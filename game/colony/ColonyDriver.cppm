@@ -34,6 +34,9 @@ export namespace pP::colony {
         /// `kAgentCountMax` reject init/regenerate with `value_too_large`.
         /// Production default stays `kAgentCount` (3).
         u32 m_agent_count{kAgentCount};
+        /// Explicit publication identity for isolated candidates. Zero keeps
+        /// the legacy in-place lifecycle's monotonically incremented identity.
+        u64 m_world_generation{};
     };
 
     /// Owns a single generated colony and its fixed-step clock. Rendering and
@@ -135,9 +138,9 @@ export namespace pP::colony {
 
         void shutdownPhysics() noexcept;
 
-        std::error_code spawnColonyAgents();
+        std::error_code spawnColonyAgents(const IContext *context = nullptr);
 
-        std::error_code createAgentBodies();
+        std::error_code createAgentBodies(const IContext *context = nullptr);
 
         void refreshAgents();
 
@@ -148,7 +151,8 @@ export namespace pP::colony {
         void mirrorBodyStates() noexcept;
 
         std::error_code rebuildChunks(
-            std::span<const sim::ChunkPos> dirty, std::span<const sim::ChunkPos> needed, u32 max);
+            std::span<const sim::ChunkPos> dirty, std::span<const sim::ChunkPos> needed, u32 max,
+            const IContext *context = nullptr);
 
         void applyToolEdits() noexcept;
 
@@ -176,7 +180,8 @@ export namespace pP::colony {
 
     public:
     public:
-        [[nodiscard]] std::error_code init(const ColonyDriverDesc &desc);
+        [[nodiscard]] std::error_code init(
+            const ColonyDriverDesc &desc, const sim::GenerationExecution *execution = nullptr);
 
         [[nodiscard]] std::error_code shutdown();
 

@@ -241,6 +241,14 @@ export namespace pP {
         }
 
     protected:
+        /// Any-thread graceful-close deferral. Implementations only latch
+        /// intent here; poll/drain owned work from the normal loop. Errors
+        /// bypass deferral. Return false once normal teardown can proceed.
+        [[nodiscard]] virtual bool deferGracefulExit_() const noexcept;
+        /// Nonblocking control work, serviced even when no client frame can
+        /// be admitted. Does not advance gameplay or submit render work.
+        [[nodiscard]] virtual std::error_code serviceControls_();
+
         // Test-seam construction: scripted platform + injected clock (the
         // production ctor delegates with IPlatform::create() and the steady
         // clock). The clock outlives the application (non-owning view).

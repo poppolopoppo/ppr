@@ -3,11 +3,19 @@
 ## Responsibility
 
 `engine.math` re-exports `mango::math` into `namespace pP` as a single C++20 module (`export module engine.math;`
-— no partitions, header-shaped `Math.cppm`). Provides SIMD vector/matrix aliases, scalar/vector math and
+— no partitions, interface `Math.cppm` and implementation `Math.cpp`). Provides SIMD vector/matrix aliases, scalar/vector math and
 quaternion re-exports, geometry primitives, `Intersect*`/`easeIn/Out/InOut*` utilities, polymorphic math constants,
 integer/float conversion helpers, predicates, `hashValue`/`opaqueValue` integration for mango vectors, and a
 row-vector TRS `math::Transform` node transform (scale → rotate → translate, quaternion composition plus
 `toMatrix`/`fromMatrix` materialization).
+
+`math::contourPoints()` and `math::contourCases()` expose one immutable numeric
+marching-squares table for centre-sampled terrain. Bits/corners are LL/LR/UR/UL;
+crossings are exact edge midpoints; saddles retain disconnected solids. Boundary
+segments have solid on their left; filled triangles are CCW and carry component
+corner masks for categorical material selection. Physics, volume validation and
+shader upload consume this table as their adapters migrate; there is no shader
+case-table duplicate. Pure exhaustive case/edge/area tests live in `Core.Math.Tests.cpp`.
 
 ## Design
 
@@ -109,4 +117,5 @@ Consumers `import engine.math;` and call
 ## Key Files
 
 - `Math.cppm` — whole module: aliases, `math::` utilities, constants, helpers, hash/opaque integration.
+- `Math.cpp` — immutable contour points/cases and out-of-line accessors.
 - `CMakeLists.txt` — `engine.math` target registration (see Integration).

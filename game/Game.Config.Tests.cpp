@@ -60,6 +60,29 @@ namespace pP::game::tests::detail::compat {
         PPR_TEST_ASSERT(interactive->m_game.m_value.m_command == EGameCommand::interactive);
     };
 
+    PPR_UNIT_TEST (worldgen_validation_invocation) {
+        Diagnostics diagnostics{};
+        const auto command = resolveCli(
+            {"--validate-worldgen", "--worldgen-root=pack", "--worldgen-profile=hollows",
+                "--worldgen-seed=18446744073709551615"},
+            diagnostics);
+        PPR_TEST_ASSERT(command.has_value());
+        PPR_TEST_ASSERT(command->m_game.m_value.m_command == EGameCommand::validate_worldgen);
+        PPR_TEST_ASSERT(command->m_game.m_value.m_worldgen_root == "pack");
+        PPR_TEST_ASSERT(command->m_game.m_value.m_worldgen_profile == "hollows");
+        PPR_TEST_ASSERT(command->m_game.m_value.m_worldgen_seed == (std::numeric_limits<u64>::max)());
+        for (const auto seed: {"--worldgen-seed=-1", "--worldgen-seed=18446744073709551616"}) {
+            Diagnostics bad{};
+            PPR_TEST_ASSERT(not resolveCli({seed}, bad));
+        }
+        Diagnostics conflict{};
+        PPR_TEST_ASSERT(not resolveCli({"--smoke", "--validate-worldgen"}, conflict));
+        PPR_TEST_ASSERT(conflict.entries().back().m_code == make_error_code(EConfigErrc::conflicting_command));
+        Diagnostics explicit_value{};
+        PPR_TEST_ASSERT(not resolveCli({"--validate-worldgen=smoke"}, explicit_value));
+        PPR_TEST_ASSERT(gameHelpText().find("validate-worldgen") != std::string::npos);
+    };
+
     PPR_UNIT_TEST (retired_workload_commands_rejected) {
         for (const char *option:
             {"--load100", "--time-trials", "--game.command=load100", "--game.command=time-trials"}) {
@@ -417,6 +440,7 @@ namespace pP::game::tests {
     const UnitTest game_config = UnitTest::Named("game_config") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::compat::selectors_pick_commands,
+            detail::compat::worldgen_validation_invocation,
             detail::compat::retired_workload_commands_rejected,
             detail::compat::repeated_same_selector_is_idempotent,
             detail::compat::selector_explicit_values_rejected,

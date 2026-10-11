@@ -99,3 +99,5 @@ Sets up C++23 modules, compiler toolchains, sanitizers, and external dependency 
 - `cmake/VCPkg.cmake` — optional vcpkg toolchain, triplet-derived MSVC runtime, EnC triplet guards, prefix path.
 - `cmake/Sanitizers.cmake` — ASAN/UBSAN enable per compiler.
 - `cmake/Dependencies.cmake` — CPM package list.
+
+World-generation deployment uses StageWorldgen.cmake to synchronize the build-owned worldgen directory, including data-only deletions, with canonical containment guards before cleanup.

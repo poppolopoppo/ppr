@@ -9,13 +9,16 @@ Game-owned colony simulation, tools, presentation translation and headless workl
 | Module | Files | Responsibility |
 |---|---|---|
 | `game.colony` | `Colony.cppm/.cpp` | RAII grid ownership and generation lifecycle |
+| `game.application:world_job` | `WorldJob.cppm/.cpp` | Game-owned asynchronous candidate preparation, cancellation, pointer publication and background retirement |
 | `game.colony.worldgen` | `WorldGen.cppm/.cpp` | Game-to-`sim::generate` wrapper |
+| `game.colony.content` | `Content.cppm/.cpp` | Owned material catalog, typed fields, biome recipes, geometric features and world profiles with finite phase-checked rules, start/resource preflight and initial-matter references; checked references, ranges, ordering and caps; explicit-root manifest/source loader; canonical full-pack identity and bounded CPU texture validation in Content.Pack.cpp. Runtime generator integration remains pending. |
+| `game.colony.metric` | `Metric.cppm/.cpp` | Checked 3:1 fine-cell/metre conversions, globally anchored construction footprints, nominal volume and persisted metric compatibility preflight. Actor, collider and renderer migration follows with generated sessions. |
 | `game.colony.driver` | `ColonyDriver.cppm/.cpp` | Explicit-time fixed step, pause/step/speed/regenerate, ECS and driver-local physics |
 | `game.colony.agents` | `Agents.cppm/.cpp` | Agent state, planning and movement vocabulary |
 | `game.colony.buildings` | `Buildings.cppm/.cpp` | Footprints, progressive build/demolition errands, component registration |
 | `game.colony.pathfinding` | `Pathfinding.cppm/.cpp` | Bounded resumable BFS over vacuum cells |
 | `game.colony.digtool` | `DigTool.cppm/.cpp` | Rectangular dig edits |
-| `game.colony.sim_packet` | `SimFramePacket.cppm/.cpp` | Owned simulation snapshots for presentation, coherence checks, grid staging |
+| `game.colony.sim_packet` | `SimFramePacket.cppm/.cpp` | Owned simulation snapshots, bounded initial presentation batches, confirmed-prefix cursor, coherence checks and grid staging |
 | `game.colony.translator` | `ColonyTranslator.cppm/.cpp` | Resident-chunk translation/cache revisions, presentation invalidation |
 | `game.colony.panel` | `ColonyPanel.cppm/.cpp` | ImGui views/state/intents; no renderer/service resolution |
 | `game.colony.smoke` | `ColonySmoke.cppm/.cpp` | Headless readback smoke |
@@ -37,3 +40,5 @@ The colony panel retains draft synchronization and adapts widget actions to game
 intents; game code retains validation, transactions, confirmation timing and persistence.
 
 `ColonySmoke` supplies `runColonySmoke(SmokeOptions)` and verifies deterministic simulation contracts plus offscreen GPU readback. Platform profiler markers remain available for performance investigations.
+
+Candidate initialization accepts explicit generation execution dependencies and a publication epoch. Spawn searches, body preparation and collider chunks check the job context; actor spawning uses the requested seed before publication. Runtime legacy regenerate remains available to explicit fixtures while the interactive client creates a separate new session.

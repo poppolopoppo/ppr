@@ -1,6 +1,7 @@
 module;
 
 #include "Colony.Elements.h"
+#include "pP/Macros.h"
 
 module game.colony.driver;
 
@@ -17,6 +18,7 @@ import game.colony.translator;
 import std;
 
 namespace pP::colony {
+    PPR_DEFINE_LOG_CATEGORY(ColonyPreparation, info, none)
     namespace {
         constexpr u32 kMaxSlices = 5u;
         constexpr std::string_view kToolStep = "tool";
@@ -132,7 +134,7 @@ namespace pP::colony {
         }
     }
 
-    std::error_code ColonyDriver::init(const ColonyDriverDesc &desc) {
+    std::error_code ColonyDriver::init(const ColonyDriverDesc &desc, const sim::GenerationExecution *const execution) {
         if (desc.m_tick_hz == 0u) [[unlikely]] {
             return std::make_error_code(std::errc::invalid_argument);
         }
@@ -152,7 +154,7 @@ namespace pP::colony {
         }
 
         const hal::ProfileScope scope_worldgen{"Colony.WorldGen"};
-        const std::error_code init_error = m_colony.init(ColonyDesc{desc.m_seed});
+        const std::error_code init_error = m_colony.init(ColonyDesc{desc.m_seed}, execution);
         if (init_error) [[unlikely]] {
             // A failed generation must not expose a partially written world.
             (void) m_colony.shutdown();
@@ -266,17 +268,22 @@ namespace pP::colony {
             }
             m_steps_bound = true;
         }
+        const IContext *const context = execution ? execution->m_context : nullptr;
+        if (context) {
+            PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, context->error());
+        }
         if (const std::error_code error = initPhysics()) [[unlikely]] {
             (void) shutdown();
             return error;
         }
         m_agent_count = desc.m_agent_count == 0u ? kAgentCount : desc.m_agent_count;
-        if (const std::error_code error = spawnColonyAgents()) [[unlikely]] {
+        m_seed = desc.m_seed;
+        if (const std::error_code error = spawnColonyAgents(context)) [[unlikely]] {
             (void) shutdown();
             return error;
         }
         m_seed = desc.m_seed;
-        ++m_world_generation;
+        m_world_generation = desc.m_world_generation != 0u ? desc.m_world_generation : m_world_generation + 1u;
         return {};
     }
 
@@ -801,24 +808,27 @@ namespace pP::colony {
         m_physics_ready = false;
     }
 
-    std::error_code ColonyDriver::spawnColonyAgents() {
-        if (const std::error_code error = spawnAgents(m_colony.grid(), m_registry, m_seed, m_agent_count)) {
+    std::error_code ColonyDriver::spawnColonyAgents(const IContext *const context) {
+        if (const std::error_code error = spawnAgents(m_colony.grid(), m_registry, m_seed, m_agent_count, context)) {
             return error;
         }
-        if (const std::error_code error = createAgentBodies()) {
+        if (const std::error_code error = createAgentBodies(context)) {
             return error;
         }
         refreshAgents();
         return {};
     }
 
-    std::error_code ColonyDriver::createAgentBodies() {
+    std::error_code ColonyDriver::createAgentBodies(const IContext *const context) {
         m_bodies = Array<AgentBody>{};
         Array<u64> keys{};
         Array<physics::BodyDefinition> definitions{};
         Array<sim::Entity> owners{};
 
         for (const auto &[entity, agent]: m_registry.view<Agent>()) {
+            if (context) {
+                PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, context->error());
+            }
             (void) agent;
             const sim::BodyState *pose = m_registry.get<sim::BodyState>(entity);
             const sim::BodyDefinition *definition = m_registry.get<sim::BodyDefinition>(entity);
@@ -863,7 +873,7 @@ namespace pP::colony {
         Array<sim::ChunkPos> coverage{};
         agentNeighbourhood(m_registry, coverage);
 
-        return rebuildChunks(coverage, coverage, kSpawnColliderBudget);
+        return rebuildChunks(coverage, coverage, kSpawnColliderBudget, context);
     }
 
     void ColonyDriver::refreshAgents() {
@@ -1191,7 +1201,8 @@ namespace pP::colony {
     }
 
     std::error_code ColonyDriver::rebuildChunks(
-        std::span<const sim::ChunkPos> dirty, std::span<const sim::ChunkPos> needed, const u32 max) {
+        std::span<const sim::ChunkPos> dirty, std::span<const sim::ChunkPos> needed, const u32 max,
+        const IContext *const context) {
         const hal::ProfileScope scope_prepare{"Colony.Colliders.Prepare"};
 
         // Determinism invariant: every grid-cell write path fans out dirt
@@ -1253,7 +1264,7 @@ namespace pP::colony {
         // is (added ∪ dirty ∪ coverage-growth) while kept buffers move over
         // verbatim. The full preparation inside the branch is the unchanged
         // fallback (same set, same order, same copies, same flags).
-        const bool delta_ready = buildColliderViewsDelta(sorted_needed, dirty, listed, pool, views);
+        const bool delta_ready = not context and buildColliderViewsDelta(sorted_needed, dirty, listed, pool, views);
         if (not delta_ready) {
             const auto include = [&listed](const sim::ChunkPos pos) {
                 if (not chunkListedU32(listed, pos)) {
@@ -1292,6 +1303,9 @@ namespace pP::colony {
             std::ranges::sort(
                 listed, {}, [](const sim::ChunkPos pos) { return pos.m_y * sim::kChunksPerEdge + pos.m_x; });
             for (const sim::ChunkPos pos: listed) {
+                if (context) {
+                    PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, context->error());
+                }
                 const std::optional<std::span<const sim::Cell>> cells = m_colony.grid().residentCells(pos);
                 Array<u16> elements{};
                 elements.resize(sim::kCellsPerChunk);
@@ -1320,10 +1334,28 @@ namespace pP::colony {
         std::error_code rebuilt{};
         {
             const hal::ProfileScope scope_rebuild{"Colony.Colliders.Rebuild"};
-            rebuilt = m_colliders.rebuildDirtyChunks(
-                m_scene, std::span<const physics::ColliderChunkView>{views.data(), views.size()},
-                std::span<const physics::ColliderChunkPos>{dirty_i32.data(), dirty_i32.size()}, sim::kChunkEdge, max,
-                processed);
+            if (context) {
+                // Candidate preparation drains one collider chunk at a time so
+                // cancellation cannot be hidden behind the entire spawn batch.
+                for (u32 index = 0u; index < max; ++index) {
+                    PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, context->error());
+                    PPR_RETURN_ERROR_ON_FAIL(
+                        ColonyPreparation,
+                        m_colliders.rebuildDirtyChunks(
+                            m_scene, std::span<const physics::ColliderChunkView>{views.data(), views.size()},
+                            index == 0u ? std::span<const physics::ColliderChunkPos>{dirty_i32.data(), dirty_i32.size()}
+                                        : std::span<const physics::ColliderChunkPos>{},
+                            sim::kChunkEdge, 1u, processed));
+                    if (m_colliders.pendingCount() == 0u) {
+                        break;
+                    }
+                }
+            } else {
+                rebuilt = m_colliders.rebuildDirtyChunks(
+                    m_scene, std::span<const physics::ColliderChunkView>{views.data(), views.size()},
+                    std::span<const physics::ColliderChunkPos>{dirty_i32.data(), dirty_i32.size()}, sim::kChunkEdge,
+                    max, processed);
+            }
         }
         // Store the prepared views for steady-state reuse; the stored
         // generation is the pre-drain value, so covered growth below forces

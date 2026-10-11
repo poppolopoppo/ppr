@@ -1,0 +1,13 @@
+# This tree is build-owned. Synchronize deletions as well as additions/edits.
+file(REAL_PATH "${BUILD_ROOT}" build_root)
+file(REAL_PATH "${DEPLOY_ROOT}" deploy_root)
+cmake_path(IS_PREFIX build_root "${deploy_root}" NORMALIZE within_build)
+cmake_path(GET deploy_root FILENAME leaf)
+if(NOT within_build OR NOT leaf STREQUAL "worldgen" OR deploy_root STREQUAL build_root)
+    message(FATAL_ERROR "Refusing worldgen staging outside its build-owned directory: ${deploy_root}")
+endif()
+if(NOT IS_DIRECTORY "${SOURCE_ROOT}/default")
+    message(FATAL_ERROR "Missing source worldgen pack: ${SOURCE_ROOT}/default")
+endif()
+file(REMOVE_RECURSE "${deploy_root}")
+file(COPY "${SOURCE_ROOT}/" DESTINATION "${deploy_root}")

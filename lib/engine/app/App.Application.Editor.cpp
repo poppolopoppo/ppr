@@ -1322,7 +1322,8 @@ namespace pP {
         {
             const hal::ProfileScope scope_frame_execute{"PPR.Frame.Execute"};
             frame_err = renderer.renderAndPresent(
-                window_snapshot, {surface_passes.begin(), surface_passes.size()}, packet_surface);
+                window_snapshot, {surface_passes.begin(), surface_passes.size()}, packet_surface,
+                &out_result.m_presented);
         }
 
         // Surface lane-observable outcome: the accepted SUBMIT value

@@ -1,12 +1,14 @@
 module;
 
 #include "Colony.Elements.h"
+#include "pP/Macros.h"
 
 module game.colony.sim_packet;
 
 import std;
 
 namespace pP::colony {
+    PPR_DEFINE_LOG_CATEGORY(SimPresentation, info, none);
     namespace {
         [[nodiscard]] GridTileRange tileRange(const sim::ChunkPos pos) noexcept {
             const i32 min_x = static_cast<i32>(pos.m_x * sim::kChunkEdge);
@@ -91,6 +93,88 @@ namespace pP::colony {
     bool isSimPacketCoherent(
         const SimFramePacket &packet, const u64 live_tick, const u64 live_world_generation) noexcept {
         return packet.m_tick == live_tick and packet.m_world_generation == live_world_generation;
+    }
+
+    Expected<SimFramePacket> makeInitialPresentationBatch(
+        const u64 frame_id, const ColonyDriver &driver, const u32 first_chunk, const u32 chunk_count) {
+        if (chunk_count == 0u or
+            chunk_count > kInitialPresentationBatchChunks or
+            first_chunk >= sim::kChunkCount or
+            chunk_count > sim::kChunkCount - first_chunk) {
+            PPR_RETURN_UNEXPECTED_ON_FAIL(SimPresentation, std::errc::invalid_argument);
+        }
+        SimFramePacket packet{};
+        packet.m_frame_id = frame_id;
+        packet.m_seed = driver.seed();
+        packet.m_world_generation = driver.worldGeneration();
+        packet.m_tick = driver.tickCount();
+        packet.m_agent_count = static_cast<u32>(driver.agentSummaries().size());
+        const auto dirty = driver.presentEditsCapture();
+        const auto &grid = driver.grid();
+        const u32 end = first_chunk + chunk_count;
+        for (u32 index = 0u; index < end; ++index) {
+            const sim::ChunkPos pos{index % sim::kChunksPerEdge, index / sim::kChunksPerEdge};
+            if (not grid.isResident(pos)) {
+                continue;
+            }
+            packet.m_resident_chunks.push_back(pos);
+            if (index < first_chunk) {
+                continue;
+            }
+            const auto cells = grid.residentCells(pos);
+            if (not cells or cells->size() != sim::kCellsPerChunk) {
+                PPR_RETURN_UNEXPECTED_ON_FAIL(SimPresentation, std::errc::state_not_recoverable);
+            }
+            u64 revision{};
+            for (const auto &row: dirty) {
+                if (row.m_pos == pos) {
+                    revision = row.m_revision;
+                    break;
+                }
+            }
+            packet.m_present_chunks.push_back(pos);
+            packet.m_present_revisions.push_back(revision);
+            SimChunkCells payload{.m_pos = pos};
+            payload.m_cells.assign(cells->begin(), cells->end());
+            packet.m_chunk_cells.push_back(std::move(payload));
+        }
+        return packet;
+    }
+
+    u32 InitialPresentation::completedChunks() const noexcept {
+        return m_next_chunk;
+    }
+
+    Expected<GridPass::GridStagedFrame> InitialPresentation::stage(const u64 frame_id, const ColonyDriver &driver) {
+        GridPass::GridStagedFrame stage{};
+        if (m_frame or m_next_chunk == sim::kChunkCount) {
+            stage.m_tiles = m_visible;
+            return stage;
+        }
+        const u32 count = std::min(kInitialPresentationBatchChunks, sim::kChunkCount - m_next_chunk);
+        auto packet = makeInitialPresentationBatch(frame_id, driver, m_next_chunk, count);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(SimPresentation, packet);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(SimPresentation, buildGridStagedFrame(*packet, stage));
+        stage.m_reset_caches = m_next_chunk == 0u;
+        m_pending = stage.m_tiles;
+        for (auto &tile: m_pending) {
+            tile.m_dirty_mask = 0u;
+        }
+        m_frame = frame_id;
+        return stage;
+    }
+
+    bool InitialPresentation::consume(const RenderFrameResult &result, const u64 world_generation) {
+        if (m_frame != result.m_frame_id or result.m_grid_ack_seed != world_generation) {
+            return false;
+        }
+        m_frame.reset();
+        if (not result.m_presented or not result.m_grid_stage_applied or result.m_error or result.m_dropped) {
+            return false;
+        }
+        m_visible = std::move(m_pending);
+        m_next_chunk = std::min(m_next_chunk + kInitialPresentationBatchChunks, sim::kChunkCount);
+        return m_next_chunk == sim::kChunkCount;
     }
 
     std::error_code buildGridStagedFrame(const SimFramePacket &packet, GridPass::GridStagedFrame &stage) {

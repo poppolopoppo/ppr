@@ -1,0 +1,168 @@
+schema_version = 1
+
+[features.landing]
+display_name = "Hearth landing"
+allow_horizontal_reflection = false
+reservation_min_x_fine = 0
+reservation_min_y_fine = 0
+reservation_max_x_fine = 90
+reservation_max_y_fine = 36
+[features.landing.operations.shell]
+order = 10
+action = "paint"
+shape = "rectangle"
+x_fine = 0
+y_fine = 0
+width_fine = 90
+height_fine = 36
+material = "masonry"
+[features.landing.operations.chamber]
+order = 20
+action = "carve"
+shape = "rectangle"
+x_fine = 3
+y_fine = 6
+width_fine = 84
+height_fine = 27
+[features.landing.operations.left_resource]
+order = 30
+action = "paint"
+shape = "rectangle"
+x_fine = 6
+y_fine = 0
+width_fine = 9
+height_fine = 6
+material = "sandstone"
+[features.landing.operations.right_resource]
+order = 40
+action = "paint"
+shape = "rectangle"
+x_fine = 75
+y_fine = 0
+width_fine = 9
+height_fine = 6
+material = "copper"
+[features.landing.markers.spawn]
+role = "start"
+x_fine = 45
+y_fine = 10
+[features.landing.markers.stone]
+role = "resource_anchor"
+x_fine = 10
+y_fine = 5
+[features.landing.markers.ore]
+role = "resource_anchor"
+x_fine = 79
+y_fine = 5
+[features.pocket]
+display_name = "Sealed cistern"
+allow_horizontal_reflection = true
+reservation_min_x_fine = 0
+reservation_min_y_fine = 0
+reservation_max_x_fine = 36
+reservation_max_y_fine = 36
+[features.pocket.operations.shell]
+order = 10
+action = "paint"
+shape = "ellipse"
+x_fine = 0
+y_fine = 0
+width_fine = 36
+height_fine = 36
+material = "basalt"
+[features.pocket.operations.interior]
+order = 20
+action = "carve"
+shape = "ellipse"
+x_fine = 3
+y_fine = 3
+width_fine = 30
+height_fine = 30
+[features.pocket.markers.anchor]
+role = "sealed_pocket"
+x_fine = 18
+y_fine = 18
+[features.room]
+display_name = "Gallery room"
+allow_horizontal_reflection = true
+reservation_min_x_fine = 0
+reservation_min_y_fine = 0
+reservation_max_x_fine = 36
+reservation_max_y_fine = 36
+[features.room.operations.shell]
+order = 10
+action = "paint"
+shape = "rectangle"
+x_fine = 0
+y_fine = 0
+width_fine = 36
+height_fine = 36
+material = "masonry"
+[features.room.operations.interior]
+order = 20
+action = "carve"
+shape = "rectangle"
+x_fine = 3
+y_fine = 3
+width_fine = 30
+height_fine = 30
+[features.room.markers.anchor]
+role = "traversal_room"
+x_fine = 18
+y_fine = 18
+[features.ruin]
+display_name = "Masonry relic"
+allow_horizontal_reflection = true
+reservation_min_x_fine = 0
+reservation_min_y_fine = 0
+reservation_max_x_fine = 36
+reservation_max_y_fine = 36
+[features.ruin.operations.shell]
+order = 10
+action = "paint"
+shape = "rectangle"
+x_fine = 0
+y_fine = 0
+width_fine = 36
+height_fine = 36
+material = "masonry"
+[features.ruin.operations.interior]
+order = 20
+action = "carve"
+shape = "rectangle"
+x_fine = 3
+y_fine = 3
+width_fine = 30
+height_fine = 30
+[features.ruin.markers.anchor]
+role = "traversal_room"
+x_fine = 18
+y_fine = 18
+[features.vent]
+display_name = "Inert chimney"
+allow_horizontal_reflection = true
+reservation_min_x_fine = 0
+reservation_min_y_fine = 0
+reservation_max_x_fine = 36
+reservation_max_y_fine = 36
+[features.vent.operations.shell]
+order = 10
+action = "paint"
+shape = "rectangle"
+x_fine = 0
+y_fine = 0
+width_fine = 36
+height_fine = 36
+material = "masonry"
+[features.vent.operations.interior]
+order = 20
+action = "carve"
+shape = "rectangle"
+x_fine = 3
+y_fine = 3
+width_fine = 30
+height_fine = 30
+[features.vent.markers.anchor]
+role = "inert"
+x_fine = 18
+y_fine = 18

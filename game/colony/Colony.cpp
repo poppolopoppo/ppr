@@ -19,8 +19,8 @@ namespace pP::colony {
         return m_initialized;
     }
 
-    std::error_code Colony::init(const ColonyDesc &desc) {
-        const std::error_code err = generateWorld(desc.m_seed, m_grid);
+    std::error_code Colony::init(const ColonyDesc &desc, const sim::GenerationExecution *const execution) {
+        const std::error_code err = generateWorld(desc.m_seed, m_grid, execution);
         if (err) [[unlikely]] {
             return err;
         }

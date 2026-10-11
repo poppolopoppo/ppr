@@ -53,6 +53,9 @@ settings and game invocation/display modules for current consumers.
   is backed by the pinned private `toml++` dependency (vcpkg with a CPM
   fallback in `cmake/external/tomlplusplus.cmake`): the parsed tree is
   flattened into the document and arrays/dates are rejected afterward.
+  Opt-in `EDecodeMode::records` rejects empty tables and literal dotted/empty
+  key segments before flattening can discard their structural meaning. The
+  default scalar mode preserves existing settings behavior.
   Inline tables flatten into dotted keys; the writer emits canonical TOML.
 
 ## Key Files

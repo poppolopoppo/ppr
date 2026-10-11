@@ -127,7 +127,8 @@ export namespace pP {
         // Window read). Temporary pass descriptors stay synchronous to the
         // encode, as on every other path.
         [[nodiscard]] std::error_code renderAndPresent(
-            const SurfaceWindowSnapshot &window, std::span<const SurfaceRenderPass> passes, SurfaceIdentity identity);
+            const SurfaceWindowSnapshot &window, std::span<const SurfaceRenderPass> passes, SurfaceIdentity identity,
+            bool *presented = nullptr);
 
         [[nodiscard]] std::error_code waitOnHost();
 
@@ -356,7 +357,8 @@ export namespace pP {
         void retireFrame_(FenceCompletionValue submitted_value, FrameSettlement settlement) noexcept;
 
         [[nodiscard]] std::error_code renderAndPresentImpl_(
-            const SurfaceWindowSnapshot &window, std::span<const SurfaceRenderPass> passes, SurfaceIdentity identity);
+            const SurfaceWindowSnapshot &window, std::span<const SurfaceRenderPass> passes, SurfaceIdentity identity,
+            bool *presented = nullptr);
 
         [[nodiscard]] std::error_code destroyWindowSurface_(WindowHandle window_handle);
 

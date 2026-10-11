@@ -980,8 +980,17 @@ namespace pP::tests::detail {
             int m_frames{0};
             int m_exit_after{3};
             std::error_code m_clause{};
+            int m_defer_until{};
+            mutable bool m_deferred{};
 
         protected:
+            [[nodiscard]] bool deferGracefulExit_() const noexcept override {
+                if (m_frames < m_defer_until) {
+                    m_deferred = true;
+                    return true;
+                }
+                return false;
+            }
             [[nodiscard]] std::error_code update([[maybe_unused]] const TimeSpan dt) override {
                 if (++m_frames >= m_exit_after) {
                     requestExit(m_clause);
@@ -996,7 +1005,7 @@ namespace pP::tests::detail {
             }
 
             std::string message(int) const override {
-                throw std::bad_alloc{};
+                throw std::runtime_error{"diagnostic unavailable"};
             }
         };
 
@@ -1289,6 +1298,11 @@ namespace pP::tests::detail {
         // The latch survives shutdown; only initialize() re-arms it, so a
         // repeated run() starts unrequested.
         PPR_TEST_ASSERT(test_app.isExitRequested());
+        AppLifecycle::ExitAfterFramesApp deferred{"DeferredExitRun"};
+        deferred.m_defer_until = 5;
+        PPR_TEST_ASSERT(not deferred.run());
+        PPR_TEST_ASSERT(deferred.m_deferred);
+        PPR_TEST_ASSERT(deferred.m_frames == 5);
     };
 
     PPR_UNIT_TEST (app_error_request_exit_run_reports_cause) {
@@ -1297,8 +1311,10 @@ namespace pP::tests::detail {
         const std::error_code expected = std::make_error_code(std::errc::operation_canceled);
         AppLifecycle::ExitAfterFramesApp test_app{"ErrorExitRun"};
         test_app.m_clause = expected;
+        test_app.m_defer_until = 100;
         PPR_TEST_ASSERT(test_app.run() == expected);
         PPR_TEST_ASSERT(test_app.m_frames == 3);
+        PPR_TEST_ASSERT(not test_app.m_deferred);
 
         AppLifecycle::ExitAfterFramesApp throwing_app{"ThrowingErrorExitRun"};
         const std::error_code throwing_cause{42, AppLifecycle::kThrowingExitMessageCategory};

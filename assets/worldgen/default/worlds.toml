@@ -1,0 +1,420 @@
+schema_version = 1
+
+[worlds.frontier]
+display_name = "Frontier basin"
+default_wall_material = "masonry"
+boundary_fine = 3
+min_sites = 24
+max_sites = 64
+site_attempts = 30
+site_spacing_m = 100.0
+boundary_warp_amplitude_m = 25.0
+boundary_warp_x_field = "warp_x"
+boundary_warp_y_field = "warp_y"
+start_biome = "hearth"
+start_feature = "landing"
+start_marker = "spawn"
+start_x_fine = 2000
+start_y_fine = 3000
+start_clearance_m = 3.0
+start_route_width_m = 1.0
+[worlds.frontier.start_resources.stone]
+marker = "stone"
+material = "sandstone"
+minimum_fine_cells = 27
+max_distance_m = 20.0
+[worlds.frontier.start_resources.ore]
+marker = "ore"
+material = "copper"
+minimum_fine_cells = 27
+max_distance_m = 20.0
+[worlds.frontier.biomes.hearth]
+biome = "hearth"
+weight = 4.0
+required_count = 1
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+distance_min_m = 0.0
+distance_max_m = 2048.0
+[worlds.frontier.rules.caves_hearth]
+kind = "threshold_cave"
+phase = "carve"
+order = 10
+biome = "hearth"
+field = "caverns"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+threshold_min = 0.48
+threshold_max = 1.0
+[worlds.frontier.biomes.rime]
+biome = "rime"
+weight = 2.0
+required_count = 1
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+distance_min_m = 0.0
+distance_max_m = 2048.0
+[worlds.frontier.rules.caves_rime]
+kind = "threshold_cave"
+phase = "carve"
+order = 11
+biome = "rime"
+field = "fissures"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+threshold_min = 0.48
+threshold_max = 1.0
+[worlds.frontier.biomes.lode]
+biome = "lode"
+weight = 3.0
+required_count = 1
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+distance_min_m = 0.0
+distance_max_m = 2048.0
+[worlds.frontier.rules.caves_lode]
+kind = "threshold_cave"
+phase = "carve"
+order = 12
+biome = "lode"
+field = "caverns"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+threshold_min = 0.48
+threshold_max = 1.0
+[worlds.frontier.biomes.ember]
+biome = "ember"
+weight = 2.0
+required_count = 1
+depth_min_normalized = 0.5
+depth_max_normalized = 1.0
+distance_min_m = 0.0
+distance_max_m = 2048.0
+[worlds.frontier.rules.caves_ember]
+kind = "threshold_cave"
+phase = "carve"
+order = 13
+biome = "ember"
+field = "caverns"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+threshold_min = 0.48
+threshold_max = 1.0
+[worlds.frontier.rules.veins]
+kind = "vein_worm"
+phase = "deposit"
+order = 10
+biome = "lode"
+count = 12
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+length_min_m = 15.0
+length_max_m = 60.0
+radius_min_m = 1.0
+radius_max_m = 2.0
+turn_probability = 0.2
+material = "copper"
+host_material = "basalt"
+[worlds.frontier.rules.tunnels]
+kind = "carve_worm"
+phase = "carve"
+order = 30
+biome = "hearth"
+count = 12
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+length_min_m = 15.0
+length_max_m = 60.0
+radius_min_m = 1.0
+radius_max_m = 2.0
+turn_probability = 0.2
+[worlds.frontier.rules.connections]
+kind = "connect_rooms"
+phase = "carve"
+order = 40
+radius_m = 1.5
+extra_links = 2
+[worlds.frontier.rules.cisterns]
+kind = "feature"
+phase = "stamp"
+order = 10
+feature = "pocket"
+biome = "hearth"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+spacing_m = 50.0
+min_count = 1
+max_count = 4
+attempts = 64
+priority = 90
+reflect = true
+[worlds.frontier.rules.galleries]
+kind = "feature"
+phase = "stamp"
+order = 20
+feature = "room"
+biome = "lode"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+spacing_m = 50.0
+min_count = 1
+max_count = 4
+attempts = 64
+priority = 80
+reflect = true
+[worlds.frontier.rules.relics]
+kind = "feature"
+phase = "stamp"
+order = 30
+feature = "ruin"
+biome = "rime"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+spacing_m = 50.0
+min_count = 1
+max_count = 4
+attempts = 64
+priority = 70
+reflect = true
+[worlds.frontier.rules.chimneys]
+kind = "feature"
+phase = "stamp"
+order = 40
+feature = "vent"
+biome = "ember"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+spacing_m = 50.0
+min_count = 1
+max_count = 4
+attempts = 64
+priority = 60
+reflect = true
+[worlds.frontier.rules.water]
+kind = "matter_fill"
+phase = "fill"
+order = 10
+feature_rule = "cisterns"
+marker = "anchor"
+material = "water"
+temperature_k = 290.0
+bulk_density_kg_m3 = 1000.0
+fill_height_m = 4.0
+[worlds.frontier.rules.air]
+kind = "matter_fill"
+phase = "fill"
+order = 20
+feature_rule = "cisterns"
+marker = "anchor"
+material = "oxygen"
+temperature_k = 290.0
+bulk_density_kg_m3 = 1.2
+[worlds.hollows]
+display_name = "The wide hollows"
+default_wall_material = "masonry"
+boundary_fine = 3
+min_sites = 24
+max_sites = 64
+site_attempts = 30
+site_spacing_m = 100.0
+boundary_warp_amplitude_m = 25.0
+boundary_warp_x_field = "warp_x"
+boundary_warp_y_field = "warp_y"
+start_biome = "hearth"
+start_feature = "landing"
+start_marker = "spawn"
+start_x_fine = 2000
+start_y_fine = 3000
+start_clearance_m = 3.0
+start_route_width_m = 1.0
+[worlds.hollows.start_resources.stone]
+marker = "stone"
+material = "sandstone"
+minimum_fine_cells = 27
+max_distance_m = 20.0
+[worlds.hollows.start_resources.ore]
+marker = "ore"
+material = "copper"
+minimum_fine_cells = 27
+max_distance_m = 20.0
+[worlds.hollows.biomes.hearth]
+biome = "hearth"
+weight = 2.0
+required_count = 1
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+distance_min_m = 0.0
+distance_max_m = 2048.0
+[worlds.hollows.rules.caves_hearth]
+kind = "threshold_cave"
+phase = "carve"
+order = 10
+biome = "hearth"
+field = "caverns"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+threshold_min = 0.25
+threshold_max = 1.0
+[worlds.hollows.biomes.rime]
+biome = "rime"
+weight = 4.0
+required_count = 1
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+distance_min_m = 0.0
+distance_max_m = 2048.0
+[worlds.hollows.rules.caves_rime]
+kind = "threshold_cave"
+phase = "carve"
+order = 11
+biome = "rime"
+field = "fissures"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+threshold_min = 0.25
+threshold_max = 1.0
+[worlds.hollows.biomes.lode]
+biome = "lode"
+weight = 3.0
+required_count = 1
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+distance_min_m = 0.0
+distance_max_m = 2048.0
+[worlds.hollows.rules.caves_lode]
+kind = "threshold_cave"
+phase = "carve"
+order = 12
+biome = "lode"
+field = "caverns"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+threshold_min = 0.25
+threshold_max = 1.0
+[worlds.hollows.biomes.ember]
+biome = "ember"
+weight = 2.0
+required_count = 1
+depth_min_normalized = 0.5
+depth_max_normalized = 1.0
+distance_min_m = 0.0
+distance_max_m = 2048.0
+[worlds.hollows.rules.caves_ember]
+kind = "threshold_cave"
+phase = "carve"
+order = 13
+biome = "ember"
+field = "caverns"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+threshold_min = 0.25
+threshold_max = 1.0
+[worlds.hollows.rules.veins]
+kind = "vein_worm"
+phase = "deposit"
+order = 10
+biome = "lode"
+count = 24
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+length_min_m = 30.0
+length_max_m = 100.0
+radius_min_m = 1.0
+radius_max_m = 4.0
+turn_probability = 0.2
+material = "copper"
+host_material = "basalt"
+[worlds.hollows.rules.tunnels]
+kind = "carve_worm"
+phase = "carve"
+order = 30
+biome = "hearth"
+count = 24
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+length_min_m = 30.0
+length_max_m = 100.0
+radius_min_m = 1.0
+radius_max_m = 4.0
+turn_probability = 0.2
+[worlds.hollows.rules.connections]
+kind = "connect_rooms"
+phase = "carve"
+order = 40
+radius_m = 1.5
+extra_links = 2
+[worlds.hollows.rules.cisterns]
+kind = "feature"
+phase = "stamp"
+order = 10
+feature = "pocket"
+biome = "hearth"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+spacing_m = 50.0
+min_count = 1
+max_count = 4
+attempts = 64
+priority = 90
+reflect = true
+[worlds.hollows.rules.galleries]
+kind = "feature"
+phase = "stamp"
+order = 20
+feature = "room"
+biome = "lode"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+spacing_m = 50.0
+min_count = 1
+max_count = 4
+attempts = 64
+priority = 80
+reflect = true
+[worlds.hollows.rules.relics]
+kind = "feature"
+phase = "stamp"
+order = 30
+feature = "ruin"
+biome = "rime"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+spacing_m = 50.0
+min_count = 1
+max_count = 4
+attempts = 64
+priority = 70
+reflect = true
+[worlds.hollows.rules.chimneys]
+kind = "feature"
+phase = "stamp"
+order = 40
+feature = "vent"
+biome = "ember"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+spacing_m = 50.0
+min_count = 1
+max_count = 4
+attempts = 64
+priority = 60
+reflect = true
+[worlds.hollows.rules.water]
+kind = "matter_fill"
+phase = "fill"
+order = 10
+feature_rule = "cisterns"
+marker = "anchor"
+material = "water"
+temperature_k = 290.0
+bulk_density_kg_m3 = 1000.0
+fill_height_m = 4.0
+[worlds.hollows.rules.air]
+kind = "matter_fill"
+phase = "fill"
+order = 20
+feature_rule = "cisterns"
+marker = "anchor"
+material = "oxygen"
+temperature_k = 290.0
+bulk_density_kg_m3 = 1.2

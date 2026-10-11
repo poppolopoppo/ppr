@@ -1,0 +1,72 @@
+schema_version = 1
+
+[fields.composition]
+algorithm = "open_simplex2"
+fractal = "fbm"
+frequency_per_metre = 0.055
+octaves = 4
+lacunarity = 2.0
+gain = 0.5
+warp_amplitude_m = 2.0
+warp_frequency_per_metre = 0.006
+
+[fields.temperature]
+algorithm = "perlin"
+fractal = "fbm"
+frequency_per_metre = 0.008
+octaves = 4
+lacunarity = 2.0
+gain = 0.5
+warp_amplitude_m = 0.0
+warp_frequency_per_metre = 0.006
+
+[fields.caverns]
+algorithm = "open_simplex2"
+fractal = "ridged"
+frequency_per_metre = 0.021
+octaves = 4
+lacunarity = 2.0
+gain = 0.5
+warp_amplitude_m = 8.0
+warp_frequency_per_metre = 0.006
+
+[fields.fissures]
+algorithm = "perlin"
+fractal = "fbm"
+frequency_per_metre = 0.038
+octaves = 4
+lacunarity = 2.0
+gain = 0.5
+warp_amplitude_m = 3.0
+warp_frequency_per_metre = 0.006
+
+[fields.ore_lenses]
+algorithm = "cellular_distance"
+fractal = "none"
+frequency_per_metre = 0.07
+octaves = 4
+lacunarity = 2.0
+gain = 0.5
+warp_amplitude_m = 0.0
+warp_frequency_per_metre = 0.006
+
+[fields.warp_x]
+algorithm = "open_simplex2"
+fractal = "fbm"
+frequency_per_metre = 0.006
+octaves = 4
+lacunarity = 2.0
+gain = 0.5
+warp_amplitude_m = 0.0
+warp_frequency_per_metre = 0.006
+
+[fields.warp_y]
+algorithm = "perlin"
+fractal = "fbm"
+frequency_per_metre = 0.006
+octaves = 4
+lacunarity = 2.0
+gain = 0.5
+warp_amplitude_m = 0.0
+warp_frequency_per_metre = 0.006
+

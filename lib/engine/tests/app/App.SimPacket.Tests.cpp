@@ -39,6 +39,94 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(colony::isSimPacketCoherent(packet, driver.tickCount(), driver.worldGeneration()));
         };
 
+        PPR_UNIT_TEST (initial_presentation_batches_bound_copies_and_preserve_prefix) {
+            colony::ColonyDriver driver{};
+            for (const u32 chunk: {0u, 7u, 8u}) {
+                PPR_TEST_ASSERT(not driver.grid().setCell(
+                    {chunk * sim::kChunkEdge, 0u}, sim::Cell{.m_element = 1u, .m_temperature = 293.0f}));
+            }
+            auto first = colony::makeInitialPresentationBatch(1u, driver, 0u, 8u);
+            PPR_TEST_ASSERT(first.has_value());
+            PPR_TEST_ASSERT(first->m_chunk_cells.size() == 2u);
+            PPR_TEST_ASSERT(first->m_resident_chunks.size() == 2u);
+            PPR_TEST_ASSERT(first->m_present_chunks.size() == 2u);
+            PPR_TEST_ASSERT(not first->m_full_refresh);
+            GridPass pass{};
+            GridPass::GridStagedFrame stage{};
+            PPR_TEST_ASSERT(not colony::buildGridStagedFrame(*first, stage));
+            stage.m_reset_caches = true;
+            PPR_TEST_ASSERT(not pass.applyStagedFrame(stage));
+            PPR_TEST_ASSERT(pass.cachedTileCount() == 2u);
+
+            // Later batches retain prepared tiles and copy only their range.
+            auto second = colony::makeInitialPresentationBatch(2u, driver, 8u, 8u);
+            PPR_TEST_ASSERT(second.has_value());
+            PPR_TEST_ASSERT(second->m_resident_chunks.size() == 3u);
+            PPR_TEST_ASSERT(second->m_chunk_cells.size() == 1u);
+            PPR_TEST_ASSERT(second->m_present_chunks[0u] == sim::ChunkPos{8u, 0u});
+            stage = {};
+            PPR_TEST_ASSERT(not colony::buildGridStagedFrame(*second, stage));
+            PPR_TEST_ASSERT(stage.m_uploads.size() == 1u);
+            PPR_TEST_ASSERT(not pass.applyStagedFrame(stage));
+            PPR_TEST_ASSERT(pass.cachedTileCount() == 3u);
+            PPR_TEST_ASSERT(pass.uploadCount() == 3u);
+
+            const auto oversized = colony::makeInitialPresentationBatch(3u, driver, 0u, 9u);
+            PPR_TEST_ASSERT(not oversized and oversized.error() == std::errc::invalid_argument);
+            const auto overflowing = colony::makeInitialPresentationBatch(3u, driver, sim::kChunkCount - 1u, 8u);
+            PPR_TEST_ASSERT(not overflowing and overflowing.error() == std::errc::invalid_argument);
+        };
+
+        PPR_UNIT_TEST (initial_presentation_skipped_batches_expose_only_confirmed_tiles) {
+            colony::ColonyDriver driver{};
+            for (const u32 chunk: {0u, 8u}) {
+                PPR_TEST_ASSERT(not driver.grid().setCell(
+                    {chunk * sim::kChunkEdge, 0u}, sim::Cell{.m_element = 1u, .m_temperature = 293.0f}));
+            }
+            colony::InitialPresentation preparation{};
+            auto first = preparation.stage(1u, driver);
+            PPR_TEST_ASSERT(first and first->m_reset_caches and first->m_uploads.size() == 1u);
+            auto waiting = preparation.stage(2u, driver);
+            PPR_TEST_ASSERT(waiting and waiting->m_tiles.empty() and waiting->m_uploads.empty());
+            RenderFrameResult skipped{.m_frame_id = 1u};
+            PPR_TEST_ASSERT(not preparation.consume(skipped, driver.worldGeneration()));
+            PPR_TEST_ASSERT(preparation.completedChunks() == 0u);
+            auto retry = preparation.stage(3u, driver);
+            PPR_TEST_ASSERT(retry and retry->m_reset_caches and retry->m_uploads.size() == 1u);
+            RenderFrameResult accepted{};
+            accepted.m_frame_id = 3u;
+            accepted.m_presented = true;
+            accepted.m_grid_stage_applied = true;
+            accepted.m_grid_ack_seed = driver.worldGeneration();
+            PPR_TEST_ASSERT(not preparation.consume(accepted, driver.worldGeneration()));
+            PPR_TEST_ASSERT(preparation.completedChunks() == 8u);
+            auto later = preparation.stage(4u, driver);
+            PPR_TEST_ASSERT(later and not later->m_reset_caches and later->m_tiles.size() == 2u);
+            waiting = preparation.stage(5u, driver);
+            PPR_TEST_ASSERT(waiting and waiting->m_tiles.size() == 1u and waiting->m_uploads.empty());
+            PPR_TEST_ASSERT(waiting->m_tiles[0u].m_dirty_mask == 0u);
+            skipped.m_frame_id = 4u;
+            skipped.m_dropped = true;
+            PPR_TEST_ASSERT(not preparation.consume(skipped, driver.worldGeneration()));
+            PPR_TEST_ASSERT(preparation.completedChunks() == 8u);
+            retry = preparation.stage(6u, driver);
+            PPR_TEST_ASSERT(retry and not retry->m_reset_caches and retry->m_uploads.size() == 1u);
+            // A late result for the skipped frame cannot settle this retry.
+            accepted.m_frame_id = 4u;
+            PPR_TEST_ASSERT(not preparation.consume(accepted, driver.worldGeneration()));
+            PPR_TEST_ASSERT(preparation.completedChunks() == 8u);
+            accepted.m_frame_id = 6u;
+            PPR_TEST_ASSERT(not preparation.consume(accepted, driver.worldGeneration()));
+            PPR_TEST_ASSERT(preparation.completedChunks() == 16u);
+            for (u64 frame = 7u; preparation.completedChunks() < sim::kChunkCount; ++frame) {
+                const auto batch = preparation.stage(frame, driver);
+                PPR_TEST_ASSERT(batch.has_value());
+                accepted.m_frame_id = frame;
+                const bool complete = preparation.consume(accepted, driver.worldGeneration());
+                PPR_TEST_ASSERT(complete == (preparation.completedChunks() == sim::kChunkCount));
+            }
+        };
+
         // Consumption ack payload: the per-chunk edit revision captured
         // with the packet (the lane echoes exactly this set back at
         // settlement time, so only captured generations are cleared).
@@ -543,6 +631,8 @@ namespace pP::tests {
     const UnitTest sim_packet = UnitTest::Named("sim_packet") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::SimPacket::default_driver_builds_empty_coherent_packet,
+            detail::SimPacket::initial_presentation_batches_bound_copies_and_preserve_prefix,
+            detail::SimPacket::initial_presentation_skipped_batches_expose_only_confirmed_tiles,
             detail::SimPacket::capture_mutation_consume_uses_packet_content,
             detail::SimPacket::two_chunks_across_updates_capture_and_upload_both,
             detail::SimPacket::full_refresh_captures_all_resident_cells,

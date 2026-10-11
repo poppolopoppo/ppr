@@ -1,0 +1,119 @@
+schema_version = 1
+
+[materials.basalt]
+numeric_id = 16
+display_name = "Basalt"
+phase = "solid"
+representation = "terrain"
+color_rgba = "58636FFF"
+albedo_texture = "textures/basalt.png"
+texture_period_m = 2.0
+diggable = true
+reference_density_kg_m3 = 2900.0
+
+[materials.sandstone]
+numeric_id = 32
+display_name = "Sandstone"
+phase = "solid"
+representation = "terrain"
+color_rgba = "B99A6CFF"
+albedo_texture = "textures/sandstone.png"
+texture_period_m = 2.0
+diggable = true
+reference_density_kg_m3 = 2200.0
+
+[materials.copper]
+numeric_id = 49
+display_name = "Copper"
+phase = "solid"
+representation = "terrain"
+color_rgba = "BD7751FF"
+albedo_texture = "textures/copper.png"
+texture_period_m = 2.0
+diggable = true
+reference_density_kg_m3 = 8900.0
+
+[materials.iron]
+numeric_id = 73
+display_name = "Iron"
+phase = "solid"
+representation = "terrain"
+color_rgba = "8E7270FF"
+albedo_texture = "textures/iron.png"
+texture_period_m = 2.0
+diggable = true
+reference_density_kg_m3 = 7800.0
+
+[materials.ice]
+numeric_id = 128
+display_name = "Ice"
+phase = "solid"
+representation = "terrain"
+color_rgba = "A4D9EFFF"
+albedo_texture = "textures/ice.png"
+texture_period_m = 2.0
+diggable = true
+reference_density_kg_m3 = 917.0
+
+[materials.masonry]
+numeric_id = 257
+display_name = "Masonry"
+phase = "solid"
+representation = "terrain"
+color_rgba = "AAA294FF"
+albedo_texture = "textures/masonry.png"
+texture_period_m = 1.0
+diggable = false
+reference_density_kg_m3 = 2400.0
+
+[materials.obsidian]
+numeric_id = 509
+display_name = "Obsidian"
+phase = "solid"
+representation = "terrain"
+color_rgba = "403D50FF"
+albedo_texture = "textures/obsidian.png"
+texture_period_m = 2.0
+diggable = true
+reference_density_kg_m3 = 2600.0
+
+[materials.water]
+numeric_id = 1001
+display_name = "Water"
+phase = "liquid"
+representation = "particle"
+color_rgba = "3989C9B0"
+reference_density_kg_m3 = 1000.0
+
+[materials.oxygen]
+numeric_id = 1009
+display_name = "Oxygen"
+phase = "gas"
+representation = "particle"
+color_rgba = "A7DAD050"
+reference_density_kg_m3 = 1.2
+
+[materials.sand]
+numeric_id = 1013
+display_name = "Sand"
+phase = "solid"
+representation = "particle"
+color_rgba = "D8BA78FF"
+reference_density_kg_m3 = 1600.0
+
+[materials.snow]
+numeric_id = 1019
+display_name = "Snow"
+phase = "solid"
+representation = "particle"
+color_rgba = "E7F3FFFF"
+reference_density_kg_m3 = 300.0
+
+[materials.pebbles]
+numeric_id = 1031
+display_name = "Pebbles"
+phase = "solid"
+representation = "particle"
+color_rgba = "8F8B83FF"
+reference_density_kg_m3 = 1700.0
+

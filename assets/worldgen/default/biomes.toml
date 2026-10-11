@@ -1,0 +1,158 @@
+schema_version = 1
+
+[biomes.hearth]
+display_name = "Hearth basin"
+preview_color_rgba = "9DB279FF"
+temperature_base_k = 293.0
+temperature_variation_k = 8.0
+temperature_field = "temperature"
+[biomes.hearth.composition.upper]
+order = 10
+depth_min_normalized = 0.0
+depth_max_normalized = 0.5
+field = "composition"
+[biomes.hearth.composition.upper.materials.host]
+material = "sandstone"
+weight = 6.0
+[biomes.hearth.composition.upper.materials.secondary]
+material = "basalt"
+weight = 1.0
+[biomes.hearth.composition.lower]
+order = 20
+depth_min_normalized = 0.5
+depth_max_normalized = 1.0
+field = "composition"
+[biomes.hearth.composition.lower.materials.host]
+material = "sandstone"
+weight = 6.0
+[biomes.hearth.composition.lower.materials.secondary]
+material = "copper"
+weight = 1.0
+[biomes.hearth.deposits.ore]
+kind = "threshold"
+order = 10
+field = "ore_lenses"
+material = "copper"
+host_material = "sandstone"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+threshold_min = -0.65
+threshold_max = -0.3
+
+[biomes.rime]
+display_name = "Rime shelves"
+preview_color_rgba = "8CBED9FF"
+temperature_base_k = 255.0
+temperature_variation_k = 12.0
+temperature_field = "temperature"
+[biomes.rime.composition.upper]
+order = 10
+depth_min_normalized = 0.0
+depth_max_normalized = 0.5
+field = "composition"
+[biomes.rime.composition.upper.materials.host]
+material = "ice"
+weight = 6.0
+[biomes.rime.composition.upper.materials.secondary]
+material = "basalt"
+weight = 1.0
+[biomes.rime.composition.lower]
+order = 20
+depth_min_normalized = 0.5
+depth_max_normalized = 1.0
+field = "composition"
+[biomes.rime.composition.lower.materials.host]
+material = "ice"
+weight = 6.0
+[biomes.rime.composition.lower.materials.secondary]
+material = "iron"
+weight = 1.0
+[biomes.rime.deposits.ore]
+kind = "threshold"
+order = 10
+field = "ore_lenses"
+material = "iron"
+host_material = "ice"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+threshold_min = -0.65
+threshold_max = -0.3
+
+[biomes.lode]
+display_name = "Lode country"
+preview_color_rgba = "B18B64FF"
+temperature_base_k = 305.0
+temperature_variation_k = 10.0
+temperature_field = "temperature"
+[biomes.lode.composition.upper]
+order = 10
+depth_min_normalized = 0.0
+depth_max_normalized = 0.5
+field = "composition"
+[biomes.lode.composition.upper.materials.host]
+material = "basalt"
+weight = 6.0
+[biomes.lode.composition.upper.materials.secondary]
+material = "basalt"
+weight = 1.0
+[biomes.lode.composition.lower]
+order = 20
+depth_min_normalized = 0.5
+depth_max_normalized = 1.0
+field = "composition"
+[biomes.lode.composition.lower.materials.host]
+material = "basalt"
+weight = 6.0
+[biomes.lode.composition.lower.materials.secondary]
+material = "copper"
+weight = 1.0
+[biomes.lode.deposits.ore]
+kind = "threshold"
+order = 10
+field = "ore_lenses"
+material = "copper"
+host_material = "basalt"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+threshold_min = -0.65
+threshold_max = -0.3
+
+[biomes.ember]
+display_name = "Ember depths"
+preview_color_rgba = "B6644EFF"
+temperature_base_k = 365.0
+temperature_variation_k = 25.0
+temperature_field = "temperature"
+[biomes.ember.composition.upper]
+order = 10
+depth_min_normalized = 0.0
+depth_max_normalized = 0.5
+field = "composition"
+[biomes.ember.composition.upper.materials.host]
+material = "obsidian"
+weight = 6.0
+[biomes.ember.composition.upper.materials.secondary]
+material = "basalt"
+weight = 1.0
+[biomes.ember.composition.lower]
+order = 20
+depth_min_normalized = 0.5
+depth_max_normalized = 1.0
+field = "composition"
+[biomes.ember.composition.lower.materials.host]
+material = "obsidian"
+weight = 6.0
+[biomes.ember.composition.lower.materials.secondary]
+material = "iron"
+weight = 1.0
+[biomes.ember.deposits.ore]
+kind = "threshold"
+order = 10
+field = "ore_lenses"
+material = "iron"
+host_material = "obsidian"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+threshold_min = -0.65
+threshold_max = -0.3
+

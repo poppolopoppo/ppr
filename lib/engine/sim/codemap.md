@@ -24,7 +24,8 @@ through owned simulation packets; the sim module itself has no renderer or scrip
   non-finite temperature). `setCell` sets the box on first write in a clean chunk, then grows it
   (`DirtyBounds`, superset semantics; clean chunks have no bounds via `dirtyBounds()`)
   (Sim.ChunkGrid.cpp:32-43); `markDirty` sets the full-chunk
-  box; `clearDirty`/`clearAllDirty` write 0,0,0,0 and rely on `m_dirty==false` for `nullopt`
+  box; `clearDirty`/`clearAllDirty` write 0,0,0,0 and rely on `m_dirty==false` for 
+ullopt`
   (Sim.ChunkGrid.cpp:147-166,198-209); `setCells` is the bulk whole-chunk
   writer (`Array&&` adopt overload: validated move-adoption with no copy; pre-materialization is the caller's duty for concurrent use). `markDirty` returns void because
   allocation failure follows the engine allocator contract. `dirtyChunks()`/
@@ -43,7 +44,8 @@ through owned simulation packets; the sim module itself has no renderer or scrip
   every held column (tail row moves into the hole, the moved entity's reverse lookup follows),
   clears the mask, bumps the generation, and recycles; `remove<T>` does the same for one
   column and returns `false` for expected absence (unregistered type, dead/stale handle, or
-  entity that does not hold `T`), as do `get<T>` (`nullptr`) and `mask` (empty). Components are
+  entity that does not hold `T`), as do `get<T>` (
+ullptr`) and `mask` (empty). Components are
   raw-copied bytes gated by `static_assert` (trivially copyable and `alignof(T) <=
   alignof(std::max_align_t)`); `registerComponent<T>()` is idempotent and fail-closes with
    `too_many_components` at 64. `clear()` empties slots and rows but retains column registration;
@@ -115,6 +117,25 @@ through owned simulation packets; the sim module itself has no renderer or scrip
   names biomes; the numeric ids match the colony-owned `game/colony/Colony.Elements.h`
   registry (vacuum 0, confirmed by the physics `!= 0u` solid test).
 
+- `:worldgen.plan` owns validated numeric recipes, compiled fields and isolated
+  integer random streams. Game content names and files stay outside sim.
+- `:worldgen.layout` owns macro sites and their spatial lookup; required biome
+  assignment and start-reservation lookup precede chunk evaluation.
+- `:worldgen.geometry` derives bounded feature reservations, worm segments and
+  deterministic traversal-room connections. Start and sealed-pocket reservations
+  are excluded from room anchors; sealed markers take precedence over room markers.
+- `:worldgen.raster` indexes geometry by intersecting chunk and evaluates terrain,
+  temperature, host-only deposits, caves and ordered template operations in global
+  coordinates. `rasterizeGenerationTerrain` returns an owned candidate grid using
+  an injected scheduler/context and drains every accepted task before returning.
+  The matter and start partitions resolve bounded disjoint fills with contour-clipped
+  volume/mass and validate supported actor-footprint routes and exposed resources.
+  The result partition orchestrates the full numeric pipeline with an injected
+  clock, final terrain validation and canonical terrain/metadata checksums.
+  Runtime publication remains pending;
+  the legacy `generate` path above remains the production caller until that work
+  is complete.
+
 ## Flow
 
 Game-specific simulation systems stay outside this module: a driver advances
@@ -161,3 +182,7 @@ snapshot.
 - `worldgen/Sim.WorldGen.cppm` — `generate(seed, grid)` interface.
 - `worldgen/Sim.WorldGen.cpp` — seeded hash-noise regions + vacuum carving.
 - `CMakeLists.txt` — `engine.sim` target registration (see Integration).
+
+World generation accepts an explicit chunk scheduler, cancellation context and atomic current-stage/chunk progress. Independent chunks use bounded batches of admitted tasks, and all admitted tasks drain before generation returns or rethrows. Serial execution remains explicit and deterministic. The current numeric recipe is retained until compiled data-driven generation replaces it.
+
+The `:worldgen.noise` partition exports numeric `NoiseFieldDesc` and a move-only compiled `NoiseField`. FastNoiseLite v1.1.1 is privately pinned behind `Sim.WorldGen.Noise.cpp`; sampling is immutable and allocation-free. OpenSimplex2, Perlin, squared-Euclidean cellular distance, fBm, ridged noise and progressive domain warp are supported. Compilation validates finite settings, octave/work limits and signed lattice-coordinate bounds. The legacy generator is not switched to this adapter yet; compiled content recipes remain pending.

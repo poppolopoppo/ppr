@@ -37,3 +37,6 @@ Display controls use owned lane-affine transactions; native window changes stay 
 `lib/engine/tests/app/CMakeLists.txt` owns six serialized app shards, including display/window transactions, render lane and lifetime/failure gates. Asset tests cover GPU/asset integration. See [root tests](../../../codemap.md#test-infrastructure) for scheduling and loop policy.
 
 For source additions, register the interface and matching implementation in `CMakeLists.txt` and update `App.cppm` only when exporting the partition. `App.TemplateInstantiations.cpp` owns explicit template instantiations. Do not infer registration from files merely present on disk.
+
+Graceful close can be deferred through the application hook before latching exit. Nonblocking control servicing runs independently of client frame admission and in pacer slices, allowing derived owners to drain asynchronous work without advancing gameplay. GLFW asks for main-window exit before marking it closed or notifying listeners; a deferred exit preserves the live window. Render results explicitly distinguish successful presentation from accepted submission and applied staging.
+

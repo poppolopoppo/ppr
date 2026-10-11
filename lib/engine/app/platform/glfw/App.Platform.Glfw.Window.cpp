@@ -383,10 +383,19 @@ namespace pP {
 
     static void glfwWindowCloseCallback_(::GLFWwindow *p_glfw_window) {
         Window &window = getWindowFromGlfwHandle_(p_glfw_window);
+        GlfwWindow &service = *g_glfw_window;
+        if (service.m_main_window == &window and service.m_application.isValid()) {
+            service.m_application->requestExit(default_value_v);
+            if (not service.m_application->isExitRequested()) {
+                // Deferred close keeps the window and its listeners live while
+                // the normal application loop drains outstanding work.
+                glfwSetWindowShouldClose(p_glfw_window, GLFW_FALSE);
+                return;
+            }
+        }
         window.m_visible = false;
         window.m_when_closed(window);
 
-        GlfwWindow &service = *g_glfw_window;
         PPR_LOG_WARNING_ON_FAIL(GlfwWindow, service.m_when_window_closed(window));
 
         if (service.m_focused_window == &window) {
@@ -396,10 +405,6 @@ namespace pP {
         if (service.m_main_window == &window) {
             service.m_main_window.reset();
 
-            // closing the main window also closes the application:
-            if (service.m_application.isValid()) {
-                service.m_application->requestExit(default_value_v);
-            }
         }
     }
 

@@ -907,13 +907,16 @@ namespace pP {
 
     std::error_code Renderer::renderAndPresent(
         const SurfaceWindowSnapshot &window, const std::span<const SurfaceRenderPass> passes,
-        const SurfaceIdentity identity) {
-        return renderAndPresentImpl_(window, passes, identity);
+        const SurfaceIdentity identity, bool *const presented) {
+        return renderAndPresentImpl_(window, passes, identity, presented);
     }
 
     std::error_code Renderer::renderAndPresentImpl_(
         const SurfaceWindowSnapshot &window, const std::span<const SurfaceRenderPass> passes,
-        const SurfaceIdentity identity) {
+        const SurfaceIdentity identity, bool *const presented) {
+        if (presented != nullptr) {
+            *presented = false;
+        }
         const hal::ProfileScope scope{"App.Renderer.Present"};
         // Pre-guard rejections (F1 stale fate): definitely unsubmitted, no
         // credit taken — stamp kRejected so THIS invocation never inherits
@@ -1210,6 +1213,9 @@ namespace pP {
         {
             const hal::ProfileScope scope_present{"App.Renderer.PresentFinal"};
             PPR_RETAIN_ERROR_ON_FAIL(Renderer, first_err, acquired_guard.settlePresent());
+        }
+        if (presented != nullptr) {
+            *presented = not first_err and settlement == FrameSettlement::kSubmitted;
         }
         return first_err;
     }

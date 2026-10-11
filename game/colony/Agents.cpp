@@ -13,6 +13,7 @@ import game.colony.pathfinding;
 import std;
 
 namespace pP::colony {
+    PPR_DEFINE_LOG_CATEGORY(AgentPreparation, info, none)
     namespace {
         // Self-contained splitmix64 (worldgen rationale: core RNG is
         // hardware-seeded and RngStream is snapshot-local, so spawns carry
@@ -188,7 +189,8 @@ namespace pP::colony {
         return {};
     }
 
-    std::error_code spawnAgents(const sim::ChunkGrid &grid, sim::Registry &registry, const u64 seed, u32 count) {
+    std::error_code spawnAgents(
+        const sim::ChunkGrid &grid, sim::Registry &registry, const u64 seed, u32 count, const IContext *const context) {
         // Phase: normalize the profiling override. Fail closed to the
         // production default on empty, reject above the named ceiling.
         if (count == 0u) {
@@ -200,11 +202,17 @@ namespace pP::colony {
 
         u64 stream = seed + 0x9E3779B97F4A7C15u;
         for (u32 agent = 0u; agent < count; ++agent) {
+            if (context) {
+                PPR_RETURN_ERROR_ON_FAIL(AgentPreparation, context->error());
+            }
             sim::GlobalCellPos spawn{sim::kWorldEdge, sim::kWorldEdge};
             for (u32 attempt = 0u; attempt < 256u and spawn.m_x >= sim::kWorldEdge; ++attempt) {
                 const u32 x = static_cast<u32>(nextStream(stream) % (sim::kWorldEdge - 1u));
                 const u32 y = static_cast<u32>(nextStream(stream) % (sim::kWorldEdge - 2u));
                 for (u32 dy = 0u; dy < 64u and spawn.m_x >= sim::kWorldEdge; ++dy) {
+                    if (context) {
+                        PPR_RETURN_ERROR_ON_FAIL(AgentPreparation, context->error());
+                    }
                     for (u32 dx = 0u; dx < 64u; ++dx) {
                         const u32 cx = (x + dx) % sim::kWorldEdge;
                         const u32 cy = (y + dy) % (sim::kWorldEdge - 1u);

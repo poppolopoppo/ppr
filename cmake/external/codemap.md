@@ -7,6 +7,8 @@ module bindings for third-party libraries consumed by the engine.
 
 ## Design
 
+- **FastNoiseLite** (`FastNoiseLite.cmake`): immutable v1.1.1 source revision, private header-only numeric worldgen dependency. `PatchFastNoiseLite.cmake` verifies the header hash and generates a per-build copy with defined unsigned wraparound arithmetic; licenses and modification notes live in `third_party/FastNoiseLite/`.
+
 - **CPM packages** (`cmake/Dependencies.cmake` + per-lib files): GLFW (`find_package(glfw3)`, SYSTEM includes),
   Mango (poppolopoppo/mango `main` branch, vcpkg prefix path + triplet passthrough, AVX/AVX2/SSE2/SSE4, `BUILD_IMPORT3D ON`,
   `BUILD_TESTS OFF` + `BUILD_TOOLS OFF` (Linux bring-up: skip unneeded Mango tests/tools), no examples/OpenGL/Vulkan/shared-libs; ASan adds `/D_ANNOTATE_STL` via `CMAKE_CXX_FLAGS`), rapidhash (interface
@@ -63,3 +65,4 @@ module bindings for third-party libraries consumed by the engine.
 - `SlangRHI.cmake` — Slang-RHI CPM, unity build, `CXX_MODULE_STD OFF`.
 - `GLFW.cmake` / `Mango.cmake` / `rapidhash.cmake` / `STB.cmake` — per-dependency fetch/link settings.
 - `vcpkg.json` — manifest (fmt, zlib, libdeflate, zstd, lcms, glfw, …).
+`FastNoiseLite.cmake` pins Auburn/FastNoiseLite v1.1.1 at immutable commit `7ccfbc16eb1c932568f177d63a9ba51d89bbe516` via CPM. Its SYSTEM interface include target `ppr.fast_noise_lite` is a PRIVATE dependency of `engine.sim`. The upstream header is included only by `Sim.WorldGen.Noise.cpp`. License notices and provenance are retained in `third_party/FastNoiseLite/`.

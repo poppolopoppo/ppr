@@ -385,6 +385,9 @@ namespace pP::image {
         const bool decoded = [&] {
             try {
                 return static_cast<bool>(decoder.decode(surface, options));
+            } catch (const std::bad_alloc &) {
+                // Allocation failure must reach the application's fatal boundary.
+                throw;
             } catch (const std::exception &) {
                 return false;
             } catch (...) {

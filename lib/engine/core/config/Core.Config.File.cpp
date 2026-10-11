@@ -33,6 +33,7 @@ namespace pP::config {
             Diagnostics *m_diagnostics{nullptr};
             Document m_document{};
             std::error_code m_first_error{};
+            EDecodeMode m_mode{EDecodeMode::scalar};
 
             [[nodiscard]] std::string location(const toml::source_position &pos) const {
                 if (pos.line == 0) {
@@ -65,11 +66,24 @@ namespace pP::config {
                     const std::string segment = keyText(kv.first);
                     const std::string key = prefix.empty() ? segment : prefix + "." + segment;
                     const toml::node &node = kv.second;
+                    if (m_mode == EDecodeMode::records and
+                        (segment.empty() or segment.find('.') != std::string::npos)) {
+                        fail(
+                            location(node.source().begin), key, "ambiguous record key segment",
+                            EConfigErrc::codec_error);
+                        continue;
+                    }
                     switch (node.type()) {
                         case toml::node_type::table: {
                             const toml::table *nested = node.as_table();
                             PPR_ASSERT(nested != nullptr);
                             if (nested != nullptr) {
+                                if (m_mode == EDecodeMode::records and nested->empty()) {
+                                    fail(
+                                        location(node.source().begin), key, "empty record tables are not supported",
+                                        EConfigErrc::missing_value);
+                                    break;
+                                }
                                 walkTable(*nested, key);
                             }
                             break;
@@ -173,7 +187,7 @@ namespace pP::config {
     } // namespace
 
     [[nodiscard]] Expected<Document> decode(
-        const std::string_view bytes, const std::string_view origin, Diagnostics &diagnostics) {
+        const std::string_view bytes, const std::string_view origin, Diagnostics &diagnostics, const EDecodeMode mode) {
         const std::string origin_text = origin.empty() ? std::string{"config"} : std::string{origin};
         toml::table table;
         try {
@@ -188,6 +202,7 @@ namespace pP::config {
         TomlFlattener flattener{};
         flattener.m_origin = origin_text;
         flattener.m_diagnostics = std::addressof(diagnostics);
+        flattener.m_mode = mode;
         flattener.walkTable(table, {});
         if (flattener.m_first_error) {
             return std::unexpected{flattener.m_first_error};

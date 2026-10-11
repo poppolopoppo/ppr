@@ -48,7 +48,7 @@ export namespace pP::colony {
 
         [[nodiscard]] bool isInitialized() const noexcept;
 
-        [[nodiscard]] std::error_code init(const ColonyDesc &desc);
+        [[nodiscard]] std::error_code init(const ColonyDesc &desc, const sim::GenerationExecution *execution = nullptr);
 
         [[nodiscard]] std::error_code shutdown();
     };

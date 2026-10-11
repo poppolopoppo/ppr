@@ -118,7 +118,8 @@ export namespace pP::colony {
     /// `kAgentCount`; `count > kAgentCountMax` returns `value_too_large`.
     /// No wall-clock or global RNG is consulted.
     [[nodiscard]] std::error_code spawnAgents(
-        const sim::ChunkGrid &grid, sim::Registry &registry, u64 seed, u32 count = kAgentCount);
+        const sim::ChunkGrid &grid, sim::Registry &registry, u64 seed, u32 count = kAgentCount,
+        const IContext *context = nullptr);
 
     /// Plans the first agent (slot order) needing a plan: none, or desired
     /// goal/site differing from the current Plan. Issues or refreshes the

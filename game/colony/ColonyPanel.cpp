@@ -389,7 +389,7 @@ namespace pP::colony {
             std::snprintf(seed_label, sizeof(seed_label), "Seed %llu", static_cast<unsigned long long>(driver.seed()));
             flow.place(plainWidth(seed_label));
             ImGui::TextDisabled("%s", seed_label);
-            place_button("New world", EColonyIntent::regenerate, 0u);
+            place_button("New game", EColonyIntent::regenerate, 0u);
 
             flow.place(plainWidth("|"));
             ImGui::TextDisabled("|");
@@ -519,13 +519,15 @@ namespace pP::colony {
             // and emitting a cancel intent instead would clear a pin the
             // player never touched.
             if (state.m_regen_confirm_open) {
-                ImGui::OpenPopup("Regenerate world?");
+                ImGui::OpenPopup("Start a new game?");
             }
-            if (ImGui::BeginPopupModal("Regenerate world?", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-                ImGui::Text("Replace the current colony with a new world?");
+            if (ImGui::BeginPopupModal("Start a new game?", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+                ImGui::Text("Generate a new world and reset the colony?");
+                ImGui::TextDisabled("Gameplay pauses while the new game is prepared.");
                 ImGui::TextDisabled(
-                    "Seed %llu is discarded; this cannot be undone.", static_cast<unsigned long long>(driver.seed()));
-                if (ImGui::Button("Regenerate")) {
+                    "The current game (seed %llu) is replaced only on success.",
+                    static_cast<unsigned long long>(driver.seed()));
+                if (ImGui::Button("Start new game")) {
                     intent = ColonyIntent{.m_kind = EColonyIntent::regenerate, .m_confirmed = true};
                     state.m_regen_confirm_open = false;
                     ImGui::CloseCurrentPopup();

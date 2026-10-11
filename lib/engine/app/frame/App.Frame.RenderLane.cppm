@@ -95,6 +95,9 @@ export namespace pP {
         FenceCompletionValue m_submit_value{kFenceValueNone};
         std::error_code m_error{};
         bool m_dropped{false};
+        // True only when this frame was submitted and its surface present
+        // succeeded. CPU staging and queue acceptance alone do not set it.
+        bool m_presented{false};
         // Echoed from the request's reservation identity so the owner can
         // match/reserve exactly once; stale results never release another
         // run's credit (owner validates against its live epoch).

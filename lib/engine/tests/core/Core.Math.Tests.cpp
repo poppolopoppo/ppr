@@ -9,6 +9,100 @@ import std;
 
 namespace pP::tests::detail {
     namespace Math {
+        double contourCross(const math::ContourPoint a, const math::ContourPoint b, const math::ContourPoint p) {
+            return (b.m_x - a.m_x) * (p.m_y - a.m_y) - (b.m_y - a.m_y) * (p.m_x - a.m_x);
+        }
+
+        bool contourContains(const math::ContourCase &shape, const math::ContourPoint point) {
+            const auto vertices = math::contourPoints();
+            for (u32 i = 0u; i < shape.m_triangle_count; ++i) {
+                const auto triangle = shape.m_triangles[i];
+                if (contourCross(vertices[triangle.m_a], vertices[triangle.m_b], point) >= 0.0 and
+                    contourCross(vertices[triangle.m_b], vertices[triangle.m_c], point) >= 0.0 and
+                    contourCross(vertices[triangle.m_c], vertices[triangle.m_a], point) >= 0.0) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        PPR_UNIT_TEST (contour_all_cases_have_exact_area_and_oriented_boundaries) {
+            constexpr std::array<double, 16> expected_areas{
+                0.0, 0.125, 0.125, 0.5, 0.125, 0.25, 0.5, 0.875, 0.125, 0.5, 0.25, 0.875, 0.5, 0.875, 0.875, 1.0};
+            const auto vertices = math::contourPoints();
+            const auto cases = math::contourCases();
+            static_assert(std::is_trivially_copyable_v<math::ContourCase>);
+            static_assert(std::is_standard_layout_v<math::ContourCase>);
+            static_assert(sizeof(math::ContourPoint) == 8u);
+            static_assert(sizeof(math::ContourSegment) == 8u);
+            static_assert(sizeof(math::ContourTriangle) == 16u);
+            static_assert(sizeof(math::ContourCase) == 72u);
+
+            for (u32 bits = 0u; bits < 16u; ++bits) {
+                const auto &shape = cases[bits];
+                PPR_TEST_ASSERT(shape.m_segment_count <= 2u and shape.m_triangle_count <= 3u);
+                double area = 0.0;
+                for (u32 i = 0u; i < shape.m_triangle_count; ++i) {
+                    const auto triangle = shape.m_triangles[i];
+                    PPR_TEST_ASSERT(triangle.m_a < 8u and triangle.m_b < 8u and triangle.m_c < 8u);
+                    PPR_TEST_ASSERT(triangle.m_solid_corners != 0u and (triangle.m_solid_corners & ~bits) == 0u);
+                    const double twice_area = contourCross(
+                        vertices[triangle.m_a], vertices[triangle.m_b], vertices[triangle.m_c]);
+                    PPR_TEST_ASSERT(twice_area > 0.0);
+                    area += twice_area * 0.5;
+                }
+                PPR_TEST_ASSERT(area == expected_areas[bits]);
+                for (u32 corner = 0u; corner < 4u; ++corner) {
+                    PPR_TEST_ASSERT(contourContains(shape, vertices[corner]) == ((bits & (1u << corner)) != 0u));
+                }
+                for (u32 i = 0u; i < shape.m_segment_count; ++i) {
+                    const auto segment = shape.m_segments[i];
+                    PPR_TEST_ASSERT(segment.m_begin >= 4u and segment.m_begin < 8u);
+                    PPR_TEST_ASSERT(segment.m_end >= 4u and segment.m_end < 8u);
+                    const auto a = vertices[segment.m_begin];
+                    const auto b = vertices[segment.m_end];
+                    const float mid_x = (a.m_x + b.m_x) * 0.5f;
+                    const float mid_y = (a.m_y + b.m_y) * 0.5f;
+                    constexpr float step = 1.0f / 1024.0f;
+                    const math::ContourPoint left{mid_x - (b.m_y - a.m_y) * step, mid_y + (b.m_x - a.m_x) * step};
+                    const math::ContourPoint right{mid_x + (b.m_y - a.m_y) * step, mid_y - (b.m_x - a.m_x) * step};
+                    PPR_TEST_ASSERT(contourContains(shape, left));
+                    PPR_TEST_ASSERT(not contourContains(shape, right));
+                }
+            }
+        };
+
+        PPR_UNIT_TEST (contour_saddles_are_disconnected_and_neighbour_edges_agree) {
+            const auto cases = math::contourCases();
+            for (const u32 bits: {5u, 10u}) {
+                const auto &shape = cases[bits];
+                PPR_TEST_ASSERT(shape.m_segment_count == 2u and shape.m_triangle_count == 2u);
+                PPR_TEST_ASSERT(not contourContains(shape, {0.5f, 0.5f}));
+                const auto a = shape.m_triangles[0u].m_solid_corners;
+                const auto b = shape.m_triangles[1u].m_solid_corners;
+                PPR_TEST_ASSERT(std::has_single_bit(a) and std::has_single_bit(b));
+                PPR_TEST_ASSERT((a | b) == bits and (a & b) == 0u);
+            }
+            for (u32 a = 0u; a < 16u; ++a) {
+                for (u32 b = 0u; b < 16u; ++b) {
+                    const bool right_matches_left = ((a >> 1u) & 1u) == (b & 1u) and
+                                                    ((a >> 2u) & 1u) == ((b >> 3u) & 1u);
+                    const bool top_matches_bottom = ((a >> 3u) & 1u) == (b & 1u) and
+                                                    ((a >> 2u) & 1u) == ((b >> 1u) & 1u);
+                    for (const float t: {0.0f, 0.25f, 0.5f, 0.75f, 1.0f}) {
+                        if (right_matches_left) {
+                            PPR_TEST_ASSERT(
+                                contourContains(cases[a], {1.0f, t}) == contourContains(cases[b], {0.0f, t}));
+                        }
+                        if (top_matches_bottom) {
+                            PPR_TEST_ASSERT(
+                                contourContains(cases[a], {t, 1.0f}) == contourContains(cases[b], {t, 0.0f}));
+                        }
+                    }
+                }
+            }
+        };
+
         PPR_UNIT_TEST (scalar_rounding_to_int) {
             static_assert(std::same_as<decltype(ceilToInt(1.0f)), i32>);
             static_assert(std::same_as<decltype(floorToInt(1.0f)), i32>);
@@ -203,6 +297,8 @@ namespace pP::tests {
             detail::Math::double_rounding_fallbacks,
             detail::Math::to_float_from_integral_vectors,
             detail::Math::generic_vector_rounding_fallback,
+            detail::Math::contour_all_cases_have_exact_area_and_oriented_boundaries,
+            detail::Math::contour_saddles_are_disconnected_and_neighbour_edges_agree,
         });
     };
 

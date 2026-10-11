@@ -77,6 +77,27 @@ export namespace pP::colony {
     [[nodiscard]] SimFramePacket makeSimFramePacket(
         u64 frame_id, const ColonyDriver &driver, bool full_refresh = false);
 
+    /// Initial graphics preparation copies at most eight chunks per frame.
+    /// Only the prepared prefix is submitted, so uncached terrain is not drawn.
+    inline constexpr u32 kInitialPresentationBatchChunks = 8u;
+    [[nodiscard]] Expected<SimFramePacket> makeInitialPresentationBatch(
+        u64 frame_id, const ColonyDriver &driver, u32 first_chunk, u32 chunk_count);
+
+    /// Client-owned initial publication cursor. At most one upload batch is
+    /// outstanding; clean frames expose only the confirmed prepared prefix.
+    class InitialPresentation {
+        u32 m_next_chunk{};
+        std::optional<u64> m_frame{};
+        Array<GridTileSubmission> m_visible{};
+        Array<GridTileSubmission> m_pending{};
+
+    public:
+        [[nodiscard]] u32 completedChunks() const noexcept;
+        [[nodiscard]] Expected<GridPass::GridStagedFrame> stage(u64 frame_id, const ColonyDriver &driver);
+        /// Returns true only when the final batch was successfully presented.
+        [[nodiscard]] bool consume(const RenderFrameResult &result, u64 world_generation);
+    };
+
     // Fail-closed coherence: the packet authorizes presentation only while
     // the live tick AND world epoch still match capture time. A regeneration
     // (seed change) or a tick advance after capture invalidates the payload.

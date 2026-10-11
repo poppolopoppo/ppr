@@ -28,7 +28,7 @@ namespace pP {
             try {
                 throw;
             } catch (const std::bad_alloc &) {
-                return std::make_error_code(std::errc::not_enough_memory);
+                hal::fatalExit("allocation-failure");
             } catch (const std::system_error &error) {
                 return error.code();
             } catch (...) {
@@ -101,6 +101,10 @@ namespace pP {
     }
 
     void Application::requestExit(const std::error_code clause) const noexcept {
+        if (not clause and deferGracefulExit_()) {
+            requestFrameAdmissionWake();
+            return;
+        }
         if (PPR_ENSURE(m_request_exit.isValid())) [[likely]] {
             if (not clause) {
                 // Graceful exit is not cancellation: raise the exit latch so
@@ -117,6 +121,8 @@ namespace pP {
             try {
                 PPR_LOG(
                     App, info, "request exit", {{"category", clause.category().name()}, {"cause", clause.message()}});
+            } catch (const std::bad_alloc &) {
+                hal::fatalExit("allocation-failure");
             } catch (...) {
                 // Diagnostics only: losing the message cannot lose or alter the published exit cause.
             }
@@ -135,6 +141,14 @@ namespace pP {
         } catch (...) {
             // Native wake is a hint; exit/error and the pulse remain durable, rechecked within one bounded slice.
         }
+    }
+
+    bool Application::deferGracefulExit_() const noexcept {
+        return false;
+    }
+
+    std::error_code Application::serviceControls_() {
+        return {};
     }
 
     bool Application::isExitRequested() const noexcept {
@@ -718,9 +732,7 @@ namespace pP {
                     first_err = std::make_error_code(std::errc::invalid_argument);
                 }
             } catch (const std::bad_alloc &) {
-                if (not first_err) {
-                    first_err = std::make_error_code(std::errc::not_enough_memory);
-                }
+                throw; // Fatal allocation failure reaches the executable boundary.
             } catch (...) {
                 if (not first_err) {
                     first_err = std::make_error_code(std::errc::state_not_recoverable);
@@ -841,6 +853,7 @@ namespace pP {
         // rechecked here. Fail-closed like the loop boundary it replaces:
         // unexpected exceptions convert to error codes, never escape.
         out_skip = false;
+        PPR_RETURN_ERROR_ON_FAIL(App, serviceControls_());
         if (const std::error_code clock_err = advanceClock_(out_delta_time)) {
             return clock_err;
         }
@@ -852,7 +865,7 @@ namespace pP {
         } catch (const std::invalid_argument &) {
             admission_err = std::make_error_code(std::errc::invalid_argument);
         } catch (const std::bad_alloc &) {
-            admission_err = std::make_error_code(std::errc::not_enough_memory);
+            throw;
         } catch (...) {
             admission_err = std::make_error_code(std::errc::state_not_recoverable);
         }
@@ -1188,6 +1201,7 @@ namespace pP {
                 const hal::ProfileScope scope_frame_service{"PPR.Frame.ServicePlatform"};
                 std::ignore = pumpOperationBestEffort_(
                     [this] { return m_platform->pumpNativeEvents(); }, m_wait_pump_error);
+                std::ignore = pumpOperationBestEffort_([this] { return serviceControls_(); }, m_wait_pump_error);
                 // A long old CPU cap must not defer a display acknowledgement
                 // until another admitted frame. Retargeting still uses the
                 // existing wakeable pacer and its original tick anchor.
@@ -1932,6 +1946,20 @@ namespace pP {
             // as any other handoff failure (never past it with no proof).
             std::shared_ptr<QuiescenceHandoffState> handoff_state{};
             try {
+                // Controls can overtake queued frames. Settle those frames and
+                // detach the executor before quarantining backend admission;
+                // otherwise a valid accepted frame can run after quarantine
+                // and turn an ordinary close into a terminal render failure.
+                bool drain_acknowledged = false;
+                const auto drain_error = m_render_lane->drainQueuedFrames(&drain_acknowledged);
+                if (not drain_acknowledged) {
+                    failStopOnUnknownGpuTeardown_(
+                        drain_error ? drain_error : std::make_error_code(std::errc::operation_canceled));
+                }
+                if (drain_error and not m_wait_pump_error) {
+                    m_wait_pump_error = drain_error;
+                }
+
                 handoff_state = std::make_shared<QuiescenceHandoffState>();
                 sync_err = m_render_lane->runOnLaneSync(
                     [this, handoff_state]() -> std::error_code {

@@ -12,7 +12,13 @@ import engine.core;
 import std;
 
 namespace pP::sim {
+    using pP::make_error_code;
+    PPR_DEFINE_LOG_CATEGORY(WorldGeneration, info, none)
+
     namespace WorldGen {
+        [[nodiscard]] std::error_code canceled(const GenerationExecution &execution) noexcept {
+            return execution.m_context != nullptr ? execution.m_context->error() : std::error_code{};
+        }
         // ------------------------------------------------------------------
         // opaque numeric element ids (canonical registry: Colony.Elements.h)
         // ------------------------------------------------------------------
@@ -323,7 +329,8 @@ namespace pP::sim {
             {2.7716386f, -1.1480503f},
         };
 
-        static void carveCaverns(ChunkGrid &grid, const u64 seed, const Layout &layout) {
+        [[nodiscard]] static std::error_code carveCaverns(
+            ChunkGrid &grid, const u64 seed, const Layout &layout, const GenerationExecution &execution) {
             const hal::ProfileScope scope{"Sim.WorldGen.CarveCaverns"};
             const u64 turn_seed = seed ^ 0xB09A11uLL;
             const u64 radius_seed = seed ^ 0xCA9E0uLL;
@@ -333,6 +340,7 @@ namespace pP::sim {
                 auto heading = static_cast<i32>((layout.m_worm_angle[worm] * 16u) / 6283u % 16u);
 
                 for (u32 step = 0u; step < layout.m_worm_steps[worm]; ++step) {
+                    PPR_RETURN_ERROR_ON_FAIL(WorldGeneration, canceled(execution));
                     // Same hashed turn stream as before (`hash01` in
                     // [-0.5, 0.5)); a turn beyond half a compass step
                     // (0.5 * (pi/8) / 0.9 ~= 0.21816616) nudges the heading
@@ -359,15 +367,18 @@ namespace pP::sim {
                     carveDisc(grid, static_cast<u32>(px), static_cast<u32>(py), radius);
                 }
             }
+            return {};
         }
 
-        static void carveVentShafts(ChunkGrid &grid, const Layout &layout) {
+        [[nodiscard]] static std::error_code carveVentShafts(
+            ChunkGrid &grid, const Layout &layout, const GenerationExecution &execution) {
             const hal::ProfileScope scope{"Sim.WorldGen.CarveVentShafts"};
             for (u32 index = 0u; index < kVentCount; ++index) {
                 const u32 vent_x = layout.m_vent_x[index];
                 const u32 vent_y = layout.m_vent_y[index];
                 const u32 top = vent_y > 260u ? vent_y - 260u : 0u;
                 for (u32 y = top; y < vent_y; ++y) {
+                    PPR_RETURN_ERROR_ON_FAIL(WorldGeneration, canceled(execution));
                     for (u32 dx = 0u; dx <= 6u; ++dx) {
                         const i32 x = static_cast<i32>(vent_x) - 3 + static_cast<i32>(dx);
                         if (x < 0 or x >= static_cast<i32>(kWorldEdge)) {
@@ -388,50 +399,114 @@ namespace pP::sim {
                     }
                 }
             }
+            return {};
         }
     } // namespace WorldGen
 
-    void generate(u64 seed, ChunkGrid &grid) {
+    std::error_code generate(const u64 seed, ChunkGrid &grid, const GenerationExecution &execution) {
         const hal::ProfileScope scope{"Sim.WorldGen.Generate"};
+        PPR_RETURN_ERROR_ON_FAIL(WorldGeneration, WorldGen::canceled(execution));
         const WorldGen::Layout layout = WorldGen::deriveLayout(seed);
         const WorldGen::Tuned tuned = WorldGen::tuneLayout(layout);
-
-        const WaitGroup wg{};
-        ParallelScheduler &worker_pool = parallel::foregroundPool();
-
-        std::error_code admission_err{};
-        for (u32 c = 0u; c < kChunkCount; ++c) {
-            grid.markDirty(ChunkPos{c % kChunksPerEdge, c / kChunksPerEdge});
-
-            const std::error_code err = worker_pool.schedule(
-                [&grid, &layout, &tuned, seed, c](const IContext &) -> void {
-                    Array<Cell> chunk{};
-                    chunk.resize(kCellsPerChunk);
-
-                    const u32 chunk_x = c % kChunksPerEdge;
-                    const u32 chunk_y = c / kChunksPerEdge;
-                    for (u32 i = 0u; i < kCellsPerChunk; ++i) {
-                        const u32 lx = i % kChunkEdge;
-                        const u32 ly = i / kChunkEdge;
-                        const u32 x = chunk_x * kChunkEdge + lx;
-                        const u32 y = chunk_y * kChunkEdge + ly;
-                        chunk[i] = WorldGen::baseCell(x, y, seed, layout, tuned);
-                    }
-
-                    const ChunkPos pos{chunk_x, chunk_y};
-                    PPR_VERIFY(not grid.setCells(pos, std::move(chunk)));
-                },
-                wg, ParallelScheduler::wait_if_full);
-
-            if (err) [[unlikely]] {
-                admission_err = admission_err ? admission_err : err;
+        if (execution.m_stage != nullptr) {
+            execution.m_stage->store(EGenerationStage::terrain, std::memory_order_release);
+        }
+        const auto fill = [&](const u32 c) -> std::error_code {
+            PPR_RETURN_ERROR_ON_FAIL(WorldGeneration, WorldGen::canceled(execution));
+            Array<Cell> chunk(kCellsPerChunk);
+            const u32 chunk_x = c % kChunksPerEdge;
+            const u32 chunk_y = c / kChunksPerEdge;
+            for (u32 ly = 0u; ly < kChunkEdge; ++ly) {
+                PPR_RETURN_ERROR_ON_FAIL(WorldGeneration, WorldGen::canceled(execution));
+                for (u32 lx = 0u; lx < kChunkEdge; ++lx) {
+                    chunk[ly * kChunkEdge + lx] = WorldGen::baseCell(
+                        chunk_x * kChunkEdge + lx, chunk_y * kChunkEdge + ly, seed, layout, tuned);
+                }
             }
+            // ChunkGrid's slot arrays are fixed at construction; each worker
+            // owns one payload/state slot, without concurrent topology growth.
+            PPR_RETURN_ERROR_ON_FAIL(WorldGeneration, grid.setCells(ChunkPos{chunk_x, chunk_y}, std::move(chunk)));
+            if (execution.m_completed_chunks != nullptr) {
+                execution.m_completed_chunks->fetch_add(1u, std::memory_order_relaxed);
+            }
+            return {};
+        };
+
+        ParallelScheduler *const pool = execution.m_pool;
+        const bool parallel = pool != nullptr and not pool->isWorkerThread();
+        constexpr u32 kBatch = 32u;
+        for (u32 first = 0u; first < kChunkCount; first += kBatch) {
+            std::array<std::future<std::error_code>, kBatch> pending{};
+            u32 admitted = 0u;
+            std::error_code error{};
+            std::exception_ptr exception{};
+            try {
+                for (u32 c = first; c < std::min(first + kBatch, kChunkCount); ++c) {
+                    if (error = WorldGen::canceled(execution); error) {
+                        break;
+                    }
+                    if (not parallel) {
+                        error = fill(c);
+                    } else {
+                        auto task = pool->schedule(
+                            [&, c](const IContext &context) -> std::error_code {
+                                PPR_RETURN_ERROR_ON_FAIL(WorldGeneration, context.error());
+                                return fill(c);
+                            },
+                            std::nullopt, ParallelScheduler::drop_if_full);
+                        if (task) {
+                            pending[admitted++] = std::move(*task);
+                        } else if (task.error() == make_error_code(RawChannel::error_full)) {
+                            // Only the coordinator may run this fallback.
+                            error = fill(c);
+                        } else {
+                            error = task.error();
+                        }
+                    }
+                    if (error) {
+                        break;
+                    }
+                }
+            } catch (...) {
+                exception = std::current_exception();
+            }
+            // Drain every accepted task before destroying the borrowed layout,
+            // even if admission, a sibling or coordinator allocation throws.
+            for (u32 i = 0u; i < admitted; ++i) {
+                try {
+                    const auto task_error = pending[i].get();
+                    if (not error) {
+                        error = task_error;
+                    }
+                } catch (...) {
+                    if (not exception) {
+                        exception = std::current_exception();
+                    }
+                }
+            }
+            if (exception) {
+                std::rethrow_exception(exception);
+            }
+            PPR_RETURN_ERROR_ON_FAIL(WorldGeneration, error);
         }
 
-        PPR_VERIFY(not wg.wait());
-        PPR_VERIFY(not admission_err);
+        if (execution.m_stage != nullptr) {
+            execution.m_stage->store(EGenerationStage::caves, std::memory_order_release);
+        }
+        PPR_RETURN_ERROR_ON_FAIL(WorldGeneration, WorldGen::carveCaverns(grid, seed, layout, execution));
+        PPR_RETURN_ERROR_ON_FAIL(WorldGeneration, WorldGen::carveVentShafts(grid, layout, execution));
+        if (execution.m_stage != nullptr) {
+            execution.m_stage->store(EGenerationStage::complete, std::memory_order_release);
+        }
+        return {};
+    }
 
-        WorldGen::carveCaverns(grid, seed, layout);
-        WorldGen::carveVentShafts(grid, layout);
+    void generate(const u64 seed, ChunkGrid &grid) {
+        // Temporary compatibility boundary for existing headless fixtures;
+        // interactive callers inject their distinct background pool/context.
+        const auto error = generate(seed, grid, GenerationExecution{.m_pool = &parallel::foregroundPool()});
+        if (error) {
+            PPR_THROW(WorldGeneration, std::system_error(error));
+        }
     }
 }

@@ -14,11 +14,13 @@ export namespace pP::game {
     enum class EGameCommand : u8 {
         interactive,
         smoke,
+        validate_worldgen,
     };
 
-    inline constexpr config::EnumDomain<EGameCommand, 2u> game_command_domain{{
+    inline constexpr config::EnumDomain<EGameCommand, 3u> game_command_domain{{
         config::EnumEntry<EGameCommand>{EGameCommand::interactive, "interactive"},
         config::EnumEntry<EGameCommand>{EGameCommand::smoke, "smoke"},
+        config::EnumEntry<EGameCommand>{EGameCommand::validate_worldgen, "validate-worldgen"},
     }};
 
     /// Game-owned invocation settings: command selection, profiling fixtures,
@@ -31,11 +33,32 @@ export namespace pP::game {
         bool m_profile100{false};
         std::optional<double> m_exit_after{};
         std::optional<std::string> m_config{};
+        std::optional<std::string> m_worldgen_root{};
+        std::string m_worldgen_profile{"frontier"};
+        u64 m_worldgen_seed{42u};
 
         [[nodiscard]] static constexpr auto describe() {
             using namespace config;
 
             return std::tuple{
+                field(
+                    &GameSettings::m_worldgen_root,
+                    Metadata{
+                        "game.worldgen_root", "Explicit world-generation pack root", "World generation",
+                        EMutability::startup, ESource::all, false},
+                    PathDomain{1024u, false}),
+                field(
+                    &GameSettings::m_worldgen_profile,
+                    Metadata{
+                        "game.worldgen_profile", "World-generation profile key", "World generation",
+                        EMutability::startup, ESource::all, false},
+                    StringDomain{128u, false}),
+                field(
+                    &GameSettings::m_worldgen_seed,
+                    Metadata{
+                        "game.worldgen_seed", "World-generation unsigned 64-bit seed", "World generation",
+                        EMutability::startup, ESource::all, false},
+                    Range<u64>{0u, (std::numeric_limits<u64>::max)()}),
                 field(
                     &GameSettings::m_command,
                     Metadata{

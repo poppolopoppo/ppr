@@ -61,6 +61,7 @@ namespace pP::game {
             const config::CliResult &cli, config::Diagnostics &diagnostics) {
             constexpr std::string_view kAliases[][2] = {
                 {"smoke", "smoke"},
+                {"validate-worldgen", "validate-worldgen"},
             };
             Array<std::string> seen{};
             for (const auto &assignment: cli.m_assignments) {
@@ -132,6 +133,17 @@ namespace pP::game {
 
         appendOption(
             schema.m_options, selectorOption("smoke", "smoke", "Run the colony smoke test (command selector)."));
+        appendOption(
+            schema.m_options, selectorOption(
+                                  "validate-worldgen", "validate-worldgen",
+                                  "Validate the complete content pack and textures without a window or GPU."));
+        appendOption(
+            schema.m_options, valueOption("game.worldgen_root", "worldgen-root", "Explicit content pack root."));
+        appendOption(
+            schema.m_options,
+            valueOption("game.worldgen_profile", "worldgen-profile", "World profile key (default frontier)."));
+        appendOption(
+            schema.m_options, valueOption("game.worldgen_seed", "worldgen-seed", "Unsigned 64-bit world seed."));
         appendOption(
             schema.m_options,
             switchOption(

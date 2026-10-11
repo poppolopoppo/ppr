@@ -4,6 +4,8 @@ target_sources(engine.math
   PUBLIC
     FILE_SET CXX_MODULES FILES
       Math.cppm
+  PRIVATE
+      Math.cpp
 )
 
 setup_ppr_project(engine.math

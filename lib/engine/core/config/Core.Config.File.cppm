@@ -73,7 +73,16 @@ export namespace pP::config {
     // expected results with contextual diagnostics. Duplicate keys are
     // errors; "#" comments are supported; I/O stays injected (callers
     // read/write the bytes).
-    [[nodiscard]] Expected<Document> decode(std::string_view bytes, std::string_view origin, Diagnostics &diagnostics);
+    // Record consumers must reject empty tables and literal dotted segments:
+    // flattening either would erase required authoring information.
+    enum class EDecodeMode : u8 {
+        scalar,
+        records
+    };
+
+    [[nodiscard]] Expected<Document> decode(
+        std::string_view bytes, std::string_view origin, Diagnostics &diagnostics,
+        EDecodeMode mode = EDecodeMode::scalar);
 
     [[nodiscard]] Expected<std::string> encode(const Document &document);
 

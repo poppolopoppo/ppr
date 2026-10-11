@@ -868,6 +868,17 @@ namespace pP::tests::detail {
             void executor(RenderSurfaceExecutor execute) {
                 renderLane()->setSurfaceExecutor(std::move(execute));
             }
+            void frameExecutor(RenderFrameExecutor execute) {
+                renderLane()->setExecutor(std::move(execute));
+            }
+            std::error_code queueFrame(const u64 id) {
+                auto packet = std::make_shared<FramePacket>();
+                packet->m_frame_id = id;
+                return renderLane()->submitFrame(RenderFrameRequest{.m_packet = std::move(packet)});
+            }
+            std::error_code laneAdmission() {
+                return getRenderer().checkFrameAdmission();
+            }
             std::error_code pump() {
                 return pumpRenderCompletions_();
             }
@@ -924,7 +935,7 @@ namespace pP::tests::detail {
                         released = true;
                         release.release();
                     }
-                    throw std::bad_alloc{};
+                    throw std::system_error{std::make_error_code(std::errc::timed_out)};
                 };
                 bool ran = false;
                 PPR_TEST_ASSERT(not test_app.synchronize(
@@ -951,6 +962,49 @@ namespace pP::tests::detail {
                 PPR_TEST_ASSERT(not test_app.boot());
                 PPR_TEST_ASSERT(not test_app.close());
             }
+        };
+
+        PPR_UNIT_TEST (shutdown_drops_queued_frames_before_backend_quarantine) {
+            std::binary_semaphore entered{0};
+            std::binary_semaphore release{0};
+            bool released = false;
+            std::atomic<u32> executions{};
+            WindowTransactionHarness test_app{};
+            PPR_TEST_ASSERT(not test_app.boot());
+            PPR_DEFER {
+                if (not released) {
+                    release.release();
+                }
+                std::ignore = test_app.close();
+            };
+            test_app.frameExecutor([&](const RenderFrameRequest &, RenderFrameResult &) -> std::error_code {
+                const auto execution = executions.fetch_add(1u);
+                if (execution == 0u) {
+                    entered.release();
+                    if (not release.try_acquire_for(std::chrono::seconds{10})) {
+                        return std::make_error_code(std::errc::timed_out);
+                    }
+                }
+                return test_app.laneAdmission();
+            });
+            PPR_TEST_ASSERT(not test_app.queueFrame(1u));
+            PPR_TEST_ASSERT(entered.try_acquire_for(std::chrono::seconds{10}));
+            PPR_TEST_ASSERT(not test_app.queueFrame(2u));
+
+            // The teardown handoff is posted before its native wait releases
+            // the executing frame. The second accepted frame stays queued.
+            test_app.m_scripted->m_on_wait = [&](TimeSpan) -> std::error_code {
+                if (not released) {
+                    released = true;
+                    release.release();
+                }
+                return {};
+            };
+            PPR_TEST_ASSERT(not test_app.close());
+            PPR_TEST_ASSERT(released);
+            PPR_TEST_ASSERT(executions.load() == 1u);
+            PPR_TEST_ASSERT(test_app.gpuTeardownDisposition() == GpuQuiescence::kIdleProven);
+            test_app.m_scripted->m_on_wait = {};
         };
 
         PPR_UNIT_TEST (display_window_mode_ack_while_suspended_and_revert) {
@@ -1204,6 +1258,12 @@ namespace pP::tests::detail {
             std::error_code m_update_error{};
             std::error_code m_render_error{};
             std23::move_only_function<void(SaturatingHarness &harness)> m_on_rendered{};
+            u32 m_control_polls{};
+
+            [[nodiscard]] std::error_code serviceControls_() override {
+                ++m_control_polls;
+                return {};
+            }
 
             explicit SaturatingHarness(const std::string_view name, GpuTeardownFailureHandler handler = nullptr)
                 : HarnessClock{}, ApplicationEditor(
@@ -2764,6 +2824,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(platform.m_dispatches == 3u);
             PPR_TEST_ASSERT(platform.m_device_polls == 3u);
             PPR_TEST_ASSERT(platform.m_pumps > platform.m_updates);
+            PPR_TEST_ASSERT(harness.m_control_polls > harness.m_updates);
             PPR_TEST_ASSERT(platform.m_update_pumps.size() == 3u);
             // Collection grew across the busy pumps (no dispatch, no drop):
             // pump indices are 1-based; sizes[2..4] cover busy pumps 3..5.
@@ -3604,6 +3665,7 @@ namespace pP::tests {
             detail::RunGate::sim_catch_up_preserves_skipped_time,
             detail::RunGate::healthy_teardown_releases_in_order,
             detail::RunGate::throwing_native_pump_and_wait_shutdown_retains_first_error,
+            detail::RunGate::shutdown_drops_queued_frames_before_backend_quarantine,
             detail::RunGate::removal_confirmed_preserves_first_error,
             detail::RunGate::focus_loss_gain_ordered_across_busy,
             detail::RunGate::two_runs_reestablish_quiescence_independently,

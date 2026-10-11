@@ -178,6 +178,24 @@ namespace pP::tests::detail::cfg_file {
         PPR_TEST_ASSERT(nested->m_value.m_integer == 1);
     };
 
+    PPR_UNIT_TEST (record_mode_rejects_erased_structure) {
+        for (const auto source:
+            {"[materials.empty]\n", "[materials.rock]\nunknown = {}\n", "\"materials.rock\" = { id = 16 }\n",
+                "\"\" = 16\n"}) {
+            Diagnostics scalar_diagnostics{};
+            PPR_TEST_ASSERT(decode(source, "legacy.toml", scalar_diagnostics).has_value());
+            Diagnostics diagnostics{};
+            const auto records = decode(source, "records.toml", diagnostics, EDecodeMode::records);
+            PPR_TEST_ASSERT(not records.has_value());
+            PPR_TEST_ASSERT(diagnostics.hasErrors());
+            PPR_TEST_ASSERT(diagnostics.entries().front().m_location.starts_with("records.toml:"));
+        }
+        Diagnostics diagnostics{};
+        const auto valid = decode("materials.rock.id = 16\n", "records.toml", diagnostics, EDecodeMode::records);
+        PPR_TEST_ASSERT(valid.has_value());
+        PPR_TEST_ASSERT(findEntry(*valid, "materials.rock.id")->m_value.m_integer == 16);
+    };
+
     PPR_UNIT_TEST (strict_toml_numbers_and_keys) {
         for (const std::string_view bad: {"x = 1__0\n", "x = 01\n", "x = \"a\" \"b\"\n", "[t]\n[t]\n"}) {
             Diagnostics diagnostics{};
@@ -488,6 +506,7 @@ namespace pP::tests {
             detail::cfg_file::malformed_input_reports_location,
             detail::cfg_file::unsupported_tables_and_arrays_rejected,
             detail::cfg_file::strict_toml_numbers_and_keys,
+            detail::cfg_file::record_mode_rejects_erased_structure,
             detail::cfg_file::number_forms,
             detail::cfg_file::string_escapes_and_literals,
             detail::cfg_file::encode_decode_round_trip,

@@ -8,6 +8,37 @@ export module engine.math;
 import engine.core;
 import std;
 
+export namespace pP::math {
+    // Unit dual cell between four sample centres. Corner bits and vertices are
+    // LL, LR, UR, UL (0..3), then bottom/right/top/left midpoints (4..7).
+    struct ContourPoint {
+        float m_x{};
+        float m_y{};
+    };
+    struct ContourSegment {
+        u32 m_begin{};
+        u32 m_end{};
+    };
+    struct ContourTriangle {
+        u32 m_a{};
+        u32 m_b{};
+        u32 m_c{};
+        // Occupied corner bits in this connected solid component; used for
+        // categorical material selection without bridging diagonal solids.
+        u32 m_solid_corners{};
+    };
+    struct ContourCase {
+        u32 m_segment_count{};
+        u32 m_triangle_count{};
+        std::array<ContourSegment, 2> m_segments{};
+        std::array<ContourTriangle, 3> m_triangles{};
+    };
+    // Boundary segments have solid on their left, matching collider chains.
+    // Filled triangles are counterclockwise. Saddles keep solids disconnected.
+    [[nodiscard]] std::span<const ContourPoint, 8> contourPoints() noexcept;
+    [[nodiscard]] std::span<const ContourCase, 16> contourCases() noexcept;
+}
+
 namespace pP::math::details {
     template<std::floating_point T>
     [[nodiscard]] constexpr T roundHalfAwayFromZero(const T value) noexcept {
