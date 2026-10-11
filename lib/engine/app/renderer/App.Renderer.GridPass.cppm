@@ -4,9 +4,11 @@ export module engine.app:renderer.grid_pass;
 
 import :renderer.types;
 import :renderer.frame_fence;
+import :renderer.gpu_caches;
 import :scene.camera;
 
 import engine.core;
+import engine.image;
 import engine.math;
 import engine.rhi;
 import engine.shader;
@@ -52,6 +54,11 @@ export namespace pP {
         float m_texture_period_m{1.0f};
     };
     static_assert(sizeof(GridTerrainVisual) == 16u);
+    static_assert(alignof(GridTerrainVisual) == 16u);
+    static_assert(PPR_OFFSETOF(GridTerrainVisual, m_material_id) == 0u);
+    static_assert(PPR_OFFSETOF(GridTerrainVisual, m_color_rgba) == 4u);
+    static_assert(PPR_OFFSETOF(GridTerrainVisual, m_texture_index) == 8u);
+    static_assert(PPR_OFFSETOF(GridTerrainVisual, m_texture_period_m) == 12u);
 
     // Frozen boundary struct (plain data): one chunk-sized tile submission.
     // m_chunk_id is the row-major chunk index (the sim chunkIndexOf domain,
@@ -239,6 +246,7 @@ export namespace pP {
             u32 m_boundary_material_id{1u};
             u64 m_content_fingerprint{};
             Array<GridTerrainVisual> m_terrain_visuals{};
+            Array<image::ImageAsset> m_terrain_images{};
             Array<GridTileSubmission> m_tiles{};
             Array<GridStagedUpload> m_uploads{};
             // Dropped before staging: translator reset / regeneration /
@@ -374,6 +382,8 @@ export namespace pP {
         std::error_code ensureVisibilityBuffers_(rhi::IDevice &device);
         std::error_code ensureSurfaceBuffers_(rhi::IDevice &device);
         std::error_code bindSurfaceBuffers_(rhi::IDevice &device, rhi::ShaderCursor &cursor, bool retained_table);
+        [[nodiscard]] Expected<bool> prepareTerrainVisuals_(rhi::IDevice &device, u32 image_budget);
+        [[nodiscard]] std::error_code ensureTerrainSampler_(rhi::IDevice &device);
 
         struct GridCachedPipeline {
             rhi::ComPtr<rhi::IRenderPipeline> m_pipeline{};
@@ -457,6 +467,11 @@ export namespace pP {
         std::array<rhi::ComPtr<rhi::IBuffer>, kTileRingSize> m_chunk_slot_buffers{};
         std::array<void *, kTileRingSize> m_chunk_slot_mapped{};
         std::array<bool, kTileRingSize> m_chunk_slot_uploaded{};
+        rhi::ComPtr<rhi::ITexture> m_terrain_fallback{};
+        rhi::ComPtr<rhi::ITextureView> m_terrain_fallback_view{};
+        rhi::ComPtr<rhi::ISampler> m_terrain_sampler{};
+        rhi::DescriptorHandle m_terrain_fallback_handle{};
+        rhi::DescriptorHandle m_terrain_sampler_handle{};
 
 
         std::array<bool, kTileRingSize> m_resident_table_uploaded{};
@@ -538,6 +553,14 @@ export namespace pP {
         // state. Candidate preparation can exchange this value on the owner
         // lane without moving pass programs, completion rings or the camera.
         struct WorldResources {
+            bool m_upload_submission_pending{false};
+            bool m_visuals_set{false};
+            Array<GridTerrainVisual> m_terrain_visuals{};
+            Array<image::ImageAsset> m_terrain_images{};
+            std::unique_ptr<BindlessTextureCache> m_texture_cache{};
+            Array<u32> m_texture_slots{};
+            u32 m_image_cursor{};
+            rhi::ComPtr<rhi::IBuffer> m_terrain_palette{};
             u64 m_job_id{};
             u64 m_world_generation{};
             u64 m_content_fingerprint{};

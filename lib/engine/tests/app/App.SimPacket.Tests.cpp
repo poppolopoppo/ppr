@@ -6,6 +6,7 @@ module engine.tests.app;
 import engine.core;
 import engine.app;
 import engine.math;
+import engine.image;
 import engine.sim;
 import std;
 
@@ -30,6 +31,19 @@ namespace pP::tests::detail {
             packet.m_boundary_material_id = 16u;
             packet.m_cell_size_m = 1.0f / 3.0f;
             packet.m_content_fingerprint = 42u;
+            mem::UniqueBuffer storage = mem::UniqueBuffer::allocate(4u);
+            PPR_TEST_ASSERT(not storage.materialize());
+            const auto pixels = storage.getMutableData();
+            PPR_TEST_ASSERT(pixels.has_value());
+            std::fill(pixels->begin(), pixels->end(), std::byte{255});
+            mem::SharedBuffer frozen;
+            PPR_TEST_ASSERT(not storage.moveToShared(&frozen));
+            image::ImageAsset image{};
+            image.m_width = 1u;
+            image.m_height = 1u;
+            image.m_storage = frozen;
+            image.m_subresources.push_back({.m_view = frozen.subspan(0u, 4u), .m_row_pitch = 4u, .m_slice_pitch = 4u});
+            packet.m_terrain_images.assign(3u, image);
             packet.m_terrain_visuals.push_back({16u, 0x123456ffu, 2u, 2.0f});
             packet.m_terrain_visuals.push_back({257u, 0xabcdef80u, 0xffffffffu, 1.0f});
             packet.m_full_refresh = true;
@@ -54,6 +68,10 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(stage.m_terrain_visuals[0u].m_color_rgba == 0x123456ffu);
             PPR_TEST_ASSERT(stage.m_terrain_visuals[0u].m_texture_index == 2u);
             PPR_TEST_ASSERT(stage.m_terrain_visuals[0u].m_texture_period_m == 2.0f);
+            packet.m_terrain_images.clear();
+            PPR_TEST_ASSERT(stage.m_terrain_images.size() == 3u);
+            PPR_TEST_ASSERT(stage.m_terrain_images[2u].m_storage.getBufferData()[0u] == std::byte{255});
+            packet.m_terrain_images.assign(3u, image);
             PPR_TEST_ASSERT(stage.m_uploads[0u].m_cell_materials[1u] == 16u);
 
             // Unknown IDs (including non-terrain catalog members) cannot enter terrain uploads.
@@ -126,6 +144,34 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not oversized and oversized.error() == std::errc::invalid_argument);
             const auto overflowing = colony::makeInitialPresentationBatch(3u, driver, sim::kChunkCount - 1u, 8u);
             PPR_TEST_ASSERT(not overflowing and overflowing.error() == std::errc::invalid_argument);
+        };
+
+        PPR_UNIT_TEST (world_presentation_capture_owns_all_resident_terrain_and_cancels) {
+            colony::ColonyDriver driver{};
+            for (const u32 chunk: {0u, 8u, 1023u}) {
+                const sim::GlobalCellPos cell{(chunk % 32u) * 128u, (chunk / 32u) * 128u};
+                PPR_TEST_ASSERT(not driver.grid().setCell(cell, sim::Cell{.m_element = 7u, .m_temperature = 293.0f}));
+            }
+            const auto dirty_before = driver.grid().dirtyChunks();
+            PPR_TEST_ASSERT(not dirty_before.empty());
+            const auto captured = colony::captureWorldPresentation(driver);
+            PPR_TEST_ASSERT(captured and captured->m_tiles.size() == 3u and captured->m_uploads.size() == 3u);
+            PPR_TEST_ASSERT(captured->m_full_refresh and not captured->m_reset_caches);
+            PPR_TEST_ASSERT(captured->m_ack_seed == driver.worldGeneration());
+            PPR_TEST_ASSERT(captured->m_uploads[2u].m_chunk_id == 1023u);
+            for (const auto &upload: captured->m_uploads) {
+                PPR_TEST_ASSERT(upload.m_cell_materials.size() == sim::kCellsPerChunk);
+                PPR_TEST_ASSERT(upload.m_cell_materials[0u] == 7u and upload.m_cell_materials[1u] == 0xffffu);
+            }
+            PPR_TEST_ASSERT(std::ranges::equal(driver.grid().dirtyChunks(), dirty_before));
+            PPR_TEST_ASSERT(not driver.grid().setCell({0u, 0u}, sim::Cell{.m_element = 99u}));
+            PPR_TEST_ASSERT(captured->m_uploads[0u].m_cell_materials[0u] == 7u);
+            const auto invalid = colony::captureWorldPresentation(driver);
+            PPR_TEST_ASSERT(not invalid and invalid.error() == std::errc::invalid_argument);
+            auto [context, cancel] = context::withCancelClause(context::background());
+            cancel(std::make_error_code(std::errc::operation_canceled));
+            const auto cancelled = colony::captureWorldPresentation(driver, context.get());
+            PPR_TEST_ASSERT(not cancelled and cancelled.error() == std::errc::operation_canceled);
         };
 
         PPR_UNIT_TEST (initial_presentation_skipped_batches_expose_only_confirmed_tiles) {
@@ -233,6 +279,23 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(packet.m_chunk_cells[0u].m_cells.size() == sim::kCellsPerChunk);
             constexpr u32 kDugCell = 10u * sim::kChunkEdge + 10u;
             PPR_TEST_ASSERT(packet.m_chunk_cells[0u].m_cells[kDugCell].m_element == 0u);
+
+            // Full coordinator capture preserves actual pending revisions,
+            // even when the captured edited cell has become vacuum.
+            Array<colony::ColonyDriver::DirtyChunk> pending;
+            const auto before = driver.presentEditsCapture();
+            pending.assign(before.begin(), before.end());
+            PPR_TEST_ASSERT(not pending.empty());
+            const auto full = colony::captureWorldPresentation(driver);
+            PPR_TEST_ASSERT(full and full->m_uploads.size() == driver.grid().residentChunkCount());
+            PPR_TEST_ASSERT(full->m_ack_revisions.size() == pending.size());
+            const auto after = driver.presentEditsCapture();
+            PPR_TEST_ASSERT(after.size() == pending.size());
+            for (u32 index = 0u; index < pending.size(); ++index) {
+                PPR_TEST_ASSERT(after[index].m_pos == pending[index].m_pos);
+                PPR_TEST_ASSERT(after[index].m_revision == pending[index].m_revision);
+                PPR_TEST_ASSERT(full->m_ack_revisions[index] == pending[index].m_revision);
+            }
 
             // Post-capture producer mutation: overwrite the live chunk with
             // invalid elements (above the element registry). The owned packet
@@ -695,6 +758,7 @@ namespace pP::tests {
             detail::SimPacket::default_driver_builds_empty_coherent_packet,
             detail::SimPacket::initial_presentation_batches_bound_copies_and_preserve_prefix,
             detail::SimPacket::initial_presentation_skipped_batches_expose_only_confirmed_tiles,
+            detail::SimPacket::world_presentation_capture_owns_all_resident_terrain_and_cancels,
             detail::SimPacket::capture_mutation_consume_uses_packet_content,
             detail::SimPacket::two_chunks_across_updates_capture_and_upload_both,
             detail::SimPacket::full_refresh_captures_all_resident_cells,

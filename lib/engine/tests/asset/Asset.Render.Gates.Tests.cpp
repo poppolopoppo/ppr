@@ -1478,10 +1478,12 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(prepared and not *prepared);
             PPR_TEST_ASSERT(grid.retainedAtlasCountForTest() == 2u);
             grid.cancelWorldCandidate(11u);
-            PPR_TEST_ASSERT(grid.retainedAtlasCountForTest() == 1u);
+            PPR_TEST_ASSERT(grid.retainedAtlasCountForTest() == 2u);
+            PPR_TEST_ASSERT(grid.stageWorldCandidate(12u, 22u, candidate) == std::errc::device_or_resource_busy);
             PPR_TEST_ASSERT(render() == after);
             const auto absent = grid.advanceWorldCandidate(device, renderer->completedFenceValue());
             PPR_TEST_ASSERT(not absent and absent.error() == std::errc::operation_not_permitted);
+            PPR_TEST_ASSERT(grid.retainedAtlasCountForTest() == 1u);
             auto invalid = candidate;
             invalid.m_cell_size_m = 2.0f;
             PPR_TEST_ASSERT(grid.stageWorldCandidate(12u, 22u, invalid) == std::errc::invalid_argument);
@@ -1694,6 +1696,99 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(grid.atlasSerializationCount() == 0u);
         };
 
+        PPR_UNIT_TEST (grid_catalog_textures_use_sparse_ids_and_world_uvs) {
+            const auto rhi = SharedGpu::rhiService();
+            const auto shader = SharedGpu::shaderService();
+            Renderer *const renderer = SharedGpu::renderer();
+            PPR_TEST_ASSERT(rhi.isValid() and shader.isValid() and renderer != nullptr);
+            rhi::IDevice &device = rhi->getDevice();
+            GridPass grid;
+            PPR_TEST_ASSERT(not grid.initialize(*rhi, *shader, std::filesystem::current_path()));
+            PPR_DEFER {
+                std::ignore = renderer->waitOnHost();
+                std::ignore = grid.shutdown();
+            };
+            mem::UniqueBuffer storage = mem::UniqueBuffer::allocate(16u);
+            PPR_TEST_ASSERT(not storage.materialize());
+            auto bytes = storage.getMutableData();
+            PPR_TEST_ASSERT(bytes.has_value());
+            for (u32 pixel = 0u; pixel < 4u; ++pixel) {
+                (*bytes)[pixel * 4u] = (pixel % 2u == 0u) ? std::byte{255} : std::byte{0};
+                (*bytes)[pixel * 4u + 1u] = std::byte{0};
+                (*bytes)[pixel * 4u + 2u] = (pixel % 2u == 0u) ? std::byte{0} : std::byte{255};
+                (*bytes)[pixel * 4u + 3u] = std::byte{255};
+            }
+            mem::SharedBuffer frozen;
+            PPR_TEST_ASSERT(not storage.moveToShared(&frozen));
+            image::ImageAsset image{};
+            image.m_width = 2u;
+            image.m_height = 2u;
+            image.m_storage = frozen;
+            image.m_subresources.push_back(
+                {.m_view = frozen.subspan(0u, 16u), .m_row_pitch = 8u, .m_slice_pitch = 16u});
+            GridPass::GridStagedFrame stage{};
+            stage.m_has_catalog = true;
+            stage.m_cell_size_m = 1.0f / 3.0f;
+            stage.m_boundary_material_id = 16u;
+            stage.m_content_fingerprint = 42u;
+            stage.m_terrain_visuals.push_back({16u, 0x00ff00ffu, 0xffffffffu, 1.0f});
+            stage.m_terrain_visuals.push_back({257u, 0x80ffffffu, 0u, 0.75f});
+            stage.m_terrain_images.push_back(image);
+            for (const u32 chunk: {0u, 1u, 32u, 33u}) {
+                const i32 x = static_cast<i32>(chunk % 32u) * 128;
+                const i32 y = static_cast<i32>(chunk / 32u) * 128;
+                stage.m_tiles.push_back(
+                    {.m_chunk_id = chunk, .m_tile_range = {x, y, x + 128, y + 128}, .m_dirty_mask = 1u});
+                GridPass::GridStagedUpload upload{};
+                upload.m_chunk_id = chunk;
+                upload.m_cell_materials.assign(GridPass::kCellsPerChunk, 257u);
+                stage.m_uploads.push_back(std::move(upload));
+            }
+            PPR_TEST_ASSERT(not grid.stageWorldCandidate(1u, 2u, stage));
+            const auto ready = grid.advanceWorldCandidate(device, renderer->completedFenceValue(), 4u);
+            PPR_TEST_ASSERT(ready and *ready);
+            PPR_TEST_ASSERT(not grid.activateWorldCandidate(1u, 2u, 42u));
+            CameraModel model{};
+            model.m_camera_mode = ECameraProjection::orthographic;
+            model.m_origin = float3{127.5f / 3.0f, 127.5f / 3.0f, 0.0f};
+            model.m_ortho_scale = 1.0f / (3.0f * 128.0f);
+            Camera camera;
+            camera.updateModel(TimeSpan{}, model, Viewport{PixelRect{int2{0, 0}, int2{128, 128}}, ViewportLayout{}});
+            PPR_TEST_ASSERT(not grid.update(TimeSpan{}, camera.getSnapshot()));
+            const auto target = makeRenderTarget_(device, 128u);
+            PPR_TEST_ASSERT(target.has_value());
+            const auto prepare = [&](const PreRenderContext &context) { return grid.prepareGpuVisibility(context); };
+            const auto draw = [&](const DrawContext &context) { return grid.renderGpuIndirect(context); };
+            PPR_TEST_ASSERT(not renderer->renderToTexture(
+                targetRef_(target), {DrawSubmission{"catalog seam", draw}}, {}, PreRenderCallback{prepare}));
+            grid.notifyFrameSubmitted(renderer->lastSubmittedFenceValue());
+            PPR_TEST_ASSERT(not renderer->waitOnHost());
+            const auto pixels = readback_(device, targetRef_(target), 128u);
+            PPR_TEST_ASSERT(pixels.has_value());
+            const float tint_red = std::pow((128.0f / 255.0f + 0.055f) / 1.055f, 2.4f);
+            for (const u32 y: {16u, 48u, 80u, 112u}) {
+                for (const u32 x: {16u, 48u, 80u, 112u}) {
+                    const float fine_x = 127.5f + (static_cast<float>(x) + 0.5f) / 128.0f;
+                    const float uv = fine_x / (3.0f * 0.75f);
+                    const float coordinate = (uv - std::floor(uv)) * 2.0f - 0.5f;
+                    const float fraction = coordinate - std::floor(coordinate);
+                    const bool left_red = static_cast<i32>(std::floor(coordinate)) % 2 == 0;
+                    const float red = left_red ? 1.0f - fraction : fraction;
+                    const auto texel = gateTexel_(*pixels, x, y);
+                    PPR_TEST_ASSERT(
+                        std::abs(
+                            static_cast<i32>(texel[0u]) - static_cast<i32>(std::lround(255.0f * tint_red * red))) <= 3);
+                    PPR_TEST_ASSERT(texel[1u] <= 2u);
+                    PPR_TEST_ASSERT(
+                        std::abs(static_cast<i32>(texel[2u]) - static_cast<i32>(std::lround(255.0f * (1.0f - red)))) <=
+                        3);
+                }
+            }
+            auto changed = stage;
+            changed.m_terrain_visuals[1u].m_color_rgba = 0xffffffffu;
+            PPR_TEST_ASSERT(grid.applyStagedFrame(changed) == std::errc::invalid_argument);
+        };
+
         PPR_UNIT_TEST (pre_render_preparation_orders_and_rejects_submission) {
             const auto rhi = SharedGpu::rhiService();
             PPR_TEST_ASSERT(rhi.isValid());
@@ -1876,6 +1971,7 @@ namespace pP::tests {
             detail::Gate::pre_render_preparation_orders_and_rejects_submission,
             detail::Gate::grid_compute_visibility_matches_reference_and_draws,
             detail::Gate::grid_shared_contours_match_cpu_at_four_chunk_seams,
+            detail::Gate::grid_catalog_textures_use_sparse_ids_and_world_uvs,
             detail::Gate::grid_candidate_world_retains_active_until_matching_activation,
         });
     };

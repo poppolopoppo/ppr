@@ -254,3 +254,34 @@ roots, atlas count 1/2/1, teardown and a fresh fence epoch after shutdown/loss.
 Formatting/style and independent Astra review passed. Normal game request/ack
 integration, catalog textures, diagnostic modes and edit/collider coherence are
 still pending; the candidate API alone does not complete world publication.
+
+Catalog surface rendering now reuses BindlessTextureCache with one shared wrap
+sampler, per-world descriptors, a bounded 16-byte dense visual palette and
+worker-decoded owned images. Sparse material IDs remain terrain identity;
+source texture indices resolve to resident slots. World-space UVs preserve
+periods across four-chunk seams. Tint colors decode from sRGB once; native
+texture format controls texture decoding. Explicit gradients are computed before
+coverage discard and bounded before period division. Stage validation admits
+only tight single-mip RGBA images up to 2048 square, 16 MiB per image and
+128 MiB aggregate. Interactive preparation admits one image per call; measured
+UI cadence is still an acceptance gate.
+
+Coordinator capture converts all resident cells directly to owned u16 uploads,
+without a full sim::Cell snapshot, preserves pending revision manifests, and
+observes cancellation between chunks. The normal WorldJob/render-control
+handshake still needs to consume this product. Canceled prepared GPU bundles
+now remain retained until a later accepted graphics-queue frame fence covers
+asynchronous texture initialization; new admission stays blocked until retirement.
+Both shutdown and device loss reset the upload/fence epoch.
+
+ASan application/app/asset build passed in `out/worldgen-textures-build6.log`.
+The textured sparse-ID/four-chunk UV readback, shared contour and candidate
+retirement tests passed three shuffled GPU loops in
+`out/worldgen-textures-gpu2.log` (47.09/46.50/47.01 s).
+Independent Astra source/readability review passed. Focused app suites are still
+running three loops in `out/worldgen-textures-app2.log`; their outcome will be
+recorded before the next integration commit. Normal authored startup, candidate
+request/ack integration, diagnostic modes, edit/collider coherence and stages
+6–7 remain required. Metal's pinned texture creation waits synchronously and
+has not passed the responsiveness gate; no backend-portability or total-memory
+claim is made from these tests.

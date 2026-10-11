@@ -2,7 +2,7 @@
 // tile. Row-major, row-vector convention: transforms call
 // mul(vector, matrix), never mul(matrix, vector). View-projection remains
 // view * projection with [0,1] depth, no transpose, no Y flip. No lighting,
-// no texturing, no GI inputs of any kind. Catalog sessions use the shared
+// world-space catalog texturing, no GI inputs of any kind. Catalog sessions use the shared
 // piecewise-linear contour surface; explicit legacy fixtures keep square cells.
 struct GridFrame {
     // Unjittered view * projection, followed by the per-slot visibility mode.
@@ -53,6 +53,15 @@ struct ContourCase {
 StructuredBuffer<float2> g_contour_points;
 StructuredBuffer<ContourCase> g_contour_cases;
 StructuredBuffer<uint> g_chunk_slots;
+// CPU GridTerrainVisual: 16 bytes, offsets 0/4/8/12. Texture index here is
+// the resident descriptor slot, resolved from the catalog's source index.
+struct TerrainVisual {
+    uint m_material_id;
+    uint m_color_rgba;
+    uint m_texture_index;
+    float m_texture_period_m;
+};
+StructuredBuffer<TerrainVisual> g_terrain_visuals;
 
 struct GridVertexOutput {
     float4 position : SV_Position;
@@ -211,17 +220,24 @@ uint contourMaterial(float2 position, float width, out float coverage) {
 }
 
 [shader("fragment")]
-float4 fragmentGridMain(GridVertexOutput input) : SV_Target {
+float4 fragmentGridMain(
+    GridVertexOutput input,
+    uniform StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
+    uniform SamplerState.Handle g_sampler) : SV_Target {
     // Evaluate derivatives before coverage branches/discards so neighboring
     // helper invocations still provide a defined edge width.
     float width = max(length(fwidth(input.fine_position)), 1.0e-6);
+    // Beyond a world-sized footprint all admitted textures already select
+    // their coarsest LOD. Bound gradients before period division to keep the
+    // smallest supported positive period finite under extreme minification.
+    float2 gradient_x = clamp(ddx(input.fine_position) * g_grid_frame.m_cell_size_m, -2048.0, 2048.0);
+    float2 gradient_y = clamp(ddy(input.fine_position) * g_grid_frame.m_cell_size_m, -2048.0, 2048.0);
     uint material = input.material;
+    float coverage = 1.0;
     if ((input.flags & 1u) != 0u) {
-        if (g_grid_frame.m_surface_mode != 0u) {
-            float coverage;
+        if ((g_grid_frame.m_surface_mode & 1u) != 0u) {
             material = contourMaterial(input.fine_position, width, coverage);
-            return float4(gridTint(material), coverage);
-        }
+        } else {
         // Rasterized quad edges may land exactly at 128 after interpolation;
         // clamp them into the final cell rather than reading the next chunk.
         uint2 cell = uint2(clamp(input.local_cell, float2(0.0), float2(127.999)));
@@ -231,6 +247,27 @@ float4 fragmentGridMain(GridVertexOutput input) : SV_Target {
         if (material == 0xffffu || material == 0u) {
             discard;
         }
+        }
     }
-    return float4(gridTint(material), 1.0);
+    if ((g_grid_frame.m_surface_mode & 2u) == 0u) {
+        return float4(gridTint(material), coverage);
+    }
+    if (material == 0u || material >= 0xffffu) {
+        discard;
+    }
+    TerrainVisual visual = g_terrain_visuals[min(material, 65535u)];
+    if (visual.m_material_id != material) {
+        discard;
+    }
+    uint rgba = visual.m_color_rgba;
+    float4 tint = float4((rgba >> 24u) & 255u, (rgba >> 16u) & 255u,
+        (rgba >> 8u) & 255u, rgba & 255u) / 255.0;
+    // Authored colors are sRGB; color texture views perform their own decode.
+    tint.rgb = select(tint.rgb <= 0.04045, tint.rgb / 12.92,
+        pow((tint.rgb + 0.055) / 1.055, float3(2.4)));
+    float period = visual.m_texture_period_m;
+    float2 uv = input.fine_position * (g_grid_frame.m_cell_size_m / period);
+    float4 albedo = nonuniform(g_textures[visual.m_texture_index]).SampleGrad(
+        g_sampler, uv, gradient_x / period, gradient_y / period);
+    return float4(tint.rgb * albedo.rgb, tint.a * albedo.a * coverage);
 }

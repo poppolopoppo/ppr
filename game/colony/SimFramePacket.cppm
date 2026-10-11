@@ -4,6 +4,7 @@ export module game.colony.sim_packet;
 
 import engine.app;
 import engine.core;
+import engine.image;
 import engine.sim;
 import game.colony.driver;
 import game.colony.content;
@@ -34,6 +35,7 @@ export namespace pP::colony {
         u32 m_boundary_material_id{1u};
         u64 m_content_fingerprint{};
         Array<GridTerrainVisual> m_terrain_visuals{};
+        Array<image::ImageAsset> m_terrain_images{};
         u64 m_frame_id{};
 
         // World epoch + committed tick at capture time. m_seed identifies
@@ -88,6 +90,12 @@ export namespace pP::colony {
     inline constexpr u32 kInitialPresentationBatchChunks = 8u;
     [[nodiscard]] Expected<SimFramePacket> makeInitialPresentationBatch(
         u64 frame_id, const ColonyDriver &driver, u32 first_chunk, u32 chunk_count);
+
+    /// Coordinator-only capture from an exclusively owned prepared session.
+    /// Converts resident cells directly to owned u16 uploads, with no full sim
+    /// snapshot or live-session borrow crossing into the rendering lane.
+    [[nodiscard]] Expected<GridPass::GridStagedFrame> captureWorldPresentation(
+        const ColonyDriver &driver, const IContext *context = nullptr);
 
     /// Client-owned initial publication cursor. At most one upload batch is
     /// outstanding; clean frames expose only the confirmed prepared prefix.

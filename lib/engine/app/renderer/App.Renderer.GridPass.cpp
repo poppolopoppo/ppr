@@ -221,6 +221,90 @@ namespace pP {
             GridPass, stage.m_boundary_material_id > 0u and stage.m_boundary_material_id < 0xffffu
                           ? std::error_code{}
                           : std::make_error_code(std::errc::invalid_argument));
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, stage.m_terrain_images.size() <= 256u and stage.m_terrain_visuals.size() <= 65534u
+                          ? std::error_code{}
+                          : std::make_error_code(std::errc::invalid_argument));
+        u64 decoded_bytes = 0u;
+        for (const auto &image: stage.m_terrain_images) {
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass, image.m_width > 0u and
+                                  image.m_width <= 2048u and
+                                  image.m_height > 0u and
+                                  image.m_height <= 2048u and
+                                  image.m_storage.isOwned() and
+                                  image.m_mip_count == 1u and
+                                  image.m_subresources.size() == 1u and
+                                  (image.m_format == image::ENativeImageFormat::rgba8_linear or
+                                      image.m_format == image::ENativeImageFormat::rgba8_srgb) and
+                                  image.m_storage.isMaterialized()
+                              ? std::error_code{}
+                              : std::make_error_code(std::errc::invalid_argument));
+            const u64 bytes = image.m_storage.getBufferData().size();
+            const u64 expected = static_cast<u64>(image.m_width) * image.m_height * 4u;
+            const auto &subresource = image.m_subresources[0u];
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass,
+                bytes == expected and
+                        subresource.m_view.getBufferData().data() == image.m_storage.getBufferData().data() and
+                        subresource.m_view.getBufferData().size() == expected and
+                        subresource.m_view.isMaterialized() and
+                        subresource.m_row_pitch == static_cast<u64>(image.m_width) * 4u and
+                        subresource.m_slice_pitch == expected
+                    ? std::error_code{}
+                    : std::make_error_code(std::errc::invalid_argument));
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass, bytes <= 128u * 1024u * 1024u - decoded_bytes
+                              ? std::error_code{}
+                              : std::make_error_code(std::errc::invalid_argument));
+            decoded_bytes += bytes;
+        }
+        std::bitset<65536u> material_ids;
+        for (const GridTerrainVisual &visual: stage.m_terrain_visuals) {
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass, visual.m_material_id > 0u and
+                                  visual.m_material_id < 0xffffu and
+                                  not material_ids.test(visual.m_material_id) and
+                                  std::isfinite(visual.m_texture_period_m) and
+                                  visual.m_texture_period_m >= 4096.0f / (std::numeric_limits<float>::max)() and
+                                  (visual.m_texture_index == 0xffffffffu or
+                                      visual.m_texture_index < stage.m_terrain_images.size())
+                              ? std::error_code{}
+                              : std::make_error_code(std::errc::invalid_argument));
+            material_ids.set(visual.m_material_id);
+        }
+        if (m_world.m_visuals_set) {
+            const bool same = m_world.m_content_fingerprint == stage.m_content_fingerprint and
+                              std::ranges::equal(
+                                  m_world.m_terrain_images, stage.m_terrain_images,
+                                  [](const image::ImageAsset &a, const image::ImageAsset &b) {
+                                      return a.m_storage == b.m_storage and
+                                             a.m_width == b.m_width and
+                                             a.m_height == b.m_height and
+                                             a.m_format == b.m_format and
+                                             a.m_mip_count == b.m_mip_count;
+                                  }) and
+                              std::ranges::equal(
+                                  m_world.m_terrain_visuals, stage.m_terrain_visuals,
+                                  [](const GridTerrainVisual &a, const GridTerrainVisual &b) {
+                                      return a.m_material_id == b.m_material_id and
+                                             a.m_color_rgba == b.m_color_rgba and
+                                             a.m_texture_index == b.m_texture_index and
+                                             a.m_texture_period_m == b.m_texture_period_m;
+                                  });
+            // Catalog changes require an independently prepared world bundle.
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass, same ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
+        } else if (not stage.m_terrain_visuals.empty()) {
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass, m_world.m_terrain_palette == nullptr
+                              ? std::error_code{}
+                              : std::make_error_code(std::errc::operation_not_permitted));
+            m_world.m_terrain_visuals = stage.m_terrain_visuals;
+            m_world.m_terrain_images = stage.m_terrain_images;
+            m_world.m_content_fingerprint = stage.m_content_fingerprint;
+            m_world.m_visuals_set = true;
+        }
         if (m_world.m_cell_size_m != stage.m_cell_size_m or
             m_world.m_contours_enabled != stage.m_has_catalog or
             m_world.m_boundary_material_id != stage.m_boundary_material_id) {
@@ -324,7 +408,14 @@ namespace pP {
 
     void GridPass::cancelWorldCandidate(const u64 job_id) noexcept {
         if (m_candidate_world and m_candidate_world->m_job_id == job_id) {
-            m_candidate_world.reset();
+            if (m_candidate_world->m_texture_cache) {
+                PPR_ASSERT(not m_retiring_world);
+                // createTexture can submit asynchronous initialization. Keep
+                // the canceled owner until a subsequent frame fence covers it.
+                m_retiring_world = std::move(m_candidate_world);
+            } else {
+                m_candidate_world.reset();
+            }
         }
     }
 
@@ -451,6 +542,8 @@ namespace pP {
         if (not m_ready) [[unlikely]] {
             return std::make_error_code(std::errc::not_connected);
         }
+        const auto visuals = prepareTerrainVisuals_(device, 256u);
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, visuals);
         Array<u32> pending{};
         const auto append_pending = [&](const u32 chunk_id) {
             const auto found = m_world.m_cell_cache.find(chunk_id);
@@ -520,6 +613,12 @@ namespace pP {
             GridPass, chunk_budget > 0u and chunk_budget <= kGridTileCacheCapacity
                           ? std::error_code{}
                           : std::make_error_code(std::errc::invalid_argument));
+        const auto visuals = prepareTerrainVisuals_(device, 1u);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(GridPass, visuals);
+        if (not *visuals) {
+            m_world.m_cell_publication_deferred = true;
+            return false;
+        }
         Array<u32> pending;
         for (const auto entry: m_world.m_cell_cache) {
             if (entry.second.m_pending) {
@@ -649,6 +748,13 @@ namespace pP {
     void GridPass::notifyFrameSubmitted(const FenceCompletionValue submit_value) noexcept {
         m_last_submitted_value = submit_value;
         m_world.m_last_reader = submit_value;
+        m_world.m_upload_submission_pending = false;
+        for (WorldResources *const world: {m_candidate_world.get(), m_retiring_world.get()}) {
+            if (world != nullptr and world->m_upload_submission_pending) {
+                world->m_last_reader = submit_value;
+                world->m_upload_submission_pending = false;
+            }
+        }
         m_tile_slot_values[m_last_used_slot] = submit_value;
         for (u32 slot = 0u; slot < kCellAtlasSlots; ++slot) {
             if (m_world.m_cell_slots_current.test(slot) or m_world.m_resident_cell_slots.test(slot)) {
@@ -660,6 +766,7 @@ namespace pP {
     void GridPass::reclaimCompleted_(const FenceCompletionValue completed) noexcept {
         std::ignore = m_deferred_releases.reclaim(completed);
         if (m_retiring_world and
+            not m_retiring_world->m_upload_submission_pending and
             m_retiring_world->m_last_reader <= completed and
             m_deferred_releases.pendingCount() == 0u) {
             // Shader bindings own resources too. Drop completed roots before
@@ -1325,8 +1432,12 @@ namespace pP {
         m_world.m_job_id = 0u;
         m_world.m_world_generation = 0u;
         m_world.m_content_fingerprint = 0u;
+        m_world.m_visuals_set = false;
+        m_world.m_terrain_visuals.clear();
+        m_world.m_terrain_images.clear();
         m_world.m_prepared = false;
         m_world.m_last_reader = kFenceValueNone;
+        m_world.m_upload_submission_pending = false;
         m_world.m_cell_slot_values.fill(kFenceValueNone);
         m_world.m_resident_cell_slots.reset();
         m_atlas_deferred_count = 0u;
@@ -1341,6 +1452,18 @@ namespace pP {
         m_last_used_slot = 0u;
         m_cached_pipeline.reset();
         m_render_pipeline_key.reset();
+        m_world.m_terrain_palette.setNull();
+        if (m_world.m_texture_cache) {
+            PPR_RETAIN_ERROR_ON_FAIL(GridPass, first_err, m_world.m_texture_cache->shutdown());
+            m_world.m_texture_cache.reset();
+        }
+        m_world.m_texture_slots.clear();
+        m_world.m_image_cursor = 0u;
+        m_terrain_sampler.setNull();
+        m_terrain_fallback_view.setNull();
+        m_terrain_fallback.setNull();
+        m_terrain_fallback_handle = {};
+        m_terrain_sampler_handle = {};
         m_ready = false;
 
         m_shader_program.setNull();
@@ -1380,6 +1503,7 @@ namespace pP {
         m_world.m_cell_slot_values.fill(kFenceValueNone);
         m_world.m_cell_publication_deferred = false;
         m_world.m_last_reader = kFenceValueNone;
+        m_world.m_upload_submission_pending = false;
         m_world.m_prepared = false;
         std::ignore = m_deferred_releases.drainAll();
         m_last_submitted_value = kFenceValueNone;
@@ -1387,6 +1511,18 @@ namespace pP {
         m_last_used_slot = 0u;
         m_cached_pipeline.reset();
         m_render_pipeline_key.reset();
+        m_world.m_terrain_palette.setNull();
+        if (m_world.m_texture_cache) {
+            PPR_RETAIN_ERROR_ON_FAIL(GridPass, first_err, m_world.m_texture_cache->shutdown());
+            m_world.m_texture_cache.reset();
+        }
+        m_world.m_texture_slots.clear();
+        m_world.m_image_cursor = 0u;
+        m_terrain_sampler.setNull();
+        m_terrain_fallback_view.setNull();
+        m_terrain_fallback.setNull();
+        m_terrain_fallback_handle = {};
+        m_terrain_sampler_handle = {};
         m_world.m_cell_atlas.setNull();
         m_visibility_programs = {};
         m_visibility_slots = {};
@@ -1548,9 +1684,110 @@ namespace pP {
         return {};
     }
 
+    std::error_code GridPass::ensureTerrainSampler_(rhi::IDevice &device) {
+        if (m_terrain_sampler != nullptr) {
+            return {};
+        }
+        constexpr u32 white = 0xffffffffu;
+        const rhi::SubresourceData initial{.data = &white, .rowPitch = 4u, .slicePitch = 4u};
+        rhi::TextureDesc desc{};
+        desc.type = rhi::TextureType::Texture2D;
+        desc.size = {.width = 1u, .height = 1u, .depth = 1u};
+        desc.arrayLength = 1u;
+        desc.mipCount = 1u;
+        desc.format = rhi::Format::RGBA8Unorm;
+        desc.memoryType = rhi::MemoryType::DeviceLocal;
+        desc.usage = rhi::TextureUsage::ShaderResource;
+        desc.defaultState = rhi::ResourceState::ShaderResource;
+        desc.label = "terrain fallback white";
+        rhi::ComPtr<rhi::ITexture> texture;
+        rhi::ComPtr<rhi::ITextureView> view;
+        rhi::ComPtr<rhi::ISampler> sampler;
+        rhi::DescriptorHandle fallback_handle{}, sampler_handle{};
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, device.createTexture(desc, &initial, texture.writeRef()));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, texture->getDefaultView(view.writeRef()));
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, view->getDescriptorHandle(rhi::DescriptorHandleAccess::Read, &fallback_handle));
+        rhi::SamplerDesc sampler_desc{};
+        sampler_desc.minFilter = rhi::TextureFilteringMode::Linear;
+        sampler_desc.magFilter = rhi::TextureFilteringMode::Linear;
+        sampler_desc.mipFilter = rhi::TextureFilteringMode::Linear;
+        sampler_desc.addressU = rhi::TextureAddressingMode::Wrap;
+        sampler_desc.addressV = rhi::TextureAddressingMode::Wrap;
+        sampler_desc.addressW = rhi::TextureAddressingMode::Wrap;
+        sampler_desc.maxAnisotropy = 1u;
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, device.createSampler(sampler_desc, sampler.writeRef()));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, sampler->getDescriptorHandle(&sampler_handle));
+        m_terrain_fallback = std::move(texture);
+        m_terrain_fallback_view = std::move(view);
+        m_terrain_sampler = std::move(sampler);
+        m_terrain_fallback_handle = fallback_handle;
+        m_terrain_sampler_handle = sampler_handle;
+        return {};
+    }
+
+    Expected<bool> GridPass::prepareTerrainVisuals_(rhi::IDevice &device, const u32 image_budget) {
+        if (m_world.m_terrain_palette != nullptr) {
+            return true;
+        }
+        m_world.m_upload_submission_pending = true;
+        PPR_RETURN_UNEXPECTED_ON_FAIL(GridPass, ensureTerrainSampler_(device));
+        if (not m_world.m_texture_cache) {
+            auto cache = std::make_unique<BindlessTextureCache>();
+            PPR_RETURN_UNEXPECTED_ON_FAIL(
+                GridPass, cache->initialize(
+                              device, safe_narrowing(m_world.m_terrain_images.size() + 1u), m_terrain_fallback_handle));
+            m_world.m_texture_slots.resize(m_world.m_terrain_images.size());
+            m_world.m_texture_cache = std::move(cache);
+        }
+        const u32 end = std::min<u32>(
+            safe_narrowing(m_world.m_terrain_images.size()), m_world.m_image_cursor + image_budget);
+        for (; m_world.m_image_cursor < end; ++m_world.m_image_cursor) {
+            const auto texture = m_world.m_texture_cache->upload(m_world.m_terrain_images[m_world.m_image_cursor]);
+            PPR_RETURN_UNEXPECTED_ON_FAIL(GridPass, texture);
+            const auto slot = m_world.m_texture_cache->residentIndex(*texture);
+            PPR_RETURN_UNEXPECTED_ON_FAIL(GridPass, slot);
+            m_world.m_texture_slots[m_world.m_image_cursor] = slot->m_value;
+        }
+        if (m_world.m_image_cursor != m_world.m_terrain_images.size()) {
+            return false;
+        }
+        // One immutable dense lookup per world. Ordinary SRV indexing is
+        // separate from the nonuniform descriptor lookup in the fragment shader.
+        Array<GridTerrainVisual> palette;
+        palette.resize(m_world.m_terrain_visuals.empty() ? 1u : 65536u);
+        for (GridTerrainVisual visual: m_world.m_terrain_visuals) {
+            visual.m_texture_index = visual.m_texture_index == 0xffffffffu
+                                         ? 0u
+                                         : m_world.m_texture_slots[visual.m_texture_index];
+            palette[visual.m_material_id] = visual;
+        }
+        rhi::BufferDesc desc{};
+        desc.size = palette.size() * sizeof(GridTerrainVisual);
+        desc.elementSize = sizeof(GridTerrainVisual);
+        desc.memoryType = rhi::MemoryType::Upload;
+        desc.usage = rhi::BufferUsage::ShaderResource;
+        desc.defaultState = rhi::ResourceState::ShaderResource;
+        desc.label = "terrain material palette";
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            GridPass, device.createBuffer(desc, palette.data(), m_world.m_terrain_palette.writeRef()));
+        return true;
+    }
+
     std::error_code GridPass::bindSurfaceBuffers_(
         rhi::IDevice &device, rhi::ShaderCursor &cursor, const bool retained_table) {
         PPR_RETURN_ERROR_ON_FAIL(GridPass, ensureSurfaceBuffers_(device));
+        const auto visuals = prepareTerrainVisuals_(device, 0u);
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, visuals);
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, *visuals ? std::error_code{} : std::make_error_code(std::errc::operation_in_progress));
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, cursor["g_terrain_visuals"].setBinding(
+                          rhi::Binding(m_world.m_terrain_palette, makeFullRange(m_world.m_terrain_palette))));
+        rhi::IBuffer *const descriptors = m_world.m_texture_cache->descriptorBuffer();
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, cursor["g_textures"].setBinding(rhi::Binding(descriptors, makeFullRange(descriptors))));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, cursor["g_sampler"].setDescriptorHandle(m_terrain_sampler_handle));
         if (not retained_table or not m_chunk_slot_uploaded[m_tile_ring_cursor]) {
             std::array<u32, kGridTileCacheCapacity> slots;
             slots.fill(0xffffffffu);
@@ -1717,6 +1954,7 @@ namespace pP {
         frame.m_view_projection = m_camera_view.m_view_projection;
         frame.m_use_visible_ids = 1u;
         frame.m_surface_mode = m_world.m_resident_contours_enabled ? 1u : 0u;
+        frame.m_surface_mode |= m_world.m_terrain_visuals.empty() ? 0u : 2u;
         frame.m_boundary_material_id = m_world.m_resident_boundary_material_id;
         frame.m_cell_size_m = m_world.m_resident_cell_size_m;
         PPR_RETURN_ERROR_ON_FAIL(
@@ -1744,6 +1982,7 @@ namespace pP {
         frame.m_view_projection = m_camera_view.m_view_projection;
         frame.m_cell_size_m = m_world.m_cell_size_m;
         frame.m_surface_mode = m_world.m_contours_enabled ? 1u : 0u;
+        frame.m_surface_mode |= m_world.m_terrain_visuals.empty() ? 0u : 2u;
         frame.m_boundary_material_id = m_world.m_boundary_material_id;
 
         PPR_RETURN_ERROR_ON_FAIL(GridPass, frame_cursor.setData(&frame, sizeof(GridFrame)));

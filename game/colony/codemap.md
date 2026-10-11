@@ -71,3 +71,10 @@ Presentation captures the validated profile's wall material as the protected
 outside-world sample ID. The driver exposes this numeric value alongside the
 borrowed catalog; owned packet/stage transport validates its terrain visual
 membership before rendering. No synthetic renderer material identity is needed.
+
+Terrain presentation now carries owned decoded albedo images alongside numeric
+visual records. GridPass resolves source texture indices through a per-world
+BindlessTextureCache, samples with world-space periods and linearized authored
+tints, and retains canceled upload owners through a covering graphics fence.
+The normal asynchronous game job still needs its candidate publication handshake;
+this pass-local implementation does not yet change normal startup to the pack.

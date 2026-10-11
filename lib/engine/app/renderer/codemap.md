@@ -317,3 +317,10 @@ World replacement and deferred edits therefore keep the previous surface's
 shape/scale until replacement data is complete. GPU fixtures compare all 16
 cases and categorical material winners across four-chunk seams at both scales,
 plus antialiasing and protected world corners.
+
+GridPass world bundles also own the bindless texture cache, source image pins,
+source-to-resident slot mapping and immutable 16-byte terrain visual palette.
+One pass sampler/fallback is shared. Candidate texture preparation is bounded to
+one admitted 2048-square RGBA image per update; canceled uploads remain retained
+until a subsequent accepted frame fence covers initialization. Coordinator-side
+capture produces owned u16 cell uploads without copying full simulation cells.

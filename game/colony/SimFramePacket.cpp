@@ -22,6 +22,9 @@ namespace pP::colony {
             const auto &content = *catalog;
             PPR_ASSERT(content.contentFingerprint().has_value());
             packet.m_content_fingerprint = *content.contentFingerprint();
+            for (const auto &texture: content.textures()) {
+                packet.m_terrain_images.push_back(texture.m_image);
+            }
             for (const MaterialDefinition &material: content.materials()) {
                 if (material.m_numeric_id == 0u or
                     material.m_representation != EMaterialRepresentation::terrain or
@@ -53,7 +56,9 @@ namespace pP::colony {
                                      : std::make_error_code(std::errc::invalid_argument));
             if (not packet.m_has_catalog) {
                 PPR_RETURN_ERROR_ON_FAIL(
-                    SimPresentation, packet.m_terrain_visuals.empty() and packet.m_content_fingerprint == 0u
+                    SimPresentation, packet.m_terrain_visuals.empty() and
+                                             packet.m_terrain_images.empty() and
+                                             packet.m_content_fingerprint == 0u
                                          ? std::error_code{}
                                          : std::make_error_code(std::errc::invalid_argument));
                 return {};
@@ -71,6 +76,11 @@ namespace pP::colony {
                                              visual.m_texture_period_m >= 4096.0f / (std::numeric_limits<float>::max)()
                                          ? std::error_code{}
                                          : std::make_error_code(std::errc::invalid_argument));
+                PPR_RETURN_ERROR_ON_FAIL(
+                    SimPresentation,
+                    visual.m_texture_index == 0xffffffffu or visual.m_texture_index < packet.m_terrain_images.size()
+                        ? std::error_code{}
+                        : std::make_error_code(std::errc::invalid_argument));
                 for (std::size_t previous = 0u; previous < index; ++previous) {
                     PPR_RETURN_ERROR_ON_FAIL(
                         SimPresentation, packet.m_terrain_visuals[previous].m_material_id != visual.m_material_id
@@ -115,7 +125,7 @@ namespace pP::colony {
         // Prepared worlds retain catalog IDs, including vacuum zero. Explicit
         // legacy fixtures retain the translator's transparent sentinel.
         [[nodiscard]] std::error_code convertCells(
-            const Array<sim::Cell> &cells, const SimFramePacket &packet, Array<u16> &scratch) {
+            const std::span<const sim::Cell> cells, const SimFramePacket &packet, Array<u16> &scratch) {
             std::bitset<65536u> terrain_ids{};
             if (packet.m_has_catalog) {
                 for (const GridTerrainVisual &visual: packet.m_terrain_visuals) {
@@ -228,6 +238,59 @@ namespace pP::colony {
         return packet;
     }
 
+    Expected<GridPass::GridStagedFrame> captureWorldPresentation(
+        const ColonyDriver &driver, const IContext *const context) {
+        SimFramePacket presentation{};
+        capturePresentation_(presentation, driver);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(SimPresentation, validatePresentation_(presentation));
+        const auto dirty = driver.presentEditsCapture();
+        const auto &grid = driver.grid();
+        GridPass::GridStagedFrame stage{};
+        stage.m_ack_seed = driver.worldGeneration();
+        stage.m_full_refresh = true;
+        for (u32 index = 0u; index < sim::kChunkCount; ++index) {
+            if (context != nullptr) {
+                PPR_RETURN_UNEXPECTED_ON_FAIL(SimPresentation, context->error());
+            }
+            const sim::ChunkPos pos{index % sim::kChunksPerEdge, index / sim::kChunksPerEdge};
+            if (not grid.isResident(pos)) {
+                continue;
+            }
+            const auto cells = grid.residentCells(pos);
+            PPR_RETURN_UNEXPECTED_ON_FAIL(
+                SimPresentation, cells and cells->size() == sim::kCellsPerChunk
+                                     ? std::error_code{}
+                                     : std::make_error_code(std::errc::state_not_recoverable));
+            const auto range = tileRange(pos);
+            stage.m_tiles.push_back(GridTileSubmission{.m_chunk_id = index, .m_tile_range = range, .m_dirty_mask = 1u});
+            GridPass::GridStagedUpload upload{};
+            upload.m_chunk_id = index;
+            upload.m_payload.m_rect[0] = static_cast<float>(range.m_min_x);
+            upload.m_payload.m_rect[1] = static_cast<float>(range.m_min_y);
+            upload.m_payload.m_rect[2] = static_cast<float>(range.m_max_x);
+            upload.m_payload.m_rect[3] = static_cast<float>(range.m_max_y);
+            PPR_RETURN_UNEXPECTED_ON_FAIL(SimPresentation, convertCells(*cells, presentation, upload.m_cell_materials));
+            stage.m_uploads.push_back(std::move(upload));
+            for (const auto &row: dirty) {
+                if (row.m_pos == pos) {
+                    stage.m_ack_chunk_ids.push_back(index);
+                    stage.m_ack_revisions.push_back(row.m_revision);
+                    break;
+                }
+            }
+        }
+        if (context != nullptr) {
+            PPR_RETURN_UNEXPECTED_ON_FAIL(SimPresentation, context->error());
+        }
+        stage.m_cell_size_m = presentation.m_cell_size_m;
+        stage.m_has_catalog = presentation.m_has_catalog;
+        stage.m_boundary_material_id = presentation.m_boundary_material_id;
+        stage.m_content_fingerprint = presentation.m_content_fingerprint;
+        stage.m_terrain_visuals = std::move(presentation.m_terrain_visuals);
+        stage.m_terrain_images = std::move(presentation.m_terrain_images);
+        return stage;
+    }
+
     u32 InitialPresentation::completedChunks() const noexcept {
         return m_next_chunk;
     }
@@ -241,6 +304,7 @@ namespace pP::colony {
         stage.m_boundary_material_id = presentation.m_boundary_material_id;
         stage.m_content_fingerprint = presentation.m_content_fingerprint;
         stage.m_terrain_visuals = std::move(presentation.m_terrain_visuals);
+        stage.m_terrain_images = std::move(presentation.m_terrain_images);
         if (m_frame or m_next_chunk == sim::kChunkCount) {
             stage.m_tiles = m_visible;
             return stage;
@@ -284,6 +348,7 @@ namespace pP::colony {
         stage.m_boundary_material_id = packet.m_boundary_material_id;
         stage.m_content_fingerprint = packet.m_content_fingerprint;
         stage.m_terrain_visuals = packet.m_terrain_visuals;
+        stage.m_terrain_images = packet.m_terrain_images;
         // Owned payload only: no driver ack, no translator contact, and no
         // pass mutation happen on the client. The pass-side contact runs
         // on the pass's owner lane via GridPass::applyStagedFrame.
