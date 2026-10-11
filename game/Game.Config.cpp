@@ -1,3 +1,7 @@
+module;
+
+#include "pP/Macros.h"
+
 module game.config;
 
 import engine.app;
@@ -7,6 +11,7 @@ import game.display;
 import std;
 
 namespace pP::game {
+    PPR_DEFINE_LOG_CATEGORY(GameConfig, info, none);
     namespace {
         [[nodiscard]] bool cliHas(const config::CliResult &cli, const std::string_view canonical) noexcept {
             for (const auto &assignment: cli.m_assignments) {
@@ -62,6 +67,7 @@ namespace pP::game {
             constexpr std::string_view kAliases[][2] = {
                 {"smoke", "smoke"},
                 {"validate-worldgen", "validate-worldgen"},
+                {"worldgen-preview", "worldgen-preview"},
             };
             Array<std::string> seen{};
             for (const auto &assignment: cli.m_assignments) {
@@ -138,15 +144,19 @@ namespace pP::game {
                                   "validate-worldgen", "validate-worldgen",
                                   "Validate the complete content pack and textures without a window or GPU."));
         appendOption(
+            schema.m_options, selectorOption(
+                                  "worldgen-preview", "worldgen-preview",
+                                  "Generate diagnostic exports without gameplay; requires an output directory."));
+        appendOption(
             schema.m_options, valueOption("game.worldgen_root", "worldgen-root", "Explicit content pack root."));
         appendOption(
             schema.m_options, valueOption(
                                   "game.worldgen_gpu_output", "worldgen-gpu-output",
-                                  "Explicit GPU closeup capture with --validate-worldgen."));
+                                  "Explicit GPU closeup capture with --worldgen-preview."));
         appendOption(
             schema.m_options, valueOption(
                                   "game.worldgen_output", "worldgen-output",
-                                  "Export flat PPM diagnostics and report with --validate-worldgen."));
+                                  "Export flat PPM diagnostics and report with --worldgen-preview."));
         appendOption(
             schema.m_options,
             valueOption("game.worldgen_profile", "worldgen-profile", "World profile key (default frontier)."));
@@ -298,6 +308,19 @@ namespace pP::game {
         }
         if (not startup) {
             return std::unexpected{startup.error()};
+        }
+
+        const auto &settings = game->m_value;
+        if ((settings.m_command == EGameCommand::worldgen_preview and
+                not settings.m_worldgen_output and
+                not settings.m_worldgen_gpu_output) or
+            (settings.m_command != EGameCommand::worldgen_preview and settings.m_worldgen_gpu_output)) {
+            const auto error = config::make_error_code(config::EConfigErrc::cross_field_invalid);
+            diagnostics.add(
+                "invocation", "game.command",
+                "--worldgen-preview requires --worldgen-output or --worldgen-gpu-output; GPU capture requires the preview selector",
+                error);
+            PPR_RETURN_UNEXPECTED_ON_FAIL(GameConfig, error);
         }
 
         GameInvocation invocation{};

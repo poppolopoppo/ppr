@@ -58,6 +58,32 @@ namespace pP::game::tests::detail::world_job {
         }
     }
 
+    PPR_UNIT_TEST (cancelled_header_retains_catalog_until_external_release) {
+        ParallelScheduler chunks{"Header retirement chunks", 1u, static_cast<std::size_t>(hal::page_granularity)};
+        WorldJob job{
+            chunks,
+            [](const ColonyDriverDesc &, const sim::GenerationExecution &, config::Diagnostics &)
+                -> Expected<std::unique_ptr<ColonyDriver>> { return std::make_unique<ColonyDriver>(); }};
+        PPR_TEST_ASSERT(not job.request({.m_world_generation = 1u}));
+        PPR_TEST_ASSERT(not job.update(true));
+        settle(job);
+        auto *const presentation = &job.presentation();
+        presentation->m_diagnostic_palette.resize(65536u);
+        job.cancel();
+        for (u32 frame = 0u; frame < 64u; ++frame) {
+            PPR_TEST_ASSERT(not job.update(true, false));
+            PPR_TEST_ASSERT(job.busy());
+            PPR_TEST_ASSERT(job.view().m_state == EWorldJobState::retiring);
+            PPR_TEST_ASSERT(presentation->m_diagnostic_palette.size() == 65536u);
+        }
+        // The external header is now released; only coordinator-owned payloads remain.
+        PPR_TEST_ASSERT(not job.update(true));
+        settle(job);
+        PPR_TEST_ASSERT(not job.busy());
+        PPR_TEST_ASSERT(job.view().m_state == EWorldJobState::cancelled);
+        PPR_TEST_ASSERT(not job.shutdown());
+    };
+
     PPR_UNIT_TEST (loading_presentation_gates_admission_and_cancel_is_reusable) {
         ParallelScheduler chunks{"World job test chunks", 1u, static_cast<std::size_t>(hal::page_granularity)};
         std::atomic<u32> calls{};
@@ -354,6 +380,7 @@ namespace pP::game::tests {
     const UnitTest world_jobs = UnitTest::Named("world_jobs") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::world_job::loading_presentation_gates_admission_and_cancel_is_reusable,
+            detail::world_job::cancelled_header_retains_catalog_until_external_release,
             detail::world_job::gated_worker_keeps_control_polling_and_cancellation_live,
             detail::world_job::frozen_capture_returns_same_owner_after_queued_cancel,
             detail::world_job::preview_failure_and_queued_cancel_return_frozen_owner,

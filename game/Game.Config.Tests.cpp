@@ -64,14 +64,14 @@ namespace pP::game::tests::detail::compat {
         Diagnostics diagnostics{};
         const auto command = resolveCli(
             {"--validate-worldgen", "--worldgen-root=pack", "--worldgen-profile=hollows",
-                "--worldgen-seed=18446744073709551615", "--worldgen-output=previews", "--worldgen-gpu-output=closeups"},
+                "--worldgen-seed=18446744073709551615", "--worldgen-output=previews"},
             diagnostics);
         PPR_TEST_ASSERT(command.has_value());
         PPR_TEST_ASSERT(command->m_game.m_value.m_command == EGameCommand::validate_worldgen);
         PPR_TEST_ASSERT(command->m_game.m_value.m_worldgen_root == "pack");
         PPR_TEST_ASSERT(command->m_game.m_value.m_worldgen_output == "previews");
         PPR_TEST_ASSERT(command->m_game.m_value.m_worldgen_profile == "hollows");
-        PPR_TEST_ASSERT(command->m_game.m_value.m_worldgen_gpu_output == "closeups");
+        PPR_TEST_ASSERT(not command->m_game.m_value.m_worldgen_gpu_output);
         PPR_TEST_ASSERT(command->m_game.m_value.m_worldgen_seed == (std::numeric_limits<u64>::max)());
         for (const auto seed: {"--worldgen-seed=-1", "--worldgen-seed=18446744073709551616"}) {
             Diagnostics bad{};
@@ -83,6 +83,27 @@ namespace pP::game::tests::detail::compat {
         Diagnostics explicit_value{};
         PPR_TEST_ASSERT(not resolveCli({"--validate-worldgen=smoke"}, explicit_value));
         PPR_TEST_ASSERT(gameHelpText().find("validate-worldgen") != std::string::npos);
+    };
+
+    PPR_UNIT_TEST (worldgen_preview_is_distinct_and_requires_explicit_output) {
+        Diagnostics diagnostics{};
+        const auto preview = resolveCli(
+            {"--worldgen-preview", "--worldgen-output=previews", "--worldgen-gpu-output=closeups"}, diagnostics);
+        PPR_TEST_ASSERT(preview and preview->m_game.m_value.m_command == EGameCommand::worldgen_preview);
+        PPR_TEST_ASSERT(preview->m_game.m_value.m_worldgen_gpu_output == "closeups");
+        for (const auto options:
+            {std::initializer_list<const char *>{"--worldgen-preview"},
+                {"--validate-worldgen", "--worldgen-gpu-output=closeups"}, {"--worldgen-gpu-output=closeups"}}) {
+            Diagnostics invalid{};
+            const auto result = resolveCli(options, invalid);
+            PPR_TEST_ASSERT(not result and result.error() == make_error_code(EConfigErrc::cross_field_invalid));
+        }
+        Diagnostics conflict{};
+        const auto conflicting = resolveCli({"--worldgen-preview", "--validate-worldgen"}, conflict);
+        PPR_TEST_ASSERT(not conflicting and conflicting.error() == make_error_code(EConfigErrc::conflicting_command));
+        Diagnostics explicit_value{};
+        PPR_TEST_ASSERT(not resolveCli({"--worldgen-preview=smoke"}, explicit_value));
+        PPR_TEST_ASSERT(gameHelpText().find("worldgen-preview") != std::string::npos);
     };
 
     PPR_UNIT_TEST (retired_workload_commands_rejected) {
@@ -443,6 +464,7 @@ namespace pP::game::tests {
         _.recurse({
             detail::compat::selectors_pick_commands,
             detail::compat::worldgen_validation_invocation,
+            detail::compat::worldgen_preview_is_distinct_and_requires_explicit_output,
             detail::compat::retired_workload_commands_rejected,
             detail::compat::repeated_same_selector_is_idempotent,
             detail::compat::selector_explicit_values_rejected,

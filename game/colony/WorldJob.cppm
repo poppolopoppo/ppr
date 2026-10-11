@@ -76,7 +76,9 @@ export namespace pP::colony {
         void cancel() noexcept;
         /// Non-waiting admission and readiness polling. Initial admission is
         /// withheld until a successful loading-screen presentation is observed.
-        [[nodiscard]] std::error_code update(bool loading_presented);
+        /// Hold cleanup while an external header command still shares catalog
+        /// image storage. Release the command before allowing worker retirement.
+        [[nodiscard]] std::error_code update(bool loading_presented, bool allow_cleanup = true);
         [[nodiscard]] WorldJobView view() const noexcept;
         [[nodiscard]] std::string_view diagnosticText() const noexcept;
         [[nodiscard]] bool busy() const noexcept;

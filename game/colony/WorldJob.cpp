@@ -256,12 +256,12 @@ namespace pP::colony {
         return {};
     }
 
-    std::error_code WorldJob::update(const bool loading_presented) {
+    std::error_code WorldJob::update(const bool loading_presented, const bool allow_cleanup) {
         if (not m_job) {
             return {};
         }
         if (m_cleanup_pending) {
-            return admitCleanup_();
+            return allow_cleanup ? admitCleanup_() : std::error_code{};
         }
         if (m_job->m_is_capture and m_view.m_state != EWorldJobState::retiring) {
             return updateCapture_(loading_presented);
@@ -327,7 +327,7 @@ namespace pP::colony {
             if (error or m_cancelled) {
                 m_view.m_state = EWorldJobState::retiring;
                 m_cleanup_pending = true;
-                return admitCleanup_();
+                return allow_cleanup ? admitCleanup_() : std::error_code{};
             }
             m_view.m_state = EWorldJobState::prepared;
             m_view.m_stage = EWorldJobStage::publishing;
@@ -335,7 +335,7 @@ namespace pP::colony {
         if (m_view.m_state == EWorldJobState::prepared and m_cancelled) {
             m_view.m_state = EWorldJobState::retiring;
             m_cleanup_pending = true;
-            return admitCleanup_();
+            return allow_cleanup ? admitCleanup_() : std::error_code{};
         }
         return {};
     }

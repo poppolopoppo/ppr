@@ -383,7 +383,7 @@ including deleted assets, without needing a C++ relink. Then run from any folder
 
 ```text
 app.game --validate-worldgen
-app.game --validate-worldgen --worldgen-profile=hollows
+app.game --worldgen-preview --worldgen-profile=hollows
 app.game --validate-worldgen --worldgen-root=<explicit-pack-directory>
 ```
 
@@ -469,7 +469,7 @@ its preserved matter metadata is labelled an invalidated baseline, not live flui
 After building `app.game`, run:
 
 ```text
-app.game --validate-worldgen --worldgen-profile=frontier --worldgen-seed=42 --worldgen-output=<output-directory>
+app.game --worldgen-preview --worldgen-profile=frontier --worldgen-seed=42 --worldgen-output=<output-directory>
 ```
 
 The headless command generates one exclusively owned world using the existing
@@ -502,12 +502,12 @@ closeups and runtime checks.
 For actual textured GridPass closeups, explicitly opt into GPU initialization:
 
 ```text
-app.game --validate-worldgen --worldgen-profile=frontier --worldgen-seed=42 --worldgen-gpu-output=<closeup-directory>
+app.game --worldgen-preview --worldgen-profile=frontier --worldgen-seed=42 --worldgen-gpu-output=<closeup-directory>
 ```
 
 This separate offscreen diagnostic freezes the generated session, renders
 512-square start, chunk-seam, surface and texture views, and reads back RGB PPM
 images. `gpu-cameras.txt` records descriptor identity and exact metre cameras.
 It uses the real bindless terrain pass and blocks for GPU completion only in
-this diagnostic host. The ordinary validation/export command remains CPU-only.
+this diagnostic host. Plain --validate-worldgen loads and compiles the pack without generating terrain, opening a window or initializing the GPU. The distinct --worldgen-preview selector generates diagnostics and requires at least one explicit output directory. The earlier --validate-worldgen --worldgen-output form remains a CPU-only compatibility path.
 These images do not measure interactive loading or input responsiveness.

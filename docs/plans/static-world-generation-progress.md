@@ -26,33 +26,29 @@ not a declaration that the seven-stage acceptance criteria have passed.
 - Factory-only prepared-world ownership binds the catalog, reproduction descriptor
   and numeric result. Colony can adopt this owner without regenerating terrain;
   the driver adopts this owner with one controlled actor and metre-scale colliders.
-  Interactive job/publication hookup is still pending.
+  Interactive publication uses the authored pack and a single controlled actor.
 
 Allocation failure is fatal. Accepted work drains before borrowed inputs are
 released, including when an allocation exception must be rethrown.
 
-## Outstanding plan work
+## Current remaining acceptance work
 
-Stage 3 still needs the catalog/session integration into the interactive job,
-complete generation allocation/scratch accounting. The shipped seed corpus now
-passes; visual inspection/export remains outstanding.
-The current interactive candidate uses the legacy recipe.
+Stages 1–6 now have integrated implementations: authored asynchronous New Game,
+transactional CPU/collider/GPU publication, catalog-driven textured terrain,
+metre-scale control/tools, inspector/preview modes, full versioned checkpoints,
+and CPU overview plus real GPU closeup exports. The entries below this section
+are chronological evidence; earlier descriptions of pending integration are
+historical and are superseded by later increments.
 
-Stage 4 has metric actors, shared-contour colliders, fixed-tick player commands
-and preserved AI, prepared-driver adoption, catalog-aware dig/demolition and
-three-cell construction validation, input clearing, metre-based picking and
-camera/overlay transport. Normal authored-session publication and complete
-shared-surface tool hit selection remain pending.
-
-Stage 5 has GPU visibility/indirect drawing, persistent resident tables,
-completion-protected atlas cohorts and shared GPU contour shading. It still
-needs catalog textures, normal transactional candidate GPU publication,
-diagnostic modes, inspector integration and gameplay/collider edit coherence.
-
-Stage 6 needs checkpoint identity/full frozen capture, preview exports and final
-authoring diagnostics. Stage 7 needs representative visual/traversal review,
-performance/memory/responsiveness measurements, the complete required build/test
-gates and removal of retired production paths.
+Stage 7 remains open. The eight profile/seed CPU and GPU capture cases passed;
+32 overview images and 32 textured closeups decoded and were inspected. Remaining
+work is generation scratch/payload accounting, measured interactive loading and
+publication cadence, data-only material extension through runtime/presentation,
+final build/test gates, and a final audit of retired production assumptions.
+Cancellation/header retirement and the distinct preview selector are being
+validated in the next increment. Actual interactive traversal, modal/cancel
+latency and a saved GPU profiler capture are not yet verified. Process-memory
+samples are retained separately from generation-owned payload accounting.
 
 Third-party dependency cleanup follows completion of all seven stages, per the
 user's instruction. No further private library patch/fork is authorized.
@@ -505,3 +501,27 @@ internal errors for a PreparedWorld member, and v3 for its by-value signature;
 the invocation boundary now passes the initialized driver plus camera/identity
 values. Logs retain these compiler failures. The final dev/ASan build and
 ten-entry matrix are running; stage-7 runtime/backend acceptance remains open.
+
+## Preview selector and cancelled-header retirement acceptance
+
+The full ten-entry ASan matrix passed against 9f577e6 in
+`out/worldgen-final-matrix-v1.log` (912.23 s): core, sim, all six application
+shards, asset and game. The next increment adds the distinct `--worldgen-preview`
+selector, with an explicit CPU/GPU export directory, and makes plain
+`--validate-worldgen` stop after loading and compiling the pack without GPU
+initialization or terrain generation. The old CPU validation-plus-export form is
+retained. GPU capture now requires the preview selector.
+
+A cancelled candidate header may share catalog image storage with the UI-owned
+command. WorldJob cleanup is withheld until that command is released, preserving
+coordinator ownership of the final image release. A regression holds a borrowed
+presentation across repeated cancellation polls and then permits retirement.
+
+The new data-only material test adds ID 60000, its own texture path, metadata and
+a new biome deposit. It checks generated ID transport, catalog metadata, digging
+and low-level collider occupancy. It does not claim to exercise the Inspector UI
+or GPU shading. Astra passed the retirement and corrected CLI/test scopes.
+CLion inspection is unavailable: the execute_tool catalog request failed with
+HTTP transport failure at 127.0.0.1:64362; no IDE-clean result is claimed.
+
+The increment's 57-edge ASan build passed. All 44 selected tests (including group nodes) passed in three shuffled loops (44.18 s, 30.32 s, 34.93 s) in out/worldgen-acceptance-gaps-tests-v1.log; no assertion failures were reported. Format Check passed eight files and semantic style reported no blocking findings.

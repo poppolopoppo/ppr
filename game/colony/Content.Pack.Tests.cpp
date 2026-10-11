@@ -2,6 +2,7 @@ module;
 #include "pP/UnitTest.h"
 module game.tests;
 import engine.core;
+import engine.physics;
 import game.colony.content;
 import game.colony.worldgen;
 import game.colony.digtool;
@@ -172,6 +173,89 @@ namespace pP::game::tests::detail::pack {
         PPR_TEST_ASSERT(grid.getCell({30u, 30u})->m_element == 16u and touched.empty());
         PPR_TEST_ASSERT(registry.get<BuildErrand>(demolition)->m_progress == 0u);
         PPR_TEST_ASSERT(registry.get<BuildErrand>(build)->m_progress == 0u);
+    };
+
+    PPR_UNIT_TEST (data_only_material_extension_reaches_raster_tools_and_colliders) {
+        Fixture fixture{};
+        fixture.write("materials.toml", fixture.read("materials.toml") + R"(
+[materials.violet_ore]
+numeric_id = 60000
+display_name = "Violet ore"
+phase = "solid"
+representation = "terrain"
+color_rgba = "C07CFFFF"
+albedo_texture = "textures/violet_ore.png"
+texture_period_m = 0.75
+diggable = true
+reference_density_kg_m3 = 3100.0
+)");
+        std::filesystem::copy_file(fixture.m_root / "textures/ice.png", fixture.m_root / "textures/violet_ore.png");
+        auto biomes = fixture.read("biomes.toml");
+        fixture.write("biomes.toml", biomes + R"(
+[biomes.hearth.deposits.violet_lens]
+kind = "threshold"
+order = 20
+field = "ore_lenses"
+material = "violet_ore"
+host_material = "sandstone"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+threshold_min = -1.0
+threshold_max = 1.0
+)");
+        config::Diagnostics diagnostics{};
+        const auto catalog = fixture.load(diagnostics);
+        PPR_TEST_ASSERT(catalog.has_value() and not diagnostics.hasErrors());
+        const auto *const material = catalog->findMaterial(u16{60000u});
+        PPR_TEST_ASSERT(material and material->m_display_name == "Violet ore");
+        PPR_TEST_ASSERT(material->m_diggable == true and material->m_color_rgba == 0xC07CFFFFu);
+        PPR_TEST_ASSERT(
+            material->m_texture_period_m == 0.75 and material->m_albedo_texture == "textures/violet_ore.png");
+        const auto texture = std::ranges::find(
+            catalog->textures(), *material->m_albedo_texture, &ContentTexture::m_path);
+        PPR_TEST_ASSERT(texture != catalog->textures().end() and texture->m_image.m_storage.isOwned());
+        PPR_TEST_ASSERT(catalog->textures().size() == 8u and catalog->contentFingerprint() != 0x857b3878fe9f3470ull);
+
+        const auto plan = compileWorldPlan(*catalog, "frontier", 42u);
+        PPR_TEST_ASSERT(plan.has_value());
+        const auto layout = sim::compileBiomeLayout(*plan);
+        PPR_TEST_ASSERT(layout.has_value());
+        const auto geometry = sim::compileGenerationGeometry(*plan, *layout);
+        PPR_TEST_ASSERT(geometry.has_value());
+        const auto raster = sim::compileGenerationRaster(*plan, *layout, *geometry);
+        PPR_TEST_ASSERT(raster.has_value());
+        std::optional<sim::Cell> generated{};
+        for (const auto &site: layout->sites()) {
+            const sim::ChunkPos pos{
+                static_cast<u32>(site.m_x_m * 3.0) / sim::kChunkEdge,
+                static_cast<u32>(site.m_y_m * 3.0) / sim::kChunkEdge};
+            const auto cells = raster->chunk(pos);
+            PPR_TEST_ASSERT(cells.has_value());
+            const auto found = std::ranges::find(*cells, u16{60000u}, &sim::Cell::m_element);
+            if (found != cells->end()) {
+                generated = *found;
+                break;
+            }
+        }
+        PPR_TEST_ASSERT(generated.has_value());
+        sim::ChunkGrid grid{};
+        PPR_TEST_ASSERT(not grid.setCell({1u, 1u}, *generated));
+        physics::Scene scene{};
+        physics::ChunkColliders colliders{{1.0f / 3.0f}};
+        PPR_TEST_ASSERT(not scene.initialize({}));
+        std::array<u16, 16u> occupancy{};
+        occupancy[5u] = grid.getCell({1u, 1u})->m_element;
+        const std::array chunks{physics::ColliderChunkView{{0, 0}, occupancy, true}};
+        const std::array dirty{physics::ColliderChunkPos{0, 0}};
+        u32 processed{};
+        PPR_TEST_ASSERT(not colliders.rebuildDirtyChunks(scene, chunks, dirty, 4u, 1u, processed));
+        PPR_TEST_ASSERT(colliders.chainCount({0, 0}) == 1u);
+        const auto dug = digCells(grid, DigRect{{1u, 1u}, 1u, 1u}, &*catalog);
+        PPR_TEST_ASSERT(dug and dug->m_dug == 1u and grid.getCell({1u, 1u})->m_element == 0u);
+        occupancy[5u] = grid.getCell({1u, 1u})->m_element;
+        PPR_TEST_ASSERT(not colliders.rebuildDirtyChunks(scene, chunks, dirty, 4u, 1u, processed));
+        PPR_TEST_ASSERT(colliders.chainCount({0, 0}) == 0u);
+        PPR_TEST_ASSERT(not scene.shutdown());
     };
 
     PPR_UNIT_TEST (complete_shipped_catalog_is_owned) {
@@ -400,6 +484,7 @@ namespace pP::game::tests {
                     detail::pack::construction_checks_complete_tiles_reservations_and_live_actor_overlap,
                     detail::pack::errand_preflight_rejects_invalid_actor_before_any_demolition_writes,
                     detail::pack::complete_shipped_catalog_is_owned,
+                    detail::pack::data_only_material_extension_reaches_raster_tools_and_colliders,
                     detail::pack::shipped_profiles_compile_owned_numeric_plans,
                     detail::pack::prepared_world_rejects_invalid_inputs_and_cancellation_before_generation,
                     detail::pack::numeric_streams_ignore_document_order_and_unused_materials,

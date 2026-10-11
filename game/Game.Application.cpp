@@ -62,6 +62,16 @@ namespace demo {
             std::cerr << "[worldgen] Unknown profile: " << settings.m_worldgen_profile << '\n';
             return pP::config::kExitInvalidUsage;
         }
+        if (settings.m_command == game::EGameCommand::validate_worldgen and not settings.m_worldgen_output) {
+            const auto plan = colony::compileWorldPlan(*catalog, settings.m_worldgen_profile, settings.m_worldgen_seed);
+            if (not plan) {
+                std::cerr << "[worldgen] Compilation failed: " << plan.error().message() << '\n';
+                return 1;
+            }
+            std::println(
+                "Worldgen pack {} validated; fingerprint {:016x}", catalog->packId(), *catalog->contentFingerprint());
+            return 0;
+        }
         auto &chunks = parallel::backgroundPool();
         auto prepared = colony::prepareWorld(
             std::move(*catalog), settings.m_worldgen_profile, settings.m_worldgen_seed, ITimerClock::steady(),
@@ -538,7 +548,11 @@ namespace demo {
                 m_preview_pending.reset();
                 m_world_job->cancel();
             }
-            PPR_RETURN_ERROR_ON_FAIL(Demo, m_world_job->update(m_loading_presented));
+            // Header images share catalog pixels. Keep the coordinator's owners
+            // until this command is settled/dropped, so its UI-side reset can
+            // never become the last large image release during cancellation.
+            const bool header_retained = m_world_command and m_world_command->m_kind == EGridWorldCommand::begin;
+            PPR_RETURN_ERROR_ON_FAIL(Demo, m_world_job->update(m_loading_presented, not header_retained));
             if (m_capture_access and m_world_job->view().m_state == colony::EWorldJobState::prepared) {
                 m_driver = m_world_job->takeCaptured(true);
                 m_driver_ready = true;
@@ -3884,7 +3898,9 @@ int runGame(const int argc, char *argv[]) try {
     const pP::DisplaySettings &display = invocation->m_display.m_value;
     const pP::StartupSettings &startup = invocation->m_startup.m_value;
 
-    if (settings.m_command == pP::game::EGameCommand::validate_worldgen and not settings.m_worldgen_gpu_output) {
+    const bool worldgen_command = settings.m_command == pP::game::EGameCommand::validate_worldgen or
+                                  settings.m_command == pP::game::EGameCommand::worldgen_preview;
+    if (worldgen_command and not settings.m_worldgen_gpu_output) {
         return demo::runWorldgenValidation(settings);
     }
 
@@ -3901,7 +3917,7 @@ int runGame(const int argc, char *argv[]) try {
         pP::IRhiService::get()->setGpuAssistedValidation(startup.m_gpu_validation);
     }
 
-    if (settings.m_command == pP::game::EGameCommand::validate_worldgen) {
+    if (worldgen_command) {
         return demo::runWorldgenValidation(settings);
     }
 
