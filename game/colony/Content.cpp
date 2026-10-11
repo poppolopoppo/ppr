@@ -505,7 +505,10 @@ namespace pP::colony {
                     field(&MaterialRecord::m_albedo_texture, metadata("albedo_texture"), StringDomain{1024u, false}),
                     field(
                         &MaterialRecord::m_texture_period_m, metadata("texture_period_m"),
-                        FloatDomain{0.0, (std::numeric_limits<double>::max)(), false, true}),
+                        // Float UV arithmetic must remain finite over the entire world.
+                        FloatDomain{
+                            4096.0 / static_cast<double>((std::numeric_limits<float>::max)()),
+                            static_cast<double>((std::numeric_limits<float>::max)()), false, false}),
                     field(&MaterialRecord::m_diggable, metadata("diggable"), boolean_domain),
                     field(
                         &MaterialRecord::m_reference_density_kg_m3, metadata("reference_density_kg_m3"),

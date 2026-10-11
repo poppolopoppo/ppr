@@ -43,6 +43,16 @@ export namespace pP {
         i32 m_max_y = 0;
     };
 
+    // Owned numeric catalog visuals. Texture indices name the immutable world
+    // bundle's source images; they are distinct from terrain material IDs.
+    struct alignas(16) GridTerrainVisual {
+        u32 m_material_id{};
+        u32 m_color_rgba{};
+        u32 m_texture_index{0xffffffffu};
+        float m_texture_period_m{1.0f};
+    };
+    static_assert(sizeof(GridTerrainVisual) == 16u);
+
     // Frozen boundary struct (plain data): one chunk-sized tile submission.
     // m_chunk_id is the row-major chunk index (the sim chunkIndexOf domain,
     // carried here as a plain u32). m_dirty_mask bit i marks tile i dirty;
@@ -132,7 +142,8 @@ export namespace pP {
         struct GridFrame {
             float4x4 m_view_projection{identity_v};
             u32 m_use_visible_ids{};
-            std::array<u32, 3u> m_padding{};
+            float m_cell_size_m{1.0f};
+            std::array<u32, 2u> m_padding{};
         };
 
         static_assert(sizeof(GridFrame) == 80u);
@@ -141,7 +152,7 @@ export namespace pP {
         // by kGridCullEpsilon) intersect the snapshot frustum. Renders
         // nothing, so it is unit-testable without a device.
         [[nodiscard]] static Expected<GridTilePlan> planTiles(
-            const CameraSnapshot &snapshot, std::span<const GridTileSubmission> submissions);
+            const CameraSnapshot &snapshot, std::span<const GridTileSubmission> submissions, float cell_size_m = 1.0f);
 
         [[nodiscard]] std::error_code initialize(
             IRhiService &rhi_service, IShaderService &shader_service, const std::filesystem::path &content_dir);
@@ -221,6 +232,10 @@ export namespace pP {
         };
 
         struct GridStagedFrame {
+            float m_cell_size_m{1.0f};
+            bool m_has_catalog{false};
+            u64 m_content_fingerprint{};
+            Array<GridTerrainVisual> m_terrain_visuals{};
             Array<GridTileSubmission> m_tiles{};
             Array<GridStagedUpload> m_uploads{};
             // Dropped before staging: translator reset / regeneration /
@@ -398,6 +413,7 @@ export namespace pP {
         std::array<VisibilityProgram, 2u> m_visibility_programs{};
         bool m_visibility_prepared{false};
         bool m_visibility_has_cells{false};
+        float m_cell_size_m{1.0f};
         std::optional<RenderPipelineKey> m_render_pipeline_key;
         std::optional<GridCachedPipeline> m_cached_pipeline;
 

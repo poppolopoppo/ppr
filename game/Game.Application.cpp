@@ -2342,7 +2342,8 @@ namespace demo {
                 }
             }
 
-            Expected<GridTilePlan> plan = GridPass::planTiles(getMainCamera()->getSnapshot(), submissions);
+            Expected<GridTilePlan> plan = GridPass::planTiles(
+                getMainCamera()->getSnapshot(), submissions, 1.0f / static_cast<float>(m_driver->cellsPerMetre()));
             if (not plan) [[unlikely]] {
                 return plan.error();
             }

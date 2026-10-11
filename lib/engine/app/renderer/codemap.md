@@ -16,6 +16,13 @@ hook. Preparation failure abandons the frame before submission; the surface
 path still settles its acquired image. Content passes own compute work and
 resource transitions issued through this camera-free seam.
 
+Grid staged frames carry owned catalog visuals and an explicit cell metric.
+Supported scales are one metre for legacy fixtures and one third metre for
+prepared worlds. CPU reference culling, GPU visibility, and vertex positions
+all apply that same scale; local atlas addressing stays in fine cells. Ordinary
+shutdown resets the metric for reuse. Catalog textures and GPU visual-resource
+publication remain separate acceptance work.
+
 ## Design
 
 - **Renderer** (`App.Renderer.cppm/.cpp`): private config (backend-preferred format, image count 3),

@@ -11,6 +11,7 @@ import game.colony.buildings;
 import game.colony.pathfinding;
 import game.colony.translator;
 import game.colony.worldgen;
+import game.colony.content;
 
 import std;
 
@@ -198,6 +199,8 @@ export namespace pP::colony {
         [[nodiscard]] std::error_code initPrepared(
             const ColonyDriverDesc &desc, PreparedWorld world, const sim::GenerationExecution *execution = nullptr);
         [[nodiscard]] const PreparedWorld *preparedWorld() const noexcept;
+        // Borrowed immutable catalog; absent for explicit legacy fixtures.
+        [[nodiscard]] const ContentCatalog *contentCatalog() const noexcept;
         [[nodiscard]] u32 cellsPerMetre() const noexcept;
 
         [[nodiscard]] std::error_code shutdown();

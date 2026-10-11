@@ -37,10 +37,11 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(std::is_trivially_copyable_v<GridTilePayload>);
             PPR_TEST_ASSERT(std::is_standard_layout_v<GridTilePayload>);
 
-            // GridFrame is uploaded as one 64-byte blob into g_grid_frame and
-            // is not layout-adaptive: a single view-projection matrix.
-            PPR_TEST_ASSERT(sizeof(GridPass::GridFrame) == 64u);
+            // GridFrame's matrix, visibility selector and metric share the shader ABI.
+            PPR_TEST_ASSERT(sizeof(GridPass::GridFrame) == 80u);
             PPR_TEST_ASSERT(PPR_OFFSETOF(GridPass::GridFrame, m_view_projection) == 0u);
+            PPR_TEST_ASSERT(PPR_OFFSETOF(GridPass::GridFrame, m_use_visible_ids) == 64u);
+            PPR_TEST_ASSERT(PPR_OFFSETOF(GridPass::GridFrame, m_cell_size_m) == 68u);
 
             // Chunk-sized granularity: one tile per chunk, never a second
             // tiling system; the cache clamps at one entry per world chunk.
@@ -55,6 +56,29 @@ namespace pP::tests::detail {
         // touches the x = 800 edge (visible per the boundary rule), and tile
         // D starts one cell past it (culled). The plan preserves submission
         // order over the visible set.
+        PPR_UNIT_TEST (grid_plan_converts_fine_bounds_to_metres) {
+            const CameraSnapshot snapshot = orthoSnapshot800x600();
+            const GridTileSubmission tiles[] = {
+                {.m_chunk_id = 0u, .m_tile_range = {2304, 0, 2432, 128}},
+                {.m_chunk_id = 1u, .m_tile_range = {2432, 0, 2560, 128}},
+            };
+            const auto legacy = GridPass::planTiles(snapshot, tiles);
+            PPR_TEST_ASSERT(legacy and legacy->m_tiles.empty());
+            const auto metric = GridPass::planTiles(snapshot, tiles, 1.0f / 3.0f);
+            PPR_TEST_ASSERT(metric and metric->m_tiles.size() == 1u);
+            PPR_TEST_ASSERT(metric->m_tiles[0u].m_chunk_id == 0u);
+            for (const float invalid:
+                {0.0f, -1.0f, (std::numeric_limits<float>::max)(), (std::numeric_limits<float>::denorm_min)(), 0.5f,
+                    std::numeric_limits<float>::infinity(), std::numeric_limits<float>::quiet_NaN()}) {
+                const auto rejected = GridPass::planTiles(snapshot, tiles, invalid);
+                PPR_TEST_ASSERT(not rejected and rejected.error() == std::errc::invalid_argument);
+                GridPass pass{};
+                GridPass::GridStagedFrame stage{};
+                stage.m_cell_size_m = invalid;
+                PPR_TEST_ASSERT(pass.applyStagedFrame(stage) == std::errc::invalid_argument);
+            }
+        };
+
         PPR_UNIT_TEST (grid_plan_culls_offscreen_tiles) {
             const CameraSnapshot snapshot = orthoSnapshot800x600();
 
@@ -478,6 +502,7 @@ namespace pP::tests {
     const UnitTest grid_pass = UnitTest::Named("grid_pass") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::GridTiles::grid_tile_payload_layout_matches_the_shader,
+            detail::GridTiles::grid_plan_converts_fine_bounds_to_metres,
             detail::GridTiles::grid_plan_culls_offscreen_tiles,
             detail::GridTiles::grid_dirty_upload_serves_quiescent_from_cache,
             detail::GridTiles::grid_cell_upload_rejects_invalid_requests_without_mutation,

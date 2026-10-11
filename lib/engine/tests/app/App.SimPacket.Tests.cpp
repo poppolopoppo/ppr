@@ -24,6 +24,51 @@ namespace pP::tests::detail {
         // the capture/consume tests initialize paused worlds for real present
         // sets.
 
+        PPR_UNIT_TEST (catalog_packet_preserves_identity_metric_and_owned_visuals) {
+            colony::SimFramePacket packet{};
+            packet.m_has_catalog = true;
+            packet.m_cell_size_m = 1.0f / 3.0f;
+            packet.m_content_fingerprint = 42u;
+            packet.m_terrain_visuals.push_back({16u, 0x123456ffu, 2u, 2.0f});
+            packet.m_terrain_visuals.push_back({257u, 0xabcdef80u, 0xffffffffu, 1.0f});
+            packet.m_full_refresh = true;
+            packet.m_resident_chunks.push_back({0u, 0u});
+            colony::SimChunkCells cells{};
+            cells.m_pos = {0u, 0u};
+            cells.m_cells.resize(sim::kCellsPerChunk);
+            cells.m_cells[1u].m_element = 16u;
+            cells.m_cells[2u].m_element = 257u;
+            packet.m_chunk_cells.push_back(std::move(cells));
+            GridPass::GridStagedFrame stage{};
+            PPR_TEST_ASSERT(not colony::buildGridStagedFrame(packet, stage));
+            PPR_TEST_ASSERT(stage.m_has_catalog and stage.m_content_fingerprint == 42u);
+            PPR_TEST_ASSERT(stage.m_cell_size_m == 1.0f / 3.0f);
+            PPR_TEST_ASSERT(stage.m_uploads.size() == 1u);
+            PPR_TEST_ASSERT(stage.m_uploads[0u].m_cell_materials[0u] == 0u);
+            PPR_TEST_ASSERT(stage.m_uploads[0u].m_cell_materials[1u] == 16u);
+            PPR_TEST_ASSERT(stage.m_uploads[0u].m_cell_materials[2u] == 257u);
+            packet.m_terrain_visuals[0u].m_color_rgba = 0u;
+            packet.m_chunk_cells[0u].m_cells[1u].m_element = 0u;
+            PPR_TEST_ASSERT(stage.m_terrain_visuals[0u].m_color_rgba == 0x123456ffu);
+            PPR_TEST_ASSERT(stage.m_terrain_visuals[0u].m_texture_index == 2u);
+            PPR_TEST_ASSERT(stage.m_terrain_visuals[0u].m_texture_period_m == 2.0f);
+            PPR_TEST_ASSERT(stage.m_uploads[0u].m_cell_materials[1u] == 16u);
+
+            // Unknown IDs (including non-terrain catalog members) cannot enter terrain uploads.
+            packet.m_chunk_cells[0u].m_cells[1u].m_element = 17u;
+            PPR_TEST_ASSERT(colony::buildGridStagedFrame(packet, stage) == std::errc::invalid_argument);
+            PPR_TEST_ASSERT(stage.m_uploads.empty() and stage.m_ack_chunk_ids.empty());
+            packet.m_chunk_cells[0u].m_cells[1u].m_element = 16u;
+            packet.m_terrain_visuals[1u].m_material_id = 16u;
+            PPR_TEST_ASSERT(colony::buildGridStagedFrame(packet, stage) == std::errc::invalid_argument);
+            packet.m_terrain_visuals[1u].m_material_id = 257u;
+            packet.m_terrain_visuals[1u].m_texture_period_m = 0.0f;
+            PPR_TEST_ASSERT(colony::buildGridStagedFrame(packet, stage) == std::errc::invalid_argument);
+            packet.m_terrain_visuals[1u].m_texture_period_m = 1.0f;
+            packet.m_cell_size_m = std::numeric_limits<float>::quiet_NaN();
+            PPR_TEST_ASSERT(colony::buildGridStagedFrame(packet, stage) == std::errc::invalid_argument);
+        };
+
         PPR_UNIT_TEST (default_driver_builds_empty_coherent_packet) {
             colony::ColonyDriver driver{};
             colony::SimFramePacket packet = colony::makeSimFramePacket(3u, driver);
@@ -630,6 +675,7 @@ namespace pP::tests::detail {
 namespace pP::tests {
     const UnitTest sim_packet = UnitTest::Named("sim_packet") / [](UnitTest::IRun &_) -> void {
         _.recurse({
+            detail::SimPacket::catalog_packet_preserves_identity_metric_and_owned_visuals,
             detail::SimPacket::default_driver_builds_empty_coherent_packet,
             detail::SimPacket::initial_presentation_batches_bound_copies_and_preserve_prefix,
             detail::SimPacket::initial_presentation_skipped_batches_expose_only_confirmed_tiles,

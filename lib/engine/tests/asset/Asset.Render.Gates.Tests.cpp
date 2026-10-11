@@ -1130,10 +1130,14 @@ namespace pP::tests::detail {
                     GridTileSubmission{.m_chunk_id = chunk, .m_tile_range = {0, 0, 128, 128}, .m_material_id = 1u});
             }
             // Mixed visibility, edge touch, all outside, all visible, and empty.
-            for (const u32 scenario: {0u, 1u, 2u, 3u, 4u, 5u, 0u}) {
+            for (const u32 scenario: {0u, 1u, 2u, 3u, 4u, 5u, 6u, 7u, 0u}) {
+                const float cell_size_m = scenario == 6u or scenario == 7u ? 1.0f / 3.0f : 1.0f;
+                GridPass::GridStagedFrame metric_stage{};
+                metric_stage.m_cell_size_m = cell_size_m;
+                PPR_TEST_ASSERT(not grid.applyStagedFrame(metric_stage));
                 CameraModel model{};
                 model.m_camera_mode = ECameraProjection::orthographic;
-                model.m_origin = float3{scenario == 2u ? 3500.0f : 0.0f, 0.0f, 0.0f};
+                model.m_origin = float3{scenario == 2u ? 3500.0f : scenario == 6u ? 64.0f : 0.0f, 0.0f, 0.0f};
                 model.m_ortho_scale = scenario == 3u ? 64.0f : scenario == 0u ? 2.0f : 1.0f;
                 Camera camera;
                 camera.updateModel(
@@ -1145,7 +1149,7 @@ namespace pP::tests::detail {
                                      : std::span<const GridTileSubmission>{tiles};
                 PPR_TEST_ASSERT(not grid.update(TimeSpan{}, snapshot));
                 PPR_TEST_ASSERT(not grid.submitTiles(submitted));
-                const auto reference = GridPass::planTiles(snapshot, submitted);
+                const auto reference = GridPass::planTiles(snapshot, submitted, cell_size_m);
                 PPR_TEST_ASSERT(reference.has_value());
                 const auto wait_for_idle = [&]() { return renderer->waitOnHost(); };
                 PPR_TEST_ASSERT(not grid.prepareCellUploads(device, wait_for_idle, true));
@@ -1172,15 +1176,19 @@ namespace pP::tests::detail {
                 std::ranges::sort(actual);
                 std::ranges::sort(expected);
                 PPR_TEST_ASSERT(std::ranges::equal(actual, expected));
-                if (scenario == 0u or scenario == 2u or scenario == 4u) {
+                if (scenario == 0u or scenario == 2u or scenario == 4u or scenario == 7u) {
                     const auto pixels = readback_(device, targetRef_(target), 128u);
                     PPR_TEST_ASSERT(pixels.has_value());
                     const auto centre = gateTexel_(*pixels, 32u, 96u);
                     std::println(
                         "grid scenario={} visible={} centre={},{},{},{}", scenario, args.instanceCount, centre[0],
                         centre[1], centre[2], centre[3]);
-                    if (scenario == 0u) {
+                    if (scenario == 0u or scenario == 7u) {
                         PPR_TEST_ASSERT(centre[0] > 160u and centre[1] < 80u);
+                        if (scenario == 7u) {
+                            const auto outside = gateTexel_(*pixels, 96u, 96u);
+                            PPR_TEST_ASSERT(outside[0] < 80u and outside[1] < 80u);
+                        }
                         PPR_TEST_ASSERT(not renderer->renderToTexture(targetRef_(target), {DrawSubmission{grid}}));
                         grid.notifyFrameSubmitted(renderer->lastSubmittedFenceValue());
                         PPR_TEST_ASSERT(not renderer->waitOnHost());
@@ -1192,6 +1200,27 @@ namespace pP::tests::detail {
                     }
                 }
             }
+
+            // A new legacy pass lifetime must not inherit the prepared metric.
+            GridPass::GridStagedFrame metric_stage{};
+            metric_stage.m_cell_size_m = 1.0f / 3.0f;
+            PPR_TEST_ASSERT(not grid.applyStagedFrame(metric_stage));
+            PPR_TEST_ASSERT(not grid.shutdown());
+            PPR_TEST_ASSERT(not grid.initialize(*rhi, *shader, std::filesystem::current_path()));
+            CameraModel legacy_model{};
+            legacy_model.m_camera_mode = ECameraProjection::orthographic;
+            Camera legacy_camera;
+            legacy_camera.updateModel(
+                TimeSpan{}, legacy_model, Viewport{PixelRect{int2{0, 0}, int2{128, 128}}, ViewportLayout{}});
+            PPR_TEST_ASSERT(not grid.update(TimeSpan{}, legacy_camera.getSnapshot()));
+            PPR_TEST_ASSERT(not grid.submitTiles(std::span{tiles.data(), 1u}));
+            PPR_TEST_ASSERT(not renderer->renderToTexture(targetRef_(target), {DrawSubmission{grid}}));
+            grid.notifyFrameSubmitted(renderer->lastSubmittedFenceValue());
+            PPR_TEST_ASSERT(not renderer->waitOnHost());
+            const auto legacy_pixels = readback_(device, targetRef_(target), 128u);
+            PPR_TEST_ASSERT(legacy_pixels.has_value());
+            const auto legacy_texel = gateTexel_(*legacy_pixels, 96u, 96u);
+            PPR_TEST_ASSERT(legacy_texel[0] > 160u and legacy_texel[1] < 80u);
         };
 
         PPR_UNIT_TEST (pre_render_preparation_orders_and_rejects_submission) {

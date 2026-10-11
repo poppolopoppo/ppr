@@ -23,6 +23,13 @@ Game-owned colony simulation, tools, presentation translation and headless workl
 | `game.colony.panel` | `ColonyPanel.cppm/.cpp` | ImGui views/state/intents; no renderer/service resolution |
 | `game.colony.smoke` | `ColonySmoke.cppm/.cpp` | Headless readback smoke |
 
+Prepared simulation packets own numeric terrain visuals, catalog identity and
+the fine-cell metric. Terrain uploads preserve sparse catalog IDs and vacuum
+zero; explicit legacy fixtures retain their transparent sentinel. The driver
+exposes a borrowed immutable `contentCatalog()` view, copied at packet capture.
+The render lane never borrows the live catalog. Authored texture periods are
+bounded for finite float UV arithmetic before generation.
+
 Check each `export module` declaration and `../CMakeLists.txt` for exact module names/registration. `Colony.Elements.h` owns element IDs (vacuum is 0).
 
 ## Simulation and presentation contracts

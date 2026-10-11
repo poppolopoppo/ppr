@@ -7,7 +7,8 @@ struct GridFrame {
     // Unjittered view * projection, followed by the per-slot visibility mode.
     float4x4 m_view_projection;
     uint m_use_visible_ids;
-    uint3 m_padding;
+    float m_cell_size_m;
+    uint2 m_padding;
 };
 
 // CPU mirror GridTilePayload: 32 B = 16 rect + 4 material + 4 base
@@ -91,7 +92,7 @@ GridVertexOutput vertexGridMain(
     // Row-vector convention (mirrors the CPU Mango transform): translation
     // in row 3, positive clip.w for +Z view-space points. Tiles live on the
     // z = 0 plane.
-    float4 world = float4(corner, 0.0, 1.0);
+    float4 world = float4(corner * g_grid_frame.m_cell_size_m, 0.0, 1.0);
     output.position = mul(world, g_grid_frame.m_view_projection);
     output.material = tile.m_material;
     output.cell_word_base = tile.m_cell_word_base;
@@ -110,7 +111,7 @@ float4 fragmentGridMain(GridVertexOutput input) : SV_Target {
         uint index = cell.y * 128u + cell.x;
         uint packed = g_cell_materials[input.cell_word_base + index / 2u];
         material = ((index & 1u) != 0u) ? (packed >> 16u) : (packed & 0xffffu);
-        if (material == 0xffffu) {
+        if (material == 0xffffu || material == 0u) {
             discard;
         }
     }

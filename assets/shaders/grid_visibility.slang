@@ -9,7 +9,8 @@ struct Tile {
 struct VisibilityFrame {
     float4 planes[6];
     uint count;
-    uint3 padding;
+    float cell_size_m;
+    uint2 padding;
 };
 ConstantBuffer<VisibilityFrame> g_visibility;
 StructuredBuffer<Tile> g_tiles;
@@ -29,8 +30,8 @@ void resetVisibility() {
 void cullVisibility(uint3 id : SV_DispatchThreadID) {
     if (id.x >= g_visibility.count) return;
     float4 rect = g_tiles[id.x].rect;
-    float2 centre = (rect.xy + rect.zw) * 0.5;
-    float half_extent = max(max((rect.z - rect.x) * 0.5, (rect.w - rect.y) * 0.5), 0.5) + 0.5;
+    float2 centre = (rect.xy + rect.zw) * 0.5 * g_visibility.cell_size_m;
+    float half_extent = (max(max((rect.z - rect.x) * 0.5, (rect.w - rect.y) * 0.5), 0.5) + 0.5) * g_visibility.cell_size_m;
     // Match the CPU reference's conservative cubic box and exact planes.
     for (uint plane = 0u; plane < 6u; ++plane) {
         float4 p = g_visibility.planes[plane];

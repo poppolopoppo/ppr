@@ -165,3 +165,20 @@ All 26 frame-fence leaves passed in `out/worldgen-gpu-cull-fence-tests.log`
 complete stage 5: textures, shared rendered contours, metric/catalog transport,
 transactional GPU bundles and versioned atlas updates remain. The current
 atlas still uses global idle; its replacement is a required responsiveness gate.
+
+Prepared presentation now transports owned numeric catalog visuals, content
+identity and the explicit fine-cell metric. Sparse terrain IDs remain unchanged
+in uploads, including vacuum zero, while legacy fixtures keep their sentinel.
+CPU reference culling, GPU culling, vertex positions and panel counts use the
+same metre conversion. Supported scales and texture periods are checked before
+unsafe arithmetic; shutdown resets the legacy metric. A borrowed driver catalog
+accessor avoids a reproducible MSVC imported-member signature ICE in packet
+capture without exporting renderer types into world generation.
+The affected ASan build passed in `out/worldgen-metric-transport-build9.log`;
+app simulation/presentation and game suites passed in
+`out/worldgen-metric-transport-tests.log` (93.92/58.58 s). Three shuffled GPU
+loops passed in `out/worldgen-metric-transport-gpu.log`, including metre-scaled
+visibility IDs/pixels, CPU parity and shutdown/reinitialization. Format/style and
+independent Astra review passed. This transport increment does not complete the
+catalog GPU palette/textures, shared contours, persistent resident table,
+versioned atlas or transactional world publication requirements.

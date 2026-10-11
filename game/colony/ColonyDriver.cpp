@@ -197,6 +197,11 @@ namespace pP::colony {
         return m_colony.preparedWorld();
     }
 
+    const ContentCatalog *ColonyDriver::contentCatalog() const noexcept {
+        const auto *const prepared = preparedWorld();
+        return prepared ? &prepared->catalog() : nullptr;
+    }
+
     u32 ColonyDriver::cellsPerMetre() const noexcept {
         return preparedWorld() ? kFineCellsPerMetre : 1u;
     }

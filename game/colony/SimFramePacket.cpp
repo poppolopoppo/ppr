@@ -5,11 +5,80 @@ module;
 
 module game.colony.sim_packet;
 
+import game.colony.content;
 import std;
 
 namespace pP::colony {
     PPR_DEFINE_LOG_CATEGORY(SimPresentation, info, none);
     namespace {
+        void capturePresentation_(SimFramePacket &packet, const ColonyDriver &driver) {
+            packet.m_cell_size_m = 1.0f / static_cast<float>(driver.cellsPerMetre());
+            const ContentCatalog *const catalog = driver.contentCatalog();
+            if (catalog == nullptr) {
+                return;
+            }
+            packet.m_has_catalog = true;
+            const auto &content = *catalog;
+            PPR_ASSERT(content.contentFingerprint().has_value());
+            packet.m_content_fingerprint = *content.contentFingerprint();
+            for (const MaterialDefinition &material: content.materials()) {
+                if (material.m_numeric_id == 0u or
+                    material.m_representation != EMaterialRepresentation::terrain or
+                    material.m_phase != EMaterialPhase::solid) {
+                    continue;
+                }
+                GridTerrainVisual visual{};
+                visual.m_material_id = material.m_numeric_id;
+                visual.m_color_rgba = material.m_color_rgba;
+                visual.m_texture_period_m = static_cast<float>(material.m_texture_period_m.value_or(1.0));
+                if (material.m_albedo_texture) {
+                    const auto textures = content.textures();
+                    for (u32 index = 0u; index < textures.size(); ++index) {
+                        if (textures[index].m_path == *material.m_albedo_texture) {
+                            visual.m_texture_index = index;
+                            break;
+                        }
+                    }
+                    PPR_ASSERT(visual.m_texture_index != 0xffffffffu);
+                }
+                packet.m_terrain_visuals.push_back(visual);
+            }
+        }
+
+        [[nodiscard]] std::error_code validatePresentation_(const SimFramePacket &packet) {
+            PPR_RETURN_ERROR_ON_FAIL(
+                SimPresentation, (packet.m_cell_size_m == 1.0f or packet.m_cell_size_m == 1.0f / 3.0f)
+                                     ? std::error_code{}
+                                     : std::make_error_code(std::errc::invalid_argument));
+            if (not packet.m_has_catalog) {
+                PPR_RETURN_ERROR_ON_FAIL(
+                    SimPresentation, packet.m_terrain_visuals.empty() and packet.m_content_fingerprint == 0u
+                                         ? std::error_code{}
+                                         : std::make_error_code(std::errc::invalid_argument));
+                return {};
+            }
+            PPR_RETURN_ERROR_ON_FAIL(
+                SimPresentation, packet.m_terrain_visuals.size() <= kMaxContentMaterials
+                                     ? std::error_code{}
+                                     : std::make_error_code(std::errc::invalid_argument));
+            for (std::size_t index = 0u; index < packet.m_terrain_visuals.size(); ++index) {
+                const auto &visual = packet.m_terrain_visuals[index];
+                PPR_RETURN_ERROR_ON_FAIL(
+                    SimPresentation, visual.m_material_id > 0u and
+                                             visual.m_material_id < 0xffffu and
+                                             std::isfinite(visual.m_texture_period_m) and
+                                             visual.m_texture_period_m >= 4096.0f / (std::numeric_limits<float>::max)()
+                                         ? std::error_code{}
+                                         : std::make_error_code(std::errc::invalid_argument));
+                for (std::size_t previous = 0u; previous < index; ++previous) {
+                    PPR_RETURN_ERROR_ON_FAIL(
+                        SimPresentation, packet.m_terrain_visuals[previous].m_material_id != visual.m_material_id
+                                             ? std::error_code{}
+                                             : std::make_error_code(std::errc::invalid_argument));
+                }
+            }
+            return {};
+        }
         [[nodiscard]] GridTileRange tileRange(const sim::ChunkPos pos) noexcept {
             const i32 min_x = static_cast<i32>(pos.m_x * sim::kChunkEdge);
             const i32 min_y = static_cast<i32>(pos.m_y * sim::kChunkEdge);
@@ -35,17 +104,25 @@ namespace pP::colony {
             return nullptr;
         }
 
-        // Mirrors ColonyTranslator's element mapping: vacuum is transparent,
-        // anything above the registry is a fail-closed validation error.
-        // Allocation failure propagates exactly as in the translator.
-        [[nodiscard]] std::error_code convertCells(const Array<sim::Cell> &cells, Array<u16> &scratch) {
+        // Prepared worlds retain catalog IDs, including vacuum zero. Explicit
+        // legacy fixtures retain the translator's transparent sentinel.
+        [[nodiscard]] std::error_code convertCells(
+            const Array<sim::Cell> &cells, const SimFramePacket &packet, Array<u16> &scratch) {
+            std::bitset<65536u> terrain_ids{};
+            if (packet.m_has_catalog) {
+                for (const GridTerrainVisual &visual: packet.m_terrain_visuals) {
+                    terrain_ids.set(visual.m_material_id);
+                }
+            }
             scratch.resize(sim::kCellsPerChunk);
             for (std::size_t cell = 0u; cell < sim::kCellsPerChunk; ++cell) {
                 const u16 element = cells[cell].m_element;
-                if (element > kElementVent) [[unlikely]] {
-                    return std::make_error_code(std::errc::invalid_argument);
+                if (element != kElementVacuum) {
+                    const bool known = packet.m_has_catalog ? terrain_ids.test(element) : element <= kElementVent;
+                    PPR_RETURN_ERROR_ON_FAIL(
+                        SimPresentation, known ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
                 }
-                scratch[cell] = element == kElementVacuum ? u16{0xffffu} : element;
+                scratch[cell] = not packet.m_has_catalog and element == kElementVacuum ? u16{0xffffu} : element;
             }
             return {};
         }
@@ -53,6 +130,7 @@ namespace pP::colony {
 
     SimFramePacket makeSimFramePacket(const u64 frame_id, const ColonyDriver &driver, const bool full_refresh) {
         SimFramePacket packet{};
+        capturePresentation_(packet, driver);
         packet.m_frame_id = frame_id;
         packet.m_seed = driver.seed();
         packet.m_world_generation = driver.worldGeneration();
@@ -104,6 +182,7 @@ namespace pP::colony {
             PPR_RETURN_UNEXPECTED_ON_FAIL(SimPresentation, std::errc::invalid_argument);
         }
         SimFramePacket packet{};
+        capturePresentation_(packet, driver);
         packet.m_frame_id = frame_id;
         packet.m_seed = driver.seed();
         packet.m_world_generation = driver.worldGeneration();
@@ -147,6 +226,12 @@ namespace pP::colony {
 
     Expected<GridPass::GridStagedFrame> InitialPresentation::stage(const u64 frame_id, const ColonyDriver &driver) {
         GridPass::GridStagedFrame stage{};
+        SimFramePacket presentation{};
+        capturePresentation_(presentation, driver);
+        stage.m_cell_size_m = presentation.m_cell_size_m;
+        stage.m_has_catalog = presentation.m_has_catalog;
+        stage.m_content_fingerprint = presentation.m_content_fingerprint;
+        stage.m_terrain_visuals = std::move(presentation.m_terrain_visuals);
         if (m_frame or m_next_chunk == sim::kChunkCount) {
             stage.m_tiles = m_visible;
             return stage;
@@ -178,6 +263,14 @@ namespace pP::colony {
     }
 
     std::error_code buildGridStagedFrame(const SimFramePacket &packet, GridPass::GridStagedFrame &stage) {
+        if (const std::error_code error = validatePresentation_(packet)) {
+            stage = {};
+            PPR_RETURN_ERROR_ON_FAIL(SimPresentation, error);
+        }
+        stage.m_cell_size_m = packet.m_cell_size_m;
+        stage.m_has_catalog = packet.m_has_catalog;
+        stage.m_content_fingerprint = packet.m_content_fingerprint;
+        stage.m_terrain_visuals = packet.m_terrain_visuals;
         // Owned payload only: no driver ack, no translator contact, and no
         // pass mutation happen on the client. The pass-side contact runs
         // on the pass's owner lane via GridPass::applyStagedFrame.
@@ -239,7 +332,7 @@ namespace pP::colony {
                 return std::make_error_code(std::errc::invalid_argument);
             }
             Array<u16> converted{};
-            if (const std::error_code error = convertCells(*cells, converted)) [[unlikely]] {
+            if (const std::error_code error = convertCells(*cells, packet, converted)) [[unlikely]] {
                 stage.m_tiles.clear();
                 stage.m_uploads.clear();
                 stage.m_full_refresh = false;

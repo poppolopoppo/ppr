@@ -33,13 +33,13 @@ namespace pP {
         // Box size is exact in x/y (mango sizes by the full extent, hence the
         // doubling of the half-extent); the z slab is a conservative half
         // cell so grazing views never drop an in-frustum tile on depth.
-        [[nodiscard]] Box tileBox_(const GridTileRange &range) noexcept {
+        [[nodiscard]] Box tileBox_(const GridTileRange &range, const float cell_size_m) noexcept {
             const float center_x = (static_cast<float>(range.m_min_x) + static_cast<float>(range.m_max_x)) * 0.5f;
             const float center_y = (static_cast<float>(range.m_min_y) + static_cast<float>(range.m_max_y)) * 0.5f;
             const float half_x = (static_cast<float>(range.m_max_x) - static_cast<float>(range.m_min_x)) * 0.5f;
             const float half_y = (static_cast<float>(range.m_max_y) - static_cast<float>(range.m_min_y)) * 0.5f;
             const float half = std::max({half_x, half_y, 0.5f}) + GridPass::kGridCullEpsilon;
-            return Box{float3{center_x, center_y, 0.0f}, half * 2.0f};
+            return Box{float3{center_x * cell_size_m, center_y * cell_size_m, 0.0f}, half * 2.0f * cell_size_m};
         }
 
         void applySubmissionBounds_(GridTilePayload &payload, const GridTileRange &range) noexcept {
@@ -77,14 +77,19 @@ namespace pP {
     // whose epsilon-expanded tile boxes intersect the snapshot frustum, in
     // submission order. Quiescent/off-screen tiles never reach the plan.
     Expected<GridTilePlan> GridPass::planTiles(
-        const CameraSnapshot &snapshot, const std::span<const GridTileSubmission> submissions) {
+        const CameraSnapshot &snapshot, const std::span<const GridTileSubmission> submissions,
+        const float cell_size_m) {
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            GridPass, (cell_size_m == 1.0f or cell_size_m == 1.0f / 3.0f)
+                          ? std::error_code{}
+                          : std::make_error_code(std::errc::invalid_argument));
         GridTilePlan plan{};
         for (std::size_t index = 0u; index < submissions.size(); ++index) {
             const GridTileSubmission &submission = submissions[index];
             if (const std::error_code err = validateSubmission_(submission)) [[unlikely]] {
                 return std::unexpected{err};
             }
-            if (not snapshot.m_frustum.isVisible(tileBox_(submission.m_tile_range))) {
+            if (not snapshot.m_frustum.isVisible(tileBox_(submission.m_tile_range, cell_size_m))) {
                 continue;
             }
             plan.m_tiles.push_back(
@@ -192,6 +197,11 @@ namespace pP {
     }
 
     std::error_code GridPass::applyStagedFrame(const GridStagedFrame &stage) {
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, (stage.m_cell_size_m == 1.0f or stage.m_cell_size_m == 1.0f / 3.0f)
+                          ? std::error_code{}
+                          : std::make_error_code(std::errc::invalid_argument));
+        m_cell_size_m = stage.m_cell_size_m;
         if (stage.m_reset_caches) {
             clearTiles();
             clearCache();
@@ -344,7 +354,7 @@ namespace pP {
             }
         } else {
             const Expected<GridTilePlan> plan = planTiles(
-                m_camera_view, std::span<const GridTileSubmission>{m_submitted_tiles});
+                m_camera_view, std::span<const GridTileSubmission>{m_submitted_tiles}, m_cell_size_m);
             PPR_RETURN_ERROR_ON_FAIL(GridPass, plan ? std::error_code{} : plan.error());
             for (const GridPlannedTile &tile: plan->m_tiles) {
                 append_pending(tile.m_chunk_id);
@@ -457,7 +467,8 @@ namespace pP {
         }
 
         Expected<GridTilePlan> plan = planTiles(
-            m_camera_view, std::span<const GridTileSubmission>{m_submitted_tiles.data(), m_submitted_tiles.size()});
+            m_camera_view, std::span<const GridTileSubmission>{m_submitted_tiles.data(), m_submitted_tiles.size()},
+            m_cell_size_m);
         if (not plan.has_value()) [[unlikely]] {
             return plan.error();
         }
@@ -602,7 +613,8 @@ namespace pP {
         }
 
         Expected<GridTilePlan> plan = planTiles(
-            m_camera_view, std::span<const GridTileSubmission>{m_submitted_tiles.data(), m_submitted_tiles.size()});
+            m_camera_view, std::span<const GridTileSubmission>{m_submitted_tiles.data(), m_submitted_tiles.size()},
+            m_cell_size_m);
         if (not plan.has_value()) [[unlikely]] {
             return plan.error();
         }
@@ -1026,6 +1038,7 @@ namespace pP {
         m_cache_hit_count = 0u;
         m_atlas_serialization_count = 0u;
         m_atlas_write_count = 0u;
+        m_cell_size_m = 1.0f;
         m_growth_wait_count = 0u;
         std::ignore = m_deferred_releases.drainAll();
         m_last_submitted_value = kFenceValueNone;
@@ -1230,7 +1243,8 @@ namespace pP {
         struct alignas(16) VisibilityFrame {
             float m_planes[6][4]{};
             u32 m_count{};
-            std::array<u32, 3u> m_padding{};
+            float m_cell_size_m{1.0f};
+            std::array<u32, 2u> m_padding{};
         };
         static_assert(sizeof(VisibilityFrame) == 112u);
         VisibilityFrame frame{};
@@ -1239,6 +1253,7 @@ namespace pP {
                 frame.m_planes[plane], m_camera_view.m_frustum.clip[plane].data(), sizeof(frame.m_planes[plane]));
         }
         frame.m_count = safe_narrowing(payloads.size());
+        frame.m_cell_size_m = m_cell_size_m;
         VisibilitySlot &slot = m_visibility_slots[m_tile_ring_cursor];
         context.m_encoder.setBufferState(slot.m_args, rhi::ResourceState::UnorderedAccess);
         context.m_encoder.setBufferState(slot.m_ids, rhi::ResourceState::UnorderedAccess);
@@ -1288,6 +1303,7 @@ namespace pP {
         GridFrame frame{};
         frame.m_view_projection = m_camera_view.m_view_projection;
         frame.m_use_visible_ids = 1u;
+        frame.m_cell_size_m = m_cell_size_m;
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass, (*cached)->m_slot_frame_cursors[m_tile_ring_cursor].setData(&frame, sizeof(frame)));
         const u32 base = 0u;
@@ -1308,6 +1324,7 @@ namespace pP {
     std::error_code GridPass::uploadFrameConstants_(rhi::ShaderCursor &frame_cursor) {
         GridFrame frame{};
         frame.m_view_projection = m_camera_view.m_view_projection;
+        frame.m_cell_size_m = m_cell_size_m;
 
         PPR_RETURN_ERROR_ON_FAIL(GridPass, frame_cursor.setData(&frame, sizeof(GridFrame)));
 
