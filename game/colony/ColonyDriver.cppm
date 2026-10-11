@@ -68,6 +68,27 @@ export namespace pP::colony {
             u32 m_height{};
         };
 
+        struct ErrandProgress {
+            sim::Entity m_entity{};
+            u32 m_original{};
+            u32 m_candidate{};
+        };
+        struct EditCandidate {
+            Array<sim::ChunkGrid::CapturedChunk> m_chunks{};
+            Array<sim::ChunkPos> m_touched{};
+            Array<DirtyChunk> m_manifest{};
+            Array<ErrandProgress> m_errands{};
+            u32 m_dug{};
+            bool m_has_dig{};
+            bool m_colliders_started{};
+            bool m_colliders_ready{};
+        };
+        std::optional<EditCandidate> m_edit{};
+        bool m_require_edit_publication{};
+        bool m_resume_edit_tick{};
+        bool m_single_step_pending{};
+        u32 m_held_slices{};
+
         Colony m_colony{};
         std::optional<sim::FixedTimestep> m_timestep{};
         u64 m_seed{};
@@ -145,6 +166,11 @@ export namespace pP::colony {
             const ColonyDriverDesc &desc, TimeSpan period, const sim::GenerationExecution *execution);
 
         void shutdownPhysics() noexcept;
+        void collectColliderInterest(Array<sim::ChunkPos> &needed);
+        [[nodiscard]] std::error_code prepareEdit(bool advance_build);
+        [[nodiscard]] std::error_code prepareEditColliders();
+        [[nodiscard]] std::error_code runHeldTicks();
+
 
         std::error_code spawnColonyAgents(const IContext *context = nullptr);
 
@@ -205,6 +231,16 @@ export namespace pP::colony {
         [[nodiscard]] const ContentCatalog *contentCatalog() const noexcept;
         [[nodiscard]] u16 boundaryMaterial() const noexcept;
         [[nodiscard]] u32 cellsPerMetre() const noexcept;
+
+        /// Interactive owner enables matching render-publication settlement.
+        /// Headless fixtures retain synchronous edit execution.
+        void requireEditPublication() noexcept;
+        [[nodiscard]] bool editPending() const noexcept;
+        [[nodiscard]] bool editReadyForPresentation() const noexcept;
+        [[nodiscard]] std::span<const sim::ChunkGrid::CapturedChunk> editChunks() const noexcept;
+        [[nodiscard]] std::span<const DirtyChunk> editManifest() const noexcept;
+        /// Matching complete GPU-consumption manifest commits the held edit.
+        [[nodiscard]] std::error_code settleEdit(std::span<const DirtyChunk> manifest);
 
         [[nodiscard]] std::error_code shutdown();
 

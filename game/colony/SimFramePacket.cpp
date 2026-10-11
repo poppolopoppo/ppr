@@ -184,6 +184,33 @@ namespace pP::colony {
                 packet.m_chunk_cells.push_back(std::move(payload));
             }
         }
+        if (driver.editReadyForPresentation()) {
+            packet.m_initial_matter_valid = false;
+            for (const auto &row: driver.editManifest()) {
+                const auto found = std::ranges::find(packet.m_present_chunks, row.m_pos);
+                if (found == packet.m_present_chunks.end()) {
+                    packet.m_present_chunks.push_back(row.m_pos);
+                    packet.m_present_revisions.push_back(row.m_revision);
+                } else {
+                    packet.m_present_revisions[static_cast<std::size_t>(found - packet.m_present_chunks.begin())] =
+                        row.m_revision;
+                }
+            }
+            for (const auto &chunk: driver.editChunks()) {
+                const auto cells = chunk.residentCells();
+                PPR_ASSERT(cells.has_value());
+                if (not containsChunk(packet.m_resident_chunks, chunk.position())) {
+                    packet.m_resident_chunks.push_back(chunk.position());
+                }
+                std::erase_if(packet.m_chunk_cells, [&](const SimChunkCells &payload) {
+                    return payload.m_pos == chunk.position();
+                });
+                SimChunkCells payload{};
+                payload.m_pos = chunk.position();
+                payload.m_cells.assign(cells->begin(), cells->end());
+                packet.m_chunk_cells.push_back(std::move(payload));
+            }
+        }
         return packet;
     }
 

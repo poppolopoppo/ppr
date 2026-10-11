@@ -27,6 +27,7 @@ target_sources(app.game
         colony/Buildings.cpp
         colony/Colony.cpp
         colony/ColonyDriver.cpp
+        colony/ColonyDriver.Edits.cpp
         colony/ColonyPanel.cpp
         colony/ColonySmoke.cpp
         colony/ColonyTranslator.cpp
@@ -136,6 +137,7 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
             colony/Buildings.cpp
             colony/Colony.cpp
             colony/ColonyDriver.cpp
+        colony/ColonyDriver.Edits.cpp
             colony/ColonyTranslator.cpp
             colony/DigTool.cpp
             colony/Pathfinding.cpp

@@ -68,7 +68,8 @@ export namespace pP::colony {
     /// Structural mutation of errand rows happens only between view passes.
     [[nodiscard]] std::error_code advanceErrands(
         sim::ChunkGrid &grid, sim::Registry &registry, Pathfinder &finder, Array<sim::ChunkPos> &touched,
-        u32 cell_budget, const ContentCatalog *catalog = nullptr);
+        u32 cell_budget, const ContentCatalog *catalog = nullptr,
+        std::optional<std23::function_ref<std::error_code(sim::ChunkPos)>> before_write = std::nullopt);
 
     /// Live (incomplete) errand rows.
     [[nodiscard]] u32 liveErrandCount(sim::Registry &registry);

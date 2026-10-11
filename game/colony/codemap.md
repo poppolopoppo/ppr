@@ -89,3 +89,5 @@ coordinator/job bound. The caller pauses/mirrors state and transfers the stable
 driver owner; takeCaptured returns it for every recoverable outcome before
 worker payload cleanup. Callers must defer all live reads/writes/acks during the
 lease and restore prior pause state with neutral input.
+
+Interactive drivers enable `requireEditPublication()`. `ColonyDriver.Edits.cpp` owns per-chunk rollback candidates, suspended tick prefixes and bounded collider preparation; owned simulation packets overlay candidate cells only when colliders are ready. Matching complete render revision manifests settle the candidate before gameplay resumes. Paused tools and explicit single-step preserve held tick accounting. Headless numeric fixtures retain their synchronous edit path.

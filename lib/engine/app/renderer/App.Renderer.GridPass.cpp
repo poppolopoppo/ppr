@@ -447,7 +447,10 @@ namespace pP {
                 stage.m_diagnostic_mode == EGridDiagnosticMode::textured and stage.m_diagnostic_palette.empty()
                     ? std::error_code{}
                     : std::make_error_code(std::errc::invalid_argument));
-            m_world.m_initial_matter_valid = m_world.m_initial_matter_valid and stage.m_initial_matter_valid;
+            // Publish invalidation with the entire cell cohort, preserving the
+            // old baseline while replacement slots are still being filled.
+            m_world.m_initial_matter_invalidation_pending = m_world.m_initial_matter_invalidation_pending or
+                                                            not stage.m_initial_matter_valid;
             return {}; // Ordinary terrain frames retain the active immutable preview.
         }
         PPR_RETURN_ERROR_ON_FAIL(
@@ -759,6 +762,14 @@ namespace pP {
         }
         if (pending.empty()) {
             m_world.m_cell_publication_deferred = not m_world.m_cell_cohort_chunks.empty();
+            const bool pending_cells = std::ranges::any_of(
+                m_world.m_cell_cache, [](const auto &entry) { return entry.second.m_pending; });
+            if (not m_world.m_cell_publication_deferred and
+                not pending_cells and
+                m_world.m_initial_matter_invalidation_pending) {
+                m_world.m_initial_matter_valid = false;
+                m_world.m_initial_matter_invalidation_pending = false;
+            }
             return default_value_v;
         }
 
@@ -784,6 +795,10 @@ namespace pP {
         });
         if (table_ready and m_world.m_resident_table_stale) {
             PPR_RETURN_ERROR_ON_FAIL(GridPass, rebuildResidentTable_());
+        }
+        if (table_ready and m_world.m_initial_matter_invalidation_pending) {
+            m_world.m_initial_matter_valid = false;
+            m_world.m_initial_matter_invalidation_pending = false;
         }
         return {};
     }
@@ -830,6 +845,10 @@ namespace pP {
         m_world.m_cell_publication_deferred = not *prepared or not *diagnostic;
         if (m_world.m_cell_publication_deferred) {
             ++m_atlas_deferred_count;
+        }
+        if (*prepared and *diagnostic and m_world.m_initial_matter_invalidation_pending) {
+            m_world.m_initial_matter_valid = false;
+            m_world.m_initial_matter_invalidation_pending = false;
         }
         return *prepared and *diagnostic;
     }
@@ -1635,6 +1654,7 @@ namespace pP {
         m_world.m_diagnostic_words = {};
         m_world.m_diagnostic_cursor = 0u;
         m_world.m_initial_matter_valid = true;
+        m_world.m_initial_matter_invalidation_pending = false;
         m_world.m_diagnostic_atlas.setNull();
         m_world.m_diagnostic_mapped = nullptr;
         m_world.m_diagnostic_colors.setNull();

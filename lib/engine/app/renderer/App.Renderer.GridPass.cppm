@@ -594,6 +594,7 @@ export namespace pP {
             std::array<Array<u32>, kGridTileCacheCapacity> m_diagnostic_words{};
             u32 m_diagnostic_cursor{};
             bool m_initial_matter_valid{true};
+            bool m_initial_matter_invalidation_pending{};
             rhi::ComPtr<rhi::IBuffer> m_diagnostic_atlas{};
             void *m_diagnostic_mapped{};
             rhi::ComPtr<rhi::IBuffer> m_diagnostic_colors{};

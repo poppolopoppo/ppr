@@ -14,6 +14,145 @@ import std;
 namespace pP::game::tests::detail::movement {
     using namespace colony;
 
+    PPR_UNIT_TEST (interactive_dig_holds_cells_bodies_and_ticks_until_complete_publication) {
+        ColonyDriver driver;
+        PPR_TEST_ASSERT(not driver.init({.m_seed = 42u, .m_agent_count = 1u}));
+        driver.grid() = sim::ChunkGrid{};
+        for (u32 x = 100u; x < 150u; ++x) {
+            PPR_TEST_ASSERT(not driver.grid().setCell({x, 40u}, {1u, 293.0f}));
+        }
+        sim::Entity actor{};
+        for (const auto &[entity, agent]: driver.registry().view<Agent>()) {
+            (void) agent;
+            actor = entity;
+        }
+        *driver.registry().get<sim::BodyState>(actor) = {110.0f, 43.0f};
+        PPR_TEST_ASSERT(not driver.restoreBodies());
+        PPR_TEST_ASSERT(not driver.assignControl(actor));
+        driver.requireEditPublication();
+        const auto before = *driver.registry().get<sim::BodyState>(actor);
+        PPR_TEST_ASSERT(not driver.requestDig({127u, 40u}, 2u, 1u));
+        const auto period = TimeSpan{std::chrono::seconds{1}} / 60u;
+        PPR_TEST_ASSERT(not driver.update(period * 3u));
+        PPR_TEST_ASSERT(driver.editPending());
+        for (u32 batch = 0u; batch < 32u and not driver.editReadyForPresentation(); ++batch) {
+            PPR_TEST_ASSERT(not driver.update(period * 5u));
+        }
+        PPR_TEST_ASSERT(driver.editReadyForPresentation());
+        driver.setPaused(true);
+        PPR_TEST_ASSERT(driver.restoreBodies() == std::errc::device_or_resource_busy);
+        PPR_TEST_ASSERT(driver.regenerate(42u) == std::errc::device_or_resource_busy);
+        PPR_TEST_ASSERT(driver.tickCount() == 0u and driver.digTotal() == 0u);
+        PPR_TEST_ASSERT(driver.initialMatterBaselineValid());
+        PPR_TEST_ASSERT(driver.grid().getCell({127u, 40u})->m_element == 1u);
+        const auto held = *driver.registry().get<sim::BodyState>(actor);
+        PPR_TEST_ASSERT(held.m_x == before.m_x and held.m_y == before.m_y);
+        Array<ColonyDriver::DirtyChunk> manifest(driver.editManifest().begin(), driver.editManifest().end());
+        PPR_TEST_ASSERT(manifest.size() == 2u);
+        PPR_TEST_ASSERT(not driver.settleEdit(std::span<const ColonyDriver::DirtyChunk>{manifest.data(), 1u}));
+        PPR_TEST_ASSERT(driver.editPending());
+        auto stale = manifest;
+        --stale[0].m_revision;
+        PPR_TEST_ASSERT(not driver.settleEdit(stale));
+        PPR_TEST_ASSERT(driver.editPending());
+        PPR_TEST_ASSERT(not driver.settleEdit(manifest));
+        PPR_TEST_ASSERT(not driver.editPending());
+        PPR_TEST_ASSERT(driver.tickCount() == 0u and driver.digTotal() == 2u);
+        PPR_TEST_ASSERT(not driver.initialMatterBaselineValid());
+        PPR_TEST_ASSERT(driver.grid().getCell({127u, 40u})->m_element == 0u);
+        PPR_TEST_ASSERT(driver.grid().getCell({128u, 40u})->m_element == 0u);
+        PPR_TEST_ASSERT(not driver.update(TimeSpan{}));
+        PPR_TEST_ASSERT(driver.tickCount() == 0u);
+        PPR_TEST_ASSERT(not driver.requestDig({129u, 40u}, 1u, 1u));
+        PPR_TEST_ASSERT(not driver.update(TimeSpan{}));
+        PPR_TEST_ASSERT(driver.editPending());
+        for (u32 batch = 0u; batch < 32u and not driver.editReadyForPresentation(); ++batch) {
+            PPR_TEST_ASSERT(not driver.update(TimeSpan{}));
+        }
+        PPR_TEST_ASSERT(driver.editReadyForPresentation());
+        manifest.assign(driver.editManifest().begin(), driver.editManifest().end());
+        PPR_TEST_ASSERT(not driver.settleEdit(manifest));
+        PPR_TEST_ASSERT(driver.tickCount() == 0u and driver.digTotal() == 3u);
+        PPR_TEST_ASSERT(not driver.stepOne());
+        PPR_TEST_ASSERT(driver.tickCount() == 1u);
+        PPR_TEST_ASSERT(not driver.update(TimeSpan{}));
+        PPR_TEST_ASSERT(driver.tickCount() == 1u);
+        driver.setPaused(false);
+        PPR_TEST_ASSERT(not driver.update(TimeSpan{}));
+        PPR_TEST_ASSERT(driver.tickCount() == 3u);
+        PPR_TEST_ASSERT(not driver.update(TimeSpan{}));
+        PPR_TEST_ASSERT(driver.tickCount() == 3u);
+        PPR_TEST_ASSERT(not driver.shutdown());
+    };
+
+    PPR_UNIT_TEST (interactive_build_progress_is_frozen_and_teardown_cancels_candidate) {
+        ColonyDriver driver;
+        PPR_TEST_ASSERT(not driver.init({.m_seed = 42u, .m_agent_count = 1u}));
+        driver.grid() = sim::ChunkGrid{};
+        PPR_TEST_ASSERT(not driver.restoreBodies());
+        driver.requireEditPublication();
+        driver.setPaused(true);
+        const auto errand = driver.buildWall({{120u, 40u}, 16u, 8u, 1u});
+        PPR_TEST_ASSERT(errand.has_value());
+        PPR_TEST_ASSERT(not driver.stepOne());
+        for (u32 batch = 0u; batch < 32u and not driver.editReadyForPresentation(); ++batch) {
+            PPR_TEST_ASSERT(not driver.update(TimeSpan{}));
+        }
+        PPR_TEST_ASSERT(driver.editReadyForPresentation());
+        PPR_TEST_ASSERT(driver.registry().get<BuildErrand>(*errand)->m_progress == 0u);
+        PPR_TEST_ASSERT(driver.grid().getCell({120u, 40u})->m_element == 0u);
+        Array<ColonyDriver::DirtyChunk> manifest(driver.editManifest().begin(), driver.editManifest().end());
+        PPR_TEST_ASSERT(not driver.settleEdit(manifest));
+        PPR_TEST_ASSERT(driver.registry().get<BuildErrand>(*errand)->m_progress == 64u);
+        PPR_TEST_ASSERT(driver.grid().getCell({120u, 40u})->m_element == 1u);
+        PPR_TEST_ASSERT(not driver.update(TimeSpan{}));
+        PPR_TEST_ASSERT(driver.tickCount() == 1u);
+        PPR_TEST_ASSERT(driver.registry().get<BuildErrand>(*errand)->m_progress == 64u);
+        PPR_TEST_ASSERT(not driver.stepOne());
+        PPR_TEST_ASSERT(driver.editPending());
+        PPR_TEST_ASSERT(driver.registry().get<BuildErrand>(*errand)->m_progress == 64u);
+        PPR_TEST_ASSERT(not driver.shutdown());
+        PPR_TEST_ASSERT(not driver.editPending());
+        PPR_TEST_ASSERT(not driver.init({.m_seed = 42u, .m_agent_count = 1u}));
+        PPR_TEST_ASSERT(not driver.update(TimeSpan{std::chrono::seconds{1}} / 60u));
+        PPR_TEST_ASSERT(driver.tickCount() == 1u);
+        PPR_TEST_ASSERT(not driver.shutdown());
+    };
+
+    PPR_UNIT_TEST (held_dig_owns_its_command_while_the_input_fifo_fills) {
+        ColonyDriver driver;
+        PPR_TEST_ASSERT(not driver.init({.m_seed = 42u, .m_agent_count = 1u}));
+        driver.grid() = sim::ChunkGrid{};
+        for (u32 x = 100u; x <= 102u; ++x) {
+            PPR_TEST_ASSERT(not driver.grid().setCell({x, 40u}, {1u, 293.0f}));
+        }
+        PPR_TEST_ASSERT(not driver.restoreBodies());
+        driver.setPaused(true);
+        driver.requireEditPublication();
+        PPR_TEST_ASSERT(not driver.requestDig({100u, 40u}, 1u, 1u));
+        PPR_TEST_ASSERT(not driver.update(TimeSpan{}));
+        PPR_TEST_ASSERT(driver.editPending());
+        PPR_TEST_ASSERT(not driver.requestDig({101u, 40u}, 1u, 1u));
+        for (u32 request = 0u; request < 255u; ++request) {
+            PPR_TEST_ASSERT(not driver.requestDig({102u, 40u}, 1u, 1u));
+        }
+        for (u32 edit = 0u; edit < 2u; ++edit) {
+            for (u32 batch = 0u; batch < 32u and not driver.editReadyForPresentation(); ++batch) {
+                PPR_TEST_ASSERT(not driver.update(TimeSpan{}));
+            }
+            PPR_TEST_ASSERT(driver.editReadyForPresentation());
+            Array<ColonyDriver::DirtyChunk> manifest(driver.editManifest().begin(), driver.editManifest().end());
+            PPR_TEST_ASSERT(not driver.settleEdit(manifest));
+            if (edit == 0u) {
+                PPR_TEST_ASSERT(not driver.update(TimeSpan{}));
+            }
+        }
+        PPR_TEST_ASSERT(driver.digTotal() == 2u and driver.tickCount() == 0u);
+        PPR_TEST_ASSERT(driver.grid().getCell({101u, 40u})->m_element == 0u);
+        PPR_TEST_ASSERT(driver.grid().getCell({102u, 40u})->m_element == 1u);
+        PPR_TEST_ASSERT(not driver.shutdown());
+    };
+
     PPR_UNIT_TEST (build_failure_retains_its_stage_through_later_tick_systems) {
         ColonyDriver driver;
         PPR_TEST_ASSERT(not driver.init({.m_seed = 42u, .m_agent_count = 1u}));
@@ -282,7 +421,10 @@ namespace pP::game::tests::detail::movement {
 namespace pP::game::tests {
     const UnitTest movement = UnitTest::Named("movement") / [](UnitTest::IRun &_) -> void {
         _.recurse(
-            {detail::movement::build_failure_retains_its_stage_through_later_tick_systems,
+            {detail::movement::held_dig_owns_its_command_while_the_input_fifo_fills,
+                detail::movement::interactive_dig_holds_cells_bodies_and_ticks_until_complete_publication,
+                detail::movement::interactive_build_progress_is_frozen_and_teardown_cancels_candidate,
+                detail::movement::build_failure_retains_its_stage_through_later_tick_systems,
                 detail::movement::moving_interest_materializes_new_terrain_without_edits_and_retires_old_owners,
                 detail::movement::metric_actor_targets_and_ladders_use_fine_cells_without_scaling_speed_or_body,
                 detail::movement::fixed_tick_control_bypasses_planning_and_clears_held_commands,

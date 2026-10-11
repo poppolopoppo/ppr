@@ -542,6 +542,7 @@ namespace demo {
                     auto &presentation = m_world_job->presentation();
                     auto candidate = m_world_job->publish();
                     m_driver.swap(candidate);
+                    m_driver->requireEditPublication();
                     m_world_job->retire(std::move(candidate));
                     if (const auto *const prepared = m_driver->preparedWorld(); prepared and m_pan_controller) {
                         const float extent = static_cast<float>(colony::kWorldExtentMetres);
@@ -3526,6 +3527,10 @@ namespace demo {
                                 .m_revision = result.m_grid_ack_revisions[i],
                             });
                     }
+                    if (const auto error = m_driver->settleEdit(ack)) {
+                        m_input_error = error;
+                        return;
+                    }
                     m_driver->ackPresentChunks(std::span<const colony::ColonyDriver::DirtyChunk>{ack});
                     if (result.m_grid_full_refresh) {
                         m_present_full_refresh = false;
@@ -3548,7 +3553,7 @@ namespace demo {
 
         [[nodiscard]] std::error_code update(const TimeSpan dt) override {
             PPR_RETURN_ERROR_ON_FAIL(Demo, advanceWorldJob_());
-            if (m_preview_pending) {
+            if (m_preview_pending and (not m_driver or not m_driver->editPending())) {
                 const auto mode = *std::exchange(m_preview_pending, std::nullopt);
                 PPR_RETURN_ERROR_ON_FAIL(Demo, requestPreview_(mode));
             }
@@ -3567,7 +3572,7 @@ namespace demo {
             const MainLaneScope main_lane{this, std::chrono::steady_clock::now()};
             // Phase: new-game request. End gestures and discard accepted tool
             // commands before pausing gameplay; none may target the new session.
-            if (m_regen_pending) {
+            if (m_regen_pending and (not m_driver or not m_driver->editPending())) {
                 m_regen_pending = false;
                 cancelToolGesture_();
                 m_ui_state.m_pinned.reset();
@@ -3692,6 +3697,15 @@ namespace demo {
             // by the present + overlay phases below on this same thread. A
             // regeneration or previous present failure makes this a full-refresh packet
             // carrying every resident chunk's cells.
+            if (m_driver->editPending() and not m_driver->editReadyForPresentation()) {
+                GridPass::GridStagedFrame frozen{};
+                frozen.m_retain_content = true;
+                frozen.m_ack_seed = m_driver->worldGeneration();
+                submitGridStage(std::move(frozen));
+                PPR_RETURN_ERROR_ON_FAIL(Demo, pollDisplaySession_(std::chrono::duration<float>(dt).count()));
+                PPR_RETURN_ERROR_ON_FAIL(Demo, drawPanel_());
+                return {};
+            }
             m_sim_packet = colony::makeSimFramePacket(getFrameIndex(), *m_driver, m_present_full_refresh);
 
             // Phase: present. Consume the owned packet on this same thread:

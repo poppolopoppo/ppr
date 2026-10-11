@@ -1486,7 +1486,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(color[2] > 240u and color[0] < 10u);
 
             // Initial matter occupies nominal empty cells below the authored
-            // fill height. Editing invalidates this baseline immediately.
+            // fill height. Invalidation publishes with the complete edit cohort.
             source.m_diagnostic_mode = EGridDiagnosticMode::initial_matter;
             source.m_diagnostic_revision = 13u;
             source.m_diagnostic_palette = {{}, {0xff0000ffu, 64.0f}};
@@ -1510,7 +1510,22 @@ namespace pP::tests::detail {
             edited.m_content_fingerprint = source.m_content_fingerprint;
             edited.m_terrain_visuals = source.m_terrain_visuals;
             edited.m_initial_matter_valid = false;
+            edited.m_tiles.push_back(
+                GridTileSubmission{.m_chunk_id = 1u, .m_tile_range = {128, 0, 256, 128}, .m_dirty_mask = 1u});
+            auto changed = source.m_uploads[0];
+            changed.m_diagnostic_indices.clear();
+            changed.m_cell_materials[0] = 1u;
+            edited.m_uploads.push_back(changed);
+            changed.m_chunk_id = 1u;
+            edited.m_uploads.push_back(std::move(changed));
             PPR_TEST_ASSERT(not grid.applyStagedFrame(edited));
+            const auto partial = grid.tryPrepareCellUploads(device, renderer->completedFenceValue(), 1u);
+            PPR_TEST_ASSERT(partial and not *partial);
+            pixels = render();
+            color = gateTexel_(pixels, 64u, 96u);
+            PPR_TEST_ASSERT(color[0] > 240u and color[1] < 10u);
+            const auto published = grid.tryPrepareCellUploads(device, renderer->completedFenceValue(), 1u);
+            PPR_TEST_ASSERT(published and *published);
             pixels = render();
             color = gateTexel_(pixels, 64u, 96u);
             PPR_TEST_ASSERT(color[0] < 80u);
@@ -1538,6 +1553,18 @@ namespace pP::tests::detail {
             }
             PPR_TEST_ASSERT(mixed);
             PPR_TEST_ASSERT(grid.atlasSerializationCount() == 0u);
+            // The reference path also consumes invalidation without new cells.
+            edited.m_tiles = source.m_tiles;
+            edited.m_uploads.clear();
+            PPR_TEST_ASSERT(not grid.applyStagedFrame(edited));
+            const auto wait = [&] { return renderer->waitOnHost(); };
+            PPR_TEST_ASSERT(not grid.prepareCellUploads(device, wait, true));
+            pixels = render();
+            for (u32 y = 0u; y < 128u; ++y) {
+                for (u32 x = 0u; x < 128u; ++x) {
+                    PPR_TEST_ASSERT(gateTexel_(pixels, x, y)[0] < 80u);
+                }
+            }
         };
 
         PPR_UNIT_TEST (grid_candidate_world_retains_active_until_matching_activation) {

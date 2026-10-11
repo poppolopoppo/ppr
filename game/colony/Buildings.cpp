@@ -161,7 +161,8 @@ namespace pP::colony {
 
     std::error_code advanceErrands(
         sim::ChunkGrid &grid, sim::Registry &registry, Pathfinder &finder, Array<sim::ChunkPos> &touched,
-        const u32 cell_budget, const ContentCatalog *const catalog) {
+        const u32 cell_budget, const ContentCatalog *const catalog,
+        const std::optional<std23::function_ref<std::error_code(sim::ChunkPos)>> before_write) {
         Array<sim::Entity> live{};
         for (const auto &[entity, errand]: registry.view<BuildErrand>()) {
             if (errand.m_total != errand.m_print.m_width * errand.m_print.m_height or
@@ -232,6 +233,9 @@ namespace pP::colony {
                         ++errand->m_progress;
                         continue;
                     }
+                }
+                if (before_write) {
+                    PPR_RETURN_ERROR_ON_FAIL(ColonyBuilding, (*before_write)(sim::chunkOf({x, y})));
                 }
                 const std::error_code set_error = grid.setCell({x, y}, sim::Cell{element, current->m_temperature});
                 PPR_ASSERT(not set_error);

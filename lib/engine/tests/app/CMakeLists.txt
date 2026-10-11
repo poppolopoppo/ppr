@@ -58,6 +58,7 @@ target_sources(engine.tests.app
         ${CMAKE_SOURCE_DIR}/game/colony/Content.Pack.cpp
         ${CMAKE_SOURCE_DIR}/game/colony/Metric.cpp
         ${CMAKE_SOURCE_DIR}/game/colony/ColonyDriver.cpp
+        ${CMAKE_SOURCE_DIR}/game/colony/ColonyDriver.Edits.cpp
         ${CMAKE_SOURCE_DIR}/game/colony/DigTool.cpp
         ${CMAKE_SOURCE_DIR}/game/colony/Pathfinding.cpp
         ${CMAKE_SOURCE_DIR}/game/colony/ColonyTranslator.cpp

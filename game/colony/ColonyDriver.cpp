@@ -270,7 +270,14 @@ namespace pP::colony {
             }
             const Expected<void> bound_tool = m_steps.addSystem(*tool, [this](sim::Registry &) {
                 m_step_stage = "tool";
-                applyToolEdits();
+                if (m_resume_edit_tick or m_edit or m_step_error) {
+                    return;
+                }
+                if (m_require_edit_publication) {
+                    PPR_RETAIN_ERROR_ON_FAIL(ColonyPreparation, m_step_error, prepareEdit(true));
+                } else {
+                    applyToolEdits();
+                }
             });
             if (not bound_tool) [[unlikely]] {
                 (void) m_colony.shutdown();
@@ -278,6 +285,9 @@ namespace pP::colony {
                 return bound_tool.error();
             }
             const Expected<void> bound_build = m_steps.addSystem(*build, [this](sim::Registry &registry) {
+                if (m_require_edit_publication) {
+                    return;
+                }
                 const hal::ProfileScope scope_build{"Colony.Build"};
                 if (not m_step_error) {
                     m_step_stage = "build";
@@ -297,6 +307,9 @@ namespace pP::colony {
                 return bound_build.error();
             }
             const Expected<void> bound = m_steps.addSystem(*declared, [this](sim::Registry &registry) {
+                if (m_edit) {
+                    return;
+                }
                 const hal::ProfileScope scope_pathfind{"Colony.Pathfind"};
                 if (not m_step_error) {
                     m_step_stage = "pathfind";
@@ -309,6 +322,9 @@ namespace pP::colony {
                 return bound.error();
             }
             const Expected<void> bound_plan = m_steps.addSystem(*aiplan, [this](sim::Registry &registry) {
+                if (m_edit) {
+                    return;
+                }
                 const hal::ProfileScope scope_plan{"Colony.Plan"};
                 if (not m_step_error) {
                     m_step_stage = "aiplan";
@@ -321,6 +337,9 @@ namespace pP::colony {
                 return bound_plan.error();
             }
             const Expected<void> bound_move = m_steps.addSystem(*movestep, [this](sim::Registry &) {
+                if (m_edit) {
+                    return;
+                }
                 if (not m_step_error) {
                     m_step_stage = "movestep";
                 }
@@ -332,6 +351,9 @@ namespace pP::colony {
                 return bound_move.error();
             }
             const Expected<void> bound_physics = m_steps.addSystem(*physics, [this](sim::Registry &) {
+                if (m_edit) {
+                    return;
+                }
                 if (not m_step_error) {
                     m_step_stage = "physics";
                 }
@@ -367,7 +389,12 @@ namespace pP::colony {
         m_controlled.reset();
         clearPlayerCommand();
         m_timestep.reset();
+        m_held_slices = 0u;
+        m_resume_edit_tick = false;
+        m_single_step_pending = false;
         shutdownPhysics();
+        m_edit.reset();
+        m_require_edit_publication = false;
         m_registry.clear();
         m_finder = Pathfinder{};
         clearToolState();
@@ -393,7 +420,26 @@ namespace pP::colony {
         if (elapsed < TimeSpan{}) [[unlikely]] {
             return std::make_error_code(std::errc::invalid_argument);
         }
+        if (m_edit) {
+            PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, prepareEditColliders());
+            return {};
+        }
+        if (m_single_step_pending and m_held_slices == 0u) {
+            m_held_slices = 1u;
+        }
+        if (m_held_slices != 0u) {
+            if (m_paused and not m_single_step_pending) {
+                // Hold simulation slices, while preserving paused tool edits.
+                PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, prepareEdit(false));
+                return {};
+            }
+            return runHeldTicks();
+        }
         if (m_paused) {
+            if (m_require_edit_publication) {
+                PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, prepareEdit(false));
+                return {};
+            }
             // Paused ticks apply the pending tool intent only: no systems,
             // no physics, no plan advance, and no clock movement.
             applyToolEdits();
@@ -423,33 +469,8 @@ namespace pP::colony {
             return report.error();
         }
 
-        // Each committed fixed slice runs the simulation systems once; a
-        // system failure aborts the tick count before it advances.
-        for (u32 slice = 0u; slice < report->m_slices; ++slice) {
-            const hal::ProfileScope scope_tick{"Colony.Tick"};
-            const std::error_code system_error = m_steps.runSystems(m_registry);
-            if (system_error) [[unlikely]] {
-                m_counts = pP::colony::pathCounts(m_registry);
-                m_errands = liveErrandCount(m_registry);
-                refreshAgents();
-                return system_error;
-            }
-            if (m_step_error) [[unlikely]] {
-                m_counts = pP::colony::pathCounts(m_registry);
-                m_errands = liveErrandCount(m_registry);
-                refreshAgents();
-                return m_step_error;
-            }
-        }
-
-        {
-            const hal::ProfileScope scope_summary{"Colony.Summary"};
-            m_tick_count += report->m_slices;
-            m_counts = pP::colony::pathCounts(m_registry);
-            m_errands = liveErrandCount(m_registry);
-            refreshAgents();
-        }
-        return {};
+        m_held_slices = report->m_slices;
+        return runHeldTicks();
     }
 
     void ColonyDriver::setPaused(const bool paused) noexcept {
@@ -514,22 +535,14 @@ namespace pP::colony {
             return std::make_error_code(std::errc::invalid_argument);
         }
 
-        {
-            const hal::ProfileScope scope_tick{"Colony.Tick"};
-            const std::error_code system_error = m_steps.runSystems(m_registry);
-            if (system_error) [[unlikely]] {
-                return system_error;
-            }
-            if (m_step_error) [[unlikely]] {
-                return m_step_error;
-            }
+        m_single_step_pending = true;
+        if (m_edit) {
+            return prepareEditColliders();
         }
-
-        ++m_tick_count;
-        m_counts = pP::colony::pathCounts(m_registry);
-        m_errands = liveErrandCount(m_registry);
-        refreshAgents();
-        return {};
+        if (m_held_slices == 0u) {
+            m_held_slices = 1u;
+        }
+        return runHeldTicks();
     }
 
     std::error_code ColonyDriver::setSpeed(const u32 speed) noexcept {
@@ -541,6 +554,9 @@ namespace pP::colony {
     }
 
     std::error_code ColonyDriver::regenerate(const u64 seed) {
+        PPR_RETURN_ERROR_ON_FAIL(
+            ColonyPreparation,
+            not m_edit ? std::error_code{} : std::make_error_code(std::errc::device_or_resource_busy));
         // Prepared worlds are replaced transactionally through WorldJob.
         if (preparedWorld()) {
             PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, std::errc::operation_not_permitted);
@@ -591,6 +607,9 @@ namespace pP::colony {
     }
 
     std::error_code ColonyDriver::regenerate(const u64 seed, const u32 agent_count) {
+        PPR_RETURN_ERROR_ON_FAIL(
+            ColonyPreparation,
+            not m_edit ? std::error_code{} : std::make_error_code(std::errc::device_or_resource_busy));
         if (agent_count > kAgentCountMax) [[unlikely]] {
             return std::make_error_code(std::errc::value_too_large);
         }
@@ -756,7 +775,7 @@ namespace pP::colony {
     }
 
     void ColonyDriver::ackPresentChunks(const std::span<const DirtyChunk> acked) noexcept {
-        if (acked.empty() or m_present_dirty.empty()) {
+        if (m_edit or acked.empty() or m_present_dirty.empty()) {
             return;
         }
         Array<DirtyChunk> kept{};
@@ -941,6 +960,11 @@ namespace pP::colony {
     void ColonyDriver::shutdownPhysics() noexcept {
         if (not m_physics_ready) {
             return;
+        }
+        // The cohort borrows the Scene and must finish before its runtime dies.
+        if (m_edit and m_edit->m_colliders_started) {
+            PPR_LOG_WARNING_ON_FAIL(ColonyPreparation, m_colliders.cancelCohort(m_scene));
+            m_edit->m_colliders_started = false;
         }
         m_bodies = Array<AgentBody>{};
         (void) m_scene.clear();
@@ -1127,6 +1151,10 @@ namespace pP::colony {
             pose->m_velocity_y = state->m_velocity_y;
             pose->m_angular_velocity = state->m_angular_velocity;
         }
+    }
+
+    void ColonyDriver::collectColliderInterest(Array<sim::ChunkPos> &needed) {
+        agentNeighbourhood(m_registry, needed, cellsPerMetre());
     }
 
     void ColonyDriver::stepPhysics() noexcept {
@@ -1573,6 +1601,9 @@ namespace pP::colony {
     }
 
     std::error_code ColonyDriver::restoreBodies() {
+        PPR_RETURN_ERROR_ON_FAIL(
+            ColonyPreparation,
+            not m_edit ? std::error_code{} : std::make_error_code(std::errc::device_or_resource_busy));
         clearPlayerCommand();
         if (not m_physics_ready) {
             return std::make_error_code(std::errc::operation_not_permitted);
@@ -1593,6 +1624,9 @@ namespace pP::colony {
     }
 
     std::error_code ColonyDriver::rebuildReplayColliders(const sim::Snapshot &snapshot) {
+        PPR_RETURN_ERROR_ON_FAIL(
+            ColonyPreparation,
+            not m_edit ? std::error_code{} : std::make_error_code(std::errc::device_or_resource_busy));
         clearToolState();
         Array<sim::ChunkPos> dirty{};
         for (const sim::ChunkDelta &delta: snapshot.m_deltas) {
