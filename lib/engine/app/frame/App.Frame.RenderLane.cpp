@@ -13,6 +13,7 @@ import engine.core;
 import std;
 
 namespace pP {
+    PPR_DEFINE_LOG_CATEGORY(WorldControls, info, none)
     namespace {
         // Maps transport outcomes to the producer contract: full stays the
         // transient capacity-busy code (drop the frame, never fail the app),
@@ -183,6 +184,40 @@ namespace pP {
     void RenderLane::setSurfaceExecutor(RenderSurfaceExecutor executor) {
         const std::lock_guard guard{m_callback_mutex};
         m_surface_executor = std::move(executor);
+    }
+
+    void RenderLane::setWorldExecutor(GridWorldExecutor executor) {
+        const std::lock_guard guard{m_callback_mutex};
+        m_world_executor = std::move(executor);
+    }
+
+    std::error_code RenderLane::requestGridWorld(std::shared_ptr<const GridWorldCommand> command) noexcept {
+        const std::lock_guard guard{m_result_stash_mutex};
+        const bool open = not m_stop_initiated.load(std::memory_order_acquire) and
+                          not m_surface_admission_closed.load(std::memory_order_acquire) and
+                          m_running.load(std::memory_order_acquire);
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldControls, open ? std::error_code{} : std::make_error_code(std::errc::operation_canceled));
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldControls,
+            command and command->m_sequence != 0u and command->m_job_id != 0u and command->m_world_generation != 0u
+                ? std::error_code{}
+                : std::make_error_code(std::errc::invalid_argument));
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldControls,
+            not m_world_command_pending ? std::error_code{} : std::make_error_code(std::errc::device_or_resource_busy));
+        PPR_RETURN_ERROR_ON_FAIL(WorldControls, terminalError());
+
+        auto reserved = m_controls->producerReserve(sizeof(RenderControl), RawChannel::drop_if_full);
+        if (not reserved) {
+            // Translate bounded transport backpressure; caller keeps its owner for retry.
+            PPR_RETURN_ERROR_ON_FAIL(WorldControls, translateProduceError_(reserved.error()));
+        }
+        new (reserved->data())
+            RenderControl{.m_kind = RenderControl::Kind::kGridWorld, .m_world_command = std::move(command)};
+        m_world_command_pending = true;
+        m_controls->producerSubmit(*reserved);
+        return {};
     }
 
     std::error_code RenderLane::requestSurfaceReconfigure(const RenderSurfaceRequest request) noexcept {
@@ -438,6 +473,10 @@ namespace pP {
             }
             RenderFrameResult *const result = static_cast<RenderFrameResult *>(acquired->data());
             const std::error_code record_err = result->m_error;
+            if (result->m_world_result) {
+                const std::lock_guard guard{m_result_stash_mutex};
+                m_world_command_pending = false;
+            }
             if (result->m_surface_result) {
                 const std::lock_guard guard{m_result_stash_mutex};
                 m_surface_transaction_pending = false;
@@ -474,6 +513,9 @@ namespace pP {
             const std::lock_guard stash_guard{m_result_stash_mutex};
             std::size_t moved = 0u;
             for (RenderFrameResult &pending: m_result_stash) {
+                if (pending.m_world_result) {
+                    m_world_command_pending = false;
+                }
                 if (pending.m_surface_result) {
                     m_surface_transaction_pending = false;
                 }
@@ -557,6 +599,7 @@ namespace pP {
                     {
                         const std::lock_guard guard{m_callback_mutex};
                         m_executor = RenderFrameExecutor{};
+                        m_world_executor = GridWorldExecutor{};
                     }
                     u64 drained = 0u;
                     for (;;) {
@@ -890,6 +933,53 @@ namespace pP {
             serviced = true;
             if (control.m_kind == RenderControl::Kind::kConfigChanged) {
                 wakeMain_();
+            }
+            if (control.m_kind == RenderControl::Kind::kGridWorld and control.m_world_command) {
+                RenderFrameResult completion{};
+                completion.m_world_result.emplace();
+                auto &result = *completion.m_world_result;
+                const auto &request = *control.m_world_command;
+                result.m_kind = request.m_kind;
+                result.m_sequence = request.m_sequence;
+                result.m_job_id = request.m_job_id;
+                result.m_world_generation = request.m_world_generation;
+                result.m_content_fingerprint = request.m_content_fingerprint;
+                if (m_stop_initiated.load(std::memory_order_acquire) or
+                    m_surface_admission_closed.load(std::memory_order_acquire)) {
+                    result.m_error = std::make_error_code(std::errc::operation_canceled);
+                } else {
+                    GridWorldExecutor *executor = nullptr;
+                    {
+                        const std::lock_guard guard{m_callback_mutex};
+                        executor = m_world_executor ? &m_world_executor : nullptr;
+                    }
+                    try {
+                        if (executor != nullptr) {
+                            (*executor)(request, result);
+                        } else {
+                            result.m_error = std::make_error_code(std::errc::not_connected);
+                        }
+                    } catch (const std::bad_alloc &) {
+                        std::terminate(); // Allocation failure is fatal, never a recoverable candidate error.
+                    } catch (const std::system_error &error) {
+                        result.m_error = error.code() ? error.code()
+                                                      : std::make_error_code(std::errc::state_not_recoverable);
+                    } catch (...) {
+                        result.m_error = std::make_error_code(std::errc::state_not_recoverable);
+                    }
+                }
+                // Executors report effects; the transport owns correlation identity.
+                result.m_kind = request.m_kind;
+                result.m_sequence = request.m_sequence;
+                result.m_job_id = request.m_job_id;
+                result.m_world_generation = request.m_world_generation;
+                result.m_content_fingerprint = request.m_content_fingerprint;
+                postResult_(std::move(completion));
+                wakeMain_();
+                if (not m_stop_initiated.load(std::memory_order_acquire)) {
+                    // Give a queued UI frame an opportunity between bounded world batches.
+                    return serviced;
+                }
             }
             if (control.m_kind == RenderControl::Kind::kReconfigureSurface) {
                 RenderFrameResult completion{};

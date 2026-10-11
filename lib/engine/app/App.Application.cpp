@@ -991,6 +991,10 @@ namespace pP {
         const std::error_code drain_error = m_render_lane->drainResults(m_render_result_scratch);
         std::error_code first_err{};
         for (const RenderFrameResult &result: m_render_result_scratch) {
+            if (result.m_world_result) {
+                onGridWorldCompleted_(*result.m_world_result);
+                continue;
+            }
             if (result.m_surface_result) {
                 const std::error_code surface_error = onSurfaceReconfigured_(*result.m_surface_result);
                 if (surface_error and not first_err) {
@@ -1055,6 +1059,9 @@ namespace pP {
             }
         }
         return first_err;
+    }
+
+    void Application::onGridWorldCompleted_(const GridWorldResult &) {
     }
 
     void Application::onLaneFrameConsumed_(const RenderFrameResult &result) {

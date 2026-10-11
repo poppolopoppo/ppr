@@ -444,6 +444,7 @@ export namespace pP {
         // (another run's epoch, or no active matching record) never release
         // a reservation and never ack edits.
         virtual void onLaneFrameConsumed_(const RenderFrameResult &);
+        virtual void onGridWorldCompleted_(const GridWorldResult &);
 
     private:
         std::unique_ptr<Renderer> m_renderer{};

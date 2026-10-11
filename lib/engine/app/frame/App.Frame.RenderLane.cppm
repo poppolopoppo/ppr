@@ -51,6 +51,37 @@ export namespace pP {
     // live ImGui context/IO. The staged pass frames carry everything the
     // lane adopts for the frame — the lane never reads live main-side
     // pass/translator state below.
+    enum class EGridWorldCommand : u8 {
+        begin,
+        append,
+        advance,
+        activate,
+        cancel
+    };
+
+    struct GridWorldCommand {
+        EGridWorldCommand m_kind{EGridWorldCommand::begin};
+        u64 m_sequence{};
+        u64 m_job_id{};
+        u64 m_world_generation{};
+        u64 m_content_fingerprint{};
+        GridPass::GridStagedFrame m_stage{};
+        bool m_final_batch{false};
+    };
+
+    struct GridWorldResult {
+        EGridWorldCommand m_kind{EGridWorldCommand::begin};
+        u64 m_sequence{};
+        u64 m_job_id{};
+        u64 m_world_generation{};
+        u64 m_content_fingerprint{};
+        std::error_code m_error{};
+        bool m_applied{false};
+        bool m_ready{false};
+    };
+
+    using GridWorldExecutor = std23::move_only_function<void(const GridWorldCommand &, GridWorldResult &)>;
+
     struct RenderFrameRequest {
         std::shared_ptr<const FramePacket> m_packet{};
         DetachedUiDrawData m_ui{};
@@ -91,6 +122,8 @@ export namespace pP {
         // is suspended; validate transaction ID + echoed handle/generation
         // against the pending candidate before committing m_applied.
         std::optional<RenderSurfaceResult> m_surface_result{};
+        // Independent world preparation has no frame reservation or dirty ack.
+        std::optional<GridWorldResult> m_world_result{};
         u64 m_frame_id{0u};
         FenceCompletionValue m_submit_value{kFenceValueNone};
         std::error_code m_error{};
@@ -152,10 +185,12 @@ export namespace pP {
             kExit,
             kConfigChanged,
             kReconfigureSurface,
+            kGridWorld,
         };
 
         Kind m_kind{Kind::kWake};
         RenderSurfaceRequest m_surface_request{};
+        std::shared_ptr<const GridWorldCommand> m_world_command{};
     };
 
     // Lane work: consumes one owned request, fills the result (submit
@@ -228,6 +263,8 @@ export namespace pP {
         void setExecutor(RenderFrameExecutor executor);
 
         void setSurfaceExecutor(RenderSurfaceExecutor executor);
+        void setWorldExecutor(GridWorldExecutor executor);
+        [[nodiscard]] std::error_code requestGridWorld(std::shared_ptr<const GridWorldCommand> command) noexcept;
 
         // One outstanding transaction, including its undrained ack. No frame
         // credit is charged. Full/busy -> bounded caller retry; stopped ->
@@ -410,6 +447,8 @@ export namespace pP {
         std::mutex m_callback_mutex{};
         RenderFrameExecutor m_executor{};
         RenderSurfaceExecutor m_surface_executor{};
+        GridWorldExecutor m_world_executor{};
+        bool m_world_command_pending{false};
         // Protected by the existing result-stash mutex. Released only when
         // main consumes the control ack; therefore ack storage stays bounded.
         bool m_surface_transaction_pending{false};

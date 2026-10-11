@@ -304,6 +304,9 @@ namespace pP {
         // so the inline branch decodes it identically.
         m_lane_rhi_service = getServices().tryGet<IRhiService>();
         if (renderLaneOwnsRenderer_()) {
+            renderLane()->setWorldExecutor([this](const GridWorldCommand &command, GridWorldResult &result) {
+                result.m_error = executeGridWorld_(command, result);
+            });
             renderLane()->setExecutor(
                 [this](const RenderFrameRequest &request, RenderFrameResult &result) -> std::error_code {
                     if (not request.m_packet) [[unlikely]] {
@@ -1136,6 +1139,79 @@ namespace pP {
         return inline_err;
     }
 
+    std::error_code ApplicationEditor::submitGridWorld(std::shared_ptr<const GridWorldCommand> command) {
+        PPR_RETURN_ERROR_ON_FAIL(
+            Editor, command ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
+        if (renderLaneOwnsRenderer_()) {
+            return renderLane()->requestGridWorld(std::move(command));
+        }
+        GridWorldResult result{};
+        result.m_kind = command->m_kind;
+        result.m_sequence = command->m_sequence;
+        result.m_job_id = command->m_job_id;
+        result.m_world_generation = command->m_world_generation;
+        result.m_content_fingerprint = command->m_content_fingerprint;
+        result.m_error = executeGridWorld_(*command, result);
+        onGridWorldCompleted_(result);
+        return {};
+    }
+
+    std::error_code ApplicationEditor::executeGridWorld_(const GridWorldCommand &command, GridWorldResult &result) {
+        PPR_RETURN_ERROR_ON_FAIL(
+            Editor, m_lane_rhi_service.isValid() ? std::error_code{} : std::make_error_code(std::errc::not_connected));
+        const auto completed = getRenderer().completedFenceValue();
+        if (command.m_kind != EGridWorldCommand::begin and command.m_kind != EGridWorldCommand::cancel) {
+            PPR_RETURN_ERROR_ON_FAIL(
+                Editor, m_grid_pass->worldCandidateMatches(
+                            command.m_job_id, command.m_world_generation, command.m_content_fingerprint)
+                            ? std::error_code{}
+                            : std::make_error_code(std::errc::operation_not_permitted));
+        }
+        switch (command.m_kind) {
+            case EGridWorldCommand::begin:
+                PPR_RETURN_ERROR_ON_FAIL(
+                    Editor, command.m_stage.m_uploads.empty() and
+                                    command.m_stage.m_tiles.size() <= GridPass::kGridTileCacheCapacity and
+                                    command.m_content_fingerprint == command.m_stage.m_content_fingerprint and
+                                    (not command.m_final_batch or command.m_stage.m_tiles.empty())
+                                ? std::error_code{}
+                                : std::make_error_code(std::errc::invalid_argument));
+                if (not m_grid_pass->worldCandidateAdmissionReady(completed)) {
+                    // The previous world is still retiring; retain the command and retry.
+                    return std::make_error_code(std::errc::device_or_resource_busy);
+                }
+                PPR_RETURN_ERROR_ON_FAIL(
+                    Editor, m_grid_pass->stageWorldCandidate(
+                                command.m_job_id, command.m_world_generation, command.m_stage, command.m_final_batch));
+                result.m_applied = true;
+                return {};
+            case EGridWorldCommand::append:
+                PPR_RETURN_ERROR_ON_FAIL(
+                    Editor, m_grid_pass->appendWorldCandidate(
+                                command.m_job_id, command.m_world_generation, command.m_stage.m_uploads,
+                                command.m_final_batch));
+                result.m_applied = true;
+                break;
+            case EGridWorldCommand::advance: break;
+            case EGridWorldCommand::activate:
+                PPR_RETURN_ERROR_ON_FAIL(
+                    Editor, m_grid_pass->activateWorldCandidate(
+                                command.m_job_id, command.m_world_generation, command.m_content_fingerprint));
+                result.m_applied = true;
+                return {};
+            case EGridWorldCommand::cancel:
+                m_grid_pass->cancelWorldCandidate(command.m_job_id);
+                result.m_applied = true;
+                return {};
+            default: PPR_RETURN_ERROR_ON_FAIL(Editor, std::errc::invalid_argument);
+        }
+        const auto ready = m_grid_pass->advanceWorldCandidate(m_lane_rhi_service->getDevice(), completed);
+        PPR_RETURN_ERROR_ON_FAIL(Editor, ready);
+        result.m_applied = true;
+        result.m_ready = *ready;
+        return {};
+    }
+
     std::error_code ApplicationEditor::executeRenderWork_(
         const RenderFrameRequest &request, RenderFrameResult &out_result) {
         Renderer &renderer = getRenderer();
@@ -1204,8 +1280,11 @@ namespace pP {
             const hal::ProfileScope scope_frame_prepare{"PPR.Frame.PrepareRender"};
             PPR_RETURN_ERROR_ON_FAIL(Editor, m_triangle_pass->update(packet.m_delta_time, packet.m_camera));
             PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->update(packet.m_delta_time, packet.m_camera));
-            PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->applyStagedFrame(grid_stage));
-            out_result.m_grid_staging_applied = true;
+            const u64 active_generation = m_grid_pass->worldGeneration();
+            if (active_generation == 0u or grid_stage.m_ack_seed == active_generation) {
+                PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->applyStagedFrame(grid_stage));
+                out_result.m_grid_staging_applied = true;
+            }
             PPR_RETURN_ERROR_ON_FAIL(Editor, m_triangle_pass->applyStagedFrame(triangle_stage));
         }
         out_result.m_grid_staged_tiles = m_grid_pass->stagedTileCount();
@@ -1216,7 +1295,7 @@ namespace pP {
             const auto published = m_grid_pass->tryPrepareCellUploads(
                 rhi_service->getDevice(), renderer.completedFenceValue());
             PPR_RETURN_ERROR_ON_FAIL(Editor, published);
-            out_result.m_grid_stage_applied = *published;
+            out_result.m_grid_stage_applied = out_result.m_grid_staging_applied and *published;
         }
 
         // Detached UI submission, bound synchronously on this lane: the

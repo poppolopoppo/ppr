@@ -193,6 +193,99 @@ namespace pP::tests::detail {
             return false;
         }
 
+        PPR_UNIT_TEST (world_control_without_frames_owns_payload_and_reports_identity) {
+            std::counting_semaphore<> wake{0};
+            RenderLane lane;
+            std::thread::id executed_on;
+            lane.setWorldExecutor([&](const GridWorldCommand &command, GridWorldResult &result) {
+                executed_on = std::this_thread::get_id();
+                PPR_TEST_ASSERT(command.m_stage.m_uploads[0u].m_cell_materials[0u] == 257u);
+                result.m_applied = true;
+                result.m_ready = true;
+            });
+            PPR_TEST_ASSERT(not lane.start({}, {}, {}, [&] { wake.release(); }));
+            PPR_DEFER {
+                lane.requestStop();
+                std::ignore = lane.join();
+            };
+            auto command = std::make_shared<GridWorldCommand>();
+            command->m_kind = EGridWorldCommand::append;
+            command->m_sequence = 17u;
+            command->m_job_id = 23u;
+            command->m_world_generation = 41u;
+            command->m_content_fingerprint = 43u;
+            command->m_stage.m_uploads.resize(1u);
+            command->m_stage.m_uploads[0u].m_cell_materials.push_back(257u);
+            const std::weak_ptr<const GridWorldCommand> lifetime = command;
+            PPR_TEST_ASSERT(not lane.requestGridWorld(command));
+            PPR_TEST_ASSERT(lane.requestGridWorld(command) == std::errc::device_or_resource_busy);
+            command.reset();
+            Array<RenderFrameResult> results;
+            for (u32 attempt = 0u; attempt < 1000u and results.empty(); ++attempt) {
+                PPR_TEST_ASSERT(not lane.drainResults(results));
+                if (results.empty()) {
+                    std::ignore = wake.try_acquire_for(std::chrono::milliseconds{30});
+                }
+            }
+            PPR_TEST_ASSERT(results.size() == 1u and results[0u].m_world_result.has_value());
+            const auto &ack = *results[0u].m_world_result;
+            PPR_TEST_ASSERT(ack.m_applied and ack.m_ready and not ack.m_error);
+            PPR_TEST_ASSERT(ack.m_kind == EGridWorldCommand::append and ack.m_sequence == 17u);
+            PPR_TEST_ASSERT(ack.m_job_id == 23u and ack.m_world_generation == 41u and ack.m_content_fingerprint == 43u);
+            PPR_TEST_ASSERT(results[0u].m_frame_id == 0u and results[0u].m_reservation_epoch == 0u);
+            PPR_TEST_ASSERT(executed_on != std::this_thread::get_id());
+            PPR_TEST_ASSERT(lane.submittedCount() == 0u and lane.inflightEstimate() == 0u);
+            lane.requestStop();
+            PPR_TEST_ASSERT(not lane.join());
+            PPR_TEST_ASSERT(lifetime.expired());
+        };
+
+        PPR_UNIT_TEST (world_control_shutdown_cancels_owned_pending_command) {
+            std::binary_semaphore entered{0}, release{0};
+            bool released = false;
+            RenderLane lane;
+            PPR_DEFER {
+                if (not released) {
+                    release.release();
+                }
+                lane.requestStop();
+                std::ignore = lane.join();
+            };
+            PPR_TEST_ASSERT(not lane.start(
+                {},
+                [&](const RenderFrameRequest &, RenderFrameResult &) -> std::error_code {
+                    entered.release();
+                    release.acquire();
+                    return {};
+                },
+                {}, {}));
+            PPR_TEST_ASSERT(not lane.submitFrame(makeRequest(1u)));
+            PPR_TEST_ASSERT(entered.try_acquire_for(std::chrono::seconds{30}));
+            auto command = std::make_shared<GridWorldCommand>();
+            command->m_sequence = 1u;
+            command->m_job_id = 2u;
+            command->m_world_generation = 3u;
+            const std::weak_ptr<const GridWorldCommand> lifetime = command;
+            PPR_TEST_ASSERT(not lane.requestGridWorld(command));
+            lane.requestStop();
+            PPR_TEST_ASSERT(lane.requestGridWorld(command) == std::errc::operation_canceled);
+            command.reset();
+            release.release();
+            released = true;
+            PPR_TEST_ASSERT(not lane.join());
+            Array<RenderFrameResult> results;
+            std::ignore = lane.drainResults(results);
+            u32 acks = 0u;
+            for (const auto &result: results) {
+                if (result.m_world_result) {
+                    ++acks;
+                    PPR_TEST_ASSERT(result.m_world_result->m_error == std::errc::operation_canceled);
+                    PPR_TEST_ASSERT(not result.m_world_result->m_applied);
+                }
+            }
+            PPR_TEST_ASSERT(acks == 1u and lifetime.expired());
+        };
+
         PPR_UNIT_TEST (surface_ack_without_admitted_frame_and_busy_until_consumed) {
             std::counting_semaphore<> wake{0};
             RenderLane lane{};
@@ -1150,6 +1243,8 @@ namespace pP::tests {
             detail::RenderLaneGate::throwing_wake_keeps_terminal_and_results_observable,
             detail::RenderLaneGate::lane_credit_return_wakes_main,
             detail::RenderLaneGate::lane_control_wake_without_work,
+            detail::RenderLaneGate::world_control_without_frames_owns_payload_and_reports_identity,
+            detail::RenderLaneGate::world_control_shutdown_cancels_owned_pending_command,
             detail::RenderLaneGate::surface_ack_without_admitted_frame_and_busy_until_consumed,
             detail::RenderLaneGate::surface_transaction_drains_two_frames_settles_staging_once,
             detail::RenderLaneGate::surface_pending_shutdown_cancels_ack_and_rejects_new_requests,

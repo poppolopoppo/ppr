@@ -71,3 +71,12 @@ Production frame packets carry functional render data. Profiler scopes and bound
 - `App.Frame.Packet.cppm` — `engine.app:frame.packet`: `FramePacket`, `hasRenderTarget`, `makeFramePacket`.
 - `App.Frame.Packet.cpp` — non-inline definitions for the above.
 - `App.Frame.RenderLane.cppm/.cpp` — `engine.app:frame.render_lane`: `RenderLane` + request/result/control types.
+
+World candidate commands use the independent control channel with one outstanding
+owned command until its result is drained. Header admission, batches of at most
+eight owned chunk uploads, readiness, matching activation, and cancellation have
+job/generation/content identities. Their results dispatch before frame credits
+or dirty acknowledgments and work without an admitted frame. Each world command
+yields to queued frame work; shutdown drains accepted commands as canceled.
+ApplicationEditor routes these commands to GridPass on the owner lane and ignores
+ordinary terrain stages belonging to a superseded active generation.

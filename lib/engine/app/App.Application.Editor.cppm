@@ -169,11 +169,13 @@ export namespace pP {
         void submitGridStage(GridPass::GridStagedFrame stage) noexcept {
             m_grid_stage = std::move(stage);
         }
+        [[nodiscard]] std::error_code submitGridWorld(std::shared_ptr<const GridWorldCommand> command);
         void submitTriangleStage(TrianglePass::TriangleStagedFrame stage) noexcept {
             m_triangle_stage = std::move(stage);
         }
 
     private:
+        [[nodiscard]] std::error_code executeGridWorld_(const GridWorldCommand &command, GridWorldResult &result);
         RenderDiagnostics m_diagnostics{};
 
     private:

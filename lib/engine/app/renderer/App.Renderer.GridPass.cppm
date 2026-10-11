@@ -293,11 +293,18 @@ export namespace pP {
         // must match at activation; at most active+candidate or active+retiring
         // resource bundles exist. Readiness alone never activates a candidate.
         [[nodiscard]] std::error_code stageWorldCandidate(
-            u64 job_id, u64 world_generation, const GridStagedFrame &stage);
+            u64 job_id, u64 world_generation, const GridStagedFrame &stage, bool uploads_complete = true);
+        [[nodiscard]] std::error_code appendWorldCandidate(
+            u64 job_id, u64 world_generation, std::span<const GridStagedUpload> uploads, bool final_batch);
         [[nodiscard]] Expected<bool> advanceWorldCandidate(
             rhi::IDevice &device, FenceCompletionValue completed, u32 chunk_budget = 8u);
         [[nodiscard]] std::error_code activateWorldCandidate(u64 job_id, u64 world_generation, u64 fingerprint);
         void cancelWorldCandidate(u64 job_id) noexcept;
+        [[nodiscard]] bool worldCandidateAdmissionReady(FenceCompletionValue completed) noexcept;
+        [[nodiscard]] bool worldCandidateMatches(u64 job_id, u64 world_generation, u64 fingerprint) const noexcept;
+        [[nodiscard]] u64 worldGeneration() const noexcept {
+            return m_world.m_world_generation;
+        }
         [[nodiscard]] u32 retainedAtlasCountForTest() const noexcept;
         [[nodiscard]] u64 atlasDeferredCount() const noexcept {
             return m_atlas_deferred_count;
@@ -553,6 +560,7 @@ export namespace pP {
         // state. Candidate preparation can exchange this value on the owner
         // lane without moving pass programs, completion rings or the camera.
         struct WorldResources {
+            bool m_candidate_uploads_complete{true};
             bool m_upload_submission_pending{false};
             bool m_visuals_set{false};
             Array<GridTerrainVisual> m_terrain_visuals{};

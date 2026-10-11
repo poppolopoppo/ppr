@@ -340,7 +340,7 @@ namespace pP {
     }
 
     std::error_code GridPass::stageWorldCandidate(
-        const u64 job_id, const u64 world_generation, const GridStagedFrame &stage) {
+        const u64 job_id, const u64 world_generation, const GridStagedFrame &stage, const bool uploads_complete) {
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass, job_id != 0u and world_generation != 0u ? std::error_code{}
                                                               : std::make_error_code(std::errc::invalid_argument));
@@ -361,10 +361,51 @@ namespace pP {
         m_world.m_job_id = job_id;
         m_world.m_world_generation = world_generation;
         m_world.m_content_fingerprint = stage.m_content_fingerprint;
+        m_world.m_candidate_uploads_complete = uploads_complete;
         // The guard restores the active world; retain the candidate owner only
         // after all CPU staging has succeeded.
         m_candidate_world = std::move(candidate);
         staged = true;
+        return {};
+    }
+
+    std::error_code GridPass::appendWorldCandidate(
+        const u64 job_id, const u64 world_generation, const std::span<const GridStagedUpload> uploads,
+        const bool final_batch) {
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, m_candidate_world and
+                              m_candidate_world->m_job_id == job_id and
+                              m_candidate_world->m_world_generation == world_generation and
+                              not m_candidate_world->m_candidate_uploads_complete
+                          ? std::error_code{}
+                          : std::make_error_code(std::errc::operation_not_permitted));
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, not uploads.empty() and uploads.size() <= 8u ? std::error_code{}
+                                                                   : std::make_error_code(std::errc::invalid_argument));
+        std::swap(m_world, *m_candidate_world);
+        PPR_DEFER {
+            std::swap(m_world, *m_candidate_world);
+        };
+        for (const auto &upload: uploads) {
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass, upload.m_cell_materials.size() == kCellsPerChunk
+                              ? std::error_code{}
+                              : std::make_error_code(std::errc::invalid_argument));
+            const auto applied = requestUpload(
+                GridUploadRequest{
+                    upload.m_chunk_id, std::span{&upload.m_payload, 1u},
+                    std::span<const u16>{upload.m_cell_materials}});
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, applied);
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass, *applied == 1u ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
+        }
+        if (final_batch) {
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass, m_world.m_cell_cache.size() == m_world.m_submitted_tiles.size()
+                              ? std::error_code{}
+                              : std::make_error_code(std::errc::invalid_argument));
+            m_world.m_candidate_uploads_complete = true;
+        }
         return {};
     }
 
@@ -381,6 +422,11 @@ namespace pP {
             m_chunk_slot_uploaded.fill(false);
             m_visibility_prepared = false;
         };
+        if (not m_world.m_candidate_uploads_complete) {
+            const auto visuals = prepareTerrainVisuals_(device, 1u);
+            PPR_RETURN_UNEXPECTED_ON_FAIL(GridPass, visuals);
+            return false;
+        }
         const auto prepared = tryPrepareCellUploads(device, completed, chunk_budget);
         PPR_RETURN_UNEXPECTED_ON_FAIL(GridPass, prepared);
         m_world.m_prepared = *prepared;
@@ -417,6 +463,19 @@ namespace pP {
                 m_candidate_world.reset();
             }
         }
+    }
+
+    bool GridPass::worldCandidateAdmissionReady(const FenceCompletionValue completed) noexcept {
+        reclaimCompleted_(completed);
+        return not m_candidate_world and not m_retiring_world;
+    }
+
+    bool GridPass::worldCandidateMatches(
+        const u64 job_id, const u64 world_generation, const u64 fingerprint) const noexcept {
+        return m_candidate_world and
+               m_candidate_world->m_job_id == job_id and
+               m_candidate_world->m_world_generation == world_generation and
+               m_candidate_world->m_content_fingerprint == fingerprint;
     }
 
     Expected<u32> GridPass::requestUpload(const GridUploadRequest &request) {

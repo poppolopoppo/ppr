@@ -1744,7 +1744,19 @@ namespace pP::tests::detail {
                 upload.m_cell_materials.assign(GridPass::kCellsPerChunk, 257u);
                 stage.m_uploads.push_back(std::move(upload));
             }
-            PPR_TEST_ASSERT(not grid.stageWorldCandidate(1u, 2u, stage));
+            auto header = stage;
+            header.m_uploads.clear();
+            PPR_TEST_ASSERT(not grid.stageWorldCandidate(1u, 2u, header, false));
+            auto partial = grid.advanceWorldCandidate(device, renderer->completedFenceValue(), 4u);
+            PPR_TEST_ASSERT(partial and not *partial);
+            PPR_TEST_ASSERT(grid.activateWorldCandidate(1u, 2u, 42u) == std::errc::operation_not_permitted);
+            PPR_TEST_ASSERT(
+                grid.appendWorldCandidate(9u, 2u, std::span{stage.m_uploads}.first(2u), false) ==
+                std::errc::operation_not_permitted);
+            PPR_TEST_ASSERT(not grid.appendWorldCandidate(1u, 2u, std::span{stage.m_uploads}.first(2u), false));
+            partial = grid.advanceWorldCandidate(device, renderer->completedFenceValue(), 4u);
+            PPR_TEST_ASSERT(partial and not *partial);
+            PPR_TEST_ASSERT(not grid.appendWorldCandidate(1u, 2u, std::span{stage.m_uploads}.subspan(2u), true));
             const auto ready = grid.advanceWorldCandidate(device, renderer->completedFenceValue(), 4u);
             PPR_TEST_ASSERT(ready and *ready);
             PPR_TEST_ASSERT(not grid.activateWorldCandidate(1u, 2u, 42u));

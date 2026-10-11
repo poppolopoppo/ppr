@@ -278,10 +278,27 @@ ASan application/app/asset build passed in `out/worldgen-textures-build6.log`.
 The textured sparse-ID/four-chunk UV readback, shared contour and candidate
 retirement tests passed three shuffled GPU loops in
 `out/worldgen-textures-gpu2.log` (47.09/46.50/47.01 s).
-Independent Astra source/readability review passed. Focused app suites are still
-running three loops in `out/worldgen-textures-app2.log`; their outcome will be
-recorded before the next integration commit. Normal authored startup, candidate
+Independent Astra source/readability review passed. All 60 focused app leaves
+passed three loops in `out/worldgen-textures-app2.log` (124.21/116.33/121.76 s). Normal authored startup, candidate
 request/ack integration, diagnostic modes, edit/collider coherence and stages
 6–7 remain required. Metal's pinned texture creation waits synchronously and
 has not passed the responsiveness gate; no backend-portability or total-memory
 claim is made from these tests.
+
+Candidate preparation now has an independent owned render-control transport.
+A validated immutable header is followed by batches of at most eight chunks;
+readiness cannot seal a nonempty header before full coverage. Append/advance/
+activation validate job, generation and fingerprint. The transport owns echoed
+identity, retains acknowledgments without frame credits, cancels accepted work
+during stop, and yields after each world batch so queued modal frames progress.
+Application dispatches control results before ordinary frame accounting; Editor
+rejects stale ordinary stages after activation. Allocation failure in the new
+world executor is fatal; other exceptions become explicit candidate failures.
+
+The final ASan build passed in `out/worldgen-controls-build2.log` (104 edges).
+All 52 app control/fence leaves passed three shuffled loops in
+`out/worldgen-controls-app2.log` (70.40/67.68/70.26 s). The focused GPU suites passed three shuffled loops in
+`out/worldgen-controls-gpu2.log` (34.82/38.30/40.98 s). Format/style and independent Astra
+review passed. This increment supplies the transport; normal authored startup
+and the game-side publication handshake remain in the following integration.
+The complete ten-entry matrix and backend/UI/memory gates remain stage 7 work.
