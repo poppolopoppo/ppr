@@ -26,24 +26,26 @@ namespace pP::colony {
             (static_cast<double>(position.m_y) + 0.5) / kFineCellsPerMetre};
     }
 
-    Expected<sim::GlobalCellPos> metreToFineCell(const MetrePoint position) {
-        if (not std::isfinite(position.m_x) or not std::isfinite(position.m_y)) {
+    Expected<sim::GlobalCellPos> metreToFineCell(const MetrePoint position, const u32 cells_per_metre) {
+        if ((cells_per_metre != 1u and cells_per_metre != kFineCellsPerMetre) or
+            not std::isfinite(position.m_x) or
+            not std::isfinite(position.m_y)) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyMetric, std::make_error_code(std::errc::invalid_argument));
         }
         if (position.m_x < 0.0 or
             position.m_y < 0.0 or
-            position.m_x >= kWorldExtentMetres or
-            position.m_y >= kWorldExtentMetres) {
+            position.m_x >= static_cast<double>(sim::kWorldEdge) / cells_per_metre or
+            position.m_y >= static_cast<double>(sim::kWorldEdge) / cells_per_metre) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyMetric, std::make_error_code(std::errc::result_out_of_range));
         }
         // The range guard precedes conversion, including the rounded final bound.
-        const auto cell_axis = [](const double metres) {
-            auto index = static_cast<u32>(std::floor(metres * kFineCellsPerMetre));
+        const auto cell_axis = [cells_per_metre](const double metres) {
+            auto index = static_cast<u32>(std::floor(metres * cells_per_metre));
             // Multiplication can round a neighbouring representable value onto
             // an integer. Compare with the same canonical boundaries we export.
-            if (index > 0u and metres < static_cast<double>(index) / kFineCellsPerMetre) {
+            if (index > 0u and metres < static_cast<double>(index) / cells_per_metre) {
                 --index;
-            } else if (metres >= static_cast<double>(index + 1u) / kFineCellsPerMetre) {
+            } else if (metres >= static_cast<double>(index + 1u) / cells_per_metre) {
                 ++index;
             }
             return index;

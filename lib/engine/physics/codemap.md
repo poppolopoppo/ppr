@@ -71,8 +71,8 @@ dependency between the modules.
   deltas, and active interest; rebuilds bounded row-major slices.
   - Vocabulary: `ColliderChunkPos` (`i32` pair, three-way comparable, so it
     keys `std::map`/`std::set`); `ColliderChunkView` (position, `m_elements`
-    span of `edge * edge` ids, `m_needed` flag marking active-body, query, or
-    swept-motion interest). Only chunks with `m_needed` build chains;
+    span of `edge * edge` occupancy samples, `m_needed` flag marking active-body,
+    query, or swept-motion interest). Interest also activates neighbouring contour owners;
     quiescent chunks have no chains, and the caller must retain element spans
     for the duration of each call.
   - Solid convention: a cell is solid exactly when its element id `!= 0u`
@@ -81,10 +81,11 @@ dependency between the modules.
     `game/colony/Colony.Elements.h` (`kElementVacuum = 0u`); a non-resident
     (absent-view) chunk reads as all-empty the same way `sim::ChunkGrid`
     reads a non-resident chunk as `Cell{}`.
-  - Extraction: `cellEdges` emits boundary edges only against non-solid
-    4-neighbours (missing-neighbour chunks count as empty), oriented
-    counterclockwise with the solid cell on the left so outward normals point
-    away from rock. `extract` traces those edges into `Polyline`s through a
+  - Extraction: `cellEdges` uses the shared `engine.math` 16-case binary
+    contour table over sample centres, with disconnected saddle cases and solid
+    on the left. Dual cells have one row-major existing sample-chunk owner.
+    `ColliderGridGeometry` supplies cell size/origin and optional protected-solid
+    exterior bounds. `extract` traces those edges into `Polyline`s through a
     sorted endpoint index (outgoing half sorted by `from`, incoming half by
     `to`, ordinal tiebreak preserving legacy scan order), dropping tracing
     from O(E^2) to sorts plus O(degree) per step with bit-identical output.
@@ -107,8 +108,8 @@ dependency between the modules.
     The table is lookup-only and never iterated for output, so drain order,
     budget, neighbour fanout, and chain tracing are untouched.
   - Dirty fanout and budget: each dirty position must itself be present in the
-    views span (else `invalid_argument`); it enqueues itself plus its four
-    cardinal neighbours that are also in the views into the `m_pending`
+    views span (else `invalid_argument`); it enqueues the existing 3 by 3
+    neighbourhood into the `m_pending`
     ordered set. The drain loop takes the smallest pending chunk first and
     stops after `max_chunks`, reporting the per-call count through
     `processed`. The caller resubmits a dirty position only on a new edit —
@@ -135,11 +136,11 @@ dependency between the modules.
     failed build retains the previous chunk collider.
   - Validation: `edge == 0`, `edge > 1024`, or `max_chunks == 0` fail fast;
     out-of-range positions, wrong-sized element spans, and duplicate views
-    fail closed before any `Scene` call. All allocation failure surfaces as
-    `not_enough_memory` with zero `Scene` side effects.
+    fail closed before any `Scene` call. Allocation failure is fatal and
+    propagates after rolling back newly acquired chains/bodies.
   - `materializeForQuery` explicitly activates one chunk even without
     active-body interest: it forces `m_needed` on a copied view set, stashes
-    the pending queue aside, rebuilds with budget 1, then merges the stashed
+    the pending queue aside, rebuilds all affected owners with budget 9, then merges the stashed
     queue back. `chainCount(pos)` / `pendingCount()` are the observable
     inspectors (chain counts back the smoke-test coverage accounting).
 - `:coupling` (`Physics.Coupling.cppm` / `Physics.Coupling.cpp`) —

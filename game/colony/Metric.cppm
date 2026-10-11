@@ -40,7 +40,9 @@ export namespace pP::colony {
 
     [[nodiscard]] std::error_code validateWorldMetric(const WorldMetric &metric);
     [[nodiscard]] Expected<MetrePoint> fineCellCentre(sim::GlobalCellPos position);
-    [[nodiscard]] Expected<sim::GlobalCellPos> metreToFineCell(MetrePoint position);
+    // The explicit one-cell scale is retained for legacy numeric fixtures.
+    [[nodiscard]] Expected<sim::GlobalCellPos> metreToFineCell(
+        MetrePoint position, u32 cells_per_metre = kFineCellsPerMetre);
     [[nodiscard]] Expected<double> fineCellBoundaryMetres(u32 boundary);
     // Exact discrete dimensions only; no rounding of authored geometry.
     [[nodiscard]] Expected<u32> discreteFineCellLength(double metres);

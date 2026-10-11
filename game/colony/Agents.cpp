@@ -9,6 +9,7 @@ import engine.core;
 import engine.sim;
 import game.colony.buildings;
 import game.colony.pathfinding;
+import game.colony.metric;
 
 import std;
 
@@ -36,7 +37,10 @@ namespace pP::colony {
             return isWalkable(grid, {x, y}) and isWalkable(grid, {x, y + 1u});
         }
 
-        [[nodiscard]] bool onLadder(const sim::Registry &registry, const float x, const float y) {
+        [[nodiscard]] bool onLadder(
+            const sim::Registry &registry, const float world_x, const float world_y, const u32 cells_per_metre) {
+            const double x = static_cast<double>(world_x) * cells_per_metre;
+            const double y = static_cast<double>(world_y) * cells_per_metre;
             for (const auto &[entity, errand]: registry.view<BuildErrand>()) {
                 (void) entity;
                 if (not errand.m_print.m_ladder) {
@@ -60,12 +64,11 @@ namespace pP::colony {
         };
 
         [[nodiscard]] Desired desiredGoal(
-            const sim::ChunkGrid &grid, const Agent &agent, const Needs &needs, const sim::BodyState &pose,
-            sim::Registry &registry) {
+            const sim::ChunkGrid &grid, const Agent &agent, const Needs &needs, const sim::GlobalCellPos here,
+            sim::Registry &registry, const bool legacy_fixture) {
             Desired want{};
-            const sim::GlobalCellPos here{static_cast<u32>(pose.m_x), static_cast<u32>(pose.m_y)};
             const auto here_cell = grid.getCell(here);
-            if (here_cell and here_cell->m_element == kElementCaustic) {
+            if (legacy_fixture and here_cell and here_cell->m_element == kElementCaustic) {
                 want.m_goal = EGoal::flee;
                 want.m_op = kOpMove;
                 for (u32 radius = 10u; radius < 200u; radius += 5u) {
@@ -190,7 +193,12 @@ namespace pP::colony {
     }
 
     std::error_code spawnAgents(
-        const sim::ChunkGrid &grid, sim::Registry &registry, const u64 seed, u32 count, const IContext *const context) {
+        const sim::ChunkGrid &grid, sim::Registry &registry, const u64 seed, u32 count, const IContext *const context,
+        const u32 cells_per_metre) {
+        const float cell_size_m = 1.0f / cells_per_metre;
+        if ((cells_per_metre != 1u and cells_per_metre != kFineCellsPerMetre)) {
+            PPR_RETURN_ERROR_ON_FAIL(AgentPreparation, std::errc::invalid_argument);
+        }
         // Phase: normalize the profiling override. Fail closed to the
         // production default on empty, reject above the named ceiling.
         if (count == 0u) {
@@ -232,8 +240,8 @@ namespace pP::colony {
             registry.emplace<Needs>(entity, Needs{});
             registry.emplace<sim::BodyState>(
                 entity, sim::BodyState{
-                            static_cast<float>(spawn.m_x) + 0.5f, static_cast<float>(spawn.m_y) + 0.5f, 0.0f, 0.0f,
-                            0.0f, 0.0f});
+                            (static_cast<float>(spawn.m_x) + 0.5f) * cell_size_m,
+                            (static_cast<float>(spawn.m_y) + 0.5f) * cell_size_m, 0.0f, 0.0f, 0.0f, 0.0f});
             registry.emplace<sim::BodyDefinition>(
                 entity, sim::BodyDefinition{
                             .m_motion = sim::EMotionKind::dynamic,
@@ -246,7 +254,9 @@ namespace pP::colony {
         return {};
     }
 
-    void planAgent(const sim::ChunkGrid &grid, sim::Registry &registry, const std::optional<sim::Entity> controlled) {
+    void planAgent(
+        const sim::ChunkGrid &grid, sim::Registry &registry, const std::optional<sim::Entity> controlled,
+        const u32 cells_per_metre) {
         for (const auto &[entity, agent]: registry.view<Agent>()) {
             if (controlled == entity) {
                 continue;
@@ -257,13 +267,17 @@ namespace pP::colony {
                 continue;
             }
 
-            const Desired want = desiredGoal(grid, agent, *needs, *pose, registry);
+            const auto position = metreToFineCell({pose->m_x, pose->m_y}, cells_per_metre);
+            if (not position) {
+                continue;
+            }
+            const sim::GlobalCellPos from = *position;
+            const Desired want = desiredGoal(grid, agent, *needs, from, registry, cells_per_metre == 1u);
             Plan *plan = registry.get<Plan>(entity);
             if (plan != nullptr and plan->m_goal == want.m_goal and plan->m_site == want.m_site) {
                 continue;
             }
 
-            const sim::GlobalCellPos from{static_cast<u32>(pose->m_x), static_cast<u32>(pose->m_y)};
             const u32 replans = plan != nullptr ? plan->m_replans + 1u : 0u;
             Plan next{};
             next.m_goal = want.m_goal;
@@ -290,7 +304,8 @@ namespace pP::colony {
     }
 
     std::error_code playerIntent(
-        const sim::Registry &registry, const sim::Entity entity, const PlayerCommand command, Intent &intent) {
+        const sim::Registry &registry, const sim::Entity entity, const PlayerCommand command, Intent &intent,
+        const u32 cells_per_metre) {
         intent = {};
         const auto *const agent = registry.get<Agent>(entity);
         const auto *const pose = registry.get<sim::BodyState>(entity);
@@ -300,22 +315,40 @@ namespace pP::colony {
             command.m_horizontal < -1 or
             command.m_horizontal > 1 or
             command.m_vertical < -1 or
-            command.m_vertical > 1) {
+            command.m_vertical > 1 or
+            (cells_per_metre != 1u and cells_per_metre != kFineCellsPerMetre)) {
+            PPR_RETURN_ERROR_ON_FAIL(AgentPreparation, std::errc::invalid_argument);
+        }
+        if (not std::isfinite(pose->m_x) or
+            not std::isfinite(pose->m_y) or
+            not std::isfinite(agent->m_speed) or
+            agent->m_speed < 0.0f) {
             PPR_RETURN_ERROR_ON_FAIL(AgentPreparation, std::errc::invalid_argument);
         }
         intent.m_velocity_x = command.m_horizontal * agent->m_speed;
-        intent.m_climbing = onLadder(registry, pose->m_x, pose->m_y);
+        intent.m_climbing = onLadder(registry, pose->m_x, pose->m_y, cells_per_metre);
         intent.m_velocity_y = intent.m_climbing ? command.m_vertical * agent->m_speed : 0.0f;
         return {};
     }
 
-    std::error_code agentIntent(sim::Registry &registry, const sim::Entity entity, Intent &intent) {
+    std::error_code agentIntent(
+        sim::Registry &registry, const sim::Entity entity, Intent &intent, const u32 cells_per_metre) {
+        const float cell_size_m = 1.0f / cells_per_metre;
         intent = Intent{};
         const Agent *agent = registry.get<Agent>(entity);
         Plan *plan = registry.get<Plan>(entity);
         const sim::BodyState *pose = registry.get<sim::BodyState>(entity);
         Needs *needs = registry.get<Needs>(entity);
-        if (agent == nullptr or pose == nullptr or needs == nullptr) {
+        if (agent == nullptr or
+            pose == nullptr or
+            needs == nullptr or
+            (cells_per_metre != 1u and cells_per_metre != kFineCellsPerMetre)) {
+            PPR_RETURN_ERROR_ON_FAIL(AgentPreparation, std::errc::invalid_argument);
+        }
+        if (not std::isfinite(pose->m_x) or
+            not std::isfinite(pose->m_y) or
+            not std::isfinite(agent->m_speed) or
+            agent->m_speed < 0.0f) {
             PPR_RETURN_ERROR_ON_FAIL(AgentPreparation, std::errc::invalid_argument);
         }
         // Planning is budgeted across actors. An actor not yet assigned a
@@ -328,10 +361,10 @@ namespace pP::colony {
             return {};
         }
         const AgentAction &action = plan->m_actions[plan->m_pc];
-        const float dx = static_cast<float>(action.m_target.m_x) + 0.5f - pose->m_x;
-        const float dy = static_cast<float>(action.m_target.m_y) + 0.5f - pose->m_y;
+        const float dx = (static_cast<float>(action.m_target.m_x) + 0.5f) * cell_size_m - pose->m_x;
+        const float dy = (static_cast<float>(action.m_target.m_y) + 0.5f) * cell_size_m - pose->m_y;
         const float distance = std::sqrt(dx * dx + dy * dy);
-        if (distance < 1.5f) {
+        if (distance < 1.5f * cell_size_m) {
             if (action.m_op == kOpRest) {
                 needs->m_o2 = 100.0f;
                 needs->m_rest = 100.0f;
@@ -344,17 +377,18 @@ namespace pP::colony {
         float step_y = dy;
         if (path != nullptr and not path->m_partial and path->m_cursor < path->m_count) {
             sim::GlobalCellPos cell = path->m_pts[path->m_cursor];
-            step_x = static_cast<float>(cell.m_x) + 0.5f - pose->m_x;
-            step_y = static_cast<float>(cell.m_y) + 0.5f - pose->m_y;
-            if (step_x * step_x + step_y * step_y < kWaypointRadius * kWaypointRadius) {
+            step_x = (static_cast<float>(cell.m_x) + 0.5f) * cell_size_m - pose->m_x;
+            step_y = (static_cast<float>(cell.m_y) + 0.5f) * cell_size_m - pose->m_y;
+            const float waypoint_radius_m = kWaypointRadius * cell_size_m;
+            if (step_x * step_x + step_y * step_y < waypoint_radius_m * waypoint_radius_m) {
                 ++path->m_cursor;
                 if (path->m_cursor >= path->m_count) {
                     ++plan->m_pc;
                     return {};
                 }
                 cell = path->m_pts[path->m_cursor];
-                step_x = static_cast<float>(cell.m_x) + 0.5f - pose->m_x;
-                step_y = static_cast<float>(cell.m_y) + 0.5f - pose->m_y;
+                step_x = (static_cast<float>(cell.m_x) + 0.5f) * cell_size_m - pose->m_x;
+                step_y = (static_cast<float>(cell.m_y) + 0.5f) * cell_size_m - pose->m_y;
             }
         } else if (path != nullptr and path->m_partial and path->m_count == 0u) {
             return {};
@@ -365,10 +399,10 @@ namespace pP::colony {
         }
         intent.m_velocity_x = step_x / length * agent->m_speed;
         intent.m_velocity_y = step_y / length * agent->m_speed;
-        if (onLadder(registry, pose->m_x, pose->m_y)) {
+        if (onLadder(registry, pose->m_x, pose->m_y, cells_per_metre)) {
             intent.m_climbing = true;
             intent.m_velocity_y = agent->m_speed;
-            if (step_x * step_x < 0.04f) {
+            if (step_x * step_x < 0.04f * cell_size_m * cell_size_m) {
                 intent.m_velocity_x = 0.0f;
             }
         } else {

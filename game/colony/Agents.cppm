@@ -16,7 +16,7 @@ export namespace pP::colony {
     /// closed to `kAgentCount` (never zero agents).
     inline constexpr u32 kAgentCountMax = 128u;
 
-    /// Default walk speed in cells per second.
+    /// Default walk speed in metres per second.
     inline constexpr float kAgentSpeed = 3.0f;
 
     /// Waypoint capture radius in cells.
@@ -125,18 +125,21 @@ export namespace pP::colony {
     /// No wall-clock or global RNG is consulted.
     [[nodiscard]] std::error_code spawnAgents(
         const sim::ChunkGrid &grid, sim::Registry &registry, u64 seed, u32 count = kAgentCount,
-        const IContext *context = nullptr);
+        const IContext *context = nullptr, u32 cells_per_metre = 1u);
 
     /// Plans the first agent (slot order) needing a plan: none, or desired
     /// goal/site differing from the current Plan. Issues or refreshes the
     /// agent's own PathReq; the pathfind step solves it.
     void planAgent(
-        const sim::ChunkGrid &grid, sim::Registry &registry, std::optional<sim::Entity> controlled = std::nullopt);
+        const sim::ChunkGrid &grid, sim::Registry &registry, std::optional<sim::Entity> controlled = std::nullopt,
+        u32 cells_per_metre = 1u);
 
     [[nodiscard]] std::error_code playerIntent(
-        const sim::Registry &registry, sim::Entity entity, PlayerCommand command, Intent &intent);
+        const sim::Registry &registry, sim::Entity entity, PlayerCommand command, Intent &intent,
+        u32 cells_per_metre = 1u);
 
     /// Advances one agent's waypoint cursor and resolves velocity (ladder
     /// zones climb). Mutates only PathComp.m_cursor / Needs / Plan progress.
-    [[nodiscard]] std::error_code agentIntent(sim::Registry &registry, sim::Entity entity, Intent &intent);
+    [[nodiscard]] std::error_code agentIntent(
+        sim::Registry &registry, sim::Entity entity, Intent &intent, u32 cells_per_metre = 1u);
 }

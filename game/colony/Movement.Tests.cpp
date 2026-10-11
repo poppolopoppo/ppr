@@ -7,10 +7,54 @@ import engine.sim;
 import game.colony.agents;
 import game.colony.buildings;
 import game.colony.driver;
+import game.colony.metric;
+import game.colony.pathfinding;
 import std;
 
 namespace pP::game::tests::detail::movement {
     using namespace colony;
+
+    PPR_UNIT_TEST (metric_actor_targets_and_ladders_use_fine_cells_without_scaling_speed_or_body) {
+        sim::Registry registry;
+        sim::ChunkGrid grid;
+        PPR_TEST_ASSERT(not registerColonyComponents(registry));
+        PPR_TEST_ASSERT(not spawnAgents(grid, registry, 42u, 1u, nullptr, kFineCellsPerMetre));
+        sim::Entity actor{};
+        for (const auto &[entity, agent]: registry.view<Agent>()) {
+            actor = entity;
+            const auto *const pose = registry.get<sim::BodyState>(entity);
+            PPR_TEST_ASSERT(std::abs(pose->m_x - (agent.m_spawn.m_x + 0.5f) / 3.0f) < 0.0002f);
+            const auto *const body = registry.get<sim::BodyDefinition>(entity);
+            PPR_TEST_ASSERT(body->m_half_width == 0.4f and body->m_half_height == 0.9f);
+        }
+        auto *const pose = registry.get<sim::BodyState>(actor);
+        *pose = {10.5f, 20.5f};
+        registry.get<Agent>(actor)->m_spawn = {50u, 61u};
+        registry.get<Needs>(actor)->m_rest = 10.0f;
+        planAgent(grid, registry, std::nullopt, kFineCellsPerMetre);
+        PPR_TEST_ASSERT((registry.get<PathReq>(actor)->m_from == sim::GlobalCellPos{31u, 61u}));
+        Intent intent{};
+        PPR_TEST_ASSERT(not agentIntent(registry, actor, intent, kFineCellsPerMetre));
+        PPR_TEST_ASSERT(intent.m_velocity_x == kAgentSpeed and intent.m_velocity_y == 0.0f);
+        const auto ladder = registry.create();
+        registry.emplace<BuildErrand>(
+            ladder,
+            BuildErrand{
+                .m_print = {.m_min = {30u, 60u}, .m_width = 3u, .m_height = 6u, .m_solid = false, .m_ladder = true}});
+        PPR_TEST_ASSERT(not playerIntent(registry, actor, {0, -1}, intent, kFineCellsPerMetre));
+        PPR_TEST_ASSERT(intent.m_climbing and intent.m_velocity_y == -kAgentSpeed);
+        pose->m_x = 12.0f;
+        PPR_TEST_ASSERT(not playerIntent(registry, actor, {1, 1}, intent, kFineCellsPerMetre));
+        PPR_TEST_ASSERT(not intent.m_climbing and intent.m_velocity_y == 0.0f and intent.m_velocity_x == kAgentSpeed);
+        PPR_TEST_ASSERT(agentIntent(registry, actor, intent, 2u) == std::errc::invalid_argument);
+        pose->m_x = std::numeric_limits<float>::quiet_NaN();
+        PPR_TEST_ASSERT(playerIntent(registry, actor, {}, intent, kFineCellsPerMetre) == std::errc::invalid_argument);
+        PPR_TEST_ASSERT(registry.remove<Plan>(actor));
+        planAgent(grid, registry, std::nullopt, kFineCellsPerMetre);
+        PPR_TEST_ASSERT(not registry.get<Plan>(actor));
+        PPR_TEST_ASSERT(metreToFineCell({10.5, 20.5}, 1u)->m_x == 10u);
+        PPR_TEST_ASSERT(metreToFineCell({10.5, 20.5}, 2u).error() == std::errc::invalid_argument);
+    };
 
     PPR_UNIT_TEST (fixed_tick_control_bypasses_planning_and_clears_held_commands) {
         ColonyDriver driver;
@@ -191,7 +235,8 @@ namespace pP::game::tests::detail::movement {
 namespace pP::game::tests {
     const UnitTest movement = UnitTest::Named("movement") / [](UnitTest::IRun &_) -> void {
         _.recurse(
-            {detail::movement::fixed_tick_control_bypasses_planning_and_clears_held_commands,
+            {detail::movement::metric_actor_targets_and_ladders_use_fine_cells_without_scaling_speed_or_body,
+                detail::movement::fixed_tick_control_bypasses_planning_and_clears_held_commands,
                 detail::movement::unplanned_actor_is_idle_but_missing_required_state_fails,
                 detail::movement::movement_preserves_falling_momentum_and_restores_ladder_gravity,
                 detail::movement::restoration_releases_previous_terrain_chains});

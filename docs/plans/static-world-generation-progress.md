@@ -94,6 +94,17 @@ metric transforms and protected bounds, diagonal dirty fanout and owner-interest
 closure. Corner queries materialize all dependent owners. Fatal allocation
 propagation retains acquisition rollback. The affected ASan simulation suite
 passed in `out/worldgen-contour-tests2.log` (70.22 s); independent review cleared
-the seam fix. Direct control and remaining actor/metric integration continue.
+the seam fix; committed as `86a89c0`. Direct fixed-tick control is committed as
+`63ca7ee`: it bypasses planning only for the selected existing actor, preserves
+autonomous path advancement/movement and clears held commands at lifecycle
+boundaries. The initial full game run exposed a fixture alignment failure;
+the corrected focused suite passed and the full game rerun passed (50.65 s) in
+`out/worldgen-control-tests2.log`. The affected app simulation suite passed
+(96.61 s). UI focus/capture wiring and generated-session integration remain.
+Actor metric adapters passed the affected app/game suites (93.83 s / 52.79 s)
+in `out/worldgen-actor-metric-tests.log` and independent review. They retain
+metre-based speed/body size, convert path targets and ladder bounds, and use
+the checked conversion before integer narrowing. Prepared driver adoption is
+the next integration increment.
 Later full acceptance gates remain pending. IDE inspection
 has previously timed out and remains unavailable rather than passed.
