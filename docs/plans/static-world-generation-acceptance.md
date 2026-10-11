@@ -11,8 +11,9 @@ gaps and the unverified gates below prevent a completion claim.
 ## Recorded environment and commands
 
 Windows 11, Ryzen 9 3950X, 64 GiB RAM, RTX 2080; MSVC 14.51/VS 18 Insiders,
-Release (`msvc-rel`), D3D12. Latest successful scripted runtime: `5caec5d`
-plus the reviewed settling-window correction, before the native UI fixes.
+Release (`msvc-rel`), D3D12. Latest successful scripted runtime: `e1448af`
+plus reviewed gap-context telemetry (v6). The v4 table below is retained as a
+historical comparison; current observations are appended below.
 The two profile cases ran sequentially without another build/test workload:
 
 ```text
@@ -122,9 +123,11 @@ process-memory observations and does not establish total peak memory.
   the world. Its action/capture took 495 ms including automation transport; this
   is not a precise engine latency measurement. This run exposed focus/follow,
   cancellation-notice and close-drain defects. Reviewed fixes are built, but
-  native traversal, extension-name and clean-close reruns remain open. The first
-  run exited 22 on close (`out/worldgen-native-v1-result.json`), not success.
-- Saved GPU profiler capture, GPU terrain time, precise GPU-memory peak, worker
+  the subsequent v2/v3 runs verified extension names, both cancellation paths and
+  normal zero-exit close. Held-input traversal remains open. The first run
+  exited 22 on close (`out/worldgen-native-v1-result.json`), not success.
+- A saved four-frame PIX GPU capture and limited replay counters are available
+  below. Native steady-state GPU timing, precise GPU-memory peak, worker
   utilization and true scheduler queue depth remain unmeasured. Existing scheduler
   outstanding-work counts combine queued and executing work.
 - All four terrain/visibility entry points compiled for DXIL and SPIR-V
@@ -179,10 +182,53 @@ material's Inspector name/ID, diagnostic Cancel with retained session/neutral
 notice, and normal close with actual zero exit. It did not establish walking or
 body/contact correspondence. The New Game Cancel attempt hit the computer-use
 input guard and is not a pass. Duplicate bars and an invalid stage ordinal were
-observed; their UI correction remains pending. See the progress log for details.
+observed; their correction passed the subsequent v3 native checks below.
 
 The modal correction subsequently passed dev/Live/Release app.game builds and
 independent review. Native v3 screenshots in `out/worldgen-native-v3` verify a
 single measured bar for terrain and graphics staging, and a labelled
 indeterminate bar for diagnostic preparation. Diagnostic cancellation retained
 the replacement session. Body/contact and held-input traversal remain open.
+
+Native v3 subsequently verified New Game cancellation during terrain work and
+normal zero-exit close. PIX UI also saved a ready-world Frontier seed-42 focused
+actor/support capture: `out/pix-manual/worldgen-ready-frontier-42-v1.wpix`, with
+PNG/event CSV/summary siblings. It contains four frames, each with two compute
+dispatches and one indirect terrain draw. PIX replay TOP-to-EOP draw samples span
+156,544–163,648 ns. These are instrumented replay samples for one close-up,
+not a native steady-state timing study. The padded selection outline extends
+beyond the actual body; it does not establish penetration. Native held-input
+traversal remains unverified. The unelevated PIX server cannot capture CPU timing.
+
+## Current gap-context observations (v6)
+
+Dev/Live/Release app.game builds passed in 80.70 seconds
+(`out/worldgen-gap-validation-v2.times.log`). Both isolated profile sequences
+exited zero with acceptance PASS; commands and sampled memory are in
+`out/worldgen-scenario-memory-v6.json`, with stdout logs named
+`out/worldgen-scenario-v6-{frontier,hollows}.stdout.log`.
+
+| Observation | Frontier | Hollows |
+|---|---:|---:|
+| Whole sequence, seconds | 53.037 | 53.072 |
+| Peak working set, bytes | 1,039,466,496 | 1,037,742,080 |
+| Sampled private peak, bytes | 1,247,059,968 | 1,248,907,264 |
+| Maximum live update gap, ms | 68.613 | 18.478 |
+| Maximum retiring update gap, ms | 17.184 | 51.274 |
+| Retiring presentation-ack gap, ms | 70.349 | 68.056 |
+| Maximum queued update gap, ms | 136.697 | 136.979 |
+| Maximum control-poll gap, ms | 12.466 | 12.223 |
+| Maximum admission probe, ms | 0.769 | 0.742 |
+| Maximum consecutive skipped admissions | 7 | 7 |
+
+Both profiles returned to one atlas/seven texture entries/seven slots after
+replacement, with observed peaks of two atlases/fourteen texture entries.
+Stationary and pan windows retained zero atlas writes, serialization and growth
+waits. Gap context records the preceding update and the last completed lane
+executor gauge sampled at the endpoint, not a duration for the entire interval.
+The Frontier live gap followed a 0.161 ms retiring update with a 1.172 ms sampled
+executor gauge; the Hollows retiring gap followed a 0.174 ms update with a
+1.251 ms sampled gauge. The low admission-probe maxima exclude its completion
+callback drain as the large blocking interval in these runs. Lane sweeping and
+credit waiting are not attributed by these gauges. The repeated long gaps
+remain unresolved; acceptance is still open.

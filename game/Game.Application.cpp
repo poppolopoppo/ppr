@@ -131,6 +131,9 @@ namespace demo {
         struct WorldgenPhaseObservation {
             u64 m_updates{}, m_presentations{};
             TimeSpan m_max_update_gap{}, m_max_update_work{}, m_max_presentation_gap{};
+            TimeSpan m_gap_previous_update_work{};
+            u32 m_gap_previous_phase{};
+            u64 m_gap_last_lane_execute_us{}, m_max_sampled_lane_execute_us{};
         };
         std::array<WorldgenPhaseObservation, 11u> m_worldgen_observations{};
         const ITimerClock *m_observation_clock{};
@@ -166,6 +169,8 @@ namespace demo {
         float2 m_acceptance_center{zero_v};
         TimePoint m_observation_start{};
         std::optional<TimePoint> m_last_update_observed{}, m_last_presentation_observed{};
+        u32 m_last_update_phase{};
+        TimeSpan m_last_update_work{};
         std::optional<TimePoint> m_first_loading_observed{}, m_first_world_observed{};
         TimeSpan m_max_control_work{};
         TimeSpan m_max_control_gap{};
@@ -183,10 +188,22 @@ namespace demo {
             }
             auto &sample = m_worldgen_observations[phase];
             ++sample.m_updates;
+            // This is the last completed executor sample, not the whole lane
+            // interval or a GPU timestamp. Sampling may miss intermediate frames.
+            const auto *lane = renderLane();
+            const u64 last_lane_execute_us = lane ? lane->lastExecuteUs() : 0u;
+            sample.m_max_sampled_lane_execute_us = std::max(sample.m_max_sampled_lane_execute_us, last_lane_execute_us);
             if (m_last_update_observed) {
-                sample.m_max_update_gap = std::max(sample.m_max_update_gap, now - *m_last_update_observed);
+                const auto gap = now - *m_last_update_observed;
+                if (gap > sample.m_max_update_gap) {
+                    sample.m_max_update_gap = gap;
+                    sample.m_gap_previous_phase = m_last_update_phase;
+                    sample.m_gap_previous_update_work = m_last_update_work;
+                    sample.m_gap_last_lane_execute_us = last_lane_execute_us;
+                }
             }
             m_last_update_observed = now;
+            m_last_update_phase = phase;
             m_peak_background_outstanding = std::max(
                 m_peak_background_outstanding, static_cast<u64>(parallel::backgroundPool().getNumOutstandingTasks()));
         }
@@ -229,9 +246,18 @@ namespace demo {
                     names[phase], sample.m_updates, sample.m_presentations,
                     time::seconds(sample.m_max_update_gap) * 1000.0, time::seconds(sample.m_max_update_work) * 1000.0,
                     time::seconds(sample.m_max_presentation_gap) * 1000.0);
+                if (sample.m_max_update_gap > TimeSpan{}) {
+                    std::println(
+                        "[worldgen-gap-context] phase={} previous_phase={} previous_update_work_ms={:.6f} last_completed_lane_execute_us={} max_sampled_lane_execute_us={}",
+                        names[phase], names[sample.m_gap_previous_phase],
+                        time::seconds(sample.m_gap_previous_update_work) * 1000.0, sample.m_gap_last_lane_execute_us,
+                        sample.m_max_sampled_lane_execute_us);
+                }
             }
             std::println(
                 "[worldgen-observation] Observations aggregate all jobs in this application run; startup milestones describe the first world. Presentation times are CPU acknowledgment observations, not GPU timestamps or native input latency; background outstanding includes running work, not queue depth.");
+            std::println(
+                "[worldgen-gap-context] Gaps span successive update starts and can cross phases; context describes the maximum gap's preceding update and the last completed lane-executor gauge sampled at its endpoint. The gauge excludes pre-execution waiting and completion delivery, includes CPU blocking inside the executor, and is not GPU timing or a causal attribution.");
         }
 
         std::unique_ptr<colony::ColonyDriver> m_driver{};
@@ -4017,6 +4043,7 @@ namespace demo {
                 if (m_worldgen_report) {
                     auto &sample = m_worldgen_observations[observation_phase];
                     sample.m_max_update_work = std::max(sample.m_max_update_work, elapsed);
+                    m_last_update_work = elapsed;
                 }
             };
             PPR_RETURN_ERROR_ON_FAIL(Demo, advanceWorldJob_());

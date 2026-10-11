@@ -851,3 +851,36 @@ semantic style and Astra's independent review. Native v3 captures show terrain
 `out/worldgen-native-v3`. New Game published a replacement session; diagnostic
 Cancel retained it with the neutral notice. The native run remains active for
 the remaining acceptance checks; no traversal pass is claimed from key taps.
+
+Native v3 also cancelled a New Game during terrain composition and retained the
+previous seed/session. Normal close exited zero (`out/worldgen-native-v3-result.json`),
+with 933,113,856-byte peak working set and 1,147,383,808-byte sampled private peak.
+The apparent body overlap in the screenshot is the intentionally padded selection
+outline; source review found no camera/metric transform divergence. This is not
+a held-input traversal pass.
+
+PIX UI launched the current Release game at Frontier seed 42 and captured the
+ready, focused actor/support close-up. The saved four-frame capture is
+`out/pix-manual/worldgen-ready-frontier-42-v1.wpix` (8,073,044 bytes), with PNG,
+event CSV and reproducibility summary beside it. Its 428 API events contain two
+compute dispatches and one indirect terrain draw per frame. Replay TOP-to-EOP
+terrain-draw samples were 159,392 / 156,960 / 163,648 / 156,544 ns; these are
+capture replay observations for one scene, not uninstrumented performance or
+a paired comparison. The CLI rejected attachment to the GUI-launched process
+with PIXTOOL17; GUI Take Capture succeeded. Replay analysis succeeded; its parser
+reported zero errors and misclassified a progress line as one warning. The full
+debug-layer stream was not available, so no blanket diagnostic-clean claim is made.
+Timing captures remain unavailable through the unelevated server.
+
+Focused gap telemetry retains the original maximum-gap metrics and records the
+preceding update's phase/work plus the existing last-completed render-executor
+gauge. It explicitly distinguishes sampled CPU execution/blocking from GPU time
+and excludes pre-execution waiting/completion delivery. Astra review and format/
+style checks passed. Corrected dev/Live/Release app.game builds passed in
+80.70 seconds, and both isolated v6 profile sequences exited zero with acceptance
+PASS (53.037 / 53.072 seconds). Peak working sets were 1,039,466,496 /
+1,037,742,080 bytes. Repeated queued gaps of about 137 ms and cross-phase
+retiring/live gaps of 51-69 ms remain unresolved. The low preceding update,
+sampled executor and admission-probe durations do not establish a cause.
+The current twelve-entry CTest matrix is running alone in the serialized queue;
+see the acceptance evidence for the v6 metrics and their limits.
