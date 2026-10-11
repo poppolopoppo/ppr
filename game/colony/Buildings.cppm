@@ -3,6 +3,7 @@ export module game.colony.buildings;
 import engine.core;
 import engine.sim;
 import game.colony.pathfinding;
+import game.colony.content;
 
 import std;
 
@@ -53,15 +54,21 @@ export namespace pP::colony {
 
     /// Validates a footprint: in-world rect, edges in [1, kMaxFootprintEdge],
     /// known element, ladders non-solid.
-    [[nodiscard]] std::error_code validateFootprint(const Footprint &print) noexcept;
+    [[nodiscard]] std::error_code validateFootprint(
+        const Footprint &print, const ContentCatalog *catalog = nullptr) noexcept;
+
+    // Generated construction validates the whole metre-aligned footprint before
+    // recording an errand; live errands reserve their complete footprint.
+    [[nodiscard]] std::error_code validateConstruction(
+        const sim::ChunkGrid &grid, sim::Registry &registry, const Footprint &print, const ContentCatalog &catalog);
 
     /// Advances every incomplete errand row-major up to `cell_budget` cells
     /// total: setCell (temperature preserved) + sim markDirty + touched-chunk
     /// record for presentation sync + Pathfinder scratch reset on any write.
     /// Structural mutation of errand rows happens only between view passes.
-    void advanceErrands(
+    [[nodiscard]] std::error_code advanceErrands(
         sim::ChunkGrid &grid, sim::Registry &registry, Pathfinder &finder, Array<sim::ChunkPos> &touched,
-        u32 cell_budget);
+        u32 cell_budget, const ContentCatalog *catalog = nullptr);
 
     /// Live (incomplete) errand rows.
     [[nodiscard]] u32 liveErrandCount(sim::Registry &registry);

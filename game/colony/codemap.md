@@ -48,4 +48,9 @@ catalog, reproduction `WorldDescriptor` and complete numeric `GeneratedWorld`.
 Its factories accept an explicit clock and execution dependencies; the path
 overload loads the catalog on its calling worker. `Colony::install` adopts this
 owner without rerasterizing, while `grid()` preserves the existing edit boundary.
-The interactive driver migration to this owner remains in progress.
+`ColonyDriver::initPrepared` adopts it into an isolated candidate with metre-scale
+shared-contour collision and exactly one controlled actor at its validated start.
+The interactive job/publication migration remains in progress. Generated-session
+tools resolve catalog terrain IDs: dig/demolition preserve protected material;
+construction validates complete globally aligned metre tiles, live actor overlap
+and pending reservations before recording progressive work.

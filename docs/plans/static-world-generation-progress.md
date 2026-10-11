@@ -25,7 +25,8 @@ not a declaration that the seven-stage acceptance criteria have passed.
   canonical terrain/output checksums and material counts.
 - Factory-only prepared-world ownership binds the catalog, reproduction descriptor
   and numeric result. Colony can adopt this owner without regenerating terrain;
-  interactive driver hookup is still pending.
+  the driver adopts this owner with one controlled actor and metre-scale colliders.
+  Interactive job/publication hookup is still pending.
 
 Allocation failure is fatal. Accepted work drains before borrowed inputs are
 released, including when an allocation exception must be rethrown.
@@ -37,8 +38,10 @@ complete generation allocation/scratch accounting. The shipped seed corpus now
 passes; visual inspection/export remains outstanding.
 The current interactive candidate uses the legacy recipe.
 
-Stage 4 needs metric migration of actors, colliders, picking/tools and construction,
-shared contour collision, one directly controlled normal actor and preserved AI.
+Stage 4 has metric actors, shared-contour colliders, fixed-tick player commands
+and preserved AI, prepared-driver adoption, catalog-aware dig/demolition and
+three-cell construction validation. Interactive picking, input and presentation
+integration remain in progress.
 
 Stage 5 needs bindless textured contours, GPU visibility/indirect drawing,
 incremental transactional GPU preparation/publication/retirement, diagnostic modes
@@ -105,6 +108,23 @@ Actor metric adapters passed the affected app/game suites (93.83 s / 52.79 s)
 in `out/worldgen-actor-metric-tests.log` and independent review. They retain
 metre-based speed/body size, convert path targets and ladder bounds, and use
 the checked conversion before integer narrowing. Prepared driver adoption is
-the next integration increment.
+committed as `db00b7f`. Prepared driver adoption is committed as `8963c0c`.
+The movement suite passed three shuffled loops, including activation and
+retirement of collider owners as an actor traverses without edits
+(`out/worldgen-prepared-focused2.log`, 37.14 s). The Release prepared-session
+and GPU smoke passed in `out/worldgen-prepared-smoke2.log`: Frontier 42 retains
+terrain `6463df966ba72c4e`, adopts the same payload allocation, starts exactly
+one controlled actor and checks movement, command reset and teardown.
+The initial Release build was interrupted during repeated vcpkg compiler-hash
+detection. Reconfiguration reused the already installed dependencies with
+`VCPKG_MANIFEST_INSTALL=OFF`; the successful build is recorded in
+`out/worldgen-prepared-release-build2.log`. Restore manifest installation before
+changing dependencies; this local cache setting does not change dependency policy.
+Catalog-aware tool and construction checks passed the affected ASan app/game
+suites in `out/worldgen-tools-tests.log` (90.92 s / 62.83 s), format/style gates
+and Astra review. Tests cover nonlegacy IDs, protected demolition, particle/unknown
+ID preflight, cross-chunk tiles, actor overlap, reservations, progressive budgets
+and preservation of the original failing tick stage. Direct UI input wiring is
+the next application increment.
 Later full acceptance gates remain pending. IDE inspection
 has previously timed out and remains unavailable rather than passed.

@@ -260,9 +260,16 @@ namespace pP::colony {
             }
             const Expected<void> bound_build = m_steps.addSystem(*build, [this](sim::Registry &registry) {
                 const hal::ProfileScope scope_build{"Colony.Build"};
-                m_step_stage = "build";
+                if (not m_step_error) {
+                    m_step_stage = "build";
+                }
                 Array<sim::ChunkPos> touched{};
-                advanceErrands(m_colony.grid(), registry, m_finder, touched, kErrandCellsPerTick);
+                const auto *const prepared = preparedWorld();
+                PPR_RETAIN_ERROR_ON_FAIL(
+                    ColonyPreparation, m_step_error,
+                    advanceErrands(
+                        m_colony.grid(), registry, m_finder, touched, kErrandCellsPerTick,
+                        prepared ? &prepared->catalog() : nullptr));
                 fanOutEditChunks(touched);
             });
             if (not bound_build) [[unlikely]] {
@@ -272,7 +279,9 @@ namespace pP::colony {
             }
             const Expected<void> bound = m_steps.addSystem(*declared, [this](sim::Registry &registry) {
                 const hal::ProfileScope scope_pathfind{"Colony.Pathfind"};
-                m_step_stage = "pathfind";
+                if (not m_step_error) {
+                    m_step_stage = "pathfind";
+                }
                 stepPathfinding(m_colony.grid(), registry, m_finder, kExpansionsPerTick);
             });
             if (not bound) [[unlikely]] {
@@ -282,7 +291,9 @@ namespace pP::colony {
             }
             const Expected<void> bound_plan = m_steps.addSystem(*aiplan, [this](sim::Registry &registry) {
                 const hal::ProfileScope scope_plan{"Colony.Plan"};
-                m_step_stage = "aiplan";
+                if (not m_step_error) {
+                    m_step_stage = "aiplan";
+                }
                 planAgent(m_colony.grid(), registry, m_controlled, cellsPerMetre());
             });
             if (not bound_plan) [[unlikely]] {
@@ -291,7 +302,9 @@ namespace pP::colony {
                 return bound_plan.error();
             }
             const Expected<void> bound_move = m_steps.addSystem(*movestep, [this](sim::Registry &) {
-                m_step_stage = "movestep";
+                if (not m_step_error) {
+                    m_step_stage = "movestep";
+                }
                 moveAgents();
             });
             if (not bound_move) [[unlikely]] {
@@ -622,10 +635,17 @@ namespace pP::colony {
         if (not m_timestep) {
             return std::unexpected{std::make_error_code(std::errc::operation_not_permitted)};
         }
-        if (const std::error_code error = validateFootprint(print)) {
-            return std::unexpected{error};
+        Footprint resolved = print;
+        if (const auto *const prepared = preparedWorld()) {
+            const auto *const profile = prepared->catalog().findWorld(prepared->descriptor().m_profile);
+            PPR_ASSERT(profile != nullptr);
+            resolved.m_element = resolved.m_solid ? profile->m_default_wall_material_id : u16{};
+            PPR_RETURN_UNEXPECTED_ON_FAIL(
+                ColonyPreparation, validateConstruction(m_colony.grid(), m_registry, resolved, prepared->catalog()));
+        } else {
+            PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyPreparation, validateFootprint(resolved));
         }
-        const auto entity = recordErrand(m_registry, print);
+        const auto entity = recordErrand(m_registry, resolved);
         if (not entity) {
             return std::unexpected{entity.error()};
         }
@@ -640,9 +660,9 @@ namespace pP::colony {
         // Demolition writes vacuum explicitly (never rely on the default).
         const Footprint print{
             .m_min = min, .m_width = width, .m_height = height, .m_element = kElementVacuum, .m_solid = false};
-        if (const std::error_code error = validateFootprint(print)) {
-            return std::unexpected{error};
-        }
+        const auto *const prepared = preparedWorld();
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            ColonyPreparation, validateFootprint(print, prepared ? &prepared->catalog() : nullptr));
         const auto entity = recordErrand(m_registry, print);
         if (not entity) {
             return std::unexpected{entity.error()};
@@ -754,7 +774,8 @@ namespace pP::colony {
     std::error_code ColonyDriver::applyDig(const PendingDig &pending) {
         const DigRect rect{.m_min = pending.m_min, .m_width = pending.m_width, .m_height = pending.m_height};
 
-        const Expected<DigResult> result = digCells(m_colony.grid(), rect);
+        const auto *const prepared = preparedWorld();
+        const Expected<DigResult> result = digCells(m_colony.grid(), rect, prepared ? &prepared->catalog() : nullptr);
         if (not result) {
             return result.error();
         }

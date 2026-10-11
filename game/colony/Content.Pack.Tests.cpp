@@ -4,6 +4,10 @@ module game.tests;
 import engine.core;
 import game.colony.content;
 import game.colony.worldgen;
+import game.colony.digtool;
+import game.colony.buildings;
+import game.colony.agents;
+import game.colony.pathfinding;
 import engine.sim;
 import std;
 
@@ -68,6 +72,107 @@ namespace pP::game::tests::detail::pack {
         }
         return result;
     }
+
+    PPR_UNIT_TEST (catalog_dig_respects_protected_material_and_preflights_the_complete_rectangle) {
+        Fixture fixture{};
+        config::Diagnostics diagnostics{};
+        const auto catalog = fixture.load(diagnostics);
+        PPR_TEST_ASSERT(catalog.has_value());
+        sim::ChunkGrid grid;
+        PPR_TEST_ASSERT(not grid.setCell({127u, 20u}, {16u, 301.0f}));
+        PPR_TEST_ASSERT(not grid.setCell({128u, 20u}, {257u, 302.0f}));
+        PPR_TEST_ASSERT(not grid.setCell({129u, 20u}, {1001u, 303.0f}));
+        grid.clearAllDirty();
+        const DigRect rect{{127u, 20u}, 3u, 1u};
+        const auto particle = digCells(grid, rect, &*catalog);
+        PPR_TEST_ASSERT(not particle and particle.error() == std::errc::invalid_argument);
+        PPR_TEST_ASSERT(grid.getCell({127u, 20u})->m_element == 16u);
+        PPR_TEST_ASSERT(not grid.setCell({129u, 20u}, {60000u, 303.0f}));
+        const auto unknown = digCells(grid, rect, &*catalog);
+        PPR_TEST_ASSERT(not unknown and unknown.error() == std::errc::invalid_argument);
+        PPR_TEST_ASSERT(grid.getCell({127u, 20u})->m_element == 16u);
+        PPR_TEST_ASSERT(not grid.setCell({129u, 20u}, {32u, 303.0f}));
+        const auto result = digCells(grid, rect, &*catalog);
+        PPR_TEST_ASSERT(result.has_value() and result->m_dug == 2u and result->m_touched.size() == 2u);
+        PPR_TEST_ASSERT(grid.getCell({127u, 20u})->m_element == 0u);
+        PPR_TEST_ASSERT(grid.getCell({127u, 20u})->m_temperature == 301.0f);
+        PPR_TEST_ASSERT(grid.getCell({128u, 20u})->m_element == 257u);
+        PPR_TEST_ASSERT(grid.getCell({129u, 20u})->m_element == 0u);
+        const auto repeated = digCells(grid, rect, &*catalog);
+        PPR_TEST_ASSERT(repeated.has_value() and repeated->m_dug == 0u and repeated->m_touched.empty());
+    };
+
+    PPR_UNIT_TEST (construction_checks_complete_tiles_reservations_and_live_actor_overlap) {
+        Fixture fixture{};
+        config::Diagnostics diagnostics{};
+        const auto catalog = fixture.load(diagnostics);
+        PPR_TEST_ASSERT(catalog.has_value());
+        sim::ChunkGrid grid;
+        sim::Registry registry;
+        PPR_TEST_ASSERT(not registerColonyComponents(registry));
+        const Footprint print{{126u, 21u}, 3u, 3u, 257u};
+        PPR_TEST_ASSERT(not validateConstruction(grid, registry, print, *catalog));
+        auto invalid = print;
+        invalid.m_element = 1001u;
+        PPR_TEST_ASSERT(validateConstruction(grid, registry, invalid, *catalog) == std::errc::invalid_argument);
+        invalid = print;
+        invalid.m_min.m_x = 127u;
+        PPR_TEST_ASSERT(validateConstruction(grid, registry, invalid, *catalog) == std::errc::invalid_argument);
+        invalid.m_min.m_x = 4095u;
+        PPR_TEST_ASSERT(validateConstruction(grid, registry, invalid, *catalog) == std::errc::invalid_argument);
+        PPR_TEST_ASSERT(not grid.setCell({128u, 23u}, {16u, 299.0f}));
+        PPR_TEST_ASSERT(validateConstruction(grid, registry, print, *catalog) == std::errc::device_or_resource_busy);
+        PPR_TEST_ASSERT(not grid.setCell({128u, 23u}, {0u, 299.0f}));
+        const auto actor = registry.create();
+        registry.emplace<Agent>(actor, Agent{});
+        registry.emplace<sim::BodyState>(actor, sim::BodyState{42.5f, 7.5f});
+        registry.emplace<sim::BodyDefinition>(actor, sim::BodyDefinition{.m_half_width = 0.4f, .m_half_height = 0.9f});
+        PPR_TEST_ASSERT(validateConstruction(grid, registry, print, *catalog) == std::errc::device_or_resource_busy);
+        registry.get<sim::BodyState>(actor)->m_x = 10.0f;
+        PPR_TEST_ASSERT(not validateConstruction(grid, registry, print, *catalog));
+        const auto entity = registry.create();
+        registry.emplace<BuildErrand>(entity, BuildErrand{print, 0u, 9u});
+        PPR_TEST_ASSERT(validateConstruction(grid, registry, print, *catalog) == std::errc::device_or_resource_busy);
+        Pathfinder finder;
+        Array<sim::ChunkPos> touched;
+        registry.get<sim::BodyState>(actor)->m_x = 42.5f;
+        PPR_TEST_ASSERT(not advanceErrands(grid, registry, finder, touched, 64u, &*catalog));
+        PPR_TEST_ASSERT(registry.get<BuildErrand>(entity)->m_progress == 0u and touched.empty());
+        registry.get<sim::BodyState>(actor)->m_x = 10.0f;
+        PPR_TEST_ASSERT(not advanceErrands(grid, registry, finder, touched, 4u, &*catalog));
+        PPR_TEST_ASSERT(registry.get<BuildErrand>(entity)->m_progress == 4u and touched.size() == 2u);
+        PPR_TEST_ASSERT(not advanceErrands(grid, registry, finder, touched, 64u, &*catalog));
+        PPR_TEST_ASSERT(registry.get<BuildErrand>(entity)->m_progress == 9u);
+        registry.get<BuildErrand>(entity)->m_print.m_solid = false;
+        registry.get<BuildErrand>(entity)->m_print.m_element = 0u;
+        registry.get<BuildErrand>(entity)->m_progress = 0u;
+        PPR_TEST_ASSERT(not advanceErrands(grid, registry, finder, touched, 64u, &*catalog));
+        PPR_TEST_ASSERT(grid.getCell({128u, 23u})->m_element == 257u);
+    };
+
+    PPR_UNIT_TEST (errand_preflight_rejects_invalid_actor_before_any_demolition_writes) {
+        Fixture fixture{};
+        config::Diagnostics diagnostics{};
+        const auto catalog = fixture.load(diagnostics);
+        PPR_TEST_ASSERT(catalog.has_value());
+        sim::ChunkGrid grid;
+        sim::Registry registry;
+        PPR_TEST_ASSERT(not registerColonyComponents(registry));
+        PPR_TEST_ASSERT(not grid.setCell({30u, 30u}, {16u, 293.0f}));
+        const auto demolition = registry.create();
+        registry.emplace<BuildErrand>(demolition, BuildErrand{Footprint{{30u, 30u}, 3u, 3u, 0u, false}, 0u, 9u});
+        const auto build = registry.create();
+        registry.emplace<BuildErrand>(build, BuildErrand{Footprint{{60u, 30u}, 3u, 3u, 257u}, 0u, 9u});
+        const auto actor = registry.create();
+        registry.emplace<Agent>(actor, Agent{});
+        registry.emplace<sim::BodyState>(actor, sim::BodyState{10.0f, 10.0f});
+        Pathfinder finder;
+        Array<sim::ChunkPos> touched;
+        PPR_TEST_ASSERT(advanceErrands(grid, registry, finder, touched, 64u, &*catalog) == std::errc::invalid_argument);
+        PPR_TEST_ASSERT(grid.getCell({30u, 30u})->m_element == 16u and touched.empty());
+        PPR_TEST_ASSERT(registry.get<BuildErrand>(demolition)->m_progress == 0u);
+        PPR_TEST_ASSERT(registry.get<BuildErrand>(build)->m_progress == 0u);
+    };
 
     PPR_UNIT_TEST (complete_shipped_catalog_is_owned) {
         Fixture fixture{};
@@ -291,7 +396,10 @@ namespace pP::game::tests {
     const UnitTest &gamePackContentTests() noexcept {
         static const UnitTest tests = UnitTest::Named("pack_content") / [](UnitTest::IRun &_) -> void {
             _.recurse(
-                {detail::pack::complete_shipped_catalog_is_owned,
+                {detail::pack::catalog_dig_respects_protected_material_and_preflights_the_complete_rectangle,
+                    detail::pack::construction_checks_complete_tiles_reservations_and_live_actor_overlap,
+                    detail::pack::errand_preflight_rejects_invalid_actor_before_any_demolition_writes,
+                    detail::pack::complete_shipped_catalog_is_owned,
                     detail::pack::shipped_profiles_compile_owned_numeric_plans,
                     detail::pack::prepared_world_rejects_invalid_inputs_and_cancellation_before_generation,
                     detail::pack::numeric_streams_ignore_document_order_and_unused_materials,

@@ -7,10 +7,12 @@ module game.colony.digtool;
 
 import engine.core;
 import engine.sim;
+import game.colony.content;
 
 import std;
 
 namespace pP::colony {
+    PPR_DEFINE_LOG_CATEGORY(ColonyDig, info, none)
     namespace {
         [[nodiscard]] bool chunkListed(const Array<sim::ChunkPos> &touched, const sim::ChunkPos pos) noexcept {
             for (const sim::ChunkPos listed: touched) {
@@ -48,10 +50,8 @@ namespace pP::colony {
         };
     }
 
-    Expected<DigResult> digCells(sim::ChunkGrid &grid, const DigRect &rect) {
-        if (const std::error_code error = validateDigRect(rect)) {
-            return std::unexpected{error};
-        }
+    Expected<DigResult> digCells(sim::ChunkGrid &grid, const DigRect &rect, const ContentCatalog *const catalog) {
+        PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyDig, validateDigRect(rect));
 
         Array<DigTarget> targets{};
         for (u32 row = 0u; row < rect.m_height; ++row) {
@@ -65,8 +65,19 @@ namespace pP::colony {
                     // is never charged), no budget, no touched chunk.
                     continue;
                 }
+                if (catalog != nullptr) {
+                    const auto *const material = catalog->findMaterial(current->m_element);
+                    if (material == nullptr or
+                        material->m_representation != EMaterialRepresentation::terrain or
+                        material->m_phase != EMaterialPhase::solid) {
+                        PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyDig, std::errc::invalid_argument);
+                    }
+                    if (not material->m_diggable.value_or(false)) {
+                        continue;
+                    }
+                }
                 if (targets.size() >= kMaxDigCells) {
-                    return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
+                    PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyDig, std::errc::invalid_argument);
                 }
                 targets.push_back({x, y, current->m_temperature});
             }

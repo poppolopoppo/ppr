@@ -2,6 +2,7 @@ export module game.colony.digtool;
 
 import engine.core;
 import engine.sim;
+import game.colony.content;
 
 import std;
 
@@ -40,5 +41,7 @@ export namespace pP::colony {
     /// so validation or budget failure changes nothing. Vacuum cells are
     /// no-ops: no write, no budget, no dirt. `setCell` auto-dirties, so no
     /// explicit `markDirty` call is needed. Deterministic: no RNG, no clock.
-    [[nodiscard]] Expected<DigResult> digCells(sim::ChunkGrid &grid, const DigRect &rect);
+    // A generated session checks catalog terrain and leaves protected material intact.
+    [[nodiscard]] Expected<DigResult> digCells(
+        sim::ChunkGrid &grid, const DigRect &rect, const ContentCatalog *catalog = nullptr);
 }

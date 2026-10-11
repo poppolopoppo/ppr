@@ -14,6 +14,17 @@ import std;
 namespace pP::game::tests::detail::movement {
     using namespace colony;
 
+    PPR_UNIT_TEST (build_failure_retains_its_stage_through_later_tick_systems) {
+        ColonyDriver driver;
+        PPR_TEST_ASSERT(not driver.init({.m_seed = 42u, .m_agent_count = 1u}));
+        const auto errand = driver.registry().create();
+        driver.registry().emplace<BuildErrand>(errand, BuildErrand{Footprint{{30u, 30u}, 1u, 1u, 1u}, 0u, 2u});
+        PPR_TEST_ASSERT(driver.update(TimeSpan{std::chrono::seconds{1}} / 60u) == std::errc::invalid_argument);
+        PPR_TEST_ASSERT(std::string_view{driver.stepStage()} == "build");
+        PPR_TEST_ASSERT(driver.tickCount() == 0u);
+        PPR_TEST_ASSERT(not driver.shutdown());
+    };
+
     PPR_UNIT_TEST (moving_interest_materializes_new_terrain_without_edits_and_retires_old_owners) {
         ColonyDriver driver;
         PPR_TEST_ASSERT(not driver.init({.m_seed = 42u, .m_agent_count = 1u}));
@@ -70,7 +81,9 @@ namespace pP::game::tests::detail::movement {
         registry.emplace<BuildErrand>(
             ladder,
             BuildErrand{
-                .m_print = {.m_min = {30u, 60u}, .m_width = 3u, .m_height = 6u, .m_solid = false, .m_ladder = true}});
+                .m_print = {.m_min = {30u, 60u}, .m_width = 3u, .m_height = 6u, .m_solid = false, .m_ladder = true},
+                .m_progress = 18u,
+                .m_total = 18u});
         PPR_TEST_ASSERT(not playerIntent(registry, actor, {0, -1}, intent, kFineCellsPerMetre));
         PPR_TEST_ASSERT(intent.m_climbing and intent.m_velocity_y == -kAgentSpeed);
         pose->m_x = 12.0f;
@@ -133,7 +146,9 @@ namespace pP::game::tests::detail::movement {
         registry.emplace<BuildErrand>(
             ladder,
             BuildErrand{
-                .m_print = {.m_min = {40u, 40u}, .m_width = 60u, .m_height = 30u, .m_solid = false, .m_ladder = true}});
+                .m_print = {.m_min = {40u, 40u}, .m_width = 60u, .m_height = 30u, .m_solid = false, .m_ladder = true},
+                .m_progress = 1800u,
+                .m_total = 1800u});
         PPR_TEST_ASSERT(not driver.setPlayerCommand({0, -1}));
         PPR_TEST_ASSERT(not driver.update(tick));
         PPR_TEST_ASSERT(registry.get<sim::BodyState>(controlled)->m_velocity_y == -kAgentSpeed);
@@ -210,7 +225,9 @@ namespace pP::game::tests::detail::movement {
         registry.emplace<BuildErrand>(
             ladder,
             BuildErrand{
-                .m_print = {.m_min = {40u, 40u}, .m_width = 30u, .m_height = 30u, .m_solid = false, .m_ladder = true}});
+                .m_print = {.m_min = {40u, 40u}, .m_width = 30u, .m_height = 30u, .m_solid = false, .m_ladder = true},
+                .m_progress = 900u,
+                .m_total = 900u});
         PPR_TEST_ASSERT(not driver.stepOne());
         const float climbing_speed = registry.get<sim::BodyState>(entity)->m_velocity_y;
         PPR_TEST_ASSERT(climbing_speed == registry.get<Agent>(entity)->m_speed);
@@ -265,7 +282,8 @@ namespace pP::game::tests::detail::movement {
 namespace pP::game::tests {
     const UnitTest movement = UnitTest::Named("movement") / [](UnitTest::IRun &_) -> void {
         _.recurse(
-            {detail::movement::moving_interest_materializes_new_terrain_without_edits_and_retires_old_owners,
+            {detail::movement::build_failure_retains_its_stage_through_later_tick_systems,
+                detail::movement::moving_interest_materializes_new_terrain_without_edits_and_retires_old_owners,
                 detail::movement::metric_actor_targets_and_ladders_use_fine_cells_without_scaling_speed_or_body,
                 detail::movement::fixed_tick_control_bypasses_planning_and_clears_held_commands,
                 detail::movement::unplanned_actor_is_idle_but_missing_required_state_fails,
