@@ -1205,17 +1205,18 @@ namespace pP {
             PPR_RETURN_ERROR_ON_FAIL(Editor, m_triangle_pass->update(packet.m_delta_time, packet.m_camera));
             PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->update(packet.m_delta_time, packet.m_camera));
             PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->applyStagedFrame(grid_stage));
+            out_result.m_grid_staging_applied = true;
             PPR_RETURN_ERROR_ON_FAIL(Editor, m_triangle_pass->applyStagedFrame(triangle_stage));
         }
-        out_result.m_grid_stage_applied = true;
         out_result.m_grid_staged_tiles = m_grid_pass->stagedTileCount();
         out_result.m_grid_cached_tiles = m_grid_pass->cachedTileCount();
 
-        const auto wait_for_gpu_idle = [&renderer]() -> std::error_code { return renderer.waitOnHost(); };
         {
             const hal::ProfileScope scope_uploads{"App.Editor.PrepareUploads"};
-            PPR_RETURN_ERROR_ON_FAIL(
-                Editor, m_grid_pass->prepareCellUploads(rhi_service->getDevice(), wait_for_gpu_idle, true));
+            const auto published = m_grid_pass->tryPrepareCellUploads(
+                rhi_service->getDevice(), renderer.completedFenceValue());
+            PPR_RETURN_ERROR_ON_FAIL(Editor, published);
+            out_result.m_grid_stage_applied = *published;
         }
 
         // Detached UI submission, bound synchronously on this lane: the

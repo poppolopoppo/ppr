@@ -127,6 +127,9 @@ export namespace pP {
         // verbatim so the owner can classify the slot without consulting
         // the side state the William lane owns.
         bool m_grid_stage_applied{false};
+        // CPU staging succeeded, even when bounded atlas publication is pending.
+        // A reset already performed must not be replayed during that deferral.
+        bool m_grid_staging_applied{false};
         u32 m_grid_staged_tiles{0u};
         u32 m_grid_cached_tiles{0u};
         // Per-slot consumption ack manifest, echoed from the request's

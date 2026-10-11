@@ -240,7 +240,7 @@ namespace pP::colony {
         auto packet = makeInitialPresentationBatch(frame_id, driver, m_next_chunk, count);
         PPR_RETURN_UNEXPECTED_ON_FAIL(SimPresentation, packet);
         PPR_RETURN_UNEXPECTED_ON_FAIL(SimPresentation, buildGridStagedFrame(*packet, stage));
-        stage.m_reset_caches = m_next_chunk == 0u;
+        stage.m_reset_caches = m_next_chunk == 0u and not m_reset_applied;
         m_pending = stage.m_tiles;
         for (auto &tile: m_pending) {
             tile.m_dirty_mask = 0u;
@@ -254,6 +254,9 @@ namespace pP::colony {
             return false;
         }
         m_frame.reset();
+        if (result.m_grid_staging_applied and result.m_grid_reset_caches) {
+            m_reset_applied = true;
+        }
         if (not result.m_presented or not result.m_grid_stage_applied or result.m_error or result.m_dropped) {
             return false;
         }

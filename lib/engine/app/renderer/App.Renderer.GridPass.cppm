@@ -131,7 +131,8 @@ export namespace pP {
         static constexpr u32 kGridTileCacheCapacity{1024u};
         static constexpr u32 kCellsPerChunk{kGridTileEdge * kGridTileEdge};
         static constexpr u32 kCellWordsPerChunk{kCellsPerChunk / 2u};
-        static constexpr u32 kCellAtlasWords{kGridTileCacheCapacity * kCellWordsPerChunk};
+        static constexpr u32 kCellAtlasSlots{2u * kGridTileCacheCapacity};
+        static constexpr u32 kCellAtlasWords{kCellAtlasSlots * kCellWordsPerChunk};
 
         // Indirect-lane vertex count: 6 non-indexed verts per tile quad, the
         // same geometry the CPU-staged drawInstanced path draws.
@@ -267,15 +268,22 @@ export namespace pP {
         // returns the error; the client must full-refresh on recovery.
         [[nodiscard]] std::error_code applyStagedFrame(const GridStagedFrame &stage);
 
-        // Call on the render thread BEFORE either render lane (never within a
-        // render-pass callback). The GPU lane requests all submitted dirty
-        // chunks so atlas readiness does not depend on CPU visibility.
-        // The callback is the renderer-owned graphics-queue idle fence, called
-        // exactly once before writing an atlas read by earlier GPU work; a
-        // clean/flat-only frame never waits. Failure leaves chunks
-        // dirty and both render lanes fail closed until a successful prepare.
+        // Explicit reference fixtures may synchronously prepare visible or all
+        // chunks after the supplied queue-idle proof. Interactive rendering uses
+        // the bounded, nonblocking publication method below.
         [[nodiscard]] std::error_code prepareCellUploads(
             rhi::IDevice &device, std23::function_ref<std::error_code()> wait_for_gpu_idle, bool all_tiles = false);
+
+        // Interactive publication never waits. False retains the previous GPU
+        // table and edit acknowledgments while a bounded cohort is prepared.
+        [[nodiscard]] Expected<bool> tryPrepareCellUploads(
+            rhi::IDevice &device, FenceCompletionValue completed, u32 chunk_budget = 8u);
+        [[nodiscard]] u64 atlasDeferredCount() const noexcept {
+            return m_atlas_deferred_count;
+        }
+        [[nodiscard]] u64 atlasUploadedBytes() const noexcept {
+            return m_atlas_uploaded_bytes;
+        }
 
         // Cache probe: the cached payload for a live entry. Quiescent tiles
         // are served here without touching the GPU. Stale or never-uploaded
@@ -390,6 +398,9 @@ export namespace pP {
         void applyCellPayload_(GridTilePayload &payload, u32 chunk_id) const noexcept;
 
         [[nodiscard]] std::error_code rebuildResidentTable_();
+        [[nodiscard]] Expected<bool> prepareCellCohort_(
+            rhi::IDevice &device, std::span<const u32> chunks, FenceCompletionValue completed, u32 chunk_budget);
+        void cancelCellCohort_() noexcept;
 
         // Drops the whole payload ring without touching a device: unmap only
         // runs when one is supplied (the growth/replacement path), while
@@ -471,13 +482,24 @@ export namespace pP {
         std::array<void *, kTileRingSize> m_indirect_args_mapped{};
         u64 m_indirect_args_capacity = 0u;
 
-        // One persistently mapped shader-readable Upload atlas. Chunk n owns
-        // words [n*8192,(n+1)*8192). Only visible pending chunks are written
-        // after an explicit renderer queue fence. A 4-byte dummy SRV serves
-        // the unchanged flat-only lane without allocating the 32 MiB atlas.
+        // Bounded 64 MiB Upload atlas: 2048 physical slots for 1024 logical
+        // chunks. Published and retained-table slots stay pinned; retired slots
+        // are reusable only after their last reader fence completes. A 4-byte
+        // dummy serves flat-only rendering without allocating the atlas.
         rhi::ComPtr<rhi::IBuffer> m_cell_atlas{};
         void *m_cell_atlas_mapped = nullptr;
         rhi::ComPtr<rhi::IBuffer> m_cell_dummy{};
+        std::array<std::optional<u32>, kGridTileCacheCapacity> m_cell_slots{};
+        std::array<FenceCompletionValue, kCellAtlasSlots> m_cell_slot_values{};
+        std::bitset<kCellAtlasSlots> m_cell_slots_current{};
+        std::bitset<kCellAtlasSlots> m_resident_cell_slots{};
+        std::bitset<kCellAtlasSlots> m_cell_slots_reserved{};
+        Array<u32> m_cell_cohort_chunks{};
+        Array<u32> m_cell_cohort_slots{};
+        u32 m_cell_cohort_cursor{};
+        bool m_cell_publication_deferred{false};
+        u64 m_atlas_deferred_count{};
+        u64 m_atlas_uploaded_bytes{};
 
         struct GridCachedCells {
             std::unique_ptr<std::array<u32, kCellWordsPerChunk>> m_words{};

@@ -38,6 +38,10 @@ executor per frame, sweeps fence completion on the lane, and settles queued work
   and settles on exit (discards unsubmitted as dropped results, final sweep). Destructor stops + joins before the
   channels die. Thread rule: the lane runs only injected callbacks; its sole cross-thread signal is the wake hint
   (`PulseEvent` + `postEmptyEvent`).
+- Grid results distinguish successful CPU staging (`m_grid_staging_applied`)
+  from complete atlas publication (`m_grid_stage_applied`). A staged reset is
+  not repeated while bounded uploads defer; edit acknowledgments still require
+  complete publication and a successful matching settlement.
 - Ownership != affinity: content owners keep their objects (editor-owned passes, client-owned ImGui context,
   game-owned snapshots/translator); the lane is only the fixed execution affinity.
 - Phase 4 surface transactions: `requestSurfaceReconfigure(RenderSurfaceRequest)` owns its value payload,

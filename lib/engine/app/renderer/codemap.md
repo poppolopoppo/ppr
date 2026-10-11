@@ -29,6 +29,15 @@ once; camera motion updates frame constants and visibility outputs. Reference
 draws invalidate shared slots they overwrite, and buffer replacement invalidates
 all slot uploads. Resident-table build/upload counters expose this work.
 
+Interactive atlas publication uses at most 2048 physical chunk slots (64 MiB).
+Published slots and retained-table references stay pinned; retired slots become
+reusable only after their last submitted reader fence completes. Upload batches
+copy at most eight chunks by default and publish complete cohorts together with
+the resident table. Deferral retains the previous terrain and pending edit
+acknowledgments. Identical retries preserve partial progress. Explicit reference
+fixtures still support queue-idle preparation; when needed, that path completes
+all pending chunks so switching preparation APIs cannot pin both slot banks.
+
 ## Design
 
 - **Renderer** (`App.Renderer.cppm/.cpp`): private config (backend-preferred format, image count 3),

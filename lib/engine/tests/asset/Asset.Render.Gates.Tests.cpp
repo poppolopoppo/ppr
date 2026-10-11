@@ -1242,6 +1242,130 @@ namespace pP::tests::detail {
             const auto moved_texel = gateTexel_(*moved_pixels, 32u, 96u);
             PPR_TEST_ASSERT(moved_texel[0] < 80u and moved_texel[1] < 80u);
 
+            // A bounded cohort preserves the previous GPU table until every
+            // replacement is ready, including identical unacknowledged replays.
+            PPR_TEST_ASSERT(not grid.shutdown());
+            PPR_TEST_ASSERT(not grid.initialize(*rhi, *shader, std::filesystem::current_path()));
+            CameraModel cohort_model{};
+            cohort_model.m_camera_mode = ECameraProjection::orthographic;
+            Camera cohort_camera;
+            cohort_camera.updateModel(
+                TimeSpan{}, cohort_model, Viewport{PixelRect{int2{0, 0}, int2{128, 128}}, ViewportLayout{}});
+            PPR_TEST_ASSERT(not grid.update(TimeSpan{}, cohort_camera.getSnapshot()));
+            const auto queue_cells = [&](const u32 chunk, const u16 material) {
+                cell_materials.assign(GridPass::kCellsPerChunk, material);
+                const auto uploaded = grid.requestUpload(
+                    GridUploadRequest{chunk, std::span{&cell_payload, 1u}, std::span<const u16>{cell_materials}});
+                PPR_TEST_ASSERT(uploaded and *uploaded == 1u);
+                return uploaded;
+            };
+            auto cohort_tiles = tiles;
+            for (auto &tile: cohort_tiles) {
+                tile.m_dirty_mask = 1u;
+            }
+            PPR_TEST_ASSERT(not grid.submitTiles(std::span{cohort_tiles.data(), 2u}));
+            for (u32 chunk = 0u; chunk < 2u; ++chunk) {
+                PPR_TEST_ASSERT(queue_cells(chunk, 1u).has_value());
+            }
+            auto published = grid.tryPrepareCellUploads(device, renderer->completedFenceValue(), 2u);
+            PPR_TEST_ASSERT(published and *published);
+            PPR_TEST_ASSERT(not renderer->renderToTexture(
+                targetRef_(target), {DrawSubmission{"old atlas cohort", draw}}, {}, PreRenderCallback{prepare}));
+            grid.notifyFrameSubmitted(renderer->lastSubmittedFenceValue());
+            PPR_TEST_ASSERT(not renderer->waitOnHost());
+            const auto old_pixels = readback_(device, targetRef_(target), 128u);
+            PPR_TEST_ASSERT(old_pixels.has_value());
+            const auto old_texel = gateTexel_(*old_pixels, 32u, 96u);
+            const u64 old_builds = grid.residentTableBuildCount();
+            for (u32 chunk = 0u; chunk < 2u; ++chunk) {
+                PPR_TEST_ASSERT(queue_cells(chunk, 2u).has_value());
+            }
+            const u64 bytes_before = grid.atlasUploadedBytes();
+            published = grid.tryPrepareCellUploads(device, renderer->completedFenceValue(), 1u);
+            PPR_TEST_ASSERT(published and not *published);
+            PPR_TEST_ASSERT(grid.atlasUploadedBytes() == bytes_before + GridPass::kCellWordsPerChunk * sizeof(u32));
+            PPR_TEST_ASSERT(not renderer->renderToTexture(
+                targetRef_(target), {DrawSubmission{"deferred atlas cohort", draw}}, {}, PreRenderCallback{prepare}));
+            grid.notifyFrameSubmitted(renderer->lastSubmittedFenceValue());
+            PPR_TEST_ASSERT(not renderer->waitOnHost());
+            const auto deferred_pixels = readback_(device, targetRef_(target), 128u);
+            PPR_TEST_ASSERT(deferred_pixels.has_value());
+            PPR_TEST_ASSERT(gateTexel_(*deferred_pixels, 32u, 96u) == old_texel);
+            PPR_TEST_ASSERT(grid.residentTableBuildCount() == old_builds);
+            for (u32 chunk = 0u; chunk < 2u; ++chunk) {
+                PPR_TEST_ASSERT(queue_cells(chunk, 2u).has_value());
+            }
+            published = grid.tryPrepareCellUploads(device, renderer->completedFenceValue(), 1u);
+            PPR_TEST_ASSERT(published and *published);
+            PPR_TEST_ASSERT(
+                grid.atlasUploadedBytes() == bytes_before + 2u * GridPass::kCellWordsPerChunk * sizeof(u32));
+            PPR_TEST_ASSERT(not renderer->renderToTexture(
+                targetRef_(target), {DrawSubmission{"published atlas cohort", draw}}, {}, PreRenderCallback{prepare}));
+            grid.notifyFrameSubmitted(renderer->lastSubmittedFenceValue());
+            PPR_TEST_ASSERT(not renderer->waitOnHost());
+            const auto new_pixels = readback_(device, targetRef_(target), 128u);
+            PPR_TEST_ASSERT(new_pixels.has_value());
+            PPR_TEST_ASSERT(gateTexel_(*new_pixels, 32u, 96u) != old_texel);
+            PPR_TEST_ASSERT(grid.atlasSerializationCount() == 0u);
+
+            // Fill both physical generations. A conservative completion frontier
+            // must defer a third generation without copying or waiting; an actual
+            // completion proof then permits reuse of the retired generation.
+            PPR_TEST_ASSERT(not grid.shutdown());
+            PPR_TEST_ASSERT(not grid.initialize(*rhi, *shader, std::filesystem::current_path()));
+            PPR_TEST_ASSERT(not grid.update(TimeSpan{}, cohort_camera.getSnapshot()));
+            Array<GridTileSubmission> atlas_tiles;
+            for (u32 chunk = 0u; chunk < GridPass::kGridTileCacheCapacity; ++chunk) {
+                const i32 x = static_cast<i32>(chunk % 32u) * 128;
+                const i32 y = static_cast<i32>(chunk / 32u) * 128;
+                atlas_tiles.push_back(
+                    GridTileSubmission{
+                        .m_chunk_id = chunk, .m_tile_range = {x, y, x + 128, y + 128}, .m_dirty_mask = 1u});
+            }
+            PPR_TEST_ASSERT(not grid.submitTiles(atlas_tiles));
+            for (const u16 material: {u16{1u}, u16{2u}}) {
+                for (u32 chunk = 0u; chunk < GridPass::kGridTileCacheCapacity; ++chunk) {
+                    PPR_TEST_ASSERT(queue_cells(chunk, material).has_value());
+                }
+                published = grid.tryPrepareCellUploads(device, kFenceValueNone, GridPass::kGridTileCacheCapacity);
+                PPR_TEST_ASSERT(published and *published);
+                PPR_TEST_ASSERT(not renderer->renderToTexture(
+                    targetRef_(target), {DrawSubmission{"full atlas generation", draw}}, {},
+                    PreRenderCallback{prepare}));
+                grid.notifyFrameSubmitted(renderer->lastSubmittedFenceValue());
+                PPR_TEST_ASSERT(not renderer->waitOnHost());
+            }
+            for (u32 chunk = 0u; chunk < GridPass::kGridTileCacheCapacity; ++chunk) {
+                PPR_TEST_ASSERT(queue_cells(chunk, 3u).has_value());
+            }
+            const u64 full_bytes = grid.atlasUploadedBytes();
+            published = grid.tryPrepareCellUploads(device, kFenceValueNone, GridPass::kGridTileCacheCapacity);
+            PPR_TEST_ASSERT(published and not *published);
+            PPR_TEST_ASSERT(grid.atlasUploadedBytes() == full_bytes);
+            published = grid.tryPrepareCellUploads(
+                device, renderer->completedFenceValue(), GridPass::kGridTileCacheCapacity);
+            PPR_TEST_ASSERT(published and *published);
+            // No render preparation between this full publication and a new
+            // edit: retirement of table pins must not depend on frame admission.
+            PPR_TEST_ASSERT(queue_cells(0u, 4u).has_value());
+            published = grid.tryPrepareCellUploads(device, renderer->completedFenceValue(), 1u);
+            PPR_TEST_ASSERT(published and *published);
+            // Mixing explicit reference preparation with an async partial cohort
+            // must clear the deferred state once the whole cohort is ready.
+            PPR_TEST_ASSERT(queue_cells(0u, 5u).has_value());
+            PPR_TEST_ASSERT(queue_cells(1u, 5u).has_value());
+            published = grid.tryPrepareCellUploads(device, renderer->completedFenceValue(), 1u);
+            PPR_TEST_ASSERT(published and not *published);
+            const auto wait_for_idle = [&]() { return renderer->waitOnHost(); };
+            PPR_TEST_ASSERT(not grid.prepareCellUploads(device, wait_for_idle, true));
+            PPR_TEST_ASSERT(queue_cells(2u, 6u).has_value());
+            published = grid.tryPrepareCellUploads(device, renderer->completedFenceValue(), 1u);
+            PPR_TEST_ASSERT(published and *published);
+            PPR_TEST_ASSERT(not renderer->renderToTexture(
+                targetRef_(target), {DrawSubmission{"mixed atlas preparation", draw}}, {}, PreRenderCallback{prepare}));
+            grid.notifyFrameSubmitted(renderer->lastSubmittedFenceValue());
+            PPR_TEST_ASSERT(not renderer->waitOnHost());
+
             // A new legacy pass lifetime must not inherit the prepared metric.
             GridPass::GridStagedFrame metric_stage{};
             metric_stage.m_cell_size_m = 1.0f / 3.0f;

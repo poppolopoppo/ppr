@@ -3205,7 +3205,7 @@ namespace demo {
                 // Non-applied outcome re-arms this world's flags for the
                 // retry; a stale (foreign-generation) result must never
                 // resurrect flags the current world never had armed.
-                if (result.m_grid_reset_caches) {
+                if (result.m_grid_reset_caches and not result.m_grid_staging_applied) {
                     m_grid_reset_pending = true;
                 }
                 if (result.m_grid_full_refresh) {

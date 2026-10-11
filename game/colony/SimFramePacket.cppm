@@ -92,6 +92,7 @@ export namespace pP::colony {
     /// outstanding; clean frames expose only the confirmed prepared prefix.
     class InitialPresentation {
         u32 m_next_chunk{};
+        bool m_reset_applied{};
         std::optional<u64> m_frame{};
         Array<GridTileSubmission> m_visible{};
         Array<GridTileSubmission> m_pending{};

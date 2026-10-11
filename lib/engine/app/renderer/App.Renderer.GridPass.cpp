@@ -201,11 +201,15 @@ namespace pP {
     void GridPass::clearCache() noexcept {
         m_visibility_prepared = false;
         m_resident_table_stale = true;
+        cancelCellCohort_();
+        m_cell_slots.fill(std::nullopt);
+        m_cell_slots_current.reset();
+        m_cell_publication_deferred = false;
         m_tile_cache.clear();
         m_cell_cache.clear();
         // Keep the atlas allocated: its previous contents may still be read
         // by an in-flight draw. A future cell request repopulates its slot
-        // only after prepareCellUploads fences the queue.
+        // only after its last submitted reader fence completes.
     }
 
     std::error_code GridPass::applyStagedFrame(const GridStagedFrame &stage) {
@@ -317,9 +321,20 @@ namespace pP {
         m_upload_count += uploaded;
         m_resident_table_stale = true;
         if (has_cells) {
-            m_cell_cache.insert_or_assign(request.m_chunk_id, GridCachedCells{std::move(packed), true});
+            const auto previous = m_cell_cache.find(request.m_chunk_id);
+            // A deferred frame can replay the same unacknowledged revision.
+            // Keep its partially copied cohort unless the actual cells change.
+            if (previous == m_cell_cache.end() or *previous->second.m_words != *packed) {
+                cancelCellCohort_();
+                m_cell_cache.insert_or_assign(request.m_chunk_id, GridCachedCells{std::move(packed), true});
+            }
         } else {
+            cancelCellCohort_();
             m_cell_cache.erase(request.m_chunk_id);
+            if (request.m_chunk_id < kGridTileCacheCapacity and m_cell_slots[request.m_chunk_id]) {
+                m_cell_slots_current.reset(*m_cell_slots[request.m_chunk_id]);
+                m_cell_slots[request.m_chunk_id].reset();
+            }
         }
         return uploaded;
     }
@@ -374,31 +389,144 @@ namespace pP {
             }
         }
         if (pending.empty()) {
+            m_cell_publication_deferred = not m_cell_cohort_chunks.empty();
             return default_value_v;
         }
 
-        // This is a renderer-owned queue fence, not a pass submission. Never
-        // write a mapped Upload SRV while an earlier frame may still read it.
-        // First-implementation bluntness is kept deliberately: the global
-        // idle serializes dirty frames, so NO overlap is claimed here — the
-        // serialization counter below exposes it for Gate 1 profiling
-        // instead of hiding it behind a "last-reader" story.
+        // Once a reference draw needs an upload, finish the whole pending
+        // cohort. Publishing only visible replacements could pin both banks
+        // and prevent a later interactive cohort from making progress.
+        for (const auto entry: m_cell_cache) {
+            append_pending(entry.first);
+        }
+
+        // Explicit reference fixtures retain their synchronous preparation API.
+        // The interactive lane uses tryPrepareCellUploads instead.
         ++m_atlas_serialization_count;
         PPR_RETURN_ERROR_ON_FAIL(GridPass, wait_for_gpu_idle());
-        PPR_RETURN_ERROR_ON_FAIL(GridPass, ensureCellBuffer_(device, true));
-        if (m_cell_atlas_mapped == nullptr) [[unlikely]] {
-            return std::make_error_code(std::errc::invalid_argument);
+        const auto prepared = prepareCellCohort_(device, pending, m_last_submitted_value, kGridTileCacheCapacity);
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, prepared);
+        m_cell_publication_deferred = not *prepared;
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, *prepared ? std::error_code{} : std::make_error_code(std::errc::no_buffer_space));
+        const bool table_ready = std::ranges::all_of(m_submitted_tiles, [this](const GridTileSubmission &tile) {
+            const auto found = m_cell_cache.find(tile.m_chunk_id);
+            return found == m_cell_cache.end() or not found->second.m_pending;
+        });
+        if (table_ready and m_resident_table_stale) {
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, rebuildResidentTable_());
         }
+        return {};
+    }
+
+    void GridPass::cancelCellCohort_() noexcept {
+        for (const u32 slot: m_cell_cohort_slots) {
+            m_cell_slots_reserved.reset(slot);
+        }
+        m_cell_cohort_chunks.clear();
+        m_cell_cohort_slots.clear();
+        m_cell_cohort_cursor = 0u;
+    }
+
+    Expected<bool> GridPass::tryPrepareCellUploads(
+        rhi::IDevice &device, const FenceCompletionValue completed, const u32 chunk_budget) {
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            GridPass, m_ready ? std::error_code{} : std::make_error_code(std::errc::not_connected));
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            GridPass, chunk_budget > 0u and chunk_budget <= kGridTileCacheCapacity
+                          ? std::error_code{}
+                          : std::make_error_code(std::errc::invalid_argument));
+        Array<u32> pending;
+        for (const auto entry: m_cell_cache) {
+            if (entry.second.m_pending) {
+                pending.push_back(entry.first);
+            }
+        }
+        const auto prepared = prepareCellCohort_(device, pending, completed, chunk_budget);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(GridPass, prepared);
+        if (*prepared and m_resident_table_stale) {
+            // Retire the old table's pins before accepting another cohort,
+            // even if frame admission later rejects the draw. Reader fences
+            // continue protecting every retired physical slot.
+            PPR_RETURN_UNEXPECTED_ON_FAIL(GridPass, rebuildResidentTable_());
+        }
+        m_cell_publication_deferred = not *prepared;
+        if (m_cell_publication_deferred) {
+            ++m_atlas_deferred_count;
+        }
+        return *prepared;
+    }
+
+    Expected<bool> GridPass::prepareCellCohort_(
+        rhi::IDevice &device, const std::span<const u32> chunks, const FenceCompletionValue completed,
+        const u32 chunk_budget) {
+        if (chunks.empty()) {
+            return true;
+        }
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            GridPass, chunks.size() <= kGridTileCacheCapacity ? std::error_code{}
+                                                              : std::make_error_code(std::errc::no_buffer_space));
+        if (m_cell_cohort_chunks.empty()) {
+            Array<u32> slots;
+            slots.reserve(chunks.size());
+            for (u32 slot = 0u; slot < kCellAtlasSlots and slots.size() < chunks.size(); ++slot) {
+                if (not m_cell_slots_current.test(slot) and
+                    not m_resident_cell_slots.test(slot) and
+                    not m_cell_slots_reserved.test(slot) and
+                    slotFenceComplete(completed, m_cell_slot_values[slot])) {
+                    slots.push_back(slot);
+                }
+            }
+            if (slots.size() != chunks.size()) {
+                return false;
+            }
+            // Allocate/copy all CPU state before reserving any physical slot.
+            Array<u32> cohort;
+            cohort.assign(chunks.begin(), chunks.end());
+            m_cell_cohort_chunks = std::move(cohort);
+            m_cell_cohort_slots = std::move(slots);
+            for (const u32 slot: m_cell_cohort_slots) {
+                m_cell_slots_reserved.set(slot);
+            }
+        }
+        PPR_RETURN_UNEXPECTED_ON_FAIL(GridPass, ensureCellBuffer_(device, true));
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            GridPass,
+            m_cell_atlas_mapped != nullptr ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
         auto *const atlas = static_cast<u32 *>(m_cell_atlas_mapped);
-        for (const u32 chunk_id: pending) {
-            GridCachedCells &cells = m_cell_cache.find(chunk_id)->second;
+        const u32 end = std::min<u32>(safe_narrowing(m_cell_cohort_chunks.size()), m_cell_cohort_cursor + chunk_budget);
+        for (; m_cell_cohort_cursor < end; ++m_cell_cohort_cursor) {
+            const u32 chunk_id = m_cell_cohort_chunks[m_cell_cohort_cursor];
+            const u32 slot = m_cell_cohort_slots[m_cell_cohort_cursor];
+            const auto found = m_cell_cache.find(chunk_id);
+            PPR_RETURN_UNEXPECTED_ON_FAIL(
+                GridPass, found != m_cell_cache.end() and found->second.m_pending
+                              ? std::error_code{}
+                              : std::make_error_code(std::errc::state_not_recoverable));
             std::memcpy(
-                atlas + static_cast<std::size_t>(chunk_id) * kCellWordsPerChunk, cells.m_words->data(),
+                atlas + static_cast<std::size_t>(slot) * kCellWordsPerChunk, found->second.m_words->data(),
                 sizeof(u32) * kCellWordsPerChunk);
-            cells.m_pending = false;
+            m_atlas_uploaded_bytes += sizeof(u32) * kCellWordsPerChunk;
         }
+        if (m_cell_cohort_cursor != m_cell_cohort_chunks.size()) {
+            return false;
+        }
+
+        // Publish the complete mapping only after every chunk was copied.
+        for (u32 index = 0u; index < m_cell_cohort_chunks.size(); ++index) {
+            const u32 chunk = m_cell_cohort_chunks[index];
+            const u32 slot = m_cell_cohort_slots[index];
+            if (m_cell_slots[chunk]) {
+                m_cell_slots_current.reset(*m_cell_slots[chunk]);
+            }
+            m_cell_slots[chunk] = slot;
+            m_cell_slots_current.set(slot);
+            m_cell_cache.find(chunk)->second.m_pending = false;
+        }
+        cancelCellCohort_();
+        m_resident_table_stale = true;
         ++m_atlas_write_count;
-        return default_value_v;
+        return true;
     }
 
     std::error_code GridPass::validateCellDraw_(const GridTilePlan &plan) const noexcept {
@@ -413,7 +541,8 @@ namespace pP {
 
     void GridPass::applyCellPayload_(GridTilePayload &payload, const u32 chunk_id) const noexcept {
         if (m_cell_cache.find(chunk_id) != m_cell_cache.end()) {
-            payload.m_cell_word_base = chunk_id * kCellWordsPerChunk;
+            PPR_ASSERT(m_cell_slots[chunk_id].has_value());
+            payload.m_cell_word_base = *m_cell_slots[chunk_id] * kCellWordsPerChunk;
             payload.m_flags = 1u;
         } else {
             payload.m_cell_word_base = 0u;
@@ -434,6 +563,11 @@ namespace pP {
     void GridPass::notifyFrameSubmitted(const FenceCompletionValue submit_value) noexcept {
         m_last_submitted_value = submit_value;
         m_tile_slot_values[m_last_used_slot] = submit_value;
+        for (u32 slot = 0u; slot < kCellAtlasSlots; ++slot) {
+            if (m_cell_slots_current.test(slot) or m_resident_cell_slots.test(slot)) {
+                m_cell_slot_values[slot] = submit_value;
+            }
+        }
     }
 
     void GridPass::reclaimCompleted_(const FenceCompletionValue completed) noexcept {
@@ -1056,6 +1190,10 @@ namespace pP {
         m_atlas_serialization_count = 0u;
         m_atlas_write_count = 0u;
         m_cell_size_m = 1.0f;
+        m_cell_slot_values.fill(kFenceValueNone);
+        m_resident_cell_slots.reset();
+        m_atlas_deferred_count = 0u;
+        m_atlas_uploaded_bytes = 0u;
         m_resident_table.clear();
         m_resident_table_build_count = 0u;
         m_resident_table_upload_count = 0u;
@@ -1091,6 +1229,12 @@ namespace pP {
         std::error_code first_err{};
         m_submitted_tiles.clear();
         m_resident_table_stale = true;
+        cancelCellCohort_();
+        m_cell_slots.fill(std::nullopt);
+        m_cell_slots_current.reset();
+        m_resident_cell_slots.reset();
+        m_cell_slot_values.fill(kFenceValueNone);
+        m_cell_publication_deferred = false;
         std::ignore = m_deferred_releases.drainAll();
         m_last_submitted_value = kFenceValueNone;
         m_tile_slot_values.fill(kFenceValueNone);
@@ -1241,6 +1385,12 @@ namespace pP {
             applyCellPayload_(payload, tile.m_chunk_id);
             payloads.push_back(payload);
         }
+        m_resident_cell_slots.reset();
+        for (const auto &payload: payloads) {
+            if ((payload.m_flags & 1u) != 0u) {
+                m_resident_cell_slots.set(payload.m_cell_word_base / kCellWordsPerChunk);
+            }
+        }
         m_resident_table = std::move(payloads);
         m_visibility_has_cells = has_cells;
         m_resident_table_stale = false;
@@ -1258,7 +1408,7 @@ namespace pP {
                           ? std::error_code{}
                           : std::make_error_code(std::errc::no_buffer_space));
         reclaimCompleted_(context.m_completed_fence_value);
-        if (m_resident_table_stale) {
+        if (m_resident_table_stale and not m_cell_publication_deferred) {
             PPR_RETURN_ERROR_ON_FAIL(GridPass, rebuildResidentTable_());
         }
         const auto &payloads = m_resident_table;

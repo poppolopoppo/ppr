@@ -195,3 +195,23 @@ pass and all 26 frame-fence leaves passed in
 and independent Astra review passed. This records work-count evidence, not a
 measured frame-time improvement or GPU-overlap claim. Versioned atlas and the
 remaining stage 5 resource/publication work are still pending.
+
+Interactive atlas uploads now use 2048 completion-protected physical slots and
+bounded eight-chunk batches, without a queue-idle callback. Complete cohorts
+publish their mappings and resident table together, including when frame
+admission rejects the next draw. Identical unacknowledged revisions retain
+partial progress; spare-slot exhaustion defers without copying or waiting.
+CPU-staging/reset acknowledgment is distinct from publication so loading retries
+do not discard a partial cohort. Explicit reference draws retain synchronous
+preparation, completing all pending chunks when a flush is needed.
+The ASan application/app/asset build passed in
+`out/worldgen-versioned-atlas-build3.log`. All 59 focused app leaves passed in
+`out/worldgen-versioned-atlas-tests.log` (87.13 s), including 26 frame-fence and
+20 packet leaves. Three final shuffled GPU loops passed in
+`out/worldgen-versioned-atlas-gpu2.log` (13.70/14.11/14.30 s), covering retained
+pixels, cohort publication, replay progress, full-slot exhaustion, fence reuse,
+publication without render preparation, and mixed reference preparation.
+Formatting, semantic style and independent Astra review passed. This completes
+the pass-local atlas increment; gameplay/collider edit revision coherence,
+shared rendered contours, textures and transactional GPU world bundles remain
+required stage 5 work. No UI-cadence or total-memory acceptance claim is made.
