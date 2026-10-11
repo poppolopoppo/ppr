@@ -591,3 +591,5 @@ Cancel latency, Inspector interaction, actor traversal, scanout cadence or GPU
 terrain time. Those require separate interaction/capture evidence. A scenario
 PASS covers only its explicit checks; the complete milestone acceptance gates
 remain those in the implementation prompt.
+
+The progress modal shows one bar for the current stage. Terrain composition uses completed generation chunks; candidate graphics staging uses acknowledged staged chunks. Physics preparation, diagnostic capture, GPU readiness, publication, cancellation and cleanup have no measured completion ratio and display an animated indeterminate bar. A full staging count is not a promise that the new world has presented.

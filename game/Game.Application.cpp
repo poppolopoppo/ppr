@@ -1070,30 +1070,37 @@ namespace demo {
                 } else if (m_world_published) {
                     label = "Preparing graphics: waiting for world presentation";
                 }
-                if (view.m_state == colony::EWorldJobState::prepared and not m_world_published) {
+                if (not closing and view.m_state == colony::EWorldJobState::prepared and not m_world_published) {
                     label = activationPending_() ? "Activating new session"
                             : m_candidate_ready  ? "Terrain ready"
                                                  : "Preparing candidate graphics";
                 }
                 ImGui::TextUnformatted(label);
-                if (view.m_state == colony::EWorldJobState::prepared and not m_world_published) {
+                // Report only the current measurable unit of work. Staged
+                // chunks do not measure GPU readiness or final presentation.
+                if (not closing and
+                    view.m_state == colony::EWorldJobState::prepared and
+                    not m_world_published and
+                    m_candidate_next_chunk < sim::kChunkCount) {
                     ImGui::ProgressBar(
                         static_cast<float>(m_candidate_next_chunk) / static_cast<float>(sim::kChunkCount),
                         ImVec2{380.0f, 0.0f}, "Terrain batches staged");
-                }
-                if (m_world_published) {
-                    ImGui::ProgressBar(1.0f, ImVec2{380.0f, 0.0f}, "Graphics preparation");
-                }
-                if (not m_preview_job) {
-                    ImGui::Text("Current stage %u/7", static_cast<unsigned>(view.m_stage) + 1u);
-                }
-                if (view.m_total != 0u and not m_world_published) {
+                    ImGui::Text("%zu / %u chunks staged", m_candidate_next_chunk, sim::kChunkCount);
+                } else if (not closing and
+                           view.m_state == colony::EWorldJobState::generating and
+                           view.m_total != 0u and
+                           not m_world_published) {
                     ImGui::ProgressBar(
                         static_cast<float>(view.m_completed) / static_cast<float>(view.m_total), ImVec2{380.0f, 0.0f},
                         "Current-stage progress");
                     ImGui::Text("%u / %u chunks", view.m_completed, view.m_total);
                 } else {
-                    ImGui::ProgressBar(0.0f, ImVec2{380.0f, 0.0f}, "Current-stage progress: indeterminate");
+                    // ImGui animates negative fractions. Use the injected
+                    // application clock, without inventing a completion ratio.
+                    const double seconds = time::seconds(m_observation_clock->now() - TimePoint{});
+                    const float fraction = terminal ? 0.0f : -1.0f - static_cast<float>(std::fmod(seconds, 1.0));
+                    ImGui::ProgressBar(
+                        fraction, ImVec2{380.0f, 0.0f}, terminal ? "Preparation stopped" : "Working (indeterminate)");
                 }
                 if (view.m_error) {
                     ImGui::TextWrapped("%s", view.m_error.message().c_str());

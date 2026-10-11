@@ -63,3 +63,5 @@ It requires authored sessions and reports incomplete shutdown as failure. See
 [worldgen authoring and diagnostics](../docs/worldgen-content.md) for scope and
 measurement limits. `--worldgen-report` mirrors render-owner observations through
 frame results; neither option reads worker-owned pass state from main.
+
+The world-work modal displays one stage-local progress bar: measured raster/staged chunk counts when available, otherwise an explicitly indeterminate animation driven by the injected application clock. It does not infer overall completion or number preview/cleanup states as generation steps.

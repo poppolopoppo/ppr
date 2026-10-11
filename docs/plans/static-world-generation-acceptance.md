@@ -180,3 +180,9 @@ notice, and normal close with actual zero exit. It did not establish walking or
 body/contact correspondence. The New Game Cancel attempt hit the computer-use
 input guard and is not a pass. Duplicate bars and an invalid stage ordinal were
 observed; their UI correction remains pending. See the progress log for details.
+
+The modal correction subsequently passed dev/Live/Release app.game builds and
+independent review. Native v3 screenshots in `out/worldgen-native-v3` verify a
+single measured bar for terrain and graphics staging, and a labelled
+indeterminate bar for diagnostic preparation. Diagnostic cancellation retained
+the replacement session. Body/contact and held-input traversal remain open.

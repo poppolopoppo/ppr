@@ -841,3 +841,13 @@ The user reported duplicate progress bars. Native preparation also displayed
 "stage 8/7". A focused modal correction follows this validated increment.
 Historical proposal supersession notes and the authoring-guide link were checked
 and already exist in all three affected historical documents / docs index.
+
+The progress modal now has one stage-local bar. Generation and graphics staging
+show measured chunk counts; readiness, presentation and diagnostic preparation
+use an explicitly labelled animated indeterminate bar. The invalid stage ordinal
+was removed. Dev, Live and Release app.game builds passed, as did formatting,
+semantic style and Astra's independent review. Native v3 captures show terrain
+35/1024, graphics staging 952/1024 and indeterminate diagnostic preparation in
+`out/worldgen-native-v3`. New Game published a replacement session; diagnostic
+Cancel retained it with the neutral notice. The native run remains active for
+the remaining acceptance checks; no traversal pass is claimed from key taps.
