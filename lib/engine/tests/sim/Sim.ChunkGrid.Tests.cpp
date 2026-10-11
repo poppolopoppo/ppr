@@ -286,6 +286,52 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(*last_cell == cells[kCellsPerChunk - 1u]);
         };
 
+        PPR_UNIT_TEST (captured_chunk_restores_exact_state_and_exchanges_owned_payload) {
+            ChunkGrid grid{};
+            const ChunkPos pos{1u, 2u};
+            const GlobalCellPos cell = globalOf(pos, {3u, 4u});
+            PPR_TEST_ASSERT(not grid.setCell(cell, Cell{257u, 300.0f}));
+            grid.setActivity(pos, EChunkActivity::quiescent);
+            const auto bounds = grid.dirtyBounds(pos);
+            auto prior = grid.captureChunk(pos);
+            PPR_TEST_ASSERT(prior.has_value() and prior->position() == pos);
+            PPR_TEST_ASSERT(prior->residentCells()->data() != grid.residentCells(pos)->data());
+            PPR_TEST_ASSERT(not grid.setCell(globalOf(pos, {100u, 110u}), Cell{12u, 400.0f}));
+            grid.setActivity(pos, EChunkActivity::active);
+            const Cell *const candidate_storage = grid.residentCells(pos)->data();
+
+            grid.exchangeChunk(*prior);
+            PPR_TEST_ASSERT(grid.dirtyBounds(pos) == bounds);
+            PPR_TEST_ASSERT(grid.activity(pos) == EChunkActivity::quiescent);
+            PPR_TEST_ASSERT(*grid.getCell(cell) == (Cell{257u, 300.0f}));
+            PPR_TEST_ASSERT(*grid.getCell(globalOf(pos, {100u, 110u})) == Cell{});
+            PPR_TEST_ASSERT(prior->residentCells()->data() == candidate_storage);
+            auto candidate = std::move(*prior);
+            grid.exchangeChunk(candidate);
+            PPR_TEST_ASSERT(grid.residentCells(pos)->data() == candidate_storage);
+            PPR_TEST_ASSERT(grid.activity(pos) == EChunkActivity::active);
+            PPR_TEST_ASSERT(*grid.getCell(globalOf(pos, {100u, 110u})) == (Cell{12u, 400.0f}));
+        };
+
+        PPR_UNIT_TEST (captured_chunk_can_restore_clean_nonresidency_without_mutating_other_chunks) {
+            ChunkGrid grid{};
+            const ChunkPos pos{3u, 4u};
+            auto prior = grid.captureChunk(pos);
+            PPR_TEST_ASSERT(prior.has_value() and not prior->residentCells());
+            PPR_TEST_ASSERT(not grid.setCell({1u, 1u}, Cell{7u, 310.0f}));
+            const auto other_bounds = grid.dirtyBounds({0u, 0u});
+            PPR_TEST_ASSERT(not grid.setCell(globalOf(pos, {1u, 1u}), Cell{12u, 280.0f}));
+            grid.exchangeChunk(*prior);
+            PPR_TEST_ASSERT(not grid.isResident(pos) and not grid.dirtyBounds(pos));
+            PPR_TEST_ASSERT(grid.residentChunkCount() == 1u);
+            PPR_TEST_ASSERT(grid.dirtyBounds({0u, 0u}) == other_bounds);
+            PPR_TEST_ASSERT(*grid.getCell({1u, 1u}) == (Cell{7u, 310.0f}));
+            grid.exchangeChunk(*prior);
+            PPR_TEST_ASSERT(grid.isResident(pos) and grid.dirtyBounds(pos).has_value());
+            const auto invalid = grid.captureChunk({kChunksPerEdge, 0u});
+            PPR_TEST_ASSERT(not invalid and invalid.error() == std::errc::result_out_of_range);
+        };
+
         PPR_UNIT_TEST (adopt_rejects_wrong_size_without_mutation) {
             ChunkGrid grid{};
             const ChunkPos chunk{1u, 2u};
@@ -384,6 +430,8 @@ namespace pP::tests {
             detail::Grid::setCells_rejects_wrong_size_without_mutation,
             detail::Grid::setCells_rejects_non_finite_without_mutation,
             detail::Grid::setCells_writes_and_marks_full_bounds,
+            detail::Grid::captured_chunk_restores_exact_state_and_exchanges_owned_payload,
+            detail::Grid::captured_chunk_can_restore_clean_nonresidency_without_mutating_other_chunks,
             detail::Grid::adopt_rejects_wrong_size_without_mutation,
             detail::Grid::adopt_rejects_non_finite_without_mutation,
             detail::Grid::adopt_moves_payload_and_marks_full_bounds,

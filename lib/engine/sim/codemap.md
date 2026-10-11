@@ -192,3 +192,5 @@ capture boundary for an exclusively frozen world. It copies all resident chunks
 row-major, keeps dirt unchanged and preserves the existing v4 ECS/body format;
 ordinary `capture` remains a dirty-rectangle delta. Cancellation yields no partial
 snapshot. Game checkpoint identity stays outside sim.
+
+`ChunkGrid::captureChunk` and allocation-free `exchangeChunk` provide an owned per-chunk rollback/candidate seam, including residency and exact dirty/activity metadata. The caller excludes observation during exchange; ordinary writes remain monotonic in residency.

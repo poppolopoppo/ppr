@@ -282,6 +282,111 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not scene.shutdown());
         };
 
+        PPR_UNIT_TEST (collider_cohort_blocks_steps_and_cancels_partial_replacement) {
+            physics::Scene scene;
+            PPR_TEST_ASSERT(not scene.initialize({}));
+            physics::ChunkColliders colliders;
+            std::array<std::array<u16, 64u>, 2u> cells{};
+            for (auto &chunk: cells) {
+                std::fill_n(chunk.begin(), 8u, u16{1u});
+            }
+            const std::array chunks{
+                physics::ColliderChunkView{{0, 0}, cells[0], true}, physics::ColliderChunkView{{1, 0}, cells[1], true}};
+            const std::array dirty{physics::ColliderChunkPos{0, 0}, physics::ColliderChunkPos{1, 0}};
+            u32 processed{};
+            PPR_TEST_ASSERT(not colliders.rebuildDirtyChunks(scene, chunks, dirty, 8u, 2u, processed));
+            const auto original_left = colliders.chainCount({0, 0});
+            const auto original_right = colliders.chainCount({1, 0});
+            PPR_TEST_ASSERT(original_left != 0u and original_right != 0u);
+            for (auto &chunk: cells) {
+                chunk.fill(0u);
+            }
+
+            PPR_TEST_ASSERT(not colliders.beginCohort(scene));
+            PPR_TEST_ASSERT(colliders.beginCohort(scene) == std::errc::device_or_resource_busy);
+            PPR_TEST_ASSERT(not colliders.rebuildDirtyChunks(scene, chunks, dirty, 8u, 1u, processed));
+            PPR_TEST_ASSERT(processed == 1u and colliders.pendingCount() == 1u);
+            PPR_TEST_ASSERT(scene.step() == std::errc::device_or_resource_busy);
+            PPR_TEST_ASSERT(colliders.commitCohort(scene) == std::errc::operation_not_permitted);
+            PPR_TEST_ASSERT(
+                colliders.materializeForQuery(scene, chunks, {0, 0}, 8u) == std::errc::device_or_resource_busy);
+            PPR_TEST_ASSERT(not colliders.cancelCohort(scene));
+            PPR_TEST_ASSERT(not colliders.cohortPending());
+            PPR_TEST_ASSERT(colliders.chainCount({0, 0}) == original_left);
+            PPR_TEST_ASSERT(colliders.chainCount({1, 0}) == original_right);
+            PPR_TEST_ASSERT(not scene.step());
+
+            PPR_TEST_ASSERT(not colliders.beginCohort(scene));
+            PPR_TEST_ASSERT(not colliders.rebuildDirtyChunks(scene, chunks, dirty, 8u, 1u, processed));
+            PPR_TEST_ASSERT(not colliders.rebuildDirtyChunks(scene, chunks, {}, 8u, 1u, processed));
+            PPR_TEST_ASSERT(scene.step() == std::errc::device_or_resource_busy);
+            PPR_TEST_ASSERT(not colliders.commitCohort(scene));
+            PPR_TEST_ASSERT(colliders.chainCount({0, 0}) == 0u and colliders.chainCount({1, 0}) == 0u);
+            PPR_TEST_ASSERT(not scene.step());
+
+            cells[0][0] = 1u;
+            PPR_TEST_ASSERT(not colliders.beginCohort(scene));
+            PPR_TEST_ASSERT(not colliders.rebuildDirtyChunks(scene, chunks, dirty, 8u, 1u, processed));
+            {
+                physics::ChunkColliders moved{std::move(colliders)};
+                PPR_TEST_ASSERT(not colliders.cohortPending() and moved.cohortPending());
+                PPR_TEST_ASSERT(scene.step() == std::errc::device_or_resource_busy);
+            }
+            PPR_TEST_ASSERT(not scene.step());
+            PPR_TEST_ASSERT(not scene.shutdown());
+        };
+
+        PPR_UNIT_TEST (collider_cohort_replacement_retires_destination_geometry) {
+            physics::Scene scene;
+            PPR_TEST_ASSERT(not scene.initialize({}));
+            physics::ChunkColliders colliders;
+            std::array<u16, 64u> cells{};
+            std::fill_n(cells.begin(), 8u, u16{1u});
+            const std::array chunks{physics::ColliderChunkView{{0, 0}, cells, true}};
+            const std::array dirty{physics::ColliderChunkPos{0, 0}};
+            u32 processed{};
+            PPR_TEST_ASSERT(not colliders.rebuildDirtyChunks(scene, chunks, dirty, 8u, 1u, processed));
+            PPR_TEST_ASSERT(colliders.chainCount({0, 0}) != 0u);
+            PPR_TEST_ASSERT(not colliders.beginCohort(scene));
+            cells.fill(0u);
+            PPR_TEST_ASSERT(not colliders.rebuildDirtyChunks(scene, chunks, dirty, 8u, 1u, processed));
+            colliders = physics::ChunkColliders{};
+            PPR_TEST_ASSERT(not scene.step());
+
+            const std::array<u64, 1u> entities{101u};
+            std::array<physics::BodyDefinition, 1u> bodies{};
+            bodies[0].m_motion = physics::EMotion::dynamic;
+            bodies[0].m_x = 3.5f;
+            bodies[0].m_y = 4.0f;
+            bodies[0].m_half_width = 0.3f;
+            bodies[0].m_half_height = 0.3f;
+            std::array<physics::BodyHandle, 1u> handles{};
+            PPR_TEST_ASSERT(not scene.createBodies(entities, bodies, handles));
+            for (u32 tick = 0u; tick < 120u; ++tick) {
+                PPR_TEST_ASSERT(not scene.step());
+            }
+            PPR_TEST_ASSERT(scene.state(handles[0])->m_y < 0.0f);
+            PPR_TEST_ASSERT(not scene.shutdown());
+        };
+
+        PPR_UNIT_TEST (chunk_chain_update_tokens_reject_stale_completion) {
+            physics::Scene scene;
+            PPR_TEST_ASSERT(not scene.initialize({}));
+            const auto old = scene.beginChunkChainUpdate();
+            PPR_TEST_ASSERT(old.has_value());
+            PPR_TEST_ASSERT(scene.finishChunkChainUpdate(*old + 1u) == std::errc::operation_not_permitted);
+            PPR_TEST_ASSERT(scene.step() == std::errc::device_or_resource_busy);
+            PPR_TEST_ASSERT(not scene.shutdown());
+            PPR_TEST_ASSERT(not scene.initialize({}));
+            const auto current = scene.beginChunkChainUpdate();
+            PPR_TEST_ASSERT(current.has_value() and *current > *old);
+            PPR_TEST_ASSERT(scene.finishChunkChainUpdate(*old) == std::errc::operation_not_permitted);
+            PPR_TEST_ASSERT(scene.step() == std::errc::device_or_resource_busy);
+            PPR_TEST_ASSERT(not scene.finishChunkChainUpdate(*current));
+            PPR_TEST_ASSERT(not scene.step());
+            PPR_TEST_ASSERT(not scene.shutdown());
+        };
+
         PPR_UNIT_TEST (cross_chunk_seam_slide_uses_ghost_vertices) {
             physics::Scene scene;
             physics::ChunkColliders colliders;
@@ -708,6 +813,9 @@ namespace pP::tests {
                 detail::PhysicsSuite::quiescent_dynamic_body_sleeps_and_explicitly_wakes,
                 detail::PhysicsSuite::destroy_and_reset_invalidate_handles_without_aliasing,
                 detail::PhysicsSuite::dig_and_build_replace_chunk_boundaries,
+                detail::PhysicsSuite::collider_cohort_blocks_steps_and_cancels_partial_replacement,
+                detail::PhysicsSuite::collider_cohort_replacement_retires_destination_geometry,
+                detail::PhysicsSuite::chunk_chain_update_tokens_reject_stale_completion,
                 detail::PhysicsSuite::cross_chunk_seam_slide_uses_ghost_vertices,
                 detail::PhysicsSuite::lazy_activation_and_bounded_dirty_slices,
                 detail::PhysicsSuite::ladder_door_vent_sensor_begin_end_are_published,

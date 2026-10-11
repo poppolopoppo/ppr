@@ -38,6 +38,7 @@ namespace pP::physics {
     }
 
     struct Scene::Runtime {
+        u64 m_chunk_chain_update{};
         struct SensorShape {
             b2ShapeId m_shape{b2_nullShapeId};
             u32 m_kind{};
@@ -152,11 +153,36 @@ namespace pP::physics {
         return {};
     }
 
+    Expected<u64> Scene::beginChunkChainUpdate() {
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            Physics, m_runtime ? std::error_code{} : error(std::errc::operation_not_permitted));
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            Physics,
+            not m_runtime->m_chunk_chain_update ? std::error_code{} : error(std::errc::device_or_resource_busy));
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            Physics, m_next_chunk_update != 0u ? std::error_code{} : error(std::errc::value_too_large));
+        m_runtime->m_chunk_chain_update = m_next_chunk_update++;
+        return m_runtime->m_chunk_chain_update;
+    }
+
+    std::error_code Scene::finishChunkChainUpdate(const u64 token) {
+        PPR_RETURN_ERROR_ON_FAIL(
+            Physics, m_runtime and token != 0u and m_runtime->m_chunk_chain_update == token
+                         ? std::error_code{}
+                         : error(std::errc::operation_not_permitted));
+        m_runtime->m_chunk_chain_update = 0u;
+        return {};
+    }
+
     std::error_code Scene::step() {
         const hal::ProfileScope scope{"Physics.Step"};
         if (not m_runtime) {
             return error(std::errc::operation_not_permitted);
         }
+
+        PPR_RETURN_ERROR_ON_FAIL(
+            Physics,
+            not m_runtime->m_chunk_chain_update ? std::error_code{} : error(std::errc::device_or_resource_busy));
 
         m_runtime->m_events.clear();
         m_runtime->m_contacts_drained = false;

@@ -11,6 +11,90 @@ import std;
 namespace pP::physics {
     ChunkColliders::ChunkColliders(const ColliderGridGeometry geometry) noexcept : m_geometry(geometry) {
     }
+    ChunkColliders::~ChunkColliders() noexcept {
+        if (m_cohort) {
+            // Best-effort RAII cancellation; the borrowed Scene outlives this owner.
+            PPR_LOG_WARNING_ON_FAIL(Physics, cancelCohort(*m_cohort->m_scene));
+        }
+    }
+
+    ChunkColliders::ChunkColliders(ChunkColliders &&other) noexcept
+        : m_geometry(other.m_geometry), m_chains(std::move(other.m_chains)), m_shapes(std::move(other.m_shapes)),
+          m_pending(std::move(other.m_pending)), m_cohort(std::exchange(other.m_cohort, std::nullopt)) {
+    }
+
+    ChunkColliders &ChunkColliders::operator=(ChunkColliders &&other) noexcept {
+        if (this != &other) {
+            if (m_cohort) {
+                Scene &scene = *m_cohort->m_scene;
+                // Best-effort replacement cleanup: cancellation restores old
+                // geometry, which must also retire before its tracking is replaced.
+                PPR_LOG_WARNING_ON_FAIL(Physics, cancelCohort(scene));
+                for (const auto &[_, handles]: m_chains) {
+                    for (const ChainHandle handle: handles) {
+                        PPR_LOG_WARNING_ON_FAIL(Physics, scene.destroyChunkChain(handle));
+                    }
+                }
+            }
+            m_geometry = other.m_geometry;
+            m_chains = std::move(other.m_chains);
+            m_shapes = std::move(other.m_shapes);
+            m_pending = std::move(other.m_pending);
+            m_cohort = std::exchange(other.m_cohort, std::nullopt);
+        }
+        return *this;
+    }
+
+    std::error_code ChunkColliders::beginCohort(Scene &scene) {
+        PPR_RETURN_ERROR_ON_FAIL(
+            Physics, not m_cohort and m_pending.empty() ? std::error_code{}
+                                                        : std::make_error_code(std::errc::device_or_resource_busy));
+        // Allocate rollback storage before acquiring the Scene step exclusion.
+        Cohort cohort{m_chains, m_shapes, {}, {}, 0u, &scene};
+        const auto token = scene.beginChunkChainUpdate();
+        PPR_RETURN_ERROR_ON_FAIL(Physics, token);
+        cohort.m_token = *token;
+        m_cohort.emplace(std::move(cohort));
+        return {};
+    }
+
+    std::error_code ChunkColliders::commitCohort(Scene &scene) {
+        PPR_RETURN_ERROR_ON_FAIL(
+            Physics, m_cohort and m_cohort->m_scene == &scene and m_pending.empty()
+                         ? std::error_code{}
+                         : std::make_error_code(std::errc::operation_not_permitted));
+        std::error_code first_error{};
+        for (const ChainHandle handle: m_cohort->m_removed) {
+            PPR_RETAIN_ERROR_ON_FAIL(Physics, first_error, scene.destroyChunkChain(handle));
+        }
+        PPR_RETAIN_ERROR_ON_FAIL(Physics, first_error, scene.finishChunkChainUpdate(m_cohort->m_token));
+        m_cohort.reset();
+        PPR_RETURN_ERROR_ON_FAIL(Physics, first_error);
+        return {};
+    }
+
+    std::error_code ChunkColliders::cancelCohort(Scene &scene) {
+        PPR_RETURN_ERROR_ON_FAIL(
+            Physics, m_cohort and m_cohort->m_scene == &scene
+                         ? std::error_code{}
+                         : std::make_error_code(std::errc::operation_not_permitted));
+        std::error_code first_error{};
+        for (const ChainHandle handle: m_cohort->m_created) {
+            PPR_RETAIN_ERROR_ON_FAIL(Physics, first_error, scene.destroyChunkChain(handle));
+        }
+        m_chains.swap(m_cohort->m_original_chains);
+        m_shapes.swap(m_cohort->m_original_shapes);
+        m_pending.clear();
+        PPR_RETAIN_ERROR_ON_FAIL(Physics, first_error, scene.finishChunkChainUpdate(m_cohort->m_token));
+        m_cohort.reset();
+        PPR_RETURN_ERROR_ON_FAIL(Physics, first_error);
+        return {};
+    }
+
+    bool ChunkColliders::cohortPending() const noexcept {
+        return m_cohort.has_value();
+    }
+
     namespace {
         [[nodiscard]] i32 floorDiv(const i32 value, const i32 divisor) noexcept {
             return value >= 0 ? value / divisor : (value + 1) / divisor - 1;
@@ -368,6 +452,9 @@ namespace pP::physics {
         const u32 edge, const u32 max_chunks, u32 &processed) {
         const hal::ProfileScope scope{"Physics.Colliders.RebuildDirtyChunks"};
         processed = 0u;
+        PPR_RETURN_ERROR_ON_FAIL(
+            Physics, not m_cohort or m_cohort->m_scene == &scene ? std::error_code{}
+                                                                 : std::make_error_code(std::errc::invalid_argument));
         if (edge == 0u or
             edge > 1024u or
             max_chunks == 0u or
@@ -517,6 +604,14 @@ namespace pP::physics {
                     }
                 };
 
+                if (m_cohort) {
+                    PPR_RETURN_ERROR_ON_FAIL(
+                        Physics, m_cohort->m_scene == &scene ? std::error_code{}
+                                                             : std::make_error_code(std::errc::invalid_argument));
+                    m_cohort->m_created.reserve(m_cohort->m_created.size() + lines.size());
+                    m_cohort->m_removed.reserve(m_cohort->m_removed.size() + oldCount);
+                }
+
                 // Phase 1 (create-only): added slots plus changed slots, in
                 // increasing line order. On failure only the chains created
                 // above are destroyed, the preinserted shape node (if any) is
@@ -547,8 +642,11 @@ namespace pP::physics {
                         if (i < common and keep[i]) {
                             continue;
                         }
-                        const std::error_code destroyed = scene.destroyChunkChain(existing->second[i]);
-                        PPR_RETURN_ERROR_ON_FAIL(Physics, destroyed);
+                        if (m_cohort) {
+                            m_cohort->m_removed.push_back(existing->second[i]);
+                        } else {
+                            PPR_RETURN_ERROR_ON_FAIL(Physics, scene.destroyChunkChain(existing->second[i]));
+                        }
                     }
 
                     // Phase 3 (splice, no Scene calls, no allocation): kept
@@ -578,6 +676,11 @@ namespace pP::physics {
                         shapeCommit->second = std::move(snapshot);
                     }
                 }
+                if (m_cohort) {
+                    for (const auto &[_, handle]: created) {
+                        m_cohort->m_created.push_back(handle);
+                    }
+                }
                 committed = true;
                 m_pending.erase(m_pending.begin());
                 ++processed;
@@ -591,6 +694,8 @@ namespace pP::physics {
     std::error_code ChunkColliders::materializeForQuery(
         Scene &scene, const std::span<const ColliderChunkView> chunks, const ColliderChunkPos pos, const u32 edge) {
         const hal::ProfileScope scope{"Physics.Colliders.MaterializeForQuery"};
+        PPR_RETURN_ERROR_ON_FAIL(
+            Physics, not m_cohort ? std::error_code{} : std::make_error_code(std::errc::device_or_resource_busy));
         if (not findChunk(chunks, pos)) {
             return std::make_error_code(std::errc::invalid_argument);
         }

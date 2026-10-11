@@ -202,3 +202,5 @@ caches and delta-reuses the element copies across ticks, and drains
 `m_collider_dirty` only after a successful prepare; it calls
 `Scene::clear()` (bodies go, chains stay) on shutdown before disposing the
 scene.
+
+Chunk collider edit cohorts retain old chains while bounded replacements are prepared. Scene update tokens exclude stepping until commit/cancel; an active cohort borrows a Scene that must outlive the collider manager. Destroy/cancel the cohort before resetting that Scene.

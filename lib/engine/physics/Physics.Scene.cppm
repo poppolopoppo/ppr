@@ -117,6 +117,7 @@ export namespace pP::physics {
         struct Runtime;
         std::unique_ptr<Runtime> m_runtime;
         u64 m_next_serial{1u};
+        u64 m_next_chunk_update{1u};
 
     public:
         struct Desc {
@@ -145,6 +146,11 @@ export namespace pP::physics {
         [[nodiscard]] std::error_code clear() noexcept;
 
         [[nodiscard]] std::error_code step();
+
+        /// A collider cohort may temporarily own old and replacement chains.
+        /// No physics step is admitted until it commits or cancels.
+        [[nodiscard]] Expected<u64> beginChunkChainUpdate();
+        [[nodiscard]] std::error_code finishChunkChainUpdate(u64 token);
 
         [[nodiscard]] std::error_code createBodies(
             std::span<const u64> entities, std::span<const BodyDefinition> definitions, std::span<BodyHandle> handles);

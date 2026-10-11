@@ -146,6 +146,31 @@ export namespace pP::sim {
     public:
         ChunkGrid();
 
+        /// Owned chunk cells and exact dirty/activity/residency state. Used to
+        /// prepare a local edit, restore its prior state, then publish by swap.
+        class CapturedChunk {
+            friend class ChunkGrid;
+            ChunkPos m_pos{};
+            ChunkState m_state{};
+            std::optional<Array<Cell>> m_payload{};
+            bool m_valid{true};
+            CapturedChunk(ChunkPos pos, ChunkState state, std::optional<Array<Cell>> payload);
+
+        public:
+            CapturedChunk(const CapturedChunk &) = delete;
+            CapturedChunk &operator=(const CapturedChunk &) = delete;
+            CapturedChunk(CapturedChunk &&other) noexcept;
+            CapturedChunk &operator=(CapturedChunk &&other) noexcept;
+            [[nodiscard]] ChunkPos position() const noexcept;
+            [[nodiscard]] std::optional<std::span<const Cell>> residentCells() const noexcept;
+        };
+
+        [[nodiscard]] Expected<CapturedChunk> captureChunk(ChunkPos pos) const;
+        /// No allocation or copying. Invalidates borrowed cell spans. Restoring
+        /// a pre-edit capture can restore nonresidency; ordinary writes remain
+        /// monotonic. Caller excludes observation while a candidate is prepared.
+        void exchangeChunk(CapturedChunk &chunk) noexcept;
+
         /// Writes a cell and marks its chunk dirty, materializing the payload on
         /// first write. Returns `result_out_of_range` when `pos` is outside the
         /// world and `invalid_argument` for a non-finite temperature.

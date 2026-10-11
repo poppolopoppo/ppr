@@ -49,9 +49,33 @@ export namespace pP::physics {
         std::map<ColliderChunkPos, std::vector<ChainHandle>> m_chains;
         std::map<ColliderChunkPos, std::vector<StoredChain>> m_shapes;
         std::set<ColliderChunkPos> m_pending;
+        struct Cohort {
+            std::map<ColliderChunkPos, std::vector<ChainHandle>> m_original_chains;
+            std::map<ColliderChunkPos, std::vector<StoredChain>> m_original_shapes;
+            std::vector<ChainHandle> m_created;
+            std::vector<ChainHandle> m_removed;
+            u64 m_token{};
+            Scene *m_scene{}; // Borrowed; the explicit cohort is completed before Scene teardown.
+        };
+        std::optional<Cohort> m_cohort;
+
 
     public:
         explicit ChunkColliders(ColliderGridGeometry geometry = {}) noexcept;
+        ~ChunkColliders() noexcept;
+        ChunkColliders(const ChunkColliders &) = delete;
+        ChunkColliders &operator=(const ChunkColliders &) = delete;
+        ChunkColliders(ChunkColliders &&other) noexcept;
+        ChunkColliders &operator=(ChunkColliders &&other) noexcept;
+
+        /// The caller freezes gameplay before admission. Preparation uses the
+        /// existing chunk budget; Scene::step rejects the entire open cohort.
+        /// Commit/cancel must use the same Scene, which outlives this owner.
+        /// Destruction cancels an uncommitted cohort as best-effort cleanup.
+        [[nodiscard]] std::error_code beginCohort(Scene &scene);
+        [[nodiscard]] std::error_code commitCohort(Scene &scene);
+        [[nodiscard]] std::error_code cancelCohort(Scene &scene);
+        [[nodiscard]] bool cohortPending() const noexcept;
 
         /// Dirty positions are delta notifications; caller resubmits only on a new edit.
         /// Per-chunk replacement is atomic; processed receives number of chunks this call.

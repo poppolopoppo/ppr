@@ -407,3 +407,11 @@ The affected app run-gate/render-lane/grid/sim-packet queue is still running in
 `out/worldgen-preview-app-tests.log`. Full matrix, runtime cadence/peak memory,
 interactive visual checks, coherent edit/collider publication and stage 6/7
 remain open. This is a validated preview increment, not stage 5 completion.
+
+### Atomic edit foundation (2026-10-11)
+
+`ChunkGrid::CapturedChunk` captures one chunk's cells, residency and exact dirty/activity state. Its allocation-free exchange supports preparing a candidate while retaining the old visible grid. Ordinary grid writes retain their existing residency behavior.
+
+`ChunkColliders` can prepare bounded replacement batches under a Scene token. Physics stepping and query materialization are excluded until commit or cancellation; cancellation restores original chains, and destruction cancels before releasing the borrowed Scene. Tokens reject stale completion across Scene lifetimes. This foundation does not yet wire gameplay/GPU edit publication.
+
+Validation: MSVC dev/ASan build of engine.tests.sim, engine.tests.app, game.tests and app.game passed (154 edges). sim/chunk_grid and sim/physics passed all 37 tests in each of three shuffled loops (190.5/185.7/216.9 ms); logs: out/worldgen-edit-foundation-build.log and out/worldgen-edit-foundation-tests.log. Format Check passed eight files; semantic style had zero blocking findings. Independent Astra review passed. IDE inspection remains unavailable as previously recorded. The preview app regression queue also passed 88 tests in each of three loops (353.67/361.03/355.01 s), out/worldgen-preview-app-tests.log. Full matrix and runtime acceptance remain pending.

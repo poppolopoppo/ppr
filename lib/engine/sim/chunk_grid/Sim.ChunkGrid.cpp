@@ -16,6 +16,57 @@ namespace pP::sim {
         m_payloads.resize(kChunkCount);
     }
 
+    PPR_DEFINE_LOG_CATEGORY(GridEdits, info, none)
+    using pP::make_error_code;
+
+    ChunkGrid::CapturedChunk::CapturedChunk(
+        const ChunkPos pos, const ChunkState state, std::optional<Array<Cell>> payload)
+        : m_pos(pos), m_state(state), m_payload(std::move(payload)) {
+    }
+
+    ChunkGrid::CapturedChunk::CapturedChunk(CapturedChunk &&other) noexcept
+        : m_pos(other.m_pos), m_state(other.m_state), m_payload(std::move(other.m_payload)),
+          m_valid(std::exchange(other.m_valid, false)) {
+    }
+
+    ChunkGrid::CapturedChunk &ChunkGrid::CapturedChunk::operator=(CapturedChunk &&other) noexcept {
+        if (this != &other) {
+            m_pos = other.m_pos;
+            m_state = other.m_state;
+            m_payload = std::move(other.m_payload);
+            m_valid = std::exchange(other.m_valid, false);
+        }
+        return *this;
+    }
+
+    ChunkPos ChunkGrid::CapturedChunk::position() const noexcept {
+        PPR_ASSERT(m_valid);
+        return m_pos;
+    }
+
+    std::optional<std::span<const Cell>> ChunkGrid::CapturedChunk::residentCells() const noexcept {
+        PPR_ASSERT(m_valid);
+        if (not m_payload) {
+            return std::nullopt;
+        }
+        return std::span<const Cell>{m_payload->data(), m_payload->size()};
+    }
+
+    Expected<ChunkGrid::CapturedChunk> ChunkGrid::captureChunk(const ChunkPos pos) const {
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            GridEdits,
+            isInsideChunkGrid(pos) ? std::error_code{} : std::make_error_code(std::errc::result_out_of_range));
+        const u32 index = chunkIndexOf(pos);
+        return CapturedChunk{pos, m_states[index], m_payloads[index]};
+    }
+
+    void ChunkGrid::exchangeChunk(CapturedChunk &chunk) noexcept {
+        PPR_ASSERT(chunk.m_valid and isInsideChunkGrid(chunk.m_pos));
+        const u32 index = chunkIndexOf(chunk.m_pos);
+        std::swap(m_states[index], chunk.m_state);
+        m_payloads[index].swap(chunk.m_payload);
+    }
+
     std::error_code ChunkGrid::setCell(const GlobalCellPos pos, const Cell cell) {
         if (not isInsideWorld(pos)) [[unlikely]] {
             return make_error_code(std::errc::result_out_of_range);
