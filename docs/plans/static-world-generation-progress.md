@@ -23,6 +23,9 @@ not a declaration that the seven-stage acceptance criteria have passed.
 - Owned complete numeric result and headless generation integration: final
   terrain reference/boundary checks, explicit-clock phase times,
   canonical terrain/output checksums and material counts.
+- Factory-only prepared-world ownership binds the catalog, reproduction descriptor
+  and numeric result. Colony can adopt this owner without regenerating terrain;
+  interactive driver hookup is still pending.
 
 Allocation failure is fatal. Accepted work drains before borrowed inputs are
 released, including when an allocation exception must be rethrown.
@@ -60,8 +63,19 @@ that its negative case fails specifically on the distance guarantee.
 Astra's read-only source reviews cleared matter, start and the complete numeric
 result scope. The result and CLI builds passed; affected simulation and game
 suites passed (73.17 s and 40.52 s) in `out/worldgen-result-tests.log`.
-Full shipped-profile validation remains unresolved: Frontier exceeded the 300 s
-ASan timeout in `out/worldgen-profile-tests.log`; Hollows is being checked next.
-This is a failed performance/validation gate, not a successful generation report.
+Both shipped-profile CTest checks exceeded the 300 s ASan timeout in
+`out/worldgen-profile-tests.log`. An unrestricted Frontier seed 42 baseline
+completed successfully in `out/worldgen-frontier-baseline.log`: layout 0.005151 s,
+geometry 0.007015 s, raster 382.642785 s, matter 0.048924 s, final validation/hash
+3.502982 s. Terrain checksum `6463df966ba72c4e`, output `23e8a7f54c511a28`;
+64 sites, 17 features, 8 matter regions, 120 spans, 134217728 grid-payload bytes.
+These are Debug ASan observations on the recorded Ryzen 9 3950X/64 GiB machine;
+they do not establish release performance. Hollows and the full corpus remain pending.
+The prepared-owner and nearest-ring increment passed the affected suites in
+`out/worldgen-session-tests2.log` (sim 66.40 s, game 39.58 s), format/style checks
+and Astra's read-only review. Build evidence is `out/worldgen-session-build3.log`.
+MSVC 14.51 emitted an internal compiler error for imported inline lifecycle
+instantiations; defining PreparedWorld/Colony lifecycle members out of line
+resolved it while retaining ordinary RAII ownership.
 Later full acceptance gates remain pending. IDE inspection
 has previously timed out and remains unavailable rather than passed.

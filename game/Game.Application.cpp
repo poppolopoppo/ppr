@@ -61,28 +61,27 @@ namespace demo {
             std::cerr << "[worldgen] Unknown profile: " << settings.m_worldgen_profile << '\n';
             return pP::config::kExitInvalidUsage;
         }
-        auto plan = colony::compileWorldPlan(*catalog, settings.m_worldgen_profile, settings.m_worldgen_seed);
-        if (not plan) {
-            std::cerr << "[worldgen] Numeric plan compilation failed: " << plan.error().message() << '\n';
-            return 1;
-        }
         auto &chunks = parallel::backgroundPool();
-        auto world = sim::generateWorld(std::move(*plan), ITimerClock::steady(), {.m_pool = &chunks});
-        if (not world) {
-            std::cerr << "[worldgen] Generation failed: " << world.error().message() << '\n';
+        auto prepared = colony::prepareWorld(
+            std::move(*catalog), settings.m_worldgen_profile, settings.m_worldgen_seed, ITimerClock::steady(),
+            {.m_pool = &chunks});
+        if (not prepared) {
+            std::cerr << "[worldgen] Generation failed: " << prepared.error().message() << '\n';
             return 1;
         }
+        const auto &content = prepared->catalog();
+        const auto &world = prepared->generated();
         std::println(
             "Worldgen pack {} validated: {} materials, {} biomes, {} features, {} profiles, {} textures; fingerprint {:016x}",
-            catalog->packId(), catalog->materials().size(), catalog->biomes().size(), catalog->features().size(),
-            catalog->worlds().size(), catalog->textures().size(), *catalog->contentFingerprint());
+            content.packId(), content.materials().size(), content.biomes().size(), content.features().size(),
+            content.worlds().size(), content.textures().size(), prepared->descriptor().m_content_fingerprint);
         std::println(
             "Seed {:016x}; terrain {:016x}; output {:016x}; {} sites, {} features, {} matter regions, {} spans; grid payload {} bytes",
-            settings.m_worldgen_seed, world->m_report.m_terrain_checksum, world->m_report.m_output_checksum,
-            world->m_layout.sites().size(), world->m_geometry.m_instances.size(), world->m_matter.m_regions.size(),
-            world->m_matter.m_span_count, world->m_report.m_grid_payload_bytes);
-        for (u32 phase = 0u; phase < world->m_report.m_phase_times.size(); ++phase) {
-            std::println("Phase {}: {:.6f} seconds", phase + 1u, time::seconds(world->m_report.m_phase_times[phase]));
+            settings.m_worldgen_seed, world.m_report.m_terrain_checksum, world.m_report.m_output_checksum,
+            world.m_layout.sites().size(), world.m_geometry.m_instances.size(), world.m_matter.m_regions.size(),
+            world.m_matter.m_span_count, world.m_report.m_grid_payload_bytes);
+        for (u32 phase = 0u; phase < world.m_report.m_phase_times.size(); ++phase) {
+            std::println("Phase {}: {:.6f} seconds", phase + 1u, time::seconds(world.m_report.m_phase_times[phase]));
         }
         return 0;
     }

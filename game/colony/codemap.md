@@ -42,3 +42,10 @@ intents; game code retains validation, transactions, confirmation timing and per
 `ColonySmoke` supplies `runColonySmoke(SmokeOptions)` and verifies deterministic simulation contracts plus offscreen GPU readback. Platform profiler markers remain available for performance investigations.
 
 Candidate initialization accepts explicit generation execution dependencies and a publication epoch. Spawn searches, body preparation and collider chunks check the job context; actor spawning uses the requested seed before publication. Runtime legacy regenerate remains available to explicit fixtures while the interactive client creates a separate new session.
+
+`WorldGen` also exposes a factory-only `PreparedWorld`, owning the immutable
+catalog, reproduction `WorldDescriptor` and complete numeric `GeneratedWorld`.
+Its factories accept an explicit clock and execution dependencies; the path
+overload loads the catalog on its calling worker. `Colony::install` adopts this
+owner without rerasterizing, while `grid()` preserves the existing edit boundary.
+The interactive driver migration to this owner remains in progress.

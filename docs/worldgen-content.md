@@ -425,7 +425,9 @@ components. Components, aggregate searches, spans and regions are capped at
 start contour validation permits at most 262,144 dual cells.
 
 Complete numeric results own the plan, layout, geometry, grid, start, matter
-and report; the injected clock affects timings only. Production job integration
+and report; the injected clock affects timings only. Game factories bind that
+result to an owned catalog and immutable reproduction descriptor; Colony can
+adopt the complete owner without regenerating. Production job integration
 and full allocation/scratch accounting remain pending. The interactive job uses the
 legacy terrain recipe until the complete candidate can pass those validations.
 Third-party dependency cleanup is deferred until all seven implementation stages

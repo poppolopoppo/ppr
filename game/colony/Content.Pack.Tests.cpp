@@ -149,6 +149,37 @@ namespace pP::game::tests::detail::pack {
         PPR_TEST_ASSERT(not sim::validateGenerationRecipe(owned->recipe()));
     };
 
+    PPR_UNIT_TEST (prepared_world_rejects_invalid_inputs_and_cancellation_before_generation) {
+        struct Clock final : ITimerClock {
+            mutable u32 m_calls{};
+            TimePoint now() const noexcept override {
+                ++m_calls;
+                return {};
+            }
+        } clock;
+        Fixture fixture{};
+        config::Diagnostics diagnostics{};
+        auto catalog = fixture.load(diagnostics);
+        PPR_TEST_ASSERT(catalog.has_value());
+        const auto unknown = prepareWorld(*catalog, "unknown", 42u, clock);
+        PPR_TEST_ASSERT(not unknown and clock.m_calls == 0u);
+
+        auto materials = decodeMaterialCatalog(fixture.read("materials.toml"), "materials.toml", diagnostics);
+        PPR_TEST_ASSERT(materials.has_value());
+        const auto incomplete = prepareWorld(std::move(*materials), "frontier", 42u, clock);
+        PPR_TEST_ASSERT(not incomplete and incomplete.error() == std::errc::invalid_argument);
+
+        auto [job_context, cancel] = context::withCancelClause(context::background());
+        cancel(std::make_error_code(std::errc::operation_canceled));
+        const auto cancelled = prepareWorld(
+            std::move(*catalog), "frontier", 0xffffffffffffffffull, clock, {.m_context = job_context.get()});
+        PPR_TEST_ASSERT(not cancelled and cancelled.error() == std::errc::operation_canceled);
+        const auto cancelled_load = prepareWorld(
+            fixture.m_root, "hollows", 42u, clock, diagnostics, {.m_context = job_context.get()});
+        PPR_TEST_ASSERT(not cancelled_load and cancelled_load.error() == std::errc::operation_canceled);
+        PPR_TEST_ASSERT(clock.m_calls == 0u);
+    };
+
     PPR_UNIT_TEST (numeric_streams_ignore_document_order_and_unused_materials) {
         Fixture fixture{};
         config::Diagnostics diagnostics{};
@@ -262,6 +293,7 @@ namespace pP::game::tests {
             _.recurse(
                 {detail::pack::complete_shipped_catalog_is_owned,
                     detail::pack::shipped_profiles_compile_owned_numeric_plans,
+                    detail::pack::prepared_world_rejects_invalid_inputs_and_cancellation_before_generation,
                     detail::pack::numeric_streams_ignore_document_order_and_unused_materials,
                     detail::pack::complete_identity_ignores_order_comments_and_source_paths,
                     detail::pack::identity_changes_for_every_definition_kind_and_texture_bytes,

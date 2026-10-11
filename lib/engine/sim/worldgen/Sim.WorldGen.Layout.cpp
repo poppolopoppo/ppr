@@ -188,21 +188,40 @@ namespace pP::sim {
         const i32 centre_x = bin(x_m), centre_y = bin(y_m);
         double best_distance = (std::numeric_limits<double>::max)();
         u32 best = (std::numeric_limits<u32>::max)();
+        const auto visit = [&](const i32 x, const i32 y) {
+            for (i32 s = m_heads[static_cast<u32>(y) * kBinsPerEdge + static_cast<u32>(x)]; s >= 0;
+                s = m_next[static_cast<u32>(s)]) {
+                const double distance = distanceSquared(m_sites[static_cast<u32>(s)], x_m, y_m);
+                if (distance < best_distance or (distance == best_distance and static_cast<u32>(s) < best)) {
+                    best = static_cast<u32>(s);
+                    best_distance = distance;
+                }
+            }
+        };
         for (i32 radius = 0; radius < static_cast<i32>(kBinsPerEdge); ++radius) {
             const i32 low_x = std::max(0, centre_x - radius), high_x = std::min(63, centre_x + radius);
             const i32 low_y = std::max(0, centre_y - radius), high_y = std::min(63, centre_y + radius);
-            for (i32 y = low_y; y <= high_y; ++y) {
-                for (i32 x = low_x; x <= high_x; ++x) {
-                    if (radius > 0 and std::max(std::abs(x - centre_x), std::abs(y - centre_y)) != radius) {
-                        continue;
+            // Enumerate only the original Chebyshev ring, in row-major order.
+            // Clipping a square's perimeter would revisit world-edge bins.
+            if (radius == 0) {
+                visit(centre_x, centre_y);
+            } else {
+                if (centre_y - radius >= 0) {
+                    for (i32 x = low_x; x <= high_x; ++x) {
+                        visit(x, centre_y - radius);
                     }
-                    for (i32 s = m_heads[static_cast<u32>(y) * kBinsPerEdge + static_cast<u32>(x)]; s >= 0;
-                        s = m_next[static_cast<u32>(s)]) {
-                        const double distance = distanceSquared(m_sites[static_cast<u32>(s)], x_m, y_m);
-                        if (distance < best_distance or (distance == best_distance and static_cast<u32>(s) < best)) {
-                            best = static_cast<u32>(s);
-                            best_distance = distance;
-                        }
+                }
+                for (i32 y = std::max(0, centre_y - radius + 1); y <= std::min(63, centre_y + radius - 1); ++y) {
+                    if (centre_x - radius >= 0) {
+                        visit(centre_x - radius, y);
+                    }
+                    if (centre_x + radius <= 63) {
+                        visit(centre_x + radius, y);
+                    }
+                }
+                if (centre_y + radius <= 63) {
+                    for (i32 x = low_x; x <= high_x; ++x) {
+                        visit(x, centre_y + radius);
                     }
                 }
             }
