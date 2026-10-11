@@ -55,6 +55,24 @@ export namespace pP {
     };
     static_assert(sizeof(GridTerrainVisual) == 16u);
     static_assert(alignof(GridTerrainVisual) == 16u);
+
+    enum class EGridDiagnosticMode : u32 {
+        textured,
+        material,
+        biome,
+        temperature,
+        initial_matter
+    };
+    struct alignas(16) GridDiagnosticColor {
+        u32 m_color_rgba{};
+        float m_fill_height_fine{4096.0f};
+        u32 m_reserved[2]{};
+    };
+    static_assert(sizeof(GridDiagnosticColor) == 16u);
+    static_assert(alignof(GridDiagnosticColor) == 16u);
+    static_assert(PPR_OFFSETOF(GridDiagnosticColor, m_color_rgba) == 0u);
+    static_assert(PPR_OFFSETOF(GridDiagnosticColor, m_fill_height_fine) == 4u);
+    static_assert(PPR_OFFSETOF(GridDiagnosticColor, m_reserved) == 8u);
     static_assert(PPR_OFFSETOF(GridTerrainVisual, m_material_id) == 0u);
     static_assert(PPR_OFFSETOF(GridTerrainVisual, m_color_rgba) == 4u);
     static_assert(PPR_OFFSETOF(GridTerrainVisual, m_texture_index) == 8u);
@@ -238,9 +256,12 @@ export namespace pP {
             u32 m_chunk_id = 0u;
             GridTilePayload m_payload{};
             Array<u16> m_cell_materials{};
+            Array<u16> m_diagnostic_indices{};
         };
 
         struct GridStagedFrame {
+            // Render the retained grid and actors while the client session is frozen.
+            bool m_retain_content{false};
             float m_cell_size_m{1.0f};
             bool m_has_catalog{false};
             u32 m_boundary_material_id{1u};
@@ -249,6 +270,10 @@ export namespace pP {
             Array<image::ImageAsset> m_terrain_images{};
             Array<GridTileSubmission> m_tiles{};
             Array<GridStagedUpload> m_uploads{};
+            EGridDiagnosticMode m_diagnostic_mode{EGridDiagnosticMode::textured};
+            u64 m_diagnostic_revision{};
+            Array<GridDiagnosticColor> m_diagnostic_palette{};
+            bool m_initial_matter_valid{true};
             // Dropped before staging: translator reset / regeneration /
             // fail-closed recovery. The client sets this; the lane applies
             // the clear so regeneration recovery never edits pass state
@@ -391,6 +416,9 @@ export namespace pP {
         std::error_code bindSurfaceBuffers_(rhi::IDevice &device, rhi::ShaderCursor &cursor, bool retained_table);
         [[nodiscard]] Expected<bool> prepareTerrainVisuals_(rhi::IDevice &device, u32 image_budget);
         [[nodiscard]] std::error_code ensureTerrainSampler_(rhi::IDevice &device);
+        [[nodiscard]] std::error_code stageDiagnostic_(const GridStagedFrame &stage);
+        [[nodiscard]] std::error_code appendDiagnostic_(const GridStagedUpload &upload);
+        [[nodiscard]] Expected<bool> prepareDiagnostic_(rhi::IDevice &device, u32 chunk_budget);
 
         struct GridCachedPipeline {
             rhi::ComPtr<rhi::IRenderPipeline> m_pipeline{};
@@ -560,6 +588,15 @@ export namespace pP {
         // state. Candidate preparation can exchange this value on the owner
         // lane without moving pass programs, completion rings or the camera.
         struct WorldResources {
+            EGridDiagnosticMode m_diagnostic_mode{EGridDiagnosticMode::textured};
+            u64 m_diagnostic_revision{};
+            Array<GridDiagnosticColor> m_diagnostic_palette{};
+            std::array<Array<u32>, kGridTileCacheCapacity> m_diagnostic_words{};
+            u32 m_diagnostic_cursor{};
+            bool m_initial_matter_valid{true};
+            rhi::ComPtr<rhi::IBuffer> m_diagnostic_atlas{};
+            void *m_diagnostic_mapped{};
+            rhi::ComPtr<rhi::IBuffer> m_diagnostic_colors{};
             bool m_candidate_uploads_complete{true};
             bool m_upload_submission_pending{false};
             bool m_visuals_set{false};

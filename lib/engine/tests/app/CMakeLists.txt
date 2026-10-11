@@ -64,6 +64,7 @@ target_sources(engine.tests.app
         ${CMAKE_SOURCE_DIR}/game/colony/Agents.cpp
         ${CMAKE_SOURCE_DIR}/game/colony/Buildings.cpp
         ${CMAKE_SOURCE_DIR}/game/colony/SimFramePacket.cpp
+        ${CMAKE_SOURCE_DIR}/game/colony/SimFramePacket.Diagnostics.cpp
     )
 
 setup_ppr_project(engine.tests.app

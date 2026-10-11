@@ -36,6 +36,7 @@ target_sources(app.game
         colony/DigTool.cpp
         colony/Pathfinding.cpp
         colony/SimFramePacket.cpp
+        colony/SimFramePacket.Diagnostics.cpp
         colony/WorldGen.cpp
         colony/WorldGen.Plan.cpp
         colony/WorldJob.cpp
@@ -141,6 +142,7 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
             colony/WorldGen.cpp
             colony/WorldGen.Plan.cpp
             colony/SimFramePacket.cpp
+            colony/SimFramePacket.Diagnostics.cpp
             colony/WorldJob.cpp
             colony/WorldJob.Tests.cpp
             colony/Movement.Tests.cpp

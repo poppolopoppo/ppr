@@ -679,7 +679,8 @@ namespace pP::colony {
             ImGui::TextDisabled("A-number is the key's low 32 bits; selection holds the whole 64-bit key.");
         }
 
-        void drawWorldGeneration_(const ColonyDriver &driver, std::optional<ColonyIntent> &intent) {
+        void drawWorldGeneration_(
+            const ColonyDriver &driver, ColonyUiState &state, std::optional<ColonyIntent> &intent) {
             const auto *const prepared = driver.preparedWorld();
             if (prepared == nullptr or not ImGui::CollapsingHeader("World generation")) {
                 return;
@@ -706,6 +707,21 @@ namespace pP::colony {
             ImGui::TextDisabled(
                 driver.initialMatterBaselineValid() ? "Initial matter: unsimulated baseline"
                                                     : "Initial matter preview invalidated by terrain edits");
+            constexpr std::array<const char *, 5u> modes{
+                "Textured terrain", "Material IDs", "Biomes", "Temperature", "Initial matter (unsimulated)"};
+            int selected = static_cast<int>(state.m_preview_mode);
+            if (ImGui::Combo("Preview", &selected, modes.data(), static_cast<int>(modes.size()))) {
+                state.m_preview_mode = static_cast<EGridDiagnosticMode>(selected);
+                intent = ColonyIntent{.m_kind = EColonyIntent::select_preview, .m_arg = static_cast<u32>(selected)};
+            }
+            if (state.m_preview_mode == EGridDiagnosticMode::temperature) {
+                ImGui::InputFloat("Minimum K", &state.m_temperature_min_k);
+                ImGui::InputFloat("Maximum K", &state.m_temperature_max_k);
+                if (ImGui::Button("Apply temperature range")) {
+                    intent = ColonyIntent{
+                        .m_kind = EColonyIntent::select_preview, .m_arg = static_cast<u32>(state.m_preview_mode)};
+                }
+            }
             if (ImGui::Button("Reload content and start new game")) {
                 intent = ColonyIntent{.m_kind = EColonyIntent::regenerate};
             }
@@ -1025,7 +1041,7 @@ namespace pP::colony {
             if (state.m_tab == EColonyPanelTab::performance) {
                 drawPerformance_(view);
             } else {
-                drawWorldGeneration_(driver, intent);
+                drawWorldGeneration_(driver, state, intent);
                 drawColonySection_(driver, view, shortcuts, state, intent);
             }
             ImGui::EndChild();

@@ -374,3 +374,36 @@ passed three shuffled loops (139.2/133.9/129.5 ms) in
 independent Astra review passed after correcting a cleanup race, test
 registration and ready-cancellation consistency. IDE inspection remains
 unavailable from the earlier timed-out inspection attempt; no new pass claimed.
+
+Diagnostic preview implementation is under validation. Material, biome,
+temperature and initial-matter modes use the existing grid pass and owned world
+candidate transaction, with a monotonic diagnostic revision. Biomes deliberately
+cover nominal empty cells; temperature follows the solid contour winner; initial
+matter clips nominal cells by fill height and the complementary empty contour.
+A changed terrain baseline disables the initial-matter preview. Diagnostic
+palette/index resources retire with their owning world bundle.
+
+Preview preparation freezes the driver owner on the existing coordinator and
+coalesces deferred render acknowledgments by chunk/revision until the owner is
+returned. Frozen frames explicitly retain both grid and actor content while UI
+and camera updates continue. Mode/range settings commit only on activation and
+restore on failure/cancellation. The current implementation uploads a complete
+replacement terrain bundle for a mode switch; its preparation and peak memory
+costs still need acceptance measurements. It is not a palette-only switch.
+
+MSVC 14.51 crashed internally when this sim-packet implementation called
+PreparedWorld accessors directly. The coordinator now supplies the immutable
+GeneratedWorld metadata explicitly; this avoids the compiler failure without
+changing generation or metadata ownership. ASan application/app/game targets
+build; focused GPU readback and lifecycle validation are in progress. No phase
+completion or new acceptance pass is claimed yet.
+
+Focused diagnostic GPU readback passed three shuffled loops (25.05/23.73/25.86 s
+including fixture lifetime) in `out/worldgen-preview-gpu-tests.log`; world-job
+coverage passed three loops in `out/worldgen-preview-job-tests.log`, including
+preview failure and queued-cancel owner return. Independent Astra follow-up
+review passes; format Check passes and semantic style has zero blocking findings.
+The affected app run-gate/render-lane/grid/sim-packet queue is still running in
+`out/worldgen-preview-app-tests.log`. Full matrix, runtime cadence/peak memory,
+interactive visual checks, coherent edit/collider publication and stage 6/7
+remain open. This is a validated preview increment, not stage 5 completion.

@@ -18,7 +18,7 @@ Game-owned colony simulation, tools, presentation translation and headless workl
 | `game.colony.buildings` | `Buildings.cppm/.cpp` | Footprints, progressive build/demolition errands, component registration |
 | `game.colony.pathfinding` | `Pathfinding.cppm/.cpp` | Bounded resumable BFS over vacuum cells |
 | `game.colony.digtool` | `DigTool.cppm/.cpp` | Rectangular dig edits |
-| `game.colony.sim_packet` | `SimFramePacket.cppm/.cpp` | Owned simulation snapshots, bounded initial presentation batches, confirmed-prefix cursor, coherence checks and grid staging |
+| `game.colony.sim_packet` | `SimFramePacket.cppm/.cpp`, `SimFramePacket.Diagnostics.cpp` | Frozen diagnostic maps, owned simulation snapshots, bounded initial presentation batches, confirmed-prefix cursor, coherence checks and grid staging |
 | `game.colony.translator` | `ColonyTranslator.cppm/.cpp` | Resident-chunk translation/cache revisions, presentation invalidation |
 | `game.colony.panel` | `ColonyPanel.cppm/.cpp` | ImGui views/state/intents; no renderer/service resolution |
 | `game.colony.smoke` | `ColonySmoke.cppm/.cpp` | Headless readback smoke |

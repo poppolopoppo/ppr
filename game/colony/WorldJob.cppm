@@ -62,9 +62,12 @@ export namespace pP::colony {
         /// Transfers ownership only on success. Until takeCaptured(), all live
         /// inspection, ticks, tools and render acknowledgments must be deferred.
         [[nodiscard]] std::error_code requestCapture(std::unique_ptr<ColonyDriver> &frozen, Capture capture);
+        [[nodiscard]] std::error_code requestPreview(
+            std::unique_ptr<ColonyDriver> &frozen, EGridDiagnosticMode mode, float temperature_min_k,
+            float temperature_max_k);
         /// Returns the frozen owner after success, failure or cancellation.
         /// The caller restores pause state and neutral input before resuming.
-        [[nodiscard]] std::unique_ptr<ColonyDriver> takeCaptured();
+        [[nodiscard]] std::unique_ptr<ColonyDriver> takeCaptured(bool retain_presentation = false);
         void cancel() noexcept;
         /// Non-waiting admission and readiness polling. Initial admission is
         /// withheld until a successful loading-screen presentation is observed.

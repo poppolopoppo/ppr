@@ -1394,6 +1394,152 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(legacy_texel[0] > 160u and legacy_texel[1] < 80u);
         };
 
+        PPR_UNIT_TEST (grid_diagnostics_cover_empty_biomes_and_preserve_terrain_modes) {
+            const auto rhi = SharedGpu::rhiService();
+            const auto shader = SharedGpu::shaderService();
+            Renderer *const renderer = SharedGpu::renderer();
+            PPR_TEST_ASSERT(rhi.isValid() and shader.isValid() and renderer != nullptr);
+            rhi::IDevice &device = rhi->getDevice();
+            GridPass grid;
+            PPR_TEST_ASSERT(not grid.initialize(*rhi, *shader, std::filesystem::current_path()));
+            PPR_DEFER {
+                std::ignore = renderer->waitOnHost();
+                std::ignore = grid.shutdown();
+            };
+            const auto target = makeRenderTarget_(device, 128u);
+            PPR_TEST_ASSERT(target.has_value());
+            CameraModel model{};
+            model.m_camera_mode = ECameraProjection::orthographic;
+            model.m_origin = float3{0.0f, 0.0f, 0.0f};
+            model.m_ortho_scale = 1.0f;
+            Camera camera;
+            camera.updateModel(TimeSpan{}, model, Viewport{PixelRect{int2{0, 0}, int2{128, 128}}, ViewportLayout{}});
+            PPR_TEST_ASSERT(not grid.update(TimeSpan{}, camera.getSnapshot()));
+            const auto prepare = [&](const PreRenderContext &context) { return grid.prepareGpuVisibility(context); };
+            const auto draw = [&](const DrawContext &context) { return grid.renderGpuIndirect(context); };
+            const auto render = [&] {
+                PPR_TEST_ASSERT(not renderer->renderToTexture(
+                    targetRef_(target), {DrawSubmission{"candidate world", draw}}, {}, PreRenderCallback{prepare}));
+                grid.notifyFrameSubmitted(renderer->lastSubmittedFenceValue());
+                PPR_TEST_ASSERT(not renderer->waitOnHost());
+                const auto pixels = readback_(device, targetRef_(target), 128u);
+                PPR_TEST_ASSERT(pixels.has_value());
+                return *pixels;
+            };
+            GridPass::GridStagedFrame source{};
+            source.m_content_fingerprint = 77u;
+            source.m_has_catalog = true;
+            source.m_terrain_visuals.push_back({1u, 0x0000ffffu, 0xffffffffu, 1.0f});
+            source.m_tiles.push_back(
+                GridTileSubmission{.m_chunk_id = 0u, .m_tile_range = {0, 0, 128, 128}, .m_dirty_mask = 1u});
+            GridPass::GridStagedUpload upload{};
+            upload.m_cell_materials.resize(GridPass::kCellsPerChunk, 0u);
+            upload.m_diagnostic_indices.resize(GridPass::kCellsPerChunk, 1u);
+            source.m_uploads.push_back(std::move(upload));
+            source.m_diagnostic_mode = EGridDiagnosticMode::biome;
+            source.m_diagnostic_palette = {{}, {0xff0000ffu}};
+            source.m_diagnostic_revision = 10u;
+            auto invalid = source;
+            invalid.m_diagnostic_revision = 11u;
+            PPR_TEST_ASSERT(grid.stageWorldCandidate(10u, 20u, invalid) == std::errc::invalid_argument);
+            PPR_TEST_ASSERT(not grid.stageWorldCandidate(10u, 20u, source));
+            auto ready = grid.advanceWorldCandidate(device, renderer->completedFenceValue(), 8u);
+            PPR_TEST_ASSERT(ready and not *ready);
+            PPR_TEST_ASSERT(grid.activateWorldCandidate(10u, 20u, 77u) == std::errc::operation_not_permitted);
+            for (u32 batch = 1u; batch < 128u; ++batch) {
+                ready = grid.advanceWorldCandidate(device, renderer->completedFenceValue(), 8u);
+                PPR_TEST_ASSERT(ready and (*ready == (batch == 127u)));
+            }
+            PPR_TEST_ASSERT(not grid.activateWorldCandidate(10u, 20u, 77u));
+            auto pixels = render();
+            auto color = gateTexel_(pixels, 64u, 64u);
+            PPR_TEST_ASSERT(color[0] > 240u and color[1] < 10u);
+
+            // Temperature follows the sampled solid cell, while the same
+            // material can have a different diagnostic color.
+            source.m_diagnostic_mode = EGridDiagnosticMode::temperature;
+            source.m_diagnostic_revision = 11u;
+            source.m_diagnostic_palette[1].m_color_rgba = 0x00ff00ffu;
+            std::ranges::fill(source.m_uploads[0].m_cell_materials, u16{1u});
+            PPR_TEST_ASSERT(not grid.stageWorldCandidate(11u, 20u, source));
+            for (u32 batch = 0u; batch < 128u; ++batch) {
+                ready = grid.advanceWorldCandidate(device, renderer->completedFenceValue(), 8u);
+                PPR_TEST_ASSERT(ready.has_value());
+            }
+            PPR_TEST_ASSERT(*ready);
+            PPR_TEST_ASSERT(not grid.activateWorldCandidate(11u, 20u, 77u));
+            pixels = render();
+            color = gateTexel_(pixels, 64u, 64u);
+            PPR_TEST_ASSERT(color[1] > 240u and color[0] < 10u);
+
+            source.m_diagnostic_mode = EGridDiagnosticMode::material;
+            source.m_diagnostic_revision = 12u;
+            source.m_diagnostic_palette.resize(65536u);
+            source.m_diagnostic_palette[1].m_color_rgba = 0x0000ffffu;
+            source.m_uploads[0].m_diagnostic_indices.clear();
+            PPR_TEST_ASSERT(not grid.stageWorldCandidate(12u, 20u, source));
+            ready = grid.advanceWorldCandidate(device, renderer->completedFenceValue(), 8u);
+            PPR_TEST_ASSERT(ready and *ready);
+            PPR_TEST_ASSERT(not grid.activateWorldCandidate(12u, 20u, 77u));
+            pixels = render();
+            color = gateTexel_(pixels, 64u, 64u);
+            PPR_TEST_ASSERT(color[2] > 240u and color[0] < 10u);
+
+            // Initial matter occupies nominal empty cells below the authored
+            // fill height. Editing invalidates this baseline immediately.
+            source.m_diagnostic_mode = EGridDiagnosticMode::initial_matter;
+            source.m_diagnostic_revision = 13u;
+            source.m_diagnostic_palette = {{}, {0xff0000ffu, 64.0f}};
+            std::ranges::fill(source.m_uploads[0].m_cell_materials, u16{0u});
+            source.m_uploads[0].m_diagnostic_indices.resize(GridPass::kCellsPerChunk, 1u);
+            PPR_TEST_ASSERT(not grid.stageWorldCandidate(13u, 20u, source));
+            for (u32 batch = 0u; batch < 128u; ++batch) {
+                ready = grid.advanceWorldCandidate(device, renderer->completedFenceValue(), 8u);
+                PPR_TEST_ASSERT(ready.has_value());
+            }
+            PPR_TEST_ASSERT(*ready);
+            PPR_TEST_ASSERT(not grid.activateWorldCandidate(13u, 20u, 77u));
+            pixels = render();
+            const auto below = gateTexel_(pixels, 64u, 96u);
+            const auto above = gateTexel_(pixels, 64u, 32u);
+            PPR_TEST_ASSERT(below[0] > 240u and below[1] < 10u);
+            PPR_TEST_ASSERT(above[0] < 80u);
+            GridPass::GridStagedFrame edited{};
+            edited.m_tiles = source.m_tiles;
+            edited.m_has_catalog = source.m_has_catalog;
+            edited.m_content_fingerprint = source.m_content_fingerprint;
+            edited.m_terrain_visuals = source.m_terrain_visuals;
+            edited.m_initial_matter_valid = false;
+            PPR_TEST_ASSERT(not grid.applyStagedFrame(edited));
+            pixels = render();
+            color = gateTexel_(pixels, 64u, 96u);
+            PPR_TEST_ASSERT(color[0] < 80u);
+            source.m_diagnostic_revision = 14u;
+            source.m_diagnostic_palette[1].m_fill_height_fine = 4096.0f;
+            source.m_uploads[0].m_cell_materials[64u * 128u + 64u] = 1u;
+            PPR_TEST_ASSERT(not grid.stageWorldCandidate(14u, 20u, source));
+            for (u32 batch = 0u; batch < 128u; ++batch) {
+                ready = grid.advanceWorldCandidate(device, renderer->completedFenceValue(), 8u);
+                PPR_TEST_ASSERT(ready.has_value());
+            }
+            PPR_TEST_ASSERT(*ready);
+            PPR_TEST_ASSERT(not grid.activateWorldCandidate(14u, 20u, 77u));
+            model.m_origin = float3{63.5f, 63.5f, 0.0f};
+            model.m_ortho_scale = 1.0f / 128.0f;
+            camera.updateModel(TimeSpan{}, model, Viewport{PixelRect{int2{0, 0}, int2{128, 128}}, ViewportLayout{}});
+            PPR_TEST_ASSERT(not grid.update(TimeSpan{}, camera.getSnapshot()));
+            pixels = render();
+            bool mixed = false;
+            for (u32 y = 0u; y < 128u; ++y) {
+                for (u32 x = 0u; x < 128u; ++x) {
+                    const auto edge = gateTexel_(pixels, x, y);
+                    mixed = mixed or (edge[0] > 40u and edge[2] > 40u and edge[1] < 8u);
+                }
+            }
+            PPR_TEST_ASSERT(mixed);
+            PPR_TEST_ASSERT(grid.atlasSerializationCount() == 0u);
+        };
+
         PPR_UNIT_TEST (grid_candidate_world_retains_active_until_matching_activation) {
             const auto rhi = SharedGpu::rhiService();
             const auto shader = SharedGpu::shaderService();
@@ -1985,6 +2131,7 @@ namespace pP::tests {
             detail::Gate::grid_shared_contours_match_cpu_at_four_chunk_seams,
             detail::Gate::grid_catalog_textures_use_sparse_ids_and_world_uvs,
             detail::Gate::grid_candidate_world_retains_active_until_matching_activation,
+            detail::Gate::grid_diagnostics_cover_empty_biomes_and_preserve_terrain_modes,
         });
     };
 

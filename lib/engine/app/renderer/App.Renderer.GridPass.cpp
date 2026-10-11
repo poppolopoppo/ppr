@@ -317,8 +317,10 @@ namespace pP {
             clearTiles();
             clearCache();
         }
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, stageDiagnostic_(stage));
         PPR_RETURN_ERROR_ON_FAIL(GridPass, submitTiles(std::span<const GridTileSubmission>{stage.m_tiles}));
         for (const GridStagedUpload &upload: stage.m_uploads) {
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, appendDiagnostic_(upload));
             GridUploadRequest request{};
             request.m_chunk_id = upload.m_chunk_id;
             request.m_tile_data_view = std::span<const GridTilePayload>{&upload.m_payload, 1u};
@@ -344,6 +346,10 @@ namespace pP {
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass, job_id != 0u and world_generation != 0u ? std::error_code{}
                                                               : std::make_error_code(std::errc::invalid_argument));
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, stage.m_diagnostic_revision == 0u or stage.m_diagnostic_revision == job_id
+                          ? std::error_code{}
+                          : std::make_error_code(std::errc::invalid_argument));
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass, not m_candidate_world and not m_retiring_world
                           ? std::error_code{}
@@ -387,6 +393,7 @@ namespace pP {
             std::swap(m_world, *m_candidate_world);
         };
         for (const auto &upload: uploads) {
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, appendDiagnostic_(upload));
             PPR_RETURN_ERROR_ON_FAIL(
                 GridPass, upload.m_cell_materials.size() == kCellsPerChunk
                               ? std::error_code{}
@@ -430,7 +437,131 @@ namespace pP {
         const auto prepared = tryPrepareCellUploads(device, completed, chunk_budget);
         PPR_RETURN_UNEXPECTED_ON_FAIL(GridPass, prepared);
         m_world.m_prepared = *prepared;
-        return *prepared;
+        return m_world.m_prepared;
+    }
+
+    std::error_code GridPass::stageDiagnostic_(const GridStagedFrame &stage) {
+        if (stage.m_diagnostic_revision == 0u) {
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass,
+                stage.m_diagnostic_mode == EGridDiagnosticMode::textured and stage.m_diagnostic_palette.empty()
+                    ? std::error_code{}
+                    : std::make_error_code(std::errc::invalid_argument));
+            m_world.m_initial_matter_valid = m_world.m_initial_matter_valid and stage.m_initial_matter_valid;
+            return {}; // Ordinary terrain frames retain the active immutable preview.
+        }
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, m_world.m_world_generation == 0u and m_world.m_diagnostic_revision == 0u
+                          ? std::error_code{}
+                          : std::make_error_code(std::errc::operation_not_permitted));
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass,
+            stage.m_diagnostic_mode <= EGridDiagnosticMode::initial_matter and
+                    stage.m_diagnostic_palette.size() <= 65536u and
+                    (stage.m_diagnostic_mode == EGridDiagnosticMode::textured or not stage.m_diagnostic_palette.empty())
+                ? std::error_code{}
+                : std::make_error_code(std::errc::invalid_argument));
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass,
+            stage.m_diagnostic_mode != EGridDiagnosticMode::material or stage.m_diagnostic_palette.size() == 65536u
+                ? std::error_code{}
+                : std::make_error_code(std::errc::invalid_argument));
+        for (const auto &entry: stage.m_diagnostic_palette) {
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass, std::isfinite(entry.m_fill_height_fine) and
+                                  entry.m_fill_height_fine >= 0.0f and
+                                  entry.m_fill_height_fine <= 4096.0f
+                              ? std::error_code{}
+                              : std::make_error_code(std::errc::invalid_argument));
+        }
+        m_world.m_diagnostic_mode = stage.m_diagnostic_mode;
+        m_world.m_diagnostic_revision = stage.m_diagnostic_revision;
+        m_world.m_diagnostic_palette = stage.m_diagnostic_palette;
+        m_world.m_initial_matter_valid = stage.m_initial_matter_valid;
+        return {};
+    }
+
+    std::error_code GridPass::appendDiagnostic_(const GridStagedUpload &upload) {
+        if (m_world.m_diagnostic_mode == EGridDiagnosticMode::textured or
+            m_world.m_diagnostic_mode == EGridDiagnosticMode::material) {
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass, upload.m_diagnostic_indices.empty() ? std::error_code{}
+                                                              : std::make_error_code(std::errc::invalid_argument));
+            return {};
+        }
+        if (upload.m_diagnostic_indices.empty() and m_world.m_prepared) {
+            return {}; // Later terrain edits retain immutable biome/temperature identity.
+        }
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, upload.m_chunk_id < kGridTileCacheCapacity and
+                              upload.m_diagnostic_indices.size() == kCellsPerChunk and
+                              m_world.m_diagnostic_atlas == nullptr
+                          ? std::error_code{}
+                          : std::make_error_code(std::errc::invalid_argument));
+        auto &words = m_world.m_diagnostic_words[upload.m_chunk_id];
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, words.empty() ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
+        words.resize(kCellWordsPerChunk);
+        for (u32 index = 0u; index < kCellsPerChunk; index += 2u) {
+            const u16 a = upload.m_diagnostic_indices[index], b = upload.m_diagnostic_indices[index + 1u];
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass, a < m_world.m_diagnostic_palette.size() and b < m_world.m_diagnostic_palette.size()
+                              ? std::error_code{}
+                              : std::make_error_code(std::errc::invalid_argument));
+            words[index / 2u] = a | (static_cast<u32>(b) << 16u);
+        }
+        return {};
+    }
+
+    Expected<bool> GridPass::prepareDiagnostic_(rhi::IDevice &device, const u32 chunk_budget) {
+        if (m_world.m_diagnostic_mode == EGridDiagnosticMode::textured) {
+            return true;
+        }
+        if (not m_world.m_diagnostic_colors) {
+            rhi::BufferDesc desc{};
+            desc.size = m_world.m_diagnostic_palette.size() * sizeof(GridDiagnosticColor);
+            desc.elementSize = sizeof(GridDiagnosticColor);
+            desc.usage = rhi::BufferUsage::ShaderResource;
+            desc.defaultState = rhi::ResourceState::ShaderResource;
+            desc.label = "grid diagnostic palette";
+            // Initialization may enqueue an upload even before the bundle is drawn.
+            m_world.m_upload_submission_pending = true;
+            PPR_RETURN_UNEXPECTED_ON_FAIL(
+                GridPass,
+                device.createBuffer(desc, m_world.m_diagnostic_palette.data(), m_world.m_diagnostic_colors.writeRef()));
+        }
+        if (m_world.m_diagnostic_mode == EGridDiagnosticMode::material) {
+            return true;
+        }
+        if (not m_world.m_diagnostic_atlas) {
+            rhi::BufferDesc desc{};
+            desc.size = static_cast<u64>(kGridTileCacheCapacity) * kCellWordsPerChunk * sizeof(u32);
+            desc.elementSize = sizeof(u32);
+            desc.memoryType = rhi::MemoryType::Upload;
+            desc.usage = rhi::BufferUsage::ShaderResource;
+            desc.defaultState = rhi::ResourceState::ShaderResource;
+            desc.label = "grid diagnostic index atlas";
+            PPR_RETURN_UNEXPECTED_ON_FAIL(
+                GridPass, device.createBuffer(desc, nullptr, m_world.m_diagnostic_atlas.writeRef()));
+            PPR_RETURN_UNEXPECTED_ON_FAIL(
+                GridPass,
+                device.mapBuffer(m_world.m_diagnostic_atlas, rhi::CpuAccessMode::Write, &m_world.m_diagnostic_mapped));
+        }
+        auto *const target = static_cast<u32 *>(m_world.m_diagnostic_mapped);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            GridPass, target != nullptr ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
+        const u32 end = m_world.m_diagnostic_cursor +
+                        std::min(chunk_budget, kGridTileCacheCapacity - m_world.m_diagnostic_cursor);
+        for (; m_world.m_diagnostic_cursor < end; ++m_world.m_diagnostic_cursor) {
+            const auto &words = m_world.m_diagnostic_words[m_world.m_diagnostic_cursor];
+            u32 *const destination = target + m_world.m_diagnostic_cursor * kCellWordsPerChunk;
+            if (words.empty()) {
+                std::fill_n(destination, kCellWordsPerChunk, 0u);
+            } else {
+                std::memcpy(destination, words.data(), kCellWordsPerChunk * sizeof(u32));
+            }
+        }
+        return m_world.m_diagnostic_cursor == kGridTileCacheCapacity;
     }
 
     std::error_code GridPass::activateWorldCandidate(
@@ -603,6 +734,8 @@ namespace pP {
         }
         const auto visuals = prepareTerrainVisuals_(device, 256u);
         PPR_RETURN_ERROR_ON_FAIL(GridPass, visuals);
+        const auto diagnostic = prepareDiagnostic_(device, kGridTileCacheCapacity);
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, diagnostic);
         Array<u32> pending{};
         const auto append_pending = [&](const u32 chunk_id) {
             const auto found = m_world.m_cell_cache.find(chunk_id);
@@ -686,17 +819,19 @@ namespace pP {
         }
         const auto prepared = prepareCellCohort_(device, pending, completed, chunk_budget);
         PPR_RETURN_UNEXPECTED_ON_FAIL(GridPass, prepared);
+        const auto diagnostic = prepareDiagnostic_(device, chunk_budget);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(GridPass, diagnostic);
         if (*prepared and m_world.m_resident_table_stale) {
             // Retire the old table's pins before accepting another cohort,
             // even if frame admission later rejects the draw. Reader fences
             // continue protecting every retired physical slot.
             PPR_RETURN_UNEXPECTED_ON_FAIL(GridPass, rebuildResidentTable_());
         }
-        m_world.m_cell_publication_deferred = not *prepared;
+        m_world.m_cell_publication_deferred = not *prepared or not *diagnostic;
         if (m_world.m_cell_publication_deferred) {
             ++m_atlas_deferred_count;
         }
-        return *prepared;
+        return *prepared and *diagnostic;
     }
 
     Expected<bool> GridPass::prepareCellCohort_(
@@ -1494,6 +1629,15 @@ namespace pP {
         m_world.m_visuals_set = false;
         m_world.m_terrain_visuals.clear();
         m_world.m_terrain_images.clear();
+        m_world.m_diagnostic_mode = EGridDiagnosticMode::textured;
+        m_world.m_diagnostic_revision = 0u;
+        m_world.m_diagnostic_palette.clear();
+        m_world.m_diagnostic_words = {};
+        m_world.m_diagnostic_cursor = 0u;
+        m_world.m_initial_matter_valid = true;
+        m_world.m_diagnostic_atlas.setNull();
+        m_world.m_diagnostic_mapped = nullptr;
+        m_world.m_diagnostic_colors.setNull();
         m_world.m_prepared = false;
         m_world.m_last_reader = kFenceValueNone;
         m_world.m_upload_submission_pending = false;
@@ -1543,6 +1687,10 @@ namespace pP {
     }
 
     std::error_code GridPass::notifyDeviceLost() noexcept {
+        m_world.m_diagnostic_atlas.setNull();
+        m_world.m_diagnostic_colors.setNull();
+        m_world.m_diagnostic_mapped = nullptr;
+        m_world.m_diagnostic_cursor = 0u;
         // Same order as shutdown, retain-first-error. CPU records (staged
         // submissions, tile cache, counters) are KEPT: resolveCached still
         // serves quiescent tiles while GPU-touching calls park. Programs
@@ -1840,6 +1988,14 @@ namespace pP {
         PPR_RETURN_ERROR_ON_FAIL(GridPass, visuals);
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass, *visuals ? std::error_code{} : std::make_error_code(std::errc::operation_in_progress));
+        rhi::IBuffer *const indices = m_world.m_diagnostic_atlas ? m_world.m_diagnostic_atlas.get()
+                                                                 : m_world.m_cell_dummy.get();
+        rhi::IBuffer *const colors = m_world.m_diagnostic_colors ? m_world.m_diagnostic_colors.get()
+                                                                 : m_world.m_terrain_palette.get();
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, cursor["g_diagnostic_indices"].setBinding(rhi::Binding(indices, makeFullRange(indices))));
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, cursor["g_diagnostic_colors"].setBinding(rhi::Binding(colors, makeFullRange(colors))));
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass, cursor["g_terrain_visuals"].setBinding(
                           rhi::Binding(m_world.m_terrain_palette, makeFullRange(m_world.m_terrain_palette))));
@@ -2014,6 +2170,10 @@ namespace pP {
         frame.m_use_visible_ids = 1u;
         frame.m_surface_mode = m_world.m_resident_contours_enabled ? 1u : 0u;
         frame.m_surface_mode |= m_world.m_terrain_visuals.empty() ? 0u : 2u;
+        frame.m_surface_mode |= (m_world.m_diagnostic_mode == EGridDiagnosticMode::initial_matter and
+                                    not m_world.m_initial_matter_valid)
+                                    ? 0u
+                                    : static_cast<u32>(m_world.m_diagnostic_mode) << 2u;
         frame.m_boundary_material_id = m_world.m_resident_boundary_material_id;
         frame.m_cell_size_m = m_world.m_resident_cell_size_m;
         PPR_RETURN_ERROR_ON_FAIL(
@@ -2042,6 +2202,10 @@ namespace pP {
         frame.m_cell_size_m = m_world.m_cell_size_m;
         frame.m_surface_mode = m_world.m_contours_enabled ? 1u : 0u;
         frame.m_surface_mode |= m_world.m_terrain_visuals.empty() ? 0u : 2u;
+        frame.m_surface_mode |= (m_world.m_diagnostic_mode == EGridDiagnosticMode::initial_matter and
+                                    not m_world.m_initial_matter_valid)
+                                    ? 0u
+                                    : static_cast<u32>(m_world.m_diagnostic_mode) << 2u;
         frame.m_boundary_material_id = m_world.m_boundary_material_id;
 
         PPR_RETURN_ERROR_ON_FAIL(GridPass, frame_cursor.setData(&frame, sizeof(GridFrame)));

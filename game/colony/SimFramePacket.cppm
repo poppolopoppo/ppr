@@ -7,6 +7,7 @@ import engine.core;
 import engine.image;
 import engine.sim;
 import game.colony.driver;
+import game.colony.worldgen;
 import game.colony.content;
 import game.colony.pathfinding;
 import game.colony.translator;
@@ -32,6 +33,7 @@ export namespace pP::colony {
     struct SimFramePacket {
         float m_cell_size_m{1.0f};
         bool m_has_catalog{false};
+        bool m_initial_matter_valid{true};
         u32 m_boundary_material_id{1u};
         u64 m_content_fingerprint{};
         Array<GridTerrainVisual> m_terrain_visuals{};
@@ -96,6 +98,12 @@ export namespace pP::colony {
     /// snapshot or live-session borrow crossing into the rendering lane.
     [[nodiscard]] Expected<GridPass::GridStagedFrame> captureWorldPresentation(
         const ColonyDriver &driver, const IContext *context = nullptr);
+    /// Whole-world preview preparation from an exclusively frozen session.
+    /// Generated metadata belongs to this driver's exclusively frozen prepared world.
+    /// The caller supplies a monotonic revision; terrain IDs remain unchanged.
+    [[nodiscard]] Expected<GridPass::GridStagedFrame> captureDiagnosticPresentation(
+        const ColonyDriver &driver, const sim::GeneratedWorld &generated, EGridDiagnosticMode mode, u64 revision,
+        float temperature_min_k, float temperature_max_k, const IContext &context);
 
     /// Client-owned initial publication cursor. At most one upload batch is
     /// outstanding; clean frames expose only the confirmed prepared prefix.

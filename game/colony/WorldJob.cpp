@@ -5,6 +5,7 @@ module;
 module game.application;
 import :world_job;
 import game.colony.sim_packet;
+import game.colony.worldgen;
 import std;
 
 namespace pP::colony {
@@ -127,9 +128,35 @@ namespace pP::colony {
         return {};
     }
 
-    std::unique_ptr<ColonyDriver> WorldJob::takeCaptured() {
+    std::error_code WorldJob::requestPreview(
+        std::unique_ptr<ColonyDriver> &frozen, const EGridDiagnosticMode mode, const float temperature_min_k,
+        const float temperature_max_k) {
+        PPR_RETURN_ERROR_ON_FAIL(WorldJobs, requestCapture(frozen, [](const ColonyDriver &, const IContext &) {
+            return std::error_code{};
+        }));
+        State *const state = m_job.get(); // Stable owner outlives callback/task and retained presentation.
+        const u64 revision = m_view.m_id;
+        state->m_capture = [state, mode, revision, temperature_min_k, temperature_max_k](
+                               const ColonyDriver &driver, const IContext &context) {
+            const auto *const prepared = driver.preparedWorld();
+            PPR_RETURN_ERROR_ON_FAIL(
+                WorldJobs, prepared ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
+            auto presentation = captureDiagnosticPresentation(
+                driver, prepared->generated(), mode, revision, temperature_min_k, temperature_max_k, context);
+            PPR_RETURN_ERROR_ON_FAIL(WorldJobs, presentation);
+            state->m_presentation = std::make_unique<GridPass::GridStagedFrame>(std::move(*presentation));
+            return std::error_code{};
+        };
+        return {};
+    }
+
+    std::unique_ptr<ColonyDriver> WorldJob::takeCaptured(const bool retain_presentation) {
         PPR_ASSERT(m_job and m_job->m_is_capture and m_view.m_state == EWorldJobState::prepared);
         auto owner = std::move(m_job->m_candidate);
+        PPR_ASSERT(owner != nullptr);
+        if (retain_presentation) {
+            return owner;
+        }
         m_view.m_state = EWorldJobState::retiring;
         m_view.m_stage = EWorldJobStage::retiring;
         m_cleanup_pending = true;

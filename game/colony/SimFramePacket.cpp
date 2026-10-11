@@ -12,6 +12,7 @@ namespace pP::colony {
     PPR_DEFINE_LOG_CATEGORY(SimPresentation, info, none);
     namespace {
         void capturePresentation_(SimFramePacket &packet, const ColonyDriver &driver) {
+            packet.m_initial_matter_valid = driver.initialMatterBaselineValid();
             packet.m_cell_size_m = 1.0f / static_cast<float>(driver.cellsPerMetre());
             const ContentCatalog *const catalog = driver.contentCatalog();
             if (catalog == nullptr) {
@@ -284,6 +285,7 @@ namespace pP::colony {
         }
         stage.m_cell_size_m = presentation.m_cell_size_m;
         stage.m_has_catalog = presentation.m_has_catalog;
+        stage.m_initial_matter_valid = presentation.m_initial_matter_valid;
         stage.m_boundary_material_id = presentation.m_boundary_material_id;
         stage.m_content_fingerprint = presentation.m_content_fingerprint;
         stage.m_terrain_visuals = std::move(presentation.m_terrain_visuals);
@@ -301,6 +303,7 @@ namespace pP::colony {
         capturePresentation_(presentation, driver);
         stage.m_cell_size_m = presentation.m_cell_size_m;
         stage.m_has_catalog = presentation.m_has_catalog;
+        stage.m_initial_matter_valid = presentation.m_initial_matter_valid;
         stage.m_boundary_material_id = presentation.m_boundary_material_id;
         stage.m_content_fingerprint = presentation.m_content_fingerprint;
         stage.m_terrain_visuals = std::move(presentation.m_terrain_visuals);
@@ -345,6 +348,7 @@ namespace pP::colony {
         }
         stage.m_cell_size_m = packet.m_cell_size_m;
         stage.m_has_catalog = packet.m_has_catalog;
+        stage.m_initial_matter_valid = packet.m_initial_matter_valid;
         stage.m_boundary_material_id = packet.m_boundary_material_id;
         stage.m_content_fingerprint = packet.m_content_fingerprint;
         stage.m_terrain_visuals = packet.m_terrain_visuals;

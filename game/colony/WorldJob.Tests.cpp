@@ -231,6 +231,33 @@ namespace pP::game::tests::detail::world_job {
         PPR_TEST_ASSERT(not job.shutdown());
     };
 
+    PPR_UNIT_TEST (preview_failure_and_queued_cancel_return_frozen_owner) {
+        ParallelScheduler chunks{"Preview failure chunks", 1u, static_cast<std::size_t>(hal::page_granularity)};
+        WorldJob job{chunks};
+        auto driver = std::make_unique<ColonyDriver>();
+        const auto address = driver.get();
+        for (const bool cancel_queued: {false, true}) {
+            PPR_TEST_ASSERT(not job.requestPreview(driver, EGridDiagnosticMode::biome, 200.0f, 400.0f));
+            PPR_TEST_ASSERT(not driver);
+            if (cancel_queued) {
+                job.cancel();
+            }
+            PPR_TEST_ASSERT(not job.update(true));
+            settle(job);
+            PPR_TEST_ASSERT(job.view().m_state == EWorldJobState::prepared);
+            const auto expected = cancel_queued ? std::errc::operation_canceled : std::errc::invalid_argument;
+            PPR_TEST_ASSERT(job.view().m_error == expected);
+            driver = job.takeCaptured(true);
+            PPR_TEST_ASSERT(driver.get() == address);
+            PPR_TEST_ASSERT(job.busy());
+            job.discardPrepared(job.view().m_error);
+            settle(job);
+            PPR_TEST_ASSERT(not job.busy());
+            PPR_TEST_ASSERT(job.view().m_state == (cancel_queued ? EWorldJobState::cancelled : EWorldJobState::failed));
+        }
+        PPR_TEST_ASSERT(not job.shutdown());
+    };
+
     PPR_UNIT_TEST (cancel_during_real_physics_preparation_discards_candidate) {
         ParallelScheduler chunks{"World physics cancel chunks", 2u, static_cast<std::size_t>(hal::page_granularity)};
         std::latch entered{1};
@@ -329,6 +356,7 @@ namespace pP::game::tests {
             detail::world_job::loading_presentation_gates_admission_and_cancel_is_reusable,
             detail::world_job::gated_worker_keeps_control_polling_and_cancellation_live,
             detail::world_job::frozen_capture_returns_same_owner_after_queued_cancel,
+            detail::world_job::preview_failure_and_queued_cancel_return_frozen_owner,
             detail::world_job::frozen_capture_gate_preserves_exclusivity_and_returns_owner_on_failure,
             detail::world_job::frozen_capture_success_and_prepared_cancel_have_consistent_outcomes,
             detail::world_job::cancel_during_real_physics_preparation_discards_candidate,

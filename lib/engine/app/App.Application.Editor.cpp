@@ -1281,11 +1281,14 @@ namespace pP {
             PPR_RETURN_ERROR_ON_FAIL(Editor, m_triangle_pass->update(packet.m_delta_time, packet.m_camera));
             PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->update(packet.m_delta_time, packet.m_camera));
             const u64 active_generation = m_grid_pass->worldGeneration();
-            if (active_generation == 0u or grid_stage.m_ack_seed == active_generation) {
+            if (not grid_stage.m_retain_content and
+                (active_generation == 0u or grid_stage.m_ack_seed == active_generation)) {
                 PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->applyStagedFrame(grid_stage));
                 out_result.m_grid_staging_applied = true;
             }
-            PPR_RETURN_ERROR_ON_FAIL(Editor, m_triangle_pass->applyStagedFrame(triangle_stage));
+            if (not grid_stage.m_retain_content) {
+                PPR_RETURN_ERROR_ON_FAIL(Editor, m_triangle_pass->applyStagedFrame(triangle_stage));
+            }
         }
         out_result.m_grid_staged_tiles = m_grid_pass->stagedTileCount();
         out_result.m_grid_cached_tiles = m_grid_pass->cachedTileCount();

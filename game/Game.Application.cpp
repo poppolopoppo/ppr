@@ -307,6 +307,49 @@ namespace demo {
         /// Confirmed regeneration waiting for the next update() head (see
         /// the regenerate case in dispatchIntent_ for why it defers).
         bool m_regen_pending{false};
+        std::optional<EGridDiagnosticMode> m_preview_pending{};
+        bool m_preview_job{};
+        EGridDiagnosticMode m_committed_preview_mode{EGridDiagnosticMode::textured};
+        float m_committed_temperature_min_k{200.0f};
+        float m_committed_temperature_max_k{400.0f};
+        bool m_capture_access{};
+        u64 m_capture_generation{};
+        std::array<u64, sim::kChunkCount> m_capture_ack_revisions{};
+
+        [[nodiscard]] std::error_code requestPreview_(const EGridDiagnosticMode mode) {
+            PPR_RETURN_ERROR_ON_FAIL(
+                Demo, m_driver and not m_world_job->busy() and not m_world_command
+                          ? std::error_code{}
+                          : std::make_error_code(std::errc::device_or_resource_busy));
+            clearControlInput_();
+            cancelToolGesture_();
+            m_tool.m_accepted_click.reset();
+            m_tool.m_drag_queue.clear();
+            m_pause_before_job = m_driver->paused();
+            m_driver->setPaused(true);
+            m_capture_generation = m_driver->worldGeneration();
+            const auto error = m_world_job->requestPreview(
+                m_driver, mode, m_ui_state.m_temperature_min_k, m_ui_state.m_temperature_max_k);
+            if (error) {
+                m_driver->setPaused(m_pause_before_job);
+                PPR_RETURN_ERROR_ON_FAIL(Demo, error);
+            }
+            m_capture_access = true;
+            m_driver_ready = false;
+            m_capture_ack_revisions.fill(0u);
+            m_preview_job = true;
+            m_world_modal = true;
+            m_world_published = false;
+            m_world_frame_presented = false;
+            m_candidate_generation = m_capture_generation;
+            m_candidate_fingerprint = 0u;
+            m_candidate_next_chunk = 0u;
+            m_candidate_begun = false;
+            m_candidate_ready = false;
+            m_candidate_activated = false;
+            m_world_view = m_world_job->view();
+            return {};
+        }
 
         [[nodiscard]] std::error_code regenerate_() {
             // Entropy is chosen at the application boundary, never inside the simulation.
@@ -385,6 +428,10 @@ namespace demo {
                 header.m_terrain_visuals = source.m_terrain_visuals;
                 header.m_terrain_images = source.m_terrain_images;
                 header.m_tiles = source.m_tiles;
+                header.m_diagnostic_mode = source.m_diagnostic_mode;
+                header.m_diagnostic_revision = source.m_diagnostic_revision;
+                header.m_diagnostic_palette = source.m_diagnostic_palette;
+                header.m_initial_matter_valid = source.m_initial_matter_valid;
                 command->m_final_batch = source.m_uploads.empty();
             } else if (kind == EGridWorldCommand::append) {
                 auto &source = m_world_job->presentation();
@@ -456,56 +503,88 @@ namespace demo {
                 not activationPending_() and
                 not m_candidate_activated) {
                 m_regen_pending = false;
+                m_preview_pending.reset();
                 m_world_job->cancel();
             }
             PPR_RETURN_ERROR_ON_FAIL(Demo, m_world_job->update(m_loading_presented));
+            if (m_capture_access and m_world_job->view().m_state == colony::EWorldJobState::prepared) {
+                m_driver = m_world_job->takeCaptured(true);
+                m_driver_ready = true;
+                m_capture_access = false;
+                Array<colony::ColonyDriver::DirtyChunk> ack{};
+                for (u32 chunk = 0u; chunk < sim::kChunkCount; ++chunk) {
+                    if (m_capture_ack_revisions[chunk] != 0u) {
+                        ack.push_back(
+                            {{chunk % sim::kChunksPerEdge, chunk / sim::kChunksPerEdge},
+                                m_capture_ack_revisions[chunk]});
+                    }
+                }
+                m_driver->ackPresentChunks(ack);
+                m_capture_ack_revisions.fill(0u);
+                clearControlInput_();
+            }
+            if (m_preview_job and
+                m_world_job->view().m_state == colony::EWorldJobState::prepared and
+                m_world_job->view().m_error) {
+                m_world_job->discardPrepared(m_world_job->view().m_error);
+            }
             const auto view = m_world_job->view();
             m_world_view = view;
             if (m_candidate_activated and not m_world_published) {
                 m_world_job->commitPublication();
-                auto &presentation = m_world_job->presentation();
-                auto candidate = m_world_job->publish();
-                m_driver.swap(candidate);
-                m_world_job->retire(std::move(candidate));
-                if (const auto *const prepared = m_driver->preparedWorld(); prepared and m_pan_controller) {
-                    const float extent = static_cast<float>(colony::kWorldExtentMetres);
-                    PPR_RETURN_ERROR_ON_FAIL(
-                        Demo, m_pan_controller->setWorldBounds(float2{0.0f, 0.0f}, float2{extent, extent}));
-                    const auto &start = prepared->generated().m_start;
-                    m_pan_controller->focusOn(
-                        float2{static_cast<float>(start.m_spawn_x_m), static_cast<float>(start.m_spawn_y_m)});
-                    m_pan_controller->resetInputState();
+                if (m_preview_job) {
+                    m_committed_preview_mode = m_ui_state.m_preview_mode;
+                    m_committed_temperature_min_k = m_ui_state.m_temperature_min_k;
+                    m_committed_temperature_max_k = m_ui_state.m_temperature_max_k;
+                    m_world_job->retire({});
+                    m_world_published = true;
+                } else {
+                    auto &presentation = m_world_job->presentation();
+                    auto candidate = m_world_job->publish();
+                    m_driver.swap(candidate);
+                    m_world_job->retire(std::move(candidate));
+                    if (const auto *const prepared = m_driver->preparedWorld(); prepared and m_pan_controller) {
+                        const float extent = static_cast<float>(colony::kWorldExtentMetres);
+                        PPR_RETURN_ERROR_ON_FAIL(
+                            Demo, m_pan_controller->setWorldBounds(float2{0.0f, 0.0f}, float2{extent, extent}));
+                        const auto &start = prepared->generated().m_start;
+                        m_pan_controller->focusOn(
+                            float2{static_cast<float>(start.m_spawn_x_m), static_cast<float>(start.m_spawn_y_m)});
+                        m_pan_controller->resetInputState();
+                    }
+                    PPR_LOG(
+                        Demo, info, "new game published",
+                        {{"seed", m_driver->seed()}, {"generation", m_driver->worldGeneration()},
+                            {"content_fingerprint", m_candidate_fingerprint}});
+                    m_driver_ready = true;
+                    m_world_published = true;
+                    m_initial_presentation = false;
+                    Array<colony::ColonyDriver::DirtyChunk> acknowledged{};
+                    acknowledged.reserve(presentation.m_ack_chunk_ids.size());
+                    for (std::size_t index = 0u; index < presentation.m_ack_chunk_ids.size(); ++index) {
+                        const u32 id = presentation.m_ack_chunk_ids[index];
+                        acknowledged.push_back(
+                            {sim::ChunkPos{id % sim::kChunksPerEdge, id / sim::kChunksPerEdge},
+                                presentation.m_ack_revisions[index]});
+                    }
+                    m_driver->ackPresentChunks(acknowledged);
+                    m_initial_graphics = {};
+                    // A successful request starts a fresh session. Display settings
+                    // belong to the application; gameplay tools and inspection do not.
+                    m_tool.m_dig_armed = false;
+                    m_ui_state.m_tool = colony::EColonyTool::inspect;
+                    m_ui_state.m_pinned.reset();
+                    m_ui_state.m_build_menu_open = false;
+                    m_ui_state.m_regen_confirm_open = false;
+                    m_ui_state.m_notice = {};
+                    m_ui_state.m_preview_mode = EGridDiagnosticMode::textured;
+                    m_committed_preview_mode = EGridDiagnosticMode::textured;
+                    m_ui_state.m_instruction = "Inspect: click a cell to pin it in the Inspector.";
+                    m_hover = {};
+                    m_grid_reset_pending = false;
+                    m_present_full_refresh = false;
+                    m_dig_issued = 0u;
                 }
-                PPR_LOG(
-                    Demo, info, "new game published",
-                    {{"seed", m_driver->seed()}, {"generation", m_driver->worldGeneration()},
-                        {"content_fingerprint", m_candidate_fingerprint}});
-                m_driver_ready = true;
-                m_world_published = true;
-                m_initial_presentation = false;
-                Array<colony::ColonyDriver::DirtyChunk> acknowledged{};
-                acknowledged.reserve(presentation.m_ack_chunk_ids.size());
-                for (std::size_t index = 0u; index < presentation.m_ack_chunk_ids.size(); ++index) {
-                    const u32 id = presentation.m_ack_chunk_ids[index];
-                    acknowledged.push_back(
-                        {sim::ChunkPos{id % sim::kChunksPerEdge, id / sim::kChunksPerEdge},
-                            presentation.m_ack_revisions[index]});
-                }
-                m_driver->ackPresentChunks(acknowledged);
-                m_initial_graphics = {};
-                // A successful request starts a fresh session. Display settings
-                // belong to the application; gameplay tools and inspection do not.
-                m_tool.m_dig_armed = false;
-                m_ui_state.m_tool = colony::EColonyTool::inspect;
-                m_ui_state.m_pinned.reset();
-                m_ui_state.m_build_menu_open = false;
-                m_ui_state.m_regen_confirm_open = false;
-                m_ui_state.m_notice = {};
-                m_ui_state.m_instruction = "Inspect: click a cell to pin it in the Inspector.";
-                m_hover = {};
-                m_grid_reset_pending = false;
-                m_present_full_refresh = false;
-                m_dig_issued = 0u;
             }
 
             const bool prepared = view.m_state == colony::EWorldJobState::prepared;
@@ -549,12 +628,23 @@ namespace demo {
                     }
                 } else if (m_world_published and m_world_frame_presented) {
                     m_world_modal = false;
+                    if (m_preview_job) {
+                        m_driver->setPaused(m_pause_before_job);
+                        clearControlInput_();
+                        m_preview_job = false;
+                    }
                 } else if (m_driver and
                            view.m_id != m_consumed_terminal_job and
                            (view.m_state == colony::EWorldJobState::failed or
                                view.m_state == colony::EWorldJobState::cancelled)) {
                     m_consumed_terminal_job = view.m_id;
+                    if (m_preview_job) {
+                        m_ui_state.m_preview_mode = m_committed_preview_mode;
+                        m_ui_state.m_temperature_min_k = m_committed_temperature_min_k;
+                        m_ui_state.m_temperature_max_k = m_committed_temperature_max_k;
+                    }
                     m_driver->setPaused(m_pause_before_job);
+                    m_preview_job = false;
                     m_world_modal = false;
                     if (view.m_error) {
                         postDisplayNotice_("World generation failed; current world retained", view.m_error);
@@ -595,6 +685,7 @@ namespace demo {
                     case colony::EWorldJobStage::physics: label = "Preparing physics"; break;
                     case colony::EWorldJobStage::publishing: label = "Publishing"; break;
                     case colony::EWorldJobStage::retiring: label = "Retiring previous session"; break;
+                    case colony::EWorldJobStage::capturing: label = "Preparing diagnostic preview"; break;
                 }
                 if (closing) {
                     label = "Closing: draining world work";
@@ -619,7 +710,9 @@ namespace demo {
                 if (m_world_published) {
                     ImGui::ProgressBar(1.0f, ImVec2{380.0f, 0.0f}, "Graphics preparation");
                 }
-                ImGui::Text("Current stage %u/7", static_cast<unsigned>(view.m_stage) + 1u);
+                if (not m_preview_job) {
+                    ImGui::Text("Current stage %u/7", static_cast<unsigned>(view.m_stage) + 1u);
+                }
                 if (view.m_total != 0u and not m_world_published) {
                     ImGui::ProgressBar(
                         static_cast<float>(view.m_completed) / static_cast<float>(view.m_total), ImVec2{380.0f, 0.0f},
@@ -1365,6 +1458,12 @@ namespace demo {
                     }
                     // Regenerate before the next update stages the new world.
                     m_regen_pending = true;
+                    break;
+
+                case colony::EColonyIntent::select_preview:
+                    if (intent.m_arg <= static_cast<u32>(EGridDiagnosticMode::initial_matter)) {
+                        m_preview_pending = static_cast<EGridDiagnosticMode>(intent.m_arg);
+                    }
                     break;
 
                 case colony::EColonyIntent::select_tool:
@@ -3390,6 +3489,25 @@ namespace demo {
                 }
             }
             if (not m_driver) {
+                if (m_capture_access and result.m_grid_ack_seed == m_capture_generation) {
+                    if (result.m_grid_stage_applied and not result.m_dropped and not result.m_error) {
+                        const auto count = std::min(
+                            result.m_grid_ack_chunk_ids.size(), result.m_grid_ack_revisions.size());
+                        for (std::size_t row = 0u; row < count; ++row) {
+                            const u32 chunk = result.m_grid_ack_chunk_ids[row];
+                            if (chunk < sim::kChunkCount) {
+                                m_capture_ack_revisions[chunk] = std::max(
+                                    m_capture_ack_revisions[chunk], result.m_grid_ack_revisions[row]);
+                            }
+                        }
+                        if (result.m_grid_full_refresh) {
+                            m_present_full_refresh = false;
+                        }
+                    } else {
+                        m_grid_reset_pending = m_grid_reset_pending or result.m_grid_reset_caches;
+                        m_present_full_refresh = m_present_full_refresh or result.m_grid_full_refresh;
+                    }
+                }
                 return;
             }
             const bool generations_match = result.m_grid_ack_seed == m_driver->worldGeneration();
@@ -3430,6 +3548,10 @@ namespace demo {
 
         [[nodiscard]] std::error_code update(const TimeSpan dt) override {
             PPR_RETURN_ERROR_ON_FAIL(Demo, advanceWorldJob_());
+            if (m_preview_pending) {
+                const auto mode = *std::exchange(m_preview_pending, std::nullopt);
+                PPR_RETURN_ERROR_ON_FAIL(Demo, requestPreview_(mode));
+            }
             // Lane split, main boundary: wall time of this whole update
             // body on the main thread (client portion). RAII so every
             // early return below still stamps; two steady_clock reads, no
@@ -3487,7 +3609,10 @@ namespace demo {
             refreshControlInput_();
             PPR_RETURN_ERROR_ON_FAIL(Demo, m_input_error);
             if (not m_driver) {
-                submitGridStage(GridPass::GridStagedFrame{});
+                GridPass::GridStagedFrame frozen{};
+                frozen.m_retain_content = m_capture_access;
+                frozen.m_ack_seed = m_capture_generation;
+                submitGridStage(std::move(frozen));
                 submitTriangleStage(TrianglePass::TriangleStagedFrame{});
                 drawWorldModal_();
                 return {};

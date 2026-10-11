@@ -75,6 +75,7 @@ export namespace pP::colony {
         display_keep, // confirm the trial picture settings
         display_revert, // revert the trial to the pre-apply values, same path
         display_use_monitor_cap, // draft paced + cap from the reported monitor refresh
+        select_preview, // m_arg = EGridDiagnosticMode; range lives in UI draft.
     };
 
     /// One typed intent; trivially copyable so keyboard callbacks, buttons,
@@ -176,6 +177,9 @@ export namespace pP::colony {
         ColonyNotice m_notice{};
         bool m_display_open{false};
         ColonyDisplaySession m_display{};
+        EGridDiagnosticMode m_preview_mode{EGridDiagnosticMode::textured};
+        float m_temperature_min_k{200.0f};
+        float m_temperature_max_k{400.0f};
     };
 
     /// Resolved pointer hover over the world, from the caller's single

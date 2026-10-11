@@ -62,6 +62,30 @@ struct TerrainVisual {
     float m_texture_period_m;
 };
 StructuredBuffer<TerrainVisual> g_terrain_visuals;
+struct DiagnosticColor {
+    uint m_color_rgba;
+    float m_fill_height_fine;
+    uint2 m_reserved;
+};
+StructuredBuffer<uint> g_diagnostic_indices;
+StructuredBuffer<DiagnosticColor> g_diagnostic_colors;
+
+uint diagnosticIndex(int2 sample) {
+    if (any(sample < int2(0)) || any(sample >= int2(4096))) { return 0u; }
+    uint2 cell = uint2(sample);
+    uint chunk = (cell.y / 128u) * 32u + cell.x / 128u;
+    uint index = (cell.y % 128u) * 128u + cell.x % 128u;
+    uint packed = g_diagnostic_indices[chunk * 8192u + index / 2u];
+    return ((index & 1u) != 0u) ? (packed >> 16u) : (packed & 0xffffu);
+}
+
+float4 diagnosticTint(uint rgba, float coverage) {
+    float4 tint = float4((rgba >> 24u) & 255u, (rgba >> 16u) & 255u,
+        (rgba >> 8u) & 255u, rgba & 255u) / 255.0;
+    tint.rgb = select(tint.rgb <= 0.04045, tint.rgb / 12.92,
+        pow((tint.rgb + 0.055) / 1.055, float3(2.4)));
+    return float4(tint.rgb, tint.a * coverage);
+}
 
 struct GridVertexOutput {
     float4 position : SV_Position;
@@ -152,7 +176,8 @@ float contourCross(float2 a, float2 b) {
     return a.x * b.y - a.y * b.x;
 }
 
-uint contourMaterial(float2 position, float width, out float coverage) {
+uint contourMaterial(float2 position, float width, out float coverage, out int2 winner) {
+    winner = int2(4096);
     int2 base = int2(floor(position - 0.5));
     float2 point = position - (float2(base) + 0.5);
     uint materials[4];
@@ -181,7 +206,8 @@ uint contourMaterial(float2 position, float width, out float coverage) {
         }
     }
     if (component == 0u) {
-        discard;
+        coverage = 0.0;
+        return 0u;
     }
     // AA uses only actual contour segments, never the internal fan edges.
     // Coverage is the union of occupied components, independent of material.
@@ -196,10 +222,9 @@ uint contourMaterial(float2 position, float width, out float coverage) {
     coverage = shape.m_segment_count == 0u ? 1.0 :
         saturate(0.5 + (best_triangle >= 0.0 ? edge_distance : -edge_distance) / width);
     if (coverage == 0.0) {
-        discard;
+        return 0u;
     }
     float closest = 1.0e30;
-    int2 winner = int2(4096);
     uint material = 0u;
     for (uint corner = 0u; corner < 4u; ++corner) {
         if ((component & (1u << corner)) == 0u) {
@@ -219,6 +244,12 @@ uint contourMaterial(float2 position, float width, out float coverage) {
     return material;
 }
 
+// Terrain and initial matter cover complementary parts of one contour pixel.
+float4 compositeMatter(float4 terrain, float4 matter) {
+    float alpha = terrain.a + matter.a;
+    return alpha > 0.0 ? float4((terrain.rgb * terrain.a + matter.rgb * matter.a) / alpha, alpha) : float4(0.0);
+}
+
 [shader("fragment")]
 float4 fragmentGridMain(
     GridVertexOutput input,
@@ -234,9 +265,16 @@ float4 fragmentGridMain(
     float2 gradient_y = clamp(ddy(input.fine_position) * g_grid_frame.m_cell_size_m, -2048.0, 2048.0);
     uint material = input.material;
     float coverage = 1.0;
+    uint diagnostic_mode = g_grid_frame.m_surface_mode >> 2u;
+    int2 sample = int2(floor(input.fine_position));
+    if (diagnostic_mode == 2u) {
+        uint index = diagnosticIndex(sample);
+        if (index == 0u) { discard; }
+        return diagnosticTint(g_diagnostic_colors[index].m_color_rgba, 1.0);
+    }
     if ((input.flags & 1u) != 0u) {
         if ((g_grid_frame.m_surface_mode & 1u) != 0u) {
-            material = contourMaterial(input.fine_position, width, coverage);
+            material = contourMaterial(input.fine_position, width, coverage, sample);
         } else {
         // Rasterized quad edges may land exactly at 128 after interpolation;
         // clamp them into the final cell rather than reading the next chunk.
@@ -249,8 +287,27 @@ float4 fragmentGridMain(
         }
         }
     }
+    float4 matter = float4(0.0);
+    if (diagnostic_mode == 4u) {
+        uint index = diagnosticIndex(int2(floor(input.fine_position)));
+        if (index != 0u) {
+            DiagnosticColor entry = g_diagnostic_colors[index];
+            float fill = saturate(0.5 + (entry.m_fill_height_fine - input.fine_position.y) / width);
+            if (fill > 0.0 && coverage < 1.0) {
+                matter = diagnosticTint(entry.m_color_rgba, fill * (1.0 - coverage));
+            }
+        }
+    }
+    if (coverage == 0.0 || material == 0u || material >= 0xffffu) {
+        if (matter.a > 0.0) { return matter; }
+        discard;
+    }
+    if (diagnostic_mode == 1u || diagnostic_mode == 3u) {
+        uint index = diagnostic_mode == 1u ? material : diagnosticIndex(sample);
+        return diagnosticTint(g_diagnostic_colors[index].m_color_rgba, coverage);
+    }
     if ((g_grid_frame.m_surface_mode & 2u) == 0u) {
-        return float4(gridTint(material), coverage);
+        return compositeMatter(float4(gridTint(material), coverage), matter);
     }
     if (material == 0u || material >= 0xffffu) {
         discard;
@@ -269,5 +326,5 @@ float4 fragmentGridMain(
     float2 uv = input.fine_position * (g_grid_frame.m_cell_size_m / period);
     float4 albedo = nonuniform(g_textures[visual.m_texture_index]).SampleGrad(
         g_sampler, uv, gradient_x / period, gradient_y / period);
-    return float4(tint.rgb * albedo.rgb, tint.a * albedo.a * coverage);
+    return compositeMatter(float4(tint.rgb * albedo.rgb, tint.a * albedo.a * coverage), matter);
 }
