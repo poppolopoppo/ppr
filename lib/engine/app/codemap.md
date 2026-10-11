@@ -48,3 +48,5 @@ perform no additional observation clock reads.
 The last admitted interval also accumulates repeated skipped attempts, native
 busy waits and completion servicing. Main snapshots and resets it before the
 next virtual update; its outstanding-reservation peak is sampled at attempts.
+
+Opt-in grid observations also transport fixed-size CPU frame timings with frame identity and explicit-clock endpoints. The injected application clock must support concurrent `now()` calls while render observations are enabled and outlive the render-lane join. Surface timings contain their preparation/draw callbacks; they are CPU wall durations, not GPU timestamps.

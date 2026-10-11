@@ -5,14 +5,18 @@ Incremental changes and older evidence: [progress log](static-world-generation-p
 Authoring commands and schemas: [content reference](../worldgen-content.md).
 
 The seven-stage implementation is integrated through the runtime acceptance
-sequence. Overall acceptance remains open: observed long update/presentation
-gaps and the unverified gates below prevent a completion claim.
+sequence. At the user's request, closeout is limited to critical correctness
+problems and errors; further performance tuning is deferred. Independent review
+found no remaining concrete critical correctness blocker. This is a bounded
+implementation closeout, not a claim that every original acceptance gate passed:
+long update/presentation gaps and unverified measurements remain below.
 
 ## Recorded environment and commands
 
 Windows 11, Ryzen 9 3950X, 64 GiB RAM, RTX 2080; MSVC 14.51/VS 18 Insiders,
-Release (`msvc-rel`), D3D12. Latest successful scripted runtime: `fab8036`
-plus the reviewed admitted-frame pacing correction (v8). The v4 table below is retained as a
+Release (`msvc-rel`), D3D12. Latest successful scripted runtime: `435dfbc`
+plus the reviewed CPU-frame observation increment and reporting corrections (v10).
+The v4 table below is retained as a
 historical comparison; current observations are appended below.
 The two profile cases ran sequentially without another build/test workload:
 
@@ -63,9 +67,9 @@ GPU executions or measured GPU time. Resource snapshots can miss peaks between
 frames. Process memory includes active/candidate sessions and their other engine
 resources; it is neither precise VRAM usage nor an allocation census.
 
-## Responsiveness remains an open acceptance failure
+## Historical responsiveness observations (v4)
 
-Configured cadence was 60 Hz (16.667 ms). The latest scripted runs observed
+Configured cadence was 60 Hz (16.667 ms). The v4 scripted runs observed
 maximum live update gaps of 32.998 ms (Frontier) and 47.859 ms (Hollows), and
 retiring presentation-ack gaps of 63.739 and 58.873 ms respectively. Frontier's
 maximum control-poll gap was 31.300 ms; its pacing/clock observation reached
@@ -106,7 +110,7 @@ Known generation accounting excludes opaque allocations, allocator overhead,
 reallocation overlap, stacks and content/physics/GPU storage. It is separate from
 process-memory observations and does not establish total peak memory.
 
-## Remaining validation
+## Validation history and remaining limitations
 
 - The twelve-entry dev/ASan CTest matrix passed at `427a2fc` in 905.78 seconds
   (`out/worldgen-final-matrix-v2.log`). Repeated app/render-lane and asset/render gates passed three loops each.
@@ -115,7 +119,7 @@ process-memory observations and does not establish total peak memory.
   passed; see the progress log for exact revisions and logs.
 - A reviewed follow-up bounds retired render-world payload disposal. Its new
   GPU regressions passed three shuffled loops; broader repeated gates and runtime
-  measurements continue. The preceding
+  measurements subsequently passed as recorded below. The preceding
   matrix tested the prior binaries.
 - Native UI evidence is retained under `out/worldgen-native-v1`: catalog-backed
   Basalt/Iron readouts, New Game confirmation, terrain-composition and diagnostic
@@ -139,7 +143,7 @@ process-memory observations and does not establish total peak memory.
   targets lacked CopySource usage, and two tests used a stale observed completion
   fence after a host wait. These are corrected in PPR code/tests; third-party
   source is unchanged. Dev, Live and Release affected builds passed. D3D12
-  three-loop full terrain-gate regression passed (`out/worldgen-native-fixes-d3d-gates-v1.log`); current full matrix remains required.
+  three-loop full terrain-gate regression passed (`out/worldgen-native-fixes-d3d-gates-v1.log`).
   Current IDE inspection is unavailable because
   the CLion router transport failed during discovery.
 
@@ -311,3 +315,73 @@ sampled 64-65 ms frame executor at replacement motivates investigation of frame
 execution. Frame identity/start/end correlation is still needed; the sample does
 not establish the cause of that gap. Resource retirement again returned both
 profiles to one atlas/seven texture entries/seven slots.
+
+## Bounded closeout and CPU frame observations (v10)
+
+The final observation increment uses the application's injected clock, only when
+worldgen reporting is enabled. Fixed-size frame results carry identity, start/end
+points and CPU staging/upload/prepare/draw/surface durations. Frame zero is valid;
+observation presence is explicit. The clock must support concurrent reads and
+outlive render-lane join. Independent source review and format/style gates passed.
+
+Dev and Live builds passed all six executable targets, followed by Release
+`app.game`, in a serialized 176.68-second build interval. The preceding affected
+frame/fence/admission run passed all 52 selected nodes in three shuffled loops
+(139.29, 127.56 and 143.43 seconds). The final presence/documentation corrections
+are covered by the rebuilt binaries and final matrix, rather than retroactively
+attributed to those earlier test binaries.
+
+Both corrected-binary v10 scenarios exited zero and emitted acceptance PASS.
+Logs are `out/worldgen-scenario-v10-{frontier,hollows}.stdout.log`; exact commands,
+actual exits and memory samples are in `out/worldgen-scenario-memory-v10.json`.
+
+| Observation | Frontier | Hollows |
+|---|---:|---:|
+| Whole sequence, seconds | 53.362 | 52.597 |
+| Startup to first loading acknowledgment, ms | 1,842.976 | 1,726.506 |
+| First loading to first world acknowledgment, ms | 7,307.342 | 7,418.130 |
+| Maximum layout update gap, ms | 130.531 | 123.537 |
+| Maximum live update gap, ms | 51.480 | 42.706 |
+| Maximum retiring presentation-ack gap, ms | 68.350 | 59.849 |
+| Maximum control-poll gap, ms | 12.967 | 13.418 |
+| Initial frame CPU total / grid draw, ms | 146.294 / 111.533 | 138.768 / 106.304 |
+| Long retiring frame CPU total / actor draw, ms | 68.029 / 65.809 | 59.617 / 57.125 |
+| Whole-process peak working set, bytes | 1,035,468,800 | 1,040,547,840 |
+| 100 ms sampled peak private memory, bytes | 1,254,158,336 | 1,261,568,000 |
+
+Phase labels are observed at completion delivery. The longest CPU frame and
+maximum update gap are selected independently. The long actor frames do overlap
+the recorded live update gaps by their timestamps, but the measurements do not
+identify shader/pipeline creation, driver work or another internal draw cost as
+the cause. Surface durations include child callbacks and must not be summed with
+them. These are CPU wall observations including blocking/descheduling, not GPU
+timestamps or paired performance comparisons. Both profiles again settled to
+one atlas, seven texture entries and seven slots after replacements; observed
+snapshot peaks were two atlases/fourteen entries.
+
+Further tuning is deferred at the user's request. Held-input native traversal,
+precise input/Cancel latency, worker utilization, true scheduler queue depth,
+precise peak VRAM and native steady-state GPU timing remain unverified. Current
+IDE inspection remains unavailable because the CLion router transport failed.
+The saved PIX capture, Vulkan readbacks, native cancellation/close checks and
+bounded resource checks retain their narrower recorded evidence. Third-party
+cleanup is outside this critical-only closeout; no fork/private patch is newly
+authorized. In particular, the existing generated FastNoiseLite private-copy
+patch in `cmake/external/PatchFastNoiseLite.cmake` remains a deferred dependency
+follow-up; this closeout does not endorse it or introduce another patch.
+
+## Final validation result
+
+The current Dev/ASan twelve-entry CTest matrix passed all twelve entries with
+zero failed tests in 959.87 seconds, including asset, all six app shards, core,
+sim, game and both shipped-profile validators. Evidence:
+`out/worldgen-final-matrix-v4.log`, `out/worldgen-final-matrix-v4.times.log` and
+`out/build/msvc-dev/Testing/Temporary/LastTest.log`. The detailed log contains no
+failed test-assertion markers. Dev and Live caches remain `PPR_TEST_LOOPS=1`.
+
+This matrix ran against the corrected CPU-observation binaries built in
+`out/worldgen-cpu-stage-*-build-v2.log`, after both v10 runtime scenarios passed.
+No build, native game or profiling capture competed with the matrix. Source
+format/style checks passed, independent source and factual reviews passed, and
+document links resolve. The IDE-inspection and remaining acceptance limitations
+above remain explicitly unverified or deferred; the matrix does not erase them.

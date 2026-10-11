@@ -113,10 +113,19 @@ export namespace pP {
     // the first request. Captured owners must outlive lane join.
     using RenderSurfaceExecutor = std23::move_only_function<void(const RenderSurfaceRequest &, RenderSurfaceResult &)>;
 
+    // Opt-in CPU wall durations include blocking/descheduling. Identity and
+    // endpoints travel with the result, rather than a last-value lane gauge.
+    struct RenderCpuObservations {
+        u64 m_frame_id{};
+        TimePoint m_start{}, m_end{};
+        TimeSpan m_staging{}, m_uploads{}, m_grid_prepare{}, m_grid_draw{}, m_triangle_draw{}, m_ui_draw{}, m_surface{};
+    };
+
     // Per-frame completion posted back to main: submission acceptance is
     // independent of present (a submitted value travels with the fence
     // until completion; a dropped frame carries m_dropped and no value).
     struct RenderFrameResult {
+        std::optional<RenderCpuObservations> m_cpu_observations{};
         std::optional<GridPassObservations> m_grid_observations{};
         // Distinct control completion on the existing reliable result stream.
         // When set, this record has NO frame/reservation/staging settlement.

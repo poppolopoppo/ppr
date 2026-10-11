@@ -258,6 +258,11 @@ export namespace pP {
         }
 
     protected:
+        // Observation-enabled render work reads this clock on the owner lane.
+        // An injected clock must support concurrent now() calls and outlive join.
+        [[nodiscard]] const ITimerClock &observationClock() const noexcept {
+            return m_observation_clock;
+        }
         void enableFrameAdmissionObservations(const bool enabled) noexcept {
             m_observe_admission = enabled;
         }

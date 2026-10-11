@@ -35,6 +35,23 @@ import std;
 
 namespace pP {
     namespace {
+        class CpuObservationScope {
+        public:
+            CpuObservationScope(const ITimerClock *const clock, TimeSpan &duration) noexcept
+                : m_clock(clock), m_duration(duration), m_start(clock ? clock->now() : TimePoint{}) {
+            }
+            ~CpuObservationScope() noexcept {
+                if (m_clock) {
+                    m_duration += m_clock->now() - m_start;
+                }
+            }
+
+        private:
+            const ITimerClock *m_clock;
+            TimeSpan &m_duration;
+            TimePoint m_start;
+        };
+
         // Every settlement path — applied, minimized, obsolete, cancelled, drop
         // in transition, or worker error — must carry the same grid-payload
         // manifest the client staged, so the derived host never has to guess
@@ -1195,6 +1212,18 @@ namespace pP {
 
     std::error_code ApplicationEditor::executeRenderWork_(
         const RenderFrameRequest &request, RenderFrameResult &out_result) {
+        const ITimerClock *const clock = request.m_observe_grid ? &observationClock() : nullptr;
+        RenderCpuObservations cpu{};
+        if (clock) {
+            cpu.m_frame_id = request.m_packet->m_frame_id;
+            cpu.m_start = clock->now();
+        }
+        PPR_DEFER {
+            if (clock) {
+                cpu.m_end = clock->now();
+                out_result.m_cpu_observations = cpu;
+            }
+        };
         Renderer &renderer = getRenderer();
         PPR_DEFER {
             if (request.m_observe_grid and m_grid_pass) {
@@ -1264,6 +1293,7 @@ namespace pP {
         // client — nothing live is read by either.
         {
             const hal::ProfileScope scope_frame_prepare{"PPR.Frame.PrepareRender"};
+            const CpuObservationScope cpu_staging{clock, cpu.m_staging};
             PPR_RETURN_ERROR_ON_FAIL(Editor, m_triangle_pass->update(packet.m_delta_time, packet.m_camera));
             PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->update(packet.m_delta_time, packet.m_camera));
             const u64 active_generation = m_grid_pass->worldGeneration();
@@ -1281,6 +1311,7 @@ namespace pP {
 
         {
             const hal::ProfileScope scope_uploads{"App.Editor.PrepareUploads"};
+            const CpuObservationScope cpu_uploads{clock, cpu.m_uploads};
             const auto published = m_grid_pass->tryPrepareCellUploads(
                 rhi_service->getDevice(), renderer.completedFenceValue());
             PPR_RETURN_ERROR_ON_FAIL(Editor, published);
@@ -1295,6 +1326,7 @@ namespace pP {
         // a temporary closure would dangle the moment this full-expression
         // ends (ASan stack-use-after-scope at encode time).
         const auto ui_encode = [&](const DrawContext &draw_context) -> std::error_code {
+            const CpuObservationScope cpu_ui{clock, cpu.m_ui_draw};
             PPR_ASSERT(m_ui_service != nullptr);
             return m_ui_service->renderDetachedUiFrame(ui, draw_context);
         };
@@ -1303,14 +1335,22 @@ namespace pP {
             ui_encode,
         };
 
-        const auto grid_prepare = [this](const PreRenderContext &context) {
+        const auto grid_prepare = [&](const PreRenderContext &context) {
+            const CpuObservationScope cpu_prepare{clock, cpu.m_grid_prepare};
             return m_grid_pass->prepareGpuVisibility(context);
         };
-        const auto grid_draw = [this](const DrawContext &context) { return m_grid_pass->renderGpuIndirect(context); };
+        const auto grid_draw = [&](const DrawContext &context) {
+            const CpuObservationScope cpu_draw{clock, cpu.m_grid_draw};
+            return m_grid_pass->renderGpuIndirect(context);
+        };
+        const auto triangle_draw = [&](const DrawContext &context) {
+            const CpuObservationScope cpu_draw{clock, cpu.m_triangle_draw};
+            return m_triangle_pass->render(context);
+        };
         const std::initializer_list<SurfaceRenderPass> surface_passes{
             {
                 .m_depth_policy = ESurfaceDepthPolicy::renderer_owned,
-                .m_draws = {DrawSubmission{"grid.gpu", grid_draw}, DrawSubmission(*m_triangle_pass)},
+                .m_draws = {DrawSubmission{"grid.gpu", grid_draw}, DrawSubmission{"triangle", triangle_draw}},
                 .m_prepare = PreRenderCallback{grid_prepare},
             },
             {
@@ -1395,6 +1435,7 @@ namespace pP {
         const SubmitFateFinalizer submit_fate_guard{this, &renderer, &out_result, previously_submitted, &frame_err};
         {
             const hal::ProfileScope scope_frame_execute{"PPR.Frame.Execute"};
+            const CpuObservationScope cpu_surface{clock, cpu.m_surface};
             frame_err = renderer.renderAndPresent(
                 window_snapshot, {surface_passes.begin(), surface_passes.size()}, packet_surface,
                 &out_result.m_presented);

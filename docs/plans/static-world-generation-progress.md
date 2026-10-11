@@ -34,7 +34,7 @@ current runtime measurements and open gates without rewriting this chronology.
 Allocation failure is fatal. Accepted work drains before borrowed inputs are
 released, including when an allocation exception must be rethrown.
 
-## Current remaining acceptance work
+## Closeout scope and remaining evidence
 
 Stages 1–6 now have integrated implementations: authored asynchronous New Game,
 transactional CPU/collider/GPU publication, catalog-driven textured terrain,
@@ -43,26 +43,34 @@ and CPU overview plus real GPU closeup exports. The entries below this section
 are chronological evidence; earlier descriptions of pending integration are
 historical and are superseded by later increments.
 
-Stage 7 remains open. The eight profile/seed CPU and GPU capture cases passed;
+The user requested closeout of critical problems and errors after accepting the
+current state. Independent review found no remaining concrete critical
+correctness blocker; further performance tuning is deferred. This does not
+convert unrun or unmet original acceptance gates into passes.
+
+The eight profile/seed CPU and GPU capture cases passed;
 32 overview images and 32 textured closeups decoded and were inspected. Known
 generation scratch/payload accounting, the data-only material extension through
 CPU/GPU presentation, cancellation/header retirement, distinct preview command
 and explicit legacy fixture retirement are implemented and reviewed.
 
 The bounded real runtime acceptance sequence and its resource observations passed
-for both shipped profiles. Remaining work includes final current build/test gates
-and documentation reconciliation.
+for both shipped profiles. Final Dev/Live/Release builds passed, and the current
+twelve-entry Dev/ASan matrix passed in 959.87 seconds. Documentation and independent
+review are reconciled for the requested critical-only closeout.
 Native Inspector/extension readouts, progress-modal phase captures, both Cancel
 paths and normal close passed the v2/v3 checks below. A ready-world four-frame
 PIX GPU capture is saved with limited replay counters. Held-input traversal,
 precise native input/Cancel latency, worker utilization, true queue depth and
 precise GPU-memory measurements remain unverified.
-Observed loading/live gaps remain an acceptance concern; the latest attribution
-narrows the paths but does not explain every long interval. Process-memory
+Observed loading/live gaps remain a recorded limitation; final CPU frame
+observations identify expensive initial terrain and actor draw calls without
+establishing their internal cause. Process-memory
 samples remain separate from generation-owned payload accounting.
 
-Third-party dependency cleanup follows completion of all seven stages, per the
-user's instruction. No further private library patch/fork is authorized.
+Third-party dependency cleanup remains deferred outside the user's requested
+critical-only closeout. The existing generated FastNoiseLite private-copy patch
+remains a dependency follow-up. No further private library patch/fork is authorized.
 
 ## Evidence retained in the output tree
 
@@ -914,3 +922,26 @@ persist: layout endpoints observed 137.506 / 124.887 ms, and replacement/live
 endpoints 47.458 / 48.228 ms. At replacement, the sampled last frame executor was
 64.069 / 65.085 ms. This directs further attribution to frame execution; it is
 not yet evidence of a particular pipeline, resource or presentation cost.
+
+## Critical-only implementation closeout
+
+At the user's request, implementation work closes with no concrete critical
+correctness blockers found by independent review. The admitted-frame pacing
+correction is committed as `435dfbc`. Opt-in CPU frame observations now preserve
+frame zero, carry frame identity/timestamps and separate staging/uploads/draw
+callbacks from the encompassing surface duration. Their source review and
+format/style gates passed.
+
+Final Dev/Live six-target and Release game builds passed. Both corrected-binary
+Frontier/Hollows v10 runtime scenarios exited zero with acceptance PASS and
+returned to one atlas/seven texture entries/seven slots. The full twelve-entry
+Dev/ASan matrix passed in 959.87 seconds (`out/worldgen-final-matrix-v4.log`), with
+no failed assertion markers in its detailed log. The preceding 52-node affected
+frame/fence/admission run passed three shuffled loops. `PPR_TEST_LOOPS=1` remains
+set in Dev and Live caches.
+
+The current acceptance record distinguishes implementation delivery from the
+original performance/measurement gates that remain unmet or unverified. Further
+tuning, held-input native traversal and the deferred dependency cleanup are not
+represented as completed work. No additional feature work or private third-party
+patch was introduced during this closeout.

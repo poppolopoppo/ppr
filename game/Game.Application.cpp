@@ -135,6 +135,8 @@ namespace demo {
             u32 m_gap_previous_phase{};
             u64 m_gap_last_lane_execute_us{}, m_max_sampled_lane_execute_us{};
             FrameAdmissionInterval m_gap_admission{};
+            std::optional<RenderCpuObservations> m_max_cpu_frame{};
+            TimePoint m_gap_start{}, m_gap_end{};
         };
         std::array<WorldgenPhaseObservation, 11u> m_worldgen_observations{};
         const ITimerClock *m_observation_clock{};
@@ -202,6 +204,8 @@ namespace demo {
                     sample.m_gap_previous_update_work = m_last_update_work;
                     sample.m_gap_last_lane_execute_us = last_lane_execute_us;
                     sample.m_gap_admission = frameAdmissionObservations().m_last_interval;
+                    sample.m_gap_start = *m_last_update_observed;
+                    sample.m_gap_end = now;
                 }
             }
             m_last_update_observed = now;
@@ -243,6 +247,19 @@ namespace demo {
                 "retiring", "capturing", "live"};
             for (u32 phase = 0u; phase < names.size(); ++phase) {
                 const auto &sample = m_worldgen_observations[phase];
+                if (sample.m_max_cpu_frame) {
+                    const auto &cpu = *sample.m_max_cpu_frame;
+                    std::println(
+                        "[worldgen-frame-cpu] observed_phase={} frame={} start_ms={:.6f} end_ms={:.6f} total_ms={:.6f} staging_ms={:.6f} uploads_ms={:.6f} grid_prepare_ms={:.6f} grid_draw_ms={:.6f} triangle_draw_ms={:.6f} ui_draw_ms={:.6f} surface_ms={:.6f} gap_start_ms={:.6f} gap_end_ms={:.6f}",
+                        names[phase], cpu.m_frame_id, time::seconds(cpu.m_start - m_observation_start) * 1000.0,
+                        time::seconds(cpu.m_end - m_observation_start) * 1000.0,
+                        time::seconds(cpu.m_end - cpu.m_start) * 1000.0, time::seconds(cpu.m_staging) * 1000.0,
+                        time::seconds(cpu.m_uploads) * 1000.0, time::seconds(cpu.m_grid_prepare) * 1000.0,
+                        time::seconds(cpu.m_grid_draw) * 1000.0, time::seconds(cpu.m_triangle_draw) * 1000.0,
+                        time::seconds(cpu.m_ui_draw) * 1000.0, time::seconds(cpu.m_surface) * 1000.0,
+                        time::seconds(sample.m_gap_start - m_observation_start) * 1000.0,
+                        time::seconds(sample.m_gap_end - m_observation_start) * 1000.0);
+                }
                 std::println(
                     "[worldgen-observation] phase={} updates={} presented_acks={} max_update_gap_ms={:.6f} max_update_work_ms={:.6f} max_presented_ack_gap_ms={:.6f}",
                     names[phase], sample.m_updates, sample.m_presentations,
@@ -265,6 +282,8 @@ namespace demo {
             }
             std::println(
                 "[worldgen-observation] Observations aggregate all jobs in this application run; startup milestones describe the first world. Presentation times are CPU acknowledgment observations, not GPU timestamps or native input latency; background outstanding includes running work, not queue depth.");
+            std::println(
+                "[worldgen-frame-cpu] Phase is observed at completion delivery. Each phase maximum CPU frame and maximum update gap are selected independently; endpoints permit overlap checks. Surface time includes grid preparation and draw callbacks, so nested durations must not be added to surface time. All durations are CPU wall time, including blocking/descheduling, rather than GPU timestamps.");
             std::println(
                 "[worldgen-gap-context] Gaps span successive update starts and can cross phases; context describes the maximum gap's preceding update and the last completed lane-executor gauge sampled at its endpoint. The gauge excludes pre-execution waiting and completion delivery, includes CPU blocking inside the executor, and is not GPU timing or a causal attribution.");
         }
@@ -3930,6 +3949,14 @@ namespace demo {
             }
             if (m_worldgen_acceptance and result.m_presented and not result.m_error and not result.m_dropped) {
                 ++m_acceptance_presentations;
+            }
+            if (m_worldgen_report and result.m_cpu_observations) {
+                auto &sample = m_worldgen_observations[observationPhase_()];
+                const auto &cpu = *result.m_cpu_observations;
+                if (not sample.m_max_cpu_frame or
+                    cpu.m_end - cpu.m_start > sample.m_max_cpu_frame->m_end - sample.m_max_cpu_frame->m_start) {
+                    sample.m_max_cpu_frame = cpu;
+                }
             }
             if (result.m_grid_observations) {
                 m_acceptance_peak_atlases = std::max(
