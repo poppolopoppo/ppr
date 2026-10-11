@@ -10,7 +10,7 @@
 
 The root first runs CPU image, mesh, resilience and observe groups. The `asset/render` group acquires a shared GPU fixture for cache, gate, draw and shared-mesh groups, releases it, then runs quarantine tests using private applications. CPU-only filtered runs never acquire that shared device. Fixture scope is recreated per runner loop.
 
-`CMakeLists.txt` registers image/mip, mesh/UV-normal, render/cache/gate/draw/shared-mesh, resilience/observe and GPU fixture implementations. It stages textures, optional meshes and shaders beside the executable. Test-only Mango/GLFW dependencies do not alter production module boundaries.
+`CMakeLists.txt` registers image/mip, mesh/UV-normal, render/cache/gate/draw/shared-mesh, resilience/observe and GPU fixture implementations. Its always-run `engine.tests.asset.assets` prerequisite stages textures, optional meshes and shaders beside the executable independently of relinking, restoring missing files and pruning stale files. Test-only Mango/GLFW dependencies do not alter production module boundaries.
 
 ## Running
 

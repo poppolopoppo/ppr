@@ -91,13 +91,8 @@ if(MSVC AND PPR_ENABLE_SANITIZER_ADDRESS)
     target_link_options(engine.tests.app PRIVATE "/alternatename:?__tlregdtor@@YAHXZ=__tlregdtor")
 endif()
 
-# Copy shader assets next to the test executable so Renderer can find them via content_dir
-add_custom_command(TARGET engine.tests.app POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-        "${CMAKE_SOURCE_DIR}/assets/shaders"
-        "$<TARGET_FILE_DIR:engine.tests.app>/shaders"
-        COMMENT "Copying shader assets"
-)
+# Renderer resolves shader assets through the executable's content directory.
+ppr_stage_assets(engine.tests.app shaders)
 
 # Phase 2.5 A1: EngineAppUnitTests split into 6 serialized ctest shards.
 # Each shard invokes the same exe with --run-test <comma-list> and

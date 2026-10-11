@@ -73,31 +73,11 @@ add_custom_target(worldgen.assets
 )
 add_dependencies(app.game worldgen.assets)
 
-# Copy shader assets to output directory
-add_custom_command(TARGET app.game POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-        "${CMAKE_SOURCE_DIR}/assets/shaders"
-        "$<TARGET_FILE_DIR:app.game>/shaders"
-        COMMENT "Copying shader assets"
-)
-
-# Stage texture and mesh fixtures next to the demo executable using the same
-# POST_BUILD shape as shaders.
-add_custom_command(TARGET app.game POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-        "${CMAKE_SOURCE_DIR}/assets/textures"
-        "$<TARGET_FILE_DIR:app.game>/textures"
-        COMMENT "Copying texture assets"
-)
-
+set(game_asset_directories shaders textures)
 if(EXISTS "${CMAKE_SOURCE_DIR}/assets/meshes")
-    add_custom_command(TARGET app.game POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_directory
-            "${CMAKE_SOURCE_DIR}/assets/meshes"
-            "$<TARGET_FILE_DIR:app.game>/meshes"
-            COMMENT "Copying mesh assets"
-    )
+    list(APPEND game_asset_directories meshes)
 endif()
+ppr_stage_assets(app.game ${game_asset_directories})
 
 # Game-owned invocation compatibility tests (Phase 2 gate): pure
 # parse/resolve coverage for selectors/conflicts, legacy value forms,

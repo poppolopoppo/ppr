@@ -41,32 +41,11 @@ if(MSVC AND PPR_ENABLE_SANITIZER_ADDRESS)
     target_link_options(engine.tests.asset PRIVATE "/alternatename:?__tlregdtor@@YAHXZ=__tlregdtor")
 endif()
 
-# Stage texture/mesh fixtures next to the test executable (same POST_BUILD shape
-# as the app suite).
-add_custom_command(TARGET engine.tests.asset POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-        "${CMAKE_SOURCE_DIR}/assets/textures"
-        "$<TARGET_FILE_DIR:engine.tests.asset>/textures"
-        COMMENT "Copying texture fixtures"
-)
-
+set(asset_fixture_directories shaders textures)
 if(EXISTS "${CMAKE_SOURCE_DIR}/assets/meshes")
-    add_custom_command(TARGET engine.tests.asset POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_directory
-            "${CMAKE_SOURCE_DIR}/assets/meshes"
-            "$<TARGET_FILE_DIR:engine.tests.asset>/meshes"
-            COMMENT "Copying mesh fixtures"
-    )
+    list(APPEND asset_fixture_directories meshes)
 endif()
-
-# TrianglePass::initialize loads mesh_bindless.slang via content_dir (same shape as
-# the app suite); the GPU cache group boots a rendering TestApp.
-add_custom_command(TARGET engine.tests.asset POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-        "${CMAKE_SOURCE_DIR}/assets/shaders"
-        "$<TARGET_FILE_DIR:engine.tests.asset>/shaders"
-        COMMENT "Copying shader assets"
-)
+ppr_stage_assets(engine.tests.asset ${asset_fixture_directories})
 
 add_test(NAME EngineAssetUnitTests COMMAND engine.tests.asset --loop ${PPR_TEST_LOOPS})
 

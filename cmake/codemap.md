@@ -64,8 +64,7 @@ Sets up C++23 modules, compiler toolchains, sanitizers, and external dependency 
   `copy_if_different` command; the gate is Windows-only because the genex is empty elsewhere.
   `ppr_stage_winpix_event_runtime()` additionally stages `WinPixEventRuntime.dll` from `slang-rhi`
   (ordered after `slang-rhi-copy-files`) when `WIN32` with target `slang-rhi` and `SLANG_RHI_ENABLE_D3D12`.
-  Shader, texture,
-  and mesh assets remain separately staged by `game/CMakeLists.txt`.
+  `Assets.cmake` provides `ppr_stage_assets()` for the game and shader-using test executables. Its always-run `<target>.assets` prerequisite invokes `StageAssets.cmake` for each owned asset directory: stale files are pruned, changed/missing files are copied, unchanged file timestamps are preserved, and no relink is forced. The script rejects deployment outside the build tree.
 
 ## Flow
 

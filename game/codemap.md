@@ -40,7 +40,7 @@ See [colony/codemap.md](colony/codemap.md) for the twelve `game.colony.*` module
 
 ## Build and tests
 
-`CMakeLists.txt` registers twelve colony modules plus `game.config` and `game.display`, their implementations, `game.application` with its `:world_job` partition, and the thin `main.cpp`. `app.game` links core/app/math/shader/rhi/sim publicly and physics privately. POST_BUILD stages shaders, textures and meshes when present.
+`CMakeLists.txt` registers twelve colony modules plus `game.config` and `game.display`, their implementations, `game.application` with its `:world_job` partition, and the thin `main.cpp`. `app.game` links core/app/math/shader/rhi/sim publicly and physics privately. Every explicit executable build stages shaders, textures and meshes when present through the independent `app.game.assets` prerequisite. Asset edits, additions and missing deployment files do not require relinking; files removed from source are pruned from deployment.
 
 `game.tests` registers `GameConfigUnitTests` unless tests are explicitly disabled. `Game.Config.Tests.cpp` covers invocation compatibility, source precedence and help; `Game.Display.Tests.cpp` covers drafts, persistence and Keep/Revert. Engine test targets never depend on these game modules.
 
