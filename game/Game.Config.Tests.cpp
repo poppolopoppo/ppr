@@ -207,6 +207,14 @@ namespace pP::game::tests::detail::compat {
         PPR_TEST_ASSERT(preset->m_profiling);
         PPR_TEST_ASSERT(not preset->m_display.m_value.m_throttle_unfocused);
 
+        Diagnostics report_diagnostics{};
+        const auto report = resolveCli({"--worldgen-report"}, report_diagnostics);
+        PPR_TEST_ASSERT(report and report->m_game.m_value.m_worldgen_report);
+        PPR_TEST_ASSERT(not report->m_profiling);
+        Diagnostics disabled_report_diagnostics{};
+        const auto disabled_report = resolveCli({"--worldgen-report=false"}, disabled_report_diagnostics);
+        PPR_TEST_ASSERT(disabled_report and not disabled_report->m_game.m_value.m_worldgen_report);
+
         Diagnostics exit_diagnostics{};
         auto bounded = resolveCli({"--auto-exit", "5"}, exit_diagnostics);
         PPR_TEST_ASSERT(bounded.has_value());

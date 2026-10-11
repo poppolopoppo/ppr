@@ -150,6 +150,10 @@ namespace pP::game {
         appendOption(
             schema.m_options, valueOption("game.worldgen_root", "worldgen-root", "Explicit content pack root."));
         appendOption(
+            schema.m_options, switchOption(
+                                  "game.worldgen_report", "worldgen-report",
+                                  "Print bounded interactive cadence and publication observations at shutdown."));
+        appendOption(
             schema.m_options, valueOption(
                                   "game.worldgen_gpu_output", "worldgen-gpu-output",
                                   "Explicit GPU closeup capture with --worldgen-preview."));

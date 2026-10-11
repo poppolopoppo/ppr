@@ -130,6 +130,70 @@ namespace demo {
     }
 
     class TurboLarbin final : public ApplicationEditor {
+        struct WorldgenPhaseObservation {
+            u64 m_updates{}, m_presentations{};
+            TimeSpan m_max_update_gap{}, m_max_update_work{}, m_max_presentation_gap{};
+        };
+        std::array<WorldgenPhaseObservation, 11u> m_worldgen_observations{};
+        const ITimerClock *m_observation_clock{};
+        bool m_worldgen_report{};
+        TimePoint m_observation_start{};
+        std::optional<TimePoint> m_last_update_observed{}, m_last_presentation_observed{};
+        std::optional<TimePoint> m_first_loading_observed{}, m_first_world_observed{};
+        TimeSpan m_max_control_work{};
+        u64 m_control_polls{}, m_world_commands_observed{}, m_peak_background_outstanding{};
+
+        [[nodiscard]] u32 observationPhase_() const noexcept {
+            return m_world_modal ? static_cast<u32>(m_world_view.m_stage) : 10u;
+        }
+
+        void observeUpdateStart_(const TimePoint now, const u32 phase) noexcept {
+            if (not m_worldgen_report) {
+                return;
+            }
+            auto &sample = m_worldgen_observations[phase];
+            ++sample.m_updates;
+            if (m_last_update_observed) {
+                sample.m_max_update_gap = std::max(sample.m_max_update_gap, now - *m_last_update_observed);
+            }
+            m_last_update_observed = now;
+            m_peak_background_outstanding = std::max(
+                m_peak_background_outstanding, static_cast<u64>(parallel::backgroundPool().getNumOutstandingTasks()));
+        }
+
+        void reportWorldgenObservations_() {
+            if (not m_worldgen_report) {
+                return;
+            }
+            std::println(
+                "[worldgen-observation] profile={} last_requested_seed={:016x} cell_size_bytes={} control_polls={} max_control_ms={:.6f} candidate_commands={} peak_background_outstanding={}",
+                m_worldgen_profile, m_requested_seed, sizeof(sim::Cell), m_control_polls,
+                time::seconds(m_max_control_work) * 1000.0, m_world_commands_observed, m_peak_background_outstanding);
+            if (m_first_loading_observed) {
+                std::println(
+                    "[worldgen-observation] startup_to_loading_ack_ms={:.6f}",
+                    time::seconds(*m_first_loading_observed - m_observation_start) * 1000.0);
+            }
+            if (m_first_loading_observed and m_first_world_observed) {
+                std::println(
+                    "[worldgen-observation] loading_ack_to_world_ack_ms={:.6f}",
+                    time::seconds(*m_first_world_observed - *m_first_loading_observed) * 1000.0);
+            }
+            constexpr std::array names{
+                "queued", "layout", "terrain", "caves", "initial_matter", "validation", "physics", "publishing",
+                "retiring", "capturing", "live"};
+            for (u32 phase = 0u; phase < names.size(); ++phase) {
+                const auto &sample = m_worldgen_observations[phase];
+                std::println(
+                    "[worldgen-observation] phase={} updates={} presented_acks={} max_update_gap_ms={:.6f} max_update_work_ms={:.6f} max_presented_ack_gap_ms={:.6f}",
+                    names[phase], sample.m_updates, sample.m_presentations,
+                    time::seconds(sample.m_max_update_gap) * 1000.0, time::seconds(sample.m_max_update_work) * 1000.0,
+                    time::seconds(sample.m_max_presentation_gap) * 1000.0);
+            }
+            std::println(
+                "[worldgen-observation] Observations aggregate all jobs in this application run; startup milestones describe the first world. Presentation times are CPU acknowledgment observations, not GPU timestamps or native input latency; background outstanding includes running work, not queue depth.");
+        }
+
         std::unique_ptr<colony::ColonyDriver> m_driver{};
         std::unique_ptr<colony::WorldJob> m_world_job{};
         mutable std::atomic<bool> m_close_requested{};
@@ -2842,7 +2906,10 @@ namespace demo {
         using super_t = ApplicationEditor;
         using super_t::super_t;
 
-        void setWorldgenSettings(const game::GameSettings &settings) {
+        void setWorldgenSettings(const game::GameSettings &settings, const ITimerClock &clock) {
+            m_observation_clock = &clock;
+            m_observation_start = clock.now();
+            m_worldgen_report = settings.m_worldgen_report;
             m_agent_count = 1u;
             m_worldgen_root = settings.m_worldgen_root
                                   ? *settings.m_worldgen_root
@@ -2879,6 +2946,13 @@ namespace demo {
 
     protected:
         [[nodiscard]] std::error_code serviceControls_() override {
+            const auto begin = m_observation_clock ? m_observation_clock->now() : TimePoint{};
+            PPR_DEFER {
+                if (m_worldgen_report) {
+                    ++m_control_polls;
+                    m_max_control_work = std::max(m_max_control_work, m_observation_clock->now() - begin);
+                }
+            };
             return m_world_job ? advanceWorldJob_(false) : std::error_code{};
         }
 
@@ -2889,6 +2963,9 @@ namespace demo {
                 result.m_job_id == m_world_command->m_job_id and
                 result.m_world_generation == m_candidate_generation and
                 result.m_content_fingerprint == m_world_command->m_content_fingerprint) {
+                if (m_worldgen_report) {
+                    ++m_world_commands_observed;
+                }
                 m_world_result = result;
             }
         }
@@ -3515,6 +3592,19 @@ namespace demo {
             if (result.m_reservation_epoch != 0u and result.m_reservation_epoch != reservationEpoch_()) {
                 return;
             }
+            if (m_worldgen_report and result.m_presented and not result.m_error and not result.m_dropped) {
+                const auto now = m_observation_clock->now();
+                auto &sample = m_worldgen_observations[observationPhase_()];
+                ++sample.m_presentations;
+                if (m_last_presentation_observed) {
+                    sample.m_max_presentation_gap = std::max(
+                        sample.m_max_presentation_gap, now - *m_last_presentation_observed);
+                }
+                m_last_presentation_observed = now;
+                if (not m_driver and not m_first_loading_observed) {
+                    m_first_loading_observed = now;
+                }
+            }
             if (m_driver and
                 m_initial_presentation and
                 m_initial_graphics.consume(result, m_driver->worldGeneration())) {
@@ -3534,6 +3624,9 @@ namespace demo {
                     result.m_grid_ack_seed == m_driver->worldGeneration()) {
                     m_world_frame_presented = true;
                 }
+            }
+            if (m_worldgen_report and m_world_frame_presented and not m_first_world_observed) {
+                m_first_world_observed = m_observation_clock->now();
             }
             if (not m_driver) {
                 if (m_capture_access and result.m_grid_ack_seed == m_capture_generation) {
@@ -3598,24 +3691,22 @@ namespace demo {
         }
 
         [[nodiscard]] std::error_code update(const TimeSpan dt) override {
+            const auto observation_begin = m_observation_clock->now();
+            const auto observation_phase = observationPhase_();
+            observeUpdateStart_(observation_begin, observation_phase);
+            PPR_DEFER {
+                const auto elapsed = m_observation_clock->now() - observation_begin;
+                m_main_ms_last = static_cast<float>(time::seconds(elapsed) * 1000.0);
+                if (m_worldgen_report) {
+                    auto &sample = m_worldgen_observations[observation_phase];
+                    sample.m_max_update_work = std::max(sample.m_max_update_work, elapsed);
+                }
+            };
             PPR_RETURN_ERROR_ON_FAIL(Demo, advanceWorldJob_());
             if (m_preview_pending and (not m_driver or m_driver->captureReady())) {
                 const auto mode = *std::exchange(m_preview_pending, std::nullopt);
                 PPR_RETURN_ERROR_ON_FAIL(Demo, requestPreview_(mode));
             }
-            // Lane split, main boundary: wall time of this whole update
-            // body on the main thread (client portion). RAII so every
-            // early return below still stamps; two steady_clock reads, no
-            // allocation.
-            struct MainLaneScope {
-                TurboLarbin *const m_owner;
-                std::chrono::steady_clock::time_point m_start;
-                ~MainLaneScope() noexcept {
-                    const std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
-                    m_owner->m_main_ms_last = std::chrono::duration<float, std::milli>(end - m_start).count();
-                }
-            };
-            const MainLaneScope main_lane{this, std::chrono::steady_clock::now()};
             // Phase: new-game request. End gestures and discard accepted tool
             // commands before pausing gameplay; none may target the new session.
             if (m_regen_pending and (not m_driver or not m_driver->editPending())) {
@@ -3816,7 +3907,17 @@ namespace demo {
             // Establish GPU quiescence before driver shutdown:
             // an UNKNOWN disposition fail-stops in super_t::shutdown() before
             // any further release.
-            std::ignore = prepareGpuTeardown_();
+            const auto quiescence_error = prepareGpuTeardown_();
+            if (gpuTeardownDisposition() == GpuQuiescence::kUnknown) {
+                failStopOnUnknownGpuTeardown_(quiescence_error);
+            }
+            PPR_RETAIN_ERROR_ON_FAIL(Demo, first_error, quiescence_error);
+            try {
+                reportWorldgenObservations_();
+            } catch (...) {
+                // A reporting failure must not skip independent resource cleanup.
+                PPR_RETAIN_ERROR_ON_FAIL(Demo, first_error, currentException_());
+            }
             // Detach the tool gesture first: cancel ownership so the camera
             // mapping below never observes a half-torn suppressor, drop the
             // focus subscription, then drop the higher-priority tool mapping
@@ -3927,7 +4028,7 @@ int runGame(const int argc, char *argv[]) try {
         return pP::colony::runColonySmoke(pP::colony::SmokeOptions{startup.m_gpu_validation}).value();
     }
     demo::TurboLarbin app("ppr", args);
-    app.setWorldgenSettings(settings);
+    app.setWorldgenSettings(settings, pP::ITimerClock::steady());
     // Optional larger workload for external profiler captures.
     if (settings.m_profile100) {
         app.setAgentCount(100u);

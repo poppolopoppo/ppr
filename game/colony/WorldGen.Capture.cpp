@@ -148,7 +148,9 @@ namespace pP::colony {
                 PPR_RETURN_ERROR_ON_FAIL(
                     WorldCapture, manifest ? std::error_code{} : std::make_error_code(std::errc::io_error));
                 manifest << m_identity;
+                const auto &capture_clock = ITimerClock::steady();
                 for (const auto &view: m_views) {
+                    const auto submission_begin = capture_clock.now();
                     CameraModel model{};
                     model.m_camera_mode = ECameraProjection::orthographic;
                     model.m_ortho_scale = view.m_width / kCaptureEdge;
@@ -159,14 +161,26 @@ namespace pP::colony {
                     PPR_RETURN_ERROR_ON_FAIL(
                         WorldCapture,
                         renderer.renderToTexture(*m_target, {DrawSubmission{m_pass}}, ColorAttachmentOps{}));
+                    const auto submission_end = capture_clock.now();
                     PPR_RETURN_ERROR_ON_FAIL(WorldCapture, renderer.waitOnHost());
+                    const auto completion_end = capture_clock.now();
                     PPR_RETURN_ERROR_ON_FAIL(
                         WorldCapture,
                         writeReadback(device, *m_target, m_directory / (std::string{view.m_name} + ".ppm")));
                     manifest << std::format(
                         "{} center_m=({}, {}) width_m={} pixels={}\n", view.m_name, view.m_x, view.m_y, view.m_width,
                         kCaptureEdge);
+                    manifest << std::format(
+                        "cpu_submission_ms={:.6f} host_completion_wait_ms={:.6f}\n",
+                        time::seconds(submission_end - submission_begin) * 1000.0,
+                        time::seconds(completion_end - submission_end) * 1000.0);
                 }
+                manifest << std::format(
+                    "atlas_uploaded_bytes={} atlas_writes={} atlas_serializations={} atlas_deferred={} growth_waits={} resident_table_builds={} resident_table_uploads={} cached_tiles={}\n",
+                    m_pass.atlasUploadedBytes(), m_pass.atlasWriteCount(), m_pass.atlasSerializationCount(),
+                    m_pass.atlasDeferredCount(), m_pass.growthWaitCount(), m_pass.residentTableBuildCount(),
+                    m_pass.residentTableUploadCount(), m_pass.cachedTileCount());
+                manifest << "Timing scope: blocking diagnostic host; completion wait is not GPU terrain time.\n";
                 manifest.close();
                 PPR_RETURN_ERROR_ON_FAIL(
                     WorldCapture, manifest ? std::error_code{} : std::make_error_code(std::errc::io_error));

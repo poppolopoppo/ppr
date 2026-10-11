@@ -511,3 +511,25 @@ images. `gpu-cameras.txt` records descriptor identity and exact metre cameras.
 It uses the real bindless terrain pass and blocks for GPU completion only in
 this diagnostic host. Plain --validate-worldgen loads and compiles the pack without generating terrain, opening a window or initializing the GPU. The distinct --worldgen-preview selector generates diagnostics and requires at least one explicit output directory. The earlier --validate-worldgen --worldgen-output form remains a CPU-only compatibility path.
 These images do not measure interactive loading or input responsiveness.
+
+## Interactive cadence observation
+
+`--worldgen-report` prints bounded, allocation-free frame-path observations at
+shutdown. The main update timer includes world-job/publication polling; control
+servicing during frame admission is timed separately. Per observed phase it
+records update count, maximum update gap/work duration and successful presented
+acknowledgment count/gap. Startup-to-first-loading and loading-to-first-complete
+world acknowledgment are separate. Observations aggregate all jobs in the run;
+the printed seed is the last requested seed. Missing readiness milestones are
+not reported as zero-duration success.
+
+The clock is injected at the application boundary. Presentation observations
+are CPU completion-consumption times, not GPU timestamps, precise scanout times,
+or native input/Cancel latency. Background outstanding tasks include executing
+work and are not queue depth or worker utilization. No GPU-thread-confined pass
+counters are read concurrently by the interactive report.
+
+The offscreen GPU manifest additionally records CPU submission duration, host
+completion wait and existing atlas/resident-table counters. Host completion wait
+is not isolated GPU terrain cost. The diagnostic host is frozen and blocking;
+its numbers do not certify interactive responsiveness.

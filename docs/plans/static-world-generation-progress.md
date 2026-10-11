@@ -525,3 +525,38 @@ CLion inspection is unavailable: the execute_tool catalog request failed with
 HTTP transport failure at 127.0.0.1:64362; no IDE-clean result is claimed.
 
 The increment's 57-edge ASan build passed. All 44 selected tests (including group nodes) passed in three shuffled loops (44.18 s, 30.32 s, 34.93 s) in out/worldgen-acceptance-gaps-tests-v1.log; no assertion failures were reported. Format Check passed eight files and semantic style reported no blocking findings.
+
+## Runtime observation and data-only GPU extension
+
+Opt-in `--worldgen-report` now records update/control work, update and observed
+presentation-ack gaps, first loading/world milestones and background outstanding
+work. The clock is injected at the application boundary. Acks are CPU-observed
+completions, not GPU timestamps; outstanding work includes running tasks. Offline
+GPU manifests separately report CPU submission and host completion wait, plus
+existing atlas counters. Astra passed this scope; configuration tests passed all
+21 nodes in three loops, and dev/ASan and Release builds passed.
+
+The actual data-only ID-60000 extension generated 4,827,397 terrain cells and
+passed CPU export and all four real GPU captures. Images were decoded and
+visually inspected in `out/worldgen-extension-acceptance/gpu/contact.png`.
+Fingerprint: `3b8ab0a56ade1865`. The new deposit and authored feature material
+require no C++ or shader changes. Inspector UI interaction remains unverified.
+
+Release seed-42 runs used paced 60 Hz, paced vsync disabled and unfocused
+throttling disabled. The first Frontier run observed loading in 2.485 s and
+world readiness 9.202 s later, with a 155.054 ms terrain update gap. Repeats
+observed Frontier loading in 3.181 s and readiness 52.602 s later, and Hollows
+loading in 3.240 s and readiness 44.328 s later. Their layout update gaps were
+469.165 / 392.166 ms despite maximum update work of 0.425 / 0.239 ms in that
+phase. Presentation acks can be consumed in admission pumps between updates;
+these values do not attribute the gap to generator work or establish responsive
+input. The unexplained gap is an open acceptance concern, not a passed gate.
+
+Repeat runs both exited zero. Process peak working sets were 679,419,904 /
+667,521,024 bytes, and sampled private peaks were 892,022,784 / 879,976,448 bytes
+(100 ms sampling; whole process, not precise generation-owned allocations).
+Commands and memory: `out/worldgen-interactive-memory-v1.json`; reports:
+`out/worldgen-interactive-frontier-repeat.stdout.log` and
+`out/worldgen-interactive-hollows.stdout.log`. These startup runs do not measure
+active-plus-candidate reload memory or native input latency. Format Check passed
+five telemetry C++ files; semantic style has zero blocking findings.
