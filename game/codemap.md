@@ -45,7 +45,7 @@ The game-owned world coordinator retains immutable requests, job-local cancellat
 
 `--worldgen-preview --worldgen-output=<directory>` exports material/biome/temperature/initial-matter P6 PPM overviews and a bounded JSON report through `colony/WorldGen.Export.cpp`. It is a headless authoring path; see `docs/worldgen-content.md` for resolution, orientation and baseline semantics. The game checkpoint envelope is owned by `game.colony.checkpoint`, leaving raw sim snapshot v4 unchanged.
 
-`--worldgen-gpu-output=<directory>` explicitly enables a rendering-capable,
+`--worldgen-preview --worldgen-gpu-output=<directory>` explicitly enables a rendering-capable,
 UI-free frozen diagnostic host after generation. `colony/WorldGen.Capture.cpp`
 uses the real GridPass, offscreen render targets and GPU readback for metre-based
 start/seam/surface/texture closeups. Blocking upload/completion is restricted to

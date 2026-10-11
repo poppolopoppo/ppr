@@ -60,15 +60,15 @@ out\build\msvc-dev\game\app.game.exe
 out\build\msvc-dev\game\app.game.exe --smoke
 ```
 
-The interactive demo presents a seeded 4096×4096-cell colony with agents, bounded pathfinding, dig/build/demolish tools, inspection, camera controls, and Colony/Performance/Display UI. It draws generated grid tiles and debug geometry; it does not load a committed Kenney fixture scene. Assets are staged beside the executable by `game/CMakeLists.txt`.
+The interactive demo loads an authored, seeded 4096×4096-cell world at three fine cells per metre and starts one directly controlled dupe. It preserves autonomous-agent pathfinding and provides dig/build/demolish tools, inspection, camera controls, and Colony/Performance/Display UI. Terrain uses catalog textures and a shared contour through GPU visibility and indirect drawing. It does not load a committed Kenney fixture scene. Assets are staged beside the executable by `game/CMakeLists.txt`.
 
 `--smoke` runs offscreen GPU readback and simulation checks. For external profiling, `--profile100` selects a 100-agent fixture and `--exit-after S` bounds the run. Bespoke CSV timing, scripted profiling controls, load/time-trial commands, and game-local exception interception have been retired. Startup/profile/display options are resolved through typed configuration; `--help` is generated from the current declarations. See [game/codemap.md](game/codemap.md) rather than copying an old flag list.
 
-For agent-driven interactive debugging, [game-control](.opencode/skills/game-control/SKILL.md) documents an external Windows controller for process targeting, screenshots, keyboard, mouse, wheel, and normal shutdown. It uses pywinauto and Pillow without adding instrumentation to the engine; semantic engine-state access remains future MCP work.
+For agent-driven interactive debugging, [game-control](.opencode/skills/game-control/SKILL.md) documents the installed Computer Use plugin and an external Windows controller fallback for process targeting, screenshots, keyboard, mouse, wheel, and normal shutdown. Semantic engine-state access remains future MCP work.
 
 ## Tests
 
-With tests enabled, current CMake registers ten entries:
+With tests enabled, current CMake registers twelve entries:
 
 | Entry | Coverage |
 |---|---|
@@ -82,6 +82,8 @@ With tests enabled, current CMake registers ten entries:
 | `app_d_io` | Services, shader, renderer/UI lifecycle, render lane and window input |
 | `EngineAssetUnitTests` | Image/mesh processing, GPU caches and render integration |
 | `GameConfigUnitTests` | Game invocation and display model/persistence |
+| `WorldgenValidateFrontier` | CPU-only shipped Frontier pack load/compile validation |
+| `WorldgenValidateHollows` | CPU-only shipped Hollows pack load/compile validation |
 
 All six app shards and the asset suite have `RUN_SERIAL TRUE`; `-j4` respects those properties. Keep independent matrix invocations exclusive on one machine. App/GPU tests need the platform/GPU facilities documented in their owning CMake files; Linux CI runs under Xvfb with Mesa.
 

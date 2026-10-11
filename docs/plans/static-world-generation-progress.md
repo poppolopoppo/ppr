@@ -4,6 +4,9 @@ The implementation authority is [the implementation prompt](static-world-generat
 This checkpoint records completed increments and outstanding integration; it is
 not a declaration that the seven-stage acceptance criteria have passed.
 
+The [acceptance evidence](static-world-generation-acceptance.md) consolidates the
+current runtime measurements and open gates without rewriting this chronology.
+
 ## Implemented increments
 
 - Asynchronous new-game foundation: first loading-screen presentation gates
@@ -46,8 +49,9 @@ generation scratch/payload accounting, the data-only material extension through
 CPU/GPU presentation, cancellation/header retirement, distinct preview command
 and explicit legacy fixture retirement are implemented and reviewed.
 
-Remaining work is the bounded real runtime acceptance sequence and its resource
-observations, final current build/test gates and documentation reconciliation.
+The bounded real runtime acceptance sequence and its resource observations passed
+for both shipped profiles. Remaining work includes final current build/test gates
+and documentation reconciliation.
 Interactive traversal and Inspector UI interaction, native input/Cancel latency,
 progress-modal phase captures and a saved GPU profiler capture remain unverified.
 Observed loading/live gaps remain an acceptance concern; the latest attribution

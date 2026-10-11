@@ -95,11 +95,11 @@ under `game/content/`; opt-in codec compatibility tests are in
 `core/config_file/`. Follow the build-system skill for the required Windows
 toolchain shell before configuring, building, or testing.
 
-## Bootstrap integration in progress
+## Bootstrap integration
 
 The interactive new-game flow keeps gameplay paused while UI/render/control work continues. Its isolated driver candidate uses a persistent low-priority coordinator and a distinct injected chunk pool. Cancellation reaches generation, actor spawning and bounded collider units. Publication swaps owning driver pointers; cancellation/failure retains the previous session. Large disposal runs on the coordinator. The first generation job waits for a successful loading-screen presentation, and the replacement modal waits for a matching presented world frame.
 
-MSVC 14.51.36231 repeatedly crashed with C1001 in function-signature.cpp when the application consumed the independently exported world-job class. The coordinator is now a partition of game.application, and main is thin. This keeps ownership explicit without custom deleters or duplicate facilities. Initial graphics preparation now copies and converts at most eight chunks per admitted frame, retaining only prepared-prefix tile metadata between frames. One batch remains in flight until its matching successful presentation; minimized/dropped batches retry, and the modal stays until the final batch presents. The existing render-lane atlas fence still needs replacement in the GPU stage before end-to-end responsiveness acceptance can be claimed.
+MSVC 14.51.36231 repeatedly crashed with C1001 in function-signature.cpp when the application consumed the independently exported world-job class. The coordinator is now a partition of game.application, and main is thin. This keeps ownership explicit without custom deleters or duplicate facilities. Independent render controls admit a candidate header and at most eight chunks per admitted update. Completion-governed versioned atlas slots replace interactive global-idle writes. Only matching activation publishes the CPU session, and the modal stays until a matching replacement frame presents. End-to-end responsiveness remains an acceptance gate; measured long update/presentation gaps are recorded in the implementation progress report.
 
 ## Pack source boundary
 
@@ -118,7 +118,7 @@ worlds = "worlds.toml"
 
 `loadContentPackSource(root, diagnostics, context)` performs blocking I/O and belongs on the world coordinator. It resolves the explicit root and each file canonically, rejects escape paths and file aliases (including aliases of the manifest), checks regular files and byte limits before mapping, and returns owned bytes. Limits are 64 KiB for the manifest and 1 MiB for each of its five documents. Cancellation is checked between bounded file reads; mapped size changes are rejected. Original manifest file-entry locations remain available for load diagnostics. Allocation failures propagate to the fatal application boundary.
 
-This lower boundary returns source bytes. `loadContentCatalog` compiles every document and required texture into one owned candidate; the interactive legacy recipe is still awaiting migration.
+This lower boundary returns source bytes. `loadContentCatalog` compiles every document and required texture into one owned candidate used by the interactive authored-world path.
 
 ## Biome recipes
 
@@ -172,17 +172,16 @@ Deposits are optional. Each threshold deposit has a unique explicit order,
 increasing normalized-depth bounds within `[0,1]`, and increasing threshold
 bounds within `[-1,1]`. `threshold` is the supported biome deposit kind at this
 boundary; unsupported kinds fail explicitly. Geometric veins, feature templates,
-world rules and full-pack identity are validated by the complete pack loader. These
-decoded recipes are not yet the interactive production generator.
+world rules and full-pack identity are validated by the complete pack loader. The
+production generator compiles these decoded recipes into its owned numeric plan.
 
 ## Noise fields
 
 `decodeFieldDefinitions` resolves named, owned numeric descriptors from `fields.toml`, sorted by stable key. The document requires `schema_version = 1` and at least one `[fields.<name>]` record. The byte cap is 1 MiB and the record cap is 256. Required fields are `algorithm` and positive finite `frequency_per_metre`. Supported algorithms are `open_simplex2`, `perlin`, and `cellular_distance` (Euclidean squared distance).
 
-Optional controls have these documented defaults: `fractal = "none"` (
-one`, `fbm`, `ridged`), `octaves = 4` (1..16), `lacunarity = 2.0` (1..4), `gain = 0.5` (0..1), `warp_amplitude_m = 0.0` (0..4096), and `warp_frequency_per_metre = 0.006` (positive finite). Nonzero warp uses an independently seeded OpenSimplex2 progressive warp. Noise samples use global metre coordinates; warping changes only sample coordinates. The numeric preflight also bounds octave-scaled lattice coordinates, rejecting unsafe combinations rather than clamping. Coordinates passed to the compiled field must be finite and within ±4096 metres.
+Optional controls have these documented defaults: `fractal = "none"` (`none`, `fbm`, `ridged`), `octaves = 4` (1..16), `lacunarity = 2.0` (1..4), `gain = 0.5` (0..1), `warp_amplitude_m = 0.0` (0..4096), and `warp_frequency_per_metre = 0.006` (positive finite). Nonzero warp uses an independently seeded OpenSimplex2 progressive warp. Noise samples use global metre coordinates; warping changes only sample coordinates. The numeric preflight also bounds octave-scaled lattice coordinates, rejecting unsafe combinations rather than clamping. Coordinates passed to the compiled field must be finite and within ±4096 metres.
 
-FastNoiseLite v1.1.1 is pinned by immutable revision and stays private to the engine adapter; see `third_party/FastNoiseLite/README.md` for provenance and the checked unsigned-arithmetic patch. The compiled field is immutable and allocation-free during sampling. Allocation failures propagate to the fatal application boundary. These field records are wired into the complete pack compiler; production terrain integration follows in stage 3.
+FastNoiseLite v1.1.1 is pinned by immutable revision and stays private to the engine adapter; see `third_party/FastNoiseLite/README.md` for provenance and the checked unsigned-arithmetic patch. The compiled field is immutable and allocation-free during sampling. Allocation failures propagate to the fatal application boundary. The complete pack compiler and production terrain generator consume these field records.
 
 ## Feature templates
 
@@ -333,8 +332,7 @@ in that rule's template. It applies to each successfully placed instance. The
 material must use particle representation. Temperature is positive finite K
 within float range; bulk density is positive finite kg/m3 at most 1e9. Gas
 forbids fill height. Other phases require an exact integer fine-cell boundary
-expressed in local metres (
-/3`, using the nearest representable double), above
+expressed in local metres (`i / 3`, using the nearest representable double), above
 the reservation bottom and at or below its top. Signed local heights are
 supported. Nearby off-lattice values are rejected rather than rounded. These
 records describe unsimulated initial matter; final geometry, containment,
@@ -383,7 +381,7 @@ including deleted assets, without needing a C++ relink. Then run from any folder
 
 ```text
 app.game --validate-worldgen
-app.game --worldgen-preview --worldgen-profile=hollows
+app.game --worldgen-preview --worldgen-profile=hollows --worldgen-output=<directory>
 app.game --validate-worldgen --worldgen-root=<explicit-pack-directory>
 ```
 
@@ -391,10 +389,11 @@ The default root is `worldgen/default` beside the executable. This command reads
 and decodes the complete pack before reporting its fingerprint; it creates no
 window, RHI service or GPU work. `--worldgen-profile` selects a validated profile;
 `--worldgen-seed` accepts the complete unsigned 64-bit range for subsequent
-numeric generation. The current validation command validates content and assets,
-compiles the owned numeric plan, rasterizes all 1024 chunks using the injected
-background pool, resolves initial matter, and validates final terrain and the
-supported start. It reports canonical terrain/output checksums, five phase
+numeric generation. Plain validation loads and validates content and assets and
+compiles the owned numeric plan; it does not generate a world. The preview command
+additionally rasterizes all 1024 chunks using the injected background pool,
+resolves initial matter, and validates final terrain and the supported start.
+Its report contains canonical terrain/output checksums, five phase
 timings, metadata counts and resident grid payload bytes. Checksums use FNV-1a
 over explicit little-endian integers and floating bit patterns; terrain is
 chunk-major/local row-major. Output identity includes stable biome/feature/rule
@@ -424,7 +423,7 @@ and report; the injected clock affects timings only. Game factories bind that
 result to an owned catalog and immutable reproduction descriptor; Colony can
 adopt the complete owner without regenerating. The production job builds and publishes this complete candidate. Full allocation/scratch accounting remains an acceptance measurement.
 Third-party dependency cleanup is deferred until all seven implementation stages
-are complete, as requested; it is not part of the remaining stage-3 work.
+are complete, as requested.
 
 
 ## Full world checkpoints

@@ -232,9 +232,10 @@ configure/build evidence to the validation owner.
 
 - Shared test infrastructure is the `engine.tests` static library (never run);
   runnable test executables are listed in the target-kinds table.
-- The ten CTest entries are `EngineCoreUnitTests`, `EngineSimUnitTests`,
+- The twelve CTest entries are `EngineCoreUnitTests`, `EngineSimUnitTests`,
   `app_a1_death_lifecycle`, `app_a2_gates`, `app_a3_display_window`, `app_b_sim`, `app_c_fence`,
-  `app_d_io`, `EngineAssetUnitTests`, and `GameConfigUnitTests`.
+  `app_d_io`, `EngineAssetUnitTests`, `GameConfigUnitTests`,
+  `WorldgenValidateFrontier`, and `WorldgenValidateHollows`.
 - `PPR_TEST_LOOPS` is a cache switch: default `1` for development;
   configure with `-DPPR_TEST_LOOPS=3` for CI stress (three same-process
   shuffled loops). When reusing that build directory for development,
