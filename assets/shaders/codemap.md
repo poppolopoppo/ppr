@@ -62,15 +62,25 @@ barriers and drawing share one encoder and submission.
   `0xFFFF` discards); otherwise the payload material is used. Catalog terrain
   resolves bindless textures and metre-period UVs; diagnostic modes use an owned
   palette. The low-three-bit tint remains only for explicit legacy fixtures.
-- Catalog contours partition solid materials through the shared marching-square
-  case table as well as clipping solid/empty coverage. Within each occupied
-  component, minority labels use their midpoint-cut polygons; the most frequent
-  label fills the complement. Count ties prefer the lower-y/lower-x sample,
-  independently of material IDs. This deliberately connects that label through
-  fully solid alternating saddles and fills multi-material junctions without holes.
-  Diagnostic sample selection stays within the chosen material. Uniform-material
-  components take a fast path; mixed components test at most three minority masks,
-  with no additional texture samples, uploads or draw calls.
+- Catalog contours use the shared marching-square topology and edge midpoints,
+  with quadratic Bezier arcs (dual-cell centre control point) for diagonal cuts.
+  Inverse-quadratic coordinates classify both outer coverage and solid materials;
+  closest-point solves measure the actual curves, never internal triangulation edges.
+  Within each occupied component, minority labels use their rounded regions;
+  the most frequent label fills the complement. Count ties prefer the lower-y/
+  lower-x sample independently of material IDs, including alternating saddles.
+  Collision contours retain the shared piecewise-linear geometry.
+- Terrain presentation adds a dark material outline with a two-pixel nominal
+  width and a one-pixel AA fringe, plus a six-pixel shadow falling into non-solid
+  space. Derivatives captured before divergent branches convert curve normals
+  to screen-space widths. Including its fringe, outline support is capped at
+  one cell across; shadow depth is capped at one cell. A bounded neighboring
+  dual-cell search carries effects across cell/chunk seams. Diagnostics retain
+  their exact palette colors; shadow composites only into non-solid coverage
+  (over matter when present), leaving solid fill unchanged.
+  Uniform components retain their material fast path. No new resources, uploads,
+  texture samples or draw calls are introduced; neighboring terrain buffer reads
+  and bounded curve evaluation add fragment work.
 - `grid_tiles.slang` entry points: `[shader("vertex")] vertexGridMain` and
   `[shader("fragment")] fragmentGridMain`.
 - CPU mirrors and cursor bindings live in `TrianglePass`, `GpuCaches`, and `Mesh.Types`.
@@ -107,12 +117,13 @@ contour/diagnostic buffers, and the bindless texture heap/shared sampler.
 - `mesh_bindless.slang` - the live bindless static-mesh vertex/fragment program.
 - `grid_tiles.slang` - the live debug-grid tile vertex/fragment program (`vertexGridMain` + `fragmentGridMain`).
 
-Catalog terrain uses the shared `engine.math` contour points and 16-case table,
-uploaded verbatim (8-byte points, 72-byte cases). The fragment shader reads four
-global samples through a completion-safe logical-chunk-to-physical-slot map,
-including diagonal neighbors, and evaluates filled triangles. Saddle components
-stay disconnected. The nearest occupied sample in that component selects the
-material, with global row-major ties; only actual boundary segments drive edge
-AA. Outside-world samples use the profile's validated wall material without
-forming atlas addresses. Each chunk draws only its nominal rectangle. Legacy
-explicit fixtures retain square cells. Texture shading remains pending.
+Catalog terrain uploads the shared `engine.math` contour points and 16-case
+connectivity table verbatim (8-byte points, 72-byte cases). The fragment shader
+reads global samples through a completion-safe logical-chunk-to-physical-slot
+map, including diagonal neighbors, then rounds the shared midpoint boundaries.
+Occupied saddle components stay disconnected; fully solid material saddles use
+the dominant-label complement policy described above. The diagnostic sample
+comes from the chosen material with global row-major ties. Outside-world samples
+use the profile's validated wall material without forming atlas addresses. Each
+chunk draws only its nominal rectangle. Explicit legacy fixtures retain square
+cells. Catalog color textures use world-space metric UVs and explicit gradients.
