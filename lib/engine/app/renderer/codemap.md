@@ -38,6 +38,15 @@ acknowledgments. Identical retries preserve partial progress. Explicit reference
 fixtures still support queue-idle preparation; when needed, that path completes
 all pending chunks so switching preparation APIs cannot pin both slot banks.
 
+World-specific terrain, atlas mappings and retained draw state live in one
+`GridPass::WorldResources` value. Owner-lane candidate staging/preparation keeps
+the active value intact; activation requires matching job, world-generation and
+content identities. At most active+candidate or active+retiring owners exist.
+The previous owner remains until its last reader, deferred pipeline roots and
+completed cached root bindings retire. Completion-safe roots are recreated
+lazily; unfinished active roots are retained. Cancellation never activates a
+candidate. Normal game candidate transport and catalog textures remain pending.
+
 ## Design
 
 - **Renderer** (`App.Renderer.cppm/.cpp`): private config (backend-preferred format, image count 3),

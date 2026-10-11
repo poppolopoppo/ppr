@@ -280,6 +280,17 @@ export namespace pP {
         // table and edit acknowledgments while a bounded cohort is prepared.
         [[nodiscard]] Expected<bool> tryPrepareCellUploads(
             rhi::IDevice &device, FenceCompletionValue completed, u32 chunk_budget = 8u);
+
+        // Owner-lane candidate preparation retains the active world. Identity
+        // must match at activation; at most active+candidate or active+retiring
+        // resource bundles exist. Readiness alone never activates a candidate.
+        [[nodiscard]] std::error_code stageWorldCandidate(
+            u64 job_id, u64 world_generation, const GridStagedFrame &stage);
+        [[nodiscard]] Expected<bool> advanceWorldCandidate(
+            rhi::IDevice &device, FenceCompletionValue completed, u32 chunk_budget = 8u);
+        [[nodiscard]] std::error_code activateWorldCandidate(u64 job_id, u64 world_generation, u64 fingerprint);
+        void cancelWorldCandidate(u64 job_id) noexcept;
+        [[nodiscard]] u32 retainedAtlasCountForTest() const noexcept;
         [[nodiscard]] u64 atlasDeferredCount() const noexcept {
             return m_atlas_deferred_count;
         }
@@ -332,10 +343,10 @@ export namespace pP {
             return m_cache_hit_count;
         }
         [[nodiscard]] u32 stagedTileCount() const noexcept {
-            return safe_narrowing(m_submitted_tiles.size());
+            return safe_narrowing(m_world.m_submitted_tiles.size());
         }
         [[nodiscard]] u32 cachedTileCount() const noexcept {
-            return safe_narrowing(m_tile_cache.size());
+            return safe_narrowing(m_world.m_tile_cache.size());
         }
 
     private:
@@ -375,7 +386,10 @@ export namespace pP {
             // m_deferred_releases instead of dropping it mid-flight.
             std::array<rhi::ComPtr<rhi::IShaderObject>, kTileRingSize> m_slot_roots{};
             std::array<rhi::ShaderCursor, kTileRingSize> m_slot_frame_cursors{};
+            std::array<rhi::IBuffer *, kTileRingSize> m_slot_atlases{};
         };
+
+        [[nodiscard]] std::error_code ensurePipelineRoots_(rhi::IDevice &device, GridCachedPipeline &pipeline);
 
         [[nodiscard]] Expected<GridCachedPipeline *> pipelineFor_(
             rhi::IDevice &device, const RenderPipelineSignature &signature);
@@ -436,21 +450,15 @@ export namespace pP {
         std::array<VisibilitySlot, kTileRingSize> m_visibility_slots{};
         std::array<VisibilityProgram, 2u> m_visibility_programs{};
         bool m_visibility_prepared{false};
-        bool m_contours_enabled{false};
-        bool m_resident_contours_enabled{false};
-        float m_resident_cell_size_m{1.0f};
-        u32 m_boundary_material_id{1u};
-        u32 m_resident_boundary_material_id{1u};
+
+
         rhi::ComPtr<rhi::IBuffer> m_contour_points{};
         rhi::ComPtr<rhi::IBuffer> m_contour_cases{};
         std::array<rhi::ComPtr<rhi::IBuffer>, kTileRingSize> m_chunk_slot_buffers{};
         std::array<void *, kTileRingSize> m_chunk_slot_mapped{};
         std::array<bool, kTileRingSize> m_chunk_slot_uploaded{};
-        std::array<u32, kGridTileCacheCapacity> m_resident_chunk_slots{};
-        bool m_visibility_has_cells{false};
-        float m_cell_size_m{1.0f};
-        Array<GridTilePayload> m_resident_table{};
-        bool m_resident_table_stale{true};
+
+
         std::array<bool, kTileRingSize> m_resident_table_uploaded{};
         u64 m_resident_table_build_count{};
         u64 m_resident_table_upload_count{};
@@ -501,18 +509,8 @@ export namespace pP {
         // chunks. Published and retained-table slots stay pinned; retired slots
         // are reusable only after their last reader fence completes. A 4-byte
         // dummy serves flat-only rendering without allocating the atlas.
-        rhi::ComPtr<rhi::IBuffer> m_cell_atlas{};
-        void *m_cell_atlas_mapped = nullptr;
-        rhi::ComPtr<rhi::IBuffer> m_cell_dummy{};
-        std::array<std::optional<u32>, kGridTileCacheCapacity> m_cell_slots{};
-        std::array<FenceCompletionValue, kCellAtlasSlots> m_cell_slot_values{};
-        std::bitset<kCellAtlasSlots> m_cell_slots_current{};
-        std::bitset<kCellAtlasSlots> m_resident_cell_slots{};
-        std::bitset<kCellAtlasSlots> m_cell_slots_reserved{};
-        Array<u32> m_cell_cohort_chunks{};
-        Array<u32> m_cell_cohort_slots{};
-        u32 m_cell_cohort_cursor{};
-        bool m_cell_publication_deferred{false};
+
+
         u64 m_atlas_deferred_count{};
         u64 m_atlas_uploaded_bytes{};
 
@@ -521,7 +519,6 @@ export namespace pP {
             bool m_pending = true;
         };
 
-        FlatMap<u32, GridCachedCells> m_cell_cache{};
 
         // Pass-owned CPU tile cache + staged submissions. Render-thread
         // confined: no internal mutex; concurrent upload is a caller bug.
@@ -530,13 +527,51 @@ export namespace pP {
             u32 m_material_id = 0u;
         };
 
-        FlatMap<u32, GridCachedTile> m_tile_cache{};
+
         u64 m_upload_count = 0u;
         // Mutable so the const resolve probe can record hits; still
         // render-thread confined, never atomic.
         mutable u64 m_cache_hit_count = 0u;
 
-        Array<GridTileSubmission> m_submitted_tiles{};
+
+        // One world owns its terrain cache, atlas mappings and retained draw
+        // state. Candidate preparation can exchange this value on the owner
+        // lane without moving pass programs, completion rings or the camera.
+        struct WorldResources {
+            u64 m_job_id{};
+            u64 m_world_generation{};
+            u64 m_content_fingerprint{};
+            FenceCompletionValue m_last_reader{kFenceValueNone};
+            bool m_prepared{false};
+            bool m_visibility_has_cells{false};
+            bool m_contours_enabled{false};
+            bool m_resident_contours_enabled{false};
+            float m_resident_cell_size_m{1.0f};
+            u32 m_boundary_material_id{1u};
+            u32 m_resident_boundary_material_id{1u};
+            std::array<u32, kGridTileCacheCapacity> m_resident_chunk_slots{};
+            float m_cell_size_m{1.0f};
+            Array<GridTilePayload> m_resident_table{};
+            bool m_resident_table_stale{true};
+            rhi::ComPtr<rhi::IBuffer> m_cell_atlas{};
+            void *m_cell_atlas_mapped = nullptr;
+            rhi::ComPtr<rhi::IBuffer> m_cell_dummy{};
+            std::array<std::optional<u32>, kGridTileCacheCapacity> m_cell_slots{};
+            std::array<FenceCompletionValue, kCellAtlasSlots> m_cell_slot_values{};
+            std::bitset<kCellAtlasSlots> m_cell_slots_current{};
+            std::bitset<kCellAtlasSlots> m_resident_cell_slots{};
+            std::bitset<kCellAtlasSlots> m_cell_slots_reserved{};
+            Array<u32> m_cell_cohort_chunks{};
+            Array<u32> m_cell_cohort_slots{};
+            u32 m_cell_cohort_cursor{};
+            bool m_cell_publication_deferred{false};
+            FlatMap<u32, GridCachedCells> m_cell_cache{};
+            FlatMap<u32, GridCachedTile> m_tile_cache{};
+            Array<GridTileSubmission> m_submitted_tiles{};
+        };
+        WorldResources m_world{};
+        std::unique_ptr<WorldResources> m_candidate_world{};
+        std::unique_ptr<WorldResources> m_retiring_world{};
 
         CameraSnapshot m_camera_view;
         bool m_ready = false;

@@ -40,12 +40,14 @@ The current interactive candidate uses the legacy recipe.
 
 Stage 4 has metric actors, shared-contour colliders, fixed-tick player commands
 and preserved AI, prepared-driver adoption, catalog-aware dig/demolition and
-three-cell construction validation. Interactive picking, input and presentation
-integration remain in progress.
+three-cell construction validation, input clearing, metre-based picking and
+camera/overlay transport. Normal authored-session publication and complete
+shared-surface tool hit selection remain pending.
 
-Stage 5 needs bindless textured contours, GPU visibility/indirect drawing,
-incremental transactional GPU preparation/publication/retirement, diagnostic modes
-and inspector integration.
+Stage 5 has GPU visibility/indirect drawing, persistent resident tables,
+completion-protected atlas cohorts and shared GPU contour shading. It still
+needs catalog textures, normal transactional candidate GPU publication,
+diagnostic modes, inspector integration and gameplay/collider edit coherence.
 
 Stage 6 needs checkpoint identity/full frozen capture, preview exports and final
 authoring diagnostics. Stage 7 needs representative visual/traversal review,
@@ -233,3 +235,22 @@ visibility/cohort regression also passed three loops in
 Formatting, semantic style and independent Astra review passed. Textures,
 transactional candidate GPU bundles, diagnostic modes and gameplay/collider
 edit coherence remain stage 5 work; this increment does not claim those gates.
+
+GridPass now owns terrain/atlas/resident state as one world resource value and
+supports independent owner-lane candidate staging, bounded preparation, matching
+activation and cancellation. Active terrain remains drawable until explicit
+activation. Admission permits active+candidate or active+retiring only. Retirement
+waits for the old reader fence and deferred pipelines, then drops completed
+shared shader roots that also own atlas references; unfinished active roots are
+preserved. Shutdown/loss reset fence-epoch state.
+The ASan application/app/asset build passed in `out/worldgen-bundle-build6.log`.
+All 59 focused app leaves passed three loops in `out/worldgen-bundle-tests.log`
+(112.75/110.93/109.18 s, before the final candidate-only retirement correction).
+Visibility and contour regressions passed three loops in
+`out/worldgen-bundle-regression.log`. The final candidate regression passed three
+loops in `out/worldgen-bundle-final-gpu.log` (18.36/19.71/19.29 s), covering retained
+pixels, partial readiness, identity rejection, cancellation, three warmed shader
+roots, atlas count 1/2/1, teardown and a fresh fence epoch after shutdown/loss.
+Formatting/style and independent Astra review passed. Normal game request/ack
+integration, catalog textures, diagnostic modes and edit/collider coherence are
+still pending; the candidate API alone does not complete world publication.

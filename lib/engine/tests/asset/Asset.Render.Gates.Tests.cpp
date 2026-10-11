@@ -1394,6 +1394,116 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(legacy_texel[0] > 160u and legacy_texel[1] < 80u);
         };
 
+        PPR_UNIT_TEST (grid_candidate_world_retains_active_until_matching_activation) {
+            const auto rhi = SharedGpu::rhiService();
+            const auto shader = SharedGpu::shaderService();
+            Renderer *const renderer = SharedGpu::renderer();
+            PPR_TEST_ASSERT(rhi.isValid() and shader.isValid() and renderer != nullptr);
+            rhi::IDevice &device = rhi->getDevice();
+            GridPass grid;
+            PPR_TEST_ASSERT(not grid.initialize(*rhi, *shader, std::filesystem::current_path()));
+            PPR_DEFER {
+                std::ignore = renderer->waitOnHost();
+                std::ignore = grid.shutdown();
+            };
+            const auto target = makeRenderTarget_(device, 128u);
+            PPR_TEST_ASSERT(target.has_value());
+            CameraModel model{};
+            model.m_camera_mode = ECameraProjection::orthographic;
+            model.m_origin = float3{0.0f, 0.0f, 0.0f};
+            model.m_ortho_scale = 1.0f;
+            Camera camera;
+            camera.updateModel(TimeSpan{}, model, Viewport{PixelRect{int2{0, 0}, int2{128, 128}}, ViewportLayout{}});
+            PPR_TEST_ASSERT(not grid.update(TimeSpan{}, camera.getSnapshot()));
+            const auto prepare = [&](const PreRenderContext &context) { return grid.prepareGpuVisibility(context); };
+            const auto draw = [&](const DrawContext &context) { return grid.renderGpuIndirect(context); };
+            const auto render = [&] {
+                PPR_TEST_ASSERT(not renderer->renderToTexture(
+                    targetRef_(target), {DrawSubmission{"candidate world", draw}}, {}, PreRenderCallback{prepare}));
+                grid.notifyFrameSubmitted(renderer->lastSubmittedFenceValue());
+                PPR_TEST_ASSERT(not renderer->waitOnHost());
+                const auto pixels = readback_(device, targetRef_(target), 128u);
+                PPR_TEST_ASSERT(pixels.has_value());
+                return gateTexel_(*pixels, 64u, 64u);
+            };
+            GridPass::GridStagedFrame active{};
+            active.m_tiles.push_back(
+                GridTileSubmission{.m_chunk_id = 0u, .m_tile_range = {0, 0, 128, 128}, .m_dirty_mask = 1u});
+            GridPass::GridStagedUpload upload{};
+            upload.m_cell_materials.resize(GridPass::kCellsPerChunk, 1u);
+            active.m_uploads.push_back(std::move(upload));
+            PPR_TEST_ASSERT(not grid.applyStagedFrame(active));
+            auto prepared = grid.tryPrepareCellUploads(device, renderer->completedFenceValue());
+            PPR_TEST_ASSERT(prepared and *prepared);
+            const auto before = render();
+            PPR_TEST_ASSERT(before[0] > 160u and before[1] < 80u);
+            PPR_TEST_ASSERT(render() == before);
+            PPR_TEST_ASSERT(render() == before);
+            PPR_TEST_ASSERT(grid.retainedAtlasCountForTest() == 1u);
+
+            auto candidate = active;
+            candidate.m_content_fingerprint = 77u;
+            std::ranges::fill(candidate.m_uploads[0].m_cell_materials, u16{2u});
+            candidate.m_tiles.push_back(
+                GridTileSubmission{.m_chunk_id = 1u, .m_tile_range = {128, 0, 256, 128}, .m_dirty_mask = 1u});
+            auto second = candidate.m_uploads[0];
+            second.m_chunk_id = 1u;
+            candidate.m_uploads.push_back(std::move(second));
+            PPR_TEST_ASSERT(not grid.stageWorldCandidate(10u, 20u, candidate));
+            PPR_TEST_ASSERT(grid.stageWorldCandidate(11u, 21u, candidate) == std::errc::device_or_resource_busy);
+            PPR_TEST_ASSERT(grid.activateWorldCandidate(10u, 20u, 77u) == std::errc::operation_not_permitted);
+            prepared = grid.advanceWorldCandidate(device, renderer->completedFenceValue(), 1u);
+            PPR_TEST_ASSERT(prepared and not *prepared);
+            PPR_TEST_ASSERT(grid.retainedAtlasCountForTest() == 2u);
+            PPR_TEST_ASSERT(render() == before);
+            prepared = grid.advanceWorldCandidate(device, renderer->completedFenceValue(), 1u);
+            PPR_TEST_ASSERT(prepared and *prepared);
+            PPR_TEST_ASSERT(render() == before);
+            PPR_TEST_ASSERT(grid.activateWorldCandidate(9u, 20u, 77u) == std::errc::operation_not_permitted);
+            PPR_TEST_ASSERT(grid.activateWorldCandidate(10u, 21u, 77u) == std::errc::operation_not_permitted);
+            PPR_TEST_ASSERT(grid.activateWorldCandidate(10u, 20u, 78u) == std::errc::operation_not_permitted);
+            grid.cancelWorldCandidate(9u);
+            PPR_TEST_ASSERT(not grid.activateWorldCandidate(10u, 20u, 77u));
+            PPR_TEST_ASSERT(grid.stageWorldCandidate(11u, 21u, candidate) == std::errc::device_or_resource_busy);
+            const auto after = render();
+            PPR_TEST_ASSERT(after[1] > 160u and after[0] < 80u);
+            PPR_TEST_ASSERT(grid.retainedAtlasCountForTest() == 1u);
+            PPR_TEST_ASSERT(grid.atlasSerializationCount() == 0u);
+
+            // Completed old readers permit another candidate. A stale cancel
+            // cannot discard it; a matching cancel preserves the active world.
+            PPR_TEST_ASSERT(not grid.stageWorldCandidate(11u, 21u, candidate));
+            grid.cancelWorldCandidate(10u);
+            prepared = grid.advanceWorldCandidate(device, renderer->completedFenceValue(), 1u);
+            PPR_TEST_ASSERT(prepared and not *prepared);
+            PPR_TEST_ASSERT(grid.retainedAtlasCountForTest() == 2u);
+            grid.cancelWorldCandidate(11u);
+            PPR_TEST_ASSERT(grid.retainedAtlasCountForTest() == 1u);
+            PPR_TEST_ASSERT(render() == after);
+            const auto absent = grid.advanceWorldCandidate(device, renderer->completedFenceValue());
+            PPR_TEST_ASSERT(not absent and absent.error() == std::errc::operation_not_permitted);
+            auto invalid = candidate;
+            invalid.m_cell_size_m = 2.0f;
+            PPR_TEST_ASSERT(grid.stageWorldCandidate(12u, 22u, invalid) == std::errc::invalid_argument);
+            PPR_TEST_ASSERT(render() == after);
+
+            for (const bool device_loss: {false, true}) {
+                PPR_TEST_ASSERT(not (device_loss ? grid.notifyDeviceLost() : grid.shutdown()));
+                PPR_TEST_ASSERT(not grid.initialize(*rhi, *shader, std::filesystem::current_path()));
+                PPR_TEST_ASSERT(not grid.stageWorldCandidate(12u, 22u, candidate));
+                prepared = grid.advanceWorldCandidate(device, renderer->completedFenceValue(), 2u);
+                PPR_TEST_ASSERT(prepared and *prepared);
+                PPR_TEST_ASSERT(not grid.activateWorldCandidate(12u, 22u, 77u));
+                // A fresh fence epoch starts at zero. The restored active
+                // bundle has not drawn and must carry no old reader fence.
+                const auto no_candidate = grid.advanceWorldCandidate(device, kFenceValueNone);
+                PPR_TEST_ASSERT(not no_candidate and no_candidate.error() == std::errc::operation_not_permitted);
+                PPR_TEST_ASSERT(not grid.stageWorldCandidate(13u, 23u, candidate));
+                grid.cancelWorldCandidate(13u);
+                PPR_TEST_ASSERT(render() == after);
+            }
+        };
+
         PPR_UNIT_TEST (grid_shared_contours_match_cpu_at_four_chunk_seams) {
             const auto rhi = SharedGpu::rhiService();
             const auto shader = SharedGpu::shaderService();
@@ -1766,6 +1876,7 @@ namespace pP::tests {
             detail::Gate::pre_render_preparation_orders_and_rejects_submission,
             detail::Gate::grid_compute_visibility_matches_reference_and_draws,
             detail::Gate::grid_shared_contours_match_cpu_at_four_chunk_seams,
+            detail::Gate::grid_candidate_world_retains_active_until_matching_activation,
         });
     };
 
