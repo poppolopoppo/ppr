@@ -1083,6 +1083,53 @@ namespace pP::tests::detail {
             pass.clearInstances();
         };
 
+        PPR_UNIT_TEST (pre_render_preparation_orders_and_rejects_submission) {
+            const auto rhi = SharedGpu::rhiService();
+            PPR_TEST_ASSERT(rhi.isValid());
+            Renderer *const renderer = SharedGpu::renderer();
+            PPR_TEST_ASSERT(renderer != nullptr);
+            const auto target = makeRenderTarget_(rhi->getDevice(), 32u);
+            PPR_TEST_ASSERT(target.has_value());
+
+            u32 phase = 0u;
+            const auto prepare = [&](const PreRenderContext &context) -> std::error_code {
+                PPR_TEST_ASSERT(phase == 0u);
+                PPR_TEST_ASSERT(std::addressof(context.m_device) == std::addressof(rhi->getDevice()));
+                PPR_TEST_ASSERT(static_cast<bool>(context.m_wait_for_fence));
+                context.m_encoder.globalBarrier();
+                phase = 1u;
+                return {};
+            };
+            const auto draw = [&](const DrawContext &) -> std::error_code {
+                PPR_TEST_ASSERT(phase == 1u);
+                phase = 2u;
+                return {};
+            };
+            PPR_TEST_ASSERT(not renderer->renderToTexture(
+                targetRef_(target), {DrawSubmission{"prepared draw", draw}}, {}, PreRenderCallback{prepare}));
+            PPR_TEST_ASSERT(phase == 2u);
+            PPR_TEST_ASSERT(not renderer->waitOnHost());
+            const FenceCompletionValue accepted = renderer->lastSubmittedFenceValue();
+
+            const auto reject = [&](const PreRenderContext &) -> std::error_code {
+                phase = 3u;
+                return std::make_error_code(std::errc::invalid_argument);
+            };
+            PPR_TEST_ASSERT(
+                renderer->renderToTexture(
+                    targetRef_(target), {DrawSubmission{"unreachable draw", draw}}, {}, PreRenderCallback{reject}) ==
+                std::make_error_code(std::errc::invalid_argument));
+            PPR_TEST_ASSERT(phase == 3u);
+            PPR_TEST_ASSERT(renderer->lastSubmittedFenceValue() == accepted);
+            PPR_TEST_ASSERT(renderer->lastSubmitSettlement() == FrameSettlement::kRejected);
+
+            phase = 0u;
+            PPR_TEST_ASSERT(not renderer->renderToTexture(
+                targetRef_(target), {DrawSubmission{"retry prepared draw", draw}}, {}, PreRenderCallback{prepare}));
+            PPR_TEST_ASSERT(phase == 2u);
+            PPR_TEST_ASSERT(not renderer->waitOnHost());
+        };
+
         // §7 editor flow end to end: boot editor, loadScene, per-frame submit
         // via update, render the pass offscreen, release on unload/teardown.
         PPR_UNIT_TEST (editor_scene_flow) {
@@ -1215,6 +1262,7 @@ namespace pP::tests {
             detail::Gate::render_rejects_multilayer_multimip_color_attachment,
             detail::Gate::render_resolves_msaa_color_attachment,
             detail::Gate::render_accepts_msaa_sample_counts,
+            detail::Gate::pre_render_preparation_orders_and_rejects_submission,
         });
     };
 

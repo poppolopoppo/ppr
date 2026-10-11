@@ -209,6 +209,7 @@ namespace pP {
             std::optional<rhi::RenderPassDepthStencilAttachment> m_depth_stencil{};
             rhi::RenderPassDesc m_desc{};
             std::span<const DrawSubmission> m_draws{};
+            std::optional<PreRenderCallback> m_prepare{};
             RenderPipelineSignature m_signature{};
             int2 m_extent{zero_v};
         };
@@ -223,7 +224,18 @@ namespace pP {
             const RenderPipelineSignature &pipeline_signature, const int2 &target_extent,
             const std::span<const DrawSubmission> draws, rhi::IDevice &device,
             const FenceCompletionValue completed_fence_value,
-            const std23::function_ref<std::error_code(FenceCompletionValue)> wait_for_fence) {
+            const std23::function_ref<std::error_code(FenceCompletionValue)> wait_for_fence,
+            const std::optional<PreRenderCallback> prepare) {
+            if (prepare) {
+                PPR_RETURN_ERROR_ON_FAIL(
+                    Renderer, (*prepare)(PreRenderContext{
+                                  .m_device = device,
+                                  .m_encoder = encoder,
+                                  .m_completed_fence_value = completed_fence_value,
+                                  .m_wait_for_fence = wait_for_fence,
+                              }));
+            }
+
             rhi::IRenderPassEncoder *const pass = encoder.beginRenderPass(render_pass);
             if (pass == nullptr) [[unlikely]] {
                 PPR_LOG(
@@ -717,7 +729,7 @@ namespace pP {
 
     std::error_code Renderer::render(
         string_literal description, const rhi::RenderPassDesc &render_pass,
-        const std::initializer_list<DrawSubmission> draws) {
+        const std::initializer_list<DrawSubmission> draws, const std::optional<PreRenderCallback> prepare) {
         const hal::ProfileScope scope{"App.Renderer.Render"};
         // Off-thread (affinity) rejection: definitely unsubmitted, no credit
         // taken — and owner-confined state untouched. The settlement member
@@ -728,12 +740,12 @@ namespace pP {
             return std::make_error_code(std::errc::operation_not_permitted);
         }
 
-        return renderDraws_(description, render_pass, std::span{draws.begin(), draws.size()});
+        return renderDraws_(description, render_pass, std::span{draws.begin(), draws.size()}, prepare);
     }
 
     std::error_code Renderer::renderDraws_(
-        string_literal description, const rhi::RenderPassDesc &render_pass,
-        const std::span<const DrawSubmission> draws) {
+        string_literal description, const rhi::RenderPassDesc &render_pass, const std::span<const DrawSubmission> draws,
+        const std::optional<PreRenderCallback> prepare) {
         const hal::ProfileScope scope_profile{"App.Renderer.Draws"};
         // Pre-guard rejections (F1 stale fate): definitely unsubmitted, no
         // credit taken — stamp kRejected so this call never inherits the
@@ -780,7 +792,7 @@ namespace pP {
         };
         if (const std::error_code encode_err = encodeRenderPass_(
                 *encoder, description, render_pass, pipeline_signature, target_extent, draws,
-                m_rhi_service->getDevice(), completed, wait_for_fence)) [[unlikely]] {
+                m_rhi_service->getDevice(), completed, wait_for_fence, prepare)) [[unlikely]] {
             return encode_err;
         }
 
@@ -801,7 +813,7 @@ namespace pP {
 
     std::error_code Renderer::renderToTexture(
         rhi::ITexture &render_target, const std::initializer_list<DrawSubmission> draws,
-        const ColorAttachmentOps &options) {
+        const ColorAttachmentOps &options, const std::optional<PreRenderCallback> prepare) {
         if (m_rhi_service.isValid() and not onRenderThread_()) [[unlikely]] {
             return std::make_error_code(std::errc::operation_not_permitted);
         }
@@ -820,7 +832,7 @@ namespace pP {
                 .colorAttachments = &color_attachment,
                 .colorAttachmentCount = 1u,
             },
-            draws);
+            draws, prepare);
     }
 
     // ------------------------------------------------------------------
@@ -1141,6 +1153,7 @@ namespace pP {
                 .depthStencilAttachment = built.m_depth_stencil ? std::addressof(*built.m_depth_stencil) : nullptr,
             };
             built.m_draws = std::span<const DrawSubmission>{surface_pass.m_draws.begin(), surface_pass.m_draws.size()};
+            built.m_prepare = surface_pass.m_prepare;
 
             first_err = surfaceSignature_(*record, surface_pass, built.m_desc, built.m_signature, built.m_extent);
             if (first_err) {
@@ -1177,7 +1190,7 @@ namespace pP {
                     }
                     first_err = encodeRenderPass_(
                         *encoder, description, built.m_desc, built.m_signature, built.m_extent, built.m_draws,
-                        m_rhi_service->getDevice(), completed, wait_for_fence);
+                        m_rhi_service->getDevice(), completed, wait_for_fence, built.m_prepare);
                 }
 
                 if (not first_err) {

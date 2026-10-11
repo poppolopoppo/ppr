@@ -142,3 +142,11 @@ application build passed in `out/worldgen-picking-build2.log`, the game suite
 passed in `out/worldgen-picking-tests.log` (58.66 s), and independent Astra review
 passed. Interactive prepared publication and the GridPass metric/render seam
 remain pending with stage 5.
+
+Stage 5 renderer preparation now runs an optional synchronous callback before
+opening each render pass, on the same encoder and submission as its draws.
+The application/app/asset build passed in `out/worldgen-prerender-build.log`.
+The GPU regression passed in `out/worldgen-prerender-test.log` (3.98 s), checking
+ordering, rejection without fence advancement, and retry. Format/style and
+independent Astra review passed. This is the compute integration boundary;
+GPU culling, catalog textures and transactional world GPU bundles remain pending.

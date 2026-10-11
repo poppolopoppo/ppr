@@ -95,6 +95,18 @@ export namespace pP {
     // duration of the synchronous encode, never stored, never transported.
     using FenceWaitHook = std23::move_only_function<std::error_code(FenceCompletionValue)>;
 
+    // Borrowed only during synchronous frame encoding, before opening the render
+    // pass. Content passes use this encoder for compute and resource transitions
+    // in the same submission as their draws; the renderer owns no content state.
+    struct PreRenderContext final {
+        rhi::IDevice &m_device;
+        rhi::ICommandEncoder &m_encoder;
+        FenceCompletionValue m_completed_fence_value{kFenceValueNone};
+        mutable FenceWaitHook m_wait_for_fence{};
+    };
+
+    using PreRenderCallback = std23::function_ref<std::error_code(const PreRenderContext &)>;
+
     struct DrawContext final {
         rhi::IDevice &m_device;
         rhi::IRenderPassEncoder &m_pass;
@@ -165,5 +177,6 @@ export namespace pP {
         ESurfaceDepthPolicy m_depth_policy{ESurfaceDepthPolicy::none};
         std::optional<rhi::RenderPassDepthStencilAttachment> m_depth_stencil{};
         std::initializer_list<const DrawSubmission> m_draws;
+        std::optional<PreRenderCallback> m_prepare{};
     };
 }

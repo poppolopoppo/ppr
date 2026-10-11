@@ -105,11 +105,11 @@ export namespace pP {
 
         [[nodiscard]] std::error_code render(
             string_literal description, const rhi::RenderPassDesc &render_pass,
-            std::initializer_list<DrawSubmission> draws);
+            std::initializer_list<DrawSubmission> draws, std::optional<PreRenderCallback> prepare = {});
 
         [[nodiscard]] std::error_code renderToTexture(
             rhi::ITexture &render_target, std::initializer_list<DrawSubmission> draws,
-            const ColorAttachmentOps &options = {});
+            const ColorAttachmentOps &options = {}, std::optional<PreRenderCallback> prepare = {});
 
         [[nodiscard]] std::error_code renderAndPresent(
             const Window &window, std::initializer_list<SurfaceRenderPass> passes);
@@ -321,7 +321,7 @@ export namespace pP {
 
         [[nodiscard]] std::error_code renderDraws_(
             string_literal description, const rhi::RenderPassDesc &render_pass,
-            const std::span<const DrawSubmission> draws);
+            const std::span<const DrawSubmission> draws, std::optional<PreRenderCallback> prepare);
 
         // One SUBMIT through the app-owned fence: signals nextValue() after
         // execute on the graphics queue and commits only on success. A failed

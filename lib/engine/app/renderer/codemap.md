@@ -9,6 +9,13 @@ camera-free RHI-facing submission shapes (`RenderPipelineSignature/Key`, `DrawCo
 `engine.app:renderer.types`. There is no `App.Renderer.Types.cpp` — the partition is fully inline in
 `App.Renderer.Types.cppm`.
 
+`PreRenderContext/Callback` is the optional synchronous preparation seam on
+surface passes and offscreen rendering. It borrows the same command encoder
+before the render pass begins, with the frame completion value and fence-wait
+hook. Preparation failure abandons the frame before submission; the surface
+path still settles its acquired image. Content passes own compute work and
+resource transitions issued through this camera-free seam.
+
 ## Design
 
 - **Renderer** (`App.Renderer.cppm/.cpp`): private config (backend-preferred format, image count 3),
