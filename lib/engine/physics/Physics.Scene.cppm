@@ -135,7 +135,7 @@ export namespace pP::physics {
 
         ~Scene() noexcept;
 
-        [[nodiscard]] std::error_code initialize(Desc desc) noexcept;
+        [[nodiscard]] std::error_code initialize(Desc desc);
 
         [[nodiscard]] std::error_code shutdown() noexcept;
 
@@ -144,7 +144,7 @@ export namespace pP::physics {
         /// Destroys bodies while chunk chains + chain body survive (ChunkColliders owns chain lifecycle).
         [[nodiscard]] std::error_code clear() noexcept;
 
-        [[nodiscard]] std::error_code step() noexcept;
+        [[nodiscard]] std::error_code step();
 
         [[nodiscard]] std::error_code createBodies(
             std::span<const u64> entities, std::span<const BodyDefinition> definitions, std::span<BodyHandle> handles);
@@ -152,21 +152,20 @@ export namespace pP::physics {
         [[nodiscard]] std::error_code destroyBody(BodyHandle handle) noexcept;
 
         /// Ordered points in world space; open chains use explicit exterior ghosts.
-        [[nodiscard]] std::expected<ChainHandle, std::error_code> createChunkChain(ChainDefinition definition) noexcept;
+        [[nodiscard]] std::expected<ChainHandle, std::error_code> createChunkChain(ChainDefinition definition);
 
         [[nodiscard]] std::expected<ChainHandle, std::error_code> replaceChunkChain(
-            ChainHandle old, ChainDefinition definition) noexcept;
+            ChainHandle old, ChainDefinition definition);
 
         [[nodiscard]] std::error_code destroyChunkChain(ChainHandle handle) noexcept;
 
-        [[nodiscard]] std::error_code attachSensor(BodyHandle handle, SensorDefinition definition) noexcept;
+        [[nodiscard]] std::error_code attachSensor(BodyHandle handle, SensorDefinition definition);
 
         [[nodiscard]] std::error_code drainSensorEvents(
             std::span<SensorEvent> destination, std::size_t &written) noexcept;
 
         /// Drains the last step once; a short destination leaves contacts available for retry.
-        [[nodiscard]] std::error_code drainContactEvents(
-            std::span<ContactEvent> destination, std::size_t &written) noexcept;
+        [[nodiscard]] std::error_code drainContactEvents(std::span<ContactEvent> destination, std::size_t &written);
 
         [[nodiscard]] std::error_code enableSleep(BodyHandle handle, bool enabled) noexcept;
 

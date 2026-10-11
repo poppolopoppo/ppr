@@ -87,6 +87,13 @@ output `23e8a7f54c511a28`, matching the earlier ASan baseline.
 The checked physics velocity/gravity API passed the affected ASan simulation
 suite (67.16 s), including sleeping-body tiny-velocity, stale-handle and gravity
 transition checks (`out/worldgen-locomotion-tests.log`); committed as `9e4de13`.
-Stable driver locomotion and restore lifecycle regression work is in progress.
+Stable driver locomotion and restore lifecycle regressions passed affected app/game
+suites (78.06 s / 43.31 s), formatting/style and independent review; committed as
+`ad839b0`. Shared-contour physics now uses the common 16-case topology, explicit
+metric transforms and protected bounds, diagonal dirty fanout and owner-interest
+closure. Corner queries materialize all dependent owners. Fatal allocation
+propagation retains acquisition rollback. The affected ASan simulation suite
+passed in `out/worldgen-contour-tests2.log` (70.22 s); independent review cleared
+the seam fix. Direct control and remaining actor/metric integration continue.
 Later full acceptance gates remain pending. IDE inspection
 has previously timed out and remains unavailable rather than passed.

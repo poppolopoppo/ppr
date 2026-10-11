@@ -101,7 +101,7 @@ namespace pP::physics {
         (void) shutdown();
     }
 
-    std::error_code Scene::initialize(const Desc desc) noexcept {
+    std::error_code Scene::initialize(const Desc desc) {
         const hal::ProfileScope scope{"Physics.Initialize"};
         const bool invalid_gravity = not std::isfinite(desc.m_gravity_x) or not std::isfinite(desc.m_gravity_y);
         const bool invalid_timestep = not std::isfinite(desc.m_fixed_dt) or desc.m_fixed_dt <= 0.0f;
@@ -111,10 +111,7 @@ namespace pP::physics {
             return error(std::errc::invalid_argument);
         }
 
-        std::unique_ptr<Runtime> runtime{new (std::nothrow) Runtime{}};
-        if (not runtime) {
-            return error(std::errc::not_enough_memory);
-        }
+        auto runtime = std::make_unique<Runtime>();
         b2WorldDef definition = b2DefaultWorldDef();
         definition.gravity = {desc.m_gravity_x, desc.m_gravity_y};
         definition.enableSleep = desc.m_enable_sleep;
@@ -155,7 +152,7 @@ namespace pP::physics {
         return {};
     }
 
-    std::error_code Scene::step() noexcept {
+    std::error_code Scene::step() {
         const hal::ProfileScope scope{"Physics.Step"};
         if (not m_runtime) {
             return error(std::errc::operation_not_permitted);
@@ -187,7 +184,7 @@ namespace pP::physics {
             }
         } catch (const std::bad_alloc &) {
             m_runtime->m_events.clear();
-            return error(std::errc::not_enough_memory);
+            PPR_RETHROW(Physics);
         }
         return {};
     }
@@ -280,7 +277,11 @@ namespace pP::physics {
                 ++created;
             }
         } catch (const std::bad_alloc &) {
-            failure = error(std::errc::not_enough_memory);
+            for (std::size_t i = 0; i < created; ++i) {
+                PPR_LOG_WARNING_ON_FAIL(Physics, destroyBody(handles[i]));
+                handles[i] = {};
+            }
+            PPR_RETHROW(Physics);
         }
         if (failure) {
             for (std::size_t i = 0; i < created; ++i) {
@@ -305,7 +306,7 @@ namespace pP::physics {
         return {};
     }
 
-    std::expected<ChainHandle, std::error_code> Scene::createChunkChain(const ChainDefinition definition) noexcept {
+    std::expected<ChainHandle, std::error_code> Scene::createChunkChain(const ChainDefinition definition) {
         if (not m_runtime) {
             return std::unexpected{error(std::errc::operation_not_permitted)};
         }
@@ -379,12 +380,12 @@ namespace pP::physics {
             }
             return ChainHandle{m_next_serial++};
         } catch (const std::bad_alloc &) {
-            return std::unexpected{error(std::errc::not_enough_memory)};
+            PPR_RETHROW(Physics);
         }
     }
 
     std::expected<ChainHandle, std::error_code> Scene::replaceChunkChain(
-        const ChainHandle old, const ChainDefinition definition) noexcept {
+        const ChainHandle old, const ChainDefinition definition) {
         if (not m_runtime) {
             return std::unexpected{error(std::errc::operation_not_permitted)};
         }
@@ -417,7 +418,7 @@ namespace pP::physics {
         return {};
     }
 
-    std::error_code Scene::attachSensor(const BodyHandle handle, const SensorDefinition definition) noexcept {
+    std::error_code Scene::attachSensor(const BodyHandle handle, const SensorDefinition definition) {
         if (not m_runtime) {
             return error(std::errc::operation_not_permitted);
         }
@@ -453,7 +454,7 @@ namespace pP::physics {
             entry->m_sensors.push_back({shape, definition.m_kind});
         } catch (const std::bad_alloc &) {
             b2DestroyShape(shape, true);
-            return error(std::errc::not_enough_memory);
+            PPR_RETHROW(Physics);
         }
         return {};
     }
@@ -471,8 +472,7 @@ namespace pP::physics {
         return {};
     }
 
-    std::error_code Scene::drainContactEvents(
-        const std::span<ContactEvent> destination, std::size_t &written) noexcept {
+    std::error_code Scene::drainContactEvents(const std::span<ContactEvent> destination, std::size_t &written) {
         const hal::ProfileScope scope{"Physics.DrainContacts"};
         written = 0u;
         if (not m_runtime) {
@@ -537,7 +537,7 @@ namespace pP::physics {
             m_runtime->m_contacts_drained = true;
             return {};
         } catch (const std::bad_alloc &) {
-            return error(std::errc::not_enough_memory);
+            PPR_RETHROW(Physics);
         }
     }
 

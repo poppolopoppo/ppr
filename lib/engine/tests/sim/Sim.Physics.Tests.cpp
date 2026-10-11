@@ -10,6 +10,96 @@ import std;
 
 namespace pP::tests::detail {
     namespace PhysicsSuite {
+        PPR_UNIT_TEST (shared_contours_preserve_all_binary_topologies) {
+            for (u32 bits = 0u; bits < 16u; ++bits) {
+                physics::Scene scene;
+                physics::ChunkColliders colliders;
+                PPR_TEST_ASSERT(not scene.initialize({}));
+                std::array<u16, 16u> cells{};
+                cells[5u] = (bits & 1u) != 0u ? 1u : 0u;
+                cells[6u] = (bits & 2u) != 0u ? 1u : 0u;
+                cells[10u] = (bits & 4u) != 0u ? 1u : 0u;
+                cells[9u] = (bits & 8u) != 0u ? 1u : 0u;
+                const std::array chunks{physics::ColliderChunkView{{0, 0}, cells, true}};
+                const std::array dirty{physics::ColliderChunkPos{0, 0}};
+                u32 processed{};
+                PPR_TEST_ASSERT(not colliders.rebuildDirtyChunks(scene, chunks, dirty, 4u, 1u, processed));
+                const std::size_t expected = bits == 0u ? 0u : (bits == 5u or bits == 10u ? 2u : 1u);
+                PPR_TEST_ASSERT(colliders.chainCount({0, 0}) == expected);
+                PPR_TEST_ASSERT(not scene.shutdown());
+            }
+        };
+
+        PPR_UNIT_TEST (four_chunk_corner_edits_rebuild_every_contour_owner_with_budget) {
+            physics::Scene scene;
+            physics::ChunkColliders colliders;
+            PPR_TEST_ASSERT(not scene.initialize({}));
+            std::array<std::array<u16, 4u>, 4u> cells{};
+            const std::array chunks{
+                physics::ColliderChunkView{{0, 0}, cells[0u], false},
+                physics::ColliderChunkView{{1, 0}, cells[1u], false},
+                physics::ColliderChunkView{{0, 1}, cells[2u], false},
+                physics::ColliderChunkView{{1, 1}, cells[3u], true}};
+            cells[3u][0u] = 1u;
+            const std::array dirty{physics::ColliderChunkPos{1, 1}};
+            u32 processed{};
+            PPR_TEST_ASSERT(not colliders.rebuildDirtyChunks(scene, chunks, dirty, 2u, 1u, processed));
+            PPR_TEST_ASSERT(processed == 1u and colliders.pendingCount() == 3u);
+            for (u32 remaining = 3u; remaining > 0u; --remaining) {
+                PPR_TEST_ASSERT(not colliders.rebuildDirtyChunks(scene, chunks, {}, 2u, 1u, processed));
+                PPR_TEST_ASSERT(processed == 1u and colliders.pendingCount() == remaining - 1u);
+            }
+            for (const auto &chunk: chunks) {
+                PPR_TEST_ASSERT(colliders.chainCount(chunk.m_pos) == 1u);
+            }
+            physics::ChunkColliders queried;
+            auto inactive = chunks;
+            for (auto &chunk: inactive) {
+                chunk.m_needed = false;
+            }
+            PPR_TEST_ASSERT(not queried.materializeForQuery(scene, inactive, {1, 1}, 2u));
+            for (const auto &chunk: chunks) {
+                PPR_TEST_ASSERT(queried.chainCount(chunk.m_pos) == 1u);
+            }
+            cells[3u][0u] = 0u;
+            PPR_TEST_ASSERT(not colliders.rebuildDirtyChunks(scene, chunks, dirty, 2u, 4u, processed));
+            PPR_TEST_ASSERT(processed == 4u);
+            for (const auto &chunk: chunks) {
+                PPR_TEST_ASSERT(colliders.chainCount(chunk.m_pos) == 0u);
+            }
+            PPR_TEST_ASSERT(not scene.shutdown());
+        };
+
+        PPR_UNIT_TEST (contour_metric_transform_and_protected_exterior_match_physics) {
+            physics::Scene scene;
+            physics::ChunkColliders colliders{{1.0f / 3.0f, 10.0f, -2.0f, 8u, 8u}};
+            PPR_TEST_ASSERT(not scene.initialize({}));
+            std::array<u16, 64u> cells{};
+            const std::array chunks{physics::ColliderChunkView{{0, 0}, cells, true}};
+            const std::array dirty{physics::ColliderChunkPos{0, 0}};
+            u32 processed{};
+            PPR_TEST_ASSERT(not colliders.rebuildDirtyChunks(scene, chunks, dirty, 8u, 1u, processed));
+            const std::array<u64, 1u> keys{1u};
+            std::array<physics::BodyDefinition, 1u> definitions{};
+            definitions[0u].m_motion = physics::EMotion::dynamic;
+            definitions[0u].m_x = 11.5f;
+            definitions[0u].m_y = -1.0f;
+            definitions[0u].m_half_width = 0.1f;
+            definitions[0u].m_half_height = 0.1f;
+            definitions[0u].m_fixed_rotation = true;
+            std::array<physics::BodyHandle, 1u> handles{};
+            PPR_TEST_ASSERT(not scene.createBodies(keys, definitions, handles));
+            for (u32 tick = 0u; tick < 120u; ++tick) {
+                PPR_TEST_ASSERT(not scene.step());
+            }
+            PPR_TEST_ASSERT(std::abs(scene.state(handles[0u])->m_y - (-1.9f)) < 0.03f);
+            physics::ChunkColliders invalid{{0.0f}};
+            PPR_TEST_ASSERT(
+                invalid.rebuildDirtyChunks(scene, chunks, dirty, 8u, 1u, processed) == std::errc::invalid_argument);
+            PPR_TEST_ASSERT(processed == 0u);
+            PPR_TEST_ASSERT(not scene.shutdown());
+        };
+
         PPR_UNIT_TEST (checked_locomotion_preserves_body_identity_and_controls_gravity) {
             physics::Scene scene;
             PPR_TEST_ASSERT(scene.setLinearVelocity({}, 1.0f, 0.0f) == std::errc::operation_not_permitted);
@@ -610,7 +700,10 @@ namespace pP::tests::detail {
 namespace pP::tests {
     const UnitTest physics = UnitTest::Named("physics") / [](UnitTest::IRun &_) -> void {
         _.recurse(
-            {detail::PhysicsSuite::fixed_replay_produces_identical_body_states,
+            {detail::PhysicsSuite::shared_contours_preserve_all_binary_topologies,
+                detail::PhysicsSuite::four_chunk_corner_edits_rebuild_every_contour_owner_with_budget,
+                detail::PhysicsSuite::contour_metric_transform_and_protected_exterior_match_physics,
+                detail::PhysicsSuite::fixed_replay_produces_identical_body_states,
                 detail::PhysicsSuite::checked_locomotion_preserves_body_identity_and_controls_gravity,
                 detail::PhysicsSuite::quiescent_dynamic_body_sleeps_and_explicitly_wakes,
                 detail::PhysicsSuite::destroy_and_reset_invalidate_handles_without_aliasing,

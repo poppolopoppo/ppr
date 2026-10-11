@@ -5,10 +5,16 @@ module engine.physics;
 
 import :chunk_colliders;
 import engine.core;
+import engine.math;
 import std;
 
 namespace pP::physics {
+    ChunkColliders::ChunkColliders(const ColliderGridGeometry geometry) noexcept : m_geometry(geometry) {
+    }
     namespace {
+        [[nodiscard]] i32 floorDiv(const i32 value, const i32 divisor) noexcept {
+            return value >= 0 ? value / divisor : (value + 1) / divisor - 1;
+        }
         struct Vertex {
             i32 x{};
             i32 y{};
@@ -128,9 +134,14 @@ namespace pP::physics {
 
         [[nodiscard]] bool solid(
             const ChunkIndex &index, const std::span<const ColliderChunkView> chunks, const i32 edge, const i32 x,
-            const i32 y) noexcept {
-            const auto floorDiv = [edge](const i32 v) { return v >= 0 ? v / edge : (v + 1) / edge - 1; };
-            const ColliderChunkPos pos{floorDiv(x), floorDiv(y)};
+            const i32 y, const ColliderGridGeometry &geometry) noexcept {
+            if (geometry.m_width_cells != 0u and (x < 0 or
+                                                     y < 0 or
+                                                     static_cast<u32>(x) >= geometry.m_width_cells or
+                                                     static_cast<u32>(y) >= geometry.m_height_cells)) {
+                return true;
+            }
+            const ColliderChunkPos pos{floorDiv(x, edge), floorDiv(y, edge)};
             const ColliderChunkView *const chunk = findChunk(index, chunks, pos);
             if (not chunk) {
                 return false;
@@ -143,22 +154,42 @@ namespace pP::physics {
         template<class F>
         void cellEdges(
             const ChunkIndex &index, const std::span<const ColliderChunkView> chunks, const i32 edge, const i32 x,
-            const i32 y, F &&append) {
-            if (not solid(index, chunks, edge, x, y)) {
-                return;
+            const i32 y, const ColliderGridGeometry &geometry, F &&append) {
+            const u32 bits = (solid(index, chunks, edge, x, y, geometry) ? 1u : 0u) |
+                             (solid(index, chunks, edge, x + 1, y, geometry) ? 2u : 0u) |
+                             (solid(index, chunks, edge, x + 1, y + 1, geometry) ? 4u : 0u) |
+                             (solid(index, chunks, edge, x, y + 1, geometry) ? 8u : 0u);
+            const auto &contour = math::contourCases()[bits];
+            const auto points = math::contourPoints();
+            const auto vertex = [&](const u32 ordinal) -> Vertex {
+                const auto p = points[ordinal];
+                // Sample centres are odd coordinates; edge midpoints are even.
+                return {2 * x + 1 + static_cast<i32>(2.0f * p.m_x), 2 * y + 1 + static_cast<i32>(2.0f * p.m_y)};
+            };
+            for (u32 segment = 0u; segment < contour.m_segment_count; ++segment) {
+                const auto boundary = contour.m_segments[segment];
+                append(Edge{vertex(boundary.m_begin), vertex(boundary.m_end)});
             }
-            if (not solid(index, chunks, edge, x, y + 1)) {
-                append(Edge{{x + 1, y + 1}, {x, y + 1}});
+        }
+
+        [[nodiscard]] std::optional<ColliderChunkPos> dualOwner(
+            const ChunkIndex &index, const std::span<const ColliderChunkView> chunks, const i32 edge, const i32 x,
+            const i32 y) noexcept {
+            // Lowest existing sample chunk in global row-major order owns the
+            // dual cell, including a missing-neighbour or outer fixture edge.
+            std::optional<ColliderChunkPos> owner;
+            for (const i32 sy: {y, y + 1}) {
+                for (const i32 sx: {x, x + 1}) {
+                    const ColliderChunkPos candidate{floorDiv(sx, edge), floorDiv(sy, edge)};
+                    if (findChunk(index, chunks, candidate) and
+                        (not owner or
+                            candidate.m_y < owner->m_y or
+                            (candidate.m_y == owner->m_y and candidate.m_x < owner->m_x))) {
+                        owner = candidate;
+                    }
+                }
             }
-            if (not solid(index, chunks, edge, x - 1, y)) {
-                append(Edge{{x, y + 1}, {x, y}});
-            }
-            if (not solid(index, chunks, edge, x, y - 1)) {
-                append(Edge{{x, y}, {x + 1, y}});
-            }
-            if (not solid(index, chunks, edge, x + 1, y)) {
-                append(Edge{{x + 1, y}, {x + 1, y + 1}});
-            }
+            return owner;
         }
 
         [[nodiscard]] int turnRank(const Edge &incoming, const Edge &outgoing) noexcept {
@@ -172,16 +203,18 @@ namespace pP::physics {
 
         [[nodiscard]] std::optional<Edge> exteriorEdge(
             const ChunkIndex &index, const std::span<const ColliderChunkView> chunks, const i32 edge,
-            const ColliderChunkPos owner, const Vertex vertex, const Edge adjacent, const bool before) {
+            const ColliderChunkPos owner, const Vertex vertex, const Edge adjacent, const bool before,
+            const ColliderGridGeometry &geometry) {
             std::optional<Edge> best;
             int rank = 4;
-            for (const i32 y: {vertex.y - 1, vertex.y}) {
-                for (const i32 x: {vertex.x - 1, vertex.x}) {
-                    const auto floorDiv = [edge](const i32 v) { return v >= 0 ? v / edge : (v + 1) / edge - 1; };
-                    if (ColliderChunkPos{floorDiv(x), floorDiv(y)} == owner) {
+            const i32 base_x = floorDiv(vertex.x, 2);
+            const i32 base_y = floorDiv(vertex.y, 2);
+            for (const i32 y: {base_y - 1, base_y}) {
+                for (const i32 x: {base_x - 1, base_x}) {
+                    if (dualOwner(index, chunks, edge, x, y) == owner) {
                         continue;
                     }
-                    cellEdges(index, chunks, edge, x, y, [&](const Edge candidate) {
+                    cellEdges(index, chunks, edge, x, y, geometry, [&](const Edge candidate) {
                         if ((before ? candidate.to == vertex : candidate.from == vertex)) {
                             const int next_rank = before ? turnRank(candidate, adjacent)
                                                          : turnRank(adjacent, candidate);
@@ -196,8 +229,10 @@ namespace pP::physics {
             return best;
         }
 
-        [[nodiscard]] ChainPoint point(const Vertex p) noexcept {
-            return {static_cast<float>(p.x), static_cast<float>(p.y)};
+        [[nodiscard]] ChainPoint point(const Vertex p, const ColliderGridGeometry &geometry) noexcept {
+            return {
+                geometry.m_origin_x_m + static_cast<float>(p.x) * (0.5f * geometry.m_cell_size_m),
+                geometry.m_origin_y_m + static_cast<float>(p.y) * (0.5f * geometry.m_cell_size_m)};
         }
 
         struct Polyline {
@@ -209,15 +244,17 @@ namespace pP::physics {
 
         [[nodiscard]] std::vector<Polyline> extract(
             const ChunkIndex &index, const std::span<const ColliderChunkView> chunks, const ColliderChunkPos pos,
-            const i32 edge) {
+            const i32 edge, const ColliderGridGeometry &geometry) {
             std::vector<Edge> edges;
             const std::size_t cells = static_cast<std::size_t>(edge) * static_cast<std::size_t>(edge);
             edges.reserve(2u * cells); // ~2 boundary edges per solid cell; sizes the walk output up front.
             const i32 origin_x = pos.m_x * edge;
             const i32 origin_y = pos.m_y * edge;
-            for (i32 y = origin_y; y < origin_y + edge; ++y) {
-                for (i32 x = origin_x; x < origin_x + edge; ++x) {
-                    cellEdges(index, chunks, edge, x, y, [&](const Edge e) { edges.push_back(e); });
+            for (i32 y = origin_y - 1; y < origin_y + edge; ++y) {
+                for (i32 x = origin_x - 1; x < origin_x + edge; ++x) {
+                    if (dualOwner(index, chunks, edge, x, y) == pos) {
+                        cellEdges(index, chunks, edge, x, y, geometry, [&](const Edge e) { edges.push_back(e); });
+                    }
                 }
             }
             // Chain-tracing endpoint index (H3b/Slice 6): one vector of
@@ -294,7 +331,7 @@ namespace pP::physics {
                     Polyline line;
                     line.points.reserve(64u); // Seed for typical small loops; longer traces keep geometric growth.
                     const Vertex start = edges[seed].from;
-                    line.points.push_back(point(start));
+                    line.points.push_back(point(start, geometry));
                     std::size_t cursor = seed;
                     std::size_t last_index = seed;
                     while (cursor != edges.size()) {
@@ -305,20 +342,19 @@ namespace pP::physics {
                             line.loop = true;
                             break;
                         }
-                        line.points.push_back(point(current.to));
+                        line.points.push_back(point(current.to, geometry));
                         cursor = next(current.to, current);
                     }
                     if (not line.loop) {
-                        const Vertex end{
-                            static_cast<i32>(line.points.back().m_x), static_cast<i32>(line.points.back().m_y)};
                         const Edge first = edges[seed];
                         const Edge last = edges[last_index];
-                        const auto before = exteriorEdge(index, chunks, edge, pos, start, first, true);
-                        const auto after = exteriorEdge(index, chunks, edge, pos, end, last, false);
-                        line.before = before ? point(before->from)
-                                             : point({2 * start.x - first.to.x, 2 * start.y - first.to.y});
-                        line.after = after ? point(after->to)
-                                           : point({2 * end.x - last.from.x, 2 * end.y - last.from.y});
+                        const Vertex end = last.to;
+                        const auto before = exteriorEdge(index, chunks, edge, pos, start, first, true, geometry);
+                        const auto after = exteriorEdge(index, chunks, edge, pos, end, last, false, geometry);
+                        line.before = before ? point(before->from, geometry)
+                                             : point({2 * start.x - first.to.x, 2 * start.y - first.to.y}, geometry);
+                        line.after = after ? point(after->to, geometry)
+                                           : point({2 * end.x - last.from.x, 2 * end.y - last.from.y}, geometry);
                     }
                     lines.push_back(std::move(line));
                 }
@@ -329,11 +365,20 @@ namespace pP::physics {
 
     std::error_code ChunkColliders::rebuildDirtyChunks(
         Scene &scene, const std::span<const ColliderChunkView> chunks, const std::span<const ColliderChunkPos> dirty,
-        const u32 edge, const u32 max_chunks, u32 &processed) noexcept {
+        const u32 edge, const u32 max_chunks, u32 &processed) {
         const hal::ProfileScope scope{"Physics.Colliders.RebuildDirtyChunks"};
         processed = 0u;
-        if (edge == 0u or edge > 1024u or max_chunks == 0u) {
-            return std::make_error_code(std::errc::invalid_argument);
+        if (edge == 0u or
+            edge > 1024u or
+            max_chunks == 0u or
+            not std::isfinite(m_geometry.m_cell_size_m) or
+            m_geometry.m_cell_size_m <= 0.0f or
+            not std::isfinite(m_geometry.m_origin_x_m) or
+            not std::isfinite(m_geometry.m_origin_y_m) or
+            ((m_geometry.m_width_cells == 0u) != (m_geometry.m_height_cells == 0u)) or
+            m_geometry.m_width_cells > 100000u or
+            m_geometry.m_height_cells > 100000u) {
+            PPR_RETURN_ERROR_ON_FAIL(Physics, std::errc::invalid_argument);
         }
         ChunkIndex index;
         for (std::size_t i = 0; i < chunks.size(); ++i) {
@@ -353,11 +398,12 @@ namespace pP::physics {
                 if (not findChunk(index, chunks, pos)) {
                     return std::make_error_code(std::errc::invalid_argument);
                 }
-                for (const ColliderChunkPos adjacent:
-                    {pos, ColliderChunkPos{pos.m_x - 1, pos.m_y}, ColliderChunkPos{pos.m_x + 1, pos.m_y},
-                        ColliderChunkPos{pos.m_x, pos.m_y - 1}, ColliderChunkPos{pos.m_x, pos.m_y + 1}}) {
-                    if (findChunk(index, chunks, adjacent)) {
-                        m_pending.insert(adjacent);
+                for (i32 dy = -1; dy <= 1; ++dy) {
+                    for (i32 dx = -1; dx <= 1; ++dx) {
+                        const ColliderChunkPos adjacent{pos.m_x + dx, pos.m_y + dy};
+                        if (findChunk(index, chunks, adjacent)) {
+                            m_pending.insert(adjacent);
+                        }
                     }
                 }
             }
@@ -397,8 +443,17 @@ namespace pP::physics {
                 };
 
                 std::vector<Polyline> lines;
-                if (chunk->m_needed) {
-                    lines = extract(index, chunks, pos, static_cast<i32>(edge));
+                // A dual cell can be owned by a neighbour of an interested
+                // sample chunk. Keep those owners active across seams/corners.
+                bool needed = chunk->m_needed;
+                for (i32 dy = -1; dy <= 1; ++dy) {
+                    for (i32 dx = -1; dx <= 1; ++dx) {
+                        const auto *const neighbour = findChunk(index, chunks, {pos.m_x + dx, pos.m_y + dy});
+                        needed = needed or (neighbour and neighbour->m_needed);
+                    }
+                }
+                if (needed) {
+                    lines = extract(index, chunks, pos, static_cast<i32>(edge), m_geometry);
                 }
                 auto existing = m_chains.find(pos);
                 if (existing == m_chains.end() and lines.empty()) {
@@ -444,6 +499,23 @@ namespace pP::physics {
                     shapeCommit = m_shapes.try_emplace(pos).first;
                 }
                 const bool shapePreinserted = needShapeNode;
+                bool chainPreinserted = false;
+                bool committed = false;
+                PPR_DEFER {
+                    if (not committed) {
+                        // Also runs on allocation exceptions after any earlier
+                        // chains were acquired. The prior geometry remains owned.
+                        for (const auto &[_, handle]: created) {
+                            PPR_LOG_WARNING_ON_FAIL(Physics, scene.destroyChunkChain(handle));
+                        }
+                        if (chainPreinserted) {
+                            m_chains.erase(pos);
+                        }
+                        if (shapePreinserted) {
+                            m_shapes.erase(pos);
+                        }
+                    }
+                };
 
                 // Phase 1 (create-only): added slots plus changed slots, in
                 // increasing line order. On failure only the chains created
@@ -457,15 +529,7 @@ namespace pP::physics {
                     const Polyline &line = lines[i];
                     const ChainDefinition definition{line.points, line.before, line.after, 0u, 1u, line.loop};
                     auto result = scene.createChunkChain(definition);
-                    if (not result) {
-                        for (const auto &[_, handle]: created) {
-                            (void) scene.destroyChunkChain(handle);
-                        }
-                        if (shapePreinserted) {
-                            m_shapes.erase(shapeCommit);
-                        }
-                        return result.error();
-                    }
+                    PPR_RETURN_ERROR_ON_FAIL(Physics, result);
                     created.emplace_back(i, *result);
                 }
 
@@ -475,17 +539,8 @@ namespace pP::physics {
                 // and m_chains/m_shapes are untouched, mirroring the legacy
                 // destroy-failure rollback.
                 if (existing == m_chains.end() and not created.empty()) {
-                    try {
-                        existing = m_chains.emplace(pos, std::vector<ChainHandle>{}).first;
-                    } catch (...) {
-                        for (const auto &[_, handle]: created) {
-                            (void) scene.destroyChunkChain(handle);
-                        }
-                        if (shapePreinserted) {
-                            m_shapes.erase(shapeCommit);
-                        }
-                        PPR_RETHROW(Physics);
-                    }
+                    existing = m_chains.emplace(pos, std::vector<ChainHandle>{}).first;
+                    chainPreinserted = true;
                 }
                 if (existing != m_chains.end()) {
                     for (std::size_t i = 0; i < oldCount; ++i) {
@@ -493,15 +548,7 @@ namespace pP::physics {
                             continue;
                         }
                         const std::error_code destroyed = scene.destroyChunkChain(existing->second[i]);
-                        if (destroyed) {
-                            for (const auto &[_, handle]: created) {
-                                (void) scene.destroyChunkChain(handle);
-                            }
-                            if (shapePreinserted) {
-                                m_shapes.erase(shapeCommit);
-                            }
-                            return destroyed;
-                        }
+                        PPR_RETURN_ERROR_ON_FAIL(Physics, destroyed);
                     }
 
                     // Phase 3 (splice, no Scene calls, no allocation): kept
@@ -531,18 +578,18 @@ namespace pP::physics {
                         shapeCommit->second = std::move(snapshot);
                     }
                 }
+                committed = true;
                 m_pending.erase(m_pending.begin());
                 ++processed;
             }
         } catch (const std::bad_alloc &) {
-            return std::make_error_code(std::errc::not_enough_memory);
+            PPR_RETHROW(Physics);
         }
         return {};
     }
 
     std::error_code ChunkColliders::materializeForQuery(
-        Scene &scene, const std::span<const ColliderChunkView> chunks, const ColliderChunkPos pos,
-        const u32 edge) noexcept {
+        Scene &scene, const std::span<const ColliderChunkView> chunks, const ColliderChunkPos pos, const u32 edge) {
         const hal::ProfileScope scope{"Physics.Colliders.MaterializeForQuery"};
         if (not findChunk(chunks, pos)) {
             return std::make_error_code(std::errc::invalid_argument);
@@ -557,9 +604,9 @@ namespace pP::physics {
             std::set<ColliderChunkPos> delayed;
             delayed.swap(m_pending);
             try {
-                m_pending.insert(pos);
                 u32 processed{};
-                const std::error_code result = rebuildDirtyChunks(scene, active, {}, edge, 1u, processed);
+                const std::array dirty{pos};
+                const std::error_code result = rebuildDirtyChunks(scene, active, dirty, edge, 9u, processed);
                 m_pending.merge(delayed);
                 return result;
             } catch (...) {
@@ -567,7 +614,7 @@ namespace pP::physics {
                 PPR_RETHROW(Physics);
             }
         } catch (const std::bad_alloc &) {
-            return std::make_error_code(std::errc::not_enough_memory);
+            PPR_RETHROW(Physics);
         }
     }
 
