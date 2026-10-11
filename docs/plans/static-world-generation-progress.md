@@ -902,3 +902,15 @@ Accumulated admission pacing and native busy waits account for those intervals;
 busy completion service is below 0.011 ms. Retry pacing is the next focused
 investigation. No new responsiveness
 fix is claimed from this measurement alone.
+
+
+The admitted-frame pacing correction preserves timer ticks and skipped-dt carry
+while preventing denied attempts from re-arming the cap. Astra review and
+format/style passed. Dev/Live all-six plus Release app.game builds passed
+(178.37 seconds), and 52 selected frame/fence/admission nodes passed all three
+shuffled loops (437.16 seconds process wall interval). Both isolated v8 profile
+runs exited zero with acceptance PASS (53.405 / 53.992 seconds). The long gaps
+persist: layout endpoints observed 137.506 / 124.887 ms, and replacement/live
+endpoints 47.458 / 48.228 ms. At replacement, the sampled last frame executor was
+64.069 / 65.085 ms. This directs further attribution to frame execution; it is
+not yet evidence of a particular pipeline, resource or presentation cost.

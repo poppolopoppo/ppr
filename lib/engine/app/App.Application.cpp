@@ -736,6 +736,7 @@ namespace pP {
                 // fixed-step sim observes preserved elapsed time.
                 const TimeSpan carry = claimSkippedFrameDt();
                 const TimeSpan effective_dt = dt + carry;
+                m_last_admitted_tick = m_application_clock.now();
                 if (m_observe_admission) {
                     m_admission_observations.m_last_interval = admission_interval;
                     admission_interval = {};
@@ -1613,7 +1614,7 @@ namespace pP {
 
     std::error_code Application::advanceClock_(
         TimeSpan *out_delta_time) { // P0 serial-explicit pacing: wakeable external waits against the
-        // previous-tick-anchored deadline (min-period policy, no catch-up),
+        // last-admitted-frame deadline (min-period policy, no catch-up),
         // then the manager ticks with a zero target so now() stays latched
         // and only callback dispatch + dt accounting run. Focus/background/
         // uncapped transitions re-evaluate here every frame via
@@ -1622,11 +1623,12 @@ namespace pP {
         // predicate covers the persistent exit/error latch plus a sampled
         // target change, so a long background wait wakes within one quantum
         // on exit or retarget; a retarget loops to recompute the deadline
-        // from the same previous tick before admission.
+        // from the same admitted frame before admission. A denied credit
+        // does not re-arm the cap, but its elapsed time still ticks/carries.
         for (;;) {
             const std::optional<TimeSpan> target = getTargetFrameTime();
             const TimeSpan period = target.value_or(TimeSpan{});
-            const TimePoint previous_tick = m_application_clock.now();
+            const TimePoint previous_tick = m_last_admitted_tick.value_or(m_application_clock.now());
             if (period <= TimeSpan{}) {
                 break;
             }
@@ -1908,6 +1910,7 @@ namespace pP {
         // the teardown settle discarded them under a proven disposition.
         ++m_reservation_epoch;
         m_admission_observations = {};
+        m_last_admitted_tick.reset();
         m_consecutive_admission_skips = 0u;
     }
 

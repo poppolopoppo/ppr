@@ -472,6 +472,7 @@ export namespace pP {
     private:
         std::unique_ptr<Renderer> m_renderer{};
         TimerManager m_application_clock{};
+        std::optional<TimePoint> m_last_admitted_tick{};
         FramePacer m_pacer{};
         const ITimerClock &m_observation_clock;
         FrameAdmissionObservations m_admission_observations{};

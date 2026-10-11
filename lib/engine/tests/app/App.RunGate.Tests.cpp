@@ -2837,6 +2837,57 @@ namespace pP::tests::detail {
             }
         };
 
+        PPR_UNIT_TEST (paced_credit_retries_preserve_elapsed_deadline) {
+            struct ManualClock final : ITimerClock {
+                TimePoint m_now{};
+                TimePoint now() const noexcept override {
+                    return m_now;
+                }
+            } clock;
+            SaturatingHarness harness{"PacedCreditRetries", nullptr, &clock};
+            PPR_TEST_ASSERT(not harness.boot());
+            PPR_DEFER {
+                std::ignore = harness.teardown();
+            };
+            harness.enableFrameAdmissionObservations(true);
+            harness.m_on_controls = [&] { clock.m_now += std::chrono::milliseconds{1}; };
+            auto &renderer = harness.getRenderer();
+            renderer.setTestHoldSweep(true);
+            u32 busy_collections{};
+            harness.m_on_rendered = [&](SaturatingHarness &self) {
+                if (self.m_renders == 2u) {
+                    // Make GPU readiness deterministic; only the explicit
+                    // sweep hold keeps both reservations occupied afterward.
+                    PPR_TEST_ASSERT(not renderer.waitForFenceValue(renderer.lastSubmittedFenceValue()));
+                    self.setTargetFrameRate(100);
+                }
+            };
+            harness.m_scripted->m_on_pump = [&](ScriptedPlatform &self, const u32) {
+                clock.m_now += std::chrono::milliseconds{1};
+                if (harness.m_updates == 2u and harness.frameAdmissionObservations().m_skipped > 0u) {
+                    if (++busy_collections == 3u) {
+                        renderer.setTestHoldSweep(false);
+                    }
+                }
+                if (harness.m_updates >= 3u) {
+                    self.endRun();
+                }
+            };
+            PPR_TEST_ASSERT(not harness.run());
+            PPR_TEST_ASSERT(not harness.m_scripted->m_watchdog_fired);
+            PPR_TEST_ASSERT(harness.m_updates == 3u and harness.m_renders == 3u);
+            const auto &interval = harness.frameAdmissionObservations().m_last_interval;
+            PPR_TEST_ASSERT(interval.m_skipped == 3u);
+            PPR_TEST_ASSERT(interval.m_admission < std::chrono::milliseconds{20});
+            PPR_TEST_ASSERT(interval.m_busy_wait == std::chrono::milliseconds{3});
+            PPR_TEST_ASSERT(harness.m_control_polls > harness.m_updates);
+            TimeSpan admitted_total{};
+            for (const auto dt: harness.m_update_dts) {
+                admitted_total += dt;
+            }
+            PPR_TEST_ASSERT(admitted_total == harness.getTimerManager().getTotalElapsed());
+        };
+
         PPR_UNIT_TEST (saturated_run_preserves_time_and_input) {
             // B2' admission + B3' saturation through real run(): 2 admitted
             // frames, K busy frames (collection grows, update/render/input-
@@ -3727,6 +3778,7 @@ namespace pP::tests {
             detail::RunGate::display_window_surface_failure_restores_native_geometry,
             detail::RunGate::display_window_stale_ack_cannot_publish_recreated_window,
             detail::RunGate::admission_observations_report_skips_with_explicit_time,
+            detail::RunGate::paced_credit_retries_preserve_elapsed_deadline,
             detail::RunGate::saturated_run_preserves_time_and_input,
             detail::RunGate::terminal_probe_runs_zero_client_work,
             detail::RunGate::first_error_precedence_clock_over_terminal,

@@ -11,8 +11,8 @@ gaps and the unverified gates below prevent a completion claim.
 ## Recorded environment and commands
 
 Windows 11, Ryzen 9 3950X, 64 GiB RAM, RTX 2080; MSVC 14.51/VS 18 Insiders,
-Release (`msvc-rel`), D3D12. Latest successful scripted runtime: `e1448af`
-plus reviewed admission-interval telemetry (v7). The v4 table below is retained as a
+Release (`msvc-rel`), D3D12. Latest successful scripted runtime: `fab8036`
+plus the reviewed admitted-frame pacing correction (v8). The v4 table below is retained as a
 historical comparison; current observations are appended below.
 The two profile cases ran sequentially without another build/test workload:
 
@@ -273,3 +273,41 @@ atlas/seven texture entries/seven slots, with observed peaks of two atlases and
 fourteen texture entries. Stationary/pan windows retained zero atlas uploads,
 serialization or growth waits. A focused review of retry pacing is underway;
 no responsiveness fix or complete acceptance is claimed yet.
+
+## Admitted-frame pacing correction (v8)
+
+Pacing now anchors its minimum period to the last admitted client frame rather
+than the last timer tick. Denied credit/suspension retries keep ticking and
+carrying elapsed time, but do not re-arm a whole frame-period wait. Dev/Live
+all-six and Release app.game builds passed in 178.37 seconds. The 52 selected
+frame-stage/fence/admission nodes passed all three shuffled loops (437.16 seconds
+process wall interval), including the new explicit-clock paced-credit regression.
+Evidence: `out/worldgen-retry-{dev,live,rel}-build-v1.log`,
+`out/worldgen-retry-tests-v1.log` and `out/worldgen-retry-validation-v1.times.log`.
+
+Both isolated v8 profile sequences exited zero with acceptance PASS; logs and
+exact commands/memory use the v8 scenario filenames.
+
+| Observation | Frontier | Hollows |
+|---|---:|---:|
+| Whole sequence, seconds | 53.405 | 53.992 |
+| Peak working set, bytes | 1,033,703,424 | 1,039,261,696 |
+| Sampled private peak, bytes | 1,244,340,224 | 1,262,505,984 |
+| Maximum layout endpoint update gap, ms | 137.506 | 124.887 |
+| Layout credit retries | 48 | 43 |
+| Layout accumulated admission, ms | 17.227 | 17.248 |
+| Layout accumulated busy wait, ms | 119.978 | 107.447 |
+| Maximum live endpoint update gap, ms | 47.458 | 48.228 |
+| Live credit retries | 13 | 13 |
+| Live accumulated admission, ms | 16.658 | 17.011 |
+| Live accumulated busy wait, ms | 30.564 | 30.989 |
+| Last frame executor at maximum live gap, microseconds | 64,069 | 65,085 |
+
+The deterministic test verifies deadline behavior. The runtime sample shows one
+admission period followed by bounded busy retries instead of repeatedly re-armed
+periods. These are separate single runs, not a paired performance study. Long
+startup/replacement intervals persist and acceptance remains open. The newly
+sampled 64-65 ms frame executor at replacement motivates investigation of frame
+execution. Frame identity/start/end correlation is still needed; the sample does
+not establish the cause of that gap. Resource retirement again returned both
+profiles to one atlas/seven texture entries/seven slots.
