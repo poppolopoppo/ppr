@@ -62,31 +62,33 @@ barriers and drawing share one encoder and submission.
   `0xFFFF` discards); otherwise the payload material is used. Catalog terrain
   resolves bindless textures and metre-period UVs; diagnostic modes use an owned
   palette. The low-three-bit tint remains only for explicit legacy fixtures.
-- Catalog contours use the shared marching-square topology and edge midpoints,
-  with material-specific quadratic Bezier arcs for diagonal cuts. Roundness 0 uses
+- Catalog coverage follows the occupied-vs-empty marching-square contour, with
+  material-specific quadratic Bezier arcs for diagonal cuts. Roundness 0 uses
   the straight chord; 1 places the control point at the dual-cell centre.
-  Inverse-quadratic coordinates classify both outer coverage and solid materials;
-  closest-point solves measure the actual curves, never internal triangulation edges.
-  Dual cells with exactly two solid labels use their mean roundness for both
-  regions and their rims, so the shared curves remain complementary. Other
-  junctions use each material's own region, including three-corner masks.
-  Multi-material junctions leave rounded void where none of those independent
-  regions cover the pixel. Repeated diagonal solids connect across saddles;
-  competing diagonal solids give the bridge to the lower material ID.
-  Collision contours retain the shared piecewise-linear geometry.
-- Terrain presentation adds a two-pixel inner outline to every solid border,
-  with a one-pixel AA fringe. Each solid side follows its own contour. Outline
-  opacity fades as nominal width grows from 0.2 to 0.3 fine cells; its width
-  remains in screen space. A twelve-pixel shadow falls into non-solid space,
-  capped at one cell. Derivatives captured before divergent branches convert
-  curve normals to screen-space widths. A bounded neighboring dual-cell search
-  carries effects across cell/chunk seams; fully faded rims skip that search. Curve bounding boxes reject unnecessary
-  closest-point solves; effect support bounds the search to 3x3 dual cells. Diagnostics retain
-  their exact palette colors; shadow composites only into non-solid coverage
-  (over matter when present), leaving solid fill unchanged.
-  Uniform components avoid curve evaluation. Boundary noise adds one shared
-  texture and two filtered samples per catalog fragment; draw counts stay unchanged.
-  Neighboring terrain buffer reads and bounded curve evaluation add fragment work.
+  Each outer arc averages the solid materials at its crossed-edge endpoints.
+  Repeated diagonal solids connect; distinct diagonal solids separated by empty
+  corners retain disconnected occupancy. Collision geometry remains unchanged.
+- Materials partition the occupied region by maximum signed contour distance,
+  filling junction gaps even when no independent label shape contains the pixel.
+  Two-solid dual cells use shared mean roundness. Competing diagonal solids
+  retain the lower-ID bridge policy in their label scores.
+- Terrain presentation draws one centered two-pixel internal material border
+  (one pixel per side), and a two-pixel inward rim on the exterior solid border.
+  Both have a one-pixel AA transition and fade as full nominal width grows
+  from 0.2 to 0.3 fine cells. Exterior rims and shadows use occupancy curves,
+  preventing phantom borders around the old independent material regions.
+  A twelve-pixel shadow falls into non-solid space, capped at one cell.
+  Derivatives captured before divergent branches convert normals to screen-space
+  widths. A bounded 3x3 neighboring dual-cell search carries exterior effects
+  across cell/chunk seams; curve bounding boxes reject unnecessary solves.
+  Internal border distance uses signed-score differences and their projected
+  analytic gradients. Diagnostics retain their exact palette colors.
+- Boundary noise uses one shared texture and two filtered samples per catalog
+  fragment. Material roundness blends angular texel ramps with broad plateaus
+  into smooth quintic interpolation. A shared cell style and scalar C1 envelope
+  prevent material interfaces and adjacent dual cells from warping apart.
+  Draw counts and resource bindings stay unchanged; curve evaluation and
+  neighboring terrain reads add bounded fragment work.
 - `grid_tiles.slang` entry points: `[shader("vertex")] vertexGridMain` and
   `[shader("fragment")] fragmentGridMain`.
 - CPU mirrors and cursor bindings live in `TrianglePass`, `GpuCaches`, and `Mesh.Types`.
@@ -132,8 +134,11 @@ material; physics retains the original disconnected saddle table. A pass-owned
 64-square linear RG noise texture has seven mip levels. Two global-coordinate
 SampleGrad samples blend between adjacent snapped octaves selected from the
 screen footprint. Each octave scales displacement with wavelength, capped at
-0.15 cells per axis. A C1 envelope fixes dual-cell edges, preventing cross-cell
-displacement and chunk seams; it fades once the cell footprint is unresolved. The diagnostic sample
+0.1 cells per axis. A scalar C1 envelope fixes both displacement components
+on every dual-cell edge, preventing cross-cell displacement and chunk seams;
+it fades once the cell footprint is unresolved. The mean solid-corner roundness
+sets interpolation style for both octave samples; explicit gradients include
+the interpolation slopes. The diagnostic sample
 comes from the chosen material with global row-major ties. Outside-world samples
 use the profile's validated wall material without forming atlas addresses. Each
 chunk draws only its nominal rectangle. Explicit legacy fixtures retain square
