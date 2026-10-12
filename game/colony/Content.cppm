@@ -21,6 +21,10 @@ export namespace pP::colony {
         opaque,
         blend
     };
+    enum class EMaterialTextureSampling : u8 {
+        stochastic,
+        repeat
+    };
 
     struct MaterialDefinition {
         std::string m_key{};
@@ -45,6 +49,7 @@ export namespace pP::colony {
         std::optional<std::string> m_normal_texture{};
         double m_normal_scale{1.0}, m_refraction_depth_m{};
         std::string m_normal_source_location{};
+        EMaterialTextureSampling m_texture_sampling{EMaterialTextureSampling::stochastic};
     };
 
     inline constexpr std::size_t kMaxMaterialDocumentBytes = 1024u * 1024u;

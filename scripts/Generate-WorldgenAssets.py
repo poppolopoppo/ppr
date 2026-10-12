@@ -101,7 +101,8 @@ def materials():
               roundness=rounded,diggable=key!="masonry",reference_density_kg_m3=float(density),
               metallic=1.0 if family=="metal" else .0,roughness=rough,emissive_r=.0,emissive_g=.0,
               emissive_b=.0,emissive_strength=1.0,alpha_mode="opaque" if tint[-2:]=="FF" else "blend",
-              ior=ior,normal_scale=.65 if depth else 1.0,refraction_depth_m=depth))
+              ior=ior,normal_scale=.65 if depth else 1.0,refraction_depth_m=depth,
+              **({"texture_sampling":"repeat"} if key=="masonry" else {})))
     for key, ident, tint, density, phase, family, rough, ior, depth in PARTICLES:
         magma=key=="magma"
         table(lines,"materials."+key,dict(numeric_id=ident,display_name=key.replace("_"," ").capitalize(),

@@ -310,8 +310,10 @@ threshold_max = 1.0
         PPR_TEST_ASSERT(catalog->findWorld("unknown") == nullptr);
         PPR_TEST_ASSERT(catalog->contentFingerprint().has_value());
         std::println("Shipped content fingerprint: {:016x}", *catalog->contentFingerprint());
-        PPR_TEST_ASSERT(catalog->contentFingerprint() == 0xc70c6df6a40ffaafull);
+        PPR_TEST_ASSERT(catalog->contentFingerprint() == 0xafd3c88984d452d4ull);
         PPR_TEST_ASSERT(catalog->findMaterial(u16{1001})->m_representation == EMaterialRepresentation::particle);
+        PPR_TEST_ASSERT(catalog->findMaterial("masonry")->m_texture_sampling == EMaterialTextureSampling::repeat);
+        PPR_TEST_ASSERT(catalog->findMaterial("basalt")->m_texture_sampling == EMaterialTextureSampling::stochastic);
         for (const auto key: {"clay", "limestone", "salt", "sulfur", "crystal"}) {
             const auto *const material = catalog->findMaterial(key);
             PPR_TEST_ASSERT(material != nullptr);
@@ -524,6 +526,7 @@ threshold_max = 1.0
             {"materials.toml", "normal_scale = 1.0", "normal_scale = 0.9"},
             {"materials.toml", "refraction_depth_m = 0.0", "refraction_depth_m = 0.1"},
             {"materials.toml", "alpha_mode = \"opaque\"", "alpha_mode = \"blend\""},
+            {"materials.toml", "texture_sampling = \"repeat\"", "texture_sampling = \"stochastic\""},
             {"backgrounds.toml", "parallax_factor = 0.08", "parallax_factor = 0.09"},
             {"biomes.toml", "293.0", "294.0"},
             {"features.toml", "Hearth landing", "Hearth landing revised"},

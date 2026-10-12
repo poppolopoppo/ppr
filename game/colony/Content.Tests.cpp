@@ -170,7 +170,7 @@ backgrounds = "backgrounds.toml"
         for (const auto invalid:
             {"metallic = -0.1", "roughness = 1.1", "emissive_r = nan", "emissive_strength = 1.0e100",
                 "alpha_mode = \"mask\"", "ior = 0.99", "ior = 3.01", "normal_scale = 4.01", "refraction_depth_m = 1.01",
-                "normal_texture = \"../normal.png\""}) {
+                "normal_texture = \"../normal.png\"", "texture_sampling = \"unknown\""}) {
             config::Diagnostics errors{};
             PPR_TEST_ASSERT(not decodeMaterialCatalog(
                 "schema_version = 2\n" + rock + invalid + "\n", "invalid-appearance.toml", errors));
@@ -188,6 +188,7 @@ backgrounds = "backgrounds.toml"
         PPR_TEST_ASSERT(sandstone->m_texture_period_m == 2.0);
         PPR_TEST_ASSERT(sandstone->m_diggable == true);
         PPR_TEST_ASSERT(sandstone->m_roundness == 1.0);
+        PPR_TEST_ASSERT(sandstone->m_texture_sampling == EMaterialTextureSampling::stochastic);
         PPR_TEST_ASSERT(catalog->findMaterial(u16{1024})->m_representation == EMaterialRepresentation::particle);
         PPR_TEST_ASSERT(catalog->findMaterial(u16{0}) == nullptr);
         PPR_TEST_ASSERT(catalog->findMaterial(u16{65535}) == nullptr);
@@ -200,8 +201,17 @@ backgrounds = "backgrounds.toml"
         auto second = decodeMaterialCatalog("# reordered\nschema_version = 2\n" + snow + rock, "two.toml", diagnostics);
         PPR_TEST_ASSERT(first.has_value() and second.has_value());
         PPR_TEST_ASSERT(first->materialFingerprint() == second->materialFingerprint());
-        PPR_TEST_ASSERT(first->materialFingerprint() == 0x4e53f380768c8f92ull);
+        PPR_TEST_ASSERT(first->materialFingerprint() == 0xb7fa289c6e92d472ull);
         PPR_TEST_ASSERT(first->materials().front().m_key == "sandstone");
+        auto explicit_default = decodeMaterialCatalog(
+            "schema_version = 2\n" + rock + "texture_sampling = \"stochastic\"\n" + snow, "explicit-default.toml",
+            diagnostics);
+        PPR_TEST_ASSERT(explicit_default and explicit_default->materialFingerprint() == first->materialFingerprint());
+        auto regular = decodeMaterialCatalog(
+            "schema_version = 2\n" + rock + "texture_sampling = \"repeat\"\n" + snow, "regular.toml", diagnostics);
+        PPR_TEST_ASSERT(
+            regular and regular->findMaterial(u16{16})->m_texture_sampling == EMaterialTextureSampling::repeat);
+        PPR_TEST_ASSERT(regular->materialFingerprint() != first->materialFingerprint());
         auto changed = decodeMaterialCatalog(
             "schema_version = 2\n" + replace(rock, "2.0", "3.0") + snow, "three.toml", diagnostics);
         PPR_TEST_ASSERT(changed.has_value());

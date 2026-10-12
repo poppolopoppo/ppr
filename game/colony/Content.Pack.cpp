@@ -70,7 +70,8 @@ namespace pP::colony {
                 value(m.m_reference_density_kg_m3);
                 values(
                     m.m_metallic, m.m_roughness, m.m_emissive_rgb[0u], m.m_emissive_rgb[1u], m.m_emissive_rgb[2u],
-                    m.m_emissive_strength, m.m_alpha_mode, m.m_ior, m.m_normal_scale, m.m_refraction_depth_m);
+                    m.m_emissive_strength, m.m_alpha_mode, m.m_ior, m.m_normal_scale, m.m_refraction_depth_m,
+                    m.m_texture_sampling);
                 if (include_path) {
                     value(m.m_normal_texture);
                     if (m.m_representation == EMaterialRepresentation::particle) {

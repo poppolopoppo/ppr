@@ -13,12 +13,34 @@ import engine.core;
 import engine.math;
 import engine.rhi;
 import engine.shader;
+import engine.image;
 
 namespace pP {
     // ReSharper disable once CppUseInternalLinkage
     PPR_DEFINE_LOG_CATEGORY(GridPass, debug, none)
 
     namespace {
+        [[nodiscard]] std::array<float, 3u> filteredAlbedoMean_(const image::ImageAsset &source) {
+            const auto &level = source.m_subresources.back();
+            const u32 width = image::mipExtentAt(source.m_width, source.m_mip_count - 1u);
+            const u32 height = image::mipExtentAt(source.m_height, source.m_mip_count - 1u);
+            const auto bytes = level.m_view.getBufferData();
+            std::array<double, 3u> sum{};
+            for (u32 y = 0u; y < height; ++y) {
+                for (u32 x = 0u; x < width; ++x) {
+                    const auto offset = static_cast<std::size_t>(y * level.m_row_pitch + x * 4u);
+                    for (u32 channel = 0u; channel < 3u; ++channel) {
+                        const double value = std::to_integer<u8>(bytes[offset + channel]) / 255.0;
+                        sum[channel] += source.m_format == image::ENativeImageFormat::rgba8_srgb
+                                            ? value <= 0.04045 ? value / 12.92 : std::pow((value + 0.055) / 1.055, 2.4)
+                                            : value;
+                    }
+                }
+            }
+            const double count = static_cast<double>(width) * height;
+            return {float(sum[0] / count), float(sum[1] / count), float(sum[2] / count)};
+        }
+
         // Never bind a bare rhi::Binding(): the default range does not survive
         // the module boundary and would build an empty SRV view. Every
         // setBinding below goes through makeFullRange.
@@ -311,24 +333,25 @@ namespace pP {
                 return std::isfinite(value) and value >= lo and value <= hi;
             };
             PPR_RETURN_ERROR_ON_FAIL(
-                GridPass, in_range(visual.m_metallic, 0.0f, 1.0f) and
-                                  in_range(visual.m_roughness, 0.0f, 1.0f) and
-                                  in_range(visual.m_opacity, 0.0f, 1.0f) and
-                                  in_range(visual.m_ior, 1.0f, 3.0f) and
-                                  in_range(visual.m_normal_scale, 0.0f, 4.0f) and
-                                  in_range(visual.m_refraction_depth_m, 0.0f, 1.0f) and
-                                  in_range(visual.m_emissive_rgb[0], 0.0f, 1.0f) and
-                                  in_range(visual.m_emissive_rgb[1], 0.0f, 1.0f) and
-                                  in_range(visual.m_emissive_rgb[2], 0.0f, 1.0f) and
-                                  std::isfinite(visual.m_emissive_strength) and
-                                  visual.m_emissive_strength >= 0.0f and
-                                  visual.m_alpha_mode <= 1u and
-                                  (visual.m_normal_texture_index == 0xffffffffu or
-                                      (visual.m_normal_texture_index < stage.m_terrain_images.size() and
-                                          stage.m_terrain_images[visual.m_normal_texture_index].m_format ==
-                                              image::ENativeImageFormat::rgba8_linear))
-                              ? std::error_code{}
-                              : std::make_error_code(std::errc::invalid_argument));
+                GridPass,
+                in_range(visual.m_metallic, 0.0f, 1.0f) and
+                        in_range(visual.m_roughness, 0.0f, 1.0f) and
+                        in_range(visual.m_opacity, 0.0f, 1.0f) and
+                        in_range(visual.m_ior, 1.0f, 3.0f) and
+                        in_range(visual.m_normal_scale, 0.0f, 4.0f) and
+                        in_range(visual.m_refraction_depth_m, 0.0f, 1.0f) and
+                        in_range(visual.m_emissive_rgb[0], 0.0f, 1.0f) and
+                        in_range(visual.m_emissive_rgb[1], 0.0f, 1.0f) and
+                        in_range(visual.m_emissive_rgb[2], 0.0f, 1.0f) and
+                        std::isfinite(visual.m_emissive_strength) and
+                        visual.m_emissive_strength >= 0.0f and
+                        (visual.m_surface_flags & ~(kGridSurfaceOpticalBlend | kGridSurfaceTextureRepeat)) == 0u and
+                        (visual.m_normal_texture_index == 0xffffffffu or
+                            (visual.m_normal_texture_index < stage.m_terrain_images.size() and
+                                stage.m_terrain_images[visual.m_normal_texture_index].m_format ==
+                                    image::ENativeImageFormat::rgba8_linear))
+                    ? std::error_code{}
+                    : std::make_error_code(std::errc::invalid_argument));
             PPR_RETURN_ERROR_ON_FAIL(
                 GridPass, visual.m_material_id > 0u and
                                   visual.m_material_id < 0xffffu and
@@ -385,7 +408,7 @@ namespace pP {
                                              a.m_ior == b.m_ior and
                                              a.m_normal_scale == b.m_normal_scale and
                                              a.m_refraction_depth_m == b.m_refraction_depth_m and
-                                             a.m_alpha_mode == b.m_alpha_mode;
+                                             a.m_surface_flags == b.m_surface_flags;
                                   });
             // Catalog changes require an independently prepared world bundle.
             PPR_RETURN_ERROR_ON_FAIL(
@@ -2291,6 +2314,13 @@ namespace pP {
         Array<GridTerrainVisual> palette;
         palette.resize(m_world.m_terrain_visuals.empty() ? 1u : 65536u);
         for (GridTerrainVisual visual: m_world.m_terrain_visuals) {
+            // Shipped chains end at one texel. Truncated admitted chains use the
+            // coarsest level's average. This filtered, quantized estimate keeps
+            // coarse LODs constant without a per-fragment mean texture read.
+            const auto mean = visual.m_texture_index == 0xffffffffu
+                                  ? std::array{1.0f, 1.0f, 1.0f}
+                                  : filteredAlbedoMean_(m_world.m_terrain_images[visual.m_texture_index]);
+            std::ranges::copy(mean, visual.m_filtered_mean_rgb);
             visual.m_texture_index = visual.m_texture_index == 0xffffffffu
                                          ? 0u
                                          : m_world.m_texture_slots[visual.m_texture_index];

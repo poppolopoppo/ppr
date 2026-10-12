@@ -46,6 +46,7 @@ namespace pP::tests::detail {
             packet.m_terrain_images.assign(3u, image);
             packet.m_terrain_visuals.push_back({16u, 0x123456ffu, 2u, 2.0f});
             packet.m_terrain_visuals.push_back({257u, 0xabcdef80u, 0xffffffffu, 1.0f});
+            packet.m_terrain_visuals[1u].m_surface_flags = kGridSurfaceOpticalBlend | kGridSurfaceTextureRepeat;
             packet.m_full_refresh = true;
             packet.m_resident_chunks.push_back({0u, 0u});
             colony::SimChunkCells cells{};
@@ -68,6 +69,8 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(stage.m_terrain_visuals[0u].m_color_rgba == 0x123456ffu);
             PPR_TEST_ASSERT(stage.m_terrain_visuals[0u].m_texture_index == 2u);
             PPR_TEST_ASSERT(stage.m_terrain_visuals[0u].m_texture_period_m == 2.0f);
+            PPR_TEST_ASSERT(
+                stage.m_terrain_visuals[1u].m_surface_flags == (kGridSurfaceOpticalBlend | kGridSurfaceTextureRepeat));
             packet.m_terrain_images.clear();
             PPR_TEST_ASSERT(stage.m_terrain_images.size() == 3u);
             PPR_TEST_ASSERT(stage.m_terrain_images[2u].m_storage.getBufferData()[0u] == std::byte{255});

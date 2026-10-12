@@ -47,13 +47,17 @@ export namespace pP {
 
     // Owned numeric catalog visuals. Texture indices name the immutable world
     // bundle's source images; they are distinct from terrain material IDs.
+    inline constexpr u32 kGridSurfaceOpticalBlend = 1u;
+    inline constexpr u32 kGridSurfaceTextureRepeat = 2u;
+
     struct alignas(16) GridTerrainVisual {
         u32 m_material_id{};
         u32 m_color_rgba{};
         u32 m_texture_index{0xffffffffu};
         float m_texture_period_m{1.0f};
         float m_roundness{1.0f};
-        u32 m_reserved[3]{};
+        // Derived from admitted albedo bytes when the immutable GPU palette is built.
+        float m_filtered_mean_rgb[3]{1.0f, 1.0f, 1.0f};
         u32 m_normal_texture_index{0xffffffffu};
         float m_metallic{};
         float m_roughness{1.0f};
@@ -63,7 +67,7 @@ export namespace pP {
         float m_ior{1.0f};
         float m_normal_scale{1.0f};
         float m_refraction_depth_m{};
-        u32 m_alpha_mode{};
+        u32 m_surface_flags{};
     };
     static_assert(sizeof(GridTerrainVisual) == 80u);
     static_assert(PPR_OFFSETOF(GridTerrainVisual, m_normal_texture_index) == 32u);
@@ -75,9 +79,9 @@ export namespace pP {
     static_assert(PPR_OFFSETOF(GridTerrainVisual, m_ior) == 64u);
     static_assert(PPR_OFFSETOF(GridTerrainVisual, m_normal_scale) == 68u);
     static_assert(PPR_OFFSETOF(GridTerrainVisual, m_refraction_depth_m) == 72u);
-    static_assert(PPR_OFFSETOF(GridTerrainVisual, m_alpha_mode) == 76u);
+    static_assert(PPR_OFFSETOF(GridTerrainVisual, m_surface_flags) == 76u);
     static_assert(PPR_OFFSETOF(GridTerrainVisual, m_roundness) == 16u);
-    static_assert(PPR_OFFSETOF(GridTerrainVisual, m_reserved) == 20u);
+    static_assert(PPR_OFFSETOF(GridTerrainVisual, m_filtered_mean_rgb) == 20u);
     static_assert(alignof(GridTerrainVisual) == 16u);
 
     struct alignas(16) GridBackgroundLayer {

@@ -79,6 +79,7 @@ Optional appearance fields use these finite domains and defaults:
 | `emissive_r`, `emissive_g`, `emissive_b` | [0,1] linear RGB | 0 |
 | `emissive_strength` | [0, float max] | 1 |
 | `alpha_mode` | `opaque`, `blend` | `opaque` |
+| `texture_sampling` | `stochastic`, `repeat` | `stochastic` |
 | `ior` | [1,3] | 1.5 |
 | `normal_texture` | Portable relative path | absent |
 | `normal_scale` | [0,4] | 1 |
@@ -91,6 +92,19 @@ geometric contour and particle fill coverage are separate. Within covered surfac
 `S = opacity*material + (1-opacity)*refracted_background`; coverage composites S
 with the destination exactly once. IOR1, flat normals, zero depth and opaque
 materials have no displacement. A covered zero-opacity surface may still refract.
+
+Natural materials use three translated patches on a triangular lattice to reduce
+repetition. Albedo and normal maps share patch coordinates, weights and explicit
+world-space sampling gradients. Linear RGB receives approximate mean/variance
+contrast correction; alpha uses ordinary blending. This is not full histogram
+transport. `texture_sampling = "repeat"` preserves structured patterns such as
+masonry mortar, using one matching albedo/normal lookup. Both modes remain anchored
+in world coordinates, including particles. Sampling mode participates in content
+identity; changing it intentionally invalidates checkpoints tied to the old pack.
+
+Solid boundary strokes retain their opacity independently of material optical
+opacity. Translucent solids participate in internal solid interfaces; gas and
+liquid particles leave the terrain boundary exterior.
 
 Texture paths use portable relative slash-separated components. Absolute,
 drive-qualified, backslash, empty, dot, and parent components are rejected.

@@ -50,7 +50,9 @@ namespace pP::colony {
                 visual.m_ior = static_cast<float>(material.m_ior);
                 visual.m_normal_scale = static_cast<float>(material.m_normal_scale);
                 visual.m_refraction_depth_m = static_cast<float>(material.m_refraction_depth_m);
-                visual.m_alpha_mode = static_cast<u32>(material.m_alpha_mode);
+                visual.m_surface_flags =
+                    (material.m_alpha_mode == EMaterialAlphaMode::blend ? kGridSurfaceOpticalBlend : 0u) |
+                    (material.m_texture_sampling == EMaterialTextureSampling::repeat ? kGridSurfaceTextureRepeat : 0u);
                 if (material.m_albedo_texture) {
                     const auto textures = content.textures();
                     for (u32 index = 0u; index < textures.size(); ++index) {

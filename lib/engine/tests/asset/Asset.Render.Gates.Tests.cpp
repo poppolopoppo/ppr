@@ -1253,7 +1253,7 @@ namespace pP::tests::detail {
             GridTerrainVisual visual{};
             visual.m_material_id = 1u;
             visual.m_color_rgba = 0x7090b0ffu;
-            visual.m_alpha_mode = 1u;
+            visual.m_surface_flags = 1u;
             visual.m_opacity = 0.0f;
             visual.m_normal_texture_index = 5u;
             visual.m_refraction_depth_m = 0.5f;
@@ -1272,7 +1272,7 @@ namespace pP::tests::detail {
             const auto refracted = capture(opticalGridFixture_(visual, 1u));
             PPR_TEST_ASSERT(changedOpticalPixels_(background, refracted) > 100u);
 
-            visual.m_alpha_mode = 0u;
+            visual.m_surface_flags = 0u;
             const auto opaque = capture(opticalGridFixture_(visual, 1u));
             visual.m_ior = 1.0f;
             const auto opaque_one = capture(opticalGridFixture_(visual, 1u));
@@ -1291,7 +1291,7 @@ namespace pP::tests::detail {
             relief.m_emissive_strength = 1.0f;
             const auto emitting = capture(opticalGridFixture_(relief, 1u));
             PPR_TEST_ASSERT(gateTexel_(emitting, 63u, 63u)[0] > gateTexel_(smooth_metal, 63u, 63u)[0] + 20u);
-            visual.m_alpha_mode = 1u;
+            visual.m_surface_flags = 1u;
             visual.m_opacity = 0.25f;
             const auto quarter = capture(opticalGridFixture_(visual, 1u));
             for (const u32 x: {17u, 53u, 91u}) {

@@ -530,6 +530,7 @@ namespace pP::colony {
             double m_metallic{}, m_roughness{1.0}, m_emissive_r{}, m_emissive_g{}, m_emissive_b{};
             double m_emissive_strength{1.0}, m_ior{1.5}, m_normal_scale{1.0}, m_refraction_depth_m{};
             EMaterialAlphaMode m_alpha_mode{EMaterialAlphaMode::opaque};
+            EMaterialTextureSampling m_texture_sampling{EMaterialTextureSampling::stochastic};
             std::optional<std::string> m_normal_texture{};
 
             static constexpr auto describe() {
@@ -577,6 +578,11 @@ namespace pP::colony {
                         EnumDomain<EMaterialAlphaMode, 2>{
                             {EnumEntry<EMaterialAlphaMode>{EMaterialAlphaMode::opaque, "opaque"},
                                 EnumEntry<EMaterialAlphaMode>{EMaterialAlphaMode::blend, "blend"}}}),
+                    field(
+                        &MaterialRecord::m_texture_sampling, metadata("texture_sampling"),
+                        EnumDomain<EMaterialTextureSampling, 2>{
+                            {EnumEntry<EMaterialTextureSampling>{EMaterialTextureSampling::stochastic, "stochastic"},
+                                EnumEntry<EMaterialTextureSampling>{EMaterialTextureSampling::repeat, "repeat"}}}),
                     field(
                         &MaterialRecord::m_reference_density_kg_m3, metadata("reference_density_kg_m3"),
                         FloatDomain{0.0, (std::numeric_limits<double>::max)(), false, true}),
@@ -703,7 +709,8 @@ namespace pP::colony {
                 {record.m_emissive_r, record.m_emissive_g, record.m_emissive_b}, record.m_emissive_strength,
                 record.m_alpha_mode, record.m_ior, record.m_normal_texture, record.m_normal_scale,
                 record.m_refraction_depth_m,
-                record.m_normal_texture ? std::string{location("normal_texture")} : std::string{}};
+                record.m_normal_texture ? std::string{location("normal_texture")} : std::string{},
+                record.m_texture_sampling};
         }
 
         [[nodiscard]] Expected<std::map<std::string, Document, std::less<>>> groupRecords(

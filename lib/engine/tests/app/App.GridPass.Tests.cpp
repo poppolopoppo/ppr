@@ -51,10 +51,12 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(PPR_OFFSETOF(GridPass::GridFrame, m_layers) == 176u);
             PPR_TEST_ASSERT(sizeof(GridBackgroundLayer) == 32u);
             PPR_TEST_ASSERT(sizeof(GridTerrainVisual) == 80u);
+            PPR_TEST_ASSERT(PPR_OFFSETOF(GridTerrainVisual, m_filtered_mean_rgb) == 20u);
+            PPR_TEST_ASSERT(sizeof(GridTerrainVisual::m_filtered_mean_rgb) == 12u);
             PPR_TEST_ASSERT(PPR_OFFSETOF(GridTerrainVisual, m_normal_texture_index) == 32u);
             PPR_TEST_ASSERT(PPR_OFFSETOF(GridTerrainVisual, m_metallic) == 36u);
             PPR_TEST_ASSERT(PPR_OFFSETOF(GridTerrainVisual, m_emissive_rgb) == 48u);
-            PPR_TEST_ASSERT(PPR_OFFSETOF(GridTerrainVisual, m_alpha_mode) == 76u);
+            PPR_TEST_ASSERT(PPR_OFFSETOF(GridTerrainVisual, m_surface_flags) == 76u);
             PPR_TEST_ASSERT(sizeof(math::ContourPoint) == 8u);
             PPR_TEST_ASSERT(sizeof(math::ContourTriangle) == 16u);
             PPR_TEST_ASSERT(sizeof(math::ContourCase) == 72u);
@@ -544,6 +546,11 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(
                 pass.applyStagedFrame(changed_thickness) == std::make_error_code(std::errc::invalid_argument));
             auto changed_optics = accepted;
+            changed_optics.m_terrain_visuals[0].m_surface_flags = 4u;
+            PPR_TEST_ASSERT(pass.applyStagedFrame(changed_optics) == std::make_error_code(std::errc::invalid_argument));
+            changed_optics.m_terrain_visuals[0].m_surface_flags = kGridSurfaceTextureRepeat;
+            PPR_TEST_ASSERT(pass.applyStagedFrame(changed_optics) == std::make_error_code(std::errc::invalid_argument));
+            changed_optics = accepted;
             changed_optics.m_terrain_visuals[0].m_ior = 1.5f;
             PPR_TEST_ASSERT(pass.applyStagedFrame(changed_optics) == std::make_error_code(std::errc::invalid_argument));
             PPR_TEST_ASSERT(not pass.applyStagedFrame(accepted));

@@ -68,7 +68,8 @@ struct ContourCase {
 StructuredBuffer<float2> g_contour_points;
 StructuredBuffer<ContourCase> g_contour_cases;
 StructuredBuffer<uint> g_chunk_slots;
-// CPU GridTerrainVisual: 32 bytes, offsets 0/4/8/12/16/20/24/28. Texture index here is
+// CPU GridTerrainVisual: 80 bytes. Scalar mean components occupy offsets 20/24/28.
+// Texture index here is
 // the resident descriptor slot, resolved from the catalog's source index.
 struct TerrainVisual {
     uint m_material_id;
@@ -77,9 +78,9 @@ struct TerrainVisual {
     float m_texture_period_m;
     float m_roundness;
     // Scalar padding keeps SPIR-V std430 array stride identical to the CPU mirror.
-    uint m_reserved0;
-    uint m_reserved1;
-    uint m_reserved2;
+    float m_filtered_mean_r;
+    float m_filtered_mean_g;
+    float m_filtered_mean_b;
     uint m_normal_texture_index;
     float m_metallic;
     float m_roughness;
@@ -89,8 +90,10 @@ struct TerrainVisual {
     float m_ior;
     float m_normal_scale;
     float m_refraction_depth_m;
-    uint m_alpha_mode;
+    uint m_surface_flags;
 };
+static const uint kSurfaceOpticalBlend = 1u;
+static const uint kSurfaceTextureRepeat = 2u;
 StructuredBuffer<TerrainVisual> g_terrain_visuals;
 Texture2D<float4> g_boundary_noise;
 // Written before the surface pass; this is never the active color attachment.
@@ -445,19 +448,51 @@ float occupiedCoverage(uint materials[4], float2 point, float width) {
     return saturate(coverage);
 }
 
-uint contourMaterial(float2 position, float2 pixel_x, float2 pixel_y, float width,
+struct TerrainStencil {
+    int2 base;
+    uint labels[16];
+};
+
+TerrainStencil terrainStencil(float2 position) {
+    TerrainStencil stencil;
+    stencil.base = int2(floor(position - 0.5));
+    // Decoration reaches at most one neighboring dual cell. All its corners
+    // and the central contour fit this exact 4x4 fragment-local stencil.
+    for (uint y = 0u; y < 4u; ++y) {
+        for (uint x = 0u; x < 4u; ++x) {
+            stencil.labels[y * 4u + x] = terrainSample(stencil.base + int2(x, y) - 1);
+        }
+    }
+    return stencil;
+}
+
+uint stencilSample(TerrainStencil stencil, int2 offset) {
+    return stencil.labels[(offset.y + 1) * 4 + offset.x + 1];
+}
+
+uint contourMaterial(float2 position, float2 pixel_x, float2 pixel_y, float width, TerrainStencil stencil,
     out float coverage, out int2 winner, out float internal_outline) {
     winner = int2(4096);
     internal_outline = 0.0;
-    int2 base = int2(floor(position - 0.5));
+    int2 base = stencil.base;
     float2 point = position - (float2(base) + 0.5);
     uint materials[4];
     float scores[4];
     float2 gradients[4];
     for (uint corner = 0u; corner < 4u; ++corner) {
-        materials[corner] = terrainSample(base + int2(g_contour_points[corner]));
+        materials[corner] = stencilSample(stencil, int2(g_contour_points[corner]));
         scores[corner] = -1.0e30;
         gradients[corner] = float2(0.0);
+    }
+    // Identical labels have neither a material interface nor partial occupancy.
+    // Decoration still examines neighbors: an exterior rim can enter this quad.
+    if (materials[0] == materials[1] && materials[0] == materials[2] && materials[0] == materials[3]) {
+        uint label = materials[0];
+        coverage = label == 0u || label == 0xffffu ? 0.0 : 1.0;
+        if (coverage == 0.0) { return 0u; }
+        // Nearest-corner diagnostics retain lower-Y, then lower-X ties.
+        winner = base + int2(point.x > 0.5 ? 1 : 0, point.y > 0.5 ? 1 : 0);
+        return label;
     }
     coverage = occupiedCoverage(materials, point, width);
     float interface_roundness;
@@ -511,8 +546,9 @@ uint contourMaterial(float2 position, float2 pixel_x, float2 pixel_y, float widt
 
 // Only occupied-vs-empty curves produce exterior rims and shadows. Internal
 // label curves are scores, not decoration geometry, so stitched joins stay clean.
-float2 contourDecoration(float2 position, float2 pixel_x, float2 pixel_y, uint material, bool need_shadow) {
-    int2 base = int2(floor(position - 0.5));
+float2 contourDecoration(float2 position, float2 pixel_x, float2 pixel_y, uint material, bool need_shadow,
+    TerrainStencil stencil) {
+    int2 base = stencil.base;
     float2 local = position - (float2(base) + 0.5);
     float pixel_bound = length(float2(length(pixel_x), length(pixel_y)));
     float pixel_min = sqrt(max(min(dot(pixel_x, pixel_x), dot(pixel_y, pixel_y)) -
@@ -531,7 +567,7 @@ float2 contourDecoration(float2 position, float2 pixel_x, float2 pixel_y, uint m
             if (dot(box_distance, box_distance) >= radius * radius) { continue; }
             uint materials[4];
             for (uint corner = 0u; corner < 4u; ++corner) {
-                materials[corner] = terrainSample(base + int2(x, y) + int2(g_contour_points[corner]));
+                materials[corner] = stencilSample(stencil, int2(x, y) + int2(g_contour_points[corner]));
             }
             uint mask = occupiedMask(materials);
             if (mask == 0u || mask == 15u) { continue; }
@@ -588,30 +624,128 @@ float3 backdropColor(float2 screen, SamplerState.Handle sampler) {
     return g_backdrop.SampleLevel(sampler, backdropUv(screen), 0.0).rgb;
 }
 
+struct TexturePatches {
+    float2 uv0;
+    float2 uv1;
+    float2 uv2;
+    float3 weights;
+};
+
+float2 patchTranslation(int2 vertex) {
+    uint2 bounded = uint2(vertex) & 0xffffu;
+    uint value = bounded.x * 0x9e3779b9u ^ bounded.y * 0x85ebca6bu;
+    value ^= value >> 16u;
+    value *= 0x7feb352du;
+    value ^= value >> 15u;
+    value *= 0x846ca68bu;
+    value ^= value >> 16u;
+    return float2(value & 0xffffu, value >> 16u) / 65536.0;
+}
+
+TexturePatches texturePatches(float2 uv) {
+    // Equilateral triangular lattice: neighboring triangles share translated
+    // patches and barycentric weights vanish continuously at their edges.
+    // Half-scale arithmetic cannot overflow for admitted nonnegative world UVs.
+    // Wrap the hash lattice before integer conversion; modulo vertex hashing
+    // keeps shared triangles continuous at that bounded domain's seam.
+    float2 half_lattice = float2(uv.x * 0.5 - uv.y * 0.288675135, uv.y * 0.577350269);
+    float2 lattice = fmod(half_lattice, 32768.0) * 2.0;
+    int2 cell = int2(floor(lattice));
+    float2 fraction = frac(lattice);
+    int2 vertices[3];
+    TexturePatches patches;
+    if (fraction.x + fraction.y <= 1.0) {
+        vertices[0] = cell;
+        vertices[1] = cell + int2(1, 0);
+        vertices[2] = cell + int2(0, 1);
+        patches.weights = float3(1.0 - fraction.x - fraction.y, fraction.x, fraction.y);
+    } else {
+        vertices[0] = cell + int2(1, 1);
+        vertices[1] = cell + int2(0, 1);
+        vertices[2] = cell + int2(1, 0);
+        patches.weights = float3(fraction.x + fraction.y - 1.0, 1.0 - fraction.x, 1.0 - fraction.y);
+    }
+    // Translation only preserves authored strata direction and the normal frame.
+    float2 repeat_uv = frac(uv);
+    patches.uv0 = repeat_uv + patchTranslation(vertices[0]);
+    patches.uv1 = repeat_uv + patchTranslation(vertices[1]);
+    patches.uv2 = repeat_uv + patchTranslation(vertices[2]);
+    return patches;
+}
+
+float3 decodePatchNormal(float3 value) {
+    float3 decoded = value * 2.0 - 1.0;
+    decoded.xy = select(abs(decoded.xy) <= (1.0 / 255.0 + 1.0e-6), float2(0.0), decoded.xy);
+    return decoded;
+}
+
+float4 decorateSurface(float4 surface, float2 decoration) {
+    // A solid boundary has its own opacity, independent of optical opacity.
+    // Normalize premultiplied contributions for the pass's straight-alpha blend.
+    float rim = saturate(decoration.x);
+    float optical = surface.a * (1.0 - rim);
+    float alpha = optical + rim;
+    float3 color = alpha > 0.0 ? (surface.rgb * optical + float3(0.025) * rim) / alpha : surface.rgb;
+    return float4(color, alpha);
+}
+
 // Optical opacity and geometric coverage are separate. The returned RGB is
 // already composed with the immutable backdrop; callers blend coverage once.
 float4 materialSurface(uint material, float2 fine_position, float2 gradient_x,
-    float2 gradient_y, float2 screen, float2 decoration, float2 texture_origin,
+    float2 gradient_y, float2 screen, float2 decoration, bool reuse_background, float3 unshifted_background,
     StructuredBuffer<DescriptorHandle<Texture2D<float4>>> textures, SamplerState.Handle sampler) {
     TerrainVisual visual = g_terrain_visuals[min(material, 65535u)];
     float4 tint = diagnosticTint(visual.m_color_rgba, 1.0);
     float period = visual.m_texture_period_m;
     float2 world = fine_position * g_grid_frame.m_cell_size_m;
-    float2 uv = (world - texture_origin) / period;
-    float4 albedo = nonuniform(textures[visual.m_texture_index]).SampleGrad(
-        sampler, uv, gradient_x / period, gradient_y / period);
+    float2 uv = world / period;
+    bool repeat_texture = (visual.m_surface_flags & kSurfaceTextureRepeat) != 0u;
+    TexturePatches patches;
+    if (repeat_texture) {
+        patches.uv0 = frac(uv);
+        patches.uv1 = patches.uv0;
+        patches.uv2 = patches.uv0;
+        patches.weights = float3(1.0, 0.0, 0.0);
+    } else {
+        patches = texturePatches(uv);
+    }
+    // Derivatives belong to the continuous world UV, before lattice/hash/fract.
+    // All albedo and normal patches use these same gradients and translations.
+    float2 uv_gradient_x = gradient_x / period;
+    float2 uv_gradient_y = gradient_y / period;
+    float4 a0 = nonuniform(textures[visual.m_texture_index]).SampleGrad(sampler, patches.uv0, uv_gradient_x, uv_gradient_y);
+    float4 a1 = float4(0.0), a2 = float4(0.0);
+    if (!repeat_texture) {
+        a1 = nonuniform(textures[visual.m_texture_index]).SampleGrad(sampler, patches.uv1, uv_gradient_x, uv_gradient_y);
+        a2 = nonuniform(textures[visual.m_texture_index]).SampleGrad(sampler, patches.uv2, uv_gradient_x, uv_gradient_y);
+    }
+    float3 weights = patches.weights;
+    float4 albedo = a0 * weights.x + a1 * weights.y + a2 * weights.z;
+    float3 mean = float3(visual.m_filtered_mean_r, visual.m_filtered_mean_g, visual.m_filtered_mean_b);
+    // Heitz/Neyret-style variance normalization in linear RGB, using the admitted
+    // filtered mean. This is an approximation, not Gaussian histogram transport.
+    // Bound reflectance overshoot; alpha retains ordinary barycentric blending.
+    if (!repeat_texture) {
+        albedo.rgb = saturate(mean + (albedo.rgb - mean) * rsqrt(dot(weights, weights)));
+    }
     float3 normal = float3(0.0, 0.0, 1.0);
     if (visual.m_normal_texture_index != 0xffffffffu) {
-        float3 decoded = nonuniform(textures[visual.m_normal_texture_index]).SampleGrad(
-            sampler, uv, gradient_x / period, gradient_y / period).xyz * 2.0 - 1.0;
-        // The canonical byte neutral is (128,128,255), exactly flat here.
-        decoded.xy = select(abs(decoded.xy) <= (1.0 / 255.0 + 1.0e-6), float2(0.0), decoded.xy);
+        float3 n0 = decodePatchNormal(nonuniform(textures[visual.m_normal_texture_index]).SampleGrad(
+            sampler, patches.uv0, uv_gradient_x, uv_gradient_y).xyz);
+        float3 n1 = float3(0.0), n2 = float3(0.0);
+        if (!repeat_texture) {
+            n1 = decodePatchNormal(nonuniform(textures[visual.m_normal_texture_index]).SampleGrad(
+                sampler, patches.uv1, uv_gradient_x, uv_gradient_y).xyz);
+            n2 = decodePatchNormal(nonuniform(textures[visual.m_normal_texture_index]).SampleGrad(
+                sampler, patches.uv2, uv_gradient_x, uv_gradient_y).xyz);
+        }
+        float3 decoded = n0 * weights.x + n1 * weights.y + n2 * weights.z;
         decoded.xy *= visual.m_normal_scale;
         if (all(isfinite(decoded)) && decoded.z > 0.0 && dot(decoded, decoded) > 1.0e-8) {
             normal = normalize(decoded);
         }
     }
-    float3 color = decorateTerrain(tint.rgb * albedo.rgb, decoration);
+    float3 color = tint.rgb * albedo.rgb;
     // Fixed local relief response uses PBR parameters without a world light/GI
     // dependency. Roughness widens the facing lobe; metallic colors its F0.
     float facing = saturate(dot(normal, normalize(float3(-0.35, 0.45, 1.0))));
@@ -621,11 +755,12 @@ float4 materialSurface(uint material, float2 fine_position, float2 gradient_x,
     }
     // Self color only, bounded without overflowing large finite strengths.
     color += 1.0 - exp(-visual.m_emissive_rgb * min(visual.m_emissive_strength, 80.0));
-    float opacity = visual.m_alpha_mode == 0u ? 1.0 : saturate(tint.a * albedo.a * visual.m_opacity);
-    if (g_grid_frame.m_has_background == 0u) { return float4(color, opacity); }
-    if (opacity >= 1.0) { return float4(color, 1.0); }
+    bool optical_blend = (visual.m_surface_flags & kSurfaceOpticalBlend) != 0u;
+    float opacity = !optical_blend ? 1.0 : saturate(tint.a * albedo.a * visual.m_opacity);
+    if (g_grid_frame.m_has_background == 0u) { return decorateSurface(float4(color, opacity), decoration); }
+    if (opacity >= 1.0) { return decorateSurface(float4(color, 1.0), decoration); }
     float2 offset_pixels = float2(0.0);
-    if (visual.m_alpha_mode == 1u && visual.m_ior > 1.0 && visual.m_refraction_depth_m > 0.0 && any(normal.xy != 0.0)) {
+    if (optical_blend && visual.m_ior > 1.0 && visual.m_refraction_depth_m > 0.0 && any(normal.xy != 0.0)) {
         float2 displacement = normal.xy / max(normal.z, 0.25) *
             ((1.0 - 1.0 / visual.m_ior) * visual.m_refraction_depth_m);
         float4 start = mul(float4(world, 0.0, 1.0), g_grid_frame.m_view_projection);
@@ -636,8 +771,9 @@ float4 materialSurface(uint material, float2 fine_position, float2 gradient_x,
             offset_pixels *= min(1.0, 8.0 / max(length(offset_pixels), 1.0e-6));
         }
     }
-    float3 background = backdropColor(screen + offset_pixels, sampler);
-    return float4(lerp(background, color, opacity), 1.0);
+    float3 background = reuse_background && all(offset_pixels == 0.0)
+        ? unshifted_background : backdropColor(screen + offset_pixels, sampler);
+    return decorateSurface(float4(lerp(background, color, opacity), 1.0), decoration);
 }
 
 [shader("fragment")]
@@ -666,6 +802,7 @@ float4 fragmentGridMain(
     float internal_outline = 0.0;
     uint diagnostic_mode = g_grid_frame.m_surface_mode >> 2u;
     int2 sample = int2(floor(input.fine_position));
+    TerrainStencil stencil = {};
     if (diagnostic_mode == 2u) {
         uint index = diagnosticIndex(sample);
         if (index == 0u) { discard; }
@@ -673,7 +810,8 @@ float4 fragmentGridMain(
     }
     if ((input.flags & 1u) != 0u) {
         if ((g_grid_frame.m_surface_mode & 1u) != 0u) {
-            material = contourMaterial(contour_position, pixel_x, pixel_y, width, coverage, sample, internal_outline);
+            stencil = terrainStencil(contour_position);
+            material = contourMaterial(contour_position, pixel_x, pixel_y, width, stencil, coverage, sample, internal_outline);
         } else {
         // Rasterized quad edges may land exactly at 128 after interpolation;
         // clamp them into the final cell rather than reading the next chunk.
@@ -703,7 +841,7 @@ float4 fragmentGridMain(
         return diagnosticTint(g_diagnostic_colors[index].m_color_rgba, coverage);
     }
     float2 decoration = (input.flags & 1u) != 0u && (g_grid_frame.m_surface_mode & 1u) != 0u ?
-        contourDecoration(contour_position, pixel_x, pixel_y, material, coverage < 1.0) : float2(0.0);
+        contourDecoration(contour_position, pixel_x, pixel_y, material, coverage < 1.0, stencil) : float2(0.0);
     decoration.x = max(decoration.x, internal_outline);
     // Shadow lives entirely on the non-solid side. Its coverage complements the
     // terrain AA and composites over matter before the final background blend.
@@ -725,7 +863,7 @@ float4 fragmentGridMain(
         discard;
     }
     float4 surface = materialSurface(material, input.fine_position, gradient_x, gradient_y,
-        input.position.xy, decoration, float2(0.0), g_textures, g_sampler);
+        input.position.xy, decoration, false, float3(0.0), g_textures, g_sampler);
     return compositeMatter(float4(surface.rgb, surface.a * coverage), matter);
 }
 
@@ -735,7 +873,6 @@ struct ParticleVertexOutput {
     nointerpolation uint material : TEXCOORD1;
     nointerpolation float fill : TEXCOORD2;
     nointerpolation uint2 owner : TEXCOORD3;
-    nointerpolation float2 pattern_origin : TEXCOORD4;
 };
 
 [shader("vertex")]
@@ -757,7 +894,6 @@ ParticleVertexOutput vertexParticleMain(uint vertex : SV_VertexID, uint instance
     output.material = particle.m_material_id;
     output.fill = particle.m_fill;
     output.owner = particle.m_owner;
-    output.pattern_origin = particle.m_position;
     return output;
 }
 
@@ -780,23 +916,27 @@ float4 fragmentParticleMain(ParticleVertexOutput input,
     if (any(input.fine_position < float2(input.owner)) || any(input.fine_position >= float2(input.owner + 1u))) { discard; }
     float coverage = 0.0, outline = 0.0;
     int2 sample = int2(input.owner);
-    uint terrain = contourMaterial(contour, pixel_x, pixel_y, width, coverage, sample, outline);
+    TerrainStencil stencil = terrainStencil(contour);
+    uint terrain = contourMaterial(contour, pixel_x, pixel_y, width, stencil, coverage, sample, outline);
+    // The terrain draw already owns fully covered pixels. Do not shade hidden
+    // particle material or reconstruct a terrain surface a second time here.
+    if (coverage == 1.0) { discard; }
+    float3 background = g_grid_frame.m_has_background != 0u ? backdropColor(input.position.xy, g_sampler) : float3(0.0);
     float4 particle = materialSurface(input.material, input.fine_position, gradient_x, gradient_y,
-        input.position.xy, float2(0.0), input.pattern_origin, g_textures, g_sampler);
+        input.position.xy, float2(0.0), true, background, g_textures, g_sampler);
     float fill = saturate(input.fill);
     if (g_grid_frame.m_has_background == 0u) {
         return float4(particle.rgb, particle.a * fill * (1.0 - coverage));
     }
-    float3 background = backdropColor(input.position.xy, g_sampler);
     float3 color = lerp(background, particle.rgb, fill);
-    float2 decoration = contourDecoration(contour, pixel_x, pixel_y, terrain, coverage < 1.0);
+    float2 decoration = contourDecoration(contour, pixel_x, pixel_y, terrain, coverage < 1.0, stencil);
     color = lerp(color, float3(0.015), 0.45 * decoration.y);
     // Reconstruct the shared contour's complete pixel, avoiding a second
     // multiplication of terrain AA against particle AA at the same boundary.
     if (coverage > 0.0 && terrain > 0u && terrain < 0xffffu) {
         decoration.x = max(decoration.x, outline);
         float4 surface = materialSurface(terrain, input.fine_position, gradient_x, gradient_y,
-            input.position.xy, decoration, float2(0.0), g_textures, g_sampler);
+            input.position.xy, decoration, true, background, g_textures, g_sampler);
         color = lerp(color, surface.rgb, coverage);
     }
     return float4(color, 1.0);

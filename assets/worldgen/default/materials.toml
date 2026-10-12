@@ -138,6 +138,7 @@ alpha_mode = "opaque"
 ior = 1.5
 normal_scale = 1.0
 refraction_depth_m = 0.0
+texture_sampling = "repeat"
 
 [materials.obsidian]
 numeric_id = 509

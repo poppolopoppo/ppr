@@ -3,6 +3,7 @@ module;
 module game.tests;
 import engine.core;
 import engine.sim;
+import engine.app;
 import game.colony.agents;
 import game.colony.buildings;
 import game.colony.pathfinding;
@@ -10,6 +11,7 @@ import game.colony.checkpoint;
 import game.colony.content;
 import game.colony.driver;
 import game.colony.worldgen;
+import game.colony.sim_packet;
 import game.application;
 import std;
 
@@ -107,6 +109,17 @@ namespace pP::game::tests::detail::checkpoint {
         auto restored = restoreWorldCheckpoint(loadCatalog(), std::move(*decoded), 17u);
         PPR_TEST_ASSERT(restored.has_value());
         auto &driver = **restored;
+        const auto presentation = makeSimFramePacket(1u, driver);
+        for (const auto &material: catalog.materials()) {
+            const auto found = std::ranges::find(
+                presentation.m_terrain_visuals, material.m_numeric_id, &GridTerrainVisual::m_material_id);
+            PPR_TEST_ASSERT(found != presentation.m_terrain_visuals.end());
+            const u32 expected = (material.m_alpha_mode == EMaterialAlphaMode::blend ? kGridSurfaceOpticalBlend : 0u) |
+                                 (material.m_texture_sampling == EMaterialTextureSampling::repeat
+                                         ? kGridSurfaceTextureRepeat
+                                         : 0u);
+            PPR_TEST_ASSERT(found->m_surface_flags == expected);
+        }
         PPR_TEST_ASSERT(driver.tickCount() == 19u and driver.worldGeneration() == 17u);
         PPR_TEST_ASSERT(driver.controlledEntity() == checkpoint.m_controlled);
         PPR_TEST_ASSERT(not driver.initialMatterBaselineValid());
