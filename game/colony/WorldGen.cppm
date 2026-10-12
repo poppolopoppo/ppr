@@ -9,7 +9,7 @@ import std;
 
 export namespace pP::colony {
     struct WorldDescriptor {
-        u32 m_pack_schema_version{1u};
+        u32 m_pack_schema_version{kContentSchemaVersion};
         u32 m_generator_version{sim::kGeneratorAlgorithmVersion};
         std::string m_profile{};
         u64 m_seed{};

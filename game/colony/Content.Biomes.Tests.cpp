@@ -11,7 +11,7 @@ import std;
 namespace pP::game::tests::detail::biomes {
     using namespace colony;
 
-    const std::string materials_text = R"(schema_version = 1
+    const std::string materials_text = R"(schema_version = 2
 [materials.rock]
 numeric_id = 16
 display_name = "Rock"
@@ -40,7 +40,7 @@ representation = "particle"
 color_rgba = "EECCAAFF"
 reference_density_kg_m3 = 1600.0
 )";
-    const std::string fields_text = R"(schema_version = 1
+    const std::string fields_text = R"(schema_version = 2
 [fields.composition]
 algorithm = "perlin"
 frequency_per_metre = 0.05
@@ -92,7 +92,7 @@ threshold_min = 0.3
 threshold_max = 1.0
 )";
     std::string validDocument() {
-        return "schema_version = 1\n" + base + shallow + deep + deposit;
+        return "schema_version = 2\n" + base + shallow + deep + deposit;
     }
 
     void replace(std::string &text, const std::string_view before, const std::string_view after) {
@@ -124,13 +124,13 @@ threshold_max = 1.0
         PPR_TEST_ASSERT(biome.m_deposits[0u].m_material_id == 501u and biome.m_deposits[0u].m_host_material_id == 16u);
 
         const auto reordered = decodeBiomeDefinitions(
-            "schema_version = 1\n" + deposit + deep + shallow + base, "other/location.toml", *materials, *fields,
+            "schema_version = 2\n" + deposit + deep + shallow + base, "other/location.toml", *materials, *fields,
             diagnostics);
         PPR_TEST_ASSERT(reordered.has_value());
         PPR_TEST_ASSERT(reordered->front().m_composition[0u].m_materials[0u].m_material_id == 501u);
         PPR_TEST_ASSERT(reordered->front().m_composition[0u].m_total_weight == band.m_total_weight);
         const auto no_deposits = decodeBiomeDefinitions(
-            "schema_version = 1\n" + base + shallow + deep, "biomes.toml", *materials, *fields, diagnostics);
+            "schema_version = 2\n" + base + shallow + deep, "biomes.toml", *materials, *fields, diagnostics);
         PPR_TEST_ASSERT(no_deposits.has_value() and no_deposits->front().m_deposits.empty());
         auto zero_variation = validDocument();
         replace(zero_variation, "temperature_variation_k = 10.0", "temperature_variation_k = 0.0");
@@ -205,7 +205,7 @@ threshold_max = 1.0
             replace(
                 invalid_deposit, invalid_depth ? "depth_max_normalized = 0.8" : "threshold_max = 1.0",
                 invalid_depth ? "depth_max_normalized = 0.1" : "threshold_max = 0.1");
-            const auto source = "schema_version = 1\n" + base + shallow + deep + invalid_deposit;
+            const auto source = "schema_version = 2\n" + base + shallow + deep + invalid_deposit;
             const std::string property = std::string{"biomes.temperate.deposits.copper."} +
                                          (invalid_depth ? "depth_max_normalized" : "threshold_max");
             config::Diagnostics codec_diagnostics{};
@@ -231,7 +231,7 @@ threshold_max = 1.0
             {"composition", kMaxBiomeCompositionBands}, {"deposits", kMaxBiomeDeposits},
             {"composition.shallow.materials", kMaxCompositionMaterials}};
         for (const auto &[collection, limit]: collections) {
-            std::string source = "schema_version = 1\n" + base;
+            std::string source = "schema_version = 2\n" + base;
             for (std::size_t i = 0u; i <= limit; ++i) {
                 source += "[biomes.temperate." + std::string{collection} + ".b" + std::to_string(i) + "]\norder = 1\n";
             }

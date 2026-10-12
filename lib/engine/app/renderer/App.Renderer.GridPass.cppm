@@ -54,11 +54,60 @@ export namespace pP {
         float m_texture_period_m{1.0f};
         float m_roundness{1.0f};
         u32 m_reserved[3]{};
+        u32 m_normal_texture_index{0xffffffffu};
+        float m_metallic{};
+        float m_roughness{1.0f};
+        float m_opacity{1.0f};
+        float m_emissive_rgb[3]{};
+        float m_emissive_strength{};
+        float m_ior{1.0f};
+        float m_normal_scale{1.0f};
+        float m_refraction_depth_m{};
+        u32 m_alpha_mode{};
     };
-    static_assert(sizeof(GridTerrainVisual) == 32u);
+    static_assert(sizeof(GridTerrainVisual) == 80u);
+    static_assert(PPR_OFFSETOF(GridTerrainVisual, m_normal_texture_index) == 32u);
+    static_assert(PPR_OFFSETOF(GridTerrainVisual, m_metallic) == 36u);
+    static_assert(PPR_OFFSETOF(GridTerrainVisual, m_roughness) == 40u);
+    static_assert(PPR_OFFSETOF(GridTerrainVisual, m_opacity) == 44u);
+    static_assert(PPR_OFFSETOF(GridTerrainVisual, m_emissive_rgb) == 48u);
+    static_assert(PPR_OFFSETOF(GridTerrainVisual, m_emissive_strength) == 60u);
+    static_assert(PPR_OFFSETOF(GridTerrainVisual, m_ior) == 64u);
+    static_assert(PPR_OFFSETOF(GridTerrainVisual, m_normal_scale) == 68u);
+    static_assert(PPR_OFFSETOF(GridTerrainVisual, m_refraction_depth_m) == 72u);
+    static_assert(PPR_OFFSETOF(GridTerrainVisual, m_alpha_mode) == 76u);
     static_assert(PPR_OFFSETOF(GridTerrainVisual, m_roundness) == 16u);
     static_assert(PPR_OFFSETOF(GridTerrainVisual, m_reserved) == 20u);
     static_assert(alignof(GridTerrainVisual) == 16u);
+
+    struct alignas(16) GridBackgroundLayer {
+        u32 m_texture_index{0xffffffffu};
+        u32 m_order{};
+        u32 m_color_rgba{0xffffffffu};
+        float m_repeat_period_m{256.0f};
+        float m_parallax_factor{};
+        u32 m_reserved[3]{};
+    };
+    static_assert(sizeof(GridBackgroundLayer) == 32u);
+    static_assert(PPR_OFFSETOF(GridBackgroundLayer, m_repeat_period_m) == 12u);
+    static_assert(PPR_OFFSETOF(GridBackgroundLayer, m_parallax_factor) == 16u);
+
+    // Immutable source records stay in physical units. Only changed chunks are
+    // repacked for the GPU; no simulation type crosses the renderer boundary.
+    struct GridParticleInstance {
+        u64 m_id{};
+        double m_position_x_m{};
+        double m_position_y_m{};
+        double m_volume_m3{};
+        double m_mass_kg{};
+        double m_temperature_k{};
+        u32 m_material_id{};
+        u32 m_phase{};
+    };
+    struct GridParticleBatch {
+        u32 m_chunk_id{};
+        std::shared_ptr<const Array<GridParticleInstance>> m_particles{};
+    };
 
     enum class EGridDiagnosticMode : u32 {
         textured,
@@ -157,6 +206,14 @@ export namespace pP {
         u64 m_texture_entries{};
         u64 m_texture_slots{};
         u32 m_retained_atlases{};
+        u64 m_particle_uploads{};
+        u64 m_particle_uploaded_bytes{};
+        u64 m_particle_instances{};
+        u64 m_particle_buffer_bytes{};
+        u64 m_background_target_bytes{};
+        u32 m_background_targets{};
+        u32 m_particle_root_bindings{};
+        u64 m_texture_decoded_bytes{};
     };
 
     class GridPass {
@@ -194,9 +251,24 @@ export namespace pP {
             float m_cell_size_m{1.0f};
             u32 m_surface_mode{};
             u32 m_boundary_material_id{1u};
+            float4x4 m_inverse_view_projection{identity_v};
+            float m_viewport[4]{};
+            float m_camera_origin[2]{};
+            u32 m_has_background{};
+            u32 m_padding{};
+            std::array<GridBackgroundLayer, 4u> m_layers{};
         };
 
-        static_assert(sizeof(GridFrame) == 80u);
+        static_assert(sizeof(GridFrame) == 304u);
+        static_assert(PPR_OFFSETOF(GridFrame, m_inverse_view_projection) == 80u);
+        static_assert(PPR_OFFSETOF(GridFrame, m_viewport) == 144u);
+        static_assert(PPR_OFFSETOF(GridFrame, m_layers) == 176u);
+
+        [[nodiscard]] std::error_code prepareBackground(
+            const PreRenderContext &context, const CameraSnapshot &camera, const rhi::Viewport &viewport,
+            const rhi::ScissorRect &scissor);
+        [[nodiscard]] std::error_code renderBackground(const DrawContext &context);
+        [[nodiscard]] std::error_code renderParticles(const DrawContext &context);
 
         // Pure CPU planner: keeps the submissions whose tile boxes (expanded
         // by kGridCullEpsilon) intersect the snapshot frustum. Renders
@@ -291,6 +363,10 @@ export namespace pP {
             u64 m_content_fingerprint{};
             Array<GridTerrainVisual> m_terrain_visuals{};
             Array<image::ImageAsset> m_terrain_images{};
+            bool m_has_background{false};
+            std::array<GridBackgroundLayer, 4u> m_background_layers{};
+            float m_reference_thickness_m{1.0f};
+            Array<GridParticleBatch> m_particle_batches{};
             Array<GridTileSubmission> m_tiles{};
             Array<GridStagedUpload> m_uploads{};
             EGridDiagnosticMode m_diagnostic_mode{EGridDiagnosticMode::textured};
@@ -456,9 +532,52 @@ export namespace pP {
             std::array<rhi::ComPtr<rhi::IShaderObject>, kTileRingSize> m_slot_roots{};
             std::array<rhi::ShaderCursor, kTileRingSize> m_slot_frame_cursors{};
             std::array<rhi::IBuffer *, kTileRingSize> m_slot_atlases{};
+            std::array<FenceCompletionValue, kTileRingSize> m_slot_last_use{};
+            std::array<u64, kTileRingSize> m_slot_world_generation{};
+            std::array<u64, kTileRingSize> m_slot_world_job_id{};
+            std::array<bool, kTileRingSize> m_slot_encoded{};
+            std::array<rhi::IBuffer *, kTileRingSize> m_slot_particle_buffers{};
+            std::array<rhi::ITextureView *, kTileRingSize> m_slot_backdrop_views{};
+            std::array<bool, kTileRingSize> m_slot_stale_bindings{};
         };
 
         [[nodiscard]] std::error_code ensurePipelineRoots_(rhi::IDevice &device, GridCachedPipeline &pipeline);
+
+        struct alignas(16) ParticleGpu {
+            float m_position[2]{};
+            float m_radius_m{};
+            float m_fill{};
+            u32 m_material_id{};
+            u32 m_phase{};
+            u32 m_owner[2]{};
+        };
+        static_assert(sizeof(ParticleGpu) == 32u);
+        static_assert(PPR_OFFSETOF(ParticleGpu, m_material_id) == 16u);
+        static_assert(PPR_OFFSETOF(ParticleGpu, m_owner) == 24u);
+        struct ParticleChunk {
+            std::shared_ptr<const Array<GridParticleInstance>> m_source{};
+            rhi::ComPtr<rhi::IBuffer> m_buffer{};
+            u32 m_count{};
+            bool m_dirty{};
+        };
+        struct BackgroundSlot {
+            rhi::ComPtr<rhi::ITexture> m_texture{};
+            rhi::ComPtr<rhi::ITextureView> m_view{};
+            u32 m_width{};
+            u32 m_height{};
+            FenceCompletionValue m_last_use{kFenceValueNone};
+        };
+        [[nodiscard]] std::error_code validateParticles_(const GridStagedFrame &stage) const;
+        void stageParticles_(const GridStagedFrame &stage);
+        void markPipelineUse_(GridCachedPipeline &pipeline, u32 slot) noexcept;
+        [[nodiscard]] std::error_code prepareParticles_(rhi::IDevice &device);
+        [[nodiscard]] std::error_code createOpticalPrograms_(
+            IShaderService &service, rhi::IDevice &device, const std::filesystem::path &content_dir);
+        [[nodiscard]] Expected<GridCachedPipeline *> opticalPipeline_(
+            rhi::IDevice &device, const RenderPipelineSignature &signature, rhi::IShaderProgram *program,
+            std::optional<RenderPipelineKey> &key, std::optional<GridCachedPipeline> &cache, bool blend);
+        void fillOpticalFrame_(GridFrame &frame) const noexcept;
+        void clearOpticalResources_() noexcept;
 
         [[nodiscard]] Expected<GridCachedPipeline *> pipelineFor_(
             rhi::IDevice &device, const RenderPipelineSignature &signature);
@@ -618,6 +737,10 @@ export namespace pP {
         // state. Candidate preparation can exchange this value on the owner
         // lane without moving pass programs, completion rings or the camera.
         struct WorldResources {
+            bool m_has_background{};
+            std::array<GridBackgroundLayer, 4u> m_background_layers{};
+            float m_reference_thickness_m{1.0f};
+            std::array<ParticleChunk, kGridTileCacheCapacity> m_particles{};
             EGridDiagnosticMode m_diagnostic_mode{EGridDiagnosticMode::textured};
             u64 m_diagnostic_revision{};
             Array<GridDiagnosticColor> m_diagnostic_palette{};
@@ -638,6 +761,7 @@ export namespace pP {
             Array<TextureHandle> m_texture_handles{};
             u32 m_image_cursor{};
             u32 m_retirement_diagnostic_cursor{};
+            u32 m_retirement_particle_cursor{};
             bool m_retirement_roots_detached{};
             rhi::ComPtr<rhi::IBuffer> m_terrain_palette{};
             u64 m_job_id{};
@@ -676,6 +800,20 @@ export namespace pP {
         std::unique_ptr<WorldResources> m_retiring_world{};
 
         CameraSnapshot m_camera_view;
+        std::array<BackgroundSlot, kTileRingSize> m_background_slots{};
+        u32 m_background_cursor{};
+        bool m_background_ready{};
+        bool m_surface_retained_table{};
+        rhi::Viewport m_background_viewport{};
+        rhi::ScissorRect m_background_scissor{};
+        CameraSnapshot m_background_camera{};
+        rhi::ComPtr<rhi::IShaderProgram> m_particle_program{};
+        rhi::ComPtr<rhi::IShaderProgram> m_background_program{};
+        rhi::ComPtr<rhi::IShaderProgram> m_background_copy_program{};
+        std::optional<RenderPipelineKey> m_particle_key{}, m_background_key{}, m_background_copy_key{};
+        std::optional<GridCachedPipeline> m_particle_pipeline{}, m_background_pipeline{}, m_background_copy_pipeline{};
+        u64 m_particle_uploads{};
+        u64 m_particle_uploaded_bytes{};
         bool m_ready = false;
     };
 }

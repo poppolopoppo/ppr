@@ -75,6 +75,7 @@ export namespace pP::colony {
         };
         struct EditCandidate {
             Array<sim::ChunkGrid::CapturedChunk> m_chunks{};
+            Array<sim::MatterParticleBatch> m_particles{};
             Array<sim::ChunkPos> m_touched{};
             Array<DirtyChunk> m_manifest{};
             Array<ErrandProgress> m_errands{};
@@ -229,18 +230,24 @@ export namespace pP::colony {
             const ColonyDriverDesc &desc, PreparedWorld world, const sim::GenerationExecution *execution = nullptr);
         /// Initializes an unpublished checkpoint candidate without spawning actors.
         [[nodiscard]] std::error_code initRestored(
-            const ColonyDriverDesc &desc, PreparedWorld world, const sim::Snapshot &snapshot, u64 tick,
-            bool initial_matter_valid, std::optional<sim::Entity> controlled,
-            const sim::GenerationExecution *execution = nullptr);
+            const ColonyDriverDesc &desc, PreparedWorld world, const sim::Snapshot &snapshot,
+            const sim::MatterParticleSnapshot &particles, u64 tick, bool initial_matter_valid,
+            std::optional<sim::Entity> controlled, const sim::GenerationExecution *execution = nullptr);
         [[nodiscard]] Expected<sim::Snapshot> captureFullWithBodies(const IContext *context = nullptr) const;
         [[nodiscard]] u32 tickHz() const noexcept;
         [[nodiscard]] bool captureReady() const noexcept;
         [[nodiscard]] const PreparedWorld *preparedWorld() const noexcept;
         [[nodiscard]] bool initialMatterBaselineValid() const noexcept;
+        [[nodiscard]] sim::MatterParticleSnapshot captureParticles() const;
+        [[nodiscard]] std::span<const sim::MatterParticle> particleChunk(sim::ChunkPos position) const noexcept;
+        [[nodiscard]] u32 particleCount() const noexcept;
+        [[nodiscard]] std::span<const sim::MatterParticleBatch> editParticles() const noexcept;
         // Borrowed immutable catalog; absent for explicit legacy fixtures.
         [[nodiscard]] const ContentCatalog *contentCatalog() const noexcept;
         [[nodiscard]] u16 boundaryMaterial() const noexcept;
         [[nodiscard]] u32 cellsPerMetre() const noexcept;
+        [[nodiscard]] double referenceThicknessMetres() const noexcept;
+        [[nodiscard]] std::string_view profileKey() const noexcept;
 
         /// Interactive owner enables matching render-publication settlement.
         /// Headless fixtures retain synchronous edit execution.

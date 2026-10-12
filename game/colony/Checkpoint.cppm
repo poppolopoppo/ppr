@@ -8,7 +8,7 @@ import game.colony.worldgen;
 import std;
 
 export namespace pP::colony {
-    inline constexpr u32 kWorldCheckpointVersion = 1u;
+    inline constexpr u32 kWorldCheckpointVersion = 2u;
     inline constexpr u64 kMaxWorldCheckpointBytes = 256u * 1024u * 1024u;
     struct CheckpointMaterial {
         u16 m_id{};
@@ -21,7 +21,8 @@ export namespace pP::colony {
         Array<CheckpointMaterial> m_materials{};
         Array<sim::GenerationSite> m_sites{};
         sim::GenerationGeometry m_geometry{};
-        sim::InitialMatter m_matter{};
+        sim::InitialMatter m_matter{}; // Historical generation metadata only.
+        sim::MatterParticleSnapshot m_particles{};
         sim::GenerationStart m_start{};
         sim::GenerationReport m_report{};
         sim::Snapshot m_snapshot{};

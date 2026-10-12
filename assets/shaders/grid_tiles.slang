@@ -4,6 +4,16 @@
 // view * projection with [0,1] depth, no transpose, no Y flip. No dynamic lighting,
 // world-space catalog texturing, no GI inputs of any kind. Catalog sessions use the shared
 // rounded quadratic-Bezier contour surface; explicit legacy fixtures keep square cells.
+struct BackgroundLayer {
+    uint m_texture_index;
+    uint m_order;
+    uint m_color_rgba;
+    float m_repeat_period_m;
+    float m_parallax_factor;
+    uint m_reserved0;
+    uint m_reserved1;
+    uint m_reserved2;
+};
 struct GridFrame {
     // Unjittered view * projection, followed by the per-slot visibility mode.
     float4x4 m_view_projection;
@@ -11,6 +21,12 @@ struct GridFrame {
     float m_cell_size_m;
     uint m_surface_mode;
     uint m_boundary_material_id;
+    float4x4 m_inverse_view_projection;
+    float4 m_viewport;
+    float2 m_camera_origin;
+    uint m_has_background;
+    uint m_padding;
+    BackgroundLayer m_layers[4];
 };
 
 // CPU mirror GridTilePayload: 32 B = 16 rect + 4 material + 4 base
@@ -64,9 +80,30 @@ struct TerrainVisual {
     uint m_reserved0;
     uint m_reserved1;
     uint m_reserved2;
+    uint m_normal_texture_index;
+    float m_metallic;
+    float m_roughness;
+    float m_opacity;
+    float3 m_emissive_rgb;
+    float m_emissive_strength;
+    float m_ior;
+    float m_normal_scale;
+    float m_refraction_depth_m;
+    uint m_alpha_mode;
 };
 StructuredBuffer<TerrainVisual> g_terrain_visuals;
 Texture2D<float4> g_boundary_noise;
+// Written before the surface pass; this is never the active color attachment.
+Texture2D<float4> g_backdrop;
+struct ParticleGpu {
+    float2 m_position;
+    float m_radius_m;
+    float m_fill;
+    uint m_material_id;
+    uint m_phase;
+    uint2 m_owner;
+};
+StructuredBuffer<ParticleGpu> g_particles;
 struct DiagnosticColor {
     uint m_color_rgba;
     float m_fill_height_fine;
@@ -541,6 +578,68 @@ float4 compositeMatter(float4 terrain, float4 matter) {
     return alpha > 0.0 ? float4((terrain.rgb * terrain.a + matter.rgb * matter.a) / alpha, alpha) : float4(0.0);
 }
 
+float2 backdropUv(float2 screen) {
+    float2 extent = max(g_grid_frame.m_viewport.zw, float2(1.0));
+    return clamp((screen - g_grid_frame.m_viewport.xy) / extent,
+        0.5 / extent, 1.0 - 0.5 / extent);
+}
+
+float3 backdropColor(float2 screen, SamplerState.Handle sampler) {
+    return g_backdrop.SampleLevel(sampler, backdropUv(screen), 0.0).rgb;
+}
+
+// Optical opacity and geometric coverage are separate. The returned RGB is
+// already composed with the immutable backdrop; callers blend coverage once.
+float4 materialSurface(uint material, float2 fine_position, float2 gradient_x,
+    float2 gradient_y, float2 screen, float2 decoration, float2 texture_origin,
+    StructuredBuffer<DescriptorHandle<Texture2D<float4>>> textures, SamplerState.Handle sampler) {
+    TerrainVisual visual = g_terrain_visuals[min(material, 65535u)];
+    float4 tint = diagnosticTint(visual.m_color_rgba, 1.0);
+    float period = visual.m_texture_period_m;
+    float2 world = fine_position * g_grid_frame.m_cell_size_m;
+    float2 uv = (world - texture_origin) / period;
+    float4 albedo = nonuniform(textures[visual.m_texture_index]).SampleGrad(
+        sampler, uv, gradient_x / period, gradient_y / period);
+    float3 normal = float3(0.0, 0.0, 1.0);
+    if (visual.m_normal_texture_index != 0xffffffffu) {
+        float3 decoded = nonuniform(textures[visual.m_normal_texture_index]).SampleGrad(
+            sampler, uv, gradient_x / period, gradient_y / period).xyz * 2.0 - 1.0;
+        // The canonical byte neutral is (128,128,255), exactly flat here.
+        decoded.xy = select(abs(decoded.xy) <= (1.0 / 255.0 + 1.0e-6), float2(0.0), decoded.xy);
+        decoded.xy *= visual.m_normal_scale;
+        if (all(isfinite(decoded)) && decoded.z > 0.0 && dot(decoded, decoded) > 1.0e-8) {
+            normal = normalize(decoded);
+        }
+    }
+    float3 color = decorateTerrain(tint.rgb * albedo.rgb, decoration);
+    // Fixed local relief response uses PBR parameters without a world light/GI
+    // dependency. Roughness widens the facing lobe; metallic colors its F0.
+    float facing = saturate(dot(normal, normalize(float3(-0.35, 0.45, 1.0))));
+    float3 f0 = lerp(float3(0.04), color, visual.m_metallic);
+    if (visual.m_normal_texture_index != 0xffffffffu) {
+        color = color * (0.72 + 0.28 * facing) + f0 * pow(facing, lerp(48.0, 2.0, visual.m_roughness)) * 0.12;
+    }
+    // Self color only, bounded without overflowing large finite strengths.
+    color += 1.0 - exp(-visual.m_emissive_rgb * min(visual.m_emissive_strength, 80.0));
+    float opacity = visual.m_alpha_mode == 0u ? 1.0 : saturate(tint.a * albedo.a * visual.m_opacity);
+    if (g_grid_frame.m_has_background == 0u) { return float4(color, opacity); }
+    if (opacity >= 1.0) { return float4(color, 1.0); }
+    float2 offset_pixels = float2(0.0);
+    if (visual.m_alpha_mode == 1u && visual.m_ior > 1.0 && visual.m_refraction_depth_m > 0.0 && any(normal.xy != 0.0)) {
+        float2 displacement = normal.xy / max(normal.z, 0.25) *
+            ((1.0 - 1.0 / visual.m_ior) * visual.m_refraction_depth_m);
+        float4 start = mul(float4(world, 0.0, 1.0), g_grid_frame.m_view_projection);
+        float4 shifted = mul(float4(world + displacement, 0.0, 1.0), g_grid_frame.m_view_projection);
+        if (abs(start.w) > 1.0e-6 && abs(shifted.w) > 1.0e-6) {
+            float2 delta_ndc = shifted.xy / shifted.w - start.xy / start.w;
+            offset_pixels = delta_ndc * float2(0.5, -0.5) * g_grid_frame.m_viewport.zw;
+            offset_pixels *= min(1.0, 8.0 / max(length(offset_pixels), 1.0e-6));
+        }
+    }
+    float3 background = backdropColor(screen + offset_pixels, sampler);
+    return float4(lerp(background, color, opacity), 1.0);
+}
+
 [shader("fragment")]
 float4 fragmentGridMain(
     GridVertexOutput input,
@@ -625,15 +724,80 @@ float4 fragmentGridMain(
     if (visual.m_material_id != material) {
         discard;
     }
-    uint rgba = visual.m_color_rgba;
-    float4 tint = float4((rgba >> 24u) & 255u, (rgba >> 16u) & 255u,
-        (rgba >> 8u) & 255u, rgba & 255u) / 255.0;
-    // Authored colors are sRGB; color texture views perform their own decode.
-    tint.rgb = select(tint.rgb <= 0.04045, tint.rgb / 12.92,
-        pow((tint.rgb + 0.055) / 1.055, float3(2.4)));
-    float period = visual.m_texture_period_m;
-    float2 uv = input.fine_position * (g_grid_frame.m_cell_size_m / period);
-    float4 albedo = nonuniform(g_textures[visual.m_texture_index]).SampleGrad(
-        g_sampler, uv, gradient_x / period, gradient_y / period);
-    return compositeMatter(float4(decorateTerrain(tint.rgb * albedo.rgb, decoration), tint.a * albedo.a * coverage), matter);
+    float4 surface = materialSurface(material, input.fine_position, gradient_x, gradient_y,
+        input.position.xy, decoration, float2(0.0), g_textures, g_sampler);
+    return compositeMatter(float4(surface.rgb, surface.a * coverage), matter);
+}
+
+struct ParticleVertexOutput {
+    float4 position : SV_Position;
+    float2 fine_position : TEXCOORD0;
+    nointerpolation uint material : TEXCOORD1;
+    nointerpolation float fill : TEXCOORD2;
+    nointerpolation uint2 owner : TEXCOORD3;
+    nointerpolation float2 pattern_origin : TEXCOORD4;
+};
+
+[shader("vertex")]
+ParticleVertexOutput vertexParticleMain(uint vertex : SV_VertexID, uint instance : SV_InstanceID) {
+    static const float2 corners[6] = {float2(-0.5,-0.5), float2(0.5,-0.5), float2(0.5,0.5),
+        float2(-0.5,-0.5), float2(0.5,0.5), float2(-0.5,0.5)};
+    ParticleGpu particle = g_particles[instance];
+    float2 owner_center = (float2(particle.m_owner) + 0.5) * g_grid_frame.m_cell_size_m;
+    // Conservative source-volume support: translate with the continuous center
+    // and expand to cover its unique owner region. Clipping cannot discard mass
+    // when a restored center approaches an owner edge. Radius is physical 2D
+    // sqrt(volume/thickness/pi); the cell proxy also covers contour-cut volumes.
+    float2 half_extent = max(float2(particle.m_radius_m),
+        0.5 * g_grid_frame.m_cell_size_m + abs(particle.m_position - owner_center));
+    float2 world = particle.m_position + corners[vertex] * (2.0 * half_extent);
+    ParticleVertexOutput output;
+    output.position = mul(float4(world, 0.0, 1.0), g_grid_frame.m_view_projection);
+    output.fine_position = world / g_grid_frame.m_cell_size_m;
+    output.material = particle.m_material_id;
+    output.fill = particle.m_fill;
+    output.owner = particle.m_owner;
+    output.pattern_origin = particle.m_position;
+    return output;
+}
+
+[shader("fragment")]
+float4 fragmentParticleMain(ParticleVertexOutput input,
+    uniform StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
+    uniform SamplerState.Handle g_sampler) : SV_Target {
+    float2 world_pixel_x = ddx(input.fine_position);
+    float2 world_pixel_y = ddy(input.fine_position);
+    float2 contour = input.fine_position;
+    if ((g_grid_frame.m_surface_mode & 3u) == 3u) {
+        contour += boundaryDisplacement(input.fine_position, world_pixel_x, world_pixel_y, g_sampler);
+    }
+    float2 pixel_x = ddx(contour), pixel_y = ddy(contour);
+    float width = clamp(length(fwidth(contour)), 1.0e-6, 1.0);
+    float2 gradient_x = clamp(world_pixel_x * g_grid_frame.m_cell_size_m, -2048.0, 2048.0);
+    float2 gradient_y = clamp(world_pixel_y * g_grid_frame.m_cell_size_m, -2048.0, 2048.0);
+    // Half-open ownership eliminates double opacity at every world/chunk seam.
+    // Expanded continuous support conserves each source record's owner volume.
+    if (any(input.fine_position < float2(input.owner)) || any(input.fine_position >= float2(input.owner + 1u))) { discard; }
+    float coverage = 0.0, outline = 0.0;
+    int2 sample = int2(input.owner);
+    uint terrain = contourMaterial(contour, pixel_x, pixel_y, width, coverage, sample, outline);
+    float4 particle = materialSurface(input.material, input.fine_position, gradient_x, gradient_y,
+        input.position.xy, float2(0.0), input.pattern_origin, g_textures, g_sampler);
+    float fill = saturate(input.fill);
+    if (g_grid_frame.m_has_background == 0u) {
+        return float4(particle.rgb, particle.a * fill * (1.0 - coverage));
+    }
+    float3 background = backdropColor(input.position.xy, g_sampler);
+    float3 color = lerp(background, particle.rgb, fill);
+    float2 decoration = contourDecoration(contour, pixel_x, pixel_y, terrain, coverage < 1.0);
+    color = lerp(color, float3(0.015), 0.45 * decoration.y);
+    // Reconstruct the shared contour's complete pixel, avoiding a second
+    // multiplication of terrain AA against particle AA at the same boundary.
+    if (coverage > 0.0 && terrain > 0u && terrain < 0xffffu) {
+        decoration.x = max(decoration.x, outline);
+        float4 surface = materialSurface(terrain, input.fine_position, gradient_x, gradient_y,
+            input.position.xy, decoration, float2(0.0), g_textures, g_sampler);
+        color = lerp(color, surface.rgb, coverage);
+    }
+    return float4(color, 1.0);
 }

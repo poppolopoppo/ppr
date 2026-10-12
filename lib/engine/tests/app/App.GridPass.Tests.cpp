@@ -38,12 +38,23 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(std::is_standard_layout_v<GridTilePayload>);
 
             // GridFrame's matrix, visibility selector and metric share the shader ABI.
-            PPR_TEST_ASSERT(sizeof(GridPass::GridFrame) == 80u);
+            PPR_TEST_ASSERT(sizeof(GridPass::GridFrame) == 304u);
             PPR_TEST_ASSERT(PPR_OFFSETOF(GridPass::GridFrame, m_view_projection) == 0u);
             PPR_TEST_ASSERT(PPR_OFFSETOF(GridPass::GridFrame, m_use_visible_ids) == 64u);
             PPR_TEST_ASSERT(PPR_OFFSETOF(GridPass::GridFrame, m_cell_size_m) == 68u);
             PPR_TEST_ASSERT(PPR_OFFSETOF(GridPass::GridFrame, m_surface_mode) == 72u);
             PPR_TEST_ASSERT(PPR_OFFSETOF(GridPass::GridFrame, m_boundary_material_id) == 76u);
+            PPR_TEST_ASSERT(PPR_OFFSETOF(GridPass::GridFrame, m_inverse_view_projection) == 80u);
+            PPR_TEST_ASSERT(PPR_OFFSETOF(GridPass::GridFrame, m_viewport) == 144u);
+            PPR_TEST_ASSERT(PPR_OFFSETOF(GridPass::GridFrame, m_camera_origin) == 160u);
+            PPR_TEST_ASSERT(PPR_OFFSETOF(GridPass::GridFrame, m_has_background) == 168u);
+            PPR_TEST_ASSERT(PPR_OFFSETOF(GridPass::GridFrame, m_layers) == 176u);
+            PPR_TEST_ASSERT(sizeof(GridBackgroundLayer) == 32u);
+            PPR_TEST_ASSERT(sizeof(GridTerrainVisual) == 80u);
+            PPR_TEST_ASSERT(PPR_OFFSETOF(GridTerrainVisual, m_normal_texture_index) == 32u);
+            PPR_TEST_ASSERT(PPR_OFFSETOF(GridTerrainVisual, m_metallic) == 36u);
+            PPR_TEST_ASSERT(PPR_OFFSETOF(GridTerrainVisual, m_emissive_rgb) == 48u);
+            PPR_TEST_ASSERT(PPR_OFFSETOF(GridTerrainVisual, m_alpha_mode) == 76u);
             PPR_TEST_ASSERT(sizeof(math::ContourPoint) == 8u);
             PPR_TEST_ASSERT(sizeof(math::ContourTriangle) == 16u);
             PPR_TEST_ASSERT(sizeof(math::ContourCase) == 72u);
@@ -472,6 +483,73 @@ namespace pP::tests::detail {
         // indirect lane issues one single-instance arg per tile whose
         // startInstanceLocation is that tile's plan index. Staging runs
         // through the real submitTiles entry; everything stays device-free.
+        PPR_UNIT_TEST (grid_particle_rejection_preserves_the_retained_stage) {
+            GridPass pass{};
+            GridPass::GridStagedFrame original{};
+            original.m_has_catalog = true;
+            original.m_terrain_visuals.push_back(GridTerrainVisual{.m_material_id = 1u});
+            original.m_tiles.push_back(
+                GridTileSubmission{.m_chunk_id = 0u, .m_tile_range = {0, 0, 128, 128}, .m_dirty_mask = 1u});
+            GridPass::GridStagedUpload upload{};
+            upload.m_payload.m_material = 1u;
+            upload.m_payload.m_rect[2] = 128.0f;
+            upload.m_payload.m_rect[3] = 128.0f;
+            original.m_uploads.push_back(upload);
+            PPR_TEST_ASSERT(not pass.applyStagedFrame(original));
+            const u64 uploads = pass.uploadCount();
+
+            GridParticleInstance particle{};
+            particle.m_id = 1u;
+            particle.m_position_x_m = 32.01;
+            particle.m_position_y_m = 32.99;
+            particle.m_volume_m3 = 1.0;
+            particle.m_mass_kg = 1.0;
+            particle.m_temperature_k = 300.0;
+            particle.m_material_id = 1u;
+            particle.m_phase = 1u;
+            const auto rejects = [&](const Array<GridParticleInstance> &records) {
+                auto rejected = original;
+                rejected.m_reset_caches = true;
+                rejected.m_uploads[0].m_payload.m_material = 9u;
+                rejected.m_particle_batches.push_back(
+                    GridParticleBatch{0u, std::make_shared<const Array<GridParticleInstance>>(records)});
+                PPR_TEST_ASSERT(pass.applyStagedFrame(rejected) == std::make_error_code(std::errc::invalid_argument));
+                PPR_TEST_ASSERT(pass.uploadCount() == uploads);
+                PPR_TEST_ASSERT(pass.cachedTileCount() == 1u and pass.stagedTileCount() == 1u);
+                const auto retained = pass.resolveCached(0u);
+                PPR_TEST_ASSERT(retained.has_value() and retained->m_material == 1u);
+            };
+            auto invalid = particle;
+            invalid.m_volume_m3 = 0.0;
+            rejects(Array<GridParticleInstance>{invalid});
+            invalid = particle;
+            invalid.m_position_x_m = 128.0;
+            rejects(Array<GridParticleInstance>{invalid});
+            invalid = particle;
+            invalid.m_temperature_k = (std::numeric_limits<double>::quiet_NaN)();
+            rejects(Array<GridParticleInstance>{invalid});
+            invalid = particle;
+            invalid.m_id = 2u;
+            rejects(Array<GridParticleInstance>{particle, invalid});
+
+            auto accepted = original;
+            accepted.m_tiles[0].m_dirty_mask = 0u;
+            accepted.m_uploads.clear();
+            accepted.m_particle_batches.push_back(
+                GridParticleBatch{
+                    0u, std::make_shared<const Array<GridParticleInstance>>(Array<GridParticleInstance>{particle})});
+            PPR_TEST_ASSERT(not pass.applyStagedFrame(accepted));
+            auto changed_thickness = accepted;
+            changed_thickness.m_reference_thickness_m = 2.0f;
+            PPR_TEST_ASSERT(
+                pass.applyStagedFrame(changed_thickness) == std::make_error_code(std::errc::invalid_argument));
+            auto changed_optics = accepted;
+            changed_optics.m_terrain_visuals[0].m_ior = 1.5f;
+            PPR_TEST_ASSERT(pass.applyStagedFrame(changed_optics) == std::make_error_code(std::errc::invalid_argument));
+            PPR_TEST_ASSERT(not pass.applyStagedFrame(accepted));
+            PPR_TEST_ASSERT(pass.uploadCount() == uploads);
+        };
+
         PPR_UNIT_TEST (grid_cpu_and_indirect_lanes_agree_on_plan) {
             GridPass pass{};
             const GridTileSubmission staged[] = {
@@ -521,6 +599,7 @@ namespace pP::tests {
             detail::GridTiles::grid_indirect_compaction_matches_visible_tiles,
             detail::GridTiles::grid_indirect_compaction_clamps_and_handles_empty,
             detail::GridTiles::grid_cpu_and_indirect_lanes_agree_on_plan,
+            detail::GridTiles::grid_particle_rejection_preserves_the_retained_stage,
         });
     };
 

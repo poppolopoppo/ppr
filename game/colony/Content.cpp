@@ -28,15 +28,38 @@ namespace pP::colony {
             std::string m_fields{};
             std::string m_features{};
             std::string m_worlds{};
+            std::string m_backgrounds{};
             static constexpr auto describe() {
                 return std::tuple{
-                    field(&PackManifestRecord::m_schema_version, metadata("schema_version"), Range<u32>{1u, 1u}),
+                    field(
+                        &PackManifestRecord::m_schema_version, metadata("schema_version"),
+                        Range<u32>{kContentSchemaVersion, kContentSchemaVersion}),
                     field(&PackManifestRecord::m_pack_id, metadata("pack_id"), StringDomain{128u, false}),
                     field(&PackManifestRecord::m_materials, metadata("files.materials"), StringDomain{1024u, false}),
                     field(&PackManifestRecord::m_biomes, metadata("files.biomes"), StringDomain{1024u, false}),
                     field(&PackManifestRecord::m_fields, metadata("files.fields"), StringDomain{1024u, false}),
                     field(&PackManifestRecord::m_features, metadata("files.features"), StringDomain{1024u, false}),
-                    field(&PackManifestRecord::m_worlds, metadata("files.worlds"), StringDomain{1024u, false})};
+                    field(&PackManifestRecord::m_worlds, metadata("files.worlds"), StringDomain{1024u, false}),
+                    field(
+                        &PackManifestRecord::m_backgrounds, metadata("files.backgrounds"), StringDomain{1024u, false})};
+            }
+        };
+
+        struct BackgroundLayerRecord {
+            u32 m_order{};
+            std::string m_texture{}, m_color_rgba{};
+            double m_repeat_period_m{}, m_parallax_factor{};
+            static constexpr auto describe() {
+                return std::tuple{
+                    field(&BackgroundLayerRecord::m_order, metadata("order"), Range<u32>{0u, 3u}),
+                    field(&BackgroundLayerRecord::m_texture, metadata("texture"), StringDomain{1024u, false}),
+                    field(&BackgroundLayerRecord::m_color_rgba, metadata("color_rgba"), StringDomain{8u, false}),
+                    field(
+                        &BackgroundLayerRecord::m_repeat_period_m, metadata("repeat_period_m"),
+                        FloatDomain{0.125, 65536.0, false, false}),
+                    field(
+                        &BackgroundLayerRecord::m_parallax_factor, metadata("parallax_factor"),
+                        FloatDomain{0.0, 1.0, false, false})};
             }
         };
 
@@ -49,6 +72,7 @@ namespace pP::colony {
             double m_gain{0.5};
             double m_warp_amplitude_m{};
             double m_warp_frequency_per_metre{0.006};
+            double m_axis_scale_x{1.0}, m_axis_scale_y{1.0}, m_rotation_degrees{};
 
             static constexpr auto describe() {
                 return std::tuple{
@@ -61,16 +85,24 @@ namespace pP::colony {
                                     sim::ENoiseAlgorithm::cellular_distance, "cellular_distance"}}}),
                     field(
                         &FieldRecord::m_fractal, metadata("fractal"),
-                        EnumDomain<sim::ENoiseFractal, 3>{
+                        EnumDomain<sim::ENoiseFractal, 4>{
                             {EnumEntry<sim::ENoiseFractal>{sim::ENoiseFractal::none, "none"},
                                 EnumEntry<sim::ENoiseFractal>{sim::ENoiseFractal::fbm, "fbm"},
-                                EnumEntry<sim::ENoiseFractal>{sim::ENoiseFractal::ridged, "ridged"}}}),
+                                EnumEntry<sim::ENoiseFractal>{sim::ENoiseFractal::ridged, "ridged"},
+                                EnumEntry<sim::ENoiseFractal>{sim::ENoiseFractal::billow, "billow"}}}),
                     field(
                         &FieldRecord::m_frequency_per_metre, metadata("frequency_per_metre"),
                         FloatDomain{0.0, (std::numeric_limits<double>::max)(), false, true}),
                     field(&FieldRecord::m_octaves, metadata("octaves"), Range<u32>{1u, 16u}),
                     field(&FieldRecord::m_lacunarity, metadata("lacunarity"), FloatDomain{1.0, 4.0, false, false}),
                     field(&FieldRecord::m_gain, metadata("gain"), FloatDomain{0.0, 1.0, false, false}),
+                    field(
+                        &FieldRecord::m_axis_scale_x, metadata("axis_scale_x"), FloatDomain{0.125, 8.0, false, false}),
+                    field(
+                        &FieldRecord::m_axis_scale_y, metadata("axis_scale_y"), FloatDomain{0.125, 8.0, false, false}),
+                    field(
+                        &FieldRecord::m_rotation_degrees, metadata("rotation_degrees"),
+                        FloatDomain{-180.0, 180.0, false, false}),
                     field(
                         &FieldRecord::m_warp_amplitude_m, metadata("warp_amplitude_m"),
                         FloatDomain{0.0, sim::kNoiseCoordinateLimitMetres, false, false}),
@@ -86,6 +118,8 @@ namespace pP::colony {
             double m_temperature_base_k{};
             double m_temperature_variation_k{};
             std::string m_temperature_field{};
+            std::optional<std::string> m_lining_material{};
+            u32 m_lining_thickness_fine{};
             static constexpr auto describe() {
                 constexpr double limit = static_cast<double>((std::numeric_limits<float>::max)()) / 2.0;
                 return std::tuple{
@@ -97,7 +131,10 @@ namespace pP::colony {
                     field(
                         &BiomeRecord::m_temperature_variation_k, metadata("temperature_variation_k"),
                         FloatDomain{0.0, limit, false, false}),
-                    field(&BiomeRecord::m_temperature_field, metadata("temperature_field"), StringDomain{128u, false})};
+                    field(&BiomeRecord::m_temperature_field, metadata("temperature_field"), StringDomain{128u, false}),
+                    field(&BiomeRecord::m_lining_material, metadata("lining_material"), StringDomain{128u, false}),
+                    field(
+                        &BiomeRecord::m_lining_thickness_fine, metadata("lining_thickness_fine"), Range<u32>{0u, 3u})};
             }
         };
 
@@ -239,6 +276,7 @@ namespace pP::colony {
 
         struct WorldProfileRecord {
             std::string m_display_name{}, m_default_wall_material{};
+            std::string m_background_stack{};
             u32 m_boundary_fine{}, m_min_sites{}, m_max_sites{}, m_site_attempts{};
             double m_site_spacing_m{}, m_boundary_warp_amplitude_m{};
             std::string m_boundary_warp_x_field{}, m_boundary_warp_y_field{};
@@ -248,6 +286,9 @@ namespace pP::colony {
             static constexpr auto describe() {
                 return std::tuple{
                     field(&WorldProfileRecord::m_display_name, metadata("display_name"), StringDomain{256u, false}),
+                    field(
+                        &WorldProfileRecord::m_background_stack, metadata("background_stack"),
+                        StringDomain{128u, false}),
                     field(
                         &WorldProfileRecord::m_default_wall_material, metadata("default_wall_material"),
                         StringDomain{128u, false}),
@@ -447,7 +488,7 @@ namespace pP::colony {
                             FloatDomain{0.0, 4096.0 / 3.0, false, true}),
                         field(&WorldFeatureRecord::m_min_count, metadata("min_count"), Range<u32>{0u, 1024u}),
                         field(&WorldFeatureRecord::m_max_count, metadata("max_count"), Range<u32>{1u, 1024u}),
-                        field(&WorldFeatureRecord::m_attempts, metadata("attempts"), Range<u32>{1u, 64u}),
+                        field(&WorldFeatureRecord::m_attempts, metadata("attempts"), Range<u32>{1u, 4096u}),
                         field(&WorldFeatureRecord::m_priority, metadata("priority"), Range<u32>{0u, 65535u}),
                         field(&WorldFeatureRecord::m_reflect, metadata("reflect"), boolean_domain)});
             }
@@ -486,6 +527,10 @@ namespace pP::colony {
             std::optional<bool> m_diggable{};
             std::optional<double> m_roundness{};
             double m_reference_density_kg_m3{0.0};
+            double m_metallic{}, m_roughness{1.0}, m_emissive_r{}, m_emissive_g{}, m_emissive_b{};
+            double m_emissive_strength{1.0}, m_ior{1.5}, m_normal_scale{1.0}, m_refraction_depth_m{};
+            EMaterialAlphaMode m_alpha_mode{EMaterialAlphaMode::opaque};
+            std::optional<std::string> m_normal_texture{};
 
             static constexpr auto describe() {
                 return std::tuple{
@@ -512,6 +557,26 @@ namespace pP::colony {
                             static_cast<double>((std::numeric_limits<float>::max)()), false, false}),
                     field(&MaterialRecord::m_diggable, metadata("diggable"), boolean_domain),
                     field(&MaterialRecord::m_roundness, metadata("roundness"), FloatDomain{0.0, 1.0, false, false}),
+                    field(&MaterialRecord::m_metallic, metadata("metallic"), FloatDomain{0.0, 1.0, false, false}),
+                    field(&MaterialRecord::m_roughness, metadata("roughness"), FloatDomain{0.0, 1.0, false, false}),
+                    field(&MaterialRecord::m_emissive_r, metadata("emissive_r"), FloatDomain{0.0, 1.0, false, false}),
+                    field(&MaterialRecord::m_emissive_g, metadata("emissive_g"), FloatDomain{0.0, 1.0, false, false}),
+                    field(&MaterialRecord::m_emissive_b, metadata("emissive_b"), FloatDomain{0.0, 1.0, false, false}),
+                    field(
+                        &MaterialRecord::m_emissive_strength, metadata("emissive_strength"),
+                        FloatDomain{0.0, static_cast<double>((std::numeric_limits<float>::max)()), false, false}),
+                    field(&MaterialRecord::m_ior, metadata("ior"), FloatDomain{1.0, 3.0, false, false}),
+                    field(
+                        &MaterialRecord::m_normal_scale, metadata("normal_scale"), FloatDomain{0.0, 4.0, false, false}),
+                    field(
+                        &MaterialRecord::m_refraction_depth_m, metadata("refraction_depth_m"),
+                        FloatDomain{0.0, 1.0, false, false}),
+                    field(&MaterialRecord::m_normal_texture, metadata("normal_texture"), StringDomain{1024u, false}),
+                    field(
+                        &MaterialRecord::m_alpha_mode, metadata("alpha_mode"),
+                        EnumDomain<EMaterialAlphaMode, 2>{
+                            {EnumEntry<EMaterialAlphaMode>{EMaterialAlphaMode::opaque, "opaque"},
+                                EnumEntry<EMaterialAlphaMode>{EMaterialAlphaMode::blend, "blend"}}}),
                     field(
                         &MaterialRecord::m_reference_density_kg_m3, metadata("reference_density_kg_m3"),
                         FloatDomain{0.0, (std::numeric_limits<double>::max)(), false, true}),
@@ -607,14 +672,22 @@ namespace pP::colony {
                                                EConfigErrc::missing_value));
                     }
                 }
-            } else if (record.m_albedo_texture or
-                       record.m_texture_period_m or
-                       record.m_diggable.has_value() or
-                       record.m_roundness) {
+            } else if (record.m_diggable.has_value() or record.m_roundness) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(
                     ColonyContent, reject(
                                        diagnostics, origin, "representation",
                                        "Particle materials cannot declare terrain-only fields"));
+            }
+            if ((record.m_albedo_texture or record.m_normal_texture) and not record.m_texture_period_m) {
+                PPR_RETURN_UNEXPECTED_ON_FAIL(
+                    ColonyContent,
+                    reject(diagnostics, origin, "texture_period_m", "Textured materials require a world-space period"));
+            }
+            if (record.m_normal_texture and not validTexturePath(*record.m_normal_texture)) {
+                PPR_RETURN_UNEXPECTED_ON_FAIL(
+                    ColonyContent, reject(
+                                       diagnostics, location("normal_texture"), "normal_texture",
+                                       "Expected a portable pack-relative path without dot segments"));
             }
             if (record.m_albedo_texture and not validTexturePath(*record.m_albedo_texture)) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(
@@ -626,7 +699,11 @@ namespace pP::colony {
                 key, record.m_numeric_id, record.m_display_name, record.m_phase, record.m_representation, color,
                 record.m_albedo_texture, record.m_texture_period_m, record.m_diggable, record.m_reference_density_kg_m3,
                 record.m_albedo_texture ? std::string{location("albedo_texture")} : std::string{},
-                record.m_roundness.value_or(1.0)};
+                record.m_roundness.value_or(1.0), record.m_metallic, record.m_roughness,
+                {record.m_emissive_r, record.m_emissive_g, record.m_emissive_b}, record.m_emissive_strength,
+                record.m_alpha_mode, record.m_ior, record.m_normal_texture, record.m_normal_scale,
+                record.m_refraction_depth_m,
+                record.m_normal_texture ? std::string{location("normal_texture")} : std::string{}};
         }
 
         [[nodiscard]] Expected<std::map<std::string, Document, std::less<>>> groupRecords(
@@ -647,11 +724,11 @@ namespace pP::colony {
                                        diagnostics, origin, "schema_version", "Required schema version is missing",
                                        EConfigErrc::missing_value));
             }
-            if (version->m_value.m_kind != EFileKind::integer or version->m_value.m_integer != 1) {
+            if (version->m_value.m_kind != EFileKind::integer or version->m_value.m_integer != kContentSchemaVersion) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(
                     ColonyContent, reject(
                                        diagnostics, version->m_location, "schema_version",
-                                       "Only content schema version 1 is supported"));
+                                       "Only content schema version 2 is supported"));
             }
 
             std::map<std::string, Document, std::less<>> groups{};
@@ -702,7 +779,8 @@ namespace pP::colony {
             const auto &record = resolved->m_value;
             const sim::NoiseFieldDesc noise{
                 record.m_algorithm, record.m_fractal, record.m_frequency_per_metre, record.m_octaves,
-                record.m_lacunarity, record.m_gain, record.m_warp_amplitude_m, record.m_warp_frequency_per_metre};
+                record.m_lacunarity, record.m_gain, record.m_warp_amplitude_m, record.m_warp_frequency_per_metre,
+                record.m_axis_scale_x, record.m_axis_scale_y, record.m_rotation_degrees};
             if (const auto error = sim::validateNoiseFieldDescription(noise)) {
                 // Translate the joint engine-domain constraint into authoring
                 // diagnostics; preserve the record's source location.
@@ -1409,6 +1487,7 @@ namespace pP::colony {
             WorldProfileDefinition &result, const std::string_view origin, const std::string &prefix,
             Diagnostics &diagnostics) {
             u32 worm_count = 0u, feature_count = 0u, connection_count = 0u;
+            u64 origin_attempts = 0u;
             for (const auto &[rule_key, rule_document]: documents) {
                 const std::string rule_prefix = prefix + "rules." + rule_key + ".";
                 auto rule = compileWorldRule(
@@ -1417,19 +1496,24 @@ namespace pP::colony {
                 PPR_RETURN_ERROR_ON_FAIL(ColonyContent, rule);
                 if (const auto *const worm = std::get_if<WorldWormRule>(&rule->m_parameters)) {
                     worm_count += worm->m_count;
+                    origin_attempts += static_cast<u64>(worm->m_count) * sim::kGenerationWormOriginAttempts;
                 }
                 if (const auto *const feature = std::get_if<WorldFeatureRule>(&rule->m_parameters)) {
                     feature_count += feature->m_max_count;
+                    origin_attempts += static_cast<u64>(feature->m_max_count) * feature->m_attempts;
                 }
                 if (rule->m_kind == EWorldRuleKind::connect_rooms) {
                     ++connection_count;
                 }
-                if (worm_count > 4096u or feature_count > 1024u or connection_count > 1u) {
+                if (worm_count > 4096u or
+                    feature_count > 1024u or
+                    connection_count > 1u or
+                    origin_attempts > sim::kMaxGenerationOriginAttempts) {
                     PPR_RETURN_ERROR_ON_FAIL(
                         ColonyContent,
                         reject(
                             diagnostics, fieldLocation(rule_document, "kind", origin), rule_prefix + "kind",
-                            "Profile exceeds aggregate limits: 4096 worms, 1024 feature instances, one room-connection rule",
+                            "Profile exceeds aggregate limits: 4096 worms, 1024 feature instances, one room-connection rule, 4194304 origin attempts",
                             EConfigErrc::out_of_range));
                 }
                 result.m_rules.push_back(std::move(*rule));
@@ -1505,7 +1589,7 @@ namespace pP::colony {
                 "display_name", "default_wall_material", "boundary_fine", "min_sites", "max_sites", "site_attempts",
                 "site_spacing_m", "boundary_warp_amplitude_m", "boundary_warp_x_field", "boundary_warp_y_field",
                 "start_biome", "start_feature", "start_marker", "start_x_fine", "start_y_fine", "start_clearance_m",
-                "start_route_width_m"};
+                "start_route_width_m", "background_stack"};
             auto record = resolveRecord<WorldProfileRecord>(resources->m_base, required, origin, diagnostics, prefix);
             PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, record);
             const auto &base = resources->m_base;
@@ -1596,6 +1680,7 @@ namespace pP::colony {
             result.m_start_y_fine = record->m_start_y_fine;
             result.m_start_clearance_m = record->m_start_clearance_m;
             result.m_start_route_width_m = record->m_start_route_width_m;
+            result.m_background_stack = std::move(record->m_background_stack);
 
             PPR_RETURN_UNEXPECTED_ON_FAIL(
                 ColonyContent,
@@ -1650,6 +1735,20 @@ namespace pP::colony {
             BiomeDefinition result{
                 key, std::move(record->m_display_name), color, record->m_temperature_base_k,
                 record->m_temperature_variation_k, std::move(record->m_temperature_field), {}, {}};
+            if (record->m_lining_material.has_value() != (record->m_lining_thickness_fine != 0u)) {
+                PPR_RETURN_UNEXPECTED_ON_FAIL(
+                    ColonyContent, reject(
+                                       diagnostics, origin, prefix + "lining_material",
+                                       "Lining material and positive thickness must be specified together"));
+            }
+            if (record->m_lining_material) {
+                auto lining = terrainReference(
+                    deposits->m_base, "lining_material", *record->m_lining_material, materials, origin, prefix,
+                    diagnostics);
+                PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, lining);
+                result.m_lining_material_id = *lining;
+                result.m_lining_thickness_fine = record->m_lining_thickness_fine;
+            }
             for (const auto &[band_key, band]: composition->m_children) {
                 auto compiled = compileComposition(
                     band_key, band, materials, fields, origin, prefix + "composition." + band_key + ".", diagnostics);
@@ -1716,6 +1815,70 @@ namespace pP::colony {
         return found == m_materials.end() or found->m_key != key ? nullptr : std::addressof(*found);
     }
 
+    Expected<Array<BackgroundStackDefinition>> decodeBackgroundDefinitions(
+        const std::string_view bytes, const std::string_view origin, Diagnostics &diagnostics) try {
+        auto groups = groupRecords(bytes, origin, "backgrounds", kMaxContentWorlds, diagnostics);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, groups);
+        Array<BackgroundStackDefinition> result{};
+        for (const auto &[key, document]: *groups) {
+            const std::string prefix = "backgrounds." + key + ".";
+            auto layers = splitChildren(document, "layers", 4u, prefix, diagnostics);
+            PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, layers);
+            if (not layers->m_base.m_entries.empty() or layers->m_children.size() != 4u) {
+                PPR_RETURN_UNEXPECTED_ON_FAIL(
+                    ColonyContent, reject(
+                                       diagnostics, origin, prefix + "layers",
+                                       "A background stack requires exactly four layers and no other fields"));
+            }
+            BackgroundStackDefinition stack{.m_key = key};
+            for (const auto &[layer_key, layer_document]: layers->m_children) {
+                constexpr std::string_view required[] = {
+                    "order", "texture", "color_rgba", "repeat_period_m", "parallax_factor"};
+                auto layer = resolveRecord<BackgroundLayerRecord>(
+                    layer_document, required, origin, diagnostics, prefix + "layers." + layer_key + ".");
+                PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, layer);
+                u32 color{};
+                const auto [end, error] = std::from_chars(
+                    layer->m_color_rgba.data(), layer->m_color_rgba.data() + layer->m_color_rgba.size(), color, 16);
+                if (layer->m_color_rgba.size() != 8u or
+                    error != std::errc{} or
+                    end != layer->m_color_rgba.data() + 8u or
+                    not validTexturePath(layer->m_texture)) {
+                    PPR_RETURN_UNEXPECTED_ON_FAIL(
+                        ColonyContent, reject(
+                                           diagnostics, origin, prefix + "layers." + layer_key,
+                                           "Expected a portable texture path and eight hexadecimal RRGGBBAA digits"));
+                }
+                stack.m_layers.push_back(
+                    {layer_key, std::move(layer->m_texture),
+                        std::string{fieldLocation(layer_document, "texture", origin)}, layer->m_order, color,
+                        layer->m_repeat_period_m, layer->m_parallax_factor});
+            }
+            std::ranges::sort(stack.m_layers, {}, &BackgroundLayerDefinition::m_order);
+            for (u32 order = 0u; order < 4u; ++order) {
+                if (stack.m_layers[order].m_order != order or
+                    (order == 0u and (stack.m_layers[order].m_color_rgba & 255u) != 255u)) {
+                    PPR_RETURN_UNEXPECTED_ON_FAIL(
+                        ColonyContent,
+                        reject(
+                            diagnostics, origin, prefix + "layers",
+                            "Layer orders must be unique zero through three; the farthest layer tint must be opaque"));
+                }
+            }
+            result.push_back(std::move(stack));
+        }
+        return result;
+    } catch (const std::bad_alloc &) {
+        throw;
+    } catch (const std::system_error &error) {
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            ColonyContent, error.code() ? error.code() : std::make_error_code(std::errc::state_not_recoverable));
+        std::unreachable();
+    } catch (...) {
+        PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, std::errc::state_not_recoverable);
+        std::unreachable();
+    }
+
     Expected<ContentPackManifest> decodePackManifest(
         const std::string_view bytes, const std::string_view origin, Diagnostics &diagnostics) {
         if (bytes.size() > kMaxPackManifestBytes) {
@@ -1727,7 +1890,7 @@ namespace pP::colony {
         PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, document);
         constexpr std::string_view required[] = {
             "schema_version", "pack_id", "files.materials", "files.biomes", "files.fields", "files.features",
-            "files.worlds"};
+            "files.worlds", "files.backgrounds"};
         for (const auto key: required) {
             if (std::ranges::none_of(document->m_entries, [key](const Entry &entry) { return entry.m_key == key; })) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(
@@ -1745,7 +1908,9 @@ namespace pP::colony {
         }
         ContentPackManifest manifest{
             .m_pack_id = record.m_pack_id,
-            .m_files = {record.m_materials, record.m_biomes, record.m_fields, record.m_features, record.m_worlds}};
+            .m_files = {
+                record.m_materials, record.m_biomes, record.m_fields, record.m_features, record.m_worlds,
+                record.m_backgrounds}};
         for (std::size_t index = 0u; index < manifest.m_files.size(); ++index) {
             const auto &path = manifest.m_files[index];
             const auto key = required[index + 2u];
@@ -1836,7 +2001,7 @@ namespace pP::colony {
         PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, manifest);
         ContentPackSource source{.m_manifest = std::move(*manifest)};
         constexpr std::string_view keys[] = {
-            "files.materials", "files.biomes", "files.fields", "files.features", "files.worlds"};
+            "files.materials", "files.biomes", "files.fields", "files.features", "files.worlds", "files.backgrounds"};
         for (std::size_t index = 0u; index < kContentDocumentCount; ++index) {
             const auto &location = source.m_manifest.m_file_locations[index];
             auto document = read(source.m_manifest.m_files[index], keys[index], location, kMaxMaterialDocumentBytes);

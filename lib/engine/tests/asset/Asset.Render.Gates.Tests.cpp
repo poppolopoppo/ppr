@@ -1085,6 +1085,373 @@ namespace pP::tests::detail {
             pass.clearInstances();
         };
 
+        [[nodiscard]] GridPass::GridStagedFrame opticalGridFixture_(
+            const GridTerrainVisual &visual, const u16 terrain, const bool layered = false) {
+            GridPass::GridStagedFrame stage{};
+            stage.m_has_background = true;
+            stage.m_terrain_visuals.push_back(visual);
+            for (u32 layer = 0u; layer < 4u; ++layer) {
+                std::array<std::byte, 64u> rgba{};
+                for (u32 pixel = 0u; pixel < 16u; ++pixel) {
+                    const u32 x = pixel % 4u;
+                    const u32 y = pixel / 4u;
+                    rgba[pixel * 4u] = std::byte{static_cast<u8>(20u + x * 70u)};
+                    rgba[pixel * 4u + 1u] = std::byte{static_cast<u8>(20u + y * 70u)};
+                    rgba[pixel * 4u + 2u] = std::byte{static_cast<u8>((x + y) % 2u == 0u ? 30u : 230u)};
+                    rgba[pixel * 4u + 3u] = std::byte{static_cast<u8>(layer == 0u ? 255u : layered ? 96u : 0u)};
+                }
+                const auto png = gatePngBytes(std::format("grid_optics_layer_{}.png", layer), rgba);
+                PPR_TEST_ASSERT(png.isValid());
+                const auto decoded = image::decodeToRgba8(
+                    png.getBufferData(), ".png", image::ImageDecodeDesc{}, image::EImageUsage::color);
+                PPR_TEST_ASSERT(decoded.has_value());
+                stage.m_terrain_images.push_back(*decoded);
+                const float factors[] = {0.08f, 0.22f, 0.45f, 0.70f};
+                const u32 colors[] = {0xffffffffu, 0xff8080ffu, 0x80ff80ffu, 0x8080ffffu};
+                stage.m_background_layers[layer] = GridBackgroundLayer{
+                    .m_texture_index = layer,
+                    .m_order = layer,
+                    .m_color_rgba = colors[layer],
+                    .m_repeat_period_m = 8.0f + 3.0f * layer,
+                    .m_parallax_factor = factors[layer],
+                };
+            }
+            const auto flat = goldenOrmFixture_("grid_normal_flat.png", {128u, 128u, 255u});
+            const auto tilt = goldenOrmFixture_("grid_normal_tilt.png", {220u, 128u, 220u});
+            PPR_TEST_ASSERT(flat.has_value() and tilt.has_value());
+            stage.m_terrain_images.push_back(*flat);
+            stage.m_terrain_images.push_back(*tilt);
+            stage.m_tiles.push_back(
+                GridTileSubmission{.m_chunk_id = 0u, .m_tile_range = {0, 0, 128, 128}, .m_dirty_mask = 1u});
+            GridPass::GridStagedUpload upload{};
+            upload.m_payload.m_rect[2] = 128.0f;
+            upload.m_payload.m_rect[3] = 128.0f;
+            upload.m_cell_materials.assign(GridPass::kCellsPerChunk, terrain);
+            stage.m_uploads.push_back(std::move(upload));
+            return stage;
+        }
+
+        [[nodiscard]] GatePixels drawOpticalGrid_(
+            GridPass &grid, const float origin_x = 56.0f, const float origin_y = 56.0f, const float width_m = 16.0f,
+            const u32 edge = 128u, u32 *const forced_background_waits = nullptr,
+            bool *const admission_during_draw = nullptr) {
+            const auto rhi = SharedGpu::rhiService();
+            Renderer *const renderer = SharedGpu::renderer();
+            PPR_TEST_ASSERT(rhi.isValid() and renderer != nullptr);
+            auto &device = rhi->getDevice();
+            const auto target = makeRenderTarget_(device, edge);
+            PPR_TEST_ASSERT(target.has_value());
+            CameraModel model{};
+            model.m_camera_mode = ECameraProjection::orthographic;
+            model.m_origin = float3{origin_x, origin_y, -0.5f};
+            model.m_ortho_scale = width_m / static_cast<float>(edge);
+            Camera camera{ECameraProjection::orthographic};
+            camera.updateModel(TimeSpan{}, model, Viewport{PixelRect{0, 0, int(edge), int(edge)}});
+            const auto snapshot = camera.getSnapshot();
+            PPR_TEST_ASSERT(not grid.update(TimeSpan{}, snapshot));
+            const auto wait_for_idle = [&]() { return renderer->waitOnHost(); };
+            PPR_TEST_ASSERT(not grid.prepareCellUploads(device, wait_for_idle, true));
+            const auto viewport = rhi::Viewport::fromSize(float(edge), float(edge));
+            const auto scissor = rhi::ScissorRect::fromSize(edge, edge);
+            const auto prepare = [&](const PreRenderContext &context) {
+                if (forced_background_waits != nullptr) {
+                    // Deterministically reproduce a pre-wait completion snapshot
+                    // after all three backdrop slots have submitted readers.
+                    PPR_TEST_ASSERT(static_cast<bool>(context.m_wait_for_fence));
+                    const auto wait = [&](const FenceCompletionValue value) {
+                        ++*forced_background_waits;
+                        return context.m_wait_for_fence(value);
+                    };
+                    const PreRenderContext stale{
+                        context.m_device, context.m_encoder, kFenceValueNone, FenceWaitHook{wait}};
+                    return grid.prepareBackground(stale, snapshot, viewport, scissor);
+                }
+                return grid.prepareBackground(context, snapshot, viewport, scissor);
+            };
+            const auto draw = [&](const DrawContext &context) -> std::error_code {
+                if (const auto ec = grid.renderBackground(context)) {
+                    return ec;
+                }
+                if (const auto ec = grid.render(context)) {
+                    return ec;
+                }
+                if (const auto ec = grid.renderParticles(context)) {
+                    return ec;
+                }
+                if (admission_during_draw != nullptr) {
+                    // Current roots are encoded and have no submitted completion yet.
+                    // They must not be mistaken for a retiring preview's roots.
+                    *admission_during_draw = false;
+                    for (u32 step = 0u; step < 32u and not *admission_during_draw; ++step) {
+                        *admission_during_draw = grid.worldCandidateAdmissionReady(context.m_completed_fence_value);
+                    }
+                }
+                return std::error_code{};
+            };
+            PPR_TEST_ASSERT(not renderer->renderToTexture(
+                targetRef_(target), {DrawSubmission{"grid optical gate", draw}}, {}, PreRenderCallback{prepare}));
+            grid.notifyFrameSubmitted(renderer->lastSubmittedFenceValue());
+            PPR_TEST_ASSERT(not renderer->waitOnHost());
+            PPR_TEST_ASSERT(not renderer->retireCompletedFrames());
+            const auto pixels = readback_(device, targetRef_(target), edge);
+            PPR_TEST_ASSERT(pixels.has_value());
+            return *pixels;
+        }
+
+        [[nodiscard]] GatePixels captureOpticalGrid_(
+            GridPass &grid, const GridPass::GridStagedFrame &stage, const u64 generation) {
+            const auto rhi = SharedGpu::rhiService();
+            Renderer *const renderer = SharedGpu::renderer();
+            PPR_TEST_ASSERT(rhi.isValid() and renderer != nullptr);
+            bool admitted = false;
+            for (u32 step = 0u; step < 32u and not admitted; ++step) {
+                admitted = grid.worldCandidateAdmissionReady(renderer->completedFenceValue());
+            }
+            PPR_TEST_ASSERT(admitted);
+            // Each control owns an independent world/catalog; only immutable
+            // shader programs and signature-compatible pipelines are reused.
+            auto candidate = stage;
+            candidate.m_content_fingerprint = generation;
+            PPR_TEST_ASSERT(not grid.stageWorldCandidate(generation, generation, candidate));
+            bool prepared = false;
+            for (u32 step = 0u; step < 32u and not prepared; ++step) {
+                const auto progress = grid.advanceWorldCandidate(rhi->getDevice(), renderer->completedFenceValue(), 8u);
+                PPR_TEST_ASSERT(progress.has_value());
+                prepared = *progress;
+            }
+            PPR_TEST_ASSERT(prepared);
+            PPR_TEST_ASSERT(not grid.activateWorldCandidate(generation, generation, generation));
+            return drawOpticalGrid_(grid);
+        }
+
+        [[nodiscard]] u32 changedOpticalPixels_(const GatePixels &a, const GatePixels &b) {
+            PPR_TEST_ASSERT(a.m_size == b.m_size);
+            u32 changed = 0u;
+            for (u32 y = 8u; y + 8u < a.m_size; y += 3u) {
+                for (u32 x = 8u; x + 8u < a.m_size; x += 3u) {
+                    changed += texelDist_(gateTexel_(a, x, y), gateTexel_(b, x, y)) > 2u ? 1u : 0u;
+                }
+            }
+            return changed;
+        }
+
+        PPR_UNIT_TEST (grid_optical_controls_and_four_layer_parallax) {
+            const auto rhi = SharedGpu::rhiService();
+            const auto shader = SharedGpu::shaderService();
+            Renderer *const renderer = SharedGpu::renderer();
+            PPR_TEST_ASSERT(rhi.isValid() and shader.isValid() and renderer != nullptr);
+            GridPass grid;
+            PPR_TEST_ASSERT(not grid.initialize(*rhi, *shader, std::filesystem::current_path()));
+            PPR_DEFER {
+                PPR_TEST_ASSERT(not renderer->waitOnHost());
+                PPR_TEST_ASSERT(not grid.shutdown());
+            };
+            u64 generation = 0u;
+            const auto capture = [&](const GridPass::GridStagedFrame &stage) {
+                return captureOpticalGrid_(grid, stage, ++generation);
+            };
+            GridTerrainVisual visual{};
+            visual.m_material_id = 1u;
+            visual.m_color_rgba = 0x7090b0ffu;
+            visual.m_alpha_mode = 1u;
+            visual.m_opacity = 0.0f;
+            visual.m_normal_texture_index = 5u;
+            visual.m_refraction_depth_m = 0.5f;
+            const auto background = capture(opticalGridFixture_(visual, 0u));
+            const auto ior_one = capture(opticalGridFixture_(visual, 1u));
+            PPR_TEST_ASSERT(changedOpticalPixels_(background, ior_one) == 0u);
+            visual.m_ior = 1.5f;
+            visual.m_normal_texture_index = 4u;
+            const auto flat = capture(opticalGridFixture_(visual, 1u));
+            PPR_TEST_ASSERT(changedOpticalPixels_(background, flat) == 0u);
+            visual.m_normal_texture_index = 5u;
+            visual.m_refraction_depth_m = 0.0f;
+            const auto zero_depth = capture(opticalGridFixture_(visual, 1u));
+            PPR_TEST_ASSERT(changedOpticalPixels_(background, zero_depth) == 0u);
+            visual.m_refraction_depth_m = 0.5f;
+            const auto refracted = capture(opticalGridFixture_(visual, 1u));
+            PPR_TEST_ASSERT(changedOpticalPixels_(background, refracted) > 100u);
+
+            visual.m_alpha_mode = 0u;
+            const auto opaque = capture(opticalGridFixture_(visual, 1u));
+            visual.m_ior = 1.0f;
+            const auto opaque_one = capture(opticalGridFixture_(visual, 1u));
+            PPR_TEST_ASSERT(changedOpticalPixels_(opaque, opaque_one) == 0u);
+            auto relief = visual;
+            relief.m_normal_texture_index = 4u;
+            const auto flat_relief = capture(opticalGridFixture_(relief, 1u));
+            PPR_TEST_ASSERT(changedOpticalPixels_(opaque_one, flat_relief) > 100u);
+            relief.m_metallic = 1.0f;
+            relief.m_roughness = 1.0f;
+            const auto rough_metal = capture(opticalGridFixture_(relief, 1u));
+            relief.m_roughness = 0.0f;
+            const auto smooth_metal = capture(opticalGridFixture_(relief, 1u));
+            PPR_TEST_ASSERT(changedOpticalPixels_(rough_metal, smooth_metal) > 100u);
+            relief.m_emissive_rgb[0] = 1.0f;
+            relief.m_emissive_strength = 1.0f;
+            const auto emitting = capture(opticalGridFixture_(relief, 1u));
+            PPR_TEST_ASSERT(gateTexel_(emitting, 63u, 63u)[0] > gateTexel_(smooth_metal, 63u, 63u)[0] + 20u);
+            visual.m_alpha_mode = 1u;
+            visual.m_opacity = 0.25f;
+            const auto quarter = capture(opticalGridFixture_(visual, 1u));
+            for (const u32 x: {17u, 53u, 91u}) {
+                const auto b = gateTexel_(background, x, 63u);
+                const auto m = gateTexel_(opaque_one, x, 63u);
+                const auto q = gateTexel_(quarter, x, 63u);
+                for (u32 channel = 0u; channel < 3u; ++channel) {
+                    const float expected = 0.25f * m[channel] + 0.75f * b[channel];
+                    PPR_TEST_ASSERT(std::abs(float(q[channel]) - expected) <= 2.0f);
+                }
+            }
+
+            const auto complete_stage = opticalGridFixture_(visual, 0u, true);
+            const auto complete = capture(complete_stage);
+            const auto pan = drawOpticalGrid_(grid, 59.0f, 57.0f);
+            const auto zoom = drawOpticalGrid_(grid, 56.0f, 56.0f, 8.0f);
+            PPR_TEST_ASSERT(changedOpticalPixels_(complete, pan) > 100u);
+            PPR_TEST_ASSERT(changedOpticalPixels_(complete, zoom) > 100u);
+            for (u32 layer = 0u; layer < 4u; ++layer) {
+                auto masked = complete_stage;
+                masked.m_background_layers[layer].m_color_rgba = layer == 0u ? 0x000000ffu : 0xffffff00u;
+                PPR_TEST_ASSERT(changedOpticalPixels_(complete, capture(masked)) > 100u);
+            }
+        };
+
+        PPR_UNIT_TEST (grid_particle_support_and_resource_repeat) {
+            const auto rhi = SharedGpu::rhiService();
+            const auto shader = SharedGpu::shaderService();
+            Renderer *const renderer = SharedGpu::renderer();
+            PPR_TEST_ASSERT(rhi.isValid() and shader.isValid() and renderer != nullptr);
+            GridTerrainVisual visual{};
+            visual.m_material_id = 1u;
+            visual.m_color_rgba = 0xff0000ffu;
+            auto stage = opticalGridFixture_(visual, 0u);
+            auto records = std::make_shared<Array<GridParticleInstance>>();
+            records->push_back(GridParticleInstance{1u, 64.5, 64.5, 1.0, 1.0, 300.0, 1u, 1u});
+            records->push_back(GridParticleInstance{2u, 65.5, 64.5, 1.0, 1.0, 300.0, 1u, 1u});
+            stage.m_particle_batches.push_back(GridParticleBatch{0u, records});
+            GridPass grid;
+            PPR_TEST_ASSERT(not grid.initialize(*rhi, *shader, std::filesystem::current_path()));
+            PPR_DEFER {
+                PPR_TEST_ASSERT(not grid.shutdown());
+            };
+            PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
+            const auto centered = drawOpticalGrid_(grid, 63.5f, 63.5f, 4.0f);
+            for (u32 x = 17u; x < 79u; ++x) {
+                const auto pixel = gateTexel_(centered, x, 96u);
+                PPR_TEST_ASSERT(pixel[0] > 250u and pixel[1] < 3u and pixel[2] < 3u);
+            }
+            stage.m_uploads.clear();
+            stage.m_tiles[0].m_dirty_mask = 0u;
+            auto offcenter = std::make_shared<Array<GridParticleInstance>>(*records);
+            (*offcenter)[0].m_position_x_m = 64.01;
+            (*offcenter)[0].m_position_y_m = 64.01;
+            (*offcenter)[1].m_position_x_m = 65.99;
+            (*offcenter)[1].m_position_y_m = 64.99;
+            stage.m_particle_batches[0].m_particles = offcenter;
+            PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
+            const auto displaced = drawOpticalGrid_(grid, 63.5f, 63.5f, 4.0f);
+            PPR_TEST_ASSERT(changedOpticalPixels_(centered, displaced) == 0u);
+            auto half = std::make_shared<Array<GridParticleInstance>>(*offcenter);
+            (*half)[0].m_volume_m3 = 0.5;
+            stage.m_particle_batches[0].m_particles = half;
+            PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
+            const auto partial = drawOpticalGrid_(grid, 63.5f, 63.5f, 4.0f);
+            PPR_TEST_ASSERT(gateTexel_(partial, 32u, 96u)[0] < 250u);
+            PPR_TEST_ASSERT(gateTexel_(partial, 64u, 96u)[0] > 250u);
+            stage.m_particle_batches[0].m_particles = offcenter;
+            PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
+            for (u32 frame = 0u; frame < 6u; ++frame) {
+                std::ignore = drawOpticalGrid_(grid, 63.5f, 63.5f, 4.0f);
+            }
+            const auto stable = grid.observations();
+            PPR_TEST_ASSERT(stable.m_particle_instances == 2u and stable.m_particle_buffer_bytes == 64u);
+            PPR_TEST_ASSERT(stable.m_background_targets == 3u);
+            PPR_TEST_ASSERT(stable.m_background_target_bytes == 3u * 128u * 128u * 8u);
+            for (u32 frame = 0u; frame < 6u; ++frame) {
+                std::ignore = drawOpticalGrid_(grid, 63.5f, 63.5f, 4.0f);
+            }
+            PPR_TEST_ASSERT(grid.observations().m_particle_uploads == stable.m_particle_uploads);
+            PPR_TEST_ASSERT(grid.observations().m_texture_entries == stable.m_texture_entries);
+            PPR_TEST_ASSERT(grid.observations().m_texture_decoded_bytes == stable.m_texture_decoded_bytes);
+            u32 forced_background_waits = 0u;
+            for (u32 frame = 0u; frame < 3u; ++frame) {
+                std::ignore = drawOpticalGrid_(grid, 3000.0f, 3000.0f, 4.0f, 64u, &forced_background_waits);
+            }
+            PPR_TEST_ASSERT(forced_background_waits == 3u);
+            // The particles remain alive but offscreen. Resizing every old slot
+            // must detach their completed roots without requiring another draw.
+            PPR_TEST_ASSERT(grid.observations().m_particle_instances == 2u);
+            PPR_TEST_ASSERT(grid.observations().m_particle_root_bindings == 0u);
+            stage.m_particle_batches[0].m_particles = std::make_shared<const Array<GridParticleInstance>>();
+            PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
+            for (u32 frame = 0u; frame < 6u; ++frame) {
+                std::ignore = drawOpticalGrid_(grid, 63.5f, 63.5f, 4.0f, 64u);
+            }
+            const auto empty = grid.observations();
+            PPR_TEST_ASSERT(empty.m_particle_instances == 0u and empty.m_particle_buffer_bytes == 0u);
+            PPR_TEST_ASSERT(empty.m_particle_root_bindings == 0u);
+            PPR_TEST_ASSERT(empty.m_background_targets == 3u);
+            PPR_TEST_ASSERT(empty.m_background_target_bytes == 3u * 64u * 64u * 8u);
+            std::println(
+                "grid resources decoded={} particle={} backdrop={} draws={} uploads={}", empty.m_texture_decoded_bytes,
+                stable.m_particle_buffer_bytes, empty.m_background_target_bytes, empty.m_draw_commands,
+                empty.m_particle_uploads);
+            const auto timing = renderer->lastGpuFrameTiming();
+            PPR_TEST_ASSERT(timing.has_value());
+            PPR_TEST_ASSERT(std::isfinite(timing->m_milliseconds) and timing->m_milliseconds >= 0.0f);
+            std::println("grid completed GPU frame ms={}", timing->m_milliseconds);
+            const auto empty_pixels = drawOpticalGrid_(grid, 63.5f, 63.5f, 4.0f, 64u);
+            for (u64 cycle = 0u; cycle < 3u; ++cycle) {
+                auto replacement = opticalGridFixture_(visual, 0u);
+                replacement.m_content_fingerprint = 100u + cycle;
+                replacement.m_particle_batches.push_back(GridParticleBatch{0u, records});
+                const u64 job = 20u + cycle * 2u;
+                // Diagnostic previews replace graphics while retaining one simulation generation.
+                constexpr u64 generation = 41u;
+                PPR_TEST_ASSERT(grid.worldCandidateAdmissionReady(renderer->completedFenceValue()));
+                PPR_TEST_ASSERT(not grid.stageWorldCandidate(job, generation, replacement));
+                const auto partial_candidate = grid.advanceWorldCandidate(
+                    rhi->getDevice(), renderer->completedFenceValue(), 1u);
+                PPR_TEST_ASSERT(partial_candidate.has_value());
+                grid.cancelWorldCandidate(job);
+                // Settle initialization uploads through the next owned submit
+                // before asking retirement to release their resources.
+                const auto retained = drawOpticalGrid_(grid, 63.5f, 63.5f, 4.0f, 64u);
+                bool admitted = false;
+                for (u32 step = 0u; step < 32u and not admitted; ++step) {
+                    admitted = grid.worldCandidateAdmissionReady(renderer->completedFenceValue());
+                }
+                PPR_TEST_ASSERT(admitted);
+                if (cycle == 0u) {
+                    PPR_TEST_ASSERT(changedOpticalPixels_(empty_pixels, retained) == 0u);
+                }
+                PPR_TEST_ASSERT(not grid.stageWorldCandidate(job + 1u, generation, replacement));
+                bool prepared = false;
+                for (u32 step = 0u; step < 32u and not prepared; ++step) {
+                    const auto progress = grid.advanceWorldCandidate(
+                        rhi->getDevice(), renderer->completedFenceValue(), 8u);
+                    PPR_TEST_ASSERT(progress.has_value());
+                    prepared = *progress;
+                }
+                PPR_TEST_ASSERT(prepared);
+                PPR_TEST_ASSERT(
+                    not grid.activateWorldCandidate(job + 1u, generation, replacement.m_content_fingerprint));
+                PPR_TEST_ASSERT(grid.worldGeneration() == generation);
+                admitted = false;
+                // Drain inside the first active encode. Waiting another frame
+                // could make generation-only retirement accidentally succeed.
+                std::ignore = drawOpticalGrid_(grid, 63.5f, 63.5f, 4.0f, 64u, nullptr, &admitted);
+                PPR_TEST_ASSERT(admitted);
+                const auto settled = grid.observations();
+                PPR_TEST_ASSERT(settled.m_particle_instances == 2u and settled.m_particle_buffer_bytes == 64u);
+                PPR_TEST_ASSERT(settled.m_texture_entries == stable.m_texture_entries);
+                PPR_TEST_ASSERT(settled.m_texture_decoded_bytes == stable.m_texture_decoded_bytes);
+                PPR_TEST_ASSERT(settled.m_background_target_bytes == empty.m_background_target_bytes);
+                PPR_TEST_ASSERT(grid.retainedAtlasCountForTest() == 1u);
+            }
+        };
+
         PPR_UNIT_TEST (grid_compute_visibility_matches_reference_and_draws) {
             const auto rhi = SharedGpu::rhiService();
             const auto shader = SharedGpu::shaderService();
@@ -1768,6 +2135,8 @@ namespace pP::tests {
             detail::Gate::pre_render_preparation_orders_and_rejects_submission,
             detail::Gate::grid_compute_visibility_matches_reference_and_draws,
             detail::Gate::grid_candidate_world_retains_active_until_matching_activation,
+            detail::Gate::grid_optical_controls_and_four_layer_parallax,
+            detail::Gate::grid_particle_support_and_resource_repeat,
         });
     };
 

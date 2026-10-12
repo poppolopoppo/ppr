@@ -143,6 +143,7 @@ namespace pP {
                     m_cached_pipeline.reset();
                     m_render_pipeline_key.reset();
                     m_shader_program.setNull();
+                    clearOpticalResources_();
                 }
                 m_ready = false;
             }
@@ -151,6 +152,7 @@ namespace pP {
         shader_state_started = true;
         PPR_RETURN_ERROR_ON_FAIL(GridPass, createShaderProgram_(shader_service, device, content_dir));
         PPR_RETURN_ERROR_ON_FAIL(GridPass, createVisibilityPrograms_(shader_service, device, content_dir));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, createOpticalPrograms_(shader_service, device, content_dir));
 
         m_ready = true;
         initialization_complete = true;
@@ -161,6 +163,13 @@ namespace pP {
 
     std::error_code GridPass::update([[maybe_unused]] TimeSpan dt, const CameraSnapshot &camera_view) {
         m_visibility_prepared = false;
+        m_background_ready = false;
+        for (auto *const pipeline:
+            {&m_cached_pipeline, &m_particle_pipeline, &m_background_pipeline, &m_background_copy_pipeline}) {
+            if (*pipeline) {
+                (**pipeline).m_slot_encoded.fill(false);
+            }
+        }
         m_camera_view = camera_view;
 
         return default_value_v;
@@ -213,6 +222,27 @@ namespace pP {
     }
 
     std::error_code GridPass::applyStagedFrame(const GridStagedFrame &stage) {
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, std::isfinite(stage.m_reference_thickness_m) and stage.m_reference_thickness_m > 0.0f
+                          ? std::error_code{}
+                          : std::make_error_code(std::errc::invalid_argument));
+        if (stage.m_has_background) {
+            for (u32 order = 0u; order < 4u; ++order) {
+                const auto &layer = stage.m_background_layers[order];
+                PPR_RETURN_ERROR_ON_FAIL(
+                    GridPass, layer.m_order == order and
+                                      layer.m_texture_index < stage.m_terrain_images.size() and
+                                      std::isfinite(layer.m_repeat_period_m) and
+                                      layer.m_repeat_period_m >= 0.125f and
+                                      layer.m_repeat_period_m <= 65536.0f and
+                                      std::isfinite(layer.m_parallax_factor) and
+                                      layer.m_parallax_factor >= 0.0f and
+                                      layer.m_parallax_factor <= 1.0f and
+                                      (order != 0u or (layer.m_color_rgba & 255u) == 255u)
+                                  ? std::error_code{}
+                                  : std::make_error_code(std::errc::invalid_argument));
+            }
+        }
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass, (stage.m_cell_size_m == 1.0f or stage.m_cell_size_m == 1.0f / 3.0f)
                           ? std::error_code{}
@@ -277,6 +307,28 @@ namespace pP {
         }
         std::bitset<65536u> material_ids;
         for (const GridTerrainVisual &visual: stage.m_terrain_visuals) {
+            const auto in_range = [](const float value, const float lo, const float hi) {
+                return std::isfinite(value) and value >= lo and value <= hi;
+            };
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass, in_range(visual.m_metallic, 0.0f, 1.0f) and
+                                  in_range(visual.m_roughness, 0.0f, 1.0f) and
+                                  in_range(visual.m_opacity, 0.0f, 1.0f) and
+                                  in_range(visual.m_ior, 1.0f, 3.0f) and
+                                  in_range(visual.m_normal_scale, 0.0f, 4.0f) and
+                                  in_range(visual.m_refraction_depth_m, 0.0f, 1.0f) and
+                                  in_range(visual.m_emissive_rgb[0], 0.0f, 1.0f) and
+                                  in_range(visual.m_emissive_rgb[1], 0.0f, 1.0f) and
+                                  in_range(visual.m_emissive_rgb[2], 0.0f, 1.0f) and
+                                  std::isfinite(visual.m_emissive_strength) and
+                                  visual.m_emissive_strength >= 0.0f and
+                                  visual.m_alpha_mode <= 1u and
+                                  (visual.m_normal_texture_index == 0xffffffffu or
+                                      (visual.m_normal_texture_index < stage.m_terrain_images.size() and
+                                          stage.m_terrain_images[visual.m_normal_texture_index].m_format ==
+                                              image::ENativeImageFormat::rgba8_linear))
+                              ? std::error_code{}
+                              : std::make_error_code(std::errc::invalid_argument));
             PPR_RETURN_ERROR_ON_FAIL(
                 GridPass, visual.m_material_id > 0u and
                                   visual.m_material_id < 0xffffu and
@@ -292,8 +344,21 @@ namespace pP {
                               : std::make_error_code(std::errc::invalid_argument));
             material_ids.set(visual.m_material_id);
         }
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, validateParticles_(stage));
         if (m_world.m_visuals_set) {
             const bool same = m_world.m_content_fingerprint == stage.m_content_fingerprint and
+                              m_world.m_cell_size_m == stage.m_cell_size_m and
+                              m_world.m_reference_thickness_m == stage.m_reference_thickness_m and
+                              m_world.m_has_background == stage.m_has_background and
+                              std::ranges::equal(
+                                  m_world.m_background_layers, stage.m_background_layers,
+                                  [](const GridBackgroundLayer &a, const GridBackgroundLayer &b) {
+                                      return a.m_texture_index == b.m_texture_index and
+                                             a.m_order == b.m_order and
+                                             a.m_color_rgba == b.m_color_rgba and
+                                             a.m_repeat_period_m == b.m_repeat_period_m and
+                                             a.m_parallax_factor == b.m_parallax_factor;
+                                  }) and
                               std::ranges::equal(
                                   m_world.m_terrain_images, stage.m_terrain_images,
                                   [](const image::ImageAsset &a, const image::ImageAsset &b) {
@@ -310,7 +375,17 @@ namespace pP {
                                              a.m_color_rgba == b.m_color_rgba and
                                              a.m_texture_index == b.m_texture_index and
                                              a.m_texture_period_m == b.m_texture_period_m and
-                                             a.m_roundness == b.m_roundness;
+                                             a.m_roundness == b.m_roundness and
+                                             a.m_normal_texture_index == b.m_normal_texture_index and
+                                             a.m_metallic == b.m_metallic and
+                                             a.m_roughness == b.m_roughness and
+                                             a.m_opacity == b.m_opacity and
+                                             std::ranges::equal(a.m_emissive_rgb, b.m_emissive_rgb) and
+                                             a.m_emissive_strength == b.m_emissive_strength and
+                                             a.m_ior == b.m_ior and
+                                             a.m_normal_scale == b.m_normal_scale and
+                                             a.m_refraction_depth_m == b.m_refraction_depth_m and
+                                             a.m_alpha_mode == b.m_alpha_mode;
                                   });
             // Catalog changes require an independently prepared world bundle.
             PPR_RETURN_ERROR_ON_FAIL(
@@ -333,6 +408,9 @@ namespace pP {
         m_world.m_cell_size_m = stage.m_cell_size_m;
         m_world.m_contours_enabled = stage.m_has_catalog;
         m_world.m_boundary_material_id = stage.m_boundary_material_id;
+        m_world.m_has_background = stage.m_has_background;
+        m_world.m_background_layers = stage.m_background_layers;
+        m_world.m_reference_thickness_m = stage.m_reference_thickness_m;
         if (stage.m_reset_caches) {
             clearTiles();
             clearCache();
@@ -340,6 +418,15 @@ namespace pP {
         PPR_RETURN_ERROR_ON_FAIL(GridPass, stageDiagnostic_(stage));
         PPR_RETURN_ERROR_ON_FAIL(GridPass, submitTiles(std::span<const GridTileSubmission>{stage.m_tiles}));
         for (const GridStagedUpload &upload: stage.m_uploads) {
+            const i32 cx = static_cast<i32>(upload.m_chunk_id % 32u);
+            const i32 cy = static_cast<i32>(upload.m_chunk_id / 32u);
+            for (i32 dy = -1; dy <= 1; ++dy) {
+                for (i32 dx = -1; dx <= 1; ++dx) {
+                    if (cx + dx >= 0 and cx + dx < 32 and cy + dy >= 0 and cy + dy < 32) {
+                        m_world.m_particles[static_cast<u32>((cy + dy) * 32 + cx + dx)].m_dirty = true;
+                    }
+                }
+            }
             PPR_RETURN_ERROR_ON_FAIL(GridPass, appendDiagnostic_(upload));
             GridUploadRequest request{};
             request.m_chunk_id = upload.m_chunk_id;
@@ -358,6 +445,7 @@ namespace pP {
                 return std::make_error_code(std::errc::state_not_recoverable);
             }
         }
+        stageParticles_(stage);
         return default_value_v;
     }
 
@@ -457,6 +545,9 @@ namespace pP {
         const auto prepared = tryPrepareCellUploads(device, completed, chunk_budget);
         PPR_RETURN_UNEXPECTED_ON_FAIL(GridPass, prepared);
         m_world.m_prepared = *prepared;
+        if (m_world.m_prepared) {
+            PPR_RETURN_UNEXPECTED_ON_FAIL(GridPass, prepareParticles_(device));
+        }
         return m_world.m_prepared;
     }
 
@@ -985,6 +1076,20 @@ namespace pP {
             }
         }
         m_tile_slot_values[m_last_used_slot] = submit_value;
+        if (m_background_ready) {
+            m_background_slots[m_background_cursor].m_last_use = submit_value;
+        }
+        for (auto *const pipeline:
+            {&m_cached_pipeline, &m_particle_pipeline, &m_background_pipeline, &m_background_copy_pipeline}) {
+            if (*pipeline) {
+                for (u32 slot = 0u; slot < kTileRingSize; ++slot) {
+                    if ((**pipeline).m_slot_encoded[slot]) {
+                        (**pipeline).m_slot_last_use[slot] = submit_value;
+                        (**pipeline).m_slot_encoded[slot] = false;
+                    }
+                }
+            }
+        }
         for (u32 slot = 0u; slot < kCellAtlasSlots; ++slot) {
             if (m_world.m_cell_slots_current.test(slot) or m_world.m_resident_cell_slots.test(slot)) {
                 m_world.m_cell_slot_values[slot] = submit_value;
@@ -994,6 +1099,20 @@ namespace pP {
 
     void GridPass::reclaimCompleted_(const FenceCompletionValue completed) noexcept {
         std::ignore = m_deferred_releases.reclaim(completed);
+        if (m_particle_pipeline) {
+            auto &pipeline = *m_particle_pipeline;
+            for (u32 slot = 0u; slot < kTileRingSize; ++slot) {
+                if (pipeline.m_slot_stale_bindings[slot] and
+                    not pipeline.m_slot_encoded[slot] and
+                    slotFenceComplete(completed, pipeline.m_slot_last_use[slot])) {
+                    pipeline.m_slot_frame_cursors[slot] = {};
+                    pipeline.m_slot_roots[slot].setNull();
+                    pipeline.m_slot_particle_buffers[slot] = nullptr;
+                    pipeline.m_slot_backdrop_views[slot] = nullptr;
+                    pipeline.m_slot_stale_bindings[slot] = false;
+                }
+            }
+        }
         if (m_retiring_world and
             not m_retiring_world->m_upload_submission_pending and
             m_retiring_world->m_last_reader <= completed and
@@ -1001,12 +1120,27 @@ namespace pP {
             // Shader bindings own resources too. Drop completed roots before
             // releasing the retired bundle or admitting another candidate.
             // Active roots with unfinished readers remain untouched.
-            if (not m_retiring_world->m_retirement_roots_detached and m_cached_pipeline) {
-                for (u32 slot = 0u; slot < kTileRingSize; ++slot) {
-                    if (slotFenceComplete(completed, m_tile_slot_values[slot])) {
-                        m_cached_pipeline->m_slot_frame_cursors[slot] = {};
-                        m_cached_pipeline->m_slot_roots[slot].setNull();
-                        m_cached_pipeline->m_slot_atlases[slot] = nullptr;
+            bool roots_detached = true;
+            for (auto *const pipeline:
+                {&m_cached_pipeline, &m_particle_pipeline, &m_background_pipeline, &m_background_copy_pipeline}) {
+                if (*pipeline) {
+                    for (u32 slot = 0u; slot < kTileRingSize; ++slot) {
+                        auto &entry = **pipeline;
+                        if (entry.m_slot_roots[slot] and
+                            entry.m_slot_world_generation[slot] == m_retiring_world->m_world_generation and
+                            entry.m_slot_world_job_id[slot] == m_retiring_world->m_job_id) {
+                            if (not entry.m_slot_encoded[slot] and
+                                slotFenceComplete(completed, entry.m_slot_last_use[slot])) {
+                                entry.m_slot_frame_cursors[slot] = {};
+                                entry.m_slot_roots[slot].setNull();
+                                entry.m_slot_atlases[slot] = nullptr;
+                                entry.m_slot_particle_buffers[slot] = nullptr;
+                                entry.m_slot_backdrop_views[slot] = nullptr;
+                                entry.m_slot_stale_bindings[slot] = false;
+                            } else {
+                                roots_detached = false;
+                            }
+                        }
                     }
                 }
             }
@@ -1027,7 +1161,15 @@ namespace pP {
                     ++m_retired_chunk_blocks;
                 }
             }
-            m_retiring_world->m_retirement_roots_detached = true;
+            while (remaining_blocks != 0u and retiring.m_retirement_particle_cursor < kGridTileCacheCapacity) {
+                auto &chunk = retiring.m_particles[retiring.m_retirement_particle_cursor++];
+                if (chunk.m_source or chunk.m_buffer) {
+                    chunk = {};
+                    --remaining_blocks;
+                    ++m_retired_chunk_blocks;
+                }
+            }
+            m_retiring_world->m_retirement_roots_detached = roots_detached;
             if (not retiring.m_texture_handles.empty()) {
                 // Handles preserve upload/dedup refcounts until the last reader.
                 PPR_VERIFY(not retiring.m_texture_cache->release(retiring.m_texture_handles.back()));
@@ -1036,8 +1178,10 @@ namespace pP {
             if (not retiring.m_terrain_images.empty()) {
                 retiring.m_terrain_images.pop_back();
             }
-            if (retiring.m_cell_cache.empty() and
+            if (roots_detached and
+                retiring.m_cell_cache.empty() and
                 retiring.m_retirement_diagnostic_cursor == kGridTileCacheCapacity and
+                retiring.m_retirement_particle_cursor == kGridTileCacheCapacity and
                 retiring.m_texture_handles.empty() and
                 retiring.m_terrain_images.empty()) {
                 // Only metadata and a fixed number of GPU objects remain.
@@ -1074,6 +1218,7 @@ namespace pP {
     //            whole or the frame stays empty. A caller that needs
     //            whole-frame atomicity must discard the pass.
     std::error_code GridPass::render(const DrawContext &draw_context) {
+        m_surface_retained_table = false;
         m_visibility_prepared = false;
         const hal::ProfileScope scope{"App.Pass.Grid"};
         if (not m_ready) [[unlikely]] {
@@ -1182,6 +1327,7 @@ namespace pP {
         // resolved at creation, so only the data below is written — and only
         // into a slot no in-flight submission still reads.
         draw_context.m_pass.bindPipeline(pipeline, root_object);
+        markPipelineUse_(**cached, m_tile_ring_cursor);
         rhi::ShaderCursor shader_cursor{root_object};
 
         PPR_RETURN_ERROR_ON_FAIL(GridPass, uploadFrameConstants_(frame_cursor));
@@ -1221,6 +1367,7 @@ namespace pP {
     // MUST be verified by an MDI GPU readback parity test; do not infer parity
     // from the CPU-side args alone.
     std::error_code GridPass::renderIndirect(const DrawContext &draw_context) {
+        m_surface_retained_table = false;
         m_visibility_prepared = false;
         if (not m_ready) [[unlikely]] {
             return std::make_error_code(std::errc::not_connected);
@@ -1347,6 +1494,7 @@ namespace pP {
         // as-is, the frame constants (per-draw bases ride the
         // args, see above), and the payload buffer.
         draw_context.m_pass.bindPipeline(pipeline, root_object);
+        markPipelineUse_(**cached, m_tile_ring_cursor);
         rhi::ShaderCursor shader_cursor{root_object};
 
         PPR_RETURN_ERROR_ON_FAIL(GridPass, uploadFrameConstants_(frame_cursor));
@@ -1640,6 +1788,9 @@ namespace pP {
             .m_retained_atlases = retainedAtlasCountForTest(),
         };
         const auto count_textures = [&](const WorldResources &world) {
+            for (const auto &image: world.m_terrain_images) {
+                out.m_texture_decoded_bytes += image.m_storage.getBufferData().size();
+            }
             if (world.m_texture_cache) {
                 out.m_texture_entries += world.m_texture_cache->entryCount();
                 out.m_texture_slots += world.m_texture_cache->textureUsed();
@@ -1651,6 +1802,34 @@ namespace pP {
         }
         if (m_retiring_world) {
             count_textures(*m_retiring_world);
+        }
+        out.m_particle_uploads = m_particle_uploads;
+        out.m_particle_uploaded_bytes = m_particle_uploaded_bytes;
+        const auto count_particles = [&](const WorldResources &world) {
+            for (const auto &chunk: world.m_particles) {
+                out.m_particle_instances += chunk.m_count;
+                if (chunk.m_buffer) {
+                    out.m_particle_buffer_bytes += chunk.m_buffer->getDesc().size;
+                }
+            }
+        };
+        count_particles(m_world);
+        if (m_candidate_world) {
+            count_particles(*m_candidate_world);
+        }
+        if (m_retiring_world) {
+            count_particles(*m_retiring_world);
+        }
+        for (const auto &slot: m_background_slots) {
+            if (slot.m_texture) {
+                ++out.m_background_targets;
+                out.m_background_target_bytes += static_cast<u64>(slot.m_width) * slot.m_height * 8u;
+            }
+        }
+        if (m_particle_pipeline) {
+            for (auto *const buffer: m_particle_pipeline->m_slot_particle_buffers) {
+                out.m_particle_root_bindings += buffer != nullptr ? 1u : 0u;
+            }
         }
         return out;
     }
@@ -1697,6 +1876,12 @@ namespace pP {
         // alongside the fence epoch they named. Retain-first-error,
         // best-effort.
         std::error_code first_err{};
+        clearOpticalResources_();
+        m_world.m_particles = {};
+        m_world.m_has_background = false;
+        m_world.m_background_layers = {};
+        m_particle_uploads = 0u;
+        m_particle_uploaded_bytes = 0u;
         m_candidate_world.reset();
         m_retiring_world.reset();
         m_world.m_submitted_tiles.clear();
@@ -1783,6 +1968,7 @@ namespace pP {
     }
 
     std::error_code GridPass::notifyDeviceLost() noexcept {
+        clearOpticalResources_();
         m_world.m_diagnostic_atlas.setNull();
         m_world.m_diagnostic_colors.setNull();
         m_world.m_diagnostic_mapped = nullptr;
@@ -2108,6 +2294,9 @@ namespace pP {
             visual.m_texture_index = visual.m_texture_index == 0xffffffffu
                                          ? 0u
                                          : m_world.m_texture_slots[visual.m_texture_index];
+            if (visual.m_normal_texture_index != 0xffffffffu) {
+                visual.m_normal_texture_index = m_world.m_texture_slots[visual.m_normal_texture_index];
+            }
             palette[visual.m_material_id] = visual;
         }
         rhi::BufferDesc desc{};
@@ -2145,6 +2334,11 @@ namespace pP {
             GridPass, cursor["g_textures"].setBinding(rhi::Binding(descriptors, makeFullRange(descriptors))));
         PPR_RETURN_ERROR_ON_FAIL(GridPass, cursor["g_sampler"].setDescriptorHandle(m_terrain_sampler_handle));
         PPR_RETURN_ERROR_ON_FAIL(GridPass, cursor["g_boundary_noise"].setBinding(rhi::Binding(m_boundary_noise_view)));
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass,
+            cursor["g_backdrop"].setBinding(
+                rhi::Binding(
+                    m_background_ready ? m_background_slots[m_background_cursor].m_view : m_terrain_fallback_view)));
         if (not retained_table or not m_chunk_slot_uploaded[m_tile_ring_cursor]) {
             std::array<u32, kGridTileCacheCapacity> slots;
             slots.fill(0xffffffffu);
@@ -2300,6 +2494,7 @@ namespace pP {
     }
 
     std::error_code GridPass::renderGpuIndirect(const DrawContext &context) {
+        m_surface_retained_table = true;
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass,
             m_visibility_prepared ? std::error_code{} : std::make_error_code(std::errc::operation_not_permitted));
@@ -2319,6 +2514,7 @@ namespace pP {
                                     : static_cast<u32>(m_world.m_diagnostic_mode) << 2u;
         frame.m_boundary_material_id = m_world.m_resident_boundary_material_id;
         frame.m_cell_size_m = m_world.m_resident_cell_size_m;
+        fillOpticalFrame_(frame);
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass, (*cached)->m_slot_frame_cursors[m_tile_ring_cursor].setData(&frame, sizeof(frame)));
         rhi::IBuffer *const tiles = m_tile_payloads[m_tile_ring_cursor].get();
@@ -2333,6 +2529,7 @@ namespace pP {
         m_cached_pipeline->m_slot_atlases[m_tile_ring_cursor] = cells == m_world.m_cell_atlas.get() ? cells : nullptr;
         PPR_RETURN_ERROR_ON_FAIL(GridPass, bindSurfaceBuffers_(context.m_device, cursor, true));
         context.m_pass.bindPipeline((*cached)->m_pipeline, root);
+        markPipelineUse_(**cached, m_tile_ring_cursor);
         context.m_pass.drawIndirect(1u, rhi::BufferOffsetPair{slot.m_args});
         ++m_draw_commands;
         return {};
@@ -2349,9 +2546,531 @@ namespace pP {
                                     ? 0u
                                     : static_cast<u32>(m_world.m_diagnostic_mode) << 2u;
         frame.m_boundary_material_id = m_world.m_boundary_material_id;
+        fillOpticalFrame_(frame);
 
         PPR_RETURN_ERROR_ON_FAIL(GridPass, frame_cursor.setData(&frame, sizeof(GridFrame)));
 
         return default_value_v;
+    }
+
+    std::error_code GridPass::validateParticles_(const GridStagedFrame &stage) const {
+        std::bitset<kGridTileCacheCapacity> chunks;
+        u64 count = 0u;
+        for (const auto &chunk: m_world.m_particles) {
+            if (chunk.m_source) {
+                count += chunk.m_source->size();
+            }
+        }
+        for (const auto &batch: stage.m_particle_batches) {
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass, batch.m_chunk_id < kGridTileCacheCapacity and
+                                  not chunks.test(batch.m_chunk_id) and
+                                  batch.m_particles != nullptr and
+                                  batch.m_particles->size() <= kCellsPerChunk
+                              ? std::error_code{}
+                              : std::make_error_code(std::errc::invalid_argument));
+            chunks.set(batch.m_chunk_id);
+            const auto &prior = m_world.m_particles[batch.m_chunk_id].m_source;
+            count -= prior ? prior->size() : 0u;
+            count += batch.m_particles->size();
+            if (m_world.m_particles[batch.m_chunk_id].m_source == batch.m_particles) {
+                continue;
+            }
+            std::bitset<kCellsPerChunk> owners;
+            for (const auto &particle: *batch.m_particles) {
+                const double cell = stage.m_cell_size_m == 1.0f ? 1.0 : 1.0 / 3.0;
+                const double scale = 1.0 / cell;
+                PPR_RETURN_ERROR_ON_FAIL(
+                    GridPass, particle.m_id != 0u and
+                                      std::isfinite(particle.m_position_x_m) and
+                                      std::isfinite(particle.m_position_y_m) and
+                                      particle.m_position_x_m >= 0.0 and
+                                      particle.m_position_y_m >= 0.0 and
+                                      particle.m_position_x_m * scale < kGridWorldEdge and
+                                      particle.m_position_y_m * scale < kGridWorldEdge and
+                                      std::isfinite(particle.m_volume_m3) and
+                                      particle.m_volume_m3 > 0.0 and
+                                      particle.m_volume_m3 <= static_cast<double>(stage.m_cell_size_m) *
+                                                                  stage.m_cell_size_m *
+                                                                  stage.m_reference_thickness_m *
+                                                                  1.001 and
+                                      std::isfinite(particle.m_mass_kg) and
+                                      particle.m_mass_kg > 0.0 and
+                                      std::isfinite(particle.m_temperature_k) and
+                                      particle.m_temperature_k >= 0.0 and
+                                      particle.m_phase <= 2u and
+                                      particle.m_material_id > 0u and
+                                      particle.m_material_id < 0xffffu
+                                  ? std::error_code{}
+                                  : std::make_error_code(std::errc::invalid_argument));
+                const u32 x = static_cast<u32>(particle.m_position_x_m * scale);
+                const u32 y = static_cast<u32>(particle.m_position_y_m * scale);
+                const u32 owner = (y % 128u) * 128u + x % 128u;
+                PPR_RETURN_ERROR_ON_FAIL(
+                    GridPass, (y / 128u) * 32u + x / 128u == batch.m_chunk_id and
+                                      not owners.test(owner) and
+                                      std::ranges::any_of(
+                                          stage.m_terrain_visuals,
+                                          [&](const auto &v) { return v.m_material_id == particle.m_material_id; })
+                                  ? std::error_code{}
+                                  : std::make_error_code(std::errc::invalid_argument));
+                owners.set(owner);
+            }
+        }
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, count <= 1024u * 1024u ? std::error_code{} : std::make_error_code(std::errc::no_buffer_space));
+        return {};
+    }
+
+    void GridPass::stageParticles_(const GridStagedFrame &stage) {
+        // Validation precedes publication; empty immutable batches remove chunks.
+        for (const auto &batch: stage.m_particle_batches) {
+            auto &chunk = m_world.m_particles[batch.m_chunk_id];
+            if (chunk.m_source != batch.m_particles) {
+                chunk.m_source = batch.m_particles;
+                chunk.m_dirty = true;
+            }
+        }
+    }
+
+    std::error_code GridPass::prepareParticles_(rhi::IDevice &device) {
+        // Dirty geometry is published as a cohort. Keep the previous immutable
+        // particle buffers until that same terrain cohort is ready to draw.
+        if (m_world.m_cell_publication_deferred or
+            std::ranges::any_of(m_world.m_cell_cache, [](const auto &entry) { return entry.second.m_pending; })) {
+            return {};
+        }
+        const auto solid = [this](const i32 x, const i32 y) {
+            if (x < 0 or y < 0 or x >= kGridWorldEdge or y >= kGridWorldEdge) {
+                return true;
+            }
+            const u32 ux = static_cast<u32>(x), uy = static_cast<u32>(y);
+            const auto found = m_world.m_cell_cache.find((uy / 128u) * 32u + ux / 128u);
+            if (found == m_world.m_cell_cache.end()) {
+                return false;
+            }
+            const u32 local = (uy % 128u) * 128u + ux % 128u;
+            return (((*found->second.m_words)[local / 2u] >> ((local & 1u) * 16u)) & 0xffffu) != 0u;
+        };
+        for (auto &chunk: m_world.m_particles) {
+            if (not chunk.m_dirty) {
+                continue;
+            }
+            Array<ParticleGpu> packed;
+            if (chunk.m_source) {
+                packed.reserve(chunk.m_source->size());
+                for (const auto &particle: *chunk.m_source) {
+                    const double cell = m_world.m_cell_size_m == 1.0f ? 1.0 : 1.0 / 3.0;
+                    const i32 x = static_cast<i32>(particle.m_position_x_m / cell);
+                    const i32 y = static_cast<i32>(particle.m_position_y_m / cell);
+                    // Shared disconnected-saddle midpoint contours: an empty
+                    // sample's quarter square loses exactly one eighth only
+                    // when all three other corners of that dual cell are solid.
+                    double area = 1.0;
+                    for (const i32 dy: {-1, 1}) {
+                        for (const i32 dx: {-1, 1}) {
+                            if (solid(x + dx, y) and solid(x, y + dy) and solid(x + dx, y + dy)) {
+                                area -= 0.125;
+                            }
+                        }
+                    }
+                    ParticleGpu value{};
+                    value.m_position[0] = static_cast<float>(particle.m_position_x_m);
+                    value.m_position[1] = static_cast<float>(particle.m_position_y_m);
+                    value.m_radius_m = static_cast<float>(
+                        std::sqrt(particle.m_volume_m3 / m_world.m_reference_thickness_m / std::numbers::pi));
+                    value.m_fill = static_cast<float>(std::clamp(
+                        particle.m_volume_m3 / (area * cell * cell * m_world.m_reference_thickness_m), 0.0, 1.0));
+                    value.m_material_id = particle.m_material_id;
+                    value.m_phase = particle.m_phase;
+                    value.m_owner[0] = static_cast<u32>(x);
+                    value.m_owner[1] = static_cast<u32>(y);
+                    packed.push_back(value);
+                }
+            }
+            rhi::ComPtr<rhi::IBuffer> buffer;
+            if (not packed.empty()) {
+                rhi::BufferDesc desc{};
+                desc.size = packed.size() * sizeof(ParticleGpu);
+                desc.elementSize = sizeof(ParticleGpu);
+                desc.memoryType = rhi::MemoryType::Upload;
+                desc.usage = rhi::BufferUsage::ShaderResource;
+                desc.defaultState = rhi::ResourceState::ShaderResource;
+                desc.label = "immutable matter particle chunk";
+                PPR_RETURN_ERROR_ON_FAIL(GridPass, device.createBuffer(desc, packed.data(), buffer.writeRef()));
+                ++m_particle_uploads;
+                m_particle_uploaded_bytes += desc.size;
+            }
+            if (chunk.m_buffer) {
+                if (m_particle_pipeline) {
+                    for (u32 slot = 0u; slot < kTileRingSize; ++slot) {
+                        if (m_particle_pipeline->m_slot_particle_buffers[slot] == chunk.m_buffer.get()) {
+                            m_particle_pipeline->m_slot_stale_bindings[slot] = true;
+                        }
+                    }
+                }
+                m_deferred_releases.defer(
+                    m_world.m_last_reader, [held = std::move(chunk.m_buffer)]() mutable { held.setNull(); });
+            }
+            chunk.m_buffer = std::move(buffer);
+            chunk.m_count = safe_narrowing(packed.size());
+            chunk.m_dirty = false;
+        }
+        return {};
+    }
+
+    void GridPass::fillOpticalFrame_(GridFrame &frame) const noexcept {
+        frame.m_has_background = m_background_ready ? 1u : 0u;
+        frame.m_inverse_view_projection = m_background_camera.m_invert_view_projection;
+        frame.m_viewport[0] = m_background_viewport.originX;
+        frame.m_viewport[1] = m_background_viewport.originY;
+        frame.m_viewport[2] = m_background_viewport.extentX;
+        frame.m_viewport[3] = m_background_viewport.extentY;
+        frame.m_camera_origin[0] = m_background_camera.m_origin.x;
+        frame.m_camera_origin[1] = m_background_camera.m_origin.y;
+        frame.m_layers = m_world.m_background_layers;
+        for (auto &layer: frame.m_layers) {
+            if (layer.m_texture_index < m_world.m_texture_slots.size()) {
+                layer.m_texture_index = m_world.m_texture_slots[layer.m_texture_index];
+            }
+        }
+    }
+
+    std::error_code GridPass::createOpticalPrograms_(
+        IShaderService &service, rhi::IDevice &device, const fs::path &content_dir) {
+        const auto create = [&](const char *file, const char *module_name, const char *vertex, const char *fragment,
+                                rhi::ComPtr<rhi::IShaderProgram> &program) -> std::error_code {
+            shader::SharedModule module{};
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass,
+                service.loadModuleFromFile(content_dir / TEXT("shaders") / file, module_name, module.writeRef()));
+            shader::ComPtr<slang::IEntryPoint> vertex_ep, fragment_ep;
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, module->findEntryPointByName(vertex, vertex_ep.writeRef()));
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, module->findEntryPointByName(fragment, fragment_ep.writeRef()));
+            slang::IComponentType *entries[] = {vertex_ep.get(), fragment_ep.get()};
+            rhi::ShaderProgramDesc desc{};
+            desc.linkingStyle = rhi::LinkingStyle::SingleProgram;
+            desc.slangGlobalScope = module.get();
+            desc.slangEntryPoints = entries;
+            desc.slangEntryPointCount = 2u;
+            shader::Diagnose diagnostics;
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass, device.createShaderProgram(desc, program.writeRef(), diagnostics.writeRef()));
+            return {};
+        };
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass,
+            create("grid_tiles.slang", "grid_tiles", "vertexParticleMain", "fragmentParticleMain", m_particle_program));
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, create(
+                          "grid_background.slang", "grid_background", "vertexBackgroundMain", "fragmentBackgroundMain",
+                          m_background_program));
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, create(
+                          "grid_background.slang", "grid_background", "vertexBackgroundMain", "fragmentBackgroundCopy",
+                          m_background_copy_program));
+        return {};
+    }
+
+    Expected<GridPass::GridCachedPipeline *> GridPass::opticalPipeline_(
+        rhi::IDevice &device, const RenderPipelineSignature &signature, rhi::IShaderProgram *const program,
+        std::optional<RenderPipelineKey> &key, std::optional<GridCachedPipeline> &cache, const bool blend) {
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            GridPass, signature.colorFormats().size() == 1u and program != nullptr
+                          ? std::error_code{}
+                          : std::make_error_code(std::errc::invalid_argument));
+        if (key and static_cast<const RenderPipelineSignature &>(*key) != signature) {
+            if (cache) {
+                m_deferred_releases.defer(m_last_submitted_value, [held = std::move(*cache)]() mutable { held = {}; });
+                cache.reset();
+            }
+            key.reset();
+        }
+        if (not cache) {
+            rhi::ColorTargetDesc target{};
+            target.format = signature.colorFormats().front();
+            target.enableBlend = blend;
+            target.color.srcFactor = rhi::BlendFactor::SrcAlpha;
+            target.color.dstFactor = rhi::BlendFactor::InvSrcAlpha;
+            target.color.op = rhi::BlendOp::Add;
+            target.alpha.srcFactor = rhi::BlendFactor::One;
+            target.alpha.dstFactor = rhi::BlendFactor::InvSrcAlpha;
+            target.alpha.op = rhi::BlendOp::Add;
+            rhi::RenderPipelineDesc desc{};
+            desc.program = program;
+            desc.primitiveTopology = rhi::PrimitiveTopology::TriangleList;
+            desc.targets = &target;
+            desc.targetCount = 1u;
+            desc.multisample.sampleCount = static_cast<u32>(signature.m_sample_count);
+            desc.depthStencil.format = signature.m_depth_stencil_format.value_or(rhi::Format::Undefined);
+            desc.depthStencil.depthTestEnable = false;
+            desc.depthStencil.depthWriteEnable = false;
+            desc.rasterizer.cullMode = rhi::CullMode::None;
+            desc.label = "grid optical content pipeline";
+            GridCachedPipeline value;
+            PPR_RETURN_UNEXPECTED_ON_FAIL(GridPass, device.createRenderPipeline(desc, value.m_pipeline.writeRef()));
+            cache.emplace(std::move(value));
+            key.emplace(signature);
+        }
+        PPR_RETURN_UNEXPECTED_ON_FAIL(GridPass, ensurePipelineRoots_(device, *cache));
+        return &*cache;
+    }
+
+    std::error_code GridPass::prepareBackground(
+        const PreRenderContext &context, const CameraSnapshot &camera, const rhi::Viewport &viewport,
+        const rhi::ScissorRect &scissor) {
+        m_background_ready = false;
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, m_ready ? std::error_code{} : std::make_error_code(std::errc::not_connected));
+        reclaimCompleted_(context.m_completed_fence_value);
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, prepareParticles_(context.m_device));
+        if (not m_world.m_has_background) {
+            return {};
+        }
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, std::isfinite(viewport.originX) and
+                              std::isfinite(viewport.originY) and
+                              std::isfinite(viewport.extentX) and
+                              std::isfinite(viewport.extentY) and
+                              viewport.extentX > 0.0f and
+                              viewport.extentY > 0.0f and
+                              viewport.extentX <= 16384.0f and
+                              viewport.extentY <= 16384.0f
+                          ? std::error_code{}
+                          : std::make_error_code(std::errc::invalid_argument));
+        const auto visuals = prepareTerrainVisuals_(context.m_device, 256u);
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, visuals);
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, *visuals ? std::error_code{} : std::make_error_code(std::errc::operation_in_progress));
+        std::array<FenceCompletionValue, kTileRingSize> values;
+        for (u32 slot = 0u; slot < kTileRingSize; ++slot) {
+            values[slot] = m_background_slots[slot].m_last_use;
+        }
+        const u32 selected = selectRingSlot(context.m_completed_fence_value, values, m_background_cursor);
+        FenceCompletionValue effective_completed = context.m_completed_fence_value;
+        if (not slotFenceComplete(context.m_completed_fence_value, values[selected])) {
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass, context.m_wait_for_fence ? context.m_wait_for_fence(values[selected])
+                                                   : std::make_error_code(std::errc::operation_would_block));
+            // A successful value-scoped wait proves completion even when the
+            // borrowed frame context still carries its earlier snapshot.
+            effective_completed = std::max(effective_completed, values[selected]);
+        }
+        m_background_cursor = selected;
+        auto &slot = m_background_slots[selected];
+        const u32 width = static_cast<u32>(std::ceil(viewport.extentX));
+        const u32 height = static_cast<u32>(std::ceil(viewport.extentY));
+        if (not slot.m_texture or slot.m_width != width or slot.m_height != height) {
+            // This slot's last reader completed; roots may still retain its view.
+            for (auto *const cache: {&m_cached_pipeline, &m_particle_pipeline, &m_background_copy_pipeline}) {
+                if (*cache) {
+                    for (u32 index = 0u; index < kTileRingSize; ++index) {
+                        auto &pipeline = **cache;
+                        if (pipeline.m_slot_backdrop_views[index] == slot.m_view.get() and
+                            slotFenceComplete(effective_completed, pipeline.m_slot_last_use[index])) {
+                            pipeline.m_slot_roots[index].setNull();
+                            pipeline.m_slot_frame_cursors[index] = {};
+                            pipeline.m_slot_particle_buffers[index] = nullptr;
+                            pipeline.m_slot_backdrop_views[index] = nullptr;
+                            pipeline.m_slot_atlases[index] = nullptr;
+                            pipeline.m_slot_stale_bindings[index] = false;
+                        }
+                    }
+                }
+            }
+            if (m_background_copy_pipeline) {
+                m_background_copy_pipeline->m_slot_roots[selected].setNull();
+                m_background_copy_pipeline->m_slot_frame_cursors[selected] = {};
+            }
+            rhi::TextureDesc desc{};
+            desc.type = rhi::TextureType::Texture2D;
+            desc.size = {.width = width, .height = height, .depth = 1u};
+            desc.arrayLength = 1u;
+            desc.mipCount = 1u;
+            desc.format = rhi::Format::RGBA16Float;
+            desc.memoryType = rhi::MemoryType::DeviceLocal;
+            desc.usage = static_cast<rhi::TextureUsage>(
+                static_cast<u32>(rhi::TextureUsage::RenderTarget) |
+                static_cast<u32>(rhi::TextureUsage::ShaderResource));
+            desc.defaultState = rhi::ResourceState::ShaderResource;
+            desc.label = "immutable grid backdrop";
+            rhi::ComPtr<rhi::ITexture> texture;
+            rhi::ComPtr<rhi::ITextureView> view;
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, context.m_device.createTexture(desc, nullptr, texture.writeRef()));
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, texture->getDefaultView(view.writeRef()));
+            slot.m_texture = std::move(texture);
+            slot.m_view = std::move(view);
+            slot.m_width = width;
+            slot.m_height = height;
+        }
+        m_background_camera = camera;
+        m_background_viewport = viewport;
+        m_background_scissor = scissor;
+        RenderPipelineSignature signature{};
+        signature.m_color_formats[0] = rhi::Format::RGBA16Float;
+        signature.m_color_format_count = 1u;
+        const auto pipeline = opticalPipeline_(
+            context.m_device, signature, m_background_program, m_background_key, m_background_pipeline, false);
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, pipeline);
+        auto *const root = (*pipeline)->m_slot_roots[selected].get();
+        rhi::ShaderCursor cursor{root};
+        GridFrame frame{};
+        frame.m_view_projection = camera.m_view_projection;
+        fillOpticalFrame_(frame);
+        frame.m_has_background = 1u;
+        frame.m_viewport[0] = 0.0f;
+        frame.m_viewport[1] = 0.0f;
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, (*pipeline)->m_slot_frame_cursors[selected].setData(&frame, sizeof(frame)));
+        auto *const descriptors = m_world.m_texture_cache->descriptorBuffer();
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, cursor["g_textures"].setBinding(rhi::Binding(descriptors, makeFullRange(descriptors))));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, cursor["g_sampler"].setDescriptorHandle(m_terrain_sampler_handle));
+        context.m_encoder.setTextureState(
+            slot.m_texture, rhi::SubresourceRange{.layer = 0u, .layerCount = 1u, .mip = 0u, .mipCount = 1u},
+            rhi::ResourceState::RenderTarget);
+        rhi::RenderPassColorAttachment attachment{};
+        attachment.view = slot.m_view;
+        attachment.clearValue[3] = 1.0f;
+        rhi::RenderPassDesc pass_desc{};
+        pass_desc.colorAttachments = &attachment;
+        pass_desc.colorAttachmentCount = 1u;
+        auto *const pass = context.m_encoder.beginRenderPass(pass_desc);
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, pass != nullptr ? std::error_code{} : std::make_error_code(std::errc::io_error));
+        pass->setRenderState(
+            {.viewports = {rhi::Viewport::fromSize(static_cast<float>(width), static_cast<float>(height))},
+                .viewportCount = 1u,
+                .scissorRects = {rhi::ScissorRect::fromSize(width, height)},
+                .scissorRectCount = 1u,
+                .indexBuffer = {}});
+        pass->bindPipeline((*pipeline)->m_pipeline, root);
+        markPipelineUse_(**pipeline, selected);
+        pass->draw({.vertexCount = 3u});
+        pass->end();
+        context.m_encoder.setTextureState(
+            slot.m_texture, rhi::SubresourceRange{.layer = 0u, .layerCount = 1u, .mip = 0u, .mipCount = 1u},
+            rhi::ResourceState::ShaderResource);
+        m_background_ready = true;
+        return {};
+    }
+
+    std::error_code GridPass::renderBackground(const DrawContext &context) {
+        if (not m_world.m_has_background) {
+            return {};
+        }
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, m_background_ready and
+                              context.m_viewport.originX == m_background_viewport.originX and
+                              context.m_viewport.originY == m_background_viewport.originY and
+                              context.m_viewport.extentX == m_background_viewport.extentX and
+                              context.m_viewport.extentY == m_background_viewport.extentY
+                          ? std::error_code{}
+                          : std::make_error_code(std::errc::operation_not_permitted));
+        const auto pipeline = opticalPipeline_(
+            context.m_device, context.m_render_pipeline_key, m_background_copy_program, m_background_copy_key,
+            m_background_copy_pipeline, false);
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, pipeline);
+        const u32 slot = m_background_cursor;
+        auto *const root = (*pipeline)->m_slot_roots[slot].get();
+        rhi::ShaderCursor cursor{root};
+        GridFrame frame{};
+        fillOpticalFrame_(frame);
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, (*pipeline)->m_slot_frame_cursors[slot].setData(&frame, sizeof(frame)));
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, cursor["g_backdrop"].setBinding(rhi::Binding(m_background_slots[slot].m_view)));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, cursor["g_sampler"].setDescriptorHandle(m_terrain_sampler_handle));
+        context.m_pass.setRenderState(
+            {.viewports = {context.m_viewport},
+                .viewportCount = 1u,
+                .scissorRects = {context.m_scissor},
+                .scissorRectCount = 1u,
+                .indexBuffer = {}});
+        context.m_pass.bindPipeline((*pipeline)->m_pipeline, root);
+        markPipelineUse_(**pipeline, slot);
+        context.m_pass.draw({.vertexCount = 3u});
+        ++m_draw_commands;
+        return {};
+    }
+
+    std::error_code GridPass::renderParticles(const DrawContext &context) {
+        if (m_world.m_diagnostic_mode != EGridDiagnosticMode::textured) {
+            return {};
+        }
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, prepareParticles_(context.m_device));
+        const auto plan = planTiles(
+            m_camera_view, std::span<const GridTileSubmission>{m_world.m_submitted_tiles}, m_world.m_cell_size_m);
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, plan);
+        if (not std::ranges::any_of(plan->m_tiles, [this](const auto &tile) {
+                return m_world.m_particles[tile.m_chunk_id].m_count != 0u;
+            })) {
+            return {};
+        }
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, ensureCellBuffer_(context.m_device, false));
+        const auto pipeline = opticalPipeline_(
+            context.m_device, context.m_render_pipeline_key, m_particle_program, m_particle_key, m_particle_pipeline,
+            true);
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, pipeline);
+        auto *const root = (*pipeline)->m_slot_roots[m_tile_ring_cursor].get();
+        rhi::ShaderCursor cursor{root};
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, uploadFrameConstants_((*pipeline)->m_slot_frame_cursors[m_tile_ring_cursor]));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, bindSurfaceBuffers_(context.m_device, cursor, m_surface_retained_table));
+        auto *const cells = (m_surface_retained_table ? m_world.m_visibility_has_cells
+                                                      : m_world.m_cell_atlas != nullptr)
+                                ? m_world.m_cell_atlas.get()
+                                : m_world.m_cell_dummy.get();
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, cursor["g_cell_materials"].setBinding(rhi::Binding(cells, makeFullRange(cells))));
+        context.m_pass.setRenderState(
+            {.viewports = {context.m_viewport},
+                .viewportCount = 1u,
+                .scissorRects = {context.m_scissor},
+                .scissorRectCount = 1u,
+                .indexBuffer = {}});
+        for (const auto &tile: plan->m_tiles) {
+            const auto &chunk = m_world.m_particles[tile.m_chunk_id];
+            if (chunk.m_count == 0u) {
+                continue;
+            }
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass,
+                cursor["g_particles"].setBinding(rhi::Binding(chunk.m_buffer, makeFullRange(chunk.m_buffer))));
+            (*pipeline)->m_slot_particle_buffers[m_tile_ring_cursor] = chunk.m_buffer.get();
+            (*pipeline)->m_slot_stale_bindings[m_tile_ring_cursor] = false;
+            context.m_pass.bindPipeline((*pipeline)->m_pipeline, root);
+            markPipelineUse_(**pipeline, m_tile_ring_cursor);
+            context.m_pass.draw({.vertexCount = 6u, .instanceCount = chunk.m_count});
+            ++m_draw_commands;
+        }
+        return {};
+    }
+
+    void GridPass::clearOpticalResources_() noexcept {
+        m_background_ready = false;
+        m_particle_pipeline.reset();
+        m_background_pipeline.reset();
+        m_background_copy_pipeline.reset();
+        m_particle_key.reset();
+        m_background_key.reset();
+        m_background_copy_key.reset();
+        m_background_slots = {};
+        m_background_cursor = 0u;
+        m_particle_program.setNull();
+        m_background_program.setNull();
+        m_background_copy_program.setNull();
+        for (auto &chunk: m_world.m_particles) {
+            chunk.m_buffer.setNull();
+            chunk.m_count = 0u;
+            chunk.m_dirty = true;
+        }
+    }
+
+    void GridPass::markPipelineUse_(GridCachedPipeline &pipeline, const u32 slot) noexcept {
+        // Preview replacements share simulation generation but own distinct graphics bundles.
+        pipeline.m_slot_world_generation[slot] = m_world.m_world_generation;
+        pipeline.m_slot_world_job_id[slot] = m_world.m_job_id;
+        pipeline.m_slot_encoded[slot] = true;
+        pipeline.m_slot_backdrop_views[slot] = m_background_ready ? m_background_slots[m_background_cursor].m_view.get()
+                                                                  : nullptr;
     }
 }

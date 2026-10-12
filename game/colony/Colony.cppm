@@ -25,6 +25,7 @@ export namespace pP::colony {
     private:
         sim::ChunkGrid m_grid{}; // Explicit legacy fixtures only when no prepared world is installed.
         std::unique_ptr<PreparedWorld> m_prepared{};
+        sim::MatterParticleState m_particles{};
         bool m_initialized{false};
 
     public:
@@ -53,7 +54,11 @@ export namespace pP::colony {
             const ColonyDesc &desc, const sim::GenerationExecution *execution = nullptr);
 
         /// Adopts a validated candidate without rerunning generation.
-        [[nodiscard]] std::error_code install(PreparedWorld world);
+        [[nodiscard]] std::error_code install(
+            PreparedWorld world, const sim::MatterParticleSnapshot *particles = nullptr,
+            const IContext *context = nullptr);
+        [[nodiscard]] sim::MatterParticleState &particles() noexcept;
+        [[nodiscard]] const sim::MatterParticleState &particles() const noexcept;
         [[nodiscard]] const PreparedWorld *preparedWorld() const noexcept;
 
         [[nodiscard]] std::error_code shutdown();

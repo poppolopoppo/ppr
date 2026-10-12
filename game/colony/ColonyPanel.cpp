@@ -716,11 +716,9 @@ namespace pP::colony {
                 static_cast<unsigned long long>(world.m_geometry.m_instances.size()));
             ImGui::Text(
                 "Initial matter regions: %llu", static_cast<unsigned long long>(world.m_matter.m_regions.size()));
-            ImGui::TextDisabled(
-                driver.initialMatterBaselineValid() ? "Initial matter: unsimulated baseline"
-                                                    : "Initial matter preview invalidated by terrain edits");
+            ImGui::Text("Persistent particles: %u", driver.particleCount());
             constexpr std::array<const char *, 5u> modes{
-                "Textured terrain", "Material IDs", "Biomes", "Temperature", "Initial matter (unsimulated)"};
+                "Textured terrain", "Material IDs", "Biomes", "Temperature", "Current particles"};
             int selected = static_cast<int>(state.m_preview_mode);
             if (ImGui::Combo("Preview", &selected, modes.data(), static_cast<int>(modes.size()))) {
                 state.m_preview_mode = static_cast<EGridDiagnosticMode>(selected);
@@ -764,32 +762,21 @@ namespace pP::colony {
                     ImGui::Text("Feature footprint: %s", catalog.features()[instance.m_feature].m_display_name.c_str());
                 }
             }
-            if (not driver.initialMatterBaselineValid()) {
-                ImGui::TextDisabled("Initial matter baseline hidden: terrain edited");
-                return;
-            }
-            // Emitted spans are sorted by row then X. Inspect one point without
-            // walking the whole world or the potentially million-span baseline.
-            for (const auto &region: world.m_matter.m_regions) {
-                const auto found = std::lower_bound(
-                    region.m_spans.begin(), region.m_spans.end(), target,
-                    [](const sim::InitialMatterSpan &span, const sim::GlobalCellPos cell) {
-                        return span.m_y < cell.m_y or (span.m_y == cell.m_y and span.m_end_x <= cell.m_x);
-                    });
-                if (found == region.m_spans.end() or found->m_y != target.m_y or target.m_x < found->m_begin_x) {
+            for (const auto &particle: driver.particleChunk(sim::chunkOf(target))) {
+                const u32 x = static_cast<u32>(particle.m_x_m / recipe.m_cell_size_m),
+                          y = static_cast<u32>(particle.m_y_m / recipe.m_cell_size_m);
+                if (x != target.m_x or y != target.m_y) {
                     continue;
                 }
-                if (const auto *const material = catalog.findMaterial(region.m_material)) {
-                    ImGui::Text("Initial matter (unsimulated): %s", material->m_display_name.c_str());
-                    ImGui::Text("Initial temperature: %.1f K", region.m_temperature_k);
-                    ImGui::Text("Initial density: %.3f kg/m3", region.m_bulk_density_kg_m3);
-                    if (region.m_fill_height_m) {
-                        ImGui::Text("Baseline fill height: %.3f m", *region.m_fill_height_m);
-                    }
-                }
-                return; // The baseline format assigns at most one material per span cell.
+                const auto *const material = catalog.findMaterial(particle.m_material);
+                ImGui::Text(
+                    "Particle %llu: %s", static_cast<unsigned long long>(particle.m_id),
+                    material->m_display_name.c_str());
+                ImGui::Text("Temperature: %.1f K", particle.m_temperature_k);
+                ImGui::Text("Volume: %.6f m3; mass: %.6f kg", particle.m_volume_m3, particle.m_mass_kg);
+                return;
             }
-            ImGui::TextDisabled("No initial matter assigned here");
+            ImGui::TextDisabled("No particle here");
         }
 
         /// Colony section: the Slice 1/2 counters, then the colonist list —

@@ -491,6 +491,7 @@ namespace demo {
         // engine.app must not link sim, so the sim-carrying packet lives
         // here). Single-use per frame; cleared after the overlay phase.
         std::optional<colony::SimFramePacket> m_sim_packet{};
+        colony::ParticlePresentationCache m_particle_presentation{};
         // A present failure or world regeneration invalidates the pass cache, so
         // the next frame's packet must carry every resident chunk's cells.
         bool m_present_full_refresh{false};
@@ -848,6 +849,10 @@ namespace demo {
                 header.m_content_fingerprint = source.m_content_fingerprint;
                 header.m_terrain_visuals = source.m_terrain_visuals;
                 header.m_terrain_images = source.m_terrain_images;
+                header.m_reference_thickness_m = source.m_reference_thickness_m;
+                header.m_has_background = source.m_has_background;
+                header.m_background_layers = source.m_background_layers;
+                header.m_particle_batches = source.m_particle_batches;
                 header.m_tiles = source.m_tiles;
                 header.m_diagnostic_mode = source.m_diagnostic_mode;
                 header.m_diagnostic_revision = source.m_diagnostic_revision;
@@ -4230,7 +4235,8 @@ namespace demo {
                 PPR_RETURN_ERROR_ON_FAIL(Demo, drawPanel_({}));
                 return {};
             }
-            m_sim_packet = colony::makeSimFramePacket(getFrameIndex(), *m_driver, m_present_full_refresh);
+            m_sim_packet = colony::makeSimFramePacket(
+                getFrameIndex(), *m_driver, m_present_full_refresh, &m_particle_presentation);
 
             // Phase: present. Consume the owned packet on this same thread:
             // selectively ack exactly the captured present set (post-capture

@@ -9,7 +9,7 @@ import std;
 
 namespace pP::game::tests::detail::worlds {
     using namespace colony;
-    constexpr std::string_view materials_text = R"(schema_version = 1
+    constexpr std::string_view materials_text = R"(schema_version = 2
 [materials.rock]
 numeric_id = 501
 display_name = "Rock"
@@ -80,6 +80,7 @@ reference_density_kg_m3 = 1.2
     }
     const std::string base = R"([worlds.default]
 display_name = "Default"
+background_stack = "default"
 default_wall_material = "wall"
 boundary_fine = 3
 min_sites = 4
@@ -192,7 +193,7 @@ bulk_density_kg_m3 = 1000.0
 fill_height_m = 4.0
 )";
     std::string validDocument() {
-        return "schema_version = 1\n" + fill + feature + connection + vein + carve + caves + resources + biome + base;
+        return "schema_version = 2\n" + fill + feature + connection + vein + carve + caves + resources + biome + base;
     }
     void replace(std::string &text, const std::string_view before, const std::string_view after) {
         const auto position = text.find(before);
@@ -228,7 +229,7 @@ fill_height_m = 4.0
         PPR_TEST_ASSERT(profile.m_rules[5u].m_kind == EWorldRuleKind::matter_fill);
         PPR_TEST_ASSERT(std::get<WorldMatterRule>(profile.m_rules[5u].m_parameters).m_material_id == 901u);
         const auto reordered = decode(
-            "schema_version = 1\n" + base + biome + resources + caves + carve + vein + connection + feature + fill,
+            "schema_version = 2\n" + base + biome + resources + caves + carve + vein + connection + feature + fill,
             input, diagnostics);
         PPR_TEST_ASSERT(reordered.has_value());
         for (std::size_t i = 0u; i < profile.m_rules.size(); ++i) {
@@ -238,7 +239,7 @@ fill_height_m = 4.0
         replace(gas, "material = \"water\"", "material = \"air\"");
         replace(gas, "fill_height_m = 4.0", "");
         const auto gas_profile = decode(
-            "schema_version = 1\n" + base + biome + resources + feature + gas, input, diagnostics);
+            "schema_version = 2\n" + base + biome + resources + feature + gas, input, diagnostics);
         PPR_TEST_ASSERT(gas_profile.has_value());
         PPR_TEST_ASSERT(not std::get<WorldMatterRule>(gas_profile->front().m_rules.back().m_parameters)
                 .m_fill_height_m.has_value());
@@ -248,6 +249,7 @@ fill_height_m = 4.0
         const auto input = inputs();
         const std::pair<std::string_view, std::string_view> failures[] = {
             {"display_name = \"Default\"", ""},
+            {"background_stack = \"default\"", ""},
             {"max_sites = 32", "max_sites = 3"},
             {"site_attempts = 30", "site_attempts = 65"},
             {"site_spacing_m = 100.0", "site_spacing_m = nan"},
@@ -288,6 +290,7 @@ fill_height_m = 4.0
             {"kind = \"carve_worm\"", "kind = \"carve_worm\"\nmaterial = \"rock\""},
             {"extra_links = 2", "extra_links = 65"},
             {"feature = \"pocket\"", "feature = \"absent\""},
+            {"attempts = 30", "attempts = 4097"},
             {"max_count = 4", "max_count = 0"},
             {"min_count = 1", "min_count = 5"},
             {"reflect = true", ""},
@@ -391,7 +394,7 @@ fill_height_m = 4.0
         const std::pair<std::string_view, std::size_t> collections[] = {
             {"rules", kMaxWorldRules}, {"biomes", kMaxContentBiomes}, {"start_resources", kMaxStartResources}};
         for (const auto &[collection, cap]: collections) {
-            std::string source = "schema_version = 1\n";
+            std::string source = "schema_version = 2\n";
             for (std::size_t i = 0u; i <= cap; ++i) {
                 source += "[worlds.default." + std::string{collection} + ".item" + std::to_string(i) + "]\norder = 1\n";
             }
@@ -409,7 +412,7 @@ fill_height_m = 4.0
             replace(z, "weight = 1.0", std::string{"weight = "} + second);
             config::Diagnostics diagnostics{};
             PPR_TEST_ASSERT(
-                not decode("schema_version = 1\n" + base + resources + caves + a + z, input, diagnostics).has_value());
+                not decode("schema_version = 2\n" + base + resources + caves + a + z, input, diagnostics).has_value());
         }
         auto duplicate_connection = connection;
         replace(duplicate_connection, "rules.rooms", "rules.second");
@@ -435,7 +438,7 @@ fill_height_m = 4.0
         PPR_TEST_ASSERT(
             not excessive_worms.has_value() and
             excessive_worms.error() == config::make_error_code(config::EConfigErrc::out_of_range));
-        std::string excessive_profiles = "schema_version = 1\n";
+        std::string excessive_profiles = "schema_version = 2\n";
         for (std::size_t i = 0u; i <= kMaxContentWorlds; ++i) {
             excessive_profiles += "[worlds.item" + std::to_string(i) + "]\ndisplay_name = \"Item\"\n";
         }

@@ -158,12 +158,28 @@ namespace pP::colony {
                     Camera camera{ECameraProjection::orthographic};
                     camera.updateModel(TimeSpan{}, model, Viewport{PixelRect{0, 0, kCaptureEdge, kCaptureEdge}});
                     PPR_RETURN_ERROR_ON_FAIL(WorldCapture, m_pass.update(TimeSpan{}, camera.getSnapshot()));
+                    const auto snapshot = camera.getSnapshot();
+                    const auto viewport = rhi::Viewport::fromSize(float(kCaptureEdge), float(kCaptureEdge));
+                    const auto scissor = rhi::ScissorRect::fromSize(kCaptureEdge, kCaptureEdge);
+                    const auto prepare = [&](const PreRenderContext &context) {
+                        return m_pass.prepareBackground(context, snapshot, viewport, scissor);
+                    };
+                    const auto draw = [&](const DrawContext &context) -> std::error_code {
+                        PPR_RETURN_ERROR_ON_FAIL(WorldCapture, m_pass.renderBackground(context));
+                        PPR_RETURN_ERROR_ON_FAIL(WorldCapture, m_pass.render(context));
+                        return m_pass.renderParticles(context);
+                    };
                     PPR_RETURN_ERROR_ON_FAIL(
-                        WorldCapture,
-                        renderer.renderToTexture(*m_target, {DrawSubmission{m_pass}}, ColorAttachmentOps{}));
+                        WorldCapture, renderer.renderToTexture(
+                                          *m_target, {DrawSubmission{"worldgen.optical", draw}}, ColorAttachmentOps{},
+                                          PreRenderCallback{prepare}));
                     const auto submission_end = capture_clock.now();
+                    const auto submitted = renderer.lastSubmittedFenceValue();
+                    m_pass.notifyFrameSubmitted(submitted);
                     PPR_RETURN_ERROR_ON_FAIL(WorldCapture, renderer.waitOnHost());
                     const auto completion_end = capture_clock.now();
+                    PPR_RETURN_ERROR_ON_FAIL(WorldCapture, renderer.retireCompletedFrames());
+                    const auto gpu_timing = renderer.lastGpuFrameTiming();
                     PPR_RETURN_ERROR_ON_FAIL(
                         WorldCapture,
                         writeReadback(device, *m_target, m_directory / (std::string{view.m_name} + ".ppm")));
@@ -174,13 +190,28 @@ namespace pP::colony {
                         "cpu_submission_ms={:.6f} host_completion_wait_ms={:.6f}\n",
                         time::seconds(submission_end - submission_begin) * 1000.0,
                         time::seconds(completion_end - submission_end) * 1000.0);
+                    if (gpu_timing and gpu_timing->m_submission == submitted) {
+                        manifest << std::format(
+                            "submission={} gpu_frame_ms={:.6f}\n", submitted, gpu_timing->m_milliseconds);
+                    } else {
+                        manifest << std::format("submission={} gpu_frame_ms=unavailable\n", submitted);
+                    }
                 }
                 manifest << std::format(
                     "atlas_uploaded_bytes={} atlas_writes={} atlas_serializations={} atlas_deferred={} growth_waits={} resident_table_builds={} resident_table_uploads={} cached_tiles={}\n",
                     m_pass.atlasUploadedBytes(), m_pass.atlasWriteCount(), m_pass.atlasSerializationCount(),
                     m_pass.atlasDeferredCount(), m_pass.growthWaitCount(), m_pass.residentTableBuildCount(),
                     m_pass.residentTableUploadCount(), m_pass.cachedTileCount());
-                manifest << "Timing scope: blocking diagnostic host; completion wait is not GPU terrain time.\n";
+                const auto observations = m_pass.observations();
+                manifest << std::format(
+                    "texture_entries={} texture_slots={} texture_decoded_bytes={} particle_instances={} particle_buffer_bytes={} particle_uploads={} particle_uploaded_bytes={} background_targets={} background_target_bytes={} draw_commands={} dispatch_commands={} retained_atlases={}\n",
+                    observations.m_texture_entries, observations.m_texture_slots, observations.m_texture_decoded_bytes,
+                    observations.m_particle_instances, observations.m_particle_buffer_bytes,
+                    observations.m_particle_uploads, observations.m_particle_uploaded_bytes,
+                    observations.m_background_targets, observations.m_background_target_bytes,
+                    observations.m_draw_commands, observations.m_dispatch_commands, observations.m_retained_atlases);
+                manifest
+                    << "Timing scope: blocking diagnostic host. CPU submission and host completion wait are separate from completed GPU frame time. GPU timestamps bracket the submitted background preparation, backdrop, terrain and particle commands; they do not isolate terrain cost. Resource counters describe retained pass payload, not total VRAM or driver allocation size.\n";
                 manifest.close();
                 PPR_RETURN_ERROR_ON_FAIL(
                     WorldCapture, manifest ? std::error_code{} : std::make_error_code(std::errc::io_error));

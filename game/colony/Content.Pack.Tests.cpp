@@ -10,6 +10,7 @@ import game.colony.buildings;
 import game.colony.agents;
 import game.colony.pathfinding;
 import engine.sim;
+import engine.image;
 import std;
 
 namespace pP::game::tests::detail::pack {
@@ -50,6 +51,35 @@ namespace pP::game::tests::detail::pack {
             return loadContentCatalog(m_root, diagnostics);
         }
     };
+    void useSmallIdentityImages(const Fixture &fixture) {
+        // Identity mutations exercise source-byte hashing and usage separation.
+        // Full-size authored maps and mip chains have a dedicated catalog test.
+        constexpr std::array<u8, 70u> first{
+            0x89u, 0x50u, 0x4eu, 0x47u, 0x0du, 0x0au, 0x1au, 0x0au, 0x00u, 0x00u, 0x00u, 0x0du, 0x49u, 0x48u, 0x44u,
+            0x52u, 0x00u, 0x00u, 0x00u, 0x01u, 0x00u, 0x00u, 0x00u, 0x01u, 0x08u, 0x06u, 0x00u, 0x00u, 0x00u, 0x1fu,
+            0x15u, 0xc4u, 0x89u, 0x00u, 0x00u, 0x00u, 0x0du, 0x49u, 0x44u, 0x41u, 0x54u, 0x78u, 0x9cu, 0x63u, 0x68u,
+            0x68u, 0xf8u, 0xffu, 0x1fu, 0x00u, 0x06u, 0x82u, 0x02u, 0xffu, 0xb3u, 0xbeu, 0x51u, 0x33u, 0x00u, 0x00u,
+            0x00u, 0x00u, 0x49u, 0x45u, 0x4eu, 0x44u, 0xaeu, 0x42u, 0x60u, 0x82u};
+        constexpr std::array<u8, 70u> second{
+            0x89u, 0x50u, 0x4eu, 0x47u, 0x0du, 0x0au, 0x1au, 0x0au, 0x00u, 0x00u, 0x00u, 0x0du, 0x49u, 0x48u, 0x44u,
+            0x52u, 0x00u, 0x00u, 0x00u, 0x01u, 0x00u, 0x00u, 0x00u, 0x01u, 0x08u, 0x06u, 0x00u, 0x00u, 0x00u, 0x1fu,
+            0x15u, 0xc4u, 0x89u, 0x00u, 0x00u, 0x00u, 0x0du, 0x49u, 0x44u, 0x41u, 0x54u, 0x78u, 0x9cu, 0x63u, 0x38u,
+            0xd0u, 0xf0u, 0xeeu, 0x3fu, 0x00u, 0x07u, 0x60u, 0x03u, 0x2eu, 0x16u, 0xe3u, 0x8cu, 0xafu, 0x00u, 0x00u,
+            0x00u, 0x00u, 0x49u, 0x45u, 0x4eu, 0x44u, 0xaeu, 0x42u, 0x60u, 0x82u};
+        for (const auto &entry: std::filesystem::directory_iterator{fixture.m_root / "textures"}) {
+            if (entry.path().extension() != ".png") {
+                continue;
+            }
+            const auto name = entry.path().filename().string();
+            const bool alternate = name == "ice.png" or
+                                   name == "ice_normal.png" or
+                                   name == "background_hollows_distant.png";
+            const auto bytes = alternate ? std::span<const u8>{second} : std::span<const u8>{first};
+            fixture.write(
+                "textures/" + name, std::string_view{reinterpret_cast<const char *>(bytes.data()), bytes.size()});
+        }
+    }
+
     void replace(std::string &text, const std::string_view before, const std::string_view after) {
         const auto at = text.find(before);
         PPR_TEST_ASSERT(at != std::string::npos);
@@ -177,6 +207,9 @@ namespace pP::game::tests::detail::pack {
 
     PPR_UNIT_TEST (data_only_material_extension_reaches_raster_tools_and_colliders) {
         Fixture fixture{};
+        config::Diagnostics baseline_diagnostics{};
+        const auto baseline_catalog = fixture.load(baseline_diagnostics);
+        PPR_TEST_ASSERT(baseline_catalog.has_value());
         fixture.write("materials.toml", fixture.read("materials.toml") + R"(
 [materials.violet_ore]
 numeric_id = 60000
@@ -194,8 +227,8 @@ reference_density_kg_m3 = 3100.0
         fixture.write("biomes.toml", biomes + R"(
 [biomes.hearth.deposits.violet_lens]
 kind = "threshold"
-order = 20
-field = "ore_lenses"
+order = 65535
+field = "ore_grain"
 material = "violet_ore"
 host_material = "sandstone"
 depth_min_normalized = 0.0
@@ -214,7 +247,9 @@ threshold_max = 1.0
         const auto texture = std::ranges::find(
             catalog->textures(), *material->m_albedo_texture, &ContentTexture::m_path);
         PPR_TEST_ASSERT(texture != catalog->textures().end() and texture->m_image.m_storage.isOwned());
-        PPR_TEST_ASSERT(catalog->textures().size() == 13u and catalog->contentFingerprint() != 0x4395aee7b6d5ec6dull);
+        PPR_TEST_ASSERT(
+            catalog->textures().size() == 99u and
+            catalog->contentFingerprint() != baseline_catalog->contentFingerprint());
 
         const auto plan = compileWorldPlan(*catalog, "frontier", 42u);
         PPR_TEST_ASSERT(plan.has_value());
@@ -267,13 +302,15 @@ threshold_max = 1.0
         }
         PPR_TEST_ASSERT(catalog.has_value() and not diagnostics.hasErrors());
         PPR_TEST_ASSERT(catalog->packId() == "ppr_frontier");
-        PPR_TEST_ASSERT(catalog->materials().size() == 17u and catalog->textures().size() == 12u);
-        PPR_TEST_ASSERT(catalog->biomes().size() == 7u and catalog->features().size() == 7u);
-        PPR_TEST_ASSERT(catalog->worlds().size() == 2u and catalog->fields().size() == 7u);
+        PPR_TEST_ASSERT(catalog->materials().size() == 45u and catalog->textures().size() == 98u);
+        PPR_TEST_ASSERT(catalog->biomes().size() == 11u and catalog->features().size() == 26u);
+        PPR_TEST_ASSERT(
+            catalog->worlds().size() == 2u and catalog->fields().size() == 28u and catalog->backgrounds().size() == 2u);
         PPR_TEST_ASSERT(catalog->findWorld("frontier") != nullptr and catalog->findWorld("hollows") != nullptr);
         PPR_TEST_ASSERT(catalog->findWorld("unknown") == nullptr);
         PPR_TEST_ASSERT(catalog->contentFingerprint().has_value());
-        PPR_TEST_ASSERT(catalog->contentFingerprint() == 0x4395aee7b6d5ec6dull);
+        std::println("Shipped content fingerprint: {:016x}", *catalog->contentFingerprint());
+        PPR_TEST_ASSERT(catalog->contentFingerprint() == 0xc70c6df6a40ffaafull);
         PPR_TEST_ASSERT(catalog->findMaterial(u16{1001})->m_representation == EMaterialRepresentation::particle);
         for (const auto key: {"clay", "limestone", "salt", "sulfur", "crystal"}) {
             const auto *const material = catalog->findMaterial(key);
@@ -283,11 +320,15 @@ threshold_max = 1.0
             PPR_TEST_ASSERT(material->m_albedo_texture.has_value());
         }
         for (const auto &texture: catalog->textures()) {
-            PPR_TEST_ASSERT(texture.m_image.m_width == 64u and texture.m_image.m_height == 64u);
-            PPR_TEST_ASSERT(texture.m_image.m_mip_count == 7u);
-            PPR_TEST_ASSERT(texture.m_image.m_subresources.size() == 7u);
+            const bool background = texture.m_path.starts_with("textures/background_");
+            const u32 edge = background ? 512u : 128u;
+            const u32 levels = background ? 10u : 8u;
+            PPR_TEST_ASSERT(texture.m_image.m_width == edge and texture.m_image.m_height == edge);
+            PPR_TEST_ASSERT(texture.m_image.m_mip_count == levels);
+            PPR_TEST_ASSERT(texture.m_image.m_subresources.size() == levels);
             PPR_TEST_ASSERT(texture.m_image.m_subresources.back().m_slice_pitch == 4u);
             PPR_TEST_ASSERT(texture.m_image.m_storage.isOwned());
+            PPR_TEST_ASSERT(texture.m_image.m_is_srgb == not texture.m_normal_map);
         }
         const auto before = catalog->textures().front().m_image.m_storage.getBufferData().front();
         // SharedBuffer exposes read-only bytes. Extracting a mutable copy while
@@ -303,7 +344,7 @@ threshold_max = 1.0
         PPR_TEST_ASSERT(not failed);
         PPR_TEST_ASSERT(catalog->textures().front().m_image.m_storage.getBufferData().front() == before);
         PPR_TEST_ASSERT(diagnostics.entries().back().m_property == "materials.basalt.albedo_texture");
-        PPR_TEST_ASSERT(diagnostics.entries().back().m_location.ends_with("materials.toml:9"));
+        PPR_TEST_ASSERT(diagnostics.entries().back().m_location.ends_with("materials.toml:10"));
         PPR_TEST_ASSERT(diagnostics.entries().back().m_message.find("basalt.png") != std::string::npos);
     };
 
@@ -313,14 +354,14 @@ threshold_max = 1.0
         auto catalog = fixture.load(diagnostics);
         PPR_TEST_ASSERT(catalog.has_value());
         PPR_TEST_ASSERT(not compileWorldPlan(*catalog, "unknown", 42u));
-        std::array<bool, 7u> seen_features{};
+        std::array<bool, 26u> seen_features{};
         for (const auto profile: {"frontier", "hollows"}) {
             for (const u64 seed: {0ull, 1ull, 42ull, 0xffffffffffffffffull}) {
                 auto plan = compileWorldPlan(*catalog, profile, seed);
                 PPR_TEST_ASSERT(plan.has_value());
                 PPR_TEST_ASSERT(plan->seed() == seed);
-                PPR_TEST_ASSERT(plan->recipe().m_materials.size() == 17u);
-                PPR_TEST_ASSERT(plan->fields().size() == 7u);
+                PPR_TEST_ASSERT(plan->recipe().m_materials.size() == 45u);
+                PPR_TEST_ASSERT(plan->fields().size() == 28u);
                 PPR_TEST_ASSERT(plan->recipe().m_boundary_material == 257u);
                 PPR_TEST_ASSERT(plan->recipe().m_cell_size_m == 1.0 / 3.0);
                 auto layout = sim::compileBiomeLayout(*plan);
@@ -338,7 +379,7 @@ threshold_max = 1.0
                     seen_features[instance.m_feature] = true;
                 }
                 PPR_TEST_ASSERT(not geometry->m_segments.empty());
-                std::array<u32, 7u> counts{};
+                std::array<u32, 11u> counts{};
                 for (const auto &site: layout->sites()) {
                     ++counts[site.m_biome];
                 }
@@ -398,7 +439,8 @@ threshold_max = 1.0
         PPR_TEST_ASSERT(catalog.has_value());
         auto baseline = compileWorldPlan(*catalog, "frontier", 42u);
         PPR_TEST_ASSERT(baseline.has_value());
-        for (const auto name: {"materials.toml", "fields.toml", "biomes.toml", "features.toml", "worlds.toml"}) {
+        for (const auto name:
+            {"materials.toml", "fields.toml", "biomes.toml", "features.toml", "worlds.toml", "backgrounds.toml"}) {
             fixture.write(name, reorder(fixture.read(name)));
         }
         auto materials = fixture.read("materials.toml");
@@ -409,7 +451,7 @@ threshold_max = 1.0
         PPR_TEST_ASSERT(catalog.has_value());
         auto changed = compileWorldPlan(*catalog, "frontier", 42u);
         PPR_TEST_ASSERT(changed.has_value());
-        PPR_TEST_ASSERT(changed->recipe().m_materials.size() == 18u);
+        PPR_TEST_ASSERT(changed->recipe().m_materials.size() == 46u);
         PPR_TEST_ASSERT(baseline->recipe().m_rules.size() == changed->recipe().m_rules.size());
         for (std::size_t i = 0u; i < baseline->recipe().m_rules.size(); ++i) {
             PPR_TEST_ASSERT(baseline->recipe().m_rules[i].m_key == changed->recipe().m_rules[i].m_key);
@@ -429,7 +471,8 @@ threshold_max = 1.0
         const auto first = fixture.load(diagnostics);
         PPR_TEST_ASSERT(first.has_value());
         const auto identity = first->contentFingerprint();
-        for (const auto name: {"materials.toml", "fields.toml", "biomes.toml", "features.toml", "worlds.toml"}) {
+        for (const auto name:
+            {"materials.toml", "fields.toml", "biomes.toml", "features.toml", "worlds.toml", "backgrounds.toml"}) {
             fixture.write(name, reorder(fixture.read(name)));
         }
         auto manifest = fixture.read("pack.toml");
@@ -440,6 +483,16 @@ threshold_max = 1.0
         replace(material, "textures/basalt.png", "textures/renamed.png");
         fixture.write("renamed.toml", material);
         std::filesystem::rename(fixture.m_root / "textures/basalt.png", fixture.m_root / "textures/renamed.png");
+        replace(material, "textures/basalt_normal.png", "textures/renamed_normal.png");
+        fixture.write("renamed.toml", material);
+        std::filesystem::rename(
+            fixture.m_root / "textures/basalt_normal.png", fixture.m_root / "textures/renamed_normal.png");
+        auto backgrounds = fixture.read("backgrounds.toml");
+        replace(backgrounds, "textures/background_frontier_distant.png", "textures/renamed_background.png");
+        fixture.write("backgrounds.toml", backgrounds);
+        std::filesystem::rename(
+            fixture.m_root / "textures/background_frontier_distant.png",
+            fixture.m_root / "textures/renamed_background.png");
         const auto reordered = fixture.load(diagnostics);
         if (not reordered) {
             std::println("{}", diagnostics.format());
@@ -450,6 +503,7 @@ threshold_max = 1.0
 
     PPR_UNIT_TEST (identity_changes_for_every_definition_kind_and_texture_bytes) {
         Fixture fixture{};
+        useSmallIdentityImages(fixture);
         config::Diagnostics diagnostics{};
         const auto baseline = fixture.load(diagnostics);
         PPR_TEST_ASSERT(baseline.has_value());
@@ -459,11 +513,23 @@ threshold_max = 1.0
         const Change changes[] = {
             {"materials.toml", "2900.0", "2901.0"},
             {"fields.toml", "0.055", "0.056"},
+            {"fields.toml", "axis_scale_x = 1.0", "axis_scale_x = 1.1"},
+            {"materials.toml", "metallic = 0.0", "metallic = 0.1"},
+            {"materials.toml", "roughness = 0.87", "roughness = 0.88"},
+            {"materials.toml", "emissive_r = 0.0", "emissive_r = 0.1"},
+            {"materials.toml", "emissive_g = 0.0", "emissive_g = 0.1"},
+            {"materials.toml", "emissive_b = 0.0", "emissive_b = 0.1"},
+            {"materials.toml", "emissive_strength = 1.0", "emissive_strength = 1.1"},
+            {"materials.toml", "ior = 1.5", "ior = 1.6"},
+            {"materials.toml", "normal_scale = 1.0", "normal_scale = 0.9"},
+            {"materials.toml", "refraction_depth_m = 0.0", "refraction_depth_m = 0.1"},
+            {"materials.toml", "alpha_mode = \"opaque\"", "alpha_mode = \"blend\""},
+            {"backgrounds.toml", "parallax_factor = 0.08", "parallax_factor = 0.09"},
             {"biomes.toml", "293.0", "294.0"},
             {"features.toml", "Hearth landing", "Hearth landing revised"},
-            {"worlds.toml", "site_spacing_m = 100.0", "site_spacing_m = 101.0"},
-            {"worlds.toml", "turn_probability = 0.2", "turn_probability = 0.3"},
-            {"worlds.toml", "fill_height_m = 4.0", "fill_height_m = 5.0"},
+            {"worlds.toml", "site_spacing_m = 160.0", "site_spacing_m = 161.0"},
+            {"worlds.toml", "turn_probability = 0.12", "turn_probability = 0.13"},
+            {"worlds.toml", "fill_height_m = 4.333333333333333", "fill_height_m = 4.666666666666667"},
         };
         for (const auto &change: changes) {
             const auto original = fixture.read(change.file);
@@ -475,12 +541,50 @@ threshold_max = 1.0
             PPR_TEST_ASSERT(candidate->contentFingerprint() != baseline->contentFingerprint());
             fixture.write(change.file, original);
         }
-        fixture.write("textures/basalt.png", fixture.read("textures/ice.png"));
-        const auto texture_change = fixture.load(diagnostics);
-        PPR_TEST_ASSERT(texture_change.has_value());
-        PPR_TEST_ASSERT(texture_change->contentFingerprint() != baseline->contentFingerprint());
+        for (const auto &paths:
+            {std::pair{"textures/basalt.png", "textures/ice.png"},
+                std::pair{"textures/basalt_normal.png", "textures/ice_normal.png"},
+                std::pair{"textures/background_frontier_distant.png", "textures/background_hollows_distant.png"}}) {
+            const auto original = fixture.read(paths.first);
+            fixture.write(paths.first, fixture.read(paths.second));
+            const auto texture_change = fixture.load(diagnostics);
+            PPR_TEST_ASSERT(texture_change.has_value());
+            PPR_TEST_ASSERT(texture_change->contentFingerprint() != baseline->contentFingerprint());
+            fixture.write(paths.first, original);
+        }
     };
 
+    PPR_UNIT_TEST (texture_usage_is_distinct_and_background_diagnostics_preserve_source_keys) {
+        Fixture fixture;
+        config::Diagnostics diagnostics;
+        auto materials = fixture.read("materials.toml");
+        replace(
+            materials, "normal_texture = \"textures/basalt_normal.png\"", "normal_texture = \"textures/basalt.png\"");
+        fixture.write("materials.toml", materials);
+        const auto catalog = fixture.load(diagnostics);
+        PPR_TEST_ASSERT(catalog.has_value());
+        u32 usages = 0u;
+        for (const auto &texture: catalog->textures()) {
+            if (texture.m_path == "textures/basalt.png") {
+                ++usages;
+                PPR_TEST_ASSERT(texture.m_image.m_is_srgb == not texture.m_normal_map);
+            }
+        }
+        PPR_TEST_ASSERT(usages == 2u);
+        auto worlds = fixture.read("worlds.toml");
+        replace(worlds, "background_stack = \"frontier\"", "background_stack = \"absent\"");
+        fixture.write("worlds.toml", worlds);
+        config::Diagnostics missing;
+        PPR_TEST_ASSERT(not fixture.load(missing));
+        PPR_TEST_ASSERT(missing.entries().back().m_property == "worlds.frontier.background_stack");
+        replace(worlds, "background_stack = \"absent\"", "background_stack = \"frontier\"");
+        fixture.write("worlds.toml", worlds);
+        std::filesystem::remove(fixture.m_root / "textures/background_frontier_distant.png");
+        config::Diagnostics background;
+        PPR_TEST_ASSERT(not fixture.load(background));
+        PPR_TEST_ASSERT(background.entries().back().m_property == "backgrounds.frontier.layers.distant.texture");
+        PPR_TEST_ASSERT(background.entries().back().m_location.find("backgrounds.toml:") != std::string::npos);
+    };
     PPR_UNIT_TEST (required_texture_limits_missing_and_cancel_are_errors) {
         Fixture fixture{};
         config::Diagnostics diagnostics{};
@@ -512,6 +616,7 @@ namespace pP::game::tests {
                     detail::pack::numeric_streams_ignore_document_order_and_unused_materials,
                     detail::pack::complete_identity_ignores_order_comments_and_source_paths,
                     detail::pack::identity_changes_for_every_definition_kind_and_texture_bytes,
+                    detail::pack::texture_usage_is_distinct_and_background_diagnostics_preserve_source_keys,
                     detail::pack::required_texture_limits_missing_and_cancel_are_errors});
         };
         return tests;

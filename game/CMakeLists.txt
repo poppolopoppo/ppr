@@ -171,7 +171,8 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
 
     set_tests_properties(GameConfigUnitTests
         PROPERTIES
-            TIMEOUT 300
+            # Full shipped-content and checkpoint coverage measured 358 s for one complete loop.
+            TIMEOUT 600
             LABELS "unit;game"
             WORKING_DIRECTORY "$<TARGET_FILE_DIR:game.tests>"
             ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:game.tests>"

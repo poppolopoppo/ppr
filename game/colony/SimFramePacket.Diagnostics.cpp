@@ -29,15 +29,11 @@ namespace pP::colony {
                                                                           temperature_max_k > temperature_min_k)
                               ? std::error_code{}
                               : std::make_error_code(std::errc::invalid_argument));
-        PPR_RETURN_UNEXPECTED_ON_FAIL(
-            WorldPreview, mode != EGridDiagnosticMode::initial_matter or driver.initialMatterBaselineValid()
-                              ? std::error_code{}
-                              : std::make_error_code(std::errc::operation_not_permitted));
         auto stage = captureWorldPresentation(driver, &context);
         PPR_RETURN_UNEXPECTED_ON_FAIL(WorldPreview, stage);
         stage->m_diagnostic_mode = mode;
         stage->m_diagnostic_revision = revision;
-        stage->m_initial_matter_valid = driver.initialMatterBaselineValid();
+        stage->m_initial_matter_valid = true;
         if (mode == EGridDiagnosticMode::textured) {
             return stage;
         }
@@ -65,14 +61,11 @@ namespace pP::colony {
                 stage->m_diagnostic_palette.push_back({(red << 24u) | (green << 16u) | (blue << 8u) | 255u});
             }
         } else {
-            for (const auto &region: generated.m_matter.m_regions) {
-                const auto *const material = catalog.findMaterial(region.m_material);
-                PPR_RETURN_UNEXPECTED_ON_FAIL(
-                    WorldPreview, material ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
-                stage->m_diagnostic_palette.push_back(
-                    {material->m_color_rgba, region.m_fill_height_m
-                                                 ? static_cast<float>(*region.m_fill_height_m * driver.cellsPerMetre())
-                                                 : 4096.0f});
+            stage->m_diagnostic_palette.resize(65536u);
+            for (const auto &material: catalog.materials()) {
+                if (material.m_representation == EMaterialRepresentation::particle) {
+                    stage->m_diagnostic_palette[material.m_numeric_id].m_color_rgba = material.m_color_rgba;
+                }
             }
         }
 
@@ -109,17 +102,18 @@ namespace pP::colony {
             }
         }
         if (mode == EGridDiagnosticMode::initial_matter) {
-            u16 index = 0u;
-            for (const auto &region: generated.m_matter.m_regions) {
-                ++index;
-                for (const auto &span: region.m_spans) {
-                    PPR_RETURN_UNEXPECTED_ON_FAIL(WorldPreview, context.error());
-                    for (u32 x = span.m_begin_x; x < span.m_end_x; ++x) {
-                        const u32 chunk = (span.m_y / sim::kChunkEdge) * sim::kChunksPerEdge + x / sim::kChunkEdge;
-                        PPR_ASSERT(chunks[chunk] != nullptr);
-                        const u32 local = (span.m_y % sim::kChunkEdge) * sim::kChunkEdge + x % sim::kChunkEdge;
-                        chunks[chunk]->m_diagnostic_indices[local] = index;
-                    }
+            const auto particles = driver.captureParticles();
+            for (const auto &batch: particles.m_chunks) {
+                PPR_RETURN_UNEXPECTED_ON_FAIL(WorldPreview, context.error());
+                const u32 chunk = sim::chunkIndexOf(batch.m_position);
+                if (chunks[chunk] == nullptr) {
+                    continue;
+                }
+                for (const auto &particle: batch.records()) {
+                    const u32 x = static_cast<u32>(particle.m_x_m * driver.cellsPerMetre());
+                    const u32 y = static_cast<u32>(particle.m_y_m * driver.cellsPerMetre());
+                    const u32 local = (y % sim::kChunkEdge) * sim::kChunkEdge + x % sim::kChunkEdge;
+                    chunks[chunk]->m_diagnostic_indices[local] = particle.m_material;
                 }
             }
         }

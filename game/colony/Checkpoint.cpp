@@ -34,6 +34,7 @@ namespace pP::colony {
         checkpoint.m_sites.assign(generated.m_layout.sites().begin(), generated.m_layout.sites().end());
         checkpoint.m_geometry = generated.m_geometry;
         checkpoint.m_matter = generated.m_matter;
+        checkpoint.m_particles = driver.captureParticles();
         checkpoint.m_start = generated.m_start;
         checkpoint.m_report = generated.m_report;
         checkpoint.m_controlled = driver.controlledEntity();
@@ -77,13 +78,14 @@ namespace pP::colony {
         PPR_RETURN_UNEXPECTED_ON_FAIL(WorldCheckpointLog, prepared);
         auto driver = std::make_unique<ColonyDriver>();
         PPR_RETURN_UNEXPECTED_ON_FAIL(
-            WorldCheckpointLog, driver->initRestored(
-                                    {.m_seed = checkpoint.m_descriptor.m_seed,
-                                        .m_tick_hz = checkpoint.m_tick_hz,
-                                        .m_agent_count = 1u,
-                                        .m_world_generation = world_generation},
-                                    std::move(*prepared), checkpoint.m_snapshot, checkpoint.m_tick,
-                                    checkpoint.m_initial_matter_valid, checkpoint.m_controlled, &execution));
+            WorldCheckpointLog,
+            driver->initRestored(
+                {.m_seed = checkpoint.m_descriptor.m_seed,
+                    .m_tick_hz = checkpoint.m_tick_hz,
+                    .m_agent_count = 1u,
+                    .m_world_generation = world_generation},
+                std::move(*prepared), checkpoint.m_snapshot, checkpoint.m_particles, checkpoint.m_tick,
+                checkpoint.m_initial_matter_valid, checkpoint.m_controlled, &execution));
         return driver;
     }
 }

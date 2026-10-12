@@ -87,7 +87,9 @@ namespace pP::colony {
                     .m_key = compiler.key({"biomes", source.m_key}),
                     .m_temperature_field = compiler.index(catalog.fields(), source.m_temperature_field),
                     .m_temperature_base_k = source.m_temperature_base_k,
-                    .m_temperature_variation_k = source.m_temperature_variation_k};
+                    .m_temperature_variation_k = source.m_temperature_variation_k,
+                    .m_lining_material = source.m_lining_material_id,
+                    .m_lining_thickness_fine = source.m_lining_thickness_fine};
                 for (const auto &band: source.m_composition) {
                     sim::GenerationBand target{
                         .m_key = compiler.key({"biomes", source.m_key, "composition", band.m_key}),

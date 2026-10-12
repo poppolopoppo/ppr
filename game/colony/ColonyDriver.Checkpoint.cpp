@@ -30,9 +30,9 @@ namespace pP::colony {
         return snapshot;
     }
     std::error_code ColonyDriver::initRestored(
-        const ColonyDriverDesc &desc, PreparedWorld world, const sim::Snapshot &snapshot, const u64 tick,
-        const bool initial_matter_valid, const std::optional<sim::Entity> controlled,
-        const sim::GenerationExecution *const execution) {
+        const ColonyDriverDesc &desc, PreparedWorld world, const sim::Snapshot &snapshot,
+        const sim::MatterParticleSnapshot &particles, const u64 tick, const bool initial_matter_valid,
+        const std::optional<sim::Entity> controlled, const sim::GenerationExecution *const execution) {
         PPR_RETURN_ERROR_ON_FAIL(
             ColonyCheckpoint, not m_timestep and
                                       desc.m_tick_hz != 0u and
@@ -44,7 +44,9 @@ namespace pP::colony {
         PPR_RETURN_ERROR_ON_FAIL(
             ColonyCheckpoint,
             period > TimeSpan{} ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
-        PPR_RETURN_ERROR_ON_FAIL(ColonyCheckpoint, m_colony.install(std::move(world)));
+        PPR_RETURN_ERROR_ON_FAIL(
+            ColonyCheckpoint,
+            m_colony.install(std::move(world), &particles, execution ? execution->m_context : nullptr));
         bool initialized = false;
         PPR_DEFER {
             if (not initialized) {

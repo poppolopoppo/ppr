@@ -77,6 +77,11 @@ namespace pP::game::tests::detail::checkpoint {
                 .m_mass_kg = 0.1,
                 .m_spans = {{40u, 127u, 129u}}});
         checkpoint.m_matter.m_span_count = 1u;
+        checkpoint.m_particles.m_next_id = 12u;
+        checkpoint.m_particles.m_chunks.push_back(
+            {{1u, 0u},
+                std::make_shared<const Array<sim::MatterParticle>>(Array<sim::MatterParticle>{
+                    {11u, 130.5 / 3.0, 40.5 / 3.0, 0.1, 0.1, 293.0, 1.0, 1001u, sim::EGenerationMatter::liquid}})});
         return checkpoint;
     }
 
@@ -96,12 +101,18 @@ namespace pP::game::tests::detail::checkpoint {
         }));
         PPR_TEST_ASSERT(decoded->m_descriptor == checkpoint.m_descriptor);
         PPR_TEST_ASSERT(decoded->m_snapshot == checkpoint.m_snapshot);
+        PPR_TEST_ASSERT(decoded->m_particles.m_next_id == 12u and decoded->m_particles.m_chunks.size() == 1u);
+        PPR_TEST_ASSERT(
+            decoded->m_particles.m_chunks[0].records()[0] == checkpoint.m_particles.m_chunks[0].records()[0]);
         auto restored = restoreWorldCheckpoint(loadCatalog(), std::move(*decoded), 17u);
         PPR_TEST_ASSERT(restored.has_value());
         auto &driver = **restored;
         PPR_TEST_ASSERT(driver.tickCount() == 19u and driver.worldGeneration() == 17u);
         PPR_TEST_ASSERT(driver.controlledEntity() == checkpoint.m_controlled);
         PPR_TEST_ASSERT(not driver.initialMatterBaselineValid());
+        const auto particles = driver.captureParticles();
+        PPR_TEST_ASSERT(particles.m_next_id == 12u and particles.m_chunks.size() == 1u);
+        PPR_TEST_ASSERT(particles.m_chunks[0].records()[0].m_id == 11u);
         PPR_TEST_ASSERT(driver.grid().getCell({127u, 40u})->m_element == 16u);
         PPR_TEST_ASSERT(driver.grid().getCell({128u, 40u})->m_temperature == 345.0f);
         const auto actor = *driver.controlledEntity();
@@ -186,6 +197,47 @@ namespace pP::game::tests::detail::checkpoint {
         PPR_TEST_ASSERT(not (*restored)->shutdown());
     };
 
+    PPR_UNIT_TEST (authored_particles_survive_headless_digs_and_wait_for_complete_build_publication) {
+        const auto catalog = loadCatalog();
+        auto restored = restoreWorldCheckpoint(loadCatalog(), editedCheckpoint(catalog), 3u);
+        PPR_TEST_ASSERT(restored.has_value());
+        auto &driver = **restored;
+        driver.setPaused(true);
+        const auto frozen = driver.captureParticles();
+        PPR_TEST_ASSERT(not driver.requestDig({127u, 40u}, 2u, 1u));
+        PPR_TEST_ASSERT(not driver.update(TimeSpan{}));
+        PPR_TEST_ASSERT(not driver.editPending());
+        PPR_TEST_ASSERT(driver.grid().getCell({127u, 40u})->m_element == 0u);
+        PPR_TEST_ASSERT(driver.particleCount() == 1u);
+        PPR_TEST_ASSERT(driver.captureParticles().m_chunks[0].m_particles == frozen.m_chunks[0].m_particles);
+
+        driver.requireEditPublication();
+        const auto errand = driver.buildWall({{126u, 39u}, 9u, 3u, 16u});
+        PPR_TEST_ASSERT(errand.has_value());
+        PPR_TEST_ASSERT(not driver.stepOne());
+        for (u32 batch = 0u; batch < 32u and not driver.editReadyForPresentation(); ++batch) {
+            PPR_TEST_ASSERT(not driver.update(TimeSpan{}));
+        }
+        PPR_TEST_ASSERT(driver.editReadyForPresentation());
+        const auto body = *driver.registry().get<sim::BodyState>(*driver.controlledEntity());
+        Array<ColonyDriver::DirtyChunk> manifest(driver.editManifest().begin(), driver.editManifest().end());
+        PPR_TEST_ASSERT(manifest.size() == 2u);
+        PPR_TEST_ASSERT(not driver.settleEdit({}));
+        PPR_TEST_ASSERT(not driver.settleEdit(std::span<const ColonyDriver::DirtyChunk>{manifest.data(), 1u}));
+        auto stale = manifest;
+        --stale[0].m_revision;
+        PPR_TEST_ASSERT(not driver.settleEdit(stale));
+        PPR_TEST_ASSERT(driver.editPending() and driver.particleCount() == 1u);
+        PPR_TEST_ASSERT(driver.grid().getCell({130u, 40u})->m_element == 0u);
+        PPR_TEST_ASSERT(driver.registry().get<sim::BodyState>(*driver.controlledEntity())->m_y == body.m_y);
+        PPR_TEST_ASSERT(driver.registry().get<BuildErrand>(*errand)->m_progress == 0u);
+        PPR_TEST_ASSERT(not driver.settleEdit(manifest));
+        PPR_TEST_ASSERT(not driver.editPending() and driver.particleCount() == 0u);
+        PPR_TEST_ASSERT(driver.grid().getCell({130u, 40u})->m_element == driver.boundaryMaterial());
+        PPR_TEST_ASSERT(frozen.m_chunks[0].records()[0].m_id == 11u);
+        PPR_TEST_ASSERT(not driver.shutdown());
+    };
+
     PPR_UNIT_TEST (malformed_identity_metric_counts_and_payload_are_rejected_before_restore) {
         const auto catalog = loadCatalog();
         const auto original = editedCheckpoint(catalog);
@@ -215,6 +267,41 @@ namespace pP::game::tests::detail::checkpoint {
         bad.m_matter.m_regions[0].m_spans = {{41u, 127u, 129u}, {40u, 127u, 129u}};
         bad.m_matter.m_span_count = 2u;
         PPR_TEST_ASSERT(validateWorldCheckpoint(bad, catalog) == std::errc::invalid_argument);
+        bad = original;
+        bad.m_particles.m_next_id = 11u;
+        PPR_TEST_ASSERT(validateWorldCheckpoint(bad, catalog) == std::errc::invalid_argument);
+        bad = original;
+        auto duplicate = *bad.m_particles.m_chunks[0].m_particles;
+        duplicate.push_back(duplicate[0]);
+        bad.m_particles.m_chunks[0].m_particles = std::make_shared<const Array<sim::MatterParticle>>(
+            std::move(duplicate));
+        PPR_TEST_ASSERT(validateWorldCheckpoint(bad, catalog) == std::errc::invalid_argument);
+        for (u32 invalid = 0u; invalid < 6u; ++invalid) {
+            bad = original;
+            auto particles = *bad.m_particles.m_chunks[0].m_particles;
+            if (invalid == 0u) {
+                particles[0].m_x_m = std::numeric_limits<double>::quiet_NaN();
+            }
+            if (invalid == 1u) {
+                particles[0].m_x_m = -1.0;
+            }
+            if (invalid == 2u) {
+                particles[0].m_phase = sim::EGenerationMatter::gas;
+            }
+            if (invalid == 3u) {
+                particles[0].m_bulk_density_kg_m3 = -1.0;
+            }
+            if (invalid == 4u) {
+                particles[0].m_mass_kg = 10.0;
+            }
+            if (invalid == 5u) {
+                particles[0].m_volume_m3 = 1.0;
+                particles[0].m_mass_kg = 1.0;
+            }
+            bad.m_particles.m_chunks[0].m_particles = std::make_shared<const Array<sim::MatterParticle>>(
+                std::move(particles));
+            PPR_TEST_ASSERT(validateWorldCheckpoint(bad, catalog) == std::errc::invalid_argument);
+        }
         const auto encoded = encodeWorldCheckpoint(original, catalog);
         PPR_TEST_ASSERT(encoded.has_value());
         auto corrupt = *encoded;
@@ -222,6 +309,24 @@ namespace pP::game::tests::detail::checkpoint {
         PPR_TEST_ASSERT(not decodeWorldCheckpoint(corrupt, catalog));
         corrupt = *encoded;
         corrupt[12u] = 0u; // Explicit full-checkpoint discriminator.
+        PPR_TEST_ASSERT(not decodeWorldCheckpoint(corrupt, catalog));
+        // Locate this fixture's unique particle ID and continuous position in
+        // the explicit wire record, then corrupt its preceding count field.
+        std::array<u8, 16u> particle_prefix{};
+        particle_prefix[0u] = 11u;
+        const u64 x_bits = std::bit_cast<u64>(original.m_particles.m_chunks[0].records()[0].m_x_m);
+        for (u32 byte = 0u; byte < 8u; ++byte) {
+            particle_prefix[8u + byte] = static_cast<u8>(x_bits >> (byte * 8u));
+        }
+        const auto record = std::ranges::search(*encoded, particle_prefix);
+        PPR_TEST_ASSERT(not record.empty());
+        const auto record_offset = static_cast<std::size_t>(record.begin() - encoded->begin());
+        PPR_TEST_ASSERT(record_offset >= 4u);
+        corrupt = *encoded;
+        const u32 oversized = sim::kMaxMatterParticles + 1u;
+        for (u32 byte = 0u; byte < 4u; ++byte) {
+            corrupt[record_offset - 4u + byte] = static_cast<u8>(oversized >> (byte * 8u));
+        }
         PPR_TEST_ASSERT(not decodeWorldCheckpoint(corrupt, catalog));
         corrupt = *encoded;
         corrupt.push_back(0u);
@@ -243,6 +348,7 @@ namespace pP::game::tests {
         _.recurse(
             {diagnostic_export_rejects_cancellation_and_unwritable_directory,
                 round_trip_restores_edited_cells_actor_identity_and_frozen_full_capture,
+                authored_particles_survive_headless_digs_and_wait_for_complete_build_publication,
                 malformed_identity_metric_counts_and_payload_are_rejected_before_restore});
     };
     const UnitTest &gameCheckpointTests() noexcept {

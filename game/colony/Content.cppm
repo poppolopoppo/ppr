@@ -17,6 +17,10 @@ export namespace pP::colony {
         terrain,
         particle
     };
+    enum class EMaterialAlphaMode : u8 {
+        opaque,
+        blend
+    };
 
     struct MaterialDefinition {
         std::string m_key{};
@@ -33,6 +37,14 @@ export namespace pP::colony {
         // Diagnostic provenance is owned but excluded from canonical content identity.
         std::string m_albedo_source_location{};
         double m_roundness{1.0};
+        double m_metallic{}, m_roughness{1.0};
+        std::array<double, 3u> m_emissive_rgb{};
+        double m_emissive_strength{1.0};
+        EMaterialAlphaMode m_alpha_mode{EMaterialAlphaMode::opaque};
+        double m_ior{1.5};
+        std::optional<std::string> m_normal_texture{};
+        double m_normal_scale{1.0}, m_refraction_depth_m{};
+        std::string m_normal_source_location{};
     };
 
     inline constexpr std::size_t kMaxMaterialDocumentBytes = 1024u * 1024u;
@@ -57,6 +69,7 @@ export namespace pP::colony {
         fields,
         features,
         worlds,
+        backgrounds,
         count
     };
     inline constexpr std::size_t kContentDocumentCount = static_cast<std::size_t>(EContentDocument::count);
@@ -130,6 +143,8 @@ export namespace pP::colony {
         std::string m_temperature_field{};
         Array<BiomeCompositionBand> m_composition{};
         Array<BiomeThresholdDeposit> m_deposits{};
+        u16 m_lining_material_id{};
+        u32 m_lining_thickness_fine{};
     };
 
     // Pure, owned biome recipes with terrain references resolved to validated
@@ -274,17 +289,32 @@ export namespace pP::colony {
         Array<WorldStartResource> m_start_resources{};
         Array<WorldBiomeChoice> m_biomes{};
         Array<WorldRuleDefinition> m_rules{};
+        std::string m_background_stack{};
     };
-    inline constexpr u32 kContentSchemaVersion = 1u;
+    struct BackgroundLayerDefinition {
+        std::string m_key{}, m_texture{}, m_source_location{};
+        u32 m_order{}, m_color_rgba{};
+        double m_repeat_period_m{}, m_parallax_factor{};
+    };
+    struct BackgroundStackDefinition {
+        std::string m_key{};
+        Array<BackgroundLayerDefinition> m_layers{};
+    };
+    [[nodiscard]] Expected<Array<BackgroundStackDefinition>> decodeBackgroundDefinitions(
+        std::string_view bytes, std::string_view origin, config::Diagnostics &diagnostics);
+    inline constexpr u32 kContentSchemaVersion = 2u;
     inline constexpr u64 kMaxTextureInputBytes = 16u * 1024u * 1024u;
     inline constexpr u64 kMaxPackTextureInputBytes = 64u * 1024u * 1024u;
     inline constexpr u64 kMaxPackTextureDecodedBytes = 128u * 1024u * 1024u;
     inline constexpr u32 kMaxContentTextureDimension = 2048u;
+    inline constexpr u32 kMaxContentTextures = 256u;
     struct ContentTexture {
         std::string m_path{};
         u64 m_source_size{};
         u64 m_source_fingerprint{};
         image::ImageAsset m_image{};
+        // Usage is part of asset identity, even when source bytes/path match.
+        bool m_normal_map{};
     };
     // Immutable owned material catalog. Decoding produces a candidate; callers
     // retain their previous catalog on failure. No parser views survive decoding.
@@ -296,6 +326,7 @@ export namespace pP::colony {
         Array<FeatureDefinition> m_features{};
         Array<WorldProfileDefinition> m_worlds{};
         Array<ContentTexture> m_textures{};
+        Array<BackgroundStackDefinition> m_backgrounds{};
         std::optional<u64> m_content_fingerprint{};
         friend Expected<ContentCatalog> loadContentCatalog(
             const std::filesystem::path &, config::Diagnostics &, const IContext *);
@@ -322,6 +353,7 @@ export namespace pP::colony {
         [[nodiscard]] std::span<const FeatureDefinition> features() const noexcept;
         [[nodiscard]] std::span<const WorldProfileDefinition> worlds() const noexcept;
         [[nodiscard]] std::span<const ContentTexture> textures() const noexcept;
+        [[nodiscard]] std::span<const BackgroundStackDefinition> backgrounds() const noexcept;
         [[nodiscard]] const WorldProfileDefinition *findWorld(std::string_view key) const noexcept;
         // Absent for the material-only decoder; present only after complete pack validation.
         [[nodiscard]] std::optional<u64> contentFingerprint() const noexcept;

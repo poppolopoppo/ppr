@@ -59,7 +59,7 @@ namespace pP::colony {
         ContentCatalog catalog, WorldDescriptor descriptor, sim::GeneratedWorld world) {
         PPR_RETURN_UNEXPECTED_ON_FAIL(WorldPreparation, validateWorldMetric(descriptor.m_metric));
         PPR_RETURN_UNEXPECTED_ON_FAIL(
-            WorldPreparation, descriptor.m_pack_schema_version == 1u and
+            WorldPreparation, descriptor.m_pack_schema_version == kContentSchemaVersion and
                                       descriptor.m_generator_version == sim::kGeneratorAlgorithmVersion and
                                       catalog.contentFingerprint() and
                                       *catalog.contentFingerprint() == descriptor.m_content_fingerprint and

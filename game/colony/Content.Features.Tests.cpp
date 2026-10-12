@@ -9,7 +9,7 @@ import std;
 
 namespace pP::game::tests::detail::features {
     using namespace colony;
-    constexpr std::string_view materials_text = R"(schema_version = 1
+    constexpr std::string_view materials_text = R"(schema_version = 2
 [materials.rock]
 numeric_id = 501
 display_name = "Rock"
@@ -71,7 +71,7 @@ x_fine = 0
 y_fine = 0
 )";
     std::string validDocument() {
-        return "schema_version = 1\n" + base + tunnel + room + wall + marker;
+        return "schema_version = 2\n" + base + tunnel + room + wall + marker;
     }
     void replace(std::string &text, const std::string_view before, const std::string_view after) {
         const auto position = text.find(before);
@@ -99,13 +99,13 @@ y_fine = 0
         PPR_TEST_ASSERT(feature.m_markers[0u].m_role == EFeatureMarkerRole::start);
 
         const auto reordered = decodeFeatureDefinitions(
-            "schema_version = 1\n" + marker + wall + room + tunnel + base, "reordered.toml", *materials, diagnostics);
+            "schema_version = 2\n" + marker + wall + room + tunnel + base, "reordered.toml", *materials, diagnostics);
         PPR_TEST_ASSERT(reordered.has_value());
         for (std::size_t i = 0u; i < feature.m_operations.size(); ++i) {
             PPR_TEST_ASSERT(reordered->front().m_operations[i].m_key == feature.m_operations[i].m_key);
         }
         const auto no_markers = decodeFeatureDefinitions(
-            "schema_version = 1\n" + base + wall, "features.toml", *materials, diagnostics);
+            "schema_version = 2\n" + base + wall, "features.toml", *materials, diagnostics);
         PPR_TEST_ASSERT(no_markers.has_value() and no_markers->front().m_markers.empty());
     };
 
@@ -165,7 +165,7 @@ y_fine = 0
             } else {
                 replace(bad_marker, "y_fine = 0", "y_fine = 18");
             }
-            const std::string source = "schema_version = 1\n" + bad_base + wall + bad_marker;
+            const std::string source = "schema_version = 2\n" + bad_base + wall + bad_marker;
             const std::string property = reservation ? "features.room.reservation_max_y_fine"
                                                      : "features.room.markers.spawn.y_fine";
             config::Diagnostics codec_diagnostics{};
@@ -190,12 +190,12 @@ y_fine = 0
             replace(bad_marker, coordinate[0] == 'x' ? "x_fine = 0" : "y_fine = 0", coordinate);
             config::Diagnostics diagnostics{};
             PPR_TEST_ASSERT(not decodeFeatureDefinitions(
-                "schema_version = 1\n" + base + wall + bad_marker, "features.toml", *materials, diagnostics)
+                "schema_version = 2\n" + base + wall + bad_marker, "features.toml", *materials, diagnostics)
                     .has_value());
         }
         for (const auto &[collection, cap]:
             {std::pair{"operations", kMaxFeatureOperations}, std::pair{"markers", kMaxFeatureMarkers}}) {
-            std::string source = "schema_version = 1\n" + base;
+            std::string source = "schema_version = 2\n" + base;
             for (std::size_t i = 0u; i <= cap; ++i) {
                 source += "[features.room." + std::string{collection} + ".item" + std::to_string(i) + "]\nx_fine = 0\n";
             }
@@ -206,9 +206,9 @@ y_fine = 0
                 failed.error() == config::make_error_code(config::EConfigErrc::out_of_range));
         }
         config::Diagnostics empty{};
-        PPR_TEST_ASSERT(not decodeFeatureDefinitions("schema_version = 1\n" + base, "features.toml", *materials, empty)
+        PPR_TEST_ASSERT(not decodeFeatureDefinitions("schema_version = 2\n" + base, "features.toml", *materials, empty)
                 .has_value());
-        std::string excessive = "schema_version = 1\n";
+        std::string excessive = "schema_version = 2\n";
         for (std::size_t i = 0u; i <= kMaxContentFeatures; ++i) {
             excessive += "[features.item" + std::to_string(i) + "]\ndisplay_name = \"Item\"\n";
         }

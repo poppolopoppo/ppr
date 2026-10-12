@@ -68,6 +68,18 @@ namespace pP::colony {
                 integer(static_cast<u8>(m.m_representation), 1u);
                 integer(m.m_color_rgba, 4u);
                 value(m.m_reference_density_kg_m3);
+                values(
+                    m.m_metallic, m.m_roughness, m.m_emissive_rgb[0u], m.m_emissive_rgb[1u], m.m_emissive_rgb[2u],
+                    m.m_emissive_strength, m.m_alpha_mode, m.m_ior, m.m_normal_scale, m.m_refraction_depth_m);
+                if (include_path) {
+                    value(m.m_normal_texture);
+                    if (m.m_representation == EMaterialRepresentation::particle) {
+                        value(m.m_albedo_texture);
+                    }
+                }
+                if (m.m_representation == EMaterialRepresentation::particle) {
+                    value(m.m_texture_period_m);
+                }
                 if (m.m_representation == EMaterialRepresentation::terrain) {
                     if (include_path) {
                         text(*m.m_albedo_texture);
@@ -104,28 +116,36 @@ namespace pP::colony {
         };
         std::error_code textureFailure(
             config::Diagnostics &diagnostics, const std::filesystem::path &path, const MaterialDefinition &material,
-            const std::string_view message, const std::error_code error) {
+            const std::string_view message, const std::error_code error, const bool normal_map = false) {
             diagnostics.add(
-                material.m_albedo_source_location.empty() ? path.string() : material.m_albedo_source_location,
-                "materials." + material.m_key + ".albedo_texture", std::string{message} + ": " + path.string(), error);
+                normal_map ? material.m_normal_source_location : material.m_albedo_source_location,
+                material.m_key.starts_with("backgrounds.")
+                    ? material.m_key + ".texture"
+                    : "materials." + material.m_key + (normal_map ? ".normal_texture" : ".albedo_texture"),
+                std::string{message} + ": " + path.string(), error);
             return error;
         }
         Expected<ContentTexture> loadTexture(
             const std::filesystem::path &root, const MaterialDefinition &material, const u64 remaining_input,
-            const u64 remaining_decoded, config::Diagnostics &diagnostics) {
-            const auto &relative = *material.m_albedo_texture;
+            const u64 remaining_decoded, config::Diagnostics &diagnostics, const bool normal_map = false) {
+            const auto &relative = normal_map ? *material.m_normal_texture : *material.m_albedo_texture;
+            const auto failTexture = [&](config::Diagnostics &target, const std::filesystem::path &failed_path,
+                                         const MaterialDefinition &source, const std::string_view message,
+                                         const std::error_code failure) {
+                return textureFailure(target, failed_path, source, message, failure, normal_map);
+            };
             std::error_code error{};
             const auto path = std::filesystem::canonical(root / relative, error);
             if (error) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(
                     ColonyContent,
-                    textureFailure(
+                    failTexture(
                         diagnostics, root / relative, material, "Cannot resolve required terrain texture", error));
             }
             const auto within = path.lexically_relative(root);
             if (within.empty() or within.is_absolute() or *within.begin() == "..") {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(
-                    ColonyContent, textureFailure(
+                    ColonyContent, failTexture(
                                        diagnostics, path, material, "Texture escapes the pack root",
                                        std::make_error_code(std::errc::invalid_argument)));
             }
@@ -133,11 +153,11 @@ namespace pP::colony {
             if (error) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(
                     ColonyContent,
-                    textureFailure(diagnostics, path, material, "Cannot inspect required terrain texture", error));
+                    failTexture(diagnostics, path, material, "Cannot inspect required terrain texture", error));
             }
             if (not regular) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(
-                    ColonyContent, textureFailure(
+                    ColonyContent, failTexture(
                                        diagnostics, path, material, "Texture must be a regular file",
                                        std::make_error_code(std::errc::invalid_argument)));
             }
@@ -145,12 +165,12 @@ namespace pP::colony {
             if (error) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(
                     ColonyContent,
-                    textureFailure(diagnostics, path, material, "Cannot size required terrain texture", error));
+                    failTexture(diagnostics, path, material, "Cannot size required terrain texture", error));
             }
             if (size == 0u or size > kMaxTextureInputBytes or size > remaining_input or remaining_decoded == 0u) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(
                     ColonyContent,
-                    textureFailure(
+                    failTexture(
                         diagnostics, path, material, "Texture exceeds per-image or aggregate pack byte limits",
                         std::make_error_code(std::errc::file_too_large)));
             }
@@ -161,11 +181,11 @@ namespace pP::colony {
             if (not mapped) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(
                     ColonyContent,
-                    textureFailure(diagnostics, path, material, "Cannot map required terrain texture", mapped.error()));
+                    failTexture(diagnostics, path, material, "Cannot map required terrain texture", mapped.error()));
             }
             if (mapped->size() != size) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(
-                    ColonyContent, textureFailure(
+                    ColonyContent, failTexture(
                                        diagnostics, path, material, "Required terrain texture changed while loading",
                                        std::make_error_code(std::errc::resource_unavailable_try_again)));
             }
@@ -177,20 +197,24 @@ namespace pP::colony {
                     .m_max_decoded_bytes = (std::min) (remaining_decoded,
                         u64{kMaxContentTextureDimension} * kMaxContentTextureDimension * 4u),
                     .m_max_input_bytes = kMaxTextureInputBytes}};
-            auto decoded = image::decodeToRgba8(bytes, path.extension().string(), desc, image::EImageUsage::color);
+            auto decoded = image::decodeToRgba8(
+                bytes, path.extension().string(), desc,
+                normal_map ? image::EImageUsage::data : image::EImageUsage::color);
             if (not decoded and decoded.error() == std::errc::not_enough_memory) {
                 throw std::bad_alloc{};
             }
             if (not decoded) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(
-                    ColonyContent, textureFailure(
+                    ColonyContent, failTexture(
                                        diagnostics, path, material,
                                        "Cannot decode required terrain texture within pack limits", decoded.error()));
             }
             // Build immutable, sRGB-aware levels on the content coordinator,
             // before render-lane upload. Count the whole chain against the pack budget.
             const image::MipGenDesc mip_desc{
-                .m_limits = {.m_max_decoded_bytes = remaining_decoded}, .m_full_chain = true};
+                .m_limits = {.m_max_decoded_bytes = remaining_decoded},
+                .m_full_chain = true,
+                .m_normal_map = normal_map};
             const auto mip_error = image::generateMipChain(*decoded, mip_desc);
             if (mip_error == std::errc::not_enough_memory) {
                 throw std::bad_alloc{};
@@ -198,7 +222,7 @@ namespace pP::colony {
             if (mip_error) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(
                     ColonyContent,
-                    textureFailure(diagnostics, path, material, "Cannot generate terrain mip chain", mip_error));
+                    failTexture(diagnostics, path, material, "Cannot generate terrain mip chain", mip_error));
             }
 
             Fingerprint source{};
@@ -207,38 +231,45 @@ namespace pP::colony {
             for (const auto byte: bytes) {
                 source.integer(std::to_integer<u8>(byte), 1u);
             }
-            return ContentTexture{relative, size, source.m_value, std::move(*decoded)};
+            return ContentTexture{relative, size, source.m_value, std::move(*decoded), normal_map};
         }
     }
 
     u64 ContentCatalog::materialFingerprint() const noexcept {
         Fingerprint hash{};
-        hash.text("ppr.materials.v1");
+        hash.text("ppr.materials.v2");
         hash.sequence(m_materials, [&](const auto &v) { hash.material(v, true); });
         return hash.m_value;
     }
     u64 ContentCatalog::computeContentFingerprint() const noexcept {
         Fingerprint hash{};
-        hash.text("ppr.content.v1");
+        hash.text("ppr.content.v2");
         hash.value(kContentSchemaVersion);
         hash.text(m_pack_id);
         hash.sequence(m_materials, [&](const auto &v) {
             hash.material(v, false);
-            if (v.m_albedo_texture) {
-                const auto texture = std::ranges::find(m_textures, *v.m_albedo_texture, &ContentTexture::m_path);
-                hash.values(texture->m_source_size, texture->m_source_fingerprint);
+            for (const bool normal_map: {false, true}) {
+                const auto &path = normal_map ? v.m_normal_texture : v.m_albedo_texture;
+                hash.value(path.has_value());
+                if (path) {
+                    const auto texture = std::ranges::find_if(m_textures, [&](const ContentTexture &item) {
+                        return item.m_path == *path and item.m_normal_map == normal_map;
+                    });
+                    hash.values(normal_map, texture->m_source_size, texture->m_source_fingerprint);
+                }
             }
         });
         hash.sequence(m_fields, [&](const auto &field) {
             const auto &v = field.m_noise;
             hash.values(
                 field.m_key, v.m_algorithm, v.m_fractal, v.m_frequency_per_metre, v.m_octaves, v.m_lacunarity, v.m_gain,
-                v.m_warp_amplitude_m, v.m_warp_frequency_per_metre);
+                v.m_warp_amplitude_m, v.m_warp_frequency_per_metre, v.m_axis_scale_x, v.m_axis_scale_y,
+                v.m_rotation_degrees);
         });
         hash.sequence(m_biomes, [&](const auto &v) {
             hash.values(
                 v.m_key, v.m_display_name, v.m_preview_color_rgba, v.m_temperature_base_k, v.m_temperature_variation_k,
-                v.m_temperature_field);
+                v.m_temperature_field, v.m_lining_material_id, v.m_lining_thickness_fine);
             hash.sequence(v.m_composition, [&](const auto &b) {
                 hash.values(b.m_key, b.m_order, b.m_depth_min_normalized, b.m_depth_max_normalized, b.m_field);
                 hash.sequence(b.m_materials, [&](const auto &m) { hash.values(m.m_key, m.m_material_id, m.m_weight); });
@@ -267,6 +298,7 @@ namespace pP::colony {
                 v.m_max_sites, v.m_site_attempts, v.m_site_spacing_m, v.m_boundary_warp_amplitude_m,
                 v.m_boundary_warp_x_field, v.m_boundary_warp_y_field, v.m_start_biome, v.m_start_feature,
                 v.m_start_marker, v.m_start_x_fine, v.m_start_y_fine, v.m_start_clearance_m, v.m_start_route_width_m);
+            hash.value(v.m_background_stack);
             hash.sequence(v.m_start_resources, [&](const auto &b) {
                 hash.values(b.m_key, b.m_marker, b.m_material_id, b.m_minimum_fine_cells, b.m_max_distance_m);
             });
@@ -278,6 +310,17 @@ namespace pP::colony {
             hash.sequence(v.m_rules, [&](const auto &b) {
                 hash.values(b.m_key, b.m_order, b.m_kind, b.m_phase);
                 std::visit([&](const auto &parameters) { hash.rule(parameters); }, b.m_parameters);
+            });
+        });
+        hash.sequence(m_backgrounds, [&](const auto &stack) {
+            hash.value(stack.m_key);
+            hash.sequence(stack.m_layers, [&](const auto &layer) {
+                hash.values(
+                    layer.m_key, layer.m_order, layer.m_color_rgba, layer.m_repeat_period_m, layer.m_parallax_factor);
+                const auto texture = std::ranges::find_if(m_textures, [&](const ContentTexture &item) {
+                    return item.m_path == layer.m_texture and not item.m_normal_map;
+                });
+                hash.values(texture->m_source_size, texture->m_source_fingerprint);
             });
         });
         return hash.m_value;
@@ -299,6 +342,9 @@ namespace pP::colony {
     }
     std::span<const ContentTexture> ContentCatalog::textures() const noexcept {
         return {m_textures.data(), m_textures.size()};
+    }
+    std::span<const BackgroundStackDefinition> ContentCatalog::backgrounds() const noexcept {
+        return {m_backgrounds.data(), m_backgrounds.size()};
     }
     std::optional<u64> ContentCatalog::contentFingerprint() const noexcept {
         return m_content_fingerprint;
@@ -348,22 +394,71 @@ namespace pP::colony {
             diagnostics);
         PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, decoded_worlds);
         catalog->m_worlds = std::move(*decoded_worlds);
+        const auto &backgrounds = documents[static_cast<std::size_t>(EContentDocument::backgrounds)];
+        auto decoded_backgrounds = decodeBackgroundDefinitions(
+            backgrounds.m_bytes, backgrounds.m_path.string(), diagnostics);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, decoded_backgrounds);
+        catalog->m_backgrounds = std::move(*decoded_backgrounds);
+        for (const auto &world: catalog->worlds()) {
+            if (std::ranges::none_of(catalog->m_backgrounds, [&](const auto &stack) {
+                    return stack.m_key == world.m_background_stack;
+                })) {
+                diagnostics.add(
+                    worlds.m_path.string(), "worlds." + world.m_key + ".background_stack", "Unknown background stack",
+                    std::make_error_code(std::errc::invalid_argument));
+                PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, std::errc::invalid_argument);
+            }
+        }
 
         u64 input_bytes = 0u, decoded_bytes = 0u;
         for (const auto &material: catalog->materials()) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, cancelled());
-            if (not material.m_albedo_texture or
-                std::ranges::find(catalog->m_textures, *material.m_albedo_texture, &ContentTexture::m_path) !=
-                    catalog->m_textures.end()) {
-                continue;
+            for (const bool normal_map: {false, true}) {
+                PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, cancelled());
+                const auto &path = normal_map ? material.m_normal_texture : material.m_albedo_texture;
+                if (not path or std::ranges::any_of(catalog->m_textures, [&](const ContentTexture &item) {
+                        return item.m_path == *path and item.m_normal_map == normal_map;
+                    })) {
+                    continue;
+                }
+                if (catalog->m_textures.size() >= kMaxContentTextures) {
+                    PPR_RETURN_UNEXPECTED_ON_FAIL(
+                        ColonyContent, textureFailure(
+                                           diagnostics, *path, material, "Too many distinct texture usages",
+                                           std::make_error_code(std::errc::file_too_large), normal_map));
+                }
+                auto texture = loadTexture(
+                    canonical_root, material, kMaxPackTextureInputBytes - input_bytes,
+                    kMaxPackTextureDecodedBytes - decoded_bytes, diagnostics, normal_map);
+                PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, texture);
+                input_bytes += texture->m_source_size;
+                decoded_bytes += texture->m_image.m_storage.getBufferData().size_bytes();
+                catalog->m_textures.push_back(std::move(*texture));
             }
-            auto texture = loadTexture(
-                canonical_root, material, kMaxPackTextureInputBytes - input_bytes,
-                kMaxPackTextureDecodedBytes - decoded_bytes, diagnostics);
-            PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, texture);
-            input_bytes += texture->m_source_size;
-            decoded_bytes += texture->m_image.m_storage.getBufferData().size_bytes();
-            catalog->m_textures.push_back(std::move(*texture));
+        }
+        for (const auto &stack: catalog->m_backgrounds) {
+            for (const auto &layer: stack.m_layers) {
+                PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, cancelled());
+                if (std::ranges::any_of(catalog->m_textures, [&](const ContentTexture &item) {
+                        return item.m_path == layer.m_texture and not item.m_normal_map;
+                    })) {
+                    continue;
+                }
+                MaterialDefinition source_material{
+                    .m_key = "backgrounds." + stack.m_key + ".layers." + layer.m_key,
+                    .m_albedo_texture = layer.m_texture,
+                    .m_albedo_source_location = layer.m_source_location};
+                if (catalog->m_textures.size() >= kMaxContentTextures) {
+                    PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, std::errc::file_too_large);
+                }
+                auto texture = loadTexture(
+                    canonical_root, source_material, kMaxPackTextureInputBytes - input_bytes,
+                    kMaxPackTextureDecodedBytes - decoded_bytes, diagnostics);
+                PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, texture);
+                input_bytes += texture->m_source_size;
+                decoded_bytes += texture->m_image.m_storage.getBufferData().size_bytes();
+                catalog->m_textures.push_back(std::move(*texture));
+            }
         }
         PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, cancelled());
         catalog->m_content_fingerprint = catalog->computeContentFingerprint();

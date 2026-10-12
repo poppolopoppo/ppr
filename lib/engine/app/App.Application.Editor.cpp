@@ -1336,13 +1336,21 @@ namespace pP {
             ui_encode,
         };
 
+        const auto grid_viewport = rhi::Viewport::fromSize(
+            static_cast<float>(packet.m_framebuffer_size.x), static_cast<float>(packet.m_framebuffer_size.y));
+        const auto grid_scissor = rhi::ScissorRect::fromSize(
+            safe_narrowing(packet.m_framebuffer_size.x), safe_narrowing(packet.m_framebuffer_size.y));
         const auto grid_prepare = [&](const PreRenderContext &context) {
             const CpuObservationScope cpu_prepare{clock, cpu.m_grid_prepare};
+            PPR_RETURN_ERROR_ON_FAIL(
+                Editor, m_grid_pass->prepareBackground(context, packet.m_camera, grid_viewport, grid_scissor));
             return m_grid_pass->prepareGpuVisibility(context);
         };
         const auto grid_draw = [&](const DrawContext &context) {
             const CpuObservationScope cpu_draw{clock, cpu.m_grid_draw};
-            return m_grid_pass->renderGpuIndirect(context);
+            PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->renderBackground(context));
+            PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->renderGpuIndirect(context));
+            return m_grid_pass->renderParticles(context);
         };
         const auto triangle_draw = [&](const DrawContext &context) {
             const CpuObservationScope cpu_draw{clock, cpu.m_triangle_draw};

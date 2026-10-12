@@ -11,7 +11,9 @@ import std;
 namespace pP::colony {
     PPR_DEFINE_LOG_CATEGORY(SimPresentation, info, none);
     namespace {
-        void capturePresentation_(SimFramePacket &packet, const ColonyDriver &driver) {
+        void capturePresentation_(
+            SimFramePacket &packet, const ColonyDriver &driver,
+            ParticlePresentationCache *const particle_cache = nullptr) {
             packet.m_initial_matter_valid = driver.initialMatterBaselineValid();
             packet.m_cell_size_m = 1.0f / static_cast<float>(driver.cellsPerMetre());
             const ContentCatalog *const catalog = driver.contentCatalog();
@@ -27,28 +29,73 @@ namespace pP::colony {
                 packet.m_terrain_images.push_back(texture.m_image);
             }
             for (const MaterialDefinition &material: content.materials()) {
-                if (material.m_numeric_id == 0u or
-                    material.m_representation != EMaterialRepresentation::terrain or
-                    material.m_phase != EMaterialPhase::solid) {
+                if (material.m_numeric_id == 0u) {
                     continue;
+                }
+                if (material.m_representation == EMaterialRepresentation::particle) {
+                    packet.m_particle_material_ids.push_back(material.m_numeric_id);
                 }
                 GridTerrainVisual visual{};
                 visual.m_material_id = material.m_numeric_id;
                 visual.m_color_rgba = material.m_color_rgba;
                 visual.m_roundness = static_cast<float>(material.m_roundness);
                 visual.m_texture_period_m = static_cast<float>(material.m_texture_period_m.value_or(1.0));
+                visual.m_metallic = static_cast<float>(material.m_metallic);
+                visual.m_roughness = static_cast<float>(material.m_roughness);
+                visual.m_opacity = 1.0f;
+                for (u32 c = 0u; c < 3u; ++c) {
+                    visual.m_emissive_rgb[c] = static_cast<float>(material.m_emissive_rgb[c]);
+                }
+                visual.m_emissive_strength = static_cast<float>(material.m_emissive_strength);
+                visual.m_ior = static_cast<float>(material.m_ior);
+                visual.m_normal_scale = static_cast<float>(material.m_normal_scale);
+                visual.m_refraction_depth_m = static_cast<float>(material.m_refraction_depth_m);
+                visual.m_alpha_mode = static_cast<u32>(material.m_alpha_mode);
                 if (material.m_albedo_texture) {
                     const auto textures = content.textures();
                     for (u32 index = 0u; index < textures.size(); ++index) {
-                        if (textures[index].m_path == *material.m_albedo_texture) {
+                        if (textures[index].m_path == *material.m_albedo_texture and not textures[index].m_normal_map) {
                             visual.m_texture_index = index;
                             break;
                         }
                     }
                     PPR_ASSERT(visual.m_texture_index != 0xffffffffu);
                 }
+                if (material.m_normal_texture) {
+                    const auto textures = content.textures();
+                    for (u32 index = 0u; index < textures.size(); ++index) {
+                        if (textures[index].m_path == *material.m_normal_texture and textures[index].m_normal_map) {
+                            visual.m_normal_texture_index = index;
+                            break;
+                        }
+                    }
+                    PPR_ASSERT(visual.m_normal_texture_index != 0xffffffffu);
+                }
                 packet.m_terrain_visuals.push_back(visual);
             }
+            packet.m_reference_thickness_m = static_cast<float>(driver.referenceThicknessMetres());
+            const auto *const profile = content.findWorld(driver.profileKey());
+            PPR_ASSERT(profile != nullptr);
+            const auto stack = std::ranges::find(
+                content.backgrounds(), profile->m_background_stack, &BackgroundStackDefinition::m_key);
+            PPR_ASSERT(stack != content.backgrounds().end());
+            packet.m_has_background = true;
+            for (const auto &layer: stack->m_layers) {
+                auto &target = packet.m_background_layers[layer.m_order];
+                target.m_order = layer.m_order;
+                target.m_color_rgba = layer.m_color_rgba;
+                target.m_repeat_period_m = static_cast<float>(layer.m_repeat_period_m);
+                target.m_parallax_factor = static_cast<float>(layer.m_parallax_factor);
+                const auto textures = content.textures();
+                for (u32 index = 0u; index < textures.size(); ++index) {
+                    if (textures[index].m_path == layer.m_texture and not textures[index].m_normal_map) {
+                        target.m_texture_index = index;
+                        break;
+                    }
+                }
+            }
+            ParticlePresentationCache temporary;
+            packet.m_particle_batches = (particle_cache ? *particle_cache : temporary).capture(driver);
         }
 
         [[nodiscard]] std::error_code validatePresentation_(const SimFramePacket &packet) {
@@ -79,10 +126,12 @@ namespace pP::colony {
                                          ? std::error_code{}
                                          : std::make_error_code(std::errc::invalid_argument));
                 PPR_RETURN_ERROR_ON_FAIL(
-                    SimPresentation,
-                    visual.m_texture_index == 0xffffffffu or visual.m_texture_index < packet.m_terrain_images.size()
-                        ? std::error_code{}
-                        : std::make_error_code(std::errc::invalid_argument));
+                    SimPresentation, (visual.m_texture_index == 0xffffffffu or
+                                         visual.m_texture_index < packet.m_terrain_images.size()) and
+                                             (visual.m_normal_texture_index == 0xffffffffu or
+                                                 visual.m_normal_texture_index < packet.m_terrain_images.size())
+                                         ? std::error_code{}
+                                         : std::make_error_code(std::errc::invalid_argument));
                 for (std::size_t previous = 0u; previous < index; ++previous) {
                     PPR_RETURN_ERROR_ON_FAIL(
                         SimPresentation, packet.m_terrain_visuals[previous].m_material_id != visual.m_material_id
@@ -131,7 +180,10 @@ namespace pP::colony {
             std::bitset<65536u> terrain_ids{};
             if (packet.m_has_catalog) {
                 for (const GridTerrainVisual &visual: packet.m_terrain_visuals) {
-                    terrain_ids.set(visual.m_material_id);
+                    if (std::ranges::find(packet.m_particle_material_ids, visual.m_material_id) ==
+                        packet.m_particle_material_ids.end()) {
+                        terrain_ids.set(visual.m_material_id);
+                    }
                 }
             }
             scratch.resize(sim::kCellsPerChunk);
@@ -148,9 +200,47 @@ namespace pP::colony {
         }
     }
 
-    SimFramePacket makeSimFramePacket(const u64 frame_id, const ColonyDriver &driver, const bool full_refresh) {
+    Array<GridParticleBatch> ParticlePresentationCache::capture(const ColonyDriver &driver) {
+        if (m_generation != driver.worldGeneration()) {
+            m_chunks = {};
+            m_generation = driver.worldGeneration();
+        }
+        std::array<std::shared_ptr<const Array<sim::MatterParticle>>, sim::kChunkCount> sources{};
+        const auto snapshot = driver.captureParticles();
+        for (const auto &batch: snapshot.m_chunks) {
+            sources[sim::chunkIndexOf(batch.m_position)] = batch.m_particles;
+        }
+        for (const auto &batch: driver.editParticles()) {
+            sources[sim::chunkIndexOf(batch.m_position)] = batch.m_particles;
+        }
+        Array<GridParticleBatch> result;
+        for (u32 index = 0u; index < sim::kChunkCount; ++index) {
+            auto &entry = m_chunks[index];
+            if (entry.m_source != sources[index]) {
+                Array<GridParticleInstance> particles;
+                if (sources[index]) {
+                    particles.reserve(sources[index]->size());
+                    for (const auto &particle: *sources[index]) {
+                        particles.push_back(
+                            {particle.m_id, particle.m_x_m, particle.m_y_m, particle.m_volume_m3, particle.m_mass_kg,
+                                particle.m_temperature_k, particle.m_material, static_cast<u32>(particle.m_phase)});
+                    }
+                }
+                entry.m_target = std::make_shared<const Array<GridParticleInstance>>(std::move(particles));
+                entry.m_source = sources[index];
+            }
+            if (entry.m_target) {
+                result.push_back({index, entry.m_target});
+            }
+        }
+        return result;
+    }
+
+    SimFramePacket makeSimFramePacket(
+        const u64 frame_id, const ColonyDriver &driver, const bool full_refresh,
+        ParticlePresentationCache *const particles) {
         SimFramePacket packet{};
-        capturePresentation_(packet, driver);
+        capturePresentation_(packet, driver, particles);
         packet.m_frame_id = frame_id;
         packet.m_seed = driver.seed();
         packet.m_world_generation = driver.worldGeneration();
@@ -221,7 +311,8 @@ namespace pP::colony {
     }
 
     Expected<SimFramePacket> makeInitialPresentationBatch(
-        const u64 frame_id, const ColonyDriver &driver, const u32 first_chunk, const u32 chunk_count) {
+        const u64 frame_id, const ColonyDriver &driver, const u32 first_chunk, const u32 chunk_count,
+        ParticlePresentationCache *const particles) {
         if (chunk_count == 0u or
             chunk_count > kInitialPresentationBatchChunks or
             first_chunk >= sim::kChunkCount or
@@ -229,7 +320,7 @@ namespace pP::colony {
             PPR_RETURN_UNEXPECTED_ON_FAIL(SimPresentation, std::errc::invalid_argument);
         }
         SimFramePacket packet{};
-        capturePresentation_(packet, driver);
+        capturePresentation_(packet, driver, particles);
         packet.m_frame_id = frame_id;
         packet.m_seed = driver.seed();
         packet.m_world_generation = driver.worldGeneration();
@@ -318,6 +409,10 @@ namespace pP::colony {
         stage.m_content_fingerprint = presentation.m_content_fingerprint;
         stage.m_terrain_visuals = std::move(presentation.m_terrain_visuals);
         stage.m_terrain_images = std::move(presentation.m_terrain_images);
+        stage.m_reference_thickness_m = presentation.m_reference_thickness_m;
+        stage.m_has_background = presentation.m_has_background;
+        stage.m_background_layers = presentation.m_background_layers;
+        stage.m_particle_batches = presentation.m_particle_batches;
         return stage;
     }
 
@@ -328,7 +423,7 @@ namespace pP::colony {
     Expected<GridPass::GridStagedFrame> InitialPresentation::stage(const u64 frame_id, const ColonyDriver &driver) {
         GridPass::GridStagedFrame stage{};
         SimFramePacket presentation{};
-        capturePresentation_(presentation, driver);
+        capturePresentation_(presentation, driver, &m_particle_cache);
         stage.m_cell_size_m = presentation.m_cell_size_m;
         stage.m_has_catalog = presentation.m_has_catalog;
         stage.m_initial_matter_valid = presentation.m_initial_matter_valid;
@@ -336,12 +431,16 @@ namespace pP::colony {
         stage.m_content_fingerprint = presentation.m_content_fingerprint;
         stage.m_terrain_visuals = std::move(presentation.m_terrain_visuals);
         stage.m_terrain_images = std::move(presentation.m_terrain_images);
+        stage.m_reference_thickness_m = presentation.m_reference_thickness_m;
+        stage.m_has_background = presentation.m_has_background;
+        stage.m_background_layers = presentation.m_background_layers;
+        stage.m_particle_batches = presentation.m_particle_batches;
         if (m_frame or m_next_chunk == sim::kChunkCount) {
             stage.m_tiles = m_visible;
             return stage;
         }
         const u32 count = std::min(kInitialPresentationBatchChunks, sim::kChunkCount - m_next_chunk);
-        auto packet = makeInitialPresentationBatch(frame_id, driver, m_next_chunk, count);
+        auto packet = makeInitialPresentationBatch(frame_id, driver, m_next_chunk, count, &m_particle_cache);
         PPR_RETURN_UNEXPECTED_ON_FAIL(SimPresentation, packet);
         PPR_RETURN_UNEXPECTED_ON_FAIL(SimPresentation, buildGridStagedFrame(*packet, stage));
         stage.m_reset_caches = m_next_chunk == 0u and not m_reset_applied;
@@ -381,6 +480,10 @@ namespace pP::colony {
         stage.m_content_fingerprint = packet.m_content_fingerprint;
         stage.m_terrain_visuals = packet.m_terrain_visuals;
         stage.m_terrain_images = packet.m_terrain_images;
+        stage.m_reference_thickness_m = packet.m_reference_thickness_m;
+        stage.m_has_background = packet.m_has_background;
+        stage.m_background_layers = packet.m_background_layers;
+        stage.m_particle_batches = packet.m_particle_batches;
         // Owned payload only: no driver ack, no translator contact, and no
         // pass mutation happen on the client. The pass-side contact runs
         // on the pass's owner lane via GridPass::applyStagedFrame.

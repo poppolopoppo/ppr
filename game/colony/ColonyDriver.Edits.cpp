@@ -124,6 +124,9 @@ namespace pP::colony {
         std::erase_if(candidate.m_chunks, [&](const auto &chunk) {
             return std::ranges::find(candidate.m_touched, chunk.position()) == candidate.m_touched.end();
         });
+        auto particles = m_colony.particles().prepareTerrainEdit(grid(), candidate.m_chunks, 1.0 / cellsPerMetre());
+        PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, particles);
+        candidate.m_particles = std::move(*particles);
         for (const auto pos: candidate.m_touched) {
             u64 revision = 1u;
             for (const auto &row: m_present_revision_history) {
@@ -143,7 +146,16 @@ namespace pP::colony {
             m_pending_digs.erase(m_pending_digs.begin());
         }
         invalidateColliderCache();
-        return prepareEditColliders();
+        PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, prepareEditColliders());
+        if (not m_require_edit_publication) {
+            // Headless authored sessions publish the same prepared transaction
+            // synchronously, without depending on a render acknowledgement.
+            while (not editReadyForPresentation()) {
+                PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, prepareEditColliders());
+            }
+            PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, settleEdit(m_edit->m_manifest));
+        }
+        return {};
     }
 
     std::error_code ColonyDriver::prepareEditColliders() {
@@ -199,6 +211,7 @@ namespace pP::colony {
         for (auto &chunk: m_edit->m_chunks) {
             grid().exchangeChunk(chunk);
         }
+        m_colony.particles().commitTerrainEdit(m_edit->m_particles);
         for (const auto &row: m_edit->m_errands) {
             m_registry.get<BuildErrand>(row.m_entity)->m_progress = row.m_candidate;
         }
@@ -206,8 +219,10 @@ namespace pP::colony {
         m_collider_dirty.clear(); // Already prepared and committed as one cohort.
         m_finder = Pathfinder{};
         m_dig_stats.m_dug_total += m_edit->m_dug;
-        PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, wakeBodiesNearEdit(m_edit->m_touched));
+        const auto wake_error = wakeBodiesNearEdit(m_edit->m_touched);
+        // The transaction is committed even if the postcommit physics wake fails.
         m_edit.reset();
+        PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, wake_error);
         return {};
     }
 }

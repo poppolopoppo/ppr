@@ -102,6 +102,55 @@ namespace pP::colony {
                 return {bytes.begin(), bytes.end()};
             }
         };
+        std::error_code encodeParticles(
+            Writer &writer, const sim::MatterParticleSnapshot &snapshot, const IContext *const context) {
+            writer.u64value(snapshot.m_next_id);
+            writer.count(snapshot.m_chunks.size());
+            for (const auto &batch: snapshot.m_chunks) {
+                PPR_RETURN_ERROR_ON_FAIL(CheckpointCodec, context ? context->error() : std::error_code{});
+                writer.u32value(sim::chunkIndexOf(batch.m_position));
+                writer.count(batch.records().size());
+                for (const auto &particle: batch.records()) {
+                    writer.u64value(particle.m_id);
+                    writer.real(particle.m_x_m);
+                    writer.real(particle.m_y_m);
+                    writer.real(particle.m_volume_m3);
+                    writer.real(particle.m_mass_kg);
+                    writer.real(particle.m_temperature_k);
+                    writer.real(particle.m_bulk_density_kg_m3);
+                    writer.integer(particle.m_material, 2u);
+                    writer.integer(static_cast<u8>(particle.m_phase), 1u);
+                }
+            }
+            return {};
+        }
+        std::error_code decodeParticles(
+            Reader &reader, sim::MatterParticleSnapshot &snapshot, const IContext *const context) {
+            snapshot.m_next_id = reader.u64value();
+            snapshot.m_chunks.resize(reader.count(sim::kChunkCount, 8u));
+            u32 total = 0u;
+            for (auto &batch: snapshot.m_chunks) {
+                PPR_RETURN_ERROR_ON_FAIL(CheckpointCodec, context ? context->error() : std::error_code{});
+                const auto index = reader.u32value();
+                batch.m_position = {index % sim::kChunksPerEdge, index / sim::kChunksPerEdge};
+                const u32 count = reader.count(sim::kMaxMatterParticles - total, 59u);
+                total += count;
+                Array<sim::MatterParticle> particles(count);
+                for (auto &particle: particles) {
+                    particle.m_id = reader.u64value();
+                    particle.m_x_m = reader.real();
+                    particle.m_y_m = reader.real();
+                    particle.m_volume_m3 = reader.real();
+                    particle.m_mass_kg = reader.real();
+                    particle.m_temperature_k = reader.real();
+                    particle.m_bulk_density_kg_m3 = reader.real();
+                    particle.m_material = static_cast<u16>(reader.integer(2u));
+                    particle.m_phase = static_cast<sim::EGenerationMatter>(reader.integer(1u));
+                }
+                batch.m_particles = std::make_shared<const Array<sim::MatterParticle>>(std::move(particles));
+            }
+            return {};
+        }
         void encodeMetadata(Writer &writer, const WorldCheckpoint &checkpoint) {
             writer.count(checkpoint.m_sites.size());
             for (const auto &site: checkpoint.m_sites) {
@@ -173,7 +222,7 @@ namespace pP::colony {
             writer.u64value(checkpoint.m_report.m_output_checksum);
             writer.u64value(checkpoint.m_report.m_grid_payload_bytes);
             // Allocation observations describe the generating process/build,
-            // not durable world state. They are intentionally absent from v1.
+            // not durable world state. They are intentionally absent from v2.
         }
         void decodeMetadata(Reader &reader, WorldCheckpoint &checkpoint) {
             checkpoint.m_sites.resize(reader.count(sim::kMaxGenerationSites, 20u));
@@ -282,6 +331,17 @@ namespace pP::colony {
             writer.u32value(checkpoint.m_controlled->m_generation);
         }
         encodeMetadata(writer, checkpoint);
+        u64 particle_bytes = 12u + checkpoint.m_particles.m_chunks.size() * 8u;
+        for (const auto &batch: checkpoint.m_particles.m_chunks) {
+            particle_bytes += batch.records().size() * 59u;
+        }
+        const u64 encoded_size = writer.m_bytes.size() + particle_bytes + 8u + snapshot->size();
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            CheckpointCodec, encoded_size <= kMaxWorldCheckpointBytes
+                                 ? std::error_code{}
+                                 : std::make_error_code(std::errc::value_too_large));
+        writer.m_bytes.reserve(static_cast<std::size_t>(encoded_size));
+        PPR_RETURN_UNEXPECTED_ON_FAIL(CheckpointCodec, encodeParticles(writer, checkpoint.m_particles, context));
         writer.u64value(snapshot->size());
         writer.m_bytes.insert(writer.m_bytes.end(), snapshot->begin(), snapshot->end());
         PPR_RETURN_UNEXPECTED_ON_FAIL(
@@ -334,6 +394,7 @@ namespace pP::colony {
             checkpoint.m_controlled = sim::Entity{index, generation};
         }
         decodeMetadata(reader, checkpoint);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(CheckpointCodec, decodeParticles(reader, checkpoint.m_particles, context));
         const auto snapshot_size = reader.u64value();
         PPR_RETURN_UNEXPECTED_ON_FAIL(CheckpointCodec, reader.m_error);
         PPR_RETURN_UNEXPECTED_ON_FAIL(

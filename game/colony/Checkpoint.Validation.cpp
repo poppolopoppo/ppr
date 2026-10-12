@@ -118,7 +118,7 @@ namespace pP::colony {
         PPR_RETURN_ERROR_ON_FAIL(CheckpointValidation, validateWorldMetric(descriptor.m_metric));
         PPR_RETURN_ERROR_ON_FAIL(
             CheckpointValidation, descriptor.m_profile.size() <= 1024u and
-                                          descriptor.m_pack_schema_version == 1u and
+                                          descriptor.m_pack_schema_version == kContentSchemaVersion and
                                           descriptor.m_generator_version == sim::kGeneratorAlgorithmVersion and
                                           catalog.contentFingerprint() and
                                           *catalog.contentFingerprint() == descriptor.m_content_fingerprint and
@@ -154,6 +154,10 @@ namespace pP::colony {
         auto plan = compileWorldPlan(catalog, descriptor.m_profile, descriptor.m_seed);
         PPR_RETURN_ERROR_ON_FAIL(CheckpointValidation, plan);
         const auto &recipe = plan->recipe();
+        PPR_RETURN_ERROR_ON_FAIL(
+            CheckpointValidation, sim::validateMatterParticles(
+                                      checkpoint.m_particles, recipe.m_materials, recipe.m_cell_size_m, context,
+                                      descriptor.m_metric.m_reference_thickness_m));
         PPR_RETURN_ERROR_ON_FAIL(
             CheckpointValidation,
             not checkpoint.m_sites.empty() and checkpoint.m_sites.size() <= sim::kMaxGenerationSites ? std::error_code{}

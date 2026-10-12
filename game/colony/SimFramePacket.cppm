@@ -30,6 +30,18 @@ export namespace pP::colony {
         Array<sim::Cell> m_cells{};
     };
 
+    class ParticlePresentationCache {
+        struct Entry {
+            std::shared_ptr<const Array<sim::MatterParticle>> m_source{};
+            std::shared_ptr<const Array<GridParticleInstance>> m_target{};
+        };
+        std::array<Entry, sim::kChunkCount> m_chunks{};
+        u64 m_generation{};
+
+    public:
+        [[nodiscard]] Array<GridParticleBatch> capture(const ColonyDriver &driver);
+    };
+
     struct SimFramePacket {
         float m_cell_size_m{1.0f};
         bool m_has_catalog{false};
@@ -38,6 +50,11 @@ export namespace pP::colony {
         u64 m_content_fingerprint{};
         Array<GridTerrainVisual> m_terrain_visuals{};
         Array<image::ImageAsset> m_terrain_images{};
+        Array<u16> m_particle_material_ids{};
+        float m_reference_thickness_m{1.0f};
+        bool m_has_background{};
+        std::array<GridBackgroundLayer, 4u> m_background_layers{};
+        Array<GridParticleBatch> m_particle_batches{};
         u64 m_frame_id{};
 
         // World epoch + committed tick at capture time. m_seed identifies
@@ -85,13 +102,15 @@ export namespace pP::colony {
     // always, cell contents for the present chunks (or for every resident
     // chunk when full_refresh). Never touches translator/pass state.
     [[nodiscard]] SimFramePacket makeSimFramePacket(
-        u64 frame_id, const ColonyDriver &driver, bool full_refresh = false);
+        u64 frame_id, const ColonyDriver &driver, bool full_refresh = false,
+        ParticlePresentationCache *particles = nullptr);
 
     /// Initial graphics preparation copies at most eight chunks per frame.
     /// Only the prepared prefix is submitted, so uncached terrain is not drawn.
     inline constexpr u32 kInitialPresentationBatchChunks = 8u;
     [[nodiscard]] Expected<SimFramePacket> makeInitialPresentationBatch(
-        u64 frame_id, const ColonyDriver &driver, u32 first_chunk, u32 chunk_count);
+        u64 frame_id, const ColonyDriver &driver, u32 first_chunk, u32 chunk_count,
+        ParticlePresentationCache *particles = nullptr);
 
     /// Coordinator-only capture from an exclusively owned prepared session.
     /// Converts resident cells directly to owned u16 uploads, with no full sim
@@ -108,6 +127,7 @@ export namespace pP::colony {
     /// Client-owned initial publication cursor. At most one upload batch is
     /// outstanding; clean frames expose only the confirmed prepared prefix.
     class InitialPresentation {
+        ParticlePresentationCache m_particle_cache{};
         u32 m_next_chunk{};
         bool m_reset_applied{};
         std::optional<u64> m_frame{};

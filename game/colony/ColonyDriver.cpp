@@ -185,7 +185,8 @@ namespace pP::colony {
             PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, std::errc::invalid_argument);
         }
         PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, shutdown());
-        PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, m_colony.install(std::move(world)));
+        PPR_RETURN_ERROR_ON_FAIL(
+            ColonyPreparation, m_colony.install(std::move(world), nullptr, execution ? execution->m_context : nullptr));
         std::error_code result = initializeRuntime(desc, period, execution);
         if (result) {
             PPR_RETAIN_ERROR_ON_FAIL(ColonyPreparation, result, shutdown());
@@ -196,6 +197,20 @@ namespace pP::colony {
 
     const PreparedWorld *ColonyDriver::preparedWorld() const noexcept {
         return m_colony.preparedWorld();
+    }
+
+    sim::MatterParticleSnapshot ColonyDriver::captureParticles() const {
+        return m_colony.particles().capture();
+    }
+    std::span<const sim::MatterParticle> ColonyDriver::particleChunk(const sim::ChunkPos position) const noexcept {
+        return m_colony.particles().chunk(position);
+    }
+    u32 ColonyDriver::particleCount() const noexcept {
+        return m_colony.particles().count();
+    }
+    std::span<const sim::MatterParticleBatch> ColonyDriver::editParticles() const noexcept {
+        return editReadyForPresentation() ? std::span<const sim::MatterParticleBatch>{m_edit->m_particles}
+                                          : std::span<const sim::MatterParticleBatch>{};
     }
 
     bool ColonyDriver::initialMatterBaselineValid() const noexcept {
@@ -219,6 +234,15 @@ namespace pP::colony {
 
     u32 ColonyDriver::cellsPerMetre() const noexcept {
         return preparedWorld() ? kFineCellsPerMetre : 1u;
+    }
+
+    double ColonyDriver::referenceThicknessMetres() const noexcept {
+        const auto *const prepared = preparedWorld();
+        return prepared ? prepared->descriptor().m_metric.m_reference_thickness_m : 1.0;
+    }
+    std::string_view ColonyDriver::profileKey() const noexcept {
+        const auto *const prepared = preparedWorld();
+        return prepared ? std::string_view{prepared->descriptor().m_profile} : std::string_view{};
     }
 
     std::error_code ColonyDriver::initializeRuntime(
@@ -275,7 +299,7 @@ namespace pP::colony {
                 if (m_resume_edit_tick or m_edit or m_step_error) {
                     return;
                 }
-                if (m_require_edit_publication) {
+                if (m_require_edit_publication or preparedWorld() != nullptr) {
                     PPR_RETAIN_ERROR_ON_FAIL(ColonyPreparation, m_step_error, prepareEdit(true));
                 } else {
                     applyToolEdits();
@@ -287,7 +311,7 @@ namespace pP::colony {
                 return bound_tool.error();
             }
             const Expected<void> bound_build = m_steps.addSystem(*build, [this](sim::Registry &registry) {
-                if (m_require_edit_publication) {
+                if (m_require_edit_publication or preparedWorld() != nullptr) {
                     return;
                 }
                 const hal::ProfileScope scope_build{"Colony.Build"};
@@ -450,7 +474,7 @@ namespace pP::colony {
             return runHeldTicks();
         }
         if (m_paused) {
-            if (m_require_edit_publication) {
+            if (m_require_edit_publication or preparedWorld() != nullptr) {
                 PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, prepareEdit(false));
                 return {};
             }

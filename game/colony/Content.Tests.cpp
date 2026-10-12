@@ -37,7 +37,7 @@ reference_density_kg_m3 = 300.0
 )";
 
     const std::string manifest = R"(
-schema_version = 1
+schema_version = 2
 pack_id = "default"
 [files]
 materials = "materials.toml"
@@ -45,6 +45,7 @@ biomes = "biomes.toml"
 fields = "fields.toml"
 features = "features.toml"
 worlds = "worlds.toml"
+backgrounds = "backgrounds.toml"
 )";
 
     [[nodiscard]] static std::string replace(
@@ -56,12 +57,32 @@ worlds = "worlds.toml"
     }
 
     PPR_UNIT_TEST (manifest_requires_complete_distinct_portable_file_set) {
+        std::string background = "schema_version = 2\n";
+        for (u32 index = 0u; index < 4u; ++index) {
+            background +=
+                "[backgrounds.frontier.layers.layer_" +
+                std::to_string(index) +
+                "]\norder = " +
+                std::to_string(index) +
+                "\ntexture = \"backgrounds/layer.png\"\ncolor_rgba = \"FFFFFFFF\"\nrepeat_period_m = 256.0\nparallax_factor = 0.22\n";
+        }
+        config::Diagnostics background_diagnostics{};
+        auto stacks = decodeBackgroundDefinitions(background, "backgrounds.toml", background_diagnostics);
+        PPR_TEST_ASSERT(stacks and stacks->size() == 1u and stacks->front().m_layers.size() == 4u);
+        for (const auto &invalid:
+            {replace(background, "order = 1", "order = 0"), replace(background, "256.0", "0.0"),
+                replace(background, "0.22", "1.01"), replace(background, "backgrounds/layer.png", "../layer.png"),
+                replace(background, "FFFFFFFF", "FFFFFF80"), background + "extra = true\n"}) {
+            config::Diagnostics errors{};
+            PPR_TEST_ASSERT(not decodeBackgroundDefinitions(invalid, "invalid-backgrounds.toml", errors));
+            PPR_TEST_ASSERT(errors.hasErrors());
+        }
         config::Diagnostics diagnostics{};
         auto decoded = decodePackManifest(manifest, "pack.toml", diagnostics);
         PPR_TEST_ASSERT(decoded and decoded->m_pack_id == "default");
         PPR_TEST_ASSERT(decoded->m_files[static_cast<std::size_t>(EContentDocument::worlds)] == "worlds.toml");
         for (const auto &invalid:
-            {replace(manifest, "schema_version = 1", "schema_version = 2"),
+            {replace(manifest, "schema_version = 2", "schema_version = 1"),
                 replace(manifest, "pack_id = \"default\"", "pack_id = \"Default\""),
                 replace(manifest, "materials.toml", "../materials.toml"),
                 replace(manifest, "worlds.toml", "biomes.toml"), replace(manifest, "worlds.toml", "pack.toml"),
@@ -88,14 +109,15 @@ worlds = "worlds.toml"
             PPR_TEST_ASSERT(file.good());
         };
         write("pack.toml", manifest);
-        for (const char *name: {"materials.toml", "biomes.toml", "fields.toml", "features.toml", "worlds.toml"}) {
-            write(name, "schema_version = 1\n");
+        for (const char *name:
+            {"materials.toml", "biomes.toml", "fields.toml", "features.toml", "worlds.toml", "backgrounds.toml"}) {
+            write(name, "schema_version = 2\n");
         }
         config::Diagnostics diagnostics{};
         auto loaded = loadContentPackSource(root, diagnostics);
         PPR_TEST_ASSERT(loaded.has_value());
         write("materials.toml", "changed\n");
-        PPR_TEST_ASSERT(loaded->m_documents[0u].m_bytes == "schema_version = 1\n");
+        PPR_TEST_ASSERT(loaded->m_documents[0u].m_bytes == "schema_version = 2\n");
 
         auto [job_context, cancel] = context::withCancelClause(context::background());
         cancel(std::make_error_code(std::errc::operation_canceled));
@@ -109,7 +131,7 @@ worlds = "worlds.toml"
         const auto missing = loadContentPackSource(root, diagnostics);
         PPR_TEST_ASSERT(not missing and missing.error() == std::errc::no_such_file_or_directory);
 
-        write("materials.toml", "schema_version = 1\n");
+        write("materials.toml", "schema_version = 2\n");
         std::filesystem::create_hard_link(root / "materials.toml", root / "alias.toml");
         write("pack.toml", replace(manifest, "worlds.toml", "alias.toml"));
         const auto duplicate = loadContentPackSource(root, diagnostics);
@@ -124,8 +146,38 @@ worlds = "worlds.toml"
     };
 
     PPR_UNIT_TEST (owned_noncontiguous_materials) {
+        config::Diagnostics appearance_diagnostics{};
+        auto appearance = decodeMaterialCatalog(
+            "schema_version = 2\n" +
+                rock +
+                "metallic = 0.7\nroughness = 0.2\nemissive_r = 0.4\nemissive_strength = 3.0\nalpha_mode = \"blend\"\nior = 1.33\nnormal_texture = \"textures/normal.png\"\nnormal_scale = 2.0\nrefraction_depth_m = 0.3\n" +
+                snow +
+                "albedo_texture = \"snow.png\"\nnormal_texture = \"normal.png\"\ntexture_period_m = 1.0\n",
+            "appearance.toml", appearance_diagnostics);
+        PPR_TEST_ASSERT(appearance and not appearance_diagnostics.hasErrors());
+        const auto *const optical = appearance->findMaterial(u16{16u});
+        PPR_TEST_ASSERT(
+            optical->m_metallic == 0.7 and
+            optical->m_roughness == 0.2 and
+            optical->m_emissive_rgb[0u] == 0.4 and
+            optical->m_emissive_strength == 3.0);
+        PPR_TEST_ASSERT(
+            optical->m_alpha_mode == EMaterialAlphaMode::blend and
+            optical->m_ior == 1.33 and
+            optical->m_normal_scale == 2.0 and
+            optical->m_refraction_depth_m == 0.3);
+        PPR_TEST_ASSERT(appearance->findMaterial(u16{1024u})->m_albedo_texture == "snow.png");
+        for (const auto invalid:
+            {"metallic = -0.1", "roughness = 1.1", "emissive_r = nan", "emissive_strength = 1.0e100",
+                "alpha_mode = \"mask\"", "ior = 0.99", "ior = 3.01", "normal_scale = 4.01", "refraction_depth_m = 1.01",
+                "normal_texture = \"../normal.png\""}) {
+            config::Diagnostics errors{};
+            PPR_TEST_ASSERT(not decodeMaterialCatalog(
+                "schema_version = 2\n" + rock + invalid + "\n", "invalid-appearance.toml", errors));
+            PPR_TEST_ASSERT(errors.hasErrors());
+        }
         config::Diagnostics diagnostics{};
-        auto catalog = decodeMaterialCatalog("schema_version = 1\n" + rock + snow, "fixture.toml", diagnostics);
+        auto catalog = decodeMaterialCatalog("schema_version = 2\n" + rock + snow, "fixture.toml", diagnostics);
         PPR_TEST_ASSERT(catalog.has_value());
         PPR_TEST_ASSERT(not diagnostics.hasErrors());
         PPR_TEST_ASSERT(catalog->materials().size() == 2u);
@@ -144,21 +196,21 @@ worlds = "worlds.toml"
 
     PPR_UNIT_TEST (canonical_material_identity) {
         config::Diagnostics diagnostics{};
-        auto first = decodeMaterialCatalog("schema_version = 1\n" + rock + snow, "one.toml", diagnostics);
-        auto second = decodeMaterialCatalog("# reordered\nschema_version = 1\n" + snow + rock, "two.toml", diagnostics);
+        auto first = decodeMaterialCatalog("schema_version = 2\n" + rock + snow, "one.toml", diagnostics);
+        auto second = decodeMaterialCatalog("# reordered\nschema_version = 2\n" + snow + rock, "two.toml", diagnostics);
         PPR_TEST_ASSERT(first.has_value() and second.has_value());
         PPR_TEST_ASSERT(first->materialFingerprint() == second->materialFingerprint());
-        PPR_TEST_ASSERT(first->materialFingerprint() == 0x32f3364f88b38b19ull);
+        PPR_TEST_ASSERT(first->materialFingerprint() == 0x4e53f380768c8f92ull);
         PPR_TEST_ASSERT(first->materials().front().m_key == "sandstone");
         auto changed = decodeMaterialCatalog(
-            "schema_version = 1\n" + replace(rock, "2.0", "3.0") + snow, "three.toml", diagnostics);
+            "schema_version = 2\n" + replace(rock, "2.0", "3.0") + snow, "three.toml", diagnostics);
         PPR_TEST_ASSERT(changed.has_value());
         PPR_TEST_ASSERT(first->materialFingerprint() != changed->materialFingerprint());
         auto rounded = decodeMaterialCatalog(
-            "schema_version = 1\n" + rock + "roundness = 0.25\n" + snow, "rounded.toml", diagnostics);
+            "schema_version = 2\n" + rock + "roundness = 0.25\n" + snow, "rounded.toml", diagnostics);
         PPR_TEST_ASSERT(rounded and rounded->findMaterial(u16{16})->m_roundness == 0.25);
         PPR_TEST_ASSERT(first->materialFingerprint() != rounded->materialFingerprint());
-        auto extended = decodeMaterialCatalog("schema_version = 1\n" + rock, "four.toml", diagnostics);
+        auto extended = decodeMaterialCatalog("schema_version = 2\n" + rock, "four.toml", diagnostics);
         PPR_TEST_ASSERT(extended.has_value());
         PPR_TEST_ASSERT(first->materialFingerprint() != extended->materialFingerprint());
     };
@@ -167,7 +219,7 @@ worlds = "worlds.toml"
         for (const auto field:
             {"numeric_id", "display_name", "phase", "representation", "color_rgba", "albedo_texture",
                 "texture_period_m", "diggable", "reference_density_kg_m3"}) {
-            std::string source = "schema_version = 1\n" + rock;
+            std::string source = "schema_version = 2\n" + rock;
             const auto begin = source.find(std::string{field} + " =");
             PPR_TEST_ASSERT(begin != std::string::npos);
             source.erase(begin, source.find('\n', begin) - begin + 1u);
@@ -207,7 +259,7 @@ worlds = "worlds.toml"
         for (const auto &[from, to]: cases) {
             config::Diagnostics diagnostics{};
             const auto catalog = decodeMaterialCatalog(
-                "schema_version = 1\n" + replace(rock, from, to), "invalid.toml", diagnostics);
+                "schema_version = 2\n" + replace(rock, from, to), "invalid.toml", diagnostics);
             PPR_TEST_ASSERT(not catalog.has_value());
             PPR_TEST_ASSERT(diagnostics.hasErrors());
             PPR_TEST_ASSERT(diagnostics.entries().front().m_property.starts_with("materials.sandstone."));
@@ -220,7 +272,7 @@ worlds = "worlds.toml"
             {"../rock.png", "/rock.png", "C:/rock.png", "textures/../../rock.png", "textures//rock.png",
                 "textures/./rock.png", "textures/", "textures\\\\rock.png"}) {
             config::Diagnostics diagnostics{};
-            const auto source = "schema_version = 1\n" + replace(rock, "textures/sandstone.png", path);
+            const auto source = "schema_version = 2\n" + replace(rock, "textures/sandstone.png", path);
             const auto catalog = decodeMaterialCatalog(source, "paths.toml", diagnostics);
             PPR_TEST_ASSERT(not catalog.has_value());
             PPR_TEST_ASSERT(diagnostics.entries().front().m_property == "materials.sandstone.albedo_texture");
@@ -228,16 +280,15 @@ worlds = "worlds.toml"
     };
 
     PPR_UNIT_TEST (particle_fields_and_duplicate_ids_rejected) {
-        for (const auto field:
-            {"diggable = false", "albedo_texture = \"snow.png\"", "texture_period_m = 1.0", "roundness = 0.5"}) {
+        for (const auto field: {"diggable = false", "albedo_texture = \"snow.png\"", "roundness = 0.5"}) {
             config::Diagnostics diagnostics{};
             const auto catalog = decodeMaterialCatalog(
-                "schema_version = 1\n" + snow + field, "particle.toml", diagnostics);
+                "schema_version = 2\n" + snow + field, "particle.toml", diagnostics);
             PPR_TEST_ASSERT(not catalog.has_value());
         }
         config::Diagnostics diagnostics{};
         const auto duplicate = decodeMaterialCatalog(
-            "schema_version = 1\n" + rock + replace(snow, "1024", "16"), "duplicate.toml", diagnostics);
+            "schema_version = 2\n" + rock + replace(snow, "1024", "16"), "duplicate.toml", diagnostics);
         PPR_TEST_ASSERT(not duplicate.has_value());
         PPR_TEST_ASSERT(duplicate.error() == config::make_error_code(config::EConfigErrc::duplicate_key));
         PPR_TEST_ASSERT(diagnostics.entries().back().m_property == "materials.snow.numeric_id");
@@ -245,12 +296,12 @@ worlds = "worlds.toml"
 
     PPR_UNIT_TEST (version_names_types_and_budgets) {
         for (const auto source:
-            {rock, "schema_version = 2\n" + rock, "schema_version = \"1\"\n" + rock,
-                std::string{"schema_version = 1\n"},
-                "schema_version = 1\n" + replace(rock, "materials.sandstone", "materials.Sandstone"),
-                "schema_version = 1\n" + replace(rock, "materials.sandstone", "materials.\"sand.stone\""),
-                "schema_version = 1\n" + rock + "numeric_id = 17\n",
-                "schema_version = 1\n" + rock + "values = [1,2]\n"}) {
+            {rock, "schema_version = 1\n" + rock, "schema_version = \"1\"\n" + rock,
+                std::string{"schema_version = 2\n"},
+                "schema_version = 2\n" + replace(rock, "materials.sandstone", "materials.Sandstone"),
+                "schema_version = 2\n" + replace(rock, "materials.sandstone", "materials.\"sand.stone\""),
+                "schema_version = 2\n" + rock + "numeric_id = 17\n",
+                "schema_version = 2\n" + rock + "values = [1,2]\n"}) {
             config::Diagnostics diagnostics{};
             PPR_TEST_ASSERT(not decodeMaterialCatalog(source, "invalid.toml", diagnostics).has_value());
             PPR_TEST_ASSERT(diagnostics.hasErrors());
@@ -259,7 +310,7 @@ worlds = "worlds.toml"
         PPR_TEST_ASSERT(
             not decodeMaterialCatalog(std::string(kMaxMaterialDocumentBytes + 1u, ' '), "large.toml", diagnostics)
                 .has_value());
-        std::string excessive = "schema_version = 1\n";
+        std::string excessive = "schema_version = 2\n";
         for (std::size_t i = 0u; i <= kMaxContentMaterials; ++i) {
             excessive += replace(rock, "materials.sandstone", "materials.rock_" + std::to_string(i));
         }
@@ -271,11 +322,11 @@ worlds = "worlds.toml"
 
     PPR_UNIT_TEST (failed_candidate_preserves_previous_catalog) {
         config::Diagnostics diagnostics{};
-        auto catalog = decodeMaterialCatalog("schema_version = 1\n" + rock, "good.toml", diagnostics);
+        auto catalog = decodeMaterialCatalog("schema_version = 2\n" + rock, "good.toml", diagnostics);
         PPR_TEST_ASSERT(catalog.has_value());
         const auto before = catalog->materialFingerprint();
         auto candidate = decodeMaterialCatalog(
-            "schema_version = 1\n" + replace(rock, "numeric_id = 16", "numeric_id = 0"), "bad.toml", diagnostics);
+            "schema_version = 2\n" + replace(rock, "numeric_id = 16", "numeric_id = 0"), "bad.toml", diagnostics);
         if (candidate) {
             catalog = std::move(candidate);
         }
@@ -285,7 +336,7 @@ worlds = "worlds.toml"
 
     PPR_UNIT_TEST (field_optional_controls_accept_finite_inclusive_endpoints) {
         const std::string header =
-            "schema_version = 1\n[fields.boundary]\nalgorithm = \"perlin\"\nfrequency_per_metre = 0.001\n";
+            "schema_version = 2\n[fields.boundary]\nalgorithm = \"perlin\"\nfrequency_per_metre = 0.001\n";
         for (const auto controls:
             {"lacunarity = 1.0\ngain = 0.0\nwarp_amplitude_m = 0.0\n",
                 "lacunarity = 4.0\ngain = 1.0\nwarp_amplitude_m = 4096.0\n"}) {
@@ -325,8 +376,8 @@ algorithm = "cellular_distance"
 frequency_per_metre = 0.125
 )";
         config::Diagnostics diagnostics{};
-        auto fields = decodeFieldDefinitions("schema_version = 1\n" + deposits + caves, "fields.toml", diagnostics);
-        auto reordered = decodeFieldDefinitions("schema_version = 1\n" + caves + deposits, "other.toml", diagnostics);
+        auto fields = decodeFieldDefinitions("schema_version = 2\n" + deposits + caves, "fields.toml", diagnostics);
+        auto reordered = decodeFieldDefinitions("schema_version = 2\n" + caves + deposits, "other.toml", diagnostics);
         PPR_TEST_ASSERT(fields and reordered and not diagnostics.hasErrors());
         PPR_TEST_ASSERT(fields->size() == 2u and fields->front().m_key == "caves");
         PPR_TEST_ASSERT(fields->back().m_noise.m_fractal == sim::ENoiseFractal::none);
@@ -339,7 +390,7 @@ frequency_per_metre = 0.125
 
     PPR_UNIT_TEST (field_required_values_and_numeric_limits_are_enforced) {
         const std::string valid =
-            "schema_version = 1\n[fields.caves]\nalgorithm = \"perlin\"\nfrequency_per_metre = 0.025\n";
+            "schema_version = 2\n[fields.caves]\nalgorithm = \"perlin\"\nfrequency_per_metre = 0.025\n";
         const std::pair<std::string_view, std::string_view> cases[] = {
             {"algorithm = \"perlin\"\n", ""}, {"frequency_per_metre = 0.025\n", ""}, {"\"perlin\"", "\"unsupported\""},
             {"0.025", "0.0"}, {"0.025", "1e-300"}, {"0.025", "1e300"}, {"0.025", "nan"}, {"0.025", "inf"},
@@ -353,7 +404,7 @@ frequency_per_metre = 0.125
             PPR_TEST_ASSERT(diagnostics.entries().front().m_property.starts_with("fields.caves."));
             PPR_TEST_ASSERT(diagnostics.entries().front().m_location.starts_with("invalid-fields.toml"));
         }
-        std::string excessive = "schema_version = 1\n";
+        std::string excessive = "schema_version = 2\n";
         for (std::size_t index = 0u; index <= kMaxContentFields; ++index) {
             excessive += "[fields.field_" +
                          std::to_string(index) +
@@ -368,12 +419,12 @@ frequency_per_metre = 0.125
     PPR_UNIT_TEST (empty_and_ambiguous_records_are_not_erased) {
         for (const auto suffix: {"\n[materials.snow]\n", "\nunknown_field = {}\n", "\n[unknown]\n"}) {
             config::Diagnostics diagnostics{};
-            PPR_TEST_ASSERT(not decodeMaterialCatalog("schema_version = 1\n" + rock + suffix, "empty.toml", diagnostics)
+            PPR_TEST_ASSERT(not decodeMaterialCatalog("schema_version = 2\n" + rock + suffix, "empty.toml", diagnostics)
                     .has_value());
             PPR_TEST_ASSERT(diagnostics.hasErrors());
         }
         config::Diagnostics diagnostics{};
-        const auto source = "schema_version = 1\n" + replace(rock, "materials.sandstone", "\"materials.sandstone\"");
+        const auto source = "schema_version = 2\n" + replace(rock, "materials.sandstone", "\"materials.sandstone\"");
         PPR_TEST_ASSERT(not decodeMaterialCatalog(source, "quoted.toml", diagnostics).has_value());
     };
 
@@ -383,7 +434,7 @@ frequency_per_metre = 0.125
             extras += "unknown_" + std::to_string(i) + " = 1\n";
         }
         config::Diagnostics forwarded{};
-        const auto material = decodeMaterialCatalog("schema_version = 1\n" + rock + extras, "many.toml", forwarded);
+        const auto material = decodeMaterialCatalog("schema_version = 2\n" + rock + extras, "many.toml", forwarded);
         PPR_TEST_ASSERT(not material and forwarded.hasErrors());
         PPR_TEST_ASSERT(forwarded.entries().size() == 64u);
         PPR_TEST_ASSERT(forwarded.size() == 200u and forwarded.omittedCount() == 136u);
@@ -392,18 +443,18 @@ frequency_per_metre = 0.125
 
         config::Diagnostics capped{2u};
         const auto fields = decodeFieldDefinitions(
-            "schema_version = 1\n[fields.caves]\nalgorithm = \"perlin\"\nfrequency_per_metre = 0.025\n" + extras,
+            "schema_version = 2\n[fields.caves]\nalgorithm = \"perlin\"\nfrequency_per_metre = 0.025\n" + extras,
             "many-fields.toml", capped);
         PPR_TEST_ASSERT(not fields and capped.hasErrors());
         PPR_TEST_ASSERT(capped.entries().size() == 2u and capped.size() == 200u and capped.omittedCount() == 198u);
         PPR_TEST_ASSERT(capped.entries().front().m_property.starts_with("fields.caves."));
         // A full collector must still reject a later invalid record.
-        const auto repeated = decodeMaterialCatalog("schema_version = 1\n" + rock + extras, "again.toml", capped);
+        const auto repeated = decodeMaterialCatalog("schema_version = 2\n" + rock + extras, "again.toml", capped);
         PPR_TEST_ASSERT(not repeated and capped.entries().size() == 2u and capped.size() == 400u);
     };
 
     PPR_UNIT_TEST (allocation_failure_reaches_fatal_boundary) {
-        const std::string source = "schema_version = 1\n" + rock;
+        const std::string source = "schema_version = 2\n" + rock;
         config::Diagnostics diagnostics{};
         bool propagated = false;
         try {

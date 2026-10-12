@@ -31,6 +31,61 @@ namespace pP::colony {
         constexpr u32 kExtent = 256u;
         constexpr u32 kCenter = kExtent / 2u;
 
+        [[nodiscard]] std::error_code checkPreparedParticles(const ColonyDriver &driver) {
+            struct Totals {
+                double m_volume{}, m_mass{};
+            };
+            const auto &generated = driver.preparedWorld()->generated();
+            const auto &recipe = generated.m_plan.recipe();
+            std::map<u16, Totals> expected, actual;
+            u64 expected_count{};
+            for (const auto &region: generated.m_matter.m_regions) {
+                auto &totals = expected[region.m_material];
+                totals.m_volume += region.m_volume_m3;
+                totals.m_mass += region.m_mass_kg;
+                for (const auto &span: region.m_spans) {
+                    expected_count += span.m_end_x - span.m_begin_x;
+                }
+            }
+
+            const auto particles = driver.captureParticles();
+            PPR_RETURN_ERROR_ON_FAIL(
+                ColonySmoke,
+                sim::validateMatterParticles(
+                    particles, recipe.m_materials, recipe.m_cell_size_m, nullptr, recipe.m_reference_thickness_m));
+            u64 count{}, liquids{}, gases{};
+            for (const auto &batch: particles.m_chunks) {
+                for (const auto &particle: batch.records()) {
+                    auto &totals = actual[particle.m_material];
+                    totals.m_volume += particle.m_volume_m3;
+                    totals.m_mass += particle.m_mass_kg;
+                    ++count;
+                    liquids += particle.m_phase == sim::EGenerationMatter::liquid;
+                    gases += particle.m_phase == sim::EGenerationMatter::gas;
+                }
+            }
+            if (count == 0u or
+                count != expected_count or
+                count != driver.particleCount() or
+                liquids == 0u or
+                gases == 0u or
+                actual.size() != expected.size()) {
+                PPR_RETURN_ERROR_ON_FAIL(ColonySmoke, std::errc::state_not_recoverable);
+            }
+            for (const auto &[material, totals]: expected) {
+                const auto found = actual.find(material);
+                if (found == actual.end() or
+                    std::abs(found->second.m_volume - totals.m_volume) > 1.0e-8 * (std::max) (1.0, totals.m_volume) or
+                    std::abs(found->second.m_mass - totals.m_mass) > 1.0e-8 * (std::max) (1.0, totals.m_mass)) {
+                    PPR_RETURN_ERROR_ON_FAIL(ColonySmoke, std::errc::state_not_recoverable);
+                }
+            }
+            std::println(
+                "SMOKE-PARTICLES count={} liquids={} gases={} materials={} result=PASS", count, liquids, gases,
+                actual.size());
+            return {};
+        }
+
         [[nodiscard]] std::error_code checkPreparedSession() {
             const auto root = hal::process::currentExecutablePath().parent_path() / "worldgen/default";
             config::Diagnostics diagnostics{};
@@ -59,6 +114,7 @@ namespace pP::colony {
             // Adoption must preserve the complete owner and payload, including
             // its validated start, rather than rerasterizing or copying the grid.
             const auto *const owner = driver->preparedWorld();
+            PPR_RETURN_ERROR_ON_FAIL(ColonySmoke, checkPreparedParticles(*driver));
             PPR_RETURN_ERROR_ON_FAIL(ColonySmoke, driver->setPlayerCommand({1, 0}));
             for (u32 tick = 0u; tick < 60u; ++tick) {
                 PPR_RETURN_ERROR_ON_FAIL(ColonySmoke, driver->update(TimeSpan{std::chrono::seconds{1}} / 60u));
