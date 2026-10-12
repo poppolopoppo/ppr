@@ -1,4 +1,4 @@
-schema_version = 1
+schema_version = 2
 
 [biomes.hearth]
 display_name = "Hearth basin"
@@ -6,290 +6,700 @@ preview_color_rgba = "9DB279FF"
 temperature_base_k = 293.0
 temperature_variation_k = 8.0
 temperature_field = "temperature"
+lining_material = "sandstone"
+lining_thickness_fine = 1
+
 [biomes.hearth.composition.upper]
 order = 10
 depth_min_normalized = 0.0
 depth_max_normalized = 0.5
-field = "composition"
-[biomes.hearth.composition.upper.materials.host]
+field = "beds"
+
+[biomes.hearth.composition.upper.materials.sandstone]
 material = "sandstone"
-weight = 6.0
-[biomes.hearth.composition.upper.materials.secondary]
-material = "basalt"
-weight = 1.0
+weight = 8.0
+
+[biomes.hearth.composition.upper.materials.dirt]
+material = "dirt"
+weight = 2.5
+
 [biomes.hearth.composition.lower]
 order = 20
 depth_min_normalized = 0.5
 depth_max_normalized = 1.0
-field = "composition"
-[biomes.hearth.composition.lower.materials.host]
+field = "beds"
+
+[biomes.hearth.composition.lower.materials.sandstone]
 material = "sandstone"
 weight = 6.0
-[biomes.hearth.composition.lower.materials.secondary]
-material = "copper"
-weight = 1.0
-[biomes.hearth.deposits.ore]
+
+[biomes.hearth.composition.lower.materials.dirt]
+material = "dirt"
+weight = 3.5
+
+[biomes.hearth.deposits.clay]
 kind = "threshold"
 order = 10
-field = "ore_lenses"
-material = "copper"
+field = "ore_grain"
+material = "clay"
 host_material = "sandstone"
 depth_min_normalized = 0.0
 depth_max_normalized = 1.0
-threshold_min = -0.65
-threshold_max = -0.3
+threshold_min = -0.58
+threshold_max = -0.485
+
+[biomes.hearth.deposits.copper_ore]
+kind = "threshold"
+order = 11
+field = "ore_grain"
+material = "copper_ore"
+host_material = "sandstone"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+threshold_min = -0.415
+threshold_max = -0.32
+
+[biomes.hearth.deposits.coal]
+kind = "threshold"
+order = 12
+field = "organic_patches"
+material = "coal"
+host_material = "sandstone"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+threshold_min = -0.25
+threshold_max = -0.155
+
+[biomes.hearth.deposits.algae]
+kind = "threshold"
+order = 13
+field = "organic_patches"
+material = "algae"
+host_material = "sandstone"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+threshold_min = -0.085
+threshold_max = 0.01
+
+[biomes.verdant]
+display_name = "Verdant galleries"
+preview_color_rgba = "86B76AFF"
+temperature_base_k = 300.0
+temperature_variation_k = 8.0
+temperature_field = "temperature"
+lining_material = "clay"
+lining_thickness_fine = 1
+
+[biomes.verdant.composition.upper]
+order = 10
+depth_min_normalized = 0.0
+depth_max_normalized = 0.5
+field = "organic_beds"
+
+[biomes.verdant.composition.upper.materials.dirt]
+material = "dirt"
+weight = 8.0
+
+[biomes.verdant.composition.upper.materials.limestone]
+material = "limestone"
+weight = 2.5
+
+[biomes.verdant.composition.lower]
+order = 20
+depth_min_normalized = 0.5
+depth_max_normalized = 1.0
+field = "organic_beds"
+
+[biomes.verdant.composition.lower.materials.dirt]
+material = "dirt"
+weight = 6.0
+
+[biomes.verdant.composition.lower.materials.limestone]
+material = "limestone"
+weight = 3.5
+
+[biomes.verdant.deposits.algae]
+kind = "threshold"
+order = 10
+field = "organic_patches"
+material = "algae"
+host_material = "dirt"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+threshold_min = -0.58
+threshold_max = -0.485
+
+[biomes.verdant.deposits.phosphorite]
+kind = "threshold"
+order = 11
+field = "ore_grain"
+material = "phosphorite"
+host_material = "dirt"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+threshold_min = -0.415
+threshold_max = -0.32
+
+[biomes.mire]
+display_name = "Billowed mire"
+preview_color_rgba = "7E9754FF"
+temperature_base_k = 305.0
+temperature_variation_k = 10.0
+temperature_field = "temperature"
+lining_material = "clay"
+lining_thickness_fine = 1
+
+[biomes.mire.composition.upper]
+order = 10
+depth_min_normalized = 0.0
+depth_max_normalized = 0.5
+field = "organic_beds"
+
+[biomes.mire.composition.upper.materials.slime]
+material = "slime"
+weight = 8.0
+
+[biomes.mire.composition.upper.materials.clay]
+material = "clay"
+weight = 2.5
+
+[biomes.mire.composition.lower]
+order = 20
+depth_min_normalized = 0.5
+depth_max_normalized = 1.0
+field = "organic_beds"
+
+[biomes.mire.composition.lower.materials.slime]
+material = "slime"
+weight = 6.0
+
+[biomes.mire.composition.lower.materials.clay]
+material = "clay"
+weight = 3.5
+
+[biomes.mire.deposits.shale]
+kind = "threshold"
+order = 10
+field = "ore_grain"
+material = "shale"
+host_material = "slime"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+threshold_min = -0.58
+threshold_max = -0.485
+
+[biomes.mire.deposits.coal]
+kind = "threshold"
+order = 11
+field = "organic_patches"
+material = "coal"
+host_material = "slime"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+threshold_min = -0.415
+threshold_max = -0.32
+
+[biomes.dunes]
+display_name = "Ochre dunes"
+preview_color_rgba = "C4A16BFF"
+temperature_base_k = 315.0
+temperature_variation_k = 15.0
+temperature_field = "temperature"
+lining_material = "shale"
+lining_thickness_fine = 1
+
+[biomes.dunes.composition.upper]
+order = 10
+depth_min_normalized = 0.0
+depth_max_normalized = 0.5
+field = "beds"
+
+[biomes.dunes.composition.upper.materials.sandstone]
+material = "sandstone"
+weight = 8.0
+
+[biomes.dunes.composition.upper.materials.shale]
+material = "shale"
+weight = 2.5
+
+[biomes.dunes.composition.lower]
+order = 20
+depth_min_normalized = 0.5
+depth_max_normalized = 1.0
+field = "beds"
+
+[biomes.dunes.composition.lower.materials.sandstone]
+material = "sandstone"
+weight = 6.0
+
+[biomes.dunes.composition.lower.materials.shale]
+material = "shale"
+weight = 3.5
+
+[biomes.dunes.deposits.rust]
+kind = "threshold"
+order = 10
+field = "ore_grain"
+material = "rust"
+host_material = "sandstone"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+threshold_min = -0.58
+threshold_max = -0.485
+
+[biomes.dunes.deposits.iron_ore]
+kind = "threshold"
+order = 11
+field = "ore_grain"
+material = "iron_ore"
+host_material = "sandstone"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+threshold_min = -0.415
+threshold_max = -0.32
 
 [biomes.rime]
 display_name = "Rime shelves"
 preview_color_rgba = "8CBED9FF"
-temperature_base_k = 255.0
-temperature_variation_k = 12.0
+temperature_base_k = 248.0
+temperature_variation_k = 15.0
 temperature_field = "temperature"
+lining_material = "granite"
+lining_thickness_fine = 2
+
 [biomes.rime.composition.upper]
 order = 10
 depth_min_normalized = 0.0
 depth_max_normalized = 0.5
-field = "composition"
-[biomes.rime.composition.upper.materials.host]
+field = "frozen_beds"
+
+[biomes.rime.composition.upper.materials.ice]
 material = "ice"
-weight = 6.0
-[biomes.rime.composition.upper.materials.secondary]
-material = "basalt"
-weight = 1.0
+weight = 8.0
+
+[biomes.rime.composition.upper.materials.granite]
+material = "granite"
+weight = 2.5
+
 [biomes.rime.composition.lower]
 order = 20
 depth_min_normalized = 0.5
 depth_max_normalized = 1.0
-field = "composition"
-[biomes.rime.composition.lower.materials.host]
+field = "frozen_beds"
+
+[biomes.rime.composition.lower.materials.ice]
 material = "ice"
 weight = 6.0
-[biomes.rime.composition.lower.materials.secondary]
-material = "iron"
-weight = 1.0
-[biomes.rime.deposits.ore]
+
+[biomes.rime.composition.lower.materials.granite]
+material = "granite"
+weight = 3.5
+
+[biomes.rime.deposits.polluted_ice]
 kind = "threshold"
 order = 10
-field = "ore_lenses"
-material = "iron"
+field = "ore_grain"
+material = "polluted_ice"
 host_material = "ice"
 depth_min_normalized = 0.0
 depth_max_normalized = 1.0
-threshold_min = -0.65
-threshold_max = -0.3
+threshold_min = -0.58
+threshold_max = -0.485
+
+[biomes.rime.deposits.wolframite]
+kind = "threshold"
+order = 11
+field = "ore_grain"
+material = "wolframite"
+host_material = "ice"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+threshold_min = -0.415
+threshold_max = -0.32
 
 [biomes.lode]
-display_name = "Lode country"
+display_name = "Dense lode country"
 preview_color_rgba = "B18B64FF"
-temperature_base_k = 305.0
-temperature_variation_k = 10.0
+temperature_base_k = 318.0
+temperature_variation_k = 18.0
 temperature_field = "temperature"
+lining_material = "basalt"
+lining_thickness_fine = 3
+
 [biomes.lode.composition.upper]
 order = 10
 depth_min_normalized = 0.0
 depth_max_normalized = 0.5
-field = "composition"
-[biomes.lode.composition.upper.materials.host]
+field = "rock_masses"
+
+[biomes.lode.composition.upper.materials.granite]
+material = "granite"
+weight = 8.0
+
+[biomes.lode.composition.upper.materials.basalt]
 material = "basalt"
-weight = 6.0
-[biomes.lode.composition.upper.materials.secondary]
-material = "basalt"
-weight = 1.0
+weight = 2.5
+
 [biomes.lode.composition.lower]
 order = 20
 depth_min_normalized = 0.5
 depth_max_normalized = 1.0
-field = "composition"
-[biomes.lode.composition.lower.materials.host]
-material = "basalt"
+field = "rock_masses"
+
+[biomes.lode.composition.lower.materials.granite]
+material = "granite"
 weight = 6.0
-[biomes.lode.composition.lower.materials.secondary]
-material = "copper"
-weight = 1.0
-[biomes.lode.deposits.ore]
+
+[biomes.lode.composition.lower.materials.basalt]
+material = "basalt"
+weight = 3.5
+
+[biomes.lode.deposits.iron_ore]
 kind = "threshold"
 order = 10
-field = "ore_lenses"
-material = "copper"
-host_material = "basalt"
+field = "ore_seams"
+material = "iron_ore"
+host_material = "granite"
 depth_min_normalized = 0.0
 depth_max_normalized = 1.0
-threshold_min = -0.65
-threshold_max = -0.3
+threshold_min = 0.59
+threshold_max = 0.625
 
-[biomes.ember]
-display_name = "Ember depths"
-preview_color_rgba = "B6644EFF"
-temperature_base_k = 365.0
-temperature_variation_k = 25.0
-temperature_field = "temperature"
-[biomes.ember.composition.upper]
-order = 10
-depth_min_normalized = 0.0
-depth_max_normalized = 0.5
-field = "composition"
-[biomes.ember.composition.upper.materials.host]
-material = "obsidian"
-weight = 6.0
-[biomes.ember.composition.upper.materials.secondary]
-material = "basalt"
-weight = 1.0
-[biomes.ember.composition.lower]
-order = 20
-depth_min_normalized = 0.5
-depth_max_normalized = 1.0
-field = "composition"
-[biomes.ember.composition.lower.materials.host]
-material = "obsidian"
-weight = 6.0
-[biomes.ember.composition.lower.materials.secondary]
-material = "iron"
-weight = 1.0
-[biomes.ember.deposits.ore]
+[biomes.lode.deposits.copper_ore]
 kind = "threshold"
-order = 10
-field = "ore_lenses"
-material = "iron"
-host_material = "obsidian"
+order = 11
+field = "ore_seams"
+material = "copper_ore"
+host_material = "granite"
 depth_min_normalized = 0.0
 depth_max_normalized = 1.0
-threshold_min = -0.65
-threshold_max = -0.3
+threshold_min = 0.645
+threshold_max = 0.68
 
+[biomes.lode.deposits.copper]
+kind = "threshold"
+order = 12
+field = "ore_seams"
+material = "copper"
+host_material = "granite"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+threshold_min = 0.7
+threshold_max = 0.735
 
-# Distinct geology and temperatures, using the existing composition/ore fields.
+[biomes.lode.deposits.iron]
+kind = "threshold"
+order = 13
+field = "ore_seams"
+material = "iron"
+host_material = "granite"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+threshold_min = 0.755
+threshold_max = 0.79
+
+[biomes.lode.deposits.aluminum]
+kind = "threshold"
+order = 14
+field = "ore_seams"
+material = "aluminum"
+host_material = "granite"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+threshold_min = 0.81
+threshold_max = 0.845
+
+[biomes.lode.deposits.wolframite]
+kind = "threshold"
+order = 15
+field = "ore_seams"
+material = "wolframite"
+host_material = "granite"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+threshold_min = 0.865
+threshold_max = 0.9
 
 [biomes.karst]
 display_name = "Crystal karst"
 preview_color_rgba = "B8A4D2FF"
 temperature_base_k = 286.0
-temperature_variation_k = 8.0
+temperature_variation_k = 12.0
 temperature_field = "temperature"
+lining_material = "limestone"
+lining_thickness_fine = 1
+
 [biomes.karst.composition.upper]
 order = 10
-depth_min_normalized = 0.00
-depth_max_normalized = 0.42
-field = "composition"
+depth_min_normalized = 0.0
+depth_max_normalized = 0.5
+field = "karst_masses"
+
 [biomes.karst.composition.upper.materials.limestone]
 material = "limestone"
-weight = 6.0
-[biomes.karst.composition.upper.materials.clay]
-material = "clay"
-weight = 2.0
-[biomes.karst.composition.upper.materials.basalt]
-material = "basalt"
-weight = 1.0
+weight = 8.0
+
+[biomes.karst.composition.upper.materials.clear_quartz]
+material = "clear_quartz"
+weight = 2.5
+
 [biomes.karst.composition.lower]
 order = 20
-depth_min_normalized = 0.42
-depth_max_normalized = 1.00
-field = "composition"
+depth_min_normalized = 0.5
+depth_max_normalized = 1.0
+field = "karst_masses"
+
 [biomes.karst.composition.lower.materials.limestone]
 material = "limestone"
 weight = 6.0
-[biomes.karst.composition.lower.materials.crystal]
-material = "crystal"
-weight = 1.0
-[biomes.karst.composition.lower.materials.iron]
-material = "iron"
-weight = 1.0
-[biomes.karst.deposits.ore]
+
+[biomes.karst.composition.lower.materials.clear_quartz]
+material = "clear_quartz"
+weight = 3.5
+
+[biomes.karst.deposits.crystal]
 kind = "threshold"
 order = 10
-field = "ore_lenses"
+field = "ore_grain"
 material = "crystal"
 host_material = "limestone"
-depth_min_normalized = 0.35
-depth_max_normalized = 1.00
-threshold_min = -0.65
-threshold_max = -0.3
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+threshold_min = -0.58
+threshold_max = -0.485
+
+[biomes.karst.deposits.diamond]
+kind = "threshold"
+order = 11
+field = "ore_grain"
+material = "diamond"
+host_material = "limestone"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+threshold_min = -0.415
+threshold_max = -0.32
 
 [biomes.saltworks]
-display_name = "Salt shelves"
+display_name = "Evaporite shelves"
 preview_color_rgba = "D5C7A1FF"
-temperature_base_k = 268.0
-temperature_variation_k = 7.0
+temperature_base_k = 305.0
+temperature_variation_k = 12.0
 temperature_field = "temperature"
+lining_material = "salt"
+lining_thickness_fine = 2
+
 [biomes.saltworks.composition.upper]
 order = 10
-depth_min_normalized = 0.00
-depth_max_normalized = 0.42
-field = "composition"
-[biomes.saltworks.composition.upper.materials.sandstone]
-material = "sandstone"
-weight = 4.0
+depth_min_normalized = 0.0
+depth_max_normalized = 0.5
+field = "salt_beds"
+
 [biomes.saltworks.composition.upper.materials.salt]
 material = "salt"
-weight = 3.0
-[biomes.saltworks.composition.upper.materials.clay]
-material = "clay"
-weight = 1.0
+weight = 8.0
+
+[biomes.saltworks.composition.upper.materials.limestone]
+material = "limestone"
+weight = 2.5
+
 [biomes.saltworks.composition.lower]
 order = 20
-depth_min_normalized = 0.42
-depth_max_normalized = 1.00
-field = "composition"
-[biomes.saltworks.composition.lower.materials.basalt]
-material = "basalt"
-weight = 4.0
+depth_min_normalized = 0.5
+depth_max_normalized = 1.0
+field = "salt_beds"
+
 [biomes.saltworks.composition.lower.materials.salt]
 material = "salt"
-weight = 3.0
-[biomes.saltworks.composition.lower.materials.ice]
-material = "ice"
-weight = 1.0
-[biomes.saltworks.deposits.ore]
+weight = 6.0
+
+[biomes.saltworks.composition.lower.materials.limestone]
+material = "limestone"
+weight = 3.5
+
+[biomes.saltworks.deposits.clay]
 kind = "threshold"
 order = 10
-field = "ore_lenses"
-material = "salt"
-host_material = "sandstone"
-depth_min_normalized = 0.00
-depth_max_normalized = 0.65
-threshold_min = -0.65
-threshold_max = -0.3
+field = "ore_grain"
+material = "clay"
+host_material = "salt"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+threshold_min = -0.58
+threshold_max = -0.485
 
 [biomes.fumaroles]
-display_name = "Sulfur chambers"
+display_name = "Sulfur chimneys"
 preview_color_rgba = "C9AB43FF"
-temperature_base_k = 372.0
-temperature_variation_k = 18.0
+temperature_base_k = 365.0
+temperature_variation_k = 25.0
 temperature_field = "temperature"
+lining_material = "obsidian"
+lining_thickness_fine = 2
+
 [biomes.fumaroles.composition.upper]
 order = 10
-depth_min_normalized = 0.00
-depth_max_normalized = 0.42
-field = "composition"
-[biomes.fumaroles.composition.upper.materials.obsidian]
-material = "obsidian"
-weight = 5.0
-[biomes.fumaroles.composition.upper.materials.sulfur]
-material = "sulfur"
-weight = 2.0
+depth_min_normalized = 0.0
+depth_max_normalized = 0.5
+field = "rock_masses"
+
 [biomes.fumaroles.composition.upper.materials.basalt]
 material = "basalt"
-weight = 1.0
+weight = 8.0
+
+[biomes.fumaroles.composition.upper.materials.obsidian]
+material = "obsidian"
+weight = 2.5
+
 [biomes.fumaroles.composition.lower]
 order = 20
-depth_min_normalized = 0.42
-depth_max_normalized = 1.00
-field = "composition"
+depth_min_normalized = 0.5
+depth_max_normalized = 1.0
+field = "rock_masses"
+
+[biomes.fumaroles.composition.lower.materials.basalt]
+material = "basalt"
+weight = 6.0
+
 [biomes.fumaroles.composition.lower.materials.obsidian]
 material = "obsidian"
-weight = 5.0
-[biomes.fumaroles.composition.lower.materials.sulfur]
-material = "sulfur"
-weight = 2.0
-[biomes.fumaroles.composition.lower.materials.crystal]
-material = "crystal"
-weight = 1.0
-[biomes.fumaroles.deposits.ore]
+weight = 3.5
+
+[biomes.fumaroles.deposits.sulfur]
 kind = "threshold"
 order = 10
-field = "ore_lenses"
+field = "ore_grain"
 material = "sulfur"
-host_material = "obsidian"
-depth_min_normalized = 0.20
-depth_max_normalized = 1.00
-threshold_min = -0.65
-threshold_max = -0.3
+host_material = "basalt"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+threshold_min = -0.58
+threshold_max = -0.485
+
+[biomes.fumaroles.deposits.rust]
+kind = "threshold"
+order = 11
+field = "ore_grain"
+material = "rust"
+host_material = "basalt"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+threshold_min = -0.415
+threshold_max = -0.32
+
+[biomes.petroleum]
+display_name = "Capped petroleum basins"
+preview_color_rgba = "7A665DFF"
+temperature_base_k = 370.0
+temperature_variation_k = 20.0
+temperature_field = "temperature"
+lining_material = "basalt"
+lining_thickness_fine = 3
+
+[biomes.petroleum.composition.upper]
+order = 10
+depth_min_normalized = 0.0
+depth_max_normalized = 0.5
+field = "oil_caps"
+
+[biomes.petroleum.composition.upper.materials.shale]
+material = "shale"
+weight = 8.0
+
+[biomes.petroleum.composition.upper.materials.basalt]
+material = "basalt"
+weight = 2.5
+
+[biomes.petroleum.composition.lower]
+order = 20
+depth_min_normalized = 0.5
+depth_max_normalized = 1.0
+field = "oil_caps"
+
+[biomes.petroleum.composition.lower.materials.shale]
+material = "shale"
+weight = 6.0
+
+[biomes.petroleum.composition.lower.materials.basalt]
+material = "basalt"
+weight = 3.5
+
+[biomes.petroleum.deposits.coal]
+kind = "threshold"
+order = 10
+field = "organic_patches"
+material = "coal"
+host_material = "shale"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+threshold_min = -0.58
+threshold_max = -0.485
+
+[biomes.petroleum.deposits.diamond]
+kind = "threshold"
+order = 11
+field = "ore_grain"
+material = "diamond"
+host_material = "shale"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+threshold_min = -0.415
+threshold_max = -0.32
+
+[biomes.ember]
+display_name = "Ember depths"
+preview_color_rgba = "B6644EFF"
+temperature_base_k = 1100.0
+temperature_variation_k = 100.0
+temperature_field = "temperature"
+lining_material = "obsidian"
+lining_thickness_fine = 3
+
+[biomes.ember.composition.upper]
+order = 10
+depth_min_normalized = 0.0
+depth_max_normalized = 0.5
+field = "rock_masses"
+
+[biomes.ember.composition.upper.materials.basalt]
+material = "basalt"
+weight = 8.0
+
+[biomes.ember.composition.upper.materials.obsidian]
+material = "obsidian"
+weight = 2.5
+
+[biomes.ember.composition.lower]
+order = 20
+depth_min_normalized = 0.5
+depth_max_normalized = 1.0
+field = "rock_masses"
+
+[biomes.ember.composition.lower.materials.basalt]
+material = "basalt"
+weight = 6.0
+
+[biomes.ember.composition.lower.materials.obsidian]
+material = "obsidian"
+weight = 3.5
+
+[biomes.ember.deposits.glass]
+kind = "threshold"
+order = 10
+field = "ore_grain"
+material = "glass"
+host_material = "basalt"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+threshold_min = -0.58
+threshold_max = -0.485
+
+[biomes.ember.deposits.iron]
+kind = "threshold"
+order = 11
+field = "ore_grain"
+material = "iron"
+host_material = "basalt"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+threshold_min = -0.415
+threshold_max = -0.32

@@ -1,4 +1,5 @@
-schema_version = 1
+schema_version = 2
+# Sealed reservations exclude traversal connections; walls are at least three fine samples.
 
 [features.landing]
 display_name = "Hearth landing"
@@ -7,7 +8,8 @@ reservation_min_x_fine = 0
 reservation_min_y_fine = 0
 reservation_max_x_fine = 90
 reservation_max_y_fine = 36
-[features.landing.operations.shell]
+
+[features.landing.operations.op_00]
 order = 10
 action = "paint"
 shape = "rectangle"
@@ -16,7 +18,8 @@ y_fine = 0
 width_fine = 90
 height_fine = 36
 material = "masonry"
-[features.landing.operations.chamber]
+
+[features.landing.operations.op_01]
 order = 20
 action = "carve"
 shape = "rectangle"
@@ -24,7 +27,8 @@ x_fine = 3
 y_fine = 6
 width_fine = 84
 height_fine = 27
-[features.landing.operations.left_resource]
+
+[features.landing.operations.op_02]
 order = 30
 action = "paint"
 shape = "rectangle"
@@ -33,7 +37,8 @@ y_fine = 0
 width_fine = 9
 height_fine = 6
 material = "sandstone"
-[features.landing.operations.right_resource]
+
+[features.landing.operations.op_03]
 order = 40
 action = "paint"
 shape = "rectangle"
@@ -42,195 +47,1499 @@ y_fine = 0
 width_fine = 9
 height_fine = 6
 material = "copper"
+
 [features.landing.markers.spawn]
 role = "start"
 x_fine = 45
 y_fine = 10
+
 [features.landing.markers.stone]
 role = "resource_anchor"
 x_fine = 10
 y_fine = 5
+
 [features.landing.markers.ore]
 role = "resource_anchor"
 x_fine = 79
 y_fine = 5
+
 [features.pocket]
-display_name = "Sealed cistern"
+display_name = "Pocket"
 allow_horizontal_reflection = true
 reservation_min_x_fine = 0
 reservation_min_y_fine = 0
-reservation_max_x_fine = 36
-reservation_max_y_fine = 36
-[features.pocket.operations.shell]
-order = 10
-action = "paint"
-shape = "ellipse"
-x_fine = 0
-y_fine = 0
-width_fine = 36
-height_fine = 36
-material = "basalt"
-[features.pocket.operations.interior]
-order = 20
-action = "carve"
-shape = "ellipse"
-x_fine = 3
-y_fine = 3
-width_fine = 30
-height_fine = 30
-[features.pocket.markers.anchor]
-role = "sealed_pocket"
-x_fine = 18
-y_fine = 18
-[features.room]
-display_name = "Gallery room"
-allow_horizontal_reflection = true
-reservation_min_x_fine = 0
-reservation_min_y_fine = 0
-reservation_max_x_fine = 36
-reservation_max_y_fine = 36
-[features.room.operations.shell]
-order = 10
-action = "paint"
-shape = "rectangle"
-x_fine = 0
-y_fine = 0
-width_fine = 36
-height_fine = 36
-material = "masonry"
-[features.room.operations.interior]
-order = 20
-action = "carve"
-shape = "rectangle"
-x_fine = 3
-y_fine = 3
-width_fine = 30
-height_fine = 30
-[features.room.markers.anchor]
-role = "traversal_room"
-x_fine = 18
-y_fine = 18
-[features.ruin]
-display_name = "Masonry relic"
-allow_horizontal_reflection = true
-reservation_min_x_fine = 0
-reservation_min_y_fine = 0
-reservation_max_x_fine = 36
-reservation_max_y_fine = 36
-[features.ruin.operations.shell]
-order = 10
-action = "paint"
-shape = "rectangle"
-x_fine = 0
-y_fine = 0
-width_fine = 36
-height_fine = 36
-material = "masonry"
-[features.ruin.operations.interior]
-order = 20
-action = "carve"
-shape = "rectangle"
-x_fine = 3
-y_fine = 3
-width_fine = 30
-height_fine = 30
-[features.ruin.markers.anchor]
-role = "traversal_room"
-x_fine = 18
-y_fine = 18
-[features.vent]
-display_name = "Inert chimney"
-allow_horizontal_reflection = true
-reservation_min_x_fine = 0
-reservation_min_y_fine = 0
-reservation_max_x_fine = 36
-reservation_max_y_fine = 36
-[features.vent.operations.shell]
-order = 10
-action = "paint"
-shape = "rectangle"
-x_fine = 0
-y_fine = 0
-width_fine = 36
-height_fine = 36
-material = "masonry"
-[features.vent.operations.interior]
-order = 20
-action = "carve"
-shape = "rectangle"
-x_fine = 3
-y_fine = 3
-width_fine = 30
-height_fine = 30
-[features.vent.markers.anchor]
-role = "inert"
-x_fine = 18
-y_fine = 18
+reservation_max_x_fine = 66
+reservation_max_y_fine = 45
 
-
-[features.crystal_geode]
-display_name = "Amethyst geode"
-allow_horizontal_reflection = true
-reservation_min_x_fine = 0
-reservation_min_y_fine = 0
-reservation_max_x_fine = 48
-reservation_max_y_fine = 36
-[features.crystal_geode.operations.shell]
+[features.pocket.operations.op_00]
 order = 10
 action = "paint"
 shape = "ellipse"
-x_fine = 0
-y_fine = 0
-width_fine = 48
-height_fine = 36
-material = "crystal"
-[features.crystal_geode.operations.interior]
+x_fine = 1
+y_fine = 1
+width_fine = 64
+height_fine = 43
+material = "sandstone"
+
+[features.pocket.operations.op_01]
 order = 20
 action = "carve"
 shape = "ellipse"
 x_fine = 4
+y_fine = 8
+width_fine = 42
+height_fine = 30
+
+[features.pocket.operations.op_02]
+order = 30
+action = "carve"
+shape = "ellipse"
+x_fine = 24
 y_fine = 4
+width_fine = 34
+height_fine = 34
+
+[features.pocket.operations.op_03]
+order = 40
+action = "carve"
+shape = "ellipse"
+x_fine = 13
+y_fine = 18
+width_fine = 35
+height_fine = 23
+
+[features.pocket.operations.op_04]
+order = 50
+action = "paint"
+shape = "ellipse"
+x_fine = 13
+y_fine = 3
+width_fine = 22
+height_fine = 4
+material = "clay"
+
+[features.pocket.markers.anchor]
+role = "sealed_pocket"
+x_fine = 33
+y_fine = 22
+
+[features.hearth_shelf]
+display_name = "Hearth shelf"
+allow_horizontal_reflection = true
+reservation_min_x_fine = 0
+reservation_min_y_fine = 0
+reservation_max_x_fine = 84
+reservation_max_y_fine = 42
+
+[features.hearth_shelf.operations.op_00]
+order = 10
+action = "paint"
+shape = "ellipse"
+x_fine = 1
+y_fine = 1
+width_fine = 82
+height_fine = 40
+material = "sandstone"
+
+[features.hearth_shelf.operations.op_01]
+order = 20
+action = "carve"
+shape = "ellipse"
+x_fine = 6
+y_fine = 10
+width_fine = 51
+height_fine = 26
+
+[features.hearth_shelf.operations.op_02]
+order = 30
+action = "carve"
+shape = "ellipse"
+x_fine = 35
+y_fine = 6
 width_fine = 40
-height_fine = 28
-[features.crystal_geode.markers.anchor]
+height_fine = 24
+
+[features.hearth_shelf.operations.op_03]
+order = 40
+action = "carve"
+shape = "ellipse"
+x_fine = 46
+y_fine = 18
+width_fine = 29
+height_fine = 18
+
+[features.hearth_shelf.operations.op_04]
+order = 50
+action = "paint"
+shape = "ellipse"
+x_fine = 16
+y_fine = 3
+width_fine = 28
+height_fine = 4
+material = "coal"
+
+[features.hearth_shelf.markers.anchor]
+role = "sealed_pocket"
+x_fine = 42
+y_fine = 21
+
+[features.verdant_bulb]
+display_name = "Verdant bulb"
+allow_horizontal_reflection = true
+reservation_min_x_fine = 0
+reservation_min_y_fine = 0
+reservation_max_x_fine = 66
+reservation_max_y_fine = 72
+
+[features.verdant_bulb.operations.op_00]
+order = 10
+action = "paint"
+shape = "ellipse"
+x_fine = 1
+y_fine = 1
+width_fine = 64
+height_fine = 70
+material = "dirt"
+
+[features.verdant_bulb.operations.op_01]
+order = 20
+action = "carve"
+shape = "ellipse"
+x_fine = 10
+y_fine = 13
+width_fine = 43
+height_fine = 48
+
+[features.verdant_bulb.operations.op_02]
+order = 30
+action = "carve"
+shape = "ellipse"
+x_fine = 32
+y_fine = 5
+width_fine = 24
+height_fine = 36
+
+[features.verdant_bulb.operations.op_03]
+order = 40
+action = "carve"
+shape = "ellipse"
+x_fine = 5
+y_fine = 37
+width_fine = 34
+height_fine = 27
+
+[features.verdant_bulb.operations.op_04]
+order = 50
+action = "paint"
+shape = "ellipse"
+x_fine = 13
+y_fine = 3
+width_fine = 22
+height_fine = 4
+material = "algae"
+
+[features.verdant_bulb.markers.anchor]
+role = "sealed_pocket"
+x_fine = 33
+y_fine = 36
+
+[features.verdant_root]
+display_name = "Verdant root"
+allow_horizontal_reflection = true
+reservation_min_x_fine = 0
+reservation_min_y_fine = 0
+reservation_max_x_fine = 90
+reservation_max_y_fine = 48
+
+[features.verdant_root.operations.op_00]
+order = 10
+action = "paint"
+shape = "ellipse"
+x_fine = 1
+y_fine = 1
+width_fine = 88
+height_fine = 46
+material = "limestone"
+
+[features.verdant_root.operations.op_01]
+order = 20
+action = "carve"
+shape = "ellipse"
+x_fine = 9
+y_fine = 13
+width_fine = 60
+height_fine = 24
+
+[features.verdant_root.operations.op_02]
+order = 30
+action = "carve"
+shape = "ellipse"
+x_fine = 50
+y_fine = 6
+width_fine = 32
+height_fine = 29
+
+[features.verdant_root.operations.op_03]
+order = 40
+action = "carve"
+shape = "ellipse"
+x_fine = 13
+y_fine = 5
+width_fine = 36
+height_fine = 20
+
+[features.verdant_root.operations.op_04]
+order = 50
+action = "paint"
+shape = "ellipse"
+x_fine = 18
+y_fine = 3
+width_fine = 30
+height_fine = 4
+material = "phosphorite"
+
+[features.verdant_root.markers.anchor]
+role = "sealed_pocket"
+x_fine = 45
+y_fine = 24
+
+[features.mire_pool]
+display_name = "Mire pool"
+allow_horizontal_reflection = true
+reservation_min_x_fine = 0
+reservation_min_y_fine = 0
+reservation_max_x_fine = 108
+reservation_max_y_fine = 39
+
+[features.mire_pool.operations.op_00]
+order = 10
+action = "paint"
+shape = "ellipse"
+x_fine = 1
+y_fine = 1
+width_fine = 106
+height_fine = 37
+material = "clay"
+
+[features.mire_pool.operations.op_01]
+order = 20
+action = "carve"
+shape = "ellipse"
+x_fine = 8
+y_fine = 10
+width_fine = 69
+height_fine = 23
+
+[features.mire_pool.operations.op_02]
+order = 30
+action = "carve"
+shape = "ellipse"
+x_fine = 45
+y_fine = 12
+width_fine = 54
+height_fine = 23
+
+[features.mire_pool.operations.op_03]
+order = 40
+action = "carve"
+shape = "ellipse"
+x_fine = 29
+y_fine = 5
+width_fine = 44
+height_fine = 19
+
+[features.mire_pool.operations.op_04]
+order = 50
+action = "paint"
+shape = "ellipse"
+x_fine = 21
+y_fine = 3
+width_fine = 36
+height_fine = 4
+material = "slime"
+
+[features.mire_pool.markers.anchor]
+role = "sealed_pocket"
+x_fine = 54
+y_fine = 19
+
+[features.mire_chimney]
+display_name = "Mire chimney"
+allow_horizontal_reflection = true
+reservation_min_x_fine = 0
+reservation_min_y_fine = 0
+reservation_max_x_fine = 48
+reservation_max_y_fine = 96
+
+[features.mire_chimney.operations.op_00]
+order = 10
+action = "paint"
+shape = "ellipse"
+x_fine = 1
+y_fine = 1
+width_fine = 46
+height_fine = 94
+material = "shale"
+
+[features.mire_chimney.operations.op_01]
+order = 20
+action = "carve"
+shape = "ellipse"
+x_fine = 13
+y_fine = 8
+width_fine = 24
+height_fine = 59
+
+[features.mire_chimney.operations.op_02]
+order = 30
+action = "carve"
+shape = "ellipse"
+x_fine = 6
+y_fine = 41
+width_fine = 26
+height_fine = 46
+
+[features.mire_chimney.operations.op_03]
+order = 40
+action = "carve"
+shape = "ellipse"
+x_fine = 23
+y_fine = 22
+width_fine = 18
+height_fine = 46
+
+[features.mire_chimney.operations.op_04]
+order = 50
+action = "paint"
+shape = "ellipse"
+x_fine = 9
+y_fine = 3
+width_fine = 16
+height_fine = 4
+material = "coal"
+
+[features.mire_chimney.markers.anchor]
 role = "sealed_pocket"
 x_fine = 24
-y_fine = 18
+y_fine = 48
 
-[features.mine_gallery]
-display_name = "Abandoned salt gallery"
+[features.dune_vault]
+display_name = "Dune vault"
+allow_horizontal_reflection = true
+reservation_min_x_fine = 0
+reservation_min_y_fine = 0
+reservation_max_x_fine = 54
+reservation_max_y_fine = 90
+
+[features.dune_vault.operations.op_00]
+order = 10
+action = "paint"
+shape = "ellipse"
+x_fine = 1
+y_fine = 1
+width_fine = 52
+height_fine = 88
+material = "shale"
+
+[features.dune_vault.operations.op_01]
+order = 20
+action = "carve"
+shape = "ellipse"
+x_fine = 11
+y_fine = 12
+width_fine = 31
+height_fine = 61
+
+[features.dune_vault.operations.op_02]
+order = 30
+action = "carve"
+shape = "ellipse"
+x_fine = 5
+y_fine = 40
+width_fine = 27
+height_fine = 40
+
+[features.dune_vault.operations.op_03]
+order = 40
+action = "carve"
+shape = "ellipse"
+x_fine = 25
+y_fine = 6
+width_fine = 21
+height_fine = 39
+
+[features.dune_vault.operations.op_04]
+order = 50
+action = "paint"
+shape = "ellipse"
+x_fine = 10
+y_fine = 3
+width_fine = 18
+height_fine = 4
+material = "rust"
+
+[features.dune_vault.markers.anchor]
+role = "sealed_pocket"
+x_fine = 27
+y_fine = 45
+
+[features.dune_bed]
+display_name = "Dune bed"
+allow_horizontal_reflection = true
+reservation_min_x_fine = 0
+reservation_min_y_fine = 0
+reservation_max_x_fine = 90
+reservation_max_y_fine = 39
+
+[features.dune_bed.operations.op_00]
+order = 10
+action = "paint"
+shape = "ellipse"
+x_fine = 1
+y_fine = 1
+width_fine = 88
+height_fine = 37
+material = "sandstone"
+
+[features.dune_bed.operations.op_01]
+order = 20
+action = "carve"
+shape = "ellipse"
+x_fine = 6
+y_fine = 8
+width_fine = 66
+height_fine = 23
+
+[features.dune_bed.operations.op_02]
+order = 30
+action = "carve"
+shape = "ellipse"
+x_fine = 46
+y_fine = 15
+width_fine = 36
+height_fine = 19
+
+[features.dune_bed.operations.op_03]
+order = 40
+action = "carve"
+shape = "ellipse"
+x_fine = 20
+y_fine = 4
+width_fine = 37
+height_fine = 18
+
+[features.dune_bed.operations.op_04]
+order = 50
+action = "paint"
+shape = "ellipse"
+x_fine = 18
+y_fine = 3
+width_fine = 30
+height_fine = 4
+material = "iron_ore"
+
+[features.dune_bed.markers.anchor]
+role = "sealed_pocket"
+x_fine = 45
+y_fine = 19
+
+[features.rime_shelf]
+display_name = "Rime shelf"
+allow_horizontal_reflection = true
+reservation_min_x_fine = 0
+reservation_min_y_fine = 0
+reservation_max_x_fine = 102
+reservation_max_y_fine = 39
+
+[features.rime_shelf.operations.op_00]
+order = 10
+action = "paint"
+shape = "ellipse"
+x_fine = 1
+y_fine = 1
+width_fine = 100
+height_fine = 37
+material = "granite"
+
+[features.rime_shelf.operations.op_01]
+order = 20
+action = "carve"
+shape = "ellipse"
+x_fine = 9
+y_fine = 9
+width_fine = 62
+height_fine = 24
+
+[features.rime_shelf.operations.op_02]
+order = 30
+action = "carve"
+shape = "ellipse"
+x_fine = 48
+y_fine = 5
+width_fine = 46
+height_fine = 22
+
+[features.rime_shelf.operations.op_03]
+order = 40
+action = "carve"
+shape = "ellipse"
+x_fine = 56
+y_fine = 17
+width_fine = 31
+height_fine = 17
+
+[features.rime_shelf.operations.op_04]
+order = 50
+action = "paint"
+shape = "ellipse"
+x_fine = 20
+y_fine = 3
+width_fine = 34
+height_fine = 4
+material = "polluted_ice"
+
+[features.rime_shelf.markers.anchor]
+role = "sealed_pocket"
+x_fine = 51
+y_fine = 19
+
+[features.ruin]
+display_name = "Ruin"
+allow_horizontal_reflection = true
+reservation_min_x_fine = 0
+reservation_min_y_fine = 0
+reservation_max_x_fine = 60
+reservation_max_y_fine = 63
+
+[features.ruin.operations.op_00]
+order = 10
+action = "paint"
+shape = "ellipse"
+x_fine = 1
+y_fine = 1
+width_fine = 58
+height_fine = 61
+material = "ice"
+
+[features.ruin.operations.op_01]
+order = 20
+action = "carve"
+shape = "ellipse"
+x_fine = 7
+y_fine = 9
+width_fine = 41
+height_fine = 42
+
+[features.ruin.operations.op_02]
+order = 30
+action = "carve"
+shape = "ellipse"
+x_fine = 29
+y_fine = 26
+width_fine = 23
+height_fine = 29
+
+[features.ruin.operations.op_03]
+order = 40
+action = "carve"
+shape = "ellipse"
+x_fine = 5
+y_fine = 29
+width_fine = 28
+height_fine = 26
+
+[features.ruin.operations.op_04]
+order = 50
+action = "paint"
+shape = "ellipse"
+x_fine = 12
+y_fine = 3
+width_fine = 20
+height_fine = 4
+material = "wolframite"
+
+[features.ruin.markers.anchor]
+role = "sealed_pocket"
+x_fine = 30
+y_fine = 31
+
+[features.room]
+display_name = "Room"
+allow_horizontal_reflection = true
+reservation_min_x_fine = 0
+reservation_min_y_fine = 0
+reservation_max_x_fine = 84
+reservation_max_y_fine = 45
+
+[features.room.operations.op_00]
+order = 10
+action = "paint"
+shape = "ellipse"
+x_fine = 1
+y_fine = 1
+width_fine = 82
+height_fine = 43
+material = "granite"
+
+[features.room.operations.op_01]
+order = 20
+action = "carve"
+shape = "ellipse"
+x_fine = 7
+y_fine = 8
+width_fine = 56
+height_fine = 30
+
+[features.room.operations.op_02]
+order = 30
+action = "carve"
+shape = "ellipse"
+x_fine = 41
+y_fine = 14
+width_fine = 35
+height_fine = 23
+
+[features.room.operations.op_03]
+order = 40
+action = "carve"
+shape = "ellipse"
+x_fine = 19
+y_fine = 4
+width_fine = 32
+height_fine = 21
+
+[features.room.operations.op_04]
+order = 50
+action = "paint"
+shape = "ellipse"
+x_fine = 16
+y_fine = 3
+width_fine = 28
+height_fine = 4
+material = "copper_ore"
+
+[features.room.markers.anchor]
+role = "sealed_pocket"
+x_fine = 42
+y_fine = 22
+
+[features.lode_lens]
+display_name = "Lode lens"
 allow_horizontal_reflection = true
 reservation_min_x_fine = 0
 reservation_min_y_fine = 0
 reservation_max_x_fine = 72
-reservation_max_y_fine = 30
-[features.mine_gallery.operations.shell]
+reservation_max_y_fine = 54
+
+[features.lode_lens.operations.op_00]
 order = 10
 action = "paint"
-shape = "rectangle"
-x_fine = 0
-y_fine = 0
-width_fine = 72
-height_fine = 30
-material = "masonry"
-[features.mine_gallery.operations.interior]
+shape = "ellipse"
+x_fine = 1
+y_fine = 1
+width_fine = 70
+height_fine = 52
+material = "basalt"
+
+[features.lode_lens.operations.op_01]
 order = 20
 action = "carve"
-shape = "rectangle"
-x_fine = 3
-y_fine = 6
-width_fine = 66
-height_fine = 21
-[features.mine_gallery.markers.anchor]
-role = "traversal_room"
+shape = "ellipse"
+x_fine = 9
+y_fine = 12
+width_fine = 51
+height_fine = 30
+
+[features.lode_lens.operations.op_02]
+order = 30
+action = "carve"
+shape = "ellipse"
+x_fine = 25
+y_fine = 5
+width_fine = 35
+height_fine = 28
+
+[features.lode_lens.operations.op_03]
+order = 40
+action = "carve"
+shape = "ellipse"
+x_fine = 6
+y_fine = 22
+width_fine = 31
+height_fine = 24
+
+[features.lode_lens.operations.op_04]
+order = 50
+action = "paint"
+shape = "ellipse"
+x_fine = 14
+y_fine = 3
+width_fine = 24
+height_fine = 4
+material = "aluminum"
+
+[features.lode_lens.markers.anchor]
+role = "sealed_pocket"
 x_fine = 36
-y_fine = 15
-[features.mine_gallery.operations.salt_seam]
+y_fine = 27
+
+[features.crystal_geode]
+display_name = "Crystal geode"
+allow_horizontal_reflection = true
+reservation_min_x_fine = 0
+reservation_min_y_fine = 0
+reservation_max_x_fine = 72
+reservation_max_y_fine = 66
+
+[features.crystal_geode.operations.op_00]
+order = 10
+action = "paint"
+shape = "ellipse"
+x_fine = 1
+y_fine = 1
+width_fine = 70
+height_fine = 64
+material = "limestone"
+
+[features.crystal_geode.operations.op_01]
+order = 20
+action = "paint"
+shape = "ellipse"
+x_fine = 3
+y_fine = 4
+width_fine = 65
+height_fine = 58
+material = "crystal"
+
+[features.crystal_geode.operations.op_02]
 order = 30
 action = "paint"
-shape = "rectangle"
-x_fine = 6
-y_fine = 3
-width_fine = 60
-height_fine = 3
+shape = "ellipse"
+x_fine = 8
+y_fine = 7
+width_fine = 55
+height_fine = 50
+material = "diamond"
+
+[features.crystal_geode.operations.op_03]
+order = 40
+action = "carve"
+shape = "ellipse"
+x_fine = 12
+y_fine = 12
+width_fine = 44
+height_fine = 42
+
+[features.crystal_geode.operations.op_04]
+order = 50
+action = "carve"
+shape = "ellipse"
+x_fine = 30
+y_fine = 22
+width_fine = 30
+height_fine = 32
+
+[features.crystal_geode.operations.op_05]
+order = 60
+action = "carve"
+shape = "ellipse"
+x_fine = 8
+y_fine = 27
+width_fine = 29
+height_fine = 27
+
+[features.crystal_geode.markers.anchor]
+role = "sealed_pocket"
+x_fine = 36
+y_fine = 33
+
+[features.quartz_geode]
+display_name = "Quartz geode"
+allow_horizontal_reflection = true
+reservation_min_x_fine = 0
+reservation_min_y_fine = 0
+reservation_max_x_fine = 60
+reservation_max_y_fine = 54
+
+[features.quartz_geode.operations.op_00]
+order = 10
+action = "paint"
+shape = "ellipse"
+x_fine = 1
+y_fine = 1
+width_fine = 58
+height_fine = 52
+material = "granite"
+
+[features.quartz_geode.operations.op_01]
+order = 20
+action = "paint"
+shape = "ellipse"
+x_fine = 3
+y_fine = 4
+width_fine = 53
+height_fine = 46
+material = "clear_quartz"
+
+[features.quartz_geode.operations.op_02]
+order = 30
+action = "paint"
+shape = "ellipse"
+x_fine = 8
+y_fine = 7
+width_fine = 43
+height_fine = 38
+material = "glass"
+
+[features.quartz_geode.operations.op_03]
+order = 40
+action = "carve"
+shape = "ellipse"
+x_fine = 9
+y_fine = 10
+width_fine = 40
+height_fine = 34
+
+[features.quartz_geode.operations.op_04]
+order = 50
+action = "carve"
+shape = "ellipse"
+x_fine = 23
+y_fine = 5
+width_fine = 26
+height_fine = 24
+
+[features.quartz_geode.operations.op_05]
+order = 60
+action = "carve"
+shape = "ellipse"
+x_fine = 5
+y_fine = 23
+width_fine = 29
+height_fine = 21
+
+[features.quartz_geode.markers.anchor]
+role = "sealed_pocket"
+x_fine = 30
+y_fine = 27
+
+[features.salt_basin]
+display_name = "Salt basin"
+allow_horizontal_reflection = true
+reservation_min_x_fine = 0
+reservation_min_y_fine = 0
+reservation_max_x_fine = 114
+reservation_max_y_fine = 42
+
+[features.salt_basin.operations.op_00]
+order = 10
+action = "paint"
+shape = "ellipse"
+x_fine = 1
+y_fine = 1
+width_fine = 112
+height_fine = 40
 material = "salt"
+
+[features.salt_basin.operations.op_01]
+order = 20
+action = "carve"
+shape = "ellipse"
+x_fine = 7
+y_fine = 11
+width_fine = 81
+height_fine = 24
+
+[features.salt_basin.operations.op_02]
+order = 30
+action = "carve"
+shape = "ellipse"
+x_fine = 51
+y_fine = 7
+width_fine = 54
+height_fine = 21
+
+[features.salt_basin.operations.op_03]
+order = 40
+action = "carve"
+shape = "ellipse"
+x_fine = 22
+y_fine = 5
+width_fine = 49
+height_fine = 20
+
+[features.salt_basin.operations.op_04]
+order = 50
+action = "paint"
+shape = "ellipse"
+x_fine = 22
+y_fine = 3
+width_fine = 38
+height_fine = 4
+material = "clay"
+
+[features.salt_basin.markers.anchor]
+role = "sealed_pocket"
+x_fine = 57
+y_fine = 21
+
+[features.mine_gallery]
+display_name = "Mine gallery"
+allow_horizontal_reflection = true
+reservation_min_x_fine = 0
+reservation_min_y_fine = 0
+reservation_max_x_fine = 96
+reservation_max_y_fine = 39
+
+[features.mine_gallery.operations.op_00]
+order = 10
+action = "paint"
+shape = "ellipse"
+x_fine = 1
+y_fine = 1
+width_fine = 94
+height_fine = 37
+material = "limestone"
+
+[features.mine_gallery.operations.op_01]
+order = 20
+action = "carve"
+shape = "ellipse"
+x_fine = 8
+y_fine = 8
+width_fine = 61
+height_fine = 26
+
+[features.mine_gallery.operations.op_02]
+order = 30
+action = "carve"
+shape = "ellipse"
+x_fine = 47
+y_fine = 15
+width_fine = 40
+height_fine = 18
+
+[features.mine_gallery.operations.op_03]
+order = 40
+action = "carve"
+shape = "ellipse"
+x_fine = 34
+y_fine = 5
+width_fine = 41
+height_fine = 20
+
+[features.mine_gallery.operations.op_04]
+order = 50
+action = "paint"
+shape = "ellipse"
+x_fine = 19
+y_fine = 3
+width_fine = 32
+height_fine = 4
+material = "salt"
+
+[features.mine_gallery.markers.anchor]
+role = "sealed_pocket"
+x_fine = 48
+y_fine = 19
+
+[features.vent]
+display_name = "Vent"
+allow_horizontal_reflection = true
+reservation_min_x_fine = 0
+reservation_min_y_fine = 0
+reservation_max_x_fine = 45
+reservation_max_y_fine = 108
+
+[features.vent.operations.op_00]
+order = 10
+action = "paint"
+shape = "ellipse"
+x_fine = 1
+y_fine = 1
+width_fine = 43
+height_fine = 106
+material = "obsidian"
+
+[features.vent.operations.op_01]
+order = 20
+action = "carve"
+shape = "ellipse"
+x_fine = 13
+y_fine = 8
+width_fine = 20
+height_fine = 79
+
+[features.vent.operations.op_02]
+order = 30
+action = "carve"
+shape = "ellipse"
+x_fine = 6
+y_fine = 48
+width_fine = 21
+height_fine = 51
+
+[features.vent.operations.op_03]
+order = 40
+action = "carve"
+shape = "ellipse"
+x_fine = 19
+y_fine = 24
+width_fine = 18
+height_fine = 45
+
+[features.vent.operations.op_04]
+order = 50
+action = "paint"
+shape = "ellipse"
+x_fine = 9
+y_fine = 3
+width_fine = 15
+height_fine = 4
+material = "sulfur"
+
+[features.vent.markers.anchor]
+role = "sealed_pocket"
+x_fine = 22
+y_fine = 54
+
+[features.fumarole_cluster]
+display_name = "Fumarole cluster"
+allow_horizontal_reflection = true
+reservation_min_x_fine = 0
+reservation_min_y_fine = 0
+reservation_max_x_fine = 78
+reservation_max_y_fine = 90
+
+[features.fumarole_cluster.operations.op_00]
+order = 10
+action = "paint"
+shape = "ellipse"
+x_fine = 1
+y_fine = 1
+width_fine = 76
+height_fine = 88
+material = "basalt"
+
+[features.fumarole_cluster.operations.op_01]
+order = 20
+action = "carve"
+shape = "ellipse"
+x_fine = 13
+y_fine = 17
+width_fine = 48
+height_fine = 58
+
+[features.fumarole_cluster.operations.op_02]
+order = 30
+action = "carve"
+shape = "ellipse"
+x_fine = 34
+y_fine = 7
+width_fine = 30
+height_fine = 41
+
+[features.fumarole_cluster.operations.op_03]
+order = 40
+action = "carve"
+shape = "ellipse"
+x_fine = 7
+y_fine = 43
+width_fine = 35
+height_fine = 37
+
+[features.fumarole_cluster.operations.op_04]
+order = 50
+action = "carve"
+shape = "ellipse"
+x_fine = 41
+y_fine = 43
+width_fine = 28
+height_fine = 33
+
+[features.fumarole_cluster.operations.op_05]
+order = 60
+action = "paint"
+shape = "ellipse"
+x_fine = 15
+y_fine = 3
+width_fine = 26
+height_fine = 4
+material = "rust"
+
+[features.fumarole_cluster.markers.anchor]
+role = "sealed_pocket"
+x_fine = 39
+y_fine = 45
+
+[features.oil_reservoir]
+display_name = "Oil reservoir"
+allow_horizontal_reflection = true
+reservation_min_x_fine = 0
+reservation_min_y_fine = 0
+reservation_max_x_fine = 108
+reservation_max_y_fine = 45
+
+[features.oil_reservoir.operations.op_00]
+order = 10
+action = "paint"
+shape = "ellipse"
+x_fine = 1
+y_fine = 1
+width_fine = 106
+height_fine = 43
+material = "basalt"
+
+[features.oil_reservoir.operations.op_01]
+order = 20
+action = "carve"
+shape = "ellipse"
+x_fine = 9
+y_fine = 11
+width_fine = 73
+height_fine = 27
+
+[features.oil_reservoir.operations.op_02]
+order = 30
+action = "carve"
+shape = "ellipse"
+x_fine = 52
+y_fine = 8
+width_fine = 46
+height_fine = 25
+
+[features.oil_reservoir.operations.op_03]
+order = 40
+action = "carve"
+shape = "ellipse"
+x_fine = 22
+y_fine = 5
+width_fine = 43
+height_fine = 22
+
+[features.oil_reservoir.operations.op_04]
+order = 50
+action = "paint"
+shape = "ellipse"
+x_fine = 21
+y_fine = 3
+width_fine = 36
+height_fine = 4
+material = "coal"
+
+[features.oil_reservoir.markers.anchor]
+role = "sealed_pocket"
+x_fine = 54
+y_fine = 22
+
+[features.oil_channels]
+display_name = "Oil channels"
+allow_horizontal_reflection = true
+reservation_min_x_fine = 0
+reservation_min_y_fine = 0
+reservation_max_x_fine = 96
+reservation_max_y_fine = 54
+
+[features.oil_channels.operations.op_00]
+order = 10
+action = "paint"
+shape = "ellipse"
+x_fine = 1
+y_fine = 1
+width_fine = 94
+height_fine = 52
+material = "shale"
+
+[features.oil_channels.operations.op_01]
+order = 20
+action = "carve"
+shape = "ellipse"
+x_fine = 8
+y_fine = 15
+width_fine = 67
+height_fine = 25
+
+[features.oil_channels.operations.op_02]
+order = 30
+action = "carve"
+shape = "ellipse"
+x_fine = 46
+y_fine = 6
+width_fine = 41
+height_fine = 28
+
+[features.oil_channels.operations.op_03]
+order = 40
+action = "carve"
+shape = "ellipse"
+x_fine = 18
+y_fine = 25
+width_fine = 43
+height_fine = 23
+
+[features.oil_channels.operations.op_04]
+order = 50
+action = "paint"
+shape = "ellipse"
+x_fine = 19
+y_fine = 3
+width_fine = 32
+height_fine = 4
+material = "diamond"
+
+[features.oil_channels.markers.anchor]
+role = "sealed_pocket"
+x_fine = 48
+y_fine = 27
+
+[features.magma_vault]
+display_name = "Magma vault"
+allow_horizontal_reflection = true
+reservation_min_x_fine = 0
+reservation_min_y_fine = 0
+reservation_max_x_fine = 102
+reservation_max_y_fine = 63
+
+[features.magma_vault.operations.op_00]
+order = 10
+action = "paint"
+shape = "ellipse"
+x_fine = 1
+y_fine = 1
+width_fine = 100
+height_fine = 61
+material = "obsidian"
+
+[features.magma_vault.operations.op_01]
+order = 20
+action = "carve"
+shape = "ellipse"
+x_fine = 13
+y_fine = 11
+width_fine = 71
+height_fine = 40
+
+[features.magma_vault.operations.op_02]
+order = 30
+action = "carve"
+shape = "ellipse"
+x_fine = 44
+y_fine = 24
+width_fine = 46
+height_fine = 29
+
+[features.magma_vault.operations.op_03]
+order = 40
+action = "carve"
+shape = "ellipse"
+x_fine = 8
+y_fine = 26
+width_fine = 41
+height_fine = 28
+
+[features.magma_vault.operations.op_04]
+order = 50
+action = "paint"
+shape = "ellipse"
+x_fine = 20
+y_fine = 3
+width_fine = 34
+height_fine = 4
+material = "glass"
+
+[features.magma_vault.markers.anchor]
+role = "sealed_pocket"
+x_fine = 51
+y_fine = 31
+
+[features.ember_fracture]
+display_name = "Ember fracture"
+allow_horizontal_reflection = true
+reservation_min_x_fine = 0
+reservation_min_y_fine = 0
+reservation_max_x_fine = 60
+reservation_max_y_fine = 90
+
+[features.ember_fracture.operations.op_00]
+order = 10
+action = "paint"
+shape = "ellipse"
+x_fine = 1
+y_fine = 1
+width_fine = 58
+height_fine = 88
+material = "basalt"
+
+[features.ember_fracture.operations.op_01]
+order = 20
+action = "carve"
+shape = "ellipse"
+x_fine = 12
+y_fine = 8
+width_fine = 31
+height_fine = 62
+
+[features.ember_fracture.operations.op_02]
+order = 30
+action = "carve"
+shape = "ellipse"
+x_fine = 25
+y_fine = 31
+width_fine = 26
+height_fine = 48
+
+[features.ember_fracture.operations.op_03]
+order = 40
+action = "carve"
+shape = "ellipse"
+x_fine = 7
+y_fine = 48
+width_fine = 26
+height_fine = 33
+
+[features.ember_fracture.operations.op_04]
+order = 50
+action = "paint"
+shape = "ellipse"
+x_fine = 12
+y_fine = 3
+width_fine = 20
+height_fine = 4
+material = "iron"
+
+[features.ember_fracture.markers.anchor]
+role = "sealed_pocket"
+x_fine = 30
+y_fine = 45
+
+[features.hearth_promenade]
+display_name = "Hearth promenade"
+allow_horizontal_reflection = true
+reservation_min_x_fine = 0
+reservation_min_y_fine = 0
+reservation_max_x_fine = 108
+reservation_max_y_fine = 45
+
+[features.hearth_promenade.operations.op_00]
+order = 10
+action = "paint"
+shape = "ellipse"
+x_fine = 0
+y_fine = 0
+width_fine = 108
+height_fine = 45
+material = "sandstone"
+
+[features.hearth_promenade.operations.op_01]
+order = 20
+action = "carve"
+shape = "ellipse"
+x_fine = 5
+y_fine = 9
+width_fine = 72
+height_fine = 29
+
+[features.hearth_promenade.operations.op_02]
+order = 30
+action = "carve"
+shape = "ellipse"
+x_fine = 51
+y_fine = 5
+width_fine = 49
+height_fine = 32
+
+[features.hearth_promenade.markers.anchor]
+role = "traversal_room"
+x_fine = 54
+y_fine = 22
+
+[features.karst_arcade]
+display_name = "Karst arcade"
+allow_horizontal_reflection = true
+reservation_min_x_fine = 0
+reservation_min_y_fine = 0
+reservation_max_x_fine = 126
+reservation_max_y_fine = 60
+
+[features.karst_arcade.operations.op_00]
+order = 10
+action = "paint"
+shape = "ellipse"
+x_fine = 0
+y_fine = 0
+width_fine = 126
+height_fine = 60
+material = "limestone"
+
+[features.karst_arcade.operations.op_01]
+order = 20
+action = "carve"
+shape = "ellipse"
+x_fine = 7
+y_fine = 8
+width_fine = 79
+height_fine = 45
+
+[features.karst_arcade.operations.op_02]
+order = 30
+action = "carve"
+shape = "ellipse"
+x_fine = 55
+y_fine = 19
+width_fine = 64
+height_fine = 35
+
+[features.karst_arcade.operations.op_03]
+order = 40
+action = "carve"
+shape = "ellipse"
+x_fine = 39
+y_fine = 5
+width_fine = 46
+height_fine = 37
+
+[features.karst_arcade.markers.anchor]
+role = "traversal_room"
+x_fine = 63
+y_fine = 30
+
+[features.mire_gallery]
+display_name = "Mire gallery"
+allow_horizontal_reflection = true
+reservation_min_x_fine = 0
+reservation_min_y_fine = 0
+reservation_max_x_fine = 114
+reservation_max_y_fine = 42
+
+[features.mire_gallery.operations.op_00]
+order = 10
+action = "paint"
+shape = "ellipse"
+x_fine = 0
+y_fine = 0
+width_fine = 114
+height_fine = 42
+material = "clay"
+
+[features.mire_gallery.operations.op_01]
+order = 20
+action = "carve"
+shape = "ellipse"
+x_fine = 5
+y_fine = 11
+width_fine = 79
+height_fine = 25
+
+[features.mire_gallery.operations.op_02]
+order = 30
+action = "carve"
+shape = "ellipse"
+x_fine = 57
+y_fine = 5
+width_fine = 49
+height_fine = 30
+
+[features.mire_gallery.markers.anchor]
+role = "traversal_room"
+x_fine = 57
+y_fine = 21

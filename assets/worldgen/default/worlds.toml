@@ -1,14 +1,16 @@
-schema_version = 1
+schema_version = 2
+# Frontier has an upper habitable belt; Hollows has deeper broad cave provinces.
 
 [worlds.frontier]
 display_name = "Frontier basin"
+background_stack = "frontier"
 default_wall_material = "masonry"
 boundary_fine = 3
-min_sites = 24
-max_sites = 64
-site_attempts = 30
-site_spacing_m = 100.0
-boundary_warp_amplitude_m = 25.0
+min_sites = 32
+max_sites = 40
+site_attempts = 60
+site_spacing_m = 160.0
+boundary_warp_amplitude_m = 21.0
 boundary_warp_x_field = "warp_x"
 boundary_warp_y_field = "warp_y"
 start_biome = "hearth"
@@ -18,122 +20,502 @@ start_x_fine = 2000
 start_y_fine = 3000
 start_clearance_m = 3.0
 start_route_width_m = 1.0
+
 [worlds.frontier.start_resources.stone]
 marker = "stone"
 material = "sandstone"
 minimum_fine_cells = 27
 max_distance_m = 20.0
+
 [worlds.frontier.start_resources.ore]
 marker = "ore"
 material = "copper"
 minimum_fine_cells = 27
 max_distance_m = 20.0
+
 [worlds.frontier.biomes.hearth]
 biome = "hearth"
 weight = 4.0
-required_count = 1
+required_count = 2
 depth_min_normalized = 0.0
-depth_max_normalized = 1.0
+depth_max_normalized = 0.42
 distance_min_m = 0.0
 distance_max_m = 2048.0
+
 [worlds.frontier.rules.caves_hearth]
 kind = "threshold_cave"
 phase = "carve"
 order = 10
 biome = "hearth"
-field = "caverns"
+field = "round_caves"
 depth_min_normalized = 0.0
 depth_max_normalized = 1.0
-threshold_min = 0.48
+threshold_min = 0.56
 threshold_max = 1.0
-[worlds.frontier.biomes.rime]
-biome = "rime"
-weight = 2.0
-required_count = 1
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-distance_min_m = 0.0
-distance_max_m = 2048.0
-[worlds.frontier.rules.caves_rime]
-kind = "threshold_cave"
-phase = "carve"
-order = 11
-biome = "rime"
-field = "fissures"
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-threshold_min = 0.48
-threshold_max = 1.0
-[worlds.frontier.biomes.lode]
-biome = "lode"
-weight = 3.0
-required_count = 1
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-distance_min_m = 0.0
-distance_max_m = 2048.0
-[worlds.frontier.rules.caves_lode]
-kind = "threshold_cave"
-phase = "carve"
-order = 12
-biome = "lode"
-field = "caverns"
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-threshold_min = 0.48
-threshold_max = 1.0
-[worlds.frontier.biomes.ember]
-biome = "ember"
-weight = 2.0
-required_count = 1
-depth_min_normalized = 0.5
-depth_max_normalized = 1.0
-distance_min_m = 0.0
-distance_max_m = 2048.0
-[worlds.frontier.rules.caves_ember]
-kind = "threshold_cave"
-phase = "carve"
-order = 13
-biome = "ember"
-field = "caverns"
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-threshold_min = 0.48
-threshold_max = 1.0
-[worlds.frontier.rules.veins]
-kind = "vein_worm"
-phase = "deposit"
-order = 10
-biome = "lode"
-count = 12
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-length_min_m = 15.0
-length_max_m = 60.0
-radius_min_m = 1.0
-radius_max_m = 2.0
-turn_probability = 0.2
-material = "copper"
-host_material = "basalt"
-[worlds.frontier.rules.tunnels]
+
+[worlds.frontier.rules.tunnels_hearth]
 kind = "carve_worm"
 phase = "carve"
 order = 30
 biome = "hearth"
-count = 12
+count = 7
 depth_min_normalized = 0.0
 depth_max_normalized = 1.0
-length_min_m = 15.0
-length_max_m = 60.0
-radius_min_m = 1.0
-radius_max_m = 2.0
-turn_probability = 0.2
-[worlds.frontier.rules.connections]
-kind = "connect_rooms"
+length_min_m = 12.0
+length_max_m = 50.0
+radius_min_m = 0.8
+radius_max_m = 1.8
+turn_probability = 0.12
+
+[worlds.frontier.biomes.verdant]
+biome = "verdant"
+weight = 2.7
+required_count = 1
+depth_min_normalized = 0.04
+depth_max_normalized = 0.45
+distance_min_m = 100.0
+distance_max_m = 2048.0
+
+[worlds.frontier.rules.caves_verdant]
+kind = "threshold_cave"
+phase = "carve"
+order = 11
+biome = "verdant"
+field = "branch_caves"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+threshold_min = 0.05
+threshold_max = 1.0
+
+[worlds.frontier.rules.tunnels_verdant]
+kind = "carve_worm"
+phase = "carve"
+order = 31
+biome = "verdant"
+count = 7
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+length_min_m = 12.0
+length_max_m = 50.0
+radius_min_m = 0.8
+radius_max_m = 1.8
+turn_probability = 0.3
+
+[worlds.frontier.biomes.mire]
+biome = "mire"
+weight = 1.8
+required_count = 1
+depth_min_normalized = 0.18
+depth_max_normalized = 0.65
+distance_min_m = 160.0
+distance_max_m = 2048.0
+
+[worlds.frontier.rules.caves_mire]
+kind = "threshold_cave"
+phase = "carve"
+order = 12
+biome = "mire"
+field = "low_pools"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+threshold_min = -0.08
+threshold_max = 1.0
+
+[worlds.frontier.rules.tunnels_mire]
+kind = "carve_worm"
+phase = "carve"
+order = 32
+biome = "mire"
+count = 7
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+length_min_m = 12.0
+length_max_m = 50.0
+radius_min_m = 0.8
+radius_max_m = 1.8
+turn_probability = 0.3
+
+[worlds.frontier.biomes.dunes]
+biome = "dunes"
+weight = 2.5
+required_count = 1
+depth_min_normalized = 0.02
+depth_max_normalized = 0.46
+distance_min_m = 200.0
+distance_max_m = 2048.0
+
+[worlds.frontier.rules.caves_dunes]
+kind = "threshold_cave"
+phase = "carve"
+order = 13
+biome = "dunes"
+field = "tall_caves"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+threshold_min = 0.57
+threshold_max = 1.0
+
+[worlds.frontier.rules.tunnels_dunes]
+kind = "carve_worm"
+phase = "carve"
+order = 33
+biome = "dunes"
+count = 7
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+length_min_m = 12.0
+length_max_m = 50.0
+radius_min_m = 0.8
+radius_max_m = 1.8
+turn_probability = 0.12
+
+[worlds.frontier.biomes.rime]
+biome = "rime"
+weight = 2.5
+required_count = 1
+depth_min_normalized = 0.02
+depth_max_normalized = 0.48
+distance_min_m = 240.0
+distance_max_m = 2048.0
+
+[worlds.frontier.rules.caves_rime]
+kind = "threshold_cave"
+phase = "carve"
+order = 14
+biome = "rime"
+field = "ice_fractures"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+threshold_min = 0.72
+threshold_max = 1.0
+
+[worlds.frontier.rules.tunnels_rime]
+kind = "carve_worm"
+phase = "carve"
+order = 34
+biome = "rime"
+count = 7
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+length_min_m = 12.0
+length_max_m = 50.0
+radius_min_m = 0.8
+radius_max_m = 1.8
+turn_probability = 0.12
+
+[worlds.frontier.biomes.lode]
+biome = "lode"
+weight = 3.0
+required_count = 2
+depth_min_normalized = 0.36
+depth_max_normalized = 0.78
+distance_min_m = 240.0
+distance_max_m = 2048.0
+
+[worlds.frontier.rules.caves_lode]
+kind = "threshold_cave"
+phase = "carve"
+order = 15
+biome = "lode"
+field = "ore_tunnels"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+threshold_min = 0.78
+threshold_max = 1.0
+
+[worlds.frontier.rules.tunnels_lode]
+kind = "carve_worm"
+phase = "carve"
+order = 35
+biome = "lode"
+count = 3
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+length_min_m = 12.0
+length_max_m = 50.0
+radius_min_m = 0.8
+radius_max_m = 1.8
+turn_probability = 0.12
+
+[worlds.frontier.biomes.karst]
+biome = "karst"
+weight = 2.0
+required_count = 1
+depth_min_normalized = 0.2
+depth_max_normalized = 0.74
+distance_min_m = 150.0
+distance_max_m = 2048.0
+
+[worlds.frontier.rules.caves_karst]
+kind = "threshold_cave"
+phase = "carve"
+order = 16
+biome = "karst"
+field = "karst_cells"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+threshold_min = 0.18
+threshold_max = 1.0
+
+[worlds.frontier.rules.tunnels_karst]
+kind = "carve_worm"
+phase = "carve"
+order = 36
+biome = "karst"
+count = 7
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+length_min_m = 12.0
+length_max_m = 50.0
+radius_min_m = 0.8
+radius_max_m = 1.8
+turn_probability = 0.12
+
+[worlds.frontier.biomes.saltworks]
+biome = "saltworks"
+weight = 1.8
+required_count = 1
+depth_min_normalized = 0.22
+depth_max_normalized = 0.72
+distance_min_m = 200.0
+distance_max_m = 2048.0
+
+[worlds.frontier.rules.caves_saltworks]
+kind = "threshold_cave"
+phase = "carve"
+order = 17
+biome = "saltworks"
+field = "salt_basins"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+threshold_min = -0.04
+threshold_max = 1.0
+
+[worlds.frontier.rules.tunnels_saltworks]
+kind = "carve_worm"
+phase = "carve"
+order = 37
+biome = "saltworks"
+count = 7
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+length_min_m = 12.0
+length_max_m = 50.0
+radius_min_m = 0.8
+radius_max_m = 1.8
+turn_probability = 0.12
+
+[worlds.frontier.biomes.fumaroles]
+biome = "fumaroles"
+weight = 1.3
+required_count = 1
+depth_min_normalized = 0.56
+depth_max_normalized = 0.92
+distance_min_m = 380.0
+distance_max_m = 2048.0
+
+[worlds.frontier.rules.caves_fumaroles]
+kind = "threshold_cave"
+phase = "carve"
+order = 18
+biome = "fumaroles"
+field = "chimney_fissures"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+threshold_min = 0.59
+threshold_max = 1.0
+
+[worlds.frontier.rules.tunnels_fumaroles]
+kind = "carve_worm"
+phase = "carve"
+order = 38
+biome = "fumaroles"
+count = 7
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+length_min_m = 12.0
+length_max_m = 50.0
+radius_min_m = 0.8
+radius_max_m = 1.8
+turn_probability = 0.12
+
+[worlds.frontier.biomes.petroleum]
+biome = "petroleum"
+weight = 1.7
+required_count = 1
+depth_min_normalized = 0.63
+depth_max_normalized = 0.94
+distance_min_m = 400.0
+distance_max_m = 2048.0
+
+[worlds.frontier.rules.caves_petroleum]
+kind = "threshold_cave"
+phase = "carve"
+order = 19
+biome = "petroleum"
+field = "oil_channels"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+threshold_min = 0.04
+threshold_max = 1.0
+
+[worlds.frontier.rules.tunnels_petroleum]
+kind = "carve_worm"
+phase = "carve"
+order = 39
+biome = "petroleum"
+count = 7
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+length_min_m = 12.0
+length_max_m = 50.0
+radius_min_m = 0.8
+radius_max_m = 1.8
+turn_probability = 0.12
+
+[worlds.frontier.biomes.ember]
+biome = "ember"
+weight = 1.8
+required_count = 1
+depth_min_normalized = 0.82
+depth_max_normalized = 1.0
+distance_min_m = 500.0
+distance_max_m = 2048.0
+
+[worlds.frontier.rules.caves_ember]
+kind = "threshold_cave"
+phase = "carve"
+order = 20
+biome = "ember"
+field = "hot_chambers"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+threshold_min = 0.66
+threshold_max = 1.0
+
+[worlds.frontier.rules.tunnels_ember]
+kind = "carve_worm"
 phase = "carve"
 order = 40
-radius_m = 1.5
-extra_links = 2
+biome = "ember"
+count = 7
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+length_min_m = 12.0
+length_max_m = 50.0
+radius_min_m = 0.8
+radius_max_m = 1.8
+turn_probability = 0.12
+
+[worlds.frontier.rules.veins_copper]
+kind = "vein_worm"
+phase = "deposit"
+order = 10
+biome = "lode"
+count = 10
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+length_min_m = 24.0
+length_max_m = 90.0
+radius_min_m = 0.4
+radius_max_m = 1.0
+turn_probability = 0.08
+material = "copper"
+host_material = "granite"
+
+[worlds.frontier.rules.veins_iron]
+kind = "vein_worm"
+phase = "deposit"
+order = 11
+biome = "lode"
+count = 10
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+length_min_m = 24.0
+length_max_m = 90.0
+radius_min_m = 0.4
+radius_max_m = 1.0
+turn_probability = 0.08
+material = "iron"
+host_material = "granite"
+
+[worlds.frontier.rules.veins_aluminum]
+kind = "vein_worm"
+phase = "deposit"
+order = 12
+biome = "lode"
+count = 10
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+length_min_m = 24.0
+length_max_m = 90.0
+radius_min_m = 0.4
+radius_max_m = 1.0
+turn_probability = 0.08
+material = "aluminum"
+host_material = "granite"
+
+[worlds.frontier.rules.veins_wolframite]
+kind = "vein_worm"
+phase = "deposit"
+order = 13
+biome = "lode"
+count = 10
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+length_min_m = 24.0
+length_max_m = 90.0
+radius_min_m = 0.4
+radius_max_m = 1.0
+turn_probability = 0.08
+material = "wolframite"
+host_material = "granite"
+
+[worlds.frontier.rules.traversal_hearth]
+kind = "feature"
+phase = "stamp"
+order = 70
+feature = "hearth_promenade"
+biome = "hearth"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+spacing_m = 45.0
+min_count = 1
+max_count = 2
+attempts = 4096
+priority = 50
+reflect = true
+
+[worlds.frontier.rules.traversal_karst]
+kind = "feature"
+phase = "stamp"
+order = 71
+feature = "karst_arcade"
+biome = "karst"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+spacing_m = 45.0
+min_count = 1
+max_count = 2
+attempts = 4096
+priority = 49
+reflect = true
+
+[worlds.frontier.rules.traversal_mire]
+kind = "feature"
+phase = "stamp"
+order = 72
+feature = "mire_gallery"
+biome = "mire"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+spacing_m = 45.0
+min_count = 1
+max_count = 2
+attempts = 4096
+priority = 48
+reflect = true
+
 [worlds.frontier.rules.cisterns]
 kind = "feature"
 phase = "stamp"
@@ -142,13 +524,326 @@ feature = "pocket"
 biome = "hearth"
 depth_min_normalized = 0.0
 depth_max_normalized = 1.0
-spacing_m = 50.0
-min_count = 0
-max_count = 4
-attempts = 64
-priority = 90
+spacing_m = 35.0
+min_count = 1
+max_count = 3
+attempts = 4096
+priority = 100
 reflect = true
-[worlds.frontier.rules.galleries]
+
+[worlds.frontier.rules.fill_pocket_water]
+kind = "matter_fill"
+phase = "fill"
+order = 10
+feature_rule = "cisterns"
+marker = "anchor"
+material = "water"
+temperature_k = 293.0
+bulk_density_kg_m3 = 1000.0
+fill_height_m = 4.333333333333333
+
+[worlds.frontier.rules.fill_pocket_oxygen]
+kind = "matter_fill"
+phase = "fill"
+order = 11
+feature_rule = "cisterns"
+marker = "anchor"
+material = "oxygen"
+temperature_k = 293.0
+bulk_density_kg_m3 = 1.2
+
+[worlds.frontier.rules.landmark_hearth_shelf]
+kind = "feature"
+phase = "stamp"
+order = 11
+feature = "hearth_shelf"
+biome = "hearth"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+spacing_m = 35.0
+min_count = 1
+max_count = 3
+attempts = 4096
+priority = 99
+reflect = true
+
+[worlds.frontier.rules.fill_hearth_shelf_oxygen]
+kind = "matter_fill"
+phase = "fill"
+order = 12
+feature_rule = "landmark_hearth_shelf"
+marker = "anchor"
+material = "oxygen"
+temperature_k = 293.0
+bulk_density_kg_m3 = 1.2
+
+[worlds.frontier.rules.landmark_verdant_bulb]
+kind = "feature"
+phase = "stamp"
+order = 12
+feature = "verdant_bulb"
+biome = "verdant"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+spacing_m = 35.0
+min_count = 1
+max_count = 3
+attempts = 4096
+priority = 98
+reflect = true
+
+[worlds.frontier.rules.fill_verdant_bulb_water]
+kind = "matter_fill"
+phase = "fill"
+order = 13
+feature_rule = "landmark_verdant_bulb"
+marker = "anchor"
+material = "water"
+temperature_k = 300.0
+bulk_density_kg_m3 = 1000.0
+fill_height_m = 3.6666666666666665
+
+[worlds.frontier.rules.fill_verdant_bulb_oxygen]
+kind = "matter_fill"
+phase = "fill"
+order = 14
+feature_rule = "landmark_verdant_bulb"
+marker = "anchor"
+material = "oxygen"
+temperature_k = 300.0
+bulk_density_kg_m3 = 1.2
+
+[worlds.frontier.rules.landmark_verdant_root]
+kind = "feature"
+phase = "stamp"
+order = 13
+feature = "verdant_root"
+biome = "verdant"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+spacing_m = 35.0
+min_count = 1
+max_count = 3
+attempts = 4096
+priority = 97
+reflect = true
+
+[worlds.frontier.rules.fill_verdant_root_polluted_oxygen]
+kind = "matter_fill"
+phase = "fill"
+order = 15
+feature_rule = "landmark_verdant_root"
+marker = "anchor"
+material = "polluted_oxygen"
+temperature_k = 300.0
+bulk_density_kg_m3 = 1.3
+
+[worlds.frontier.rules.landmark_mire_pool]
+kind = "feature"
+phase = "stamp"
+order = 14
+feature = "mire_pool"
+biome = "mire"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+spacing_m = 35.0
+min_count = 1
+max_count = 3
+attempts = 4096
+priority = 96
+reflect = true
+
+[worlds.frontier.rules.fill_mire_pool_polluted_water]
+kind = "matter_fill"
+phase = "fill"
+order = 16
+feature_rule = "landmark_mire_pool"
+marker = "anchor"
+material = "polluted_water"
+temperature_k = 305.0
+bulk_density_kg_m3 = 1030.0
+fill_height_m = 5.666666666666667
+
+[worlds.frontier.rules.fill_mire_pool_polluted_oxygen]
+kind = "matter_fill"
+phase = "fill"
+order = 17
+feature_rule = "landmark_mire_pool"
+marker = "anchor"
+material = "polluted_oxygen"
+temperature_k = 305.0
+bulk_density_kg_m3 = 1.3
+
+[worlds.frontier.rules.landmark_mire_chimney]
+kind = "feature"
+phase = "stamp"
+order = 15
+feature = "mire_chimney"
+biome = "mire"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+spacing_m = 35.0
+min_count = 1
+max_count = 3
+attempts = 4096
+priority = 95
+reflect = true
+
+[worlds.frontier.rules.fill_mire_chimney_polluted_oxygen]
+kind = "matter_fill"
+phase = "fill"
+order = 18
+feature_rule = "landmark_mire_chimney"
+marker = "anchor"
+material = "polluted_oxygen"
+temperature_k = 305.0
+bulk_density_kg_m3 = 1.3
+
+[worlds.frontier.rules.landmark_dune_vault]
+kind = "feature"
+phase = "stamp"
+order = 16
+feature = "dune_vault"
+biome = "dunes"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+spacing_m = 35.0
+min_count = 1
+max_count = 3
+attempts = 4096
+priority = 94
+reflect = true
+
+[worlds.frontier.rules.fill_dune_vault_regolith]
+kind = "matter_fill"
+phase = "fill"
+order = 19
+feature_rule = "landmark_dune_vault"
+marker = "anchor"
+material = "regolith"
+temperature_k = 315.0
+bulk_density_kg_m3 = 1500.0
+fill_height_m = 4.0
+
+[worlds.frontier.rules.fill_dune_vault_carbon_dioxide]
+kind = "matter_fill"
+phase = "fill"
+order = 20
+feature_rule = "landmark_dune_vault"
+marker = "anchor"
+material = "carbon_dioxide"
+temperature_k = 315.0
+bulk_density_kg_m3 = 1.8
+
+[worlds.frontier.rules.landmark_dune_bed]
+kind = "feature"
+phase = "stamp"
+order = 17
+feature = "dune_bed"
+biome = "dunes"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+spacing_m = 35.0
+min_count = 1
+max_count = 3
+attempts = 4096
+priority = 93
+reflect = true
+
+[worlds.frontier.rules.fill_dune_bed_sand]
+kind = "matter_fill"
+phase = "fill"
+order = 21
+feature_rule = "landmark_dune_bed"
+marker = "anchor"
+material = "sand"
+temperature_k = 315.0
+bulk_density_kg_m3 = 1600.0
+fill_height_m = 4.333333333333333
+
+[worlds.frontier.rules.fill_dune_bed_carbon_dioxide]
+kind = "matter_fill"
+phase = "fill"
+order = 22
+feature_rule = "landmark_dune_bed"
+marker = "anchor"
+material = "carbon_dioxide"
+temperature_k = 315.0
+bulk_density_kg_m3 = 1.8
+
+[worlds.frontier.rules.landmark_rime_shelf]
+kind = "feature"
+phase = "stamp"
+order = 18
+feature = "rime_shelf"
+biome = "rime"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+spacing_m = 35.0
+min_count = 1
+max_count = 3
+attempts = 4096
+priority = 92
+reflect = true
+
+[worlds.frontier.rules.fill_rime_shelf_snow]
+kind = "matter_fill"
+phase = "fill"
+order = 23
+feature_rule = "landmark_rime_shelf"
+marker = "anchor"
+material = "snow"
+temperature_k = 248.0
+bulk_density_kg_m3 = 300.0
+fill_height_m = 3.6666666666666665
+
+[worlds.frontier.rules.fill_rime_shelf_carbon_dioxide]
+kind = "matter_fill"
+phase = "fill"
+order = 24
+feature_rule = "landmark_rime_shelf"
+marker = "anchor"
+material = "carbon_dioxide"
+temperature_k = 248.0
+bulk_density_kg_m3 = 1.8
+
+[worlds.frontier.rules.landmark_ruin]
+kind = "feature"
+phase = "stamp"
+order = 19
+feature = "ruin"
+biome = "rime"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+spacing_m = 35.0
+min_count = 1
+max_count = 3
+attempts = 4096
+priority = 91
+reflect = true
+
+[worlds.frontier.rules.fill_ruin_brine]
+kind = "matter_fill"
+phase = "fill"
+order = 25
+feature_rule = "landmark_ruin"
+marker = "anchor"
+material = "brine"
+temperature_k = 248.0
+bulk_density_kg_m3 = 1200.0
+fill_height_m = 5.0
+
+[worlds.frontier.rules.fill_ruin_carbon_dioxide]
+kind = "matter_fill"
+phase = "fill"
+order = 26
+feature_rule = "landmark_ruin"
+marker = "anchor"
+material = "carbon_dioxide"
+temperature_k = 248.0
+bulk_density_kg_m3 = 1.8
+
+[worlds.frontier.rules.landmark_room]
 kind = "feature"
 phase = "stamp"
 order = 20
@@ -156,68 +851,387 @@ feature = "room"
 biome = "lode"
 depth_min_normalized = 0.0
 depth_max_normalized = 1.0
-spacing_m = 50.0
-min_count = 0
-max_count = 4
-attempts = 64
-priority = 80
+spacing_m = 35.0
+min_count = 1
+max_count = 3
+attempts = 4096
+priority = 90
 reflect = true
-[worlds.frontier.rules.relics]
+
+[worlds.frontier.rules.fill_room_pebbles]
+kind = "matter_fill"
+phase = "fill"
+order = 27
+feature_rule = "landmark_room"
+marker = "anchor"
+material = "pebbles"
+temperature_k = 318.0
+bulk_density_kg_m3 = 1700.0
+fill_height_m = 3.3333333333333335
+
+[worlds.frontier.rules.landmark_lode_lens]
+kind = "feature"
+phase = "stamp"
+order = 21
+feature = "lode_lens"
+biome = "lode"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+spacing_m = 35.0
+min_count = 1
+max_count = 3
+attempts = 4096
+priority = 89
+reflect = true
+
+[worlds.frontier.rules.fill_lode_lens_hydrogen]
+kind = "matter_fill"
+phase = "fill"
+order = 28
+feature_rule = "landmark_lode_lens"
+marker = "anchor"
+material = "hydrogen"
+temperature_k = 318.0
+bulk_density_kg_m3 = 0.09
+
+[worlds.frontier.rules.landmark_crystal_geode]
+kind = "feature"
+phase = "stamp"
+order = 22
+feature = "crystal_geode"
+biome = "karst"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+spacing_m = 35.0
+min_count = 1
+max_count = 3
+attempts = 4096
+priority = 88
+reflect = true
+
+[worlds.frontier.rules.fill_crystal_geode_water]
+kind = "matter_fill"
+phase = "fill"
+order = 29
+feature_rule = "landmark_crystal_geode"
+marker = "anchor"
+material = "water"
+temperature_k = 286.0
+bulk_density_kg_m3 = 1000.0
+fill_height_m = 7.0
+
+[worlds.frontier.rules.fill_crystal_geode_oxygen]
+kind = "matter_fill"
+phase = "fill"
+order = 30
+feature_rule = "landmark_crystal_geode"
+marker = "anchor"
+material = "oxygen"
+temperature_k = 286.0
+bulk_density_kg_m3 = 1.2
+
+[worlds.frontier.rules.landmark_quartz_geode]
+kind = "feature"
+phase = "stamp"
+order = 23
+feature = "quartz_geode"
+biome = "karst"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+spacing_m = 35.0
+min_count = 1
+max_count = 3
+attempts = 4096
+priority = 87
+reflect = true
+
+[worlds.frontier.rules.fill_quartz_geode_water]
+kind = "matter_fill"
+phase = "fill"
+order = 31
+feature_rule = "landmark_quartz_geode"
+marker = "anchor"
+material = "water"
+temperature_k = 286.0
+bulk_density_kg_m3 = 1000.0
+fill_height_m = 3.6666666666666665
+
+[worlds.frontier.rules.fill_quartz_geode_oxygen]
+kind = "matter_fill"
+phase = "fill"
+order = 32
+feature_rule = "landmark_quartz_geode"
+marker = "anchor"
+material = "oxygen"
+temperature_k = 286.0
+bulk_density_kg_m3 = 1.2
+
+[worlds.frontier.rules.landmark_salt_basin]
+kind = "feature"
+phase = "stamp"
+order = 24
+feature = "salt_basin"
+biome = "saltworks"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+spacing_m = 35.0
+min_count = 1
+max_count = 3
+attempts = 4096
+priority = 86
+reflect = true
+
+[worlds.frontier.rules.fill_salt_basin_brine]
+kind = "matter_fill"
+phase = "fill"
+order = 33
+feature_rule = "landmark_salt_basin"
+marker = "anchor"
+material = "brine"
+temperature_k = 305.0
+bulk_density_kg_m3 = 1200.0
+fill_height_m = 5.666666666666667
+
+[worlds.frontier.rules.fill_salt_basin_carbon_dioxide]
+kind = "matter_fill"
+phase = "fill"
+order = 34
+feature_rule = "landmark_salt_basin"
+marker = "anchor"
+material = "carbon_dioxide"
+temperature_k = 305.0
+bulk_density_kg_m3 = 1.8
+
+[worlds.frontier.rules.landmark_mine_gallery]
+kind = "feature"
+phase = "stamp"
+order = 25
+feature = "mine_gallery"
+biome = "saltworks"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+spacing_m = 35.0
+min_count = 1
+max_count = 3
+attempts = 4096
+priority = 85
+reflect = true
+
+[worlds.frontier.rules.fill_mine_gallery_sand]
+kind = "matter_fill"
+phase = "fill"
+order = 35
+feature_rule = "landmark_mine_gallery"
+marker = "anchor"
+material = "sand"
+temperature_k = 305.0
+bulk_density_kg_m3 = 1600.0
+fill_height_m = 3.6666666666666665
+
+[worlds.frontier.rules.fill_mine_gallery_carbon_dioxide]
+kind = "matter_fill"
+phase = "fill"
+order = 36
+feature_rule = "landmark_mine_gallery"
+marker = "anchor"
+material = "carbon_dioxide"
+temperature_k = 305.0
+bulk_density_kg_m3 = 1.8
+
+[worlds.frontier.rules.landmark_vent]
+kind = "feature"
+phase = "stamp"
+order = 26
+feature = "vent"
+biome = "fumaroles"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+spacing_m = 35.0
+min_count = 1
+max_count = 3
+attempts = 4096
+priority = 84
+reflect = true
+
+[worlds.frontier.rules.fill_vent_steam]
+kind = "matter_fill"
+phase = "fill"
+order = 37
+feature_rule = "landmark_vent"
+marker = "anchor"
+material = "steam"
+temperature_k = 365.0
+bulk_density_kg_m3 = 0.6
+
+[worlds.frontier.rules.landmark_fumarole_cluster]
+kind = "feature"
+phase = "stamp"
+order = 27
+feature = "fumarole_cluster"
+biome = "fumaroles"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+spacing_m = 35.0
+min_count = 1
+max_count = 3
+attempts = 4096
+priority = 83
+reflect = true
+
+[worlds.frontier.rules.fill_fumarole_cluster_chlorine]
+kind = "matter_fill"
+phase = "fill"
+order = 38
+feature_rule = "landmark_fumarole_cluster"
+marker = "anchor"
+material = "chlorine"
+temperature_k = 365.0
+bulk_density_kg_m3 = 3.2
+
+[worlds.frontier.rules.landmark_oil_reservoir]
+kind = "feature"
+phase = "stamp"
+order = 28
+feature = "oil_reservoir"
+biome = "petroleum"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+spacing_m = 35.0
+min_count = 1
+max_count = 3
+attempts = 4096
+priority = 82
+reflect = true
+
+[worlds.frontier.rules.fill_oil_reservoir_crude_oil]
+kind = "matter_fill"
+phase = "fill"
+order = 39
+feature_rule = "landmark_oil_reservoir"
+marker = "anchor"
+material = "crude_oil"
+temperature_k = 370.0
+bulk_density_kg_m3 = 850.0
+fill_height_m = 5.666666666666667
+
+[worlds.frontier.rules.fill_oil_reservoir_natural_gas]
+kind = "matter_fill"
+phase = "fill"
+order = 40
+feature_rule = "landmark_oil_reservoir"
+marker = "anchor"
+material = "natural_gas"
+temperature_k = 370.0
+bulk_density_kg_m3 = 0.8
+
+[worlds.frontier.rules.landmark_oil_channels]
+kind = "feature"
+phase = "stamp"
+order = 29
+feature = "oil_channels"
+biome = "petroleum"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+spacing_m = 35.0
+min_count = 1
+max_count = 3
+attempts = 4096
+priority = 81
+reflect = true
+
+[worlds.frontier.rules.fill_oil_channels_crude_oil]
+kind = "matter_fill"
+phase = "fill"
+order = 41
+feature_rule = "landmark_oil_channels"
+marker = "anchor"
+material = "crude_oil"
+temperature_k = 370.0
+bulk_density_kg_m3 = 850.0
+fill_height_m = 4.0
+
+[worlds.frontier.rules.fill_oil_channels_carbon_dioxide]
+kind = "matter_fill"
+phase = "fill"
+order = 42
+feature_rule = "landmark_oil_channels"
+marker = "anchor"
+material = "carbon_dioxide"
+temperature_k = 370.0
+bulk_density_kg_m3 = 1.8
+
+[worlds.frontier.rules.landmark_magma_vault]
 kind = "feature"
 phase = "stamp"
 order = 30
-feature = "ruin"
-biome = "rime"
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-spacing_m = 50.0
-min_count = 0
-max_count = 4
-attempts = 64
-priority = 70
-reflect = true
-[worlds.frontier.rules.chimneys]
-kind = "feature"
-phase = "stamp"
-order = 40
-feature = "vent"
+feature = "magma_vault"
 biome = "ember"
 depth_min_normalized = 0.0
 depth_max_normalized = 1.0
-spacing_m = 50.0
-min_count = 0
-max_count = 4
-attempts = 64
-priority = 60
+spacing_m = 35.0
+min_count = 1
+max_count = 3
+attempts = 4096
+priority = 80
 reflect = true
-[worlds.frontier.rules.water]
+
+[worlds.frontier.rules.fill_magma_vault_magma]
 kind = "matter_fill"
 phase = "fill"
-order = 10
-feature_rule = "cisterns"
+order = 43
+feature_rule = "landmark_magma_vault"
 marker = "anchor"
-material = "water"
-temperature_k = 290.0
-bulk_density_kg_m3 = 1000.0
-fill_height_m = 4.0
-[worlds.frontier.rules.air]
+material = "magma"
+temperature_k = 1100.0
+bulk_density_kg_m3 = 2800.0
+fill_height_m = 7.666666666666667
+
+[worlds.frontier.rules.landmark_ember_fracture]
+kind = "feature"
+phase = "stamp"
+order = 31
+feature = "ember_fracture"
+biome = "ember"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+spacing_m = 35.0
+min_count = 1
+max_count = 3
+attempts = 4096
+priority = 79
+reflect = true
+
+[worlds.frontier.rules.fill_ember_fracture_ash]
 kind = "matter_fill"
 phase = "fill"
-order = 20
-feature_rule = "cisterns"
+order = 44
+feature_rule = "landmark_ember_fracture"
 marker = "anchor"
-material = "oxygen"
-temperature_k = 290.0
-bulk_density_kg_m3 = 1.2
+material = "ash"
+temperature_k = 1100.0
+bulk_density_kg_m3 = 650.0
+fill_height_m = 4.666666666666667
+
+[worlds.frontier.rules.fill_ember_fracture_steam]
+kind = "matter_fill"
+phase = "fill"
+order = 45
+feature_rule = "landmark_ember_fracture"
+marker = "anchor"
+material = "steam"
+temperature_k = 1100.0
+bulk_density_kg_m3 = 0.6
+
 [worlds.hollows]
 display_name = "The wide hollows"
+background_stack = "hollows"
 default_wall_material = "masonry"
 boundary_fine = 3
-min_sites = 24
-max_sites = 64
-site_attempts = 30
-site_spacing_m = 100.0
-boundary_warp_amplitude_m = 25.0
+min_sites = 40
+max_sites = 48
+site_attempts = 60
+site_spacing_m = 140.0
+boundary_warp_amplitude_m = 29.0
 boundary_warp_x_field = "warp_x"
 boundary_warp_y_field = "warp_y"
 start_biome = "hearth"
@@ -227,122 +1241,502 @@ start_x_fine = 2000
 start_y_fine = 3000
 start_clearance_m = 3.0
 start_route_width_m = 1.0
+
 [worlds.hollows.start_resources.stone]
 marker = "stone"
 material = "sandstone"
 minimum_fine_cells = 27
 max_distance_m = 20.0
+
 [worlds.hollows.start_resources.ore]
 marker = "ore"
 material = "copper"
 minimum_fine_cells = 27
 max_distance_m = 20.0
+
 [worlds.hollows.biomes.hearth]
 biome = "hearth"
-weight = 2.0
+weight = 2.6
 required_count = 1
 depth_min_normalized = 0.0
-depth_max_normalized = 1.0
+depth_max_normalized = 0.42
 distance_min_m = 0.0
 distance_max_m = 2048.0
+
 [worlds.hollows.rules.caves_hearth]
 kind = "threshold_cave"
 phase = "carve"
 order = 10
 biome = "hearth"
-field = "caverns"
+field = "round_caves"
 depth_min_normalized = 0.0
 depth_max_normalized = 1.0
-threshold_min = 0.25
+threshold_min = 0.42
 threshold_max = 1.0
-[worlds.hollows.biomes.rime]
-biome = "rime"
-weight = 4.0
-required_count = 1
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-distance_min_m = 0.0
-distance_max_m = 2048.0
-[worlds.hollows.rules.caves_rime]
-kind = "threshold_cave"
-phase = "carve"
-order = 11
-biome = "rime"
-field = "fissures"
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-threshold_min = 0.25
-threshold_max = 1.0
-[worlds.hollows.biomes.lode]
-biome = "lode"
-weight = 3.0
-required_count = 1
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-distance_min_m = 0.0
-distance_max_m = 2048.0
-[worlds.hollows.rules.caves_lode]
-kind = "threshold_cave"
-phase = "carve"
-order = 12
-biome = "lode"
-field = "caverns"
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-threshold_min = 0.25
-threshold_max = 1.0
-[worlds.hollows.biomes.ember]
-biome = "ember"
-weight = 2.0
-required_count = 1
-depth_min_normalized = 0.5
-depth_max_normalized = 1.0
-distance_min_m = 0.0
-distance_max_m = 2048.0
-[worlds.hollows.rules.caves_ember]
-kind = "threshold_cave"
-phase = "carve"
-order = 13
-biome = "ember"
-field = "caverns"
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-threshold_min = 0.25
-threshold_max = 1.0
-[worlds.hollows.rules.veins]
-kind = "vein_worm"
-phase = "deposit"
-order = 10
-biome = "lode"
-count = 24
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-length_min_m = 30.0
-length_max_m = 100.0
-radius_min_m = 1.0
-radius_max_m = 4.0
-turn_probability = 0.2
-material = "copper"
-host_material = "basalt"
-[worlds.hollows.rules.tunnels]
+
+[worlds.hollows.rules.tunnels_hearth]
 kind = "carve_worm"
 phase = "carve"
 order = 30
 biome = "hearth"
-count = 24
+count = 14
 depth_min_normalized = 0.0
 depth_max_normalized = 1.0
-length_min_m = 30.0
-length_max_m = 100.0
-radius_min_m = 1.0
-radius_max_m = 4.0
-turn_probability = 0.2
-[worlds.hollows.rules.connections]
-kind = "connect_rooms"
+length_min_m = 25.0
+length_max_m = 105.0
+radius_min_m = 1.6
+radius_max_m = 3.5
+turn_probability = 0.12
+
+[worlds.hollows.biomes.verdant]
+biome = "verdant"
+weight = 1.7550000000000001
+required_count = 1
+depth_min_normalized = 0.04
+depth_max_normalized = 0.45
+distance_min_m = 100.0
+distance_max_m = 2048.0
+
+[worlds.hollows.rules.caves_verdant]
+kind = "threshold_cave"
+phase = "carve"
+order = 11
+biome = "verdant"
+field = "branch_caves"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+threshold_min = -0.09
+threshold_max = 1.0
+
+[worlds.hollows.rules.tunnels_verdant]
+kind = "carve_worm"
+phase = "carve"
+order = 31
+biome = "verdant"
+count = 14
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+length_min_m = 25.0
+length_max_m = 105.0
+radius_min_m = 1.6
+radius_max_m = 3.5
+turn_probability = 0.3
+
+[worlds.hollows.biomes.mire]
+biome = "mire"
+weight = 4.0
+required_count = 2
+depth_min_normalized = 0.12
+depth_max_normalized = 0.82
+distance_min_m = 160.0
+distance_max_m = 2048.0
+
+[worlds.hollows.rules.caves_mire]
+kind = "threshold_cave"
+phase = "carve"
+order = 12
+biome = "mire"
+field = "low_pools"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+threshold_min = -0.22
+threshold_max = 1.0
+
+[worlds.hollows.rules.tunnels_mire]
+kind = "carve_worm"
+phase = "carve"
+order = 32
+biome = "mire"
+count = 14
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+length_min_m = 25.0
+length_max_m = 105.0
+radius_min_m = 1.6
+radius_max_m = 3.5
+turn_probability = 0.3
+
+[worlds.hollows.biomes.dunes]
+biome = "dunes"
+weight = 1.625
+required_count = 1
+depth_min_normalized = 0.02
+depth_max_normalized = 0.46
+distance_min_m = 200.0
+distance_max_m = 2048.0
+
+[worlds.hollows.rules.caves_dunes]
+kind = "threshold_cave"
+phase = "carve"
+order = 13
+biome = "dunes"
+field = "tall_caves"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+threshold_min = 0.43
+threshold_max = 1.0
+
+[worlds.hollows.rules.tunnels_dunes]
+kind = "carve_worm"
+phase = "carve"
+order = 33
+biome = "dunes"
+count = 14
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+length_min_m = 25.0
+length_max_m = 105.0
+radius_min_m = 1.6
+radius_max_m = 3.5
+turn_probability = 0.12
+
+[worlds.hollows.biomes.rime]
+biome = "rime"
+weight = 1.625
+required_count = 1
+depth_min_normalized = 0.02
+depth_max_normalized = 0.48
+distance_min_m = 240.0
+distance_max_m = 2048.0
+
+[worlds.hollows.rules.caves_rime]
+kind = "threshold_cave"
+phase = "carve"
+order = 14
+biome = "rime"
+field = "ice_fractures"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+threshold_min = 0.58
+threshold_max = 1.0
+
+[worlds.hollows.rules.tunnels_rime]
+kind = "carve_worm"
+phase = "carve"
+order = 34
+biome = "rime"
+count = 14
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+length_min_m = 25.0
+length_max_m = 105.0
+radius_min_m = 1.6
+radius_max_m = 3.5
+turn_probability = 0.12
+
+[worlds.hollows.biomes.lode]
+biome = "lode"
+weight = 0.75
+required_count = 1
+depth_min_normalized = 0.36
+depth_max_normalized = 0.78
+distance_min_m = 240.0
+distance_max_m = 2048.0
+
+[worlds.hollows.rules.caves_lode]
+kind = "threshold_cave"
+phase = "carve"
+order = 15
+biome = "lode"
+field = "ore_tunnels"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+threshold_min = 0.78
+threshold_max = 1.0
+
+[worlds.hollows.rules.tunnels_lode]
+kind = "carve_worm"
+phase = "carve"
+order = 35
+biome = "lode"
+count = 14
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+length_min_m = 25.0
+length_max_m = 105.0
+radius_min_m = 1.6
+radius_max_m = 3.5
+turn_probability = 0.12
+
+[worlds.hollows.biomes.karst]
+biome = "karst"
+weight = 5.0
+required_count = 2
+depth_min_normalized = 0.12
+depth_max_normalized = 0.82
+distance_min_m = 150.0
+distance_max_m = 2048.0
+
+[worlds.hollows.rules.caves_karst]
+kind = "threshold_cave"
+phase = "carve"
+order = 16
+biome = "karst"
+field = "karst_cells"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+threshold_min = 0.04
+threshold_max = 1.0
+
+[worlds.hollows.rules.tunnels_karst]
+kind = "carve_worm"
+phase = "carve"
+order = 36
+biome = "karst"
+count = 14
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+length_min_m = 25.0
+length_max_m = 105.0
+radius_min_m = 1.6
+radius_max_m = 3.5
+turn_probability = 0.12
+
+[worlds.hollows.biomes.saltworks]
+biome = "saltworks"
+weight = 3.5
+required_count = 2
+depth_min_normalized = 0.12
+depth_max_normalized = 0.82
+distance_min_m = 200.0
+distance_max_m = 2048.0
+
+[worlds.hollows.rules.caves_saltworks]
+kind = "threshold_cave"
+phase = "carve"
+order = 17
+biome = "saltworks"
+field = "salt_basins"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+threshold_min = -0.18
+threshold_max = 1.0
+
+[worlds.hollows.rules.tunnels_saltworks]
+kind = "carve_worm"
+phase = "carve"
+order = 37
+biome = "saltworks"
+count = 14
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+length_min_m = 25.0
+length_max_m = 105.0
+radius_min_m = 1.6
+radius_max_m = 3.5
+turn_probability = 0.12
+
+[worlds.hollows.biomes.fumaroles]
+biome = "fumaroles"
+weight = 0.8450000000000001
+required_count = 1
+depth_min_normalized = 0.56
+depth_max_normalized = 0.92
+distance_min_m = 380.0
+distance_max_m = 2048.0
+
+[worlds.hollows.rules.caves_fumaroles]
+kind = "threshold_cave"
+phase = "carve"
+order = 18
+biome = "fumaroles"
+field = "chimney_fissures"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+threshold_min = 0.45
+threshold_max = 1.0
+
+[worlds.hollows.rules.tunnels_fumaroles]
+kind = "carve_worm"
+phase = "carve"
+order = 38
+biome = "fumaroles"
+count = 14
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+length_min_m = 25.0
+length_max_m = 105.0
+radius_min_m = 1.6
+radius_max_m = 3.5
+turn_probability = 0.12
+
+[worlds.hollows.biomes.petroleum]
+biome = "petroleum"
+weight = 1.105
+required_count = 1
+depth_min_normalized = 0.63
+depth_max_normalized = 0.94
+distance_min_m = 400.0
+distance_max_m = 2048.0
+
+[worlds.hollows.rules.caves_petroleum]
+kind = "threshold_cave"
+phase = "carve"
+order = 19
+biome = "petroleum"
+field = "oil_channels"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+threshold_min = -0.1
+threshold_max = 1.0
+
+[worlds.hollows.rules.tunnels_petroleum]
+kind = "carve_worm"
+phase = "carve"
+order = 39
+biome = "petroleum"
+count = 14
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+length_min_m = 25.0
+length_max_m = 105.0
+radius_min_m = 1.6
+radius_max_m = 3.5
+turn_probability = 0.12
+
+[worlds.hollows.biomes.ember]
+biome = "ember"
+weight = 1.1700000000000002
+required_count = 1
+depth_min_normalized = 0.82
+depth_max_normalized = 1.0
+distance_min_m = 500.0
+distance_max_m = 2048.0
+
+[worlds.hollows.rules.caves_ember]
+kind = "threshold_cave"
+phase = "carve"
+order = 20
+biome = "ember"
+field = "hot_chambers"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+threshold_min = 0.52
+threshold_max = 1.0
+
+[worlds.hollows.rules.tunnels_ember]
+kind = "carve_worm"
 phase = "carve"
 order = 40
-radius_m = 1.5
-extra_links = 2
+biome = "ember"
+count = 14
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+length_min_m = 25.0
+length_max_m = 105.0
+radius_min_m = 1.6
+radius_max_m = 3.5
+turn_probability = 0.12
+
+[worlds.hollows.rules.veins_copper]
+kind = "vein_worm"
+phase = "deposit"
+order = 10
+biome = "lode"
+count = 4
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+length_min_m = 24.0
+length_max_m = 90.0
+radius_min_m = 0.4
+radius_max_m = 1.0
+turn_probability = 0.08
+material = "copper"
+host_material = "granite"
+
+[worlds.hollows.rules.veins_iron]
+kind = "vein_worm"
+phase = "deposit"
+order = 11
+biome = "lode"
+count = 4
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+length_min_m = 24.0
+length_max_m = 90.0
+radius_min_m = 0.4
+radius_max_m = 1.0
+turn_probability = 0.08
+material = "iron"
+host_material = "granite"
+
+[worlds.hollows.rules.veins_aluminum]
+kind = "vein_worm"
+phase = "deposit"
+order = 12
+biome = "lode"
+count = 4
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+length_min_m = 24.0
+length_max_m = 90.0
+radius_min_m = 0.4
+radius_max_m = 1.0
+turn_probability = 0.08
+material = "aluminum"
+host_material = "granite"
+
+[worlds.hollows.rules.veins_wolframite]
+kind = "vein_worm"
+phase = "deposit"
+order = 13
+biome = "lode"
+count = 4
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+length_min_m = 24.0
+length_max_m = 90.0
+radius_min_m = 0.4
+radius_max_m = 1.0
+turn_probability = 0.08
+material = "wolframite"
+host_material = "granite"
+
+[worlds.hollows.rules.traversal_hearth]
+kind = "feature"
+phase = "stamp"
+order = 70
+feature = "hearth_promenade"
+biome = "hearth"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+spacing_m = 45.0
+min_count = 1
+max_count = 5
+attempts = 4096
+priority = 50
+reflect = true
+
+[worlds.hollows.rules.traversal_karst]
+kind = "feature"
+phase = "stamp"
+order = 71
+feature = "karst_arcade"
+biome = "karst"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+spacing_m = 45.0
+min_count = 1
+max_count = 5
+attempts = 4096
+priority = 49
+reflect = true
+
+[worlds.hollows.rules.traversal_mire]
+kind = "feature"
+phase = "stamp"
+order = 72
+feature = "mire_gallery"
+biome = "mire"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+spacing_m = 45.0
+min_count = 1
+max_count = 5
+attempts = 4096
+priority = 48
+reflect = true
+
 [worlds.hollows.rules.cisterns]
 kind = "feature"
 phase = "stamp"
@@ -351,13 +1745,326 @@ feature = "pocket"
 biome = "hearth"
 depth_min_normalized = 0.0
 depth_max_normalized = 1.0
-spacing_m = 50.0
-min_count = 0
+spacing_m = 35.0
+min_count = 1
 max_count = 4
-attempts = 64
-priority = 90
+attempts = 4096
+priority = 100
 reflect = true
-[worlds.hollows.rules.galleries]
+
+[worlds.hollows.rules.fill_pocket_water]
+kind = "matter_fill"
+phase = "fill"
+order = 10
+feature_rule = "cisterns"
+marker = "anchor"
+material = "water"
+temperature_k = 293.0
+bulk_density_kg_m3 = 1000.0
+fill_height_m = 4.333333333333333
+
+[worlds.hollows.rules.fill_pocket_oxygen]
+kind = "matter_fill"
+phase = "fill"
+order = 11
+feature_rule = "cisterns"
+marker = "anchor"
+material = "oxygen"
+temperature_k = 293.0
+bulk_density_kg_m3 = 1.2
+
+[worlds.hollows.rules.landmark_hearth_shelf]
+kind = "feature"
+phase = "stamp"
+order = 11
+feature = "hearth_shelf"
+biome = "hearth"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+spacing_m = 35.0
+min_count = 1
+max_count = 4
+attempts = 4096
+priority = 99
+reflect = true
+
+[worlds.hollows.rules.fill_hearth_shelf_oxygen]
+kind = "matter_fill"
+phase = "fill"
+order = 12
+feature_rule = "landmark_hearth_shelf"
+marker = "anchor"
+material = "oxygen"
+temperature_k = 293.0
+bulk_density_kg_m3 = 1.2
+
+[worlds.hollows.rules.landmark_verdant_bulb]
+kind = "feature"
+phase = "stamp"
+order = 12
+feature = "verdant_bulb"
+biome = "verdant"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+spacing_m = 35.0
+min_count = 1
+max_count = 4
+attempts = 4096
+priority = 98
+reflect = true
+
+[worlds.hollows.rules.fill_verdant_bulb_water]
+kind = "matter_fill"
+phase = "fill"
+order = 13
+feature_rule = "landmark_verdant_bulb"
+marker = "anchor"
+material = "water"
+temperature_k = 300.0
+bulk_density_kg_m3 = 1000.0
+fill_height_m = 3.6666666666666665
+
+[worlds.hollows.rules.fill_verdant_bulb_oxygen]
+kind = "matter_fill"
+phase = "fill"
+order = 14
+feature_rule = "landmark_verdant_bulb"
+marker = "anchor"
+material = "oxygen"
+temperature_k = 300.0
+bulk_density_kg_m3 = 1.2
+
+[worlds.hollows.rules.landmark_verdant_root]
+kind = "feature"
+phase = "stamp"
+order = 13
+feature = "verdant_root"
+biome = "verdant"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+spacing_m = 35.0
+min_count = 1
+max_count = 4
+attempts = 4096
+priority = 97
+reflect = true
+
+[worlds.hollows.rules.fill_verdant_root_polluted_oxygen]
+kind = "matter_fill"
+phase = "fill"
+order = 15
+feature_rule = "landmark_verdant_root"
+marker = "anchor"
+material = "polluted_oxygen"
+temperature_k = 300.0
+bulk_density_kg_m3 = 1.3
+
+[worlds.hollows.rules.landmark_mire_pool]
+kind = "feature"
+phase = "stamp"
+order = 14
+feature = "mire_pool"
+biome = "mire"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+spacing_m = 35.0
+min_count = 1
+max_count = 4
+attempts = 4096
+priority = 96
+reflect = true
+
+[worlds.hollows.rules.fill_mire_pool_polluted_water]
+kind = "matter_fill"
+phase = "fill"
+order = 16
+feature_rule = "landmark_mire_pool"
+marker = "anchor"
+material = "polluted_water"
+temperature_k = 305.0
+bulk_density_kg_m3 = 1030.0
+fill_height_m = 5.666666666666667
+
+[worlds.hollows.rules.fill_mire_pool_polluted_oxygen]
+kind = "matter_fill"
+phase = "fill"
+order = 17
+feature_rule = "landmark_mire_pool"
+marker = "anchor"
+material = "polluted_oxygen"
+temperature_k = 305.0
+bulk_density_kg_m3 = 1.3
+
+[worlds.hollows.rules.landmark_mire_chimney]
+kind = "feature"
+phase = "stamp"
+order = 15
+feature = "mire_chimney"
+biome = "mire"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+spacing_m = 35.0
+min_count = 1
+max_count = 4
+attempts = 4096
+priority = 95
+reflect = true
+
+[worlds.hollows.rules.fill_mire_chimney_polluted_oxygen]
+kind = "matter_fill"
+phase = "fill"
+order = 18
+feature_rule = "landmark_mire_chimney"
+marker = "anchor"
+material = "polluted_oxygen"
+temperature_k = 305.0
+bulk_density_kg_m3 = 1.3
+
+[worlds.hollows.rules.landmark_dune_vault]
+kind = "feature"
+phase = "stamp"
+order = 16
+feature = "dune_vault"
+biome = "dunes"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+spacing_m = 35.0
+min_count = 1
+max_count = 4
+attempts = 4096
+priority = 94
+reflect = true
+
+[worlds.hollows.rules.fill_dune_vault_regolith]
+kind = "matter_fill"
+phase = "fill"
+order = 19
+feature_rule = "landmark_dune_vault"
+marker = "anchor"
+material = "regolith"
+temperature_k = 315.0
+bulk_density_kg_m3 = 1500.0
+fill_height_m = 4.0
+
+[worlds.hollows.rules.fill_dune_vault_carbon_dioxide]
+kind = "matter_fill"
+phase = "fill"
+order = 20
+feature_rule = "landmark_dune_vault"
+marker = "anchor"
+material = "carbon_dioxide"
+temperature_k = 315.0
+bulk_density_kg_m3 = 1.8
+
+[worlds.hollows.rules.landmark_dune_bed]
+kind = "feature"
+phase = "stamp"
+order = 17
+feature = "dune_bed"
+biome = "dunes"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+spacing_m = 35.0
+min_count = 1
+max_count = 4
+attempts = 4096
+priority = 93
+reflect = true
+
+[worlds.hollows.rules.fill_dune_bed_sand]
+kind = "matter_fill"
+phase = "fill"
+order = 21
+feature_rule = "landmark_dune_bed"
+marker = "anchor"
+material = "sand"
+temperature_k = 315.0
+bulk_density_kg_m3 = 1600.0
+fill_height_m = 4.333333333333333
+
+[worlds.hollows.rules.fill_dune_bed_carbon_dioxide]
+kind = "matter_fill"
+phase = "fill"
+order = 22
+feature_rule = "landmark_dune_bed"
+marker = "anchor"
+material = "carbon_dioxide"
+temperature_k = 315.0
+bulk_density_kg_m3 = 1.8
+
+[worlds.hollows.rules.landmark_rime_shelf]
+kind = "feature"
+phase = "stamp"
+order = 18
+feature = "rime_shelf"
+biome = "rime"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+spacing_m = 35.0
+min_count = 1
+max_count = 4
+attempts = 4096
+priority = 92
+reflect = true
+
+[worlds.hollows.rules.fill_rime_shelf_snow]
+kind = "matter_fill"
+phase = "fill"
+order = 23
+feature_rule = "landmark_rime_shelf"
+marker = "anchor"
+material = "snow"
+temperature_k = 248.0
+bulk_density_kg_m3 = 300.0
+fill_height_m = 3.6666666666666665
+
+[worlds.hollows.rules.fill_rime_shelf_carbon_dioxide]
+kind = "matter_fill"
+phase = "fill"
+order = 24
+feature_rule = "landmark_rime_shelf"
+marker = "anchor"
+material = "carbon_dioxide"
+temperature_k = 248.0
+bulk_density_kg_m3 = 1.8
+
+[worlds.hollows.rules.landmark_ruin]
+kind = "feature"
+phase = "stamp"
+order = 19
+feature = "ruin"
+biome = "rime"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+spacing_m = 35.0
+min_count = 1
+max_count = 4
+attempts = 4096
+priority = 91
+reflect = true
+
+[worlds.hollows.rules.fill_ruin_brine]
+kind = "matter_fill"
+phase = "fill"
+order = 25
+feature_rule = "landmark_ruin"
+marker = "anchor"
+material = "brine"
+temperature_k = 248.0
+bulk_density_kg_m3 = 1200.0
+fill_height_m = 5.0
+
+[worlds.hollows.rules.fill_ruin_carbon_dioxide]
+kind = "matter_fill"
+phase = "fill"
+order = 26
+feature_rule = "landmark_ruin"
+marker = "anchor"
+material = "carbon_dioxide"
+temperature_k = 248.0
+bulk_density_kg_m3 = 1.8
+
+[worlds.hollows.rules.landmark_room]
 kind = "feature"
 phase = "stamp"
 order = 20
@@ -365,224 +2072,373 @@ feature = "room"
 biome = "lode"
 depth_min_normalized = 0.0
 depth_max_normalized = 1.0
-spacing_m = 50.0
-min_count = 0
+spacing_m = 35.0
+min_count = 1
 max_count = 4
-attempts = 64
-priority = 80
+attempts = 4096
+priority = 90
 reflect = true
-[worlds.hollows.rules.relics]
+
+[worlds.hollows.rules.fill_room_pebbles]
+kind = "matter_fill"
+phase = "fill"
+order = 27
+feature_rule = "landmark_room"
+marker = "anchor"
+material = "pebbles"
+temperature_k = 318.0
+bulk_density_kg_m3 = 1700.0
+fill_height_m = 3.3333333333333335
+
+[worlds.hollows.rules.landmark_lode_lens]
+kind = "feature"
+phase = "stamp"
+order = 21
+feature = "lode_lens"
+biome = "lode"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+spacing_m = 35.0
+min_count = 1
+max_count = 4
+attempts = 4096
+priority = 89
+reflect = true
+
+[worlds.hollows.rules.fill_lode_lens_hydrogen]
+kind = "matter_fill"
+phase = "fill"
+order = 28
+feature_rule = "landmark_lode_lens"
+marker = "anchor"
+material = "hydrogen"
+temperature_k = 318.0
+bulk_density_kg_m3 = 0.09
+
+[worlds.hollows.rules.landmark_crystal_geode]
+kind = "feature"
+phase = "stamp"
+order = 22
+feature = "crystal_geode"
+biome = "karst"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+spacing_m = 35.0
+min_count = 1
+max_count = 4
+attempts = 4096
+priority = 88
+reflect = true
+
+[worlds.hollows.rules.fill_crystal_geode_water]
+kind = "matter_fill"
+phase = "fill"
+order = 29
+feature_rule = "landmark_crystal_geode"
+marker = "anchor"
+material = "water"
+temperature_k = 286.0
+bulk_density_kg_m3 = 1000.0
+fill_height_m = 7.0
+
+[worlds.hollows.rules.fill_crystal_geode_oxygen]
+kind = "matter_fill"
+phase = "fill"
+order = 30
+feature_rule = "landmark_crystal_geode"
+marker = "anchor"
+material = "oxygen"
+temperature_k = 286.0
+bulk_density_kg_m3 = 1.2
+
+[worlds.hollows.rules.landmark_quartz_geode]
+kind = "feature"
+phase = "stamp"
+order = 23
+feature = "quartz_geode"
+biome = "karst"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+spacing_m = 35.0
+min_count = 1
+max_count = 4
+attempts = 4096
+priority = 87
+reflect = true
+
+[worlds.hollows.rules.fill_quartz_geode_water]
+kind = "matter_fill"
+phase = "fill"
+order = 31
+feature_rule = "landmark_quartz_geode"
+marker = "anchor"
+material = "water"
+temperature_k = 286.0
+bulk_density_kg_m3 = 1000.0
+fill_height_m = 3.6666666666666665
+
+[worlds.hollows.rules.fill_quartz_geode_oxygen]
+kind = "matter_fill"
+phase = "fill"
+order = 32
+feature_rule = "landmark_quartz_geode"
+marker = "anchor"
+material = "oxygen"
+temperature_k = 286.0
+bulk_density_kg_m3 = 1.2
+
+[worlds.hollows.rules.landmark_salt_basin]
+kind = "feature"
+phase = "stamp"
+order = 24
+feature = "salt_basin"
+biome = "saltworks"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+spacing_m = 35.0
+min_count = 1
+max_count = 4
+attempts = 4096
+priority = 86
+reflect = true
+
+[worlds.hollows.rules.fill_salt_basin_brine]
+kind = "matter_fill"
+phase = "fill"
+order = 33
+feature_rule = "landmark_salt_basin"
+marker = "anchor"
+material = "brine"
+temperature_k = 305.0
+bulk_density_kg_m3 = 1200.0
+fill_height_m = 5.666666666666667
+
+[worlds.hollows.rules.fill_salt_basin_carbon_dioxide]
+kind = "matter_fill"
+phase = "fill"
+order = 34
+feature_rule = "landmark_salt_basin"
+marker = "anchor"
+material = "carbon_dioxide"
+temperature_k = 305.0
+bulk_density_kg_m3 = 1.8
+
+[worlds.hollows.rules.landmark_mine_gallery]
+kind = "feature"
+phase = "stamp"
+order = 25
+feature = "mine_gallery"
+biome = "saltworks"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+spacing_m = 35.0
+min_count = 1
+max_count = 4
+attempts = 4096
+priority = 85
+reflect = true
+
+[worlds.hollows.rules.fill_mine_gallery_sand]
+kind = "matter_fill"
+phase = "fill"
+order = 35
+feature_rule = "landmark_mine_gallery"
+marker = "anchor"
+material = "sand"
+temperature_k = 305.0
+bulk_density_kg_m3 = 1600.0
+fill_height_m = 3.6666666666666665
+
+[worlds.hollows.rules.fill_mine_gallery_carbon_dioxide]
+kind = "matter_fill"
+phase = "fill"
+order = 36
+feature_rule = "landmark_mine_gallery"
+marker = "anchor"
+material = "carbon_dioxide"
+temperature_k = 305.0
+bulk_density_kg_m3 = 1.8
+
+[worlds.hollows.rules.landmark_vent]
+kind = "feature"
+phase = "stamp"
+order = 26
+feature = "vent"
+biome = "fumaroles"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+spacing_m = 35.0
+min_count = 1
+max_count = 4
+attempts = 4096
+priority = 84
+reflect = true
+
+[worlds.hollows.rules.fill_vent_steam]
+kind = "matter_fill"
+phase = "fill"
+order = 37
+feature_rule = "landmark_vent"
+marker = "anchor"
+material = "steam"
+temperature_k = 365.0
+bulk_density_kg_m3 = 0.6
+
+[worlds.hollows.rules.landmark_fumarole_cluster]
+kind = "feature"
+phase = "stamp"
+order = 27
+feature = "fumarole_cluster"
+biome = "fumaroles"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+spacing_m = 35.0
+min_count = 1
+max_count = 4
+attempts = 4096
+priority = 83
+reflect = true
+
+[worlds.hollows.rules.fill_fumarole_cluster_chlorine]
+kind = "matter_fill"
+phase = "fill"
+order = 38
+feature_rule = "landmark_fumarole_cluster"
+marker = "anchor"
+material = "chlorine"
+temperature_k = 365.0
+bulk_density_kg_m3 = 3.2
+
+[worlds.hollows.rules.landmark_oil_reservoir]
+kind = "feature"
+phase = "stamp"
+order = 28
+feature = "oil_reservoir"
+biome = "petroleum"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+spacing_m = 35.0
+min_count = 1
+max_count = 4
+attempts = 4096
+priority = 82
+reflect = true
+
+[worlds.hollows.rules.fill_oil_reservoir_crude_oil]
+kind = "matter_fill"
+phase = "fill"
+order = 39
+feature_rule = "landmark_oil_reservoir"
+marker = "anchor"
+material = "crude_oil"
+temperature_k = 370.0
+bulk_density_kg_m3 = 850.0
+fill_height_m = 5.666666666666667
+
+[worlds.hollows.rules.fill_oil_reservoir_natural_gas]
+kind = "matter_fill"
+phase = "fill"
+order = 40
+feature_rule = "landmark_oil_reservoir"
+marker = "anchor"
+material = "natural_gas"
+temperature_k = 370.0
+bulk_density_kg_m3 = 0.8
+
+[worlds.hollows.rules.landmark_oil_channels]
+kind = "feature"
+phase = "stamp"
+order = 29
+feature = "oil_channels"
+biome = "petroleum"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+spacing_m = 35.0
+min_count = 1
+max_count = 4
+attempts = 4096
+priority = 81
+reflect = true
+
+[worlds.hollows.rules.fill_oil_channels_crude_oil]
+kind = "matter_fill"
+phase = "fill"
+order = 41
+feature_rule = "landmark_oil_channels"
+marker = "anchor"
+material = "crude_oil"
+temperature_k = 370.0
+bulk_density_kg_m3 = 850.0
+fill_height_m = 4.0
+
+[worlds.hollows.rules.fill_oil_channels_carbon_dioxide]
+kind = "matter_fill"
+phase = "fill"
+order = 42
+feature_rule = "landmark_oil_channels"
+marker = "anchor"
+material = "carbon_dioxide"
+temperature_k = 370.0
+bulk_density_kg_m3 = 1.8
+
+[worlds.hollows.rules.landmark_magma_vault]
 kind = "feature"
 phase = "stamp"
 order = 30
-feature = "ruin"
-biome = "rime"
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-spacing_m = 50.0
-min_count = 0
-max_count = 4
-attempts = 64
-priority = 70
-reflect = true
-[worlds.hollows.rules.chimneys]
-kind = "feature"
-phase = "stamp"
-order = 40
-feature = "vent"
+feature = "magma_vault"
 biome = "ember"
 depth_min_normalized = 0.0
 depth_max_normalized = 1.0
-spacing_m = 50.0
-min_count = 0
+spacing_m = 35.0
+min_count = 1
 max_count = 4
-attempts = 64
-priority = 60
+attempts = 4096
+priority = 80
 reflect = true
-[worlds.hollows.rules.water]
+
+[worlds.hollows.rules.fill_magma_vault_magma]
 kind = "matter_fill"
 phase = "fill"
-order = 10
-feature_rule = "cisterns"
+order = 43
+feature_rule = "landmark_magma_vault"
 marker = "anchor"
-material = "water"
-temperature_k = 290.0
-bulk_density_kg_m3 = 1000.0
-fill_height_m = 4.0
-[worlds.hollows.rules.air]
+material = "magma"
+temperature_k = 1100.0
+bulk_density_kg_m3 = 2800.0
+fill_height_m = 7.666666666666667
+
+[worlds.hollows.rules.landmark_ember_fracture]
+kind = "feature"
+phase = "stamp"
+order = 31
+feature = "ember_fracture"
+biome = "ember"
+depth_min_normalized = 0.0
+depth_max_normalized = 1.0
+spacing_m = 35.0
+min_count = 1
+max_count = 4
+attempts = 4096
+priority = 79
+reflect = true
+
+[worlds.hollows.rules.fill_ember_fracture_ash]
 kind = "matter_fill"
 phase = "fill"
-order = 20
-feature_rule = "cisterns"
+order = 44
+feature_rule = "landmark_ember_fracture"
 marker = "anchor"
-material = "oxygen"
-temperature_k = 290.0
-bulk_density_kg_m3 = 1.2
+material = "ash"
+temperature_k = 1100.0
+bulk_density_kg_m3 = 650.0
+fill_height_m = 4.666666666666667
 
-# New regions are guaranteed sites; optional landmarks may be omitted on conflicts.
-
-[worlds.frontier.biomes.karst]
-biome = "karst"
-weight = 2.0
-required_count = 1
-depth_min_normalized = 0.05
-depth_max_normalized = 0.85
-distance_min_m = 0.0
-distance_max_m = 2048.0
-[worlds.frontier.rules.caves_karst]
-kind = "threshold_cave"
-phase = "carve"
-order = 14
-biome = "karst"
-field = "caverns"
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-threshold_min = 0.34
-threshold_max = 1.0
-[worlds.frontier.biomes.saltworks]
-biome = "saltworks"
-weight = 1.5
-required_count = 1
-depth_min_normalized = 0.00
-depth_max_normalized = 0.70
-distance_min_m = 0.0
-distance_max_m = 2048.0
-[worlds.frontier.rules.caves_saltworks]
-kind = "threshold_cave"
-phase = "carve"
-order = 15
-biome = "saltworks"
-field = "fissures"
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-threshold_min = 0.12
-threshold_max = 1.0
-[worlds.frontier.biomes.fumaroles]
-biome = "fumaroles"
-weight = 1.2
-required_count = 1
-depth_min_normalized = 0.55
-depth_max_normalized = 1.00
-distance_min_m = 0.0
-distance_max_m = 2048.0
-[worlds.frontier.rules.caves_fumaroles]
-kind = "threshold_cave"
-phase = "carve"
-order = 16
-biome = "fumaroles"
-field = "caverns"
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-threshold_min = 0.62
-threshold_max = 1.0
-[worlds.frontier.rules.geodes]
-kind = "feature"
-phase = "stamp"
-order = 50
-feature = "crystal_geode"
-biome = "karst"
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-spacing_m = 75.0
-min_count = 0
-max_count = 3
-attempts = 64
-priority = 50
-reflect = true
-[worlds.frontier.rules.salt_galleries]
-kind = "feature"
-phase = "stamp"
-order = 60
-feature = "mine_gallery"
-biome = "saltworks"
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-spacing_m = 75.0
-min_count = 0
-max_count = 3
-attempts = 64
-priority = 40
-reflect = true
-
-[worlds.hollows.biomes.karst]
-biome = "karst"
-weight = 2.0
-required_count = 1
-depth_min_normalized = 0.05
-depth_max_normalized = 0.85
-distance_min_m = 0.0
-distance_max_m = 2048.0
-[worlds.hollows.rules.caves_karst]
-kind = "threshold_cave"
-phase = "carve"
-order = 14
-biome = "karst"
-field = "caverns"
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-threshold_min = 0.18
-threshold_max = 1.0
-[worlds.hollows.biomes.saltworks]
-biome = "saltworks"
-weight = 1.5
-required_count = 1
-depth_min_normalized = 0.00
-depth_max_normalized = 0.70
-distance_min_m = 0.0
-distance_max_m = 2048.0
-[worlds.hollows.rules.caves_saltworks]
-kind = "threshold_cave"
-phase = "carve"
-order = 15
-biome = "saltworks"
-field = "fissures"
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-threshold_min = 0.04
-threshold_max = 1.0
-[worlds.hollows.biomes.fumaroles]
-biome = "fumaroles"
-weight = 1.2
-required_count = 1
-depth_min_normalized = 0.55
-depth_max_normalized = 1.00
-distance_min_m = 0.0
-distance_max_m = 2048.0
-[worlds.hollows.rules.caves_fumaroles]
-kind = "threshold_cave"
-phase = "carve"
-order = 16
-biome = "fumaroles"
-field = "caverns"
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-threshold_min = 0.4
-threshold_max = 1.0
-[worlds.hollows.rules.geodes]
-kind = "feature"
-phase = "stamp"
-order = 50
-feature = "crystal_geode"
-biome = "karst"
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-spacing_m = 75.0
-min_count = 0
-max_count = 3
-attempts = 64
-priority = 50
-reflect = true
-[worlds.hollows.rules.salt_galleries]
-kind = "feature"
-phase = "stamp"
-order = 60
-feature = "mine_gallery"
-biome = "saltworks"
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-spacing_m = 75.0
-min_count = 0
-max_count = 3
-attempts = 64
-priority = 40
-reflect = true
+[worlds.hollows.rules.fill_ember_fracture_steam]
+kind = "matter_fill"
+phase = "fill"
+order = 45
+feature_rule = "landmark_ember_fracture"
+marker = "anchor"
+material = "steam"
+temperature_k = 1100.0
+bulk_density_kg_m3 = 0.6

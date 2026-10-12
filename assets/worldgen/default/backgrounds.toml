@@ -1,0 +1,57 @@
+schema_version = 2
+
+[backgrounds.frontier.layers.distant]
+order = 0
+texture = "textures/background_frontier_distant.png"
+color_rgba = "FFFFFFFF"
+repeat_period_m = 256.0
+parallax_factor = 0.08
+
+[backgrounds.frontier.layers.caverns]
+order = 1
+texture = "textures/background_frontier_caverns.png"
+color_rgba = "FFFFFFFF"
+repeat_period_m = 180.0
+parallax_factor = 0.22
+
+[backgrounds.frontier.layers.formations]
+order = 2
+texture = "textures/background_frontier_formations.png"
+color_rgba = "FFFFFFFF"
+repeat_period_m = 112.0
+parallax_factor = 0.45
+
+[backgrounds.frontier.layers.backwall]
+order = 3
+texture = "textures/background_frontier_backwall.png"
+color_rgba = "FFFFFFFF"
+repeat_period_m = 64.0
+parallax_factor = 0.7
+
+[backgrounds.hollows.layers.distant]
+order = 0
+texture = "textures/background_hollows_distant.png"
+color_rgba = "FFFFFFFF"
+repeat_period_m = 256.0
+parallax_factor = 0.08
+
+[backgrounds.hollows.layers.caverns]
+order = 1
+texture = "textures/background_hollows_caverns.png"
+color_rgba = "FFFFFFFF"
+repeat_period_m = 180.0
+parallax_factor = 0.22
+
+[backgrounds.hollows.layers.formations]
+order = 2
+texture = "textures/background_hollows_formations.png"
+color_rgba = "FFFFFFFF"
+repeat_period_m = 112.0
+parallax_factor = 0.45
+
+[backgrounds.hollows.layers.backwall]
+order = 3
+texture = "textures/background_hollows_backwall.png"
+color_rgba = "FFFFFFFF"
+repeat_period_m = 64.0
+parallax_factor = 0.7

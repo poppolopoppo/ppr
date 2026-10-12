@@ -1,72 +1,366 @@
-schema_version = 1
+schema_version = 2
+# Coordinates are transformed before domain warp; global depth bands remain global.
 
 [fields.composition]
 algorithm = "open_simplex2"
 fractal = "fbm"
 frequency_per_metre = 0.055
-octaves = 4
+octaves = 3
 lacunarity = 2.0
 gain = 0.5
 warp_amplitude_m = 2.0
-warp_frequency_per_metre = 0.006
+warp_frequency_per_metre = 0.009
+axis_scale_x = 1.0
+axis_scale_y = 1.0
+rotation_degrees = 0.0
 
 [fields.temperature]
 algorithm = "perlin"
 fractal = "fbm"
 frequency_per_metre = 0.008
-octaves = 4
+octaves = 3
 lacunarity = 2.0
 gain = 0.5
 warp_amplitude_m = 0.0
-warp_frequency_per_metre = 0.006
+warp_frequency_per_metre = 0.009
+axis_scale_x = 1.0
+axis_scale_y = 1.0
+rotation_degrees = 0.0
 
 [fields.caverns]
 algorithm = "open_simplex2"
 fractal = "ridged"
 frequency_per_metre = 0.021
-octaves = 4
+octaves = 3
 lacunarity = 2.0
 gain = 0.5
 warp_amplitude_m = 8.0
-warp_frequency_per_metre = 0.006
+warp_frequency_per_metre = 0.009
+axis_scale_x = 1.0
+axis_scale_y = 1.0
+rotation_degrees = 0.0
 
 [fields.fissures]
 algorithm = "perlin"
 fractal = "fbm"
 frequency_per_metre = 0.038
-octaves = 4
+octaves = 3
 lacunarity = 2.0
 gain = 0.5
 warp_amplitude_m = 3.0
-warp_frequency_per_metre = 0.006
+warp_frequency_per_metre = 0.009
+axis_scale_x = 1.0
+axis_scale_y = 1.0
+rotation_degrees = 0.0
 
 [fields.ore_lenses]
 algorithm = "cellular_distance"
 fractal = "none"
 frequency_per_metre = 0.07
-octaves = 4
+octaves = 3
 lacunarity = 2.0
 gain = 0.5
 warp_amplitude_m = 0.0
-warp_frequency_per_metre = 0.006
+warp_frequency_per_metre = 0.009
+axis_scale_x = 1.0
+axis_scale_y = 1.0
+rotation_degrees = 0.0
 
 [fields.warp_x]
 algorithm = "open_simplex2"
 fractal = "fbm"
 frequency_per_metre = 0.006
-octaves = 4
+octaves = 3
 lacunarity = 2.0
 gain = 0.5
 warp_amplitude_m = 0.0
-warp_frequency_per_metre = 0.006
+warp_frequency_per_metre = 0.009
+axis_scale_x = 1.0
+axis_scale_y = 1.0
+rotation_degrees = 0.0
 
 [fields.warp_y]
 algorithm = "perlin"
 fractal = "fbm"
 frequency_per_metre = 0.006
-octaves = 4
+octaves = 3
 lacunarity = 2.0
 gain = 0.5
 warp_amplitude_m = 0.0
-warp_frequency_per_metre = 0.006
+warp_frequency_per_metre = 0.009
+axis_scale_x = 1.0
+axis_scale_y = 1.0
+rotation_degrees = 0.0
 
+[fields.beds]
+algorithm = "perlin"
+fractal = "fbm"
+frequency_per_metre = 0.014
+octaves = 3
+lacunarity = 2.0
+gain = 0.5
+warp_amplitude_m = 14.0
+warp_frequency_per_metre = 0.009
+axis_scale_x = 0.45
+axis_scale_y = 1.7
+rotation_degrees = -7.0
+
+[fields.organic_beds]
+algorithm = "open_simplex2"
+fractal = "billow"
+frequency_per_metre = 0.014
+octaves = 3
+lacunarity = 2.0
+gain = 0.5
+warp_amplitude_m = 18.0
+warp_frequency_per_metre = 0.009
+axis_scale_x = 1.0
+axis_scale_y = 1.3
+rotation_degrees = 11.0
+
+[fields.frozen_beds]
+algorithm = "perlin"
+fractal = "fbm"
+frequency_per_metre = 0.013
+octaves = 3
+lacunarity = 2.0
+gain = 0.5
+warp_amplitude_m = 12.0
+warp_frequency_per_metre = 0.009
+axis_scale_x = 0.6
+axis_scale_y = 1.7
+rotation_degrees = 4.0
+
+[fields.rock_masses]
+algorithm = "open_simplex2"
+fractal = "ridged"
+frequency_per_metre = 0.018
+octaves = 3
+lacunarity = 2.0
+gain = 0.5
+warp_amplitude_m = 9.0
+warp_frequency_per_metre = 0.009
+axis_scale_x = 1.2
+axis_scale_y = 0.9
+rotation_degrees = -23.0
+
+[fields.karst_masses]
+algorithm = "open_simplex2"
+fractal = "fbm"
+frequency_per_metre = 0.012
+octaves = 3
+lacunarity = 2.0
+gain = 0.5
+warp_amplitude_m = 12.0
+warp_frequency_per_metre = 0.009
+axis_scale_x = 1.1
+axis_scale_y = 0.85
+rotation_degrees = 17.0
+
+[fields.salt_beds]
+algorithm = "perlin"
+fractal = "fbm"
+frequency_per_metre = 0.011
+octaves = 3
+lacunarity = 2.0
+gain = 0.5
+warp_amplitude_m = 14.0
+warp_frequency_per_metre = 0.009
+axis_scale_x = 0.5
+axis_scale_y = 1.5
+rotation_degrees = -3.0
+
+[fields.oil_caps]
+algorithm = "perlin"
+fractal = "fbm"
+frequency_per_metre = 0.012
+octaves = 3
+lacunarity = 2.0
+gain = 0.5
+warp_amplitude_m = 16.0
+warp_frequency_per_metre = 0.009
+axis_scale_x = 0.55
+axis_scale_y = 1.35
+rotation_degrees = -6.0
+
+[fields.round_caves]
+algorithm = "open_simplex2"
+fractal = "ridged"
+frequency_per_metre = 0.012
+octaves = 2
+lacunarity = 2.0
+gain = 0.5
+warp_amplitude_m = 18.0
+warp_frequency_per_metre = 0.014
+axis_scale_x = 1.0
+axis_scale_y = 1.0
+rotation_degrees = 0.0
+
+[fields.branch_caves]
+algorithm = "open_simplex2"
+fractal = "billow"
+frequency_per_metre = 0.014
+octaves = 2
+lacunarity = 2.0
+gain = 0.5
+warp_amplitude_m = 18.0
+warp_frequency_per_metre = 0.014
+axis_scale_x = 0.8
+axis_scale_y = 1.2
+rotation_degrees = 27.0
+
+[fields.low_pools]
+algorithm = "open_simplex2"
+fractal = "billow"
+frequency_per_metre = 0.01
+octaves = 2
+lacunarity = 2.0
+gain = 0.5
+warp_amplitude_m = 20.0
+warp_frequency_per_metre = 0.014
+axis_scale_x = 0.7
+axis_scale_y = 1.3
+rotation_degrees = -4.0
+
+[fields.tall_caves]
+algorithm = "open_simplex2"
+fractal = "ridged"
+frequency_per_metre = 0.016
+octaves = 2
+lacunarity = 2.0
+gain = 0.5
+warp_amplitude_m = 14.0
+warp_frequency_per_metre = 0.014
+axis_scale_x = 1.8
+axis_scale_y = 0.65
+rotation_degrees = 8.0
+
+[fields.ice_fractures]
+algorithm = "perlin"
+fractal = "ridged"
+frequency_per_metre = 0.013
+octaves = 2
+lacunarity = 2.0
+gain = 0.5
+warp_amplitude_m = 17.0
+warp_frequency_per_metre = 0.014
+axis_scale_x = 0.7
+axis_scale_y = 1.4
+rotation_degrees = 7.0
+
+[fields.ore_tunnels]
+algorithm = "perlin"
+fractal = "ridged"
+frequency_per_metre = 0.018
+octaves = 2
+lacunarity = 2.0
+gain = 0.5
+warp_amplitude_m = 9.0
+warp_frequency_per_metre = 0.014
+axis_scale_x = 1.25
+axis_scale_y = 0.8
+rotation_degrees = -28.0
+
+[fields.karst_cells]
+algorithm = "open_simplex2"
+fractal = "fbm"
+frequency_per_metre = 0.01
+octaves = 2
+lacunarity = 2.0
+gain = 0.5
+warp_amplitude_m = 28.0
+warp_frequency_per_metre = 0.014
+axis_scale_x = 1.1
+axis_scale_y = 0.85
+rotation_degrees = 17.0
+
+[fields.salt_basins]
+algorithm = "open_simplex2"
+fractal = "billow"
+frequency_per_metre = 0.01
+octaves = 2
+lacunarity = 2.0
+gain = 0.5
+warp_amplitude_m = 22.0
+warp_frequency_per_metre = 0.014
+axis_scale_x = 0.7
+axis_scale_y = 1.1
+rotation_degrees = -9.0
+
+[fields.chimney_fissures]
+algorithm = "perlin"
+fractal = "ridged"
+frequency_per_metre = 0.018
+octaves = 2
+lacunarity = 2.0
+gain = 0.5
+warp_amplitude_m = 18.0
+warp_frequency_per_metre = 0.014
+axis_scale_x = 1.7
+axis_scale_y = 0.6
+rotation_degrees = 2.0
+
+[fields.oil_channels]
+algorithm = "open_simplex2"
+fractal = "billow"
+frequency_per_metre = 0.012
+octaves = 2
+lacunarity = 2.0
+gain = 0.5
+warp_amplitude_m = 20.0
+warp_frequency_per_metre = 0.014
+axis_scale_x = 0.75
+axis_scale_y = 1.2
+rotation_degrees = -14.0
+
+[fields.hot_chambers]
+algorithm = "open_simplex2"
+fractal = "ridged"
+frequency_per_metre = 0.009
+octaves = 2
+lacunarity = 2.0
+gain = 0.5
+warp_amplitude_m = 25.0
+warp_frequency_per_metre = 0.014
+axis_scale_x = 0.8
+axis_scale_y = 1.05
+rotation_degrees = -12.0
+
+[fields.ore_grain]
+algorithm = "open_simplex2"
+fractal = "fbm"
+frequency_per_metre = 0.034
+octaves = 3
+lacunarity = 2.0
+gain = 0.5
+warp_amplitude_m = 7.0
+warp_frequency_per_metre = 0.009
+axis_scale_x = 1.4
+axis_scale_y = 0.7
+rotation_degrees = 35.0
+
+[fields.ore_seams]
+algorithm = "perlin"
+fractal = "ridged"
+frequency_per_metre = 0.027
+octaves = 3
+lacunarity = 2.0
+gain = 0.5
+warp_amplitude_m = 8.0
+warp_frequency_per_metre = 0.009
+axis_scale_x = 0.5
+axis_scale_y = 1.5
+rotation_degrees = -18.0
+
+[fields.organic_patches]
+algorithm = "open_simplex2"
+fractal = "billow"
+frequency_per_metre = 0.03
+octaves = 3
+lacunarity = 2.0
+gain = 0.5
+warp_amplitude_m = 9.0
+warp_frequency_per_metre = 0.009
+axis_scale_x = 1.2
+axis_scale_y = 0.9
+rotation_degrees = 0.0
