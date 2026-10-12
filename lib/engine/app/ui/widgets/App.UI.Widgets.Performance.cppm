@@ -16,14 +16,17 @@ export namespace pP::ui {
         u64 m_over_budget{};
     };
 
-    /// Client-owned CPU timing telemetry. Sampling never drives frame admission.
+    /// Client-owned CPU and asynchronously completed GPU timing telemetry. Sampling never drives frame admission.
     class PerformanceWidget {
     public:
         static constexpr std::size_t kWindow = 240u;
         static constexpr float kBudgetMs = 1000.0f / 60.0f;
 
         void observe(float frame_ms, float render_ms) noexcept;
+        void observeGpu(u64 submission, float milliseconds) noexcept;
         void draw(float bottom_inset) const;
+        [[nodiscard]] std::size_t gpuSampleCount() const noexcept;
+        [[nodiscard]] const TimingStatistics &gpuStatistics() const noexcept;
         [[nodiscard]] std::size_t sampleCount() const noexcept;
         [[nodiscard]] const TimingStatistics &frameStatistics() const noexcept;
         [[nodiscard]] const TimingStatistics &renderStatistics() const noexcept;
@@ -34,6 +37,9 @@ export namespace pP::ui {
             float m_render;
         };
         RingBuffer<Sample, kWindow> m_samples{};
+        RingBuffer<float, kWindow> m_gpu_samples{};
+        TimingStatistics m_gpu{};
+        u64 m_gpu_submission{};
         TimingStatistics m_frame{};
         TimingStatistics m_render{};
         u32 m_until_refresh{};

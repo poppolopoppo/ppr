@@ -1555,6 +1555,36 @@ namespace pP::tests::detail {
                 grid.observations().m_retired_chunk_blocks == retirement_before.m_retired_chunk_blocks + 64u);
         };
 
+        PPR_UNIT_TEST (gpu_timestamps_follow_completed_submissions_and_reject_abandoned_encoders) {
+            Renderer *const renderer = SharedGpu::renderer();
+            const auto rhi = SharedGpu::rhiService();
+            PPR_TEST_ASSERT(renderer != nullptr and rhi.isValid());
+            const auto target = makeRenderTarget_(rhi->getDevice(), 128u);
+            PPR_TEST_ASSERT(target.has_value());
+            PPR_DEFER {
+                std::ignore = renderer->waitOnHost();
+            };
+            FenceCompletionValue previous{};
+            for (u32 frame = 0u; frame < 4u; ++frame) {
+                PPR_TEST_ASSERT(not renderer->renderToTexture(targetRef_(target), {}));
+                const auto submitted = renderer->lastSubmittedFenceValue();
+                PPR_TEST_ASSERT(not renderer->waitOnHost());
+                PPR_TEST_ASSERT(not renderer->retireCompletedFrames());
+                const auto timing = renderer->lastGpuFrameTiming();
+                PPR_TEST_ASSERT(timing and timing->m_submission == submitted and timing->m_submission > previous);
+                PPR_TEST_ASSERT(std::isfinite(timing->m_milliseconds) and timing->m_milliseconds >= 0.0f);
+                previous = submitted;
+                const auto reject = [](const DrawContext &) {
+                    return std::make_error_code(std::errc::invalid_argument);
+                };
+                PPR_TEST_ASSERT(
+                    renderer->renderToTexture(
+                        targetRef_(target), {DrawSubmission{"abandoned timestamp encoder", reject}}) ==
+                    std::errc::invalid_argument);
+                PPR_TEST_ASSERT(renderer->lastGpuFrameTiming()->m_submission == submitted);
+            }
+        };
+
         PPR_UNIT_TEST (pre_render_preparation_orders_and_rejects_submission) {
             const auto rhi = SharedGpu::rhiService();
             PPR_TEST_ASSERT(rhi.isValid());
@@ -1734,6 +1764,7 @@ namespace pP::tests {
             detail::Gate::render_rejects_multilayer_multimip_color_attachment,
             detail::Gate::render_resolves_msaa_color_attachment,
             detail::Gate::render_accepts_msaa_sample_counts,
+            detail::Gate::gpu_timestamps_follow_completed_submissions_and_reject_abandoned_encoders,
             detail::Gate::pre_render_preparation_orders_and_rejects_submission,
             detail::Gate::grid_compute_visibility_matches_reference_and_draws,
             detail::Gate::grid_candidate_world_retains_active_until_matching_activation,

@@ -3947,6 +3947,9 @@ namespace demo {
             if (result.m_reservation_epoch != 0u and result.m_reservation_epoch != reservationEpoch_()) {
                 return;
             }
+            if (result.m_gpu_timing) {
+                m_performance_widget.observeGpu(result.m_gpu_timing->m_submission, result.m_gpu_timing->m_milliseconds);
+            }
             if (m_worldgen_acceptance and result.m_presented and not result.m_error and not result.m_dropped) {
                 ++m_acceptance_presentations;
             }

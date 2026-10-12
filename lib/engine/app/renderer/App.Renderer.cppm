@@ -69,6 +69,13 @@ export namespace pP {
         std::error_code m_restoration_error{};
     };
 
+    struct GpuFrameTiming {
+        // Identity belongs to the completed submission, not the CPU result
+        // carrying this delayed observation back to the client.
+        FenceCompletionValue m_submission{};
+        float m_milliseconds{};
+    };
+
     class Renderer final {
     public:
         // Initial vsync is used for new surfaces; geometry always comes from
@@ -219,6 +226,8 @@ export namespace pP {
         [[nodiscard]] FenceCompletionValue lastSubmittedFenceValue() const noexcept;
         [[nodiscard]] FenceCompletionValue completedFenceValue() const noexcept;
         [[nodiscard]] u32 outstandingFrameCount() const noexcept;
+        [[nodiscard]] std::optional<GpuFrameTiming> lastGpuFrameTiming() const noexcept;
+
 
         // Current surface generation for a window handle, or
         // kSurfaceGenerationNone when no record exists (first frame).
@@ -372,6 +381,13 @@ export namespace pP {
         // fresh nonzero generation from this counter. Never reused, never
         // reset except by process restart.
         SurfaceGeneration m_surface_epoch{kSurfaceGenerationNone};
+        [[nodiscard]] std::optional<u32> beginGpuTiming_(rhi::ICommandEncoder &encoder) noexcept;
+        void collectGpuTimings_(FenceCompletionValue completed) noexcept;
+        rhi::ComPtr<rhi::IQueryPool> m_gpu_queries{};
+        std::array<FenceCompletionValue, 2u> m_gpu_query_fences{};
+        std::optional<GpuFrameTiming> m_last_gpu_timing{};
+        double m_gpu_timestamp_frequency{};
+        bool m_gpu_timing_enabled{};
         rhi::ComPtr<rhi::ICommandQueue> m_graphics_queue{};
         // The one app-owned monotonic fence: one signalled value per frame
         // SUBMIT, never an internal queue ID.

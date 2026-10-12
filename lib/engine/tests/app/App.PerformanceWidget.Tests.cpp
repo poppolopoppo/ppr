@@ -22,6 +22,26 @@ namespace pP::tests::detail::PerformanceWidgetTests {
         }
     };
 
+    PPR_UNIT_TEST (gpu_history_is_asynchronous_and_deduplicates_completed_submissions) {
+        ui::PerformanceWidget widget;
+        widget.observe(16.0f, 3.0f);
+        PPR_TEST_ASSERT(widget.gpuSampleCount() == 0u);
+        widget.observeGpu(10u, 2.0f);
+        widget.observeGpu(10u, 99.0f);
+        widget.observeGpu(9u, 99.0f);
+        PPR_TEST_ASSERT(widget.gpuSampleCount() == 1u);
+        PPR_TEST_ASSERT(widget.gpuStatistics().m_average == 2.0f);
+        widget.observeGpu(12u, 4.0f);
+        PPR_TEST_ASSERT(widget.gpuSampleCount() == 2u);
+        PPR_TEST_ASSERT(widget.gpuStatistics().m_average == 3.0f);
+        PPR_TEST_ASSERT(widget.sampleCount() == 1u);
+        for (u64 id = 13u; id < 300u; ++id) {
+            widget.observeGpu(id, 5.0f);
+        }
+        PPR_TEST_ASSERT(widget.gpuSampleCount() == ui::PerformanceWidget::kWindow);
+        PPR_TEST_ASSERT(widget.gpuStatistics().m_minimum == 5.0f and widget.gpuStatistics().m_maximum == 5.0f);
+    };
+
     PPR_UNIT_TEST (single_sample_and_budget_boundary) {
         ui::PerformanceWidget widget;
         widget.observe(ui::PerformanceWidget::kBudgetMs, 20.0f);
@@ -95,6 +115,7 @@ namespace pP::tests {
     const UnitTest performance_widget = UnitTest::Named("performance_widget") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::PerformanceWidgetTests::empty_history_has_zero_statistics,
+            detail::PerformanceWidgetTests::gpu_history_is_asynchronous_and_deduplicates_completed_submissions,
             detail::PerformanceWidgetTests::single_sample_and_budget_boundary,
             detail::PerformanceWidgetTests::distinct_channels_report_nearest_rank_percentiles,
             detail::PerformanceWidgetTests::rolling_history_discards_oldest_samples,

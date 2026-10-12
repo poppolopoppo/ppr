@@ -330,7 +330,7 @@ Metric, contour mode and boundary material publish with the resident table.
 World replacement and deferred edits therefore keep the previous surface's
 shape/scale until replacement data is complete. Grid appearance and evolving
 contour style are reviewed manually. Automated gates cover admission, resource
-lifetime, visibility and publication.
+lifetime, visibility, publication and GPU timestamps.
 
 GridPass world bundles also own the bindless texture cache, source image pins,
 source-to-resident slot mapping and immutable 32-byte terrain visual palette (including per-material roundness).
@@ -344,3 +344,12 @@ carried by value in the existing frame result. The editor mirrors them for game
 acceptance reports. They count encoded GPU terrain draw/dispatch commands, atlas
 publication/table work, retained atlases and live per-world texture entries/slots;
 they do not assert GPU completion, total driver allocation or total VRAM.
+
+Renderer owns a four-query GPU timestamp pool (two completion-gated pairs).
+Timestamps enclose each frame command encoder, including pre-render preparation
+and all surface passes, excluding separate uploads and presentation. Collection
+requires both the application fence and nonblocking query readiness. Saturated
+query storage omits telemetry; query failures disable telemetry with a diagnostic.
+The pool follows the same proven-idle/confirmed-removal release rules as other
+Renderer resources. Delayed `GpuFrameTiming` observations retain their submission
+identity when transported to the main thread in `RenderFrameResult`.

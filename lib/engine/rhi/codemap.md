@@ -98,3 +98,8 @@ shader global session → `createDevice` → `setTargetFormat(toSlangCompileTarg
 - `RHI.cppm` — aliases, projection declarations, error API, `IRhiService`.
 - `RHI.cpp` — `SlangRhiErrorCategory`, `SlangRhiDebugCallback`, `getDeviceTypeName_`,
   `toSlangCompileTarget_`, projections, `SlangRhiService`, `PPR_DEFINE_LOG_CATEGORY(RHI, info, none)`.
+
+Timestamp-query aliases `IQueryPool`, `QueryPoolDesc`, `QueryType` and
+`QueryResultState` expose the dependency API to Renderer without a separate
+query wrapper. `getResultState` is nonblocking; `getResult` requires resolved
+readiness when used on a frame-critical path.

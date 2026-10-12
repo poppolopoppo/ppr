@@ -1226,6 +1226,7 @@ namespace pP {
         };
         Renderer &renderer = getRenderer();
         PPR_DEFER {
+            out_result.m_gpu_timing = renderer.lastGpuFrameTiming();
             if (request.m_observe_grid and m_grid_pass) {
                 out_result.m_grid_observations = m_grid_pass->observations();
             }

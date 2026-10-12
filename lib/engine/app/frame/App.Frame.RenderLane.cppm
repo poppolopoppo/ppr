@@ -126,6 +126,7 @@ export namespace pP {
     // until completion; a dropped frame carries m_dropped and no value).
     struct RenderFrameResult {
         std::optional<RenderCpuObservations> m_cpu_observations{};
+        std::optional<GpuFrameTiming> m_gpu_timing{};
         std::optional<GridPassObservations> m_grid_observations{};
         // Distinct control completion on the existing reliable result stream.
         // When set, this record has NO frame/reservation/staging settlement.

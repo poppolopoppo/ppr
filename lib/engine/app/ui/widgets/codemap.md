@@ -6,7 +6,7 @@ submit display transactions, read clocks, or own game simulation state.
 
 | Partition | Files | Responsibility |
 |---|---|---|
-| `:ui.widgets.performance` | `App.UI.Widgets.Performance.cppm/.cpp` | Bounded `RingBuffer` timing history, average/percentiles and frame/render plots |
+| `:ui.widgets.performance` | `App.UI.Widgets.Performance.cppm/.cpp` | Bounded `RingBuffer` timing history, average/percentiles and CPU frame/render and completed GPU frame plots |
 | `:ui.widgets.display` | `App.UI.Widgets.Display.cppm/.cpp` | Display draft controls, capability choices, requested/device telemetry and confirmation presentation |
 
 The display widget borrows editable draft fields through `DisplayWidgetDraft` and
@@ -21,3 +21,7 @@ Both partitions are exported from `../../App.cppm` and registered in
 `../../CMakeLists.txt`. The colony panel adapts game display policy to the neutral
 widget seam; the game consumes the timing widget. See the
 [UI map](../codemap.md) for frontend/render ownership.
+
+GPU samples have their own bounded history and completed-submission identity.
+Repeated or older observations are ignored, so a delayed GPU result is not
+counted again on every CPU frame. Missing initial samples show waiting/unavailable.

@@ -63,6 +63,30 @@ namespace pP::ui {
         }
     }
 
+    void PerformanceWidget::observeGpu(const u64 submission, const float milliseconds) noexcept {
+        PPR_ASSERT(std::isfinite(milliseconds) and milliseconds >= 0.0f);
+        if (submission <= m_gpu_submission) {
+            return;
+        }
+        m_gpu_submission = submission;
+        if (m_gpu_samples.isFull()) {
+            std::ignore = m_gpu_samples.popFrontAssumeNotEmpty();
+        }
+        m_gpu_samples.pushBackAssumeNotFull(milliseconds);
+        std::array<float, kWindow> values{};
+        for (std::size_t index = 0u; index < m_gpu_samples.size(); ++index) {
+            values[index] = m_gpu_samples[index];
+        }
+        m_gpu = summarize(std::span{values}.first(m_gpu_samples.size()));
+    }
+
+    std::size_t PerformanceWidget::gpuSampleCount() const noexcept {
+        return m_gpu_samples.size();
+    }
+    const TimingStatistics &PerformanceWidget::gpuStatistics() const noexcept {
+        return m_gpu;
+    }
+
     void PerformanceWidget::refresh_() noexcept {
         std::array<float, kWindow> frames{};
         std::array<float, kWindow> renders{};
@@ -130,5 +154,17 @@ namespace pP::ui {
                     .m_render;
             },
             samples, count, m_render, width);
+        if (m_gpu_samples.isEmpty()) {
+            ImGui::TextDisabled("GPU frame: waiting for timestamp samples / unavailable");
+            ImGui::Dummy(ImVec2{width, 64.0f});
+        } else {
+            drawGraph(
+                "GPU frame (completed command work)",
+                [](void *data, const int index) {
+                    return (*static_cast<const RingBuffer<float, kWindow> *>(data))[static_cast<std::size_t>(index)];
+                },
+                const_cast<RingBuffer<float, kWindow> *>(&m_gpu_samples), checked_cast<int>(m_gpu_samples.size()),
+                m_gpu, width);
+        }
     }
 }

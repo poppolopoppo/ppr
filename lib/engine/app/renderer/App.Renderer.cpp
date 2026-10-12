@@ -327,6 +327,20 @@ namespace pP {
         // first submit already carries a value; never an internal queue ID.
         PPR_RETURN_ERROR_ON_FAIL(Renderer, m_frame_fence.initialize(device));
 
+        // Telemetry is best effort: unsupported timestamp queries do not
+        // disable rendering. No GPU wait is introduced to obtain a sample.
+        m_gpu_timestamp_frequency = static_cast<double>(device.getInfo().timestampFrequency);
+        m_gpu_query_fences = {};
+        m_last_gpu_timing.reset();
+        if (m_gpu_timestamp_frequency > 0.0) {
+            rhi::QueryPoolDesc queries{};
+            queries.type = rhi::QueryType::Timestamp;
+            queries.count = 4u;
+            queries.label = "GPU frame timings";
+            const auto timing_error = make_error_code(device.createQueryPool(queries, m_gpu_queries.writeRef()));
+            PPR_LOG_WARNING_ON_FAIL(Renderer, timing_error);
+            m_gpu_timing_enabled = not timing_error;
+        }
         m_submit_quarantine = false;
         m_injected_submit_failure = false;
         m_shutdown_complete = false;
@@ -425,6 +439,10 @@ namespace pP {
         }
 
         m_surfaces.clear();
+        m_gpu_queries.setNull();
+        m_gpu_query_fences = {};
+        m_last_gpu_timing.reset();
+        m_gpu_timing_enabled = false;
         m_graphics_queue.setNull();
         m_rhi_service.reset();
         m_owner = std::thread::id{};
@@ -464,6 +482,10 @@ namespace pP {
             record.m_surface.setNull();
         }
         m_surfaces.clear();
+        m_gpu_queries.setNull();
+        m_gpu_query_fences = {};
+        m_last_gpu_timing.reset();
+        m_gpu_timing_enabled = false;
         m_graphics_queue.setNull();
     }
 
@@ -490,6 +512,68 @@ namespace pP {
         }
     }
 
+    std::optional<GpuFrameTiming> Renderer::lastGpuFrameTiming() const noexcept {
+        return m_last_gpu_timing;
+    }
+
+    std::optional<u32> Renderer::beginGpuTiming_(rhi::ICommandEncoder &encoder) noexcept {
+        if (not m_gpu_timing_enabled) {
+            return {};
+        }
+        for (u32 slot = 0u; slot < m_gpu_query_fences.size(); ++slot) {
+            if (m_gpu_query_fences[slot] != kFenceValueNone) {
+                continue;
+            }
+            const auto error = make_error_code(m_gpu_queries->reset(slot * 2u, 2u));
+            if (error) {
+                // Timing is optional, but a failed query must never be reused.
+                PPR_LOG_WARNING_ON_FAIL(Renderer, error);
+                m_gpu_timing_enabled = false;
+                m_last_gpu_timing.reset();
+                return {};
+            }
+            encoder.writeTimestamp(m_gpu_queries, slot * 2u);
+            return slot;
+        }
+        return {}; // All pairs pending: omit telemetry without stalling admission.
+    }
+
+    void Renderer::collectGpuTimings_(const FenceCompletionValue completed) noexcept {
+        if (not m_gpu_timing_enabled) {
+            return;
+        }
+        for (u32 slot = 0u; slot < m_gpu_query_fences.size(); ++slot) {
+            const auto fence = m_gpu_query_fences[slot];
+            if (fence == kFenceValueNone or fence > completed) {
+                continue;
+            }
+            rhi::QueryResultState state{};
+            auto error = make_error_code(m_gpu_queries->getResultState(slot * 2u, 2u, &state));
+            if (not error and state != rhi::QueryResultState::Resolved) {
+                continue;
+            }
+            std::array<u64, 2u> ticks{};
+            if (not error) {
+                // Resolved is explicitly nonblocking; the app fence additionally
+                // proves the command buffer that owns these writes is complete.
+                error = make_error_code(m_gpu_queries->getResult(slot * 2u, 2u, ticks.data()));
+            }
+            if (error) {
+                PPR_LOG_WARNING_ON_FAIL(Renderer, error);
+                m_gpu_timing_enabled = false;
+                m_last_gpu_timing.reset();
+                return;
+            }
+            if (ticks[1] >= ticks[0] and (not m_last_gpu_timing or fence > m_last_gpu_timing->m_submission)) {
+                const double milliseconds = static_cast<double>(ticks[1] - ticks[0]) *
+                                            1000.0 /
+                                            m_gpu_timestamp_frequency;
+                m_last_gpu_timing = GpuFrameTiming{fence, static_cast<float>(milliseconds)};
+            }
+            m_gpu_query_fences[slot] = kFenceValueNone;
+        }
+    }
+
     void Renderer::sweepCompleted_() noexcept {
         // Tests-only delayed-completion seam: while held, real submits stay
         // outstanding (no reclaim, no credit return) so the test can assert
@@ -499,6 +583,7 @@ namespace pP {
         }
         const Expected<FenceCompletionValue> completed = m_frame_fence.pollCompleted();
         const FenceCompletionValue known = completed.has_value() ? *completed : m_frame_fence.completed();
+        collectGpuTimings_(known);
         std::ignore = m_deferred.reclaim(known);
         std::size_t kept = 0u;
         // Frontier is the maximum of values whose entries actually left the
@@ -786,6 +871,7 @@ namespace pP {
         rhi::ComPtr<rhi::ICommandEncoder> encoder;
         PPR_RETURN_ERROR_ON_FAIL(Renderer, m_graphics_queue->createCommandEncoder(encoder.writeRef()));
 
+        const auto timing_slot = beginGpuTiming_(*encoder);
         const FenceCompletionValue completed = m_frame_fence.completed();
         const auto wait_for_fence = [this](const FenceCompletionValue value) -> std::error_code {
             return m_frame_fence.waitFor(value);
@@ -796,6 +882,9 @@ namespace pP {
             return encode_err;
         }
 
+        if (timing_slot) {
+            encoder->writeTimestamp(m_gpu_queries, *timing_slot * 2u + 1u);
+        }
         rhi::ComPtr<rhi::ICommandBuffer> command_buffer;
         PPR_RETURN_ERROR_ON_FAIL(Renderer, encoder->finish(command_buffer.writeRef()));
         const Expected<FenceCompletionValue> submitted = submitAndSignal_(command_buffer.get());
@@ -807,6 +896,9 @@ namespace pP {
             return submitted.error();
         }
         submitted_value = *submitted;
+        if (timing_slot) {
+            m_gpu_query_fences[*timing_slot] = *submitted;
+        }
         settlement = FrameSettlement::kSubmitted;
         return default_value_v;
     }
@@ -1184,6 +1276,7 @@ namespace pP {
                 PPR_RETAIN_ERROR_ON_FAIL(
                     Renderer, first_err, m_graphics_queue->createCommandEncoder(encoder.writeRef()));
 
+                const auto timing_slot = not first_err ? beginGpuTiming_(*encoder) : std::nullopt;
                 for (const BuiltSurfacePass &built: built_passes) {
                     if (first_err) {
                         break;
@@ -1194,6 +1287,9 @@ namespace pP {
                 }
 
                 if (not first_err) {
+                    if (timing_slot) {
+                        encoder->writeTimestamp(m_gpu_queries, *timing_slot * 2u + 1u);
+                    }
                     rhi::ComPtr<rhi::ICommandBuffer> command_buffer;
                     PPR_RETAIN_ERROR_ON_FAIL(Renderer, first_err, encoder->finish(command_buffer.writeRef()));
                     if (not first_err) {
@@ -1208,6 +1304,9 @@ namespace pP {
                         const Expected<FenceCompletionValue> submitted = submitAndSignal_(command_buffer.get());
                         if (submitted) {
                             submitted_value = *submitted;
+                            if (timing_slot) {
+                                m_gpu_query_fences[*timing_slot] = *submitted;
+                            }
                             settlement = FrameSettlement::kSubmitted;
                         } else {
                             first_err = submitted.error();
