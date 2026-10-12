@@ -349,14 +349,15 @@ World-profile decoding feeds the production numeric compiler; the complete-pack 
 `loadContentCatalog(root, diagnostics, context)` runs on the coordinator or a
 headless caller. It owns materials, fields, biomes, features, profiles and frozen
 CPU images. It validates all five manifest documents before decoding every
-required terrain texture. Unique authored texture paths share one decoded image;
+required terrain texture. The coordinator builds a complete sRGB-aware mip chain
+through 1x1 before publishing each immutable image. Unique authored texture paths share one decoded image;
 there is no missing-image fallback. Paths must resolve inside the canonical pack
 root and name regular files. Errors retain the original material assignment
 location, qualified property and offending path. Cancellation is checked between
 bounded documents and images; allocation failures remain fatal.
 
 The implementation caps each texture at 2048 by 2048 and 16 MiB input, with
-64 MiB aggregate input and 128 MiB decoded pack storage. The material cap also
+64 MiB aggregate input and 128 MiB decoded pack storage, including all mip levels. The material cap also
 bounds distinct textures to 256. These are safety limits, not content targets.
 
 The complete fingerprint uses FNV-1a and the domain `ppr.content.v1`, schema

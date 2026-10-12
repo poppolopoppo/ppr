@@ -233,26 +233,42 @@ namespace pP {
                                   image.m_height > 0u and
                                   image.m_height <= 2048u and
                                   image.m_storage.isOwned() and
-                                  image.m_mip_count == 1u and
-                                  image.m_subresources.size() == 1u and
+                                  image.m_mip_count > 0u and
+                                  image.m_mip_count <=
+                                      static_cast<u32>(std::bit_width((std::max) (image.m_width, image.m_height))) and
+                                  image.m_subresources.size() == image.m_mip_count and
+                                  image.m_dimension == image::EImageDimension::image2d and
+                                  not image.m_is_block and
+                                  image.m_tag == image::EBlockTag::none and
                                   (image.m_format == image::ENativeImageFormat::rgba8_linear or
                                       image.m_format == image::ENativeImageFormat::rgba8_srgb) and
                                   image.m_storage.isMaterialized()
                               ? std::error_code{}
                               : std::make_error_code(std::errc::invalid_argument));
             const u64 bytes = image.m_storage.getBufferData().size();
-            const u64 expected = static_cast<u64>(image.m_width) * image.m_height * 4u;
-            const auto &subresource = image.m_subresources[0u];
+            u64 offset = 0u;
+            for (u32 level = 0u; level < image.m_mip_count; ++level) {
+                const u64 width = image::mipExtentAt(image.m_width, level);
+                const u64 height = image::mipExtentAt(image.m_height, level);
+                const u64 expected = width * height * 4u;
+                const auto &subresource = image.m_subresources[level];
+                PPR_RETURN_ERROR_ON_FAIL(
+                    GridPass, offset <= bytes and expected <= bytes - offset
+                                  ? std::error_code{}
+                                  : std::make_error_code(std::errc::invalid_argument));
+                PPR_RETURN_ERROR_ON_FAIL(
+                    GridPass, subresource.m_view.isMaterialized() and
+                                      subresource.m_view.getBufferData().data() ==
+                                          image.m_storage.getBufferData().data() + offset and
+                                      subresource.m_view.getBufferData().size() == expected and
+                                      subresource.m_row_pitch == width * 4u and
+                                      subresource.m_slice_pitch == expected
+                                  ? std::error_code{}
+                                  : std::make_error_code(std::errc::invalid_argument));
+                offset += expected;
+            }
             PPR_RETURN_ERROR_ON_FAIL(
-                GridPass,
-                bytes == expected and
-                        subresource.m_view.getBufferData().data() == image.m_storage.getBufferData().data() and
-                        subresource.m_view.getBufferData().size() == expected and
-                        subresource.m_view.isMaterialized() and
-                        subresource.m_row_pitch == static_cast<u64>(image.m_width) * 4u and
-                        subresource.m_slice_pitch == expected
-                    ? std::error_code{}
-                    : std::make_error_code(std::errc::invalid_argument));
+                GridPass, bytes == offset ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
             PPR_RETURN_ERROR_ON_FAIL(
                 GridPass, bytes <= 128u * 1024u * 1024u - decoded_bytes
                               ? std::error_code{}

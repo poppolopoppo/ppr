@@ -121,6 +121,30 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(over == image::make_error_code(image::errc::invalid_argument));
             PPR_TEST_ASSERT(capped.m_mip_count == 1u);
         };
+        PPR_UNIT_TEST (mips_full_chain_reaches_one_texel) {
+            for (const auto extent: {std::pair{1u, 1u}, {2u, 2u}, {64u, 64u}, {64u, 1u}, {17u, 5u}}) {
+                image::ImageAsset chained = makeSolid_(extent.first, extent.second, std::byte{0x7F});
+                const auto base_size = chained.m_storage.getBufferData().size();
+                PPR_TEST_ASSERT(not image::generateMipChain(chained, image::MipGenDesc{.m_full_chain = true}));
+                PPR_TEST_ASSERT(
+                    chained.m_mip_count == static_cast<u32>(std::bit_width((std::max) (extent.first, extent.second))));
+                PPR_TEST_ASSERT(chained.m_subresources.size() == chained.m_mip_count);
+                PPR_TEST_ASSERT(chained.m_subresources.front().m_slice_pitch == base_size);
+                PPR_TEST_ASSERT(chained.m_subresources.back().m_row_pitch == 4u);
+                PPR_TEST_ASSERT(chained.m_subresources.back().m_slice_pitch == 4u);
+                PPR_TEST_ASSERT(
+                    std::ranges::all_of(
+                        chained.m_subresources.front().m_view.getBufferData(),
+                        [](const std::byte value) { return value == std::byte{0x7F}; }));
+            }
+
+            image::ImageAsset capped = makeSolid_(64u, 64u, std::byte{0x7F});
+            const image::MipGenDesc tight{.m_limits = {.m_max_decoded_bytes = 64u * 64u * 4u}, .m_full_chain = true};
+            PPR_TEST_ASSERT(
+                image::generateMipChain(capped, tight) == image::make_error_code(image::errc::invalid_argument));
+            PPR_TEST_ASSERT(capped.m_mip_count == 1u and capped.m_subresources.size() == 1u);
+            PPR_TEST_ASSERT(capped.m_storage.getBufferData().size() == 64u * 64u * 4u);
+        };
     } // namespace MipsChain
 } // namespace pP::tests::detail
 
@@ -506,6 +530,7 @@ namespace pP::tests {
     const UnitTest image_mips = UnitTest::Named("mips") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::MipsChain::mips_chain_rules,
+            detail::MipsChain::mips_full_chain_reaches_one_texel,
             detail::MipsCoverage::mips_coverage_preserved,
             detail::MipsBleed::mips_no_bleed_at_edges,
             detail::MipsQuality::mips_hq_within_bounds,

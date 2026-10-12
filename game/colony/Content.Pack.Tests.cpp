@@ -284,6 +284,9 @@ threshold_max = 1.0
         }
         for (const auto &texture: catalog->textures()) {
             PPR_TEST_ASSERT(texture.m_image.m_width == 64u and texture.m_image.m_height == 64u);
+            PPR_TEST_ASSERT(texture.m_image.m_mip_count == 7u);
+            PPR_TEST_ASSERT(texture.m_image.m_subresources.size() == 7u);
+            PPR_TEST_ASSERT(texture.m_image.m_subresources.back().m_slice_pitch == 4u);
             PPR_TEST_ASSERT(texture.m_image.m_storage.isOwned());
         }
         const auto before = catalog->textures().front().m_image.m_storage.getBufferData().front();

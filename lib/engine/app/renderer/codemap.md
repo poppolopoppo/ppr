@@ -21,6 +21,9 @@ Supported scales are one metre for legacy fixtures and one third metre for
 prepared worlds. CPU reference culling, GPU visibility, and vertex positions
 all apply that same scale; local atlas addressing stays in fine cells. Ordinary
 shutdown resets the metric for reuse. Catalog images and GPU visual resources publish with the owned world candidate.
+Terrain admission validates every mip's tight pitch and contiguous owned storage,
+including the complete chain in the decoded-byte budget. Upload retains all levels
+for trilinear filtering.
 
 Grid payload tables are zero-based. The vertex entry uses visible-ID indirection
 or its instance ID directly; it has no per-draw scalar uniform. This keeps the

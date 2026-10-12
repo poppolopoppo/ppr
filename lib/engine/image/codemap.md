@@ -35,14 +35,16 @@ decode (P1a RGBA first, then P1b blocks) + `:mips` CPU chain generation (Phase 8
   `m_limits` checks bounding input/header/decoded bytes before allocation, and `checkInvariants_`
   (`PPR_ASSERT` + `invalid_argument` on violation) at return.
 - `:mips` declares `mipCountFor`/`mipExtentAt`/`generateMipChain` (`MipGenDesc`: incremental
-  default, HQ-from-top opt-in, coverage preserve, alpha cutoff, limits); `Image.Mips.cpp`
+  default, HQ-from-top opt-in, coverage preserve, alpha cutoff, limits, full-chain opt-in); `Image.Mips.cpp`
   implements them in a float-linear workspace via `stbir_resize_float_linear` (vendored `stb`
   target, private — Mango has no float resample), sRGB to linear before the filter with
   re-encode after, chamfer distance-field color expansion before each level, upscale-only
   binary-search coverage restore (20 steps, abort-below-1). Blocked assets reject with
   `function_not_supported` so KTX2-embedded chains pass through untouched; the chain lands in
   `m_subresources[m_mip_count]` (one frozen storage, tight pitches) with chain bytes counted
-  against the decode cap.
+  against the decode cap. Default chains stop at four pixels; `m_full_chain`
+  reaches 1x1, including non-square images. Resizer scratch allocation failure
+  throws `bad_alloc`.
 
 ## Flow
 

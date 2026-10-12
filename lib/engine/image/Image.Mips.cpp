@@ -220,7 +220,12 @@ namespace pP::image {
             [[unlikely]] {
             return make_error_code(errc::invalid_argument);
         }
-        const u32 count = mipCountFor(asset.m_width, asset.m_height);
+        if (asset.m_width > static_cast<u32>((std::numeric_limits<int>::max)()) or
+            asset.m_height > static_cast<u32>((std::numeric_limits<int>::max)())) {
+            PPR_RETURN_ERROR_ON_FAIL(Image, errc::invalid_argument);
+        }
+        const u32 count = desc.m_full_chain ? std::bit_width((std::max) (asset.m_width, asset.m_height))
+                                            : mipCountFor(asset.m_width, asset.m_height);
         if (count <= 1u) {
             return std::error_code{};
         }
@@ -299,7 +304,9 @@ namespace pP::image {
             if (stbir_resize_float_linear(
                     source, source_w_int, source_h_int, 0, next.data(), level_w_int, level_h_int, 0, STBIR_RGBA) ==
                 nullptr) [[unlikely]] {
-                return make_error_code(errc::invalid_argument);
+                // Dimensions and storage are validated; stb's remaining failure
+                // is its internal scratch allocation. Allocation failure is fatal.
+                throw std::bad_alloc{};
             }
             if (desc.m_has_preserve_coverage) {
                 preserveCoverage_(next, target_coverage, desc.m_alpha_cutoff);

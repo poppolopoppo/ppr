@@ -66,19 +66,20 @@ barriers and drawing share one encoder and submission.
   with quadratic Bezier arcs (dual-cell centre control point) for diagonal cuts.
   Inverse-quadratic coordinates classify both outer coverage and solid materials;
   closest-point solves measure the actual curves, never internal triangulation edges.
-  Within each occupied component, minority labels use their rounded regions;
-  the most frequent label fills the complement. Count ties prefer the lower-y/
-  lower-x sample independently of material IDs, including alternating saddles.
+  Each material uses its own rounded region, including three-corner masks.
+  Multi-material junctions and alternating saddles leave rounded void where
+  none of those independent regions cover the pixel.
   Collision contours retain the shared piecewise-linear geometry.
-- Terrain presentation adds a dark material outline with a two-pixel nominal
-  width and a one-pixel AA fringe, plus a six-pixel shadow falling into non-solid
-  space. Derivatives captured before divergent branches convert curve normals
-  to screen-space widths. Including its fringe, outline support is capped at
-  one cell across; shadow depth is capped at one cell. A bounded neighboring
-  dual-cell search carries effects across cell/chunk seams. Diagnostics retain
+- Terrain presentation adds a two-pixel inner outline to every solid border,
+  with a one-pixel AA fringe. Each solid side follows its own contour. Outline
+  opacity fades as nominal width grows from one to three fine cells; its width
+  remains in screen space. A twelve-pixel shadow falls into non-solid space,
+  capped at one cell. Derivatives captured before divergent branches convert
+  curve normals to screen-space widths. A bounded neighboring dual-cell search
+  carries effects across cell/chunk seams; fully faded rims skip that search. Diagnostics retain
   their exact palette colors; shadow composites only into non-solid coverage
   (over matter when present), leaving solid fill unchanged.
-  Uniform components retain their material fast path. No new resources, uploads,
+  Uniform components avoid curve evaluation. No new resources, uploads,
   texture samples or draw calls are introduced; neighboring terrain buffer reads
   and bounded curve evaluation add fragment work.
 - `grid_tiles.slang` entry points: `[shader("vertex")] vertexGridMain` and
@@ -121,8 +122,8 @@ Catalog terrain uploads the shared `engine.math` contour points and 16-case
 connectivity table verbatim (8-byte points, 72-byte cases). The fragment shader
 reads global samples through a completion-safe logical-chunk-to-physical-slot
 map, including diagonal neighbors, then rounds the shared midpoint boundaries.
-Occupied saddle components stay disconnected; fully solid material saddles use
-the dominant-label complement policy described above. The diagnostic sample
+Per-material saddle components stay disconnected, leaving void between their
+independent rounded regions. The diagnostic sample
 comes from the chosen material with global row-major ties. Outside-world samples
 use the profile's validated wall material without forming atlas addresses. Each
 chunk draws only its nominal rectangle. Explicit legacy fixtures retain square

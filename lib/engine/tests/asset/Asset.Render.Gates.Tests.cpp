@@ -1550,11 +1550,13 @@ namespace pP::tests::detail {
             camera.updateModel(TimeSpan{}, model, Viewport{PixelRect{int2{0, 0}, int2{128, 128}}, ViewportLayout{}});
             PPR_TEST_ASSERT(not grid.update(TimeSpan{}, camera.getSnapshot()));
             pixels = render();
+            // Exterior AA combines red matter with the solid's dark inner rim;
+            // its blue component exceeds the shadow-only maximum of two byte values.
             bool mixed = false;
             for (u32 y = 0u; y < 128u; ++y) {
                 for (u32 x = 0u; x < 128u; ++x) {
                     const auto edge = gateTexel_(pixels, x, y);
-                    mixed = mixed or (edge[0] > 40u and edge[2] > 40u and edge[1] < 8u);
+                    mixed = mixed or (edge[0] > 40u and edge[2] > 2u and edge[1] < 8u);
                 }
             }
             PPR_TEST_ASSERT(mixed);
@@ -1782,7 +1784,7 @@ namespace pP::tests::detail {
             const auto prepare = [&](const PreRenderContext &context) { return grid.prepareGpuVisibility(context); };
             const auto draw = [&](const DrawContext &context) { return grid.renderGpuIndirect(context); };
             const std::array<u32, 4u> chunks{0u, 1u, 33u, 32u};
-            const std::array<u16, 4u> materials{1u, 2u, 4u, 3u};
+            const std::array<u16, 4u> materials{1u, 1u, 1u, 1u};
             GridPass::GridStagedFrame stage{};
             stage.m_has_catalog = true;
             for (const u32 chunk: chunks) {
@@ -1832,7 +1834,7 @@ namespace pP::tests::detail {
                     PPR_TEST_ASSERT(pixels.has_value());
                     if (mask == 1u and metric == 1.0f) {
                         const auto edge = gateTexel_(*pixels, 2u, 64u);
-                        PPR_TEST_ASSERT(edge[0u] > 70u and edge[0u] < 210u);
+                        PPR_TEST_ASSERT(edge[0u] > 6u and edge[0u] < 25u);
                         // The quadratic arc includes this point outside the old chord.
                         const auto rounded = gateTexel_(*pixels, 40u, 87u);
                         PPR_TEST_ASSERT(rounded[0u] > 200u and rounded[1u] < 45u);
@@ -1861,7 +1863,7 @@ namespace pP::tests::detail {
                                 const auto segment = shape.m_segments[edge];
                                 const auto a = points[segment.m_begin];
                                 const auto b = points[segment.m_end];
-                                near_edge = near_edge or roundedGateDistance_(point, a, b) < 0.065f;
+                                near_edge = near_edge or roundedGateDistance_(point, a, b) < 0.11f;
                             }
                             if (near_edge) {
                                 continue;
@@ -1877,37 +1879,9 @@ namespace pP::tests::detail {
                                     break;
                                 }
                             }
-                            u32 dominant{};
-                            for (const u32 corner: {0u, 1u, 3u, 2u}) {
-                                if ((component & (1u << corner)) != 0u) {
-                                    dominant = corner;
-                                    break;
-                                }
-                            }
-                            u32 material = materials[dominant];
-                            // Distinct labels use midpoint-cut corner islands;
-                            // the spatially first label fills the remaining junction.
-                            for (u32 corner = 0u; corner < 4u; ++corner) {
-                                if ((component & (1u << corner)) == 0u or corner == dominant) {
-                                    continue;
-                                }
-                                const float distance = std::abs(warped.m_x - points[corner].m_x) +
-                                                       std::abs(warped.m_y - points[corner].m_y);
-                                const auto &island = cases[std::size_t{1u} << corner];
-                                const auto segment = island.m_segments[0u];
-                                near_edge = near_edge or
-                                            roundedGateDistance_(
-                                                point, points[segment.m_begin], points[segment.m_end]) < 0.02f;
-                                if (distance < 0.5f) {
-                                    material = materials[corner];
-                                }
-                            }
-                            if (near_edge) {
-                                continue;
-                            }
                             const auto texel = gateTexel_(*pixels, x, y);
                             for (u32 channel = 0u; channel < 3u; ++channel) {
-                                const i32 expected = component != 0u ? ((material & (1u << channel)) != 0u ? 217 : 38)
+                                const i32 expected = component != 0u ? (channel == 0u ? 217 : 38)
                                                      : channel == 2u ? 51
                                                                      : 25;
                                 PPR_TEST_ASSERT(std::abs(static_cast<i32>(texel[channel]) - expected) <= 2);
@@ -2000,32 +1974,23 @@ namespace pP::tests::detail {
 
             struct MaterialCase {
                 std::array<u16, 4u> m_ids;
-                u32 m_dominant_corner;
             };
             Array<MaterialCase> fixtures;
             for (u32 mask = 0u; mask < 16u; ++mask) {
                 MaterialCase fixture{};
-                u32 count{};
                 for (u32 corner = 0u; corner < 4u; ++corner) {
                     fixture.m_ids[corner] = (mask & (1u << corner)) != 0u ? 1u : 2u;
-                    count += (mask >> corner) & 1u;
-                }
-                // A strict majority wins; a two/two tie uses the bottom-left label.
-                const u16 dominant = count > 2u ? 1u : count < 2u ? 2u : fixture.m_ids[0u];
-                for (u32 corner = 0u; corner < 4u; ++corner) {
-                    if (fixture.m_ids[corner] == dominant) {
-                        fixture.m_dominant_corner = corner;
-                        break;
-                    }
                 }
                 fixtures.push_back(fixture);
             }
-            fixtures.push_back({{1u, 1u, 2u, 4u}, 0u});
-            fixtures.push_back({{1u, 2u, 1u, 4u}, 0u});
-            fixtures.push_back({{1u, 2u, 4u, 3u}, 0u});
-            fixtures.push_back({{1u, 2u, 3u, 2u}, 1u});
-            fixtures.push_back({{60001u, 65530u, 60004u, 60003u}, 0u});
-            fixtures.push_back({{65530u, 60001u, 65530u, 60001u}, 0u});
+            fixtures.push_back({{1u, 1u, 2u, 4u}});
+            fixtures.push_back({{1u, 2u, 1u, 4u}});
+            fixtures.push_back({{1u, 2u, 4u, 3u}});
+            fixtures.push_back({{1u, 2u, 3u, 2u}});
+            fixtures.push_back({{60001u, 65530u, 60004u, 60003u}});
+            fixtures.push_back({{65530u, 60001u, 65530u, 60001u}});
+            fixtures.push_back({{1u, 2u, 0u, 0u}});
+            fixtures.push_back({{1u, 2u, 3u, 0u}});
 
             // Independent analytic regions in inverse-quadratic coordinates.
             const auto contains = [](const u32 mask, const float x, const float y) {
@@ -2041,10 +2006,29 @@ namespace pP::tests::detail {
                 if (mask == 9u) {
                     return x <= 0.5f;
                 }
-                return ((mask & 1u) != 0u and x + y <= 0.5f) or
-                       ((mask & 2u) != 0u and 1.0f - x + y <= 0.5f) or
-                       ((mask & 4u) != 0u and 2.0f - x - y <= 0.5f) or
-                       ((mask & 8u) != 0u and x + 1.0f - y <= 0.5f);
+                const bool bottom_left = x + y <= 0.5f;
+                const bool bottom_right = 1.0f - x + y <= 0.5f;
+                const bool top_right = 2.0f - x - y <= 0.5f;
+                const bool top_left = x + 1.0f - y <= 0.5f;
+                if (mask == 15u) {
+                    return true;
+                }
+                if (mask == 7u) {
+                    return not top_left;
+                }
+                if (mask == 11u) {
+                    return not top_right;
+                }
+                if (mask == 13u) {
+                    return not bottom_right;
+                }
+                if (mask == 14u) {
+                    return not bottom_left;
+                }
+                return ((mask & 1u) != 0u and bottom_left) or
+                       ((mask & 2u) != 0u and bottom_right) or
+                       ((mask & 4u) != 0u and top_right) or
+                       ((mask & 8u) != 0u and top_left);
             };
             for (const auto &fixture: fixtures) {
                 for (u32 corner = 0u; corner < 4u; ++corner) {
@@ -2067,16 +2051,34 @@ namespace pP::tests::detail {
                 PPR_TEST_ASSERT(not renderer->waitOnHost());
                 const auto pixels = readback_(device, targetRef_(target), 128u);
                 PPR_TEST_ASSERT(pixels.has_value());
+                if (fixture.m_ids == std::array<u16, 4>{1u, 2u, 3u, 0u}) {
+                    const auto directory = std::filesystem::current_path() / "temp_gate_fixtures";
+                    std::error_code error;
+                    std::filesystem::create_directories(directory, error);
+                    PPR_TEST_ASSERT(not error);
+                    const mango::image::Surface surface{
+                        128, 128,
+                        mango::image::Format(32, mango::image::Format::UNORM, mango::image::Format::RGBA, 8, 8, 8, 8),
+                        static_cast<u32>(pixels->m_row_pitch), pixels->m_bytes.data()};
+                    PPR_TEST_ASSERT(
+                        static_cast<bool>(surface.save((directory / "grid-rounded-material-junction.png").string())));
+                }
+                if (fixture.m_ids == std::array<u16, 4>{1u, 2u, 0u, 0u}) {
+                    // Independent rounded corners leave void where a complementary
+                    // dominant fill used to produce a pointed material junction.
+                    const auto gap = gateTexel_(*pixels, 64u, 95u);
+                    PPR_TEST_ASSERT(gap[0u] < 60u and gap[1u] < 60u and gap[2u] < 60u);
+                }
                 for (u32 y = 2u; y < 128u; y += 5u) {
                     for (u32 x = 2u; x < 128u; x += 5u) {
                         const math::ContourPoint point{
                             (static_cast<float>(x) + 0.5f) / 128.0f, 1.0f - (static_cast<float>(y) + 0.5f) / 128.0f};
                         const auto warped = roundedGatePoint_(point);
                         bool near_edge = false;
-                        u16 material = fixture.m_ids[fixture.m_dominant_corner];
+                        u16 material = 0u;
                         for (u32 corner = 0u; corner < 4u; ++corner) {
                             const u16 candidate = fixture.m_ids[corner];
-                            if (candidate == fixture.m_ids[fixture.m_dominant_corner]) {
+                            if (candidate == 0u) {
                                 continue;
                             }
                             u32 mask{};
@@ -2089,7 +2091,7 @@ namespace pP::tests::detail {
                                 const auto segment = shape.m_segments[edge];
                                 near_edge = near_edge or
                                             roundedGateDistance_(
-                                                point, points[segment.m_begin], points[segment.m_end]) < 0.02f;
+                                                point, points[segment.m_begin], points[segment.m_end]) < 0.11f;
                             }
                             if (contains(mask, warped.m_x, warped.m_y)) {
                                 material = candidate;
@@ -2100,7 +2102,9 @@ namespace pP::tests::detail {
                         }
                         const auto texel = gateTexel_(*pixels, x, y);
                         for (u32 channel = 0u; channel < 3u; ++channel) {
-                            const i32 expected = (material & (1u << channel)) != 0u ? 217 : 38;
+                            const i32 expected = material == 0u                       ? (channel == 2u ? 51 : 25)
+                                                 : (material & (1u << channel)) != 0u ? 217
+                                                                                      : 38;
                             PPR_TEST_ASSERT(std::abs(static_cast<i32>(texel[channel]) - expected) <= 2);
                         }
                     }
@@ -2108,7 +2112,7 @@ namespace pP::tests::detail {
             }
         };
 
-        PPR_UNIT_TEST (grid_contour_styles_keep_screen_size_and_cell_cap) {
+        PPR_UNIT_TEST (grid_contour_styles_fade_inner_rims_and_cap_shadow) {
             const auto rhi = SharedGpu::rhiService();
             const auto shader = SharedGpu::shaderService();
             Renderer *const renderer = SharedGpu::renderer();
@@ -2148,7 +2152,8 @@ namespace pP::tests::detail {
             const auto published = grid.tryPrepareCellUploads(device, renderer->completedFenceValue(), 4u);
             PPR_TEST_ASSERT(published and *published);
             std::array<u8, 4u> reference_shadow{};
-            for (const float pixels_per_cell: {16.0f, 8.0f, 2.0f, 0.5f}) {
+            u8 previous_rim{};
+            for (const float pixels_per_cell: {32.0f, 16.0f, 8.0f, 2.0f, 1.0f, 0.5f}) {
                 const float extent = 128.0f / pixels_per_cell;
                 CameraModel model{};
                 model.m_camera_mode = ECameraProjection::orthographic;
@@ -2170,31 +2175,39 @@ namespace pP::tests::detail {
                 const auto left_fill = gateTexel_(*pixels, 61u, 96u);
                 const auto right_fill = gateTexel_(*pixels, 66u, 96u);
                 PPR_TEST_ASSERT(left_fill[0u] >= 215u and right_fill[1u] >= 215u);
-                if (pixels_per_cell >= 8.0f) {
+                if (pixels_per_cell <= 2.0f) {
+                    PPR_TEST_ASSERT(left_outline[0u] > previous_rim or pixels_per_cell == 2.0f);
+                    previous_rim = left_outline[0u];
+                    if (pixels_per_cell == 1.0f) {
+                        PPR_TEST_ASSERT(left_outline[0u] > 100u and left_outline[0u] < 125u);
+                    }
+                }
+                if (pixels_per_cell >= 16.0f) {
+                    PPR_TEST_ASSERT(gateTexel_(*pixels, 32u, 65u)[0u] <= 10u);
                     PPR_TEST_ASSERT(left_outline[0u] >= 5u and left_outline[0u] <= 10u);
                     PPR_TEST_ASSERT(right_outline[1u] >= 5u and right_outline[1u] <= 10u);
                     for (u32 row = 0u; row < reference_shadow.size(); ++row) {
                         const auto texel = gateTexel_(*pixels, 32u, 62u - row);
                         PPR_TEST_ASSERT(texel[2u] > 28u and texel[2u] < 51u);
-                        if (pixels_per_cell == 16.0f) {
+                        if (pixels_per_cell == 32.0f) {
                             reference_shadow[row] = texel[2u];
                         } else {
                             PPR_TEST_ASSERT(std::abs(static_cast<i32>(texel[2u]) - reference_shadow[row]) <= 2);
                         }
                     }
-                    PPR_TEST_ASSERT(gateTexel_(*pixels, 32u, 57u)[2u] == 51u);
-                } else {
+                    PPR_TEST_ASSERT(gateTexel_(*pixels, 32u, 50u)[2u] == 51u);
+                } else if (pixels_per_cell <= 2.0f) {
                     // At two pixels/cell the shadow ends within two pixels;
                     // at half a pixel/cell its support is smaller than one pixel.
                     PPR_TEST_ASSERT(gateTexel_(*pixels, 32u, 61u)[2u] == 51u);
-                    PPR_TEST_ASSERT(gateTexel_(*pixels, 62u, 96u)[0u] >= 215u);
+                    PPR_TEST_ASSERT(gateTexel_(*pixels, 60u, 96u)[0u] >= 215u);
                     if (pixels_per_cell == 0.5f) {
                         PPR_TEST_ASSERT(left_outline[0u] >= 215u and right_outline[1u] >= 215u);
                     }
                 }
                 // Solid fill is not shadowed; distant empty space is unchanged.
-                PPR_TEST_ASSERT(gateTexel_(*pixels, 32u, 65u)[0u] >= 215u);
-                const auto empty = gateTexel_(*pixels, 32u, 55u);
+                PPR_TEST_ASSERT(gateTexel_(*pixels, 32u, 67u)[0u] >= 215u);
+                const auto empty = gateTexel_(*pixels, 32u, 48u);
                 PPR_TEST_ASSERT(empty[0u] == 25u and empty[1u] == 25u and empty[2u] == 51u);
             }
         };
@@ -2292,6 +2305,101 @@ namespace pP::tests::detail {
                 512, 512, mango::image::Format(32, mango::image::Format::UNORM, mango::image::Format::RGBA, 8, 8, 8, 8),
                 static_cast<u32>(pixels->m_row_pitch), pixels->m_bytes.data()};
             PPR_TEST_ASSERT(static_cast<bool>(surface.save((directory / "grid-dense-contours.png").string())));
+        };
+
+        PPR_UNIT_TEST (grid_catalog_mips_filter_extreme_minification) {
+            const auto rhi = SharedGpu::rhiService();
+            const auto shader = SharedGpu::shaderService();
+            Renderer *const renderer = SharedGpu::renderer();
+            PPR_TEST_ASSERT(rhi.isValid() and shader.isValid() and renderer != nullptr);
+            rhi::IDevice &device = rhi->getDevice();
+            GridPass grid;
+            PPR_TEST_ASSERT(not grid.initialize(*rhi, *shader, std::filesystem::current_path()));
+            PPR_DEFER {
+                std::ignore = renderer->waitOnHost();
+                std::ignore = grid.shutdown();
+            };
+            mem::UniqueBuffer storage = mem::UniqueBuffer::allocate(64u * 64u * 4u);
+            PPR_TEST_ASSERT(not storage.materialize());
+            auto bytes = storage.getMutableData();
+            PPR_TEST_ASSERT(bytes.has_value());
+            for (u32 pixel = 0u; pixel < 64u * 64u; ++pixel) {
+                (*bytes)[pixel * 4u] = ((pixel % 64u) / 8u % 2u == 0u) ? std::byte{255} : std::byte{0};
+                (*bytes)[pixel * 4u + 1u] = std::byte{0};
+                (*bytes)[pixel * 4u + 2u] = ((pixel % 64u) / 8u % 2u == 0u) ? std::byte{0} : std::byte{255};
+                (*bytes)[pixel * 4u + 3u] = std::byte{255};
+            }
+            mem::SharedBuffer frozen;
+            PPR_TEST_ASSERT(not storage.moveToShared(&frozen));
+            image::ImageAsset image{};
+            image.m_width = 64u;
+            image.m_height = 64u;
+            image.m_format = image::ENativeImageFormat::rgba8_srgb;
+            image.m_is_srgb = true;
+            image.m_storage = frozen;
+            image.m_subresources.push_back(
+                {.m_view = frozen.subspan(0u, 64u * 64u * 4u), .m_row_pitch = 256u, .m_slice_pitch = 64u * 64u * 4u});
+            PPR_TEST_ASSERT(not image::generateMipChain(image, image::MipGenDesc{.m_full_chain = true}));
+            PPR_TEST_ASSERT(image.m_mip_count == 7u);
+            GridPass::GridStagedFrame stage{};
+            stage.m_has_catalog = true;
+            stage.m_cell_size_m = 1.0f / 3.0f;
+            stage.m_boundary_material_id = 16u;
+            stage.m_content_fingerprint = 42u;
+            stage.m_terrain_visuals.push_back({16u, 0x00ff00ffu, 0xffffffffu, 1.0f});
+            stage.m_terrain_visuals.push_back({257u, 0xffffffffu, 0u, 0.1f});
+            stage.m_terrain_images.push_back(image);
+            for (const u32 chunk: {0u, 1u, 32u, 33u}) {
+                const i32 x = static_cast<i32>(chunk % 32u) * 128;
+                const i32 y = static_cast<i32>(chunk / 32u) * 128;
+                stage.m_tiles.push_back(
+                    {.m_chunk_id = chunk, .m_tile_range = {x, y, x + 128, y + 128}, .m_dirty_mask = 1u});
+                GridPass::GridStagedUpload upload{};
+                upload.m_chunk_id = chunk;
+                upload.m_cell_materials.assign(GridPass::kCellsPerChunk, 257u);
+                stage.m_uploads.push_back(std::move(upload));
+            }
+            auto malformed = stage;
+            malformed.m_terrain_images[0u].m_subresources.back().m_slice_pitch = 8u;
+            PPR_TEST_ASSERT(grid.applyStagedFrame(malformed) == std::errc::invalid_argument);
+            malformed = stage;
+            ++malformed.m_terrain_images[0u].m_mip_count;
+            PPR_TEST_ASSERT(grid.applyStagedFrame(malformed) == std::errc::invalid_argument);
+            PPR_TEST_ASSERT(not grid.stageWorldCandidate(1u, 2u, stage));
+            const auto ready = grid.advanceWorldCandidate(device, renderer->completedFenceValue(), 4u);
+            PPR_TEST_ASSERT(ready and *ready);
+            PPR_TEST_ASSERT(not grid.activateWorldCandidate(1u, 2u, 42u));
+            const auto target = makeRenderTarget_(device, 128u);
+            PPR_TEST_ASSERT(target.has_value());
+            const auto prepare = [&](const PreRenderContext &context) { return grid.prepareGpuVisibility(context); };
+            const auto draw = [&](const DrawContext &context) { return grid.renderGpuIndirect(context); };
+            // More than 200 source texels per output pixel forces the 1x1 mip.
+            // Translations must not reveal the original eight-texel color stripes.
+            for (const float offset: {0.0f, 0.013f, 0.071f}) {
+                CameraModel model{};
+                model.m_camera_mode = ECameraProjection::orthographic;
+                model.m_origin = float3{64.0f / 3.0f + offset, 64.0f / 3.0f, 0.0f};
+                model.m_ortho_scale = 1.0f / 3.0f;
+                Camera camera;
+                camera.updateModel(
+                    TimeSpan{}, model, Viewport{PixelRect{int2{0, 0}, int2{128, 128}}, ViewportLayout{}});
+                PPR_TEST_ASSERT(not grid.update(TimeSpan{}, camera.getSnapshot()));
+                PPR_TEST_ASSERT(not renderer->renderToTexture(
+                    targetRef_(target), {DrawSubmission{"minified terrain mips", draw}}, {},
+                    PreRenderCallback{prepare}));
+                grid.notifyFrameSubmitted(renderer->lastSubmittedFenceValue());
+                PPR_TEST_ASSERT(not renderer->waitOnHost());
+                const auto pixels = readback_(device, targetRef_(target), 128u);
+                PPR_TEST_ASSERT(pixels.has_value());
+                for (const u32 y: {16u, 48u, 80u, 112u}) {
+                    for (const u32 x: {16u, 48u, 80u, 112u}) {
+                        const auto texel = gateTexel_(*pixels, x, y);
+                        PPR_TEST_ASSERT(std::abs(static_cast<i32>(texel[0u]) - 128) <= 4);
+                        PPR_TEST_ASSERT(texel[1u] <= 2u);
+                        PPR_TEST_ASSERT(std::abs(static_cast<i32>(texel[2u]) - 128) <= 4);
+                    }
+                }
+            }
         };
 
         PPR_UNIT_TEST (grid_catalog_textures_use_sparse_ids_and_world_uvs) {
@@ -2605,9 +2713,10 @@ namespace pP::tests {
             detail::Gate::grid_compute_visibility_matches_reference_and_draws,
             detail::Gate::grid_shared_contours_match_cpu_at_four_chunk_seams,
             detail::Gate::grid_material_contours_partition_solid_chunk_seams,
-            detail::Gate::grid_contour_styles_keep_screen_size_and_cell_cap,
+            detail::Gate::grid_contour_styles_fade_inner_rims_and_cap_shadow,
             detail::Gate::grid_dense_contours_render_repeated_frames,
             detail::Gate::grid_catalog_textures_use_sparse_ids_and_world_uvs,
+            detail::Gate::grid_catalog_mips_filter_extreme_minification,
             detail::Gate::grid_candidate_world_retains_active_until_matching_activation,
             detail::Gate::grid_diagnostics_cover_empty_biomes_and_preserve_terrain_modes,
         });

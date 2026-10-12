@@ -29,6 +29,8 @@ export namespace pP::image {
 
         bool m_is_high_quality = false;
         bool m_has_preserve_coverage = false;
+        // Repeating terrain needs a final 1x1 average under extreme minification.
+        bool m_full_chain = false;
     };
 
     // Incremental resampling (false, the default) filters each level from its

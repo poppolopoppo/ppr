@@ -232,49 +232,14 @@ bool contourContains(uint mask, float2 point) {
     return false;
 }
 
-uint componentMaterial(float2 point, uint materials[4], uint component, out uint masks[4]) {
-    for (uint index = 0u; index < 4u; ++index) { masks[index] = 0u; }
-    uint visited = 0u;
-    uint dominant = 0u;
-    uint largest = 0u;
-    for (uint corner = 0u; corner < 4u; ++corner) {
-        if ((component & (1u << corner)) == 0u || (visited & (1u << corner)) != 0u) {
-            continue;
-        }
-        uint mask = 0u;
-        for (uint other = 0u; other < 4u; ++other) {
-            if ((component & (1u << other)) != 0u && materials[corner] == materials[other]) {
-                mask |= 1u << other;
-            }
-        }
-        if (mask == component) {
-            return materials[corner];
-        }
-        masks[corner] = mask;
-        visited |= mask;
-        uint count = countbits(mask);
-        float2 coordinate = g_contour_points[corner];
-        float2 previous = g_contour_points[dominant];
-        bool before = coordinate.y < previous.y ||
-            (coordinate.y == previous.y && coordinate.x < previous.x);
-        if (count > largest || (count == largest && before)) {
-            largest = count;
-            dominant = corner;
-        }
+// Each label owns its rounded marching-square region. Their union may leave
+// void at multi-material junctions; no material fills another label's complement.
+uint materialMask(uint materials[4], uint corner) {
+    uint mask = 0u;
+    for (uint other = 0u; other < 4u; ++other) {
+        if (materials[other] == materials[corner]) { mask |= 1u << other; }
     }
-    // Minority labels use the shared marching-square polygons. The dominant
-    // label fills their complement, including the centre at 3/4-label junctions.
-    // Equal counts prefer the lower-y/lower-x sample, never the numeric ID.
-    // In a fully occupied alternating saddle this connects the dominant label;
-    // keeping both labels disconnected would leave an unpainted centre.
-    masks[dominant] = 0u;
-    uint material = materials[dominant];
-    for (uint corner = 0u; corner < 4u; ++corner) {
-        if (masks[corner] != 0u && contourContains(masks[corner], point)) {
-            material = materials[corner];
-        }
-    }
-    return material;
+    return mask;
 }
 
 uint contourMaterial(float2 position, float width, out float coverage, out int2 winner) {
@@ -283,53 +248,36 @@ uint contourMaterial(float2 position, float width, out float coverage, out int2 
     float2 point = position - (float2(base) + 0.5);
     float2 warped = contourWarp(point);
     uint materials[4];
-    uint mask = 0u;
     for (uint corner = 0u; corner < 4u; ++corner) {
         materials[corner] = terrainSample(base + int2(g_contour_points[corner]));
-        if (materials[corner] != 0u && materials[corner] != 0xffffu) {
-            mask |= 1u << corner;
+    }
+    uint visited = 0u;
+    uint material = 0u;
+    float best = 0.0;
+    coverage = 0.0;
+    for (uint corner = 0u; corner < 4u; ++corner) {
+        uint label = materials[corner];
+        if (label == 0u || label == 0xffffu || (visited & (1u << corner)) != 0u) { continue; }
+        uint mask = materialMask(materials, corner);
+        visited |= mask;
+        ContourCase shape = g_contour_cases[mask];
+        float distance = 1.0e30;
+        for (uint edge = 0u; edge < shape.m_segment_count; ++edge) {
+            float2 nearest, normal;
+            distance = min(distance, roundedSegmentDistance(point, shape.m_segments[edge], nearest, normal));
         }
-    }
-    ContourCase shape = g_contour_cases[mask];
-    uint component = 0u;
-    float best_triangle = -1.0e30;
-    for (uint index = 0u; index < shape.m_triangle_count; ++index) {
-        ContourTriangle triangle = shape.m_triangles[index];
-        float2 a = g_contour_points[triangle.m_a];
-        float2 b = g_contour_points[triangle.m_b];
-        float2 c = g_contour_points[triangle.m_c];
-        float signed_distance = min(
-            contourCross(b - a, warped - a) / length(b - a),
-            min(contourCross(c - b, warped - b) / length(c - b),
-                contourCross(a - c, warped - c) / length(a - c)));
-        if (signed_distance > best_triangle) {
-            best_triangle = signed_distance;
-            component = triangle.m_solid_corners;
-        }
-    }
-    if (component == 0u) {
-        coverage = 0.0;
-        return 0u;
-    }
-    // AA uses only actual contour segments, never the internal fan edges.
-    // Coverage is the union of occupied components, independent of material.
-    float edge_distance = 1.0e30;
-    for (uint edge = 0u; edge < shape.m_segment_count; ++edge) {
-        float2 nearest, normal;
-        edge_distance = min(edge_distance, roundedSegmentDistance(point, shape.m_segments[edge], nearest, normal));
-    }
-    coverage = shape.m_segment_count == 0u ? 1.0 :
-        saturate(0.5 + (best_triangle >= 0.0 ? edge_distance : -edge_distance) / width);
-    if (coverage == 0.0) {
-        return 0u;
+        float alpha = shape.m_segment_count == 0u ? 1.0 :
+            saturate(0.5 + (contourContains(mask, warped) ? distance : -distance) / width);
+        // Complementary material edges each contribute half their pixel at a
+        // shared seam; summing avoids introducing a transparent AA hairline.
+        coverage = saturate(coverage + alpha);
+        if (alpha <= best) { continue; }
+        best = alpha;
+        material = label;
     }
     float closest = 1.0e30;
-    uint masks[4];
-    uint material = componentMaterial(warped, materials, component, masks);
     for (uint corner = 0u; corner < 4u; ++corner) {
-        if ((component & (1u << corner)) == 0u || materials[corner] != material) {
-            continue;
-        }
+        if (materials[corner] != material || material == 0u) { continue; }
         float2 delta = point - g_contour_points[corner];
         float distance = dot(delta, delta);
         int2 coordinate = base + int2(g_contour_points[corner]);
@@ -343,51 +291,54 @@ uint contourMaterial(float2 position, float width, out float coverage, out int2 
     return material;
 }
 
-// Styles search only dual cells within their capped support, including adjacent
-// chunks. This prevents shadows/outlines from stopping at a dual-cell boundary.
-float2 contourDecoration(float2 position, float2 pixel_x, float2 pixel_y) {
+// The inner rim follows only the selected solid's own boundary. The screen
+// width is unchanged by zoom; opacity fades as its nominal width spans 1..3
+// fine cells. The 0.5px AA fringe needs up to 3.75 cells of search support.
+float2 contourDecoration(float2 position, float2 pixel_x, float2 pixel_y, uint material, bool need_shadow) {
     int2 base = int2(floor(position - 0.5));
     float2 local = position - (float2(base) + 0.5);
-    float radius = min(6.5 * length(float2(length(pixel_x), length(pixel_y))), 1.0);
+    float pixel_bound = length(float2(length(pixel_x), length(pixel_y)));
+    // A lower bound on the smallest Jacobian singular value proves every
+    // normal's two-pixel rim has faded, without assuming an axis-aligned view.
+    float pixel_min = sqrt(max(min(dot(pixel_x, pixel_x), dot(pixel_y, pixel_y)) -
+        abs(dot(pixel_x, pixel_y)), 0.0));
+    bool need_outline = material != 0u && material != 0xffffu && pixel_min < 1.5;
+    float radius = max(need_outline ? min(2.5 * pixel_bound, 3.75) : 0.0,
+        need_shadow ? min(12.0 * pixel_bound, 1.0) : 0.0);
+    if (radius == 0.0) { return float2(0.0); }
+    int extent = int(ceil(radius));
     float outline = 0.0;
     float shadow = 0.0;
-    for (int y = -1; y <= 1; ++y) {
-        for (int x = -1; x <= 1; ++x) {
+    for (int y = -extent; y <= extent; ++y) {
+        for (int x = -extent; x <= extent; ++x) {
             float2 point = local - float2(x, y);
             float2 box_distance = max(max(-point, point - 1.0), 0.0);
             if (length(box_distance) >= radius) { continue; }
             uint materials[4];
-            uint occupied = 0u;
             for (uint corner = 0u; corner < 4u; ++corner) {
                 materials[corner] = terrainSample(base + int2(x, y) + int2(g_contour_points[corner]));
-                if (materials[corner] != 0u && materials[corner] != 0xffffu) { occupied |= 1u << corner; }
-            }
-            ContourCase shape = g_contour_cases[occupied];
-            for (uint edge = 0u; edge < shape.m_segment_count; ++edge) {
-                float2 nearest, normal;
-                float distance = roundedSegmentDistance(point, shape.m_segments[edge], nearest, normal);
-                float depth = min(6.0 * contourPixelSize(normal, pixel_x, pixel_y), 1.0);
-                // The caller clips this to the non-solid coverage, including matter.
-                shadow = max(shadow, 1.0 - smoothstep(0.0, depth, distance));
             }
             uint visited = 0u;
-            for (uint triangle = 0u; triangle < shape.m_triangle_count; ++triangle) {
-                uint component = shape.m_triangles[triangle].m_solid_corners;
-                if ((visited & component) != 0u) { continue; }
-                visited |= component;
-                uint masks[4];
-                componentMaterial(contourWarp(saturate(point)), materials, component, masks);
-                for (uint corner = 0u; corner < 4u; ++corner) {
-                    ContourCase material_shape = g_contour_cases[masks[corner]];
-                    for (uint edge = 0u; edge < material_shape.m_segment_count; ++edge) {
-                        float2 nearest, normal;
-                        float distance = roundedSegmentDistance(point, material_shape.m_segments[edge], nearest, normal);
-                        if (!contourContains(occupied, contourWarp(nearest))) { continue; }
-                        float pixel = contourPixelSize(normal, pixel_x, pixel_y);
-                        // Including its AA fringe, total outline support <= one cell.
-                        float half_width = min(pixel, 1.0 / 3.0);
-                        float aa = min(0.5 * pixel, 1.0 / 6.0);
-                        outline = max(outline, 1.0 - smoothstep(half_width - aa, half_width + aa, distance));
+            for (uint corner = 0u; corner < 4u; ++corner) {
+                uint label = materials[corner];
+                if (label == 0u || label == 0xffffu || (visited & (1u << corner)) != 0u) { continue; }
+                uint mask = materialMask(materials, corner);
+                visited |= mask;
+                if (label != material && !need_shadow) { continue; }
+                ContourCase shape = g_contour_cases[mask];
+                for (uint edge = 0u; edge < shape.m_segment_count; ++edge) {
+                    float2 nearest, normal;
+                    float distance = roundedSegmentDistance(point, shape.m_segments[edge], nearest, normal);
+                    float pixel = contourPixelSize(normal, pixel_x, pixel_y);
+                    if (need_shadow) {
+                        float depth = min(12.0 * pixel, 1.0);
+                        shadow = max(shadow, 1.0 - smoothstep(0.0, depth, distance));
+                    }
+                    if (need_outline && label == material) {
+                        float width = 2.0 * pixel;
+                        float fade = 1.0 - smoothstep(1.0, 3.0, width);
+                        float aa = 0.5 * pixel;
+                        outline = max(outline, fade * (1.0 - smoothstep(width - aa, width + aa, distance)));
                     }
                 }
             }
@@ -397,8 +348,7 @@ float2 contourDecoration(float2 position, float2 pixel_x, float2 pixel_y) {
 }
 
 float3 decorateTerrain(float3 color, float2 decoration) {
-    // An opaque outline core hides the discontinuous material switch; its
-    // smooth one-pixel fringe blends into the independently sampled terrain.
+    // Each solid carries its own two-pixel inner rim and one-pixel AA transition.
     return lerp(color, float3(0.025), decoration.x);
 }
 
@@ -464,7 +414,7 @@ float4 fragmentGridMain(
         return diagnosticTint(g_diagnostic_colors[index].m_color_rgba, coverage);
     }
     float2 decoration = (input.flags & 1u) != 0u && (g_grid_frame.m_surface_mode & 1u) != 0u ?
-        contourDecoration(input.fine_position, pixel_x, pixel_y) : float2(0.0);
+        contourDecoration(input.fine_position, pixel_x, pixel_y, material, coverage < 1.0) : float2(0.0);
     // Shadow lives entirely on the non-solid side. Its coverage complements the
     // terrain AA and composites over matter before the final background blend.
     float shadow = 0.45 * decoration.y;

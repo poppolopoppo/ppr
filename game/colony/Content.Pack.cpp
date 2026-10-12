@@ -186,6 +186,20 @@ namespace pP::colony {
                                        diagnostics, path, material,
                                        "Cannot decode required terrain texture within pack limits", decoded.error()));
             }
+            // Build immutable, sRGB-aware levels on the content coordinator,
+            // before render-lane upload. Count the whole chain against the pack budget.
+            const image::MipGenDesc mip_desc{
+                .m_limits = {.m_max_decoded_bytes = remaining_decoded}, .m_full_chain = true};
+            const auto mip_error = image::generateMipChain(*decoded, mip_desc);
+            if (mip_error == std::errc::not_enough_memory) {
+                throw std::bad_alloc{};
+            }
+            if (mip_error) {
+                PPR_RETURN_UNEXPECTED_ON_FAIL(
+                    ColonyContent,
+                    textureFailure(diagnostics, path, material, "Cannot generate terrain mip chain", mip_error));
+            }
+
             Fingerprint source{};
             source.text("ppr.texture.source.v1");
             source.integer(bytes.size_bytes(), 8u);
