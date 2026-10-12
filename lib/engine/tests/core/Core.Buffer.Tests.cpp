@@ -182,6 +182,28 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not cloned.isValid());
         };
 
+        PPR_UNIT_TEST (unique_best_fit_page_boundaries_preserve_content_and_release) {
+            const std::array sizes{
+                mem::SmallPage::block_size_v, 2u * mem::SmallPage::block_size_v, mem::HugePage::block_size_v,
+                2u * mem::HugePage::block_size_v};
+            for (const std::size_t size: sizes) {
+                mem::UniqueBuffer buffer = mem::UniqueBuffer::allocate(size);
+                auto data = buffer.getMutableData();
+                PPR_TEST_ASSERT(data.has_value());
+                PPR_TEST_ASSERT(data->size_bytes() == size);
+                std::ranges::fill(*data, std::byte{0x5a});
+                PPR_TEST_ASSERT(std::ranges::all_of(buffer.getBufferData(), [](const std::byte value) {
+                    return value == std::byte{0x5a};
+                }));
+                mem::SharedBuffer shared = toShared(buffer);
+                PPR_TEST_ASSERT(not buffer.isValid());
+                PPR_TEST_ASSERT(shared.getBufferData().size_bytes() == size);
+                PPR_TEST_ASSERT(shared.getBufferData().front() == std::byte{0x5a});
+                shared.reset();
+                PPR_TEST_ASSERT(not shared.isValid());
+            }
+        };
+
         PPR_UNIT_TEST (unique_allocation_ctor_stateless_roundtrip) {
             mem::Allocation<std::byte, mem::GPA> allocation{4u};
             mem::UniqueBuffer buffer{std::move(allocation)};
@@ -713,6 +735,7 @@ namespace pP::tests {
         _.recurse({
             detail::Buffer::unique_default_is_empty,
             detail::Buffer::unique_best_fit_allocate_zero_is_invalid,
+            detail::Buffer::unique_best_fit_page_boundaries_preserve_content_and_release,
             detail::Buffer::unique_allocation_ctor_stateless_roundtrip,
             detail::Buffer::unique_allocation_ctor_stateful,
             detail::Buffer::unique_immutable_owner_rejects_mutable_access,

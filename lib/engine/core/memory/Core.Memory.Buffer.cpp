@@ -210,12 +210,12 @@ namespace pP::mem {
         }
 
         static_assert(Allocator<HugePage>::is_stateless_v);
-        if (alignForward(size_bytes, HugePage::block_size_v) == size_bytes) {
+        if (size_bytes == HugePage::block_size_v) {
             return allocate(HugePage{}, size_bytes);
         }
 
         static_assert(Allocator<SmallPage>::is_stateless_v);
-        if (alignForward(size_bytes, SmallPage::block_size_v) == size_bytes) {
+        if (size_bytes == SmallPage::block_size_v) {
             return allocate(SmallPage{}, size_bytes);
         }
 
