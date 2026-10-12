@@ -226,7 +226,10 @@ namespace pP::image {
         }
         const u32 count = desc.m_full_chain ? std::bit_width((std::max) (asset.m_width, asset.m_height))
                                             : mipCountFor(asset.m_width, asset.m_height);
-        if (count <= 1u) {
+        if (desc.m_normal_map and (asset.m_is_srgb or desc.m_has_preserve_coverage)) {
+            PPR_RETURN_ERROR_ON_FAIL(Image, errc::invalid_argument);
+        }
+        if (count <= 1u and not desc.m_normal_map) {
             return std::error_code{};
         }
         // Chain bytes count against the decode cap: a max-size single level has
@@ -248,6 +251,20 @@ namespace pP::image {
         const bool to_linear = asset.m_is_srgb;
         const std::size_t top_count = static_cast<std::size_t>(asset.m_width) * asset.m_height;
         std::vector<float> top(top_count * 4u);
+        const auto normalize_normal = [](float *const normal) {
+            const float length_squared = normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2];
+            if (length_squared <= 1.0e-12f or normal[2] <= 0.0f) {
+                normal[0] = 0.0f;
+                normal[1] = 0.0f;
+                normal[2] = 1.0f;
+            } else {
+                const float inverse_length = 1.0f / std::sqrt(length_squared);
+                normal[0] *= inverse_length;
+                normal[1] *= inverse_length;
+                normal[2] *= inverse_length;
+            }
+            normal[3] = 1.0f;
+        };
         for (std::size_t i = 0u; i < top_count; ++i) {
             const float r = byteToUnit_(top_bytes[i * 4u + 0u]);
             const float g = byteToUnit_(top_bytes[i * 4u + 1u]);
@@ -256,6 +273,12 @@ namespace pP::image {
             top[i * 4u + 1u] = to_linear ? mango::math::srgb_to_linear(g) : g;
             top[i * 4u + 2u] = to_linear ? mango::math::srgb_to_linear(b) : b;
             top[i * 4u + 3u] = byteToUnit_(top_bytes[i * 4u + 3u]);
+            if (desc.m_normal_map) {
+                for (u32 axis = 0u; axis < 3u; ++axis) {
+                    top[i * 4u + axis] = top[i * 4u + axis] * 2.0f - 1.0f;
+                }
+                normalize_normal(top.data() + i * 4u);
+            }
         }
         const float target_coverage = desc.m_has_preserve_coverage ? coverageOf_(top, desc.m_alpha_cutoff) : 0.0f;
 
@@ -273,6 +296,14 @@ namespace pP::image {
         }
 
         std::ranges::copy(top_bytes.first(top_size), chain->begin());
+        if (desc.m_normal_map) {
+            for (std::size_t i = 0u; i < top_count; ++i) {
+                for (u32 axis = 0u; axis < 3u; ++axis) {
+                    (*chain)[i * 4u + axis] = unitToByte_(top[i * 4u + axis] * 0.5f + 0.5f);
+                }
+                (*chain)[i * 4u + 3u] = std::byte{255};
+            }
+        }
         u64 offset = static_cast<u64>(top_size);
 
         std::vector<float> previous{};
@@ -294,7 +325,9 @@ namespace pP::image {
                 source_w = previous_w == 0u ? asset.m_width : previous_w;
                 source_h = previous_h == 0u ? asset.m_height : previous_h;
             }
-            expandTransparentColors_(work, source_w, source_h);
+            if (not desc.m_normal_map) {
+                expandTransparentColors_(work, source_w, source_h);
+            }
             const float *const source = work.data();
             next.assign(static_cast<std::size_t>(level_w) * level_h * 4u, 0.0f);
             const int source_w_int = static_cast<int>(source_w);
@@ -313,6 +346,14 @@ namespace pP::image {
             }
             std::byte *const dest = chain->data() + offset;
             for (std::size_t i = 0u; i < static_cast<std::size_t>(level_w) * level_h; ++i) {
+                if (desc.m_normal_map) {
+                    normalize_normal(next.data() + i * 4u);
+                    for (u32 axis = 0u; axis < 3u; ++axis) {
+                        dest[i * 4u + axis] = unitToByte_(next[i * 4u + axis] * 0.5f + 0.5f);
+                    }
+                    dest[i * 4u + 3u] = std::byte{255};
+                    continue;
+                }
                 const float r = to_linear ? mango::math::linear_to_srgb(next[i * 4u + 0u]) : next[i * 4u + 0u];
                 const float g = to_linear ? mango::math::linear_to_srgb(next[i * 4u + 1u]) : next[i * 4u + 1u];
                 const float b = to_linear ? mango::math::linear_to_srgb(next[i * 4u + 2u]) : next[i * 4u + 2u];

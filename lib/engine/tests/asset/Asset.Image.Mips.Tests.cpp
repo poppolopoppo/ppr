@@ -122,6 +122,64 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(capped.m_mip_count == 1u);
         };
         PPR_UNIT_TEST (mips_full_chain_reaches_one_texel) {
+            const auto normal_fixture = [](const u32 size) {
+                auto fixture = makeSolid_(size, size, std::byte{0});
+                std::vector<std::byte> pixels(static_cast<std::size_t>(size) * size * 4u);
+                for (std::size_t pixel = 0u; pixel < pixels.size(); pixel += 4u) {
+                    const bool positive = ((pixel / 4u) % 2u) == 0u;
+                    pixels[pixel] = positive ? std::byte{255} : std::byte{0};
+                    pixels[pixel + 1u] = positive ? std::byte{128} : std::byte{127};
+                    pixels[pixel + 2u] = std::byte{255};
+                    pixels[pixel + 3u] = std::byte{255};
+                }
+                fixture.m_storage = mem::SharedBuffer::clone(mem::SharedBufferView{pixels.data(), pixels.size()});
+                fixture.m_subresources[0u].m_view = fixture.m_storage;
+                fixture.m_format = image::ENativeImageFormat::rgba8_linear;
+                fixture.m_is_srgb = false;
+                return fixture;
+            };
+            for (const bool high_quality: {false, true}) {
+                auto opposed = normal_fixture(8u);
+                PPR_TEST_ASSERT(not image::generateMipChain(
+                    opposed,
+                    image::MipGenDesc{.m_is_high_quality = high_quality, .m_full_chain = true, .m_normal_map = true}));
+                const auto tail = opposed.m_subresources.back().m_view.getBufferData();
+                PPR_TEST_ASSERT(
+                    tail[0u] == std::byte{128} and tail[1u] == std::byte{128} and tail[2u] == std::byte{255});
+            }
+            auto tiny_normal = normal_fixture(1u);
+            PPR_TEST_ASSERT(not image::generateMipChain(tiny_normal, image::MipGenDesc{.m_normal_map = true}));
+            const auto tiny_bytes = tiny_normal.m_storage.getBufferData();
+            PPR_TEST_ASSERT(tiny_bytes[0u] != std::byte{255} and tiny_normal.m_mip_count == 1u);
+            image::ImageAsset normals = makeSolid_(8u, 8u, std::byte{0});
+            normals.m_format = image::ENativeImageFormat::rgba8_linear;
+            normals.m_is_srgb = false;
+            PPR_TEST_ASSERT(
+                not image::generateMipChain(normals, image::MipGenDesc{.m_full_chain = true, .m_normal_map = true}));
+            for (const auto &level: normals.m_subresources) {
+                const auto bytes = level.m_view.getBufferData();
+                for (std::size_t pixel = 0u; pixel < bytes.size(); pixel += 4u) {
+                    PPR_TEST_ASSERT(
+                        bytes[pixel] == std::byte{128} and
+                        bytes[pixel + 1u] == std::byte{128} and
+                        bytes[pixel + 2u] == std::byte{255} and
+                        bytes[pixel + 3u] == std::byte{255});
+                }
+            }
+            image::ImageAsset color_normal = makeSolid_(8u, 8u, std::byte{128});
+            PPR_TEST_ASSERT(
+                image::generateMipChain(color_normal, image::MipGenDesc{.m_normal_map = true}) ==
+                image::errc::invalid_argument);
+            image::ImageAsset diagonal = makeSolid_(8u, 8u, std::byte{255});
+            diagonal.m_format = image::ENativeImageFormat::rgba8_linear;
+            diagonal.m_is_srgb = false;
+            PPR_TEST_ASSERT(
+                not image::generateMipChain(diagonal, image::MipGenDesc{.m_full_chain = true, .m_normal_map = true}));
+            for (const auto &level: diagonal.m_subresources) {
+                const auto bytes = level.m_view.getBufferData();
+                const float component = std::to_integer<u8>(bytes[0u]) / 255.0f * 2.0f - 1.0f;
+                PPR_TEST_ASSERT(std::abs(component - 1.0f / std::sqrt(3.0f)) < 0.01f);
+            }
             for (const auto extent: {std::pair{1u, 1u}, {2u, 2u}, {64u, 64u}, {64u, 1u}, {17u, 5u}}) {
                 image::ImageAsset chained = makeSolid_(extent.first, extent.second, std::byte{0x7F});
                 const auto base_size = chained.m_storage.getBufferData().size();

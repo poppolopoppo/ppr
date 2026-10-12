@@ -31,6 +31,9 @@ export namespace pP::image {
         bool m_has_preserve_coverage = false;
         // Repeating terrain needs a final 1x1 average under extreme minification.
         bool m_full_chain = false;
+        // Linear tangent-normal RGB: decode, filter vectors, renormalize every level.
+        // Zero or back-facing vectors become the exact camera-facing flat normal.
+        bool m_normal_map = false;
     };
 
     // Incremental resampling (false, the default) filters each level from its
@@ -66,7 +69,8 @@ export namespace pP::image {
     // chain generation
     // ------------------------------------------------------------------
 
-    // Builds the full chain in place: level 0 bytes are kept verbatim, levels
+    // Builds the full chain in place: color/data level 0 bytes are kept verbatim;
+    // normal mode sanitizes and normalizes level 0. Subsequent levels
     // 1..mipCount-1 are appended into one frozen storage with tight pitches.
     // Blocked assets (KTX2/DDS passthrough) reject with function_not_supported
     // so embedded chains are never decoded to recompress; anything else
