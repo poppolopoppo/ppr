@@ -1,5 +1,6 @@
 {
   "extensions": {
-    ".cppm": "cpp"
+    ".cppm": "cpp",
+    ".slang": "cpp"
   }
 }
