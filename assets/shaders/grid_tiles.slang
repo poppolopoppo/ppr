@@ -186,6 +186,47 @@ float materialRoundness(uint material) {
     return (g_grid_frame.m_surface_mode & 2u) != 0u ? g_terrain_visuals[material].m_roundness : 1.0;
 }
 
+// Two solid labels share one curve, including complementary saddle cases.
+// Empty corners and multi-material junctions retain each label's rounded void.
+bool sharedSolidRoundness(uint materials[4], out float roundness) {
+    roundness = 0.0;
+    uint first = materials[0];
+    uint second = 0u;
+    for (uint corner = 0u; corner < 4u; ++corner) {
+        uint label = materials[corner];
+        if (label == 0u || label == 0xffffu) { return false; }
+        if (label == first) { continue; }
+        if (second != 0u && label != second) { return false; }
+        second = label;
+    }
+    if (second == 0u) { return false; }
+    roundness = 0.5 * (materialRoundness(first) + materialRoundness(second));
+    return true;
+}
+
+// Adjacent snapped octaves share the same world-anchored sample at each zoom
+// transition. Scale displacement with wavelength before blending to keep fine
+// detail bounded, and filter each octave with the original screen gradients.
+float2 boundaryDisplacement(float2 position, float2 pixel_x, float2 pixel_y, SamplerState.Handle sampler) {
+    float footprint = max(sqrt(dot(pixel_x, pixel_x) + dot(pixel_y, pixel_y)), 1.0e-6);
+    float octave = clamp(log2(16.0 * footprint), -8.0, 12.0);
+    float scale = exp2(floor(octave));
+    float blend = smoothstep(0.0, 1.0, frac(octave));
+    float period = 32.0 * scale;
+    float2 fine = g_boundary_noise.SampleGrad(sampler, position / period,
+        pixel_x / period, pixel_y / period).rg * 2.0 - 1.0;
+    float2 coarse = g_boundary_noise.SampleGrad(sampler, position / (2.0 * period),
+        pixel_x / (2.0 * period), pixel_y / (2.0 * period)).rg * 2.0 - 1.0;
+    float2 displacement = lerp(min(0.06 * scale, 0.15) * fine,
+        min(0.12 * scale, 0.15) * coarse, blend);
+    float2 local = frac(position - 0.5);
+    float2 envelope = 16.0 * local * local * (1.0 - local) * (1.0 - local);
+    // The one-cell envelope itself becomes unresolved under minification.
+    // Fade that signal before it aliases; the 0.15-cell cap keeps cell ownership.
+    float fade = 1.0 - smoothstep(0.25, 0.75, footprint);
+    return displacement * envelope * fade;
+}
+
 float roundedSegmentDistance(float2 point, uint2 segment, float roundness, out float2 nearest, out float2 normal) {
     float2 a = g_contour_points[segment.x];
     float2 b = g_contour_points[segment.y];
@@ -243,8 +284,8 @@ bool contourContains(uint mask, float2 point) {
     return false;
 }
 
-// Each label owns its rounded marching-square region. Their union may leave
-// void at multi-material junctions; no material fills another label's complement.
+// Each label owns its marching-square region. Two-solid interfaces use shared
+// roundness; multi-material junctions can still leave rounded void.
 uint materialMask(uint materials[4], uint corner) {
     uint mask = 0u;
     for (uint other = 0u; other < 4u; ++other) {
@@ -271,6 +312,8 @@ uint contourMaterial(float2 position, float width, out float coverage, out int2 
     for (uint corner = 0u; corner < 4u; ++corner) {
         materials[corner] = terrainSample(base + int2(g_contour_points[corner]));
     }
+    float interface_roundness;
+    bool shared_interface = sharedSolidRoundness(materials, interface_roundness);
     uint visited = 0u;
     uint material = 0u;
     float best = 0.0;
@@ -282,7 +325,7 @@ uint contourMaterial(float2 position, float width, out float coverage, out int2 
         visited |= mask;
         bool connected = connectedSaddle(materials, corner, mask);
         uint shape_mask = connected ? 15u ^ mask : mask;
-        float roundness = materialRoundness(label);
+        float roundness = shared_interface ? interface_roundness : materialRoundness(label);
         float2 warped = contourWarp(point, roundness);
         ContourCase shape = g_contour_cases[shape_mask];
         float distance = 1.0e30;
@@ -342,6 +385,8 @@ float2 contourDecoration(float2 position, float2 pixel_x, float2 pixel_y, uint m
             for (uint corner = 0u; corner < 4u; ++corner) {
                 materials[corner] = terrainSample(base + int2(x, y) + int2(g_contour_points[corner]));
             }
+            float interface_roundness;
+            bool shared_interface = sharedSolidRoundness(materials, interface_roundness);
             uint visited = 0u;
             for (uint corner = 0u; corner < 4u; ++corner) {
                 uint label = materials[corner];
@@ -351,7 +396,7 @@ float2 contourDecoration(float2 position, float2 pixel_x, float2 pixel_y, uint m
                 if (label != material && !need_shadow) { continue; }
                 bool connected = connectedSaddle(materials, corner, mask);
                 ContourCase shape = g_contour_cases[connected ? 15u ^ mask : mask];
-                float roundness = materialRoundness(label);
+                float roundness = shared_interface ? interface_roundness : materialRoundness(label);
                 for (uint edge = 0u; edge < shape.m_segment_count; ++edge) {
                     float2 a = g_contour_points[shape.m_segments[edge].x];
                     float2 b = g_contour_points[shape.m_segments[edge].y];
@@ -398,14 +443,11 @@ float4 fragmentGridMain(
     GridVertexOutput input,
     uniform StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
     uniform SamplerState.Handle g_sampler) : SV_Target {
+    float2 world_pixel_x = ddx(input.fine_position);
+    float2 world_pixel_y = ddy(input.fine_position);
     float2 contour_position = input.fine_position;
     if ((g_grid_frame.m_surface_mode & 3u) == 3u) {
-        float2 uv = input.fine_position / 32.0;
-        float2 noise = g_boundary_noise.SampleGrad(g_sampler, uv,
-            ddx(input.fine_position) / 32.0, ddy(input.fine_position) / 32.0).rg * 2.0 - 1.0;
-        float2 local = frac(input.fine_position - 0.5);
-        float2 envelope = 16.0 * local * local * (1.0 - local) * (1.0 - local);
-        contour_position += 0.06 * noise * envelope;
+        contour_position += boundaryDisplacement(input.fine_position, world_pixel_x, world_pixel_y, g_sampler);
     }
     // Evaluate derivatives before coverage branches/discards so neighboring
     // helper invocations still provide a defined edge width.
@@ -415,8 +457,8 @@ float4 fragmentGridMain(
     // Beyond a world-sized footprint all admitted textures already select
     // their coarsest LOD. Bound gradients before period division to keep the
     // smallest supported positive period finite under extreme minification.
-    float2 gradient_x = clamp(ddx(input.fine_position) * g_grid_frame.m_cell_size_m, -2048.0, 2048.0);
-    float2 gradient_y = clamp(ddy(input.fine_position) * g_grid_frame.m_cell_size_m, -2048.0, 2048.0);
+    float2 gradient_x = clamp(world_pixel_x * g_grid_frame.m_cell_size_m, -2048.0, 2048.0);
+    float2 gradient_y = clamp(world_pixel_y * g_grid_frame.m_cell_size_m, -2048.0, 2048.0);
     uint material = input.material;
     float coverage = 1.0;
     uint diagnostic_mode = g_grid_frame.m_surface_mode >> 2u;

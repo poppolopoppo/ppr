@@ -67,7 +67,9 @@ barriers and drawing share one encoder and submission.
   the straight chord; 1 places the control point at the dual-cell centre.
   Inverse-quadratic coordinates classify both outer coverage and solid materials;
   closest-point solves measure the actual curves, never internal triangulation edges.
-  Each material uses its own rounded region, including three-corner masks.
+  Dual cells with exactly two solid labels use their mean roundness for both
+  regions and their rims, so the shared curves remain complementary. Other
+  junctions use each material's own region, including three-corner masks.
   Multi-material junctions leave rounded void where none of those independent
   regions cover the pixel. Repeated diagonal solids connect across saddles;
   competing diagonal solids give the bridge to the lower material ID.
@@ -83,7 +85,7 @@ barriers and drawing share one encoder and submission.
   their exact palette colors; shadow composites only into non-solid coverage
   (over matter when present), leaving solid fill unchanged.
   Uniform components avoid curve evaluation. Boundary noise adds one shared
-  texture and one sample per catalog fragment; draw counts stay unchanged.
+  texture and two filtered samples per catalog fragment; draw counts stay unchanged.
   Neighboring terrain buffer reads and bounded curve evaluation add fragment work.
 - `grid_tiles.slang` entry points: `[shader("vertex")] vertexGridMain` and
   `[shader("fragment")] fragmentGridMain`.
@@ -127,9 +129,11 @@ reads global samples through a completion-safe logical-chunk-to-physical-slot
 map, including diagonal neighbors, then rounds the shared midpoint boundaries.
 The shader complements the opposing saddle case for the selected bridge
 material; physics retains the original disconnected saddle table. A pass-owned
-64-square linear RG noise texture has seven mip levels. One global-coordinate
-sample perturbs contours by at most 0.06 cells per axis; a C1 envelope fixes
-dual-cell edges, preventing cross-cell displacement and chunk seams. The diagnostic sample
+64-square linear RG noise texture has seven mip levels. Two global-coordinate
+SampleGrad samples blend between adjacent snapped octaves selected from the
+screen footprint. Each octave scales displacement with wavelength, capped at
+0.15 cells per axis. A C1 envelope fixes dual-cell edges, preventing cross-cell
+displacement and chunk seams; it fades once the cell footprint is unresolved. The diagnostic sample
 comes from the chosen material with global row-major ties. Outside-world samples
 use the profile's validated wall material without forming atlas addresses. Each
 chunk draws only its nominal rectangle. Explicit legacy fixtures retain square
