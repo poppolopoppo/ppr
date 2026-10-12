@@ -10,7 +10,7 @@ here.
 ## Repository facts
 
 PPR is a high-performance real-time C++23 engine built with C++20 modules.
-`game/main.cpp` hosts an `Application` run loop. `include/pP/Macros.h` is the
+`game/Game.Application.cpp` hosts the `Application` run loop; `game/main.cpp` calls its exported `runGame` entry point. `include/pP/Macros.h` is the
 public macro header.
 
 The dependency graph is directional and must remain acyclic (see `codemap.md`;
@@ -128,8 +128,11 @@ work in that area.
   `try { ... } catch (...) {}` with no log, error code, or diagnostic is
   forbidden. Either remove `noexcept` and let the failure reach a reporting
   boundary, or translate it into the function's `std::error_code` /
-  `std::expected` result (bad allocation → `not_enough_memory`,
-  `system_error` → its code, otherwise `state_not_recoverable`). Best-effort
+  `std::expected` result (`system_error` → its code, otherwise
+  `state_not_recoverable`). `std::bad_alloc` is fatal: let it reach the
+  application's reporting/fatal boundary, including when it occurs during
+  diagnostics. Do not translate it into `not_enough_memory` or swallow it in
+  a catch-all handler. Best-effort
   paths (hints, diagnostics, best-effort teardown logging) are the only
   exception, and must say so in a comment. Never guard a smart-pointer
   assignment with a blind catch merely to keep `noexcept`; make the owning
