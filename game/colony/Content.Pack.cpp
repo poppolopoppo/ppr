@@ -74,6 +74,7 @@ namespace pP::colony {
                     }
                     value(*m.m_texture_period_m);
                     value(*m.m_diggable);
+                    value(m.m_roundness);
                 }
             }
             void rule(const WorldCaveRule &v) noexcept {

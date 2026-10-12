@@ -214,7 +214,7 @@ threshold_max = 1.0
         const auto texture = std::ranges::find(
             catalog->textures(), *material->m_albedo_texture, &ContentTexture::m_path);
         PPR_TEST_ASSERT(texture != catalog->textures().end() and texture->m_image.m_storage.isOwned());
-        PPR_TEST_ASSERT(catalog->textures().size() == 13u and catalog->contentFingerprint() != 0x52892cac0e92ceedull);
+        PPR_TEST_ASSERT(catalog->textures().size() == 13u and catalog->contentFingerprint() != 0x4395aee7b6d5ec6dull);
 
         const auto plan = compileWorldPlan(*catalog, "frontier", 42u);
         PPR_TEST_ASSERT(plan.has_value());
@@ -273,7 +273,7 @@ threshold_max = 1.0
         PPR_TEST_ASSERT(catalog->findWorld("frontier") != nullptr and catalog->findWorld("hollows") != nullptr);
         PPR_TEST_ASSERT(catalog->findWorld("unknown") == nullptr);
         PPR_TEST_ASSERT(catalog->contentFingerprint().has_value());
-        PPR_TEST_ASSERT(catalog->contentFingerprint() == 0x52892cac0e92ceedull);
+        PPR_TEST_ASSERT(catalog->contentFingerprint() == 0x4395aee7b6d5ec6dull);
         PPR_TEST_ASSERT(catalog->findMaterial(u16{1001})->m_representation == EMaterialRepresentation::particle);
         for (const auto key: {"clay", "limestone", "salt", "sulfur", "crystal"}) {
             const auto *const material = catalog->findMaterial(key);

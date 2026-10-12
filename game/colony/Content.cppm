@@ -32,6 +32,7 @@ export namespace pP::colony {
         double m_reference_density_kg_m3{0.0};
         // Diagnostic provenance is owned but excluded from canonical content identity.
         std::string m_albedo_source_location{};
+        double m_roundness{1.0};
     };
 
     inline constexpr std::size_t kMaxMaterialDocumentBytes = 1024u * 1024u;

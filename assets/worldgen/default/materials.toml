@@ -8,6 +8,7 @@ representation = "terrain"
 color_rgba = "58636FFF"
 albedo_texture = "textures/basalt.png"
 texture_period_m = 2.0
+roundness = 0.65
 diggable = true
 reference_density_kg_m3 = 2900.0
 
@@ -19,6 +20,7 @@ representation = "terrain"
 color_rgba = "B99A6CFF"
 albedo_texture = "textures/sandstone.png"
 texture_period_m = 2.0
+roundness = 0.9
 diggable = true
 reference_density_kg_m3 = 2200.0
 
@@ -30,6 +32,7 @@ representation = "terrain"
 color_rgba = "BD7751FF"
 albedo_texture = "textures/copper.png"
 texture_period_m = 2.0
+roundness = 0.6
 diggable = true
 reference_density_kg_m3 = 8900.0
 
@@ -41,6 +44,7 @@ representation = "terrain"
 color_rgba = "8E7270FF"
 albedo_texture = "textures/iron.png"
 texture_period_m = 2.0
+roundness = 0.55
 diggable = true
 reference_density_kg_m3 = 7800.0
 
@@ -52,6 +56,7 @@ representation = "terrain"
 color_rgba = "A4D9EFFF"
 albedo_texture = "textures/ice.png"
 texture_period_m = 2.0
+roundness = 0.85
 diggable = true
 reference_density_kg_m3 = 917.0
 
@@ -63,6 +68,7 @@ representation = "terrain"
 color_rgba = "AAA294FF"
 albedo_texture = "textures/masonry.png"
 texture_period_m = 1.0
+roundness = 0.15
 diggable = false
 reference_density_kg_m3 = 2400.0
 
@@ -74,6 +80,7 @@ representation = "terrain"
 color_rgba = "403D50FF"
 albedo_texture = "textures/obsidian.png"
 texture_period_m = 2.0
+roundness = 0.45
 diggable = true
 reference_density_kg_m3 = 2600.0
 
@@ -128,6 +135,7 @@ representation = "terrain"
 color_rgba = "A86D4AFF"
 albedo_texture = "textures/clay.png"
 texture_period_m = 2.0
+roundness = 1.0
 diggable = true
 reference_density_kg_m3 = 1800.0
 
@@ -139,6 +147,7 @@ representation = "terrain"
 color_rgba = "C9C5ADFF"
 albedo_texture = "textures/limestone.png"
 texture_period_m = 2.0
+roundness = 0.75
 diggable = true
 reference_density_kg_m3 = 2600.0
 
@@ -150,6 +159,7 @@ representation = "terrain"
 color_rgba = "F5E9D6FF"
 albedo_texture = "textures/salt.png"
 texture_period_m = 1.0
+roundness = 0.8
 diggable = true
 reference_density_kg_m3 = 2160.0
 
@@ -161,6 +171,7 @@ representation = "terrain"
 color_rgba = "E3C74FFF"
 albedo_texture = "textures/sulfur.png"
 texture_period_m = 1.0
+roundness = 0.8
 diggable = true
 reference_density_kg_m3 = 2070.0
 
@@ -172,5 +183,6 @@ representation = "terrain"
 color_rgba = "B69BE8FF"
 albedo_texture = "textures/crystal.png"
 texture_period_m = 1.0
+roundness = 0.25
 diggable = true
 reference_density_kg_m3 = 2650.0

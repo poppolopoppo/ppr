@@ -328,13 +328,13 @@ retained lookup slots, including diagonal neighbors absent from the compact draw
 table, stay pinned until the publication and reader-fence rules release them.
 Metric, contour mode and boundary material publish with the resident table.
 World replacement and deferred edits therefore keep the previous surface's
-shape/scale until replacement data is complete. GPU fixtures compare all 16
-cases and categorical material winners across four-chunk seams at both scales,
-plus antialiasing and protected world corners.
+shape/scale until replacement data is complete. Grid appearance and evolving
+contour style are reviewed manually. Automated gates cover admission, resource
+lifetime, visibility and publication.
 
 GridPass world bundles also own the bindless texture cache, source image pins,
-source-to-resident slot mapping and immutable 16-byte terrain visual palette.
-One pass sampler/fallback is shared. Candidate texture preparation is bounded to
+source-to-resident slot mapping and immutable 32-byte terrain visual palette (including per-material roundness).
+One pass sampler/fallback and a seven-level boundary-noise texture are shared. Candidate texture preparation is bounded to
 one admitted 2048-square RGBA image per update; canceled uploads remain retained
 until a subsequent accepted frame fence covers initialization. Coordinator-side
 capture produces owned u16 cell uploads without copying full simulation cells.

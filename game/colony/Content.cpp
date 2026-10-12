@@ -484,6 +484,7 @@ namespace pP::colony {
             std::optional<std::string> m_albedo_texture{};
             std::optional<double> m_texture_period_m{};
             std::optional<bool> m_diggable{};
+            std::optional<double> m_roundness{};
             double m_reference_density_kg_m3{0.0};
 
             static constexpr auto describe() {
@@ -510,6 +511,7 @@ namespace pP::colony {
                             4096.0 / static_cast<double>((std::numeric_limits<float>::max)()),
                             static_cast<double>((std::numeric_limits<float>::max)()), false, false}),
                     field(&MaterialRecord::m_diggable, metadata("diggable"), boolean_domain),
+                    field(&MaterialRecord::m_roundness, metadata("roundness"), FloatDomain{0.0, 1.0, false, false}),
                     field(
                         &MaterialRecord::m_reference_density_kg_m3, metadata("reference_density_kg_m3"),
                         FloatDomain{0.0, (std::numeric_limits<double>::max)(), false, true}),
@@ -605,7 +607,10 @@ namespace pP::colony {
                                                EConfigErrc::missing_value));
                     }
                 }
-            } else if (record.m_albedo_texture or record.m_texture_period_m or record.m_diggable.has_value()) {
+            } else if (record.m_albedo_texture or
+                       record.m_texture_period_m or
+                       record.m_diggable.has_value() or
+                       record.m_roundness) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(
                     ColonyContent, reject(
                                        diagnostics, origin, "representation",
@@ -620,7 +625,8 @@ namespace pP::colony {
             return MaterialDefinition{
                 key, record.m_numeric_id, record.m_display_name, record.m_phase, record.m_representation, color,
                 record.m_albedo_texture, record.m_texture_period_m, record.m_diggable, record.m_reference_density_kg_m3,
-                record.m_albedo_texture ? std::string{location("albedo_texture")} : std::string{}};
+                record.m_albedo_texture ? std::string{location("albedo_texture")} : std::string{},
+                record.m_roundness.value_or(1.0)};
         }
 
         [[nodiscard]] Expected<std::map<std::string, Document, std::less<>>> groupRecords(

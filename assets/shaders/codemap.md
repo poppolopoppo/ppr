@@ -63,25 +63,28 @@ barriers and drawing share one encoder and submission.
   resolves bindless textures and metre-period UVs; diagnostic modes use an owned
   palette. The low-three-bit tint remains only for explicit legacy fixtures.
 - Catalog contours use the shared marching-square topology and edge midpoints,
-  with quadratic Bezier arcs (dual-cell centre control point) for diagonal cuts.
+  with material-specific quadratic Bezier arcs for diagonal cuts. Roundness 0 uses
+  the straight chord; 1 places the control point at the dual-cell centre.
   Inverse-quadratic coordinates classify both outer coverage and solid materials;
   closest-point solves measure the actual curves, never internal triangulation edges.
   Each material uses its own rounded region, including three-corner masks.
-  Multi-material junctions and alternating saddles leave rounded void where
-  none of those independent regions cover the pixel.
+  Multi-material junctions leave rounded void where none of those independent
+  regions cover the pixel. Repeated diagonal solids connect across saddles;
+  competing diagonal solids give the bridge to the lower material ID.
   Collision contours retain the shared piecewise-linear geometry.
 - Terrain presentation adds a two-pixel inner outline to every solid border,
   with a one-pixel AA fringe. Each solid side follows its own contour. Outline
-  opacity fades as nominal width grows from one to three fine cells; its width
+  opacity fades as nominal width grows from 0.2 to 0.3 fine cells; its width
   remains in screen space. A twelve-pixel shadow falls into non-solid space,
   capped at one cell. Derivatives captured before divergent branches convert
   curve normals to screen-space widths. A bounded neighboring dual-cell search
-  carries effects across cell/chunk seams; fully faded rims skip that search. Diagnostics retain
+  carries effects across cell/chunk seams; fully faded rims skip that search. Curve bounding boxes reject unnecessary
+  closest-point solves; effect support bounds the search to 3x3 dual cells. Diagnostics retain
   their exact palette colors; shadow composites only into non-solid coverage
   (over matter when present), leaving solid fill unchanged.
-  Uniform components avoid curve evaluation. No new resources, uploads,
-  texture samples or draw calls are introduced; neighboring terrain buffer reads
-  and bounded curve evaluation add fragment work.
+  Uniform components avoid curve evaluation. Boundary noise adds one shared
+  texture and one sample per catalog fragment; draw counts stay unchanged.
+  Neighboring terrain buffer reads and bounded curve evaluation add fragment work.
 - `grid_tiles.slang` entry points: `[shader("vertex")] vertexGridMain` and
   `[shader("fragment")] fragmentGridMain`.
 - CPU mirrors and cursor bindings live in `TrianglePass`, `GpuCaches`, and `Mesh.Types`.
@@ -122,8 +125,11 @@ Catalog terrain uploads the shared `engine.math` contour points and 16-case
 connectivity table verbatim (8-byte points, 72-byte cases). The fragment shader
 reads global samples through a completion-safe logical-chunk-to-physical-slot
 map, including diagonal neighbors, then rounds the shared midpoint boundaries.
-Per-material saddle components stay disconnected, leaving void between their
-independent rounded regions. The diagnostic sample
+The shader complements the opposing saddle case for the selected bridge
+material; physics retains the original disconnected saddle table. A pass-owned
+64-square linear RG noise texture has seven mip levels. One global-coordinate
+sample perturbs contours by at most 0.06 cells per axis; a C1 envelope fixes
+dual-cell edges, preventing cross-cell displacement and chunk seams. The diagnostic sample
 comes from the chosen material with global row-major ties. Outside-world samples
 use the profile's validated wall material without forming atlas addresses. Each
 chunk draws only its nominal rectangle. Explicit legacy fixtures retain square

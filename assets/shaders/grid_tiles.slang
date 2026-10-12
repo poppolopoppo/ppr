@@ -52,15 +52,18 @@ struct ContourCase {
 StructuredBuffer<float2> g_contour_points;
 StructuredBuffer<ContourCase> g_contour_cases;
 StructuredBuffer<uint> g_chunk_slots;
-// CPU GridTerrainVisual: 16 bytes, offsets 0/4/8/12. Texture index here is
+// CPU GridTerrainVisual: 32 bytes, offsets 0/4/8/12/16/20. Texture index here is
 // the resident descriptor slot, resolved from the catalog's source index.
 struct TerrainVisual {
     uint m_material_id;
     uint m_color_rgba;
     uint m_texture_index;
     float m_texture_period_m;
+    float m_roundness;
+    uint3 m_reserved;
 };
 StructuredBuffer<TerrainVisual> g_terrain_visuals;
+Texture2D<float4> g_boundary_noise;
 struct DiagnosticColor {
     uint m_color_rgba;
     float m_fill_height_fine;
@@ -167,23 +170,28 @@ float contourCross(float2 a, float2 b) {
     return a.x * b.y - a.y * b.x;
 }
 
-// Inverse quadratic coordinates turn shared diagonal midpoint cuts into
-// quadratic Bezier arcs with the dual-cell centre as control point. Crossings,
-// connectivity and axis-aligned endpoint tangents agree across neighboring cells.
-float2 contourWarp(float2 point) {
-    float2 offset = point - 0.5;
-    return 0.5 + 0.5 * sign(offset) * sqrt(abs(2.0 * offset));
+// Inverse of the per-axis quadratic map. Zero roundness keeps straight
+// midpoint cuts; one reproduces the original rounded Bezier boundary.
+float2 contourWarp(float2 point, float roundness) {
+    float2 lower = min(point, 1.0 - point);
+    float scale = 1.0 + roundness;
+    float2 mapped = 2.0 * lower / (scale + sqrt(max(scale * scale - 8.0 * roundness * lower, 0.0)));
+    return select(point <= 0.5, mapped, 1.0 - mapped);
 }
 
-float roundedSegmentDistance(float2 point, uint2 segment, out float2 nearest, out float2 normal) {
+float materialRoundness(uint material) {
+    return (g_grid_frame.m_surface_mode & 2u) != 0u ? g_terrain_visuals[material].m_roundness : 1.0;
+}
+
+float roundedSegmentDistance(float2 point, uint2 segment, float roundness, out float2 nearest, out float2 normal) {
     float2 a = g_contour_points[segment.x];
     float2 b = g_contour_points[segment.y];
     float2 delta = b - a;
     float t = saturate(dot(point - a, delta) / dot(delta, delta));
     nearest = a + t * delta;
     normal = float2(-delta.y, delta.x);
-    if (delta.x != 0.0 && delta.y != 0.0) {
-        float2 control = float2(0.5);
+    if (roundness != 0.0 && delta.x != 0.0 && delta.y != 0.0) {
+        float2 control = lerp((a + b) * 0.5, float2(0.5), roundness);
         float2 acceleration = 2.0 * (a - 2.0 * control + b);
         float best = min(dot(point - a, point - a), dot(point - b, point - b));
         float best_t = dot(point - a, point - a) < dot(point - b, point - b) ? 0.0 : 1.0;
@@ -242,11 +250,20 @@ uint materialMask(uint materials[4], uint corner) {
     return mask;
 }
 
+// A saddle cannot connect both opposing materials in the plane. The lower
+// solid ID wins that tie; a repeated solid always connects across empty corners.
+// Use the opposite case's boundary and complement only for that saddle label.
+bool connectedSaddle(uint materials[4], uint corner, uint mask) {
+    if (mask != 5u && mask != 10u) { return false; }
+    uint other = materials[(corner + 1u) & 3u];
+    uint opposite = materials[(corner + 3u) & 3u];
+    return other != opposite || other == 0u || other == 0xffffu || materials[corner] < other;
+}
+
 uint contourMaterial(float2 position, float width, out float coverage, out int2 winner) {
     winner = int2(4096);
     int2 base = int2(floor(position - 0.5));
     float2 point = position - (float2(base) + 0.5);
-    float2 warped = contourWarp(point);
     uint materials[4];
     for (uint corner = 0u; corner < 4u; ++corner) {
         materials[corner] = terrainSample(base + int2(g_contour_points[corner]));
@@ -260,14 +277,18 @@ uint contourMaterial(float2 position, float width, out float coverage, out int2 
         if (label == 0u || label == 0xffffu || (visited & (1u << corner)) != 0u) { continue; }
         uint mask = materialMask(materials, corner);
         visited |= mask;
-        ContourCase shape = g_contour_cases[mask];
+        bool connected = connectedSaddle(materials, corner, mask);
+        uint shape_mask = connected ? 15u ^ mask : mask;
+        float roundness = materialRoundness(label);
+        float2 warped = contourWarp(point, roundness);
+        ContourCase shape = g_contour_cases[shape_mask];
         float distance = 1.0e30;
         for (uint edge = 0u; edge < shape.m_segment_count; ++edge) {
             float2 nearest, normal;
-            distance = min(distance, roundedSegmentDistance(point, shape.m_segments[edge], nearest, normal));
+            distance = min(distance, roundedSegmentDistance(point, shape.m_segments[edge], roundness, nearest, normal));
         }
         float alpha = shape.m_segment_count == 0u ? 1.0 :
-            saturate(0.5 + (contourContains(mask, warped) ? distance : -distance) / width);
+            saturate(0.5 + ((contourContains(shape_mask, warped) != connected) ? distance : -distance) / width);
         // Complementary material edges each contribute half their pixel at a
         // shared seam; summing avoids introducing a transparent AA hairline.
         coverage = saturate(coverage + alpha);
@@ -292,8 +313,8 @@ uint contourMaterial(float2 position, float width, out float coverage, out int2 
 }
 
 // The inner rim follows only the selected solid's own boundary. The screen
-// width is unchanged by zoom; opacity fades as its nominal width spans 1..3
-// fine cells. The 0.5px AA fringe needs up to 3.75 cells of search support.
+// width is unchanged by zoom; the authored tuning fades its nominal width
+// over 0.2..0.3 fine cells. Its 0.5px AA fringe needs at most 0.375 cells.
 float2 contourDecoration(float2 position, float2 pixel_x, float2 pixel_y, uint material, bool need_shadow) {
     int2 base = int2(floor(position - 0.5));
     float2 local = position - (float2(base) + 0.5);
@@ -302,8 +323,8 @@ float2 contourDecoration(float2 position, float2 pixel_x, float2 pixel_y, uint m
     // normal's two-pixel rim has faded, without assuming an axis-aligned view.
     float pixel_min = sqrt(max(min(dot(pixel_x, pixel_x), dot(pixel_y, pixel_y)) -
         abs(dot(pixel_x, pixel_y)), 0.0));
-    bool need_outline = material != 0u && material != 0xffffu && pixel_min < 1.5;
-    float radius = max(need_outline ? min(2.5 * pixel_bound, 3.75) : 0.0,
+    bool need_outline = material != 0u && material != 0xffffu && pixel_min < 0.15;
+    float radius = max(need_outline ? min(2.5 * pixel_bound, 0.375) : 0.0,
         need_shadow ? min(12.0 * pixel_bound, 1.0) : 0.0);
     if (radius == 0.0) { return float2(0.0); }
     int extent = int(ceil(radius));
@@ -313,7 +334,7 @@ float2 contourDecoration(float2 position, float2 pixel_x, float2 pixel_y, uint m
         for (int x = -extent; x <= extent; ++x) {
             float2 point = local - float2(x, y);
             float2 box_distance = max(max(-point, point - 1.0), 0.0);
-            if (length(box_distance) >= radius) { continue; }
+            if (dot(box_distance, box_distance) >= radius * radius) { continue; }
             uint materials[4];
             for (uint corner = 0u; corner < 4u; ++corner) {
                 materials[corner] = terrainSample(base + int2(x, y) + int2(g_contour_points[corner]));
@@ -325,10 +346,21 @@ float2 contourDecoration(float2 position, float2 pixel_x, float2 pixel_y, uint m
                 uint mask = materialMask(materials, corner);
                 visited |= mask;
                 if (label != material && !need_shadow) { continue; }
-                ContourCase shape = g_contour_cases[mask];
+                bool connected = connectedSaddle(materials, corner, mask);
+                ContourCase shape = g_contour_cases[connected ? 15u ^ mask : mask];
+                float roundness = materialRoundness(label);
                 for (uint edge = 0u; edge < shape.m_segment_count; ++edge) {
+                    float2 a = g_contour_points[shape.m_segments[edge].x];
+                    float2 b = g_contour_points[shape.m_segments[edge].y];
+                    float2 control = lerp((a + b) * 0.5, float2(0.5), roundness);
+                    float2 low = min(a, b), high = max(a, b);
+                    if (a.x != b.x && a.y != b.y) {
+                        low = min(low, control); high = max(high, control);
+                    }
+                    float2 box = max(max(low - point, point - high), 0.0);
+                    if (dot(box, box) >= radius * radius) { continue; }
                     float2 nearest, normal;
-                    float distance = roundedSegmentDistance(point, shape.m_segments[edge], nearest, normal);
+                    float distance = roundedSegmentDistance(point, shape.m_segments[edge], roundness, nearest, normal);
                     float pixel = contourPixelSize(normal, pixel_x, pixel_y);
                     if (need_shadow) {
                         float depth = min(12.0 * pixel, 1.0);
@@ -336,7 +368,7 @@ float2 contourDecoration(float2 position, float2 pixel_x, float2 pixel_y, uint m
                     }
                     if (need_outline && label == material) {
                         float width = 2.0 * pixel;
-                        float fade = 1.0 - smoothstep(1.0, 3.0, width);
+                        float fade = 1.0 - smoothstep(0.2, 0.3, width);
                         float aa = 0.5 * pixel;
                         outline = max(outline, fade * (1.0 - smoothstep(width - aa, width + aa, distance)));
                     }
@@ -363,11 +395,20 @@ float4 fragmentGridMain(
     GridVertexOutput input,
     uniform StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
     uniform SamplerState.Handle g_sampler) : SV_Target {
+    float2 contour_position = input.fine_position;
+    if ((g_grid_frame.m_surface_mode & 3u) == 3u) {
+        float2 uv = input.fine_position / 32.0;
+        float2 noise = g_boundary_noise.SampleGrad(g_sampler, uv,
+            ddx(input.fine_position) / 32.0, ddy(input.fine_position) / 32.0).rg * 2.0 - 1.0;
+        float2 local = frac(input.fine_position - 0.5);
+        float2 envelope = 16.0 * local * local * (1.0 - local) * (1.0 - local);
+        contour_position += 0.06 * noise * envelope;
+    }
     // Evaluate derivatives before coverage branches/discards so neighboring
     // helper invocations still provide a defined edge width.
-    float2 pixel_x = ddx(input.fine_position);
-    float2 pixel_y = ddy(input.fine_position);
-    float width = clamp(length(fwidth(input.fine_position)), 1.0e-6, 1.0);
+    float2 pixel_x = ddx(contour_position);
+    float2 pixel_y = ddy(contour_position);
+    float width = clamp(length(fwidth(contour_position)), 1.0e-6, 1.0);
     // Beyond a world-sized footprint all admitted textures already select
     // their coarsest LOD. Bound gradients before period division to keep the
     // smallest supported positive period finite under extreme minification.
@@ -384,7 +425,7 @@ float4 fragmentGridMain(
     }
     if ((input.flags & 1u) != 0u) {
         if ((g_grid_frame.m_surface_mode & 1u) != 0u) {
-            material = contourMaterial(input.fine_position, width, coverage, sample);
+            material = contourMaterial(contour_position, width, coverage, sample);
         } else {
         // Rasterized quad edges may land exactly at 128 after interpolation;
         // clamp them into the final cell rather than reading the next chunk.
@@ -414,7 +455,7 @@ float4 fragmentGridMain(
         return diagnosticTint(g_diagnostic_colors[index].m_color_rgba, coverage);
     }
     float2 decoration = (input.flags & 1u) != 0u && (g_grid_frame.m_surface_mode & 1u) != 0u ?
-        contourDecoration(input.fine_position, pixel_x, pixel_y, material, coverage < 1.0) : float2(0.0);
+        contourDecoration(contour_position, pixel_x, pixel_y, material, coverage < 1.0) : float2(0.0);
     // Shadow lives entirely on the non-solid side. Its coverage complements the
     // terrain AA and composites over matter before the final background blend.
     float shadow = 0.45 * decoration.y;

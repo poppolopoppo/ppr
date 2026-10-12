@@ -52,8 +52,12 @@ export namespace pP {
         u32 m_color_rgba{};
         u32 m_texture_index{0xffffffffu};
         float m_texture_period_m{1.0f};
+        float m_roundness{1.0f};
+        u32 m_reserved[3]{};
     };
-    static_assert(sizeof(GridTerrainVisual) == 16u);
+    static_assert(sizeof(GridTerrainVisual) == 32u);
+    static_assert(PPR_OFFSETOF(GridTerrainVisual, m_roundness) == 16u);
+    static_assert(PPR_OFFSETOF(GridTerrainVisual, m_reserved) == 20u);
     static_assert(alignof(GridTerrainVisual) == 16u);
 
     enum class EGridDiagnosticMode : u32 {
@@ -522,6 +526,8 @@ export namespace pP {
         std::array<rhi::ComPtr<rhi::IBuffer>, kTileRingSize> m_chunk_slot_buffers{};
         std::array<void *, kTileRingSize> m_chunk_slot_mapped{};
         std::array<bool, kTileRingSize> m_chunk_slot_uploaded{};
+        rhi::ComPtr<rhi::ITexture> m_boundary_noise{};
+        rhi::ComPtr<rhi::ITextureView> m_boundary_noise_view{};
         rhi::ComPtr<rhi::ITexture> m_terrain_fallback{};
         rhi::ComPtr<rhi::ITextureView> m_terrain_fallback_view{};
         rhi::ComPtr<rhi::ISampler> m_terrain_sampler{};

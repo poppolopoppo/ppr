@@ -281,6 +281,9 @@ namespace pP {
                 GridPass, visual.m_material_id > 0u and
                                   visual.m_material_id < 0xffffu and
                                   not material_ids.test(visual.m_material_id) and
+                                  std::isfinite(visual.m_roundness) and
+                                  visual.m_roundness >= 0.0f and
+                                  visual.m_roundness <= 1.0f and
                                   std::isfinite(visual.m_texture_period_m) and
                                   visual.m_texture_period_m >= 4096.0f / (std::numeric_limits<float>::max)() and
                                   (visual.m_texture_index == 0xffffffffu or
@@ -306,7 +309,8 @@ namespace pP {
                                       return a.m_material_id == b.m_material_id and
                                              a.m_color_rgba == b.m_color_rgba and
                                              a.m_texture_index == b.m_texture_index and
-                                             a.m_texture_period_m == b.m_texture_period_m;
+                                             a.m_texture_period_m == b.m_texture_period_m and
+                                             a.m_roundness == b.m_roundness;
                                   });
             // Catalog changes require an independently prepared world bundle.
             PPR_RETURN_ERROR_ON_FAIL(
@@ -1752,6 +1756,8 @@ namespace pP {
         m_world.m_texture_slots.clear();
         m_world.m_texture_handles.clear();
         m_world.m_image_cursor = 0u;
+        m_boundary_noise_view.setNull();
+        m_boundary_noise.setNull();
         m_terrain_sampler.setNull();
         m_terrain_fallback_view.setNull();
         m_terrain_fallback.setNull();
@@ -1816,6 +1822,8 @@ namespace pP {
         m_world.m_texture_slots.clear();
         m_world.m_texture_handles.clear();
         m_world.m_image_cursor = 0u;
+        m_boundary_noise_view.setNull();
+        m_boundary_noise.setNull();
         m_terrain_sampler.setNull();
         m_terrain_fallback_view.setNull();
         m_terrain_fallback.setNull();
@@ -2013,6 +2021,50 @@ namespace pP {
         sampler_desc.maxAnisotropy = 1u;
         PPR_RETURN_ERROR_ON_FAIL(GridPass, device.createSampler(sampler_desc, sampler.writeRef()));
         PPR_RETURN_ERROR_ON_FAIL(GridPass, sampler->getDescriptorHandle(&sampler_handle));
+        // Shared linear noise, with a complete mip chain. Global shader UVs and
+        // wrapped sampling make this independent of chunk residency and camera.
+        std::array<u32, 5461u> noise{};
+        std::array<rhi::SubresourceData, 7u> levels{};
+        u32 state = 0x9e3779b9u;
+        for (u32 index = 0u; index < 4096u; ++index) {
+            state ^= state << 13u;
+            state ^= state >> 17u;
+            state ^= state << 5u;
+            noise[index] = (state & 0x0000ffffu) | 0xff800000u;
+        }
+        u32 offset = 0u;
+        u32 previous = 0u;
+        for (u32 mip = 0u, size = 64u; mip < 7u; ++mip, size /= 2u) {
+            if (mip != 0u) {
+                for (u32 y = 0u; y < size; ++y) {
+                    for (u32 x = 0u; x < size; ++x) {
+                        const u32 start = previous + (2u * y) * (2u * size) + 2u * x;
+                        u32 value = 0xff800000u;
+                        for (u32 channel = 0u; channel < 2u; ++channel) {
+                            const u32 shift = channel * 8u;
+                            const u32 sum = ((noise[start] >> shift) & 255u) +
+                                            ((noise[start + 1u] >> shift) & 255u) +
+                                            ((noise[start + 2u * size] >> shift) & 255u) +
+                                            ((noise[start + 2u * size + 1u] >> shift) & 255u);
+                            value |= ((sum + 2u) / 4u) << shift;
+                        }
+                        noise[offset + y * size + x] = value;
+                    }
+                }
+            }
+            levels[mip] = {.data = noise.data() + offset, .rowPitch = size * 4u, .slicePitch = size * size * 4u};
+            previous = offset;
+            offset += size * size;
+        }
+        desc.size = {.width = 64u, .height = 64u, .depth = 1u};
+        desc.mipCount = 7u;
+        desc.label = "terrain boundary noise";
+        rhi::ComPtr<rhi::ITexture> boundary_noise;
+        rhi::ComPtr<rhi::ITextureView> boundary_view;
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, device.createTexture(desc, levels.data(), boundary_noise.writeRef()));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, boundary_noise->getDefaultView(boundary_view.writeRef()));
+        m_boundary_noise = std::move(boundary_noise);
+        m_boundary_noise_view = std::move(boundary_view);
         m_terrain_fallback = std::move(texture);
         m_terrain_fallback_view = std::move(view);
         m_terrain_sampler = std::move(sampler);
@@ -2092,6 +2144,7 @@ namespace pP {
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass, cursor["g_textures"].setBinding(rhi::Binding(descriptors, makeFullRange(descriptors))));
         PPR_RETURN_ERROR_ON_FAIL(GridPass, cursor["g_sampler"].setDescriptorHandle(m_terrain_sampler_handle));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, cursor["g_boundary_noise"].setBinding(rhi::Binding(m_boundary_noise_view)));
         if (not retained_table or not m_chunk_slot_uploaded[m_tile_ring_cursor]) {
             std::array<u32, kGridTileCacheCapacity> slots;
             slots.fill(0xffffffffu);

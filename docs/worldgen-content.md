@@ -10,7 +10,9 @@ final row/column. `WorldMetric` rejects legacy scale/thickness values.
 
 The immutable `engine.math` contour table describes all sixteen centre-sampled
 dual-cell cases, midpoint crossings, CCW filled triangles and solid-left boundary
-segments. Diagonal solid components remain disconnected. Game, physics and GPU adapters consume the same table for the current production world.
+segments. Physics retains disconnected diagonal components. Rendering uses the same
+midpoint table with a connected saddle variant for repeated diagonal solids;
+when two materials compete for the diagonal bridge, the lower numeric ID wins.
 
 The first implementation slice provides `game.colony.content` and its pure
 `decodeMaterialCatalog(bytes, origin, diagnostics)` boundary. It returns an
@@ -81,12 +83,12 @@ excludes comments, source paths, and provenance. Byte order is:
    display name, u8 phase (solid=0, liquid=1, gas=2), u8 representation
    (terrain=0, particle=1), u32 RRGGBBAA, and IEEE-754 binary64 density bits.
 3. For terrain only: length-prefixed texture path, binary64 period bits,
-   and one diggability byte (0 or 1).
+   one diggability byte (0 or 1), and binary64 roundness bits.
 
 All integers and floating bit patterns use little-endian bytes; string lengths
 are u64 byte counts. FNV-1a starts at 14695981039346656037, multiplies by
 1099511628211 after XORing each byte, and wraps modulo 2^64. The example above
-has checksum `6e172b31ab5d1b68`. Textures, biome/profile/template data, generator
+has checksum `32f3364f88b38b19`. Textures, biome/profile/template data, generator
 version, and world-unit identity must enter the eventual complete pack/world
 descriptor separately.
 
@@ -612,3 +614,11 @@ PASS covers only its explicit checks; the complete milestone acceptance gates
 remain those in the implementation prompt.
 
 The progress modal shows one bar for the current stage. Terrain composition uses completed generation chunks; candidate graphics staging uses acknowledged staged chunks. Physics preparation, diagnostic capture, GPU readiness, publication, cancellation and cleanup have no measured completion ratio and display an animated indeterminate bar. A full staging count is not a promise that the new world has presented.
+
+Terrain materials may author `roundness` in `[0, 1]` (default `1`). Zero keeps
+straight marching-square cuts; one uses the original rounded quadratic boundary.
+The value is part of canonical content identity and is rejected for particles.
+Masonry uses a smaller value than soft clay and sandstone. Global, mip-filtered
+noise adds bounded irregularity without moving contour crossings between cells.
+The performance widget includes asynchronous GPU command-frame timing alongside
+CPU frame cadence and render-lane wall time; GPU samples exclude presentation.

@@ -135,6 +135,7 @@ worlds = "worlds.toml"
         PPR_TEST_ASSERT(sandstone->m_color_rgba == 0xB59C72FFu);
         PPR_TEST_ASSERT(sandstone->m_texture_period_m == 2.0);
         PPR_TEST_ASSERT(sandstone->m_diggable == true);
+        PPR_TEST_ASSERT(sandstone->m_roundness == 1.0);
         PPR_TEST_ASSERT(catalog->findMaterial(u16{1024})->m_representation == EMaterialRepresentation::particle);
         PPR_TEST_ASSERT(catalog->findMaterial(u16{0}) == nullptr);
         PPR_TEST_ASSERT(catalog->findMaterial(u16{65535}) == nullptr);
@@ -147,12 +148,16 @@ worlds = "worlds.toml"
         auto second = decodeMaterialCatalog("# reordered\nschema_version = 1\n" + snow + rock, "two.toml", diagnostics);
         PPR_TEST_ASSERT(first.has_value() and second.has_value());
         PPR_TEST_ASSERT(first->materialFingerprint() == second->materialFingerprint());
-        PPR_TEST_ASSERT(first->materialFingerprint() == 0x6e172b31ab5d1b68ull);
+        PPR_TEST_ASSERT(first->materialFingerprint() == 0x32f3364f88b38b19ull);
         PPR_TEST_ASSERT(first->materials().front().m_key == "sandstone");
         auto changed = decodeMaterialCatalog(
             "schema_version = 1\n" + replace(rock, "2.0", "3.0") + snow, "three.toml", diagnostics);
         PPR_TEST_ASSERT(changed.has_value());
         PPR_TEST_ASSERT(first->materialFingerprint() != changed->materialFingerprint());
+        auto rounded = decodeMaterialCatalog(
+            "schema_version = 1\n" + rock + "roundness = 0.25\n" + snow, "rounded.toml", diagnostics);
+        PPR_TEST_ASSERT(rounded and rounded->findMaterial(u16{16})->m_roundness == 0.25);
+        PPR_TEST_ASSERT(first->materialFingerprint() != rounded->materialFingerprint());
         auto extended = decodeMaterialCatalog("schema_version = 1\n" + rock, "four.toml", diagnostics);
         PPR_TEST_ASSERT(extended.has_value());
         PPR_TEST_ASSERT(first->materialFingerprint() != extended->materialFingerprint());
@@ -195,6 +200,9 @@ worlds = "worlds.toml"
             {"reference_density_kg_m3 = 2200.0", "reference_density_kg_m3 = -2.0"},
             {"diggable = true", "diggable = \"yes\""},
             {"diggable = true", "diggable = true\nunknown_field = 42"},
+            {"diggable = true", "diggable = true\nroundness = -0.01"},
+            {"diggable = true", "diggable = true\nroundness = 1.01"},
+            {"diggable = true", "diggable = true\nroundness = nan"},
         };
         for (const auto &[from, to]: cases) {
             config::Diagnostics diagnostics{};
@@ -220,7 +228,8 @@ worlds = "worlds.toml"
     };
 
     PPR_UNIT_TEST (particle_fields_and_duplicate_ids_rejected) {
-        for (const auto field: {"diggable = false", "albedo_texture = \"snow.png\"", "texture_period_m = 1.0"}) {
+        for (const auto field:
+            {"diggable = false", "albedo_texture = \"snow.png\"", "texture_period_m = 1.0", "roundness = 0.5"}) {
             config::Diagnostics diagnostics{};
             const auto catalog = decodeMaterialCatalog(
                 "schema_version = 1\n" + snow + field, "particle.toml", diagnostics);

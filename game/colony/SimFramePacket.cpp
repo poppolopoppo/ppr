@@ -35,6 +35,7 @@ namespace pP::colony {
                 GridTerrainVisual visual{};
                 visual.m_material_id = material.m_numeric_id;
                 visual.m_color_rgba = material.m_color_rgba;
+                visual.m_roundness = static_cast<float>(material.m_roundness);
                 visual.m_texture_period_m = static_cast<float>(material.m_texture_period_m.value_or(1.0));
                 if (material.m_albedo_texture) {
                     const auto textures = content.textures();
