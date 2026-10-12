@@ -52,7 +52,7 @@ struct ContourCase {
 StructuredBuffer<float2> g_contour_points;
 StructuredBuffer<ContourCase> g_contour_cases;
 StructuredBuffer<uint> g_chunk_slots;
-// CPU GridTerrainVisual: 32 bytes, offsets 0/4/8/12/16/20. Texture index here is
+// CPU GridTerrainVisual: 32 bytes, offsets 0/4/8/12/16/20/24/28. Texture index here is
 // the resident descriptor slot, resolved from the catalog's source index.
 struct TerrainVisual {
     uint m_material_id;
@@ -60,7 +60,10 @@ struct TerrainVisual {
     uint m_texture_index;
     float m_texture_period_m;
     float m_roundness;
-    uint3 m_reserved;
+    // Scalar padding keeps SPIR-V std430 array stride identical to the CPU mirror.
+    uint m_reserved0;
+    uint m_reserved1;
+    uint m_reserved2;
 };
 StructuredBuffer<TerrainVisual> g_terrain_visuals;
 Texture2D<float4> g_boundary_noise;
