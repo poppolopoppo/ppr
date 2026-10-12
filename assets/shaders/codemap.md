@@ -85,7 +85,7 @@ barriers and drawing share one encoder and submission.
   analytic gradients. Diagnostics retain their exact palette colors.
 - Boundary noise uses one shared texture and two filtered samples per catalog
   fragment. Material roundness blends angular texel ramps with broad plateaus
-  into smooth quintic interpolation. A shared cell style and scalar C1 envelope
+  into smooth quintic interpolation. A shared cell style and harmonic-mean scalar C1 envelope
   prevent material interfaces and adjacent dual cells from warping apart.
   Draw counts and resource bindings stay unchanged; curve evaluation and
   neighboring terrain reads add bounded fragment work.
@@ -137,8 +137,10 @@ screen footprint. Each octave scales displacement with wavelength, capped at
 0.1 cells per axis. A scalar C1 envelope fixes both displacement components
 on every dual-cell edge, preventing cross-cell displacement and chunk seams;
 it fades once the cell footprint is unresolved. The mean solid-corner roundness
-sets interpolation style for both octave samples; explicit gradients include
-the interpolation slopes. The diagnostic sample
+sets interpolation style for both octave samples, independently of amplitude;
+explicit gradients include the interpolation slopes. Broader noise wavelengths
+allow visible displacement, while the harmonic-mean envelope avoids the
+interior attenuation of multiplying its axis envelopes together. The diagnostic sample
 comes from the chosen material with global row-major ties. Outside-world samples
 use the profile's validated wall material without forming atlas addresses. Each
 chunk draws only its nominal rectangle. Explicit legacy fixtures retain square

@@ -237,19 +237,21 @@ float2 boundaryDisplacement(float2 position, float2 pixel_x, float2 pixel_y, Sam
     float octave = clamp(log2(16.0 * footprint), -8.0, 12.0);
     float scale = exp2(floor(octave));
     float blend = smoothstep(0.0, 1.0, frac(octave));
-    float period = 32.0 * scale;
+    float period = 96.0 * scale;
     float2 fine = boundaryNoise(position, period, roundness, pixel_x, pixel_y, sampler);
     float2 coarse = boundaryNoise(position, 2.0 * period, roundness, pixel_x, pixel_y, sampler);
-    // Interpolation slopes reach two. Wavelength-scaled amplitudes and the cap
-    // leave room for that slope and the envelope's spatial variation.
-    float2 displacement = lerp(min(0.02 * scale, 0.1) * fine,
-        min(0.04 * scale, 0.1) * coarse, blend);
+    // Roundness changes interpolation shape, never displacement strength.
+    // Broader wavelengths leave slope budget for a visible, cell-bounded warp.
+    float2 displacement = lerp(min(0.06 * scale, 0.1) * fine,
+        min(0.12 * scale, 0.1) * coarse, blend);
     float2 local = frac(position - 0.5);
     float2 envelope = 16.0 * local * local * (1.0 - local) * (1.0 - local);
-    // Both components vanish on every dual-cell edge, even when the material
-    // mix changes across that edge. Fade the unresolved envelope at minification.
+    // The harmonic mean preserves edge anchoring without multiplying away
+    // visible displacement in the interior. Both components still vanish C1
+    // on every cell edge, even where neighboring material mixes differ.
+    float shared_envelope = 2.0 * envelope.x * envelope.y / (envelope.x + envelope.y + 1.0e-6);
     float fade = 1.0 - smoothstep(0.25, 0.75, footprint);
-    return displacement * (envelope.x * envelope.y) * fade;
+    return displacement * shared_envelope * fade;
 }
 
 float roundedSegmentDistance(float2 point, uint2 segment, float roundness, out float2 nearest, out float2 normal) {
