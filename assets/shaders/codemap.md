@@ -83,8 +83,8 @@ barriers and drawing share one encoder and submission.
   across cell/chunk seams; curve bounding boxes reject unnecessary solves.
   Internal border distance uses signed-score differences and their projected
   analytic gradients. Diagnostics retain their exact palette colors.
-- Boundary noise uses one shared texture and two filtered samples per catalog
-  fragment. Material roundness blends angular texel ramps with broad plateaus
+- Boundary noise uses one shared texture and four explicit mip samples per
+  catalog fragment, combining persistent macro and fine-detail bands. Material roundness blends angular texel ramps with broad plateaus
   into smooth quintic interpolation. A shared cell style and harmonic-mean scalar C1 envelope
   prevent material interfaces and adjacent dual cells from warping apart.
   Draw counts and resource bindings stay unchanged; curve evaluation and
@@ -131,16 +131,15 @@ reads global samples through a completion-safe logical-chunk-to-physical-slot
 map, including diagonal neighbors, then rounds the shared midpoint boundaries.
 The shader complements the opposing saddle case for the selected bridge
 material; physics retains the original disconnected saddle table. A pass-owned
-64-square linear RG noise texture has seven mip levels. Two global-coordinate
-SampleGrad samples blend between adjacent snapped octaves selected from the
-screen footprint. Each octave scales displacement with wavelength, capped at
-0.1 cells per axis. A scalar C1 envelope fixes both displacement components
-on every dual-cell edge, preventing cross-cell displacement and chunk seams;
-it fades once the cell footprint is unresolved. The mean solid-corner roundness
-sets interpolation style for both octave samples, independently of amplitude;
-explicit gradients include the interpolation slopes. Broader noise wavelengths
-allow visible displacement, while the harmonic-mean envelope avoids the
-interior attenuation of multiplying its axis envelopes together. The diagnostic sample
+64-square linear RG noise texture has seven mip levels. Fixed world-space macro
+and detail bands use texture periods of 512 and 16 fine cells, with gains 0.075
+and 0.011 independent of zoom and roundness. Each band smoothly blends adjacent
+snapped mip levels at identical UVs; zoom filters fixed features rather than
+morphing spatial octaves. A conservative footprint covers both interpolation
+profiles, including sharp plateaus. The combined displacement is bounded by
+0.086 cells per axis. A harmonic-mean scalar C1 envelope fixes both components
+on every dual-cell edge and fades when cells become unresolved. The mean solid-
+corner roundness controls angular versus quintic interpolation only. The diagnostic sample
 comes from the chosen material with global row-major ties. Outside-world samples
 use the profile's validated wall material without forming atlas addresses. Each
 chunk draws only its nominal rectangle. Explicit legacy fixtures retain square

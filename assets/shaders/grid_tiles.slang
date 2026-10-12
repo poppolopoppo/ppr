@@ -205,23 +205,28 @@ bool sharedSolidRoundness(uint materials[4], out float roundness) {
 }
 
 // Smooth materials use quintic texel interpolation; sharp materials retain
-// angular ramps with broad plateaus. Explicit gradients filter both profiles.
+// angular ramps with broad plateaus. The world-space lattice never follows zoom.
 float2 boundaryNoise(float2 position, float period, float roundness,
-    float2 pixel_x, float2 pixel_y, SamplerState.Handle sampler) {
+    float footprint, SamplerState.Handle sampler) {
     float2 texel = position * (64.0 / period) - 0.5;
     float2 fraction = frac(texel);
     float2 angular = saturate(2.0 * fraction - 0.5);
     float2 smooth = fraction * fraction * fraction * (fraction * (6.0 * fraction - 15.0) + 10.0);
-    float2 angular_slope = select(fraction > 0.25 && fraction < 0.75, float2(2.0), float2(0.0));
-    float2 smooth_slope = 30.0 * fraction * fraction * (1.0 - fraction) * (1.0 - fraction);
-    float2 slope = lerp(angular_slope, smooth_slope, roundness);
     float2 uv = (floor(texel) + lerp(angular, smooth, roundness) + 0.5) / 64.0;
-    return g_boundary_noise.SampleGrad(sampler, uv,
-        slope * pixel_x / period, slope * pixel_y / period).rg * 2.0 - 1.0;
+    // Both interpolation profiles have slope at most two. The Frobenius
+    // footprint conservatively filters even angular plateaus under minification.
+    float lod = clamp(log2(max(128.0 * footprint / period, 1.0)), 0.0, 6.0);
+    float lower = floor(lod);
+    float blend = smoothstep(0.0, 1.0, frac(lod));
+    // The snapped window changes filtering only: both mips sample identical UVs,
+    // so zooming cannot slide, rescale or replace the underlying spatial field.
+    float2 fine = g_boundary_noise.SampleLevel(sampler, uv, lower).rg;
+    float2 coarse = g_boundary_noise.SampleLevel(sampler, uv, min(lower + 1.0, 6.0)).rg;
+    return lerp(fine, coarse, blend) * 2.0 - 1.0;
 }
 
-// Adjacent snapped octaves share the same world-anchored sample at each zoom
-// transition. One shared style prevents material sides from warping apart.
+// Persistent macro and detail bands add together, rather than morphing between
+// spatial octaves as zoom changes. One shared style keeps material sides joined.
 float2 boundaryDisplacement(float2 position, float2 pixel_x, float2 pixel_y, SamplerState.Handle sampler) {
     int2 base = int2(floor(position - 0.5));
     float roundness = 0.0;
@@ -234,16 +239,11 @@ float2 boundaryDisplacement(float2 position, float2 pixel_x, float2 pixel_y, Sam
     }
     roundness = solids > 0.0 ? roundness / solids : 1.0;
     float footprint = max(sqrt(dot(pixel_x, pixel_x) + dot(pixel_y, pixel_y)), 1.0e-6);
-    float octave = clamp(log2(16.0 * footprint), -8.0, 12.0);
-    float scale = exp2(floor(octave));
-    float blend = smoothstep(0.0, 1.0, frac(octave));
-    float period = 96.0 * scale;
-    float2 fine = boundaryNoise(position, period, roundness, pixel_x, pixel_y, sampler);
-    float2 coarse = boundaryNoise(position, 2.0 * period, roundness, pixel_x, pixel_y, sampler);
-    // Roundness changes interpolation shape, never displacement strength.
-    // Broader wavelengths leave slope budget for a visible, cell-bounded warp.
-    float2 displacement = lerp(min(0.06 * scale, 0.1) * fine,
-        min(0.12 * scale, 0.1) * coarse, blend);
+    float2 macro = boundaryNoise(position, 512.0, roundness, footprint, sampler);
+    float2 detail = boundaryNoise(position, 16.0, roundness, footprint, sampler);
+    // Fixed gains preserve displacement at every roundness. Fine detail is
+    // 32 times the macro frequency; their combined component bound is 0.086 cells.
+    float2 displacement = 0.075 * macro + 0.011 * detail;
     float2 local = frac(position - 0.5);
     float2 envelope = 16.0 * local * local * (1.0 - local) * (1.0 - local);
     // The harmonic mean preserves edge anchoring without multiplying away
