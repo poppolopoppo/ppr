@@ -29,6 +29,8 @@ namespace pP::tests::detail::SharedGpu {
 
 namespace pP::tests::detail {
     namespace Gate {
+        PPR_DEFINE_LOG_CATEGORY(GridMaterialGate, info, none)
+
         struct GateEditorApp : ApplicationEditor {
             explicit GateEditorApp(const std::string_view name, const std::span<const char *const> argv)
                 : ApplicationEditor(name, argv) {
@@ -1271,6 +1273,13 @@ namespace pP::tests::detail {
             visual.m_refraction_depth_m = 0.5f;
             const auto refracted = capture(opticalGridFixture_(visual, 1u));
             PPR_TEST_ASSERT(changedOpticalPixels_(background, refracted) > 100u);
+            visual.m_surface_flags = kGridSurfaceOpticalBlend | kGridSurfaceTextureRepeat;
+            visual.m_ior = 1.0f;
+            const auto repeat_one = capture(opticalGridFixture_(visual, 1u));
+            PPR_TEST_ASSERT(changedOpticalPixels_(background, repeat_one) == 0u);
+            visual.m_ior = 1.5f;
+            const auto repeat_refracted = capture(opticalGridFixture_(visual, 1u));
+            PPR_TEST_ASSERT(changedOpticalPixels_(repeat_one, repeat_refracted) > 100u);
 
             visual.m_surface_flags = 0u;
             const auto opaque = capture(opticalGridFixture_(visual, 1u));
@@ -1314,6 +1323,546 @@ namespace pP::tests::detail {
                 auto masked = complete_stage;
                 masked.m_background_layers[layer].m_color_rgba = layer == 0u ? 0x000000ffu : 0xffffff00u;
                 PPR_TEST_ASSERT(changedOpticalPixels_(complete, capture(masked)) > 100u);
+            }
+        };
+
+        [[nodiscard]] image::ImageAsset gridPattern_(const bool normal, const bool constant = false) {
+            constexpr u32 size = 128u;
+            std::vector<std::byte> pixels(size * size * 4u);
+            for (u32 y = 0u; y < size; ++y) {
+                for (u32 x = 0u; x < size; ++x) {
+                    const float a = std::sin((float(x) + 2.0f * y) * 2.0f * pi_v<float> / size);
+                    const float b = std::cos((3.0f * x - float(y)) * 2.0f * pi_v<float> / size);
+                    const auto byte = [](const float value) {
+                        return std::byte{u8(std::lround(std::clamp(value, 0.0f, 1.0f) * 255.0f))};
+                    };
+                    const auto offset = (y * size + x) * 4u;
+                    if (normal) {
+                        const float nx = constant ? 0.0f : 0.45f * a;
+                        const float ny = constant ? 0.0f : 0.35f * b;
+                        pixels[offset] = byte(0.5f + 0.5f * nx);
+                        pixels[offset + 1u] = byte(0.5f + 0.5f * ny);
+                        pixels[offset + 2u] = byte(0.5f + 0.5f * std::sqrt(1.0f - nx * nx - ny * ny));
+                    } else {
+                        pixels[offset] = byte(constant ? 0.5f : 0.5f + 0.25f * a + 0.125f * b);
+                        pixels[offset + 1u] = byte(constant ? 0.5f : 0.5f - 0.25f * a);
+                        pixels[offset + 2u] = byte(constant ? 0.5f : 0.5f + 0.25f * b);
+                    }
+                    pixels[offset + 3u] = std::byte{255};
+                }
+            }
+            image::ImageAsset image{};
+            image.m_width = size;
+            image.m_height = size;
+            image.m_storage = mem::SharedBuffer::clone(mem::SharedBufferView{pixels.data(), pixels.size()});
+            image.m_subresources.push_back(
+                image::ImageSubresource{
+                    .m_view = image.m_storage, .m_row_pitch = size * 4u, .m_slice_pitch = pixels.size()});
+            // Linear fixtures make the public readback's expected values direct;
+            // production sRGB decoding is covered by the image/cache gates.
+            PPR_TEST_ASSERT(
+                not image::generateMipChain(image, image::MipGenDesc{.m_full_chain = true, .m_normal_map = normal}));
+            PPR_TEST_ASSERT(image.m_mip_count == 8u);
+            return image;
+        }
+
+        void saveGridQa_(const GatePixels &pixels, const std::string_view name) {
+            const char *const directory = std::getenv("PPR_GRID_QA_DIR");
+            if (directory == nullptr) {
+                return;
+            }
+            const std::filesystem::path root{directory};
+            std::filesystem::create_directories(root);
+            const mango::image::Surface surface{
+                int(pixels.m_size), int(pixels.m_size),
+                mango::image::Format(32, mango::image::Format::UNORM, mango::image::Format::RGBA, 8, 8, 8, 8),
+                pixels.m_row_pitch, pixels.m_bytes.data()};
+            PPR_TEST_ASSERT(static_cast<bool>(surface.save((root / (std::string{name} + ".png")).string())));
+        }
+
+        void addAdjacentGridChunk_(GridPass::GridStagedFrame &stage) {
+            stage.m_tiles.push_back(
+                GridTileSubmission{.m_chunk_id = 1u, .m_tile_range = {128, 0, 256, 128}, .m_dirty_mask = 1u});
+            auto upload = stage.m_uploads[0];
+            upload.m_chunk_id = 1u;
+            upload.m_payload.m_rect[0] = 128.0f;
+            upload.m_payload.m_rect[2] = 256.0f;
+            stage.m_uploads.push_back(std::move(upload));
+        }
+
+        void fillGridParticles_(GridPass::GridStagedFrame &stage, const u32 phase, const bool offcenter = false) {
+            stage.m_particle_batches.clear();
+            for (u32 chunk = 0u; chunk < stage.m_uploads.size(); ++chunk) {
+                std::ranges::fill(stage.m_uploads[chunk].m_cell_materials, u16{0u});
+                auto records = std::make_shared<Array<GridParticleInstance>>();
+                records->reserve(GridPass::kCellsPerChunk);
+                for (u32 y = 0u; y < 128u; ++y) {
+                    for (u32 x = 0u; x < 128u; ++x) {
+                        const double offset = offcenter ? (x % 2u == 0u ? 0.01 : 0.99) : 0.5;
+                        records->push_back(
+                            GridParticleInstance{
+                                u64(chunk) * 16384u + y * 128u + x + 1u, double(chunk * 128u + x) + offset,
+                                double(y) + offset, 1.0, 1.0, 300.0, 1u, phase});
+                    }
+                }
+                stage.m_particle_batches.push_back(GridParticleBatch{chunk, std::move(records)});
+            }
+        }
+
+        [[nodiscard]] double gridPixelDifference_(const GatePixels &a, const GatePixels &b, const u32 shift_x = 0u) {
+            PPR_TEST_ASSERT(a.m_size == b.m_size);
+            double sum = 0.0;
+            u64 count = 0u;
+            for (u32 y = 16u; y + 16u < a.m_size; ++y) {
+                for (u32 x = 16u; x + shift_x + 16u < a.m_size; ++x) {
+                    const auto pa = gateTexel_(a, x + shift_x, y);
+                    const auto pb = gateTexel_(b, x, y);
+                    for (u32 channel = 0u; channel < 3u; ++channel) {
+                        sum += std::abs(int(pa[channel]) - int(pb[channel]));
+                        ++count;
+                    }
+                }
+            }
+            return sum / double(count);
+        }
+
+        [[nodiscard]] std::array<double, 4u> gridBilinear_(
+            const image::ImageAsset &image, const double u, const double v) {
+            const double x = (u - std::floor(u)) * image.m_width - 0.5;
+            const double y = (v - std::floor(v)) * image.m_height - 0.5;
+            const int ix = int(std::floor(x)), iy = int(std::floor(y));
+            const auto &level = image.m_subresources.front();
+            const auto bytes = level.m_view.getBufferData();
+            std::array<double, 4u> result{};
+            for (int dy = 0; dy < 2; ++dy) {
+                for (int dx = 0; dx < 2; ++dx) {
+                    const u32 sx = u32((ix + dx + int(image.m_width)) % int(image.m_width));
+                    const u32 sy = u32((iy + dy + int(image.m_height)) % int(image.m_height));
+                    const double weight = (dx == 0 ? 1.0 - (x - ix) : x - ix) * (dy == 0 ? 1.0 - (y - iy) : y - iy);
+                    for (u32 channel = 0u; channel < 4u; ++channel) {
+                        result[channel] += weight *
+                                           std::to_integer<u8>(bytes[sy * level.m_row_pitch + sx * 4u + channel]) /
+                                           255.0;
+                    }
+                }
+            }
+            return result;
+        }
+
+        [[nodiscard]] std::array<double, 3u> gridPatternReference_(
+            const image::ImageAsset &albedo, const image::ImageAsset &normals, const float u, const float v,
+            const bool stochastic) {
+            const float lx = u - v * 0.577350269f, ly = v * 1.154700538f;
+            const int cx = int(std::floor(lx)), cy = int(std::floor(ly));
+            const float fx = lx - cx, fy = ly - cy;
+            std::array<std::array<int, 2u>, 3u> vertices{};
+            std::array<double, 3u> weights{};
+            if (fx + fy <= 1.0f) {
+                vertices = {{{cx, cy}, {cx + 1, cy}, {cx, cy + 1}}};
+                weights = {1.0 - fx - fy, fx, fy};
+            } else {
+                vertices = {{{cx + 1, cy + 1}, {cx, cy + 1}, {cx + 1, cy}}};
+                weights = {fx + fy - 1.0, 1.0 - fx, 1.0 - fy};
+            }
+            if (not stochastic) {
+                weights = {1.0, 0.0, 0.0};
+            }
+            std::array<double, 3u> color{}, normal{};
+            for (u32 patch = 0u; patch < 3u; ++patch) {
+                u32 hash = (u32(vertices[patch][0]) & 65535u) * 0x9e3779b9u ^
+                           (u32(vertices[patch][1]) & 65535u) * 0x85ebca6bu;
+                hash ^= hash >> 16u;
+                hash *= 0x7feb352du;
+                hash ^= hash >> 15u;
+                hash *= 0x846ca68bu;
+                hash ^= hash >> 16u;
+                const double pu = u + (stochastic ? double(hash & 65535u) / 65536.0 : 0.0);
+                const double pv = v + (stochastic ? double(hash >> 16u) / 65536.0 : 0.0);
+                const auto a = gridBilinear_(albedo, pu, pv);
+                const auto n = gridBilinear_(normals, pu, pv);
+                for (u32 channel = 0u; channel < 3u; ++channel) {
+                    color[channel] += a[channel] * weights[patch];
+                    double decoded = n[channel] * 2.0 - 1.0;
+                    if (channel < 2u and std::abs(decoded) <= 1.0 / 255.0 + 1.0e-6) {
+                        decoded = 0.0;
+                    }
+                    normal[channel] += decoded * weights[patch];
+                }
+            }
+            const double inverse_length = 1.0 /
+                                          std::sqrt(
+                                              std::inner_product(normal.begin(), normal.end(), normal.begin(), 0.0));
+            const double facing = std::clamp(
+                (normal[0] * -0.35 + normal[1] * 0.45 + normal[2]) * inverse_length / std::sqrt(1.325), 0.0, 1.0);
+            const auto tail = albedo.m_subresources.back().m_view.getBufferData();
+            const double correction = stochastic ? 1.0 / std::sqrt(
+                                                             std::inner_product(
+                                                                 weights.begin(), weights.end(), weights.begin(), 0.0))
+                                                 : 1.0;
+            for (u32 channel = 0u; channel < 3u; ++channel) {
+                const double mean = std::to_integer<u8>(tail[channel]) / 255.0;
+                color[channel] = std::clamp(mean + (color[channel] - mean) * correction, 0.0, 1.0);
+                color[channel] = (color[channel] * (0.72 + 0.28 * facing) + 0.04 * facing * facing * 0.12) * 255.0;
+            }
+            return color;
+        }
+
+        PPR_UNIT_TEST (grid_stochastic_world_uvs_mips_and_particle_seams) {
+            const auto rhi = SharedGpu::rhiService();
+            const auto shader = SharedGpu::shaderService();
+            PPR_TEST_ASSERT(rhi.isValid() and shader.isValid());
+            GridPass grid;
+            PPR_TEST_ASSERT(not grid.initialize(*rhi, *shader, std::filesystem::current_path()));
+            PPR_DEFER {
+                PPR_TEST_ASSERT(not grid.shutdown());
+            };
+            GridTerrainVisual visual{};
+            visual.m_material_id = 1u;
+            visual.m_color_rgba = 0xffffff80u;
+            visual.m_surface_flags = 1u;
+            visual.m_texture_index = 6u;
+            visual.m_normal_texture_index = 7u;
+            visual.m_texture_period_m = 8.0f;
+            auto stage = opticalGridFixture_(visual, 1u);
+            stage.m_has_catalog = true;
+            stage.m_terrain_images.push_back(gridPattern_(false));
+            stage.m_terrain_images.push_back(gridPattern_(true));
+            addAdjacentGridChunk_(stage);
+            std::ignore = captureOpticalGrid_(grid, stage, 1u);
+            const auto solid = drawOpticalGrid_(grid, 120.0f, 56.0f, 16.0f, 256u);
+            saveGridQa_(solid, "pattern-solid-chunk-seam");
+            fillGridParticles_(stage, 1u);
+            std::ignore = captureOpticalGrid_(grid, stage, 2u);
+            const auto liquid = drawOpticalGrid_(grid, 120.0f, 56.0f, 16.0f, 256u);
+            saveGridQa_(liquid, "pattern-liquid-chunk-seam");
+            // Identical world material has identical sampling across the two
+            // representations and the owner/chunk seam at world x=128.
+            PPR_TEST_ASSERT(gridPixelDifference_(solid, liquid) < 0.3);
+            fillGridParticles_(stage, 2u, true);
+            std::ignore = captureOpticalGrid_(grid, stage, 3u);
+            const auto gas = drawOpticalGrid_(grid, 120.0f, 56.0f, 16.0f, 256u);
+            saveGridQa_(gas, "pattern-gas-offcenter-chunk-seam");
+            PPR_TEST_ASSERT(gridPixelDifference_(liquid, gas) < 0.3);
+            const auto subpixel = drawOpticalGrid_(grid, 120.015625f, 56.0f, 16.0f, 256u);
+            saveGridQa_(subpixel, "pattern-gas-subpixel-pan");
+            PPR_TEST_ASSERT(gridPixelDifference_(gas, subpixel) < 8.0);
+
+            // A whole source period must no longer repeat the same patch.
+            double repetition_difference = 0.0;
+            for (u32 y = 32u; y < 224u; ++y) {
+                for (u32 x = 16u; x < 112u; ++x) {
+                    repetition_difference += texelDist_(gateTexel_(gas, x, y), gateTexel_(gas, x + 128u, y));
+                }
+            }
+            PPR_TEST_ASSERT(repetition_difference / (192.0 * 96.0) > 12.0);
+
+            auto repeated = stage;
+            repeated.m_has_background = false;
+            repeated.m_terrain_visuals[0].m_surface_flags = kGridSurfaceTextureRepeat;
+            std::ignore = captureOpticalGrid_(grid, repeated, 7u);
+            const auto regular = drawOpticalGrid_(grid, 120.0f, 56.0f, 16.0f, 256u);
+            saveGridQa_(regular, "pattern-authored-repeat");
+            double regular_difference = 0.0;
+            for (u32 y = 32u; y < 224u; ++y) {
+                for (u32 x = 16u; x < 112u; ++x) {
+                    regular_difference += texelDist_(gateTexel_(regular, x, y), gateTexel_(regular, x + 128u, y));
+                }
+            }
+            PPR_TEST_ASSERT(regular_difference / (192.0 * 96.0) < 0.3);
+            repeated.m_terrain_visuals[0].m_surface_flags = 0u;
+            std::ignore = captureOpticalGrid_(grid, repeated, 8u);
+            const auto coherent = drawOpticalGrid_(grid, 120.0f, 56.0f, 16.0f, 256u);
+            // Isolate world sampling from the backdrop's deliberate parallax.
+            const auto panned = drawOpticalGrid_(grid, 120.0625f, 56.0f, 16.0f, 256u);
+            PPR_TEST_ASSERT(gridPixelDifference_(coherent, panned, 1u) < 0.3);
+            // At exactly one source texel per pixel the base-level bilinear
+            // reference pins patch translations, weights and signed normal
+            // decoding together, rather than merely checking image variation.
+            for (u32 y = 32u; y < 224u; y += 31u) {
+                for (u32 x = 32u; x < 224u; x += 31u) {
+                    const float u = (120.0f + (float(x) + 0.5f) / 16.0f) / 8.0f;
+                    const float v = (56.0f + (255.5f - float(y)) / 16.0f) / 8.0f;
+                    for (const bool stochastic: {false, true}) {
+                        const auto expected = gridPatternReference_(
+                            stage.m_terrain_images[6], stage.m_terrain_images[7], u, v, stochastic);
+                        const auto actual = gateTexel_(stochastic ? coherent : regular, x, y);
+                        for (u32 channel = 0u; channel < 3u; ++channel) {
+                            PPR_TEST_ASSERT(std::abs(expected[channel] - actual[channel]) <= 3.0);
+                        }
+                    }
+                }
+            }
+
+            // Positive world coordinates can still produce a negative skewed
+            // lattice coordinate. Preserve its fractional precision and hash.
+            const auto negative_skew = drawOpticalGrid_(grid, 56.0f, 112.0f, 16.0f, 256u);
+            for (u32 y = 32u; y < 224u; y += 31u) {
+                for (u32 x = 32u; x < 224u; x += 31u) {
+                    const float u = (56.0f + (float(x) + 0.5f) / 16.0f) / 8.0f;
+                    const float v = (112.0f + (255.5f - float(y)) / 16.0f) / 8.0f;
+                    const auto expected = gridPatternReference_(
+                        stage.m_terrain_images[6], stage.m_terrain_images[7], u, v, true);
+                    const auto actual = gateTexel_(negative_skew, x, y);
+                    for (u32 channel = 0u; channel < 3u; ++channel) {
+                        PPR_TEST_ASSERT(std::abs(expected[channel] - actual[channel]) <= 3.0);
+                    }
+                }
+            }
+
+            auto coarse = stage;
+            coarse.m_particle_batches.clear();
+            coarse.m_has_background = false;
+            coarse.m_terrain_visuals[0].m_surface_flags = 0u;
+            coarse.m_terrain_visuals[0].m_normal_texture_index = 0xffffffffu;
+            coarse.m_terrain_visuals[0].m_texture_period_m = 0.001f;
+            for (auto &upload: coarse.m_uploads) {
+                std::ranges::fill(upload.m_cell_materials, u16{1u});
+            }
+            std::ignore = captureOpticalGrid_(grid, coarse, 4u);
+            const auto minified = drawOpticalGrid_(grid, 120.0f, 56.0f, 16.0f, 256u);
+            saveGridQa_(minified, "pattern-coarsest-mip");
+            const auto tail = coarse.m_terrain_images[6].m_subresources.back().m_view.getBufferData();
+            for (u32 y = 16u; y < 240u; y += 7u) {
+                for (u32 x = 16u; x < 240u; x += 7u) {
+                    const auto pixel = gateTexel_(minified, x, y);
+                    for (u32 channel = 0u; channel < 3u; ++channel) {
+                        PPR_TEST_ASSERT(std::abs(int(pixel[channel]) - std::to_integer<int>(tail[channel])) <= 1);
+                    }
+                }
+            }
+            coarse.m_terrain_visuals[0].m_texture_period_m = 4096.0f / (std::numeric_limits<float>::max)();
+            std::ignore = captureOpticalGrid_(grid, coarse, 5u);
+            const auto extreme = drawOpticalGrid_(grid, 120.0f, 56.0f, 16.0f, 256u);
+            PPR_TEST_ASSERT(gridPixelDifference_(minified, extreme) < 0.1);
+            coarse.m_terrain_images[6] = gridPattern_(false, true);
+            // GPU format is authoritative even if caller metadata disagrees.
+            coarse.m_terrain_images[6].m_is_srgb = true;
+            coarse.m_terrain_visuals[0].m_texture_period_m = 8.0f;
+            std::ignore = captureOpticalGrid_(grid, coarse, 6u);
+            const auto constant = drawOpticalGrid_(grid, 120.0f, 56.0f, 16.0f, 256u);
+            for (u32 y = 16u; y < 240u; y += 7u) {
+                for (u32 x = 16u; x < 240u; x += 7u) {
+                    const auto pixel = gateTexel_(constant, x, y);
+                    PPR_TEST_ASSERT(pixel[0] == 128u and pixel[1] == 128u and pixel[2] == 128u);
+                }
+            }
+        };
+
+        PPR_UNIT_TEST (grid_translucent_solid_borders_and_particle_exteriors) {
+            const auto rhi = SharedGpu::rhiService();
+            const auto shader = SharedGpu::shaderService();
+            PPR_TEST_ASSERT(rhi.isValid() and shader.isValid());
+            GridPass grid;
+            PPR_TEST_ASSERT(not grid.initialize(*rhi, *shader, std::filesystem::current_path()));
+            PPR_DEFER {
+                PPR_TEST_ASSERT(not grid.shutdown());
+            };
+            GridTerrainVisual glass{};
+            glass.m_material_id = 1u;
+            glass.m_color_rgba = 0xffffffffu;
+            glass.m_surface_flags = 1u;
+            auto stage = opticalGridFixture_(glass, 1u);
+            stage.m_has_catalog = true;
+            stage.m_has_background = false;
+            auto solid = glass;
+            solid.m_material_id = 2u;
+            solid.m_surface_flags = 0u;
+            stage.m_terrain_visuals.push_back(solid);
+            for (u32 y = 0u; y < 128u; ++y) {
+                for (u32 x = 64u; x < 128u; ++x) {
+                    stage.m_uploads[0].m_cell_materials[y * 128u + x] = 2u;
+                }
+            }
+            std::ignore = captureOpticalGrid_(grid, stage, 1u);
+            const auto opaque = drawOpticalGrid_(grid, 60.0f, 60.0f, 8.0f, 256u);
+            saveGridQa_(opaque, "solid-solid-opaque-border");
+            stage.m_terrain_visuals[0].m_color_rgba = 0xffffff00u;
+            std::ignore = captureOpticalGrid_(grid, stage, 2u);
+            const auto clear = drawOpticalGrid_(grid, 60.0f, 60.0f, 8.0f, 256u);
+            saveGridQa_(clear, "solid-solid-zero-opacity-border-no-backdrop");
+            stage.m_terrain_visuals[0].m_color_rgba = 0xffffff80u;
+            std::ignore = captureOpticalGrid_(grid, stage, 3u);
+            const auto translucent = drawOpticalGrid_(grid, 60.0f, 60.0f, 8.0f, 256u);
+            saveGridQa_(translucent, "solid-solid-half-opacity-border-no-backdrop");
+            u32 dark_border = 0u;
+            for (u32 y = 24u; y < 232u; ++y) {
+                for (u32 x = 108u; x < 148u; ++x) {
+                    const auto reference = gateTexel_(opaque, x, y);
+                    if (reference[0] >= 5u and reference[0] <= 8u) {
+                        const auto a = gateTexel_(clear, x, y);
+                        const auto b = gateTexel_(translucent, x, y);
+                        PPR_TEST_ASSERT(std::abs(int(a[0]) - int(reference[0])) <= 2);
+                        PPR_TEST_ASSERT(std::abs(int(b[0]) - int(reference[0])) <= 2);
+                        ++dark_border;
+                    }
+                }
+            }
+            PPR_TEST_ASSERT(dark_border > 100u);
+            // The optical interior remains transparent; contour opacity does
+            // not turn the entire zero-opacity solid into opaque dark fill.
+            PPR_TEST_ASSERT(texelDist_(gateTexel_(opaque, 32u, 128u), gateTexel_(clear, 32u, 128u)) > 100u);
+
+            stage.m_has_background = true;
+            std::ignore = captureOpticalGrid_(grid, stage, 4u);
+            const auto internal = drawOpticalGrid_(grid, 60.0f, 60.0f, 8.0f, 256u);
+            saveGridQa_(internal, "solid-glass-internal-border");
+            for (u32 y = 0u; y < 128u; ++y) {
+                for (u32 x = 64u; x < 128u; ++x) {
+                    stage.m_uploads[0].m_cell_materials[y * 128u + x] = 0u;
+                }
+            }
+            auto records = std::make_shared<Array<GridParticleInstance>>();
+            records->reserve(8192u);
+            for (u32 y = 0u; y < 128u; ++y) {
+                for (u32 x = 64u; x < 128u; ++x) {
+                    records->push_back(
+                        GridParticleInstance{
+                            u64(y) * 128u + x + 1u, double(x) + 0.5, double(y) + 0.5, 1.0, 1.0, 300.0, 2u, 1u});
+                }
+            }
+            stage.m_particle_batches.push_back(GridParticleBatch{0u, records});
+            std::ignore = captureOpticalGrid_(grid, stage, 5u);
+            const auto liquid = drawOpticalGrid_(grid, 60.0f, 60.0f, 8.0f, 256u);
+            saveGridQa_(liquid, "glass-liquid-exterior-border");
+            auto gases = std::make_shared<Array<GridParticleInstance>>(*records);
+            for (auto &particle: *gases) {
+                particle.m_phase = 2u;
+            }
+            stage.m_particle_batches[0].m_particles = gases;
+            std::ignore = captureOpticalGrid_(grid, stage, 6u);
+            const auto gas = drawOpticalGrid_(grid, 60.0f, 60.0f, 8.0f, 256u);
+            saveGridQa_(gas, "glass-gas-exterior-border");
+            PPR_TEST_ASSERT(gridPixelDifference_(liquid, gas) < 0.1);
+            // Particle phase cannot turn an exterior into a two-solid material
+            // interface. The exterior casts a shadow only on its matter side.
+            double exterior_darkening = 0.0;
+            for (u32 y = 32u; y < 224u; ++y) {
+                for (u32 x = 136u; x < 144u; ++x) {
+                    exterior_darkening += int(gateTexel_(internal, x, y)[0]) - int(gateTexel_(gas, x, y)[0]);
+                }
+            }
+            PPR_TEST_ASSERT(exterior_darkening / (192.0 * 8.0) > 3.0);
+        };
+
+        PPR_UNIT_TEST (grid_material_shading_cost_samples) {
+            const auto rhi = SharedGpu::rhiService();
+            const auto shader = SharedGpu::shaderService();
+            Renderer *const renderer = SharedGpu::renderer();
+            PPR_TEST_ASSERT(rhi.isValid() and shader.isValid() and renderer != nullptr);
+            auto &device = rhi->getDevice();
+            constexpr u32 edge = 1024u;
+            constexpr u32 warm_frames = 3u;
+            constexpr u32 sample_frames = 5u;
+            std::println(
+                "GRID-COST device_type={} core_validation={} gpu_assisted_validation={}",
+                static_cast<int>(device.getDeviceType()), rhi->isCoreValidationEnabled(),
+                rhi->isGpuAssistedValidationEnabled());
+            const auto target = makeRenderTarget_(device, edge);
+            PPR_TEST_ASSERT(target.has_value());
+            GridPass grid;
+            PPR_TEST_ASSERT(not grid.initialize(*rhi, *shader, std::filesystem::current_path()));
+            PPR_DEFER {
+                PPR_TEST_ASSERT(not renderer->waitOnHost());
+                PPR_TEST_ASSERT(not renderer->retireCompletedFrames());
+                PPR_TEST_ASSERT(not grid.shutdown());
+            };
+
+            CameraModel model{};
+            model.m_camera_mode = ECameraProjection::orthographic;
+            model.m_origin = float3{0.0f, 0.0f, -0.5f};
+            model.m_ortho_scale = 128.0f / static_cast<float>(edge);
+            Camera camera{ECameraProjection::orthographic};
+            camera.updateModel(TimeSpan{}, model, Viewport{PixelRect{0, 0, int(edge), int(edge)}});
+            const auto snapshot = camera.getSnapshot();
+            const auto viewport = rhi::Viewport::fromSize(float(edge), float(edge));
+            const auto scissor = rhi::ScissorRect::fromSize(edge, edge);
+            const std::array names{
+                "homogeneous-solid", "dense-solid-interfaces", "translucent-exterior", "dense-particles"};
+            for (u32 scenario = 0u; scenario < names.size(); ++scenario) {
+                GridTerrainVisual visual{};
+                visual.m_material_id = 1u;
+                visual.m_color_rgba = scenario >= 2u ? 0xffffff80u : 0xffffffffu;
+                visual.m_texture_index = 0u;
+                visual.m_texture_period_m = 8.0f;
+                visual.m_normal_texture_index = 5u;
+                visual.m_roughness = 0.5f;
+                visual.m_surface_flags = scenario >= 2u ? 1u : 0u;
+                visual.m_ior = 1.5f;
+                visual.m_refraction_depth_m = 0.05f;
+                auto stage = opticalGridFixture_(visual, scenario == 3u ? 0u : 1u, true);
+                stage.m_has_catalog = true;
+                if (scenario == 1u) {
+                    auto other = visual;
+                    other.m_material_id = 2u;
+                    other.m_color_rgba = 0x80c0ffffu;
+                    other.m_normal_texture_index = 4u;
+                    stage.m_terrain_visuals.push_back(other);
+                }
+                if (scenario == 1u or scenario == 2u) {
+                    for (u32 y = 0u; y < 128u; ++y) {
+                        for (u32 x = 0u; x < 128u; ++x) {
+                            stage.m_uploads[0].m_cell_materials[y * 128u + x] = (x + y) % 2u == 0u ? 1u
+                                                                                : scenario == 1u   ? 2u
+                                                                                                   : 0u;
+                        }
+                    }
+                }
+                if (scenario == 3u) {
+                    auto records = std::make_shared<Array<GridParticleInstance>>();
+                    records->reserve(GridPass::kCellsPerChunk);
+                    for (u32 y = 0u; y < 128u; ++y) {
+                        for (u32 x = 0u; x < 128u; ++x) {
+                            records->push_back(
+                                GridParticleInstance{
+                                    u64(y) * 128u + x + 1u, double(x) + 0.5, double(y) + 0.5, 1.0, 1.0, 300.0, 1u, 1u});
+                        }
+                    }
+                    stage.m_particle_batches.push_back(GridParticleBatch{0u, std::move(records)});
+                }
+                std::ignore = captureOpticalGrid_(grid, stage, scenario + 1u);
+                PPR_TEST_ASSERT(not grid.update(TimeSpan{}, snapshot));
+                const auto wait_for_idle = [&]() { return renderer->waitOnHost(); };
+                PPR_TEST_ASSERT(not grid.prepareCellUploads(device, wait_for_idle, true));
+                const auto prepare = [&](const PreRenderContext &context) {
+                    return grid.prepareBackground(context, snapshot, viewport, scissor);
+                };
+                const auto draw = [&](const DrawContext &context) -> std::error_code {
+                    PPR_RETURN_ERROR_ON_FAIL(GridMaterialGate, grid.renderBackground(context));
+                    PPR_RETURN_ERROR_ON_FAIL(GridMaterialGate, grid.render(context));
+                    PPR_RETURN_ERROR_ON_FAIL(GridMaterialGate, grid.renderParticles(context));
+                    return {};
+                };
+
+                // Reuse the target, camera, world and resident resources. These
+                // submission-matched timestamps include backdrop preparation and
+                // all production grid draws, without readback in the sample loop.
+                std::array<float, sample_frames> samples{};
+                for (u32 frame = 0u; frame < warm_frames + sample_frames; ++frame) {
+                    PPR_TEST_ASSERT(not renderer->renderToTexture(
+                        targetRef_(target), {DrawSubmission{"grid material cost", draw}}, {},
+                        PreRenderCallback{prepare}));
+                    const auto submitted = renderer->lastSubmittedFenceValue();
+                    grid.notifyFrameSubmitted(submitted);
+                    PPR_TEST_ASSERT(not renderer->waitOnHost());
+                    PPR_TEST_ASSERT(not renderer->retireCompletedFrames());
+                    const auto timing = renderer->lastGpuFrameTiming();
+                    PPR_TEST_ASSERT(timing.has_value() and timing->m_submission == submitted);
+                    PPR_TEST_ASSERT(std::isfinite(timing->m_milliseconds) and timing->m_milliseconds >= 0.0f);
+                    if (frame >= warm_frames) {
+                        samples[frame - warm_frames] = timing->m_milliseconds;
+                    }
+                }
+                const auto observations = grid.observations();
+                PPR_TEST_ASSERT(observations.m_particle_instances == (scenario == 3u ? 16384u : 0u));
+                PPR_TEST_ASSERT(observations.m_background_targets == 3u);
+                std::ranges::sort(samples);
+                const float mean = std::accumulate(samples.begin(), samples.end(), 0.0f) / float(sample_frames);
+                std::println(
+                    "GRID-COST scenario={} edge={} samples={} gpu_ms_min={} median={} max={} mean={} "
+                    "decoded_bytes={} particle_bytes={} backdrop_bytes={}",
+                    names[scenario], edge, sample_frames, samples.front(), samples[sample_frames / 2u], samples.back(),
+                    mean, observations.m_texture_decoded_bytes, observations.m_particle_buffer_bytes,
+                    observations.m_background_target_bytes);
             }
         };
 
@@ -2137,6 +2686,9 @@ namespace pP::tests {
             detail::Gate::grid_candidate_world_retains_active_until_matching_activation,
             detail::Gate::grid_optical_controls_and_four_layer_parallax,
             detail::Gate::grid_particle_support_and_resource_repeat,
+            detail::Gate::grid_material_shading_cost_samples,
+            detail::Gate::grid_stochastic_world_uvs_mips_and_particle_seams,
+            detail::Gate::grid_translucent_solid_borders_and_particle_exteriors,
         });
     };
 
