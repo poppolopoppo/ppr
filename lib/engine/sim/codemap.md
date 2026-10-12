@@ -11,7 +11,7 @@ through owned simulation packets; the sim module itself has no renderer or scrip
 
 ## Design
 
-- Partitioned umbrella: `Sim.cppm` re-exports `:chunk_grid`, `:ecs`, `:footprint`, `:snapshot`, `:tick`, and `:worldgen` (snapshot before tick per Sim.cppm:5-10).
+- Partitioned umbrella: `Sim.cppm` re-exports `:chunk_grid`, `:ecs`, `:footprint`, `:snapshot`, `:tick`, `:worldgen`, and `:particles` (snapshot before tick per Sim.cppm:5-10).
 - `:chunk_grid` holds the geometry vocabulary (`kChunkEdge`=128, `kChunksPerEdge`=32,
   `kWorldEdge`=4096, `kChunkCount`=1024, `kCellsPerChunk`=16384), the `GlobalCellPos`/`ChunkPos`/
   `LocalCellPos` strong coordinate types with constexpr converters (`chunkOf`, `localOf`,
@@ -122,9 +122,12 @@ ullptr`) and `mask` (empty). Components are
   volume/mass and validate supported actor-footprint routes and exposed resources.
   The result partition orchestrates the full numeric pipeline with an injected
   clock, final terrain validation and canonical terrain/metadata checksums.
-  Runtime publication remains pending;
-  the legacy `generate` path above remains the production caller until that work
-  is complete.
+  Production game sessions publish independently owned numeric worlds.
+
+- `:particles` owns bounded immutable chunk batches of persistent static matter
+  records, canonical seed allocation, identity/physical validation and local
+  point-occupancy terrain-edit candidates. It depends only on core/math/numeric
+  worldgen; renderer payloads and checkpoint envelopes stay in game.
 
 ## Flow
 
@@ -153,7 +156,7 @@ snapshot.
   sim state, and both `app.game` and `engine.tests.sim` link PRIVATE `engine.physics`
   for their driver-owned scenes.
 - Build: `Sim.cppm`, `chunk_grid/Sim.ChunkGrid.cppm`, `ecs/Sim.Ecs.cppm`, `footprint/Sim.Footprint.cppm`, `tick/Sim.Tick.cppm`,
-  `snapshot/Sim.Snapshot.cppm`, `worldgen/Sim.WorldGen.cppm` in `FILE_SET CXX_MODULES`; their registered implementation `.cpp` files as PRIVATE
+  `snapshot/Sim.Snapshot.cppm`, `worldgen/Sim.WorldGen.cppm`, `particles/Sim.Particles.cppm` in `FILE_SET CXX_MODULES`; their registered implementation `.cpp` files as PRIVATE
   sources (`:footprint` and execution-only `:worldgen` have no `.cpp`);
   `setup_ppr_project(engine.sim INTERNAL_PUBLIC_DEPS engine.core engine.math)`.
 
@@ -167,6 +170,7 @@ snapshot.
 - `footprint/Sim.Footprint.cppm` — pointer-free BodyState, BodyDefinition, SolidFootprint and Sensor vocabulary.
 - `tick/Sim.Tick.cppm` — `FixedTimestep`, `TickReport`, `StepRegistry` interface.
 - `tick/Sim.Tick.cpp` — accumulator/policy math, fail-closed declaration + stable Kahn order.
+- `particles/Sim.Particles.cppm/.cpp` — persistent matter records, seed/restore and local edit preparation/commit.
 - `snapshot/Sim.Snapshot.cppm` — `sim::errc`, snapshot vocabulary (`BodyRecord`, `BodiesSection`), capture/apply/save/load plus exported `restore()`.
 - `snapshot/Sim.Snapshot.cpp` — error category, shared `validate()`, LE codec.
 - `worldgen/Sim.WorldGen.cppm` — execution/progress vocabulary.

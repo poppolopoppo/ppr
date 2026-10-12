@@ -89,6 +89,15 @@ namespace pP::tests::detail {
             };
             rejects([](auto &recipe) { recipe.m_biomes[0u].m_temperature_field = 1u; });
             rejects([](auto &recipe) { recipe.m_fields.push_back(recipe.m_fields[0u]); });
+            rejects([](auto &recipe) { recipe.m_biomes[0u].m_lining_material = 17u; });
+            rejects([](auto &recipe) {
+                recipe.m_biomes[0u].m_lining_material = 17u;
+                recipe.m_biomes[0u].m_lining_thickness_fine = 4u;
+            });
+            rejects([](auto &recipe) {
+                recipe.m_biomes[0u].m_lining_material = 99u;
+                recipe.m_biomes[0u].m_lining_thickness_fine = 1u;
+            });
             rejects([](auto &recipe) { recipe.m_materials[0u].m_id = 0u; });
             rejects([](auto &recipe) { recipe.m_max_sites = kMaxGenerationSites + 1u; });
             rejects([](auto &recipe) {
@@ -181,6 +190,132 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not validateGenerationRecipe(recipe));
         };
 
+        PPR_UNIT_TEST (biome_lining_stops_threshold_caves_and_replays_across_chunks) {
+            auto recipe = numericRecipe();
+            recipe.m_cell_size_m = 1.0;
+            recipe.m_biomes.push_back(recipe.m_biomes.front());
+            recipe.m_biomes.back().m_key = 204u;
+            recipe.m_constraints.push_back({402u, 1u, 1u, 1.0, 0.0, 1.0, 0.0, 2048.0});
+            recipe.m_rules.push_back({501u, 1u, EGenerationPhase::carve, GenerationCave{0u, 0u, 0.0, 1.0, -1.0, 1.0}});
+            recipe.m_rules.push_back({502u, 2u, EGenerationPhase::carve, GenerationCave{1u, 0u, 0.0, 1.0, -1.0, 1.0}});
+            // Four surrounding sites make a single-cell different-biome island.
+            // Diagonal distance two/three cannot be detected by cardinal rays.
+            const std::array sites{
+                GenerationSite{125.5, 127.5, 0u}, GenerationSite{129.5, 127.5, 0u}, GenerationSite{127.5, 125.5, 0u},
+                GenerationSite{127.5, 129.5, 0u}, GenerationSite{127.5, 127.5, 1u}};
+            for (const u32 width: {1u, 2u, 3u}) {
+                recipe.m_biomes.front().m_lining_material = 17u;
+                recipe.m_biomes.front().m_lining_thickness_fine = width;
+                const auto plan = compileGenerationPlan(recipe, 42u);
+                PPR_TEST_ASSERT(plan.has_value());
+                const auto layout = restoreBiomeLayout(*plan, sites);
+                PPR_TEST_ASSERT(layout.has_value());
+                const auto geometry = compileGenerationGeometry(*plan, *layout);
+                PPR_TEST_ASSERT(geometry.has_value());
+                const auto raster = compileGenerationRaster(*plan, *layout, *geometry);
+                PPR_TEST_ASSERT(raster.has_value());
+                const auto left = raster->chunk({0u, 0u});
+                const auto right = raster->chunk({1u, 0u});
+                const auto replay = raster->chunk({1u, 0u});
+                PPR_TEST_ASSERT(left.has_value() and right.has_value() and replay.has_value());
+                PPR_TEST_ASSERT((*left)[126u * kChunkEdge + 126u].m_element == (width >= 2u ? 17u : 0u));
+                PPR_TEST_ASSERT((*left)[126u * kChunkEdge + 125u].m_element == (width >= 3u ? 17u : 0u));
+                PPR_TEST_ASSERT((*left)[126u * kChunkEdge + 127u].m_element == 17u);
+                PPR_TEST_ASSERT((*right)[126u * kChunkEdge].m_element == (width >= 2u ? 17u : 0u));
+                PPR_TEST_ASSERT(*right == *replay);
+                for (const ChunkPos corner: {ChunkPos{0u, 31u}, ChunkPos{31u, 0u}, ChunkPos{31u, 31u}}) {
+                    const auto cells = raster->chunk(corner);
+                    PPR_TEST_ASSERT(cells.has_value());
+                }
+            }
+        };
+        PPR_UNIT_TEST (particle_seeding_replays_large_regions_with_coherent_positive_mass) {
+            auto recipe = numericRecipe();
+            recipe.m_materials.push_back({99u, false, false, EGenerationMatter::liquid, 1000.0});
+            ChunkGrid grid;
+            InitialMatter matter;
+            InitialMatterRegion region{
+                .m_identity = 1u, .m_material = 99u, .m_temperature_k = 293.0, .m_bulk_density_kg_m3 = 1000.0};
+            for (u32 y = 10u; y < 110u; ++y) {
+                region.m_spans.push_back({y, 10u, 1010u});
+                for (u32 x = 10u; x < 1010u; ++x) {
+                    region.m_volume_m3 += recipe.m_cell_size_m * recipe.m_cell_size_m;
+                }
+            }
+            region.m_mass_kg = region.m_volume_m3 * region.m_bulk_density_kg_m3;
+            matter.m_regions.push_back(region);
+            matter.m_span_count = 100u;
+            const auto seeded = seedMatterParticles(matter, grid, recipe);
+            const auto replay = seedMatterParticles(matter, grid, recipe);
+            PPR_TEST_ASSERT(seeded.has_value() and replay.has_value());
+            double volume{}, mass{};
+            u32 count{};
+            for (u32 i = 0u; i < seeded->m_chunks.size(); ++i) {
+                PPR_TEST_ASSERT(seeded->m_chunks[i].records().size() == replay->m_chunks[i].records().size());
+                for (u32 j = 0u; j < seeded->m_chunks[i].records().size(); ++j) {
+                    const auto &particle = seeded->m_chunks[i].records()[j];
+                    PPR_TEST_ASSERT(particle == replay->m_chunks[i].records()[j]);
+                    PPR_TEST_ASSERT(particle.m_volume_m3 > 0.0 and particle.m_mass_kg == particle.m_volume_m3 * 1000.0);
+                    volume += particle.m_volume_m3;
+                    mass += particle.m_mass_kg;
+                    ++count;
+                }
+            }
+            PPR_TEST_ASSERT(count == 100000u);
+            PPR_TEST_ASSERT(std::abs(volume - region.m_volume_m3) < 1.0e-8 * region.m_volume_m3);
+            PPR_TEST_ASSERT(std::abs(mass - region.m_mass_kg) < 1.0e-8 * region.m_mass_kg);
+            matter.m_regions.front().m_volume_m3 *= 2.0;
+            PPR_TEST_ASSERT(not seedMatterParticles(matter, grid, recipe));
+        };
+        PPR_UNIT_TEST (particle_edits_are_local_atomic_and_pure_digs_preserve_frozen_records) {
+            auto recipe = numericRecipe();
+            recipe.m_materials.push_back({99u, false, false, EGenerationMatter::gas, 1.0});
+            ChunkGrid grid;
+            PPR_TEST_ASSERT(not grid.setCell({120u, 40u}, {17u, 293.0f}));
+            const double volume = 2.0 * recipe.m_cell_size_m * recipe.m_cell_size_m;
+            InitialMatter matter;
+            matter.m_regions.push_back(
+                {.m_identity = 1u,
+                    .m_material = 99u,
+                    .m_temperature_k = 293.0,
+                    .m_bulk_density_kg_m3 = 1.0,
+                    .m_volume_m3 = volume,
+                    .m_mass_kg = volume,
+                    .m_spans = {{40u, 127u, 129u}}});
+            const auto seeded = seedMatterParticles(matter, grid, recipe);
+            PPR_TEST_ASSERT(seeded.has_value());
+            MatterParticleState state;
+            PPR_TEST_ASSERT(not state.restore(*seeded, recipe.m_materials, recipe.m_cell_size_m));
+            const auto frozen = state.capture();
+            auto original = grid.captureChunk({0u, 0u});
+            PPR_TEST_ASSERT(original.has_value());
+            PPR_TEST_ASSERT(not grid.setCell({120u, 40u}, {}));
+            grid.exchangeChunk(*original);
+            std::array dig{std::move(*original)};
+            const auto dug = state.prepareTerrainEdit(grid, dig, recipe.m_cell_size_m);
+            PPR_TEST_ASSERT(dug.has_value() and dug->empty() and state.count() == 2u);
+            auto old = grid.captureChunk({0u, 0u});
+            PPR_TEST_ASSERT(old.has_value());
+            PPR_TEST_ASSERT(not grid.setCell({127u, 40u}, {17u, 293.0f}));
+            grid.exchangeChunk(*old);
+            std::array build{std::move(*old)};
+            const auto candidate = state.prepareTerrainEdit(grid, build, recipe.m_cell_size_m);
+            PPR_TEST_ASSERT(candidate.has_value() and candidate->size() == 1u and state.count() == 2u);
+            state.commitTerrainEdit(*candidate);
+            PPR_TEST_ASSERT(state.count() == 1u and frozen.m_chunks[0].records().size() == 1u);
+            PPR_TEST_ASSERT(state.chunk({1u, 0u})[0].m_id == 2u);
+            auto [context, cancel] = context::withCancelClause(context::background());
+            cancel(std::make_error_code(std::errc::operation_canceled));
+            PPR_TEST_ASSERT(
+                state.restore({}, recipe.m_materials, recipe.m_cell_size_m, context.get()) ==
+                std::errc::operation_canceled);
+            PPR_TEST_ASSERT(state.count() == 1u);
+            auto invalid = state.capture();
+            invalid.m_next_id = 2u;
+            PPR_TEST_ASSERT(
+                state.restore(invalid, recipe.m_materials, recipe.m_cell_size_m) == std::errc::invalid_argument);
+            PPR_TEST_ASSERT(state.count() == 1u);
+        };
         PPR_UNIT_TEST (macro_layout_replays_spacing_and_spatial_nearest_matches_oracle) {
             for (const u64 seed: {0ull, 1ull, 42ull, 0xffffffffffffffffull}) {
                 auto plan = compileGenerationPlan(numericRecipe(), seed);
@@ -376,7 +511,7 @@ namespace pP::tests::detail {
                 {.m_key = 601u,
                     .m_phase = EGenerationPhase::carve,
                     .m_parameters = GenerationWorm{
-                        .m_count = 4096u,
+                        .m_count = 1024u,
                         .m_carve = true,
                         .m_depth_max = 1.0,
                         .m_length_min_m = 4096.0,
@@ -385,6 +520,8 @@ namespace pP::tests::detail {
                         .m_radius_max_m = 0.5}}};
             result = run();
             PPR_TEST_ASSERT(not result and result.error() == make_error_code(EGenerationErrc::segment_limit));
+            std::get<GenerationWorm>(recipe.m_rules.front().m_parameters).m_count = 1025u;
+            PPR_TEST_ASSERT(validateGenerationRecipe(recipe) == std::errc::value_too_large);
         };
 
         PPR_UNIT_TEST (chunk_raster_preserves_boundaries_host_replacement_and_global_seams) {
@@ -734,11 +871,23 @@ namespace pP::tests::detail {
         };
 
         PPR_UNIT_TEST (compiled_noise_algorithms_replay_and_support_concurrent_sampling) {
+            const NoiseFieldDesc base_desc{.m_frequency_per_metre = 0.025, .m_octaves = 1u};
+            auto billow_desc = base_desc;
+            billow_desc.m_fractal = ENoiseFractal::billow;
+            auto base = compileNoiseField(base_desc, 42u);
+            auto billow = compileNoiseField(billow_desc, 42u);
+            PPR_TEST_ASSERT(base and billow);
+            for (u32 index = 0u; index < 32u; ++index) {
+                const double x = index * 17.25 - 120.0;
+                PPR_TEST_ASSERT(
+                    std::abs(billow->sample(x, 57.75) - (2.0f * std::abs(base->sample(x, 57.75)) - 1.0f)) <= 1.0e-7f);
+            }
             std::array<float, 32u> previous{};
             bool have_previous = false;
             for (const auto algorithm:
                 {ENoiseAlgorithm::open_simplex2, ENoiseAlgorithm::perlin, ENoiseAlgorithm::cellular_distance}) {
-                for (const auto fractal: {ENoiseFractal::none, ENoiseFractal::fbm, ENoiseFractal::ridged}) {
+                for (const auto fractal:
+                    {ENoiseFractal::none, ENoiseFractal::fbm, ENoiseFractal::ridged, ENoiseFractal::billow}) {
                     const NoiseFieldDesc desc{
                         .m_algorithm = algorithm,
                         .m_fractal = fractal,
@@ -757,6 +906,11 @@ namespace pP::tests::detail {
                         return values;
                     };
                     const auto expected = samples(*field);
+                    if (fractal == ENoiseFractal::billow) {
+                        PPR_TEST_ASSERT(std::ranges::all_of(expected, [](const float value) {
+                            return value >= -1.0f and value <= 1.0f;
+                        }));
+                    }
                     auto concurrent = std::async(std::launch::async, [&] { return samples(*field); });
                     PPR_TEST_ASSERT(samples(*field) == expected);
                     PPR_TEST_ASSERT(samples(*replay) == expected);
@@ -796,6 +950,18 @@ namespace pP::tests::detail {
         PPR_UNIT_TEST (noise_description_rejects_invalid_work_and_numeric_domains) {
             const NoiseFieldDesc valid{.m_frequency_per_metre = 0.025};
             PPR_TEST_ASSERT(compileNoiseField(valid, 42u).has_value());
+            auto transformed = valid;
+            transformed.m_axis_scale_x = 2.0;
+            transformed.m_axis_scale_y = 0.5;
+            transformed.m_rotation_degrees = 90.0;
+            auto scaled_field = compileNoiseField(transformed, 42u);
+            auto base_field = compileNoiseField(valid, 42u);
+            PPR_TEST_ASSERT(scaled_field and base_field);
+            PPR_TEST_ASSERT(std::abs(scaled_field->sample(12.0, 40.0) - base_field->sample(-20.0, 24.0)) < 1.0e-6f);
+            for (const double scale: {0.124, 8.001, std::numeric_limits<double>::quiet_NaN()}) {
+                transformed.m_axis_scale_x = scale;
+                PPR_TEST_ASSERT(validateNoiseFieldDescription(transformed) == std::errc::invalid_argument);
+            }
             for (const double frequency:
                 {0.0, -1.0, 1.0e-300, 1.0e300, std::numeric_limits<double>::infinity(),
                     std::numeric_limits<double>::quiet_NaN()}) {
@@ -969,10 +1135,12 @@ namespace pP::tests::detail {
             // chunk buffers; the serial observation includes one already.
             PPR_TEST_ASSERT(
                 parallel->m_report.m_known_phase_scratch_bytes[2u] >= serial->m_report.m_known_phase_scratch_bytes[2u]);
+            const auto working_raster = compileGenerationRaster(
+                parallel->m_plan, parallel->m_layout, parallel->m_geometry);
+            PPR_TEST_ASSERT(working_raster.has_value());
             PPR_TEST_ASSERT(
                 parallel->m_report.m_known_phase_scratch_bytes[2u] <=
-                serial->m_report.m_known_phase_scratch_bytes[2u] +
-                    3u * static_cast<u64>(kCellsPerChunk) * sizeof(Cell));
+                serial->m_report.m_known_phase_scratch_bytes[2u] + 3u * working_raster->chunkWorkingPayloadBytes());
             PPR_TEST_ASSERT(serial->m_layout.sites().size() == parallel->m_layout.sites().size());
             const auto [context, cancel] = context::withCancel(context::background());
             cancel();
@@ -998,6 +1166,9 @@ namespace pP::tests {
             detail::WorldGen::numeric_plan_rejects_invalid_references_bounds_and_collapsed_weights,
             detail::WorldGen::numeric_plan_accepts_granular_fills_and_exact_signed_thirds,
             detail::WorldGen::numeric_plan_preserves_authored_geometry_boundaries,
+            detail::WorldGen::biome_lining_stops_threshold_caves_and_replays_across_chunks,
+            detail::WorldGen::particle_seeding_replays_large_regions_with_coherent_positive_mass,
+            detail::WorldGen::particle_edits_are_local_atomic_and_pure_digs_preserve_frozen_records,
             detail::WorldGen::macro_layout_replays_spacing_and_spatial_nearest_matches_oracle,
             detail::WorldGen::macro_layout_reports_infeasible_constraints_and_cancellation,
             detail::WorldGen::macro_layout_satisfies_required_biomes_before_weighted_assignment,

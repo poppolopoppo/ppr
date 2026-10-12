@@ -140,6 +140,9 @@ namespace pP::sim {
                     biome.m_bands.empty() or
                     biome.m_bands.size() > 128u or
                     biome.m_deposits.size() > 128u or
+                    biome.m_lining_thickness_fine > 3u or
+                    ((biome.m_lining_material == 0u) != (biome.m_lining_thickness_fine == 0u)) or
+                    (biome.m_lining_material != 0u and not terrain(recipe, biome.m_lining_material)) or
                     not ordered(biome.m_bands) or
                     not ordered(biome.m_deposits)) {
                     PPR_RETURN_ERROR_ON_FAIL(WorldPlan, std::errc::invalid_argument);
@@ -351,7 +354,7 @@ namespace pP::sim {
                 rule.m_parameters);
         }
         [[nodiscard]] std::error_code validateRules(const GenerationRecipe &recipe) {
-            u64 worm_count = 0u, feature_count = 0u;
+            u64 worm_count = 0u, feature_count = 0u, origin_attempts = 0u;
             u32 connections = 0u;
             for (std::size_t i = 0u; i < recipe.m_rules.size(); ++i) {
                 const auto &rule = recipe.m_rules[i];
@@ -366,13 +369,18 @@ namespace pP::sim {
                 }
                 if (const auto *const worm = std::get_if<GenerationWorm>(&rule.m_parameters)) {
                     worm_count += worm->m_count;
+                    origin_attempts += static_cast<u64>(worm->m_count) * kGenerationWormOriginAttempts;
                 } else if (const auto *const placement = std::get_if<GenerationPlacement>(&rule.m_parameters)) {
                     feature_count += placement->m_max_count;
+                    origin_attempts += static_cast<u64>(placement->m_max_count) * placement->m_attempts;
                 } else if (std::holds_alternative<GenerationConnection>(rule.m_parameters)) {
                     ++connections;
                 }
             }
-            if (worm_count > 4096u or feature_count > 1024u or connections > 1u) {
+            if (worm_count > 4096u or
+                feature_count > 1024u or
+                connections > 1u or
+                origin_attempts > kMaxGenerationOriginAttempts) {
                 PPR_RETURN_ERROR_ON_FAIL(WorldPlan, std::errc::value_too_large);
             }
             return {};

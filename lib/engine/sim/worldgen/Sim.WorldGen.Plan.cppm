@@ -5,13 +5,16 @@ import engine.core;
 import std;
 
 export namespace pP::sim {
-    inline constexpr u32 kGeneratorAlgorithmVersion = 1u;
+    inline constexpr u32 kGeneratorAlgorithmVersion = 2u;
     inline constexpr u32 kMaxGenerationMaterials = 256u;
     inline constexpr u32 kMaxGenerationFields = 256u;
     inline constexpr u32 kMaxGenerationBiomes = 64u;
     inline constexpr u32 kMaxGenerationFeatures = 128u;
     inline constexpr u32 kMaxGenerationRules = 128u;
     inline constexpr u32 kMaxGenerationSites = 4096u;
+    inline constexpr u32 kGenerationWormOriginAttempts = 4096u;
+    // Bound the complete rejection-sampling budget before any geometry allocation.
+    inline constexpr u64 kMaxGenerationOriginAttempts = 4u * 1024u * 1024u;
 
     // Numeric owned input. Keys are stable stream identities compiled by the
     // caller; array indices are resolved references, never persistent identities.
@@ -55,6 +58,8 @@ export namespace pP::sim {
         double m_temperature_base_k{}, m_temperature_variation_k{};
         Array<GenerationBand> m_bands{};
         Array<GenerationDeposit> m_deposits{};
+        u16 m_lining_material{};
+        u32 m_lining_thickness_fine{};
     };
     enum class EGenerationShape : u8 {
         rectangle,

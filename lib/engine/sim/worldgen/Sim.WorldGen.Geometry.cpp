@@ -182,7 +182,8 @@ namespace pP::sim {
                     GenerationRandom random{generationStreamSeed(plan.seed(), rule.m_key, ordinal)};
                     double x = 0.0, y = 0.0;
                     bool found = false;
-                    for (u32 attempt = 0u; attempt < 64u; ++attempt) {
+                    for (u32 attempt = 0u; attempt < kGenerationWormOriginAttempts; ++attempt) {
+                        PPR_RETURN_ERROR_ON_FAIL(WorldGeometry, canceled(context));
                         x = boundary + (extent - 2.0 * boundary) * random.unit();
                         y = boundary + (extent - 2.0 * boundary) * random.unit();
                         const double depth = 1.0 - y / extent;

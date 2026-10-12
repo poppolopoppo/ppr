@@ -4,6 +4,7 @@ target_sources(engine.sim
   PUBLIC
     FILE_SET CXX_MODULES FILES
       Sim.cppm
+      particles/Sim.Particles.cppm
       chunk_grid/Sim.ChunkGrid.cppm
       ecs/Sim.Ecs.cppm
       footprint/Sim.Footprint.cppm
@@ -19,6 +20,7 @@ target_sources(engine.sim
       worldgen/Sim.WorldGen.Start.cppm
       worldgen/Sim.WorldGen.Result.cppm
   PRIVATE
+      particles/Sim.Particles.cpp
       chunk_grid/Sim.ChunkGrid.cpp
       ecs/Sim.Ecs.cpp
       tick/Sim.Tick.cpp

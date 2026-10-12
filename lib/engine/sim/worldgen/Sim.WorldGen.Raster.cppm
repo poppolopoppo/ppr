@@ -28,6 +28,7 @@ export namespace pP::sim {
         GenerationRaster &operator=(const GenerationRaster &) = delete;
         [[nodiscard]] Expected<Array<Cell>> chunk(ChunkPos position, const IContext *context = nullptr) const;
         [[nodiscard]] u64 indexPayloadBytes() const noexcept;
+        [[nodiscard]] u64 chunkWorkingPayloadBytes() const noexcept;
     };
     [[nodiscard]] Expected<GenerationRaster> compileGenerationRaster(
         const GenerationPlan &plan, const BiomeLayout &layout, const GenerationGeometry &geometry,

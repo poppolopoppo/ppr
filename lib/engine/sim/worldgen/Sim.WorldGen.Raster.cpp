@@ -107,14 +107,13 @@ namespace pP::sim {
             return material;
         }
         [[nodiscard]] Cell sample(
-            const GenerationPlan &plan, const BiomeLayout &layout, const GenerationGeometry &geometry,
-            const std::span<const u32> segments, const std::span<const u32> instances, const u32 x,
-            const u32 y) noexcept {
+            const GenerationPlan &plan, const GenerationGeometry &geometry, const std::span<const u32> segments,
+            const std::span<const u32> instances, const u32 x, const u32 y, const u32 biome_index,
+            const bool lining) noexcept {
             const auto &recipe = plan.recipe();
             const double scale = 1.0 / recipe.m_cell_size_m;
             const double xm = (x + 0.5) / scale, ym = (y + 0.5) / scale;
             const double depth = 1.0 - (y + 0.5) / kWorldEdge;
-            const u32 biome_index = generationBiomeAt(plan, layout, xm, ym);
             const auto &biome = recipe.m_biomes[biome_index];
             const float temperature = static_cast<float>(
                 biome.m_temperature_base_k +
@@ -132,12 +131,14 @@ namespace pP::sim {
                     break;
                 }
             }
-            u16 material = baseMaterial(plan, biome, depth, xm, ym);
+            u16 material = lining and reservation == nullptr ? biome.m_lining_material
+                                                             : baseMaterial(plan, biome, depth, xm, ym);
             bool portal = false;
             for (u32 r = 0u; r < recipe.m_rules.size(); ++r) {
                 const auto &rule = recipe.m_rules[r];
                 if (const auto *const cave = std::get_if<GenerationCave>(&rule.m_parameters)) {
-                    if (reservation != nullptr or
+                    if (lining or
+                        reservation != nullptr or
                         cave->m_biome != biome_index or
                         not depthContains(depth, cave->m_depth_min, cave->m_depth_max)) {
                         continue;
@@ -238,19 +239,63 @@ namespace pP::sim {
         }
         return bytes;
     }
+    u64 GenerationRaster::chunkWorkingPayloadBytes() const noexcept {
+        u32 padding = 0u;
+        for (const auto &biome: m_plan.recipe().m_biomes) {
+            padding = std::max(padding, biome.m_lining_thickness_fine);
+        }
+        const u64 edge = kChunkEdge + 2u * padding;
+        return kCellsPerChunk * sizeof(Cell) + edge * edge * sizeof(u32);
+    }
     Expected<Array<Cell>> GenerationRaster::chunk(const ChunkPos position, const IContext *const context) const {
         if (position.m_x >= kChunksPerEdge or position.m_y >= kChunksPerEdge) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(WorldRaster, std::errc::result_out_of_range);
         }
         PPR_RETURN_UNEXPECTED_ON_FAIL(WorldRaster, canceled(context));
-        const u32 index = position.m_y * kChunksPerEdge + position.m_x;
+        const auto &recipe = m_plan.recipe();
+        u32 padding = 0u;
+        for (const auto &biome: recipe.m_biomes) {
+            padding = std::max(padding, biome.m_lining_thickness_fine);
+        }
+        const u32 edge = kChunkEdge + 2u * padding;
+        Array<u32> biomes(edge * edge);
+        for (u32 y = 0u; y < edge; ++y) {
+            PPR_RETURN_UNEXPECTED_ON_FAIL(WorldRaster, canceled(context));
+            for (u32 x = 0u; x < edge; ++x) {
+                const double gx = std::clamp(
+                    static_cast<double>(position.m_x * kChunkEdge + x) - padding + 0.5, 0.5, kWorldEdge - 0.5);
+                const double gy = std::clamp(
+                    static_cast<double>(position.m_y * kChunkEdge + y) - padding + 0.5, 0.5, kWorldEdge - 0.5);
+                biomes[y * edge + x] = generationBiomeAt(
+                    m_plan, m_layout, gx * recipe.m_cell_size_m, gy * recipe.m_cell_size_m);
+            }
+        }
         Array<Cell> cells(kCellsPerChunk);
+        const u32 bucket = position.m_y * kChunksPerEdge + position.m_x;
         for (u32 y = 0u; y < kChunkEdge; ++y) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(WorldRaster, canceled(context));
             for (u32 x = 0u; x < kChunkEdge; ++x) {
+                const u32 at = (y + padding) * edge + x + padding;
+                const u32 biome_index = biomes[at];
+                const auto &biome = recipe.m_biomes[biome_index];
+                bool lining = false;
+                const i32 radius = static_cast<i32>(biome.m_lining_thickness_fine);
+                for (i32 dy = -radius; dy <= radius and not lining; ++dy) {
+                    const i32 horizontal = radius - std::abs(dy);
+                    for (i32 dx = -horizontal; dx <= horizontal; ++dx) {
+                        const i64 neighbor = static_cast<i64>(at) + dy * static_cast<i64>(edge) + dx;
+                        if (biomes[static_cast<std::size_t>(neighbor)] != biome_index) {
+                            lining = true;
+                            break;
+                        }
+                    }
+                }
+                // Full bounded Manhattan distance, including diagonal neighbors.
+                // The immutable biome halo makes province separators independent of
+                // chunk scheduling. Threshold caves stop here; deliberate carves cross.
                 cells[y * kChunkEdge + x] = sample(
-                    m_plan, m_layout, m_geometry, m_segments[index], m_instances[index], position.m_x * kChunkEdge + x,
-                    position.m_y * kChunkEdge + y);
+                    m_plan, m_geometry, m_segments[bucket], m_instances[bucket], position.m_x * kChunkEdge + x,
+                    position.m_y * kChunkEdge + y, biome_index, lining);
             }
         }
         return cells;
@@ -265,7 +310,7 @@ namespace pP::sim {
                     *known_scratch_peak = std::max(
                         *known_scratch_peak,
                         raster.indexPayloadBytes() +
-                            static_cast<u64>(peak.load(std::memory_order_relaxed)) * kCellsPerChunk * sizeof(Cell));
+                            static_cast<u64>(peak.load(std::memory_order_relaxed)) * raster.chunkWorkingPayloadBytes());
                 }
             };
             const auto fill = [&](const u32 c) -> std::error_code {

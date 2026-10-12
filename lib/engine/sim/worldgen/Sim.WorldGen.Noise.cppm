@@ -14,7 +14,8 @@ export namespace pP::sim {
     enum class ENoiseFractal : u8 {
         none,
         fbm,
-        ridged
+        ridged,
+        billow
     };
 
     struct NoiseFieldDesc {
@@ -26,6 +27,9 @@ export namespace pP::sim {
         double m_gain{0.5};
         double m_warp_amplitude_m{};
         double m_warp_frequency_per_metre{0.006};
+        double m_axis_scale_x{1.0};
+        double m_axis_scale_y{1.0};
+        double m_rotation_degrees{};
     };
 
     // Covers the fixed world's metre coordinates with room for local masks.

@@ -16,3 +16,5 @@ export import :worldgen.raster;
 export import :worldgen.matter;
 export import :worldgen.start;
 export import :worldgen.result;
+
+export import :particles;
