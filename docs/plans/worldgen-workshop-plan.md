@@ -1,6 +1,6 @@
 # Worldgen Workshop — proposed implementation plan
 
-Status: prepared by GPT-6 Astra from the current repository; implementation requested by the user after visual acceptance of the generation changes. Sol owns implementation and integration; Luna explores; Astra reviews without editing. Builds and executable checks remain serialized.
+Status: prepared by GPT-6 Astra; first-release implementation approved for committing, with user visual validation pending. Sol owns implementation and integration; Luna explores; Astra reviews without editing. Builds remain serialized; further validation stays focused on changed behavior.
 
 ## Goal and first release
 
@@ -22,13 +22,15 @@ Biome controls cover composition weights and ordered beds, field/material refere
 
 Start with explicit Preview, Undo/Redo, and Revert. Add debounced live regeneration after measuring responsiveness. Keep keys and numeric IDs stable initially; renaming, deletion, cloning, and pack creation require a later authoring increment.
 
+User refinement: make the undo/redo mechanism reusable by other clients. A small content-free typed command history belongs in the shared engine layer, with owning command values, bounded storage, redo invalidation, caller-supplied apply/revert operations, and explicit absence/failure results. It retains no callbacks or borrowed client state. Workshop-specific source patches, coalescing policy, and disk dirty baselines remain game-owned.
+
 ## Preview design and limits
 
 Start with a **Biome sample**, not an exact crop of a generated world. Use a deterministic fixed sample domain, selected biome and profile rules, and chosen global position/depth. A starting size of 256×256 fine cells is approximately 85×85 metres at the existing metric; larger selectable sizes follow measurement.
 
 Reuse production geology, caves, pores, material filters, detail, appended prototype erosion, and formation evaluation. Build an explicit preview context without modifying the authored pack to force a biome into the sample. Show which profile rules participate. Allow explicit feature placement for inspection later.
 
-Preserve global noise/random coordinate anchoring. Rasterize support outside the visible sample and crop only for presentation. The existing 24-cell filter halo is only part of the required support: formation roots, support checks, footprints, and rendering seams also need context. Panning within a generated sample must not change its contents.
+Preserve global noise/random coordinate anchoring. Rasterize support outside the visible sample. Implemented refinement: retain complete support chunks in presentation and mark the sample interior with a cyan outline; crop counts and exports to the interior. The existing 24-cell filter halo is only part of the required support: formation roots, support checks, footprints, and rendering seams also need context. Panning within a generated sample must not change its contents.
 
 ### Formation prerequisite
 
@@ -73,7 +75,7 @@ Reuse the P6 PPM writer, material/biome colors, and temperature ramp in `WorldGe
 
 Write `preview.json` containing sample semantics, generator/export versions, pack/profile/biome, full seed, sample/support bounds, metric, participating rules/overrides, formation-domain semantics, content fingerprint, cell checksum, sampling dimensions, and camera/display settings. Include the exact validated manifest and six-document source snapshot used by that preview under `source/`. The smaller first release records referenced asset identities and explicitly requires the original unchanged asset root; a self-contained asset bundle can follow.
 
-Export off-main from immutable owned data into a fresh directory, writing a completion manifest last. Report failure/cancellation and the partial-output location. When textured presentation lands, export a matching `textured.ppm` through asynchronous render-owned readback after GPU completion; do not invoke the blocking diagnostic capture host from the UI thread.
+Export off-main from immutable owned data into a fresh directory, writing a completion manifest last. Report failure/cancellation and the partial-output location. Textured presentation is implemented; textured-image export is separately deferred. A later matching `textured.ppm` export should use asynchronous render-owned readback after GPU completion; do not invoke the blocking diagnostic capture host from the UI thread.
 
 ## Ownership and jobs
 

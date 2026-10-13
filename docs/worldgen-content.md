@@ -616,6 +616,65 @@ solid removes only a center that becomes covered. Terrain, collider and particle
 candidates publish together. No flow, gravity, pressure or phase-change solver runs.
 
 
+## In-game Worldgen Workshop
+
+Open **Worldgen Workshop** from the colony panel, or start directly without
+generating a complete world:
+
+```text
+app.game --worldgen-workshop --worldgen-root=E:/Code/ppr/assets/worldgen/default
+```
+
+Choose an explicit authored pack root. The executable-adjacent `worldgen/default`
+directory is staged output and may be replaced by a build; it is not inferred to
+be an editable repository source directory.
+
+The browser shows the opened pack, materials/elements, fields, biomes, features,
+world profiles, backgrounds and textures. The first authoring surface edits
+existing biome scalar values and nested composition/deposit properties. Keys and
+numeric IDs remain stable; other categories are inspectable with source and
+reference information. Cave and worm rules retain their actual world-profile
+ownership.
+
+Use a fixed seed, profile and sample origin, then **Preview** to compare edits.
+The laboratory generates a 256-by-256 fine-cell biome sample, approximately
+85-by-85 metres, with at most 25 resident support chunks. It reuses production
+geology, pores, worms, material filters, appended erosion and supported formation
+evaluation. It omits global start areas, authored feature reservations,
+connections, initial matter and whole-world playability validation. This is a
+**Biome sample**, not an exact crop of a complete generated world.
+
+The cyan outline marks the sample interior. Complete support chunks remain
+visible outside it for contours and formations; counts and exports refer only to
+the interior. Textured, material, biome and temperature views use the real
+GridPass. Temperature display and export use 200–1000 K.
+
+Edits have Undo/Redo and Revert. Invalid drafts retain the last validated catalog
+and successful preview. Preview and I/O run on owned background snapshots; Cancel
+and newer requests cannot publish an obsolete result. Open, Reload and application
+exit require an explicit decision before discarding dirty drafts.
+
+**Save biomes** validates against the current rest of the pack and writes the
+biome document while preserving comments, line endings and untouched text. Disk
+conflicts retain the draft. An accepted save advances the session revision; it
+advances validation to that revision when the saved draft still matches. Edits
+made while saving remain dirty. Simultaneous external writes during the
+optimistic commit are unsupported.
+
+**Export Preview** writes material, biome and temperature P6 PPM images,
+`preview.json`, and the exact validated manifest/source snapshot used by the
+completed preview, including unsaved edits. Images contain one pixel per visible
+fine cell, with highest +Y first. Use a fresh output directory; completion metadata
+is written last. Referenced texture identities are recorded, but assets are not
+copied: reproduction requires the original unchanged asset root.
+
+Returning from Workshop restores the retained game presentation, camera and
+pause state without regenerating its terrain. Shared `engine.core` command history
+owns bounded reversible edits; content-specific patches and disk dirty state stay
+in the game authoring session.
+
+## Command-line diagnostics
+
 Build `app.game` or `game.tests` to synchronize the build-owned `worldgen` tree,
 including deleted assets, without needing a C++ relink. Then run from any folder:
 
