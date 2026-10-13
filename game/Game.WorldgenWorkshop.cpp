@@ -23,6 +23,21 @@ namespace pP::colony {
             kFineCellsPerMetre, kReferenceThicknessMetres);
         packet.m_world_generation = revision;
         packet.m_full_refresh = true;
+        // Preview particles already carry canonical production IDs. Convert the
+        // bounded immutable batches without constructing a partial game driver.
+        for (const auto &batch: preview.m_particles.m_chunks) {
+            PPR_RETURN_UNEXPECTED_ON_FAIL(Workshop, context.error());
+            Array<GridParticleInstance> particles;
+            particles.reserve(batch.m_particles->size());
+            for (const auto &particle: *batch.m_particles) {
+                particles.push_back(
+                    {particle.m_id, particle.m_x_m, particle.m_y_m, particle.m_volume_m3, particle.m_mass_kg,
+                        particle.m_temperature_k, particle.m_material, static_cast<u32>(particle.m_phase)});
+            }
+            packet.m_particle_batches.push_back(
+                {sim::chunkIndexOf(batch.m_position),
+                    std::make_shared<const Array<GridParticleInstance>>(std::move(particles))});
+        }
         if (preview.m_plan.recipe().m_open_surface) {
             auto surface = std::make_shared<GridSurfaceProfile>();
             surface->m_cell_size_m = packet.m_cell_size_m;
@@ -81,7 +96,10 @@ namespace pP::colony {
                 upload.m_diagnostic_indices.resize(sim::kCellsPerChunk);
                 for (u32 i = 0u; i < sim::kCellsPerChunk; ++i) {
                     if (mode == EGridDiagnosticMode::biome) {
-                        upload.m_diagnostic_indices[i] = static_cast<u16>(preview.m_biome_index + 1u);
+                        const double x = (position.m_x * sim::kChunkEdge + i % sim::kChunkEdge + 0.5) * kFineCellMetres;
+                        const double y = (position.m_y * sim::kChunkEdge + i / sim::kChunkEdge + 0.5) * kFineCellMetres;
+                        upload.m_diagnostic_indices[i] = static_cast<u16>(
+                            sim::generationBiomeAt(preview.m_plan, preview.m_layout, x, y) + 1u);
                     } else if ((*cells)[i].m_element != 0u) {
                         const double unit = std::clamp(
                             (static_cast<double>((*cells)[i].m_temperature) - 200.0) / 800.0, 0.0, 1.0);
@@ -122,10 +140,13 @@ namespace pP::colony {
         std::shared_ptr<const ContentCatalog> m_catalog{};
         std::optional<ContentAuthoringSaveResult> m_saved{};
         std::optional<WorldgenPreviewResult> m_preview{};
+        std::shared_ptr<const WorldgenPreviewWorld> m_world{}, m_retired_world{};
         std::unique_ptr<GridPass::GridStagedFrame> m_stage{};
         std::string m_diagnostic_text{};
     };
-    WorldgenWorkshop::WorldgenWorkshop(ParallelScheduler &pool) : m_pool(pool) {
+    WorldgenWorkshop::WorldgenWorkshop(
+        ParallelScheduler &pool, const ITimerClock &clock, ParallelScheduler *const generation_pool)
+        : m_pool(pool), m_clock(clock), m_generation_pool(generation_pool) {
     }
     WorldgenWorkshop::~WorldgenWorkshop() noexcept {
         PPR_LOG_WARNING_ON_FAIL(Workshop, shutdown());
@@ -144,6 +165,17 @@ namespace pP::colony {
     }
     std::string_view WorldgenWorkshop::diagnostics() const noexcept {
         return m_diagnostics;
+    }
+    std::span<const config::Diagnostic> WorldgenWorkshop::propertyDiagnostics() const noexcept {
+        if (not m_session or m_diagnostic_root != m_session->root() or m_diagnostic_revision != m_session->revision()) {
+            return {};
+        }
+        return m_property_diagnostics.entries();
+    }
+    bool WorldgenWorkshop::draftInvalid() const noexcept {
+        return m_session and
+               m_invalid_draft_root == m_session->root() and
+               m_invalid_draft_revision == m_session->revision();
     }
     bool WorldgenWorkshop::busy() const noexcept {
         return m_running != nullptr or m_replacement != nullptr;
@@ -178,21 +210,51 @@ namespace pP::colony {
     std::error_code WorldgenWorkshop::validate() {
         PPR_RETURN_ERROR_ON_FAIL(
             Workshop, m_session ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
+        if (explicitOperationPending_()) {
+            m_validation_pending = true;
+            return {};
+        }
         Request request{};
         request.m_kind = Request::Kind::validate;
         request.m_snapshot = m_session->draftSnapshot();
-        return queue_(std::move(request));
+        PPR_RETURN_ERROR_ON_FAIL(Workshop, queue_(std::move(request)));
+        m_validation_pending = false;
+        return {};
     }
     std::error_code WorldgenWorkshop::requestPreview(WorldgenPreviewSpec spec, const EGridDiagnosticMode mode) {
         PPR_RETURN_ERROR_ON_FAIL(
             Workshop, m_session ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
+        PPR_RETURN_ERROR_ON_FAIL(
+            Workshop, not explicitOperationPending_() ? std::error_code{}
+                                                      : std::make_error_code(std::errc::device_or_resource_busy));
         Request request{};
         request.m_kind = Request::Kind::preview;
         request.m_snapshot = m_session->draftSnapshot();
         spec.m_revision = request.m_snapshot->m_revision;
-        request.m_spec = std::move(spec);
+        request.m_spec = spec;
         request.m_mode = mode;
-        return queue_(std::move(request));
+        PPR_RETURN_ERROR_ON_FAIL(Workshop, queue_(std::move(request)));
+        m_live_spec = std::move(spec);
+        m_live_mode = mode;
+        m_live_pending = false;
+        m_validation_pending = false;
+        return {};
+    }
+    void WorldgenWorkshop::configureLivePreview(
+        const bool enabled, WorldgenPreviewSpec spec, const EGridDiagnosticMode mode) {
+        if (not enabled or not m_session or m_closing) {
+            m_live_enabled = false;
+            m_live_pending = false;
+            return;
+        }
+        spec.m_revision = m_session->revision();
+        if (not m_live_enabled or not m_live_spec or *m_live_spec != spec or m_live_mode != mode) {
+            m_live_spec = std::move(spec);
+            m_live_mode = mode;
+            m_live_due = m_clock.now() + std::chrono::milliseconds{350};
+            m_live_pending = true;
+        }
+        m_live_enabled = true;
     }
     std::error_code WorldgenWorkshop::save() {
         PPR_RETURN_ERROR_ON_FAIL(
@@ -217,11 +279,14 @@ namespace pP::colony {
         return queue_(std::move(request));
     }
     void WorldgenWorkshop::cancel() noexcept {
+        m_live_pending = false;
+        m_validation_pending = false;
         if (m_running) {
             m_running->m_cancel(std::make_error_code(std::errc::operation_canceled));
         }
         m_replacement.reset();
         ++m_latest_request;
+        m_status = "Cancellation requested. Draft and last good preview retained.";
     }
     void WorldgenWorkshop::close() noexcept {
         m_closing = true;
@@ -229,6 +294,13 @@ namespace pP::colony {
     }
     std::unique_ptr<GridPass::GridStagedFrame> WorldgenWorkshop::takePresentation() {
         return std::move(m_presentation);
+    }
+    bool WorldgenWorkshop::explicitOperationPending_() const noexcept {
+        const auto explicit_operation = [](const Request::Kind kind) {
+            return kind == Request::Kind::open or kind == Request::Kind::save or kind == Request::Kind::export_preview;
+        };
+        return (m_running and explicit_operation(m_running->m_request.m_kind)) or
+               (m_replacement and explicit_operation(m_replacement->m_kind));
     }
     std::error_code WorldgenWorkshop::update() {
         if (m_running and m_task.valid() and m_task.wait_for(std::chrono::seconds{0}) == std::future_status::ready) {
@@ -240,10 +312,54 @@ namespace pP::colony {
             if (state->m_saved and m_session and state->m_saved->m_snapshot.m_root == m_session->root()) {
                 (void) m_session->acceptSave(std::move(*state->m_saved));
             }
+            if (error == std::errc::operation_canceled and not m_replacement and not m_closing) {
+                m_status = "Cancelled. Draft and last good preview retained.";
+            }
             if (state->m_request.m_id == m_latest_request and not m_closing) {
                 m_diagnostics = state->m_diagnostic_text;
-                if (error) {
-                    m_status = "Request failed: " + error.message() + ". Draft and last good preview retained.";
+                const bool diagnostic_matches = m_session and
+                                                state->m_request.m_snapshot and
+                                                state->m_request.m_snapshot->m_root == m_session->root() and
+                                                state->m_request.m_snapshot->m_revision == m_session->revision();
+                if (diagnostic_matches and
+                    error != std::errc::operation_canceled and
+                    state->m_request.m_kind != Request::Kind::export_preview) {
+                    m_property_diagnostics = state->m_diagnostics;
+                    m_diagnostic_root = m_session->root();
+                    m_diagnostic_revision = m_session->revision();
+                }
+                // Operational and rejected-edit errors do not invalidate source.
+                // Only a completed catalog validation controls preview admission.
+                if (diagnostic_matches and
+                    error != std::errc::operation_canceled and
+                    (state->m_request.m_kind == Request::Kind::validate or
+                        state->m_request.m_kind == Request::Kind::preview)) {
+                    if (not state->m_catalog and state->m_diagnostics.hasErrors()) {
+                        m_invalid_draft_root = m_session->root();
+                        m_invalid_draft_revision = m_session->revision();
+                    } else if (state->m_catalog) {
+                        m_invalid_draft_root.clear();
+                        m_invalid_draft_revision = 0u;
+                    }
+                }
+                if (error == std::errc::operation_canceled) {
+                    m_status = "Cancelled. Draft and last good preview retained.";
+                } else if (error) {
+                    constexpr std::string_view operations[]{
+                        "Open pack", "Validate draft", "Generate preview", "Save pack", "Export preview"};
+                    m_status = std::string{operations[static_cast<std::size_t>(state->m_request.m_kind)]} +
+                               " failed: " +
+                               error.message() +
+                               ". Draft and last good preview retained.";
+                    if (state->m_diagnostics.hasErrors()) {
+                        const auto &first = state->m_diagnostics.entries().front();
+                        m_status += "\n" + first.m_property + ": " + first.m_message;
+                    } else if (state->m_request.m_kind == Request::Kind::open or
+                               state->m_request.m_kind == Request::Kind::save) {
+                        const auto &path = state->m_request.m_snapshot ? state->m_request.m_snapshot->m_root
+                                                                       : state->m_request.m_path;
+                        m_status += "\nPack root: " + path.string();
+                    }
                     if (state->m_request.m_kind == Request::Kind::export_preview) {
                         m_status += " Partial output may remain at " + state->m_request.m_path.string();
                     }
@@ -256,7 +372,15 @@ namespace pP::colony {
                     }
                     if (state->m_opened) {
                         state->m_retired_session = std::move(m_session);
+                        state->m_retired_world = std::move(m_world_cache);
+                        m_live_spec.reset();
+                        m_live_pending = false;
                         m_session = std::move(state->m_opened);
+                        m_property_diagnostics.clear();
+                        m_diagnostic_root.clear();
+                        m_diagnostic_revision = 0u;
+                        m_invalid_draft_root.clear();
+                        m_invalid_draft_revision = 0u;
                     }
                     if (m_session and state->m_catalog and state->m_request.m_snapshot) {
                         (void) m_session->acceptValidation(state->m_request.m_snapshot->m_revision, state->m_catalog);
@@ -266,6 +390,9 @@ namespace pP::colony {
                                           state->m_request.m_snapshot->m_root == m_session->root() and
                                           state->m_request.m_snapshot->m_revision == m_session->revision();
                     if (state->m_preview and matching) {
+                        if (state->m_world) {
+                            m_world_cache = state->m_world;
+                        }
                         m_retired_preview = std::move(m_last_preview);
                         m_last_preview = state;
                         m_presentation = std::move(state->m_stage);
@@ -276,17 +403,37 @@ namespace pP::colony {
                 }
             }
         }
+        // Explicit I/O owns its snapshot until completion. Live edits may replace
+        // numerical work, but must never cancel a save, open, or export.
+        if (m_validation_pending and not m_closing and not explicitOperationPending_()) {
+            PPR_RETURN_ERROR_ON_FAIL(Workshop, validate());
+        }
+        if (m_live_pending and
+            m_live_spec and
+            m_live_enabled and
+            not m_closing and
+            not explicitOperationPending_() and
+            m_clock.now() >= m_live_due) {
+            if (draftInvalid()) {
+                m_live_pending = false;
+                m_status = "Live preview paused: fix the highlighted properties. Your last good preview is retained.";
+            } else {
+                PPR_RETURN_ERROR_ON_FAIL(Workshop, requestPreview(*m_live_spec, m_live_mode));
+            }
+        }
         if (m_running or not m_replacement or m_closing) {
             return {};
         }
         auto state = std::make_shared<State>();
         state->m_request = *m_replacement;
+        state->m_world = m_world_cache;
         std::tie(state->m_context, state->m_cancel) = context::withCancelClause(context::background());
         // Retain the previous completed task until a worker owns its final disposal.
         const auto retired = m_completed;
         const auto retired_preview = m_retired_preview;
         auto task = m_pool.schedule(
-            [state, retired, retired_preview](const IContext &) -> std::error_code {
+            [state, retired, retired_preview, clock = &m_clock, generation_pool = m_generation_pool](
+                const IContext &) -> std::error_code {
                 auto execute = [&]() -> std::error_code {
                     PPR_RETURN_ERROR_ON_FAIL(Workshop, state->m_context->error());
                     auto &request = state->m_request;
@@ -300,6 +447,7 @@ namespace pP::colony {
                             *request.m_snapshot, state->m_diagnostics, state->m_context.get());
                         PPR_RETURN_ERROR_ON_FAIL(Workshop, saved);
                         state->m_saved = std::move(*saved);
+                        PPR_RETURN_ERROR_ON_FAIL(Workshop, state->m_saved->m_error);
                     } else if (request.m_kind == Request::Kind::export_preview) {
                         PPR_RETURN_ERROR_ON_FAIL(
                             Workshop,
@@ -312,7 +460,19 @@ namespace pP::colony {
                         PPR_RETURN_ERROR_ON_FAIL(Workshop, catalog);
                         state->m_catalog = *catalog;
                         if (request.m_kind == Request::Kind::preview) {
-                            auto preview = prepareWorldgenPreview(**catalog, request.m_spec, state->m_context.get());
+                            if (request.m_spec.m_mode == EWorldgenPreviewMode::whole_world_crop) {
+                                if (not state->m_world or not state->m_world->matches(**catalog, request.m_spec)) {
+                                    state->m_world.reset();
+                                    auto world = prepareWorldgenPreviewWorld(
+                                        **catalog, request.m_spec, *clock, state->m_context.get(), generation_pool);
+                                    PPR_RETURN_ERROR_ON_FAIL(Workshop, world);
+                                    state->m_world = std::move(*world);
+                                }
+                            } else {
+                                state->m_world.reset();
+                            }
+                            auto preview = prepareWorldgenPreview(
+                                **catalog, request.m_spec, state->m_context.get(), state->m_world);
                             PPR_RETURN_ERROR_ON_FAIL(Workshop, preview);
                             auto stage = captureWorldgenPreviewPresentation(
                                 *preview, request.m_mode, request.m_id, *state->m_context);
@@ -367,6 +527,8 @@ namespace pP::colony {
         m_last_preview.reset();
         m_retired_preview.reset();
         m_presentation.reset();
+        m_world_cache.reset();
+        m_live_spec.reset();
         m_session.reset();
         return error;
     }

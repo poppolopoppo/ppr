@@ -313,11 +313,15 @@ namespace demo {
         bool m_workshop_startup{}, m_workshop_pending{}, m_workshop_open{}, m_workshop_capturing{},
             m_workshop_closing{}, m_workshop_restoring{};
         bool m_workshop_pause{}, m_workshop_focused{}, m_workshop_displayed{};
+        EGridDiagnosticMode m_workshop_displayed_mode{EGridDiagnosticMode::textured};
         float3 m_workshop_game_eye{zero_v};
         float m_workshop_game_scale{0.5f};
         std::optional<float3> m_workshop_game_follow{};
         u64 m_workshop_epoch{1ull << 63u};
         std::string m_workshop_error{};
+        config::Diagnostics m_workshop_edit_diagnostics{32u};
+        u64 m_workshop_edit_diagnostics_revision{};
+        std::filesystem::path m_workshop_edit_diagnostics_root{};
         mutable std::atomic<bool> m_close_requested{};
         std::atomic<bool> m_defer_close{};
         bool m_loading_presented{};
@@ -3283,8 +3287,10 @@ namespace demo {
             enableFrameAdmissionObservations(m_worldgen_report);
             m_agent_count = 1u;
             m_workshop_startup = settings.m_command == game::EGameCommand::worldgen_workshop;
-            m_workshop_root = settings.m_worldgen_root ? std::filesystem::path{*settings.m_worldgen_root}
-                                                       : std::filesystem::path{};
+            m_worldgen_root = settings.m_worldgen_root
+                                  ? *settings.m_worldgen_root
+                                  : hal::process::currentExecutablePath().parent_path() / "worldgen" / "default";
+            m_workshop_root = m_worldgen_root;
             std::snprintf(
                 m_workshop_ui.m_root.data(), m_workshop_ui.m_root.size(), "%s", m_workshop_root.string().c_str());
             std::snprintf(
@@ -3292,9 +3298,6 @@ namespace demo {
                 settings.m_worldgen_profile.c_str());
             std::snprintf(m_workshop_ui.m_biome.data(), m_workshop_ui.m_biome.size(), "%s", "hearth");
             m_workshop_ui.m_seed = settings.m_worldgen_seed;
-            m_worldgen_root = settings.m_worldgen_root
-                                  ? *settings.m_worldgen_root
-                                  : hal::process::currentExecutablePath().parent_path() / "worldgen" / "default";
             m_worldgen_profile = settings.m_worldgen_profile;
             m_requested_seed = settings.m_worldgen_seed;
         }
@@ -3329,10 +3332,31 @@ namespace demo {
             m_display_baseline = baseline;
         }
 
+        [[nodiscard]] colony::WorldgenPreviewSpec workshopSpec_() const {
+            return {
+                std::string{m_workshop_ui.m_profile.data()}, std::string{m_workshop_ui.m_biome.data()},
+                m_workshop_ui.m_seed, 0u,
+                {static_cast<u32>(m_workshop_ui.m_origin[0]), static_cast<u32>(m_workshop_ui.m_origin[1])},
+                m_workshop_ui.m_preview_mode};
+        }
+
         [[nodiscard]] bool workshopPreviewMatches_(
-            const colony::WorldgenPreviewResult &preview, const std::filesystem::path &root) const {
+            const colony::WorldgenPreviewResult &preview, const std::filesystem::path &root,
+            const EGridDiagnosticMode mode) const {
             const auto *const session = m_workshop->session();
-            if (not session or root != session->root() or preview.m_spec.m_revision != session->revision()) {
+            if (not session or
+                root != session->root() or
+                preview.m_spec.m_revision != session->revision() or
+                mode != m_workshop_ui.m_mode) {
+                return false;
+            }
+            const auto desired = workshopSpec_();
+            if (preview.m_spec.m_profile != desired.m_profile or
+                preview.m_spec.m_seed != desired.m_seed or
+                preview.m_spec.m_origin != desired.m_origin or
+                preview.m_spec.m_mode != desired.m_mode or
+                (desired.m_mode == colony::EWorldgenPreviewMode::biome_sample and
+                    preview.m_spec.m_biome != desired.m_biome)) {
                 return false;
             }
             if (session->validatedRevision() != session->revision()) {
@@ -3369,6 +3393,12 @@ namespace demo {
             if (m_workshop_transition != WorkshopTransition::none) {
                 return {};
             }
+            // Reject invalid input before entering a transition that would keep
+            // reopening the unsaved-edits modal on each attempted Open.
+            PPR_RETURN_ERROR_ON_FAIL(
+                Demo, transition != WorkshopTransition::open or not root.empty()
+                          ? std::error_code{}
+                          : std::make_error_code(std::errc::invalid_argument));
             m_workshop_transition = transition;
             m_workshop_transition_root = std::move(root);
             auto *const session = m_workshop->session();
@@ -3534,6 +3564,7 @@ namespace demo {
                             m_workshop_displayed = true;
                             m_workshop_displayed_preview = std::move(m_workshop_staged_preview);
                             m_workshop_displayed_root = std::move(m_workshop_staged_root);
+                            m_workshop_displayed_mode = m_workshop_stage->m_diagnostic_mode;
                             m_workshop_stage.reset();
                             m_workshop_staged_preview.reset();
                             if (m_workshop_restoring) {
@@ -3555,7 +3586,8 @@ namespace demo {
             if (m_workshop_stage and
                 not m_workshop_restoring and
                 m_workshop_staged_preview and
-                not workshopPreviewMatches_(*m_workshop_staged_preview, m_workshop_staged_root) and
+                not workshopPreviewMatches_(
+                    *m_workshop_staged_preview, m_workshop_staged_root, m_workshop_stage->m_diagnostic_mode) and
                 not activationPending_()) {
                 m_candidate_cancel_needed = true;
             }
@@ -3619,6 +3651,16 @@ namespace demo {
 
         void drawWorkshop_() {
             auto *const session = m_workshop->session();
+            Array<config::Diagnostic> property_diagnostics;
+            const auto worker_diagnostics = m_workshop->propertyDiagnostics();
+            property_diagnostics.assign(worker_diagnostics.begin(), worker_diagnostics.end());
+            if (session and
+                m_workshop_edit_diagnostics_root == session->root() and
+                m_workshop_edit_diagnostics_revision == session->revision()) {
+                property_diagnostics.insert(
+                    property_diagnostics.end(), m_workshop_edit_diagnostics.entries().begin(),
+                    m_workshop_edit_diagnostics.entries().end());
+            }
             const colony::WorldgenPanelView view{
                 .m_source = session ? &session->draftSource() : nullptr,
                 .m_catalog = session ? session->validatedCatalog().get() : nullptr,
@@ -3632,11 +3674,16 @@ namespace demo {
                 .m_publishing = m_workshop_stage != nullptr,
                 .m_closing = m_workshop_closing or m_workshop_transition != WorkshopTransition::none,
                 .m_preview_current = m_workshop_displayed_preview and
-                                     workshopPreviewMatches_(*m_workshop_displayed_preview, m_workshop_displayed_root),
+                                     workshopPreviewMatches_(
+                                         *m_workshop_displayed_preview, m_workshop_displayed_root,
+                                         m_workshop_displayed_mode),
                 .m_can_export = m_workshop_displayed_preview and
                                 m_workshop_displayed_preview.get() == m_workshop->preview(),
+                .m_draft_invalid = m_workshop->draftInvalid(),
                 .m_status = m_workshop_error.empty() ? m_workshop->status() : std::string_view{m_workshop_error},
-                .m_diagnostics = m_workshop->diagnostics()};
+                .m_diagnostics = m_workshop->diagnostics(),
+                .m_property_diagnostics = property_diagnostics,
+                .m_diagnostics_revision = session ? session->revision() : 0u};
             for (const auto &intent: colony::drawWorldgenPanel(m_workshop_ui, view)) {
                 std::error_code error{};
                 config::Diagnostics diagnostics{32u};
@@ -3646,13 +3693,9 @@ namespace demo {
                             WorkshopTransition::open, std::filesystem::path{m_workshop_ui.m_root.data()});
                         break;
                     case colony::EWorkshopIntent::preview:
-                        error = m_workshop->requestPreview(
-                            {std::string{m_workshop_ui.m_profile.data()}, std::string{m_workshop_ui.m_biome.data()},
-                                m_workshop_ui.m_seed, 0u,
-                                {static_cast<u32>(m_workshop_ui.m_origin[0]),
-                                    static_cast<u32>(m_workshop_ui.m_origin[1])}},
-                            m_workshop_ui.m_mode);
+                        error = m_workshop->requestPreview(workshopSpec_(), m_workshop_ui.m_mode);
                         break;
+                    case colony::EWorkshopIntent::preview_settings_changed: break;
                     case colony::EWorkshopIntent::cancel:
                         m_workshop->cancel();
                         m_workshop_queued.reset();
@@ -3693,6 +3736,29 @@ namespace demo {
                             }
                         }
                         break;
+                    case colony::EWorkshopIntent::edit_definition:
+                    case colony::EWorkshopIntent::clear_property:
+                    case colony::EWorkshopIntent::clone_definition:
+                    case colony::EWorkshopIntent::delete_definition:
+                        if (session) {
+                            if (intent.m_kind == colony::EWorkshopIntent::edit_definition) {
+                                error = session->editDefinition(
+                                    intent.m_document, intent.m_key, intent.m_property, intent.m_value, diagnostics);
+                            } else if (intent.m_kind == colony::EWorkshopIntent::clear_property) {
+                                error = session->clearDefinitionProperty(
+                                    intent.m_document, intent.m_key, intent.m_property, diagnostics);
+                            } else if (intent.m_kind == colony::EWorkshopIntent::clone_definition) {
+                                error = session->cloneDefinition(
+                                    intent.m_document, intent.m_source_key, intent.m_key, intent.m_numeric_id,
+                                    diagnostics);
+                            } else {
+                                error = session->deleteDefinition(intent.m_document, intent.m_key, diagnostics);
+                            }
+                            if (not error) {
+                                error = m_workshop->validate();
+                            }
+                        }
+                        break;
                     case colony::EWorkshopIntent::export_preview: {
                         const auto &camera = getMainCamera()->getSnapshot();
                         const double scale = m_pan_controller->getOrthoScale();
@@ -3712,11 +3778,39 @@ namespace demo {
                         break;
                 }
                 if (error) {
-                    m_workshop_error = error.message() + "\n" + diagnostics.format();
+                    if (diagnostics.hasErrors() and session) {
+                        m_workshop_edit_diagnostics = diagnostics;
+                        m_workshop_edit_diagnostics_revision = session->revision();
+                        m_workshop_edit_diagnostics_root = session->root();
+                        m_workshop_error =
+                            "Edit rejected. Select its diagnostic to find the property that needs fixing.";
+                    } else if (intent.m_kind == colony::EWorkshopIntent::open) {
+                        m_workshop_error = "Could not open the pack. Check the pack root path: " + error.message();
+                    } else if (intent.m_kind == colony::EWorkshopIntent::save) {
+                        m_workshop_error = "Could not save. Wait for current work to finish and check Diagnostics: " +
+                                           error.message();
+                    } else {
+                        m_workshop_error = error.message() + "\n" + diagnostics.format();
+                    }
                 } else {
-                    m_workshop_error.clear();
+                    if (intent.m_kind != colony::EWorkshopIntent::preview_settings_changed) {
+                        m_workshop_error.clear();
+                    }
+                    if (intent.m_kind == colony::EWorkshopIntent::edit_definition or
+                        intent.m_kind == colony::EWorkshopIntent::clear_property or
+                        intent.m_kind == colony::EWorkshopIntent::edit_biome or
+                        intent.m_kind == colony::EWorkshopIntent::undo or
+                        intent.m_kind == colony::EWorkshopIntent::redo or
+                        intent.m_kind == colony::EWorkshopIntent::revert) {
+                        m_workshop_edit_diagnostics.clear();
+                    }
                 }
             }
+            m_workshop->configureLivePreview(
+                m_workshop_ui.m_automatic_live and
+                    not m_workshop_closing and
+                    m_workshop_transition == WorkshopTransition::none,
+                workshopSpec_(), m_workshop_ui.m_mode);
             if (m_workshop_transition != WorkshopTransition::none) {
                 ImGui::OpenPopup("Unsaved biome edits");
             }
@@ -3884,7 +3978,10 @@ namespace demo {
             m_close_requested.store(false, std::memory_order_release);
             m_defer_close.store(true, std::memory_order_release);
             m_loading_presented = false;
-            m_workshop = std::make_unique<colony::WorldgenWorkshop>(parallel::backgroundPool());
+            // Separate existing pools keep exact generation off its chunk workers;
+            // the production raster falls back to serial execution on its own pool.
+            m_workshop = std::make_unique<colony::WorldgenWorkshop>(
+                parallel::backgroundPool(), *m_observation_clock, &parallel::foregroundPool());
             if (not m_workshop_startup) {
                 PPR_RETURN_ERROR_ON_FAIL(Demo, requestWorld_(m_requested_seed));
             }

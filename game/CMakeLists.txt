@@ -88,6 +88,14 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/assets/meshes")
 endif()
 ppr_stage_assets(app.game ${game_asset_directories})
 
+add_custom_target(run-app-game
+    DEPENDS app.game
+    COMMAND $<TARGET_FILE:app.game>
+    WORKING_DIRECTORY "$<TARGET_FILE_DIR:app.game>"
+    COMMENT "Running app.game"
+    USES_TERMINAL
+)
+
 # Game-owned invocation compatibility tests (Phase 2 gate): pure
 # parse/resolve coverage for selectors/conflicts, legacy value forms,
 # profiling triggers, startup booleans, configuration precedence, and help
