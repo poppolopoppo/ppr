@@ -1002,138 +1002,190 @@ namespace pP::sim {
         }
         return {};
     }
-    std::error_code finishGenerationTerrain(
-        const GenerationPlan &plan, const BiomeLayout &layout, const GenerationGeometry &geometry, ChunkGrid &grid,
-        const IContext *const context, u64 *const known_scratch_peak) {
-        const auto &r = plan.recipe();
-        const bool formations = std::ranges::any_of(
-            r.m_biomes, [](const auto &biome) { return biome.m_formation_probability > 0.0; });
-        if (not formations) {
-            return validateGenerationBackbone(plan, geometry, grid, context);
-        }
-        auto raster = compileGenerationRaster(plan, layout, geometry, context);
-        PPR_RETURN_ERROR_ON_FAIL(WorldRaster, raster);
-        struct Formation {
-            u32 x{}, y{}, biome{}, length{}, half_width{};
-            i32 direction{};
-            Cell support{};
-        };
-        Array<Formation> records;
-        records.reserve(4096u);
-        // Discovery sees this frozen grid only. No writes occur until every
-        // admitted root and its complete tapered footprint have been collected.
-        const ChunkGrid &original = grid;
-        const auto cell = [&](const u32 x, const u32 y) {
-            const auto cells = original.residentCells({x / kChunkEdge, y / kChunkEdge});
-            return cells ? (*cells)[(y % kChunkEdge) * kChunkEdge + x % kChunkEdge] : Cell{};
-        };
-        for (u32 ty = 1u; ty < kWorldEdge / 16u - 1u; ++ty) {
-            PPR_RETURN_ERROR_ON_FAIL(WorldRaster, canceled(context));
-            for (u32 tx = 1u; tx < kWorldEdge / 16u - 1u; ++tx) {
-                const u64 tile = static_cast<u64>(ty) * 256u + tx;
-                GenerationRandom random{generationStreamSeed(plan.seed(), 0x666f726d6174696full, tile)};
-                const u32 x = tx * 16u + static_cast<u32>(random.bounded(16u));
-                const u32 initial_y = ty * 16u + static_cast<u32>(random.bounded(16u));
-                const u32 biome_index = generationBiomeAt(
-                    plan, layout, (x + 0.5) * r.m_cell_size_m, (initial_y + 0.5) * r.m_cell_size_m);
-                const auto &biome = r.m_biomes[biome_index];
-                if (random.unit() >= biome.m_formation_probability or records.size() == 4096u) {
-                    continue;
-                }
-                const i32 direction = random.bounded(2u) == 0u ? -1 : 1;
-                std::optional<u32> root_y;
-                for (u32 dy = 0u; dy < 16u; ++dy) {
-                    const u32 y = ty * 16u + ((initial_y + dy) % 16u);
-                    const u32 next_y = static_cast<u32>(static_cast<i32>(y) + direction);
-                    if (cell(x, y).m_element != 0u and cell(x, next_y).m_element == 0u) {
-                        root_y = y;
-                        break;
+    namespace {
+        std::error_code applyFormations(
+            const GenerationPlan &plan, const BiomeLayout &layout, const GenerationGeometry &geometry, ChunkGrid &grid,
+            const GenerationCellBounds candidates, const IContext *const context, u64 *const known_scratch_peak) {
+            const auto &r = plan.recipe();
+            const bool formations = std::ranges::any_of(
+                r.m_biomes, [](const auto &biome) { return biome.m_formation_probability > 0.0; });
+            if (not formations) {
+                return {};
+            }
+            auto raster = compileGenerationRaster(plan, layout, geometry, context);
+            PPR_RETURN_ERROR_ON_FAIL(WorldRaster, raster);
+            struct Formation {
+                u32 x{}, y{}, biome{}, length{}, half_width{};
+                i32 direction{};
+                Cell support{};
+            };
+            Array<Formation> records;
+            records.reserve(4096u);
+            // Discovery sees this frozen grid only. No writes occur until every
+            // admitted root and its complete tapered footprint have been collected.
+            const ChunkGrid &original = grid;
+            const auto cell = [&](const u32 x, const u32 y) {
+                const auto cells = original.residentCells({x / kChunkEdge, y / kChunkEdge});
+                return cells ? (*cells)[(y % kChunkEdge) * kChunkEdge + x % kChunkEdge] : Cell{};
+            };
+            for (u32 ty = std::max(1u, candidates.m_bottom / 16u);
+                ty < std::min(kWorldEdge / 16u - 1u, candidates.m_top / 16u); ++ty) {
+                PPR_RETURN_ERROR_ON_FAIL(WorldRaster, canceled(context));
+                for (u32 tx = std::max(1u, candidates.m_left / 16u);
+                    tx < std::min(kWorldEdge / 16u - 1u, candidates.m_right / 16u); ++tx) {
+                    const u64 tile = static_cast<u64>(ty) * 256u + tx;
+                    GenerationRandom random{generationStreamSeed(plan.seed(), 0x666f726d6174696full, tile)};
+                    const u32 x = tx * 16u + static_cast<u32>(random.bounded(16u));
+                    const u32 initial_y = ty * 16u + static_cast<u32>(random.bounded(16u));
+                    const u32 biome_index = generationBiomeAt(
+                        plan, layout, (x + 0.5) * r.m_cell_size_m, (initial_y + 0.5) * r.m_cell_size_m);
+                    const auto &biome = r.m_biomes[biome_index];
+                    if (random.unit() >= biome.m_formation_probability or records.size() == 4096u) {
+                        continue;
                     }
-                }
-                if (not root_y) {
-                    continue;
-                }
-                const Cell support = cell(x, *root_y);
-                const auto host = std::ranges::find(r.m_materials, support.m_element, &GenerationMaterial::m_id);
-                if (host == r.m_materials.end() or not host->m_diggable) {
-                    continue;
-                }
-                const u32 length = std::max(
-                    2u, static_cast<u32>(
-                            std::ceil(biome.m_formation_length_m * (0.45 + 0.55 * random.unit()) / r.m_cell_size_m)));
-                const u32 width = 1u + static_cast<u32>(random.bounded(3u));
-                bool valid = true;
-                for (i32 dx = -static_cast<i32>(width); dx <= static_cast<i32>(width); ++dx) {
-                    const u32 gx = static_cast<u32>(static_cast<i32>(x) + dx);
-                    valid = valid and cell(gx, *root_y).m_element != 0u and not raster->protectedCell(gx, *root_y);
-                }
-                for (u32 step = 1u; valid and step <= length; ++step) {
-                    const i32 gy = static_cast<i32>(*root_y) + direction * static_cast<i32>(step);
-                    if (gy <= 0 or gy >= static_cast<i32>(kWorldEdge) - 1) {
-                        valid = false;
-                        break;
+                    const i32 direction = random.bounded(2u) == 0u ? -1 : 1;
+                    std::optional<u32> root_y;
+                    for (u32 dy = 0u; dy < 16u; ++dy) {
+                        const u32 y = ty * 16u + ((initial_y + dy) % 16u);
+                        const u32 next_y = static_cast<u32>(static_cast<i32>(y) + direction);
+                        if (cell(x, y).m_element != 0u and cell(x, next_y).m_element == 0u) {
+                            root_y = y;
+                            break;
+                        }
                     }
-                    const i32 half = static_cast<i32>((width * (length - step)) / length);
-                    for (i32 dx = -half - 1; dx <= half + 1; ++dx) {
-                        const u32 gx = static_cast<u32>(static_cast<i32>(x) + dx), y = static_cast<u32>(gy);
-                        if (cell(gx, y).m_element != 0u or
-                            raster->protectedCell(gx, y) or
-                            generationBiomeAt(
-                                plan, layout, (gx + 0.5) * r.m_cell_size_m, (y + 0.5) * r.m_cell_size_m) !=
-                                biome_index) {
+                    if (not root_y) {
+                        continue;
+                    }
+                    const Cell support = cell(x, *root_y);
+                    const auto host = std::ranges::find(r.m_materials, support.m_element, &GenerationMaterial::m_id);
+                    if (host == r.m_materials.end() or not host->m_diggable) {
+                        continue;
+                    }
+                    const u32 length = std::max(
+                        2u, static_cast<u32>(std::ceil(
+                                biome.m_formation_length_m * (0.45 + 0.55 * random.unit()) / r.m_cell_size_m)));
+                    const u32 width = 1u + static_cast<u32>(random.bounded(3u));
+                    bool valid = true;
+                    for (i32 dx = -static_cast<i32>(width); dx <= static_cast<i32>(width); ++dx) {
+                        const u32 gx = static_cast<u32>(static_cast<i32>(x) + dx);
+                        valid = valid and cell(gx, *root_y).m_element != 0u and not raster->protectedCell(gx, *root_y);
+                    }
+                    for (u32 step = 1u; valid and step <= length; ++step) {
+                        const i32 gy = static_cast<i32>(*root_y) + direction * static_cast<i32>(step);
+                        if (gy <= 0 or gy >= static_cast<i32>(kWorldEdge) - 1) {
                             valid = false;
+                            break;
+                        }
+                        const i32 half = static_cast<i32>((width * (length - step)) / length);
+                        for (i32 dx = -half - 1; dx <= half + 1; ++dx) {
+                            const u32 gx = static_cast<u32>(static_cast<i32>(x) + dx), y = static_cast<u32>(gy);
+                            if (cell(gx, y).m_element != 0u or
+                                raster->protectedCell(gx, y) or
+                                generationBiomeAt(
+                                    plan, layout, (gx + 0.5) * r.m_cell_size_m, (y + 0.5) * r.m_cell_size_m) !=
+                                    biome_index) {
+                                valid = false;
+                                break;
+                            }
+                        }
+                    }
+                    if (valid) {
+                        records.push_back({x, *root_y, biome_index, length, width, direction, support});
+                    }
+                }
+            }
+            if (known_scratch_peak != nullptr) {
+                *known_scratch_peak = std::max(
+                    *known_scratch_peak, raster->indexPayloadBytes() + records.capacity() * sizeof(Formation));
+            }
+            for (const auto &record: records) {
+                PPR_RETURN_ERROR_ON_FAIL(WorldRaster, canceled(context));
+                const auto &biome = r.m_biomes[record.biome];
+                bool clear = true;
+                for (u32 step = 1u; clear and step <= record.length; ++step) {
+                    const u32 y = static_cast<u32>(
+                        static_cast<i32>(record.y) + record.direction * static_cast<i32>(step));
+                    const i32 half = static_cast<i32>((record.half_width * (record.length - step)) / record.length);
+                    for (i32 dx = -half; dx <= half; ++dx) {
+                        if (cell(static_cast<u32>(static_cast<i32>(record.x) + dx), y).m_element != 0u) {
+                            clear = false;
                             break;
                         }
                     }
                 }
-                if (valid) {
-                    records.push_back({x, *root_y, biome_index, length, width, direction, support});
+                if (not clear) {
+                    continue;
                 }
-            }
-        }
-        if (known_scratch_peak != nullptr) {
-            *known_scratch_peak = std::max(
-                *known_scratch_peak, raster->indexPayloadBytes() + records.capacity() * sizeof(Formation));
-        }
-        for (const auto &record: records) {
-            PPR_RETURN_ERROR_ON_FAIL(WorldRaster, canceled(context));
-            const auto &biome = r.m_biomes[record.biome];
-            bool clear = true;
-            for (u32 step = 1u; clear and step <= record.length; ++step) {
-                const u32 y = static_cast<u32>(static_cast<i32>(record.y) + record.direction * static_cast<i32>(step));
-                const i32 half = static_cast<i32>((record.half_width * (record.length - step)) / record.length);
-                for (i32 dx = -half; dx <= half; ++dx) {
-                    if (cell(static_cast<u32>(static_cast<i32>(record.x) + dx), y).m_element != 0u) {
-                        clear = false;
-                        break;
-                    }
-                }
-            }
-            if (not clear) {
-                continue;
-            }
-            for (u32 step = 1u; step <= record.length; ++step) {
-                const u32 y = static_cast<u32>(static_cast<i32>(record.y) + record.direction * static_cast<i32>(step));
-                const i32 half = static_cast<i32>((record.half_width * (record.length - step)) / record.length);
-                for (i32 dx = -half; dx <= half; ++dx) {
-                    PPR_RETURN_ERROR_ON_FAIL(
-                        WorldRaster, grid.setCell(
-                                         {static_cast<u32>(static_cast<i32>(record.x) + dx), y},
-                                         {biome.m_formation_material, record.support.m_temperature}));
-                }
-            }
-            if (biome.m_rind_material != 0u) {
-                for (i32 dx = -static_cast<i32>(record.half_width); dx <= static_cast<i32>(record.half_width); ++dx) {
-                    const u32 x = static_cast<u32>(static_cast<i32>(record.x) + dx);
-                    if (cellDraw(plan.seed(), biome.m_key, x, record.y, 0x72696e64636f6e74ull) < 0.55) {
+                for (u32 step = 1u; step <= record.length; ++step) {
+                    const u32 y = static_cast<u32>(
+                        static_cast<i32>(record.y) + record.direction * static_cast<i32>(step));
+                    const i32 half = static_cast<i32>((record.half_width * (record.length - step)) / record.length);
+                    for (i32 dx = -half; dx <= half; ++dx) {
                         PPR_RETURN_ERROR_ON_FAIL(
-                            WorldRaster,
-                            grid.setCell({x, record.y}, {biome.m_rind_material, record.support.m_temperature}));
+                            WorldRaster, grid.setCell(
+                                             {static_cast<u32>(static_cast<i32>(record.x) + dx), y},
+                                             {biome.m_formation_material, record.support.m_temperature}));
+                    }
+                }
+                if (biome.m_rind_material != 0u) {
+                    for (i32 dx = -static_cast<i32>(record.half_width); dx <= static_cast<i32>(record.half_width);
+                        ++dx) {
+                        const u32 x = static_cast<u32>(static_cast<i32>(record.x) + dx);
+                        if (cellDraw(plan.seed(), biome.m_key, x, record.y, 0x72696e64636f6e74ull) < 0.55) {
+                            PPR_RETURN_ERROR_ON_FAIL(
+                                WorldRaster,
+                                grid.setCell({x, record.y}, {biome.m_rind_material, record.support.m_temperature}));
+                        }
                     }
                 }
             }
+            return {};
         }
-        return validateGenerationBackbone(plan, geometry, grid, context);
+    }
+    std::error_code finishGenerationTerrain(
+        const GenerationPlan &plan, const BiomeLayout &layout, const GenerationGeometry &geometry, ChunkGrid &grid,
+        const IContext *const context, u64 *const known_scratch_peak) {
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldRaster, applyFormations(
+                             plan, layout, geometry, grid, {16u, 16u, kWorldEdge - 16u, kWorldEdge - 16u}, context,
+                             known_scratch_peak));
+        PPR_RETURN_ERROR_ON_FAIL(WorldRaster, validateGenerationBackbone(plan, geometry, grid, context));
+        return {};
+    }
+    std::error_code finishGenerationTerrainRegion(
+        const GenerationPlan &plan, const BiomeLayout &layout, const GenerationGeometry &geometry, ChunkGrid &grid,
+        const GenerationCellBounds candidates, const IContext *const context, u64 *const known_scratch_peak) {
+        PPR_RETURN_ERROR_ON_FAIL(WorldRaster, canceled(context));
+        if (candidates.m_left >= candidates.m_right or
+            candidates.m_bottom >= candidates.m_top or
+            candidates.m_right > kWorldEdge or
+            candidates.m_top > kWorldEdge or
+            candidates.m_left % 16u != 0u or
+            candidates.m_bottom % 16u != 0u or
+            candidates.m_right % 16u != 0u or
+            candidates.m_top % 16u != 0u) {
+            PPR_RETURN_ERROR_ON_FAIL(WorldRaster, std::errc::invalid_argument);
+        }
+        u32 reach = 2u;
+        for (const auto &biome: plan.recipe().m_biomes) {
+            reach = std::max(
+                reach, static_cast<u32>(std::ceil(biome.m_formation_length_m / plan.recipe().m_cell_size_m)));
+        }
+        reach += 4u;
+        const u32 left = candidates.m_left > reach ? candidates.m_left - reach : 0u;
+        const u32 bottom = candidates.m_bottom > reach ? candidates.m_bottom - reach : 0u;
+        const u32 right = std::min(kWorldEdge, candidates.m_right + reach);
+        const u32 top = std::min(kWorldEdge, candidates.m_top + reach);
+        for (u32 cy = bottom / kChunkEdge; cy <= (top - 1u) / kChunkEdge; ++cy) {
+            for (u32 cx = left / kChunkEdge; cx <= (right - 1u) / kChunkEdge; ++cx) {
+                if (not grid.residentCells({cx, cy})) {
+                    PPR_RETURN_ERROR_ON_FAIL(WorldRaster, std::errc::invalid_argument);
+                }
+            }
+        }
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldRaster, applyFormations(plan, layout, geometry, grid, candidates, context, known_scratch_peak));
+        return {};
     }
     Expected<ChunkGrid> rasterizeGenerationTerrain(
         const GenerationPlan &plan, const BiomeLayout &layout, const GenerationGeometry &geometry,

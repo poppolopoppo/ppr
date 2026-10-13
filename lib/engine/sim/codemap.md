@@ -204,3 +204,10 @@ finishing discovers at most 4096 supported formation records against the frozen
 grid, applies them in stable order, and certifies selected backbone connectivity
 and actor clearance. Sky, continuous bedrock, reservations and connection cores
 remain protected through all filters.
+
+Explicit biome-sample layout/geometry factories select one biome and omit global
+start/features/connections while reusing blob and worm generation. A shared
+formation evaluator accepts a fixed local candidate domain with checked resident
+support; the production wrapper retains its whole-world order/cap and backbone
+certification. Game-owned preview code rasterizes bounded support chunks and
+never treats a sparse sample as a complete validated generated world.

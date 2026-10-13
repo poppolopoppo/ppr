@@ -198,7 +198,10 @@ namespace pP::sim {
             const double extent = kWorldEdge * recipe.m_cell_size_m;
             const double boundary = recipe.m_boundary_fine * recipe.m_cell_size_m;
             for (u32 b = 0u; b < recipe.m_biomes.size(); ++b) {
-                if (std::ranges::none_of(recipe.m_constraints, [b](const auto &entry) { return entry.m_biome == b; })) {
+                if (layout.sampleBiome() ? b != *layout.sampleBiome()
+                                         : std::ranges::none_of(recipe.m_constraints, [b](const auto &entry) {
+                                               return entry.m_biome == b;
+                                           })) {
                     continue;
                 }
                 if (std::ranges::none_of(recipe.m_biomes[b].m_deposits, [](const auto &deposit) {
@@ -344,6 +347,9 @@ namespace pP::sim {
                 const auto &rule = recipe.m_rules[r];
                 const auto *const worm = std::get_if<GenerationWorm>(&rule.m_parameters);
                 if (worm == nullptr) {
+                    continue;
+                }
+                if (layout.sampleBiome() and worm->m_biome != *layout.sampleBiome()) {
                     continue;
                 }
                 // One-metre maximum steps; the final step retains authored
@@ -799,6 +805,18 @@ namespace pP::sim {
         PPR_RETURN_UNEXPECTED_ON_FAIL(WorldGeometry, blobs(plan, layout, geometry, context, known_scratch_peak));
         PPR_RETURN_UNEXPECTED_ON_FAIL(WorldGeometry, worms(plan, layout, geometry, context));
         PPR_RETURN_UNEXPECTED_ON_FAIL(WorldGeometry, connections(plan, layout, geometry, context, known_scratch_peak));
+        return geometry;
+    }
+    Expected<GenerationGeometry> compileBiomeSampleGeometry(
+        const GenerationPlan &plan, const BiomeLayout &layout, const IContext *const context,
+        u64 *const known_scratch_peak) {
+        PPR_RETURN_UNEXPECTED_ON_FAIL(WorldGeometry, canceled(context));
+        if (not layout.sampleBiome()) {
+            PPR_RETURN_UNEXPECTED_ON_FAIL(WorldGeometry, std::errc::invalid_argument);
+        }
+        GenerationGeometry geometry;
+        PPR_RETURN_UNEXPECTED_ON_FAIL(WorldGeometry, blobs(plan, layout, geometry, context, known_scratch_peak));
+        PPR_RETURN_UNEXPECTED_ON_FAIL(WorldGeometry, worms(plan, layout, geometry, context));
         return geometry;
     }
 }

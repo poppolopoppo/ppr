@@ -218,6 +218,21 @@ namespace pP::sim {
     std::span<const GenerationSite> BiomeLayout::sites() const noexcept {
         return m_sites;
     }
+    std::optional<u32> BiomeLayout::sampleBiome() const noexcept {
+        return m_sample_biome;
+    }
+    Expected<BiomeLayout> compileBiomeSampleLayout(
+        const GenerationPlan &plan, const u32 biome, const IContext *const context) {
+        PPR_RETURN_UNEXPECTED_ON_FAIL(WorldLayout, canceled(context));
+        if (biome >= plan.recipe().m_biomes.size()) {
+            PPR_RETURN_UNEXPECTED_ON_FAIL(WorldLayout, std::errc::invalid_argument);
+        }
+        const double extent = kWorldEdge * plan.recipe().m_cell_size_m;
+        BiomeLayout layout{extent};
+        layout.append({0.5 * extent, 0.5 * extent, biome});
+        layout.m_sample_biome = biome;
+        return layout;
+    }
     u32 BiomeLayout::nearest(const double x_m, const double y_m) const noexcept {
         PPR_ASSERT(not m_sites.empty() and std::isfinite(x_m) and std::isfinite(y_m));
         PPR_ASSERT(
@@ -294,6 +309,9 @@ namespace pP::sim {
     u32 generationBiomeAt(
         const GenerationPlan &plan, const BiomeLayout &layout, const double x_m, const double y_m) noexcept {
         const auto &recipe = plan.recipe();
+        if (const auto sample = layout.sampleBiome()) {
+            return *sample;
+        }
         if (recipe.m_biomes.size() == 1u) {
             return 0u;
         }

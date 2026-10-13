@@ -38,6 +38,17 @@ export namespace pP::sim {
     [[nodiscard]] std::error_code finishGenerationTerrain(
         const GenerationPlan &plan, const BiomeLayout &layout, const GenerationGeometry &geometry, ChunkGrid &grid,
         const IContext *context = nullptr, u64 *known_scratch_peak = nullptr);
+    /// Half-open global fine-cell bounds.
+    struct GenerationCellBounds {
+        u32 m_left{}, m_bottom{}, m_right{}, m_top{};
+        constexpr bool operator==(const GenerationCellBounds &) const noexcept = default;
+    };
+    /// Applies shared frozen-contact formations over a fixed tile-aligned root
+    /// domain. Requires resident support through the longest footprint plus its
+    /// validation ring. No whole-world backbone or playability validation runs.
+    [[nodiscard]] std::error_code finishGenerationTerrainRegion(
+        const GenerationPlan &plan, const BiomeLayout &layout, const GenerationGeometry &geometry, ChunkGrid &grid,
+        GenerationCellBounds candidates, const IContext *context = nullptr, u64 *known_scratch_peak = nullptr);
     [[nodiscard]] Expected<GenerationRaster> compileGenerationRaster(
         const GenerationPlan &plan, const BiomeLayout &layout, const GenerationGeometry &geometry,
         const IContext *context = nullptr);

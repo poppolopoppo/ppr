@@ -246,6 +246,44 @@ namespace pP::tests::detail {
                 }
             }
         };
+        PPR_UNIT_TEST (biome_sample_forces_selected_context_without_start_or_foreign_geometry) {
+            auto recipe = numericRecipe();
+            recipe.m_materials.push_back({33u, true, true, EGenerationMatter::solid, 2700.0});
+            recipe.m_biomes.push_back(recipe.m_biomes.front());
+            recipe.m_biomes.back().m_key = 204u;
+            recipe.m_biomes.back().m_bands[0u].m_choices[0u].m_material = 33u;
+            recipe.m_biomes.back().m_erosion_passes = 8u;
+            recipe.m_rules.push_back(
+                {501u, 1u, EGenerationPhase::carve,
+                    GenerationWorm{
+                        .m_biome = 0u,
+                        .m_count = 1u,
+                        .m_carve = true,
+                        .m_depth_max = 1.0,
+                        .m_length_min_m = 1.0,
+                        .m_length_max_m = 1.0,
+                        .m_radius_min_m = 0.2,
+                        .m_radius_max_m = 0.2}});
+            const auto plan = compileGenerationPlan(recipe, 42u);
+            PPR_TEST_ASSERT(plan.has_value());
+            const auto layout = compileBiomeSampleLayout(*plan, 1u);
+            PPR_TEST_ASSERT(layout.has_value() and layout->sampleBiome() == 1u);
+            PPR_TEST_ASSERT(generationBiomeAt(*plan, *layout, 670.0, 1005.0) == 1u);
+            const auto geometry = compileBiomeSampleGeometry(*plan, *layout);
+            PPR_TEST_ASSERT(geometry.has_value() and geometry->m_instances.empty() and geometry->m_segments.empty());
+            const auto raster = compileGenerationRaster(*plan, *layout, *geometry);
+            PPR_TEST_ASSERT(raster.has_value());
+            const auto first = raster->chunk({15u, 23u});
+            const auto replay = raster->chunk({15u, 23u});
+            PPR_TEST_ASSERT(first.has_value() and replay.has_value() and *first == *replay);
+            PPR_TEST_ASSERT(std::ranges::all_of(*first, [](const Cell cell) { return cell.m_element == 33u; }));
+            const auto invalid = compileBiomeSampleLayout(*plan, 2u);
+            PPR_TEST_ASSERT(not invalid and invalid.error() == std::errc::invalid_argument);
+            const auto [context, cancel] = context::withCancel(context::background());
+            cancel();
+            const auto cancelled = compileBiomeSampleGeometry(*plan, *layout, context.get());
+            PPR_TEST_ASSERT(not cancelled and cancelled.error() == std::errc::operation_canceled);
+        };
         PPR_UNIT_TEST (particle_seeding_replays_large_regions_with_coherent_positive_mass) {
             auto recipe = numericRecipe();
             recipe.m_materials.push_back({99u, false, false, EGenerationMatter::liquid, 1000.0});
@@ -1255,8 +1293,25 @@ namespace pP::tests::detail {
                 PPR_TEST_ASSERT(not grid.setCell({x, 32u}, {17u, 293.0f}));
                 PPR_TEST_ASSERT(not grid.setCell({x, 96u}, {17u, 293.0f}));
             }
+            ChunkGrid region = grid;
+            const GenerationCellBounds candidates{16u, 16u, 416u, 112u};
+            ChunkGrid absent;
+            PPR_TEST_ASSERT(
+                finishGenerationTerrainRegion(*plan, *layout, geometry, absent, candidates) ==
+                std::errc::invalid_argument);
+            const auto [context, cancel] = context::withCancel(context::background());
+            cancel();
+            PPR_TEST_ASSERT(
+                finishGenerationTerrainRegion(*plan, *layout, geometry, region, candidates, context.get()) ==
+                std::errc::operation_canceled);
             u64 scratch{};
+            PPR_TEST_ASSERT(
+                not finishGenerationTerrainRegion(*plan, *layout, geometry, region, candidates, nullptr, &scratch));
+            PPR_TEST_ASSERT(region.residentChunkCount() == 4u);
             PPR_TEST_ASSERT(not finishGenerationTerrain(*plan, *layout, geometry, grid, nullptr, &scratch));
+            for (u32 x = 0u; x < 4u; ++x) {
+                PPR_TEST_ASSERT(std::ranges::equal(*region.residentCells({x, 0u}), *grid.residentCells({x, 0u})));
+            }
             PPR_TEST_ASSERT(scratch > 0u);
             u32 growth{};
             for (u32 y = 33u; y < 96u; ++y) {
@@ -1770,6 +1825,7 @@ namespace pP::tests {
             detail::WorldGen::numeric_plan_accepts_granular_fills_and_exact_signed_thirds,
             detail::WorldGen::numeric_plan_preserves_authored_geometry_boundaries,
             detail::WorldGen::biome_lining_stops_threshold_caves_and_replays_across_chunks,
+            detail::WorldGen::biome_sample_forces_selected_context_without_start_or_foreign_geometry,
             detail::WorldGen::particle_seeding_replays_large_regions_with_coherent_positive_mass,
             detail::WorldGen::particle_edits_are_local_atomic_and_pure_digs_preserve_frozen_records,
             detail::WorldGen::macro_layout_replays_spacing_and_spatial_nearest_matches_oracle,

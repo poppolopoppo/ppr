@@ -36,4 +36,9 @@ export namespace pP::sim {
     [[nodiscard]] Expected<GenerationGeometry> compileGenerationGeometry(
         const GenerationPlan &plan, const BiomeLayout &layout, const IContext *context = nullptr,
         u64 *known_scratch_peak = nullptr);
+    /// Uniform-biome laboratory geometry: deposits and worms only. No start,
+    /// feature reservations, traversal connections or initial matter are placed.
+    [[nodiscard]] Expected<GenerationGeometry> compileBiomeSampleGeometry(
+        const GenerationPlan &plan, const BiomeLayout &layout, const IContext *context = nullptr,
+        u64 *known_scratch_peak = nullptr);
 }
