@@ -1002,3 +1002,434 @@ alpha_mode = "blend"
 ior = 1.00044
 normal_scale = 0.0
 refraction_depth_m = 0.0
+
+[materials.calcite]
+numeric_id = 616
+display_name = "Calcite"
+phase = "solid"
+representation = "terrain"
+color_rgba = "EADCC2E8"
+albedo_texture = "textures/calcite.png"
+normal_texture = "textures/calcite_normal.png"
+texture_period_m = 2.0
+roundness = 0.4
+diggable = true
+reference_density_kg_m3 = 2710.0
+metallic = 0.0
+roughness = 0.24
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "blend"
+ior = 1.66
+normal_scale = 0.65
+refraction_depth_m = 0.08
+
+
+[materials.dolomite]
+numeric_id = 617
+display_name = "Dolomite"
+phase = "solid"
+representation = "terrain"
+color_rgba = "CDBA9FFF"
+albedo_texture = "textures/dolomite.png"
+normal_texture = "textures/dolomite_normal.png"
+texture_period_m = 2.0
+roundness = 0.6
+diggable = true
+reference_density_kg_m3 = 2850.0
+metallic = 0.0
+roughness = 0.63
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "opaque"
+ior = 1.5
+normal_scale = 1.0
+refraction_depth_m = 0.0
+
+
+[materials.chalk]
+numeric_id = 618
+display_name = "Chalk"
+phase = "solid"
+representation = "terrain"
+color_rgba = "E7E6D8FF"
+albedo_texture = "textures/chalk.png"
+normal_texture = "textures/chalk_normal.png"
+texture_period_m = 2.0
+roundness = 0.9
+diggable = true
+reference_density_kg_m3 = 2100.0
+metallic = 0.0
+roughness = 0.98
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "opaque"
+ior = 1.5
+normal_scale = 1.0
+refraction_depth_m = 0.0
+
+
+[materials.gypsum]
+numeric_id = 619
+display_name = "Gypsum"
+phase = "solid"
+representation = "terrain"
+color_rgba = "EEE1C8D8"
+albedo_texture = "textures/gypsum.png"
+normal_texture = "textures/gypsum_normal.png"
+texture_period_m = 2.0
+roundness = 0.45
+diggable = true
+reference_density_kg_m3 = 2320.0
+metallic = 0.0
+roughness = 0.38
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "blend"
+ior = 1.52
+normal_scale = 0.65
+refraction_depth_m = 0.06
+
+
+[materials.anhydrite]
+numeric_id = 620
+display_name = "Anhydrite"
+phase = "solid"
+representation = "terrain"
+color_rgba = "BFC2CDFF"
+albedo_texture = "textures/anhydrite.png"
+normal_texture = "textures/anhydrite_normal.png"
+texture_period_m = 2.0
+roundness = 0.5
+diggable = true
+reference_density_kg_m3 = 2970.0
+metallic = 0.0
+roughness = 0.7
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "opaque"
+ior = 1.5
+normal_scale = 1.0
+refraction_depth_m = 0.0
+
+
+[materials.conglomerate]
+numeric_id = 621
+display_name = "Conglomerate"
+phase = "solid"
+representation = "terrain"
+color_rgba = "A79781FF"
+albedo_texture = "textures/conglomerate.png"
+normal_texture = "textures/conglomerate_normal.png"
+texture_period_m = 2.0
+roundness = 0.8
+diggable = true
+reference_density_kg_m3 = 2450.0
+metallic = 0.0
+roughness = 0.91
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "opaque"
+ior = 1.5
+normal_scale = 1.0
+refraction_depth_m = 0.0
+
+
+[materials.breccia]
+numeric_id = 622
+display_name = "Breccia"
+phase = "solid"
+representation = "terrain"
+color_rgba = "B59583FF"
+albedo_texture = "textures/breccia.png"
+normal_texture = "textures/breccia_normal.png"
+texture_period_m = 2.0
+roundness = 0.3
+diggable = true
+reference_density_kg_m3 = 2600.0
+metallic = 0.0
+roughness = 0.89
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "opaque"
+ior = 1.5
+normal_scale = 1.0
+refraction_depth_m = 0.0
+
+
+[materials.gneiss]
+numeric_id = 623
+display_name = "Gneiss"
+phase = "solid"
+representation = "terrain"
+color_rgba = "A3A3ADFF"
+albedo_texture = "textures/gneiss.png"
+normal_texture = "textures/gneiss_normal.png"
+texture_period_m = 2.0
+roundness = 0.45
+diggable = true
+reference_density_kg_m3 = 2800.0
+metallic = 0.0
+roughness = 0.81
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "opaque"
+ior = 1.5
+normal_scale = 1.0
+refraction_depth_m = 0.0
+
+
+[materials.pumice]
+numeric_id = 624
+display_name = "Pumice"
+phase = "solid"
+representation = "terrain"
+color_rgba = "C3BAA6FF"
+albedo_texture = "textures/pumice.png"
+normal_texture = "textures/pumice_normal.png"
+texture_period_m = 2.0
+roundness = 0.85
+diggable = true
+reference_density_kg_m3 = 700.0
+metallic = 0.0
+roughness = 0.98
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "opaque"
+ior = 1.5
+normal_scale = 1.0
+refraction_depth_m = 0.0
+
+
+[materials.laterite]
+numeric_id = 625
+display_name = "Laterite"
+phase = "solid"
+representation = "terrain"
+color_rgba = "BF683FFF"
+albedo_texture = "textures/laterite.png"
+normal_texture = "textures/laterite_normal.png"
+texture_period_m = 2.0
+roundness = 0.8
+diggable = true
+reference_density_kg_m3 = 1800.0
+metallic = 0.0
+roughness = 0.96
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "opaque"
+ior = 1.5
+normal_scale = 1.0
+refraction_depth_m = 0.0
+
+
+[materials.ruby]
+numeric_id = 626
+display_name = "Ruby"
+phase = "solid"
+representation = "terrain"
+color_rgba = "E33B62E0"
+albedo_texture = "textures/ruby.png"
+normal_texture = "textures/ruby_normal.png"
+texture_period_m = 1.0
+roundness = 0.18
+diggable = true
+reference_density_kg_m3 = 4000.0
+metallic = 0.0
+roughness = 0.08
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "blend"
+ior = 1.77
+normal_scale = 0.65
+refraction_depth_m = 0.16
+
+
+[materials.emerald]
+numeric_id = 627
+display_name = "Emerald"
+phase = "solid"
+representation = "terrain"
+color_rgba = "43CB93D8"
+albedo_texture = "textures/emerald.png"
+normal_texture = "textures/emerald_normal.png"
+texture_period_m = 1.0
+roundness = 0.22
+diggable = true
+reference_density_kg_m3 = 2760.0
+metallic = 0.0
+roughness = 0.11
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "blend"
+ior = 1.58
+normal_scale = 0.65
+refraction_depth_m = 0.18
+
+
+[materials.fluorite]
+numeric_id = 628
+display_name = "Fluorite"
+phase = "solid"
+representation = "terrain"
+color_rgba = "C6BBEBC4"
+albedo_texture = "textures/fluorite.png"
+normal_texture = "textures/fluorite_normal.png"
+texture_period_m = 1.0
+roundness = 0.25
+diggable = true
+reference_density_kg_m3 = 3180.0
+metallic = 0.0
+roughness = 0.18
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "blend"
+ior = 1.434
+normal_scale = 0.65
+refraction_depth_m = 0.16
+
+
+[materials.azurite]
+numeric_id = 629
+display_name = "Azurite"
+phase = "solid"
+representation = "terrain"
+color_rgba = "3676D5FF"
+albedo_texture = "textures/azurite.png"
+normal_texture = "textures/azurite_normal.png"
+texture_period_m = 2.0
+roundness = 0.65
+diggable = true
+reference_density_kg_m3 = 3770.0
+metallic = 0.0
+roughness = 0.43
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "opaque"
+ior = 1.5
+normal_scale = 1.0
+refraction_depth_m = 0.0
+
+
+[materials.uranium_ore]
+numeric_id = 630
+display_name = "Uranium ore"
+phase = "solid"
+representation = "terrain"
+color_rgba = "B8B3A3FF"
+albedo_texture = "textures/uranium_ore.png"
+normal_texture = "textures/uranium_ore_normal.png"
+texture_period_m = 2.0
+roundness = 0.5
+diggable = true
+reference_density_kg_m3 = 6500.0
+metallic = 0.0
+roughness = 0.8
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "opaque"
+ior = 1.5
+normal_scale = 1.0
+refraction_depth_m = 0.0
+
+
+[materials.autunite]
+numeric_id = 631
+display_name = "Autunite"
+phase = "solid"
+representation = "terrain"
+color_rgba = "D1EA5EFF"
+albedo_texture = "textures/autunite.png"
+normal_texture = "textures/autunite_normal.png"
+texture_period_m = 1.0
+roundness = 0.35
+diggable = true
+reference_density_kg_m3 = 3150.0
+metallic = 0.0
+roughness = 0.34
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "opaque"
+ior = 1.5
+normal_scale = 1.0
+refraction_depth_m = 0.0
+
+
+[materials.tuff]
+numeric_id = 632
+display_name = "Tuff"
+phase = "solid"
+representation = "terrain"
+color_rgba = "ADA58DFF"
+albedo_texture = "textures/tuff.png"
+normal_texture = "textures/tuff_normal.png"
+texture_period_m = 2.0
+roundness = 0.7
+diggable = true
+reference_density_kg_m3 = 1900.0
+metallic = 0.0
+roughness = 0.94
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "opaque"
+ior = 1.5
+normal_scale = 1.0
+refraction_depth_m = 0.0
+
+
+[materials.bedrock]
+numeric_id = 633
+display_name = "Bedrock"
+phase = "solid"
+representation = "terrain"
+color_rgba = "41434FFF"
+albedo_texture = "textures/bedrock.png"
+normal_texture = "textures/bedrock_normal.png"
+texture_period_m = 2.0
+roundness = 0.25
+diggable = false
+reference_density_kg_m3 = 3050.0
+metallic = 0.0
+roughness = 0.88
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "opaque"
+ior = 1.5
+normal_scale = 1.0
+refraction_depth_m = 0.0

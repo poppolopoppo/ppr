@@ -1,8 +1,10 @@
-"""Rebuild the original PPR v2 content pack (Python 3.11+, standard library only).
+"""Maintain PPR v2 materials and textures (Python 3.11+, standard library only).
 
 All patterns are periodic in both axes. Normal maps derive from the exact height
 field used by albedo; PNG row zero corresponds to world Y zero. Run from any cwd.
-The authored recipes here are the source of truth for the generated TOML/PNGs.
+The ledger defines stable IDs and seeds missing material entries. Existing TOML
+is authored content and is preserved; legacy recipes only bootstrap absent files.
+Existing textures are preserved unless --overwrite-textures is requested.
 """
 from __future__ import annotations
 
@@ -47,6 +49,24 @@ SOLIDS = [
     ("polluted_ice",613,"91BCA7CE",940,"ice",.38,.85),
     ("iron_ore",614,"AD7F62FF",4500,"ore",.76,.55),
     ("copper_ore",615,"9C8755FF",3800,"ore",.74,.60),
+    ("calcite",616,"EADCC2E8",2710,"carbonate",.24,.40),
+    ("dolomite",617,"CDBA9FFF",2850,"carbonate",.63,.60),
+    ("chalk",618,"E7E6D8FF",2100,"chalk",.98,.90),
+    ("gypsum",619,"EEE1C8D8",2320,"bladed",.38,.45),
+    ("anhydrite",620,"BFC2CDFF",2970,"massive",.70,.50),
+    ("conglomerate",621,"A79781FF",2450,"clastic",.91,.80),
+    ("breccia",622,"B59583FF",2600,"clastic",.89,.30),
+    ("gneiss",623,"A3A3ADFF",2800,"folded",.81,.45),
+    ("pumice",624,"C3BAA6FF",700,"vesicular",.98,.85),
+    ("laterite",625,"BF683FFF",1800,"pisolitic",.96,.80),
+    ("ruby",626,"E33B62E0",4000,"gem",.08,.18),
+    ("emerald",627,"43CB93D8",2760,"gem",.11,.22),
+    ("fluorite",628,"C6BBEBC4",3180,"cubic",.18,.25),
+    ("azurite",629,"3676D5FF",3770,"botryoidal",.43,.65),
+    ("uranium_ore",630,"B8B3A3FF",6500,"mineralized",.80,.50),
+    ("autunite",631,"D1EA5EFF",3150,"platy",.34,.35),
+    ("tuff",632,"ADA58DFF",1900,"pyroclastic",.94,.70),
+    ("bedrock",633,"41434FFF",3050,"folded",.88,.25),
 ]
 # key, ID, tint, density, phase, family, roughness, IOR, effective depth
 PARTICLES = [
@@ -83,22 +103,28 @@ def table(lines, name, values):
 
 
 def save(name, lines):
-    (ROOT / name).write_text("\n".join(lines) + "\n", encoding="utf-8")
+    # These templates bootstrap absent files. Existing recipes are hand-authored
+    # production content and must never be reset by material/asset maintenance.
+    path = ROOT / name
+    if not path.exists():
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def materials():
     lines = ["schema_version = 2", "# Stable numeric-ID ledger is in Generate-WorldgenAssets.py."]
     optical = {"ice":(1.31,.18),"polluted_ice":(1.34,.15),"salt":(1.54,.06),
                "crystal":(1.54,.25),"diamond":(2.42,.28),"clear_quartz":(1.46,.24),
-               "glass":(1.50,.30),"slime":(1.38,.08)}
+               "glass":(1.50,.30),"slime":(1.38,.08),"calcite":(1.66,.08),
+               "gypsum":(1.52,.06),"ruby":(1.77,.16),"emerald":(1.58,.18),
+               "fluorite":(1.434,.16)}
     for key, ident, tint, density, family, rough, rounded in SOLIDS:
         ior, depth = optical.get(key,(1.5,0.0))
         display = {"copper":"Native copper","iron":"Native iron","aluminum":"Native aluminum",
                    "crystal":"Amethyst","salt":"Rock salt"}.get(key,key.replace("_"," ").capitalize())
         table(lines,"materials."+key,dict(numeric_id=ident,display_name=display,phase="solid",
               representation="terrain",color_rgba=tint,albedo_texture=f"textures/{key}.png",
-              normal_texture=f"textures/{key}_normal.png",texture_period_m=1.0 if family=="crystal" else 2.0,
-              roundness=rounded,diggable=key!="masonry",reference_density_kg_m3=float(density),
+              normal_texture=f"textures/{key}_normal.png",texture_period_m=1.0 if family in ("crystal","gem","cubic","platy") else 2.0,
+              roundness=rounded,diggable=key not in ("masonry","bedrock"),reference_density_kg_m3=float(density),
               metallic=1.0 if family=="metal" else .0,roughness=rough,emissive_r=.0,emissive_g=.0,
               emissive_b=.0,emissive_strength=1.0,alpha_mode="opaque" if tint[-2:]=="FF" else "blend",
               ior=ior,normal_scale=.65 if depth else 1.0,refraction_depth_m=depth,
@@ -112,7 +138,21 @@ def materials():
               emissive_r=1.0 if magma else .0,emissive_g=.19 if magma else .0,emissive_b=.025 if magma else .0,
               emissive_strength=2.5 if magma else 1.0,alpha_mode="opaque" if phase=="solid" else "blend",
               ior=ior,normal_scale=.0 if phase=="gas" else .8,refraction_depth_m=depth))
-    save("materials.toml",lines)
+    path=ROOT/"materials.toml"
+    if not path.exists():
+        save("materials.toml",lines)
+        return
+    # Append only missing ledger entries, preserving every authored property,
+    # comment and ordering of existing materials (including custom materials).
+    existing=tomllib.loads(path.read_text(encoding="utf-8"))["materials"]
+    additions=[]
+    for section in "\n".join(lines).split("\n[materials.")[1:]:
+        key=section.split("]",1)[0]
+        if key not in existing:
+            additions.append("\n[materials."+section)
+    if additions:
+        with path.open("a",encoding="utf-8",newline="\n") as stream:
+            stream.write("\n".join(additions)+"\n")
 
 
 # biome, label, preview, T, delta, host, secondary, resources, lining, thickness,
@@ -490,9 +530,187 @@ def png(path,size,rgba,srgb):
 def byte(v): return max(0,min(255,round(v*255)))
 
 
-def texture(key,family):
+GEOLOGICAL_FAMILIES={"carbonate","chalk","bladed","massive","clastic","folded",
+                     "vesicular","pisolitic","gem","cubic","botryoidal",
+                     "mineralized","platy","pyroclastic"}
+
+
+def mineral_plates(seed,kind):
+    """Unequal overlapping crystals, with local alignment inside growth clusters."""
+    result=[]
+    for i in range(64 if kind=="platy" else 36):
+        cluster=i%5
+        cx=hash01(cluster,0,seed+72); cy=hash01(cluster,1,seed+72)
+        x=(cx+(hash01(i,0,seed+73)-.5)*.56)%1
+        y=(cy+(hash01(i,1,seed+73)-.5)*.56)%1
+        angle=(hash01(cluster,2,seed+72)-.5)*2.4+(hash01(i,2,seed+73)-.5)*.42
+        width=.028+.065*hash01(i,3,seed+73)
+        length=width*(.36+.45*hash01(i,4,seed+73)) if kind=="platy" else width*(.70+.50*hash01(i,4,seed+73))
+        result.append((x,y,width,length,math.cos(angle),math.sin(angle),hash01(i,5,seed+73)))
+    return result
+
+
+def geological_sample(u,v,family,seed,key,plates=()):
+    """Periodic relief and albedo multipliers; the material supplies its base tint.
+
+    Shape, mineral distribution and color share coordinates so dark pores recede,
+    clasts stand above cement, and mineral facets agree with their normal maps.
+    """
+    broad=noise(u,v,4,seed)
+    grain=noise(u,v,64,seed+2)
+    wu=u+.055*(noise(u,v,3,seed+41)-.5)
+    wv=v+.055*(noise(u,v,3,seed+47)-.5)
+    distance,gap,facet=cells(wu,wv,8,seed+5)
+    shade=.72; color=(1.,1.,1.)
+    if family=="carbonate":
+        # Rhombohedral cleavage, coarser and more glassy for calcite.
+        _,edge,plane=cells(wu+.08*math.sin(math.tau*wv),wv,6 if key=="calcite" else 12,seed+7)
+        cleavage=math.exp(-edge*48)
+        h=.32+.47*plane+.12*broad-.16*cleavage
+        shade=.65+.40*plane-.22*cleavage
+        color=(1.,.98,.92) if key=="calcite" else (.96,.94+.06*broad,1.)
+    elif family=="chalk":
+        pore,_,_=cells(wu,wv,23,seed+7)
+        pit=math.exp(-pore*pore*100)*(.3+.7*noise(wu,wv,7,seed+8))
+        bedding=noise(wu,wv,3,seed+9,17)
+        h=.57+.08*broad+.06*grain+.06*bedding-.16*pit
+        shade=.91+.05*bedding-.20*pit
+    elif family=="bladed":
+        _,edge,plane=cells(wu*3,wv,7,seed+7)
+        fibers=noise(wu,wv,47,seed+8,4)
+        joint=math.exp(-edge*65)
+        h=.34+.35*plane+.12*fibers-.12*joint
+        shade=.71+.24*plane+.10*fibers-.17*joint
+        color=(1.,.98,.92+.08*fibers)
+    elif family=="massive":
+        fracture=math.exp(-gap*55)
+        h=.41+.21*facet+.12*noise(wu,wv,26,seed+9)+.08*grain-.17*fracture
+        shade=.76+.16*broad+.10*facet-.19*fracture
+        color=(.93+.07*broad,.96,1.)
+    elif family=="clastic":
+        # Rounded pebbles retain cement between them; broken angular clasts
+        # occupy interlocking polygons, with a different fracture relief.
+        if key=="conglomerate":
+            distance,_,facet=cells(wu,wv,6,seed+7)
+            radius=.35+.38*facet
+            clast=max(0.,min(1.,(radius-distance)*18))
+            dome=max(0.,1-(distance/radius)**2)
+            h=.30+.07*grain+clast*(.13+.29*dome)
+        else:
+            clast=max(0.,min(1.,(gap-.035)*24))
+            h=.26+.06*grain+clast*(.16+.37*facet)
+        cement=.42+.15*noise(wu,wv,21,seed+9)
+        stone=.57+.35*facet+.07*grain
+        shade=cement*(1-clast)+stone*clast
+        # Individual clasts vary in warm/cool lithology, rather than confetti.
+        lithology=1. if facet>.56 else 0.
+        color=(1.-clast*.18*lithology,1.-clast*.09,1.-clast*.22*(1-lithology))
+    elif family=="folded":
+        folded=wv+.09*math.sin(math.tau*u)+.10*(noise(u,v,3,seed+9)-.5)
+        bands=noise(wu,folded,3,seed+8,23)
+        fine=noise(wu,folded,5,seed+10,59)
+        seam=max(0.,1-abs(bands-.72)*35)
+        h=.30+.31*bands+.13*fine+.07*grain+.05*seam
+        shade=.46+.47*bands+.13*fine
+        if key=="bedrock":
+            # Compressed, folded basement: pale hairline seams in dark grain.
+            shade=.49+.31*bands+.12*fine+.11*seam
+            h=.27+.32*bands+.16*fine+.05*grain
+            color=(.88+.12*seam,.93+.07*seam,1.)
+        else:
+            color=(.93+.07*bands,.93+.07*bands,1.)
+    elif family=="vesicular":
+        pore,_,_=cells(wu*2,wv,13,seed+7)
+        cavity=math.exp(-pore*pore*35)
+        rim=math.exp(-((pore-.29)*13)**2)
+        h=.58+.09*broad+.07*grain-.38*cavity+.06*rim
+        shade=.81+.10*broad-.43*cavity+.07*rim
+    elif family=="pisolitic":
+        nodule=max(0.,1-distance*2.1)
+        shell=.5+.5*math.cos(distance*37)
+        weathering=noise(wu,wv,19,seed+8)
+        h=.33+.20*nodule+.07*shell*nodule+.16*grain+.09*weathering
+        shade=.56+.18*nodule+.13*broad+.13*weathering+.07*shell*nodule
+        color=(1.,.78+.22*nodule,.68+.26*nodule)
+    elif family=="gem":
+        # Elongated emerald columns and compact ruby facets have deliberately
+        # different relief, inclusions and cleavage, not just different tints.
+        cu,cv=(wu*2,wv) if key=="emerald" else (wu,wv)
+        radius,edge,plane=cells(cu,cv,6,seed+7)
+        cleavage=math.exp(-edge*65)
+        inclusion=max(0.,noise(cu,cv,17,seed+8)-.68)*1.2
+        facet_step=math.floor(plane*7)/7
+        h=.26+.53*facet_step+.06*broad-.15*cleavage-.08*inclusion
+        shade=.46+.48*facet_step+.10*broad-.24*cleavage-inclusion
+        if key=="ruby":
+            color=(1.,.65+.32*plane,.77+.23*plane)
+        else:
+            striation=noise(wu,wv,43,seed+9,3)
+            h+=.05*striation
+            color=(.62+.32*plane,1.,.78+.22*striation)
+    elif family in ("cubic","platy"):
+        h=.22+.12*broad+.06*grain
+        shade=.36+.16*broad
+        rgb=(shade*.83,shade,shade*.65) if family=="platy" else (shade*.88,shade*.77,shade)
+        for px,py,width,length,cs,sn,variation in plates:
+            dx=(wu-px+.5)%1-.5; dy=(wv-py+.5)%1-.5
+            local_x=abs(dx*cs+dy*sn)/width
+            local_y=abs(-dx*sn+dy*cs)/length
+            edge=1-max(local_x,local_y)
+            if edge<=0: continue
+            rim=min(1.,edge*22)
+            terrace=math.floor(edge*9)/9
+            relief=.34+.25*variation+.11*terrace
+            if relief<=h: continue
+            h=relief-.06*(1-rim)
+            facet=.70+.18*(1-local_x)+.08*variation
+            if family=="platy":
+                rgb=(facet*(.83+.12*variation),facet,facet*(.30+.20*variation))
+            else:
+                zone=noise(px,py,4,seed+8)
+                color=(.43,.95,1.) if zone>.54 else (1.,.59+.20*variation,1.)
+                rgb=tuple(facet*c for c in color)
+            rgb=tuple(c*(.73+.27*rim) for c in rgb)
+        return h,rgb
+    elif family=="botryoidal":
+        radius,_,plane=cells(wu,wv,14,seed+7)
+        dome=math.sqrt(max(0.,1-(radius/.55)**2))
+        crust=noise(wu,wv,5,seed+8)
+        h=.27+.39*dome+.08*grain+.08*crust
+        shade=.44+.36*dome+.17*crust
+        color=(.60+.30*plane,.72+.28*dome,1.)
+    elif family=="mineralized":
+        fracture=math.exp(-gap*45)
+        mineral=max(0.,min(1.,(noise(wu,wv,9,seed+8)-.61)*13))
+        fleck=max(0.,min(1.,(noise(wu,wv,39,seed+9)-.60)*8))*mineral
+        h=.33+.17*broad+.11*facet+.07*grain-.11*fracture+.14*fleck
+        # Dark host with sparse green/gold mineralization. No emissive glow.
+        shade=.22+.15*broad+.08*facet
+        host=(shade*.85,shade*.93,shade)
+        gold=1. if noise(wu,wv,11,seed+10)>.52 else 0.
+        mineral_color=(.43+.40*gold,.79,.14+.07*gold)
+        return h,tuple(a*(1-fleck)+b*fleck for a,b in zip(host,mineral_color))
+    else:  # Welded tuff: flattened pumice fragments in fine volcanic ash.
+        radius,_,plane=cells(wu,wv*3,9,seed+7)
+        fragment=max(0.,min(1.,(.38-radius)*17))
+        lamina=noise(wu,wv,3,seed+8,29)
+        h=.35+.11*lamina+.10*grain+fragment*(.09+.14*plane)
+        shade=.59+.17*lamina+.10*grain+fragment*(.10+.10*plane)
+        color=(1.,.94+.06*fragment,.83+.14*fragment)
+    return h,tuple(shade*c for c in color)
+
+
+def texture(key,family,overwrite=False):
+    albedo_path=ROOT/f"textures/{key}.png"
+    normal_path=ROOT/f"textures/{key}_normal.png"
+    write_albedo=overwrite or not albedo_path.exists()
+    write_normal=overwrite or not normal_path.exists()
+    if not write_albedo and not write_normal: return 0
     size=128; seed=int.from_bytes(hashlib.sha256(key.encode()).digest()[:4],"little")
-    heights=[height(x/size,y/size,family,seed,key) for y in range(size) for x in range(size)]
+    geological=family in GEOLOGICAL_FAMILIES
+    plates=mineral_plates(seed,family) if family in ("cubic","platy") else ()
+    samples=[geological_sample(x/size,y/size,family,seed,key,plates) for y in range(size) for x in range(size)] if geological else []
+    heights=[sample[0] for sample in samples] if geological else [height(x/size,y/size,family,seed,key) for y in range(size) for x in range(size)]
     albedo=bytearray(); normals=bytearray()
     for y in range(size):
         for x in range(size):
@@ -500,13 +718,16 @@ def texture(key,family):
             # Whitening preserves authored material tints without double-tinting.
             shade=max(.34,min(1.0,.55+.50*h))
             if family=="ore": shade=min(1.,shade+.14*(h>.70))
-            albedo.extend((byte(shade),byte(shade),byte(shade),255))
+            rgb=samples[y*size+x][1] if geological else (shade,shade,shade)
+            albedo.extend((*map(byte,rgb),255))
             dx=(heights[y*size+(x+1)%size]-heights[y*size+(x-1)%size])*5
             dy=(heights[((y+1)%size)*size+x]-heights[((y-1)%size)*size+x])*5
             length=math.sqrt(dx*dx+dy*dy+1)
             normals.extend((byte(.5-.5*dx/length),byte(.5-.5*dy/length),byte(.5+.5/length),255))
-    png(ROOT/f"textures/{key}.png",size,albedo,True)
-    png(ROOT/f"textures/{key}_normal.png",size,normals,False)
+    # A missing partner must not replace an existing hand-authored map.
+    if write_albedo: png(albedo_path,size,albedo,True)
+    if write_normal: png(normal_path,size,normals,False)
+    return int(write_albedo)+int(write_normal)
 
 
 def background_texture(profile,layer,order):
@@ -535,18 +756,39 @@ def background_texture(profile,layer,order):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--data-only",action="store_true",help="Rebuild recipes without regenerating unchanged textures")
+    mode=parser.add_mutually_exclusive_group()
+    mode.add_argument("--data-only",action="store_true",help="Append missing materials and bootstrap absent recipes; preserve existing files")
+    mode.add_argument("--materials-only",action="store_true",help="Append missing materials and generate their missing texture maps without touching recipes/backgrounds")
+    mode.add_argument("--assets-only",action="store_true",help="Generate missing texture maps without touching any TOML file")
+    parser.add_argument("--material",action="append",default=[],metavar="KEY",help="Limit material texture generation to this key; repeat for multiple keys")
+    parser.add_argument("--overwrite-textures",action="store_true",help="Explicitly regenerate selected texture maps, including existing maps")
     args=parser.parse_args()
+    known={s[0] for s in SOLIDS+PARTICLES}
+    unknown=set(args.material)-known
+    if unknown: parser.error("Unknown material keys: "+", ".join(sorted(unknown)))
     (ROOT/"textures").mkdir(parents=True,exist_ok=True)
-    materials(); fields(); biomes(); author_features(); worlds(); backgrounds()
+    if not args.assets_only:
+        materials()
+        if not args.materials_only:
+            fields(); biomes(); author_features(); worlds(); backgrounds()
+    generated=0
     if not args.data_only:
-        for key,_,_,_,family,*_ in SOLIDS: texture(key,family)
-        for key,_,_,_,_,family,*_ in PARTICLES: texture(key,family)
-        for profile in ("frontier","hollows"):
-            for order,layer in enumerate(("distant","caverns","formations","backwall")): background_texture(profile,layer,order)
+        entries=[(s[0],s[4]) for s in SOLIDS]+[(s[0],s[5]) for s in PARTICLES]
+        for key,family in entries:
+            if args.material and key not in args.material: continue
+            paths=[ROOT/f"textures/{key}{suffix}.png" for suffix in ("","_normal")]
+            if args.overwrite_textures or any(not path.exists() for path in paths):
+                generated+=texture(key,family,args.overwrite_textures)
+        if not args.materials_only and not args.material:
+            for profile in ("frontier","hollows"):
+                for order,layer in enumerate(("distant","caverns","formations","backwall")):
+                    path=ROOT/f"textures/background_{profile}_{layer}.png"
+                    if args.overwrite_textures or not path.exists():
+                        background_texture(profile,layer,order)
+                        generated+=1
     for path in ROOT.glob("*.toml"):
         with path.open("rb") as stream: tomllib.load(stream)
-    print("Generated 45 materials, 11 biomes, 28 fields, 26 templates, two profiles; TOML syntax valid." + ("" if args.data_only else " Generated 98 PNG assets."))
+    print(f"Material ledger: {len(SOLIDS)+len(PARTICLES)} entries. Generated {generated} PNG assets; existing recipes preserved; TOML syntax valid.")
 
 
 if __name__=="__main__": main()
