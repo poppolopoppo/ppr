@@ -492,7 +492,7 @@ export namespace pP::mem {
 
 #if PPR_ENABLE_DEBUG
     namespace details {
-        class [[nodiscard]] ScopedArenaWithDebug : public ScopedArena<Arena<SmallPage>> {
+        class [[nodiscard]] ScopedArenaWithDebug : public ScopedArena<Arena<>> {
             static i32 &getDepthTLS() noexcept {
                 thread_local i32 g_depth_tls{-1};
                 return g_depth_tls;
@@ -501,7 +501,7 @@ export namespace pP::mem {
             i32 m_depth{-1};
 
         public:
-            explicit ScopedArenaWithDebug(Arena<SmallPage> &arena) noexcept
+            explicit ScopedArenaWithDebug(Arena<> &arena) noexcept
                 : ScopedArena(arena), m_depth(++getDepthTLS()) {
             }
 
@@ -525,7 +525,7 @@ export namespace pP::mem {
     // ------------------------------------------------------------------
 
     class ScratchPad {
-        [[nodiscard]] static Arena<SmallPage> &getArenaTLS_() noexcept;
+        [[nodiscard]] static Arena<> &getArenaTLS_() noexcept;
 
     public:
         constexpr ScratchPad() noexcept = default;
@@ -533,7 +533,7 @@ export namespace pP::mem {
 #if PPR_ENABLE_DEBUG
         using scoped_arena_t = details::ScopedArenaWithDebug;
 #else
-        using scoped_arena_t = ScopedArena<Arena<SmallPage>>;
+        using scoped_arena_t = ScopedArena<Arena<>>;
 #endif
 
         [[nodiscard]] static constexpr Allocator<scoped_arena_t> open() noexcept {

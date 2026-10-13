@@ -91,8 +91,8 @@ namespace pP::mem {
     // default Arena for for small transient allocations (ex: log formatting, serialization, etc)
     // ------------------------------------------------------------------
 
-    Arena<SmallPage> &ScratchPad::getArenaTLS_() noexcept {
-        alignas(hal::cacheline_size_v) thread_local Arena<SmallPage> g_instance_tls{};
+    Arena<> &ScratchPad::getArenaTLS_() noexcept {
+        alignas(hal::cacheline_size_v) thread_local Arena g_instance_tls{};
         return g_instance_tls;
     }
 
