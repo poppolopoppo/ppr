@@ -131,6 +131,7 @@ namespace pP::sim {
             return {};
         }
         [[nodiscard]] std::error_code validateBiomes(const GenerationRecipe &recipe) {
+            u64 blob_count = 0u;
             for (const auto &biome: recipe.m_biomes) {
                 if (biome.m_temperature_field >= recipe.m_fields.size() or
                     not positive(
@@ -141,6 +142,32 @@ namespace pP::sim {
                     biome.m_bands.size() > 128u or
                     biome.m_deposits.size() > 128u or
                     biome.m_lining_thickness_fine > 3u or
+                    biome.m_relaxation_passes > 24u or
+                    static_cast<u64>(biome.m_relaxation_passes) +
+                            biome.m_pore_passes +
+                            biome.m_finish_passes +
+                            biome.m_erosion_passes >
+                        24u or
+                    biome.m_pore_passes > 6u or
+                    biome.m_finish_passes > 4u or
+                    biome.m_erosion_passes > 24u or
+                    biome.m_pore_field >= recipe.m_fields.size() or
+                    not finiteRange(biome.m_pore_probability, 0.0, 0.2) or
+                    (biome.m_pore_probability > 0.0 and
+                        biome.m_pore_radius_max_m > kMaxGenerationPoreRadiusFine * recipe.m_cell_size_m) or
+                    not interval(biome.m_pore_radius_min_m, biome.m_pore_radius_max_m, 0.0, 3.0) or
+                    not finiteRange(biome.m_pore_affinity_min, -1.0, 1.0) or
+                    not finiteRange(biome.m_finish_adoption, 0.0, 0.3) or
+                    not finiteRange(biome.m_soil_depth_m, 0.0, 12.0) or
+                    not finiteRange(biome.m_weathered_depth_m, 0.0, 30.0) or
+                    not finiteRange(biome.m_formation_probability, 0.0, 0.2) or
+                    not finiteRange(biome.m_formation_length_m, 0.0, 8.0) or
+                    (biome.m_soil_depth_m > 0.0 and not terrain(recipe, biome.m_soil_material)) or
+                    (biome.m_weathered_depth_m > 0.0 and not terrain(recipe, biome.m_weathered_material)) or
+                    (biome.m_formation_probability > 0.0 and not terrain(recipe, biome.m_formation_material)) or
+                    (biome.m_rind_material != 0u and not terrain(recipe, biome.m_rind_material)) or
+                    not finiteRange(biome.m_relaxation_adoption, 0.0, 1.0) or
+                    not finiteRange(biome.m_sprinkle_probability, 0.0, 1.0) or
                     ((biome.m_lining_material == 0u) != (biome.m_lining_thickness_fine == 0u)) or
                     (biome.m_lining_material != 0u and not terrain(recipe, biome.m_lining_material)) or
                     not ordered(biome.m_bands) or
@@ -150,17 +177,23 @@ namespace pP::sim {
                 double previous_depth = 0.0;
                 for (const auto &band: biome.m_bands) {
                     if (band.m_field >= recipe.m_fields.size() or
+                        not finiteRange(band.m_bed_period_m, 0.0, 256.0) or
+                        not finiteRange(band.m_bed_warp_m, 0.0, 64.0) or
+                        not finiteRange(band.m_bed_dip, -0.5, 0.5) or
+                        (band.m_bed_period_m == 0.0 and (band.m_bed_warp_m != 0.0 or band.m_bed_dip != 0.0)) or
                         not interval(band.m_depth_min, band.m_depth_max, 0.0, 1.0) or
                         band.m_depth_min != previous_depth or
                         band.m_depth_min == band.m_depth_max or
                         band.m_choices.empty() or
                         band.m_choices.size() > kMaxGenerationMaterials or
                         not uniqueKeys(band.m_choices) or
+                        std::ranges::none_of(
+                            band.m_choices, [](const auto &choice) { return choice.m_material != 0u; }) or
                         not validWeights(band.m_choices)) {
                         PPR_RETURN_ERROR_ON_FAIL(WorldPlan, std::errc::invalid_argument);
                     }
                     for (const auto &choice: band.m_choices) {
-                        if (not terrain(recipe, choice.m_material)) {
+                        if (choice.m_material != 0u and not terrain(recipe, choice.m_material)) {
                             PPR_RETURN_ERROR_ON_FAIL(WorldPlan, std::errc::invalid_argument);
                         }
                     }
@@ -174,10 +207,51 @@ namespace pP::sim {
                         not terrain(recipe, deposit.m_material) or
                         not terrain(recipe, deposit.m_host) or
                         not interval(deposit.m_depth_min, deposit.m_depth_max, 0.0, 1.0) or
-                        not interval(deposit.m_threshold_min, deposit.m_threshold_max, -1.0, 1.0)) {
+                        not interval(deposit.m_threshold_min, deposit.m_threshold_max, -1.0, 1.0) or
+                        deposit.m_shape > EGenerationDepositShape::blob or
+                        deposit.m_stage > EGenerationDepositStage::detail or
+                        not finiteRange(deposit.m_core_coverage, 0.0, 1.0) or
+                        not finiteRange(deposit.m_fringe_coverage, 0.0, 1.0) or
+                        deposit.m_core_coverage < deposit.m_fringe_coverage or
+                        (deposit.m_stage == EGenerationDepositStage::bulk and deposit.m_sprinkle_probability != 0.0) or
+                        not finiteRange(deposit.m_sprinkle_probability, 0.0, 0.02)) {
+                        PPR_RETURN_ERROR_ON_FAIL(WorldPlan, std::errc::invalid_argument);
+                    }
+                    if (deposit.m_shape == EGenerationDepositShape::blob) {
+                        if (deposit.m_blob_count == 0u or
+                            deposit.m_blob_count > 4096u or
+                            deposit.m_depth_min == deposit.m_depth_max or
+                            not interval(deposit.m_radius_min_m, deposit.m_radius_max_m, 0.0, 256.0) or
+                            deposit.m_radius_min_m == 0.0 or
+                            not interval(deposit.m_stretch_min, deposit.m_stretch_max, 0.1, 16.0) or
+                            not interval(
+                                deposit.m_orientation_min_degrees, deposit.m_orientation_max_degrees, 0.0, 360.0) or
+                            not finiteRange(deposit.m_distortion, 0.0, 0.45) or
+                            deposit.m_radius_max_m *
+                                    std::max(1.0, deposit.m_stretch_max) *
+                                    (1.0 + deposit.m_distortion) *
+                                    1.2 >
+                                kWorldEdge * recipe.m_cell_size_m) {
+                            PPR_RETURN_ERROR_ON_FAIL(WorldPlan, std::errc::invalid_argument);
+                        }
+                        blob_count += deposit.m_blob_count;
+                    } else if (deposit.m_blob_count != 0u or
+                               deposit.m_radius_min_m != 0.0 or
+                               deposit.m_radius_max_m != 0.0 or
+                               deposit.m_stretch_min != 1.0 or
+                               deposit.m_stretch_max != 1.0 or
+                               deposit.m_distortion != 0.0 or
+                               deposit.m_orientation_min_degrees != 0.0 or
+                               deposit.m_orientation_max_degrees != 360.0 or
+                               deposit.m_core_coverage != 1.0 or
+                               deposit.m_fringe_coverage != 1.0 or
+                               deposit.m_sprinkle_probability != 0.0) {
                         PPR_RETURN_ERROR_ON_FAIL(WorldPlan, std::errc::invalid_argument);
                     }
                 }
+            }
+            if (blob_count > 4096u) {
+                PPR_RETURN_ERROR_ON_FAIL(WorldPlan, std::errc::value_too_large);
             }
             return {};
         }
@@ -297,11 +371,22 @@ namespace pP::sim {
                                interval(value.m_radius_min_m, value.m_radius_max_m, 0.0, 256.0) and
                                value.m_radius_min_m > 0.0 and
                                finiteRange(value.m_turn_probability, 0.0, 1.0) and
+                               finiteRange(value.m_turn_smoothing, 0.0, 1.0) and
+                               finiteRange(value.m_radius_variation, 0.0, 1.0) and
+                               finiteRange(value.m_chamber_probability, 0.0, 0.1) and
+                               finiteRange(value.m_chamber_scale, 1.0, 4.0) and
+                               (value.m_turn_smoothing > 0.0 or (value.m_radius_variation == 0.0 and
+                                                                    value.m_chamber_probability == 0.0 and
+                                                                    value.m_chamber_scale == 1.0)) and
                                (value.m_carve or (terrain(recipe, value.m_material) and terrain(recipe, value.m_host)));
                     } else if constexpr (std::is_same_v<T, GenerationConnection>) {
                         return rule.m_phase == EGenerationPhase::carve and
                                positive(value.m_radius_m, 256.0) and
-                               value.m_extra_links <= 1024u;
+                               value.m_extra_links <= 1024u and
+                               value.m_natural_anchors <= 128u and
+                               value.m_wells <= 32u and
+                               value.m_branches <= 64u and
+                               finiteRange(value.m_roughness_m, 0.0, 8.0);
                     } else if constexpr (std::is_same_v<T, GenerationPlacement>) {
                         return rule.m_phase == EGenerationPhase::stamp and
                                value.m_feature < recipe.m_features.size() and
@@ -355,6 +440,11 @@ namespace pP::sim {
         }
         [[nodiscard]] std::error_code validateRules(const GenerationRecipe &recipe) {
             u64 worm_count = 0u, feature_count = 0u, origin_attempts = 0u;
+            for (const auto &biome: recipe.m_biomes) {
+                for (const auto &deposit: biome.m_deposits) {
+                    origin_attempts += static_cast<u64>(deposit.m_blob_count) * kGenerationBlobOriginAttempts;
+                }
+            }
             u32 connections = 0u;
             for (std::size_t i = 0u; i < recipe.m_rules.size(); ++i) {
                 const auto &rule = recipe.m_rules[i];
@@ -488,6 +578,46 @@ namespace pP::sim {
         return bytes;
     }
 
+    double generationSurfaceHeight(const GenerationPlan &plan, const double x_m) noexcept {
+        const auto &r = plan.recipe();
+        return r.m_open_surface ? r.m_surface_elevation_m +
+                                      r.m_surface_amplitude_m * plan.fields()[r.m_surface_field].sample(x_m, 0.0)
+                                : kWorldEdge * r.m_cell_size_m;
+    }
+    double generationBedrockHeight(const GenerationPlan &plan, const double x_m) noexcept {
+        const auto &r = plan.recipe();
+        return r.m_open_surface ? r.m_bedrock_thickness_m +
+                                      r.m_bedrock_variation_m * plan.fields()[r.m_bedrock_field].sample(x_m, 0.0)
+                                : r.m_boundary_fine * r.m_cell_size_m;
+    }
+    double generationDepth(const GenerationPlan &plan, const double x_m, const double y_m) noexcept {
+        const double surface = generationSurfaceHeight(plan, x_m);
+        return std::clamp(
+            (surface - y_m) / (surface - (plan.recipe().m_open_surface ? generationBedrockHeight(plan, x_m) : 0.0)),
+            0.0, 1.0);
+    }
+    bool generationSubsurfaceBounds(
+        const GenerationPlan &plan, const i64 min_x, const i64 min_y, const i64 max_x, const i64 max_y) noexcept {
+        const auto &r = plan.recipe();
+        if (min_x < r.m_boundary_fine or
+            max_x > kWorldEdge - r.m_boundary_fine or
+            min_y < r.m_boundary_fine or
+            max_y > kWorldEdge - r.m_boundary_fine) {
+            return false;
+        }
+        if (not r.m_open_surface) {
+            return true;
+        }
+        for (i64 x = min_x; x < max_x; ++x) {
+            const double xm = (static_cast<double>(x) + 0.5) * r.m_cell_size_m;
+            if (static_cast<double>(min_y) * r.m_cell_size_m <= generationBedrockHeight(plan, xm) or
+                static_cast<double>(max_y) * r.m_cell_size_m >= generationSurfaceHeight(plan, xm)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     std::error_code validateGenerationRecipe(const GenerationRecipe &recipe) {
         PPR_RETURN_ERROR_ON_FAIL(WorldPlan, validateCounts(recipe));
         if (not positive(recipe.m_cell_size_m, 1.0) or
@@ -499,7 +629,36 @@ namespace pP::sim {
         for (const auto &field: recipe.m_fields) {
             PPR_RETURN_ERROR_ON_FAIL(WorldPlan, validateNoiseFieldDescription(field.m_noise));
         }
+        if (recipe.m_open_surface) {
+            const auto *const bedrock = material(recipe, recipe.m_bedrock_material);
+            const double extent = kWorldEdge * recipe.m_cell_size_m;
+            if (recipe.m_surface_field >= recipe.m_fields.size() or
+                recipe.m_bedrock_field >= recipe.m_fields.size() or
+                bedrock == nullptr or
+                not bedrock->m_terrain or
+                bedrock->m_diggable or
+                not interval(
+                    recipe.m_bedrock_thickness_m - recipe.m_bedrock_variation_m,
+                    recipe.m_bedrock_thickness_m + recipe.m_bedrock_variation_m, 15.0, 40.0) or
+                not finiteRange(recipe.m_surface_amplitude_m, 0.0, 256.0) or
+                not finiteRange(recipe.m_surface_elevation_m, 0.0, extent) or
+                recipe.m_surface_elevation_m - recipe.m_surface_amplitude_m <= 40.0 or
+                recipe.m_surface_elevation_m + recipe.m_surface_amplitude_m >= extent or
+                (recipe.m_start_depth_m and not finiteRange(*recipe.m_start_depth_m, 0.0, extent))) {
+                PPR_RETURN_ERROR_ON_FAIL(WorldPlan, std::errc::invalid_argument);
+            }
+        }
         PPR_RETURN_ERROR_ON_FAIL(WorldPlan, validateBiomes(recipe));
+        u32 pore = 0u, competition = 0u, finish = 0u, erosion = 0u;
+        for (const auto &biome: recipe.m_biomes) {
+            pore = std::max(pore, biome.m_pore_passes);
+            competition = std::max(competition, biome.m_relaxation_passes);
+            finish = std::max(finish, biome.m_finish_passes);
+            erosion = std::max(erosion, biome.m_erosion_passes);
+        }
+        if (pore + competition + finish + erosion > 24u) {
+            PPR_RETURN_ERROR_ON_FAIL(WorldPlan, std::errc::invalid_argument);
+        }
         PPR_RETURN_ERROR_ON_FAIL(WorldPlan, validateFeatures(recipe));
         PPR_RETURN_ERROR_ON_FAIL(WorldPlan, validateLayout(recipe));
         PPR_RETURN_ERROR_ON_FAIL(WorldPlan, validateRules(recipe));
@@ -523,6 +682,28 @@ namespace pP::sim {
             PPR_RETURN_UNEXPECTED_ON_FAIL(WorldPlan, compiled);
             fields.push_back(std::move(*compiled));
         }
-        return GenerationPlan{std::move(recipe), std::move(fields), seed};
+        std::ranges::sort(recipe.m_materials, {}, &GenerationMaterial::m_id);
+        GenerationPlan plan{std::move(recipe), std::move(fields), seed};
+        auto &resolved = plan.m_recipe;
+        if (resolved.m_open_surface) {
+            if (resolved.m_start_depth_m) {
+                const double height = generationSurfaceHeight(
+                                          plan, (resolved.m_start_x_fine + 0.5) * resolved.m_cell_size_m) -
+                                      *resolved.m_start_depth_m;
+                if (height < 0.0 or height >= kWorldEdge * resolved.m_cell_size_m) {
+                    PPR_RETURN_UNEXPECTED_ON_FAIL(WorldPlan, std::errc::invalid_argument);
+                }
+                resolved.m_start_y_fine = static_cast<u32>(std::floor(height / resolved.m_cell_size_m));
+            }
+            const auto &bounds = resolved.m_features[resolved.m_start_feature].m_bounds;
+            if (not generationSubsurfaceBounds(
+                    plan, static_cast<i64>(resolved.m_start_x_fine) + bounds.m_min_x,
+                    static_cast<i64>(resolved.m_start_y_fine) + bounds.m_min_y,
+                    static_cast<i64>(resolved.m_start_x_fine) + bounds.m_max_x,
+                    static_cast<i64>(resolved.m_start_y_fine) + bounds.m_max_y)) {
+                PPR_RETURN_UNEXPECTED_ON_FAIL(WorldPlan, std::errc::invalid_argument);
+            }
+        }
+        return plan;
     }
 }

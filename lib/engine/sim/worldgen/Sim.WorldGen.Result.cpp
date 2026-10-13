@@ -47,6 +47,17 @@ namespace pP::sim {
             for (const auto &material: recipe.m_materials) {
                 terrain[material.m_id] = material.m_terrain ? 1u : 0u;
             }
+            Array<double> surfaces(recipe.m_open_surface ? kWorldEdge : 0u),
+                bedrock(recipe.m_open_surface ? kWorldEdge : 0u);
+            for (u32 x = 0u; x < surfaces.size(); ++x) {
+                const double xm = (x + 0.5) * recipe.m_cell_size_m;
+                surfaces[x] = generationSurfaceHeight(plan, xm);
+                bedrock[x] = generationBedrockHeight(plan, xm);
+            }
+            known_scratch_peak = std::max(
+                known_scratch_peak, terrain.capacity() * sizeof(u8) +
+                                        counts.capacity() * sizeof(u64) +
+                                        (surfaces.capacity() + bedrock.capacity()) * sizeof(double));
             Checksum cells;
             // Domain/version followed by chunk-major, local row-major payload.
             cells.integer(0x7070722e67726964ull, 8u);
@@ -62,14 +73,19 @@ namespace pP::sim {
                         const auto cell = (*payload)[i];
                         const u32 x = cx * kChunkEdge + i % kChunkEdge;
                         const u32 y = cy * kChunkEdge + i / kChunkEdge;
+                        const double ym = (y + 0.5) * recipe.m_cell_size_m;
+                        const bool sky = recipe.m_open_surface and ym >= surfaces[x];
+                        const bool basement = recipe.m_open_surface and ym <= bedrock[x];
                         const bool boundary = x < recipe.m_boundary_fine or
                                               y < recipe.m_boundary_fine or
                                               x >= kWorldEdge - recipe.m_boundary_fine or
-                                              y >= kWorldEdge - recipe.m_boundary_fine;
+                                              (not recipe.m_open_surface and y >= kWorldEdge - recipe.m_boundary_fine);
                         if (terrain[cell.m_element] == 0u or
                             not std::isfinite(cell.m_temperature) or
                             (cell.m_element != 0u and cell.m_temperature <= 0.0f) or
-                            (boundary and cell.m_element != recipe.m_boundary_material)) {
+                            (sky and (cell.m_element != 0u or cell.m_temperature != 0.0f)) or
+                            (basement and cell.m_element != recipe.m_bedrock_material) or
+                            (boundary and not sky and not basement and cell.m_element != recipe.m_boundary_material)) {
                             PPR_RETURN_UNEXPECTED_ON_FAIL(WorldResult, std::errc::invalid_argument);
                         }
                         ++counts[cell.m_element];
@@ -110,6 +126,20 @@ namespace pP::sim {
                 output.number(segment.m_x1_m);
                 output.number(segment.m_y1_m);
                 output.number(segment.m_radius_m);
+            }
+            output.integer(geometry.m_blobs.size(), 8u);
+            for (const auto &blob: geometry.m_blobs) {
+                PPR_RETURN_UNEXPECTED_ON_FAIL(WorldResult, canceled(execution));
+                output.integer(recipe.m_biomes[blob.m_biome].m_key, 8u);
+                output.integer(recipe.m_biomes[blob.m_biome].m_deposits[blob.m_deposit].m_key, 8u);
+                output.integer(blob.m_ordinal, 4u);
+                output.number(blob.m_x_m);
+                output.number(blob.m_y_m);
+                output.number(blob.m_radius_m);
+                output.number(blob.m_stretch);
+                output.number(blob.m_angle);
+                output.number(blob.m_offset_x);
+                output.number(blob.m_offset_y);
             }
             output.integer(geometry.m_omitted_instances.size(), 8u);
             for (const auto omitted: geometry.m_omitted_instances) {
@@ -157,6 +187,7 @@ namespace pP::sim {
                                                     grid.retainedPayloadBytes() +
                                                     geometry.m_instances.capacity() * sizeof(GenerationInstance) +
                                                     geometry.m_segments.capacity() * sizeof(GenerationSegment) +
+                                                    geometry.m_blobs.capacity() * sizeof(GenerationGeometry::Blob) +
                                                     geometry.m_omitted_instances.capacity() * sizeof(u32) +
                                                     matter.m_regions.capacity() * sizeof(InitialMatterRegion) +
                                                     start.m_resource_fine_cells.capacity() * sizeof(u32) +

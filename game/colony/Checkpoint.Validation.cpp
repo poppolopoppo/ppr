@@ -15,6 +15,52 @@ namespace pP::colony {
         bool coordinate(const double value) noexcept {
             return std::isfinite(value) and value >= 0.0 and value <= kWorldExtentMetres;
         }
+        std::error_code validateBlobs(
+            const sim::GenerationGeometry &geometry, const sim::GenerationRecipe &recipe,
+            const IContext *const context) {
+            PPR_RETURN_ERROR_ON_FAIL(
+                CheckpointValidation, geometry.m_blobs.size() <= 4096u ? std::error_code{} : invalid);
+            Array<std::tuple<u32, u32, u32>> identities;
+            identities.reserve(geometry.m_blobs.size());
+            for (const auto &blob: geometry.m_blobs) {
+                PPR_RETURN_ERROR_ON_FAIL(CheckpointValidation, context ? context->error() : std::error_code{});
+                PPR_RETURN_ERROR_ON_FAIL(
+                    CheckpointValidation, blob.m_biome < recipe.m_biomes.size() and
+                                                  blob.m_deposit < recipe.m_biomes[blob.m_biome].m_deposits.size()
+                                              ? std::error_code{}
+                                              : invalid);
+                const auto &deposit = recipe.m_biomes[blob.m_biome].m_deposits[blob.m_deposit];
+                PPR_RETURN_ERROR_ON_FAIL(
+                    CheckpointValidation,
+                    deposit.m_shape == sim::EGenerationDepositShape::blob and
+                            blob.m_ordinal < deposit.m_blob_count and
+                            coordinate(blob.m_x_m) and
+                            coordinate(blob.m_y_m) and
+                            std::isfinite(blob.m_radius_m) and
+                            blob.m_radius_m >= deposit.m_radius_min_m and
+                            blob.m_radius_m <= deposit.m_radius_max_m and
+                            std::isfinite(blob.m_stretch) and
+                            blob.m_stretch >= deposit.m_stretch_min and
+                            blob.m_stretch <= deposit.m_stretch_max and
+                            std::isfinite(blob.m_angle) and
+                            blob.m_angle >= 2.0 * std::numbers::pi * (deposit.m_orientation_min_degrees / 360.0) and
+                            blob.m_angle <= 2.0 * std::numbers::pi * (deposit.m_orientation_max_degrees / 360.0) and
+                            std::isfinite(blob.m_offset_x) and
+                            std::isfinite(blob.m_offset_y) and
+                            blob.m_offset_x >= 0.0 and
+                            blob.m_offset_x <= 1024.0 and
+                            blob.m_offset_y >= 0.0 and
+                            blob.m_offset_y <= 1024.0
+                        ? std::error_code{}
+                        : invalid);
+                identities.emplace_back(blob.m_biome, blob.m_deposit, blob.m_ordinal);
+            }
+            std::ranges::sort(identities);
+            PPR_RETURN_ERROR_ON_FAIL(
+                CheckpointValidation,
+                std::ranges::adjacent_find(identities) == identities.end() ? std::error_code{} : invalid);
+            return {};
+        }
         bool validBooleans(const sim::EcsColumnData &column, const std::initializer_list<std::size_t> offsets) {
             for (std::size_t row = 0u; row < column.m_owners.size(); ++row) {
                 for (const auto offset: offsets) {
@@ -214,6 +260,7 @@ namespace pP::colony {
                                           ? std::error_code{}
                                           : invalid);
         }
+        PPR_RETURN_ERROR_ON_FAIL(CheckpointValidation, validateBlobs(checkpoint.m_geometry, recipe, context));
         for (const auto omitted: checkpoint.m_geometry.m_omitted_instances) {
             PPR_RETURN_ERROR_ON_FAIL(
                 CheckpointValidation, omitted < recipe.m_rules.size() ? std::error_code{} : invalid);

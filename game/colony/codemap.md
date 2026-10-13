@@ -99,7 +99,7 @@ lease and restore prior pause state with neutral input.
 Interactive drivers enable `requireEditPublication()`. `ColonyDriver.Edits.cpp` owns per-chunk rollback candidates, suspended tick prefixes and bounded collider preparation; owned simulation packets overlay candidate cells only when colliders are ready. Matching complete render revision manifests settle the candidate before gameplay resumes. Paused tools and explicit single-step preserve held tick accounting. Headless numeric fixtures retain their synchronous edit path.
 
 
-`Checkpoint.cppm` / `Checkpoint.cpp` / `Checkpoint.Codec.cpp` / `Checkpoint.Validation.cpp` own the v2 game envelope including current particle records/next ID, full frozen capture, explicit byte codec and fail-closed content/metadata/ECS validation. `ColonyDriver.Checkpoint.cpp` provides full body-aware capture and fresh candidate restoration. `WorldJob::requestCheckpoint` runs capture under the existing exclusive owner lease; encoding/I/O consume the owned result off-main. `Checkpoint.Tests.cpp` covers edited-world round trips, identity/metric rejection, malformed input and frozen full capture without dirty-state mutation. Raw sim snapshot v4 remains a separate low-level codec.
+`Checkpoint.cppm` / `Checkpoint.cpp` / `Checkpoint.Codec.cpp` / `Checkpoint.Validation.cpp` own the v3 game envelope (including finite blob metadata) including current particle records/next ID, full frozen capture, explicit byte codec and fail-closed content/metadata/ECS validation. `ColonyDriver.Checkpoint.cpp` provides full body-aware capture and fresh candidate restoration. `WorldJob::requestCheckpoint` runs capture under the existing exclusive owner lease; encoding/I/O consume the owned result off-main. `Checkpoint.Tests.cpp` covers edited-world round trips, identity/metric rejection, malformed input and frozen full capture without dirty-state mutation. Raw sim snapshot v4 remains a separate low-level codec.
 
 
 `WorldGen.Export.cpp` streams bounded flat PPM overviews plus a machine-readable generation report from an exclusively owned validated generated world. `--worldgen-preview --worldgen-output=<directory>` invokes it offline; row orientation is +Y-up and 4x4 fine samples are averaged per pixel. It shares contour/fill-height clipping and authored material/biome colors. This is separate from GPU texture/contour acceptance.
@@ -127,3 +127,19 @@ candidates stage local center-covered particle removals with terrain/colliders a
 commit after complete matching publication. Pure digs preserve immutable batches.
 Frame packets share translated changed particle chunks and complete material/normal
 and four-layer backdrop appearance; engine.app does not import simulation types.
+
+Authored geology compiles one open-surface/bedrock frame, ordered warped bed
+packages, material-only salt, clustered vacuum seeds and bounded pore/material/
+finishing phases into the numeric plan. Supported roof/floor formations discover
+bounded records from the frozen terrain before applying them; final certification
+preserves the selected routed cave backbone. Every new control enters canonical
+identity. The original weighted geological competition and weak solid-only finish
+remain intact. A separate final `erosion_passes` stage uses the prototype's
+unweighted eight-neighbor histogram including vacuum at 50% adoption, initially
+eight passes in shipped recipes. Generator version 6 rejects older identities while retaining
+the v3 checkpoint envelope layout. See [worldgen authoring](../../docs/worldgen-content.md).
+
+The presentation cache also captures the immutable open-surface profile once
+per world generation, evaluating the shared generation height helper at every
+fine-column centre. Owned packets, initial batches and candidate publication
+share those numeric heights with GridPass without transporting sim plan types.

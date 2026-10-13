@@ -16,9 +16,10 @@ export namespace pP::sim {
         const GenerationGeometry &m_geometry;
         Array<Array<u32>> m_segments;
         Array<Array<u32>> m_instances;
+        Array<Array<u32>> m_blobs;
         GenerationRaster(
             const GenerationPlan &, const BiomeLayout &, const GenerationGeometry &, Array<Array<u32>>,
-            Array<Array<u32>>) noexcept;
+            Array<Array<u32>>, Array<Array<u32>>) noexcept;
         friend Expected<GenerationRaster> compileGenerationRaster(
             const GenerationPlan &, const BiomeLayout &, const GenerationGeometry &, const IContext *);
 
@@ -27,9 +28,16 @@ export namespace pP::sim {
         GenerationRaster(const GenerationRaster &) = delete;
         GenerationRaster &operator=(const GenerationRaster &) = delete;
         [[nodiscard]] Expected<Array<Cell>> chunk(ChunkPos position, const IContext *context = nullptr) const;
+        [[nodiscard]] bool protectedCell(u32 x, u32 y) const noexcept;
         [[nodiscard]] u64 indexPayloadBytes() const noexcept;
         [[nodiscard]] u64 chunkWorkingPayloadBytes() const noexcept;
     };
+    [[nodiscard]] std::error_code validateGenerationBackbone(
+        const GenerationPlan &plan, const GenerationGeometry &geometry, const ChunkGrid &grid,
+        const IContext *context = nullptr);
+    [[nodiscard]] std::error_code finishGenerationTerrain(
+        const GenerationPlan &plan, const BiomeLayout &layout, const GenerationGeometry &geometry, ChunkGrid &grid,
+        const IContext *context = nullptr, u64 *known_scratch_peak = nullptr);
     [[nodiscard]] Expected<GenerationRaster> compileGenerationRaster(
         const GenerationPlan &plan, const BiomeLayout &layout, const GenerationGeometry &geometry,
         const IContext *context = nullptr);

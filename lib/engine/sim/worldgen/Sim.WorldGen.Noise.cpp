@@ -36,7 +36,7 @@ namespace pP::sim {
         }
 
         [[nodiscard]] bool validNoiseDescription(const NoiseFieldDesc &desc) noexcept {
-            if (desc.m_algorithm > ENoiseAlgorithm::cellular_distance or
+            if (desc.m_algorithm > ENoiseAlgorithm::cellular_value or
                 desc.m_fractal > ENoiseFractal::billow or
                 desc.m_octaves == 0u or
                 desc.m_octaves > 16u or
@@ -132,6 +132,11 @@ namespace pP::sim {
                 impl->m_noise.SetNoiseType(FastNoiseLite::NoiseType_Cellular);
                 impl->m_noise.SetCellularDistanceFunction(FastNoiseLite::CellularDistanceFunction_EuclideanSq);
                 impl->m_noise.SetCellularReturnType(FastNoiseLite::CellularReturnType_Distance);
+                break;
+            case ENoiseAlgorithm::cellular_value:
+                impl->m_noise.SetNoiseType(FastNoiseLite::NoiseType_Cellular);
+                impl->m_noise.SetCellularDistanceFunction(FastNoiseLite::CellularDistanceFunction_EuclideanSq);
+                impl->m_noise.SetCellularReturnType(FastNoiseLite::CellularReturnType_CellValue);
                 break;
         }
         const FastNoiseLite::FractalType fractals[] = {

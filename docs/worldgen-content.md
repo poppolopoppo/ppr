@@ -160,7 +160,8 @@ This lower boundary returns source bytes. `loadContentCatalog` compiles every do
 
 `decodeBiomeDefinitions` returns owned recipes sorted by biome key. It validates
 references against the decoded material catalog and field definitions. Terrain
-choices and deposit hosts/outputs must resolve to terrain solids; particle IDs
+choices accept terrain solids or the explicit `vacuum` empty seed. Deposit hosts/outputs
+must resolve to terrain solids; particle IDs
 are rejected. The document is limited to 1 MiB and 64 biomes. Each biome supports
 at most 16 composition bands, 64 named choices per band and 64 deposits.
 
@@ -204,16 +205,126 @@ threshold_min = 0.3
 threshold_max = 1.0
 ```
 
-Deposits are optional. Each threshold deposit has a unique explicit order,
-increasing normalized-depth bounds within `[0,1]`, and increasing threshold
-bounds within `[-1,1]`. `threshold` is the supported biome deposit kind at this
-boundary; unsupported kinds fail explicitly. Geometric veins, feature templates,
-world rules and full-pack identity are validated by the complete pack loader. The
-production generator compiles these decoded recipes into its owned numeric plan.
+Deposits are optional. Each `kind = "threshold"` deposit has a unique explicit
+order and increasing normalized-depth bounds within `[0,1]`. The default
+`shape = "field"` keeps the existing field-window placement and requires explicit
+increasing `threshold_min`/`threshold_max` within `[-1,1]`.
+
+`shape = "blob"` places a finite number of independently seeded, rotated ellipses,
+stretched along their local axes and distorted at their edge by the named `field`.
+Threshold bounds may be omitted (resolved to `[-1,1]`) and do not select blob cells.
+Blob outputs replace only their named terrain host within the selected biome/depth.
+They never paint vacuum or another biome.
+Origins use bounded site-local proposal boxes clipped to the world and authored
+depth interval, followed by exact warped-biome admission. This favors province
+interiors; it is not a uniform distribution over the full biome area. The optional controls are:
+
+| Control | Domain | Default |
+|---|---|---|
+| `stage` | `bulk` before pore/material passes, `detail` before finishing passes | `bulk` |
+| `blob_count` | 1..4096 for blobs; aggregate cap 4096 | 0 for fields |
+| `radius_min_m`, `radius_max_m` | ordered positive radii, at most 256 m | 0 for fields |
+| `stretch_min`, `stretch_max` | ordered values in `[0.1,16]` | 1 |
+| `orientation_min_degrees`, `orientation_max_degrees` | ordered values in `[0,360]`; equal values fix the angle | 0, 360 |
+| `distortion` | `[0,0.45]` | 0 |
+| `core_coverage`, `fringe_coverage` | `[0,1]`, core at least fringe | 1 |
+| `sprinkle_probability` | `[0,0.02]`, detail stage only | 0 |
+
+Orientation is counterclockwise from world +X and rotates the stretched local X
+axis. The default full circle preserves the existing random stream; restricting
+the range does not shift radius, stretch or edge-offset draws. Angles are stored
+in the existing checkpoint blob record and checked against the compiled recipe.
+The stretched radius including edge distortion and the satellite annulus must
+fit within the world width. Field shapes require neutral blob controls. Coverage
+is same-mineral occupancy probability: it stays at the core value through normalized
+radius 0.6, then declines linearly to the fringe value at radius 1. Sprinkle adds
+sparse same-mineral satellites only in the local radius `(1,1.2]`; it does not
+scatter minerals through the whole biome or introduce a different envelope material.
+
+Optional composition-band `bed_period_m` enables ordered strata instead of a
+categorical noise draw. It is in `[0,256]`, with zero retaining the ordinary
+field-driven palette. `bed_warp_m` is in `[0,64]` and `bed_dip` in `[-0.5,0.5]`;
+both must be zero when beds are disabled. Positive choice weights, in choice-key
+order, divide each repeating package into successive beds. The package coordinate
+uses surface-relative metres, lateral dip and the band's named warp field. Slow
+field modulation changes package thickness; the seed selects its phase. Separate
+depth bands can author different sequences, dips and characteristic thicknesses.
+Bulk bodies interrupt these beds before pores and caves are carved.
+
+Optional biome `sprinkle_probability` is in `[0,1]` (default 0). It independently
+resamples unprotected cells from the depth band's solid choices before bulk
+geology. It never creates vacuum. Explicit `vacuum` remains a supported coherent
+palette choice for custom packs, with zero temperature; every band also requires
+at least one terrain solid. Inside authored reservations all palette draws are
+conditioned on the solid choices. Explicit template carving and authorized
+traversal-room connections create emptiness there. Gas and liquid materials
+remain particles and cannot enter any terrain palette or deposit.
+
+Separate clustered pores use these optional biome controls:
+
+| Control | Domain | Default |
+|---|---|---|
+| `pore_field` | Named coherent affinity field | absent |
+| `pore_probability` | `[0,0.2]`, one trial per global 16x16 fine-cell tile | 0 |
+| `pore_radius_min_m`, `pore_radius_max_m` | Ordered radii in `[0,3]` metres | 2, 3 |
+| `pore_affinity_min` | `[-1,1]` | 0 |
+| `pore_passes` | 0..6 | 0 |
+| `finish_passes` | 0..4 | 0 |
+| `finish_adoption` | `[0,0.3]` | 0.15 |
+
+Active pores require the affinity field. A deterministic tile trial selects one
+jittered disc after bulk geology; its anchor and affected cells must pass the
+coherent affinity gate. Only solids in the local composition band are eligible
+hosts. The numeric API additionally bounds the radius to 32 fine cells, and its
+tile search derives its extent from the metric. Neighboring chunks therefore
+reconstruct the same discs. The short synchronous pore phase births vacuum at
+three empty neighbors and retains it at two; the immutable original host/affinity
+gate limits births. Vacuum always has zero temperature.
+
+`relaxation_passes` remains 0..24, with `relaxation_adoption` in `[0,1]` (default
+0.5). The tweaked material competition retains its weighted solid-neighbor vote:
+local frequency, original-stratum affinity, current-material inertia and bounded
+density resistance. The shipped per-biome adoption values remain 0.25..0.4.
+This stage only relabels solids and retains existing vacuum. Detail deposits and
+their satellites are then initialized over the remaining halo, followed by the
+same weak solid-only finishing vote at shipped 12% adoption.
+
+Optional `erosion_passes` appends the prototype erosion filter after those stages.
+Its default is zero, retaining the earlier pipeline for custom packs and numeric
+fixtures. It accepts 0..24, subject to the combined pass limit; the shipped recipes
+initially use eight passes. Each pass builds an unweighted histogram of all eight
+neighbors, excluding the centre and including vacuum and every solid ID. Either
+a solid or an empty centre adopts the most frequent neighbor label with fixed
+50% probability, allowing excavation, refill and solid relabeling. This final
+stage adds no stratum/current/density bias. Seeded semantic material keys, global
+position and pass resolve equal counts deterministically instead of depending on
+GPU execution order. Dedicated pore seeding and birth/survival still precede the
+tweaked stages; the final erosion may refill or merge their cavities.
+
+The sum of the maximum pore, competition, finishing and erosion counts across the
+recipe must not exceed 24. The shipped maximum is 3+10+3+8=24. Every sequential
+pass consumes one fine-cell halo; the halo covers their sum. Detail therefore
+precedes erosion even when finishing has zero passes. Biome boundaries, lining,
+reservations, connection cores, sky and bedrock stay immutable throughout every
+filter. Supported formations are discovered from the completed erosion output.
+
+Optional `soil_material`, `soil_depth_m`, `weathered_material` and
+`weathered_depth_m` author surface cover, using terrain solids and depths in
+`[0,12]` and `[0,30]` metres respectively. Optional `formation_material`, `formation_probability` in
+`[0,0.2]`, `formation_length_m` in `[0,8]` and `rind_material` author supported
+roof/floor growth. The final stage reads the frozen grid, collects at most 4096
+complete supported tapered footprints, then applies records in stable order.
+It requires empty clearance, one biome, diggable support and unprotected cells;
+conflicting records are skipped whole. Contact rinds are discontinuous material
+replacement at admitted roots. Discovery never reads earlier formation writes
+and does not copy the whole grid. Backbone clearance is checked afterward.
+
+All controls enter canonical content identity. Deposits retain the existing
+`threshold` kind and field/blob shapes; unsupported kinds fail explicitly.
 
 ## Noise fields
 
-`decodeFieldDefinitions` resolves named, owned numeric descriptors from `fields.toml`, sorted by stable key. The document requires `schema_version = 2` and at least one `[fields.<name>]` record. The byte cap is 1 MiB and the record cap is 256. Required fields are `algorithm` and positive finite `frequency_per_metre`. Supported algorithms are `open_simplex2`, `perlin`, and `cellular_distance` (Euclidean squared distance).
+`decodeFieldDefinitions` resolves named, owned numeric descriptors from `fields.toml`, sorted by stable key. The document requires `schema_version = 2` and at least one `[fields.<name>]` record. The byte cap is 1 MiB and the record cap is 256. Required fields are `algorithm` and positive finite `frequency_per_metre`. Supported algorithms are `open_simplex2`, `perlin`, `cellular_distance` (Euclidean squared distance), and `cellular_value` (the nearest cellular site's random scalar label). With `fractal = "none"`, cellular value supplies coherent categorical patches for weighted composition. Site labels are approximately uniform; patch areas and realized material coverage are not exact palette weight ratios.
 
 Optional controls have these documented defaults: `fractal = "none"` (`none`, `fbm`, `ridged`, `billow`), `octaves = 4` (1..16), `lacunarity = 2.0` (1..4), `gain = 0.5` (0..1), `warp_amplitude_m = 0.0` (0..4096), and `warp_frequency_per_metre = 0.006` (positive finite). Nonzero warp uses an independently seeded OpenSimplex2 progressive warp. Noise samples use global metre coordinates. Optional `axis_scale_x/y` in [0.125,8] and `rotation_degrees` in [-180,180] transform coordinates before the existing warp. Billow uses normalized octaves of `2*abs(noise)-1`; warping changes only sample coordinates. The numeric preflight also bounds octave-scaled lattice coordinates, rejecting unsafe combinations rather than clamping. Coordinates passed to the compiled field must be finite and within ±4096 metres.
 
@@ -310,12 +421,27 @@ Each `[worlds.<profile>]` has these fields:
 | `boundary_warp_x_field`, `boundary_warp_y_field` | Named fields, also required when amplitude is zero |
 | `start_biome` | Biome enabled by this profile |
 | `start_feature`, `start_marker` | Template and its `start` attachment marker |
-| `start_x_fine`, `start_y_fine` | Fixed template origin, integer world fine-cell boundary coordinates 0..4095 |
+| `start_x_fine`, `start_y_fine` | Template origin, integer fine-cell coordinates 0..4095; optional surface-relative depth resolves Y |
 | `start_clearance_m` | Minimum vertical clearance, at least 3 m and no greater than reservation height |
 | `start_route_width_m` | Positive minimum route width, no greater than reservation width |
 
+Optional `surface_field`, `surface_elevation_m` and `surface_amplitude_m` enable
+an open top with one seeded height function `H(x)`; the shipped height field has
+five fBm octaves. Optional `bedrock_field`, `bedrock_material`,
+`bedrock_thickness_m` and `bedrock_variation_m` define its continuous bottom
+boundary `B(x)`. Bedrock must be undiggable terrain, and thickness plus/minus
+variation must stay in 15..40 metres. Above `H(x)` terrain is vacuum with zero
+temperature. At or below `B(x)` bedrock wins before templates, caves or filters.
+Side safety walls remain below the surface; there is no solid ceiling.
+`start_depth_m`, when supplied, resolves the start origin below `H(x)` before
+layout. Layout eligibility, deposits, cave gates and raster all use normalized
+depth `(H(x)-y)/(H(x)-B(x))`, clamped to `[0,1]`. Closed numeric fixtures retain
+their original world-relative depth frame.
+
 The translated start reservation must fit strictly inside the permanent world
-boundary. Start site/spawn coordinates derive from the translated marker centre,
+boundary and, for open profiles, between surface and bedrock at every intersected
+fine column. The full reservation includes its clearance and resource alcoves;
+checking only the origin or marker is insufficient. Start site/spawn coordinates derive from the translated marker centre,
 not the template origin. The template geometry authors room dimensions, shell
 materials and alcoves; the profile authors their checked minimum guarantees.
 
@@ -354,11 +480,27 @@ nonempty and within `[0,1]`; cave thresholds form a nonempty interval within
 `[-1,1]`. Worm count is 1..1024 per rule, length is positive and at most 4096/3 m,
 radius is positive and at most 64 m, and turn probability is in `[0,1]`.
 Length/radius minima may equal maxima. Carve worms forbid material fields.
+Optional `turn_smoothing` and `radius_variation` are in `[0,1]` (default 0).
+Positive turn smoothing enables continuous heading changes; radius variation
+changes tunnel width gradually along the path. `chamber_probability` is in
+`[0,0.1]` (default 0), and `chamber_scale` is in `[1,4]` (default 1).
+Nonneutral radius/chamber controls require positive smoothing. Chambers widen
+local portions of the same unbranched worm. Omitting these controls retains the
+previous discrete worm path and constant radius.
 Room connections use positive radius at most 64 m and 0..64 extra links; sealed
 pockets are excluded when generating the anchor graph.
-The shipped natural profiles omit this optional global straight-edge graph.
-They retain curved worms, local traversal galleries and the protected start route,
-but do not guarantee that every remote gallery belongs to a single connected network.
+Optional `natural_anchors` (0..128) adds admitted biome-site anchors;
+`wells` (0..32), `branches` (0..64), and `roughness_m` (0..8) add bounded dead-end
+routes and irregular polyline vertices. The shipped profiles combine the room
+anchors and natural anchors with an MST and selected extra links. Radius-aware
+routing avoids protected reservations, surface and bedrock; a bounded obstacle
+search or required branch exhaustion fails generation rather than dropping a
+required route. Start and sealed-pocket reservations are excluded, while
+traversal-room reservations authorize portals. Final certification requires the
+selected segment graph to be connected and its sampled actor footprints empty
+after all terrain filters and formations. This establishes finite-width cave
+clearance, not a walkable supported route through every shaft or connectivity of
+every incidental pore. The start separately retains its supported route check.
 
 Feature spacing is positive and at most 4096/3 m; counts satisfy
 `0 <= min_count <= max_count <= 1024`, with positive maximum, 1..4096 attempts and
@@ -415,13 +557,39 @@ therefore preserves identity. The generator version and metric convention belong
 separately in the world descriptor. The material-only decoder returns no complete
 fingerprint, so it cannot be mistaken for a validated pack.
 
-`assets/worldgen/default` ships 45 materials (28 terrain, five granular, five liquid,
-seven gas), 11 biomes, 28 fields, 26 templates and two profiles (`frontier`, `hollows`).
-The original 17 numeric material IDs are preserved. Ninety original 128² albedo/normal
-maps and eight 512² background maps are generated from the checked-in deterministic
-asset script; provenance is recorded in the pack. Profiles differ in region weights,
-cave density and vein/tunnel geometry while retaining the landing and guaranteed
-starting sandstone/copper resources.
+`assets/worldgen/default` ships 63 materials (46 terrain, five granular, five
+liquid, seven gas), 11 biomes, 44 fields, 26 templates and two profiles
+(`frontier`, `hollows`). Existing material IDs remain stable; the 18 appended
+geological materials use IDs 616..633. They include sedimentary and metamorphic
+hosts, volcanic tuff/pumice, gems, uranium ore/autunite and continuous bedrock.
+Every new material has authored albedo, normal, density and optical/PBR values.
+Uranium minerals do not add radiation physics or automatic emissive glow.
+There are 126 material albedo/normal maps plus eight background maps. The asset
+script's narrow material/asset modes preserve the manually tuned recipe files.
+
+Profiles use smaller macro provinces: Frontier requests 64..80 sites at 110 m
+spacing, and Hollows 72..96 at 100 m, with scaled boundary warps. Ordered warped
+bed packages give sedimentary and metamorphic districts continuous directional
+sequences; finite bulk bodies and smaller detail minerals retain independent
+scales. Clustered pores, threshold caves, curved worms and routed backbone links
+supply distinct cavity scales. Biome recipes author individual host sequences,
+cover, porosity and supported formations. Verdant canopy, Mire peat and deep Lode
+retain broad, strongly warped categorical masses alongside their layered packages,
+so the same stripe pattern does not fill every district. Magma remains particle matter inside
+protected stamped reservoirs; natural volcanic rock does not imply containment.
+Host filters clip bodies to their current material, so host-specific minerals
+are not guaranteed. Landing anchors retain the guaranteed starting resources.
+
+Generator algorithm version 6 appends prototype-style modal erosion, including
+vacuum, after the retained tweaked filters, with deterministic ties. It retains the
+open surface/bedrock frame, strata,
+clustered pore filters, routed backbone and final supported formations. Older checkpoint generator identities are rejected. The v3 game
+envelope byte layout remains unchanged because no encoded geometry fields were
+added; all new controls participate in canonical recipe identity and regeneration.
+
+These authored scales require preview and runtime appearance/cost acceptance;
+schema and contract tests alone do not establish either. The implementation adds
+no dissolution, radiation, flowing magma or general-purpose geological solver.
 
 Each profile selects a required `background_stack`. `backgrounds.toml` provides four
 ordered layers per stack, with texture, color, repeat period in metres and parallax
@@ -429,6 +597,10 @@ factor. Layer zero is forced opaque. The production pass composes an immutable
 background target with the same camera/viewport as the main draw; terrain and current
 particles may refract this target without sampling the active attachment or actors.
 Layer UVs are `(world_xy - camera_origin_xy * (1-factor)) / repeat_period_m`.
+For open profiles, presentation caches the same `H(x)` at all 4096 fine-column
+centres. A separate background buffer supplies those immutable heights; above
+them the pass composes an explicit sky gradient instead of cave layers. The
+304-byte main grid frame layout is unchanged.
 
 Optional `lining_material` / `lining_thickness_fine` biome lining names a terrain material and thickness in one to three fine
 cells. A bounded Manhattan neighborhood finds different biome ownership, including
@@ -473,7 +645,7 @@ Diagnostic output is limited to 64 entries and bounded
 field lengths. The asynchronous runtime job uses the same loader.
 
 Stage 3 currently provides owned numeric plans, deterministic macro layout,
-bounded worm/room/feature geometry, chunk-local terrain rasterization and an
+bounded worm/blob/room/feature geometry, chunk-local terrain rasterization and an
 owned full-grid executor with injected scheduling and cancellation. Every
 accepted chunk task drains before borrowed inputs are released. Sealed-pocket
 markers override traversal-room markers; room connections cannot open those
@@ -497,15 +669,15 @@ are complete, as requested.
 ## Full world checkpoints
 
 `game.colony.checkpoint` wraps the unchanged low-level sim snapshot v4 in a
-version-2 game envelope (versioned `PPRWGEN1` magic). It stores the exact pack schema/generator
+version-3 game envelope (versioned `PPRWGEN1` magic). It stores the exact pack schema/generator
 version, profile, unsigned seed, content fingerprint and 3:1 metric, plus the
 sorted numeric-ID/material-key manifest (including reserved vacuum ID 0), biome
-sites, feature instances/segments/omissions, start/resource results, initial
+sites, feature instances/segments/omissions and finite blob records, start/resource results, initial
 matter spans/fill heights and baseline validity, current particle batches and next ID,
 generation report, fixed tick
 and frequency, and controlled entity slot/generation. Fields are explicit
 little-endian integers and IEEE-754 doubles; strings/counts are length-prefixed.
-Version-1 envelopes are rejected explicitly; there is no implicit migration.
+Version-1 and version-2 envelopes are rejected explicitly; there is no implicit migration.
 The complete encoded envelope is bounded at 256 MiB. This is an application
 checkpoint for the current component layouts, not an ABI migration facility.
 
@@ -629,7 +801,7 @@ These figures exclude allocator metadata, simultaneous old/new reallocation
 buffers, opaque noise and task allocations, thread stacks, content catalogs,
 physics and GPU storage. They are neither total allocations nor process peak
 memory. Record process peaks separately. These observations do not affect
-persistent checksums and are deliberately absent from checkpoint v2; restored
+persistent checksums and are deliberately absent from checkpoint v3; restored
 checkpoints display allocation observations as unrecorded rather than zero cost.
 
 With `--worldgen-report`, admission observations also report attempted/skipped

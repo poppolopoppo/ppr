@@ -88,6 +88,20 @@ namespace pP::tests::detail {
                 PPR_TEST_ASSERT(not compileGenerationPlan(std::move(recipe), 42u));
             };
             rejects([](auto &recipe) { recipe.m_biomes[0u].m_temperature_field = 1u; });
+            rejects([](auto &recipe) { recipe.m_biomes[0u].m_erosion_passes = 25u; });
+            rejects([](auto &recipe) {
+                recipe.m_biomes[0u].m_relaxation_passes = 17u;
+                recipe.m_biomes[0u].m_erosion_passes = 8u;
+            });
+            rejects([](auto &recipe) {
+                recipe.m_biomes[0u].m_relaxation_passes = (std::numeric_limits<u32>::max)();
+                recipe.m_biomes[0u].m_pore_passes = 1u;
+            });
+            rejects([](auto &recipe) {
+                recipe.m_biomes[0u].m_relaxation_passes = 20u;
+                recipe.m_biomes[0u].m_pore_passes = 3u;
+                recipe.m_biomes[0u].m_finish_passes = 2u;
+            });
             rejects([](auto &recipe) { recipe.m_fields.push_back(recipe.m_fields[0u]); });
             rejects([](auto &recipe) { recipe.m_biomes[0u].m_lining_material = 17u; });
             rejects([](auto &recipe) {
@@ -99,6 +113,7 @@ namespace pP::tests::detail {
                 recipe.m_biomes[0u].m_lining_thickness_fine = 1u;
             });
             rejects([](auto &recipe) { recipe.m_materials[0u].m_id = 0u; });
+            rejects([](auto &recipe) { recipe.m_biomes[0u].m_bands[0u].m_choices[0u].m_material = 0u; });
             rejects([](auto &recipe) { recipe.m_max_sites = kMaxGenerationSites + 1u; });
             rejects([](auto &recipe) {
                 recipe.m_features[0u].m_bounds = {
@@ -206,6 +221,8 @@ namespace pP::tests::detail {
             for (const u32 width: {1u, 2u, 3u}) {
                 recipe.m_biomes.front().m_lining_material = 17u;
                 recipe.m_biomes.front().m_lining_thickness_fine = width;
+                recipe.m_biomes.front().m_relaxation_passes = 3u;
+                recipe.m_biomes.front().m_relaxation_adoption = 1.0;
                 const auto plan = compileGenerationPlan(recipe, 42u);
                 PPR_TEST_ASSERT(plan.has_value());
                 const auto layout = restoreBiomeLayout(*plan, sites);
@@ -524,6 +541,368 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(validateGenerationRecipe(recipe) == std::errc::value_too_large);
         };
 
+        PPR_UNIT_TEST (finite_blobs_and_smooth_worms_are_bounded_and_replay) {
+            auto recipe = numericRecipe();
+            recipe.m_materials.push_back({33u, true, true, EGenerationMatter::solid, 2500.0});
+            GenerationDeposit deposit{
+                .m_key = 501u,
+                .m_material = 33u,
+                .m_host = 17u,
+                .m_depth_max = 1.0,
+                .m_threshold_min = -1.0,
+                .m_threshold_max = 1.0,
+                .m_shape = EGenerationDepositShape::blob,
+                .m_blob_count = 2u,
+                .m_radius_min_m = 4.0,
+                .m_radius_max_m = 8.0,
+                .m_stretch_min = 0.5,
+                .m_stretch_max = 3.0,
+                .m_distortion = 0.3};
+            recipe.m_biomes[0u].m_deposits.push_back(deposit);
+            recipe.m_rules.push_back(
+                {.m_key = 601u,
+                    .m_phase = EGenerationPhase::carve,
+                    .m_parameters = GenerationWorm{
+                        .m_count = 1u,
+                        .m_carve = true,
+                        .m_depth_max = 1.0,
+                        .m_length_min_m = 80.25,
+                        .m_length_max_m = 80.25,
+                        .m_radius_min_m = 1.0,
+                        .m_radius_max_m = 3.0,
+                        .m_turn_probability = 0.5,
+                        .m_turn_smoothing = 0.85,
+                        .m_radius_variation = 1.0,
+                        .m_chamber_probability = 0.1,
+                        .m_chamber_scale = 3.0}});
+            const auto plan = compileGenerationPlan(recipe, 42u);
+            PPR_TEST_ASSERT(plan.has_value());
+            const auto layout = compileBiomeLayout(*plan);
+            PPR_TEST_ASSERT(layout.has_value());
+            const auto first = compileGenerationGeometry(*plan, *layout);
+            const auto replay = compileGenerationGeometry(*plan, *layout);
+            PPR_TEST_ASSERT(first and replay);
+            PPR_TEST_ASSERT(first->m_blobs == replay->m_blobs and first->m_blobs.size() == 2u);
+            PPR_TEST_ASSERT(first->m_segments == replay->m_segments and first->m_segments.size() == 81u);
+            bool varied_radius = false;
+            for (u32 i = 0u; i < first->m_segments.size(); ++i) {
+                const auto &segment = first->m_segments[i];
+                PPR_TEST_ASSERT(segment.m_radius_m >= 1.0 and segment.m_radius_m <= 9.0);
+                if (i == 0u) {
+                    continue;
+                }
+                const auto &previous = first->m_segments[i - 1u];
+                PPR_TEST_ASSERT(segment.m_x0_m == previous.m_x1_m and segment.m_y0_m == previous.m_y1_m);
+                const double ax = previous.m_x1_m - previous.m_x0_m, ay = previous.m_y1_m - previous.m_y0_m;
+                const double bx = segment.m_x1_m - segment.m_x0_m, by = segment.m_y1_m - segment.m_y0_m;
+                PPR_TEST_ASSERT(std::abs(std::atan2(ax * by - ay * bx, ax * bx + ay * by)) <= 0.351);
+                varied_radius = varied_radius or segment.m_radius_m != previous.m_radius_m;
+            }
+            PPR_TEST_ASSERT(varied_radius);
+            deposit.m_key = 502u;
+            deposit.m_order = 1u;
+            recipe.m_biomes[0u].m_deposits.push_back(deposit);
+            const auto extended_plan = compileGenerationPlan(recipe, 42u);
+            PPR_TEST_ASSERT(extended_plan.has_value());
+            const auto extended_layout = compileBiomeLayout(*extended_plan);
+            PPR_TEST_ASSERT(extended_layout.has_value());
+            const auto extended = compileGenerationGeometry(*extended_plan, *extended_layout);
+            PPR_TEST_ASSERT(extended.has_value() and extended->m_blobs.size() == 4u);
+            PPR_TEST_ASSERT(
+                first->m_blobs[0u] == extended->m_blobs[0u] and first->m_blobs[1u] == extended->m_blobs[1u]);
+            for (const auto bounds: {std::pair{80.0, 100.0}, std::pair{90.0, 90.0}}) {
+                auto oriented = recipe;
+                auto &lens = oriented.m_biomes[0u].m_deposits[0u];
+                lens.m_orientation_min_degrees = bounds.first;
+                lens.m_orientation_max_degrees = bounds.second;
+                const auto oriented_plan = compileGenerationPlan(std::move(oriented), 42u);
+                PPR_TEST_ASSERT(oriented_plan.has_value());
+                const auto oriented_geometry = compileGenerationGeometry(*oriented_plan, *layout);
+                PPR_TEST_ASSERT(oriented_geometry.has_value());
+                for (u32 i = 0u; i < 2u; ++i) {
+                    const auto &blob = oriented_geometry->m_blobs[i];
+                    PPR_TEST_ASSERT(
+                        blob.m_angle >= 2.0 * std::numbers::pi * (bounds.first / 360.0) and
+                        blob.m_angle <= 2.0 * std::numbers::pi * (bounds.second / 360.0));
+                    PPR_TEST_ASSERT(blob.m_x_m == first->m_blobs[i].m_x_m and blob.m_y_m == first->m_blobs[i].m_y_m);
+                    PPR_TEST_ASSERT(
+                        blob.m_radius_m == first->m_blobs[i].m_radius_m and
+                        blob.m_stretch == first->m_blobs[i].m_stretch);
+                    PPR_TEST_ASSERT(
+                        blob.m_offset_x == first->m_blobs[i].m_offset_x and
+                        blob.m_offset_y == first->m_blobs[i].m_offset_y);
+                }
+                PPR_TEST_ASSERT(compileGenerationRaster(*oriented_plan, *layout, *oriented_geometry).has_value());
+                auto malformed = *oriented_geometry;
+                malformed.m_blobs[0u].m_angle = 2.0 * std::numbers::pi * (bounds.second / 360.0) + 0.01;
+                PPR_TEST_ASSERT(not compileGenerationRaster(*oriented_plan, *layout, malformed).has_value());
+            }
+            for (const auto bounds:
+                {std::pair{100.0, 80.0}, std::pair{-1.0, 90.0}, std::pair{0.0, 361.0},
+                    std::pair{0.0, (std::numeric_limits<double>::quiet_NaN)()}}) {
+                auto invalid_orientation = recipe;
+                auto &lens = invalid_orientation.m_biomes[0u].m_deposits[0u];
+                lens.m_orientation_min_degrees = bounds.first;
+                lens.m_orientation_max_degrees = bounds.second;
+                PPR_TEST_ASSERT(validateGenerationRecipe(invalid_orientation) == std::errc::invalid_argument);
+            }
+            recipe.m_biomes[0u].m_deposits[0u].m_radius_min_m = 0.0;
+            PPR_TEST_ASSERT(validateGenerationRecipe(recipe) == std::errc::invalid_argument);
+            recipe.m_biomes[0u].m_deposits[0u].m_radius_min_m = 4.0;
+            recipe.m_biomes[0u].m_relaxation_passes = 25u;
+            PPR_TEST_ASSERT(validateGenerationRecipe(recipe) == std::errc::invalid_argument);
+            const auto [context, cancel] = context::withCancel(context::background());
+            cancel();
+            const auto cancelled = compileGenerationGeometry(*plan, *layout, context.get());
+            PPR_TEST_ASSERT(not cancelled and cancelled.error() == std::errc::operation_canceled);
+
+            // The target occupies a four-metre square in a 4096-metre world.
+            // Global rejection sampling cannot reliably admit these origins.
+            auto tiny = numericRecipe();
+            tiny.m_cell_size_m = 1.0;
+            tiny.m_materials.push_back({33u, true, true, EGenerationMatter::solid, 2500.0});
+            tiny.m_biomes.push_back(tiny.m_biomes.front());
+            tiny.m_biomes.back().m_key = 204u;
+            tiny.m_constraints.push_back({402u, 1u, 1u, 1.0, 0.0, 1.0, 0.0, 2048.0});
+            tiny.m_biomes.back().m_deposits.push_back(
+                {.m_key = 701u,
+                    .m_material = 33u,
+                    .m_host = 17u,
+                    .m_depth_min = 1.0 - 1000.25 / kWorldEdge,
+                    .m_depth_max = 1.0 - 999.75 / kWorldEdge,
+                    .m_shape = EGenerationDepositShape::blob,
+                    .m_blob_count = 32u,
+                    .m_radius_min_m = 0.5,
+                    .m_radius_max_m = 1.0});
+            constexpr std::array tiny_sites{
+                GenerationSite{1000.0, 1000.0, 1u}, GenerationSite{996.0, 1000.0, 0u},
+                GenerationSite{1004.0, 1000.0, 0u}, GenerationSite{1000.0, 996.0, 0u},
+                GenerationSite{1000.0, 1004.0, 0u}};
+            for (const u64 seed: {0ull, 1ull, 42ull, 0xffffffffffffffffull}) {
+                const auto tiny_plan = compileGenerationPlan(tiny, seed);
+                PPR_TEST_ASSERT(tiny_plan.has_value());
+                const auto tiny_layout = restoreBiomeLayout(*tiny_plan, tiny_sites);
+                PPR_TEST_ASSERT(tiny_layout.has_value());
+                u64 scratch = 0u;
+                const auto admitted = compileGenerationGeometry(*tiny_plan, *tiny_layout, nullptr, &scratch);
+                PPR_TEST_ASSERT(admitted.has_value() and admitted->m_blobs.size() == 32u and scratch > 0u);
+                for (const auto &blob: admitted->m_blobs) {
+                    PPR_TEST_ASSERT(blob.m_x_m >= 998.0 and blob.m_x_m <= 1002.0);
+                    PPR_TEST_ASSERT(blob.m_y_m >= 999.75 and blob.m_y_m <= 1000.25);
+                    PPR_TEST_ASSERT(generationBiomeAt(*tiny_plan, *tiny_layout, blob.m_x_m, blob.m_y_m) == 1u);
+                }
+                PPR_TEST_ASSERT(std::ranges::any_of(admitted->m_blobs, [&](const auto &blob) {
+                    return blob.m_x_m != admitted->m_blobs.front().m_x_m and
+                           blob.m_y_m != admitted->m_blobs.front().m_y_m;
+                }));
+            }
+            tiny.m_biomes.back().m_deposits.front().m_depth_min = 0.1;
+            tiny.m_biomes.back().m_deposits.front().m_depth_max = 0.2;
+            const auto absent_plan = compileGenerationPlan(tiny, 42u);
+            PPR_TEST_ASSERT(absent_plan.has_value());
+            const auto absent_layout = restoreBiomeLayout(*absent_plan, tiny_sites);
+            PPR_TEST_ASSERT(absent_layout.has_value());
+            const auto absent = compileGenerationGeometry(*absent_plan, *absent_layout);
+            PPR_TEST_ASSERT(not absent and absent.error() == make_error_code(EGenerationErrc::constraints_exhausted));
+        };
+
+        PPR_UNIT_TEST (coherent_vacuum_palette_is_salted_before_bounded_relaxation) {
+            auto recipe = numericRecipe();
+            recipe.m_materials.push_back({33u, true, true, EGenerationMatter::solid, 2700.0});
+            recipe.m_fields[0u].m_noise.m_algorithm = ENoiseAlgorithm::cellular_value;
+            recipe.m_fields[0u].m_noise.m_frequency_per_metre = 0.12;
+            auto &biome = recipe.m_biomes[0u];
+            biome.m_bands[0u].m_choices[0u].m_weight = 3.0;
+            biome.m_bands[0u].m_choices.push_back({204u, 0u, 1.0});
+            biome.m_bands[0u].m_choices.push_back({205u, 33u, 1.0});
+            biome.m_sprinkle_probability = 0.4;
+            const auto salted = compileGenerationPlan(recipe, 42u);
+            PPR_TEST_ASSERT(salted.has_value());
+            const auto layout = compileBiomeLayout(*salted);
+            PPR_TEST_ASSERT(layout.has_value());
+            GenerationGeometry geometry;
+            geometry.m_instances.push_back({0u, kGenerationStartRule, 0u, 70, 80, false});
+            const auto raw_raster = compileGenerationRaster(*salted, *layout, geometry);
+            PPR_TEST_ASSERT(raw_raster.has_value());
+            const auto raw = raw_raster->chunk({0u, 0u});
+            PPR_TEST_ASSERT(raw.has_value());
+            recipe.m_biomes[0u].m_sprinkle_probability = 0.0;
+            const auto coherent = compileGenerationPlan(recipe, 42u);
+            PPR_TEST_ASSERT(coherent.has_value());
+            const auto coherent_raster = compileGenerationRaster(*coherent, *layout, geometry);
+            PPR_TEST_ASSERT(coherent_raster.has_value());
+            const auto unsalted = coherent_raster->chunk({0u, 0u});
+            PPR_TEST_ASSERT(unsalted.has_value() and *raw != *unsalted);
+            recipe.m_biomes[0u].m_sprinkle_probability = 0.4;
+            recipe.m_biomes[0u].m_relaxation_passes = 1u;
+            recipe.m_biomes[0u].m_relaxation_adoption = 0.32;
+            recipe.m_biomes[0u].m_finish_passes = 2u;
+            recipe.m_biomes[0u].m_finish_adoption = 0.12;
+            const auto tweaked_plan = compileGenerationPlan(recipe, 42u);
+            PPR_TEST_ASSERT(tweaked_plan.has_value());
+            const auto tweaked_raster = compileGenerationRaster(*tweaked_plan, *layout, geometry);
+            PPR_TEST_ASSERT(tweaked_raster.has_value());
+            const auto tweaked = tweaked_raster->chunk({0u, 0u});
+            PPR_TEST_ASSERT(tweaked.has_value());
+            recipe.m_biomes[0u].m_erosion_passes = 1u;
+            const auto modal_plan = compileGenerationPlan(recipe, 42u);
+            PPR_TEST_ASSERT(modal_plan.has_value());
+            const auto modal_raster = compileGenerationRaster(*modal_plan, *layout, geometry);
+            PPR_TEST_ASSERT(modal_raster.has_value());
+            const auto modal = modal_raster->chunk({0u, 0u});
+            const auto modal_replay = modal_raster->chunk({0u, 0u});
+            PPR_TEST_ASSERT(modal and modal_replay and *modal == *modal_replay);
+            constexpr std::array<u16, 3u> labels{0u, 17u, 33u};
+            u32 excavated = 0u, filled = 0u, relabeled = 0u, retained = 0u;
+            // The reference reads the completed tweaked/finish output, proving
+            // erosion is appended. Unique pluralities need no tie assumption.
+            for (u32 y = 4u; y < 76u; ++y) {
+                for (u32 x = 4u; x < kChunkEdge - 1u; ++x) {
+                    std::array<u32, 3u> histogram{};
+                    for (i32 dy = -1; dy <= 1; ++dy) {
+                        for (i32 dx = -1; dx <= 1; ++dx) {
+                            if (dx == 0 and dy == 0) {
+                                continue;
+                            }
+                            const auto neighbor =
+                                (*tweaked)[static_cast<std::size_t>((static_cast<i64>(y) + dy) * kChunkEdge + x + dx)]
+                                    .m_element;
+                            const auto label = std::ranges::find(labels, neighbor);
+                            PPR_TEST_ASSERT(label != labels.end());
+                            ++histogram[static_cast<std::size_t>(label - labels.begin())];
+                        }
+                    }
+                    const auto maximum = std::ranges::max_element(histogram);
+                    if (std::ranges::count(histogram, *maximum) != 1) {
+                        continue;
+                    }
+                    const u16 expected = labels[static_cast<std::size_t>(maximum - histogram.begin())];
+                    const auto before = (*tweaked)[y * kChunkEdge + x].m_element;
+                    const auto &after = (*modal)[y * kChunkEdge + x];
+                    PPR_TEST_ASSERT(after.m_element == expected or after.m_element == before);
+                    PPR_TEST_ASSERT(after.m_element == 0u ? after.m_temperature == 0.0f : after.m_temperature > 0.0f);
+                    if (before == after.m_element) {
+                        retained += before != expected ? 1u : 0u;
+                        continue;
+                    }
+                    excavated += before != 0u and expected == 0u ? 1u : 0u;
+                    filled += before == 0u and expected != 0u ? 1u : 0u;
+                    relabeled += before != 0u and expected != 0u and before != expected ? 1u : 0u;
+                }
+            }
+            PPR_TEST_ASSERT(excavated > 0u and filled > 0u and relabeled > 0u and retained > 0u);
+            recipe.m_biomes[0u].m_relaxation_passes = 21u;
+            recipe.m_biomes[0u].m_relaxation_adoption = 0.5;
+            recipe.m_biomes[0u].m_finish_passes = 0u;
+            recipe.m_biomes[0u].m_erosion_passes = 0u;
+            const auto relaxed = compileGenerationPlan(recipe, 42u);
+            PPR_TEST_ASSERT(relaxed.has_value());
+            const auto smooth_raster = compileGenerationRaster(*relaxed, *layout, geometry);
+            PPR_TEST_ASSERT(smooth_raster.has_value());
+            const auto smooth = smooth_raster->chunk({0u, 0u});
+            const auto replay = smooth_raster->chunk({0u, 0u});
+            PPR_TEST_ASSERT(smooth and replay and *smooth == *replay);
+            PPR_TEST_ASSERT(std::ranges::any_of(*smooth, [](const Cell &cell) { return cell.m_element == 0u; }));
+            const auto edges = [](const Array<Cell> &cells) {
+                u32 changes = 0u;
+                for (u32 y = 1u; y < kChunkEdge; ++y) {
+                    for (u32 x = 1u; x < kChunkEdge; ++x) {
+                        const u32 at = y * kChunkEdge + x;
+                        changes += cells[at].m_element != cells[at - 1u].m_element ? 1u : 0u;
+                        changes += cells[at].m_element != cells[at - kChunkEdge].m_element ? 1u : 0u;
+                    }
+                }
+                return changes;
+            };
+            PPR_TEST_ASSERT(edges(*smooth) < edges(*raw));
+            for (u32 y = 0u; y < kChunkEdge; ++y) {
+                PPR_TEST_ASSERT((*smooth)[y * kChunkEdge].m_element == recipe.m_boundary_material);
+            }
+            for (u32 y = 80u; y < 110u; ++y) {
+                for (u32 x = 70u; x < 100u; ++x) {
+                    PPR_TEST_ASSERT((*smooth)[y * kChunkEdge + x].m_element == 0u);
+                }
+            }
+            u32 natural_empty = 0u;
+            for (u32 y = 3u; y < 80u; ++y) {
+                for (u32 x = 3u; x < kChunkEdge; ++x) {
+                    natural_empty += (*smooth)[y * kChunkEdge + x].m_element == 0u ? 1u : 0u;
+                }
+            }
+            PPR_TEST_ASSERT(natural_empty > 0u);
+            for (const auto &cell: *smooth) {
+                PPR_TEST_ASSERT(cell.m_element == 0u ? cell.m_temperature == 0.0f : cell.m_temperature > 0.0f);
+            }
+            for (const double probability: {-0.1, 1.1, (std::numeric_limits<double>::quiet_NaN)()}) {
+                recipe.m_biomes[0u].m_sprinkle_probability = probability;
+                PPR_TEST_ASSERT(validateGenerationRecipe(recipe) == std::errc::invalid_argument);
+            }
+        };
+
+        PPR_UNIT_TEST (relaxation_crosses_chunk_seams_preserves_reservations_and_precedes_detail) {
+            auto recipe = numericRecipe();
+            recipe.m_cell_size_m = 1.0;
+            recipe.m_materials.push_back({33u, true, true, EGenerationMatter::solid, 2500.0});
+            recipe.m_materials.push_back({49u, true, true, EGenerationMatter::solid, 2500.0});
+            auto &biome = recipe.m_biomes[0u];
+            biome.m_relaxation_passes = 1u;
+            biome.m_relaxation_adoption = 1.0;
+            biome.m_deposits.push_back(
+                {.m_key = 501u,
+                    .m_material = 33u,
+                    .m_host = 17u,
+                    .m_depth_max = 1.0,
+                    .m_threshold_min = -1.0,
+                    .m_threshold_max = 1.0,
+                    .m_shape = EGenerationDepositShape::blob,
+                    .m_blob_count = 1u,
+                    .m_radius_min_m = 1.5,
+                    .m_radius_max_m = 1.5});
+            biome.m_deposits.push_back(
+                {.m_key = 502u,
+                    .m_order = 1u,
+                    .m_material = 49u,
+                    .m_host = 17u,
+                    .m_depth_max = 1.0,
+                    .m_threshold_min = -1.0,
+                    .m_threshold_max = 1.0,
+                    .m_shape = EGenerationDepositShape::blob,
+                    .m_stage = EGenerationDepositStage::detail,
+                    .m_blob_count = 1u,
+                    .m_radius_min_m = 0.2,
+                    .m_radius_max_m = 0.2});
+            recipe.m_rules.push_back(
+                {.m_key = 601u, .m_phase = EGenerationPhase::carve, .m_parameters = GenerationConnection{0.2, 0u}});
+            const auto plan = compileGenerationPlan(recipe, 42u);
+            PPR_TEST_ASSERT(plan.has_value());
+            const auto layout = compileBiomeLayout(*plan);
+            PPR_TEST_ASSERT(layout.has_value());
+            GenerationGeometry geometry;
+            geometry.m_instances.push_back({0u, kGenerationStartRule, 0u, 127, 80, false});
+            geometry.m_segments.push_back({0u, 120.5, 70.5, 140.5, 70.5, 0.2});
+            geometry.m_blobs.push_back({0u, 0u, 0u, 127.5, 64.5, 1.5, 1.0, 0.0, 0.0, 0.0});
+            geometry.m_blobs.push_back({0u, 1u, 0u, 128.5, 63.5, 0.2, 1.0, 0.0, 0.0, 0.0});
+            const auto raster = compileGenerationRaster(*plan, *layout, geometry);
+            PPR_TEST_ASSERT(raster.has_value());
+            const auto right = raster->chunk({1u, 0u}), left = raster->chunk({0u, 0u});
+            const auto replay = raster->chunk({1u, 0u});
+            PPR_TEST_ASSERT(left and right and replay and *right == *replay);
+            PPR_TEST_ASSERT((*left)[64u * kChunkEdge + 127u].m_element == 33u);
+            PPR_TEST_ASSERT((*left)[63u * kChunkEdge + 126u].m_element == 17u);
+            PPR_TEST_ASSERT((*right)[64u * kChunkEdge].m_element == 33u);
+            PPR_TEST_ASSERT((*right)[63u * kChunkEdge].m_element == 49u);
+            PPR_TEST_ASSERT((*left)[70u * kChunkEdge + 127u].m_element == 0u);
+            PPR_TEST_ASSERT((*right)[70u * kChunkEdge].m_element == 0u);
+            PPR_TEST_ASSERT((*left)[80u * kChunkEdge + 127u].m_element == 0u);
+            PPR_TEST_ASSERT((*right)[80u * kChunkEdge].m_element == 0u);
+            for (const auto &cell: *right) {
+                PPR_TEST_ASSERT(cell.m_element == 0u ? cell.m_temperature == 0.0f : cell.m_temperature > 0.0f);
+            }
+            geometry.m_blobs[0u].m_stretch = std::numeric_limits<double>::infinity();
+            const auto invalid = compileGenerationRaster(*plan, *layout, geometry);
+            PPR_TEST_ASSERT(not invalid and invalid.error() == std::errc::invalid_argument);
+        };
+
         PPR_UNIT_TEST (chunk_raster_preserves_boundaries_host_replacement_and_global_seams) {
             auto recipe = numericRecipe();
             recipe.m_materials.push_back({33u, true, true, EGenerationMatter::solid, 2500.0});
@@ -700,6 +1079,204 @@ namespace pP::tests::detail {
                     .m_parameters = GenerationFill{0u, 0u, 1009u, true, 290.0, 1.2, std::nullopt}});
             return recipe;
         }
+        PPR_UNIT_TEST (vacuum_palette_preserves_unstamped_sealed_reservation_substrate) {
+            auto recipe = matterRecipe();
+            recipe.m_fields[0u].m_noise.m_algorithm = ENoiseAlgorithm::cellular_value;
+            recipe.m_fields[0u].m_noise.m_frequency_per_metre = 0.12;
+            auto &biome = recipe.m_biomes[0u];
+            biome.m_bands[0u].m_choices.push_back({204u, 0u, 999.0});
+            biome.m_sprinkle_probability = 0.4;
+            biome.m_relaxation_passes = 21u;
+            // The inner carve crosses the outer ellipse. Its corners require
+            // unpainted substrate from the protected reservation to stay sealed.
+            auto &pocket = recipe.m_features[1u];
+            pocket.m_operations = {
+                {.m_key = 703u,
+                    .m_shape = EGenerationShape::ellipse,
+                    .m_x = 1,
+                    .m_y = 1,
+                    .m_width = 7u,
+                    .m_height = 7u,
+                    .m_material = 17u},
+                {.m_key = 704u, .m_order = 1u, .m_carve = true, .m_x = 1, .m_y = 1, .m_width = 7u, .m_height = 7u}};
+            const auto plan = compileGenerationPlan(recipe, 42u);
+            PPR_TEST_ASSERT(plan.has_value());
+            const auto layout = compileBiomeLayout(*plan);
+            PPR_TEST_ASSERT(layout.has_value());
+            GenerationGeometry geometry;
+            geometry.m_instances.push_back({1u, 0u, 0u, 60, 60, false});
+            const auto raster = compileGenerationRaster(*plan, *layout, geometry);
+            PPR_TEST_ASSERT(raster.has_value());
+            auto cells = raster->chunk({0u, 0u});
+            PPR_TEST_ASSERT(cells.has_value());
+            ChunkGrid grid;
+            PPR_TEST_ASSERT(not grid.setCells({0u, 0u}, std::move(*cells)));
+            const auto matter = resolveInitialMatter(*plan, geometry, grid);
+            PPR_TEST_ASSERT(matter and matter->m_regions.size() == 2u and matter->m_largest_component == 49u);
+            PPR_TEST_ASSERT(grid.getCell({60u, 60u})->m_element == 17u);
+            PPR_TEST_ASSERT(grid.getCell({61u, 61u})->m_element == 0u);
+        };
+
+        PPR_UNIT_TEST (open_surface_and_continuous_bedrock_override_every_terrain_phase) {
+            auto recipe = numericRecipe();
+            recipe.m_cell_size_m = 1.0;
+            recipe.m_materials.push_back({633u, true, false, EGenerationMatter::solid, 3100.0});
+            recipe.m_open_surface = true;
+            recipe.m_surface_elevation_m = 220.0;
+            recipe.m_bedrock_thickness_m = 25.0;
+            recipe.m_bedrock_material = 633u;
+            recipe.m_start_depth_m = 45.0;
+            recipe.m_biomes[0u].m_pore_probability = 0.2;
+            recipe.m_biomes[0u].m_pore_affinity_min = -1.0;
+            recipe.m_biomes[0u].m_pore_passes = 3u;
+            recipe.m_biomes[0u].m_relaxation_passes = 8u;
+            recipe.m_biomes[0u].m_finish_passes = 3u;
+            recipe.m_rules.push_back({501u, 1u, EGenerationPhase::carve, GenerationCave{0u, 0u, 0.0, 1.0, -1.0, 1.0}});
+            const auto plan = compileGenerationPlan(recipe, 42u);
+            PPR_TEST_ASSERT(plan and plan->recipe().m_start_y_fine == 175u);
+            PPR_TEST_ASSERT(generationDepth(*plan, 70.0, 220.0) == 0.0);
+            PPR_TEST_ASSERT(generationDepth(*plan, 70.0, 25.0) == 1.0);
+            const auto layout = restoreBiomeLayout(*plan, std::array{GenerationSite{100.0, 150.0, 0u}});
+            PPR_TEST_ASSERT(layout.has_value());
+            GenerationGeometry geometry;
+            // Even a supplied carve template crossing the protected bedrock
+            // cannot overwrite it; normal geometry rejects this placement.
+            geometry.m_instances.push_back({0u, kGenerationStartRule, 0u, 10, 10, false});
+            const auto raster = compileGenerationRaster(*plan, *layout, geometry);
+            PPR_TEST_ASSERT(raster.has_value());
+            const auto bottom = raster->chunk({0u, 0u}), surface = raster->chunk({0u, 1u}),
+                       top = raster->chunk({0u, 31u});
+            PPR_TEST_ASSERT(bottom and surface and top);
+            for (u32 x = 0u; x < kChunkEdge; ++x) {
+                for (u32 y = 0u; y < 25u; ++y) {
+                    PPR_TEST_ASSERT((*bottom)[y * kChunkEdge + x].m_element == 633u);
+                }
+                for (u32 y = 92u; y < kChunkEdge; ++y) {
+                    PPR_TEST_ASSERT((*surface)[y * kChunkEdge + x] == Cell{});
+                }
+            }
+            PPR_TEST_ASSERT(std::ranges::all_of(*top, [](const Cell &cell) { return cell == Cell{}; }));
+            // The canonical metric multiplication differs by one ULP from
+            // division through a reciprocal at this exact allowed surface.
+            auto edge_recipe = numericRecipe();
+            edge_recipe.m_materials.push_back({633u, true, false, EGenerationMatter::solid, 3100.0});
+            edge_recipe.m_open_surface = true;
+            edge_recipe.m_surface_elevation_m = 152.5 / 3.0;
+            edge_recipe.m_bedrock_thickness_m = 25.0;
+            edge_recipe.m_bedrock_material = 633u;
+            edge_recipe.m_start_depth_m = 20.0;
+            const auto edge_plan = compileGenerationPlan(edge_recipe, 42u);
+            PPR_TEST_ASSERT(edge_plan.has_value());
+            const auto edge_layout = restoreBiomeLayout(*edge_plan, std::array{GenerationSite{20.0, 35.0, 0u}});
+            PPR_TEST_ASSERT(edge_layout.has_value());
+            const GenerationGeometry edge_geometry;
+            const auto edge_raster = compileGenerationRaster(*edge_plan, *edge_layout, edge_geometry);
+            PPR_TEST_ASSERT(edge_raster.has_value());
+            const auto edge_cells = edge_raster->chunk({0u, 1u});
+            PPR_TEST_ASSERT(edge_cells.has_value());
+            PPR_TEST_ASSERT((*edge_cells)[24u * kChunkEdge].m_element == 17u);
+            PPR_TEST_ASSERT((*edge_cells)[25u * kChunkEdge] == Cell{});
+            recipe.m_start_depth_m = 10.0;
+            PPR_TEST_ASSERT(not compileGenerationPlan(recipe, 42u));
+            recipe.m_start_depth_m = 45.0;
+            recipe.m_materials.back().m_diggable = true;
+            PPR_TEST_ASSERT(not compileGenerationPlan(recipe, 42u));
+        };
+        PPR_UNIT_TEST (warped_beds_and_clustered_pores_replay_through_split_filters) {
+            auto recipe = numericRecipe();
+            recipe.m_cell_size_m = 1.0;
+            recipe.m_materials.push_back({33u, true, true, EGenerationMatter::solid, 2700.0, 3301u});
+            recipe.m_materials[0u].m_key = 1701u;
+            auto &biome = recipe.m_biomes[0u];
+            auto &band = biome.m_bands[0u];
+            band.m_choices.push_back({204u, 33u, 1.0});
+            band.m_bed_period_m = 22.0;
+            band.m_bed_warp_m = 3.0;
+            band.m_bed_dip = 0.05;
+            biome.m_pore_probability = 0.2;
+            biome.m_pore_affinity_min = -1.0;
+            biome.m_sprinkle_probability = 0.2;
+            const auto raw_plan = compileGenerationPlan(recipe, 42u);
+            PPR_TEST_ASSERT(raw_plan.has_value());
+            const auto layout = restoreBiomeLayout(*raw_plan, std::array{GenerationSite{100.0, 100.0, 0u}});
+            PPR_TEST_ASSERT(layout.has_value());
+            GenerationGeometry geometry;
+            geometry.m_instances.push_back({0u, kGenerationStartRule, 0u, 70, 80, false});
+            const auto raw_raster = compileGenerationRaster(*raw_plan, *layout, geometry);
+            PPR_TEST_ASSERT(raw_raster.has_value());
+            const auto raw = raw_raster->chunk({0u, 0u});
+            PPR_TEST_ASSERT(raw.has_value());
+            biome.m_pore_passes = 3u;
+            biome.m_relaxation_passes = 8u;
+            biome.m_finish_passes = 3u;
+            const auto plan = compileGenerationPlan(recipe, 42u);
+            PPR_TEST_ASSERT(plan.has_value());
+            const auto raster = compileGenerationRaster(*plan, *layout, geometry);
+            PPR_TEST_ASSERT(raster.has_value());
+            const auto left = raster->chunk({0u, 0u}), right = raster->chunk({1u, 0u}),
+                       replay = raster->chunk({0u, 0u});
+            PPR_TEST_ASSERT(left and right and replay and *left == *replay and *left != *raw);
+            u32 pores = 0u, pore_changes = 0u, first_material = 0u, second_material = 0u;
+            for (u32 y = 3u; y < 70u; ++y) {
+                for (u32 x = 3u; x < kChunkEdge; ++x) {
+                    const auto &cell = (*left)[y * kChunkEdge + x];
+                    pores += cell.m_element == 0u ? 1u : 0u;
+                    pore_changes += (cell.m_element == 0u) != ((*raw)[y * kChunkEdge + x].m_element == 0u) ? 1u : 0u;
+                    first_material += cell.m_element == 17u ? 1u : 0u;
+                    second_material += cell.m_element == 33u ? 1u : 0u;
+                    PPR_TEST_ASSERT(cell.m_element == 0u ? cell.m_temperature == 0.0f : cell.m_temperature > 0.0f);
+                }
+            }
+            PPR_TEST_ASSERT(pores > 0u and pore_changes > 0u and first_material > 0u and second_material > 0u);
+            for (u32 y = 80u; y < 110u; ++y) {
+                for (u32 x = 70u; x < 100u; ++x) {
+                    PPR_TEST_ASSERT((*left)[y * kChunkEdge + x].m_element == 0u);
+                }
+            }
+        };
+        PPR_UNIT_TEST (supported_formations_use_frozen_contacts_and_preserve_backbone_clearance) {
+            auto recipe = numericRecipe();
+            recipe.m_cell_size_m = 1.0;
+            recipe.m_materials.push_back({33u, true, true, EGenerationMatter::solid, 2700.0});
+            auto &biome = recipe.m_biomes[0u];
+            biome.m_formation_probability = 0.2;
+            biome.m_formation_length_m = 5.0;
+            biome.m_formation_material = 33u;
+            biome.m_rind_material = 33u;
+            recipe.m_rules.push_back({501u, 1u, EGenerationPhase::carve, GenerationConnection{2.2, 0u, 1u}});
+            const auto plan = compileGenerationPlan(recipe, 42u);
+            PPR_TEST_ASSERT(plan.has_value());
+            const auto layout = restoreBiomeLayout(*plan, std::array{GenerationSite{100.0, 100.0, 0u}});
+            PPR_TEST_ASSERT(layout.has_value());
+            GenerationGeometry geometry;
+            geometry.m_segments = {{0u, 40.5, 60.5, 180.5, 60.5, 2.2}, {0u, 180.5, 60.5, 180.5, 90.5, 2.2}};
+            ChunkGrid grid;
+            for (u32 x = 16u; x < 400u; ++x) {
+                PPR_TEST_ASSERT(not grid.setCell({x, 32u}, {17u, 293.0f}));
+                PPR_TEST_ASSERT(not grid.setCell({x, 96u}, {17u, 293.0f}));
+            }
+            u64 scratch{};
+            PPR_TEST_ASSERT(not finishGenerationTerrain(*plan, *layout, geometry, grid, nullptr, &scratch));
+            PPR_TEST_ASSERT(scratch > 0u);
+            u32 growth{};
+            for (u32 y = 33u; y < 96u; ++y) {
+                for (u32 x = 16u; x < 400u; ++x) {
+                    growth += grid.getCell({x, y})->m_element == 33u ? 1u : 0u;
+                }
+            }
+            PPR_TEST_ASSERT(growth > 0u);
+            PPR_TEST_ASSERT(not validateGenerationBackbone(*plan, geometry, grid));
+            PPR_TEST_ASSERT(not grid.setCell({100u, 60u}, {17u, 293.0f}));
+            PPR_TEST_ASSERT(
+                validateGenerationBackbone(*plan, geometry, grid) ==
+                make_error_code(EGenerationErrc::constraints_exhausted));
+            PPR_TEST_ASSERT(not grid.setCell({100u, 60u}, {}));
+            geometry.m_segments.back().m_x0_m += 0.01;
+            PPR_TEST_ASSERT(
+                validateGenerationBackbone(*plan, geometry, grid) ==
+                make_error_code(EGenerationErrc::constraints_exhausted));
+        };
+
         PPR_UNIT_TEST (initial_matter_is_disjoint_canonical_and_mass_uses_empty_geometry) {
             auto plan = compileGenerationPlan(matterRecipe(), 42u);
             PPR_TEST_ASSERT(plan.has_value());
@@ -885,7 +1462,8 @@ namespace pP::tests::detail {
             std::array<float, 32u> previous{};
             bool have_previous = false;
             for (const auto algorithm:
-                {ENoiseAlgorithm::open_simplex2, ENoiseAlgorithm::perlin, ENoiseAlgorithm::cellular_distance}) {
+                {ENoiseAlgorithm::open_simplex2, ENoiseAlgorithm::perlin, ENoiseAlgorithm::cellular_distance,
+                    ENoiseAlgorithm::cellular_value}) {
                 for (const auto fractal:
                     {ENoiseFractal::none, ENoiseFractal::fbm, ENoiseFractal::ridged, ENoiseFractal::billow}) {
                     const NoiseFieldDesc desc{
@@ -927,7 +1505,8 @@ namespace pP::tests::detail {
 
         PPR_UNIT_TEST (compiled_noise_samples_coordinate_limits_and_full_seed_domain) {
             for (const auto algorithm:
-                {ENoiseAlgorithm::open_simplex2, ENoiseAlgorithm::perlin, ENoiseAlgorithm::cellular_distance}) {
+                {ENoiseAlgorithm::open_simplex2, ENoiseAlgorithm::perlin, ENoiseAlgorithm::cellular_distance,
+                    ENoiseAlgorithm::cellular_value}) {
                 const NoiseFieldDesc desc{
                     .m_algorithm = algorithm,
                     .m_fractal = ENoiseFractal::fbm,
@@ -1086,16 +1665,40 @@ namespace pP::tests::detail {
                 }
             } clock;
             auto recipe = numericRecipe();
+            recipe.m_materials.push_back({633u, true, false, EGenerationMatter::solid, 3200.0, 63301u});
+            recipe.m_open_surface = true;
+            recipe.m_surface_elevation_m = 1120.0;
+            recipe.m_bedrock_thickness_m = 25.0;
+            recipe.m_bedrock_material = 633u;
+            recipe.m_start_depth_m = 120.0;
             recipe.m_features[0u].m_operations[0u].m_x = 3;
             recipe.m_features[0u].m_operations[0u].m_y = 6;
             recipe.m_features[0u].m_operations[0u].m_width = 24u;
             recipe.m_features[0u].m_operations[0u].m_height = 21u;
+            recipe.m_materials.push_back({33u, true, true, EGenerationMatter::solid, 2700.0, 3301u});
+            recipe.m_biomes[0u].m_pore_probability = 0.05;
+            recipe.m_biomes[0u].m_pore_affinity_min = -1.0;
+            recipe.m_biomes[0u].m_pore_passes = 1u;
+            recipe.m_biomes[0u].m_relaxation_passes = 1u;
+            recipe.m_biomes[0u].m_finish_passes = 2u;
+            recipe.m_biomes[0u].m_erosion_passes = 2u;
+            recipe.m_biomes[0u].m_deposits.push_back(
+                {.m_key = 601u,
+                    .m_material = 33u,
+                    .m_host = 17u,
+                    .m_depth_max = 1.0,
+                    .m_threshold_min = -0.15,
+                    .m_threshold_max = 0.15,
+                    .m_stage = EGenerationDepositStage::detail});
             auto plan = compileGenerationPlan(recipe, 42u);
             PPR_TEST_ASSERT(plan.has_value());
             std::atomic<u32> completed{};
             std::atomic<EGenerationStage> stage{EGenerationStage::layout};
             auto serial = generateWorld(std::move(*plan), clock, {.m_completed_chunks = &completed, .m_stage = &stage});
             PPR_TEST_ASSERT(serial.has_value());
+            PPR_TEST_ASSERT(serial->m_grid.getCell({0u, 0u})->m_element == 633u);
+            PPR_TEST_ASSERT(serial->m_grid.getCell({0u, kWorldEdge - 1u})->m_element == 0u);
+            PPR_TEST_ASSERT(serial->m_grid.getCell({0u, 1000u})->m_element == 17u);
             PPR_TEST_ASSERT(completed.load() == kChunkCount and stage.load() == EGenerationStage::complete);
             PPR_TEST_ASSERT(
                 serial->m_grid.residentChunkCount() == kChunkCount and serial->m_grid.dirtyChunkCount() == kChunkCount);
@@ -1174,11 +1777,18 @@ namespace pP::tests {
             detail::WorldGen::macro_layout_satisfies_required_biomes_before_weighted_assignment,
             detail::WorldGen::nonlocal_geometry_replays_worms_and_links_only_traversal_rooms,
             detail::WorldGen::nonlocal_geometry_distinguishes_required_exhaustion_optional_omission_and_limits,
+            detail::WorldGen::finite_blobs_and_smooth_worms_are_bounded_and_replay,
+            detail::WorldGen::coherent_vacuum_palette_is_salted_before_bounded_relaxation,
+            detail::WorldGen::relaxation_crosses_chunk_seams_preserves_reservations_and_precedes_detail,
             detail::WorldGen::chunk_raster_preserves_boundaries_host_replacement_and_global_seams,
             detail::WorldGen::chunk_raster_opens_room_portals_but_preserves_mixed_role_sealed_pockets,
             detail::WorldGen::chunk_raster_protects_template_reservations_from_cave_fields,
             detail::WorldGen::compiled_noise_algorithms_replay_and_support_concurrent_sampling,
             detail::WorldGen::matter_area_clips_shared_contours_and_horizontal_height,
+            detail::WorldGen::vacuum_palette_preserves_unstamped_sealed_reservation_substrate,
+            detail::WorldGen::open_surface_and_continuous_bedrock_override_every_terrain_phase,
+            detail::WorldGen::warped_beds_and_clustered_pores_replay_through_split_filters,
+            detail::WorldGen::supported_formations_use_frozen_contacts_and_preserve_backbone_clearance,
             detail::WorldGen::initial_matter_is_disjoint_canonical_and_mass_uses_empty_geometry,
             detail::WorldGen::initial_matter_rejects_diagonal_saddle_leaks,
             detail::WorldGen::initial_matter_preserves_integer_boundaries_and_gas_is_remaining_volume,

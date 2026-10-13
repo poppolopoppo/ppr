@@ -178,7 +178,7 @@ snapshot.
 
 World generation accepts an explicit chunk scheduler, cancellation context and atomic current-stage/chunk progress. Independent chunks use bounded batches of admitted tasks, and all admitted tasks drain before generation returns or rethrows. Serial execution remains explicit and deterministic. Production uses compiled numeric recipes.
 
-The `:worldgen.noise` partition exports numeric `NoiseFieldDesc` and a move-only compiled `NoiseField`. FastNoiseLite v1.1.1 is privately pinned behind `Sim.WorldGen.Noise.cpp`; sampling is immutable and allocation-free. OpenSimplex2, Perlin, squared-Euclidean cellular distance, fBm, ridged noise and progressive domain warp are supported. Compilation validates finite settings, octave/work limits and signed lattice-coordinate bounds. Compiled numeric content recipes use this adapter.
+The `:worldgen.noise` partition exports numeric `NoiseFieldDesc` and a move-only compiled `NoiseField`. FastNoiseLite v1.1.1 is privately pinned behind `Sim.WorldGen.Noise.cpp`; sampling is immutable and allocation-free. OpenSimplex2, Perlin, squared-Euclidean cellular distance, cellular site values, fBm, ridged noise and progressive domain warp are supported. Compilation validates finite settings, octave/work limits and signed lattice-coordinate bounds. Compiled numeric content recipes use this adapter.
 
 `captureFull(grid[, registry], seed, context)` is the additive full-residency
 capture boundary for an exclusively frozen world. It copies all resident chunks
@@ -192,3 +192,15 @@ Production generation accepts owned validated numeric plans. The former seed-onl
 hard-coded generator and its archetype/pinned-hash tests now live in the game's
 explicit legacy fixture, outside engine.sim and engine.tests.sim. This preserves
 smoke/many-agent fixture coverage without an implicit normal generation fallback.
+
+The numeric worldgen plan owns the shared surface/bedrock/depth helpers and
+surface-relative start resolution. Raster uses global tile pore seeds and the
+sum of pore/material/finishing/erosion halos. Weighted geological competition and
+weak solid-only finishing precede the optional final unweighted eight-neighbor
+erosion, which includes vacuum at fixed 50% adoption. Semantic keys resolve ties;
+all sequential passes share the 24-cell halo bound.
+Geometry routes selected cave anchors around protected obstacles. Final terrain
+finishing discovers at most 4096 supported formation records against the frozen
+grid, applies them in stable order, and certifies selected backbone connectivity
+and actor clearance. Sky, continuous bedrock, reservations and connection cores
+remain protected through all filters.

@@ -8,7 +8,7 @@ import game.colony.worldgen;
 import std;
 
 export namespace pP::colony {
-    inline constexpr u32 kWorldCheckpointVersion = 2u;
+    inline constexpr u32 kWorldCheckpointVersion = 3u;
     inline constexpr u64 kMaxWorldCheckpointBytes = 256u * 1024u * 1024u;
     struct CheckpointMaterial {
         u16 m_id{};

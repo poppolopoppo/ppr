@@ -245,6 +245,43 @@ fill_height_m = 4.0
                 .m_fill_height_m.has_value());
     };
 
+    PPR_UNIT_TEST (smooth_worm_controls_are_opt_in_and_bounded) {
+        const auto input = inputs();
+        config::Diagnostics diagnostics{};
+        const auto legacy = decode(validDocument(), input, diagnostics);
+        PPR_TEST_ASSERT(legacy.has_value());
+        const auto &old_worm = std::get<WorldWormRule>(legacy->front().m_rules[2u].m_parameters);
+        PPR_TEST_ASSERT(old_worm.m_turn_smoothing == 0.0 and old_worm.m_radius_variation == 0.0);
+        PPR_TEST_ASSERT(old_worm.m_chamber_probability == 0.0 and old_worm.m_chamber_scale == 1.0);
+        auto smooth = validDocument();
+        replace(smooth, "turn_probability = 0.2", R"(turn_probability = 0.2
+turn_smoothing = 0.8
+radius_variation = 0.4
+chamber_probability = 0.1
+chamber_scale = 4.0)");
+        const auto accepted = decode(smooth, input, diagnostics);
+        PPR_TEST_ASSERT(accepted.has_value());
+        const auto &worm = std::get<WorldWormRule>(accepted->front().m_rules[2u].m_parameters);
+        PPR_TEST_ASSERT(worm.m_turn_smoothing == 0.8 and worm.m_radius_variation == 0.4);
+        PPR_TEST_ASSERT(worm.m_chamber_probability == 0.1 and worm.m_chamber_scale == 4.0);
+        const std::pair<std::string_view, std::string_view> failures[] = {
+            {"turn_smoothing = 0.8", "turn_smoothing = 0.0"},
+            {"turn_smoothing = 0.8", "turn_smoothing = 1.1"},
+            {"turn_smoothing = 0.8", "turn_smoothing = nan"},
+            {"radius_variation = 0.4", "radius_variation = -0.1"},
+            {"radius_variation = 0.4", "radius_variation = 1.1"},
+            {"chamber_probability = 0.1", "chamber_probability = 0.11"},
+            {"chamber_scale = 4.0", "chamber_scale = 4.1"},
+            {"chamber_scale = 4.0", "chamber_scale = 0.9"},
+        };
+        for (const auto &[before, after]: failures) {
+            auto invalid = smooth;
+            replace(invalid, before, after);
+            config::Diagnostics rejected{};
+            PPR_TEST_ASSERT(not decode(invalid, input, rejected).has_value() and rejected.hasErrors());
+        }
+    };
+
     PPR_UNIT_TEST (invalid_world_values_references_and_phases_are_rejected) {
         const auto input = inputs();
         const std::pair<std::string_view, std::string_view> failures[] = {
@@ -455,6 +492,7 @@ namespace pP::game::tests {
         _.recurse(
             {detail::worlds::owned_profiles_resolve_all_rule_kinds_and_canonical_order,
                 detail::worlds::invalid_world_values_references_and_phases_are_rejected,
+                detail::worlds::smooth_worm_controls_are_opt_in_and_bounded,
                 detail::worlds::world_diagnostics_preserve_exact_fields_and_locations,
                 detail::worlds::world_counts_and_weight_intervals_are_bounded,
                 detail::worlds::fill_heights_require_exact_signed_fine_cell_boundaries});

@@ -24,6 +24,12 @@ export namespace pP::sim {
         Array<GenerationSegment> m_segments;
         Array<u32> m_omitted_instances;
         u32 m_worst_placement_attempts{};
+        struct Blob {
+            u32 m_biome{}, m_deposit{}, m_ordinal{};
+            double m_x_m{}, m_y_m{}, m_radius_m{}, m_stretch{}, m_angle{}, m_offset_x{}, m_offset_y{};
+            constexpr bool operator==(const Blob &) const noexcept = default;
+        };
+        Array<Blob> m_blobs;
     };
     /// Derives all nonlocal features, worms and room links before any chunk
     /// rasterization. Required placement exhaustion never silently omits work.

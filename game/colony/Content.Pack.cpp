@@ -99,10 +99,11 @@ namespace pP::colony {
                 values(
                     v.m_biome, v.m_count, v.m_depth_min_normalized, v.m_depth_max_normalized, v.m_length_min_m,
                     v.m_length_max_m, v.m_radius_min_m, v.m_radius_max_m, v.m_turn_probability, v.m_material_id,
-                    v.m_host_material_id);
+                    v.m_host_material_id, v.m_turn_smoothing, v.m_radius_variation, v.m_chamber_probability,
+                    v.m_chamber_scale);
             }
             void rule(const WorldConnectionRule &v) noexcept {
-                values(v.m_radius_m, v.m_extra_links);
+                values(v.m_radius_m, v.m_extra_links, v.m_natural_anchors, v.m_wells, v.m_branches, v.m_roughness_m);
             }
             void rule(const WorldFeatureRule &v) noexcept {
                 values(
@@ -270,15 +271,30 @@ namespace pP::colony {
         hash.sequence(m_biomes, [&](const auto &v) {
             hash.values(
                 v.m_key, v.m_display_name, v.m_preview_color_rgba, v.m_temperature_base_k, v.m_temperature_variation_k,
-                v.m_temperature_field, v.m_lining_material_id, v.m_lining_thickness_fine);
+                v.m_temperature_field, v.m_lining_material_id, v.m_lining_thickness_fine, v.m_relaxation_passes,
+                v.m_relaxation_adoption, v.m_sprinkle_probability);
+            hash.values(
+                v.m_pore_probability, v.m_pore_radius_min_m, v.m_pore_radius_max_m, v.m_pore_affinity_min,
+                v.m_pore_passes, v.m_finish_passes, v.m_erosion_passes, v.m_finish_adoption, v.m_soil_material_id,
+                v.m_weathered_material_id, v.m_soil_depth_m, v.m_weathered_depth_m, v.m_formation_material_id,
+                v.m_rind_material_id, v.m_formation_probability, v.m_formation_length_m);
+            hash.value(v.m_pore_field.has_value());
+            if (v.m_pore_field) {
+                hash.value(*v.m_pore_field);
+            }
             hash.sequence(v.m_composition, [&](const auto &b) {
-                hash.values(b.m_key, b.m_order, b.m_depth_min_normalized, b.m_depth_max_normalized, b.m_field);
+                hash.values(
+                    b.m_key, b.m_order, b.m_depth_min_normalized, b.m_depth_max_normalized, b.m_field, b.m_bed_period_m,
+                    b.m_bed_warp_m, b.m_bed_dip);
                 hash.sequence(b.m_materials, [&](const auto &m) { hash.values(m.m_key, m.m_material_id, m.m_weight); });
             });
             hash.sequence(v.m_deposits, [&](const auto &b) {
                 hash.values(
                     b.m_key, b.m_order, b.m_field, b.m_material_id, b.m_host_material_id, b.m_depth_min_normalized,
-                    b.m_depth_max_normalized, b.m_threshold_min, b.m_threshold_max);
+                    b.m_depth_max_normalized, b.m_threshold_min, b.m_threshold_max, b.m_shape, b.m_stage,
+                    b.m_blob_count, b.m_radius_min_m, b.m_radius_max_m, b.m_stretch_min, b.m_stretch_max,
+                    b.m_distortion, b.m_core_coverage, b.m_fringe_coverage, b.m_sprinkle_probability,
+                    b.m_orientation_min_degrees, b.m_orientation_max_degrees);
             });
         });
         hash.sequence(m_features, [&](const auto &v) {
@@ -300,6 +316,19 @@ namespace pP::colony {
                 v.m_boundary_warp_x_field, v.m_boundary_warp_y_field, v.m_start_biome, v.m_start_feature,
                 v.m_start_marker, v.m_start_x_fine, v.m_start_y_fine, v.m_start_clearance_m, v.m_start_route_width_m);
             hash.value(v.m_background_stack);
+            hash.values(
+                v.m_surface_field.has_value(), v.m_bedrock_field.has_value(), v.m_surface_elevation_m,
+                v.m_surface_amplitude_m, v.m_bedrock_thickness_m, v.m_bedrock_variation_m, v.m_bedrock_material_id,
+                v.m_start_depth_m.has_value());
+            if (v.m_surface_field) {
+                hash.value(*v.m_surface_field);
+            }
+            if (v.m_bedrock_field) {
+                hash.value(*v.m_bedrock_field);
+            }
+            if (v.m_start_depth_m) {
+                hash.value(*v.m_start_depth_m);
+            }
             hash.sequence(v.m_start_resources, [&](const auto &b) {
                 hash.values(b.m_key, b.m_marker, b.m_material_id, b.m_minimum_fine_cells, b.m_max_distance_m);
             });

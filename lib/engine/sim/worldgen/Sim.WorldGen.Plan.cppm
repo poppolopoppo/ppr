@@ -5,7 +5,7 @@ import engine.core;
 import std;
 
 export namespace pP::sim {
-    inline constexpr u32 kGeneratorAlgorithmVersion = 2u;
+    inline constexpr u32 kGeneratorAlgorithmVersion = 6u;
     inline constexpr u32 kMaxGenerationMaterials = 256u;
     inline constexpr u32 kMaxGenerationFields = 256u;
     inline constexpr u32 kMaxGenerationBiomes = 64u;
@@ -13,6 +13,8 @@ export namespace pP::sim {
     inline constexpr u32 kMaxGenerationRules = 128u;
     inline constexpr u32 kMaxGenerationSites = 4096u;
     inline constexpr u32 kGenerationWormOriginAttempts = 4096u;
+    inline constexpr u32 kGenerationBlobOriginAttempts = 256u;
+    inline constexpr u32 kMaxGenerationPoreRadiusFine = 32u;
     // Bound the complete rejection-sampling budget before any geometry allocation.
     inline constexpr u64 kMaxGenerationOriginAttempts = 4u * 1024u * 1024u;
 
@@ -28,6 +30,7 @@ export namespace pP::sim {
         bool m_terrain{}, m_diggable{};
         EGenerationMatter m_matter{};
         double m_reference_density_kg_m3{};
+        u64 m_key{};
     };
     struct GenerationField {
         u64 m_key{};
@@ -45,12 +48,27 @@ export namespace pP::sim {
         Array<GenerationChoice> m_choices{};
         // Derived by compileGenerationPlan, never trusted from caller input.
         double m_total_weight{};
+        double m_bed_period_m{}, m_bed_warp_m{}, m_bed_dip{};
+    };
+    enum class EGenerationDepositShape : u8 {
+        field,
+        blob
+    };
+    enum class EGenerationDepositStage : u8 {
+        bulk,
+        detail
     };
     struct GenerationDeposit {
         u64 m_key{};
         u32 m_order{}, m_field{};
         u16 m_material{}, m_host{};
         double m_depth_min{}, m_depth_max{}, m_threshold_min{}, m_threshold_max{};
+        EGenerationDepositShape m_shape{};
+        EGenerationDepositStage m_stage{};
+        u32 m_blob_count{};
+        double m_radius_min_m{}, m_radius_max_m{}, m_stretch_min{1.0}, m_stretch_max{1.0}, m_distortion{};
+        double m_core_coverage{1.0}, m_fringe_coverage{1.0}, m_sprinkle_probability{};
+        double m_orientation_min_degrees{}, m_orientation_max_degrees{360.0};
     };
     struct GenerationBiome {
         u64 m_key{};
@@ -60,6 +78,26 @@ export namespace pP::sim {
         Array<GenerationDeposit> m_deposits{};
         u16 m_lining_material{};
         u32 m_lining_thickness_fine{};
+        u32 m_relaxation_passes{};
+        double m_relaxation_adoption{0.5};
+        double m_sprinkle_probability{};
+        u32 m_pore_field{};
+        double m_pore_probability{};
+        double m_pore_radius_min_m{2.0};
+        double m_pore_radius_max_m{3.0};
+        double m_pore_affinity_min{};
+        u32 m_pore_passes{};
+        u32 m_finish_passes{};
+        double m_finish_adoption{0.15};
+        u16 m_soil_material{};
+        u16 m_weathered_material{};
+        double m_soil_depth_m{};
+        double m_weathered_depth_m{};
+        u16 m_formation_material{};
+        u16 m_rind_material{};
+        double m_formation_probability{};
+        double m_formation_length_m{3.0};
+        u32 m_erosion_passes{};
     };
     enum class EGenerationShape : u8 {
         rectangle,
@@ -119,10 +157,13 @@ export namespace pP::sim {
         double m_depth_min{}, m_depth_max{}, m_length_min_m{}, m_length_max_m{}, m_radius_min_m{}, m_radius_max_m{},
             m_turn_probability{};
         u16 m_material{}, m_host{};
+        double m_turn_smoothing{}, m_radius_variation{}, m_chamber_probability{}, m_chamber_scale{1.0};
     };
     struct GenerationConnection {
         double m_radius_m{};
         u32 m_extra_links{};
+        u32 m_natural_anchors{}, m_wells{}, m_branches{};
+        double m_roughness_m{};
     };
     struct GenerationPlacement {
         u32 m_feature{}, m_biome{}, m_min_count{}, m_max_count{}, m_attempts{}, m_priority{};
@@ -164,6 +205,12 @@ export namespace pP::sim {
         u32 m_warp_x_field{}, m_warp_y_field{};
         u32 m_start_biome{}, m_start_feature{}, m_start_marker{}, m_start_x_fine{}, m_start_y_fine{};
         double m_start_clearance_m{}, m_start_route_width_m{}, m_actor_half_width_m{}, m_actor_half_height_m{};
+        // Disabled in small legacy fixtures; authored worlds use an open surface.
+        bool m_open_surface{};
+        u32 m_surface_field{}, m_bedrock_field{};
+        double m_surface_elevation_m{}, m_surface_amplitude_m{}, m_bedrock_thickness_m{}, m_bedrock_variation_m{};
+        u16 m_bedrock_material{};
+        std::optional<double> m_start_depth_m{};
     };
 
     // Fixed SplitMix64 stream with unbiased bounded integer draws. Domain keys
@@ -197,6 +244,11 @@ export namespace pP::sim {
         /// Owned vector payload capacities; excludes opaque compiled-noise allocations.
         [[nodiscard]] u64 retainedPayloadBytes() const noexcept;
     };
+    [[nodiscard]] double generationSurfaceHeight(const GenerationPlan &plan, double x_m) noexcept;
+    [[nodiscard]] double generationBedrockHeight(const GenerationPlan &plan, double x_m) noexcept;
+    [[nodiscard]] double generationDepth(const GenerationPlan &plan, double x_m, double y_m) noexcept;
+    [[nodiscard]] bool generationSubsurfaceBounds(
+        const GenerationPlan &plan, i64 min_x, i64 min_y, i64 max_x, i64 max_y) noexcept;
     [[nodiscard]] std::error_code validateGenerationRecipe(const GenerationRecipe &recipe);
     [[nodiscard]] Expected<GenerationPlan> compileGenerationPlan(GenerationRecipe recipe, u64 seed);
 }

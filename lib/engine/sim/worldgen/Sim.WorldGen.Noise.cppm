@@ -9,7 +9,8 @@ export namespace pP::sim {
     enum class ENoiseAlgorithm : u8 {
         open_simplex2,
         perlin,
-        cellular_distance
+        cellular_distance,
+        cellular_value
     };
     enum class ENoiseFractal : u8 {
         none,

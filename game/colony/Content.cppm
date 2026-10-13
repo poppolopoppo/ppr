@@ -127,6 +127,7 @@ export namespace pP::colony {
         std::string m_field{};
         Array<WeightedTerrainMaterial> m_materials{};
         double m_total_weight{};
+        double m_bed_period_m{}, m_bed_warp_m{}, m_bed_dip{};
     };
     struct BiomeThresholdDeposit {
         std::string m_key{};
@@ -138,6 +139,13 @@ export namespace pP::colony {
         double m_depth_max_normalized{};
         double m_threshold_min{};
         double m_threshold_max{};
+        sim::EGenerationDepositShape m_shape{sim::EGenerationDepositShape::field};
+        sim::EGenerationDepositStage m_stage{sim::EGenerationDepositStage::bulk};
+        u32 m_blob_count{};
+        double m_radius_min_m{}, m_radius_max_m{};
+        double m_stretch_min{1.0}, m_stretch_max{1.0}, m_distortion{};
+        double m_core_coverage{1.0}, m_fringe_coverage{1.0}, m_sprinkle_probability{};
+        double m_orientation_min_degrees{}, m_orientation_max_degrees{360.0};
     };
     struct BiomeDefinition {
         std::string m_key{};
@@ -150,6 +158,26 @@ export namespace pP::colony {
         Array<BiomeThresholdDeposit> m_deposits{};
         u16 m_lining_material_id{};
         u32 m_lining_thickness_fine{};
+        u32 m_relaxation_passes{};
+        double m_relaxation_adoption{0.5};
+        double m_sprinkle_probability{};
+        std::optional<std::string> m_pore_field{};
+        double m_pore_probability{};
+        double m_pore_radius_min_m{2.0};
+        double m_pore_radius_max_m{3.0};
+        double m_pore_affinity_min{};
+        u32 m_pore_passes{};
+        u32 m_finish_passes{};
+        double m_finish_adoption{0.15};
+        u16 m_soil_material_id{};
+        u16 m_weathered_material_id{};
+        double m_soil_depth_m{};
+        double m_weathered_depth_m{};
+        u16 m_formation_material_id{};
+        u16 m_rind_material_id{};
+        double m_formation_probability{};
+        double m_formation_length_m{3.0};
+        u32 m_erosion_passes{};
     };
 
     // Pure, owned biome recipes with terrain references resolved to validated
@@ -249,10 +277,13 @@ export namespace pP::colony {
         double m_radius_min_m{}, m_radius_max_m{};
         double m_turn_probability{};
         u16 m_material_id{}, m_host_material_id{};
+        double m_turn_smoothing{}, m_radius_variation{}, m_chamber_probability{}, m_chamber_scale{1.0};
     };
     struct WorldConnectionRule {
         double m_radius_m{};
         u32 m_extra_links{};
+        u32 m_natural_anchors{}, m_wells{}, m_branches{};
+        double m_roughness_m{};
     };
     struct WorldFeatureRule {
         std::string m_feature{}, m_biome{};
@@ -295,6 +326,10 @@ export namespace pP::colony {
         Array<WorldBiomeChoice> m_biomes{};
         Array<WorldRuleDefinition> m_rules{};
         std::string m_background_stack{};
+        std::optional<std::string> m_surface_field{}, m_bedrock_field{};
+        double m_surface_elevation_m{}, m_surface_amplitude_m{}, m_bedrock_thickness_m{}, m_bedrock_variation_m{};
+        u16 m_bedrock_material_id{};
+        std::optional<double> m_start_depth_m{};
     };
     struct BackgroundLayerDefinition {
         std::string m_key{}, m_texture{}, m_source_location{};

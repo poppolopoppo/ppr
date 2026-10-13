@@ -248,7 +248,7 @@ threshold_max = 1.0
             catalog->textures(), *material->m_albedo_texture, &ContentTexture::m_path);
         PPR_TEST_ASSERT(texture != catalog->textures().end() and texture->m_image.m_storage.isOwned());
         PPR_TEST_ASSERT(
-            catalog->textures().size() == 99u and
+            catalog->textures().size() == 135u and
             catalog->contentFingerprint() != baseline_catalog->contentFingerprint());
 
         const auto plan = compileWorldPlan(*catalog, "frontier", 42u);
@@ -302,15 +302,15 @@ threshold_max = 1.0
         }
         PPR_TEST_ASSERT(catalog.has_value() and not diagnostics.hasErrors());
         PPR_TEST_ASSERT(catalog->packId() == "ppr_frontier");
-        PPR_TEST_ASSERT(catalog->materials().size() == 45u and catalog->textures().size() == 98u);
+        PPR_TEST_ASSERT(catalog->materials().size() == 63u and catalog->textures().size() == 134u);
         PPR_TEST_ASSERT(catalog->biomes().size() == 11u and catalog->features().size() == 26u);
         PPR_TEST_ASSERT(
-            catalog->worlds().size() == 2u and catalog->fields().size() == 28u and catalog->backgrounds().size() == 2u);
+            catalog->worlds().size() == 2u and catalog->fields().size() == 44u and catalog->backgrounds().size() == 2u);
         PPR_TEST_ASSERT(catalog->findWorld("frontier") != nullptr and catalog->findWorld("hollows") != nullptr);
         PPR_TEST_ASSERT(catalog->findWorld("unknown") == nullptr);
         PPR_TEST_ASSERT(catalog->contentFingerprint().has_value());
         std::println("Shipped content fingerprint: {:016x}", *catalog->contentFingerprint());
-        PPR_TEST_ASSERT(catalog->contentFingerprint() == 0xafd3c88984d452d4ull);
+        PPR_TEST_ASSERT(catalog->contentFingerprint() == 0xf3033606eee22dd4ull);
         PPR_TEST_ASSERT(catalog->findMaterial(u16{1001})->m_representation == EMaterialRepresentation::particle);
         PPR_TEST_ASSERT(catalog->findMaterial("masonry")->m_texture_sampling == EMaterialTextureSampling::repeat);
         PPR_TEST_ASSERT(catalog->findMaterial("basalt")->m_texture_sampling == EMaterialTextureSampling::stochastic);
@@ -362,10 +362,74 @@ threshold_max = 1.0
                 auto plan = compileWorldPlan(*catalog, profile, seed);
                 PPR_TEST_ASSERT(plan.has_value());
                 PPR_TEST_ASSERT(plan->seed() == seed);
-                PPR_TEST_ASSERT(plan->recipe().m_materials.size() == 45u);
-                PPR_TEST_ASSERT(plan->fields().size() == 28u);
+                PPR_TEST_ASSERT(plan->recipe().m_materials.size() == 63u);
+                PPR_TEST_ASSERT(plan->fields().size() == 44u);
                 PPR_TEST_ASSERT(plan->recipe().m_boundary_material == 257u);
                 PPR_TEST_ASSERT(plan->recipe().m_cell_size_m == 1.0 / 3.0);
+                PPR_TEST_ASSERT(plan->recipe().m_open_surface and plan->recipe().m_bedrock_material == 633u);
+                PPR_TEST_ASSERT(catalog->findMaterial("bedrock")->m_diggable == false);
+                const auto &start_feature = plan->recipe().m_features[plan->recipe().m_start_feature];
+                const auto &bounds = start_feature.m_bounds;
+                PPR_TEST_ASSERT(
+                    sim::generationSubsurfaceBounds(
+                        *plan, static_cast<i64>(plan->recipe().m_start_x_fine) + bounds.m_min_x,
+                        static_cast<i64>(plan->recipe().m_start_y_fine) + bounds.m_min_y,
+                        static_cast<i64>(plan->recipe().m_start_x_fine) + bounds.m_max_x,
+                        static_cast<i64>(plan->recipe().m_start_y_fine) + bounds.m_max_y));
+                for (std::size_t i = 0u; i < catalog->biomes().size(); ++i) {
+                    const auto &source = catalog->biomes()[i];
+                    const auto &target = plan->recipe().m_biomes[i];
+                    PPR_TEST_ASSERT(target.m_relaxation_passes == source.m_relaxation_passes);
+                    PPR_TEST_ASSERT(target.m_relaxation_adoption == source.m_relaxation_adoption);
+                    PPR_TEST_ASSERT(target.m_erosion_passes == source.m_erosion_passes);
+                    PPR_TEST_ASSERT(target.m_sprinkle_probability == source.m_sprinkle_probability);
+                    PPR_TEST_ASSERT(
+                        target.m_pore_probability == source.m_pore_probability and
+                        target.m_pore_passes == source.m_pore_passes);
+                    PPR_TEST_ASSERT(
+                        target.m_finish_passes == source.m_finish_passes and
+                        target.m_finish_adoption == source.m_finish_adoption);
+                    PPR_TEST_ASSERT(
+                        target.m_formation_material == source.m_formation_material_id and
+                        target.m_formation_probability == source.m_formation_probability);
+                    for (std::size_t j = 0u; j < source.m_composition.size(); ++j) {
+                        PPR_TEST_ASSERT(target.m_bands[j].m_bed_period_m == source.m_composition[j].m_bed_period_m);
+                        PPR_TEST_ASSERT(target.m_bands[j].m_bed_warp_m == source.m_composition[j].m_bed_warp_m);
+                    }
+                    PPR_TEST_ASSERT(target.m_deposits.size() == source.m_deposits.size());
+                    for (std::size_t j = 0u; j < source.m_deposits.size(); ++j) {
+                        const auto &from = source.m_deposits[j];
+                        const auto &to = target.m_deposits[j];
+                        PPR_TEST_ASSERT(to.m_shape == from.m_shape and to.m_stage == from.m_stage);
+                        PPR_TEST_ASSERT(to.m_blob_count == from.m_blob_count);
+                        PPR_TEST_ASSERT(
+                            to.m_orientation_min_degrees == from.m_orientation_min_degrees and
+                            to.m_orientation_max_degrees == from.m_orientation_max_degrees);
+                        PPR_TEST_ASSERT(
+                            to.m_radius_min_m == from.m_radius_min_m and to.m_radius_max_m == from.m_radius_max_m);
+                        PPR_TEST_ASSERT(
+                            to.m_stretch_min == from.m_stretch_min and to.m_stretch_max == from.m_stretch_max);
+                        PPR_TEST_ASSERT(
+                            to.m_distortion == from.m_distortion and to.m_core_coverage == from.m_core_coverage);
+                        PPR_TEST_ASSERT(
+                            to.m_fringe_coverage == from.m_fringe_coverage and
+                            to.m_sprinkle_probability == from.m_sprinkle_probability);
+                    }
+                }
+                for (std::size_t i = 0u; i < catalog->findWorld(profile)->m_rules.size(); ++i) {
+                    const auto *const from = std::get_if<WorldWormRule>(
+                        &catalog->findWorld(profile)->m_rules[i].m_parameters);
+                    if (from == nullptr) {
+                        continue;
+                    }
+                    const auto &to = std::get<sim::GenerationWorm>(plan->recipe().m_rules[i].m_parameters);
+                    PPR_TEST_ASSERT(
+                        to.m_turn_smoothing == from->m_turn_smoothing and
+                        to.m_radius_variation == from->m_radius_variation);
+                    PPR_TEST_ASSERT(
+                        to.m_chamber_probability == from->m_chamber_probability and
+                        to.m_chamber_scale == from->m_chamber_scale);
+                }
                 auto layout = sim::compileBiomeLayout(*plan);
                 PPR_TEST_ASSERT(layout.has_value());
                 PPR_TEST_ASSERT(layout->sites().size() >= plan->recipe().m_min_sites);
@@ -453,7 +517,7 @@ threshold_max = 1.0
         PPR_TEST_ASSERT(catalog.has_value());
         auto changed = compileWorldPlan(*catalog, "frontier", 42u);
         PPR_TEST_ASSERT(changed.has_value());
-        PPR_TEST_ASSERT(changed->recipe().m_materials.size() == 46u);
+        PPR_TEST_ASSERT(changed->recipe().m_materials.size() == 64u);
         PPR_TEST_ASSERT(baseline->recipe().m_rules.size() == changed->recipe().m_rules.size());
         for (std::size_t i = 0u; i < baseline->recipe().m_rules.size(); ++i) {
             PPR_TEST_ASSERT(baseline->recipe().m_rules[i].m_key == changed->recipe().m_rules[i].m_key);
@@ -529,8 +593,38 @@ threshold_max = 1.0
             {"materials.toml", "texture_sampling = \"repeat\"", "texture_sampling = \"stochastic\""},
             {"backgrounds.toml", "parallax_factor = 0.08", "parallax_factor = 0.09"},
             {"biomes.toml", "293.0", "294.0"},
+            {"biomes.toml", "bed_period_m = 48", "bed_period_m = 49"},
+            {"biomes.toml", "pore_probability = 0.055", "pore_probability = 0.056"},
+            {"biomes.toml", "pore_passes = 3", "pore_passes = 2"},
+            {"biomes.toml", "erosion_passes = 8", "erosion_passes = 7"},
+            {"biomes.toml", "finish_adoption = 0.12", "finish_adoption = 0.13"},
+            {"biomes.toml", "formation_probability = 0.045", "formation_probability = 0.046"},
+            {"worlds.toml", "surface_amplitude_m = 55.0", "surface_amplitude_m = 56.0"},
+            {"worlds.toml", "bedrock_variation_m = 12.5", "bedrock_variation_m = 12.4"},
+            {"worlds.toml", "start_depth_m = 65.0", "start_depth_m = 66.0"},
+            {"worlds.toml", "natural_anchors = 28", "natural_anchors = 29"},
+            {"worlds.toml", "roughness_m = 4.5", "roughness_m = 4.4"},
+            {"biomes.toml", "relaxation_passes = 8", "relaxation_passes = 9"},
+            {"biomes.toml", "sprinkle_probability = 0.08", "sprinkle_probability = 0.09"},
+            {"biomes.toml", "relaxation_adoption = 0.32", "relaxation_adoption = 0.33"},
+            {"biomes.toml", "stage = \"bulk\"", "stage = \"detail\""},
+            {"biomes.toml", "blob_count = 48", "blob_count = 47"},
+            {"biomes.toml", "radius_min_m = 8.0", "radius_min_m = 7.0"},
+            {"biomes.toml", "radius_max_m = 13.0", "radius_max_m = 14.0"},
+            {"biomes.toml", "stretch_min = 1.1", "stretch_min = 1.2"},
+            {"biomes.toml", "stretch_max = 2.5", "stretch_max = 2.6"},
+            {"biomes.toml", "distortion = 0.28", "distortion = 0.27"},
+            {"biomes.toml", "orientation_min_degrees = 0.0", "orientation_min_degrees = 1.0"},
+            {"biomes.toml", "orientation_max_degrees = 360.0", "orientation_max_degrees = 359.0"},
+            {"biomes.toml", "core_coverage = 0.95", "core_coverage = 0.94"},
+            {"biomes.toml", "fringe_coverage = 0.22", "fringe_coverage = 0.21"},
+            {"biomes.toml", "sprinkle_probability = 0.004", "sprinkle_probability = 0.005"},
+            {"worlds.toml", "turn_smoothing = 0.82", "turn_smoothing = 0.83"},
+            {"worlds.toml", "radius_variation = 0.35", "radius_variation = 0.34"},
+            {"worlds.toml", "chamber_probability = 0.025", "chamber_probability = 0.026"},
+            {"worlds.toml", "chamber_scale = 2.2", "chamber_scale = 2.3"},
             {"features.toml", "Hearth landing", "Hearth landing revised"},
-            {"worlds.toml", "site_spacing_m = 160.0", "site_spacing_m = 161.0"},
+            {"worlds.toml", "site_spacing_m = 110.0", "site_spacing_m = 111.0"},
             {"worlds.toml", "turn_probability = 0.12", "turn_probability = 0.13"},
             {"worlds.toml", "fill_height_m = 4.333333333333333", "fill_height_m = 4.666666666666667"},
         };

@@ -137,6 +137,131 @@ threshold_max = 1.0
         replace(zero_variation, "threshold_min = 0.3", "threshold_min = -1.0");
         const auto endpoints = decodeBiomeDefinitions(zero_variation, "biomes.toml", *materials, *fields, diagnostics);
         PPR_TEST_ASSERT(endpoints.has_value() and endpoints->front().m_temperature_variation_k == 0.0);
+        auto porous = validDocument();
+        replace(porous, "material = \"ore\"", "material = \"vacuum\"");
+        replace(
+            porous, "temperature_field = \"temperature\"",
+            "temperature_field = \"temperature\"\nsprinkle_probability = 0.4\nrelaxation_passes = 21");
+        const auto holes = decodeBiomeDefinitions(porous, "biomes.toml", *materials, *fields, diagnostics);
+        PPR_TEST_ASSERT(holes.has_value());
+        PPR_TEST_ASSERT(holes->front().m_composition[0u].m_materials[0u].m_material_id == 0u);
+        PPR_TEST_ASSERT(holes->front().m_sprinkle_probability == 0.4 and holes->front().m_relaxation_passes == 21u);
+        for (const auto probability: {"-0.1", "1.1", "nan"}) {
+            auto invalid = porous;
+            replace(invalid, "sprinkle_probability = 0.4", std::string{"sprinkle_probability = "} + probability);
+            PPR_TEST_ASSERT(not decodeBiomeDefinitions(invalid, "biomes.toml", *materials, *fields, diagnostics));
+        }
+    };
+
+    PPR_UNIT_TEST (finite_blob_controls_validate_and_preserve_legacy_defaults) {
+        config::Diagnostics setup{};
+        const auto materials = decodeMaterialCatalog(materials_text, "materials.toml", setup);
+        const auto fields = decodeFieldDefinitions(fields_text, "fields.toml", setup);
+        PPR_TEST_ASSERT(materials.has_value() and fields.has_value());
+        const auto legacy = decodeBiomeDefinitions(validDocument(), "biomes.toml", *materials, *fields, setup);
+        PPR_TEST_ASSERT(legacy.has_value());
+        const auto &original = legacy->front();
+        PPR_TEST_ASSERT(original.m_relaxation_passes == 0u and original.m_relaxation_adoption == 0.5);
+        PPR_TEST_ASSERT(original.m_erosion_passes == 0u);
+        auto erosion = validDocument();
+        replace(
+            erosion, "temperature_field = \"temperature\"", "temperature_field = \"temperature\"\nerosion_passes = 24");
+        const auto erosion_only = decodeBiomeDefinitions(erosion, "biomes.toml", *materials, *fields, setup);
+        PPR_TEST_ASSERT(erosion_only and erosion_only->front().m_erosion_passes == 24u);
+        for (const auto replacement: {"erosion_passes = 25", "erosion_passes = 24\nrelaxation_passes = 1"}) {
+            auto invalid = erosion;
+            replace(invalid, "erosion_passes = 24", replacement);
+            config::Diagnostics rejected;
+            PPR_TEST_ASSERT(not decodeBiomeDefinitions(invalid, "biomes.toml", *materials, *fields, rejected));
+        }
+        PPR_TEST_ASSERT(original.m_deposits.front().m_shape == sim::EGenerationDepositShape::field);
+        PPR_TEST_ASSERT(original.m_deposits.front().m_stage == sim::EGenerationDepositStage::bulk);
+        PPR_TEST_ASSERT(
+            original.m_deposits.front().m_orientation_min_degrees == 0.0 and
+            original.m_deposits.front().m_orientation_max_degrees == 360.0);
+        auto blob = validDocument();
+        replace(
+            blob, "temperature_field = \"temperature\"",
+            "temperature_field = \"temperature\"\nrelaxation_passes = 8\nrelaxation_adoption = 0.4");
+        replace(blob, "threshold_min = 0.3\nthreshold_max = 1.0", R"(shape = "blob"
+stage = "detail"
+blob_count = 4096
+radius_min_m = 2.0
+radius_max_m = 5.0
+stretch_min = 0.1
+stretch_max = 16.0
+distortion = 0.45
+orientation_min_degrees = 80.0
+orientation_max_degrees = 100.0
+core_coverage = 0.9
+fringe_coverage = 0.2
+sprinkle_probability = 0.02)");
+        config::Diagnostics diagnostics{};
+        const auto accepted = decodeBiomeDefinitions(blob, "biomes.toml", *materials, *fields, diagnostics);
+        PPR_TEST_ASSERT(accepted.has_value());
+        const auto &biome = accepted->front();
+        const auto &item = biome.m_deposits.front();
+        PPR_TEST_ASSERT(biome.m_relaxation_passes == 8u and biome.m_relaxation_adoption == 0.4);
+        PPR_TEST_ASSERT(
+            item.m_shape == sim::EGenerationDepositShape::blob and
+            item.m_stage == sim::EGenerationDepositStage::detail);
+        PPR_TEST_ASSERT(item.m_blob_count == 4096u and item.m_radius_min_m == 2.0 and item.m_radius_max_m == 5.0);
+        PPR_TEST_ASSERT(item.m_stretch_min == 0.1 and item.m_stretch_max == 16.0 and item.m_distortion == 0.45);
+        PPR_TEST_ASSERT(item.m_orientation_min_degrees == 80.0 and item.m_orientation_max_degrees == 100.0);
+        auto fixed_orientation = blob;
+        replace(fixed_orientation, "orientation_max_degrees = 100.0", "orientation_max_degrees = 80.0");
+        PPR_TEST_ASSERT(
+            decodeBiomeDefinitions(fixed_orientation, "biomes.toml", *materials, *fields, diagnostics).has_value());
+        PPR_TEST_ASSERT(
+            item.m_core_coverage == 0.9 and item.m_fringe_coverage == 0.2 and item.m_sprinkle_probability == 0.02);
+        const std::pair<std::string_view, std::string_view> failures[] = {
+            {"relaxation_passes = 8", "relaxation_passes = 25"},
+            {"relaxation_adoption = 0.4", "relaxation_adoption = nan"},
+            {"relaxation_adoption = 0.4", "relaxation_adoption = 1.1"},
+            {"shape = \"blob\"", "shape = \"field\""},
+            {"stage = \"detail\"", "stage = \"bulk\""},
+            {"blob_count = 4096", "blob_count = 0"},
+            {"blob_count = 4096", "blob_count = 4097"},
+            {"radius_min_m = 2.0", "radius_min_m = 0.0"},
+            {"radius_max_m = 5.0", "radius_max_m = 1.0"},
+            {"radius_max_m = 5.0", "radius_max_m = 257.0"},
+            {"radius_max_m = 5.0", "radius_max_m = 100.0"},
+            {"stretch_min = 0.1", "stretch_min = 0.09"},
+            {"stretch_max = 16.0", "stretch_max = 17.0"},
+            {"distortion = 0.45", "distortion = 0.46"},
+            {"orientation_min_degrees = 80.0", "orientation_min_degrees = -0.1"},
+            {"orientation_max_degrees = 100.0", "orientation_max_degrees = 360.1"},
+            {"orientation_max_degrees = 100.0", "orientation_max_degrees = 79.0"},
+            {"orientation_max_degrees = 100.0", "orientation_max_degrees = nan"},
+            {"core_coverage = 0.9", "core_coverage = 0.1"},
+            {"fringe_coverage = 0.2", "fringe_coverage = -0.1"},
+            {"sprinkle_probability = 0.02", "sprinkle_probability = 0.021"},
+        };
+        for (const auto &[before, after]: failures) {
+            auto invalid = blob;
+            replace(invalid, before, after);
+            config::Diagnostics rejected{};
+            PPR_TEST_ASSERT(
+                not decodeBiomeDefinitions(invalid, "biomes.toml", *materials, *fields, rejected).has_value());
+            PPR_TEST_ASSERT(rejected.hasErrors());
+        }
+        auto second = deposit;
+        replace(second, "deposits.copper", "deposits.second");
+        replace(second, "order = 5", "order = 6");
+        replace(
+            second, "threshold_min = 0.3\nthreshold_max = 1.0",
+            "shape = \"blob\"\nblob_count = 1\nradius_min_m = 1.0\nradius_max_m = 1.0");
+        config::Diagnostics aggregate{};
+        PPR_TEST_ASSERT(
+            not decodeBiomeDefinitions(blob + second, "biomes.toml", *materials, *fields, aggregate).has_value());
+        PPR_TEST_ASSERT(aggregate.entries().back().m_property == "biomes");
+        auto mixed = validDocument();
+        replace(mixed, "order = 5", "order = 5\ncore_coverage = 0.5");
+        config::Diagnostics neutral{};
+        PPR_TEST_ASSERT(not decodeBiomeDefinitions(mixed, "biomes.toml", *materials, *fields, neutral).has_value());
+        mixed = validDocument();
+        replace(mixed, "order = 5", "order = 5\norientation_max_degrees = 90.0");
+        PPR_TEST_ASSERT(not decodeBiomeDefinitions(mixed, "biomes.toml", *materials, *fields, neutral).has_value());
     };
 
     PPR_UNIT_TEST (invalid_recipes_keep_qualified_diagnostics) {
@@ -154,6 +279,8 @@ threshold_max = 1.0
             {"field = \"composition\"", "field = \"absent\""},
             {"material = \"ore\"", "material = \"absent\""},
             {"material = \"ore\"", "material = \"sand\""},
+            {"composition.deep.materials.host]\nmaterial = \"rock\"",
+                "composition.deep.materials.host]\nmaterial = \"vacuum\""},
             {"host_material = \"rock\"", "host_material = \"sand\""},
             {"weight = 3.0", "weight = 0.0"},
             {"weight = 3.0", "weight = nan"},
@@ -248,6 +375,7 @@ namespace pP::game::tests {
         _.recurse(
             {detail::biomes::owned_sorted_composition_and_terrain_references,
                 detail::biomes::invalid_recipes_keep_qualified_diagnostics,
+                detail::biomes::finite_blob_controls_validate_and_preserve_legacy_defaults,
                 detail::biomes::deposit_interval_errors_identify_the_offending_field,
                 detail::biomes::child_counts_are_bounded_before_compilation});
     };

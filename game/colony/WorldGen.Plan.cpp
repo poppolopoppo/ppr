@@ -89,7 +89,29 @@ namespace pP::colony {
                     .m_temperature_base_k = source.m_temperature_base_k,
                     .m_temperature_variation_k = source.m_temperature_variation_k,
                     .m_lining_material = source.m_lining_material_id,
-                    .m_lining_thickness_fine = source.m_lining_thickness_fine};
+                    .m_lining_thickness_fine = source.m_lining_thickness_fine,
+                    .m_relaxation_passes = source.m_relaxation_passes,
+                    .m_relaxation_adoption = source.m_relaxation_adoption,
+                    .m_sprinkle_probability = source.m_sprinkle_probability};
+                if (source.m_pore_field) {
+                    biome.m_pore_field = compiler.index(catalog.fields(), *source.m_pore_field);
+                }
+                biome.m_pore_probability = source.m_pore_probability;
+                biome.m_pore_radius_min_m = source.m_pore_radius_min_m;
+                biome.m_pore_radius_max_m = source.m_pore_radius_max_m;
+                biome.m_pore_affinity_min = source.m_pore_affinity_min;
+                biome.m_pore_passes = source.m_pore_passes;
+                biome.m_finish_passes = source.m_finish_passes;
+                biome.m_erosion_passes = source.m_erosion_passes;
+                biome.m_finish_adoption = source.m_finish_adoption;
+                biome.m_soil_material = source.m_soil_material_id;
+                biome.m_weathered_material = source.m_weathered_material_id;
+                biome.m_soil_depth_m = source.m_soil_depth_m;
+                biome.m_weathered_depth_m = source.m_weathered_depth_m;
+                biome.m_formation_material = source.m_formation_material_id;
+                biome.m_rind_material = source.m_rind_material_id;
+                biome.m_formation_probability = source.m_formation_probability;
+                biome.m_formation_length_m = source.m_formation_length_m;
                 for (const auto &band: source.m_composition) {
                     sim::GenerationBand target{
                         .m_key = compiler.key({"biomes", source.m_key, "composition", band.m_key}),
@@ -97,6 +119,9 @@ namespace pP::colony {
                         .m_field = compiler.index(catalog.fields(), band.m_field),
                         .m_depth_min = band.m_depth_min_normalized,
                         .m_depth_max = band.m_depth_max_normalized};
+                    target.m_bed_period_m = band.m_bed_period_m;
+                    target.m_bed_warp_m = band.m_bed_warp_m;
+                    target.m_bed_dip = band.m_bed_dip;
                     for (const auto &choice: band.m_materials) {
                         target.m_choices.push_back(
                             {compiler.key(
@@ -110,7 +135,11 @@ namespace pP::colony {
                         {compiler.key({"biomes", source.m_key, "deposits", deposit.m_key}), deposit.m_order,
                             compiler.index(catalog.fields(), deposit.m_field), deposit.m_material_id,
                             deposit.m_host_material_id, deposit.m_depth_min_normalized, deposit.m_depth_max_normalized,
-                            deposit.m_threshold_min, deposit.m_threshold_max});
+                            deposit.m_threshold_min, deposit.m_threshold_max, deposit.m_shape, deposit.m_stage,
+                            deposit.m_blob_count, deposit.m_radius_min_m, deposit.m_radius_max_m, deposit.m_stretch_min,
+                            deposit.m_stretch_max, deposit.m_distortion, deposit.m_core_coverage,
+                            deposit.m_fringe_coverage, deposit.m_sprinkle_probability,
+                            deposit.m_orientation_min_degrees, deposit.m_orientation_max_degrees});
                 }
                 recipe.m_biomes.push_back(std::move(biome));
             }
@@ -158,9 +187,12 @@ namespace pP::colony {
                             source.m_kind == EWorldRuleKind::carve_worm, value.m_depth_min_normalized,
                             value.m_depth_max_normalized, value.m_length_min_m, value.m_length_max_m,
                             value.m_radius_min_m, value.m_radius_max_m, value.m_turn_probability, value.m_material_id,
-                            value.m_host_material_id};
+                            value.m_host_material_id, value.m_turn_smoothing, value.m_radius_variation,
+                            value.m_chamber_probability, value.m_chamber_scale};
                     } else if constexpr (std::is_same_v<T, WorldConnectionRule>) {
-                        rule.m_parameters = sim::GenerationConnection{value.m_radius_m, value.m_extra_links};
+                        rule.m_parameters = sim::GenerationConnection{
+                            value.m_radius_m, value.m_extra_links, value.m_natural_anchors, value.m_wells,
+                            value.m_branches, value.m_roughness_m};
                     } else if constexpr (std::is_same_v<T, WorldFeatureRule>) {
                         rule.m_parameters = sim::GenerationPlacement{
                             compiler.index(catalog.features(), value.m_feature),
@@ -203,7 +235,8 @@ namespace pP::colony {
         for (const auto &source: catalog.materials()) {
             recipe.m_materials.push_back(
                 {source.m_numeric_id, source.m_representation == EMaterialRepresentation::terrain,
-                    source.m_diggable.value_or(false), matter(source.m_phase), source.m_reference_density_kg_m3});
+                    source.m_diggable.value_or(false), matter(source.m_phase), source.m_reference_density_kg_m3,
+                    compiler.key({"materials", source.m_key})});
         }
         for (const auto &source: catalog.fields()) {
             recipe.m_fields.push_back({compiler.key({"fields", source.m_key}), source.m_noise});
@@ -229,6 +262,17 @@ namespace pP::colony {
             profile->m_start_marker);
         recipe.m_start_x_fine = profile->m_start_x_fine;
         recipe.m_start_y_fine = profile->m_start_y_fine;
+        recipe.m_open_surface = profile->m_surface_field.has_value();
+        if (recipe.m_open_surface) {
+            recipe.m_surface_field = compiler.index(catalog.fields(), *profile->m_surface_field);
+            recipe.m_bedrock_field = compiler.index(catalog.fields(), *profile->m_bedrock_field);
+            recipe.m_surface_elevation_m = profile->m_surface_elevation_m;
+            recipe.m_surface_amplitude_m = profile->m_surface_amplitude_m;
+            recipe.m_bedrock_thickness_m = profile->m_bedrock_thickness_m;
+            recipe.m_bedrock_variation_m = profile->m_bedrock_variation_m;
+            recipe.m_bedrock_material = profile->m_bedrock_material_id;
+            recipe.m_start_depth_m = profile->m_start_depth_m;
+        }
         recipe.m_start_clearance_m = profile->m_start_clearance_m;
         recipe.m_start_route_width_m = profile->m_start_route_width_m;
         // Actual player body half extents; authored profiles cannot resize actors.

@@ -78,11 +78,13 @@ namespace pP::colony {
                 return std::tuple{
                     field(
                         &FieldRecord::m_algorithm, metadata("algorithm"),
-                        EnumDomain<sim::ENoiseAlgorithm, 3>{
+                        EnumDomain<sim::ENoiseAlgorithm, 4>{
                             {EnumEntry<sim::ENoiseAlgorithm>{sim::ENoiseAlgorithm::open_simplex2, "open_simplex2"},
                                 EnumEntry<sim::ENoiseAlgorithm>{sim::ENoiseAlgorithm::perlin, "perlin"},
                                 EnumEntry<sim::ENoiseAlgorithm>{
-                                    sim::ENoiseAlgorithm::cellular_distance, "cellular_distance"}}}),
+                                    sim::ENoiseAlgorithm::cellular_distance, "cellular_distance"},
+                                EnumEntry<sim::ENoiseAlgorithm>{
+                                    sim::ENoiseAlgorithm::cellular_value, "cellular_value"}}}),
                     field(
                         &FieldRecord::m_fractal, metadata("fractal"),
                         EnumDomain<sim::ENoiseFractal, 4>{
@@ -120,9 +122,65 @@ namespace pP::colony {
             std::string m_temperature_field{};
             std::optional<std::string> m_lining_material{};
             u32 m_lining_thickness_fine{};
+            u32 m_relaxation_passes{};
+            double m_relaxation_adoption{0.5};
+            double m_sprinkle_probability{};
+            std::optional<std::string> m_pore_field{};
+            double m_pore_probability{};
+            double m_pore_radius_min_m{2.0};
+            double m_pore_radius_max_m{3.0};
+            double m_pore_affinity_min{};
+            u32 m_pore_passes{};
+            u32 m_finish_passes{};
+            double m_finish_adoption{0.15};
+            std::optional<std::string> m_soil_material{};
+            std::optional<std::string> m_weathered_material{};
+            double m_soil_depth_m{};
+            double m_weathered_depth_m{};
+            std::optional<std::string> m_formation_material{};
+            std::optional<std::string> m_rind_material{};
+            double m_formation_probability{};
+            double m_formation_length_m{3.0};
+            u32 m_erosion_passes{};
             static constexpr auto describe() {
                 constexpr double limit = static_cast<double>((std::numeric_limits<float>::max)()) / 2.0;
                 return std::tuple{
+                    field(&BiomeRecord::m_pore_field, metadata("pore_field"), StringDomain{128u, false}),
+                    field(
+                        &BiomeRecord::m_pore_probability, metadata("pore_probability"),
+                        FloatDomain{0.0, 0.2, false, false}),
+                    field(
+                        &BiomeRecord::m_pore_radius_min_m, metadata("pore_radius_min_m"),
+                        FloatDomain{0.0, 3.0, false, false}),
+                    field(
+                        &BiomeRecord::m_pore_radius_max_m, metadata("pore_radius_max_m"),
+                        FloatDomain{0.0, 3.0, false, false}),
+                    field(
+                        &BiomeRecord::m_pore_affinity_min, metadata("pore_affinity_min"),
+                        FloatDomain{-1.0, 1.0, false, false}),
+                    field(&BiomeRecord::m_pore_passes, metadata("pore_passes"), Range<u32>{0u, 6u}),
+                    field(&BiomeRecord::m_finish_passes, metadata("finish_passes"), Range<u32>{0u, 4u}),
+                    field(&BiomeRecord::m_erosion_passes, metadata("erosion_passes"), Range<u32>{0u, 24u}),
+                    field(
+                        &BiomeRecord::m_finish_adoption, metadata("finish_adoption"),
+                        FloatDomain{0.0, 0.3, false, false}),
+                    field(&BiomeRecord::m_soil_material, metadata("soil_material"), StringDomain{128u, false}),
+                    field(
+                        &BiomeRecord::m_weathered_material, metadata("weathered_material"), StringDomain{128u, false}),
+                    field(&BiomeRecord::m_soil_depth_m, metadata("soil_depth_m"), FloatDomain{0.0, 12.0, false, false}),
+                    field(
+                        &BiomeRecord::m_weathered_depth_m, metadata("weathered_depth_m"),
+                        FloatDomain{0.0, 30.0, false, false}),
+                    field(
+                        &BiomeRecord::m_formation_material, metadata("formation_material"), StringDomain{128u, false}),
+                    field(&BiomeRecord::m_rind_material, metadata("rind_material"), StringDomain{128u, false}),
+                    field(
+                        &BiomeRecord::m_formation_probability, metadata("formation_probability"),
+                        FloatDomain{0.0, 0.2, false, false}),
+                    field(
+                        &BiomeRecord::m_formation_length_m, metadata("formation_length_m"),
+                        FloatDomain{0.0, 8.0, false, false}),
+
                     field(&BiomeRecord::m_display_name, metadata("display_name"), StringDomain{256u, false}),
                     field(&BiomeRecord::m_preview_color_rgba, metadata("preview_color_rgba"), StringDomain{8u, false}),
                     field(
@@ -133,8 +191,14 @@ namespace pP::colony {
                         FloatDomain{0.0, limit, false, false}),
                     field(&BiomeRecord::m_temperature_field, metadata("temperature_field"), StringDomain{128u, false}),
                     field(&BiomeRecord::m_lining_material, metadata("lining_material"), StringDomain{128u, false}),
+                    field(&BiomeRecord::m_lining_thickness_fine, metadata("lining_thickness_fine"), Range<u32>{0u, 3u}),
+                    field(&BiomeRecord::m_relaxation_passes, metadata("relaxation_passes"), Range<u32>{0u, 24u}),
                     field(
-                        &BiomeRecord::m_lining_thickness_fine, metadata("lining_thickness_fine"), Range<u32>{0u, 3u})};
+                        &BiomeRecord::m_relaxation_adoption, metadata("relaxation_adoption"),
+                        FloatDomain{0.0, 1.0, false, false}),
+                    field(
+                        &BiomeRecord::m_sprinkle_probability, metadata("sprinkle_probability"),
+                        FloatDomain{0.0, 1.0, false, false})};
             }
         };
 
@@ -143,8 +207,15 @@ namespace pP::colony {
             double m_depth_min_normalized{};
             double m_depth_max_normalized{};
             std::string m_field{};
+            double m_bed_period_m{}, m_bed_warp_m{}, m_bed_dip{};
             static constexpr auto describe() {
                 return std::tuple{
+                    field(
+                        &CompositionRecord::m_bed_period_m, metadata("bed_period_m"),
+                        FloatDomain{0.0, 256.0, false, false}),
+                    field(
+                        &CompositionRecord::m_bed_warp_m, metadata("bed_warp_m"), FloatDomain{0.0, 64.0, false, false}),
+                    field(&CompositionRecord::m_bed_dip, metadata("bed_dip"), FloatDomain{-0.5, 0.5, false, false}),
                     field(&CompositionRecord::m_order, metadata("order"), Range<u32>{0u, 65535u}),
                     field(
                         &CompositionRecord::m_depth_min_normalized, metadata("depth_min_normalized"),
@@ -179,8 +250,15 @@ namespace pP::colony {
             std::string m_host_material{};
             double m_depth_min_normalized{};
             double m_depth_max_normalized{};
-            double m_threshold_min{};
-            double m_threshold_max{};
+            double m_threshold_min{-1.0};
+            double m_threshold_max{1.0};
+            sim::EGenerationDepositShape m_shape{sim::EGenerationDepositShape::field};
+            sim::EGenerationDepositStage m_stage{sim::EGenerationDepositStage::bulk};
+            u32 m_blob_count{};
+            double m_radius_min_m{}, m_radius_max_m{};
+            double m_stretch_min{1.0}, m_stretch_max{1.0}, m_distortion{};
+            double m_core_coverage{1.0}, m_fringe_coverage{1.0}, m_sprinkle_probability{};
+            double m_orientation_min_degrees{}, m_orientation_max_degrees{360.0};
             static constexpr auto describe() {
                 return std::tuple{
                     field(
@@ -201,7 +279,43 @@ namespace pP::colony {
                         FloatDomain{-1.0, 1.0, false, false}),
                     field(
                         &DepositRecord::m_threshold_max, metadata("threshold_max"),
-                        FloatDomain{-1.0, 1.0, false, false})};
+                        FloatDomain{-1.0, 1.0, false, false}),
+                    field(
+                        &DepositRecord::m_shape, metadata("shape"),
+                        EnumDomain<sim::EGenerationDepositShape, 2>{
+                            {EnumEntry<sim::EGenerationDepositShape>{sim::EGenerationDepositShape::field, "field"},
+                                EnumEntry<sim::EGenerationDepositShape>{sim::EGenerationDepositShape::blob, "blob"}}}),
+                    field(
+                        &DepositRecord::m_stage, metadata("stage"),
+                        EnumDomain<sim::EGenerationDepositStage, 2>{
+                            {EnumEntry<sim::EGenerationDepositStage>{sim::EGenerationDepositStage::bulk, "bulk"},
+                                EnumEntry<sim::EGenerationDepositStage>{
+                                    sim::EGenerationDepositStage::detail, "detail"}}}),
+                    field(&DepositRecord::m_blob_count, metadata("blob_count"), Range<u32>{0u, 4096u}),
+                    field(
+                        &DepositRecord::m_radius_min_m, metadata("radius_min_m"),
+                        FloatDomain{0.0, 256.0, false, false}),
+                    field(
+                        &DepositRecord::m_radius_max_m, metadata("radius_max_m"),
+                        FloatDomain{0.0, 256.0, false, false}),
+                    field(&DepositRecord::m_stretch_min, metadata("stretch_min"), FloatDomain{0.1, 16.0, false, false}),
+                    field(&DepositRecord::m_stretch_max, metadata("stretch_max"), FloatDomain{0.1, 16.0, false, false}),
+                    field(&DepositRecord::m_distortion, metadata("distortion"), FloatDomain{0.0, 0.45, false, false}),
+                    field(
+                        &DepositRecord::m_orientation_min_degrees, metadata("orientation_min_degrees"),
+                        FloatDomain{0.0, 360.0, false, false}),
+                    field(
+                        &DepositRecord::m_orientation_max_degrees, metadata("orientation_max_degrees"),
+                        FloatDomain{0.0, 360.0, false, false}),
+                    field(
+                        &DepositRecord::m_core_coverage, metadata("core_coverage"),
+                        FloatDomain{0.0, 1.0, false, false}),
+                    field(
+                        &DepositRecord::m_fringe_coverage, metadata("fringe_coverage"),
+                        FloatDomain{0.0, 1.0, false, false}),
+                    field(
+                        &DepositRecord::m_sprinkle_probability, metadata("sprinkle_probability"),
+                        FloatDomain{0.0, 0.02, false, false})};
             }
         };
 
@@ -283,8 +397,31 @@ namespace pP::colony {
             std::string m_start_biome{}, m_start_feature{}, m_start_marker{};
             u32 m_start_x_fine{}, m_start_y_fine{};
             double m_start_clearance_m{}, m_start_route_width_m{};
+            std::optional<std::string> m_surface_field{}, m_bedrock_field{}, m_bedrock_material{};
+            double m_surface_elevation_m{}, m_surface_amplitude_m{}, m_bedrock_thickness_m{}, m_bedrock_variation_m{};
+            std::optional<double> m_start_depth_m{};
             static constexpr auto describe() {
                 return std::tuple{
+                    field(&WorldProfileRecord::m_surface_field, metadata("surface_field"), StringDomain{128u, false}),
+                    field(&WorldProfileRecord::m_bedrock_field, metadata("bedrock_field"), StringDomain{128u, false}),
+                    field(
+                        &WorldProfileRecord::m_bedrock_material, metadata("bedrock_material"),
+                        StringDomain{128u, false}),
+                    field(
+                        &WorldProfileRecord::m_surface_elevation_m, metadata("surface_elevation_m"),
+                        FloatDomain{0.0, 1365.0, false, false}),
+                    field(
+                        &WorldProfileRecord::m_surface_amplitude_m, metadata("surface_amplitude_m"),
+                        FloatDomain{0.0, 256.0, false, false}),
+                    field(
+                        &WorldProfileRecord::m_bedrock_thickness_m, metadata("bedrock_thickness_m"),
+                        FloatDomain{0.0, 40.0, false, false}),
+                    field(
+                        &WorldProfileRecord::m_bedrock_variation_m, metadata("bedrock_variation_m"),
+                        FloatDomain{0.0, 12.5, false, false}),
+                    field(
+                        &WorldProfileRecord::m_start_depth_m, metadata("start_depth_m"),
+                        FloatDomain{0.0, 1000.0, false, false}),
                     field(&WorldProfileRecord::m_display_name, metadata("display_name"), StringDomain{256u, false}),
                     field(
                         &WorldProfileRecord::m_background_stack, metadata("background_stack"),
@@ -422,6 +559,7 @@ namespace pP::colony {
             u32 m_count{};
             double m_depth_min_normalized{}, m_depth_max_normalized{};
             double m_length_min_m{}, m_length_max_m{}, m_radius_min_m{}, m_radius_max_m{}, m_turn_probability{};
+            double m_turn_smoothing{}, m_radius_variation{}, m_chamber_probability{}, m_chamber_scale{1.0};
             static constexpr auto describe() {
                 return std::tuple_cat(
                     WorldRuleHeader::describe(),
@@ -450,16 +588,38 @@ namespace pP::colony {
                             FloatDomain{0.0, 64.0, false, true}),
                         field(
                             &WorldWormRecord::m_turn_probability, metadata("turn_probability"),
-                            FloatDomain{0.0, 1.0, false, false})});
+                            FloatDomain{0.0, 1.0, false, false}),
+                        field(
+                            &WorldWormRecord::m_turn_smoothing, metadata("turn_smoothing"),
+                            FloatDomain{0.0, 1.0, false, false}),
+                        field(
+                            &WorldWormRecord::m_radius_variation, metadata("radius_variation"),
+                            FloatDomain{0.0, 1.0, false, false}),
+                        field(
+                            &WorldWormRecord::m_chamber_probability, metadata("chamber_probability"),
+                            FloatDomain{0.0, 0.1, false, false}),
+                        field(
+                            &WorldWormRecord::m_chamber_scale, metadata("chamber_scale"),
+                            FloatDomain{1.0, 4.0, false, false})});
             }
         };
         struct WorldConnectionRecord : WorldRuleHeader {
             double m_radius_m{};
             u32 m_extra_links{};
+            u32 m_natural_anchors{}, m_wells{}, m_branches{};
+            double m_roughness_m{};
             static constexpr auto describe() {
                 return std::tuple_cat(
                     WorldRuleHeader::describe(),
                     std::tuple{
+                        field(
+                            &WorldConnectionRecord::m_natural_anchors, metadata("natural_anchors"),
+                            Range<u32>{0u, 128u}),
+                        field(&WorldConnectionRecord::m_wells, metadata("wells"), Range<u32>{0u, 32u}),
+                        field(&WorldConnectionRecord::m_branches, metadata("branches"), Range<u32>{0u, 64u}),
+                        field(
+                            &WorldConnectionRecord::m_roughness_m, metadata("roughness_m"),
+                            FloatDomain{0.0, 8.0, false, false}),
                         field(
                             &WorldConnectionRecord::m_radius_m, metadata("radius_m"),
                             FloatDomain{0.0, 64.0, false, true}),
@@ -926,15 +1086,18 @@ namespace pP::colony {
             }
             BiomeCompositionBand result{
                 key, record->m_order, record->m_depth_min_normalized, record->m_depth_max_normalized,
-                std::move(record->m_field), {}, 0.0};
+                std::move(record->m_field), {}, 0.0, record->m_bed_period_m, record->m_bed_warp_m, record->m_bed_dip};
             constexpr std::string_view choice_required[] = {"material", "weight"};
             for (const auto &[choice_key, choice_document]: split->m_children) {
                 const std::string choice_prefix = prefix + "materials." + choice_key + ".";
                 auto choice = resolveRecord<WeightedMaterialRecord>(
                     choice_document, choice_required, origin, diagnostics, choice_prefix);
                 PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, choice);
-                auto id = terrainReference(
-                    choice_document, "material", choice->m_material, materials, origin, choice_prefix, diagnostics);
+                // Vacuum is an empty terrain seed, never a particle material.
+                auto id = choice->m_material == "vacuum" ? Expected<u16>{u16{0}}
+                                                         : terrainReference(
+                                                               choice_document, "material", choice->m_material,
+                                                               materials, origin, choice_prefix, diagnostics);
                 PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, id);
                 const double total = result.m_total_weight + choice->m_weight;
                 if (not std::isfinite(total) or total == result.m_total_weight) {
@@ -946,6 +1109,13 @@ namespace pP::colony {
                 }
                 result.m_total_weight = total;
                 result.m_materials.push_back({choice_key, *id, choice->m_weight});
+            }
+            if (std::ranges::none_of(
+                    result.m_materials, [](const auto &choice) { return choice.m_material_id != 0u; })) {
+                PPR_RETURN_UNEXPECTED_ON_FAIL(
+                    ColonyContent, reject(
+                                       diagnostics, origin, prefix + "materials",
+                                       "Composition requires a terrain solid for the protected feature substrate"));
             }
             double cumulative = 0.0;
             double previous = 0.0;
@@ -970,8 +1140,7 @@ namespace pP::colony {
             const std::span<const FieldDefinition> fields, const std::string_view origin, const std::string &prefix,
             Diagnostics &diagnostics) {
             constexpr std::string_view required[] = {
-                "kind", "order", "field", "material", "host_material", "depth_min_normalized", "depth_max_normalized",
-                "threshold_min", "threshold_max"};
+                "kind", "order", "field", "material", "host_material", "depth_min_normalized", "depth_max_normalized"};
             auto record = resolveRecord<DepositRecord>(document, required, origin, diagnostics, prefix);
             PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, record);
             PPR_RETURN_UNEXPECTED_ON_FAIL(
@@ -997,9 +1166,59 @@ namespace pP::colony {
                         diagnostics, fieldLocation(document, "threshold_max", origin), prefix + "threshold_max",
                         "Deposit threshold interval must be nonempty and increasing"));
             }
+            if (record->m_shape == sim::EGenerationDepositShape::field) {
+                for (const std::string_view property: {"threshold_min", "threshold_max"}) {
+                    if (std::ranges::none_of(
+                            document.m_entries, [&](const Entry &entry) { return entry.m_key == property; })) {
+                        PPR_RETURN_UNEXPECTED_ON_FAIL(
+                            ColonyContent,
+                            reject(
+                                diagnostics, fieldLocation(document, property, origin), prefix + std::string{property},
+                                "Field deposits require explicit threshold bounds", EConfigErrc::missing_value));
+                    }
+                }
+                if (record->m_blob_count != 0u or
+                    record->m_radius_min_m != 0.0 or
+                    record->m_radius_max_m != 0.0 or
+                    record->m_stretch_min != 1.0 or
+                    record->m_stretch_max != 1.0 or
+                    record->m_distortion != 0.0 or
+                    record->m_orientation_min_degrees != 0.0 or
+                    record->m_orientation_max_degrees != 360.0 or
+                    record->m_core_coverage != 1.0 or
+                    record->m_fringe_coverage != 1.0 or
+                    record->m_sprinkle_probability != 0.0) {
+                    PPR_RETURN_UNEXPECTED_ON_FAIL(
+                        ColonyContent,
+                        reject(diagnostics, origin, prefix + "shape", "Field deposits require neutral blob controls"));
+                }
+            } else {
+                if (record->m_blob_count == 0u or
+                    record->m_radius_min_m <= 0.0 or
+                    record->m_radius_max_m < record->m_radius_min_m or
+                    record->m_stretch_max < record->m_stretch_min or
+                    record->m_orientation_max_degrees < record->m_orientation_min_degrees or
+                    record->m_core_coverage < record->m_fringe_coverage or
+                    record->m_radius_max_m *
+                            (std::max) (1.0, record->m_stretch_max) *
+                            (1.0 + record->m_distortion) *
+                            1.2 >
+                        4096.0 / 3.0 or
+                    (record->m_stage == sim::EGenerationDepositStage::bulk and record->m_sprinkle_probability != 0.0)) {
+                    PPR_RETURN_UNEXPECTED_ON_FAIL(
+                        ColonyContent,
+                        reject(
+                            diagnostics, origin, prefix + "shape",
+                            "Blob deposits require a positive count and ordered positive radius/stretch/density ranges; sprinkle requires detail stage"));
+                }
+            }
             return BiomeThresholdDeposit{
                 key, record->m_order, std::move(record->m_field), *material, *host, record->m_depth_min_normalized,
-                record->m_depth_max_normalized, record->m_threshold_min, record->m_threshold_max};
+                record->m_depth_max_normalized, record->m_threshold_min, record->m_threshold_max, record->m_shape,
+                record->m_stage, record->m_blob_count, record->m_radius_min_m, record->m_radius_max_m,
+                record->m_stretch_min, record->m_stretch_max, record->m_distortion, record->m_core_coverage,
+                record->m_fringe_coverage, record->m_sprinkle_probability, record->m_orientation_min_degrees,
+                record->m_orientation_max_degrees};
         }
 
         [[nodiscard]] std::error_code conditionalFields(
@@ -1269,6 +1488,14 @@ namespace pP::colony {
                         ColonyContent, worldInterval(
                                            document, "radius_max_m", record->m_radius_min_m, record->m_radius_max_m,
                                            true, origin, prefix, diagnostics));
+                    if (record->m_turn_smoothing == 0.0 and (record->m_radius_variation != 0.0 or
+                                                                record->m_chamber_probability != 0.0 or
+                                                                record->m_chamber_scale != 1.0)) {
+                        PPR_RETURN_UNEXPECTED_ON_FAIL(
+                            ColonyContent, reject(
+                                               diagnostics, origin, prefix + "turn_smoothing",
+                                               "Radius variation and chambers require positive turn smoothing"));
+                    }
                     constexpr std::string_view material_fields[] = {"material", "host_material"};
                     const bool vein = header->m_kind == EWorldRuleKind::vein_worm;
                     PPR_RETURN_UNEXPECTED_ON_FAIL(
@@ -1288,14 +1515,17 @@ namespace pP::colony {
                         std::move(record->m_biome), record->m_count, record->m_depth_min_normalized,
                         record->m_depth_max_normalized, record->m_length_min_m, record->m_length_max_m,
                         record->m_radius_min_m, record->m_radius_max_m, record->m_turn_probability, material_id,
-                        host_id};
+                        host_id, record->m_turn_smoothing, record->m_radius_variation, record->m_chamber_probability,
+                        record->m_chamber_scale};
                     break;
                 }
                 case EWorldRuleKind::connect_rooms: {
                     constexpr std::string_view required[] = {"radius_m", "extra_links"};
                     auto record = resolveRecord<WorldConnectionRecord>(document, required, origin, diagnostics, prefix);
                     PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, record);
-                    result.m_parameters = WorldConnectionRule{record->m_radius_m, record->m_extra_links};
+                    result.m_parameters = WorldConnectionRule{
+                        record->m_radius_m, record->m_extra_links, record->m_natural_anchors, record->m_wells,
+                        record->m_branches, record->m_roughness_m};
                     break;
                 }
                 case EWorldRuleKind::feature: {
@@ -1688,6 +1918,48 @@ namespace pP::colony {
             result.m_start_clearance_m = record->m_start_clearance_m;
             result.m_start_route_width_m = record->m_start_route_width_m;
             result.m_background_stack = std::move(record->m_background_stack);
+            if (record->m_surface_field) {
+                for (const auto *name: {&record->m_surface_field, &record->m_bedrock_field}) {
+                    if (not *name) {
+                        PPR_RETURN_UNEXPECTED_ON_FAIL(
+                            ColonyContent, reject(
+                                               diagnostics, origin, prefix + "surface_field",
+                                               "Open surface requires surface and bedrock fields"));
+                    }
+                    PPR_RETURN_UNEXPECTED_ON_FAIL(
+                        ColonyContent,
+                        requireFieldReference(base, "surface_field", **name, fields, origin, prefix, diagnostics));
+                }
+                if (not record->m_bedrock_material or
+                    record->m_bedrock_thickness_m - record->m_bedrock_variation_m < 15.0 or
+                    record->m_bedrock_thickness_m + record->m_bedrock_variation_m > 40.0) {
+                    PPR_RETURN_UNEXPECTED_ON_FAIL(
+                        ColonyContent, reject(
+                                           diagnostics, origin, prefix + "bedrock_thickness_m",
+                                           "Bedrock must remain continuously 15 to 40 metres thick"));
+                }
+                auto bedrock = terrainReference(
+                    base, "bedrock_material", *record->m_bedrock_material, materials, origin, prefix, diagnostics);
+                PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, bedrock);
+                if (materials.findMaterial(*bedrock)->m_diggable.value_or(true)) {
+                    PPR_RETURN_UNEXPECTED_ON_FAIL(
+                        ColonyContent,
+                        reject(diagnostics, origin, prefix + "bedrock_material", "Bedrock must be undiggable terrain"));
+                }
+                result.m_bedrock_material_id = *bedrock;
+            } else if (record->m_bedrock_field or record->m_bedrock_material or record->m_start_depth_m) {
+                PPR_RETURN_UNEXPECTED_ON_FAIL(
+                    ColonyContent, reject(
+                                       diagnostics, origin, prefix + "surface_field",
+                                       "Surface-relative controls require a surface field"));
+            }
+            result.m_surface_field = std::move(record->m_surface_field);
+            result.m_bedrock_field = std::move(record->m_bedrock_field);
+            result.m_surface_elevation_m = record->m_surface_elevation_m;
+            result.m_surface_amplitude_m = record->m_surface_amplitude_m;
+            result.m_bedrock_thickness_m = record->m_bedrock_thickness_m;
+            result.m_bedrock_variation_m = record->m_bedrock_variation_m;
+            result.m_start_depth_m = record->m_start_depth_m;
 
             PPR_RETURN_UNEXPECTED_ON_FAIL(
                 ColonyContent,
@@ -1742,6 +2014,70 @@ namespace pP::colony {
             BiomeDefinition result{
                 key, std::move(record->m_display_name), color, record->m_temperature_base_k,
                 record->m_temperature_variation_k, std::move(record->m_temperature_field), {}, {}};
+            result.m_relaxation_passes = record->m_relaxation_passes;
+            result.m_relaxation_adoption = record->m_relaxation_adoption;
+            result.m_sprinkle_probability = record->m_sprinkle_probability;
+            if (record->m_pore_field) {
+                PPR_RETURN_UNEXPECTED_ON_FAIL(
+                    ColonyContent,
+                    requireFieldReference(
+                        deposits->m_base, "pore_field", *record->m_pore_field, fields, origin, prefix, diagnostics));
+                result.m_pore_field = std::move(record->m_pore_field);
+            }
+            result.m_pore_probability = record->m_pore_probability;
+            result.m_pore_radius_min_m = record->m_pore_radius_min_m;
+            result.m_pore_radius_max_m = record->m_pore_radius_max_m;
+            result.m_pore_affinity_min = record->m_pore_affinity_min;
+            result.m_pore_passes = record->m_pore_passes;
+            result.m_finish_passes = record->m_finish_passes;
+            result.m_erosion_passes = record->m_erosion_passes;
+            result.m_finish_adoption = record->m_finish_adoption;
+            if (record->m_soil_material) {
+                auto id = terrainReference(
+                    deposits->m_base, "soil_material", *record->m_soil_material, materials, origin, prefix,
+                    diagnostics);
+                PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, id);
+                result.m_soil_material_id = *id;
+            }
+            if (record->m_weathered_material) {
+                auto id = terrainReference(
+                    deposits->m_base, "weathered_material", *record->m_weathered_material, materials, origin, prefix,
+                    diagnostics);
+                PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, id);
+                result.m_weathered_material_id = *id;
+            }
+            result.m_soil_depth_m = record->m_soil_depth_m;
+            result.m_weathered_depth_m = record->m_weathered_depth_m;
+            if (record->m_formation_material) {
+                auto id = terrainReference(
+                    deposits->m_base, "formation_material", *record->m_formation_material, materials, origin, prefix,
+                    diagnostics);
+                PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, id);
+                result.m_formation_material_id = *id;
+            }
+            if (record->m_rind_material) {
+                auto id = terrainReference(
+                    deposits->m_base, "rind_material", *record->m_rind_material, materials, origin, prefix,
+                    diagnostics);
+                PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, id);
+                result.m_rind_material_id = *id;
+            }
+            result.m_formation_probability = record->m_formation_probability;
+            result.m_formation_length_m = record->m_formation_length_m;
+            if (result.m_relaxation_passes + result.m_pore_passes + result.m_finish_passes + result.m_erosion_passes >
+                    24u or
+                result.m_pore_radius_min_m > result.m_pore_radius_max_m or
+                ((result.m_pore_probability > 0.0 or result.m_pore_passes > 0u) and not result.m_pore_field) or
+                (result.m_soil_depth_m > 0.0 and result.m_soil_material_id == 0u) or
+                (result.m_weathered_depth_m > 0.0 and result.m_weathered_material_id == 0u) or
+                (result.m_formation_probability > 0.0 and result.m_formation_material_id == 0u)) {
+                PPR_RETURN_UNEXPECTED_ON_FAIL(
+                    ColonyContent,
+                    reject(
+                        diagnostics, origin, prefix + "pore_passes",
+                        "Terrain phases require valid fields/materials, ordered radii and at most 24 total neighbor passes"));
+            }
+
             if (record->m_lining_material.has_value() != (record->m_lining_thickness_fine != 0u)) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(
                     ColonyContent, reject(
@@ -1805,7 +2141,6 @@ namespace pP::colony {
             }
             return result;
         }
-
     }
 
     std::span<const MaterialDefinition> ContentCatalog::materials() const noexcept {
@@ -2130,6 +2465,18 @@ namespace pP::colony {
             auto biome = compileBiome(key, group, materials, fields, origin, diagnostics);
             PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, biome);
             biomes.push_back(std::move(*biome));
+        }
+        u32 blob_count{};
+        for (const auto &biome: biomes) {
+            for (const auto &deposit: biome.m_deposits) {
+                blob_count += deposit.m_blob_count;
+                if (blob_count > 4096u) {
+                    PPR_RETURN_UNEXPECTED_ON_FAIL(
+                        ColonyContent, reject(
+                                           diagnostics, origin, "biomes", "Aggregate blob count exceeds 4096",
+                                           EConfigErrc::out_of_range));
+                }
+            }
         }
         return biomes;
     } catch (const std::bad_alloc &) {

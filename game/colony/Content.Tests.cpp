@@ -392,6 +392,11 @@ frequency_per_metre = 0.125
         PPR_TEST_ASSERT(fields->size() == 2u and fields->front().m_key == "caves");
         PPR_TEST_ASSERT(fields->back().m_noise.m_fractal == sim::ENoiseFractal::none);
         PPR_TEST_ASSERT(fields->back().m_noise.m_octaves == 4u);
+        const auto categorical = decodeFieldDefinitions(
+            "schema_version = 2\n[fields.palette]\nalgorithm = \"cellular_value\"\nfrequency_per_metre = 0.125\n",
+            "fields.toml", diagnostics);
+        PPR_TEST_ASSERT(categorical.has_value());
+        PPR_TEST_ASSERT(categorical->front().m_noise.m_algorithm == sim::ENoiseAlgorithm::cellular_value);
         auto compiled = sim::compileNoiseField(fields->front().m_noise, 42u);
         auto replay = sim::compileNoiseField(reordered->front().m_noise, 42u);
         PPR_TEST_ASSERT(compiled and replay);

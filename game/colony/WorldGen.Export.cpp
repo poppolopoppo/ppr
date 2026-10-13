@@ -49,14 +49,15 @@ namespace pP::colony {
                 "\"generator_version\":{},\"cells_per_metre\":{},\"cells_per_tile\":{},\"reference_thickness_m\":{},"
                 "\"terrain_checksum\":\"{:016x}\",\"output_checksum\":\"{:016x}\",\"grid_payload_bytes\":{},"
                 "\"preview_edge\":{},\"temperature_min_k\":200,\"temperature_max_k\":1000,\"initial_matter_is_unsimulated_baseline\":true,"
-                "\"site_count\":{},\"feature_count\":{},\"segment_count\":{},\"omitted_count\":{},\"worst_placement_attempts\":{},\n\"phase_seconds\":[",
+                "\"site_count\":{},\"feature_count\":{},\"segment_count\":{},\"blob_count\":{},\"omitted_count\":{},\"worst_placement_attempts\":{},\n\"phase_seconds\":[",
                 descriptor.m_profile, descriptor.m_seed, descriptor.m_content_fingerprint,
                 descriptor.m_generator_version, descriptor.m_metric.m_cells_per_metre,
                 descriptor.m_metric.m_cells_per_tile, descriptor.m_metric.m_reference_thickness_m,
                 world.m_report.m_terrain_checksum, world.m_report.m_output_checksum,
                 world.m_report.m_grid_payload_bytes, kPreviewEdge, world.m_layout.sites().size(),
                 world.m_geometry.m_instances.size(), world.m_geometry.m_segments.size(),
-                world.m_geometry.m_omitted_instances.size(), world.m_geometry.m_worst_placement_attempts);
+                world.m_geometry.m_blobs.size(), world.m_geometry.m_omitted_instances.size(),
+                world.m_geometry.m_worst_placement_attempts);
             for (u32 phase = 0u; phase < world.m_report.m_phase_times.size(); ++phase) {
                 result += std::format("{}{:.9f}", phase ? "," : "", time::seconds(world.m_report.m_phase_times[phase]));
             }

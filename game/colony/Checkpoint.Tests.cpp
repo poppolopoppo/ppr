@@ -43,6 +43,22 @@ namespace pP::game::tests::detail::checkpoint {
         auto layout = sim::compileBiomeLayout(*plan);
         PPR_TEST_ASSERT(layout.has_value());
         checkpoint.m_sites.assign(layout->sites().begin(), layout->sites().end());
+        for (u32 b = 0u; b < plan->recipe().m_biomes.size() and checkpoint.m_geometry.m_blobs.empty(); ++b) {
+            const auto &deposits = plan->recipe().m_biomes[b].m_deposits;
+            for (u32 d = 0u; d < deposits.size(); ++d) {
+                const auto &deposit = deposits[d];
+                if (deposit.m_shape == sim::EGenerationDepositShape::blob and deposit.m_blob_count >= 2u) {
+                    checkpoint.m_geometry.m_blobs.push_back(
+                        {b, d, 0u, 12.3456789, 45.125, deposit.m_radius_min_m, deposit.m_stretch_min,
+                            2.0 * std::numbers::pi * (deposit.m_orientation_min_degrees / 360.0), 100.0, 200.0});
+                    checkpoint.m_geometry.m_blobs.push_back(
+                        {b, d, 1u, 90.25, 75.5, deposit.m_radius_max_m, deposit.m_stretch_max,
+                            2.0 * std::numbers::pi * (deposit.m_orientation_max_degrees / 360.0), 500.0, 900.0});
+                    break;
+                }
+            }
+        }
+        PPR_TEST_ASSERT(checkpoint.m_geometry.m_blobs.size() == 2u);
         checkpoint.m_start.m_resource_fine_cells.resize(plan->recipe().m_resources.size());
         checkpoint.m_start.m_spawn_x_m = 10.0;
         checkpoint.m_start.m_spawn_y_m = 15.0;
@@ -103,12 +119,14 @@ namespace pP::game::tests::detail::checkpoint {
         }));
         PPR_TEST_ASSERT(decoded->m_descriptor == checkpoint.m_descriptor);
         PPR_TEST_ASSERT(decoded->m_snapshot == checkpoint.m_snapshot);
+        PPR_TEST_ASSERT(decoded->m_geometry.m_blobs == checkpoint.m_geometry.m_blobs);
         PPR_TEST_ASSERT(decoded->m_particles.m_next_id == 12u and decoded->m_particles.m_chunks.size() == 1u);
         PPR_TEST_ASSERT(
             decoded->m_particles.m_chunks[0].records()[0] == checkpoint.m_particles.m_chunks[0].records()[0]);
         auto restored = restoreWorldCheckpoint(loadCatalog(), std::move(*decoded), 17u);
         PPR_TEST_ASSERT(restored.has_value());
         auto &driver = **restored;
+        PPR_TEST_ASSERT(driver.preparedWorld()->generated().m_geometry.m_blobs == checkpoint.m_geometry.m_blobs);
         const auto presentation = makeSimFramePacket(1u, driver);
         for (const auto &material: catalog.materials()) {
             const auto found = std::ranges::find(
@@ -251,6 +269,62 @@ namespace pP::game::tests::detail::checkpoint {
         PPR_TEST_ASSERT(not driver.shutdown());
     };
 
+    PPR_UNIT_TEST (checkpoint_blob_references_ranges_and_wire_counts_are_checked) {
+        const auto catalog = loadCatalog();
+        const auto original = editedCheckpoint(catalog);
+        const auto plan = compileWorldPlan(catalog, "frontier", 42u);
+        PPR_TEST_ASSERT(plan.has_value());
+        const auto &reference = original.m_geometry.m_blobs.front();
+        const auto &deposit = plan->recipe().m_biomes[reference.m_biome].m_deposits[reference.m_deposit];
+        for (u32 scenario = 0u; scenario < 13u; ++scenario) {
+            auto bad = original;
+            auto &blob = bad.m_geometry.m_blobs.front();
+            switch (scenario) {
+                case 0u: blob.m_biome = 10000u; break;
+                case 1u: blob.m_deposit = 10000u; break;
+                case 2u: blob.m_ordinal = 10000u; break;
+                case 3u: blob.m_radius_m = 0.0; break;
+                case 4u: blob.m_stretch = 100.0; break;
+                case 5u: blob.m_angle = std::numeric_limits<double>::quiet_NaN(); break;
+                case 6u: blob.m_x_m = -1.0; break;
+                case 7u: blob.m_offset_y = 1025.0; break;
+                case 8u: bad.m_geometry.m_blobs.push_back(blob); break;
+                case 9u: bad.m_geometry.m_blobs.resize(4097u, blob); break;
+                case 10u: blob.m_angle = -0.1; break;
+                case 11u: blob.m_angle = 2.0 * std::numbers::pi + 0.1; break;
+                case 12u:
+                    blob.m_angle = 2.0 * std::numbers::pi * (deposit.m_orientation_max_degrees / 360.0) + 0.01;
+                    break;
+            }
+            PPR_TEST_ASSERT(validateWorldCheckpoint(bad, catalog) == std::errc::invalid_argument);
+        }
+        const auto encoded = encodeWorldCheckpoint(original, catalog);
+        PPR_TEST_ASSERT(encoded.has_value());
+        auto old_version = *encoded;
+        old_version[8u] = 2u;
+        PPR_TEST_ASSERT(decodeWorldCheckpoint(old_version, catalog).error() == std::errc::protocol_not_supported);
+        std::array<u8, 16u> position{};
+        const auto &first = original.m_geometry.m_blobs.front();
+        for (u32 byte = 0u; byte < 8u; ++byte) {
+            position[byte] = static_cast<u8>(std::bit_cast<u64>(first.m_x_m) >> (byte * 8u));
+            position[8u + byte] = static_cast<u8>(std::bit_cast<u64>(first.m_y_m) >> (byte * 8u));
+        }
+        const auto record = std::ranges::search(*encoded, position);
+        PPR_TEST_ASSERT(not record.empty());
+        const auto offset = static_cast<std::size_t>(record.begin() - encoded->begin());
+        PPR_TEST_ASSERT(offset >= 16u);
+        auto excessive = *encoded;
+        // Blob count precedes three u32 references and seven doubles.
+        excessive[offset - 16u] = 1u;
+        excessive[offset - 15u] = 16u;
+        excessive[offset - 14u] = 0u;
+        excessive[offset - 13u] = 0u;
+        PPR_TEST_ASSERT(not decodeWorldCheckpoint(excessive, catalog));
+        auto truncated = *encoded;
+        truncated.resize(offset + 8u);
+        PPR_TEST_ASSERT(not decodeWorldCheckpoint(truncated, catalog));
+    };
+
     PPR_UNIT_TEST (malformed_identity_metric_counts_and_payload_are_rejected_before_restore) {
         const auto catalog = loadCatalog();
         const auto original = editedCheckpoint(catalog);
@@ -362,7 +436,8 @@ namespace pP::game::tests {
             {diagnostic_export_rejects_cancellation_and_unwritable_directory,
                 round_trip_restores_edited_cells_actor_identity_and_frozen_full_capture,
                 authored_particles_survive_headless_digs_and_wait_for_complete_build_publication,
-                malformed_identity_metric_counts_and_payload_are_rejected_before_restore});
+                malformed_identity_metric_counts_and_payload_are_rejected_before_restore,
+                checkpoint_blob_references_ranges_and_wire_counts_are_checked});
     };
     const UnitTest &gameCheckpointTests() noexcept {
         return checkpoint_tests;

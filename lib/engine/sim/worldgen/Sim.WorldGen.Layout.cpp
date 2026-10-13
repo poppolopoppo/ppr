@@ -43,8 +43,8 @@ namespace pP::sim {
         }
         [[nodiscard]] bool eligible(
             const GenerationBiomeConstraint &constraint, const GenerationSite &site, const GenerationSite &start,
-            const double extent) noexcept {
-            const double depth = 1.0 - site.m_y_m / extent;
+            const GenerationPlan &plan) noexcept {
+            const double depth = generationDepth(plan, site.m_x_m, site.m_y_m);
             const double distance = std::sqrt(distanceSquared(site, start.m_x_m, start.m_y_m));
             return depth >= constraint.m_depth_min and
                    depth <= constraint.m_depth_max and
@@ -55,8 +55,9 @@ namespace pP::sim {
         // reassign earlier choices, so overlapping eligibility cannot make a
         // feasible assignment fail merely because of an early greedy choice.
         [[nodiscard]] std::error_code assignRequired(
-            const GenerationRecipe &recipe, Array<GenerationSite> &sites, const double extent,
-            const IContext *const context, const u64 active_bytes, u64 *const known_scratch_peak) {
+            const GenerationPlan &plan, Array<GenerationSite> &sites, const IContext *const context,
+            const u64 active_bytes, u64 *const known_scratch_peak) {
+            const auto &recipe = plan.recipe();
             struct Demand {
                 u32 m_constraint{}, m_eligible{};
                 u64 m_key{};
@@ -66,7 +67,7 @@ namespace pP::sim {
                 const auto &constraint = recipe.m_constraints[c];
                 u32 count = constraint.m_required_count;
                 if (constraint.m_biome == recipe.m_start_biome) {
-                    if (not eligible(constraint, sites[0u], sites[0u], extent)) {
+                    if (not eligible(constraint, sites[0u], sites[0u], plan)) {
                         PPR_RETURN_ERROR_ON_FAIL(WorldLayout, make_error_code(EGenerationErrc::constraints_exhausted));
                     }
                     if (count > 0u) {
@@ -75,7 +76,7 @@ namespace pP::sim {
                 }
                 u32 candidates = 0u;
                 for (std::size_t s = 1u; s < sites.size(); ++s) {
-                    if (eligible(constraint, sites[s], sites[0u], extent)) {
+                    if (eligible(constraint, sites[s], sites[0u], plan)) {
                         ++candidates;
                     }
                 }
@@ -117,7 +118,7 @@ namespace pP::sim {
                     const u32 demand = queue[q];
                     const auto &constraint = recipe.m_constraints[demands[demand].m_constraint];
                     for (u32 s = 1u; s < sites.size(); ++s) {
-                        if (parent[s] >= 0 or not eligible(constraint, sites[s], sites[0u], extent)) {
+                        if (parent[s] >= 0 or not eligible(constraint, sites[s], sites[0u], plan)) {
                             continue;
                         }
                         parent[s] = static_cast<i32>(demand);
@@ -339,7 +340,12 @@ namespace pP::sim {
                 // Uniform area density in the annulus [r,2r].
                 const double radius = recipe.m_site_spacing_m * std::sqrt(1.0 + 3.0 * random.unit());
                 const double x = parent.m_x_m + radius * std::cos(angle), y = parent.m_y_m + radius * std::sin(angle);
-                if (x < boundary or y < boundary or x >= extent - boundary or y >= extent - boundary) {
+                if (x < boundary or
+                    y < boundary or
+                    x >= extent - boundary or
+                    y >= extent - boundary or
+                    (recipe.m_open_surface and
+                        (y <= generationBedrockHeight(plan, x) or y >= generationSurfaceHeight(plan, x)))) {
                     continue;
                 }
                 const auto &nearest = layout.m_sites[layout.nearest(x, y)];
@@ -361,8 +367,7 @@ namespace pP::sim {
         }
         PPR_RETURN_UNEXPECTED_ON_FAIL(
             WorldLayout,
-            assignRequired(
-                recipe, layout.m_sites, extent, context, active.capacity() * sizeof(u32), known_scratch_peak));
+            assignRequired(plan, layout.m_sites, context, active.capacity() * sizeof(u32), known_scratch_peak));
         for (u32 s = 1u; s < layout.m_sites.size(); ++s) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(WorldLayout, canceled(context));
             auto &site = layout.m_sites[s];
@@ -371,7 +376,7 @@ namespace pP::sim {
             }
             double total = 0.0;
             for (const auto &constraint: recipe.m_constraints) {
-                if (eligible(constraint, site, layout.m_sites[0u], extent)) {
+                if (eligible(constraint, site, layout.m_sites[0u], plan)) {
                     total += constraint.m_weight;
                 }
             }
@@ -382,7 +387,7 @@ namespace pP::sim {
             const double draw = choice.unit();
             double cumulative = 0.0;
             for (const auto &constraint: recipe.m_constraints) {
-                if (not eligible(constraint, site, layout.m_sites[0u], extent)) {
+                if (not eligible(constraint, site, layout.m_sites[0u], plan)) {
                     continue;
                 }
                 cumulative += constraint.m_weight;

@@ -176,6 +176,19 @@ namespace pP::colony {
                 writer.real(segment.m_y1_m);
                 writer.real(segment.m_radius_m);
             }
+            writer.count(checkpoint.m_geometry.m_blobs.size());
+            for (const auto &blob: checkpoint.m_geometry.m_blobs) {
+                writer.u32value(blob.m_biome);
+                writer.u32value(blob.m_deposit);
+                writer.u32value(blob.m_ordinal);
+                writer.real(blob.m_x_m);
+                writer.real(blob.m_y_m);
+                writer.real(blob.m_radius_m);
+                writer.real(blob.m_stretch);
+                writer.real(blob.m_angle);
+                writer.real(blob.m_offset_x);
+                writer.real(blob.m_offset_y);
+            }
             writer.count(checkpoint.m_geometry.m_omitted_instances.size());
             for (const auto omitted: checkpoint.m_geometry.m_omitted_instances) {
                 writer.u32value(omitted);
@@ -222,7 +235,7 @@ namespace pP::colony {
             writer.u64value(checkpoint.m_report.m_output_checksum);
             writer.u64value(checkpoint.m_report.m_grid_payload_bytes);
             // Allocation observations describe the generating process/build,
-            // not durable world state. They are intentionally absent from v2.
+            // not durable world state. They are intentionally absent from v3.
         }
         void decodeMetadata(Reader &reader, WorldCheckpoint &checkpoint) {
             checkpoint.m_sites.resize(reader.count(sim::kMaxGenerationSites, 20u));
@@ -248,6 +261,19 @@ namespace pP::colony {
                 segment.m_x1_m = reader.real();
                 segment.m_y1_m = reader.real();
                 segment.m_radius_m = reader.real();
+            }
+            checkpoint.m_geometry.m_blobs.resize(reader.count(4096u, 68u));
+            for (auto &blob: checkpoint.m_geometry.m_blobs) {
+                blob.m_biome = reader.u32value();
+                blob.m_deposit = reader.u32value();
+                blob.m_ordinal = reader.u32value();
+                blob.m_x_m = reader.real();
+                blob.m_y_m = reader.real();
+                blob.m_radius_m = reader.real();
+                blob.m_stretch = reader.real();
+                blob.m_angle = reader.real();
+                blob.m_offset_x = reader.real();
+                blob.m_offset_y = reader.real();
             }
             checkpoint.m_geometry.m_omitted_instances.resize(reader.count(1024u, 4u));
             for (auto &omitted: checkpoint.m_geometry.m_omitted_instances) {

@@ -6,11 +6,11 @@ display_name = "Frontier basin"
 background_stack = "frontier"
 default_wall_material = "masonry"
 boundary_fine = 3
-min_sites = 32
-max_sites = 40
+min_sites = 64
+max_sites = 80
 site_attempts = 60
-site_spacing_m = 160.0
-boundary_warp_amplitude_m = 21.0
+site_spacing_m = 110.0
+boundary_warp_amplitude_m = 34.0
 boundary_warp_x_field = "warp_x"
 boundary_warp_y_field = "warp_y"
 start_biome = "hearth"
@@ -20,6 +20,14 @@ start_x_fine = 2000
 start_y_fine = 3000
 start_clearance_m = 3.0
 start_route_width_m = 1.0
+surface_field = "surface_height"
+surface_elevation_m = 1120.0
+surface_amplitude_m = 55.0
+bedrock_field = "bedrock_height"
+bedrock_material = "bedrock"
+bedrock_thickness_m = 27.5
+bedrock_variation_m = 12.5
+start_depth_m = 65.0
 
 [worlds.frontier.start_resources.stone]
 marker = "stone"
@@ -50,7 +58,7 @@ biome = "hearth"
 field = "round_caves"
 depth_min_normalized = 0.0
 depth_max_normalized = 1.0
-threshold_min = 0.56
+threshold_min = 0.49
 threshold_max = 1.0
 
 [worlds.frontier.rules.tunnels_hearth]
@@ -58,14 +66,18 @@ kind = "carve_worm"
 phase = "carve"
 order = 30
 biome = "hearth"
-count = 7
+count = 28
 depth_min_normalized = 0.0
 depth_max_normalized = 1.0
-length_min_m = 12.0
-length_max_m = 50.0
-radius_min_m = 0.8
-radius_max_m = 1.8
+length_min_m = 20.0
+length_max_m = 90.0
+radius_min_m = 1.2
+radius_max_m = 3.5
 turn_probability = 0.12
+turn_smoothing = 0.82
+radius_variation = 0.35
+chamber_probability = 0.025
+chamber_scale = 2.2
 
 [worlds.frontier.biomes.verdant]
 biome = "verdant"
@@ -84,7 +96,7 @@ biome = "verdant"
 field = "branch_caves"
 depth_min_normalized = 0.0
 depth_max_normalized = 1.0
-threshold_min = 0.05
+threshold_min = 0.31
 threshold_max = 1.0
 
 [worlds.frontier.rules.tunnels_verdant]
@@ -92,14 +104,18 @@ kind = "carve_worm"
 phase = "carve"
 order = 31
 biome = "verdant"
-count = 7
+count = 22
 depth_min_normalized = 0.0
 depth_max_normalized = 1.0
-length_min_m = 12.0
-length_max_m = 50.0
-radius_min_m = 0.8
-radius_max_m = 1.8
-turn_probability = 0.3
+length_min_m = 18.0
+length_max_m = 80.0
+radius_min_m = 1.0
+radius_max_m = 2.7
+turn_probability = 0.22
+turn_smoothing = 0.72
+radius_variation = 0.38
+chamber_probability = 0.035
+chamber_scale = 2.0
 
 [worlds.frontier.biomes.mire]
 biome = "mire"
@@ -118,7 +134,7 @@ biome = "mire"
 field = "low_pools"
 depth_min_normalized = 0.0
 depth_max_normalized = 1.0
-threshold_min = -0.08
+threshold_min = 0.39
 threshold_max = 1.0
 
 [worlds.frontier.rules.tunnels_mire]
@@ -126,14 +142,18 @@ kind = "carve_worm"
 phase = "carve"
 order = 32
 biome = "mire"
-count = 7
+count = 14
 depth_min_normalized = 0.0
 depth_max_normalized = 1.0
 length_min_m = 12.0
-length_max_m = 50.0
-radius_min_m = 0.8
-radius_max_m = 1.8
-turn_probability = 0.3
+length_max_m = 55.0
+radius_min_m = 1.6
+radius_max_m = 3.8
+turn_probability = 0.26
+turn_smoothing = 0.65
+radius_variation = 0.5
+chamber_probability = 0.055
+chamber_scale = 2.4
 
 [worlds.frontier.biomes.dunes]
 biome = "dunes"
@@ -152,7 +172,7 @@ biome = "dunes"
 field = "tall_caves"
 depth_min_normalized = 0.0
 depth_max_normalized = 1.0
-threshold_min = 0.57
+threshold_min = 0.60
 threshold_max = 1.0
 
 [worlds.frontier.rules.tunnels_dunes]
@@ -160,14 +180,18 @@ kind = "carve_worm"
 phase = "carve"
 order = 33
 biome = "dunes"
-count = 7
+count = 12
 depth_min_normalized = 0.0
 depth_max_normalized = 1.0
-length_min_m = 12.0
-length_max_m = 50.0
-radius_min_m = 0.8
-radius_max_m = 1.8
-turn_probability = 0.12
+length_min_m = 25.0
+length_max_m = 85.0
+radius_min_m = 0.7
+radius_max_m = 1.7
+turn_probability = 0.08
+turn_smoothing = 0.92
+radius_variation = 0.16
+chamber_probability = 0.008
+chamber_scale = 1.5
 
 [worlds.frontier.biomes.rime]
 biome = "rime"
@@ -186,7 +210,7 @@ biome = "rime"
 field = "ice_fractures"
 depth_min_normalized = 0.0
 depth_max_normalized = 1.0
-threshold_min = 0.72
+threshold_min = 0.64
 threshold_max = 1.0
 
 [worlds.frontier.rules.tunnels_rime]
@@ -194,14 +218,18 @@ kind = "carve_worm"
 phase = "carve"
 order = 34
 biome = "rime"
-count = 7
+count = 10
 depth_min_normalized = 0.0
 depth_max_normalized = 1.0
-length_min_m = 12.0
-length_max_m = 50.0
-radius_min_m = 0.8
-radius_max_m = 1.8
-turn_probability = 0.12
+length_min_m = 20.0
+length_max_m = 70.0
+radius_min_m = 0.6
+radius_max_m = 1.5
+turn_probability = 0.1
+turn_smoothing = 0.94
+radius_variation = 0.12
+chamber_probability = 0.0
+chamber_scale = 1.0
 
 [worlds.frontier.biomes.lode]
 biome = "lode"
@@ -217,10 +245,10 @@ kind = "threshold_cave"
 phase = "carve"
 order = 15
 biome = "lode"
-field = "ore_tunnels"
+field = "round_caves"
 depth_min_normalized = 0.0
 depth_max_normalized = 1.0
-threshold_min = 0.78
+threshold_min = 0.58
 threshold_max = 1.0
 
 [worlds.frontier.rules.tunnels_lode]
@@ -228,14 +256,18 @@ kind = "carve_worm"
 phase = "carve"
 order = 35
 biome = "lode"
-count = 3
+count = 24
 depth_min_normalized = 0.0
 depth_max_normalized = 1.0
-length_min_m = 12.0
-length_max_m = 50.0
-radius_min_m = 0.8
-radius_max_m = 1.8
+length_min_m = 25.0
+length_max_m = 105.0
+radius_min_m = 0.9
+radius_max_m = 2.6
 turn_probability = 0.12
+turn_smoothing = 0.9
+radius_variation = 0.3
+chamber_probability = 0.018
+chamber_scale = 1.8
 
 [worlds.frontier.biomes.karst]
 biome = "karst"
@@ -254,7 +286,7 @@ biome = "karst"
 field = "karst_cells"
 depth_min_normalized = 0.0
 depth_max_normalized = 1.0
-threshold_min = 0.18
+threshold_min = 0.28
 threshold_max = 1.0
 
 [worlds.frontier.rules.tunnels_karst]
@@ -262,14 +294,18 @@ kind = "carve_worm"
 phase = "carve"
 order = 36
 biome = "karst"
-count = 7
+count = 34
 depth_min_normalized = 0.0
 depth_max_normalized = 1.0
-length_min_m = 12.0
-length_max_m = 50.0
-radius_min_m = 0.8
-radius_max_m = 1.8
+length_min_m = 18.0
+length_max_m = 100.0
+radius_min_m = 1.4
+radius_max_m = 4.0
 turn_probability = 0.12
+turn_smoothing = 0.88
+radius_variation = 0.45
+chamber_probability = 0.04
+chamber_scale = 2.5
 
 [worlds.frontier.biomes.saltworks]
 biome = "saltworks"
@@ -288,7 +324,7 @@ biome = "saltworks"
 field = "salt_basins"
 depth_min_normalized = 0.0
 depth_max_normalized = 1.0
-threshold_min = -0.04
+threshold_min = 0.55
 threshold_max = 1.0
 
 [worlds.frontier.rules.tunnels_saltworks]
@@ -296,14 +332,18 @@ kind = "carve_worm"
 phase = "carve"
 order = 37
 biome = "saltworks"
-count = 7
+count = 12
 depth_min_normalized = 0.0
 depth_max_normalized = 1.0
-length_min_m = 12.0
-length_max_m = 50.0
-radius_min_m = 0.8
-radius_max_m = 1.8
-turn_probability = 0.12
+length_min_m = 15.0
+length_max_m = 60.0
+radius_min_m = 1.0
+radius_max_m = 2.6
+turn_probability = 0.1
+turn_smoothing = 0.9
+radius_variation = 0.25
+chamber_probability = 0.02
+chamber_scale = 1.8
 
 [worlds.frontier.biomes.fumaroles]
 biome = "fumaroles"
@@ -322,7 +362,7 @@ biome = "fumaroles"
 field = "chimney_fissures"
 depth_min_normalized = 0.0
 depth_max_normalized = 1.0
-threshold_min = 0.59
+threshold_min = 0.49
 threshold_max = 1.0
 
 [worlds.frontier.rules.tunnels_fumaroles]
@@ -330,14 +370,18 @@ kind = "carve_worm"
 phase = "carve"
 order = 38
 biome = "fumaroles"
-count = 7
+count = 16
 depth_min_normalized = 0.0
 depth_max_normalized = 1.0
-length_min_m = 12.0
-length_max_m = 50.0
-radius_min_m = 0.8
+length_min_m = 25.0
+length_max_m = 95.0
+radius_min_m = 0.7
 radius_max_m = 1.8
 turn_probability = 0.12
+turn_smoothing = 0.91
+radius_variation = 0.3
+chamber_probability = 0.012
+chamber_scale = 1.6
 
 [worlds.frontier.biomes.petroleum]
 biome = "petroleum"
@@ -356,7 +400,7 @@ biome = "petroleum"
 field = "oil_channels"
 depth_min_normalized = 0.0
 depth_max_normalized = 1.0
-threshold_min = 0.04
+threshold_min = 0.57
 threshold_max = 1.0
 
 [worlds.frontier.rules.tunnels_petroleum]
@@ -364,14 +408,18 @@ kind = "carve_worm"
 phase = "carve"
 order = 39
 biome = "petroleum"
-count = 7
+count = 8
 depth_min_normalized = 0.0
 depth_max_normalized = 1.0
 length_min_m = 12.0
-length_max_m = 50.0
+length_max_m = 45.0
 radius_min_m = 0.8
-radius_max_m = 1.8
-turn_probability = 0.12
+radius_max_m = 1.9
+turn_probability = 0.08
+turn_smoothing = 0.95
+radius_variation = 0.18
+chamber_probability = 0.0
+chamber_scale = 1.0
 
 [worlds.frontier.biomes.ember]
 biome = "ember"
@@ -390,7 +438,7 @@ biome = "ember"
 field = "hot_chambers"
 depth_min_normalized = 0.0
 depth_max_normalized = 1.0
-threshold_min = 0.66
+threshold_min = 0.39
 threshold_max = 1.0
 
 [worlds.frontier.rules.tunnels_ember]
@@ -398,78 +446,18 @@ kind = "carve_worm"
 phase = "carve"
 order = 40
 biome = "ember"
-count = 7
+count = 18
 depth_min_normalized = 0.0
 depth_max_normalized = 1.0
-length_min_m = 12.0
-length_max_m = 50.0
-radius_min_m = 0.8
-radius_max_m = 1.8
-turn_probability = 0.12
-
-[worlds.frontier.rules.veins_copper]
-kind = "vein_worm"
-phase = "deposit"
-order = 10
-biome = "lode"
-count = 10
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-length_min_m = 24.0
-length_max_m = 90.0
-radius_min_m = 0.4
-radius_max_m = 1.0
-turn_probability = 0.08
-material = "copper"
-host_material = "granite"
-
-[worlds.frontier.rules.veins_iron]
-kind = "vein_worm"
-phase = "deposit"
-order = 11
-biome = "lode"
-count = 10
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-length_min_m = 24.0
-length_max_m = 90.0
-radius_min_m = 0.4
-radius_max_m = 1.0
-turn_probability = 0.08
-material = "iron"
-host_material = "granite"
-
-[worlds.frontier.rules.veins_aluminum]
-kind = "vein_worm"
-phase = "deposit"
-order = 12
-biome = "lode"
-count = 10
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-length_min_m = 24.0
-length_max_m = 90.0
-radius_min_m = 0.4
-radius_max_m = 1.0
-turn_probability = 0.08
-material = "aluminum"
-host_material = "granite"
-
-[worlds.frontier.rules.veins_wolframite]
-kind = "vein_worm"
-phase = "deposit"
-order = 13
-biome = "lode"
-count = 10
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-length_min_m = 24.0
-length_max_m = 90.0
-radius_min_m = 0.4
-radius_max_m = 1.0
-turn_probability = 0.08
-material = "wolframite"
-host_material = "granite"
+length_min_m = 20.0
+length_max_m = 85.0
+radius_min_m = 1.8
+radius_max_m = 4.5
+turn_probability = 0.18
+turn_smoothing = 0.8
+radius_variation = 0.6
+chamber_probability = 0.07
+chamber_scale = 2.8
 
 [worlds.frontier.rules.traversal_hearth]
 kind = "feature"
@@ -1227,11 +1215,11 @@ display_name = "The wide hollows"
 background_stack = "hollows"
 default_wall_material = "masonry"
 boundary_fine = 3
-min_sites = 40
-max_sites = 48
+min_sites = 72
+max_sites = 96
 site_attempts = 60
-site_spacing_m = 140.0
-boundary_warp_amplitude_m = 29.0
+site_spacing_m = 100.0
+boundary_warp_amplitude_m = 42.0
 boundary_warp_x_field = "warp_x"
 boundary_warp_y_field = "warp_y"
 start_biome = "hearth"
@@ -1241,6 +1229,14 @@ start_x_fine = 2000
 start_y_fine = 3000
 start_clearance_m = 3.0
 start_route_width_m = 1.0
+surface_field = "surface_height"
+surface_elevation_m = 1120.0
+surface_amplitude_m = 55.0
+bedrock_field = "bedrock_height"
+bedrock_material = "bedrock"
+bedrock_thickness_m = 27.5
+bedrock_variation_m = 12.5
+start_depth_m = 105.0
 
 [worlds.hollows.start_resources.stone]
 marker = "stone"
@@ -1271,7 +1267,7 @@ biome = "hearth"
 field = "round_caves"
 depth_min_normalized = 0.0
 depth_max_normalized = 1.0
-threshold_min = 0.42
+threshold_min = 0.45
 threshold_max = 1.0
 
 [worlds.hollows.rules.tunnels_hearth]
@@ -1279,14 +1275,18 @@ kind = "carve_worm"
 phase = "carve"
 order = 30
 biome = "hearth"
-count = 14
+count = 28
 depth_min_normalized = 0.0
 depth_max_normalized = 1.0
-length_min_m = 25.0
-length_max_m = 105.0
-radius_min_m = 1.6
+length_min_m = 20.0
+length_max_m = 90.0
+radius_min_m = 1.2
 radius_max_m = 3.5
 turn_probability = 0.12
+turn_smoothing = 0.82
+radius_variation = 0.35
+chamber_probability = 0.025
+chamber_scale = 2.2
 
 [worlds.hollows.biomes.verdant]
 biome = "verdant"
@@ -1305,7 +1305,7 @@ biome = "verdant"
 field = "branch_caves"
 depth_min_normalized = 0.0
 depth_max_normalized = 1.0
-threshold_min = -0.09
+threshold_min = 0.27
 threshold_max = 1.0
 
 [worlds.hollows.rules.tunnels_verdant]
@@ -1313,14 +1313,18 @@ kind = "carve_worm"
 phase = "carve"
 order = 31
 biome = "verdant"
-count = 14
+count = 30
 depth_min_normalized = 0.0
 depth_max_normalized = 1.0
-length_min_m = 25.0
-length_max_m = 105.0
-radius_min_m = 1.6
-radius_max_m = 3.5
-turn_probability = 0.3
+length_min_m = 18.0
+length_max_m = 80.0
+radius_min_m = 1.0
+radius_max_m = 2.7
+turn_probability = 0.22
+turn_smoothing = 0.72
+radius_variation = 0.38
+chamber_probability = 0.035
+chamber_scale = 2.0
 
 [worlds.hollows.biomes.mire]
 biome = "mire"
@@ -1339,7 +1343,7 @@ biome = "mire"
 field = "low_pools"
 depth_min_normalized = 0.0
 depth_max_normalized = 1.0
-threshold_min = -0.22
+threshold_min = 0.35
 threshold_max = 1.0
 
 [worlds.hollows.rules.tunnels_mire]
@@ -1347,14 +1351,18 @@ kind = "carve_worm"
 phase = "carve"
 order = 32
 biome = "mire"
-count = 14
+count = 20
 depth_min_normalized = 0.0
 depth_max_normalized = 1.0
-length_min_m = 25.0
-length_max_m = 105.0
+length_min_m = 12.0
+length_max_m = 55.0
 radius_min_m = 1.6
-radius_max_m = 3.5
-turn_probability = 0.3
+radius_max_m = 3.8
+turn_probability = 0.26
+turn_smoothing = 0.65
+radius_variation = 0.5
+chamber_probability = 0.055
+chamber_scale = 2.4
 
 [worlds.hollows.biomes.dunes]
 biome = "dunes"
@@ -1373,7 +1381,7 @@ biome = "dunes"
 field = "tall_caves"
 depth_min_normalized = 0.0
 depth_max_normalized = 1.0
-threshold_min = 0.43
+threshold_min = 0.56
 threshold_max = 1.0
 
 [worlds.hollows.rules.tunnels_dunes]
@@ -1381,14 +1389,18 @@ kind = "carve_worm"
 phase = "carve"
 order = 33
 biome = "dunes"
-count = 14
+count = 18
 depth_min_normalized = 0.0
 depth_max_normalized = 1.0
 length_min_m = 25.0
-length_max_m = 105.0
-radius_min_m = 1.6
-radius_max_m = 3.5
-turn_probability = 0.12
+length_max_m = 85.0
+radius_min_m = 0.7
+radius_max_m = 1.7
+turn_probability = 0.08
+turn_smoothing = 0.92
+radius_variation = 0.16
+chamber_probability = 0.008
+chamber_scale = 1.5
 
 [worlds.hollows.biomes.rime]
 biome = "rime"
@@ -1407,7 +1419,7 @@ biome = "rime"
 field = "ice_fractures"
 depth_min_normalized = 0.0
 depth_max_normalized = 1.0
-threshold_min = 0.58
+threshold_min = 0.60
 threshold_max = 1.0
 
 [worlds.hollows.rules.tunnels_rime]
@@ -1415,14 +1427,18 @@ kind = "carve_worm"
 phase = "carve"
 order = 34
 biome = "rime"
-count = 14
+count = 16
 depth_min_normalized = 0.0
 depth_max_normalized = 1.0
-length_min_m = 25.0
-length_max_m = 105.0
-radius_min_m = 1.6
-radius_max_m = 3.5
-turn_probability = 0.12
+length_min_m = 20.0
+length_max_m = 70.0
+radius_min_m = 0.6
+radius_max_m = 1.5
+turn_probability = 0.1
+turn_smoothing = 0.94
+radius_variation = 0.12
+chamber_probability = 0.0
+chamber_scale = 1.0
 
 [worlds.hollows.biomes.lode]
 biome = "lode"
@@ -1438,10 +1454,10 @@ kind = "threshold_cave"
 phase = "carve"
 order = 15
 biome = "lode"
-field = "ore_tunnels"
+field = "round_caves"
 depth_min_normalized = 0.0
 depth_max_normalized = 1.0
-threshold_min = 0.78
+threshold_min = 0.54
 threshold_max = 1.0
 
 [worlds.hollows.rules.tunnels_lode]
@@ -1449,14 +1465,18 @@ kind = "carve_worm"
 phase = "carve"
 order = 35
 biome = "lode"
-count = 14
+count = 24
 depth_min_normalized = 0.0
 depth_max_normalized = 1.0
 length_min_m = 25.0
 length_max_m = 105.0
-radius_min_m = 1.6
-radius_max_m = 3.5
+radius_min_m = 0.9
+radius_max_m = 2.6
 turn_probability = 0.12
+turn_smoothing = 0.9
+radius_variation = 0.3
+chamber_probability = 0.018
+chamber_scale = 1.8
 
 [worlds.hollows.biomes.karst]
 biome = "karst"
@@ -1475,7 +1495,7 @@ biome = "karst"
 field = "karst_cells"
 depth_min_normalized = 0.0
 depth_max_normalized = 1.0
-threshold_min = 0.04
+threshold_min = 0.24
 threshold_max = 1.0
 
 [worlds.hollows.rules.tunnels_karst]
@@ -1483,14 +1503,18 @@ kind = "carve_worm"
 phase = "carve"
 order = 36
 biome = "karst"
-count = 14
+count = 34
 depth_min_normalized = 0.0
 depth_max_normalized = 1.0
-length_min_m = 25.0
-length_max_m = 105.0
-radius_min_m = 1.6
-radius_max_m = 3.5
+length_min_m = 18.0
+length_max_m = 100.0
+radius_min_m = 1.4
+radius_max_m = 4.0
 turn_probability = 0.12
+turn_smoothing = 0.88
+radius_variation = 0.45
+chamber_probability = 0.04
+chamber_scale = 2.5
 
 [worlds.hollows.biomes.saltworks]
 biome = "saltworks"
@@ -1509,7 +1533,7 @@ biome = "saltworks"
 field = "salt_basins"
 depth_min_normalized = 0.0
 depth_max_normalized = 1.0
-threshold_min = -0.18
+threshold_min = 0.51
 threshold_max = 1.0
 
 [worlds.hollows.rules.tunnels_saltworks]
@@ -1517,14 +1541,18 @@ kind = "carve_worm"
 phase = "carve"
 order = 37
 biome = "saltworks"
-count = 14
+count = 18
 depth_min_normalized = 0.0
 depth_max_normalized = 1.0
-length_min_m = 25.0
-length_max_m = 105.0
-radius_min_m = 1.6
-radius_max_m = 3.5
-turn_probability = 0.12
+length_min_m = 15.0
+length_max_m = 60.0
+radius_min_m = 1.0
+radius_max_m = 2.6
+turn_probability = 0.1
+turn_smoothing = 0.9
+radius_variation = 0.25
+chamber_probability = 0.02
+chamber_scale = 1.8
 
 [worlds.hollows.biomes.fumaroles]
 biome = "fumaroles"
@@ -1551,14 +1579,18 @@ kind = "carve_worm"
 phase = "carve"
 order = 38
 biome = "fumaroles"
-count = 14
+count = 22
 depth_min_normalized = 0.0
 depth_max_normalized = 1.0
 length_min_m = 25.0
-length_max_m = 105.0
-radius_min_m = 1.6
-radius_max_m = 3.5
+length_max_m = 95.0
+radius_min_m = 0.7
+radius_max_m = 1.8
 turn_probability = 0.12
+turn_smoothing = 0.91
+radius_variation = 0.3
+chamber_probability = 0.012
+chamber_scale = 1.6
 
 [worlds.hollows.biomes.petroleum]
 biome = "petroleum"
@@ -1577,7 +1609,7 @@ biome = "petroleum"
 field = "oil_channels"
 depth_min_normalized = 0.0
 depth_max_normalized = 1.0
-threshold_min = -0.1
+threshold_min = 0.53
 threshold_max = 1.0
 
 [worlds.hollows.rules.tunnels_petroleum]
@@ -1585,14 +1617,18 @@ kind = "carve_worm"
 phase = "carve"
 order = 39
 biome = "petroleum"
-count = 14
+count = 12
 depth_min_normalized = 0.0
 depth_max_normalized = 1.0
-length_min_m = 25.0
-length_max_m = 105.0
-radius_min_m = 1.6
-radius_max_m = 3.5
-turn_probability = 0.12
+length_min_m = 12.0
+length_max_m = 45.0
+radius_min_m = 0.8
+radius_max_m = 1.9
+turn_probability = 0.08
+turn_smoothing = 0.95
+radius_variation = 0.18
+chamber_probability = 0.0
+chamber_scale = 1.0
 
 [worlds.hollows.biomes.ember]
 biome = "ember"
@@ -1611,7 +1647,7 @@ biome = "ember"
 field = "hot_chambers"
 depth_min_normalized = 0.0
 depth_max_normalized = 1.0
-threshold_min = 0.52
+threshold_min = 0.35
 threshold_max = 1.0
 
 [worlds.hollows.rules.tunnels_ember]
@@ -1619,78 +1655,18 @@ kind = "carve_worm"
 phase = "carve"
 order = 40
 biome = "ember"
-count = 14
+count = 26
 depth_min_normalized = 0.0
 depth_max_normalized = 1.0
-length_min_m = 25.0
-length_max_m = 105.0
-radius_min_m = 1.6
-radius_max_m = 3.5
-turn_probability = 0.12
-
-[worlds.hollows.rules.veins_copper]
-kind = "vein_worm"
-phase = "deposit"
-order = 10
-biome = "lode"
-count = 4
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-length_min_m = 24.0
-length_max_m = 90.0
-radius_min_m = 0.4
-radius_max_m = 1.0
-turn_probability = 0.08
-material = "copper"
-host_material = "granite"
-
-[worlds.hollows.rules.veins_iron]
-kind = "vein_worm"
-phase = "deposit"
-order = 11
-biome = "lode"
-count = 4
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-length_min_m = 24.0
-length_max_m = 90.0
-radius_min_m = 0.4
-radius_max_m = 1.0
-turn_probability = 0.08
-material = "iron"
-host_material = "granite"
-
-[worlds.hollows.rules.veins_aluminum]
-kind = "vein_worm"
-phase = "deposit"
-order = 12
-biome = "lode"
-count = 4
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-length_min_m = 24.0
-length_max_m = 90.0
-radius_min_m = 0.4
-radius_max_m = 1.0
-turn_probability = 0.08
-material = "aluminum"
-host_material = "granite"
-
-[worlds.hollows.rules.veins_wolframite]
-kind = "vein_worm"
-phase = "deposit"
-order = 13
-biome = "lode"
-count = 4
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-length_min_m = 24.0
-length_max_m = 90.0
-radius_min_m = 0.4
-radius_max_m = 1.0
-turn_probability = 0.08
-material = "wolframite"
-host_material = "granite"
+length_min_m = 20.0
+length_max_m = 85.0
+radius_min_m = 1.8
+radius_max_m = 4.5
+turn_probability = 0.18
+turn_smoothing = 0.8
+radius_variation = 0.6
+chamber_probability = 0.07
+chamber_scale = 2.8
 
 [worlds.hollows.rules.traversal_hearth]
 kind = "feature"
@@ -2442,3 +2418,26 @@ marker = "anchor"
 material = "steam"
 temperature_k = 1100.0
 bulk_density_kg_m3 = 0.6
+
+[worlds.frontier.rules.backbone]
+kind = "connect_rooms"
+phase = "carve"
+order = 95
+radius_m = 2.2
+extra_links = 6
+natural_anchors = 28
+wells = 3
+branches = 8
+roughness_m = 4.5
+
+
+[worlds.hollows.rules.backbone]
+kind = "connect_rooms"
+phase = "carve"
+order = 95
+radius_m = 2.2
+extra_links = 10
+natural_anchors = 36
+wells = 3
+branches = 8
+roughness_m = 4.5
