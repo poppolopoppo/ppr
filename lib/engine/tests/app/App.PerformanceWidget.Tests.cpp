@@ -8,6 +8,10 @@ import engine.app;
 import std;
 
 namespace pP::tests::detail::PerformanceWidgetTests {
+    // ------------------------------------------------------------------
+    // performance widget
+    // ------------------------------------------------------------------
+
     PPR_UNIT_TEST (empty_history_has_zero_statistics) {
         const ui::PerformanceWidget widget;
         PPR_TEST_ASSERT(widget.sampleCount() == 0u);

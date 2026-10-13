@@ -9,6 +9,10 @@ import engine.core;
 import std;
 
 namespace pP::tests::detail::cfg_file {
+    // ------------------------------------------------------------------
+    // config file
+    // ------------------------------------------------------------------
+
     using namespace pP::config;
 
     // Full writer round-trips use SingleSettings below.

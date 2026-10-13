@@ -68,6 +68,7 @@ export namespace pP::physics {
         ChunkColliders(ChunkColliders &&other) noexcept;
         ChunkColliders &operator=(ChunkColliders &&other) noexcept;
 
+        // cohort lifecycle:
         /// The caller freezes gameplay before admission. Preparation uses the
         /// existing chunk budget; Scene::step rejects the entire open cohort.
         /// Commit/cancel must use the same Scene, which outlives this owner.
@@ -77,6 +78,7 @@ export namespace pP::physics {
         [[nodiscard]] std::error_code cancelCohort(Scene &scene);
         [[nodiscard]] bool cohortPending() const noexcept;
 
+        // rebuild:
         /// Dirty positions are delta notifications; caller resubmits only on a new edit.
         /// Per-chunk replacement is atomic; processed receives number of chunks this call.
         [[nodiscard]] std::error_code rebuildDirtyChunks(
@@ -87,6 +89,7 @@ export namespace pP::physics {
         [[nodiscard]] std::error_code materializeForQuery(
             Scene &scene, std::span<const ColliderChunkView> chunks, ColliderChunkPos pos, u32 edge);
 
+        // queries:
         [[nodiscard]] std::size_t chainCount(ColliderChunkPos pos) const noexcept;
 
         [[nodiscard]] std::size_t pendingCount() const noexcept;

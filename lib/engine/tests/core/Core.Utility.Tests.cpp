@@ -7,6 +7,10 @@ import engine.core;
 import std;
 
 namespace pP::tests::detail {
+    // ------------------------------------------------------------------
+    // utility
+    // ------------------------------------------------------------------
+
     namespace Utility {
         PPR_UNIT_TEST (command_history_owns_values_and_preserves_failed_operations) {
             struct Change {

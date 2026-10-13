@@ -53,6 +53,7 @@ namespace pP {
         // therefore never strand observers into teardown.
         Array<PendingInputEvent> owned{};
         owned.swap(m_events);
+
         std::error_code first_err{};
         for (const PendingInputEvent &event: owned) {
             std::visit(

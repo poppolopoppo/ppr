@@ -184,9 +184,11 @@ namespace pP::colony {
         if (period <= TimeSpan{}) {
             PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, std::errc::invalid_argument);
         }
+
         PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, shutdown());
         PPR_RETURN_ERROR_ON_FAIL(
             ColonyPreparation, m_colony.install(std::move(world), nullptr, execution ? execution->m_context : nullptr));
+
         std::error_code result = initializeRuntime(desc, period, execution);
         if (result) {
             PPR_RETAIN_ERROR_ON_FAIL(ColonyPreparation, result, shutdown());
@@ -247,6 +249,7 @@ namespace pP::colony {
         if (not recipe.m_open_surface) {
             return false;
         }
+
         for (u32 column = 0u; column < sim::kWorldEdge; ++column) {
             const double x_m = (static_cast<double>(column) + 0.5) * recipe.m_cell_size_m;
             heights[column] = static_cast<float>(sim::generationSurfaceHeight(plan, x_m));
@@ -272,6 +275,7 @@ namespace pP::colony {
             m_timestep.reset();
             return error;
         }
+
         if (not m_steps_bound) {
             // Declaration order is execution order: tool edits, build
             // errands, search, plan, move, then physics integration and
@@ -410,17 +414,21 @@ namespace pP::colony {
             }
             m_steps_bound = true;
         }
+
         const IContext *const context = execution ? execution->m_context : nullptr;
         if (context) {
             PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, context->error());
         }
+
         if (const std::error_code error = initPhysics()) [[unlikely]] {
             (void) shutdown();
             return error;
         }
+
         m_agent_count = desc.m_agent_count == 0u ? kAgentCount : desc.m_agent_count;
         m_seed = desc.m_seed;
         m_tick_hz = desc.m_tick_hz;
+
         if (restored) {
             PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, sim::restore(m_registry, *restored));
             PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, createAgentBodies(context));
@@ -480,6 +488,7 @@ namespace pP::colony {
             PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, prepareEditColliders());
             return {};
         }
+
         if (m_single_step_pending and m_held_slices == 0u) {
             m_held_slices = 1u;
         }
@@ -491,6 +500,7 @@ namespace pP::colony {
             }
             return runHeldTicks();
         }
+
         if (m_paused) {
             if (m_require_edit_publication or preparedWorld() != nullptr) {
                 PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, prepareEdit(false));
@@ -542,6 +552,7 @@ namespace pP::colony {
         if (not m_timestep) {
             PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, std::errc::operation_not_permitted);
         }
+
         if (entity) {
             Intent intent{};
             PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, playerIntent(m_registry, *entity, {}, intent, cellsPerMetre()));
@@ -575,6 +586,7 @@ namespace pP::colony {
             command.m_vertical > 1) {
             PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, std::errc::invalid_argument);
         }
+
         m_player_command = m_paused ? PlayerCommand{} : command;
         return {};
     }
@@ -653,10 +665,12 @@ namespace pP::colony {
             (void) shutdown();
             return error;
         }
+
         if (const std::error_code error = spawnColonyAgents()) [[unlikely]] {
             (void) shutdown();
             return error;
         }
+
         m_seed = seed;
         ++m_world_generation;
         return {};
@@ -730,6 +744,7 @@ namespace pP::colony {
         if (not m_timestep) {
             return std::unexpected{std::make_error_code(std::errc::operation_not_permitted)};
         }
+
         Footprint resolved = print;
         if (const auto *const prepared = preparedWorld()) {
             const auto *const profile = prepared->catalog().findWorld(prepared->descriptor().m_profile);
@@ -740,10 +755,12 @@ namespace pP::colony {
         } else {
             PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyPreparation, validateFootprint(resolved));
         }
+
         const auto entity = recordErrand(m_registry, resolved);
         if (not entity) {
             return std::unexpected{entity.error()};
         }
+
         m_errands = liveErrandCount(m_registry);
         return entity;
     }
@@ -752,16 +769,20 @@ namespace pP::colony {
         if (not m_timestep) {
             return std::unexpected{std::make_error_code(std::errc::operation_not_permitted)};
         }
+
         // Demolition writes vacuum explicitly (never rely on the default).
         const Footprint print{
             .m_min = min, .m_width = width, .m_height = height, .m_element = kElementVacuum, .m_solid = false};
         const auto *const prepared = preparedWorld();
+
         PPR_RETURN_UNEXPECTED_ON_FAIL(
             ColonyPreparation, validateFootprint(print, prepared ? &prepared->catalog() : nullptr));
+
         const auto entity = recordErrand(m_registry, print);
         if (not entity) {
             return std::unexpected{entity.error()};
         }
+
         m_errands = liveErrandCount(m_registry);
         return entity;
     }
@@ -809,6 +830,7 @@ namespace pP::colony {
             (caps & ~kPathCapsWalk) != 0u) {
             return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
         }
+
         const sim::Entity entity = m_registry.create();
         m_registry.emplace<PathReq>(entity, PathReq{.m_entity = entity, .m_from = from, .m_to = to, .m_caps = caps});
         return entity;
@@ -819,6 +841,7 @@ namespace pP::colony {
         // Presentation owns m_present_dirty only; the collider sets drain in
         // stepPhysics so cleared collider entries always reach a rebuild.
         std::error_code first_error{};
+
         for (const DirtyChunk &row: m_present_dirty) {
             if (const std::error_code error = translator.markChunkChanged(row.m_pos)) {
                 if (not first_error) {
@@ -826,6 +849,7 @@ namespace pP::colony {
                 }
             }
         }
+
         m_present_dirty = Array<DirtyChunk>{};
         return first_error;
     }
@@ -834,8 +858,10 @@ namespace pP::colony {
         if (m_edit or acked.empty() or m_present_dirty.empty()) {
             return;
         }
+
         Array<DirtyChunk> kept{};
         kept.reserve(m_present_dirty.size());
+
         for (const DirtyChunk &pending: m_present_dirty) {
             bool acknowledged = false;
             for (const DirtyChunk &done: acked) {
@@ -848,6 +874,7 @@ namespace pP::colony {
                 kept.push_back(pending);
             }
         }
+
         m_present_dirty = std::move(kept);
     }
 
@@ -859,6 +886,7 @@ namespace pP::colony {
 
         const PendingDig pending = m_pending_digs.front();
         m_pending_digs.erase(m_pending_digs.begin());
+
         if (const std::error_code error = applyDig(pending)) {
             if (not m_step_error) {
                 m_step_error = error;
@@ -996,6 +1024,7 @@ namespace pP::colony {
         if (m_physics_ready) {
             return {};
         }
+
         if (preparedWorld()) {
             m_colliders = physics::ChunkColliders{
                 {static_cast<float>(kFineCellMetres), 0.0f, 0.0f, sim::kWorldEdge, sim::kWorldEdge}};
@@ -1038,6 +1067,7 @@ namespace pP::colony {
 
     std::error_code ColonyDriver::spawnColonyAgents(const IContext *const context) {
         std::optional<sim::Entity> controlled;
+
         if (const auto *const prepared = preparedWorld()) {
             if (context) {
                 PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, context->error());
@@ -1063,6 +1093,7 @@ namespace pP::colony {
             PPR_RETURN_ERROR_ON_FAIL(
                 ColonyPreparation, spawnAgents(m_colony.grid(), m_registry, m_seed, m_agent_count, context));
         }
+
         if (const std::error_code error = createAgentBodies(context)) {
             return error;
         }
@@ -1124,6 +1155,7 @@ namespace pP::colony {
         for (u32 index = 0u; index < m_bodies.size(); ++index) {
             m_body_by_slot[m_bodies[index].m_entity.m_index] = index;
         }
+
         Array<sim::ChunkPos> coverage{};
         agentNeighbourhood(m_registry, coverage, cellsPerMetre());
 
@@ -1132,6 +1164,7 @@ namespace pP::colony {
 
     void ColonyDriver::refreshAgents() {
         m_agents = Array<AgentSummary>{};
+
         for (const auto &[entity, agent]: m_registry.view<Agent>()) {
             const sim::BodyState *pose = m_registry.get<sim::BodyState>(entity);
             if (pose == nullptr) {
@@ -1165,6 +1198,7 @@ namespace pP::colony {
         if (not indexed or entry >= m_bodies.size() or m_bodies[entry].m_entity != entity) {
             PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, std::errc::invalid_argument);
         }
+
         AgentBody &body = m_bodies[entry];
         const auto state = m_scene.state(body.m_handle);
         if (not state) {
@@ -1190,6 +1224,7 @@ namespace pP::colony {
             PPR_RETAIN_ERROR_ON_FAIL(ColonyPreparation, m_step_error, moveAgent(entity));
         }
     }
+
     void ColonyDriver::mirrorBodyStates() noexcept {
         for (const AgentBody &entry: m_bodies) {
             const auto state = m_scene.state(entry.m_handle);
@@ -1220,6 +1255,7 @@ namespace pP::colony {
         }
         Array<sim::ChunkPos> needed{};
         agentNeighbourhood(m_registry, needed, cellsPerMetre());
+
         if (not m_step_error) {
             m_step_stage = "colliders";
         }
@@ -1233,6 +1269,7 @@ namespace pP::colony {
         // Split ownership: m_collider_dirty drains here on success only, so a
         // failed rebuild retains it for retry; presentEdits never touches it.
         m_collider_dirty = Array<sim::ChunkPos>{};
+
         if (not m_step_error) {
             m_step_stage = "scene-step";
         }
@@ -1262,6 +1299,7 @@ namespace pP::colony {
             return {};
         }
         const auto *const prepared = preparedWorld();
+
         for (u32 index = 0u; index < sim::kCellsPerChunk; ++index) {
             const auto id = (*cells)[index].m_element;
             if (id == 0u) {
@@ -1464,6 +1502,7 @@ namespace pP::colony {
         }
         std::ranges::sort(
             sorted_needed, {}, [](const sim::ChunkPos pos) { return pos.m_y * sim::kChunksPerEdge + pos.m_x; });
+
         // Interest transitions are geometry work even without terrain edits:
         // gained owners need chains and lost owners must release theirs.
         Array<sim::ChunkPos> work_dirty{};
@@ -1484,6 +1523,7 @@ namespace pP::colony {
                 }
             }
         }
+
         dirty = {work_dirty.data(), work_dirty.size()};
         const bool hit = m_cache_valid and
                          m_cover_gen == m_cached_gen and
@@ -1536,6 +1576,7 @@ namespace pP::colony {
             PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, delta);
             delta_ready = *delta;
         }
+
         if (not delta_ready) {
             const auto include = [&listed](const sim::ChunkPos pos) {
                 if (not chunkListedU32(listed, pos)) {
@@ -1589,12 +1630,14 @@ namespace pP::colony {
                         .m_needed = wanted});
             }
         }
+
         Array<physics::ColliderChunkPos> dirty_i32{};
         for (const sim::ChunkPos pos: dirty) {
             dirty_i32.push_back(physics::ColliderChunkPos{static_cast<i32>(pos.m_x), static_cast<i32>(pos.m_y)});
         }
         u32 processed = 0u;
         std::error_code rebuilt{};
+
         {
             const hal::ProfileScope scope_rebuild{"Colony.Colliders.Rebuild"};
             if (context) {
@@ -1661,17 +1704,21 @@ namespace pP::colony {
             ColonyPreparation,
             not m_edit ? std::error_code{} : std::make_error_code(std::errc::device_or_resource_busy));
         clearPlayerCommand();
+
         if (not m_physics_ready) {
             return std::make_error_code(std::errc::operation_not_permitted);
         }
+
         // Scene::clear preserves terrain chains. Recreate the disposable
         // physics world before releasing its collider handle owner.
         shutdownPhysics();
         PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, initPhysics());
         clearToolState();
+
         if (const std::error_code error = createAgentBodies()) {
             return error;
         }
+
         m_finder = Pathfinder{};
         refreshAgents();
         m_counts = pP::colony::pathCounts(m_registry);
@@ -1684,6 +1731,7 @@ namespace pP::colony {
             ColonyPreparation,
             not m_edit ? std::error_code{} : std::make_error_code(std::errc::device_or_resource_busy));
         clearToolState();
+
         Array<sim::ChunkPos> dirty{};
         for (const sim::ChunkDelta &delta: snapshot.m_deltas) {
             const sim::ChunkPos pos{delta.m_chunk % sim::kChunksPerEdge, delta.m_chunk / sim::kChunksPerEdge};
@@ -1691,8 +1739,10 @@ namespace pP::colony {
                 dirty.push_back(pos);
             }
         }
+
         Array<sim::ChunkPos> needed{};
         agentNeighbourhood(m_registry, needed, cellsPerMetre());
+
         // Listed below can add a 3x3 ring per entry; budget past it so the
         // call always completes fully (or reports) with no remainder.
         const u64 listed_max = (dirty.size() + needed.size()) * 9u + 1u;
@@ -1707,7 +1757,9 @@ namespace pP::colony {
 
     sim::Snapshot ColonyDriver::snapshotWithBodies() {
         mirrorBodyStates();
+
         sim::Snapshot snap = sim::capture(m_colony.grid(), m_registry, m_seed);
+
         for (auto &record: snap.m_bodies.m_records) {
             for (const AgentBody &entry: m_bodies) {
                 if (entry.m_entity == record.m_entity) {
@@ -1719,6 +1771,7 @@ namespace pP::colony {
                 }
             }
         }
+
         snap.m_bodies.m_replay_ticks = m_tick_count;
         return snap;
     }

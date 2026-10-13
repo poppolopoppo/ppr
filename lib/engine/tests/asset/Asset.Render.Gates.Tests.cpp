@@ -20,6 +20,10 @@ import std;
 namespace m3d = mango::import3d;
 
 namespace pP::tests::detail::SharedGpu {
+    // ------------------------------------------------------------------
+    // render gates
+    // ------------------------------------------------------------------
+
     [[nodiscard]] safe_ptr<IRhiService> rhiService();
 
     [[nodiscard]] safe_ptr<IShaderService> shaderService();

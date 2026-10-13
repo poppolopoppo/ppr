@@ -15,8 +15,10 @@ namespace pP::colony {
             ColonyCheckpoint, m_timestep.has_value() and captureReady()
                                   ? std::error_code{}
                                   : std::make_error_code(std::errc::device_or_resource_busy));
+
         auto snapshot = sim::captureFull(grid(), m_registry, m_seed, context);
         PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyCheckpoint, snapshot);
+
         for (auto &record: snapshot->m_bodies.m_records) {
             const auto body = std::ranges::find(m_bodies, record.m_entity, &AgentBody::m_entity);
             PPR_RETURN_UNEXPECTED_ON_FAIL(
@@ -26,6 +28,7 @@ namespace pP::colony {
             PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyCheckpoint, awake);
             record.m_awake = *awake;
         }
+
         snapshot->m_bodies.m_replay_ticks = m_tick_count;
         return snapshot;
     }
@@ -40,6 +43,7 @@ namespace pP::colony {
                                       snapshot.m_seed == desc.m_seed
                                   ? std::error_code{}
                                   : std::make_error_code(std::errc::invalid_argument));
+
         const auto period = TimeSpan{std::chrono::seconds{1}} / desc.m_tick_hz;
         PPR_RETURN_ERROR_ON_FAIL(
             ColonyCheckpoint,
@@ -47,6 +51,7 @@ namespace pP::colony {
         PPR_RETURN_ERROR_ON_FAIL(
             ColonyCheckpoint,
             m_colony.install(std::move(world), &particles, execution ? execution->m_context : nullptr));
+
         bool initialized = false;
         PPR_DEFER {
             if (not initialized) {
@@ -54,8 +59,10 @@ namespace pP::colony {
                 PPR_LOG_WARNING_ON_FAIL(ColonyCheckpoint, shutdown());
             }
         };
+
         PPR_RETURN_ERROR_ON_FAIL(ColonyCheckpoint, initializeRuntime(desc, period, execution, &snapshot));
         PPR_RETURN_ERROR_ON_FAIL(ColonyCheckpoint, assignControl(controlled));
+
         m_tick_count = tick;
         m_initial_matter_baseline_valid = initial_matter_valid;
         m_counts = pP::colony::pathCounts(m_registry);

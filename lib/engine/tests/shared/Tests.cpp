@@ -11,6 +11,10 @@ import std;
 namespace pP::tests {
     static std::atomic<bool> g_tests_failed{false};
 
+    // ------------------------------------------------------------------
+    // cli schema
+    // ------------------------------------------------------------------
+
     [[nodiscard]] config::CliSchema testCliSchema(const std::string_view program) {
         config::CliSchema schema{};
         schema.m_program = program;
@@ -54,6 +58,9 @@ namespace pP::tests {
         return schema;
     }
 
+    // ------------------------------------------------------------------
+    // invocation parsing
+    // ------------------------------------------------------------------
     [[nodiscard]] Expected<ParsedTests> parseTestInvocation(
         const std::span<const std::string_view> args, const std::string_view program,
         const std::span<const config::Layer> lowerLayers, config::Diagnostics &diagnostics) {
@@ -65,6 +72,7 @@ namespace pP::tests {
         if (auto valid = config::validateSchema<TestSettings>(diagnostics); not valid) {
             return std::unexpected{valid.error()};
         }
+
         if (parsed->m_help_requested) {
             ParsedTests help{};
             help.m_cli = std::move(*parsed);
@@ -92,6 +100,7 @@ namespace pP::tests {
         ParsedTests invocation{};
         invocation.m_settings = std::move(*resolved);
         invocation.m_cli = std::move(cli_copy);
+
         return invocation;
     }
 
@@ -107,9 +116,13 @@ namespace pP::tests {
         for (int index = 1; index < argc; ++index) {
             args.emplace_back(argv[index] != nullptr ? argv[index] : "");
         }
+
         return parseTestInvocation(std::span<const std::string_view>{args.data(), args.size()}, program, diagnostics);
     }
 
+    // ------------------------------------------------------------------
+    // shuffle
+    // ------------------------------------------------------------------
     [[nodiscard]] bool shuffleEnabled(const ParsedTests &parsed) noexcept {
         const config::Assignment *last = nullptr;
         for (const auto &assignment: parsed.m_cli.m_assignments) {
@@ -117,6 +130,7 @@ namespace pP::tests {
                 last = std::addressof(assignment);
             }
         }
+
         // Order-sensitive precedence: an explicit --shuffle mention always
         // enables shuffling, while the winning --no-shuffle mention applies
         // its resolved boolean (so --no-shuffle=false enables shuffling).
@@ -128,6 +142,9 @@ namespace pP::tests {
         return not parsed.m_settings.m_value.m_no_shuffle;
     }
 
+    // ------------------------------------------------------------------
+    // runner
+    // ------------------------------------------------------------------
     namespace {
         /// Runner-boundary construction from a parsed invocation. Seed
         /// generation stays here (and in runSuite for auto-seed); parsing
@@ -150,11 +167,13 @@ namespace pP::tests {
             if (settings.m_child_run) {
                 cli.m_context.markAsChildRun();
             }
+
             cli.m_context.m_shuffle_seed = settings.m_shuffle_seed;
             cli.m_shuffle_enabled = shuffleEnabled(parsed);
             if (not cli.m_shuffle_enabled) {
                 cli.m_context.m_shuffle_seed = std::nullopt;
             }
+
             return cli;
         }
     } // namespace
@@ -211,6 +230,7 @@ namespace pP::tests {
             std::println("{}", config::generateHelp(testCliSchema(program), parsed->m_settings.m_value));
             return 0;
         }
+
         return runSuite(makeTestCli(*parsed), root);
     }
 }

@@ -85,6 +85,7 @@ namespace pP {
                 const std::lock_guard scope_lock(m_subscriptions_mutex);
                 snapshot.append(m_subscriptions);
             }
+
             for (const TagPtr<ISignal> handler: snapshot) {
                 const auto [signal, event_tag] = handler.unpack();
                 signal->notify(event_tag);

@@ -14,6 +14,7 @@ namespace pP::tests::detail {
     // ------------------------------------------------------------------
     // A. Shader Error Codes
     // ------------------------------------------------------------------
+
     namespace ShaderErrC {
         static_assert(static_cast<int>(shader::errc::ok) == SLANG_OK);
         static_assert(static_cast<int>(shader::errc::not_found) == SLANG_E_NOT_FOUND);
@@ -85,6 +86,7 @@ namespace pP::tests::detail {
     // ------------------------------------------------------------------
     // B. RHI Error Codes
     // ------------------------------------------------------------------
+
     namespace RhiErrC {
         PPR_UNIT_TEST (rhi_error_category_name) {
             const auto &cat = rhi::error_category();
@@ -130,6 +132,7 @@ namespace pP::tests::detail {
     // ------------------------------------------------------------------
     // C. Diagnose & ModuleHandle
     // ------------------------------------------------------------------
+
     namespace ModHandle {
         PPR_UNIT_TEST (diagnose_default_construct) {
             shader::Diagnose diag;
@@ -147,6 +150,7 @@ namespace pP::tests::detail {
     // ------------------------------------------------------------------
     // D. Shader Compilation & Reflection
     // ------------------------------------------------------------------
+
     namespace ShaderComp {
         void discardExpectedFailureLog_(const Log::Entry &) noexcept {
         }
@@ -398,6 +402,7 @@ float4 fragmentMain(VSOutput input) : SV_Target {
     // ------------------------------------------------------------------
     // Parent aggregator
     // ------------------------------------------------------------------
+
 } // namespace pP::tests::detail
 
 namespace pP::tests {

@@ -8,6 +8,10 @@ import engine.core;
 import std;
 
 namespace pP::tests::detail {
+    // ------------------------------------------------------------------
+    // safe ptr
+    // ------------------------------------------------------------------
+
     namespace SafePtr {
 #if PPR_ENABLE_DEBUG
         static_assert(not pP::details::is_relocatable_v<safe_ptr<safe_object>>);

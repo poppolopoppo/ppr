@@ -10,6 +10,10 @@ import engine.math;
 import std;
 
 export namespace pP {
+    // ------------------------------------------------------------------
+    // video mode
+    // ------------------------------------------------------------------
+
     struct VideoMode {
         int2 m_resolution{zero_v};
         int3 m_rgb_bits{zero_v};
@@ -17,6 +21,10 @@ export namespace pP {
 
         bool operator==(const VideoMode &) const;
     };
+
+    // ------------------------------------------------------------------
+    // monitor
+    // ------------------------------------------------------------------
 
     class Monitor : public safe_object {
     public:

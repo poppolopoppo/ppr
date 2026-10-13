@@ -6,6 +6,10 @@ import engine.core;
 import std;
 
 export namespace pP::ui {
+    // ------------------------------------------------------------------
+    // timing statistics
+    // ------------------------------------------------------------------
+
     struct TimingStatistics {
         float m_average{};
         float m_p50{};
@@ -15,6 +19,10 @@ export namespace pP::ui {
         float m_maximum{};
         u64 m_over_budget{};
     };
+
+    // ------------------------------------------------------------------
+    // performance widget
+    // ------------------------------------------------------------------
 
     /// Client-owned CPU and asynchronously completed GPU timing telemetry. Sampling never drives frame admission.
     class PerformanceWidget {

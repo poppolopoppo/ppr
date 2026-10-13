@@ -21,6 +21,7 @@ namespace pP {
     IoFile &IoFile::operator=(IoFile &&other) noexcept {
         if (this != &other) {
             close_();
+
             m_port_handle = std::exchange(other.m_port_handle, nullptr);
             m_file = std::exchange(other.m_file, nullptr);
         }
@@ -75,6 +76,7 @@ namespace pP::io {
             if (m_handle != nullptr) {
                 hal::io::deinit(m_handle);
             }
+
             m_handle = std::exchange(other.m_handle, nullptr);
         }
         return *this;
@@ -139,6 +141,7 @@ namespace pP::io {
     std::size_t IoPort::pollCompletions() noexcept {
         std::array<hal::io::CompletionEntry, kMaxCompletionBatch> entries{};
         const std::size_t n = hal::io::poll(m_handle, entries);
+
         for (std::size_t i = 0u; i < n; ++i) {
             auto &ce = entries[i];
             if (ce.m_user_data != nullptr) [[likely]] {
@@ -152,6 +155,7 @@ namespace pP::io {
     std::size_t IoPort::waitForCompletions() noexcept {
         std::array<hal::io::CompletionEntry, kMaxCompletionBatch> entries{};
         const std::size_t n = hal::io::wait(m_handle, entries);
+
         for (std::size_t i = 0u; i < n; ++i) {
             auto &ce = entries[i];
             if (ce.m_user_data != nullptr) [[likely]] {
@@ -175,6 +179,7 @@ namespace pP {
             if (m_active_file != nullptr) {
                 hal::io::cancelIo(m_active_file, m_overlapped_storage);
             }
+
             m_active_file = nullptr;
             m_completed.resetEvent();
         }

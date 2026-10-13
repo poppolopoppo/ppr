@@ -8,6 +8,10 @@ import game.colony.content;
 import std;
 
 namespace pP::game::tests::detail::worlds {
+    // ------------------------------------------------------------------
+    // content worlds
+    // ------------------------------------------------------------------
+
     using namespace colony;
     constexpr std::string_view materials_text = R"(schema_version = 2
 [materials.rock]

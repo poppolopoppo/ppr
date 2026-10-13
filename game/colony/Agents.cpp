@@ -41,6 +41,7 @@ namespace pP::colony {
             const sim::Registry &registry, const float world_x, const float world_y, const u32 cells_per_metre) {
             const double x = static_cast<double>(world_x) * cells_per_metre;
             const double y = static_cast<double>(world_y) * cells_per_metre;
+
             for (const auto &[entity, errand]: registry.view<BuildErrand>()) {
                 (void) entity;
                 if (not errand.m_print.m_ladder) {
@@ -123,6 +124,7 @@ namespace pP::colony {
             want.m_op = kOpWork;
             bool errand = false;
             u32 best_distance = 0xFFFFFFFFu;
+
             for (const auto &[entity, row]: registry.view<BuildErrand>()) {
                 (void) entity;
                 if (row.m_progress >= row.m_total) {
@@ -167,6 +169,7 @@ namespace pP::colony {
                 }
                 errand = true;
             }
+
             if (not errand) {
                 want.m_goal = EGoal::seek;
                 want.m_op = kOpMove;
@@ -199,6 +202,7 @@ namespace pP::colony {
         if ((cells_per_metre != 1u and cells_per_metre != kFineCellsPerMetre)) {
             PPR_RETURN_ERROR_ON_FAIL(AgentPreparation, std::errc::invalid_argument);
         }
+
         // Phase: normalize the profiling override. Fail closed to the
         // production default on empty, reject above the named ceiling.
         if (count == 0u) {
@@ -209,11 +213,13 @@ namespace pP::colony {
         }
 
         u64 stream = seed + 0x9E3779B97F4A7C15u;
+
         for (u32 agent = 0u; agent < count; ++agent) {
             if (context) {
                 PPR_RETURN_ERROR_ON_FAIL(AgentPreparation, context->error());
             }
             sim::GlobalCellPos spawn{sim::kWorldEdge, sim::kWorldEdge};
+
             for (u32 attempt = 0u; attempt < 256u and spawn.m_x >= sim::kWorldEdge; ++attempt) {
                 const u32 x = static_cast<u32>(nextStream(stream) % (sim::kWorldEdge - 1u));
                 const u32 y = static_cast<u32>(nextStream(stream) % (sim::kWorldEdge - 2u));
@@ -234,6 +240,7 @@ namespace pP::colony {
             if (spawn.m_x >= sim::kWorldEdge) {
                 return std::make_error_code(std::errc::state_not_recoverable);
             }
+
             const sim::Entity entity = registry.create();
             const u64 key = (static_cast<u64>(entity.m_generation) << 32u) | entity.m_index;
             registry.emplace<Agent>(entity, Agent{.m_key = key, .m_spawn = spawn});
@@ -285,6 +292,7 @@ namespace pP::colony {
             next.m_actions[0] = AgentAction{.m_op = want.m_op, .m_target = want.m_site};
             next.m_action_count = 1u;
             next.m_replans = replans;
+
             if (plan != nullptr) {
                 *plan = next;
             } else {
@@ -325,6 +333,7 @@ namespace pP::colony {
             agent->m_speed < 0.0f) {
             PPR_RETURN_ERROR_ON_FAIL(AgentPreparation, std::errc::invalid_argument);
         }
+
         intent.m_velocity_x = command.m_horizontal * agent->m_speed;
         intent.m_climbing = onLadder(registry, pose->m_x, pose->m_y, cells_per_metre);
         intent.m_velocity_y = intent.m_climbing ? command.m_vertical * agent->m_speed : 0.0f;
@@ -372,6 +381,7 @@ namespace pP::colony {
             ++plan->m_pc;
             return {};
         }
+
         PathComp *path = registry.get<PathComp>(entity);
         float step_x = dx;
         float step_y = dy;
@@ -408,6 +418,7 @@ namespace pP::colony {
         } else {
             intent.m_velocity_y = 0.0f;
         }
+
         needs->m_o2 -= 0.05f;
         needs->m_rest -= 0.1f;
         if (needs->m_o2 < 0.0f) {

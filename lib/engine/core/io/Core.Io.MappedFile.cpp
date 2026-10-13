@@ -12,6 +12,7 @@ namespace pP {
     MappedFile &MappedFile::operator=(MappedFile &&other) noexcept {
         if (this != &other) {
             unmap_();
+
             m_map = std::exchange(other.m_map, nullptr);
         }
         return *this;

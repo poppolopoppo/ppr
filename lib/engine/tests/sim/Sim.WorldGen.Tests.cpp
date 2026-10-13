@@ -9,6 +9,10 @@ import engine.sim;
 import std;
 
 namespace pP::tests::detail {
+    // ------------------------------------------------------------------
+    // world gen
+    // ------------------------------------------------------------------
+
     namespace WorldGen {
         using namespace pP::sim;
 
@@ -48,6 +52,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(random.next() == 0xe220a8397b1dcdafull);
             PPR_TEST_ASSERT(random.next() == 0x6e789e6aa1b965f4ull);
             PPR_TEST_ASSERT(random.next() == 0x06c45d188009454full);
+
             for (const u64 seed: {0ull, 1ull, 42ull, 0xffffffffffffffffull}) {
                 GenerationRandom first{generationStreamSeed(seed, 101u, 7u)};
                 GenerationRandom replay{generationStreamSeed(seed, 101u, 7u)};
@@ -60,12 +65,14 @@ namespace pP::tests::detail {
                         PPR_TEST_ASSERT(first.bounded(bound) < bound);
                     }
                 }
+
                 for (u32 i = 0u; i < 100u; ++i) {
                     const double value = first.unit();
                     PPR_TEST_ASSERT(value >= 0.0 and value < 1.0);
                 }
             }
         };
+
         PPR_UNIT_TEST (numeric_plan_owns_recipe_and_isolates_field_streams) {
             auto input = numericRecipe();
             auto first = compileGenerationPlan(input, 42u);
@@ -76,17 +83,20 @@ namespace pP::tests::detail {
             auto second = compileGenerationPlan(std::move(input), 42u);
             PPR_TEST_ASSERT(second.has_value());
             PPR_TEST_ASSERT(first->recipe().m_fields.size() == 1u and first->seed() == 42u);
+
             for (u32 i = 0u; i < 100u; ++i) {
                 PPR_TEST_ASSERT(
                     first->fields()[0u].sample(i * 2.75, 17.0) == second->fields()[1u].sample(i * 2.75, 17.0));
             }
         };
+
         PPR_UNIT_TEST (numeric_plan_rejects_invalid_references_bounds_and_collapsed_weights) {
             const auto rejects = [](const auto &mutate) {
                 auto recipe = numericRecipe();
                 mutate(recipe);
                 PPR_TEST_ASSERT(not compileGenerationPlan(std::move(recipe), 42u));
             };
+
             rejects([](auto &recipe) { recipe.m_biomes[0u].m_temperature_field = 1u; });
             rejects([](auto &recipe) { recipe.m_biomes[0u].m_erosion_passes = 25u; });
             rejects([](auto &recipe) {
@@ -136,6 +146,7 @@ namespace pP::tests::detail {
                     {999u, 1u, 0u, (std::numeric_limits<double>::max)(), 0.0, 1.0, 0.0, 2048.0});
             });
         };
+
         PPR_UNIT_TEST (numeric_plan_accepts_granular_fills_and_exact_signed_thirds) {
             auto recipe = numericRecipe();
             recipe.m_materials.push_back({1001u, false, false, EGenerationMatter::solid, 1800.0});
@@ -154,6 +165,7 @@ namespace pP::tests::detail {
                         .m_temperature_k = 290.0,
                         .m_bulk_density_kg_m3 = 1800.0,
                         .m_fill_height_m = 5.0 / 3.0}});
+
             for (const double height: {5.0 / 3.0, -5.0 / 3.0}) {
                 auto &fill = std::get<GenerationFill>(recipe.m_rules[1u].m_parameters);
                 fill.m_fill_height_m = height;
@@ -161,6 +173,7 @@ namespace pP::tests::detail {
                 fill.m_fill_height_m = std::nextafter(height, 0.0);
                 PPR_TEST_ASSERT(validateGenerationRecipe(recipe) == std::errc::invalid_argument);
             }
+
             recipe.m_rules.clear();
             recipe.m_rules.push_back(
                 {.m_key = 503u,
@@ -177,6 +190,7 @@ namespace pP::tests::detail {
             recipe.m_biomes[0u].m_temperature_base_k = 1.0e30;
             PPR_TEST_ASSERT(not validateGenerationRecipe(recipe));
         };
+
         PPR_UNIT_TEST (numeric_plan_preserves_authored_geometry_boundaries) {
             auto recipe = numericRecipe();
             recipe.m_features[0u].m_operations[0u] = {
@@ -189,6 +203,7 @@ namespace pP::tests::detail {
                 .m_end_y = 20,
                 .m_radius_m = 7.0 / 3.0};
             PPR_TEST_ASSERT(not validateGenerationRecipe(recipe));
+
             recipe.m_features[0u].m_bounds = {0, 0, 2000, 2000};
             auto &operation = recipe.m_features[0u].m_operations[0u];
             operation.m_x = 900;
@@ -218,6 +233,7 @@ namespace pP::tests::detail {
             const std::array sites{
                 GenerationSite{125.5, 127.5, 0u}, GenerationSite{129.5, 127.5, 0u}, GenerationSite{127.5, 125.5, 0u},
                 GenerationSite{127.5, 129.5, 0u}, GenerationSite{127.5, 127.5, 1u}};
+
             for (const u32 width: {1u, 2u, 3u}) {
                 recipe.m_biomes.front().m_lining_material = 17u;
                 recipe.m_biomes.front().m_lining_thickness_fine = width;
@@ -246,6 +262,7 @@ namespace pP::tests::detail {
                 }
             }
         };
+
         PPR_UNIT_TEST (biome_sample_forces_selected_context_without_start_or_foreign_geometry) {
             auto recipe = numericRecipe();
             recipe.m_materials.push_back({33u, true, true, EGenerationMatter::solid, 2700.0});
@@ -277,13 +294,16 @@ namespace pP::tests::detail {
             const auto replay = raster->chunk({15u, 23u});
             PPR_TEST_ASSERT(first.has_value() and replay.has_value() and *first == *replay);
             PPR_TEST_ASSERT(std::ranges::all_of(*first, [](const Cell cell) { return cell.m_element == 33u; }));
+
             const auto invalid = compileBiomeSampleLayout(*plan, 2u);
             PPR_TEST_ASSERT(not invalid and invalid.error() == std::errc::invalid_argument);
+
             const auto [context, cancel] = context::withCancel(context::background());
             cancel();
             const auto cancelled = compileBiomeSampleGeometry(*plan, *layout, context.get());
             PPR_TEST_ASSERT(not cancelled and cancelled.error() == std::errc::operation_canceled);
         };
+
         PPR_UNIT_TEST (particle_seeding_replays_large_regions_with_coherent_positive_mass) {
             auto recipe = numericRecipe();
             recipe.m_materials.push_back({99u, false, false, EGenerationMatter::liquid, 1000.0});
@@ -303,6 +323,7 @@ namespace pP::tests::detail {
             const auto seeded = seedMatterParticles(matter, grid, recipe);
             const auto replay = seedMatterParticles(matter, grid, recipe);
             PPR_TEST_ASSERT(seeded.has_value() and replay.has_value());
+
             double volume{}, mass{};
             u32 count{};
             for (u32 i = 0u; i < seeded->m_chunks.size(); ++i) {
@@ -322,6 +343,7 @@ namespace pP::tests::detail {
             matter.m_regions.front().m_volume_m3 *= 2.0;
             PPR_TEST_ASSERT(not seedMatterParticles(matter, grid, recipe));
         };
+
         PPR_UNIT_TEST (particle_edits_are_local_atomic_and_pure_digs_preserve_frozen_records) {
             auto recipe = numericRecipe();
             recipe.m_materials.push_back({99u, false, false, EGenerationMatter::gas, 1.0});
@@ -371,6 +393,7 @@ namespace pP::tests::detail {
                 state.restore(invalid, recipe.m_materials, recipe.m_cell_size_m) == std::errc::invalid_argument);
             PPR_TEST_ASSERT(state.count() == 1u);
         };
+
         PPR_UNIT_TEST (macro_layout_replays_spacing_and_spatial_nearest_matches_oracle) {
             for (const u64 seed: {0ull, 1ull, 42ull, 0xffffffffffffffffull}) {
                 auto plan = compileGenerationPlan(numericRecipe(), seed);
@@ -414,6 +437,7 @@ namespace pP::tests::detail {
                 }
             }
         };
+
         PPR_UNIT_TEST (macro_layout_reports_infeasible_constraints_and_cancellation) {
             auto recipe = numericRecipe();
             recipe.m_site_spacing_m = 4096.0 / 3.0;
@@ -434,6 +458,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(
                 not exhausted and exhausted.error() == make_error_code(EGenerationErrc::constraints_exhausted));
         };
+
         PPR_UNIT_TEST (macro_layout_satisfies_required_biomes_before_weighted_assignment) {
             auto recipe = numericRecipe();
             recipe.m_max_sites = 64u;
@@ -1117,6 +1142,7 @@ namespace pP::tests::detail {
                     .m_parameters = GenerationFill{0u, 0u, 1009u, true, 290.0, 1.2, std::nullopt}});
             return recipe;
         }
+
         PPR_UNIT_TEST (vacuum_palette_preserves_unstamped_sealed_reservation_substrate) {
             auto recipe = matterRecipe();
             recipe.m_fields[0u].m_noise.m_algorithm = ENoiseAlgorithm::cellular_value;
@@ -1220,6 +1246,7 @@ namespace pP::tests::detail {
             recipe.m_materials.back().m_diggable = true;
             PPR_TEST_ASSERT(not compileGenerationPlan(recipe, 42u));
         };
+
         PPR_UNIT_TEST (warped_beds_and_clustered_pores_replay_through_split_filters) {
             auto recipe = numericRecipe();
             recipe.m_cell_size_m = 1.0;
@@ -1272,6 +1299,7 @@ namespace pP::tests::detail {
                 }
             }
         };
+
         PPR_UNIT_TEST (supported_formations_use_frozen_contacts_and_preserve_backbone_clearance) {
             auto recipe = numericRecipe();
             recipe.m_cell_size_m = 1.0;
@@ -1382,6 +1410,7 @@ namespace pP::tests::detail {
             auto blocked = resolveInitialMatter(*plan, geometry, grid);
             PPR_TEST_ASSERT(not blocked and blocked.error() == make_error_code(EGenerationErrc::matter_anchor_solid));
         };
+
         PPR_UNIT_TEST (initial_matter_preserves_integer_boundaries_and_gas_is_remaining_volume) {
             for (const bool signed_height: {false, true}) {
                 auto recipe = matterRecipe();

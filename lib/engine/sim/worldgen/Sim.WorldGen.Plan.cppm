@@ -5,6 +5,10 @@ import engine.core;
 import std;
 
 export namespace pP::sim {
+    // ------------------------------------------------------------------
+    // generation limits
+    // ------------------------------------------------------------------
+
     inline constexpr u32 kGeneratorAlgorithmVersion = 6u;
     inline constexpr u32 kMaxGenerationMaterials = 256u;
     inline constexpr u32 kMaxGenerationFields = 256u;
@@ -17,6 +21,10 @@ export namespace pP::sim {
     inline constexpr u32 kMaxGenerationPoreRadiusFine = 32u;
     // Bound the complete rejection-sampling budget before any geometry allocation.
     inline constexpr u64 kMaxGenerationOriginAttempts = 4u * 1024u * 1024u;
+
+    // ------------------------------------------------------------------
+    // recipe vocabulary
+    // ------------------------------------------------------------------
 
     // Numeric owned input. Keys are stable stream identities compiled by the
     // caller; array indices are resolved references, never persistent identities.
@@ -213,6 +221,10 @@ export namespace pP::sim {
         std::optional<double> m_start_depth_m{};
     };
 
+    // ------------------------------------------------------------------
+    // deterministic random
+    // ------------------------------------------------------------------
+
     // Fixed SplitMix64 stream with unbiased bounded integer draws. Domain keys
     // and ordinals isolate independent decisions from unrelated content changes.
     [[nodiscard]] u64 generationStreamSeed(u64 seed, u64 domain_key, u64 ordinal) noexcept;
@@ -225,6 +237,10 @@ export namespace pP::sim {
         [[nodiscard]] u64 bounded(u64 exclusive_max) noexcept;
         [[nodiscard]] double unit() noexcept;
     };
+
+    // ------------------------------------------------------------------
+    // compiled plan
+    // ------------------------------------------------------------------
 
     class GenerationPlan {
         GenerationRecipe m_recipe;

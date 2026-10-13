@@ -9,6 +9,10 @@ import engine.sim;
 import std;
 
 namespace pP::tests::detail {
+    // ------------------------------------------------------------------
+    // ecs
+    // ------------------------------------------------------------------
+
     namespace EcsSuite {
         using namespace pP::sim;
 

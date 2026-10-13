@@ -10,6 +10,10 @@ import game.application;
 import std;
 
 namespace pP::game::tests::detail::world_job {
+    // ------------------------------------------------------------------
+    // world jobs
+    // ------------------------------------------------------------------
+
     using namespace colony;
 
     class PreparationGate final : public IContext {
@@ -67,15 +71,19 @@ namespace pP::game::tests::detail::world_job {
         PPR_TEST_ASSERT(not job.request({.m_world_generation = 1u}));
         PPR_TEST_ASSERT(not job.update(true));
         settle(job);
+
         auto *const presentation = &job.presentation();
         presentation->m_diagnostic_palette.resize(65536u);
+
         job.cancel();
+
         for (u32 frame = 0u; frame < 64u; ++frame) {
             PPR_TEST_ASSERT(not job.update(true, false));
             PPR_TEST_ASSERT(job.busy());
             PPR_TEST_ASSERT(job.view().m_state == EWorldJobState::retiring);
             PPR_TEST_ASSERT(presentation->m_diagnostic_palette.size() == 65536u);
         }
+
         // The external header is now released; only coordinator-owned payloads remain.
         PPR_TEST_ASSERT(not job.update(true));
         settle(job);
@@ -95,23 +103,29 @@ namespace pP::game::tests::detail::world_job {
                 return std::make_unique<ColonyDriver>();
             }};
         const ColonyDriverDesc request{.m_seed = 42u, .m_world_generation = 1u};
+
         PPR_TEST_ASSERT(not job.request(request));
+
         for (u32 frame = 0; frame < 64u; ++frame) {
             PPR_TEST_ASSERT(not job.update(false));
         }
+
         PPR_TEST_ASSERT(calls.load() == 0u);
         PPR_TEST_ASSERT(job.view().m_state == EWorldJobState::queued);
         const auto first_id = job.view().m_id;
+
         job.cancel();
         PPR_TEST_ASSERT(not job.update(false));
         PPR_TEST_ASSERT(not job.busy());
         PPR_TEST_ASSERT(job.view().m_state == EWorldJobState::cancelled);
+
         PPR_TEST_ASSERT(not job.request(request));
         PPR_TEST_ASSERT(job.view().m_id > first_id);
         PPR_TEST_ASSERT(not job.update(true));
         settle(job);
         PPR_TEST_ASSERT(job.view().m_state == EWorldJobState::prepared);
         PPR_TEST_ASSERT(job.presentation().m_uploads.empty());
+
         job.commitPublication();
         job.cancel(); // An accepted activation must finish CPU publication even during close.
         PPR_TEST_ASSERT(job.view().m_state == EWorldJobState::prepared);

@@ -91,6 +91,7 @@ namespace pP::context {
             if (not err) {
                 return;
             }
+
             // std::error_code carries indeterminate padding and
             // std::atomic<std::error_code> is not lock-free here, so the
             // 16-byte CAS also compares padding: a fresh expect_no_error{}

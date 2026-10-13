@@ -9,6 +9,10 @@ import engine.math;
 import std;
 
 namespace pP::tests::detail {
+    // ------------------------------------------------------------------
+    // zero v probe
+    // ------------------------------------------------------------------
+
     namespace ZeroVProbe {
         PPR_UNIT_TEST (brace_splat_int2) {
             const int2 v{zero_v};

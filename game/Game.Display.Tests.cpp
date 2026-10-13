@@ -13,6 +13,10 @@ import game.display;
 import std;
 
 namespace pP::game::tests::detail::display {
+    // ------------------------------------------------------------------
+    // display
+    // ------------------------------------------------------------------
+
     using namespace pP::config;
 
     [[nodiscard]] Resolved<DisplaySettings> committedDisplay() {

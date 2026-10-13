@@ -8,6 +8,10 @@ import engine.rhi;
 import std;
 
 namespace pP::tests::detail {
+    // ------------------------------------------------------------------
+    // enums
+    // ------------------------------------------------------------------
+
     namespace Enum {
         enum class Color : u32 {
             none = 0u,

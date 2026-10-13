@@ -90,6 +90,7 @@ namespace pP {
             err = make_error_code(std::errc::not_connected);
         }
         m_foreground_listener.reset();
+
         return err;
     }
 

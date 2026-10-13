@@ -11,6 +11,10 @@ import engine.rhi;
 import std;
 
 namespace pP::tests::detail {
+    // ------------------------------------------------------------------
+    // grid pass
+    // ------------------------------------------------------------------
+
     namespace GridTiles {
         [[nodiscard]] CameraSnapshot orthoSnapshot800x600() {
             Camera cam;

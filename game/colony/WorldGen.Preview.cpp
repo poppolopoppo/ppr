@@ -27,6 +27,7 @@ namespace pP::colony {
         }
         u64 matterPayload(const sim::InitialMatter &matter) noexcept {
             u64 bytes = matter.m_regions.capacity() * sizeof(sim::InitialMatterRegion);
+
             for (const auto &region: matter.m_regions) {
                 bytes += region.m_spans.capacity() * sizeof(sim::InitialMatterSpan);
             }
@@ -34,6 +35,7 @@ namespace pP::colony {
         }
         u64 particlePayload(const sim::MatterParticleSnapshot &particles) noexcept {
             u64 bytes = particles.m_chunks.capacity() * sizeof(sim::MatterParticleBatch);
+
             for (const auto &chunk: particles.m_chunks) {
                 if (chunk.m_particles) {
                     bytes += chunk.m_particles->capacity() * sizeof(sim::MatterParticle);
@@ -43,6 +45,7 @@ namespace pP::colony {
         }
         u32 filterHalo(const sim::GenerationPlan &plan) noexcept {
             u32 lining{}, pore{}, relaxation{}, finish{}, erosion{};
+
             for (const auto &biome: plan.recipe().m_biomes) {
                 lining = std::max(lining, biome.m_lining_thickness_fine);
                 pore = std::max(pore, biome.m_pore_passes);
@@ -57,6 +60,7 @@ namespace pP::colony {
             const IContext *const context, u64 &known_scratch_peak) {
             const auto &world = prepared.m_world;
             Array<Array<sim::InitialMatterSpan>> spans(world.m_matter.m_regions.size());
+
             for (u32 cy = visible.m_bottom / sim::kChunkEdge; cy <= (visible.m_top - 1u) / sim::kChunkEdge; ++cy) {
                 for (u32 cx = visible.m_left / sim::kChunkEdge; cx <= (visible.m_right - 1u) / sim::kChunkEdge; ++cx) {
                     for (const auto &entry: prepared.m_matter_chunks[sim::chunkIndexOf({cx, cy})]) {
@@ -71,11 +75,14 @@ namespace pP::colony {
                     }
                 }
             }
+
             u64 scratch = spans.capacity() * sizeof(Array<sim::InitialMatterSpan>);
             for (const auto &region: spans) {
                 scratch += region.capacity() * sizeof(sim::InitialMatterSpan);
             }
+
             known_scratch_peak = std::max(known_scratch_peak, scratch);
+
             sim::InitialMatter result;
             for (std::size_t region_index = 0u; region_index < spans.size(); ++region_index) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(BiomeSamplePreview, context ? context->error() : std::error_code{});
@@ -131,6 +138,7 @@ namespace pP::colony {
             Array<u64> counts(65536u, 0u);
             result.m_known_scratch_peak_bytes = std::max(
                 result.m_known_scratch_peak_bytes, counts.capacity() * sizeof(u64));
+
             u64 checksum = 14695981039346656037ull;
             checksumInteger(
                 checksum,
@@ -140,6 +148,7 @@ namespace pP::colony {
             checksumInteger(checksum, sim::kGeneratorAlgorithmVersion, 4u);
             checksumInteger(checksum, result.m_visible.m_left, 4u);
             checksumInteger(checksum, result.m_visible.m_bottom, 4u);
+
             for (u32 y = result.m_visible.m_bottom; y < result.m_visible.m_top; ++y) {
                 PPR_RETURN_ERROR_ON_FAIL(BiomeSamplePreview, context ? context->error() : std::error_code{});
                 for (u32 x = result.m_visible.m_left; x < result.m_visible.m_right; ++x) {
@@ -158,11 +167,13 @@ namespace pP::colony {
                 }
             }
             result.m_checksum = checksum;
+
             for (u32 material = 0u; material < counts.size(); ++material) {
                 if (counts[material] != 0u) {
                     result.m_material_counts.push_back({static_cast<u16>(material), counts[material]});
                 }
             }
+
             result.m_known_retained_payload_bytes = result.m_plan.retainedPayloadBytes() +
                                                     result.m_layout.retainedPayloadBytes() +
                                                     geometryPayload(result.m_geometry) +
@@ -175,6 +186,7 @@ namespace pP::colony {
             return {};
         }
     }
+
     const sim::GenerationGeometry &WorldgenPreviewResult::geometry() const noexcept {
         return m_exact_world ? m_exact_world->m_world.m_geometry : m_geometry;
     }
@@ -183,6 +195,7 @@ namespace pP::colony {
                m_world.m_plan.seed() == spec.m_seed and
                catalog.contentFingerprint() == std::optional<u64>{m_content_fingerprint};
     }
+
     Expected<std::shared_ptr<const WorldgenPreviewWorld>> prepareWorldgenPreviewWorld(
         const ContentCatalog &catalog, const WorldgenPreviewSpec &spec, const ITimerClock &clock,
         const IContext *const context, ParallelScheduler *const generation_pool) {
@@ -191,15 +204,20 @@ namespace pP::colony {
         if (not fingerprint) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(BiomeSamplePreview, std::errc::invalid_argument);
         }
+
         auto plan = compileWorldPlan(catalog, spec.m_profile, spec.m_seed);
         PPR_RETURN_UNEXPECTED_ON_FAIL(BiomeSamplePreview, plan);
+
         auto world = sim::generateWorld(std::move(*plan), clock, {.m_pool = generation_pool, .m_context = context});
         PPR_RETURN_UNEXPECTED_ON_FAIL(BiomeSamplePreview, world);
+
         auto particles = sim::seedMatterParticles(world->m_matter, world->m_grid, world->m_plan.recipe(), context);
         PPR_RETURN_UNEXPECTED_ON_FAIL(BiomeSamplePreview, particles);
         PPR_RETURN_UNEXPECTED_ON_FAIL(BiomeSamplePreview, context ? context->error() : std::error_code{});
+
         auto prepared = std::make_shared<WorldgenPreviewWorld>(
             WorldgenPreviewWorld{spec.m_profile, *fingerprint, std::move(*world), std::move(*particles)});
+
         for (u32 region = 0u; region < prepared->m_world.m_matter.m_regions.size(); ++region) {
             for (const auto span: prepared->m_world.m_matter.m_regions[region].m_spans) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(BiomeSamplePreview, context ? context->error() : std::error_code{});
@@ -211,12 +229,14 @@ namespace pP::colony {
                 }
             }
         }
+
         prepared->m_known_retained_payload_bytes = prepared->m_world.m_report.m_retained_known_payload_bytes +
                                                    particlePayload(prepared->m_particles) +
                                                    sizeof(prepared->m_matter_chunks);
         for (const auto &chunk: prepared->m_matter_chunks) {
             prepared->m_known_retained_payload_bytes += chunk.capacity() * sizeof(WorldgenPreviewWorld::MatterSpan);
         }
+
         prepared->m_known_preparation_scratch_peak_bytes = *std::ranges::max_element(
             prepared->m_world.m_report.m_known_phase_scratch_bytes);
         // The particle API does not expose its transient validation capacities;
@@ -231,19 +251,25 @@ namespace pP::colony {
             spec.m_origin.m_y > sim::kWorldEdge - kWorldgenPreviewEdge) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(BiomeSamplePreview, std::errc::result_out_of_range);
         }
+
         auto plan = compileWorldPlan(catalog, spec.m_profile, spec.m_seed);
         PPR_RETURN_UNEXPECTED_ON_FAIL(BiomeSamplePreview, plan);
+
         const sim::GenerationCellBounds visible{
             spec.m_origin.m_x, spec.m_origin.m_y, spec.m_origin.m_x + kWorldgenPreviewEdge,
             spec.m_origin.m_y + kWorldgenPreviewEdge};
+
         if (spec.m_mode == EWorldgenPreviewMode::whole_world_crop) {
             if (not world or not world->matches(catalog, spec)) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(BiomeSamplePreview, std::errc::invalid_argument);
             }
+
             auto layout = sim::restoreBiomeLayout(*plan, world->m_world.m_layout.sites());
             PPR_RETURN_UNEXPECTED_ON_FAIL(BiomeSamplePreview, layout);
+
             const auto support = align(expand(visible, 1u), sim::kChunkEdge);
             sim::ChunkGrid grid;
+
             for (u32 cy = support.m_bottom / sim::kChunkEdge; cy < support.m_top / sim::kChunkEdge; ++cy) {
                 for (u32 cx = support.m_left / sim::kChunkEdge; cx < support.m_right / sim::kChunkEdge; ++cx) {
                     PPR_RETURN_UNEXPECTED_ON_FAIL(BiomeSamplePreview, context ? context->error() : std::error_code{});
@@ -255,12 +281,15 @@ namespace pP::colony {
                         BiomeSamplePreview, grid.setCells({cx, cy}, Array<sim::Cell>{cells->begin(), cells->end()}));
                 }
             }
+
             u64 scratch{};
             auto matter = cropMatter(*world, visible, context, scratch);
             PPR_RETURN_UNEXPECTED_ON_FAIL(BiomeSamplePreview, matter);
+
             const u32 biome_index = sim::generationBiomeAt(
                 *plan, *layout, (visible.m_left + 0.5) * plan->recipe().m_cell_size_m,
                 (visible.m_bottom + 0.5) * plan->recipe().m_cell_size_m);
+
             WorldgenPreviewResult result{
                 std::move(catalog), std::move(spec), std::move(*plan), std::move(*layout), {}, std::move(grid), visible,
                 support, {16u, 16u, sim::kWorldEdge - 16u, sim::kWorldEdge - 16u}, biome_index};
@@ -268,34 +297,44 @@ namespace pP::colony {
             result.m_known_world_cache_payload_bytes = world->m_known_retained_payload_bytes;
             result.m_exact_world = world;
             result.m_particles.m_next_id = world->m_particles.m_next_id;
+
             for (const auto &batch: world->m_particles.m_chunks) {
                 const u32 x = batch.m_position.m_x * sim::kChunkEdge, y = batch.m_position.m_y * sim::kChunkEdge;
                 if (x >= support.m_left and x < support.m_right and y >= support.m_bottom and y < support.m_top) {
                     result.m_particles.m_chunks.push_back(batch);
                 }
             }
+
             result.m_filter_halo_fine = filterHalo(result.m_plan);
             result.m_known_scratch_peak_bytes = std::max(scratch, world->m_known_preparation_scratch_peak_bytes);
+
             for (const auto &rule: result.m_catalog.findWorld(result.m_spec.m_profile)->m_rules) {
                 result.m_participating_rules.push_back(rule.m_key);
             }
+
             result.m_omissions = {"simulation actors and runtime state"};
             PPR_RETURN_UNEXPECTED_ON_FAIL(BiomeSamplePreview, summarize(result, context));
             return result;
         }
+
         if (spec.m_mode != EWorldgenPreviewMode::biome_sample) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(BiomeSamplePreview, std::errc::invalid_argument);
         }
+
         const auto biome = std::ranges::find(catalog.biomes(), spec.m_biome, &BiomeDefinition::m_key);
         if (biome == catalog.biomes().end()) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(BiomeSamplePreview, std::errc::invalid_argument);
         }
+
         const u32 biome_index = static_cast<u32>(biome - catalog.biomes().begin());
+
         auto layout = sim::compileBiomeSampleLayout(*plan, biome_index, context);
         PPR_RETURN_UNEXPECTED_ON_FAIL(BiomeSamplePreview, layout);
+
         u64 scratch{};
         auto geometry = sim::compileBiomeSampleGeometry(*plan, *layout, context, &scratch);
         PPR_RETURN_UNEXPECTED_ON_FAIL(BiomeSamplePreview, geometry);
+
         // Numeric recipes cap formations at eight metres: 24 fine cells at 3:1.
         // Candidate roots include every footprint reaching the interior. A second
         // expansion supplies complete support and footprint validation for those roots.
@@ -306,6 +345,7 @@ namespace pP::colony {
                 static_cast<u32>(std::ceil(entry.m_formation_length_m / plan->recipe().m_cell_size_m)));
         }
         formation_reach += 4u;
+
         const auto domain = align(expand(visible, formation_reach), 16u);
         const auto support = align(expand(domain, formation_reach + 1u), sim::kChunkEdge);
         const u32 chunks = (support.m_right - support.m_left) /
@@ -314,6 +354,7 @@ namespace pP::colony {
         if (chunks > kWorldgenPreviewMaxResidentChunks) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(BiomeSamplePreview, std::errc::value_too_large);
         }
+
         sim::ChunkGrid grid;
         {
             auto raster = sim::compileGenerationRaster(*plan, *layout, *geometry, context);
@@ -327,9 +368,11 @@ namespace pP::colony {
                 }
             }
         }
+
         PPR_RETURN_UNEXPECTED_ON_FAIL(
             BiomeSamplePreview,
             sim::finishGenerationTerrainRegion(*plan, *layout, *geometry, grid, domain, context, &scratch));
+
         WorldgenPreviewResult result{
             std::move(catalog), std::move(spec), std::move(*plan), std::move(*layout), std::move(*geometry),
             std::move(grid), visible, support, domain, biome_index};
@@ -345,6 +388,7 @@ namespace pP::colony {
                 result.m_participating_rules.push_back(profile->m_rules[i].m_key);
             }
         }
+
         result.m_omissions = {
             "macro biome boundaries", "start reservation", "feature placements", "traversal connections",
             "initial matter", "backbone and playability validation"};

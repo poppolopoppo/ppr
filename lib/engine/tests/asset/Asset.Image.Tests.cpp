@@ -11,6 +11,10 @@ import engine.image;
 import std;
 
 namespace pP::tests::detail {
+    // ------------------------------------------------------------------
+    // image
+    // ------------------------------------------------------------------
+
     namespace Image {
         [[nodiscard]] mango::image::Format testRgbaFormat() {
             using mango::image::Format;

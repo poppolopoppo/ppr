@@ -69,10 +69,12 @@ namespace pP::colony {
             const sim::Entity entity = finder.m_entity;
             Array<u32> chain{};
             u32 node = end_node;
+
             while (node != none_v and node < finder.m_nodes.size()) {
                 chain.push_back(finder.m_nodes[node].m_packed);
                 node = finder.m_nodes[node].m_parent;
             }
+
             PathComp comp{};
             comp.m_partial = partial;
             if (chain.size() > 1u) {
@@ -88,6 +90,7 @@ namespace pP::colony {
                 }
                 comp.m_count = total;
             }
+
             finder = Pathfinder{};
             emitResult(registry, entity, comp);
         }

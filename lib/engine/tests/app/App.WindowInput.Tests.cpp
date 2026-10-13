@@ -13,6 +13,10 @@ import imgui_internal;
 import std;
 
 namespace pP::tests::detail {
+    // ------------------------------------------------------------------
+    // window input
+    // ------------------------------------------------------------------
+
     namespace SharedWindowInputGpu {
         // Shared process device for the window_input GPU leaves.
         //

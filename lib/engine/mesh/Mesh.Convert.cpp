@@ -259,6 +259,10 @@ namespace pP::mesh {
                 }
             }
 
+            // ------------------------------------------------------------------
+            // glb index vocabulary
+            // ------------------------------------------------------------------
+
             struct GlbBufferViewDesc {
                 u64 m_buffer = 0u;
                 u64 m_offset = 0u;
@@ -733,6 +737,10 @@ namespace pP::mesh {
                        lhs.offset.y == rhs.offset.y and
                        lhs.rotation == rhs.rotation;
             }
+
+            // ------------------------------------------------------------------
+            // baked uv transform
+            // ------------------------------------------------------------------
 
             struct BakedUvTransform {
                 m3d::UvTransform m_transform{};
@@ -1507,6 +1515,10 @@ namespace pP::mesh {
             }
         }
     }
+
+    // ------------------------------------------------------------------
+    // mesh error category
+    // ------------------------------------------------------------------
 
     namespace {
         class MeshErrorCategory final : public std::error_category {

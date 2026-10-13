@@ -7,6 +7,10 @@ import engine.core;
 import std;
 
 namespace pP::tests::detail {
+    // ------------------------------------------------------------------
+    // containers sparse vector
+    // ------------------------------------------------------------------
+
     namespace Sparse_vector {
         PPR_UNIT_TEST (allocation_and_free_list) {
             pP::SparseVector<int> vec;

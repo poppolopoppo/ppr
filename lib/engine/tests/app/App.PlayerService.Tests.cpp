@@ -8,6 +8,10 @@ import engine.app;
 import std;
 
 namespace pP::tests::detail {
+    // ------------------------------------------------------------------
+    // player service
+    // ------------------------------------------------------------------
+
     class PlayerServiceTestApp final : public Application {
     public:
         PlayerServiceTestApp()

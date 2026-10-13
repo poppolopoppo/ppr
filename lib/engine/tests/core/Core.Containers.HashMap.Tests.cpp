@@ -7,6 +7,10 @@ import engine.core;
 import std;
 
 namespace pP::tests::detail {
+    // ------------------------------------------------------------------
+    // containers hash map
+    // ------------------------------------------------------------------
+
     namespace Hash_map {
         PPR_UNIT_TEST (eviction) {
             pP::HashMap<int, int> m;

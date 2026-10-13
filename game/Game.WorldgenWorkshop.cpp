@@ -17,12 +17,14 @@ namespace pP::colony {
             Workshop, mode <= EGridDiagnosticMode::temperature and revision != 0u
                           ? std::error_code{}
                           : std::make_error_code(std::errc::invalid_argument));
+
         SimFramePacket packet{};
         packet = captureCatalogPresentation(
             preview.m_catalog, preview.m_spec.m_profile, preview.m_plan.recipe().m_boundary_material,
             kFineCellsPerMetre, kReferenceThicknessMetres);
         packet.m_world_generation = revision;
         packet.m_full_refresh = true;
+
         // Preview particles already carry canonical production IDs. Convert the
         // bounded immutable batches without constructing a partial game driver.
         for (const auto &batch: preview.m_particles.m_chunks) {
@@ -38,6 +40,7 @@ namespace pP::colony {
                 {sim::chunkIndexOf(batch.m_position),
                     std::make_shared<const Array<GridParticleInstance>>(std::move(particles))});
         }
+
         if (preview.m_plan.recipe().m_open_surface) {
             auto surface = std::make_shared<GridSurfaceProfile>();
             surface->m_cell_size_m = packet.m_cell_size_m;
@@ -47,6 +50,7 @@ namespace pP::colony {
             }
             packet.m_surface_profile = std::move(surface);
         }
+
         for (u32 cy = preview.m_support.m_bottom / sim::kChunkEdge; cy < preview.m_support.m_top / sim::kChunkEdge;
             ++cy) {
             for (u32 cx = preview.m_support.m_left / sim::kChunkEdge; cx < preview.m_support.m_right / sim::kChunkEdge;
@@ -61,12 +65,15 @@ namespace pP::colony {
                 packet.m_chunk_cells.push_back({position, Array<sim::Cell>{cells->begin(), cells->end()}});
             }
         }
+
         GridPass::GridStagedFrame stage{};
         PPR_RETURN_UNEXPECTED_ON_FAIL(Workshop, buildGridStagedFrame(packet, stage));
+
         // GridPass requires complete chunk ranges. The client marks the visible
         // interior separately from the retained contour/formation support context.
         stage.m_diagnostic_mode = mode;
         stage.m_diagnostic_revision = revision;
+
         if (mode == EGridDiagnosticMode::material) {
             stage.m_diagnostic_palette.resize(65536u);
             for (const auto &material: preview.m_catalog.materials()) {
@@ -84,6 +91,7 @@ namespace pP::colony {
                 stage.m_diagnostic_palette.push_back({(bin << 24u) | (green << 16u) | ((255u - bin) << 8u) | 255u});
             }
         }
+
         if (mode == EGridDiagnosticMode::biome or mode == EGridDiagnosticMode::temperature) {
             for (auto &upload: stage.m_uploads) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(Workshop, context.error());
@@ -93,16 +101,19 @@ namespace pP::colony {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(
                     Workshop,
                     cells.has_value() ? std::error_code{} : std::make_error_code(std::errc::state_not_recoverable));
+
                 upload.m_diagnostic_indices.resize(sim::kCellsPerChunk);
                 for (u32 i = 0u; i < sim::kCellsPerChunk; ++i) {
                     if (mode == EGridDiagnosticMode::biome) {
                         const double x = (position.m_x * sim::kChunkEdge + i % sim::kChunkEdge + 0.5) * kFineCellMetres;
                         const double y = (position.m_y * sim::kChunkEdge + i / sim::kChunkEdge + 0.5) * kFineCellMetres;
+
                         upload.m_diagnostic_indices[i] = static_cast<u16>(
                             sim::generationBiomeAt(preview.m_plan, preview.m_layout, x, y) + 1u);
                     } else if ((*cells)[i].m_element != 0u) {
                         const double unit = std::clamp(
                             (static_cast<double>((*cells)[i].m_temperature) - 200.0) / 800.0, 0.0, 1.0);
+
                         upload.m_diagnostic_indices[i] = static_cast<u16>(
                             std::min(255u, static_cast<u32>(unit * 256.0)) + 1u);
                     }
@@ -144,6 +155,7 @@ namespace pP::colony {
         std::unique_ptr<GridPass::GridStagedFrame> m_stage{};
         std::string m_diagnostic_text{};
     };
+
     WorldgenWorkshop::WorldgenWorkshop(
         ParallelScheduler &pool, const ITimerClock &clock, ParallelScheduler *const generation_pool)
         : m_pool(pool), m_clock(clock), m_generation_pool(generation_pool) {
@@ -180,11 +192,13 @@ namespace pP::colony {
     bool WorldgenWorkshop::busy() const noexcept {
         return m_running != nullptr or m_replacement != nullptr;
     }
+
     std::error_code WorldgenWorkshop::queue_(Request request) {
         PPR_RETURN_ERROR_ON_FAIL(
             Workshop, m_closing ? std::make_error_code(std::errc::operation_canceled) : std::error_code{});
         PPR_RETURN_ERROR_ON_FAIL(
             Workshop, m_next_request != 0u ? std::error_code{} : std::make_error_code(std::errc::value_too_large));
+
         request.m_id = m_next_request++;
         m_latest_request = request.m_id;
         if (m_running) {
@@ -194,6 +208,7 @@ namespace pP::colony {
         m_status = "Queued; the previous successful preview remains visible.";
         return {};
     }
+
     std::error_code WorldgenWorkshop::open(std::filesystem::path root, const std::optional<u64> discard_revision) {
         PPR_RETURN_ERROR_ON_FAIL(
             Workshop, root.empty() ? std::make_error_code(std::errc::invalid_argument) : std::error_code{});
@@ -201,38 +216,46 @@ namespace pP::colony {
             Workshop, not m_session or not m_session->dirty() or discard_revision == m_session->revision()
                           ? std::error_code{}
                           : std::make_error_code(std::errc::operation_not_permitted));
+
         Request request{};
         request.m_kind = Request::Kind::open;
         request.m_path = std::move(root);
         request.m_replaced_revision = m_session ? m_session->revision() : 0u;
         return queue_(std::move(request));
     }
+
     std::error_code WorldgenWorkshop::validate() {
         PPR_RETURN_ERROR_ON_FAIL(
             Workshop, m_session ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
+
         if (explicitOperationPending_()) {
             m_validation_pending = true;
             return {};
         }
+
         Request request{};
         request.m_kind = Request::Kind::validate;
         request.m_snapshot = m_session->draftSnapshot();
+
         PPR_RETURN_ERROR_ON_FAIL(Workshop, queue_(std::move(request)));
         m_validation_pending = false;
         return {};
     }
+
     std::error_code WorldgenWorkshop::requestPreview(WorldgenPreviewSpec spec, const EGridDiagnosticMode mode) {
         PPR_RETURN_ERROR_ON_FAIL(
             Workshop, m_session ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
         PPR_RETURN_ERROR_ON_FAIL(
             Workshop, not explicitOperationPending_() ? std::error_code{}
                                                       : std::make_error_code(std::errc::device_or_resource_busy));
+
         Request request{};
         request.m_kind = Request::Kind::preview;
         request.m_snapshot = m_session->draftSnapshot();
         spec.m_revision = request.m_snapshot->m_revision;
         request.m_spec = spec;
         request.m_mode = mode;
+
         PPR_RETURN_ERROR_ON_FAIL(Workshop, queue_(std::move(request)));
         m_live_spec = std::move(spec);
         m_live_mode = mode;
@@ -240,6 +263,7 @@ namespace pP::colony {
         m_validation_pending = false;
         return {};
     }
+
     void WorldgenWorkshop::configureLivePreview(
         const bool enabled, WorldgenPreviewSpec spec, const EGridDiagnosticMode mode) {
         if (not enabled or not m_session or m_closing) {
@@ -247,6 +271,7 @@ namespace pP::colony {
             m_live_pending = false;
             return;
         }
+
         spec.m_revision = m_session->revision();
         if (not m_live_enabled or not m_live_spec or *m_live_spec != spec or m_live_mode != mode) {
             m_live_spec = std::move(spec);
@@ -256,20 +281,24 @@ namespace pP::colony {
         }
         m_live_enabled = true;
     }
+
     std::error_code WorldgenWorkshop::save() {
         PPR_RETURN_ERROR_ON_FAIL(
             Workshop,
             m_session and not busy() ? std::error_code{} : std::make_error_code(std::errc::device_or_resource_busy));
+
         Request request{};
         request.m_kind = Request::Kind::save;
         request.m_snapshot = m_session->draftSnapshot();
         return queue_(std::move(request));
     }
+
     std::error_code WorldgenWorkshop::exportPreview(std::filesystem::path path, const WorldgenPreviewDisplay display) {
         PPR_RETURN_ERROR_ON_FAIL(
             Workshop, m_last_preview and not path.empty() and not busy()
                           ? std::error_code{}
                           : std::make_error_code(std::errc::invalid_argument));
+
         Request request{};
         request.m_kind = Request::Kind::export_preview;
         request.m_path = std::move(path);
@@ -278,6 +307,7 @@ namespace pP::colony {
         request.m_export = m_last_preview;
         return queue_(std::move(request));
     }
+
     void WorldgenWorkshop::cancel() noexcept {
         m_live_pending = false;
         m_validation_pending = false;
@@ -288,13 +318,16 @@ namespace pP::colony {
         ++m_latest_request;
         m_status = "Cancellation requested. Draft and last good preview retained.";
     }
+
     void WorldgenWorkshop::close() noexcept {
         m_closing = true;
         cancel();
     }
+
     std::unique_ptr<GridPass::GridStagedFrame> WorldgenWorkshop::takePresentation() {
         return std::move(m_presentation);
     }
+
     bool WorldgenWorkshop::explicitOperationPending_() const noexcept {
         const auto explicit_operation = [](const Request::Kind kind) {
             return kind == Request::Kind::open or kind == Request::Kind::save or kind == Request::Kind::export_preview;
@@ -302,19 +335,23 @@ namespace pP::colony {
         return (m_running and explicit_operation(m_running->m_request.m_kind)) or
                (m_replacement and explicit_operation(m_replacement->m_kind));
     }
+
     std::error_code WorldgenWorkshop::update() {
         if (m_running and m_task.valid() and m_task.wait_for(std::chrono::seconds{0}) == std::future_status::ready) {
             const auto error = m_task.get();
             const auto state = m_running;
             m_completed = std::move(m_running);
+
             // An atomic replacement may have committed before cancellation.
             // Always advance its matching session baseline, preserving newer edits.
             if (state->m_saved and m_session and state->m_saved->m_snapshot.m_root == m_session->root()) {
                 (void) m_session->acceptSave(std::move(*state->m_saved));
             }
+
             if (error == std::errc::operation_canceled and not m_replacement and not m_closing) {
                 m_status = "Cancelled. Draft and last good preview retained.";
             }
+
             if (state->m_request.m_id == m_latest_request and not m_closing) {
                 m_diagnostics = state->m_diagnostic_text;
                 const bool diagnostic_matches = m_session and
@@ -328,6 +365,7 @@ namespace pP::colony {
                     m_diagnostic_root = m_session->root();
                     m_diagnostic_revision = m_session->revision();
                 }
+
                 // Operational and rejected-edit errors do not invalidate source.
                 // Only a completed catalog validation controls preview admission.
                 if (diagnostic_matches and
@@ -342,6 +380,7 @@ namespace pP::colony {
                         m_invalid_draft_revision = 0u;
                     }
                 }
+
                 if (error == std::errc::operation_canceled) {
                     m_status = "Cancelled. Draft and last good preview retained.";
                 } else if (error) {
@@ -403,11 +442,13 @@ namespace pP::colony {
                 }
             }
         }
+
         // Explicit I/O owns its snapshot until completion. Live edits may replace
         // numerical work, but must never cancel a save, open, or export.
         if (m_validation_pending and not m_closing and not explicitOperationPending_()) {
             PPR_RETURN_ERROR_ON_FAIL(Workshop, validate());
         }
+
         if (m_live_pending and
             m_live_spec and
             m_live_enabled and
@@ -421,13 +462,16 @@ namespace pP::colony {
                 PPR_RETURN_ERROR_ON_FAIL(Workshop, requestPreview(*m_live_spec, m_live_mode));
             }
         }
+
         if (m_running or not m_replacement or m_closing) {
             return {};
         }
+
         auto state = std::make_shared<State>();
         state->m_request = *m_replacement;
         state->m_world = m_world_cache;
         std::tie(state->m_context, state->m_cancel) = context::withCancelClause(context::background());
+
         // Retain the previous completed task until a worker owns its final disposal.
         const auto retired = m_completed;
         const auto retired_preview = m_retired_preview;
@@ -437,6 +481,7 @@ namespace pP::colony {
                 auto execute = [&]() -> std::error_code {
                     PPR_RETURN_ERROR_ON_FAIL(Workshop, state->m_context->error());
                     auto &request = state->m_request;
+
                     if (request.m_kind == Request::Kind::open) {
                         auto opened = ContentAuthoringSession::open(
                             request.m_path, state->m_diagnostics, state->m_context.get());
@@ -505,6 +550,7 @@ namespace pP::colony {
             return {};
         }
         PPR_RETURN_ERROR_ON_FAIL(Workshop, task);
+
         m_completed.reset();
         m_retired_preview.reset();
         m_task = std::move(*task);
@@ -513,6 +559,7 @@ namespace pP::colony {
         m_status = "Working; edits can queue one replacement snapshot.";
         return {};
     }
+
     std::error_code WorldgenWorkshop::shutdown() {
         close();
         std::error_code error{};

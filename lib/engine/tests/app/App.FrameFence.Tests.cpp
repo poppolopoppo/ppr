@@ -276,6 +276,7 @@ namespace pP::tests::detail {
         // ------------------------------------------------------------------
         // GPU tests: real device, real fence, real submissions.
         // ------------------------------------------------------------------
+
         // Headless-proven in this file (real Renderer + real fence values):
         //   two_truly_pending_submissions_via_real_fence_values (B3: two
         //     accepted N/N+1 both uncompleted at assert time under the

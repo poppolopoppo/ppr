@@ -6,6 +6,10 @@ import engine.core;
 import std;
 
 export namespace pP::sim {
+    // ------------------------------------------------------------------
+    // geometry vocabulary
+    // ------------------------------------------------------------------
+
     inline constexpr u32 kMaxGenerationSegments = 1024u * 1024u;
     inline constexpr u32 kGenerationStartRule = (std::numeric_limits<u32>::max)();
     struct GenerationInstance {
@@ -31,6 +35,11 @@ export namespace pP::sim {
         };
         Array<Blob> m_blobs;
     };
+
+    // ------------------------------------------------------------------
+    // geometry compilation
+    // ------------------------------------------------------------------
+
     /// Derives all nonlocal features, worms and room links before any chunk
     /// rasterization. Required placement exhaustion never silently omits work.
     [[nodiscard]] Expected<GenerationGeometry> compileGenerationGeometry(

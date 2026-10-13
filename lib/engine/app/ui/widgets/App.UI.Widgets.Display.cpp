@@ -9,6 +9,10 @@ import std;
 
 namespace pP::ui {
     namespace {
+        // ------------------------------------------------------------------
+        // widget helpers
+        // ------------------------------------------------------------------
+
         struct DisplayWindowScope {
             ~DisplayWindowScope() noexcept {
                 ImGui::End();
@@ -194,6 +198,10 @@ namespace pP::ui {
         }
 
     }
+
+    // ------------------------------------------------------------------
+    // display widget
+    // ------------------------------------------------------------------
 
     /// Dedicated Display window (help-window precedent: centered, fixed
     /// chrome, reopenable). Edits land in the session draft only; every

@@ -12,6 +12,10 @@ import engine.rhi;
 import std;
 
 namespace pP::tests::detail {
+    // ------------------------------------------------------------------
+    // render view
+    // ------------------------------------------------------------------
+
     namespace RendererBoundary {
         PPR_UNIT_TEST (color_attachment_ops_have_sane_defaults) {
             const ColorAttachmentOps options{};

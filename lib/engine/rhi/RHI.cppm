@@ -20,6 +20,10 @@ namespace slang_rhi {
 }
 
 export namespace pP::rhi {
+    // ------------------------------------------------------------------
+    // error codes
+    // ------------------------------------------------------------------
+
     using errc = shader::errc;
 
     [[nodiscard]] const std::error_category &error_category() noexcept;
@@ -71,6 +75,10 @@ export namespace pP::rhi {
     using slang_rhi::DeviceInfo;
     using slang_rhi::DeviceLimits;
     using slang_rhi::DeviceType;
+
+    // ------------------------------------------------------------------
+    // projection free functions
+    // ------------------------------------------------------------------
 
     [[nodiscard]] float4x4 getOrthoMatrix(float width, float height) noexcept;
 
@@ -173,6 +181,10 @@ export namespace Slang {
 
 export namespace pP {
     using Slang::make_error_code;
+
+    // ------------------------------------------------------------------
+    // rhi service
+    // ------------------------------------------------------------------
 
     class IRhiService : public IService {
     public:

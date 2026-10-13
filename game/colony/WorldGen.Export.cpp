@@ -26,6 +26,7 @@ namespace pP::colony {
         std::error_code matterRow(
             const ContentCatalog &catalog, const sim::GeneratedWorld &world, const u32 y, Array<Color> &row) {
             std::ranges::fill(row, Color{});
+
             for (const auto &region: world.m_matter.m_regions) {
                 const auto *const material = catalog.findMaterial(region.m_material);
                 PPR_RETURN_ERROR_ON_FAIL(
@@ -58,18 +59,24 @@ namespace pP::colony {
                 world.m_geometry.m_instances.size(), world.m_geometry.m_segments.size(),
                 world.m_geometry.m_blobs.size(), world.m_geometry.m_omitted_instances.size(),
                 world.m_geometry.m_worst_placement_attempts);
+
             for (u32 phase = 0u; phase < world.m_report.m_phase_times.size(); ++phase) {
                 result += std::format("{}{:.9f}", phase ? "," : "", time::seconds(world.m_report.m_phase_times[phase]));
             }
+
             result += std::format(
                 "],\n\"memory_accounting_available\":{},\"retained_known_payload_bytes\":{},\"known_phase_scratch_bytes\":[",
                 world.m_report.m_retained_known_payload_bytes != 0u, world.m_report.m_retained_known_payload_bytes);
+
             for (u32 phase = 0u; phase < world.m_report.m_known_phase_scratch_bytes.size(); ++phase) {
                 result += std::format("{}{}", phase ? "," : "", world.m_report.m_known_phase_scratch_bytes[phase]);
             }
+
             result +=
                 "],\n\"memory_scope\":\"Known vector payload capacities and inline spatial heads; raster chunk buffers use a live-task requested-payload bound. Excludes allocator/reallocation overhead, opaque noise/task allocations and stacks. Not process peak memory.\",\n\"materials\":[";
+
             bool first = true;
+
             for (const auto count: world.m_report.m_material_counts) {
                 const auto *const material = catalog.findMaterial(count.m_material);
                 result += std::format(
@@ -77,8 +84,10 @@ namespace pP::colony {
                     material ? material->m_key : "vacuum", count.m_cells);
                 first = false;
             }
+
             result += "],\n\"biomes\":[";
             first = true;
+
             for (const auto &biome: catalog.biomes()) {
                 const auto color = rgb(biome.m_preview_color_rgba);
                 result += std::format(
@@ -86,8 +95,10 @@ namespace pP::colony {
                     static_cast<u32>(color[0u]), static_cast<u32>(color[1u]), static_cast<u32>(color[2u]));
                 first = false;
             }
+
             result += "],\n\"initial_matter\":[";
             first = true;
+
             for (const auto &region: world.m_matter.m_regions) {
                 result += std::format(
                     "{}{{\"identity\":\"{:016x}\",\"material\":{},\"temperature_k\":{},\"bulk_density_kg_m3\":{},"
@@ -98,6 +109,7 @@ namespace pP::colony {
                     region.m_spans.size());
                 first = false;
             }
+
             result += "]\n}\n";
             return result;
         }
@@ -121,6 +133,7 @@ namespace pP::colony {
             biome_index >= catalog.biomes().size()) {
             PPR_RETURN_ERROR_ON_FAIL(WorldExport, std::errc::invalid_argument);
         }
+
         const u32 width = bounds.m_right - bounds.m_left, height = bounds.m_top - bounds.m_bottom;
         constexpr std::array<std::string_view, 3u> names{"material.ppm", "biome.ppm", "temperature.ppm"};
         std::array<std::ofstream, 3u> files;
@@ -130,11 +143,14 @@ namespace pP::colony {
                 WorldExport, files[mode] ? std::error_code{} : std::make_error_code(std::errc::io_error));
             files[mode] << "P6\n" << width << ' ' << height << "\n255\n";
         }
+
         std::array<Array<u8>, 3u> rows;
         for (auto &row: rows) {
             row.resize(width * 3u);
         }
+
         const auto biome_color = rgb(catalog.biomes()[biome_index].m_preview_color_rgba);
+
         for (u32 image_y = 0u; image_y < height; ++image_y) {
             PPR_RETURN_ERROR_ON_FAIL(WorldExport, context ? context->error() : std::error_code{});
             const u32 y = bounds.m_top - 1u - image_y;
@@ -166,12 +182,14 @@ namespace pP::colony {
                     WorldExport, files[mode] ? std::error_code{} : std::make_error_code(std::errc::io_error));
             }
         }
+
         for (auto &file: files) {
             file.close();
             PPR_RETURN_ERROR_ON_FAIL(WorldExport, file ? std::error_code{} : std::make_error_code(std::errc::io_error));
         }
         return {};
     }
+
     std::error_code exportWorldDiagnostics(
         const ContentCatalog &catalog, const sim::GeneratedWorld &world, const WorldDescriptor &descriptor,
         const std::filesystem::path &directory, const IContext *const context) {
@@ -184,6 +202,7 @@ namespace pP::colony {
         std::error_code error;
         std::filesystem::create_directories(directory, error);
         PPR_RETURN_ERROR_ON_FAIL(WorldExport, error);
+
         constexpr std::array<std::string_view, 4u> names{
             "material.ppm", "biome.ppm", "temperature.ppm", "initial-matter.ppm"};
         std::array<std::ofstream, 4u> files;
@@ -193,6 +212,7 @@ namespace pP::colony {
                 WorldExport, files[mode] ? std::error_code{} : std::make_error_code(std::errc::io_error));
             files[mode] << "P6\n" << kPreviewEdge << ' ' << kPreviewEdge << "\n255\n";
         }
+
         Array<Color> material_colors(65536u);
         for (const auto &material: catalog.materials()) {
             material_colors[material.m_numeric_id] = rgb(material.m_color_rgba);
@@ -203,6 +223,7 @@ namespace pP::colony {
             row.resize(kPreviewEdge);
         }
         Array<u8> bytes(kPreviewEdge * 3u);
+
         for (u32 image_y = 0u; image_y < kPreviewEdge; ++image_y) {
             PPR_RETURN_ERROR_ON_FAIL(WorldExport, context ? context->error() : std::error_code{});
             for (auto &row: rows) {
@@ -238,10 +259,12 @@ namespace pP::colony {
                     WorldExport, files[mode] ? std::error_code{} : std::make_error_code(std::errc::io_error));
             }
         }
+
         for (auto &file: files) {
             file.close();
             PPR_RETURN_ERROR_ON_FAIL(WorldExport, file ? std::error_code{} : std::make_error_code(std::errc::io_error));
         }
+
         PPR_RETURN_ERROR_ON_FAIL(WorldExport, context ? context->error() : std::error_code{});
         PPR_RETURN_ERROR_ON_FAIL(WorldExport, writeText(directory / "report.json", machine_report));
         PPR_RETURN_ERROR_ON_FAIL(

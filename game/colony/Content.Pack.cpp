@@ -72,15 +72,18 @@ namespace pP::colony {
                     m.m_metallic, m.m_roughness, m.m_emissive_rgb[0u], m.m_emissive_rgb[1u], m.m_emissive_rgb[2u],
                     m.m_emissive_strength, m.m_alpha_mode, m.m_ior, m.m_normal_scale, m.m_refraction_depth_m,
                     m.m_texture_sampling);
+
                 if (include_path) {
                     value(m.m_normal_texture);
                     if (m.m_representation == EMaterialRepresentation::particle) {
                         value(m.m_albedo_texture);
                     }
                 }
+
                 if (m.m_representation == EMaterialRepresentation::particle) {
                     value(m.m_texture_period_m);
                 }
+
                 if (m.m_representation == EMaterialRepresentation::terrain) {
                     if (include_path) {
                         text(*m.m_albedo_texture);
@@ -136,6 +139,7 @@ namespace pP::colony {
                                          const std::error_code failure) {
                 return textureFailure(target, failed_path, source, message, failure, normal_map);
             };
+
             std::error_code error{};
             const auto path = std::filesystem::canonical(root / relative, error);
             if (error) {
@@ -144,6 +148,7 @@ namespace pP::colony {
                     failTexture(
                         diagnostics, root / relative, material, "Cannot resolve required terrain texture", error));
             }
+
             const auto within = path.lexically_relative(root);
             if (within.empty() or within.is_absolute() or *within.begin() == "..") {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(
@@ -151,6 +156,7 @@ namespace pP::colony {
                                        diagnostics, path, material, "Texture escapes the pack root",
                                        std::make_error_code(std::errc::invalid_argument)));
             }
+
             const bool regular = std::filesystem::is_regular_file(path, error);
             if (error) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(
@@ -163,6 +169,7 @@ namespace pP::colony {
                                        diagnostics, path, material, "Texture must be a regular file",
                                        std::make_error_code(std::errc::invalid_argument)));
             }
+
             const auto size = std::filesystem::file_size(path, error);
             if (error) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(
@@ -176,6 +183,7 @@ namespace pP::colony {
                         diagnostics, path, material, "Texture exceeds per-image or aggregate pack byte limits",
                         std::make_error_code(std::errc::file_too_large)));
             }
+
             auto mapped = io::mapFile(path);
             if (not mapped and mapped.error() == std::errc::not_enough_memory) {
                 throw std::bad_alloc{};
@@ -191,6 +199,7 @@ namespace pP::colony {
                                        diagnostics, path, material, "Required terrain texture changed while loading",
                                        std::make_error_code(std::errc::resource_unavailable_try_again)));
             }
+
             const mem::SharedBufferView bytes{reinterpret_cast<const std::byte *>(mapped->c_str()), mapped->size()};
             const image::ImageDecodeDesc desc{
                 .m_limits = {
@@ -199,6 +208,7 @@ namespace pP::colony {
                     .m_max_decoded_bytes = (std::min) (remaining_decoded,
                         u64{kMaxContentTextureDimension} * kMaxContentTextureDimension * 4u),
                     .m_max_input_bytes = kMaxTextureInputBytes}};
+
             auto decoded = image::decodeToRgba8(
                 bytes, path.extension().string(), desc,
                 normal_map ? image::EImageUsage::data : image::EImageUsage::color);
@@ -211,6 +221,7 @@ namespace pP::colony {
                                        diagnostics, path, material,
                                        "Cannot decode required terrain texture within pack limits", decoded.error()));
             }
+
             // Build immutable, sRGB-aware levels on the content coordinator,
             // before render-lane upload. Count the whole chain against the pack budget.
             const image::MipGenDesc mip_desc{
@@ -261,6 +272,7 @@ namespace pP::colony {
                 }
             }
         });
+
         hash.sequence(m_fields, [&](const auto &field) {
             const auto &v = field.m_noise;
             hash.values(
@@ -268,6 +280,7 @@ namespace pP::colony {
                 v.m_warp_amplitude_m, v.m_warp_frequency_per_metre, v.m_axis_scale_x, v.m_axis_scale_y,
                 v.m_rotation_degrees);
         });
+
         hash.sequence(m_biomes, [&](const auto &v) {
             hash.values(
                 v.m_key, v.m_display_name, v.m_preview_color_rgba, v.m_temperature_base_k, v.m_temperature_variation_k,
@@ -297,6 +310,7 @@ namespace pP::colony {
                     b.m_orientation_min_degrees, b.m_orientation_max_degrees);
             });
         });
+
         hash.sequence(m_features, [&](const auto &v) {
             const auto &b = v.m_reservation;
             hash.values(
@@ -309,6 +323,7 @@ namespace pP::colony {
             });
             hash.sequence(v.m_markers, [&](const auto &b) { hash.values(b.m_key, b.m_role, b.m_x_fine, b.m_y_fine); });
         });
+
         hash.sequence(m_worlds, [&](const auto &v) {
             hash.values(
                 v.m_key, v.m_display_name, v.m_default_wall_material_id, v.m_boundary_fine, v.m_min_sites,
@@ -342,6 +357,7 @@ namespace pP::colony {
                 std::visit([&](const auto &parameters) { hash.rule(parameters); }, b.m_parameters);
             });
         });
+
         hash.sequence(m_backgrounds, [&](const auto &stack) {
             hash.value(stack.m_key);
             hash.sequence(stack.m_layers, [&](const auto &layer) {
@@ -394,12 +410,14 @@ namespace pP::colony {
         const IContext *const context) try {
         const auto cancelled = [&]() -> std::error_code { return context ? context->error() : std::error_code{}; };
         PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, cancelled());
+
         std::error_code error{};
         const auto canonical_root = std::filesystem::canonical(root, error);
         if (error) {
             diagnostics.add(root.string(), "pack", "Cannot resolve pack root", error);
             PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, error);
         }
+
         auto manifest = decodePackManifest(
             source.m_manifest_source.m_bytes, source.m_manifest_source.m_path.string(), diagnostics);
         PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, manifest);
@@ -409,28 +427,33 @@ namespace pP::colony {
                 std::make_error_code(std::errc::invalid_argument));
             PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, std::errc::invalid_argument);
         }
+
         const auto &documents = source.m_documents;
         const auto &materials = documents[static_cast<std::size_t>(EContentDocument::materials)];
         auto catalog = decodeMaterialCatalog(materials.m_bytes, materials.m_path.string(), diagnostics);
         PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, catalog);
         catalog->m_pack_id = source.m_manifest.m_pack_id;
+
         const auto &fields = documents[static_cast<std::size_t>(EContentDocument::fields)];
         PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, cancelled());
         auto decoded_fields = decodeFieldDefinitions(fields.m_bytes, fields.m_path.string(), diagnostics);
         PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, decoded_fields);
         catalog->m_fields = std::move(*decoded_fields);
+
         const auto &biomes = documents[static_cast<std::size_t>(EContentDocument::biomes)];
         PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, cancelled());
         auto decoded_biomes = decodeBiomeDefinitions(
             biomes.m_bytes, biomes.m_path.string(), *catalog, catalog->fields(), diagnostics);
         PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, decoded_biomes);
         catalog->m_biomes = std::move(*decoded_biomes);
+
         const auto &features = documents[static_cast<std::size_t>(EContentDocument::features)];
         PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, cancelled());
         auto decoded_features = decodeFeatureDefinitions(
             features.m_bytes, features.m_path.string(), *catalog, diagnostics);
         PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, decoded_features);
         catalog->m_features = std::move(*decoded_features);
+
         const auto &worlds = documents[static_cast<std::size_t>(EContentDocument::worlds)];
         PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, cancelled());
         auto decoded_worlds = decodeWorldProfiles(
@@ -438,11 +461,13 @@ namespace pP::colony {
             diagnostics);
         PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, decoded_worlds);
         catalog->m_worlds = std::move(*decoded_worlds);
+
         const auto &backgrounds = documents[static_cast<std::size_t>(EContentDocument::backgrounds)];
         auto decoded_backgrounds = decodeBackgroundDefinitions(
             backgrounds.m_bytes, backgrounds.m_path.string(), diagnostics);
         PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, decoded_backgrounds);
         catalog->m_backgrounds = std::move(*decoded_backgrounds);
+
         for (const auto &world: catalog->worlds()) {
             if (std::ranges::none_of(catalog->m_backgrounds, [&](const auto &stack) {
                     return stack.m_key == world.m_background_stack;
@@ -480,6 +505,7 @@ namespace pP::colony {
                 catalog->m_textures.push_back(std::move(*texture));
             }
         }
+
         for (const auto &stack: catalog->m_backgrounds) {
             for (const auto &layer: stack.m_layers) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, cancelled());
@@ -504,6 +530,7 @@ namespace pP::colony {
                 catalog->m_textures.push_back(std::move(*texture));
             }
         }
+
         PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, cancelled());
         catalog->m_content_fingerprint = catalog->computeContentFingerprint();
         return std::move(*catalog);

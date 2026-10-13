@@ -42,6 +42,10 @@ import std;
 //   on the test thread can never strand a worker.
 
 namespace pP::tests::detail {
+    // ------------------------------------------------------------------
+    // concurrency scheduler
+    // ------------------------------------------------------------------
+
     namespace Scheduler {
         [[nodiscard]] std::size_t queueBytes() noexcept {
             return static_cast<std::size_t>(hal::page_granularity);

@@ -7,6 +7,10 @@ import engine.core;
 import std;
 
 namespace pP::tests::detail {
+    // ------------------------------------------------------------------
+    // containers core
+    // ------------------------------------------------------------------
+
     namespace Container {
         PPR_UNIT_TEST (traits_relocatable_fundamentals) {
             PPR_TEST_ASSERT(details::relocatable<int>::value);

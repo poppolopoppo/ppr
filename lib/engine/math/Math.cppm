@@ -9,6 +9,10 @@ import engine.core;
 import std;
 
 export namespace pP::math {
+    // ------------------------------------------------------------------
+    // contour vocabulary
+    // ------------------------------------------------------------------
+
     // Unit dual cell between four sample centres. Corner bits and vertices are
     // LL, LR, UR, UL (0..3), then bottom/right/top/left midpoints (4..7).
     struct ContourPoint {
@@ -40,6 +44,10 @@ export namespace pP::math {
 }
 
 namespace pP::math::details {
+    // ------------------------------------------------------------------
+    // rounding and conversion helpers
+    // ------------------------------------------------------------------
+
     template<std::floating_point T>
     [[nodiscard]] constexpr T roundHalfAwayFromZero(const T value) noexcept {
         return std::round(value);
@@ -96,6 +104,10 @@ namespace pP::math::details {
 }
 
 export namespace pP {
+    // ------------------------------------------------------------------
+    // vector and matrix aliases
+    // ------------------------------------------------------------------
+
     using namespace mango::math;
 
     using int2 = int32x2;
@@ -116,6 +128,10 @@ export namespace pP {
 
     using float3x3 = Matrix3x3;
     using float4x4 = Matrix4x4;
+
+    // ------------------------------------------------------------------
+    // scalar and vector operations
+    // ------------------------------------------------------------------
 
     using mango::math::abs;
     using mango::math::acos;
@@ -158,6 +174,10 @@ export namespace pP {
     using mango::math::transpose;
     using mango::math::trunc;
 
+    // ------------------------------------------------------------------
+    // rotation vocabulary and operations
+    // ------------------------------------------------------------------
+
     using mango::math::AngleAxis;
     using mango::math::EulerAngles;
     using mango::math::Quaternion;
@@ -168,6 +188,10 @@ export namespace pP {
 
     using mango::math::packQuaternion;
     using mango::math::unpackQuaternion;
+
+    // ------------------------------------------------------------------
+    // geometry vocabulary
+    // ------------------------------------------------------------------
 
     using mango::math::Box;
     using mango::math::Cone;
@@ -182,6 +206,10 @@ export namespace pP {
     using mango::math::Triangle;
 
     namespace math {
+        // ------------------------------------------------------------------
+        // axes and directions
+        // ------------------------------------------------------------------
+
         inline const float3 axis_x{1, 0, 0};
         inline const float3 axis_y{0, 1, 0};
         inline const float3 axis_z{0, 0, 1};
@@ -195,11 +223,19 @@ export namespace pP {
         inline const float3 forward{axis_z};
         inline const float3 backward{-axis_z};
 
+        // ------------------------------------------------------------------
+        // intersection operations
+        // ------------------------------------------------------------------
+
         using mango::math::Intersect;
         using mango::math::IntersectBarycentric;
         using mango::math::IntersectBarycentricTwosided;
         using mango::math::IntersectRange;
         using mango::math::IntersectSolid;
+
+        // ------------------------------------------------------------------
+        // easing curves
+        // ------------------------------------------------------------------
 
         using mango::math::easeInBack;
         using mango::math::easeInBounce;
@@ -232,11 +268,19 @@ export namespace pP {
         using mango::math::easeInOutSine;
 
         namespace details {
+            // ------------------------------------------------------------------
+            // arithmetic and value-generator concepts
+            // ------------------------------------------------------------------
+
             template<typename T>
             concept TArithmetic = std::is_arithmetic_v<T>;
 
             template<auto ValueGeneratorV, typename T>
             concept TValueGenerator = requires { ValueGeneratorV.template operator()<T>(); };
+
+            // ------------------------------------------------------------------
+            // polymorphic constants
+            // ------------------------------------------------------------------
 
             // Accept any callable object as a Non-Type Template Parameter
             template<auto ValueGeneratorV>
@@ -285,6 +329,10 @@ export namespace pP {
             struct Number<void, ValueGeneratorV> {
                 static constexpr PolymorphicConstant<ValueGeneratorV> value{};
             };
+
+            // ------------------------------------------------------------------
+            // identity constant
+            // ------------------------------------------------------------------
 
             struct IdentityValue {
                 template<typename IdentityT>

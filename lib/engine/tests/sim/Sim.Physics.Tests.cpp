@@ -9,6 +9,10 @@ import engine.sim;
 import std;
 
 namespace pP::tests::detail {
+    // ------------------------------------------------------------------
+    // physics
+    // ------------------------------------------------------------------
+
     namespace PhysicsSuite {
         PPR_UNIT_TEST (shared_contours_preserve_all_binary_topologies) {
             for (u32 bits = 0u; bits < 16u; ++bits) {

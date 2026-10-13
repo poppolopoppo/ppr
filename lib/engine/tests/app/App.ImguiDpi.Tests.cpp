@@ -9,6 +9,10 @@ import engine.math;
 import std;
 
 namespace pP::tests::detail {
+    // ------------------------------------------------------------------
+    // imgui dpi
+    // ------------------------------------------------------------------
+
     namespace ImguiDpi {
         [[nodiscard]] constexpr float2 framebufferScaleFor(const int2 logical, const int2 framebuffer) noexcept {
             float2 scale{1.0f};

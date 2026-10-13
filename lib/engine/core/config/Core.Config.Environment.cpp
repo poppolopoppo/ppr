@@ -44,6 +44,7 @@ namespace pP::config {
             std::free(raw);
             return std::nullopt;
         }
+
         // RAII owner: a throwing std::string construction still frees.
         const std::unique_ptr<char, decltype(&std::free)> owner{raw, &std::free};
         if (owner == nullptr) {

@@ -193,6 +193,7 @@ namespace pP::sim {
         std::ranges::sort(supports, [](const auto &a, const auto &b) {
             return a.m_y != b.m_y ? a.m_y > b.m_y : a.m_left < b.m_left;
         });
+
         std::optional<double> floor;
         const double body_half_width = recipe.m_actor_half_width_m * scale;
         for (std::size_t i = 0u; i < supports.size();) {
@@ -226,6 +227,7 @@ namespace pP::sim {
             *floor + recipe.m_start_clearance_m * scale > bounds.m_max_y) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(WorldStart, make_error_code(EGenerationErrc::start_invalid));
         }
+
         for (const auto &triangle: triangles) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(WorldStart, canceled(context));
             if (overlaps(triangle, route_left, route_right, *floor, *floor + recipe.m_start_clearance_m * scale)) {

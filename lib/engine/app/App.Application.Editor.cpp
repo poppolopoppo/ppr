@@ -82,6 +82,10 @@ namespace pP {
     // ReSharper disable once CppUseInternalLinkage
     PPR_DEFINE_LOG_CATEGORY(Editor, debug, none)
 
+    // ------------------------------------------------------------------
+    // application editor
+    // ------------------------------------------------------------------
+
     ApplicationEditor::ApplicationEditor(const std::string_view name, const std::span<const char *const> argv)
         : ApplicationEditor(name, argv, nullptr) {
     }
@@ -116,6 +120,10 @@ namespace pP {
 
     ApplicationEditor::~ApplicationEditor() noexcept = default;
 
+    // ------------------------------------------------------------------
+    // client service
+    // ------------------------------------------------------------------
+
     safe_ptr<const Camera> ApplicationEditor::getMainCamera() const noexcept {
         return m_camera.get();
     }
@@ -147,6 +155,10 @@ namespace pP {
     safe_ptr<InputContext> ApplicationEditor::getMainInputContext() noexcept {
         return safe_ptr(&m_main_input_context->m_context);
     }
+
+    // ------------------------------------------------------------------
+    // lifecycle
+    // ------------------------------------------------------------------
 
     std::error_code ApplicationEditor::initialize() {
         PPR_RETURN_ERROR_ON_FAIL(Editor, Application::initialize());
@@ -336,6 +348,10 @@ namespace pP {
         return default_value_v;
     }
 
+    // ------------------------------------------------------------------
+    // scene flow
+    // ------------------------------------------------------------------
+
     std::error_code ApplicationEditor::replaceMainCameraController(
         std::unique_ptr<ICameraController> controller, const ECameraProjection projection) {
         if (not controller) [[unlikely]] {
@@ -490,6 +506,10 @@ namespace pP {
         }
         return default_value_v;
     }
+
+    // ------------------------------------------------------------------
+    // teardown
+    // ------------------------------------------------------------------
 
     std::error_code ApplicationEditor::shutdown() {
         std::error_code first_err{};
@@ -835,6 +855,10 @@ namespace pP {
         return first_err;
     }
 
+    // ------------------------------------------------------------------
+    // frame update and settlement
+    // ------------------------------------------------------------------
+
     void ApplicationEditor::onMainWindowFocused_([[maybe_unused]] const Window &window, const bool focused) {
         setBackgroundPriority(backgroundThrottleWanted_(focused));
 
@@ -981,6 +1005,10 @@ namespace pP {
             fence_aware->notifyFrameSubmitted(accepted);
         }
     }
+
+    // ------------------------------------------------------------------
+    // lane submission and execution
+    // ------------------------------------------------------------------
 
     std::error_code ApplicationEditor::submitRenderWork_(const FramePacket &packet) {
         // CLIENT lane (main): detach the UI frame, then hand the owned

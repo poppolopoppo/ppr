@@ -9,6 +9,10 @@ import engine.math;
 import std;
 
 namespace pP::tests::detail {
+    // ------------------------------------------------------------------
+    // devices
+    // ------------------------------------------------------------------
+
     namespace DeviceHarness {
         struct Capture {
             Array<InputMessage> messages{};

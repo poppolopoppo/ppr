@@ -11,6 +11,10 @@ import engine.rhi;
 import std;
 
 namespace pP::tests::detail {
+    // ------------------------------------------------------------------
+    // camera
+    // ------------------------------------------------------------------
+
     constexpr float kEps = 1e-4f;
 
     [[nodiscard]] bool matEq(const float4x4 &a, const float4x4 &b) noexcept {

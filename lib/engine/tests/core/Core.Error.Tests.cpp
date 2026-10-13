@@ -7,6 +7,10 @@ import engine.core;
 import std;
 
 namespace pP::tests::detail {
+    // ------------------------------------------------------------------
+    // error
+    // ------------------------------------------------------------------
+
     PPR_DEFINE_LOG_CATEGORY(ThrowProbe, warning, none)
 
     namespace ThrowPolicy {

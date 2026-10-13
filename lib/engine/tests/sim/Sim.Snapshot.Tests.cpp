@@ -9,6 +9,10 @@ import engine.sim;
 import std;
 
 namespace pP::tests::detail {
+    // ------------------------------------------------------------------
+    // snapshot
+    // ------------------------------------------------------------------
+
     namespace SnapshotSuite {
         using namespace pP::sim;
 

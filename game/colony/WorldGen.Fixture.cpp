@@ -119,6 +119,7 @@ namespace pP::colony {
         [[nodiscard]] static Layout deriveLayout(const u64 seed) noexcept {
             Layout layout{};
             u64 state = seed + 0x9E3779B97F4A7C15ULL;
+
             layout.m_pocket_x = 1024u + static_cast<u32>(nextStream(state) % 2048u);
             layout.m_pocket_y = 1024u + static_cast<u32>(nextStream(state) % 2048u);
             layout.m_pocket_radius = 240u + static_cast<u32>(nextStream(state) % 145u);
@@ -164,12 +165,14 @@ namespace pP::colony {
         [[nodiscard]] static Tuned tuneLayout(const Layout &layout) noexcept {
             Tuned tuned{};
             const float pocket_radius = static_cast<float>(layout.m_pocket_radius);
+
             tuned.m_pocket_core2 = pocket_radius * pocket_radius * 0.3025f;
             tuned.m_pocket_rim2 = pocket_radius * pocket_radius;
             tuned.m_lens_x = static_cast<float>(layout.m_lens_x);
             tuned.m_lens_y = static_cast<float>(layout.m_lens_y);
             tuned.m_lens_rx = static_cast<float>(layout.m_lens_rx);
             tuned.m_lens_ry = static_cast<float>(layout.m_lens_ry);
+
             for (u32 index = 0u; index < kVentCount; ++index) {
                 const float radius = static_cast<float>(layout.m_vent_radius[index]);
                 tuned.m_vent_r2[index] = radius * radius;
@@ -299,6 +302,7 @@ namespace pP::colony {
                     if (not prior.has_value()) [[unlikely]] {
                         continue;
                     }
+
                     Cell carved = *prior;
                     carved.m_element = kVacuum;
                     PPR_VERIFY(not grid.setCell(pos, carved));
@@ -334,6 +338,7 @@ namespace pP::colony {
             const hal::ProfileScope scope{"Sim.WorldGen.CarveCaverns"};
             const u64 turn_seed = seed ^ 0xB09A11uLL;
             const u64 radius_seed = seed ^ 0xCA9E0uLL;
+
             for (u32 worm = 0u; worm < kWormCount; ++worm) {
                 auto px = static_cast<float>(layout.m_worm_x[worm]);
                 auto py = static_cast<float>(layout.m_worm_y[worm]);
@@ -341,6 +346,7 @@ namespace pP::colony {
 
                 for (u32 step = 0u; step < layout.m_worm_steps[worm]; ++step) {
                     PPR_RETURN_ERROR_ON_FAIL(WorldGeneration, canceled(execution));
+
                     // Same hashed turn stream as before (`hash01` in
                     // [-0.5, 0.5)); a turn beyond half a compass step
                     // (0.5 * (pi/8) / 0.9 ~= 0.21816616) nudges the heading
@@ -373,6 +379,7 @@ namespace pP::colony {
         [[nodiscard]] static std::error_code carveVentShafts(
             ChunkGrid &grid, const Layout &layout, const GenerationExecution &execution) {
             const hal::ProfileScope scope{"Sim.WorldGen.CarveVentShafts"};
+
             for (u32 index = 0u; index < kVentCount; ++index) {
                 const u32 vent_x = layout.m_vent_x[index];
                 const u32 vent_y = layout.m_vent_y[index];
@@ -409,16 +416,20 @@ namespace pP::colony {
         const auto &execution = requested_execution != nullptr ? *requested_execution : serial;
         const hal::ProfileScope scope{"Sim.WorldGen.Generate"};
         PPR_RETURN_ERROR_ON_FAIL(WorldGeneration, WorldGen::canceled(execution));
+
         const WorldGen::Layout layout = WorldGen::deriveLayout(seed);
         const WorldGen::Tuned tuned = WorldGen::tuneLayout(layout);
+
         if (execution.m_stage != nullptr) {
             execution.m_stage->store(EGenerationStage::terrain, std::memory_order_release);
         }
         const auto fill = [&](const u32 c) -> std::error_code {
             PPR_RETURN_ERROR_ON_FAIL(WorldGeneration, WorldGen::canceled(execution));
+
             Array<Cell> chunk(kCellsPerChunk);
             const u32 chunk_x = c % kChunksPerEdge;
             const u32 chunk_y = c / kChunksPerEdge;
+
             for (u32 ly = 0u; ly < kChunkEdge; ++ly) {
                 PPR_RETURN_ERROR_ON_FAIL(WorldGeneration, WorldGen::canceled(execution));
                 for (u32 lx = 0u; lx < kChunkEdge; ++lx) {
@@ -426,9 +437,11 @@ namespace pP::colony {
                         chunk_x * kChunkEdge + lx, chunk_y * kChunkEdge + ly, seed, layout, tuned);
                 }
             }
+
             // ChunkGrid's slot arrays are fixed at construction; each worker
             // owns one payload/state slot, without concurrent topology growth.
             PPR_RETURN_ERROR_ON_FAIL(WorldGeneration, grid.setCells(ChunkPos{chunk_x, chunk_y}, std::move(chunk)));
+
             if (execution.m_completed_chunks != nullptr) {
                 execution.m_completed_chunks->fetch_add(1u, std::memory_order_relaxed);
             }
@@ -438,11 +451,13 @@ namespace pP::colony {
         ParallelScheduler *const pool = execution.m_pool;
         const bool parallel = pool != nullptr and not pool->isWorkerThread();
         constexpr u32 kBatch = 32u;
+
         for (u32 first = 0u; first < kChunkCount; first += kBatch) {
             std::array<std::future<std::error_code>, kBatch> pending{};
             u32 admitted = 0u;
             std::error_code error{};
             std::exception_ptr exception{};
+
             try {
                 for (u32 c = first; c < std::min(first + kBatch, kChunkCount); ++c) {
                     if (error = WorldGen::canceled(execution); error) {
@@ -473,6 +488,7 @@ namespace pP::colony {
             } catch (...) {
                 exception = std::current_exception();
             }
+
             // Drain every accepted task before destroying the borrowed layout,
             // even if admission, a sibling or coordinator allocation throws.
             for (u32 i = 0u; i < admitted; ++i) {
@@ -487,6 +503,7 @@ namespace pP::colony {
                     }
                 }
             }
+
             if (exception) {
                 std::rethrow_exception(exception);
             }
@@ -496,8 +513,10 @@ namespace pP::colony {
         if (execution.m_stage != nullptr) {
             execution.m_stage->store(EGenerationStage::caves, std::memory_order_release);
         }
+
         PPR_RETURN_ERROR_ON_FAIL(WorldGeneration, WorldGen::carveCaverns(grid, seed, layout, execution));
         PPR_RETURN_ERROR_ON_FAIL(WorldGeneration, WorldGen::carveVentShafts(grid, layout, execution));
+
         if (execution.m_stage != nullptr) {
             execution.m_stage->store(EGenerationStage::complete, std::memory_order_release);
         }

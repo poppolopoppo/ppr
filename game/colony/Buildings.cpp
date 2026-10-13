@@ -22,6 +22,7 @@ namespace pP::colony {
             const double bottom = static_cast<double>(print.m_min.m_y) / 3.0;
             const double right = static_cast<double>(print.m_min.m_x + print.m_width) / 3.0;
             const double top = static_cast<double>(print.m_min.m_y + print.m_height) / 3.0;
+
             for (const auto &[entity, agent]: registry.view<Agent>()) {
                 (void) agent;
                 const auto *const pose = registry.get<sim::BodyState>(entity);
@@ -128,9 +129,11 @@ namespace pP::colony {
             print.m_height % 3u != 0u) {
             PPR_RETURN_ERROR_ON_FAIL(ColonyBuilding, std::errc::invalid_argument);
         }
+
         const auto bounds = constructionFootprint(
             {print.m_min.m_x / 3u, print.m_min.m_y / 3u}, {print.m_width / 3u, print.m_height / 3u});
         PPR_RETURN_ERROR_ON_FAIL(ColonyBuilding, bounds);
+
         for (u32 y = bounds->m_begin.m_y; y < bounds->m_end.m_y; ++y) {
             for (u32 x = bounds->m_begin.m_x; x < bounds->m_end.m_x; ++x) {
                 const auto cell = grid.getCell({x, y});
@@ -140,11 +143,13 @@ namespace pP::colony {
                 }
             }
         }
+
         const auto overlap = actorOverlaps(registry, print);
         PPR_RETURN_ERROR_ON_FAIL(ColonyBuilding, overlap);
         if (*overlap) {
             PPR_RETURN_ERROR_ON_FAIL(ColonyBuilding, std::errc::device_or_resource_busy);
         }
+
         for (const auto &[entity, errand]: registry.view<BuildErrand>()) {
             (void) entity;
             const auto &other = errand.m_print;
@@ -164,6 +169,7 @@ namespace pP::colony {
         const u32 cell_budget, const ContentCatalog *const catalog,
         const std::optional<std23::function_ref<std::error_code(sim::ChunkPos)>> before_write) {
         Array<sim::Entity> live{};
+
         for (const auto &[entity, errand]: registry.view<BuildErrand>()) {
             if (errand.m_total != errand.m_print.m_width * errand.m_print.m_height or
                 errand.m_progress > errand.m_total) {
@@ -199,8 +205,10 @@ namespace pP::colony {
                 live.push_back(entity);
             }
         }
+
         u32 left = cell_budget;
         bool wrote = false;
+
         for (const sim::Entity entity: live) {
             BuildErrand *errand = registry.get<BuildErrand>(entity);
             if (errand == nullptr) {
@@ -252,6 +260,7 @@ namespace pP::colony {
                 break;
             }
         }
+
         if (wrote) {
             finder = Pathfinder{};
         }

@@ -29,12 +29,14 @@ namespace pP::colony {
         while (m_held_slices != 0u) {
             PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, m_steps.runSystems(m_registry));
             PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, m_step_error);
+
             if (m_edit) {
                 m_resume_edit_tick = true;
                 // Prefix stopped before search/planning/movement. Retain this
                 // slice and every already-admitted catch-up slice exactly once.
                 return {};
             }
+
             m_resume_edit_tick = false;
             --m_held_slices;
             ++m_tick_count;
@@ -60,6 +62,7 @@ namespace pP::colony {
             candidate.m_chunks.push_back(std::move(*chunk));
             return {};
         };
+
         if (advance_build) {
             for (const auto &[entity, errand]: m_registry.view<BuildErrand>()) {
                 if (errand.m_progress < errand.m_total) {
@@ -67,6 +70,7 @@ namespace pP::colony {
                 }
             }
         }
+
         bool restore = true;
         PPR_DEFER {
             // Includes errors and fatal allocation unwinding. No partially
@@ -80,6 +84,7 @@ namespace pP::colony {
                 }
             }
         };
+
         if (not m_pending_digs.empty()) {
             const auto &dig = m_pending_digs.front();
             candidate.m_has_dig = true;
@@ -95,6 +100,7 @@ namespace pP::colony {
             candidate.m_dug = dug->m_dug;
             candidate.m_touched = dug->m_touched;
         }
+
         if (advance_build) {
             Pathfinder scratch{};
             // Capture only chunks actually written, bounded by this tick's
@@ -104,13 +110,16 @@ namespace pP::colony {
                                  grid(), m_registry, scratch, candidate.m_touched, kErrandCellsPerTick,
                                  contentCatalog(), std23::function_ref<std::error_code(sim::ChunkPos)>{capture}));
         }
+
         for (auto &row: candidate.m_errands) {
             row.m_candidate = m_registry.get<BuildErrand>(row.m_entity)->m_progress;
             m_registry.get<BuildErrand>(row.m_entity)->m_progress = row.m_original;
         }
+
         for (auto &chunk: candidate.m_chunks) {
             grid().exchangeChunk(chunk);
         }
+
         restore = false;
         if (candidate.m_touched.empty()) {
             for (const auto &row: candidate.m_errands) {
@@ -121,12 +130,15 @@ namespace pP::colony {
             }
             return {};
         }
+
         std::erase_if(candidate.m_chunks, [&](const auto &chunk) {
             return std::ranges::find(candidate.m_touched, chunk.position()) == candidate.m_touched.end();
         });
+
         auto particles = m_colony.particles().prepareTerrainEdit(grid(), candidate.m_chunks, 1.0 / cellsPerMetre());
         PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, particles);
         candidate.m_particles = std::move(*particles);
+
         for (const auto pos: candidate.m_touched) {
             u64 revision = 1u;
             for (const auto &row: m_present_revision_history) {
@@ -139,14 +151,17 @@ namespace pP::colony {
                 ColonyEdits, revision != 0u ? std::error_code{} : std::make_error_code(std::errc::value_too_large));
             candidate.m_manifest.push_back({pos, revision});
         }
+
         m_edit.emplace(std::move(candidate));
         // The admitted command belongs to the candidate, so later bounded
         // FIFO overflow cannot evict it or make settlement pop another dig.
         if (m_edit->m_has_dig) {
             m_pending_digs.erase(m_pending_digs.begin());
         }
+
         invalidateColliderCache();
         PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, prepareEditColliders());
+
         if (not m_require_edit_publication) {
             // Headless authored sessions publish the same prepared transaction
             // synchronously, without depending on a render acknowledgement.
@@ -163,8 +178,10 @@ namespace pP::colony {
         if (m_edit->m_colliders_ready) {
             return {};
         }
+
         Array<sim::ChunkPos> needed{};
         collectColliderInterest(needed);
+
         if (not m_edit->m_colliders_started) {
             if (m_colliders.pendingCount() != 0u) {
                 PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, rebuildChunks({}, needed, 2u));
@@ -190,6 +207,7 @@ namespace pP::colony {
             // The frozen candidate cache already owns the complete neighbor closure.
             PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, rebuildChunks({}, needed, 2u));
         }
+
         m_edit->m_colliders_ready = m_colliders.pendingCount() == 0u;
         return {};
     }
@@ -206,19 +224,25 @@ namespace pP::colony {
         if (not matches) {
             return {};
         }
+
         PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, m_colliders.commitCohort(m_scene));
         m_edit->m_colliders_started = false;
+
         for (auto &chunk: m_edit->m_chunks) {
             grid().exchangeChunk(chunk);
         }
+
         m_colony.particles().commitTerrainEdit(m_edit->m_particles);
+
         for (const auto &row: m_edit->m_errands) {
             m_registry.get<BuildErrand>(row.m_entity)->m_progress = row.m_candidate;
         }
+
         fanOutEditChunks(m_edit->m_touched);
         m_collider_dirty.clear(); // Already prepared and committed as one cohort.
         m_finder = Pathfinder{};
         m_dig_stats.m_dug_total += m_edit->m_dug;
+
         const auto wake_error = wakeBodiesNearEdit(m_edit->m_touched);
         // The transaction is committed even if the postcommit physics wake fails.
         m_edit.reset();

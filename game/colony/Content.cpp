@@ -894,6 +894,7 @@ namespace pP::colony {
                     result = std::move(descriptor);
                 }
             };
+
             std::apply([&](const auto &...member) { (inspect(member), ...); }, schema);
             return result;
         }
@@ -929,6 +930,7 @@ namespace pP::colony {
         }
         Array<std::string> recordKeys(const Document &document, const std::string_view prefix) {
             Array<std::string> result;
+
             for (const auto &entry: document.m_entries) {
                 if (entry.m_key.starts_with(prefix)) {
                     const auto remainder = std::string_view{entry.m_key}.substr(prefix.size());
@@ -938,6 +940,7 @@ namespace pP::colony {
                     }
                 }
             }
+
             std::ranges::sort(result);
             result.erase(std::unique(result.begin(), result.end()), result.end());
             return result;
@@ -964,7 +967,9 @@ namespace pP::colony {
             if (path.empty() or path.front() == '/' or path.find_first_of("\\:\0", 0u, 3u) != std::string_view::npos) {
                 return false;
             }
+
             std::size_t start = 0u;
+
             while (start < path.size()) {
                 const auto end = path.find('/', start);
                 const auto segment = path.substr(
@@ -1002,6 +1007,7 @@ namespace pP::colony {
             const Layer layers[] = {toLayer(document, std::string{origin})};
             auto resolved = resolve<MaterialRecord>(layers, diagnostics);
             PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, resolved);
+
             const auto &record = resolved->m_value;
             const auto location = [&](const std::string_view field) -> std::string_view {
                 const auto found = std::ranges::find(document.m_entries, field, &Entry::m_key);
@@ -1017,6 +1023,7 @@ namespace pP::colony {
                                        diagnostics, location("color_rgba"), "color_rgba",
                                        "Expected exactly eight hexadecimal RRGGBBAA digits"));
             }
+
             if (record.m_representation == EMaterialRepresentation::terrain) {
                 if (record.m_phase != EMaterialPhase::solid) {
                     PPR_RETURN_UNEXPECTED_ON_FAIL(
@@ -1037,23 +1044,27 @@ namespace pP::colony {
                                        diagnostics, origin, "representation",
                                        "Particle materials cannot declare terrain-only fields"));
             }
+
             if ((record.m_albedo_texture or record.m_normal_texture) and not record.m_texture_period_m) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(
                     ColonyContent,
                     reject(diagnostics, origin, "texture_period_m", "Textured materials require a world-space period"));
             }
+
             if (record.m_normal_texture and not validTexturePath(*record.m_normal_texture)) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(
                     ColonyContent, reject(
                                        diagnostics, location("normal_texture"), "normal_texture",
                                        "Expected a portable pack-relative path without dot segments"));
             }
+
             if (record.m_albedo_texture and not validTexturePath(*record.m_albedo_texture)) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(
                     ColonyContent, reject(
                                        diagnostics, location("albedo_texture"), "albedo_texture",
                                        "Expected a portable pack-relative path without dot segments"));
             }
+
             return MaterialDefinition{
                 key, record.m_numeric_id, record.m_display_name, record.m_phase, record.m_representation, color,
                 record.m_albedo_texture, record.m_texture_period_m, record.m_diggable, record.m_reference_density_kg_m3,
@@ -1076,6 +1087,7 @@ namespace pP::colony {
             }
             auto document = decode(bytes, origin, diagnostics, EDecodeMode::records);
             PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, document);
+
             std::ranges::sort(document->m_entries, {}, &Entry::m_key);
             const auto version = std::ranges::find(document->m_entries, "schema_version", &Entry::m_key);
             if (version == document->m_entries.end()) {
@@ -1093,6 +1105,7 @@ namespace pP::colony {
 
             std::map<std::string, Document, std::less<>> groups{};
             const std::string prefix = std::string{collection} + ".";
+
             for (const auto &entry: document->m_entries) {
                 if (entry.m_key == "schema_version") {
                     continue;
@@ -1120,6 +1133,7 @@ namespace pP::colony {
                 field.m_key = full.substr(separator + 1u);
                 groups[key].m_entries.push_back(std::move(field));
             }
+
             if (groups.empty()) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(
                     ColonyContent, reject(
@@ -1136,11 +1150,13 @@ namespace pP::colony {
             const Layer layers[] = {toLayer(document, std::string{origin})};
             auto resolved = resolve<FieldRecord>(layers, diagnostics);
             PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, resolved);
+
             const auto &record = resolved->m_value;
             const sim::NoiseFieldDesc noise{
                 record.m_algorithm, record.m_fractal, record.m_frequency_per_metre, record.m_octaves,
                 record.m_lacunarity, record.m_gain, record.m_warp_amplitude_m, record.m_warp_frequency_per_metre,
                 record.m_axis_scale_x, record.m_axis_scale_y, record.m_rotation_degrees};
+
             if (const auto error = sim::validateNoiseFieldDescription(noise)) {
                 // Translate the joint engine-domain constraint into authoring
                 // diagnostics; preserve the record's source location.
@@ -1179,6 +1195,7 @@ namespace pP::colony {
                 appendDiagnostics(diagnostics, local, prefix);
                 PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, presence);
             }
+
             const Layer layers[] = {toLayer(document, std::string{origin})};
             auto resolved = resolve<Record>(layers, local);
             appendDiagnostics(diagnostics, local, prefix);
@@ -1196,6 +1213,7 @@ namespace pP::colony {
             const std::string_view qualified_prefix, Diagnostics &diagnostics) {
             ChildRecords result{};
             const std::string prefix = std::string{collection} + ".";
+
             for (const auto &entry: document.m_entries) {
                 if (not entry.m_key.starts_with(prefix)) {
                     result.m_base.m_entries.push_back(entry);
@@ -1258,12 +1276,15 @@ namespace pP::colony {
             Diagnostics &diagnostics) {
             auto split = splitChildren(document, "materials", kMaxCompositionMaterials, prefix, diagnostics);
             PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, split);
+
             constexpr std::string_view required[] = {"order", "depth_min_normalized", "depth_max_normalized", "field"};
             auto record = resolveRecord<CompositionRecord>(split->m_base, required, origin, diagnostics, prefix);
             PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, record);
+
             PPR_RETURN_UNEXPECTED_ON_FAIL(
                 ColonyContent,
                 requireFieldReference(split->m_base, "field", record->m_field, fields, origin, prefix, diagnostics));
+
             if (record->m_depth_min_normalized >= record->m_depth_max_normalized) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(
                     ColonyContent,
@@ -1271,16 +1292,19 @@ namespace pP::colony {
                         diagnostics, fieldLocation(split->m_base, "depth_max_normalized", origin),
                         prefix + "depth_max_normalized", "Composition requires a nonempty increasing depth interval"));
             }
+
             if (split->m_children.empty()) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(
                     ColonyContent, reject(
                                        diagnostics, origin, prefix + "materials",
                                        "Composition requires named material choices", EConfigErrc::missing_value));
             }
+
             BiomeCompositionBand result{
                 key, record->m_order, record->m_depth_min_normalized, record->m_depth_max_normalized,
                 std::move(record->m_field), {}, 0.0, record->m_bed_period_m, record->m_bed_warp_m, record->m_bed_dip};
             constexpr std::string_view choice_required[] = {"material", "weight"};
+
             for (const auto &[choice_key, choice_document]: split->m_children) {
                 const std::string choice_prefix = prefix + "materials." + choice_key + ".";
                 auto choice = resolveRecord<WeightedMaterialRecord>(
@@ -1303,6 +1327,7 @@ namespace pP::colony {
                 result.m_total_weight = total;
                 result.m_materials.push_back({choice_key, *id, choice->m_weight});
             }
+
             if (std::ranges::none_of(
                     result.m_materials, [](const auto &choice) { return choice.m_material_id != 0u; })) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(
@@ -1310,8 +1335,10 @@ namespace pP::colony {
                                        diagnostics, origin, prefix + "materials",
                                        "Composition requires a terrain solid for the protected feature substrate"));
             }
+
             double cumulative = 0.0;
             double previous = 0.0;
+
             for (const auto &choice: result.m_materials) {
                 cumulative += choice.m_weight;
                 const double fraction = cumulative / result.m_total_weight;
@@ -1336,15 +1363,19 @@ namespace pP::colony {
                 "kind", "order", "field", "material", "host_material", "depth_min_normalized", "depth_max_normalized"};
             auto record = resolveRecord<DepositRecord>(document, required, origin, diagnostics, prefix);
             PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, record);
+
             PPR_RETURN_UNEXPECTED_ON_FAIL(
                 ColonyContent,
                 requireFieldReference(document, "field", record->m_field, fields, origin, prefix, diagnostics));
+
             auto material = terrainReference(
                 document, "material", record->m_material, materials, origin, prefix, diagnostics);
             PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, material);
+
             auto host = terrainReference(
                 document, "host_material", record->m_host_material, materials, origin, prefix, diagnostics);
             PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, host);
+
             if (record->m_depth_min_normalized >= record->m_depth_max_normalized) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(
                     ColonyContent,
@@ -1352,6 +1383,7 @@ namespace pP::colony {
                         diagnostics, fieldLocation(document, "depth_max_normalized", origin),
                         prefix + "depth_max_normalized", "Deposit depth interval must be nonempty and increasing"));
             }
+
             if (record->m_threshold_min >= record->m_threshold_max) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(
                     ColonyContent,
@@ -1359,6 +1391,7 @@ namespace pP::colony {
                         diagnostics, fieldLocation(document, "threshold_max", origin), prefix + "threshold_max",
                         "Deposit threshold interval must be nonempty and increasing"));
             }
+
             if (record->m_shape == sim::EGenerationDepositShape::field) {
                 for (const std::string_view property: {"threshold_min", "threshold_max"}) {
                     if (std::ranges::none_of(
@@ -1405,6 +1438,7 @@ namespace pP::colony {
                             "Blob deposits require a positive count and ordered positive radius/stretch/density ranges; sprinkle requires detail stage"));
                 }
             }
+
             return BiomeThresholdDeposit{
                 key, record->m_order, std::move(record->m_field), *material, *host, record->m_depth_min_normalized,
                 record->m_depth_max_normalized, record->m_threshold_min, record->m_threshold_max, record->m_shape,
@@ -1439,10 +1473,12 @@ namespace pP::colony {
             constexpr std::string_view required[] = {"order", "action", "shape", "x_fine", "y_fine"};
             auto record = resolveRecord<FeatureOperationRecord>(document, required, origin, diagnostics, prefix);
             PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, record);
+
             const bool capsule = record->m_shape == EFeatureShape::capsule;
             constexpr std::string_view box_fields[] = {"width_fine", "height_fine"};
             constexpr std::string_view capsule_fields[] = {"end_x_fine", "end_y_fine", "radius_m"};
             constexpr std::string_view material_fields[] = {"material"};
+
             PPR_RETURN_UNEXPECTED_ON_FAIL(
                 ColonyContent, conditionalFields(document, box_fields, not capsule, origin, prefix, diagnostics));
             PPR_RETURN_UNEXPECTED_ON_FAIL(
@@ -1464,6 +1500,7 @@ namespace pP::colony {
                 max_x = min_x + *record->m_width_fine;
                 max_y = min_y + *record->m_height_fine;
             }
+
             if (min_x < bounds.m_min_x_fine or
                 min_y < bounds.m_min_y_fine or
                 max_x > bounds.m_max_x_fine or
@@ -1474,12 +1511,14 @@ namespace pP::colony {
                                        "Operation geometry exceeds its reservation"));
             }
             u16 material_id{};
+
             if (record->m_action == EFeatureAction::paint) {
                 auto material = terrainReference(
                     document, "material", record->m_material, materials, origin, prefix, diagnostics);
                 PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, material);
                 material_id = *material;
             }
+
             return FeatureOperation{
                 key, record->m_order, record->m_action, record->m_shape, record->m_x_fine, record->m_y_fine,
                 record->m_width_fine.value_or(0u), record->m_height_fine.value_or(0u), record->m_end_x_fine.value_or(0),
@@ -1490,15 +1529,19 @@ namespace pP::colony {
             const std::string &key, const Document &document, const ContentCatalog &materials,
             const std::string_view origin, Diagnostics &diagnostics) {
             const std::string prefix = "features." + key + ".";
+
             auto operations = splitChildren(document, "operations", kMaxFeatureOperations, prefix, diagnostics);
             PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, operations);
+
             auto markers = splitChildren(operations->m_base, "markers", kMaxFeatureMarkers, prefix, diagnostics);
             PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, markers);
+
             constexpr std::string_view required[] = {
                 "display_name", "allow_horizontal_reflection", "reservation_min_x_fine", "reservation_min_y_fine",
                 "reservation_max_x_fine", "reservation_max_y_fine"};
             auto record = resolveRecord<FeatureRecord>(markers->m_base, required, origin, diagnostics, prefix);
             PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, record);
+
             const FeatureBounds bounds{
                 record->m_min_x_fine, record->m_min_y_fine, record->m_max_x_fine, record->m_max_y_fine};
             if (bounds.m_min_x_fine >= bounds.m_max_x_fine or
@@ -1519,6 +1562,7 @@ namespace pP::colony {
                                        diagnostics, origin, prefix + "operations",
                                        "At least one terrain operation is required", EConfigErrc::missing_value));
             }
+
             FeatureDefinition result{
                 key, std::move(record->m_display_name), record->m_allow_horizontal_reflection, bounds, {}, {}};
             for (const auto &[operation_key, operation_document]: operations->m_children) {
@@ -1542,6 +1586,7 @@ namespace pP::colony {
             }
 
             constexpr std::string_view marker_required[] = {"role", "x_fine", "y_fine"};
+
             for (const auto &[marker_key, marker_document]: markers->m_children) {
                 const std::string marker_prefix = prefix + "markers." + marker_key + ".";
                 auto marker = resolveRecord<FeatureMarkerRecord>(
@@ -1612,13 +1657,16 @@ namespace pP::colony {
             Diagnostics &diagnostics) {
             constexpr std::string_view header_required[] = {"kind", "phase", "order"};
             Document header_document{};
+
             for (const auto &entry: document.m_entries) {
                 if (std::ranges::find(header_required, entry.m_key) != std::end(header_required)) {
                     header_document.m_entries.push_back(entry);
                 }
             }
+
             auto header = resolveRecord<WorldRuleHeader>(header_document, header_required, origin, diagnostics, prefix);
             PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, header);
+
             EWorldRulePhase expected_phase = EWorldRulePhase::carve;
             switch (header->m_kind) {
                 case EWorldRuleKind::vein_worm: expected_phase = EWorldRulePhase::deposit; break;
@@ -1626,13 +1674,16 @@ namespace pP::colony {
                 case EWorldRuleKind::matter_fill: expected_phase = EWorldRulePhase::fill; break;
                 default: break;
             }
+
             if (header->m_phase != expected_phase) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(
                     ColonyContent, reject(
                                        diagnostics, fieldLocation(document, "phase", origin), prefix + "phase",
                                        "Rule kind is incompatible with this generation phase"));
             }
+
             WorldRuleDefinition result{key, header->m_order, header->m_kind, header->m_phase, {}};
+
             switch (header->m_kind) {
                 case EWorldRuleKind::threshold_cave: {
                     constexpr std::string_view required[] = {
@@ -1640,12 +1691,15 @@ namespace pP::colony {
                         "threshold_max"};
                     auto record = resolveRecord<WorldCaveRecord>(document, required, origin, diagnostics, prefix);
                     PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, record);
+
                     PPR_RETURN_UNEXPECTED_ON_FAIL(
                         ColonyContent,
                         worldBiomeReference(document, record->m_biome, choices, origin, prefix, diagnostics));
+
                     PPR_RETURN_UNEXPECTED_ON_FAIL(
                         ColonyContent,
                         requireFieldReference(document, "field", record->m_field, fields, origin, prefix, diagnostics));
+
                     PPR_RETURN_UNEXPECTED_ON_FAIL(
                         ColonyContent, worldInterval(
                                            document, "depth_max_normalized", record->m_depth_min_normalized,
@@ -1654,6 +1708,7 @@ namespace pP::colony {
                         ColonyContent, worldInterval(
                                            document, "threshold_max", record->m_threshold_min, record->m_threshold_max,
                                            false, origin, prefix, diagnostics));
+
                     result.m_parameters = WorldCaveRule{
                         std::move(record->m_biome), std::move(record->m_field), record->m_depth_min_normalized,
                         record->m_depth_max_normalized, record->m_threshold_min, record->m_threshold_max};
@@ -1666,9 +1721,11 @@ namespace pP::colony {
                         "length_max_m", "radius_min_m", "radius_max_m", "turn_probability"};
                     auto record = resolveRecord<WorldWormRecord>(document, required, origin, diagnostics, prefix);
                     PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, record);
+
                     PPR_RETURN_UNEXPECTED_ON_FAIL(
                         ColonyContent,
                         worldBiomeReference(document, record->m_biome, choices, origin, prefix, diagnostics));
+
                     PPR_RETURN_UNEXPECTED_ON_FAIL(
                         ColonyContent, worldInterval(
                                            document, "depth_max_normalized", record->m_depth_min_normalized,
@@ -1681,6 +1738,7 @@ namespace pP::colony {
                         ColonyContent, worldInterval(
                                            document, "radius_max_m", record->m_radius_min_m, record->m_radius_max_m,
                                            true, origin, prefix, diagnostics));
+
                     if (record->m_turn_smoothing == 0.0 and (record->m_radius_variation != 0.0 or
                                                                 record->m_chamber_probability != 0.0 or
                                                                 record->m_chamber_scale != 1.0)) {
@@ -1689,10 +1747,12 @@ namespace pP::colony {
                                                diagnostics, origin, prefix + "turn_smoothing",
                                                "Radius variation and chambers require positive turn smoothing"));
                     }
+
                     constexpr std::string_view material_fields[] = {"material", "host_material"};
                     const bool vein = header->m_kind == EWorldRuleKind::vein_worm;
                     PPR_RETURN_UNEXPECTED_ON_FAIL(
                         ColonyContent, conditionalFields(document, material_fields, vein, origin, prefix, diagnostics));
+
                     u16 material_id{}, host_id{};
                     if (vein) {
                         auto material = terrainReference(
@@ -1704,6 +1764,7 @@ namespace pP::colony {
                         material_id = *material;
                         host_id = *host;
                     }
+
                     result.m_parameters = WorldWormRule{
                         std::move(record->m_biome), record->m_count, record->m_depth_min_normalized,
                         record->m_depth_max_normalized, record->m_length_min_m, record->m_length_max_m,
@@ -1716,6 +1777,7 @@ namespace pP::colony {
                     constexpr std::string_view required[] = {"radius_m", "extra_links"};
                     auto record = resolveRecord<WorldConnectionRecord>(document, required, origin, diagnostics, prefix);
                     PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, record);
+
                     result.m_parameters = WorldConnectionRule{
                         record->m_radius_m, record->m_extra_links, record->m_natural_anchors, record->m_wells,
                         record->m_branches, record->m_roughness_m};
@@ -1727,12 +1789,14 @@ namespace pP::colony {
                         "max_count", "attempts", "priority", "reflect"};
                     auto record = resolveRecord<WorldFeatureRecord>(document, required, origin, diagnostics, prefix);
                     PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, record);
+
                     PPR_RETURN_UNEXPECTED_ON_FAIL(
                         ColonyContent,
                         worldBiomeReference(document, record->m_biome, choices, origin, prefix, diagnostics));
                     auto feature = worldFeatureReference(
                         document, "feature", record->m_feature, features, origin, prefix, diagnostics);
                     PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, feature);
+
                     PPR_RETURN_UNEXPECTED_ON_FAIL(
                         ColonyContent, worldInterval(
                                            document, "depth_max_normalized", record->m_depth_min_normalized,
@@ -1741,12 +1805,14 @@ namespace pP::colony {
                         ColonyContent, worldInterval(
                                            document, "max_count", record->m_min_count, record->m_max_count, true,
                                            origin, prefix, diagnostics));
+
                     if (record->m_reflect and not (*feature)->m_allow_horizontal_reflection) {
                         PPR_RETURN_UNEXPECTED_ON_FAIL(
                             ColonyContent, reject(
                                                diagnostics, fieldLocation(document, "reflect", origin),
                                                prefix + "reflect", "Template does not allow horizontal reflection"));
                     }
+
                     result.m_parameters = WorldFeatureRule{
                         std::move(record->m_feature), std::move(record->m_biome), record->m_depth_min_normalized,
                         record->m_depth_max_normalized, record->m_spacing_m, record->m_min_count, record->m_max_count,
@@ -1758,6 +1824,7 @@ namespace pP::colony {
                         "feature_rule", "marker", "material", "temperature_k", "bulk_density_kg_m3"};
                     auto record = resolveRecord<WorldMatterRecord>(document, required, origin, diagnostics, prefix);
                     PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, record);
+
                     const auto *const material = materials.findMaterial(record->m_material);
                     if (not material or material->m_representation != EMaterialRepresentation::particle) {
                         PPR_RETURN_UNEXPECTED_ON_FAIL(
@@ -1766,11 +1833,13 @@ namespace pP::colony {
                                 diagnostics, fieldLocation(document, "material", origin), prefix + "material",
                                 "Initial matter requires a particle material reference"));
                     }
+
                     constexpr std::string_view height_fields[] = {"fill_height_m"};
                     PPR_RETURN_UNEXPECTED_ON_FAIL(
                         ColonyContent, conditionalFields(
                                            document, height_fields, material->m_phase != EMaterialPhase::gas, origin,
                                            prefix, diagnostics));
+
                     if (record->m_fill_height_m and not discreteFineCellLength(std::abs(*record->m_fill_height_m))) {
                         PPR_RETURN_UNEXPECTED_ON_FAIL(
                             ColonyContent,
@@ -1778,6 +1847,7 @@ namespace pP::colony {
                                 diagnostics, fieldLocation(document, "fill_height_m", origin), prefix + "fill_height_m",
                                 "Fill height must be an exact integer fine-cell boundary in metres"));
                     }
+
                     result.m_parameters = WorldMatterRule{
                         std::move(record->m_feature_rule), std::move(record->m_marker), material->m_numeric_id,
                         record->m_temperature_k, record->m_bulk_density_kg_m3, record->m_fill_height_m};
@@ -1796,25 +1866,30 @@ namespace pP::colony {
                 "distance_max_m"};
             double total_weight = 0.0;
             u32 required_sites = 0u;
+
             for (const auto &[choice_key, choice_document]: documents) {
                 const std::string choice_prefix = prefix + "biomes." + choice_key + ".";
                 auto choice = resolveRecord<WorldBiomeRecord>(
                     choice_document, choice_required, origin, diagnostics, choice_prefix);
                 PPR_RETURN_ERROR_ON_FAIL(ColonyContent, choice);
+
                 if (std::ranges::find(biomes, choice->m_biome, &BiomeDefinition::m_key) == biomes.end()) {
                     PPR_RETURN_ERROR_ON_FAIL(
                         ColonyContent, reject(
                                            diagnostics, fieldLocation(choice_document, "biome", origin),
                                            choice_prefix + "biome", "Unknown biome reference"));
                 }
+
                 PPR_RETURN_ERROR_ON_FAIL(
                     ColonyContent, worldInterval(
                                        choice_document, "depth_max_normalized", choice->m_depth_min_normalized,
                                        choice->m_depth_max_normalized, false, origin, choice_prefix, diagnostics));
+
                 PPR_RETURN_ERROR_ON_FAIL(
                     ColonyContent, worldInterval(
                                        choice_document, "distance_max_m", choice->m_distance_min_m,
                                        choice->m_distance_max_m, true, origin, choice_prefix, diagnostics));
+
                 required_sites += choice->m_required_count;
                 if (required_sites > result.m_max_sites) {
                     PPR_RETURN_ERROR_ON_FAIL(
@@ -1823,6 +1898,7 @@ namespace pP::colony {
                             diagnostics, fieldLocation(choice_document, "required_count", origin),
                             choice_prefix + "required_count", "Required biome counts exceed the profile site cap"));
                 }
+
                 const double next_weight = total_weight + choice->m_weight;
                 if (not std::isfinite(next_weight) or next_weight == total_weight) {
                     PPR_RETURN_ERROR_ON_FAIL(
@@ -1836,6 +1912,7 @@ namespace pP::colony {
                         choice->m_depth_min_normalized, choice->m_depth_max_normalized, choice->m_distance_min_m,
                         choice->m_distance_max_m});
             }
+
             double cumulative = 0.0, previous = 0.0;
             for (const auto &choice: result.m_biomes) {
                 cumulative += choice.m_weight;
@@ -1849,6 +1926,7 @@ namespace pP::colony {
                 }
                 previous = fraction;
             }
+
             if (std::ranges::none_of(
                     result.m_biomes, [&](const auto &choice) { return choice.m_biome == result.m_start_biome; })) {
                 PPR_RETURN_ERROR_ON_FAIL(
@@ -1866,15 +1944,18 @@ namespace pP::colony {
             const std::string_view origin, const std::string &prefix, Diagnostics &diagnostics) {
             constexpr std::string_view resource_required[] = {
                 "marker", "material", "minimum_fine_cells", "max_distance_m"};
+
             for (const auto &[resource_key, resource_document]: documents) {
                 const std::string resource_prefix = prefix + "start_resources." + resource_key + ".";
                 auto resource = resolveRecord<StartResourceRecord>(
                     resource_document, resource_required, origin, diagnostics, resource_prefix);
                 PPR_RETURN_ERROR_ON_FAIL(ColonyContent, resource);
+
                 auto id = terrainReference(
                     resource_document, "material", resource->m_material, materials, origin, resource_prefix,
                     diagnostics);
                 PPR_RETURN_ERROR_ON_FAIL(ColonyContent, id);
+
                 if (not *materials.findMaterial(*id)->m_diggable) {
                     PPR_RETURN_ERROR_ON_FAIL(
                         ColonyContent,
@@ -1882,6 +1963,7 @@ namespace pP::colony {
                             diagnostics, fieldLocation(resource_document, "material", origin),
                             resource_prefix + "material", "Guaranteed starting resource must be diggable"));
                 }
+
                 const auto marker = std::ranges::find(start.m_markers, resource->m_marker, &FeatureMarker::m_key);
                 if (marker == start.m_markers.end() or
                     marker->m_role != EFeatureMarkerRole::resource_anchor or
@@ -1894,6 +1976,7 @@ namespace pP::colony {
                             diagnostics, fieldLocation(resource_document, "marker", origin), resource_prefix + "marker",
                             "Resource alcoves require distinct resource-anchor markers in the start template"));
                 }
+
                 const double dx = static_cast<double>(marker->m_x_fine - spawn.m_x_fine) / 3.0;
                 const double dy = static_cast<double>(marker->m_y_fine - spawn.m_y_fine) / 3.0;
                 if (std::hypot(dx, dy) > resource->m_max_distance_m) {
@@ -1903,6 +1986,7 @@ namespace pP::colony {
                                            resource_prefix + "max_distance_m",
                                            "Resource anchor lies beyond its maximum start distance"));
                 }
+
                 result.m_start_resources.push_back(
                     {resource_key, std::move(resource->m_marker), *id, resource->m_minimum_fine_cells,
                         resource->m_max_distance_m});
@@ -1918,12 +2002,14 @@ namespace pP::colony {
             Diagnostics &diagnostics) {
             u32 worm_count = 0u, feature_count = 0u, connection_count = 0u;
             u64 origin_attempts = 0u;
+
             for (const auto &[rule_key, rule_document]: documents) {
                 const std::string rule_prefix = prefix + "rules." + rule_key + ".";
                 auto rule = compileWorldRule(
                     rule_key, rule_document, materials, fields, result.m_biomes, features, origin, rule_prefix,
                     diagnostics);
                 PPR_RETURN_ERROR_ON_FAIL(ColonyContent, rule);
+
                 if (const auto *const worm = std::get_if<WorldWormRule>(&rule->m_parameters)) {
                     worm_count += worm->m_count;
                     origin_attempts += static_cast<u64>(worm->m_count) * sim::kGenerationWormOriginAttempts;
@@ -1935,6 +2021,7 @@ namespace pP::colony {
                 if (rule->m_kind == EWorldRuleKind::connect_rooms) {
                     ++connection_count;
                 }
+
                 if (worm_count > 4096u or
                     feature_count > 1024u or
                     connection_count > 1u or
@@ -1946,8 +2033,10 @@ namespace pP::colony {
                             "Profile exceeds aggregate limits: 4096 worms, 1024 feature instances, one room-connection rule, 4194304 origin attempts",
                             EConfigErrc::out_of_range));
                 }
+
                 result.m_rules.push_back(std::move(*rule));
             }
+
             std::ranges::sort(result.m_rules, [](const auto &a, const auto &b) {
                 return std::tie(a.m_phase, a.m_order, a.m_key) < std::tie(b.m_phase, b.m_order, b.m_key);
             });
@@ -1963,6 +2052,7 @@ namespace pP::colony {
                             EConfigErrc::duplicate_key));
                 }
             }
+
             for (const auto &rule: result.m_rules) {
                 const auto *const fill = std::get_if<WorldMatterRule>(&rule.m_parameters);
                 if (not fill) {
@@ -2009,12 +2099,16 @@ namespace pP::colony {
             const std::span<const FeatureDefinition> features, const std::string_view origin,
             Diagnostics &diagnostics) {
             const std::string prefix = "worlds." + key + ".";
+
             auto choices = splitChildren(document, "biomes", kMaxContentBiomes, prefix, diagnostics);
             PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, choices);
+
             auto rules = splitChildren(choices->m_base, "rules", kMaxWorldRules, prefix, diagnostics);
             PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, rules);
+
             auto resources = splitChildren(rules->m_base, "start_resources", kMaxStartResources, prefix, diagnostics);
             PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, resources);
+
             constexpr std::string_view required[] = {
                 "display_name", "default_wall_material", "boundary_fine", "min_sites", "max_sites", "site_attempts",
                 "site_spacing_m", "boundary_warp_amplitude_m", "boundary_warp_x_field", "boundary_warp_y_field",
@@ -2022,14 +2116,17 @@ namespace pP::colony {
                 "start_route_width_m", "background_stack"};
             auto record = resolveRecord<WorldProfileRecord>(resources->m_base, required, origin, diagnostics, prefix);
             PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, record);
+
             const auto &base = resources->m_base;
             PPR_RETURN_UNEXPECTED_ON_FAIL(
                 ColonyContent,
                 worldInterval(
                     base, "max_sites", record->m_min_sites, record->m_max_sites, true, origin, prefix, diagnostics));
+
             auto wall = terrainReference(
                 base, "default_wall_material", record->m_default_wall_material, materials, origin, prefix, diagnostics);
             PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, wall);
+
             PPR_RETURN_UNEXPECTED_ON_FAIL(
                 ColonyContent, requireFieldReference(
                                    base, "boundary_warp_x_field", record->m_boundary_warp_x_field, fields, origin,
@@ -2038,9 +2135,11 @@ namespace pP::colony {
                 ColonyContent, requireFieldReference(
                                    base, "boundary_warp_y_field", record->m_boundary_warp_y_field, fields, origin,
                                    prefix, diagnostics));
+
             auto start = worldFeatureReference(
                 base, "start_feature", record->m_start_feature, features, origin, prefix, diagnostics);
             PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, start);
+
             const auto spawn = std::ranges::find((*start)->m_markers, record->m_start_marker, &FeatureMarker::m_key);
             if (spawn == (*start)->m_markers.end() or spawn->m_role != EFeatureMarkerRole::start) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(
@@ -2049,6 +2148,7 @@ namespace pP::colony {
                         diagnostics, fieldLocation(base, "start_marker", origin), prefix + "start_marker",
                         "Start marker must reference a start-role marker in the start template"));
             }
+
             const auto &reservation = (*start)->m_reservation;
             const i32 start_x = static_cast<i32>(record->m_start_x_fine);
             const i32 start_y = static_cast<i32>(record->m_start_y_fine);
@@ -2064,6 +2164,7 @@ namespace pP::colony {
                                        diagnostics, fieldLocation(base, property, origin), prefix + property,
                                        "Start reservation must fit inside the permanent world boundary"));
             }
+
             if (record->m_start_clearance_m >
                 static_cast<double>(reservation.m_max_y_fine - reservation.m_min_y_fine) / 3.0) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(
@@ -2071,6 +2172,7 @@ namespace pP::colony {
                                        diagnostics, fieldLocation(base, "start_clearance_m", origin),
                                        prefix + "start_clearance_m", "Clearance exceeds the start reservation height"));
             }
+
             if (record->m_start_route_width_m >
                 static_cast<double>(reservation.m_max_x_fine - reservation.m_min_x_fine) / 3.0) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(
@@ -2079,6 +2181,7 @@ namespace pP::colony {
                         diagnostics, fieldLocation(base, "start_route_width_m", origin), prefix + "start_route_width_m",
                         "Route width exceeds the start reservation width"));
             }
+
             if (choices->m_children.empty() or resources->m_children.size() < 2u or rules->m_children.empty()) {
                 const std::string property = choices->m_children.empty()
                                                  ? "biomes"
@@ -2111,6 +2214,7 @@ namespace pP::colony {
             result.m_start_clearance_m = record->m_start_clearance_m;
             result.m_start_route_width_m = record->m_start_route_width_m;
             result.m_background_stack = std::move(record->m_background_stack);
+
             if (record->m_surface_field) {
                 for (const auto *name: {&record->m_surface_field, &record->m_bedrock_field}) {
                     if (not *name) {
@@ -2123,6 +2227,7 @@ namespace pP::colony {
                         ColonyContent,
                         requireFieldReference(base, "surface_field", **name, fields, origin, prefix, diagnostics));
                 }
+
                 if (not record->m_bedrock_material or
                     record->m_bedrock_thickness_m - record->m_bedrock_variation_m < 15.0 or
                     record->m_bedrock_thickness_m + record->m_bedrock_variation_m > 40.0) {
@@ -2131,6 +2236,7 @@ namespace pP::colony {
                                            diagnostics, origin, prefix + "bedrock_thickness_m",
                                            "Bedrock must remain continuously 15 to 40 metres thick"));
                 }
+
                 auto bedrock = terrainReference(
                     base, "bedrock_material", *record->m_bedrock_material, materials, origin, prefix, diagnostics);
                 PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, bedrock);
@@ -2139,6 +2245,7 @@ namespace pP::colony {
                         ColonyContent,
                         reject(diagnostics, origin, prefix + "bedrock_material", "Bedrock must be undiggable terrain"));
                 }
+
                 result.m_bedrock_material_id = *bedrock;
             } else if (record->m_bedrock_field or record->m_bedrock_material or record->m_start_depth_m) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(
@@ -2146,6 +2253,7 @@ namespace pP::colony {
                                        diagnostics, origin, prefix + "surface_field",
                                        "Surface-relative controls require a surface field"));
             }
+
             result.m_surface_field = std::move(record->m_surface_field);
             result.m_bedrock_field = std::move(record->m_bedrock_field);
             result.m_surface_elevation_m = record->m_surface_elevation_m;
@@ -2157,13 +2265,16 @@ namespace pP::colony {
             PPR_RETURN_UNEXPECTED_ON_FAIL(
                 ColonyContent,
                 compileWorldBiomes(choices->m_children, base, biomes, result, origin, prefix, diagnostics));
+
             PPR_RETURN_UNEXPECTED_ON_FAIL(
                 ColonyContent,
                 compileStartResources(
                     resources->m_children, materials, **start, *spawn, result, origin, prefix, diagnostics));
+
             PPR_RETURN_UNEXPECTED_ON_FAIL(
                 ColonyContent,
                 compileWorldRules(rules->m_children, materials, fields, features, result, origin, prefix, diagnostics));
+
             return result;
         }
 
@@ -2171,19 +2282,24 @@ namespace pP::colony {
             const std::string &key, const Document &document, const ContentCatalog &materials,
             const std::span<const FieldDefinition> fields, const std::string_view origin, Diagnostics &diagnostics) {
             const std::string prefix = "biomes." + key + ".";
+
             auto composition = splitChildren(document, "composition", kMaxBiomeCompositionBands, prefix, diagnostics);
             PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, composition);
+
             auto deposits = splitChildren(composition->m_base, "deposits", kMaxBiomeDeposits, prefix, diagnostics);
             PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, deposits);
+
             constexpr std::string_view required[] = {
                 "display_name", "preview_color_rgba", "temperature_base_k", "temperature_variation_k",
                 "temperature_field"};
             auto record = resolveRecord<BiomeRecord>(deposits->m_base, required, origin, diagnostics, prefix);
             PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, record);
+
             PPR_RETURN_UNEXPECTED_ON_FAIL(
                 ColonyContent, requireFieldReference(
                                    deposits->m_base, "temperature_field", record->m_temperature_field, fields, origin,
                                    prefix, diagnostics));
+
             u32 color{};
             const auto [end, error] = std::from_chars(
                 record->m_preview_color_rgba.data(),
@@ -2197,6 +2313,7 @@ namespace pP::colony {
                         diagnostics, fieldLocation(deposits->m_base, "preview_color_rgba", origin),
                         prefix + "preview_color_rgba", "Expected exactly eight hexadecimal RRGGBBAA digits"));
             }
+
             if (record->m_temperature_base_k <= record->m_temperature_variation_k) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(
                     ColonyContent, reject(
@@ -2204,12 +2321,14 @@ namespace pP::colony {
                                        prefix + "temperature_variation_k",
                                        "Temperature variation must remain below the positive base temperature"));
             }
+
             BiomeDefinition result{
                 key, std::move(record->m_display_name), color, record->m_temperature_base_k,
                 record->m_temperature_variation_k, std::move(record->m_temperature_field), {}, {}};
             result.m_relaxation_passes = record->m_relaxation_passes;
             result.m_relaxation_adoption = record->m_relaxation_adoption;
             result.m_sprinkle_probability = record->m_sprinkle_probability;
+
             if (record->m_pore_field) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(
                     ColonyContent,
@@ -2217,6 +2336,7 @@ namespace pP::colony {
                         deposits->m_base, "pore_field", *record->m_pore_field, fields, origin, prefix, diagnostics));
                 result.m_pore_field = std::move(record->m_pore_field);
             }
+
             result.m_pore_probability = record->m_pore_probability;
             result.m_pore_radius_min_m = record->m_pore_radius_min_m;
             result.m_pore_radius_max_m = record->m_pore_radius_max_m;
@@ -2225,6 +2345,7 @@ namespace pP::colony {
             result.m_finish_passes = record->m_finish_passes;
             result.m_erosion_passes = record->m_erosion_passes;
             result.m_finish_adoption = record->m_finish_adoption;
+
             if (record->m_soil_material) {
                 auto id = terrainReference(
                     deposits->m_base, "soil_material", *record->m_soil_material, materials, origin, prefix,
@@ -2232,6 +2353,7 @@ namespace pP::colony {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, id);
                 result.m_soil_material_id = *id;
             }
+
             if (record->m_weathered_material) {
                 auto id = terrainReference(
                     deposits->m_base, "weathered_material", *record->m_weathered_material, materials, origin, prefix,
@@ -2239,8 +2361,10 @@ namespace pP::colony {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, id);
                 result.m_weathered_material_id = *id;
             }
+
             result.m_soil_depth_m = record->m_soil_depth_m;
             result.m_weathered_depth_m = record->m_weathered_depth_m;
+
             if (record->m_formation_material) {
                 auto id = terrainReference(
                     deposits->m_base, "formation_material", *record->m_formation_material, materials, origin, prefix,
@@ -2248,6 +2372,7 @@ namespace pP::colony {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, id);
                 result.m_formation_material_id = *id;
             }
+
             if (record->m_rind_material) {
                 auto id = terrainReference(
                     deposits->m_base, "rind_material", *record->m_rind_material, materials, origin, prefix,
@@ -2255,8 +2380,10 @@ namespace pP::colony {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, id);
                 result.m_rind_material_id = *id;
             }
+
             result.m_formation_probability = record->m_formation_probability;
             result.m_formation_length_m = record->m_formation_length_m;
+
             if (result.m_relaxation_passes + result.m_pore_passes + result.m_finish_passes + result.m_erosion_passes >
                 100u) {
                 const auto pass_budget_error = config::make_error_code(EConfigErrc::cross_field_invalid);
@@ -2268,6 +2395,7 @@ namespace pP::colony {
                 }
                 PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, pass_budget_error);
             }
+
             if (result.m_pore_radius_min_m > result.m_pore_radius_max_m) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(
                     ColonyContent,
@@ -2275,18 +2403,21 @@ namespace pP::colony {
                         diagnostics, fieldLocation(deposits->m_base, "pore_radius_min_m", origin),
                         prefix + "pore_radius_min_m", "Minimum pore radius must not exceed maximum pore radius"));
             }
+
             if ((result.m_pore_probability > 0.0 or result.m_pore_passes > 0u) and not result.m_pore_field) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(
                     ColonyContent, reject(
                                        diagnostics, fieldLocation(deposits->m_base, "pore_field", origin),
                                        prefix + "pore_field", "Enabled pores require a pore field"));
             }
+
             if (result.m_soil_depth_m > 0.0 and result.m_soil_material_id == 0u) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(
                     ColonyContent, reject(
                                        diagnostics, fieldLocation(deposits->m_base, "soil_material", origin),
                                        prefix + "soil_material", "Positive soil depth requires a soil material"));
             }
+
             if (result.m_weathered_depth_m > 0.0 and result.m_weathered_material_id == 0u) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(
                     ColonyContent,
@@ -2294,6 +2425,7 @@ namespace pP::colony {
                         diagnostics, fieldLocation(deposits->m_base, "weathered_material", origin),
                         prefix + "weathered_material", "Positive weathered depth requires a weathered material"));
             }
+
             if (result.m_formation_probability > 0.0 and result.m_formation_material_id == 0u) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(
                     ColonyContent,
@@ -2316,15 +2448,18 @@ namespace pP::colony {
                 result.m_lining_material_id = *lining;
                 result.m_lining_thickness_fine = record->m_lining_thickness_fine;
             }
+
             for (const auto &[band_key, band]: composition->m_children) {
                 auto compiled = compileComposition(
                     band_key, band, materials, fields, origin, prefix + "composition." + band_key + ".", diagnostics);
                 PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, compiled);
                 result.m_composition.push_back(std::move(*compiled));
             }
+
             std::ranges::sort(result.m_composition, {}, &BiomeCompositionBand::m_order);
             double next_depth = 0.0;
             std::optional<u32> previous_order{};
+
             for (const auto &band: result.m_composition) {
                 if (previous_order == band.m_order or band.m_depth_min_normalized != next_depth) {
                     PPR_RETURN_UNEXPECTED_ON_FAIL(
@@ -2337,12 +2472,14 @@ namespace pP::colony {
                 previous_order = band.m_order;
                 next_depth = band.m_depth_max_normalized;
             }
+
             if (next_depth != 1.0) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(
                     ColonyContent, reject(
                                        diagnostics, origin, prefix + "composition",
                                        "Composition bands must cover all normalized depths from zero to one"));
             }
+
             for (const auto &[deposit_key, deposit]: deposits->m_children) {
                 auto compiled = compileDeposit(
                     deposit_key, deposit, materials, fields, origin, prefix + "deposits." + deposit_key + ".",
@@ -2441,6 +2578,7 @@ namespace pP::colony {
         }
         return std::nullopt;
     }
+
     Array<std::string> contentPropertyReferenceChoices(
         const EContentDocument category, const std::string_view relative_property,
         const std::array<config::Document, kContentDocumentCount> &documents, const std::string_view definition_key) {

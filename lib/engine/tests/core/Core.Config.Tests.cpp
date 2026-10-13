@@ -9,6 +9,10 @@ import engine.core;
 import std;
 
 namespace pP::tests::detail::cfg {
+    // ------------------------------------------------------------------
+    // config
+    // ------------------------------------------------------------------
+
     using namespace pP::config;
 
     enum class EPace : u8 {

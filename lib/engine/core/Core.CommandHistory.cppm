@@ -50,8 +50,10 @@ export namespace pP {
             if (m_max_commands == 0u or payload_bytes > m_max_payload_bytes) {
                 PPR_RETURN_ERROR_ON_FAIL(CommandHistory, std::errc::no_buffer_space);
             }
+
             m_entries.reserve(std::min(m_entries.size() + 1u, m_max_commands));
             PPR_RETURN_ERROR_ON_FAIL(CommandHistory, apply(command));
+
             while (m_entries.size() > m_cursor) {
                 m_payload_bytes -= m_entries.back().m_payload_bytes;
                 m_entries.pop_back();

@@ -10,6 +10,7 @@ export namespace pP {
     enum class EGamepadButton : u8;
     enum class EMouseButton : u8;
     enum class EKeyboardKey : u8;
+
     // ------------------------------------------------------------------
     // input service interface
     // ------------------------------------------------------------------

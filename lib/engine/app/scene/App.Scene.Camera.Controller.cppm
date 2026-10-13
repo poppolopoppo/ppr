@@ -14,6 +14,10 @@ import :scene.camera;
 export namespace pP {
     class InputMapping;
 
+    // ------------------------------------------------------------------
+    // camera controller interface
+    // ------------------------------------------------------------------
+
     class ICameraController : public safe_object {
     public:
         // ReSharper disable once CppHidingFunction
@@ -27,6 +31,10 @@ export namespace pP {
         }
     };
 
+    // ------------------------------------------------------------------
+    // dummy camera controller
+    // ------------------------------------------------------------------
+
     class DummyCameraController final : public ICameraController {
     public:
         DummyCameraController() noexcept = default;
@@ -39,6 +47,10 @@ export namespace pP {
     };
 
     namespace details {
+        // ------------------------------------------------------------------
+        // basic camera controller
+        // ------------------------------------------------------------------
+
         class BasicCameraController : public ICameraController {
         public:
             const std::unique_ptr<InputAction> m_translate_action{};
@@ -155,6 +167,10 @@ export namespace pP {
         };
     }
 
+    // ------------------------------------------------------------------
+    // free camera controller
+    // ------------------------------------------------------------------
+
     class FreeCameraController final : public details::BasicCameraController {
     public:
         FreeCameraController() = default;
@@ -165,6 +181,10 @@ export namespace pP {
 
         void provideInputActionKeyMappings(InputMapping &out_mapping) const noexcept override;
     };
+
+    // ------------------------------------------------------------------
+    // pan camera controller
+    // ------------------------------------------------------------------
 
     class PanCameraController final : public details::BasicCameraController {
     public:
@@ -273,6 +293,10 @@ export namespace pP {
         std::optional<WorldBounds> m_world_bounds{};
         std::optional<float3> m_follow_target{};
     };
+
+    // ------------------------------------------------------------------
+    // orbit camera controller
+    // ------------------------------------------------------------------
 
     class OrbitCameraController final : public details::BasicCameraController {
     public:

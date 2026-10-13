@@ -7,6 +7,10 @@ import engine.core;
 import std;
 
 namespace pP::tests::detail {
+    // ------------------------------------------------------------------
+    // concurrency event
+    // ------------------------------------------------------------------
+
     namespace Event {
         class DummySignal final : public ISignal {
         public:

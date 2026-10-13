@@ -7,6 +7,10 @@ import engine.core;
 import std;
 
 namespace pP::tests::detail {
+    // ------------------------------------------------------------------
+    // timer pacer
+    // ------------------------------------------------------------------
+
     namespace Pacer {
         // Fake-clock harness: manual steady-clock seam + recording sleep
         // primitive. Slicing, deadline, and wake-predicate logic stay in

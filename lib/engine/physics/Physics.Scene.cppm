@@ -9,6 +9,10 @@ import std;
 export namespace pP::physics {
     PPR_DECLARE_LOG_CATEGORY(Physics);
 
+    // ------------------------------------------------------------------
+    // body identity
+    // ------------------------------------------------------------------
+
     struct BodyHandle {
         u64 m_entity{};
         u64 m_serial{};
@@ -26,6 +30,10 @@ export namespace pP::physics {
         box,
         circle
     };
+
+    // ------------------------------------------------------------------
+    // body description
+    // ------------------------------------------------------------------
 
     struct BodyDefinition {
         EMotion m_motion{EMotion::static_body};
@@ -61,6 +69,10 @@ export namespace pP::physics {
         [[nodiscard]] constexpr bool operator==(const BodyState &) const noexcept = default;
     };
 
+    // ------------------------------------------------------------------
+    // sensors + contacts
+    // ------------------------------------------------------------------
+
     struct SensorDefinition {
         EGeometry m_geometry{EGeometry::box};
         float m_half_width{0.5f};
@@ -92,6 +104,10 @@ export namespace pP::physics {
         float m_approach_speed{};
     };
 
+    // ------------------------------------------------------------------
+    // chunk chains
+    // ------------------------------------------------------------------
+
     struct ChainPoint {
         float m_x{};
         float m_y{};
@@ -112,6 +128,10 @@ export namespace pP::physics {
         u32 m_material_count{1u};
         bool m_loop{};
     };
+
+    // ------------------------------------------------------------------
+    // scene
+    // ------------------------------------------------------------------
 
     class Scene {
         struct Runtime;

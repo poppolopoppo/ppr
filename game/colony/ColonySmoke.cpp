@@ -54,6 +54,7 @@ namespace pP::colony {
                 sim::validateMatterParticles(
                     particles, recipe.m_materials, recipe.m_cell_size_m, nullptr, recipe.m_reference_thickness_m));
             u64 count{}, liquids{}, gases{};
+
             for (const auto &batch: particles.m_chunks) {
                 for (const auto &particle: batch.records()) {
                     auto &totals = actual[particle.m_material];
@@ -64,6 +65,7 @@ namespace pP::colony {
                     gases += particle.m_phase == sim::EGenerationMatter::gas;
                 }
             }
+
             if (count == 0u or
                 count != expected_count or
                 count != driver.particleCount() or
@@ -72,6 +74,7 @@ namespace pP::colony {
                 actual.size() != expected.size()) {
                 PPR_RETURN_ERROR_ON_FAIL(ColonySmoke, std::errc::state_not_recoverable);
             }
+
             for (const auto &[material, totals]: expected) {
                 const auto found = actual.find(material);
                 if (found == actual.end() or
@@ -80,6 +83,7 @@ namespace pP::colony {
                     PPR_RETURN_ERROR_ON_FAIL(ColonySmoke, std::errc::state_not_recoverable);
                 }
             }
+
             std::println(
                 "SMOKE-PARTICLES count={} liquids={} gases={} materials={} result=PASS", count, liquids, gases,
                 actual.size());
@@ -92,17 +96,20 @@ namespace pP::colony {
             auto &pool = parallel::backgroundPool();
             auto prepared = prepareWorld(root, "frontier", 42u, ITimerClock::steady(), diagnostics, {.m_pool = &pool});
             PPR_RETURN_ERROR_ON_FAIL(ColonySmoke, prepared);
+
             const auto terrain_checksum = prepared->generated().m_report.m_terrain_checksum;
             const auto start = prepared->generated().m_start;
             const auto resident = prepared->grid().residentCells({15u, 23u});
             if (not resident) {
                 PPR_RETURN_ERROR_ON_FAIL(ColonySmoke, std::errc::state_not_recoverable);
             }
+
             const auto *const payload = resident->data();
             auto driver = std::make_unique<ColonyDriver>();
             PPR_RETURN_ERROR_ON_FAIL(
                 ColonySmoke, driver->initPrepared(
                                  {.m_seed = 42u, .m_agent_count = 1u, .m_world_generation = 7u}, std::move(*prepared)));
+
             const auto actor = driver->controlledEntity();
             if (not actor or
                 driver->cellsPerMetre() != 3u or
@@ -111,6 +118,7 @@ namespace pP::colony {
                 driver->grid().residentCells({15u, 23u})->data() != payload) {
                 PPR_RETURN_ERROR_ON_FAIL(ColonySmoke, std::errc::state_not_recoverable);
             }
+
             // Adoption must preserve the complete owner and payload, including
             // its validated start, rather than rerasterizing or copying the grid.
             const auto *const owner = driver->preparedWorld();
@@ -119,6 +127,7 @@ namespace pP::colony {
             for (u32 tick = 0u; tick < 60u; ++tick) {
                 PPR_RETURN_ERROR_ON_FAIL(ColonySmoke, driver->update(TimeSpan{std::chrono::seconds{1}} / 60u));
             }
+
             const auto *const pose = driver->registry().get<sim::BodyState>(*actor);
             if (not pose or
                 pose->m_x <= start.m_spawn_x_m + 0.2 or
@@ -127,6 +136,7 @@ namespace pP::colony {
                 driver->registry().get<PathReq>(*actor)) {
                 PPR_RETURN_ERROR_ON_FAIL(ColonySmoke, std::errc::state_not_recoverable);
             }
+
             const auto failed = prepareWorld(owner->catalog(), "unknown", 42u, ITimerClock::steady());
             if (failed or
                 driver->preparedWorld() != owner or
@@ -134,15 +144,18 @@ namespace pP::colony {
                 driver->regenerateLegacyFixture(43u) != std::errc::operation_not_permitted) {
                 PPR_RETURN_ERROR_ON_FAIL(ColonySmoke, std::errc::state_not_recoverable);
             }
+
             PPR_RETURN_ERROR_ON_FAIL(ColonySmoke, driver->restoreBodies());
             PPR_RETURN_ERROR_ON_FAIL(ColonySmoke, driver->update(TimeSpan{std::chrono::seconds{1}} / 60u));
             if (driver->registry().get<sim::BodyState>(*actor)->m_velocity_x != 0.0f) {
                 PPR_RETURN_ERROR_ON_FAIL(ColonySmoke, std::errc::state_not_recoverable);
             }
+
             PPR_RETURN_ERROR_ON_FAIL(ColonySmoke, driver->shutdown());
             if (driver->preparedWorld() or driver->controlledEntity()) {
                 PPR_RETURN_ERROR_ON_FAIL(ColonySmoke, std::errc::state_not_recoverable);
             }
+
             std::println(
                 "SMOKE-PREPARED profile=frontier seed=42 terrain={:016x} ticks=61 result=PASS", terrain_checksum);
             return {};
@@ -173,6 +186,7 @@ namespace pP::colony {
                     device.readTexture(&target, 0u, 0u, blob.writeRef(), &layout))) [[unlikely]] {
                 return err;
             }
+
             const std::size_t offset = static_cast<std::size_t>(kCenter) * static_cast<std::size_t>(layout.rowPitch) +
                                        static_cast<std::size_t>(kCenter) * pixel.size();
             if (blob.get() == nullptr or
@@ -182,7 +196,9 @@ namespace pP::colony {
                 blob->getBufferSize() - offset < pixel.size()) [[unlikely]] {
                 return std::make_error_code(std::errc::invalid_argument);
             }
+
             const auto *const bytes = static_cast<const std::byte *>(blob->getBufferPointer()) + offset;
+
             for (std::size_t channel = 0u; channel < pixel.size(); ++channel) {
                 pixel[channel] = static_cast<u8>(bytes[channel]);
             }
@@ -196,6 +212,7 @@ namespace pP::colony {
             if (const std::error_code error = driver.initLegacyFixture(ColonyDriverDesc{.m_seed = kSeed})) {
                 return std::unexpected{error};
             }
+
             driver.setPaused(true);
             const sim::ChunkGrid &grid = driver.grid();
             sim::Registry &registry = driver.registry();
@@ -223,8 +240,10 @@ namespace pP::colony {
             if (from.m_x >= sim::kWorldEdge) {
                 return std::unexpected{std::make_error_code(std::errc::state_not_recoverable)};
             }
+
             sim::GlobalCellPos to = from;
             bool distant = false;
+
             for (u32 y = 0u; y < sim::kWorldEdge and not distant; ++y) {
                 for (u32 x = 0u; x < sim::kWorldEdge; ++x) {
                     const u32 dx = x >= from.m_x ? x - from.m_x : from.m_x - x;
@@ -284,6 +303,7 @@ namespace pP::colony {
                     previous = cell;
                 }
             }
+
             const PathReq *req = registry.get<PathReq>(entity);
             if (req == nullptr) {
                 return std::unexpected{std::make_error_code(std::errc::state_not_recoverable)};
@@ -348,10 +368,12 @@ namespace pP::colony {
             if (not bytes) {
                 return std::unexpected{bytes.error()};
             }
+
             const auto loaded = sim::load(std::span<const u8>{bytes->data(), bytes->size()});
             if (not loaded) {
                 return std::unexpected{loaded.error()};
             }
+
             sim::Registry restored{};
             if (const std::error_code error = registerColonyComponents(restored)) {
                 return std::unexpected{error};
@@ -359,6 +381,7 @@ namespace pP::colony {
             if (const std::error_code error = sim::restore(restored, *loaded)) {
                 return std::unexpected{error};
             }
+
             const PathReq *req2 = restored.get<PathReq>(entity);
             const PathComp *comp2 = restored.get<PathComp>(entity);
             if (req2 == nullptr or comp2 == nullptr or not (*req2 == want_req) or not (*comp2 == want_comp)) {
@@ -386,6 +409,7 @@ namespace pP::colony {
             if (const std::error_code error = driver.initLegacyFixture(ColonyDriverDesc{.m_seed = kSeed})) {
                 return std::unexpected{error};
             }
+
             driver.setPaused(true);
             ColonyTranslator translator{};
             sim::Registry &registry = driver.registry();
@@ -691,6 +715,7 @@ namespace pP::colony {
             if (const std::error_code error = driver.initLegacyFixture(ColonyDriverDesc{.m_seed = kSeed})) {
                 return std::unexpected{error};
             }
+
             driver.setPaused(true);
             ColonyTranslator translator{};
             sim::Registry &registry = driver.registry();
@@ -2559,6 +2584,7 @@ namespace pP::colony {
                         device.createTexture(desc, nullptr, m_target.writeRef()))) [[unlikely]] {
                     return error;
                 }
+
                 if (const std::error_code error = renderer.renderToTexture(
                         *m_target, {DrawSubmission{m_pass}}, ColorAttachmentOps{})) [[unlikely]] {
                     return error;
@@ -3113,6 +3139,7 @@ namespace pP::colony {
         if (options.m_gpu_validation) {
             IRhiService::get()->setGpuAssistedValidation(true);
         }
+
         // Stage entries go to stderr (unbuffered): on abort/exception the
         // last entered stage survives, which buffered stdout would lose.
         std::println(stderr, "SMOKE-STAGE prepared-session");
@@ -3143,6 +3170,7 @@ namespace pP::colony {
             std::println("SMOKE-BUILD result=FAIL error={}", built.error().message());
             return built.error();
         }
+
         std::println("SMOKE-BUILD solid=64 demolish=vacuum delta_chunks={} result=PASS", *built);
 
         std::println(stderr, "SMOKE-STAGE dig");
@@ -3151,6 +3179,7 @@ namespace pP::colony {
             std::println("SMOKE-DIG result=FAIL error={}", dug.error().message());
             return dug.error();
         }
+
         // Slice 5 dig evidence is CPU-refresh (D5 translator/GridPass upload
         // deltas on resident chunks); the offscreen GPU readback below proves
         // rasterization independently. Both must pass for the final PASS.
@@ -3168,6 +3197,7 @@ namespace pP::colony {
         } catch (...) {
             result = std::make_error_code(std::errc::state_not_recoverable);
         }
+
         if (not result) {
             result = app.shutdownError();
         }

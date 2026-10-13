@@ -8,6 +8,11 @@ import std;
 namespace pP::sim {
     using pP::make_error_code;
     PPR_DEFINE_LOG_CATEGORY(MatterParticles, info, none);
+
+    // ------------------------------------------------------------------
+    // validation helpers
+    // ------------------------------------------------------------------
+
     namespace {
         [[nodiscard]] std::error_code canceled(const IContext *const context) noexcept {
             return context ? context->error() : std::error_code{};
@@ -53,6 +58,11 @@ namespace pP::sim {
         return m_particles ? std::span<const MatterParticle>{m_particles->data(), m_particles->size()}
                            : std::span<const MatterParticle>{};
     }
+
+    // ------------------------------------------------------------------
+    // seeding
+    // ------------------------------------------------------------------
+
     Expected<MatterParticleSnapshot> seedMatterParticles(
         const InitialMatter &matter, const ChunkGrid &grid, const GenerationRecipe &recipe,
         const IContext *const context) {
@@ -75,10 +85,12 @@ namespace pP::sim {
                 }
             }
         }
+
         std::array<Array<MatterParticle>, kChunkCount> chunks{};
         for (u32 i = 0u; i < kChunkCount; ++i) {
             chunks[i].reserve(counts[i]);
         }
+
         MatterParticleSnapshot result;
         for (const auto &region: matter.m_regions) {
             const auto *const definition = material(recipe.m_materials, region.m_material);
@@ -136,6 +148,10 @@ namespace pP::sim {
                 result, recipe.m_materials, recipe.m_cell_size_m, context, recipe.m_reference_thickness_m));
         return result;
     }
+    // ------------------------------------------------------------------
+    // validation
+    // ------------------------------------------------------------------
+
     std::error_code validateMatterParticles(
         const MatterParticleSnapshot &snapshot, const std::span<const GenerationMaterial> materials,
         const double cell_size, const IContext *const context, const double reference_thickness) {
@@ -147,6 +163,7 @@ namespace pP::sim {
             snapshot.m_chunks.size() > kChunkCount) {
             PPR_RETURN_ERROR_ON_FAIL(MatterParticles, std::errc::invalid_argument);
         }
+
         u64 total{};
         std::bitset<kChunkCount> seen_chunks{};
         Array<u64> ids;
@@ -197,6 +214,7 @@ namespace pP::sim {
                 cells.push_back(cell.m_y * kWorldEdge + cell.m_x);
             }
         }
+
         std::ranges::sort(ids);
         std::ranges::sort(cells);
         if (std::ranges::adjacent_find(ids) != ids.end() or std::ranges::adjacent_find(cells) != cells.end()) {
@@ -204,6 +222,10 @@ namespace pP::sim {
         }
         return {};
     }
+    // ------------------------------------------------------------------
+    // particle state
+    // ------------------------------------------------------------------
+
     std::error_code MatterParticleState::restore(
         const MatterParticleSnapshot &snapshot, const std::span<const GenerationMaterial> materials,
         const double cell_size, const IContext *const context, const double reference_thickness) {
@@ -215,6 +237,7 @@ namespace pP::sim {
             chunks[chunkIndexOf(batch.m_position)] = batch.m_particles;
             count += static_cast<u32>(batch.records().size());
         }
+
         PPR_RETURN_ERROR_ON_FAIL(MatterParticles, canceled(context));
         m_chunks.swap(chunks);
         m_count = count;
@@ -272,6 +295,7 @@ namespace pP::sim {
                 }
             }
         }
+
         const auto read = [&](const i32 x, const i32 y, const bool edited) {
             if (x < 0 or y < 0 or x >= kWorldEdge or y >= kWorldEdge) {
                 return true;
@@ -282,6 +306,7 @@ namespace pP::sim {
             const auto cells = edited and overlay ? overlay->residentCells() : original.residentCells(position);
             return cells and (*cells)[(cell.m_y % kChunkEdge) * kChunkEdge + cell.m_x % kChunkEdge].m_element != 0u;
         };
+
         Array<MatterParticleBatch> result;
         for (u32 index = 0u; index < kChunkCount; ++index) {
             if (not affected.test(index) or not m_chunks[index]) {

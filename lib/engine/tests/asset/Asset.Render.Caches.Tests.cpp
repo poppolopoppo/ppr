@@ -19,6 +19,10 @@ import std;
 // fail-closed, scene coexistence, residency, plus the GPU-owned cache
 // lifecycle logging leaf. One flat group: asset/render/caches.
 namespace pP::tests::detail::SharedGpu {
+    // ------------------------------------------------------------------
+    // render caches
+    // ------------------------------------------------------------------
+
     [[nodiscard]] safe_ptr<IRhiService> rhiService();
 
     [[nodiscard]] safe_ptr<IShaderService> shaderService();

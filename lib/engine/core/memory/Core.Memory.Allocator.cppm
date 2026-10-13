@@ -209,7 +209,9 @@ export namespace pP::mem {
         [[maybe_unused]] constexpr std::allocation_result<T *> allocate(
             AllocatorT &al, const std::size_t n = 1u) noexcept {
             PPR_ASSERT(!isValid() && "Allocation is already valid");
+
             const std::allocation_result<void *> blk = al.allocateRaw(sizeof(T) * n, AlignmentV);
+
             m_block.ptr = blk.ptr;
             m_block.count = checked_cast<Size_T>(blk.count);
             return {static_cast<T *>(m_block.ptr), m_block.count / sizeof(T)};
@@ -493,6 +495,7 @@ export namespace pP::mem {
             using value_type = std::ranges::range_value_t<RangeT>;
             const std::size_t n = std::ranges::size(values);
             const std::span<value_type> dst{al.template allocate<value_type>(n, alignment), n};
+
             std::memcpy(dst.data(), std::ranges::data(values), n * sizeof(value_type));
             return dst;
         }
@@ -919,6 +922,7 @@ export namespace pP::mem {
                 overlap(m_storage, InSituSizeV, ptr, old_size) &&
                 "Trying to resize a pointer outside of the in-situ buffer");
             PPR_ASSUME(ptr != nullptr);
+
             if (static_cast<const std::byte *>(ptr) + new_size <=
                 static_cast<const std::byte *>(m_storage) + InSituSizeV) {
                 if (old_size < new_size) {
@@ -1105,6 +1109,7 @@ export namespace pP::mem {
             if (m_pools[free_pool_index] == nullptr) {
                 throwBadAlloc();
             }
+
             poisonReserved(m_pools[free_pool_index], pool_size_v);
 
             constexpr u32 new_block_index = 0u;
@@ -1141,6 +1146,7 @@ export namespace pP::mem {
             PPR_ASSERT(m_blocks[pool_index] == 0u);
             poisonDestroyed(m_pools[pool_index], pool_size_v);
             BlockAllocatorT::deallocateRaw(m_pools[pool_index], pool_size_v, AlignmentV);
+
             m_pools[pool_index] = nullptr;
 
             m_num_free_blocks.fetch_sub(Bitmask<page_mask_t>::bit_count_v);

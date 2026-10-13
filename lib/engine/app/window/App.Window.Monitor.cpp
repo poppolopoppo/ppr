@@ -9,6 +9,10 @@ import engine.core;
 import std;
 
 namespace pP {
+    // ------------------------------------------------------------------
+    // video mode
+    // ------------------------------------------------------------------
+
     // NOTE: component-wise; mango vector == doesn't cover generic int
     // vectors on this toolchain (same as BasicRect::operator==).
     bool VideoMode::operator==(const VideoMode &other) const {
@@ -19,6 +23,10 @@ namespace pP {
                m_rgb_bits.z == other.m_rgb_bits.z &&
                m_refresh_rate == other.m_refresh_rate;
     }
+
+    // ------------------------------------------------------------------
+    // monitor
+    // ------------------------------------------------------------------
 
     Monitor::Monitor(
         const MonitorHandle handle, std::string name, VideoMode mode, const int2 &physical_size,

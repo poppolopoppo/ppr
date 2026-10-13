@@ -258,7 +258,6 @@ namespace pP {
                     }
                 };
 
-
                 constexpr slang_rhi::Feature required_features[] = {
                     slang_rhi::Feature::Surface,
                     slang_rhi::Feature::Rasterization,

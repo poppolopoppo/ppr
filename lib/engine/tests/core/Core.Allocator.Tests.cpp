@@ -7,6 +7,10 @@ import engine.core;
 import std;
 
 namespace pP::tests::detail {
+    // ------------------------------------------------------------------
+    // allocator
+    // ------------------------------------------------------------------
+
     namespace Allocator {
         struct Widget {
             inline static std::size_t destroyed = 0u;

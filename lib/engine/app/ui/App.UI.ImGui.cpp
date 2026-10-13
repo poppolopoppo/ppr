@@ -594,6 +594,10 @@ float4 fragmentMain(PsInput input) : SV_Target {
                 return encodeDetachedUiFrame_(detached, draw_context);
             }
 
+            // ------------------------------------------------------------------
+            // detached ui frame
+            // ------------------------------------------------------------------
+
             [[nodiscard]] std::error_code buildDetachedUiFrame(DetachedUiDrawData &out) override {
                 // CLIENT lane only: completes the ImGui frame and publishes
                 // owned, imgui-free draw data. The worker never re-enters
@@ -1282,6 +1286,10 @@ float4 fragmentMain(PsInput input) : SV_Target {
             }
         }
 
+        // ------------------------------------------------------------------
+        // input
+        // ------------------------------------------------------------------
+
         EInputMessageResponse ImGuiService::onInputCharacter_(const hal::native::char_t codepoint) noexcept {
             // Ctrl+key produces a control character (e.g. Ctrl+A -> 0x01), not text.
             if (ImGui::GetIO().KeyCtrl) {
@@ -1578,6 +1586,10 @@ float4 fragmentMain(PsInput input) : SV_Target {
         }
         return impl->shutdownFrontendContextOnMain();
     }
+
+    // ------------------------------------------------------------------
+    // service factory
+    // ------------------------------------------------------------------
 
     namespace ui {
         std::unique_ptr<IUIService> createImGuiService() {

@@ -9,6 +9,10 @@ import engine.math;
 import std;
 
 namespace pP::tests::detail {
+    // ------------------------------------------------------------------
+    // frame
+    // ------------------------------------------------------------------
+
     namespace FrameStages {
         constexpr ApplicationDomain kHeadlessDomain{
             .m_is_headless = true,

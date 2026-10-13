@@ -7,6 +7,10 @@ import engine.core;
 import std;
 
 namespace pP::tests::detail {
+    // ------------------------------------------------------------------
+    // containers stable vector
+    // ------------------------------------------------------------------
+
     namespace Stable_vector {
         PPR_UNIT_TEST (growth_and_indexing) {
             pP::StableVector<int> vec;

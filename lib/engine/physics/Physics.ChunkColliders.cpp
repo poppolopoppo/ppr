@@ -9,6 +9,10 @@ import engine.math;
 import std;
 
 namespace pP::physics {
+    // ------------------------------------------------------------------
+    // lifecycle
+    // ------------------------------------------------------------------
+
     ChunkColliders::ChunkColliders(const ColliderGridGeometry geometry) noexcept : m_geometry(geometry) {
     }
     ChunkColliders::~ChunkColliders() noexcept {
@@ -45,15 +49,21 @@ namespace pP::physics {
         return *this;
     }
 
+    // ------------------------------------------------------------------
+    // cohort lifecycle
+    // ------------------------------------------------------------------
+
     std::error_code ChunkColliders::beginCohort(Scene &scene) {
         PPR_RETURN_ERROR_ON_FAIL(
             Physics, not m_cohort and m_pending.empty() ? std::error_code{}
                                                         : std::make_error_code(std::errc::device_or_resource_busy));
         // Allocate rollback storage before acquiring the Scene step exclusion.
         Cohort cohort{m_chains, m_shapes, {}, {}, 0u, &scene};
+
         const auto token = scene.beginChunkChainUpdate();
         PPR_RETURN_ERROR_ON_FAIL(Physics, token);
         cohort.m_token = *token;
+
         m_cohort.emplace(std::move(cohort));
         return {};
     }
@@ -67,6 +77,7 @@ namespace pP::physics {
         for (const ChainHandle handle: m_cohort->m_removed) {
             PPR_RETAIN_ERROR_ON_FAIL(Physics, first_error, scene.destroyChunkChain(handle));
         }
+
         PPR_RETAIN_ERROR_ON_FAIL(Physics, first_error, scene.finishChunkChainUpdate(m_cohort->m_token));
         m_cohort.reset();
         PPR_RETURN_ERROR_ON_FAIL(Physics, first_error);
@@ -85,6 +96,7 @@ namespace pP::physics {
         m_chains.swap(m_cohort->m_original_chains);
         m_shapes.swap(m_cohort->m_original_shapes);
         m_pending.clear();
+
         PPR_RETAIN_ERROR_ON_FAIL(Physics, first_error, scene.finishChunkChainUpdate(m_cohort->m_token));
         m_cohort.reset();
         PPR_RETURN_ERROR_ON_FAIL(Physics, first_error);
@@ -94,6 +106,10 @@ namespace pP::physics {
     bool ChunkColliders::cohortPending() const noexcept {
         return m_cohort.has_value();
     }
+
+    // ------------------------------------------------------------------
+    // contour extraction helpers
+    // ------------------------------------------------------------------
 
     namespace {
         [[nodiscard]] i32 floorDiv(const i32 value, const i32 divisor) noexcept {
@@ -447,6 +463,10 @@ namespace pP::physics {
         }
     }
 
+    // ------------------------------------------------------------------
+    // dirty-chunk rebuild
+    // ------------------------------------------------------------------
+
     std::error_code ChunkColliders::rebuildDirtyChunks(
         Scene &scene, const std::span<const ColliderChunkView> chunks, const std::span<const ColliderChunkPos> dirty,
         const u32 edge, const u32 max_chunks, u32 &processed) {
@@ -706,6 +726,7 @@ namespace pP::physics {
                     chunk.m_needed = true;
                 }
             }
+
             std::set<ColliderChunkPos> delayed;
             delayed.swap(m_pending);
             try {
@@ -722,6 +743,10 @@ namespace pP::physics {
             PPR_RETHROW(Physics);
         }
     }
+
+    // ------------------------------------------------------------------
+    // queries
+    // ------------------------------------------------------------------
 
     std::size_t ChunkColliders::chainCount(const ColliderChunkPos pos) const noexcept {
         const auto it = m_chains.find(pos);

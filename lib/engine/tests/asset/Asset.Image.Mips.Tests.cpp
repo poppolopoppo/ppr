@@ -12,6 +12,10 @@ import std;
 // anti-bleed, HQ equivalence bounds. One flat group: asset/image/mips
 // (nested under the image root in Asset.Image.Tests.cpp).
 namespace pP::tests::detail {
+    // ------------------------------------------------------------------
+    // image mips
+    // ------------------------------------------------------------------
+
     namespace MipsChain {
         [[nodiscard]] image::ImageAsset makeSolid_(const u32 width, const u32 height, const std::byte fill) {
             const std::size_t size = static_cast<std::size_t>(width) * height * 4u;
@@ -121,6 +125,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(over == image::make_error_code(image::errc::invalid_argument));
             PPR_TEST_ASSERT(capped.m_mip_count == 1u);
         };
+
         PPR_UNIT_TEST (mips_full_chain_reaches_one_texel) {
             const auto normal_fixture = [](const u32 size) {
                 auto fixture = makeSolid_(size, size, std::byte{0});
@@ -138,6 +143,7 @@ namespace pP::tests::detail {
                 fixture.m_is_srgb = false;
                 return fixture;
             };
+
             for (const bool high_quality: {false, true}) {
                 auto opposed = normal_fixture(8u);
                 PPR_TEST_ASSERT(not image::generateMipChain(
@@ -147,10 +153,12 @@ namespace pP::tests::detail {
                 PPR_TEST_ASSERT(
                     tail[0u] == std::byte{128} and tail[1u] == std::byte{128} and tail[2u] == std::byte{255});
             }
+
             auto tiny_normal = normal_fixture(1u);
             PPR_TEST_ASSERT(not image::generateMipChain(tiny_normal, image::MipGenDesc{.m_normal_map = true}));
             const auto tiny_bytes = tiny_normal.m_storage.getBufferData();
             PPR_TEST_ASSERT(tiny_bytes[0u] != std::byte{255} and tiny_normal.m_mip_count == 1u);
+
             image::ImageAsset normals = makeSolid_(8u, 8u, std::byte{0});
             normals.m_format = image::ENativeImageFormat::rgba8_linear;
             normals.m_is_srgb = false;
@@ -166,10 +174,12 @@ namespace pP::tests::detail {
                         bytes[pixel + 3u] == std::byte{255});
                 }
             }
+
             image::ImageAsset color_normal = makeSolid_(8u, 8u, std::byte{128});
             PPR_TEST_ASSERT(
                 image::generateMipChain(color_normal, image::MipGenDesc{.m_normal_map = true}) ==
                 image::errc::invalid_argument);
+
             image::ImageAsset diagonal = makeSolid_(8u, 8u, std::byte{255});
             diagonal.m_format = image::ENativeImageFormat::rgba8_linear;
             diagonal.m_is_srgb = false;
@@ -180,6 +190,7 @@ namespace pP::tests::detail {
                 const float component = std::to_integer<u8>(bytes[0u]) / 255.0f * 2.0f - 1.0f;
                 PPR_TEST_ASSERT(std::abs(component - 1.0f / std::sqrt(3.0f)) < 0.01f);
             }
+
             for (const auto extent: {std::pair{1u, 1u}, {2u, 2u}, {64u, 64u}, {64u, 1u}, {17u, 5u}}) {
                 image::ImageAsset chained = makeSolid_(extent.first, extent.second, std::byte{0x7F});
                 const auto base_size = chained.m_storage.getBufferData().size();

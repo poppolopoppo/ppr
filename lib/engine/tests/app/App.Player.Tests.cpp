@@ -8,6 +8,10 @@ import engine.app;
 import std;
 
 namespace pP::tests::detail {
+    // ------------------------------------------------------------------
+    // player
+    // ------------------------------------------------------------------
+
     PPR_UNIT_TEST (player_id_ordering) {
         constexpr PlayerIdentity keyboard{
             .m_user_id = default_value_v,

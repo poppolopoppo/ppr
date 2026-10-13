@@ -9,6 +9,10 @@ import game.colony.metric;
 import std;
 
 namespace pP::game::tests::detail::metric {
+    // ------------------------------------------------------------------
+    // metric
+    // ------------------------------------------------------------------
+
     using namespace colony;
 
     PPR_UNIT_TEST (centres_and_half_open_boundaries) {

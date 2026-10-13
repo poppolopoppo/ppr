@@ -52,6 +52,10 @@ namespace pP {
         }
     }
 
+    // ------------------------------------------------------------------
+    // render lane
+    // ------------------------------------------------------------------
+
     RenderLane::RenderLane()
         : m_frames(std::make_shared<RawChannel>(kFrameDepth, sizeof(std::shared_ptr<const RenderFrameRequest>))),
           m_results(std::make_shared<RawChannel>(kResultDepth, sizeof(RenderFrameResult))),
@@ -177,6 +181,10 @@ namespace pP {
         }
         return init_err;
     }
+
+    // ------------------------------------------------------------------
+    // main-side submission
+    // ------------------------------------------------------------------
 
     void RenderLane::setExecutor(RenderFrameExecutor executor) {
         const std::lock_guard guard{m_callback_mutex};
@@ -715,6 +723,10 @@ namespace pP {
         m_running.store(false, std::memory_order_release);
         return default_value_v;
     }
+
+    // ------------------------------------------------------------------
+    // lane execution
+    // ------------------------------------------------------------------
 
     void RenderLane::invokePumpSlice_() noexcept {
         // Move the slice out (never hold the pump mutex across the

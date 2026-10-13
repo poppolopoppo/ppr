@@ -106,6 +106,7 @@ namespace pP::colony {
             Writer &writer, const sim::MatterParticleSnapshot &snapshot, const IContext *const context) {
             writer.u64value(snapshot.m_next_id);
             writer.count(snapshot.m_chunks.size());
+
             for (const auto &batch: snapshot.m_chunks) {
                 PPR_RETURN_ERROR_ON_FAIL(CheckpointCodec, context ? context->error() : std::error_code{});
                 writer.u32value(sim::chunkIndexOf(batch.m_position));
@@ -129,6 +130,7 @@ namespace pP::colony {
             snapshot.m_next_id = reader.u64value();
             snapshot.m_chunks.resize(reader.count(sim::kChunkCount, 8u));
             u32 total = 0u;
+
             for (auto &batch: snapshot.m_chunks) {
                 PPR_RETURN_ERROR_ON_FAIL(CheckpointCodec, context ? context->error() : std::error_code{});
                 const auto index = reader.u32value();
@@ -158,6 +160,7 @@ namespace pP::colony {
                 writer.real(site.m_y_m);
                 writer.u32value(site.m_biome);
             }
+
             writer.count(checkpoint.m_geometry.m_instances.size());
             for (const auto &instance: checkpoint.m_geometry.m_instances) {
                 writer.u32value(instance.m_feature);
@@ -167,6 +170,7 @@ namespace pP::colony {
                 writer.u32value(std::bit_cast<u32>(instance.m_origin_y));
                 writer.boolean(instance.m_reflected);
             }
+
             writer.count(checkpoint.m_geometry.m_segments.size());
             for (const auto &segment: checkpoint.m_geometry.m_segments) {
                 writer.u32value(segment.m_rule);
@@ -176,6 +180,7 @@ namespace pP::colony {
                 writer.real(segment.m_y1_m);
                 writer.real(segment.m_radius_m);
             }
+
             writer.count(checkpoint.m_geometry.m_blobs.size());
             for (const auto &blob: checkpoint.m_geometry.m_blobs) {
                 writer.u32value(blob.m_biome);
@@ -189,10 +194,12 @@ namespace pP::colony {
                 writer.real(blob.m_offset_x);
                 writer.real(blob.m_offset_y);
             }
+
             writer.count(checkpoint.m_geometry.m_omitted_instances.size());
             for (const auto omitted: checkpoint.m_geometry.m_omitted_instances) {
                 writer.u32value(omitted);
             }
+
             writer.u32value(checkpoint.m_geometry.m_worst_placement_attempts);
             writer.real(checkpoint.m_start.m_spawn_x_m);
             writer.real(checkpoint.m_start.m_spawn_y_m);
@@ -201,10 +208,12 @@ namespace pP::colony {
             for (const auto cells: checkpoint.m_start.m_resource_fine_cells) {
                 writer.u32value(cells);
             }
+
             writer.u32value(checkpoint.m_matter.m_span_count);
             writer.u32value(checkpoint.m_matter.m_searched_cells);
             writer.u32value(checkpoint.m_matter.m_largest_component);
             writer.count(checkpoint.m_matter.m_regions.size());
+
             for (const auto &region: checkpoint.m_matter.m_regions) {
                 writer.u64value(region.m_identity);
                 writer.integer(region.m_material, 2u);
@@ -223,14 +232,17 @@ namespace pP::colony {
                     writer.u32value(span.m_end_x);
                 }
             }
+
             for (const auto time: checkpoint.m_report.m_phase_times) {
                 writer.u64value(std::bit_cast<u64>(static_cast<i64>(time.count())));
             }
+
             writer.count(checkpoint.m_report.m_material_counts.size());
             for (const auto &count: checkpoint.m_report.m_material_counts) {
                 writer.integer(count.m_material, 2u);
                 writer.u64value(count.m_cells);
             }
+
             writer.u64value(checkpoint.m_report.m_terrain_checksum);
             writer.u64value(checkpoint.m_report.m_output_checksum);
             writer.u64value(checkpoint.m_report.m_grid_payload_bytes);
@@ -244,6 +256,7 @@ namespace pP::colony {
                 site.m_y_m = reader.real();
                 site.m_biome = reader.u32value();
             }
+
             checkpoint.m_geometry.m_instances.resize(reader.count(1025u, 21u));
             for (auto &instance: checkpoint.m_geometry.m_instances) {
                 instance.m_feature = reader.u32value();
@@ -253,6 +266,7 @@ namespace pP::colony {
                 instance.m_origin_y = std::bit_cast<i32>(reader.u32value());
                 instance.m_reflected = reader.boolean();
             }
+
             checkpoint.m_geometry.m_segments.resize(reader.count(sim::kMaxGenerationSegments, 44u));
             for (auto &segment: checkpoint.m_geometry.m_segments) {
                 segment.m_rule = reader.u32value();
@@ -262,6 +276,7 @@ namespace pP::colony {
                 segment.m_y1_m = reader.real();
                 segment.m_radius_m = reader.real();
             }
+
             checkpoint.m_geometry.m_blobs.resize(reader.count(4096u, 68u));
             for (auto &blob: checkpoint.m_geometry.m_blobs) {
                 blob.m_biome = reader.u32value();
@@ -275,10 +290,12 @@ namespace pP::colony {
                 blob.m_offset_x = reader.real();
                 blob.m_offset_y = reader.real();
             }
+
             checkpoint.m_geometry.m_omitted_instances.resize(reader.count(1024u, 4u));
             for (auto &omitted: checkpoint.m_geometry.m_omitted_instances) {
                 omitted = reader.u32value();
             }
+
             checkpoint.m_geometry.m_worst_placement_attempts = reader.u32value();
             checkpoint.m_start.m_spawn_x_m = reader.real();
             checkpoint.m_start.m_spawn_y_m = reader.real();
@@ -287,11 +304,13 @@ namespace pP::colony {
             for (auto &cells: checkpoint.m_start.m_resource_fine_cells) {
                 cells = reader.u32value();
             }
+
             checkpoint.m_matter.m_span_count = reader.u32value();
             checkpoint.m_matter.m_searched_cells = reader.u32value();
             checkpoint.m_matter.m_largest_component = reader.u32value();
             checkpoint.m_matter.m_regions.resize(reader.count(sim::kMaxInitialMatterRegions, 47u));
             u32 spans = 0u;
+
             for (auto &region: checkpoint.m_matter.m_regions) {
                 region.m_identity = reader.u64value();
                 region.m_material = static_cast<u16>(reader.integer(2u));
@@ -310,14 +329,17 @@ namespace pP::colony {
                     span.m_end_x = reader.u32value();
                 }
             }
+
             for (auto &time: checkpoint.m_report.m_phase_times) {
                 time = TimeSpan{std::bit_cast<i64>(reader.u64value())};
             }
+
             checkpoint.m_report.m_material_counts.resize(reader.count(sim::kMaxGenerationMaterials + 1u, 10u));
             for (auto &count: checkpoint.m_report.m_material_counts) {
                 count.m_material = static_cast<u16>(reader.integer(2u));
                 count.m_cells = reader.u64value();
             }
+
             checkpoint.m_report.m_terrain_checksum = reader.u64value();
             checkpoint.m_report.m_output_checksum = reader.u64value();
             checkpoint.m_report.m_grid_payload_bytes = reader.u64value();
@@ -327,13 +349,16 @@ namespace pP::colony {
     Expected<Array<u8>> encodeWorldCheckpoint(
         const WorldCheckpoint &checkpoint, const ContentCatalog &catalog, const IContext *const context) {
         PPR_RETURN_UNEXPECTED_ON_FAIL(CheckpointCodec, validateWorldCheckpoint(checkpoint, catalog, context));
+
         const auto snapshot = sim::save(checkpoint.m_snapshot);
         PPR_RETURN_UNEXPECTED_ON_FAIL(CheckpointCodec, snapshot);
         PPR_RETURN_UNEXPECTED_ON_FAIL(CheckpointCodec, context ? context->error() : std::error_code{});
+
         Writer writer;
         writer.u64value(kMagic);
         writer.u32value(kWorldCheckpointVersion);
         writer.boolean(true); // Full, never a delta.
+
         const auto &descriptor = checkpoint.m_descriptor;
         writer.u32value(descriptor.m_pack_schema_version);
         writer.u32value(descriptor.m_generator_version);
@@ -343,11 +368,13 @@ namespace pP::colony {
         writer.u32value(descriptor.m_metric.m_cells_per_metre);
         writer.u32value(descriptor.m_metric.m_cells_per_tile);
         writer.real(descriptor.m_metric.m_reference_thickness_m);
+
         writer.count(checkpoint.m_materials.size());
         for (const auto &material: checkpoint.m_materials) {
             writer.integer(material.m_id, 2u);
             writer.string(material.m_key);
         }
+
         writer.u64value(checkpoint.m_tick);
         writer.u32value(checkpoint.m_tick_hz);
         writer.boolean(checkpoint.m_initial_matter_valid);
@@ -356,20 +383,26 @@ namespace pP::colony {
             writer.u32value(checkpoint.m_controlled->m_index);
             writer.u32value(checkpoint.m_controlled->m_generation);
         }
+
         encodeMetadata(writer, checkpoint);
+
         u64 particle_bytes = 12u + checkpoint.m_particles.m_chunks.size() * 8u;
         for (const auto &batch: checkpoint.m_particles.m_chunks) {
             particle_bytes += batch.records().size() * 59u;
         }
+
         const u64 encoded_size = writer.m_bytes.size() + particle_bytes + 8u + snapshot->size();
         PPR_RETURN_UNEXPECTED_ON_FAIL(
             CheckpointCodec, encoded_size <= kMaxWorldCheckpointBytes
                                  ? std::error_code{}
                                  : std::make_error_code(std::errc::value_too_large));
         writer.m_bytes.reserve(static_cast<std::size_t>(encoded_size));
+
         PPR_RETURN_UNEXPECTED_ON_FAIL(CheckpointCodec, encodeParticles(writer, checkpoint.m_particles, context));
+
         writer.u64value(snapshot->size());
         writer.m_bytes.insert(writer.m_bytes.end(), snapshot->begin(), snapshot->end());
+
         PPR_RETURN_UNEXPECTED_ON_FAIL(
             CheckpointCodec, writer.m_bytes.size() <= kMaxWorldCheckpointBytes
                                  ? std::error_code{}
@@ -385,6 +418,7 @@ namespace pP::colony {
                                  ? std::error_code{}
                                  : std::make_error_code(std::errc::value_too_large));
         PPR_RETURN_UNEXPECTED_ON_FAIL(CheckpointCodec, context ? context->error() : std::error_code{});
+
         Reader reader{bytes};
         const auto magic = reader.u64value();
         const auto version = reader.u32value();
@@ -396,6 +430,7 @@ namespace pP::colony {
         const bool full = reader.boolean();
         PPR_RETURN_UNEXPECTED_ON_FAIL(
             CheckpointCodec, full ? std::error_code{} : sim::make_error_code(sim::errc::invalid_payload));
+
         WorldCheckpoint checkpoint;
         auto &descriptor = checkpoint.m_descriptor;
         descriptor.m_pack_schema_version = reader.u32value();
@@ -406,11 +441,13 @@ namespace pP::colony {
         descriptor.m_metric.m_cells_per_metre = reader.u32value();
         descriptor.m_metric.m_cells_per_tile = reader.u32value();
         descriptor.m_metric.m_reference_thickness_m = reader.real();
+
         checkpoint.m_materials.resize(reader.count(kMaxContentMaterials + 1u, 6u));
         for (auto &material: checkpoint.m_materials) {
             material.m_id = static_cast<u16>(reader.integer(2u));
             material.m_key = reader.string();
         }
+
         checkpoint.m_tick = reader.u64value();
         checkpoint.m_tick_hz = reader.u32value();
         checkpoint.m_initial_matter_valid = reader.boolean();
@@ -419,14 +456,18 @@ namespace pP::colony {
             const auto generation = reader.u32value();
             checkpoint.m_controlled = sim::Entity{index, generation};
         }
+
         decodeMetadata(reader, checkpoint);
+
         PPR_RETURN_UNEXPECTED_ON_FAIL(CheckpointCodec, decodeParticles(reader, checkpoint.m_particles, context));
+
         const auto snapshot_size = reader.u64value();
         PPR_RETURN_UNEXPECTED_ON_FAIL(CheckpointCodec, reader.m_error);
         PPR_RETURN_UNEXPECTED_ON_FAIL(
             CheckpointCodec, snapshot_size <= kMaxWorldCheckpointBytes and snapshot_size <= reader.remaining()
                                  ? std::error_code{}
                                  : sim::make_error_code(sim::errc::truncated));
+
         const auto snapshot_bytes = reader.take(static_cast<std::size_t>(snapshot_size));
         PPR_RETURN_UNEXPECTED_ON_FAIL(
             CheckpointCodec,
@@ -434,6 +475,7 @@ namespace pP::colony {
         auto snapshot = sim::load(snapshot_bytes);
         PPR_RETURN_UNEXPECTED_ON_FAIL(CheckpointCodec, snapshot);
         checkpoint.m_snapshot = std::move(*snapshot);
+
         PPR_RETURN_UNEXPECTED_ON_FAIL(CheckpointCodec, validateWorldCheckpoint(checkpoint, catalog, context));
         return checkpoint;
     }

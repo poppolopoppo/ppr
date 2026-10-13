@@ -51,6 +51,7 @@ namespace pP::colony {
             PPR_RETURN_ERROR_ON_FAIL(PreviewExport, error);
             PPR_RETURN_ERROR_ON_FAIL(
                 PreviewExport, writePreviewText(directory / "pack.toml", source.m_manifest_source.m_bytes));
+
             for (std::size_t i = 0u; i < source.m_documents.size(); ++i) {
                 PPR_RETURN_ERROR_ON_FAIL(PreviewExport, context ? context->error() : std::error_code{});
                 const std::filesystem::path relative{source.m_manifest.m_files[i]};
@@ -74,6 +75,7 @@ namespace pP::colony {
             const IContext *const context) {
             constexpr u32 edge = kWorldgenPreviewEdge;
             Array<u16> matter(edge * edge, 0u);
+
             for (const auto &region: preview.m_matter.m_regions) {
                 for (const auto span: region.m_spans) {
                     for (u32 x = span.m_begin_x; x < span.m_end_x; ++x) {
@@ -82,6 +84,7 @@ namespace pP::colony {
                     }
                 }
             }
+
             std::string biomes{"P6\n256 256\n255\n"}, fills{biomes};
             biomes.reserve(biomes.size() + edge * edge * 3u);
             fills.reserve(fills.size() + edge * edge * 3u);
@@ -90,6 +93,7 @@ namespace pP::colony {
                     bytes += static_cast<char>((rgba >> shift) & 255u);
                 }
             };
+
             for (u32 row = 0u; row < edge; ++row) {
                 PPR_RETURN_ERROR_ON_FAIL(PreviewExport, context ? context->error() : std::error_code{});
                 const u32 y = preview.m_visible.m_top - 1u - row;
@@ -104,6 +108,7 @@ namespace pP::colony {
                     append(fills, material ? material->m_color_rgba : 0u);
                 }
             }
+
             PPR_RETURN_ERROR_ON_FAIL(PreviewExport, writePreviewText(directory / "biome.ppm", biomes));
             PPR_RETURN_ERROR_ON_FAIL(PreviewExport, writePreviewText(directory / "initial-matter.ppm", fills));
             return {};
@@ -142,6 +147,7 @@ namespace pP::colony {
                 display.m_center_y_m, display.m_zoom, display.m_view_mode,
                 quote(source.m_manifest_source.m_path.parent_path().generic_string()));
             bool first = true;
+
             for (const auto &texture: preview.m_catalog.textures()) {
                 result += std::format(
                     "{}{{\"path\":{},\"source_size\":{},\"source_fingerprint\":\"{:016x}\",\"normal_map\":{}}}",
@@ -149,15 +155,19 @@ namespace pP::colony {
                     texture.m_normal_map);
                 first = false;
             }
+
             result += "]},\"materials\":[";
             first = true;
+
             for (const auto count: preview.m_material_counts) {
                 result += std::format(
                     "{}{{\"id\":{},\"cells\":{}}}", first ? "" : ",", count.m_material, count.m_cells);
                 first = false;
             }
+
             result += "],\"initial_matter_regions\":[";
             first = true;
+
             for (const auto &region: preview.m_matter.m_regions) {
                 result += std::format(
                     "{}{{\"identity\":\"{:016x}\",\"material\":{},\"temperature_k\":{},\"bulk_density_kg_m3\":{},\"crop_volume_m3\":{},\"crop_mass_kg\":{},\"spans\":[",
@@ -172,7 +182,9 @@ namespace pP::colony {
                 result += "]}";
                 first = false;
             }
+
             result += ']';
+
             if (preview.m_exact_world) {
                 const auto &world = preview.m_exact_world->m_world;
                 result += std::format(
@@ -188,6 +200,7 @@ namespace pP::colony {
             return result + "\n}\n";
         }
     }
+
     std::error_code exportWorldgenPreview(
         const WorldgenPreviewResult &preview, const ContentPackSource &source, const WorldgenPreviewDisplay &display,
         const std::filesystem::path &directory, const IContext *const context) {
@@ -200,22 +213,28 @@ namespace pP::colony {
             source.m_manifest_source.m_bytes.empty()) {
             PPR_RETURN_ERROR_ON_FAIL(PreviewExport, std::errc::invalid_argument);
         }
+
         std::error_code error;
         const bool created = std::filesystem::create_directory(directory, error);
         PPR_RETURN_ERROR_ON_FAIL(PreviewExport, error);
         if (not created) {
             PPR_RETURN_ERROR_ON_FAIL(PreviewExport, std::errc::file_exists);
         }
+
         PPR_RETURN_ERROR_ON_FAIL(
             PreviewExport,
             exportWorldgenRegionImages(
                 preview.m_catalog, preview.m_grid, preview.m_visible, preview.m_biome_index, directory, context));
+
         if (preview.m_spec.m_mode == EWorldgenPreviewMode::whole_world_crop) {
             PPR_RETURN_ERROR_ON_FAIL(PreviewExport, writeExactContextImages(preview, directory, context));
         }
+
         PPR_RETURN_ERROR_ON_FAIL(PreviewExport, writeSource(source, directory / "source", context));
+
         PPR_RETURN_ERROR_ON_FAIL(
             PreviewExport, writePreviewText(directory / "preview.json", previewReport(preview, source, display)));
+
         PPR_RETURN_ERROR_ON_FAIL(PreviewExport, context ? context->error() : std::error_code{});
         PPR_RETURN_ERROR_ON_FAIL(
             PreviewExport, writePreviewText(

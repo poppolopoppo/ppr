@@ -12,6 +12,10 @@ import game.colony.pathfinding;
 import std;
 
 namespace pP::game::tests::detail::movement {
+    // ------------------------------------------------------------------
+    // movement
+    // ------------------------------------------------------------------
+
     using namespace colony;
 
     PPR_UNIT_TEST (interactive_dig_holds_cells_bodies_and_ticks_until_complete_publication) {

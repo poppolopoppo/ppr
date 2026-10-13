@@ -19,6 +19,7 @@ namespace pP::colony {
             [[nodiscard]] u64 key(const std::initializer_list<std::string_view> parts) {
                 u64 hash = 14695981039346656037ull;
                 const auto byte = [&hash](const u8 value) { hash = (hash ^ value) * 1099511628211ull; };
+
                 for (const auto part: parts) {
                     const u64 size = part.size();
                     for (u32 shift = 0u; shift < 64u; shift += 8u) {
@@ -28,6 +29,7 @@ namespace pP::colony {
                         byte(static_cast<u8>(value));
                     }
                 }
+
                 if (not m_keys.insert(hash).second) {
                     m_error = std::make_error_code(std::errc::invalid_argument);
                 }
@@ -112,6 +114,7 @@ namespace pP::colony {
                 biome.m_rind_material = source.m_rind_material_id;
                 biome.m_formation_probability = source.m_formation_probability;
                 biome.m_formation_length_m = source.m_formation_length_m;
+
                 for (const auto &band: source.m_composition) {
                     sim::GenerationBand target{
                         .m_key = compiler.key({"biomes", source.m_key, "composition", band.m_key}),
@@ -130,6 +133,7 @@ namespace pP::colony {
                     }
                     biome.m_bands.push_back(std::move(target));
                 }
+
                 for (const auto &deposit: source.m_deposits) {
                     biome.m_deposits.push_back(
                         {compiler.key({"biomes", source.m_key, "deposits", deposit.m_key}), deposit.m_order,
@@ -141,6 +145,7 @@ namespace pP::colony {
                             deposit.m_fringe_coverage, deposit.m_sprinkle_probability,
                             deposit.m_orientation_min_degrees, deposit.m_orientation_max_degrees});
                 }
+
                 recipe.m_biomes.push_back(std::move(biome));
             }
         }
@@ -151,6 +156,7 @@ namespace pP::colony {
                     .m_key = compiler.key({"features", source.m_key}),
                     .m_bounds = {bounds.m_min_x_fine, bounds.m_min_y_fine, bounds.m_max_x_fine, bounds.m_max_y_fine},
                     .m_allow_reflection = source.m_allow_horizontal_reflection};
+
                 for (const auto &operation: source.m_operations) {
                     feature.m_operations.push_back(
                         {compiler.key({"features", source.m_key, "operations", operation.m_key}), operation.m_order,
@@ -158,11 +164,13 @@ namespace pP::colony {
                             operation.m_y_fine, operation.m_end_x_fine, operation.m_end_y_fine, operation.m_width_fine,
                             operation.m_height_fine, operation.m_radius_m, operation.m_material_id});
                 }
+
                 for (const auto &marker: source.m_markers) {
                     feature.m_markers.push_back(
                         {compiler.key({"features", source.m_key, "markers", marker.m_key}), role(marker.m_role),
                             marker.m_x_fine, marker.m_y_fine});
                 }
+
                 recipe.m_features.push_back(std::move(feature));
             }
         }
@@ -230,17 +238,21 @@ namespace pP::colony {
         if (not catalog.contentFingerprint() or profile == nullptr) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyWorldPlan, std::errc::invalid_argument);
         }
+
         Compiler compiler;
         sim::GenerationRecipe recipe;
+
         for (const auto &source: catalog.materials()) {
             recipe.m_materials.push_back(
                 {source.m_numeric_id, source.m_representation == EMaterialRepresentation::terrain,
                     source.m_diggable.value_or(false), matter(source.m_phase), source.m_reference_density_kg_m3,
                     compiler.key({"materials", source.m_key})});
         }
+
         for (const auto &source: catalog.fields()) {
             recipe.m_fields.push_back({compiler.key({"fields", source.m_key}), source.m_noise});
         }
+
         compileBiomes(compiler, catalog, recipe);
         compileFeatures(compiler, catalog, recipe);
 
@@ -273,11 +285,13 @@ namespace pP::colony {
             recipe.m_bedrock_material = profile->m_bedrock_material_id;
             recipe.m_start_depth_m = profile->m_start_depth_m;
         }
+
         recipe.m_start_clearance_m = profile->m_start_clearance_m;
         recipe.m_start_route_width_m = profile->m_start_route_width_m;
         // Actual player body half extents; authored profiles cannot resize actors.
         recipe.m_actor_half_width_m = 0.4;
         recipe.m_actor_half_height_m = 0.9;
+
         for (const auto &source: profile->m_biomes) {
             recipe.m_constraints.push_back(
                 {compiler.key({"worlds", profile->m_key, "biomes", source.m_key}),
@@ -285,6 +299,7 @@ namespace pP::colony {
                     source.m_depth_min_normalized, source.m_depth_max_normalized, source.m_distance_min_m,
                     source.m_distance_max_m});
         }
+
         for (const auto &source: profile->m_start_resources) {
             recipe.m_resources.push_back(
                 {compiler.key({"worlds", profile->m_key, "resources", source.m_key}),
@@ -293,9 +308,11 @@ namespace pP::colony {
                         source.m_marker),
                     source.m_minimum_fine_cells, source.m_material_id, source.m_max_distance_m});
         }
+
         for (const auto &source: profile->m_rules) {
             recipe.m_rules.push_back(compileRule(compiler, catalog, *profile, source));
         }
+
         PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyWorldPlan, compiler.m_error);
         return sim::compileGenerationPlan(std::move(recipe), seed);
     }

@@ -55,6 +55,7 @@ namespace pP::ui {
             std::ignore = m_samples.popFrontAssumeNotEmpty();
         }
         m_samples.pushBackAssumeNotFull(Sample{frame_ms, render_ms});
+
         if (m_until_refresh == 0u) {
             refresh_();
             m_until_refresh = 14u;
@@ -73,10 +74,12 @@ namespace pP::ui {
             std::ignore = m_gpu_samples.popFrontAssumeNotEmpty();
         }
         m_gpu_samples.pushBackAssumeNotFull(milliseconds);
+
         std::array<float, kWindow> values{};
         for (std::size_t index = 0u; index < m_gpu_samples.size(); ++index) {
             values[index] = m_gpu_samples[index];
         }
+
         m_gpu = summarize(std::span{values}.first(m_gpu_samples.size()));
     }
 
@@ -96,6 +99,7 @@ namespace pP::ui {
             frames[index] = m_samples[index].m_frame;
             renders[index] = m_samples[index].m_render;
         }
+
         m_frame = summarize(std::span{frames}.first(count));
         m_render = summarize(std::span{renders}.first(count));
     }
@@ -115,6 +119,7 @@ namespace pP::ui {
         if (io.DisplaySize.x <= 32.0f or io.DisplaySize.y <= bottom_inset + 32.0f) {
             return;
         }
+
         ImGui::SetNextWindowPos(
             ImVec2{8.0f, io.DisplaySize.y - bottom_inset - 8.0f}, ImGuiCond_Always, ImVec2{0.0f, 1.0f});
         ImGui::SetNextWindowBgAlpha(0.90f);
@@ -134,6 +139,7 @@ namespace pP::ui {
         if (not visible) {
             return;
         }
+
         ImGui::Text("Timing · last %u frames · ms", checked_cast<u32>(m_samples.size()));
         ImGui::TextDisabled("Blue: average   Amber: p95");
         const float width = std::min(440.0f, io.DisplaySize.x - 32.0f);

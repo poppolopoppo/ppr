@@ -15,9 +15,11 @@ namespace pP::physics {
         sensor_count = 0u;
         wake_count = 0u;
         contact_count = 0u;
+
         if (handles.size() != states.size() or handles.size() > wakes.size()) {
             return std::make_error_code(std::errc::no_buffer_space);
         }
+
         try {
             std::vector<PreviousAwake> next;
             std::vector<WakeRecord> transitions;
@@ -25,6 +27,7 @@ namespace pP::physics {
             next.reserve(handles.size());
             transitions.reserve(handles.size());
             pending.reserve(handles.size());
+
             for (std::size_t index = 0u; index < handles.size(); ++index) {
                 const BodyHandle handle = handles[index];
                 if (handle.m_entity == 0u or (index != 0u and handles[index - 1u].m_entity >= handle.m_entity)) {
@@ -46,6 +49,7 @@ namespace pP::physics {
                     transitions.push_back({handle.m_entity, *awake});
                 }
             }
+
             std::vector<SensorEvent> events(sensors.size());
             std::size_t count{};
             if (const std::error_code error = scene.drainSensorEvents(events, count); error) {
@@ -55,12 +59,14 @@ namespace pP::physics {
             std::ranges::sort(events, {}, [](const SensorEvent &event) {
                 return std::tuple{event.m_sensor_entity, event.m_visitor_entity, event.m_kind, event.m_begin};
             });
+
             std::size_t contacts_written{};
             if (not contacts.empty()) {
                 if (const std::error_code error = scene.drainContactEvents(contacts, contacts_written); error) {
                     return error;
                 }
             }
+
             std::ranges::copy(events, sensors.begin());
             std::ranges::copy(pending, states.begin());
             std::ranges::copy(transitions, wakes.begin());

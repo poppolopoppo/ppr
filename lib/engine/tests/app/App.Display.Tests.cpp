@@ -10,6 +10,10 @@ import engine.math;
 import std;
 
 namespace pP::tests::detail {
+    // ------------------------------------------------------------------
+    // display
+    // ------------------------------------------------------------------
+
     namespace Display {
         struct TransactionApp final : Application {
             u32 m_settlements{0u};

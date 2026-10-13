@@ -11,6 +11,10 @@ import game.colony.content;
 import std;
 
 namespace pP::game::tests::detail::content {
+    // ------------------------------------------------------------------
+    // content
+    // ------------------------------------------------------------------
+
     using namespace colony;
 
     const std::string rock = R"(

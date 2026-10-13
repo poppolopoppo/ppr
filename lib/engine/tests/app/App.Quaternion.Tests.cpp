@@ -10,6 +10,10 @@ import engine.math;
 import std;
 
 namespace pP::tests::detail {
+    // ------------------------------------------------------------------
+    // quaternion
+    // ------------------------------------------------------------------
+
     namespace QuaternionTests {
         constexpr float kEps = 1e-4f;
 

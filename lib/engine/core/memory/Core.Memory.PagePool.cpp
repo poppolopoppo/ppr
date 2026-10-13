@@ -250,6 +250,7 @@ namespace pP::mem {
             storage.ptr &&
             storage.count >= infos.getAllocationSize() &&
             "Storage must be properly allocated and sized according to setupMemoryRequirements()");
+
         m_bits = static_cast<word_t *>(storage.ptr);
 
         auto bits_span = std::span{static_cast<word_t *>(storage.ptr), infos.getNumTotalWords()};

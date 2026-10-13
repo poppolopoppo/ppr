@@ -163,6 +163,7 @@ namespace pP::config {
         if (redact) {
             return "<redacted>";
         }
+
         switch (m_kind) {
             case ESourceKind::boolean: return m_boolean ? "true" : "false";
             case ESourceKind::integer: return configFormat("{}", m_integer);
@@ -217,6 +218,7 @@ namespace pP::config {
             }
             result += '\n';
         }
+
         if (omittedCount() != 0u) {
             result += configFormat("{} further diagnostics omitted (record limit reached).\n", omittedCount());
         }

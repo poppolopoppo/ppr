@@ -339,6 +339,7 @@ export namespace pP::config {
         result.m_description = metadata.m_description;
         result.m_units = metadata.m_units;
         result.m_read_only = metadata.m_read_only;
+
         if constexpr (requires {
                           domain.m_min;
                           domain.m_max;
@@ -356,12 +357,14 @@ export namespace pP::config {
                 result.m_slider_min = std::nextafter(result.m_slider_min, result.m_slider_max);
             }
         }
+
         if constexpr (requires { domain.m_entries; }) {
             result.m_choices.reserve(domain.m_entries.size());
             for (const auto &entry: domain.m_entries) {
                 result.m_choices.push_back(entry.m_name);
             }
         }
+
         result.m_optional = details::is_optional_v<T>;
         return result;
     }
@@ -593,6 +596,7 @@ export namespace pP::config {
             if (trimmed.empty()) {
                 return make_error_code(EConfigErrc::invalid_integer);
             }
+
             if constexpr (std::is_signed_v<T>) {
                 i64 wide = 0;
                 const auto [ptr, ec] = std::from_chars(trimmed.data(), trimmed.data() + trimmed.size(), wide);
@@ -606,6 +610,7 @@ export namespace pP::config {
                     wide > static_cast<i64>(std::numeric_limits<T>::max())) {
                     return make_error_code(EConfigErrc::out_of_range);
                 }
+
                 out = static_cast<T>(wide);
             } else {
                 u64 wide = 0;
@@ -619,6 +624,7 @@ export namespace pP::config {
                 if (wide > static_cast<u64>(std::numeric_limits<T>::max())) {
                     return make_error_code(EConfigErrc::out_of_range);
                 }
+
                 out = static_cast<T>(wide);
             }
             return {};
@@ -633,6 +639,7 @@ export namespace pP::config {
             if (trimmed.empty()) {
                 return make_error_code(EConfigErrc::invalid_float);
             }
+
             double wide = 0.0;
             const auto [ptr, ec] = std::from_chars(trimmed.data(), trimmed.data() + trimmed.size(), wide);
             if (ec == std::errc::result_out_of_range) {
@@ -650,6 +657,7 @@ export namespace pP::config {
                     return make_error_code(EConfigErrc::out_of_range);
                 }
             }
+
             out = static_cast<T>(wide);
             return {};
         }
@@ -699,6 +707,7 @@ export namespace pP::config {
                 if (not std::in_range<T>(src.m_integer)) {
                     return make_error_code(EConfigErrc::out_of_range);
                 }
+
                 out = static_cast<T>(src.m_integer);
                 return {};
             }
@@ -723,6 +732,7 @@ export namespace pP::config {
                         src.m_floating > static_cast<double>(std::numeric_limits<T>::max()))) {
                     return make_error_code(EConfigErrc::out_of_range);
                 }
+
                 out = static_cast<T>(src.m_floating);
                 return {};
             }
@@ -773,6 +783,7 @@ export namespace pP::config {
             if (src.m_kind != ESourceKind::text) {
                 return make_error_code(EConfigErrc::type_mismatch);
             }
+
             return parseEnumValue(constraint, src.m_text, out);
         }
 
@@ -784,10 +795,12 @@ export namespace pP::config {
                 out.reset();
                 return {};
             }
+
             T inner{};
             if (const std::error_code err = convertTo(src, inner, mode, constraint, expected)) {
                 return err;
             }
+
             out = std::move(inner);
             return {};
         }
@@ -808,6 +821,7 @@ export namespace pP::config {
                         if (assignment.m_name != name) {
                             continue;
                         }
+
                         T scratch = field;
                         std::string expected;
                         std::error_code err = convertTo(
@@ -815,6 +829,7 @@ export namespace pP::config {
                         if (not err) {
                             err = checkConstraint(member.m_constraint, scratch);
                         }
+
                         state.report(
                             assignment.m_location, std::string{name},
                             configFormat(
@@ -826,6 +841,7 @@ export namespace pP::config {
                     }
                     continue;
                 }
+
                 if (state.m_enforce_runtime_mutability and member.m_metadata.m_mutability != EMutability::runtime) {
                     for (const auto &assignment: layer.m_assignments) {
                         if (assignment.m_name != name) {
@@ -839,10 +855,12 @@ export namespace pP::config {
                     }
                     continue;
                 }
+
                 for (const auto &assignment: layer.m_assignments) {
                     if (assignment.m_name != name) {
                         continue;
                     }
+
                     // Validate every supplied value, even shadowed ones.
                     T scratch = field;
                     std::string expected;
@@ -878,6 +896,7 @@ export namespace pP::config {
                         state.retain(err);
                         continue;
                     }
+
                     winner = std::addressof(assignment);
                     winner_source = layer.m_source;
                     field = std::move(scratch);
@@ -1012,6 +1031,7 @@ export namespace pP::config {
         if (state.m_first_error) {
             return state.m_first_error;
         }
+
         resolved.m_value = std::move(scratch);
         resolved.m_origins = std::move(origins);
         return {};

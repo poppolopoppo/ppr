@@ -8,6 +8,10 @@ import engine.image;
 import std;
 
 export namespace pP::colony {
+    // ------------------------------------------------------------------
+    // materials
+    // ------------------------------------------------------------------
+
     enum class EMaterialPhase : u8 {
         solid,
         liquid,
@@ -52,6 +56,10 @@ export namespace pP::colony {
         EMaterialTextureSampling m_texture_sampling{EMaterialTextureSampling::stochastic};
     };
 
+    // ------------------------------------------------------------------
+    // limits
+    // ------------------------------------------------------------------
+
     inline constexpr std::size_t kMaxMaterialDocumentBytes = 1024u * 1024u;
     inline constexpr std::size_t kMaxContentMaterials = 256u;
     inline constexpr std::size_t kMaxContentFields = 256u;
@@ -67,6 +75,10 @@ export namespace pP::colony {
     inline constexpr std::size_t kMaxWorldSites = 4096u;
     inline constexpr std::size_t kMaxStartResources = 8u;
     inline constexpr std::size_t kMaxPackManifestBytes = 64u * 1024u;
+
+    // ------------------------------------------------------------------
+    // documents
+    // ------------------------------------------------------------------
 
     enum class EContentDocument : u8 {
         materials,
@@ -94,6 +106,10 @@ export namespace pP::colony {
         EContentDocument category, std::string_view relative_property,
         const std::array<config::Document, kContentDocumentCount> &documents, std::string_view definition_key);
 
+    // ------------------------------------------------------------------
+    // manifests
+    // ------------------------------------------------------------------
+
     struct ContentPackManifest {
         std::string m_pack_id{};
         // Indexed by EContentDocument; the manifest is the complete file set.
@@ -109,6 +125,10 @@ export namespace pP::colony {
         ContentSourceDocument m_manifest_source{};
         std::array<ContentSourceDocument, kContentDocumentCount> m_documents{};
     };
+
+    // ------------------------------------------------------------------
+    // fields
+    // ------------------------------------------------------------------
 
     struct FieldDefinition {
         std::string m_key{};
@@ -129,6 +149,10 @@ export namespace pP::colony {
         const std::filesystem::path &root, config::Diagnostics &diagnostics, const IContext *context = nullptr);
 
     class ContentCatalog;
+
+    // ------------------------------------------------------------------
+    // biomes
+    // ------------------------------------------------------------------
 
     struct WeightedTerrainMaterial {
         std::string m_key{};
@@ -203,6 +227,10 @@ export namespace pP::colony {
         std::string_view bytes, std::string_view origin, const ContentCatalog &materials,
         std::span<const FieldDefinition> fields, config::Diagnostics &diagnostics);
 
+    // ------------------------------------------------------------------
+    // features
+    // ------------------------------------------------------------------
+
     enum class EFeatureAction : u8 {
         paint,
         carve
@@ -257,6 +285,10 @@ export namespace pP::colony {
     [[nodiscard]] Expected<Array<FeatureDefinition>> decodeFeatureDefinitions(
         std::string_view bytes, std::string_view origin, const ContentCatalog &materials,
         config::Diagnostics &diagnostics);
+
+    // ------------------------------------------------------------------
+    // worlds
+    // ------------------------------------------------------------------
 
     enum class EWorldRuleKind : u8 {
         threshold_cave,
@@ -347,6 +379,11 @@ export namespace pP::colony {
         u16 m_bedrock_material_id{};
         std::optional<double> m_start_depth_m{};
     };
+
+    // ------------------------------------------------------------------
+    // backgrounds
+    // ------------------------------------------------------------------
+
     struct BackgroundLayerDefinition {
         std::string m_key{}, m_texture{}, m_source_location{};
         u32 m_order{}, m_color_rgba{};
@@ -358,6 +395,11 @@ export namespace pP::colony {
     };
     [[nodiscard]] Expected<Array<BackgroundStackDefinition>> decodeBackgroundDefinitions(
         std::string_view bytes, std::string_view origin, config::Diagnostics &diagnostics);
+
+    // ------------------------------------------------------------------
+    // textures
+    // ------------------------------------------------------------------
+
     inline constexpr u32 kContentSchemaVersion = 2u;
     inline constexpr u64 kMaxTextureInputBytes = 16u * 1024u * 1024u;
     inline constexpr u64 kMaxPackTextureInputBytes = 64u * 1024u * 1024u;
@@ -372,6 +414,11 @@ export namespace pP::colony {
         // Usage is part of asset identity, even when source bytes/path match.
         bool m_normal_map{};
     };
+
+    // ------------------------------------------------------------------
+    // content catalog
+    // ------------------------------------------------------------------
+
     // Immutable owned material catalog. Decoding produces a candidate; callers
     // retain their previous catalog on failure. No parser views survive decoding.
     class ContentCatalog {

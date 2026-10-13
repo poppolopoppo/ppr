@@ -10,6 +10,10 @@ import engine.mesh;
 import std;
 
 namespace pP::tests::detail {
+    // ------------------------------------------------------------------
+    // search
+    // ------------------------------------------------------------------
+
     namespace Mesh {
         // Mesh fixtures stage POST_BUILD next to the test executable; CTest
         // runs with WORKING_DIRECTORY == that directory (Ninja single-config),

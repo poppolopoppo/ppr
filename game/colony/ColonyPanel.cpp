@@ -17,6 +17,10 @@ import std;
 
 namespace pP::colony {
     namespace {
+        // ------------------------------------------------------------------
+        // helpers
+        // ------------------------------------------------------------------
+
         // Palette: the same values the Slice 1 panel used for PAUSED/RUNNING
         // and the same cyan/orange the game's debug-draw materials use, so
         // chrome, outline, and world agree. Every state is written as words
@@ -70,6 +74,10 @@ namespace pP::colony {
         [[nodiscard]] float plainWidth(const char *label) noexcept {
             return ImGui::CalcTextSize(label).x;
         }
+
+        // ------------------------------------------------------------------
+        // bar flow
+        // ------------------------------------------------------------------
 
         /// Wrapping row for the top bar: continues on one line while the next
         /// item fits the window's content width, otherwise stays on the fresh
@@ -177,6 +185,10 @@ namespace pP::colony {
                 default: return "";
             }
         }
+
+        // ------------------------------------------------------------------
+        // cell reads
+        // ------------------------------------------------------------------
 
         /// One cell read for the status line and Inspector. Residency comes
         /// from `isResident` because `getCell` reads a non-resident chunk
@@ -1162,6 +1174,7 @@ namespace pP::colony {
             if (not action) {
                 return;
             }
+
             switch (*action) {
                 case ui::EDisplayWidgetAction::use_monitor_cap:
                     intent = ColonyIntent{.m_kind = EColonyIntent::display_use_monitor_cap};
@@ -1194,6 +1207,7 @@ namespace pP::colony {
         std::optional<ColonyIntent> intent{};
 
         pushChromeStyle();
+        // chrome scope:
         struct ChromeScope {
             bool active{true};
             void close() noexcept {
@@ -1237,6 +1251,7 @@ namespace pP::colony {
         frame.m_chrome_top = bar_height;
         frame.m_chrome_bottom = status_height;
         frame.m_chrome_right = side_width;
+
         // Hand the keyboard back to the game after a completed click or on
         // the frame a popup closes (mirrors the engine's background-click
         // deselect). Active editors and drags retain keyboard focus across

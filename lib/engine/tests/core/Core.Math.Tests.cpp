@@ -8,6 +8,10 @@ import engine.math;
 import std;
 
 namespace pP::tests::detail {
+    // ------------------------------------------------------------------
+    // math
+    // ------------------------------------------------------------------
+
     namespace Math {
         double contourCross(const math::ContourPoint a, const math::ContourPoint b, const math::ContourPoint p) {
             return (b.m_x - a.m_x) * (p.m_y - a.m_y) - (b.m_y - a.m_y) * (p.m_x - a.m_x);

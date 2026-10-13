@@ -15,6 +15,10 @@ import game.colony.sim_packet;
 import game.colony.translator;
 
 namespace pP::tests::detail {
+    // ------------------------------------------------------------------
+    // sim packet
+    // ------------------------------------------------------------------
+
     namespace SimPacket {
         // F1 game payload: owned copies captured after the tick, consumed by
         // the present/overlay phases on the same thread. These tests run the

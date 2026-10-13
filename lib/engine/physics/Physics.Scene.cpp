@@ -12,6 +12,10 @@ namespace pP::physics {
     // ReSharper disable once CppUseInternalLinkage
     PPR_DEFINE_LOG_CATEGORY(Physics, debug, none);
 
+    // ------------------------------------------------------------------
+    // validation helpers
+    // ------------------------------------------------------------------
+
     namespace {
         [[nodiscard]] std::error_code error(const std::errc code) noexcept {
             return std::make_error_code(code);
@@ -36,6 +40,10 @@ namespace pP::physics {
             return b2CreatePolygonShape(body, &definition, &box);
         }
     }
+
+    // ------------------------------------------------------------------
+    // runtime
+    // ------------------------------------------------------------------
 
     struct Scene::Runtime {
         u64 m_chunk_chain_update{};
@@ -102,6 +110,10 @@ namespace pP::physics {
         (void) shutdown();
     }
 
+    // ------------------------------------------------------------------
+    // lifecycle
+    // ------------------------------------------------------------------
+
     std::error_code Scene::initialize(const Desc desc) {
         const hal::ProfileScope scope{"Physics.Initialize"};
         const bool invalid_gravity = not std::isfinite(desc.m_gravity_x) or not std::isfinite(desc.m_gravity_y);
@@ -120,6 +132,7 @@ namespace pP::physics {
         if (B2_IS_NULL(runtime->m_world)) {
             return error(std::errc::resource_unavailable_try_again);
         }
+
         runtime->m_dt = desc.m_fixed_dt;
         runtime->m_substeps = static_cast<int>(desc.m_substeps);
         m_runtime = std::move(runtime);
@@ -153,6 +166,10 @@ namespace pP::physics {
         return {};
     }
 
+    // ------------------------------------------------------------------
+    // chunk-chain update tokens
+    // ------------------------------------------------------------------
+
     Expected<u64> Scene::beginChunkChainUpdate() {
         PPR_RETURN_UNEXPECTED_ON_FAIL(
             Physics, m_runtime ? std::error_code{} : error(std::errc::operation_not_permitted));
@@ -174,6 +191,10 @@ namespace pP::physics {
         return {};
     }
 
+    // ------------------------------------------------------------------
+    // stepping
+    // ------------------------------------------------------------------
+
     std::error_code Scene::step() {
         const hal::ProfileScope scope{"Physics.Step"};
         if (not m_runtime) {
@@ -186,10 +207,12 @@ namespace pP::physics {
 
         m_runtime->m_events.clear();
         m_runtime->m_contacts_drained = false;
+
         {
             const hal::ProfileScope scope_world{"Physics.Step.World"};
             b2World_Step(m_runtime->m_world, m_runtime->m_dt, m_runtime->m_substeps);
         }
+
         const b2SensorEvents events = b2World_GetSensorEvents(m_runtime->m_world);
 
         const hal::ProfileScope scope_sensors{"Physics.Step.Sensors"};
@@ -214,6 +237,10 @@ namespace pP::physics {
         }
         return {};
     }
+
+    // ------------------------------------------------------------------
+    // bodies
+    // ------------------------------------------------------------------
 
     std::error_code Scene::createBodies(
         const std::span<const u64> entities, const std::span<const BodyDefinition> definitions,
@@ -257,6 +284,7 @@ namespace pP::physics {
 
         std::size_t created{};
         std::error_code failure{};
+
         try {
             for (std::size_t i = 0; i < entities.size(); ++i) {
                 const BodyDefinition &def = definitions[i];
@@ -331,6 +359,10 @@ namespace pP::physics {
         m_runtime->m_events.clear();
         return {};
     }
+
+    // ------------------------------------------------------------------
+    // chunk chains
+    // ------------------------------------------------------------------
 
     std::expected<ChainHandle, std::error_code> Scene::createChunkChain(const ChainDefinition definition) {
         if (not m_runtime) {
@@ -444,6 +476,10 @@ namespace pP::physics {
         return {};
     }
 
+    // ------------------------------------------------------------------
+    // sensors + contacts
+    // ------------------------------------------------------------------
+
     std::error_code Scene::attachSensor(const BodyHandle handle, const SensorDefinition definition) {
         if (not m_runtime) {
             return error(std::errc::operation_not_permitted);
@@ -509,6 +545,7 @@ namespace pP::physics {
         }
 
         const b2ContactEvents events = b2World_GetContactEvents(m_runtime->m_world);
+
         try {
             std::vector<ContactEvent> contacts;
             contacts.reserve(static_cast<std::size_t>(events.beginCount + events.endCount + events.hitCount));
@@ -566,6 +603,10 @@ namespace pP::physics {
             PPR_RETHROW(Physics);
         }
     }
+
+    // ------------------------------------------------------------------
+    // body queries
+    // ------------------------------------------------------------------
 
     std::error_code Scene::enableSleep(const BodyHandle handle, const bool enabled) noexcept {
         if (not m_runtime) {

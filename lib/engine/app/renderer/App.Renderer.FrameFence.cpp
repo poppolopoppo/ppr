@@ -12,6 +12,10 @@ namespace pP {
     // ReSharper disable once CppUseInternalLinkage
     PPR_DEFINE_LOG_CATEGORY(FrameFence, info, none)
 
+    // ------------------------------------------------------------------
+    // fence-governed gpu reuse
+    // ------------------------------------------------------------------
+
     u32 selectRingSlot(
         const FenceCompletionValue completed, const std::span<const FenceCompletionValue> slot_values,
         const u32 cursor) noexcept {
@@ -40,6 +44,10 @@ namespace pP {
         return youngest;
     }
 
+    // ------------------------------------------------------------------
+    // frame credit ledger
+    // ------------------------------------------------------------------
+
     std::error_code FrameCreditLedger::acquire() noexcept {
         if (m_outstanding >= kMaxOutstandingFrames) [[unlikely]] {
             return std::make_error_code(std::errc::device_or_resource_busy);
@@ -59,6 +67,10 @@ namespace pP {
     void FrameCreditLedger::reset() noexcept {
         m_outstanding = 0u;
     }
+
+    // ------------------------------------------------------------------
+    // deferred release
+    // ------------------------------------------------------------------
 
     void DeferredReleaseQueue::defer(
         const FenceCompletionValue last_use_value, std23::move_only_function<void()> release) noexcept {
@@ -103,6 +115,10 @@ namespace pP {
     u32 DeferredReleaseQueue::pendingCount() const noexcept {
         return safe_narrowing(m_entries.size());
     }
+
+    // ------------------------------------------------------------------
+    // app-owned monotonic fence
+    // ------------------------------------------------------------------
 
     std::error_code FrameFence::initialize(rhi::IDevice &device) {
         if (m_fence) [[unlikely]] {

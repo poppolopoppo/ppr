@@ -9,6 +9,10 @@ import engine.core;
 import std;
 
 namespace pP::tests::detail::cfg_cli {
+    // ------------------------------------------------------------------
+    // config cli
+    // ------------------------------------------------------------------
+
     using namespace pP::config;
 
     struct CliSettings {

@@ -81,6 +81,7 @@ namespace pP::mem {
         }
 
         PPR_ASSERT(overlap(m_data, m_capacity, mark));
+
         const u32 prev_offset = m_offset;
         m_offset = static_cast<u32>(static_cast<const std::byte *>(mark) - m_data);
 
@@ -102,6 +103,7 @@ namespace pP::mem {
         ScopedArenaWithDebug::~ScopedArenaWithDebug() noexcept {
             if (m_depth < 0)
                 return;
+
             i32 &g_depth_tls = getDepthTLS();
             PPR_ASSERT(g_depth_tls == m_depth);
             g_depth_tls = m_depth - 1;

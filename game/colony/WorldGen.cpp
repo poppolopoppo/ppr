@@ -46,10 +46,13 @@ namespace pP::colony {
         if (not catalog.contentFingerprint()) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(WorldPreparation, std::errc::invalid_argument);
         }
+
         auto plan = compileWorldPlan(catalog, profile, seed);
         PPR_RETURN_UNEXPECTED_ON_FAIL(WorldPreparation, plan);
+
         auto world = sim::generateWorld(std::move(*plan), clock, execution);
         PPR_RETURN_UNEXPECTED_ON_FAIL(WorldPreparation, world);
+
         const WorldDescriptor descriptor{
             .m_profile = std::string{profile}, .m_seed = seed, .m_content_fingerprint = *catalog.contentFingerprint()};
         return PreparedWorld{std::move(catalog), descriptor, std::move(*world)};

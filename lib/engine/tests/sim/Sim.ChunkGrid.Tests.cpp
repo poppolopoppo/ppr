@@ -9,6 +9,10 @@ import engine.sim;
 import std;
 
 namespace pP::tests::detail {
+    // ------------------------------------------------------------------
+    // chunk grid
+    // ------------------------------------------------------------------
+
     namespace Grid {
         using namespace pP::sim;
 

@@ -61,6 +61,7 @@ namespace pP::config {
                         return;
                     }
                 }
+
                 m_document.m_entries.push_back(Entry{key, std::move(value), location(node.source().begin)});
             }
 
@@ -147,6 +148,7 @@ namespace pP::config {
             if (key.empty()) {
                 return false;
             }
+
             for (const char ch: key) {
                 const bool bare = (ch >= 'a' and ch <= 'z') or
                                   (ch >= 'A' and ch <= 'Z') or
@@ -184,6 +186,7 @@ namespace pP::config {
                         break;
                 }
             }
+
             out += '"';
             return out;
         }
@@ -202,10 +205,12 @@ namespace pP::config {
             diagnostics.add(where, "", std::string{description}, make_error_code(EConfigErrc::codec_error));
             return std::unexpected{make_error_code(EConfigErrc::codec_error)};
         }
+
         TomlFlattener flattener{};
         flattener.m_origin = origin_text;
         flattener.m_diagnostics = std::addressof(diagnostics);
         flattener.m_mode = mode;
+
         flattener.walkTable(table, {});
         if (flattener.m_first_error) {
             return std::unexpected{flattener.m_first_error};
@@ -259,6 +264,7 @@ namespace pP::config {
                 if (entry_section != section) {
                     continue;
                 }
+
                 const std::string key_text = isBareKey(short_key) ? short_key : escapeTomlString(short_key);
                 const FileValue &value = entry.m_value;
                 switch (value.m_kind) {
@@ -272,6 +278,7 @@ namespace pP::config {
                         if (error != std::errc{}) {
                             return std::unexpected{std::make_error_code(error)};
                         }
+
                         out += key_text + " = ";
                         out.append(buffer.data(), end);
                         out += '\n';
@@ -290,6 +297,7 @@ namespace pP::config {
                             if (error != std::errc{}) {
                                 return std::unexpected{std::make_error_code(error)};
                             }
+
                             std::string number(buffer.data(), end);
                             if (number.find_first_of(".eE") == std::string::npos) {
                                 number += ".0";
@@ -338,6 +346,7 @@ namespace pP::config {
             document.m_entries.push_back(Entry{"value", value, {}});
             auto encoded = encode(document);
             PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, encoded);
+
             constexpr std::string_view marker = "value = ";
             const auto begin = encoded->find(marker);
             if (begin == std::string::npos or not encoded->ends_with('\n')) {
@@ -362,6 +371,7 @@ namespace pP::config {
         if (after.size() > max_source_bytes - (bytes.size() - before.size())) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, EConfigErrc::out_of_range);
         }
+
         std::string result{bytes};
         result.replace(patch.m_offset, before.size(), after);
         return result;
@@ -375,11 +385,14 @@ namespace pP::config {
             diagnostics.add(std::string{origin}, std::string{key}, std::string{message}, error);
             return error;
         };
+
         if (bytes.size() > 1024u * 1024u or not isValidCanonicalName(key)) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, fail("Invalid scalar patch path or source size"));
         }
+
         auto decoded = decode(bytes, origin, diagnostics);
         PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, decoded);
+
         auto scalar = scalarText(value);
         PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, scalar);
 
@@ -389,6 +402,7 @@ namespace pP::config {
         } catch (const toml::parse_error &) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, fail("Source cannot be parsed for patching"));
         }
+
         const toml::table *parent = std::addressof(table);
         std::string_view remaining = key;
         while (remaining.find('.') != std::string_view::npos) {
@@ -400,6 +414,7 @@ namespace pP::config {
             parent = node->as_table();
             remaining.remove_prefix(dot + 1u);
         }
+
         ScalarSourcePatch patch;
         if (const auto *node = parent->get(remaining)) {
             const bool compatible = (node->is_boolean() and value.m_kind == EFileKind::boolean) or
@@ -409,6 +424,7 @@ namespace pP::config {
             if (not compatible) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, fail("Scalar patch changes the authored value kind"));
             }
+
             auto begin = sourceOffset(bytes, node->source().begin);
             PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, begin);
             auto end = sourceOffset(bytes, node->source().end);
@@ -416,6 +432,7 @@ namespace pP::config {
             if (*end < *begin) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, fail("Invalid parser source span"));
             }
+
             patch = {*begin, std::string{bytes.substr(*begin, *end - *begin)}, std::move(*scalar)};
         } else {
             auto begin = sourceOffset(bytes, parent->source().begin);
@@ -426,6 +443,7 @@ namespace pP::config {
                 bytes[*begin] != '[') {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, fail("Insertion requires an existing explicit table"));
             }
+
             const auto newline = bytes.find('\n', *begin);
             const std::string_view eol = bytes.find("\r\n") == std::string_view::npos ? "\n" : "\r\n";
             patch.m_offset = newline == std::string_view::npos ? bytes.size() : newline + 1u;
@@ -437,10 +455,12 @@ namespace pP::config {
                 patch.m_after += eol;
             }
         }
+
         auto patched = applySourcePatch(bytes, patch);
         PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, patched);
         auto reparsed = decode(*patched, origin, diagnostics);
         PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, reparsed);
+
         const auto entry = std::ranges::find(reparsed->m_entries, key, &Entry::m_key);
         // An implicit parent can share a descendant's header source region.
         // Require that insertion actually created the requested qualified key.
@@ -457,6 +477,7 @@ namespace pP::config {
             ConfigFile, bytes.size() <= 1024u * 1024u and isValidCanonicalName(key) and not record.m_entries.empty()
                             ? std::error_code{}
                             : std::make_error_code(std::errc::invalid_argument));
+
         auto decoded = decode(bytes, origin, diagnostics, EDecodeMode::records);
         PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, decoded);
         const auto prefix = std::string{key} + ".";
@@ -465,6 +486,7 @@ namespace pP::config {
             })) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, EConfigErrc::duplicate_key);
         }
+
         Document qualified;
         for (const auto &entry: record.m_entries) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(
@@ -472,8 +494,10 @@ namespace pP::config {
                                                               : std::make_error_code(std::errc::invalid_argument));
             qualified.m_entries.push_back({prefix + entry.m_key, entry.m_value, {}});
         }
+
         auto encoded = encode(qualified);
         PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, encoded);
+
         const std::string_view eol = bytes.find("\r\n") == std::string_view::npos ? "\n" : "\r\n";
         std::string appended;
         if (not bytes.empty() and not bytes.ends_with('\n')) {
@@ -487,6 +511,7 @@ namespace pP::config {
                 appended += ch;
             }
         }
+
         ScalarSourcePatch patch{bytes.size(), {}, std::move(appended)};
         auto candidate = applySourcePatch(bytes, patch);
         PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, candidate);
@@ -502,14 +527,17 @@ namespace pP::config {
             ConfigFile, bytes.size() <= 1024u * 1024u and isValidCanonicalName(key)
                             ? std::error_code{}
                             : std::make_error_code(std::errc::invalid_argument));
+
         auto decoded = decode(bytes, origin, diagnostics, EDecodeMode::records);
         PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, decoded);
+
         toml::table table;
         try {
             table = toml::parse(bytes, std::string{origin});
         } catch (const toml::parse_error &) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, EConfigErrc::codec_error);
         }
+
         const toml::node *node = std::addressof(table);
         std::string_view remaining = key;
         while (not remaining.empty()) {
@@ -522,10 +550,12 @@ namespace pP::config {
             }
             remaining.remove_prefix(dot + 1u);
         }
+
         PPR_RETURN_UNEXPECTED_ON_FAIL(
             ConfigFile, not node->as_table() or not node->as_table()->is_inline()
                             ? std::error_code{}
                             : std::make_error_code(std::errc::operation_not_supported));
+
         using Span = std::pair<std::size_t, std::size_t>;
         Array<Span> spans;
         const auto collect = [&](auto &&self, const toml::node &current) -> std::error_code {
@@ -550,9 +580,11 @@ namespace pP::config {
             }
             return {};
         };
+
         PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, collect(collect, *node));
         PPR_RETURN_UNEXPECTED_ON_FAIL(
             ConfigFile, not spans.empty() ? std::error_code{} : make_error_code(EConfigErrc::codec_error));
+
         std::ranges::sort(spans);
         const auto first = spans.front().first;
         const auto last = std::ranges::max(spans, {}, &Span::second).second;
@@ -564,16 +596,19 @@ namespace pP::config {
             }
             cursor = (std::max) (cursor, end);
         }
+
         auto candidate = applySourcePatch(bytes, patch);
         PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, candidate);
         auto checked = decode(*candidate, origin, diagnostics, EDecodeMode::records);
         PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, checked);
+
         const auto prefix = std::string{key} + ".";
         if (std::ranges::any_of(checked->m_entries, [&](const Entry &entry) {
                 return entry.m_key == key or entry.m_key.starts_with(prefix);
             })) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, EConfigErrc::codec_error);
         }
+
         // Parser source regions for implicit tables can overlap descendants.
         // Prove that removing the selected record preserved every other value.
         Document retained;
@@ -582,6 +617,7 @@ namespace pP::config {
                 retained.m_entries.push_back(entry);
             }
         }
+
         std::ranges::sort(retained.m_entries, {}, &Entry::m_key);
         std::ranges::sort(checked->m_entries, {}, &Entry::m_key);
         auto expected = encode(retained);

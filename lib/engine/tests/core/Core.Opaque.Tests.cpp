@@ -7,6 +7,10 @@ import engine.core;
 import std;
 
 namespace pP::tests::detail {
+    // ------------------------------------------------------------------
+    // opaque
+    // ------------------------------------------------------------------
+
     namespace Opaque {
         namespace Value {
             PPR_UNIT_TEST (decl_scalars) {

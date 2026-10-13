@@ -10,6 +10,10 @@ import engine.tests;
 import std;
 
 namespace pP::tests::detail::harness {
+    // ------------------------------------------------------------------
+    // test harness
+    // ------------------------------------------------------------------
+
     using namespace pP::config;
 
     [[nodiscard]] Expected<ParsedTests> parse(

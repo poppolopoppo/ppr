@@ -29,11 +29,14 @@ namespace pP::colony {
                                                                           temperature_max_k > temperature_min_k)
                               ? std::error_code{}
                               : std::make_error_code(std::errc::invalid_argument));
+
         auto stage = captureWorldPresentation(driver, &context);
         PPR_RETURN_UNEXPECTED_ON_FAIL(WorldPreview, stage);
+
         stage->m_diagnostic_mode = mode;
         stage->m_diagnostic_revision = revision;
         stage->m_initial_matter_valid = true;
+
         if (mode == EGridDiagnosticMode::textured) {
             return stage;
         }
@@ -101,6 +104,7 @@ namespace pP::colony {
                 }
             }
         }
+
         if (mode == EGridDiagnosticMode::initial_matter) {
             const auto particles = driver.captureParticles();
             for (const auto &batch: particles.m_chunks) {
@@ -117,6 +121,7 @@ namespace pP::colony {
                 }
             }
         }
+
         PPR_RETURN_UNEXPECTED_ON_FAIL(WorldPreview, context.error());
         return stage;
     }

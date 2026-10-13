@@ -19,6 +19,10 @@ import std;
 // render scope (the asset/render parent in Asset.Tests.cpp owns the single
 // SharedGpu acquire).
 namespace pP::tests::detail::SharedGpu {
+    // ------------------------------------------------------------------
+    // render shared mesh
+    // ------------------------------------------------------------------
+
     [[nodiscard]] safe_ptr<IRhiService> rhiService();
 
     [[nodiscard]] safe_ptr<IShaderService> shaderService();

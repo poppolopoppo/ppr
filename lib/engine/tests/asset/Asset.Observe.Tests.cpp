@@ -17,6 +17,10 @@ import std;
 // ring, pipeline cache, RHI budget, shader modules) are proven by the
 // logging_gpu group. One focused test per TU.
 namespace pP::tests::detail {
+    // ------------------------------------------------------------------
+    // observe
+    // ------------------------------------------------------------------
+
     namespace Logging {
         [[nodiscard]] std::filesystem::path loggingMeshDir() {
             return std::filesystem::current_path() / "meshes" / "";

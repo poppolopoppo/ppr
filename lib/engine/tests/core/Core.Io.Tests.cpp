@@ -7,6 +7,10 @@ import engine.core;
 import std;
 
 namespace pP::tests::detail {
+    // ------------------------------------------------------------------
+    // io
+    // ------------------------------------------------------------------
+
     namespace Io {
         namespace File {
             PPR_UNIT_TEST (open_and_close) {

@@ -7,6 +7,10 @@ import engine.core;
 import std;
 
 namespace pP::tests::detail {
+    // ------------------------------------------------------------------
+    // io file watcher
+    // ------------------------------------------------------------------
+
     namespace File_watcher {
         struct TempDir {
             std::filesystem::path path;

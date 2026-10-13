@@ -9,6 +9,10 @@ import game.colony.content;
 import std;
 
 namespace pP::game::tests::detail::biomes {
+    // ------------------------------------------------------------------
+    // content biomes
+    // ------------------------------------------------------------------
+
     using namespace colony;
 
     const std::string materials_text = R"(schema_version = 2

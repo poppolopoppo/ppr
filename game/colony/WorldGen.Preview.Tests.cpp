@@ -12,6 +12,10 @@ import imgui_internal;
 import std;
 
 namespace pP::game::tests::detail::worldgen_preview {
+    // ------------------------------------------------------------------
+    // world generation previews
+    // ------------------------------------------------------------------
+
     using namespace colony;
     PPR_UNIT_TEST (workshop_widgets_block_invalid_actions_and_focus_nested_property_errors) {
         auto *const previous = ImGui::GetCurrentContext();
@@ -308,6 +312,7 @@ namespace pP::game::tests::detail::worldgen_preview {
             std::errc::operation_canceled);
         PPR_TEST_ASSERT(not std::filesystem::exists(cancelled_output / "complete.json"));
     };
+
     PPR_UNIT_TEST (whole_world_crops_preserve_production_formations_seams_and_matter) {
         struct Clock final : ITimerClock {
             mutable u32 m_calls{};

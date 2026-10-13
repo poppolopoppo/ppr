@@ -7,6 +7,10 @@ import engine.core;
 import std;
 
 export namespace pP::sim {
+    // ------------------------------------------------------------------
+    // generation raster
+    // ------------------------------------------------------------------
+
     inline constexpr u32 kMaxGenerationRasterReferences = 16u * 1024u * 1024u;
     /// Borrowed immutable inputs must outlive this index and every raster task.
     /// Each call owns at most one chunk payload and never mutates those inputs.
@@ -32,6 +36,11 @@ export namespace pP::sim {
         [[nodiscard]] u64 indexPayloadBytes() const noexcept;
         [[nodiscard]] u64 chunkWorkingPayloadBytes() const noexcept;
     };
+
+    // ------------------------------------------------------------------
+    // terrain finishing
+    // ------------------------------------------------------------------
+
     [[nodiscard]] std::error_code validateGenerationBackbone(
         const GenerationPlan &plan, const GenerationGeometry &geometry, const ChunkGrid &grid,
         const IContext *context = nullptr);

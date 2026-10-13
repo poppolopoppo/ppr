@@ -6,6 +6,10 @@ import engine.sim;
 import game.colony.worldgen;
 import std;
 namespace pP::game::tests::detail::legacy_fixture {
+    // ------------------------------------------------------------------
+    // legacy world generation fixtures
+    // ------------------------------------------------------------------
+
     using namespace sim;
     using colony::generateLegacyFixture;
     [[nodiscard]] u64 gridHash(const ChunkGrid &grid) {
@@ -161,4 +165,3 @@ namespace pP::game::tests {
         return legacy_fixture;
     }
 }
-

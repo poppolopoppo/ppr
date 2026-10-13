@@ -465,6 +465,7 @@ namespace pP {
         }
         PPR_RETURN_ERROR_ON_FAIL(GridPass, stageDiagnostic_(stage));
         PPR_RETURN_ERROR_ON_FAIL(GridPass, submitTiles(std::span<const GridTileSubmission>{stage.m_tiles}));
+
         for (const GridStagedUpload &upload: stage.m_uploads) {
             const i32 cx = static_cast<i32>(upload.m_chunk_id % 32u);
             const i32 cy = static_cast<i32>(upload.m_chunk_id / 32u);
@@ -548,6 +549,7 @@ namespace pP {
         PPR_DEFER {
             std::swap(m_world, *m_candidate_world);
         };
+
         for (const auto &upload: uploads) {
             PPR_RETURN_ERROR_ON_FAIL(GridPass, appendDiagnostic_(upload));
             PPR_RETURN_ERROR_ON_FAIL(
@@ -2448,6 +2450,7 @@ namespace pP {
             applyCellPayload_(payload, tile.m_chunk_id);
             payloads.push_back(payload);
         }
+
         m_world.m_resident_cell_slots.reset();
         m_world.m_resident_chunk_slots.fill(0xffffffffu);
         for (u32 chunk = 0u; chunk < kGridTileCacheCapacity; ++chunk) {
@@ -2617,6 +2620,7 @@ namespace pP {
                 count += chunk.m_source->size();
             }
         }
+
         for (const auto &batch: stage.m_particle_batches) {
             PPR_RETURN_ERROR_ON_FAIL(
                 GridPass, batch.m_chunk_id < kGridTileCacheCapacity and
@@ -3090,6 +3094,7 @@ namespace pP {
                 .scissorRects = {context.m_scissor},
                 .scissorRectCount = 1u,
                 .indexBuffer = {}});
+
         for (const auto &tile: plan->m_tiles) {
             const auto &chunk = m_world.m_particles[tile.m_chunk_id];
             if (chunk.m_count == 0u) {

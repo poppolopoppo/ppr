@@ -10,6 +10,10 @@ import engine.math;
 import std;
 
 namespace pP::tests::detail {
+    // ------------------------------------------------------------------
+    // input listener
+    // ------------------------------------------------------------------
+
     // Minimal InputListener wired to a single action/key mapping; posts synthetic
     // InputMessages and records which trigger handlers fired.
     struct ListenerHarness {
@@ -99,6 +103,7 @@ namespace pP::tests::detail {
         h.post(EInputMessageEvent::pressed);
         PPR_TEST_ASSERT(modulate_count == 1);
     };
+
     // Two mappings bound to the same key at different priorities; observes
     // per-action trigger counts, dispatch order, and live event state.
     struct ConsumeHarness {

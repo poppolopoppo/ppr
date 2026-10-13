@@ -11,6 +11,10 @@ import engine.core;
 import std;
 
 export namespace pP::shader {
+    // ------------------------------------------------------------------
+    // error codes
+    // ------------------------------------------------------------------
+
     enum class errc : int {
         ok = SLANG_OK,
         unknown_error = SLANG_FAIL,
@@ -115,6 +119,10 @@ export namespace Slang {
 }
 
 export namespace pP {
+    // ------------------------------------------------------------------
+    // shader service
+    // ------------------------------------------------------------------
+
     class IShaderService : public IService {
     public:
         [[nodiscard]] static safe_ptr<IShaderService> get() noexcept;

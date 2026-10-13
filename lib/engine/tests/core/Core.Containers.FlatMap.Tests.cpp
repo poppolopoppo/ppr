@@ -7,6 +7,10 @@ import engine.core;
 import std;
 
 namespace pP::tests::detail {
+    // ------------------------------------------------------------------
+    // containers flat map
+    // ------------------------------------------------------------------
+
     namespace Flat_map {
         PPR_UNIT_TEST (empty) {
             pP::FlatMap<int, int> m;

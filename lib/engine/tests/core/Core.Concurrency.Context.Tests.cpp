@@ -7,6 +7,10 @@ import engine.core;
 import std;
 
 namespace pP::tests::detail {
+    // ------------------------------------------------------------------
+    // concurrency context
+    // ------------------------------------------------------------------
+
     namespace Context {
         namespace Background {
             PPR_UNIT_TEST (done_is_never_event) {

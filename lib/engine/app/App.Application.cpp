@@ -64,6 +64,10 @@ namespace pP {
         : Application(std::move(domain), name, argv, IPlatform::create(), ITimerClock::steady(), nullptr) {
     }
 
+    // ------------------------------------------------------------------
+    // application
+    // ------------------------------------------------------------------
+
     Application::Application(
         ApplicationDomain domain, const std::string_view name, const std::span<const char *const> argv,
         const GpuTeardownFailureHandler on_gpu_teardown_failure)
@@ -181,6 +185,10 @@ namespace pP {
             setTargetFrameDuration(std::nullopt);
         }
     }
+
+    // ------------------------------------------------------------------
+    // display settings
+    // ------------------------------------------------------------------
 
     void Application::setDisplaySettings(const DisplaySettings &settings) {
         // Startup policy only; window intent is validated against native
@@ -570,6 +578,10 @@ namespace pP {
         return {};
     }
 
+    // ------------------------------------------------------------------
+    // run loop
+    // ------------------------------------------------------------------
+
     std::error_code Application::run() {
         // Exception safety net only: the fused finishRun_() below owns
         // normal-path cleanup, so this fires solely when an exception
@@ -867,6 +879,10 @@ namespace pP {
         completed = true;
         return result;
     }
+
+    // ------------------------------------------------------------------
+    // frame admission
+    // ------------------------------------------------------------------
 
     void Application::noteSkippedFrameDt(const TimeSpan dt) noexcept {
         if (dt > TimeSpan{}) {
@@ -1316,6 +1332,10 @@ namespace pP {
         }
     }
 
+    // ------------------------------------------------------------------
+    // render lane
+    // ------------------------------------------------------------------
+
     bool Application::renderLaneOwnsRenderer_() const noexcept {
         // Ownership, not liveness: the lane owns Renderer affinity from
         // startRenderLane_ until the lane object is destroyed, independent
@@ -1651,6 +1671,10 @@ namespace pP {
         }
         return m_application_clock.tick(out_delta_time, TimeSpan{});
     }
+
+    // ------------------------------------------------------------------
+    // lifecycle and teardown
+    // ------------------------------------------------------------------
 
     std::error_code Application::finishRun_(const std::error_code prior) {
         std::error_code result = prior;
@@ -2126,6 +2150,10 @@ namespace pP {
         std::fflush(nullptr);
         std::_Exit(kUnknownGpuCompletionFatalExit);
     }
+
+    // ------------------------------------------------------------------
+    // update and render
+    // ------------------------------------------------------------------
 
     std::error_code Application::update(TimeSpan dt) {
         const hal::ProfileScope scope{"App.Update"};

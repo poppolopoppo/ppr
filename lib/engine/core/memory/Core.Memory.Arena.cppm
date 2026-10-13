@@ -116,6 +116,7 @@ export namespace pP::mem {
 
         void pushSlab_(const std::size_t wanted_size) {
             PPR_ASSERT(wanted_size > sizeof(SlabHeader));
+
             SlabHeader *const prev_slab = rootSlab_();
             if (prev_slab) {
                 prev_slab->m_offset = m_offset;
@@ -143,6 +144,7 @@ export namespace pP::mem {
 
             poisonDestroyed(m_slab, m_capacity);
             AllocatorT::deallocateRaw(m_slab, m_capacity, max_align_v);
+
             m_slab = nullptr;
             m_capacity = 0u;
             m_offset = 0u;

@@ -198,6 +198,7 @@ namespace pP::config {
                         make_error_code(EConfigErrc::unexpected_value), std::string{name});
                     continue;
                 }
+
                 pushAssignment(canonical, SourceValue::boolean(false), i, std::string{name});
                 continue;
             }
@@ -253,6 +254,7 @@ namespace pP::config {
                     make_error_code(EConfigErrc::missing_value), std::string{name});
                 continue;
             }
+
             ++i;
             if (args[i].empty() and not option.m_preserve_empty_value) {
                 pushAssignment(canonical, SourceValue::reset(), i, std::string{name});
@@ -273,6 +275,7 @@ namespace pP::config {
         for (int i = 1; i < argc; ++i) {
             args.emplace_back(argv[i] != nullptr ? argv[i] : "");
         }
+
         return parseCliArgs(std::span<const std::string_view>{args.data(), args.size()}, schema, diagnostics);
     }
 
@@ -296,9 +299,11 @@ namespace pP::config {
             }
             result += "\n";
         }
+
         if (not schema.m_description.empty()) {
             result += configFormat("\n{}\n", schema.m_description);
         }
+
         if (not schema.m_commands.empty()) {
             result += "\nCommands:\n";
             for (const auto &command: schema.m_commands) {
@@ -309,6 +314,7 @@ namespace pP::config {
                 result += "\n";
             }
         }
+
         if (not schema.m_options.empty()) {
             result += "\nOptions:\n";
             for (const auto &option: schema.m_options) {
@@ -320,6 +326,7 @@ namespace pP::config {
                 for (const std::string_view alias: option.m_aliases) {
                     result += configFormat(", --{}", alias);
                 }
+
                 if (option.m_is_switch) {
                     result += " (switch)";
                 } else if (option.m_value_optional) {
@@ -331,6 +338,7 @@ namespace pP::config {
                     result += configFormat(" - {}", option.m_description);
                 }
                 result += "\n";
+
                 for (const std::string_view negation: option.m_negations) {
                     result += configFormat("    --{} sets {} to false\n", negation, option.m_canonical);
                 }

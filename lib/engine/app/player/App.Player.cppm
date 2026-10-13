@@ -10,6 +10,10 @@ import :input.device;
 import :input.action;
 
 export namespace pP {
+    // ------------------------------------------------------------------
+    // player identity
+    // ------------------------------------------------------------------
+
     enum class EPlayerKind : u8 {
         keyboard = 0,
         gamepad,
@@ -38,6 +42,10 @@ export namespace pP {
         PlayerIdentity m_player_id{};
         StableVector<InputMessage> m_messages{};
     };
+
+    // ------------------------------------------------------------------
+    // player
+    // ------------------------------------------------------------------
 
     class Player : public safe_object {
         PlayerIdentity m_id{};

@@ -7,6 +7,10 @@ import engine.core;
 import std;
 
 namespace pP::tests::detail {
+    // ------------------------------------------------------------------
+    // logger
+    // ------------------------------------------------------------------
+
     PPR_DEFINE_LOG_CATEGORY(WriterProbe, warning, none)
 
     namespace Logger {

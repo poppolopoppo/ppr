@@ -20,9 +20,11 @@ namespace pP::colony {
             packet.m_boundary_material_id = boundary_material;
             PPR_ASSERT(content.contentFingerprint().has_value());
             packet.m_content_fingerprint = *content.contentFingerprint();
+
             for (const auto &texture: content.textures()) {
                 packet.m_terrain_images.push_back(texture.m_image);
             }
+
             for (const MaterialDefinition &material: content.materials()) {
                 if (material.m_numeric_id == 0u) {
                     continue;
@@ -70,12 +72,14 @@ namespace pP::colony {
                 }
                 packet.m_terrain_visuals.push_back(visual);
             }
+
             packet.m_reference_thickness_m = static_cast<float>(reference_thickness);
             const auto *const profile = content.findWorld(profile_key);
             PPR_ASSERT(profile != nullptr);
             const auto stack = std::ranges::find(
                 content.backgrounds(), profile->m_background_stack, &BackgroundStackDefinition::m_key);
             PPR_ASSERT(stack != content.backgrounds().end());
+
             packet.m_has_background = true;
             for (const auto &layer: stack->m_layers) {
                 auto &target = packet.m_background_layers[layer.m_order];
@@ -102,9 +106,11 @@ namespace pP::colony {
             if (catalog == nullptr) {
                 return;
             }
+
             captureCatalogPresentation_(
                 packet, *catalog, driver.profileKey(), driver.boundaryMaterial(), driver.cellsPerMetre(),
                 driver.referenceThicknessMetres());
+
             ParticlePresentationCache temporary;
             auto &cache = particle_cache ? *particle_cache : temporary;
             packet.m_particle_batches = cache.capture(driver);
@@ -125,10 +131,12 @@ namespace pP::colony {
                                          : std::make_error_code(std::errc::invalid_argument));
                 return {};
             }
+
             PPR_RETURN_ERROR_ON_FAIL(
                 SimPresentation, packet.m_terrain_visuals.size() <= kMaxContentMaterials
                                      ? std::error_code{}
                                      : std::make_error_code(std::errc::invalid_argument));
+
             for (std::size_t index = 0u; index < packet.m_terrain_visuals.size(); ++index) {
                 const auto &visual = packet.m_terrain_visuals[index];
                 PPR_RETURN_ERROR_ON_FAIL(
@@ -152,6 +160,7 @@ namespace pP::colony {
                                              : std::make_error_code(std::errc::invalid_argument));
                 }
             }
+
             const bool boundary_known = std::ranges::any_of(
                 packet.m_terrain_visuals, [&packet](const GridTerrainVisual &visual) {
                     return visual.m_material_id == packet.m_boundary_material_id;
@@ -191,6 +200,7 @@ namespace pP::colony {
         [[nodiscard]] std::error_code convertCells(
             const std::span<const sim::Cell> cells, const SimFramePacket &packet, Array<u16> &scratch) {
             std::bitset<65536u> terrain_ids{};
+
             if (packet.m_has_catalog) {
                 for (const GridTerrainVisual &visual: packet.m_terrain_visuals) {
                     if (std::ranges::find(packet.m_particle_material_ids, visual.m_material_id) ==
@@ -199,7 +209,9 @@ namespace pP::colony {
                     }
                 }
             }
+
             scratch.resize(sim::kCellsPerChunk);
+
             for (std::size_t cell = 0u; cell < sim::kCellsPerChunk; ++cell) {
                 const u16 element = cells[cell].m_element;
                 if (element != kElementVacuum) {
@@ -227,15 +239,20 @@ namespace pP::colony {
             m_surface_captured = false;
             m_generation = driver.worldGeneration();
         }
+
         std::array<std::shared_ptr<const Array<sim::MatterParticle>>, sim::kChunkCount> sources{};
         const auto snapshot = driver.captureParticles();
+
         for (const auto &batch: snapshot.m_chunks) {
             sources[sim::chunkIndexOf(batch.m_position)] = batch.m_particles;
         }
+
         for (const auto &batch: driver.editParticles()) {
             sources[sim::chunkIndexOf(batch.m_position)] = batch.m_particles;
         }
+
         Array<GridParticleBatch> result;
+
         for (u32 index = 0u; index < sim::kChunkCount; ++index) {
             auto &entry = m_chunks[index];
             if (entry.m_source != sources[index]) {
@@ -265,20 +282,26 @@ namespace pP::colony {
             m_surface_captured = false;
             m_generation = driver.worldGeneration();
         }
+
         if (m_surface_captured) {
             return m_surface_profile;
         }
+
         static_assert(kGridSurfaceColumns == sim::kWorldEdge);
         std::array<float, kGridSurfaceColumns> heights;
+
         if (not driver.sampleSurfaceHeights(heights)) {
             m_surface_captured = true;
             return {};
         }
+
         auto surface = std::make_shared<GridSurfaceProfile>();
         surface->m_cell_size_m = 1.0f / static_cast<float>(driver.cellsPerMetre());
+
         for (u32 column = 0u; column < kGridSurfaceColumns; ++column) {
             surface->m_heights_m[column / 4u][column % 4u] = heights[column];
         }
+
         m_surface_profile = std::move(surface);
         m_surface_captured = true;
         return m_surface_profile;
@@ -289,6 +312,7 @@ namespace pP::colony {
         ParticlePresentationCache *const particles) {
         SimFramePacket packet{};
         capturePresentation_(packet, driver, particles);
+
         packet.m_frame_id = frame_id;
         packet.m_seed = driver.seed();
         packet.m_world_generation = driver.worldGeneration();
@@ -298,10 +322,12 @@ namespace pP::colony {
         packet.m_path_counts = driver.pathCounts();
         packet.m_errands = driver.errandCount();
         packet.m_full_refresh = full_refresh;
+
         for (const ColonyDriver::DirtyChunk &row: driver.presentEditsCapture()) {
             packet.m_present_chunks.push_back(row.m_pos);
             packet.m_present_revisions.push_back(row.m_revision);
         }
+
         const sim::ChunkGrid &grid = driver.grid();
         for (u32 y = 0u; y < sim::kChunksPerEdge; ++y) {
             for (u32 x = 0u; x < sim::kChunksPerEdge; ++x) {
@@ -323,6 +349,7 @@ namespace pP::colony {
                 packet.m_chunk_cells.push_back(std::move(payload));
             }
         }
+
         if (driver.editReadyForPresentation()) {
             packet.m_initial_matter_valid = false;
             for (const auto &row: driver.editManifest()) {
@@ -369,14 +396,17 @@ namespace pP::colony {
         }
         SimFramePacket packet{};
         capturePresentation_(packet, driver, particles);
+
         packet.m_frame_id = frame_id;
         packet.m_seed = driver.seed();
         packet.m_world_generation = driver.worldGeneration();
         packet.m_tick = driver.tickCount();
         packet.m_agent_count = static_cast<u32>(driver.agentSummaries().size());
+
         const auto dirty = driver.presentEditsCapture();
         const auto &grid = driver.grid();
         const u32 end = first_chunk + chunk_count;
+
         for (u32 index = 0u; index < end; ++index) {
             const sim::ChunkPos pos{index % sim::kChunksPerEdge, index / sim::kChunksPerEdge};
             if (not grid.isResident(pos)) {
@@ -411,11 +441,14 @@ namespace pP::colony {
         SimFramePacket presentation{};
         capturePresentation_(presentation, driver);
         PPR_RETURN_UNEXPECTED_ON_FAIL(SimPresentation, validatePresentation_(presentation));
+
         const auto dirty = driver.presentEditsCapture();
         const auto &grid = driver.grid();
+
         GridPass::GridStagedFrame stage{};
         stage.m_ack_seed = driver.worldGeneration();
         stage.m_full_refresh = true;
+
         for (u32 index = 0u; index < sim::kChunkCount; ++index) {
             if (context != nullptr) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(SimPresentation, context->error());
@@ -447,9 +480,11 @@ namespace pP::colony {
                 }
             }
         }
+
         if (context != nullptr) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(SimPresentation, context->error());
         }
+
         stage.m_cell_size_m = presentation.m_cell_size_m;
         stage.m_has_catalog = presentation.m_has_catalog;
         stage.m_initial_matter_valid = presentation.m_initial_matter_valid;
@@ -473,6 +508,7 @@ namespace pP::colony {
         GridPass::GridStagedFrame stage{};
         SimFramePacket presentation{};
         capturePresentation_(presentation, driver, &m_particle_cache);
+
         stage.m_cell_size_m = presentation.m_cell_size_m;
         stage.m_has_catalog = presentation.m_has_catalog;
         stage.m_initial_matter_valid = presentation.m_initial_matter_valid;
@@ -485,14 +521,17 @@ namespace pP::colony {
         stage.m_background_layers = presentation.m_background_layers;
         stage.m_surface_profile = presentation.m_surface_profile;
         stage.m_particle_batches = presentation.m_particle_batches;
+
         if (m_frame or m_next_chunk == sim::kChunkCount) {
             stage.m_tiles = m_visible;
             return stage;
         }
+
         const u32 count = std::min(kInitialPresentationBatchChunks, sim::kChunkCount - m_next_chunk);
         auto packet = makeInitialPresentationBatch(frame_id, driver, m_next_chunk, count, &m_particle_cache);
         PPR_RETURN_UNEXPECTED_ON_FAIL(SimPresentation, packet);
         PPR_RETURN_UNEXPECTED_ON_FAIL(SimPresentation, buildGridStagedFrame(*packet, stage));
+
         stage.m_reset_caches = m_next_chunk == 0u and not m_reset_applied;
         m_pending = stage.m_tiles;
         for (auto &tile: m_pending) {
@@ -523,6 +562,7 @@ namespace pP::colony {
             stage = {};
             PPR_RETURN_ERROR_ON_FAIL(SimPresentation, error);
         }
+
         stage.m_cell_size_m = packet.m_cell_size_m;
         stage.m_has_catalog = packet.m_has_catalog;
         stage.m_initial_matter_valid = packet.m_initial_matter_valid;
@@ -535,6 +575,7 @@ namespace pP::colony {
         stage.m_background_layers = packet.m_background_layers;
         stage.m_surface_profile = packet.m_surface_profile;
         stage.m_particle_batches = packet.m_particle_batches;
+
         // Owned payload only: no driver ack, no translator contact, and no
         // pass mutation happen on the client. The pass-side contact runs
         // on the pass's owner lane via GridPass::applyStagedFrame.

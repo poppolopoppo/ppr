@@ -6,6 +6,10 @@ import engine.core;
 import std;
 
 export namespace pP::sim {
+    // ------------------------------------------------------------------
+    // noise vocabulary
+    // ------------------------------------------------------------------
+
     enum class ENoiseAlgorithm : u8 {
         open_simplex2,
         perlin,
@@ -38,6 +42,10 @@ export namespace pP::sim {
     // private noise implementation's signed integer domain.
     inline constexpr double kNoiseCoordinateLimitMetres = 4096.0;
 
+    // ------------------------------------------------------------------
+    // compiled noise field
+    // ------------------------------------------------------------------
+
     class NoiseField {
         struct Impl;
         std::unique_ptr<Impl> m_impl;
@@ -54,6 +62,10 @@ export namespace pP::sim {
         /// are finite metre coordinates within kNoiseCoordinateLimitMetres.
         [[nodiscard]] float sample(double x_m, double y_m) const noexcept;
     };
+
+    // ------------------------------------------------------------------
+    // field compilation
+    // ------------------------------------------------------------------
 
     [[nodiscard]] std::error_code validateNoiseFieldDescription(const NoiseFieldDesc &desc) noexcept;
     [[nodiscard]] Expected<NoiseField> compileNoiseField(const NoiseFieldDesc &desc, u64 stream_seed);

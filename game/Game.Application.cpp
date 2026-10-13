@@ -36,6 +36,10 @@ namespace demo {
     using namespace pP;
     PPR_DEFINE_LOG_CATEGORY(Demo, info, none);
 
+    // ------------------------------------------------------------------
+    // headless worldgen validation
+    // ------------------------------------------------------------------
+
     int runWorldgenValidation(const game::GameSettings &settings) {
 
         std::filesystem::path root{};
@@ -129,6 +133,10 @@ namespace demo {
         }
         return 0;
     }
+
+    // ------------------------------------------------------------------
+    // interactive editor
+    // ------------------------------------------------------------------
 
     class TurboLarbin final : public ApplicationEditor {
         struct WorldgenPhaseObservation {
@@ -640,6 +648,7 @@ namespace demo {
                 Demo, m_observation_clock->now() - m_observation_start < std::chrono::seconds{600}
                           ? std::error_code{}
                           : std::make_error_code(std::errc::timed_out));
+
             const bool ready = m_driver and
                                m_driver_ready and
                                not m_world_modal and
@@ -651,9 +660,11 @@ namespace demo {
             if (not ready) {
                 return {};
             }
+
             const bool window_complete = m_observation_clock->now() - m_acceptance_phase_start >=
                                              std::chrono::seconds{2} and
                                          m_acceptance_presentations - m_acceptance_phase_presentations >= 64u;
+
             switch (m_acceptance_phase) {
                 case AcceptancePhase::initial: {
                     // Warm every completion-selected slot before measuring a quiet camera.
@@ -665,6 +676,7 @@ namespace demo {
                     if (m_acceptance_presentations - m_acceptance_phase_presentations < 96u) {
                         return {};
                     }
+
                     m_driver->setPaused(true);
                     PPR_RETURN_ERROR_ON_FAIL(
                         Demo,
@@ -679,6 +691,7 @@ namespace demo {
                     m_acceptance_center = float2{
                         static_cast<float>(m_driver->preparedWorld()->generated().m_start.m_spawn_x_m),
                         static_cast<float>(m_driver->preparedWorld()->generated().m_start.m_spawn_y_m)};
+
                     beginAcceptancePhase_(AcceptancePhase::stationary);
                     break;
                 }
@@ -696,6 +709,7 @@ namespace demo {
                     PPR_RETURN_ERROR_ON_FAIL(
                         Demo,
                         m_pan_controller->setOrthoScale(m_acceptance_scale * (1.0f + 0.25f * std::sin(t * 4.0f))));
+
                     if (window_complete) {
                         PPR_RETURN_ERROR_ON_FAIL(Demo, reportAcceptancePhase_());
                         PPR_RETURN_ERROR_ON_FAIL(Demo, startAcceptanceSeam_());
@@ -749,6 +763,7 @@ namespace demo {
                         PPR_RETURN_ERROR_ON_FAIL(
                             Demo,
                             observations ? std::error_code{} : std::make_error_code(std::errc::no_message_available));
+
                         // Two seconds is the minimum observation window, not a
                         // disposal deadline. Bounded retirement must reach the
                         // original resource baseline before the overall timeout.
@@ -757,6 +772,7 @@ namespace demo {
                             observations->m_texture_slots != m_acceptance_initial_texture_slots) {
                             return {};
                         }
+
                         PPR_RETURN_ERROR_ON_FAIL(Demo, reportAcceptancePhase_());
                         beginAcceptancePhase_(AcceptancePhase::done);
                         std::println(
@@ -956,6 +972,7 @@ namespace demo {
                     }
                 }
             }
+
             // Once activation is admitted, settle its acknowledgment before close/cancel.
             // It is the transaction's irreversible publication boundary.
             if (m_close_requested.load(std::memory_order_acquire) and
@@ -965,11 +982,13 @@ namespace demo {
                 m_preview_pending.reset();
                 m_world_job->cancel();
             }
+
             // Header images share catalog pixels. Keep the coordinator's owners
             // until this command is settled/dropped, so its UI-side reset can
             // never become the last large image release during cancellation.
             const bool header_retained = m_world_command and m_world_command->m_kind == EGridWorldCommand::begin;
             PPR_RETURN_ERROR_ON_FAIL(Demo, m_world_job->update(m_loading_presented, not header_retained));
+
             if (m_capture_access and m_world_job->view().m_state == colony::EWorldJobState::prepared) {
                 m_driver = m_world_job->takeCaptured(true);
                 m_driver_ready = true;
@@ -986,13 +1005,16 @@ namespace demo {
                 m_capture_ack_revisions.fill(0u);
                 clearControlInput_();
             }
+
             if (m_preview_job and
                 m_world_job->view().m_state == colony::EWorldJobState::prepared and
                 m_world_job->view().m_error) {
                 m_world_job->discardPrepared(m_world_job->view().m_error);
             }
+
             const auto view = m_world_job->view();
             m_world_view = view;
+
             if (m_candidate_activated and not m_world_published) {
                 m_world_job->commitPublication();
                 if (m_preview_job) {
@@ -1007,6 +1029,7 @@ namespace demo {
                     m_driver.swap(candidate);
                     m_driver->requireEditPublication();
                     m_world_job->retire(std::move(candidate));
+
                     if (const auto *const prepared = m_driver->preparedWorld(); prepared and m_pan_controller) {
                         const float extent = static_cast<float>(colony::kWorldExtentMetres);
                         PPR_RETURN_ERROR_ON_FAIL(
@@ -1016,6 +1039,7 @@ namespace demo {
                             float2{static_cast<float>(start.m_spawn_x_m), static_cast<float>(start.m_spawn_y_m)});
                         m_pan_controller->resetInputState();
                     }
+
                     PPR_LOG(
                         Demo, info, "new game published",
                         {{"seed", m_driver->seed()}, {"generation", m_driver->worldGeneration()},
@@ -1023,6 +1047,7 @@ namespace demo {
                     m_driver_ready = true;
                     m_world_published = true;
                     m_initial_presentation = false;
+
                     Array<colony::ColonyDriver::DirtyChunk> acknowledged{};
                     acknowledged.reserve(presentation.m_ack_chunk_ids.size());
                     for (std::size_t index = 0u; index < presentation.m_ack_chunk_ids.size(); ++index) {
@@ -1033,6 +1058,7 @@ namespace demo {
                     }
                     m_driver->ackPresentChunks(acknowledged);
                     m_initial_graphics = {};
+
                     // A successful request starts a fresh session. Display settings
                     // belong to the application; gameplay tools and inspection do not.
                     m_tool.m_dig_armed = false;
@@ -1060,6 +1086,7 @@ namespace demo {
                 }
                 m_candidate_cancel_needed = m_candidate_cancel_needed or m_candidate_begun;
             }
+
             if (not m_world_command) {
                 if (m_candidate_cancel_needed) {
                     queueWorldCommand_(EGridWorldCommand::cancel);
@@ -1076,7 +1103,9 @@ namespace demo {
                     }
                 }
             }
+
             PPR_RETURN_ERROR_ON_FAIL(Demo, submitWorldCommand_());
+
             if (not m_world_job->busy() and not m_world_command and not m_candidate_cancel_needed) {
                 if (m_close_requested.load(std::memory_order_acquire) and not m_workshop_open) {
                     if (m_driver) {
@@ -1900,6 +1929,7 @@ namespace demo {
             if (not m_driver or m_world_modal) {
                 return;
             }
+
             switch (intent.m_kind) {
                 case colony::EColonyIntent::open_workshop: m_workshop_pending = true; break;
                 case colony::EColonyIntent::pause_toggle:
@@ -3500,7 +3530,9 @@ namespace demo {
                 m_workshop_queued.reset();
                 m_workshop_queued_preview.reset();
             }
+
             PPR_RETURN_ERROR_ON_FAIL(Demo, m_workshop->update());
+
             if (m_workshop_transition_saving and not m_workshop->busy()) {
                 m_workshop_transition_saving = false;
                 if (m_workshop->session() and not m_workshop->session()->dirty()) {
@@ -3509,6 +3541,7 @@ namespace demo {
                     }
                 }
             }
+
             if (m_workshop_capturing) {
                 PPR_RETURN_ERROR_ON_FAIL(Demo, m_world_job->update(true));
                 if (m_world_job->view().m_state == colony::EWorldJobState::prepared) {
@@ -3532,11 +3565,13 @@ namespace demo {
             } else {
                 PPR_RETURN_ERROR_ON_FAIL(Demo, m_world_job->update(true));
             }
+
             if (auto prepared = m_workshop->takePresentation(); prepared and not m_workshop_closing) {
                 m_workshop_queued = std::move(prepared);
                 m_workshop_queued_preview = m_workshop->previewHandle();
                 m_workshop_queued_root = m_workshop->session()->root();
             }
+
             if (m_world_result) {
                 const auto result = *std::exchange(m_world_result, std::nullopt);
                 m_world_command_waiting = false;
@@ -3580,6 +3615,7 @@ namespace demo {
                     }
                 }
             }
+
             if (m_workshop_closing and m_workshop_stage and not m_workshop_restoring and not activationPending_()) {
                 m_candidate_cancel_needed = true;
             }
@@ -3591,13 +3627,16 @@ namespace demo {
                 not activationPending_()) {
                 m_candidate_cancel_needed = true;
             }
+
             if (m_world_command) {
                 return submitWorldCommand_();
             }
+
             if (m_candidate_cancel_needed) {
                 queueWorldCommand_(EGridWorldCommand::cancel);
                 return submitWorldCommand_();
             }
+
             if (m_workshop_closing and not m_workshop_stage and not m_workshop_capturing and not m_workshop->busy()) {
                 if (m_workshop_restore and
                     m_workshop_displayed and
@@ -3636,6 +3675,7 @@ namespace demo {
                     m_workshop_focused = true;
                 }
             }
+
             if (m_workshop_stage) {
                 if (not m_candidate_begun) {
                     queueWorldCommand_(EGridWorldCommand::begin);
@@ -3654,6 +3694,7 @@ namespace demo {
             Array<config::Diagnostic> property_diagnostics;
             const auto worker_diagnostics = m_workshop->propertyDiagnostics();
             property_diagnostics.assign(worker_diagnostics.begin(), worker_diagnostics.end());
+
             if (session and
                 m_workshop_edit_diagnostics_root == session->root() and
                 m_workshop_edit_diagnostics_revision == session->revision()) {
@@ -4014,6 +4055,7 @@ namespace demo {
 
             initializeInput_();
             PPR_RETURN_ERROR_ON_FAIL(Demo, uploadDebugDraw_());
+
             if (m_workshop_startup) {
                 PPR_RETURN_ERROR_ON_FAIL(Demo, openWorkshop_());
             }
@@ -4115,6 +4157,7 @@ namespace demo {
                 debugModel_(min_x + cell_metres * 0.5f, min_y + edge * 0.5f, 0.0f, cell_metres, edge),
                 debugModel_(min_x + edge - cell_metres * 0.5f, min_y + edge * 0.5f, 0.0f, cell_metres, edge),
             };
+
             for (const float4x4 &model: edges) {
                 stage.m_instances.push_back(
                     TrianglePass::SubmittedInstance{.m_bag = m_quad_bag, .m_material = material, .m_model = model});
@@ -4152,6 +4195,7 @@ namespace demo {
             if (not origin.has_value() or not unit_x.has_value()) {
                 return std::nullopt;
             }
+
             const float ppw = std::abs(unit_x->x - origin->x);
             if (not (ppw > 0.0f) or not std::isfinite(ppw)) {
                 return std::nullopt;
@@ -4570,15 +4614,18 @@ namespace demo {
         // it lives in the fence/ledger; this hook owns only CPU-consumption.
         void onLaneFrameConsumed_(const RenderFrameResult &result) override {
             ApplicationEditor::onLaneFrameConsumed_(result);
+
             if (m_workshop_open) {
                 return;
             }
+
             // Same identity gate as the base hook: a settling result whose
             // packet matches the driver's seed but belongs to a previous run
             // would otherwise ack world edits the driver never re-staged.
             if (result.m_reservation_epoch != 0u and result.m_reservation_epoch != reservationEpoch_()) {
                 return;
             }
+
             if (result.m_gpu_timing) {
                 m_performance_widget.observeGpu(result.m_gpu_timing->m_submission, result.m_gpu_timing->m_milliseconds);
             }
@@ -5015,6 +5062,10 @@ namespace demo {
         }
     };
 }
+
+// ------------------------------------------------------------------
+// game entry
+// ------------------------------------------------------------------
 
 int runGame(const int argc, char *argv[]) try {
     const std::span<const char *const> args{argv, pP::checked_cast<std::size_t>(argc)};

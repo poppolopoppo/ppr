@@ -14,6 +14,10 @@ import engine.core;
 namespace pP {
     PPR_DEFINE_LOG_CATEGORY(GlfwPlatform, info, none)
 
+    // ------------------------------------------------------------------
+    // glfw error category
+    // ------------------------------------------------------------------
+
     namespace platform {
         class GlfwErrorCategory : public std::error_category {
         public:
@@ -57,6 +61,10 @@ namespace pP {
             return make_error_code(enumOrd(error_code));
         }
     }
+
+    // ------------------------------------------------------------------
+    // glfw platform
+    // ------------------------------------------------------------------
 
     std::unique_ptr<IPlatform> IPlatform::create() noexcept {
         return std::make_unique<GlfwPlatform>();

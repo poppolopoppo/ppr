@@ -12,6 +12,10 @@ import engine.mesh;
 import std;
 
 namespace pP::tests::detail {
+    // ------------------------------------------------------------------
+    // resilience
+    // ------------------------------------------------------------------
+
     namespace Fuzz {
         // Seeded deterministic corpus: the fixed seed makes
         // every mutation identical on every run, so each rejection is a

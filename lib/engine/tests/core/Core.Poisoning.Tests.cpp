@@ -7,6 +7,10 @@ import engine.core;
 import std;
 
 namespace pP::tests::detail {
+    // ------------------------------------------------------------------
+    // poisoning
+    // ------------------------------------------------------------------
+
     namespace Poisoning {
         namespace details {
             [[maybe_unused]] volatile int sink = 0;

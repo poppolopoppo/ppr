@@ -86,6 +86,7 @@ namespace pP {
                 const std::string_view message{
                     static_cast<const char *>(diagnostic_blob->getBufferPointer()),
                     safe_narrowing(diagnostic_blob->getBufferSize())};
+
                 PPR_LOG_RAW(Shader, error, message);
             }
         }

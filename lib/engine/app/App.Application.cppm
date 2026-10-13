@@ -21,6 +21,10 @@ export namespace pP {
     class IWindowService;
     class Renderer;
 
+    // ------------------------------------------------------------------
+    // application domain
+    // ------------------------------------------------------------------
+
     struct ApplicationDomain {
         /// headless applications run without a window
         bool m_is_headless: 1 {false};
@@ -34,6 +38,10 @@ export namespace pP {
         bool m_needs_user_interface: 1 {true};
     };
 
+    // ------------------------------------------------------------------
+    // frame admission interval
+    // ------------------------------------------------------------------
+
     /// Main-thread admission work since the preceding admitted update.
     /// Includes repeated skipped iterations; durations include descheduling.
     struct FrameAdmissionInterval {
@@ -41,6 +49,10 @@ export namespace pP {
         u64 m_sampled_peak_outstanding{};
         TimeSpan m_admission{}, m_busy_wait{}, m_busy_service{};
     };
+
+    // ------------------------------------------------------------------
+    // frame admission observations
+    // ------------------------------------------------------------------
 
     /// Opt-in CPU observations of the admission path, reset for each run.
     /// Durations include descheduling; native waits are best-effort requests.
@@ -50,6 +62,10 @@ export namespace pP {
         TimeSpan m_max_controls{}, m_max_clock{}, m_max_probe{}, m_max_total{};
         TimeSpan m_max_sleep_slice{}, m_max_sleep_overshoot{};
     };
+
+    // ------------------------------------------------------------------
+    // application
+    // ------------------------------------------------------------------
 
     class Application : public safe_object {
         // One per admitted frame: epoch + frame identity, active flag, and
@@ -550,6 +566,8 @@ export namespace pP {
         // bound guarantees a third frame is never constructed while two are
         // outstanding across building/queued/recording/GPU-pending.
         FrameCreditLedger m_frame_reservations{};
+
+        // frame reservation:
         // Keyed reservation records (epoch, frame id) replacing the former
         // lane/inline pending counters: the record itself identifies the
         // frame every settlement decision fires for, so pairing no longer

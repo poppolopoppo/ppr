@@ -71,6 +71,7 @@ namespace pP::game {
                 {"worldgen-workshop", "worldgen-workshop"},
             };
             Array<std::string> seen{};
+
             for (const auto &assignment: cli.m_assignments) {
                 if (assignment.m_name != "game.command" or assignment.m_value.m_kind != config::ESourceKind::text) {
                     continue;
@@ -95,6 +96,7 @@ namespace pP::game {
                     seen.push_back(assignment.m_value.m_text);
                 }
             }
+
             if (seen.size() > 1u) {
                 diagnostics.add(
                     "cli", "game.command",
@@ -124,6 +126,7 @@ namespace pP::game {
                     config::make_error_code(config::EConfigErrc::codec_error), "config");
                 return std::unexpected{config::make_error_code(config::EConfigErrc::codec_error)};
             }
+
             const std::string bytes{std::istreambuf_iterator<char>{file}, std::istreambuf_iterator<char>{}};
             auto document = config::decode(bytes, path, diagnostics);
             if (not document) {
@@ -137,6 +140,7 @@ namespace pP::game {
         config::CliSchema schema{};
         schema.m_program = "ppr";
         schema.m_description = "PPR colony demo: interactive editor, headless commands, and profiling fixtures.";
+
         appendOption(
             schema.m_options,
             selectorOption(
@@ -192,6 +196,7 @@ namespace pP::game {
         for (auto &option: displayCliOptions()) {
             schema.m_options.push_back(std::move(option));
         }
+
         for (auto &option: startupCliOptions()) {
             schema.m_options.push_back(std::move(option));
         }
@@ -312,6 +317,7 @@ namespace pP::game {
         }
         auto display = config::resolve<DisplaySettings>(
             std::span<const config::Layer>{display_precedence.data(), display_precedence.size()}, diagnostics);
+
         auto startup = config::resolve<StartupSettings>(
             std::span<const config::Layer>{startup_layers.data(), startup_layers.size()}, diagnostics);
 
@@ -370,6 +376,7 @@ namespace pP::game {
         if (not parsed) {
             return std::unexpected{parsed.error()};
         }
+
         if (parsed->m_help_requested) {
             GameInvocation help{};
             help.m_cli = std::move(*parsed);

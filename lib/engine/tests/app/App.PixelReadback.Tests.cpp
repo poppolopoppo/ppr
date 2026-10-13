@@ -10,6 +10,10 @@ import engine.rhi;
 import std;
 
 namespace pP::tests::detail {
+    // ------------------------------------------------------------------
+    // pixel readback
+    // ------------------------------------------------------------------
+
     namespace detail {
         constexpr ApplicationDomain kRenderingDomain{
             .m_is_headless = false,

@@ -3,6 +3,10 @@ module game.tests;
 import engine.core;
 
 namespace pP::game::tests {
+    // ------------------------------------------------------------------
+    // game tests
+    // ------------------------------------------------------------------
+
     const UnitTest &gameConfigTests() noexcept;
     const UnitTest &gameDisplayTests() noexcept;
     const UnitTest &gameContentTests() noexcept;

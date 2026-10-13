@@ -10,6 +10,10 @@ import engine.core;
 import std;
 
 namespace pP::tests::detail {
+    // ------------------------------------------------------------------
+    // hal
+    // ------------------------------------------------------------------
+
     namespace Hal {
         PPR_UNIT_TEST (thread_id) {
             const auto tid = hal::currentThreadId();

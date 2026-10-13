@@ -22,6 +22,7 @@ namespace pP::colony {
                 CheckpointValidation, geometry.m_blobs.size() <= 4096u ? std::error_code{} : invalid);
             Array<std::tuple<u32, u32, u32>> identities;
             identities.reserve(geometry.m_blobs.size());
+
             for (const auto &blob: geometry.m_blobs) {
                 PPR_RETURN_ERROR_ON_FAIL(CheckpointValidation, context ? context->error() : std::error_code{});
                 PPR_RETURN_ERROR_ON_FAIL(
@@ -55,6 +56,7 @@ namespace pP::colony {
                         : invalid);
                 identities.emplace_back(blob.m_biome, blob.m_deposit, blob.m_ordinal);
             }
+
             std::ranges::sort(identities);
             PPR_RETURN_ERROR_ON_FAIL(
                 CheckpointValidation,
@@ -75,6 +77,7 @@ namespace pP::colony {
             const auto &columns = checkpoint.m_snapshot.m_ecs.m_columns;
             PPR_RETURN_ERROR_ON_FAIL(
                 CheckpointValidation, columns.size() == registry.componentCount() ? std::error_code{} : invalid);
+
             const auto &body_column = columns[*registry.componentId<sim::BodyDefinition>()];
             PPR_RETURN_ERROR_ON_FAIL(
                 CheckpointValidation,
@@ -84,6 +87,7 @@ namespace pP::colony {
                         offsetof(sim::BodyDefinition, m_is_bullet), offsetof(sim::BodyDefinition, m_fixed_rotation)})
                     ? std::error_code{}
                     : invalid);
+
             const auto &footprints = columns[*registry.componentId<Footprint>()];
             const auto &errands = columns[*registry.componentId<BuildErrand>()];
             PPR_RETURN_ERROR_ON_FAIL(
@@ -94,12 +98,14 @@ namespace pP::colony {
                                          offsetof(BuildErrand, m_print) + offsetof(Footprint, m_ladder)})
                     ? std::error_code{}
                     : invalid);
+
             for (const auto id:
                 {registry.componentId<Plan>(), registry.componentId<PathReq>(), registry.componentId<PathComp>()}) {
                 PPR_RETURN_ERROR_ON_FAIL(
                     CheckpointValidation,
                     columns[*id].m_owners.empty() and columns[*id].m_bytes.empty() ? std::error_code{} : invalid);
             }
+
             Array<u64> keys;
             for (const auto &[entity, agent]: registry.view<Agent>()) {
                 const auto *const needs = registry.get<Needs>(entity);
@@ -119,6 +125,7 @@ namespace pP::colony {
                                               : invalid);
                 keys.push_back(agent.m_key);
             }
+
             std::ranges::sort(keys);
             PPR_RETURN_ERROR_ON_FAIL(
                 CheckpointValidation, not keys.empty() and
@@ -128,6 +135,7 @@ namespace pP::colony {
                                               body_column.m_owners.size() == keys.size()
                                           ? std::error_code{}
                                           : invalid);
+
             for (const auto &[entity, body]: registry.view<sim::BodyDefinition>()) {
                 PPR_RETURN_ERROR_ON_FAIL(
                     CheckpointValidation, registry.get<Agent>(entity) and
@@ -146,6 +154,7 @@ namespace pP::colony {
                                               ? std::error_code{}
                                               : invalid);
             }
+
             if (checkpoint.m_controlled) {
                 PPR_RETURN_ERROR_ON_FAIL(
                     CheckpointValidation,
@@ -197,6 +206,7 @@ namespace pP::colony {
                                           checkpoint.m_snapshot.m_streams.empty()
                                       ? std::error_code{}
                                       : invalid);
+
         auto plan = compileWorldPlan(catalog, descriptor.m_profile, descriptor.m_seed);
         PPR_RETURN_ERROR_ON_FAIL(CheckpointValidation, plan);
         const auto &recipe = plan->recipe();
@@ -277,6 +287,7 @@ namespace pP::colony {
                                           checkpoint.m_start.m_resource_fine_cells.size() == recipe.m_resources.size()
                                       ? std::error_code{}
                                       : invalid);
+
         sim::Registry registry;
         PPR_RETURN_ERROR_ON_FAIL(CheckpointValidation, registerColonyComponents(registry));
         PPR_RETURN_ERROR_ON_FAIL(CheckpointValidation, sim::restore(registry, checkpoint.m_snapshot));
@@ -285,6 +296,7 @@ namespace pP::colony {
             (void) entity;
             PPR_RETURN_ERROR_ON_FAIL(CheckpointValidation, validateFootprint(footprint, &catalog));
         }
+
         for (const auto &[entity, errand]: registry.view<BuildErrand>()) {
             (void) entity;
             PPR_RETURN_ERROR_ON_FAIL(CheckpointValidation, validateFootprint(errand.m_print, &catalog));
@@ -296,6 +308,7 @@ namespace pP::colony {
         }
         std::bitset<65536u> terrain_ids;
         terrain_ids.set(0u);
+
         for (const auto &material: catalog.materials()) {
             if (material.m_representation == EMaterialRepresentation::terrain and
                 material.m_phase == EMaterialPhase::solid) {
@@ -303,6 +316,7 @@ namespace pP::colony {
             }
         }
         std::array<const sim::ChunkDelta *, sim::kChunkCount> chunks{};
+
         for (const auto &chunk: checkpoint.m_snapshot.m_deltas) {
             PPR_RETURN_ERROR_ON_FAIL(CheckpointValidation, context ? context->error() : std::error_code{});
             PPR_RETURN_ERROR_ON_FAIL(
@@ -328,6 +342,7 @@ namespace pP::colony {
         Array<sim::InitialMatterSpan> spans;
         spans.reserve(checkpoint.m_matter.m_span_count);
         Array<u64> identities;
+
         for (const auto &region: checkpoint.m_matter.m_regions) {
             PPR_RETURN_ERROR_ON_FAIL(CheckpointValidation, context ? context->error() : std::error_code{});
             const auto *const material = catalog.findMaterial(region.m_material);
@@ -391,6 +406,7 @@ namespace pP::colony {
         PPR_RETURN_ERROR_ON_FAIL(
             CheckpointValidation,
             std::ranges::adjacent_find(identities) == identities.end() ? std::error_code{} : invalid);
+
         std::ranges::sort(spans, [](const auto &a, const auto &b) {
             return std::tie(a.m_y, a.m_begin_x, a.m_end_x) < std::tie(b.m_y, b.m_begin_x, b.m_end_x);
         });
@@ -401,6 +417,7 @@ namespace pP::colony {
                     ? std::error_code{}
                     : invalid);
         }
+
         PPR_RETURN_ERROR_ON_FAIL(
             CheckpointValidation, checkpoint.m_report.m_material_counts.size() <= sim::kMaxGenerationMaterials + 1u
                                       ? std::error_code{}
@@ -408,15 +425,18 @@ namespace pP::colony {
         for (const auto time: checkpoint.m_report.m_phase_times) {
             PPR_RETURN_ERROR_ON_FAIL(CheckpointValidation, time >= TimeSpan{} ? std::error_code{} : invalid);
         }
+
         PPR_RETURN_ERROR_ON_FAIL(
             CheckpointValidation, checkpoint.m_report.m_grid_payload_bytes <=
                                           static_cast<u64>(sim::kWorldEdge) * sim::kWorldEdge * sizeof(sim::Cell)
                                       ? std::error_code{}
                                       : invalid);
+
         for (const auto cells: checkpoint.m_start.m_resource_fine_cells) {
             PPR_RETURN_ERROR_ON_FAIL(
                 CheckpointValidation, cells <= sim::kWorldEdge * sim::kWorldEdge ? std::error_code{} : invalid);
         }
+
         for (const auto &count: checkpoint.m_report.m_material_counts) {
             PPR_RETURN_ERROR_ON_FAIL(
                 CheckpointValidation, terrain_ids.test(count.m_material) and

@@ -17,6 +17,10 @@ import game.application;
 import std;
 
 namespace pP::game::tests::detail::pack {
+    // ------------------------------------------------------------------
+    // content pack
+    // ------------------------------------------------------------------
+
     using namespace colony;
     struct Fixture {
         std::filesystem::path m_root;
@@ -685,6 +689,7 @@ threshold_max = 1.0
         PPR_TEST_ASSERT(background.entries().back().m_property == "backgrounds.frontier.layers.distant.texture");
         PPR_TEST_ASSERT(background.entries().back().m_location.find("backgrounds.toml:") != std::string::npos);
     };
+
     PPR_UNIT_TEST (authoring_all_definition_categories_round_trip_and_multidocument_save_retains_newer_edits) {
         Fixture fixture;
         useSmallIdentityImages(fixture);
@@ -1115,6 +1120,7 @@ threshold_max = 1.0
         PPR_TEST_ASSERT(workshop.propertyDiagnostics().empty());
         PPR_TEST_ASSERT(not workshop.shutdown());
     };
+
     PPR_UNIT_TEST (workshop_property_metadata_tracks_schemas_and_contextual_references) {
         std::array<config::Document, kContentDocumentCount> documents;
         const auto descriptor = [&](const EContentDocument category, const std::string_view property) {
@@ -1189,6 +1195,7 @@ threshold_max = 1.0
         documents = {};
         PPR_TEST_ASSERT(lifetime.size() == 3u and lifetime[0u] == "rectangle");
     };
+
     PPR_UNIT_TEST (required_texture_limits_missing_and_cancel_are_errors) {
         Fixture fixture{};
         config::Diagnostics diagnostics{};

@@ -697,6 +697,7 @@ namespace pP::sim {
                 }
             }
         }
+
         Array<Cell, mem::ScratchPad> next(passes == 0u ? 0u : edge * edge);
         // Each pass consumes only the immutable previous buffer. Shrinking its
         // valid halo by one cell proves identical interior results in every chunk.
@@ -799,6 +800,7 @@ namespace pP::sim {
             }
             current.swap(next);
         }
+
         Array<Cell> cells(kCellsPerChunk);
         for (u32 y = 0u; y < kChunkEdge; ++y) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(WorldRaster, canceled(context));
@@ -869,7 +871,6 @@ namespace pP::sim {
                 }
                 return {};
             };
-
 
             for (u32 chunk_index = 0u; chunk_index < kChunkCount; ++chunk_index) {
                 std::error_code err{};
@@ -961,6 +962,7 @@ namespace pP::sim {
                 }
             }
         }
+
         if (not parents.empty()) {
             const u32 connected = root(0u);
             for (u32 i = 1u; i < parents.size(); ++i) {
@@ -1067,6 +1069,7 @@ namespace pP::sim {
                 *known_scratch_peak = std::max(
                     *known_scratch_peak, raster->indexPayloadBytes() + records.capacity() * sizeof(Formation));
             }
+
             for (const auto &record: records) {
                 PPR_RETURN_ERROR_ON_FAIL(WorldRaster, canceled(context));
                 const auto &biome = r.m_biomes[record.biome];
@@ -1152,6 +1155,7 @@ namespace pP::sim {
                 }
             }
         }
+
         PPR_RETURN_ERROR_ON_FAIL(
             WorldRaster, applyFormations(plan, layout, geometry, grid, candidates, context, known_scratch_peak));
         return {};
@@ -1226,6 +1230,7 @@ namespace pP::sim {
                     (std::max(segment.m_x0_m, segment.m_x1_m) + segment.m_radius_m) * scale,
                     (std::max(segment.m_y0_m, segment.m_y1_m) + segment.m_radius_m) * scale));
         }
+
         for (u32 i = 0u; i < geometry.m_instances.size(); ++i) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(WorldRaster, canceled(context));
             const auto &instance = geometry.m_instances[i];
@@ -1240,6 +1245,7 @@ namespace pP::sim {
                                  instance.m_origin_x + static_cast<double>(bounds.m_max_x) - 1.0,
                                  instance.m_origin_y + static_cast<double>(bounds.m_max_y) - 1.0));
         }
+
         for (u32 i = 0u; i < geometry.m_blobs.size(); ++i) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(WorldRaster, canceled(context));
             const auto &blob = geometry.m_blobs[i];

@@ -39,6 +39,7 @@ namespace pP::colony {
         m_prepared.reset();
         m_particles = sim::MatterParticleState{};
         m_grid = sim::ChunkGrid{};
+
         PPR_RETURN_ERROR_ON_FAIL(ColonyWorld, generateLegacyFixture(desc.m_seed, m_grid, execution));
 
         m_initialized = true;
@@ -67,6 +68,7 @@ namespace pP::colony {
             recipe.m_reference_thickness_m != descriptor.m_metric.m_reference_thickness_m) {
             PPR_RETURN_ERROR_ON_FAIL(ColonyWorld, std::errc::invalid_argument);
         }
+
         sim::MatterParticleState particles;
         if (restored) {
             PPR_RETURN_ERROR_ON_FAIL(
@@ -82,6 +84,7 @@ namespace pP::colony {
                 particles.restore(
                     *seeded, recipe.m_materials, recipe.m_cell_size_m, context, recipe.m_reference_thickness_m));
         }
+
         auto prepared = std::make_unique<PreparedWorld>(std::move(world));
         m_grid = sim::ChunkGrid{};
         m_prepared = std::move(prepared);

@@ -9,6 +9,10 @@ import engine.core;
 import std;
 
 export namespace pP {
+    // ------------------------------------------------------------------
+    // frame pacing
+    // ------------------------------------------------------------------
+
     enum class EFramePacing : u8 {
         uncapped,
         follow_vsync,
@@ -21,6 +25,10 @@ export namespace pP {
         config::EnumEntry<EFramePacing>{EFramePacing::paced, "paced"},
     }};
 
+    // ------------------------------------------------------------------
+    // window mode
+    // ------------------------------------------------------------------
+
     enum class EDisplayWindowMode : u8 {
         windowed,
         fullscreen
@@ -30,6 +38,10 @@ export namespace pP {
         config::EnumEntry<EDisplayWindowMode>{EDisplayWindowMode::windowed, "windowed"},
         config::EnumEntry<EDisplayWindowMode>{EDisplayWindowMode::fullscreen, "fullscreen"},
     }};
+
+    // ------------------------------------------------------------------
+    // display settings
+    // ------------------------------------------------------------------
 
     /// Zero dimensions retain window size / select the monitor's current mode.
     /// Zero refresh requests the platform default, not an inferred refresh.

@@ -7,6 +7,10 @@ import engine.core;
 import std;
 
 namespace pP::tests::detail {
+    // ------------------------------------------------------------------
+    // memory page pool
+    // ------------------------------------------------------------------
+
     namespace Page_pool {
         PPR_UNIT_TEST (bit_tree_mechanics) {
             mem::UnitTest::bit_tree_mechanics();

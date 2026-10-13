@@ -7,6 +7,10 @@ import engine.core;
 import std;
 
 namespace pP::tests::detail {
+    // ------------------------------------------------------------------
+    // strings
+    // ------------------------------------------------------------------
+
     namespace String {
         namespace Helper {
             PPR_UNIT_TEST (char_helpers) {

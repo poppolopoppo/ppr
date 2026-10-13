@@ -7,6 +7,10 @@ import engine.core;
 import std;
 
 namespace pP::tests::detail {
+    // ------------------------------------------------------------------
+    // memory arena
+    // ------------------------------------------------------------------
+
     namespace Arena {
         PPR_UNIT_TEST (lifo_operations) {
             mem::Arena<mem::GPA> arena(64u);

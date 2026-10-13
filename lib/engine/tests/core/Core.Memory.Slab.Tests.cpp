@@ -7,6 +7,10 @@ import engine.core;
 import std;
 
 namespace pP::tests::detail {
+    // ------------------------------------------------------------------
+    // memory slab
+    // ------------------------------------------------------------------
+
     namespace Slab {
         PPR_UNIT_TEST (lifo_operations) {
             mem::InSituSlab<64u> slab;

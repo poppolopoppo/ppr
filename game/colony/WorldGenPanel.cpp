@@ -27,6 +27,7 @@ namespace pP::colony {
                         {key, std::move(value), "production decoder default (omitted in source)"});
                 }
             };
+
             for (const auto &biome: catalog.biomes()) {
                 const auto prefix = "biomes." + biome.m_key + ".";
                 if (std::ranges::none_of(document.m_entries, [&](const config::Entry &entry) {
@@ -73,6 +74,7 @@ namespace pP::colony {
                         config::FileValue::floating(deposit.m_orientation_max_degrees));
                 }
             }
+
             std::ranges::sort(document.m_entries, {}, &config::Entry::m_key);
         }
         bool matches(const std::string_view text, const std::string_view search) {
@@ -115,11 +117,13 @@ namespace pP::colony {
             const std::string_view property = diagnostic.m_property;
             const auto first = property.find('.');
             const auto second = first == std::string_view::npos ? first : property.find('.', first + 1u);
+
             if (first == std::string_view::npos or
                 second == std::string_view::npos or
                 std::ranges::find(kCategories, property.substr(0u, first)) == kCategories.end()) {
                 return false;
             }
+
             selectDefinition(state, property.substr(0u, first), property.substr(first + 1u, second - first - 1u));
             state.m_focus_property = property;
             state.m_property_search[0u] = '\0';
@@ -133,11 +137,13 @@ namespace pP::colony {
                 view.m_catalog == state.m_document_catalog) {
                 return;
             }
+
             state.m_document_source = view.m_source;
             state.m_document_revision = view.m_revision;
             state.m_document_validated_revision = view.m_validated_revision;
             state.m_document_catalog = view.m_catalog;
             state.m_tree_selection.clear();
+
             for (std::size_t index = 0u; index < kCategories.size(); ++index) {
                 state.m_documents[index] = {};
                 state.m_record_keys[index].clear();
@@ -151,9 +157,11 @@ namespace pP::colony {
                     }
                 }
             }
+
             if (view.m_catalog) {
                 appendResolvedBiomeDefaults(state.m_documents[1u], *view.m_catalog);
             }
+
             for (std::size_t index = 0u; index < kCategories.size(); ++index) {
                 auto &keys = state.m_record_keys[index];
                 for (const auto &entry: state.m_documents[index].m_entries) {
@@ -171,15 +179,19 @@ namespace pP::colony {
             if (selection == state.m_tree_selection) {
                 return;
             }
+
             state.m_tree_selection = selection;
             state.m_property_tree.clear();
+
             const auto category = std::ranges::find(kCategories, state.m_selected_category);
             if (category == kCategories.end()) {
                 return;
             }
+
             const auto index = static_cast<std::size_t>(category - kCategories.begin());
             const auto &document = state.m_documents[index];
             const auto prefix = selection + ".";
+
             for (std::size_t entry_index = 0u; entry_index < document.m_entries.size(); ++entry_index) {
                 const auto &entry = document.m_entries[entry_index];
                 if (not entry.m_key.starts_with(prefix)) {
@@ -255,6 +267,7 @@ namespace pP::colony {
             }
             const auto &descriptor = *node.m_descriptor;
             double lower = descriptor.m_slider_min, upper = descriptor.m_slider_max;
+
             if (descriptor.m_min) {
                 lower = (std::max) (lower,
                     descriptor.m_exclusive_min
@@ -267,6 +280,7 @@ namespace pP::colony {
                         ? std::nextafter(*descriptor.m_max, -std::numeric_limits<double>::infinity())
                         : *descriptor.m_max);
             }
+
             if (value.m_kind == config::EFileKind::integer) {
                 const auto toInteger = [](const double number) {
                     if (number >= static_cast<double>((std::numeric_limits<i64>::max)())) {
@@ -315,6 +329,7 @@ namespace pP::colony {
             const auto diagnostics = currentDiagnostics(view);
             const bool has_error = std::ranges::any_of(
                 diagnostics, [&](const config::Diagnostic &diagnostic) { return diagnostic.m_property == key; });
+
             if (not has_error) {
                 if (state.m_focus_property == key) {
                     ImGui::SetScrollHereY(0.35f);
@@ -322,12 +337,14 @@ namespace pP::colony {
                 }
                 return;
             }
+
             ImGui::SameLine();
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4{1.0f, 0.45f, 0.35f, 1.0f});
             const bool clicked = ImGui::SmallButton("!##error");
             ImGui::PopStyleColor();
             const auto anchor = ImGui::GetItemRectMax();
             const bool focused = state.m_focus_property == key;
+
             if (focused and not ImGui::IsItemVisible()) {
                 ImGui::SetScrollHereY(0.35f);
             } else if (clicked or focused) {
@@ -339,6 +356,7 @@ namespace pP::colony {
             if (ImGui::IsItemHovered()) {
                 ImGui::SetTooltip("Show errors for %s", key.c_str());
             }
+
             ImGui::SetNextWindowPos(ImVec2{anchor.x + 6.0f, anchor.y + 4.0f}, ImGuiCond_Appearing);
             if (ImGui::BeginPopup("Property error")) {
                 ImGui::PushTextWrapPos(ImGui::GetFontSize() * 36.0f);
@@ -362,6 +380,7 @@ namespace pP::colony {
             const auto prefix = std::string{kCategories[category]} + "." + definition_key + ".";
             const auto property = std::string_view{entry.m_key}.substr(prefix.size());
             const bool editable = not view.m_closing and (not node.m_descriptor or not node.m_descriptor->m_read_only);
+
             ImGui::PushID(entry.m_key.c_str());
             ImGui::TableNextRow();
             ImGui::TableSetColumnIndex(0);
@@ -384,6 +403,7 @@ namespace pP::colony {
                 ImGui::TextUnformatted("Ctrl-click a slider to enter an exact value.");
                 ImGui::EndTooltip();
             }
+
             ImGui::TableSetColumnIndex(1);
             const bool choice_control = entry.m_value.m_kind == config::EFileKind::text and
                                         (not node.m_choices.empty() or
@@ -401,6 +421,7 @@ namespace pP::colony {
             }
             bool changed = false;
             bool cleared = false;
+
             ImGui::BeginDisabled(not editable);
             switch (value.m_kind) {
                 case config::EFileKind::boolean: changed = ImGui::Checkbox("##value", &value.m_boolean); break;
@@ -415,6 +436,7 @@ namespace pP::colony {
                     break;
             }
             ImGui::EndDisabled();
+
             if (numeric) {
                 if (changed) {
                     state.m_numeric_edit_key = entry.m_key;
@@ -426,6 +448,7 @@ namespace pP::colony {
                     state.m_numeric_edit_key.clear();
                 }
             }
+
             if (can_reset) {
                 ImGui::SameLine();
                 ImGui::BeginDisabled(not editable);
@@ -444,6 +467,7 @@ namespace pP::colony {
                     ImGui::SetTooltip("Unset this optional property and use its default.");
                 }
             }
+
             if (changed) {
                 WorkshopIntent intent{cleared ? EWorkshopIntent::clear_property : EWorkshopIntent::edit_definition};
                 intent.m_document = static_cast<EContentDocument>(category);
@@ -452,6 +476,7 @@ namespace pP::colony {
                 intent.m_value = std::move(value);
                 intents.push_back(std::move(intent));
             }
+
             propertyErrors(state, entry.m_key, view);
             if (node.m_descriptor and
                 node.m_descriptor->m_reference_category and
@@ -475,6 +500,7 @@ namespace pP::colony {
             WorldgenPanelState &state, const Array<WorldgenPanelState::PropertyNode> &nodes, const std::size_t category,
             const WorldgenPanelView &view, Array<WorkshopIntent> &intents) {
             const std::string_view search = state.m_property_search.data();
+
             for (const auto &node: nodes) {
                 if (not treeMatches(node, search)) {
                     continue;
@@ -547,6 +573,7 @@ namespace pP::colony {
             if (ImGui::IsItemHovered()) {
                 ImGui::SetTooltip("Authored pack root. Build-staged assets may be overwritten by a build.");
             }
+
             ImGui::SameLine();
             const bool empty_root = std::string_view{state.m_root.data()}.find_first_not_of(" \t\r\n") ==
                                     std::string_view::npos;
@@ -610,10 +637,12 @@ namespace pP::colony {
                 emit(intents, EWorkshopIntent::preview_settings_changed);
             }
             ImGui::EndDisabled();
+
             ImGui::Text(
                 "%s | draft %llu / validated %llu%s", view.m_dirty ? "Unsaved changes" : "Saved", view.m_revision,
                 view.m_validated_revision, view.m_busy ? " | worker busy" : "");
             ImGui::TextWrapped("%.*s", static_cast<int>(view.m_status.size()), view.m_status.data());
+
             if (contentErrors(view)) {
                 ImGui::TextColored(ImVec4{1.0f, 0.45f, 0.35f, 1.0f}, "This draft has property errors.");
                 ImGui::SameLine();
@@ -629,6 +658,7 @@ namespace pP::colony {
             ImGui::InputTextWithHint(
                 "##content-search", "Search definitions", state.m_search.data(), state.m_search.size());
             const std::string_view search = state.m_search.data();
+
             for (std::size_t category = 0u; category < kCategories.size(); ++category) {
                 if (not search.empty()) {
                     ImGui::SetNextItemOpen(true, ImGuiCond_Always);
@@ -656,6 +686,7 @@ namespace pP::colony {
                     ImGui::TreePop();
                 }
             }
+
             if (view.m_catalog and ImGui::TreeNode("Referenced textures")) {
                 for (const auto &texture: view.m_catalog->textures()) {
                     if (matches(texture.m_path, search) and ImGui::Selectable(texture.m_path.c_str())) {
@@ -664,6 +695,7 @@ namespace pP::colony {
                 }
                 ImGui::TreePop();
             }
+
             if (view.m_source and ImGui::TreeNode("Pack source")) {
                 ImGui::TextWrapped("%s", view.m_source->m_manifest.m_pack_id.c_str());
                 ImGui::TextWrapped("%s", view.m_source->m_manifest_source.m_path.string().c_str());
@@ -676,12 +708,14 @@ namespace pP::colony {
             if (not ImGui::CollapsingHeader("Create / delete definition")) {
                 return;
             }
+
             ImGui::SetNextItemWidth(-1.0f);
             ImGui::InputTextWithHint(
                 "##new-key", "New unique definition key", state.m_new_key.data(), state.m_new_key.size());
             if (category == 0u) {
                 ImGui::InputInt("New material ID", &state.m_new_numeric_id);
             }
+
             const std::string_view key = state.m_new_key.data();
             const bool valid_key = not key.empty() and
                                    key.find('.') == std::string_view::npos and
@@ -701,6 +735,7 @@ namespace pP::colony {
                                         (state.m_new_numeric_id < 1 or state.m_new_numeric_id > 65534 or duplicate_id)
                                     ? "Choose an unused material ID between 1 and 65534."
                                     : "";
+
             ImGui::BeginDisabled(reason[0u] != '\0');
             if (ImGui::Button("Create from selected")) {
                 WorkshopIntent intent{EWorkshopIntent::clone_definition};
@@ -728,6 +763,7 @@ namespace pP::colony {
         }
         void inspector(WorldgenPanelState &state, const WorldgenPanelView &view, Array<WorkshopIntent> &intents) {
             const auto category = std::ranges::find(kCategories, state.m_selected_category);
+
             if (state.m_selected_key.empty()) {
                 ImGui::TextWrapped("Choose a definition in the browser to inspect its properties.");
                 return;
@@ -736,6 +772,7 @@ namespace pP::colony {
                 ImGui::TextWrapped("Reserved element ID 0 represents empty terrain. Its identity is fixed.");
                 return;
             }
+
             if (category == kCategories.end()) {
                 if (view.m_catalog and state.m_selected_category == "textures") {
                     for (const auto &texture: view.m_catalog->textures()) {
@@ -749,12 +786,14 @@ namespace pP::colony {
                 }
                 return;
             }
+
             const auto index = static_cast<std::size_t>(category - kCategories.begin());
             if (state.m_property_tree.empty()) {
                 ImGui::TextWrapped(
                     "This definition is no longer in the draft. Choose another definition or Undo deletion.");
                 return;
             }
+
             ImGui::SetNextItemWidth(-1.0f);
             ImGui::InputTextWithHint(
                 "##property-search", "Search nested properties", state.m_property_search.data(),
@@ -765,6 +804,7 @@ namespace pP::colony {
             }
             ImGui::TextDisabled(
                 "Hover labels for source, units and schema bounds. Ctrl-click sliders for exact values.");
+
             if (ImGui::BeginTable(
                     "Property tree", 2,
                     ImGuiTableFlags_Resizable | ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV)) {
@@ -774,7 +814,9 @@ namespace pP::colony {
                 propertyTree(state, state.m_property_tree, index, view, intents);
                 ImGui::EndTable();
             }
+
             definitionActions(state, index, view, intents);
+
             if (ImGui::CollapsingHeader("Used by")) {
                 for (std::size_t other = 0u; other < kCategories.size(); ++other) {
                     for (const auto &entry: state.m_documents[other].m_entries) {
@@ -792,6 +834,7 @@ namespace pP::colony {
             ImGui::TextUnformatted("256 x 256 fine cells | 85.33 m square");
             ImGui::TextWrapped(
                 "The cyan outline marks the counted and exported interior. Extra rendered cells provide contour support.");
+
             bool changed = keyCombo(
                 "World profile", state.m_profile.data(), state.m_profile.size(), state.m_record_keys[4u]);
             constexpr const char *scopes[]{"Biome sample", "Exact whole-world crop"};
@@ -821,9 +864,11 @@ namespace pP::colony {
                 state.m_mode = static_cast<EGridDiagnosticMode>(mode);
                 changed = true;
             }
+
             if (changed) {
                 emit(intents, EWorkshopIntent::preview_settings_changed);
             }
+
             const auto reason = previewReason(state, view);
             actionButton("Prepare preview", reason, EWorkshopIntent::preview, intents);
             if (not reason.empty()) {
@@ -832,6 +877,7 @@ namespace pP::colony {
             if (view.m_publishing) {
                 ImGui::TextWrapped("Preparing the render preview; the previous picture remains visible.");
             }
+
             if (view.m_preview) {
                 const auto &preview = *view.m_preview;
                 ImGui::Separator();
@@ -848,6 +894,7 @@ namespace pP::colony {
                 ImGui::Text(
                     "Visible [%u,%u) x [%u,%u)", preview.m_visible.m_left, preview.m_visible.m_right,
                     preview.m_visible.m_bottom, preview.m_visible.m_top);
+
                 if (ImGui::TreeNode("Material counts")) {
                     for (const auto &count: preview.m_material_counts) {
                         const auto *material = preview.m_catalog.findMaterial(count.m_material);
@@ -857,6 +904,7 @@ namespace pP::colony {
                     }
                     ImGui::TreePop();
                 }
+
                 if (ImGui::TreeNode("Participating profile rules")) {
                     if (ImGui::SmallButton("Inspect profile")) {
                         selectDefinition(state, "worlds", preview.m_spec.m_profile);
@@ -867,6 +915,7 @@ namespace pP::colony {
                     }
                     ImGui::TreePop();
                 }
+
                 if (ImGui::TreeNode("Sample scope / omissions")) {
                     for (const auto &omission: preview.m_omissions) {
                         ImGui::BulletText("%s", omission.c_str());
@@ -874,6 +923,7 @@ namespace pP::colony {
                     ImGui::TreePop();
                 }
             }
+
             ImGui::Separator();
             ImGui::InputText(
                 "Fresh diagnostic export directory", state.m_export_path.data(), state.m_export_path.size());
@@ -888,6 +938,7 @@ namespace pP::colony {
         }
         void diagnosticsPanel(WorldgenPanelState &state, const WorldgenPanelView &view) {
             const auto diagnostics = currentDiagnostics(view);
+
             if (diagnostics.empty()) {
                 ImGui::TextWrapped("No property diagnostics for the current draft.");
             } else {
@@ -908,15 +959,18 @@ namespace pP::colony {
                     ImGui::PopID();
                 }
             }
+
             if (not view.m_diagnostics.empty() and
                 ImGui::CollapsingHeader("Operation log (may describe an older draft)")) {
                 ImGui::TextWrapped("%.*s", static_cast<int>(view.m_diagnostics.size()), view.m_diagnostics.data());
             }
         }
     }
+
     Array<WorkshopIntent> drawWorldgenPanel(WorldgenPanelState &state, const WorldgenPanelView &view) {
         Array<WorkshopIntent> intents{};
         refreshDocuments(state, view);
+
         ImGui::SetNextWindowPos(ImVec2{12.0f, 34.0f}, ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowSize(ImVec2{1100.0f, 820.0f}, ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowSizeConstraints(
@@ -925,7 +979,9 @@ namespace pP::colony {
             ImGui::End();
             return intents;
         }
+
         toolbar(state, view, intents);
+
         if (ImGui::BeginTable("Workshop layout", 2, ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInnerV)) {
             ImGui::TableSetupColumn("Browser", ImGuiTableColumnFlags_WidthFixed, 235.0f);
             ImGui::TableSetupColumn("Inspector", ImGuiTableColumnFlags_WidthStretch);

@@ -38,6 +38,7 @@ namespace pP::colony {
             position.m_y >= static_cast<double>(sim::kWorldEdge) / cells_per_metre) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyMetric, std::make_error_code(std::errc::result_out_of_range));
         }
+
         // The range guard precedes conversion, including the rounded final bound.
         const auto cell_axis = [cells_per_metre](const double metres) {
             auto index = static_cast<u32>(std::floor(metres * cells_per_metre));
@@ -100,10 +101,12 @@ namespace pP::colony {
         if (max_fine_edge < kFineCellsPerConstructionTile) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyMetric, std::errc::invalid_argument);
         }
+
         const auto begin = constructionTileOf(anchor);
         PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyMetric, begin);
         const auto end = constructionTileOf(cursor);
         PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyMetric, end);
+
         constexpr u32 complete_tiles = sim::kWorldEdge / kFineCellsPerConstructionTile;
         const i32 limit = static_cast<i32>(std::min(max_fine_edge / kFineCellsPerConstructionTile, complete_tiles));
         const auto clamp_axis = [limit](const u32 origin, const u32 target) {

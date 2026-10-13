@@ -23,17 +23,21 @@ namespace pP::colony {
                 ContentAuthoring, index < categories.size() and validKey(key)
                                       ? std::error_code{}
                                       : std::make_error_code(std::errc::invalid_argument));
+
             const auto &document = source.m_documents[index];
             auto decoded = config::decode(
                 document.m_bytes, document.m_path.string(), diagnostics, config::EDecodeMode::records);
             PPR_RETURN_UNEXPECTED_ON_FAIL(ContentAuthoring, decoded);
+
             const auto prefix = std::string{categories[index]} + "." + std::string{key} + ".";
             config::Document record;
+
             for (const auto &entry: decoded->m_entries) {
                 if (entry.m_key.starts_with(prefix)) {
                     record.m_entries.push_back({entry.m_key.substr(prefix.size()), entry.m_value, entry.m_location});
                 }
             }
+
             if (record.m_entries.empty()) {
                 diagnostics.add(
                     document.m_path.string(), std::string{key}, "Unknown authored definition",
@@ -80,8 +84,10 @@ namespace pP::colony {
         const std::filesystem::path &root, config::Diagnostics &diagnostics, const IContext *const context) {
         auto source = loadContentPackSource(root, diagnostics, context);
         PPR_RETURN_UNEXPECTED_ON_FAIL(ContentAuthoring, source);
+
         auto catalog = loadContentCatalog(root, *source, diagnostics, context);
         PPR_RETURN_UNEXPECTED_ON_FAIL(ContentAuthoring, catalog);
+
         std::error_code error;
         auto canonical_root = std::filesystem::canonical(root, error);
         PPR_RETURN_UNEXPECTED_ON_FAIL(ContentAuthoring, error);
@@ -125,6 +131,7 @@ namespace pP::colony {
         auto &document = m_draft.m_documents[static_cast<std::size_t>(command.m_document)];
         auto bytes = config::applySourcePatch(document.m_bytes, command.m_patch, reverse);
         PPR_RETURN_ERROR_ON_FAIL(ContentAuthoring, bytes);
+
         document.m_bytes = std::move(*bytes);
         ++m_revision;
         return {};
@@ -134,6 +141,7 @@ namespace pP::colony {
         if (patch.m_before == patch.m_after) {
             return {};
         }
+
         const auto payload_bytes = static_cast<u64>(patch.m_before.size() + patch.m_after.size());
         PPR_RETURN_ERROR_ON_FAIL(
             ContentAuthoring, m_history.execute(
@@ -154,10 +162,12 @@ namespace pP::colony {
         const config::FileValue &value, config::Diagnostics &diagnostics) {
         auto record = definitionDocument(m_draft, kind, key, diagnostics);
         PPR_RETURN_ERROR_ON_FAIL(ContentAuthoring, record);
+
         PPR_RETURN_ERROR_ON_FAIL(
             ContentAuthoring, config::isValidCanonicalName(relative_property) and relative_property != "numeric_id"
                                   ? std::error_code{}
                                   : std::make_error_code(std::errc::invalid_argument));
+
         const auto index = static_cast<std::size_t>(kind);
         const auto &document = m_draft.m_documents[index];
         auto patch = config::patchScalar(
@@ -173,11 +183,13 @@ namespace pP::colony {
         config::Diagnostics &diagnostics) {
         auto record = definitionDocument(m_draft, kind, key, diagnostics);
         PPR_RETURN_ERROR_ON_FAIL(ContentAuthoring, record);
+
         const auto index = static_cast<std::size_t>(kind);
         const auto &source = m_draft.m_documents[index];
         auto document = config::decode(
             source.m_bytes, source.m_path.string(), diagnostics, config::EDecodeMode::records);
         PPR_RETURN_ERROR_ON_FAIL(ContentAuthoring, document);
+
         const auto descriptor = contentPropertyDescriptor(kind, relative_property, *document, key);
         const auto qualified =
             std::string{categories[index]} + "." + std::string{key} + "." + std::string{relative_property};
@@ -187,9 +199,11 @@ namespace pP::colony {
                 config::make_error_code(config::EConfigErrc::cross_field_invalid));
             PPR_RETURN_ERROR_ON_FAIL(ContentAuthoring, config::EConfigErrc::cross_field_invalid);
         }
+
         if (std::ranges::find(document->m_entries, qualified, &config::Entry::m_key) == document->m_entries.end()) {
             return {};
         }
+
         auto patch = config::removeRecord(source.m_bytes, qualified, source.m_path.string(), diagnostics);
         PPR_RETURN_ERROR_ON_FAIL(ContentAuthoring, patch);
         PPR_RETURN_ERROR_ON_FAIL(ContentAuthoring, executePatch(kind, std::move(*patch)));
@@ -200,11 +214,14 @@ namespace pP::colony {
         const std::optional<u16> new_numeric_id, config::Diagnostics &diagnostics) {
         auto record = definitionDocument(m_draft, kind, source_key, diagnostics);
         PPR_RETURN_ERROR_ON_FAIL(ContentAuthoring, record);
+
         PPR_RETURN_ERROR_ON_FAIL(
             ContentAuthoring,
             validKey(new_key) ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
+
         const auto index = static_cast<std::size_t>(kind);
         const auto &document = m_draft.m_documents[index];
+
         if (kind == EContentDocument::materials) {
             PPR_RETURN_ERROR_ON_FAIL(
                 ContentAuthoring, new_numeric_id and *new_numeric_id > 0u and *new_numeric_id < 65535u
@@ -231,6 +248,7 @@ namespace pP::colony {
                 ContentAuthoring,
                 not new_numeric_id ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
         }
+
         auto patch = config::insertRecord(
             document.m_bytes, std::string{categories[index]} + "." + std::string{new_key}, *record,
             document.m_path.string(), diagnostics);
@@ -242,8 +260,10 @@ namespace pP::colony {
         const EContentDocument kind, const std::string_view key, config::Diagnostics &diagnostics) {
         auto record = definitionDocument(m_draft, kind, key, diagnostics);
         PPR_RETURN_ERROR_ON_FAIL(ContentAuthoring, record);
+
         const auto index = static_cast<std::size_t>(kind);
         const auto &document = m_draft.m_documents[index];
+
         auto patch = config::removeRecord(
             document.m_bytes, std::string{categories[index]} + "." + std::string{key}, document.m_path.string(),
             diagnostics);
@@ -284,10 +304,12 @@ namespace pP::colony {
         if (result.m_snapshot.m_root != m_root) {
             return false;
         }
+
         const bool matching = result.m_snapshot.m_revision == m_revision and
                               sameSource(result.m_submitted_source, m_draft);
         const bool successful = matching and not result.m_error and result.m_catalog != nullptr;
         auto draft = result.m_snapshot.m_source;
+
         // Preserve desired bytes for every authored document, even when a
         // partial save committed a different value and the user then undid it.
         // Untouched documents adopt fresh disk bytes unless edited meanwhile.
@@ -298,11 +320,14 @@ namespace pP::colony {
                 draft.m_documents[index] = m_draft.m_documents[index];
             }
         }
+
         m_baseline = std::move(result.m_snapshot.m_source);
         m_draft = std::move(draft);
+
         // Saving revalidates on-disk pack inputs and texture bytes. Retire all
         // older previews/validations even when the authored source bytes match.
         ++m_revision;
+
         if (successful) {
             m_catalog = std::move(result.m_catalog);
             m_validated_revision = m_revision;
@@ -320,6 +345,7 @@ namespace pP::colony {
         ContentAuthoringSnapshot snapshot, config::Diagnostics &diagnostics, const IContext *const context) try {
         const auto cancelled = [&] { return context ? context->error() : std::error_code{}; };
         PPR_RETURN_UNEXPECTED_ON_FAIL(ContentAuthoring, cancelled());
+
         auto current = loadContentPackSource(snapshot.m_root, diagnostics, context);
         PPR_RETURN_UNEXPECTED_ON_FAIL(ContentAuthoring, current);
         if (not sameDocument(current->m_manifest_source, snapshot.m_baseline.m_manifest_source)) {
@@ -329,9 +355,11 @@ namespace pP::colony {
             ContentAuthoring, sameDocument(snapshot.m_source.m_manifest_source, snapshot.m_baseline.m_manifest_source)
                                   ? std::error_code{}
                                   : std::make_error_code(std::errc::invalid_argument));
+
         auto submitted_source = snapshot.m_source;
         const ContentPackSource disk_before = *current;
         std::array<bool, kContentDocumentCount> changed{};
+
         for (std::size_t index = 0u; index < kContentDocumentCount; ++index) {
             const auto &requested = snapshot.m_source.m_documents[index];
             changed[index] = not sameDocument(requested, snapshot.m_baseline.m_documents[index]);
@@ -348,9 +376,11 @@ namespace pP::colony {
                 current->m_documents[index] = requested;
             }
         }
+
         auto validated = loadContentCatalog(snapshot.m_root, *current, diagnostics, context);
         PPR_RETURN_UNEXPECTED_ON_FAIL(ContentAuthoring, validated);
         auto catalog = std::make_shared<const ContentCatalog>(std::move(*validated));
+
         std::array<std::filesystem::path, kContentDocumentCount> temporary{};
         std::array<bool, kContentDocumentCount> acquired{}, replaced{};
         PPR_DEFER {
@@ -363,6 +393,7 @@ namespace pP::colony {
                 }
             }
         };
+
         // Acquire and verify every changed document before committing any one.
         for (std::size_t index = 0u; index < kContentDocumentCount; ++index) {
             if (not changed[index] or sameDocument(disk_before.m_documents[index], current->m_documents[index])) {
@@ -394,17 +425,21 @@ namespace pP::colony {
                 ContentAuthoring, stream ? std::error_code{} : std::make_error_code(std::errc::io_error));
             PPR_RETURN_UNEXPECTED_ON_FAIL(ContentAuthoring, verifyStagingFile(temporary[index], target.m_bytes));
         }
+
         auto checked = loadContentPackSource(snapshot.m_root, diagnostics, context);
         PPR_RETURN_UNEXPECTED_ON_FAIL(ContentAuthoring, checked);
         if (not sameSource(*checked, disk_before)) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(ContentAuthoring, conflict(diagnostics, snapshot.m_root));
         }
+
         PPR_RETURN_UNEXPECTED_ON_FAIL(ContentAuthoring, cancelled());
+
         // Each sibling rename is atomic; the pack is deliberately not described
         // as atomic. After commit starts, finish independent replacements even
         // if cancellation arrives, retaining the disk baseline for every outcome.
         auto committed_source = disk_before;
         std::error_code first_error;
+
         for (std::size_t index = 0u; index < kContentDocumentCount; ++index) {
             if (not acquired[index]) {
                 continue;
@@ -421,6 +456,7 @@ namespace pP::colony {
             }
             PPR_RETAIN_ERROR_ON_FAIL(ContentAuthoring, first_error, error);
         }
+
         // Reconcile even when a rename or verification fails. The submitted
         // baseline remains in the result so acceptance can preserve undo intent.
         auto reread = [&]() -> Expected<ContentPackSource> {
@@ -446,6 +482,7 @@ namespace pP::colony {
             }
             committed_source = std::move(*reread);
         }
+
         if (first_error) {
             for (std::size_t index = 0u; index < kContentDocumentCount; ++index) {
                 if (replaced[index]) {
@@ -457,6 +494,7 @@ namespace pP::colony {
             }
             catalog.reset();
         }
+
         snapshot.m_source = std::move(committed_source);
         return ContentAuthoringSaveResult{
             std::move(snapshot), std::move(catalog), std::move(submitted_source), first_error};

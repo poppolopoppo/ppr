@@ -7,6 +7,10 @@ import engine.core;
 import std;
 
 export namespace pP::sim {
+    // ------------------------------------------------------------------
+    // particle vocabulary
+    // ------------------------------------------------------------------
+
     // At most 64 MiB of logical live records; explicit encoding uses 59 MiB.
     // Frozen snapshots may retain previous batches across local edits.
     // Allocate only occupied batches, never this maximum up front.
@@ -33,12 +37,21 @@ export namespace pP::sim {
         u64 m_next_id{1u};
         Array<MatterParticleBatch> m_chunks{};
     };
+
+    // ------------------------------------------------------------------
+    // seeding + validation
+    // ------------------------------------------------------------------
+
     [[nodiscard]] Expected<MatterParticleSnapshot> seedMatterParticles(
         const InitialMatter &matter, const ChunkGrid &grid, const GenerationRecipe &recipe,
         const IContext *context = nullptr);
     [[nodiscard]] std::error_code validateMatterParticles(
         const MatterParticleSnapshot &snapshot, std::span<const GenerationMaterial> materials, double cell_size_m,
         const IContext *context = nullptr, double reference_thickness_m = 1.0);
+
+    // ------------------------------------------------------------------
+    // particle state
+    // ------------------------------------------------------------------
 
     class MatterParticleState {
         std::array<std::shared_ptr<const Array<MatterParticle>>, kChunkCount> m_chunks{};

@@ -62,6 +62,10 @@ namespace pP {
 }
 
 namespace pP::tests::detail {
+    // ------------------------------------------------------------------
+    // player graph
+    // ------------------------------------------------------------------
+
     PPR_UNIT_TEST (empty_initially) {
         const PlayerGraph graph{};
         u32 count = 0u;

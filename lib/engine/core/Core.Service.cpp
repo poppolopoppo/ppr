@@ -6,6 +6,10 @@ import :service;
 import std;
 
 namespace pP {
+    // ------------------------------------------------------------------
+    // services store
+    // ------------------------------------------------------------------
+
     bool ServicesStore::insert_(std::type_index service_key, safe_ptr<IService> &&service) {
         const std::unique_lock write_lock{m_shared_mutex};
         return m_services.emplace(std::move(service_key), std::move(service)).second;

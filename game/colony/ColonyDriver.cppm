@@ -20,6 +20,10 @@ export namespace pP::colony {
     /// one cell, so the wake predicate compares cell-space distances directly).
     inline constexpr u32 kDigWakeCells = 8u;
 
+    // ------------------------------------------------------------------
+    // dig statistics
+    // ------------------------------------------------------------------
+
     /// Cached dig outcomes for panel/smoke reads. Reset on regenerate,
     /// restore, replay rebuild, and shutdown. `m_wake_radius` is fixed.
     struct DigStats {
@@ -27,6 +31,10 @@ export namespace pP::colony {
         const u32 m_wake_radius{kDigWakeCells};
         Array<sim::ChunkPos> m_last_chunks{};
     };
+
+    // ------------------------------------------------------------------
+    // driver description
+    // ------------------------------------------------------------------
 
     struct ColonyDriverDesc {
         u64 m_seed{1234567u};
@@ -41,6 +49,10 @@ export namespace pP::colony {
         u64 m_world_generation{};
     };
 
+    // ------------------------------------------------------------------
+    // agent body
+    // ------------------------------------------------------------------
+
     /// Owns a single generated colony and its fixed-step clock. Rendering and
     /// input remain with the caller; elapsed time and regeneration seeds are
     /// supplied explicitly at the boundary.
@@ -52,6 +64,10 @@ export namespace pP::colony {
         float m_velocity_x{};
         float m_velocity_y{};
     };
+
+    // ------------------------------------------------------------------
+    // colony driver
+    // ------------------------------------------------------------------
 
     class ColonyDriver {
     public:

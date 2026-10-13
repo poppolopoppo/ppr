@@ -7,6 +7,10 @@ import engine.core;
 import std;
 
 namespace pP::tests::detail {
+    // ------------------------------------------------------------------
+    // service
+    // ------------------------------------------------------------------
+
     namespace Service {
         PPR_UNIT_TEST (type_uid_identity) {
             const std::type_index id_a = typeid(int);

@@ -10,6 +10,10 @@ import game.config;
 import std;
 
 namespace pP::game::tests::detail::compat {
+    // ------------------------------------------------------------------
+    // configuration compatibility
+    // ------------------------------------------------------------------
+
     using namespace pP::config;
 
     [[nodiscard]] Array<std::string_view> spell(const std::initializer_list<const char *> words) {

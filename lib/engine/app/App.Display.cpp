@@ -13,6 +13,10 @@ import std;
 namespace pP {
     PPR_DEFINE_LOG_CATEGORY(DisplayPolicy, info, none);
 
+    // ------------------------------------------------------------------
+    // display policy
+    // ------------------------------------------------------------------
+
     DisplayMonitorSelection findDisplayMonitor(
         const std::string_view preference, const DisplayCapabilities &capabilities) noexcept {
         DisplayMonitorSelection result{};
@@ -149,6 +153,10 @@ namespace pP {
         return supported ? std::error_code{}
                          : reject("display.width", "Resolution/refresh is not an enumerated exclusive mode");
     }
+
+    // ------------------------------------------------------------------
+    // display controller
+    // ------------------------------------------------------------------
 
     DisplayController::DisplayController(const DisplaySettings &settings) : m_committed(settings) {
         m_resolved.m_value = settings;

@@ -117,6 +117,7 @@ namespace pP::game {
         if (not numeric) {
             return {};
         }
+
         const std::error_code error = std::make_error_code(std::errc::invalid_argument);
         diagnostics.add(
             "display-panel", "display.monitor", "Monitor must be auto or an enumerated name, never a number", error);
@@ -189,12 +190,14 @@ namespace pP::game {
         if (not candidate) {
             return std::unexpected{candidate.error()};
         }
+
         if (displayWindowChange(committed.m_value, candidate->m_value) and not capabilities.m_window_changes) {
             const std::error_code error = std::make_error_code(std::errc::operation_not_supported);
             diagnostics.add(
                 "display capabilities", "display.window_mode", "Native window changes are unsupported", error);
             return std::unexpected{error};
         }
+
         if (const std::error_code error = validateDisplaySettings(candidate->m_value, capabilities, diagnostics)) {
             return std::unexpected{error};
         }
@@ -208,6 +211,7 @@ namespace pP::game {
 
         Array<std::string> persistable{};
         DisplaySettings probe{};
+
         config::visit(probe, [&](const auto &member, const auto &) {
             if (member.m_metadata.m_persistable) {
                 persistable.push_back(std::string{member.m_metadata.m_name});
@@ -221,6 +225,7 @@ namespace pP::game {
             }
             merged.m_entries.push_back(entry);
         }
+
         for (auto &entry: fresh->m_entries) {
             bool keep = false;
             for (const auto &name: persistable) {
@@ -241,6 +246,7 @@ namespace pP::game {
     Expected<std::string> encodeDisplayOverlay(const config::Document &document) {
         auto body = config::encode(document);
         PPR_RETURN_UNEXPECTED_ON_FAIL(GameDisplay, body);
+
         std::string out{"# Saved from the Display window (Save button): acknowledged picture settings only.\n"
                         "# Hand-edited base files are never rewritten by this action.\n"
                         "# The command line and environment entries still take priority over this file.\n"};
@@ -264,6 +270,7 @@ namespace pP::game {
                 return errno != 0 ? std::error_code{errno, std::generic_category()}
                                   : std::make_error_code(std::errc::io_error);
             };
+
             std::filesystem::path temp = path;
             temp += ".tmp";
             bool acquired = false;
@@ -285,6 +292,7 @@ namespace pP::game {
                     }
                 }
             };
+
             {
                 errno = 0;
                 std::ofstream out{temp, std::ios::binary | std::ios::trunc};
@@ -298,12 +306,14 @@ namespace pP::game {
                 if (not out) {
                     PPR_RETURN_ERROR_ON_FAIL(GameDisplay, failure("write temporary file", stream_error()));
                 }
+
                 errno = 0;
                 out.close();
                 if (not out) {
                     PPR_RETURN_ERROR_ON_FAIL(GameDisplay, failure("close temporary file", stream_error()));
                 }
             }
+
             std::error_code rename_error{};
             std::filesystem::rename(temp, path, rename_error);
             if (rename_error) {
@@ -337,6 +347,7 @@ namespace pP::game {
         if (not bytes->has_value()) {
             return std::optional<config::Layer>{std::nullopt};
         }
+
         auto document = config::decode(**bytes, path.string(), diagnostics);
         PPR_RETURN_UNEXPECTED_ON_FAIL(GameDisplay, document);
         return std::optional<config::Layer>{
@@ -393,6 +404,7 @@ namespace pP::game {
                 return revert;
             }
             const WindowDisplayGeometry &geometry = confirm.m_prior_geometry;
+
             if (geometry.m_fullscreen) {
                 revert.m_window_mode = EDisplayWindowMode::fullscreen;
                 if (not geometry.m_monitor.empty()) {
@@ -407,6 +419,7 @@ namespace pP::game {
                 }
                 return revert;
             }
+
             revert.m_window_mode = EDisplayWindowMode::windowed;
             revert.m_refresh_hz = 0u;
             if (geometry.m_size.x > 0 and geometry.m_size.y > 0) {
@@ -485,6 +498,7 @@ namespace pP::game {
             std::string bytes{};
             std::array<char, 4096> block{};
             std::uintmax_t remaining = size;
+
             while (remaining > 0u) {
                 const auto count = static_cast<std::streamsize>(std::min<std::uintmax_t>(remaining, block.size()));
                 stream.read(block.data(), count);
@@ -494,6 +508,7 @@ namespace pP::game {
                 bytes.append(block.data(), static_cast<std::size_t>(count));
                 remaining -= static_cast<std::uintmax_t>(count);
             }
+
             // A file that grew since sizing is not a complete overlay snapshot.
             if (stream.peek() != std::char_traits<char>::eof() or stream.bad() or not stream.eof()) {
                 return failure();
@@ -521,6 +536,7 @@ namespace pP::game {
         if (not present) {
             return std::optional<std::string>{std::nullopt};
         }
+
         std::ifstream file{path, std::ios::binary};
         if (not file) {
             diagnostics.add(
@@ -529,6 +545,7 @@ namespace pP::game {
             PPR_LOG(GameDisplay, error, "display overlay file unavailable", {{"path", path.string()}});
             PPR_RETURN_UNEXPECTED_ON_FAIL(GameDisplay, config::make_error_code(config::EConfigErrc::codec_error));
         }
+
         std::error_code size_error{};
         const std::uintmax_t size = std::filesystem::file_size(path, size_error);
         if (size_error) {
@@ -538,6 +555,7 @@ namespace pP::game {
             PPR_LOG(GameDisplay, error, "display overlay file unavailable", {{"path", path.string()}});
             PPR_RETURN_UNEXPECTED_ON_FAIL(GameDisplay, config::make_error_code(config::EConfigErrc::codec_error));
         }
+
         auto bytes = readOverlayBytes(file, size, path, diagnostics);
         PPR_RETURN_UNEXPECTED_ON_FAIL(GameDisplay, bytes);
         return std::optional<std::string>{std::move(*bytes)};

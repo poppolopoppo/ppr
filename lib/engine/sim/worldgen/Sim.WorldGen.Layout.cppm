@@ -5,6 +5,10 @@ import engine.core;
 import std;
 
 export namespace pP::sim {
+    // ------------------------------------------------------------------
+    // generation errors
+    // ------------------------------------------------------------------
+
     enum class EGenerationErrc {
         constraints_exhausted = 1,
         segment_limit,
@@ -27,6 +31,11 @@ export namespace pP::sim {
         u32 m_biome{};
         constexpr bool operator==(const GenerationSite &) const noexcept = default;
     };
+
+    // ------------------------------------------------------------------
+    // biome layout
+    // ------------------------------------------------------------------
+
     /// Owned macro layout and fixed-size spatial index. Site order is its stable
     /// identity; exact squared-distance ties select the lowest site identity.
     class BiomeLayout {
@@ -55,6 +64,11 @@ export namespace pP::sim {
         /// twice kNoiseCoordinateLimitMetres on each axis.
         [[nodiscard]] u32 nearest(double x_m, double y_m) const noexcept;
     };
+
+    // ------------------------------------------------------------------
+    // layout compilation
+    // ------------------------------------------------------------------
+
     [[nodiscard]] Expected<BiomeLayout> compileBiomeLayout(
         const GenerationPlan &plan, const IContext *context = nullptr, u64 *known_scratch_peak = nullptr);
     /// Rebuilds only the derived spatial index from structurally validated saved sites.

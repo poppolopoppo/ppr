@@ -36,12 +36,14 @@ namespace pP::colony {
                 blob->getBufferSize() < (kCaptureEdge - 1u) * layout.rowPitch + row_bytes) {
                 PPR_RETURN_ERROR_ON_FAIL(WorldCapture, std::errc::protocol_error);
             }
+
             std::ofstream file{path, std::ios::binary | std::ios::trunc};
             PPR_RETURN_ERROR_ON_FAIL(
                 WorldCapture, file ? std::error_code{} : std::make_error_code(std::errc::io_error));
             file << "P6\n" << kCaptureEdge << ' ' << kCaptureEdge << "\n255\n";
             const auto *const data = static_cast<const u8 *>(blob->getBufferPointer());
             std::array<char, kCaptureEdge * 3u> row{};
+
             for (u32 y = 0u; y < kCaptureEdge; ++y) {
                 for (u32 x = 0u; x < kCaptureEdge; ++x) {
                     for (u32 c = 0u; c < 3u; ++c) {
@@ -52,6 +54,7 @@ namespace pP::colony {
                 PPR_RETURN_ERROR_ON_FAIL(
                     WorldCapture, file ? std::error_code{} : std::make_error_code(std::errc::io_error));
             }
+
             file.close();
             PPR_RETURN_ERROR_ON_FAIL(
                 WorldCapture, file ? std::error_code{} : std::make_error_code(std::errc::io_error));
@@ -96,11 +99,13 @@ namespace pP::colony {
                 m_base_started = true;
                 PPR_RETURN_ERROR_ON_FAIL(WorldCapture, Application::initialize());
                 m_base_ready = true;
+
                 const auto rhi_service = getServices().tryGet<IRhiService>();
                 const auto shader_service = getServices().tryGet<IShaderService>();
                 if (not rhi_service or not shader_service) {
                     PPR_RETURN_ERROR_ON_FAIL(WorldCapture, std::errc::not_connected);
                 }
+
                 std::error_code directory_error{};
                 std::filesystem::create_directories(m_directory, directory_error);
                 PPR_RETURN_ERROR_ON_FAIL(WorldCapture, directory_error);
@@ -108,6 +113,7 @@ namespace pP::colony {
                 m_pass_started = true;
                 PPR_RETURN_ERROR_ON_FAIL(
                     WorldCapture, m_pass.initialize(*rhi_service, *shader_service, getContentDir().path()));
+
                 auto stage = captureWorldPresentation(*m_driver);
                 PPR_RETURN_ERROR_ON_FAIL(WorldCapture, stage);
                 PPR_RETURN_ERROR_ON_FAIL(WorldCapture, m_pass.applyStagedFrame(std::move(*stage)));
@@ -125,12 +131,15 @@ namespace pP::colony {
                 if (not service) {
                     PPR_RETURN_ERROR_ON_FAIL(WorldCapture, std::errc::not_connected);
                 }
+
                 auto &device = service->getDevice();
                 auto &renderer = getRenderer();
+
                 // Explicit blocking diagnostic host, never used by interactive publication.
                 PPR_RETURN_ERROR_ON_FAIL(
                     WorldCapture,
                     m_pass.prepareCellUploads(device, [&renderer] { return renderer.waitOnHost(); }, true));
+
                 rhi::TextureDesc desc{};
                 desc.type = rhi::TextureType::Texture2D;
                 desc.size = {kCaptureEdge, kCaptureEdge, 1u};
@@ -149,6 +158,7 @@ namespace pP::colony {
                     WorldCapture, manifest ? std::error_code{} : std::make_error_code(std::errc::io_error));
                 manifest << m_identity;
                 const auto &capture_clock = ITimerClock::steady();
+
                 for (const auto &view: m_views) {
                     const auto submission_begin = capture_clock.now();
                     CameraModel model{};
@@ -197,6 +207,7 @@ namespace pP::colony {
                         manifest << std::format("submission={} gpu_frame_ms=unavailable\n", submitted);
                     }
                 }
+
                 manifest << std::format(
                     "atlas_uploaded_bytes={} atlas_writes={} atlas_serializations={} atlas_deferred={} growth_waits={} resident_table_builds={} resident_table_uploads={} cached_tiles={}\n",
                     m_pass.atlasUploadedBytes(), m_pass.atlasWriteCount(), m_pass.atlasSerializationCount(),
@@ -210,11 +221,13 @@ namespace pP::colony {
                     observations.m_particle_uploads, observations.m_particle_uploaded_bytes,
                     observations.m_background_targets, observations.m_background_target_bytes,
                     observations.m_draw_commands, observations.m_dispatch_commands, observations.m_retained_atlases);
+
                 manifest
                     << "Timing scope: blocking diagnostic host. CPU submission and host completion wait are separate from completed GPU frame time. GPU timestamps bracket the submitted background preparation, backdrop, terrain and particle commands; they do not isolate terrain cost. Resource counters describe retained pass payload, not total VRAM or driver allocation size.\n";
                 manifest.close();
                 PPR_RETURN_ERROR_ON_FAIL(
                     WorldCapture, manifest ? std::error_code{} : std::make_error_code(std::errc::io_error));
+
                 m_complete = true;
                 requestExit();
                 return {};
@@ -266,12 +279,14 @@ namespace pP::colony {
         const std::array<CaptureView, 4u> views{
             {{"start", x, y + 3.0f, 28.0f}, {"seam", std::floor(x / chunk_metres) * chunk_metres, y, 12.0f},
                 {"surface", x, y, 4.0f}, {"texture", x, y - 1.0f, 2.0f}}};
+
         // Best-effort cleanup if Application construction throws before taking the owner.
         PPR_DEFER {
             if (driver) {
                 PPR_LOG_WARNING_ON_FAIL(WorldCapture, driver->shutdown());
             }
         };
+
         WorldCaptureApp app{std::move(driver), views, identity, directory};
         PPR_RETURN_ERROR_ON_FAIL(WorldCapture, app.run());
         PPR_RETURN_ERROR_ON_FAIL(WorldCapture, app.shutdownError());

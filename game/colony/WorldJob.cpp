@@ -56,6 +56,7 @@ namespace pP::colony {
         if (m_next_id == 0u or request.m_world_generation == 0u) {
             PPR_RETURN_ERROR_ON_FAIL(WorldJobs, std::errc::value_too_large);
         }
+
         m_diagnostic_text.clear();
         m_job = std::make_shared<State>();
         m_job->m_request = request;
@@ -81,6 +82,7 @@ namespace pP::colony {
         PPR_RETURN_ERROR_ON_FAIL(
             WorldJobs,
             frozen->captureReady() ? std::error_code{} : std::make_error_code(std::errc::device_or_resource_busy));
+
         auto state = std::make_shared<State>();
         std::tie(state->m_context, state->m_cancel) = context::withCancelClause(context::background());
         state->m_capture = std::move(capture);
@@ -121,6 +123,7 @@ namespace pP::colony {
             m_task = std::move(*task);
             m_view.m_state = EWorldJobState::generating;
         }
+
         if (m_task.valid() and m_task.wait_for(std::chrono::seconds{0}) == std::future_status::ready) {
             m_view.m_error = m_task.get(); // Ready; allocation exceptions remain fatal.
             if (m_cancelled) {
@@ -137,8 +140,10 @@ namespace pP::colony {
         PPR_RETURN_ERROR_ON_FAIL(WorldJobs, requestCapture(frozen, [](const ColonyDriver &, const IContext &) {
             return std::error_code{};
         }));
+
         State *const state = m_job.get(); // Stable owner outlives callback/task and retained presentation.
         const u64 revision = m_view.m_id;
+
         state->m_capture = [state, mode, revision, temperature_min_k, temperature_max_k](
                                const ColonyDriver &driver, const IContext &context) {
             const auto *const prepared = driver.preparedWorld();
@@ -157,7 +162,9 @@ namespace pP::colony {
         PPR_RETURN_ERROR_ON_FAIL(WorldJobs, requestCapture(frozen, [](const ColonyDriver &, const IContext &) {
             return std::error_code{};
         }));
+
         State *const state = m_job.get();
+
         state->m_capture = [state](const ColonyDriver &driver, const IContext &context) {
             const auto *const prepared = driver.preparedWorld();
             PPR_RETURN_ERROR_ON_FAIL(
@@ -265,6 +272,7 @@ namespace pP::colony {
         if (m_job->m_is_capture and m_view.m_state != EWorldJobState::retiring) {
             return updateCapture_(loading_presented);
         }
+
         if (m_view.m_state == EWorldJobState::queued) {
             if (m_cancelled) {
                 m_view.m_state = EWorldJobState::cancelled;
@@ -311,6 +319,7 @@ namespace pP::colony {
             m_task = std::move(*task);
             m_view.m_state = EWorldJobState::generating;
         }
+
         if (m_task.valid() and m_task.wait_for(std::chrono::seconds{0}) == std::future_status::ready) {
             const auto error = m_task.get(); // Ready: transports only an error code; exceptions remain fatal.
             if (m_view.m_state == EWorldJobState::retiring) {
@@ -331,6 +340,7 @@ namespace pP::colony {
             m_view.m_state = EWorldJobState::prepared;
             m_view.m_stage = EWorldJobStage::publishing;
         }
+
         if (m_view.m_state == EWorldJobState::prepared and m_cancelled) {
             m_view.m_state = EWorldJobState::retiring;
             m_cleanup_pending = true;
