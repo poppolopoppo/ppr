@@ -79,6 +79,21 @@ export namespace pP::colony {
     };
     inline constexpr std::size_t kContentDocumentCount = static_cast<std::size_t>(EContentDocument::count);
 
+    /// Numeric limits and enum choices come from the decoding schemas. Slider
+    /// bounds are viewport hints only; editors must include the current value.
+    /// Choice lists are owned; their string views have immutable static lifetime.
+    struct ContentPropertyDescriptor : config::PropertyDescriptor {
+        std::optional<EContentDocument> m_reference_category{};
+    };
+    [[nodiscard]] std::optional<ContentPropertyDescriptor> contentPropertyDescriptor(
+        EContentDocument category, std::string_view relative_property, const config::Document &document,
+        std::string_view definition_key);
+    /// Contextual reference choices from current draft documents, including
+    /// profile-enabled biomes, feature rules and their selected template markers.
+    [[nodiscard]] Array<std::string> contentPropertyReferenceChoices(
+        EContentDocument category, std::string_view relative_property,
+        const std::array<config::Document, kContentDocumentCount> &documents, std::string_view definition_key);
+
     struct ContentPackManifest {
         std::string m_pack_id{};
         // Indexed by EContentDocument; the manifest is the complete file set.

@@ -6,6 +6,7 @@ import engine.physics;
 import game.colony.content;
 import game.colony.content.authoring;
 import game.colony.worldgen;
+import game.colony.worldgen_preview;
 import game.colony.digtool;
 import game.colony.buildings;
 import game.colony.agents;
@@ -684,6 +685,150 @@ threshold_max = 1.0
         PPR_TEST_ASSERT(background.entries().back().m_property == "backgrounds.frontier.layers.distant.texture");
         PPR_TEST_ASSERT(background.entries().back().m_location.find("backgrounds.toml:") != std::string::npos);
     };
+    PPR_UNIT_TEST (authoring_all_definition_categories_round_trip_and_multidocument_save_retains_newer_edits) {
+        Fixture fixture;
+        useSmallIdentityImages(fixture);
+        config::Diagnostics diagnostics{64u};
+        auto opened = ContentAuthoringSession::open(fixture.m_root, diagnostics);
+        PPR_TEST_ASSERT(opened.has_value());
+        auto session = std::move(*opened);
+        const auto original = session.draftSnapshot();
+        constexpr std::array<std::string_view, kContentDocumentCount> keys{
+            "basalt", "hearth", "composition", "landing", "frontier", "frontier"};
+        for (std::size_t index = 0u; index < kContentDocumentCount; ++index) {
+            const auto kind = static_cast<EContentDocument>(index);
+            PPR_TEST_ASSERT(not session.cloneDefinition(
+                kind, keys[index], "workshop_copy",
+                kind == EContentDocument::materials ? std::optional<u16>{static_cast<u16>(60000u)} : std::nullopt,
+                diagnostics));
+            const auto cloned = session.draftSnapshot();
+            PPR_TEST_ASSERT(
+                cloned.m_source.m_documents[index].m_bytes.starts_with(original.m_source.m_documents[index].m_bytes));
+            PPR_TEST_ASSERT(session.undo().value());
+            PPR_TEST_ASSERT(
+                session.draftSource().m_documents[index].m_bytes == original.m_source.m_documents[index].m_bytes);
+            PPR_TEST_ASSERT(session.redo().value());
+        }
+        const auto all_cloned = session.draftSnapshot();
+        PPR_TEST_ASSERT(validateContentDraft(all_cloned, diagnostics).has_value());
+        for (std::size_t index = 0u; index < kContentDocumentCount; ++index) {
+            const auto kind = static_cast<EContentDocument>(index);
+            PPR_TEST_ASSERT(not session.deleteDefinition(kind, "workshop_copy", diagnostics));
+            const auto removed = session.draftSnapshot();
+            PPR_TEST_ASSERT(session.undo().value());
+            PPR_TEST_ASSERT(
+                session.draftSource().m_documents[index].m_bytes == all_cloned.m_source.m_documents[index].m_bytes);
+            PPR_TEST_ASSERT(session.redo().value());
+            PPR_TEST_ASSERT(
+                session.draftSource().m_documents[index].m_bytes == removed.m_source.m_documents[index].m_bytes);
+        }
+        PPR_TEST_ASSERT(validateContentDraft(session.draftSnapshot(), diagnostics).has_value());
+        session.revert();
+        PPR_TEST_ASSERT(
+            session.cloneDefinition(
+                EContentDocument::materials, "basalt", "duplicate_id", static_cast<u16>(16u), diagnostics) ==
+            config::EConfigErrc::duplicate_key);
+        PPR_TEST_ASSERT(
+            session.editDefinition(
+                EContentDocument::materials, "basalt", "numeric_id", config::FileValue::integer(18), diagnostics) ==
+            std::errc::invalid_argument);
+        const auto referenced_field = session.validatedCatalog()->biomes().front().m_temperature_field;
+        PPR_TEST_ASSERT(not session.deleteDefinition(EContentDocument::fields, referenced_field, diagnostics));
+        config::Diagnostics references;
+        PPR_TEST_ASSERT(not validateContentDraft(session.draftSnapshot(), references) and references.hasErrors());
+        PPR_TEST_ASSERT(not saveContentDraft(session.draftSnapshot(), references));
+        PPR_TEST_ASSERT(session.dirty() and fixture.read("fields.toml") == original.m_source.m_documents[2u].m_bytes);
+        PPR_TEST_ASSERT(session.undo().value() and not session.dirty());
+
+        PPR_TEST_ASSERT(not session.editDefinition(
+            EContentDocument::materials, "basalt", "roughness", config::FileValue::floating(0.5), diagnostics));
+        PPR_TEST_ASSERT(not session.editDefinition(
+            EContentDocument::fields, "composition", "frequency_per_metre", config::FileValue::floating(0.06),
+            diagnostics));
+        PPR_TEST_ASSERT(not session.editDefinition(
+            EContentDocument::worlds, "frontier", "display_name", config::FileValue::text("Edited profile"),
+            diagnostics));
+        const auto submitted = session.draftSnapshot();
+        // Staging collisions are discovered before any document commits.
+        fixture.write("worlds.toml.workshop.tmp", "another owner");
+        PPR_TEST_ASSERT(not saveContentDraft(submitted, diagnostics));
+        PPR_TEST_ASSERT(fixture.read("materials.toml") == original.m_source.m_documents[0u].m_bytes);
+        PPR_TEST_ASSERT(fixture.read("fields.toml") == original.m_source.m_documents[2u].m_bytes);
+        PPR_TEST_ASSERT(fixture.read("worlds.toml.workshop.tmp") == "another owner");
+        std::filesystem::remove(fixture.m_root / "worlds.toml.workshop.tmp");
+        PPR_TEST_ASSERT(not session.editDefinition(
+            EContentDocument::fields, "composition", "frequency_per_metre", config::FileValue::floating(0.07),
+            diagnostics));
+        const auto newer = session.draftSnapshot();
+        auto saved = saveContentDraft(submitted, diagnostics);
+        PPR_TEST_ASSERT(saved.has_value() and not session.acceptSave(std::move(*saved)));
+        PPR_TEST_ASSERT(session.dirty());
+        PPR_TEST_ASSERT(fixture.read("materials.toml") == submitted.m_source.m_documents[0u].m_bytes);
+        PPR_TEST_ASSERT(fixture.read("fields.toml") == submitted.m_source.m_documents[2u].m_bytes);
+        PPR_TEST_ASSERT(fixture.read("worlds.toml") == submitted.m_source.m_documents[4u].m_bytes);
+        PPR_TEST_ASSERT(session.draftSource().m_documents[2u].m_bytes == newer.m_source.m_documents[2u].m_bytes);
+        auto retry = saveContentDraft(session.draftSnapshot(), diagnostics);
+        PPR_TEST_ASSERT(retry.has_value() and session.acceptSave(std::move(*retry)) and not session.dirty());
+    };
+
+    PPR_UNIT_TEST (authoring_partial_commit_reconciles_baseline_preserves_newer_edits_and_undo_intent) {
+#ifdef _WIN32
+        Fixture fixture;
+        useSmallIdentityImages(fixture);
+        config::Diagnostics diagnostics{64u};
+        auto opened = ContentAuthoringSession::open(fixture.m_root, diagnostics);
+        PPR_TEST_ASSERT(opened.has_value());
+        auto session = std::move(*opened);
+        const auto catalog = session.validatedCatalog();
+        PPR_TEST_ASSERT(not session.editDefinition(
+            EContentDocument::materials, "basalt", "roughness", config::FileValue::floating(0.5), diagnostics));
+        PPR_TEST_ASSERT(not session.editDefinition(
+            EContentDocument::fields, "composition", "frequency_per_metre", config::FileValue::floating(0.06),
+            diagnostics));
+        const auto submitted = session.draftSnapshot();
+        // MSVC file streams share reading/writing but not deletion: reading and
+        // staging succeed while the second document's replacement is denied.
+        std::ifstream locked{fixture.m_root / "fields.toml", std::ios::binary};
+        PPR_TEST_ASSERT(locked.good());
+        auto partial = saveContentDraft(submitted, diagnostics);
+        PPR_TEST_ASSERT(partial.has_value() and partial->m_error != std::error_code{} and not partial->m_catalog);
+        PPR_TEST_ASSERT(fixture.read("materials.toml") == submitted.m_source.m_documents[0u].m_bytes);
+        PPR_TEST_ASSERT(fixture.read("fields.toml") == submitted.m_baseline.m_documents[2u].m_bytes);
+        PPR_TEST_ASSERT(not session.editDefinition(
+            EContentDocument::materials, "basalt", "roughness", config::FileValue::floating(0.6), diagnostics));
+        const auto newer = session.draftSnapshot();
+        PPR_TEST_ASSERT(not session.acceptSave(std::move(*partial)));
+        PPR_TEST_ASSERT(session.dirty() and session.validatedCatalog() == catalog);
+        PPR_TEST_ASSERT(session.baselineSource().m_documents[0u].m_bytes == submitted.m_source.m_documents[0u].m_bytes);
+        PPR_TEST_ASSERT(session.draftSource().m_documents[0u].m_bytes == newer.m_source.m_documents[0u].m_bytes);
+        locked.close();
+        auto retry = saveContentDraft(session.draftSnapshot(), diagnostics);
+        PPR_TEST_ASSERT(retry.has_value() and not retry->m_error and session.acceptSave(std::move(*retry)));
+        PPR_TEST_ASSERT(not session.dirty());
+
+        const auto before_undo = session.draftSnapshot();
+        PPR_TEST_ASSERT(not session.editDefinition(
+            EContentDocument::materials, "basalt", "roughness", config::FileValue::floating(0.7), diagnostics));
+        PPR_TEST_ASSERT(not session.editDefinition(
+            EContentDocument::fields, "composition", "frequency_per_metre", config::FileValue::floating(0.08),
+            diagnostics));
+        locked.open(fixture.m_root / "fields.toml", std::ios::binary);
+        PPR_TEST_ASSERT(locked.good());
+        auto undo_partial = saveContentDraft(session.draftSnapshot(), diagnostics);
+        PPR_TEST_ASSERT(undo_partial.has_value() and undo_partial->m_error != std::error_code{});
+        PPR_TEST_ASSERT(session.undo().value() and session.undo().value());
+        PPR_TEST_ASSERT(not session.acceptSave(std::move(*undo_partial)) and session.dirty());
+        PPR_TEST_ASSERT(session.draftSource().m_documents[0u].m_bytes == before_undo.m_source.m_documents[0u].m_bytes);
+        PPR_TEST_ASSERT(
+            session.baselineSource().m_documents[0u].m_bytes != before_undo.m_source.m_documents[0u].m_bytes);
+        locked.close();
+        auto restore = saveContentDraft(session.draftSnapshot(), diagnostics);
+        PPR_TEST_ASSERT(restore.has_value() and not restore->m_error and session.acceptSave(std::move(*restore)));
+        PPR_TEST_ASSERT(
+            not session.dirty() and fixture.read("materials.toml") == before_undo.m_source.m_documents[0u].m_bytes);
+#endif
+    };
+
     PPR_UNIT_TEST (authoring_drafts_validate_independently_and_save_without_losing_newer_edits) {
         Fixture fixture;
         useSmallIdentityImages(fixture);
@@ -695,6 +840,32 @@ threshold_max = 1.0
         const auto baseline_catalog = session.validatedCatalog();
         const auto baseline_revision = session.validatedRevision();
         PPR_TEST_ASSERT(not session.dirty() and not session.canUndo());
+        constexpr auto materials = static_cast<std::size_t>(EContentDocument::materials);
+        const auto original_materials = session.draftSource().m_documents[materials].m_bytes;
+        PPR_TEST_ASSERT(
+            not session.clearDefinitionProperty(EContentDocument::materials, "basalt", "normal_texture", diagnostics));
+        const auto cleared_materials = session.draftSource().m_documents[materials].m_bytes;
+        PPR_TEST_ASSERT(cleared_materials != original_materials and session.dirty() and session.canUndo());
+        const auto cleared = config::decode(
+            cleared_materials, "cleared.toml", diagnostics, config::EDecodeMode::records);
+        PPR_TEST_ASSERT(cleared.has_value());
+        PPR_TEST_ASSERT(
+            std::ranges::find(cleared->m_entries, "materials.basalt.normal_texture", &config::Entry::m_key) ==
+            cleared->m_entries.end());
+        const auto clear_revision = session.revision();
+        PPR_TEST_ASSERT(
+            not session.clearDefinitionProperty(EContentDocument::materials, "basalt", "normal_texture", diagnostics));
+        PPR_TEST_ASSERT(session.revision() == clear_revision);
+        const auto required_error = session.clearDefinitionProperty(
+            EContentDocument::materials, "basalt", "numeric_id", diagnostics);
+        PPR_TEST_ASSERT(required_error != std::error_code{} and session.revision() == clear_revision);
+        diagnostics.clear();
+        PPR_TEST_ASSERT(session.undo().value() and not session.dirty());
+        PPR_TEST_ASSERT(session.draftSource().m_documents[materials].m_bytes == original_materials);
+        PPR_TEST_ASSERT(session.redo().value());
+        PPR_TEST_ASSERT(session.draftSource().m_documents[materials].m_bytes == cleared_materials);
+        PPR_TEST_ASSERT(session.undo().value() and not session.dirty());
+        PPR_TEST_ASSERT(session.validatedCatalog() == baseline_catalog);
         PPR_TEST_ASSERT(
             not session.editBiome("hearth", "temperature_base_k", config::FileValue::floating(300.0), diagnostics));
         const auto valid_snapshot = session.draftSnapshot();
@@ -798,10 +969,16 @@ threshold_max = 1.0
     };
 
     PPR_UNIT_TEST (workshop_queued_requests_preserve_newer_drafts_and_require_current_discard_authority) {
+        struct Clock final : ITimerClock {
+            TimePoint m_now{};
+            TimePoint now() const noexcept override {
+                return m_now;
+            }
+        } clock;
         Fixture fixture{};
         useSmallIdentityImages(fixture);
         ParallelScheduler pool{"Workshop request contracts", 1u, static_cast<std::size_t>(hal::page_granularity)};
-        WorldgenWorkshop workshop{pool};
+        WorldgenWorkshop workshop{pool, clock};
         const auto settle = [&]() {
             while (workshop.busy()) {
                 PPR_TEST_ASSERT(not workshop.update());
@@ -881,7 +1058,136 @@ threshold_max = 1.0
         PPR_TEST_ASSERT(
             reopened->draftSource().m_documents[biomes].m_bytes == original.m_source.m_documents[biomes].m_bytes);
         PPR_TEST_ASSERT(reopened->validatedCatalog()->contentFingerprint() == catalog->contentFingerprint());
+        WorldgenPreviewSpec spec{"frontier", "hearth", 42u, reopened->revision()};
+        workshop.configureLivePreview(true, spec, pP::EGridDiagnosticMode::material);
+        PPR_TEST_ASSERT(not workshop.busy());
+        clock.m_now += std::chrono::milliseconds{349};
+        workshop.configureLivePreview(true, spec, pP::EGridDiagnosticMode::material);
+        PPR_TEST_ASSERT(not workshop.update() and not workshop.busy());
+        clock.m_now += std::chrono::milliseconds{1};
+        PPR_TEST_ASSERT(not workshop.update() and workshop.busy());
+        workshop.cancel();
+        settle();
+        PPR_TEST_ASSERT(workshop.preview() == nullptr);
+        clock.m_now += std::chrono::seconds{1};
+        workshop.configureLivePreview(true, spec, pP::EGridDiagnosticMode::material);
+        PPR_TEST_ASSERT(not workshop.update() and not workshop.busy());
+        // Toggling re-arms the same identity. An explicit preview satisfies the
+        // pending automatic request, so the elapsed deadline cannot duplicate it.
+        workshop.configureLivePreview(false, spec, pP::EGridDiagnosticMode::material);
+        workshop.configureLivePreview(true, spec, pP::EGridDiagnosticMode::material);
+        PPR_TEST_ASSERT(not workshop.requestPreview(spec, pP::EGridDiagnosticMode::material));
+        clock.m_now += std::chrono::seconds{1};
+        PPR_TEST_ASSERT(not workshop.update() and workshop.busy());
+        settle();
+        PPR_TEST_ASSERT(workshop.preview() != nullptr and workshop.preview()->m_spec.m_seed == spec.m_seed);
+        PPR_TEST_ASSERT(not workshop.update() and not workshop.busy());
+        ++spec.m_seed;
+        workshop.configureLivePreview(true, spec, pP::EGridDiagnosticMode::material);
+        PPR_TEST_ASSERT(not workshop.open(fixture.m_root));
+        clock.m_now += std::chrono::seconds{1};
+        settle();
+        PPR_TEST_ASSERT(not workshop.update() and not workshop.busy());
+        auto *const qa_session = workshop.session();
+        PPR_TEST_ASSERT(qa_session != nullptr);
+        const auto hearth = std::ranges::find(
+            qa_session->validatedCatalog()->biomes(), "hearth", &BiomeDefinition::m_key);
+        PPR_TEST_ASSERT(hearth != qa_session->validatedCatalog()->biomes().end() and not hearth->m_composition.empty());
+        const std::string bed_dip = "composition." + hearth->m_composition.front().m_key + ".bed_dip";
+        workshop.configureLivePreview(false, spec, pP::EGridDiagnosticMode::material);
+        PPR_TEST_ASSERT(not qa_session->editBiome("hearth", bed_dip, config::FileValue::floating(1.0), diagnostics));
+        PPR_TEST_ASSERT(not workshop.validate());
+        settle();
+        const auto property_diagnostics = workshop.propertyDiagnostics();
+        PPR_TEST_ASSERT(not property_diagnostics.empty());
+        PPR_TEST_ASSERT(std::ranges::any_of(property_diagnostics, [&](const auto &diagnostic) {
+            return diagnostic.m_property == "biomes.hearth." + bed_dip and not diagnostic.m_message.empty();
+        }));
+        spec.m_revision = qa_session->revision();
+        workshop.configureLivePreview(true, spec, pP::EGridDiagnosticMode::material);
+        clock.m_now += std::chrono::seconds{1};
+        PPR_TEST_ASSERT(not workshop.update() and not workshop.busy());
+        PPR_TEST_ASSERT(qa_session->undo().value());
+        PPR_TEST_ASSERT(workshop.propertyDiagnostics().empty());
+        workshop.configureLivePreview(false, spec, pP::EGridDiagnosticMode::material);
+        PPR_TEST_ASSERT(not workshop.validate());
+        settle();
+        PPR_TEST_ASSERT(workshop.propertyDiagnostics().empty());
         PPR_TEST_ASSERT(not workshop.shutdown());
+    };
+    PPR_UNIT_TEST (workshop_property_metadata_tracks_schemas_and_contextual_references) {
+        std::array<config::Document, kContentDocumentCount> documents;
+        const auto descriptor = [&](const EContentDocument category, const std::string_view property) {
+            return contentPropertyDescriptor(
+                category, property, documents[static_cast<std::size_t>(category)], "frontier");
+        };
+        const auto probability = descriptor(EContentDocument::biomes, "formation_probability");
+        PPR_TEST_ASSERT(probability and probability->m_min == 0.0 and probability->m_max == 0.2);
+        const auto phase = descriptor(EContentDocument::materials, "phase");
+        PPR_TEST_ASSERT(phase and phase->m_choices.size() == 3u);
+        PPR_TEST_ASSERT(not phase->m_optional);
+        PPR_TEST_ASSERT(std::ranges::find(phase->m_choices, "liquid") != phase->m_choices.end());
+        const auto octaves = descriptor(EContentDocument::fields, "octaves");
+        PPR_TEST_ASSERT(octaves and octaves->m_min == 1.0 and octaves->m_max == 16.0);
+        auto &fields = documents[static_cast<std::size_t>(EContentDocument::fields)];
+        fields.m_entries = {
+            {"fields.frontier.frequency_per_metre", config::FileValue::floating(1.0e20), "metadata.toml:1"}};
+        const auto frequency = descriptor(EContentDocument::fields, "frequency_per_metre");
+        PPR_TEST_ASSERT(frequency and frequency->m_exclusive_min and *frequency->m_max > 1.0e20);
+        PPR_TEST_ASSERT(std::isfinite(frequency->m_slider_max) and frequency->m_slider_max < 1.0e20);
+        PPR_TEST_ASSERT(frequency->m_slider_max == 0.1 and frequency->m_units == "1/m");
+        PPR_TEST_ASSERT(fields.m_entries.front().m_value.m_floating == 1.0e20);
+        const auto band = descriptor(EContentDocument::biomes, "composition.lower.bed_dip");
+        PPR_TEST_ASSERT(band and band->m_min == -0.5 and band->m_max == 0.5);
+        const auto weight = descriptor(EContentDocument::biomes, "composition.lower.materials.rock.weight");
+        PPR_TEST_ASSERT(weight and weight->m_exclusive_min and weight->m_min == 0.0);
+        PPR_TEST_ASSERT(std::isfinite(weight->m_slider_max) and weight->m_slider_max < *weight->m_max);
+        const auto shape = descriptor(EContentDocument::biomes, "deposits.ore.shape");
+        PPR_TEST_ASSERT(shape and std::ranges::find(shape->m_choices, "blob") != shape->m_choices.end());
+        const auto operation = descriptor(EContentDocument::features, "operations.clear.shape");
+        PPR_TEST_ASSERT(operation and operation->m_choices.size() == 3u);
+        PPR_TEST_ASSERT(std::ranges::find(operation->m_choices, "capsule") != operation->m_choices.end());
+        const auto layer = descriptor(EContentDocument::backgrounds, "layers.far.parallax_factor");
+        PPR_TEST_ASSERT(layer and layer->m_min == 0.0 and layer->m_max == 1.0);
+        const auto material = descriptor(EContentDocument::biomes, "soil_material");
+        PPR_TEST_ASSERT(material and material->m_reference_category == EContentDocument::materials);
+        PPR_TEST_ASSERT(material->m_optional);
+        PPR_TEST_ASSERT(not descriptor(EContentDocument::biomes, "composition.lower.unknown"));
+        auto &worlds = documents[static_cast<std::size_t>(EContentDocument::worlds)];
+        worlds.m_entries = {
+            {"worlds.frontier.start_feature", config::FileValue::text("start"), "metadata.toml:1"},
+            {"worlds.frontier.biomes.home.biome", config::FileValue::text("hearth"), "metadata.toml:2"},
+            {"worlds.frontier.rules.cave.kind", config::FileValue::text("threshold_cave"), "metadata.toml:3"},
+            {"worlds.frontier.rules.pocket.kind", config::FileValue::text("feature"), "metadata.toml:4"},
+            {"worlds.frontier.rules.pocket.feature", config::FileValue::text("sealed"), "metadata.toml:5"},
+            {"worlds.frontier.rules.fill.kind", config::FileValue::text("matter_fill"), "metadata.toml:6"},
+            {"worlds.frontier.rules.fill.feature_rule", config::FileValue::text("pocket"), "metadata.toml:7"}};
+        auto &features = documents[static_cast<std::size_t>(EContentDocument::features)];
+        features.m_entries = {
+            {"features.start.markers.spawn.role", config::FileValue::text("start"), "metadata.toml:8"},
+            {"features.sealed.markers.liquid.role", config::FileValue::text("sealed_pocket"), "metadata.toml:9"}};
+        PPR_TEST_ASSERT(descriptor(EContentDocument::worlds, "rules.cave.threshold_min").has_value());
+        const auto kind = descriptor(EContentDocument::worlds, "rules.cave.kind");
+        PPR_TEST_ASSERT(kind and kind->m_read_only and kind->m_choices.size() == 6u);
+        PPR_TEST_ASSERT(not kind->m_description.empty());
+        PPR_TEST_ASSERT(std::ranges::find(kind->m_choices, "matter_fill") != kind->m_choices.end());
+        PPR_TEST_ASSERT(not descriptor(EContentDocument::worlds, "rules.cave.radius_min_m"));
+        worlds.m_entries[2u].m_value = config::FileValue::text("carve_worm");
+        const auto radius = descriptor(EContentDocument::worlds, "rules.cave.radius_min_m");
+        PPR_TEST_ASSERT(radius and radius->m_min == 0.0 and radius->m_max == 64.0 and radius->m_exclusive_min);
+        PPR_TEST_ASSERT(radius->m_units == "m");
+        const auto choices = [&](const std::string_view property) {
+            return contentPropertyReferenceChoices(EContentDocument::worlds, property, documents, "frontier");
+        };
+        PPR_TEST_ASSERT(choices("rules.cave.biome") == Array<std::string>{"hearth"});
+        PPR_TEST_ASSERT(choices("rules.fill.feature_rule") == Array<std::string>{"pocket"});
+        PPR_TEST_ASSERT(choices("rules.fill.marker") == Array<std::string>{"liquid"});
+        PPR_TEST_ASSERT(choices("start_marker") == Array<std::string>{"spawn"});
+        worlds.m_entries[6u].m_value = config::FileValue::text("missing");
+        PPR_TEST_ASSERT(choices("rules.fill.marker").empty());
+        const auto lifetime = operation->m_choices;
+        documents = {};
+        PPR_TEST_ASSERT(lifetime.size() == 3u and lifetime[0u] == "rectangle");
     };
     PPR_UNIT_TEST (required_texture_limits_missing_and_cancel_are_errors) {
         Fixture fixture{};
@@ -916,7 +1222,11 @@ namespace pP::game::tests {
                     detail::pack::identity_changes_for_every_definition_kind_and_texture_bytes,
                     detail::pack::texture_usage_is_distinct_and_background_diagnostics_preserve_source_keys,
                     detail::pack::required_texture_limits_missing_and_cancel_are_errors,
+                    detail::pack::workshop_property_metadata_tracks_schemas_and_contextual_references,
                     detail::pack::authoring_drafts_validate_independently_and_save_without_losing_newer_edits,
+                    detail::pack::authoring_partial_commit_reconciles_baseline_preserves_newer_edits_and_undo_intent,
+                    detail::pack::
+                        authoring_all_definition_categories_round_trip_and_multidocument_save_retains_newer_edits,
                     detail::pack::
                         workshop_queued_requests_preserve_newer_drafts_and_require_current_discard_authority});
         };

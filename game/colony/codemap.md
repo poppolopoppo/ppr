@@ -17,8 +17,8 @@ Game-owned colony simulation, tools, presentation translation and headless workl
 | `game.colony` | `Colony.cppm/.cpp` | RAII grid ownership and generation lifecycle |
 | `game.application:world_job` | `WorldJob.cppm/.cpp` | Game-owned asynchronous candidate preparation, cancellation, pointer publication and background retirement |
 | `game.colony.worldgen` | `WorldGen.cppm/.cpp`, `WorldGen.Plan.cpp`, `WorldGen.Fixture.cpp` | Authored numeric-plan preparation and explicitly named legacy fixtures |
-| `game.colony.worldgen_preview` | `WorldGen.Preview.cppm/.cpp`, `WorldGen.Preview.Export.cpp` | Owned bounded biome samples, selected-biome context, local production formation evaluation and exact-interior diagnostic/source export |
-| `game.colony.worldgen_panel` | `WorldGenPanel.cppm/.cpp` | Workshop content browser, biome controls and intents; no I/O or renderer mutation |
+| `game.colony.worldgen_preview` | `WorldGen.Preview.cppm/.cpp`, `WorldGen.Preview.Export.cpp` | Bounded biome samples and exact crops of cached production worlds, canonical initial particles, diagnostic/source export |
+| `game.colony.worldgen_panel` | `WorldGenPanel.cppm/.cpp` | Workshop browser, all-document property controls, clone/delete and live-preview intents; no I/O or renderer mutation |
 | `game.colony.content` | `Content.cppm/.cpp` | Owned material catalog, typed fields, biome recipes, geometric features and world profiles with finite phase-checked rules, start/resource preflight and initial-matter references; checked references, ranges, ordering and caps; explicit-root manifest/source loader; canonical full-pack identity and bounded CPU texture validation in Content.Pack.cpp. Normal interactive startup resolves these inputs on the world coordinator. |
 | `game.colony.metric` | `Metric.cppm/.cpp` | Checked 3:1 fine-cell/metre conversions, globally anchored construction footprints, nominal volume and persisted metric compatibility preflight. Authored sessions use this metric for actors, colliders, tools and rendering. |
 | `game.colony.driver` | `ColonyDriver.cppm/.cpp` | Explicit-time fixed step, pause/step/speed/regenerate, ECS and driver-local physics |
@@ -43,18 +43,20 @@ Check each `export module` declaration and `../CMakeLists.txt` for exact module 
 ## Simulation and presentation contracts
 
 `Content.Authoring.cppm/.cpp` (`game.colony.content.authoring`) owns an explicitly
-opened pack root, baseline bytes, biome source drafts, bounded shared command
+opened pack root, baseline bytes, all six content-document drafts, bounded shared command
 history, and the last validated catalog. Typed invalid drafts remain editable;
 revision checks prevent stale validation acceptance. Worker requests copy owned
 source snapshots, including the original manifest and all six documents.
 `Content.Pack.cpp` validates snapshots through the same decoder, reference,
 texture and fingerprint path as ordinary disk loading.
 
-`saveContentDraft` validates edited biome bytes against the current disk pack,
-checks the baseline manifest/biome document for conflicts, exclusively writes
-and verifies a sibling temporary, rechecks source bytes, replaces via same-volume
-rename, and rereads before returning success. It commits one document. Conflict
-detection is optimistic; concurrent external writes during commit are unsupported.
+`saveContentDraft` validates every edited document against the current disk pack,
+checks manifest and changed-document baselines for conflicts, exclusively stages
+and verifies sibling temporary files, then rechecks source bytes before committing.
+Individual same-volume replacements are atomic; the pack transaction is not.
+Partial outcomes retain committed baselines and report the operational error,
+preserving unsaved/newer edits for retry. Conflict detection is optimistic;
+concurrent external writes during commit are unsupported.
 Only acceptance matching the current draft revision clears dirty state; newer
 edits retain their bytes while the saved baseline advances. Reload uses `open`
 to produce a complete replacement session before the caller replaces its owner.
