@@ -13,8 +13,9 @@ Validation is execution-focused and orchestrator-owned. Apart from the required
 `scripts/Format-Cpp.ps1 -Mode Fix` pass, it does not edit the working tree. It
 selects and runs the requested checks, records exact results, and treats the
 `code-reviewer` verdict as a release gate rather than duplicating review
-dimensions. Failures are routed to `@fixer` or `@oracle`, then only affected
-checks are repeated.
+dimensions. In-plan implementation defects go to `@fixer`; unexplained compiler
+ICEs and plan/feasibility blockers go through the coordinator to `@oracle` under
+AGENTS.md's delegated-implementation contract. Only affected checks are repeated.
 
 ## Execution flow
 
@@ -220,8 +221,12 @@ Otherwise record `windbg_gate: not_applicable`.
 
 ## Triage
 
-- Build/test failure: preserve the command, exit code, and useful error excerpt;
-  fix, then rerun that preset/check.
+- Build/test failure: preserve the command, preset, toolchain, exit code, and
+  relevant log. Distinguish an in-plan defect from an unexplained compiler ICE
+  or a remedy that would change the accepted design. Route the latter through
+  the `BLOCKED_PLAN` handoff in AGENTS.md before production workaround edits;
+  the execution owner supplies requested diagnostic/reproducer evidence. After
+  an authorized fix, rerun only the affected preset/check.
 - Inspection issue: confirm against compiler/build configuration before editing;
   apply the staged CLion timeout-recovery sequence and record every final timeout
   as inspection-unavailable/skipped with the timeout evidence.

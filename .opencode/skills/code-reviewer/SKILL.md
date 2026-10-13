@@ -46,6 +46,10 @@ targeted fix deltas and reopen broader scope only when those deltas affect it.
    or high-risk cross-system. Do not launch a reviewer per dimension.
    Record only triggered risks and evidence needed; omit per-dimension
    no-findings narratives.
+   For delegated implementation, compare the diff with the supplied accepted
+   plan and recorded planning-owner decisions. An unapproved design substitution
+   is a blocking finding even when tests pass; use the escalation contract in
+   AGENTS.md. Request missing decision context rather than assuming approval.
 3. Inspect changed code and only the directly relevant callers, owners,
    teardown paths, module interfaces, and tests needed to prove or refute a
    concern. Prefer project-aware search and targeted reads; avoid repeatedly

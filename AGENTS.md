@@ -300,6 +300,46 @@ The `fixer` agent is edit-only (no builds); builds and tests run via the
 orchestrator per `build-system`. The `clion` MCP server exposes exactly one
 tool, the `execute_tool` router; agents call it with `projectPath="E:/Code/ppr"`.
 
+### Delegated implementation and plan changes
+
+Delegation authorizes implementation within the accepted plan, not unilateral
+redesign. This applies to OMO `fixer` and equivalent Codex implementation
+subagents, regardless of model. The planning owner is `oracle` in OMO; in other
+environments the coordinator identifies the agent responsible for design
+decisions. These responsibilities do not grant additional tools or permissions.
+
+- A delegated task carries the accepted plan or relevant excerpt, bounded edit
+  scope, facilities to reuse, required behavior, and any already accepted
+  fallback. Reuse the existing task context; no separate planning document is
+  required. A missing consequential design decision goes back to the coordinator.
+- Implementation details and established fixes within that scope remain the
+  implementer's responsibility. Replacing a chosen subsystem with bespoke
+  functions, changing ownership or dependency boundaries, weakening validation,
+  or dropping supported behavior requires a planning-owner decision before edits.
+  Passing tests or making a build succeed does not authorize those changes.
+- An unexplained compiler ICE or an unexpected feasibility blocker requires
+  the implementer to stop affected production edits and return `BLOCKED_PLAN`
+  through the coordinator. Do not iterate speculative production workarounds or
+  silently substitute another design. Read-only investigation may continue
+  within existing grants; builds and reproducer execution stay with their owner.
+  A complete diagnosis or minimal reproducer is not a prerequisite for escalation.
+- The handoff identifies the blocked plan step, observed failure and available
+  command/preset/toolchain/log evidence, attempted changes and their outcomes,
+  current diff and any experimental edits, known facts versus hypotheses, missing
+  evidence, and the decision needed. Reference existing artifacts; say when
+  evidence is unavailable. Preserve user work and report partial state rather
+  than performing a broad rollback or presenting a substitute as complete.
+- The coordinator routes this evidence to the planning owner for re-evaluation.
+  Do not reassign the same blocker with an unrestricted "make it work" goal.
+  The planning owner may request targeted diagnosis or accept a bounded remedy
+  or revised plan. Record that decision in the task context and return explicit
+  scope to the implementer before affected implementation resumes. If that
+  decision is unavailable, keep the affected work blocked; independent approved
+  work may continue.
+- A useful blocked handoff fulfills the delegated reporting duty; the overall
+  task remains incomplete. Completion pressure, retries, and tool failures do
+  not transfer design authority to the implementation lane.
+
 ## Repository Map
 
 Read the root `codemap.md` before working and a directory's `codemap.md` for
