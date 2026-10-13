@@ -1,12 +1,12 @@
 # Worldgen Workshop — proposed implementation plan
 
-Status: prepared by GPT-6 Astra; first-release implementation approved for committing, with user visual validation pending. Sol owns implementation and integration; Luna explores; Astra reviews without editing. Builds remain serialized; further validation stays focused on changed behavior.
+Status: first release committed; expanded authoring, live regeneration and exact crops implemented. Focused grouped source reviews and behavior checks passed; user visual validation remains pending. Textured-image export was explicitly removed from scope. Sol owns implementation and integration; Luna explores; Astra reviews without editing. Builds remain serialized.
 
 ## Goal and first release
 
 Provide an in-game developer workspace to browse the complete content pack, edit biome settings, generate a small deterministic sample, and save authored settings to disk. Opening this workspace must not require generating a complete 4096-square terrain map.
 
-The first release includes a searchable browser for packs, materials/elements, fields, biomes, features, world profiles, backgrounds, and referenced textures. It edits existing biome definitions and their nested composition/deposit records. Other categories initially provide inspection and cross-reference navigation; broader editing follows in a second increment.
+The browser covers packs, materials/elements, fields, biomes, features, world profiles, backgrounds, and referenced textures. Expanded authoring edits all six definition documents, including nested records, and creates definitions by cloning an existing definition with an explicit new key and unused material ID where applicable. Deletion is undoable; unresolved references block validation and saving. Pack manifests and referenced textures remain inspectable.
 
 “Elements” are the existing numeric terrain/particle IDs and material identities, including reserved vacuum; there is no separate authored element document. “Packs” means explicitly opened manifest roots, not a new mod registry or pack-composition system.
 
@@ -20,7 +20,7 @@ Show authored keys, numeric IDs where applicable, source file/location, referenc
 
 Biome controls cover composition weights and ordered beds, field/material references, pores, relaxation/finishing/erosion passes, lining, formations, deposits, and temperature. Show units, defaults, and validation. Cave thresholds and worms that belong to world-profile rules appear as linked rules with their actual owner, rather than invented biome properties.
 
-Start with explicit Preview, Undo/Redo, and Revert. Add debounced live regeneration after measuring responsiveness. Keep keys and numeric IDs stable initially; renaming, deletion, cloning, and pack creation require a later authoring increment.
+Explicit Preview, Undo/Redo and Revert remain available. Optional live regeneration uses a 350 ms debounce and latest-request coalescing while preserving explicit I/O. Ordinary edits keep keys and numeric IDs stable. Clone/delete are supported; renaming and creating pack roots remain outside this increment.
 
 User refinement: make the undo/redo mechanism reusable by other clients. A small content-free typed command history belongs in the shared engine layer, with owning command values, bounded storage, redo invalidation, caller-supplied apply/revert operations, and explicit absence/failure results. It retains no callbacks or borrowed client state. Workshop-specific source patches, coalescing policy, and disk dirty baselines remain game-owned.
 
@@ -40,7 +40,7 @@ Separate shared formation discovery, validation, and application from the whole-
 
 Do not run whole-world backbone/start/resource or connected initial-matter validation on a sparse sample: missing chunks currently behave as empty cells. Initial matter and global playability remain outside the laboratory’s validation scope.
 
-Exact world-crop preview is a later capability: retain production macro layout and geometry, raster only required support chunks, and solve global formation admission/order through sparse discovery or a separately approved generator-version change.
+Exact whole-world crops reuse immutable production generation, including global formation admission/order, backbone/start validation and canonical initial particles. Current global admission semantics require one complete background preparation per content/profile/seed. Moving the crop reuses the cached world and retains bounded support chunks; no alternate generator or version change is introduced.
 
 ## Existing reuse points
 
@@ -61,7 +61,7 @@ Add a source-backed catalog-loading seam in `Content.Pack.cpp`; disk loading rem
 
 Extend the existing private TOML codec with narrowly scoped parser-derived source spans and value replacement/insertion. `config::Document` currently keeps flattened values plus origin/line, and `config::encode` canonicalizes text. Serializing that representation would lose comments/layout. Patch only changed values; preserve untouched bytes, comments, line endings, omitted defaults, and textures. Reparse and validate the patched draft.
 
-Initially, Save commits one edited document after validating it against the current on-disk rest of the pack. Do not pretend several file replacements form an atomic pack transaction. Retain dirty drafts on failure.
+Save stages all changed documents after validating them against the current on-disk rest of the pack. Each replacement is atomic, but the pack transaction is not. Partial outcomes reconcile committed baselines and preserve desired/newer draft bytes; failures remain visible and retryable.
 
 Before saving, compare current disk bytes with the loaded baseline. On external changes, offer Reload or retain/export the draft; never silently overwrite. Write a sibling temporary file, verify completion, then use a verified atomic replacement primitive. Check existing filesystem/display-persistence facilities and their platform guarantees. Clear dirty state only after replacement and successful reread.
 
@@ -99,13 +99,13 @@ Existing integration points include `Game.Application.cpp`, `Game.Config.*`, `Co
 1. Browser, source drafts, validation, lossless save/reload, Undo/Redo.
 2. Deterministic local numerical preview, including shared formation evaluation and explicit sample semantics.
 3. Asynchronous real GridPass presentation, cancellation, stale-result rejection, and safe close/retirement.
-4. Richer material/field/profile editing and measured optional live regeneration.
-5. Exact world-crop preview after global formation semantics are resolved.
+4. Expanded material/field/profile and other definition editing, clone/delete, and optional debounced live regeneration.
+5. Exact whole-world crop preview with cached production generation.
 
 Verify byte-preserving saves and external-change conflicts; invalid references/assets/drafts; seed replay and seams; formation roots outside the visible sample; cancellation/stale completion/close races; bounded jobs/resident chunks; actual textured preview and repeated resource retirement. Compare pre-formation crop cells against full generation; test formation equivalence only under the explicitly defined sample semantics.
 
 Export acceptance covers orientation/dimensions, excluded halos, matching image/result revisions, reproduction from the exported source snapshot, and failed/cancelled output handling.
 
-Use existing suites and repository format/style/build gates. Presentation integration requires the full app/asset matrix and applicable three-loop lifetime/concurrency checks. Measure latency, responsiveness, and CPU/GPU memory before claiming speed.
+Use existing suites and repository format/style/build gates. Per the user's current instruction, validate the changed authoring, generation and live-coordination groups only, with repeated focused concurrency checks. Leave appearance and interaction validation to the user. Measure latency, responsiveness and memory before claiming speed.
 
-User acceptance: edit a biome, preview at fixed seed/camera, compare, save, reload/restart, and reproduce the result. The central scope decision for review is whether the first release should inspect all categories but edit biomes first, or include material/field/profile editing immediately.
+User acceptance: edit definitions, preview at fixed seed/camera, compare, save, reload/restart and reproduce the result. Check creation/deletion, automatic regeneration and exact crop navigation visually; textured-image export is excluded.

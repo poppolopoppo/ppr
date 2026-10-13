@@ -625,24 +625,64 @@ generating a complete world:
 app.game --worldgen-workshop --worldgen-root=E:/Code/ppr/assets/worldgen/default
 ```
 
-Choose an explicit authored pack root. The executable-adjacent `worldgen/default`
-directory is staged output and may be replaced by a build; it is not inferred to
-be an editable repository source directory.
+The pack-root field defaults to the current world-generation root, including any
+`--worldgen-root` override. The executable-adjacent `worldgen/default` directory is
+staged output and may be replaced by a build; choose the authored pack root when
+edits should persist across builds.
 
 The browser shows the opened pack, materials/elements, fields, biomes, features,
-world profiles, backgrounds and textures. The first authoring surface edits
-existing biome scalar values and nested composition/deposit properties. Keys and
-numeric IDs remain stable; other categories are inspectable with source and
-reference information. Cave and worm rules retain their actual world-profile
-ownership.
+world profiles, backgrounds and textures. Materials, fields, biomes, features,
+world profiles and backgrounds expose their authored scalar properties,
+including nested records. Cave and worm rules retain their actual world-profile
+ownership. Pack manifests and referenced textures remain inspectable.
+
+The resizable Workshop separates the content browser from the inspector. Search
+definitions in the browser or filter the inspector's nested property tree.
+Numeric sliders use the production decoder's legal ranges, with practical editing
+ranges for unbounded values; text entry remains available for precise values.
+Enums and content references offer their available choices in combo boxes.
+Optional references can be unset through an undoable source edit.
+Resetting a non-biome optional property removes its source-driven row; Undo
+restores it. Rule kinds remain read-only because changing kind also changes the
+required property schema; start from a profile containing the desired rule kind.
+Property errors retain their source location and appear beside the relevant
+control. Select a diagnostic to reveal that property, including nested groups.
+Linked constraints such as ordered radii still apply alongside individual ranges.
+Live preview pauses on a known invalid draft until an edit fixes it, retaining the
+last successful picture. Open and Save explain when their prerequisites are missing.
+
+**Create from selected** clones a definition with a new key; materials also require
+a new unused numeric ID. **Delete selected definition** is undoable. Unresolved
+references remain visible as validation errors and block saving or generation;
+deletion never silently cascades. Structural editing supports the explicit-table
+and dotted-record syntax used by the shipped packs; inline-table record deletion
+returns an explicit unsupported-operation error. Existing keys and numeric IDs remain stable
+during ordinary property editing.
 
 Use a fixed seed, profile and sample origin, then **Preview** to compare edits.
+**Automatic live preview** regenerates after a 350 ms quiet period. It keeps one
+running request and one replacement, coalesces edits, and defers generation while
+explicit open/save/export operations run. Cancel suppresses automatic retry until
+the desired input changes or live preview is toggled again.
+
+Choose **Biome sample** for the fast local laboratory or **Whole-world crop** for
+production terrain at the requested coordinates.
 The laboratory generates a 256-by-256 fine-cell biome sample, approximately
 85-by-85 metres, with at most 25 resident support chunks. It reuses production
 geology, pores, worms, material filters, appended erosion and supported formation
 evaluation. It omits global start areas, authored feature reservations,
 connections, initial matter and whole-world playability validation. This is a
 **Biome sample**, not an exact crop of a complete generated world.
+
+**Whole-world crop** first generates and validates the complete production world
+in the background, preserving global formation admission/order, authored features,
+start constraints and initial matter. It retains an immutable world cache and
+copies only the crop's support chunks for presentation. Moving the crop reuses the
+cache; changing content, profile or seed requires another complete preparation.
+The selected biome is ignored in this mode. Its first preview costs a full world
+generation and retains the full terrain and initial particle snapshot in memory.
+The background coordinator injects a separate existing worker pool for production
+chunk generation; crop extraction itself performs no additional terrain generation.
 
 The cyan outline marks the sample interior. Complete support chunks remain
 visible outside it for contours and formations; counts and exports refer only to
@@ -654,19 +694,22 @@ and successful preview. Preview and I/O run on owned background snapshots; Cance
 and newer requests cannot publish an obsolete result. Open, Reload and application
 exit require an explicit decision before discarding dirty drafts.
 
-**Save biomes** validates against the current rest of the pack and writes the
-biome document while preserving comments, line endings and untouched text. Disk
+**Save** validates against the current rest of the pack and stages every changed
+content document while preserving comments, line endings and untouched text. Disk
 conflicts retain the draft. An accepted save advances the session revision; it
 advances validation to that revision when the saved draft still matches. Edits
-made while saving remain dirty. Simultaneous external writes during the
-optimistic commit are unsupported.
+made while saving remain dirty. Each document replacement is atomic; the complete
+pack is not a single atomic transaction. Partial failures report committed paths,
+retain the draft, and allow retry when disk bytes match the baseline or requested
+version. Simultaneous external writes during the optimistic commit are unsupported.
 
 **Export Preview** writes material, biome and temperature P6 PPM images,
 `preview.json`, and the exact validated manifest/source snapshot used by the
 completed preview, including unsaved edits. Images contain one pixel per visible
 fine cell, with highest +Y first. Use a fresh output directory; completion metadata
 is written last. Referenced texture identities are recorded, but assets are not
-copied: reproduction requires the original unchanged asset root.
+copied: reproduction requires the original unchanged asset root. Exact mode also
+exports `initial-matter.ppm` and production generation identity/cache metadata.
 
 Returning from Workshop restores the retained game presentation, camera and
 pause state without regenerating its terrain. Shared `engine.core` command history
