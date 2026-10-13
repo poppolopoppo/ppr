@@ -450,6 +450,149 @@ namespace pP::config {
         return patch;
     }
 
+    Expected<ScalarSourcePatch> insertRecord(
+        const std::string_view bytes, const std::string_view key, const Document &record, const std::string_view origin,
+        Diagnostics &diagnostics) {
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            ConfigFile, bytes.size() <= 1024u * 1024u and isValidCanonicalName(key) and not record.m_entries.empty()
+                            ? std::error_code{}
+                            : std::make_error_code(std::errc::invalid_argument));
+        auto decoded = decode(bytes, origin, diagnostics, EDecodeMode::records);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, decoded);
+        const auto prefix = std::string{key} + ".";
+        if (std::ranges::any_of(decoded->m_entries, [&](const Entry &entry) {
+                return entry.m_key == key or entry.m_key.starts_with(prefix);
+            })) {
+            PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, EConfigErrc::duplicate_key);
+        }
+        Document qualified;
+        for (const auto &entry: record.m_entries) {
+            PPR_RETURN_UNEXPECTED_ON_FAIL(
+                ConfigFile, isValidCanonicalName(entry.m_key) ? std::error_code{}
+                                                              : std::make_error_code(std::errc::invalid_argument));
+            qualified.m_entries.push_back({prefix + entry.m_key, entry.m_value, {}});
+        }
+        auto encoded = encode(qualified);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, encoded);
+        const std::string_view eol = bytes.find("\r\n") == std::string_view::npos ? "\n" : "\r\n";
+        std::string appended;
+        if (not bytes.empty() and not bytes.ends_with('\n')) {
+            appended += eol;
+        }
+        appended += eol;
+        for (const char ch: *encoded) {
+            if (ch == '\n') {
+                appended += eol;
+            } else {
+                appended += ch;
+            }
+        }
+        ScalarSourcePatch patch{bytes.size(), {}, std::move(appended)};
+        auto candidate = applySourcePatch(bytes, patch);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, candidate);
+        auto checked = decode(*candidate, origin, diagnostics, EDecodeMode::records);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, checked);
+        return patch;
+    }
+
+    Expected<ScalarSourcePatch> removeRecord(
+        const std::string_view bytes, const std::string_view key, const std::string_view origin,
+        Diagnostics &diagnostics) {
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            ConfigFile, bytes.size() <= 1024u * 1024u and isValidCanonicalName(key)
+                            ? std::error_code{}
+                            : std::make_error_code(std::errc::invalid_argument));
+        auto decoded = decode(bytes, origin, diagnostics, EDecodeMode::records);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, decoded);
+        toml::table table;
+        try {
+            table = toml::parse(bytes, std::string{origin});
+        } catch (const toml::parse_error &) {
+            PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, EConfigErrc::codec_error);
+        }
+        const toml::node *node = std::addressof(table);
+        std::string_view remaining = key;
+        while (not remaining.empty()) {
+            const auto dot = remaining.find('.');
+            node = node->as_table() ? node->as_table()->get(remaining.substr(0u, dot)) : nullptr;
+            PPR_RETURN_UNEXPECTED_ON_FAIL(
+                ConfigFile, node ? std::error_code{} : make_error_code(EConfigErrc::unknown_property));
+            if (dot == std::string_view::npos) {
+                break;
+            }
+            remaining.remove_prefix(dot + 1u);
+        }
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            ConfigFile, not node->as_table() or not node->as_table()->is_inline()
+                            ? std::error_code{}
+                            : std::make_error_code(std::errc::operation_not_supported));
+        using Span = std::pair<std::size_t, std::size_t>;
+        Array<Span> spans;
+        const auto collect = [&](auto &&self, const toml::node &current) -> std::error_code {
+            auto begin = sourceOffset(bytes, current.source().begin);
+            PPR_RETURN_ERROR_ON_FAIL(ConfigFile, begin);
+            if (const auto *nested = current.as_table(); nested and not nested->is_inline()) {
+                if (*begin < bytes.size() and bytes[*begin] == '[') {
+                    const auto end = bytes.find('\n', *begin);
+                    spans.emplace_back(*begin, end == std::string_view::npos ? bytes.size() : end + 1u);
+                }
+                for (const auto &[unused, child]: *nested) {
+                    PPR_RETURN_ERROR_ON_FAIL(ConfigFile, self(self, child));
+                }
+            } else {
+                auto end = sourceOffset(bytes, current.source().end);
+                PPR_RETURN_ERROR_ON_FAIL(ConfigFile, end);
+                const auto line_begin = *begin == 0u ? std::string_view::npos : bytes.rfind('\n', *begin - 1u);
+                const auto line_end = bytes.find('\n', *end);
+                spans.emplace_back(
+                    line_begin == std::string_view::npos ? 0u : line_begin + 1u,
+                    line_end == std::string_view::npos ? bytes.size() : line_end + 1u);
+            }
+            return {};
+        };
+        PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, collect(collect, *node));
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            ConfigFile, not spans.empty() ? std::error_code{} : make_error_code(EConfigErrc::codec_error));
+        std::ranges::sort(spans);
+        const auto first = spans.front().first;
+        const auto last = std::ranges::max(spans, {}, &Span::second).second;
+        ScalarSourcePatch patch{first, std::string{bytes.substr(first, last - first)}, {}};
+        auto cursor = first;
+        for (const auto &[begin, end]: spans) {
+            if (begin > cursor) {
+                patch.m_after += bytes.substr(cursor, begin - cursor);
+            }
+            cursor = (std::max) (cursor, end);
+        }
+        auto candidate = applySourcePatch(bytes, patch);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, candidate);
+        auto checked = decode(*candidate, origin, diagnostics, EDecodeMode::records);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, checked);
+        const auto prefix = std::string{key} + ".";
+        if (std::ranges::any_of(checked->m_entries, [&](const Entry &entry) {
+                return entry.m_key == key or entry.m_key.starts_with(prefix);
+            })) {
+            PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, EConfigErrc::codec_error);
+        }
+        // Parser source regions for implicit tables can overlap descendants.
+        // Prove that removing the selected record preserved every other value.
+        Document retained;
+        for (const auto &entry: decoded->m_entries) {
+            if (entry.m_key != key and not entry.m_key.starts_with(prefix)) {
+                retained.m_entries.push_back(entry);
+            }
+        }
+        std::ranges::sort(retained.m_entries, {}, &Entry::m_key);
+        std::ranges::sort(checked->m_entries, {}, &Entry::m_key);
+        auto expected = encode(retained);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, expected);
+        auto actual = encode(*checked);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, actual);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            ConfigFile, *expected == *actual ? std::error_code{} : make_error_code(EConfigErrc::codec_error));
+        return patch;
+    }
+
     [[nodiscard]] Layer toLayer(Document document, std::string origin) {
         Layer layer{};
         layer.m_source = ESource::file;

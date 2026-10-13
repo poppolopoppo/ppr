@@ -549,6 +549,124 @@ namespace pP::tests::detail::cfg_file {
         PPR_TEST_ASSERT(not patchScalar(oversized, "x", FileValue::integer(9), "source", diagnostics));
     };
 
+    PPR_UNIT_TEST (record_source_patches_preserve_interleaved_tables_comments_and_undo) {
+        const std::string source =
+            "\xEF\xBB\xBFschema_version = 2\r\n# keep header\r\n"
+            "[records.first]\r\nvalue = '''multiline\r\n[not.a.header]\r\ntext''' # own value\r\n"
+            "# keep between tables\r\n[records.other]\r\nvalue = 7 # keep unrelated\r\n"
+            "[records.first.child]\r\nname = 'caf\xc3\xa9'\r\n";
+        Diagnostics diagnostics;
+        const auto removal = removeRecord(source, "records.first", "source.toml", diagnostics);
+        PPR_TEST_ASSERT(removal.has_value());
+        const auto removed = applySourcePatch(source, *removal);
+        PPR_TEST_ASSERT(removed.has_value());
+        PPR_TEST_ASSERT(
+            *removed == "\xEF\xBB\xBFschema_version = 2\r\n# keep header\r\n"
+                        "# keep between tables\r\n[records.other]\r\nvalue = 7 # keep unrelated\r\n");
+        const auto restored = applySourcePatch(*removed, *removal, true);
+        PPR_TEST_ASSERT(restored.has_value() and *restored == source);
+        Document record;
+        record.m_entries.push_back({"value", FileValue::integer(8), {}});
+        record.m_entries.push_back({"child.name", FileValue::text("new"), {}});
+        const auto insertion = insertRecord(source, "records.new", record, "source.toml", diagnostics);
+        PPR_TEST_ASSERT(insertion.has_value());
+        const auto inserted = applySourcePatch(source, *insertion);
+        PPR_TEST_ASSERT(inserted.has_value() and inserted->starts_with(source));
+        PPR_TEST_ASSERT(inserted->find("[records.new.child]\r\nname = \"new\"\r\n") != std::string::npos);
+        const auto undone = applySourcePatch(*inserted, *insertion, true);
+        PPR_TEST_ASSERT(undone.has_value() and *undone == source);
+        PPR_TEST_ASSERT(not insertRecord(source, "records.first", record, "source.toml", diagnostics));
+        PPR_TEST_ASSERT(not removeRecord(source, "records.missing", "source.toml", diagnostics));
+        PPR_TEST_ASSERT(not removeRecord(
+            "records = { first = { value = 1 }, other = { value = 2 } }\n", "records.first", "source.toml",
+            diagnostics));
+    };
+
+    PPR_UNIT_TEST (schema_property_projection_preserves_domains_hints_choices_and_optionality) {
+        struct Settings {
+            enum class Sampling : u8 {
+                point,
+                smooth
+            };
+            std::optional<double> m_frequency{1.0e20};
+            std::optional<std::string> m_source{};
+            Sampling m_sampling{};
+            std::optional<Sampling> m_alternate{};
+            i32 m_offset{};
+            static constexpr auto describe() {
+                return std::tuple{
+                    field(
+                        &Settings::m_frequency,
+                        Metadata{
+                            "frequency", "Noise frequency", "Noise", EMutability::startup, ESource::file, true, false,
+                            {}, "1/m", 0.0, 0.1},
+                        FloatDomain{0.0, (std::numeric_limits<double>::max)(), false, true}),
+                    field(
+                        &Settings::m_source,
+                        Metadata{
+                            "source", "Source field", "Noise", EMutability::startup, ESource::file, true, false,
+                            "fields"},
+                        StringDomain{128u, false}),
+                    field(
+                        &Settings::m_sampling, Metadata{"sampling", "Sampling", "Noise"},
+                        EnumDomain<Sampling, 2u>{
+                            {EnumEntry<Sampling>{Sampling::point, "point"},
+                                EnumEntry<Sampling>{Sampling::smooth, "smooth"}}}),
+                    field(
+                        &Settings::m_alternate, Metadata{"alternate", "Alternate sampling", "Noise"},
+                        EnumDomain<Sampling, 2u>{
+                            {EnumEntry<Sampling>{Sampling::point, "nearest"},
+                                EnumEntry<Sampling>{Sampling::smooth, "linear"}}}),
+                    field(&Settings::m_offset, Metadata{"offset", "Offset", "Noise"}, Range<i32>{-8, 8})};
+            }
+        } settings;
+        const auto schema = Settings::describe();
+        const auto frequency = describeProperty(std::get<0u>(schema));
+        PPR_TEST_ASSERT(frequency.m_min == 0.0 and frequency.m_max == (std::numeric_limits<double>::max)());
+        PPR_TEST_ASSERT(frequency.m_optional and frequency.m_exclusive_min and not frequency.m_exclusive_max);
+        PPR_TEST_ASSERT(frequency.m_slider_min > 0.0 and frequency.m_slider_max == 0.1);
+        PPR_TEST_ASSERT(frequency.m_description == "Noise frequency" and frequency.m_units == "1/m");
+        PPR_TEST_ASSERT(settings.m_frequency == 1.0e20);
+        const auto source = describeProperty(std::get<1u>(schema));
+        PPR_TEST_ASSERT(source.m_optional and source.m_reference == "fields");
+        const auto sampling = describeProperty(std::get<2u>(schema));
+        const auto alternate = describeProperty(std::get<3u>(schema));
+        PPR_TEST_ASSERT(not sampling.m_optional and alternate.m_optional);
+        PPR_TEST_ASSERT(sampling.m_choices == (Array<std::string_view>{"point", "smooth"}));
+        PPR_TEST_ASSERT(alternate.m_choices == (Array<std::string_view>{"nearest", "linear"}));
+        const auto offset = describeProperty(std::get<4u>(schema));
+        PPR_TEST_ASSERT(offset.m_min == -8.0 and offset.m_max == 8.0 and not offset.m_optional);
+    };
+
+    PPR_UNIT_TEST (scalar_removal_preserves_comments_crlf_siblings_and_reversible_proof) {
+        const std::string source =
+            "# keep header\r\n[settings]\r\n# keep explanation\r\noptional = 2.0 # own assignment\r\n"
+            "sibling = 7 # keep sibling\r\n[settings.child]\r\nvalue = 'keep child'\r\n";
+        Diagnostics diagnostics;
+        const auto patch = removeRecord(source, "settings.optional", "optional.toml", diagnostics);
+        PPR_TEST_ASSERT(patch.has_value());
+        const auto removed = applySourcePatch(source, *patch);
+        PPR_TEST_ASSERT(removed.has_value());
+        PPR_TEST_ASSERT(
+            *removed == "# keep header\r\n[settings]\r\n# keep explanation\r\nsibling = 7 # keep sibling\r\n"
+                        "[settings.child]\r\nvalue = 'keep child'\r\n");
+        const auto decoded = decode(*removed, "optional.toml", diagnostics, EDecodeMode::records);
+        PPR_TEST_ASSERT(decoded.has_value() and findEntry(*decoded, "settings.optional") == nullptr);
+        const auto *const sibling = findEntry(*decoded, "settings.sibling");
+        const auto *const child = findEntry(*decoded, "settings.child.value");
+        PPR_TEST_ASSERT(sibling != nullptr and sibling->m_value.m_integer == 7);
+        PPR_TEST_ASSERT(child != nullptr and child->m_value.m_text == "keep child");
+        const auto restored = applySourcePatch(*removed, *patch, true);
+        PPR_TEST_ASSERT(restored.has_value() and *restored == source);
+        auto changed = source;
+        changed.replace(changed.find("optional = 2.0"), std::string_view{"optional = 2.0"}.size(), "optional = 3.0");
+        const auto conflict = applySourcePatch(changed, *patch);
+        PPR_TEST_ASSERT(not conflict and conflict.error() == std::errc::invalid_argument);
+        const auto inline_removal = removeRecord(
+            "settings = { optional = 2.0, sibling = 7 }\r\n", "settings.optional", "inline.toml", diagnostics);
+        PPR_TEST_ASSERT(not inline_removal);
+    };
+
     PPR_UNIT_TEST (large_unsigned_serialization) {
         WideSettings settings{};
         settings.m_big = std::numeric_limits<u64>::max();
@@ -589,6 +707,9 @@ namespace pP::tests {
             detail::cfg_file::source_patch_preserves_utf8_comments_crlf_and_quoted_values,
             detail::cfg_file::source_patch_insertion_preserves_headers_final_comments_and_newline_style,
             detail::cfg_file::source_patch_rejects_missing_implicit_parents_type_changes_and_conflicts,
+            detail::cfg_file::record_source_patches_preserve_interleaved_tables_comments_and_undo,
+            detail::cfg_file::schema_property_projection_preserves_domains_hints_choices_and_optionality,
+            detail::cfg_file::scalar_removal_preserves_comments_crlf_siblings_and_reversible_proof,
         });
     };
 

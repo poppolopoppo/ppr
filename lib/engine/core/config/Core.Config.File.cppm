@@ -98,6 +98,13 @@ export namespace pP::config {
         Diagnostics &diagnostics);
     [[nodiscard]] Expected<std::string> applySourcePatch(
         std::string_view bytes, const ScalarSourcePatch &patch, bool reverse = false);
+    // Append a new record, or remove a record or scalar's source spans. Unrelated
+    // bytes (including comments between interleaved tables) remain unchanged.
+    [[nodiscard]] Expected<ScalarSourcePatch> insertRecord(
+        std::string_view bytes, std::string_view key, const Document &record, std::string_view origin,
+        Diagnostics &diagnostics);
+    [[nodiscard]] Expected<ScalarSourcePatch> removeRecord(
+        std::string_view bytes, std::string_view key, std::string_view origin, Diagnostics &diagnostics);
 
 
     // Wraps a decoded document as a file precedence layer.

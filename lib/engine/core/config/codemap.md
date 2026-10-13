@@ -14,7 +14,10 @@ settings and game invocation/display modules for current consumers.
 - **Core.Config.cppm/.cpp** (`:config`): `EMutability`, `ESource` bitmask
   (`none` = trusted programmatic layer bypassing permission checks),
   `Metadata` (name/description/category/mutability/sources/persistable plus
-  `m_sensitive` for diagnostic redaction), constraint vocabulary
+  `m_sensitive` for diagnostic redaction, reference category, units and expected
+  numeric editing interval), `PropertyDescriptor`/`describeProperty()` for an
+  owned display-neutral projection of legal ranges, enum choices and optionality,
+  constraint vocabulary
   (`AnyDomain`, `Range<T>`, `BooleanDomain`, `EnumDomain<E,N>` +
   `enumDomain()` factory, `StringDomain`, `PathDomain`, `FloatDomain`),
   `Member`/`field()`/`visit()` over `Schema::describe()` tuples, strictly
@@ -63,6 +66,13 @@ settings and game invocation/display modules for current consumers.
   be inserted only into existing explicit tables. Untouched bytes, comments,
   BOMs and line endings remain intact. Patches enforce the existing 1 MiB
   content-document limit and reparse the candidate before returning it.
+  `insertRecord` appends a new owned record with qualified scalar/nested-table
+  keys while retaining existing source bytes and newline style. `removeRecord`
+  derives the selected record's table/scalar line spans from parser locations,
+  preserves unrelated interleaved tables and standalone comments, and checks
+  that all unrelated decoded values survive. Inline record removal fails
+  explicitly rather than deleting a shared assignment. Both return reversible
+  source patches; authoring history and document ownership remain with callers.
 
 ## Key Files
 

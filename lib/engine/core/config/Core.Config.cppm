@@ -138,6 +138,10 @@ export namespace pP::config {
         ESource m_sources{ESource::none};
         bool m_persistable{false};
         bool m_sensitive{false};
+        std::string_view m_reference_category{}, m_units{};
+        // Expected editing interval; constraints remain the legal domain.
+        std::optional<double> m_slider_min{}, m_slider_max{};
+        bool m_read_only{false};
     };
 
     // Canonical segments use a restricted identifier alphabet so that
@@ -307,6 +311,59 @@ export namespace pP::config {
     [[nodiscard]] constexpr Member<Owner, T, Constraint> field(
         T Owner::*member, const Metadata metadata, const Constraint constraint) {
         return Member<Owner, T, Constraint>{member, metadata, constraint};
+    }
+
+    /// Display-neutral runtime projection of a schema member. Enum names refer
+    /// to the schema's static strings; the choice list itself is owned.
+    struct PropertyDescriptor {
+        std::optional<double> m_min{}, m_max{};
+        bool m_exclusive_min{}, m_exclusive_max{}, m_optional{}, m_read_only{};
+        double m_slider_min{}, m_slider_max{};
+        Array<std::string_view> m_choices{};
+        std::string_view m_reference{}, m_description{}, m_units{};
+    };
+    namespace details {
+        template<typename T>
+        struct IsOptional : std::false_type {};
+        template<typename T>
+        struct IsOptional<std::optional<T>> : std::true_type {};
+        template<typename T>
+        inline constexpr bool is_optional_v = IsOptional<std::remove_cvref_t<T>>::value;
+    }
+    template<typename Owner, typename T, typename Constraint>
+    [[nodiscard]] PropertyDescriptor describeProperty(const Member<Owner, T, Constraint> &member) {
+        PropertyDescriptor result;
+        const auto &domain = member.m_constraint;
+        const auto &metadata = member.m_metadata;
+        result.m_reference = metadata.m_reference_category;
+        result.m_description = metadata.m_description;
+        result.m_units = metadata.m_units;
+        result.m_read_only = metadata.m_read_only;
+        if constexpr (requires {
+                          domain.m_min;
+                          domain.m_max;
+                      }) {
+            result.m_min = static_cast<double>(domain.m_min);
+            result.m_max = static_cast<double>(domain.m_max);
+            if constexpr (requires { domain.m_exclusive_min; }) {
+                result.m_exclusive_min = domain.m_exclusive_min;
+            }
+            result.m_slider_min = metadata.m_slider_min.value_or(*result.m_min >= -1.0e6 ? *result.m_min : -1000.0);
+            result.m_slider_max = metadata.m_slider_max.value_or(*result.m_max <= 1.0e6 ? *result.m_max : 1000.0);
+            result.m_slider_min = std::clamp(result.m_slider_min, *result.m_min, *result.m_max);
+            result.m_slider_max = std::clamp(result.m_slider_max, result.m_slider_min, *result.m_max);
+            if (result.m_exclusive_min and result.m_slider_min == *result.m_min) {
+                result.m_slider_min = std::nextafter(result.m_slider_min, result.m_slider_max);
+            }
+        }
+        if constexpr (requires { domain.m_entries; }) {
+            result.m_choices.reserve(domain.m_entries.size());
+            for (const auto &entry: domain.m_entries) {
+                result.m_choices.push_back(entry.m_name);
+            }
+        }
+        result.m_optional = details::is_optional_v<T>;
+        return result;
     }
 
     template<typename Settings, typename Visitor>
@@ -522,15 +579,6 @@ export namespace pP::config {
             void upsertOrigin(std::string name, ESource source, std::string location);
             void rejectUnknown(std::span<const std::string_view> names);
         };
-
-        template<typename T>
-        struct IsOptional : std::false_type {};
-
-        template<typename T>
-        struct IsOptional<std::optional<T>> : std::true_type {};
-
-        template<typename T>
-        inline constexpr bool is_optional_v = IsOptional<std::remove_cvref_t<T>>::value;
 
         template<typename S>
         concept THasCrossValidate = requires (const S &settings, Diagnostics &diagnostics) {
