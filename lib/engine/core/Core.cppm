@@ -3,6 +3,7 @@ module;
 export module engine.core;
 
 export import :assert;
+export import :command_history;
 export import :containers;
 export import :containers.hash_map;
 export import :containers.sparse_vector;

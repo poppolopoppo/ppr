@@ -7,10 +7,13 @@ module engine.core;
 
 import :config;
 import :config.file;
+import :logger;
 
 import std;
 
 namespace pP::config {
+    using pP::make_error_code;
+    PPR_DEFINE_LOG_CATEGORY(ConfigFile, debug, none)
     namespace {
         // toml++ owns TOML 1.0 syntax (tables, dotted keys, typed scalars,
         // comments, escapes). The codec only flattens the parsed tree into
@@ -303,6 +306,148 @@ namespace pP::config {
             }
         }
         return out;
+    }
+
+    namespace {
+        // toml++ increments source columns once per UTF-8 codepoint (including
+        // CR), and advances source lines on LF. Its reader consumes an initial BOM.
+        [[nodiscard]] Expected<std::size_t> sourceOffset(
+            const std::string_view bytes, const toml::source_position position) {
+            std::size_t offset = bytes.starts_with("\xEF\xBB\xBF") ? 3u : 0u;
+            u32 line = 1u;
+            u32 column = 1u;
+            while (offset < bytes.size() and (line != position.line or column != position.column)) {
+                const auto lead = static_cast<unsigned char>(bytes[offset]);
+                const std::size_t width = lead < 0x80u ? 1u : lead < 0xE0u ? 2u : lead < 0xF0u ? 3u : 4u;
+                if (bytes[offset] == '\n') {
+                    ++line;
+                    column = 1u;
+                } else {
+                    ++column;
+                }
+                offset += width;
+            }
+            if (offset > bytes.size() or line != position.line or column != position.column) {
+                PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, EConfigErrc::codec_error);
+            }
+            return offset;
+        }
+
+        [[nodiscard]] Expected<std::string> scalarText(const FileValue &value) {
+            Document document;
+            document.m_entries.push_back(Entry{"value", value, {}});
+            auto encoded = encode(document);
+            PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, encoded);
+            constexpr std::string_view marker = "value = ";
+            const auto begin = encoded->find(marker);
+            if (begin == std::string::npos or not encoded->ends_with('\n')) {
+                PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, EConfigErrc::codec_error);
+            }
+            return encoded->substr(begin + marker.size(), encoded->size() - begin - marker.size() - 1u);
+        }
+    }
+
+    Expected<std::string> applySourcePatch(
+        const std::string_view bytes, const ScalarSourcePatch &patch, const bool reverse) {
+        const auto &before = reverse ? patch.m_after : patch.m_before;
+        const auto &after = reverse ? patch.m_before : patch.m_after;
+        // Match the established content document source-byte limit, including growth.
+        constexpr std::size_t max_source_bytes = 1024u * 1024u;
+        if (bytes.size() > max_source_bytes or
+            patch.m_offset > bytes.size() or
+            before.size() > bytes.size() - patch.m_offset or
+            bytes.substr(patch.m_offset, before.size()) != before) {
+            PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, std::errc::invalid_argument);
+        }
+        if (after.size() > max_source_bytes - (bytes.size() - before.size())) {
+            PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, EConfigErrc::out_of_range);
+        }
+        std::string result{bytes};
+        result.replace(patch.m_offset, before.size(), after);
+        return result;
+    }
+
+    Expected<ScalarSourcePatch> patchScalar(
+        const std::string_view bytes, const std::string_view key, const FileValue &value, const std::string_view origin,
+        Diagnostics &diagnostics) {
+        const auto fail = [&](const std::string_view message) {
+            const auto error = make_error_code(EConfigErrc::codec_error);
+            diagnostics.add(std::string{origin}, std::string{key}, std::string{message}, error);
+            return error;
+        };
+        if (bytes.size() > 1024u * 1024u or not isValidCanonicalName(key)) {
+            PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, fail("Invalid scalar patch path or source size"));
+        }
+        auto decoded = decode(bytes, origin, diagnostics);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, decoded);
+        auto scalar = scalarText(value);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, scalar);
+
+        toml::table table;
+        try {
+            table = toml::parse(bytes, std::string{origin});
+        } catch (const toml::parse_error &) {
+            PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, fail("Source cannot be parsed for patching"));
+        }
+        const toml::table *parent = std::addressof(table);
+        std::string_view remaining = key;
+        while (remaining.find('.') != std::string_view::npos) {
+            const auto dot = remaining.find('.');
+            const auto *node = parent->get(remaining.substr(0u, dot));
+            if (node == nullptr or node->as_table() == nullptr) {
+                PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, fail("Scalar parent table does not exist"));
+            }
+            parent = node->as_table();
+            remaining.remove_prefix(dot + 1u);
+        }
+        ScalarSourcePatch patch;
+        if (const auto *node = parent->get(remaining)) {
+            const bool compatible = (node->is_boolean() and value.m_kind == EFileKind::boolean) or
+                                    (node->is_integer() and value.m_kind == EFileKind::integer) or
+                                    (node->is_floating_point() and value.m_kind == EFileKind::floating) or
+                                    (node->is_string() and value.m_kind == EFileKind::text);
+            if (not compatible) {
+                PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, fail("Scalar patch changes the authored value kind"));
+            }
+            auto begin = sourceOffset(bytes, node->source().begin);
+            PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, begin);
+            auto end = sourceOffset(bytes, node->source().end);
+            PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, end);
+            if (*end < *begin) {
+                PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, fail("Invalid parser source span"));
+            }
+            patch = {*begin, std::string{bytes.substr(*begin, *end - *begin)}, std::move(*scalar)};
+        } else {
+            auto begin = sourceOffset(bytes, parent->source().begin);
+            PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, begin);
+            if (parent == std::addressof(table) or
+                parent->is_inline() or
+                *begin >= bytes.size() or
+                bytes[*begin] != '[') {
+                PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, fail("Insertion requires an existing explicit table"));
+            }
+            const auto newline = bytes.find('\n', *begin);
+            const std::string_view eol = bytes.find("\r\n") == std::string_view::npos ? "\n" : "\r\n";
+            patch.m_offset = newline == std::string_view::npos ? bytes.size() : newline + 1u;
+            if (newline == std::string_view::npos) {
+                patch.m_after += eol;
+            }
+            patch.m_after += std::string{remaining} + " = " + *scalar;
+            if (newline != std::string_view::npos) {
+                patch.m_after += eol;
+            }
+        }
+        auto patched = applySourcePatch(bytes, patch);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, patched);
+        auto reparsed = decode(*patched, origin, diagnostics);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, reparsed);
+        const auto entry = std::ranges::find(reparsed->m_entries, key, &Entry::m_key);
+        // An implicit parent can share a descendant's header source region.
+        // Require that insertion actually created the requested qualified key.
+        if (entry == reparsed->m_entries.end() or entry->m_value.m_kind != value.m_kind) {
+            PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, fail("Insertion requires the requested explicit table"));
+        }
+        return patch;
     }
 
     [[nodiscard]] Layer toLayer(Document document, std::string origin) {

@@ -480,6 +480,75 @@ namespace pP::tests::detail::cfg_file {
         PPR_TEST_ASSERT(name->m_value.m_text == "ada");
     };
 
+    PPR_UNIT_TEST (source_patch_preserves_utf8_comments_crlf_and_quoted_values) {
+        const std::string source = "\xEF\xBB\xBF# untouched\r\n[net]\r\n"
+                                   "inline = { \"\xC3\xA9\xF0\x9F\x8C\x8D\" = 'unchanged', port = 8_080 } # tail\r\n"
+                                   "host = 'old # text' # retain this\r\n";
+        Diagnostics diagnostics;
+        auto patch = patchScalar(source, "net.inline.port", FileValue::integer(9000), "source.toml", diagnostics);
+        PPR_TEST_ASSERT(patch.has_value());
+        PPR_TEST_ASSERT(patch->m_before == "8_080");
+        auto changed = applySourcePatch(source, *patch);
+        PPR_TEST_ASSERT(changed.has_value());
+        auto expected = source;
+        expected.replace(expected.find("8_080"), 5u, "9000");
+        PPR_TEST_ASSERT(*changed == expected);
+        const auto restored = applySourcePatch(*changed, *patch, true);
+        PPR_TEST_ASSERT(restored.has_value() and *restored == source);
+
+        auto string_patch = patchScalar(
+            *changed, "net.host", FileValue::text("quote \" slash \\ newline\n"), "source.toml", diagnostics);
+        PPR_TEST_ASSERT(string_patch.has_value() and string_patch->m_before == "'old # text'");
+        auto string_changed = applySourcePatch(*changed, *string_patch);
+        PPR_TEST_ASSERT(string_changed.has_value());
+        PPR_TEST_ASSERT(string_changed->ends_with("\"quote \\\" slash \\\\ newline\\n\" # retain this\r\n"));
+        auto decoded = decode(*string_changed, "source.toml", diagnostics);
+        PPR_TEST_ASSERT(decoded.has_value());
+        PPR_TEST_ASSERT(findEntry(*decoded, "net.host")->m_value.m_text == "quote \" slash \\ newline\n");
+    };
+
+    PPR_UNIT_TEST (source_patch_insertion_preserves_headers_final_comments_and_newline_style) {
+        for (const std::string source:
+            {"[net] # header\r\nport = 8080 # final", "[net] # header\nport = 8080 # final\n",
+                "[net] # final header"}) {
+            Diagnostics diagnostics;
+            const auto patch = patchScalar(source, "net.tls", FileValue::boolean(true), "source.toml", diagnostics);
+            PPR_TEST_ASSERT(patch.has_value() and patch->m_before.empty());
+            const auto changed = applySourcePatch(source, *patch);
+            PPR_TEST_ASSERT(changed.has_value());
+            const auto restored = applySourcePatch(*changed, *patch, true);
+            PPR_TEST_ASSERT(restored.has_value() and *restored == source);
+            auto expected = source;
+            const auto newline = source.find('\n');
+            if (newline == std::string::npos) {
+                expected += "\ntls = true";
+            } else {
+                expected.insert(
+                    newline + 1u, source.find("\r\n") == std::string::npos ? "tls = true\n" : "tls = true\r\n");
+            }
+            PPR_TEST_ASSERT(*changed == expected);
+        }
+    };
+
+    PPR_UNIT_TEST (source_patch_rejects_missing_implicit_parents_type_changes_and_conflicts) {
+        Diagnostics diagnostics;
+        constexpr std::string_view source = "[net.inner]\nport = 8080\n";
+        PPR_TEST_ASSERT(not patchScalar(source, "missing.port", FileValue::integer(9), "source", diagnostics));
+        PPR_TEST_ASSERT(not patchScalar(source, "net.extra", FileValue::integer(9), "source", diagnostics));
+        PPR_TEST_ASSERT(not patchScalar(source, "net..port", FileValue::integer(9), "source", diagnostics));
+        PPR_TEST_ASSERT(not patchScalar(source, "net.inner.port", FileValue::text("9"), "source", diagnostics));
+        PPR_TEST_ASSERT(
+            not patchScalar("net.port = 1\n", "net.extra", FileValue::boolean(true), "source", diagnostics));
+        PPR_TEST_ASSERT(
+            not patchScalar("net = { port = 1 }\n", "net.extra", FileValue::boolean(true), "source", diagnostics));
+        auto patch = patchScalar(source, "net.inner.port", FileValue::integer(9), "source", diagnostics);
+        PPR_TEST_ASSERT(patch.has_value());
+        const auto conflict = applySourcePatch("[net.inner]\nport = 8081\n", *patch);
+        PPR_TEST_ASSERT(not conflict and conflict.error() == std::errc::invalid_argument);
+        const std::string oversized(1024u * 1024u + 1u, ' ');
+        PPR_TEST_ASSERT(not patchScalar(oversized, "x", FileValue::integer(9), "source", diagnostics));
+    };
+
     PPR_UNIT_TEST (large_unsigned_serialization) {
         WideSettings settings{};
         settings.m_big = std::numeric_limits<u64>::max();
@@ -517,6 +586,9 @@ namespace pP::tests {
             detail::cfg_file::settings_writer_round_trip,
             detail::cfg_file::optional_serialization,
             detail::cfg_file::large_unsigned_serialization,
+            detail::cfg_file::source_patch_preserves_utf8_comments_crlf_and_quoted_values,
+            detail::cfg_file::source_patch_insertion_preserves_headers_final_comments_and_newline_style,
+            detail::cfg_file::source_patch_rejects_missing_implicit_parents_type_changes_and_conflicts,
         });
     };
 

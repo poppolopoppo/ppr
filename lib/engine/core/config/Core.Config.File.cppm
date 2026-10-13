@@ -86,6 +86,20 @@ export namespace pP::config {
 
     [[nodiscard]] Expected<std::string> encode(const Document &document);
 
+    struct ScalarSourcePatch {
+        std::size_t m_offset{};
+        std::string m_before;
+        std::string m_after;
+    };
+    // Parser-derived scalar replacement or insertion into an existing explicit
+    // table. No TOML implementation types or source views escape this boundary.
+    [[nodiscard]] Expected<ScalarSourcePatch> patchScalar(
+        std::string_view bytes, std::string_view key, const FileValue &value, std::string_view origin,
+        Diagnostics &diagnostics);
+    [[nodiscard]] Expected<std::string> applySourcePatch(
+        std::string_view bytes, const ScalarSourcePatch &patch, bool reverse = false);
+
+
     // Wraps a decoded document as a file precedence layer.
     [[nodiscard]] Layer toLayer(Document document, std::string origin);
 

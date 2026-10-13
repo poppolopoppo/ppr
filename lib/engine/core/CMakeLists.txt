@@ -32,6 +32,7 @@ target_sources(engine.core
     PUBLIC
         FILE_SET CXX_MODULES FILES
             Core.Assert.cppm
+            Core.CommandHistory.cppm
             concurrency/Core.Concurrency.Channel.cppm
             concurrency/Core.Concurrency.Context.cppm
             concurrency/Core.Concurrency.Event.cppm
@@ -71,6 +72,7 @@ target_sources(engine.core
             Core.cppm
     PRIVATE
         Core.Assert.cpp
+        Core.CommandHistory.cpp
         concurrency/Core.Concurrency.Channel.cpp
         concurrency/Core.Concurrency.Context.cpp
         concurrency/Core.Concurrency.Event.cpp

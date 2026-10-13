@@ -57,6 +57,12 @@ settings and game invocation/display modules for current consumers.
   key segments before flattening can discard their structural meaning. The
   default scalar mode preserves existing settings behavior.
   Inline tables flatten into dotted keys; the writer emits canonical TOML.
+  `patchScalar` derives UTF-8 byte spans from parser source positions and returns
+  an owning `ScalarSourcePatch`; `applySourcePatch` checks the expected bytes in
+  either direction. Existing scalars keep their value kind; absent scalars may
+  be inserted only into existing explicit tables. Untouched bytes, comments,
+  BOMs and line endings remain intact. Patches enforce the existing 1 MiB
+  content-document limit and reparse the candidate before returning it.
 
 ## Key Files
 

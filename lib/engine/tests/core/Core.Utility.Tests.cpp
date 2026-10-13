@@ -8,6 +8,89 @@ import std;
 
 namespace pP::tests::detail {
     namespace Utility {
+        PPR_UNIT_TEST (command_history_owns_values_and_preserves_failed_operations) {
+            struct Change {
+                std::string m_name;
+                int m_amount{};
+            };
+            CommandHistory<Change> history{8u, 64u};
+            int value = 0;
+            bool fail = false;
+            const auto apply = [&](const Change &change) -> std::error_code {
+                if (fail) {
+                    return std::make_error_code(std::errc::operation_canceled);
+                }
+                value += change.m_amount;
+                return {};
+            };
+            const auto revert = [&](const Change &change) -> std::error_code {
+                if (fail) {
+                    return std::make_error_code(std::errc::operation_canceled);
+                }
+                value -= change.m_amount;
+                return {};
+            };
+            PPR_TEST_ASSERT(history.undo(revert).value() == false);
+            PPR_TEST_ASSERT(history.redo(apply).value() == false);
+            Change first{"owned", 3};
+            PPR_TEST_ASSERT(not history.execute(first, first.m_name.size(), apply));
+            first.m_name = "changed";
+            first.m_amount = 900;
+            PPR_TEST_ASSERT(value == 3 and history.canUndo() and not history.canRedo());
+            fail = true;
+            const auto failed_undo = history.undo(revert);
+            PPR_TEST_ASSERT(not failed_undo and failed_undo.error() == std::errc::operation_canceled);
+            PPR_TEST_ASSERT(value == 3 and history.canUndo() and not history.canRedo());
+            fail = false;
+            PPR_TEST_ASSERT(history.undo(revert).value() and value == 0 and history.canRedo());
+            fail = true;
+            const auto failed_redo = history.redo(apply);
+            PPR_TEST_ASSERT(not failed_redo and failed_redo.error() == std::errc::operation_canceled);
+            PPR_TEST_ASSERT(history.execute(Change{"failed", 10}, 6u, apply) == std::errc::operation_canceled);
+            PPR_TEST_ASSERT(value == 0 and history.canRedo() and not history.canUndo());
+            fail = false;
+            PPR_TEST_ASSERT(history.redo(apply).value() and value == 3);
+            PPR_TEST_ASSERT(history.undo(revert).value() and value == 0);
+            PPR_TEST_ASSERT(not history.execute(Change{"branch", 5}, 6u, apply));
+            PPR_TEST_ASSERT(value == 5 and not history.canRedo());
+            PPR_TEST_ASSERT(history.undo(revert).value() and value == 0);
+            history.clear();
+            PPR_TEST_ASSERT(not history.canUndo() and not history.canRedo() and history.payloadBytes() == 0u);
+        };
+
+        PPR_UNIT_TEST (command_history_evicts_oldest_entries_and_rejects_oversized_before_apply) {
+            CommandHistory<int> history{2u, 5u};
+            int value = 0;
+            const auto apply = [&](const int delta) -> std::error_code {
+                value += delta;
+                return {};
+            };
+            const auto revert = [&](const int delta) -> std::error_code {
+                value -= delta;
+                return {};
+            };
+            PPR_TEST_ASSERT(not history.execute(1, 2u, apply));
+            PPR_TEST_ASSERT(not history.execute(2, 2u, apply));
+            PPR_TEST_ASSERT(not history.execute(3, 2u, apply));
+            PPR_TEST_ASSERT(value == 6 and history.payloadBytes() == 4u);
+            PPR_TEST_ASSERT(history.undo(revert).value() and history.undo(revert).value());
+            PPR_TEST_ASSERT(value == 1 and not history.undo(revert).value());
+            PPR_TEST_ASSERT(not history.execute(7, 5u, apply));
+            PPR_TEST_ASSERT(value == 8 and history.payloadBytes() == 5u and not history.canRedo());
+            PPR_TEST_ASSERT(history.execute(100, 6u, apply) == std::errc::no_buffer_space);
+            PPR_TEST_ASSERT(value == 8 and history.payloadBytes() == 5u);
+            PPR_TEST_ASSERT(history.undo(revert).value() and value == 1 and not history.canUndo());
+            CommandHistory<int> disabled{0u, 5u};
+            PPR_TEST_ASSERT(disabled.execute(100, 1u, apply) == std::errc::no_buffer_space and value == 1);
+
+            CommandHistory<int> payload_limited{10u, 3u};
+            PPR_TEST_ASSERT(not payload_limited.execute(4, 2u, apply));
+            PPR_TEST_ASSERT(not payload_limited.execute(5, 2u, apply));
+            PPR_TEST_ASSERT(payload_limited.payloadBytes() == 2u);
+            PPR_TEST_ASSERT(payload_limited.undo(revert).value() and value == 5);
+            PPR_TEST_ASSERT(not payload_limited.undo(revert).value());
+        };
+
         PPR_UNIT_TEST (divide_round_up_basic) {
             constexpr auto exact = divideRoundUp(9u, 3u);
             PPR_TEST_ASSERT(exact == 3u);
@@ -272,6 +355,8 @@ namespace pP::tests::detail {
 namespace pP::tests {
     const UnitTest utility = UnitTest::Named("utility") / [](UnitTest::IRun &_) -> void {
         _.recurse({
+            detail::Utility::command_history_owns_values_and_preserves_failed_operations,
+            detail::Utility::command_history_evicts_oldest_entries_and_rejects_oversized_before_apply,
             detail::Utility::divide_round_up_basic,
             detail::Utility::align_backward_basic,
             detail::Utility::align_forward_basic,
