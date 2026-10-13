@@ -129,7 +129,7 @@ Current CMake registers twelve entries: `EngineCoreUnitTests`, `EngineSimUnitTes
 
 Suite interfaces export declaration-only `extern const UnitTest` roots; implementations assemble private groups through `Tests()` accessors. Use `unit-test-updater` for test changes and owning CMake files for current file/group inventories rather than old counts.
 
-Validation scope is defined by [validation](.opencode/skills/validation/SKILL.md) and [build-system](.opencode/skills/build-system/SKILL.md): local batches run affected suites, phase completion runs all affected suites, cross-cutting app/render changes require the complete matrix including asset, and high-risk lifetime/concurrency/render transactions require three-loop affected suites. No automatic retries masking flakes; preserve failure seeds. Documentation-only changes use factual/reference checks and review rather than executable tests.
+Validation scope and review timing are defined by [validation](.opencode/skills/validation/SKILL.md) and [build-system](.opencode/skills/build-system/SKILL.md). Local batches default to an affected Dev build and focused behavioral checks; coherent completion, shared render transactions, and merge/stress gates expand coverage as specified there. Reuse applicable passed evidence and rerun only invalidated checks. Documentation and script changes use proportionate reference, syntax, and behavior checks rather than unrelated C++ builds or CTest. No automatic retries masking flakes; preserve failure seeds.
 
 ## Map maintenance
 

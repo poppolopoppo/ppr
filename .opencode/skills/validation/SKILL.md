@@ -18,56 +18,60 @@ checks are repeated.
 
 ## Execution flow
 
-1. Determine scope and platform. Honor explicitly requested presets/targets;
-   otherwise use the standard platform matrix from `build-system`.
-   Record change class and triggered risks in one short line; the scope rules
-   below remain authoritative.
-2. Run `pwsh -NoProfile -File scripts/Format-Cpp.ps1 -Mode Fix` once over the
-   change set, then `pwsh -NoProfile -File scripts/Format-Cpp.ps1` (Check),
-   before builds or other validation checks. Formatting is never applied per file
-   by hand and never through the CLion `reformat_file` router.
-   Reuse a valid Check result when source and check inputs are unchanged; do not
-   re-execute an identical check.
-3. Configure, build, and test through `build-system`: its platform environment,
-   target/preset selection, persistent-shell execution, and batching rules are
-   authoritative. Discover current IDE capabilities when needed; do not infer
-   them from a historical tool count. Run configurations can implicitly build
-   and must refer to executable targets.
-4. Run the deterministic gates for touched C++ and block validation on any
-   failure: `scripts/Format-Cpp.ps1` (Check) and
-   `scripts/Check-SemanticStyle.ps1 -Files '<touched>'`. Reuse the unchanged-source
-   Format Check result from step 2; still run the semantic style gate.
-   Design-level readability — phase separation, guard grouping, helper extraction
-   — is `code-reviewer`'s verdict rather than a formatting check, and is not
-   re-litigated here.
-5. Run the staged CLion inspection workflow for touched C++ files when the IDE
-   is available (tool access follows the `AGENTS.md` guard; procedure is
-   below). A final inspection timeout must be disclosed as
-   inspection-unavailable/skipped with timeout evidence, never silently
-   skipped and never reported as passed.
-6. Before the reviewer verdict, run any triggered focused measurement or boundary
-   test not already covered. Reuse valid evidence for unchanged code,
-   configuration, and workload. For build-performance triggers, use
-   `build-system`'s Build-performance workflow and the gate below.
-   Invoke `code-reviewer` and incorporate its verdict and findings without
-   repeating its taxonomy. A failed or unresolved finding leaves validation
-   incomplete even when commands pass.
-7. Summarize each command/check as passed, failed, or skipped with its reason.
+1. Before implementation, establish the acceptance and verification scope in the
+   existing task context, following AGENTS.md and the test skill's fixture
+   preflight. Identify whether this is a local batch, completed behavior/phase,
+   or merge/release gate. Honor explicit user scope. Otherwise a local batch
+   defaults to the affected Dev target closure and justified focused tests;
+   do not expand it to all presets or the full CTest matrix automatically.
+2. The author self-reviews behavior, error/lifetime contracts, and logical
+   grouping while implementing. Consult a specialist before coding only when
+   unresolved architectural or domain uncertainty could cause substantial
+   rework; routine work needs no separate design approval or planning artifact.
+3. Once a coherent batch is ready, run Format Fix then Check and the touched-file
+   semantic-style gate before expensive execution. Inspect the formatted bodies
+   for coherent semantic groups. Route corrections to the author/fixer, then
+   rerun affected gates. Mechanical formatting is script-owned; semantic blank
+   lines are author-owned. Do not format or recheck after every small edit.
+4. For completed behavior, use one context-owning independent reviewer under
+   `code-reviewer`. Stable-code review may precede or overlap long execution so
+   findings arrive early; it need not wait for the last build, test, or CLion
+   result. Keep source-review and execution statuses distinct until final
+   reconciliation. Re-review fixes as a delta, widening scope only when their
+   effects require it. Local edit batches use author self-review, not an
+   automatic additional independent review for every iteration.
+5. Configure, build, and test the selected scope through `build-system` in the
+   persistent shell, with builds and executable checks serialized. Run triggered
+   boundary/performance checks once; do not substitute a tiny fixture for a claim
+   that requires production parity or stress. Discover current IDE capabilities
+   when needed and perform the staged touched-file CLion inspection below when
+   available. Report unavailable or timed-out inspection honestly.
+6. Reuse passed evidence when the checked source/dependency closure, configuration,
+   tools, and workload remain applicable. After a fix, rerun failed and affected
+   checks only; a broader suite is repeated only if its evidence was invalidated
+   or a delivery/risk trigger requires new coverage. Reconcile final review and
+   execution results; unresolved findings or required unrun gates leave delivery
+   incomplete. Summarize passed, failed, and skipped checks with reasons.
 
 ## Scope rules
 
-- **Local edit batch:** build affected targets and dependents; run one shuffled
-  loop of affected suites or justified focused groups; apply format/style
-  gates and review. Record why focused groups prove the affected claim.
-- **Local phase completion:** run one loop of all affected suites.
-  Cross-cutting app/render-lane changes, including Phase 4, require the full
-  twelve-entry matrix, including asset and both shipped-profile validators.
+- **Local edit batch:** affected Dev build and one loop of justified focused
+  leaves/groups, plus applicable format/style checks and author self-review.
+  Record why those checks prove the changed claim. Use a whole affected suite
+  when focused selection cannot establish it. Additional presets require an
+  explicit request or concrete compatibility, optimization, or toolchain risk.
+- **Completed behavior/local phase:** one loop of all affected suites and one
+  independent review, reusing applicable earlier results. Cross-cutting shared
+  app/render-lane transaction changes require the full twelve-entry matrix,
+  including asset and both shipped-profile validators; a bounded app/UI edit
+  alone does not trigger it. Define completion at a coherent behavior boundary,
+  not at every tool call, file edit, or conversational turn.
 - **Pre-merge CI:** run the full matrix for one loop plus the platform/build
   matrix from `build-system`.
 - **Nightly stress:** run the full ASan matrix with three same-process
   shuffled loops (`-DPPR_TEST_LOOPS=3`).
 - **High-risk merge:** run three-loop affected suites for concurrency,
-  lifetime, teardown, or render-transaction changes; Phase 4 qualifies.
+  lifetime, teardown, or render-transaction changes.
 - Asset is not nightly-only: it is required when rendering, surfaces,
   resource lifetime, asset handling, or shared dependencies change. Unrelated
   config-only iterations need not rerun it.
@@ -79,6 +83,19 @@ checks are repeated.
   request `code-reviewer`'s docs-only gate.
 - Config-only changes run syntax/reference checks plus the smallest affected
   configure/build/test command; expand only if they alter wider behavior.
+- Script/tooling changes use syntax checks and focused behavior/exit-code cases;
+  they do not trigger C++ builds or CTest unless engine behavior is affected.
+
+## Evidence and efficiency
+
+Use the existing validation record, not a new tracking service. Retain exact
+commands, scope/preset, exit status, wall time, log path, and source/configuration
+identity sufficient to judge evidence reuse. Record first-build failures, review
+fix rounds, repeated checks and their reason, and subsequent reopened defects.
+When session usage is available, keep uncached input, cached-input subset and
+output tokens distinct. Report concurrent interval unions separately from summed
+agent time; do not infer savings, phase costs, or billing from command counts.
+Compare similar tasks before claiming that the revised workflow is faster.
 
 ## Triggered build-performance gate
 
@@ -94,8 +111,8 @@ the claim unverified; a successful capture alone does not prove a fix.
 ## C++ formatting gate
 
 Applies whenever the change set includes a C++ file. The repository-root
-`.clang-format` is the single canonical formatting authority; the CLion project
-style is IDE convenience only. All formatting goes through one script, which
+`.clang-format` is the canonical mechanical formatting authority; the CLion project
+style is IDE convenience only. Mechanical formatting goes through one script, which
 applies clang-format to changed lines only and enforces three invariants: the
 ASCII code token stream is unchanged, the result is a fixed point within a
 bounded pass budget, and in Check mode the working tree already holds the
@@ -108,13 +125,16 @@ canonical output.
 - Exit 0 is required. `DRIFT` means lines are not canonical, `UNSAFE` means the
   formatter would change the code token stream, and `UNSTABLE` means no fixed
   point within the pass budget. Each class blocks validation and is routed to the
-  orchestrator; do not hand-fix whitespace and do not re-run the formatter hoping
+  orchestrator; do not hand-tune mechanical formatting or rerun the formatter hoping
   for a different result.
 - Do not use the CLion `reformat_file` router. It does not consistently apply the
   project style, reflows `and`/`or`/`not` chains away from the trailing-operator
   rule, injects namespace end-comments, and inherits a confirmed upstream
   non-idempotency defect class.
-- Do not hand-edit whitespace to satisfy a layout rule. The script owns layout.
+- Authors insert semantic blank lines under AGENTS.md. Do not hand-tune mechanical
+  formatting; rerun the gate after semantic grouping edits. Reuse a passed Check
+  only while its source and check inputs are unchanged. Fix and Check remain
+  separate: convergence during Fix alone does not establish the final Check.
 - If no C++ files changed, record this gate as not applicable.
 
 ## C++ semantic style gate
@@ -133,6 +153,9 @@ This gate is deterministic only. Design-level readability is not, and lives with
   and D-DENSE is a blank-line count heuristic that must not become a blocking
   numeric line limit. Exit 1 on blocking findings, exit 0 on advisory-only.
 - Add `-Strict` only for a deliberate full audit; it also fails on advisory hits.
+  Default output contains blocker details and advisory counts; use
+  `-ShowAdvisories` for detailed advisory inspection. Counts do not prove semantic
+  readability, and a single arbitrary blank line is not a readability fix.
 - Route blocking findings to the orchestrator for a bounded fix, then repeat the
   formatting and style gates.
 - For the design-level pass, expect validation guards grouped at the start of the
@@ -140,7 +163,8 @@ This gate is deterministic only. Design-level readability is not, and lives with
   blank lines separating logical phases without fragmenting related declarations,
   guards, or structured logging fields. Extract helpers only for a distinct domain
   operation or reuse, keep side effects and submissions in the caller, and never
-  invent numeric line limits. These are review expectations, not gate criteria.
+  invent numeric line limits. These are semantic review acceptance criteria,
+  not deterministic script checks; unresolved confirmed findings block delivery.
 
 ## CLion inspection gate
 

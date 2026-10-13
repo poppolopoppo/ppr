@@ -162,6 +162,13 @@ app/asset tiers use GLFW/headless as documented in `codemap.md`. Use
 **`unit-test-updater`** for test changes and **`validation`** for the
 post-change checklist.
 
+Before implementation, establish the changed behavior, owning subsystem,
+applicable error/lifetime constraints, existing facilities to reuse, and the
+smallest meaningful verification in the existing task context. Keep this brief
+proportionate; routine work needs no separate planning document or design approval.
+Resolve consequential architectural uncertainty before committing to an approach.
+The validation skill owns execution scope, evidence reuse, and review timing.
+
 - Deliver complete behavior for the supported scope: success, expected absence,
   failure, cancellation where applicable, and safe partial-initialization and
   teardown paths. Do not present placeholders, silent degradation, or unverified
@@ -175,28 +182,8 @@ post-change checklist.
 
 ## C++ and API rules
 
-AGENTS.md states the only C++ invariants; skills state procedures and must not
-restate or compete with them.
-
-- Dependencies point down the graph only; a lower layer never depends on a
-  higher one.
-- A `.cppm` exports declarations (plus definitions only for exported templates
-  and inline functions); non-inline, non-template definitions belong in the
-  matching `.cpp`.
-- Make ownership visible in types: RAII values and `unique_ptr` own;
-  references, views, callbacks, `function_ref`, and `safe_ptr` do not. The
-  owner outlives every `safe_ptr`; never hide ownership or lifetime in
-  global/singleton state.
-- Inject dependencies (time, I/O, RNG, services, mutable state) at high-level
-  boundaries through constructors, parameters, or explicit service boundaries;
-  lower-level logic never reads an implicit clock or resolves a hidden
-  singleton. Teardown is the inverse of setup (detach, drain/join, release in
-  dependency order); shutdown is best effort preserving the first error.
-- Use `std::error_code` for no-value lifecycle/operational actions and
-  `std::expected<T, std::error_code>` (or established equivalent) for
-  value-producing recoverable operations; make failure/cancellation visible,
-  never opaque false/null/default. Assertions express violated programmer
-  invariants (`PPR_ASSERT`/`PPR_VERIFY`); tests use `PPR_TEST_ASSERT`.
+The architecture, ownership, error, and test invariants above apply to C++.
+Skills own procedures and must not duplicate or compete with these rules.
 - Prefer value semantics, RAII, and the simplest suitable standard or established
   repository facility. Encode ownership and meaningful invariants in types; avoid
   manual resource protocols where an existing owning type fits.
@@ -212,16 +199,33 @@ restate or compete with them.
 
 ### Semantic control flow
 
-After mechanical formatting, do one semantic readability pass on touched C++:
-keep validation guards together, the success path contiguous, phases separated,
-and distinct domain operations in named helpers.
-Separate distinct logical phases (setup, validation, iteration, submission, logging) with blank lines;
-do not put a blank line between every statement.
-Some parts of this pass are mechanical and some are not, and the difference is not
-"what the formatter can do". `scripts/Format-Cpp.ps1` owns every layout decision,
-including line breaks (see Source format). You own the logical decomposition into
-named helpers and phases, and `code-reviewer` owns whether the result is readable.
-Telling "setup" from "submission" is design review, not formatting.
+Group related statements while writing code. Keep related declarations,
+initialization, guards, and structured logging fields together; insert a blank
+line where the code changes responsibility, such as from preparation to
+submission or from submission to bookkeeping. Keep the success path contiguous.
+Do not separate every statement or add arbitrary blank lines to meet a quota.
+
+The author owns semantic group boundaries and inserts their blank lines. The
+formatter owns mechanical layout and expression wrapping; it cannot discover
+changes of responsibility. Self-review the groups before expensive validation
+and check that they remain clear after formatting. Independent review verifies
+this requirement. Extract helpers for distinct domain operations or reuse;
+comments and helper extraction do not replace appropriate blank-line grouping.
+
+For example, preparation stays together, followed by submission and bookkeeping:
+
+```cpp
+DrawSubmission submission{};
+submission.m_viewport = viewport;
+submission.m_scissor = scissor;
+
+PPR_RETURN_ERROR_ON_FAIL(Render, submit(submission));
+
+++statistics.m_submissions;
+statistics.m_vertices += vertex_count;
+```
+
+A short body with one coherent responsibility may need no blank lines.
 Any boolean-operator expression — `if`/`while`/`for` conditions, returns, assignments,
 assertions — SHOULD stay on one line when it fits, where "fits" means it stays
 within about 120 columns, matching the configured `ColumnLimit`. Wrap it only when
@@ -235,11 +239,11 @@ it overflows, and then break AFTER the operator, never before it:
 
 ## Source format
 
-The repository-root `.clang-format` is the single canonical formatting authority.
+The repository-root `.clang-format` is the canonical mechanical formatting authority.
 The CLion project style (`Project.xml`) is demoted to IDE convenience only and
 never overrides it, and the IDE must be configured to format C/C++ through the
-external `clang-format` binary rather than its own engine. Formatting is applied
-by script, never by hand:
+external `clang-format` binary rather than its own engine. Mechanical formatting
+is applied by script; authors insert semantic blank lines as described above:
 
 - `pwsh -NoProfile -File scripts/Format-Cpp.ps1 -Mode Fix` rewrites the lines the
   working tree changes.
@@ -252,30 +256,27 @@ by script, never by hand:
   A-STRANDED, B-OP, and C-LEADING; `-Strict` also fails on advisory findings.
   Run it repo-wide only as a deliberate audit, never as a per-change gate.
 
-`ColumnLimit` is `120`, so the formatter performs real column-driven wrapping: it
-joins and splits statements, and it re-flows them. It does not preserve the line
-breaks you wrote — structural rules normalize them (collapsing
-`void f() { foo(); }` onto one line, joining a detached opening brace) and the
-column limit then decides the rest. Division of labour:
+`ColumnLimit` is `120`, so the formatter wraps and reflows expressions and
+normalizes brace placement. It does not determine semantic group boundaries;
+author-inserted blank lines remain subject to the configured empty-line limits.
+Division of labour:
 
-- **The script owns** every layout decision: indentation, spacing, alignment,
-  blank-line limits, and line wrapping and breaking. Do not hand-tune any of
-  them, and do not hand-adjust whitespace to satisfy a layout rule.
-- **You own** the logical decomposition of a statement into named helpers and
-  phases, comments that state intent or invariants, and whether the result is
-  readable. Line breaks are not yours to choose.
+- **The script owns** mechanical formatting: indentation, spacing, alignment,
+  brace placement, expression wrapping, and consecutive empty-line limits.
+- **You own** logical grouping, semantic blank-line placement, meaningful helper
+  boundaries, and comments that state intent or invariants.
 - **`code-reviewer` owns** whether the result reads clearly.
 
-Do not use the CLion `reformat_file` router, and do not hand-adjust whitespace to
-satisfy a layout rule either — run the script. CLion's internal engine does not
+Do not use the CLion `reformat_file` router or hand-tune mechanical formatting;
+run the script after semantic edits. CLion's internal engine does not
 consistently apply the project style, reflows `and`/`or`/`not` chains away from the
 trailing-operator rule, and injects namespace end-comments; non-idempotent
 reformatting is a confirmed upstream defect class. The IDE is configured to
 delegate C/C++ formatting to the external `clang-format` binary so the script and
 the editor cannot disagree.
 
-Because the script owns line breaks, the alternative-token rules above are not
-enforced by the formatter: clang-format re-flows these chains but has no option to
+Expression wrapping remains script-owned, but the alternative-token rules above
+are not fully enforced by the formatter: clang-format re-flows these chains but has no option to
 normalise their spacing or operator placement. `scripts/Check-SemanticStyle.ps1` is
 that enforcement. Run it on any file where you wrote or changed `and`/`or`/`not`.
 

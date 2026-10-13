@@ -114,10 +114,14 @@ build target, not a test executable.
   `msvc-profile`, `clang-cl-dev`, `clang-cl-rel`, `clang-dev`, and `clang-rel`. GCC may meet a
   C++23 language prerequisite, but the hidden `gcc-dev` and `gcc-rel` presets
   do not support this project's module builds and are not validation candidates.
-- On Windows, the normal validation set is `msvc-dev`, `msvc-live`, and
-  `msvc-rel` (`msvc-profile` is the instrumented Release runtime-profiling preset,
-  not build-time profiling or part of normal validation); on Linux/Darwin it is `clang-dev` and `clang-rel` unless the
-  requested scope specifies otherwise.
+- For a local edit batch, default to the affected target/dependent closure in
+  `msvc-dev` on Windows or `clang-dev` on Linux/Darwin, plus the focused tests
+  selected under `validation`. Do not build every preset after each edit.
+  Add `msvc-live` for Edit-and-Continue/toolchain compatibility and `msvc-rel`
+  or `clang-rel` for Release/optimization compatibility when affected or requested.
+  The pre-merge/release platform matrix remains `msvc-dev`, `msvc-live`,
+  `msvc-rel` on Windows and `clang-dev`, `clang-rel` on Linux/Darwin.
+  `msvc-profile` is instrumented Release runtime profiling, not a default gate.
 
 ## Build-performance workflow
 
@@ -240,8 +244,9 @@ configure/build evidence to the validation owner.
   configure with `-DPPR_TEST_LOOPS=3` for CI stress (three same-process
   shuffled loops). When reusing that build directory for development,
   explicitly restore `-DPPR_TEST_LOOPS=1`.
-- There are no CTest *test presets*. Use the executables directly or
-  the approved scheduling command
+- There are no CTest *test presets*. Use exact leaf/group executable filters for
+  the selected local scope. When the full matrix is required under `validation`,
+  use the approved scheduling command
   `ctest --test-dir out/build/msvc-dev -j4 --output-on-failure`.
 - All six app shards and `EngineAssetUnitTests` currently set `RUN_SERIAL TRUE`;
   CTest honors that exclusion even under `-j4`.

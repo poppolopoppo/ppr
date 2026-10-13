@@ -9,8 +9,9 @@ description: >
 
 ## Contract
 
-Review tracked staged and unstaged changes plus untracked or ignored replacement
-documentation; do not edit or stage files. This skill owns the
+Review the task's coherent change scope, including its staged/unstaged changes
+and relevant untracked or ignored replacements; do not edit or stage files.
+Do not absorb unrelated working-tree changes into a review. This skill owns the
 review workflow and finding format; domain skills own their specialized
 mechanics. Report only findings supported by the current diff and targeted
 source evidence. `@fixer` applies bounded fixes; `@oracle` adjudicates a
@@ -19,14 +20,22 @@ verdict.
 
 ## Review process
 
-1. One context-owning reviewer first enumerates all review inputs without
+Use one independent review for completed behavior, not a new reviewer for every
+edit batch or dimension. The author self-reviews during implementation. An early
+specialist consultation is justified by consequential unresolved design risk;
+it is not an automatic second full review. Reuse the existing reviewer for
+targeted fix deltas and reopen broader scope only when those deltas affect it.
+
+1. One context-owning reviewer enumerates the supplied scope's review inputs without
    staging anything: `git diff --name-status` (unstaged tracked),
    `git diff --cached --name-status` (staged tracked), and untracked plus ignored
    replacement documentation under `AGENTS.md`, `README.md`, `codemap.md`,
    `.opencode/skills/`, and `.opencode/commands/`. Use
    `git ls-files --others --exclude-standard -- <paths>` and
    `git ls-files --others -i --exclude-standard -- <paths>` for the latter two
-   sets. Before relying on `build-system`, check
+   sets. If no scope was supplied, establish it from the current task and changed
+   paths before loading diffs. Reuse current scoped diffs, instructions, and
+   specialist evidence; refresh only changed inputs. Before relying on `build-system`, check
    `git check-ignore -v --no-index .opencode/skills/build-system/SKILL.md`; if it
    is ignored, report the ignore rule and do not stage it automatically. Then
    gather the relevant diff, changed files, and repository instructions for each
@@ -47,8 +56,11 @@ verdict.
 5. For every finding, cite `file:line`, the violated contract, the concrete
    consequence, and the smallest credible remediation. Re-check non-IDE
    findings against current source before presenting them.
-6. Mark the review **passed**, **blocked**, or **proportionately reviewed**.
-   Confirmed Errors and Warnings block; Suggestions are advisory.
+6. Stable-code review may happen before or alongside long validation. Mark the
+   source review **passed**, **blocked**, or **proportionately reviewed**, and
+   identify any execution evidence still pending. The orchestrator reconciles
+   final evidence; do not launch another full review merely because test logs
+   arrived. Confirmed Errors and Warnings block; Suggestions are advisory.
 
 ## The seven dimensions
 
@@ -90,22 +102,26 @@ verdict.
   service, and HAL boundaries retain their documented roles.
 - Framework hooks and callbacks are thin glue that delegates to engine logic;
   functions do not mix orchestration with unrelated low-level work.
-- In touched C++, check the post-format control flow for mixed setup,
+- In touched function and lambda bodies, check the post-format control flow for mixed setup,
   validation, iteration, material/resource resolution, submission, counter, and
   logging phases, excessive nesting, and repeated early exits that obscure the
   successful path. Validation guards should remain grouped at the start of the
   relevant helper, followed by contiguous fall-through, with coherent separation
   between logical phases.
-- Flag only material mixed responsibilities, unreadable nesting, or missing
-  logical separation; do not flag ordinary personal blank-line preferences.
+- A semantic separation finding must identify the adjacent responsibilities and
+  the missing or misplaced blank-line boundary. Clear violations of AGENTS.md
+  are actionable even when formatting passes; neither function length nor
+  statement counts establish a violation. Keep related instructions together
+  and do not demand a blank line after every statement, guard, or control block.
   Named helpers should express a distinct domain operation or reuse rather than
   an arbitrary line-count threshold, and side effects and submissions stay in
   the caller. Structured logging fields remain one logical block and do not
   justify flattening surrounding control flow.
-- For the lexical tripwire, defer to the `scripts/Check-SemanticStyle.ps1` result
-  produced by validation; do not re-derive its taxonomy here. Blocking classes are
-  A-STRANDED, B-OP, and C-LEADING. B-CMP, C-DETACHED, and D-DENSE are advisory
-   and are formatter-owned or heuristic, so do not raise them as review findings.
+- Reuse the lexical tripwire's blocker result; do not promote heuristic
+  advisories directly into findings. When density is a concern, inspect the
+  relevant bodies or request scoped `-ShowAdvisories` output. Resolve a D-DENSE
+  advisory as either a coherent group or a specific semantic separation issue;
+  an advisory alone is not a violation and its absence does not prove readability.
 
 Trigger cost review when change alters recurring per-frame, per-tick, per-item,
 submission, or streaming work via iteration count, algorithm, allocation, sync,
@@ -137,7 +153,7 @@ extraction do not trigger measurement.
 - Changes follow the repository-root `.clang-format` as enforced by
   `scripts/Format-Cpp.ps1`, plus `AGENTS.md`, naming, module split, macro, and
   comment conventions. The mechanical gates own indentation, spacing, and
-  alignment; this review owns whether *logical* line breaks and phase separation
+  alignment and expression wrapping; this review owns whether semantic blank-line boundaries
   read clearly. Flag only material inconsistencies, not unrelated style
   preferences.
 

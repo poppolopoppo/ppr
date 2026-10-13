@@ -25,6 +25,13 @@ directly.
 
 - Define the changed observable behavior contract first: inputs, boundary/error
   result, state change, ownership transfer, and post-shutdown behavior.
+- Choose the cheapest faithful fixture and verification scope before writing
+  tests. Check configured values against authoritative domains, ensure a
+  reference test uses an actually consumed reference, and preserve relevant
+  production execution options such as injected worker pools. A local fixture
+  cannot prove whole-production parity or stress when those are the claim.
+  Reuse the task's existing acceptance brief; do not require another plan or
+  specialist pass for routine work.
 - Test public or otherwise observable boundaries, not private representation or
   call sequencing. Cover internal regressions through their public boundary.
   Drive time-dependent behavior with an injected clock/tick rather than sleeps
@@ -44,15 +51,11 @@ directly.
 
 ## Step 1 — Gather context
 
-Run both commands:
-
-```bash
-git diff HEAD                  # show all changes
-git diff --cached              # staged-only (if user already staged)
-```
-
-Also load the AGENTS.md for coding conventions, and read the test
-group file(s) corresponding to the modified source:
+Reuse the current task-scoped diff, AGENTS.md, owning codemap, and existing test
+evidence. If context is missing or stale, get changed names first, then read
+`git diff HEAD -- <task paths>` and staged-only differences when staged/unstaged
+intent matters. Do not reread the full repository diff or unchanged instructions
+at every handoff. Read the test group file(s) corresponding to the modified source:
 
 - Source `lib/engine/core/Core.Foo.cppm` → leaves in the matching group file,
   e.g. `lib/engine/tests/core/Core.Allocator.Tests.cpp` (allocator group)
@@ -198,20 +201,28 @@ tree level and change its path); see `module-architect`.
 
 ## Step 5 — Verify
 
-Build and run the test executable to confirm all tests pass.
+Build the affected test target and run the selected leaves/groups to prove the
+changed behavior, reusing applicable passed evidence.
 
-Follow `build-system` for the platform environment, affected target build, and
-focused suite execution, then `validation` for proportionate gates. Use current
+Follow `validation` for scope and `build-system` for the environment and serialized
+execution. The test author hands off the selected checks rather than creating a
+second build/test lane. Use current
 registered target and CTest names; discover the latter with `ctest -N`. Do not
 copy a session-specific IDE tool catalog or prescribe a second build route here.
 
-If any test fails, treat the failure as a bug — do not weaken assertions.
+Investigate a failure against the public contract and fixture assumptions.
+Correct an invalid fixture within this skill; route confirmed production defects
+to the orchestrator for an authorized production fix. Do not weaken the intended
+contract or automatically rerun a failure. Repeat failed and affected checks only
+unless broader evidence was invalidated.
 
 ### Expected-fail/crash validation:
 
 - For `expect_fail` tests: verify they pass (i.e., the assertion fires and the runner flips the result to pass). If an `expect_fail` test returns without throwing, that is a *failure* — the precondition wasn't enforced.
 - For `expect_crash` tests: verify they pass (i.e., the child process exits non-zero). If an `expect_crash` test exits cleanly, that is a *failure* — the crash wasn't triggered.
-- Run all tests together; expected-fail/crash tests should produce green (pass) output, not red (fail).
+- Run the checks selected under `validation`; suite/matrix/stress expansion uses
+  its delivery and risk triggers. Expected-fail/crash cases must pass within
+  that scope. This instruction does not require all repository tests together.
 
 ---
 
@@ -230,10 +241,10 @@ If any test fails, treat the failure as a bug — do not weaken assertions.
 | Step | Delegate to | Why |
 |------|-------------|-----|
 | Locate corresponding test files / naming | `@explorer` | Fast codebase recon |
-| Classify diff into required test actions | `@oracle` (or orchestrator) | Judgment on API change type |
+| Classify changed contracts and test scope | Orchestrator; specialist only for unresolved risk | Reuse the acceptance brief |
 | Write `PPR_UNIT_TEST` bodies + umbrella registration | `@fixer` | Bounded implementation |
-| Verify build/test of new tests | background build subagent | Reuse validation lane |
-| Convention check | `code-reviewer` skill | AGENTS.md compliance |
+| Verify build/test of new tests | Existing validation owner/lane | Serialize execution and reuse evidence |
+| Convention check | Author; `code-reviewer` at completed behavior | No additional review per test edit |
 
 ---
 

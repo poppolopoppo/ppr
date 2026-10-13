@@ -14,16 +14,14 @@
       "Separate distinct logical phases (setup, validation, iteration,
         submission, logging) with blank lines; do not put a blank line
         between every statement."
-      "The mechanical formatter (scripts/Format-Cpp.ps1 with .clang-format)
-        owns indentation, spacing and alignment. It does NOT decide logical
-        line breaks, and it performs no column-driven wrapping because
-        ColumnLimit is 0, so a chain the author broke is left broken. The
-        author owns whether a statement is logically wrapped; this script is
-        a tripwire that flags the mechanical defects listed below."
+      "The formatter owns indentation, spacing, braces and expression wrapping
+        under ColumnLimit 120. The author owns semantic grouping and the blank
+        lines between responsibilities. This script checks lexical defects;
+        its density heuristic cannot establish readable grouping."
 
     Blocking (fail the gate):
       A-STRANDED, B-OP, C-LEADING.
-    Advisory (reported, gate stays green unless -Strict is set):
+    Advisory (counted by default; details with -ShowAdvisories or -Strict):
       B-CMP, C-DETACHED, D-DENSE.
 
     Class map:
@@ -34,7 +32,7 @@
                      space after the alternative token.
       B-CMP       -> advisory: `x<` needs eyeballing — comparison `x<max`
                      is a hit, template `view<T>` is not; the script cannot
-                     distinguish, so B-CMP is review-only.
+                     distinguish; a hit alone is not a review finding.
       C-LEADING   -> blocking: trailing-operator rule (operator must end the
                      line, never start the continuation: a code line whose
                      first token is `and`/`or`).
@@ -43,8 +41,8 @@
                      to the `)` line. Brace placement is owned by
                      clang-format, so this heuristic no longer gates.
       D-DENSE     -> advisory: "separate distinct logical phases with blank
-                     lines" heuristic. Blank-line counts are a style
-                     preference, not a gate; review-only.
+                     lines" heuristic. Inspect in context: counts alone do
+                     not prove a semantic separation violation or its absence.
 
 .PARAMETER Files
     Optional explicit list of file paths to scan. When provided, only these
@@ -54,7 +52,11 @@
 .PARAMETER Strict
     When set, any hit (advisory or blocking) exits 1, preserving the old
     strict behaviour for a deliberate full audit. Default: only blocking
-    hits exit 1.
+    hits exit 1. Strict also displays advisory details.
+
+.PARAMETER ShowAdvisories
+    Display individual advisory findings and directory counts in addition to
+    blockers and summary counts. Does not change exit status or severity.
 
 .PARAMETER PathFilter
     Optional case-insensitive substring; only files whose full path contains
@@ -74,7 +76,8 @@
 .EXAMPLE
     pwsh -NoProfile -File scripts/Check-SemanticStyle.ps1
     pwsh -NoProfile -File scripts/Check-SemanticStyle.ps1 -PathFilter 'game\colony'
-    pwsh -NoProfile -File scripts/Check-SemanticStyle.ps1 -Files 'lib/engine/rhi/RHI.cpp','game/main.cpp'
+    pwsh -NoProfile -File scripts/Check-SemanticStyle.ps1 -Files 'lib/engine/rhi/RHI.cpp,game/main.cpp'
+    pwsh -NoProfile -File scripts/Check-SemanticStyle.ps1 -Files 'game/main.cpp' -ShowAdvisories
     pwsh -NoProfile -File scripts/Check-SemanticStyle.ps1 -Strict
 
 .NOTES
@@ -86,7 +89,8 @@ param(
     [string]$RepoRoot = "",
     [int]$DenseMinCodeLines = 30,
     [string[]]$Files = @(),
-    [switch]$Strict
+    [switch]$Strict,
+    [switch]$ShowAdvisories
 )
 
 $ErrorActionPreference = 'Stop'
@@ -412,14 +416,15 @@ foreach ($f in $scanFiles) {
     }
 }
 
-# --- Output ------------------------------------------------------------------
-foreach ($h in ($hits | Sort-Object Rel, Line, Class)) {
-    Write-Output ('{0}:{1}:{2}: {3}' -f $h.Rel, $h.Line, $h.Class, $h.Excerpt)
-}
-
 # Severity split: only blocking classes fail the gate (unless -Strict).
 $blocking = @($hits | Where-Object { $BlockingClasses -contains $_.Class })
 $advisory = @($hits | Where-Object { $BlockingClasses -notcontains $_.Class })
+
+# --- Output ------------------------------------------------------------------
+$reported = if ($ShowAdvisories -or $Strict) { $hits } else { $blocking }
+foreach ($h in ($reported | Sort-Object Rel, Line, Class)) {
+    Write-Output ('{0}:{1}:{2}: {3}' -f $h.Rel, $h.Line, $h.Class, $h.Excerpt)
+}
 
 Write-Output ''
 Write-Output ("Files scanned: {0}   Blocking: {1}   Advisory: {2}" -f $scanned, $blocking.Count, $advisory.Count)
@@ -427,20 +432,22 @@ if ($hits.Count -gt 0) {
     Write-Output '-- by class --'
     $hits | Group-Object Class | Sort-Object Name |
         ForEach-Object { Write-Output ("  {0}: {1}" -f $_.Name, $_.Count) }
-    Write-Output '-- by directory --'
-    $hits | ForEach-Object {
-        $d = Split-Path $_.Rel -Parent
-        if ([string]::IsNullOrEmpty($d)) { $d = '.' }
-        $d
-    } | Group-Object | Sort-Object Count -Descending |
-        ForEach-Object { Write-Output ("  {0}: {1}" -f $_.Name, $_.Count) }
+    if ($ShowAdvisories -or $Strict) {
+        Write-Output '-- by directory --'
+        $hits | ForEach-Object {
+            $d = Split-Path $_.Rel -Parent
+            if ([string]::IsNullOrEmpty($d)) { $d = '.' }
+            $d
+        } | Group-Object | Sort-Object Count -Descending |
+            ForEach-Object { Write-Output ("  {0}: {1}" -f $_.Name, $_.Count) }
+    }
 }
 if ($blocking.Count -gt 0) {
     exit 1
 } elseif ($Strict -and $hits.Count -gt 0) {
     exit 1
 } elseif ($hits.Count -gt 0) {
-    Write-Output ("No blocking findings ({0} advisory; use -Strict to fail on advisory)." -f $advisory.Count)
+    Write-Output ("No blocking findings ({0} advisory; use -ShowAdvisories for details, -Strict to fail on advisory)." -f $advisory.Count)
     exit 0
 } else {
     Write-Output 'Clean.'
