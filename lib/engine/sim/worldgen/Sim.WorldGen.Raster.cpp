@@ -553,6 +553,9 @@ namespace pP::sim {
             PPR_RETURN_UNEXPECTED_ON_FAIL(WorldRaster, std::errc::result_out_of_range);
         }
         PPR_RETURN_UNEXPECTED_ON_FAIL(WorldRaster, canceled(context));
+
+        const auto scratch_scope = mem::ScratchPad::open();
+
         const auto &recipe = m_plan.recipe();
         u32 lining_radius = 0u, passes = 0u, pore_passes = 0u, competition_passes = 0u, finish_passes = 0u,
             erosion_passes = 0u;
@@ -573,7 +576,7 @@ namespace pP::sim {
             return static_cast<u32>(std::clamp(
                 static_cast<i64>(chunk * kChunkEdge + value) - padding, i64{0}, static_cast<i64>(kWorldEdge - 1u)));
         };
-        Array<u32> biomes(edge * edge);
+        Array<u32, mem::ScratchPad> biomes(edge * edge);
         for (u32 y = 0u; y < edge; ++y) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(WorldRaster, canceled(context));
             for (u32 x = 0u; x < edge; ++x) {
@@ -632,10 +635,11 @@ namespace pP::sim {
             }
             return cells;
         }
-        Array<Cell> current(edge * edge);
-        Array<u16> affinity_materials(passes == 0u ? 0u : edge * edge);
-        Array<u8> pore_eligible(pore_passes == 0u ? 0u : edge * edge);
-        Array<u8> protected_cells(edge * edge, 0u);
+
+        Array<Cell, mem::ScratchPad> current(edge * edge);
+        Array<u16, mem::ScratchPad> affinity_materials(passes == 0u ? 0u : edge * edge);
+        Array<u8, mem::ScratchPad> pore_eligible(pore_passes == 0u ? 0u : edge * edge);
+        Array<u8, mem::ScratchPad> protected_cells(edge * edge, 0u);
         for (u32 y = guard; y < edge - guard; ++y) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(WorldRaster, canceled(context));
             for (u32 x = guard; x < edge - guard; ++x) {
@@ -693,7 +697,7 @@ namespace pP::sim {
                 }
             }
         }
-        Array<Cell> next(passes == 0u ? 0u : edge * edge);
+        Array<Cell, mem::ScratchPad> next(passes == 0u ? 0u : edge * edge);
         // Each pass consumes only the immutable previous buffer. Shrinking its
         // valid halo by one cell proves identical interior results in every chunk.
         for (u32 pass = 0u; pass < passes; ++pass) {
@@ -826,7 +830,13 @@ namespace pP::sim {
             const GenerationRaster &raster, ChunkGrid &grid, const GenerationExecution &execution,
             u64 *const known_scratch_peak) {
             std::atomic<u32> active{}, peak{};
+            WaitGroup wg{};
+            ParallelScheduler *const pool = execution.m_pool;
+            const bool parallel = pool != nullptr and not pool->isWorkerThread();
+
             PPR_DEFER {
+                std::ignore = wg.wait();
+
                 if (known_scratch_peak != nullptr) {
                     *known_scratch_peak = std::max(
                         *known_scratch_peak,
@@ -834,6 +844,7 @@ namespace pP::sim {
                             static_cast<u64>(peak.load(std::memory_order_relaxed)) * raster.chunkWorkingPayloadBytes());
                 }
             };
+
             const auto fill = [&](const u32 c) -> std::error_code {
                 // One requested chunk payload per live task. Include the short
                 // handoff to grid ownership; this is a conservative task bound.
@@ -858,71 +869,29 @@ namespace pP::sim {
                 }
                 return {};
             };
-            ParallelScheduler *const pool = execution.m_pool;
-            const bool parallel = pool != nullptr and not pool->isWorkerThread();
-            constexpr u32 batch = 32u;
-            for (u32 first = 0u; first < kChunkCount; first += batch) {
-                std::array<std::future<std::error_code>, batch> pending{};
-                u32 admitted = 0u;
-                std::error_code error{};
-                std::exception_ptr exception{}, fatal_allocation{};
-                try {
-                    for (u32 c = first; c < std::min(first + batch, kChunkCount); ++c) {
-                        if (error = canceled(execution.m_context); error) {
-                            break;
-                        }
-                        if (not parallel) {
-                            error = fill(c);
-                        } else {
-                            auto task = pool->schedule(
-                                [&, c](const IContext &context) -> std::error_code {
-                                    PPR_RETURN_ERROR_ON_FAIL(WorldRaster, context.error());
-                                    return fill(c);
-                                },
-                                std::nullopt, ParallelScheduler::drop_if_full);
-                            if (task) {
-                                pending[admitted++] = std::move(*task);
-                            } else if (task.error() == make_error_code(RawChannel::error_full)) {
-                                // Only the coordinator runs queue-pressure fallback.
-                                error = fill(c);
-                            } else {
-                                error = task.error();
-                            }
-                        }
-                        if (error) {
-                            break;
-                        }
-                    }
-                } catch (const std::bad_alloc &) {
-                    fatal_allocation = std::current_exception();
-                } catch (...) {
-                    exception = std::current_exception();
-                }
-                // Borrowed inputs, raster bins and grid slots remain alive until
-                // all accepted tasks complete, even after admission fails.
-                for (u32 i = 0u; i < admitted; ++i) {
-                    try {
-                        const auto task_error = pending[i].get();
-                        if (not error) {
-                            error = task_error;
-                        }
-                    } catch (const std::bad_alloc &) {
-                        fatal_allocation = std::current_exception();
-                    } catch (...) {
-                        if (not exception) {
-                            exception = std::current_exception();
-                        }
+
+
+            for (u32 chunk_index = 0u; chunk_index < kChunkCount; ++chunk_index) {
+                std::error_code err{};
+                if (not parallel) {
+                    err = fill(chunk_index);
+                } else {
+                    auto task = pool->schedule(
+                        [&, chunk_index](const IContext &context) -> std::error_code {
+                            PPR_RETURN_ERROR_ON_FAIL(WorldRaster, context.error());
+                            return fill(chunk_index);
+                        },
+                        wg, ParallelScheduler::wait_if_full);
+                    if (not task) {
+                        err = task.error();
                     }
                 }
-                if (fatal_allocation) {
-                    std::rethrow_exception(fatal_allocation);
+                if (err) [[unlikely]] {
+                    return err;
                 }
-                if (exception) {
-                    std::rethrow_exception(exception);
-                }
-                PPR_RETURN_ERROR_ON_FAIL(WorldRaster, error);
             }
-            return {};
+
+            return wg.wait();
         }
     }
     std::error_code validateGenerationBackbone(
