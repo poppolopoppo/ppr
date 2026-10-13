@@ -9,13 +9,36 @@ import std;
 export namespace pP::colony {
     inline constexpr u32 kWorldgenPreviewEdge = 256u;
     inline constexpr u32 kWorldgenPreviewMaxResidentChunks = 25u;
+    enum class EWorldgenPreviewMode : u8 {
+        biome_sample,
+        whole_world_crop
+    };
     struct WorldgenPreviewSpec {
         std::string m_profile{}, m_biome{};
         u64 m_seed{}, m_revision{};
         sim::GlobalCellPos m_origin{1920u, 1920u};
+        EWorldgenPreviewMode m_mode{EWorldgenPreviewMode::biome_sample};
         bool operator==(const WorldgenPreviewSpec &) const noexcept = default;
     };
-    /// A terrain-only Biome sample, never a complete or playable generated world.
+    /// Immutable production generation, prepared once in the background. The
+    /// global formation admission cap requires this whole-world preparation.
+    struct WorldgenPreviewWorld {
+        std::string m_profile;
+        u64 m_content_fingerprint{};
+        sim::GeneratedWorld m_world;
+        sim::MatterParticleSnapshot m_particles;
+        struct MatterSpan {
+            u32 m_region{};
+            sim::InitialMatterSpan m_span;
+        };
+        std::array<Array<MatterSpan>, sim::kChunkCount> m_matter_chunks;
+        u64 m_known_retained_payload_bytes{}, m_known_preparation_scratch_peak_bytes{};
+        [[nodiscard]] bool matches(const ContentCatalog &catalog, const WorldgenPreviewSpec &spec) const noexcept;
+    };
+    [[nodiscard]] Expected<std::shared_ptr<const WorldgenPreviewWorld>> prepareWorldgenPreviewWorld(
+        const ContentCatalog &catalog, const WorldgenPreviewSpec &spec, const ITimerClock &clock,
+        const IContext *context = nullptr, ParallelScheduler *generation_pool = nullptr);
+    /// A bounded biome sample or an exact crop of validated production terrain.
     /// Support chunks are owned and globally anchored; camera movement is external.
     struct WorldgenPreviewResult {
         ContentCatalog m_catalog;
@@ -30,11 +53,17 @@ export namespace pP::colony {
         Array<sim::GenerationMaterialCount> m_material_counts;
         Array<std::string> m_participating_rules;
         Array<std::string> m_omissions;
+        sim::InitialMatter m_matter;
+        u64 m_known_world_cache_payload_bytes{};
+        std::shared_ptr<const WorldgenPreviewWorld> m_exact_world;
+        sim::MatterParticleSnapshot m_particles;
+        [[nodiscard]] const sim::GenerationGeometry &geometry() const noexcept;
     };
     /// Blocking CPU work for an offline caller or background coordinator.
     /// On failure/cancellation the caller's previous result is untouched.
     [[nodiscard]] Expected<WorldgenPreviewResult> prepareWorldgenPreview(
-        ContentCatalog catalog, WorldgenPreviewSpec spec, const IContext *context = nullptr);
+        ContentCatalog catalog, WorldgenPreviewSpec spec, const IContext *context = nullptr,
+        std::shared_ptr<const WorldgenPreviewWorld> world = {});
     struct WorldgenPreviewDisplay {
         double m_center_x_m{}, m_center_y_m{}, m_zoom{1.0};
         u32 m_view_mode{};
