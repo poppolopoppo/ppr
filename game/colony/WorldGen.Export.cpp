@@ -111,6 +111,67 @@ namespace pP::colony {
         }
     }
 
+    std::error_code exportWorldgenRegionImages(
+        const ContentCatalog &catalog, const sim::ChunkGrid &grid, const sim::GenerationCellBounds bounds,
+        const u32 biome_index, const std::filesystem::path &directory, const IContext *const context) {
+        if (bounds.m_left >= bounds.m_right or
+            bounds.m_bottom >= bounds.m_top or
+            bounds.m_right > sim::kWorldEdge or
+            bounds.m_top > sim::kWorldEdge or
+            biome_index >= catalog.biomes().size()) {
+            PPR_RETURN_ERROR_ON_FAIL(WorldExport, std::errc::invalid_argument);
+        }
+        const u32 width = bounds.m_right - bounds.m_left, height = bounds.m_top - bounds.m_bottom;
+        constexpr std::array<std::string_view, 3u> names{"material.ppm", "biome.ppm", "temperature.ppm"};
+        std::array<std::ofstream, 3u> files;
+        for (u32 mode = 0u; mode < files.size(); ++mode) {
+            files[mode].open(directory / names[mode], std::ios::binary | std::ios::trunc);
+            PPR_RETURN_ERROR_ON_FAIL(
+                WorldExport, files[mode] ? std::error_code{} : std::make_error_code(std::errc::io_error));
+            files[mode] << "P6\n" << width << ' ' << height << "\n255\n";
+        }
+        std::array<Array<u8>, 3u> rows;
+        for (auto &row: rows) {
+            row.resize(width * 3u);
+        }
+        const auto biome_color = rgb(catalog.biomes()[biome_index].m_preview_color_rgba);
+        for (u32 image_y = 0u; image_y < height; ++image_y) {
+            PPR_RETURN_ERROR_ON_FAIL(WorldExport, context ? context->error() : std::error_code{});
+            const u32 y = bounds.m_top - 1u - image_y;
+            for (u32 image_x = 0u; image_x < width; ++image_x) {
+                const u32 x = bounds.m_left + image_x;
+                if (not grid.residentCells(sim::chunkOf({x, y}))) {
+                    PPR_RETURN_ERROR_ON_FAIL(WorldExport, std::errc::invalid_argument);
+                }
+                const auto cell = grid.getCell({x, y});
+                PPR_RETURN_ERROR_ON_FAIL(WorldExport, cell);
+                const auto *const material = catalog.findMaterial(cell->m_element);
+                if (cell->m_element != 0u and material == nullptr) {
+                    PPR_RETURN_ERROR_ON_FAIL(WorldExport, std::errc::invalid_argument);
+                }
+                const std::array colors{
+                    material ? rgb(material->m_color_rgba) : Color{}, biome_color,
+                    cell->m_element != 0u ? temperatureColor(cell->m_temperature) : Color{}};
+                for (u32 mode = 0u; mode < files.size(); ++mode) {
+                    for (u32 channel = 0u; channel < 3u; ++channel) {
+                        rows[mode][image_x * 3u + channel] = static_cast<u8>(
+                            std::clamp(std::lround(colors[mode][channel]), 0l, 255l));
+                    }
+                }
+            }
+            for (u32 mode = 0u; mode < files.size(); ++mode) {
+                files[mode].write(
+                    reinterpret_cast<const char *>(rows[mode].data()), static_cast<std::streamsize>(rows[mode].size()));
+                PPR_RETURN_ERROR_ON_FAIL(
+                    WorldExport, files[mode] ? std::error_code{} : std::make_error_code(std::errc::io_error));
+            }
+        }
+        for (auto &file: files) {
+            file.close();
+            PPR_RETURN_ERROR_ON_FAIL(WorldExport, file ? std::error_code{} : std::make_error_code(std::errc::io_error));
+        }
+        return {};
+    }
     std::error_code exportWorldDiagnostics(
         const ContentCatalog &catalog, const sim::GeneratedWorld &world, const WorldDescriptor &descriptor,
         const std::filesystem::path &directory, const IContext *const context) {

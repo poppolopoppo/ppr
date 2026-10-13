@@ -116,6 +116,8 @@ backgrounds = "backgrounds.toml"
         config::Diagnostics diagnostics{};
         auto loaded = loadContentPackSource(root, diagnostics);
         PPR_TEST_ASSERT(loaded.has_value());
+        PPR_TEST_ASSERT(loaded->m_manifest_source.m_bytes == manifest);
+        PPR_TEST_ASSERT(loaded->m_manifest_source.m_path == std::filesystem::canonical(root / "pack.toml"));
         write("materials.toml", "changed\n");
         PPR_TEST_ASSERT(loaded->m_documents[0u].m_bytes == "schema_version = 2\n");
 

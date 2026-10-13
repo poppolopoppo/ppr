@@ -68,6 +68,7 @@ namespace pP::game {
                 {"smoke", "smoke"},
                 {"validate-worldgen", "validate-worldgen"},
                 {"worldgen-preview", "worldgen-preview"},
+                {"worldgen-workshop", "worldgen-workshop"},
             };
             Array<std::string> seen{};
             for (const auto &assignment: cli.m_assignments) {
@@ -136,6 +137,11 @@ namespace pP::game {
         config::CliSchema schema{};
         schema.m_program = "ppr";
         schema.m_description = "PPR colony demo: interactive editor, headless commands, and profiling fixtures.";
+        appendOption(
+            schema.m_options,
+            selectorOption(
+                "worldgen-workshop", "worldgen-workshop",
+                "Open Worldgen Workshop without generating a complete world; open an explicit authored pack root."));
 
         appendOption(
             schema.m_options, selectorOption("smoke", "smoke", "Run the colony smoke test (command selector)."));

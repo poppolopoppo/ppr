@@ -91,6 +91,7 @@ export namespace pP::colony {
     };
     struct ContentPackSource {
         ContentPackManifest m_manifest{};
+        ContentSourceDocument m_manifest_source{};
         std::array<ContentSourceDocument, kContentDocumentCount> m_documents{};
     };
 
@@ -370,6 +371,8 @@ export namespace pP::colony {
         std::optional<u64> m_content_fingerprint{};
         friend Expected<ContentCatalog> loadContentCatalog(
             const std::filesystem::path &, config::Diagnostics &, const IContext *);
+        friend Expected<ContentCatalog> loadContentCatalog(
+            const std::filesystem::path &, const ContentPackSource &, config::Diagnostics &, const IContext *);
         [[nodiscard]] u64 computeContentFingerprint() const noexcept;
         ContentCatalog() = default;
         friend Expected<ContentCatalog> decodeMaterialCatalog(
@@ -413,4 +416,7 @@ export namespace pP::colony {
     // before a complete owned candidate is returned. No GPU or services are accessed.
     [[nodiscard]] Expected<ContentCatalog> loadContentCatalog(
         const std::filesystem::path &root, config::Diagnostics &diagnostics, const IContext *context = nullptr);
+    [[nodiscard]] Expected<ContentCatalog> loadContentCatalog(
+        const std::filesystem::path &root, const ContentPackSource &source, config::Diagnostics &diagnostics,
+        const IContext *context = nullptr);
 }

@@ -12,18 +12,12 @@ import std;
 namespace pP::colony {
     PPR_DEFINE_LOG_CATEGORY(SimPresentation, info, none);
     namespace {
-        void capturePresentation_(
-            SimFramePacket &packet, const ColonyDriver &driver,
-            ParticlePresentationCache *const particle_cache = nullptr) {
-            packet.m_initial_matter_valid = driver.initialMatterBaselineValid();
-            packet.m_cell_size_m = 1.0f / static_cast<float>(driver.cellsPerMetre());
-            const ContentCatalog *const catalog = driver.contentCatalog();
-            if (catalog == nullptr) {
-                return;
-            }
+        void captureCatalogPresentation_(
+            SimFramePacket &packet, const ContentCatalog &content, const std::string_view profile_key,
+            const u32 boundary_material, const u32 cells_per_metre, const double reference_thickness) {
+            packet.m_cell_size_m = 1.0f / static_cast<float>(cells_per_metre);
             packet.m_has_catalog = true;
-            packet.m_boundary_material_id = driver.boundaryMaterial();
-            const auto &content = *catalog;
+            packet.m_boundary_material_id = boundary_material;
             PPR_ASSERT(content.contentFingerprint().has_value());
             packet.m_content_fingerprint = *content.contentFingerprint();
             for (const auto &texture: content.textures()) {
@@ -76,8 +70,8 @@ namespace pP::colony {
                 }
                 packet.m_terrain_visuals.push_back(visual);
             }
-            packet.m_reference_thickness_m = static_cast<float>(driver.referenceThicknessMetres());
-            const auto *const profile = content.findWorld(driver.profileKey());
+            packet.m_reference_thickness_m = static_cast<float>(reference_thickness);
+            const auto *const profile = content.findWorld(profile_key);
             PPR_ASSERT(profile != nullptr);
             const auto stack = std::ranges::find(
                 content.backgrounds(), profile->m_background_stack, &BackgroundStackDefinition::m_key);
@@ -97,6 +91,20 @@ namespace pP::colony {
                     }
                 }
             }
+        }
+
+        void capturePresentation_(
+            SimFramePacket &packet, const ColonyDriver &driver,
+            ParticlePresentationCache *const particle_cache = nullptr) {
+            packet.m_initial_matter_valid = driver.initialMatterBaselineValid();
+            packet.m_cell_size_m = 1.0f / static_cast<float>(driver.cellsPerMetre());
+            const ContentCatalog *const catalog = driver.contentCatalog();
+            if (catalog == nullptr) {
+                return;
+            }
+            captureCatalogPresentation_(
+                packet, *catalog, driver.profileKey(), driver.boundaryMaterial(), driver.cellsPerMetre(),
+                driver.referenceThicknessMetres());
             ParticlePresentationCache temporary;
             auto &cache = particle_cache ? *particle_cache : temporary;
             packet.m_particle_batches = cache.capture(driver);
@@ -205,6 +213,13 @@ namespace pP::colony {
         }
     }
 
+    SimFramePacket captureCatalogPresentation(
+        const ContentCatalog &catalog, const std::string_view profile, const u32 boundary_material,
+        const u32 cells_per_metre, const double reference_thickness) {
+        SimFramePacket packet{};
+        captureCatalogPresentation_(packet, catalog, profile, boundary_material, cells_per_metre, reference_thickness);
+        return packet;
+    }
     Array<GridParticleBatch> ParticlePresentationCache::capture(const ColonyDriver &driver) {
         if (m_generation != driver.worldGeneration()) {
             m_chunks = {};

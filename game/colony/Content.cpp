@@ -2366,6 +2366,7 @@ namespace pP::colony {
             }
             source.m_documents[index] = std::move(*document);
         }
+        source.m_manifest_source = std::move(*manifest_source);
         return source;
     }
 

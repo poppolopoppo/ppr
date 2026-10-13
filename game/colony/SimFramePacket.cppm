@@ -121,6 +121,10 @@ export namespace pP::colony {
     /// snapshot or live-session borrow crossing into the rendering lane.
     [[nodiscard]] Expected<GridPass::GridStagedFrame> captureWorldPresentation(
         const ColonyDriver &driver, const IContext *context = nullptr);
+    /// Shared catalog appearance conversion for complete worlds and sparse samples.
+    [[nodiscard]] SimFramePacket captureCatalogPresentation(
+        const ContentCatalog &catalog, std::string_view profile, u32 boundary_material, u32 cells_per_metre,
+        double reference_thickness);
     /// Whole-world preview preparation from an exclusively frozen session.
     /// Generated metadata belongs to this driver's exclusively frozen prepared world.
     /// The caller supplies a monotonic revision; terrain IDs remain unchanged.

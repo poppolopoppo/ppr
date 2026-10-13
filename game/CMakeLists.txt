@@ -5,6 +5,7 @@ target_sources(app.game
     PUBLIC
         FILE_SET CXX_MODULES FILES
             Game.Application.cppm
+            Game.WorldgenWorkshop.cppm
             colony/Agents.cppm
             colony/Buildings.cppm
             colony/Checkpoint.cppm
@@ -14,16 +15,20 @@ target_sources(app.game
             colony/ColonySmoke.cppm
             colony/ColonyTranslator.cppm
             colony/Content.cppm
+            colony/Content.Authoring.cppm
             colony/Metric.cppm
             colony/DigTool.cppm
             colony/Pathfinding.cppm
             colony/SimFramePacket.cppm
             colony/WorldGen.cppm
+            colony/WorldGen.Preview.cppm
+            colony/WorldGenPanel.cppm
             colony/WorldJob.cppm
             Game.Config.cppm
             Game.Display.cppm
     PRIVATE
         Game.Application.cpp
+        Game.WorldgenWorkshop.cpp
         colony/Agents.cpp
         colony/Buildings.cpp
         colony/Checkpoint.cpp
@@ -39,6 +44,7 @@ target_sources(app.game
         colony/ColonyTranslator.cpp
         colony/Content.cpp
         colony/Content.Pack.cpp
+        colony/Content.Authoring.cpp
         colony/Metric.cpp
         colony/DigTool.cpp
         colony/Pathfinding.cpp
@@ -48,6 +54,9 @@ target_sources(app.game
         colony/WorldGen.Fixture.cpp
         colony/WorldGen.Plan.cpp
         colony/WorldGen.Export.cpp
+        colony/WorldGen.Preview.cpp
+        colony/WorldGen.Preview.Export.cpp
+        colony/WorldGenPanel.cpp
         colony/WorldJob.cpp
         Game.Config.cpp
         Game.Display.cpp
@@ -91,10 +100,12 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
         PUBLIC
             FILE_SET CXX_MODULES FILES
                 Game.Application.cppm
+                Game.WorldgenWorkshop.cppm
                 Game.Config.cppm
                 Game.Display.cppm
                 Game.Tests.cppm
                 colony/Content.cppm
+                colony/Content.Authoring.cppm
                 colony/Metric.cppm
                 colony/Agents.cppm
                 colony/Buildings.cppm
@@ -105,16 +116,20 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
                 colony/DigTool.cppm
                 colony/Pathfinding.cppm
                 colony/WorldGen.cppm
+                colony/WorldGen.Preview.cppm
+                colony/WorldGenPanel.cppm
                 colony/SimFramePacket.cppm
                 colony/WorldJob.cppm
         PRIVATE
             Game.Config.cpp
             Game.Display.cpp
+            Game.WorldgenWorkshop.cpp
             Game.Tests.cpp
             Game.Config.Tests.cpp
             Game.Display.Tests.cpp
             colony/Content.cpp
             colony/Content.Pack.cpp
+            colony/Content.Authoring.cpp
             colony/Content.Tests.cpp
             colony/Content.Biomes.Tests.cpp
             colony/Content.Features.Tests.cpp
@@ -140,6 +155,10 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
             colony/WorldGen.Fixture.Tests.cpp
             colony/WorldGen.Plan.cpp
             colony/WorldGen.Export.cpp
+            colony/WorldGen.Preview.cpp
+            colony/WorldGen.Preview.Export.cpp
+            colony/WorldGen.Preview.Tests.cpp
+            colony/WorldGenPanel.cpp
             colony/SimFramePacket.cpp
             colony/SimFramePacket.Diagnostics.cpp
             colony/WorldJob.cpp

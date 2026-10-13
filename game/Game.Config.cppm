@@ -16,13 +16,15 @@ export namespace pP::game {
         smoke,
         validate_worldgen,
         worldgen_preview,
+        worldgen_workshop,
     };
 
-    inline constexpr config::EnumDomain<EGameCommand, 4u> game_command_domain{{
+    inline constexpr config::EnumDomain<EGameCommand, 5u> game_command_domain{{
         config::EnumEntry<EGameCommand>{EGameCommand::interactive, "interactive"},
         config::EnumEntry<EGameCommand>{EGameCommand::smoke, "smoke"},
         config::EnumEntry<EGameCommand>{EGameCommand::validate_worldgen, "validate-worldgen"},
         config::EnumEntry<EGameCommand>{EGameCommand::worldgen_preview, "worldgen-preview"},
+        config::EnumEntry<EGameCommand>{EGameCommand::worldgen_workshop, "worldgen-workshop"},
     }};
 
     /// Game-owned invocation settings: command selection, profiling fixtures,

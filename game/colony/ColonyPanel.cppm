@@ -76,6 +76,7 @@ export namespace pP::colony {
         display_revert, // revert the trial to the pre-apply values, same path
         display_use_monitor_cap, // draft paced + cap from the reported monitor refresh
         select_preview, // m_arg = EGridDiagnosticMode; range lives in UI draft.
+        open_workshop,
     };
 
     /// One typed intent; trivially copyable so keyboard callbacks, buttons,

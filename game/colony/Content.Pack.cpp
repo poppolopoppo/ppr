@@ -384,7 +384,14 @@ namespace pP::colony {
         return found == m_worlds.end() or found->m_key != key ? nullptr : std::addressof(*found);
     }
     Expected<ContentCatalog> loadContentCatalog(
-        const std::filesystem::path &root, config::Diagnostics &diagnostics, const IContext *const context) try {
+        const std::filesystem::path &root, config::Diagnostics &diagnostics, const IContext *const context) {
+        auto source = loadContentPackSource(root, diagnostics, context);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, source);
+        return loadContentCatalog(root, *source, diagnostics, context);
+    }
+    Expected<ContentCatalog> loadContentCatalog(
+        const std::filesystem::path &root, const ContentPackSource &source, config::Diagnostics &diagnostics,
+        const IContext *const context) try {
         const auto cancelled = [&]() -> std::error_code { return context ? context->error() : std::error_code{}; };
         PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, cancelled());
         std::error_code error{};
@@ -393,13 +400,20 @@ namespace pP::colony {
             diagnostics.add(root.string(), "pack", "Cannot resolve pack root", error);
             PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, error);
         }
-        auto source = loadContentPackSource(canonical_root, diagnostics, context);
-        PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, source);
-        const auto &documents = source->m_documents;
+        auto manifest = decodePackManifest(
+            source.m_manifest_source.m_bytes, source.m_manifest_source.m_path.string(), diagnostics);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, manifest);
+        if (manifest->m_files != source.m_manifest.m_files or manifest->m_pack_id != source.m_manifest.m_pack_id) {
+            diagnostics.add(
+                root.string(), "pack", "Source manifest metadata does not match its bytes",
+                std::make_error_code(std::errc::invalid_argument));
+            PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, std::errc::invalid_argument);
+        }
+        const auto &documents = source.m_documents;
         const auto &materials = documents[static_cast<std::size_t>(EContentDocument::materials)];
         auto catalog = decodeMaterialCatalog(materials.m_bytes, materials.m_path.string(), diagnostics);
         PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, catalog);
-        catalog->m_pack_id = source->m_manifest.m_pack_id;
+        catalog->m_pack_id = source.m_manifest.m_pack_id;
         const auto &fields = documents[static_cast<std::size_t>(EContentDocument::fields)];
         PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, cancelled());
         auto decoded_fields = decodeFieldDefinitions(fields.m_bytes, fields.m_path.string(), diagnostics);

@@ -422,6 +422,10 @@ namespace pP::colony {
                 }
             }
             place_button("?", EColonyIntent::help, 0u);
+            flow.place(framedWidth("Worldgen Workshop"));
+            if (ImGui::Button("Worldgen Workshop")) {
+                intent = ColonyIntent{EColonyIntent::open_workshop};
+            }
             {
                 const bool open = state.m_display_open;
                 const char *shown = open ? "[Display]" : "Display";

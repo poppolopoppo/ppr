@@ -4,6 +4,7 @@ module game.tests;
 import engine.core;
 import engine.physics;
 import game.colony.content;
+import game.colony.content.authoring;
 import game.colony.worldgen;
 import game.colony.digtool;
 import game.colony.buildings;
@@ -11,6 +12,7 @@ import game.colony.agents;
 import game.colony.pathfinding;
 import engine.sim;
 import engine.image;
+import game.application;
 import std;
 
 namespace pP::game::tests::detail::pack {
@@ -682,6 +684,205 @@ threshold_max = 1.0
         PPR_TEST_ASSERT(background.entries().back().m_property == "backgrounds.frontier.layers.distant.texture");
         PPR_TEST_ASSERT(background.entries().back().m_location.find("backgrounds.toml:") != std::string::npos);
     };
+    PPR_UNIT_TEST (authoring_drafts_validate_independently_and_save_without_losing_newer_edits) {
+        Fixture fixture;
+        useSmallIdentityImages(fixture);
+        const auto original = fixture.read("biomes.toml");
+        config::Diagnostics diagnostics{64u};
+        auto opened = ContentAuthoringSession::open(fixture.m_root, diagnostics);
+        PPR_TEST_ASSERT(opened.has_value());
+        auto session = std::move(*opened);
+        const auto baseline_catalog = session.validatedCatalog();
+        const auto baseline_revision = session.validatedRevision();
+        PPR_TEST_ASSERT(not session.dirty() and not session.canUndo());
+        PPR_TEST_ASSERT(
+            not session.editBiome("hearth", "temperature_base_k", config::FileValue::floating(300.0), diagnostics));
+        const auto valid_snapshot = session.draftSnapshot();
+        PPR_TEST_ASSERT(session.dirty() and session.revision() != baseline_revision);
+        PPR_TEST_ASSERT(
+            session.validatedRevision() == baseline_revision and session.validatedCatalog() == baseline_catalog);
+        PPR_TEST_ASSERT(fixture.read("biomes.toml") == original);
+
+        PPR_TEST_ASSERT(not session.editBiome(
+            "hearth", "temperature_field", config::FileValue::text("missing-field"), diagnostics));
+        config::Diagnostics invalid_diagnostics{64u};
+        const auto invalid = validateContentDraft(session.draftSnapshot(), invalid_diagnostics);
+        PPR_TEST_ASSERT(not invalid and invalid_diagnostics.hasErrors());
+        PPR_TEST_ASSERT(session.validatedCatalog() == baseline_catalog);
+        PPR_TEST_ASSERT(session.undo().value());
+        PPR_TEST_ASSERT(
+            session.draftSource().m_documents[static_cast<std::size_t>(EContentDocument::biomes)].m_bytes ==
+            valid_snapshot.m_source.m_documents[static_cast<std::size_t>(EContentDocument::biomes)].m_bytes);
+        PPR_TEST_ASSERT(not session.acceptValidation(valid_snapshot.m_revision, baseline_catalog));
+        PPR_TEST_ASSERT(session.redo().value() and session.undo().value());
+        auto validated = validateContentDraft(session.draftSnapshot(), diagnostics);
+        PPR_TEST_ASSERT(validated.has_value());
+        PPR_TEST_ASSERT((*validated)->contentFingerprint() != baseline_catalog->contentFingerprint());
+        PPR_TEST_ASSERT(session.acceptValidation(session.revision(), *validated));
+
+        auto save_snapshot = session.draftSnapshot();
+        PPR_TEST_ASSERT(
+            not session.editBiome("hearth", "temperature_base_k", config::FileValue::floating(301.0), diagnostics));
+        auto saved = saveContentDraft(std::move(save_snapshot), diagnostics);
+        PPR_TEST_ASSERT(saved.has_value());
+        PPR_TEST_ASSERT(not session.acceptSave(std::move(*saved)) and session.dirty());
+        auto newer_save = saveContentDraft(session.draftSnapshot(), diagnostics);
+        PPR_TEST_ASSERT(newer_save.has_value() and session.acceptSave(std::move(*newer_save)));
+        PPR_TEST_ASSERT(not session.dirty());
+        auto reopened = ContentAuthoringSession::open(fixture.m_root, diagnostics);
+        PPR_TEST_ASSERT(reopened.has_value());
+        PPR_TEST_ASSERT(
+            reopened->validatedCatalog()->contentFingerprint() == session.validatedCatalog()->contentFingerprint());
+        PPR_TEST_ASSERT(session.undo().value() and session.dirty());
+        session.revert();
+        PPR_TEST_ASSERT(not session.dirty() and not session.canUndo() and not session.canRedo());
+
+        PPR_TEST_ASSERT(
+            not session.editBiome("hearth", "temperature_base_k", config::FileValue::floating(301.5), diagnostics));
+        const auto before_external_fields = session.draftSnapshot();
+        auto old_validation = validateContentDraft(before_external_fields, diagnostics);
+        PPR_TEST_ASSERT(old_validation.has_value());
+        PPR_TEST_ASSERT(session.acceptValidation(before_external_fields.m_revision, *old_validation));
+        auto changed_fields = fixture.read("fields.toml");
+        replace(changed_fields, "frequency_per_metre = 0.008", "frequency_per_metre = 0.01");
+        fixture.write("fields.toml", changed_fields);
+        auto save_with_external_fields = saveContentDraft(before_external_fields, diagnostics);
+        PPR_TEST_ASSERT(save_with_external_fields.has_value());
+        PPR_TEST_ASSERT(session.acceptSave(std::move(*save_with_external_fields)));
+        PPR_TEST_ASSERT(not session.dirty() and session.revision() != before_external_fields.m_revision);
+        PPR_TEST_ASSERT(session.validatedRevision() == session.revision());
+        PPR_TEST_ASSERT(session.validatedCatalog()->contentFingerprint() != (*old_validation)->contentFingerprint());
+        PPR_TEST_ASSERT(
+            session.draftSource().m_documents[static_cast<std::size_t>(EContentDocument::fields)].m_bytes ==
+            changed_fields);
+        PPR_TEST_ASSERT(not session.acceptValidation(before_external_fields.m_revision, *old_validation));
+
+        const auto before_external_texture = session.draftSnapshot();
+        const auto before_texture_catalog = session.validatedCatalog();
+        std::filesystem::copy_file(
+            fixture.m_root / "textures/ice.png", fixture.m_root / "textures/basalt.png",
+            std::filesystem::copy_options::overwrite_existing);
+        auto save_with_external_texture = saveContentDraft(before_external_texture, diagnostics);
+        PPR_TEST_ASSERT(save_with_external_texture.has_value());
+        PPR_TEST_ASSERT(session.acceptSave(std::move(*save_with_external_texture)));
+        PPR_TEST_ASSERT(not session.dirty() and session.revision() != before_external_texture.m_revision);
+        PPR_TEST_ASSERT(session.validatedRevision() == session.revision());
+        PPR_TEST_ASSERT(
+            session.validatedCatalog()->contentFingerprint() != before_texture_catalog->contentFingerprint());
+        PPR_TEST_ASSERT(
+            session.draftSource().m_documents[static_cast<std::size_t>(EContentDocument::biomes)].m_bytes ==
+            before_external_texture.m_source.m_documents[static_cast<std::size_t>(EContentDocument::biomes)].m_bytes);
+        PPR_TEST_ASSERT(not session.acceptValidation(before_external_texture.m_revision, before_texture_catalog));
+
+        const auto committed = fixture.read("biomes.toml");
+        PPR_TEST_ASSERT(
+            not session.editBiome("hearth", "temperature_base_k", config::FileValue::floating(302.0), diagnostics));
+        const auto retained = session.draftSnapshot();
+        fixture.write("biomes.toml", committed + "\n# external edit\n");
+        const auto conflicting = saveContentDraft(session.draftSnapshot(), diagnostics);
+        PPR_TEST_ASSERT(not conflicting and conflicting.error() == std::errc::resource_unavailable_try_again);
+        PPR_TEST_ASSERT(session.dirty() and session.revision() == retained.m_revision);
+        PPR_TEST_ASSERT(fixture.read("biomes.toml") == committed + "\n# external edit\n");
+        fixture.write("biomes.toml", committed);
+
+        fixture.write("biomes.toml.workshop.tmp", "another owner's staging file");
+        const auto collision = saveContentDraft(session.draftSnapshot(), diagnostics);
+        PPR_TEST_ASSERT(not collision and collision.error() == std::errc::io_error);
+        PPR_TEST_ASSERT(fixture.read("biomes.toml.workshop.tmp") == "another owner's staging file");
+        PPR_TEST_ASSERT(fixture.read("biomes.toml") == committed and session.dirty());
+        auto [job_context, cancel] = context::withCancelClause(context::background());
+        cancel(std::make_error_code(std::errc::operation_canceled));
+        const auto cancelled = saveContentDraft(session.draftSnapshot(), diagnostics, job_context.get());
+        PPR_TEST_ASSERT(not cancelled and cancelled.error() == std::errc::operation_canceled);
+        PPR_TEST_ASSERT(fixture.read("biomes.toml") == committed and session.dirty());
+    };
+
+    PPR_UNIT_TEST (workshop_queued_requests_preserve_newer_drafts_and_require_current_discard_authority) {
+        Fixture fixture{};
+        useSmallIdentityImages(fixture);
+        ParallelScheduler pool{"Workshop request contracts", 1u, static_cast<std::size_t>(hal::page_granularity)};
+        WorldgenWorkshop workshop{pool};
+        const auto settle = [&]() {
+            while (workshop.busy()) {
+                PPR_TEST_ASSERT(not workshop.update());
+                std::this_thread::yield();
+            }
+        };
+        // Queuing never starts I/O. A replacement supersedes an invalid root,
+        // and cancellation removes both before the first admission update.
+        PPR_TEST_ASSERT(not workshop.open(fixture.m_root / "missing"));
+        PPR_TEST_ASSERT(not workshop.open(fixture.m_root));
+        PPR_TEST_ASSERT(workshop.busy() and workshop.session() == nullptr);
+        workshop.cancel();
+        PPR_TEST_ASSERT(not workshop.busy());
+        PPR_TEST_ASSERT(not workshop.update() and workshop.session() == nullptr);
+        PPR_TEST_ASSERT(not workshop.open(fixture.m_root / "missing"));
+        PPR_TEST_ASSERT(not workshop.open(fixture.m_root));
+        settle();
+        auto *const session = workshop.session();
+        PPR_TEST_ASSERT(session != nullptr and not session->dirty());
+        PPR_TEST_ASSERT(session->root() == std::filesystem::canonical(fixture.m_root));
+        const auto catalog = session->validatedCatalog();
+        const u64 validated_revision = session->validatedRevision();
+        const auto original = session->draftSnapshot();
+        constexpr auto biomes = static_cast<std::size_t>(EContentDocument::biomes);
+        config::Diagnostics diagnostics;
+        PPR_TEST_ASSERT(
+            not session->editBiome("hearth", "temperature_base_k", config::FileValue::floating(301.0), diagnostics));
+        const auto validation_input = session->draftSnapshot();
+        PPR_TEST_ASSERT(not workshop.validate());
+        // The immutable request has revisionR, but admission has not run yet.
+        PPR_TEST_ASSERT(
+            not session->editBiome("hearth", "temperature_base_k", config::FileValue::floating(302.0), diagnostics));
+        const auto newer = session->draftSnapshot();
+        PPR_TEST_ASSERT(newer.m_revision > validation_input.m_revision);
+        settle();
+        PPR_TEST_ASSERT(workshop.session() == session and session->revision() == newer.m_revision);
+        PPR_TEST_ASSERT(session->validatedRevision() == validated_revision and session->validatedCatalog() == catalog);
+        PPR_TEST_ASSERT(
+            session->draftSource().m_documents[biomes].m_bytes == newer.m_source.m_documents[biomes].m_bytes);
+        PPR_TEST_ASSERT(session->dirty() and session->canUndo() and not session->canRedo());
+
+        PPR_TEST_ASSERT(workshop.open(fixture.m_root) == std::errc::operation_not_permitted);
+        PPR_TEST_ASSERT(not workshop.busy() and session->revision() == newer.m_revision);
+        PPR_TEST_ASSERT(
+            session->draftSource().m_documents[biomes].m_bytes == newer.m_source.m_documents[biomes].m_bytes);
+        PPR_TEST_ASSERT(session->canUndo() and not session->canRedo());
+        const auto undo = session->undo();
+        PPR_TEST_ASSERT(undo.has_value() and *undo);
+        PPR_TEST_ASSERT(
+            session->draftSource().m_documents[biomes].m_bytes ==
+            validation_input.m_source.m_documents[biomes].m_bytes);
+        const auto redo = session->redo();
+        PPR_TEST_ASSERT(redo.has_value() and *redo);
+        PPR_TEST_ASSERT(
+            session->draftSource().m_documents[biomes].m_bytes == newer.m_source.m_documents[biomes].m_bytes);
+
+        const u64 discard_revision = session->revision();
+        PPR_TEST_ASSERT(not workshop.open(fixture.m_root, discard_revision));
+        PPR_TEST_ASSERT(
+            not session->editBiome("hearth", "temperature_base_k", config::FileValue::floating(303.0), diagnostics));
+        const auto after_discard_authorization = session->draftSnapshot();
+        PPR_TEST_ASSERT(after_discard_authorization.m_revision > discard_revision);
+        settle();
+        PPR_TEST_ASSERT(
+            workshop.session() == session and session->revision() == after_discard_authorization.m_revision);
+        PPR_TEST_ASSERT(
+            session->draftSource().m_documents[biomes].m_bytes ==
+            after_discard_authorization.m_source.m_documents[biomes].m_bytes);
+        PPR_TEST_ASSERT(session->dirty() and session->canUndo() and not session->canRedo());
+        PPR_TEST_ASSERT(session->validatedRevision() == validated_revision and session->validatedCatalog() == catalog);
+        PPR_TEST_ASSERT(not workshop.open(fixture.m_root, session->revision()));
+        settle();
+        const auto *const reopened = workshop.session();
+        PPR_TEST_ASSERT(reopened != nullptr and not reopened->dirty());
+        PPR_TEST_ASSERT(reopened->validatedRevision() == reopened->revision());
+        PPR_TEST_ASSERT(not reopened->canUndo() and not reopened->canRedo());
+        PPR_TEST_ASSERT(
+            reopened->draftSource().m_documents[biomes].m_bytes == original.m_source.m_documents[biomes].m_bytes);
+        PPR_TEST_ASSERT(reopened->validatedCatalog()->contentFingerprint() == catalog->contentFingerprint());
+        PPR_TEST_ASSERT(not workshop.shutdown());
+    };
     PPR_UNIT_TEST (required_texture_limits_missing_and_cancel_are_errors) {
         Fixture fixture{};
         config::Diagnostics diagnostics{};
@@ -714,7 +915,10 @@ namespace pP::game::tests {
                     detail::pack::complete_identity_ignores_order_comments_and_source_paths,
                     detail::pack::identity_changes_for_every_definition_kind_and_texture_bytes,
                     detail::pack::texture_usage_is_distinct_and_background_diagnostics_preserve_source_keys,
-                    detail::pack::required_texture_limits_missing_and_cancel_are_errors});
+                    detail::pack::required_texture_limits_missing_and_cancel_are_errors,
+                    detail::pack::authoring_drafts_validate_independently_and_save_without_losing_newer_edits,
+                    detail::pack::
+                        workshop_queued_requests_preserve_newer_drafts_and_require_current_discard_authority});
         };
         return tests;
     }

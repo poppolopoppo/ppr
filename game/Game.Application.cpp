@@ -18,6 +18,9 @@ import game.colony.buildings;
 import game.colony.driver;
 import game.colony.content;
 import game.colony.metric;
+import game.colony.content.authoring;
+import game.colony.worldgen_panel;
+import game.colony.worldgen_preview;
 import game.colony.worldgen;
 
 import game.colony.sim_packet;
@@ -290,6 +293,31 @@ namespace demo {
 
         std::unique_ptr<colony::ColonyDriver> m_driver{};
         std::unique_ptr<colony::WorldJob> m_world_job{};
+        std::unique_ptr<colony::WorldgenWorkshop> m_workshop{};
+        colony::WorldgenPanelState m_workshop_ui{};
+        std::filesystem::path m_workshop_root{};
+        std::unique_ptr<GridPass::GridStagedFrame> m_workshop_restore{}, m_workshop_stage{}, m_workshop_queued{};
+        std::shared_ptr<const colony::WorldgenPreviewResult> m_workshop_staged_preview{}, m_workshop_queued_preview{},
+            m_workshop_displayed_preview{};
+        std::filesystem::path m_workshop_staged_root{}, m_workshop_queued_root{}, m_workshop_displayed_root{};
+        enum class WorkshopTransition : u8 {
+            none,
+            open,
+            exit
+        };
+        WorkshopTransition m_workshop_transition{};
+        std::filesystem::path m_workshop_transition_root{};
+        u64 m_workshop_transition_revision{};
+        bool m_workshop_transition_saving{};
+        bool m_workshop_exit_authorized{};
+        bool m_workshop_startup{}, m_workshop_pending{}, m_workshop_open{}, m_workshop_capturing{},
+            m_workshop_closing{}, m_workshop_restoring{};
+        bool m_workshop_pause{}, m_workshop_focused{}, m_workshop_displayed{};
+        float3 m_workshop_game_eye{zero_v};
+        float m_workshop_game_scale{0.5f};
+        std::optional<float3> m_workshop_game_follow{};
+        u64 m_workshop_epoch{1ull << 63u};
+        std::string m_workshop_error{};
         mutable std::atomic<bool> m_close_requested{};
         std::atomic<bool> m_defer_close{};
         bool m_loading_presented{};
@@ -841,7 +869,7 @@ namespace demo {
             command->m_world_generation = m_candidate_generation;
             command->m_content_fingerprint = m_candidate_fingerprint;
             if (kind == EGridWorldCommand::begin) {
-                auto &source = m_world_job->presentation();
+                auto &source = m_workshop_stage ? *m_workshop_stage : m_world_job->presentation();
                 auto &header = command->m_stage;
                 header.m_cell_size_m = source.m_cell_size_m;
                 header.m_has_catalog = source.m_has_catalog;
@@ -861,7 +889,7 @@ namespace demo {
                 header.m_initial_matter_valid = source.m_initial_matter_valid;
                 command->m_final_batch = source.m_uploads.empty();
             } else if (kind == EGridWorldCommand::append) {
-                auto &source = m_world_job->presentation();
+                auto &source = m_workshop_stage ? *m_workshop_stage : m_world_job->presentation();
                 const auto end = std::min(source.m_uploads.size(), m_candidate_next_chunk + 8u);
                 command->m_stage.m_uploads.reserve(end - m_candidate_next_chunk);
                 while (m_candidate_next_chunk < end) {
@@ -1046,7 +1074,7 @@ namespace demo {
             }
             PPR_RETURN_ERROR_ON_FAIL(Demo, submitWorldCommand_());
             if (not m_world_job->busy() and not m_world_command and not m_candidate_cancel_needed) {
-                if (m_close_requested.load(std::memory_order_acquire)) {
+                if (m_close_requested.load(std::memory_order_acquire) and not m_workshop_open) {
                     if (m_driver) {
                         cancelToolGesture_();
                         m_tool.m_accepted_click.reset();
@@ -1603,7 +1631,8 @@ namespace demo {
                 return map;
             }
             map.m_snapshot = camera->getSnapshot();
-            map.m_cells_per_metre = m_driver ? m_driver->cellsPerMetre() : 1u;
+            map.m_cells_per_metre = m_workshop_open ? colony::kFineCellsPerMetre
+                                                    : (m_driver ? m_driver->cellsPerMetre() : 1u);
             map.m_extent = float2{static_cast<float>(extent.x), static_cast<float>(extent.y)};
             map.m_valid = true;
             return map;
@@ -1868,6 +1897,7 @@ namespace demo {
                 return;
             }
             switch (intent.m_kind) {
+                case colony::EColonyIntent::open_workshop: m_workshop_pending = true; break;
                 case colony::EColonyIntent::pause_toggle:
                     clearControlInput_();
                     m_driver->togglePaused();
@@ -3252,6 +3282,16 @@ namespace demo {
             enableGridObservations(m_worldgen_report);
             enableFrameAdmissionObservations(m_worldgen_report);
             m_agent_count = 1u;
+            m_workshop_startup = settings.m_command == game::EGameCommand::worldgen_workshop;
+            m_workshop_root = settings.m_worldgen_root ? std::filesystem::path{*settings.m_worldgen_root}
+                                                       : std::filesystem::path{};
+            std::snprintf(
+                m_workshop_ui.m_root.data(), m_workshop_ui.m_root.size(), "%s", m_workshop_root.string().c_str());
+            std::snprintf(
+                m_workshop_ui.m_profile.data(), m_workshop_ui.m_profile.size(), "%s",
+                settings.m_worldgen_profile.c_str());
+            std::snprintf(m_workshop_ui.m_biome.data(), m_workshop_ui.m_biome.size(), "%s", "hearth");
+            m_workshop_ui.m_seed = settings.m_worldgen_seed;
             m_worldgen_root = settings.m_worldgen_root
                                   ? *settings.m_worldgen_root
                                   : hal::process::currentExecutablePath().parent_path() / "worldgen" / "default";
@@ -3289,6 +3329,474 @@ namespace demo {
             m_display_baseline = baseline;
         }
 
+        [[nodiscard]] bool workshopPreviewMatches_(
+            const colony::WorldgenPreviewResult &preview, const std::filesystem::path &root) const {
+            const auto *const session = m_workshop->session();
+            if (not session or root != session->root() or preview.m_spec.m_revision != session->revision()) {
+                return false;
+            }
+            if (session->validatedRevision() != session->revision()) {
+                return true;
+            }
+            if (not session->validatedCatalog()) {
+                return false;
+            }
+            const auto preview_fingerprint = preview.m_catalog.contentFingerprint();
+            const auto validated_fingerprint = session->validatedCatalog()->contentFingerprint();
+            return preview_fingerprint and validated_fingerprint and *preview_fingerprint == *validated_fingerprint;
+        }
+
+        [[nodiscard]] std::error_code completeWorkshopTransition_() {
+            auto *const session = m_workshop->session();
+            PPR_RETURN_ERROR_ON_FAIL(
+                Demo, not session or not session->dirty() or session->revision() == m_workshop_transition_revision
+                          ? std::error_code{}
+                          : std::make_error_code(std::errc::operation_not_permitted));
+            if (m_workshop_transition == WorkshopTransition::open) {
+                PPR_RETURN_ERROR_ON_FAIL(
+                    Demo, m_workshop->open(m_workshop_transition_root, m_workshop_transition_revision));
+            } else if (m_workshop_transition == WorkshopTransition::exit) {
+                m_workshop_exit_authorized = true;
+                m_close_requested.store(true, std::memory_order_release);
+                m_workshop_closing = true;
+            }
+            m_workshop_transition = WorkshopTransition::none;
+            return {};
+        }
+
+        [[nodiscard]] std::error_code requestWorkshopTransition_(
+            const WorkshopTransition transition, std::filesystem::path root = {}) {
+            if (m_workshop_transition != WorkshopTransition::none) {
+                return {};
+            }
+            m_workshop_transition = transition;
+            m_workshop_transition_root = std::move(root);
+            auto *const session = m_workshop->session();
+            m_workshop_transition_revision = session ? session->revision() : 0u;
+            if (session and session->dirty()) {
+                return {};
+            }
+            return completeWorkshopTransition_();
+        }
+
+        [[nodiscard]] std::error_code openWorkshop_() {
+            PPR_RETURN_ERROR_ON_FAIL(
+                Demo, not m_world_job->busy() and not m_world_command
+                          ? std::error_code{}
+                          : std::make_error_code(std::errc::device_or_resource_busy));
+            clearControlInput_();
+            cancelToolGesture_();
+            m_tool.m_accepted_click.reset();
+            m_tool.m_drag_queue.clear();
+            m_preview_pending.reset();
+            m_regen_pending = false;
+            m_workshop_pause = m_driver and m_driver->paused();
+            if (m_pan_controller) {
+                m_workshop_game_eye = getMainCamera()->getSnapshot().m_origin;
+                m_workshop_game_scale = m_pan_controller->getOrthoScale();
+                m_workshop_game_follow = m_pan_controller->getFollowTarget();
+                m_pan_controller->setFollowTarget(std::nullopt);
+                m_pan_controller->resetInputState();
+            }
+            if (m_driver and m_workshop_transition != WorkshopTransition::exit) {
+                m_driver->setPaused(true);
+                const auto error = m_world_job->requestPreview(
+                    m_driver, m_committed_preview_mode, m_committed_temperature_min_k, m_committed_temperature_max_k);
+                if (error) {
+                    m_driver->setPaused(m_workshop_pause);
+                    PPR_RETURN_ERROR_ON_FAIL(Demo, error);
+                }
+                m_workshop_capturing = true;
+                m_driver_ready = false;
+            }
+            m_workshop_open = true;
+            m_workshop_pending = false;
+            m_workshop_closing = false;
+            m_workshop_restoring = false;
+            m_workshop_focused = false;
+            m_workshop_displayed = false;
+            m_world_modal = true;
+            if (not m_workshop->session() and not m_workshop_root.empty()) {
+                if (const auto error = m_workshop->open(m_workshop_root)) {
+                    m_workshop_error = error.message();
+                }
+            }
+            return {};
+        }
+
+        [[nodiscard]] std::error_code finishWorkshop_() {
+            m_workshop_open = false;
+            m_workshop_closing = false;
+            m_workshop_restoring = false;
+            m_workshop_stage.reset();
+            m_workshop_queued.reset();
+            m_workshop_restore.reset();
+            m_workshop_staged_preview.reset();
+            m_workshop_queued_preview.reset();
+            m_workshop_displayed_preview.reset();
+            m_world_modal = false;
+            m_world_published = true;
+            m_world_frame_presented = true;
+            m_candidate_begun = false;
+            m_candidate_cancel_needed = false;
+            m_candidate_activated = false;
+            if (m_driver) {
+                m_driver->setPaused(m_workshop_pause);
+                clearControlInput_();
+                if (m_pan_controller) {
+                    const float extent = m_driver->cellsPerMetre() == colony::kFineCellsPerMetre
+                                             ? static_cast<float>(colony::kWorldExtentMetres)
+                                             : static_cast<float>(sim::kWorldEdge);
+                    PPR_RETURN_ERROR_ON_FAIL(
+                        Demo, m_pan_controller->setWorldBounds(float2{0.0f, 0.0f}, float2{extent, extent}));
+                    PPR_RETURN_ERROR_ON_FAIL(Demo, m_pan_controller->setOrthoScale(m_workshop_game_scale));
+                    m_pan_controller->translate(m_workshop_game_eye, true);
+                    m_pan_controller->resetInputState();
+                    m_pan_controller->setFollowTarget(m_workshop_game_follow);
+                }
+            } else {
+                m_close_requested.store(true, std::memory_order_release);
+            }
+            return {};
+        }
+
+        [[nodiscard]] std::error_code advanceWorkshop_() {
+            if (m_close_requested.load(std::memory_order_acquire) and not m_workshop_closing) {
+                m_close_requested.store(false, std::memory_order_release);
+                PPR_RETURN_ERROR_ON_FAIL(Demo, requestWorkshopTransition_(WorkshopTransition::exit));
+            }
+            if (m_workshop_closing) {
+                m_workshop->cancel();
+                m_workshop_queued.reset();
+                m_workshop_queued_preview.reset();
+            }
+            PPR_RETURN_ERROR_ON_FAIL(Demo, m_workshop->update());
+            if (m_workshop_transition_saving and not m_workshop->busy()) {
+                m_workshop_transition_saving = false;
+                if (m_workshop->session() and not m_workshop->session()->dirty()) {
+                    if (const auto error = completeWorkshopTransition_()) {
+                        m_workshop_error = error.message();
+                    }
+                }
+            }
+            if (m_workshop_capturing) {
+                PPR_RETURN_ERROR_ON_FAIL(Demo, m_world_job->update(true));
+                if (m_world_job->view().m_state == colony::EWorldJobState::prepared) {
+                    if (not m_world_job->view().m_error) {
+                        m_workshop_restore = std::make_unique<GridPass::GridStagedFrame>(
+                            std::move(m_world_job->presentation()));
+                    } else {
+                        m_workshop_error = m_world_job->view().m_error.message();
+                    }
+                    m_driver = m_world_job->takeCaptured();
+                    m_driver_ready = true;
+                    m_workshop_capturing = false;
+                    // Entry requires a restorable game picture before replacing it.
+                    if (not m_workshop_restore) {
+                        PPR_LOG(
+                            Demo, warning, "Workshop entry failed; retaining game presentation",
+                            {{"error", m_workshop_error}});
+                        return finishWorkshop_();
+                    }
+                }
+            } else {
+                PPR_RETURN_ERROR_ON_FAIL(Demo, m_world_job->update(true));
+            }
+            if (auto prepared = m_workshop->takePresentation(); prepared and not m_workshop_closing) {
+                m_workshop_queued = std::move(prepared);
+                m_workshop_queued_preview = m_workshop->previewHandle();
+                m_workshop_queued_root = m_workshop->session()->root();
+            }
+            if (m_world_result) {
+                const auto result = *std::exchange(m_world_result, std::nullopt);
+                m_world_command_waiting = false;
+                if (result.m_kind == EGridWorldCommand::begin and
+                    result.m_error == std::errc::device_or_resource_busy) {
+                    return {};
+                }
+                m_world_command.reset();
+                if (result.m_error) {
+                    if (m_workshop_restoring or
+                        result.m_kind == EGridWorldCommand::activate or
+                        result.m_kind == EGridWorldCommand::cancel) {
+                        PPR_RETURN_ERROR_ON_FAIL(Demo, result.m_error);
+                    }
+                    m_workshop_error = "Preview publication failed: " + result.m_error.message();
+                    m_candidate_cancel_needed = true;
+                } else {
+                    switch (result.m_kind) {
+                        case EGridWorldCommand::begin: m_candidate_begun = true; break;
+                        case EGridWorldCommand::append:
+                        case EGridWorldCommand::advance: m_candidate_ready = result.m_ready; break;
+                        case EGridWorldCommand::activate:
+                            m_candidate_begun = false;
+                            m_candidate_ready = false;
+                            m_workshop_displayed = true;
+                            m_workshop_displayed_preview = std::move(m_workshop_staged_preview);
+                            m_workshop_displayed_root = std::move(m_workshop_staged_root);
+                            m_workshop_stage.reset();
+                            m_workshop_staged_preview.reset();
+                            if (m_workshop_restoring) {
+                                return finishWorkshop_();
+                            }
+                            break;
+                        case EGridWorldCommand::cancel:
+                            m_candidate_begun = false;
+                            m_candidate_cancel_needed = false;
+                            m_workshop_stage.reset();
+                            m_workshop_staged_preview.reset();
+                            break;
+                    }
+                }
+            }
+            if (m_workshop_closing and m_workshop_stage and not m_workshop_restoring and not activationPending_()) {
+                m_candidate_cancel_needed = true;
+            }
+            if (m_workshop_stage and
+                not m_workshop_restoring and
+                m_workshop_staged_preview and
+                not workshopPreviewMatches_(*m_workshop_staged_preview, m_workshop_staged_root) and
+                not activationPending_()) {
+                m_candidate_cancel_needed = true;
+            }
+            if (m_world_command) {
+                return submitWorldCommand_();
+            }
+            if (m_candidate_cancel_needed) {
+                queueWorldCommand_(EGridWorldCommand::cancel);
+                return submitWorldCommand_();
+            }
+            if (m_workshop_closing and not m_workshop_stage and not m_workshop_capturing and not m_workshop->busy()) {
+                if (m_workshop_restore and
+                    m_workshop_displayed and
+                    not m_close_requested.load(std::memory_order_acquire)) {
+                    m_workshop_queued = std::move(m_workshop_restore);
+                    m_workshop_restoring = true;
+                } else {
+                    return finishWorkshop_();
+                }
+            }
+            if (not m_workshop_stage and m_workshop_queued and not m_workshop_capturing) {
+                m_workshop_stage = std::move(m_workshop_queued);
+                m_workshop_staged_preview = std::move(m_workshop_queued_preview);
+                m_workshop_staged_root = std::move(m_workshop_queued_root);
+                m_world_view.m_id = ++m_workshop_epoch;
+                m_workshop_stage->m_diagnostic_revision = m_world_view.m_id;
+                m_candidate_generation = m_workshop_epoch;
+                m_candidate_fingerprint = m_workshop_stage->m_content_fingerprint;
+                m_candidate_next_chunk = 0u;
+                m_candidate_begun = false;
+                m_candidate_ready = false;
+                if (not m_workshop_focused and
+                    not m_workshop_restoring and
+                    m_pan_controller and
+                    m_workshop_staged_preview) {
+                    const auto &bounds = m_workshop_staged_preview->m_visible;
+                    m_pan_controller->clearWorldBounds();
+                    const float scale = std::max(
+                        0.05f, static_cast<float>(colony::kWorldgenPreviewEdge) /
+                                   (3.0f * std::max(200.0f, m_pan_controller->getViewportSize().y * 0.75f)));
+                    PPR_RETURN_ERROR_ON_FAIL(Demo, m_pan_controller->setOrthoScale(scale));
+                    m_pan_controller->focusOn(
+                        float2{(bounds.m_left + bounds.m_right) / 6.0f, (bounds.m_bottom + bounds.m_top) / 6.0f} -
+                        m_pan_controller->getViewportSize() * scale * 0.5f);
+                    m_pan_controller->resetInputState();
+                    m_workshop_focused = true;
+                }
+            }
+            if (m_workshop_stage) {
+                if (not m_candidate_begun) {
+                    queueWorldCommand_(EGridWorldCommand::begin);
+                } else if (m_candidate_next_chunk < m_workshop_stage->m_uploads.size()) {
+                    queueWorldCommand_(EGridWorldCommand::append);
+                } else {
+                    queueWorldCommand_(m_candidate_ready ? EGridWorldCommand::activate : EGridWorldCommand::advance);
+                }
+                PPR_RETURN_ERROR_ON_FAIL(Demo, submitWorldCommand_());
+            }
+            return {};
+        }
+
+        void drawWorkshop_() {
+            auto *const session = m_workshop->session();
+            const colony::WorldgenPanelView view{
+                .m_source = session ? &session->draftSource() : nullptr,
+                .m_catalog = session ? session->validatedCatalog().get() : nullptr,
+                .m_preview = m_workshop_displayed_preview.get(),
+                .m_revision = session ? session->revision() : 0u,
+                .m_validated_revision = session ? session->validatedRevision() : 0u,
+                .m_dirty = session and session->dirty(),
+                .m_busy = m_workshop->busy(),
+                .m_can_undo = session and session->canUndo(),
+                .m_can_redo = session and session->canRedo(),
+                .m_publishing = m_workshop_stage != nullptr,
+                .m_closing = m_workshop_closing or m_workshop_transition != WorkshopTransition::none,
+                .m_preview_current = m_workshop_displayed_preview and
+                                     workshopPreviewMatches_(*m_workshop_displayed_preview, m_workshop_displayed_root),
+                .m_can_export = m_workshop_displayed_preview and
+                                m_workshop_displayed_preview.get() == m_workshop->preview(),
+                .m_status = m_workshop_error.empty() ? m_workshop->status() : std::string_view{m_workshop_error},
+                .m_diagnostics = m_workshop->diagnostics()};
+            for (const auto &intent: colony::drawWorldgenPanel(m_workshop_ui, view)) {
+                std::error_code error{};
+                config::Diagnostics diagnostics{32u};
+                switch (intent.m_kind) {
+                    case colony::EWorkshopIntent::open:
+                        error = requestWorkshopTransition_(
+                            WorkshopTransition::open, std::filesystem::path{m_workshop_ui.m_root.data()});
+                        break;
+                    case colony::EWorkshopIntent::preview:
+                        error = m_workshop->requestPreview(
+                            {std::string{m_workshop_ui.m_profile.data()}, std::string{m_workshop_ui.m_biome.data()},
+                                m_workshop_ui.m_seed, 0u,
+                                {static_cast<u32>(m_workshop_ui.m_origin[0]),
+                                    static_cast<u32>(m_workshop_ui.m_origin[1])}},
+                            m_workshop_ui.m_mode);
+                        break;
+                    case colony::EWorkshopIntent::cancel:
+                        m_workshop->cancel();
+                        m_workshop_queued.reset();
+                        m_workshop_queued_preview.reset();
+                        if (m_workshop_stage and not activationPending_()) {
+                            m_candidate_cancel_needed = true;
+                        }
+                        break;
+                    case colony::EWorkshopIntent::save: error = m_workshop->save(); break;
+                    case colony::EWorkshopIntent::reload:
+                        if (session) {
+                            error = requestWorkshopTransition_(WorkshopTransition::open, session->root());
+                        }
+                        break;
+                    case colony::EWorkshopIntent::revert:
+                        if (session) {
+                            session->revert();
+                            error = m_workshop->validate();
+                        }
+                        break;
+                    case colony::EWorkshopIntent::undo:
+                    case colony::EWorkshopIntent::redo:
+                        if (session) {
+                            const auto changed = intent.m_kind == colony::EWorkshopIntent::undo ? session->undo()
+                                                                                                : session->redo();
+                            if (not changed) {
+                                error = changed.error();
+                            } else if (*changed) {
+                                error = m_workshop->validate();
+                            }
+                        }
+                        break;
+                    case colony::EWorkshopIntent::edit_biome:
+                        if (session) {
+                            error = session->editBiome(intent.m_biome, intent.m_property, intent.m_value, diagnostics);
+                            if (not error) {
+                                error = m_workshop->validate();
+                            }
+                        }
+                        break;
+                    case colony::EWorkshopIntent::export_preview: {
+                        const auto &camera = getMainCamera()->getSnapshot();
+                        const double scale = m_pan_controller->getOrthoScale();
+                        error = m_workshop->exportPreview(
+                            std::filesystem::path{m_workshop_ui.m_export_path.data()},
+                            {camera.m_origin.x + camera.m_viewport_size.x * scale * 0.5,
+                                camera.m_origin.y + camera.m_viewport_size.y * scale * 0.5, scale,
+                                static_cast<u32>(m_workshop_ui.m_mode)});
+                        break;
+                    }
+                    case colony::EWorkshopIntent::close:
+                        if (m_driver or m_workshop_capturing) {
+                            m_workshop_closing = true;
+                        } else {
+                            error = requestWorkshopTransition_(WorkshopTransition::exit);
+                        }
+                        break;
+                }
+                if (error) {
+                    m_workshop_error = error.message() + "\n" + diagnostics.format();
+                } else {
+                    m_workshop_error.clear();
+                }
+            }
+            if (m_workshop_transition != WorkshopTransition::none) {
+                ImGui::OpenPopup("Unsaved biome edits");
+            }
+            if (ImGui::BeginPopupModal("Unsaved biome edits", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+                ImGui::TextWrapped(
+                    "Save biome edits before continuing? Discard replaces this draft and its history only after the requested operation succeeds.");
+                ImGui::TextWrapped("%.*s", static_cast<int>(m_workshop->status().size()), m_workshop->status().data());
+                ImGui::BeginDisabled(m_workshop->busy() or m_workshop_transition_saving);
+                if (ImGui::Button("Save and continue")) {
+                    if (const auto error = m_workshop->save()) {
+                        m_workshop_error = error.message();
+                    } else {
+                        m_workshop_transition_saving = true;
+                    }
+                }
+                ImGui::EndDisabled();
+                ImGui::SameLine();
+                ImGui::BeginDisabled(m_workshop_transition_saving);
+                if (ImGui::Button("Discard and continue")) {
+                    if (const auto error = completeWorkshopTransition_()) {
+                        m_workshop_error = error.message();
+                    } else {
+                        ImGui::CloseCurrentPopup();
+                    }
+                }
+                ImGui::EndDisabled();
+                ImGui::SameLine();
+                if (ImGui::Button("Cancel transition")) {
+                    // Let an already admitted save settle without replacing the draft.
+                    if (m_workshop_transition == WorkshopTransition::exit and
+                        m_driver and
+                        not m_workshop_restore and
+                        not m_workshop_displayed) {
+                        m_workshop_closing = true;
+                    }
+                    m_workshop_transition = WorkshopTransition::none;
+                    m_workshop_transition_saving = false;
+                    m_close_requested.store(false, std::memory_order_release);
+                    ImGui::CloseCurrentPopup();
+                }
+                if (m_workshop_transition == WorkshopTransition::none) {
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::EndPopup();
+            }
+            if (const auto *const preview = m_workshop_displayed_preview.get(); preview and m_workshop_displayed) {
+                const auto map = screenMap_();
+                const auto &bounds = preview->m_visible;
+                const auto a = map.worldToClient(float2{bounds.m_left / 3.0f, bounds.m_bottom / 3.0f});
+                const auto b = map.worldToClient(float2{bounds.m_right / 3.0f, bounds.m_top / 3.0f});
+                if (a and b) {
+                    const auto *const viewport = ImGui::GetMainViewport();
+                    ImGui::GetForegroundDrawList()->AddRect(
+                        ImVec2{viewport->Pos.x + a->x, viewport->Pos.y + b->y},
+                        ImVec2{viewport->Pos.x + b->x, viewport->Pos.y + a->y}, 0xffffff00u, 0.0f, ImDrawFlags_None,
+                        2.0f);
+                }
+                if (not ImGui::GetIO().WantCaptureMouse and
+                    ImGui::IsMouseClicked(ImGuiMouseButton_Left) and
+                    not m_workshop_stage and
+                    not m_workshop_queued) {
+                    const auto point = ImGui::GetMousePos();
+                    const auto *const viewport = ImGui::GetMainViewport();
+                    const auto cell = map.pickCell(float2{point.x - viewport->Pos.x, point.y - viewport->Pos.y});
+                    if (cell and
+                        cell->m_x >= bounds.m_left and
+                        cell->m_x < bounds.m_right and
+                        cell->m_y >= bounds.m_bottom and
+                        cell->m_y < bounds.m_top) {
+                        const auto value = preview->m_grid.getCell(*cell);
+                        if (value) {
+                            const auto *const material = preview->m_catalog.findMaterial(value->m_element);
+                            m_workshop_ui.m_selected_category = "materials";
+                            m_workshop_ui.m_selected_key = material ? material->m_key : "vacuum";
+                        }
+                    }
+                }
+            }
+        }
+
     protected:
         [[nodiscard]] std::error_code render() override {
             const auto begin = m_worldgen_report ? m_observation_clock->now() : TimePoint{};
@@ -3313,6 +3821,18 @@ namespace demo {
                     m_max_control_work = std::max(m_max_control_work, m_observation_clock->now() - begin);
                 }
             };
+            if (not m_workshop_open and
+                not m_workshop_exit_authorized and
+                m_workshop and
+                m_workshop->session() and
+                m_workshop->session()->dirty() and
+                m_close_requested.exchange(false, std::memory_order_acq_rel)) {
+                PPR_RETURN_ERROR_ON_FAIL(Demo, requestWorkshopTransition_(WorkshopTransition::exit));
+                m_workshop_pending = true;
+            }
+            if (m_workshop_open) {
+                return advanceWorkshop_();
+            }
             return m_world_job ? advanceWorldJob_(false) : std::error_code{};
         }
 
@@ -3364,7 +3884,10 @@ namespace demo {
             m_close_requested.store(false, std::memory_order_release);
             m_defer_close.store(true, std::memory_order_release);
             m_loading_presented = false;
-            PPR_RETURN_ERROR_ON_FAIL(Demo, requestWorld_(m_requested_seed));
+            m_workshop = std::make_unique<colony::WorldgenWorkshop>(parallel::backgroundPool());
+            if (not m_workshop_startup) {
+                PPR_RETURN_ERROR_ON_FAIL(Demo, requestWorld_(m_requested_seed));
+            }
 
             auto camera_controller = std::make_unique<PanCameraController>();
             constexpr float ortho_scale = 0.5f;
@@ -3394,6 +3917,9 @@ namespace demo {
 
             initializeInput_();
             PPR_RETURN_ERROR_ON_FAIL(Demo, uploadDebugDraw_());
+            if (m_workshop_startup) {
+                PPR_RETURN_ERROR_ON_FAIL(Demo, openWorkshop_());
+            }
 
             // Bounded runs request normal shutdown through the application timer.
             if (m_auto_exit_seconds.has_value()) {
@@ -3947,6 +4473,9 @@ namespace demo {
         // it lives in the fence/ledger; this hook owns only CPU-consumption.
         void onLaneFrameConsumed_(const RenderFrameResult &result) override {
             ApplicationEditor::onLaneFrameConsumed_(result);
+            if (m_workshop_open) {
+                return;
+            }
             // Same identity gate as the base hook: a settling result whose
             // packet matches the driver's seed but belongs to a previous run
             // would otherwise ack world edits the driver never re-staged.
@@ -4091,6 +4620,27 @@ namespace demo {
                     m_last_update_work = elapsed;
                 }
             };
+            if (m_workshop_pending and
+                m_driver and
+                m_driver->captureReady() and
+                not m_world_job->busy() and
+                not m_world_command) {
+                PPR_RETURN_ERROR_ON_FAIL(Demo, openWorkshop_());
+            }
+            if (m_workshop_open) {
+                PPR_RETURN_ERROR_ON_FAIL(Demo, advanceWorkshop_());
+                if (m_workshop_open) {
+                    refreshControllerViewport_();
+                    clearControlInput_();
+                    PPR_RETURN_ERROR_ON_FAIL(Demo, super_t::update(dt));
+                    GridPass::GridStagedFrame retained{};
+                    retained.m_retain_content = true;
+                    submitGridStage(std::move(retained));
+                    submitTriangleStage(TrianglePass::TriangleStagedFrame{});
+                    drawWorkshop_();
+                    return {};
+                }
+            }
             PPR_RETURN_ERROR_ON_FAIL(Demo, advanceWorldJob_());
             PPR_RETURN_ERROR_ON_FAIL(Demo, advanceAcceptance_());
             if (m_preview_pending and (not m_driver or m_driver->captureReady())) {
@@ -4295,6 +4845,9 @@ namespace demo {
         [[nodiscard]] std::error_code shutdown() override {
             std::error_code first_error{};
             m_defer_close.store(false, std::memory_order_release);
+            if (m_workshop) {
+                PPR_RETAIN_ERROR_ON_FAIL(Demo, first_error, m_workshop->shutdown());
+            }
             // Ordinary close has already drained in the normal loop. This
             // synchronous fallback is reserved for bootstrap/terminal failure.
             if (m_world_job) {

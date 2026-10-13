@@ -60,6 +60,10 @@ export namespace pP::colony {
     [[nodiscard]] std::error_code exportWorldDiagnostics(
         const ContentCatalog &catalog, const sim::GeneratedWorld &world, const WorldDescriptor &descriptor,
         const std::filesystem::path &directory, const IContext *context = nullptr);
+    /// Streams one P6 pixel per cell from an owned uniform-biome region, +Y-up.
+    [[nodiscard]] std::error_code exportWorldgenRegionImages(
+        const ContentCatalog &catalog, const sim::ChunkGrid &grid, sim::GenerationCellBounds bounds, u32 biome_index,
+        const std::filesystem::path &directory, const IContext *context = nullptr);
     /// Explicit legacy smoke/many-agent fixture only; authored sessions use prepareWorld.
     /// Kept game-owned so engine generation remains numeric-plan driven.
     [[nodiscard]] std::error_code generateLegacyFixture(

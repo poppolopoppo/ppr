@@ -1,0 +1,373 @@
+module;
+#include "pP/Macros.h"
+module game.application;
+import :worldgen_workshop;
+import game.colony.sim_packet;
+import game.colony.metric;
+import engine.sim;
+import std;
+
+namespace pP::colony {
+    PPR_DEFINE_LOG_CATEGORY(Workshop, info, none);
+    Expected<GridPass::GridStagedFrame> captureWorldgenPreviewPresentation(
+        const WorldgenPreviewResult &preview, const EGridDiagnosticMode mode, const u64 revision,
+        const IContext &context) {
+        PPR_RETURN_UNEXPECTED_ON_FAIL(Workshop, context.error());
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            Workshop, mode <= EGridDiagnosticMode::temperature and revision != 0u
+                          ? std::error_code{}
+                          : std::make_error_code(std::errc::invalid_argument));
+        SimFramePacket packet{};
+        packet = captureCatalogPresentation(
+            preview.m_catalog, preview.m_spec.m_profile, preview.m_plan.recipe().m_boundary_material,
+            kFineCellsPerMetre, kReferenceThicknessMetres);
+        packet.m_world_generation = revision;
+        packet.m_full_refresh = true;
+        if (preview.m_plan.recipe().m_open_surface) {
+            auto surface = std::make_shared<GridSurfaceProfile>();
+            surface->m_cell_size_m = packet.m_cell_size_m;
+            for (u32 column = 0u; column < kGridSurfaceColumns; ++column) {
+                surface->m_heights_m[column / 4u][column % 4u] = static_cast<float>(
+                    sim::generationSurfaceHeight(preview.m_plan, (column + 0.5) * packet.m_cell_size_m));
+            }
+            packet.m_surface_profile = std::move(surface);
+        }
+        for (u32 cy = preview.m_support.m_bottom / sim::kChunkEdge; cy < preview.m_support.m_top / sim::kChunkEdge;
+            ++cy) {
+            for (u32 cx = preview.m_support.m_left / sim::kChunkEdge; cx < preview.m_support.m_right / sim::kChunkEdge;
+                ++cx) {
+                PPR_RETURN_UNEXPECTED_ON_FAIL(Workshop, context.error());
+                const sim::ChunkPos position{cx, cy};
+                const auto cells = preview.m_grid.residentCells(position);
+                PPR_RETURN_UNEXPECTED_ON_FAIL(
+                    Workshop,
+                    cells.has_value() ? std::error_code{} : std::make_error_code(std::errc::state_not_recoverable));
+                packet.m_resident_chunks.push_back(position);
+                packet.m_chunk_cells.push_back({position, Array<sim::Cell>{cells->begin(), cells->end()}});
+            }
+        }
+        GridPass::GridStagedFrame stage{};
+        PPR_RETURN_UNEXPECTED_ON_FAIL(Workshop, buildGridStagedFrame(packet, stage));
+        // GridPass requires complete chunk ranges. The client marks the visible
+        // interior separately from the retained contour/formation support context.
+        stage.m_diagnostic_mode = mode;
+        stage.m_diagnostic_revision = revision;
+        if (mode == EGridDiagnosticMode::material) {
+            stage.m_diagnostic_palette.resize(65536u);
+            for (const auto &material: preview.m_catalog.materials()) {
+                stage.m_diagnostic_palette[material.m_numeric_id].m_color_rgba = material.m_color_rgba;
+            }
+        } else if (mode == EGridDiagnosticMode::biome) {
+            stage.m_diagnostic_palette.push_back({});
+            for (const auto &biome: preview.m_catalog.biomes()) {
+                stage.m_diagnostic_palette.push_back({biome.m_preview_color_rgba});
+            }
+        } else if (mode == EGridDiagnosticMode::temperature) {
+            stage.m_diagnostic_palette.push_back({0x202020ffu});
+            for (u32 bin = 0u; bin < 256u; ++bin) {
+                const u32 green = 255u - static_cast<u32>(std::abs(2 * static_cast<i32>(bin) - 255));
+                stage.m_diagnostic_palette.push_back({(bin << 24u) | (green << 16u) | ((255u - bin) << 8u) | 255u});
+            }
+        }
+        if (mode == EGridDiagnosticMode::biome or mode == EGridDiagnosticMode::temperature) {
+            for (auto &upload: stage.m_uploads) {
+                PPR_RETURN_UNEXPECTED_ON_FAIL(Workshop, context.error());
+                const sim::ChunkPos position{
+                    upload.m_chunk_id % sim::kChunksPerEdge, upload.m_chunk_id / sim::kChunksPerEdge};
+                const auto cells = preview.m_grid.residentCells(position);
+                PPR_RETURN_UNEXPECTED_ON_FAIL(
+                    Workshop,
+                    cells.has_value() ? std::error_code{} : std::make_error_code(std::errc::state_not_recoverable));
+                upload.m_diagnostic_indices.resize(sim::kCellsPerChunk);
+                for (u32 i = 0u; i < sim::kCellsPerChunk; ++i) {
+                    if (mode == EGridDiagnosticMode::biome) {
+                        upload.m_diagnostic_indices[i] = static_cast<u16>(preview.m_biome_index + 1u);
+                    } else if ((*cells)[i].m_element != 0u) {
+                        const double unit = std::clamp(
+                            (static_cast<double>((*cells)[i].m_temperature) - 200.0) / 800.0, 0.0, 1.0);
+                        upload.m_diagnostic_indices[i] = static_cast<u16>(
+                            std::min(255u, static_cast<u32>(unit * 256.0)) + 1u);
+                    }
+                }
+            }
+        }
+        return stage;
+    }
+
+    struct WorldgenWorkshop::Request {
+        enum class Kind : u8 {
+            open,
+            validate,
+            preview,
+            save,
+            export_preview
+        };
+        Kind m_kind{};
+        u64 m_id{};
+        u64 m_replaced_revision{};
+        std::filesystem::path m_path{};
+        std::optional<ContentAuthoringSnapshot> m_snapshot{};
+        WorldgenPreviewSpec m_spec{};
+        EGridDiagnosticMode m_mode{};
+        WorldgenPreviewDisplay m_display{};
+        std::shared_ptr<State> m_export{};
+    };
+    struct WorldgenWorkshop::State {
+        Request m_request;
+        SharedContext m_context;
+        context::CancelClauseFunc m_cancel;
+        config::Diagnostics m_diagnostics{64u};
+        std::unique_ptr<ContentAuthoringSession> m_opened{};
+        std::unique_ptr<ContentAuthoringSession> m_retired_session{};
+        std::shared_ptr<const ContentCatalog> m_catalog{};
+        std::optional<ContentAuthoringSaveResult> m_saved{};
+        std::optional<WorldgenPreviewResult> m_preview{};
+        std::unique_ptr<GridPass::GridStagedFrame> m_stage{};
+        std::string m_diagnostic_text{};
+    };
+    WorldgenWorkshop::WorldgenWorkshop(ParallelScheduler &pool) : m_pool(pool) {
+    }
+    WorldgenWorkshop::~WorldgenWorkshop() noexcept {
+        PPR_LOG_WARNING_ON_FAIL(Workshop, shutdown());
+    }
+    ContentAuthoringSession *WorldgenWorkshop::session() noexcept {
+        return m_session.get();
+    }
+    const WorldgenPreviewResult *WorldgenWorkshop::preview() const noexcept {
+        return m_last_preview and m_last_preview->m_preview ? &*m_last_preview->m_preview : nullptr;
+    }
+    std::shared_ptr<const WorldgenPreviewResult> WorldgenWorkshop::previewHandle() const noexcept {
+        return preview() ? std::shared_ptr<const WorldgenPreviewResult>{m_last_preview, preview()} : nullptr;
+    }
+    std::string_view WorldgenWorkshop::status() const noexcept {
+        return m_status;
+    }
+    std::string_view WorldgenWorkshop::diagnostics() const noexcept {
+        return m_diagnostics;
+    }
+    bool WorldgenWorkshop::busy() const noexcept {
+        return m_running != nullptr or m_replacement != nullptr;
+    }
+    std::error_code WorldgenWorkshop::queue_(Request request) {
+        PPR_RETURN_ERROR_ON_FAIL(
+            Workshop, m_closing ? std::make_error_code(std::errc::operation_canceled) : std::error_code{});
+        PPR_RETURN_ERROR_ON_FAIL(
+            Workshop, m_next_request != 0u ? std::error_code{} : std::make_error_code(std::errc::value_too_large));
+        request.m_id = m_next_request++;
+        m_latest_request = request.m_id;
+        if (m_running) {
+            m_running->m_cancel(std::make_error_code(std::errc::operation_canceled));
+        }
+        m_replacement = std::make_unique<Request>(std::move(request));
+        m_status = "Queued; the previous successful preview remains visible.";
+        return {};
+    }
+    std::error_code WorldgenWorkshop::open(std::filesystem::path root, const std::optional<u64> discard_revision) {
+        PPR_RETURN_ERROR_ON_FAIL(
+            Workshop, root.empty() ? std::make_error_code(std::errc::invalid_argument) : std::error_code{});
+        PPR_RETURN_ERROR_ON_FAIL(
+            Workshop, not m_session or not m_session->dirty() or discard_revision == m_session->revision()
+                          ? std::error_code{}
+                          : std::make_error_code(std::errc::operation_not_permitted));
+        Request request{};
+        request.m_kind = Request::Kind::open;
+        request.m_path = std::move(root);
+        request.m_replaced_revision = m_session ? m_session->revision() : 0u;
+        return queue_(std::move(request));
+    }
+    std::error_code WorldgenWorkshop::validate() {
+        PPR_RETURN_ERROR_ON_FAIL(
+            Workshop, m_session ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
+        Request request{};
+        request.m_kind = Request::Kind::validate;
+        request.m_snapshot = m_session->draftSnapshot();
+        return queue_(std::move(request));
+    }
+    std::error_code WorldgenWorkshop::requestPreview(WorldgenPreviewSpec spec, const EGridDiagnosticMode mode) {
+        PPR_RETURN_ERROR_ON_FAIL(
+            Workshop, m_session ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
+        Request request{};
+        request.m_kind = Request::Kind::preview;
+        request.m_snapshot = m_session->draftSnapshot();
+        spec.m_revision = request.m_snapshot->m_revision;
+        request.m_spec = std::move(spec);
+        request.m_mode = mode;
+        return queue_(std::move(request));
+    }
+    std::error_code WorldgenWorkshop::save() {
+        PPR_RETURN_ERROR_ON_FAIL(
+            Workshop,
+            m_session and not busy() ? std::error_code{} : std::make_error_code(std::errc::device_or_resource_busy));
+        Request request{};
+        request.m_kind = Request::Kind::save;
+        request.m_snapshot = m_session->draftSnapshot();
+        return queue_(std::move(request));
+    }
+    std::error_code WorldgenWorkshop::exportPreview(std::filesystem::path path, const WorldgenPreviewDisplay display) {
+        PPR_RETURN_ERROR_ON_FAIL(
+            Workshop, m_last_preview and not path.empty() and not busy()
+                          ? std::error_code{}
+                          : std::make_error_code(std::errc::invalid_argument));
+        Request request{};
+        request.m_kind = Request::Kind::export_preview;
+        request.m_path = std::move(path);
+        request.m_display = display;
+        request.m_display.m_view_mode = static_cast<u32>(m_last_preview->m_request.m_mode);
+        request.m_export = m_last_preview;
+        return queue_(std::move(request));
+    }
+    void WorldgenWorkshop::cancel() noexcept {
+        if (m_running) {
+            m_running->m_cancel(std::make_error_code(std::errc::operation_canceled));
+        }
+        m_replacement.reset();
+        ++m_latest_request;
+    }
+    void WorldgenWorkshop::close() noexcept {
+        m_closing = true;
+        cancel();
+    }
+    std::unique_ptr<GridPass::GridStagedFrame> WorldgenWorkshop::takePresentation() {
+        return std::move(m_presentation);
+    }
+    std::error_code WorldgenWorkshop::update() {
+        if (m_running and m_task.valid() and m_task.wait_for(std::chrono::seconds{0}) == std::future_status::ready) {
+            const auto error = m_task.get();
+            const auto state = m_running;
+            m_completed = std::move(m_running);
+            // An atomic replacement may have committed before cancellation.
+            // Always advance its matching session baseline, preserving newer edits.
+            if (state->m_saved and m_session and state->m_saved->m_snapshot.m_root == m_session->root()) {
+                (void) m_session->acceptSave(std::move(*state->m_saved));
+            }
+            if (state->m_request.m_id == m_latest_request and not m_closing) {
+                m_diagnostics = state->m_diagnostic_text;
+                if (error) {
+                    m_status = "Request failed: " + error.message() + ". Draft and last good preview retained.";
+                    if (state->m_request.m_kind == Request::Kind::export_preview) {
+                        m_status += " Partial output may remain at " + state->m_request.m_path.string();
+                    }
+                } else {
+                    if (state->m_opened and
+                        (m_session ? m_session->revision() : 0u) != state->m_request.m_replaced_revision) {
+                        m_status =
+                            "Open cancelled because the draft changed while loading. Draft and history retained.";
+                        return {};
+                    }
+                    if (state->m_opened) {
+                        state->m_retired_session = std::move(m_session);
+                        m_session = std::move(state->m_opened);
+                    }
+                    if (m_session and state->m_catalog and state->m_request.m_snapshot) {
+                        (void) m_session->acceptValidation(state->m_request.m_snapshot->m_revision, state->m_catalog);
+                    }
+                    const bool matching = m_session and
+                                          state->m_request.m_snapshot and
+                                          state->m_request.m_snapshot->m_root == m_session->root() and
+                                          state->m_request.m_snapshot->m_revision == m_session->revision();
+                    if (state->m_preview and matching) {
+                        m_retired_preview = std::move(m_last_preview);
+                        m_last_preview = state;
+                        m_presentation = std::move(state->m_stage);
+                    }
+                    m_status = state->m_request.m_kind == Request::Kind::export_preview
+                                   ? "Preview exported to " + state->m_request.m_path.string()
+                                   : "Request completed.";
+                }
+            }
+        }
+        if (m_running or not m_replacement or m_closing) {
+            return {};
+        }
+        auto state = std::make_shared<State>();
+        state->m_request = *m_replacement;
+        std::tie(state->m_context, state->m_cancel) = context::withCancelClause(context::background());
+        // Retain the previous completed task until a worker owns its final disposal.
+        const auto retired = m_completed;
+        const auto retired_preview = m_retired_preview;
+        auto task = m_pool.schedule(
+            [state, retired, retired_preview](const IContext &) -> std::error_code {
+                auto execute = [&]() -> std::error_code {
+                    PPR_RETURN_ERROR_ON_FAIL(Workshop, state->m_context->error());
+                    auto &request = state->m_request;
+                    if (request.m_kind == Request::Kind::open) {
+                        auto opened = ContentAuthoringSession::open(
+                            request.m_path, state->m_diagnostics, state->m_context.get());
+                        PPR_RETURN_ERROR_ON_FAIL(Workshop, opened);
+                        state->m_opened = std::make_unique<ContentAuthoringSession>(std::move(*opened));
+                    } else if (request.m_kind == Request::Kind::save) {
+                        auto saved = saveContentDraft(
+                            *request.m_snapshot, state->m_diagnostics, state->m_context.get());
+                        PPR_RETURN_ERROR_ON_FAIL(Workshop, saved);
+                        state->m_saved = std::move(*saved);
+                    } else if (request.m_kind == Request::Kind::export_preview) {
+                        PPR_RETURN_ERROR_ON_FAIL(
+                            Workshop,
+                            exportWorldgenPreview(
+                                *request.m_export->m_preview, request.m_export->m_request.m_snapshot->m_source,
+                                request.m_display, request.m_path, state->m_context.get()));
+                    } else {
+                        auto catalog = validateContentDraft(
+                            *request.m_snapshot, state->m_diagnostics, state->m_context.get());
+                        PPR_RETURN_ERROR_ON_FAIL(Workshop, catalog);
+                        state->m_catalog = *catalog;
+                        if (request.m_kind == Request::Kind::preview) {
+                            auto preview = prepareWorldgenPreview(**catalog, request.m_spec, state->m_context.get());
+                            PPR_RETURN_ERROR_ON_FAIL(Workshop, preview);
+                            auto stage = captureWorldgenPreviewPresentation(
+                                *preview, request.m_mode, request.m_id, *state->m_context);
+                            PPR_RETURN_ERROR_ON_FAIL(Workshop, stage);
+                            state->m_preview = std::move(*preview);
+                            state->m_stage = std::make_unique<GridPass::GridStagedFrame>(std::move(*stage));
+                        }
+                    }
+                    PPR_RETURN_ERROR_ON_FAIL(Workshop, state->m_context->error());
+                    return {};
+                };
+                std::error_code error{};
+                try {
+                    error = execute();
+                } catch (const std::bad_alloc &) {
+                    throw;
+                } catch (const std::system_error &exception) {
+                    error = exception.code();
+                } catch (...) {
+                    error = std::make_error_code(std::errc::state_not_recoverable);
+                }
+                state->m_diagnostic_text = state->m_diagnostics.format();
+                if (state->m_diagnostic_text.size() > 64u * 1024u) {
+                    state->m_diagnostic_text.resize(64u * 1024u);
+                }
+                return error;
+            },
+            std::nullopt, ParallelScheduler::drop_if_full);
+        if (not task and task.error() == make_error_code(RawChannel::error_full)) {
+            return {};
+        }
+        PPR_RETURN_ERROR_ON_FAIL(Workshop, task);
+        m_completed.reset();
+        m_retired_preview.reset();
+        m_task = std::move(*task);
+        m_running = std::move(state);
+        m_replacement.reset();
+        m_status = "Working; edits can queue one replacement snapshot.";
+        return {};
+    }
+    std::error_code WorldgenWorkshop::shutdown() {
+        close();
+        std::error_code error{};
+        if (m_task.valid()) {
+            const auto result = m_task.get();
+            if (result != std::errc::operation_canceled) {
+                PPR_RETAIN_ERROR_ON_FAIL(Workshop, error, result);
+            }
+        }
+        m_running.reset();
+        m_completed.reset();
+        m_last_preview.reset();
+        m_retired_preview.reset();
+        m_presentation.reset();
+        m_session.reset();
+        return error;
+    }
+}

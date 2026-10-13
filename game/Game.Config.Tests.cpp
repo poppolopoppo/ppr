@@ -58,6 +58,14 @@ namespace pP::game::tests::detail::compat {
         auto interactive = resolveCli({}, default_diagnostics);
         PPR_TEST_ASSERT(interactive.has_value());
         PPR_TEST_ASSERT(interactive->m_game.m_value.m_command == EGameCommand::interactive);
+
+        Diagnostics workshop_diagnostics{};
+        const auto workshop = resolveCli(
+            {"--worldgen-workshop", "--worldgen-seed=18446744073709551615"}, workshop_diagnostics);
+        PPR_TEST_ASSERT(workshop.has_value());
+        PPR_TEST_ASSERT(workshop->m_game.m_value.m_command == EGameCommand::worldgen_workshop);
+        PPR_TEST_ASSERT(not workshop->m_game.m_value.m_worldgen_root);
+        PPR_TEST_ASSERT(workshop->m_game.m_value.m_worldgen_seed == (std::numeric_limits<u64>::max)());
     };
 
     PPR_UNIT_TEST (worldgen_validation_invocation) {
