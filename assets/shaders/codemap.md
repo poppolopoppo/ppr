@@ -144,3 +144,9 @@ comes from the chosen material with global row-major ties. Outside-world samples
 use the profile's validated wall material without forming atlas addresses. Each
 chunk draws only its nominal rectangle. Explicit legacy fixtures retain square
 cells. Catalog color textures use world-space metric UVs and explicit gradients.
+
+The background program receives exact generation heights for all 4096 fine
+columns in a separate 16 KiB constant buffer. The existing 304-byte frame
+carries its enable flag and cell metric. Above each column's surface it draws
+a sky gradient; below it retains the four authored parallax layers. The same
+rendered backdrop supplies optical terrain and particle refraction.

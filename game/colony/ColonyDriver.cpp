@@ -236,6 +236,24 @@ namespace pP::colony {
         return preparedWorld() ? kFineCellsPerMetre : 1u;
     }
 
+    bool ColonyDriver::sampleSurfaceHeights(const std::span<float> heights) const noexcept {
+        PPR_ASSERT(heights.size() == sim::kWorldEdge);
+        const auto *const prepared = preparedWorld();
+        if (prepared == nullptr) {
+            return false;
+        }
+        const auto &plan = prepared->generated().m_plan;
+        const auto &recipe = plan.recipe();
+        if (not recipe.m_open_surface) {
+            return false;
+        }
+        for (u32 column = 0u; column < sim::kWorldEdge; ++column) {
+            const double x_m = (static_cast<double>(column) + 0.5) * recipe.m_cell_size_m;
+            heights[column] = static_cast<float>(sim::generationSurfaceHeight(plan, x_m));
+        }
+        return true;
+    }
+
     double ColonyDriver::referenceThicknessMetres() const noexcept {
         const auto *const prepared = preparedWorld();
         return prepared ? prepared->descriptor().m_metric.m_reference_thickness_m : 1.0;

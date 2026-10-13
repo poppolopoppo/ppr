@@ -852,6 +852,7 @@ namespace demo {
                 header.m_reference_thickness_m = source.m_reference_thickness_m;
                 header.m_has_background = source.m_has_background;
                 header.m_background_layers = source.m_background_layers;
+                header.m_surface_profile = source.m_surface_profile;
                 header.m_particle_batches = source.m_particle_batches;
                 header.m_tiles = source.m_tiles;
                 header.m_diagnostic_mode = source.m_diagnostic_mode;

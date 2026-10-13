@@ -25,7 +25,7 @@ struct GridFrame {
     float4 m_viewport;
     float2 m_camera_origin;
     uint m_has_background;
-    uint m_padding;
+    uint m_has_surface;
     BackgroundLayer m_layers[4];
 };
 

@@ -246,6 +246,9 @@ export namespace pP::colony {
         [[nodiscard]] const ContentCatalog *contentCatalog() const noexcept;
         [[nodiscard]] u16 boundaryMaterial() const noexcept;
         [[nodiscard]] u32 cellsPerMetre() const noexcept;
+        // Exactly 4096 column-centre heights. False denotes a legacy fixture
+        // or closed world and leaves the caller's output untouched.
+        [[nodiscard]] bool sampleSurfaceHeights(std::span<float> heights) const noexcept;
         [[nodiscard]] double referenceThicknessMetres() const noexcept;
         [[nodiscard]] std::string_view profileKey() const noexcept;
 

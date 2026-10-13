@@ -269,6 +269,23 @@ namespace pP {
             GridPass, (stage.m_cell_size_m == 1.0f or stage.m_cell_size_m == 1.0f / 3.0f)
                           ? std::error_code{}
                           : std::make_error_code(std::errc::invalid_argument));
+        if (stage.m_surface_profile) {
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass, stage.m_has_background and stage.m_surface_profile->m_cell_size_m == stage.m_cell_size_m
+                              ? std::error_code{}
+                              : std::make_error_code(std::errc::invalid_argument));
+            if (stage.m_surface_profile != m_world.m_surface_profile) {
+                const float world_height_m = static_cast<float>(kGridSurfaceColumns) * stage.m_cell_size_m;
+                for (const auto &heights: stage.m_surface_profile->m_heights_m) {
+                    for (const float height: heights) {
+                        PPR_RETURN_ERROR_ON_FAIL(
+                            GridPass, std::isfinite(height) and height >= 0.0f and height <= world_height_m
+                                          ? std::error_code{}
+                                          : std::make_error_code(std::errc::invalid_argument));
+                    }
+                }
+            }
+        }
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass, stage.m_boundary_material_id > 0u and stage.m_boundary_material_id < 0xffffu
                           ? std::error_code{}
@@ -373,6 +390,13 @@ namespace pP {
                               m_world.m_cell_size_m == stage.m_cell_size_m and
                               m_world.m_reference_thickness_m == stage.m_reference_thickness_m and
                               m_world.m_has_background == stage.m_has_background and
+                              (m_world.m_surface_profile == stage.m_surface_profile or
+                                  (m_world.m_surface_profile and
+                                      stage.m_surface_profile and
+                                      m_world.m_surface_profile->m_cell_size_m ==
+                                          stage.m_surface_profile->m_cell_size_m and
+                                      m_world.m_surface_profile->m_heights_m ==
+                                          stage.m_surface_profile->m_heights_m)) and
                               std::ranges::equal(
                                   m_world.m_background_layers, stage.m_background_layers,
                                   [](const GridBackgroundLayer &a, const GridBackgroundLayer &b) {
@@ -433,6 +457,7 @@ namespace pP {
         m_world.m_boundary_material_id = stage.m_boundary_material_id;
         m_world.m_has_background = stage.m_has_background;
         m_world.m_background_layers = stage.m_background_layers;
+        m_world.m_surface_profile = stage.m_surface_profile;
         m_world.m_reference_thickness_m = stage.m_reference_thickness_m;
         if (stage.m_reset_caches) {
             clearTiles();
@@ -1903,6 +1928,7 @@ namespace pP {
         m_world.m_particles = {};
         m_world.m_has_background = false;
         m_world.m_background_layers = {};
+        m_world.m_surface_profile.reset();
         m_particle_uploads = 0u;
         m_particle_uploaded_bytes = 0u;
         m_candidate_world.reset();
@@ -2759,6 +2785,7 @@ namespace pP {
         frame.m_camera_origin[0] = m_background_camera.m_origin.x;
         frame.m_camera_origin[1] = m_background_camera.m_origin.y;
         frame.m_layers = m_world.m_background_layers;
+        frame.m_has_surface = m_world.m_surface_profile ? 1u : 0u;
         for (auto &layer: frame.m_layers) {
             if (layer.m_texture_index < m_world.m_texture_slots.size()) {
                 layer.m_texture_index = m_world.m_texture_slots[layer.m_texture_index];
@@ -2946,11 +2973,17 @@ namespace pP {
         rhi::ShaderCursor cursor{root};
         GridFrame frame{};
         frame.m_view_projection = camera.m_view_projection;
+        frame.m_cell_size_m = m_world.m_cell_size_m;
         fillOpticalFrame_(frame);
         frame.m_has_background = 1u;
         frame.m_viewport[0] = 0.0f;
         frame.m_viewport[1] = 0.0f;
         PPR_RETURN_ERROR_ON_FAIL(GridPass, (*pipeline)->m_slot_frame_cursors[selected].setData(&frame, sizeof(frame)));
+        rhi::ShaderCursor surface;
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, cursor["g_surface_profile"].getDereferenced(surface));
+        static constexpr GridSurfaceHeights no_surface{};
+        const auto &heights = m_world.m_surface_profile ? m_world.m_surface_profile->m_heights_m : no_surface;
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, surface.setData(&heights, sizeof(heights)));
         auto *const descriptors = m_world.m_texture_cache->descriptorBuffer();
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass, cursor["g_textures"].setBinding(rhi::Binding(descriptors, makeFullRange(descriptors))));

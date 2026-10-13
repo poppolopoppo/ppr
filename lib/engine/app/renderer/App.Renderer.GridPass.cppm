@@ -96,6 +96,16 @@ export namespace pP {
     static_assert(PPR_OFFSETOF(GridBackgroundLayer, m_repeat_period_m) == 12u);
     static_assert(PPR_OFFSETOF(GridBackgroundLayer, m_parallax_factor) == 16u);
 
+    inline constexpr u32 kGridSurfaceColumns = 4096u;
+    using GridSurfaceHeights = std::array<std::array<float, 4u>, kGridSurfaceColumns / 4u>;
+    static_assert(sizeof(GridSurfaceHeights) == 16384u);
+    // Exact generation height at each fine-column centre. Immutable owned
+    // presentation data; no generation recipe or simulation dependency crosses here.
+    struct GridSurfaceProfile {
+        float m_cell_size_m{1.0f};
+        GridSurfaceHeights m_heights_m{};
+    };
+
     // Immutable source records stay in physical units. Only changed chunks are
     // repacked for the GPU; no simulation type crosses the renderer boundary.
     struct GridParticleInstance {
@@ -259,14 +269,18 @@ export namespace pP {
             float m_viewport[4]{};
             float m_camera_origin[2]{};
             u32 m_has_background{};
-            u32 m_padding{};
+            u32 m_has_surface{};
             std::array<GridBackgroundLayer, 4u> m_layers{};
         };
 
         static_assert(sizeof(GridFrame) == 304u);
+        static_assert(alignof(GridFrame) == 16u);
+        // Mango matrices have non-trivial copy/destruction; their established
+        // row-major wire representation is pinned by these size/offset checks.
         static_assert(PPR_OFFSETOF(GridFrame, m_inverse_view_projection) == 80u);
         static_assert(PPR_OFFSETOF(GridFrame, m_viewport) == 144u);
         static_assert(PPR_OFFSETOF(GridFrame, m_layers) == 176u);
+        static_assert(PPR_OFFSETOF(GridFrame, m_has_surface) == 172u);
 
         [[nodiscard]] std::error_code prepareBackground(
             const PreRenderContext &context, const CameraSnapshot &camera, const rhi::Viewport &viewport,
@@ -369,6 +383,7 @@ export namespace pP {
             Array<image::ImageAsset> m_terrain_images{};
             bool m_has_background{false};
             std::array<GridBackgroundLayer, 4u> m_background_layers{};
+            std::shared_ptr<const GridSurfaceProfile> m_surface_profile{};
             float m_reference_thickness_m{1.0f};
             Array<GridParticleBatch> m_particle_batches{};
             Array<GridTileSubmission> m_tiles{};
@@ -743,6 +758,7 @@ export namespace pP {
         struct WorldResources {
             bool m_has_background{};
             std::array<GridBackgroundLayer, 4u> m_background_layers{};
+            std::shared_ptr<const GridSurfaceProfile> m_surface_profile{};
             float m_reference_thickness_m{1.0f};
             std::array<ParticleChunk, kGridTileCacheCapacity> m_particles{};
             EGridDiagnosticMode m_diagnostic_mode{EGridDiagnosticMode::textured};

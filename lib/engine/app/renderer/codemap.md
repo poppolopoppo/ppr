@@ -353,3 +353,9 @@ query storage omits telemetry; query failures disable telemetry with a diagnosti
 The pool follows the same proven-idle/confirmed-removal release rules as other
 Renderer resources. Delayed `GpuFrameTiming` observations retain their submission
 identity when transported to the main thread in `RenderFrameResult`.
+
+GridPass retains an optional immutable numeric surface profile with each world
+bundle. Its background-only 16 KiB height constant buffer selects sky above the
+exact fine-column surface and authored parallax below. The 304-byte frame ABI
+uses its former padding word for the surface enable flag; tile and particle
+frames keep their size. Surface data shares candidate publication and retirement.

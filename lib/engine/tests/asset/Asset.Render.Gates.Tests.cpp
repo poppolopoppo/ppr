@@ -1324,6 +1324,24 @@ namespace pP::tests::detail {
                 masked.m_background_layers[layer].m_color_rgba = layer == 0u ? 0x000000ffu : 0xffffff00u;
                 PPR_TEST_ASSERT(changedOpticalPixels_(complete, capture(masked)) > 100u);
             }
+
+            // The centre row lies above the left surface and below the right
+            // surface. Both samples use the real reflected height buffer.
+            auto surface_stage = complete_stage;
+            auto surface = std::make_shared<GridSurfaceProfile>();
+            for (u32 column = 0u; column < kGridSurfaceColumns; ++column) {
+                surface->m_heights_m[column / 4u][column % 4u] = column < 64u ? 63.0f : 65.0f;
+            }
+            surface_stage.m_surface_profile = std::move(surface);
+            const auto surfaced = capture(surface_stage);
+            const auto sky = gateTexel_(surfaced, 32u, 64u);
+            PPR_TEST_ASSERT(sky != gateTexel_(complete, 32u, 64u));
+            PPR_TEST_ASSERT(sky[2] > sky[1] and sky[1] > sky[0]);
+            PPR_TEST_ASSERT(gateTexel_(surfaced, 96u, 64u) == gateTexel_(complete, 96u, 64u));
+            surface_stage.m_terrain_visuals[0u].m_opacity = 0.0f;
+            surface_stage.m_terrain_visuals[0u].m_ior = 1.0f;
+            surface_stage.m_uploads[0u].m_cell_materials.assign(GridPass::kCellsPerChunk, 1u);
+            PPR_TEST_ASSERT(changedOpticalPixels_(surfaced, capture(surface_stage)) == 0u);
         };
 
         [[nodiscard]] image::ImageAsset gridPattern_(const bool normal, const bool constant = false) {

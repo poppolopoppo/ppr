@@ -5,6 +5,7 @@ module;
 
 module game.colony.sim_packet;
 
+import engine.sim;
 import game.colony.content;
 import std;
 
@@ -97,7 +98,9 @@ namespace pP::colony {
                 }
             }
             ParticlePresentationCache temporary;
-            packet.m_particle_batches = (particle_cache ? *particle_cache : temporary).capture(driver);
+            auto &cache = particle_cache ? *particle_cache : temporary;
+            packet.m_particle_batches = cache.capture(driver);
+            packet.m_surface_profile = cache.captureSurface(driver);
         }
 
         [[nodiscard]] std::error_code validatePresentation_(const SimFramePacket &packet) {
@@ -205,6 +208,8 @@ namespace pP::colony {
     Array<GridParticleBatch> ParticlePresentationCache::capture(const ColonyDriver &driver) {
         if (m_generation != driver.worldGeneration()) {
             m_chunks = {};
+            m_surface_profile.reset();
+            m_surface_captured = false;
             m_generation = driver.worldGeneration();
         }
         std::array<std::shared_ptr<const Array<sim::MatterParticle>>, sim::kChunkCount> sources{};
@@ -236,6 +241,32 @@ namespace pP::colony {
             }
         }
         return result;
+    }
+
+    std::shared_ptr<const GridSurfaceProfile> ParticlePresentationCache::captureSurface(const ColonyDriver &driver) {
+        if (m_generation != driver.worldGeneration()) {
+            m_chunks = {};
+            m_surface_profile.reset();
+            m_surface_captured = false;
+            m_generation = driver.worldGeneration();
+        }
+        if (m_surface_captured) {
+            return m_surface_profile;
+        }
+        static_assert(kGridSurfaceColumns == sim::kWorldEdge);
+        std::array<float, kGridSurfaceColumns> heights;
+        if (not driver.sampleSurfaceHeights(heights)) {
+            m_surface_captured = true;
+            return {};
+        }
+        auto surface = std::make_shared<GridSurfaceProfile>();
+        surface->m_cell_size_m = 1.0f / static_cast<float>(driver.cellsPerMetre());
+        for (u32 column = 0u; column < kGridSurfaceColumns; ++column) {
+            surface->m_heights_m[column / 4u][column % 4u] = heights[column];
+        }
+        m_surface_profile = std::move(surface);
+        m_surface_captured = true;
+        return m_surface_profile;
     }
 
     SimFramePacket makeSimFramePacket(
@@ -414,6 +445,7 @@ namespace pP::colony {
         stage.m_reference_thickness_m = presentation.m_reference_thickness_m;
         stage.m_has_background = presentation.m_has_background;
         stage.m_background_layers = presentation.m_background_layers;
+        stage.m_surface_profile = presentation.m_surface_profile;
         stage.m_particle_batches = presentation.m_particle_batches;
         return stage;
     }
@@ -436,6 +468,7 @@ namespace pP::colony {
         stage.m_reference_thickness_m = presentation.m_reference_thickness_m;
         stage.m_has_background = presentation.m_has_background;
         stage.m_background_layers = presentation.m_background_layers;
+        stage.m_surface_profile = presentation.m_surface_profile;
         stage.m_particle_batches = presentation.m_particle_batches;
         if (m_frame or m_next_chunk == sim::kChunkCount) {
             stage.m_tiles = m_visible;
@@ -485,6 +518,7 @@ namespace pP::colony {
         stage.m_reference_thickness_m = packet.m_reference_thickness_m;
         stage.m_has_background = packet.m_has_background;
         stage.m_background_layers = packet.m_background_layers;
+        stage.m_surface_profile = packet.m_surface_profile;
         stage.m_particle_batches = packet.m_particle_batches;
         // Owned payload only: no driver ack, no translator contact, and no
         // pass mutation happen on the client. The pass-side contact runs

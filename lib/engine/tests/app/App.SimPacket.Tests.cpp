@@ -31,6 +31,17 @@ namespace pP::tests::detail {
             packet.m_boundary_material_id = 16u;
             packet.m_cell_size_m = 1.0f / 3.0f;
             packet.m_content_fingerprint = 42u;
+            packet.m_has_background = true;
+            for (u32 order = 0u; order < 4u; ++order) {
+                packet.m_background_layers[order].m_order = order;
+                packet.m_background_layers[order].m_texture_index = 0u;
+            }
+            auto surface = std::make_shared<GridSurfaceProfile>();
+            surface->m_cell_size_m = packet.m_cell_size_m;
+            surface->m_heights_m[0u][0u] = 12.5f;
+            surface->m_heights_m.back()[3u] = 1240.0f;
+            const std::weak_ptr<const GridSurfaceProfile> surface_lifetime = surface;
+            packet.m_surface_profile = std::move(surface);
             mem::UniqueBuffer storage = mem::UniqueBuffer::allocate(4u);
             PPR_TEST_ASSERT(not storage.materialize());
             const auto pixels = storage.getMutableData();
@@ -60,6 +71,40 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(stage.m_has_catalog and stage.m_content_fingerprint == 42u);
             PPR_TEST_ASSERT(stage.m_boundary_material_id == 16u);
             PPR_TEST_ASSERT(stage.m_cell_size_m == 1.0f / 3.0f);
+            PPR_TEST_ASSERT(stage.m_surface_profile == packet.m_surface_profile);
+            GridPass surface_pass;
+            PPR_TEST_ASSERT(not surface_pass.applyStagedFrame(stage));
+            const u64 uploads = surface_pass.uploadCount();
+            for (const float invalid_height:
+                {-1.0f, 1366.0f, std::numeric_limits<float>::infinity(), std::numeric_limits<float>::quiet_NaN()}) {
+                auto rejected = stage;
+                auto invalid_surface = std::make_shared<GridSurfaceProfile>(*stage.m_surface_profile);
+                invalid_surface->m_heights_m.back()[3u] = invalid_height;
+                rejected.m_surface_profile = std::move(invalid_surface);
+                // First publication exercises validation without an existing
+                // world's immutable-profile comparison rejecting the change.
+                GridPass rejected_pass;
+                PPR_TEST_ASSERT(rejected_pass.applyStagedFrame(rejected) == std::errc::invalid_argument);
+                PPR_TEST_ASSERT(rejected_pass.uploadCount() == 0u and rejected_pass.cachedTileCount() == 0u);
+                PPR_TEST_ASSERT(surface_pass.uploadCount() == uploads and surface_pass.cachedTileCount() == 1u);
+            }
+            auto rejected_metric = stage;
+            auto invalid_metric = std::make_shared<GridSurfaceProfile>(*stage.m_surface_profile);
+            invalid_metric->m_cell_size_m = 1.0f;
+            rejected_metric.m_surface_profile = std::move(invalid_metric);
+            GridPass rejected_metric_pass;
+            PPR_TEST_ASSERT(rejected_metric_pass.applyStagedFrame(rejected_metric) == std::errc::invalid_argument);
+            PPR_TEST_ASSERT(rejected_metric_pass.uploadCount() == 0u and rejected_metric_pass.cachedTileCount() == 0u);
+            rejected_metric.m_surface_profile.reset();
+            packet.m_surface_profile.reset();
+            PPR_TEST_ASSERT(not surface_lifetime.expired());
+            PPR_TEST_ASSERT(stage.m_surface_profile->m_cell_size_m == 1.0f / 3.0f);
+            PPR_TEST_ASSERT(stage.m_surface_profile->m_heights_m[0u][0u] == 12.5f);
+            PPR_TEST_ASSERT(stage.m_surface_profile->m_heights_m.back()[3u] == 1240.0f);
+            stage.m_surface_profile.reset();
+            PPR_TEST_ASSERT(not surface_lifetime.expired());
+            PPR_TEST_ASSERT(not surface_pass.shutdown());
+            PPR_TEST_ASSERT(surface_lifetime.expired());
             PPR_TEST_ASSERT(stage.m_uploads.size() == 1u);
             PPR_TEST_ASSERT(stage.m_uploads[0u].m_cell_materials[0u] == 0u);
             PPR_TEST_ASSERT(stage.m_uploads[0u].m_cell_materials[1u] == 16u);

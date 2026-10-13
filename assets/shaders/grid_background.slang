@@ -20,10 +20,16 @@ struct GridFrame {
     float4 m_viewport;
     float2 m_camera_origin;
     uint m_has_background;
-    uint m_padding;
+    uint m_has_surface;
     BackgroundLayer m_layers[4];
 };
 ConstantBuffer<GridFrame> g_grid_frame;
+// Float4 packing preserves a 16-byte constant-buffer array stride. The
+// background-only buffer is exactly 16 KiB, including on Vulkan minimum limits.
+struct SurfaceProfile {
+    float4 m_heights_m[1024];
+};
+ConstantBuffer<SurfaceProfile> g_surface_profile;
 Texture2D<float4> g_backdrop;
 struct BackgroundVertexOutput {
     float4 position : SV_Position;
@@ -60,6 +66,19 @@ float4 fragmentBackgroundMain(BackgroundVertexOutput input,
     float t = abs(direction.z) > 1.0e-8 ? -near_point.z / direction.z : 0.0;
     float2 world = (near_point + direction * t).xy;
     float2 dx = ddx(world), dy = ddy(world);
+    if (g_grid_frame.m_has_surface != 0u) {
+        // Columns match the exact seeded height sampled by the terrain raster.
+        // Edge clamping keeps backdrop reads bounded when the camera sees outside
+        // the finite world. This same target supplies optical refraction below.
+        uint column = uint(clamp(floor(world.x / g_grid_frame.m_cell_size_m), 0.0, 4095.0));
+        float surface_y = g_surface_profile.m_heights_m[column / 4u][column % 4u];
+        if (world.y >= surface_y) {
+            float altitude = saturate((world.y - surface_y) / 180.0);
+            float3 horizon = float3(0.52, 0.70, 0.82);
+            float3 zenith = float3(0.12, 0.30, 0.52);
+            return float4(lerp(horizon, zenith, smoothstep(0.0, 1.0, altitude)), 1.0);
+        }
+    }
     float3 result = float3(0.0);
     [unroll]
     for (uint index = 0u; index < 4u; ++index) {

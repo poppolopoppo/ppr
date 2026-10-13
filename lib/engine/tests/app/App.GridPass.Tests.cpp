@@ -48,7 +48,9 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(PPR_OFFSETOF(GridPass::GridFrame, m_viewport) == 144u);
             PPR_TEST_ASSERT(PPR_OFFSETOF(GridPass::GridFrame, m_camera_origin) == 160u);
             PPR_TEST_ASSERT(PPR_OFFSETOF(GridPass::GridFrame, m_has_background) == 168u);
+            PPR_TEST_ASSERT(PPR_OFFSETOF(GridPass::GridFrame, m_has_surface) == 172u);
             PPR_TEST_ASSERT(PPR_OFFSETOF(GridPass::GridFrame, m_layers) == 176u);
+            PPR_TEST_ASSERT(sizeof(GridSurfaceHeights) == 16384u);
             PPR_TEST_ASSERT(sizeof(GridBackgroundLayer) == 32u);
             PPR_TEST_ASSERT(sizeof(GridTerrainVisual) == 80u);
             PPR_TEST_ASSERT(PPR_OFFSETOF(GridTerrainVisual, m_filtered_mean_rgb) == 20u);
