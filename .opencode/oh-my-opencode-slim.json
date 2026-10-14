@@ -1,6 +1,6 @@
 {
   "$schema": "https://unpkg.com/oh-my-opencode-slim@latest/oh-my-opencode-slim.schema.json",
-  "preset": "hybrid",
+  "preset": "opencode-zen-free",
   "companion": {
     "enabled": false,
     "position": "bottom-right",
@@ -30,6 +30,8 @@
           "clion-debugger",
           "simplify",
           "code-reviewer",
+          "module-architect",
+          "slang-shader-developer",
           "concurrency-patterns",
           "memory-allocator",
           "hal-developer"
@@ -42,10 +44,11 @@
       },
       "fixer": {
         "model": "openai/gpt-6.1-sol",
-        "temperature": 0.2,
+        "variant": "high",
         "skills": [
           "clion-debugger",
           "module-architect",
+          "slang-shader-developer",
           "unit-test-updater",
           "git-commit-planner",
           "git-push-planner",
@@ -63,7 +66,7 @@
         ]
       },
       "explorer": {
-        "model": "opencode/muse-spark-1.3-contributor-free",
+        "model": "opencode/mimo-v2.6-flash-free",
         "temperature": 0.2,
         "skills": [],
         "mcps": [
@@ -72,9 +75,8 @@
         ]
       },
       "librarian": {
-        "model": "opencode/space-bunny-free",
+        "model": "opencode/mimo-v2.6-flash-free",
         "temperature": 0.7,
-        "variant": "high",
         "skills": [],
         "mcps": [
           "context7",
@@ -86,7 +88,7 @@
       },
       "designer": {
         "model": "openai/gpt-6-luna",
-        "variant": "max",
+        "variant": "medium",
         "temperature": 0.6,
         "skills": [
           "plantuml-skill"
@@ -116,8 +118,8 @@
     },
     "openai": {
       "orchestrator": {
-        "model": "openai/gpt-6-sol",
-        "variant": "high",
+        "model": "openai/gpt-6.1-sol",
+        "variant": "medium",
         "skills": [
           "*"
         ],
@@ -133,6 +135,8 @@
           "clion-debugger",
           "simplify",
           "code-reviewer",
+          "module-architect",
+          "slang-shader-developer",
           "concurrency-patterns",
           "memory-allocator",
           "hal-developer"
@@ -176,11 +180,12 @@
         ]
       },
       "fixer": {
-        "model": "openai/gpt-6-sol",
+        "model": "openai/gpt-6.1-sol",
         "variant": "high",
         "skills": [
           "clion-debugger",
           "module-architect",
+          "slang-shader-developer",
           "unit-test-updater",
           "git-commit-planner",
           "git-push-planner",
@@ -232,11 +237,13 @@
       "oracle": {
         "model": "opencode/muse-spark-1.3-contributor-free",
         "temperature": 0.4,
-        "variant": "xhigh",
+        "variant": "max",
         "skills": [
           "clion-debugger",
           "simplify",
           "code-reviewer",
+          "module-architect",
+          "slang-shader-developer",
           "concurrency-patterns",
           "memory-allocator",
           "hal-developer"
@@ -248,9 +255,8 @@
         ]
       },
       "explorer": {
-        "model": "opencode/space-bunny-free",
+        "model": "opencode/mimo-v2.6-flash-free",
         "temperature": 0.2,
-        "variant": "high",
         "skills": [],
         "mcps": [
           "clion",
@@ -271,7 +277,7 @@
         ]
       },
       "designer": {
-        "model": "opencode/fledge-alpha-free",
+        "model": "opencode/mimo-v2.6-flash-free",
         "temperature": 0.6,
         "skills": [
           "plantuml-skill"
@@ -282,10 +288,12 @@
       },
       "fixer": {
         "model": "opencode/muse-spark-1.3-contributor-free",
+        "variant": "high",
         "temperature": 0.2,
         "skills": [
           "clion-debugger",
           "module-architect",
+          "slang-shader-developer",
           "unit-test-updater",
           "git-commit-planner",
           "git-push-planner",
@@ -312,6 +320,112 @@
         "model": "opencode/nemotron-3-ultra-free",
         "temperature": 0.4,
         "variant": "high",
+        "skills": [
+          "*"
+        ],
+        "mcps": [
+          "*",
+          "!context7"
+        ]
+      }
+    },
+    "opencode-zen-free-fast": {
+      "orchestrator": {
+        "model": "opencode/muse-spark-1.3-contributor-free",
+        "temperature": 0.4,
+        "variant": "high",
+        "skills": [
+          "*"
+        ],
+        "mcps": [
+          "*",
+          "!context7"
+        ]
+      },
+      "oracle": {
+        "model": "opencode/muse-spark-1.3-contributor-free",
+        "temperature": 0.4,
+        "variant": "high",
+        "skills": [
+          "clion-debugger",
+          "simplify",
+          "code-reviewer",
+          "module-architect",
+          "slang-shader-developer",
+          "concurrency-patterns",
+          "memory-allocator",
+          "hal-developer"
+        ],
+        "mcps": [
+          "clion",
+          "codegraph",
+          "WinDbg"
+        ]
+      },
+      "explorer": {
+        "model": "opencode/cat-jam-free",
+        "temperature": 0.2,
+        "skills": [],
+        "mcps": [
+          "clion",
+          "codegraph"
+        ]
+      },
+      "librarian": {
+        "model": "opencode/nemotron-3.5-lightning-free",
+        "temperature": 0.2,
+        "skills": [],
+        "mcps": [
+          "context7",
+          "gh_grep",
+          "codegraph",
+          "searxng",
+          "WinDbg"
+        ]
+      },
+      "designer": {
+        "model": "opencode/space-bunny-free",
+        "temperature": 0.3,
+        "variant": "low",
+        "skills": [
+          "plantuml-skill"
+        ],
+        "mcps": [
+          "codegraph"
+        ]
+      },
+      "fixer": {
+        "model": "opencode/nemotron-3.5-lightning-free",
+        "temperature": 0.2,
+        "skills": [
+          "clion-debugger",
+          "module-architect",
+          "slang-shader-developer",
+          "unit-test-updater",
+          "git-commit-planner",
+          "git-push-planner",
+          "concurrency-patterns",
+          "memory-allocator",
+          "hal-developer",
+          "plantuml-skill",
+          "windbg-triage"
+        ],
+        "mcps": [
+          "clion",
+          "codegraph",
+          "searxng",
+          "WinDbg"
+        ]
+      },
+      "observer": {
+        "model": "opencode/nemotron-3.5-lightning-free",
+        "temperature": 0.2,
+        "skills": [],
+        "mcps": []
+      },
+      "council": {
+        "model": "opencode/nemotron-3.5-lightning-free",
+        "temperature": 0.4,
         "skills": [
           "*"
         ],
