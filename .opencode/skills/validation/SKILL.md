@@ -25,15 +25,19 @@ AGENTS.md's delegated-implementation contract. Only affected checks are repeated
    or merge/release gate. Honor explicit user scope. Otherwise a local batch
    defaults to the affected Dev target closure and justified focused tests;
    do not expand it to all presets or the full CTest matrix automatically.
-2. The author self-reviews behavior, error/lifetime contracts, and logical
-   grouping while implementing. Consult a specialist before coding only when
+2. The author self-reviews behavior, error/lifetime contracts, and the
+   [logical paragraphs and section headers](../../../AGENTS.md#semantic-control-flow)
+   while implementing, including nested bodies and declaration groups. This is
+   part of authoring, not a cleanup task deferred to the formatter or reviewer.
+   Consult a specialist before coding only when
    unresolved architectural or domain uncertainty could cause substantial
    rework; routine work needs no separate design approval or planning artifact.
 3. Once a coherent batch is ready, run Format Fix then Check and the touched-file
-   semantic-style gate before expensive execution. Inspect the formatted bodies
-   for coherent semantic groups. Route corrections to the author/fixer, then
+   semantic-style gate before expensive execution. Confirm the author inspected
+   the formatted bodies, declaration groups, and section headers against that
+   contract. Route missing boundaries/headers to the author/fixer, then
    rerun affected gates. Mechanical formatting is script-owned; semantic blank
-   lines are author-owned. Do not format or recheck after every small edit.
+   lines and headers are author-owned. Do not format or recheck after every small edit.
 4. For completed behavior, use one context-owning independent reviewer under
    `code-reviewer`. Stable-code review may precede or overlap long execution so
    findings arrive early; it need not wait for the last build, test, or CLion
@@ -132,7 +136,9 @@ canonical output.
   project style, reflows `and`/`or`/`not` chains away from the trailing-operator
   rule, injects namespace end-comments, and inherits a confirmed upstream
   non-idempotency defect class.
-- Authors insert semantic blank lines under AGENTS.md. Do not hand-tune mechanical
+- Authors insert semantic blank lines and section headers under AGENTS.md. A
+  successful Fix/Check establishes mechanical layout only; it cannot certify
+  logical paragraphs or supply missing headers. Do not hand-tune mechanical
   formatting; rerun the gate after semantic grouping edits. Reuse a passed Check
   only while its source and check inputs are unchanged. Fix and Check remain
   separate: convergence during Fix alone does not establish the final Check.
@@ -159,13 +165,12 @@ This gate is deterministic only. Design-level readability is not, and lives with
   readability, and a single arbitrary blank line is not a readability fix.
 - Route blocking findings to the orchestrator for a bounded fix, then repeat the
   formatting and style gates.
-- For the design-level pass, expect validation guards grouped at the start of the
-  relevant helper, successful work through a contiguous fall-through path, and
-  blank lines separating logical phases without fragmenting related declarations,
-  guards, or structured logging fields. Extract helpers only for a distinct domain
-  operation or reuse, keep side effects and submissions in the caller, and never
-  invent numeric line limits. These are semantic review acceptance criteria,
-  not deterministic script checks; unresolved confirmed findings block delivery.
+- Track semantic grouping/section-header review separately from the two script
+  exit statuses, using author self-review for local batches and the existing
+  independent reviewer at completion. A green script result or absent D-DENSE
+  advisory cannot mark that review passed. Apply AGENTS.md's contract through
+  `code-reviewer`, without another review pass or a numeric density threshold;
+  unresolved confirmed missing boundaries or headers block delivery.
 
 ## CLion inspection gate
 

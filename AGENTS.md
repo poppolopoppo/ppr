@@ -193,24 +193,49 @@ Skills own procedures and must not duplicate or compete with these rules.
   wallet aggregates; strong types where they prevent misuse). Framework hooks
   (`main`, application hooks, listeners) are thin glue delegating to engine
   logic.
-- Use `not`/`and`/`or` (on one line when short, otherwise trailing-operator one-operand-per-line per Semantic control flow); use `const T` and `T *const`/`const T *const` where the
+- Use `not`/`and`/`or` (on one line when short, otherwise trailing-operator one-operand-per-line per Boolean expressions); use `const T` and `T *const`/`const T *const` where the
   callee must not reseat; order attributes, inline-control macros, `constexpr`,
   return type, name, parameters, `const`, `noexcept`.
 
 ### Semantic control flow
 
-Group related statements while writing code. Keep related declarations,
-initialization, guards, and structured logging fields together; insert a blank
-line where the code changes responsibility, such as from preparation to
-submission or from submission to bookkeeping. Keep the success path contiguous.
-Do not separate every statement or add arbitrary blank lines to meet a quota.
+**Write code in logical paragraphs, separated by one blank line.** A function
+with one responsibility can still have several steps; sharing a variable or
+contributing to the same result does not make those steps one paragraph. This
+applies recursively inside loops, branches, lambdas, and test bodies, including
+short bodies. clang-format cannot infer these boundaries; authors MUST insert
+them while writing, before handing code to validation or another agent.
 
-The author owns semantic group boundaries and inserts their blank lines. The
-formatter owns mechanical layout and expression wrapping; it cannot discover
-changes of responsibility. Self-review the groups before expensive validation
-and check that they remain clear after formatting. Independent review verifies
-this requirement. Extract helpers for distinct domain operations or reuse;
-comments and helper extraction do not replace appropriate blank-line grouping.
+- Separate successive steps: establish inputs, prepare working state, traverse
+  or calculate, check the result, commit changes, and finalize. A step may be
+  one statement (sorting, a propagation macro, or an accumulator update).
+- Separate a completed search/count/collection loop from its result check and
+  from the next action. Separate rejection/skip guards from accepted-item work,
+  and independent sibling cases or traversal passes when each is a distinct step.
+- Keep declarations with the step they support, not in one undifferentiated
+  setup block. Separate local helper definitions from their use; distinguish
+  scratch setup, deferred bookkeeping, and execution when they are separate steps.
+- Keep a tightly coupled operation intact: a call and its immediate error
+  propagation, a value and its local guard, one object's field initialization,
+  one log record's fields, or an update and its terminating `break`/`return`.
+  Place guards where their inputs become available; do not move them all to
+  the function entry. A final return may stay with the result it completes.
+- Separate adjacent function definitions (including short members) and distinct
+  declaration groups. In classes, distinguish constants, related state groups,
+  construction, mutation, friend declarations, move operations, deleted copy
+  operations, and query groups where present. Keep related pairs together.
+  Keep documentation comments attached to their declaration, with the separator
+  before the comment when starting a new group.
+
+Read each touched body and declaration block as a sequence of steps before
+handoff, then check that sequence after formatting. Missing boundaries are an
+incomplete edit even if format/style scripts pass. Preserve existing intentional
+grouping when editing; dense surrounding code is not a precedent to copy. Do not
+use line-count quotas, a blank after every statement/brace, or a token-saving
+dense draft for a later agent to repair. A genuinely single-step body needs no
+internal blank line. Keep the success path contiguous in control flow; that
+does not mean removing its paragraph breaks. Extract helpers for distinct domain
+operations or reuse; comments and extraction do not replace paragraph boundaries.
 
 For example, preparation stays together, followed by submission and bookkeeping:
 
@@ -225,7 +250,34 @@ PPR_RETURN_ERROR_ON_FAIL(Render, submit(submission));
 statistics.m_vertices += vertex_count;
 ```
 
-A short body with one coherent responsibility may need no blank lines.
+For examples grounded in the authored Layout corrections and commit `6fc03a2`,
+see [C++ logical grouping](docs/cpp-logical-grouping.md) when calibrating a boundary.
+
+### Section headers
+
+Authors MUST label the major sections of C++ interfaces, implementations, and
+test files with the established three-line header (as in
+`App.Input.Listener.cppm` and commit `6fc03a2`):
+
+```cpp
+// ------------------------------------------------------------------
+// layout compilation
+// ------------------------------------------------------------------
+```
+
+Use concise responsibility names for cohesive type/API families, implementation
+areas, and test suites; include the first substantive section, not only later
+transitions. Put the header at the section's indentation, separated from adjacent
+content by a blank line, before any attached `///` documentation. Preserve and
+extend these headers when adding sections. Inside classes, use a short label
+such as `// listeners:` for distinct member/API subgroups needing a name.
+Ordinary function-body steps use blank lines; do not put a banner over every
+function, guard, or paragraph. A tiny forwarding/umbrella file with no substantive
+section needs no artificial header. Headers provide navigation; paragraph breaks
+provide local flow. Both are author-owned and independently required.
+
+### Boolean expressions
+
 Any boolean-operator expression — `if`/`while`/`for` conditions, returns, assignments,
 assertions — SHOULD stay on one line when it fits, where "fits" means it stays
 within about 120 columns, matching the configured `ColumnLimit`. Wrap it only when
@@ -263,9 +315,10 @@ Division of labour:
 
 - **The script owns** mechanical formatting: indentation, spacing, alignment,
   brace placement, expression wrapping, and consecutive empty-line limits.
-- **You own** logical grouping, semantic blank-line placement, meaningful helper
-  boundaries, and comments that state intent or invariants.
-- **`code-reviewer` owns** whether the result reads clearly.
+- **You own** logical paragraphs, declaration groups, section headers, meaningful
+  helper boundaries, and comments that state intent or invariants.
+- **`code-reviewer` owns** verifying those boundaries and headers in the formatted
+  source. Passing mechanical checks does not establish this acceptance criterion.
 
 Do not use the CLion `reformat_file` router or hand-tune mechanical formatting;
 run the script after semantic edits. CLion's internal engine does not
