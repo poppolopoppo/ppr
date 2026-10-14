@@ -197,6 +197,33 @@ Skills own procedures and must not duplicate or compete with these rules.
   callee must not reseat; order attributes, inline-control macros, `constexpr`,
   return type, name, parameters, `const`, `noexcept`.
 
+### Data-member layout
+
+- Review the physical layout of every type whose data members you add or
+  change. Minimize avoidable internal and trailing padding.
+- Order independent members by decreasing required alignment and group
+  small members together. Use actual alignment requirements; do not assume
+  that `sizeof` determines alignment. Check the resulting object size,
+  including trailing padding that contributes to array stride.
+- Preserve initialization and destruction dependencies, external layout
+  contracts, and declaration-order semantics. Reorder members only when
+  those constraints remain satisfied, and update affected initializers
+  and consumers.
+- Keep natural alignment. Do not introduce packing, extra `alignas`,
+  bit-fields, or narrower field types solely to remove padding or silence
+  a diagnostic.
+- Preserve intentional padding and alignment required by external layout
+  contracts or justified cache-line separation to prevent false sharing.
+  Base cache-line separation on actual concurrent access patterns; do not
+  apply it indiscriminately. Document the reason when it is not apparent
+  from the declaration.
+- Verify `sizeof`, `alignof`, and relevant member offsets on the affected
+  target/configuration for layout-sensitive or heavily replicated types.
+  Add static assertions for actual layout contracts, not incidental
+  implementation details.
+- Keep this review within the changed types and their affected consumers.
+  Do not expand it into unrelated layout refactoring.
+
 ### Semantic control flow
 
 **Write code in logical paragraphs, separated by one blank line.** A function

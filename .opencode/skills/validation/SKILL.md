@@ -25,7 +25,8 @@ AGENTS.md's delegated-implementation contract. Only affected checks are repeated
    or merge/release gate. Honor explicit user scope. Otherwise a local batch
    defaults to the affected Dev target closure and justified focused tests;
    do not expand it to all presets or the full CTest matrix automatically.
-2. The author self-reviews behavior, error/lifetime contracts, and the
+2. The author self-reviews behavior, error/lifetime contracts,
+   [data-member layout](../../../AGENTS.md#data-member-layout), and the
    [logical paragraphs and section headers](../../../AGENTS.md#semantic-control-flow)
    while implementing, including nested bodies and declaration groups. This is
    part of authoring, not a cleanup task deferred to the formatter or reviewer.
@@ -48,7 +49,8 @@ AGENTS.md's delegated-implementation contract. Only affected checks are repeated
 5. Configure, build, and test the selected scope through `build-system` in the
    persistent shell, with builds and executable checks serialized. Run triggered
    boundary/performance checks once; do not substitute a tiny fixture for a claim
-   that requires production parity or stress. Discover current IDE capabilities
+   that requires production parity or stress. Collect the evidence required by
+   the data-member layout contract through these checks. Discover current IDE capabilities
    when needed and perform the staged touched-file CLion inspection below when
    available. Report unavailable or timed-out inspection honestly.
 6. Reuse passed evidence when the checked source/dependency closure, configuration,

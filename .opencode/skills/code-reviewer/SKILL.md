@@ -102,6 +102,10 @@ targeted fix deltas and reopen broader scope only when those deltas affect it.
 ### 5. Subsystem responsibility and control flow
 - For new facilities, check current purpose and reuse of the owning subsystem;
   screen material hot-path changes for cost evidence.
+- For changed data-member declarations, enforce
+  [AGENTS.md's data-member layout contract](../../../AGENTS.md#data-member-layout).
+  Report confirmed avoidable padding with a safe alternative and concrete size
+  or stride impact; padding alone is not a violation.
 - Each subsystem owns one coherent responsibility. Renderer/pass, scene/camera,
   service, and HAL boundaries retain their documented roles.
 - Framework hooks and callbacks are thin glue that delegates to engine logic;
