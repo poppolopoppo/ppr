@@ -210,6 +210,93 @@ namespace pP::tests::detail {
 
         static_assert(mem::details::TResizableAllocator<ResizeOnlyAllocator>);
 
+        struct FailingAllocator {
+            std::size_t allocate_calls{};
+            bool fail{true};
+
+            [[nodiscard]] std::allocation_result<void *> allocateRaw(
+                const std::size_t bytes, const std::align_val_t alignment) noexcept {
+                ++allocate_calls;
+                if (fail) {
+                    return {};
+                }
+                return mem::GPA::allocateRaw(bytes, alignment);
+            }
+
+            void deallocateRaw(void *const ptr, const std::size_t bytes, const std::align_val_t alignment) noexcept {
+                mem::GPA::deallocateRaw(ptr, bytes, alignment);
+            }
+        };
+
+        // LocalCache regression backing: deterministic shared store that retains
+        // freed blocks without clearing poison. Models PagePool bundle retention
+        // (freed pages stay mapped in partial/full bundles, poison preserved
+        // until reuse; next allocate hands out the same block). Bookkeeping
+        // lives outside the payload in vectors of pointers. The store owns every
+        // block; caches observe it through SharedRetainingBacking. Declare the
+        // store before the caches so caches flush before the store frees.
+        struct LocalCacheRetainingStore {
+            static constexpr std::size_t kBlockSize = 64u;
+
+            std::vector<void *> m_owned{};
+            std::vector<void *> m_free{};
+
+            LocalCacheRetainingStore() = default;
+
+            LocalCacheRetainingStore(const LocalCacheRetainingStore &) = delete;
+
+            LocalCacheRetainingStore &operator=(const LocalCacheRetainingStore &) = delete;
+
+            ~LocalCacheRetainingStore() noexcept {
+                for (void *const ptr: m_owned) {
+                    mem::GPA::deallocateRaw(ptr, kBlockSize, max_align_v);
+                }
+            }
+
+            [[nodiscard]] std::allocation_result<void *> allocateRaw(
+                const std::size_t bytes, const std::align_val_t alignment) noexcept {
+                static_cast<void>(bytes);
+
+                if (!m_free.empty()) {
+                    void *const ptr = m_free.back();
+                    m_free.pop_back();
+
+                    return {ptr, kBlockSize};
+                }
+
+                const auto block = mem::GPA::allocateRaw(kBlockSize, alignment);
+
+                if (block.ptr != nullptr) {
+                    m_owned.push_back(block.ptr);
+                }
+
+                return {block.ptr, block.ptr != nullptr ? kBlockSize : 0u};
+            }
+
+            void deallocateRaw(void *const ptr, const std::size_t bytes, const std::align_val_t alignment) noexcept {
+                static_cast<void>(bytes);
+                static_cast<void>(alignment);
+
+                m_free.push_back(ptr);
+            }
+        };
+
+        struct SharedRetainingBacking {
+            LocalCacheRetainingStore *m_store{nullptr};
+
+            explicit SharedRetainingBacking(LocalCacheRetainingStore &store) noexcept : m_store(&store) {
+            }
+
+            [[nodiscard]] std::allocation_result<void *> allocateRaw(
+                const std::size_t bytes, const std::align_val_t alignment) noexcept {
+                return m_store->allocateRaw(bytes, alignment);
+            }
+
+            void deallocateRaw(void *const ptr, const std::size_t bytes, const std::align_val_t alignment) noexcept {
+                m_store->deallocateRaw(ptr, bytes, alignment);
+            }
+        };
+
         PPR_UNIT_TEST (overlap_boundaries) {
             const std::array<std::byte, 16u> storage{};
             const std::array<std::byte, 16u> other{};
@@ -419,6 +506,217 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(backend.blocks.empty());
         };
 
+        PPR_UNIT_TEST (stl_allocation_failure_throws_bad_alloc) {
+            FailingAllocator backend{};
+            mem::STL<int, FailingAllocator> allocator{backend};
+
+            for (const bool at_least: {false, true}) {
+                bool threw = false;
+                try {
+                    if (at_least) {
+                        static_cast<void>(allocator.allocate_at_least(1u));
+                    } else {
+                        static_cast<void>(allocator.allocate(1u));
+                    }
+                } catch (const std::bad_alloc &) {
+                    threw = true;
+                }
+                PPR_TEST_ASSERT(threw);
+            }
+            PPR_TEST_ASSERT(backend.allocate_calls == 2u);
+        };
+
+        PPR_UNIT_TEST (stl_allocation_overflow_throws_before_backend) {
+            FailingAllocator backend{};
+            mem::STL<int, FailingAllocator> allocator{backend};
+            constexpr std::size_t count = (std::numeric_limits<std::size_t>::max)() / sizeof(int) + 1u;
+
+            for (const bool at_least: {false, true}) {
+                bool threw = false;
+                try {
+                    if (at_least) {
+                        static_cast<void>(allocator.allocate_at_least(count));
+                    } else {
+                        static_cast<void>(allocator.allocate(count));
+                    }
+                } catch (const std::bad_alloc &) {
+                    threw = true;
+                }
+                PPR_TEST_ASSERT(threw);
+            }
+            PPR_TEST_ASSERT(backend.allocate_calls == 0u);
+        };
+
+        PPR_UNIT_TEST (stl_allocation_roundtrip) {
+            mem::InSitu<64u> backend{};
+            mem::STL<int, decltype(backend)> allocator{backend};
+
+            int *const values = allocator.allocate(3u);
+            values[0] = 7;
+            values[2] = 11;
+            const bool preserved = values[0] == 7 and values[2] == 11;
+            allocator.deallocate(values, 3u);
+            PPR_TEST_ASSERT(preserved);
+
+            const auto block = allocator.allocate_at_least(3u);
+            const bool sufficient = block.count >= 3u;
+            block.ptr[0] = 17;
+            const int value = block.ptr[0];
+            allocator.deallocate(block.ptr, block.count);
+            PPR_TEST_ASSERT(sufficient);
+            PPR_TEST_ASSERT(value == 17);
+        };
+
+        PPR_UNIT_TEST (stl_vector_failed_reserve_preserves_contents) {
+            FailingAllocator backend{};
+            backend.fail = false;
+            mem::STL<int, FailingAllocator> allocator{backend};
+            std::vector<int, decltype(allocator)> values{allocator};
+            values.push_back(7);
+            values.push_back(11);
+
+            backend.fail = true;
+            bool threw = false;
+            try {
+                values.reserve(values.capacity() + 1u);
+            } catch (const std::bad_alloc &) {
+                threw = true;
+            }
+
+            PPR_TEST_ASSERT(threw);
+            PPR_TEST_ASSERT(values.size() == 2u);
+            PPR_TEST_ASSERT(values[0] == 7);
+            PPR_TEST_ASSERT(values[1] == 11);
+        };
+
+        PPR_UNIT_TEST (local_cache_hit_reuse_unpoisoned) {
+            LocalCacheRetainingStore store{};
+            SharedRetainingBacking backing{store};
+
+            mem::LocalCache<64u, SharedRetainingBacking, 2u> cache{backing};
+
+            const auto first = cache.allocateRaw(64u, max_align_v);
+            PPR_TEST_ASSERT(first.ptr != nullptr);
+            PPR_TEST_ASSERT(first.count == 64u);
+
+            cache.deallocateRaw(first.ptr, first.count, max_align_v);
+
+            const auto second = cache.allocateRaw(64u, max_align_v);
+            PPR_TEST_ASSERT(second.ptr == first.ptr);
+            PPR_TEST_ASSERT(second.count == 64u);
+
+            auto *const bytes = static_cast<std::byte *>(second.ptr);
+
+            for (std::size_t i = 0u; i < second.count; ++i) {
+                bytes[i] = static_cast<std::byte>(i & 0xFFu);
+            }
+
+            bool intact = true;
+
+            for (std::size_t i = 0u; i < second.count; ++i) {
+                intact = intact and bytes[i] == static_cast<std::byte>(i & 0xFFu);
+            }
+
+            PPR_TEST_ASSERT(intact);
+
+            cache.deallocateRaw(second.ptr, second.count, max_align_v);
+        };
+
+        PPR_UNIT_TEST (local_cache_miss_after_flush_reuses_backing_block) {
+            LocalCacheRetainingStore store{};
+            SharedRetainingBacking backing{store};
+
+            void *expected = nullptr;
+            std::size_t expected_count = 0u;
+
+            {
+                mem::LocalCache<64u, SharedRetainingBacking, 2u> first_cache{backing};
+
+                const auto block = first_cache.allocateRaw(64u, max_align_v);
+                PPR_TEST_ASSERT(block.ptr != nullptr);
+
+                expected = block.ptr;
+                expected_count = block.count;
+
+                first_cache.deallocateRaw(block.ptr, block.count, max_align_v);
+                first_cache.shrinkToFit();
+            }
+
+            mem::LocalCache<64u, SharedRetainingBacking, 2u> second_cache{backing};
+
+            // Second cache starts empty, so this allocate takes the
+            // backing-allocation branch. Pre-fix that branch skipped
+            // unpoisonUninitialized and the writes below faulted under ASan.
+            const auto reused = second_cache.allocateRaw(64u, max_align_v);
+            PPR_TEST_ASSERT(reused.ptr == expected);
+            PPR_TEST_ASSERT(reused.count == expected_count);
+
+            auto *const bytes = static_cast<std::byte *>(reused.ptr);
+
+            for (std::size_t i = 0u; i < reused.count; ++i) {
+                bytes[i] = static_cast<std::byte>((i * 31u) & 0xFFu);
+            }
+
+            bool intact = true;
+
+            for (std::size_t i = 0u; i < reused.count; ++i) {
+                intact = intact and bytes[i] == static_cast<std::byte>((i * 31u) & 0xFFu);
+            }
+
+            PPR_TEST_ASSERT(intact);
+
+            second_cache.deallocateRaw(reused.ptr, reused.count, max_align_v);
+        };
+
+        PPR_UNIT_TEST (local_cache_miss_after_eviction_reuses_backing_block) {
+            LocalCacheRetainingStore store{};
+            SharedRetainingBacking backing{store};
+
+            mem::LocalCache<64u, SharedRetainingBacking, 2u> first_cache{backing};
+
+            const auto block_a = first_cache.allocateRaw(64u, max_align_v);
+            const auto block_b = first_cache.allocateRaw(64u, max_align_v);
+            const auto block_c = first_cache.allocateRaw(64u, max_align_v);
+
+            PPR_TEST_ASSERT(block_a.ptr != nullptr);
+            PPR_TEST_ASSERT(block_b.ptr != nullptr);
+            PPR_TEST_ASSERT(block_c.ptr != nullptr);
+            PPR_TEST_ASSERT(block_a.ptr != block_b.ptr);
+            PPR_TEST_ASSERT(block_a.ptr != block_c.ptr);
+            PPR_TEST_ASSERT(block_b.ptr != block_c.ptr);
+
+            void *const evicted = block_a.ptr;
+
+            // Capacity is 2: parking three blocks evicts the oldest (a) back to
+            // the shared store. The store keeps a LIFO free list with only that
+            // block, so reuse through the second cache is deterministic.
+            first_cache.deallocateRaw(block_a.ptr, block_a.count, max_align_v);
+            first_cache.deallocateRaw(block_b.ptr, block_b.count, max_align_v);
+            first_cache.deallocateRaw(block_c.ptr, block_c.count, max_align_v);
+
+            mem::LocalCache<64u, SharedRetainingBacking, 2u> second_cache{backing};
+
+            const auto reused = second_cache.allocateRaw(64u, max_align_v);
+            PPR_TEST_ASSERT(reused.ptr == evicted);
+            PPR_TEST_ASSERT(reused.count == 64u);
+
+            auto *const bytes = static_cast<std::byte *>(reused.ptr);
+
+            for (std::size_t i = 0u; i < reused.count; ++i) {
+                bytes[i] = static_cast<std::byte>((i + 7u) & 0xFFu);
+            }
+
+            bool intact = true;
+
+            for (std::size_t i = 0u; i < reused.count; ++i) {
+                intact = intact and bytes[i] == static_cast<std::byte>((i + 7u) & 0xFFu);
+            }
+
+            PPR_TEST_ASSERT(intact);
+
+            second_cache.deallocateRaw(reused.ptr, reused.count, max_align_v);
+        };
+
         PPR_UNIT_TEST (allocation_stateful_resize_create_destroy) {
             RecordingAllocator backend{};
 
@@ -543,6 +841,13 @@ namespace pP::tests {
             detail::Allocator::allocator_wrapper_forwards_and_force_ref,
             detail::Allocator::pmr_erasure_and_equality,
             detail::Allocator::allocator_traits_operations,
+            detail::Allocator::stl_allocation_failure_throws_bad_alloc,
+            detail::Allocator::stl_allocation_overflow_throws_before_backend,
+            detail::Allocator::stl_allocation_roundtrip,
+            detail::Allocator::stl_vector_failed_reserve_preserves_contents,
+            detail::Allocator::local_cache_hit_reuse_unpoisoned,
+            detail::Allocator::local_cache_miss_after_flush_reuses_backing_block,
+            detail::Allocator::local_cache_miss_after_eviction_reuses_backing_block,
             detail::Allocator::allocation_stateful_resize_create_destroy,
             detail::Allocator::allocation_raii_and_relocate,
             detail::Allocator::allocation_create_destroy_non_trivial,

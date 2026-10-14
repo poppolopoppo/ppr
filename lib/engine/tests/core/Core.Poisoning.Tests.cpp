@@ -24,6 +24,75 @@ namespace pP::tests::detail {
                 auto *byte_ptr = static_cast<std::byte *>(ptr);
                 byte_ptr[0] = std::byte{0xAB};
             }
+
+            // Deterministic retaining store for LocalCache poison-retention
+            // probes. Models PagePool bundle retention: freed blocks stay mapped
+            // and poisoned until reuse. Vectors hold pointers outside the payload.
+            // The store owns every block; caches observe it. Declare the store
+            // before the caches so caches flush before the store frees.
+            struct RetainingStore {
+                static constexpr std::size_t kBlockSize = 64u;
+
+                std::vector<void *> m_owned{};
+                std::vector<void *> m_free{};
+
+                RetainingStore() = default;
+
+                RetainingStore(const RetainingStore &) = delete;
+
+                RetainingStore &operator=(const RetainingStore &) = delete;
+
+                ~RetainingStore() noexcept {
+                    for (void *const ptr: m_owned) {
+                        mem::GPA::deallocateRaw(ptr, kBlockSize, max_align_v);
+                    }
+                }
+
+                [[nodiscard]] std::allocation_result<void *> allocateRaw(
+                    const std::size_t bytes, const std::align_val_t alignment) noexcept {
+                    static_cast<void>(bytes);
+
+                    if (!m_free.empty()) {
+                        void *const ptr = m_free.back();
+                        m_free.pop_back();
+
+                        return {ptr, kBlockSize};
+                    }
+
+                    const auto block = mem::GPA::allocateRaw(kBlockSize, alignment);
+
+                    if (block.ptr != nullptr) {
+                        m_owned.push_back(block.ptr);
+                    }
+
+                    return {block.ptr, block.ptr != nullptr ? kBlockSize : 0u};
+                }
+
+                void deallocateRaw(
+                    void *const ptr, const std::size_t bytes, const std::align_val_t alignment) noexcept {
+                    static_cast<void>(bytes);
+                    static_cast<void>(alignment);
+
+                    m_free.push_back(ptr);
+                }
+            };
+
+            struct SharedBacking {
+                RetainingStore *m_store{nullptr};
+
+                explicit SharedBacking(RetainingStore &store) noexcept : m_store(&store) {
+                }
+
+                [[nodiscard]] std::allocation_result<void *> allocateRaw(
+                    const std::size_t bytes, const std::align_val_t alignment) noexcept {
+                    return m_store->allocateRaw(bytes, alignment);
+                }
+
+                void deallocateRaw(
+                    void *const ptr, const std::size_t bytes, const std::align_val_t alignment) noexcept {
+                    m_store->deallocateRaw(ptr, bytes, alignment);
+                }
+            };
         }
 
         PPR_UNIT_TEST (child_process_without_error, UnitTest::fork) {
@@ -161,6 +230,84 @@ namespace pP::tests::detail {
             pool.deallocateRaw(blocks[127], 64u, max_align_v);
             details::access_after_poison(blocks[64]);
         };
+
+        PPR_UNIT_TEST (local_cache_cached_block_stays_poisoned, UnitTest::expect_crash) {
+            details::RetainingStore store{};
+            details::SharedBacking backing{store};
+
+            mem::LocalCache<64u, details::SharedBacking, 2u> cache{backing};
+
+            const auto block = cache.allocateRaw(64u, max_align_v);
+
+            cache.deallocateRaw(block.ptr, block.count, max_align_v);
+
+            // No legitimate reallocation may unpoison before this probe: the
+            // block is still parked in the MRU ring.
+            details::access_after_poison(block.ptr);
+        };
+
+        PPR_UNIT_TEST (local_cache_flushed_block_stays_poisoned, UnitTest::expect_crash) {
+            details::RetainingStore store{};
+            details::SharedBacking backing{store};
+
+            mem::LocalCache<64u, details::SharedBacking, 2u> cache{backing};
+
+            const auto block = cache.allocateRaw(64u, max_align_v);
+
+            cache.deallocateRaw(block.ptr, block.count, max_align_v);
+            cache.shrinkToFit();
+
+            // Block is free in the shared store; no second cache reallocates it
+            // before this probe, so poison must still hold.
+            details::access_after_poison(block.ptr);
+        };
+
+        PPR_UNIT_TEST (local_cache_evicted_block_stays_poisoned, UnitTest::expect_crash) {
+            details::RetainingStore store{};
+            details::SharedBacking backing{store};
+
+            mem::LocalCache<64u, details::SharedBacking, 2u> cache{backing};
+
+            const auto block_a = cache.allocateRaw(64u, max_align_v);
+            const auto block_b = cache.allocateRaw(64u, max_align_v);
+            const auto block_c = cache.allocateRaw(64u, max_align_v);
+
+            // Capacity 2 evicts the oldest (a) into the shared store on the
+            // third deallocate; a stays free there until this probe.
+            cache.deallocateRaw(block_a.ptr, block_a.count, max_align_v);
+            cache.deallocateRaw(block_b.ptr, block_b.count, max_align_v);
+            cache.deallocateRaw(block_c.ptr, block_c.count, max_align_v);
+
+            details::access_after_poison(block_a.ptr);
+        };
+
+        PPR_UNIT_TEST (arena_initial_slab_unused_capacity_triggers_asan, UnitTest::expect_crash) {
+            mem::Arena<mem::GPA> arena{4096u};
+
+            const auto live = arena.allocateRaw(64u, max_align_v);
+            auto *const bytes = static_cast<std::byte *>(live.ptr);
+            bytes[0] = std::byte{0xAB};
+
+            // Probe 256 bytes past the live top: 32 shadow granules inside the
+            // 4096-byte backing, 8-aligned, far from both edges.
+            const auto *const probe = static_cast<const std::byte *>(arena.watermark()) + 256u;
+            details::access_after_poison(const_cast<std::byte *>(probe));
+        };
+
+        PPR_UNIT_TEST (arena_grown_slab_unused_capacity_triggers_asan, UnitTest::expect_crash) {
+            mem::Arena<mem::GPA> arena{128u};
+
+            [[maybe_unused]] const auto filler = arena.allocateRaw(64u, max_align_v);
+
+            // Exhausts the 128-byte slab and pushes a fresh 128-byte slab.
+            const auto live = arena.allocateRaw(64u, max_align_v);
+            static_cast<std::byte *>(live.ptr)[0] = std::byte{0xAB};
+
+            // New slab holds ~80 live bytes; +32 stays 16 bytes inside the
+            // 128-byte backing, 8-aligned, clear of partial granules.
+            const auto *const probe = static_cast<const std::byte *>(arena.watermark()) + 32u;
+            details::access_after_poison(const_cast<std::byte *>(probe));
+        };
     }
 } // namespace pP::tests::detail
 
@@ -187,6 +334,11 @@ namespace pP::tests {
                 detail::Poisoning::arena_asan_on_restore,
                 detail::Poisoning::arena_cross_slab_restore_triggers_asan,
                 detail::Poisoning::pooling_pool_level_poison,
+                detail::Poisoning::local_cache_cached_block_stays_poisoned,
+                detail::Poisoning::local_cache_flushed_block_stays_poisoned,
+                detail::Poisoning::local_cache_evicted_block_stays_poisoned,
+                detail::Poisoning::arena_initial_slab_unused_capacity_triggers_asan,
+                detail::Poisoning::arena_grown_slab_unused_capacity_triggers_asan,
             });
         }
     };

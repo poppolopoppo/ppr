@@ -152,6 +152,55 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(arena.owns(p1.ptr, p1.count));
             PPR_TEST_ASSERT(arena.owns(p2.ptr, p2.count));
         };
+
+        PPR_UNIT_TEST (initial_slab_live_prefix_writable) {
+            mem::Arena<mem::GPA> arena{4096u};
+
+            const auto live = arena.allocateRaw(64u, max_align_v);
+            PPR_TEST_ASSERT(live.ptr != nullptr);
+
+            auto *const bytes = static_cast<std::byte *>(live.ptr);
+
+            for (std::size_t i = 0u; i < 64u; ++i) {
+                bytes[i] = static_cast<std::byte>((i * 17u) & 0xFFu);
+            }
+
+            bool intact = true;
+
+            for (std::size_t i = 0u; i < 64u; ++i) {
+                intact = intact and bytes[i] == static_cast<std::byte>((i * 17u) & 0xFFu);
+            }
+
+            PPR_TEST_ASSERT(intact);
+            PPR_TEST_ASSERT(arena.owns(live.ptr, 64u));
+        };
+
+        PPR_UNIT_TEST (grown_slab_live_prefix_writable) {
+            mem::Arena<mem::GPA> arena{128u};
+
+            const auto filler = arena.allocateRaw(64u, max_align_v);
+            PPR_TEST_ASSERT(filler.ptr != nullptr);
+
+            // Second allocation exhausts the 128-byte slab and pushes a fresh
+            // slab; the returned block lives in that new slab.
+            const auto live = arena.allocateRaw(64u, max_align_v);
+            PPR_TEST_ASSERT(live.ptr != nullptr);
+
+            auto *const bytes = static_cast<std::byte *>(live.ptr);
+
+            for (std::size_t i = 0u; i < 64u; ++i) {
+                bytes[i] = static_cast<std::byte>((i + 3u) & 0xFFu);
+            }
+
+            bool intact = true;
+
+            for (std::size_t i = 0u; i < 64u; ++i) {
+                intact = intact and bytes[i] == static_cast<std::byte>((i + 3u) & 0xFFu);
+            }
+
+            PPR_TEST_ASSERT(intact);
+            PPR_TEST_ASSERT(arena.owns(live.ptr, 64u));
+        };
     }
 } // namespace pP::tests::detail
 
@@ -165,6 +214,8 @@ namespace pP::tests {
             detail::Arena::allocator_compliance,
             detail::Arena::scratch_pad_allocator,
             detail::Arena::scratch_pad_scoped,
+            detail::Arena::initial_slab_live_prefix_writable,
+            detail::Arena::grown_slab_live_prefix_writable,
         });
     };
 

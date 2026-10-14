@@ -991,13 +991,13 @@ export namespace pP::mem {
             PPR_ASSERT(bytes == block_size_v);
             PPR_ASSERT(alignment <= AlignmentV);
 
-            if (m_mru.size() > 0u) [[likely]] {
-                void *const p_block = m_mru.popBackAssumeNotEmpty();
-                unpoisonUninitialized(p_block, block_size_v);
-                return {p_block, block_size_v};
+            std::allocation_result<void *> block{m_mru.popBack().value_or(nullptr), block_size_v};
+            if (block.ptr == nullptr) {
+                block = AllocatorT::allocateRaw(bytes, AlignmentV);
             }
 
-            return AllocatorT::allocateRaw(bytes, AlignmentV);
+            unpoisonUninitialized(block.ptr, block.count);
+            return block;
         }
 
         constexpr void deallocateRaw(
@@ -1404,11 +1404,19 @@ export namespace pP::mem {
         }
 
         [[nodiscard]] constexpr value_type *allocate(const size_type n) {
-            return allocator_type::template allocate<value_type>(n);
+            return allocate_at_least(n).ptr;
         }
 
         [[nodiscard]] constexpr std::allocation_result<value_type *> allocate_at_least(const size_type n) {
-            return allocator_type::template allocate_at_least<value_type>(n);
+            if (n > (std::numeric_limits<size_type>::max)() / sizeof(value_type)) [[unlikely]] {
+                throwBadAlloc();
+            }
+
+            const auto block = allocator_type::template allocate_at_least<value_type>(n);
+            if (block.ptr == nullptr) [[unlikely]] {
+                throwBadAlloc();
+            }
+            return block;
         }
 
         constexpr void deallocate(value_type *ptr, const size_type n) {

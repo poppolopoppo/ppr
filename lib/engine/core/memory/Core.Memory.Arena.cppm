@@ -132,7 +132,7 @@ export namespace pP::mem {
             new (std::launder(rootSlab_()))
                 SlabHeader{.m_next = prev_slab, .m_capacity = m_capacity, .m_offset = m_offset};
 
-            annotateContiguousContainer(static_cast<std::byte *>(m_slab), m_capacity, slab_overhead_size, m_offset);
+            annotateContiguousContainer(static_cast<std::byte *>(m_slab), m_capacity, m_capacity, m_offset);
         }
 
         void popSlab_() {
