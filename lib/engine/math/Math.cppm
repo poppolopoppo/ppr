@@ -153,6 +153,7 @@ export namespace pP {
     using mango::math::inverse;
     using mango::math::length;
     using mango::math::lerp;
+    using mango::math::linear_to_srgb;
     using mango::math::log;
     using mango::math::log2;
     using mango::math::max;
@@ -165,10 +166,12 @@ export namespace pP {
     using mango::math::refract;
     using mango::math::round;
     using mango::math::rsqrt;
+    using mango::math::select;
     using mango::math::sign;
     using mango::math::sin;
     using mango::math::smoothstep;
     using mango::math::sqrt;
+    using mango::math::srgb_to_linear;
     using mango::math::square;
     using mango::math::tan;
     using mango::math::transpose;

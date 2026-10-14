@@ -26,7 +26,8 @@ case-table duplicate. Pure exhaustive case/edge/area tests live in `Core.Math.Te
 - Scalar/vector `using mango::math::X` re-exports: `abs`/`acos`/`asin`/`atan`/`atan2`/`ceil`/`clamp`/`cos`/
   `cross`/`distance`/`dot`/`exp`/`exp2`/`floor`/`fract`/
   `hmax`/`hmin`/`inverse`/`length`/`lerp`/`log`/`log2`/`max`/`min`/`mod`/`normalize`/`pow`/`rcp`/`reflect`/
-  `refract`/`round`/`rsqrt`/`sign`/`sin`/`smoothstep`/`sqrt`/`square`/`tan`/`transpose`/`trunc`; rotation
+  `refract`/`round`/`rsqrt`/`select`/`sign`/`sin`/`smoothstep`/`sqrt`/`square`/`tan`/`transpose`/`trunc`;
+  SIMD-capable `srgb_to_linear`/`linear_to_srgb`; rotation
   `AngleAxis`/`EulerAngles`/`Quaternion` + `conjugate`/`packQuaternion`/`unpackQuaternion`/`slerp`/`squad`; geometry `Box`/`Cone`/`FastRay`/`Frustum`/`Plane`/`Quadratic`/`Ray`/`RayFrustum`/
   `Rectangle`/`Sphere`/`Triangle`; all arithmetic/comparison/bitwise `operator*`/`==`/etc. re-exports.
 - `pP::math` sub-namespace: left-handed axis constants (`axis_x/y/z`, `right/left`, `up/down`,
