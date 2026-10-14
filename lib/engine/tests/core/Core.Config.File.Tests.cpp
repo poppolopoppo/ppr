@@ -113,6 +113,97 @@ namespace pP::tests::detail::cfg_file {
         PPR_TEST_ASSERT(text.find("dup.toml:3") != std::string::npos);
     };
 
+    PPR_UNIT_TEST (flattened_key_collisions_preserve_duplicate_diagnostics) {
+        // Both keys are legal TOML, but scalar flattening gives them the same path.
+        // The nested table sorts before the literal dotted key, so line 1 is the duplicate.
+        constexpr std::string_view bytes = "\"a.b\" = 1\n[a]\nb = 2\n";
+
+        Diagnostics diagnostics{};
+        const auto document = decode(bytes, "collision.toml", diagnostics);
+        PPR_TEST_ASSERT(not document.has_value());
+        PPR_TEST_ASSERT(document.error() == make_error_code(EConfigErrc::duplicate_key));
+        PPR_TEST_ASSERT(diagnostics.size() == 1u);
+
+        const std::string text = diagnostics.format();
+        PPR_TEST_ASSERT(text.find("collision.toml:1") != std::string::npos);
+        PPR_TEST_ASSERT(text.find("duplicate key 'a.b'") != std::string::npos);
+    };
+
+    PPR_UNIT_TEST (many_unique_short_and_long_keys_preserve_values_and_order) {
+        constexpr u32 count = 256u;
+        const std::string long_prefix = "z" + std::string(128u, 'x');
+        const auto key = [&](const bool long_key, const u32 index) {
+            return std::format("{}{:04}", long_key ? std::string_view{long_prefix} : std::string_view{"k"}, index);
+        };
+
+        std::string bytes;
+        for (u32 remaining = count; remaining > 0u; --remaining) {
+            const u32 index = remaining - 1u;
+            bytes += std::format("{} = {}\n", key(true, index), count + index);
+            bytes += std::format("{} = {}\n", key(false, index), index);
+        }
+
+        for (const auto mode: {EDecodeMode::scalar, EDecodeMode::records, EDecodeMode::tree}) {
+            Diagnostics diagnostics{};
+            const auto document = decode(bytes, "unique.toml", diagnostics, mode);
+            PPR_TEST_ASSERT(document.has_value());
+            PPR_TEST_ASSERT(not diagnostics.hasErrors());
+            PPR_TEST_ASSERT(document->m_entries.size() == count * 2u);
+
+            for (u32 index = 0; index < count; ++index) {
+                const Entry &short_entry = document->m_entries[index];
+                PPR_TEST_ASSERT(short_entry.m_key == key(false, index));
+                PPR_TEST_ASSERT(short_entry.m_value.m_kind == EFileKind::integer);
+                PPR_TEST_ASSERT(short_entry.m_value.m_integer == static_cast<i64>(index));
+
+                const Entry &long_entry = document->m_entries[count + index];
+                PPR_TEST_ASSERT(long_entry.m_key == key(true, index));
+                PPR_TEST_ASSERT(long_entry.m_value.m_kind == EFileKind::integer);
+                PPR_TEST_ASSERT(long_entry.m_value.m_integer == static_cast<i64>(count + index));
+            }
+
+            PPR_TEST_ASSERT(document->m_entries.front().m_location == "unique.toml:512");
+            PPR_TEST_ASSERT(document->m_entries[count].m_location == "unique.toml:511");
+        }
+    };
+
+    PPR_UNIT_TEST (decoded_document_owns_long_keys_values_and_locations_after_scratch_reuse) {
+        const std::string key(128u, 'k');
+        const std::string value(1024u, 'v');
+        const std::string origin = "an_owned_configuration_source_location_that_outlives_parsing.toml";
+        Diagnostics diagnostics;
+        const auto document = [&]() {
+            const std::string bytes = key + " = \"" + value + "\"\n";
+            return decode(bytes, origin, diagnostics);
+        }();
+        PPR_TEST_ASSERT(document.has_value() and not diagnostics.hasErrors());
+
+        {
+            const auto scratch_scope = mem::ScratchPad::open();
+            Array<std::byte, mem::ScratchPad> overwrite(1024u * 1024u, std::byte{0x79});
+            PPR_TEST_ASSERT(overwrite.back() == std::byte{0x79});
+        }
+
+        PPR_TEST_ASSERT(document->m_entries.size() == 1u);
+        PPR_TEST_ASSERT(document->m_entries.front().m_key == key);
+        PPR_TEST_ASSERT(document->m_entries.front().m_value.m_text == value);
+        PPR_TEST_ASSERT(document->m_entries.front().m_location == origin + ":1");
+    };
+
+    PPR_UNIT_TEST (scalar_patch_preserves_original_decode_failures_and_diagnostic_order) {
+        for (const std::string_view bytes: {"[a\nb = 1\n", "\"a.b\" = 1\n[a]\nb = 2\n", "[a]\nb = [1, 2]\n"}) {
+            Diagnostics decode_diagnostics;
+            const auto decoded = decode(bytes, "invalid-patch.toml", decode_diagnostics);
+            PPR_TEST_ASSERT(not decoded.has_value());
+
+            Diagnostics patch_diagnostics;
+            const auto patch = patchScalar(
+                bytes, "a.b", FileValue::integer(3), "invalid-patch.toml", patch_diagnostics);
+            PPR_TEST_ASSERT(not patch.has_value() and patch.error() == decoded.error());
+            PPR_TEST_ASSERT(patch_diagnostics.format() == decode_diagnostics.format());
+        }
+    };
+
     PPR_UNIT_TEST (dotted_keys_are_relative_to_table) {
         // TOML dotted keys inside a table are relative: "net.port" under
         // "[net]" defines "net.net.port", so this is not a duplicate.
@@ -1236,6 +1327,10 @@ namespace pP::tests {
             detail::cfg_file::decode_sections_comments_and_types,
             detail::cfg_file::hash_inside_strings_is_not_a_comment,
             detail::cfg_file::duplicate_keys_are_errors,
+            detail::cfg_file::flattened_key_collisions_preserve_duplicate_diagnostics,
+            detail::cfg_file::many_unique_short_and_long_keys_preserve_values_and_order,
+            detail::cfg_file::decoded_document_owns_long_keys_values_and_locations_after_scratch_reuse,
+            detail::cfg_file::scalar_patch_preserves_original_decode_failures_and_diagnostic_order,
             detail::cfg_file::dotted_keys_are_relative_to_table,
             detail::cfg_file::typed_value_integrity,
             detail::cfg_file::malformed_input_reports_location,

@@ -46,6 +46,10 @@ settings and game invocation/display modules for current consumers.
   assignments. Reference validation covers key syntax only; target existence
   and suitability remain the content owner's responsibility. Diagnostics can
   carry related logical paths without changing their retention/count contract.
+  Resolution borrows immutable source layers and indexes variant replacements
+  through explicit subtree scopes; shadowed replacements are still validated.
+  Same-thread `ScratchPad` storage holds private path/index work until resolution
+  ends. Returned values, provenance and diagnostic strings retain owned storage.
 - **Core.Config.Cli.cppm/.cpp** (`:config.cli`): `OptionDecl` (canonical +
   aliases + negations, switch/required/optional values, repeatable marker,
   `m_preserve_empty_value` for legacy empty-string options),
@@ -68,6 +72,9 @@ settings and game invocation/display modules for current consumers.
   is backed by the pinned private `toml++` dependency (vcpkg with a CPM
   fallback in `cmake/external/tomlplusplus.cmake`): the parsed tree is
   flattened into the document and arrays/dates are rejected afterward.
+  Flattening uses scoped scratch keys and paths while producing an owned
+  document. Scalar patching shares the original parsed tree between validation
+  and source-span lookup, then validates the complete patched bytes separately.
   Opt-in `EDecodeMode::records` rejects empty tables and literal dotted/empty
   key segments before flattening can discard their structural meaning. The
   default scalar mode preserves existing settings behavior.

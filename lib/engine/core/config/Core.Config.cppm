@@ -6,6 +6,7 @@ export module engine.core:config;
 
 import :containers.stl;
 import :logger;
+import :memory.arena;
 import :types;
 import :utility;
 
@@ -899,6 +900,10 @@ export namespace pP::config {
 } // namespace pP::config
 
 namespace pP::config::details {
+    using ScratchText = std::basic_string<char, std::char_traits<char>, mem::STL<char, mem::ScratchPad>>;
+
+    [[nodiscard]] ScratchText scratchPath(std::string_view prefix, std::string_view name);
+
     // Borrows source paths for one resolution; source arrays outlive the index.
     class SourcePathIndex {
     public:
@@ -911,10 +916,10 @@ namespace pP::config::details {
         explicit SourcePathIndex(std::span<const GroupPresence> groups);
         [[nodiscard]] std::span<const Entry> exact(std::string_view path) const noexcept;
         [[nodiscard]] bool supplied(std::string_view path, bool descendants) const;
-        [[nodiscard]] Array<std::size_t> subtree(std::string_view path) const;
+        [[nodiscard]] Array<std::size_t, mem::ScratchPad> subtree(std::string_view path) const;
 
     private:
-        Array<Entry> m_paths;
+        Array<Entry, mem::ScratchPad> m_paths;
         void sort_();
     };
 }
@@ -927,12 +932,16 @@ export namespace pP::config {
         [[nodiscard]] bool iequals(std::string_view lhs, std::string_view rhs) noexcept;
 
         struct ResolveState {
-            std::span<const Layer> m_layers{};
-            Array<SourcePathIndex> m_assignment_indices;
+            std::span<const Layer *const> m_layers{};
+            std::span<const SourcePathIndex> m_assignment_indices;
+            Array<SourcePathIndex, mem::ScratchPad> m_assignment_storage;
+            Array<std::size_t, mem::ScratchPad> m_origin_indices;
+            Array<std::size_t, mem::ScratchPad> m_origin_remap;
             Diagnostics *m_diagnostics{nullptr};
             Array<PropertyOrigin> *m_origins{nullptr};
             std::error_code m_first_error{};
             bool m_enforce_runtime_mutability{false};
+            bool m_origin_index_valid{false};
 
             void retain(const std::error_code err) noexcept {
                 if (err and not m_first_error) {
@@ -941,11 +950,14 @@ export namespace pP::config {
             }
 
             void report(
-                std::string location, std::string property, std::string message, std::error_code code,
+                std::string_view location, std::string_view property, std::string_view message, std::error_code code,
                 std::string alias = {});
-            void upsertOrigin(std::string name, ESource source, std::string location);
+            void upsertOrigin(std::string_view name, ESource source, std::string_view location);
+            void replaceOrigins(std::string_view path, Array<PropertyOrigin> &replacement);
+
             void rejectUnknown(std::span<const std::string_view> names);
             void indexSources();
+            void indexOrigins();
         };
 
         template<typename S>
@@ -1189,7 +1201,7 @@ export namespace pP::config {
             ESource winner_source = ESource::none;
 
             for (std::size_t layer_index = 0u; layer_index < state.m_layers.size(); ++layer_index) {
-                const auto &layer = state.m_layers[layer_index];
+                const auto &layer = *state.m_layers[layer_index];
                 const auto assignments = state.m_assignment_indices[layer_index].exact(name);
                 if (layer.m_source != ESource::none and
                     (member.m_metadata.m_sources & layer.m_source) == ESource::none) {
@@ -1274,7 +1286,7 @@ export namespace pP::config {
             }
 
             if (winner != nullptr) {
-                state.upsertOrigin(std::string{name}, winner_source, winner->m_location);
+                state.upsertOrigin(name, winner_source, winner->m_location);
             }
         }
 
@@ -1650,19 +1662,22 @@ export namespace pP::config {
         struct TreeResolveState {
             std::span<const TreeLayer> m_layers;
             ResolveState m_scalars;
-            Array<SourcePathIndex> m_group_indices;
-            Array<std::string> m_scalar_paths;
-            Array<std::string> m_group_paths;
+            std::span<const SourcePathIndex> m_group_indices;
+            Array<SourcePathIndex, mem::ScratchPad> m_group_storage;
+            Array<ScratchText, mem::ScratchPad> m_scalar_paths;
+            Array<ScratchText, mem::ScratchPad> m_group_paths;
             // Each boundary delegates consumed-path checks to an isolated
             // one-layer subtree. Paths from different tags/layers never mix.
-            Array<std::string> m_atomic_paths;
+            Array<ScratchText, mem::ScratchPad> m_atomic_paths;
+            std::string_view m_scope;
             bool m_atomic_replacement{};
 
             [[nodiscard]] bool supplied(std::string_view path, bool descendants) const;
-            void report(std::string location, std::string path, std::string message, std::error_code error);
-            void presence(const std::string &path, const Metadata &metadata, bool required);
+            void report(
+                std::string_view location, std::string_view path, std::string_view message, std::error_code error);
+            void presence(std::string_view path, const Metadata &metadata, bool required);
             void rejectUnknown();
-            [[nodiscard]] Array<std::string> entryKeys(const std::string &path);
+            [[nodiscard]] Array<std::string_view, mem::ScratchPad> entryKeys(std::string_view path);
             void indexSources();
         };
 
@@ -1671,14 +1686,10 @@ export namespace pP::config {
 
         template<typename Owner, typename T, typename C>
         void resolveTreeVariant(
-            T &value, const Member<Owner, T, C> &member, const std::string &path, TreeResolveState &state) {
+            T &value, const Member<Owner, T, C> &member, const std::string_view path, TreeResolveState &state) {
             state.presence(path, member.m_metadata, member.m_presence == EPresence::required);
-            state.m_atomic_paths.push_back(path);
-            const auto tag_path = recursivePath(path, "tag");
-            const auto within = [&](const std::string_view name) {
-                return name == path or
-                       (name.starts_with(path) and name.size() > path.size() and name[path.size()] == '.');
-            };
+            state.m_atomic_paths.emplace_back(path);
+            const auto tag_path = scratchPath(path, "tag");
             const bool supplied = state.supplied(path, true);
             if constexpr (is_optional_v<T>) {
                 if (member.m_presence == EPresence::optional) {
@@ -1723,42 +1734,37 @@ export namespace pP::config {
                 return;
             }
 
-            for (const auto &layer: state.m_layers) {
-                TreeLayer subtree;
-                subtree.m_scalars.m_source = layer.m_scalars.m_source;
-                subtree.m_scalars.m_origin = layer.m_scalars.m_origin;
-                for (const auto &assignment: layer.m_scalars.m_assignments) {
-                    if (within(assignment.m_name)) {
-                        subtree.m_scalars.m_assignments.push_back(assignment);
-                    }
-                }
-                for (const auto &group: layer.m_groups) {
-                    if (within(group.m_path)) {
-                        subtree.m_groups.push_back(group);
-                    }
-                }
-                if (subtree.m_scalars.m_assignments.empty() and subtree.m_groups.empty()) {
+            for (std::size_t layer_index = 0u; layer_index < state.m_layers.size(); ++layer_index) {
+                const auto &layer = state.m_layers[layer_index];
+                const auto &assignments = state.m_scalars.m_assignment_indices[layer_index];
+                const auto &groups = state.m_group_indices[layer_index];
+                if (not assignments.supplied(path, true) and not groups.supplied(path, true)) {
                     continue;
                 }
 
+                // This replacement observes only its prefix in the original immutable layer.
+                // Reuse the original indexes instead of copying all subtree values and paths.
+                const Layer *const scalar_layer = std::addressof(layer.m_scalars);
                 Array<PropertyOrigin> origins;
                 TreeResolveState replacement{};
-                replacement.m_layers = std::span{std::addressof(subtree), 1u};
-                replacement.m_scalars.m_layers = std::span{std::addressof(subtree.m_scalars), 1u};
-                replacement.indexSources();
+                replacement.m_layers = std::span{std::addressof(layer), 1u};
+                replacement.m_scalars.m_layers = std::span{std::addressof(scalar_layer), 1u};
+                replacement.m_scalars.m_assignment_indices = std::span{std::addressof(assignments), 1u};
+                replacement.m_group_indices = std::span{std::addressof(groups), 1u};
                 replacement.m_scalars.m_diagnostics = state.m_scalars.m_diagnostics;
                 replacement.m_scalars.m_origins = std::addressof(origins);
+                replacement.m_scope = path;
                 replacement.m_atomic_replacement = true;
-                replacement.m_group_paths.push_back(path);
+                replacement.m_group_paths.emplace_back(path);
                 replacement.m_scalar_paths.push_back(tag_path);
+
                 const Assignment *tag = nullptr;
-                for (const auto &assignment: subtree.m_scalars.m_assignments) {
-                    if (assignment.m_name == tag_path) {
-                        tag = std::addressof(assignment);
-                    }
+                for (const auto &match: assignments.exact(tag_path)) {
+                    tag = std::addressof(layer.m_scalars.m_assignments[match.m_position]);
                 }
-                const auto location = tag != nullptr ? tag->m_location : subtree.m_scalars.m_origin;
-                replacement.m_scalars.upsertOrigin(path, subtree.m_scalars.m_source, location);
+
+                const auto &location = tag != nullptr ? tag->m_location : layer.m_scalars.m_origin;
+                replacement.m_scalars.upsertOrigin(path, layer.m_scalars.m_source, location);
                 bool selected = false;
                 if (tag == nullptr) {
                     replacement.report(
@@ -1768,7 +1774,7 @@ export namespace pP::config {
                     replacement.report(
                         location, tag_path, "variant tag must be text", make_error_code(EConfigErrc::type_mismatch));
                 } else {
-                    replacement.m_scalars.upsertOrigin(tag_path, subtree.m_scalars.m_source, location);
+                    replacement.m_scalars.upsertOrigin(tag_path, layer.m_scalars.m_source, location);
                     std::apply(
                         [&](const auto &...alt) {
                             const auto resolve_alternative = [&](const auto &alternative) {
@@ -1777,7 +1783,7 @@ export namespace pP::config {
                                     return;
                                 }
                                 selected = true;
-                                const auto payload_path = recursivePath(path, alternative.m_tag);
+                                const auto payload_path = scratchPath(path, alternative.m_tag);
                                 replacement.presence(payload_path, member.m_metadata, true);
                                 A payload{};
                                 resolveTreeObject(payload, payload_path, replacement);
@@ -1801,10 +1807,7 @@ export namespace pP::config {
                 // latest complete subtree's origins (including same-tag edits).
                 replacement.rejectUnknown();
                 state.m_scalars.retain(replacement.m_scalars.m_first_error);
-                std::erase_if(*state.m_scalars.m_origins, [&](const auto &origin) { return within(origin.m_name); });
-                for (auto &origin: origins) {
-                    state.m_scalars.m_origins->push_back(std::move(origin));
-                }
+                state.m_scalars.replaceOrigins(path, origins);
             }
         }
 
@@ -1813,7 +1816,7 @@ export namespace pP::config {
             visit(object, [&](const auto &member, auto &value) {
                 using T = std::remove_cvref_t<decltype(value)>;
                 using C = std::remove_cvref_t<decltype(member.m_constraint)>;
-                const auto path = recursivePath(prefix, member.m_metadata.m_name);
+                const auto path = scratchPath(prefix, member.m_metadata.m_name);
                 if constexpr (node_kind_v<C> == ENodeKind::scalar) {
                     state.m_scalar_paths.push_back(path);
                     state.m_scalars.upsertOrigin(path, ESource::none, "default");
@@ -1857,7 +1860,7 @@ export namespace pP::config {
                     using E = typename CollectionTraits<T>::Element;
                     if constexpr (TDescribed<E>) {
                         state.presence(path, member.m_metadata, member.m_presence == EPresence::required);
-                        Array<std::string_view> initial_keys;
+                        Array<std::string_view, mem::ScratchPad> initial_keys;
                         for (const auto &entry: value.m_entries) {
                             if (not isValidKey(entry.m_key)) {
                                 state.report(
@@ -1875,11 +1878,11 @@ export namespace pP::config {
                         for (const auto &key: keys) {
                             if (std::ranges::find(value.m_entries, key, &KeyedEntry<E>::m_key) ==
                                 value.m_entries.end()) {
-                                value.m_entries.push_back({key, E{}});
+                                value.m_entries.push_back({std::string{key}, E{}});
                             }
                         }
                         for (auto &entry: value.m_entries) {
-                            const auto entry_path = recursivePath(path, entry.m_key);
+                            const auto entry_path = scratchPath(path, entry.m_key);
                             state.presence(entry_path, member.m_metadata, false);
                             resolveTreeObject(entry.m_value, entry_path, state);
                         }
@@ -1919,15 +1922,22 @@ export namespace pP::config {
 
     template<typename Settings>
     [[nodiscard]] Expected<Resolved<Settings>> resolve(std::span<const Layer> layers, Diagnostics &diagnostics) {
+        const auto scratch_scope = mem::ScratchPad::open();
+        Array<const Layer *, mem::ScratchPad> borrowed_layers;
+        borrowed_layers.reserve(layers.size());
+        for (const auto &layer: layers) {
+            borrowed_layers.push_back(std::addressof(layer));
+        }
+
         details::ResolveState state{};
-        state.m_layers = layers;
+        state.m_layers = borrowed_layers;
         state.indexSources();
         state.m_diagnostics = std::addressof(diagnostics);
 
         Resolved<Settings> result{};
         state.m_origins = std::addressof(result.m_origins);
 
-        Array<std::string_view> names{};
+        Array<std::string_view, mem::ScratchPad> names{};
         visit(result.m_value, [&](const auto &member, auto &) { names.push_back(member.m_metadata.m_name); });
 
         for (std::size_t i = 0; i < names.size(); ++i) {
@@ -1944,7 +1954,7 @@ export namespace pP::config {
         state.rejectUnknown(names);
 
         visit(result.m_value, [&](const auto &member, auto &field) {
-            result.m_origins.push_back(PropertyOrigin{std::string{member.m_metadata.m_name}, ESource::none, "default"});
+            state.upsertOrigin(member.m_metadata.m_name, ESource::none, "default");
             details::applyMember(field, member, state);
         });
 
@@ -1974,18 +1984,19 @@ export namespace pP::config {
             std::is_copy_constructible_v<Settings>, "Settings must be copyable for transactional runtime apply");
         static_assert(std::is_copy_assignable_v<Settings>, "Settings must be copyable for transactional runtime apply");
 
+        const auto scratch_scope = mem::ScratchPad::open();
         Settings scratch = resolved.m_value;
         Array<PropertyOrigin> origins = resolved.m_origins;
 
         details::ResolveState state{};
-        const Layer *single = std::addressof(layer);
-        state.m_layers = std::span{single, 1};
+        const Layer *const single = std::addressof(layer);
+        state.m_layers = std::span{std::addressof(single), 1u};
         state.indexSources();
         state.m_diagnostics = std::addressof(diagnostics);
         state.m_origins = std::addressof(origins);
         state.m_enforce_runtime_mutability = true;
 
-        Array<std::string_view> names{};
+        Array<std::string_view, mem::ScratchPad> names{};
         visit(scratch, [&](const auto &member, auto &) { names.push_back(member.m_metadata.m_name); });
         state.rejectUnknown(names);
 
@@ -2067,12 +2078,14 @@ export namespace pP::config {
     [[nodiscard]] Expected<Resolved<Settings>> resolveRecursive(
         const std::span<const TreeLayer> layers, Diagnostics &diagnostics) {
         using pP::make_error_code;
+        const auto scratch_scope = mem::ScratchPad::open();
         const auto schema = validateSchema<Settings>(diagnostics);
         PPR_RETURN_UNEXPECTED_ON_FAIL(Config, schema);
-        Array<Layer> scalars;
+
+        Array<const Layer *, mem::ScratchPad> scalars;
         scalars.reserve(layers.size());
         for (const auto &layer: layers) {
-            scalars.push_back(layer.m_scalars);
+            scalars.push_back(std::addressof(layer.m_scalars));
         }
 
         Resolved<Settings> result;

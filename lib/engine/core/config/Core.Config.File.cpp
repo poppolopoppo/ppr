@@ -8,6 +8,7 @@ module engine.core;
 import :config;
 import :config.file;
 import :logger;
+import :memory.arena;
 
 import std;
 
@@ -15,6 +16,10 @@ namespace pP::config {
     using pP::make_error_code;
     PPR_DEFINE_LOG_CATEGORY(ConfigFile, debug, none)
     namespace {
+        // ------------------------------------------------------------------
+        // TOML decoding
+        // ------------------------------------------------------------------
+
         // toml++ owns TOML 1.0 syntax (tables, dotted keys, typed scalars,
         // comments, escapes). The codec only flattens the parsed tree into
         // the format-neutral document and rejects value kinds Phase 1 has
@@ -22,53 +27,81 @@ namespace pP::config {
         // numbers, and redefined tables fail inside toml++ with source
         // positions that become diagnostics.
         template<typename K>
-        [[nodiscard]] std::string keyText(const K &key) {
+        [[nodiscard]] std::string_view keyText(const K &key) {
             if constexpr (requires { key.str(); }) {
                 const auto view = key.str();
-                return std::string{view.data(), view.size()};
+                return std::string_view{view.data(), view.size()};
             } else {
-                return std::string{std::string_view{key}};
+                return std::string_view{key};
             }
         }
+
+        using ScratchText = std::basic_string<char, std::char_traits<char>, mem::STL<char, mem::ScratchPad>>;
+
+        struct ScratchTextLess {
+            bool operator()(const ScratchText &left, const ScratchText &right) const noexcept {
+                return std::string_view{left} < std::string_view{right};
+            }
+        };
 
         struct TomlFlattener {
             std::string m_origin{"config"};
             Diagnostics *m_diagnostics{nullptr};
             Document m_document{};
+            std::set<ScratchText, ScratchTextLess, mem::STL<ScratchText, mem::ScratchPad>> m_keys{};
             std::error_code m_first_error{};
             EDecodeMode m_mode{EDecodeMode::scalar};
+            bool m_retain_document{true};
 
             [[nodiscard]] std::string location(const toml::source_position &pos) const {
                 if (pos.line == 0) {
                     return m_origin;
                 }
-                return configFormat("{}:{}", m_origin, pos.line);
+
+                std::array<char, 16u> digits{};
+                const auto converted = std::to_chars(digits.data(), digits.data() + digits.size(), pos.line);
+                std::string result;
+                result.reserve(m_origin.size() + 1u + static_cast<std::size_t>(converted.ptr - digits.data()));
+                result.append(m_origin);
+                result.push_back(':');
+                result.append(digits.data(), converted.ptr);
+                return result;
             }
 
-            void fail(std::string where, std::string key, std::string message, const EConfigErrc code) {
-                m_diagnostics->add(std::move(where), std::move(key), std::move(message), make_error_code(code));
+            void fail(std::string where, const std::string_view key, std::string message, const EConfigErrc code) {
+                m_diagnostics->add(std::move(where), std::string{key}, std::move(message), make_error_code(code));
                 if (not m_first_error) {
                     m_first_error = make_error_code(code);
                 }
             }
 
-            void addEntry(const toml::node &node, const std::string &key, FileValue value) {
-                for (const auto &entry: m_document.m_entries) {
-                    if (entry.m_key == key) {
-                        fail(
-                            location(node.source().begin), key, configFormat("duplicate key '{}'", key),
-                            EConfigErrc::duplicate_key);
-                        return;
-                    }
+            void addEntry(const toml::node &node, const std::string_view key, FileValue value) {
+                // Own keys independently of the document vector: its growth can
+                // relocate short strings while recursive flattening is in progress.
+                if (not m_keys.emplace(key).second) {
+                    fail(
+                        location(node.source().begin), key, configFormat("duplicate key '{}'", key),
+                        EConfigErrc::duplicate_key);
+                    return;
                 }
 
-                m_document.m_entries.push_back(Entry{key, std::move(value), location(node.source().begin)});
+                if (m_retain_document) {
+                    m_document.m_entries.push_back(
+                        Entry{std::string{key}, std::move(value), location(node.source().begin)});
+                }
             }
 
-            void walkTable(const toml::table &table, const std::string &prefix) {
+            void walkTable(const toml::table &table, const std::string_view prefix) {
                 for (auto &&kv: table) {
-                    const std::string segment = keyText(kv.first);
-                    const std::string key = prefix.empty() ? segment : prefix + "." + segment;
+                    const std::string_view segment = keyText(kv.first);
+                    ScratchText key;
+                    key.reserve(prefix.size() + (prefix.empty() ? 0u : 1u) + segment.size());
+                    key.append(prefix);
+                    if (not prefix.empty()) {
+                        key.push_back('.');
+                    }
+                    key.append(segment);
+
                     const toml::node &node = kv.second;
                     if (m_mode != EDecodeMode::scalar and (segment.empty() or segment.find('.') != std::string::npos)) {
                         fail(
@@ -83,8 +116,8 @@ namespace pP::config {
                             const toml::table *nested = node.as_table();
                             PPR_ASSERT(nested != nullptr);
                             if (nested != nullptr) {
-                                if (m_mode == EDecodeMode::tree) {
-                                    m_document.m_groups.push_back({key, location(node.source().begin)});
+                                if (m_mode == EDecodeMode::tree and m_retain_document) {
+                                    m_document.m_groups.push_back({std::string{key}, location(node.source().begin)});
                                 }
                                 if (m_mode == EDecodeMode::records and nested->empty()) {
                                     fail(
@@ -131,11 +164,11 @@ namespace pP::config {
                             break;
                         }
                         case toml::node_type::string: {
-                            const std::optional<std::string> value = node.value<std::string>();
-                            if (not value.has_value()) {
+                            const auto *const value = node.as_string();
+                            if (value == nullptr) {
                                 fail(location(node.source().begin), key, "malformed string", EConfigErrc::codec_error);
                             } else {
-                                addEntry(node, key, FileValue::text(*value));
+                                addEntry(node, key, m_retain_document ? FileValue::text(value->get()) : FileValue{});
                             }
                             break;
                         }
@@ -147,6 +180,43 @@ namespace pP::config {
                 }
             }
         };
+
+        [[nodiscard]] Expected<toml::table> parseToml(
+            const std::string_view bytes, const std::string_view origin, Diagnostics &diagnostics,
+            const EDecodeMode mode) {
+            const std::string origin_text = origin.empty() ? std::string{"config"} : std::string{origin};
+            if (mode == EDecodeMode::tree and bytes.size() > 1024u * 1024u) {
+                diagnostics.add(
+                    origin_text, "", "tree source exceeds the 1 MiB document limit",
+                    make_error_code(EConfigErrc::out_of_range));
+                PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, EConfigErrc::out_of_range);
+            }
+
+            try {
+                return toml::parse(bytes, origin_text);
+            } catch (const toml::parse_error &err) {
+                const u32 line = err.source().begin.line;
+                const std::string where = line == 0 ? origin_text : configFormat("{}:{}", origin_text, line);
+                diagnostics.add(where, "", std::string{err.description()}, make_error_code(EConfigErrc::codec_error));
+                PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, EConfigErrc::codec_error);
+                std::unreachable();
+            }
+        }
+
+        [[nodiscard]] Expected<Document> flattenParsed(
+            const toml::table &table, const std::string_view origin, Diagnostics &diagnostics, const EDecodeMode mode,
+            const bool retain_document = true) {
+            const auto scratch_scope = mem::ScratchPad::open();
+            TomlFlattener flattener{};
+            flattener.m_origin = origin.empty() ? std::string{"config"} : std::string{origin};
+            flattener.m_diagnostics = std::addressof(diagnostics);
+            flattener.m_mode = mode;
+            flattener.m_retain_document = retain_document;
+
+            flattener.walkTable(table, {});
+            PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, flattener.m_first_error);
+            return std::move(flattener.m_document);
+        }
 
         [[nodiscard]] bool isBareKey(const std::string_view key) noexcept {
             if (key.empty()) {
@@ -198,34 +268,10 @@ namespace pP::config {
 
     [[nodiscard]] Expected<Document> decode(
         const std::string_view bytes, const std::string_view origin, Diagnostics &diagnostics, const EDecodeMode mode) {
-        const std::string origin_text = origin.empty() ? std::string{"config"} : std::string{origin};
-        if (mode == EDecodeMode::tree and bytes.size() > 1024u * 1024u) {
-            diagnostics.add(
-                origin_text, "", "tree source exceeds the 1 MiB document limit",
-                make_error_code(EConfigErrc::out_of_range));
-            PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, EConfigErrc::out_of_range);
-        }
-        toml::table table;
-        try {
-            table = toml::parse(bytes, origin_text);
-        } catch (const toml::parse_error &err) {
-            const std::string_view description = err.description();
-            const u32 line = err.source().begin.line;
-            const std::string where = line == 0 ? origin_text : configFormat("{}:{}", origin_text, line);
-            diagnostics.add(where, "", std::string{description}, make_error_code(EConfigErrc::codec_error));
-            return std::unexpected{make_error_code(EConfigErrc::codec_error)};
-        }
+        auto table = parseToml(bytes, origin, diagnostics, mode);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, table);
 
-        TomlFlattener flattener{};
-        flattener.m_origin = origin_text;
-        flattener.m_diagnostics = std::addressof(diagnostics);
-        flattener.m_mode = mode;
-
-        flattener.walkTable(table, {});
-        if (flattener.m_first_error) {
-            return std::unexpected{flattener.m_first_error};
-        }
-        return std::move(flattener.m_document);
+        return flattenParsed(*table, origin, diagnostics, mode);
     }
 
     [[nodiscard]] Expected<std::string> encode(const Document &document) {
@@ -437,20 +483,15 @@ namespace pP::config {
             PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, fail("Invalid scalar patch path or source size"));
         }
 
-        auto decoded = decode(bytes, origin, diagnostics);
+        auto table = parseToml(bytes, origin, diagnostics, EDecodeMode::scalar);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, table);
+        auto decoded = flattenParsed(*table, origin, diagnostics, EDecodeMode::scalar, false);
         PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, decoded);
 
         auto scalar = scalarText(value);
         PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, scalar);
 
-        toml::table table;
-        try {
-            table = toml::parse(bytes, std::string{origin});
-        } catch (const toml::parse_error &) {
-            PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, fail("Source cannot be parsed for patching"));
-        }
-
-        const toml::table *parent = std::addressof(table);
+        const toml::table *parent = std::addressof(*table);
         std::string_view remaining = key;
         while (remaining.find('.') != std::string_view::npos) {
             const auto dot = remaining.find('.');
@@ -484,7 +525,7 @@ namespace pP::config {
         } else {
             auto begin = sourceOffset(bytes, parent->source().begin);
             PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, begin);
-            if (parent == std::addressof(table) or
+            if (parent == std::addressof(*table) or
                 parent->is_inline() or
                 *begin >= bytes.size() or
                 bytes[*begin] != '[') {

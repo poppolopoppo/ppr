@@ -1128,6 +1128,94 @@ namespace pP::tests::detail::cfg {
         layer.m_scalars.m_assignments.push_back({std::move(path), {}, std::move(value), std::move(location), 0u});
     }
 
+    PPR_UNIT_TEST (recursive_owned_results_survive_sources_and_scratch_reuse) {
+        struct Collection {
+            KeyedCollection<VariantSettings<EPresence::required>> m_records;
+
+            static constexpr auto describe() {
+                return std::tuple{collection(
+                    &Collection::m_records,
+                    Metadata{"long_configuration_records", {}, {}, EMutability::startup, ESource::all}, {0u, 4u})};
+            }
+        };
+
+        const std::string key(96u, 'k');
+        const std::string path = "long_configuration_records." + key + ".choice";
+        const std::string amount_path = path + ".nested.inner.numbers.amount";
+        const std::string origin = "a_long_owned_source_location_that_must_survive_resolution.toml:27";
+        Expected<Resolved<Collection>> result;
+        Diagnostics diagnostics;
+        {
+            auto layer = variantLayer(path, "nested", origin);
+            variantAssignment(layer, path + ".nested.inner.tag", SourceValue::text("numbers"), origin);
+            variantAssignment(layer, amount_path, SourceValue::integer(7), origin);
+            layer.m_groups.push_back({path + ".nested.inner", origin});
+            layer.m_groups.push_back({path + ".nested.inner.numbers", origin});
+
+            result = resolveRecursive<Collection>(std::span{&layer, 1u}, diagnostics);
+            PPR_TEST_ASSERT(result.has_value() and not diagnostics.hasErrors());
+        }
+
+        {
+            const auto scratch_scope = mem::ScratchPad::open();
+            Array<std::byte, mem::ScratchPad> overwrite(1024u * 1024u, std::byte{0x6d});
+            PPR_TEST_ASSERT(overwrite.front() == std::byte{0x6d});
+        }
+
+        PPR_TEST_ASSERT(result->m_value.m_records.m_entries.size() == 1u);
+        PPR_TEST_ASSERT(result->m_value.m_records.m_entries.front().m_key == key);
+        const auto &nested = std::get<VariantNested>(result->m_value.m_records.m_entries.front().m_value.m_choice);
+        PPR_TEST_ASSERT(std::get<VariantNumbers>(nested.m_inner).m_amount == 7u);
+        const auto *const retained = result->find(amount_path);
+        PPR_TEST_ASSERT(retained != nullptr and retained->m_location == origin and retained->m_name == amount_path);
+    };
+
+    PPR_UNIT_TEST (variant_replacement_scopes_exclude_prefix_siblings) {
+        struct Prefixes {
+            std::variant<VariantEmpty, VariantNumbers> m_foo{}, m_foobar{}, m_foo_dash{};
+
+            static constexpr auto describe() {
+                return std::tuple{
+                    taggedVariant(
+                        &Prefixes::m_foo, Metadata{"foo", {}, {}, EMutability::startup, ESource::all},
+                        EPresence::required, alternative<VariantEmpty>("empty"),
+                        alternative<VariantNumbers>("numbers")),
+                    taggedVariant(
+                        &Prefixes::m_foobar, Metadata{"foobar", {}, {}, EMutability::startup, ESource::all},
+                        EPresence::required, alternative<VariantEmpty>("empty"),
+                        alternative<VariantNumbers>("numbers")),
+                    taggedVariant(
+                        &Prefixes::m_foo_dash, Metadata{"foo-bar", {}, {}, EMutability::startup, ESource::all},
+                        EPresence::required, alternative<VariantEmpty>("empty"),
+                        alternative<VariantNumbers>("numbers"))};
+            }
+        };
+
+        TreeLayer layer;
+        for (const std::string_view path: {"foo", "foobar", "foo-bar"}) {
+            auto subtree = variantLayer(std::string{path}, "numbers");
+            layer.m_groups.insert(layer.m_groups.end(), subtree.m_groups.begin(), subtree.m_groups.end());
+            layer.m_scalars.m_assignments.insert(
+                layer.m_scalars.m_assignments.end(), subtree.m_scalars.m_assignments.begin(),
+                subtree.m_scalars.m_assignments.end());
+            variantAssignment(layer, std::string{path} + ".numbers.amount", SourceValue::integer(3));
+        }
+
+        Diagnostics diagnostics;
+        const auto valid = resolveRecursive<Prefixes>(std::span{&layer, 1u}, diagnostics);
+        PPR_TEST_ASSERT(valid.has_value() and not diagnostics.hasErrors());
+
+        variantAssignment(layer, "foobar.numbers.typo", SourceValue::integer(1), "sibling:1");
+        variantAssignment(layer, "foo-bar.numbers.typo", SourceValue::integer(1), "sibling:2");
+        const auto invalid = resolveRecursive<Prefixes>(std::span{&layer, 1u}, diagnostics);
+        PPR_TEST_ASSERT(not invalid and invalid.error() == make_error_code(EConfigErrc::unknown_property));
+        PPR_TEST_ASSERT(diagnostics.size() == 2u);
+        PPR_TEST_ASSERT(diagnostics.entries()[0u].m_property == "foobar.numbers.typo");
+        PPR_TEST_ASSERT(diagnostics.entries()[0u].m_location == "sibling:1");
+        PPR_TEST_ASSERT(diagnostics.entries()[1u].m_property == "foo-bar.numbers.typo");
+        PPR_TEST_ASSERT(diagnostics.entries()[1u].m_location == "sibling:2");
+    };
+
     PPR_UNIT_TEST (variant_nested_resolution_is_order_independent) {
         auto layer = variantLayer("choice", "nested");
         variantAssignment(layer, "choice.nested.inner.numbers.amount", SourceValue::integer(7));
@@ -1236,6 +1324,64 @@ namespace pP::tests::detail::cfg {
         PPR_TEST_ASSERT(untouched.has_value() and std::holds_alternative<VariantEmpty>(untouched->m_value.m_choice));
         PPR_TEST_ASSERT(untouched->find("choice.tag")->m_location == "changed:1");
         PPR_TEST_ASSERT(untouched->m_value.m_unrelated == 7u and not diagnostics.hasErrors());
+    };
+
+    PPR_UNIT_TEST (repeated_nested_replacements_preserve_origin_order_and_sources) {
+        struct Sequence {
+            u32 m_head{4u}, m_tail{4u};
+            std::variant<VariantEmpty, VariantNested> m_choice;
+
+            static constexpr auto describe() {
+                return std::tuple{
+                    field(
+                        &Sequence::m_head, Metadata{"head", {}, {}, EMutability::startup, ESource::all},
+                        Range<u32>{1u, 9u}),
+                    taggedVariant(
+                        &Sequence::m_choice, Metadata{"choice", {}, {}, EMutability::startup, ESource::all},
+                        EPresence::required, alternative<VariantEmpty>("empty"), alternative<VariantNested>("nested")),
+                    field(
+                        &Sequence::m_tail, Metadata{"tail", {}, {}, EMutability::startup, ESource::all},
+                        Range<u32>{1u, 9u})};
+            }
+        };
+
+        Array<TreeLayer> layers;
+        for (u32 index = 0u; index < 4u; ++index) {
+            const std::string origin = "nested-layer-" + std::to_string(index) + ":27";
+            auto layer = variantLayer("choice", "nested", origin);
+            layer.m_scalars.m_source = ESource::file;
+            layer.m_groups.push_back({"choice.nested.inner", origin});
+            layer.m_groups.push_back({"choice.nested.inner.numbers", origin});
+            variantAssignment(layer, "choice.nested.inner.tag", SourceValue::text("numbers"), origin);
+            variantAssignment(layer, "choice.nested.inner.numbers.amount", SourceValue::integer(index + 1u), origin);
+            layers.push_back(std::move(layer));
+        }
+
+        variantAssignment(layers.front(), "head", SourceValue::integer(7), "retained-head:2");
+        variantAssignment(layers.front(), "tail", SourceValue::integer(8), "retained-tail:2");
+        variantAssignment(layers.front(), "choice.nested.inner.numbers.extra", SourceValue::integer(9));
+        Diagnostics diagnostics;
+        const auto result = resolveRecursive<Sequence>(layers, diagnostics);
+        PPR_TEST_ASSERT(result.has_value() and not diagnostics.hasErrors());
+        PPR_TEST_ASSERT(result->m_value.m_head == 7u and result->m_value.m_tail == 8u);
+        const auto &numbers = std::get<VariantNumbers>(std::get<VariantNested>(result->m_value.m_choice).m_inner);
+        PPR_TEST_ASSERT(numbers.m_amount == 4u and numbers.m_offset == 4u and not numbers.m_extra);
+
+        constexpr std::string_view expected[] = {
+            "head", "choice", "choice.tag", "choice.nested", "choice.nested.inner", "choice.nested.inner.tag",
+            "choice.nested.inner.numbers", "choice.nested.inner.numbers.amount", "choice.nested.inner.numbers.offset",
+            "choice.nested.inner.numbers.extra", "tail"};
+        PPR_TEST_ASSERT(result->m_origins.size() == std::size(expected));
+        for (std::size_t index = 0u; index < std::size(expected); ++index) {
+            PPR_TEST_ASSERT(result->m_origins[index].m_name == expected[index]);
+        }
+
+        PPR_TEST_ASSERT(result->find("head")->m_location == "retained-head:2");
+        PPR_TEST_ASSERT(result->find("tail")->m_location == "retained-tail:2");
+        PPR_TEST_ASSERT(result->find("choice.nested.inner.numbers.amount")->m_location == "nested-layer-3:27");
+        PPR_TEST_ASSERT(result->find("choice.nested.inner.numbers.amount")->m_source == ESource::file);
+        PPR_TEST_ASSERT(result->find("choice.nested.inner.numbers.offset")->m_location == "default");
+        PPR_TEST_ASSERT(result->find("choice.nested.inner.numbers.offset")->m_source == ESource::none);
     };
 
     PPR_UNIT_TEST (variant_replacements_do_not_inherit_and_validate_shadowed_layers) {
@@ -1501,9 +1647,12 @@ namespace pP::tests {
             detail::cfg::recursive_absent_optional_validates_defaulted_descendants,
             detail::cfg::recursive_empty_collection_validates_defaulted_element_descendants,
             detail::cfg::variant_nested_resolution_is_order_independent,
+            detail::cfg::recursive_owned_results_survive_sources_and_scratch_reuse,
+            detail::cfg::variant_replacement_scopes_exclude_prefix_siblings,
             detail::cfg::variant_tag_and_payload_errors_report_logical_paths,
             detail::cfg::variant_required_optional_and_defaulted_presence,
             detail::cfg::variant_layers_replace_same_and_changed_tags_atomically,
+            detail::cfg::repeated_nested_replacements_preserve_origin_order_and_sources,
             detail::cfg::variant_replacements_do_not_inherit_and_validate_shadowed_layers,
             detail::cfg::variant_schema_all_and_value_active_preorder_traversal,
             detail::cfg::variant_schema_rejects_invalid_tags_types_presence_and_defaults,
