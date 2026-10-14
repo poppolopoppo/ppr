@@ -176,34 +176,6 @@ namespace pP::sim {
             return std::hypot(local_x, local_y) / edge;
         }
 
-        [[nodiscard]] u64 materialKey(const GenerationRecipe &recipe, const u16 id) noexcept {
-            if (id == 0u) {
-                return 0x76616375756dull;
-            }
-
-            const auto material = std::ranges::lower_bound(recipe.m_materials, id, {}, &GenerationMaterial::m_id);
-            if (material != recipe.m_materials.end() and material->m_key != 0u) {
-                return material->m_key;
-            }
-
-            for (const auto &biome: recipe.m_biomes) {
-                for (const auto &band: biome.m_bands) {
-                    for (const auto &choice: band.m_choices) {
-                        if (choice.m_material == id) {
-                            return choice.m_key;
-                        }
-                    }
-                }
-
-                for (const auto &deposit: biome.m_deposits) {
-                    if (deposit.m_material == id) {
-                        return deposit.m_key;
-                    }
-                }
-            }
-            return 0u;
-        }
-
         [[nodiscard]] u16 neighborhoodMode(
             const GenerationPlan &plan, const std::array<u16, 8u> &neighbors, const u16 current, const u16 affinity,
             const u32 x, const u32 y, const u32 pass, const bool erosion) noexcept {
@@ -228,9 +200,17 @@ namespace pP::sim {
                 ++votes[index];
             }
 
+            const auto tieHash = [&](const u16 material) {
+                return generationStreamSeed(
+                    plan.seed(), plan.materialLookup()[material].m_key ^ 0x746965726f636bull,
+                    (static_cast<u64>(y) * kWorldEdge + x) * 24u + pass);
+            };
+
             u16 mode = current;
             double best = -1.0;
             u64 best_tie{};
+            bool best_tie_ready = false;
+
             for (u32 i = 0u; i < distinct; ++i) {
                 const u16 candidate = materials[i];
                 double score = votes[i];
@@ -240,24 +220,33 @@ namespace pP::sim {
                     score += (candidate == affinity ? 1.25 : 0.0) + (candidate == current ? 0.75 : 0.0);
 
                     if (candidate == current and current != 0u) {
-                        const auto host = std::ranges::lower_bound(
-                            plan.recipe().m_materials, current, {}, &GenerationMaterial::m_id);
-                        if (host != plan.recipe().m_materials.end()) {
-                            score += std::clamp(host->m_reference_density_kg_m3 / 5000.0, 0.0, 1.0);
-                        }
+                        score += plan.materialLookup()[current].m_density_score;
                     }
                 }
 
-                const u64 tie = generationStreamSeed(
-                    plan.seed(), materialKey(plan.recipe(), candidate) ^ 0x746965726f636bull,
-                    (static_cast<u64>(y) * kWorldEdge + x) * 24u + pass);
-
-                if (score > best or (score == best and tie > best_tie)) {
+                if (score > best) {
                     mode = candidate;
                     best = score;
+                    best_tie_ready = false;
+                    continue;
+                }
+
+                if (score < best) {
+                    continue;
+                }
+
+                if (not best_tie_ready) {
+                    best_tie = tieHash(mode);
+                    best_tie_ready = true;
+                }
+
+                const u64 tie = tieHash(candidate);
+                if (tie > best_tie) {
+                    mode = candidate;
                     best_tie = tie;
                 }
             }
+
             return mode;
         }
 

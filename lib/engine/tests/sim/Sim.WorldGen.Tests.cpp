@@ -635,6 +635,60 @@ y_fine=0
             PPR_TEST_ASSERT(semanticHash(duplicate, duplicate) != first);
         };
 
+        PPR_UNIT_TEST (numeric_plan_compiles_sparse_material_keys_and_density_once) {
+            auto recipe = numericRecipe();
+            recipe.m_materials.push_back({65000u, true, true, EGenerationMatter::solid, 7500.0});
+            recipe.m_materials.push_back({40000u, true, true, EGenerationMatter::solid, 1000.0, 900u});
+            recipe.m_materials.push_back({33000u, true, true, EGenerationMatter::solid, 1250.0});
+            recipe.m_materials.push_back({32000u, true, true, EGenerationMatter::solid, 1250.0});
+            auto &biome = recipe.m_biomes.front();
+            biome.m_bands.front().m_choices.push_back({0u, 65000u, 1.0});
+            biome.m_bands.front().m_choices.push_back({204u, 40000u, 1.0});
+            biome.m_deposits.push_back(
+                {.m_key = 205u,
+                    .m_material = 65000u,
+                    .m_host = 17u,
+                    .m_depth_max = 1.0,
+                    .m_threshold_min = -1.0,
+                    .m_threshold_max = 1.0});
+            biome.m_deposits.push_back(
+                {.m_key = 206u,
+                    .m_order = 1u,
+                    .m_material = 33000u,
+                    .m_host = 17u,
+                    .m_depth_max = 1.0,
+                    .m_threshold_min = -1.0,
+                    .m_threshold_max = 1.0});
+            auto later = biome;
+            later.m_key = 207u;
+            later.m_bands.front().m_choices.front().m_key = 208u;
+            later.m_bands.front().m_choices.push_back({209u, 33000u, 1.0});
+            recipe.m_biomes.push_back(std::move(later));
+
+            auto plan = compileGenerationPlan(std::move(recipe), 42u);
+            PPR_TEST_ASSERT(plan.has_value());
+            const auto lookup = plan->materialLookup();
+            PPR_TEST_ASSERT(lookup.size() == 65001u);
+            PPR_TEST_ASSERT(lookup[0u].m_key == 0x76616375756dull and lookup[0u].m_density_score == 0.0);
+            PPR_TEST_ASSERT(lookup[17u].m_key == 202u and lookup[17u].m_density_score == 0.5);
+            PPR_TEST_ASSERT(lookup[65000u].m_key == 0u and lookup[65000u].m_density_score == 1.0);
+            PPR_TEST_ASSERT(lookup[40000u].m_key == 900u and lookup[40000u].m_density_score == 0.2);
+            PPR_TEST_ASSERT(lookup[33000u].m_key == 206u and lookup[33000u].m_density_score == 0.25);
+            PPR_TEST_ASSERT(lookup[32000u].m_key == 0u and lookup[32000u].m_density_score == 0.25);
+
+            PPR_TEST_ASSERT(
+                sizeof(GenerationMaterialLookup) == 16u and alignof(GenerationMaterialLookup) == alignof(u64));
+            const GenerationMaterialLookup layout{};
+            const auto *layout_bytes = reinterpret_cast<const char *>(&layout);
+            PPR_TEST_ASSERT(reinterpret_cast<const char *>(&layout.m_key) == layout_bytes);
+            PPR_TEST_ASSERT(reinterpret_cast<const char *>(&layout.m_density_score) == layout_bytes + sizeof(u64));
+
+            const u64 retained = plan->retainedPayloadBytes();
+            auto moved = std::move(*plan);
+            PPR_TEST_ASSERT(moved.materialLookup()[65000u].m_density_score == 1.0);
+            PPR_TEST_ASSERT(moved.retainedPayloadBytes() == retained and retained >= lookup.size_bytes());
+        };
+
         PPR_UNIT_TEST (definition_recipe_all_payloads_and_derived_phases) {
             using namespace definition;
             static_assert(phaseOf(Cave{}) == EGenerationPhase::carve);
@@ -4128,6 +4182,7 @@ namespace pP::tests {
             detail::WorldGen::noise_schema_rejects_unsafe,
             detail::WorldGen::generation_random_has_fixed_full_width_streams,
             detail::WorldGen::numeric_plan_owns_recipe_and_isolates_field_streams,
+            detail::WorldGen::numeric_plan_compiles_sparse_material_keys_and_density_once,
             detail::WorldGen::numeric_plan_rejects_invalid_references_bounds_and_collapsed_weights,
             detail::WorldGen::numeric_plan_accepts_granular_fills_and_exact_signed_thirds,
             detail::WorldGen::numeric_plan_preserves_authored_geometry_boundaries,

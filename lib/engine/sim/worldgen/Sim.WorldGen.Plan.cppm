@@ -269,13 +269,22 @@ export namespace pP::sim {
     // compiled plan
     // ------------------------------------------------------------------
 
+    struct GenerationMaterialLookup {
+        u64 m_key{};
+        double m_density_score{};
+    };
+
     // subgroup: generation plan
     class GenerationPlan {
         GenerationRecipe m_recipe;
         Array<NoiseField> m_fields;
+        Array<GenerationMaterialLookup> m_material_lookup;
         u64 m_seed{};
 
-        GenerationPlan(GenerationRecipe recipe, Array<NoiseField> fields, u64 seed) noexcept;
+        GenerationPlan(
+            GenerationRecipe recipe, Array<NoiseField> fields, Array<GenerationMaterialLookup> material_lookup,
+            u64 seed) noexcept;
+
         friend Expected<GenerationPlan> compileGenerationPlan(GenerationRecipe, u64);
 
     public:
@@ -287,6 +296,7 @@ export namespace pP::sim {
 
         [[nodiscard]] const GenerationRecipe &recipe() const noexcept;
         [[nodiscard]] std::span<const NoiseField> fields() const noexcept;
+        [[nodiscard]] std::span<const GenerationMaterialLookup> materialLookup() const noexcept;
 
         [[nodiscard]] u64 seed() const noexcept;
         /// Owned vector payload capacities; excludes opaque compiled-noise allocations.

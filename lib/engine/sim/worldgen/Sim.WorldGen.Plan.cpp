@@ -587,9 +587,13 @@ namespace pP::sim {
     // compiled plan
     // ------------------------------------------------------------------
 
-    GenerationPlan::GenerationPlan(GenerationRecipe recipe, Array<NoiseField> fields, const u64 seed) noexcept
-        : m_recipe(std::move(recipe)), m_fields(std::move(fields)), m_seed(seed) {
+    GenerationPlan::GenerationPlan(
+        GenerationRecipe recipe, Array<NoiseField> fields, Array<GenerationMaterialLookup> material_lookup,
+        const u64 seed) noexcept
+        : m_recipe(std::move(recipe)), m_fields(std::move(fields)), m_material_lookup(std::move(material_lookup)),
+          m_seed(seed) {
     }
+
     const GenerationRecipe &GenerationPlan::recipe() const noexcept {
         return m_recipe;
     }
@@ -598,12 +602,17 @@ namespace pP::sim {
         return m_fields;
     }
 
+    std::span<const GenerationMaterialLookup> GenerationPlan::materialLookup() const noexcept {
+        return m_material_lookup;
+    }
+
     u64 GenerationPlan::seed() const noexcept {
         return m_seed;
     }
 
     u64 GenerationPlan::retainedPayloadBytes() const noexcept {
         u64 bytes = m_fields.capacity() * sizeof(NoiseField) +
+                    m_material_lookup.capacity() * sizeof(GenerationMaterialLookup) +
                     m_recipe.m_materials.capacity() * sizeof(GenerationMaterial) +
                     m_recipe.m_fields.capacity() * sizeof(GenerationField) +
                     m_recipe.m_biomes.capacity() * sizeof(GenerationBiome) +
@@ -810,7 +819,41 @@ namespace pP::sim {
         }
 
         std::ranges::sort(recipe.m_materials, {}, &GenerationMaterial::m_id);
-        GenerationPlan plan{std::move(recipe), std::move(fields), seed};
+
+        const std::size_t material_count = static_cast<std::size_t>(recipe.m_materials.back().m_id) + 1u;
+        Array<GenerationMaterialLookup> material_lookup(material_count);
+        material_lookup[0u] = {0x76616375756dull, 0.0};
+
+        const auto semanticKey = [&](const GenerationMaterial &material) {
+            if (material.m_key != 0u) {
+                return material.m_key;
+            }
+
+            for (const auto &biome: recipe.m_biomes) {
+                for (const auto &band: biome.m_bands) {
+                    for (const auto &choice: band.m_choices) {
+                        if (choice.m_material == material.m_id) {
+                            return choice.m_key;
+                        }
+                    }
+                }
+
+                for (const auto &deposit: biome.m_deposits) {
+                    if (deposit.m_material == material.m_id) {
+                        return deposit.m_key;
+                    }
+                }
+            }
+
+            return u64{};
+        };
+
+        for (const auto &material: recipe.m_materials) {
+            material_lookup[material.m_id] = {
+                semanticKey(material), std::clamp(material.m_reference_density_kg_m3 / 5000.0, 0.0, 1.0)};
+        }
+
+        GenerationPlan plan{std::move(recipe), std::move(fields), std::move(material_lookup), seed};
         auto &resolved = plan.m_recipe;
 
         if (resolved.m_open_surface) {
