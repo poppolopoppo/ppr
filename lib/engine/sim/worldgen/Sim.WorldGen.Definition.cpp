@@ -464,91 +464,147 @@ namespace pP::sim::definition {
             }
         };
 
-        // ------------------------------------------------------------------
-        // semantic fingerprint
-        // ------------------------------------------------------------------
-
     }
 
+    // ------------------------------------------------------------------
+    // semantic fingerprint
+    // ------------------------------------------------------------------
+
     SemanticFingerprint::SemanticFingerprint(const Definition &definition) noexcept : m_definition(definition) {
+        // Core's rapidhash wrapper stores size_t. Reject narrowing rather than
+        // silently publishing a truncated 64-bit semantic identity on a 32-bit target.
+        static_assert(sizeof(decltype(pP::hash::memory(nullptr, 0u, 0u).m_value)) == sizeof(u64));
+        string("ppr.semantic-fingerprint.v3");
+    }
+
+    void SemanticFingerprint::append(const void *const data, const std::size_t size) noexcept {
+        const auto *source = static_cast<const u8 *>(data);
+        std::size_t remaining = size;
+        m_length += static_cast<u64>(size);
+
+        while (remaining != 0u) {
+            const std::size_t copied = (std::min) (remaining, kBlockBytes - m_used);
+            std::memcpy(m_buffer.data() + m_used, source, copied);
+            m_used += copied;
+            source += copied;
+            remaining -= copied;
+
+            // Each complete canonical 512-byte block seeds the next rapidhash
+            // call. Append-call boundaries never cause a flush.
+            if (m_used == kBlockBytes) {
+                m_hash = static_cast<u64>(pP::hash::memory(m_buffer.data(), kBlockBytes, m_hash).m_value);
+                m_used = 0u;
+            }
+        }
     }
 
     void SemanticFingerprint::byte(const u8 value) noexcept {
-        m_hash = (m_hash ^ value) * 1099511628211ull;
+        append(&value, 1u);
     }
 
     void SemanticFingerprint::string(const std::string_view item) noexcept {
+        byte(3u);
         integer(static_cast<u64>(item.size()));
-        for (const char ch: item) {
-            byte(static_cast<u8>(ch));
-        }
+        append(item.data(), item.size());
     }
 
-    std::string SemanticFingerprint::childPath(const std::string_view prefix, const std::string_view name) {
-        return prefix.empty() ? std::string{name} : std::string{prefix} + "." + std::string{name};
+    SemanticFingerprint::Context SemanticFingerprint::profileContext(const std::string_view key) const noexcept {
+        Context context{};
+        context.m_profile_key = key;
+        context.m_profile = find(m_definition.m_worlds, key);
+        if (context.m_profile != nullptr) {
+            // The authored feature name remains meaningful when its definition is missing.
+            context.m_start = {context.m_profile->m_start.m_feature.m_key, EOwner::feature};
+        }
+
+        return context;
     }
 
-    std::optional<std::string> SemanticFingerprint::referenceOwner(
-        const config::ReferenceTarget &target, const std::string_view path) const {
-        if (target.m_scope == config::EReferenceScope::root) {
-            return std::string{};
-        }
-        if (not path.starts_with("worlds.")) {
-            return std::nullopt;
-        }
-
-        const auto profile_end = path.find('.', 7u);
-        const auto profile_key = path.substr(7u, profile_end - 7u);
-        const std::string profile_path = "worlds." + std::string{profile_key};
-        if (target.m_collection == "rules") {
-            return profile_path;
-        }
-        const auto *profile = find(m_definition.m_worlds, profile_key);
-        if (profile == nullptr or target.m_collection != "markers") {
-            return std::nullopt;
-        }
-        if (target.m_suitability == "start" or target.m_suitability == "resource_anchor") {
-            // The authored owner remains meaningful even when its feature is absent.
-            return "features." + profile->m_start.m_feature.m_key;
+    SemanticFingerprint::Context SemanticFingerprint::ruleContext(
+        const Context &parent, const std::string_view key) const noexcept {
+        Context context = parent;
+        context.m_pocket = {};
+        if (context.m_profile == nullptr) {
+            return context;
         }
 
-        const std::string rules_prefix = profile_path + ".rules.";
-        if (target.m_suitability != "sealed_pocket" or not path.starts_with(rules_prefix)) {
-            return std::nullopt;
-        }
-        const auto rule_end = path.find('.', rules_prefix.size());
-        const auto rule_key = path.substr(rules_prefix.size(), rule_end - rules_prefix.size());
-        const auto *rule = find(profile->m_rules, rule_key);
+        const auto *rule = find(context.m_profile->m_rules, key);
         const auto *fill = rule == nullptr ? nullptr : std::get_if<MatterFill>(&rule->m_payload);
         if (fill == nullptr) {
-            return std::nullopt;
+            return context;
         }
-        const auto *placement = find(profile->m_rules, fill->m_placement.m_key);
+
+        const auto *placement = find(context.m_profile->m_rules, fill->m_placement.m_key);
         const auto *feature = placement == nullptr ? nullptr : std::get_if<Feature>(&placement->m_payload);
-        if (feature == nullptr) {
-            return std::nullopt;
+        if (feature != nullptr) {
+            context.m_pocket = {feature->m_feature.m_key, EOwner::feature};
         }
-        return "features." + feature->m_feature.m_key;
+
+        return context;
+    }
+
+    SemanticFingerprint::Context SemanticFingerprint::resolveContext(
+        const SemanticFingerprintScope &scope) const noexcept {
+        Context context = scope.m_profile ? profileContext(*scope.m_profile) : Context{};
+        if (scope.m_rule) {
+            context = ruleContext(context, *scope.m_rule);
+        }
+
+        return context;
+    }
+
+    SemanticFingerprint::Owner SemanticFingerprint::referenceOwner(
+        const config::ReferenceTarget &target, const Context &context) noexcept {
+        if (target.m_scope == config::EReferenceScope::root) {
+            return {{}, EOwner::root};
+        }
+
+        if (target.m_collection == "rules" and context.m_profile_key) {
+            return {*context.m_profile_key, EOwner::profile};
+        }
+
+        if (target.m_collection == "markers") {
+            if (target.m_suitability == "start" or target.m_suitability == "resource_anchor") {
+                return context.m_start;
+            }
+
+            if (target.m_suitability == "sealed_pocket") {
+                return context.m_pocket;
+            }
+        }
+
+        return {};
     }
 
     void SemanticFingerprint::reference(
-        const config::ReferenceTarget &target, const std::string_view key, const std::string_view path) {
+        const config::ReferenceTarget &target, const std::string_view key, const Context &context) {
         byte(18u);
         string(target.m_collection);
         integer(static_cast<std::underlying_type_t<config::EReferenceScope>>(target.m_scope));
         string(target.m_suitability);
         string(key);
 
-        const auto owner = referenceOwner(target, path);
-        byte(owner.has_value() ? 1u : 0u);
-        if (owner) {
-            string(*owner);
+        const auto owner = referenceOwner(target, context);
+        byte(static_cast<u8>(owner.m_kind));
+        if (owner.m_kind == EOwner::profile or owner.m_kind == EOwner::feature) {
+            string(owner.m_key);
         }
+
         byte(19u);
     }
 
     u64 SemanticFingerprint::hash() const noexcept {
-        return m_hash;
+        // Finalize a local state: reading hash() never consumes the buffered tail.
+        const u64 tail = static_cast<u64>(
+            pP::hash::memory(m_buffer.data(), m_used, m_hash ^ 0x7461696c2e7633ull).m_value);
+        std::array<u8, 17u> frame{};
+        frame[0u] = 32u;
+        for (std::size_t i = 0u; i < sizeof(u64); ++i) {
+            frame[1u + i] = static_cast<u8>(m_length >> (8u * i));
+            frame[9u + i] = static_cast<u8>(static_cast<u64>(m_used) >> (8u * i));
+        }
+
+        return static_cast<u64>(pP::hash::memory(frame.data(), frame.size(), tail).m_value);
     }
 
     // ------------------------------------------------------------------
@@ -1276,19 +1332,20 @@ namespace pP::sim::definition {
 
     u64 definitionFingerprint(const Definition &definition) {
         SemanticFingerprint fingerprint{definition};
-        fingerprint.string("ppr.worldgen.definition.v2");
+        fingerprint.string("ppr.worldgen.definition.v3");
         fingerprint.value(definition);
         return fingerprint.hash();
     }
 
     u64 definitionRulesFingerprint(const Definition &definition) {
         SemanticFingerprint fingerprint{definition};
-        fingerprint.string("ppr.worldgen.rules.v2");
+        fingerprint.string("ppr.worldgen.rules.v3");
         fingerprint.integer(static_cast<u64>(definition.m_worlds.m_entries.size()));
-        for (const auto *profile: sortedEntries(definition.m_worlds)) {
-            fingerprint.string(profile->m_key);
-            fingerprint.value(profile->m_value.m_rules, "worlds." + profile->m_key + ".rules");
-        }
+        fingerprint.ordered(definition.m_worlds, [&](const auto &profile) {
+            fingerprint.string(profile.m_key);
+            fingerprint.value(profile.m_value.m_rules, SemanticFingerprintScope{profile.m_key});
+        });
+
         return fingerprint.hash();
     }
 }

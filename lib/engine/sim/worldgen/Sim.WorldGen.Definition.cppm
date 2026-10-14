@@ -1002,36 +1002,95 @@ export namespace pP::sim::definition {
         }
     };
 
-    // Borrows the canonical definition for owner-scoped reference resolution.
-    // Prefixes passed to value() are canonical sim paths (worlds.<profile>...),
-    // independent of the caller's surrounding pack/domain framing.
     // ------------------------------------------------------------------
     // semantic fingerprint
     // ------------------------------------------------------------------
 
-    // subgroup: semantic fingerprint
-    class SemanticFingerprint {
-        const Definition &m_definition;
-        u64 m_hash{14695981039346656037ull};
+    // Borrows authored identities; absence and a present empty key are distinct.
+    struct SemanticFingerprintScope {
+        std::optional<std::string_view> m_profile{};
+        std::optional<std::string_view> m_rule{};
+    };
 
+    // Borrows the canonical definition independently of surrounding pack/domain framing.
+    class SemanticFingerprint {
+        enum class EOwner : u8 {
+            absent,
+            root,
+            profile,
+            feature
+        };
+
+        struct Owner {
+            std::string_view m_key{};
+            EOwner m_kind{EOwner::absent};
+        };
+
+        struct Context {
+            const ProfileDefinition *m_profile{};
+            std::optional<std::string_view> m_profile_key{};
+            Owner m_start{};
+            Owner m_pocket{};
+        };
+
+        // Fixed canonical blocks bound encoding storage independently of input size.
+        static constexpr std::size_t kBlockBytes = 512u;
+
+        const Definition &m_definition;
+        Array<std::size_t> m_ordering{};
+        u64 m_hash{0x7070722e73656d33ull};
+        u64 m_length{};
+        std::size_t m_used{};
+        std::array<u8, kBlockBytes> m_buffer{};
+
+        void append(const void *data, std::size_t size) noexcept;
         void byte(u8 value) noexcept;
-        [[nodiscard]] static std::string childPath(std::string_view prefix, std::string_view name);
-        [[nodiscard]] std::optional<std::string> referenceOwner(
-            const config::ReferenceTarget &target, std::string_view path) const;
-        void reference(const config::ReferenceTarget &target, std::string_view key, std::string_view path);
+
+        [[nodiscard]] Context profileContext(std::string_view key) const noexcept;
+        [[nodiscard]] Context ruleContext(const Context &context, std::string_view key) const noexcept;
+        [[nodiscard]] Context resolveContext(const SemanticFingerprintScope &scope) const noexcept;
+        [[nodiscard]] static Owner referenceOwner(
+            const config::ReferenceTarget &target, const Context &context) noexcept;
+
+        void reference(const config::ReferenceTarget &target, std::string_view key, const Context &context);
+
+        template<typename T, typename Visitor>
+        void ordered(const KeyedCollection<T> &collection, Visitor &&visitor) {
+            const std::size_t frame = m_ordering.size();
+            const std::size_t count = collection.m_entries.size();
+            for (std::size_t i = 0u; i < count; ++i) {
+                m_ordering.push_back(i);
+            }
+
+            std::sort(m_ordering.begin() + frame, m_ordering.end(), [&](const auto left, const auto right) {
+                const auto &left_key = collection.m_entries[left].m_key;
+                const auto &right_key = collection.m_entries[right].m_key;
+                return left_key < right_key or (left_key == right_key and left < right);
+            });
+
+            for (std::size_t i = 0u; i < count; ++i) {
+                // Recursion may reallocate scratch; retain offsets, never iterators.
+                visitor(collection.m_entries[m_ordering[frame + i]]);
+            }
+
+            m_ordering.resize(frame);
+        }
+
+        friend u64 definitionRulesFingerprint(const Definition &definition);
 
         template<typename Member, typename T>
-        void memberValue(const Member &member, const T &item, const std::string_view path) {
+        void memberValue(const Member &member, const T &item, const Context &context) {
             using Constraint = std::remove_cvref_t<decltype(member.m_constraint)>;
             if constexpr (config::details::is_optional_v<T>) {
                 byte(1u);
                 byte(item.has_value() ? 1u : 0u);
                 if (item) {
-                    memberValue(member, *item, path);
+                    memberValue(member, *item, context);
                 }
+
                 byte(2u);
             } else if constexpr (requires { member.m_constraint.m_target; }) {
-                reference(member.m_constraint.m_target, item.m_key, path);
+                reference(member.m_constraint.m_target, item.m_key, context);
             } else if constexpr (config::details::is_variant_domain_v<Constraint>) {
                 byte(16u);
                 const auto tag = config::variantTag(member, item);
@@ -1039,61 +1098,51 @@ export namespace pP::sim::definition {
                 // A valueless variant is an invalid draft, still deterministically encoded.
                 byte(item.valueless_by_exception() ? 0u : 1u);
                 if (not item.valueless_by_exception()) {
-                    const auto payload_path = childPath(path, tag);
-                    std::visit([&](const auto &payload) { value(payload, payload_path); }, item);
+                    std::visit([&](const auto &payload) { valueInContext(payload, context); }, item);
                 }
+
                 byte(17u);
             } else {
-                value(item, path);
-            }
-        }
-
-    public:
-        explicit SemanticFingerprint(const Definition &definition) noexcept;
-        void string(std::string_view item) noexcept;
-
-        template<typename T>
-            requires (std::is_integral_v<T> and not std::is_same_v<T, bool>)
-        void integer(const T item) noexcept {
-            using U = std::make_unsigned_t<T>;
-            const U bits = static_cast<U>(item);
-            for (std::size_t i = 0u; i < sizeof(U); ++i) {
-                byte(static_cast<u8>(bits >> (8u * i)));
+                valueInContext(item, context);
             }
         }
 
         template<typename T>
-        void value(const T &item, const std::string_view prefix = {}) {
+        void valueInContext(const T &item, const Context &context) {
             if constexpr (config::details::is_optional_v<T>) {
                 byte(1u);
                 byte(item.has_value() ? 1u : 0u);
                 if (item) {
-                    value(*item, prefix);
+                    valueInContext(*item, context);
                 }
+
                 byte(2u);
             } else if constexpr (requires { item.m_entries; }) {
                 byte(5u);
                 integer(static_cast<u64>(item.m_entries.size()));
-                using Entry = typename std::remove_cvref_t<decltype(item.m_entries)>::value_type;
-                Array<const Entry *> entries;
-                entries.reserve(item.m_entries.size());
-                for (const auto &entry: item.m_entries) {
-                    entries.push_back(std::addressof(entry));
-                }
-                std::ranges::stable_sort(entries, {}, [](const auto *entry) { return entry->m_key; });
-                for (const auto *entry: entries) {
+                ordered(item, [&](const auto &entry) {
                     byte(6u);
-                    string(entry->m_key);
-                    value(entry->m_value, childPath(prefix, entry->m_key));
+                    string(entry.m_key);
+                    using Item = std::remove_cvref_t<decltype(entry.m_value)>;
+                    if constexpr (std::is_same_v<Item, ProfileDefinition>) {
+                        valueInContext(entry.m_value, profileContext(entry.m_key));
+                    } else if constexpr (std::is_same_v<Item, RuleDefinition>) {
+                        valueInContext(entry.m_value, ruleContext(context, entry.m_key));
+                    } else {
+                        valueInContext(entry.m_value, context);
+                    }
+
                     byte(7u);
-                }
+                });
+
                 byte(8u);
             } else if constexpr (config::details::TDescribed<T>) {
                 byte(9u);
                 config::visit(item, [&](const auto &member, const auto &member_value) {
                     string(member.m_metadata.m_name);
-                    memberValue(member, member_value, childPath(prefix, member.m_metadata.m_name));
+                    memberValue(member, member_value, context);
                 });
+
                 byte(10u);
             } else if constexpr (std::is_floating_point_v<T>) {
                 byte(11u);
@@ -1124,6 +1173,30 @@ export namespace pP::sim::definition {
             } else {
                 static_assert(sizeof(T) == 0u, "Semantic identity requires a described value or a supported scalar");
             }
+        }
+
+    public:
+        explicit SemanticFingerprint(const Definition &definition) noexcept;
+
+        void string(std::string_view item) noexcept;
+
+        // Raw little-endian encoding primitive; value() supplies scalar type framing.
+        template<typename T>
+            requires (std::is_integral_v<T> and not std::is_same_v<T, bool>)
+        void integer(const T item) noexcept {
+            using U = std::make_unsigned_t<T>;
+            const U bits = static_cast<U>(item);
+            std::array<u8, sizeof(U)> encoded{};
+            for (std::size_t i = 0u; i < sizeof(U); ++i) {
+                encoded[i] = static_cast<u8>(bits >> (8u * i));
+            }
+
+            append(encoded.data(), encoded.size());
+        }
+
+        template<typename T>
+        void value(const T &item, const SemanticFingerprintScope scope = {}) {
+            valueInContext(item, resolveContext(scope));
         }
 
         [[nodiscard]] u64 hash() const noexcept;

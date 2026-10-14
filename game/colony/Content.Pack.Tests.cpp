@@ -319,11 +319,10 @@ threshold.max = 1.0
         PPR_TEST_ASSERT(catalog->findWorld("frontier") != nullptr and catalog->findWorld("hollows") != nullptr);
         PPR_TEST_ASSERT(catalog->findWorld("unknown") == nullptr);
         PPR_TEST_ASSERT(catalog->contentFingerprint().has_value());
-        std::println("Shipped content fingerprint: {:016x}", *catalog->contentFingerprint());
-        // Definition v2 encodes semantic tags and reference owners with sorted bindings;
-        // pack v3 adds the split rules/appearance documents and asset identities.
+        // Definition fingerprint v3 uses structural owners and rapidhash block chaining;
+        // content fingerprint v4 includes the split documents and asset identities.
         // Authored scalars are preserved, including explicit former blob threshold defaults [-1, 1].
-        PPR_TEST_ASSERT(catalog->contentFingerprint() == 0x60f263b002a7c82cull);
+        PPR_TEST_ASSERT(catalog->contentFingerprint() == 0xbccb226c4455552bull);
         PPR_TEST_ASSERT(catalog->findMaterial("water")->m_representation == EMaterialRepresentation::particle);
         PPR_TEST_ASSERT(catalog->findMaterial("masonry")->m_texture_sampling == EMaterialTextureSampling::repeat);
         PPR_TEST_ASSERT(catalog->findMaterial("basalt")->m_texture_sampling == EMaterialTextureSampling::stochastic);

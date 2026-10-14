@@ -331,9 +331,10 @@ y_fine=0
 
         template<typename T>
         [[nodiscard]] u64 semanticHash(
-            const definition::Definition &context, const T &value, const std::string_view prefix = {}) {
+            const definition::Definition &context, const T &value,
+            const definition::SemanticFingerprintScope scope = {}) {
             definition::SemanticFingerprint fingerprint{context};
-            fingerprint.value(value, prefix);
+            fingerprint.value(value, scope);
             return fingerprint.hash();
         }
 
@@ -452,12 +453,12 @@ y_fine=0
             auto source = recipeDefinition();
             const auto &profile = source.m_worlds.m_entries.front().m_value;
             auto start = profile.m_start;
-            const auto absent = semanticHash(source, start, "worlds.frontier.start");
+            const auto absent = semanticHash(source, start, {"frontier"});
             start.m_depth_m = 0.0;
-            const auto present = semanticHash(source, start, "worlds.frontier.start");
+            const auto present = semanticHash(source, start, {"frontier"});
             PPR_TEST_ASSERT(absent != present);
             start.m_depth_m = -0.0;
-            PPR_TEST_ASSERT(semanticHash(source, start, "worlds.frontier.start") == present);
+            PPR_TEST_ASSERT(semanticHash(source, start, {"frontier"}) == present);
 
             definition::SemanticFingerprint first{source}, second{source};
             first.string("ab");
@@ -479,33 +480,33 @@ y_fine=0
             const auto start = profile.m_start;
             const auto resource = profile.m_resources.m_entries.front().m_value;
             const auto fill = std::get<definition::MatterFill>(profile.m_rules.m_entries.back().m_value.m_payload);
-            const auto start_hash = semanticHash(source, start, "worlds.frontier.start");
-            const auto resource_hash = semanticHash(source, resource, "worlds.frontier.resources.stone");
-            const auto fill_hash = semanticHash(source, fill, "worlds.frontier.rules.gas.payload.matter_fill");
+            const auto start_hash = semanticHash(source, start, {"frontier"});
+            const auto resource_hash = semanticHash(source, resource, {"frontier"});
+            const auto fill_hash = semanticHash(source, fill, {"frontier", "gas"});
 
             profile.m_start.m_feature.m_key = "missing_feature";
-            PPR_TEST_ASSERT(semanticHash(source, start, "worlds.frontier.start") != start_hash);
-            PPR_TEST_ASSERT(semanticHash(source, resource, "worlds.frontier.resources.stone") != resource_hash);
+            PPR_TEST_ASSERT(semanticHash(source, start, {"frontier"}) != start_hash);
+            PPR_TEST_ASSERT(semanticHash(source, resource, {"frontier"}) != resource_hash);
             profile.m_start.m_feature.m_key = "another_missing_feature";
-            const auto missing = semanticHash(source, start, "worlds.frontier.start");
+            const auto missing = semanticHash(source, start, {"frontier"});
             profile.m_start.m_feature.m_key = "missing_feature";
-            PPR_TEST_ASSERT(semanticHash(source, start, "worlds.frontier.start") != missing);
+            PPR_TEST_ASSERT(semanticHash(source, start, {"frontier"}) != missing);
 
             auto &placement = std::get<definition::Feature>(profile.m_rules.m_entries[4].m_value.m_payload);
             placement.m_feature.m_key = "missing_feature";
-            const auto missing_fill = semanticHash(source, fill, "worlds.frontier.rules.gas.payload.matter_fill");
+            const auto missing_fill = semanticHash(source, fill, {"frontier", "gas"});
             PPR_TEST_ASSERT(missing_fill != fill_hash);
             placement.m_feature.m_key.clear();
-            const auto empty_owner = semanticHash(source, fill, "worlds.frontier.rules.gas.payload.matter_fill");
+            const auto empty_owner = semanticHash(source, fill, {"frontier", "gas"});
             profile.m_rules.m_entries[4].m_value.m_payload = definition::Connection{};
-            const auto absent_owner = semanticHash(source, fill, "worlds.frontier.rules.gas.payload.matter_fill");
+            const auto absent_owner = semanticHash(source, fill, {"frontier", "gas"});
             PPR_TEST_ASSERT(absent_owner != empty_owner and absent_owner != missing_fill);
 
             auto second = recipeDefinition().m_worlds.m_entries.front();
             second.m_key = "hollows";
             source.m_worlds.m_entries.push_back(second);
-            PPR_TEST_ASSERT(semanticHash(source, fill, "worlds.hollows.rules.gas.payload.matter_fill") != fill_hash);
-            PPR_TEST_ASSERT(semanticHash(source, start, "worlds.hollows.start") == start_hash);
+            PPR_TEST_ASSERT(semanticHash(source, fill, {"hollows", "gas"}) != fill_hash);
+            PPR_TEST_ASSERT(semanticHash(source, start, {"hollows"}) == start_hash);
         };
 
         PPR_UNIT_TEST (definition_rules_fingerprint_projects_all_profiles_canonically) {
@@ -533,6 +534,105 @@ y_fine=0
             PPR_TEST_ASSERT(definition::definitionRulesFingerprint(changed) == expected);
             changed.m_worlds.m_entries.front().m_value.m_rules.m_entries.front().m_value.m_enabled = false;
             PPR_TEST_ASSERT(definition::definitionRulesFingerprint(changed) != expected);
+        };
+
+        PPR_UNIT_TEST (semantic_fingerprint_stream_boundaries_and_non_destructive_reads) {
+            const definition::Definition context;
+            definition::SemanticFingerprint words{context}, bytes{context};
+            for (u32 i = 0u; i < 2049u; ++i) {
+                const u32 word = i * 0x01020305u;
+                words.integer(word);
+                for (u32 shift = 0u; shift < 32u; shift += 8u) {
+                    bytes.integer(static_cast<u8>(word >> shift));
+                }
+
+                PPR_TEST_ASSERT(words.hash() == bytes.hash());
+                PPR_TEST_ASSERT(words.hash() == words.hash());
+            }
+
+            const std::string long_value(4097u, 'x');
+            words.string(long_value);
+            bytes.string(long_value);
+            PPR_TEST_ASSERT(words.hash() == bytes.hash());
+
+            definition::SemanticFingerprint uninterrupted{context};
+            for (u32 i = 0u; i < 2049u; ++i) {
+                uninterrupted.integer(i * 0x01020305u);
+            }
+
+            uninterrupted.string(long_value);
+            PPR_TEST_ASSERT(words.hash() == uninterrupted.hash());
+            PPR_TEST_ASSERT(semanticHash(context, u32{1u}) != semanticHash(context, u64{1u}));
+            PPR_TEST_ASSERT(semanticHash(context, i32{1}) != semanticHash(context, u32{1u}));
+        };
+
+        PPR_UNIT_TEST (semantic_fingerprint_explicit_scope_presence_and_subtree_isolation) {
+            auto context = recipeDefinition();
+            const auto separate = context;
+            const auto &profile = separate.m_worlds.m_entries.front().m_value;
+            const auto &fill = std::get<definition::MatterFill>(profile.m_rules.m_entries.back().m_value.m_payload);
+            const auto original = semanticHash(context, separate);
+            context.m_worlds.m_entries.front().m_value.m_start.m_feature.m_key = "context_only";
+            PPR_TEST_ASSERT(semanticHash(context, separate) != original);
+            PPR_TEST_ASSERT(
+                semanticHash(context, profile, {"frontier"}) != semanticHash(separate, profile, {"frontier"}));
+
+            const auto absent = semanticHash(context, fill);
+            const auto empty = semanticHash(context, fill, {std::string_view{}, "gas"});
+            const auto missing = semanticHash(context, fill, {"missing", "gas"});
+            PPR_TEST_ASSERT(absent != empty and absent != missing and empty != missing);
+
+            definition::SemanticFingerprint first{context}, second{context};
+            first.value(fill, {"frontier", "gas"});
+            first.value(profile.m_start, {"missing"});
+            first.value(fill);
+            second.value(fill, {"frontier", "gas"});
+            second.value(profile.m_start, {"missing"});
+            second.value(fill, {});
+            PPR_TEST_ASSERT(first.hash() == second.hash());
+
+            definition::SemanticFingerprint unscoped{context}, after_scope{context};
+            unscoped.value(u32{1u});
+            unscoped.value(fill);
+            after_scope.value(u32{1u}, {"frontier", "gas"});
+            after_scope.value(fill);
+            PPR_TEST_ASSERT(unscoped.hash() == after_scope.hash());
+        };
+
+        PPR_UNIT_TEST (semantic_fingerprint_nested_scratch_and_duplicate_key_order) {
+            auto source = recipeDefinition();
+            const auto prototype = source.m_worlds.m_entries.front();
+            source.m_worlds.m_entries.clear();
+            for (u32 i = 0u; i < 40u; ++i) {
+                auto profile = prototype;
+                profile.m_key = std::string(128u, 'w') + std::to_string(i);
+                for (u32 j = 0u; j < 80u; ++j) {
+                    auto rule = prototype.m_value.m_rules.m_entries.front();
+                    rule.m_key = std::string(129u, 'r') + std::to_string(j);
+                    profile.m_value.m_rules.m_entries.push_back(std::move(rule));
+                }
+
+                source.m_worlds.m_entries.push_back(std::move(profile));
+            }
+
+            const auto expected = semanticHash(source, source);
+            auto reordered = source;
+            std::ranges::reverse(reordered.m_worlds.m_entries);
+            for (auto &profile: reordered.m_worlds.m_entries) {
+                std::ranges::reverse(profile.m_value.m_rules.m_entries);
+            }
+
+            PPR_TEST_ASSERT(semanticHash(reordered, reordered) == expected);
+            PPR_TEST_ASSERT(
+                definition::definitionRulesFingerprint(reordered) == definition::definitionRulesFingerprint(source));
+
+            auto duplicate = minimalDefinition();
+            auto material = duplicate.m_materials.m_entries.front();
+            material.m_value.m_density += 1.0;
+            duplicate.m_materials.m_entries.push_back(material);
+            const auto first = semanticHash(duplicate, duplicate);
+            std::ranges::reverse(duplicate.m_materials.m_entries);
+            PPR_TEST_ASSERT(semanticHash(duplicate, duplicate) != first);
         };
 
         PPR_UNIT_TEST (definition_recipe_all_payloads_and_derived_phases) {
@@ -1271,13 +1371,12 @@ radius_m=1.0
             PPR_TEST_ASSERT(diagnostics.entries().front().m_property == "biomes.plain.deposits.ore.depth.max");
         };
 
-        PPR_UNIT_TEST (definition_fingerprint_v2_pinned_and_sensitive_to_every_member) {
+        PPR_UNIT_TEST (definition_fingerprint_v3_pinned_and_sensitive_to_every_member) {
             using namespace definition;
             const auto source = completeDefinition();
-            // V2 uses the shared descriptor encoder: textual variant tags and scoped reference
-            // metadata/owner paths replace variant indices and reference-type inventories.
-            // Pinned once from the audited v2 cutover run, without changing completeDefinition().
-            constexpr u64 expected = 0xeabf43d9ff4929e3ull;
+            // V3 uses canonical fixed-block rapidhash chaining and structured borrowed owners.
+            // Definition schema version remains 2; fingerprint format evolves independently.
+            constexpr u64 expected = 0x770ac140d1b05e74ull;
 
             Array<std::string> paths;
             const auto collect = [&](const std::string &path, const auto &) { paths.push_back(path); };
@@ -4005,12 +4104,15 @@ namespace pP::tests {
             detail::WorldGen::definition_feature_reservation_and_shape_extent_paths,
             detail::WorldGen::definition_feature_reordering_preserves_bindings_streams_and_geometry,
             detail::WorldGen::definition_recursive_paths_include_deposits_and_pore,
-            detail::WorldGen::definition_fingerprint_v2_pinned_and_sensitive_to_every_member,
+            detail::WorldGen::definition_fingerprint_v3_pinned_and_sensitive_to_every_member,
             detail::WorldGen::semantic_fingerprint_tags_ignore_variant_storage_indices,
             detail::WorldGen::semantic_fingerprint_reference_domains_are_semantic,
             detail::WorldGen::semantic_fingerprint_canonical_keys_and_every_described_member,
             detail::WorldGen::semantic_fingerprint_optional_presence_zero_and_primitive_framing,
             detail::WorldGen::semantic_fingerprint_scoped_reference_owners_follow_authored_context,
+            detail::WorldGen::semantic_fingerprint_stream_boundaries_and_non_destructive_reads,
+            detail::WorldGen::semantic_fingerprint_explicit_scope_presence_and_subtree_isolation,
+            detail::WorldGen::semantic_fingerprint_nested_scratch_and_duplicate_key_order,
             detail::WorldGen::definition_rules_fingerprint_projects_all_profiles_canonically,
             detail::WorldGen::definition_rejects_normalized_weight_collapse,
             detail::WorldGen::definition_validates_biome_chain,

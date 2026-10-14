@@ -165,18 +165,18 @@ namespace pP::colony {
 
     u64 ContentCatalog::materialFingerprint() const {
         sim::definition::SemanticFingerprint hash{m_definition};
-        hash.string("ppr.materials.v3");
-        hash.value(m_definition.m_materials, "materials");
-        hash.value(m_definition.m_appearance.m_materials, "appearance.materials");
+        hash.string("ppr.materials.v4");
+        hash.value(m_definition.m_materials);
+        hash.value(m_definition.m_appearance.m_materials);
         return hash.hash();
     }
     u64 ContentCatalog::computeContentFingerprint() const {
         sim::definition::SemanticFingerprint hash{m_definition};
-        hash.string("ppr.content.v3");
+        hash.string("ppr.content.v4");
         hash.value(kContentSchemaVersion);
         hash.value(m_pack_id);
         hash.value(static_cast<const sim::definition::Definition &>(m_definition));
-        hash.value(m_definition.m_appearance, "appearance");
+        hash.value(m_definition.m_appearance);
 
         // Asset identities include semantic usage and source bytes, independent of loading order.
         Array<const ContentTexture *> textures;
