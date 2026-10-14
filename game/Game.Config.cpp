@@ -124,19 +124,21 @@ namespace pP::game {
 
         [[nodiscard]] Expected<config::Layer> loadConfigFile(
             const std::string &path, config::Diagnostics &diagnostics) {
-            std::ifstream file{path, std::ios::binary};
-            if (not file) {
+            MappedFile file;
+            try {
+                file = MappedFile{hal::io::mapFile(path, {})};
+            } catch (const std::system_error &) {
                 diagnostics.add(
                     path, "game.config", "cannot open config file '" + path + "'",
                     config::make_error_code(config::EConfigErrc::codec_error), "config");
-                return std::unexpected{config::make_error_code(config::EConfigErrc::codec_error)};
+                PPR_RETURN_UNEXPECTED_ON_FAIL(GameConfig, config::EConfigErrc::codec_error);
             }
 
-            const std::string bytes{std::istreambuf_iterator<char>{file}, std::istreambuf_iterator<char>{}};
+            const std::string_view bytes = file.size() == 0u ? std::string_view{}
+                                                             : std::string_view{file.c_str(), file.size()};
             auto document = config::decode(bytes, path, diagnostics);
-            if (not document) {
-                return std::unexpected{document.error()};
-            }
+            PPR_RETURN_UNEXPECTED_ON_FAIL(GameConfig, document);
+
             return config::toLayer(std::move(*document), path);
         }
     } // namespace

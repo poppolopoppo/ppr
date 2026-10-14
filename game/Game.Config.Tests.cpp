@@ -480,6 +480,63 @@ namespace pP::game::tests::detail::compat {
         PPR_TEST_ASSERT(missing.error() == make_error_code(EConfigErrc::codec_error));
     };
 
+    PPR_UNIT_TEST (mapped_config_files_preserve_owned_results_empty_input_and_errors) {
+        static std::atomic<u32> ordinal{};
+        const auto parent = hal::process::currentExecutablePath().parent_path();
+        std::filesystem::path directory;
+        for (;;) {
+            directory = parent / ("mapped-game-config-test-" + std::to_string(ordinal.fetch_add(1u)));
+            std::error_code error;
+            const bool created = std::filesystem::create_directory(directory, error);
+            PPR_TEST_ASSERT(not error);
+            if (created) {
+                break;
+            }
+        }
+
+        PPR_DEFER {
+            // Best-effort test cleanup also runs after a failed assertion.
+            std::error_code ignored;
+            std::filesystem::remove_all(directory, ignored);
+        };
+        const auto path = directory / "settings.toml";
+        const std::string argument = path.string();
+
+        const auto write = [&](const std::string_view bytes) {
+            std::ofstream file{path, std::ios::binary | std::ios::trunc};
+            if (not bytes.empty()) {
+                file.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+            }
+
+            PPR_TEST_ASSERT(file.good());
+        };
+
+        write("[game]\nexit_after = 2.25\n");
+        Diagnostics diagnostics;
+        const auto result = invoke({"ppr", "--config", argument.c_str()}, diagnostics);
+        PPR_TEST_ASSERT(result.has_value() and not diagnostics.hasErrors());
+        PPR_TEST_ASSERT(result->m_game.m_value.m_exit_after == 2.25);
+        PPR_TEST_ASSERT(std::filesystem::remove(path));
+
+        const auto *const origin = result->m_game.find("game.exit_after");
+        PPR_TEST_ASSERT(origin != nullptr and origin->m_location == argument + ":2");
+        write({});
+        const auto empty = invoke({"ppr", "--config", argument.c_str()}, diagnostics);
+        PPR_TEST_ASSERT(empty.has_value() and not diagnostics.hasErrors());
+
+        write("[game]\nexit_after = nope\n");
+        const auto malformed = invoke({"ppr", "--config", argument.c_str()}, diagnostics);
+        PPR_TEST_ASSERT(not malformed and malformed.error() == make_error_code(EConfigErrc::codec_error));
+        PPR_TEST_ASSERT(diagnostics.format().find(argument + ":2") != std::string::npos);
+
+        PPR_TEST_ASSERT(std::filesystem::remove(path));
+        diagnostics.clear();
+        const auto missing = invoke({"ppr", "--config", argument.c_str()}, diagnostics);
+        PPR_TEST_ASSERT(not missing and missing.error() == make_error_code(EConfigErrc::codec_error));
+        PPR_TEST_ASSERT(diagnostics.entries().front().m_property == "game.config");
+        PPR_TEST_ASSERT(diagnostics.entries().front().m_alias == "config");
+    };
+
     PPR_UNIT_TEST (executable_boundary_rejects_unknown_options) {
         Diagnostics unknown_diagnostics{};
         const auto unknown = invoke({"ppr", "--bogus"}, unknown_diagnostics);
@@ -516,6 +573,7 @@ namespace pP::game::tests {
             detail::compat::display_cli_precedence_and_shadowed_validation,
             detail::compat::display_options_appear_in_generated_game_help,
             detail::compat::help_suppresses_without_reading_config,
+            detail::compat::mapped_config_files_preserve_owned_results_empty_input_and_errors,
             detail::compat::executable_boundary_rejects_unknown_options,
             detail::compat::retired_crash_harness_rejected,
         });
