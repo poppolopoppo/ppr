@@ -10,6 +10,10 @@ import :config.cli;
 import std;
 
 namespace pP::config {
+    // ------------------------------------------------------------------
+    // config.cli
+    // ------------------------------------------------------------------
+
     namespace {
         struct OptionMatch {
             const OptionDecl *m_option{nullptr};

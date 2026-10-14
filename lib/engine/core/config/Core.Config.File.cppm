@@ -6,6 +6,7 @@ export module engine.core:config.file;
 
 import :config;
 import :containers.stl;
+import :logger;
 import :types;
 import :utility;
 
@@ -67,6 +68,8 @@ export namespace pP::config {
 
     struct Document {
         Array<Entry> m_entries{};
+        // Slice 1a: canonical definition — retain authored table presence, including empty groups.
+        Array<GroupPresence> m_groups{};
     };
 
     // One codec seam: bytes in, owned document out (and back). Both return
@@ -77,7 +80,9 @@ export namespace pP::config {
     // flattening either would erase required authoring information.
     enum class EDecodeMode : u8 {
         scalar,
-        records
+        records,
+        // Slice 1a: canonical definition — structured decoding without flattening away presence.
+        tree
     };
 
     [[nodiscard]] Expected<Document> decode(
@@ -106,9 +111,23 @@ export namespace pP::config {
     [[nodiscard]] Expected<ScalarSourcePatch> removeRecord(
         std::string_view bytes, std::string_view key, std::string_view origin, Diagnostics &diagnostics);
 
-
+    enum class ETreeSourceEdit : u8 {
+        insert,
+        remove,
+        replace
+    };
+    // key is the subtree root; descendants in subtree are relative to it.
+    // Its root group is implicit, so an empty document inserts an empty group.
+    // Insert requires absence; remove/replace require presence. Remove requires
+    // an empty document. Replacement returns one reversible, validated patch.
+    [[nodiscard]] Expected<ScalarSourcePatch> patchTree(
+        std::string_view bytes, std::string_view key, ETreeSourceEdit edit, const Document &subtree,
+        std::string_view origin, Diagnostics &diagnostics);
     // Wraps a decoded document as a file precedence layer.
     [[nodiscard]] Layer toLayer(Document document, std::string origin);
+
+    // Slice 1a: canonical definition — file tree precedence layer.
+    [[nodiscard]] TreeLayer toTreeLayer(Document document, std::string origin);
 
     namespace details {
         template<typename Owner, typename M, typename Constraint, typename V>
@@ -118,6 +137,13 @@ export namespace pP::config {
                 if (value.has_value()) {
                     return appendEntry(document, member, *value);
                 }
+                return {};
+            } else if constexpr (requires {
+                                     member.m_constraint.m_target;
+                                     value.m_key;
+                                 }) {
+                document.m_entries.push_back(
+                    Entry{std::string{member.m_metadata.m_name}, FileValue::text(value.m_key), "default"});
                 return {};
             } else if constexpr (std::is_same_v<V, bool>) {
                 document.m_entries.push_back(
@@ -172,17 +198,38 @@ export namespace pP::config {
     // truncating.
     template<typename Settings>
     [[nodiscard]] Expected<Document> documentFrom(const Settings &settings) {
+        using pP::make_error_code;
         Document document{};
         std::error_code failure{};
-        visit(settings, [&](const auto &member, const auto &field) {
+        visitRecursive(settings, [&](const auto &path, const auto &member, const auto &field) {
             if (failure) {
                 return;
             }
-            failure = details::appendEntry(document, member, field);
+            using T = std::remove_cvref_t<decltype(field)>;
+            using C = std::remove_cvref_t<decltype(member.m_constraint)>;
+            if constexpr (details::is_optional_v<T>) {
+                if (not field) {
+                    return;
+                }
+            }
+            if constexpr (details::node_kind_v<C> == ENodeKind::scalar) {
+                auto qualified = member;
+                qualified.m_metadata.m_name = path;
+                failure = details::appendEntry(document, qualified, field);
+            } else {
+                document.m_groups.push_back({path, "default"});
+                if constexpr (details::node_kind_v<C> == ENodeKind::variant) {
+                    const auto tag = variantTag(member, field);
+                    if (tag.empty()) {
+                        failure = make_error_code(EConfigErrc::unknown_enum_value);
+                        return;
+                    }
+                    document.m_entries.push_back(
+                        {details::recursivePath(path, "tag"), FileValue::text(std::string{tag}), "default"});
+                }
+            }
         });
-        if (failure) {
-            return std::unexpected{failure};
-        }
+        PPR_RETURN_UNEXPECTED_ON_FAIL(Config, failure);
         return document;
     }
 } // namespace pP::config

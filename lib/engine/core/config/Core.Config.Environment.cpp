@@ -1,14 +1,26 @@
 module;
 
+// ------------------------------------------------------------------
+// config.environment
+// ------------------------------------------------------------------
+
 #include "pP/Macros.h"
 #include <cstdlib>
 
 module engine.core;
 
+// ------------------------------------------------------------------
+// config.environment
+// ------------------------------------------------------------------
+
 import :config;
 import :config.environment;
 
 import std;
+
+// ------------------------------------------------------------------
+// config.environment
+// ------------------------------------------------------------------
 
 namespace pP::config {
     [[nodiscard]] std::string environmentName(const std::string_view canonical) {

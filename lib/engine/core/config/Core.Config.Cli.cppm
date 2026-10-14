@@ -12,6 +12,10 @@ import :utility;
 import std;
 
 export namespace pP::config {
+    // ------------------------------------------------------------------
+    // config.cli
+    // ------------------------------------------------------------------
+
     // Exit code the executable returns for invalid invocation or
     // configuration. Enforced by the caller, never by parsing.
     inline constexpr int kExitInvalidUsage = 2;

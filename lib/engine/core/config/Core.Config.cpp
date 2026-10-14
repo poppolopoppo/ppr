@@ -4,11 +4,18 @@ module;
 
 module engine.core;
 
+// ------------------------------------------------------------------
+// config
+// ------------------------------------------------------------------
+
 import :config;
+import :logger;
 
 import std;
 
 namespace pP::config {
+    PPR_DEFINE_LOG_CATEGORY(Config, debug, none)
+
     class ConfigErrorCategory final : public std::error_category {
     public:
         [[nodiscard]] const char *name() const noexcept override {
@@ -104,6 +111,23 @@ namespace pP::config {
         return "any";
     }
 
+    // Slice 1a: canonical definition — collection/reference keys are not paths.
+    bool isValidKey(const std::string_view key) noexcept {
+        if (key.empty() or key.size() > 128u) {
+            return false;
+        }
+        for (const char ch: key) {
+            if (not ((ch >= 'a' and ch <= 'z') or (ch >= '0' and ch <= '9') or ch == '_' or ch == '-')) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    std::string details::recursivePath(const std::string_view prefix, const std::string_view name) {
+        return prefix.empty() ? std::string{name} : std::string{prefix} + "." + std::string{name};
+    }
+
     [[nodiscard]] std::string BooleanDomain::describe() const {
         return "boolean";
     }
@@ -178,7 +202,8 @@ namespace pP::config {
     }
 
     void Diagnostics::add(
-        std::string location, std::string property, std::string message, std::error_code code, std::string alias) {
+        std::string location, std::string property, std::string message, std::error_code code, std::string alias,
+        Array<std::string> related_properties) {
         addOmitted(1u);
         if (m_entries.size() >= m_max_entries) {
             return;
@@ -190,6 +215,7 @@ namespace pP::config {
                 std::move(alias),
                 std::move(message),
                 code,
+                std::move(related_properties),
             });
     }
 
@@ -287,6 +313,75 @@ namespace pP::config {
             }
         }
 
+        SourcePathIndex::SourcePathIndex(const std::span<const Assignment> assignments) {
+            m_paths.reserve(assignments.size());
+            for (std::size_t position = 0u; position < assignments.size(); ++position) {
+                m_paths.push_back({assignments[position].m_name, position});
+            }
+            sort_();
+        }
+
+        SourcePathIndex::SourcePathIndex(const std::span<const GroupPresence> groups) {
+            m_paths.reserve(groups.size());
+            for (std::size_t position = 0u; position < groups.size(); ++position) {
+                m_paths.push_back({groups[position].m_path, position});
+            }
+            sort_();
+        }
+
+        void SourcePathIndex::sort_() {
+            std::ranges::sort(m_paths, [](const Entry &left, const Entry &right) {
+                return left.m_path < right.m_path or
+                       (left.m_path == right.m_path and left.m_position < right.m_position);
+            });
+        }
+
+        std::span<const SourcePathIndex::Entry> SourcePathIndex::exact(const std::string_view path) const noexcept {
+            const auto first = std::ranges::lower_bound(m_paths, path, {}, &Entry::m_path);
+            const auto last = std::upper_bound(
+                first, m_paths.end(), path, [](const auto key, const Entry &entry) { return key < entry.m_path; });
+            return {first, last};
+        }
+
+        bool SourcePathIndex::supplied(const std::string_view path, const bool descendants) const {
+            if (not exact(path).empty()) {
+                return true;
+            }
+            if (not descendants) {
+                return false;
+            }
+
+            // Prefix siblings such as a-b may sort between a and its a.b descendants.
+            const std::string prefix = std::string{path} + ".";
+            const auto first = std::ranges::lower_bound(m_paths, prefix, {}, &Entry::m_path);
+            return first != m_paths.end() and first->m_path.starts_with(prefix);
+        }
+
+        Array<std::size_t> SourcePathIndex::subtree(const std::string_view path) const {
+            Array<std::size_t> positions;
+            for (const auto &entry: exact(path)) {
+                positions.push_back(entry.m_position);
+            }
+            const std::string prefix = std::string{path} + ".";
+            auto entry = std::ranges::lower_bound(m_paths, prefix, {}, &Entry::m_path);
+            while (entry != m_paths.end() and entry->m_path.starts_with(prefix)) {
+                positions.push_back(entry->m_position);
+                ++entry;
+            }
+
+            // Lookup order must not change layer-local winners or diagnostic ordering.
+            std::ranges::sort(positions);
+            return positions;
+        }
+
+        void ResolveState::indexSources() {
+            m_assignment_indices.clear();
+            m_assignment_indices.reserve(m_layers.size());
+            for (const auto &layer: m_layers) {
+                m_assignment_indices.emplace_back(std::span<const Assignment>{layer.m_assignments});
+            }
+        }
+
         void ResolveState::upsertOrigin(std::string name, const ESource source, std::string location) {
             if (m_origins == nullptr) {
                 return;
@@ -318,6 +413,160 @@ namespace pP::config {
                             make_error_code(EConfigErrc::unknown_property), assignment.m_alias_used);
                         retain(make_error_code(EConfigErrc::unknown_property));
                     }
+                }
+            }
+        }
+
+        namespace {
+            [[nodiscard]] bool inTree(
+                const std::string_view name, const std::string_view path, const bool descendants) {
+                return name == path or (descendants and
+                                           name.size() > path.size() and
+                                           name.starts_with(path) and
+                                           name[path.size()] == '.');
+            }
+        }
+
+        void TreeResolveState::report(
+            std::string location, std::string path, std::string message, const std::error_code error) {
+            m_scalars.report(std::move(location), std::move(path), std::move(message), error);
+            m_scalars.retain(error);
+        }
+
+        bool TreeResolveState::supplied(const std::string_view path, const bool descendants) const {
+            for (std::size_t layer = 0u; layer < m_layers.size(); ++layer) {
+                if (m_scalars.m_assignment_indices[layer].supplied(path, descendants) or
+                    (descendants and m_group_indices[layer].supplied(path, true))) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        void TreeResolveState::indexSources() {
+            m_scalars.indexSources();
+            m_group_indices.clear();
+            m_group_indices.reserve(m_layers.size());
+            for (const auto &layer: m_layers) {
+                m_group_indices.emplace_back(std::span<const GroupPresence>{layer.m_groups});
+            }
+        }
+
+        void TreeResolveState::presence(const std::string &path, const Metadata &metadata, const bool required) {
+            m_group_paths.push_back(path);
+            m_scalars.upsertOrigin(path, ESource::none, "default");
+            bool found = false;
+            for (std::size_t layer_index = 0u; layer_index < m_layers.size(); ++layer_index) {
+                const auto &layer = m_layers[layer_index];
+                const auto source = layer.m_scalars.m_source;
+                const bool allowed = source == ESource::none or any(metadata.m_sources & source);
+                const std::string *winning_location = nullptr;
+                const auto note = [&](const std::string &location) {
+                    found = true;
+                    if (not allowed) {
+                        report(
+                            location, path, "group does not accept this source",
+                            make_error_code(EConfigErrc::source_disallowed));
+                    } else {
+                        winning_location = std::addressof(location);
+                    }
+                };
+                // Both explicit empty tables and descendant assignments supply presence.
+                for (const auto position: m_group_indices[layer_index].subtree(path)) {
+                    note(layer.m_groups[position].m_location);
+                }
+                for (const auto position: m_scalars.m_assignment_indices[layer_index].subtree(path)) {
+                    note(layer.m_scalars.m_assignments[position].m_location);
+                }
+
+                if (winning_location != nullptr) {
+                    m_scalars.upsertOrigin(path, source, *winning_location);
+                }
+            }
+            if (required and not found) {
+                report("resolve", path, "required group was not supplied", make_error_code(EConfigErrc::missing_value));
+            }
+        }
+
+        Array<std::string> TreeResolveState::entryKeys(const std::string &path) {
+            Array<std::string> keys;
+            const auto prefix = path + ".";
+            const auto add = [&](const std::string &name, const std::string &location) {
+                if (not name.starts_with(prefix)) {
+                    return;
+                }
+                const std::string_view tail{std::string_view{name}.substr(prefix.size())};
+                const auto key = tail.substr(0u, tail.find('.'));
+                if (not isValidKey(key)) {
+                    report(
+                        location, recursivePath(path, key), "invalid collection key ([a-z0-9_-], 1..128)",
+                        make_error_code(EConfigErrc::out_of_range));
+                } else if (std::ranges::find(keys, key) == keys.end()) {
+                    keys.emplace_back(key);
+                }
+            };
+            for (std::size_t layer_index = 0u; layer_index < m_layers.size(); ++layer_index) {
+                const auto &layer = m_layers[layer_index];
+                for (const auto position: m_group_indices[layer_index].subtree(path)) {
+                    const auto &group = layer.m_groups[position];
+                    add(group.m_path, group.m_location);
+                }
+                for (const auto position: m_scalars.m_assignment_indices[layer_index].subtree(path)) {
+                    const auto &assignment = layer.m_scalars.m_assignments[position];
+                    add(assignment.m_name, assignment.m_location);
+                }
+            }
+            return keys;
+        }
+
+        void TreeResolveState::rejectUnknown() {
+            const auto delegated = [&](const std::string_view path) {
+                return std::ranges::any_of(
+                    m_atomic_paths, [&](const auto &boundary) { return inTree(path, boundary, true); });
+            };
+            for (const auto &layer: m_layers) {
+                for (std::size_t i = 0; i < layer.m_groups.size(); ++i) {
+                    const auto &group = layer.m_groups[i];
+                    if (delegated(group.m_path)) {
+                        continue;
+                    }
+                    if (std::ranges::find(m_group_paths, group.m_path) == m_group_paths.end()) {
+                        report(
+                            group.m_location, group.m_path, "unknown group",
+                            make_error_code(EConfigErrc::unknown_property));
+                    }
+                    for (std::size_t j = 0; j < i; ++j) {
+                        if (layer.m_groups[j].m_path == group.m_path) {
+                            report(
+                                group.m_location, group.m_path, "duplicate group declaration in layer",
+                                make_error_code(EConfigErrc::duplicate_key));
+                            break;
+                        }
+                    }
+                }
+                for (std::size_t i = 0; i < layer.m_scalars.m_assignments.size(); ++i) {
+                    const auto &assignment = layer.m_scalars.m_assignments[i];
+                    if (delegated(assignment.m_name)) {
+                        continue;
+                    }
+                    if (m_atomic_replacement) {
+                        for (std::size_t j = 0; j < i; ++j) {
+                            if (layer.m_scalars.m_assignments[j].m_name == assignment.m_name) {
+                                report(
+                                    assignment.m_location, assignment.m_name, "duplicate key in variant replacement",
+                                    make_error_code(EConfigErrc::duplicate_key));
+                                break;
+                            }
+                        }
+                    }
+                    if (std::ranges::find(m_scalar_paths, assignment.m_name) != m_scalar_paths.end()) {
+                        continue;
+                    }
+                    const bool group = std::ranges::find(m_group_paths, assignment.m_name) != m_group_paths.end();
+                    report(
+                        assignment.m_location, assignment.m_name,
+                        group ? "group/collection scalar assignment or reset is not supported" : "unknown property",
+                        make_error_code(group ? EConfigErrc::type_mismatch : EConfigErrc::unknown_property));
                 }
             }
         }

@@ -621,6 +621,780 @@ namespace pP::tests::detail::cfg {
         PPR_TEST_ASSERT(default_diagnostics.hasErrors());
     };
 
+    struct RequiredRecord {
+        u32 m_value{};
+        static constexpr auto describe() {
+            return std::tuple{field(
+                &RequiredRecord::m_value, Metadata{"value", "Required value", "Tree"}, Range<u32>{1u, 9u},
+                EPresence::required)};
+        }
+        static std::error_code validate(const RequiredRecord &record, Diagnostics &) {
+            PPR_TEST_ASSERT(record.m_value != 0u);
+            return {};
+        }
+    };
+
+    struct PresenceSettings {
+        u32 m_required{};
+        u32 m_defaulted{4u};
+        std::optional<u32> m_optional{6u};
+        std::optional<RequiredRecord> m_child{};
+        static constexpr auto describe() {
+            return std::tuple{
+                field(
+                    &PresenceSettings::m_required, Metadata{"required", "Required", "Tree"}, Range<u32>{1u, 9u},
+                    EPresence::required),
+                field(
+                    &PresenceSettings::m_defaulted, Metadata{"defaulted", "Defaulted", "Tree"}, Range<u32>{1u, 9u},
+                    EPresence::defaulted),
+                field(
+                    &PresenceSettings::m_optional, Metadata{"optional", "Optional", "Tree"}, Range<u32>{1u, 9u},
+                    EPresence::optional),
+                group(&PresenceSettings::m_child, Metadata{"child", "Optional record", "Tree"}, EPresence::optional)};
+        }
+    };
+
+    struct RecordSettings {
+        KeyedCollection<RequiredRecord> m_records{};
+        static constexpr auto describe() {
+            auto records = collection(&RecordSettings::m_records, Metadata{"records", "Records", "Tree"}, {1u, 4u});
+            records.m_presence = EPresence::required;
+            return std::tuple{records};
+        }
+    };
+
+    template<u32 Default>
+    struct NestedDefaultsRecord {
+        u32 m_required{};
+        u32 m_defaulted{Default};
+        static constexpr auto describe() {
+            return std::tuple{
+                field(
+                    &NestedDefaultsRecord::m_required, Metadata{"required", "Required", "Tree"}, Range<u32>{1u, 9u},
+                    EPresence::required),
+                field(
+                    &NestedDefaultsRecord::m_defaulted, Metadata{"defaulted", "Defaulted", "Tree"}, Range<u32>{1u, 9u},
+                    EPresence::defaulted)};
+        }
+    };
+
+    template<u32 Default>
+    struct RequiredDefaultsGroup {
+        NestedDefaultsRecord<Default> m_record{};
+        static constexpr auto describe() {
+            return std::tuple{
+                group(&RequiredDefaultsGroup::m_record, Metadata{"record", "Record", "Tree"}, EPresence::required)};
+        }
+    };
+
+    template<u32 Default>
+    struct OptionalDefaultsGroup {
+        std::optional<NestedDefaultsRecord<Default>> m_record{};
+        static constexpr auto describe() {
+            return std::tuple{
+                group(&OptionalDefaultsGroup::m_record, Metadata{"record", "Record", "Tree"}, EPresence::optional)};
+        }
+    };
+
+    template<u32 Default>
+    struct EmptyDefaultsCollection {
+        KeyedCollection<NestedDefaultsRecord<Default>> m_records{};
+        static constexpr auto describe() {
+            return std::tuple{
+                collection(&EmptyDefaultsCollection::m_records, Metadata{"records", "Records", "Tree"}, {0u, 4u})};
+        }
+    };
+
+    PPR_UNIT_TEST (required_defaulted_optional_presence) {
+        Diagnostics diagnostics;
+        const auto missing = resolveRecursive<PresenceSettings>({}, diagnostics);
+        PPR_TEST_ASSERT(not missing and missing.error() == make_error_code(EConfigErrc::missing_value));
+        PPR_TEST_ASSERT(diagnostics.entries().front().m_property == "required");
+
+        TreeLayer layer{singleLayer(ESource::none, "required", SourceValue::integer(2)), {}};
+        diagnostics.clear();
+        const auto omitted = resolveRecursive<PresenceSettings>(std::span{&layer, 1u}, diagnostics);
+        PPR_TEST_ASSERT(omitted.has_value() and not diagnostics.hasErrors());
+        PPR_TEST_ASSERT(omitted->m_value.m_required == 2u and omitted->m_value.m_defaulted == 4u);
+        PPR_TEST_ASSERT(not omitted->m_value.m_optional and not omitted->m_value.m_child);
+
+        layer.m_groups.push_back({"child", "test:2"});
+        diagnostics.clear();
+        const auto empty_child = resolveRecursive<PresenceSettings>(std::span{&layer, 1u}, diagnostics);
+        PPR_TEST_ASSERT(not empty_child and empty_child.error() == make_error_code(EConfigErrc::missing_value));
+        PPR_TEST_ASSERT(diagnostics.entries().front().m_property == "child.value");
+
+        layer.m_scalars.m_assignments.push_back({"child.value", {}, SourceValue::integer(3), "programmatic", 0u});
+        diagnostics.clear();
+        const auto trusted = resolveRecursive<PresenceSettings>(std::span{&layer, 1u}, diagnostics);
+        PPR_TEST_ASSERT(trusted.has_value() and not diagnostics.hasErrors());
+        PPR_TEST_ASSERT(trusted->m_value.m_child and trusted->m_value.m_child->m_value == 3u);
+        PPR_TEST_ASSERT(trusted->find("required") != nullptr and trusted->find("required")->m_source == ESource::none);
+    };
+
+    PPR_UNIT_TEST (duplicate_and_unknown_keys) {
+        TreeLayer layer{
+            singleLayer(ESource::none, "records.rock.value", SourceValue::integer(2)),
+            {{"records.rock", "test:1"}, {"records.rock", "test:2"}}};
+        Diagnostics diagnostics;
+        const auto duplicate = resolveRecursive<RecordSettings>(std::span{&layer, 1u}, diagnostics);
+        PPR_TEST_ASSERT(not duplicate and duplicate.error() == make_error_code(EConfigErrc::duplicate_key));
+        PPR_TEST_ASSERT(diagnostics.entries().front().m_property == "records.rock");
+
+        layer.m_groups.pop_back();
+        layer.m_scalars.m_assignments.push_back({"records.rock.typo", {}, SourceValue::integer(3), "test:3", 0u});
+        diagnostics.clear();
+        const auto unknown = resolveRecursive<RecordSettings>(std::span{&layer, 1u}, diagnostics);
+        PPR_TEST_ASSERT(not unknown and unknown.error() == make_error_code(EConfigErrc::unknown_property));
+        PPR_TEST_ASSERT(diagnostics.entries().front().m_property == "records.rock.typo");
+        PPR_TEST_ASSERT(diagnostics.entries().front().m_location == "test:3");
+        PPR_TEST_ASSERT(diagnostics.format().find("records.rock.typo") != std::string::npos);
+    };
+
+    struct SourceOrderRecord {
+        u32 m_value{}, m_other{4u};
+        static constexpr auto describe() {
+            return std::tuple{
+                field(
+                    &SourceOrderRecord::m_value, Metadata{"value", {}, {}, EMutability::startup, ESource::all},
+                    Range<u32>{1u, 9u}, EPresence::required),
+                field(
+                    &SourceOrderRecord::m_other, Metadata{"other", {}, {}, EMutability::startup, ESource::all},
+                    Range<u32>{1u, 9u})};
+        }
+    };
+
+    PPR_UNIT_TEST (recursive_source_order_preserves_collection_and_origin_winners) {
+        struct SourceOrderSettings {
+            KeyedCollection<SourceOrderRecord> m_records;
+            static constexpr auto describe() {
+                auto records = collection(
+                    &SourceOrderSettings::m_records, Metadata{"records", {}, {}, EMutability::startup, ESource::all},
+                    {1u, 4u});
+                records.m_presence = EPresence::required;
+                return std::tuple{records};
+            }
+        };
+        TreeLayer base;
+        base.m_scalars.m_source = ESource::file;
+        base.m_groups = {{"records.z", "base:group-z"}, {"records.a", "base:group-a"}};
+        base.m_scalars.m_assignments = {
+            {"records.a.value", {}, SourceValue::integer(2), "base:a-first", 99u},
+            {"records.z.value", {}, SourceValue::integer(3), "base:z", 0u},
+            {"records.a.value", {}, SourceValue::integer(4), "base:a-last", 1u},
+            {"records.m.value", {}, SourceValue::integer(5), "base:m", 0u}};
+        TreeLayer overlay;
+        overlay.m_scalars.m_source = ESource::cli;
+        overlay.m_groups = {{"records.b", "cli:group-b"}};
+        overlay.m_scalars.m_assignments = {
+            {"records.b.value", {}, SourceValue::text("7"), "cli:b", 0u},
+            {"records.z.value", {}, SourceValue::text("8"), "cli:z", 0u}};
+        const TreeLayer layers[] = {base, overlay};
+
+        Diagnostics diagnostics;
+        const auto result = resolveRecursive<SourceOrderSettings>(layers, diagnostics);
+        PPR_TEST_ASSERT(result.has_value() and not diagnostics.hasErrors());
+        const auto &entries = result->m_value.m_records.m_entries;
+        PPR_TEST_ASSERT(entries.size() == 4u);
+        PPR_TEST_ASSERT(entries[0u].m_key == "z" and entries[0u].m_value.m_value == 8u);
+        PPR_TEST_ASSERT(entries[1u].m_key == "a" and entries[1u].m_value.m_value == 4u);
+        PPR_TEST_ASSERT(entries[2u].m_key == "m" and entries[2u].m_value.m_value == 5u);
+        PPR_TEST_ASSERT(entries[3u].m_key == "b" and entries[3u].m_value.m_value == 7u);
+        PPR_TEST_ASSERT(result->find("records")->m_location == "cli:z");
+        PPR_TEST_ASSERT(result->find("records.z")->m_location == "cli:z");
+        PPR_TEST_ASSERT(result->find("records.z.value")->m_source == ESource::cli);
+        PPR_TEST_ASSERT(result->find("records.a.value")->m_location == "base:a-last");
+
+        Array<std::string> origin_paths;
+        for (const auto &origin: result->m_origins) {
+            origin_paths.push_back(origin.m_name);
+        }
+        PPR_TEST_ASSERT(
+            origin_paths == (Array<std::string>{
+                                "records", "records.z", "records.z.value", "records.z.other", "records.a",
+                                "records.a.value", "records.a.other", "records.m", "records.m.value", "records.m.other",
+                                "records.b", "records.b.value", "records.b.other"}));
+    };
+
+    PPR_UNIT_TEST (recursive_prefix_neighbors_preserve_descendant_presence) {
+        struct PrefixSettings {
+            std::optional<RequiredRecord> m_a, m_ab, m_underscore, m_dash;
+            static constexpr auto describe() {
+                return std::tuple{
+                    group(&PrefixSettings::m_a, Metadata{"a"}, EPresence::optional),
+                    group(&PrefixSettings::m_ab, Metadata{"ab"}, EPresence::optional),
+                    group(&PrefixSettings::m_underscore, Metadata{"a_b"}, EPresence::optional),
+                    group(&PrefixSettings::m_dash, Metadata{"a-b"}, EPresence::optional)};
+            }
+        };
+        TreeLayer layer;
+        layer.m_scalars.m_assignments = {
+            {"a-b.value", {}, SourceValue::integer(3), "dash", 0u},
+            {"ab.value", {}, SourceValue::integer(4), "neighbor", 0u},
+            {"a_b.value", {}, SourceValue::integer(5), "underscore", 0u},
+            {"a.value", {}, SourceValue::integer(2), "descendant", 0u}};
+        Diagnostics diagnostics;
+        const auto present = resolveRecursive<PrefixSettings>(std::span{&layer, 1u}, diagnostics);
+        PPR_TEST_ASSERT(present.has_value() and not diagnostics.hasErrors());
+        PPR_TEST_ASSERT(present->m_value.m_a and present->m_value.m_a->m_value == 2u);
+        PPR_TEST_ASSERT(present->m_value.m_ab and present->m_value.m_ab->m_value == 4u);
+        PPR_TEST_ASSERT(present->m_value.m_underscore and present->m_value.m_underscore->m_value == 5u);
+        PPR_TEST_ASSERT(present->m_value.m_dash and present->m_value.m_dash->m_value == 3u);
+
+        layer.m_scalars.m_assignments.pop_back();
+        diagnostics.clear();
+        const auto absent = resolveRecursive<PrefixSettings>(std::span{&layer, 1u}, diagnostics);
+        PPR_TEST_ASSERT(absent.has_value() and not diagnostics.hasErrors());
+        PPR_TEST_ASSERT(not absent->m_value.m_a);
+        PPR_TEST_ASSERT(absent->m_value.m_ab and absent->m_value.m_underscore and absent->m_value.m_dash);
+    };
+
+    PPR_UNIT_TEST (recursive_group_source_errors_preserve_authored_locations) {
+        struct FileGroupSettings {
+            SourceOrderRecord m_record;
+            static constexpr auto describe() {
+                return std::tuple{group(
+                    &FileGroupSettings::m_record, Metadata{"record", {}, {}, EMutability::startup, ESource::file},
+                    EPresence::required)};
+            }
+        };
+        TreeLayer layer;
+        layer.m_scalars.m_source = ESource::cli;
+        layer.m_groups = {{"record", "argv:group"}};
+        layer.m_scalars.m_assignments = {
+            {"record.value", {}, SourceValue::text("2"), "argv:value", 0u},
+            {"record.other", {}, SourceValue::text("3"), "argv:other", 0u}};
+        Diagnostics diagnostics;
+        const auto result = resolveRecursive<FileGroupSettings>(std::span{&layer, 1u}, diagnostics);
+        PPR_TEST_ASSERT(not result and result.error() == make_error_code(EConfigErrc::source_disallowed));
+        PPR_TEST_ASSERT(diagnostics.entries().size() == 3u);
+        const auto &errors = diagnostics.entries();
+        PPR_TEST_ASSERT(errors[0u].m_location == "argv:group");
+        PPR_TEST_ASSERT(errors[1u].m_location == "argv:value");
+        PPR_TEST_ASSERT(errors[2u].m_location == "argv:other");
+        for (const auto &error: errors) {
+            PPR_TEST_ASSERT(error.m_property == "record");
+            PPR_TEST_ASSERT(error.m_code == make_error_code(EConfigErrc::source_disallowed));
+        }
+    };
+
+    PPR_UNIT_TEST (recursive_invalid_collection_keys_preserve_diagnostic_order) {
+        TreeLayer layer;
+        layer.m_groups = {{"records.Z", "group:z"}, {"records.A", "group:a"}};
+        layer.m_scalars.m_assignments = {
+            {"records.X.value", {}, SourceValue::integer(2), "scalar:x", 0u},
+            {"records.B.value", {}, SourceValue::integer(3), "scalar:b", 0u}};
+        Diagnostics diagnostics;
+        const auto result = resolveRecursive<RecordSettings>(std::span{&layer, 1u}, diagnostics);
+        PPR_TEST_ASSERT(not result and result.error() == make_error_code(EConfigErrc::out_of_range));
+        PPR_TEST_ASSERT(diagnostics.entries().size() >= 4u);
+        const auto &errors = diagnostics.entries();
+        const std::string_view locations[] = {"group:z", "group:a", "scalar:x", "scalar:b"};
+        const std::string_view paths[] = {"records.Z", "records.A", "records.X", "records.B"};
+        for (std::size_t i = 0u; i < std::size(locations); ++i) {
+            PPR_TEST_ASSERT(errors[i].m_location == locations[i]);
+            PPR_TEST_ASSERT(errors[i].m_property == paths[i]);
+            PPR_TEST_ASSERT(errors[i].m_code == make_error_code(EConfigErrc::out_of_range));
+        }
+    };
+
+    struct ScopedReference {
+        std::string m_key{"unresolved"};
+    };
+
+    template<EReferenceScope Scope, bool BadCollection = false>
+    struct ScopedReferenceSettings {
+        ScopedReference m_target{};
+        static constexpr auto describe() {
+            return std::tuple{field(
+                &ScopedReferenceSettings::m_target,
+                Metadata{"target", "Target", "Tree", EMutability::startup, ESource::file},
+                ReferenceDomain<ScopedReference>{{BadCollection ? "records..bad" : "records", "usable", Scope}})};
+        }
+    };
+
+    PPR_UNIT_TEST (owner_reference_scope_is_metadata_and_validation_stays_syntax_only) {
+        Diagnostics diagnostics;
+        PPR_TEST_ASSERT(validateSchema<ScopedReferenceSettings<EReferenceScope::root>>(diagnostics).has_value());
+        PPR_TEST_ASSERT(validateSchema<ScopedReferenceSettings<EReferenceScope::owner>>(diagnostics).has_value());
+        const auto descriptor = describeProperty(
+            std::get<0u>(ScopedReferenceSettings<EReferenceScope::owner>::describe()));
+        PPR_TEST_ASSERT(descriptor.m_reference_target.has_value());
+        PPR_TEST_ASSERT(descriptor.m_reference_target->m_scope == EReferenceScope::owner);
+        PPR_TEST_ASSERT(descriptor.m_reference_target->m_collection == "records");
+        PPR_TEST_ASSERT(descriptor.m_reference_target->m_suitability == "usable");
+
+        // No records or owner are supplied to core: lookup belongs to the consumer.
+        TreeLayer layer{singleLayer(ESource::file, "target", SourceValue::text("missing_but_valid")), {}};
+        const auto resolved = resolveRecursive<ScopedReferenceSettings<EReferenceScope::owner>>(
+            std::span{&layer, 1u}, diagnostics);
+        PPR_TEST_ASSERT(resolved.has_value() and not diagnostics.hasErrors());
+        PPR_TEST_ASSERT(resolved->m_value.m_target.m_key == "missing_but_valid");
+
+        for (const auto &key: {std::string{}, std::string{"has.dot"}, std::string{"Upper"}, std::string(129u, 'a')}) {
+            diagnostics.clear();
+            layer.m_scalars.m_assignments.front().m_value = SourceValue::text(key);
+            const auto invalid = resolveRecursive<ScopedReferenceSettings<EReferenceScope::owner>>(
+                std::span{&layer, 1u}, diagnostics);
+            PPR_TEST_ASSERT(not invalid and invalid.error() == make_error_code(EConfigErrc::out_of_range));
+            PPR_TEST_ASSERT(diagnostics.entries().front().m_property == "target");
+        }
+    };
+
+    PPR_UNIT_TEST (reference_scope_declarations_reject_invalid_targets_and_unknown_scope) {
+        Diagnostics diagnostics;
+        const auto bad_collection = validateSchema<ScopedReferenceSettings<EReferenceScope::owner, true>>(diagnostics);
+        PPR_TEST_ASSERT(not bad_collection and bad_collection.error() == make_error_code(EConfigErrc::schema_invalid));
+        PPR_TEST_ASSERT(diagnostics.entries().front().m_property == "target");
+        diagnostics.clear();
+        const auto bad_scope = validateSchema<ScopedReferenceSettings<static_cast<EReferenceScope>(255u)>>(diagnostics);
+        PPR_TEST_ASSERT(not bad_scope and bad_scope.error() == make_error_code(EConfigErrc::schema_invalid));
+        PPR_TEST_ASSERT(diagnostics.entries().front().m_property == "target");
+    };
+
+    PPR_UNIT_TEST (recursive_schema_validation) {
+        Diagnostics diagnostics;
+        PPR_TEST_ASSERT(validateSchema<PresenceSettings>(diagnostics).has_value());
+        PPR_TEST_ASSERT(validateSchema<RecordSettings>(diagnostics).has_value());
+        PPR_TEST_ASSERT(not diagnostics.hasErrors());
+
+        struct BadDefault : PresenceSettings {
+            BadDefault() {
+                m_defaulted = 0u;
+            }
+        };
+        diagnostics.clear();
+        const auto bad_default = validateSchema<BadDefault>(diagnostics);
+        PPR_TEST_ASSERT(not bad_default and bad_default.error() == make_error_code(EConfigErrc::schema_invalid));
+        PPR_TEST_ASSERT(diagnostics.entries().front().m_property == "defaulted");
+
+        struct ConcealedRequired {
+            RequiredRecord m_record{2u};
+            static constexpr auto describe() {
+                return std::tuple{
+                    group(&ConcealedRequired::m_record, Metadata{"record", "Record", "Tree"}, EPresence::defaulted)};
+            }
+        };
+        diagnostics.clear();
+        const auto concealed = validateSchema<ConcealedRequired>(diagnostics);
+        PPR_TEST_ASSERT(not concealed and concealed.error() == make_error_code(EConfigErrc::schema_invalid));
+        PPR_TEST_ASSERT(diagnostics.entries().front().m_property == "record.value");
+    };
+
+    PPR_UNIT_TEST (recursive_required_group_validates_defaulted_descendants) {
+        Diagnostics diagnostics;
+        const auto invalid = validateSchema<RequiredDefaultsGroup<0u>>(diagnostics);
+        PPR_TEST_ASSERT(not invalid and invalid.error() == make_error_code(EConfigErrc::schema_invalid));
+        PPR_TEST_ASSERT(diagnostics.size() == 1u);
+        PPR_TEST_ASSERT(diagnostics.entries().front().m_property == "record.defaulted");
+
+        diagnostics.clear();
+        PPR_TEST_ASSERT(validateSchema<RequiredDefaultsGroup<4u>>(diagnostics).has_value());
+        PPR_TEST_ASSERT(not diagnostics.hasErrors());
+        const auto missing = resolveRecursive<RequiredDefaultsGroup<4u>>({}, diagnostics);
+        PPR_TEST_ASSERT(not missing and missing.error() == make_error_code(EConfigErrc::missing_value));
+        PPR_TEST_ASSERT(diagnostics.entries().front().m_property == "record");
+
+        TreeLayer layer{};
+        layer.m_groups.push_back({"record", "test:1"});
+        diagnostics.clear();
+        const auto missing_leaf = resolveRecursive<RequiredDefaultsGroup<4u>>(std::span{&layer, 1u}, diagnostics);
+        PPR_TEST_ASSERT(not missing_leaf and missing_leaf.error() == make_error_code(EConfigErrc::missing_value));
+        PPR_TEST_ASSERT(diagnostics.entries().front().m_property == "record.required");
+
+        struct InitializedCollection {
+            KeyedCollection<NestedDefaultsRecord<4u>> m_records{};
+            InitializedCollection() {
+                m_records.m_entries.push_back({"entry", {0u, 0u}});
+            }
+            static constexpr auto describe() {
+                return std::tuple{
+                    collection(&InitializedCollection::m_records, Metadata{"records", "Records", "Tree"}, {0u, 4u})};
+            }
+        };
+        struct RequiredCollectionGroup {
+            InitializedCollection m_record{};
+            static constexpr auto describe() {
+                return std::tuple{group(
+                    &RequiredCollectionGroup::m_record, Metadata{"record", "Record", "Tree"}, EPresence::required)};
+            }
+        };
+        diagnostics.clear();
+        const auto invalid_entry = validateSchema<RequiredCollectionGroup>(diagnostics);
+        PPR_TEST_ASSERT(not invalid_entry and invalid_entry.error() == make_error_code(EConfigErrc::schema_invalid));
+        PPR_TEST_ASSERT(diagnostics.size() == 1u);
+        PPR_TEST_ASSERT(diagnostics.entries().front().m_property == "record.records.entry.defaulted");
+    };
+
+    PPR_UNIT_TEST (recursive_absent_optional_validates_defaulted_descendants) {
+        Diagnostics diagnostics;
+        const auto invalid = validateSchema<OptionalDefaultsGroup<0u>>(diagnostics);
+        PPR_TEST_ASSERT(not invalid and invalid.error() == make_error_code(EConfigErrc::schema_invalid));
+        PPR_TEST_ASSERT(diagnostics.size() == 1u);
+        PPR_TEST_ASSERT(diagnostics.entries().front().m_property == "record.defaulted");
+
+        diagnostics.clear();
+        PPR_TEST_ASSERT(validateSchema<OptionalDefaultsGroup<4u>>(diagnostics).has_value());
+        const auto absent = resolveRecursive<OptionalDefaultsGroup<4u>>({}, diagnostics);
+        PPR_TEST_ASSERT(absent.has_value() and not diagnostics.hasErrors());
+        PPR_TEST_ASSERT(not absent->m_value.m_record);
+    };
+
+    PPR_UNIT_TEST (recursive_empty_collection_validates_defaulted_element_descendants) {
+        Diagnostics diagnostics;
+        const auto invalid = validateSchema<EmptyDefaultsCollection<0u>>(diagnostics);
+        PPR_TEST_ASSERT(not invalid and invalid.error() == make_error_code(EConfigErrc::schema_invalid));
+        PPR_TEST_ASSERT(diagnostics.size() == 1u);
+        PPR_TEST_ASSERT(diagnostics.entries().front().m_property == "records.{key}.defaulted");
+
+        Diagnostics capped{0u};
+        const auto capped_invalid = validateSchema<EmptyDefaultsCollection<0u>>(capped);
+        PPR_TEST_ASSERT(not capped_invalid and capped_invalid.error() == make_error_code(EConfigErrc::schema_invalid));
+        PPR_TEST_ASSERT(capped.entries().empty() and capped.size() == 1u and capped.omittedCount() == 1u);
+
+        diagnostics.clear();
+        PPR_TEST_ASSERT(validateSchema<EmptyDefaultsCollection<4u>>(diagnostics).has_value());
+        const auto empty = resolveRecursive<EmptyDefaultsCollection<4u>>({}, diagnostics);
+        PPR_TEST_ASSERT(empty.has_value() and not diagnostics.hasErrors());
+        PPR_TEST_ASSERT(empty->m_value.m_records.m_entries.empty());
+    };
+
+    struct VariantEmpty {
+        static constexpr auto describe() {
+            return std::tuple{};
+        }
+    };
+
+    struct VariantNumbers {
+        u32 m_amount{};
+        u32 m_offset{4u};
+        std::optional<u32> m_extra{};
+        static constexpr auto describe() {
+            return std::tuple{
+                field(
+                    &VariantNumbers::m_amount, Metadata{"amount", {}, {}, EMutability::startup, ESource::all},
+                    Range<u32>{1u, 9u}, EPresence::required),
+                field(
+                    &VariantNumbers::m_offset, Metadata{"offset", {}, {}, EMutability::startup, ESource::all},
+                    Range<u32>{1u, 9u}),
+                field(
+                    &VariantNumbers::m_extra, Metadata{"extra", {}, {}, EMutability::startup, ESource::all},
+                    Range<u32>{1u, 9u}, EPresence::optional)};
+        }
+    };
+
+    struct VariantNested {
+        std::variant<VariantEmpty, VariantNumbers> m_inner{};
+        static constexpr auto describe() {
+            return std::tuple{taggedVariant(
+                &VariantNested::m_inner, Metadata{"inner", {}, {}, EMutability::startup, ESource::all},
+                EPresence::required, alternative<VariantEmpty>("empty"), alternative<VariantNumbers>("numbers"))};
+        }
+    };
+
+    template<EPresence Presence>
+    struct VariantSettings {
+        using Payload = std::variant<VariantEmpty, VariantNumbers, VariantNested>;
+        using Value = std::conditional_t<Presence == EPresence::optional, std::optional<Payload>, Payload>;
+        Value m_choice{Payload{VariantEmpty{}}};
+        u32 m_unrelated{4u};
+        VariantSettings() {
+            if constexpr (Presence == EPresence::defaulted) {
+                m_choice = VariantNumbers{3u, 6u, 2u};
+            }
+        }
+        static constexpr auto describe() {
+            return std::tuple{
+                taggedVariant(
+                    &VariantSettings::m_choice, Metadata{"choice", {}, {}, EMutability::startup, ESource::all},
+                    Presence, alternative<VariantEmpty>("empty"), alternative<VariantNumbers>("numbers"),
+                    alternative<VariantNested>("nested")),
+                field(
+                    &VariantSettings::m_unrelated, Metadata{"unrelated", {}, {}, EMutability::startup, ESource::all},
+                    Range<u32>{1u, 9u})};
+        }
+    };
+
+    [[nodiscard]] TreeLayer variantLayer(
+        const std::string &path, const std::string &tag, const std::string &origin = "variant:1") {
+        TreeLayer layer;
+        layer.m_scalars = singleLayer(ESource::none, path + ".tag", SourceValue::text(tag), origin);
+        layer.m_scalars.m_origin = origin;
+        layer.m_groups = {{path, origin}, {path + "." + tag, origin}};
+        return layer;
+    }
+
+    void variantAssignment(TreeLayer &layer, std::string path, SourceValue value, std::string location = "variant:2") {
+        layer.m_scalars.m_assignments.push_back({std::move(path), {}, std::move(value), std::move(location), 0u});
+    }
+
+    PPR_UNIT_TEST (variant_nested_resolution_is_order_independent) {
+        auto layer = variantLayer("choice", "nested");
+        variantAssignment(layer, "choice.nested.inner.numbers.amount", SourceValue::integer(7));
+        variantAssignment(layer, "choice.nested.inner.tag", SourceValue::text("numbers"));
+        layer.m_groups.push_back({"choice.nested.inner.numbers", "variant:3"});
+        layer.m_groups.push_back({"choice.nested.inner", "variant:4"});
+        for (u32 order = 0u; order < 2u; ++order) {
+            Diagnostics diagnostics;
+            const auto result = resolveRecursive<VariantSettings<EPresence::required>>(
+                std::span{&layer, 1u}, diagnostics);
+            PPR_TEST_ASSERT(result.has_value() and not diagnostics.hasErrors());
+            const auto &nested = std::get<VariantNested>(result->m_value.m_choice);
+            PPR_TEST_ASSERT(std::get<VariantNumbers>(nested.m_inner).m_amount == 7u);
+            PPR_TEST_ASSERT(result->find("choice.nested.inner.tag") != nullptr);
+            std::ranges::reverse(layer.m_groups);
+            std::ranges::reverse(layer.m_scalars.m_assignments);
+        }
+    };
+
+    PPR_UNIT_TEST (variant_tag_and_payload_errors_report_logical_paths) {
+        const auto check = [](const TreeLayer &layer, const EConfigErrc expected, const std::string_view path) {
+            Diagnostics diagnostics;
+            const auto result = resolveRecursive<VariantSettings<EPresence::required>>(
+                std::span{&layer, 1u}, diagnostics);
+            PPR_TEST_ASSERT(not result and result.error() == make_error_code(expected));
+            PPR_TEST_ASSERT(std::ranges::any_of(diagnostics.entries(), [&](const auto &entry) {
+                return entry.m_property == path and entry.m_code == make_error_code(expected);
+            }));
+        };
+        check(variantLayer("choice", "unknown"), EConfigErrc::unknown_enum_value, "choice.tag");
+        auto layer = variantLayer("choice", "empty");
+        layer.m_scalars.m_assignments.front().m_value = SourceValue::integer(1);
+        check(layer, EConfigErrc::type_mismatch, "choice.tag");
+        layer.m_scalars.m_assignments.clear();
+        check(layer, EConfigErrc::missing_value, "choice.tag");
+        layer = variantLayer("choice", "empty");
+        layer.m_groups.pop_back();
+        check(layer, EConfigErrc::missing_value, "choice.empty");
+        layer = variantLayer("choice", "numbers");
+        check(layer, EConfigErrc::missing_value, "choice.numbers.amount");
+        layer = variantLayer("choice", "empty");
+        variantAssignment(layer, "choice.numbers.amount", SourceValue::integer(2), "inactive:7");
+        check(layer, EConfigErrc::unknown_property, "choice.numbers.amount");
+        layer = variantLayer("choice", "empty");
+        layer.m_groups.push_back({"choice.numbers", "inactive:8"});
+        check(layer, EConfigErrc::unknown_property, "choice.numbers");
+        layer = variantLayer("choice", "empty");
+        variantAssignment(layer, "choice.empty.typo", SourceValue::integer(2));
+        check(layer, EConfigErrc::unknown_property, "choice.empty.typo");
+        layer = variantLayer("choice", "empty");
+        variantAssignment(layer, "choice.tag", SourceValue::text("empty"));
+        check(layer, EConfigErrc::duplicate_key, "choice.tag");
+        layer = variantLayer("choice", "empty");
+        layer.m_groups.push_back({"choice.empty", "duplicate:4"});
+        check(layer, EConfigErrc::duplicate_key, "choice.empty");
+        layer = variantLayer("choice", "numbers");
+        variantAssignment(layer, "choice.numbers.amount", SourceValue::integer(2));
+        variantAssignment(layer, "choice.numbers.amount", SourceValue::integer(3));
+        check(layer, EConfigErrc::duplicate_key, "choice.numbers.amount");
+    };
+
+    PPR_UNIT_TEST (variant_required_optional_and_defaulted_presence) {
+        Diagnostics diagnostics;
+        const auto required = resolveRecursive<VariantSettings<EPresence::required>>({}, diagnostics);
+        PPR_TEST_ASSERT(not required and required.error() == make_error_code(EConfigErrc::missing_value));
+        diagnostics.clear();
+        const auto absent = resolveRecursive<VariantSettings<EPresence::optional>>({}, diagnostics);
+        PPR_TEST_ASSERT(absent.has_value() and not absent->m_value.m_choice);
+        auto layer = variantLayer("choice", "empty");
+        const auto present = resolveRecursive<VariantSettings<EPresence::optional>>(std::span{&layer, 1u}, diagnostics);
+        PPR_TEST_ASSERT(present.has_value() and present->m_value.m_choice);
+        PPR_TEST_ASSERT(std::holds_alternative<VariantEmpty>(*present->m_value.m_choice));
+        const auto defaulted = resolveRecursive<VariantSettings<EPresence::defaulted>>({}, diagnostics);
+        PPR_TEST_ASSERT(defaulted.has_value());
+        const auto &numbers = std::get<VariantNumbers>(defaulted->m_value.m_choice);
+        PPR_TEST_ASSERT(numbers.m_amount == 3u and numbers.m_offset == 6u and numbers.m_extra == 2u);
+        PPR_TEST_ASSERT(defaulted->find("choice.tag")->m_location == "default");
+        const auto authored = resolveRecursive<VariantSettings<EPresence::defaulted>>(
+            std::span{&layer, 1u}, diagnostics);
+        PPR_TEST_ASSERT(authored.has_value() and std::holds_alternative<VariantEmpty>(authored->m_value.m_choice));
+        PPR_TEST_ASSERT(not diagnostics.hasErrors());
+    };
+
+    PPR_UNIT_TEST (variant_layers_replace_same_and_changed_tags_atomically) {
+        Array<TreeLayer> layers{variantLayer("choice", "numbers", "base:1")};
+        variantAssignment(layers.front(), "choice.numbers.amount", SourceValue::integer(2), "base:2");
+        variantAssignment(layers.front(), "choice.numbers.offset", SourceValue::integer(8), "base:3");
+        variantAssignment(layers.front(), "choice.numbers.extra", SourceValue::integer(9), "base:4");
+        layers.push_back(variantLayer("choice", "numbers", "overlay:1"));
+        variantAssignment(layers.back(), "choice.numbers.amount", SourceValue::integer(5), "overlay:2");
+        Diagnostics diagnostics;
+        const auto same = resolveRecursive<VariantSettings<EPresence::required>>(layers, diagnostics);
+        PPR_TEST_ASSERT(same.has_value());
+        const auto &numbers = std::get<VariantNumbers>(same->m_value.m_choice);
+        PPR_TEST_ASSERT(numbers.m_amount == 5u and numbers.m_offset == 4u and not numbers.m_extra);
+        PPR_TEST_ASSERT(same->find("choice.numbers.offset")->m_location == "default");
+        PPR_TEST_ASSERT(same->find("choice.numbers.amount")->m_location == "overlay:2");
+        PPR_TEST_ASSERT(same->find("choice.tag")->m_location == "overlay:1");
+
+        layers.push_back(variantLayer("choice", "empty", "changed:1"));
+        const auto changed = resolveRecursive<VariantSettings<EPresence::required>>(layers, diagnostics);
+        PPR_TEST_ASSERT(changed.has_value() and std::holds_alternative<VariantEmpty>(changed->m_value.m_choice));
+        PPR_TEST_ASSERT(changed->find("choice.numbers.amount") == nullptr);
+        layers.push_back({singleLayer(ESource::none, "unrelated", SourceValue::integer(7)), {}});
+        const auto untouched = resolveRecursive<VariantSettings<EPresence::required>>(layers, diagnostics);
+        PPR_TEST_ASSERT(untouched.has_value() and std::holds_alternative<VariantEmpty>(untouched->m_value.m_choice));
+        PPR_TEST_ASSERT(untouched->find("choice.tag")->m_location == "changed:1");
+        PPR_TEST_ASSERT(untouched->m_value.m_unrelated == 7u and not diagnostics.hasErrors());
+    };
+
+    PPR_UNIT_TEST (variant_replacements_do_not_inherit_and_validate_shadowed_layers) {
+        Array<TreeLayer> layers{variantLayer("choice", "numbers", "base:1")};
+        variantAssignment(layers.front(), "choice.numbers.amount", SourceValue::integer(2));
+        layers.push_back(variantLayer("choice", "numbers", "partial:1"));
+        Diagnostics diagnostics;
+        const auto partial = resolveRecursive<VariantSettings<EPresence::required>>(layers, diagnostics);
+        PPR_TEST_ASSERT(not partial and partial.error() == make_error_code(EConfigErrc::missing_value));
+        PPR_TEST_ASSERT(diagnostics.entries().front().m_property == "choice.numbers.amount");
+        layers.back() = TreeLayer{singleLayer(ESource::none, "choice.numbers.amount", SourceValue::integer(3)), {}};
+        diagnostics.clear();
+        const auto no_tag = resolveRecursive<VariantSettings<EPresence::required>>(layers, diagnostics);
+        PPR_TEST_ASSERT(not no_tag and no_tag.error() == make_error_code(EConfigErrc::missing_value));
+        PPR_TEST_ASSERT(diagnostics.entries().front().m_property == "choice.tag");
+
+        layers.front().m_scalars.m_assignments.back().m_value = SourceValue::integer(20);
+        layers.back() = variantLayer("choice", "empty", "valid:1");
+        diagnostics.clear();
+        const auto shadowed = resolveRecursive<VariantSettings<EPresence::required>>(layers, diagnostics);
+        PPR_TEST_ASSERT(not shadowed and shadowed.error() == make_error_code(EConfigErrc::out_of_range));
+        PPR_TEST_ASSERT(diagnostics.entries().front().m_property == "choice.numbers.amount");
+
+        // A later active payload must not legitimize an earlier inactive path.
+        layers.front() = variantLayer("choice", "empty", "inactive:1");
+        variantAssignment(layers.front(), "choice.numbers.amount", SourceValue::integer(2));
+        layers.back() = variantLayer("choice", "numbers", "active:1");
+        variantAssignment(layers.back(), "choice.numbers.amount", SourceValue::integer(3));
+        diagnostics.clear();
+        const auto inactive_shadowed = resolveRecursive<VariantSettings<EPresence::required>>(layers, diagnostics);
+        PPR_TEST_ASSERT(
+            not inactive_shadowed and inactive_shadowed.error() == make_error_code(EConfigErrc::unknown_property));
+        PPR_TEST_ASSERT(diagnostics.entries().front().m_property == "choice.numbers.amount");
+
+        layers.front() = variantLayer("choice", "nested", "outer:1");
+        variantAssignment(layers.front(), "choice.nested.inner.tag", SourceValue::text("numbers"));
+        variantAssignment(layers.front(), "choice.nested.inner.numbers.amount", SourceValue::integer(2));
+        layers.back() = variantLayer("choice", "nested", "outer:2");
+        diagnostics.clear();
+        const auto no_outer_inheritance = resolveRecursive<VariantSettings<EPresence::required>>(layers, diagnostics);
+        PPR_TEST_ASSERT(
+            not no_outer_inheritance and no_outer_inheritance.error() == make_error_code(EConfigErrc::missing_value));
+        PPR_TEST_ASSERT(diagnostics.entries().front().m_property == "choice.nested.inner");
+    };
+
+    PPR_UNIT_TEST (variant_schema_all_and_value_active_preorder_traversal) {
+        using S = VariantSettings<EPresence::optional>;
+        const auto member = std::get<0u>(S::describe());
+        const auto descriptor = describeProperty(member);
+        PPR_TEST_ASSERT(descriptor.m_kind == ENodeKind::variant and descriptor.m_optional);
+        PPR_TEST_ASSERT(descriptor.m_choices == (Array<std::string_view>{"empty", "numbers", "nested"}));
+        Array<std::string> schema_paths;
+        describeRecursive<S>([&](const auto &path, const auto &, const auto &) { schema_paths.push_back(path); });
+        PPR_TEST_ASSERT(schema_paths.front() == "choice");
+        PPR_TEST_ASSERT(std::ranges::find(schema_paths, "choice.nested.inner.numbers.amount") != schema_paths.end());
+        PPR_TEST_ASSERT(std::ranges::find(schema_paths, "choice.numbers.amount") != schema_paths.end());
+        S settings;
+        settings.m_choice = VariantNumbers{2u};
+        PPR_TEST_ASSERT(variantTag(member, settings.m_choice) == "numbers");
+        Array<std::string> value_paths;
+        visitRecursive(settings, [&](const auto &path, const auto &, auto &) { value_paths.push_back(path); });
+        PPR_TEST_ASSERT(value_paths[0u] == "choice" and value_paths[1u] == "choice.numbers");
+        PPR_TEST_ASSERT(std::ranges::find(value_paths, "choice.empty") == value_paths.end());
+        PPR_TEST_ASSERT(std::ranges::find(value_paths, "choice.nested") == value_paths.end());
+        settings.m_choice.reset();
+        value_paths.clear();
+        visitRecursive(settings, [&](const auto &path, const auto &, auto &) { value_paths.push_back(path); });
+        PPR_TEST_ASSERT(value_paths == (Array<std::string>{"choice", "unrelated"}));
+        PPR_TEST_ASSERT(variantTag(member, settings.m_choice).empty());
+    };
+
+    PPR_UNIT_TEST (variant_schema_rejects_invalid_tags_types_presence_and_defaults) {
+        struct InvalidTags {
+            std::variant<VariantEmpty, VariantNumbers> m_choice{};
+            static constexpr auto describe() {
+                return std::tuple{taggedVariant(
+                    &InvalidTags::m_choice, Metadata{"choice"}, EPresence::required, alternative<VariantEmpty>("tag"),
+                    alternative<VariantNumbers>("tag"))};
+            }
+        };
+        struct InvalidSegment {
+            std::variant<VariantEmpty> m_choice{};
+            static constexpr auto describe() {
+                return std::tuple{taggedVariant(
+                    &InvalidSegment::m_choice, Metadata{"choice"}, EPresence::required,
+                    alternative<VariantEmpty>("a.b"))};
+            }
+        };
+        struct MissingCoverage {
+            std::variant<VariantEmpty, VariantNumbers> m_choice{};
+            static constexpr auto describe() {
+                return std::tuple{taggedVariant(
+                    &MissingCoverage::m_choice, Metadata{"choice"}, EPresence::required,
+                    alternative<VariantEmpty>("empty"))};
+            }
+        };
+        struct InvalidEmptyTag {
+            std::variant<VariantEmpty> m_choice{};
+            static constexpr auto describe() {
+                return std::tuple{taggedVariant(
+                    &InvalidEmptyTag::m_choice, Metadata{"choice"}, EPresence::required,
+                    alternative<VariantEmpty>(""))};
+            }
+        };
+        struct InvalidPresence {
+            std::variant<VariantEmpty> m_choice{};
+            static constexpr auto describe() {
+                return std::tuple{taggedVariant(
+                    &InvalidPresence::m_choice, Metadata{"choice"}, EPresence::optional,
+                    alternative<VariantEmpty>("empty"))};
+            }
+        };
+        struct DuplicateTypes {
+            std::variant<VariantEmpty, VariantNumbers> m_choice{};
+            static constexpr auto describe() {
+                return std::tuple{taggedVariant(
+                    &DuplicateTypes::m_choice, Metadata{"choice"}, EPresence::required, alternative<VariantEmpty>("a"),
+                    alternative<VariantEmpty>("b"))};
+            }
+        };
+        struct EmptyDomain {
+            std::variant<VariantEmpty> m_choice{};
+            static constexpr auto describe() {
+                return std::tuple{taggedVariant(&EmptyDomain::m_choice, Metadata{"choice"}, EPresence::required)};
+            }
+        };
+        struct MonostatePayload {
+            std::variant<std::monostate, VariantEmpty> m_choice{};
+            static constexpr auto describe() {
+                return std::tuple{taggedVariant(
+                    &MonostatePayload::m_choice, Metadata{"choice"}, EPresence::optional,
+                    alternative<std::monostate>("none"), alternative<VariantEmpty>("empty"))};
+            }
+        };
+        struct InvalidDefault : VariantSettings<EPresence::defaulted> {
+            InvalidDefault() {
+                m_choice = VariantNumbers{};
+            }
+        };
+        const auto check = []<typename S>() {
+            Diagnostics diagnostics;
+            const auto result = validateSchema<S>(diagnostics);
+            PPR_TEST_ASSERT(not result and result.error() == make_error_code(EConfigErrc::schema_invalid));
+            PPR_TEST_ASSERT(diagnostics.hasErrors() and diagnostics.entries().front().m_property.starts_with("choice"));
+        };
+        check.template operator()<InvalidTags>();
+        check.template operator()<InvalidSegment>();
+        check.template operator()<InvalidEmptyTag>();
+        check.template operator()<InvalidPresence>();
+        check.template operator()<MissingCoverage>();
+        check.template operator()<DuplicateTypes>();
+        check.template operator()<EmptyDomain>();
+        check.template operator()<MonostatePayload>();
+        check.template operator()<InvalidDefault>();
+        Diagnostics diagnostics;
+        PPR_TEST_ASSERT(validateSchema<VariantSettings<EPresence::required>>(diagnostics).has_value());
+        PPR_TEST_ASSERT(validateSchema<VariantSettings<EPresence::defaulted>>(diagnostics).has_value());
+    };
+
     PPR_UNIT_TEST (environment_name_derivation) {
         PPR_TEST_ASSERT(environmentName("display.cap_hz") == "PPR_DISPLAY__CAP_HZ");
         PPR_TEST_ASSERT(environmentName("perf.pacing") == "PPR_PERF__PACING");
@@ -714,6 +1488,25 @@ namespace pP::tests {
             detail::cfg::sensitive_values_are_redacted,
             detail::cfg::diagnostics_carry_context,
             detail::cfg::schema_validation,
+            detail::cfg::required_defaulted_optional_presence,
+            detail::cfg::duplicate_and_unknown_keys,
+            detail::cfg::recursive_source_order_preserves_collection_and_origin_winners,
+            detail::cfg::recursive_prefix_neighbors_preserve_descendant_presence,
+            detail::cfg::recursive_group_source_errors_preserve_authored_locations,
+            detail::cfg::recursive_invalid_collection_keys_preserve_diagnostic_order,
+            detail::cfg::recursive_schema_validation,
+            detail::cfg::owner_reference_scope_is_metadata_and_validation_stays_syntax_only,
+            detail::cfg::reference_scope_declarations_reject_invalid_targets_and_unknown_scope,
+            detail::cfg::recursive_required_group_validates_defaulted_descendants,
+            detail::cfg::recursive_absent_optional_validates_defaulted_descendants,
+            detail::cfg::recursive_empty_collection_validates_defaulted_element_descendants,
+            detail::cfg::variant_nested_resolution_is_order_independent,
+            detail::cfg::variant_tag_and_payload_errors_report_logical_paths,
+            detail::cfg::variant_required_optional_and_defaulted_presence,
+            detail::cfg::variant_layers_replace_same_and_changed_tags_atomically,
+            detail::cfg::variant_replacements_do_not_inherit_and_validate_shadowed_layers,
+            detail::cfg::variant_schema_all_and_value_active_preorder_traversal,
+            detail::cfg::variant_schema_rejects_invalid_tags_types_presence_and_defaults,
             detail::cfg::environment_name_derivation,
             detail::cfg::environment_reads_only_known_names,
             detail::cfg::environment_alias_names,

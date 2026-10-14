@@ -5,10 +5,15 @@ module;
 export module engine.core:config;
 
 import :containers.stl;
+import :logger;
 import :types;
 import :utility;
 
 import std;
+
+namespace pP::config {
+    PPR_DECLARE_LOG_CATEGORY(Config)
+}
 
 export namespace pP::config {
     // MSVC workaround: std::make_format_args is constexpr and performs
@@ -74,8 +79,14 @@ export namespace pP::config {
 
     [[nodiscard]] const std::error_category &configCategory() noexcept;
 
-    [[nodiscard]] std::error_code make_error_code(const EConfigErrc err) noexcept;
+    [[nodiscard]] std::error_code make_error_code(EConfigErrc err) noexcept;
+} // namespace pP::config
 
+export template<>
+struct std::is_error_code_enum<pP::config::EConfigErrc> : std::true_type { // NOLINT(*-dcl58-cpp)
+};
+
+export namespace pP::config {
     // ------------------------------------------------------------------
     // sources: bitmask of origins allowed to supply a property.
     // ESource::none on a Layer bypasses permission checks and marks a
@@ -113,7 +124,7 @@ export namespace pP::config {
         return static_cast<std::underlying_type_t<ESource>>(sources) != 0;
     }
 
-    [[nodiscard]] std::string_view sourceName(const ESource source) noexcept;
+    [[nodiscard]] std::string_view sourceName(ESource source) noexcept;
 
     // ------------------------------------------------------------------
     // mutability: startup properties are fixed after startup resolution;
@@ -147,6 +158,81 @@ export namespace pP::config {
     // Canonical segments use a restricted identifier alphabet so that
     // environment-name derivation and CLI spelling are unambiguous.
     [[nodiscard]] bool isValidCanonicalName(std::string_view name) noexcept;
+
+    // Slice 1a: canonical definition — recursive configuration vocabulary.
+    enum class EPresence : u8 {
+        defaulted,
+        required,
+        optional
+    };
+    enum class ENodeKind : u8 {
+        scalar,
+        group,
+        collection,
+        variant
+    };
+    enum class EReferenceScope : u8 {
+        root,
+        // Collection within an explicitly supplied owner, never a lexical parent.
+        // The consumer supplies that owner and resolves existence/suitability.
+        owner
+    };
+
+    struct ReferenceTarget {
+        std::string_view m_collection{};
+        std::string_view m_suitability{};
+        EReferenceScope m_scope{EReferenceScope::root};
+    };
+
+    template<typename T>
+    struct KeyedEntry {
+        std::string m_key{};
+        T m_value{};
+    };
+
+    template<typename T>
+    struct KeyedCollection {
+        Array<KeyedEntry<T>> m_entries{};
+    };
+
+    struct CollectionDomain {
+        std::size_t m_min{};
+        std::size_t m_max{(std::numeric_limits<std::size_t>::max)()};
+    };
+
+    template<typename T>
+    struct Alternative {
+        using Type = T;
+        std::string_view m_tag;
+    };
+
+    template<typename... T>
+    struct VariantDomain {
+        std::tuple<Alternative<T>...> m_alternatives;
+    };
+
+    template<typename T>
+    [[nodiscard]] constexpr Alternative<T> alternative(const std::string_view tag) {
+        return {tag};
+    }
+
+    [[nodiscard]] bool isValidKey(std::string_view key) noexcept;
+
+    template<typename Ref>
+    struct ReferenceDomain {
+        ReferenceTarget m_target{};
+
+        [[nodiscard]] std::error_code validate(const Ref &value) const noexcept {
+            if (not isValidKey(value.m_key)) {
+                PPR_RETURN_ERROR_ON_FAIL(Config, EConfigErrc::out_of_range);
+            }
+            return {};
+        }
+
+        [[nodiscard]] std::string describe() const {
+            return "reference key ([a-z0-9_-], 1..128 characters)";
+        }
+    };
 
     // ------------------------------------------------------------------
     // constraints: small vocabulary, no general validation framework.
@@ -305,12 +391,42 @@ export namespace pP::config {
         T Owner::*m_member;
         Metadata m_metadata;
         Constraint m_constraint;
+        EPresence m_presence{EPresence::defaulted};
     };
 
     template<typename Owner, typename T, typename Constraint>
     [[nodiscard]] constexpr Member<Owner, T, Constraint> field(
         T Owner::*member, const Metadata metadata, const Constraint constraint) {
         return Member<Owner, T, Constraint>{member, metadata, constraint};
+    }
+
+    // Slice 1a: canonical definition — typed recursive member declarations.
+    template<typename Owner, typename T, typename Constraint>
+    [[nodiscard]] constexpr Member<Owner, T, Constraint> field(
+        T Owner::*member, const Metadata metadata, const Constraint constraint, const EPresence presence) {
+        return {member, metadata, constraint, presence};
+    }
+
+    namespace details {
+        struct GroupDomain {};
+    }
+
+    template<typename Owner, typename T>
+    [[nodiscard]] constexpr Member<Owner, T, details::GroupDomain> group(
+        T Owner::*member, const Metadata metadata, const EPresence presence) {
+        return {member, metadata, {}, presence};
+    }
+
+    template<typename Owner, typename T>
+    [[nodiscard]] constexpr Member<Owner, KeyedCollection<T>, CollectionDomain> collection(
+        KeyedCollection<T> Owner::*member, const Metadata metadata, const CollectionDomain domain) {
+        return {member, metadata, domain, EPresence::defaulted};
+    }
+
+    template<typename Owner, typename T, typename... A>
+    [[nodiscard]] constexpr Member<Owner, T, VariantDomain<A...>> taggedVariant(
+        T Owner::*member, const Metadata metadata, const EPresence presence, const Alternative<A>... alternatives) {
+        return {member, metadata, {std::tuple{alternatives...}}, presence};
     }
 
     /// Display-neutral runtime projection of a schema member. Enum names refer
@@ -321,6 +437,10 @@ export namespace pP::config {
         double m_slider_min{}, m_slider_max{};
         Array<std::string_view> m_choices{};
         std::string_view m_reference{}, m_description{}, m_units{};
+        ENodeKind m_kind{ENodeKind::scalar};
+        EPresence m_presence{EPresence::defaulted};
+        std::optional<ReferenceTarget> m_reference_target{};
+        std::optional<CollectionDomain> m_collection_domain{};
     };
     namespace details {
         template<typename T>
@@ -329,6 +449,81 @@ export namespace pP::config {
         struct IsOptional<std::optional<T>> : std::true_type {};
         template<typename T>
         inline constexpr bool is_optional_v = IsOptional<std::remove_cvref_t<T>>::value;
+
+        template<typename T>
+        struct UnwrapOptional {
+            using Type = T;
+        };
+        template<typename T>
+        struct UnwrapOptional<std::optional<T>> {
+            using Type = T;
+        };
+        template<typename T>
+        using Unwrapped = typename UnwrapOptional<std::remove_cvref_t<T>>::Type;
+
+        template<typename T>
+        struct CollectionTraits {
+            static constexpr bool value = false;
+        };
+        template<typename T>
+        struct CollectionTraits<KeyedCollection<T>> {
+            static constexpr bool value = true;
+            using Element = T;
+        };
+
+        template<typename C>
+        inline constexpr bool is_variant_domain_v = false;
+        template<typename... A>
+        inline constexpr bool is_variant_domain_v<VariantDomain<A...>> = true;
+
+        template<typename T>
+        concept TDescribed = requires { T::describe(); };
+
+        template<typename T, typename C>
+        struct VariantCompatible : std::false_type {};
+        template<typename... T, typename... A>
+        struct VariantCompatible<std::variant<T...>, VariantDomain<A...>> {
+            template<typename U>
+            static constexpr std::size_t payload_count = (std::size_t{std::is_same_v<U, T>} + ... + 0u);
+            template<typename U>
+            static constexpr std::size_t descriptor_count = (std::size_t{std::is_same_v<U, A>} + ... + 0u);
+            static constexpr bool value = sizeof...(T) == sizeof...(A) and
+                                          sizeof...(A) > 0u and
+                                          ((payload_count<A> == 1u) and ...) and
+                                          ((descriptor_count<T> == 1u) and ...) and
+                                          (TDescribed<A> and ...);
+        };
+        template<typename T, typename C>
+        inline constexpr bool variant_compatible_v = VariantCompatible<Unwrapped<T>, C>::value;
+
+        template<typename C>
+        inline constexpr ENodeKind node_kind_v = std::is_same_v<C, GroupDomain>        ? ENodeKind::group
+                                                 : std::is_same_v<C, CollectionDomain> ? ENodeKind::collection
+                                                 : is_variant_domain_v<C>              ? ENodeKind::variant
+                                                                                       : ENodeKind::scalar;
+
+        [[nodiscard]] std::string recursivePath(std::string_view prefix, std::string_view name);
+    }
+
+    /// The discriminator is schema metadata, never a mutable payload field.
+    template<typename Owner, typename T, typename... A, typename V>
+    [[nodiscard]] std::string_view variantTag(const Member<Owner, T, VariantDomain<A...>> &member, const V &value) {
+        if constexpr (details::is_optional_v<V>) {
+            return value ? variantTag(member, *value) : std::string_view{};
+        } else {
+            std::string_view tag;
+            if constexpr (details::variant_compatible_v<V, VariantDomain<A...>>) {
+                std::apply(
+                    [&](const auto &...alt) {
+                        ((std::holds_alternative<typename std::remove_cvref_t<decltype(alt)>::Type>(value)
+                                 ? void(tag = alt.m_tag)
+                                 : void()),
+                            ...);
+                    },
+                    member.m_constraint.m_alternatives);
+            }
+            return tag;
+        }
     }
     template<typename Owner, typename T, typename Constraint>
     [[nodiscard]] PropertyDescriptor describeProperty(const Member<Owner, T, Constraint> &member) {
@@ -339,8 +534,16 @@ export namespace pP::config {
         result.m_description = metadata.m_description;
         result.m_units = metadata.m_units;
         result.m_read_only = metadata.m_read_only;
+        result.m_kind = details::node_kind_v<Constraint>;
+        result.m_presence = member.m_presence;
+        if constexpr (std::is_same_v<Constraint, CollectionDomain>) {
+            result.m_collection_domain = domain;
+        }
+        if constexpr (requires { domain.m_target; }) {
+            result.m_reference_target = domain.m_target;
+        }
 
-        if constexpr (requires {
+        if constexpr (not std::is_same_v<Constraint, CollectionDomain> and requires {
                           domain.m_min;
                           domain.m_max;
                       }) {
@@ -365,20 +568,144 @@ export namespace pP::config {
             }
         }
 
+        if constexpr (details::is_variant_domain_v<Constraint>) {
+            std::apply(
+                [&](const auto &...alt) { (result.m_choices.push_back(alt.m_tag), ...); }, domain.m_alternatives);
+        }
+
         result.m_optional = details::is_optional_v<T>;
         return result;
     }
 
     template<typename Settings, typename Visitor>
+    void describeRecursive(Visitor &&visitor, std::string_view prefix = {});
+
+    template<typename Settings, typename Visitor>
+    void visitRecursive(Settings &settings, Visitor &&visitor, std::string_view prefix = {});
+}
+
+export namespace pP::config {
+    template<typename Settings, typename Visitor>
     constexpr void visit(Settings &settings, Visitor &&visitor) {
-        auto members = std::remove_cvref_t<Settings>::describe();
-        std::apply([&](const auto &...member) { (visitor(member, settings.*(member.m_member)), ...); }, members);
+        const auto members = settings.describe();
+        std::apply(
+            [&](const auto... member) -> void { (void) (visitor(member, settings.*member.m_member), ...); }, members);
     }
 
     template<typename Settings, typename Visitor>
     constexpr void visit(const Settings &settings, Visitor &&visitor) {
-        const auto members = std::remove_cvref_t<Settings>::describe();
-        std::apply([&](const auto &...member) { (visitor(member, settings.*(member.m_member)), ...); }, members);
+        const auto members = settings.describe();
+        std::apply(
+            [&](const auto... member) -> void { (void) (visitor(member, settings.*member.m_member), ...); }, members);
+    }
+
+    // Slice 1a: canonical definition — preorder schema/value traversal.
+    // Callbacks receive (logical path, typed Member, type_identity<T>/T&).
+    // Member metadata remains local; the owned path carries the full prefix.
+    template<typename Settings, typename Visitor>
+    void describeRecursive(Visitor &&visitor, const std::string_view prefix) {
+        const auto members = Settings::describe();
+        const auto describe = [&](const auto &member) {
+            using T = std::remove_cvref_t<decltype(std::declval<Settings>().*member.m_member)>;
+            using C = std::remove_cvref_t<decltype(member.m_constraint)>;
+            const auto path = details::recursivePath(prefix, member.m_metadata.m_name);
+            visitor(path, member, std::type_identity<T>{});
+
+            if constexpr (details::node_kind_v<C> == ENodeKind::group and details::TDescribed<details::Unwrapped<T>>) {
+                describeRecursive<details::Unwrapped<T>>(visitor, path);
+            } else if constexpr (details::node_kind_v<C> == ENodeKind::variant) {
+                std::apply(
+                    [&](const auto &...alt) {
+                        const auto describe_alternative = [&](const auto &alternative) {
+                            using A = typename std::remove_cvref_t<decltype(alternative)>::Type;
+                            if constexpr (details::TDescribed<A>) {
+                                auto metadata = member.m_metadata;
+                                metadata.m_name = alternative.m_tag;
+                                const auto payload = group(&KeyedEntry<A>::m_value, metadata, EPresence::required);
+                                const auto payload_path = details::recursivePath(path, alternative.m_tag);
+                                visitor(payload_path, payload, std::type_identity<A>{});
+                                describeRecursive<A>(visitor, payload_path);
+                            }
+                        };
+                        (describe_alternative(alt), ...);
+                    },
+                    member.m_constraint.m_alternatives);
+            } else if constexpr (details::node_kind_v<C> == ENodeKind::collection and
+                                 details::CollectionTraits<T>::value) {
+                using E = typename details::CollectionTraits<T>::Element;
+                if constexpr (details::TDescribed<E>) {
+                    const auto entry_path = details::recursivePath(path, "{key}");
+                    auto metadata = member.m_metadata;
+                    metadata.m_name = "{key}";
+                    const auto entry = group(&KeyedEntry<E>::m_value, metadata, EPresence::required);
+                    visitor(entry_path, entry, std::type_identity<E>{});
+
+                    describeRecursive<E>(visitor, entry_path);
+                }
+            }
+        };
+        std::apply([&](const auto &...member) -> void { (describe(member), ...); }, members);
+    }
+
+    template<typename Settings, typename Visitor>
+    void visitRecursive(Settings &settings, Visitor &&visitor, const std::string_view prefix) {
+        visit(settings, [&]<typename T0>(const auto &member, T0 &value) {
+            using C = std::remove_cvref_t<decltype(member.m_constraint)>;
+            using T = std::remove_cvref_t<T0>;
+            const auto path = details::recursivePath(prefix, member.m_metadata.m_name);
+            visitor(path, member, value);
+
+            if constexpr (details::node_kind_v<C> == ENodeKind::group and details::TDescribed<details::Unwrapped<T>>) {
+                if constexpr (details::is_optional_v<T>) {
+                    if (value) {
+                        visitRecursive(*value, visitor, path);
+                    }
+                } else {
+                    visitRecursive(value, visitor, path);
+                }
+            } else if constexpr (details::node_kind_v<C> == ENodeKind::variant and
+                                 details::variant_compatible_v<T, C>) {
+                const auto visit_payload = [&](auto &variant) {
+                    std::apply(
+                        [&](const auto &...alt) {
+                            const auto visit_alternative = [&](const auto &alternative) {
+                                using A = typename std::remove_cvref_t<decltype(alternative)>::Type;
+                                if (auto *payload = std::get_if<A>(std::addressof(variant))) {
+                                    auto metadata = member.m_metadata;
+                                    metadata.m_name = alternative.m_tag;
+                                    const auto descriptor = group(
+                                        &KeyedEntry<A>::m_value, metadata, EPresence::required);
+                                    const auto payload_path = details::recursivePath(path, alternative.m_tag);
+                                    visitor(payload_path, descriptor, *payload);
+                                    visitRecursive(*payload, visitor, payload_path);
+                                }
+                            };
+                            (visit_alternative(alt), ...);
+                        },
+                        member.m_constraint.m_alternatives);
+                };
+                if constexpr (details::is_optional_v<T>) {
+                    if (value) {
+                        visit_payload(*value);
+                    }
+                } else {
+                    visit_payload(value);
+                }
+            } else if constexpr (details::node_kind_v<C> == ENodeKind::collection and
+                                 details::CollectionTraits<T>::value) {
+                using E = typename details::CollectionTraits<T>::Element;
+                if constexpr (details::TDescribed<E>) {
+                    for (auto &entry: value.m_entries) {
+                        const auto entry_path = details::recursivePath(path, entry.m_key);
+                        auto metadata = member.m_metadata;
+                        metadata.m_name = entry.m_key;
+                        const auto descriptor = group(&KeyedEntry<E>::m_value, metadata, EPresence::required);
+                        visitor(entry_path, descriptor, entry.m_value);
+                        visitRecursive(entry.m_value, visitor, entry_path);
+                    }
+                }
+            }
+        });
     }
 
     // ------------------------------------------------------------------
@@ -471,6 +798,17 @@ export namespace pP::config {
         Array<Assignment> m_assignments{};
     };
 
+    // Slice 1a: canonical definition — presence is independent of leaf values.
+    struct GroupPresence {
+        std::string m_path{};
+        std::string m_location{};
+    };
+
+    struct TreeLayer {
+        Layer m_scalars{};
+        Array<GroupPresence> m_groups{};
+    };
+
     // ------------------------------------------------------------------
     // diagnostics: caller-owned collection. Every entry carries the
     // canonical name, alias used, source location, expected domain,
@@ -483,6 +821,7 @@ export namespace pP::config {
         std::string m_alias{};
         std::string m_message{};
         std::error_code m_code{};
+        Array<std::string> m_related_properties{};
     };
 
     class Diagnostics {
@@ -497,7 +836,7 @@ export namespace pP::config {
 
         void add(
             std::string location, std::string property, std::string message, std::error_code code,
-            std::string alias = {});
+            std::string alias = {}, Array<std::string> related_properties = {});
         /// Preserve failure multiplicity when forwarding an already capped collector.
         void addOmitted(std::size_t count) noexcept;
 
@@ -557,6 +896,30 @@ export namespace pP::config {
         }
     };
 
+} // namespace pP::config
+
+namespace pP::config::details {
+    // Borrows source paths for one resolution; source arrays outlive the index.
+    class SourcePathIndex {
+    public:
+        struct Entry {
+            std::string_view m_path;
+            std::size_t m_position;
+        };
+
+        explicit SourcePathIndex(std::span<const Assignment> assignments);
+        explicit SourcePathIndex(std::span<const GroupPresence> groups);
+        [[nodiscard]] std::span<const Entry> exact(std::string_view path) const noexcept;
+        [[nodiscard]] bool supplied(std::string_view path, bool descendants) const;
+        [[nodiscard]] Array<std::size_t> subtree(std::string_view path) const;
+
+    private:
+        Array<Entry> m_paths;
+        void sort_();
+    };
+}
+
+export namespace pP::config {
     namespace details {
         // Machinery used by resolve/applyRuntime; not application API.
         // ASCII-only helpers (config names are restricted alphabet).
@@ -565,6 +928,7 @@ export namespace pP::config {
 
         struct ResolveState {
             std::span<const Layer> m_layers{};
+            Array<SourcePathIndex> m_assignment_indices;
             Diagnostics *m_diagnostics{nullptr};
             Array<PropertyOrigin> *m_origins{nullptr};
             std::error_code m_first_error{};
@@ -581,6 +945,7 @@ export namespace pP::config {
                 std::string alias = {});
             void upsertOrigin(std::string name, ESource source, std::string location);
             void rejectUnknown(std::span<const std::string_view> names);
+            void indexSources();
         };
 
         template<typename S>
@@ -787,6 +1152,17 @@ export namespace pP::config {
             return parseEnumValue(constraint, src.m_text, out);
         }
 
+        template<typename Ref>
+        [[nodiscard]] std::error_code convertTo(
+            const SourceValue &src, Ref &out, const ETextMode, const ReferenceDomain<Ref> &, std::string &expected) {
+            expected = "reference key";
+            if (src.m_kind != ESourceKind::text) {
+                PPR_RETURN_ERROR_ON_FAIL(Config, EConfigErrc::type_mismatch);
+            }
+            out.m_key = src.m_text;
+            return {};
+        }
+
         template<typename T, typename C>
         [[nodiscard]] std::error_code convertTo(
             const SourceValue &src, std::optional<T> &out, const ETextMode mode, const C &constraint,
@@ -812,16 +1188,15 @@ export namespace pP::config {
             const Assignment *winner = nullptr;
             ESource winner_source = ESource::none;
 
-            for (const auto &layer: state.m_layers) {
+            for (std::size_t layer_index = 0u; layer_index < state.m_layers.size(); ++layer_index) {
+                const auto &layer = state.m_layers[layer_index];
+                const auto assignments = state.m_assignment_indices[layer_index].exact(name);
                 if (layer.m_source != ESource::none and
                     (member.m_metadata.m_sources & layer.m_source) == ESource::none) {
                     // Disallowed source: still validate values below so hidden
                     // mistakes surface even though nothing is applied.
-                    for (const auto &assignment: layer.m_assignments) {
-                        if (assignment.m_name != name) {
-                            continue;
-                        }
-
+                    for (const auto &match: assignments) {
+                        const auto &assignment = layer.m_assignments[match.m_position];
                         T scratch = field;
                         std::string expected;
                         std::error_code err = convertTo(
@@ -843,10 +1218,8 @@ export namespace pP::config {
                 }
 
                 if (state.m_enforce_runtime_mutability and member.m_metadata.m_mutability != EMutability::runtime) {
-                    for (const auto &assignment: layer.m_assignments) {
-                        if (assignment.m_name != name) {
-                            continue;
-                        }
+                    for (const auto &match: assignments) {
+                        const auto &assignment = layer.m_assignments[match.m_position];
                         state.report(
                             assignment.m_location, std::string{name},
                             "startup-only property cannot be changed at runtime",
@@ -856,11 +1229,8 @@ export namespace pP::config {
                     continue;
                 }
 
-                for (const auto &assignment: layer.m_assignments) {
-                    if (assignment.m_name != name) {
-                        continue;
-                    }
-
+                for (const auto &match: assignments) {
+                    const auto &assignment = layer.m_assignments[match.m_position];
                     // Validate every supplied value, even shadowed ones.
                     T scratch = field;
                     std::string expected;
@@ -938,6 +1308,607 @@ export namespace pP::config {
                 return "<complex>";
             }
         }
+
+        template<typename C, typename T>
+            struct DomainCompatible : std::bool_constant < requires(const C &c, const T &v) {
+            {c.validate(v)}->std::convertible_to<std::error_code>;
+            c.describe();
+        }>{};
+        template<typename T>
+        struct DomainCompatible<AnyDomain, T> : std::bool_constant<not std::is_enum_v<T>> {};
+        template<typename D, typename T>
+        struct DomainCompatible<Range<D>, T> : std::bool_constant<std::is_same_v<D, T>> {};
+        template<typename T>
+        struct DomainCompatible<BooleanDomain, T> : std::bool_constant<std::is_same_v<T, bool>> {};
+        template<typename T>
+        struct DomainCompatible<FloatDomain, T> : std::bool_constant<std::is_floating_point_v<T>> {};
+        template<typename T>
+        struct DomainCompatible<StringDomain, T> : std::bool_constant<std::is_same_v<T, std::string>> {};
+        template<typename T>
+        struct DomainCompatible<PathDomain, T> : std::bool_constant<std::is_same_v<T, std::string>> {};
+        template<typename E, std::size_t N, typename T>
+        struct DomainCompatible<EnumDomain<E, N>, T> : std::bool_constant<std::is_same_v<E, T>> {};
+        template<typename Ref, typename T>
+        struct DomainCompatible<ReferenceDomain<Ref>, T> : std::bool_constant<std::is_same_v<Ref, T>> {};
+
+        template<typename T, typename C>
+        inline constexpr bool scalar_compatible_v = DomainCompatible<C, Unwrapped<T>>::value and
+                                                    (std::is_arithmetic_v<Unwrapped<T>> or
+                                                        std::is_enum_v<Unwrapped<T>> or
+                                                        std::is_same_v<Unwrapped<T>, std::string> or
+                                                        (std::is_same_v<C, ReferenceDomain<Unwrapped<T>>> and
+                                                            requires (Unwrapped<T> v) {
+                                                                { v.m_key } -> std::same_as<std::string &>;
+                                                            }));
+
+        template<typename Settings>
+        [[nodiscard]] constexpr bool hasRecursiveMembers() {
+            using Members = decltype(Settings::describe());
+            return []<std::size_t... I>(std::index_sequence<I...>) {
+                return (
+                    (node_kind_v<std::remove_cvref_t<decltype(std::declval<std::tuple_element_t<I, Members>>()
+                                .m_constraint)>> != ENodeKind::scalar) or
+                    ...);
+            }(std::make_index_sequence<std::tuple_size_v<Members>>{});
+        }
+
+        inline void schemaError(Diagnostics &diagnostics, const std::string &path, std::string message) {
+            diagnostics.add("schema", path, std::move(message), make_error_code(EConfigErrc::schema_invalid));
+        }
+
+        template<typename C>
+        void validateDomain(const C &domain, const std::string &path, Diagnostics &diagnostics) {
+            if constexpr (requires {
+                              domain.m_min;
+                              domain.m_max;
+                          }) {
+                bool invalid = domain.m_min > domain.m_max;
+                if constexpr (std::is_floating_point_v<decltype(domain.m_min)>) {
+                    invalid = invalid or not std::isfinite(domain.m_min) or not std::isfinite(domain.m_max);
+                }
+                if constexpr (requires { domain.m_exclusive_min; }) {
+                    invalid = invalid or (domain.m_exclusive_min and domain.m_min == domain.m_max);
+                }
+                if (invalid) {
+                    schemaError(diagnostics, path, "inconsistent domain bounds");
+                }
+            }
+            if constexpr (requires { domain.m_entries; }) {
+                if (domain.m_entries.empty()) {
+                    schemaError(diagnostics, path, "enum domain has no entries");
+                }
+                for (std::size_t i = 0; i < domain.m_entries.size(); ++i) {
+                    if (domain.m_entries[i].m_name.empty()) {
+                        schemaError(diagnostics, path, "enum name is empty");
+                    }
+                    for (std::size_t j = 0; j < i; ++j) {
+                        if (domain.m_entries[i].m_name == domain.m_entries[j].m_name or
+                            domain.m_entries[i].m_value == domain.m_entries[j].m_value) {
+                            schemaError(diagnostics, path, "duplicate enum name or value");
+                        }
+                    }
+                }
+            }
+            if constexpr (requires { domain.m_target; }) {
+                if (not isValidCanonicalName(domain.m_target.m_collection) or
+                    (domain.m_target.m_scope != EReferenceScope::root and
+                        domain.m_target.m_scope != EReferenceScope::owner)) {
+                    schemaError(diagnostics, path, "invalid reference target");
+                }
+            }
+        }
+
+        // Stored variant initializers are values, not authored layers: required
+        // payload leaves are checked for validity rather than authoring presence.
+        template<typename Settings>
+        void validateStoredTreeValue(const Settings &value, const std::string_view prefix, Diagnostics &diagnostics) {
+            const auto initial_errors = diagnostics.size();
+            const auto cross_validate = [&](const auto &object, const std::string_view path) {
+                using S = std::remove_cvref_t<decltype(object)>;
+                if constexpr (THasCrossValidate<S>) {
+                    if (diagnostics.hasErrorsSince(initial_errors)) {
+                        return;
+                    }
+                    const auto before = diagnostics.size();
+                    const auto error = S::validate(object, diagnostics);
+                    if (error and not diagnostics.hasErrorsSince(before)) {
+                        diagnostics.add(
+                            "default", std::string{path}, "initializer cross-field validation failed", error);
+                    }
+                }
+            };
+            visitRecursive(
+                value,
+                [&](const auto &path, const auto &member, const auto &field_value) {
+                    using T = std::remove_cvref_t<decltype(field_value)>;
+                    using C = std::remove_cvref_t<decltype(member.m_constraint)>;
+                    if constexpr (node_kind_v<C> == ENodeKind::scalar and scalar_compatible_v<T, C>) {
+                        if (const auto error = checkConstraint(member.m_constraint, field_value)) {
+                            diagnostics.add("default", path, "initializer violates its domain", error);
+                        }
+                    } else if constexpr (node_kind_v<C> == ENodeKind::variant) {
+                        if constexpr (is_optional_v<T>) {
+                            if (field_value and variantTag(member, field_value).empty()) {
+                                diagnostics.add(
+                                    "default", path, "invalid variant initializer",
+                                    make_error_code(EConfigErrc::unknown_enum_value));
+                            }
+                        } else if (variantTag(member, field_value).empty()) {
+                            diagnostics.add(
+                                "default", path, "invalid variant initializer",
+                                make_error_code(EConfigErrc::unknown_enum_value));
+                        }
+                    } else if constexpr (node_kind_v<C> == ENodeKind::collection and CollectionTraits<T>::value) {
+                        if (field_value.m_entries.size() < member.m_constraint.m_min or
+                            field_value.m_entries.size() > member.m_constraint.m_max) {
+                            diagnostics.add(
+                                "default", path, "initializer violates cardinality bounds",
+                                make_error_code(EConfigErrc::out_of_range));
+                        }
+                        Array<std::string_view> keys;
+                        for (const auto &entry: field_value.m_entries) {
+                            if (not isValidKey(entry.m_key) or std::ranges::find(keys, entry.m_key) != keys.end()) {
+                                diagnostics.add(
+                                    "default", recursivePath(path, entry.m_key), "invalid or duplicate key",
+                                    make_error_code(EConfigErrc::duplicate_key));
+                            }
+                            keys.push_back(entry.m_key);
+                        }
+                    }
+                },
+                prefix);
+
+            // Whole-object validators run only after every active descendant's
+            // domain has been checked; preorder callbacks alone are too early.
+            if (not diagnostics.hasErrorsSince(initial_errors)) {
+                visitRecursive(
+                    value,
+                    [&](const auto &path, const auto &member, const auto &field_value) {
+                        using T = std::remove_cvref_t<decltype(field_value)>;
+                        using C = std::remove_cvref_t<decltype(member.m_constraint)>;
+                        if constexpr (node_kind_v<C> == ENodeKind::group and TDescribed<Unwrapped<T>>) {
+                            if constexpr (is_optional_v<T>) {
+                                if (field_value) {
+                                    cross_validate(*field_value, path);
+                                }
+                            } else {
+                                cross_validate(field_value, path);
+                            }
+                        }
+                    },
+                    prefix);
+            }
+            cross_validate(value, prefix);
+        }
+
+        template<typename Settings>
+        void validateRecursiveSchema(
+            const Settings &probe, const std::string_view prefix, Diagnostics &diagnostics,
+            const bool validate_initializers, const bool default_group = false) {
+            Array<std::string_view> names;
+            visit(probe, [&](const auto &member, const auto &value) {
+                using T = std::remove_cvref_t<decltype(value)>;
+                using C = std::remove_cvref_t<decltype(member.m_constraint)>;
+                const auto name = member.m_metadata.m_name;
+                const auto path = recursivePath(prefix, name);
+                if (not isValidCanonicalName(name) or name.find('.') != std::string_view::npos) {
+                    schemaError(diagnostics, path, "recursive names must be single non-empty canonical segments");
+                }
+                if (std::ranges::find(names, name) != names.end()) {
+                    schemaError(diagnostics, path, "duplicate sibling name");
+                }
+                names.push_back(name);
+                const bool check_default = validate_initializers and member.m_presence != EPresence::required;
+                if (validate_initializers and default_group and member.m_presence == EPresence::required) {
+                    schemaError(diagnostics, path, "a group initializer cannot supply a required descendant");
+                }
+
+                if constexpr (node_kind_v<C> == ENodeKind::group) {
+                    if constexpr (TDescribed<Unwrapped<T>>) {
+                        if constexpr (is_optional_v<T>) {
+                            if (member.m_presence != EPresence::optional) {
+                                schemaError(diagnostics, path, "optional groups must declare optional presence");
+                            }
+                            if (value) {
+                                validateRecursiveSchema(*value, path, diagnostics, check_default, check_default);
+                            } else {
+                                validateRecursiveSchema(Unwrapped<T>{}, path, diagnostics, false);
+                            }
+                        } else {
+                            if (member.m_presence == EPresence::optional) {
+                                schemaError(diagnostics, path, "optional presence requires optional<T>");
+                            }
+                            validateRecursiveSchema(value, path, diagnostics, check_default, check_default);
+                        }
+                    } else {
+                        schemaError(diagnostics, path, "group requires a described object");
+                    }
+                } else if constexpr (node_kind_v<C> == ENodeKind::variant) {
+                    if (member.m_presence == EPresence::optional and not is_optional_v<T>) {
+                        schemaError(diagnostics, path, "optional variant presence requires optional<variant>");
+                    }
+                    Array<std::string_view> tags;
+                    std::apply(
+                        [&](const auto &...alt) {
+                            const auto check_alternative = [&](const auto &alternative) {
+                                using A = typename std::remove_cvref_t<decltype(alternative)>::Type;
+                                const auto payload_path = recursivePath(path, alternative.m_tag);
+                                if (not isValidCanonicalName(alternative.m_tag) or
+                                    alternative.m_tag.find('.') != std::string_view::npos or
+                                    alternative.m_tag == "tag") {
+                                    schemaError(diagnostics, payload_path, "invalid or reserved variant tag");
+                                }
+                                if (std::ranges::find(tags, alternative.m_tag) != tags.end()) {
+                                    schemaError(diagnostics, payload_path, "duplicate variant tag");
+                                }
+                                tags.push_back(alternative.m_tag);
+                                if constexpr (TDescribed<A>) {
+                                    validateRecursiveSchema(A{}, payload_path, diagnostics, false);
+                                } else {
+                                    schemaError(
+                                        diagnostics, payload_path, "variant alternatives must be described objects");
+                                }
+                            };
+                            (check_alternative(alt), ...);
+                        },
+                        member.m_constraint.m_alternatives);
+                    if constexpr (not variant_compatible_v<T, C>) {
+                        schemaError(diagnostics, path, "variant domain must cover each payload type exactly once");
+                    } else if (check_default and member.m_presence == EPresence::defaulted) {
+                        const auto check_value = [&](const auto &variant) {
+                            const auto before = diagnostics.size();
+                            if (variant.valueless_by_exception()) {
+                                schemaError(diagnostics, path, "valueless variant initializer");
+                                return;
+                            }
+                            std::visit(
+                                [&](const auto &payload) {
+                                    validateStoredTreeValue(
+                                        payload, recursivePath(path, variantTag(member, variant)), diagnostics);
+                                },
+                                variant);
+                            if (diagnostics.hasErrorsSince(before)) {
+                                schemaError(diagnostics, path, "invalid variant initializer");
+                            }
+                        };
+                        if constexpr (is_optional_v<T>) {
+                            if (value) {
+                                check_value(*value);
+                            }
+                        } else {
+                            check_value(value);
+                        }
+                    }
+                } else if constexpr (node_kind_v<C> == ENodeKind::collection) {
+                    validateDomain(member.m_constraint, path, diagnostics);
+                    if (member.m_presence == EPresence::optional) {
+                        schemaError(diagnostics, path, "collections do not support optional presence");
+                    }
+                    if constexpr (CollectionTraits<T>::value) {
+                        using E = typename CollectionTraits<T>::Element;
+                        if constexpr (TDescribed<E>) {
+                            // Empty collections still expose and validate the complete element schema.
+                            validateRecursiveSchema(E{}, recursivePath(path, "{key}"), diagnostics, false);
+                            if (check_default) {
+                                if (value.m_entries.size() < member.m_constraint.m_min or
+                                    value.m_entries.size() > member.m_constraint.m_max) {
+                                    schemaError(diagnostics, path, "default collection violates cardinality bounds");
+                                }
+                            }
+
+                            Array<std::string_view> keys;
+                            for (const auto &entry: value.m_entries) {
+                                if (check_default) {
+                                    if (not isValidKey(entry.m_key) or
+                                        std::ranges::find(keys, entry.m_key) != keys.end()) {
+                                        schemaError(
+                                            diagnostics, recursivePath(path, entry.m_key), "invalid or duplicate key");
+                                    }
+                                    keys.push_back(entry.m_key);
+                                }
+                                validateRecursiveSchema(
+                                    entry.m_value, recursivePath(path, entry.m_key), diagnostics, check_default,
+                                    check_default);
+                            }
+                        } else {
+                            schemaError(diagnostics, path, "collection elements must be described objects");
+                        }
+                    } else {
+                        schemaError(diagnostics, path, "collection descriptor requires KeyedCollection<T>");
+                    }
+                } else {
+                    validateDomain(member.m_constraint, path, diagnostics);
+                    if constexpr (scalar_compatible_v<T, C>) {
+                        const auto &metadata = member.m_metadata;
+                        const bool numeric = std::is_arithmetic_v<Unwrapped<T>> and
+                                             not std::is_same_v<Unwrapped<T>, bool>;
+                        if ((metadata.m_slider_min and (not numeric or not std::isfinite(*metadata.m_slider_min))) or
+                            (metadata.m_slider_max and (not numeric or not std::isfinite(*metadata.m_slider_max))) or
+                            (metadata.m_slider_min and
+                                metadata.m_slider_max and
+                                *metadata.m_slider_min > *metadata.m_slider_max)) {
+                            schemaError(diagnostics, path, "inconsistent numeric editing interval");
+                        }
+                        if (member.m_presence == EPresence::optional and not is_optional_v<T>) {
+                            schemaError(diagnostics, path, "optional scalar presence requires optional<T>");
+                        }
+                        // Leaf defaults remain part of the schema even when the enclosing initializer is absent.
+                        // Only required leaf placeholders are exempt from domain validation.
+                        if (member.m_presence != EPresence::required) {
+                            if (const auto error = checkConstraint(member.m_constraint, value)) {
+                                schemaError(
+                                    diagnostics, path, configFormat("invalid default value ({})", error.message()));
+                            }
+                        }
+                    } else {
+                        schemaError(diagnostics, path, "incompatible scalar descriptor and member type");
+                    }
+                }
+            });
+        }
+
+        struct TreeResolveState {
+            std::span<const TreeLayer> m_layers;
+            ResolveState m_scalars;
+            Array<SourcePathIndex> m_group_indices;
+            Array<std::string> m_scalar_paths;
+            Array<std::string> m_group_paths;
+            // Each boundary delegates consumed-path checks to an isolated
+            // one-layer subtree. Paths from different tags/layers never mix.
+            Array<std::string> m_atomic_paths;
+            bool m_atomic_replacement{};
+
+            [[nodiscard]] bool supplied(std::string_view path, bool descendants) const;
+            void report(std::string location, std::string path, std::string message, std::error_code error);
+            void presence(const std::string &path, const Metadata &metadata, bool required);
+            void rejectUnknown();
+            [[nodiscard]] Array<std::string> entryKeys(const std::string &path);
+            void indexSources();
+        };
+
+        template<typename Settings>
+        void resolveTreeObject(Settings &object, std::string_view prefix, TreeResolveState &state);
+
+        template<typename Owner, typename T, typename C>
+        void resolveTreeVariant(
+            T &value, const Member<Owner, T, C> &member, const std::string &path, TreeResolveState &state) {
+            state.presence(path, member.m_metadata, member.m_presence == EPresence::required);
+            state.m_atomic_paths.push_back(path);
+            const auto tag_path = recursivePath(path, "tag");
+            const auto within = [&](const std::string_view name) {
+                return name == path or
+                       (name.starts_with(path) and name.size() > path.size() and name[path.size()] == '.');
+            };
+            const bool supplied = state.supplied(path, true);
+            if constexpr (is_optional_v<T>) {
+                if (member.m_presence == EPresence::optional) {
+                    value.reset();
+                }
+            }
+            if (not supplied) {
+                const auto record_default = [&](const auto &variant) {
+                    state.m_scalars.upsertOrigin(tag_path, ESource::none, "default");
+                    if (variant.valueless_by_exception()) {
+                        return;
+                    }
+                    const auto payload_path = recursivePath(path, variantTag(member, variant));
+                    state.m_scalars.upsertOrigin(payload_path, ESource::none, "default");
+                    std::visit(
+                        [&](const auto &payload) {
+                            visitRecursive(
+                                payload,
+                                [&](const auto &child_path, const auto &child_member, const auto &child_value) {
+                                    state.m_scalars.upsertOrigin(child_path, ESource::none, "default");
+                                    using ChildC = std::remove_cvref_t<decltype(child_member.m_constraint)>;
+                                    if constexpr (node_kind_v<ChildC> == ENodeKind::variant) {
+                                        if (not variantTag(child_member, child_value).empty()) {
+                                            state.m_scalars.upsertOrigin(
+                                                recursivePath(child_path, "tag"), ESource::none, "default");
+                                        }
+                                    }
+                                },
+                                payload_path);
+                        },
+                        variant);
+                };
+                if (member.m_presence == EPresence::defaulted) {
+                    if constexpr (is_optional_v<T>) {
+                        if (value) {
+                            record_default(*value);
+                        }
+                    } else {
+                        record_default(value);
+                    }
+                }
+                return;
+            }
+
+            for (const auto &layer: state.m_layers) {
+                TreeLayer subtree;
+                subtree.m_scalars.m_source = layer.m_scalars.m_source;
+                subtree.m_scalars.m_origin = layer.m_scalars.m_origin;
+                for (const auto &assignment: layer.m_scalars.m_assignments) {
+                    if (within(assignment.m_name)) {
+                        subtree.m_scalars.m_assignments.push_back(assignment);
+                    }
+                }
+                for (const auto &group: layer.m_groups) {
+                    if (within(group.m_path)) {
+                        subtree.m_groups.push_back(group);
+                    }
+                }
+                if (subtree.m_scalars.m_assignments.empty() and subtree.m_groups.empty()) {
+                    continue;
+                }
+
+                Array<PropertyOrigin> origins;
+                TreeResolveState replacement{};
+                replacement.m_layers = std::span{std::addressof(subtree), 1u};
+                replacement.m_scalars.m_layers = std::span{std::addressof(subtree.m_scalars), 1u};
+                replacement.indexSources();
+                replacement.m_scalars.m_diagnostics = state.m_scalars.m_diagnostics;
+                replacement.m_scalars.m_origins = std::addressof(origins);
+                replacement.m_atomic_replacement = true;
+                replacement.m_group_paths.push_back(path);
+                replacement.m_scalar_paths.push_back(tag_path);
+                const Assignment *tag = nullptr;
+                for (const auto &assignment: subtree.m_scalars.m_assignments) {
+                    if (assignment.m_name == tag_path) {
+                        tag = std::addressof(assignment);
+                    }
+                }
+                const auto location = tag != nullptr ? tag->m_location : subtree.m_scalars.m_origin;
+                replacement.m_scalars.upsertOrigin(path, subtree.m_scalars.m_source, location);
+                bool selected = false;
+                if (tag == nullptr) {
+                    replacement.report(
+                        location, tag_path, "variant tag was not supplied",
+                        make_error_code(EConfigErrc::missing_value));
+                } else if (tag->m_value.m_kind != ESourceKind::text) {
+                    replacement.report(
+                        location, tag_path, "variant tag must be text", make_error_code(EConfigErrc::type_mismatch));
+                } else {
+                    replacement.m_scalars.upsertOrigin(tag_path, subtree.m_scalars.m_source, location);
+                    std::apply(
+                        [&](const auto &...alt) {
+                            const auto resolve_alternative = [&](const auto &alternative) {
+                                using A = typename std::remove_cvref_t<decltype(alternative)>::Type;
+                                if (tag->m_value.m_text != alternative.m_tag) {
+                                    return;
+                                }
+                                selected = true;
+                                const auto payload_path = recursivePath(path, alternative.m_tag);
+                                replacement.presence(payload_path, member.m_metadata, true);
+                                A payload{};
+                                resolveTreeObject(payload, payload_path, replacement);
+                                if constexpr (is_optional_v<T>) {
+                                    value.emplace(std::in_place_type<A>, std::move(payload));
+                                } else {
+                                    value.template emplace<A>(std::move(payload));
+                                }
+                            };
+                            (resolve_alternative(alt), ...);
+                        },
+                        member.m_constraint.m_alternatives);
+                    if (not selected) {
+                        replacement.report(
+                            location, tag_path, "unknown variant tag",
+                            make_error_code(EConfigErrc::unknown_enum_value));
+                    }
+                }
+
+                // Validate even a shadowed replacement, then retain only the
+                // latest complete subtree's origins (including same-tag edits).
+                replacement.rejectUnknown();
+                state.m_scalars.retain(replacement.m_scalars.m_first_error);
+                std::erase_if(*state.m_scalars.m_origins, [&](const auto &origin) { return within(origin.m_name); });
+                for (auto &origin: origins) {
+                    state.m_scalars.m_origins->push_back(std::move(origin));
+                }
+            }
+        }
+
+        template<typename Settings>
+        void resolveTreeObject(Settings &object, const std::string_view prefix, TreeResolveState &state) {
+            visit(object, [&](const auto &member, auto &value) {
+                using T = std::remove_cvref_t<decltype(value)>;
+                using C = std::remove_cvref_t<decltype(member.m_constraint)>;
+                const auto path = recursivePath(prefix, member.m_metadata.m_name);
+                if constexpr (node_kind_v<C> == ENodeKind::scalar) {
+                    state.m_scalar_paths.push_back(path);
+                    state.m_scalars.upsertOrigin(path, ESource::none, "default");
+                    const bool supplied = state.supplied(path, false);
+                    if (member.m_presence == EPresence::required and not supplied) {
+                        state.report(
+                            "resolve", path, "required property was not supplied",
+                            make_error_code(EConfigErrc::missing_value));
+                    }
+                    if constexpr (is_optional_v<T>) {
+                        if (member.m_presence == EPresence::optional and not supplied) {
+                            value.reset();
+                        }
+                    }
+                    if constexpr (scalar_compatible_v<T, C>) {
+                        auto qualified = member;
+                        qualified.m_metadata.m_name = path;
+                        applyMember(value, qualified, state.m_scalars);
+                        if (not supplied and member.m_presence != EPresence::required) {
+                            if (const auto error = checkConstraint(member.m_constraint, value)) {
+                                state.report("default", path, "retained initializer violates its domain", error);
+                            }
+                        }
+                    }
+                } else if constexpr (node_kind_v<C> == ENodeKind::group and TDescribed<Unwrapped<T>>) {
+                    state.presence(path, member.m_metadata, member.m_presence == EPresence::required);
+                    if constexpr (is_optional_v<T>) {
+                        if (state.supplied(path, true)) {
+                            // Authoring an optional group starts a new T{}, not a hidden engaged initializer.
+                            value.emplace();
+                            resolveTreeObject(*value, path, state);
+                        } else {
+                            value.reset();
+                        }
+                    } else {
+                        resolveTreeObject(value, path, state);
+                    }
+                } else if constexpr (node_kind_v<C> == ENodeKind::variant and variant_compatible_v<T, C>) {
+                    resolveTreeVariant(value, member, path, state);
+                } else if constexpr (node_kind_v<C> == ENodeKind::collection and CollectionTraits<T>::value) {
+                    using E = typename CollectionTraits<T>::Element;
+                    if constexpr (TDescribed<E>) {
+                        state.presence(path, member.m_metadata, member.m_presence == EPresence::required);
+                        Array<std::string_view> initial_keys;
+                        for (const auto &entry: value.m_entries) {
+                            if (not isValidKey(entry.m_key)) {
+                                state.report(
+                                    "default", recursivePath(path, entry.m_key), "invalid collection key",
+                                    make_error_code(EConfigErrc::out_of_range));
+                            }
+                            if (std::ranges::find(initial_keys, entry.m_key) != initial_keys.end()) {
+                                state.report(
+                                    "default", recursivePath(path, entry.m_key), "duplicate collection key",
+                                    make_error_code(EConfigErrc::duplicate_key));
+                            }
+                            initial_keys.push_back(entry.m_key);
+                        }
+                        const auto keys = state.entryKeys(path);
+                        for (const auto &key: keys) {
+                            if (std::ranges::find(value.m_entries, key, &KeyedEntry<E>::m_key) ==
+                                value.m_entries.end()) {
+                                value.m_entries.push_back({key, E{}});
+                            }
+                        }
+                        for (auto &entry: value.m_entries) {
+                            const auto entry_path = recursivePath(path, entry.m_key);
+                            state.presence(entry_path, member.m_metadata, false);
+                            resolveTreeObject(entry.m_value, entry_path, state);
+                        }
+                        if (value.m_entries.size() < member.m_constraint.m_min or
+                            value.m_entries.size() > member.m_constraint.m_max) {
+                            state.report(
+                                "resolve", path, "collection violates cardinality bounds",
+                                make_error_code(EConfigErrc::out_of_range));
+                        }
+                    }
+                }
+            });
+
+            // Incomplete records are never passed to whole-record validators.
+            if constexpr (THasCrossValidate<Settings>) {
+                if (not state.m_scalars.m_first_error) {
+                    auto &diagnostics = *state.m_scalars.m_diagnostics;
+                    const auto before = diagnostics.size();
+                    const auto error = Settings::validate(object, diagnostics);
+                    if (error and not diagnostics.hasErrorsSince(before)) {
+                        state.report("resolve", std::string{prefix}, "cross-field validation failed", error);
+                    }
+                    state.m_scalars.retain(error);
+                    if (diagnostics.hasErrorsSince(before)) {
+                        state.m_scalars.retain(make_error_code(EConfigErrc::cross_field_invalid));
+                    }
+                }
+            }
+        }
     } // namespace details
 
     // ------------------------------------------------------------------
@@ -950,6 +1921,7 @@ export namespace pP::config {
     [[nodiscard]] Expected<Resolved<Settings>> resolve(std::span<const Layer> layers, Diagnostics &diagnostics) {
         details::ResolveState state{};
         state.m_layers = layers;
+        state.indexSources();
         state.m_diagnostics = std::addressof(diagnostics);
 
         Resolved<Settings> result{};
@@ -1008,6 +1980,7 @@ export namespace pP::config {
         details::ResolveState state{};
         const Layer *single = std::addressof(layer);
         state.m_layers = std::span{single, 1};
+        state.indexSources();
         state.m_diagnostics = std::addressof(diagnostics);
         state.m_origins = std::addressof(origins);
         state.m_enforce_runtime_mutability = true;
@@ -1041,42 +2014,77 @@ export namespace pP::config {
     // and default values satisfying their own constraints.
     template<typename Settings>
     [[nodiscard]] Expected<void> validateSchema(Diagnostics &diagnostics) {
+        using pP::make_error_code;
         const std::size_t before = diagnostics.size();
         Settings probe{};
 
-        Array<std::string_view> names{};
-        visit(probe, [&](const auto &member, auto &field) {
-            const std::string_view name = member.m_metadata.m_name;
-            names.push_back(name);
-            if (not isValidCanonicalName(name)) {
-                diagnostics.add(
-                    "schema", std::string{name}, "canonical name must use [a-z0-9_.-] with no empty segments",
-                    make_error_code(EConfigErrc::schema_invalid));
+        if constexpr (details::hasRecursiveMembers<Settings>()) {
+            details::validateRecursiveSchema(probe, {}, diagnostics, true);
+            if (diagnostics.hasErrorsSince(before)) {
+                PPR_RETURN_UNEXPECTED_ON_FAIL(Config, EConfigErrc::schema_invalid);
             }
-            if (const std::error_code err = details::checkConstraint(member.m_constraint, field)) {
-                diagnostics.add(
-                    "schema", std::string{name}, configFormat("invalid default value ({})", err.message()),
-                    make_error_code(EConfigErrc::schema_invalid));
-            }
-        });
+            return Expected<void>{};
+        } else {
 
-        for (std::size_t i = 0; i < names.size(); ++i) {
-            for (std::size_t j = i + 1; j < names.size(); ++j) {
-                if (names[i] == names[j]) {
+            Array<std::string_view> names{};
+            visit(probe, [&](const auto &member, auto &field) {
+                const std::string_view name = member.m_metadata.m_name;
+                names.push_back(name);
+                if (not isValidCanonicalName(name)) {
                     diagnostics.add(
-                        "schema", std::string{names[i]}, "duplicate canonical property name in schema",
+                        "schema", std::string{name}, "canonical name must use [a-z0-9_.-] with no empty segments",
                         make_error_code(EConfigErrc::schema_invalid));
                 }
+                details::validateDomain(member.m_constraint, std::string{name}, diagnostics);
+                if (member.m_presence != EPresence::required) {
+                    if (const std::error_code err = details::checkConstraint(member.m_constraint, field)) {
+                        diagnostics.add(
+                            "schema", std::string{name}, configFormat("invalid default value ({})", err.message()),
+                            make_error_code(EConfigErrc::schema_invalid));
+                    }
+                }
+            });
+
+            for (std::size_t i = 0; i < names.size(); ++i) {
+                for (std::size_t j = i + 1; j < names.size(); ++j) {
+                    if (names[i] == names[j]) {
+                        diagnostics.add(
+                            "schema", std::string{names[i]}, "duplicate canonical property name in schema",
+                            make_error_code(EConfigErrc::schema_invalid));
+                    }
+                }
             }
+
+            if (diagnostics.hasErrorsSince(before)) {
+                return std::unexpected{make_error_code(EConfigErrc::schema_invalid)};
+            }
+            return Expected<void>{};
+        }
+    }
+
+    // Slice 1a: canonical definition — transactional keyed tree resolution.
+    template<typename Settings>
+    [[nodiscard]] Expected<Resolved<Settings>> resolveRecursive(
+        const std::span<const TreeLayer> layers, Diagnostics &diagnostics) {
+        using pP::make_error_code;
+        const auto schema = validateSchema<Settings>(diagnostics);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(Config, schema);
+        Array<Layer> scalars;
+        scalars.reserve(layers.size());
+        for (const auto &layer: layers) {
+            scalars.push_back(layer.m_scalars);
         }
 
-        if (diagnostics.hasErrorsSince(before)) {
-            return std::unexpected{make_error_code(EConfigErrc::schema_invalid)};
-        }
-        return Expected<void>{};
+        Resolved<Settings> result;
+        details::TreeResolveState state{};
+        state.m_layers = layers;
+        state.m_scalars.m_layers = scalars;
+        state.indexSources();
+        state.m_scalars.m_diagnostics = std::addressof(diagnostics);
+        state.m_scalars.m_origins = std::addressof(result.m_origins);
+        details::resolveTreeObject(result.m_value, {}, state);
+        state.rejectUnknown();
+        PPR_RETURN_UNEXPECTED_ON_FAIL(Config, state.m_scalars.m_first_error);
+        return result;
     }
 } // namespace pP::config
-
-export template<>
-struct std::is_error_code_enum<pP::config::EConfigErrc> : std::true_type { // NOLINT(*-dcl58-cpp)
-};
