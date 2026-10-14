@@ -4114,6 +4114,30 @@ thickness_fine = 1
             const auto working_raster = compileGenerationRaster(
                 parallel->m_plan, parallel->m_layout, parallel->m_geometry);
             PPR_TEST_ASSERT(working_raster.has_value());
+
+            {
+                const auto scratch_scope = mem::ScratchPad::open();
+                const auto &biome = recipe.m_biomes.front();
+                const u32 padded_edge = kChunkEdge + 2u * (biome.m_lining_thickness_fine +
+                                                              biome.m_pore_passes +
+                                                              biome.m_relaxation_passes +
+                                                              biome.m_finish_passes +
+                                                              biome.m_erosion_passes +
+                                                              1u);
+                Array<std::array<double, 2u>, mem::ScratchPad> columns(padded_edge);
+                PPR_TEST_ASSERT(columns.capacity() == padded_edge);
+
+                // This fixture needs two cell buffers, biome IDs, affinity IDs,
+                // pore flags and protection flags, in addition to the column pair.
+                const u64 square_payload = static_cast<u64>(padded_edge) *
+                                           padded_edge *
+                                           (2u * sizeof(Cell) + sizeof(u32) + sizeof(u16) + 2u * sizeof(u8));
+                const u64 expected_payload = kCellsPerChunk * sizeof(Cell) +
+                                             square_payload +
+                                             columns.capacity() * sizeof(columns.front());
+                PPR_TEST_ASSERT(working_raster->chunkWorkingPayloadBytes() == expected_payload);
+            }
+
             PPR_TEST_ASSERT(
                 parallel->m_report.m_known_phase_scratch_bytes[2u] <=
                 serial->m_report.m_known_phase_scratch_bytes[2u] + 3u * working_raster->chunkWorkingPayloadBytes());

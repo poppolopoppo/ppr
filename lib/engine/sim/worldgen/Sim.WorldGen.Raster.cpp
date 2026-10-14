@@ -86,6 +86,20 @@ namespace pP::sim {
             });
         }
 
+        // ------------------------------------------------------------------
+        // terrain column sampling
+        // ------------------------------------------------------------------
+
+        struct RasterColumn {
+            double m_surface{}, m_bedrock{};
+        };
+
+        [[nodiscard]] double columnDepth(
+            const RasterColumn &column, const double y_m, const bool open_surface) noexcept {
+            return std::clamp(
+                (column.m_surface - y_m) / (column.m_surface - (open_surface ? column.m_bedrock : 0.0)), 0.0, 1.0);
+        }
+
         [[nodiscard]] double fieldValue(
             const GenerationPlan &plan, const u32 field, const double x, const double y) noexcept {
             return std::clamp(static_cast<double>(plan.fields()[field].sample(x, y)), -1.0, 1.0);
@@ -98,25 +112,24 @@ namespace pP::sim {
         }
 
         [[nodiscard]] u16 baseMaterial(
-            const GenerationPlan &plan, const GenerationBiome &biome, const double depth, const double x,
-            const double y, const u32 gx, const u32 gy, const bool sprinkle, const bool allow_vacuum) noexcept {
+            const GenerationPlan &plan, const GenerationBiome &biome, const double depth, const double surface,
+            const double x, const double y, const u32 gx, const u32 gy, const bool sprinkle,
+            const bool allow_vacuum) noexcept {
             u16 material = 0u;
             for (const auto &band: biome.m_bands) {
                 if (not depthContains(depth, band.m_depth_min, band.m_depth_max)) {
                     continue;
                 }
 
-                double draw = 0.5 * (fieldValue(plan, band.m_field, x, y) + 1.0);
+                const double field = fieldValue(plan, band.m_field, x, y);
+                double draw = 0.5 * (field + 1.0);
                 if (band.m_bed_period_m > 0.0) {
                     // A periodic package of ordered beds, bent by the authored field;
                     // long-wave width modulation avoids mechanically repeated layers.
                     const double thickness = band.m_bed_period_m *
                                              (1.0 + 0.2 * fieldValue(plan, band.m_field, x * 0.37, 17.0));
                     GenerationRandom phase{generationStreamSeed(plan.seed(), band.m_key, 0x6265647068617365ull)};
-                    const double coordinate = (generationSurfaceHeight(plan, x) -
-                                                  y +
-                                                  x * band.m_bed_dip +
-                                                  band.m_bed_warp_m * fieldValue(plan, band.m_field, x, y)) /
+                    const double coordinate = (surface - y + x * band.m_bed_dip + band.m_bed_warp_m * field) /
                                                   thickness +
                                               phase.unit();
                     draw = coordinate - std::floor(coordinate);
@@ -369,20 +382,21 @@ namespace pP::sim {
         [[nodiscard]] Cell sample(
             const GenerationPlan &plan, const GenerationGeometry &geometry, const std::span<const u32> segments,
             const std::span<const u32> instances, const std::span<const u32> blobs, const u32 x, const u32 y,
-            const u32 biome_index, const bool lining, const bool sprinkle = false) noexcept {
+            const u32 biome_index, const RasterColumn &column, const bool lining,
+            const bool sprinkle = false) noexcept {
             const auto &recipe = plan.recipe();
             const double xm = (x + 0.5) * recipe.m_cell_size_m, ym = (y + 0.5) * recipe.m_cell_size_m;
-            const double depth = generationDepth(plan, xm, ym);
+            const double depth = columnDepth(column, ym, recipe.m_open_surface);
 
             const auto &biome = recipe.m_biomes[biome_index];
             const float temperature = static_cast<float>(
                 biome.m_temperature_base_k +
                 biome.m_temperature_variation_k * fieldValue(plan, biome.m_temperature_field, xm, ym));
             if (recipe.m_open_surface) {
-                if (ym >= generationSurfaceHeight(plan, xm)) {
+                if (ym >= column.m_surface) {
                     return {};
                 }
-                if (ym <= generationBedrockHeight(plan, xm)) {
+                if (ym <= column.m_bedrock) {
                     return {recipe.m_bedrock_material, temperature};
                 }
             }
@@ -405,7 +419,7 @@ namespace pP::sim {
             u16 material = lining and reservation == nullptr
                                ? biome.m_lining_material
                                : baseMaterial(
-                                     plan, biome, depth, xm, ym, x, y,
+                                     plan, biome, depth, column.m_surface, xm, ym, x, y,
                                      sprinkle and reservation == nullptr and not lining, reservation == nullptr);
 
             // Field deposits retain their historical behavior inside reservations;
@@ -421,7 +435,7 @@ namespace pP::sim {
             }
 
             if (recipe.m_open_surface and reservation == nullptr and not lining) {
-                const double cover = generationSurfaceHeight(plan, xm) - ym;
+                const double cover = column.m_surface - ym;
                 const double variation = 1.0 + 0.25 * fieldValue(plan, biome.m_temperature_field, xm, 0.0);
 
                 if (cover < biome.m_soil_depth_m * variation) {
@@ -623,13 +637,15 @@ namespace pP::sim {
 
         const u32 passes = pore + competition + finish + erosion;
         const u64 edge = kChunkEdge + 2u * (lining + passes + 1u);
-        return kCellsPerChunk * sizeof(Cell) + edge *
-                                                   edge *
-                                                   (sizeof(u32) +
-                                                       sizeof(u8) +
-                                                       (passes == 0u ? 0u : sizeof(u16)) +
-                                                       (pore == 0u ? 0u : sizeof(u8)) +
-                                                       sizeof(Cell) * (passes == 0u ? 1u : 2u));
+        return kCellsPerChunk * sizeof(Cell) +
+               edge * sizeof(RasterColumn) +
+               edge *
+                   edge *
+                   (sizeof(u32) +
+                       sizeof(u8) +
+                       (passes == 0u ? 0u : sizeof(u16)) +
+                       (pore == 0u ? 0u : sizeof(u8)) +
+                       sizeof(Cell) * (passes == 0u ? 1u : 2u));
     }
 
     Expected<Array<Cell>> GenerationRaster::chunk(const ChunkPos position, const SharedContext &context) const {
@@ -661,6 +677,14 @@ namespace pP::sim {
             return static_cast<u32>(std::clamp(
                 static_cast<i64>(chunk * kChunkEdge + value) - padding, i64{0}, static_cast<i64>(kWorldEdge - 1u)));
         };
+
+        Array<RasterColumn, mem::ScratchPad> columns(edge);
+        for (u32 x = 0u; x < edge; ++x) {
+            PPR_RETURN_UNEXPECTED_ON_FAIL(WorldRaster, canceled(context));
+
+            const double xm = (global(x, position.m_x) + 0.5) * recipe.m_cell_size_m;
+            columns[x] = {generationSurfaceHeight(m_plan, xm), generationBedrockHeight(m_plan, xm)};
+        }
 
         Array<u32, mem::ScratchPad> biomes(edge * edge);
         for (u32 y = 0u; y < edge; ++y) {
@@ -720,7 +744,7 @@ namespace pP::sim {
                     const u32 at = (y + padding) * edge + x + padding;
                     cells[y * kChunkEdge + x] = sample(
                         m_plan, m_geometry, m_segments[bucket], m_instances[bucket], m_blobs[bucket],
-                        position.m_x * kChunkEdge + x, position.m_y * kChunkEdge + y, biomes[at],
+                        position.m_x * kChunkEdge + x, position.m_y * kChunkEdge + y, biomes[at], columns[x + padding],
                         liningAt(at, recipe.m_biomes[biomes[at]]));
                 }
             }
@@ -747,10 +771,8 @@ namespace pP::sim {
                                gx >= kWorldEdge - recipe.m_boundary_fine or
                                (not recipe.m_open_surface and gy >= kWorldEdge - recipe.m_boundary_fine) or
                                (recipe.m_open_surface and
-                                   ((gy + 0.5) * recipe.m_cell_size_m >=
-                                           generationSurfaceHeight(m_plan, (gx + 0.5) * recipe.m_cell_size_m) or
-                                       (gy + 0.5) * recipe.m_cell_size_m <=
-                                           generationBedrockHeight(m_plan, (gx + 0.5) * recipe.m_cell_size_m)));
+                                   ((gy + 0.5) * recipe.m_cell_size_m >= columns[x].m_surface or
+                                       (gy + 0.5) * recipe.m_cell_size_m <= columns[x].m_bedrock));
 
                 // Both sides of a biome boundary remain fixed, including biomes
                 // without authored lining. A mode vote never transports material across it.
@@ -779,12 +801,13 @@ namespace pP::sim {
                 protected_cells[at] = protect ? 1u : 0u;
                 current[at] = sample(
                     m_plan, m_geometry, m_segments[bucket], m_instances[bucket], m_blobs[bucket], gx, gy, biome_index,
-                    lining, not protect);
+                    columns[x], lining, not protect);
 
                 if (passes != 0u and not protect) {
                     const double xm = (gx + 0.5) * recipe.m_cell_size_m, ym = (gy + 0.5) * recipe.m_cell_size_m;
-                    const double depth = generationDepth(m_plan, xm, ym);
-                    affinity_materials[at] = baseMaterial(m_plan, biome, depth, xm, ym, gx, gy, false, false);
+                    const double depth = columnDepth(columns[x], ym, recipe.m_open_surface);
+                    affinity_materials[at] = baseMaterial(
+                        m_plan, biome, depth, columns[x].m_surface, xm, ym, gx, gy, false, false);
 
                     if (pore_passes != 0u) {
                         pore_eligible[at] = (current[at].m_element == 0u or
@@ -817,7 +840,7 @@ namespace pP::sim {
                         const u32 gx = global(x, position.m_x), gy = global(y, position.m_y);
                         const u32 bucket = (gy / kChunkEdge) * kChunksPerEdge + gx / kChunkEdge;
                         const double xm = (gx + 0.5) * recipe.m_cell_size_m, ym = (gy + 0.5) * recipe.m_cell_size_m;
-                        const double depth = generationDepth(m_plan, xm, ym);
+                        const double depth = columnDepth(columns[x], ym, recipe.m_open_surface);
 
                         current[at].m_element = deposits(
                             m_plan, m_geometry, m_blobs[bucket], biomes[at], depth, xm, ym, gx, gy,
