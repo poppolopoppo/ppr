@@ -9,6 +9,11 @@ import game.colony.metric;
 import std;
 namespace pP::colony {
     PPR_DEFINE_LOG_CATEGORY(CheckpointValidation, info, none);
+
+    // ------------------------------------------------------------------
+    // validation helpers
+    // ------------------------------------------------------------------
+
     namespace {
         const auto invalid = std::make_error_code(std::errc::invalid_argument);
         const auto incompatible = std::make_error_code(std::errc::protocol_not_supported);
@@ -165,6 +170,10 @@ namespace pP::colony {
             return {};
         }
     }
+
+    // ------------------------------------------------------------------
+    // world checkpoint validation
+    // ------------------------------------------------------------------
 
     std::error_code validateWorldCheckpoint(
         const WorldCheckpoint &checkpoint, const ContentCatalog &catalog, const IContext *const context) {

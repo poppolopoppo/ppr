@@ -7,6 +7,11 @@ import game.colony.pathfinding;
 import std;
 namespace pP::colony {
     PPR_DEFINE_LOG_CATEGORY(WorldCheckpointLog, info, none);
+
+    // ------------------------------------------------------------------
+    // helpers
+    // ------------------------------------------------------------------
+
     namespace {
         std::error_code canceled(const IContext *const context) noexcept {
             return context ? context->error() : std::error_code{};
@@ -22,6 +27,10 @@ namespace pP::colony {
             return result;
         }
     }
+
+    // ------------------------------------------------------------------
+    // capture
+    // ------------------------------------------------------------------
 
     Expected<WorldCheckpoint> captureWorldCheckpoint(
         const ColonyDriver &driver, const sim::GeneratedWorld &generated, const IContext *const context) {
@@ -63,6 +72,10 @@ namespace pP::colony {
         PPR_RETURN_UNEXPECTED_ON_FAIL(WorldCheckpointLog, canceled(context));
         return checkpoint;
     }
+
+    // ------------------------------------------------------------------
+    // restore
+    // ------------------------------------------------------------------
 
     Expected<std::unique_ptr<ColonyDriver>> restoreWorldCheckpoint(
         ContentCatalog catalog, WorldCheckpoint checkpoint, const u64 world_generation,

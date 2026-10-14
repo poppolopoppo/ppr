@@ -26,10 +26,18 @@ import std;
 namespace pP::colony {
     PPR_DEFINE_LOG_CATEGORY(ColonySmoke, debug, none)
 
+    // ------------------------------------------------------------------
+    // smoke helpers
+    // ------------------------------------------------------------------
+
     namespace {
         constexpr u64 kSeed = 1234567u;
         constexpr u32 kExtent = 256u;
         constexpr u32 kCenter = kExtent / 2u;
+
+        // ------------------------------------------------------------------
+        // prepared particles
+        // ------------------------------------------------------------------
 
         [[nodiscard]] std::error_code checkPreparedParticles(const ColonyDriver &driver) {
             struct Totals {
@@ -89,6 +97,10 @@ namespace pP::colony {
                 actual.size());
             return {};
         }
+
+        // ------------------------------------------------------------------
+        // prepared session
+        // ------------------------------------------------------------------
 
         [[nodiscard]] std::error_code checkPreparedSession() {
             const auto root = hal::process::currentExecutablePath().parent_path() / "worldgen/default";
@@ -161,6 +173,10 @@ namespace pP::colony {
             return {};
         }
 
+        // ------------------------------------------------------------------
+        // core cell
+        // ------------------------------------------------------------------
+
         [[nodiscard]] Expected<sim::GlobalCellPos> findCoreCell(const sim::ChunkGrid &grid) {
             // Choose an actual generated temperate cell rather than assuming
             // the seed leaves any one coordinate uncarved by a cavern.
@@ -177,6 +193,10 @@ namespace pP::colony {
             }
             return std::unexpected{std::make_error_code(std::errc::state_not_recoverable)};
         }
+
+        // ------------------------------------------------------------------
+        // center pixel
+        // ------------------------------------------------------------------
 
         [[nodiscard]] std::error_code readCenterPixel(
             rhi::IDevice &device, rhi::ITexture &target, std::array<u8, 4u> &pixel) {
@@ -204,6 +224,10 @@ namespace pP::colony {
             }
             return {};
         }
+
+        // ------------------------------------------------------------------
+        // pathfinding checks
+        // ------------------------------------------------------------------
 
         /// Deterministic Slice 2 self-checks: budget slicing, completion or
         /// honest partial, and save→load→tick stability of path state.
@@ -401,6 +425,10 @@ namespace pP::colony {
             return counts;
         }
 
+        // ------------------------------------------------------------------
+        // building checks
+        // ------------------------------------------------------------------
+
         /// Deterministic Slice 3 self-checks: progressive wall placement,
         /// grid solidity, translator sync, search on the edited grid,
         /// grid-delta snapshot round-trip, and demolition back to vacuum.
@@ -593,6 +621,10 @@ namespace pP::colony {
             }
             return delta_chunks;
         }
+
+        // ------------------------------------------------------------------
+        // dig checks
+        // ------------------------------------------------------------------
 
         /// Deterministic Slice 5 self-checks: dig-primitive validation,
         /// paused-only application, collider-budget drain, wake radius,
@@ -2441,6 +2473,10 @@ namespace pP::colony {
             return dug_total;
         }
 
+        // ------------------------------------------------------------------
+        // smoke app
+        // ------------------------------------------------------------------
+
         class ColonySmokeApp final : public Application {
         public:
             explicit ColonySmokeApp(const std::span<const char *const> argv)
@@ -2462,12 +2498,15 @@ namespace pP::colony {
             [[nodiscard]] u32 visibleTiles() const noexcept {
                 return m_visible_tiles;
             }
+
             [[nodiscard]] const std::array<u8, 4u> &pixel() const noexcept {
                 return m_pixel;
             }
+
             [[nodiscard]] bool verified() const noexcept {
                 return m_verified;
             }
+
             [[nodiscard]] std::error_code shutdownError() const noexcept {
                 return m_shutdown_error;
             }
@@ -2650,6 +2689,10 @@ namespace pP::colony {
 
 
     }
+
+    // ------------------------------------------------------------------
+    // agent checks
+    // ------------------------------------------------------------------
 
     /// Deterministic Slice 4 self-checks: seed-identical spawns, plan
     /// coverage, movement, double-run equality, and bodies snapshot
@@ -3130,6 +3173,10 @@ namespace pP::colony {
         }
         return std::array<u32, 3u>{static_cast<u32>(peak), planned, static_cast<u32>(third_replay.size())};
     }
+
+    // ------------------------------------------------------------------
+    // headless smoke
+    // ------------------------------------------------------------------
 
     std::error_code runColonySmoke(const SmokeOptions &options) {
         // Opt-in GPU-assisted validation (default off everywhere; accepted

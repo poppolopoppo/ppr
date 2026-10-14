@@ -8,7 +8,12 @@ import :logger;
 import std;
 
 export namespace pP {
+    // ------------------------------------------------------------------
+    // command_history
+    // ------------------------------------------------------------------
+
     PPR_DECLARE_LOG_CATEGORY(CommandHistory)
+
     // Owning, content-free history. Operations are borrowed only for this call.
     // A failed client operation must leave client state unchanged. Command moves
     // must not throw, so a successful apply always obtains an undo entry.
@@ -19,7 +24,7 @@ export namespace pP {
             Command m_command;
             u64 m_payload_bytes{};
         };
-        Array<Entry> m_entries;
+        Array<Entry> m_entries{};
         std::size_t m_cursor{};
         std::size_t m_max_commands;
         u64 m_max_payload_bytes;
@@ -30,20 +35,25 @@ export namespace pP {
             const std::size_t max_commands = 128u, const u64 max_payload_bytes = 8u * 1024u * 1024u) noexcept
             : m_max_commands(max_commands), m_max_payload_bytes(max_payload_bytes) {
         }
+
         [[nodiscard]] bool canUndo() const noexcept {
             return m_cursor != 0u;
         }
+
         [[nodiscard]] bool canRedo() const noexcept {
             return m_cursor != m_entries.size();
         }
+
         [[nodiscard]] u64 payloadBytes() const noexcept {
             return m_payload_bytes;
         }
+
         void clear() noexcept {
             m_entries.clear();
             m_cursor = 0u;
             m_payload_bytes = 0u;
         }
+
         [[nodiscard]] std::error_code execute(
             Command command, const u64 payload_bytes,
             const std23::function_ref<std::error_code(const Command &)> apply) {
@@ -67,6 +77,7 @@ export namespace pP {
             m_cursor = m_entries.size();
             return {};
         }
+
         // false is expected absence; unexpected means the client operation failed.
         [[nodiscard]] std::expected<bool, std::error_code> undo(
             const std23::function_ref<std::error_code(const Command &)> revert) {
@@ -77,6 +88,7 @@ export namespace pP {
             --m_cursor;
             return true;
         }
+
         [[nodiscard]] std::expected<bool, std::error_code> redo(
             const std23::function_ref<std::error_code(const Command &)> apply) {
             if (not canRedo()) {

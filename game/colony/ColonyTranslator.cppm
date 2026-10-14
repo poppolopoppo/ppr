@@ -8,14 +8,20 @@ import engine.sim;
 import std;
 
 export namespace pP::colony {
+    // ------------------------------------------------------------------
+    // translator
+    // ------------------------------------------------------------------
+
     /// Render-thread confined presentation state for one grid/pass pair. The
     /// grid's snapshot dirty flags are independent of these upload revisions.
     class ColonyTranslator {
     private:
+        // state:
         std::array<bool, sim::kChunkCount> m_presented{};
         u32 m_submitted_chunks{};
 
     public:
+        // operations:
         /// Drop the old world's staged tiles and cached cell materials before
         /// submitting a regenerated grid (or after replacing the GridPass).
         void reset(GridPass &pass) noexcept;
@@ -38,7 +44,6 @@ export namespace pP::colony {
 
         /// Submitted resident chunks (not camera-frustum visibility).
         [[nodiscard]] u32 submittedChunks() const noexcept;
-
 
         [[nodiscard]] static constexpr u32 totalChunks() noexcept {
             return sim::kChunkCount;

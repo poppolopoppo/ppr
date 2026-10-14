@@ -15,6 +15,10 @@
 #include <cstdint>
 
 namespace pP::colony {
+    // ------------------------------------------------------------------
+    // colony elements
+    // ------------------------------------------------------------------
+
     inline constexpr std::uint16_t kElementVacuum = 0u;
     inline constexpr std::uint16_t kElementRock = 1u;
     inline constexpr std::uint16_t kElementIce = 2u;
@@ -23,6 +27,10 @@ namespace pP::colony {
     inline constexpr std::uint16_t kElementRuins = 5u;
     inline constexpr std::uint16_t kElementAbyssal = 6u;
     inline constexpr std::uint16_t kElementVent = 7u;
+
+    // ------------------------------------------------------------------
+    // nominal temperatures
+    // ------------------------------------------------------------------
 
     // Nominal (noise-free) temperatures in Kelvin assigned per archetype.
     inline constexpr float kTempRock = 293.0f;

@@ -24,6 +24,11 @@ import engine.shader;
 import std;
 
 namespace pP {
+
+    // ------------------------------------------------------------------
+    // ui
+    // ------------------------------------------------------------------
+
     PPR_DEFINE_LOG_CATEGORY(UI, info, none)
 
     namespace {

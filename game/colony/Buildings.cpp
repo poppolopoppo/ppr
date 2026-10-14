@@ -16,6 +16,11 @@ import std;
 
 namespace pP::colony {
     PPR_DEFINE_LOG_CATEGORY(ColonyBuilding, info, none)
+
+    // ------------------------------------------------------------------
+    // building helpers
+    // ------------------------------------------------------------------
+
     namespace {
         [[nodiscard]] Expected<bool> actorOverlaps(sim::Registry &registry, const Footprint &print) {
             const double left = static_cast<double>(print.m_min.m_x) / 3.0;
@@ -57,6 +62,10 @@ namespace pP::colony {
         }
     }
 
+    // ------------------------------------------------------------------
+    // building registration
+    // ------------------------------------------------------------------
+
     std::error_code registerBuildingComponents(sim::Registry &registry) {
         const auto print = registry.registerComponent<Footprint>();
         if (not print) {
@@ -68,6 +77,10 @@ namespace pP::colony {
         }
         return {};
     }
+
+    // ------------------------------------------------------------------
+    // colony registration
+    // ------------------------------------------------------------------
 
     std::error_code registerColonyComponents(sim::Registry &registry) {
         if (const std::error_code error = registerPathfindingComponents(registry)) {
@@ -89,6 +102,10 @@ namespace pP::colony {
         }
         return {};
     }
+
+    // ------------------------------------------------------------------
+    // footprint validation
+    // ------------------------------------------------------------------
 
     std::error_code validateFootprint(const Footprint &print, const ContentCatalog *const catalog) noexcept {
         if (print.m_width == 0u or
@@ -119,6 +136,10 @@ namespace pP::colony {
         }
         return {};
     }
+
+    // ------------------------------------------------------------------
+    // construction validation
+    // ------------------------------------------------------------------
 
     std::error_code validateConstruction(
         const sim::ChunkGrid &grid, sim::Registry &registry, const Footprint &print, const ContentCatalog &catalog) {
@@ -163,6 +184,10 @@ namespace pP::colony {
         }
         return {};
     }
+
+    // ------------------------------------------------------------------
+    // errand advancement
+    // ------------------------------------------------------------------
 
     std::error_code advanceErrands(
         sim::ChunkGrid &grid, sim::Registry &registry, Pathfinder &finder, Array<sim::ChunkPos> &touched,
@@ -266,6 +291,10 @@ namespace pP::colony {
         }
         return {};
     }
+
+    // ------------------------------------------------------------------
+    // live errand count
+    // ------------------------------------------------------------------
 
     u32 liveErrandCount(sim::Registry &registry) {
         u32 live = 0u;

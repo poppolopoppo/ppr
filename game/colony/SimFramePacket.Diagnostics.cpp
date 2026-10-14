@@ -14,6 +14,10 @@ import std;
 namespace pP::colony {
     PPR_DEFINE_LOG_CATEGORY(WorldPreview, info, none)
 
+    // ------------------------------------------------------------------
+    // diagnostic presentation
+    // ------------------------------------------------------------------
+
     Expected<GridPass::GridStagedFrame> captureDiagnosticPresentation(
         const ColonyDriver &driver, const sim::GeneratedWorld &generated, const EGridDiagnosticMode mode,
         const u64 revision, const float temperature_min_k, const float temperature_max_k, const IContext &context) {

@@ -2,14 +2,22 @@ module;
 #include "pP/Macros.h"
 module game.colony.driver;
 import std;
+
 namespace pP::colony {
     PPR_DEFINE_LOG_CATEGORY(ColonyCheckpoint, info, none);
+
+    // ------------------------------------------------------------------
+    // checkpoint capture and restore
+    // ------------------------------------------------------------------
+
     u32 ColonyDriver::tickHz() const noexcept {
         return m_tick_hz;
     }
+
     bool ColonyDriver::captureReady() const noexcept {
         return not m_edit and m_held_slices == 0u;
     }
+
     Expected<sim::Snapshot> ColonyDriver::captureFullWithBodies(const IContext *const context) const {
         PPR_RETURN_UNEXPECTED_ON_FAIL(
             ColonyCheckpoint, m_timestep.has_value() and captureReady()
@@ -32,6 +40,7 @@ namespace pP::colony {
         snapshot->m_bodies.m_replay_ticks = m_tick_count;
         return snapshot;
     }
+
     std::error_code ColonyDriver::initRestored(
         const ColonyDriverDesc &desc, PreparedWorld world, const sim::Snapshot &snapshot,
         const sim::MatterParticleSnapshot &particles, const u64 tick, const bool initial_matter_valid,

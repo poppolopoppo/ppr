@@ -11,6 +11,10 @@ import game.display;
 import std;
 
 export namespace pP::colony {
+    // ------------------------------------------------------------------
+    // panel types
+    // ------------------------------------------------------------------
+
     /// Read-only presentation counts supplied by the renderer/caller.
     /// Path counters ride the same struct (appended): the panel never
     /// imports the pathfinding module. Shape unchanged from Slice 1.
@@ -313,6 +317,10 @@ export namespace pP::colony {
         float m_chrome_bottom{};
         float m_chrome_right{};
     };
+
+    // ------------------------------------------------------------------
+    // panel api
+    // ------------------------------------------------------------------
 
     /// Draws the full colony chrome: a wrapping top simulation bar plus a
     /// contextual tool strip, a right side panel (Colony and Performance

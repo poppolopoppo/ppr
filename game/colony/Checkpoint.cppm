@@ -8,13 +8,23 @@ import game.colony.worldgen;
 import std;
 
 export namespace pP::colony {
+    // ------------------------------------------------------------------
+    // world checkpoint
+    // ------------------------------------------------------------------
+
     inline constexpr u32 kWorldCheckpointVersion = 3u;
     inline constexpr u64 kMaxWorldCheckpointBytes = 256u * 1024u * 1024u;
+
+    // ------------------------------------------------------------------
+    // checkpoint material
+    // ------------------------------------------------------------------
+
     struct CheckpointMaterial {
         u16 m_id{};
         std::string m_key{};
         [[nodiscard]] bool operator==(const CheckpointMaterial &) const = default;
     };
+
     /// Owned full checkpoint; no live session, held input or derived cache is borrowed.
     struct WorldCheckpoint {
         WorldDescriptor m_descriptor{};
@@ -31,6 +41,11 @@ export namespace pP::colony {
         u32 m_tick_hz{60u};
         bool m_initial_matter_valid{true};
     };
+
+    // ------------------------------------------------------------------
+    // checkpoint operations
+    // ------------------------------------------------------------------
+
     /// Coordinator-only: driver and generated metadata are exclusively frozen at
     /// one completed tick. Return the session owner before encoding/writing this value.
     [[nodiscard]] Expected<WorldCheckpoint> captureWorldCheckpoint(

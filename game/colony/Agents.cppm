@@ -8,6 +8,10 @@ import game.colony.pathfinding;
 import std;
 
 export namespace pP::colony {
+    // ------------------------------------------------------------------
+    // agent constants
+    // ------------------------------------------------------------------
+
     /// Agent count spawned per colony (deterministic, seed-derived).
     inline constexpr u32 kAgentCount = 3u;
 
@@ -34,6 +38,10 @@ export namespace pP::colony {
 
     /// High-level plan actions per Plan (waypoints live in PathComp).
     inline constexpr u32 kMaxPlanActions = 8u;
+
+    // ------------------------------------------------------------------
+    // agent types
+    // ------------------------------------------------------------------
 
     enum class EGoal : u32 {
         seek,
@@ -110,6 +118,10 @@ export namespace pP::colony {
     static_assert(sizeof(Agent) == 24u);
     static_assert(sizeof(Needs) == 8u);
     static_assert(sizeof(Plan) == 120u);
+
+    // ------------------------------------------------------------------
+    // agent api
+    // ------------------------------------------------------------------
 
     /// Registers Agent, Needs, Plan (appended after the building components
     /// by the central helper; never call alone).

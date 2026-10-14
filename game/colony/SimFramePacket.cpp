@@ -11,6 +11,11 @@ import std;
 
 namespace pP::colony {
     PPR_DEFINE_LOG_CATEGORY(SimPresentation, info, none);
+
+    // ------------------------------------------------------------------
+    // presentation capture
+    // ------------------------------------------------------------------
+
     namespace {
         void captureCatalogPresentation_(
             SimFramePacket &packet, const ContentCatalog &content, const std::string_view profile_key,
@@ -224,6 +229,10 @@ namespace pP::colony {
             return {};
         }
     }
+
+    // ------------------------------------------------------------------
+    // packet assembly
+    // ------------------------------------------------------------------
 
     SimFramePacket captureCatalogPresentation(
         const ContentCatalog &catalog, const std::string_view profile, const u32 boundary_material,
@@ -500,6 +509,10 @@ namespace pP::colony {
         return stage;
     }
 
+    // ------------------------------------------------------------------
+    // initial presentation
+    // ------------------------------------------------------------------
+
     u32 InitialPresentation::completedChunks() const noexcept {
         return m_next_chunk;
     }
@@ -556,6 +569,10 @@ namespace pP::colony {
         m_next_chunk = std::min(m_next_chunk + kInitialPresentationBatchChunks, sim::kChunkCount);
         return m_next_chunk == sim::kChunkCount;
     }
+
+    // ------------------------------------------------------------------
+    // grid staging
+    // ------------------------------------------------------------------
 
     std::error_code buildGridStagedFrame(const SimFramePacket &packet, GridPass::GridStagedFrame &stage) {
         if (const std::error_code error = validatePresentation_(packet)) {

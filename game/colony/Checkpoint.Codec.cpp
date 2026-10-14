@@ -4,47 +4,63 @@ module game.colony.checkpoint;
 import std;
 namespace pP::colony {
     PPR_DEFINE_LOG_CATEGORY(CheckpointCodec, info, none);
+
+    // ------------------------------------------------------------------
+    // codec helpers
+    // ------------------------------------------------------------------
+
     namespace {
         constexpr u64 kMagic = 0x314e454757525050ull; // PPRWGEN1, little endian.
         class Writer {
         public:
             Array<u8> m_bytes;
+
             void integer(const u64 value, const u32 width) {
                 for (u32 index = 0u; index < width; ++index) {
                     m_bytes.push_back(static_cast<u8>(value >> (8u * index)));
                 }
             }
+
             void u32value(const u32 value) {
                 integer(value, 4u);
             }
+
             void u64value(const u64 value) {
                 integer(value, 8u);
             }
+
             void real(const double value) {
                 u64value(std::bit_cast<u64>(value));
             }
+
             void boolean(const bool value) {
                 integer(value ? 1u : 0u, 1u);
             }
+
             void string(const std::string &value) {
                 u32value(static_cast<u32>(value.size()));
                 m_bytes.insert(m_bytes.end(), value.begin(), value.end());
             }
+
             void count(const std::size_t value) {
                 u32value(static_cast<u32>(value));
             }
         };
+
         class Reader {
             std::span<const u8> m_bytes;
             std::size_t m_offset{};
 
         public:
             std::error_code m_error{};
+
             explicit Reader(const std::span<const u8> bytes) : m_bytes(bytes) {
             }
+
             std::size_t remaining() const noexcept {
                 return m_bytes.size() - m_offset;
             }
+
             std::span<const u8> take(const std::size_t size) {
                 if (m_error) {
                     return {};
@@ -57,6 +73,7 @@ namespace pP::colony {
                 m_offset += size;
                 return bytes;
             }
+
             u64 integer(const u32 width) {
                 const auto bytes = take(width);
                 u64 value{};
@@ -65,15 +82,19 @@ namespace pP::colony {
                 }
                 return value;
             }
+
             u32 u32value() {
                 return static_cast<u32>(integer(4u));
             }
+
             u64 u64value() {
                 return integer(8u);
             }
+
             double real() {
                 return std::bit_cast<double>(u64value());
             }
+
             bool boolean() {
                 const auto value = integer(1u);
                 if (value > 1u) {
@@ -81,6 +102,7 @@ namespace pP::colony {
                 }
                 return value == 1u;
             }
+
             u32 count(const u32 maximum, const u32 minimum_record_bytes) {
                 const auto value = u32value();
                 if (m_error) {
@@ -96,12 +118,14 @@ namespace pP::colony {
                 }
                 return value;
             }
+
             std::string string() {
                 const auto size = count(1024u, 1u);
                 const auto bytes = take(size);
                 return {bytes.begin(), bytes.end()};
             }
         };
+
         std::error_code encodeParticles(
             Writer &writer, const sim::MatterParticleSnapshot &snapshot, const IContext *const context) {
             writer.u64value(snapshot.m_next_id);
@@ -125,6 +149,7 @@ namespace pP::colony {
             }
             return {};
         }
+
         std::error_code decodeParticles(
             Reader &reader, sim::MatterParticleSnapshot &snapshot, const IContext *const context) {
             snapshot.m_next_id = reader.u64value();
@@ -153,6 +178,7 @@ namespace pP::colony {
             }
             return {};
         }
+
         void encodeMetadata(Writer &writer, const WorldCheckpoint &checkpoint) {
             writer.count(checkpoint.m_sites.size());
             for (const auto &site: checkpoint.m_sites) {
@@ -249,6 +275,7 @@ namespace pP::colony {
             // Allocation observations describe the generating process/build,
             // not durable world state. They are intentionally absent from v3.
         }
+
         void decodeMetadata(Reader &reader, WorldCheckpoint &checkpoint) {
             checkpoint.m_sites.resize(reader.count(sim::kMaxGenerationSites, 20u));
             for (auto &site: checkpoint.m_sites) {
@@ -346,6 +373,10 @@ namespace pP::colony {
         }
     }
 
+    // ------------------------------------------------------------------
+    // encode
+    // ------------------------------------------------------------------
+
     Expected<Array<u8>> encodeWorldCheckpoint(
         const WorldCheckpoint &checkpoint, const ContentCatalog &catalog, const IContext *const context) {
         PPR_RETURN_UNEXPECTED_ON_FAIL(CheckpointCodec, validateWorldCheckpoint(checkpoint, catalog, context));
@@ -410,6 +441,10 @@ namespace pP::colony {
         PPR_RETURN_UNEXPECTED_ON_FAIL(CheckpointCodec, context ? context->error() : std::error_code{});
         return std::move(writer.m_bytes);
     }
+
+    // ------------------------------------------------------------------
+    // decode
+    // ------------------------------------------------------------------
 
     Expected<WorldCheckpoint> decodeWorldCheckpoint(
         const std::span<const u8> bytes, const ContentCatalog &catalog, const IContext *const context) {

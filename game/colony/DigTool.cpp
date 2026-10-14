@@ -13,6 +13,11 @@ import std;
 
 namespace pP::colony {
     PPR_DEFINE_LOG_CATEGORY(ColonyDig, info, none)
+
+    // ------------------------------------------------------------------
+    // helpers
+    // ------------------------------------------------------------------
+
     namespace {
         [[nodiscard]] bool chunkListed(const Array<sim::ChunkPos> &touched, const sim::ChunkPos pos) noexcept {
             for (const sim::ChunkPos listed: touched) {
@@ -31,10 +36,12 @@ namespace pP::colony {
             if (bad_edge) {
                 return std::make_error_code(std::errc::invalid_argument);
             }
+
             const u64 area = static_cast<u64>(rect.m_width) * rect.m_height;
             if (area > kMaxDigCells) {
                 return std::make_error_code(std::errc::invalid_argument);
             }
+
             const u64 far_x = static_cast<u64>(rect.m_min.m_x) + rect.m_width;
             const u64 far_y = static_cast<u64>(rect.m_min.m_y) + rect.m_height;
             if (far_x > sim::kWorldEdge or far_y > sim::kWorldEdge) {
@@ -49,6 +56,10 @@ namespace pP::colony {
             float m_temperature{};
         };
     }
+
+    // ------------------------------------------------------------------
+    // dig cells
+    // ------------------------------------------------------------------
 
     Expected<DigResult> digCells(sim::ChunkGrid &grid, const DigRect &rect, const ContentCatalog *const catalog) {
         PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyDig, validateDigRect(rect));

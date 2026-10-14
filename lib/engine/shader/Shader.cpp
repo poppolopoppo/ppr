@@ -11,6 +11,11 @@ import std;
 import engine.core;
 
 namespace pP {
+
+    // ------------------------------------------------------------------
+    // shader
+    // ------------------------------------------------------------------
+
     PPR_DEFINE_LOG_CATEGORY(Shader, info, none)
 
     namespace shader {

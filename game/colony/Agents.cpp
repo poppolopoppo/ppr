@@ -15,6 +15,11 @@ import std;
 
 namespace pP::colony {
     PPR_DEFINE_LOG_CATEGORY(AgentPreparation, info, none)
+
+    // ------------------------------------------------------------------
+    // agent helpers
+    // ------------------------------------------------------------------
+
     namespace {
         // Self-contained splitmix64 (worldgen rationale: core RNG is
         // hardware-seeded and RngStream is snapshot-local, so spawns carry
@@ -179,6 +184,10 @@ namespace pP::colony {
         }
     }
 
+    // ------------------------------------------------------------------
+    // agent registration
+    // ------------------------------------------------------------------
+
     std::error_code registerAgentComponents(sim::Registry &registry) {
         const auto agent = registry.registerComponent<Agent>();
         if (not agent) {
@@ -194,6 +203,10 @@ namespace pP::colony {
         }
         return {};
     }
+
+    // ------------------------------------------------------------------
+    // agent spawning
+    // ------------------------------------------------------------------
 
     std::error_code spawnAgents(
         const sim::ChunkGrid &grid, sim::Registry &registry, const u64 seed, u32 count, const IContext *const context,
@@ -261,6 +274,10 @@ namespace pP::colony {
         return {};
     }
 
+    // ------------------------------------------------------------------
+    // agent planning
+    // ------------------------------------------------------------------
+
     void planAgent(
         const sim::ChunkGrid &grid, sim::Registry &registry, const std::optional<sim::Entity> controlled,
         const u32 cells_per_metre) {
@@ -311,6 +328,10 @@ namespace pP::colony {
         }
     }
 
+    // ------------------------------------------------------------------
+    // player intent
+    // ------------------------------------------------------------------
+
     std::error_code playerIntent(
         const sim::Registry &registry, const sim::Entity entity, const PlayerCommand command, Intent &intent,
         const u32 cells_per_metre) {
@@ -339,6 +360,10 @@ namespace pP::colony {
         intent.m_velocity_y = intent.m_climbing ? command.m_vertical * agent->m_speed : 0.0f;
         return {};
     }
+
+    // ------------------------------------------------------------------
+    // agent intent
+    // ------------------------------------------------------------------
 
     std::error_code agentIntent(
         sim::Registry &registry, const sim::Entity entity, Intent &intent, const u32 cells_per_metre) {

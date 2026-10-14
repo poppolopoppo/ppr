@@ -10,6 +10,10 @@ import engine.sim;
 import std;
 
 namespace pP::colony {
+    // ------------------------------------------------------------------
+    // helpers
+    // ------------------------------------------------------------------
+
     namespace {
         [[nodiscard]] u32 packCell(const u32 x, const u32 y) noexcept {
             return y * sim::kWorldEdge + x;
@@ -95,6 +99,10 @@ namespace pP::colony {
             emitResult(registry, entity, comp);
         }
     }
+
+    // ------------------------------------------------------------------
+    // pathfinding
+    // ------------------------------------------------------------------
 
     bool isWalkable(const sim::ChunkGrid &grid, const sim::GlobalCellPos pos) noexcept {
         if (not sim::isInsideWorld(pos)) {

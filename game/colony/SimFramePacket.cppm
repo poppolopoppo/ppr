@@ -35,6 +35,8 @@ export namespace pP::colony {
             std::shared_ptr<const Array<sim::MatterParticle>> m_source{};
             std::shared_ptr<const Array<GridParticleInstance>> m_target{};
         };
+
+        // cache:
         std::array<Entry, sim::kChunkCount> m_chunks{};
         u64 m_generation{};
         std::shared_ptr<const GridSurfaceProfile> m_surface_profile{};
@@ -135,6 +137,7 @@ export namespace pP::colony {
     /// Client-owned initial publication cursor. At most one upload batch is
     /// outstanding; clean frames expose only the confirmed prepared prefix.
     class InitialPresentation {
+        // cache:
         ParticlePresentationCache m_particle_cache{};
         u32 m_next_chunk{};
         bool m_reset_applied{};

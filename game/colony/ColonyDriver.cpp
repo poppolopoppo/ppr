@@ -22,6 +22,11 @@ import std;
 
 namespace pP::colony {
     PPR_DEFINE_LOG_CATEGORY(ColonyPreparation, info, none)
+
+    // ------------------------------------------------------------------
+    // driver helpers
+    // ------------------------------------------------------------------
+
     namespace {
         constexpr u32 kMaxSlices = 5u;
         constexpr std::string_view kToolStep = "tool";
@@ -139,6 +144,10 @@ namespace pP::colony {
         }
     }
 
+    // ------------------------------------------------------------------
+    // driver initialization
+    // ------------------------------------------------------------------
+
     std::error_code ColonyDriver::initLegacyFixture(
         const ColonyDriverDesc &desc, const sim::GenerationExecution *const execution) {
         if (desc.m_tick_hz == 0u) [[unlikely]] {
@@ -197,6 +206,10 @@ namespace pP::colony {
         return {};
     }
 
+    // ------------------------------------------------------------------
+    // driver metadata
+    // ------------------------------------------------------------------
+
     const PreparedWorld *ColonyDriver::preparedWorld() const noexcept {
         return m_colony.preparedWorld();
     }
@@ -204,12 +217,15 @@ namespace pP::colony {
     sim::MatterParticleSnapshot ColonyDriver::captureParticles() const {
         return m_colony.particles().capture();
     }
+
     std::span<const sim::MatterParticle> ColonyDriver::particleChunk(const sim::ChunkPos position) const noexcept {
         return m_colony.particles().chunk(position);
     }
+
     u32 ColonyDriver::particleCount() const noexcept {
         return m_colony.particles().count();
     }
+
     std::span<const sim::MatterParticleBatch> ColonyDriver::editParticles() const noexcept {
         return editReadyForPresentation() ? std::span<const sim::MatterParticleBatch>{m_edit->m_particles}
                                           : std::span<const sim::MatterParticleBatch>{};
@@ -261,10 +277,15 @@ namespace pP::colony {
         const auto *const prepared = preparedWorld();
         return prepared ? prepared->descriptor().m_metric.m_reference_thickness_m : 1.0;
     }
+
     std::string_view ColonyDriver::profileKey() const noexcept {
         const auto *const prepared = preparedWorld();
         return prepared ? std::string_view{prepared->descriptor().m_profile} : std::string_view{};
     }
+
+    // ------------------------------------------------------------------
+    // runtime setup
+    // ------------------------------------------------------------------
 
     std::error_code ColonyDriver::initializeRuntime(
         const ColonyDriverDesc &desc, const TimeSpan period, const sim::GenerationExecution *const execution,
@@ -477,6 +498,10 @@ namespace pP::colony {
         return error;
     }
 
+    // ------------------------------------------------------------------
+    // tick control
+    // ------------------------------------------------------------------
+
     std::error_code ColonyDriver::update(const TimeSpan elapsed) {
         if (not m_timestep) [[unlikely]] {
             return std::make_error_code(std::errc::operation_not_permitted);
@@ -621,6 +646,10 @@ namespace pP::colony {
         return {};
     }
 
+    // ------------------------------------------------------------------
+    // world replacement
+    // ------------------------------------------------------------------
+
     std::error_code ColonyDriver::regenerateLegacyFixture(const u64 seed) {
         PPR_RETURN_ERROR_ON_FAIL(
             ColonyPreparation,
@@ -687,6 +716,10 @@ namespace pP::colony {
         return regenerateLegacyFixture(seed);
     }
 
+    // ------------------------------------------------------------------
+    // driver queries
+    // ------------------------------------------------------------------
+
     sim::ChunkGrid &ColonyDriver::grid() noexcept {
         return m_colony.grid();
     }
@@ -739,6 +772,10 @@ namespace pP::colony {
     u32 ColonyDriver::errandCount() const noexcept {
         return m_errands;
     }
+
+    // ------------------------------------------------------------------
+    // construction tools
+    // ------------------------------------------------------------------
 
     Expected<sim::Entity> ColonyDriver::buildWall(const Footprint &print) {
         if (not m_timestep) {
@@ -877,6 +914,10 @@ namespace pP::colony {
 
         m_present_dirty = std::move(kept);
     }
+
+    // ------------------------------------------------------------------
+    // tool application
+    // ------------------------------------------------------------------
 
     void ColonyDriver::applyToolEdits() noexcept {
         const hal::ProfileScope scope_tool{"Colony.Tool"};
@@ -1019,6 +1060,10 @@ namespace pP::colony {
         ++m_cover_gen;
         m_cache_valid = false;
     }
+
+    // ------------------------------------------------------------------
+    // physics lifecycle
+    // ------------------------------------------------------------------
 
     std::error_code ColonyDriver::initPhysics() {
         if (m_physics_ready) {
@@ -1291,6 +1336,10 @@ namespace pP::colony {
             mirrorBodyStates();
         }
     }
+
+    // ------------------------------------------------------------------
+    // collider preparation
+    // ------------------------------------------------------------------
 
     std::error_code ColonyDriver::copyColliderChunk(const sim::ChunkPos position, Array<u16> &occupancy) const {
         occupancy.assign(sim::kCellsPerChunk, u16{});
@@ -1694,6 +1743,10 @@ namespace pP::colony {
         }
         return rebuilt;
     }
+
+    // ------------------------------------------------------------------
+    // driver diagnostics
+    // ------------------------------------------------------------------
 
     std::span<const AgentSummary> ColonyDriver::agentSummaries() const noexcept {
         return std::span<const AgentSummary>{m_agents.data(), m_agents.size()};

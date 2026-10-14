@@ -6,6 +6,10 @@ import engine.sim;
 import std;
 
 export namespace pP::colony {
+    // ------------------------------------------------------------------
+    // constants
+    // ------------------------------------------------------------------
+
     /// Capability bits for `PathReq::m_caps`. Only plain walking exists;
     /// doors/permissions and flying are non-goals (plan §5).
     inline constexpr u32 kPathCapsWalk = 1u;
@@ -22,6 +26,10 @@ export namespace pP::colony {
 
     /// Words of the membership bitset covering every world cell exactly once.
     inline constexpr u32 kSearchBitWords = (sim::kWorldEdge * sim::kWorldEdge + 63u) / 64u;
+
+    // ------------------------------------------------------------------
+    // types
+    // ------------------------------------------------------------------
 
     /// Durable path request. Lives in the existing ECS columns section, so it
     /// is snapshot-covered with no format bump; registration order is fixed by
@@ -84,6 +92,10 @@ export namespace pP::colony {
     static_assert(std::is_standard_layout_v<PathComp> and std::is_trivially_copyable_v<PathComp>);
     static_assert(sizeof(PathReq) == 28u);
     static_assert(sizeof(PathComp) == 2060u);
+
+    // ------------------------------------------------------------------
+    // operations
+    // ------------------------------------------------------------------
 
     /// Walkable means vacuum element. A never-written chunk reads back as
     /// `Cell{}` (all vacuum), so non-resident space is walkable by convention.

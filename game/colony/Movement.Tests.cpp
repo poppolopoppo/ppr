@@ -25,6 +25,7 @@ namespace pP::game::tests::detail::movement {
         for (u32 x = 100u; x < 150u; ++x) {
             PPR_TEST_ASSERT(not driver.grid().setCell({x, 40u}, {1u, 293.0f}));
         }
+
         sim::Entity actor{};
         for (const auto &[entity, agent]: driver.registry().view<Agent>()) {
             (void) agent;
@@ -33,6 +34,7 @@ namespace pP::game::tests::detail::movement {
         *driver.registry().get<sim::BodyState>(actor) = {110.0f, 43.0f};
         PPR_TEST_ASSERT(not driver.restoreBodies());
         PPR_TEST_ASSERT(not driver.assignControl(actor));
+
         driver.requireEditPublication();
         const auto before = *driver.registry().get<sim::BodyState>(actor);
         PPR_TEST_ASSERT(not driver.requestDig({127u, 40u}, 2u, 1u));
@@ -43,6 +45,7 @@ namespace pP::game::tests::detail::movement {
             PPR_TEST_ASSERT(not driver.update(period * 5u));
         }
         PPR_TEST_ASSERT(driver.editReadyForPresentation());
+
         driver.setPaused(true);
         PPR_TEST_ASSERT(driver.restoreBodies() == std::errc::device_or_resource_busy);
         PPR_TEST_ASSERT(driver.regenerateLegacyFixture(42u) == std::errc::device_or_resource_busy);
@@ -51,6 +54,7 @@ namespace pP::game::tests::detail::movement {
         PPR_TEST_ASSERT(driver.grid().getCell({127u, 40u})->m_element == 1u);
         const auto held = *driver.registry().get<sim::BodyState>(actor);
         PPR_TEST_ASSERT(held.m_x == before.m_x and held.m_y == before.m_y);
+
         Array<ColonyDriver::DirtyChunk> manifest(driver.editManifest().begin(), driver.editManifest().end());
         PPR_TEST_ASSERT(manifest.size() == 2u);
         PPR_TEST_ASSERT(not driver.settleEdit(std::span<const ColonyDriver::DirtyChunk>{manifest.data(), 1u}));
@@ -65,6 +69,7 @@ namespace pP::game::tests::detail::movement {
         PPR_TEST_ASSERT(not driver.initialMatterBaselineValid());
         PPR_TEST_ASSERT(driver.grid().getCell({127u, 40u})->m_element == 0u);
         PPR_TEST_ASSERT(driver.grid().getCell({128u, 40u})->m_element == 0u);
+
         PPR_TEST_ASSERT(not driver.update(TimeSpan{}));
         PPR_TEST_ASSERT(driver.tickCount() == 0u);
         PPR_TEST_ASSERT(not driver.requestDig({129u, 40u}, 1u, 1u));
@@ -77,10 +82,12 @@ namespace pP::game::tests::detail::movement {
         manifest.assign(driver.editManifest().begin(), driver.editManifest().end());
         PPR_TEST_ASSERT(not driver.settleEdit(manifest));
         PPR_TEST_ASSERT(driver.tickCount() == 0u and driver.digTotal() == 3u);
+
         PPR_TEST_ASSERT(not driver.stepOne());
         PPR_TEST_ASSERT(driver.tickCount() == 1u);
         PPR_TEST_ASSERT(not driver.update(TimeSpan{}));
         PPR_TEST_ASSERT(driver.tickCount() == 1u);
+
         driver.setPaused(false);
         PPR_TEST_ASSERT(not driver.update(TimeSpan{}));
         PPR_TEST_ASSERT(driver.tickCount() == 3u);
@@ -96,6 +103,7 @@ namespace pP::game::tests::detail::movement {
         PPR_TEST_ASSERT(not driver.restoreBodies());
         driver.requireEditPublication();
         driver.setPaused(true);
+
         const auto errand = driver.buildWall({{120u, 40u}, 16u, 8u, 1u});
         PPR_TEST_ASSERT(errand.has_value());
         PPR_TEST_ASSERT(not driver.stepOne());
@@ -105,6 +113,7 @@ namespace pP::game::tests::detail::movement {
         PPR_TEST_ASSERT(driver.editReadyForPresentation());
         PPR_TEST_ASSERT(driver.registry().get<BuildErrand>(*errand)->m_progress == 0u);
         PPR_TEST_ASSERT(driver.grid().getCell({120u, 40u})->m_element == 0u);
+
         Array<ColonyDriver::DirtyChunk> manifest(driver.editManifest().begin(), driver.editManifest().end());
         PPR_TEST_ASSERT(not driver.settleEdit(manifest));
         PPR_TEST_ASSERT(driver.registry().get<BuildErrand>(*errand)->m_progress == 64u);
@@ -117,6 +126,7 @@ namespace pP::game::tests::detail::movement {
         PPR_TEST_ASSERT(driver.registry().get<BuildErrand>(*errand)->m_progress == 64u);
         PPR_TEST_ASSERT(not driver.shutdown());
         PPR_TEST_ASSERT(not driver.editPending());
+
         PPR_TEST_ASSERT(not driver.initLegacyFixture({.m_seed = 42u, .m_agent_count = 1u}));
         PPR_TEST_ASSERT(not driver.update(TimeSpan{std::chrono::seconds{1}} / 60u));
         PPR_TEST_ASSERT(driver.tickCount() == 1u);
@@ -133,6 +143,7 @@ namespace pP::game::tests::detail::movement {
         PPR_TEST_ASSERT(not driver.restoreBodies());
         driver.setPaused(true);
         driver.requireEditPublication();
+
         PPR_TEST_ASSERT(not driver.requestDig({100u, 40u}, 1u, 1u));
         PPR_TEST_ASSERT(not driver.update(TimeSpan{}));
         PPR_TEST_ASSERT(driver.editPending());
@@ -140,6 +151,7 @@ namespace pP::game::tests::detail::movement {
         for (u32 request = 0u; request < 255u; ++request) {
             PPR_TEST_ASSERT(not driver.requestDig({102u, 40u}, 1u, 1u));
         }
+
         for (u32 edit = 0u; edit < 2u; ++edit) {
             for (u32 batch = 0u; batch < 32u and not driver.editReadyForPresentation(); ++batch) {
                 PPR_TEST_ASSERT(not driver.update(TimeSpan{}));
@@ -151,6 +163,7 @@ namespace pP::game::tests::detail::movement {
                 PPR_TEST_ASSERT(not driver.update(TimeSpan{}));
             }
         }
+
         PPR_TEST_ASSERT(driver.digTotal() == 2u and driver.tickCount() == 0u);
         PPR_TEST_ASSERT(driver.grid().getCell({101u, 40u})->m_element == 0u);
         PPR_TEST_ASSERT(driver.grid().getCell({102u, 40u})->m_element == 1u);
@@ -175,6 +188,7 @@ namespace pP::game::tests::detail::movement {
         for (u32 x = 0u; x < 1024u; ++x) {
             PPR_TEST_ASSERT(not driver.grid().setCell({x, 40u}, {1u, 293.0f}));
         }
+
         auto &registry = driver.registry();
         sim::Entity actor{};
         for (const auto &[entity, agent]: registry.view<Agent>()) {
@@ -191,6 +205,7 @@ namespace pP::game::tests::detail::movement {
         for (u32 tick = 0u; tick < 80u; ++tick) {
             PPR_TEST_ASSERT(not driver.update(TimeSpan{std::chrono::seconds{1}} / 60u));
         }
+
         PPR_TEST_ASSERT(registry.get<sim::BodyState>(actor)->m_x > 450.0f);
         PPR_TEST_ASSERT(registry.get<sim::BodyState>(actor)->m_y > 41.0f);
         PPR_TEST_ASSERT(driver.chainCount({4u, 0u}) > 0u);
@@ -211,6 +226,7 @@ namespace pP::game::tests::detail::movement {
             const auto *const body = registry.get<sim::BodyDefinition>(entity);
             PPR_TEST_ASSERT(body->m_half_width == 0.4f and body->m_half_height == 0.9f);
         }
+
         auto *const pose = registry.get<sim::BodyState>(actor);
         *pose = {10.5f, 20.5f};
         registry.get<Agent>(actor)->m_spawn = {50u, 61u};
@@ -220,6 +236,7 @@ namespace pP::game::tests::detail::movement {
         Intent intent{};
         PPR_TEST_ASSERT(not agentIntent(registry, actor, intent, kFineCellsPerMetre));
         PPR_TEST_ASSERT(intent.m_velocity_x == kAgentSpeed and intent.m_velocity_y == 0.0f);
+
         const auto ladder = registry.create();
         registry.emplace<BuildErrand>(
             ladder,
@@ -229,6 +246,7 @@ namespace pP::game::tests::detail::movement {
                 .m_total = 18u});
         PPR_TEST_ASSERT(not playerIntent(registry, actor, {0, -1}, intent, kFineCellsPerMetre));
         PPR_TEST_ASSERT(intent.m_climbing and intent.m_velocity_y == -kAgentSpeed);
+
         pose->m_x = 12.0f;
         PPR_TEST_ASSERT(not playerIntent(registry, actor, {1, 1}, intent, kFineCellsPerMetre));
         PPR_TEST_ASSERT(not intent.m_climbing and intent.m_velocity_y == 0.0f and intent.m_velocity_x == kAgentSpeed);
@@ -258,6 +276,7 @@ namespace pP::game::tests::detail::movement {
         PPR_TEST_ASSERT(not driver.restoreBodies());
         PPR_TEST_ASSERT(not driver.assignControl(actors[0u]));
         PPR_TEST_ASSERT(driver.controlledEntity() == actors[0u]);
+
         const auto tick = TimeSpan{std::chrono::seconds{1}} / 60u;
         const auto controlled = actors[0u];
         PPR_TEST_ASSERT(not driver.setPlayerCommand({1, 0}));
@@ -271,6 +290,7 @@ namespace pP::game::tests::detail::movement {
         const auto *const path = registry.get<PathComp>(actors[1u]);
         PPR_TEST_ASSERT(path != nullptr and path->m_count > 0u and path->m_cursor > 0u);
         PPR_TEST_ASSERT(registry.get<sim::BodyState>(actors[1u])->m_velocity_x > 0.0f);
+
         const auto falling = registry.get<sim::BodyState>(controlled)->m_velocity_y;
         PPR_TEST_ASSERT(not driver.setPlayerCommand({-1, 0}));
         PPR_TEST_ASSERT(not driver.update(tick));
@@ -279,6 +299,7 @@ namespace pP::game::tests::detail::movement {
         PPR_TEST_ASSERT(driver.setPlayerCommand({2, 0}) == std::errc::invalid_argument);
         PPR_TEST_ASSERT(driver.assignControl(registry.create()) == std::errc::invalid_argument);
         PPR_TEST_ASSERT(driver.controlledEntity() == controlled);
+
         driver.setPaused(true);
         PPR_TEST_ASSERT(not driver.setPlayerCommand({1, 0}));
         PPR_TEST_ASSERT(not driver.stepOne());
@@ -295,12 +316,14 @@ namespace pP::game::tests::detail::movement {
         PPR_TEST_ASSERT(not driver.setPlayerCommand({0, -1}));
         PPR_TEST_ASSERT(not driver.update(tick));
         PPR_TEST_ASSERT(registry.get<sim::BodyState>(controlled)->m_velocity_y == -kAgentSpeed);
+
         driver.clearPlayerCommand();
         PPR_TEST_ASSERT(not driver.update(tick));
         PPR_TEST_ASSERT(registry.get<sim::BodyState>(controlled)->m_velocity_y == 0.0f);
         PPR_TEST_ASSERT(registry.remove<BuildErrand>(ladder));
         PPR_TEST_ASSERT(not driver.update(tick));
         PPR_TEST_ASSERT(registry.get<sim::BodyState>(controlled)->m_velocity_y < 0.0f);
+
         PPR_TEST_ASSERT(not driver.setPlayerCommand({1, 0}));
         PPR_TEST_ASSERT(not driver.restoreBodies());
         PPR_TEST_ASSERT(not driver.update(tick));
@@ -355,6 +378,7 @@ namespace pP::game::tests::detail::movement {
         }
         PPR_TEST_ASSERT(not driver.restoreBodies());
         driver.setPaused(true);
+
         PPR_TEST_ASSERT(not driver.stepOne());
         const auto entity = actors[0u];
         auto pose = *registry.get<sim::BodyState>(entity);
@@ -398,6 +422,7 @@ namespace pP::game::tests::detail::movement {
         for (u32 x = 40u; x < 70u; ++x) {
             PPR_TEST_ASSERT(not driver.grid().setCell({x, 40u}, {1u, 293.0f}));
         }
+
         auto &registry = driver.registry();
         sim::Entity actor{};
         for (const auto &[entity, agent]: registry.view<Agent>()) {
@@ -412,6 +437,7 @@ namespace pP::game::tests::detail::movement {
             PPR_TEST_ASSERT(not driver.stepOne());
         }
         PPR_TEST_ASSERT(registry.get<sim::BodyState>(actor)->m_y > 41.0f);
+
         driver.grid() = sim::ChunkGrid{};
         PPR_TEST_ASSERT(not driver.restoreBodies());
         for (u32 tick = 0u; tick < 60u; ++tick) {
@@ -436,6 +462,7 @@ namespace pP::game::tests {
                 detail::movement::movement_preserves_falling_momentum_and_restores_ladder_gravity,
                 detail::movement::restoration_releases_previous_terrain_chains});
     };
+
     const UnitTest &gameMovementTests() noexcept {
         return movement;
     }

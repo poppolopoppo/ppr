@@ -56,6 +56,10 @@ namespace pP::colony {
         }
     }
 
+    // ------------------------------------------------------------------
+    // translator
+    // ------------------------------------------------------------------
+
     void ColonyTranslator::reset(GridPass &pass) noexcept {
         pass.clearTiles();
         pass.clearCache();

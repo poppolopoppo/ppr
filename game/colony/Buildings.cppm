@@ -8,11 +8,19 @@ import game.colony.content;
 import std;
 
 export namespace pP::colony {
+    // ------------------------------------------------------------------
+    // building constants
+    // ------------------------------------------------------------------
+
     /// Max footprint edge in cells; bounds one errand's total work.
     inline constexpr u32 kMaxFootprintEdge = 32u;
 
     /// Grid cells written per BuildStep tick across all live errands.
     inline constexpr u32 kErrandCellsPerTick = 64u;
+
+    // ------------------------------------------------------------------
+    // building types
+    // ------------------------------------------------------------------
 
     /// Edit-domain rectangle. Game-local state (NOT sim snapshot vocabulary):
     /// solid writes `m_element`, non-solid writes vacuum; ladders are
@@ -42,6 +50,10 @@ export namespace pP::colony {
     static_assert(std::is_standard_layout_v<BuildErrand> and std::is_trivially_copyable_v<BuildErrand>);
     static_assert(sizeof(Footprint) == 20u);
     static_assert(sizeof(BuildErrand) == 28u);
+
+    // ------------------------------------------------------------------
+    // building api
+    // ------------------------------------------------------------------
 
     /// Registers Footprint then BuildErrand. Never call alone: use
     /// `registerColonyComponents` so ids stay append-only and central.

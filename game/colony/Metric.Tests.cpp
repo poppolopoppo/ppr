@@ -35,6 +35,7 @@ namespace pP::game::tests::detail::metric {
                 PPR_TEST_ASSERT(before.has_value() and before->m_x == i - 1u);
             }
         }
+
         const auto last = metreToFineCell({std::nextafter(kWorldExtentMetres, 0.0), 0.0});
         PPR_TEST_ASSERT(last.has_value() and last->m_x == sim::kWorldEdge - 1u);
         PPR_TEST_ASSERT(not metreToFineCell({kWorldExtentMetres, 0.0}).has_value());
@@ -59,6 +60,7 @@ namespace pP::game::tests::detail::metric {
                 PPR_TEST_ASSERT(tile.has_value() and tile->m_x == 42u and tile->m_y == 42u);
             }
         }
+
         const auto last = constructionFootprint({1364u, 1364u});
         PPR_TEST_ASSERT(last.has_value() and last->m_end.m_x == 4095u and last->m_end.m_y == 4095u);
         PPR_TEST_ASSERT(not constructionTileOf({4095u, 0u}).has_value());
@@ -68,6 +70,7 @@ namespace pP::game::tests::detail::metric {
         PPR_TEST_ASSERT(not constructionFootprint({0u, 0u}, {0u, 1u}).has_value());
         PPR_TEST_ASSERT(not constructionFootprint({(std::numeric_limits<u32>::max)(), 0u}).has_value());
         PPR_TEST_ASSERT(not constructionFootprint({0u, 0u}, {(std::numeric_limits<u32>::max)(), 1u}).has_value());
+
         const auto multi = constructionFootprint({1u, 2u}, {2u, 3u});
         PPR_TEST_ASSERT(multi.has_value() and multi->m_begin.m_x == 3u and multi->m_end.m_y == 15u);
     };
@@ -77,17 +80,21 @@ namespace pP::game::tests::detail::metric {
         PPR_TEST_ASSERT(single.has_value());
         PPR_TEST_ASSERT((single->m_begin == sim::GlobalCellPos{126u, 126u}));
         PPR_TEST_ASSERT((single->m_end == sim::GlobalCellPos{129u, 129u}));
+
         const auto forward = constructionDragFootprint({127u, 127u}, {500u, 500u}, 32u);
         PPR_TEST_ASSERT(forward.has_value());
         PPR_TEST_ASSERT((forward->m_begin == sim::GlobalCellPos{126u, 126u}));
         PPR_TEST_ASSERT((forward->m_end == sim::GlobalCellPos{156u, 156u}));
+
         const auto reverse = constructionDragFootprint({127u, 127u}, {0u, 0u}, 32u);
         PPR_TEST_ASSERT(reverse.has_value());
         PPR_TEST_ASSERT((reverse->m_begin == sim::GlobalCellPos{99u, 99u}));
         PPR_TEST_ASSERT((reverse->m_end == sim::GlobalCellPos{129u, 129u}));
+
         PPR_TEST_ASSERT(not constructionDragFootprint({4095u, 0u}, {0u, 0u}, 32u));
         PPR_TEST_ASSERT(not constructionDragFootprint({0u, 0u}, {4095u, 0u}, 32u));
         PPR_TEST_ASSERT(not constructionDragFootprint({0u, 0u}, {0u, 0u}, 2u));
+
         const auto corner = constructionDragFootprint({4094u, 4094u}, {4094u, 4094u}, 32u);
         PPR_TEST_ASSERT(corner.has_value() and corner->m_end.m_x == 4095u and corner->m_end.m_y == 4095u);
     };
@@ -104,6 +111,7 @@ namespace pP::game::tests::detail::metric {
                         .has_value());
             }
         }
+
         PPR_TEST_ASSERT(*discreteFineCellLength(1.0) == 3u);
         PPR_TEST_ASSERT(*discreteFineCellLength(3.0) == 9u);
         PPR_TEST_ASSERT(*discreteFineCellLength(1.0 / 3.0) == 1u);
@@ -127,6 +135,7 @@ namespace pP::game::tests {
                 detail::metric::construction_drag_snaps_and_clamps_from_the_anchor_tile,
                 detail::metric::discrete_dimensions_volume_and_metric_identity});
     };
+
     const UnitTest &gameMetricTests() noexcept {
         return metric;
     }

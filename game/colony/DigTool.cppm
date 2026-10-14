@@ -7,6 +7,10 @@ import game.colony.content;
 import std;
 
 export namespace pP::colony {
+    // ------------------------------------------------------------------
+    // constants
+    // ------------------------------------------------------------------
+
     /// Max dig edge in cells; mirrors `kMaxFootprintEdge` without importing
     /// the buildings module (this module imports core/sim only).
     inline constexpr u32 kMaxDigEdge = 32u;
@@ -14,6 +18,10 @@ export namespace pP::colony {
     /// Cell budget of one dig: the full 32x32 rect. Vacuum no-ops never
     /// charge it; oversized rects fail validation before any write.
     inline constexpr u32 kMaxDigCells = kMaxDigEdge * kMaxDigEdge;
+
+    // ------------------------------------------------------------------
+    // types
+    // ------------------------------------------------------------------
 
     /// Dig rectangle. Game-local edit vocabulary (NOT sim snapshot state):
     /// every non-vacuum cell inside clears to vacuum, temperature preserved.
@@ -34,6 +42,10 @@ export namespace pP::colony {
 
     static_assert(std::is_standard_layout_v<DigRect>);
     static_assert(sizeof(DigRect) == 16u);
+
+    // ------------------------------------------------------------------
+    // operations
+    // ------------------------------------------------------------------
 
     /// Validates `rect` (edges in [1, kMaxDigEdge], area within kMaxDigCells,
     /// rect inside the world), then clears every non-vacuum cell row-major to

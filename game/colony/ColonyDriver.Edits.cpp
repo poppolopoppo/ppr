@@ -7,23 +7,35 @@ import std;
 namespace pP::colony {
     PPR_DEFINE_LOG_CATEGORY(ColonyEdits, info, none);
 
+    // ------------------------------------------------------------------
+    // edit publication
+    // ------------------------------------------------------------------
+
     void ColonyDriver::requireEditPublication() noexcept {
         m_require_edit_publication = true;
     }
+
     bool ColonyDriver::editPending() const noexcept {
         return m_edit.has_value();
     }
+
     bool ColonyDriver::editReadyForPresentation() const noexcept {
         return m_edit and m_edit->m_colliders_ready;
     }
+
     std::span<const sim::ChunkGrid::CapturedChunk> ColonyDriver::editChunks() const noexcept {
         return editReadyForPresentation() ? std::span<const sim::ChunkGrid::CapturedChunk>{m_edit->m_chunks}
                                           : std::span<const sim::ChunkGrid::CapturedChunk>{};
     }
+
     std::span<const ColonyDriver::DirtyChunk> ColonyDriver::editManifest() const noexcept {
         return editReadyForPresentation() ? std::span<const DirtyChunk>{m_edit->m_manifest}
                                           : std::span<const DirtyChunk>{};
     }
+
+    // ------------------------------------------------------------------
+    // held ticks
+    // ------------------------------------------------------------------
 
     std::error_code ColonyDriver::runHeldTicks() {
         while (m_held_slices != 0u) {
@@ -50,6 +62,10 @@ namespace pP::colony {
         }
         return {};
     }
+
+    // ------------------------------------------------------------------
+    // edit preparation
+    // ------------------------------------------------------------------
 
     std::error_code ColonyDriver::prepareEdit(const bool advance_build) {
         EditCandidate candidate{};
@@ -173,6 +189,10 @@ namespace pP::colony {
         return {};
     }
 
+    // ------------------------------------------------------------------
+    // edit colliders
+    // ------------------------------------------------------------------
+
     std::error_code ColonyDriver::prepareEditColliders() {
         PPR_ASSERT(m_edit.has_value());
         if (m_edit->m_colliders_ready) {
@@ -211,6 +231,10 @@ namespace pP::colony {
         m_edit->m_colliders_ready = m_colliders.pendingCount() == 0u;
         return {};
     }
+
+    // ------------------------------------------------------------------
+    // edit settlement
+    // ------------------------------------------------------------------
 
     std::error_code ColonyDriver::settleEdit(const std::span<const DirtyChunk> manifest) {
         if (not editReadyForPresentation()) {

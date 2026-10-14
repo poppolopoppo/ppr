@@ -237,6 +237,10 @@ namespace pP::colony {
             }
         }
 
+        // ------------------------------------------------------------------
+        // status line
+        // ------------------------------------------------------------------
+
         /// Bottom status line: hovered cell/element, pinned target, then the
         /// newest bounded notice (with its error code) or the standing tool
         /// instruction. Returns its height for the side-panel layout.
@@ -310,6 +314,10 @@ namespace pP::colony {
             ImGui::End();
             return height;
         }
+
+        // ------------------------------------------------------------------
+        // top bar
+        // ------------------------------------------------------------------
 
         /// Wrapping top simulation bar plus the contextual tool strip and the
         /// build/regenerate popups. Every button dispatches the same intent
@@ -576,6 +584,10 @@ namespace pP::colony {
             return height;
         }
 
+        // ------------------------------------------------------------------
+        // inspector
+        // ------------------------------------------------------------------
+
         /// Persistent Inspector: Hovering vs Pinned header, coordinates,
         /// element, temperature, pin/unpin, the Focus control, the selected
         /// colonist's stable key with its follow state, and the nearest
@@ -695,6 +707,10 @@ namespace pP::colony {
             ImGui::TextDisabled("A-number is the key's low 32 bits; selection holds the whole 64-bit key.");
         }
 
+        // ------------------------------------------------------------------
+        // world generation
+        // ------------------------------------------------------------------
+
         void drawWorldGeneration_(
             const ColonyDriver &driver, ColonyUiState &state, std::optional<ColonyIntent> &intent) {
             const auto *const prepared = driver.preparedWorld();
@@ -753,11 +769,16 @@ namespace pP::colony {
             }
         }
 
+        // ------------------------------------------------------------------
+        // generated cell metadata
+        // ------------------------------------------------------------------
+
         void drawGeneratedCellMetadata_(const ColonyDriver &driver, const sim::GlobalCellPos target) {
             const auto *const prepared = driver.preparedWorld();
             if (prepared == nullptr) {
                 return;
             }
+
             const auto &world = prepared->generated();
             const auto &catalog = prepared->catalog();
             const auto &recipe = world.m_plan.recipe();
@@ -767,6 +788,7 @@ namespace pP::colony {
             if (biome < catalog.biomes().size()) {
                 ImGui::Text("Biome: %s", catalog.biomes()[biome].m_display_name.c_str());
             }
+
             for (const auto &instance: world.m_geometry.m_instances) {
                 if (instance.m_feature >= recipe.m_features.size() or instance.m_feature >= catalog.features().size()) {
                     continue;
@@ -778,6 +800,7 @@ namespace pP::colony {
                     ImGui::Text("Feature footprint: %s", catalog.features()[instance.m_feature].m_display_name.c_str());
                 }
             }
+
             for (const auto &particle: driver.particleChunk(sim::chunkOf(target))) {
                 const u32 x = static_cast<u32>(particle.m_x_m / recipe.m_cell_size_m),
                           y = static_cast<u32>(particle.m_y_m / recipe.m_cell_size_m);
@@ -792,8 +815,13 @@ namespace pP::colony {
                 ImGui::Text("Volume: %.6f m3; mass: %.6f kg", particle.m_volume_m3, particle.m_mass_kg);
                 return;
             }
+
             ImGui::TextDisabled("No particle here");
         }
+
+        // ------------------------------------------------------------------
+        // colony section
+        // ------------------------------------------------------------------
 
         /// Colony section: the Slice 1/2 counters, then the colonist list —
         /// one row per live summary with a per-row Focus button, the Find
@@ -947,6 +975,10 @@ namespace pP::colony {
             }
         }
 
+        // ------------------------------------------------------------------
+        // performance
+        // ------------------------------------------------------------------
+
         /// Bounded performance and operational diagnostics for the current view.
         void drawPerformance_(const ColonyUiView &view) {
             const ColonyPerfView &perf = view.m_perf;
@@ -997,8 +1029,6 @@ namespace pP::colony {
             ImGui::Text("Dig issued %llu", static_cast<unsigned long long>(perf.m_dig_issued));
             ImGui::Text("Dig wait   %llu pending", static_cast<unsigned long long>(perf.m_dig_pending_est));
             ImGui::TextDisabled("Pending is issued minus applied - an upper bound, restarted by regen.");
-
-
         }
 
         /// Right side panel: section buttons, the persistent Inspector above
@@ -1155,6 +1185,7 @@ namespace pP::colony {
                 session.m_draft = std::move(*draft);
                 session.m_synced = true;
             }
+
             const auto availability = game::displaySwitchingAvailability(snap.m_capabilities);
             auto &draft = session.m_draft;
             const ui::DisplayWidgetState widget{
@@ -1200,6 +1231,10 @@ namespace pP::colony {
             }
         }
     } // namespace
+
+    // ------------------------------------------------------------------
+    // colony ui
+    // ------------------------------------------------------------------
 
     ColonyUiFrame drawColonyUi(
         const ColonyDriver &driver, const ColonyUiView &view, const ColonyDisplaySnapshot &display,
