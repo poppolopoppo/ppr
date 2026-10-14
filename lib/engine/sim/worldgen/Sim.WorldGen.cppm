@@ -2,6 +2,8 @@ module;
 
 export module engine.sim:worldgen;
 
+export import :worldgen.definition;
+
 import :chunk_grid;
 
 import engine.core;
@@ -17,12 +19,13 @@ export namespace pP::sim {
         validation,
         complete
     };
+
     /// Borrowed execution dependencies, valid until generation has drained.
     /// A null pool selects serial execution on the caller (the game uses its
     /// coordinator, never the UI). Progress counts completed whole chunks.
     struct GenerationExecution {
-        ParallelScheduler *m_pool{};
-        const IContext *m_context{};
+        safe_ptr<ParallelScheduler> m_scheduler{&parallel::backgroundPool()};
+        SharedContext m_context{};
         std::atomic<u32> *m_completed_chunks{};
         std::atomic<EGenerationStage> *m_stage{};
     };

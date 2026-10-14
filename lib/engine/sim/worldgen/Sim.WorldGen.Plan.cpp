@@ -11,6 +11,10 @@ namespace pP::sim {
     using pP::make_error_code;
     PPR_DEFINE_LOG_CATEGORY(WorldPlan, info, none);
 
+    // ------------------------------------------------------------------
+    // plan helpers
+    // ------------------------------------------------------------------
+
     namespace {
         [[nodiscard]] u64 mix(const u64 value) noexcept {
             u64 state = value;
@@ -18,16 +22,20 @@ namespace pP::sim {
             state = (state ^ (state >> 27u)) * 0x94d049bb133111ebull;
             return state ^ (state >> 31u);
         }
+
         [[nodiscard]] bool finiteRange(const double value, const double low, const double high) noexcept {
             return std::isfinite(value) and value >= low and value <= high;
         }
+
         [[nodiscard]] bool interval(
             const double low, const double high, const double minimum, const double maximum) noexcept {
             return finiteRange(low, minimum, maximum) and finiteRange(high, minimum, maximum) and low <= high;
         }
+
         [[nodiscard]] bool positive(const double value, const double maximum) noexcept {
             return std::isfinite(value) and value > 0.0 and value <= maximum;
         }
+
         template<class T>
         [[nodiscard]] bool validWeights(const Array<T> &values) noexcept {
             double total = 0.0;
@@ -40,6 +48,7 @@ namespace pP::sim {
                 }
                 total = next;
             }
+
             double cumulative = 0.0, previous = 0.0;
             for (const auto &value: values) {
                 cumulative += value.m_weight;
@@ -51,6 +60,7 @@ namespace pP::sim {
             }
             return true;
         }
+
         template<class T>
         [[nodiscard]] bool uniqueKeys(const Array<T> &values) noexcept {
             for (std::size_t i = 0u; i < values.size(); ++i) {
@@ -62,6 +72,7 @@ namespace pP::sim {
             }
             return true;
         }
+
         template<class T>
         [[nodiscard]] bool ordered(const Array<T> &values) noexcept {
             for (std::size_t i = 1u; i < values.size(); ++i) {
@@ -71,6 +82,7 @@ namespace pP::sim {
             }
             return uniqueKeys(values);
         }
+
         [[nodiscard]] const GenerationMaterial *material(const GenerationRecipe &recipe, const u16 id) noexcept {
             for (const auto &entry: recipe.m_materials) {
                 if (entry.m_id == id) {
@@ -79,14 +91,17 @@ namespace pP::sim {
             }
             return nullptr;
         }
+
         [[nodiscard]] bool terrain(const GenerationRecipe &recipe, const u16 id) noexcept {
             const auto *const entry = material(recipe, id);
             return entry != nullptr and entry->m_terrain;
         }
+
         [[nodiscard]] bool activeBiome(const GenerationRecipe &recipe, const u32 index) noexcept {
             return std::ranges::any_of(
                 recipe.m_constraints, [index](const auto &entry) { return entry.m_biome == index; });
         }
+
         [[nodiscard]] std::error_code validateCounts(const GenerationRecipe &recipe) {
             if (recipe.m_materials.empty() or
                 recipe.m_materials.size() > kMaxGenerationMaterials or
@@ -102,6 +117,7 @@ namespace pP::sim {
                 recipe.m_resources.size() > 8u) {
                 PPR_RETURN_ERROR_ON_FAIL(WorldPlan, std::errc::value_too_large);
             }
+
             if (not uniqueKeys(recipe.m_fields) or
                 not uniqueKeys(recipe.m_biomes) or
                 not uniqueKeys(recipe.m_features) or
@@ -112,6 +128,7 @@ namespace pP::sim {
             }
             return {};
         }
+
         [[nodiscard]] std::error_code validateMaterials(const GenerationRecipe &recipe) {
             for (std::size_t i = 0u; i < recipe.m_materials.size(); ++i) {
                 const auto &entry = recipe.m_materials[i];
@@ -122,6 +139,7 @@ namespace pP::sim {
                     not positive(entry.m_reference_density_kg_m3, (std::numeric_limits<double>::max)())) {
                     PPR_RETURN_ERROR_ON_FAIL(WorldPlan, std::errc::invalid_argument);
                 }
+
                 for (std::size_t j = 0u; j < i; ++j) {
                     if (recipe.m_materials[j].m_id == entry.m_id) {
                         PPR_RETURN_ERROR_ON_FAIL(WorldPlan, std::errc::invalid_argument);
@@ -130,6 +148,7 @@ namespace pP::sim {
             }
             return {};
         }
+
         [[nodiscard]] std::error_code validateBiomes(const GenerationRecipe &recipe) {
             u64 blob_count = 0u;
             for (const auto &biome: recipe.m_biomes) {
@@ -142,15 +161,6 @@ namespace pP::sim {
                     biome.m_bands.size() > 128u or
                     biome.m_deposits.size() > 128u or
                     biome.m_lining_thickness_fine > 3u or
-                    biome.m_relaxation_passes > 24u or
-                    static_cast<u64>(biome.m_relaxation_passes) +
-                            biome.m_pore_passes +
-                            biome.m_finish_passes +
-                            biome.m_erosion_passes >
-                        24u or
-                    biome.m_pore_passes > 6u or
-                    biome.m_finish_passes > 4u or
-                    biome.m_erosion_passes > 24u or
                     biome.m_pore_field >= recipe.m_fields.size() or
                     not finiteRange(biome.m_pore_probability, 0.0, 0.2) or
                     (biome.m_pore_probability > 0.0 and
@@ -174,6 +184,7 @@ namespace pP::sim {
                     not ordered(biome.m_deposits)) {
                     PPR_RETURN_ERROR_ON_FAIL(WorldPlan, std::errc::invalid_argument);
                 }
+
                 double previous_depth = 0.0;
                 for (const auto &band: biome.m_bands) {
                     if (band.m_field >= recipe.m_fields.size() or
@@ -199,9 +210,11 @@ namespace pP::sim {
                     }
                     previous_depth = band.m_depth_max;
                 }
+
                 if (previous_depth != 1.0) {
                     PPR_RETURN_ERROR_ON_FAIL(WorldPlan, std::errc::invalid_argument);
                 }
+
                 for (const auto &deposit: biome.m_deposits) {
                     if (deposit.m_field >= recipe.m_fields.size() or
                         not terrain(recipe, deposit.m_material) or
@@ -250,14 +263,18 @@ namespace pP::sim {
                     }
                 }
             }
+
             if (blob_count > 4096u) {
                 PPR_RETURN_ERROR_ON_FAIL(WorldPlan, std::errc::value_too_large);
             }
+
             return {};
         }
+
         [[nodiscard]] bool inside(const GenerationBounds &bounds, const i64 x, const i64 y) noexcept {
             return x >= bounds.m_min_x and x < bounds.m_max_x and y >= bounds.m_min_y and y < bounds.m_max_y;
         }
+
         [[nodiscard]] bool validOperation(
             const GenerationRecipe &recipe, const GenerationFeature &feature,
             const GenerationOperation &operation) noexcept {
@@ -282,6 +299,7 @@ namespace pP::sim {
                    std::max(operation.m_x, operation.m_end_x) + radius <= feature.m_bounds.m_max_x and
                    std::max(operation.m_y, operation.m_end_y) + radius <= feature.m_bounds.m_max_y;
         }
+
         [[nodiscard]] std::error_code validateFeatures(const GenerationRecipe &recipe) {
             for (const auto &feature: recipe.m_features) {
                 const auto &bounds = feature.m_bounds;
@@ -300,11 +318,13 @@ namespace pP::sim {
                     not uniqueKeys(feature.m_markers)) {
                     PPR_RETURN_ERROR_ON_FAIL(WorldPlan, std::errc::invalid_argument);
                 }
+
                 for (const auto &operation: feature.m_operations) {
                     if (not validOperation(recipe, feature, operation)) {
                         PPR_RETURN_ERROR_ON_FAIL(WorldPlan, std::errc::invalid_argument);
                     }
                 }
+
                 for (const auto &marker: feature.m_markers) {
                     if (marker.m_role > EGenerationMarker::inert or not inside(bounds, marker.m_x, marker.m_y)) {
                         PPR_RETURN_ERROR_ON_FAIL(WorldPlan, std::errc::invalid_argument);
@@ -313,6 +333,7 @@ namespace pP::sim {
             }
             return {};
         }
+
         [[nodiscard]] std::error_code validateLayout(const GenerationRecipe &recipe) {
             const double world_m = kWorldEdge * recipe.m_cell_size_m;
             if (not terrain(recipe, recipe.m_boundary_material) or
@@ -330,6 +351,7 @@ namespace pP::sim {
                 recipe.m_warp_y_field >= recipe.m_fields.size()) {
                 PPR_RETURN_ERROR_ON_FAIL(WorldPlan, std::errc::invalid_argument);
             }
+
             u64 required = 0u;
             for (std::size_t i = 0u; i < recipe.m_constraints.size(); ++i) {
                 const auto &constraint = recipe.m_constraints[i];
@@ -345,11 +367,14 @@ namespace pP::sim {
                 }
                 required += constraint.m_required_count;
             }
+
             if (required > recipe.m_max_sites or not validWeights(recipe.m_constraints)) {
                 PPR_RETURN_ERROR_ON_FAIL(WorldPlan, std::errc::invalid_argument);
             }
+
             return {};
         }
+
         [[nodiscard]] bool validRule(const GenerationRecipe &recipe, const GenerationRule &rule) noexcept {
             return std::visit(
                 [&](const auto &value) {
@@ -420,12 +445,15 @@ namespace pP::sim {
                             feature.m_markers[value.m_marker].m_role != EGenerationMarker::sealed_pocket) {
                             return false;
                         }
+
                         if (value.m_gas) {
                             return not value.m_fill_height_m.has_value();
                         }
+
                         if (not value.m_fill_height_m or not finiteRange(*value.m_fill_height_m, -4096.0, 4096.0)) {
                             return false;
                         }
+
                         // Compare with the canonical boundary itself, not a tolerance
                         // which would silently accept neighbouring floating-point values.
                         const double cells_per_metre = 1.0 / recipe.m_cell_size_m;
@@ -438,6 +466,7 @@ namespace pP::sim {
                 },
                 rule.m_parameters);
         }
+
         [[nodiscard]] std::error_code validateRules(const GenerationRecipe &recipe) {
             u64 worm_count = 0u, feature_count = 0u, origin_attempts = 0u;
             for (const auto &biome: recipe.m_biomes) {
@@ -445,6 +474,7 @@ namespace pP::sim {
                     origin_attempts += static_cast<u64>(deposit.m_blob_count) * kGenerationBlobOriginAttempts;
                 }
             }
+
             u32 connections = 0u;
             for (std::size_t i = 0u; i < recipe.m_rules.size(); ++i) {
                 const auto &rule = recipe.m_rules[i];
@@ -467,14 +497,17 @@ namespace pP::sim {
                     ++connections;
                 }
             }
+
             if (worm_count > 4096u or
                 feature_count > 1024u or
                 connections > 1u or
                 origin_attempts > kMaxGenerationOriginAttempts) {
                 PPR_RETURN_ERROR_ON_FAIL(WorldPlan, std::errc::value_too_large);
             }
+
             return {};
         }
+
         [[nodiscard]] std::error_code validateStart(const GenerationRecipe &recipe) {
             if (not activeBiome(recipe, recipe.m_start_biome) or
                 recipe.m_start_feature >= recipe.m_features.size() or
@@ -488,6 +521,7 @@ namespace pP::sim {
                 recipe.m_start_clearance_m < 2.0 * recipe.m_actor_half_height_m) {
                 PPR_RETURN_ERROR_ON_FAIL(WorldPlan, std::errc::invalid_argument);
             }
+
             const auto &feature = recipe.m_features[recipe.m_start_feature];
             const auto &bounds = feature.m_bounds;
             if (recipe.m_start_marker >= feature.m_markers.size() or
@@ -498,6 +532,7 @@ namespace pP::sim {
                 static_cast<i64>(recipe.m_start_y_fine) + bounds.m_max_y > kWorldEdge - recipe.m_boundary_fine) {
                 PPR_RETURN_ERROR_ON_FAIL(WorldPlan, std::errc::invalid_argument);
             }
+
             for (std::size_t i = 0u; i < recipe.m_resources.size(); ++i) {
                 const auto &resource = recipe.m_resources[i];
                 const auto *const entry = material(recipe, resource.m_material);
@@ -521,11 +556,16 @@ namespace pP::sim {
         }
     }
 
+    // ------------------------------------------------------------------
+    // deterministic random
+    // ------------------------------------------------------------------
+
     u64 generationStreamSeed(const u64 seed, const u64 domain_key, const u64 ordinal) noexcept {
         return mix(mix(seed ^ 0x7070722e67656e31ull) ^ mix(domain_key) ^ mix(ordinal + 0x9e3779b97f4a7c15ull));
     }
     GenerationRandom::GenerationRandom(const u64 state) noexcept : m_state(state) {
     }
+
     u64 GenerationRandom::next() noexcept {
         m_state += 0x9e3779b97f4a7c15ull;
         return mix(m_state);
@@ -539,18 +579,25 @@ namespace pP::sim {
         } while (value < threshold);
         return value % exclusive_max;
     }
+
     double GenerationRandom::unit() noexcept {
         return static_cast<double>(next() >> 11u) * 0x1.0p-53;
     }
+    // ------------------------------------------------------------------
+    // compiled plan
+    // ------------------------------------------------------------------
+
     GenerationPlan::GenerationPlan(GenerationRecipe recipe, Array<NoiseField> fields, const u64 seed) noexcept
         : m_recipe(std::move(recipe)), m_fields(std::move(fields)), m_seed(seed) {
     }
     const GenerationRecipe &GenerationPlan::recipe() const noexcept {
         return m_recipe;
     }
+
     std::span<const NoiseField> GenerationPlan::fields() const noexcept {
         return m_fields;
     }
+
     u64 GenerationPlan::seed() const noexcept {
         return m_seed;
     }
@@ -575,8 +622,13 @@ namespace pP::sim {
             bytes += feature.m_operations.capacity() * sizeof(GenerationOperation) +
                      feature.m_markers.capacity() * sizeof(GenerationMarker);
         }
+
         return bytes;
     }
+
+    // ------------------------------------------------------------------
+    // plan queries
+    // ------------------------------------------------------------------
 
     double generationSurfaceHeight(const GenerationPlan &plan, const double x_m) noexcept {
         const auto &r = plan.recipe();
@@ -584,18 +636,21 @@ namespace pP::sim {
                                       r.m_surface_amplitude_m * plan.fields()[r.m_surface_field].sample(x_m, 0.0)
                                 : kWorldEdge * r.m_cell_size_m;
     }
+
     double generationBedrockHeight(const GenerationPlan &plan, const double x_m) noexcept {
         const auto &r = plan.recipe();
         return r.m_open_surface ? r.m_bedrock_thickness_m +
                                       r.m_bedrock_variation_m * plan.fields()[r.m_bedrock_field].sample(x_m, 0.0)
                                 : r.m_boundary_fine * r.m_cell_size_m;
     }
+
     double generationDepth(const GenerationPlan &plan, const double x_m, const double y_m) noexcept {
         const double surface = generationSurfaceHeight(plan, x_m);
         return std::clamp(
             (surface - y_m) / (surface - (plan.recipe().m_open_surface ? generationBedrockHeight(plan, x_m) : 0.0)),
             0.0, 1.0);
     }
+
     bool generationSubsurfaceBounds(
         const GenerationPlan &plan, const i64 min_x, const i64 min_y, const i64 max_x, const i64 max_y) noexcept {
         const auto &r = plan.recipe();
@@ -618,6 +673,78 @@ namespace pP::sim {
         return true;
     }
 
+    // ------------------------------------------------------------------
+    // recipe validation
+    // ------------------------------------------------------------------
+
+    std::error_code validateGenerationHalo(
+        const std::span<const GenerationBiome> biomes, const std::span<const std::string_view> paths,
+        config::Diagnostics *const diagnostics) {
+        using config::EConfigErrc;
+        std::error_code first;
+        const auto reject = [&](const std::string &path, const EConfigErrc code, const std::string_view message,
+                                Array<std::string> related = {}) {
+            const auto error = config::make_error_code(code);
+            if (not first) {
+                first = error;
+            }
+            if (diagnostics != nullptr) {
+                diagnostics->add("definition", path, std::string{message}, error, {}, std::move(related));
+            }
+        };
+        if (not paths.empty() and paths.size() != biomes.size()) {
+            reject("biomes", EConfigErrc::schema_invalid, "Halo path count must match participant count");
+            PPR_RETURN_ERROR_ON_FAIL(WorldPlan, first);
+        }
+
+        constexpr std::array<u32, 4> caps{6u, 24u, 4u, 24u};
+        constexpr std::array<std::string_view, 4> names{
+            "pore.passes", "relaxation_passes", "finish_passes", "erosion_passes"};
+        std::array<u32, 4> maxima{};
+        const auto counts = [](const GenerationBiome &biome) {
+            return std::array{
+                biome.m_pore_passes, biome.m_relaxation_passes, biome.m_finish_passes, biome.m_erosion_passes};
+        };
+        const auto path = [&](const std::size_t index, const std::size_t pass) {
+            const auto prefix = paths.empty() ? "biomes." + std::to_string(index) : std::string{paths[index]};
+            return prefix + "." + std::string{names[pass]};
+        };
+
+        for (std::size_t i = 0u; i < biomes.size(); ++i) {
+            const auto values = counts(biomes[i]);
+            for (std::size_t pass = 0u; pass < maxima.size(); ++pass) {
+                maxima[pass] = std::max(maxima[pass], values[pass]);
+                if (values[pass] > caps[pass]) {
+                    reject(path(i, pass), EConfigErrc::out_of_range, "Sequential pass count exceeds its cap");
+                }
+            }
+        }
+
+        u64 total = 0u;
+        for (const auto maximum: maxima) {
+            total += maximum;
+        }
+        if (total > 24u) {
+            Array<std::string> related;
+            for (std::size_t i = 0u; i < biomes.size(); ++i) {
+                const auto values = counts(biomes[i]);
+                for (std::size_t pass = 0u; pass < maxima.size(); ++pass) {
+                    if (maxima[pass] > 0u and values[pass] == maxima[pass]) {
+                        related.push_back(path(i, pass));
+                    }
+                }
+            }
+            std::ranges::sort(related);
+            related.erase(std::unique(related.begin(), related.end()), related.end());
+            reject(
+                "biomes", EConfigErrc::cross_field_invalid,
+                "Sum of participant-wide sequential halo maxima exceeds 24 fine cells", std::move(related));
+        }
+        PPR_RETURN_ERROR_ON_FAIL(WorldPlan, first);
+        return {};
+    }
+
+    // Legacy content v2: deferred migration — retain the full numeric world safety boundary.
     std::error_code validateGenerationRecipe(const GenerationRecipe &recipe) {
         PPR_RETURN_ERROR_ON_FAIL(WorldPlan, validateCounts(recipe));
         if (not positive(recipe.m_cell_size_m, 1.0) or
@@ -649,24 +776,22 @@ namespace pP::sim {
             }
         }
         PPR_RETURN_ERROR_ON_FAIL(WorldPlan, validateBiomes(recipe));
-        u32 pore = 0u, competition = 0u, finish = 0u, erosion = 0u;
-        for (const auto &biome: recipe.m_biomes) {
-            pore = std::max(pore, biome.m_pore_passes);
-            competition = std::max(competition, biome.m_relaxation_passes);
-            finish = std::max(finish, biome.m_finish_passes);
-            erosion = std::max(erosion, biome.m_erosion_passes);
-        }
-        if (pore + competition + finish + erosion > 24u) {
+
+        // Translate canonical diagnostics back to the established numeric recipe error contract.
+        if (validateGenerationHalo(recipe.m_biomes, {})) {
             PPR_RETURN_ERROR_ON_FAIL(WorldPlan, std::errc::invalid_argument);
         }
+
         PPR_RETURN_ERROR_ON_FAIL(WorldPlan, validateFeatures(recipe));
         PPR_RETURN_ERROR_ON_FAIL(WorldPlan, validateLayout(recipe));
         PPR_RETURN_ERROR_ON_FAIL(WorldPlan, validateRules(recipe));
         PPR_RETURN_ERROR_ON_FAIL(WorldPlan, validateStart(recipe));
         return {};
     }
+
     Expected<GenerationPlan> compileGenerationPlan(GenerationRecipe recipe, const u64 seed) {
         PPR_RETURN_UNEXPECTED_ON_FAIL(WorldPlan, validateGenerationRecipe(recipe));
+
         for (auto &biome: recipe.m_biomes) {
             for (auto &band: biome.m_bands) {
                 band.m_total_weight = 0.0;
@@ -675,6 +800,7 @@ namespace pP::sim {
                 }
             }
         }
+
         Array<NoiseField> fields;
         fields.reserve(recipe.m_fields.size());
         for (const auto &field: recipe.m_fields) {
@@ -682,9 +808,11 @@ namespace pP::sim {
             PPR_RETURN_UNEXPECTED_ON_FAIL(WorldPlan, compiled);
             fields.push_back(std::move(*compiled));
         }
+
         std::ranges::sort(recipe.m_materials, {}, &GenerationMaterial::m_id);
         GenerationPlan plan{std::move(recipe), std::move(fields), seed};
         auto &resolved = plan.m_recipe;
+
         if (resolved.m_open_surface) {
             if (resolved.m_start_depth_m) {
                 const double height = generationSurfaceHeight(

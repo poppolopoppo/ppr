@@ -109,6 +109,22 @@ ullptr`) and `mask` (empty). Components are
 
 - `:worldgen.plan` owns validated numeric recipes, compiled fields and isolated
   integer random streams. Game content names and files stay outside sim.
+- `:worldgen.definition` is the **Slice 1a: canonical definition** seam: owned,
+  file-neutral keyed materials/noise fields, 64 biomes, features and profiles, recursive core config
+  descriptors, semantic/reference validation, deterministic numeric fragment compilation,
+  and shared `SemanticFingerprint` (definition schema version 2). `NoiseFieldDesc::describe()` owns
+  the canonical noise schema; compiled noise remains move-only and is created only
+  by the numeric plan compiler. The fragment is not a validated world.
+- Generic dispatch restored; the known MSVC `fbt-resolve` ICE is user-owned.
+- `validateGenerationHalo` validates maxima over ALL supplied recipe biomes,
+  with deterministic contributor paths, shared per-pass caps and the 24-cell bound.
+  Game's `decodeWorldGenDefinition` adds required file envelope version 2 and
+  source locations. `compileRecipe` resolves profile-owned rules and references
+  through canonical bindings; appearance and pack documents remain game-owned.
+  Generator algorithm version 8 is the conservative compatibility boundary;
+  checkpoint envelope v3 and sim snapshot v4 are unchanged.
+  Semantic identity uses textual variant tags, explicit presence, sorted keys
+  and reference domains/owner paths; assigned IDs and storage indices are excluded.
 - `:worldgen.layout` owns macro sites and their spatial lookup; required biome
   assignment and start-reservation lookup precede chunk evaluation.
 - `:worldgen.geometry` derives bounded feature reservations, worm segments and
@@ -174,6 +190,9 @@ snapshot.
 - `snapshot/Sim.Snapshot.cppm` — `sim::errc`, snapshot vocabulary (`BodyRecord`, `BodiesSection`), capture/apply/save/load plus exported `restore()`.
 - `snapshot/Sim.Snapshot.cpp` — error category, shared `validate()`, LE codec.
 - `worldgen/Sim.WorldGen.cppm` — execution/progress vocabulary.
+- `worldgen/Sim.WorldGen.Definition.cppm/.cpp` — canonical recursive definition,
+  `validateDefinition`, `compileDefinition`, bindings and fragment identity;
+  re-exported by `:worldgen` (and thus the sim umbrella).
 - `CMakeLists.txt` — `engine.sim` target registration (see Integration).
 
 World generation accepts an explicit chunk scheduler, cancellation context and atomic current-stage/chunk progress. Independent chunks use bounded batches of admitted tasks, and all admitted tasks drain before generation returns or rethrows. Serial execution remains explicit and deterministic. Production uses compiled numeric recipes.

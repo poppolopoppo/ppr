@@ -14,17 +14,20 @@ namespace pP::sim {
     // ------------------------------------------------------------------
 
     namespace {
-        [[nodiscard]] std::error_code canceled(const IContext *const context) noexcept {
+        [[nodiscard]] std::error_code canceled(const SharedContext &context) noexcept {
             return context ? context->error() : std::error_code{};
         }
+
         [[nodiscard]] const GenerationMaterial *material(
             const std::span<const GenerationMaterial> materials, const u16 id) noexcept {
             const auto found = std::ranges::find(materials, id, &GenerationMaterial::m_id);
             return found == materials.end() ? nullptr : std::addressof(*found);
         }
+
         [[nodiscard]] bool positive(const double value) noexcept {
             return std::isfinite(value) and value > 0.0;
         }
+
         template<typename Read>
         [[nodiscard]] bool covered(const MatterParticle &particle, const double cell_size, Read &&read) noexcept {
             const double x = particle.m_x_m / cell_size - 0.5;
@@ -32,20 +35,24 @@ namespace pP::sim {
             const i32 ix = static_cast<i32>(std::floor(x)), iy = static_cast<i32>(std::floor(y));
             const double px = x - ix, py = y - iy;
             constexpr std::array<std::pair<i32, i32>, 4u> offsets{{{0, 0}, {1, 0}, {1, 1}, {0, 1}}};
+
             u32 mask{};
             for (u32 corner = 0u; corner < 4u; ++corner) {
                 if (read(ix + offsets[corner].first, iy + offsets[corner].second)) {
                     mask |= 1u << corner;
                 }
             }
+
             const auto &shape = math::contourCases()[mask];
             const auto points = math::contourPoints();
             for (u32 triangle = 0u; triangle < shape.m_triangle_count; ++triangle) {
                 const auto indices = shape.m_triangles[triangle];
+
                 const auto a = points[indices.m_a], b = points[indices.m_b], c = points[indices.m_c];
                 const auto cross = [&](const auto from, const auto to) {
                     return (to.m_x - from.m_x) * (py - from.m_y) - (to.m_y - from.m_y) * (px - from.m_x);
                 };
+
                 const double ab = cross(a, b), bc = cross(b, c), ca = cross(c, a);
                 if ((ab >= 0.0 and bc >= 0.0 and ca >= 0.0) or (ab <= 0.0 and bc <= 0.0 and ca <= 0.0)) {
                     return true;
@@ -65,7 +72,7 @@ namespace pP::sim {
 
     Expected<MatterParticleSnapshot> seedMatterParticles(
         const InitialMatter &matter, const ChunkGrid &grid, const GenerationRecipe &recipe,
-        const IContext *const context) {
+        const SharedContext &context) {
         PPR_RETURN_UNEXPECTED_ON_FAIL(MatterParticles, canceled(context));
         u64 count{};
         std::array<u32, kChunkCount> counts{};
@@ -74,11 +81,13 @@ namespace pP::sim {
                 if (span.m_y >= kWorldEdge or span.m_begin_x >= span.m_end_x or span.m_end_x > kWorldEdge) {
                     PPR_RETURN_UNEXPECTED_ON_FAIL(MatterParticles, std::errc::invalid_argument);
                 }
+
                 for (u32 x = span.m_begin_x; x < span.m_end_x;) {
                     const u32 end = std::min(span.m_end_x, (x / kChunkEdge + 1u) * kChunkEdge);
                     counts[chunkIndexOf(chunkOf({x, span.m_y}))] += end - x;
                     x = end;
                 }
+
                 count += span.m_end_x - span.m_begin_x;
                 if (count > kMaxMatterParticles) {
                     PPR_RETURN_UNEXPECTED_ON_FAIL(MatterParticles, std::errc::value_too_large);
@@ -100,6 +109,7 @@ namespace pP::sim {
                 (not std::isfinite(region.m_temperature_k) or region.m_temperature_k < 0.0)) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(MatterParticles, std::errc::invalid_argument);
             }
+
             double volume{};
             MatterParticle *last = nullptr;
             for (const auto span: region.m_spans) {
@@ -111,6 +121,7 @@ namespace pP::sim {
                     if (not positive(particle_volume)) {
                         PPR_RETURN_UNEXPECTED_ON_FAIL(MatterParticles, std::errc::invalid_argument);
                     }
+
                     auto &chunk = chunks[chunkIndexOf(chunkOf({x, span.m_y}))];
                     chunk.push_back(
                         {result.m_next_id++, (x + 0.5) * recipe.m_cell_size_m, (span.m_y + 0.5) * recipe.m_cell_size_m,
@@ -120,6 +131,7 @@ namespace pP::sim {
                     volume += particle_volume;
                 }
             }
+
             if (last != nullptr) {
                 // Region totals were accumulated in generation order. Accept only
                 // floating-point accumulation error, never redistribute bad metadata.
@@ -131,10 +143,12 @@ namespace pP::sim {
                         1.0e-8 * std::max(1.0, region.m_mass_kg)) {
                     PPR_RETURN_UNEXPECTED_ON_FAIL(MatterParticles, std::errc::invalid_argument);
                 }
+
                 last->m_volume_m3 += region.m_volume_m3 - volume;
                 last->m_mass_kg = last->m_volume_m3 * last->m_bulk_density_kg_m3;
             }
         }
+
         for (u32 index = 0u; index < kChunkCount; ++index) {
             if (not chunks[index].empty()) {
                 result.m_chunks.push_back(
@@ -142,6 +156,7 @@ namespace pP::sim {
                         std::make_shared<const Array<MatterParticle>>(std::move(chunks[index]))});
             }
         }
+
         PPR_RETURN_UNEXPECTED_ON_FAIL(
             MatterParticles,
             validateMatterParticles(
@@ -154,7 +169,7 @@ namespace pP::sim {
 
     std::error_code validateMatterParticles(
         const MatterParticleSnapshot &snapshot, const std::span<const GenerationMaterial> materials,
-        const double cell_size, const IContext *const context, const double reference_thickness) {
+        const double cell_size, const SharedContext &context, const double reference_thickness) {
         PPR_RETURN_ERROR_ON_FAIL(MatterParticles, canceled(context));
         if (not positive(cell_size) or
             not positive(reference_thickness) or
@@ -175,12 +190,15 @@ namespace pP::sim {
                 not batch.m_particles) {
                 PPR_RETURN_ERROR_ON_FAIL(MatterParticles, std::errc::invalid_argument);
             }
+
             const u32 index = chunkIndexOf(batch.m_position);
             total += batch.records().size();
             if (seen_chunks.test(index) or total > kMaxMatterParticles) {
                 PPR_RETURN_ERROR_ON_FAIL(MatterParticles, std::errc::invalid_argument);
             }
+
             seen_chunks.set(index);
+
             for (const auto &particle: batch.records()) {
                 const auto *const definition = material(materials, particle.m_material);
                 if (particle.m_id == 0u or
@@ -203,6 +221,7 @@ namespace pP::sim {
                     std::ranges::any_of(particle.m_reserved, [](const u8 value) { return value != 0u; })) {
                     PPR_RETURN_ERROR_ON_FAIL(MatterParticles, std::errc::invalid_argument);
                 }
+
                 const GlobalCellPos cell{
                     static_cast<u32>(particle.m_x_m / cell_size), static_cast<u32>(particle.m_y_m / cell_size)};
                 if (chunkOf(cell) != batch.m_position or
@@ -210,6 +229,7 @@ namespace pP::sim {
                         1.0e-9 * (std::max) (1.0, particle.m_mass_kg)) {
                     PPR_RETURN_ERROR_ON_FAIL(MatterParticles, std::errc::invalid_argument);
                 }
+
                 ids.push_back(particle.m_id);
                 cells.push_back(cell.m_y * kWorldEdge + cell.m_x);
             }
@@ -228,7 +248,7 @@ namespace pP::sim {
 
     std::error_code MatterParticleState::restore(
         const MatterParticleSnapshot &snapshot, const std::span<const GenerationMaterial> materials,
-        const double cell_size, const IContext *const context, const double reference_thickness) {
+        const double cell_size, const SharedContext &context, const double reference_thickness) {
         PPR_RETURN_ERROR_ON_FAIL(
             MatterParticles, validateMatterParticles(snapshot, materials, cell_size, context, reference_thickness));
         std::array<std::shared_ptr<const Array<MatterParticle>>, kChunkCount> chunks{};
@@ -267,6 +287,7 @@ namespace pP::sim {
         if (not positive(cell_size)) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(MatterParticles, std::errc::invalid_argument);
         }
+
         std::array<const ChunkGrid::CapturedChunk *, kChunkCount> overlays{};
         std::bitset<kChunkCount> affected{};
         for (const auto &chunk: candidate) {
@@ -283,9 +304,11 @@ namespace pP::sim {
                     }
                 }
             }
+
             if (not added_solid) {
                 continue;
             }
+
             for (i32 dy = -1; dy <= 1; ++dy) {
                 for (i32 dx = -1; dx <= 1; ++dx) {
                     const i32 x = static_cast<i32>(position.m_x) + dx, y = static_cast<i32>(position.m_y) + dy;
@@ -300,6 +323,7 @@ namespace pP::sim {
             if (x < 0 or y < 0 or x >= kWorldEdge or y >= kWorldEdge) {
                 return true;
             }
+
             const GlobalCellPos cell{static_cast<u32>(x), static_cast<u32>(y)};
             const auto position = chunkOf(cell);
             const auto *const overlay = overlays[chunkIndexOf(position)];
@@ -312,6 +336,7 @@ namespace pP::sim {
             if (not affected.test(index) or not m_chunks[index]) {
                 continue;
             }
+
             Array<MatterParticle> retained;
             bool removed = false;
             for (const auto &particle: *m_chunks[index]) {
@@ -325,6 +350,7 @@ namespace pP::sim {
                     retained.push_back(particle);
                 }
             }
+
             if (removed) {
                 result.push_back(
                     {{index % kChunksPerEdge, index / kChunksPerEdge},

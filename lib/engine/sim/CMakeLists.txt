@@ -12,6 +12,7 @@ target_sources(engine.sim
       snapshot/Sim.Snapshot.cppm
       worldgen/Sim.WorldGen.cppm
       worldgen/Sim.WorldGen.Noise.cppm
+      worldgen/Sim.WorldGen.Definition.cppm
       worldgen/Sim.WorldGen.Plan.cppm
       worldgen/Sim.WorldGen.Layout.cppm
       worldgen/Sim.WorldGen.Geometry.cppm
@@ -26,6 +27,7 @@ target_sources(engine.sim
       tick/Sim.Tick.cpp
       snapshot/Sim.Snapshot.cpp
       worldgen/Sim.WorldGen.Noise.cpp
+      worldgen/Sim.WorldGen.Definition.cpp
       worldgen/Sim.WorldGen.Plan.cpp
       worldgen/Sim.WorldGen.Layout.cpp
       worldgen/Sim.WorldGen.Geometry.cpp

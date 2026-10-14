@@ -9,7 +9,7 @@ export namespace pP::sim {
     // generation limits
     // ------------------------------------------------------------------
 
-    inline constexpr u32 kGeneratorAlgorithmVersion = 6u;
+    inline constexpr u32 kGeneratorAlgorithmVersion = 8u;
     inline constexpr u32 kMaxGenerationMaterials = 256u;
     inline constexpr u32 kMaxGenerationFields = 256u;
     inline constexpr u32 kMaxGenerationBiomes = 64u;
@@ -33,6 +33,8 @@ export namespace pP::sim {
         liquid,
         gas
     };
+
+    // subgroup: generation material
     struct GenerationMaterial {
         u16 m_id{};
         bool m_terrain{}, m_diggable{};
@@ -40,15 +42,18 @@ export namespace pP::sim {
         double m_reference_density_kg_m3{};
         u64 m_key{};
     };
+
     struct GenerationField {
         u64 m_key{};
         NoiseFieldDesc m_noise{};
     };
+
     struct GenerationChoice {
         u64 m_key{};
         u16 m_material{};
         double m_weight{};
     };
+
     struct GenerationBand {
         u64 m_key{};
         u32 m_order{}, m_field{};
@@ -58,14 +63,17 @@ export namespace pP::sim {
         double m_total_weight{};
         double m_bed_period_m{}, m_bed_warp_m{}, m_bed_dip{};
     };
+
     enum class EGenerationDepositShape : u8 {
         field,
         blob
     };
+
     enum class EGenerationDepositStage : u8 {
         bulk,
         detail
     };
+
     struct GenerationDeposit {
         u64 m_key{};
         u32 m_order{}, m_field{};
@@ -78,6 +86,7 @@ export namespace pP::sim {
         double m_core_coverage{1.0}, m_fringe_coverage{1.0}, m_sprinkle_probability{};
         double m_orientation_min_degrees{}, m_orientation_max_degrees{360.0};
     };
+
     struct GenerationBiome {
         u64 m_key{};
         u32 m_temperature_field{};
@@ -107,11 +116,13 @@ export namespace pP::sim {
         double m_formation_length_m{3.0};
         u32 m_erosion_passes{};
     };
+
     enum class EGenerationShape : u8 {
         rectangle,
         ellipse,
         capsule
     };
+
     enum class EGenerationMarker : u8 {
         start,
         traversal_room,
@@ -119,9 +130,11 @@ export namespace pP::sim {
         resource_anchor,
         inert
     };
+
     struct GenerationBounds {
         i32 m_min_x{}, m_min_y{}, m_max_x{}, m_max_y{};
     };
+
     struct GenerationOperation {
         u64 m_key{};
         u32 m_order{};
@@ -132,11 +145,14 @@ export namespace pP::sim {
         double m_radius_m{};
         u16 m_material{};
     };
+
     struct GenerationMarker {
         u64 m_key{};
         EGenerationMarker m_role{};
         i32 m_x{}, m_y{};
     };
+
+    // subgroup: generation feature
     struct GenerationFeature {
         u64 m_key{};
         GenerationBounds m_bounds{};
@@ -144,21 +160,25 @@ export namespace pP::sim {
         Array<GenerationOperation> m_operations{};
         Array<GenerationMarker> m_markers{};
     };
+
     struct GenerationBiomeConstraint {
         u64 m_key{};
         u32 m_biome{}, m_required_count{};
         double m_weight{}, m_depth_min{}, m_depth_max{}, m_distance_min_m{}, m_distance_max_m{};
     };
+
     struct GenerationResource {
         u64 m_key{};
         u32 m_marker{}, m_minimum_fine_cells{};
         u16 m_material{};
         double m_max_distance_m{};
     };
+
     struct GenerationCave {
         u32 m_biome{}, m_field{};
         double m_depth_min{}, m_depth_max{}, m_threshold_min{}, m_threshold_max{};
     };
+
     struct GenerationWorm {
         u32 m_biome{}, m_count{};
         bool m_carve{};
@@ -167,17 +187,20 @@ export namespace pP::sim {
         u16 m_material{}, m_host{};
         double m_turn_smoothing{}, m_radius_variation{}, m_chamber_probability{}, m_chamber_scale{1.0};
     };
+
     struct GenerationConnection {
         double m_radius_m{};
         u32 m_extra_links{};
         u32 m_natural_anchors{}, m_wells{}, m_branches{};
         double m_roughness_m{};
     };
+
     struct GenerationPlacement {
         u32 m_feature{}, m_biome{}, m_min_count{}, m_max_count{}, m_attempts{}, m_priority{};
         double m_depth_min{}, m_depth_max{}, m_spacing_m{};
         bool m_reflect{};
     };
+
     struct GenerationFill {
         u32 m_placement_rule{}, m_marker{};
         u16 m_material{};
@@ -185,12 +208,14 @@ export namespace pP::sim {
         double m_temperature_k{}, m_bulk_density_kg_m3{};
         std::optional<double> m_fill_height_m{};
     };
+
     enum class EGenerationPhase : u8 {
         deposit,
         carve,
         stamp,
         fill
     };
+
     struct GenerationRule {
         u64 m_key{};
         u32 m_order{};
@@ -198,6 +223,7 @@ export namespace pP::sim {
         std::variant<GenerationCave, GenerationWorm, GenerationConnection, GenerationPlacement, GenerationFill>
             m_parameters{};
     };
+
     struct GenerationRecipe {
         Array<GenerationMaterial> m_materials{};
         Array<GenerationField> m_fields{};
@@ -228,6 +254,7 @@ export namespace pP::sim {
     // Fixed SplitMix64 stream with unbiased bounded integer draws. Domain keys
     // and ordinals isolate independent decisions from unrelated content changes.
     [[nodiscard]] u64 generationStreamSeed(u64 seed, u64 domain_key, u64 ordinal) noexcept;
+    // subgroup: generation random
     class GenerationRandom {
         u64 m_state{};
 
@@ -242,29 +269,43 @@ export namespace pP::sim {
     // compiled plan
     // ------------------------------------------------------------------
 
+    // subgroup: generation plan
     class GenerationPlan {
         GenerationRecipe m_recipe;
         Array<NoiseField> m_fields;
         u64 m_seed{};
+
         GenerationPlan(GenerationRecipe recipe, Array<NoiseField> fields, u64 seed) noexcept;
         friend Expected<GenerationPlan> compileGenerationPlan(GenerationRecipe, u64);
 
     public:
         GenerationPlan(GenerationPlan &&) noexcept = default;
         GenerationPlan &operator=(GenerationPlan &&) noexcept = default;
+
         GenerationPlan(const GenerationPlan &) = delete;
         GenerationPlan &operator=(const GenerationPlan &) = delete;
+
         [[nodiscard]] const GenerationRecipe &recipe() const noexcept;
         [[nodiscard]] std::span<const NoiseField> fields() const noexcept;
+
         [[nodiscard]] u64 seed() const noexcept;
         /// Owned vector payload capacities; excludes opaque compiled-noise allocations.
         [[nodiscard]] u64 retainedPayloadBytes() const noexcept;
     };
+
     [[nodiscard]] double generationSurfaceHeight(const GenerationPlan &plan, double x_m) noexcept;
     [[nodiscard]] double generationBedrockHeight(const GenerationPlan &plan, double x_m) noexcept;
     [[nodiscard]] double generationDepth(const GenerationPlan &plan, double x_m, double y_m) noexcept;
     [[nodiscard]] bool generationSubsurfaceBounds(
         const GenerationPlan &plan, i64 min_x, i64 min_y, i64 max_x, i64 max_y) noexcept;
+
     [[nodiscard]] std::error_code validateGenerationRecipe(const GenerationRecipe &recipe);
+    // Slice 1a: canonical definition — every supplied biome participates, regardless of layout selection.
+    // Paths are biome prefixes in span order, or empty for numeric-only callers.
+
+    [[nodiscard]] std::error_code validateGenerationHalo(
+        std::span<const GenerationBiome> biomes, std::span<const std::string_view> paths,
+        config::Diagnostics *diagnostics = nullptr);
+
     [[nodiscard]] Expected<GenerationPlan> compileGenerationPlan(GenerationRecipe recipe, u64 seed);
 }

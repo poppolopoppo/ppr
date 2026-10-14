@@ -9,6 +9,7 @@ import engine.sim;
 import std;
 
 namespace pP::tests::detail {
+    // subgroup: world gen detail
     // ------------------------------------------------------------------
     // world gen
     // ------------------------------------------------------------------
@@ -46,6 +47,2138 @@ namespace pP::tests::detail {
             recipe.m_actor_half_height_m = 0.9;
             return recipe;
         }
+
+        [[nodiscard]] definition::Definition minimalDefinition() {
+            definition::Definition result;
+            result.m_materials.m_entries.push_back(
+                {"rock", {EGenerationMatter::solid, definition::EMaterialRepresentation::terrain, true, 2500.0}});
+            result.m_fields.m_entries.push_back({"climate", {.m_frequency_per_metre = 0.025}});
+            definition::CompositionBand band;
+            band.m_field.m_key = "climate";
+            band.m_materials.m_entries.push_back({"stone", {{"rock"}, 1.0}});
+            definition::Biome biome;
+            biome.m_temperature = {{"climate"}, 293.0, 0.0};
+            biome.m_composition.m_entries.push_back({"base", std::move(band)});
+            result.m_biomes.m_entries.push_back({"plain", std::move(biome)});
+            return result;
+        }
+
+        [[nodiscard]] definition::Definition completeDefinition() {
+            auto result = minimalDefinition();
+            auto &biome = result.m_biomes.m_entries.front().m_value;
+            biome.m_temperature.m_variation_k = 8.0;
+            definition::Deposit deposit;
+            deposit.m_order = 7u;
+            deposit.m_field.m_key = "climate";
+            deposit.m_material.m_key = "rock";
+            deposit.m_host_material.m_key = "rock";
+            deposit.m_depth.m_min = 0.125;
+            deposit.m_depth.m_max = 0.875;
+            deposit.m_threshold = {-0.5, 0.75};
+            biome.m_deposits.m_entries.push_back({"ore", std::move(deposit)});
+            biome.m_pore = definition::Pore{{"climate"}, 0.1, {1.0, 2.0}, 0.25, 2u};
+            return result;
+        }
+
+        [[nodiscard]] auto numericBiomeValues(const GenerationBiome &biome) {
+            const auto choice_values = [](const GenerationChoice &choice) {
+                return std::tuple{choice.m_key, choice.m_material, choice.m_weight};
+            };
+            using ChoiceValues = decltype(choice_values(GenerationChoice{}));
+            const auto band_values = [&](const GenerationBand &band) {
+                Array<ChoiceValues> choices;
+                for (const auto &choice: band.m_choices) {
+                    choices.push_back(choice_values(choice));
+                }
+                return std::tuple{
+                    band.m_key, band.m_order, band.m_field, band.m_depth_min, band.m_depth_max, band.m_total_weight,
+                    band.m_bed_period_m, band.m_bed_warp_m, band.m_bed_dip, std::move(choices)};
+            };
+            Array<decltype(band_values(GenerationBand{}))> bands;
+            for (const auto &band: biome.m_bands) {
+                bands.push_back(band_values(band));
+            }
+            const auto deposit_values = [](const GenerationDeposit &deposit) {
+                return std::tuple{
+                    deposit.m_key, deposit.m_order, deposit.m_field, deposit.m_material, deposit.m_host,
+                    deposit.m_depth_min, deposit.m_depth_max, deposit.m_threshold_min, deposit.m_threshold_max,
+                    deposit.m_shape, deposit.m_stage, deposit.m_blob_count, deposit.m_radius_min_m,
+                    deposit.m_radius_max_m, deposit.m_stretch_min, deposit.m_stretch_max, deposit.m_distortion,
+                    deposit.m_core_coverage, deposit.m_fringe_coverage, deposit.m_sprinkle_probability,
+                    deposit.m_orientation_min_degrees, deposit.m_orientation_max_degrees};
+            };
+            Array<decltype(deposit_values(GenerationDeposit{}))> deposits;
+            for (const auto &deposit: biome.m_deposits) {
+                deposits.push_back(deposit_values(deposit));
+            }
+            return std::tuple{
+                biome.m_key, biome.m_temperature_field, biome.m_temperature_base_k, biome.m_temperature_variation_k,
+                std::move(bands), std::move(deposits), biome.m_lining_material, biome.m_lining_thickness_fine,
+                biome.m_relaxation_passes, biome.m_relaxation_adoption, biome.m_sprinkle_probability,
+                biome.m_pore_field, biome.m_pore_probability, biome.m_pore_radius_min_m, biome.m_pore_radius_max_m,
+                biome.m_pore_affinity_min, biome.m_pore_passes, biome.m_finish_passes, biome.m_finish_adoption,
+                biome.m_soil_material, biome.m_weathered_material, biome.m_soil_depth_m, biome.m_weathered_depth_m,
+                biome.m_formation_material, biome.m_rind_material, biome.m_formation_probability,
+                biome.m_formation_length_m, biome.m_erosion_passes};
+        }
+
+        template<typename T>
+        void flipFingerprintMember(T &value) {
+            // Fingerprinting is not validation: mutations need only be distinct resolved values.
+            if constexpr (requires { value.m_entries; }) {
+                if (value.m_entries.empty()) {
+                    value.m_entries.emplace_back();
+                } else {
+                    value.m_entries.clear();
+                }
+            } else if constexpr (requires {
+                                     value.has_value();
+                                     value.reset();
+                                 }) {
+                if (value) {
+                    value.reset();
+                } else {
+                    value.emplace();
+                }
+            } else if constexpr (requires { T::describe(); }) {
+                bool flipped = false;
+                config::visit(value, [&](const auto &, auto &child) {
+                    if (not flipped) {
+                        flipFingerprintMember(child);
+                        flipped = true;
+                    }
+                });
+            } else if constexpr (requires { std::get<0>(value); }) {
+                std::visit([&](auto &active) { flipFingerprintMember(active); }, value);
+            } else if constexpr (std::is_same_v<T, std::string>) {
+                value += "_changed";
+            } else if constexpr (std::is_same_v<T, bool>) {
+                value = not value;
+            } else if constexpr (std::is_enum_v<T>) {
+                value = static_cast<T>(static_cast<std::underlying_type_t<T>>(value) + 1u);
+            } else if constexpr (std::is_floating_point_v<T>) {
+                value += 0.125;
+            } else if constexpr (std::is_integral_v<T>) {
+                ++value;
+            } else {
+                static_assert(sizeof(T) == 0u, "Fingerprint mutation needs a described value or supported scalar");
+            }
+        }
+
+        template<typename T, typename Visitor>
+        void walkFingerprintMembers(T &object, Visitor &visitor, std::string_view prefix = {});
+
+        template<typename T, typename Visitor>
+        void walkFingerprintChildren(T &value, Visitor &visitor, const std::string &path) {
+            if constexpr (requires { value.m_entries; }) {
+                for (auto &entry: value.m_entries) {
+                    const auto entry_path = path + "." + entry.m_key;
+                    visitor(entry_path, entry.m_value);
+                    walkFingerprintMembers(entry.m_value, visitor, entry_path);
+                }
+            } else if constexpr (requires { value.has_value(); }) {
+                if (value) {
+                    if constexpr (requires { std::remove_cvref_t<decltype(*value)>::describe(); }) {
+                        walkFingerprintMembers(*value, visitor, path);
+                    }
+                }
+            } else if constexpr (requires { std::remove_cvref_t<T>::describe(); }) {
+                walkFingerprintMembers(value, visitor, path);
+            }
+        }
+
+        template<typename T, typename Visitor>
+        void walkFingerprintMembers(T &object, Visitor &visitor, const std::string_view prefix) {
+            config::visit(object, [&](const auto &member, auto &value) {
+                const auto name = member.m_metadata.m_name;
+                const auto path = prefix.empty() ? std::string{name} : std::string{prefix} + "." + std::string{name};
+                visitor(path, value);
+
+                // Reference wrappers are scalar schema members, not nested groups.
+                using Constraint = std::remove_cvref_t<decltype(member.m_constraint)>;
+                if constexpr (std::is_same_v<Constraint, config::details::GroupDomain> or
+                              std::is_same_v<Constraint, config::CollectionDomain>) {
+                    walkFingerprintChildren(value, visitor, path);
+                } else if constexpr (config::details::is_variant_domain_v<Constraint>) {
+                    const auto payload_path = path + "." + std::string{config::variantTag(member, value)};
+                    const auto descend = [&](auto &variant) {
+                        std::visit(
+                            [&](auto &payload) { walkFingerprintMembers(payload, visitor, payload_path); }, variant);
+                    };
+                    if constexpr (config::details::is_optional_v<std::remove_cvref_t<decltype(value)>>) {
+                        if (value) {
+                            descend(*value);
+                        }
+                    } else {
+                        descend(value);
+                    }
+                }
+            });
+        }
+
+        [[nodiscard]] std::string featureText(
+            const std::string_view action, const std::string_view shape, const bool allow_reflection = false) {
+            std::string text = R"toml(
+[materials.rock]
+phase='solid'
+representation='terrain'
+diggable=true
+density=2500.0
+[fields.climate]
+algorithm='open_simplex2'
+frequency_per_metre=0.025
+[biomes.plain.temperature]
+field='climate'
+base_k=293.0
+[biomes.plain.composition.base]
+order=0
+field='climate'
+[biomes.plain.composition.base.depth]
+min=0.0
+[biomes.plain.composition.base.materials.stone]
+material='rock'
+weight=1.0
+[features.room]
+)toml";
+            text += allow_reflection ? "allow_horizontal_reflection=true\n" : "allow_horizontal_reflection=false\n";
+            text += R"toml([features.room.reservation]
+min_x_fine=-3
+min_y_fine=-3
+max_x_fine=12
+max_y_fine=12
+[features.room.operations.cut]
+order=7
+x_fine=0
+y_fine=0
+[features.room.operations.cut.action]
+)toml";
+            text += "tag='" +
+                    std::string{action} +
+                    "'\n[features.room.operations.cut.action." +
+                    std::string{action} +
+                    "]\n";
+            if (action == "paint") {
+                text += "material='rock'\n";
+            }
+            text += "[features.room.operations.cut.action." +
+                    std::string{action} +
+                    ".shape]\ntag='" +
+                    std::string{shape} +
+                    "'\n";
+            text +=
+                "[features.room.operations.cut.action." + std::string{action} + ".shape." + std::string{shape} + "]\n";
+            text += shape == "capsule" ? "end_x_fine=6\nend_y_fine=3\nradius_m=1.0\n" : "width_fine=6\nheight_fine=9\n";
+            return text;
+        }
+
+        [[nodiscard]] Expected<config::Resolved<definition::Definition>> resolveFeatureText(
+            const std::string_view text, config::Diagnostics &diagnostics) {
+            const auto document = config::decode(text, "feature.toml", diagnostics, config::EDecodeMode::tree);
+            PPR_TEST_ASSERT(document.has_value());
+            const auto layer = config::toTreeLayer(*document, "feature.toml");
+            return config::resolveRecursive<definition::Definition>(std::span{&layer, 1u}, diagnostics);
+        }
+
+        [[nodiscard]] definition::GenerationCompileParameters recipeParameters() {
+            return {1.0 / 3.0, 1.0, 0.4, 0.9};
+        }
+
+        [[nodiscard]] definition::Definition recipeDefinition() {
+            using namespace definition;
+            auto result = minimalDefinition();
+            result.m_materials.m_entries.push_back(
+                {"water", {EGenerationMatter::liquid, EMaterialRepresentation::particle, {}, 1000.0}});
+            result.m_materials.m_entries.push_back(
+                {"air", {EGenerationMatter::gas, EMaterialRepresentation::particle, {}, 1.0}});
+            FeatureDefinition feature;
+            feature.m_reservation = {0, 0, 30, 30};
+            feature.m_allow_horizontal_reflection = true;
+            feature.m_operations.m_entries.push_back({"cut", {0u, 0, 0, Carve{Rectangle{30u, 30u}}}});
+            feature.m_markers.m_entries = {
+                {"start", {EGenerationMarker::start, 15, 10}}, {"pocket", {EGenerationMarker::sealed_pocket, 15, 15}},
+                {"resource", {EGenerationMarker::resource_anchor, 20, 20}},
+                {"room", {EGenerationMarker::traversal_room, 10, 10}}, {"inert", {EGenerationMarker::inert, 5, 5}}};
+            result.m_features.m_entries.push_back({"room", feature});
+            feature.m_markers.m_entries.front().m_value.m_x_fine = 8;
+            result.m_features.m_entries.push_back({"other", std::move(feature)});
+            ProfileDefinition profile;
+            profile.m_layout = {4u, 16u, 30u, 100.0};
+            profile.m_boundaries = {{"rock"}, 3u, 0.0, {"climate"}, {"climate"}};
+            profile.m_start = {{"plain"}, {"room"}, {"start"}, 2000u, 3000u, 3.0, 1.0, {}};
+            profile.m_biomes.m_entries.push_back({"plain", {{"plain"}, 1u, 1.0, {0.0, 1.0}, 0.0, 2048.0}});
+            profile.m_resources.m_entries.push_back({"stone", {{"resource"}, {"rock"}, 1u, 100.0}});
+            WormGeometry worm{{"plain"}, 2u, {0.0, 1.0}, 10.0, 20.0, 1.0, 2.0, 0.1};
+            profile.m_rules.m_entries = {
+                {"cave", {0u, true, Cave{{"plain"}, {"climate"}, {0.0, 1.0}, {-0.5, 0.5}}}},
+                {"carve", {1u, true, CarveWorm{worm}}}, {"vein", {0u, true, VeinWorm{worm, {"rock"}, {"rock"}}}},
+                {"connect", {2u, true, Connection{1.0, 1u, 2u, 1u, 1u, 0.5}}},
+                {"place", {0u, true, Feature{{"room"}, {"plain"}, {0.0, 1.0}, 10.0, 1u, 2u, 30u, 3u, true}}},
+                {"liquid", {0u, true, MatterFill{{"place"}, {"pocket"}, {"water"}, 293.0, 1000.0, 5.0}}},
+                {"gas", {1u, true, MatterFill{{"place"}, {"pocket"}, {"air"}, 293.0, 1.0, {}}}}};
+            result.m_worlds.m_entries.push_back({"frontier", std::move(profile)});
+            return result;
+        }
+
+        void checkRecipeFailure(
+            const definition::Definition &source, const config::EConfigErrc code, const std::string_view path) {
+            config::Diagnostics diagnostics;
+            const auto compiled = definition::compileRecipe(source, {"frontier"}, recipeParameters(), diagnostics);
+            PPR_TEST_ASSERT(not compiled and compiled.error() == config::make_error_code(code));
+            PPR_TEST_ASSERT(std::ranges::any_of(diagnostics.entries(), [&](const auto &entry) {
+                return entry.m_property == path and entry.m_code == compiled.error();
+            }));
+        }
+
+        template<typename T>
+        [[nodiscard]] u64 semanticHash(
+            const definition::Definition &context, const T &value, const std::string_view prefix = {}) {
+            definition::SemanticFingerprint fingerprint{context};
+            fingerprint.value(value, prefix);
+            return fingerprint.hash();
+        }
+
+        struct SemanticShape {
+            std::variant<definition::Rectangle, definition::Ellipse> m_shape{definition::Rectangle{2u, 3u}};
+            static constexpr auto describe() {
+                return std::tuple{config::taggedVariant(
+                    &SemanticShape::m_shape, config::Metadata{"shape"}, config::EPresence::required,
+                    config::alternative<definition::Rectangle>("rectangle"),
+                    config::alternative<definition::Ellipse>("ellipse"))};
+            }
+        };
+
+        struct SemanticReorderedShape {
+            std::variant<definition::Ellipse, definition::Rectangle> m_shape{definition::Rectangle{2u, 3u}};
+            static constexpr auto describe() {
+                return std::tuple{config::taggedVariant(
+                    &SemanticReorderedShape::m_shape, config::Metadata{"shape"}, config::EPresence::required,
+                    config::alternative<definition::Ellipse>("ellipse"),
+                    config::alternative<definition::Rectangle>("rectangle"))};
+            }
+        };
+
+        template<bool Scoped = false, bool Choice = false, bool DifferentCollection = false>
+        struct SemanticReferenceProjection {
+            definition::MaterialReference m_reference{"rock"};
+            static constexpr auto describe() {
+                return std::tuple{config::field(
+                    &SemanticReferenceProjection::m_reference, config::Metadata{"reference"},
+                    config::ReferenceDomain<definition::MaterialReference>{
+                        {DifferentCollection ? "features" : "materials", Choice ? "terrain_or_vacuum" : "terrain",
+                            Scoped ? config::EReferenceScope::owner : config::EReferenceScope::root}},
+                    config::EPresence::required)};
+            }
+        };
+
+        PPR_UNIT_TEST (semantic_fingerprint_reference_domains_are_semantic) {
+            const definition::Definition context;
+            const auto root = semanticHash(context, SemanticReferenceProjection<>{});
+            PPR_TEST_ASSERT(root != semanticHash(context, SemanticReferenceProjection<true>{}));
+            PPR_TEST_ASSERT(root != semanticHash(context, SemanticReferenceProjection<false, true>{}));
+            PPR_TEST_ASSERT(root != semanticHash(context, SemanticReferenceProjection<false, false, true>{}));
+        };
+
+        PPR_UNIT_TEST (semantic_fingerprint_tags_ignore_variant_storage_indices) {
+            const definition::Definition context;
+            const SemanticShape first;
+            const SemanticReorderedShape second;
+            PPR_TEST_ASSERT(first.m_shape.index() != second.m_shape.index());
+            PPR_TEST_ASSERT(semanticHash(context, first) == semanticHash(context, second));
+
+            auto ellipse = first;
+            ellipse.m_shape = definition::Ellipse{2u, 3u};
+            PPR_TEST_ASSERT(semanticHash(context, first) != semanticHash(context, ellipse));
+        };
+
+        PPR_UNIT_TEST (semantic_fingerprint_canonical_keys_and_every_described_member) {
+            using namespace definition;
+            auto source = recipeDefinition();
+            auto &biome = source.m_biomes.m_entries.front().m_value;
+            biome = completeDefinition().m_biomes.m_entries.front().m_value;
+            biome.m_deposits.m_entries.front().m_value.m_blob = DepositBlob{
+                1u, {1.0, 2.0}, {1.0, 2.0}, {0.0, 90.0}, 0.1};
+            biome.m_lining = Lining{{"rock"}, 1u};
+            biome.m_surface_layers.m_soil = Soil{{"rock"}, 1.0};
+            biome.m_surface_layers.m_weathered = Weathered{{"rock"}, 2.0};
+            biome.m_formation = Formation{{"rock"}, 0.1, 3.0};
+            biome.m_rind = Rind{{"rock"}};
+            auto &profile = source.m_worlds.m_entries.front().m_value;
+            profile.m_surface_bedrock = SurfaceBedrock{{"climate"}, {"climate"}, {"rock"}, 100.0, 4.0, 10.0, 2.0};
+            profile.m_start.m_depth_m = 2.0;
+            source.m_features.m_entries.front().m_value.m_operations.m_entries = {
+                {"paint_rectangle", {0u, 0, 0, Paint{{"rock"}, Rectangle{2u, 3u}}}},
+                {"paint_ellipse", {1u, 0, 0, Paint{{"rock"}, Ellipse{2u, 3u}}}},
+                {"paint_capsule", {2u, 0, 0, Paint{{"rock"}, Capsule{2, 3, 0.5}}}},
+                {"cut", {3u, 0, 0, Carve{Rectangle{2u, 3u}}}}, {"carve_ellipse", {4u, 0, 0, Carve{Ellipse{2u, 3u}}}},
+                {"carve_capsule", {5u, 0, 0, Carve{Capsule{2, 3, 0.5}}}}};
+            const auto expected = semanticHash(source, source);
+            auto reordered = source;
+            config::visitRecursive(reordered, [&](const auto &, const auto &, auto &value) {
+                if constexpr (requires { value.m_entries; }) {
+                    std::ranges::reverse(value.m_entries);
+                }
+            });
+            PPR_TEST_ASSERT(semanticHash(reordered, reordered) == expected);
+
+            Array<std::string> paths;
+            const auto collect = [&](const std::string &path, const auto &) { paths.push_back(path); };
+            walkFingerprintMembers(source, collect);
+            for (const std::string_view path: std::array{
+                     "worlds.frontier.rules.liquid.payload.matter_fill.marker",
+                     "worlds.frontier.surface_bedrock.bedrock_variation_m",
+                     "features.room.operations.paint_rectangle.action.paint.shape.rectangle.width_fine",
+                     "features.room.operations.paint_ellipse.action.paint.shape.ellipse.width_fine",
+                     "features.room.operations.paint_capsule.action.paint.shape.capsule.radius_m",
+                     "features.room.operations.cut.action.carve.shape.rectangle.width_fine",
+                     "features.room.operations.carve_ellipse.action.carve.shape.ellipse.width_fine",
+                     "features.room.operations.carve_capsule.action.carve.shape.capsule.radius_m"}) {
+                PPR_TEST_ASSERT(std::ranges::find(paths, path) != paths.end());
+            }
+            for (const auto &path: paths) {
+                auto changed = source;
+                bool found = false;
+                const auto mutate = [&](const std::string &candidate, auto &value) {
+                    if (candidate == path) {
+                        flipFingerprintMember(value);
+                        found = true;
+                    }
+                };
+                walkFingerprintMembers(changed, mutate);
+                PPR_TEST_ASSERT(found and semanticHash(changed, changed) != expected);
+            }
+        };
+
+        PPR_UNIT_TEST (semantic_fingerprint_optional_presence_zero_and_primitive_framing) {
+            auto source = recipeDefinition();
+            const auto &profile = source.m_worlds.m_entries.front().m_value;
+            auto start = profile.m_start;
+            const auto absent = semanticHash(source, start, "worlds.frontier.start");
+            start.m_depth_m = 0.0;
+            const auto present = semanticHash(source, start, "worlds.frontier.start");
+            PPR_TEST_ASSERT(absent != present);
+            start.m_depth_m = -0.0;
+            PPR_TEST_ASSERT(semanticHash(source, start, "worlds.frontier.start") == present);
+
+            definition::SemanticFingerprint first{source}, second{source};
+            first.string("ab");
+            first.string("c");
+            second.string("a");
+            second.string("bc");
+            PPR_TEST_ASSERT(first.hash() != second.hash());
+            definition::SemanticFingerprint number{source}, bytes{source};
+            number.integer(u32{0x04030201u});
+            for (const u8 byte: std::array<u8, 4>{1u, 2u, 3u, 4u}) {
+                bytes.integer(byte);
+            }
+            PPR_TEST_ASSERT(number.hash() == bytes.hash());
+        };
+
+        PPR_UNIT_TEST (semantic_fingerprint_scoped_reference_owners_follow_authored_context) {
+            auto source = recipeDefinition();
+            auto &profile = source.m_worlds.m_entries.front().m_value;
+            const auto start = profile.m_start;
+            const auto resource = profile.m_resources.m_entries.front().m_value;
+            const auto fill = std::get<definition::MatterFill>(profile.m_rules.m_entries.back().m_value.m_payload);
+            const auto start_hash = semanticHash(source, start, "worlds.frontier.start");
+            const auto resource_hash = semanticHash(source, resource, "worlds.frontier.resources.stone");
+            const auto fill_hash = semanticHash(source, fill, "worlds.frontier.rules.gas.payload.matter_fill");
+
+            profile.m_start.m_feature.m_key = "missing_feature";
+            PPR_TEST_ASSERT(semanticHash(source, start, "worlds.frontier.start") != start_hash);
+            PPR_TEST_ASSERT(semanticHash(source, resource, "worlds.frontier.resources.stone") != resource_hash);
+            profile.m_start.m_feature.m_key = "another_missing_feature";
+            const auto missing = semanticHash(source, start, "worlds.frontier.start");
+            profile.m_start.m_feature.m_key = "missing_feature";
+            PPR_TEST_ASSERT(semanticHash(source, start, "worlds.frontier.start") != missing);
+
+            auto &placement = std::get<definition::Feature>(profile.m_rules.m_entries[4].m_value.m_payload);
+            placement.m_feature.m_key = "missing_feature";
+            const auto missing_fill = semanticHash(source, fill, "worlds.frontier.rules.gas.payload.matter_fill");
+            PPR_TEST_ASSERT(missing_fill != fill_hash);
+            placement.m_feature.m_key.clear();
+            const auto empty_owner = semanticHash(source, fill, "worlds.frontier.rules.gas.payload.matter_fill");
+            profile.m_rules.m_entries[4].m_value.m_payload = definition::Connection{};
+            const auto absent_owner = semanticHash(source, fill, "worlds.frontier.rules.gas.payload.matter_fill");
+            PPR_TEST_ASSERT(absent_owner != empty_owner and absent_owner != missing_fill);
+
+            auto second = recipeDefinition().m_worlds.m_entries.front();
+            second.m_key = "hollows";
+            source.m_worlds.m_entries.push_back(second);
+            PPR_TEST_ASSERT(semanticHash(source, fill, "worlds.hollows.rules.gas.payload.matter_fill") != fill_hash);
+            PPR_TEST_ASSERT(semanticHash(source, start, "worlds.hollows.start") == start_hash);
+        };
+
+        PPR_UNIT_TEST (definition_rules_fingerprint_projects_all_profiles_canonically) {
+            auto source = recipeDefinition();
+            auto empty = source.m_worlds.m_entries.front();
+            empty.m_key = "empty";
+            empty.m_value.m_rules.m_entries.clear();
+            const auto without_empty = definition::definitionRulesFingerprint(source);
+            source.m_worlds.m_entries.push_back(empty);
+            const auto expected = definition::definitionRulesFingerprint(source);
+            PPR_TEST_ASSERT(expected != without_empty);
+
+            auto reordered = source;
+            std::ranges::reverse(reordered.m_worlds.m_entries);
+            for (auto &profile: reordered.m_worlds.m_entries) {
+                std::ranges::reverse(profile.m_value.m_rules.m_entries);
+            }
+            PPR_TEST_ASSERT(definition::definitionRulesFingerprint(reordered) == expected);
+            reordered.m_worlds.m_entries.front().m_key = "renamed_empty";
+            PPR_TEST_ASSERT(definition::definitionRulesFingerprint(reordered) != expected);
+
+            auto changed = source;
+            changed.m_worlds.m_entries.front().m_value.m_layout.m_min_sites += 1u;
+            changed.m_materials.m_entries.front().m_value.m_density += 1.0;
+            PPR_TEST_ASSERT(definition::definitionRulesFingerprint(changed) == expected);
+            changed.m_worlds.m_entries.front().m_value.m_rules.m_entries.front().m_value.m_enabled = false;
+            PPR_TEST_ASSERT(definition::definitionRulesFingerprint(changed) != expected);
+        };
+
+        PPR_UNIT_TEST (definition_recipe_all_payloads_and_derived_phases) {
+            using namespace definition;
+            static_assert(phaseOf(Cave{}) == EGenerationPhase::carve);
+            static_assert(phaseOf(CarveWorm{}) == EGenerationPhase::carve);
+            static_assert(phaseOf(VeinWorm{}) == EGenerationPhase::deposit);
+            static_assert(phaseOf(Connection{}) == EGenerationPhase::carve);
+            static_assert(phaseOf(Feature{}) == EGenerationPhase::stamp);
+            static_assert(phaseOf(MatterFill{}) == EGenerationPhase::fill);
+            static_assert(phaseOf(RuleVariant{Connection{}}) == EGenerationPhase::carve);
+            config::Diagnostics diagnostics;
+            const auto compiled = compileRecipe(recipeDefinition(), {"frontier"}, recipeParameters(), diagnostics);
+            PPR_TEST_ASSERT(compiled.has_value() and not diagnostics.hasErrors());
+            PPR_TEST_ASSERT(not validateGenerationRecipe(compiled->m_recipe));
+            const auto &rules = compiled->m_recipe.m_rules;
+            PPR_TEST_ASSERT(rules.size() == 7u);
+            PPR_TEST_ASSERT(
+                rules[0].m_phase == EGenerationPhase::deposit and
+                not std::get<GenerationWorm>(rules[0].m_parameters).m_carve);
+            PPR_TEST_ASSERT(
+                rules[1].m_phase == EGenerationPhase::carve and
+                std::holds_alternative<GenerationCave>(rules[1].m_parameters));
+            PPR_TEST_ASSERT(std::get<GenerationWorm>(rules[2].m_parameters).m_carve);
+            PPR_TEST_ASSERT(std::holds_alternative<GenerationConnection>(rules[3].m_parameters));
+            PPR_TEST_ASSERT(
+                rules[4].m_phase == EGenerationPhase::stamp and
+                std::get<GenerationPlacement>(rules[4].m_parameters).m_reflect);
+            const auto &liquid = std::get<GenerationFill>(rules[5].m_parameters);
+            const auto &gas = std::get<GenerationFill>(rules[6].m_parameters);
+            PPR_TEST_ASSERT(
+                rules[5].m_phase == EGenerationPhase::fill and not liquid.m_gas and liquid.m_fill_height_m == 5.0);
+            PPR_TEST_ASSERT(gas.m_gas and not gas.m_fill_height_m and gas.m_placement_rule == 4u);
+            PPR_TEST_ASSERT(compiled->m_recipe.m_resources.size() == 1u);
+            for (const auto &binding: compiled->m_bindings.m_rules) {
+                PPR_TEST_ASSERT(binding.m_profile == "frontier");
+            }
+        };
+
+        PPR_UNIT_TEST (definition_recipe_particle_fill_accepts_every_phase) {
+            using namespace definition;
+            for (const auto phase: {EGenerationMatter::solid, EGenerationMatter::liquid, EGenerationMatter::gas}) {
+                auto source = recipeDefinition();
+                source.m_materials.m_entries.push_back(
+                    {"fill", {phase, EMaterialRepresentation::particle, {}, 1000.0}});
+                auto &fill = std::get<MatterFill>(
+                    source.m_worlds.m_entries.front().m_value.m_rules.m_entries[5].m_value.m_payload);
+                fill.m_material.m_key = "fill";
+                const bool gas = phase == EGenerationMatter::gas;
+                if (gas) {
+                    fill.m_fill_height_m.reset();
+                }
+
+                config::Diagnostics diagnostics;
+                const auto compiled = compileRecipe(source, {"frontier"}, recipeParameters(), diagnostics);
+                PPR_TEST_ASSERT(compiled.has_value() and not diagnostics.hasErrors());
+                PPR_TEST_ASSERT(not validateGenerationRecipe(compiled->m_recipe));
+                const auto &numeric = std::get<GenerationFill>(compiled->m_recipe.m_rules[5].m_parameters);
+                PPR_TEST_ASSERT(numeric.m_gas == gas and numeric.m_fill_height_m == fill.m_fill_height_m);
+
+                if (phase == EGenerationMatter::solid) {
+                    fill.m_fill_height_m.reset();
+                    checkRecipeFailure(
+                        source, config::EConfigErrc::missing_value,
+                        "worlds.frontier.rules.liquid.payload.matter_fill.fill_height_m");
+                    fill.m_fill_height_m = 5.0;
+                    source.m_materials.m_entries.back().m_value.m_representation = EMaterialRepresentation::terrain;
+                    source.m_materials.m_entries.back().m_value.m_diggable = true;
+                    checkRecipeFailure(
+                        source, config::EConfigErrc::cross_field_invalid,
+                        "worlds.frontier.rules.liquid.payload.matter_fill.material");
+                }
+            }
+        };
+
+        PPR_UNIT_TEST (definition_recipe_fill_phase_height_and_suitability) {
+            using namespace definition;
+            auto source = recipeDefinition();
+            auto &rules = source.m_worlds.m_entries.front().m_value.m_rules;
+            auto &gas = std::get<MatterFill>(rules.m_entries.back().m_value.m_payload);
+            gas.m_fill_height_m = 5.0;
+            checkRecipeFailure(
+                source, config::EConfigErrc::cross_field_invalid,
+                "worlds.frontier.rules.gas.payload.matter_fill.fill_height_m");
+            gas.m_fill_height_m.reset();
+            auto &liquid = std::get<MatterFill>(rules.m_entries[5].m_value.m_payload);
+            liquid.m_fill_height_m.reset();
+            checkRecipeFailure(
+                source, config::EConfigErrc::missing_value,
+                "worlds.frontier.rules.liquid.payload.matter_fill.fill_height_m");
+            liquid.m_fill_height_m = 5.0;
+            liquid.m_material.m_key = "rock";
+            checkRecipeFailure(
+                source, config::EConfigErrc::cross_field_invalid,
+                "worlds.frontier.rules.liquid.payload.matter_fill.material");
+            liquid.m_material.m_key = "water";
+            liquid.m_fill_height_m = 5.1;
+            checkRecipeFailure(
+                source, config::EConfigErrc::cross_field_invalid,
+                "worlds.frontier.rules.liquid.payload.matter_fill.fill_height_m");
+        };
+
+        PPR_UNIT_TEST (definition_recipe_scoped_markers_and_owner_first) {
+            using namespace definition;
+            auto source = recipeDefinition();
+            auto &profile = source.m_worlds.m_entries.front().m_value;
+            for (const std::string_view wrong: {"resource", "room", "inert", "pocket"}) {
+                profile.m_start.m_marker.m_key = wrong;
+                checkRecipeFailure(source, config::EConfigErrc::cross_field_invalid, "worlds.frontier.start.marker");
+            }
+            profile.m_start.m_marker.m_key = "start";
+            auto &fill = std::get<MatterFill>(profile.m_rules.m_entries.back().m_value.m_payload);
+            for (const std::string_view wrong: {"start", "resource", "room", "inert"}) {
+                fill.m_marker.m_key = wrong;
+                checkRecipeFailure(
+                    source, config::EConfigErrc::cross_field_invalid,
+                    "worlds.frontier.rules.gas.payload.matter_fill.marker");
+            }
+            fill.m_marker.m_key = "foreign";
+            source.m_features.m_entries[1].m_value.m_markers.m_entries.push_back(
+                {"foreign", {EGenerationMarker::sealed_pocket, 5, 5}});
+            checkRecipeFailure(
+                source, config::EConfigErrc::cross_field_invalid,
+                "worlds.frontier.rules.gas.payload.matter_fill.marker");
+            fill.m_marker.m_key = "pocket";
+            profile.m_start.m_feature.m_key = "missing";
+            config::Diagnostics diagnostics;
+            const auto missing_owner = compileRecipe(source, {"frontier"}, recipeParameters(), diagnostics);
+            PPR_TEST_ASSERT(not missing_owner);
+            PPR_TEST_ASSERT(diagnostics.entries().front().m_property == "worlds.frontier.start.feature");
+            profile.m_start.m_feature.m_key = "other";
+            diagnostics.clear();
+            const auto scoped = compileRecipe(source, {"frontier"}, recipeParameters(), diagnostics);
+            PPR_TEST_ASSERT(scoped.has_value());
+            const auto &start_feature = scoped->m_recipe.m_features[scoped->m_recipe.m_start_feature];
+            PPR_TEST_ASSERT(start_feature.m_markers[scoped->m_recipe.m_start_marker].m_x == 8);
+            for (const auto &feature: scoped->m_bindings.m_features) {
+                for (const auto &marker: feature.m_markers) {
+                    PPR_TEST_ASSERT(marker.m_feature == feature.m_key);
+                }
+            }
+            auto &resource = profile.m_resources.m_entries.front().m_value;
+            resource.m_marker.m_key = "pocket";
+            checkRecipeFailure(
+                source, config::EConfigErrc::cross_field_invalid, "worlds.frontier.resources.stone.marker");
+        };
+
+        PPR_UNIT_TEST (definition_recipe_scoped_rules_disabled_placement_and_active_biomes) {
+            using namespace definition;
+            auto source = recipeDefinition();
+            auto &profile = source.m_worlds.m_entries.front().m_value;
+            profile.m_rules.m_entries[4].m_value.m_enabled = false;
+            checkRecipeFailure(
+                source, config::EConfigErrc::cross_field_invalid,
+                "worlds.frontier.rules.gas.payload.matter_fill.placement");
+            profile.m_rules.m_entries[4].m_value.m_enabled = true;
+            auto &gas = std::get<MatterFill>(profile.m_rules.m_entries.back().m_value.m_payload);
+            gas.m_placement.m_key = "cave";
+            checkRecipeFailure(
+                source, config::EConfigErrc::cross_field_invalid,
+                "worlds.frontier.rules.gas.payload.matter_fill.placement");
+            gas.m_placement.m_key = "foreign";
+            auto other = profile;
+            other.m_rules.m_entries[4].m_key = "foreign";
+            std::get<MatterFill>(other.m_rules.m_entries[5].m_value.m_payload).m_placement.m_key = "foreign";
+            source.m_worlds.m_entries.push_back({"other", std::move(other)});
+            checkRecipeFailure(
+                source, config::EConfigErrc::cross_field_invalid,
+                "worlds.frontier.rules.gas.payload.matter_fill.placement");
+
+            source = recipeDefinition();
+            source.m_biomes.m_entries.push_back({"unused", source.m_biomes.m_entries.front().m_value});
+            std::get<Cave>(source.m_worlds.m_entries.front().m_value.m_rules.m_entries.front().m_value.m_payload)
+                .m_biome.m_key = "unused";
+            checkRecipeFailure(
+                source, config::EConfigErrc::cross_field_invalid, "worlds.frontier.rules.cave.payload.cave.biome");
+            std::get<Cave>(source.m_worlds.m_entries.front().m_value.m_rules.m_entries.front().m_value.m_payload)
+                .m_biome.m_key = "plain";
+            std::get<Feature>(source.m_worlds.m_entries.front().m_value.m_rules.m_entries[4].m_value.m_payload)
+                .m_biome.m_key = "unused";
+            checkRecipeFailure(
+                source, config::EConfigErrc::cross_field_invalid, "worlds.frontier.rules.place.payload.feature.biome");
+        };
+
+        PPR_UNIT_TEST (definition_recipe_profile_owned_rule_bindings_and_reordering) {
+            using namespace definition;
+            auto source = recipeDefinition();
+            source.m_worlds.m_entries.push_back({"second", source.m_worlds.m_entries.front().m_value});
+            std::get<Feature>(source.m_worlds.m_entries.back().m_value.m_rules.m_entries[4].m_value.m_payload)
+                .m_feature.m_key = "other";
+            config::Diagnostics diagnostics;
+            const auto first = compileRecipe(source, {"frontier"}, recipeParameters(), diagnostics);
+            const auto second = compileRecipe(source, {"second"}, recipeParameters(), diagnostics);
+            PPR_TEST_ASSERT(first.has_value() and second.has_value());
+            PPR_TEST_ASSERT(first->m_bindings.m_rules.front().m_profile == "frontier");
+            PPR_TEST_ASSERT(second->m_bindings.m_rules.front().m_profile == "second");
+            PPR_TEST_ASSERT(first->m_recipe.m_rules.front().m_key != second->m_recipe.m_rules.front().m_key);
+            std::ranges::reverse(source.m_worlds.m_entries);
+            std::ranges::reverse(source.m_features.m_entries);
+            std::ranges::reverse(source.m_materials.m_entries);
+            for (auto &profile: source.m_worlds.m_entries) {
+                std::ranges::reverse(profile.m_value.m_rules.m_entries);
+                std::ranges::reverse(profile.m_value.m_biomes.m_entries);
+                std::ranges::reverse(profile.m_value.m_resources.m_entries);
+            }
+            for (auto &feature: source.m_features.m_entries) {
+                std::ranges::reverse(feature.m_value.m_markers.m_entries);
+            }
+            const auto reordered = compileRecipe(source, {"frontier"}, recipeParameters(), diagnostics);
+            PPR_TEST_ASSERT(reordered.has_value() and not diagnostics.hasErrors());
+            for (std::size_t i = 0u; i < first->m_recipe.m_rules.size(); ++i) {
+                PPR_TEST_ASSERT(first->m_recipe.m_rules[i].m_key == reordered->m_recipe.m_rules[i].m_key);
+                PPR_TEST_ASSERT(first->m_recipe.m_rules[i].m_phase == reordered->m_recipe.m_rules[i].m_phase);
+                PPR_TEST_ASSERT(first->m_recipe.m_rules[i].m_order == reordered->m_recipe.m_rules[i].m_order);
+                PPR_TEST_ASSERT(first->m_bindings.m_rules[i].m_key == reordered->m_bindings.m_rules[i].m_key);
+                PPR_TEST_ASSERT(first->m_bindings.m_rules[i].m_index == reordered->m_bindings.m_rules[i].m_index);
+            }
+            const auto &fill = std::get<GenerationFill>(reordered->m_recipe.m_rules.back().m_parameters);
+            PPR_TEST_ASSERT(
+                fill.m_placement_rule ==
+                std::get<GenerationFill>(first->m_recipe.m_rules.back().m_parameters).m_placement_rule);
+            PPR_TEST_ASSERT(
+                fill.m_marker == std::get<GenerationFill>(first->m_recipe.m_rules.back().m_parameters).m_marker);
+        };
+
+        PPR_UNIT_TEST (definition_recipe_numeric_boundary_and_missing_dependencies) {
+            using namespace definition;
+            auto source = recipeDefinition();
+            auto &profile = source.m_worlds.m_entries.front().m_value;
+            profile.m_layout.m_site_spacing_m = 2000.0;
+            checkRecipeFailure(source, config::EConfigErrc::cross_field_invalid, "worlds.frontier");
+            profile.m_layout.m_site_spacing_m = 100.0;
+            profile.m_rules.m_entries[1].m_value.m_order = 0u;
+            checkRecipeFailure(source, config::EConfigErrc::duplicate_key, "worlds.frontier.rules.cave.order");
+            profile.m_rules.m_entries[1].m_value.m_order = 1u;
+            profile.m_boundaries.m_warp_x_field.m_key = "missing";
+            checkRecipeFailure(
+                source, config::EConfigErrc::cross_field_invalid, "worlds.frontier.boundaries.warp_x_field");
+            profile.m_boundaries.m_warp_x_field.m_key = "climate";
+            source.m_features.m_entries.front().m_value.m_allow_horizontal_reflection = false;
+            checkRecipeFailure(
+                source, config::EConfigErrc::cross_field_invalid,
+                "worlds.frontier.rules.place.payload.feature.reflect");
+            source.m_features.m_entries.front().m_value.m_allow_horizontal_reflection = true;
+            auto parameters = recipeParameters();
+            parameters.m_reference_thickness_m = 0.0;
+            profile.m_start.m_feature.m_key = "missing";
+            config::Diagnostics diagnostics;
+            const auto invalid_parameters = compileRecipe(source, {"absent"}, parameters, diagnostics);
+            PPR_TEST_ASSERT(
+                not invalid_parameters and
+                invalid_parameters.error() == config::make_error_code(config::EConfigErrc::out_of_range));
+            PPR_TEST_ASSERT(diagnostics.entries().front().m_property == "reference_thickness_m");
+            diagnostics.clear();
+            const auto missing_profile = compileRecipe(source, {"absent"}, recipeParameters(), diagnostics);
+            PPR_TEST_ASSERT(not missing_profile and diagnostics.entries().front().m_property == "worlds.absent");
+        };
+
+        PPR_UNIT_TEST (definition_recipe_optional_surface_bedrock_and_owned_values) {
+            using namespace definition;
+            auto source = recipeDefinition();
+            source.m_materials.m_entries.push_back(
+                {"bedrock", {EGenerationMatter::solid, EMaterialRepresentation::terrain, false, 3000.0}});
+            auto &profile = source.m_worlds.m_entries.front().m_value;
+            profile.m_surface_bedrock = SurfaceBedrock{{"climate"}, {"climate"}, {"bedrock"}, 1000.0, 10.0, 20.0, 2.0};
+            profile.m_start.m_depth_m = 50.0;
+            config::Diagnostics diagnostics;
+            const auto compiled = compileRecipe(source, {"frontier"}, recipeParameters(), diagnostics);
+            PPR_TEST_ASSERT(compiled.has_value() and not diagnostics.hasErrors());
+            source = {};
+            PPR_TEST_ASSERT(compiled->m_recipe.m_open_surface and compiled->m_recipe.m_start_depth_m == 50.0);
+            PPR_TEST_ASSERT(compiled->m_recipe.m_bedrock_thickness_m == 20.0);
+            PPR_TEST_ASSERT(compiled->m_bindings.m_rules.front().m_profile == "frontier");
+            source = recipeDefinition();
+            source.m_worlds.m_entries.front().m_value.m_surface_bedrock = SurfaceBedrock{
+                {"missing"}, {"climate"}, {"rock"}, 1000.0, 10.0, 20.0, 2.0};
+            checkRecipeFailure(
+                source, config::EConfigErrc::cross_field_invalid, "worlds.frontier.surface_bedrock.surface_field");
+        };
+
+        [[nodiscard]] std::string profileText() {
+            return featureText("carve", "rectangle") + R"toml(
+[features.room.markers.start]
+role='start'
+x_fine=1
+y_fine=1
+[worlds.frontier.layout]
+min_sites=4
+max_sites=16
+site_attempts=30
+site_spacing_m=100.0
+[worlds.frontier.boundaries]
+material='rock'
+thickness_fine=3
+warp_x_field='climate'
+warp_y_field='climate'
+[worlds.frontier.start]
+biome='plain'
+feature='room'
+marker='start'
+x_fine=2000
+y_fine=3000
+clearance_m=3.0
+route_width_m=1.0
+[worlds.frontier.biomes.plain]
+biome='plain'
+required_count=1
+weight=1.0
+distance_min_m=0.0
+distance_max_m=2048.0
+[worlds.frontier.biomes.plain.depth]
+min=0.0
+max=1.0
+[worlds.frontier.rules.edit]
+order=0
+[worlds.frontier.rules.edit.payload]
+tag='cave'
+[worlds.frontier.rules.edit.payload.cave]
+biome='plain'
+field='missing'
+[worlds.frontier.rules.edit.payload.cave.depth]
+min=0.0
+max=1.0
+[worlds.frontier.rules.edit.payload.cave.threshold]
+min=-0.5
+max=0.5
+)toml";
+        }
+
+        PPR_UNIT_TEST (definition_recipe_generic_resolution_variant_refs_and_atomic_replacement) {
+            using namespace definition;
+            config::Diagnostics diagnostics;
+            const auto base_document = config::decode(
+                profileText(), "base.toml", diagnostics, config::EDecodeMode::tree);
+            PPR_TEST_ASSERT(base_document.has_value());
+            Array<config::TreeLayer> layers{config::toTreeLayer(*base_document, "base.toml")};
+            const auto resolved = config::resolveRecursive<Definition>(layers, diagnostics);
+            PPR_TEST_ASSERT(resolved.has_value() and not diagnostics.hasErrors());
+            const auto &rule = resolved->m_value.m_worlds.m_entries.front().m_value.m_rules.m_entries.front().m_value;
+            PPR_TEST_ASSERT(rule.m_enabled and std::holds_alternative<Cave>(rule.m_payload));
+            const auto invalid_ref = compileRecipe(resolved->m_value, {"frontier"}, recipeParameters(), diagnostics);
+            PPR_TEST_ASSERT(
+                not invalid_ref and
+                invalid_ref.error() == config::make_error_code(config::EConfigErrc::cross_field_invalid));
+            PPR_TEST_ASSERT(
+                diagnostics.entries().front().m_property == "worlds.frontier.rules.edit.payload.cave.field");
+            diagnostics.clear();
+            const auto replacement_document = config::decode(
+                R"toml(
+[worlds.frontier.rules.edit.payload]
+tag='connection'
+[worlds.frontier.rules.edit.payload.connection]
+radius_m=1.0
+)toml",
+                "replace.toml", diagnostics, config::EDecodeMode::tree);
+            PPR_TEST_ASSERT(replacement_document.has_value());
+            layers.push_back(config::toTreeLayer(*replacement_document, "replace.toml"));
+            const auto replaced = config::resolveRecursive<Definition>(layers, diagnostics);
+            PPR_TEST_ASSERT(replaced.has_value() and not diagnostics.hasErrors());
+            const auto &replacement =
+                replaced->m_value.m_worlds.m_entries.front().m_value.m_rules.m_entries.front().m_value;
+            PPR_TEST_ASSERT(std::holds_alternative<Connection>(replacement.m_payload));
+            PPR_TEST_ASSERT(replaced->find("worlds.frontier.rules.edit.payload.cave.field") == nullptr);
+            const auto compiled = compileRecipe(replaced->m_value, {"frontier"}, recipeParameters(), diagnostics);
+            PPR_TEST_ASSERT(compiled.has_value() and not diagnostics.hasErrors());
+            PPR_TEST_ASSERT(
+                std::holds_alternative<GenerationConnection>(compiled->m_recipe.m_rules.front().m_parameters));
+            auto missing_text = profileText();
+            const auto offset = missing_text.find("field='missing'\n");
+            missing_text.erase(offset, std::string_view{"field='missing'\n"}.size());
+            diagnostics.clear();
+            const auto missing = resolveFeatureText(missing_text, diagnostics);
+            PPR_TEST_ASSERT(
+                not missing and missing.error() == config::make_error_code(config::EConfigErrc::missing_value));
+            PPR_TEST_ASSERT(std::ranges::any_of(diagnostics.entries(), [](const auto &entry) {
+                return entry.m_property == "worlds.frontier.rules.edit.payload.cave.field";
+            }));
+        };
+
+        void checkFeatureCombination(const std::string_view action, const std::string_view shape) {
+            config::Diagnostics diagnostics;
+            const auto resolved = resolveFeatureText(featureText(action, shape), diagnostics);
+            PPR_TEST_ASSERT(resolved.has_value() and not diagnostics.hasErrors());
+            const auto compiled = definition::compileDefinition(resolved->m_value, 1.0 / 3.0, diagnostics);
+            PPR_TEST_ASSERT(compiled.has_value() and not diagnostics.hasErrors());
+            PPR_TEST_ASSERT(compiled->m_features.size() == 1u);
+            const auto &feature = compiled->m_features.front();
+            PPR_TEST_ASSERT(feature.m_bounds.m_min_x == -3 and feature.m_bounds.m_min_y == -3);
+            PPR_TEST_ASSERT(feature.m_bounds.m_max_x == 12 and feature.m_bounds.m_max_y == 12);
+            const auto &operation = feature.m_operations.front();
+            PPR_TEST_ASSERT(operation.m_order == 7u and operation.m_x == 0 and operation.m_y == 0);
+            PPR_TEST_ASSERT(operation.m_carve == (action == "carve"));
+            PPR_TEST_ASSERT(operation.m_material == (action == "carve" ? 0u : 1u));
+            if (shape == "capsule") {
+                PPR_TEST_ASSERT(operation.m_shape == EGenerationShape::capsule);
+                PPR_TEST_ASSERT(operation.m_end_x == 6 and operation.m_end_y == 3 and operation.m_radius_m == 1.0);
+                PPR_TEST_ASSERT(operation.m_width == 0u and operation.m_height == 0u);
+            } else {
+                PPR_TEST_ASSERT(
+                    operation.m_shape ==
+                    (shape == "rectangle" ? EGenerationShape::rectangle : EGenerationShape::ellipse));
+                PPR_TEST_ASSERT(operation.m_width == 6u and operation.m_height == 9u);
+                PPR_TEST_ASSERT(operation.m_end_x == 0 and operation.m_end_y == 0 and operation.m_radius_m == 0.0);
+            }
+        }
+
+        PPR_UNIT_TEST (definition_feature_paint_rectangle) {
+            checkFeatureCombination("paint", "rectangle");
+        };
+        PPR_UNIT_TEST (definition_feature_paint_ellipse) {
+            checkFeatureCombination("paint", "ellipse");
+        };
+        PPR_UNIT_TEST (definition_feature_paint_capsule) {
+            checkFeatureCombination("paint", "capsule");
+        };
+        PPR_UNIT_TEST (definition_feature_carve_rectangle) {
+            checkFeatureCombination("carve", "rectangle");
+        };
+        PPR_UNIT_TEST (definition_feature_carve_ellipse) {
+            checkFeatureCombination("carve", "ellipse");
+        };
+        PPR_UNIT_TEST (definition_feature_carve_capsule) {
+            checkFeatureCombination("carve", "capsule");
+        };
+
+        PPR_UNIT_TEST (definition_feature_reflection_required_and_numeric) {
+            for (const bool allow: {false, true}) {
+                config::Diagnostics diagnostics;
+                const auto resolved = resolveFeatureText(featureText("carve", "rectangle", allow), diagnostics);
+                PPR_TEST_ASSERT(resolved.has_value());
+                const auto compiled = definition::compileDefinition(resolved->m_value, 1.0 / 3.0, diagnostics);
+                PPR_TEST_ASSERT(compiled.has_value() and compiled->m_features.front().m_allow_reflection == allow);
+                auto changed = resolved->m_value;
+                changed.m_features.m_entries.front().m_value.m_allow_horizontal_reflection = not allow;
+                PPR_TEST_ASSERT(
+                    definition::definitionFingerprint(changed) != definition::definitionFingerprint(resolved->m_value));
+            }
+            auto text = featureText("carve", "rectangle");
+            const auto offset = text.find("allow_horizontal_reflection=false\n");
+            text.erase(offset, std::string_view{"allow_horizontal_reflection=false\n"}.size());
+            config::Diagnostics diagnostics;
+            const auto missing = resolveFeatureText(text, diagnostics);
+            PPR_TEST_ASSERT(
+                not missing and missing.error() == config::make_error_code(config::EConfigErrc::missing_value));
+            PPR_TEST_ASSERT(std::ranges::any_of(diagnostics.entries(), [](const auto &entry) {
+                return entry.m_property == "features.room.allow_horizontal_reflection";
+            }));
+        };
+
+        PPR_UNIT_TEST (definition_feature_paint_requires_terrain_carve_has_no_material) {
+            using namespace definition;
+            config::Diagnostics diagnostics;
+            auto text = featureText("paint", "rectangle");
+            const auto offset = text.rfind("material='rock'\n");
+            text.erase(offset, std::string_view{"material='rock'\n"}.size());
+            const auto missing = resolveFeatureText(text, diagnostics);
+            PPR_TEST_ASSERT(
+                not missing and missing.error() == config::make_error_code(config::EConfigErrc::missing_value));
+            PPR_TEST_ASSERT(std::ranges::any_of(diagnostics.entries(), [](const auto &entry) {
+                return entry.m_property == "features.room.operations.cut.action.paint.material";
+            }));
+
+            diagnostics.clear();
+            auto resolved = resolveFeatureText(featureText("paint", "rectangle"), diagnostics);
+            PPR_TEST_ASSERT(resolved.has_value());
+            auto &source = resolved->m_value;
+            source.m_materials.m_entries.push_back(
+                {"dust", {EGenerationMatter::solid, EMaterialRepresentation::particle, {}, 1000.0}});
+            auto &operation = source.m_features.m_entries.front().m_value.m_operations.m_entries.front().m_value;
+            for (const std::string_view key: {"dust", "vacuum", "missing"}) {
+                std::get<Paint>(operation.m_action).m_material.m_key = key;
+                diagnostics.clear();
+                const auto invalid = compileDefinition(source, 1.0 / 3.0, diagnostics);
+                PPR_TEST_ASSERT(
+                    not invalid and
+                    invalid.error() == config::make_error_code(config::EConfigErrc::cross_field_invalid));
+                PPR_TEST_ASSERT(
+                    diagnostics.entries().front().m_property == "features.room.operations.cut.action.paint.material");
+            }
+            operation.m_action = Carve{Rectangle{6u, 9u}};
+            diagnostics.clear();
+            const auto carved = compileDefinition(source, 1.0 / 3.0, diagnostics);
+            PPR_TEST_ASSERT(carved.has_value() and carved->m_features.front().m_operations.front().m_material == 0u);
+
+            // Carve has no material leaf; stray material is rejected rather than resolved or retained.
+            text = featureText("carve", "rectangle");
+            const std::string_view table = "[features.room.operations.cut.action.carve]\n";
+            text.insert(text.find(table) + table.size(), "material='missing'\n");
+            diagnostics.clear();
+            const auto stray = resolveFeatureText(text, diagnostics);
+            PPR_TEST_ASSERT(
+                not stray and stray.error() == config::make_error_code(config::EConfigErrc::unknown_property));
+            PPR_TEST_ASSERT(std::ranges::any_of(diagnostics.entries(), [](const auto &entry) {
+                return entry.m_property == "features.room.operations.cut.action.carve.material";
+            }));
+        };
+
+        PPR_UNIT_TEST (definition_feature_unknown_action_and_shape_tags) {
+            for (const bool action: {true, false}) {
+                auto text = featureText("carve", "rectangle");
+                const auto tag = action ? "tag='carve'" : "tag='rectangle'";
+                text.replace(text.find(tag), std::string_view{tag}.size(), "tag='unknown'");
+                config::Diagnostics diagnostics;
+                const auto rejected = resolveFeatureText(text, diagnostics);
+                PPR_TEST_ASSERT(
+                    not rejected and
+                    rejected.error() == config::make_error_code(config::EConfigErrc::unknown_enum_value));
+                const auto path = action ? "features.room.operations.cut.action.tag"
+                                         : "features.room.operations.cut.action.carve.shape.tag";
+                PPR_TEST_ASSERT(std::ranges::any_of(diagnostics.entries(), [&](const auto &entry) {
+                    return entry.m_property == path and entry.m_code == rejected.error();
+                }));
+            }
+        };
+
+        PPR_UNIT_TEST (definition_feature_markers_roles_and_extent_paths) {
+            using namespace definition;
+            config::Diagnostics diagnostics;
+            auto text = featureText("carve", "rectangle");
+            const std::array roles{"start", "traversal_room", "sealed_pocket", "resource_anchor", "inert"};
+            for (u32 index = 0u; index < roles.size(); ++index) {
+                text += std::format(
+                    "[features.room.markers.marker_{}]\nrole='{}'\nx_fine={}\ny_fine=0\n", index, roles[index], index);
+            }
+            const auto resolved = resolveFeatureText(text, diagnostics);
+            PPR_TEST_ASSERT(resolved.has_value());
+            const auto compiled = compileDefinition(resolved->m_value, 1.0 / 3.0, diagnostics);
+            PPR_TEST_ASSERT(compiled.has_value() and compiled->m_features.front().m_markers.size() == roles.size());
+            for (u32 index = 0u; index < roles.size(); ++index) {
+                const auto &marker = compiled->m_features.front().m_markers[index];
+                PPR_TEST_ASSERT(
+                    marker.m_role == static_cast<EGenerationMarker>(index) and
+                    marker.m_x == static_cast<i32>(index) and
+                    marker.m_y == 0);
+                const auto &binding = compiled->m_bindings.m_features.front().m_markers[index];
+                PPR_TEST_ASSERT(binding.m_key == std::format("marker_{}", index) and binding.m_index == index);
+            }
+            for (const bool x: {true, false}) {
+                auto invalid = resolved->m_value;
+                auto &marker = invalid.m_features.m_entries.front().m_value.m_markers.m_entries.front().m_value;
+                (x ? marker.m_x_fine : marker.m_y_fine) = 12;
+                diagnostics.clear();
+                PPR_TEST_ASSERT(
+                    validateDefinition(invalid, diagnostics) ==
+                    config::make_error_code(config::EConfigErrc::cross_field_invalid));
+                PPR_TEST_ASSERT(
+                    diagnostics.entries().front().m_property ==
+                    (x ? "features.room.markers.marker_0.x_fine" : "features.room.markers.marker_0.y_fine"));
+            }
+        };
+
+        PPR_UNIT_TEST (definition_feature_reservation_and_shape_extent_paths) {
+            using namespace definition;
+            for (const std::string_view shape: {"rectangle", "ellipse", "capsule"}) {
+                config::Diagnostics diagnostics;
+                const auto resolved = resolveFeatureText(featureText("carve", shape), diagnostics);
+                PPR_TEST_ASSERT(resolved.has_value());
+                auto invalid = resolved->m_value;
+                auto &feature = invalid.m_features.m_entries.front().m_value;
+                feature.m_operations.m_entries.front().m_value.m_x_fine = 10;
+                PPR_TEST_ASSERT(
+                    validateDefinition(invalid, diagnostics) ==
+                    config::make_error_code(config::EConfigErrc::cross_field_invalid));
+                PPR_TEST_ASSERT(
+                    diagnostics.entries().front().m_property ==
+                    "features.room.operations.cut.action.carve.shape." + std::string{shape});
+
+                invalid = resolved->m_value;
+                invalid.m_features.m_entries.front().m_value.m_reservation.m_max_x_fine = -3;
+                diagnostics.clear();
+                PPR_TEST_ASSERT(
+                    validateDefinition(invalid, diagnostics) ==
+                    config::make_error_code(config::EConfigErrc::cross_field_invalid));
+                PPR_TEST_ASSERT(diagnostics.entries().front().m_property == "features.room.reservation.max_x_fine");
+                if (shape == "capsule") {
+                    diagnostics.clear();
+                    const auto too_small_cells = compileDefinition(resolved->m_value, 0.1, diagnostics);
+                    PPR_TEST_ASSERT(
+                        not too_small_cells and
+                        too_small_cells.error() == config::make_error_code(config::EConfigErrc::cross_field_invalid));
+                    PPR_TEST_ASSERT(
+                        diagnostics.entries().front().m_property ==
+                        "features.room.operations.cut.action.carve.shape.capsule");
+                }
+            }
+        };
+
+        [[nodiscard]] auto numericFeatureValues(const GenerationFeature &feature) {
+            const auto operation_values = [](const GenerationOperation &value) {
+                return std::tuple{
+                    value.m_key, value.m_order, value.m_shape, value.m_carve, value.m_x, value.m_y, value.m_end_x,
+                    value.m_end_y, value.m_width, value.m_height, value.m_radius_m, value.m_material};
+            };
+            Array<decltype(operation_values(GenerationOperation{}))> operations;
+            for (const auto &operation: feature.m_operations) {
+                operations.push_back(operation_values(operation));
+            }
+            Array<std::tuple<u64, EGenerationMarker, i32, i32>> markers;
+            for (const auto &marker: feature.m_markers) {
+                markers.push_back({marker.m_key, marker.m_role, marker.m_x, marker.m_y});
+            }
+            return std::tuple{
+                feature.m_key, feature.m_bounds.m_min_x, feature.m_bounds.m_min_y, feature.m_bounds.m_max_x,
+                feature.m_bounds.m_max_y, feature.m_allow_reflection, operations, markers};
+        }
+
+        PPR_UNIT_TEST (definition_feature_reordering_preserves_bindings_streams_and_geometry) {
+            using namespace definition;
+            config::Diagnostics diagnostics;
+            const auto resolved = resolveFeatureText(featureText("paint", "capsule"), diagnostics);
+            PPR_TEST_ASSERT(resolved.has_value());
+            auto source = resolved->m_value;
+            auto &feature = source.m_features.m_entries.front().m_value;
+            auto later = feature.m_operations.m_entries.front();
+            later.m_key = "a_later";
+            later.m_value.m_order = 11u;
+            later.m_value.m_action = Carve{Ellipse{6u, 9u}};
+            feature.m_operations.m_entries.push_back(later);
+            feature.m_markers.m_entries.push_back({"z_last", {EGenerationMarker::inert, 1, 2}});
+            feature.m_markers.m_entries.push_back({"a_first", {EGenerationMarker::resource_anchor, -3, -3}});
+            auto other = source.m_features.m_entries.front();
+            other.m_key = "alpha";
+            other.m_value.m_allow_horizontal_reflection = true;
+            source.m_features.m_entries.push_back(other);
+            const auto first = compileDefinition(source, 1.0 / 3.0, diagnostics);
+            PPR_TEST_ASSERT(first.has_value());
+            auto reordered = source;
+            std::ranges::reverse(reordered.m_features.m_entries);
+            for (auto &entry: reordered.m_features.m_entries) {
+                std::ranges::reverse(entry.m_value.m_operations.m_entries);
+                std::ranges::reverse(entry.m_value.m_markers.m_entries);
+            }
+            const auto second = compileDefinition(reordered, 1.0 / 3.0, diagnostics);
+            PPR_TEST_ASSERT(second.has_value() and definitionFingerprint(source) == definitionFingerprint(reordered));
+            std::set<u64> keys;
+            for (u32 index = 0u; index < first->m_features.size(); ++index) {
+                const auto &a = first->m_features[index];
+                const auto &b = second->m_features[index];
+                PPR_TEST_ASSERT(numericFeatureValues(a) == numericFeatureValues(b));
+                const auto &binding = first->m_bindings.m_features[index];
+                const auto &other_binding = second->m_bindings.m_features[index];
+                PPR_TEST_ASSERT(binding.m_key == (index == 0u ? "alpha" : "room") and binding.m_index == index);
+                PPR_TEST_ASSERT(binding.m_key == other_binding.m_key and binding.m_index == other_binding.m_index);
+                PPR_TEST_ASSERT(a.m_operations.front().m_order == 7u and a.m_operations.back().m_order == 11u);
+                PPR_TEST_ASSERT(keys.insert(a.m_key).second);
+                for (const auto &operation: a.m_operations) {
+                    PPR_TEST_ASSERT(keys.insert(operation.m_key).second);
+                }
+                for (u32 marker = 0u; marker < a.m_markers.size(); ++marker) {
+                    PPR_TEST_ASSERT(keys.insert(a.m_markers[marker].m_key).second);
+                    PPR_TEST_ASSERT(binding.m_markers[marker].m_key == other_binding.m_markers[marker].m_key);
+                    PPR_TEST_ASSERT(
+                        binding.m_markers[marker].m_index == marker and
+                        other_binding.m_markers[marker].m_index == marker);
+                }
+            }
+            auto duplicate_order = source;
+            duplicate_order.m_features.m_entries.front().m_value.m_operations.m_entries.back().m_value.m_order = 7u;
+            diagnostics.clear();
+            PPR_TEST_ASSERT(
+                validateDefinition(duplicate_order, diagnostics) ==
+                config::make_error_code(config::EConfigErrc::duplicate_key));
+            PPR_TEST_ASSERT(diagnostics.entries().front().m_property == "features.room.operations.cut.order");
+        };
+
+        PPR_UNIT_TEST (definition_recursive_paths_include_deposits_and_pore) {
+            using namespace definition;
+            auto source = completeDefinition();
+            config::Diagnostics diagnostics;
+            PPR_TEST_ASSERT(not validateDefinition(source, diagnostics) and not diagnostics.hasErrors());
+            const auto fragment = compileDefinition(source, 1.0 / 3.0, diagnostics);
+            PPR_TEST_ASSERT(fragment.has_value() and fragment->m_biomes.front().m_deposits.size() == 1u);
+            PPR_TEST_ASSERT(fragment->m_biomes.front().m_deposits.front().m_depth_min == 0.125);
+            PPR_TEST_ASSERT(fragment->m_biomes.front().m_deposits.front().m_depth_max == 0.875);
+
+            const Array<std::string> expected{
+                "biomes", "biomes.plain", "biomes.plain.composition", "biomes.plain.composition.base",
+                "biomes.plain.deposits", "biomes.plain.deposits.ore", "biomes.plain.deposits.ore.order",
+                "biomes.plain.deposits.ore.field", "biomes.plain.deposits.ore.material",
+                "biomes.plain.deposits.ore.host_material", "biomes.plain.deposits.ore.depth",
+                "biomes.plain.deposits.ore.depth.min", "biomes.plain.deposits.ore.depth.max",
+                "biomes.plain.deposits.ore.threshold", "biomes.plain.deposits.ore.threshold.min",
+                "biomes.plain.deposits.ore.threshold.max", "biomes.plain.pore", "biomes.plain.pore.field",
+                "biomes.plain.pore.probability", "biomes.plain.pore.radius", "biomes.plain.pore.radius.min_m",
+                "biomes.plain.pore.radius.max_m", "biomes.plain.pore.affinity_min", "biomes.plain.pore.passes"};
+            Array<std::string> schema_paths;
+            config::describeRecursive<Definition>(
+                [&](const std::string &path, const auto &, auto) { schema_paths.push_back(path); });
+            for (auto path: expected) {
+                for (const auto key: {".plain", ".base", ".ore"}) {
+                    if (const auto offset = path.find(key); offset != std::string::npos) {
+                        path.replace(offset, std::string_view{key}.size(), ".{key}");
+                    }
+                }
+                PPR_TEST_ASSERT(std::ranges::find(schema_paths, path) != schema_paths.end());
+            }
+
+            const auto collect = [&](const Definition &object) {
+                Array<std::string> paths;
+                config::visitRecursive(object, [&](const std::string &path, const auto &, const auto &value) {
+                    // Keep the selected deposit/pore contract independent of other biome schema additions.
+                    if (std::ranges::find(expected, path) != expected.end()) {
+                        paths.push_back(path);
+                    }
+                    if constexpr (std::is_same_v<std::remove_cvref_t<decltype(value)>, double>) {
+                        if (path == "biomes.plain.deposits.ore.depth.min") {
+                            PPR_TEST_ASSERT(value == 0.125);
+                        } else if (path == "biomes.plain.deposits.ore.depth.max") {
+                            PPR_TEST_ASSERT(value == 0.875);
+                        } else if (path == "biomes.plain.deposits.ore.threshold.min") {
+                            PPR_TEST_ASSERT(value == -0.5);
+                        } else if (path == "biomes.plain.deposits.ore.threshold.max") {
+                            PPR_TEST_ASSERT(value == 0.75);
+                        } else if (path == "biomes.plain.pore.radius.min_m") {
+                            PPR_TEST_ASSERT(value == 1.0);
+                        } else if (path == "biomes.plain.pore.radius.max_m") {
+                            PPR_TEST_ASSERT(value == 2.0);
+                        }
+                    }
+                });
+                return paths;
+            };
+            PPR_TEST_ASSERT(collect(source) == expected);
+
+            auto without_pore = source;
+            without_pore.m_biomes.m_entries.front().m_value.m_pore.reset();
+            auto expected_without_pore = expected;
+            expected_without_pore.resize(17u); // The optional group remains; its seven descendants disappear.
+            PPR_TEST_ASSERT(collect(without_pore) == expected_without_pore);
+
+            auto invalid = source;
+            invalid.m_biomes.m_entries.front().m_value.m_deposits.m_entries.front().m_value.m_depth.m_max = 1.125;
+            diagnostics.clear();
+            PPR_TEST_ASSERT(
+                validateDefinition(invalid, diagnostics) == config::make_error_code(config::EConfigErrc::out_of_range));
+            PPR_TEST_ASSERT(diagnostics.entries().front().m_property == "biomes.plain.deposits.ore.depth.max");
+        };
+
+        PPR_UNIT_TEST (definition_fingerprint_v2_pinned_and_sensitive_to_every_member) {
+            using namespace definition;
+            const auto source = completeDefinition();
+            // V2 uses the shared descriptor encoder: textual variant tags and scoped reference
+            // metadata/owner paths replace variant indices and reference-type inventories.
+            // Pinned once from the audited v2 cutover run, without changing completeDefinition().
+            constexpr u64 expected = 0xeabf43d9ff4929e3ull;
+
+            Array<std::string> paths;
+            const auto collect = [&](const std::string &path, const auto &) { paths.push_back(path); };
+            walkFingerprintMembers(source, collect);
+            const auto actual = definitionFingerprint(source);
+            PPR_TEST_ASSERT(kDefinitionSchemaVersion == 2u and actual == expected);
+
+            std::size_t checked = 0u;
+            for (const auto &path: paths) {
+                auto changed = source;
+                bool found = false;
+                const auto mutate = [&](const std::string &candidate, auto &value) {
+                    if (candidate == path) {
+                        flipFingerprintMember(value);
+                        found = true;
+                    }
+                };
+                walkFingerprintMembers(changed, mutate);
+                PPR_TEST_ASSERT(found and definitionFingerprint(changed) != expected);
+                ++checked;
+            }
+            // Empty features/worlds collections add two descriptor members to the original 80.
+            PPR_TEST_ASSERT(checked == 82u);
+        };
+
+        PPR_UNIT_TEST (definition_rejects_normalized_weight_collapse) {
+            auto source = minimalDefinition();
+            auto &choices =
+                source.m_biomes.m_entries.front().m_value.m_composition.m_entries.front().m_value.m_materials;
+            choices.m_entries = {{"a_small", {{"rock"}, 1.0e-300}}, {"z_large", {{"rock"}, 1.0e300}}};
+            // Storage order must not change the key-sorted numeric validation or diagnostic path.
+            for (u32 order = 0u; order < 2u; ++order) {
+                config::Diagnostics diagnostics;
+                const auto error = config::make_error_code(config::EConfigErrc::cross_field_invalid);
+                PPR_TEST_ASSERT(definition::validateDefinition(source, diagnostics) == error);
+                PPR_TEST_ASSERT(diagnostics.entries().size() == 1u);
+                PPR_TEST_ASSERT(
+                    diagnostics.entries().front().m_property ==
+                    "biomes.plain.composition.base.materials.a_small.weight");
+                PPR_TEST_ASSERT(diagnostics.entries().front().m_code == error);
+                diagnostics.clear();
+                const auto compiled = definition::compileDefinition(source, 1.0 / 3.0, diagnostics);
+                PPR_TEST_ASSERT(not compiled and compiled.error() == error);
+                std::ranges::reverse(choices.m_entries);
+            }
+
+            choices.m_entries.front().m_value.m_weight = 1.0;
+            choices.m_entries.back().m_value.m_weight = 3.0;
+            config::Diagnostics diagnostics;
+            PPR_TEST_ASSERT(not definition::validateDefinition(source, diagnostics) and not diagnostics.hasErrors());
+        };
+
+        PPR_UNIT_TEST (definition_validates_biome_chain) {
+            using namespace definition;
+            using config::EConfigErrc;
+            const auto valid = minimalDefinition();
+            config::Diagnostics diagnostics;
+            PPR_TEST_ASSERT(not validateDefinition(valid, diagnostics) and not diagnostics.hasErrors());
+            PPR_TEST_ASSERT(valid.m_biomes.m_entries.front().m_value.m_deposits.m_entries.empty());
+            PPR_TEST_ASSERT(not valid.m_biomes.m_entries.front().m_value.m_pore);
+
+            const auto rejects = [](const Definition &candidate, const std::string_view path, const EConfigErrc code,
+                                     const std::string_view related = {}) {
+                config::Diagnostics errors;
+                PPR_TEST_ASSERT(validateDefinition(candidate, errors) == config::make_error_code(code));
+                const auto found = std::ranges::find(errors.entries(), path, &config::Diagnostic::m_property);
+                PPR_TEST_ASSERT(found != errors.entries().end() and found->m_code == config::make_error_code(code));
+                if (not related.empty()) {
+                    PPR_TEST_ASSERT(
+                        std::ranges::find(found->m_related_properties, related) != found->m_related_properties.end());
+                }
+            };
+            auto candidate = valid;
+            candidate.m_biomes.m_entries.front().m_value.m_temperature.m_field.m_key = "missing";
+            rejects(candidate, "biomes.plain.temperature.field", EConfigErrc::cross_field_invalid, "fields.missing");
+
+            candidate = valid;
+            auto &material = candidate.m_materials.m_entries.front().m_value;
+            material.m_representation = EMaterialRepresentation::particle;
+            material.m_diggable.reset();
+            rejects(
+                candidate, "biomes.plain.composition.base.materials.stone.material", EConfigErrc::cross_field_invalid,
+                "materials.rock");
+
+            candidate = valid;
+            candidate.m_biomes.m_entries.front().m_value.m_composition.m_entries.front().m_value.m_depth.m_max = 0.0;
+            rejects(
+                candidate, "biomes.plain.composition.base.depth.max", EConfigErrc::cross_field_invalid,
+                "biomes.plain.composition.base.depth.min");
+
+            candidate = valid;
+            candidate.m_biomes.m_entries.front().m_value.m_composition.m_entries.clear();
+            rejects(candidate, "biomes.plain.composition", EConfigErrc::out_of_range);
+
+            candidate = valid;
+            auto &bands = candidate.m_biomes.m_entries.front().m_value.m_composition.m_entries;
+            bands.front().m_value.m_depth.m_max = 0.5;
+            auto second = bands.front();
+            second.m_key = "next";
+            second.m_value.m_depth = {0.5, 1.0};
+            bands.push_back(std::move(second));
+            rejects(
+                candidate, "biomes.plain.composition.next.order", EConfigErrc::duplicate_key,
+                "biomes.plain.composition.base.order");
+
+            candidate = valid;
+            candidate.m_biomes.m_entries.front().m_value.m_pore = Pore{{"climate"}, 0.0, {2.0, 1.0}};
+            rejects(
+                candidate, "biomes.plain.pore.radius.max_m", EConfigErrc::cross_field_invalid,
+                "biomes.plain.pore.radius.min_m");
+        };
+
+        PPR_UNIT_TEST (definition_ids_and_fingerprint_deterministic) {
+            using namespace definition;
+            constexpr std::string_view omitted = R"toml(
+[materials.rock]
+phase = "solid"
+representation = "terrain"
+diggable = true
+density = 2500.0
+[materials.ash]
+phase = "solid"
+representation = "terrain"
+diggable = false
+density = 1000.0
+[fields.climate]
+algorithm = "open_simplex2"
+frequency_per_metre = 0.025
+[fields.alpha]
+algorithm = "perlin"
+frequency_per_metre = 0.01
+[biomes.plain.temperature]
+field = "climate"
+base_k = 293.0
+[biomes.plain.composition.base]
+order = 0
+field = "climate"
+depth.min = 0.0
+[biomes.plain.composition.base.materials.stone]
+material = "rock"
+weight = 1.0
+[biomes.plain.composition.base.materials.air]
+material = "vacuum"
+weight = 1.0
+)toml";
+            constexpr std::string_view explicit_defaults = R"toml(
+# Same resolved values, with a different ordering and spelling of numbers.
+[fields.alpha]
+frequency_per_metre=1e-2
+algorithm='perlin'
+[materials.ash]
+density=1e3
+diggable=false
+representation='terrain'
+phase='solid'
+[materials.rock]
+density=2.5e3
+diggable=true
+representation='terrain'
+phase='solid'
+[fields.climate]
+frequency_per_metre=0.025
+algorithm='open_simplex2'
+fractal='none'
+octaves=4
+lacunarity=2.0
+gain=0.5
+axis_scale_x=1.0
+axis_scale_y=1.0
+rotation_degrees=0.0
+warp_amplitude_m=0.0
+warp_frequency_per_metre=0.006
+[biomes.plain.deposits]
+[biomes.plain.temperature]
+base_k=293.0
+field='climate'
+variation_k=0.0
+[biomes.plain.composition.base]
+field='climate'
+order=0
+depth.max=1.0
+depth.min=0.0
+[biomes.plain.composition.base.materials.air]
+weight=1.0
+material='vacuum'
+[biomes.plain.composition.base.materials.stone]
+weight=1.0
+material='rock'
+)toml";
+            const auto resolve_source = [](const std::string_view source) {
+                config::Diagnostics diagnostics;
+                const auto document = config::decode(source, "definition.toml", diagnostics, config::EDecodeMode::tree);
+                PPR_TEST_ASSERT(document.has_value());
+                const auto layer = config::toTreeLayer(*document, "definition.toml");
+                const auto resolved = config::resolveRecursive<Definition>(std::span{&layer, 1u}, diagnostics);
+                PPR_TEST_ASSERT(resolved.has_value() and not diagnostics.hasErrors());
+                return resolved->m_value;
+            };
+            const auto first = resolve_source(omitted);
+            const auto second = resolve_source(explicit_defaults);
+            PPR_TEST_ASSERT(definitionFingerprint(first) == definitionFingerprint(second));
+
+            config::Diagnostics diagnostics;
+            const auto a = compileDefinition(first, 1.0 / 3.0, diagnostics);
+            const auto b = compileDefinition(second, 1.0 / 3.0, diagnostics);
+            PPR_TEST_ASSERT(a.has_value() and b.has_value() and not diagnostics.hasErrors());
+            PPR_TEST_ASSERT(a->m_bindings.m_materials.size() == 2u and a->m_bindings.m_fields.size() == 2u);
+            PPR_TEST_ASSERT(b->m_bindings.m_materials.size() == 2u and b->m_bindings.m_fields.size() == 2u);
+            for (std::size_t index = 0u; index < a->m_bindings.m_materials.size(); ++index) {
+                const auto &left = a->m_bindings.m_materials[index];
+                const auto &right = b->m_bindings.m_materials[index];
+                PPR_TEST_ASSERT(left.m_key == right.m_key and left.m_id == right.m_id);
+                PPR_TEST_ASSERT(left.m_id == index + 1u and left.m_id != 0u and left.m_id != 65535u);
+                PPR_TEST_ASSERT(a->m_materials[index].m_key == b->m_materials[index].m_key);
+            }
+            PPR_TEST_ASSERT(a->m_bindings.m_materials.front().m_key == "ash");
+            for (std::size_t index = 0u; index < a->m_bindings.m_fields.size(); ++index) {
+                PPR_TEST_ASSERT(a->m_bindings.m_fields[index].m_key == b->m_bindings.m_fields[index].m_key);
+                PPR_TEST_ASSERT(a->m_bindings.m_fields[index].m_index == index);
+                PPR_TEST_ASSERT(b->m_bindings.m_fields[index].m_index == index);
+                PPR_TEST_ASSERT(a->m_fields[index].m_key == b->m_fields[index].m_key);
+            }
+            PPR_TEST_ASSERT(a->m_bindings.m_fields.front().m_key == "alpha");
+            PPR_TEST_ASSERT(a->m_biomes.front().m_key == b->m_biomes.front().m_key);
+            PPR_TEST_ASSERT(
+                a->m_biomes.front().m_temperature_field == 1u and b->m_biomes.front().m_temperature_field == 1u);
+            PPR_TEST_ASSERT(a->m_biomes.front().m_bands.front().m_key == b->m_biomes.front().m_bands.front().m_key);
+            PPR_TEST_ASSERT(a->m_biomes.front().m_bands.front().m_choices.front().m_material == 0u);
+            PPR_TEST_ASSERT(b->m_biomes.front().m_bands.front().m_choices.front().m_material == 0u);
+
+            auto reordered = first;
+            std::ranges::reverse(reordered.m_materials.m_entries);
+            std::ranges::reverse(reordered.m_fields.m_entries);
+            std::ranges::reverse(reordered.m_biomes.m_entries.front()
+                    .m_value.m_composition.m_entries.front()
+                    .m_value.m_materials.m_entries);
+            const auto c = compileDefinition(reordered, 1.0 / 3.0, diagnostics);
+            PPR_TEST_ASSERT(c.has_value() and definitionFingerprint(reordered) == definitionFingerprint(first));
+            PPR_TEST_ASSERT(
+                c->m_bindings.m_materials.front().m_key == "ash" and c->m_bindings.m_materials.back().m_id == 2u);
+            PPR_TEST_ASSERT(c->m_biomes.front().m_key == a->m_biomes.front().m_key);
+            PPR_TEST_ASSERT(
+                c->m_biomes.front().m_bands.front().m_choices.front().m_key ==
+                a->m_biomes.front().m_bands.front().m_choices.front().m_key);
+
+            auto present_pore = first;
+            present_pore.m_biomes.m_entries.front().m_value.m_pore = Pore{{"climate"}, 0.0};
+            PPR_TEST_ASSERT(not validateDefinition(present_pore, diagnostics));
+            PPR_TEST_ASSERT(definitionFingerprint(present_pore) != definitionFingerprint(first));
+        };
+
+        PPR_UNIT_TEST (definition_compiles_every_biome_and_enforces_cardinality) {
+            using namespace definition;
+            auto source = completeDefinition();
+            const auto prototype = source.m_biomes.m_entries.front().m_value;
+            for (const u32 count: {1u, kMaxGenerationBiomes}) {
+                source.m_biomes.m_entries.clear();
+                for (u32 index = 0u; index < count; ++index) {
+                    auto biome = prototype;
+                    biome.m_temperature.m_base_k = 273.0 + index;
+                    if (index % 2u == 0u) {
+                        biome.m_pore.reset();
+                    }
+                    biome.m_deposits.m_entries.front().m_value.m_order = index;
+                    source.m_biomes.m_entries.push_back({std::format("biome_{:02}", index), std::move(biome)});
+                }
+                std::ranges::reverse(source.m_biomes.m_entries);
+                config::Diagnostics diagnostics;
+                const auto compiled = compileDefinition(source, 1.0 / 3.0, diagnostics);
+                PPR_TEST_ASSERT(compiled.has_value() and not diagnostics.hasErrors());
+                PPR_TEST_ASSERT(compiled->m_biomes.size() == count and compiled->m_bindings.m_biomes.size() == count);
+                std::set<u64> streams;
+                for (u32 index = 0u; index < count; ++index) {
+                    const auto &binding = compiled->m_bindings.m_biomes[index];
+                    const auto &biome = compiled->m_biomes[index];
+                    PPR_TEST_ASSERT(binding.m_key == std::format("biome_{:02}", index) and binding.m_index == index);
+                    PPR_TEST_ASSERT(biome.m_temperature_base_k == 273.0 + index and biome.m_temperature_field == 0u);
+                    PPR_TEST_ASSERT(biome.m_bands.size() == 1u and biome.m_deposits.size() == 1u);
+                    PPR_TEST_ASSERT(biome.m_bands.front().m_choices.front().m_material == 1u);
+                    PPR_TEST_ASSERT(biome.m_deposits.front().m_order == index);
+                    PPR_TEST_ASSERT(biome.m_deposits.front().m_depth_min == 0.125);
+                    PPR_TEST_ASSERT(biome.m_pore_passes == (index % 2u == 0u ? 0u : 2u));
+                    PPR_TEST_ASSERT(biome.m_pore_probability == (index % 2u == 0u ? 0.0 : 0.1));
+                    PPR_TEST_ASSERT(streams.insert(biome.m_key).second);
+                    PPR_TEST_ASSERT(streams.insert(biome.m_bands.front().m_key).second);
+                    PPR_TEST_ASSERT(streams.insert(biome.m_bands.front().m_choices.front().m_key).second);
+                    PPR_TEST_ASSERT(streams.insert(biome.m_deposits.front().m_key).second);
+                }
+            }
+
+            // Invalid scalar in the last canonical biome must not be hidden by first-only lowering.
+            source.m_biomes.m_entries.front().m_value.m_temperature.m_variation_k = 1000.0;
+            config::Diagnostics diagnostics;
+            const auto invalid = compileDefinition(source, 1.0 / 3.0, diagnostics);
+            PPR_TEST_ASSERT(
+                not invalid and invalid.error() == config::make_error_code(config::EConfigErrc::cross_field_invalid));
+            PPR_TEST_ASSERT(diagnostics.entries().front().m_property == "biomes.biome_63.temperature.variation_k");
+
+            for (const u32 count: {0u, kMaxGenerationBiomes + 1u}) {
+                source.m_biomes.m_entries.clear();
+                for (u32 index = 0u; index < count; ++index) {
+                    source.m_biomes.m_entries.push_back({std::format("biome_{:02}", index), prototype});
+                }
+                diagnostics.clear();
+                const auto rejected = compileDefinition(source, 1.0 / 3.0, diagnostics);
+                PPR_TEST_ASSERT(
+                    not rejected and rejected.error() == config::make_error_code(config::EConfigErrc::out_of_range));
+                PPR_TEST_ASSERT(diagnostics.entries().front().m_property == "biomes");
+            }
+        };
+
+        PPR_UNIT_TEST (definition_reordering_preserves_all_bindings_streams_and_output) {
+            using namespace definition;
+            auto source = completeDefinition();
+            source.m_materials.m_entries.push_back(
+                {"ash", {EGenerationMatter::solid, EMaterialRepresentation::terrain, false, 1000.0}});
+            source.m_fields.m_entries.push_back(
+                {"alpha", {.m_algorithm = ENoiseAlgorithm::perlin, .m_frequency_per_metre = 0.01}});
+            auto &biome = source.m_biomes.m_entries.front().m_value;
+            biome.m_lining = Lining{{"ash"}, 2u};
+            biome.m_relaxation = {3u, 0.25};
+            biome.m_sprinkle.m_probability = 0.125;
+            biome.m_finish = {1u, 0.2};
+            biome.m_erosion.m_passes = 2u;
+            biome.m_surface_layers.m_soil = Soil{{"ash"}, 4.0};
+            biome.m_surface_layers.m_weathered = Weathered{{"rock"}, 5.0};
+            biome.m_formation = Formation{{"rock"}, 0.1, 4.0};
+            biome.m_rind = Rind{{"ash"}};
+            auto &bands = biome.m_composition.m_entries;
+            bands.front().m_key = "z_first";
+            bands.front().m_value.m_depth.m_max = 0.5;
+            bands.front().m_value.m_bed_period_m = 8.0;
+            bands.front().m_value.m_bed_warp_m = 1.0;
+            bands.front().m_value.m_bed_dip = 0.125;
+            bands.front().m_value.m_materials.m_entries.push_back({"air", {{"vacuum"}, 2.0}});
+            auto second_band = bands.front();
+            second_band.m_key = "a_second";
+            second_band.m_value.m_order = 9u;
+            second_band.m_value.m_depth = {0.5, 1.0};
+            second_band.m_value.m_field.m_key = "alpha";
+            bands.push_back(std::move(second_band));
+            auto second_deposit = biome.m_deposits.m_entries.front();
+            second_deposit.m_key = "a_later";
+            second_deposit.m_value.m_order = 11u;
+            second_deposit.m_value.m_field.m_key = "alpha";
+            second_deposit.m_value.m_material.m_key = "ash";
+            second_deposit.m_value.m_stage = EGenerationDepositStage::detail;
+            second_deposit.m_value.m_core_coverage = 0.75;
+            second_deposit.m_value.m_fringe_coverage = 0.5;
+            second_deposit.m_value.m_sprinkle_probability = 0.01;
+            second_deposit.m_value.m_blob = DepositBlob{3u, {2.0, 4.0}, {1.25, 2.0}, {30.0, 90.0}, 0.2};
+            biome.m_deposits.m_entries.push_back(std::move(second_deposit));
+            auto second_biome = source.m_biomes.m_entries.front();
+            second_biome.m_key = "alpine";
+            second_biome.m_value.m_temperature = {{"alpha"}, 280.0, 4.0};
+            source.m_biomes.m_entries.push_back(std::move(second_biome));
+
+            auto reordered = source;
+            std::ranges::reverse(reordered.m_materials.m_entries);
+            std::ranges::reverse(reordered.m_fields.m_entries);
+            std::ranges::reverse(reordered.m_biomes.m_entries);
+            for (auto &entry: reordered.m_biomes.m_entries) {
+                std::ranges::reverse(entry.m_value.m_composition.m_entries);
+                std::ranges::reverse(entry.m_value.m_deposits.m_entries);
+                for (auto &band: entry.m_value.m_composition.m_entries) {
+                    std::ranges::reverse(band.m_value.m_materials.m_entries);
+                }
+            }
+            PPR_TEST_ASSERT(definitionFingerprint(source) == definitionFingerprint(reordered));
+            config::Diagnostics diagnostics;
+            const auto first = compileDefinition(source, 1.0 / 3.0, diagnostics);
+            const auto second = compileDefinition(reordered, 1.0 / 3.0, diagnostics);
+            PPR_TEST_ASSERT(first.has_value() and second.has_value() and not diagnostics.hasErrors());
+            PPR_TEST_ASSERT(first->m_materials.size() == 2u and second->m_materials.size() == 2u);
+            PPR_TEST_ASSERT(first->m_fields.size() == 2u and second->m_fields.size() == 2u);
+            PPR_TEST_ASSERT(first->m_biomes.size() == 2u and second->m_biomes.size() == 2u);
+            const auto material_values = [](const GenerationMaterial &material) {
+                return std::tuple{
+                    material.m_id, material.m_terrain, material.m_diggable, material.m_matter,
+                    material.m_reference_density_kg_m3, material.m_key};
+            };
+            const auto noise_values = [](const NoiseFieldDesc &noise) {
+                return std::tuple{
+                    noise.m_algorithm, noise.m_fractal, noise.m_frequency_per_metre, noise.m_octaves,
+                    noise.m_lacunarity, noise.m_gain, noise.m_axis_scale_x, noise.m_axis_scale_y,
+                    noise.m_rotation_degrees, noise.m_warp_amplitude_m, noise.m_warp_frequency_per_metre};
+            };
+            for (u32 index = 0u; index < 2u; ++index) {
+                const auto &a = first->m_bindings;
+                const auto &b = second->m_bindings;
+                const auto expected_material = index == 0u ? "ash" : "rock";
+                const auto expected_field = index == 0u ? "alpha" : "climate";
+                const auto expected_biome = index == 0u ? "alpine" : "plain";
+                PPR_TEST_ASSERT(
+                    a.m_materials[index].m_key == expected_material and a.m_materials[index].m_id == index + 1u);
+                PPR_TEST_ASSERT(
+                    a.m_materials[index].m_key == b.m_materials[index].m_key and
+                    a.m_materials[index].m_id == b.m_materials[index].m_id);
+                PPR_TEST_ASSERT(a.m_fields[index].m_key == expected_field and a.m_fields[index].m_index == index);
+                PPR_TEST_ASSERT(
+                    a.m_fields[index].m_key == b.m_fields[index].m_key and b.m_fields[index].m_index == index);
+                PPR_TEST_ASSERT(a.m_biomes[index].m_key == expected_biome and a.m_biomes[index].m_index == index);
+                PPR_TEST_ASSERT(
+                    a.m_biomes[index].m_key == b.m_biomes[index].m_key and b.m_biomes[index].m_index == index);
+                PPR_TEST_ASSERT(
+                    material_values(first->m_materials[index]) == material_values(second->m_materials[index]));
+                PPR_TEST_ASSERT(first->m_fields[index].m_key == second->m_fields[index].m_key);
+                PPR_TEST_ASSERT(
+                    noise_values(first->m_fields[index].m_noise) == noise_values(second->m_fields[index].m_noise));
+                PPR_TEST_ASSERT(
+                    numericBiomeValues(first->m_biomes[index]) == numericBiomeValues(second->m_biomes[index]));
+                const auto &compiled = first->m_biomes[index];
+                PPR_TEST_ASSERT(compiled.m_temperature_field == index);
+                PPR_TEST_ASSERT(compiled.m_bands.front().m_order == 0u and compiled.m_bands.back().m_order == 9u);
+                PPR_TEST_ASSERT(
+                    compiled.m_deposits.front().m_order == 7u and compiled.m_deposits.back().m_order == 11u);
+                PPR_TEST_ASSERT(compiled.m_deposits.front().m_shape == EGenerationDepositShape::field);
+                PPR_TEST_ASSERT(compiled.m_deposits.back().m_shape == EGenerationDepositShape::blob);
+                PPR_TEST_ASSERT(compiled.m_lining_material == 1u and compiled.m_lining_thickness_fine == 2u);
+                PPR_TEST_ASSERT(compiled.m_soil_material == 1u and compiled.m_soil_depth_m == 4.0);
+                PPR_TEST_ASSERT(compiled.m_weathered_material == 2u and compiled.m_weathered_depth_m == 5.0);
+                PPR_TEST_ASSERT(compiled.m_formation_material == 2u and compiled.m_formation_probability == 0.1);
+                PPR_TEST_ASSERT(compiled.m_formation_length_m == 4.0 and compiled.m_rind_material == 1u);
+            }
+
+            for (const bool deposits: {false, true}) {
+                auto duplicate = source;
+                auto &authored = duplicate.m_biomes.m_entries.back().m_value;
+                if (deposits) {
+                    authored.m_deposits.m_entries.back().m_value.m_order =
+                        authored.m_deposits.m_entries.front().m_value.m_order;
+                } else {
+                    authored.m_composition.m_entries.back().m_value.m_order =
+                        authored.m_composition.m_entries.front().m_value.m_order;
+                }
+                diagnostics.clear();
+                const auto rejected = compileDefinition(duplicate, 1.0 / 3.0, diagnostics);
+                PPR_TEST_ASSERT(
+                    not rejected and rejected.error() == config::make_error_code(config::EConfigErrc::duplicate_key));
+            }
+        };
+
+        PPR_UNIT_TEST (definition_halo_includes_unused_biomes_and_reorder_stable_ties) {
+            using namespace definition;
+            auto source = minimalDefinition();
+            const auto prototype = source.m_biomes.m_entries.front().m_value;
+            source.m_biomes.m_entries.clear();
+            for (const auto key: {"a", "b", "c", "d", "unused"}) {
+                source.m_biomes.m_entries.push_back({key, prototype});
+            }
+            source.m_biomes.m_entries[0u].m_value.m_pore = Pore{{"climate"}, 0.0, {}, 0.0, 6u};
+            source.m_biomes.m_entries[1u].m_value.m_relaxation.m_passes = 10u;
+            source.m_biomes.m_entries[2u].m_value.m_finish.m_passes = 4u;
+            source.m_biomes.m_entries[3u].m_value.m_erosion.m_passes = 4u;
+            config::Diagnostics diagnostics;
+            const auto accepted = compileDefinition(source, 1.0 / 3.0, diagnostics);
+            PPR_TEST_ASSERT(accepted.has_value() and not diagnostics.hasErrors());
+            PPR_TEST_ASSERT(accepted->m_biomes.size() == 5u and accepted->m_biomes.back().m_pore_passes == 0u);
+
+            // No layout selects this biome: authored participants still contribute and every tie is reported.
+            auto &unused = source.m_biomes.m_entries.back().m_value;
+            unused.m_pore = source.m_biomes.m_entries.front().m_value.m_pore;
+            unused.m_relaxation.m_passes = 10u;
+            unused.m_finish.m_passes = 4u;
+            unused.m_erosion.m_passes = 5u;
+            const Array<std::string> contributors{
+                "biomes.a.pore.passes", "biomes.b.relaxation.passes", "biomes.c.finish.passes",
+                "biomes.unused.erosion.passes", "biomes.unused.finish.passes", "biomes.unused.pore.passes",
+                "biomes.unused.relaxation.passes"};
+            for (u32 order = 0u; order < 2u; ++order) {
+                diagnostics.clear();
+                const auto rejected = compileDefinition(source, 1.0 / 3.0, diagnostics);
+                PPR_TEST_ASSERT(
+                    not rejected and
+                    rejected.error() == config::make_error_code(config::EConfigErrc::cross_field_invalid));
+                PPR_TEST_ASSERT(diagnostics.entries().size() == 1u);
+                PPR_TEST_ASSERT(diagnostics.entries().front().m_property == "biomes");
+                PPR_TEST_ASSERT(diagnostics.entries().front().m_related_properties == contributors);
+                std::ranges::reverse(source.m_biomes.m_entries);
+            }
+
+            for (u32 stage = 0u; stage < 4u; ++stage) {
+                auto candidate = minimalDefinition();
+                auto &biome = candidate.m_biomes.m_entries.front().m_value;
+                const std::array<std::string_view, 4u> paths{
+                    "biomes.plain.pore.passes", "biomes.plain.relaxation.passes", "biomes.plain.finish.passes",
+                    "biomes.plain.erosion.passes"};
+                if (stage == 0u) {
+                    biome.m_pore = Pore{{"climate"}, 0.0, {}, 0.0, 7u};
+                } else if (stage == 1u) {
+                    biome.m_relaxation.m_passes = 25u;
+                } else if (stage == 2u) {
+                    biome.m_finish.m_passes = 5u;
+                } else {
+                    biome.m_erosion.m_passes = 25u;
+                }
+                diagnostics.clear();
+                const auto rejected = compileDefinition(candidate, 1.0 / 3.0, diagnostics);
+                PPR_TEST_ASSERT(
+                    not rejected and rejected.error() == config::make_error_code(config::EConfigErrc::out_of_range));
+                PPR_TEST_ASSERT(diagnostics.entries().front().m_property == paths[stage]);
+            }
+        };
+
+        PPR_UNIT_TEST (definition_authored_field_and_terrain_references_resolve_and_diagnose) {
+            using namespace definition;
+            using config::EConfigErrc;
+            constexpr std::string_view authored = R"toml(
+[materials.rock]
+phase = "solid"
+representation = "terrain"
+diggable = true
+density = 2500.0
+[materials.dust]
+phase = "solid"
+representation = "particle"
+density = 1000.0
+[fields.alpha]
+algorithm = "perlin"
+frequency_per_metre = 0.01
+[fields.climate]
+algorithm = "open_simplex2"
+frequency_per_metre = 0.025
+[biomes.plain.temperature]
+field = "climate"
+base_k = 293.0
+[biomes.plain.composition.base]
+order = 0
+field = "climate"
+depth.min = 0.0
+[biomes.plain.composition.base.materials.stone]
+material = "rock"
+weight = 1.0
+[biomes.plain.deposits.ore]
+order = 0
+field = "alpha"
+material = "rock"
+host_material = "rock"
+depth.min = 0.1
+depth.max = 0.9
+threshold.min = -0.5
+threshold.max = 0.5
+[biomes.plain.pore]
+field = "alpha"
+[biomes.plain.lining]
+material = "rock"
+thickness_fine = 1
+)toml";
+            const auto resolve_source = [](const std::string_view source, config::Diagnostics &diagnostics) {
+                const auto document = config::decode(source, "references.toml", diagnostics, config::EDecodeMode::tree);
+                PPR_TEST_ASSERT(document.has_value());
+                const auto layer = config::toTreeLayer(*document, "references.toml");
+                return config::resolveRecursive<Definition>(std::span{&layer, 1u}, diagnostics);
+            };
+            config::Diagnostics diagnostics;
+            const auto resolved = resolve_source(authored, diagnostics);
+            PPR_TEST_ASSERT(resolved.has_value() and not diagnostics.hasErrors());
+            const auto compiled = compileDefinition(resolved->m_value, 1.0 / 3.0, diagnostics);
+            PPR_TEST_ASSERT(compiled.has_value() and not diagnostics.hasErrors());
+            const auto &biome = compiled->m_biomes.front();
+            PPR_TEST_ASSERT(biome.m_temperature_field == 1u and biome.m_bands.front().m_field == 1u);
+            PPR_TEST_ASSERT(biome.m_deposits.front().m_field == 0u and biome.m_pore_field == 0u);
+            PPR_TEST_ASSERT(biome.m_bands.front().m_choices.front().m_material == 2u);
+            PPR_TEST_ASSERT(biome.m_deposits.front().m_material == 2u and biome.m_deposits.front().m_host == 2u);
+            PPR_TEST_ASSERT(biome.m_lining_material == 2u);
+
+            const auto replace_leaf = [&](const std::string_view group, const std::string_view leaf,
+                                          const std::string_view replacement) {
+                std::string source{authored};
+                const auto start = source.find(group);
+                PPR_TEST_ASSERT(start != std::string::npos);
+                const auto offset = source.find(leaf, start);
+                PPR_TEST_ASSERT(offset != std::string::npos);
+                source.replace(offset, leaf.size(), replacement);
+                return source;
+            };
+            for (const auto &[group, leaf, path]: std::array{
+                     std::tuple{"[biomes.plain.temperature]", "field = \"climate\"", "biomes.plain.temperature.field"},
+                     std::tuple{
+                         "[biomes.plain.deposits.ore]", "material = \"rock\"", "biomes.plain.deposits.ore.material"}}) {
+                diagnostics.clear();
+                const auto missing = resolve_source(replace_leaf(group, leaf, ""), diagnostics);
+                PPR_TEST_ASSERT(not missing and missing.error() == config::make_error_code(EConfigErrc::missing_value));
+                PPR_TEST_ASSERT(diagnostics.entries().front().m_property == path);
+
+                const auto scalar = std::string_view{leaf}.starts_with("field") ? "field" : "material";
+                diagnostics.clear();
+                const auto invalid = resolve_source(
+                    replace_leaf(group, leaf, std::string{scalar} + " = \"bad key\""), diagnostics);
+                PPR_TEST_ASSERT(not invalid and invalid.error() == config::make_error_code(EConfigErrc::out_of_range));
+                PPR_TEST_ASSERT(diagnostics.entries().front().m_property == path);
+
+                diagnostics.clear();
+                const auto unknown = resolve_source(
+                    replace_leaf(group, leaf, std::string{scalar} + " = \"missing\""), diagnostics);
+                PPR_TEST_ASSERT(unknown.has_value());
+                const auto rejected = compileDefinition(unknown->m_value, 1.0 / 3.0, diagnostics);
+                PPR_TEST_ASSERT(
+                    not rejected and rejected.error() == config::make_error_code(EConfigErrc::cross_field_invalid));
+                PPR_TEST_ASSERT(diagnostics.entries().front().m_property == path);
+                const std::string collection = scalar == std::string_view{"field"} ? "fields" : "materials";
+                const Array<std::string> related{collection + ".missing", collection};
+                PPR_TEST_ASSERT(diagnostics.entries().front().m_related_properties == related);
+            }
+
+            for (const auto &[leaf, path]: std::array{
+                     std::pair{"material = \"rock\"", "biomes.plain.deposits.ore.material"},
+                     std::pair{"host_material = \"rock\"", "biomes.plain.deposits.ore.host_material"}}) {
+                diagnostics.clear();
+                const auto name = std::string_view{leaf}.substr(0u, std::string_view{leaf}.find(' '));
+                const auto particle = resolve_source(
+                    replace_leaf("[biomes.plain.deposits.ore]", leaf, std::string{name} + " = \"dust\""), diagnostics);
+                PPR_TEST_ASSERT(particle.has_value());
+                const auto rejected = compileDefinition(particle->m_value, 1.0 / 3.0, diagnostics);
+                PPR_TEST_ASSERT(
+                    not rejected and rejected.error() == config::make_error_code(EConfigErrc::cross_field_invalid));
+                PPR_TEST_ASSERT(diagnostics.entries().front().m_property == path);
+                PPR_TEST_ASSERT(
+                    diagnostics.entries().front().m_related_properties ==
+                    Array<std::string>{"materials.dust", "materials"});
+            }
+        };
+
+        PPR_UNIT_TEST (definition_blob_presence_and_controls_across_all_biomes) {
+            using namespace definition;
+            using config::EConfigErrc;
+            auto source = completeDefinition();
+            source.m_biomes.m_entries.front().m_value.m_pore.reset();
+            auto second = source.m_biomes.m_entries.front();
+            second.m_key = "unused";
+            second.m_value.m_deposits.m_entries.front().m_value.m_blob = DepositBlob{
+                2048u, {1.0, 2.0}, {1.25, 2.0}, {30.0, 90.0}, 0.2};
+            source.m_biomes.m_entries.push_back(std::move(second));
+            config::Diagnostics diagnostics;
+            const auto compiled = compileDefinition(source, 1.0 / 3.0, diagnostics);
+            PPR_TEST_ASSERT(compiled.has_value() and not diagnostics.hasErrors());
+            PPR_TEST_ASSERT(compiled->m_biomes.front().m_deposits.front().m_shape == EGenerationDepositShape::field);
+            const auto &blob = compiled->m_biomes.back().m_deposits.front();
+            PPR_TEST_ASSERT(blob.m_shape == EGenerationDepositShape::blob and blob.m_blob_count == 2048u);
+            PPR_TEST_ASSERT(blob.m_radius_min_m == 1.0 and blob.m_radius_max_m == 2.0);
+            PPR_TEST_ASSERT(blob.m_stretch_min == 1.25 and blob.m_stretch_max == 2.0);
+            PPR_TEST_ASSERT(blob.m_orientation_min_degrees == 30.0 and blob.m_orientation_max_degrees == 90.0);
+            PPR_TEST_ASSERT(blob.m_distortion == 0.2 and blob.m_threshold_min == -0.5 and blob.m_threshold_max == 0.75);
+
+            const auto rejects = [&](const auto &mutate, const std::string_view path, const EConfigErrc code,
+                                     const double cell_size_m = 1.0 / 3.0) {
+                auto candidate = source;
+                mutate(candidate.m_biomes.m_entries.back().m_value.m_deposits.m_entries.front().m_value);
+                config::Diagnostics errors;
+                const auto rejected = compileDefinition(candidate, cell_size_m, errors);
+                PPR_TEST_ASSERT(not rejected and rejected.error() == config::make_error_code(code));
+                const auto diagnostic = std::ranges::find(errors.entries(), path, &config::Diagnostic::m_property);
+                PPR_TEST_ASSERT(
+                    diagnostic != errors.entries().end() and diagnostic->m_code == config::make_error_code(code));
+            };
+            rejects(
+                [](auto &deposit) { deposit.m_blob->m_count = 0u; }, "biomes.unused.deposits.ore.blob.count",
+                EConfigErrc::out_of_range);
+            rejects(
+                [](auto &deposit) { deposit.m_blob->m_count = 4097u; }, "biomes.unused.deposits.ore.blob.count",
+                EConfigErrc::out_of_range);
+            rejects(
+                [](auto &deposit) { deposit.m_blob->m_radius.m_min_m = 0.0; },
+                "biomes.unused.deposits.ore.blob.radius.min_m", EConfigErrc::cross_field_invalid);
+            rejects(
+                [](auto &deposit) { deposit.m_blob->m_radius.m_min_m = 3.0; },
+                "biomes.unused.deposits.ore.blob.radius.min_m", EConfigErrc::cross_field_invalid);
+            rejects(
+                [](auto &deposit) { deposit.m_blob->m_stretch.m_max = 1.0; },
+                "biomes.unused.deposits.ore.blob.stretch.max", EConfigErrc::cross_field_invalid);
+            rejects(
+                [](auto &deposit) { deposit.m_blob->m_stretch.m_min = 0.0; },
+                "biomes.unused.deposits.ore.blob.stretch.min", EConfigErrc::out_of_range);
+            rejects(
+                [](auto &deposit) { deposit.m_blob->m_orientation.m_max_degrees = 20.0; },
+                "biomes.unused.deposits.ore.blob.orientation.max_degrees", EConfigErrc::cross_field_invalid);
+            rejects(
+                [](auto &deposit) { deposit.m_blob->m_distortion = 0.5; }, "biomes.unused.deposits.ore.blob.distortion",
+                EConfigErrc::out_of_range);
+            rejects(
+                [](auto &deposit) { deposit.m_core_coverage = 0.5; }, "biomes.unused.deposits.ore.fringe_coverage",
+                EConfigErrc::cross_field_invalid);
+            rejects(
+                [](auto &deposit) { deposit.m_sprinkle_probability = 0.01; },
+                "biomes.unused.deposits.ore.sprinkle_probability", EConfigErrc::cross_field_invalid);
+            rejects(
+                [](auto &deposit) {
+                    deposit.m_blob.reset();
+                    deposit.m_core_coverage = 0.5;
+                    deposit.m_fringe_coverage = 0.5;
+                },
+                "biomes.unused.deposits.ore.blob", EConfigErrc::cross_field_invalid);
+            rejects(
+                [](auto &deposit) {
+                    deposit.m_blob.reset();
+                    deposit.m_stage = EGenerationDepositStage::detail;
+                    deposit.m_sprinkle_probability = 0.01;
+                },
+                "biomes.unused.deposits.ore.blob", EConfigErrc::cross_field_invalid);
+            rejects(
+                [](auto &) {}, "biomes.unused.deposits.ore.blob.radius.max_m", EConfigErrc::cross_field_invalid,
+                1.0 / kWorldEdge);
+
+            // The aggregate cap covers the complete fragment, not one selected biome.
+            source.m_biomes.m_entries.front().m_value.m_deposits.m_entries.front().m_value.m_blob =
+                source.m_biomes.m_entries.back().m_value.m_deposits.m_entries.front().m_value.m_blob;
+            diagnostics.clear();
+            PPR_TEST_ASSERT(
+                compileDefinition(source, 1.0 / 3.0, diagnostics).has_value() and not diagnostics.hasErrors());
+            ++source.m_biomes.m_entries.back().m_value.m_deposits.m_entries.front().m_value.m_blob->m_count;
+            const Array<std::string> counts{
+                "biomes.plain.deposits.ore.blob.count", "biomes.unused.deposits.ore.blob.count"};
+            for (u32 order = 0u; order < 2u; ++order) {
+                diagnostics.clear();
+                const auto rejected = compileDefinition(source, 1.0 / 3.0, diagnostics);
+                PPR_TEST_ASSERT(
+                    not rejected and rejected.error() == config::make_error_code(EConfigErrc::out_of_range));
+                PPR_TEST_ASSERT(
+                    diagnostics.entries().size() == 1u and diagnostics.entries().front().m_property == "biomes");
+                PPR_TEST_ASSERT(diagnostics.entries().front().m_related_properties == counts);
+                std::ranges::reverse(source.m_biomes.m_entries);
+            }
+        };
+
+        PPR_UNIT_TEST (halo_maxima_across_biomes) {
+            std::array<GenerationBiome, 4u> biomes{};
+            const std::array<std::string_view, 4u> paths{"biomes.a", "biomes.b", "biomes.c", "biomes.d"};
+            biomes[0u].m_pore_passes = 6u;
+            biomes[1u].m_relaxation_passes = 10u;
+            biomes[2u].m_finish_passes = 4u;
+            biomes[3u].m_erosion_passes = 4u;
+            config::Diagnostics diagnostics;
+            PPR_TEST_ASSERT(not validateGenerationHalo(biomes, paths, &diagnostics));
+            PPR_TEST_ASSERT(not diagnostics.hasErrors());
+
+            biomes[3u].m_erosion_passes = 5u;
+            PPR_TEST_ASSERT(
+                validateGenerationHalo(biomes, paths, &diagnostics) ==
+                config::make_error_code(config::EConfigErrc::cross_field_invalid));
+            PPR_TEST_ASSERT(diagnostics.entries().size() == 1u);
+            const auto &error = diagnostics.entries().front();
+            PPR_TEST_ASSERT(error.m_property == "biomes");
+            const Array<std::string> contributors{
+                "biomes.a.pore.passes", "biomes.b.relaxation_passes", "biomes.c.finish_passes",
+                "biomes.d.erosion_passes"};
+            PPR_TEST_ASSERT(error.m_related_properties == contributors);
+            std::ranges::reverse(biomes);
+            auto reversed_paths = paths;
+            std::ranges::reverse(reversed_paths);
+            diagnostics.clear();
+            PPR_TEST_ASSERT(
+                validateGenerationHalo(biomes, reversed_paths, &diagnostics) ==
+                config::make_error_code(config::EConfigErrc::cross_field_invalid));
+            PPR_TEST_ASSERT(diagnostics.entries().front().m_related_properties == contributors);
+
+            for (auto &biome: biomes) {
+                biome.m_pore_passes = 0u;
+                biome.m_relaxation_passes = 0u;
+                biome.m_finish_passes = 0u;
+                biome.m_erosion_passes = 0u;
+            }
+            diagnostics.clear();
+            PPR_TEST_ASSERT(not validateGenerationHalo(biomes, paths, &diagnostics) and not diagnostics.hasErrors());
+        };
+
+        PPR_UNIT_TEST (fragment_to_recipe_compiles) {
+            using namespace definition;
+            const auto source = minimalDefinition();
+            config::Diagnostics diagnostics;
+            const auto fragment = compileDefinition(source, 1.0 / 3.0, diagnostics);
+            PPR_TEST_ASSERT(fragment.has_value());
+            auto recipe = numericRecipe();
+            recipe.m_materials = fragment->m_materials;
+            recipe.m_fields = fragment->m_fields;
+            recipe.m_biomes = fragment->m_biomes;
+            recipe.m_boundary_material = fragment->m_bindings.m_materials.front().m_id;
+            // World scale, layout constraints, start reservation and actor geometry stay caller-owned.
+            const auto plan = compileGenerationPlan(std::move(recipe), 42u);
+            PPR_TEST_ASSERT(plan.has_value());
+
+            auto shifted = source;
+            shifted.m_materials.m_entries.push_back({"ash", source.m_materials.m_entries.front().m_value});
+            shifted.m_fields.m_entries.push_back({"alpha", source.m_fields.m_entries.front().m_value});
+            const auto shifted_fragment = compileDefinition(shifted, 1.0 / 3.0, diagnostics);
+            PPR_TEST_ASSERT(shifted_fragment.has_value() and not diagnostics.hasErrors());
+            PPR_TEST_ASSERT(fragment->m_bindings.m_materials.front().m_id == 1u);
+            PPR_TEST_ASSERT(
+                shifted_fragment->m_bindings.m_materials.back().m_key == "rock" and
+                shifted_fragment->m_bindings.m_materials.back().m_id == 2u);
+            PPR_TEST_ASSERT(
+                shifted_fragment->m_bindings.m_fields.back().m_key == "climate" and
+                shifted_fragment->m_bindings.m_fields.back().m_index == 1u);
+            PPR_TEST_ASSERT(fragment->m_materials.front().m_key == shifted_fragment->m_materials.back().m_key);
+            PPR_TEST_ASSERT(fragment->m_fields.front().m_key == shifted_fragment->m_fields.back().m_key);
+            PPR_TEST_ASSERT(fragment->m_biomes.front().m_key == shifted_fragment->m_biomes.front().m_key);
+            PPR_TEST_ASSERT(
+                fragment->m_biomes.front().m_bands.front().m_key ==
+                shifted_fragment->m_biomes.front().m_bands.front().m_key);
+            PPR_TEST_ASSERT(
+                fragment->m_biomes.front().m_bands.front().m_choices.front().m_key ==
+                shifted_fragment->m_biomes.front().m_bands.front().m_choices.front().m_key);
+        };
+
+        PPR_UNIT_TEST (noise_descriptor_preserves_authored_editing_metadata) {
+            using namespace config;
+            const std::array<std::string_view, 11u> descriptions{
+                "Base noise algorithm", "Fractal octave combination", "Base spatial frequency",
+                "Number of fractal noise octaves", "Frequency multiplier between octaves",
+                "Amplitude multiplier between octaves", "Horizontal sampling scale", "Vertical sampling scale",
+                "Sampling coordinate rotation", "Domain warp displacement", "Domain warp spatial frequency"};
+            const std::array<std::string_view, 11u> units{"", "", "1/m", "", "", "", "", "", "degrees", "m", "1/m"};
+            const std::array<std::optional<double>, 11u> slider_min{
+                std::nullopt, std::nullopt, 0.0, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt,
+                std::nullopt, 0.0, 0.0};
+            const std::array<std::optional<double>, 11u> slider_max{
+                std::nullopt, std::nullopt, 0.1, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt,
+                std::nullopt, 100.0, 0.1};
+            const auto members = NoiseFieldDesc::describe();
+            std::size_t index = 0u;
+            const auto inspect = [&](const auto &member) {
+                PPR_TEST_ASSERT(
+                    member.m_metadata.m_description == descriptions[index] and
+                    member.m_metadata.m_units == units[index]);
+                PPR_TEST_ASSERT(
+                    member.m_metadata.m_slider_min == slider_min[index] and
+                    member.m_metadata.m_slider_max == slider_max[index]);
+                const auto projected = describeProperty(member);
+                PPR_TEST_ASSERT(projected.m_description == descriptions[index] and projected.m_units == units[index]);
+                ++index;
+            };
+            std::apply([&](const auto &...member) { (inspect(member), ...); }, members);
+            PPR_TEST_ASSERT(index == descriptions.size());
+
+            const auto frequency = describeProperty(std::get<2>(members));
+            const auto warp_frequency = describeProperty(std::get<10>(members));
+            for (const auto &projected: {frequency, warp_frequency}) {
+                PPR_TEST_ASSERT(projected.m_min == 0.0 and projected.m_max == (std::numeric_limits<double>::max)());
+                // The authored zero slider endpoint is nudged only to respect the exclusive legal minimum.
+                PPR_TEST_ASSERT(projected.m_exclusive_min and projected.m_slider_min == std::nextafter(0.0, 0.1));
+                PPR_TEST_ASSERT(projected.m_slider_max == 0.1 and projected.m_units == "1/m");
+            }
+            PPR_TEST_ASSERT(std::get<2>(members).m_metadata.m_slider_min == 0.0);
+            PPR_TEST_ASSERT(std::get<10>(members).m_metadata.m_slider_min == 0.0);
+
+            const auto amplitude = describeProperty(std::get<9>(members));
+            PPR_TEST_ASSERT(amplitude.m_min == 0.0 and amplitude.m_max == 4096.0);
+            PPR_TEST_ASSERT(
+                amplitude.m_slider_min == 0.0 and amplitude.m_slider_max == 100.0 and amplitude.m_units == "m");
+            const auto rotation = describeProperty(std::get<8>(members));
+            PPR_TEST_ASSERT(rotation.m_min == -180.0 and rotation.m_max == 180.0);
+            PPR_TEST_ASSERT(
+                rotation.m_slider_min == -180.0 and rotation.m_slider_max == 180.0 and rotation.m_units == "degrees");
+        };
+
+        PPR_UNIT_TEST (noise_schema_rejects_unsafe) {
+            using namespace config;
+            const auto base_layer = [] {
+                TreeLayer layer;
+                layer.m_scalars.m_source = ESource::file;
+                layer.m_scalars.m_assignments = {
+                    {"algorithm", {}, SourceValue::text("open_simplex2"), "noise.toml:1", 0u},
+                    {"frequency_per_metre", {}, SourceValue::floating(1.0e-8), "noise.toml:2", 0u},
+                    {"warp_frequency_per_metre", {}, SourceValue::floating(1.0e-8), "noise.toml:3", 0u}};
+                return layer;
+            };
+            const auto rejects = [&](const std::string_view name, SourceValue value) {
+                auto layer = base_layer();
+                layer.m_scalars.m_assignments.push_back({std::string{name}, {}, std::move(value), "noise.toml:4", 0u});
+                Diagnostics diagnostics;
+                const auto result = resolveRecursive<NoiseFieldDesc>(std::span{&layer, 1u}, diagnostics);
+                PPR_TEST_ASSERT(not result and result.error() == make_error_code(EConfigErrc::out_of_range));
+                PPR_TEST_ASSERT(diagnostics.entries().front().m_property == name);
+            };
+            rejects("octaves", SourceValue::integer(0));
+            rejects("octaves", SourceValue::integer(17));
+            for (const auto &[name, low, high]: std::array{
+                     std::tuple{"lacunarity", 0.99, 4.01}, std::tuple{"gain", -0.01, 1.01},
+                     std::tuple{"axis_scale_x", 0.124, 8.01}, std::tuple{"axis_scale_y", 0.124, 8.01},
+                     std::tuple{"rotation_degrees", -180.01, 180.01}}) {
+                rejects(name, SourceValue::floating(low));
+                rejects(name, SourceValue::floating(high));
+            }
+
+            auto edge = base_layer();
+            edge.m_scalars.m_assignments.push_back({"octaves", {}, SourceValue::integer(16), "edge", 0u});
+            edge.m_scalars.m_assignments.push_back({"lacunarity", {}, SourceValue::floating(4.0), "edge", 0u});
+            edge.m_scalars.m_assignments.push_back({"gain", {}, SourceValue::floating(1.0), "edge", 0u});
+            edge.m_scalars.m_assignments.push_back({"axis_scale_x", {}, SourceValue::floating(0.125), "edge", 0u});
+            edge.m_scalars.m_assignments.push_back({"axis_scale_y", {}, SourceValue::floating(8.0), "edge", 0u});
+            edge.m_scalars.m_assignments.push_back({"rotation_degrees", {}, SourceValue::floating(180.0), "edge", 0u});
+            Diagnostics diagnostics;
+            const auto valid = resolveRecursive<NoiseFieldDesc>(std::span{&edge, 1u}, diagnostics);
+            PPR_TEST_ASSERT(valid.has_value() and not validateNoiseFieldDescription(valid->m_value));
+
+            auto unsafe = minimalDefinition();
+            unsafe.m_fields.m_entries.front().m_value = valid->m_value;
+            unsafe.m_fields.m_entries.front().m_value.m_frequency_per_metre = 1.0e20;
+            PPR_TEST_ASSERT(
+                definition::validateDefinition(unsafe, diagnostics) == make_error_code(EConfigErrc::out_of_range));
+            PPR_TEST_ASSERT(diagnostics.entries().front().m_property == "fields.climate");
+        };
 
         PPR_UNIT_TEST (generation_random_has_fixed_full_width_streams) {
             GenerationRandom random{0u};
@@ -256,10 +2389,13 @@ namespace pP::tests::detail {
                 PPR_TEST_ASSERT((*left)[126u * kChunkEdge + 127u].m_element == 17u);
                 PPR_TEST_ASSERT((*right)[126u * kChunkEdge].m_element == (width >= 2u ? 17u : 0u));
                 PPR_TEST_ASSERT(*right == *replay);
-                for (const ChunkPos corner: {ChunkPos{0u, 31u}, ChunkPos{31u, 0u}, ChunkPos{31u, 31u}}) {
-                    const auto cells = raster->chunk(corner);
-                    PPR_TEST_ASSERT(cells.has_value());
-                }
+
+                const std::error_code err = parallel::forEach(
+                    std::array{ChunkPos{0u, 31u}, ChunkPos{31u, 0u}, ChunkPos{31u, 31u}}, [&](const ChunkPos &corner) {
+                        const auto cells = raster->chunk(corner);
+                        PPR_TEST_ASSERT(cells.has_value());
+                    });
+                PPR_TEST_ASSERT(not err);
             }
         };
 
@@ -300,7 +2436,7 @@ namespace pP::tests::detail {
 
             const auto [context, cancel] = context::withCancel(context::background());
             cancel();
-            const auto cancelled = compileBiomeSampleGeometry(*plan, *layout, context.get());
+            const auto cancelled = compileBiomeSampleGeometry(*plan, *layout, context);
             PPR_TEST_ASSERT(not cancelled and cancelled.error() == std::errc::operation_canceled);
         };
 
@@ -384,8 +2520,7 @@ namespace pP::tests::detail {
             auto [context, cancel] = context::withCancelClause(context::background());
             cancel(std::make_error_code(std::errc::operation_canceled));
             PPR_TEST_ASSERT(
-                state.restore({}, recipe.m_materials, recipe.m_cell_size_m, context.get()) ==
-                std::errc::operation_canceled);
+                state.restore({}, recipe.m_materials, recipe.m_cell_size_m, context) == std::errc::operation_canceled);
             PPR_TEST_ASSERT(state.count() == 1u);
             auto invalid = state.capture();
             invalid.m_next_id = 2u;
@@ -448,7 +2583,7 @@ namespace pP::tests::detail {
                 not exhausted and exhausted.error() == make_error_code(EGenerationErrc::constraints_exhausted));
             const auto [context, cancel] = context::withCancel(context::background());
             cancel();
-            auto cancelled = compileBiomeLayout(*plan, context.get());
+            auto cancelled = compileBiomeLayout(*plan, context);
             PPR_TEST_ASSERT(not cancelled and cancelled.error() == std::errc::operation_canceled);
             recipe = numericRecipe();
             recipe.m_constraints[0u].m_distance_min_m = 1.0;
@@ -716,7 +2851,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(validateGenerationRecipe(recipe) == std::errc::invalid_argument);
             const auto [context, cancel] = context::withCancel(context::background());
             cancel();
-            const auto cancelled = compileGenerationGeometry(*plan, *layout, context.get());
+            const auto cancelled = compileGenerationGeometry(*plan, *layout, context);
             PPR_TEST_ASSERT(not cancelled and cancelled.error() == std::errc::operation_canceled);
 
             // The target occupies a four-metre square in a 4096-metre world.
@@ -1011,7 +3146,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not invalid and invalid.error() == std::errc::result_out_of_range);
             const auto [context, cancel] = context::withCancel(context::background());
             cancel();
-            const auto cancelled = raster->chunk({0u, 0u}, context.get());
+            const auto cancelled = raster->chunk({0u, 0u}, context);
             PPR_TEST_ASSERT(not cancelled and cancelled.error() == std::errc::operation_canceled);
         };
 
@@ -1330,7 +3465,7 @@ namespace pP::tests::detail {
             const auto [context, cancel] = context::withCancel(context::background());
             cancel();
             PPR_TEST_ASSERT(
-                finishGenerationTerrainRegion(*plan, *layout, geometry, region, candidates, context.get()) ==
+                finishGenerationTerrainRegion(*plan, *layout, geometry, region, candidates, context) ==
                 std::errc::operation_canceled);
             u64 scratch{};
             PPR_TEST_ASSERT(
@@ -1404,7 +3539,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(first->m_regions[0u].m_fill_height_m == std::optional<double>{64.0 / 3.0});
             const auto [context, cancel] = context::withCancel(context::background());
             cancel();
-            auto cancelled = resolveInitialMatter(*plan, geometry, grid, context.get());
+            auto cancelled = resolveInitialMatter(*plan, geometry, grid, context);
             PPR_TEST_ASSERT(not cancelled and cancelled.error() == std::errc::operation_canceled);
             PPR_TEST_ASSERT(not grid.setCell({64u, 64u}, {17u, 293.0f}));
             auto blocked = resolveInitialMatter(*plan, geometry, grid);
@@ -1527,7 +3662,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not buried and buried.error() == make_error_code(EGenerationErrc::start_invalid));
             const auto [context, cancel] = context::withCancel(context::background());
             cancel();
-            auto cancelled = validateGenerationStart(*plan, grid, context.get());
+            auto cancelled = validateGenerationStart(*plan, grid, context);
             PPR_TEST_ASSERT(not cancelled and cancelled.error() == std::errc::operation_canceled);
         };
 
@@ -1699,21 +3834,21 @@ namespace pP::tests::detail {
             auto geometry = compileGenerationGeometry(*plan, *layout);
             PPR_TEST_ASSERT(geometry.has_value());
             ParallelScheduler pool{"Terrain cancellation test", 1u, 4096u};
-            WorkerCancellation context{pool, 10u};
+            auto context = std::make_shared<WorkerCancellation>(pool, 10u);
             auto result = rasterizeGenerationTerrain(
-                *plan, *layout, *geometry, {.m_pool = &pool, .m_context = &context});
+                *plan, *layout, *geometry, {.m_scheduler = &pool, .m_context = context});
             PPR_TEST_ASSERT(not result and result.error() == std::errc::operation_canceled);
-            PPR_TEST_ASSERT(context.workerChecks() >= 10u);
+            PPR_TEST_ASSERT(context->workerChecks() >= 10u);
 
-            WorkerCancellation nested_context{pool, 10u};
+            auto nested_context = std::make_shared<WorkerCancellation>(pool, 10u);
             auto nested = pool.schedule([&](const IContext &) {
                 return rasterizeGenerationTerrain(
-                    *plan, *layout, *geometry, {.m_pool = &pool, .m_context = &nested_context});
+                    *plan, *layout, *geometry, {.m_scheduler = &pool, .m_context = nested_context});
             });
             PPR_TEST_ASSERT(nested.has_value());
             auto nested_result = nested->get();
             PPR_TEST_ASSERT(not nested_result and nested_result.error() == std::errc::operation_canceled);
-            PPR_TEST_ASSERT(nested_context.workerChecks() >= 10u);
+            PPR_TEST_ASSERT(nested_context->workerChecks() >= 10u);
             PPR_TEST_ASSERT(not pool.join());
             PPR_TEST_ASSERT(pool.getNumOutstandingTasks() == 0u);
         };
@@ -1805,12 +3940,13 @@ namespace pP::tests::detail {
             }
             PPR_TEST_ASSERT(cell_count == static_cast<u64>(kWorldEdge) * kWorldEdge);
             PPR_TEST_ASSERT(serial->m_start.m_floor_y_m == 1002.0);
-            ParallelScheduler pool{"Owned terrain test", 3u, 4096u};
             completed.store(0u);
+            ParallelScheduler &pool = parallel::backgroundPool();
             auto parallel_plan = compileGenerationPlan(recipe, 42u);
             PPR_TEST_ASSERT(parallel_plan.has_value());
             auto parallel = generateWorld(
-                std::move(*parallel_plan), clock, {.m_pool = &pool, .m_completed_chunks = &completed});
+                std::move(*parallel_plan), clock,
+                {.m_scheduler = &pool, .m_completed_chunks = &completed});
             PPR_TEST_ASSERT(parallel.has_value());
             PPR_TEST_ASSERT(completed.load() == kChunkCount);
             PPR_TEST_ASSERT(gridHash(serial->m_grid) == gridHash(parallel->m_grid));
@@ -1836,11 +3972,10 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(cancelled_plan.has_value());
             auto cancelled = generateWorld(
                 std::move(*cancelled_plan), clock,
-                {.m_pool = &pool, .m_context = context.get(), .m_completed_chunks = &completed});
+                {.m_scheduler = &pool, .m_context = context, .m_completed_chunks = &completed});
             PPR_TEST_ASSERT(not cancelled and cancelled.error() == std::errc::operation_canceled);
             PPR_TEST_ASSERT(completed.load() == 0u);
         };
-
 
     } // namespace WorldGen
 } // namespace pP::tests::detail
@@ -1848,6 +3983,47 @@ namespace pP::tests::detail {
 namespace pP::tests {
     const UnitTest world_gen = UnitTest::Named("world_gen") / [](UnitTest::IRun &_) -> void {
         _.recurse({
+            detail::WorldGen::definition_feature_paint_rectangle,
+            detail::WorldGen::definition_recipe_all_payloads_and_derived_phases,
+            detail::WorldGen::definition_recipe_fill_phase_height_and_suitability,
+            detail::WorldGen::definition_recipe_particle_fill_accepts_every_phase,
+            detail::WorldGen::definition_recipe_scoped_markers_and_owner_first,
+            detail::WorldGen::definition_recipe_scoped_rules_disabled_placement_and_active_biomes,
+            detail::WorldGen::definition_recipe_profile_owned_rule_bindings_and_reordering,
+            detail::WorldGen::definition_recipe_numeric_boundary_and_missing_dependencies,
+            detail::WorldGen::definition_recipe_optional_surface_bedrock_and_owned_values,
+            detail::WorldGen::definition_recipe_generic_resolution_variant_refs_and_atomic_replacement,
+            detail::WorldGen::definition_feature_paint_ellipse,
+            detail::WorldGen::definition_feature_paint_capsule,
+            detail::WorldGen::definition_feature_carve_rectangle,
+            detail::WorldGen::definition_feature_carve_ellipse,
+            detail::WorldGen::definition_feature_carve_capsule,
+            detail::WorldGen::definition_feature_reflection_required_and_numeric,
+            detail::WorldGen::definition_feature_paint_requires_terrain_carve_has_no_material,
+            detail::WorldGen::definition_feature_unknown_action_and_shape_tags,
+            detail::WorldGen::definition_feature_markers_roles_and_extent_paths,
+            detail::WorldGen::definition_feature_reservation_and_shape_extent_paths,
+            detail::WorldGen::definition_feature_reordering_preserves_bindings_streams_and_geometry,
+            detail::WorldGen::definition_recursive_paths_include_deposits_and_pore,
+            detail::WorldGen::definition_fingerprint_v2_pinned_and_sensitive_to_every_member,
+            detail::WorldGen::semantic_fingerprint_tags_ignore_variant_storage_indices,
+            detail::WorldGen::semantic_fingerprint_reference_domains_are_semantic,
+            detail::WorldGen::semantic_fingerprint_canonical_keys_and_every_described_member,
+            detail::WorldGen::semantic_fingerprint_optional_presence_zero_and_primitive_framing,
+            detail::WorldGen::semantic_fingerprint_scoped_reference_owners_follow_authored_context,
+            detail::WorldGen::definition_rules_fingerprint_projects_all_profiles_canonically,
+            detail::WorldGen::definition_rejects_normalized_weight_collapse,
+            detail::WorldGen::definition_validates_biome_chain,
+            detail::WorldGen::definition_ids_and_fingerprint_deterministic,
+            detail::WorldGen::definition_compiles_every_biome_and_enforces_cardinality,
+            detail::WorldGen::definition_reordering_preserves_all_bindings_streams_and_output,
+            detail::WorldGen::definition_halo_includes_unused_biomes_and_reorder_stable_ties,
+            detail::WorldGen::definition_authored_field_and_terrain_references_resolve_and_diagnose,
+            detail::WorldGen::definition_blob_presence_and_controls_across_all_biomes,
+            detail::WorldGen::halo_maxima_across_biomes,
+            detail::WorldGen::fragment_to_recipe_compiles,
+            detail::WorldGen::noise_descriptor_preserves_authored_editing_metadata,
+            detail::WorldGen::noise_schema_rejects_unsafe,
             detail::WorldGen::generation_random_has_fixed_full_width_streams,
             detail::WorldGen::numeric_plan_owns_recipe_and_isolates_field_streams,
             detail::WorldGen::numeric_plan_rejects_invalid_references_bounds_and_collapsed_weights,

@@ -44,10 +44,10 @@ export namespace pP::sim {
 
     [[nodiscard]] Expected<MatterParticleSnapshot> seedMatterParticles(
         const InitialMatter &matter, const ChunkGrid &grid, const GenerationRecipe &recipe,
-        const IContext *context = nullptr);
+        const SharedContext &context = nullptr);
     [[nodiscard]] std::error_code validateMatterParticles(
         const MatterParticleSnapshot &snapshot, std::span<const GenerationMaterial> materials, double cell_size_m,
-        const IContext *context = nullptr, double reference_thickness_m = 1.0);
+        const SharedContext &context = nullptr, double reference_thickness_m = 1.0);
 
     // ------------------------------------------------------------------
     // particle state
@@ -61,7 +61,7 @@ export namespace pP::sim {
     public:
         [[nodiscard]] std::error_code restore(
             const MatterParticleSnapshot &snapshot, std::span<const GenerationMaterial> materials, double cell_size_m,
-            const IContext *context = nullptr, double reference_thickness_m = 1.0);
+            const SharedContext &context = nullptr, double reference_thickness_m = 1.0);
         [[nodiscard]] MatterParticleSnapshot capture() const;
         [[nodiscard]] std::span<const MatterParticle> chunk(ChunkPos position) const noexcept;
         [[nodiscard]] u32 count() const noexcept;

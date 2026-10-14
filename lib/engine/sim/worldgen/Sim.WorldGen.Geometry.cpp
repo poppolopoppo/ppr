@@ -9,13 +9,20 @@ import std;
 namespace pP::sim {
     using pP::make_error_code;
     PPR_DEFINE_LOG_CATEGORY(WorldGeometry, info, none);
+
+    // ------------------------------------------------------------------
+    // geometry helpers
+    // ------------------------------------------------------------------
+
     namespace {
-        [[nodiscard]] std::error_code canceled(const IContext *const context) noexcept {
+        [[nodiscard]] std::error_code canceled(const SharedContext &context) noexcept {
             return context != nullptr ? context->error() : std::error_code{};
         }
+
         struct Rect {
             i64 m_left{}, m_bottom{}, m_right{}, m_top{};
         };
+
         [[nodiscard]] Rect reservation(const GenerationRecipe &recipe, const GenerationInstance &instance) noexcept {
             const auto &bounds = recipe.m_features[instance.m_feature].m_bounds;
             return {
@@ -24,11 +31,13 @@ namespace pP::sim {
                 instance.m_origin_x + static_cast<i64>(bounds.m_max_x),
                 instance.m_origin_y + static_cast<i64>(bounds.m_max_y)};
         }
+
         [[nodiscard]] double spacing(const GenerationRecipe &recipe, const GenerationInstance &instance) noexcept {
             return instance.m_rule == kGenerationStartRule
                        ? 0.0
                        : std::get<GenerationPlacement>(recipe.m_rules[instance.m_rule].m_parameters).m_spacing_m;
         }
+
         [[nodiscard]] bool fits(
             const GenerationPlan &plan, const GenerationGeometry &geometry,
             const GenerationInstance &candidate) noexcept {
@@ -37,6 +46,7 @@ namespace pP::sim {
             if (not generationSubsurfaceBounds(plan, bounds.m_left, bounds.m_bottom, bounds.m_right, bounds.m_top)) {
                 return false;
             }
+
             const i64 boundary = recipe.m_boundary_fine;
             if (bounds.m_left < boundary or
                 bounds.m_bottom < boundary or
@@ -44,6 +54,7 @@ namespace pP::sim {
                 bounds.m_top > kWorldEdge - boundary) {
                 return false;
             }
+
             const double centre_x = 0.5 * static_cast<double>(bounds.m_left + bounds.m_right);
             const double centre_y = 0.5 * static_cast<double>(bounds.m_bottom + bounds.m_top);
             for (const auto &instance: geometry.m_instances) {
@@ -64,9 +75,10 @@ namespace pP::sim {
             }
             return true;
         }
+
         [[nodiscard]] Expected<bool> place(
             const GenerationPlan &plan, const BiomeLayout &layout, GenerationGeometry &geometry, const u32 rule_index,
-            const u32 ordinal, const IContext *const context) {
+            const u32 ordinal, const SharedContext &context) {
             const auto &recipe = plan.recipe();
             const auto &rule = recipe.m_rules[rule_index];
             const auto &placement = std::get<GenerationPlacement>(rule.m_parameters);
@@ -78,6 +90,7 @@ namespace pP::sim {
             if (min_x > max_x or min_y > max_y) {
                 return false;
             }
+
             GenerationRandom random{generationStreamSeed(plan.seed(), rule.m_key, ordinal)};
             for (u32 attempt = 0u; attempt < placement.m_attempts; ++attempt) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(WorldGeometry, canceled(context));
@@ -102,9 +115,10 @@ namespace pP::sim {
             }
             return false;
         }
+
         [[nodiscard]] std::error_code features(
             const GenerationPlan &plan, const BiomeLayout &layout, GenerationGeometry &geometry,
-            const IContext *const context, u64 *const known_scratch_peak) {
+            const SharedContext &context, u64 *const known_scratch_peak) {
             const auto &recipe = plan.recipe();
             geometry.m_instances.push_back(
                 {recipe.m_start_feature, kGenerationStartRule, 0u, static_cast<i32>(recipe.m_start_x_fine),
@@ -120,6 +134,7 @@ namespace pP::sim {
                     placements.push_back(r);
                 }
             }
+
             std::ranges::sort(placements, [&](const u32 a, const u32 b) {
                 const auto &pa = std::get<GenerationPlacement>(recipe.m_rules[a].m_parameters);
                 const auto &pb = std::get<GenerationPlacement>(recipe.m_rules[b].m_parameters);
@@ -129,6 +144,7 @@ namespace pP::sim {
                 return std::tie(recipe.m_rules[a].m_order, recipe.m_rules[a].m_key) <
                        std::tie(recipe.m_rules[b].m_order, recipe.m_rules[b].m_key);
             });
+
             // Reserve every required instance before optional instances compete
             // for remaining space; priority orders conflicts within each pass.
             for (const bool required: {true, false}) {
@@ -152,6 +168,7 @@ namespace pP::sim {
             }
             return {};
         }
+
         [[nodiscard]] std::error_code addSegment(GenerationGeometry &geometry, const GenerationSegment segment) {
             if (geometry.m_segments.size() >= kMaxGenerationSegments) {
                 PPR_RETURN_ERROR_ON_FAIL(WorldGeometry, make_error_code(EGenerationErrc::segment_limit));
@@ -159,11 +176,13 @@ namespace pP::sim {
             geometry.m_segments.push_back(segment);
             return {};
         }
+
         struct BlobOriginRegion {
             double m_left{}, m_bottom{}, m_right{}, m_top{}, m_cumulative_area{};
         };
+
         [[nodiscard]] Expected<Array<BlobOriginRegion>> blobOriginRegions(
-            const GenerationPlan &plan, const BiomeLayout &layout, const u32 biome, const IContext *const context) {
+            const GenerationPlan &plan, const BiomeLayout &layout, const u32 biome, const SharedContext &context) {
             const auto &recipe = plan.recipe();
             const double extent = kWorldEdge * recipe.m_cell_size_m;
             const double boundary = recipe.m_boundary_fine * recipe.m_cell_size_m;
@@ -191,9 +210,10 @@ namespace pP::sim {
             }
             return regions;
         }
+
         [[nodiscard]] std::error_code blobs(
             const GenerationPlan &plan, const BiomeLayout &layout, GenerationGeometry &geometry,
-            const IContext *const context, u64 *const known_scratch_peak) {
+            const SharedContext &context, u64 *const known_scratch_peak) {
             const auto &recipe = plan.recipe();
             const double extent = kWorldEdge * recipe.m_cell_size_m;
             const double boundary = recipe.m_boundary_fine * recipe.m_cell_size_m;
@@ -286,9 +306,10 @@ namespace pP::sim {
             }
             return {};
         }
+
         [[nodiscard]] std::error_code smoothWorm(
             const GenerationRecipe &recipe, const GenerationWorm &worm, const u32 rule, GenerationRandom &random,
-            GenerationGeometry &geometry, double x, double y, const IContext *const context) {
+            GenerationGeometry &geometry, double x, double y, const SharedContext &context) {
             const double extent = kWorldEdge * recipe.m_cell_size_m;
             const double boundary = recipe.m_boundary_fine * recipe.m_cell_size_m;
             double remaining = worm.m_length_min_m + (worm.m_length_max_m - worm.m_length_min_m) * random.unit();
@@ -333,9 +354,10 @@ namespace pP::sim {
             }
             return {};
         }
+
         [[nodiscard]] std::error_code worms(
             const GenerationPlan &plan, const BiomeLayout &layout, GenerationGeometry &geometry,
-            const IContext *const context) {
+            const SharedContext &context) {
             const auto &recipe = plan.recipe();
             constexpr double diagonal = 0.7071067811865475244;
             constexpr std::array<std::array<double, 2u>, 8u> headings{
@@ -412,9 +434,10 @@ namespace pP::sim {
             }
             return {};
         }
+
         [[nodiscard]] std::error_code connections(
             const GenerationPlan &plan, const BiomeLayout &layout, GenerationGeometry &geometry,
-            const IContext *const context, u64 *const known_scratch_peak) {
+            const SharedContext &context, u64 *const known_scratch_peak) {
             const auto &recipe = plan.recipe();
             if (std::ranges::none_of(recipe.m_rules, [](const auto &rule) {
                     return std::holds_alternative<GenerationConnection>(rule.m_parameters);
@@ -796,8 +819,9 @@ namespace pP::sim {
             return {};
         }
     }
+
     Expected<GenerationGeometry> compileGenerationGeometry(
-        const GenerationPlan &plan, const BiomeLayout &layout, const IContext *const context,
+        const GenerationPlan &plan, const BiomeLayout &layout, const SharedContext &context,
         u64 *const known_scratch_peak) {
         PPR_RETURN_UNEXPECTED_ON_FAIL(WorldGeometry, canceled(context));
         GenerationGeometry geometry;
@@ -807,13 +831,15 @@ namespace pP::sim {
         PPR_RETURN_UNEXPECTED_ON_FAIL(WorldGeometry, connections(plan, layout, geometry, context, known_scratch_peak));
         return geometry;
     }
+
     Expected<GenerationGeometry> compileBiomeSampleGeometry(
-        const GenerationPlan &plan, const BiomeLayout &layout, const IContext *const context,
+        const GenerationPlan &plan, const BiomeLayout &layout, const SharedContext &context,
         u64 *const known_scratch_peak) {
         PPR_RETURN_UNEXPECTED_ON_FAIL(WorldGeometry, canceled(context));
         if (not layout.sampleBiome()) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(WorldGeometry, std::errc::invalid_argument);
         }
+
         GenerationGeometry geometry;
         PPR_RETURN_UNEXPECTED_ON_FAIL(WorldGeometry, blobs(plan, layout, geometry, context, known_scratch_peak));
         PPR_RETURN_UNEXPECTED_ON_FAIL(WorldGeometry, worms(plan, layout, geometry, context));

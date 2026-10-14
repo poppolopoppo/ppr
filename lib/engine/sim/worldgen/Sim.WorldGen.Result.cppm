@@ -16,6 +16,7 @@ export namespace pP::sim {
         u16 m_material{};
         u64 m_cells{};
     };
+
     struct GenerationReport {
         // Layout, nonlocal geometry, raster, matter, final validation/hash.
         std::array<TimeSpan, 5u> m_phase_times{};
@@ -26,6 +27,7 @@ export namespace pP::sim {
         std::array<u64, 5u> m_known_phase_scratch_bytes{};
         u64 m_retained_known_payload_bytes{};
     };
+
     /// Entire numeric candidate, including inputs needed for later inspection.
     /// No catalog/parser storage or executor is borrowed by the result.
     struct GeneratedWorld {
@@ -37,6 +39,7 @@ export namespace pP::sim {
         GenerationStart m_start;
         GenerationReport m_report;
     };
+
     /// Offline caller or background coordinator only. Clock is explicit and
     /// affects report timings only, never generation or persistent checksums.
     [[nodiscard]] Expected<GeneratedWorld> generateWorld(
