@@ -966,6 +966,10 @@ namespace pP::sim {
             WaitGroup wg{};
             ParallelScheduler *const scheduler = execution.m_scheduler.get();
             const bool parallel = scheduler != nullptr and not scheduler->isWorkerThread();
+            Array<std::future<std::error_code>> pending;
+            if (parallel) {
+                pending.reserve(kChunkCount);
+            }
 
             PPR_DEFER {
                 std::ignore = wg.wait();
@@ -974,6 +978,7 @@ namespace pP::sim {
                     *known_scratch_peak = std::max(
                         *known_scratch_peak,
                         raster.indexPayloadBytes() +
+                            pending.capacity() * sizeof(std::future<std::error_code>) +
                             static_cast<u64>(peak.load(std::memory_order_relaxed)) * raster.chunkWorkingPayloadBytes());
                 }
             };
@@ -1007,28 +1012,84 @@ namespace pP::sim {
                 return {};
             };
 
-            for (u32 chunk_index = 0u; chunk_index < kChunkCount; ++chunk_index) {
-                std::error_code err{};
-                if (not parallel) {
-                    err = fill(chunk_index);
-                } else {
-                    auto task = scheduler->schedule(
-                        [&, chunk_index](const IContext &context) -> std::error_code {
-                            PPR_RETURN_ERROR_ON_FAIL(WorldRaster, context.error());
-                            return fill(chunk_index);
-                        },
-                        wg, ParallelScheduler::wait_if_full);
-                    if (not task) {
-                        err = task.error();
+            std::error_code error{};
+            std::exception_ptr exception{}, fatal_allocation{};
+
+            try {
+                for (u32 chunk_index = 0u; chunk_index < kChunkCount; ++chunk_index) {
+                    std::error_code err = canceled(execution.m_context);
+                    if (not err) {
+                        if (not parallel) {
+                            err = fill(chunk_index);
+                        } else {
+                            auto task = scheduler->schedule(
+                                [fill, chunk_index](const IContext &context) -> std::error_code {
+                                    PPR_RETURN_ERROR_ON_FAIL(WorldRaster, context.error());
+                                    return fill(chunk_index);
+                                },
+                                wg, ParallelScheduler::wait_if_full);
+                            if (task) {
+                                pending.push_back(std::move(*task));
+                            } else {
+                                err = task.error();
+                            }
+                        }
+                    }
+
+                    if (err) {
+                        PPR_RETAIN_ERROR_ON_FAIL(WorldRaster, error, err);
+                        break;
                     }
                 }
+            } catch (const std::bad_alloc &) {
+                fatal_allocation = std::current_exception();
+            } catch (...) {
+                exception = std::current_exception();
+            }
 
-                if (err) [[unlikely]] {
-                    return err;
+            // WaitGroup tracks execution exceptions, while callable error codes
+            // live in futures. Drain before observing every independent result.
+            const auto wait_error = wg.wait();
+
+            for (auto &task: pending) {
+                std::error_code task_error{};
+                try {
+                    task_error = task.get();
+                } catch (const std::bad_alloc &) {
+                    fatal_allocation = std::current_exception();
+                } catch (const std::system_error &failure) {
+                    task_error = failure.code();
+                    if (not task_error) {
+                        task_error = std::make_error_code(std::errc::state_not_recoverable);
+                    }
+                } catch (...) {
+                    task_error = std::make_error_code(std::errc::state_not_recoverable);
+                }
+
+                try {
+                    PPR_RETAIN_ERROR_ON_FAIL(WorldRaster, error, task_error);
+                } catch (const std::bad_alloc &) {
+                    // Diagnostics may allocate too; finish consuming the drained
+                    // results before forwarding allocation failure to the boundary.
+                    fatal_allocation = std::current_exception();
+                } catch (...) {
+                    if (not exception) {
+                        exception = std::current_exception();
+                    }
                 }
             }
 
-            return wg.wait();
+            if (fatal_allocation) {
+                std::rethrow_exception(fatal_allocation);
+            }
+
+            if (exception) {
+                std::rethrow_exception(exception);
+            }
+
+            PPR_RETAIN_ERROR_ON_FAIL(WorldRaster, error, wait_error);
+            PPR_RETURN_ERROR_ON_FAIL(WorldRaster, error);
+            return {};
         }
     }
 
