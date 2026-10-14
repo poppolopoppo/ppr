@@ -569,7 +569,7 @@ export namespace pP::colony {
         [[nodiscard]] std::span<const MaterialDefinition> materials() const noexcept;
         [[nodiscard]] const MaterialDefinition *findMaterial(u16 numeric_id) const noexcept;
         [[nodiscard]] const MaterialDefinition *findMaterial(std::string_view key) const noexcept;
-        // FNV-1a over the versioned canonical material values, with explicit
+        // Rapidhash block chaining over canonical material values, with explicit
         // lengths and little-endian numeric bytes. Not the complete pack identity.
         [[nodiscard]] u64 materialFingerprint() const;
         [[nodiscard]] std::string_view packId() const noexcept;

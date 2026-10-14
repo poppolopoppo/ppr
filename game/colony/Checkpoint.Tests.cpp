@@ -489,7 +489,7 @@ namespace pP::game::tests::detail::checkpoint {
         auto [capture_context, cancel] = context::withCancelClause(context::background());
         cancel(std::make_error_code(std::errc::operation_canceled));
         PPR_TEST_ASSERT(
-            decodeWorldCheckpoint(*encoded, catalog, capture_context.get()).error() == std::errc::operation_canceled);
+            decodeWorldCheckpoint(*encoded, catalog, capture_context).error() == std::errc::operation_canceled);
         PPR_TEST_ASSERT(not validateWorldCheckpoint(original, catalog));
     };
 }

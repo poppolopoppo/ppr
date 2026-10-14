@@ -378,7 +378,7 @@ namespace pP::colony {
     // ------------------------------------------------------------------
 
     Expected<Array<u8>> encodeWorldCheckpoint(
-        const WorldCheckpoint &checkpoint, const ContentCatalog &catalog, const IContext *const context) {
+        const WorldCheckpoint &checkpoint, const ContentCatalog &catalog, const SharedContext &context) {
         PPR_RETURN_UNEXPECTED_ON_FAIL(CheckpointCodec, validateWorldCheckpoint(checkpoint, catalog, context));
 
         const auto snapshot = sim::save(checkpoint.m_snapshot);
@@ -429,7 +429,7 @@ namespace pP::colony {
                                  : std::make_error_code(std::errc::value_too_large));
         writer.m_bytes.reserve(static_cast<std::size_t>(encoded_size));
 
-        PPR_RETURN_UNEXPECTED_ON_FAIL(CheckpointCodec, encodeParticles(writer, checkpoint.m_particles, context));
+        PPR_RETURN_UNEXPECTED_ON_FAIL(CheckpointCodec, encodeParticles(writer, checkpoint.m_particles, context.get()));
 
         writer.u64value(snapshot->size());
         writer.m_bytes.insert(writer.m_bytes.end(), snapshot->begin(), snapshot->end());
@@ -447,7 +447,7 @@ namespace pP::colony {
     // ------------------------------------------------------------------
 
     Expected<WorldCheckpoint> decodeWorldCheckpoint(
-        const std::span<const u8> bytes, const ContentCatalog &catalog, const IContext *const context) {
+        const std::span<const u8> bytes, const ContentCatalog &catalog, const SharedContext &context) {
         PPR_RETURN_UNEXPECTED_ON_FAIL(
             CheckpointCodec, bytes.size() <= kMaxWorldCheckpointBytes
                                  ? std::error_code{}
@@ -494,7 +494,7 @@ namespace pP::colony {
 
         decodeMetadata(reader, checkpoint);
 
-        PPR_RETURN_UNEXPECTED_ON_FAIL(CheckpointCodec, decodeParticles(reader, checkpoint.m_particles, context));
+        PPR_RETURN_UNEXPECTED_ON_FAIL(CheckpointCodec, decodeParticles(reader, checkpoint.m_particles, context.get()));
 
         const auto snapshot_size = reader.u64value();
         PPR_RETURN_UNEXPECTED_ON_FAIL(CheckpointCodec, reader.m_error);

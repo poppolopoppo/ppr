@@ -60,7 +60,7 @@ namespace pP::colony {
     }
 
     std::error_code Colony::install(
-        PreparedWorld world, const sim::MatterParticleSnapshot *const restored, const IContext *const context) {
+        PreparedWorld world, const sim::MatterParticleSnapshot *const restored, const SharedContext &context) {
         const auto &descriptor = world.descriptor();
         const auto &recipe = world.generated().m_plan.recipe();
         PPR_RETURN_ERROR_ON_FAIL(ColonyWorld, validateWorldMetric(descriptor.m_metric));

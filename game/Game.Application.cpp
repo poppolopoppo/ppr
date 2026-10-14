@@ -80,7 +80,7 @@ namespace demo {
         auto &chunks = parallel::backgroundPool();
         auto prepared = colony::prepareWorld(
             std::move(*catalog), settings.m_worldgen_profile, settings.m_worldgen_seed, ITimerClock::steady(),
-            {.m_pool = &chunks});
+            {.m_scheduler = &chunks});
         if (not prepared) {
             std::cerr << "[worldgen] Generation failed: " << prepared.error().message() << '\n';
             return 1;

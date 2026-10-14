@@ -51,11 +51,11 @@ export namespace pP::colony {
     [[nodiscard]] Expected<WorldCheckpoint> captureWorldCheckpoint(
         const ColonyDriver &driver, const sim::GeneratedWorld &generated, const IContext *context = nullptr);
     [[nodiscard]] std::error_code validateWorldCheckpoint(
-        const WorldCheckpoint &checkpoint, const ContentCatalog &catalog, const IContext *context = nullptr);
+        const WorldCheckpoint &checkpoint, const ContentCatalog &catalog, const SharedContext &context = {});
     [[nodiscard]] Expected<Array<u8>> encodeWorldCheckpoint(
-        const WorldCheckpoint &checkpoint, const ContentCatalog &catalog, const IContext *context = nullptr);
+        const WorldCheckpoint &checkpoint, const ContentCatalog &catalog, const SharedContext &context = {});
     [[nodiscard]] Expected<WorldCheckpoint> decodeWorldCheckpoint(
-        std::span<const u8> bytes, const ContentCatalog &catalog, const IContext *context = nullptr);
+        std::span<const u8> bytes, const ContentCatalog &catalog, const SharedContext &context = {});
     /// Builds a fresh unpublished owner from saved cells; no terrain regeneration.
     [[nodiscard]] Expected<std::unique_ptr<ColonyDriver>> restoreWorldCheckpoint(
         ContentCatalog catalog, WorldCheckpoint checkpoint, u64 world_generation,

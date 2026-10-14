@@ -56,7 +56,7 @@ export namespace pP::colony {
         /// Adopts a validated candidate without rerunning generation.
         [[nodiscard]] std::error_code install(
             PreparedWorld world, const sim::MatterParticleSnapshot *particles = nullptr,
-            const IContext *context = nullptr);
+            const SharedContext &context = {});
         [[nodiscard]] sim::MatterParticleState &particles() noexcept;
         [[nodiscard]] const sim::MatterParticleState &particles() const noexcept;
         [[nodiscard]] const PreparedWorld *preparedWorld() const noexcept;

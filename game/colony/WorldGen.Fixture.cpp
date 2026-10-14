@@ -446,7 +446,7 @@ namespace pP::colony {
             return {};
         };
 
-        ParallelScheduler *const pool = execution.m_pool;
+        ParallelScheduler *const pool = execution.m_scheduler.get();
         const bool parallel = pool != nullptr and not pool->isWorkerThread();
         constexpr u32 kBatch = 32u;
 

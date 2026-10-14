@@ -40,7 +40,7 @@ namespace pP::colony {
     Expected<PreparedWorld> prepareWorld(
         const std::filesystem::path &root, const std::string_view profile, const u64 seed, const ITimerClock &clock,
         config::Diagnostics &diagnostics, const sim::GenerationExecution &execution) {
-        auto catalog = loadContentCatalog(root, diagnostics, execution.m_context);
+        auto catalog = loadContentCatalog(root, diagnostics, execution.m_context.get());
         PPR_RETURN_UNEXPECTED_ON_FAIL(WorldPreparation, catalog);
         return prepareWorld(std::move(*catalog), profile, seed, clock, execution);
     }

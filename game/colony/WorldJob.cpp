@@ -299,8 +299,8 @@ namespace pP::colony {
             auto task = m_coordinator.schedule(
                 [this, state](const IContext &) -> std::error_code {
                     const sim::GenerationExecution execution{
-                        .m_pool = &m_chunks,
-                        .m_context = state->m_context.get(),
+                        .m_scheduler = &m_chunks,
+                        .m_context = state->m_context,
                         .m_completed_chunks = &state->m_completed,
                         .m_stage = &state->m_stage};
                     PPR_RETURN_ERROR_ON_FAIL(WorldJobs, state->m_context->error());
@@ -319,7 +319,7 @@ namespace pP::colony {
                     }
                     PPR_RETURN_ERROR_ON_FAIL(WorldJobs, candidate);
                     state->m_candidate = std::move(*candidate);
-                    auto presentation = captureWorldPresentation(*state->m_candidate, execution.m_context);
+                    auto presentation = captureWorldPresentation(*state->m_candidate, execution.m_context.get());
                     PPR_RETURN_ERROR_ON_FAIL(WorldJobs, presentation);
                     state->m_presentation = std::make_unique<GridPass::GridStagedFrame>(std::move(*presentation));
                     return {};

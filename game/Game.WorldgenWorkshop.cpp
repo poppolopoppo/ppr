@@ -514,7 +514,7 @@ namespace pP::colony {
                                 if (not state->m_world or not state->m_world->matches(**catalog, request.m_spec)) {
                                     state->m_world.reset();
                                     auto world = prepareWorldgenPreviewWorld(
-                                        **catalog, request.m_spec, *clock, state->m_context.get(), generation_pool);
+                                        **catalog, request.m_spec, *clock, state->m_context, generation_pool);
                                     PPR_RETURN_ERROR_ON_FAIL(Workshop, world);
                                     state->m_world = std::move(*world);
                                 }
@@ -522,7 +522,7 @@ namespace pP::colony {
                                 state->m_world.reset();
                             }
                             auto preview = prepareWorldgenPreview(
-                                **catalog, request.m_spec, state->m_context.get(), state->m_world);
+                                **catalog, request.m_spec, state->m_context, state->m_world);
                             PPR_RETURN_ERROR_ON_FAIL(Workshop, preview);
                             auto stage = captureWorldgenPreviewPresentation(
                                 *preview, request.m_mode, request.m_id, *state->m_context);

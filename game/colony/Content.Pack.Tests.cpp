@@ -526,10 +526,10 @@ threshold.max = 1.0
         auto [job_context, cancel] = context::withCancelClause(context::background());
         cancel(std::make_error_code(std::errc::operation_canceled));
         const auto cancelled = prepareWorld(
-            std::move(*catalog), "frontier", 0xffffffffffffffffull, clock, {.m_context = job_context.get()});
+            std::move(*catalog), "frontier", 0xffffffffffffffffull, clock, {.m_context = job_context});
         PPR_TEST_ASSERT(not cancelled and cancelled.error() == std::errc::operation_canceled);
         const auto cancelled_load = prepareWorld(
-            fixture.m_root, "hollows", 42u, clock, diagnostics, {.m_context = job_context.get()});
+            fixture.m_root, "hollows", 42u, clock, diagnostics, {.m_context = job_context});
         PPR_TEST_ASSERT(not cancelled_load and cancelled_load.error() == std::errc::operation_canceled);
         PPR_TEST_ASSERT(clock.m_calls == 0u);
     };

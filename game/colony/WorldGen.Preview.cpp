@@ -215,7 +215,7 @@ namespace pP::colony {
 
     Expected<std::shared_ptr<const WorldgenPreviewWorld>> prepareWorldgenPreviewWorld(
         const ContentCatalog &catalog, const WorldgenPreviewSpec &spec, const ITimerClock &clock,
-        const IContext *const context, ParallelScheduler *const generation_pool) {
+        const SharedContext &context, ParallelScheduler *const generation_pool) {
         PPR_RETURN_UNEXPECTED_ON_FAIL(BiomeSamplePreview, context ? context->error() : std::error_code{});
         const auto fingerprint = catalog.contentFingerprint();
         if (not fingerprint) {
@@ -225,7 +225,8 @@ namespace pP::colony {
         auto plan = compileWorldPlan(catalog, spec.m_profile, spec.m_seed);
         PPR_RETURN_UNEXPECTED_ON_FAIL(BiomeSamplePreview, plan);
 
-        auto world = sim::generateWorld(std::move(*plan), clock, {.m_pool = generation_pool, .m_context = context});
+        auto world = sim::generateWorld(
+            std::move(*plan), clock, {.m_scheduler = generation_pool, .m_context = context});
         PPR_RETURN_UNEXPECTED_ON_FAIL(BiomeSamplePreview, world);
 
         auto particles = sim::seedMatterParticles(world->m_matter, world->m_grid, world->m_plan.recipe(), context);
@@ -266,7 +267,7 @@ namespace pP::colony {
     // ------------------------------------------------------------------
 
     Expected<WorldgenPreviewResult> prepareWorldgenPreview(
-        ContentCatalog catalog, WorldgenPreviewSpec spec, const IContext *const context,
+        ContentCatalog catalog, WorldgenPreviewSpec spec, const SharedContext &context,
         std::shared_ptr<const WorldgenPreviewWorld> world) {
         PPR_RETURN_UNEXPECTED_ON_FAIL(BiomeSamplePreview, context ? context->error() : std::error_code{});
         if (spec.m_origin.m_x > sim::kWorldEdge - kWorldgenPreviewEdge or
@@ -305,7 +306,7 @@ namespace pP::colony {
             }
 
             u64 scratch{};
-            auto matter = cropMatter(*world, visible, context, scratch);
+            auto matter = cropMatter(*world, visible, context.get(), scratch);
             PPR_RETURN_UNEXPECTED_ON_FAIL(BiomeSamplePreview, matter);
 
             const u32 biome_index = sim::generationBiomeAt(
@@ -335,7 +336,7 @@ namespace pP::colony {
             }
 
             result.m_omissions = {"simulation actors and runtime state"};
-            PPR_RETURN_UNEXPECTED_ON_FAIL(BiomeSamplePreview, summarize(result, context));
+            PPR_RETURN_UNEXPECTED_ON_FAIL(BiomeSamplePreview, summarize(result, context.get()));
             return result;
         }
 
@@ -414,7 +415,7 @@ namespace pP::colony {
         result.m_omissions = {
             "macro biome boundaries", "start reservation", "feature placements", "traversal connections",
             "initial matter", "backbone and playability validation"};
-        PPR_RETURN_UNEXPECTED_ON_FAIL(BiomeSamplePreview, summarize(result, context));
+        PPR_RETURN_UNEXPECTED_ON_FAIL(BiomeSamplePreview, summarize(result, context.get()));
         return result;
     }
 }

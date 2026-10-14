@@ -72,7 +72,7 @@ namespace pP::game::tests::detail::legacy_fixture {
         const auto [context, cancel] = context::withCancel(context::background());
         cancel();
         std::atomic<u32> completed{};
-        const GenerationExecution execution{.m_context = context.get(), .m_completed_chunks = &completed};
+        const GenerationExecution execution{.m_context = context, .m_completed_chunks = &completed};
         PPR_TEST_ASSERT(generateLegacyFixture(42u, grid, &execution) == std::errc::operation_canceled);
         PPR_TEST_ASSERT(grid.residentChunkCount() == 0u);
         PPR_TEST_ASSERT(completed.load() == 0u);

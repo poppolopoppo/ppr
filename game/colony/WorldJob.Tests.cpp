@@ -315,9 +315,10 @@ namespace pP::game::tests::detail::world_job {
             chunks,
             [&](const ColonyDriverDesc &request, const sim::GenerationExecution &execution,
                 config::Diagnostics &) -> Expected<std::unique_ptr<ColonyDriver>> {
-                PreparationGate gate{*execution.m_context, *execution.m_stage, entered, release};
                 auto local = execution;
-                local.m_context = &gate;
+                local.m_context = std::make_shared<PreparationGate>(
+                    *execution.m_context, *execution.m_stage, entered, release);
+
                 auto driver = std::make_unique<ColonyDriver>();
                 const auto error = driver->initLegacyFixture(request, &local);
                 if (error) {

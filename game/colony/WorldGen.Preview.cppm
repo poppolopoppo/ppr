@@ -51,7 +51,7 @@ export namespace pP::colony {
 
     [[nodiscard]] Expected<std::shared_ptr<const WorldgenPreviewWorld>> prepareWorldgenPreviewWorld(
         const ContentCatalog &catalog, const WorldgenPreviewSpec &spec, const ITimerClock &clock,
-        const IContext *context = nullptr, ParallelScheduler *generation_pool = nullptr);
+        const SharedContext &context = {}, ParallelScheduler *generation_pool = nullptr);
 
     // ------------------------------------------------------------------
     // preview result
@@ -86,7 +86,7 @@ export namespace pP::colony {
     /// Blocking CPU work for an offline caller or background coordinator.
     /// On failure/cancellation the caller's previous result is untouched.
     [[nodiscard]] Expected<WorldgenPreviewResult> prepareWorldgenPreview(
-        ContentCatalog catalog, WorldgenPreviewSpec spec, const IContext *context = nullptr,
+        ContentCatalog catalog, WorldgenPreviewSpec spec, const SharedContext &context = {},
         std::shared_ptr<const WorldgenPreviewWorld> world = {});
 
     // ------------------------------------------------------------------

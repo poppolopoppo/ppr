@@ -106,7 +106,8 @@ namespace pP::colony {
             const auto root = hal::process::currentExecutablePath().parent_path() / "worldgen/default";
             config::Diagnostics diagnostics{};
             auto &pool = parallel::backgroundPool();
-            auto prepared = prepareWorld(root, "frontier", 42u, ITimerClock::steady(), diagnostics, {.m_pool = &pool});
+            auto prepared = prepareWorld(
+                root, "frontier", 42u, ITimerClock::steady(), diagnostics, {.m_scheduler = &pool});
             PPR_RETURN_ERROR_ON_FAIL(ColonySmoke, prepared);
 
             const auto terrain_checksum = prepared->generated().m_report.m_terrain_checksum;

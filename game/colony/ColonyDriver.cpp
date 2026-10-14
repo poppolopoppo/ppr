@@ -436,7 +436,7 @@ namespace pP::colony {
             m_steps_bound = true;
         }
 
-        const IContext *const context = execution ? execution->m_context : nullptr;
+        const IContext *const context = execution ? execution->m_context.get() : nullptr;
         if (context) {
             PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, context->error());
         }

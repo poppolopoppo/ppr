@@ -176,7 +176,7 @@ namespace pP::colony {
     // ------------------------------------------------------------------
 
     std::error_code validateWorldCheckpoint(
-        const WorldCheckpoint &checkpoint, const ContentCatalog &catalog, const IContext *const context) {
+        const WorldCheckpoint &checkpoint, const ContentCatalog &catalog, const SharedContext &context) {
         const auto &descriptor = checkpoint.m_descriptor;
         PPR_RETURN_ERROR_ON_FAIL(CheckpointValidation, context ? context->error() : std::error_code{});
         PPR_RETURN_ERROR_ON_FAIL(CheckpointValidation, validateWorldMetric(descriptor.m_metric));
@@ -279,7 +279,7 @@ namespace pP::colony {
                                           ? std::error_code{}
                                           : invalid);
         }
-        PPR_RETURN_ERROR_ON_FAIL(CheckpointValidation, validateBlobs(checkpoint.m_geometry, recipe, context));
+        PPR_RETURN_ERROR_ON_FAIL(CheckpointValidation, validateBlobs(checkpoint.m_geometry, recipe, context.get()));
         for (const auto omitted: checkpoint.m_geometry.m_omitted_instances) {
             PPR_RETURN_ERROR_ON_FAIL(
                 CheckpointValidation, omitted < recipe.m_rules.size() ? std::error_code{} : invalid);

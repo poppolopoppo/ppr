@@ -288,7 +288,7 @@ namespace pP::game::tests::detail::worldgen_preview {
         PPR_TEST_ASSERT(not missing_profile and missing_profile.error() == std::errc::invalid_argument);
         const auto [context, cancel] = context::withCancel(context::background());
         cancel();
-        const auto cancelled = prepareWorldgenPreview(*catalog, spec, context.get());
+        const auto cancelled = prepareWorldgenPreview(*catalog, spec, context);
         PPR_TEST_ASSERT(not cancelled and cancelled.error() == std::errc::operation_canceled);
 
         OutputDirectory output;
@@ -490,10 +490,10 @@ namespace pP::game::tests::detail::worldgen_preview {
         const auto [context, cancel] = context::withCancel(context::background());
         cancel();
         const u32 clock_calls = clock.m_calls;
-        const auto cancelled_world = prepareWorldgenPreviewWorld(*catalog, spec, clock, context.get());
+        const auto cancelled_world = prepareWorldgenPreviewWorld(*catalog, spec, clock, context);
         PPR_TEST_ASSERT(not cancelled_world and cancelled_world.error() == std::errc::operation_canceled);
         PPR_TEST_ASSERT(clock.m_calls == clock_calls);
-        const auto cancelled_crop = prepareWorldgenPreview(*catalog, spec, context.get(), *prepared);
+        const auto cancelled_crop = prepareWorldgenPreview(*catalog, spec, context, *prepared);
         PPR_TEST_ASSERT(not cancelled_crop and cancelled_crop.error() == std::errc::operation_canceled);
 
         spec.m_origin = cropOrigin(*formation);
