@@ -3,120 +3,31 @@ module;
 module game.colony.content;
 import engine.core;
 import engine.image;
+import engine.sim;
 import std;
 
 namespace pP::colony {
     PPR_DECLARE_LOG_CATEGORY(ColonyContent)
+
+    // ------------------------------------------------------------------
+    // texture loading
+    // ------------------------------------------------------------------
+
     namespace {
         using pP::make_error_code;
         struct Fingerprint {
             u64 m_value{14695981039346656037ull};
-            void integer(const u64 v, const u32 width) noexcept {
+            void integer(const u64 value, const u32 width) noexcept {
                 for (u32 i = 0u; i < width; ++i) {
-                    m_value ^= (v >> (i * 8u)) & 255u;
+                    m_value ^= static_cast<u8>(value >> (i * 8u));
                     m_value *= 1099511628211ull;
                 }
             }
-            void text(const std::string_view v) noexcept {
-                integer(v.size(), 8u);
-                for (const unsigned char byte: v) {
+            void text(const std::string_view value) noexcept {
+                integer(value.size(), 8u);
+                for (const unsigned char byte: value) {
                     integer(byte, 1u);
                 }
-            }
-            void value(const std::string &v) noexcept {
-                text(v);
-            }
-            void value(const double v) noexcept {
-                integer(std::bit_cast<u64>(v), 8u);
-            }
-            void value(const bool v) noexcept {
-                integer(v ? 1u : 0u, 1u);
-            }
-            template<typename T>
-                requires (std::is_integral_v<T> and not std::is_same_v<T, bool>)
-            void value(const T v) noexcept {
-                integer(static_cast<u64>(v), sizeof(T));
-            }
-            template<typename T>
-                requires std::is_enum_v<T>
-            void value(const T v) noexcept {
-                integer(static_cast<u64>(v), 4u);
-            }
-            template<typename T>
-            void value(const std::optional<T> &v) noexcept {
-                value(v.has_value());
-                if (v) {
-                    value(*v);
-                }
-            }
-            template<typename... T>
-            void values(const T &...v) noexcept {
-                (value(v), ...);
-            }
-            template<typename T, typename F>
-            void sequence(const T &items, F &&write) noexcept {
-                integer(items.size(), 8u);
-                for (const auto &item: items) {
-                    write(item);
-                }
-            }
-            void material(const MaterialDefinition &m, const bool include_path) noexcept {
-                text(m.m_key);
-                integer(m.m_numeric_id, 2u);
-                text(m.m_display_name);
-                integer(static_cast<u8>(m.m_phase), 1u);
-                integer(static_cast<u8>(m.m_representation), 1u);
-                integer(m.m_color_rgba, 4u);
-                value(m.m_reference_density_kg_m3);
-                values(
-                    m.m_metallic, m.m_roughness, m.m_emissive_rgb[0u], m.m_emissive_rgb[1u], m.m_emissive_rgb[2u],
-                    m.m_emissive_strength, m.m_alpha_mode, m.m_ior, m.m_normal_scale, m.m_refraction_depth_m,
-                    m.m_texture_sampling);
-
-                if (include_path) {
-                    value(m.m_normal_texture);
-                    if (m.m_representation == EMaterialRepresentation::particle) {
-                        value(m.m_albedo_texture);
-                    }
-                }
-
-                if (m.m_representation == EMaterialRepresentation::particle) {
-                    value(m.m_texture_period_m);
-                }
-
-                if (m.m_representation == EMaterialRepresentation::terrain) {
-                    if (include_path) {
-                        text(*m.m_albedo_texture);
-                    }
-                    value(*m.m_texture_period_m);
-                    value(*m.m_diggable);
-                    value(m.m_roundness);
-                }
-            }
-            void rule(const WorldCaveRule &v) noexcept {
-                values(
-                    v.m_biome, v.m_field, v.m_depth_min_normalized, v.m_depth_max_normalized, v.m_threshold_min,
-                    v.m_threshold_max);
-            }
-            void rule(const WorldWormRule &v) noexcept {
-                values(
-                    v.m_biome, v.m_count, v.m_depth_min_normalized, v.m_depth_max_normalized, v.m_length_min_m,
-                    v.m_length_max_m, v.m_radius_min_m, v.m_radius_max_m, v.m_turn_probability, v.m_material_id,
-                    v.m_host_material_id, v.m_turn_smoothing, v.m_radius_variation, v.m_chamber_probability,
-                    v.m_chamber_scale);
-            }
-            void rule(const WorldConnectionRule &v) noexcept {
-                values(v.m_radius_m, v.m_extra_links, v.m_natural_anchors, v.m_wells, v.m_branches, v.m_roughness_m);
-            }
-            void rule(const WorldFeatureRule &v) noexcept {
-                values(
-                    v.m_feature, v.m_biome, v.m_depth_min_normalized, v.m_depth_max_normalized, v.m_spacing_m,
-                    v.m_min_count, v.m_max_count, v.m_attempts, v.m_priority, v.m_reflect);
-            }
-            void rule(const WorldMatterRule &v) noexcept {
-                values(
-                    v.m_feature_rule, v.m_marker, v.m_material_id, v.m_temperature_k, v.m_bulk_density_kg_m3,
-                    v.m_fill_height_m);
             }
         };
         std::error_code textureFailure(
@@ -124,9 +35,9 @@ namespace pP::colony {
             const std::string_view message, const std::error_code error, const bool normal_map = false) {
             diagnostics.add(
                 normal_map ? material.m_normal_source_location : material.m_albedo_source_location,
-                material.m_key.starts_with("backgrounds.")
+                material.m_key.starts_with("appearance.backgrounds.")
                     ? material.m_key + ".texture"
-                    : "materials." + material.m_key + (normal_map ? ".normal_texture" : ".albedo_texture"),
+                    : "appearance.materials." + material.m_key + (normal_map ? ".normal_texture" : ".albedo_texture"),
                 std::string{message} + ": " + path.string(), error);
             return error;
         }
@@ -248,128 +159,42 @@ namespace pP::colony {
         }
     }
 
-    u64 ContentCatalog::materialFingerprint() const noexcept {
-        Fingerprint hash{};
-        hash.text("ppr.materials.v2");
-        hash.sequence(m_materials, [&](const auto &v) { hash.material(v, true); });
-        return hash.m_value;
+    // ------------------------------------------------------------------
+    // catalog fingerprints
+    // ------------------------------------------------------------------
+
+    u64 ContentCatalog::materialFingerprint() const {
+        sim::definition::SemanticFingerprint hash{m_definition};
+        hash.string("ppr.materials.v3");
+        hash.value(m_definition.m_materials, "materials");
+        hash.value(m_definition.m_appearance.m_materials, "appearance.materials");
+        return hash.hash();
     }
-    u64 ContentCatalog::computeContentFingerprint() const noexcept {
-        Fingerprint hash{};
-        hash.text("ppr.content.v2");
+    u64 ContentCatalog::computeContentFingerprint() const {
+        sim::definition::SemanticFingerprint hash{m_definition};
+        hash.string("ppr.content.v3");
         hash.value(kContentSchemaVersion);
-        hash.text(m_pack_id);
-        hash.sequence(m_materials, [&](const auto &v) {
-            hash.material(v, false);
-            for (const bool normal_map: {false, true}) {
-                const auto &path = normal_map ? v.m_normal_texture : v.m_albedo_texture;
-                hash.value(path.has_value());
-                if (path) {
-                    const auto texture = std::ranges::find_if(m_textures, [&](const ContentTexture &item) {
-                        return item.m_path == *path and item.m_normal_map == normal_map;
-                    });
-                    hash.values(normal_map, texture->m_source_size, texture->m_source_fingerprint);
-                }
-            }
-        });
+        hash.value(m_pack_id);
+        hash.value(static_cast<const sim::definition::Definition &>(m_definition));
+        hash.value(m_definition.m_appearance, "appearance");
 
-        hash.sequence(m_fields, [&](const auto &field) {
-            const auto &v = field.m_noise;
-            hash.values(
-                field.m_key, v.m_algorithm, v.m_fractal, v.m_frequency_per_metre, v.m_octaves, v.m_lacunarity, v.m_gain,
-                v.m_warp_amplitude_m, v.m_warp_frequency_per_metre, v.m_axis_scale_x, v.m_axis_scale_y,
-                v.m_rotation_degrees);
+        // Asset identities include semantic usage and source bytes, independent of loading order.
+        Array<const ContentTexture *> textures;
+        textures.reserve(m_textures.size());
+        for (const auto &texture: m_textures) {
+            textures.push_back(std::addressof(texture));
+        }
+        std::ranges::sort(textures, [](const auto *left, const auto *right) {
+            return std::tie(left->m_path, left->m_normal_map) < std::tie(right->m_path, right->m_normal_map);
         });
-
-        hash.sequence(m_biomes, [&](const auto &v) {
-            hash.values(
-                v.m_key, v.m_display_name, v.m_preview_color_rgba, v.m_temperature_base_k, v.m_temperature_variation_k,
-                v.m_temperature_field, v.m_lining_material_id, v.m_lining_thickness_fine, v.m_relaxation_passes,
-                v.m_relaxation_adoption, v.m_sprinkle_probability);
-            hash.values(
-                v.m_pore_probability, v.m_pore_radius_min_m, v.m_pore_radius_max_m, v.m_pore_affinity_min,
-                v.m_pore_passes, v.m_finish_passes, v.m_erosion_passes, v.m_finish_adoption, v.m_soil_material_id,
-                v.m_weathered_material_id, v.m_soil_depth_m, v.m_weathered_depth_m, v.m_formation_material_id,
-                v.m_rind_material_id, v.m_formation_probability, v.m_formation_length_m);
-            hash.value(v.m_pore_field.has_value());
-            if (v.m_pore_field) {
-                hash.value(*v.m_pore_field);
-            }
-            hash.sequence(v.m_composition, [&](const auto &b) {
-                hash.values(
-                    b.m_key, b.m_order, b.m_depth_min_normalized, b.m_depth_max_normalized, b.m_field, b.m_bed_period_m,
-                    b.m_bed_warp_m, b.m_bed_dip);
-                hash.sequence(b.m_materials, [&](const auto &m) { hash.values(m.m_key, m.m_material_id, m.m_weight); });
-            });
-            hash.sequence(v.m_deposits, [&](const auto &b) {
-                hash.values(
-                    b.m_key, b.m_order, b.m_field, b.m_material_id, b.m_host_material_id, b.m_depth_min_normalized,
-                    b.m_depth_max_normalized, b.m_threshold_min, b.m_threshold_max, b.m_shape, b.m_stage,
-                    b.m_blob_count, b.m_radius_min_m, b.m_radius_max_m, b.m_stretch_min, b.m_stretch_max,
-                    b.m_distortion, b.m_core_coverage, b.m_fringe_coverage, b.m_sprinkle_probability,
-                    b.m_orientation_min_degrees, b.m_orientation_max_degrees);
-            });
-        });
-
-        hash.sequence(m_features, [&](const auto &v) {
-            const auto &b = v.m_reservation;
-            hash.values(
-                v.m_key, v.m_display_name, v.m_allow_horizontal_reflection, b.m_min_x_fine, b.m_min_y_fine,
-                b.m_max_x_fine, b.m_max_y_fine);
-            hash.sequence(v.m_operations, [&](const auto &b) {
-                hash.values(
-                    b.m_key, b.m_order, b.m_action, b.m_shape, b.m_x_fine, b.m_y_fine, b.m_width_fine, b.m_height_fine,
-                    b.m_end_x_fine, b.m_end_y_fine, b.m_radius_m, b.m_material_id);
-            });
-            hash.sequence(v.m_markers, [&](const auto &b) { hash.values(b.m_key, b.m_role, b.m_x_fine, b.m_y_fine); });
-        });
-
-        hash.sequence(m_worlds, [&](const auto &v) {
-            hash.values(
-                v.m_key, v.m_display_name, v.m_default_wall_material_id, v.m_boundary_fine, v.m_min_sites,
-                v.m_max_sites, v.m_site_attempts, v.m_site_spacing_m, v.m_boundary_warp_amplitude_m,
-                v.m_boundary_warp_x_field, v.m_boundary_warp_y_field, v.m_start_biome, v.m_start_feature,
-                v.m_start_marker, v.m_start_x_fine, v.m_start_y_fine, v.m_start_clearance_m, v.m_start_route_width_m);
-            hash.value(v.m_background_stack);
-            hash.values(
-                v.m_surface_field.has_value(), v.m_bedrock_field.has_value(), v.m_surface_elevation_m,
-                v.m_surface_amplitude_m, v.m_bedrock_thickness_m, v.m_bedrock_variation_m, v.m_bedrock_material_id,
-                v.m_start_depth_m.has_value());
-            if (v.m_surface_field) {
-                hash.value(*v.m_surface_field);
-            }
-            if (v.m_bedrock_field) {
-                hash.value(*v.m_bedrock_field);
-            }
-            if (v.m_start_depth_m) {
-                hash.value(*v.m_start_depth_m);
-            }
-            hash.sequence(v.m_start_resources, [&](const auto &b) {
-                hash.values(b.m_key, b.m_marker, b.m_material_id, b.m_minimum_fine_cells, b.m_max_distance_m);
-            });
-            hash.sequence(v.m_biomes, [&](const auto &b) {
-                hash.values(
-                    b.m_key, b.m_biome, b.m_weight, b.m_required_count, b.m_depth_min_normalized,
-                    b.m_depth_max_normalized, b.m_distance_min_m, b.m_distance_max_m);
-            });
-            hash.sequence(v.m_rules, [&](const auto &b) {
-                hash.values(b.m_key, b.m_order, b.m_kind, b.m_phase);
-                std::visit([&](const auto &parameters) { hash.rule(parameters); }, b.m_parameters);
-            });
-        });
-
-        hash.sequence(m_backgrounds, [&](const auto &stack) {
-            hash.value(stack.m_key);
-            hash.sequence(stack.m_layers, [&](const auto &layer) {
-                hash.values(
-                    layer.m_key, layer.m_order, layer.m_color_rgba, layer.m_repeat_period_m, layer.m_parallax_factor);
-                const auto texture = std::ranges::find_if(m_textures, [&](const ContentTexture &item) {
-                    return item.m_path == layer.m_texture and not item.m_normal_map;
-                });
-                hash.values(texture->m_source_size, texture->m_source_fingerprint);
-            });
-        });
-        return hash.m_value;
+        hash.integer(static_cast<u64>(textures.size()));
+        for (const auto *texture: textures) {
+            hash.value(texture->m_path);
+            hash.value(texture->m_normal_map);
+            hash.value(texture->m_source_size);
+            hash.value(texture->m_source_fingerprint);
+        }
+        return hash.hash();
     }
     std::string_view ContentCatalog::packId() const noexcept {
         return m_pack_id;
@@ -399,6 +224,11 @@ namespace pP::colony {
         const auto found = std::ranges::lower_bound(m_worlds, key, {}, &WorldProfileDefinition::m_key);
         return found == m_worlds.end() or found->m_key != key ? nullptr : std::addressof(*found);
     }
+
+    // ------------------------------------------------------------------
+    // catalog loading
+    // ------------------------------------------------------------------
+
     Expected<ContentCatalog> loadContentCatalog(
         const std::filesystem::path &root, config::Diagnostics &diagnostics, const IContext *const context) {
         auto source = loadContentPackSource(root, diagnostics, context);
@@ -428,56 +258,28 @@ namespace pP::colony {
             PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, std::errc::invalid_argument);
         }
 
-        const auto &documents = source.m_documents;
-        const auto &materials = documents[static_cast<std::size_t>(EContentDocument::materials)];
-        auto catalog = decodeMaterialCatalog(materials.m_bytes, materials.m_path.string(), diagnostics);
+        std::array<config::Document, kContentDocumentCount> documents;
+        for (std::size_t index = 0u; index < documents.size(); ++index) {
+            PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, cancelled());
+            const auto &input = source.m_documents[index];
+            if (input.m_bytes.size() > kMaxMaterialDocumentBytes) {
+                diagnostics.add(
+                    input.m_path.string(), "", "Content document exceeds 1 MiB",
+                    config::make_error_code(config::EConfigErrc::out_of_range));
+                PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, config::EConfigErrc::out_of_range);
+            }
+            auto document = config::decode(
+                input.m_bytes, input.m_path.string(), diagnostics, config::EDecodeMode::tree);
+            PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, document);
+            documents[index] = std::move(*document);
+        }
+        auto document = mergeContentDocuments(documents, diagnostics);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, document);
+        auto definition = resolvePackDefinition(*document, diagnostics);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, definition);
+        auto catalog = projectContentCatalog(std::move(*definition), *document, diagnostics);
         PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, catalog);
         catalog->m_pack_id = source.m_manifest.m_pack_id;
-
-        const auto &fields = documents[static_cast<std::size_t>(EContentDocument::fields)];
-        PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, cancelled());
-        auto decoded_fields = decodeFieldDefinitions(fields.m_bytes, fields.m_path.string(), diagnostics);
-        PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, decoded_fields);
-        catalog->m_fields = std::move(*decoded_fields);
-
-        const auto &biomes = documents[static_cast<std::size_t>(EContentDocument::biomes)];
-        PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, cancelled());
-        auto decoded_biomes = decodeBiomeDefinitions(
-            biomes.m_bytes, biomes.m_path.string(), *catalog, catalog->fields(), diagnostics);
-        PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, decoded_biomes);
-        catalog->m_biomes = std::move(*decoded_biomes);
-
-        const auto &features = documents[static_cast<std::size_t>(EContentDocument::features)];
-        PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, cancelled());
-        auto decoded_features = decodeFeatureDefinitions(
-            features.m_bytes, features.m_path.string(), *catalog, diagnostics);
-        PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, decoded_features);
-        catalog->m_features = std::move(*decoded_features);
-
-        const auto &worlds = documents[static_cast<std::size_t>(EContentDocument::worlds)];
-        PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, cancelled());
-        auto decoded_worlds = decodeWorldProfiles(
-            worlds.m_bytes, worlds.m_path.string(), *catalog, catalog->fields(), catalog->biomes(), catalog->features(),
-            diagnostics);
-        PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, decoded_worlds);
-        catalog->m_worlds = std::move(*decoded_worlds);
-
-        const auto &backgrounds = documents[static_cast<std::size_t>(EContentDocument::backgrounds)];
-        auto decoded_backgrounds = decodeBackgroundDefinitions(
-            backgrounds.m_bytes, backgrounds.m_path.string(), diagnostics);
-        PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, decoded_backgrounds);
-        catalog->m_backgrounds = std::move(*decoded_backgrounds);
-
-        for (const auto &world: catalog->worlds()) {
-            if (std::ranges::none_of(catalog->m_backgrounds, [&](const auto &stack) {
-                    return stack.m_key == world.m_background_stack;
-                })) {
-                diagnostics.add(
-                    worlds.m_path.string(), "worlds." + world.m_key + ".background_stack", "Unknown background stack",
-                    std::make_error_code(std::errc::invalid_argument));
-                PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, std::errc::invalid_argument);
-            }
-        }
 
         u64 input_bytes = 0u, decoded_bytes = 0u;
         for (const auto &material: catalog->materials()) {
@@ -515,7 +317,7 @@ namespace pP::colony {
                     continue;
                 }
                 MaterialDefinition source_material{
-                    .m_key = "backgrounds." + stack.m_key + ".layers." + layer.m_key,
+                    .m_key = "appearance.backgrounds." + stack.m_key + ".layers." + layer.m_key,
                     .m_albedo_texture = layer.m_texture,
                     .m_albedo_source_location = layer.m_source_location};
                 if (catalog->m_textures.size() >= kMaxContentTextures) {

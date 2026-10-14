@@ -86,10 +86,25 @@ export namespace pP::colony {
         fields,
         features,
         worlds,
-        backgrounds,
+        rules,
+        appearance,
         count
     };
     inline constexpr std::size_t kContentDocumentCount = static_cast<std::size_t>(EContentDocument::count);
+
+    struct ContentDocumentBinding {
+        EContentDocument m_document{};
+        std::string_view m_collection{}, m_label{}, m_schema_root{};
+        bool m_attached_rules{};
+        std::size_t m_definition_depth{1u};
+    };
+    [[nodiscard]] std::span<const ContentDocumentBinding> contentDocumentBindings() noexcept;
+    [[nodiscard]] std::string contentDocumentPath(
+        EContentDocument category, std::string_view definition_key, std::string_view relative_property = {});
+    [[nodiscard]] std::string contentCanonicalPath(EContentDocument category, std::string_view document_path);
+    [[nodiscard]] std::optional<std::pair<EContentDocument, std::string>> contentSourcePath(
+        std::string_view canonical_path);
+    [[nodiscard]] Array<std::string> contentDefinitionKeys(EContentDocument category, const config::Document &document);
 
     /// Numeric limits and enum choices come from the decoding schemas. Slider
     /// bounds are viewport hints only; editors must include the current value.
@@ -137,9 +152,6 @@ export namespace pP::colony {
 
     // Owned, canonically sorted named fields; numeric validation reuses sim's
     // allocation-free compiler preflight. No noise object or parser view survives.
-    [[nodiscard]] Expected<Array<FieldDefinition>> decodeFieldDefinitions(
-        std::string_view bytes, std::string_view origin, config::Diagnostics &diagnostics);
-
     [[nodiscard]] Expected<ContentPackManifest> decodePackManifest(
         std::string_view bytes, std::string_view origin, config::Diagnostics &diagnostics);
     /// Blocking I/O boundary: call on the world coordinator, never the UI lane.
@@ -223,10 +235,6 @@ export namespace pP::colony {
     // Pure, owned biome recipes with terrain references resolved to validated
     // numeric IDs. Fields retain their stable stream keys. Explicit ordered
     // composition bands cover normalized depth [0,1] without gaps/overlap.
-    [[nodiscard]] Expected<Array<BiomeDefinition>> decodeBiomeDefinitions(
-        std::string_view bytes, std::string_view origin, const ContentCatalog &materials,
-        std::span<const FieldDefinition> fields, config::Diagnostics &diagnostics);
-
     // ------------------------------------------------------------------
     // features
     // ------------------------------------------------------------------
@@ -282,28 +290,10 @@ export namespace pP::colony {
         Array<FeatureOperation> m_operations{};
         Array<FeatureMarker> m_markers{};
     };
-    [[nodiscard]] Expected<Array<FeatureDefinition>> decodeFeatureDefinitions(
-        std::string_view bytes, std::string_view origin, const ContentCatalog &materials,
-        config::Diagnostics &diagnostics);
-
     // ------------------------------------------------------------------
     // worlds
     // ------------------------------------------------------------------
 
-    enum class EWorldRuleKind : u8 {
-        threshold_cave,
-        carve_worm,
-        vein_worm,
-        connect_rooms,
-        feature,
-        matter_fill
-    };
-    enum class EWorldRulePhase : u8 {
-        deposit,
-        carve,
-        stamp,
-        fill
-    };
     struct WorldBiomeChoice {
         std::string m_key{};
         std::string m_biome{};
@@ -311,48 +301,6 @@ export namespace pP::colony {
         u32 m_required_count{};
         double m_depth_min_normalized{}, m_depth_max_normalized{};
         double m_distance_min_m{}, m_distance_max_m{};
-    };
-    struct WorldCaveRule {
-        std::string m_biome{}, m_field{};
-        double m_depth_min_normalized{}, m_depth_max_normalized{};
-        double m_threshold_min{}, m_threshold_max{};
-    };
-    struct WorldWormRule {
-        std::string m_biome{};
-        u32 m_count{};
-        double m_depth_min_normalized{}, m_depth_max_normalized{};
-        double m_length_min_m{}, m_length_max_m{};
-        double m_radius_min_m{}, m_radius_max_m{};
-        double m_turn_probability{};
-        u16 m_material_id{}, m_host_material_id{};
-        double m_turn_smoothing{}, m_radius_variation{}, m_chamber_probability{}, m_chamber_scale{1.0};
-    };
-    struct WorldConnectionRule {
-        double m_radius_m{};
-        u32 m_extra_links{};
-        u32 m_natural_anchors{}, m_wells{}, m_branches{};
-        double m_roughness_m{};
-    };
-    struct WorldFeatureRule {
-        std::string m_feature{}, m_biome{};
-        double m_depth_min_normalized{}, m_depth_max_normalized{};
-        double m_spacing_m{};
-        u32 m_min_count{}, m_max_count{}, m_attempts{}, m_priority{};
-        bool m_reflect{};
-    };
-    struct WorldMatterRule {
-        std::string m_feature_rule{}, m_marker{};
-        u16 m_material_id{};
-        double m_temperature_k{}, m_bulk_density_kg_m3{};
-        std::optional<double> m_fill_height_m{};
-    };
-    struct WorldRuleDefinition {
-        std::string m_key{};
-        u32 m_order{};
-        EWorldRuleKind m_kind{};
-        EWorldRulePhase m_phase{};
-        std::variant<WorldCaveRule, WorldWormRule, WorldConnectionRule, WorldFeatureRule, WorldMatterRule>
-            m_parameters{};
     };
     struct WorldStartResource {
         std::string m_key{}, m_marker{};
@@ -372,7 +320,7 @@ export namespace pP::colony {
         double m_start_clearance_m{}, m_start_route_width_m{};
         Array<WorldStartResource> m_start_resources{};
         Array<WorldBiomeChoice> m_biomes{};
-        Array<WorldRuleDefinition> m_rules{};
+        Array<std::string> m_rule_keys{};
         std::string m_background_stack{};
         std::optional<std::string> m_surface_field{}, m_bedrock_field{};
         double m_surface_elevation_m{}, m_surface_amplitude_m{}, m_bedrock_thickness_m{}, m_bedrock_variation_m{};
@@ -393,14 +341,11 @@ export namespace pP::colony {
         std::string m_key{};
         Array<BackgroundLayerDefinition> m_layers{};
     };
-    [[nodiscard]] Expected<Array<BackgroundStackDefinition>> decodeBackgroundDefinitions(
-        std::string_view bytes, std::string_view origin, config::Diagnostics &diagnostics);
-
     // ------------------------------------------------------------------
     // textures
     // ------------------------------------------------------------------
 
-    inline constexpr u32 kContentSchemaVersion = 2u;
+    inline constexpr u32 kContentSchemaVersion = 3u;
     inline constexpr u64 kMaxTextureInputBytes = 16u * 1024u * 1024u;
     inline constexpr u64 kMaxPackTextureInputBytes = 64u * 1024u * 1024u;
     inline constexpr u64 kMaxPackTextureDecodedBytes = 128u * 1024u * 1024u;
@@ -415,6 +360,175 @@ export namespace pP::colony {
         bool m_normal_map{};
     };
 
+    namespace appearance_schema {
+        constexpr config::Metadata metadata(const std::string_view name) {
+            return {name, "Content appearance", "Appearance", config::EMutability::startup, config::ESource::file};
+        }
+        template<typename Owner, typename T>
+        constexpr auto collection(T Owner::*member, const std::string_view name, const std::size_t maximum) {
+            auto result = config::collection(member, metadata(name), {0u, maximum});
+            result.m_presence = config::EPresence::defaulted;
+            return result;
+        }
+    }
+
+    struct MaterialAppearance {
+        std::string m_display_name{}, m_color_rgba{};
+        std::optional<std::string> m_albedo_texture{}, m_normal_texture{};
+        std::optional<double> m_texture_period_m{};
+        std::optional<double> m_roundness{};
+        double m_metallic{}, m_roughness{1.0};
+        double m_emissive_r{}, m_emissive_g{}, m_emissive_b{}, m_emissive_strength{1.0};
+        double m_ior{1.5}, m_normal_scale{1.0}, m_refraction_depth_m{};
+        EMaterialAlphaMode m_alpha_mode{EMaterialAlphaMode::opaque};
+        EMaterialTextureSampling m_texture_sampling{EMaterialTextureSampling::stochastic};
+        static constexpr auto describe() {
+            using namespace config;
+            using appearance_schema::metadata;
+            return std::tuple{
+                field(
+                    &MaterialAppearance::m_display_name, metadata("display_name"), StringDomain{256u, false},
+                    EPresence::required),
+                field(
+                    &MaterialAppearance::m_color_rgba, metadata("color_rgba"), StringDomain{8u, false},
+                    EPresence::required),
+                field(
+                    &MaterialAppearance::m_albedo_texture, metadata("albedo_texture"), StringDomain{1024u, false},
+                    EPresence::optional),
+                field(
+                    &MaterialAppearance::m_normal_texture, metadata("normal_texture"), StringDomain{1024u, false},
+                    EPresence::optional),
+                field(
+                    &MaterialAppearance::m_texture_period_m, metadata("texture_period_m"),
+                    FloatDomain{
+                        4096.0 / static_cast<double>((std::numeric_limits<float>::max)()),
+                        static_cast<double>((std::numeric_limits<float>::max)())},
+                    EPresence::optional),
+                field(
+                    &MaterialAppearance::m_roundness, metadata("roundness"), FloatDomain{0.0, 1.0},
+                    EPresence::optional),
+                field(&MaterialAppearance::m_metallic, metadata("metallic"), FloatDomain{0.0, 1.0}),
+                field(&MaterialAppearance::m_roughness, metadata("roughness"), FloatDomain{0.0, 1.0}),
+                field(&MaterialAppearance::m_emissive_r, metadata("emissive_r"), FloatDomain{0.0, 1.0}),
+                field(&MaterialAppearance::m_emissive_g, metadata("emissive_g"), FloatDomain{0.0, 1.0}),
+                field(&MaterialAppearance::m_emissive_b, metadata("emissive_b"), FloatDomain{0.0, 1.0}),
+                field(
+                    &MaterialAppearance::m_emissive_strength, metadata("emissive_strength"),
+                    FloatDomain{0.0, static_cast<double>((std::numeric_limits<float>::max)())}),
+                field(&MaterialAppearance::m_ior, metadata("ior"), FloatDomain{1.0, 3.0}),
+                field(&MaterialAppearance::m_normal_scale, metadata("normal_scale"), FloatDomain{0.0, 4.0}),
+                field(&MaterialAppearance::m_refraction_depth_m, metadata("refraction_depth_m"), FloatDomain{0.0, 1.0}),
+                field(
+                    &MaterialAppearance::m_alpha_mode, metadata("alpha_mode"),
+                    EnumDomain<EMaterialAlphaMode, 2>{
+                        {EnumEntry{EMaterialAlphaMode::opaque, "opaque"},
+                            EnumEntry{EMaterialAlphaMode::blend, "blend"}}}),
+                field(
+                    &MaterialAppearance::m_texture_sampling, metadata("texture_sampling"),
+                    EnumDomain<EMaterialTextureSampling, 2>{
+                        {EnumEntry{EMaterialTextureSampling::stochastic, "stochastic"},
+                            EnumEntry{EMaterialTextureSampling::repeat, "repeat"}}})};
+        }
+    };
+    struct BiomeAppearance {
+        std::string m_display_name{}, m_preview_color_rgba{};
+        static constexpr auto describe() {
+            return std::tuple{
+                config::field(
+                    &BiomeAppearance::m_display_name, appearance_schema::metadata("display_name"),
+                    config::StringDomain{256u, false}, config::EPresence::required),
+                config::field(
+                    &BiomeAppearance::m_preview_color_rgba, appearance_schema::metadata("preview_color_rgba"),
+                    config::StringDomain{8u, false}, config::EPresence::required)};
+        }
+    };
+    struct FeatureAppearance {
+        std::string m_display_name{};
+        static constexpr auto describe() {
+            return std::tuple{config::field(
+                &FeatureAppearance::m_display_name, appearance_schema::metadata("display_name"),
+                config::StringDomain{256u, false}, config::EPresence::required)};
+        }
+    };
+    struct WorldAppearance {
+        std::string m_display_name{}, m_background_stack{};
+        static constexpr auto describe() {
+            return std::tuple{
+                config::field(
+                    &WorldAppearance::m_display_name, appearance_schema::metadata("display_name"),
+                    config::StringDomain{256u, false}, config::EPresence::required),
+                config::field(
+                    &WorldAppearance::m_background_stack, appearance_schema::metadata("background_stack"),
+                    config::StringDomain{128u, false}, config::EPresence::required)};
+        }
+    };
+    struct BackgroundAppearanceLayer {
+        u32 m_order{};
+        std::string m_texture{}, m_color_rgba{};
+        double m_repeat_period_m{}, m_parallax_factor{};
+        static constexpr auto describe() {
+            using namespace config;
+            using appearance_schema::metadata;
+            return std::tuple{
+                field(&BackgroundAppearanceLayer::m_order, metadata("order"), Range{0u, 3u}, EPresence::required),
+                field(
+                    &BackgroundAppearanceLayer::m_texture, metadata("texture"), StringDomain{1024u, false},
+                    EPresence::required),
+                field(
+                    &BackgroundAppearanceLayer::m_color_rgba, metadata("color_rgba"), StringDomain{8u, false},
+                    EPresence::required),
+                field(
+                    &BackgroundAppearanceLayer::m_repeat_period_m, metadata("repeat_period_m"),
+                    FloatDomain{0.125, 65536.0}, EPresence::required),
+                field(
+                    &BackgroundAppearanceLayer::m_parallax_factor, metadata("parallax_factor"), FloatDomain{0.0, 1.0},
+                    EPresence::required)};
+        }
+    };
+    struct BackgroundAppearance {
+        config::KeyedCollection<BackgroundAppearanceLayer> m_layers{};
+        static constexpr auto describe() {
+            return std::tuple{
+                config::collection(&BackgroundAppearance::m_layers, appearance_schema::metadata("layers"), {4u, 4u})};
+        }
+    };
+    struct Appearance {
+        config::KeyedCollection<MaterialAppearance> m_materials{};
+        config::KeyedCollection<BiomeAppearance> m_biomes{};
+        config::KeyedCollection<FeatureAppearance> m_features{};
+        config::KeyedCollection<WorldAppearance> m_worlds{};
+        config::KeyedCollection<BackgroundAppearance> m_backgrounds{};
+        static constexpr auto describe() {
+            return std::tuple{
+                appearance_schema::collection(&Appearance::m_materials, "materials", kMaxContentMaterials),
+                appearance_schema::collection(&Appearance::m_biomes, "biomes", kMaxContentBiomes),
+                appearance_schema::collection(&Appearance::m_features, "features", kMaxContentFeatures),
+                appearance_schema::collection(&Appearance::m_worlds, "worlds", kMaxContentWorlds),
+                appearance_schema::collection(&Appearance::m_backgrounds, "backgrounds", kMaxContentWorlds)};
+        }
+    };
+    struct PackDefinition : sim::definition::Definition {
+        Appearance m_appearance{};
+        static constexpr auto describe() {
+            return std::tuple_cat(
+                sim::definition::Definition::describe(),
+                std::tuple{config::group(
+                    &PackDefinition::m_appearance, appearance_schema::metadata("appearance"),
+                    config::EPresence::required)});
+        }
+    };
+    [[nodiscard]] Expected<config::Document> projectContentDocument(
+        EContentDocument category, const PackDefinition &definition);
+    [[nodiscard]] Expected<config::Document> contentVariantSubtree(
+        EContentDocument category, std::string_view definition_key, std::string_view relative_variant_path,
+        std::string_view tag);
+    [[nodiscard]] Expected<config::Document> mergeContentDocuments(
+        const std::array<config::Document, kContentDocumentCount> &documents, config::Diagnostics &diagnostics);
+    [[nodiscard]] Expected<PackDefinition> decodePackDefinition(
+        const ContentPackSource &source, config::Diagnostics &diagnostics);
+    [[nodiscard]] Expected<PackDefinition> resolvePackDefinition(
+        const config::Document &document, config::Diagnostics &diagnostics);
+
     // ------------------------------------------------------------------
     // content catalog
     // ------------------------------------------------------------------
@@ -422,6 +536,8 @@ export namespace pP::colony {
     // Immutable owned material catalog. Decoding produces a candidate; callers
     // retain their previous catalog on failure. No parser views survive decoding.
     class ContentCatalog {
+        // state:
+        PackDefinition m_definition{};
         Array<MaterialDefinition> m_materials{};
         std::string m_pack_id{};
         Array<FieldDefinition> m_fields{};
@@ -431,14 +547,16 @@ export namespace pP::colony {
         Array<ContentTexture> m_textures{};
         Array<BackgroundStackDefinition> m_backgrounds{};
         std::optional<u64> m_content_fingerprint{};
+
+        // friends:
         friend Expected<ContentCatalog> loadContentCatalog(
             const std::filesystem::path &, config::Diagnostics &, const IContext *);
         friend Expected<ContentCatalog> loadContentCatalog(
             const std::filesystem::path &, const ContentPackSource &, config::Diagnostics &, const IContext *);
-        [[nodiscard]] u64 computeContentFingerprint() const noexcept;
+        [[nodiscard]] u64 computeContentFingerprint() const;
         ContentCatalog() = default;
-        friend Expected<ContentCatalog> decodeMaterialCatalog(
-            std::string_view bytes, std::string_view origin, config::Diagnostics &diagnostics);
+        friend Expected<ContentCatalog> projectContentCatalog(
+            PackDefinition, const config::Document &, config::Diagnostics &);
 
     public:
         ContentCatalog(ContentCatalog &&) = default;
@@ -446,12 +564,14 @@ export namespace pP::colony {
         ContentCatalog(const ContentCatalog &) = default;
         ContentCatalog &operator=(const ContentCatalog &) = default;
 
+        [[nodiscard]] const PackDefinition &definition() const noexcept;
+
         [[nodiscard]] std::span<const MaterialDefinition> materials() const noexcept;
         [[nodiscard]] const MaterialDefinition *findMaterial(u16 numeric_id) const noexcept;
         [[nodiscard]] const MaterialDefinition *findMaterial(std::string_view key) const noexcept;
         // FNV-1a over the versioned canonical material values, with explicit
         // lengths and little-endian numeric bytes. Not the complete pack identity.
-        [[nodiscard]] u64 materialFingerprint() const noexcept;
+        [[nodiscard]] u64 materialFingerprint() const;
         [[nodiscard]] std::string_view packId() const noexcept;
         [[nodiscard]] std::span<const FieldDefinition> fields() const noexcept;
         [[nodiscard]] std::span<const BiomeDefinition> biomes() const noexcept;
@@ -460,20 +580,17 @@ export namespace pP::colony {
         [[nodiscard]] std::span<const ContentTexture> textures() const noexcept;
         [[nodiscard]] std::span<const BackgroundStackDefinition> backgrounds() const noexcept;
         [[nodiscard]] const WorldProfileDefinition *findWorld(std::string_view key) const noexcept;
-        // Absent for the material-only decoder; present only after complete pack validation.
+        // Present only after complete pack and asset validation.
         [[nodiscard]] std::optional<u64> contentFingerprint() const noexcept;
     };
+    [[nodiscard]] Expected<ContentCatalog> projectContentCatalog(
+        PackDefinition definition, const config::Document &document, config::Diagnostics &diagnostics);
+    [[nodiscard]] Expected<ContentCatalog> projectContentCatalog(
+        PackDefinition definition, config::Diagnostics &diagnostics);
 
-    [[nodiscard]] Expected<Array<WorldProfileDefinition>> decodeWorldProfiles(
-        std::string_view bytes, std::string_view origin, const ContentCatalog &materials,
-        std::span<const FieldDefinition> fields, std::span<const BiomeDefinition> biomes,
-        std::span<const FeatureDefinition> features, config::Diagnostics &diagnostics);
-
-    // Pure scalar-codec boundary; performs no I/O or texture decoding. Terrain
-    // texture paths are portable pack-relative paths without dot segments.
-    // bad_alloc propagates to the application's fatal exception boundary.
-    [[nodiscard]] Expected<ContentCatalog> decodeMaterialCatalog(
+    [[nodiscard]] Expected<sim::definition::Definition> decodeWorldGenDefinition(
         std::string_view bytes, std::string_view origin, config::Diagnostics &diagnostics);
+
     // Worker/headless boundary: all documents and referenced textures are validated
     // before a complete owned candidate is returned. No GPU or services are accessed.
     [[nodiscard]] Expected<ContentCatalog> loadContentCatalog(

@@ -7,6 +7,10 @@ import game.colony.content;
 import std;
 
 export namespace pP::colony {
+    // ------------------------------------------------------------------
+    // draft snapshots
+    // ------------------------------------------------------------------
+
     // Values cross worker boundaries; no worker borrows the mutable session.
     struct ContentAuthoringSnapshot {
         std::filesystem::path m_root;
@@ -28,7 +32,12 @@ export namespace pP::colony {
     [[nodiscard]] Expected<ContentAuthoringSaveResult> saveContentDraft(
         ContentAuthoringSnapshot snapshot, config::Diagnostics &diagnostics, const IContext *context = nullptr);
 
+    // ------------------------------------------------------------------
+    // authoring session
+    // ------------------------------------------------------------------
+
     class ContentAuthoringSession {
+        // state:
         std::filesystem::path m_root;
         ContentPackSource m_baseline;
         ContentPackSource m_draft;
@@ -37,6 +46,8 @@ export namespace pP::colony {
             config::ScalarSourcePatch m_patch;
         };
         CommandHistory<SourceCommand> m_history;
+
+        // revisions:
         u64 m_revision{1u};
         u64 m_validated_revision{1u};
         std::shared_ptr<const ContentCatalog> m_catalog;
@@ -68,10 +79,13 @@ export namespace pP::colony {
             const config::FileValue &value, config::Diagnostics &diagnostics);
         [[nodiscard]] std::error_code cloneDefinition(
             EContentDocument document, std::string_view source_key, std::string_view new_key,
-            std::optional<u16> new_numeric_id, config::Diagnostics &diagnostics);
+            config::Diagnostics &diagnostics);
         [[nodiscard]] std::error_code clearDefinitionProperty(
             EContentDocument document, std::string_view key, std::string_view relative_property,
             config::Diagnostics &diagnostics);
+        [[nodiscard]] std::error_code replaceDefinitionSubtree(
+            EContentDocument document, std::string_view key, std::string_view relative_property,
+            const config::Document &subtree, config::Diagnostics &diagnostics);
         [[nodiscard]] std::error_code deleteDefinition(
             EContentDocument document, std::string_view key, config::Diagnostics &diagnostics);
         [[nodiscard]] Expected<bool> undo();

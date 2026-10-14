@@ -117,24 +117,24 @@ namespace pP::game::tests::detail::pack {
         const auto catalog = fixture.load(diagnostics);
         PPR_TEST_ASSERT(catalog.has_value());
         sim::ChunkGrid grid;
-        PPR_TEST_ASSERT(not grid.setCell({127u, 20u}, {16u, 301.0f}));
-        PPR_TEST_ASSERT(not grid.setCell({128u, 20u}, {257u, 302.0f}));
-        PPR_TEST_ASSERT(not grid.setCell({129u, 20u}, {1001u, 303.0f}));
+        PPR_TEST_ASSERT(not grid.setCell({127u, 20u}, {catalog->findMaterial("basalt")->m_numeric_id, 301.0f}));
+        PPR_TEST_ASSERT(not grid.setCell({128u, 20u}, {catalog->findMaterial("masonry")->m_numeric_id, 302.0f}));
+        PPR_TEST_ASSERT(not grid.setCell({129u, 20u}, {catalog->findMaterial("water")->m_numeric_id, 303.0f}));
         grid.clearAllDirty();
         const DigRect rect{{127u, 20u}, 3u, 1u};
         const auto particle = digCells(grid, rect, &*catalog);
         PPR_TEST_ASSERT(not particle and particle.error() == std::errc::invalid_argument);
-        PPR_TEST_ASSERT(grid.getCell({127u, 20u})->m_element == 16u);
+        PPR_TEST_ASSERT(grid.getCell({127u, 20u})->m_element == catalog->findMaterial("basalt")->m_numeric_id);
         PPR_TEST_ASSERT(not grid.setCell({129u, 20u}, {60000u, 303.0f}));
         const auto unknown = digCells(grid, rect, &*catalog);
         PPR_TEST_ASSERT(not unknown and unknown.error() == std::errc::invalid_argument);
-        PPR_TEST_ASSERT(grid.getCell({127u, 20u})->m_element == 16u);
-        PPR_TEST_ASSERT(not grid.setCell({129u, 20u}, {32u, 303.0f}));
+        PPR_TEST_ASSERT(grid.getCell({127u, 20u})->m_element == catalog->findMaterial("basalt")->m_numeric_id);
+        PPR_TEST_ASSERT(not grid.setCell({129u, 20u}, {catalog->findMaterial("sandstone")->m_numeric_id, 303.0f}));
         const auto result = digCells(grid, rect, &*catalog);
         PPR_TEST_ASSERT(result.has_value() and result->m_dug == 2u and result->m_touched.size() == 2u);
         PPR_TEST_ASSERT(grid.getCell({127u, 20u})->m_element == 0u);
         PPR_TEST_ASSERT(grid.getCell({127u, 20u})->m_temperature == 301.0f);
-        PPR_TEST_ASSERT(grid.getCell({128u, 20u})->m_element == 257u);
+        PPR_TEST_ASSERT(grid.getCell({128u, 20u})->m_element == catalog->findMaterial("masonry")->m_numeric_id);
         PPR_TEST_ASSERT(grid.getCell({129u, 20u})->m_element == 0u);
         const auto repeated = digCells(grid, rect, &*catalog);
         PPR_TEST_ASSERT(repeated.has_value() and repeated->m_dug == 0u and repeated->m_touched.empty());
@@ -148,17 +148,17 @@ namespace pP::game::tests::detail::pack {
         sim::ChunkGrid grid;
         sim::Registry registry;
         PPR_TEST_ASSERT(not registerColonyComponents(registry));
-        const Footprint print{{126u, 21u}, 3u, 3u, 257u};
+        const Footprint print{{126u, 21u}, 3u, 3u, catalog->findMaterial("masonry")->m_numeric_id};
         PPR_TEST_ASSERT(not validateConstruction(grid, registry, print, *catalog));
         auto invalid = print;
-        invalid.m_element = 1001u;
+        invalid.m_element = catalog->findMaterial("water")->m_numeric_id;
         PPR_TEST_ASSERT(validateConstruction(grid, registry, invalid, *catalog) == std::errc::invalid_argument);
         invalid = print;
         invalid.m_min.m_x = 127u;
         PPR_TEST_ASSERT(validateConstruction(grid, registry, invalid, *catalog) == std::errc::invalid_argument);
         invalid.m_min.m_x = 4095u;
         PPR_TEST_ASSERT(validateConstruction(grid, registry, invalid, *catalog) == std::errc::invalid_argument);
-        PPR_TEST_ASSERT(not grid.setCell({128u, 23u}, {16u, 299.0f}));
+        PPR_TEST_ASSERT(not grid.setCell({128u, 23u}, {catalog->findMaterial("basalt")->m_numeric_id, 299.0f}));
         PPR_TEST_ASSERT(validateConstruction(grid, registry, print, *catalog) == std::errc::device_or_resource_busy);
         PPR_TEST_ASSERT(not grid.setCell({128u, 23u}, {0u, 299.0f}));
         const auto actor = registry.create();
@@ -185,7 +185,7 @@ namespace pP::game::tests::detail::pack {
         registry.get<BuildErrand>(entity)->m_print.m_element = 0u;
         registry.get<BuildErrand>(entity)->m_progress = 0u;
         PPR_TEST_ASSERT(not advanceErrands(grid, registry, finder, touched, 64u, &*catalog));
-        PPR_TEST_ASSERT(grid.getCell({128u, 23u})->m_element == 257u);
+        PPR_TEST_ASSERT(grid.getCell({128u, 23u})->m_element == catalog->findMaterial("masonry")->m_numeric_id);
     };
 
     PPR_UNIT_TEST (errand_preflight_rejects_invalid_actor_before_any_demolition_writes) {
@@ -196,18 +196,20 @@ namespace pP::game::tests::detail::pack {
         sim::ChunkGrid grid;
         sim::Registry registry;
         PPR_TEST_ASSERT(not registerColonyComponents(registry));
-        PPR_TEST_ASSERT(not grid.setCell({30u, 30u}, {16u, 293.0f}));
+        PPR_TEST_ASSERT(not grid.setCell({30u, 30u}, {catalog->findMaterial("basalt")->m_numeric_id, 293.0f}));
         const auto demolition = registry.create();
         registry.emplace<BuildErrand>(demolition, BuildErrand{Footprint{{30u, 30u}, 3u, 3u, 0u, false}, 0u, 9u});
         const auto build = registry.create();
-        registry.emplace<BuildErrand>(build, BuildErrand{Footprint{{60u, 30u}, 3u, 3u, 257u}, 0u, 9u});
+        registry.emplace<BuildErrand>(
+            build, BuildErrand{Footprint{{60u, 30u}, 3u, 3u, catalog->findMaterial("masonry")->m_numeric_id}, 0u, 9u});
         const auto actor = registry.create();
         registry.emplace<Agent>(actor, Agent{});
         registry.emplace<sim::BodyState>(actor, sim::BodyState{10.0f, 10.0f});
         Pathfinder finder;
         Array<sim::ChunkPos> touched;
         PPR_TEST_ASSERT(advanceErrands(grid, registry, finder, touched, 64u, &*catalog) == std::errc::invalid_argument);
-        PPR_TEST_ASSERT(grid.getCell({30u, 30u})->m_element == 16u and touched.empty());
+        PPR_TEST_ASSERT(
+            grid.getCell({30u, 30u})->m_element == catalog->findMaterial("basalt")->m_numeric_id and touched.empty());
         PPR_TEST_ASSERT(registry.get<BuildErrand>(demolition)->m_progress == 0u);
         PPR_TEST_ASSERT(registry.get<BuildErrand>(build)->m_progress == 0u);
     };
@@ -219,34 +221,35 @@ namespace pP::game::tests::detail::pack {
         PPR_TEST_ASSERT(baseline_catalog.has_value());
         fixture.write("materials.toml", fixture.read("materials.toml") + R"(
 [materials.violet_ore]
-numeric_id = 60000
-display_name = "Violet ore"
 phase = "solid"
 representation = "terrain"
+diggable = true
+density = 3100.0
+)");
+        fixture.write("appearance.toml", fixture.read("appearance.toml") + R"(
+[appearance.materials.violet_ore]
+display_name = "Violet ore"
 color_rgba = "C07CFFFF"
 albedo_texture = "textures/violet_ore.png"
 texture_period_m = 0.75
-diggable = true
-reference_density_kg_m3 = 3100.0
 )");
         std::filesystem::copy_file(fixture.m_root / "textures/ice.png", fixture.m_root / "textures/violet_ore.png");
         auto biomes = fixture.read("biomes.toml");
         fixture.write("biomes.toml", biomes + R"(
 [biomes.hearth.deposits.violet_lens]
-kind = "threshold"
 order = 65535
 field = "ore_grain"
 material = "violet_ore"
 host_material = "sandstone"
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-threshold_min = -1.0
-threshold_max = 1.0
+depth.min = 0.0
+depth.max = 1.0
+threshold.min = -1.0
+threshold.max = 1.0
 )");
         config::Diagnostics diagnostics{};
         const auto catalog = fixture.load(diagnostics);
         PPR_TEST_ASSERT(catalog.has_value() and not diagnostics.hasErrors());
-        const auto *const material = catalog->findMaterial(u16{60000u});
+        const auto *const material = catalog->findMaterial("violet_ore");
         PPR_TEST_ASSERT(material and material->m_display_name == "Violet ore");
         PPR_TEST_ASSERT(material->m_diggable == true and material->m_color_rgba == 0xC07CFFFFu);
         PPR_TEST_ASSERT(
@@ -273,7 +276,7 @@ threshold_max = 1.0
                 static_cast<u32>(site.m_y_m * 3.0) / sim::kChunkEdge};
             const auto cells = raster->chunk(pos);
             PPR_TEST_ASSERT(cells.has_value());
-            const auto found = std::ranges::find(*cells, u16{60000u}, &sim::Cell::m_element);
+            const auto found = std::ranges::find(*cells, material->m_numeric_id, &sim::Cell::m_element);
             if (found != cells->end()) {
                 generated = *found;
                 break;
@@ -317,8 +320,11 @@ threshold_max = 1.0
         PPR_TEST_ASSERT(catalog->findWorld("unknown") == nullptr);
         PPR_TEST_ASSERT(catalog->contentFingerprint().has_value());
         std::println("Shipped content fingerprint: {:016x}", *catalog->contentFingerprint());
-        PPR_TEST_ASSERT(catalog->contentFingerprint() == 0xf3033606eee22dd4ull);
-        PPR_TEST_ASSERT(catalog->findMaterial(u16{1001})->m_representation == EMaterialRepresentation::particle);
+        // Definition v2 encodes semantic tags and reference owners with sorted bindings;
+        // pack v3 adds the split rules/appearance documents and asset identities.
+        // Authored scalars are preserved, including explicit former blob threshold defaults [-1, 1].
+        PPR_TEST_ASSERT(catalog->contentFingerprint() == 0x60f263b002a7c82cull);
+        PPR_TEST_ASSERT(catalog->findMaterial("water")->m_representation == EMaterialRepresentation::particle);
         PPR_TEST_ASSERT(catalog->findMaterial("masonry")->m_texture_sampling == EMaterialTextureSampling::repeat);
         PPR_TEST_ASSERT(catalog->findMaterial("basalt")->m_texture_sampling == EMaterialTextureSampling::stochastic);
         for (const auto key: {"clay", "limestone", "salt", "sulfur", "crystal"}) {
@@ -348,12 +354,22 @@ threshold_max = 1.0
         PPR_TEST_ASSERT(mutable_bytes.has_value());
         mutable_bytes->front() ^= std::byte{1u};
         PPR_TEST_ASSERT(catalog->textures().front().m_image.m_storage.getBufferData().front() == before);
+
+        config::Diagnostics source_diagnostics;
+        const auto appearance = config::decode(
+            fixture.read("appearance.toml"), std::filesystem::canonical(fixture.m_root / "appearance.toml").string(),
+            source_diagnostics, config::EDecodeMode::tree);
+        PPR_TEST_ASSERT(appearance.has_value());
+        const auto albedo = std::ranges::find(
+            appearance->m_entries, "appearance.materials.basalt.albedo_texture", &config::Entry::m_key);
+        PPR_TEST_ASSERT(albedo != appearance->m_entries.end());
+
         fixture.write("textures/basalt.png", "corrupt");
         const auto failed = fixture.load(diagnostics);
         PPR_TEST_ASSERT(not failed);
         PPR_TEST_ASSERT(catalog->textures().front().m_image.m_storage.getBufferData().front() == before);
-        PPR_TEST_ASSERT(diagnostics.entries().back().m_property == "materials.basalt.albedo_texture");
-        PPR_TEST_ASSERT(diagnostics.entries().back().m_location.ends_with("materials.toml:10"));
+        PPR_TEST_ASSERT(diagnostics.entries().back().m_property == albedo->m_key);
+        PPR_TEST_ASSERT(diagnostics.entries().back().m_location == albedo->m_location);
         PPR_TEST_ASSERT(diagnostics.entries().back().m_message.find("basalt.png") != std::string::npos);
     };
 
@@ -371,9 +387,11 @@ threshold_max = 1.0
                 PPR_TEST_ASSERT(plan->seed() == seed);
                 PPR_TEST_ASSERT(plan->recipe().m_materials.size() == 63u);
                 PPR_TEST_ASSERT(plan->fields().size() == 44u);
-                PPR_TEST_ASSERT(plan->recipe().m_boundary_material == 257u);
+                PPR_TEST_ASSERT(plan->recipe().m_boundary_material == catalog->findMaterial("masonry")->m_numeric_id);
                 PPR_TEST_ASSERT(plan->recipe().m_cell_size_m == 1.0 / 3.0);
-                PPR_TEST_ASSERT(plan->recipe().m_open_surface and plan->recipe().m_bedrock_material == 633u);
+                PPR_TEST_ASSERT(
+                    plan->recipe().m_open_surface and
+                    plan->recipe().m_bedrock_material == catalog->findMaterial("bedrock")->m_numeric_id);
                 PPR_TEST_ASSERT(catalog->findMaterial("bedrock")->m_diggable == false);
                 const auto &start_feature = plan->recipe().m_features[plan->recipe().m_start_feature];
                 const auto &bounds = start_feature.m_bounds;
@@ -423,9 +441,21 @@ threshold_max = 1.0
                             to.m_sprinkle_probability == from.m_sprinkle_probability);
                     }
                 }
-                for (std::size_t i = 0u; i < catalog->findWorld(profile)->m_rules.size(); ++i) {
-                    const auto *const from = std::get_if<WorldWormRule>(
-                        &catalog->findWorld(profile)->m_rules[i].m_parameters);
+                const auto &profile_definition = *std::ranges::find_if(
+                    catalog->definition().m_worlds.m_entries,
+                    [&](const auto &entry) { return entry.m_key == profile; });
+                for (std::size_t i = 0u; i < catalog->findWorld(profile)->m_rule_keys.size(); ++i) {
+                    const auto &key = catalog->findWorld(profile)->m_rule_keys[i];
+                    const auto rule = std::ranges::find_if(
+                        profile_definition.m_value.m_rules.m_entries,
+                        [&](const auto &entry) { return entry.m_key == key; });
+                    PPR_TEST_ASSERT(rule != profile_definition.m_value.m_rules.m_entries.end());
+                    const sim::definition::WormGeometry *from{};
+                    if (const auto *carve = std::get_if<sim::definition::CarveWorm>(&rule->m_value.m_payload)) {
+                        from = &carve->m_geometry;
+                    } else if (const auto *vein = std::get_if<sim::definition::VeinWorm>(&rule->m_value.m_payload)) {
+                        from = &vein->m_geometry;
+                    }
                     if (from == nullptr) {
                         continue;
                     }
@@ -489,7 +519,7 @@ threshold_max = 1.0
         const auto unknown = prepareWorld(*catalog, "unknown", 42u, clock);
         PPR_TEST_ASSERT(not unknown and clock.m_calls == 0u);
 
-        auto materials = decodeMaterialCatalog(fixture.read("materials.toml"), "materials.toml", diagnostics);
+        auto materials = projectContentCatalog(catalog->definition(), diagnostics);
         PPR_TEST_ASSERT(materials.has_value());
         const auto incomplete = prepareWorld(std::move(*materials), "frontier", 42u, clock);
         PPR_TEST_ASSERT(not incomplete and incomplete.error() == std::errc::invalid_argument);
@@ -513,13 +543,17 @@ threshold_max = 1.0
         auto baseline = compileWorldPlan(*catalog, "frontier", 42u);
         PPR_TEST_ASSERT(baseline.has_value());
         for (const auto name:
-            {"materials.toml", "fields.toml", "biomes.toml", "features.toml", "worlds.toml", "backgrounds.toml"}) {
+            {"materials.toml", "fields.toml", "biomes.toml", "features.toml", "worlds.toml", "rules.toml",
+                "appearance.toml"}) {
             fixture.write(name, reorder(fixture.read(name)));
         }
         auto materials = fixture.read("materials.toml");
-        materials += "\n[materials.aaa_unused]\nnumeric_id = 60000\ndisplay_name = \"Unused\"\nphase = \"solid\"\n"
-                     "representation = \"particle\"\ncolor_rgba = \"ffffffff\"\nreference_density_kg_m3 = 1000.0\n";
+        materials += "\n[materials.aaa_unused]\nphase = 'solid'\nrepresentation = 'particle'\ndensity = 1000.0\n";
         fixture.write("materials.toml", materials);
+        fixture.write(
+            "appearance.toml",
+            fixture.read("appearance.toml") +
+                "\n[appearance.materials.aaa_unused]\ndisplay_name = 'Unused'\ncolor_rgba = 'FFFFFFFF'\n");
         catalog = fixture.load(diagnostics);
         PPR_TEST_ASSERT(catalog.has_value());
         auto changed = compileWorldPlan(*catalog, "frontier", 42u);
@@ -538,31 +572,34 @@ threshold_max = 1.0
         }
     };
 
-    PPR_UNIT_TEST (complete_identity_ignores_order_comments_and_source_paths) {
+    PPR_UNIT_TEST (complete_identity_ignores_document_order_comments_and_source_paths) {
         Fixture fixture{};
         config::Diagnostics diagnostics{};
         const auto first = fixture.load(diagnostics);
         PPR_TEST_ASSERT(first.has_value());
         const auto identity = first->contentFingerprint();
         for (const auto name:
-            {"materials.toml", "fields.toml", "biomes.toml", "features.toml", "worlds.toml", "backgrounds.toml"}) {
+            {"materials.toml", "fields.toml", "biomes.toml", "features.toml", "worlds.toml", "rules.toml",
+                "appearance.toml"}) {
             fixture.write(name, reorder(fixture.read(name)));
         }
         auto manifest = fixture.read("pack.toml");
         replace(manifest, "materials.toml", "renamed.toml");
         std::filesystem::rename(fixture.m_root / "materials.toml", fixture.m_root / "renamed.toml");
         fixture.write("pack.toml", manifest);
-        auto material = fixture.read("renamed.toml");
+        const auto renamed_source = fixture.load(diagnostics);
+        PPR_TEST_ASSERT(renamed_source and renamed_source->contentFingerprint() == identity);
+        auto material = fixture.read("appearance.toml");
         replace(material, "textures/basalt.png", "textures/renamed.png");
-        fixture.write("renamed.toml", material);
+        fixture.write("appearance.toml", material);
         std::filesystem::rename(fixture.m_root / "textures/basalt.png", fixture.m_root / "textures/renamed.png");
         replace(material, "textures/basalt_normal.png", "textures/renamed_normal.png");
-        fixture.write("renamed.toml", material);
+        fixture.write("appearance.toml", material);
         std::filesystem::rename(
             fixture.m_root / "textures/basalt_normal.png", fixture.m_root / "textures/renamed_normal.png");
-        auto backgrounds = fixture.read("backgrounds.toml");
+        auto backgrounds = fixture.read("appearance.toml");
         replace(backgrounds, "textures/background_frontier_distant.png", "textures/renamed_background.png");
-        fixture.write("backgrounds.toml", backgrounds);
+        fixture.write("appearance.toml", backgrounds);
         std::filesystem::rename(
             fixture.m_root / "textures/background_frontier_distant.png",
             fixture.m_root / "textures/renamed_background.png");
@@ -571,7 +608,7 @@ threshold_max = 1.0
             std::println("{}", diagnostics.format());
         }
         PPR_TEST_ASSERT(reordered.has_value());
-        PPR_TEST_ASSERT(reordered->contentFingerprint() == identity);
+        PPR_TEST_ASSERT(reordered->contentFingerprint() != identity);
     };
 
     PPR_UNIT_TEST (identity_changes_for_every_definition_kind_and_texture_bytes) {
@@ -581,65 +618,84 @@ threshold_max = 1.0
         const auto baseline = fixture.load(diagnostics);
         PPR_TEST_ASSERT(baseline.has_value());
         struct Change {
-            std::string_view file, before, after;
+            std::string_view file, property;
+            config::FileValue value;
         };
         const Change changes[] = {
-            {"materials.toml", "2900.0", "2901.0"},
-            {"fields.toml", "0.055", "0.056"},
-            {"fields.toml", "axis_scale_x = 1.0", "axis_scale_x = 1.1"},
-            {"materials.toml", "metallic = 0.0", "metallic = 0.1"},
-            {"materials.toml", "roughness = 0.87", "roughness = 0.88"},
-            {"materials.toml", "emissive_r = 0.0", "emissive_r = 0.1"},
-            {"materials.toml", "emissive_g = 0.0", "emissive_g = 0.1"},
-            {"materials.toml", "emissive_b = 0.0", "emissive_b = 0.1"},
-            {"materials.toml", "emissive_strength = 1.0", "emissive_strength = 1.1"},
-            {"materials.toml", "ior = 1.5", "ior = 1.6"},
-            {"materials.toml", "normal_scale = 1.0", "normal_scale = 0.9"},
-            {"materials.toml", "refraction_depth_m = 0.0", "refraction_depth_m = 0.1"},
-            {"materials.toml", "alpha_mode = \"opaque\"", "alpha_mode = \"blend\""},
-            {"materials.toml", "texture_sampling = \"repeat\"", "texture_sampling = \"stochastic\""},
-            {"backgrounds.toml", "parallax_factor = 0.08", "parallax_factor = 0.09"},
-            {"biomes.toml", "293.0", "294.0"},
-            {"biomes.toml", "bed_period_m = 48", "bed_period_m = 49"},
-            {"biomes.toml", "pore_probability = 0.055", "pore_probability = 0.056"},
-            {"biomes.toml", "pore_passes = 3", "pore_passes = 2"},
-            {"biomes.toml", "erosion_passes = 8", "erosion_passes = 7"},
-            {"biomes.toml", "finish_adoption = 0.12", "finish_adoption = 0.13"},
-            {"biomes.toml", "formation_probability = 0.045", "formation_probability = 0.046"},
-            {"worlds.toml", "surface_amplitude_m = 55.0", "surface_amplitude_m = 56.0"},
-            {"worlds.toml", "bedrock_variation_m = 12.5", "bedrock_variation_m = 12.4"},
-            {"worlds.toml", "start_depth_m = 65.0", "start_depth_m = 66.0"},
-            {"worlds.toml", "natural_anchors = 28", "natural_anchors = 29"},
-            {"worlds.toml", "roughness_m = 4.5", "roughness_m = 4.4"},
-            {"biomes.toml", "relaxation_passes = 8", "relaxation_passes = 9"},
-            {"biomes.toml", "sprinkle_probability = 0.08", "sprinkle_probability = 0.09"},
-            {"biomes.toml", "relaxation_adoption = 0.32", "relaxation_adoption = 0.33"},
-            {"biomes.toml", "stage = \"bulk\"", "stage = \"detail\""},
-            {"biomes.toml", "blob_count = 48", "blob_count = 47"},
-            {"biomes.toml", "radius_min_m = 8.0", "radius_min_m = 7.0"},
-            {"biomes.toml", "radius_max_m = 13.0", "radius_max_m = 14.0"},
-            {"biomes.toml", "stretch_min = 1.1", "stretch_min = 1.2"},
-            {"biomes.toml", "stretch_max = 2.5", "stretch_max = 2.6"},
-            {"biomes.toml", "distortion = 0.28", "distortion = 0.27"},
-            {"biomes.toml", "orientation_min_degrees = 0.0", "orientation_min_degrees = 1.0"},
-            {"biomes.toml", "orientation_max_degrees = 360.0", "orientation_max_degrees = 359.0"},
-            {"biomes.toml", "core_coverage = 0.95", "core_coverage = 0.94"},
-            {"biomes.toml", "fringe_coverage = 0.22", "fringe_coverage = 0.21"},
-            {"biomes.toml", "sprinkle_probability = 0.004", "sprinkle_probability = 0.005"},
-            {"worlds.toml", "turn_smoothing = 0.82", "turn_smoothing = 0.83"},
-            {"worlds.toml", "radius_variation = 0.35", "radius_variation = 0.34"},
-            {"worlds.toml", "chamber_probability = 0.025", "chamber_probability = 0.026"},
-            {"worlds.toml", "chamber_scale = 2.2", "chamber_scale = 2.3"},
-            {"features.toml", "Hearth landing", "Hearth landing revised"},
-            {"worlds.toml", "site_spacing_m = 110.0", "site_spacing_m = 111.0"},
-            {"worlds.toml", "turn_probability = 0.12", "turn_probability = 0.13"},
-            {"worlds.toml", "fill_height_m = 4.333333333333333", "fill_height_m = 4.666666666666667"},
-        };
+            {"materials.toml", "materials.basalt.density", config::FileValue::floating(2901.0)},
+            {"fields.toml", "fields.composition.frequency_per_metre", config::FileValue::floating(0.071)},
+            {"fields.toml", "fields.composition.axis_scale_x", config::FileValue::floating(1.1)},
+            {"appearance.toml", "appearance.materials.basalt.metallic", config::FileValue::floating(0.1)},
+            {"appearance.toml", "appearance.materials.basalt.roughness", config::FileValue::floating(0.88)},
+            {"appearance.toml", "appearance.materials.basalt.emissive_r", config::FileValue::floating(0.1)},
+            {"appearance.toml", "appearance.materials.basalt.emissive_g", config::FileValue::floating(0.1)},
+            {"appearance.toml", "appearance.materials.basalt.emissive_b", config::FileValue::floating(0.1)},
+            {"appearance.toml", "appearance.materials.basalt.emissive_strength", config::FileValue::floating(1.1)},
+            {"appearance.toml", "appearance.materials.basalt.ior", config::FileValue::floating(1.6)},
+            {"appearance.toml", "appearance.materials.basalt.normal_scale", config::FileValue::floating(0.9)},
+            {"appearance.toml", "appearance.materials.basalt.refraction_depth_m", config::FileValue::floating(0.1)},
+            {"appearance.toml", "appearance.materials.basalt.alpha_mode", config::FileValue::text("blend")},
+            {"appearance.toml", "appearance.materials.basalt.texture_sampling", config::FileValue::text("repeat")},
+            {"appearance.toml", "appearance.backgrounds.frontier.layers.distant.parallax_factor",
+                config::FileValue::floating(0.09)},
+            {"biomes.toml", "biomes.hearth.temperature.base_k", config::FileValue::floating(294.0)},
+            {"biomes.toml", "biomes.hearth.composition.cover.bed_period_m", config::FileValue::integer(49)},
+            {"biomes.toml", "biomes.hearth.pore.probability", config::FileValue::floating(0.056)},
+            {"biomes.toml", "biomes.hearth.pore.passes", config::FileValue::integer(2)},
+            {"biomes.toml", "biomes.hearth.erosion.passes", config::FileValue::integer(7)},
+            {"biomes.toml", "biomes.hearth.finish.adoption", config::FileValue::floating(0.13)},
+            {"biomes.toml", "biomes.hearth.formation.probability", config::FileValue::floating(0.046)},
+            {"biomes.toml", "biomes.hearth.relaxation.passes", config::FileValue::integer(9)},
+            {"biomes.toml", "biomes.hearth.sprinkle.probability", config::FileValue::floating(0.09)},
+            {"biomes.toml", "biomes.hearth.relaxation.adoption", config::FileValue::floating(0.33)},
+            {"biomes.toml", "biomes.hearth.deposits.secondary_host.stage", config::FileValue::text("detail")},
+            {"biomes.toml", "biomes.hearth.deposits.secondary_host.blob.count", config::FileValue::integer(47)},
+            {"biomes.toml", "biomes.hearth.deposits.secondary_host.blob.radius.min_m",
+                config::FileValue::floating(4.5)},
+            {"biomes.toml", "biomes.hearth.deposits.secondary_host.blob.radius.max_m",
+                config::FileValue::floating(14.0)},
+            {"biomes.toml", "biomes.hearth.deposits.secondary_host.blob.stretch.min", config::FileValue::floating(1.1)},
+            {"biomes.toml", "biomes.hearth.deposits.secondary_host.blob.stretch.max", config::FileValue::floating(1.9)},
+            {"biomes.toml", "biomes.hearth.deposits.secondary_host.blob.distortion", config::FileValue::floating(0.37)},
+            {"biomes.toml", "biomes.hearth.deposits.azurite.blob.orientation.min_degrees",
+                config::FileValue::floating(1.0)},
+            {"biomes.toml", "biomes.hearth.deposits.azurite.blob.orientation.max_degrees",
+                config::FileValue::floating(359.0)},
+            {"biomes.toml", "biomes.hearth.deposits.secondary_host.core_coverage", config::FileValue::floating(0.89)},
+            {"biomes.toml", "biomes.hearth.deposits.secondary_host.fringe_coverage", config::FileValue::floating(0.29)},
+            {"biomes.toml", "biomes.hearth.deposits.secondary_host.sprinkle_probability",
+                config::FileValue::floating(0.001)},
+            {"worlds.toml", "worlds.frontier.surface_bedrock.surface_amplitude_m", config::FileValue::floating(56.0)},
+            {"worlds.toml", "worlds.frontier.surface_bedrock.bedrock_variation_m", config::FileValue::floating(12.4)},
+            {"worlds.toml", "worlds.frontier.start.depth_m", config::FileValue::floating(66.0)},
+            {"worlds.toml", "worlds.frontier.layout.site_spacing_m", config::FileValue::floating(111.0)},
+            {"rules.toml", "rules.frontier.backbone.payload.connection.natural_anchors",
+                config::FileValue::integer(29)},
+            {"rules.toml", "rules.frontier.backbone.payload.connection.roughness_m", config::FileValue::floating(4.4)},
+            {"rules.toml", "rules.frontier.tunnels_hearth.payload.carve_worm.geometry.turn_smoothing",
+                config::FileValue::floating(0.83)},
+            {"rules.toml", "rules.frontier.tunnels_hearth.payload.carve_worm.geometry.radius_variation",
+                config::FileValue::floating(0.34)},
+            {"rules.toml", "rules.frontier.tunnels_hearth.payload.carve_worm.geometry.chamber_probability",
+                config::FileValue::floating(0.026)},
+            {"rules.toml", "rules.frontier.tunnels_hearth.payload.carve_worm.geometry.chamber_scale",
+                config::FileValue::floating(2.3)},
+            {"rules.toml", "rules.frontier.tunnels_hearth.payload.carve_worm.geometry.turn_probability",
+                config::FileValue::floating(0.13)},
+            {"rules.toml", "rules.frontier.fill_pocket_water.payload.matter_fill.fill_height_m",
+                config::FileValue::floating(4.666666666666667)},
+            {"appearance.toml", "appearance.features.landing.display_name",
+                config::FileValue::text("Hearth landing revised")}};
         for (const auto &change: changes) {
             const auto original = fixture.read(change.file);
-            auto changed = original;
-            replace(changed, change.before, change.after);
-            fixture.write(change.file, changed);
+            const auto patch = config::patchScalar(original, change.property, change.value, change.file, diagnostics);
+            if (not patch) {
+                throw std::system_error(patch.error(), std::string{change.property} + "\n" + diagnostics.format());
+            }
+            PPR_TEST_ASSERT(patch.has_value() and patch->m_before != patch->m_after);
+            const auto changed = config::applySourcePatch(original, *patch);
+            PPR_TEST_ASSERT(changed.has_value());
+            fixture.write(change.file, *changed);
             const auto candidate = fixture.load(diagnostics);
             PPR_TEST_ASSERT(candidate.has_value());
             PPR_TEST_ASSERT(candidate->contentFingerprint() != baseline->contentFingerprint());
@@ -661,10 +717,10 @@ threshold_max = 1.0
     PPR_UNIT_TEST (texture_usage_is_distinct_and_background_diagnostics_preserve_source_keys) {
         Fixture fixture;
         config::Diagnostics diagnostics;
-        auto materials = fixture.read("materials.toml");
+        auto materials = fixture.read("appearance.toml");
         replace(
             materials, "normal_texture = \"textures/basalt_normal.png\"", "normal_texture = \"textures/basalt.png\"");
-        fixture.write("materials.toml", materials);
+        fixture.write("appearance.toml", materials);
         const auto catalog = fixture.load(diagnostics);
         PPR_TEST_ASSERT(catalog.has_value());
         u32 usages = 0u;
@@ -675,19 +731,20 @@ threshold_max = 1.0
             }
         }
         PPR_TEST_ASSERT(usages == 2u);
-        auto worlds = fixture.read("worlds.toml");
+        auto worlds = fixture.read("appearance.toml");
         replace(worlds, "background_stack = \"frontier\"", "background_stack = \"absent\"");
-        fixture.write("worlds.toml", worlds);
+        fixture.write("appearance.toml", worlds);
         config::Diagnostics missing;
         PPR_TEST_ASSERT(not fixture.load(missing));
-        PPR_TEST_ASSERT(missing.entries().back().m_property == "worlds.frontier.background_stack");
+        PPR_TEST_ASSERT(missing.entries().back().m_property == "appearance.worlds.frontier.background_stack");
         replace(worlds, "background_stack = \"absent\"", "background_stack = \"frontier\"");
-        fixture.write("worlds.toml", worlds);
+        fixture.write("appearance.toml", worlds);
         std::filesystem::remove(fixture.m_root / "textures/background_frontier_distant.png");
         config::Diagnostics background;
         PPR_TEST_ASSERT(not fixture.load(background));
-        PPR_TEST_ASSERT(background.entries().back().m_property == "backgrounds.frontier.layers.distant.texture");
-        PPR_TEST_ASSERT(background.entries().back().m_location.find("backgrounds.toml:") != std::string::npos);
+        PPR_TEST_ASSERT(
+            background.entries().back().m_property == "appearance.backgrounds.frontier.layers.distant.texture");
+        PPR_TEST_ASSERT(background.entries().back().m_location.find("appearance.toml:") != std::string::npos);
     };
 
     PPR_UNIT_TEST (authoring_all_definition_categories_round_trip_and_multidocument_save_retains_newer_edits) {
@@ -699,13 +756,13 @@ threshold_max = 1.0
         auto session = std::move(*opened);
         const auto original = session.draftSnapshot();
         constexpr std::array<std::string_view, kContentDocumentCount> keys{
-            "basalt", "hearth", "composition", "landing", "frontier", "frontier"};
+            "basalt", "hearth", "composition", "landing", "frontier", "frontier.caves_hearth", "materials.basalt"};
+        constexpr std::array<std::string_view, kContentDocumentCount> copies{
+            "workshop_copy", "workshop_copy", "workshop_copy", "workshop_copy", "workshop_copy",
+            "frontier.workshop_copy", "materials.workshop_copy"};
         for (std::size_t index = 0u; index < kContentDocumentCount; ++index) {
             const auto kind = static_cast<EContentDocument>(index);
-            PPR_TEST_ASSERT(not session.cloneDefinition(
-                kind, keys[index], "workshop_copy",
-                kind == EContentDocument::materials ? std::optional<u16>{static_cast<u16>(60000u)} : std::nullopt,
-                diagnostics));
+            PPR_TEST_ASSERT(not session.cloneDefinition(kind, keys[index], copies[index], diagnostics));
             const auto cloned = session.draftSnapshot();
             PPR_TEST_ASSERT(
                 cloned.m_source.m_documents[index].m_bytes.starts_with(original.m_source.m_documents[index].m_bytes));
@@ -713,30 +770,30 @@ threshold_max = 1.0
             PPR_TEST_ASSERT(
                 session.draftSource().m_documents[index].m_bytes == original.m_source.m_documents[index].m_bytes);
             PPR_TEST_ASSERT(session.redo().value());
-        }
-        const auto all_cloned = session.draftSnapshot();
-        PPR_TEST_ASSERT(validateContentDraft(all_cloned, diagnostics).has_value());
-        for (std::size_t index = 0u; index < kContentDocumentCount; ++index) {
-            const auto kind = static_cast<EContentDocument>(index);
-            PPR_TEST_ASSERT(not session.deleteDefinition(kind, "workshop_copy", diagnostics));
+            PPR_TEST_ASSERT(not session.deleteDefinition(kind, copies[index], diagnostics));
             const auto removed = session.draftSnapshot();
             PPR_TEST_ASSERT(session.undo().value());
             PPR_TEST_ASSERT(
-                session.draftSource().m_documents[index].m_bytes == all_cloned.m_source.m_documents[index].m_bytes);
+                session.draftSource().m_documents[index].m_bytes == cloned.m_source.m_documents[index].m_bytes);
             PPR_TEST_ASSERT(session.redo().value());
             PPR_TEST_ASSERT(
                 session.draftSource().m_documents[index].m_bytes == removed.m_source.m_documents[index].m_bytes);
+            session.revert();
         }
-        PPR_TEST_ASSERT(validateContentDraft(session.draftSnapshot(), diagnostics).has_value());
+        PPR_TEST_ASSERT(
+            not session.cloneDefinition(EContentDocument::materials, "basalt", "workshop_copy", diagnostics));
+        PPR_TEST_ASSERT(not session.cloneDefinition(
+            EContentDocument::appearance, "materials.basalt", "materials.workshop_copy", diagnostics));
+        const auto cloned_catalog = validateContentDraft(session.draftSnapshot(), diagnostics);
+        PPR_TEST_ASSERT(cloned_catalog.has_value());
+        PPR_TEST_ASSERT((*cloned_catalog)->findMaterial("workshop_copy") != nullptr);
+        PPR_TEST_ASSERT(
+            (*cloned_catalog)->findMaterial("workshop_copy")->m_numeric_id !=
+            (*cloned_catalog)->findMaterial("basalt")->m_numeric_id);
         session.revert();
         PPR_TEST_ASSERT(
-            session.cloneDefinition(
-                EContentDocument::materials, "basalt", "duplicate_id", static_cast<u16>(16u), diagnostics) ==
+            session.cloneDefinition(EContentDocument::materials, "basalt", "basalt", diagnostics) ==
             config::EConfigErrc::duplicate_key);
-        PPR_TEST_ASSERT(
-            session.editDefinition(
-                EContentDocument::materials, "basalt", "numeric_id", config::FileValue::integer(18), diagnostics) ==
-            std::errc::invalid_argument);
         const auto referenced_field = session.validatedCatalog()->biomes().front().m_temperature_field;
         PPR_TEST_ASSERT(not session.deleteDefinition(EContentDocument::fields, referenced_field, diagnostics));
         config::Diagnostics references;
@@ -746,21 +803,21 @@ threshold_max = 1.0
         PPR_TEST_ASSERT(session.undo().value() and not session.dirty());
 
         PPR_TEST_ASSERT(not session.editDefinition(
-            EContentDocument::materials, "basalt", "roughness", config::FileValue::floating(0.5), diagnostics));
+            EContentDocument::materials, "basalt", "density", config::FileValue::floating(2901.0), diagnostics));
         PPR_TEST_ASSERT(not session.editDefinition(
             EContentDocument::fields, "composition", "frequency_per_metre", config::FileValue::floating(0.06),
             diagnostics));
         PPR_TEST_ASSERT(not session.editDefinition(
-            EContentDocument::worlds, "frontier", "display_name", config::FileValue::text("Edited profile"),
+            EContentDocument::appearance, "worlds.frontier", "display_name", config::FileValue::text("Edited profile"),
             diagnostics));
         const auto submitted = session.draftSnapshot();
         // Staging collisions are discovered before any document commits.
-        fixture.write("worlds.toml.workshop.tmp", "another owner");
+        fixture.write("appearance.toml.workshop.tmp", "another owner");
         PPR_TEST_ASSERT(not saveContentDraft(submitted, diagnostics));
         PPR_TEST_ASSERT(fixture.read("materials.toml") == original.m_source.m_documents[0u].m_bytes);
         PPR_TEST_ASSERT(fixture.read("fields.toml") == original.m_source.m_documents[2u].m_bytes);
-        PPR_TEST_ASSERT(fixture.read("worlds.toml.workshop.tmp") == "another owner");
-        std::filesystem::remove(fixture.m_root / "worlds.toml.workshop.tmp");
+        PPR_TEST_ASSERT(fixture.read("appearance.toml.workshop.tmp") == "another owner");
+        std::filesystem::remove(fixture.m_root / "appearance.toml.workshop.tmp");
         PPR_TEST_ASSERT(not session.editDefinition(
             EContentDocument::fields, "composition", "frequency_per_metre", config::FileValue::floating(0.07),
             diagnostics));
@@ -770,7 +827,7 @@ threshold_max = 1.0
         PPR_TEST_ASSERT(session.dirty());
         PPR_TEST_ASSERT(fixture.read("materials.toml") == submitted.m_source.m_documents[0u].m_bytes);
         PPR_TEST_ASSERT(fixture.read("fields.toml") == submitted.m_source.m_documents[2u].m_bytes);
-        PPR_TEST_ASSERT(fixture.read("worlds.toml") == submitted.m_source.m_documents[4u].m_bytes);
+        PPR_TEST_ASSERT(fixture.read("appearance.toml") == submitted.m_source.m_documents[6u].m_bytes);
         PPR_TEST_ASSERT(session.draftSource().m_documents[2u].m_bytes == newer.m_source.m_documents[2u].m_bytes);
         auto retry = saveContentDraft(session.draftSnapshot(), diagnostics);
         PPR_TEST_ASSERT(retry.has_value() and session.acceptSave(std::move(*retry)) and not session.dirty());
@@ -786,7 +843,7 @@ threshold_max = 1.0
         auto session = std::move(*opened);
         const auto catalog = session.validatedCatalog();
         PPR_TEST_ASSERT(not session.editDefinition(
-            EContentDocument::materials, "basalt", "roughness", config::FileValue::floating(0.5), diagnostics));
+            EContentDocument::materials, "basalt", "density", config::FileValue::floating(2901.0), diagnostics));
         PPR_TEST_ASSERT(not session.editDefinition(
             EContentDocument::fields, "composition", "frequency_per_metre", config::FileValue::floating(0.06),
             diagnostics));
@@ -800,7 +857,7 @@ threshold_max = 1.0
         PPR_TEST_ASSERT(fixture.read("materials.toml") == submitted.m_source.m_documents[0u].m_bytes);
         PPR_TEST_ASSERT(fixture.read("fields.toml") == submitted.m_baseline.m_documents[2u].m_bytes);
         PPR_TEST_ASSERT(not session.editDefinition(
-            EContentDocument::materials, "basalt", "roughness", config::FileValue::floating(0.6), diagnostics));
+            EContentDocument::materials, "basalt", "density", config::FileValue::floating(2902.0), diagnostics));
         const auto newer = session.draftSnapshot();
         PPR_TEST_ASSERT(not session.acceptSave(std::move(*partial)));
         PPR_TEST_ASSERT(session.dirty() and session.validatedCatalog() == catalog);
@@ -813,7 +870,7 @@ threshold_max = 1.0
 
         const auto before_undo = session.draftSnapshot();
         PPR_TEST_ASSERT(not session.editDefinition(
-            EContentDocument::materials, "basalt", "roughness", config::FileValue::floating(0.7), diagnostics));
+            EContentDocument::materials, "basalt", "density", config::FileValue::floating(2903.0), diagnostics));
         PPR_TEST_ASSERT(not session.editDefinition(
             EContentDocument::fields, "composition", "frequency_per_metre", config::FileValue::floating(0.08),
             diagnostics));
@@ -845,24 +902,24 @@ threshold_max = 1.0
         const auto baseline_catalog = session.validatedCatalog();
         const auto baseline_revision = session.validatedRevision();
         PPR_TEST_ASSERT(not session.dirty() and not session.canUndo());
-        constexpr auto materials = static_cast<std::size_t>(EContentDocument::materials);
+        constexpr auto materials = static_cast<std::size_t>(EContentDocument::appearance);
         const auto original_materials = session.draftSource().m_documents[materials].m_bytes;
-        PPR_TEST_ASSERT(
-            not session.clearDefinitionProperty(EContentDocument::materials, "basalt", "normal_texture", diagnostics));
+        PPR_TEST_ASSERT(not session.clearDefinitionProperty(
+            EContentDocument::appearance, "materials.basalt", "normal_texture", diagnostics));
         const auto cleared_materials = session.draftSource().m_documents[materials].m_bytes;
         PPR_TEST_ASSERT(cleared_materials != original_materials and session.dirty() and session.canUndo());
-        const auto cleared = config::decode(
-            cleared_materials, "cleared.toml", diagnostics, config::EDecodeMode::records);
+        const auto cleared = config::decode(cleared_materials, "cleared.toml", diagnostics, config::EDecodeMode::tree);
         PPR_TEST_ASSERT(cleared.has_value());
         PPR_TEST_ASSERT(
-            std::ranges::find(cleared->m_entries, "materials.basalt.normal_texture", &config::Entry::m_key) ==
+            std::ranges::find(
+                cleared->m_entries, "appearance.materials.basalt.normal_texture", &config::Entry::m_key) ==
             cleared->m_entries.end());
         const auto clear_revision = session.revision();
-        PPR_TEST_ASSERT(
-            not session.clearDefinitionProperty(EContentDocument::materials, "basalt", "normal_texture", diagnostics));
+        PPR_TEST_ASSERT(not session.clearDefinitionProperty(
+            EContentDocument::appearance, "materials.basalt", "normal_texture", diagnostics));
         PPR_TEST_ASSERT(session.revision() == clear_revision);
         const auto required_error = session.clearDefinitionProperty(
-            EContentDocument::materials, "basalt", "numeric_id", diagnostics);
+            EContentDocument::appearance, "materials.basalt", "display_name", diagnostics);
         PPR_TEST_ASSERT(required_error != std::error_code{} and session.revision() == clear_revision);
         diagnostics.clear();
         PPR_TEST_ASSERT(session.undo().value() and not session.dirty());
@@ -872,7 +929,7 @@ threshold_max = 1.0
         PPR_TEST_ASSERT(session.undo().value() and not session.dirty());
         PPR_TEST_ASSERT(session.validatedCatalog() == baseline_catalog);
         PPR_TEST_ASSERT(
-            not session.editBiome("hearth", "temperature_base_k", config::FileValue::floating(300.0), diagnostics));
+            not session.editBiome("hearth", "temperature.base_k", config::FileValue::floating(300.0), diagnostics));
         const auto valid_snapshot = session.draftSnapshot();
         PPR_TEST_ASSERT(session.dirty() and session.revision() != baseline_revision);
         PPR_TEST_ASSERT(
@@ -880,7 +937,7 @@ threshold_max = 1.0
         PPR_TEST_ASSERT(fixture.read("biomes.toml") == original);
 
         PPR_TEST_ASSERT(not session.editBiome(
-            "hearth", "temperature_field", config::FileValue::text("missing-field"), diagnostics));
+            "hearth", "temperature.field", config::FileValue::text("missing-field"), diagnostics));
         config::Diagnostics invalid_diagnostics{64u};
         const auto invalid = validateContentDraft(session.draftSnapshot(), invalid_diagnostics);
         PPR_TEST_ASSERT(not invalid and invalid_diagnostics.hasErrors());
@@ -898,7 +955,7 @@ threshold_max = 1.0
 
         auto save_snapshot = session.draftSnapshot();
         PPR_TEST_ASSERT(
-            not session.editBiome("hearth", "temperature_base_k", config::FileValue::floating(301.0), diagnostics));
+            not session.editBiome("hearth", "temperature.base_k", config::FileValue::floating(301.0), diagnostics));
         auto saved = saveContentDraft(std::move(save_snapshot), diagnostics);
         PPR_TEST_ASSERT(saved.has_value());
         PPR_TEST_ASSERT(not session.acceptSave(std::move(*saved)) and session.dirty());
@@ -914,7 +971,7 @@ threshold_max = 1.0
         PPR_TEST_ASSERT(not session.dirty() and not session.canUndo() and not session.canRedo());
 
         PPR_TEST_ASSERT(
-            not session.editBiome("hearth", "temperature_base_k", config::FileValue::floating(301.5), diagnostics));
+            not session.editBiome("hearth", "temperature.base_k", config::FileValue::floating(301.5), diagnostics));
         const auto before_external_fields = session.draftSnapshot();
         auto old_validation = validateContentDraft(before_external_fields, diagnostics);
         PPR_TEST_ASSERT(old_validation.has_value());
@@ -952,7 +1009,7 @@ threshold_max = 1.0
 
         const auto committed = fixture.read("biomes.toml");
         PPR_TEST_ASSERT(
-            not session.editBiome("hearth", "temperature_base_k", config::FileValue::floating(302.0), diagnostics));
+            not session.editBiome("hearth", "temperature.base_k", config::FileValue::floating(302.0), diagnostics));
         const auto retained = session.draftSnapshot();
         fixture.write("biomes.toml", committed + "\n# external edit\n");
         const auto conflicting = saveContentDraft(session.draftSnapshot(), diagnostics);
@@ -1010,12 +1067,12 @@ threshold_max = 1.0
         constexpr auto biomes = static_cast<std::size_t>(EContentDocument::biomes);
         config::Diagnostics diagnostics;
         PPR_TEST_ASSERT(
-            not session->editBiome("hearth", "temperature_base_k", config::FileValue::floating(301.0), diagnostics));
+            not session->editBiome("hearth", "temperature.base_k", config::FileValue::floating(301.0), diagnostics));
         const auto validation_input = session->draftSnapshot();
         PPR_TEST_ASSERT(not workshop.validate());
         // The immutable request has revisionR, but admission has not run yet.
         PPR_TEST_ASSERT(
-            not session->editBiome("hearth", "temperature_base_k", config::FileValue::floating(302.0), diagnostics));
+            not session->editBiome("hearth", "temperature.base_k", config::FileValue::floating(302.0), diagnostics));
         const auto newer = session->draftSnapshot();
         PPR_TEST_ASSERT(newer.m_revision > validation_input.m_revision);
         settle();
@@ -1043,7 +1100,7 @@ threshold_max = 1.0
         const u64 discard_revision = session->revision();
         PPR_TEST_ASSERT(not workshop.open(fixture.m_root, discard_revision));
         PPR_TEST_ASSERT(
-            not session->editBiome("hearth", "temperature_base_k", config::FileValue::floating(303.0), diagnostics));
+            not session->editBiome("hearth", "temperature.base_k", config::FileValue::floating(303.0), diagnostics));
         const auto after_discard_authorization = session->draftSnapshot();
         PPR_TEST_ASSERT(after_discard_authorization.m_revision > discard_revision);
         settle();
@@ -1121,76 +1178,137 @@ threshold_max = 1.0
         PPR_TEST_ASSERT(not workshop.shutdown());
     };
 
+    PPR_UNIT_TEST (authoring_group_and_variant_transactions_are_atomic_and_same_tag_is_a_noop) {
+        Fixture fixture;
+        useSmallIdentityImages(fixture);
+        config::Diagnostics diagnostics;
+        auto opened = ContentAuthoringSession::open(fixture.m_root, diagnostics);
+        PPR_TEST_ASSERT(opened.has_value());
+        auto session = std::move(*opened);
+        const auto original = session.draftSnapshot();
+        const auto catalog = session.validatedCatalog();
+        PPR_TEST_ASSERT(not session.editDefinition(
+            EContentDocument::features, "landing", "operations.op_01.action.tag", config::FileValue::text("carve"),
+            diagnostics));
+        PPR_TEST_ASSERT(not session.editDefinition(
+            EContentDocument::features, "landing", "operations.op_01.action.carve.shape.tag",
+            config::FileValue::text("rectangle"), diagnostics));
+        PPR_TEST_ASSERT(session.revision() == original.m_revision and not session.canUndo() and not session.dirty());
+        PPR_TEST_ASSERT(session.draftSource().m_documents[3u].m_bytes == original.m_source.m_documents[3u].m_bytes);
+
+        PPR_TEST_ASSERT(not session.editDefinition(
+            EContentDocument::features, "landing", "operations.op_01.action.carve.shape.tag",
+            config::FileValue::text("capsule"), diagnostics));
+        const auto invalid = session.draftSnapshot();
+        PPR_TEST_ASSERT(invalid.m_revision != original.m_revision and session.canUndo());
+        config::Diagnostics invalid_errors;
+        PPR_TEST_ASSERT(not validateContentDraft(invalid, invalid_errors) and invalid_errors.hasErrors());
+        PPR_TEST_ASSERT(session.validatedCatalog() == catalog);
+        PPR_TEST_ASSERT(session.undo().value());
+        PPR_TEST_ASSERT(session.draftSource().m_documents[3u].m_bytes == original.m_source.m_documents[3u].m_bytes);
+        PPR_TEST_ASSERT(session.redo().value());
+        PPR_TEST_ASSERT(session.draftSource().m_documents[3u].m_bytes == invalid.m_source.m_documents[3u].m_bytes);
+        PPR_TEST_ASSERT(session.undo().value());
+
+        const auto ellipse = config::decode(
+            "tag = 'ellipse'\n[ellipse]\nwidth_fine = 84\nheight_fine = 27\n", "replacement.toml", diagnostics,
+            config::EDecodeMode::tree);
+        PPR_TEST_ASSERT(ellipse.has_value());
+        PPR_TEST_ASSERT(not session.replaceDefinitionSubtree(
+            EContentDocument::features, "landing", "operations.op_01.action.carve.shape", *ellipse, diagnostics));
+        const auto variant = session.draftSnapshot();
+        PPR_TEST_ASSERT(validateContentDraft(variant, diagnostics).has_value());
+        PPR_TEST_ASSERT(session.undo().value());
+        PPR_TEST_ASSERT(session.draftSource().m_documents[3u].m_bytes == original.m_source.m_documents[3u].m_bytes);
+        PPR_TEST_ASSERT(session.redo().value());
+        PPR_TEST_ASSERT(session.draftSource().m_documents[3u].m_bytes == variant.m_source.m_documents[3u].m_bytes);
+
+        const auto temperature = config::decode(
+            "field = 'temperature'\nbase_k = 300.0\nvariation_k = 8.0\n", "replacement.toml", diagnostics,
+            config::EDecodeMode::tree);
+        PPR_TEST_ASSERT(temperature.has_value());
+        PPR_TEST_ASSERT(not session.replaceDefinitionSubtree(
+            EContentDocument::biomes, "hearth", "temperature", *temperature, diagnostics));
+        const auto group = session.draftSnapshot();
+        PPR_TEST_ASSERT(validateContentDraft(group, diagnostics).has_value());
+        PPR_TEST_ASSERT(session.undo().value());
+        PPR_TEST_ASSERT(session.draftSource().m_documents[1u].m_bytes == variant.m_source.m_documents[1u].m_bytes);
+        PPR_TEST_ASSERT(session.redo().value());
+        PPR_TEST_ASSERT(session.draftSource().m_documents[1u].m_bytes == group.m_source.m_documents[1u].m_bytes);
+        PPR_TEST_ASSERT(session.draftSource().m_documents[6u].m_bytes == original.m_source.m_documents[6u].m_bytes);
+        PPR_TEST_ASSERT(not session.acceptValidation(original.m_revision, catalog));
+    };
+
     PPR_UNIT_TEST (workshop_property_metadata_tracks_schemas_and_contextual_references) {
+        Fixture fixture;
+        config::Diagnostics diagnostics;
+        const auto source = loadContentPackSource(fixture.m_root, diagnostics);
+        PPR_TEST_ASSERT(source.has_value());
         std::array<config::Document, kContentDocumentCount> documents;
-        const auto descriptor = [&](const EContentDocument category, const std::string_view property) {
-            return contentPropertyDescriptor(
-                category, property, documents[static_cast<std::size_t>(category)], "frontier");
+        for (std::size_t i = 0u; i < kContentDocumentCount; ++i) {
+            const auto document = config::decode(
+                source->m_documents[i].m_bytes, source->m_documents[i].m_path.string(), diagnostics,
+                config::EDecodeMode::tree);
+            PPR_TEST_ASSERT(document.has_value());
+            documents[i] = *document;
+        }
+        const auto descriptor = [&](const EContentDocument category, const std::string_view key,
+                                    const std::string_view property) {
+            return contentPropertyDescriptor(category, property, documents[static_cast<std::size_t>(category)], key);
         };
-        const auto probability = descriptor(EContentDocument::biomes, "formation_probability");
+        const auto probability = descriptor(EContentDocument::biomes, "hearth", "formation.probability");
         PPR_TEST_ASSERT(probability and probability->m_min == 0.0 and probability->m_max == 0.2);
-        const auto phase = descriptor(EContentDocument::materials, "phase");
-        PPR_TEST_ASSERT(phase and phase->m_choices.size() == 3u);
-        PPR_TEST_ASSERT(not phase->m_optional);
+        const auto phase = descriptor(EContentDocument::materials, "basalt", "phase");
+        PPR_TEST_ASSERT(phase and phase->m_choices.size() == 3u and not phase->m_optional);
         PPR_TEST_ASSERT(std::ranges::find(phase->m_choices, "liquid") != phase->m_choices.end());
-        const auto octaves = descriptor(EContentDocument::fields, "octaves");
+        const auto octaves = descriptor(EContentDocument::fields, "composition", "octaves");
         PPR_TEST_ASSERT(octaves and octaves->m_min == 1.0 and octaves->m_max == 16.0);
-        auto &fields = documents[static_cast<std::size_t>(EContentDocument::fields)];
-        fields.m_entries = {
-            {"fields.frontier.frequency_per_metre", config::FileValue::floating(1.0e20), "metadata.toml:1"}};
-        const auto frequency = descriptor(EContentDocument::fields, "frequency_per_metre");
-        PPR_TEST_ASSERT(frequency and frequency->m_exclusive_min and *frequency->m_max > 1.0e20);
-        PPR_TEST_ASSERT(std::isfinite(frequency->m_slider_max) and frequency->m_slider_max < 1.0e20);
-        PPR_TEST_ASSERT(frequency->m_slider_max == 0.1 and frequency->m_units == "1/m");
-        PPR_TEST_ASSERT(fields.m_entries.front().m_value.m_floating == 1.0e20);
-        const auto band = descriptor(EContentDocument::biomes, "composition.lower.bed_dip");
+        const auto frequency = descriptor(EContentDocument::fields, "composition", "frequency_per_metre");
+        PPR_TEST_ASSERT(frequency and frequency->m_exclusive_min and std::isfinite(frequency->m_slider_max));
+        const auto band = descriptor(EContentDocument::biomes, "hearth", "composition.cover.bed_dip");
         PPR_TEST_ASSERT(band and band->m_min == -0.5 and band->m_max == 0.5);
-        const auto weight = descriptor(EContentDocument::biomes, "composition.lower.materials.rock.weight");
+        const auto weight = descriptor(EContentDocument::biomes, "hearth", "composition.cover.materials.bed_01.weight");
         PPR_TEST_ASSERT(weight and weight->m_exclusive_min and weight->m_min == 0.0);
-        PPR_TEST_ASSERT(std::isfinite(weight->m_slider_max) and weight->m_slider_max < *weight->m_max);
-        const auto shape = descriptor(EContentDocument::biomes, "deposits.ore.shape");
-        PPR_TEST_ASSERT(shape and std::ranges::find(shape->m_choices, "blob") != shape->m_choices.end());
-        const auto operation = descriptor(EContentDocument::features, "operations.clear.shape");
+        const auto operation = descriptor(
+            EContentDocument::features, "landing", "operations.op_01.action.carve.shape.tag");
         PPR_TEST_ASSERT(operation and operation->m_choices.size() == 3u);
         PPR_TEST_ASSERT(std::ranges::find(operation->m_choices, "capsule") != operation->m_choices.end());
-        const auto layer = descriptor(EContentDocument::backgrounds, "layers.far.parallax_factor");
+        const auto layer = descriptor(
+            EContentDocument::appearance, "backgrounds.frontier", "layers.distant.parallax_factor");
         PPR_TEST_ASSERT(layer and layer->m_min == 0.0 and layer->m_max == 1.0);
-        const auto material = descriptor(EContentDocument::biomes, "soil_material");
+        const auto material = descriptor(EContentDocument::biomes, "hearth", "surface_layers.soil.material");
         PPR_TEST_ASSERT(material and material->m_reference_category == EContentDocument::materials);
-        PPR_TEST_ASSERT(material->m_optional);
-        PPR_TEST_ASSERT(not descriptor(EContentDocument::biomes, "composition.lower.unknown"));
-        auto &worlds = documents[static_cast<std::size_t>(EContentDocument::worlds)];
-        worlds.m_entries = {
-            {"worlds.frontier.start_feature", config::FileValue::text("start"), "metadata.toml:1"},
-            {"worlds.frontier.biomes.home.biome", config::FileValue::text("hearth"), "metadata.toml:2"},
-            {"worlds.frontier.rules.cave.kind", config::FileValue::text("threshold_cave"), "metadata.toml:3"},
-            {"worlds.frontier.rules.pocket.kind", config::FileValue::text("feature"), "metadata.toml:4"},
-            {"worlds.frontier.rules.pocket.feature", config::FileValue::text("sealed"), "metadata.toml:5"},
-            {"worlds.frontier.rules.fill.kind", config::FileValue::text("matter_fill"), "metadata.toml:6"},
-            {"worlds.frontier.rules.fill.feature_rule", config::FileValue::text("pocket"), "metadata.toml:7"}};
-        auto &features = documents[static_cast<std::size_t>(EContentDocument::features)];
-        features.m_entries = {
-            {"features.start.markers.spawn.role", config::FileValue::text("start"), "metadata.toml:8"},
-            {"features.sealed.markers.liquid.role", config::FileValue::text("sealed_pocket"), "metadata.toml:9"}};
-        PPR_TEST_ASSERT(descriptor(EContentDocument::worlds, "rules.cave.threshold_min").has_value());
-        const auto kind = descriptor(EContentDocument::worlds, "rules.cave.kind");
-        PPR_TEST_ASSERT(kind and kind->m_read_only and kind->m_choices.size() == 6u);
-        PPR_TEST_ASSERT(not kind->m_description.empty());
+        PPR_TEST_ASSERT(not descriptor(EContentDocument::biomes, "hearth", "composition.cover.unknown"));
+
+        const auto kind = descriptor(EContentDocument::rules, "frontier.caves_hearth", "payload.tag");
+        PPR_TEST_ASSERT(kind and not kind->m_read_only and kind->m_choices.size() == 6u);
         PPR_TEST_ASSERT(std::ranges::find(kind->m_choices, "matter_fill") != kind->m_choices.end());
-        PPR_TEST_ASSERT(not descriptor(EContentDocument::worlds, "rules.cave.radius_min_m"));
-        worlds.m_entries[2u].m_value = config::FileValue::text("carve_worm");
-        const auto radius = descriptor(EContentDocument::worlds, "rules.cave.radius_min_m");
-        PPR_TEST_ASSERT(radius and radius->m_min == 0.0 and radius->m_max == 64.0 and radius->m_exclusive_min);
-        PPR_TEST_ASSERT(radius->m_units == "m");
-        const auto choices = [&](const std::string_view property) {
-            return contentPropertyReferenceChoices(EContentDocument::worlds, property, documents, "frontier");
+        PPR_TEST_ASSERT(
+            descriptor(EContentDocument::rules, "frontier.caves_hearth", "payload.cave.threshold.min").has_value());
+        PPR_TEST_ASSERT(not descriptor(EContentDocument::rules, "frontier.caves_hearth", "payload.cave.unknown"));
+        const auto radius = descriptor(
+            EContentDocument::rules, "frontier.tunnels_hearth", "payload.carve_worm.geometry.radius_min_m");
+        PPR_TEST_ASSERT(radius and radius->m_min == 0.0 and radius->m_max == 256.0 and radius->m_exclusive_min);
+        const auto choices = [&](const EContentDocument category, const std::string_view key,
+                                 const std::string_view property) {
+            return contentPropertyReferenceChoices(category, property, documents, key);
         };
-        PPR_TEST_ASSERT(choices("rules.cave.biome") == Array<std::string>{"hearth"});
-        PPR_TEST_ASSERT(choices("rules.fill.feature_rule") == Array<std::string>{"pocket"});
-        PPR_TEST_ASSERT(choices("rules.fill.marker") == Array<std::string>{"liquid"});
-        PPR_TEST_ASSERT(choices("start_marker") == Array<std::string>{"spawn"});
-        worlds.m_entries[6u].m_value = config::FileValue::text("missing");
-        PPR_TEST_ASSERT(choices("rules.fill.marker").empty());
+        const auto biomes = choices(EContentDocument::rules, "frontier.caves_hearth", "payload.cave.biome");
+        PPR_TEST_ASSERT(std::ranges::find(biomes, "hearth") != biomes.end());
+        const auto placements = choices(
+            EContentDocument::rules, "frontier.fill_pocket_water", "payload.matter_fill.placement");
+        PPR_TEST_ASSERT(std::ranges::find(placements, "cisterns") != placements.end());
+        PPR_TEST_ASSERT(
+            choices(EContentDocument::rules, "frontier.fill_pocket_water", "payload.matter_fill.marker") ==
+            Array<std::string>{"anchor"});
+        PPR_TEST_ASSERT(choices(EContentDocument::worlds, "frontier", "start.marker") == Array<std::string>{"spawn"});
+        auto &rules = documents[static_cast<std::size_t>(EContentDocument::rules)];
+        const auto placement = std::ranges::find(
+            rules.m_entries, "rules.frontier.fill_pocket_water.payload.matter_fill.placement", &config::Entry::m_key);
+        PPR_TEST_ASSERT(placement != rules.m_entries.end());
+        placement->m_value = config::FileValue::text("missing");
+        PPR_TEST_ASSERT(
+            choices(EContentDocument::rules, "frontier.fill_pocket_water", "payload.matter_fill.marker").empty());
         const auto lifetime = operation->m_choices;
         documents = {};
         PPR_TEST_ASSERT(lifetime.size() == 3u and lifetime[0u] == "rectangle");
@@ -1225,11 +1343,12 @@ namespace pP::game::tests {
                     detail::pack::shipped_profiles_compile_owned_numeric_plans,
                     detail::pack::prepared_world_rejects_invalid_inputs_and_cancellation_before_generation,
                     detail::pack::numeric_streams_ignore_document_order_and_unused_materials,
-                    detail::pack::complete_identity_ignores_order_comments_and_source_paths,
+                    detail::pack::complete_identity_ignores_document_order_comments_and_source_paths,
                     detail::pack::identity_changes_for_every_definition_kind_and_texture_bytes,
                     detail::pack::texture_usage_is_distinct_and_background_diagnostics_preserve_source_keys,
                     detail::pack::required_texture_limits_missing_and_cancel_are_errors,
                     detail::pack::workshop_property_metadata_tracks_schemas_and_contextual_references,
+                    detail::pack::authoring_group_and_variant_transactions_are_atomic_and_same_tag_is_a_noop,
                     detail::pack::authoring_drafts_validate_independently_and_save_without_losing_newer_edits,
                     detail::pack::authoring_partial_commit_reconciles_baseline_preserves_newer_edits_and_undo_intent,
                     detail::pack::

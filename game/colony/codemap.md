@@ -19,7 +19,7 @@ Game-owned colony simulation, tools, presentation translation and headless workl
 | `game.colony.worldgen` | `WorldGen.cppm/.cpp`, `WorldGen.Plan.cpp`, `WorldGen.Fixture.cpp` | Authored numeric-plan preparation and explicitly named legacy fixtures |
 | `game.colony.worldgen_preview` | `WorldGen.Preview.cppm/.cpp`, `WorldGen.Preview.Export.cpp` | Bounded biome samples and exact crops of cached production worlds, canonical initial particles, diagnostic/source export |
 | `game.colony.worldgen_panel` | `WorldGenPanel.cppm/.cpp` | Workshop browser, all-document property controls, clone/delete and live-preview intents; no I/O or renderer mutation |
-| `game.colony.content` | `Content.cppm/.cpp` | Owned material catalog, typed fields, biome recipes, geometric features and world profiles with finite phase-checked rules, start/resource preflight and initial-matter references; checked references, ranges, ordering and caps; explicit-root manifest/source loader; canonical full-pack identity and bounded CPU texture validation in Content.Pack.cpp. Normal interactive startup resolves these inputs on the world coordinator. |
+| `game.colony.content` | `Content.cppm/.cpp` | `PackDefinition` combines sim descriptors and game appearance. Seven schema-3 documents bind through generic core tree resolution; profile-owned rules attach only to worlds-document owners. `decodeWorldGenDefinition` handles the separate version-2 definition envelope. Runtime catalogs project compiled bindings; explicit-root loading, shared semantic identity and CPU texture validation live in Content.Pack.cpp. |
 | `game.colony.metric` | `Metric.cppm/.cpp` | Checked 3:1 fine-cell/metre conversions, globally anchored construction footprints, nominal volume and persisted metric compatibility preflight. Authored sessions use this metric for actors, colliders, tools and rendering. |
 | `game.colony.driver` | `ColonyDriver.cppm/.cpp` | Explicit-time fixed step, pause/step/speed/regenerate, ECS and driver-local physics |
 | `game.colony.agents` | `Agents.cppm/.cpp` | Agent state, planning and movement vocabulary |
@@ -43,10 +43,10 @@ Check each `export module` declaration and `../CMakeLists.txt` for exact module 
 ## Simulation and presentation contracts
 
 `Content.Authoring.cppm/.cpp` (`game.colony.content.authoring`) owns an explicitly
-opened pack root, baseline bytes, all six content-document drafts, bounded shared command
+opened pack root, baseline bytes, all seven content-document drafts, bounded shared command
 history, and the last validated catalog. Typed invalid drafts remain editable;
 revision checks prevent stale validation acceptance. Worker requests copy owned
-source snapshots, including the original manifest and all six documents.
+source snapshots, including the original manifest and all seven documents.
 `Content.Pack.cpp` validates snapshots through the same decoder, reference,
 texture and fingerprint path as ordinary disk loading.
 
@@ -160,7 +160,8 @@ preserves the selected routed cave backbone. Every new control enters canonical
 identity. The original weighted geological competition and weak solid-only finish
 remain intact. A separate final `erosion_passes` stage uses the prototype's
 unweighted eight-neighbor histogram including vacuum at 50% adoption, initially
-eight passes in shipped recipes. Generator version 6 rejects older identities while retaining
+eight passes in shipped recipes. Generator version 8 conservatively rejects older identities at
+`validateWorldCheckpoint` before material-ID restoration, while retaining
 the v3 checkpoint envelope layout. See [worldgen authoring](../../docs/worldgen-content.md).
 
 The presentation cache also captures the immutable open-surface profile once

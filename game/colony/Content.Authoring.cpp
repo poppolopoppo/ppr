@@ -9,36 +9,50 @@ import std;
 namespace pP::colony {
     PPR_DEFINE_LOG_CATEGORY(ContentAuthoring, debug, none)
 
+    // ------------------------------------------------------------------
+    // session helpers
+    // ------------------------------------------------------------------
+
     namespace {
-        constexpr std::array<std::string_view, kContentDocumentCount> categories{
-            "materials", "biomes", "fields", "features", "worlds", "backgrounds"};
         bool validKey(const std::string_view key) {
-            return not key.empty() and key.find('.') == std::string_view::npos and config::isValidCanonicalName(key);
+            return config::isValidCanonicalName(key);
         }
         Expected<config::Document> definitionDocument(
             const ContentPackSource &source, const EContentDocument kind, const std::string_view key,
             config::Diagnostics &diagnostics) {
             const auto index = static_cast<std::size_t>(kind);
             PPR_RETURN_UNEXPECTED_ON_FAIL(
-                ContentAuthoring, index < categories.size() and validKey(key)
+                ContentAuthoring, index < kContentDocumentCount and validKey(key)
                                       ? std::error_code{}
                                       : std::make_error_code(std::errc::invalid_argument));
 
             const auto &document = source.m_documents[index];
             auto decoded = config::decode(
-                document.m_bytes, document.m_path.string(), diagnostics, config::EDecodeMode::records);
+                document.m_bytes, document.m_path.string(), diagnostics, config::EDecodeMode::tree);
             PPR_RETURN_UNEXPECTED_ON_FAIL(ContentAuthoring, decoded);
 
-            const auto prefix = std::string{categories[index]} + "." + std::string{key} + ".";
+            const auto root = contentDocumentPath(kind, key);
+            const auto prefix = root + ".";
             config::Document record;
+            bool present = false;
 
             for (const auto &entry: decoded->m_entries) {
                 if (entry.m_key.starts_with(prefix)) {
+                    present = true;
                     record.m_entries.push_back({entry.m_key.substr(prefix.size()), entry.m_value, entry.m_location});
                 }
             }
 
-            if (record.m_entries.empty()) {
+            for (const auto &group: decoded->m_groups) {
+                if (group.m_path == root) {
+                    present = true;
+                } else if (group.m_path.starts_with(prefix)) {
+                    present = true;
+                    record.m_groups.push_back({group.m_path.substr(prefix.size()), group.m_location});
+                }
+            }
+
+            if (not present) {
                 diagnostics.add(
                     document.m_path.string(), std::string{key}, "Unknown authored definition",
                     config::make_error_code(config::EConfigErrc::unknown_property));
@@ -79,6 +93,10 @@ namespace pP::colony {
             return {};
         }
     }
+
+    // ------------------------------------------------------------------
+    // session lifecycle
+    // ------------------------------------------------------------------
 
     Expected<ContentAuthoringSession> ContentAuthoringSession::open(
         const std::filesystem::path &root, config::Diagnostics &diagnostics, const IContext *const context) {
@@ -127,6 +145,10 @@ namespace pP::colony {
         return m_history.canRedo();
     }
 
+    // ------------------------------------------------------------------
+    // draft edits
+    // ------------------------------------------------------------------
+
     std::error_code ContentAuthoringSession::applyPatch(const SourceCommand &command, const bool reverse) {
         auto &document = m_draft.m_documents[static_cast<std::size_t>(command.m_document)];
         auto bytes = config::applySourcePatch(document.m_bytes, command.m_patch, reverse);
@@ -164,16 +186,35 @@ namespace pP::colony {
         PPR_RETURN_ERROR_ON_FAIL(ContentAuthoring, record);
 
         PPR_RETURN_ERROR_ON_FAIL(
-            ContentAuthoring, config::isValidCanonicalName(relative_property) and relative_property != "numeric_id"
+            ContentAuthoring, config::isValidCanonicalName(relative_property)
                                   ? std::error_code{}
                                   : std::make_error_code(std::errc::invalid_argument));
+
+        if (relative_property.ends_with(".tag")) {
+            PPR_RETURN_ERROR_ON_FAIL(
+                ContentAuthoring, value.m_kind == config::EFileKind::text
+                                      ? std::error_code{}
+                                      : config::make_error_code(config::EConfigErrc::type_mismatch));
+            const auto current = std::ranges::find(record->m_entries, relative_property, &config::Entry::m_key);
+            if (current != record->m_entries.end() and
+                current->m_value.m_kind == config::EFileKind::text and
+                current->m_value.m_text == value.m_text) {
+                return {};
+            }
+
+            const auto variant = relative_property.substr(0u, relative_property.size() - 4u);
+            auto subtree = contentVariantSubtree(kind, key, variant, value.m_text);
+            PPR_RETURN_ERROR_ON_FAIL(ContentAuthoring, subtree);
+            PPR_RETURN_ERROR_ON_FAIL(
+                ContentAuthoring, replaceDefinitionSubtree(kind, key, variant, *subtree, diagnostics));
+            return {};
+        }
 
         const auto index = static_cast<std::size_t>(kind);
         const auto &document = m_draft.m_documents[index];
         auto patch = config::patchScalar(
-            document.m_bytes,
-            std::string{categories[index]} + "." + std::string{key} + "." + std::string{relative_property}, value,
-            document.m_path.string(), diagnostics);
+            document.m_bytes, contentDocumentPath(kind, key, relative_property), value, document.m_path.string(),
+            diagnostics);
         PPR_RETURN_ERROR_ON_FAIL(ContentAuthoring, patch);
         PPR_RETURN_ERROR_ON_FAIL(ContentAuthoring, executePatch(kind, std::move(*patch)));
         return {};
@@ -186,13 +227,11 @@ namespace pP::colony {
 
         const auto index = static_cast<std::size_t>(kind);
         const auto &source = m_draft.m_documents[index];
-        auto document = config::decode(
-            source.m_bytes, source.m_path.string(), diagnostics, config::EDecodeMode::records);
+        auto document = config::decode(source.m_bytes, source.m_path.string(), diagnostics, config::EDecodeMode::tree);
         PPR_RETURN_ERROR_ON_FAIL(ContentAuthoring, document);
 
         const auto descriptor = contentPropertyDescriptor(kind, relative_property, *document, key);
-        const auto qualified =
-            std::string{categories[index]} + "." + std::string{key} + "." + std::string{relative_property};
+        const auto qualified = contentDocumentPath(kind, key, relative_property);
         if (not descriptor or not descriptor->m_optional) {
             diagnostics.add(
                 source.m_path.string(), qualified, "Only optional configuration properties can be unset",
@@ -200,18 +239,43 @@ namespace pP::colony {
             PPR_RETURN_ERROR_ON_FAIL(ContentAuthoring, config::EConfigErrc::cross_field_invalid);
         }
 
-        if (std::ranges::find(document->m_entries, qualified, &config::Entry::m_key) == document->m_entries.end()) {
+        const auto prefix = qualified + ".";
+        if (std::ranges::none_of(
+                document->m_entries,
+                [&](const auto &entry) { return entry.m_key == qualified or entry.m_key.starts_with(prefix); }) and
+            std::ranges::none_of(document->m_groups, [&](const auto &group) {
+                return group.m_path == qualified or group.m_path.starts_with(prefix);
+            })) {
             return {};
         }
 
-        auto patch = config::removeRecord(source.m_bytes, qualified, source.m_path.string(), diagnostics);
+        auto patch = config::patchTree(
+            source.m_bytes, qualified, config::ETreeSourceEdit::remove, {}, source.m_path.string(), diagnostics);
+        PPR_RETURN_ERROR_ON_FAIL(ContentAuthoring, patch);
+        PPR_RETURN_ERROR_ON_FAIL(ContentAuthoring, executePatch(kind, std::move(*patch)));
+        return {};
+    }
+    std::error_code ContentAuthoringSession::replaceDefinitionSubtree(
+        const EContentDocument kind, const std::string_view key, const std::string_view relative_property,
+        const config::Document &subtree, config::Diagnostics &diagnostics) {
+        const auto record = definitionDocument(m_draft, kind, key, diagnostics);
+        PPR_RETURN_ERROR_ON_FAIL(ContentAuthoring, record);
+        PPR_RETURN_ERROR_ON_FAIL(
+            ContentAuthoring, config::isValidCanonicalName(relative_property)
+                                  ? std::error_code{}
+                                  : std::make_error_code(std::errc::invalid_argument));
+
+        const auto &source = m_draft.m_documents[static_cast<std::size_t>(kind)];
+        auto patch = config::patchTree(
+            source.m_bytes, contentDocumentPath(kind, key, relative_property), config::ETreeSourceEdit::replace,
+            subtree, source.m_path.string(), diagnostics);
         PPR_RETURN_ERROR_ON_FAIL(ContentAuthoring, patch);
         PPR_RETURN_ERROR_ON_FAIL(ContentAuthoring, executePatch(kind, std::move(*patch)));
         return {};
     }
     std::error_code ContentAuthoringSession::cloneDefinition(
         const EContentDocument kind, const std::string_view source_key, const std::string_view new_key,
-        const std::optional<u16> new_numeric_id, config::Diagnostics &diagnostics) {
+        config::Diagnostics &diagnostics) {
         auto record = definitionDocument(m_draft, kind, source_key, diagnostics);
         PPR_RETURN_ERROR_ON_FAIL(ContentAuthoring, record);
 
@@ -222,35 +286,8 @@ namespace pP::colony {
         const auto index = static_cast<std::size_t>(kind);
         const auto &document = m_draft.m_documents[index];
 
-        if (kind == EContentDocument::materials) {
-            PPR_RETURN_ERROR_ON_FAIL(
-                ContentAuthoring, new_numeric_id and *new_numeric_id > 0u and *new_numeric_id < 65535u
-                                      ? std::error_code{}
-                                      : std::make_error_code(std::errc::invalid_argument));
-            auto decoded = config::decode(
-                document.m_bytes, document.m_path.string(), diagnostics, config::EDecodeMode::records);
-            PPR_RETURN_ERROR_ON_FAIL(ContentAuthoring, decoded);
-            if (std::ranges::any_of(decoded->m_entries, [&](const config::Entry &entry) {
-                    return entry.m_key.ends_with(".numeric_id") and entry.m_value.m_integer == *new_numeric_id;
-                })) {
-                diagnostics.add(
-                    document.m_path.string(), "numeric_id", "New material requires an unused numeric ID",
-                    config::make_error_code(config::EConfigErrc::duplicate_key));
-                PPR_RETURN_ERROR_ON_FAIL(ContentAuthoring, config::EConfigErrc::duplicate_key);
-            }
-            for (auto &entry: record->m_entries) {
-                if (entry.m_key == "numeric_id") {
-                    entry.m_value = config::FileValue::integer(*new_numeric_id);
-                }
-            }
-        } else {
-            PPR_RETURN_ERROR_ON_FAIL(
-                ContentAuthoring,
-                not new_numeric_id ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
-        }
-
-        auto patch = config::insertRecord(
-            document.m_bytes, std::string{categories[index]} + "." + std::string{new_key}, *record,
+        auto patch = config::patchTree(
+            document.m_bytes, contentDocumentPath(kind, new_key), config::ETreeSourceEdit::insert, *record,
             document.m_path.string(), diagnostics);
         PPR_RETURN_ERROR_ON_FAIL(ContentAuthoring, patch);
         PPR_RETURN_ERROR_ON_FAIL(ContentAuthoring, executePatch(kind, std::move(*patch)));
@@ -264,9 +301,9 @@ namespace pP::colony {
         const auto index = static_cast<std::size_t>(kind);
         const auto &document = m_draft.m_documents[index];
 
-        auto patch = config::removeRecord(
-            document.m_bytes, std::string{categories[index]} + "." + std::string{key}, document.m_path.string(),
-            diagnostics);
+        auto patch = config::patchTree(
+            document.m_bytes, contentDocumentPath(kind, key), config::ETreeSourceEdit::remove, {},
+            document.m_path.string(), diagnostics);
         PPR_RETURN_ERROR_ON_FAIL(ContentAuthoring, patch);
         PPR_RETURN_ERROR_ON_FAIL(ContentAuthoring, executePatch(kind, std::move(*patch)));
         return {};
@@ -291,6 +328,11 @@ namespace pP::colony {
     ContentAuthoringSnapshot ContentAuthoringSession::draftSnapshot() const {
         return {m_root, m_draft, m_baseline, m_revision};
     }
+
+    // ------------------------------------------------------------------
+    // validation and save
+    // ------------------------------------------------------------------
+
     bool ContentAuthoringSession::acceptValidation(
         const u64 revision, std::shared_ptr<const ContentCatalog> catalog) noexcept {
         if (revision != m_revision or not catalog) {
