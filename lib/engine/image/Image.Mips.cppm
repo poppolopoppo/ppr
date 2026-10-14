@@ -12,7 +12,7 @@ import std;
 // to engine.image; Mango has no float resample), halving to 4 px
 // (mipCount = FloorLog2(min) - 1), sRGB to linear before the filter with
 // re-encode after, alpha-coverage preserve by binary search (mask materials,
-// upscale-only), chamfer distance-field plus color-expand anti-bleed. The
+// upscale-only). Explicit whole-chain color flooding is a separate operation. The
 // chain lands in m_subresources[m_mip_count] with chain bytes counted against
 // the decode cap; KTX2-embedded chains pass through untouched (blocked inputs
 // reject here, never decode to recompress).
@@ -22,6 +22,9 @@ export namespace pP::image {
     // mip generation policy
     // ------------------------------------------------------------------
 
+    // Incremental resampling (false, the default) filters each level from its
+    // predecessor; high-quality mode (true, opt-in) filters every level from
+    // the top level directly.
     struct MipGenDesc {
         ImageLimits m_limits = kDefaultImageLimits;
 
@@ -36,9 +39,27 @@ export namespace pP::image {
         bool m_normal_map = false;
     };
 
-    // Incremental resampling (false, the default) filters each level from its
-    // predecessor; high-quality mode (true, opt-in) filters every level from
-    // the top level directly.
+    // ------------------------------------------------------------------
+    // explicit color flooding policy
+    // ------------------------------------------------------------------
+
+    // Alpha masks use raw UNORM channel values, including RGB channels in sRGB assets.
+    enum class EImageChannel : u8 {
+        red,
+        green,
+        blue,
+        alpha
+    };
+
+    struct MipFloodDesc {
+        // Borrowed for this call; null selects the color asset itself.
+        const ImageAsset *m_alpha_source = nullptr;
+
+        float m_alpha_cutoff = 0.5f;
+        EImageChannel m_alpha_channel = EImageChannel::alpha;
+        // Flooding is defined only for straight-alpha colors.
+        bool m_is_premultiplied_alpha = false;
+    };
 
     // ------------------------------------------------------------------
     // chain geometry
@@ -74,6 +95,20 @@ export namespace pP::image {
     // 1..mipCount-1 are appended into one frozen storage with tight pitches.
     // Blocked assets (KTX2/DDS passthrough) reject with function_not_supported
     // so embedded chains are never decoded to recompress; anything else
-    // malformed rejects with invalid_argument.
+    // malformed rejects with invalid_argument. Base width and height must be
+    // multiples of four; logical down-chain extents may be smaller or odd.
     [[nodiscard]] std::error_code generateMipChain(ImageAsset &asset, MipGenDesc desc);
+
+    // Explicitly fills sub-cutoff RGB throughout an existing RGBA8 mip chain,
+    // including level 0, using weighted color support down to 1x1 and bilinear
+    // coarse-to-fine flooding. Alpha bytes and at/above-cutoff RGB stay exact.
+    // No eligible seed produces black RGB. Premultiplied colors reject. This
+    // color-only operation must not be invoked on normal/vector data.
+    // A separate alpha source must have matching base extents and either one
+    // level (box-derived masks) or at least the color chain's level count. Source channels
+    // are raw UNORM masks; their sRGB tag does not change mask interpretation.
+    // Both base extents must be multiples of four. Inputs may alias; only color
+    // storage is replaced, atomically after success. Blocked inputs reject with
+    // function_not_supported; malformed inputs/policies reject with invalid_argument.
+    [[nodiscard]] std::error_code floodMipChain(ImageAsset &color, MipFloodDesc desc = {});
 }

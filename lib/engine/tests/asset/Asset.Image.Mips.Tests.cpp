@@ -110,12 +110,19 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(twice == image::make_error_code(image::errc::invalid_argument));
             PPR_TEST_ASSERT(chained.m_mip_count == 3u);
 
-            // Tiny assets stay single-level (successful no-op).
-            image::ImageAsset tiny = makeSolid_(2u, 2u, std::byte{0xFF});
-            PPR_TEST_ASSERT(tiny.m_width == 2u);
+            // The smallest supported base stays single-level by default.
+            image::ImageAsset tiny = makeSolid_(4u, 4u, std::byte{0xFF});
+            PPR_TEST_ASSERT(tiny.m_width == 4u);
             PPR_TEST_ASSERT(not image::generateMipChain(tiny, image::MipGenDesc{}));
             PPR_TEST_ASSERT(tiny.m_mip_count == 1u);
             PPR_TEST_ASSERT(tiny.m_subresources.size() == 1u);
+
+            for (const auto extent: {std::pair{1u, 1u}, {2u, 2u}, {17u, 5u}, {4u, 6u}}) {
+                auto invalid = makeSolid_(extent.first, extent.second, std::byte{255});
+                const auto before = invalid.m_storage;
+                PPR_TEST_ASSERT(image::generateMipChain(invalid, {}) == image::errc::invalid_argument);
+                PPR_TEST_ASSERT(invalid.m_storage.getBufferData().data() == before.getBufferData().data());
+            }
 
             // Chain bytes count against the decode cap.
             image::ImageAsset capped = makeSolid_(16u, 16u, std::byte{0x11});
@@ -154,7 +161,7 @@ namespace pP::tests::detail {
                     tail[0u] == std::byte{128} and tail[1u] == std::byte{128} and tail[2u] == std::byte{255});
             }
 
-            auto tiny_normal = normal_fixture(1u);
+            auto tiny_normal = normal_fixture(4u);
             PPR_TEST_ASSERT(not image::generateMipChain(tiny_normal, image::MipGenDesc{.m_normal_map = true}));
             const auto tiny_bytes = tiny_normal.m_storage.getBufferData();
             PPR_TEST_ASSERT(tiny_bytes[0u] != std::byte{255} and tiny_normal.m_mip_count == 1u);
@@ -191,7 +198,7 @@ namespace pP::tests::detail {
                 PPR_TEST_ASSERT(std::abs(component - 1.0f / std::sqrt(3.0f)) < 0.01f);
             }
 
-            for (const auto extent: {std::pair{1u, 1u}, {2u, 2u}, {64u, 64u}, {64u, 1u}, {17u, 5u}}) {
+            for (const auto extent: {std::pair{4u, 4u}, {64u, 64u}, {64u, 4u}, {4u, 64u}, {12u, 4u}}) {
                 image::ImageAsset chained = makeSolid_(extent.first, extent.second, std::byte{0x7F});
                 const auto base_size = chained.m_storage.getBufferData().size();
                 PPR_TEST_ASSERT(not image::generateMipChain(chained, image::MipGenDesc{.m_full_chain = true}));
@@ -437,6 +444,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not image::generateMipChain(chained, image::MipGenDesc{}));
             PPR_TEST_ASSERT(chained.m_mip_count == 2u);
             PPR_TEST_ASSERT(chained.m_subresources.size() == 2u);
+            PPR_TEST_ASSERT(not image::floodMipChain(chained));
             const image::ImageSubresource &mip = chained.m_subresources[1];
 
             // Border texel (1,0) blends one red column with one transparent
@@ -595,6 +603,253 @@ namespace pP::tests::detail {
     } // namespace MipsQuality
 } // namespace pP::tests::detail
 
+namespace pP::tests::detail::MipsFlood {
+    // ------------------------------------------------------------------
+    // explicit flooding fixtures and contracts
+    // ------------------------------------------------------------------
+
+    template<typename PixelFn>
+    [[nodiscard]] image::ImageAsset makeFixture_(
+        const u32 width, const u32 height, PixelFn pixel_fn, const bool srgb = false) {
+        auto fixture = MipsChain::makeSolid_(width, height, std::byte{0});
+        std::vector<std::byte> bytes(static_cast<std::size_t>(width) * height * 4u);
+        for (std::size_t i = 0u; i < bytes.size() / 4u; ++i) {
+            const std::array<u8, 4> pixel = pixel_fn(i);
+            for (std::size_t channel = 0u; channel < pixel.size(); ++channel) {
+                bytes[i * 4u + channel] = static_cast<std::byte>(pixel[channel]);
+            }
+        }
+
+        fixture.m_storage = mem::SharedBuffer::clone(mem::SharedBufferView{bytes.data(), bytes.size()});
+        fixture.m_subresources.front().m_view = fixture.m_storage;
+        fixture.m_is_srgb = srgb;
+        fixture.m_format = srgb ? image::ENativeImageFormat::rgba8_srgb : image::ENativeImageFormat::rgba8_linear;
+        return fixture;
+    }
+
+    PPR_UNIT_TEST (flood_is_explicit_and_preserves_visible_bytes) {
+        auto color = MipsBleed::makeRedOnTransparent_();
+        const image::ImageAsset source = color;
+        PPR_TEST_ASSERT(not image::generateMipChain(color, {}));
+        PPR_TEST_ASSERT(
+            std::ranges::equal(color.m_subresources.front().m_view.getBufferData(), source.m_storage.getBufferData()));
+        const image::ImageAsset before = color;
+
+        PPR_TEST_ASSERT(not image::floodMipChain(color));
+        PPR_TEST_ASSERT(color.m_mip_count == before.m_mip_count);
+        PPR_TEST_ASSERT(color.m_storage.getBufferData().size() == before.m_storage.getBufferData().size());
+        for (u32 level = 0u; level < color.m_mip_count; ++level) {
+            const auto old_bytes = before.m_subresources[level].m_view.getBufferData();
+            const auto new_bytes = color.m_subresources[level].m_view.getBufferData();
+            for (std::size_t at = 0u; at < new_bytes.size(); at += 4u) {
+                PPR_TEST_ASSERT(new_bytes[at + 3u] == old_bytes[at + 3u]);
+                if (std::to_integer<u8>(old_bytes[at + 3u]) >= 128u) {
+                    PPR_TEST_ASSERT(std::ranges::equal(new_bytes.subspan(at, 4u), old_bytes.subspan(at, 4u)));
+                    continue;
+                }
+
+                PPR_TEST_ASSERT(new_bytes[at] == std::byte{255});
+                PPR_TEST_ASSERT(new_bytes[at + 1u] == std::byte{0} and new_bytes[at + 2u] == std::byte{0});
+            }
+        }
+
+        auto alias = before;
+        PPR_TEST_ASSERT(not image::floodMipChain(alias, image::MipFloodDesc{.m_alpha_source = &alias}));
+        PPR_TEST_ASSERT(std::ranges::equal(alias.m_storage.getBufferData(), color.m_storage.getBufferData()));
+    };
+
+    PPR_UNIT_TEST (flood_blends_colors_and_obeys_cutoff) {
+        const auto two_seeds = [](const std::size_t pixel) -> std::array<u8, 4> {
+            if (pixel == 0u) {
+                return {255u, 0u, 0u, 255u};
+            }
+
+            if (pixel == 15u) {
+                return {0u, 0u, 255u, 255u};
+            }
+
+            return {0u, 255u, 0u, 0u};
+        };
+
+        auto linear = makeFixture_(4u, 4u, two_seeds);
+        auto srgb = makeFixture_(4u, 4u, two_seeds, true);
+        PPR_TEST_ASSERT(not image::floodMipChain(linear));
+        PPR_TEST_ASSERT(not image::floodMipChain(srgb));
+        const auto blend = MipsBleed::texelOf_(linear.m_subresources[0u], 1u, 1u, 4u);
+        const auto gamma_blend = MipsBleed::texelOf_(srgb.m_subresources[0u], 1u, 1u, 4u);
+        PPR_TEST_ASSERT(blend[0u] > 0u and blend[2u] > 0u and blend[1u] == 0u and blend[3u] == 0u);
+        PPR_TEST_ASSERT(gamma_blend[0u] > blend[0u] and gamma_blend[2u] > blend[2u]);
+
+        auto boundary = makeFixture_(4u, 4u, [](const std::size_t pixel) -> std::array<u8, 4> {
+            return pixel == 15u ? std::array<u8, 4>{231u, 17u, 43u, 128u} : std::array<u8, 4>{0u, 255u, 0u, 127u};
+        });
+        const auto seed_before = MipsBleed::texelOf_(boundary.m_subresources[0u], 3u, 3u, 4u);
+        PPR_TEST_ASSERT(not image::floodMipChain(boundary, image::MipFloodDesc{.m_alpha_cutoff = 128.0f / 255.0f}));
+        PPR_TEST_ASSERT(MipsBleed::texelOf_(boundary.m_subresources[0u], 3u, 3u, 4u) == seed_before);
+        const auto filled = MipsBleed::texelOf_(boundary.m_subresources[0u], 0u, 0u, 4u);
+        PPR_TEST_ASSERT(filled == (std::array<unsigned int, 4>{231u, 17u, 43u, 127u}));
+    };
+
+    PPR_UNIT_TEST (flood_sparse_support_reaches_odd_and_thin_mips) {
+        for (const auto extent: {std::pair{12u, 4u}, {4u, 64u}, {64u, 4u}}) {
+            for (const bool full_chain: {false, true}) {
+                const std::size_t last = static_cast<std::size_t>(extent.first) * extent.second - 1u;
+                auto color = makeFixture_(
+                    extent.first, extent.second, [last](const std::size_t pixel) -> std::array<u8, 4> {
+                        return pixel == last ? std::array<u8, 4>{255u, 0u, 0u, 255u}
+                                             : std::array<u8, 4>{0u, 255u, 0u, 0u};
+                    });
+                PPR_TEST_ASSERT(not image::generateMipChain(color, image::MipGenDesc{.m_full_chain = full_chain}));
+                const image::ImageAsset before = color;
+
+                PPR_TEST_ASSERT(not image::floodMipChain(color));
+                for (u32 level = 0u; level < color.m_mip_count; ++level) {
+                    const auto bytes = color.m_subresources[level].m_view.getBufferData();
+                    const auto old_bytes = before.m_subresources[level].m_view.getBufferData();
+                    for (std::size_t at = 0u; at < bytes.size(); at += 4u) {
+                        PPR_TEST_ASSERT(bytes[at + 3u] == old_bytes[at + 3u]);
+                        PPR_TEST_ASSERT(bytes[at] == std::byte{255});
+                        PPR_TEST_ASSERT(bytes[at + 1u] == std::byte{0} and bytes[at + 2u] == std::byte{0});
+                    }
+                }
+            }
+        }
+
+        // 12x4 -> 6x2 -> 3x1 -> 1x1 exercises the coverage batch's padded tail.
+        auto coverage = makeFixture_(12u, 4u, [](const std::size_t pixel) -> std::array<u8, 4> {
+            return {255u, 0u, 0u, pixel == 47u ? u8{255} : u8{0}};
+        });
+        PPR_TEST_ASSERT(not image::generateMipChain(
+            coverage, image::MipGenDesc{.m_has_preserve_coverage = true, .m_full_chain = true}));
+        PPR_TEST_ASSERT(coverage.m_mip_count == 4u);
+        for (const auto &level: coverage.m_subresources) {
+            PPR_TEST_ASSERT(MipsCoverage::coverageOf_(level) >= 1.0f / 48.0f);
+        }
+    };
+
+    PPR_UNIT_TEST (flood_uses_external_raw_channels_and_mask_mips) {
+        for (const image::EImageChannel channel:
+            {image::EImageChannel::red, image::EImageChannel::green, image::EImageChannel::blue,
+                image::EImageChannel::alpha}) {
+            auto color = makeFixture_(12u, 4u, [](const std::size_t pixel) -> std::array<u8, 4> {
+                return pixel == 47u ? std::array<u8, 4>{255u, 0u, 0u, 73u} : std::array<u8, 4>{0u, 255u, 0u, 73u};
+            });
+            const auto alpha = makeFixture_(
+                12u, 4u,
+                [channel](const std::size_t pixel) -> std::array<u8, 4> {
+                    std::array<u8, 4> value{};
+                    value[static_cast<u32>(channel)] = pixel == 47u ? u8{128} : u8{0};
+                    return value;
+                },
+                true);
+            const auto alpha_owner = alpha.m_storage;
+            PPR_TEST_ASSERT(not image::generateMipChain(color, image::MipGenDesc{.m_full_chain = true}));
+            const image::ImageAsset before = color;
+
+            PPR_TEST_ASSERT(not image::floodMipChain(
+                color, image::MipFloodDesc{
+                           .m_alpha_source = &alpha, .m_alpha_cutoff = 128.0f / 255.0f, .m_alpha_channel = channel}));
+            PPR_TEST_ASSERT(alpha.m_storage.getBufferData().data() == alpha_owner.getBufferData().data());
+            for (u32 level = 0u; level < color.m_mip_count; ++level) {
+                const auto bytes = color.m_subresources[level].m_view.getBufferData();
+                const auto old_bytes = before.m_subresources[level].m_view.getBufferData();
+                for (std::size_t at = 0u; at < bytes.size(); at += 4u) {
+                    PPR_TEST_ASSERT(bytes[at] == std::byte{255});
+                    PPR_TEST_ASSERT(bytes[at + 1u] == std::byte{0} and bytes[at + 2u] == std::byte{0});
+                    PPR_TEST_ASSERT(bytes[at + 3u] == old_bytes[at + 3u]);
+                }
+            }
+        }
+
+        auto color = makeFixture_(8u, 8u, [](const std::size_t pixel) -> std::array<u8, 4> {
+            return pixel == 0u ? std::array<u8, 4>{255u, 0u, 0u, 255u} : std::array<u8, 4>{0u, 255u, 0u, 255u};
+        });
+        auto alpha = makeFixture_(8u, 8u, [](const std::size_t pixel) -> std::array<u8, 4> {
+            return {pixel == 0u ? u8{255} : u8{0}, 0u, 0u, 255u};
+        });
+        PPR_TEST_ASSERT(not image::generateMipChain(color, {}));
+        PPR_TEST_ASSERT(not image::generateMipChain(alpha, {}));
+        std::vector<std::byte> mask_bytes(
+            alpha.m_storage.getBufferData().begin(), alpha.m_storage.getBufferData().end());
+        mask_bytes[256u] = std::byte{255};
+        alpha.m_storage = mem::SharedBuffer::clone(mem::SharedBufferView{mask_bytes.data(), mask_bytes.size()});
+        alpha.m_subresources[0u].m_view = alpha.m_storage.subspan(0u, 256u);
+        alpha.m_subresources[1u].m_view = alpha.m_storage.subspan(256u, 64u);
+        const auto retained = MipsBleed::texelOf_(color.m_subresources[1u], 0u, 0u, 4u);
+
+        PPR_TEST_ASSERT(not image::floodMipChain(
+            color, image::MipFloodDesc{.m_alpha_source = &alpha, .m_alpha_channel = image::EImageChannel::red}));
+        PPR_TEST_ASSERT(MipsBleed::texelOf_(color.m_subresources[1u], 0u, 0u, 4u) == retained);
+        const auto replaced = MipsBleed::texelOf_(color.m_subresources[1u], 3u, 3u, 4u);
+        PPR_TEST_ASSERT(replaced == (std::array<unsigned int, 4>{255u, 0u, 0u, 255u}));
+    };
+
+    PPR_UNIT_TEST (flood_no_seed_and_invalid_inputs) {
+        auto color = makeFixture_(8u, 8u, [](std::size_t) -> std::array<u8, 4> { return {93u, 71u, 129u, 0u}; });
+        PPR_TEST_ASSERT(not image::generateMipChain(color, image::MipGenDesc{.m_full_chain = true}));
+        PPR_TEST_ASSERT(not image::floodMipChain(color));
+        PPR_TEST_ASSERT(std::ranges::all_of(color.m_storage.getBufferData(), [](const std::byte value) {
+            return value == std::byte{0};
+        }));
+
+        auto valid = makeFixture_(8u, 8u, [](std::size_t) -> std::array<u8, 4> { return {23u, 41u, 119u, 255u}; });
+        const auto before = valid.m_storage;
+        const auto assert_unchanged = [&] {
+            PPR_TEST_ASSERT(valid.m_storage.getBufferData().data() == before.getBufferData().data());
+            PPR_TEST_ASSERT(valid.m_mip_count == 1u);
+        };
+
+        for (const float cutoff: {0.0f, -1.0f, 1.1f, std::numeric_limits<float>::quiet_NaN()}) {
+            PPR_TEST_ASSERT(
+                image::floodMipChain(valid, image::MipFloodDesc{.m_alpha_cutoff = cutoff}) ==
+                image::errc::invalid_argument);
+            assert_unchanged();
+        }
+
+        PPR_TEST_ASSERT(
+            image::floodMipChain(valid, image::MipFloodDesc{.m_is_premultiplied_alpha = true}) ==
+            image::errc::invalid_argument);
+        assert_unchanged();
+
+        PPR_TEST_ASSERT(
+            image::floodMipChain(
+                valid, image::MipFloodDesc{.m_alpha_channel = static_cast<image::EImageChannel>(4u)}) ==
+            image::errc::invalid_argument);
+        assert_unchanged();
+
+        const auto mismatch = makeFixture_(4u, 8u, [](std::size_t) -> std::array<u8, 4> { return {0u, 0u, 0u, 255u}; });
+        PPR_TEST_ASSERT(
+            image::floodMipChain(valid, image::MipFloodDesc{.m_alpha_source = &mismatch}) ==
+            image::errc::invalid_argument);
+        assert_unchanged();
+
+        auto wrong_count = valid;
+        auto full_color = valid;
+        PPR_TEST_ASSERT(not image::generateMipChain(wrong_count, {}));
+        PPR_TEST_ASSERT(not image::generateMipChain(full_color, image::MipGenDesc{.m_full_chain = true}));
+        PPR_TEST_ASSERT(
+            image::floodMipChain(full_color, image::MipFloodDesc{.m_alpha_source = &wrong_count}) ==
+            image::errc::invalid_argument);
+        assert_unchanged();
+
+        PPR_TEST_ASSERT(not image::floodMipChain(wrong_count, image::MipFloodDesc{.m_alpha_source = &full_color}));
+
+        auto malformed = valid;
+        ++malformed.m_subresources[0u].m_row_pitch;
+        PPR_TEST_ASSERT(image::floodMipChain(malformed) == image::errc::invalid_argument);
+
+        auto bad_extent = MipsChain::makeSolid_(6u, 4u, std::byte{255});
+        PPR_TEST_ASSERT(image::floodMipChain(bad_extent) == image::errc::invalid_argument);
+
+        auto blocked = valid;
+        blocked.m_format = image::ENativeImageFormat::bc1_linear;
+        PPR_TEST_ASSERT(image::floodMipChain(blocked) == image::errc::function_not_supported);
+
+        PPR_TEST_ASSERT(not image::floodMipChain(valid));
+        PPR_TEST_ASSERT(std::ranges::equal(valid.m_storage.getBufferData(), before.getBufferData()));
+    };
+}
+
 namespace pP::tests {
     const UnitTest image_mips = UnitTest::Named("mips") / [](UnitTest::IRun &_) -> void {
         _.recurse({
@@ -603,6 +858,11 @@ namespace pP::tests {
             detail::MipsCoverage::mips_coverage_preserved,
             detail::MipsBleed::mips_no_bleed_at_edges,
             detail::MipsQuality::mips_hq_within_bounds,
+            detail::MipsFlood::flood_is_explicit_and_preserves_visible_bytes,
+            detail::MipsFlood::flood_blends_colors_and_obeys_cutoff,
+            detail::MipsFlood::flood_sparse_support_reaches_odd_and_thin_mips,
+            detail::MipsFlood::flood_uses_external_raw_channels_and_mask_mips,
+            detail::MipsFlood::flood_no_seed_and_invalid_inputs,
         });
     };
 

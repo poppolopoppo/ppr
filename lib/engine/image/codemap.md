@@ -38,13 +38,26 @@ decode (P1a RGBA first, then P1b blocks) + `:mips` CPU chain generation (Phase 8
   default, HQ-from-top opt-in, coverage preserve, alpha cutoff, limits, full-chain opt-in); `Image.Mips.cpp`
   implements them in a float-linear workspace via `stbir_resize_float_linear` (vendored `stb`
   target, private — Mango has no float resample), sRGB to linear before the filter with
-  re-encode after, chamfer distance-field color expansion before each level, upscale-only
+  re-encode after, SIMD pixel transfer/normalization/coverage, upscale-only
   binary-search coverage restore (20 steps, abort-below-1). Blocked assets reject with
   `function_not_supported` so KTX2-embedded chains pass through untouched; the chain lands in
   `m_subresources[m_mip_count]` (one frozen storage, tight pitches) with chain bytes counted
   against the decode cap. Default chains stop at four pixels; `m_full_chain`
   reaches 1x1, including non-square images. Resizer scratch allocation failure
-  throws `bad_alloc`.
+  throws `bad_alloc`. Base dimensions must be multiples of four; generated logical mip
+  extents may be odd or smaller than four. Generation preserves color/data level 0 and
+  never floods implicitly.
+- `floodMipChain` is the explicit optional color-only operation on an existing tight
+  RGBA8 chain. `MipFloodDesc` selects a borrowed same-size alpha source (embedded by
+  default), an RGBA mask channel and cutoff; premultiplied colors reject. Masks are
+  raw UNORM even for sRGB RGB channels. A separate base-only mask is box-reduced to
+  the color chain's levels; matching mask chains use their own per-level values.
+  Binary seed confidence is reduced with premultiplied linear RGB through an auxiliary
+  1x1 support level, then blended back with bilinear sampling. Sub-cutoff RGB, including
+  level 0, receives flooded colors; alpha and eligible RGB bytes remain exact. An empty
+  seed set produces black. Workspaces use engine GPA allocation because custom image
+  limits can exceed scratch arenas' u32 slab capacity. Output publication is atomic and
+  borrowed sources may alias color without mutation of separate source assets.
 
 ## Flow
 
