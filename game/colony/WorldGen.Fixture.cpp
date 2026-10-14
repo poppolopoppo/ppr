@@ -4,15 +4,13 @@ module;
 module game.colony.worldgen;
 
 import engine.sim;
-
-
 import engine.core;
-
 import std;
 
 namespace pP::colony {
     using namespace sim;
     using pP::make_error_code;
+
     PPR_DEFINE_LOG_CATEGORY(WorldGeneration, info, none)
 
     namespace WorldGen {

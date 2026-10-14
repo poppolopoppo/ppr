@@ -151,6 +151,7 @@ namespace pP::game::tests::detail::legacy_fixture {
         PPR_TEST_ASSERT(gridHash(grid) == kPinnedHash);
     };
 }
+
 namespace pP::game::tests {
     const UnitTest legacy_fixture = UnitTest::Named("legacy_fixture") / [](UnitTest::IRun &_) -> void {
         _.recurse(

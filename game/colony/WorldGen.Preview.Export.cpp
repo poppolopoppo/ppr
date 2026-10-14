@@ -5,6 +5,10 @@ import game.colony.worldgen;
 import std;
 
 namespace pP::colony {
+    // ------------------------------------------------------------------
+    // preview export
+    // ------------------------------------------------------------------
+
     PPR_DEFINE_LOG_CATEGORY(PreviewExport, info, none);
     namespace {
         std::string quote(const std::string_view text) {
@@ -200,6 +204,10 @@ namespace pP::colony {
             return result + "\n}\n";
         }
     }
+
+    // ------------------------------------------------------------------
+    // preview export entry point
+    // ------------------------------------------------------------------
 
     std::error_code exportWorldgenPreview(
         const WorldgenPreviewResult &preview, const ContentPackSource &source, const WorldgenPreviewDisplay &display,

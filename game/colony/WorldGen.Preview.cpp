@@ -5,6 +5,10 @@ import game.colony.worldgen;
 import std;
 
 namespace pP::colony {
+    // ------------------------------------------------------------------
+    // worldgen preview
+    // ------------------------------------------------------------------
+
     PPR_DEFINE_LOG_CATEGORY(BiomeSamplePreview, info, none);
     namespace {
         sim::GenerationCellBounds expand(const sim::GenerationCellBounds bounds, const u32 padding) noexcept {
@@ -187,14 +191,27 @@ namespace pP::colony {
         }
     }
 
+    // ------------------------------------------------------------------
+    // preview result geometry
+    // ------------------------------------------------------------------
+
     const sim::GenerationGeometry &WorldgenPreviewResult::geometry() const noexcept {
         return m_exact_world ? m_exact_world->m_world.m_geometry : m_geometry;
     }
+
+    // ------------------------------------------------------------------
+    // preview world matching
+    // ------------------------------------------------------------------
+
     bool WorldgenPreviewWorld::matches(const ContentCatalog &catalog, const WorldgenPreviewSpec &spec) const noexcept {
         return m_profile == spec.m_profile and
                m_world.m_plan.seed() == spec.m_seed and
                catalog.contentFingerprint() == std::optional<u64>{m_content_fingerprint};
     }
+
+    // ------------------------------------------------------------------
+    // preview world preparation
+    // ------------------------------------------------------------------
 
     Expected<std::shared_ptr<const WorldgenPreviewWorld>> prepareWorldgenPreviewWorld(
         const ContentCatalog &catalog, const WorldgenPreviewSpec &spec, const ITimerClock &clock,
@@ -243,6 +260,11 @@ namespace pP::colony {
         // those allocations are explicitly excluded from the reported scratch.
         return std::shared_ptr<const WorldgenPreviewWorld>{std::move(prepared)};
     }
+
+    // ------------------------------------------------------------------
+    // preview preparation
+    // ------------------------------------------------------------------
+
     Expected<WorldgenPreviewResult> prepareWorldgenPreview(
         ContentCatalog catalog, WorldgenPreviewSpec spec, const IContext *const context,
         std::shared_ptr<const WorldgenPreviewWorld> world) {
@@ -308,8 +330,8 @@ namespace pP::colony {
             result.m_filter_halo_fine = filterHalo(result.m_plan);
             result.m_known_scratch_peak_bytes = std::max(scratch, world->m_known_preparation_scratch_peak_bytes);
 
-            for (const auto &rule: result.m_catalog.findWorld(result.m_spec.m_profile)->m_rules) {
-                result.m_participating_rules.push_back(rule.m_key);
+            for (const auto &key: result.m_catalog.findWorld(result.m_spec.m_profile)->m_rule_keys) {
+                result.m_participating_rules.push_back(key);
             }
 
             result.m_omissions = {"simulation actors and runtime state"};
@@ -385,7 +407,7 @@ namespace pP::colony {
             const auto *const worm = std::get_if<sim::GenerationWorm>(&rule.m_parameters);
             if ((cave != nullptr and cave->m_biome == biome_index) or
                 (worm != nullptr and worm->m_biome == biome_index)) {
-                result.m_participating_rules.push_back(profile->m_rules[i].m_key);
+                result.m_participating_rules.push_back(profile->m_rule_keys[i]);
             }
         }
 

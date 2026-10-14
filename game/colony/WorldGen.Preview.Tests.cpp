@@ -64,7 +64,7 @@ namespace pP::game::tests::detail::worldgen_preview {
         PPR_TEST_ASSERT(emitted(frame(open_position, false), EWorkshopIntent::open));
 
         ContentPackSource source;
-        source.m_documents[1u].m_bytes = "schema_version = 2\n[biomes.hearth]\ntemperature_base_k = 293.0\n"
+        source.m_documents[1u].m_bytes = "schema_version = 3\n[biomes.hearth]\ntemperature.base_k = 293.0\n"
                                          "[biomes.hearth.composition.band]\nbed_period_m = 4.0\n";
         view.m_source = &source;
         view.m_revision = 1u;
@@ -91,7 +91,7 @@ namespace pP::game::tests::detail::worldgen_preview {
         PPR_TEST_ASSERT(not state.m_property_tree.empty() and state.m_focus_property.empty());
         PPR_TEST_ASSERT(ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel));
         ImGui::ClosePopupToLevel(0, false);
-        std::snprintf(state.m_property_search.data(), state.m_property_search.size(), "%s", "temperature_base_k");
+        std::snprintf(state.m_property_search.data(), state.m_property_search.size(), "%s", "temperature.base_k");
         static_cast<void>(frame(ImVec2{-1.0f, -1.0f}, false));
         ImGuiWindow *inspector_window{};
         for (auto *candidate: context->Windows) {
@@ -119,13 +119,13 @@ namespace pP::game::tests::detail::worldgen_preview {
             not emitted(frame(ImVec2{left + slider_width * 0.3f, slider_y}, true), EWorkshopIntent::edit_definition));
         PPR_TEST_ASSERT(
             not emitted(frame(ImVec2{left + slider_width * 0.7f, slider_y}, true), EWorkshopIntent::edit_definition));
-        PPR_TEST_ASSERT(state.m_numeric_edit_key == "biomes.hearth.temperature_base_k");
+        PPR_TEST_ASSERT(state.m_numeric_edit_key == "biomes.hearth.temperature.base_k");
         const auto dragged = state.m_numeric_edit.m_floating;
         const auto released = frame(ImVec2{left + slider_width * 0.7f, slider_y}, false);
         const auto edit = std::ranges::find(released, EWorkshopIntent::edit_definition, &WorkshopIntent::m_kind);
         PPR_TEST_ASSERT(
             edit != released.end() and
-            edit->m_property == "temperature_base_k" and
+            edit->m_property == "temperature.base_k" and
             edit->m_value.m_floating == dragged);
         PPR_TEST_ASSERT(state.m_numeric_edit_key.empty());
     };
@@ -165,6 +165,7 @@ namespace pP::game::tests::detail::worldgen_preview {
         PPR_TEST_ASSERT(sample.m_grid.residentChunkCount() <= kWorldgenPreviewMaxResidentChunks);
         PPR_TEST_ASSERT(sample.m_grid.residentChunkCount() > 0u);
         PPR_TEST_ASSERT(sample.m_checksum != 0u);
+
         u64 cells{};
         u64 solid{};
         for (const auto count: sample.m_material_counts) {
@@ -175,6 +176,7 @@ namespace pP::game::tests::detail::worldgen_preview {
         PPR_TEST_ASSERT(sample.m_geometry.m_instances.empty());
         PPR_TEST_ASSERT(not sample.m_omissions.empty());
         PPR_TEST_ASSERT(sample.m_known_scratch_peak_bytes > 0u and sample.m_known_retained_payload_bytes > 0u);
+
         // Eight metres at 3:1 is a24-cell formation; its complete candidate
         // roots and four-cell support/validation ring must be resident.
         constexpr u32 reach = 28u;
@@ -188,6 +190,7 @@ namespace pP::game::tests::detail::worldgen_preview {
         PPR_TEST_ASSERT(support.m_bottom <= (domain.m_bottom > reach ? domain.m_bottom - reach : 0u));
         PPR_TEST_ASSERT(support.m_right >= std::min(sim::kWorldEdge, domain.m_right + reach));
         PPR_TEST_ASSERT(support.m_top >= std::min(sim::kWorldEdge, domain.m_top + reach));
+
         for (u32 y = support.m_bottom; y < support.m_top; y += sim::kChunkEdge) {
             for (u32 x = support.m_left; x < support.m_right; x += sim::kChunkEdge) {
                 PPR_TEST_ASSERT(sample.m_grid.residentCells(sim::chunkOf({x, y})).has_value());
@@ -204,8 +207,10 @@ namespace pP::game::tests::detail::worldgen_preview {
             {std::string_view{materials}, std::string_view{biomes}, std::string_view{temperatures}}) {
             PPR_TEST_ASSERT(bytes.starts_with(header) and bytes.size() == header.size() + image_bytes);
         }
+
         const u32 biome_rgba = sample.m_catalog.biomes()[sample.m_biome_index].m_preview_color_rgba;
         bool unequal_rows{};
+
         for (u32 row = 0u; row < 256u; ++row) {
             const u32 y = sample.m_visible.m_top - 1u - row;
             for (u32 column = 0u; column < 256u; ++column) {
@@ -224,24 +229,25 @@ namespace pP::game::tests::detail::worldgen_preview {
                                materials[pixel] != materials[header.size() + ((255u - row) * 256u + column) * 3u];
             }
         }
+
         // This authored subsurface sample contains an asymmetric raster, so the
         // per-cell comparison above also detects a vertical image inversion.
         PPR_TEST_ASSERT(unequal_rows);
     }
+
     PPR_UNIT_TEST (bounded_samples_replay_and_export_the_exact_visible_draft) {
         const auto root = hal::process::currentExecutablePath().parent_path() / "worldgen/default";
         config::Diagnostics diagnostics;
         auto source = loadContentPackSource(root, diagnostics);
         PPR_TEST_ASSERT(source.has_value());
-        auto &biome_bytes = source->m_documents[static_cast<std::size_t>(EContentDocument::biomes)].m_bytes;
-        const auto hearth = biome_bytes.find("[biomes.hearth]");
-        PPR_TEST_ASSERT(hearth != std::string::npos);
-        const auto length = biome_bytes.find("formation_length_m = ", hearth);
-        PPR_TEST_ASSERT(length != std::string::npos);
-        const auto value = length + std::string_view{"formation_length_m = "}.size();
-        const auto value_end = biome_bytes.find_first_of("\r\n", value);
-        PPR_TEST_ASSERT(value_end != std::string::npos);
-        biome_bytes.replace(value, value_end - value, "8.0");
+        auto &biomes = source->m_documents[static_cast<std::size_t>(EContentDocument::biomes)];
+        const auto patch = config::patchScalar(
+            biomes.m_bytes, "biomes.hearth.formation.length_m", config::FileValue::floating(8.0),
+            biomes.m_path.string(), diagnostics);
+        PPR_TEST_ASSERT(patch.has_value());
+        auto edited = config::applySourcePatch(biomes.m_bytes, *patch);
+        PPR_TEST_ASSERT(edited.has_value());
+        biomes.m_bytes = std::move(*edited);
         const auto catalog = loadContentCatalog(root, *source, diagnostics);
         PPR_TEST_ASSERT(catalog.has_value());
 
@@ -521,6 +527,7 @@ namespace pP::game::tests::detail::worldgen_preview {
         PPR_TEST_ASSERT(std::filesystem::exists(directory / "complete.json"));
     };
 }
+
 namespace pP::game::tests {
     const UnitTest worldgen_preview = UnitTest::Named("worldgen_preview") / [](UnitTest::IRun &_) -> void {
         _.recurse(

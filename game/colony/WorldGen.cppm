@@ -40,6 +40,7 @@ export namespace pP::colony {
         [[nodiscard]] const sim::GeneratedWorld &generated() const noexcept;
         [[nodiscard]] sim::ChunkGrid &grid() noexcept;
     };
+
     [[nodiscard]] Expected<PreparedWorld> prepareWorld(
         const std::filesystem::path &root, std::string_view profile, u64 seed, const ITimerClock &clock,
         config::Diagnostics &diagnostics, const sim::GenerationExecution &execution = {});

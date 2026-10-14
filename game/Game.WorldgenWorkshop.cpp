@@ -8,6 +8,11 @@ import engine.sim;
 import std;
 
 namespace pP::colony {
+
+    // ------------------------------------------------------------------
+    // worldgen workshop
+    // ------------------------------------------------------------------
+
     PPR_DEFINE_LOG_CATEGORY(Workshop, info, none);
     Expected<GridPass::GridStagedFrame> captureWorldgenPreviewPresentation(
         const WorldgenPreviewResult &preview, const EGridDiagnosticMode mode, const u64 revision,

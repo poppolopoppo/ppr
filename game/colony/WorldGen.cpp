@@ -8,6 +8,10 @@ import engine.sim;
 import std;
 
 namespace pP::colony {
+    // ------------------------------------------------------------------
+    // prepared world
+    // ------------------------------------------------------------------
+
     PPR_DEFINE_LOG_CATEGORY(WorldPreparation, info, none);
 
     PreparedWorld::PreparedWorld(ContentCatalog catalog, WorldDescriptor descriptor, sim::GeneratedWorld world)
@@ -29,6 +33,10 @@ namespace pP::colony {
         return m_world.m_grid;
     }
 
+    // ------------------------------------------------------------------
+    // world preparation
+    // ------------------------------------------------------------------
+
     Expected<PreparedWorld> prepareWorld(
         const std::filesystem::path &root, const std::string_view profile, const u64 seed, const ITimerClock &clock,
         config::Diagnostics &diagnostics, const sim::GenerationExecution &execution) {
@@ -43,6 +51,7 @@ namespace pP::colony {
         if (execution.m_context != nullptr) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(WorldPreparation, execution.m_context->error());
         }
+
         if (not catalog.contentFingerprint()) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(WorldPreparation, std::errc::invalid_argument);
         }
@@ -57,6 +66,10 @@ namespace pP::colony {
             .m_profile = std::string{profile}, .m_seed = seed, .m_content_fingerprint = *catalog.contentFingerprint()};
         return PreparedWorld{std::move(catalog), descriptor, std::move(*world)};
     }
+
+    // ------------------------------------------------------------------
+    // world restoration
+    // ------------------------------------------------------------------
 
     Expected<PreparedWorld> restorePreparedWorld(
         ContentCatalog catalog, WorldDescriptor descriptor, sim::GeneratedWorld world) {

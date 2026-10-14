@@ -8,6 +8,10 @@ import game.colony.worldgen_preview;
 import std;
 
 export namespace pP::colony {
+    // ------------------------------------------------------------------
+    // intents
+    // ------------------------------------------------------------------
+
     enum class EWorkshopIntent : u8 {
         open,
         preview,
@@ -32,8 +36,12 @@ export namespace pP::colony {
         config::FileValue m_value{};
         EContentDocument m_document{EContentDocument::biomes};
         std::string m_key{}, m_source_key{};
-        std::optional<u16> m_numeric_id{};
     };
+
+    // ------------------------------------------------------------------
+    // panel state
+    // ------------------------------------------------------------------
+
     struct WorldgenPanelState {
         struct PropertyNode {
             std::string m_name{}, m_path{};
@@ -51,7 +59,6 @@ export namespace pP::colony {
         EWorldgenPreviewMode m_preview_mode{EWorldgenPreviewMode::biome_sample};
         bool m_automatic_live{};
         std::array<char, 129u> m_new_key{};
-        int m_new_numeric_id{1};
         std::string m_selected_category{"biomes"}, m_selected_key{};
         std::string m_edit_key{};
         std::string m_numeric_edit_key{};
@@ -67,6 +74,7 @@ export namespace pP::colony {
         const ContentPackSource *m_document_source{};
         const ContentCatalog *m_document_catalog{};
     };
+
     struct WorldgenPanelView {
         const ContentPackSource *m_source{};
         const ContentCatalog *m_catalog{};
@@ -79,5 +87,6 @@ export namespace pP::colony {
         std::span<const config::Diagnostic> m_property_diagnostics{};
         u64 m_diagnostics_revision{};
     };
+
     [[nodiscard]] Array<WorkshopIntent> drawWorldgenPanel(WorldgenPanelState &state, const WorldgenPanelView &view);
 }

@@ -16,6 +16,10 @@ import game.colony.sim_packet;
 import std;
 
 namespace pP::colony {
+    // ------------------------------------------------------------------
+    // world capture
+    // ------------------------------------------------------------------
+
     PPR_DEFINE_LOG_CATEGORY(WorldCapture, info, none);
     namespace {
         constexpr u32 kCaptureEdge = 512u;
@@ -23,6 +27,10 @@ namespace pP::colony {
             std::string_view m_name;
             float m_x{}, m_y{}, m_width{};
         };
+
+        // ------------------------------------------------------------------
+        // readback
+        // ------------------------------------------------------------------
 
         [[nodiscard]] std::error_code writeReadback(
             rhi::IDevice &device, rhi::ITexture &target, const std::filesystem::path &path) {
@@ -61,6 +69,10 @@ namespace pP::colony {
             return {};
         }
 
+        // ------------------------------------------------------------------
+        // capture application
+        // ------------------------------------------------------------------
+
         class WorldCaptureApp final : public Application {
             std::string m_identity;
             std::filesystem::path m_directory;
@@ -95,6 +107,10 @@ namespace pP::colony {
             }
 
         protected:
+            // ------------------------------------------------------------------
+            // initialization
+            // ------------------------------------------------------------------
+
             [[nodiscard]] std::error_code initialize() override {
                 m_base_started = true;
                 PPR_RETURN_ERROR_ON_FAIL(WorldCapture, Application::initialize());
@@ -120,10 +136,18 @@ namespace pP::colony {
                 return {};
             }
 
+            // ------------------------------------------------------------------
+            // update
+            // ------------------------------------------------------------------
+
             [[nodiscard]] std::error_code update(const TimeSpan dt) override {
                 // Frozen generation baseline: no simulation tick or held input enters a capture.
                 return Application::update(dt);
             }
+
+            // ------------------------------------------------------------------
+            // render
+            // ------------------------------------------------------------------
 
             [[nodiscard]] std::error_code render() override {
                 PPR_RETURN_ERROR_ON_FAIL(WorldCapture, Application::render());
@@ -233,6 +257,10 @@ namespace pP::colony {
                 return {};
             }
 
+            // ------------------------------------------------------------------
+            // shutdown
+            // ------------------------------------------------------------------
+
             [[nodiscard]] std::error_code shutdown() override {
                 std::error_code first{};
                 // A failed wait does not authorize releasing resources still used by GPU work.
@@ -267,6 +295,10 @@ namespace pP::colony {
             }
         };
     }
+
+    // ------------------------------------------------------------------
+    // capture entry point
+    // ------------------------------------------------------------------
 
     std::error_code captureWorldGpuCloseups(
         std::unique_ptr<ColonyDriver> driver, const double spawn_x_m, const double floor_y_m, std::string identity,

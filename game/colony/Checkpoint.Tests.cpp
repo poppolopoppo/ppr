@@ -24,9 +24,11 @@ namespace pP::game::tests::detail::checkpoint {
 
     ContentCatalog loadCatalog() {
         config::Diagnostics diagnostics;
-        auto catalog = loadContentCatalog(
-            hal::process::currentExecutablePath().parent_path() / "worldgen/default", diagnostics);
-        PPR_TEST_ASSERT(catalog.has_value());
+        const auto root = hal::process::currentExecutablePath().parent_path() / "worldgen/default";
+        auto catalog = loadContentCatalog(root, diagnostics);
+        if (not catalog) {
+            throw std::system_error(catalog.error(), diagnostics.format() + root.string());
+        }
         return std::move(*catalog);
     }
 
@@ -75,9 +77,9 @@ namespace pP::game::tests::detail::checkpoint {
         checkpoint.m_report.m_material_counts.push_back({0u, 100u});
 
         sim::ChunkGrid grid;
-        PPR_TEST_ASSERT(not grid.setCell({127u, 40u}, {16u, 321.0f}));
+        PPR_TEST_ASSERT(not grid.setCell({127u, 40u}, {catalog.findMaterial("basalt")->m_numeric_id, 321.0f}));
         grid.clearAllDirty();
-        PPR_TEST_ASSERT(not grid.setCell({128u, 40u}, {32u, 345.0f}));
+        PPR_TEST_ASSERT(not grid.setCell({128u, 40u}, {catalog.findMaterial("sandstone")->m_numeric_id, 345.0f}));
 
         sim::Registry registry;
         PPR_TEST_ASSERT(not registerColonyComponents(registry));
@@ -99,7 +101,7 @@ namespace pP::game::tests::detail::checkpoint {
 
         checkpoint.m_matter.m_regions.push_back(
             {.m_identity = 3u,
-                .m_material = 1001u,
+                .m_material = catalog.findMaterial("water")->m_numeric_id,
                 .m_temperature_k = 293.0,
                 .m_bulk_density_kg_m3 = 1.0,
                 .m_volume_m3 = 0.1,
@@ -109,11 +111,29 @@ namespace pP::game::tests::detail::checkpoint {
 
         checkpoint.m_particles.m_next_id = 12u;
         checkpoint.m_particles.m_chunks.push_back(
-            {{1u, 0u},
-                std::make_shared<const Array<sim::MatterParticle>>(Array<sim::MatterParticle>{
-                    {11u, 130.5 / 3.0, 40.5 / 3.0, 0.1, 0.1, 293.0, 1.0, 1001u, sim::EGenerationMatter::liquid}})});
+            {{1u, 0u}, std::make_shared<const Array<sim::MatterParticle>>(Array<sim::MatterParticle>{
+                           {11u, 130.5 / 3.0, 40.5 / 3.0, 0.1, 0.1, 293.0, 1.0,
+                               catalog.findMaterial("water")->m_numeric_id, sim::EGenerationMatter::liquid}})});
         return checkpoint;
     }
+
+    PPR_UNIT_TEST (generator_seven_checkpoint_is_incompatible_before_material_id_restore) {
+        const auto catalog = loadCatalog();
+        auto checkpoint = editedCheckpoint(catalog);
+        PPR_TEST_ASSERT(sim::kGeneratorAlgorithmVersion == 8u);
+        PPR_TEST_ASSERT(not validateWorldCheckpoint(checkpoint, catalog));
+
+        checkpoint.m_descriptor.m_generator_version = 7u;
+        PPR_TEST_ASSERT(validateWorldCheckpoint(checkpoint, catalog) == std::errc::protocol_not_supported);
+        // Even an unknown saved cell ID cannot pass the identity boundary.
+        checkpoint.m_snapshot.m_deltas.front().m_cells.front().m_element = 60000u;
+        PPR_TEST_ASSERT(validateWorldCheckpoint(checkpoint, catalog) == std::errc::protocol_not_supported);
+        const auto restored = restoreWorldCheckpoint(catalog, checkpoint, 1u);
+        PPR_TEST_ASSERT(not restored and restored.error() == std::errc::protocol_not_supported);
+
+        checkpoint.m_descriptor.m_generator_version = sim::kGeneratorAlgorithmVersion;
+        PPR_TEST_ASSERT(validateWorldCheckpoint(checkpoint, catalog) == std::errc::invalid_argument);
+    };
 
     PPR_UNIT_TEST (round_trip_restores_edited_cells_actor_identity_and_frozen_full_capture) {
         const auto catalog = loadCatalog();
@@ -162,7 +182,7 @@ namespace pP::game::tests::detail::checkpoint {
         const auto particles = driver.captureParticles();
         PPR_TEST_ASSERT(particles.m_next_id == 12u and particles.m_chunks.size() == 1u);
         PPR_TEST_ASSERT(particles.m_chunks[0].records()[0].m_id == 11u);
-        PPR_TEST_ASSERT(driver.grid().getCell({127u, 40u})->m_element == 16u);
+        PPR_TEST_ASSERT(driver.grid().getCell({127u, 40u})->m_element == catalog.findMaterial("basalt")->m_numeric_id);
         PPR_TEST_ASSERT(driver.grid().getCell({128u, 40u})->m_temperature == 345.0f);
 
         const auto actor = *driver.controlledEntity();
@@ -172,7 +192,7 @@ namespace pP::game::tests::detail::checkpoint {
 
         driver.registry().emplace<Plan>(actor, {});
         driver.grid().clearAllDirty();
-        PPR_TEST_ASSERT(not driver.grid().setCell({128u, 41u}, {16u, 310.0f}));
+        PPR_TEST_ASSERT(not driver.grid().setCell({128u, 41u}, {catalog.findMaterial("basalt")->m_numeric_id, 310.0f}));
         const auto before = sim::capture(driver.grid(), 42u);
 
         ParallelScheduler chunks{"Checkpoint capture chunks", 1u, static_cast<std::size_t>(hal::page_granularity)};
@@ -275,7 +295,7 @@ namespace pP::game::tests::detail::checkpoint {
         PPR_TEST_ASSERT(driver.captureParticles().m_chunks[0].m_particles == frozen.m_chunks[0].m_particles);
 
         driver.requireEditPublication();
-        const auto errand = driver.buildWall({{126u, 39u}, 9u, 3u, 16u});
+        const auto errand = driver.buildWall({{126u, 39u}, 9u, 3u, catalog.findMaterial("basalt")->m_numeric_id});
         PPR_TEST_ASSERT(errand.has_value());
         PPR_TEST_ASSERT(not driver.stepOne());
         for (u32 batch = 0u; batch < 32u and not driver.editReadyForPresentation(); ++batch) {
@@ -475,10 +495,15 @@ namespace pP::game::tests::detail::checkpoint {
 }
 
 namespace pP::game::tests {
+    // ------------------------------------------------------------------
+    // checkpoint tests
+    // ------------------------------------------------------------------
+
     const UnitTest checkpoint_tests = UnitTest::Named("checkpoint") / [](UnitTest::IRun &_) {
         using namespace detail::checkpoint;
         _.recurse(
-            {diagnostic_export_rejects_cancellation_and_unwritable_directory,
+            {generator_seven_checkpoint_is_incompatible_before_material_id_restore,
+                diagnostic_export_rejects_cancellation_and_unwritable_directory,
                 round_trip_restores_edited_cells_actor_identity_and_frozen_full_capture,
                 authored_particles_survive_headless_digs_and_wait_for_complete_build_publication,
                 malformed_identity_metric_counts_and_payload_are_rejected_before_restore,

@@ -10,6 +10,10 @@ import game.colony.checkpoint;
 import std;
 
 export namespace pP::colony {
+    // ------------------------------------------------------------------
+    // job state
+    // ------------------------------------------------------------------
+
     enum class EWorldJobState : u8 {
         idle,
         queued,
@@ -42,6 +46,10 @@ export namespace pP::colony {
         u32 m_total{}; // Zero denotes an indeterminate stage.
         std::error_code m_error{};
     };
+
+    // ------------------------------------------------------------------
+    // world job
+    // ------------------------------------------------------------------
 
     /// One game-owned coordinator job. Requests/candidates never borrow live
     /// session state. The owner polls from its normal loop and must cancel,

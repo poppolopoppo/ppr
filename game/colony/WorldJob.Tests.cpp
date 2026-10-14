@@ -154,20 +154,24 @@ namespace pP::game::tests::detail::world_job {
                 cancellation_observed.store(execution.m_context->error() == std::errc::operation_canceled);
                 return std::make_unique<ColonyDriver>();
             }};
+
         // Release before the job's destructor even if a parent assertion throws.
         PPR_DEFER {
             if (not released) {
                 release.count_down();
             }
         };
+
         PPR_TEST_ASSERT(not job.request(ColonyDriverDesc{.m_world_generation = 1u}));
         PPR_TEST_ASSERT(not job.update(true));
         entered.wait();
+
         for (u32 frame = 0; frame < 64u; ++frame) {
             PPR_TEST_ASSERT(not job.update(true));
             PPR_TEST_ASSERT(job.view().m_state == EWorldJobState::generating);
         }
         PPR_TEST_ASSERT(job.request(ColonyDriverDesc{.m_world_generation = 2u}) == std::errc::device_or_resource_busy);
+
         job.cancel();
         PPR_TEST_ASSERT(job.view().m_state == EWorldJobState::cancelling);
         release.count_down();
@@ -214,6 +218,7 @@ namespace pP::game::tests::detail::world_job {
                 release.count_down();
             }
         };
+
         PPR_TEST_ASSERT(not job.requestCapture(driver, [&](const ColonyDriver &frozen, const IContext &) {
             PPR_TEST_ASSERT(&frozen == address);
             entered.count_down();
@@ -222,16 +227,19 @@ namespace pP::game::tests::detail::world_job {
         }));
         PPR_TEST_ASSERT(not job.update(true));
         entered.wait();
+
         for (u32 frame = 0u; frame < 64u; ++frame) {
             PPR_TEST_ASSERT(not job.update(true));
             PPR_TEST_ASSERT(job.view().m_stage == EWorldJobStage::capturing);
         }
         PPR_TEST_ASSERT(job.request(ColonyDriverDesc{.m_world_generation = 2u}) == std::errc::device_or_resource_busy);
+
         auto other = std::make_unique<ColonyDriver>();
         PPR_TEST_ASSERT(job.requestCapture(other, [](const ColonyDriver &, const IContext &) {
             return std::error_code{};
         }) == std::errc::device_or_resource_busy);
         PPR_TEST_ASSERT(other != nullptr);
+
         release.count_down();
         released = true;
         settle(job);
@@ -317,16 +325,19 @@ namespace pP::game::tests::detail::world_job {
                 }
                 return driver;
             }};
+
         PPR_DEFER {
             if (not released) {
                 release.count_down();
             }
         };
+
         PPR_TEST_ASSERT(
             not job.request(ColonyDriverDesc{.m_seed = 42u, .m_agent_count = 100u, .m_world_generation = 7u}));
         PPR_TEST_ASSERT(not job.update(true));
         entered.wait();
         PPR_TEST_ASSERT(job.view().m_stage == EWorldJobStage::physics);
+
         job.cancel();
         release.count_down();
         released = true;
@@ -370,6 +381,7 @@ namespace pP::game::tests::detail::world_job {
                 }
                 return std::make_unique<ColonyDriver>();
             }};
+
         PPR_TEST_ASSERT(not job.request(ColonyDriverDesc{.m_world_generation = 1u}));
         PPR_TEST_ASSERT(not job.update(true));
         settle(job);
@@ -377,11 +389,13 @@ namespace pP::game::tests::detail::world_job {
         PPR_TEST_ASSERT(job.view().m_error == std::errc::io_error);
         PPR_TEST_ASSERT(job.diagnosticText().find("materials.toml") != std::string_view::npos);
         PPR_TEST_ASSERT(job.diagnosticText().find("terrain.albedo") != std::string_view::npos);
+
         fail = false; // Prior work has drained; no concurrent access.
         PPR_TEST_ASSERT(not job.request(ColonyDriverDesc{.m_world_generation = 1u}));
         PPR_TEST_ASSERT(not job.update(true));
         settle(job);
         PPR_TEST_ASSERT(job.view().m_state == EWorldJobState::prepared);
+
         job.cancel();
         PPR_TEST_ASSERT(not job.update(true));
         settle(job);

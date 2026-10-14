@@ -10,6 +10,11 @@ import std;
 
 namespace pP::colony {
     PPR_DEFINE_LOG_CATEGORY(WorldJobs, info, none)
+
+    // ------------------------------------------------------------------
+    // state
+    // ------------------------------------------------------------------
+
     struct WorldJob::State {
         ColonyDriverDesc m_request{};
         config::Diagnostics m_diagnostics{64u};
@@ -48,6 +53,10 @@ namespace pP::colony {
         // fallback is for partial initialization or a terminal/fatal run error.
         PPR_LOG_WARNING_ON_FAIL(WorldJobs, shutdown());
     }
+
+    // ------------------------------------------------------------------
+    // request
+    // ------------------------------------------------------------------
 
     std::error_code WorldJob::request(const ColonyDriverDesc request) {
         if (busy()) {
@@ -262,6 +271,10 @@ namespace pP::colony {
         return {};
     }
 
+    // ------------------------------------------------------------------
+    // update
+    // ------------------------------------------------------------------
+
     std::error_code WorldJob::update(const bool loading_presented, const bool allow_cleanup) {
         if (not m_job) {
             return {};
@@ -349,6 +362,10 @@ namespace pP::colony {
         return {};
     }
 
+    // ------------------------------------------------------------------
+    // publication
+    // ------------------------------------------------------------------
+
     std::unique_ptr<ColonyDriver> WorldJob::publish() {
         PPR_ASSERT(m_job and m_view.m_state == EWorldJobState::prepared and not m_cancelled);
         return std::move(m_job->m_candidate);
@@ -389,6 +406,10 @@ namespace pP::colony {
         m_cancelled = false;
         m_cleanup_pending = true;
     }
+
+    // ------------------------------------------------------------------
+    // teardown
+    // ------------------------------------------------------------------
 
     std::error_code WorldJob::shutdown() {
         cancel();

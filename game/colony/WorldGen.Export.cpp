@@ -4,6 +4,10 @@ module game.colony.worldgen;
 import std;
 
 namespace pP::colony {
+    // ------------------------------------------------------------------
+    // world export
+    // ------------------------------------------------------------------
+
     PPR_DEFINE_LOG_CATEGORY(WorldExport, info, none);
     namespace {
         constexpr u32 kPreviewEdge = 1024u;
@@ -123,6 +127,10 @@ namespace pP::colony {
         }
     }
 
+    // ------------------------------------------------------------------
+    // region image export
+    // ------------------------------------------------------------------
+
     std::error_code exportWorldgenRegionImages(
         const ContentCatalog &catalog, const sim::ChunkGrid &grid, const sim::GenerationCellBounds bounds,
         const u32 biome_index, const std::filesystem::path &directory, const IContext *const context) {
@@ -189,6 +197,10 @@ namespace pP::colony {
         }
         return {};
     }
+
+    // ------------------------------------------------------------------
+    // world diagnostics export
+    // ------------------------------------------------------------------
 
     std::error_code exportWorldDiagnostics(
         const ContentCatalog &catalog, const sim::GeneratedWorld &world, const WorldDescriptor &descriptor,

@@ -3790,8 +3790,7 @@ namespace demo {
                                     intent.m_document, intent.m_key, intent.m_property, diagnostics);
                             } else if (intent.m_kind == colony::EWorkshopIntent::clone_definition) {
                                 error = session->cloneDefinition(
-                                    intent.m_document, intent.m_source_key, intent.m_key, intent.m_numeric_id,
-                                    diagnostics);
+                                    intent.m_document, intent.m_source_key, intent.m_key, diagnostics);
                             } else {
                                 error = session->deleteDefinition(intent.m_document, intent.m_key, diagnostics);
                             }
