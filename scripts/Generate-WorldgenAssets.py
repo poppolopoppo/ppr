@@ -1,10 +1,10 @@
-"""Maintain PPR v2 materials and textures (Python 3.11+, standard library only).
+"""Maintain procedural textures for PPR's canonical v3 shipped pack.
 
-All patterns are periodic in both axes. Normal maps derive from the exact height
-field used by albedo; PNG row zero corresponds to world Y zero. Run from any cwd.
-The ledger defines stable IDs and seeds missing material entries. Existing TOML
-is authored content and is preserved; legacy recipes only bootstrap absent files.
-Existing textures are preserved unless --overwrite-textures is requested.
+Simulation and appearance TOML are authored source. This tool reads them without
+rewriting recipes or assigning IDs. Existing textures are preserved unless
+--overwrite-textures is requested. All material patterns are periodic in both
+axes; normal maps derive from the albedo height field. PNG row zero is world Y
+zero. Python 3.11+, standard library only; run from any working directory.
 """
 from __future__ import annotations
 
@@ -18,425 +18,73 @@ import zlib
 
 ROOT = Path(__file__).resolve().parents[1] / "assets/worldgen/default"
 
-# Explicit permanent ledger: the original seventeen keys retain their IDs.
-# key, ID, tint, density, pattern family, roughness, roundness
-SOLIDS = [
-    ("basalt",16,"58636FFF",2900,"rock",.87,.65),
-    ("sandstone",32,"B99A6CFF",2200,"sediment",.92,.90),
-    ("copper",49,"BD7751FF",8900,"metal",.30,.60),
-    ("iron",73,"8E7270FF",7800,"metal",.43,.55),
-    ("ice",128,"A4D9EFA0",917,"ice",.18,.85),
-    ("masonry",257,"AAA294FF",2400,"masonry",.85,.15),
-    ("obsidian",509,"403D50FF",2600,"crystal",.14,.45),
-    ("clay",65,"A86D4AFF",1800,"sediment",.95,1.0),
-    ("limestone",97,"C9C5ADFF",2600,"sediment",.84,.75),
-    ("salt",160,"F5E9D6DA",2160,"crystal",.36,.80),
-    ("sulfur",193,"E3C74FFF",2070,"granular",.88,.80),
-    ("crystal",385,"B69BE88A",2650,"crystal",.12,.25),
-    ("granite",600,"9A9296FF",2700,"rock",.83,.45),
-    ("shale",601,"6A7779FF",2550,"sediment",.91,.55),
-    ("dirt",602,"8C6546FF",1450,"organic",1.0,.95),
-    ("algae",603,"7EAD4AFF",1100,"organic",.89,.95),
-    ("slime",604,"72974DE0",1350,"organic",.31,1.0),
-    ("coal",605,"34333DFF",1300,"rock",.91,.65),
-    ("rust",606,"C66F3FFF",2400,"granular",.94,.65),
-    ("phosphorite",607,"B4B669FF",3100,"granular",.87,.65),
-    ("aluminum",608,"C4CDD1FF",2700,"metal",.27,.40),
-    ("wolframite",609,"5C657FFF",7300,"metal",.48,.40),
-    ("diamond",610,"DAEEFF65",3510,"crystal",.04,.15),
-    ("clear_quartz",611,"E4E9FA60",2650,"crystal",.10,.25),
-    ("glass",612,"A2D8E04A",2500,"ice",.06,.30),
-    ("polluted_ice",613,"91BCA7CE",940,"ice",.38,.85),
-    ("iron_ore",614,"AD7F62FF",4500,"ore",.76,.55),
-    ("copper_ore",615,"9C8755FF",3800,"ore",.74,.60),
-    ("calcite",616,"EADCC2E8",2710,"carbonate",.24,.40),
-    ("dolomite",617,"CDBA9FFF",2850,"carbonate",.63,.60),
-    ("chalk",618,"E7E6D8FF",2100,"chalk",.98,.90),
-    ("gypsum",619,"EEE1C8D8",2320,"bladed",.38,.45),
-    ("anhydrite",620,"BFC2CDFF",2970,"massive",.70,.50),
-    ("conglomerate",621,"A79781FF",2450,"clastic",.91,.80),
-    ("breccia",622,"B59583FF",2600,"clastic",.89,.30),
-    ("gneiss",623,"A3A3ADFF",2800,"folded",.81,.45),
-    ("pumice",624,"C3BAA6FF",700,"vesicular",.98,.85),
-    ("laterite",625,"BF683FFF",1800,"pisolitic",.96,.80),
-    ("ruby",626,"E33B62E0",4000,"gem",.08,.18),
-    ("emerald",627,"43CB93D8",2760,"gem",.11,.22),
-    ("fluorite",628,"C6BBEBC4",3180,"cubic",.18,.25),
-    ("azurite",629,"3676D5FF",3770,"botryoidal",.43,.65),
-    ("uranium_ore",630,"B8B3A3FF",6500,"mineralized",.80,.50),
-    ("autunite",631,"D1EA5EFF",3150,"platy",.34,.35),
-    ("tuff",632,"ADA58DFF",1900,"pyroclastic",.94,.70),
-    ("bedrock",633,"41434FFF",3050,"folded",.88,.25),
-]
-# key, ID, tint, density, phase, family, roughness, IOR, effective depth
-PARTICLES = [
-    ("sand",1013,"D8BA78FF",1600,"solid","granular",1.0,1.5,0.0),
-    ("snow",1019,"E7F3FFFF",300,"solid","granular",.97,1.31,0.0),
-    ("pebbles",1031,"8F8B83FF",1700,"solid","rock",.96,1.5,0.0),
-    ("regolith",1100,"B7A59AFF",1500,"solid","granular",1.0,1.5,0.0),
-    ("ash",1101,"77737FFF",650,"solid","granular",1.0,1.5,0.0),
-    ("water",1001,"3989C970",1000,"liquid","liquid",.12,1.333,.20),
-    ("polluted_water",1200,"859E476C",1030,"liquid","liquid",.34,1.36,.20),
-    ("brine",1201,"7DBAB57C",1200,"liquid","liquid",.16,1.38,.24),
-    ("crude_oil",1202,"4C3D4DC4",850,"liquid","liquid",.26,1.47,.12),
-    ("magma",1203,"FF6728E8",2800,"liquid","liquid",.48,1.52,.10),
-    ("oxygen",1009,"A7DAD01C",1.2,"gas","gas",1.0,1.0003,0.0),
-    ("polluted_oxygen",1300,"B5C56535",1.3,"gas","gas",1.0,1.0004,0.0),
-    ("carbon_dioxide",1301,"9A96AF24",1.8,"gas","gas",1.0,1.00045,0.0),
-    ("hydrogen",1302,"DDA4C328",.09,"gas","gas",1.0,1.00014,0.0),
-    ("chlorine",1303,"D5E27938",3.2,"gas","gas",1.0,1.00077,0.0),
-    ("steam",1304,"CFDCE54A",.60,"gas","gas",1.0,1.00026,.03),
-    ("natural_gas",1305,"C7A36E2A",.80,"gas","gas",1.0,1.00044,0.0),
-]
-
-
-def table(lines, name, values):
-    lines.append(f"\n[{name}]")
-    for key, value in values.items():
-        if isinstance(value, bool):
-            value = str(value).lower()
-        elif isinstance(value, str):
-            value = '"' + value + '"'
-        else:
-            value = repr(value)
-        lines.append(f"{key} = {value}")
-
-
-def save(name, lines):
-    # These templates bootstrap absent files. Existing recipes are hand-authored
-    # production content and must never be reset by material/asset maintenance.
-    path = ROOT / name
-    if not path.exists():
-        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-
-def materials():
-    lines = ["schema_version = 2", "# Stable numeric-ID ledger is in Generate-WorldgenAssets.py."]
-    optical = {"ice":(1.31,.18),"polluted_ice":(1.34,.15),"salt":(1.54,.06),
-               "crystal":(1.54,.25),"diamond":(2.42,.28),"clear_quartz":(1.46,.24),
-               "glass":(1.50,.30),"slime":(1.38,.08),"calcite":(1.66,.08),
-               "gypsum":(1.52,.06),"ruby":(1.77,.16),"emerald":(1.58,.18),
-               "fluorite":(1.434,.16)}
-    for key, ident, tint, density, family, rough, rounded in SOLIDS:
-        ior, depth = optical.get(key,(1.5,0.0))
-        display = {"copper":"Native copper","iron":"Native iron","aluminum":"Native aluminum",
-                   "crystal":"Amethyst","salt":"Rock salt"}.get(key,key.replace("_"," ").capitalize())
-        table(lines,"materials."+key,dict(numeric_id=ident,display_name=display,phase="solid",
-              representation="terrain",color_rgba=tint,albedo_texture=f"textures/{key}.png",
-              normal_texture=f"textures/{key}_normal.png",texture_period_m=1.0 if family in ("crystal","gem","cubic","platy") else 2.0,
-              roundness=rounded,diggable=key not in ("masonry","bedrock"),reference_density_kg_m3=float(density),
-              metallic=1.0 if family=="metal" else .0,roughness=rough,emissive_r=.0,emissive_g=.0,
-              emissive_b=.0,emissive_strength=1.0,alpha_mode="opaque" if tint[-2:]=="FF" else "blend",
-              ior=ior,normal_scale=.65 if depth else 1.0,refraction_depth_m=depth,
-              **({"texture_sampling":"repeat"} if key=="masonry" else {})))
-    for key, ident, tint, density, phase, family, rough, ior, depth in PARTICLES:
-        magma=key=="magma"
-        table(lines,"materials."+key,dict(numeric_id=ident,display_name=key.replace("_"," ").capitalize(),
-              phase=phase,representation="particle",color_rgba=tint,reference_density_kg_m3=float(density),
-              albedo_texture=f"textures/{key}.png",normal_texture=f"textures/{key}_normal.png",
-              texture_period_m=3.0 if phase=="gas" else 2.0,metallic=.0,roughness=rough,
-              emissive_r=1.0 if magma else .0,emissive_g=.19 if magma else .0,emissive_b=.025 if magma else .0,
-              emissive_strength=2.5 if magma else 1.0,alpha_mode="opaque" if phase=="solid" else "blend",
-              ior=ior,normal_scale=.0 if phase=="gas" else .8,refraction_depth_m=depth))
-    path=ROOT/"materials.toml"
-    if not path.exists():
-        save("materials.toml",lines)
-        return
-    # Append only missing ledger entries, preserving every authored property,
-    # comment and ordering of existing materials (including custom materials).
-    existing=tomllib.loads(path.read_text(encoding="utf-8"))["materials"]
-    additions=[]
-    for section in "\n".join(lines).split("\n[materials.")[1:]:
-        key=section.split("]",1)[0]
-        if key not in existing:
-            additions.append("\n[materials."+section)
-    if additions:
-        with path.open("a",encoding="utf-8",newline="\n") as stream:
-            stream.write("\n".join(additions)+"\n")
-
-
-# biome, label, preview, T, delta, host, secondary, resources, lining, thickness,
-# composition field, cave field, cave threshold, depth range, minimum start distance
-BIOMES = [
-    ("hearth","Hearth basin","9DB279FF",293,8,"sandstone","dirt",["clay","copper_ore","coal","algae"],"sandstone",1,"beds","round_caves",.56,(.0,.42),0),
-    ("verdant","Verdant galleries","86B76AFF",300,8,"dirt","limestone",["algae","phosphorite"],"clay",1,"organic_beds","branch_caves",.05,(.04,.45),100),
-    ("mire","Billowed mire","7E9754FF",305,10,"slime","clay",["shale","coal"],"clay",1,"organic_beds","low_pools",-.08,(.18,.65),160),
-    ("dunes","Ochre dunes","C4A16BFF",315,15,"sandstone","shale",["rust","iron_ore"],"shale",1,"beds","tall_caves",.57,(.02,.46),200),
-    ("rime","Rime shelves","8CBED9FF",248,15,"ice","granite",["polluted_ice","wolframite"],"granite",2,"frozen_beds","ice_fractures",.72,(.02,.48),240),
-    ("lode","Dense lode country","B18B64FF",318,18,"granite","basalt",["iron_ore","copper_ore","copper","iron","aluminum","wolframite"],"basalt",3,"rock_masses","ore_tunnels",.78,(.36,.78),240),
-    ("karst","Crystal karst","B8A4D2FF",286,12,"limestone","clear_quartz",["crystal","diamond"],"limestone",1,"karst_masses","karst_cells",.18,(.20,.74),150),
-    ("saltworks","Evaporite shelves","D5C7A1FF",305,12,"salt","limestone",["clay"],"salt",2,"salt_beds","salt_basins",-.04,(.22,.72),200),
-    ("fumaroles","Sulfur chimneys","C9AB43FF",365,25,"basalt","obsidian",["sulfur","rust"],"obsidian",2,"rock_masses","chimney_fissures",.59,(.56,.92),380),
-    ("petroleum","Capped petroleum basins","7A665DFF",370,20,"shale","basalt",["coal","diamond"],"basalt",3,"oil_caps","oil_channels",.04,(.63,.94),400),
-    ("ember","Ember depths","B6644EFF",1100,100,"basalt","obsidian",["glass","iron"],"obsidian",3,"rock_masses","hot_chambers",.66,(.82,1.0),500),
-]
-
-
-def fields():
-    lines=["schema_version = 2", "# Coordinates are transformed before domain warp; global depth bands remain global."]
-    specs={
-        "composition":("open_simplex2","fbm",.055,1,1,0,2),
-        "temperature":("perlin","fbm",.008,1,1,0,0),
-        "caverns":("open_simplex2","ridged",.021,1,1,0,8),
-        "fissures":("perlin","fbm",.038,1,1,0,3),
-        "ore_lenses":("cellular_distance","none",.07,1,1,0,0),
-        "warp_x":("open_simplex2","fbm",.006,1,1,0,0),
-        "warp_y":("perlin","fbm",.006,1,1,0,0),
-        "beds":("perlin","fbm",.014,.45,1.7,-7,14),
-        "organic_beds":("open_simplex2","billow",.014,1.0,1.3,11,18),
-        "frozen_beds":("perlin","fbm",.013,.6,1.7,4,12),
-        "rock_masses":("open_simplex2","ridged",.018,1.2,.9,-23,9),
-        "karst_masses":("open_simplex2","fbm",.012,1.1,.85,17,12),
-        "salt_beds":("perlin","fbm",.011,.5,1.5,-3,14),
-        "oil_caps":("perlin","fbm",.012,.55,1.35,-6,16),
-        "round_caves":("open_simplex2","ridged",.012,1.0,1.0,0,18),
-        "branch_caves":("open_simplex2","billow",.014,.8,1.2,27,18),
-        "low_pools":("open_simplex2","billow",.010,.7,1.3,-4,20),
-        "tall_caves":("open_simplex2","ridged",.016,1.8,.65,8,14),
-        "ice_fractures":("perlin","ridged",.013,.7,1.4,7,17),
-        "ore_tunnels":("perlin","ridged",.018,1.25,.8,-28,9),
-        "karst_cells":("open_simplex2","fbm",.010,1.1,.85,17,28),
-        "salt_basins":("open_simplex2","billow",.010,.7,1.1,-9,22),
-        "chimney_fissures":("perlin","ridged",.018,1.7,.6,2,18),
-        "oil_channels":("open_simplex2","billow",.012,.75,1.2,-14,20),
-        "hot_chambers":("open_simplex2","ridged",.009,.8,1.05,-12,25),
-        "ore_grain":("open_simplex2","fbm",.034,1.4,.7,35,7),
-        "ore_seams":("perlin","ridged",.027,.5,1.5,-18,8),
-        "organic_patches":("open_simplex2","billow",.030,1.2,.9,0,9),
-    }
-    for key,(algo,fractal,freq,sx,sy,rot,warp) in specs.items():
-        table(lines,"fields."+key,dict(algorithm=algo,fractal=fractal,frequency_per_metre=freq,
-              octaves=2 if key in {b[-4] for b in BIOMES} else 3,lacunarity=2.0,gain=.5,warp_amplitude_m=float(warp),
-              warp_frequency_per_metre=.014 if key in {b[-4] for b in BIOMES} else .009,axis_scale_x=float(sx),axis_scale_y=float(sy),rotation_degrees=float(rot)))
-    save("fields.toml",lines)
-
-
-def biomes():
-    lines=["schema_version = 2"]
-    for key,label,color,temp,delta,host,secondary,resources,lining,width,field,*_ in BIOMES:
-        prefix="biomes."+key
-        table(lines,prefix,dict(display_name=label,preview_color_rgba=color,temperature_base_k=float(temp),
-              temperature_variation_k=float(delta),temperature_field="temperature",lining_material=lining,
-              lining_thickness_fine=width))
-        for band,lo,hi,weights in [("upper",0.0,.50,(8.0,2.5)),("lower",.50,1.0,(6.0,3.5))]:
-            p=prefix+".composition."+band
-            table(lines,p,dict(order=10 if band=="upper" else 20,depth_min_normalized=lo,depth_max_normalized=hi,field=field))
-            for material,weight in zip((host,secondary),weights):
-                table(lines,p+".materials."+material,dict(material=material,weight=weight))
-        for i,resource in enumerate(resources):
-            f="organic_patches" if resource in ("algae","coal","slime") else "ore_seams" if key=="lode" else "ore_grain"
-            # Nonoverlapping narrow windows produce localized resources instead of a weighted palette.
-            lo=-.58+i*.165 if f!="ore_seams" else .59+i*.055
-            hi=lo+(.095 if f!="ore_seams" else .035)
-            table(lines,prefix+".deposits."+resource,dict(kind="threshold",order=10+i,field=f,material=resource,
-                  host_material=host,depth_min_normalized=0.0,depth_max_normalized=1.0,
-                  threshold_min=round(lo,4),threshold_max=round(hi,4)))
-    save("biomes.toml",lines)
-
-
-# Templates are authored independently of noise. Each contains one or more
-# explicit structures and sealed matter anchors; no runtime fluid behavior.
-FEATURES={}
-
-
-def feature(key,label,w,h,ops,role="sealed_pocket",anchor=None):
-    FEATURES[key]=dict(label=label,w=w,h=h,ops=ops,role=role,anchor=anchor or (w//2,h//2))
-
-
-def ellipse(action,x,y,w,h,material=None):
-    d=dict(action=action,shape="ellipse",x_fine=x,y_fine=y,width_fine=w,height_fine=h)
-    if material: d["material"]=material
-    return d
-
-
-def rect(action,x,y,w,h,material=None):
-    d=ellipse(action,x,y,w,h,material)
-    d["shape"]="rectangle"
-    return d
-
-
-def author_features():
-    # Keep protected landing geometry/markers and both resource volumes exactly.
-    feature("landing","Hearth landing",90,36,[rect("paint",0,0,90,36,"masonry"),
-            rect("carve",3,6,84,27),rect("paint",6,0,9,6,"sandstone"),rect("paint",75,0,9,6,"copper")],"start",(45,10))
-    # key, host shell, dimensions, interior style, resource ledge.
-    specs=[
-        ("pocket","sandstone",66,45,"round","clay"),
-        ("hearth_shelf","sandstone",84,42,"shelf","coal"),
-        ("verdant_bulb","dirt",66,72,"branch","algae"),
-        ("verdant_root","limestone",90,48,"branch","phosphorite"),
-        ("mire_pool","clay",108,39,"basin","slime"),
-        ("mire_chimney","shale",48,96,"chimney","coal"),
-        ("dune_vault","shale",54,90,"chimney","rust"),
-        ("dune_bed","sandstone",90,39,"shelf","iron_ore"),
-        ("rime_shelf","granite",102,39,"shelf","polluted_ice"),
-        ("ruin","ice",60,63,"round","wolframite"),
-        ("room","granite",84,45,"shelf","copper_ore"),
-        ("lode_lens","basalt",72,54,"round","aluminum"),
-        ("crystal_geode","limestone",72,66,"geode","crystal"),
-        ("quartz_geode","granite",60,54,"geode","clear_quartz"),
-        ("salt_basin","salt",114,42,"basin","clay"),
-        ("mine_gallery","limestone",96,39,"shelf","salt"),
-        ("vent","obsidian",45,108,"chimney","sulfur"),
-        ("fumarole_cluster","basalt",78,90,"branch","rust"),
-        ("oil_reservoir","basalt",108,45,"basin","coal"),
-        ("oil_channels","shale",96,54,"branch","diamond"),
-        ("magma_vault","obsidian",102,63,"round","glass"),
-        ("ember_fracture","basalt",60,90,"chimney","iron"),
-    ]
-    # Independent normalized chamber lobes, authored for each landmark.
-    # Overlap joins lobes to the central anchor; no uniform cross-shaped recipe.
-    lobes={
-        "pocket":[(.06,.18,.64,.67),(.36,.09,.52,.76),(.20,.40,.53,.51)],
-        "hearth_shelf":[(.07,.24,.61,.61),(.42,.15,.48,.56),(.55,.44,.34,.43)],
-        "verdant_bulb":[(.15,.18,.65,.67),(.48,.07,.37,.50),(.07,.52,.51,.38)],
-        "verdant_root":[(.10,.28,.67,.51),(.55,.13,.36,.61),(.14,.11,.40,.42)],
-        "mire_pool":[(.07,.25,.64,.59),(.42,.30,.50,.58),(.27,.13,.41,.48)],
-        "mire_chimney":[(.27,.08,.49,.61),(.13,.43,.55,.48),(.48,.23,.38,.48)],
-        "dune_vault":[(.20,.13,.58,.68),(.10,.45,.50,.44),(.47,.07,.39,.43)],
-        "dune_bed":[(.07,.20,.73,.59),(.51,.39,.40,.48),(.22,.11,.41,.45)],
-        "rime_shelf":[(.09,.22,.61,.62),(.47,.12,.45,.56),(.55,.43,.30,.44)],
-        "ruin":[(.12,.15,.68,.66),(.49,.41,.38,.46),(.08,.46,.46,.42)],
-        "room":[(.08,.18,.67,.67),(.49,.32,.42,.52),(.23,.10,.38,.46)],
-        "lode_lens":[(.12,.23,.71,.56),(.35,.10,.49,.52),(.08,.40,.43,.45)],
-        "crystal_geode":[(.17,.18,.61,.64),(.42,.33,.42,.48),(.11,.41,.40,.41)],
-        "quartz_geode":[(.15,.18,.66,.63),(.38,.10,.43,.45),(.09,.43,.49,.39)],
-        "salt_basin":[(.06,.26,.71,.58),(.45,.17,.47,.51),(.19,.12,.43,.47)],
-        "mine_gallery":[(.08,.20,.64,.66),(.49,.38,.42,.47),(.35,.13,.43,.51)],
-        "vent":[(.28,.07,.45,.73),(.14,.44,.47,.47),(.43,.22,.39,.42)],
-        "fumarole_cluster":[(.17,.19,.61,.65),(.43,.08,.39,.46),(.09,.48,.45,.41),(.53,.48,.36,.37)],
-        "oil_reservoir":[(.08,.25,.68,.60),(.48,.18,.43,.56),(.20,.11,.40,.48)],
-        "oil_channels":[(.08,.28,.70,.46),(.48,.12,.43,.52),(.19,.46,.45,.42)],
-        "magma_vault":[(.13,.18,.70,.63),(.43,.38,.45,.46),(.08,.42,.40,.44)],
-        "ember_fracture":[(.20,.09,.51,.69),(.41,.34,.44,.53),(.11,.53,.43,.37)],
-    }
-    for key,host,w,h,style,resource in specs:
-        # Cave rules and worms already respect the whole reservation. Retain
-        # solid terrain around these irregular painted shells and chamber lobes.
-        ops=[ellipse("paint",1,1,w-2,h-2,host)]
-        if style=="geode":
-            ops += [ellipse("paint",3,4,w-7,h-8,resource),
-                    ellipse("paint",8,7,w-17,h-16,"diamond" if key=="crystal_geode" else "glass")]
-        for nx,ny,nw,nh in lobes[key]:
-            x=max(4,round(nx*w)); y=max(4,round(ny*h))
-            width=min(round(nw*w),w-4-x); height=min(round(nh*h),h-4-y)
-            ops.append(ellipse("carve",x,y,width,height))
-        if style!="geode":
-            # A localized ore patch in the lower wall, rather than a ruler-straight
-            # identical ledge across every pocket. It cannot cover the anchor.
-            ops.append(ellipse("paint",w//5,3,w//3,4,resource))
-        feature(key,key.replace("_"," ").capitalize(),w,h,ops)
-    # Local traversal rooms remain independent; shipped profiles omit global straight links.
-    for key,host,w,h,outline in [
-        ("hearth_promenade","sandstone",108,45,[(5,9,72,29),(51,5,49,32)]),
-        ("karst_arcade","limestone",126,60,[(7,8,79,45),(55,19,64,35),(39,5,46,37)]),
-        ("mire_gallery","clay",114,42,[(5,11,79,25),(57,5,49,30)])]:
-        feature(key,key.replace("_"," ").capitalize(),w,h,
-                [ellipse("paint",0,0,w,h,host)]+[ellipse("carve",*lobe) for lobe in outline],"traversal_room")
-    lines=["schema_version = 2", "# Sealed reservations exclude traversal connections; walls are at least three fine samples."]
-    for key,f in FEATURES.items():
-        p="features."+key
-        table(lines,p,dict(display_name=f["label"],allow_horizontal_reflection=key!="landing",
-              reservation_min_x_fine=0,reservation_min_y_fine=0,reservation_max_x_fine=f["w"],reservation_max_y_fine=f["h"]))
-        for i,op in enumerate(f["ops"]): table(lines,p+f".operations.op_{i:02}",dict(order=(i+1)*10,**op))
-        if key=="landing":
-            for name,role,x,y in [("spawn","start",45,10),("stone","resource_anchor",10,5),("ore","resource_anchor",79,5)]:
-                table(lines,p+".markers."+name,dict(role=role,x_fine=x,y_fine=y))
-        else:
-            x,y=f["anchor"]
-            table(lines,p+".markers.anchor",dict(role=f["role"],x_fine=x,y_fine=y))
-    save("features.toml",lines)
-
-
-# Every particle appears in at least one shipped placement+fill recipe.
-POCKETS={
-    "hearth":[("pocket",[("water",3.0),("oxygen",None)]),("hearth_shelf",[("oxygen",None)])],
-    "verdant":[("verdant_bulb",[("water",2.0),("oxygen",None)]),("verdant_root",[("polluted_oxygen",None)])],
-    "mire":[("mire_pool",[("polluted_water",4.0),("polluted_oxygen",None)]),("mire_chimney",[("polluted_oxygen",None)])],
-    "dunes":[("dune_vault",[("regolith",2.0),("carbon_dioxide",None)]),("dune_bed",[("sand",3.0),("carbon_dioxide",None)])],
-    "rime":[("rime_shelf",[("snow",2.0),("carbon_dioxide",None)]),("ruin",[("brine",2.0),("carbon_dioxide",None)])],
-    "lode":[("room",[("pebbles",2.0)]),("lode_lens",[("hydrogen",None)])],
-    "karst":[("crystal_geode",[("water",3.0),("oxygen",None)]),("quartz_geode",[("water",2.0),("oxygen",None)])],
-    "saltworks":[("salt_basin",[("brine",4.0),("carbon_dioxide",None)]),("mine_gallery",[("sand",2.0),("carbon_dioxide",None)])],
-    "fumaroles":[("vent",[("steam",None)]),("fumarole_cluster",[("chlorine",None)])],
-    "petroleum":[("oil_reservoir",[("crude_oil",4.0),("natural_gas",None)]),("oil_channels",[("crude_oil",2.0),("carbon_dioxide",None)])],
-    "ember":[("magma_vault",[("magma",4.0)]),("ember_fracture",[("ash",2.0),("steam",None)])],
+# Procedural art families are keyed by semantic material name, independently of
+# compileDefinition's runtime material bindings.
+MATERIAL_FAMILIES = {
+    'algae': 'organic',
+    'aluminum': 'metal',
+    'anhydrite': 'massive',
+    'ash': 'granular',
+    'autunite': 'platy',
+    'azurite': 'botryoidal',
+    'basalt': 'rock',
+    'bedrock': 'folded',
+    'breccia': 'clastic',
+    'brine': 'liquid',
+    'calcite': 'carbonate',
+    'carbon_dioxide': 'gas',
+    'chalk': 'chalk',
+    'chlorine': 'gas',
+    'clay': 'sediment',
+    'clear_quartz': 'crystal',
+    'coal': 'rock',
+    'conglomerate': 'clastic',
+    'copper': 'metal',
+    'copper_ore': 'ore',
+    'crude_oil': 'liquid',
+    'crystal': 'crystal',
+    'diamond': 'crystal',
+    'dirt': 'organic',
+    'dolomite': 'carbonate',
+    'emerald': 'gem',
+    'fluorite': 'cubic',
+    'glass': 'ice',
+    'gneiss': 'folded',
+    'granite': 'rock',
+    'gypsum': 'bladed',
+    'hydrogen': 'gas',
+    'ice': 'ice',
+    'iron': 'metal',
+    'iron_ore': 'ore',
+    'laterite': 'pisolitic',
+    'limestone': 'sediment',
+    'magma': 'liquid',
+    'masonry': 'masonry',
+    'natural_gas': 'gas',
+    'obsidian': 'crystal',
+    'oxygen': 'gas',
+    'pebbles': 'rock',
+    'phosphorite': 'granular',
+    'polluted_ice': 'ice',
+    'polluted_oxygen': 'gas',
+    'polluted_water': 'liquid',
+    'pumice': 'vesicular',
+    'regolith': 'granular',
+    'ruby': 'gem',
+    'rust': 'granular',
+    'salt': 'crystal',
+    'sand': 'granular',
+    'sandstone': 'sediment',
+    'shale': 'sediment',
+    'slime': 'organic',
+    'snow': 'granular',
+    'steam': 'gas',
+    'sulfur': 'granular',
+    'tuff': 'pyroclastic',
+    'uranium_ore': 'mineralized',
+    'water': 'liquid',
+    'wolframite': 'metal',
 }
-
-
-def worlds():
-    lines=["schema_version = 2", "# Frontier has an upper habitable belt; Hollows has deeper broad cave provinces."]
-    for profile in ("frontier","hollows"):
-        hollow=profile=="hollows"
-        p="worlds."+profile
-        table(lines,p,dict(display_name="The wide hollows" if hollow else "Frontier basin",background_stack=profile,
-              default_wall_material="masonry",boundary_fine=3,min_sites=40 if hollow else 32,max_sites=48 if hollow else 40,
-              site_attempts=60,site_spacing_m=140.0 if hollow else 160.0,boundary_warp_amplitude_m=29.0 if hollow else 21.0,
-              boundary_warp_x_field="warp_x",boundary_warp_y_field="warp_y",start_biome="hearth",start_feature="landing",
-              start_marker="spawn",start_x_fine=2000,start_y_fine=3000,start_clearance_m=3.0,start_route_width_m=1.0))
-        for name,marker,mat in [("stone","stone","sandstone"),("ore","ore","copper")]:
-            table(lines,p+".start_resources."+name,dict(marker=marker,material=mat,minimum_fine_cells=27,max_distance_m=20.0))
-        for i,b in enumerate(BIOMES):
-            key=b[0]; lo,hi=b[-2]; dist=b[-1]
-            weight={"hearth":4.0,"verdant":2.7,"mire":1.8,"dunes":2.5,"rime":2.5,"lode":3.0,"karst":2.0,"saltworks":1.8,"fumaroles":1.3,"petroleum":1.7,"ember":1.8}[key]
-            if hollow:
-                weight={"karst":5.0,"mire":4.0,"saltworks":3.5,"lode":.75}.get(key,weight*.65)
-                if key in ("karst","mire","saltworks"): lo,hi=.12,.82
-            table(lines,p+".biomes."+key,dict(biome=key,weight=weight,required_count=2 if key in (("karst","mire","saltworks") if hollow else ("hearth","lode")) else 1,
-                  depth_min_normalized=lo,depth_max_normalized=hi,distance_min_m=float(dist),distance_max_m=2048.0))
-            # Each province retains its cave field; chamber scale and warped
-            # anisotropy vary without turning an entire region into parallel slits.
-            threshold=b[-3] - (.14 if hollow and key!="lode" else 0)
-            carve_min,carve_max=round(threshold,3),1.0
-            table(lines,p+".rules.caves_"+key,dict(kind="threshold_cave",phase="carve",order=10+i,biome=key,field=b[-4],
-                  depth_min_normalized=0.0,depth_max_normalized=1.0,threshold_min=carve_min,threshold_max=carve_max))
-            table(lines,p+".rules.tunnels_"+key,dict(kind="carve_worm",phase="carve",order=30+i,biome=key,
-                  count=14 if hollow else (3 if key=="lode" else 7),depth_min_normalized=0.0,depth_max_normalized=1.0,
-                  length_min_m=25.0 if hollow else 12.0,length_max_m=105.0 if hollow else 50.0,
-                  radius_min_m=1.6 if hollow else .8,radius_max_m=3.5 if hollow else 1.8,turn_probability=.30 if key in ("verdant","mire") else .12))
-        for i,mat in enumerate(("copper","iron","aluminum","wolframite")):
-            table(lines,p+".rules.veins_"+mat,dict(kind="vein_worm",phase="deposit",order=10+i,biome="lode",count=4 if hollow else 10,
-                  depth_min_normalized=0.0,depth_max_normalized=1.0,length_min_m=24.0,length_max_m=90.0,radius_min_m=.4,radius_max_m=1.0,
-                  turn_probability=.08,material=mat,host_material="granite"))
-        # Natural profiles use curved worms and local galleries, without a world-spanning straight-edge graph.
-        for i,(biome,feat) in enumerate((("hearth","hearth_promenade"),("karst","karst_arcade"),("mire","mire_gallery"))):
-            table(lines,p+".rules.traversal_"+biome,dict(kind="feature",phase="stamp",order=70+i,feature=feat,biome=biome,
-                  depth_min_normalized=0.0,depth_max_normalized=1.0,spacing_m=45.0,min_count=1,max_count=5 if hollow else 2,
-                  attempts=4096,priority=50-i,reflect=True))
-        fill_order=10
-        for i,(biome,entries) in enumerate(POCKETS.items()):
-            for variant,(feat,fills) in enumerate(entries):
-                rule="cisterns" if feat=="pocket" else "landmark_"+feat
-                table(lines,p+".rules."+rule,dict(kind="feature",phase="stamp",order=10+i*2+variant,feature=feat,biome=biome,
-                      depth_min_normalized=0.0,depth_max_normalized=1.0,spacing_m=35.0,min_count=1,max_count=4 if hollow else 3,
-                      attempts=4096,priority=100-i*2-variant,reflect=True))
-                for mat,height in fills:
-                    density=next(x[3] for x in PARTICLES if x[0]==mat)
-                    temp=next(b[3] for b in BIOMES if b[0]==biome)
-                    vals=dict(kind="matter_fill",phase="fill",order=fill_order,feature_rule=rule,marker="anchor",material=mat,
-                              temperature_k=float(temp),bulk_density_kg_m3=float(density))
-                    if height is not None:
-                        # Generator heights are reservation-relative, not floor-relative.
-                        # Add the carved floor offset so shallow beds are never empty.
-                        floor_fine=min(op["y_fine"] for op in FEATURES[feat]["ops"] if op["action"]=="carve")
-                        # Divide the canonical integer once, avoiding nonintegral
-                        # round-off from adding two independently rounded thirds.
-                        vals["fill_height_m"]=(round(height*3)+floor_fine)/3.0
-                    table(lines,p+".rules.fill_"+feat+"_"+mat,vals)
-                    fill_order+=1
-    save("worlds.toml",lines)
-
-
-def backgrounds():
-    lines=["schema_version = 2"]
-    for profile in ("frontier","hollows"):
-        for order,(name,factor,period) in enumerate(zip(("distant","caverns","formations","backwall"),(.08,.22,.45,.70),(256.0,180.0,112.0,64.0))):
-            table(lines,f"backgrounds.{profile}.layers.{name}",dict(order=order,texture=f"textures/background_{profile}_{name}.png",
-                  color_rgba="FFFFFFFF",repeat_period_m=period,parallax_factor=factor))
-    save("backgrounds.toml",lines)
-    save("pack.toml",["schema_version = 2",'pack_id = "ppr_frontier"',"", "[files]",
-         'materials = "materials.toml"','biomes = "biomes.toml"','fields = "fields.toml"',
-         'features = "features.toml"','worlds = "worlds.toml"','backgrounds = "backgrounds.toml"'])
 
 
 def hash01(x,y,seed):
@@ -755,40 +403,45 @@ def background_texture(profile,layer,order):
 
 
 def main():
-    parser=argparse.ArgumentParser(description=__doc__)
-    mode=parser.add_mutually_exclusive_group()
-    mode.add_argument("--data-only",action="store_true",help="Append missing materials and bootstrap absent recipes; preserve existing files")
-    mode.add_argument("--materials-only",action="store_true",help="Append missing materials and generate their missing texture maps without touching recipes/backgrounds")
-    mode.add_argument("--assets-only",action="store_true",help="Generate missing texture maps without touching any TOML file")
-    parser.add_argument("--material",action="append",default=[],metavar="KEY",help="Limit material texture generation to this key; repeat for multiple keys")
-    parser.add_argument("--overwrite-textures",action="store_true",help="Explicitly regenerate selected texture maps, including existing maps")
-    args=parser.parse_args()
-    known={s[0] for s in SOLIDS+PARTICLES}
-    unknown=set(args.material)-known
-    if unknown: parser.error("Unknown material keys: "+", ".join(sorted(unknown)))
-    (ROOT/"textures").mkdir(parents=True,exist_ok=True)
-    if not args.assets_only:
-        materials()
-        if not args.materials_only:
-            fields(); biomes(); author_features(); worlds(); backgrounds()
-    generated=0
-    if not args.data_only:
-        entries=[(s[0],s[4]) for s in SOLIDS]+[(s[0],s[5]) for s in PARTICLES]
-        for key,family in entries:
-            if args.material and key not in args.material: continue
-            paths=[ROOT/f"textures/{key}{suffix}.png" for suffix in ("","_normal")]
-            if args.overwrite_textures or any(not path.exists() for path in paths):
-                generated+=texture(key,family,args.overwrite_textures)
-        if not args.materials_only and not args.material:
-            for profile in ("frontier","hollows"):
-                for order,layer in enumerate(("distant","caverns","formations","backwall")):
-                    path=ROOT/f"textures/background_{profile}_{layer}.png"
-                    if args.overwrite_textures or not path.exists():
-                        background_texture(profile,layer,order)
-                        generated+=1
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--material", action="append", default=[], metavar="KEY",
+                        help="Limit texture generation to this semantic material key; repeat as needed")
+    parser.add_argument("--overwrite-textures", action="store_true",
+                        help="Explicitly regenerate selected texture maps, including existing maps")
+    args = parser.parse_args()
+    documents = {}
     for path in ROOT.glob("*.toml"):
-        with path.open("rb") as stream: tomllib.load(stream)
-    print(f"Material ledger: {len(SOLIDS)+len(PARTICLES)} entries. Generated {generated} PNG assets; existing recipes preserved; TOML syntax valid.")
+        with path.open("rb") as stream:
+            document = tomllib.load(stream)
+        if document.get("schema_version") != 3:
+            parser.error(f"{path.name}: expected content schema 3")
+        documents[path.stem] = document
+    appearance = documents["appearance"]["appearance"]
+    known = set(MATERIAL_FAMILIES) & documents["materials"]["materials"].keys()
+    unknown = set(args.material) - known
+    if unknown:
+        parser.error("Unknown procedural material keys: " + ", ".join(sorted(unknown)))
+
+    (ROOT / "textures").mkdir(parents=True, exist_ok=True)
+    generated = 0
+    for key in sorted(known):
+        if args.material and key not in args.material:
+            continue
+        visual = appearance["materials"][key]
+        if visual.get("albedo_texture") != f"textures/{key}.png" or visual.get("normal_texture") != f"textures/{key}_normal.png":
+            parser.error(f"{key}: procedural generation requires its shipped texture paths")
+        generated += texture(key, MATERIAL_FAMILIES[key], args.overwrite_textures)
+    if not args.material:
+        for profile, stack in appearance["backgrounds"].items():
+            for layer, visual in stack["layers"].items():
+                if visual["texture"] != f"textures/background_{profile}_{layer}.png":
+                    parser.error(f"{profile}.{layer}: procedural generation requires its shipped texture path")
+                path = ROOT / visual["texture"]
+                if args.overwrite_textures or not path.exists():
+                    background_texture(profile, layer, visual["order"])
+                    generated += 1
+    print(f"Generated {generated} PNG assets; canonical authored documents preserved; TOML syntax valid.")
 
 
-if __name__=="__main__": main()
+if __name__ == "__main__":
+    main()

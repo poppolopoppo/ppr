@@ -1,4 +1,5 @@
-schema_version = 2
+schema_version = 3
+# Canonical semantic keys; numeric IDs are assigned by compileDefinition.
 pack_id = "ppr_frontier"
 
 [files]
@@ -7,4 +8,5 @@ biomes = "biomes.toml"
 fields = "fields.toml"
 features = "features.toml"
 worlds = "worlds.toml"
-backgrounds = "backgrounds.toml"
+rules = "rules.toml"
+appearance = "appearance.toml"

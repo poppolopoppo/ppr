@@ -1,5 +1,7 @@
-schema_version = 2
-# Coordinates are transformed before domain warp; global depth bands remain global.
+schema_version = 3
+# Canonical semantic keys; numeric IDs are assigned by compileDefinition.
+
+[fields]
 
 [fields.composition]
 algorithm = "open_simplex2"
@@ -365,7 +367,6 @@ axis_scale_x = 1.2
 axis_scale_y = 0.9
 rotation_degrees = 0.0
 
-# Finite blobs sample this field in independent local frames; no shared contour windows.
 [fields.blob_edges]
 algorithm = "open_simplex2"
 fractal = "fbm"
@@ -509,7 +510,6 @@ rotation_degrees = 0.0
 warp_amplitude_m = 0.0
 warp_frequency_per_metre = 0.02
 
-
 [fields.bedrock_height]
 algorithm = "open_simplex2"
 fractal = "fbm"
@@ -522,7 +522,6 @@ axis_scale_y = 1.0
 rotation_degrees = 0.0
 warp_amplitude_m = 0.0
 warp_frequency_per_metre = 0.02
-
 
 [fields.hearth_bedding]
 algorithm = "open_simplex2"
@@ -537,7 +536,6 @@ rotation_degrees = 0.0
 warp_amplitude_m = 0.0
 warp_frequency_per_metre = 0.02
 
-
 [fields.lode_bedding]
 algorithm = "open_simplex2"
 fractal = "fbm"
@@ -551,7 +549,6 @@ rotation_degrees = 0.0
 warp_amplitude_m = 0.0
 warp_frequency_per_metre = 0.02
 
-
 [fields.karst_bedding]
 algorithm = "open_simplex2"
 fractal = "fbm"
@@ -564,7 +561,6 @@ axis_scale_y = 1.0
 rotation_degrees = 0.0
 warp_amplitude_m = 0.0
 warp_frequency_per_metre = 0.02
-
 
 [fields.pore_affinity]
 algorithm = "open_simplex2"

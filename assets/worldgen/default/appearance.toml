@@ -1,0 +1,1326 @@
+schema_version = 3
+# Canonical semantic keys; numeric IDs are assigned by compileDefinition.
+
+[appearance]
+
+[appearance.materials]
+
+[appearance.materials.basalt]
+display_name = "Basalt"
+color_rgba = "58636FFF"
+albedo_texture = "textures/basalt.png"
+normal_texture = "textures/basalt_normal.png"
+texture_period_m = 2.0
+roundness = 0.65
+metallic = 0.0
+roughness = 0.87
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "opaque"
+ior = 1.5
+normal_scale = 1.0
+refraction_depth_m = 0.0
+
+[appearance.materials.sandstone]
+display_name = "Sandstone"
+color_rgba = "B99A6CFF"
+albedo_texture = "textures/sandstone.png"
+normal_texture = "textures/sandstone_normal.png"
+texture_period_m = 2.0
+roundness = 0.9
+metallic = 0.0
+roughness = 0.92
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "opaque"
+ior = 1.5
+normal_scale = 1.0
+refraction_depth_m = 0.0
+
+[appearance.materials.copper]
+display_name = "Native copper"
+color_rgba = "BD7751FF"
+albedo_texture = "textures/copper.png"
+normal_texture = "textures/copper_normal.png"
+texture_period_m = 2.0
+roundness = 0.6
+metallic = 1.0
+roughness = 0.3
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "opaque"
+ior = 1.5
+normal_scale = 1.0
+refraction_depth_m = 0.0
+
+[appearance.materials.iron]
+display_name = "Native iron"
+color_rgba = "8E7270FF"
+albedo_texture = "textures/iron.png"
+normal_texture = "textures/iron_normal.png"
+texture_period_m = 2.0
+roundness = 0.55
+metallic = 1.0
+roughness = 0.43
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "opaque"
+ior = 1.5
+normal_scale = 1.0
+refraction_depth_m = 0.0
+
+[appearance.materials.ice]
+display_name = "Ice"
+color_rgba = "A4D9EFA0"
+albedo_texture = "textures/ice.png"
+normal_texture = "textures/ice_normal.png"
+texture_period_m = 2.0
+roundness = 0.85
+metallic = 0.0
+roughness = 0.18
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "blend"
+ior = 1.31
+normal_scale = 0.65
+refraction_depth_m = 0.18
+
+[appearance.materials.masonry]
+display_name = "Masonry"
+color_rgba = "AAA294FF"
+albedo_texture = "textures/masonry.png"
+normal_texture = "textures/masonry_normal.png"
+texture_period_m = 2.0
+roundness = 0.15
+metallic = 0.0
+roughness = 0.85
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "opaque"
+ior = 1.5
+normal_scale = 1.0
+refraction_depth_m = 0.0
+texture_sampling = "repeat"
+
+[appearance.materials.obsidian]
+display_name = "Obsidian"
+color_rgba = "403D50FF"
+albedo_texture = "textures/obsidian.png"
+normal_texture = "textures/obsidian_normal.png"
+texture_period_m = 1.0
+roundness = 0.45
+metallic = 0.0
+roughness = 0.14
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "opaque"
+ior = 1.5
+normal_scale = 1.0
+refraction_depth_m = 0.0
+
+[appearance.materials.clay]
+display_name = "Clay"
+color_rgba = "A86D4AFF"
+albedo_texture = "textures/clay.png"
+normal_texture = "textures/clay_normal.png"
+texture_period_m = 2.0
+roundness = 1.0
+metallic = 0.0
+roughness = 0.95
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "opaque"
+ior = 1.5
+normal_scale = 1.0
+refraction_depth_m = 0.0
+
+[appearance.materials.limestone]
+display_name = "Limestone"
+color_rgba = "C9C5ADFF"
+albedo_texture = "textures/limestone.png"
+normal_texture = "textures/limestone_normal.png"
+texture_period_m = 2.0
+roundness = 0.75
+metallic = 0.0
+roughness = 0.84
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "opaque"
+ior = 1.5
+normal_scale = 1.0
+refraction_depth_m = 0.0
+
+[appearance.materials.salt]
+display_name = "Rock salt"
+color_rgba = "F5E9D6DA"
+albedo_texture = "textures/salt.png"
+normal_texture = "textures/salt_normal.png"
+texture_period_m = 1.0
+roundness = 0.8
+metallic = 0.0
+roughness = 0.36
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "blend"
+ior = 1.54
+normal_scale = 0.65
+refraction_depth_m = 0.06
+
+[appearance.materials.sulfur]
+display_name = "Sulfur"
+color_rgba = "E3C74FFF"
+albedo_texture = "textures/sulfur.png"
+normal_texture = "textures/sulfur_normal.png"
+texture_period_m = 2.0
+roundness = 0.8
+metallic = 0.0
+roughness = 0.88
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "opaque"
+ior = 1.5
+normal_scale = 1.0
+refraction_depth_m = 0.0
+
+[appearance.materials.crystal]
+display_name = "Amethyst"
+color_rgba = "B69BE88A"
+albedo_texture = "textures/crystal.png"
+normal_texture = "textures/crystal_normal.png"
+texture_period_m = 1.0
+roundness = 0.25
+metallic = 0.0
+roughness = 0.12
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "blend"
+ior = 1.54
+normal_scale = 0.65
+refraction_depth_m = 0.25
+
+[appearance.materials.granite]
+display_name = "Granite"
+color_rgba = "9A9296FF"
+albedo_texture = "textures/granite.png"
+normal_texture = "textures/granite_normal.png"
+texture_period_m = 2.0
+roundness = 0.45
+metallic = 0.0
+roughness = 0.83
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "opaque"
+ior = 1.5
+normal_scale = 1.0
+refraction_depth_m = 0.0
+
+[appearance.materials.shale]
+display_name = "Shale"
+color_rgba = "6A7779FF"
+albedo_texture = "textures/shale.png"
+normal_texture = "textures/shale_normal.png"
+texture_period_m = 2.0
+roundness = 0.55
+metallic = 0.0
+roughness = 0.91
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "opaque"
+ior = 1.5
+normal_scale = 1.0
+refraction_depth_m = 0.0
+
+[appearance.materials.dirt]
+display_name = "Dirt"
+color_rgba = "8C6546FF"
+albedo_texture = "textures/dirt.png"
+normal_texture = "textures/dirt_normal.png"
+texture_period_m = 2.0
+roundness = 0.95
+metallic = 0.0
+roughness = 1.0
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "opaque"
+ior = 1.5
+normal_scale = 1.0
+refraction_depth_m = 0.0
+
+[appearance.materials.algae]
+display_name = "Algae"
+color_rgba = "7EAD4AFF"
+albedo_texture = "textures/algae.png"
+normal_texture = "textures/algae_normal.png"
+texture_period_m = 2.0
+roundness = 0.95
+metallic = 0.0
+roughness = 0.89
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "opaque"
+ior = 1.5
+normal_scale = 1.0
+refraction_depth_m = 0.0
+
+[appearance.materials.slime]
+display_name = "Slime"
+color_rgba = "72974DE0"
+albedo_texture = "textures/slime.png"
+normal_texture = "textures/slime_normal.png"
+texture_period_m = 2.0
+roundness = 1.0
+metallic = 0.0
+roughness = 0.31
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "blend"
+ior = 1.38
+normal_scale = 0.65
+refraction_depth_m = 0.08
+
+[appearance.materials.coal]
+display_name = "Coal"
+color_rgba = "34333DFF"
+albedo_texture = "textures/coal.png"
+normal_texture = "textures/coal_normal.png"
+texture_period_m = 2.0
+roundness = 0.65
+metallic = 0.0
+roughness = 0.91
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "opaque"
+ior = 1.5
+normal_scale = 1.0
+refraction_depth_m = 0.0
+
+[appearance.materials.rust]
+display_name = "Rust"
+color_rgba = "C66F3FFF"
+albedo_texture = "textures/rust.png"
+normal_texture = "textures/rust_normal.png"
+texture_period_m = 2.0
+roundness = 0.65
+metallic = 0.0
+roughness = 0.94
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "opaque"
+ior = 1.5
+normal_scale = 1.0
+refraction_depth_m = 0.0
+
+[appearance.materials.phosphorite]
+display_name = "Phosphorite"
+color_rgba = "B4B669FF"
+albedo_texture = "textures/phosphorite.png"
+normal_texture = "textures/phosphorite_normal.png"
+texture_period_m = 2.0
+roundness = 0.65
+metallic = 0.0
+roughness = 0.87
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "opaque"
+ior = 1.5
+normal_scale = 1.0
+refraction_depth_m = 0.0
+
+[appearance.materials.aluminum]
+display_name = "Native aluminum"
+color_rgba = "C4CDD1FF"
+albedo_texture = "textures/aluminum.png"
+normal_texture = "textures/aluminum_normal.png"
+texture_period_m = 2.0
+roundness = 0.4
+metallic = 1.0
+roughness = 0.27
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "opaque"
+ior = 1.5
+normal_scale = 1.0
+refraction_depth_m = 0.0
+
+[appearance.materials.wolframite]
+display_name = "Wolframite"
+color_rgba = "5C657FFF"
+albedo_texture = "textures/wolframite.png"
+normal_texture = "textures/wolframite_normal.png"
+texture_period_m = 2.0
+roundness = 0.4
+metallic = 1.0
+roughness = 0.48
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "opaque"
+ior = 1.5
+normal_scale = 1.0
+refraction_depth_m = 0.0
+
+[appearance.materials.diamond]
+display_name = "Diamond"
+color_rgba = "DAEEFF65"
+albedo_texture = "textures/diamond.png"
+normal_texture = "textures/diamond_normal.png"
+texture_period_m = 1.0
+roundness = 0.15
+metallic = 0.0
+roughness = 0.04
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "blend"
+ior = 2.42
+normal_scale = 0.65
+refraction_depth_m = 0.28
+
+[appearance.materials.clear_quartz]
+display_name = "Clear quartz"
+color_rgba = "E4E9FA60"
+albedo_texture = "textures/clear_quartz.png"
+normal_texture = "textures/clear_quartz_normal.png"
+texture_period_m = 1.0
+roundness = 0.25
+metallic = 0.0
+roughness = 0.1
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "blend"
+ior = 1.46
+normal_scale = 0.65
+refraction_depth_m = 0.24
+
+[appearance.materials.glass]
+display_name = "Glass"
+color_rgba = "A2D8E04A"
+albedo_texture = "textures/glass.png"
+normal_texture = "textures/glass_normal.png"
+texture_period_m = 2.0
+roundness = 0.3
+metallic = 0.0
+roughness = 0.06
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "blend"
+ior = 1.5
+normal_scale = 0.65
+refraction_depth_m = 0.3
+
+[appearance.materials.polluted_ice]
+display_name = "Polluted ice"
+color_rgba = "91BCA7CE"
+albedo_texture = "textures/polluted_ice.png"
+normal_texture = "textures/polluted_ice_normal.png"
+texture_period_m = 2.0
+roundness = 0.85
+metallic = 0.0
+roughness = 0.38
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "blend"
+ior = 1.34
+normal_scale = 0.65
+refraction_depth_m = 0.15
+
+[appearance.materials.iron_ore]
+display_name = "Iron ore"
+color_rgba = "AD7F62FF"
+albedo_texture = "textures/iron_ore.png"
+normal_texture = "textures/iron_ore_normal.png"
+texture_period_m = 2.0
+roundness = 0.55
+metallic = 0.0
+roughness = 0.76
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "opaque"
+ior = 1.5
+normal_scale = 1.0
+refraction_depth_m = 0.0
+
+[appearance.materials.copper_ore]
+display_name = "Copper ore"
+color_rgba = "9C8755FF"
+albedo_texture = "textures/copper_ore.png"
+normal_texture = "textures/copper_ore_normal.png"
+texture_period_m = 2.0
+roundness = 0.6
+metallic = 0.0
+roughness = 0.74
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "opaque"
+ior = 1.5
+normal_scale = 1.0
+refraction_depth_m = 0.0
+
+[appearance.materials.sand]
+display_name = "Sand"
+color_rgba = "D8BA78FF"
+albedo_texture = "textures/sand.png"
+normal_texture = "textures/sand_normal.png"
+texture_period_m = 2.0
+metallic = 0.0
+roughness = 1.0
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "opaque"
+ior = 1.5
+normal_scale = 0.8
+refraction_depth_m = 0.0
+
+[appearance.materials.snow]
+display_name = "Snow"
+color_rgba = "E7F3FFFF"
+albedo_texture = "textures/snow.png"
+normal_texture = "textures/snow_normal.png"
+texture_period_m = 2.0
+metallic = 0.0
+roughness = 0.97
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "opaque"
+ior = 1.31
+normal_scale = 0.8
+refraction_depth_m = 0.0
+
+[appearance.materials.pebbles]
+display_name = "Pebbles"
+color_rgba = "8F8B83FF"
+albedo_texture = "textures/pebbles.png"
+normal_texture = "textures/pebbles_normal.png"
+texture_period_m = 2.0
+metallic = 0.0
+roughness = 0.96
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "opaque"
+ior = 1.5
+normal_scale = 0.8
+refraction_depth_m = 0.0
+
+[appearance.materials.regolith]
+display_name = "Regolith"
+color_rgba = "B7A59AFF"
+albedo_texture = "textures/regolith.png"
+normal_texture = "textures/regolith_normal.png"
+texture_period_m = 2.0
+metallic = 0.0
+roughness = 1.0
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "opaque"
+ior = 1.5
+normal_scale = 0.8
+refraction_depth_m = 0.0
+
+[appearance.materials.ash]
+display_name = "Ash"
+color_rgba = "77737FFF"
+albedo_texture = "textures/ash.png"
+normal_texture = "textures/ash_normal.png"
+texture_period_m = 2.0
+metallic = 0.0
+roughness = 1.0
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "opaque"
+ior = 1.5
+normal_scale = 0.8
+refraction_depth_m = 0.0
+
+[appearance.materials.water]
+display_name = "Water"
+color_rgba = "3989C970"
+albedo_texture = "textures/water.png"
+normal_texture = "textures/water_normal.png"
+texture_period_m = 2.0
+metallic = 0.0
+roughness = 0.12
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "blend"
+ior = 1.333
+normal_scale = 0.8
+refraction_depth_m = 0.2
+
+[appearance.materials.polluted_water]
+display_name = "Polluted water"
+color_rgba = "859E476C"
+albedo_texture = "textures/polluted_water.png"
+normal_texture = "textures/polluted_water_normal.png"
+texture_period_m = 2.0
+metallic = 0.0
+roughness = 0.34
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "blend"
+ior = 1.36
+normal_scale = 0.8
+refraction_depth_m = 0.2
+
+[appearance.materials.brine]
+display_name = "Brine"
+color_rgba = "7DBAB57C"
+albedo_texture = "textures/brine.png"
+normal_texture = "textures/brine_normal.png"
+texture_period_m = 2.0
+metallic = 0.0
+roughness = 0.16
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "blend"
+ior = 1.38
+normal_scale = 0.8
+refraction_depth_m = 0.24
+
+[appearance.materials.crude_oil]
+display_name = "Crude oil"
+color_rgba = "4C3D4DC4"
+albedo_texture = "textures/crude_oil.png"
+normal_texture = "textures/crude_oil_normal.png"
+texture_period_m = 2.0
+metallic = 0.0
+roughness = 0.26
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "blend"
+ior = 1.47
+normal_scale = 0.8
+refraction_depth_m = 0.12
+
+[appearance.materials.magma]
+display_name = "Magma"
+color_rgba = "FF6728E8"
+albedo_texture = "textures/magma.png"
+normal_texture = "textures/magma_normal.png"
+texture_period_m = 2.0
+metallic = 0.0
+roughness = 0.48
+emissive_r = 1.0
+emissive_g = 0.19
+emissive_b = 0.025
+emissive_strength = 2.5
+alpha_mode = "blend"
+ior = 1.52
+normal_scale = 0.8
+refraction_depth_m = 0.1
+
+[appearance.materials.oxygen]
+display_name = "Oxygen"
+color_rgba = "A7DAD01C"
+albedo_texture = "textures/oxygen.png"
+normal_texture = "textures/oxygen_normal.png"
+texture_period_m = 3.0
+metallic = 0.0
+roughness = 1.0
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "blend"
+ior = 1.0003
+normal_scale = 0.0
+refraction_depth_m = 0.0
+
+[appearance.materials.polluted_oxygen]
+display_name = "Polluted oxygen"
+color_rgba = "B5C56535"
+albedo_texture = "textures/polluted_oxygen.png"
+normal_texture = "textures/polluted_oxygen_normal.png"
+texture_period_m = 3.0
+metallic = 0.0
+roughness = 1.0
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "blend"
+ior = 1.0004
+normal_scale = 0.0
+refraction_depth_m = 0.0
+
+[appearance.materials.carbon_dioxide]
+display_name = "Carbon dioxide"
+color_rgba = "9A96AF24"
+albedo_texture = "textures/carbon_dioxide.png"
+normal_texture = "textures/carbon_dioxide_normal.png"
+texture_period_m = 3.0
+metallic = 0.0
+roughness = 1.0
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "blend"
+ior = 1.00045
+normal_scale = 0.0
+refraction_depth_m = 0.0
+
+[appearance.materials.hydrogen]
+display_name = "Hydrogen"
+color_rgba = "DDA4C328"
+albedo_texture = "textures/hydrogen.png"
+normal_texture = "textures/hydrogen_normal.png"
+texture_period_m = 3.0
+metallic = 0.0
+roughness = 1.0
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "blend"
+ior = 1.00014
+normal_scale = 0.0
+refraction_depth_m = 0.0
+
+[appearance.materials.chlorine]
+display_name = "Chlorine"
+color_rgba = "D5E27938"
+albedo_texture = "textures/chlorine.png"
+normal_texture = "textures/chlorine_normal.png"
+texture_period_m = 3.0
+metallic = 0.0
+roughness = 1.0
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "blend"
+ior = 1.00077
+normal_scale = 0.0
+refraction_depth_m = 0.0
+
+[appearance.materials.steam]
+display_name = "Steam"
+color_rgba = "CFDCE54A"
+albedo_texture = "textures/steam.png"
+normal_texture = "textures/steam_normal.png"
+texture_period_m = 3.0
+metallic = 0.0
+roughness = 1.0
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "blend"
+ior = 1.00026
+normal_scale = 0.0
+refraction_depth_m = 0.03
+
+[appearance.materials.natural_gas]
+display_name = "Natural gas"
+color_rgba = "C7A36E2A"
+albedo_texture = "textures/natural_gas.png"
+normal_texture = "textures/natural_gas_normal.png"
+texture_period_m = 3.0
+metallic = 0.0
+roughness = 1.0
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "blend"
+ior = 1.00044
+normal_scale = 0.0
+refraction_depth_m = 0.0
+
+[appearance.materials.calcite]
+display_name = "Calcite"
+color_rgba = "EADCC2E8"
+albedo_texture = "textures/calcite.png"
+normal_texture = "textures/calcite_normal.png"
+texture_period_m = 2.0
+roundness = 0.4
+metallic = 0.0
+roughness = 0.24
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "blend"
+ior = 1.66
+normal_scale = 0.65
+refraction_depth_m = 0.08
+
+[appearance.materials.dolomite]
+display_name = "Dolomite"
+color_rgba = "CDBA9FFF"
+albedo_texture = "textures/dolomite.png"
+normal_texture = "textures/dolomite_normal.png"
+texture_period_m = 2.0
+roundness = 0.6
+metallic = 0.0
+roughness = 0.63
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "opaque"
+ior = 1.5
+normal_scale = 1.0
+refraction_depth_m = 0.0
+
+[appearance.materials.chalk]
+display_name = "Chalk"
+color_rgba = "E7E6D8FF"
+albedo_texture = "textures/chalk.png"
+normal_texture = "textures/chalk_normal.png"
+texture_period_m = 2.0
+roundness = 0.9
+metallic = 0.0
+roughness = 0.98
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "opaque"
+ior = 1.5
+normal_scale = 1.0
+refraction_depth_m = 0.0
+
+[appearance.materials.gypsum]
+display_name = "Gypsum"
+color_rgba = "EEE1C8D8"
+albedo_texture = "textures/gypsum.png"
+normal_texture = "textures/gypsum_normal.png"
+texture_period_m = 2.0
+roundness = 0.45
+metallic = 0.0
+roughness = 0.38
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "blend"
+ior = 1.52
+normal_scale = 0.65
+refraction_depth_m = 0.06
+
+[appearance.materials.anhydrite]
+display_name = "Anhydrite"
+color_rgba = "BFC2CDFF"
+albedo_texture = "textures/anhydrite.png"
+normal_texture = "textures/anhydrite_normal.png"
+texture_period_m = 2.0
+roundness = 0.5
+metallic = 0.0
+roughness = 0.7
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "opaque"
+ior = 1.5
+normal_scale = 1.0
+refraction_depth_m = 0.0
+
+[appearance.materials.conglomerate]
+display_name = "Conglomerate"
+color_rgba = "A79781FF"
+albedo_texture = "textures/conglomerate.png"
+normal_texture = "textures/conglomerate_normal.png"
+texture_period_m = 2.0
+roundness = 0.8
+metallic = 0.0
+roughness = 0.91
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "opaque"
+ior = 1.5
+normal_scale = 1.0
+refraction_depth_m = 0.0
+
+[appearance.materials.breccia]
+display_name = "Breccia"
+color_rgba = "B59583FF"
+albedo_texture = "textures/breccia.png"
+normal_texture = "textures/breccia_normal.png"
+texture_period_m = 2.0
+roundness = 0.3
+metallic = 0.0
+roughness = 0.89
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "opaque"
+ior = 1.5
+normal_scale = 1.0
+refraction_depth_m = 0.0
+
+[appearance.materials.gneiss]
+display_name = "Gneiss"
+color_rgba = "A3A3ADFF"
+albedo_texture = "textures/gneiss.png"
+normal_texture = "textures/gneiss_normal.png"
+texture_period_m = 2.0
+roundness = 0.45
+metallic = 0.0
+roughness = 0.81
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "opaque"
+ior = 1.5
+normal_scale = 1.0
+refraction_depth_m = 0.0
+
+[appearance.materials.pumice]
+display_name = "Pumice"
+color_rgba = "C3BAA6FF"
+albedo_texture = "textures/pumice.png"
+normal_texture = "textures/pumice_normal.png"
+texture_period_m = 2.0
+roundness = 0.85
+metallic = 0.0
+roughness = 0.98
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "opaque"
+ior = 1.5
+normal_scale = 1.0
+refraction_depth_m = 0.0
+
+[appearance.materials.laterite]
+display_name = "Laterite"
+color_rgba = "BF683FFF"
+albedo_texture = "textures/laterite.png"
+normal_texture = "textures/laterite_normal.png"
+texture_period_m = 2.0
+roundness = 0.8
+metallic = 0.0
+roughness = 0.96
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "opaque"
+ior = 1.5
+normal_scale = 1.0
+refraction_depth_m = 0.0
+
+[appearance.materials.ruby]
+display_name = "Ruby"
+color_rgba = "E33B62E0"
+albedo_texture = "textures/ruby.png"
+normal_texture = "textures/ruby_normal.png"
+texture_period_m = 1.0
+roundness = 0.18
+metallic = 0.0
+roughness = 0.08
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "blend"
+ior = 1.77
+normal_scale = 0.65
+refraction_depth_m = 0.16
+
+[appearance.materials.emerald]
+display_name = "Emerald"
+color_rgba = "43CB93D8"
+albedo_texture = "textures/emerald.png"
+normal_texture = "textures/emerald_normal.png"
+texture_period_m = 1.0
+roundness = 0.22
+metallic = 0.0
+roughness = 0.11
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "blend"
+ior = 1.58
+normal_scale = 0.65
+refraction_depth_m = 0.18
+
+[appearance.materials.fluorite]
+display_name = "Fluorite"
+color_rgba = "C6BBEBC4"
+albedo_texture = "textures/fluorite.png"
+normal_texture = "textures/fluorite_normal.png"
+texture_period_m = 1.0
+roundness = 0.25
+metallic = 0.0
+roughness = 0.18
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "blend"
+ior = 1.434
+normal_scale = 0.65
+refraction_depth_m = 0.16
+
+[appearance.materials.azurite]
+display_name = "Azurite"
+color_rgba = "3676D5FF"
+albedo_texture = "textures/azurite.png"
+normal_texture = "textures/azurite_normal.png"
+texture_period_m = 2.0
+roundness = 0.65
+metallic = 0.0
+roughness = 0.43
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "opaque"
+ior = 1.5
+normal_scale = 1.0
+refraction_depth_m = 0.0
+
+[appearance.materials.uranium_ore]
+display_name = "Uranium ore"
+color_rgba = "B8B3A3FF"
+albedo_texture = "textures/uranium_ore.png"
+normal_texture = "textures/uranium_ore_normal.png"
+texture_period_m = 2.0
+roundness = 0.5
+metallic = 0.0
+roughness = 0.8
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "opaque"
+ior = 1.5
+normal_scale = 1.0
+refraction_depth_m = 0.0
+
+[appearance.materials.autunite]
+display_name = "Autunite"
+color_rgba = "D1EA5EFF"
+albedo_texture = "textures/autunite.png"
+normal_texture = "textures/autunite_normal.png"
+texture_period_m = 1.0
+roundness = 0.35
+metallic = 0.0
+roughness = 0.34
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "opaque"
+ior = 1.5
+normal_scale = 1.0
+refraction_depth_m = 0.0
+
+[appearance.materials.tuff]
+display_name = "Tuff"
+color_rgba = "ADA58DFF"
+albedo_texture = "textures/tuff.png"
+normal_texture = "textures/tuff_normal.png"
+texture_period_m = 2.0
+roundness = 0.7
+metallic = 0.0
+roughness = 0.94
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "opaque"
+ior = 1.5
+normal_scale = 1.0
+refraction_depth_m = 0.0
+
+[appearance.materials.bedrock]
+display_name = "Bedrock"
+color_rgba = "41434FFF"
+albedo_texture = "textures/bedrock.png"
+normal_texture = "textures/bedrock_normal.png"
+texture_period_m = 2.0
+roundness = 0.25
+metallic = 0.0
+roughness = 0.88
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "opaque"
+ior = 1.5
+normal_scale = 1.0
+refraction_depth_m = 0.0
+
+[appearance.biomes]
+
+[appearance.biomes.hearth]
+display_name = "Hearth basin"
+preview_color_rgba = "9DB279FF"
+
+[appearance.biomes.verdant]
+display_name = "Verdant galleries"
+preview_color_rgba = "86B76AFF"
+
+[appearance.biomes.mire]
+display_name = "Billowed mire"
+preview_color_rgba = "7E9754FF"
+
+[appearance.biomes.dunes]
+display_name = "Ochre dunes"
+preview_color_rgba = "C4A16BFF"
+
+[appearance.biomes.rime]
+display_name = "Rime shelves"
+preview_color_rgba = "8CBED9FF"
+
+[appearance.biomes.lode]
+display_name = "Dense lode country"
+preview_color_rgba = "B18B64FF"
+
+[appearance.biomes.karst]
+display_name = "Crystal karst"
+preview_color_rgba = "B8A4D2FF"
+
+[appearance.biomes.saltworks]
+display_name = "Evaporite shelves"
+preview_color_rgba = "D5C7A1FF"
+
+[appearance.biomes.fumaroles]
+display_name = "Sulfur chimneys"
+preview_color_rgba = "C9AB43FF"
+
+[appearance.biomes.petroleum]
+display_name = "Capped petroleum basins"
+preview_color_rgba = "7A665DFF"
+
+[appearance.biomes.ember]
+display_name = "Ember depths"
+preview_color_rgba = "B6644EFF"
+
+[appearance.features]
+
+[appearance.features.landing]
+display_name = "Hearth landing"
+
+[appearance.features.pocket]
+display_name = "Pocket"
+
+[appearance.features.hearth_shelf]
+display_name = "Hearth shelf"
+
+[appearance.features.verdant_bulb]
+display_name = "Verdant bulb"
+
+[appearance.features.verdant_root]
+display_name = "Verdant root"
+
+[appearance.features.mire_pool]
+display_name = "Mire pool"
+
+[appearance.features.mire_chimney]
+display_name = "Mire chimney"
+
+[appearance.features.dune_vault]
+display_name = "Dune vault"
+
+[appearance.features.dune_bed]
+display_name = "Dune bed"
+
+[appearance.features.rime_shelf]
+display_name = "Rime shelf"
+
+[appearance.features.ruin]
+display_name = "Ruin"
+
+[appearance.features.room]
+display_name = "Room"
+
+[appearance.features.lode_lens]
+display_name = "Lode lens"
+
+[appearance.features.crystal_geode]
+display_name = "Crystal geode"
+
+[appearance.features.quartz_geode]
+display_name = "Quartz geode"
+
+[appearance.features.salt_basin]
+display_name = "Salt basin"
+
+[appearance.features.mine_gallery]
+display_name = "Mine gallery"
+
+[appearance.features.vent]
+display_name = "Vent"
+
+[appearance.features.fumarole_cluster]
+display_name = "Fumarole cluster"
+
+[appearance.features.oil_reservoir]
+display_name = "Oil reservoir"
+
+[appearance.features.oil_channels]
+display_name = "Oil channels"
+
+[appearance.features.magma_vault]
+display_name = "Magma vault"
+
+[appearance.features.ember_fracture]
+display_name = "Ember fracture"
+
+[appearance.features.hearth_promenade]
+display_name = "Hearth promenade"
+
+[appearance.features.karst_arcade]
+display_name = "Karst arcade"
+
+[appearance.features.mire_gallery]
+display_name = "Mire gallery"
+
+[appearance.worlds]
+
+[appearance.worlds.frontier]
+display_name = "Frontier basin"
+background_stack = "frontier"
+
+[appearance.worlds.hollows]
+display_name = "The wide hollows"
+background_stack = "hollows"
+
+[appearance.backgrounds]
+
+[appearance.backgrounds.frontier]
+
+[appearance.backgrounds.frontier.layers]
+
+[appearance.backgrounds.frontier.layers.distant]
+order = 0
+texture = "textures/background_frontier_distant.png"
+color_rgba = "FFFFFFFF"
+repeat_period_m = 256.0
+parallax_factor = 0.08
+
+[appearance.backgrounds.frontier.layers.caverns]
+order = 1
+texture = "textures/background_frontier_caverns.png"
+color_rgba = "FFFFFFFF"
+repeat_period_m = 180.0
+parallax_factor = 0.22
+
+[appearance.backgrounds.frontier.layers.formations]
+order = 2
+texture = "textures/background_frontier_formations.png"
+color_rgba = "FFFFFFFF"
+repeat_period_m = 112.0
+parallax_factor = 0.45
+
+[appearance.backgrounds.frontier.layers.backwall]
+order = 3
+texture = "textures/background_frontier_backwall.png"
+color_rgba = "FFFFFFFF"
+repeat_period_m = 64.0
+parallax_factor = 0.7
+
+[appearance.backgrounds.hollows]
+
+[appearance.backgrounds.hollows.layers]
+
+[appearance.backgrounds.hollows.layers.distant]
+order = 0
+texture = "textures/background_hollows_distant.png"
+color_rgba = "FFFFFFFF"
+repeat_period_m = 256.0
+parallax_factor = 0.08
+
+[appearance.backgrounds.hollows.layers.caverns]
+order = 1
+texture = "textures/background_hollows_caverns.png"
+color_rgba = "FFFFFFFF"
+repeat_period_m = 180.0
+parallax_factor = 0.22
+
+[appearance.backgrounds.hollows.layers.formations]
+order = 2
+texture = "textures/background_hollows_formations.png"
+color_rgba = "FFFFFFFF"
+repeat_period_m = 112.0
+parallax_factor = 0.45
+
+[appearance.backgrounds.hollows.layers.backwall]
+order = 3
+texture = "textures/background_hollows_backwall.png"
+color_rgba = "FFFFFFFF"
+repeat_period_m = 64.0
+parallax_factor = 0.7

@@ -1,1050 +1,25 @@
-schema_version = 2
+schema_version = 3
+# Canonical semantic keys; numeric IDs are assigned by compileDefinition.
+
+[biomes]
 
 [biomes.hearth]
-display_name = "Hearth basin"
-preview_color_rgba = "9DB279FF"
-temperature_base_k = 293.0
-temperature_variation_k = 8.0
-temperature_field = "temperature"
-lining_material = "sandstone"
-lining_thickness_fine = 1
-relaxation_passes = 8
-relaxation_adoption = 0.32
-sprinkle_probability = 0.08
-pore_field = "pore_affinity"
-pore_probability = 0.055
-pore_radius_min_m = 2.0
-pore_radius_max_m = 3.0
-pore_affinity_min = 0.08
-pore_passes = 3
-finish_passes = 3
-finish_adoption = 0.12
-soil_material = "dirt"
-weathered_material = "laterite"
-soil_depth_m = 2.5
-weathered_depth_m = 6.0
-formation_material = "clay"
-rind_material = "calcite"
-formation_probability = 0.045
-formation_length_m = 2.0
-erosion_passes = 8
 
-[biomes.hearth.deposits.secondary_host]
-kind = "threshold"
-shape = "blob"
-stage = "bulk"
-order = 1
-field = "blob_edges"
-material = "dirt"
-host_material = "sandstone"
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-blob_count = 48
-radius_min_m = 5.0
-radius_max_m = 13.0
-stretch_min = 1.0
-stretch_max = 1.8
-distortion = 0.38
-core_coverage = 0.9
-fringe_coverage = 0.3
-sprinkle_probability = 0.0
+[biomes.hearth.temperature]
+field = "temperature"
+base_k = 293.0
+variation_k = 8.0
 
-[biomes.hearth.deposits.clay]
-kind = "threshold"
-shape = "blob"
-stage = "detail"
-order = 10
-field = "blob_edges"
-material = "clay"
-host_material = "sandstone"
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-blob_count = 60
-radius_min_m = 2.5
-radius_max_m = 8.0
-stretch_min = 1.2
-stretch_max = 3.0
-distortion = 0.22
-core_coverage = 0.95
-fringe_coverage = 0.22
-sprinkle_probability = 0.004
-
-[biomes.hearth.deposits.copper_ore]
-kind = "threshold"
-shape = "blob"
-stage = "detail"
-order = 11
-field = "blob_edges"
-material = "copper_ore"
-host_material = "sandstone"
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-blob_count = 44
-radius_min_m = 2.0
-radius_max_m = 6.0
-stretch_min = 1.3
-stretch_max = 3.5
-distortion = 0.22
-core_coverage = 0.9
-fringe_coverage = 0.1
-sprinkle_probability = 0.003
-
-[biomes.hearth.deposits.coal]
-kind = "threshold"
-shape = "blob"
-stage = "detail"
-order = 12
-field = "blob_edges"
-material = "coal"
-host_material = "sandstone"
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-blob_count = 36
-radius_min_m = 3.0
-radius_max_m = 9.0
-stretch_min = 1.4
-stretch_max = 3.2
-distortion = 0.22
-core_coverage = 0.88
-fringe_coverage = 0.18
-sprinkle_probability = 0.003
-
-[biomes.hearth.deposits.algae]
-kind = "threshold"
-shape = "blob"
-stage = "detail"
-order = 13
-field = "blob_edges"
-material = "algae"
-host_material = "sandstone"
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-blob_count = 32
-radius_min_m = 2.0
-radius_max_m = 5.0
-stretch_min = 1.0
-stretch_max = 1.8
-distortion = 0.22
-core_coverage = 0.7
-fringe_coverage = 0.08
-sprinkle_probability = 0.002
-
-[biomes.verdant]
-display_name = "Verdant galleries"
-preview_color_rgba = "86B76AFF"
-temperature_base_k = 300.0
-temperature_variation_k = 8.0
-temperature_field = "temperature"
-lining_material = "clay"
-lining_thickness_fine = 1
-relaxation_passes = 9
-relaxation_adoption = 0.37
-sprinkle_probability = 0.09
-pore_field = "pore_affinity"
-pore_probability = 0.12
-pore_radius_min_m = 2.0
-pore_radius_max_m = 3.0
-pore_affinity_min = -0.02
-pore_passes = 3
-finish_passes = 3
-finish_adoption = 0.12
-soil_material = "dirt"
-soil_depth_m = 3.5
-weathered_material = "laterite"
-weathered_depth_m = 8.0
-formation_material = "algae"
-formation_probability = 0.085
-formation_length_m = 2.7
-rind_material = "calcite"
-erosion_passes = 8
-
-[biomes.verdant.deposits.limestone_islands]
-kind = "threshold"
-shape = "blob"
-stage = "bulk"
-order = 1
-field = "organic_edges"
-material = "limestone"
-host_material = "dirt"
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-blob_count = 44
-radius_min_m = 8.0
-radius_max_m = 20.0
-stretch_min = 1.0
-stretch_max = 1.7
-orientation_min_degrees = 0.0
-orientation_max_degrees = 360.0
-distortion = 0.3
-core_coverage = 1.0
-fringe_coverage = 1.0
-sprinkle_probability = 0.0
-
-[biomes.verdant.deposits.algae]
-kind = "threshold"
-shape = "blob"
-stage = "detail"
-order = 10
-field = "organic_edges"
-material = "algae"
-host_material = "dirt"
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-blob_count = 70
-radius_min_m = 2.0
-radius_max_m = 6.0
-stretch_min = 1.0
-stretch_max = 1.5
-orientation_min_degrees = 0.0
-orientation_max_degrees = 360.0
-distortion = 0.35
-core_coverage = 0.82
-fringe_coverage = 0.12
-sprinkle_probability = 0.002
-
-[biomes.verdant.deposits.phosphorite]
-kind = "threshold"
-shape = "blob"
-stage = "detail"
-order = 11
-field = "organic_edges"
-material = "phosphorite"
-host_material = "limestone"
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-blob_count = 44
-radius_min_m = 1.5
-radius_max_m = 4.0
-stretch_min = 1.1
-stretch_max = 2.0
-orientation_min_degrees = 0.0
-orientation_max_degrees = 360.0
-distortion = 0.2
-core_coverage = 0.96
-fringe_coverage = 0.08
-sprinkle_probability = 0.001
-
-[biomes.mire]
-display_name = "Billowed mire"
-preview_color_rgba = "7E9754FF"
-temperature_base_k = 305.0
-temperature_variation_k = 10.0
-temperature_field = "temperature"
-lining_material = "clay"
-lining_thickness_fine = 1
-relaxation_passes = 10
-relaxation_adoption = 0.4
-sprinkle_probability = 0.1
-pore_field = "pore_affinity"
-pore_probability = 0.17
-pore_radius_min_m = 2.0
-pore_radius_max_m = 3.0
-pore_affinity_min = -0.12
-pore_passes = 3
-finish_passes = 3
-finish_adoption = 0.12
-soil_material = "dirt"
-soil_depth_m = 2.0
-weathered_material = "clay"
-weathered_depth_m = 10.0
-formation_material = "slime"
-formation_probability = 0.12
-formation_length_m = 3.2
-rind_material = "gypsum"
-erosion_passes = 8
-
-[biomes.mire.deposits.coal]
-kind = "threshold"
-shape = "blob"
-stage = "detail"
-order = 10
-field = "organic_edges"
-material = "coal"
-host_material = "slime"
-depth_min_normalized = 0.0
-depth_max_normalized = 0.72
-blob_count = 50
-radius_min_m = 2.0
-radius_max_m = 5.0
-stretch_min = 2.0
-stretch_max = 3.5
-orientation_min_degrees = 165.0
-orientation_max_degrees = 180.0
-distortion = 0.28
-core_coverage = 0.88
-fringe_coverage = 0.2
-sprinkle_probability = 0.002
-
-[biomes.mire.deposits.shale]
-kind = "threshold"
-shape = "blob"
-stage = "detail"
-order = 11
-field = "sediment_edges"
-material = "shale"
-host_material = "clay"
-depth_min_normalized = 0.15
-depth_max_normalized = 1.0
-blob_count = 38
-radius_min_m = 3.0
-radius_max_m = 7.0
-stretch_min = 1.5
-stretch_max = 3.0
-orientation_min_degrees = 0.0
-orientation_max_degrees = 25.0
-distortion = 0.23
-core_coverage = 0.98
-fringe_coverage = 0.3
-sprinkle_probability = 0.001
-
-[biomes.dunes]
-display_name = "Ochre dunes"
-preview_color_rgba = "C4A16BFF"
-temperature_base_k = 315.0
-temperature_variation_k = 15.0
-temperature_field = "temperature"
-lining_material = "shale"
-lining_thickness_fine = 1
-relaxation_passes = 7
-relaxation_adoption = 0.27
-sprinkle_probability = 0.045
-pore_field = "pore_affinity"
-pore_probability = 0.06
-pore_radius_min_m = 2.0
-pore_radius_max_m = 3.0
-pore_affinity_min = 0.16
-pore_passes = 3
-finish_passes = 3
-finish_adoption = 0.12
-soil_material = "sandstone"
-soil_depth_m = 1.0
-weathered_material = "laterite"
-weathered_depth_m = 4.0
-formation_material = "gypsum"
-formation_probability = 0.045
-formation_length_m = 2.3
-rind_material = "rust"
-erosion_passes = 8
-
-[biomes.dunes.deposits.rust]
-kind = "threshold"
-shape = "blob"
-stage = "detail"
-order = 10
-field = "sediment_edges"
-material = "rust"
-host_material = "sandstone"
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-blob_count = 48
-radius_min_m = 1.5
-radius_max_m = 4.0
-stretch_min = 3.0
-stretch_max = 5.0
-orientation_min_degrees = 4.0
-orientation_max_degrees = 14.0
-distortion = 0.12
-core_coverage = 0.9
-fringe_coverage = 0.12
-sprinkle_probability = 0.001
-
-[biomes.dunes.deposits.iron_ore]
-kind = "threshold"
-shape = "blob"
-stage = "detail"
-order = 11
-field = "mineral_edges"
-material = "iron_ore"
-host_material = "sandstone"
-depth_min_normalized = 0.12
-depth_max_normalized = 1.0
-blob_count = 32
-radius_min_m = 1.0
-radius_max_m = 3.0
-stretch_min = 1.0
-stretch_max = 1.5
-orientation_min_degrees = 0.0
-orientation_max_degrees = 360.0
-distortion = 0.25
-core_coverage = 0.97
-fringe_coverage = 0.06
-sprinkle_probability = 0.0005
-
-[biomes.rime]
-display_name = "Rime shelves"
-preview_color_rgba = "8CBED9FF"
-temperature_base_k = 248.0
-temperature_variation_k = 15.0
-temperature_field = "temperature"
-lining_material = "granite"
-lining_thickness_fine = 2
-relaxation_passes = 7
-relaxation_adoption = 0.3
-sprinkle_probability = 0.035
-pore_field = "pore_affinity"
-pore_probability = 0.065
-pore_radius_min_m = 2.0
-pore_radius_max_m = 3.0
-pore_affinity_min = 0.1
-pore_passes = 3
-finish_passes = 3
-finish_adoption = 0.12
-soil_material = "ice"
-soil_depth_m = 1.7
-weathered_material = "polluted_ice"
-weathered_depth_m = 3.5
-formation_material = "ice"
-formation_probability = 0.095
-formation_length_m = 4.2
-rind_material = "clear_quartz"
-erosion_passes = 8
-
-[biomes.rime.deposits.granite_shelves]
-kind = "threshold"
-shape = "blob"
-stage = "bulk"
-order = 1
-field = "frozen_edges"
-material = "granite"
-host_material = "ice"
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-blob_count = 30
-radius_min_m = 5.0
-radius_max_m = 12.0
-stretch_min = 1.8
-stretch_max = 3.0
-orientation_min_degrees = 0.0
-orientation_max_degrees = 8.0
-distortion = 0.22
-core_coverage = 1.0
-fringe_coverage = 1.0
-sprinkle_probability = 0.0
-
-[biomes.rime.deposits.polluted_ice]
-kind = "threshold"
-shape = "blob"
-stage = "detail"
-order = 10
-field = "frozen_edges"
-material = "polluted_ice"
-host_material = "ice"
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-blob_count = 44
-radius_min_m = 3.0
-radius_max_m = 9.0
-stretch_min = 1.5
-stretch_max = 2.8
-orientation_min_degrees = 0.0
-orientation_max_degrees = 12.0
-distortion = 0.18
-core_coverage = 0.98
-fringe_coverage = 0.35
-sprinkle_probability = 0.0
-
-[biomes.rime.deposits.wolframite]
-kind = "threshold"
-shape = "blob"
-stage = "detail"
-order = 11
-field = "mineral_edges"
-material = "wolframite"
-host_material = "granite"
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-blob_count = 26
-radius_min_m = 1.0
-radius_max_m = 2.5
-stretch_min = 1.4
-stretch_max = 2.5
-orientation_min_degrees = 65.0
-orientation_max_degrees = 115.0
-distortion = 0.12
-core_coverage = 0.98
-fringe_coverage = 0.05
-sprinkle_probability = 0.0005
-
-[biomes.lode]
-display_name = "Dense lode country"
-preview_color_rgba = "B18B64FF"
-temperature_base_k = 318.0
-temperature_variation_k = 18.0
-temperature_field = "temperature"
-lining_material = "basalt"
-lining_thickness_fine = 3
-relaxation_passes = 9
-relaxation_adoption = 0.26
-sprinkle_probability = 0.055
-pore_field = "pore_affinity"
-pore_probability = 0.05
-pore_radius_min_m = 2.0
-pore_radius_max_m = 3.0
-pore_affinity_min = 0.22
-pore_passes = 3
-finish_passes = 3
-finish_adoption = 0.12
-soil_material = "laterite"
-weathered_material = "breccia"
-soil_depth_m = 1.0
-weathered_depth_m = 7.5
-formation_material = "clear_quartz"
-rind_material = "autunite"
-formation_probability = 0.035
-formation_length_m = 2.7
-erosion_passes = 8
-
-[biomes.lode.deposits.secondary_host]
-kind = "threshold"
-shape = "blob"
-stage = "bulk"
-order = 1
-field = "blob_edges"
-material = "basalt"
-host_material = "granite"
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-blob_count = 36
-radius_min_m = 9.0
-radius_max_m = 25.0
-stretch_min = 1.0
-stretch_max = 1.45
-distortion = 0.38
-core_coverage = 0.9
-fringe_coverage = 0.3
-sprinkle_probability = 0.0
-
-[biomes.lode.deposits.iron_ore]
-kind = "threshold"
-shape = "blob"
-stage = "detail"
-order = 10
-field = "blob_edges"
-material = "iron_ore"
-host_material = "granite"
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-blob_count = 60
-radius_min_m = 2.5
-radius_max_m = 8.0
-stretch_min = 1.8
-stretch_max = 4.0
-distortion = 0.22
-core_coverage = 0.97
-fringe_coverage = 0.18
-sprinkle_probability = 0.004
-
-[biomes.lode.deposits.copper_ore]
-kind = "threshold"
-shape = "blob"
-stage = "detail"
-order = 11
-field = "blob_edges"
-material = "copper_ore"
-host_material = "granite"
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-blob_count = 44
-radius_min_m = 2.0
-radius_max_m = 6.0
-stretch_min = 1.5
-stretch_max = 3.8
-distortion = 0.22
-core_coverage = 0.9
-fringe_coverage = 0.12
-sprinkle_probability = 0.003
-
-[biomes.lode.deposits.copper]
-kind = "threshold"
-shape = "blob"
-stage = "detail"
-order = 12
-field = "blob_edges"
-material = "copper"
-host_material = "granite"
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-blob_count = 28
-radius_min_m = 1.0
-radius_max_m = 3.0
-stretch_min = 2.0
-stretch_max = 4.5
-distortion = 0.22
-core_coverage = 0.8
-fringe_coverage = 0.05
-sprinkle_probability = 0.002
-
-[biomes.lode.deposits.iron]
-kind = "threshold"
-shape = "blob"
-stage = "detail"
-order = 13
-field = "blob_edges"
-material = "iron"
-host_material = "granite"
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-blob_count = 32
-radius_min_m = 1.2
-radius_max_m = 3.5
-stretch_min = 2.0
-stretch_max = 4.0
-distortion = 0.22
-core_coverage = 0.85
-fringe_coverage = 0.07
-sprinkle_probability = 0.002
-
-[biomes.lode.deposits.aluminum]
-kind = "threshold"
-shape = "blob"
-stage = "detail"
-order = 14
-field = "blob_edges"
-material = "aluminum"
-host_material = "granite"
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-blob_count = 24
-radius_min_m = 1.5
-radius_max_m = 4.0
-stretch_min = 1.5
-stretch_max = 3.0
-distortion = 0.22
-core_coverage = 0.8
-fringe_coverage = 0.08
-sprinkle_probability = 0.002
-
-[biomes.lode.deposits.wolframite]
-kind = "threshold"
-shape = "blob"
-stage = "detail"
-order = 15
-field = "blob_edges"
-material = "wolframite"
-host_material = "granite"
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-blob_count = 20
-radius_min_m = 1.2
-radius_max_m = 3.0
-stretch_min = 1.4
-stretch_max = 3.6
-distortion = 0.22
-core_coverage = 0.93
-fringe_coverage = 0.1
-sprinkle_probability = 0.002
-
-[biomes.karst]
-display_name = "Crystal karst"
-preview_color_rgba = "B8A4D2FF"
-temperature_base_k = 286.0
-temperature_variation_k = 12.0
-temperature_field = "temperature"
-lining_material = "limestone"
-lining_thickness_fine = 1
-relaxation_passes = 8
-relaxation_adoption = 0.3
-sprinkle_probability = 0.085
-pore_field = "pore_affinity"
-pore_probability = 0.15
-pore_radius_min_m = 2.0
-pore_radius_max_m = 3.0
-pore_affinity_min = -0.08
-pore_passes = 3
-finish_passes = 3
-finish_adoption = 0.12
-soil_material = "dirt"
-weathered_material = "chalk"
-soil_depth_m = 1.5
-weathered_depth_m = 5.0
-formation_material = "calcite"
-rind_material = "fluorite"
-formation_probability = 0.14
-formation_length_m = 5.5
-erosion_passes = 8
-
-[biomes.karst.deposits.secondary_host]
-kind = "threshold"
-shape = "blob"
-stage = "bulk"
-order = 1
-field = "blob_edges"
-material = "dolomite"
-host_material = "limestone"
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-blob_count = 42
-radius_min_m = 7.0
-radius_max_m = 19.0
-stretch_min = 1.0
-stretch_max = 1.7
-distortion = 0.38
-core_coverage = 0.9
-fringe_coverage = 0.3
-sprinkle_probability = 0.0
-
-[biomes.karst.deposits.crystal]
-kind = "threshold"
-shape = "blob"
-stage = "detail"
-order = 10
-field = "blob_edges"
-material = "crystal"
-host_material = "limestone"
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-blob_count = 48
-radius_min_m = 2.0
-radius_max_m = 7.0
-stretch_min = 1.0
-stretch_max = 2.1
-distortion = 0.22
-core_coverage = 0.92
-fringe_coverage = 0.12
-sprinkle_probability = 0.003
-
-[biomes.karst.deposits.diamond]
-kind = "threshold"
-shape = "blob"
-stage = "detail"
-order = 11
-field = "blob_edges"
-material = "diamond"
-host_material = "limestone"
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-blob_count = 18
-radius_min_m = 0.8
-radius_max_m = 2.5
-stretch_min = 1.0
-stretch_max = 1.8
-distortion = 0.22
-core_coverage = 0.88
-fringe_coverage = 0.05
-sprinkle_probability = 0.001
-
-[biomes.saltworks]
-display_name = "Evaporite shelves"
-preview_color_rgba = "D5C7A1FF"
-temperature_base_k = 305.0
-temperature_variation_k = 12.0
-temperature_field = "temperature"
-lining_material = "salt"
-lining_thickness_fine = 2
-relaxation_passes = 8
-relaxation_adoption = 0.28
-sprinkle_probability = 0.055
-pore_field = "pore_affinity"
-pore_probability = 0.08
-pore_radius_min_m = 2.0
-pore_radius_max_m = 3.0
-pore_affinity_min = 0.1
-pore_passes = 3
-finish_passes = 3
-finish_adoption = 0.12
-soil_material = "salt"
-soil_depth_m = 1.5
-weathered_material = "gypsum"
-weathered_depth_m = 5.0
-formation_material = "gypsum"
-formation_probability = 0.11
-formation_length_m = 4.6
-rind_material = "anhydrite"
-erosion_passes = 8
-
-[biomes.saltworks.deposits.clay]
-kind = "threshold"
-shape = "blob"
-stage = "detail"
-order = 10
-field = "sediment_edges"
-material = "clay"
-host_material = "salt"
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-blob_count = 38
-radius_min_m = 1.5
-radius_max_m = 4.0
-stretch_min = 4.0
-stretch_max = 6.0
-orientation_min_degrees = 174.0
-orientation_max_degrees = 180.0
-distortion = 0.08
-core_coverage = 1.0
-fringe_coverage = 0.4
-sprinkle_probability = 0.0
-
-[biomes.fumaroles]
-display_name = "Sulfur chimneys"
-preview_color_rgba = "C9AB43FF"
-temperature_base_k = 365.0
-temperature_variation_k = 25.0
-temperature_field = "temperature"
-lining_material = "obsidian"
-lining_thickness_fine = 2
-relaxation_passes = 8
-relaxation_adoption = 0.28
-sprinkle_probability = 0.055
-pore_field = "pore_affinity"
-pore_probability = 0.085
-pore_radius_min_m = 2.0
-pore_radius_max_m = 3.0
-pore_affinity_min = 0.12
-pore_passes = 3
-finish_passes = 3
-finish_adoption = 0.12
-soil_material = "tuff"
-soil_depth_m = 1.2
-weathered_material = "breccia"
-weathered_depth_m = 6.0
-formation_material = "sulfur"
-formation_probability = 0.1
-formation_length_m = 3.2
-rind_material = "azurite"
-erosion_passes = 8
-
-[biomes.fumaroles.deposits.obsidian_pipes]
-kind = "threshold"
-shape = "blob"
-stage = "bulk"
-order = 1
-field = "volcanic_edges"
-material = "obsidian"
-host_material = "basalt"
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-blob_count = 28
-radius_min_m = 3.0
-radius_max_m = 7.0
-stretch_min = 3.0
-stretch_max = 5.0
-orientation_min_degrees = 76.0
-orientation_max_degrees = 104.0
-distortion = 0.38
-core_coverage = 1.0
-fringe_coverage = 1.0
-sprinkle_probability = 0.0
-
-[biomes.fumaroles.deposits.sulfur]
-kind = "threshold"
-shape = "blob"
-stage = "detail"
-order = 10
-field = "mineral_edges"
-material = "sulfur"
-host_material = "basalt"
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-blob_count = 64
-radius_min_m = 1.0
-radius_max_m = 3.0
-stretch_min = 2.5
-stretch_max = 4.0
-orientation_min_degrees = 75.0
-orientation_max_degrees = 105.0
-distortion = 0.26
-core_coverage = 0.92
-fringe_coverage = 0.12
-sprinkle_probability = 0.001
-
-[biomes.fumaroles.deposits.rust]
-kind = "threshold"
-shape = "blob"
-stage = "detail"
-order = 11
-field = "mineral_edges"
-material = "rust"
-host_material = "obsidian"
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-blob_count = 28
-radius_min_m = 1.0
-radius_max_m = 2.5
-stretch_min = 2.0
-stretch_max = 3.5
-orientation_min_degrees = 78.0
-orientation_max_degrees = 102.0
-distortion = 0.2
-core_coverage = 0.8
-fringe_coverage = 0.08
-sprinkle_probability = 0.0005
-
-[biomes.petroleum]
-display_name = "Capped petroleum basins"
-preview_color_rgba = "7A665DFF"
-temperature_base_k = 370.0
-temperature_variation_k = 20.0
-temperature_field = "temperature"
-lining_material = "basalt"
-lining_thickness_fine = 3
-relaxation_passes = 8
-relaxation_adoption = 0.25
-sprinkle_probability = 0.04
-pore_field = "pore_affinity"
-pore_probability = 0.055
-pore_radius_min_m = 2.0
-pore_radius_max_m = 3.0
-pore_affinity_min = 0.2
-pore_passes = 3
-finish_passes = 3
-finish_adoption = 0.12
-soil_material = "clay"
-soil_depth_m = 1.0
-weathered_material = "shale"
-weathered_depth_m = 7.0
-formation_material = "calcite"
-formation_probability = 0.055
-formation_length_m = 2.7
-rind_material = "azurite"
-erosion_passes = 8
-
-[biomes.petroleum.deposits.basalt_caps]
-kind = "threshold"
-shape = "blob"
-stage = "bulk"
-order = 1
-field = "sediment_edges"
-material = "basalt"
-host_material = "shale"
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-blob_count = 32
-radius_min_m = 4.0
-radius_max_m = 10.0
-stretch_min = 2.0
-stretch_max = 3.5
-orientation_min_degrees = 174.0
-orientation_max_degrees = 180.0
-distortion = 0.22
-core_coverage = 1.0
-fringe_coverage = 1.0
-sprinkle_probability = 0.0
-
-[biomes.petroleum.deposits.coal]
-kind = "threshold"
-shape = "blob"
-stage = "detail"
-order = 10
-field = "organic_edges"
-material = "coal"
-host_material = "shale"
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-blob_count = 44
-radius_min_m = 2.0
-radius_max_m = 5.0
-stretch_min = 2.5
-stretch_max = 4.0
-orientation_min_degrees = 170.0
-orientation_max_degrees = 180.0
-distortion = 0.15
-core_coverage = 0.95
-fringe_coverage = 0.15
-sprinkle_probability = 0.001
-
-[biomes.petroleum.deposits.diamond]
-kind = "threshold"
-shape = "blob"
-stage = "detail"
-order = 11
-field = "mineral_edges"
-material = "diamond"
-host_material = "basalt"
-depth_min_normalized = 0.45
-depth_max_normalized = 1.0
-blob_count = 14
-radius_min_m = 0.8
-radius_max_m = 1.8
-stretch_min = 1.0
-stretch_max = 1.5
-orientation_min_degrees = 0.0
-orientation_max_degrees = 360.0
-distortion = 0.1
-core_coverage = 0.98
-fringe_coverage = 0.03
-sprinkle_probability = 0.0
-
-[biomes.ember]
-display_name = "Ember depths"
-preview_color_rgba = "B6644EFF"
-temperature_base_k = 1100.0
-temperature_variation_k = 100.0
-temperature_field = "temperature"
-lining_material = "obsidian"
-lining_thickness_fine = 3
-relaxation_passes = 9
-relaxation_adoption = 0.28
-sprinkle_probability = 0.045
-pore_field = "pore_affinity"
-pore_probability = 0.095
-pore_radius_min_m = 2.0
-pore_radius_max_m = 3.0
-pore_affinity_min = 0.06
-pore_passes = 3
-finish_passes = 3
-finish_adoption = 0.12
-soil_material = "pumice"
-soil_depth_m = 1.5
-weathered_material = "tuff"
-weathered_depth_m = 8.0
-formation_material = "obsidian"
-formation_probability = 0.075
-formation_length_m = 3.8
-rind_material = "breccia"
-erosion_passes = 8
-
-[biomes.ember.deposits.glass]
-kind = "threshold"
-shape = "blob"
-stage = "detail"
-order = 10
-field = "volcanic_edges"
-material = "glass"
-host_material = "obsidian"
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-blob_count = 36
-radius_min_m = 2.0
-radius_max_m = 5.0
-stretch_min = 1.5
-stretch_max = 3.0
-orientation_min_degrees = 150.0
-orientation_max_degrees = 180.0
-distortion = 0.2
-core_coverage = 0.96
-fringe_coverage = 0.18
-sprinkle_probability = 0.0
-
-[biomes.ember.deposits.iron]
-kind = "threshold"
-shape = "blob"
-stage = "detail"
-order = 11
-field = "mineral_edges"
-material = "iron"
-host_material = "basalt"
-depth_min_normalized = 0.0
-depth_max_normalized = 1.0
-blob_count = 30
-radius_min_m = 1.0
-radius_max_m = 3.0
-stretch_min = 1.0
-stretch_max = 1.7
-orientation_min_degrees = 0.0
-orientation_max_degrees = 360.0
-distortion = 0.3
-core_coverage = 0.93
-fringe_coverage = 0.05
-sprinkle_probability = 0.0005
+[biomes.hearth.composition]
 
 [biomes.hearth.composition.cover]
 order = 10
-depth_min_normalized = 0
-depth_max_normalized = 0.22
 field = "hearth_bedding"
 bed_period_m = 48
 bed_warp_m = 7
 bed_dip = 0.035
+
+[biomes.hearth.composition.cover.materials]
 
 [biomes.hearth.composition.cover.materials.bed_01]
 material = "sandstone"
@@ -1062,14 +37,18 @@ weight = 0.7
 material = "shale"
 weight = 0.9
 
+[biomes.hearth.composition.cover.depth]
+min = 0
+max = 0.22
+
 [biomes.hearth.composition.basin]
 order = 20
-depth_min_normalized = 0.22
-depth_max_normalized = 1
 field = "hearth_bedding"
 bed_period_m = 82
 bed_warp_m = 12
 bed_dip = -0.02
+
+[biomes.hearth.composition.basin.materials]
 
 [biomes.hearth.composition.basin.materials.bed_01]
 material = "sandstone"
@@ -1087,209 +66,269 @@ weight = 1.3
 material = "breccia"
 weight = 0.7
 
+[biomes.hearth.composition.basin.depth]
+min = 0.22
+max = 1
 
-[biomes.lode.composition.upper]
+[biomes.hearth.deposits]
+
+[biomes.hearth.deposits.secondary_host]
+stage = "bulk"
+order = 1
+field = "blob_edges"
+material = "dirt"
+host_material = "sandstone"
+core_coverage = 0.9
+fringe_coverage = 0.3
+sprinkle_probability = 0.0
+
+[biomes.hearth.deposits.secondary_host.depth]
+min = 0.0
+max = 1.0
+
+[biomes.hearth.deposits.secondary_host.threshold]
+min = -1.0
+max = 1.0
+
+[biomes.hearth.deposits.secondary_host.blob]
+count = 48
+distortion = 0.38
+
+[biomes.hearth.deposits.secondary_host.blob.radius]
+min_m = 5.0
+max_m = 13.0
+
+[biomes.hearth.deposits.secondary_host.blob.stretch]
+min = 1.0
+max = 1.8
+
+[biomes.hearth.deposits.secondary_host.blob.orientation]
+
+[biomes.hearth.deposits.clay]
+stage = "detail"
 order = 10
-depth_min_normalized = 0
-depth_max_normalized = 0.44
-field = "lode_bedding"
-bed_period_m = 78
-bed_warp_m = 18
-bed_dip = 0.14
+field = "blob_edges"
+material = "clay"
+host_material = "sandstone"
+core_coverage = 0.95
+fringe_coverage = 0.22
+sprinkle_probability = 0.004
 
-[biomes.lode.composition.upper.materials.bed_01]
-material = "gneiss"
-weight = 4.8
+[biomes.hearth.deposits.clay.depth]
+min = 0.0
+max = 1.0
 
-[biomes.lode.composition.upper.materials.bed_02]
-material = "granite"
-weight = 3.6
+[biomes.hearth.deposits.clay.threshold]
+min = -1.0
+max = 1.0
 
-[biomes.lode.composition.upper.materials.bed_03]
-material = "basalt"
-weight = 1.6
+[biomes.hearth.deposits.clay.blob]
+count = 60
+distortion = 0.22
 
-[biomes.lode.composition.deep]
-order = 20
-depth_min_normalized = 0.44
-depth_max_normalized = 1
-field = "beds"
-bed_period_m = 0
-bed_warp_m = 0
-bed_dip = 0
+[biomes.hearth.deposits.clay.blob.radius]
+min_m = 2.5
+max_m = 8.0
 
-[biomes.lode.composition.deep.materials.bed_01]
-material = "granite"
-weight = 5.8
+[biomes.hearth.deposits.clay.blob.stretch]
+min = 1.2
+max = 3.0
 
-[biomes.lode.composition.deep.materials.bed_02]
-material = "gneiss"
-weight = 2.8
+[biomes.hearth.deposits.clay.blob.orientation]
 
-[biomes.lode.composition.deep.materials.bed_03]
-material = "basalt"
-weight = 1.4
-
-
-[biomes.karst.composition.upper]
-order = 10
-depth_min_normalized = 0
-depth_max_normalized = 0.26
-field = "karst_bedding"
-bed_period_m = 42
-bed_warp_m = 9
-bed_dip = -0.055
-
-[biomes.karst.composition.upper.materials.bed_01]
-material = "chalk"
-weight = 2.4
-
-[biomes.karst.composition.upper.materials.bed_02]
-material = "limestone"
-weight = 5.0
-
-[biomes.karst.composition.upper.materials.bed_03]
-material = "dolomite"
-weight = 2.0
-
-[biomes.karst.composition.upper.materials.bed_04]
-material = "gypsum"
-weight = 0.6
-
-[biomes.karst.composition.lower]
-order = 20
-depth_min_normalized = 0.26
-depth_max_normalized = 1
-field = "karst_bedding"
-bed_period_m = 66
-bed_warp_m = 15
-bed_dip = 0.025
-
-[biomes.karst.composition.lower.materials.bed_01]
-material = "limestone"
-weight = 5.8
-
-[biomes.karst.composition.lower.materials.bed_02]
-material = "dolomite"
-weight = 2.4
-
-[biomes.karst.composition.lower.materials.bed_03]
-material = "anhydrite"
-weight = 0.9
-
-[biomes.karst.composition.lower.materials.bed_04]
-material = "phosphorite"
-weight = 0.9
-
-
-[biomes.lode.deposits.ruby]
-kind = "threshold"
-order = 200
-field = "mineral_edges"
-material = "ruby"
-host_material = "gneiss"
-depth_min_normalized = 0.12
-depth_max_normalized = 1.0
-threshold_min = -1.0
-threshold_max = 1.0
-shape = "blob"
+[biomes.hearth.deposits.copper_ore]
 stage = "detail"
-blob_count = 14
-radius_min_m = 2.0
-radius_max_m = 4.5
-stretch_min = 1.0
-stretch_max = 1.9
-distortion = 0.3
-core_coverage = 0.85
-fringe_coverage = 0.25
-sprinkle_probability = 0.002
-orientation_min_degrees = 0.0
-orientation_max_degrees = 360.0
+order = 11
+field = "blob_edges"
+material = "copper_ore"
+host_material = "sandstone"
+core_coverage = 0.9
+fringe_coverage = 0.1
+sprinkle_probability = 0.003
 
+[biomes.hearth.deposits.copper_ore.depth]
+min = 0.0
+max = 1.0
 
-[biomes.lode.deposits.emerald]
-kind = "threshold"
-order = 210
-field = "mineral_edges"
-material = "emerald"
-host_material = "gneiss"
-depth_min_normalized = 0.12
-depth_max_normalized = 1.0
-threshold_min = -1.0
-threshold_max = 1.0
-shape = "blob"
+[biomes.hearth.deposits.copper_ore.threshold]
+min = -1.0
+max = 1.0
+
+[biomes.hearth.deposits.copper_ore.blob]
+count = 44
+distortion = 0.22
+
+[biomes.hearth.deposits.copper_ore.blob.radius]
+min_m = 2.0
+max_m = 6.0
+
+[biomes.hearth.deposits.copper_ore.blob.stretch]
+min = 1.3
+max = 3.5
+
+[biomes.hearth.deposits.copper_ore.blob.orientation]
+
+[biomes.hearth.deposits.coal]
 stage = "detail"
-blob_count = 16
-radius_min_m = 2.0
-radius_max_m = 5.0
-stretch_min = 1.0
-stretch_max = 1.9
-distortion = 0.3
-core_coverage = 0.85
-fringe_coverage = 0.25
-sprinkle_probability = 0.002
-orientation_min_degrees = 0.0
-orientation_max_degrees = 360.0
+order = 12
+field = "blob_edges"
+material = "coal"
+host_material = "sandstone"
+core_coverage = 0.88
+fringe_coverage = 0.18
+sprinkle_probability = 0.003
 
+[biomes.hearth.deposits.coal.depth]
+min = 0.0
+max = 1.0
 
-[biomes.lode.deposits.uranium_ore]
-kind = "threshold"
-order = 220
-field = "mineral_edges"
-material = "uranium_ore"
-host_material = "granite"
-depth_min_normalized = 0.12
-depth_max_normalized = 1.0
-threshold_min = -1.0
-threshold_max = 1.0
-shape = "blob"
+[biomes.hearth.deposits.coal.threshold]
+min = -1.0
+max = 1.0
+
+[biomes.hearth.deposits.coal.blob]
+count = 36
+distortion = 0.22
+
+[biomes.hearth.deposits.coal.blob.radius]
+min_m = 3.0
+max_m = 9.0
+
+[biomes.hearth.deposits.coal.blob.stretch]
+min = 1.4
+max = 3.2
+
+[biomes.hearth.deposits.coal.blob.orientation]
+
+[biomes.hearth.deposits.algae]
 stage = "detail"
-blob_count = 16
-radius_min_m = 2.5
-radius_max_m = 5.5
-stretch_min = 1.0
-stretch_max = 1.9
-distortion = 0.3
-core_coverage = 0.85
-fringe_coverage = 0.25
+order = 13
+field = "blob_edges"
+material = "algae"
+host_material = "sandstone"
+core_coverage = 0.7
+fringe_coverage = 0.08
 sprinkle_probability = 0.002
-orientation_min_degrees = 0.0
-orientation_max_degrees = 360.0
 
+[biomes.hearth.deposits.algae.depth]
+min = 0.0
+max = 1.0
+
+[biomes.hearth.deposits.algae.threshold]
+min = -1.0
+max = 1.0
+
+[biomes.hearth.deposits.algae.blob]
+count = 32
+distortion = 0.22
+
+[biomes.hearth.deposits.algae.blob.radius]
+min_m = 2.0
+max_m = 5.0
+
+[biomes.hearth.deposits.algae.blob.stretch]
+min = 1.0
+max = 1.8
+
+[biomes.hearth.deposits.algae.blob.orientation]
 
 [biomes.hearth.deposits.azurite]
-kind = "threshold"
 order = 230
 field = "mineral_edges"
 material = "azurite"
 host_material = "sandstone"
-depth_min_normalized = 0.12
-depth_max_normalized = 1.0
-threshold_min = -1.0
-threshold_max = 1.0
-shape = "blob"
 stage = "detail"
-blob_count = 14
-radius_min_m = 2.5
-radius_max_m = 5.5
-stretch_min = 1.0
-stretch_max = 1.9
-distortion = 0.3
 core_coverage = 0.85
 fringe_coverage = 0.25
 sprinkle_probability = 0.002
-orientation_min_degrees = 0.0
-orientation_max_degrees = 360.0
 
+[biomes.hearth.deposits.azurite.depth]
+min = 0.12
+max = 1.0
+
+[biomes.hearth.deposits.azurite.threshold]
+min = -1.0
+max = 1.0
+
+[biomes.hearth.deposits.azurite.blob]
+count = 14
+distortion = 0.3
+
+[biomes.hearth.deposits.azurite.blob.radius]
+min_m = 2.5
+max_m = 5.5
+
+[biomes.hearth.deposits.azurite.blob.stretch]
+min = 1.0
+max = 1.9
+
+[biomes.hearth.deposits.azurite.blob.orientation]
+min_degrees = 0.0
+max_degrees = 360.0
+
+[biomes.hearth.pore]
+field = "pore_affinity"
+probability = 0.055
+affinity_min = 0.08
+passes = 3
+
+[biomes.hearth.pore.radius]
+min_m = 2.0
+max_m = 3.0
+
+[biomes.hearth.lining]
+material = "sandstone"
+thickness_fine = 1
+
+[biomes.hearth.relaxation]
+passes = 8
+adoption = 0.32
+
+[biomes.hearth.sprinkle]
+probability = 0.08
+
+[biomes.hearth.finish]
+passes = 3
+adoption = 0.12
+
+[biomes.hearth.erosion]
+passes = 8
+
+[biomes.hearth.formation]
+material = "clay"
+probability = 0.045
+length_m = 2.0
+
+[biomes.hearth.rind]
+material = "calcite"
+
+[biomes.hearth.surface_layers]
+
+[biomes.hearth.surface_layers.soil]
+material = "dirt"
+depth_m = 2.5
+
+[biomes.hearth.surface_layers.weathered]
+material = "laterite"
+depth_m = 6.0
+
+[biomes.verdant]
+
+[biomes.verdant.temperature]
+field = "temperature"
+base_k = 300.0
+variation_k = 8.0
+
+[biomes.verdant.composition]
 
 [biomes.verdant.composition.canopy]
 order = 10
-depth_min_normalized = 0
-depth_max_normalized = 0.32
 field = "organic_beds"
 bed_period_m = 0
 bed_warp_m = 0
 bed_dip = 0
+
+[biomes.verdant.composition.canopy.materials]
 
 [biomes.verdant.composition.canopy.materials.bed_01]
 material = "dirt"
@@ -1307,14 +346,18 @@ weight = 2.8
 material = "algae"
 weight = 0.6
 
+[biomes.verdant.composition.canopy.depth]
+min = 0
+max = 0.32
+
 [biomes.verdant.composition.galleries]
 order = 20
-depth_min_normalized = 0.32
-depth_max_normalized = 1
 field = "hearth_bedding"
 bed_period_m = 91
 bed_warp_m = 31
 bed_dip = -0.045
+
+[biomes.verdant.composition.galleries.materials]
 
 [biomes.verdant.composition.galleries.materials.bed_01]
 material = "dirt"
@@ -1332,15 +375,177 @@ weight = 0.6
 material = "clay"
 weight = 0.8
 
+[biomes.verdant.composition.galleries.depth]
+min = 0.32
+max = 1
+
+[biomes.verdant.deposits]
+
+[biomes.verdant.deposits.limestone_islands]
+stage = "bulk"
+order = 1
+field = "organic_edges"
+material = "limestone"
+host_material = "dirt"
+core_coverage = 1.0
+fringe_coverage = 1.0
+sprinkle_probability = 0.0
+
+[biomes.verdant.deposits.limestone_islands.depth]
+min = 0.0
+max = 1.0
+
+[biomes.verdant.deposits.limestone_islands.threshold]
+min = -1.0
+max = 1.0
+
+[biomes.verdant.deposits.limestone_islands.blob]
+count = 44
+distortion = 0.3
+
+[biomes.verdant.deposits.limestone_islands.blob.radius]
+min_m = 8.0
+max_m = 20.0
+
+[biomes.verdant.deposits.limestone_islands.blob.stretch]
+min = 1.0
+max = 1.7
+
+[biomes.verdant.deposits.limestone_islands.blob.orientation]
+min_degrees = 0.0
+max_degrees = 360.0
+
+[biomes.verdant.deposits.algae]
+stage = "detail"
+order = 10
+field = "organic_edges"
+material = "algae"
+host_material = "dirt"
+core_coverage = 0.82
+fringe_coverage = 0.12
+sprinkle_probability = 0.002
+
+[biomes.verdant.deposits.algae.depth]
+min = 0.0
+max = 1.0
+
+[biomes.verdant.deposits.algae.threshold]
+min = -1.0
+max = 1.0
+
+[biomes.verdant.deposits.algae.blob]
+count = 70
+distortion = 0.35
+
+[biomes.verdant.deposits.algae.blob.radius]
+min_m = 2.0
+max_m = 6.0
+
+[biomes.verdant.deposits.algae.blob.stretch]
+min = 1.0
+max = 1.5
+
+[biomes.verdant.deposits.algae.blob.orientation]
+min_degrees = 0.0
+max_degrees = 360.0
+
+[biomes.verdant.deposits.phosphorite]
+stage = "detail"
+order = 11
+field = "organic_edges"
+material = "phosphorite"
+host_material = "limestone"
+core_coverage = 0.96
+fringe_coverage = 0.08
+sprinkle_probability = 0.001
+
+[biomes.verdant.deposits.phosphorite.depth]
+min = 0.0
+max = 1.0
+
+[biomes.verdant.deposits.phosphorite.threshold]
+min = -1.0
+max = 1.0
+
+[biomes.verdant.deposits.phosphorite.blob]
+count = 44
+distortion = 0.2
+
+[biomes.verdant.deposits.phosphorite.blob.radius]
+min_m = 1.5
+max_m = 4.0
+
+[biomes.verdant.deposits.phosphorite.blob.stretch]
+min = 1.1
+max = 2.0
+
+[biomes.verdant.deposits.phosphorite.blob.orientation]
+min_degrees = 0.0
+max_degrees = 360.0
+
+[biomes.verdant.pore]
+field = "pore_affinity"
+probability = 0.12
+affinity_min = -0.02
+passes = 3
+
+[biomes.verdant.pore.radius]
+min_m = 2.0
+max_m = 3.0
+
+[biomes.verdant.lining]
+material = "clay"
+thickness_fine = 1
+
+[biomes.verdant.relaxation]
+passes = 9
+adoption = 0.37
+
+[biomes.verdant.sprinkle]
+probability = 0.09
+
+[biomes.verdant.finish]
+passes = 3
+adoption = 0.12
+
+[biomes.verdant.erosion]
+passes = 8
+
+[biomes.verdant.formation]
+material = "algae"
+probability = 0.085
+length_m = 2.7
+
+[biomes.verdant.rind]
+material = "calcite"
+
+[biomes.verdant.surface_layers]
+
+[biomes.verdant.surface_layers.soil]
+material = "dirt"
+depth_m = 3.5
+
+[biomes.verdant.surface_layers.weathered]
+material = "laterite"
+depth_m = 8.0
+
+[biomes.mire]
+
+[biomes.mire.temperature]
+field = "temperature"
+base_k = 305.0
+variation_k = 10.0
+
+[biomes.mire.composition]
 
 [biomes.mire.composition.peat]
 order = 10
-depth_min_normalized = 0
-depth_max_normalized = 0.38
 field = "mire_masses"
 bed_period_m = 0
 bed_warp_m = 0
 bed_dip = 0
+
+[biomes.mire.composition.peat.materials]
 
 [biomes.mire.composition.peat.materials.bed_01]
 material = "slime"
@@ -1358,14 +563,18 @@ weight = 1.2
 material = "coal"
 weight = 0.3
 
+[biomes.mire.composition.peat.depth]
+min = 0
+max = 0.38
+
 [biomes.mire.composition.buried]
 order = 20
-depth_min_normalized = 0.38
-depth_max_normalized = 1
 field = "lode_bedding"
 bed_period_m = 74
 bed_warp_m = 30
 bed_dip = 0.065
+
+[biomes.mire.composition.buried.materials]
 
 [biomes.mire.composition.buried.materials.bed_01]
 material = "slime"
@@ -1383,15 +592,143 @@ weight = 1.9
 material = "coal"
 weight = 0.4
 
+[biomes.mire.composition.buried.depth]
+min = 0.38
+max = 1
+
+[biomes.mire.deposits]
+
+[biomes.mire.deposits.coal]
+stage = "detail"
+order = 10
+field = "organic_edges"
+material = "coal"
+host_material = "slime"
+core_coverage = 0.88
+fringe_coverage = 0.2
+sprinkle_probability = 0.002
+
+[biomes.mire.deposits.coal.depth]
+min = 0.0
+max = 0.72
+
+[biomes.mire.deposits.coal.threshold]
+min = -1.0
+max = 1.0
+
+[biomes.mire.deposits.coal.blob]
+count = 50
+distortion = 0.28
+
+[biomes.mire.deposits.coal.blob.radius]
+min_m = 2.0
+max_m = 5.0
+
+[biomes.mire.deposits.coal.blob.stretch]
+min = 2.0
+max = 3.5
+
+[biomes.mire.deposits.coal.blob.orientation]
+min_degrees = 165.0
+max_degrees = 180.0
+
+[biomes.mire.deposits.shale]
+stage = "detail"
+order = 11
+field = "sediment_edges"
+material = "shale"
+host_material = "clay"
+core_coverage = 0.98
+fringe_coverage = 0.3
+sprinkle_probability = 0.001
+
+[biomes.mire.deposits.shale.depth]
+min = 0.15
+max = 1.0
+
+[biomes.mire.deposits.shale.threshold]
+min = -1.0
+max = 1.0
+
+[biomes.mire.deposits.shale.blob]
+count = 38
+distortion = 0.23
+
+[biomes.mire.deposits.shale.blob.radius]
+min_m = 3.0
+max_m = 7.0
+
+[biomes.mire.deposits.shale.blob.stretch]
+min = 1.5
+max = 3.0
+
+[biomes.mire.deposits.shale.blob.orientation]
+min_degrees = 0.0
+max_degrees = 25.0
+
+[biomes.mire.pore]
+field = "pore_affinity"
+probability = 0.17
+affinity_min = -0.12
+passes = 3
+
+[biomes.mire.pore.radius]
+min_m = 2.0
+max_m = 3.0
+
+[biomes.mire.lining]
+material = "clay"
+thickness_fine = 1
+
+[biomes.mire.relaxation]
+passes = 10
+adoption = 0.4
+
+[biomes.mire.sprinkle]
+probability = 0.1
+
+[biomes.mire.finish]
+passes = 3
+adoption = 0.12
+
+[biomes.mire.erosion]
+passes = 8
+
+[biomes.mire.formation]
+material = "slime"
+probability = 0.12
+length_m = 3.2
+
+[biomes.mire.rind]
+material = "gypsum"
+
+[biomes.mire.surface_layers]
+
+[biomes.mire.surface_layers.soil]
+material = "dirt"
+depth_m = 2.0
+
+[biomes.mire.surface_layers.weathered]
+material = "clay"
+depth_m = 10.0
+
+[biomes.dunes]
+
+[biomes.dunes.temperature]
+field = "temperature"
+base_k = 315.0
+variation_k = 15.0
+
+[biomes.dunes.composition]
 
 [biomes.dunes.composition.crossbeds]
 order = 10
-depth_min_normalized = 0
-depth_max_normalized = 0.3
 field = "dune_beds"
 bed_period_m = 34
 bed_warp_m = 5
 bed_dip = 0.16
+
+[biomes.dunes.composition.crossbeds.materials]
 
 [biomes.dunes.composition.crossbeds.materials.bed_01]
 material = "sandstone"
@@ -1409,14 +746,18 @@ weight = 0.5
 material = "rust"
 weight = 0.2
 
+[biomes.dunes.composition.crossbeds.depth]
+min = 0
+max = 0.3
+
 [biomes.dunes.composition.buried]
 order = 20
-depth_min_normalized = 0.3
-depth_max_normalized = 1
 field = "dune_beds"
 bed_period_m = 68
 bed_warp_m = 9
 bed_dip = -0.075
+
+[biomes.dunes.composition.buried.materials]
 
 [biomes.dunes.composition.buried.materials.bed_01]
 material = "sandstone"
@@ -1434,15 +775,143 @@ weight = 1.1
 material = "iron_ore"
 weight = 0.3
 
+[biomes.dunes.composition.buried.depth]
+min = 0.3
+max = 1
+
+[biomes.dunes.deposits]
+
+[biomes.dunes.deposits.rust]
+stage = "detail"
+order = 10
+field = "sediment_edges"
+material = "rust"
+host_material = "sandstone"
+core_coverage = 0.9
+fringe_coverage = 0.12
+sprinkle_probability = 0.001
+
+[biomes.dunes.deposits.rust.depth]
+min = 0.0
+max = 1.0
+
+[biomes.dunes.deposits.rust.threshold]
+min = -1.0
+max = 1.0
+
+[biomes.dunes.deposits.rust.blob]
+count = 48
+distortion = 0.12
+
+[biomes.dunes.deposits.rust.blob.radius]
+min_m = 1.5
+max_m = 4.0
+
+[biomes.dunes.deposits.rust.blob.stretch]
+min = 3.0
+max = 5.0
+
+[biomes.dunes.deposits.rust.blob.orientation]
+min_degrees = 4.0
+max_degrees = 14.0
+
+[biomes.dunes.deposits.iron_ore]
+stage = "detail"
+order = 11
+field = "mineral_edges"
+material = "iron_ore"
+host_material = "sandstone"
+core_coverage = 0.97
+fringe_coverage = 0.06
+sprinkle_probability = 0.0005
+
+[biomes.dunes.deposits.iron_ore.depth]
+min = 0.12
+max = 1.0
+
+[biomes.dunes.deposits.iron_ore.threshold]
+min = -1.0
+max = 1.0
+
+[biomes.dunes.deposits.iron_ore.blob]
+count = 32
+distortion = 0.25
+
+[biomes.dunes.deposits.iron_ore.blob.radius]
+min_m = 1.0
+max_m = 3.0
+
+[biomes.dunes.deposits.iron_ore.blob.stretch]
+min = 1.0
+max = 1.5
+
+[biomes.dunes.deposits.iron_ore.blob.orientation]
+min_degrees = 0.0
+max_degrees = 360.0
+
+[biomes.dunes.pore]
+field = "pore_affinity"
+probability = 0.06
+affinity_min = 0.16
+passes = 3
+
+[biomes.dunes.pore.radius]
+min_m = 2.0
+max_m = 3.0
+
+[biomes.dunes.lining]
+material = "shale"
+thickness_fine = 1
+
+[biomes.dunes.relaxation]
+passes = 7
+adoption = 0.27
+
+[biomes.dunes.sprinkle]
+probability = 0.045
+
+[biomes.dunes.finish]
+passes = 3
+adoption = 0.12
+
+[biomes.dunes.erosion]
+passes = 8
+
+[biomes.dunes.formation]
+material = "gypsum"
+probability = 0.045
+length_m = 2.3
+
+[biomes.dunes.rind]
+material = "rust"
+
+[biomes.dunes.surface_layers]
+
+[biomes.dunes.surface_layers.soil]
+material = "sandstone"
+depth_m = 1.0
+
+[biomes.dunes.surface_layers.weathered]
+material = "laterite"
+depth_m = 4.0
+
+[biomes.rime]
+
+[biomes.rime.temperature]
+field = "temperature"
+base_k = 248.0
+variation_k = 15.0
+
+[biomes.rime.composition]
 
 [biomes.rime.composition.shelves]
 order = 10
-depth_min_normalized = 0
-depth_max_normalized = 0.45
 field = "frozen_beds"
 bed_period_m = 62
 bed_warp_m = 8
 bed_dip = 0.018
+
+[biomes.rime.composition.shelves.materials]
 
 [biomes.rime.composition.shelves.materials.bed_01]
 material = "ice"
@@ -1456,14 +925,18 @@ weight = 0.9
 material = "conglomerate"
 weight = 0.8
 
+[biomes.rime.composition.shelves.depth]
+min = 0
+max = 0.45
+
 [biomes.rime.composition.basement]
 order = 20
-depth_min_normalized = 0.45
-depth_max_normalized = 1
 field = "frozen_beds"
 bed_period_m = 112
 bed_warp_m = 15
 bed_dip = -0.045
+
+[biomes.rime.composition.basement.materials]
 
 [biomes.rime.composition.basement.materials.bed_01]
 material = "ice"
@@ -1477,15 +950,855 @@ weight = 2.4
 material = "granite"
 weight = 1.2
 
+[biomes.rime.composition.basement.depth]
+min = 0.45
+max = 1
+
+[biomes.rime.deposits]
+
+[biomes.rime.deposits.granite_shelves]
+stage = "bulk"
+order = 1
+field = "frozen_edges"
+material = "granite"
+host_material = "ice"
+core_coverage = 1.0
+fringe_coverage = 1.0
+sprinkle_probability = 0.0
+
+[biomes.rime.deposits.granite_shelves.depth]
+min = 0.0
+max = 1.0
+
+[biomes.rime.deposits.granite_shelves.threshold]
+min = -1.0
+max = 1.0
+
+[biomes.rime.deposits.granite_shelves.blob]
+count = 30
+distortion = 0.22
+
+[biomes.rime.deposits.granite_shelves.blob.radius]
+min_m = 5.0
+max_m = 12.0
+
+[biomes.rime.deposits.granite_shelves.blob.stretch]
+min = 1.8
+max = 3.0
+
+[biomes.rime.deposits.granite_shelves.blob.orientation]
+min_degrees = 0.0
+max_degrees = 8.0
+
+[biomes.rime.deposits.polluted_ice]
+stage = "detail"
+order = 10
+field = "frozen_edges"
+material = "polluted_ice"
+host_material = "ice"
+core_coverage = 0.98
+fringe_coverage = 0.35
+sprinkle_probability = 0.0
+
+[biomes.rime.deposits.polluted_ice.depth]
+min = 0.0
+max = 1.0
+
+[biomes.rime.deposits.polluted_ice.threshold]
+min = -1.0
+max = 1.0
+
+[biomes.rime.deposits.polluted_ice.blob]
+count = 44
+distortion = 0.18
+
+[biomes.rime.deposits.polluted_ice.blob.radius]
+min_m = 3.0
+max_m = 9.0
+
+[biomes.rime.deposits.polluted_ice.blob.stretch]
+min = 1.5
+max = 2.8
+
+[biomes.rime.deposits.polluted_ice.blob.orientation]
+min_degrees = 0.0
+max_degrees = 12.0
+
+[biomes.rime.deposits.wolframite]
+stage = "detail"
+order = 11
+field = "mineral_edges"
+material = "wolframite"
+host_material = "granite"
+core_coverage = 0.98
+fringe_coverage = 0.05
+sprinkle_probability = 0.0005
+
+[biomes.rime.deposits.wolframite.depth]
+min = 0.0
+max = 1.0
+
+[biomes.rime.deposits.wolframite.threshold]
+min = -1.0
+max = 1.0
+
+[biomes.rime.deposits.wolframite.blob]
+count = 26
+distortion = 0.12
+
+[biomes.rime.deposits.wolframite.blob.radius]
+min_m = 1.0
+max_m = 2.5
+
+[biomes.rime.deposits.wolframite.blob.stretch]
+min = 1.4
+max = 2.5
+
+[biomes.rime.deposits.wolframite.blob.orientation]
+min_degrees = 65.0
+max_degrees = 115.0
+
+[biomes.rime.pore]
+field = "pore_affinity"
+probability = 0.065
+affinity_min = 0.1
+passes = 3
+
+[biomes.rime.pore.radius]
+min_m = 2.0
+max_m = 3.0
+
+[biomes.rime.lining]
+material = "granite"
+thickness_fine = 2
+
+[biomes.rime.relaxation]
+passes = 7
+adoption = 0.3
+
+[biomes.rime.sprinkle]
+probability = 0.035
+
+[biomes.rime.finish]
+passes = 3
+adoption = 0.12
+
+[biomes.rime.erosion]
+passes = 8
+
+[biomes.rime.formation]
+material = "ice"
+probability = 0.095
+length_m = 4.2
+
+[biomes.rime.rind]
+material = "clear_quartz"
+
+[biomes.rime.surface_layers]
+
+[biomes.rime.surface_layers.soil]
+material = "ice"
+depth_m = 1.7
+
+[biomes.rime.surface_layers.weathered]
+material = "polluted_ice"
+depth_m = 3.5
+
+[biomes.lode]
+
+[biomes.lode.temperature]
+field = "temperature"
+base_k = 318.0
+variation_k = 18.0
+
+[biomes.lode.composition]
+
+[biomes.lode.composition.upper]
+order = 10
+field = "lode_bedding"
+bed_period_m = 78
+bed_warp_m = 18
+bed_dip = 0.14
+
+[biomes.lode.composition.upper.materials]
+
+[biomes.lode.composition.upper.materials.bed_01]
+material = "gneiss"
+weight = 4.8
+
+[biomes.lode.composition.upper.materials.bed_02]
+material = "granite"
+weight = 3.6
+
+[biomes.lode.composition.upper.materials.bed_03]
+material = "basalt"
+weight = 1.6
+
+[biomes.lode.composition.upper.depth]
+min = 0
+max = 0.44
+
+[biomes.lode.composition.deep]
+order = 20
+field = "beds"
+bed_period_m = 0
+bed_warp_m = 0
+bed_dip = 0
+
+[biomes.lode.composition.deep.materials]
+
+[biomes.lode.composition.deep.materials.bed_01]
+material = "granite"
+weight = 5.8
+
+[biomes.lode.composition.deep.materials.bed_02]
+material = "gneiss"
+weight = 2.8
+
+[biomes.lode.composition.deep.materials.bed_03]
+material = "basalt"
+weight = 1.4
+
+[biomes.lode.composition.deep.depth]
+min = 0.44
+max = 1
+
+[biomes.lode.deposits]
+
+[biomes.lode.deposits.secondary_host]
+stage = "bulk"
+order = 1
+field = "blob_edges"
+material = "basalt"
+host_material = "granite"
+core_coverage = 0.9
+fringe_coverage = 0.3
+sprinkle_probability = 0.0
+
+[biomes.lode.deposits.secondary_host.depth]
+min = 0.0
+max = 1.0
+
+[biomes.lode.deposits.secondary_host.threshold]
+min = -1.0
+max = 1.0
+
+[biomes.lode.deposits.secondary_host.blob]
+count = 36
+distortion = 0.38
+
+[biomes.lode.deposits.secondary_host.blob.radius]
+min_m = 9.0
+max_m = 25.0
+
+[biomes.lode.deposits.secondary_host.blob.stretch]
+min = 1.0
+max = 1.45
+
+[biomes.lode.deposits.secondary_host.blob.orientation]
+
+[biomes.lode.deposits.iron_ore]
+stage = "detail"
+order = 10
+field = "blob_edges"
+material = "iron_ore"
+host_material = "granite"
+core_coverage = 0.97
+fringe_coverage = 0.18
+sprinkle_probability = 0.004
+
+[biomes.lode.deposits.iron_ore.depth]
+min = 0.0
+max = 1.0
+
+[biomes.lode.deposits.iron_ore.threshold]
+min = -1.0
+max = 1.0
+
+[biomes.lode.deposits.iron_ore.blob]
+count = 60
+distortion = 0.22
+
+[biomes.lode.deposits.iron_ore.blob.radius]
+min_m = 2.5
+max_m = 8.0
+
+[biomes.lode.deposits.iron_ore.blob.stretch]
+min = 1.8
+max = 4.0
+
+[biomes.lode.deposits.iron_ore.blob.orientation]
+
+[biomes.lode.deposits.copper_ore]
+stage = "detail"
+order = 11
+field = "blob_edges"
+material = "copper_ore"
+host_material = "granite"
+core_coverage = 0.9
+fringe_coverage = 0.12
+sprinkle_probability = 0.003
+
+[biomes.lode.deposits.copper_ore.depth]
+min = 0.0
+max = 1.0
+
+[biomes.lode.deposits.copper_ore.threshold]
+min = -1.0
+max = 1.0
+
+[biomes.lode.deposits.copper_ore.blob]
+count = 44
+distortion = 0.22
+
+[biomes.lode.deposits.copper_ore.blob.radius]
+min_m = 2.0
+max_m = 6.0
+
+[biomes.lode.deposits.copper_ore.blob.stretch]
+min = 1.5
+max = 3.8
+
+[biomes.lode.deposits.copper_ore.blob.orientation]
+
+[biomes.lode.deposits.copper]
+stage = "detail"
+order = 12
+field = "blob_edges"
+material = "copper"
+host_material = "granite"
+core_coverage = 0.8
+fringe_coverage = 0.05
+sprinkle_probability = 0.002
+
+[biomes.lode.deposits.copper.depth]
+min = 0.0
+max = 1.0
+
+[biomes.lode.deposits.copper.threshold]
+min = -1.0
+max = 1.0
+
+[biomes.lode.deposits.copper.blob]
+count = 28
+distortion = 0.22
+
+[biomes.lode.deposits.copper.blob.radius]
+min_m = 1.0
+max_m = 3.0
+
+[biomes.lode.deposits.copper.blob.stretch]
+min = 2.0
+max = 4.5
+
+[biomes.lode.deposits.copper.blob.orientation]
+
+[biomes.lode.deposits.iron]
+stage = "detail"
+order = 13
+field = "blob_edges"
+material = "iron"
+host_material = "granite"
+core_coverage = 0.85
+fringe_coverage = 0.07
+sprinkle_probability = 0.002
+
+[biomes.lode.deposits.iron.depth]
+min = 0.0
+max = 1.0
+
+[biomes.lode.deposits.iron.threshold]
+min = -1.0
+max = 1.0
+
+[biomes.lode.deposits.iron.blob]
+count = 32
+distortion = 0.22
+
+[biomes.lode.deposits.iron.blob.radius]
+min_m = 1.2
+max_m = 3.5
+
+[biomes.lode.deposits.iron.blob.stretch]
+min = 2.0
+max = 4.0
+
+[biomes.lode.deposits.iron.blob.orientation]
+
+[biomes.lode.deposits.aluminum]
+stage = "detail"
+order = 14
+field = "blob_edges"
+material = "aluminum"
+host_material = "granite"
+core_coverage = 0.8
+fringe_coverage = 0.08
+sprinkle_probability = 0.002
+
+[biomes.lode.deposits.aluminum.depth]
+min = 0.0
+max = 1.0
+
+[biomes.lode.deposits.aluminum.threshold]
+min = -1.0
+max = 1.0
+
+[biomes.lode.deposits.aluminum.blob]
+count = 24
+distortion = 0.22
+
+[biomes.lode.deposits.aluminum.blob.radius]
+min_m = 1.5
+max_m = 4.0
+
+[biomes.lode.deposits.aluminum.blob.stretch]
+min = 1.5
+max = 3.0
+
+[biomes.lode.deposits.aluminum.blob.orientation]
+
+[biomes.lode.deposits.wolframite]
+stage = "detail"
+order = 15
+field = "blob_edges"
+material = "wolframite"
+host_material = "granite"
+core_coverage = 0.93
+fringe_coverage = 0.1
+sprinkle_probability = 0.002
+
+[biomes.lode.deposits.wolframite.depth]
+min = 0.0
+max = 1.0
+
+[biomes.lode.deposits.wolframite.threshold]
+min = -1.0
+max = 1.0
+
+[biomes.lode.deposits.wolframite.blob]
+count = 20
+distortion = 0.22
+
+[biomes.lode.deposits.wolframite.blob.radius]
+min_m = 1.2
+max_m = 3.0
+
+[biomes.lode.deposits.wolframite.blob.stretch]
+min = 1.4
+max = 3.6
+
+[biomes.lode.deposits.wolframite.blob.orientation]
+
+[biomes.lode.deposits.ruby]
+order = 200
+field = "mineral_edges"
+material = "ruby"
+host_material = "gneiss"
+stage = "detail"
+core_coverage = 0.85
+fringe_coverage = 0.25
+sprinkle_probability = 0.002
+
+[biomes.lode.deposits.ruby.depth]
+min = 0.12
+max = 1.0
+
+[biomes.lode.deposits.ruby.threshold]
+min = -1.0
+max = 1.0
+
+[biomes.lode.deposits.ruby.blob]
+count = 14
+distortion = 0.3
+
+[biomes.lode.deposits.ruby.blob.radius]
+min_m = 2.0
+max_m = 4.5
+
+[biomes.lode.deposits.ruby.blob.stretch]
+min = 1.0
+max = 1.9
+
+[biomes.lode.deposits.ruby.blob.orientation]
+min_degrees = 0.0
+max_degrees = 360.0
+
+[biomes.lode.deposits.emerald]
+order = 210
+field = "mineral_edges"
+material = "emerald"
+host_material = "gneiss"
+stage = "detail"
+core_coverage = 0.85
+fringe_coverage = 0.25
+sprinkle_probability = 0.002
+
+[biomes.lode.deposits.emerald.depth]
+min = 0.12
+max = 1.0
+
+[biomes.lode.deposits.emerald.threshold]
+min = -1.0
+max = 1.0
+
+[biomes.lode.deposits.emerald.blob]
+count = 16
+distortion = 0.3
+
+[biomes.lode.deposits.emerald.blob.radius]
+min_m = 2.0
+max_m = 5.0
+
+[biomes.lode.deposits.emerald.blob.stretch]
+min = 1.0
+max = 1.9
+
+[biomes.lode.deposits.emerald.blob.orientation]
+min_degrees = 0.0
+max_degrees = 360.0
+
+[biomes.lode.deposits.uranium_ore]
+order = 220
+field = "mineral_edges"
+material = "uranium_ore"
+host_material = "granite"
+stage = "detail"
+core_coverage = 0.85
+fringe_coverage = 0.25
+sprinkle_probability = 0.002
+
+[biomes.lode.deposits.uranium_ore.depth]
+min = 0.12
+max = 1.0
+
+[biomes.lode.deposits.uranium_ore.threshold]
+min = -1.0
+max = 1.0
+
+[biomes.lode.deposits.uranium_ore.blob]
+count = 16
+distortion = 0.3
+
+[biomes.lode.deposits.uranium_ore.blob.radius]
+min_m = 2.5
+max_m = 5.5
+
+[biomes.lode.deposits.uranium_ore.blob.stretch]
+min = 1.0
+max = 1.9
+
+[biomes.lode.deposits.uranium_ore.blob.orientation]
+min_degrees = 0.0
+max_degrees = 360.0
+
+[biomes.lode.deposits.autunite]
+stage = "detail"
+order = 240
+field = "mineral_edges"
+material = "autunite"
+host_material = "granite"
+core_coverage = 0.9
+fringe_coverage = 0.3
+sprinkle_probability = 0.002
+
+[biomes.lode.deposits.autunite.depth]
+min = 0.2
+max = 1.0
+
+[biomes.lode.deposits.autunite.threshold]
+min = -1.0
+max = 1.0
+
+[biomes.lode.deposits.autunite.blob]
+count = 14
+distortion = 0.35
+
+[biomes.lode.deposits.autunite.blob.radius]
+min_m = 1.5
+max_m = 3.5
+
+[biomes.lode.deposits.autunite.blob.stretch]
+min = 1.0
+max = 2.0
+
+[biomes.lode.deposits.autunite.blob.orientation]
+min_degrees = 0.0
+max_degrees = 360.0
+
+[biomes.lode.pore]
+field = "pore_affinity"
+probability = 0.05
+affinity_min = 0.22
+passes = 3
+
+[biomes.lode.pore.radius]
+min_m = 2.0
+max_m = 3.0
+
+[biomes.lode.lining]
+material = "basalt"
+thickness_fine = 3
+
+[biomes.lode.relaxation]
+passes = 9
+adoption = 0.26
+
+[biomes.lode.sprinkle]
+probability = 0.055
+
+[biomes.lode.finish]
+passes = 3
+adoption = 0.12
+
+[biomes.lode.erosion]
+passes = 8
+
+[biomes.lode.formation]
+material = "clear_quartz"
+probability = 0.035
+length_m = 2.7
+
+[biomes.lode.rind]
+material = "autunite"
+
+[biomes.lode.surface_layers]
+
+[biomes.lode.surface_layers.soil]
+material = "laterite"
+depth_m = 1.0
+
+[biomes.lode.surface_layers.weathered]
+material = "breccia"
+depth_m = 7.5
+
+[biomes.karst]
+
+[biomes.karst.temperature]
+field = "temperature"
+base_k = 286.0
+variation_k = 12.0
+
+[biomes.karst.composition]
+
+[biomes.karst.composition.upper]
+order = 10
+field = "karst_bedding"
+bed_period_m = 42
+bed_warp_m = 9
+bed_dip = -0.055
+
+[biomes.karst.composition.upper.materials]
+
+[biomes.karst.composition.upper.materials.bed_01]
+material = "chalk"
+weight = 2.4
+
+[biomes.karst.composition.upper.materials.bed_02]
+material = "limestone"
+weight = 5.0
+
+[biomes.karst.composition.upper.materials.bed_03]
+material = "dolomite"
+weight = 2.0
+
+[biomes.karst.composition.upper.materials.bed_04]
+material = "gypsum"
+weight = 0.6
+
+[biomes.karst.composition.upper.depth]
+min = 0
+max = 0.26
+
+[biomes.karst.composition.lower]
+order = 20
+field = "karst_bedding"
+bed_period_m = 66
+bed_warp_m = 15
+bed_dip = 0.025
+
+[biomes.karst.composition.lower.materials]
+
+[biomes.karst.composition.lower.materials.bed_01]
+material = "limestone"
+weight = 5.8
+
+[biomes.karst.composition.lower.materials.bed_02]
+material = "dolomite"
+weight = 2.4
+
+[biomes.karst.composition.lower.materials.bed_03]
+material = "anhydrite"
+weight = 0.9
+
+[biomes.karst.composition.lower.materials.bed_04]
+material = "phosphorite"
+weight = 0.9
+
+[biomes.karst.composition.lower.depth]
+min = 0.26
+max = 1
+
+[biomes.karst.deposits]
+
+[biomes.karst.deposits.secondary_host]
+stage = "bulk"
+order = 1
+field = "blob_edges"
+material = "dolomite"
+host_material = "limestone"
+core_coverage = 0.9
+fringe_coverage = 0.3
+sprinkle_probability = 0.0
+
+[biomes.karst.deposits.secondary_host.depth]
+min = 0.0
+max = 1.0
+
+[biomes.karst.deposits.secondary_host.threshold]
+min = -1.0
+max = 1.0
+
+[biomes.karst.deposits.secondary_host.blob]
+count = 42
+distortion = 0.38
+
+[biomes.karst.deposits.secondary_host.blob.radius]
+min_m = 7.0
+max_m = 19.0
+
+[biomes.karst.deposits.secondary_host.blob.stretch]
+min = 1.0
+max = 1.7
+
+[biomes.karst.deposits.secondary_host.blob.orientation]
+
+[biomes.karst.deposits.crystal]
+stage = "detail"
+order = 10
+field = "blob_edges"
+material = "crystal"
+host_material = "limestone"
+core_coverage = 0.92
+fringe_coverage = 0.12
+sprinkle_probability = 0.003
+
+[biomes.karst.deposits.crystal.depth]
+min = 0.0
+max = 1.0
+
+[biomes.karst.deposits.crystal.threshold]
+min = -1.0
+max = 1.0
+
+[biomes.karst.deposits.crystal.blob]
+count = 48
+distortion = 0.22
+
+[biomes.karst.deposits.crystal.blob.radius]
+min_m = 2.0
+max_m = 7.0
+
+[biomes.karst.deposits.crystal.blob.stretch]
+min = 1.0
+max = 2.1
+
+[biomes.karst.deposits.crystal.blob.orientation]
+
+[biomes.karst.deposits.diamond]
+stage = "detail"
+order = 11
+field = "blob_edges"
+material = "diamond"
+host_material = "limestone"
+core_coverage = 0.88
+fringe_coverage = 0.05
+sprinkle_probability = 0.001
+
+[biomes.karst.deposits.diamond.depth]
+min = 0.0
+max = 1.0
+
+[biomes.karst.deposits.diamond.threshold]
+min = -1.0
+max = 1.0
+
+[biomes.karst.deposits.diamond.blob]
+count = 18
+distortion = 0.22
+
+[biomes.karst.deposits.diamond.blob.radius]
+min_m = 0.8
+max_m = 2.5
+
+[biomes.karst.deposits.diamond.blob.stretch]
+min = 1.0
+max = 1.8
+
+[biomes.karst.deposits.diamond.blob.orientation]
+
+[biomes.karst.pore]
+field = "pore_affinity"
+probability = 0.15
+affinity_min = -0.08
+passes = 3
+
+[biomes.karst.pore.radius]
+min_m = 2.0
+max_m = 3.0
+
+[biomes.karst.lining]
+material = "limestone"
+thickness_fine = 1
+
+[biomes.karst.relaxation]
+passes = 8
+adoption = 0.3
+
+[biomes.karst.sprinkle]
+probability = 0.085
+
+[biomes.karst.finish]
+passes = 3
+adoption = 0.12
+
+[biomes.karst.erosion]
+passes = 8
+
+[biomes.karst.formation]
+material = "calcite"
+probability = 0.14
+length_m = 5.5
+
+[biomes.karst.rind]
+material = "fluorite"
+
+[biomes.karst.surface_layers]
+
+[biomes.karst.surface_layers.soil]
+material = "dirt"
+depth_m = 1.5
+
+[biomes.karst.surface_layers.weathered]
+material = "chalk"
+depth_m = 5.0
+
+[biomes.saltworks]
+
+[biomes.saltworks.temperature]
+field = "temperature"
+base_k = 305.0
+variation_k = 12.0
+
+[biomes.saltworks.composition]
 
 [biomes.saltworks.composition.evaporites]
 order = 10
-depth_min_normalized = 0
-depth_max_normalized = 0.43
 field = "evaporite_beds"
 bed_period_m = 39
 bed_warp_m = 5
 bed_dip = -0.025
+
+[biomes.saltworks.composition.evaporites.materials]
 
 [biomes.saltworks.composition.evaporites.materials.bed_01]
 material = "salt"
@@ -1503,14 +1816,18 @@ weight = 1.7
 material = "clay"
 weight = 0.9
 
+[biomes.saltworks.composition.evaporites.depth]
+min = 0
+max = 0.43
+
 [biomes.saltworks.composition.buried]
 order = 20
-depth_min_normalized = 0.43
-depth_max_normalized = 1
 field = "evaporite_beds"
 bed_period_m = 61
 bed_warp_m = 8
 bed_dip = 0.02
+
+[biomes.saltworks.composition.buried.materials]
 
 [biomes.saltworks.composition.buried.materials.bed_01]
 material = "salt"
@@ -1528,15 +1845,143 @@ weight = 2.0
 material = "shale"
 weight = 0.5
 
+[biomes.saltworks.composition.buried.depth]
+min = 0.43
+max = 1
+
+[biomes.saltworks.deposits]
+
+[biomes.saltworks.deposits.clay]
+stage = "detail"
+order = 10
+field = "sediment_edges"
+material = "clay"
+host_material = "salt"
+core_coverage = 1.0
+fringe_coverage = 0.4
+sprinkle_probability = 0.0
+
+[biomes.saltworks.deposits.clay.depth]
+min = 0.0
+max = 1.0
+
+[biomes.saltworks.deposits.clay.threshold]
+min = -1.0
+max = 1.0
+
+[biomes.saltworks.deposits.clay.blob]
+count = 38
+distortion = 0.08
+
+[biomes.saltworks.deposits.clay.blob.radius]
+min_m = 1.5
+max_m = 4.0
+
+[biomes.saltworks.deposits.clay.blob.stretch]
+min = 4.0
+max = 6.0
+
+[biomes.saltworks.deposits.clay.blob.orientation]
+min_degrees = 174.0
+max_degrees = 180.0
+
+[biomes.saltworks.deposits.fluorite]
+stage = "detail"
+order = 150
+field = "mineral_edges"
+material = "fluorite"
+host_material = "dolomite"
+core_coverage = 0.9
+fringe_coverage = 0.3
+sprinkle_probability = 0.002
+
+[biomes.saltworks.deposits.fluorite.depth]
+min = 0
+max = 1
+
+[biomes.saltworks.deposits.fluorite.threshold]
+min = -1.0
+max = 1.0
+
+[biomes.saltworks.deposits.fluorite.blob]
+count = 16
+distortion = 0.35
+
+[biomes.saltworks.deposits.fluorite.blob.radius]
+min_m = 2.5
+max_m = 5.0
+
+[biomes.saltworks.deposits.fluorite.blob.stretch]
+min = 1
+max = 1.8
+
+[biomes.saltworks.deposits.fluorite.blob.orientation]
+min_degrees = 0
+max_degrees = 360
+
+[biomes.saltworks.pore]
+field = "pore_affinity"
+probability = 0.08
+affinity_min = 0.1
+passes = 3
+
+[biomes.saltworks.pore.radius]
+min_m = 2.0
+max_m = 3.0
+
+[biomes.saltworks.lining]
+material = "salt"
+thickness_fine = 2
+
+[biomes.saltworks.relaxation]
+passes = 8
+adoption = 0.28
+
+[biomes.saltworks.sprinkle]
+probability = 0.055
+
+[biomes.saltworks.finish]
+passes = 3
+adoption = 0.12
+
+[biomes.saltworks.erosion]
+passes = 8
+
+[biomes.saltworks.formation]
+material = "gypsum"
+probability = 0.11
+length_m = 4.6
+
+[biomes.saltworks.rind]
+material = "anhydrite"
+
+[biomes.saltworks.surface_layers]
+
+[biomes.saltworks.surface_layers.soil]
+material = "salt"
+depth_m = 1.5
+
+[biomes.saltworks.surface_layers.weathered]
+material = "gypsum"
+depth_m = 5.0
+
+[biomes.fumaroles]
+
+[biomes.fumaroles.temperature]
+field = "temperature"
+base_k = 365.0
+variation_k = 25.0
+
+[biomes.fumaroles.composition]
 
 [biomes.fumaroles.composition.ash]
 order = 10
-depth_min_normalized = 0
-depth_max_normalized = 0.7
 field = "rock_masses"
 bed_period_m = 57
 bed_warp_m = 16
 bed_dip = 0.12
+
+[biomes.fumaroles.composition.ash.materials]
 
 [biomes.fumaroles.composition.ash.materials.bed_01]
 material = "tuff"
@@ -1554,14 +1999,18 @@ weight = 0.9
 material = "obsidian"
 weight = 0.5
 
+[biomes.fumaroles.composition.ash.depth]
+min = 0
+max = 0.7
+
 [biomes.fumaroles.composition.pipes]
 order = 20
-depth_min_normalized = 0.7
-depth_max_normalized = 1
 field = "rock_masses"
 bed_period_m = 94
 bed_warp_m = 23
 bed_dip = -0.09
+
+[biomes.fumaroles.composition.pipes.materials]
 
 [biomes.fumaroles.composition.pipes.materials.bed_01]
 material = "basalt"
@@ -1579,15 +2028,177 @@ weight = 1.0
 material = "sulfur"
 weight = 0.2
 
+[biomes.fumaroles.composition.pipes.depth]
+min = 0.7
+max = 1
+
+[biomes.fumaroles.deposits]
+
+[biomes.fumaroles.deposits.obsidian_pipes]
+stage = "bulk"
+order = 1
+field = "volcanic_edges"
+material = "obsidian"
+host_material = "basalt"
+core_coverage = 1.0
+fringe_coverage = 1.0
+sprinkle_probability = 0.0
+
+[biomes.fumaroles.deposits.obsidian_pipes.depth]
+min = 0.0
+max = 1.0
+
+[biomes.fumaroles.deposits.obsidian_pipes.threshold]
+min = -1.0
+max = 1.0
+
+[biomes.fumaroles.deposits.obsidian_pipes.blob]
+count = 28
+distortion = 0.38
+
+[biomes.fumaroles.deposits.obsidian_pipes.blob.radius]
+min_m = 3.0
+max_m = 7.0
+
+[biomes.fumaroles.deposits.obsidian_pipes.blob.stretch]
+min = 3.0
+max = 5.0
+
+[biomes.fumaroles.deposits.obsidian_pipes.blob.orientation]
+min_degrees = 76.0
+max_degrees = 104.0
+
+[biomes.fumaroles.deposits.sulfur]
+stage = "detail"
+order = 10
+field = "mineral_edges"
+material = "sulfur"
+host_material = "basalt"
+core_coverage = 0.92
+fringe_coverage = 0.12
+sprinkle_probability = 0.001
+
+[biomes.fumaroles.deposits.sulfur.depth]
+min = 0.0
+max = 1.0
+
+[biomes.fumaroles.deposits.sulfur.threshold]
+min = -1.0
+max = 1.0
+
+[biomes.fumaroles.deposits.sulfur.blob]
+count = 64
+distortion = 0.26
+
+[biomes.fumaroles.deposits.sulfur.blob.radius]
+min_m = 1.0
+max_m = 3.0
+
+[biomes.fumaroles.deposits.sulfur.blob.stretch]
+min = 2.5
+max = 4.0
+
+[biomes.fumaroles.deposits.sulfur.blob.orientation]
+min_degrees = 75.0
+max_degrees = 105.0
+
+[biomes.fumaroles.deposits.rust]
+stage = "detail"
+order = 11
+field = "mineral_edges"
+material = "rust"
+host_material = "obsidian"
+core_coverage = 0.8
+fringe_coverage = 0.08
+sprinkle_probability = 0.0005
+
+[biomes.fumaroles.deposits.rust.depth]
+min = 0.0
+max = 1.0
+
+[biomes.fumaroles.deposits.rust.threshold]
+min = -1.0
+max = 1.0
+
+[biomes.fumaroles.deposits.rust.blob]
+count = 28
+distortion = 0.2
+
+[biomes.fumaroles.deposits.rust.blob.radius]
+min_m = 1.0
+max_m = 2.5
+
+[biomes.fumaroles.deposits.rust.blob.stretch]
+min = 2.0
+max = 3.5
+
+[biomes.fumaroles.deposits.rust.blob.orientation]
+min_degrees = 78.0
+max_degrees = 102.0
+
+[biomes.fumaroles.pore]
+field = "pore_affinity"
+probability = 0.085
+affinity_min = 0.12
+passes = 3
+
+[biomes.fumaroles.pore.radius]
+min_m = 2.0
+max_m = 3.0
+
+[biomes.fumaroles.lining]
+material = "obsidian"
+thickness_fine = 2
+
+[biomes.fumaroles.relaxation]
+passes = 8
+adoption = 0.28
+
+[biomes.fumaroles.sprinkle]
+probability = 0.055
+
+[biomes.fumaroles.finish]
+passes = 3
+adoption = 0.12
+
+[biomes.fumaroles.erosion]
+passes = 8
+
+[biomes.fumaroles.formation]
+material = "sulfur"
+probability = 0.1
+length_m = 3.2
+
+[biomes.fumaroles.rind]
+material = "azurite"
+
+[biomes.fumaroles.surface_layers]
+
+[biomes.fumaroles.surface_layers.soil]
+material = "tuff"
+depth_m = 1.2
+
+[biomes.fumaroles.surface_layers.weathered]
+material = "breccia"
+depth_m = 6.0
+
+[biomes.petroleum]
+
+[biomes.petroleum.temperature]
+field = "temperature"
+base_k = 370.0
+variation_k = 20.0
+
+[biomes.petroleum.composition]
 
 [biomes.petroleum.composition.caprock]
 order = 10
-depth_min_normalized = 0
-depth_max_normalized = 0.78
 field = "oil_caps"
 bed_period_m = 52
 bed_warp_m = 6
 bed_dip = -0.025
+
+[biomes.petroleum.composition.caprock.materials]
 
 [biomes.petroleum.composition.caprock.materials.bed_01]
 material = "shale"
@@ -1605,14 +2216,18 @@ weight = 0.9
 material = "coal"
 weight = 0.4
 
+[biomes.petroleum.composition.caprock.depth]
+min = 0
+max = 0.78
+
 [biomes.petroleum.composition.source]
 order = 20
-depth_min_normalized = 0.78
-depth_max_normalized = 1
 field = "oil_caps"
 bed_period_m = 87
 bed_warp_m = 11
 bed_dip = 0.04
+
+[biomes.petroleum.composition.source.materials]
 
 [biomes.petroleum.composition.source.materials.bed_01]
 material = "shale"
@@ -1630,15 +2245,177 @@ weight = 1.2
 material = "coal"
 weight = 0.5
 
+[biomes.petroleum.composition.source.depth]
+min = 0.78
+max = 1
+
+[biomes.petroleum.deposits]
+
+[biomes.petroleum.deposits.basalt_caps]
+stage = "bulk"
+order = 1
+field = "sediment_edges"
+material = "basalt"
+host_material = "shale"
+core_coverage = 1.0
+fringe_coverage = 1.0
+sprinkle_probability = 0.0
+
+[biomes.petroleum.deposits.basalt_caps.depth]
+min = 0.0
+max = 1.0
+
+[biomes.petroleum.deposits.basalt_caps.threshold]
+min = -1.0
+max = 1.0
+
+[biomes.petroleum.deposits.basalt_caps.blob]
+count = 32
+distortion = 0.22
+
+[biomes.petroleum.deposits.basalt_caps.blob.radius]
+min_m = 4.0
+max_m = 10.0
+
+[biomes.petroleum.deposits.basalt_caps.blob.stretch]
+min = 2.0
+max = 3.5
+
+[biomes.petroleum.deposits.basalt_caps.blob.orientation]
+min_degrees = 174.0
+max_degrees = 180.0
+
+[biomes.petroleum.deposits.coal]
+stage = "detail"
+order = 10
+field = "organic_edges"
+material = "coal"
+host_material = "shale"
+core_coverage = 0.95
+fringe_coverage = 0.15
+sprinkle_probability = 0.001
+
+[biomes.petroleum.deposits.coal.depth]
+min = 0.0
+max = 1.0
+
+[biomes.petroleum.deposits.coal.threshold]
+min = -1.0
+max = 1.0
+
+[biomes.petroleum.deposits.coal.blob]
+count = 44
+distortion = 0.15
+
+[biomes.petroleum.deposits.coal.blob.radius]
+min_m = 2.0
+max_m = 5.0
+
+[biomes.petroleum.deposits.coal.blob.stretch]
+min = 2.5
+max = 4.0
+
+[biomes.petroleum.deposits.coal.blob.orientation]
+min_degrees = 170.0
+max_degrees = 180.0
+
+[biomes.petroleum.deposits.diamond]
+stage = "detail"
+order = 11
+field = "mineral_edges"
+material = "diamond"
+host_material = "basalt"
+core_coverage = 0.98
+fringe_coverage = 0.03
+sprinkle_probability = 0.0
+
+[biomes.petroleum.deposits.diamond.depth]
+min = 0.45
+max = 1.0
+
+[biomes.petroleum.deposits.diamond.threshold]
+min = -1.0
+max = 1.0
+
+[biomes.petroleum.deposits.diamond.blob]
+count = 14
+distortion = 0.1
+
+[biomes.petroleum.deposits.diamond.blob.radius]
+min_m = 0.8
+max_m = 1.8
+
+[biomes.petroleum.deposits.diamond.blob.stretch]
+min = 1.0
+max = 1.5
+
+[biomes.petroleum.deposits.diamond.blob.orientation]
+min_degrees = 0.0
+max_degrees = 360.0
+
+[biomes.petroleum.pore]
+field = "pore_affinity"
+probability = 0.055
+affinity_min = 0.2
+passes = 3
+
+[biomes.petroleum.pore.radius]
+min_m = 2.0
+max_m = 3.0
+
+[biomes.petroleum.lining]
+material = "basalt"
+thickness_fine = 3
+
+[biomes.petroleum.relaxation]
+passes = 8
+adoption = 0.25
+
+[biomes.petroleum.sprinkle]
+probability = 0.04
+
+[biomes.petroleum.finish]
+passes = 3
+adoption = 0.12
+
+[biomes.petroleum.erosion]
+passes = 8
+
+[biomes.petroleum.formation]
+material = "calcite"
+probability = 0.055
+length_m = 2.7
+
+[biomes.petroleum.rind]
+material = "azurite"
+
+[biomes.petroleum.surface_layers]
+
+[biomes.petroleum.surface_layers.soil]
+material = "clay"
+depth_m = 1.0
+
+[biomes.petroleum.surface_layers.weathered]
+material = "shale"
+depth_m = 7.0
+
+[biomes.ember]
+
+[biomes.ember.temperature]
+field = "temperature"
+base_k = 1100.0
+variation_k = 100.0
+
+[biomes.ember.composition]
 
 [biomes.ember.composition.flows]
 order = 10
-depth_min_normalized = 0
-depth_max_normalized = 0.9
 field = "lava_flows"
 bed_period_m = 61
 bed_warp_m = 14
 bed_dip = 0.07
+
+[biomes.ember.composition.flows.materials]
 
 [biomes.ember.composition.flows.materials.bed_01]
 material = "basalt"
@@ -1656,14 +2433,18 @@ weight = 1.5
 material = "obsidian"
 weight = 0.6
 
+[biomes.ember.composition.flows.depth]
+min = 0
+max = 0.9
+
 [biomes.ember.composition.basement]
 order = 20
-depth_min_normalized = 0.9
-depth_max_normalized = 1
 field = "lava_flows"
 bed_period_m = 102
 bed_warp_m = 24
 bed_dip = -0.055
+
+[biomes.ember.composition.basement.materials]
 
 [biomes.ember.composition.basement.materials.bed_01]
 material = "basalt"
@@ -1681,91 +2462,190 @@ weight = 1.0
 material = "tuff"
 weight = 0.2
 
+[biomes.ember.composition.basement.depth]
+min = 0.9
+max = 1
+
+[biomes.ember.deposits]
+
+[biomes.ember.deposits.glass]
+stage = "detail"
+order = 10
+field = "volcanic_edges"
+material = "glass"
+host_material = "obsidian"
+core_coverage = 0.96
+fringe_coverage = 0.18
+sprinkle_probability = 0.0
+
+[biomes.ember.deposits.glass.depth]
+min = 0.0
+max = 1.0
+
+[biomes.ember.deposits.glass.threshold]
+min = -1.0
+max = 1.0
+
+[biomes.ember.deposits.glass.blob]
+count = 36
+distortion = 0.2
+
+[biomes.ember.deposits.glass.blob.radius]
+min_m = 2.0
+max_m = 5.0
+
+[biomes.ember.deposits.glass.blob.stretch]
+min = 1.5
+max = 3.0
+
+[biomes.ember.deposits.glass.blob.orientation]
+min_degrees = 150.0
+max_degrees = 180.0
+
+[biomes.ember.deposits.iron]
+stage = "detail"
+order = 11
+field = "mineral_edges"
+material = "iron"
+host_material = "basalt"
+core_coverage = 0.93
+fringe_coverage = 0.05
+sprinkle_probability = 0.0005
+
+[biomes.ember.deposits.iron.depth]
+min = 0.0
+max = 1.0
+
+[biomes.ember.deposits.iron.threshold]
+min = -1.0
+max = 1.0
+
+[biomes.ember.deposits.iron.blob]
+count = 30
+distortion = 0.3
+
+[biomes.ember.deposits.iron.blob.radius]
+min_m = 1.0
+max_m = 3.0
+
+[biomes.ember.deposits.iron.blob.stretch]
+min = 1.0
+max = 1.7
+
+[biomes.ember.deposits.iron.blob.orientation]
+min_degrees = 0.0
+max_degrees = 360.0
+
 [biomes.ember.deposits.dikes]
-kind = "threshold"
-shape = "blob"
 stage = "bulk"
 order = 5
 field = "volcanic_edges"
 material = "obsidian"
 host_material = "basalt"
-blob_count = 24
-radius_min_m = 2.0
-radius_max_m = 4.5
-stretch_min = 4
-stretch_max = 7
-orientation_min_degrees = 76
-orientation_max_degrees = 104
-distortion = 0.35
 core_coverage = 0.9
 fringe_coverage = 0.3
 sprinkle_probability = 0.0
-depth_min_normalized = 0.12
-depth_max_normalized = 1
+
+[biomes.ember.deposits.dikes.depth]
+min = 0.12
+max = 1
+
+[biomes.ember.deposits.dikes.threshold]
+min = -1.0
+max = 1.0
+
+[biomes.ember.deposits.dikes.blob]
+count = 24
+distortion = 0.35
+
+[biomes.ember.deposits.dikes.blob.radius]
+min_m = 2.0
+max_m = 4.5
+
+[biomes.ember.deposits.dikes.blob.stretch]
+min = 4
+max = 7
+
+[biomes.ember.deposits.dikes.blob.orientation]
+min_degrees = 76
+max_degrees = 104
 
 [biomes.ember.deposits.fluorite]
-kind = "threshold"
-shape = "blob"
 stage = "detail"
 order = 150
 field = "volcanic_edges"
 material = "fluorite"
 host_material = "obsidian"
-blob_count = 14
-radius_min_m = 2.5
-radius_max_m = 5.0
-stretch_min = 1
-stretch_max = 1.6
-orientation_min_degrees = 0
-orientation_max_degrees = 360
-distortion = 0.35
 core_coverage = 0.9
 fringe_coverage = 0.3
 sprinkle_probability = 0.002
-depth_min_normalized = 0.2
-depth_max_normalized = 1
 
-[biomes.saltworks.deposits.fluorite]
-kind = "threshold"
-shape = "blob"
-stage = "detail"
-order = 150
-field = "mineral_edges"
-material = "fluorite"
-host_material = "dolomite"
-blob_count = 16
-radius_min_m = 2.5
-radius_max_m = 5.0
-stretch_min = 1
-stretch_max = 1.8
-orientation_min_degrees = 0
-orientation_max_degrees = 360
+[biomes.ember.deposits.fluorite.depth]
+min = 0.2
+max = 1
+
+[biomes.ember.deposits.fluorite.threshold]
+min = -1.0
+max = 1.0
+
+[biomes.ember.deposits.fluorite.blob]
+count = 14
 distortion = 0.35
-core_coverage = 0.9
-fringe_coverage = 0.3
-sprinkle_probability = 0.002
-depth_min_normalized = 0
-depth_max_normalized = 1
 
+[biomes.ember.deposits.fluorite.blob.radius]
+min_m = 2.5
+max_m = 5.0
 
-[biomes.lode.deposits.autunite]
-kind = "threshold"
-shape = "blob"
-stage = "detail"
-order = 240
-field = "mineral_edges"
-material = "autunite"
-host_material = "granite"
-blob_count = 14
-radius_min_m = 1.5
-radius_max_m = 3.5
-stretch_min = 1.0
-stretch_max = 2.0
-orientation_min_degrees = 0.0
-orientation_max_degrees = 360.0
-distortion = 0.35
-core_coverage = 0.9
-fringe_coverage = 0.3
-sprinkle_probability = 0.002
-depth_min_normalized = 0.2
-depth_max_normalized = 1.0
+[biomes.ember.deposits.fluorite.blob.stretch]
+min = 1
+max = 1.6
+
+[biomes.ember.deposits.fluorite.blob.orientation]
+min_degrees = 0
+max_degrees = 360
+
+[biomes.ember.pore]
+field = "pore_affinity"
+probability = 0.095
+affinity_min = 0.06
+passes = 3
+
+[biomes.ember.pore.radius]
+min_m = 2.0
+max_m = 3.0
+
+[biomes.ember.lining]
+material = "obsidian"
+thickness_fine = 3
+
+[biomes.ember.relaxation]
+passes = 9
+adoption = 0.28
+
+[biomes.ember.sprinkle]
+probability = 0.045
+
+[biomes.ember.finish]
+passes = 3
+adoption = 0.12
+
+[biomes.ember.erosion]
+passes = 8
+
+[biomes.ember.formation]
+material = "obsidian"
+probability = 0.075
+length_m = 3.8
+
+[biomes.ember.rind]
+material = "breccia"
+
+[biomes.ember.surface_layers]
+
+[biomes.ember.surface_layers.soil]
+material = "pumice"
+depth_m = 1.5
+
+[biomes.ember.surface_layers.weathered]
+material = "tuff"
+depth_m = 8.0
