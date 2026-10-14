@@ -141,29 +141,44 @@ namespace pP::colony {
                        ? std::string_view{entry->m_value.m_text}
                        : std::string_view{};
         }
-        Array<std::string> keys(const Document &document, const std::string_view root) {
+        Array<std::string_view, mem::ScratchPad> keyViews(const Document &document, const std::string_view root) {
             const std::string prefix = std::string{root} + ".";
-            Array<std::string> result;
+            Array<std::string_view, mem::ScratchPad> result;
             const auto add = [&](const std::string_view path) {
                 if (path.starts_with(prefix)) {
                     const auto tail = path.substr(prefix.size());
                     const auto dot = tail.find('.');
                     const auto key = tail.substr(0u, dot);
                     if (not key.empty()) {
-                        result.emplace_back(key);
+                        result.push_back(key);
                     }
                 }
             };
+
             for (const auto &entry: document.m_entries) {
                 add(entry.m_key);
             }
+
             for (const auto &group: document.m_groups) {
                 add(group.m_path);
             }
+
             std::ranges::sort(result);
             result.erase(std::unique(result.begin(), result.end()), result.end());
             return result;
         }
+
+        Array<std::string> keys(const Document &document, const std::string_view root) {
+            const auto scratch_scope = mem::ScratchPad::open();
+            const auto views = keyViews(document, root);
+            Array<std::string> result;
+            result.reserve(views.size());
+            for (const auto view: views) {
+                result.emplace_back(view);
+            }
+            return result;
+        }
+
         bool schemaMatches(std::string_view schema, std::string_view path) {
             while (not schema.empty() and not path.empty()) {
                 const auto schema_dot = schema.find('.');
@@ -330,19 +345,33 @@ namespace pP::colony {
 
     Expected<Document> mergeContentDocuments(
         const std::array<Document, kContentDocumentCount> &documents, Diagnostics &diagnostics) {
+        const auto scratch_scope = mem::ScratchPad::open();
         Document merged;
+        std::size_t entry_count{}, group_count{};
+        for (const auto &document: documents) {
+            entry_count += document.m_entries.size();
+            group_count += document.m_groups.size();
+        }
+
+        // Destination arrays stay fixed while the scratch index borrows their owned keys.
+        merged.m_entries.reserve(entry_count);
+        merged.m_groups.reserve(group_count);
+        std::set<std::string_view, std::less<>, mem::STL<std::string_view, mem::ScratchPad>> destinations;
+
         const auto &worlds = documents[static_cast<std::size_t>(EContentDocument::worlds)];
-        const auto owners = keys(worlds, "worlds");
+        const auto owners = keyViews(worlds, "worlds");
         const auto &appearance = documents[static_cast<std::size_t>(EContentDocument::appearance)];
         for (const auto &binding: kBindings) {
             if (binding.m_attached_rules or binding.m_document == EContentDocument::appearance) {
                 continue;
             }
-            const auto declared = keys(documents[static_cast<std::size_t>(binding.m_document)], binding.m_collection);
+            const auto declared = keyViews(
+                documents[static_cast<std::size_t>(binding.m_document)], binding.m_collection);
             const std::string root = "appearance." + std::string{binding.m_collection};
-            for (const auto &key: keys(appearance, root)) {
+            for (const auto key: keyViews(appearance, root)) {
                 if (std::ranges::find(declared, key) == declared.end()) {
-                    const std::string path = root + "." + key;
+                    std::string path = root + ".";
+                    path.append(key);
                     PPR_RETURN_UNEXPECTED_ON_FAIL(
                         ColonyContent,
                         reject(diagnostics, location(appearance, path), path, "Appearance owner does not exist"));
@@ -404,14 +433,15 @@ namespace pP::colony {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, validate(entry.m_key, entry.m_location));
                 Entry mapped = entry;
                 mapped.m_key = contentCanonicalPath(binding.m_document, entry.m_key);
-                if (std::ranges::find(merged.m_entries, mapped.m_key, &Entry::m_key) != merged.m_entries.end() or
-                    std::ranges::find(merged.m_groups, mapped.m_key, &GroupPresence::m_path) != merged.m_groups.end()) {
+                if (destinations.contains(mapped.m_key)) {
                     PPR_RETURN_UNEXPECTED_ON_FAIL(
                         ColonyContent, reject(
                                            diagnostics, entry.m_location, mapped.m_key,
                                            "Multiple sources target the same destination", EConfigErrc::duplicate_key));
                 }
+
                 merged.m_entries.push_back(std::move(mapped));
+                destinations.insert(merged.m_entries.back().m_key);
             }
             for (const auto &group: document.m_groups) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, validate(group.m_path, group.m_location));
@@ -421,16 +451,16 @@ namespace pP::colony {
                     continue;
                 }
                 GroupPresence mapped{contentCanonicalPath(binding.m_document, group.m_path), group.m_location};
-                if (std::ranges::find(merged.m_groups, mapped.m_path, &GroupPresence::m_path) !=
-                        merged.m_groups.end() or
-                    std::ranges::find(merged.m_entries, mapped.m_path, &Entry::m_key) != merged.m_entries.end()) {
+                if (destinations.contains(mapped.m_path)) {
                     PPR_RETURN_UNEXPECTED_ON_FAIL(
                         ColonyContent,
                         reject(
                             diagnostics, group.m_location, mapped.m_path,
                             "Multiple sources declare the same destination", EConfigErrc::duplicate_key));
                 }
+
                 merged.m_groups.push_back(std::move(mapped));
+                destinations.insert(merged.m_groups.back().m_path);
             }
         }
         return merged;

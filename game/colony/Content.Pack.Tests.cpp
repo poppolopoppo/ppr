@@ -111,6 +111,31 @@ namespace pP::game::tests::detail::pack {
         return result;
     }
 
+    PPR_UNIT_TEST (definition_keys_own_sorted_unique_segments_from_raw_drafts) {
+        Array<std::string> owned;
+        {
+            config::Document document;
+            for (const std::string_view path:
+                {"materials.zeta.phase", "materials.alpha.phase", "materials.alpha.density", "materials.a-b.phase",
+                    "materials..ignored", "materials2.other.phase", "materials.foo[bar].phase",
+                    "materials.\"quoted\".phase"}) {
+                document.m_entries.push_back({std::string{path}, config::FileValue::integer(1), "draft:1"});
+            }
+
+            document.m_groups = {{"materials.alpha", "draft:2"}, {"materials.beta", "draft:3"}};
+
+            owned = contentDefinitionKeys(EContentDocument::materials, document);
+        }
+
+        {
+            const auto scratch_scope = mem::ScratchPad::open();
+            Array<std::byte, mem::ScratchPad> overwrite(1024u * 1024u, std::byte{0x4b});
+            PPR_TEST_ASSERT(overwrite.front() == std::byte{0x4b});
+        }
+
+        PPR_TEST_ASSERT(owned == (Array<std::string>{"\"quoted\"", "a-b", "alpha", "beta", "foo[bar]", "zeta"}));
+    };
+
     PPR_UNIT_TEST (catalog_dig_respects_protected_material_and_preflights_the_complete_rectangle) {
         Fixture fixture{};
         config::Diagnostics diagnostics{};
@@ -1334,7 +1359,8 @@ namespace pP::game::tests {
     const UnitTest &gamePackContentTests() noexcept {
         static const UnitTest tests = UnitTest::Named("pack_content") / [](UnitTest::IRun &_) -> void {
             _.recurse(
-                {detail::pack::catalog_dig_respects_protected_material_and_preflights_the_complete_rectangle,
+                {detail::pack::definition_keys_own_sorted_unique_segments_from_raw_drafts,
+                    detail::pack::catalog_dig_respects_protected_material_and_preflights_the_complete_rectangle,
                     detail::pack::construction_checks_complete_tiles_reservations_and_live_actor_overlap,
                     detail::pack::errand_preflight_rejects_invalid_actor_before_any_demolition_writes,
                     detail::pack::complete_shipped_catalog_is_owned,
