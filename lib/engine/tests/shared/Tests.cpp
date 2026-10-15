@@ -235,6 +235,7 @@ namespace pP::tests {
     }
 
     [[nodiscard]] int runTests(const int argc, char *argv[], const UnitTest &root, const std::string_view program) {
+        hal::setThreadName("TestThread");
         [[maybe_unused]] const hal::process::Context process_context{};
 
         config::Diagnostics diagnostics{};

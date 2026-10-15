@@ -1428,26 +1428,56 @@ namespace pP::tests::detail {
 
         PPR_UNIT_TEST (forrange_caller_error_over_helper_error) {
             // Composition order is caller lane, then group, then scheduler
-            // (first failure wins). With 2 workers and 6 even items the
-            // chunking is exact: helpers cover [0,4), the caller drains
-            // [4,6). Distinct failure codes prove the caller lane wins while
+            // (first failure wins). With 2 workers and 5 items, two complete
+            // helper chunks cover [0,4), leaving the real caller tail [4,5).
+            // Distinct failure codes prove the caller lane wins while
             // the helper failure is still recorded on the scheduler.
             const std::error_code caller_err = std::make_error_code(std::errc::invalid_argument);
             const std::error_code helper_err = make_error_code(ParallelScheduler::err_task_exception);
+
+            std::counting_semaphore<2> release_helpers{0};
+            std::atomic<bool> helper_timed_out{false};
+            bool caller_timed_out = false;
+            bool helpers_released = false;
             ParallelScheduler sched{"scheduler-test", 2u, queueBytes()};
 
+            PPR_DEFER {
+                if (not helpers_released) {
+                    release_helpers.release(2);
+                }
+            };
+
             const std::error_code err = parallel::forRange(
-                0u, 6u,
+                0u, 5u,
                 [&](std::size_t i) {
                     if (i < 4u) {
+                        // A timeout is only a failure escape if admission never reaches the caller tail.
+                        if (not release_helpers.try_acquire_for(std::chrono::seconds{5})) {
+                            helper_timed_out.store(true, std::memory_order_release);
+                            throw std::system_error(std::make_error_code(std::errc::timed_out));
+                        }
+
                         throw std::runtime_error("helper chunk failure");
                     }
+
+                    helpers_released = true;
+                    release_helpers.release(2);
+
+                    // Observe publication, rather than racing the helper's safety-net reporting.
+                    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+                    while (sched.error() != helper_err and std::chrono::steady_clock::now() < deadline) {
+                        std::this_thread::yield();
+                    }
+
+                    caller_timed_out = sched.error() != helper_err;
                     throw std::system_error(caller_err);
                 },
                 sched);
+
             PPR_TEST_ASSERT(err == caller_err);
             PPR_TEST_ASSERT(sched.join() == helper_err);
             PPR_TEST_ASSERT(sched.getNumOutstandingTasks() == 0u);
+            PPR_TEST_ASSERT(not helper_timed_out.load(std::memory_order_acquire) and not caller_timed_out);
         };
 
         PPR_UNIT_TEST (forrange_success_returns_empty) {

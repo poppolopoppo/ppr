@@ -402,8 +402,19 @@ namespace pP {
         }
 
         const WaitGroup wg;
+        bool drained = false;
+        PPR_DEFER {
+            if (not drained) {
+                // The original exception is already propagating; drain accepted jobs before borrowed
+                // caller state unwinds, ignoring only this cleanup wait's ordinary error result.
+                std::ignore = wg.wait();
+            }
+        };
+
         std::error_code err = forRangeInternal_(first, last, closure, scheduler, min_job_size, wg);
         err = err | wg.wait();
+        drained = true;
+
         err = err | scheduler.error();
         return err;
     }

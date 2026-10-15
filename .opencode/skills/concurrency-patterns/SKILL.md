@@ -601,6 +601,14 @@ success registers exactly once and the worker envelope settles the group via
 `parallel::forRange/forEach` compose caller-lane, group, then scheduler
 error with queue-full fallback to the caller lane.
 
+On a worker of the same scheduler, `forRange` executes inline rather than
+dispatching and waiting on that pool. The synchronous helper also drains all
+accepted tasks if submission unwinds with an exception, before borrowed caller
+state is destroyed. Fallible jobs that need ordered outcomes or fatal-exception
+priority must retain private results until that drain; the scheduler safety net
+is not a substitute for their error policy. Keep profiling scopes local to the
+thread executing each phase.
+
 Regression links: `Core.Concurrency.Scheduler.Tests.cpp`
 `cancel_ack_still_rejects_admission` (post-ack admission stays rejected),
 `cancel_parent_drains_accepted_rejects_later` (accepted work still drains),
