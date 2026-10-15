@@ -8,12 +8,22 @@ import engine.core;
 import std;
 
 namespace pP::tests::detail::SharedGpu {
+    // ------------------------------------------------------------------
+    // shared GPU fixture lifecycle
+    // ------------------------------------------------------------------
+
     [[nodiscard]] std::error_code acquire();
 
     [[nodiscard]] std::error_code release();
 } // namespace pP::tests::detail::SharedGpu
 
 namespace pP::tests {
+    // ------------------------------------------------------------------
+    // suite group accessors
+    // ------------------------------------------------------------------
+
+    const UnitTest &packTests() noexcept;
+
     const UnitTest &imageTests() noexcept;
 
     const UnitTest &meshTests() noexcept;
@@ -32,6 +42,10 @@ namespace pP::tests {
 
     const UnitTest &observeTests() noexcept;
 
+    // ------------------------------------------------------------------
+    // shared render scope
+    // ------------------------------------------------------------------
+
     // Shared render scope: the first acquire boots the headless kSharedDomain
     // app once per loop (Asset.GpuFixture.cpp); subgroups hold no refs of
     // their own. Inverse teardown: per-leaf TrianglePass::shutdown, then this
@@ -42,29 +56,38 @@ namespace pP::tests {
     const UnitTest render = UnitTest::Named("render") / [](UnitTest::IRun &_) -> void {
         // Phase 2: shared scope over caches + gates + draws.
         PPR_TEST_ASSERT(not detail::SharedGpu::acquire());
+
         _.recurse({
             renderCachesTests(),
             renderGatesTests(),
             renderDrawsTests(),
             renderSharedMeshTests(),
         });
+
         PPR_TEST_ASSERT(not detail::SharedGpu::release());
+
         // Phase 3: quarantine (private app/device only, shared session gone).
         _.recurse({
             renderQuarantineTests(),
         });
     };
 
+    // ------------------------------------------------------------------
+    // asset suite root
+    // ------------------------------------------------------------------
+
     // Defined here rather than as an inline constexpr umbrella in Asset.Tests.cppm:
     // same MSVC C1001 shape as engine.tests.core.
     extern const UnitTest asset = UnitTest::Named("asset") / [](UnitTest::IRun &_) -> void {
         // Phase 1: CPU-only tops hold no SharedGpu refs and never acquire.
         _.recurse({
+            packTests(),
             imageTests(),
             meshTests(),
             resilienceTests(),
             observeTests(),
         });
+
         // Phase 2+3: shared-GPU scope, then quarantine (both in render above).
         _.recurse({
             render,

@@ -38,6 +38,6 @@ target_sources(engine.sim
 )
 
 setup_ppr_project(engine.sim
-  INTERNAL_PUBLIC_DEPS engine.core engine.math
+  INTERNAL_PUBLIC_DEPS engine.core engine.math engine.asset
   EXTERNAL_SYSTEM_PRIVATE_DEPS ppr.fast_noise_lite
 )

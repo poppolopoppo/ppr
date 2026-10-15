@@ -14,6 +14,6 @@ target_sources(engine.image
 )
 
 setup_ppr_project(engine.image
-  INTERNAL_PUBLIC_DEPS engine.core engine.math
+  INTERNAL_PUBLIC_DEPS engine.core engine.math engine.asset
   EXTERNAL_SYSTEM_PRIVATE_DEPS mango-image stb
 )

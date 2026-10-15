@@ -9,6 +9,7 @@ target_sources(engine.tests.asset
 target_sources(engine.tests.asset
     PRIVATE
         Asset.Tests.cpp
+        Asset.Pack.Tests.cpp
         # Image: image goldens + mip goldens + fixture path-join (all CPU-only).
         Asset.Image.Tests.cpp
         Asset.Image.Mips.Tests.cpp
@@ -30,7 +31,7 @@ target_sources(engine.tests.asset
     )
 
 setup_ppr_project(engine.tests.asset
-    INTERNAL_PUBLIC_DEPS engine.image engine.mesh engine.app engine.rhi engine.shader engine.tests
+    INTERNAL_PUBLIC_DEPS engine.asset engine.image engine.mesh engine.app engine.rhi engine.shader engine.tests
     EXTERNAL_SYSTEM_PRIVATE_DEPS mango-image mango-import3d glfw
 )
 
