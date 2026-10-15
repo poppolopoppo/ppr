@@ -11,6 +11,7 @@
 
 - [Custom logger, public macros, and mandatory error propagation](logging-and-errors.md)
 - [C++ logical paragraphs, declaration groups, and section headers](cpp-logical-grouping.md)
+- [Runtime profiling markers, coverage, and cost](profiling.md)
 - [Engine dependency map](../lib/engine/codemap.md)
 - [Application lifecycle/ownership](../lib/engine/app/codemap.md)
 - [Render worker and payload boundary](../lib/engine/app/frame/codemap.md)

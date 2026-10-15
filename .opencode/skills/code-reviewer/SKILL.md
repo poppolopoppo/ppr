@@ -143,6 +143,18 @@ submission, or streaming work via iteration count, algorithm, allocation, sync,
 transfer volume, shader work, or retained resources. Renames/comments/equivalent
 extraction do not trigger measurement.
 
+For material runtime changes, review profiling coverage under
+[AGENTS.md](../../../AGENTS.md#runtime-cost) and the
+[placement guide](../../../docs/profiling.md). Check whether meaningful phases,
+batch/worker execution, and waits remain distinguishable. Identify redundant
+nesting, per-item event multiplication, dynamic-label costs, unbalanced manual
+pairs, or scopes spanning threads/suspension. `Blocking` labels wait operations;
+mixed native waits may include callbacks and are not pure blocked time. A missing
+marker alone is not a finding: identify the diagnostic question left unanswered
+and the smallest useful boundary. Do not impose per-function coverage or numeric
+granularity thresholds. Reuse validation's trace/cost evidence; flag unavailable
+evidence without treating successful capture or no-fault tests as sufficient.
+
 #### Application and rendering boundary checks
 - A platform/application client owns application-facing window, viewport, and
   scene coordination; device-facing renderer code does not acquire or retain

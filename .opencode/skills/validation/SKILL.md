@@ -92,6 +92,16 @@ AGENTS.md's delegated-implementation contract. Only affected checks are repeated
   configure/build/test command; expand only if they alter wider behavior.
 - Script/tooling changes use syntax checks and focused behavior/exit-code cases;
   they do not trigger C++ builds or CTest unless engine behavior is affected.
+- Runtime marker changes require a bounded representative timing trace under
+  `pix-profiling` to verify names/nesting, expected execution threads, and work
+  versus waits. When granularity materially increases marker frequency, compare
+  matching baseline/candidate workloads and settings, retaining event rate,
+  trace bytes per second, runtime samples/spread, and capture overhead as described
+  in [profiling guidance](../../../docs/profiling.md). Do not invent a global
+  threshold or expand marker-only edits into render-transaction stress gates.
+  Reuse relevant correctness checks; marker no-fault tests do not validate trace
+  coverage or cost. Record unavailable sampling controls, elevation, timing
+  inspection, or baseline evidence explicitly; those checks remain unverified.
 
 ## Evidence and efficiency
 

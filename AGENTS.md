@@ -72,6 +72,24 @@ work in that area.
 - Applicable product budgets are defined outside AGENTS.md; do not invent
   engine-wide thresholds. Do not introduce speculative optimization, caching, or
   concurrency without demonstrated need.
+- Preserve useful profiling coverage when adding or changing material runtime
+  work. Use `hal::ProfileScope` at meaningful phase, batch, subsystem, and worker
+  execution boundaries where timing distinguishes actionable causes of a slowdown.
+  Reuse enclosing coverage when it already answers that question.
+- Do not instrument every function, trivial forwarding/accessor operations, or
+  per-item inner loops by default. Prefer an aggregate scope around the batch;
+  add finer scopes for a concrete investigation, considering invocation frequency,
+  runtime overhead, and trace volume. Review granularity without a function-coverage
+  percentage or universal duration threshold.
+- Prefer named RAII scope objects with stable, descriptive literal names. Manual
+  `hal::profileBegin`/`hal::profileEnd` pairs must remain balanced and properly nested
+  on the same thread across all exits. Do not span asynchronous handoffs or
+  coroutine suspension with these thread-local scopes.
+- Use `hal::profile_blocking_category` around actual CPU wait operations, keeping
+  useful work outside the scope where the API permits. A wait API that also runs
+  callbacks measures that combined elapsed time, not pure blocked time. See
+  [profiling guidance](docs/profiling.md) for placement and interpretation, and
+  **`pix-profiling`** for capture procedures.
 
 ## Ownership, lifetime, and teardown
 
