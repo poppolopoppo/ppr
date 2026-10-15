@@ -3254,6 +3254,106 @@ thickness_fine = 1
             PPR_TEST_ASSERT(not invalid and invalid.error() == std::errc::invalid_argument);
         };
 
+        PPR_UNIT_TEST (absent_biome_pass_maxima_preserve_sampled_chunk_output) {
+            auto recipe = numericRecipe();
+            recipe.m_cell_size_m = 1.0;
+            recipe.m_materials.push_back({33u, true, true, EGenerationMatter::solid, 2700.0});
+            recipe.m_materials.push_back({49u, true, true, EGenerationMatter::solid, 3000.0});
+            recipe.m_fields[0u].m_noise.m_algorithm = ENoiseAlgorithm::cellular_value;
+            recipe.m_fields[0u].m_noise.m_frequency_per_metre = 0.12;
+
+            auto &active = recipe.m_biomes.front();
+            active.m_bands[0u].m_choices[0u].m_weight = 3.0;
+            active.m_bands[0u].m_choices.push_back({204u, 0u, 1.0});
+            active.m_bands[0u].m_choices.push_back({205u, 33u, 1.0});
+            active.m_sprinkle_probability = 0.4;
+            active.m_pore_probability = 0.15;
+            active.m_pore_affinity_min = -1.0;
+            active.m_pore_passes = 1u;
+            active.m_relaxation_passes = 1u;
+            active.m_relaxation_adoption = 0.7;
+            active.m_finish_passes = 0u;
+            active.m_erosion_passes = 1u;
+            active.m_deposits.push_back(
+                {.m_key = 501u,
+                    .m_material = 49u,
+                    .m_host = 17u,
+                    .m_depth_max = 1.0,
+                    .m_threshold_min = -1.0,
+                    .m_threshold_max = 1.0,
+                    .m_stage = EGenerationDepositStage::detail});
+
+            // The absent biome still sets global stage offsets: detail at pass 5
+            // and erosion at pass 7. Removing it changes the random draw identities.
+            recipe.m_biomes.push_back(recipe.m_biomes.front());
+            auto &absent = recipe.m_biomes.back();
+            absent.m_key = 206u;
+            absent.m_pore_passes = 2u;
+            absent.m_relaxation_passes = 3u;
+            absent.m_finish_passes = 2u;
+            absent.m_erosion_passes = 2u;
+
+            const auto plan = compileGenerationPlan(recipe, 42u);
+            PPR_TEST_ASSERT(plan.has_value());
+
+            const auto layout = compileBiomeSampleLayout(*plan, 0u);
+            PPR_TEST_ASSERT(layout.has_value() and layout->sampleBiome() == 0u);
+
+            GenerationGeometry geometry;
+            geometry.m_instances.push_back({0u, kGenerationStartRule, 0u, 120, 80, false});
+            const auto raster = compileGenerationRaster(*plan, *layout, geometry);
+            PPR_TEST_ASSERT(raster.has_value());
+
+            const auto left = raster->chunk({0u, 0u});
+            const auto right = raster->chunk({1u, 0u});
+            PPR_TEST_ASSERT(left.has_value() and right.has_value());
+
+            const auto right_replay = raster->chunk({1u, 0u});
+            const auto left_replay = raster->chunk({0u, 0u});
+            PPR_TEST_ASSERT(right_replay.has_value() and left_replay.has_value());
+            PPR_TEST_ASSERT(*left == *left_replay and *right == *right_replay);
+
+            for (const auto *const cells: {std::addressof(*left), std::addressof(*right)}) {
+                PPR_TEST_ASSERT(std::ranges::any_of(*cells, [](const Cell cell) { return cell.m_element == 33u; }));
+                PPR_TEST_ASSERT(std::ranges::any_of(*cells, [](const Cell cell) { return cell.m_element == 49u; }));
+
+                for (const auto &cell: *cells) {
+                    PPR_TEST_ASSERT(
+                        cell.m_element == 0u or
+                        cell.m_element == 17u or
+                        cell.m_element == 33u or
+                        cell.m_element == 49u);
+                    PPR_TEST_ASSERT(cell.m_element == 0u ? cell.m_temperature == 0.0f : cell.m_temperature > 0.0f);
+                }
+
+                for (u32 x = 0u; x < kChunkEdge; ++x) {
+                    PPR_TEST_ASSERT((*cells)[x].m_element == recipe.m_boundary_material);
+                }
+            }
+
+            // The same protected carve crosses the independently rasterized seam.
+            for (u32 y = 80u; y < 110u; ++y) {
+                for (u32 x = 120u; x < 150u; ++x) {
+                    const auto &cells = x < kChunkEdge ? *left : *right;
+                    PPR_TEST_ASSERT(cells[y * kChunkEdge + x % kChunkEdge] == Cell{});
+                }
+            }
+
+            const auto checksum = [](const Array<Cell> &cells) {
+                hash_t result{hash::default_seed_v};
+
+                for (const Cell &cell: cells) {
+                    result = hash::combine(result, cell.m_element, std::bit_cast<u32>(cell.m_temperature));
+                }
+
+                return result.m_value;
+            };
+
+            // Pin the full global-pass output using semantic fields, never Cell padding.
+            PPR_TEST_ASSERT(checksum(*left) == 0x40b7d1729d078c3bull);
+            PPR_TEST_ASSERT(checksum(*right) == 0x5cac8b4b33fa15b9ull);
+        };
+
         PPR_UNIT_TEST (chunk_raster_preserves_boundaries_host_replacement_and_global_seams) {
             auto recipe = numericRecipe();
             recipe.m_materials.push_back({33u, true, true, EGenerationMatter::solid, 2500.0});
@@ -4098,8 +4198,7 @@ thickness_fine = 1
             auto parallel_plan = compileGenerationPlan(recipe, 42u);
             PPR_TEST_ASSERT(parallel_plan.has_value());
             auto parallel = generateWorld(
-                std::move(*parallel_plan), clock,
-                {.m_scheduler = &pool, .m_completed_chunks = &completed});
+                std::move(*parallel_plan), clock, {.m_scheduler = &pool, .m_completed_chunks = &completed});
             PPR_TEST_ASSERT(parallel.has_value());
             PPR_TEST_ASSERT(completed.load() == kChunkCount);
             PPR_TEST_ASSERT(gridHash(serial->m_grid) == gridHash(parallel->m_grid));
@@ -4222,6 +4321,7 @@ namespace pP::tests {
             detail::WorldGen::finite_blobs_and_smooth_worms_are_bounded_and_replay,
             detail::WorldGen::coherent_vacuum_palette_is_salted_before_bounded_relaxation,
             detail::WorldGen::relaxation_crosses_chunk_seams_preserves_reservations_and_precedes_detail,
+            detail::WorldGen::absent_biome_pass_maxima_preserve_sampled_chunk_output,
             detail::WorldGen::chunk_raster_preserves_boundaries_host_replacement_and_global_seams,
             detail::WorldGen::chunk_raster_opens_room_portals_but_preserves_mixed_role_sealed_pockets,
             detail::WorldGen::chunk_raster_protects_template_reservations_from_cave_fields,

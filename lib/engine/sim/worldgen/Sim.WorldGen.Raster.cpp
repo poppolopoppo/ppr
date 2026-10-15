@@ -389,13 +389,14 @@ namespace pP::sim {
             const double depth = columnDepth(column, ym, recipe.m_open_surface);
 
             const auto &biome = recipe.m_biomes[biome_index];
+            if (recipe.m_open_surface and ym >= column.m_surface) {
+                return {};
+            }
+
             const float temperature = static_cast<float>(
                 biome.m_temperature_base_k +
                 biome.m_temperature_variation_k * fieldValue(plan, biome.m_temperature_field, xm, ym));
             if (recipe.m_open_surface) {
-                if (ym >= column.m_surface) {
-                    return {};
-                }
                 if (ym <= column.m_bedrock) {
                     return {recipe.m_bedrock_material, temperature};
                 }
@@ -712,6 +713,7 @@ namespace pP::sim {
         };
 
         u32 local_passes = 0u;
+        u32 local_pore_passes = 0u, local_competition_passes = 0u, local_finish_passes = 0u, local_erosion_passes = 0u;
         bool detail = false, sprinkle = false;
         std::array<bool, kMaxGenerationBiomes> present{};
         for (const u32 index: biomes) {
@@ -727,6 +729,11 @@ namespace pP::sim {
             local_passes = std::max(
                 local_passes,
                 biome.m_relaxation_passes + biome.m_pore_passes + biome.m_finish_passes + biome.m_erosion_passes);
+            local_pore_passes = std::max(local_pore_passes, biome.m_pore_passes);
+            local_competition_passes = std::max(local_competition_passes, biome.m_relaxation_passes);
+            local_finish_passes = std::max(local_finish_passes, biome.m_finish_passes);
+            local_erosion_passes = std::max(local_erosion_passes, biome.m_erosion_passes);
+
             sprinkle = sprinkle or biome.m_sprinkle_probability > 0.0 or biome.m_pore_probability > 0.0;
             detail = detail or std::ranges::any_of(biome.m_deposits, [](const auto &deposit) {
                 return deposit.m_stage == EGenerationDepositStage::detail or deposit.m_sprinkle_probability > 0.0;
@@ -736,8 +743,10 @@ namespace pP::sim {
         if (local_passes == 0u and not detail and not sprinkle) {
             // Unchanged provinces need only their original chunk payload. They
             // never allocate relaxation buffers or scan protection geometry.
+            const hal::ProfileScope scope_sample{"Sim.WorldGen.Raster.Sample"};
             Array<Cell> cells(kCellsPerChunk);
             const u32 bucket = position.m_y * kChunksPerEdge + position.m_x;
+
             for (u32 y = 0u; y < kChunkEdge; ++y) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(WorldRaster, canceled(context));
                 for (u32 x = 0u; x < kChunkEdge; ++x) {
@@ -748,6 +757,7 @@ namespace pP::sim {
                         liningAt(at, recipe.m_biomes[biomes[at]]));
                 }
             }
+
             return cells;
         }
 
@@ -755,218 +765,244 @@ namespace pP::sim {
         Array<u16, mem::ScratchPad> affinity_materials(passes == 0u ? 0u : edge * edge);
         Array<u8, mem::ScratchPad> pore_eligible(pore_passes == 0u ? 0u : edge * edge);
         Array<u8, mem::ScratchPad> protected_cells(edge * edge, 0u);
-        for (u32 y = guard; y < edge - guard; ++y) {
-            PPR_RETURN_UNEXPECTED_ON_FAIL(WorldRaster, canceled(context));
 
-            for (u32 x = guard; x < edge - guard; ++x) {
-                const u32 at = y * edge + x, biome_index = biomes[at];
-                const auto &biome = recipe.m_biomes[biome_index];
-                const u32 gx = global(x, position.m_x), gy = global(y, position.m_y);
-                const u32 bucket = (gy / kChunkEdge) * kChunksPerEdge + gx / kChunkEdge;
-                const bool lining = liningAt(at, biome);
+        {
+            const hal::ProfileScope scope{"Sim.WorldGen.Raster.Sample"};
+            for (u32 y = guard; y < edge - guard; ++y) {
+                PPR_RETURN_UNEXPECTED_ON_FAIL(WorldRaster, canceled(context));
 
-                bool protect = lining or
-                               gx < recipe.m_boundary_fine or
-                               gy < recipe.m_boundary_fine or
-                               gx >= kWorldEdge - recipe.m_boundary_fine or
-                               (not recipe.m_open_surface and gy >= kWorldEdge - recipe.m_boundary_fine) or
-                               (recipe.m_open_surface and
-                                   ((gy + 0.5) * recipe.m_cell_size_m >= columns[x].m_surface or
-                                       (gy + 0.5) * recipe.m_cell_size_m <= columns[x].m_bedrock));
+                for (u32 x = guard; x < edge - guard; ++x) {
+                    const u32 at = y * edge + x, biome_index = biomes[at];
+                    const auto &biome = recipe.m_biomes[biome_index];
+                    const u32 gx = global(x, position.m_x), gy = global(y, position.m_y);
+                    const u32 bucket = (gy / kChunkEdge) * kChunksPerEdge + gx / kChunkEdge;
+                    const bool lining = liningAt(at, biome);
 
-                // Both sides of a biome boundary remain fixed, including biomes
-                // without authored lining. A mode vote never transports material across it.
-                for (i32 dy = -1; dy <= 1; ++dy) {
-                    for (i32 dx = -1; dx <= 1; ++dx) {
-                        const auto neighbor = static_cast<std::size_t>(
-                            static_cast<i64>(at) + dy * static_cast<i64>(edge) + dx);
-                        protect = protect or biomes[neighbor] != biome_index;
+                    bool protect = lining or
+                                   gx < recipe.m_boundary_fine or
+                                   gy < recipe.m_boundary_fine or
+                                   gx >= kWorldEdge - recipe.m_boundary_fine or
+                                   (not recipe.m_open_surface and gy >= kWorldEdge - recipe.m_boundary_fine) or
+                                   (recipe.m_open_surface and
+                                       ((gy + 0.5) * recipe.m_cell_size_m >= columns[x].m_surface or
+                                           (gy + 0.5) * recipe.m_cell_size_m <= columns[x].m_bedrock));
+
+                    // Both sides of a biome boundary remain fixed, including biomes
+                    // without authored lining. A mode vote never transports material across it.
+                    for (i32 dy = -1; dy <= 1; ++dy) {
+                        for (i32 dx = -1; dx <= 1; ++dx) {
+                            const auto neighbor = static_cast<std::size_t>(
+                                static_cast<i64>(at) + dy * static_cast<i64>(edge) + dx);
+                            protect = protect or biomes[neighbor] != biome_index;
+                        }
                     }
-                }
 
-                for (const u32 index: m_instances[bucket]) {
-                    protect = protect or reserved(recipe, m_geometry.m_instances[index], gx, gy);
-                }
-
-                for (const u32 index: m_segments[bucket]) {
-                    const auto &segment = m_geometry.m_segments[index];
-                    if (std::holds_alternative<GenerationConnection>(recipe.m_rules[segment.m_rule].m_parameters)) {
-                        protect = protect or capsule(
-                                                 (gx + 0.5) * recipe.m_cell_size_m, (gy + 0.5) * recipe.m_cell_size_m,
-                                                 segment.m_x0_m, segment.m_y0_m, segment.m_x1_m, segment.m_y1_m,
-                                                 segment.m_radius_m);
+                    for (const u32 index: m_instances[bucket]) {
+                        protect = protect or reserved(recipe, m_geometry.m_instances[index], gx, gy);
                     }
-                }
 
-                protected_cells[at] = protect ? 1u : 0u;
-                current[at] = sample(
-                    m_plan, m_geometry, m_segments[bucket], m_instances[bucket], m_blobs[bucket], gx, gy, biome_index,
-                    columns[x], lining, not protect);
+                    for (const u32 index: m_segments[bucket]) {
+                        const auto &segment = m_geometry.m_segments[index];
+                        if (std::holds_alternative<GenerationConnection>(recipe.m_rules[segment.m_rule].m_parameters)) {
+                            protect = protect or capsule(
+                                                     (gx + 0.5) * recipe.m_cell_size_m,
+                                                     (gy + 0.5) * recipe.m_cell_size_m, segment.m_x0_m, segment.m_y0_m,
+                                                     segment.m_x1_m, segment.m_y1_m, segment.m_radius_m);
+                        }
+                    }
 
-                if (passes != 0u and not protect) {
-                    const double xm = (gx + 0.5) * recipe.m_cell_size_m, ym = (gy + 0.5) * recipe.m_cell_size_m;
-                    const double depth = columnDepth(columns[x], ym, recipe.m_open_surface);
-                    affinity_materials[at] = baseMaterial(
-                        m_plan, biome, depth, columns[x].m_surface, xm, ym, gx, gy, false, false);
+                    protected_cells[at] = protect ? 1u : 0u;
+                    current[at] = sample(
+                        m_plan, m_geometry, m_segments[bucket], m_instances[bucket], m_blobs[bucket], gx, gy,
+                        biome_index, columns[x], lining, not protect);
 
-                    if (pore_passes != 0u) {
-                        pore_eligible[at] = (current[at].m_element == 0u or
-                                                poreHost(biome, depth, current[at].m_element)) and
-                                                    poreAffinity(m_plan, biome, xm, ym)
-                                                ? u8{1u}
-                                                : u8{0u};
+                    if (passes != 0u and not protect) {
+                        const double xm = (gx + 0.5) * recipe.m_cell_size_m, ym = (gy + 0.5) * recipe.m_cell_size_m;
+                        const double depth = columnDepth(columns[x], ym, recipe.m_open_surface);
+                        affinity_materials[at] = baseMaterial(
+                            m_plan, biome, depth, columns[x].m_surface, xm, ym, gx, gy, false, false);
+
+                        if (pore_passes != 0u) {
+                            pore_eligible[at] = (current[at].m_element == 0u or
+                                                    poreHost(biome, depth, current[at].m_element)) and
+                                                        poreAffinity(m_plan, biome, xm, ym)
+                                                    ? u8{1u}
+                                                    : u8{0u};
+                        }
                     }
                 }
             }
         }
 
         Array<Cell, mem::ScratchPad> next(passes == 0u ? 0u : edge * edge);
-        // Each pass consumes only the immutable previous buffer. Shrinking its
-        // valid halo by one cell proves identical interior results in every chunk.
-        for (u32 pass = 0u; pass < passes; ++pass) {
-            if (pass == pore_passes + competition_passes) {
-                // Detail is initialized over the entire remaining valid halo.
-                // Finishing therefore sees identical geology across chunk seams.
-                const u32 detail_margin = guard + pass;
 
-                for (u32 y = detail_margin; y < edge - detail_margin; ++y) {
+        {
+            const hal::ProfileScope scope{"Sim.WorldGen.Raster.Relax"};
+            // Each pass consumes only the immutable previous buffer. Shrinking its
+            // valid halo by one cell proves identical interior results in every chunk.
+            for (u32 pass = 0u; pass < passes; ++pass) {
+                if (pass == pore_passes + competition_passes) {
+                    // Detail is initialized over the entire remaining valid halo.
+                    // Finishing therefore sees identical geology across chunk seams.
+                    const u32 detail_margin = guard + pass;
+
+                    for (u32 y = detail_margin; y < edge - detail_margin; ++y) {
+                        PPR_RETURN_UNEXPECTED_ON_FAIL(WorldRaster, canceled(context));
+                        for (u32 x = detail_margin; x < edge - detail_margin; ++x) {
+                            const u32 at = y * edge + x;
+                            if (protected_cells[at] != 0u or current[at].m_element == 0u) {
+                                continue;
+                            }
+
+                            const u32 gx = global(x, position.m_x), gy = global(y, position.m_y);
+                            const u32 bucket = (gy / kChunkEdge) * kChunksPerEdge + gx / kChunkEdge;
+                            const double xm = (gx + 0.5) * recipe.m_cell_size_m, ym = (gy + 0.5) * recipe.m_cell_size_m;
+                            const double depth = columnDepth(columns[x], ym, recipe.m_open_surface);
+
+                            current[at].m_element = deposits(
+                                m_plan, m_geometry, m_blobs[bucket], biomes[at], depth, xm, ym, gx, gy,
+                                EGenerationDepositStage::detail, current[at].m_element);
+
+                            current[at].m_element = deposits(
+                                m_plan, m_geometry, m_blobs[bucket], biomes[at], depth, xm, ym, gx, gy,
+                                EGenerationDepositStage::detail, current[at].m_element, true);
+                        }
+                    }
+                }
+
+                PPR_RETURN_UNEXPECTED_ON_FAIL(WorldRaster, canceled(context));
+
+                const bool pore_phase = pass < pore_passes;
+                const bool erosion_phase = pass >= pore_passes + competition_passes + finish_passes;
+                const bool finish_phase = not erosion_phase and pass >= pore_passes + competition_passes;
+                const u32 phase_pass = pore_phase
+                                           ? pass
+                                           : (erosion_phase ? pass - pore_passes - competition_passes - finish_passes
+                                                            : (finish_phase ? pass - pore_passes - competition_passes
+                                                                            : pass - pore_passes));
+                const u32 local_phase_max = pore_phase ? local_pore_passes
+                                                       : (erosion_phase ? local_erosion_passes
+                                                                        : (finish_phase ? local_finish_passes
+                                                                                        : local_competition_passes));
+
+                // Keep global pass identities and the fixed detail boundary even
+                // when no biome in this complete chunk halo can change a cell.
+                if (phase_pass >= local_phase_max) {
+                    continue;
+                }
+
+                next = current;
+
+                const u32 margin = guard + pass + 1u;
+                for (u32 y = margin; y < edge - margin; ++y) {
                     PPR_RETURN_UNEXPECTED_ON_FAIL(WorldRaster, canceled(context));
-                    for (u32 x = detail_margin; x < edge - detail_margin; ++x) {
+                    for (u32 x = margin; x < edge - margin; ++x) {
                         const u32 at = y * edge + x;
-                        if (protected_cells[at] != 0u or current[at].m_element == 0u) {
+                        const auto &biome = recipe.m_biomes[biomes[at]];
+                        const u32 phase_count = pore_phase
+                                                    ? biome.m_pore_passes
+                                                    : (erosion_phase ? biome.m_erosion_passes
+                                                                     : (finish_phase ? biome.m_finish_passes
+                                                                                     : biome.m_relaxation_passes));
+
+                        if (protected_cells[at] != 0u or phase_pass >= phase_count) {
                             continue;
                         }
 
                         const u32 gx = global(x, position.m_x), gy = global(y, position.m_y);
-                        const u32 bucket = (gy / kChunkEdge) * kChunksPerEdge + gx / kChunkEdge;
-                        const double xm = (gx + 0.5) * recipe.m_cell_size_m, ym = (gy + 0.5) * recipe.m_cell_size_m;
-                        const double depth = columnDepth(columns[x], ym, recipe.m_open_surface);
+                        if (cellDraw(m_plan.seed(), biome.m_key, gx, gy, 0x72656c6178000000ull + pass) >=
+                            (pore_phase ? 1.0
+                                        : (erosion_phase ? 0.5
+                                                         : (finish_phase ? biome.m_finish_adoption
+                                                                         : biome.m_relaxation_adoption)))) {
+                            continue;
+                        }
 
-                        current[at].m_element = deposits(
-                            m_plan, m_geometry, m_blobs[bucket], biomes[at], depth, xm, ym, gx, gy,
-                            EGenerationDepositStage::detail, current[at].m_element);
-
-                        current[at].m_element = deposits(
-                            m_plan, m_geometry, m_blobs[bucket], biomes[at], depth, xm, ym, gx, gy,
-                            EGenerationDepositStage::detail, current[at].m_element, true);
-                    }
-                }
-            }
-
-            next = current;
-            const u32 margin = guard + pass + 1u;
-            for (u32 y = margin; y < edge - margin; ++y) {
-                PPR_RETURN_UNEXPECTED_ON_FAIL(WorldRaster, canceled(context));
-                for (u32 x = margin; x < edge - margin; ++x) {
-                    const u32 at = y * edge + x;
-                    const auto &biome = recipe.m_biomes[biomes[at]];
-                    const bool pore_phase = pass < pore_passes;
-                    const bool erosion_phase = pass >= pore_passes + competition_passes + finish_passes;
-                    const bool finish_phase = not erosion_phase and pass >= pore_passes + competition_passes;
-
-                    const u32 phase_pass = pore_phase
-                                               ? pass
-                                               : (erosion_phase
-                                                         ? pass - pore_passes - competition_passes - finish_passes
-                                                         : (finish_phase ? pass - pore_passes - competition_passes
-                                                                         : pass - pore_passes));
-
-                    const u32 phase_count = pore_phase ? biome.m_pore_passes
-                                                       : (erosion_phase ? biome.m_erosion_passes
-                                                                        : (finish_phase ? biome.m_finish_passes
-                                                                                        : biome.m_relaxation_passes));
-
-                    if (protected_cells[at] != 0u or phase_pass >= phase_count) {
-                        continue;
-                    }
-
-                    const u32 gx = global(x, position.m_x), gy = global(y, position.m_y);
-                    if (cellDraw(m_plan.seed(), biome.m_key, gx, gy, 0x72656c6178000000ull + pass) >=
-                        (pore_phase ? 1.0
-                                    : (erosion_phase ? 0.5
-                                                     : (finish_phase ? biome.m_finish_adoption
-                                                                     : biome.m_relaxation_adoption)))) {
-                        continue;
-                    }
-
-                    std::array<u16, 8u> neighbors{};
-                    u32 count = 0u;
-                    for (i32 dy = -1; dy <= 1; ++dy) {
-                        for (i32 dx = -1; dx <= 1; ++dx) {
-                            if (dx != 0 or dy != 0) {
-                                neighbors[count++] =
-                                    current[static_cast<std::size_t>(
-                                                static_cast<i64>(at) + dy * static_cast<i64>(edge) + dx)]
-                                        .m_element;
+                        std::array<u16, 8u> neighbors{};
+                        u32 count = 0u;
+                        for (i32 dy = -1; dy <= 1; ++dy) {
+                            for (i32 dx = -1; dx <= 1; ++dx) {
+                                if (dx != 0 or dy != 0) {
+                                    neighbors[count++] =
+                                        current[static_cast<std::size_t>(
+                                                    static_cast<i64>(at) + dy * static_cast<i64>(edge) + dx)]
+                                            .m_element;
+                                }
                             }
                         }
-                    }
 
-                    const double xm = (gx + 0.5) * recipe.m_cell_size_m, ym = (gy + 0.5) * recipe.m_cell_size_m;
-                    const u16 affinity = affinity_materials[at];
-                    const u16 neighbor_mode = neighborhoodMode(
-                        m_plan, neighbors, current[at].m_element, affinity, gx, gy, pass, erosion_phase);
+                        const double xm = (gx + 0.5) * recipe.m_cell_size_m, ym = (gy + 0.5) * recipe.m_cell_size_m;
+                        const u16 affinity = affinity_materials[at];
+                        const u16 neighbor_mode = neighborhoodMode(
+                            m_plan, neighbors, current[at].m_element, affinity, gx, gy, pass, erosion_phase);
 
-                    u16 mode = current[at].m_element;
-                    if (pore_phase) {
-                        const u32 empty = static_cast<u32>(std::ranges::count(neighbors, u16{0u}));
-                        if (mode == 0u) {
-                            mode = empty >= 2u ? u16{0u} : (neighbor_mode == 0u ? affinity : neighbor_mode);
-                        } else if (empty >= 3u and pore_eligible[at] != 0u) {
-                            mode = 0u;
+                        u16 mode = current[at].m_element;
+                        if (pore_phase) {
+                            const u32 empty = static_cast<u32>(std::ranges::count(neighbors, u16{0u}));
+                            if (mode == 0u) {
+                                mode = empty >= 2u ? u16{0u} : (neighbor_mode == 0u ? affinity : neighbor_mode);
+                            } else if (empty >= 3u and pore_eligible[at] != 0u) {
+                                mode = 0u;
+                            }
+                        } else if (erosion_phase or mode != 0u) {
+                            // Only the appended prototype erosion can excavate or
+                            // refill; the earlier geological stages remain intact.
+                            mode = neighbor_mode;
                         }
-                    } else if (erosion_phase or mode != 0u) {
-                        // Only the appended prototype erosion can excavate or
-                        // refill; the earlier geological stages remain intact.
-                        mode = neighbor_mode;
-                    }
 
-                    if (mode == current[at].m_element) {
-                        continue;
-                    }
+                        if (mode == current[at].m_element) {
+                            continue;
+                        }
 
-                    const float temperature = mode == 0u
-                                                  ? 0.0f
-                                                  : static_cast<float>(
-                                                        biome.m_temperature_base_k +
-                                                        biome.m_temperature_variation_k *
-                                                            fieldValue(m_plan, biome.m_temperature_field, xm, ym));
-                    next[at] = {mode, temperature};
+                        const float temperature = mode == 0u
+                                                      ? 0.0f
+                                                      : static_cast<float>(
+                                                            biome.m_temperature_base_k +
+                                                            biome.m_temperature_variation_k *
+                                                                fieldValue(m_plan, biome.m_temperature_field, xm, ym));
+                        next[at] = {mode, temperature};
+                    }
                 }
+
+                current.swap(next);
             }
-            current.swap(next);
         }
 
         Array<Cell> cells(kCellsPerChunk);
-        for (u32 y = 0u; y < kChunkEdge; ++y) {
-            PPR_RETURN_UNEXPECTED_ON_FAIL(WorldRaster, canceled(context));
 
-            for (u32 x = 0u; x < kChunkEdge; ++x) {
-                const u32 at = (y + padding) * edge + x + padding;
-                Cell cell = current[at];
+        {
+            const hal::ProfileScope scope{"Sim.WorldGen.Raster.Output"};
+            for (u32 y = 0u; y < kChunkEdge; ++y) {
+                PPR_RETURN_UNEXPECTED_ON_FAIL(WorldRaster, canceled(context));
 
-                if (finish_passes == 0u and
-                    erosion_passes == 0u and
-                    protected_cells[at] == 0u and
-                    cell.m_element != 0u) {
-                    const u32 gx = position.m_x * kChunkEdge + x, gy = position.m_y * kChunkEdge + y;
-                    const u32 bucket = position.m_y * kChunksPerEdge + position.m_x;
+                for (u32 x = 0u; x < kChunkEdge; ++x) {
+                    const u32 at = (y + padding) * edge + x + padding;
+                    Cell cell = current[at];
 
-                    const double xm = (gx + 0.5) * recipe.m_cell_size_m, ym = (gy + 0.5) * recipe.m_cell_size_m;
-                    const double depth = generationDepth(m_plan, xm, ym);
+                    if (finish_passes == 0u and
+                        erosion_passes == 0u and
+                        protected_cells[at] == 0u and
+                        cell.m_element != 0u) {
+                        const u32 gx = position.m_x * kChunkEdge + x, gy = position.m_y * kChunkEdge + y;
+                        const u32 bucket = position.m_y * kChunksPerEdge + position.m_x;
 
-                    cell.m_element = deposits(
-                        m_plan, m_geometry, m_blobs[bucket], biomes[at], depth, xm, ym, gx, gy,
-                        EGenerationDepositStage::detail, cell.m_element);
+                        const double xm = (gx + 0.5) * recipe.m_cell_size_m, ym = (gy + 0.5) * recipe.m_cell_size_m;
+                        const double depth = generationDepth(m_plan, xm, ym);
 
-                    cell.m_element = deposits(
-                        m_plan, m_geometry, m_blobs[bucket], biomes[at], depth, xm, ym, gx, gy,
-                        EGenerationDepositStage::detail, cell.m_element, true);
+                        cell.m_element = deposits(
+                            m_plan, m_geometry, m_blobs[bucket], biomes[at], depth, xm, ym, gx, gy,
+                            EGenerationDepositStage::detail, cell.m_element);
+
+                        cell.m_element = deposits(
+                            m_plan, m_geometry, m_blobs[bucket], biomes[at], depth, xm, ym, gx, gy,
+                            EGenerationDepositStage::detail, cell.m_element, true);
+                    }
+
+                    cells[y * kChunkEdge + x] = cell;
                 }
-
-                cells[y * kChunkEdge + x] = cell;
             }
         }
+
         return cells;
     }
 

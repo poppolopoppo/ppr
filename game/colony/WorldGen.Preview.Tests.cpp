@@ -361,8 +361,13 @@ namespace pP::game::tests::detail::worldgen_preview {
                 "Workshop exact production phase {}: {:.3f}s", phase,
                 time::seconds(world.m_report.m_phase_times[phase]));
         }
+
+        std::println(
+            "Workshop exact production checksums: terrain={:016x}, output={:016x}", world.m_report.m_terrain_checksum,
+            world.m_report.m_output_checksum);
         std::println(
             "Workshop exact production known cache payload: {} bytes", (*prepared)->m_known_retained_payload_bytes);
+
         PPR_TEST_ASSERT(world.m_grid.residentChunkCount() == sim::kChunkCount);
         PPR_TEST_ASSERT(world.m_report.m_output_checksum != 0u);
         PPR_TEST_ASSERT((*prepared)->matches(*catalog, spec));
