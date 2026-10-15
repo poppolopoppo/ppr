@@ -394,13 +394,22 @@ export namespace pP {
         // hashed segment colors; see the Windows backend.
         inline constexpr const char *profile_blocking_category = "Blocking";
 
+        // CPU duration events: these do not measure GPU execution. Instrument
+        // meaningful phases/batches, not every function or inner-loop item.
         // name and category are borrowed only for the duration of the call
         // and never retained. A null category hashes the name segment up to
-        // the first '.' for its color.
+        // the first '.' for its color; categories do not enable filtering.
+        // name must be non-null/non-empty; category must be null or non-empty.
+        // Manual pairs must be balanced and nested on the same thread across
+        // all exits. Do not span async handoffs or coroutine suspension.
         void profileBegin(const char *name, const char *category = nullptr) noexcept;
 
         void profileEnd() noexcept;
 
+        // Prefer a named RAII object with a stable literal label. An unnamed
+        // temporary ends at the full expression. Marker calls have a cost;
+        // disabled capture/build settings do not establish zero overhead.
+        // Placement, build behavior, and examples: docs/profiling.md.
         struct ProfileScope {
             explicit ProfileScope(const char *name, const char *category = nullptr) noexcept;
 
@@ -471,6 +480,25 @@ export namespace pP {
         // ------------------------------------------------------------------
 
         namespace process {
+            // RAII abstraction to hook process initialize/shutdown
+            struct Context {
+                Context() {
+                    // Disable synchronization with C standard streams (printf/scanf) for performance
+                    std::ios_base::sync_with_stdio(false);
+
+                    // Untie std::cin from std::cout to prevent automatic flushing before every input operation
+                    std::cin.tie(nullptr);
+
+                    disableSystemErrorReporting();
+                    installDebugAssertHooks();
+                }
+
+                ~Context() noexcept {
+                    // Enable back synchronization with C standard streams (printf/scanf)
+                    std::ios_base::sync_with_stdio(true);
+                }
+            };
+
             [[nodiscard]] std::filesystem::path currentExecutablePath() noexcept(false);
 
             [[nodiscard]] int spawnAndWait(

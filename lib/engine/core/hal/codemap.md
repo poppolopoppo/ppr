@@ -4,6 +4,10 @@
 Lowest-level platform abstraction (`export module engine.core:hal`) plus shared foundation helpers. `namespace hal` exposes page memory, magic ring buffers, native-string transcoding, debugger hooks, profiling markers, thread identity/naming, process spawn, deadline timers, well-known directories, and the full async-IO surface that `Core.Io` wraps. Platform backends live in `hal/<windows|linux|darwin|generic>/`, selected by `PPR_HAL_PLATFORM`.
 
 ## Design
+- **Profiling guidance**: [runtime profiling](../../../../docs/profiling.md)
+  explains CPU scope placement, same-thread pairing, build behavior, wait
+  attribution, and overhead. `AGENTS.md` owns coverage policy; the
+  [PIX skill](../../../../.opencode/skills/pix-profiling/SKILL.md) owns capture procedures.
 - **Foundation prelude** (in `pP` scope of `Core.HAL.cppm`): `simd_128_t`, `hash::mix`/`combine` (mx3/xmxmx 64-bit, best-xmxmx 32-bit, Boost `combine`), `overloaded` visitor, `Deferred`/`defer` scope guard, `randomNumberGenerator()` declared `Core.HAL.cppm:132`, defined windows + linux only (hardware-seeded `mt19937_64`).
 - **Identity/dirs**: `platformName()`, cached `userName()`, `Uuid` (`m_data[4]` + `create()`), `homeDir`/`systemDir`/`appDataLocalDir`/`appDataRoamingDir` as `directory_entry` refs.
 - **Page memory**: `pageAlloc(size, commit, PageProtection{read,write,execute}, alignment)` → `allocation_result`, `pageCommit`/`pageDecommit`/`pageProtect`/`pageOfferToOS`/`pageReclaimFromOS`/`pageFree`; `page_size`/`page_granularity` externs, `cacheline_size_v` (hardware constant or 64 fallback). Backs `mem::OS`. Linux now matches Windows on over-aligned requests (reserve `aligned_size + align - granularity` window, `mprotect` the aligned slice, `munmap` the head/tail slop); fast path when `align <= granularity`.
