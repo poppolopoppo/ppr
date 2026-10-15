@@ -237,7 +237,7 @@
       "oracle": {
         "model": "opencode/muse-spark-1.3-contributor-free",
         "temperature": 0.4,
-        "variant": "max",
+        "variant": "xhigh",
         "skills": [
           "clion-debugger",
           "simplify",
@@ -255,7 +255,8 @@
         ]
       },
       "explorer": {
-        "model": "opencode/mimo-v2.6-flash-free",
+        "model": "opencode/space-bunny-free",
+        "variant": "high",
         "temperature": 0.2,
         "skills": [],
         "mcps": [
@@ -317,9 +318,9 @@
         "mcps": []
       },
       "council": {
-        "model": "opencode/nemotron-3-ultra-free",
-        "temperature": 0.4,
+        "model": "opencode/muse-spark-1.3-contributor-free",
         "variant": "high",
+        "temperature": 0.4,
         "skills": [
           "*"
         ],
@@ -458,7 +459,7 @@
           "prompt": "Focus on correctness, edge cases, unit test coverage, and failure modes in engine subsystems."
         },
         "delta": {
-          "model": "opencode/nemotron-3-ultra-free",
+          "model": "opencode/mimo-v2.6-flash-free",
           "prompt": "Focus on C++23 idioms, import std patterns, constexpr optimization, safe_ptr lifetime, and PPR coding standards."
         }
       },
