@@ -60,23 +60,26 @@ namespace pP::game::tests::detail::pack {
     };
     void useSmallIdentityImages(const Fixture &fixture) {
         // Identity mutations exercise source-byte hashing and usage separation.
+        // The 4x4 bases satisfy the mip contract while retaining the two original pixel colors.
         // Full-size authored maps and mip chains have a dedicated catalog test.
-        constexpr std::array<u8, 70u> first{
+        constexpr std::array<u8, 75u> first{
             0x89u, 0x50u, 0x4eu, 0x47u, 0x0du, 0x0au, 0x1au, 0x0au, 0x00u, 0x00u, 0x00u, 0x0du, 0x49u, 0x48u, 0x44u,
-            0x52u, 0x00u, 0x00u, 0x00u, 0x01u, 0x00u, 0x00u, 0x00u, 0x01u, 0x08u, 0x06u, 0x00u, 0x00u, 0x00u, 0x1fu,
-            0x15u, 0xc4u, 0x89u, 0x00u, 0x00u, 0x00u, 0x0du, 0x49u, 0x44u, 0x41u, 0x54u, 0x78u, 0x9cu, 0x63u, 0x68u,
-            0x68u, 0xf8u, 0xffu, 0x1fu, 0x00u, 0x06u, 0x82u, 0x02u, 0xffu, 0xb3u, 0xbeu, 0x51u, 0x33u, 0x00u, 0x00u,
-            0x00u, 0x00u, 0x49u, 0x45u, 0x4eu, 0x44u, 0xaeu, 0x42u, 0x60u, 0x82u};
-        constexpr std::array<u8, 70u> second{
+            0x52u, 0x00u, 0x00u, 0x00u, 0x04u, 0x00u, 0x00u, 0x00u, 0x04u, 0x08u, 0x06u, 0x00u, 0x00u, 0x00u, 0xa9u,
+            0xf1u, 0x9eu, 0x7eu, 0x00u, 0x00u, 0x00u, 0x12u, 0x49u, 0x44u, 0x41u, 0x54u, 0x78u, 0x9cu, 0x63u, 0x68u,
+            0x68u, 0xf8u, 0xffu, 0x1fu, 0x19u, 0x33u, 0x90u, 0x2eu, 0x00u, 0x00u, 0x4cu, 0x7eu, 0x2fu, 0xe1u, 0x74u,
+            0xdcu, 0xdau, 0x7cu, 0x00u, 0x00u, 0x00u, 0x00u, 0x49u, 0x45u, 0x4eu, 0x44u, 0xaeu, 0x42u, 0x60u, 0x82u};
+        constexpr std::array<u8, 75u> second{
             0x89u, 0x50u, 0x4eu, 0x47u, 0x0du, 0x0au, 0x1au, 0x0au, 0x00u, 0x00u, 0x00u, 0x0du, 0x49u, 0x48u, 0x44u,
-            0x52u, 0x00u, 0x00u, 0x00u, 0x01u, 0x00u, 0x00u, 0x00u, 0x01u, 0x08u, 0x06u, 0x00u, 0x00u, 0x00u, 0x1fu,
-            0x15u, 0xc4u, 0x89u, 0x00u, 0x00u, 0x00u, 0x0du, 0x49u, 0x44u, 0x41u, 0x54u, 0x78u, 0x9cu, 0x63u, 0x38u,
-            0xd0u, 0xf0u, 0xeeu, 0x3fu, 0x00u, 0x07u, 0x60u, 0x03u, 0x2eu, 0x16u, 0xe3u, 0x8cu, 0xafu, 0x00u, 0x00u,
-            0x00u, 0x00u, 0x49u, 0x45u, 0x4eu, 0x44u, 0xaeu, 0x42u, 0x60u, 0x82u};
+            0x52u, 0x00u, 0x00u, 0x00u, 0x04u, 0x00u, 0x00u, 0x00u, 0x04u, 0x08u, 0x06u, 0x00u, 0x00u, 0x00u, 0xa9u,
+            0xf1u, 0x9eu, 0x7eu, 0x00u, 0x00u, 0x00u, 0x12u, 0x49u, 0x44u, 0x41u, 0x54u, 0x78u, 0x9cu, 0x63u, 0x38u,
+            0xd0u, 0xf0u, 0xeeu, 0x3fu, 0x32u, 0x66u, 0x20u, 0x5du, 0x00u, 0x00u, 0xb6u, 0xe6u, 0x32u, 0xd1u, 0xedu,
+            0xfbu, 0xd5u, 0x33u, 0x00u, 0x00u, 0x00u, 0x00u, 0x49u, 0x45u, 0x4eu, 0x44u, 0xaeu, 0x42u, 0x60u, 0x82u};
+
         for (const auto &entry: std::filesystem::directory_iterator{fixture.m_root / "textures"}) {
             if (entry.path().extension() != ".png") {
                 continue;
             }
+
             const auto name = entry.path().filename().string();
             const bool alternate = name == "ice.png" or
                                    name == "ice_normal.png" or
@@ -638,9 +641,14 @@ threshold.max = 1.0
     PPR_UNIT_TEST (identity_changes_for_every_definition_kind_and_texture_bytes) {
         Fixture fixture{};
         useSmallIdentityImages(fixture);
+
         config::Diagnostics diagnostics{};
         const auto baseline = fixture.load(diagnostics);
         PPR_TEST_ASSERT(baseline.has_value());
+
+        auto source = loadContentPackSource(fixture.m_root, diagnostics);
+        PPR_TEST_ASSERT(source.has_value());
+
         struct Change {
             std::string_view file, property;
             config::FileValue value;
@@ -709,21 +717,34 @@ threshold.max = 1.0
                 config::FileValue::floating(4.666666666666667)},
             {"appearance.toml", "appearance.features.landing.display_name",
                 config::FileValue::text("Hearth landing revised")}};
+
         for (const auto &change: changes) {
-            const auto original = fixture.read(change.file);
-            const auto patch = config::patchScalar(original, change.property, change.value, change.file, diagnostics);
+            const auto file = std::ranges::find(source->m_manifest.m_files, change.file);
+            PPR_TEST_ASSERT(file != source->m_manifest.m_files.end());
+
+            const auto index = static_cast<std::size_t>(file - source->m_manifest.m_files.begin());
+            auto &document = source->m_documents[index];
+
+            const auto patch = config::patchScalar(
+                document.m_bytes, change.property, change.value, change.file, diagnostics);
             if (not patch) {
                 throw std::system_error(patch.error(), std::string{change.property} + "\n" + diagnostics.format());
             }
+
             PPR_TEST_ASSERT(patch.has_value() and patch->m_before != patch->m_after);
-            const auto changed = config::applySourcePatch(original, *patch);
+
+            auto changed = config::applySourcePatch(document.m_bytes, *patch);
             PPR_TEST_ASSERT(changed.has_value());
-            fixture.write(change.file, *changed);
-            const auto candidate = fixture.load(diagnostics);
+
+            auto original = std::exchange(document.m_bytes, std::move(*changed));
+
+            const auto candidate = loadContentCatalog(fixture.m_root, *source, diagnostics);
             PPR_TEST_ASSERT(candidate.has_value());
             PPR_TEST_ASSERT(candidate->contentFingerprint() != baseline->contentFingerprint());
-            fixture.write(change.file, original);
+
+            document.m_bytes = std::move(original);
         }
+
         for (const auto &paths:
             {std::pair{"textures/basalt.png", "textures/ice.png"},
                 std::pair{"textures/basalt_normal.png", "textures/ice_normal.png"},
@@ -734,6 +755,100 @@ threshold.max = 1.0
             PPR_TEST_ASSERT(texture_change.has_value());
             PPR_TEST_ASSERT(texture_change->contentFingerprint() != baseline->contentFingerprint());
             fixture.write(paths.first, original);
+        }
+    };
+
+    // ------------------------------------------------------------------
+    // texture admission and generation
+    // ------------------------------------------------------------------
+
+    PPR_UNIT_TEST (earlier_mip_failure_precedes_later_texture_preparation_failure) {
+        Fixture fixture{};
+        useSmallIdentityImages(fixture);
+
+        // Decoding succeeds, but the existing mip contract rejects this 1x1 base.
+        constexpr std::array<u8, 70u> pixel{
+            0x89u, 0x50u, 0x4eu, 0x47u, 0x0du, 0x0au, 0x1au, 0x0au, 0x00u, 0x00u, 0x00u, 0x0du, 0x49u, 0x48u, 0x44u,
+            0x52u, 0x00u, 0x00u, 0x00u, 0x01u, 0x00u, 0x00u, 0x00u, 0x01u, 0x08u, 0x06u, 0x00u, 0x00u, 0x00u, 0x1fu,
+            0x15u, 0xc4u, 0x89u, 0x00u, 0x00u, 0x00u, 0x0du, 0x49u, 0x44u, 0x41u, 0x54u, 0x78u, 0x9cu, 0x63u, 0x68u,
+            0x68u, 0xf8u, 0xffu, 0x1fu, 0x00u, 0x06u, 0x82u, 0x02u, 0xffu, 0xb3u, 0xbeu, 0x51u, 0x33u, 0x00u, 0x00u,
+            0x00u, 0x00u, 0x49u, 0x45u, 0x4eu, 0x44u, 0xaeu, 0x42u, 0x60u, 0x82u};
+        fixture.write("textures/basalt.png", {reinterpret_cast<const char *>(pixel.data()), pixel.size()});
+        std::filesystem::remove(fixture.m_root / "textures/basalt_normal.png");
+
+        config::Diagnostics diagnostics{};
+        const auto catalog = fixture.load(diagnostics);
+        PPR_TEST_ASSERT(not catalog and catalog.error() == image::make_error_code(image::errc::invalid_argument));
+        PPR_TEST_ASSERT(diagnostics.size() == 1u and diagnostics.entries().size() == 1u);
+        PPR_TEST_ASSERT(diagnostics.entries().front().m_property == "appearance.materials.basalt.albedo_texture");
+        PPR_TEST_ASSERT(diagnostics.entries().front().m_message.starts_with("Cannot generate terrain mip chain:"));
+        PPR_TEST_ASSERT(diagnostics.entries().front().m_location.find("appearance.toml:") != std::string::npos);
+    };
+
+    PPR_UNIT_TEST (texture_input_admission_falls_back_serially_and_preserves_owned_mip_bytes) {
+        Fixture fixture{};
+        useSmallIdentityImages(fixture);
+
+        auto png = fixture.read("textures/basalt.png");
+        PPR_TEST_ASSERT(png.size() == 75u);
+
+        const auto ending = png.substr(png.size() - 12u);
+        png.resize(png.size() - 12u);
+
+        const auto append_big_endian = [&](const u32 value) {
+            for (u32 shift: {24u, 16u, 8u, 0u}) {
+                png.push_back(static_cast<char>((value >> shift) & 0xffu));
+            }
+        };
+
+        // A valid private ancillary chunk pads the PNG to the exact per-image input limit.
+        // Its fixed CRC was checked offline: zlib.crc32(b'npAD' + bytes(16777129)) == 0x01ca3580.
+        constexpr u32 padding_bytes = static_cast<u32>(kMaxTextureInputBytes) - 75u - 12u;
+        append_big_endian(padding_bytes);
+        png += "npAD";
+        png.append(padding_bytes, '\0');
+        append_big_endian(0x01ca3580u);
+        png += ending;
+        PPR_TEST_ASSERT(png.size() == kMaxTextureInputBytes);
+
+        fixture.write("textures/basalt.png", png);
+
+        auto appearance = fixture.read("appearance.toml");
+        replace(
+            appearance, "normal_texture = \"textures/basalt_normal.png\"", "normal_texture = \"textures/basalt.png\"");
+        fixture.write("appearance.toml", appearance);
+
+        config::Diagnostics diagnostics{};
+        const auto catalog = fixture.load(diagnostics);
+        PPR_TEST_ASSERT(catalog.has_value() and not diagnostics.hasErrors());
+        PPR_TEST_ASSERT(catalog->contentFingerprint().has_value());
+
+        const auto usages = std::ranges::count_if(catalog->textures(), [](const ContentTexture &texture) {
+            return texture.m_path == "textures/basalt.png" and texture.m_source_size == kMaxTextureInputBytes;
+        });
+        PPR_TEST_ASSERT(usages == 2);
+
+        // Loading on an existing background worker exercises the nested serial fallback.
+        // The returned catalog must own all bytes independently of that worker's local workspaces.
+        auto scheduled = parallel::backgroundPool().schedule([root = fixture.m_root](const IContext &) {
+            config::Diagnostics errors{};
+            return loadContentCatalog(root, errors);
+        });
+        PPR_TEST_ASSERT(scheduled.has_value());
+
+        const auto nested = scheduled->get();
+        PPR_TEST_ASSERT(nested.has_value());
+        PPR_TEST_ASSERT(nested->contentFingerprint() == catalog->contentFingerprint());
+        PPR_TEST_ASSERT(nested->textures().size() == catalog->textures().size());
+
+        for (std::size_t index = 0u; index < catalog->textures().size(); ++index) {
+            const auto &expected = catalog->textures()[index];
+            const auto &actual = nested->textures()[index];
+            PPR_TEST_ASSERT(actual.m_path == expected.m_path and actual.m_normal_map == expected.m_normal_map);
+            PPR_TEST_ASSERT(actual.m_image.m_storage.isOwned());
+            PPR_TEST_ASSERT(
+                std::ranges::equal(
+                    actual.m_image.m_storage.getBufferData(), expected.m_image.m_storage.getBufferData()));
         }
     };
 
@@ -769,6 +884,10 @@ threshold.max = 1.0
             background.entries().back().m_property == "appearance.backgrounds.frontier.layers.distant.texture");
         PPR_TEST_ASSERT(background.entries().back().m_location.find("appearance.toml:") != std::string::npos);
     };
+
+    // ------------------------------------------------------------------
+    // content authoring
+    // ------------------------------------------------------------------
 
     PPR_UNIT_TEST (authoring_all_definition_categories_round_trip_and_multidocument_save_retains_newer_edits) {
         Fixture fixture;
@@ -1369,6 +1488,8 @@ namespace pP::game::tests {
                     detail::pack::numeric_streams_ignore_document_order_and_unused_materials,
                     detail::pack::complete_identity_ignores_document_order_comments_and_source_paths,
                     detail::pack::identity_changes_for_every_definition_kind_and_texture_bytes,
+                    detail::pack::earlier_mip_failure_precedes_later_texture_preparation_failure,
+                    detail::pack::texture_input_admission_falls_back_serially_and_preserves_owned_mip_bytes,
                     detail::pack::texture_usage_is_distinct_and_background_diagnostics_preserve_source_keys,
                     detail::pack::required_texture_limits_missing_and_cancel_are_errors,
                     detail::pack::workshop_property_metadata_tracks_schemas_and_contextual_references,

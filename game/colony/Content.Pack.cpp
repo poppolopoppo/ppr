@@ -30,6 +30,27 @@ namespace pP::colony {
                 }
             }
         };
+
+        struct PreparedTexture {
+            ContentTexture m_texture{};
+            std::filesystem::path m_path{};
+            std::string m_location{};
+            std::string m_property{};
+            MappedFile m_mapping{};
+            std::exception_ptr m_exception{};
+            std::error_code m_error{};
+            u64 m_chain_bytes{};
+            u64 m_payload_bytes{};
+            bool m_finished{};
+            bool m_bad_alloc{};
+        };
+
+        // Bound admitted base/float payload by the existing maximum-size single-image workload.
+        // Decoder/stb scratch and allocator overhead remain separate from this payload estimate.
+        constexpr u64 kMaxTextureBaseBytes = u64{kMaxContentTextureDimension} * kMaxContentTextureDimension * 4u;
+        constexpr u64 kMaxTextureMipPayloadBytes = kMaxTextureBaseBytes * 5u +
+                                                   (kMaxTextureBaseBytes / 4u + kMaxTextureBaseBytes / 16u) * 4u;
+
         std::error_code textureFailure(
             config::Diagnostics &diagnostics, const std::filesystem::path &path, const MaterialDefinition &material,
             const std::string_view message, const std::error_code error, const bool normal_map = false) {
@@ -41,9 +62,12 @@ namespace pP::colony {
                 std::string{message} + ": " + path.string(), error);
             return error;
         }
-        Expected<ContentTexture> loadTexture(
+        Expected<PreparedTexture> prepareTexture(
             const std::filesystem::path &root, const MaterialDefinition &material, const u64 remaining_input,
-            const u64 remaining_decoded, config::Diagnostics &diagnostics, const bool normal_map = false) {
+            const u64 remaining_decoded, config::Diagnostics &diagnostics,
+            const std23::function_ref<std::error_code(u64)> admit_mapping,
+            const std23::function_ref<std::error_code(u64)> admit_base, const bool normal_map) {
+            const hal::ProfileScope scope{"Content.Texture.Prepare"};
             const auto &relative = normal_map ? *material.m_normal_texture : *material.m_albedo_texture;
             const auto failTexture = [&](config::Diagnostics &target, const std::filesystem::path &failed_path,
                                          const MaterialDefinition &source, const std::string_view message,
@@ -95,7 +119,12 @@ namespace pP::colony {
                         std::make_error_code(std::errc::file_too_large)));
             }
 
-            auto mapped = io::mapFile(path);
+            PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, admit_mapping(size));
+
+            auto mapped = [&] {
+                const hal::ProfileScope map_scope{"Content.Texture.Map"};
+                return io::mapFile(path);
+            }();
             if (not mapped and mapped.error() == std::errc::not_enough_memory) {
                 throw std::bad_alloc{};
             }
@@ -120,9 +149,14 @@ namespace pP::colony {
                         u64{kMaxContentTextureDimension} * kMaxContentTextureDimension * 4u),
                     .m_max_input_bytes = kMaxTextureInputBytes}};
 
-            auto decoded = image::decodeToRgba8(
-                bytes, path.extension().string(), desc,
-                normal_map ? image::EImageUsage::data : image::EImageUsage::color);
+            PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, admit_base(desc.m_limits.m_max_decoded_bytes));
+
+            auto decoded = [&] {
+                const hal::ProfileScope decode_scope{"Content.Texture.Decode"};
+                return image::decodeToRgba8(
+                    bytes, path.extension().string(), desc,
+                    normal_map ? image::EImageUsage::data : image::EImageUsage::color);
+            }();
             if (not decoded and decoded.error() == std::errc::not_enough_memory) {
                 throw std::bad_alloc{};
             }
@@ -133,29 +167,73 @@ namespace pP::colony {
                                        "Cannot decode required terrain texture within pack limits", decoded.error()));
             }
 
-            // Build immutable, sRGB-aware levels on the content coordinator,
-            // before render-lane upload. Count the whole chain against the pack budget.
-            const image::MipGenDesc mip_desc{
-                .m_limits = {.m_max_decoded_bytes = remaining_decoded},
-                .m_full_chain = true,
-                .m_normal_map = normal_map};
-            const auto mip_error = image::generateMipChain(*decoded, mip_desc);
-            if (mip_error == std::errc::not_enough_memory) {
-                throw std::bad_alloc{};
-            }
-            if (mip_error) {
-                PPR_RETURN_UNEXPECTED_ON_FAIL(
-                    ColonyContent,
-                    failTexture(diagnostics, path, material, "Cannot generate terrain mip chain", mip_error));
+            const u32 count = std::bit_width((std::max) (decoded->m_width, decoded->m_height));
+            u64 chain_bytes{};
+            u64 payload_bytes = decoded->m_storage.getBufferData().size_bytes() * 5u;
+            for (u32 level = 0u; level < count; ++level) {
+                const u64 level_bytes = image::slicePitchFor(
+                    image::mipExtentAt(decoded->m_width, level), image::mipExtentAt(decoded->m_height, level),
+                    image::EBlockTag::none);
+                if (level_bytes > remaining_decoded - chain_bytes) {
+                    PPR_RETURN_UNEXPECTED_ON_FAIL(
+                        ColonyContent, failTexture(
+                                           diagnostics, path, material, "Cannot generate terrain mip chain",
+                                           image::make_error_code(image::errc::invalid_argument)));
+                }
+
+                chain_bytes += level_bytes;
+
+                if (level == 1u or level == 2u) {
+                    payload_bytes += level_bytes * sizeof(float);
+                }
             }
 
-            Fingerprint source{};
-            source.text("ppr.texture.source.v1");
-            source.integer(bytes.size_bytes(), 8u);
-            for (const auto byte: bytes) {
-                source.integer(std::to_integer<u8>(byte), 1u);
+            return PreparedTexture{
+                .m_texture = ContentTexture{relative, size, 0u, std::move(*decoded), normal_map},
+                .m_path = path,
+                .m_location = normal_map ? material.m_normal_source_location : material.m_albedo_source_location,
+                .m_property = material.m_key.starts_with("appearance.backgrounds.")
+                                  ? material.m_key + ".texture"
+                                  : "appearance.materials." +
+                                        material.m_key +
+                                        (normal_map ? ".normal_texture" : ".albedo_texture"),
+                .m_mapping = std::move(*mapped),
+                .m_chain_bytes = chain_bytes,
+                .m_payload_bytes = payload_bytes};
+        }
+
+        void generateTexture(PreparedTexture &prepared) {
+            const image::MipGenDesc mip_desc{
+                .m_limits = {.m_max_decoded_bytes = prepared.m_chain_bytes},
+                .m_full_chain = true,
+                .m_normal_map = prepared.m_texture.m_normal_map};
+
+            prepared.m_error = [&] {
+                const hal::ProfileScope mip_scope{"Content.Texture.Mips"};
+                return image::generateMipChain(prepared.m_texture.m_image, mip_desc);
+            }();
+            if (prepared.m_error == std::errc::not_enough_memory) {
+                throw std::bad_alloc{};
             }
-            return ContentTexture{relative, size, source.m_value, std::move(*decoded), normal_map};
+
+            if (prepared.m_error) {
+                return;
+            }
+
+            const auto bytes = prepared.m_mapping.span();
+            Fingerprint source{};
+
+            {
+                const hal::ProfileScope hash_scope{"Content.Texture.HashSource"};
+                source.text("ppr.texture.source.v1");
+                source.integer(bytes.size_bytes(), 8u);
+
+                for (const auto byte: bytes) {
+                    source.integer(std::to_integer<u8>(byte), 1u);
+                }
+            }
+
+            prepared.m_texture.m_source_fingerprint = source.m_value;
         }
     }
 
@@ -235,6 +313,7 @@ namespace pP::colony {
         PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, source);
         return loadContentCatalog(root, *source, diagnostics, context);
     }
+
     Expected<ContentCatalog> loadContentCatalog(
         const std::filesystem::path &root, const ContentPackSource &source, config::Diagnostics &diagnostics,
         const IContext *const context) try {
@@ -281,59 +360,256 @@ namespace pP::colony {
         PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, catalog);
         catalog->m_pack_id = source.m_manifest.m_pack_id;
 
-        u64 input_bytes = 0u, decoded_bytes = 0u;
+        const hal::ProfileScope texture_scope{"Content.Textures.Load"};
+        std::array<std::optional<PreparedTexture>, 2u> pending{};
+        std::size_t pending_count{};
+        u64 pending_input{}, pending_payload{};
+        u64 input_bytes{}, decoded_bytes{};
+
+        const auto flush = [&]() -> std::error_code {
+            if (pending_count == 0u) {
+                return {};
+            }
+
+            // forRange drains on return and exceptional unwind before this outer cleanup releases slots.
+            PPR_DEFER {
+                for (auto &prepared: pending) {
+                    prepared.reset();
+                }
+
+                pending_count = 0u;
+                pending_input = 0u;
+                pending_payload = 0u;
+            };
+
+            std::exception_ptr dispatch_exception{};
+            std::error_code generated{};
+            bool dispatch_bad_alloc = false;
+            try {
+                generated = parallel::forRange(
+                    0u, pending_count,
+                    [&](const std::size_t index) noexcept {
+                        auto &prepared = *pending[index];
+
+                        try {
+                            generateTexture(prepared);
+                        } catch (const std::bad_alloc &) {
+                            prepared.m_exception = std::current_exception();
+                            prepared.m_bad_alloc = true;
+                        } catch (...) {
+                            prepared.m_exception = std::current_exception();
+                        }
+
+                        prepared.m_finished = true;
+                    },
+                    parallel::backgroundPool());
+            } catch (const std::bad_alloc &) {
+                dispatch_exception = std::current_exception();
+                dispatch_bad_alloc = true;
+            } catch (...) {
+                dispatch_exception = std::current_exception();
+            }
+
+            // Allocation failure remains fatal, including from a later speculative slot.
+            for (std::size_t index = 0u; index < pending_count; ++index) {
+                if (pending[index]->m_bad_alloc) {
+                    std::rethrow_exception(pending[index]->m_exception);
+                }
+            }
+
+            if (dispatch_bad_alloc) {
+                std::rethrow_exception(dispatch_exception);
+            }
+
+            // Completed earlier textures retain serial error precedence over a later admission exception.
+            for (std::size_t index = 0u; index < pending_count; ++index) {
+                auto &prepared = *pending[index];
+                PPR_ASSERT(prepared.m_finished or generated != std::error_code{} or dispatch_exception);
+
+                if (not prepared.m_finished) {
+                    if (dispatch_exception) {
+                        std::rethrow_exception(dispatch_exception);
+                    }
+
+                    prepared.m_error = generated;
+                }
+
+                if (prepared.m_exception) {
+                    std::rethrow_exception(prepared.m_exception);
+                }
+
+                if (prepared.m_error) {
+                    diagnostics.add(
+                        prepared.m_location, prepared.m_property,
+                        "Cannot generate terrain mip chain: " + prepared.m_path.string(), prepared.m_error);
+                    PPR_RETURN_ERROR_ON_FAIL(ColonyContent, prepared.m_error);
+                }
+
+                catalog->m_textures.push_back(std::move(prepared.m_texture));
+            }
+
+            if (dispatch_exception) {
+                std::rethrow_exception(dispatch_exception);
+            }
+
+            PPR_RETURN_ERROR_ON_FAIL(ColonyContent, generated);
+            return {};
+        };
+
+        const auto check_cancelled = [&]() -> std::error_code {
+            const auto error = cancelled();
+            if (error) {
+                // An earlier accepted texture's failure precedes cancellation at this boundary.
+                PPR_RETURN_ERROR_ON_FAIL(ColonyContent, flush());
+            }
+
+            PPR_RETURN_ERROR_ON_FAIL(ColonyContent, error);
+            return {};
+        };
+
+        const auto contains = [&](const std::string_view path, const bool normal_map) {
+            if (std::ranges::any_of(catalog->m_textures, [&](const ContentTexture &item) {
+                    return item.m_path == path and item.m_normal_map == normal_map;
+                })) {
+                return true;
+            }
+
+            for (std::size_t index = 0u; index < pending_count; ++index) {
+                const auto &texture = pending[index]->m_texture;
+                if (texture.m_path == path and texture.m_normal_map == normal_map) {
+                    return true;
+                }
+            }
+
+            return false;
+        };
+
+        const auto load_texture = [&](const MaterialDefinition &material, const bool normal_map) -> std::error_code {
+            try {
+                const auto admit_mapping = [&](const u64 size) -> std::error_code {
+                    if (size > kMaxTextureInputBytes - pending_input) {
+                        PPR_RETURN_ERROR_ON_FAIL(ColonyContent, flush());
+                    }
+
+                    return {};
+                };
+
+                const auto admit_base = [&](const u64 size) -> std::error_code {
+                    if (size > kMaxTextureMipPayloadBytes - pending_payload) {
+                        PPR_RETURN_ERROR_ON_FAIL(ColonyContent, flush());
+                    }
+
+                    return {};
+                };
+
+                config::Diagnostics preparation_diagnostics{};
+                auto prepared = prepareTexture(
+                    canonical_root, material, kMaxPackTextureInputBytes - input_bytes,
+                    kMaxPackTextureDecodedBytes - decoded_bytes, preparation_diagnostics, admit_mapping, admit_base,
+                    normal_map);
+                if (not prepared) {
+                    // Preserve the serial first-error owner before forwarding a later preparation failure.
+                    PPR_RETURN_ERROR_ON_FAIL(ColonyContent, flush());
+
+                    for (const auto &entry: preparation_diagnostics.entries()) {
+                        diagnostics.add(
+                            entry.m_location, entry.m_property, entry.m_message, entry.m_code, entry.m_alias,
+                            entry.m_related_properties);
+                    }
+
+                    diagnostics.addOmitted(preparation_diagnostics.omittedCount());
+                    PPR_RETURN_ERROR_ON_FAIL(ColonyContent, prepared.error());
+                }
+
+                if (prepared->m_payload_bytes > kMaxTextureMipPayloadBytes - pending_payload) {
+                    // The candidate base was admitted before decode; finish earlier work while retaining that base.
+                    PPR_RETURN_ERROR_ON_FAIL(ColonyContent, flush());
+                }
+
+                input_bytes += prepared->m_texture.m_source_size;
+                decoded_bytes += prepared->m_chain_bytes;
+                pending_input += prepared->m_texture.m_source_size;
+                pending_payload += prepared->m_payload_bytes;
+                pending[pending_count].emplace(std::move(*prepared));
+                ++pending_count;
+
+                if (pending_count == pending.size()) {
+                    PPR_RETURN_ERROR_ON_FAIL(ColonyContent, flush());
+                }
+
+                return {};
+            } catch (const std::bad_alloc &) {
+                const auto exception = std::current_exception();
+
+                // flush drains before inspecting results; preserve the pending fatal cause even if
+                // reporting an earlier worker's ordinary exception throws after that drain.
+                try {
+                    std::ignore = flush();
+                } catch (...) {
+                    std::rethrow_exception(exception);
+                }
+
+                std::rethrow_exception(exception);
+            } catch (...) {
+                const auto exception = std::current_exception();
+
+                PPR_RETURN_ERROR_ON_FAIL(ColonyContent, flush());
+
+                std::rethrow_exception(exception);
+            }
+        };
+
         for (const auto &material: catalog->materials()) {
-            PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, cancelled());
+            PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, check_cancelled());
+
             for (const bool normal_map: {false, true}) {
-                PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, cancelled());
+                PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, check_cancelled());
+
                 const auto &path = normal_map ? material.m_normal_texture : material.m_albedo_texture;
-                if (not path or std::ranges::any_of(catalog->m_textures, [&](const ContentTexture &item) {
-                        return item.m_path == *path and item.m_normal_map == normal_map;
-                    })) {
+                if (not path or contains(*path, normal_map)) {
                     continue;
                 }
-                if (catalog->m_textures.size() >= kMaxContentTextures) {
+
+                if (catalog->m_textures.size() + pending_count >= kMaxContentTextures) {
+                    PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, flush());
+
                     PPR_RETURN_UNEXPECTED_ON_FAIL(
                         ColonyContent, textureFailure(
                                            diagnostics, *path, material, "Too many distinct texture usages",
                                            std::make_error_code(std::errc::file_too_large), normal_map));
                 }
-                auto texture = loadTexture(
-                    canonical_root, material, kMaxPackTextureInputBytes - input_bytes,
-                    kMaxPackTextureDecodedBytes - decoded_bytes, diagnostics, normal_map);
-                PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, texture);
-                input_bytes += texture->m_source_size;
-                decoded_bytes += texture->m_image.m_storage.getBufferData().size_bytes();
-                catalog->m_textures.push_back(std::move(*texture));
+
+                PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, load_texture(material, normal_map));
             }
         }
 
         for (const auto &stack: catalog->m_backgrounds) {
             for (const auto &layer: stack.m_layers) {
-                PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, cancelled());
-                if (std::ranges::any_of(catalog->m_textures, [&](const ContentTexture &item) {
-                        return item.m_path == layer.m_texture and not item.m_normal_map;
-                    })) {
+                PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, check_cancelled());
+
+                if (contains(layer.m_texture, false)) {
                     continue;
                 }
+
                 MaterialDefinition source_material{
                     .m_key = "appearance.backgrounds." + stack.m_key + ".layers." + layer.m_key,
                     .m_albedo_texture = layer.m_texture,
                     .m_albedo_source_location = layer.m_source_location};
-                if (catalog->m_textures.size() >= kMaxContentTextures) {
+
+                if (catalog->m_textures.size() + pending_count >= kMaxContentTextures) {
+                    PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, flush());
+
                     PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, std::errc::file_too_large);
                 }
-                auto texture = loadTexture(
-                    canonical_root, source_material, kMaxPackTextureInputBytes - input_bytes,
-                    kMaxPackTextureDecodedBytes - decoded_bytes, diagnostics);
-                PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, texture);
-                input_bytes += texture->m_source_size;
-                decoded_bytes += texture->m_image.m_storage.getBufferData().size_bytes();
-                catalog->m_textures.push_back(std::move(*texture));
+
+                PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, load_texture(source_material, false));
             }
         }
 
+        PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, flush());
+
         PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, cancelled());
+
         catalog->m_content_fingerprint = catalog->computeContentFingerprint();
         return std::move(*catalog);
     } catch (const std::bad_alloc &) {

@@ -360,6 +360,14 @@ namespace pP::colony {
 
         const auto &worlds = documents[static_cast<std::size_t>(EContentDocument::worlds)];
         const auto owners = keyViews(worlds, "worlds");
+        Array<std::string_view, mem::ScratchPad> explicit_world_groups;
+        explicit_world_groups.reserve(worlds.m_groups.size());
+        for (const auto &group: worlds.m_groups) {
+            explicit_world_groups.push_back(group.m_path);
+        }
+
+        std::ranges::sort(explicit_world_groups);
+
         const auto &appearance = documents[static_cast<std::size_t>(EContentDocument::appearance)];
         for (const auto &binding: kBindings) {
             if (binding.m_attached_rules or binding.m_document == EContentDocument::appearance) {
@@ -369,7 +377,7 @@ namespace pP::colony {
                 documents[static_cast<std::size_t>(binding.m_document)], binding.m_collection);
             const std::string root = "appearance." + std::string{binding.m_collection};
             for (const auto key: keyViews(appearance, root)) {
-                if (std::ranges::find(declared, key) == declared.end()) {
+                if (not std::ranges::binary_search(declared, key)) {
                     std::string path = root + ".";
                     path.append(key);
                     PPR_RETURN_UNEXPECTED_ON_FAIL(
@@ -405,9 +413,8 @@ namespace pP::colony {
                     const auto owner = tail.substr(0u, tail.find('.'));
                     const std::string declaration = "worlds." + std::string{owner};
                     // A rule cannot synthesize a profile: require its explicit worlds.toml declaration.
-                    if (std::ranges::find(owners, owner) == owners.end() or
-                        std::ranges::none_of(
-                            worlds.m_groups, [&](const auto &group) { return group.m_path == declaration; })) {
+                    if (not std::ranges::binary_search(owners, owner) or
+                        not std::ranges::binary_search(explicit_world_groups, std::string_view{declaration})) {
                         PPR_RETURN_ERROR_ON_FAIL(
                             ColonyContent,
                             reject(diagnostics, source, path, "Rule owner must be explicitly declared in worlds.toml"));

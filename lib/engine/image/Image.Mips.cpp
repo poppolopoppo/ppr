@@ -82,19 +82,22 @@ namespace pP::image {
             const std::span<float> rgba, std::byte *const destination, const bool srgb,
             const bool normal_map) noexcept {
             constexpr std::size_t scanline_pitch_in_pixels = 128u * 128u;
-            return parallel::forRange(0u, rgba.size() / 4u, [&](std::size_t index) {
-                const std::size_t i = index * 4u;
-                float4 pixel = float4::uload(rgba.data() + i);
+            return parallel::forRange(
+                0u, rgba.size() / 4u,
+                [&](std::size_t index) {
+                    const std::size_t i = index * 4u;
+                    float4 pixel = float4::uload(rgba.data() + i);
 
-                if (normal_map) {
-                    pixel = normalizeNormal_(pixel);
-                    float4::ustore(rgba.data() + i, pixel);
+                    if (normal_map) {
+                        pixel = normalizeNormal_(pixel);
+                        float4::ustore(rgba.data() + i, pixel);
 
-                    pixel = pixel * 0.5f + 0.5f;
-                }
+                        pixel = pixel * 0.5f + 0.5f;
+                    }
 
-                packPixel_(destination + i, encodePixel_(pixel, srgb));
-            }, parallel::backgroundPool(), scanline_pitch_in_pixels);
+                    packPixel_(destination + i, encodePixel_(pixel, srgb));
+                },
+                parallel::backgroundPool(), scanline_pitch_in_pixels);
         }
 
         // ------------------------------------------------------------------
@@ -432,18 +435,23 @@ namespace pP::image {
             const float *const source = source_level == 0u ? top.data() : previous.data();
             next.resize(static_cast<std::size_t>(width) * height * 4u);
 
-            if (stbir_resize_float_linear(
-                    source, static_cast<int>(source_width), static_cast<int>(source_height), 0, next.data(),
-                    static_cast<int>(width), static_cast<int>(height), 0, STBIR_RGBA) == nullptr) {
-                // Validated storage/dimensions leave stb's scratch allocation as its failure.
-                throw std::bad_alloc{};
+            {
+                const hal::ProfileScope resize_scope{"Image.Mips.Resize"};
+
+                if (stbir_resize_float_linear(
+                        source, static_cast<int>(source_width), static_cast<int>(source_height), 0, next.data(),
+                        static_cast<int>(width), static_cast<int>(height), 0, STBIR_RGBA) == nullptr) {
+                    // Validated storage/dimensions leave stb's scratch allocation as its failure.
+                    throw std::bad_alloc{};
+                }
             }
 
             if (desc.m_has_preserve_coverage) {
                 preserveCoverage_(next, target_coverage, desc.m_alpha_cutoff);
             }
 
-            PPR_RETURN_ERROR_ON_FAIL(Image, encodeLevel_(next, chain->data() + offset, asset.m_is_srgb, desc.m_normal_map));
+            PPR_RETURN_ERROR_ON_FAIL(
+                Image, encodeLevel_(next, chain->data() + offset, asset.m_is_srgb, desc.m_normal_map));
             offset += static_cast<std::size_t>(slicePitchFor(width, height, EBlockTag::none));
             previous.swap(next);
         }
