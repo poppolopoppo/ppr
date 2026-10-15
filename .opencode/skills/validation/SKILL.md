@@ -47,7 +47,11 @@ AGENTS.md's delegated-implementation contract. Only affected checks are repeated
    effects require it. Local edit batches use author self-review, not an
    automatic additional independent review for every iteration.
 5. Configure, build, and test the selected scope through `build-system` in the
-   persistent shell, with builds and executable checks serialized. Run triggered
+   persistent shell, with builds and executable checks serialized.
+   The game harness caps `--run-test` at 1024 characters; preflight filter length
+   and split longer filters across serialized runs while preserving the approved
+   aggregate leaf scope and checking that the expected leaves actually ran.
+   Run triggered
    boundary/performance checks once; do not substitute a tiny fixture for a claim
    that requires production parity or stress. Collect the evidence required by
    the data-member layout contract through these checks. Discover current IDE capabilities
@@ -107,8 +111,12 @@ AGENTS.md's delegated-implementation contract. Only affected checks are repeated
 
 Use the existing validation record, not a new tracking service. Retain exact
 commands, scope/preset, exit status, wall time, log path, and source/configuration
-identity sufficient to judge evidence reuse. Record first-build failures, review
-fix rounds, repeated checks and their reason, and subsequent reopened defects.
+identity sufficient to judge evidence reuse. Bind executable and matching debug
+symbols (PDB on Windows) to the compiled-source snapshot, including changed-file
+hashes when needed; later working-tree edits are separate from that build identity.
+Record individual completed test-leaf durations separately from overlapping
+group-node totals. Record first-build failures, review fix rounds, repeated checks
+and their reason, and subsequent reopened defects.
 When session usage is available, keep uncached input, cached-input subset and
 output tokens distinct. Report concurrent interval unions separately from summed
 agent time; do not infer savings, phase costs, or billing from command counts.
@@ -119,7 +127,8 @@ Compare similar tasks before claiming that the revised workflow is faster.
 For triggers defined in `build-system`'s Build-performance workflow, retain the
 representative workload evidence. For optimization claims compare baseline and
 candidate with identical workload, toolchain, parallelism, and cache policy.
-Repeat paired runs and report samples plus spread, not one percentage. Use
+Repeat paired runs and report samples plus spread, not one percentage. A single
+run is a runtime observation, not a causal performance benchmark. Use
 UNINSTRUMENTED timing for the improvement claim; tracing explains it. Preserve
 correctness tests, module dependencies, sanitizers, and requested output semantics.
 Do not invent a global percentage threshold. Missing required evidence leaves

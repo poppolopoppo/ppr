@@ -56,6 +56,21 @@ math/noise helpers, container operations, and allocator primitives do not need
 scopes by default. Temporary detail is appropriate for a concrete investigation;
 remove it afterward unless its ongoing diagnostic value justifies its cost.
 
+Texture loading follows the same rule: retain named RAII scopes around useful
+aggregate phases such as batch loading, decoding, and upload preparation when
+they distinguish the cause of a slowdown. Do not add an event for every texture
+or helper call merely to increase coverage. Preserve existing useful phase names.
+
+The content loader prepares bounded two-texture waves serially, then generates
+mips and hashes on the existing background pool. `Content.Textures.Load` measures
+the caller's complete synchronous texture phase, including preparation and waits.
+`Content.Texture.Prepare`/`Map`/`Decode` describe preparation;
+`Content.Texture.Mips`/`HashSource` run on the executing thread. `Image.Mips.Resize`
+isolates the stb resize call for this investigation. Existing encoding work is
+visible through `Core.Parallel.ForRange`; these intervals overlap their parents.
+The former per-texture `Content.Texture.Load` interval is not directly comparable
+to the preparation-only interval.
+
 Place scopes on the thread executing work. Submission, execution, and completion
 are different boundaries; a submitter's scope cannot describe the worker's work.
 Use separate scopes on each thread, never a begin on one and an end on another.
@@ -65,6 +80,15 @@ elapsed time, `Sim.WorldGen.RasterJob` for each scheduled chunk job (a batch of
 16,384 cells), and `Sim.WorldGen.WaitForRaster` for the caller's completion wait.
 The serial path retains aggregate coverage. This bounded job-level detail
 distinguishes worker execution and imbalance without marking individual cells.
+
+Within raster work, `Sim.WorldGen.Raster.Sample` covers sampling and cell
+preparation, `Sim.WorldGen.Raster.Relax` covers the complete pass/detail phase,
+and `Sim.WorldGen.Raster.Output` covers the final cell/deposit copy.
+Preliminary column/biome setup remains in aggregate
+coverage. The direct no-pass `Sample` also includes output allocation; the general
+path allocates buffers outside its child scopes. Interpret those boundaries
+before comparing phases or adding temporary detail.
+
 Each `ParallelScheduler` worker also emits `Core.Scheduler.ExecuteTask` around
 task execution through its safety net. Idle signal/channel waits and completion
 bookkeeping stay outside that interval. Domain-specific child scopes identify
@@ -73,6 +97,12 @@ the task's content; their durations overlap with the scheduler parent.
 including caller participation and waiting for dispatched work. `parallel::forEach`
 forwards through that boundary and needs no duplicate scope. Worker execution
 remains visible through the separate scheduler scopes.
+
+Nested `forRange` on a worker of the same pool executes inline, avoiding a worker
+waiting on its own pool. The synchronous helper drains accepted work on exception
+unwind before borrowed caller state is destroyed. This lifetime guarantee does
+not make unhandled worker exceptions or shared mutable diagnostics appropriate;
+fallible texture jobs retain private outcomes for ordered handling after drain.
 
 Keep a scope around a wait call narrow, with preparation and subsequent useful
 work outside it. A predicate wait can return immediately, and some native wait
@@ -105,6 +135,33 @@ can be disabled independently of PIX events; the
 [Microsoft timing guide](https://learn.microsoft.com/en-us/windows/win32/direct3dtools/pix/articles/timing-captures/pix-timing-captures)
 describes the options. The capture skill explains how to verify available
 controls and what to report when tooling cannot enforce them.
+
+Capture creation, the MCP response, and analysis are separate evidence. A response
+error can occur after PIX writes an artifact; a nonempty artifact does not prove
+that it opens or that CPU scopes were inspected. Record each outcome separately.
+Native CPU timing queries are not exposed by the current MCP integration.
+Microsoft's supported read-only timing-file queries can provide local evidence
+and derived JSON without UI control; the capture skill owns that conditional
+procedure and its coverage limits. Respect the user's chosen analysis mode and
+report unavailable evidence rather than requiring UI inspection.
+
+For test timing evidence, retain the exact binary, source revision/working-tree
+state, effective configuration, loop/shuffle settings, and measured runtime.
+A long-running suite's timeout does not establish a focused test's expected
+runtime. The capture skill owns reproducible test setup and launch/attach steps.
+
+Before an algorithm change, retain deterministic baseline output checksums over
+semantic fields, such as material IDs and temperature bit patterns, excluding
+structure padding. Check the candidate against that baseline as well as meaningful
+behavior assertions. Replaying the same implementation proves repeatability,
+not equivalence between the previous and changed algorithms.
+
+Content fingerprints include definitions and texture source bytes, but exclude
+generated mip bytes. Check owned mip bytes independently when changing generation
+or scheduling. The current mip path filters linear floats with stb's Mitchell
+downsampling, clamp edges, and straight-alpha handling. A faster box/tiled path
+would change output semantics; timing evidence alone does not authorize that
+change or establish equivalent visual quality.
 
 When granularity materially increases marker frequency, compare baseline and
 candidate under matching workload, compiler/optimization, logging, warmup, and
