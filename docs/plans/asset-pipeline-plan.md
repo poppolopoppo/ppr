@@ -148,10 +148,14 @@ appearance in one typed wrapper:
 ```toml
 schema_version = 1
 element = "rock_element"
+representation = "terrain"
+diggable = true
 
 [appearance]
-albedo = "rock_albedo"
-normal = "ppr.shared:stone_normal"
+display_name = "Rock"
+color_rgba = "808080ff"
+albedo_texture = "rock_albedo"
+normal_texture = "ppr.shared:stone_normal"
 roughness = 0.8
 ```
 
@@ -166,6 +170,32 @@ mip_policy = "mitchell"
 
 These examples show the intended separation; milestone one freezes schemas and
 supported setting values against existing processors.
+
+The domain descriptor seam uses `sim::asset::Element` for phase/density and
+Material descriptors for Element references, representation and optional
+diggability. Existing typed Biome/Feature/Rule/Field models are wrapped as
+`schema_version = 1` plus `[definition]`; content composes `[appearance]` where
+needed. A World owns `semantic_key`, `[profile]` using `ProfileDefinition`,
+`[palette.materials.<alias>]` with `asset`/`id`, and indexed field/biome/feature
+palettes with `asset`/`index`. `[palette.rules.<alias>]` names standalone Rule
+descriptors; rule order and profile ownership remain in the existing schema.
+Inline `profile.rules` is rejected rather than becoming a second rule format.
+
+World palette entry keys and references inside reused numeric descriptors are
+world-local semantic aliases (maximum 128 bytes). They resolve against the
+selected World's exact declared bindings, including unsampled biomes. Material
+to Element, appearance to Texture/background, and palette `asset` fields are
+pack asset references (maximum 257 bytes), checked against the declaring pack
+and its dependencies. Marker and Rule edges retain their feature/profile owner
+scope. Diagnostic locations remain owned descriptor provenance with world
+context supplied at assembly.
+
+Texture descriptors support `color`, `data`, and `normal` interpretation and
+the existing `mitchell` downsampling policy. Optional `full_chain` (true),
+`high_quality` (false), `preserve_coverage` (false), and `alpha_cutoff` (0.5)
+map directly to existing mip processing. Normal maps reject coverage
+preservation. The current pinned stb float-linear default downsampler is
+Mitchell; changing processor behavior requires its separate processor version.
 
 Implementation decisions frozen for milestone one: local keys use the existing
 `[a-z0-9_-]{1,128}` grammar. Pack namespaces are 1..128 bytes of nonempty,

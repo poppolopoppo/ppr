@@ -1,8 +1,10 @@
 module;
+#include "pP/Macros.h"
 
 export module game.colony.content;
 
 import engine.core;
+import engine.asset;
 import engine.sim;
 import engine.image;
 import std;
@@ -462,7 +464,7 @@ export namespace pP::colony {
                     config::StringDomain{256u, false}, config::EPresence::required),
                 config::field(
                     &WorldAppearance::m_background_stack, appearance_schema::metadata("background_stack"),
-                    config::StringDomain{128u, false}, config::EPresence::required)};
+                    config::StringDomain{257u, false}, config::EPresence::required)};
         }
     };
 
@@ -513,6 +515,127 @@ export namespace pP::colony {
                 appearance_schema::collection(&Appearance::m_backgrounds, "backgrounds", kMaxContentWorlds)};
         }
     };
+
+    // ------------------------------------------------------------------
+    // named descriptor composition
+    // ------------------------------------------------------------------
+
+    PPR_DECLARE_LOG_CATEGORY(ContentDescriptors);
+
+    inline constexpr std::string_view kBackgroundAssetKind = "colony.background";
+    inline constexpr std::string_view kContentAssetKinds[] = {
+        sim::asset::kElementKind, sim::asset::kMaterialKind, sim::asset::kFieldKind, sim::asset::kBiomeKind,
+        sim::asset::kFeatureKind, sim::asset::kRuleKind, sim::asset::kWorldKind, image::kTextureAssetKind,
+        kBackgroundAssetKind};
+
+    struct MaterialAssetDescriptor : sim::asset::MaterialDescriptor {
+        MaterialAppearance m_appearance{};
+
+        [[nodiscard]] static constexpr auto describe() {
+            return std::tuple_cat(
+                sim::asset::MaterialDescriptor::describe(),
+                std::tuple{config::group(
+                    &MaterialAssetDescriptor::m_appearance, asset::metadata("appearance"),
+                    config::EPresence::required)});
+        }
+    };
+
+    struct BiomeAssetDescriptor : sim::asset::BiomeDescriptor {
+        BiomeAppearance m_appearance{};
+
+        [[nodiscard]] static constexpr auto describe() {
+            return std::tuple_cat(
+                sim::asset::BiomeDescriptor::describe(),
+                std::tuple{config::group(
+                    &BiomeAssetDescriptor::m_appearance, asset::metadata("appearance"), config::EPresence::required)});
+        }
+    };
+
+    struct FeatureAssetDescriptor : sim::asset::FeatureDescriptor {
+        FeatureAppearance m_appearance{};
+
+        [[nodiscard]] static constexpr auto describe() {
+            return std::tuple_cat(
+                sim::asset::FeatureDescriptor::describe(),
+                std::tuple{config::group(
+                    &FeatureAssetDescriptor::m_appearance, asset::metadata("appearance"),
+                    config::EPresence::required)});
+        }
+    };
+
+    struct WorldAssetDescriptor : sim::asset::WorldDescriptor {
+        WorldAppearance m_appearance{};
+
+        [[nodiscard]] static constexpr auto describe() {
+            return std::tuple_cat(
+                sim::asset::WorldDescriptor::describe(),
+                std::tuple{config::group(
+                    &WorldAssetDescriptor::m_appearance, asset::metadata("appearance"), config::EPresence::required)});
+        }
+    };
+
+    using BackgroundAssetDescriptor = sim::asset::Descriptor<BackgroundAppearance>;
+
+    struct BackgroundIdTag;
+    using BackgroundId = Numeric<u64, BackgroundIdTag>;
+
+    template<typename Descriptor, typename Id>
+    struct ContentDescriptor {
+        asset::Imported<Descriptor> m_descriptor{};
+        Id m_id{};
+    };
+
+    using MaterialAsset = ContentDescriptor<MaterialAssetDescriptor, sim::asset::MaterialId>;
+    using FieldAsset = ContentDescriptor<sim::asset::FieldDescriptor, sim::asset::FieldId>;
+    using BiomeAsset = ContentDescriptor<BiomeAssetDescriptor, sim::asset::BiomeId>;
+    using FeatureAsset = ContentDescriptor<FeatureAssetDescriptor, sim::asset::FeatureId>;
+    using RuleAsset = ContentDescriptor<sim::asset::RuleDescriptor, sim::asset::RuleId>;
+    using WorldAsset = ContentDescriptor<WorldAssetDescriptor, sim::asset::WorldId>;
+    using BackgroundAsset = ContentDescriptor<BackgroundAssetDescriptor, BackgroundId>;
+
+    /// A complete typed definition import pins its immutable pack metadata.
+    /// Retained observers use safe_ptr only after the owning catalog is pinned;
+    /// spans and entry pointers remain short-lived views of this owner.
+    class ContentDescriptorCatalog : public safe_object {
+        // owners:
+        std::shared_ptr<const asset::PackSet> m_packs;
+        sim::asset::ElementCatalog m_elements;
+        image::TextureCatalog m_textures;
+
+        // typed definitions:
+        Array<MaterialAsset> m_materials;
+        Array<FieldAsset> m_fields;
+        Array<BiomeAsset> m_biomes;
+        Array<FeatureAsset> m_features;
+        Array<RuleAsset> m_rules;
+        Array<WorldAsset> m_worlds;
+        Array<BackgroundAsset> m_backgrounds;
+
+        // construction and link validation:
+        ContentDescriptorCatalog(
+            std::shared_ptr<const asset::PackSet> packs, sim::asset::ElementCatalog elements,
+            image::TextureCatalog textures);
+        [[nodiscard]] std::error_code validateLinks(config::Diagnostics &diagnostics) const;
+
+    public:
+        [[nodiscard]] static Expected<ContentDescriptorCatalog> importDefinitions(
+            std::shared_ptr<const asset::PackSet> packs, config::Diagnostics &diagnostics);
+
+        [[nodiscard]] const asset::PackSet &packs() const noexcept;
+        [[nodiscard]] const sim::asset::ElementCatalog &elements() const noexcept;
+        [[nodiscard]] const image::TextureCatalog &textures() const noexcept;
+        [[nodiscard]] std::span<const MaterialAsset> materials() const noexcept;
+        [[nodiscard]] std::span<const FieldAsset> fields() const noexcept;
+        [[nodiscard]] std::span<const BiomeAsset> biomes() const noexcept;
+        [[nodiscard]] std::span<const FeatureAsset> features() const noexcept;
+        [[nodiscard]] std::span<const RuleAsset> rules() const noexcept;
+        [[nodiscard]] std::span<const WorldAsset> worlds() const noexcept;
+        [[nodiscard]] std::span<const BackgroundAsset> backgrounds() const noexcept;
+    };
+
+    // ------------------------------------------------------------------
+    // assembled content definition
+    // ------------------------------------------------------------------
 
     struct PackDefinition : sim::definition::Definition {
         Appearance m_appearance{};

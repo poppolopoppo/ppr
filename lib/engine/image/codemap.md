@@ -1,5 +1,11 @@
 # lib/engine/image/
 
+Named descriptor addition: `Image.Texture.cppm/.cpp` (`:texture`) owns
+schema-1 Texture descriptors, distinct persistent `TextureId`, and the typed
+definition-only `TextureCatalog`. It imports descriptor bytes/provenance and
+checks source containment without opening binary images. Interpretation is
+color/data/normal; mip settings map to the existing Mitchell processor.
+
 ## Responsibility
 
 `engine.image` owns CPU-side image assets (decode to native format + plain layout; no GPU/RHI

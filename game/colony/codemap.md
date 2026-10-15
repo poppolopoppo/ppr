@@ -1,5 +1,13 @@
 # game/colony/
 
+Named descriptor addition: `Content.Descriptors.cpp` implements the owned
+`ContentDescriptorCatalog` declared in `Content.cppm`. Composed schemas reuse
+sim definitions and existing appearance metadata, pin immutable pack metadata,
+and validate true cross-domain asset links and explicit palette index domains.
+`Content.Descriptors.Tests.cpp` exercises the real two-root module/config seam,
+shared Elements, missing/corrupt binary sources, owned provenance and symlink
+containment. The existing loader remains until the consumer migration gate.
+
 `WorldGen.Capture.cpp` implements the `game.colony.smoke` blocking GPU diagnostic
 entry point. The invocation boundary passes an exclusively owned initialized
 authored driver and reproduction/camera values; no simulation ticks run during

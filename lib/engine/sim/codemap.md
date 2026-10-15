@@ -1,5 +1,12 @@
 # lib/engine/sim/
 
+Named descriptor addition: `Sim.Asset.cppm/.cpp` (`:asset`) owns phase/density
+Elements, Material-to-Element composition, distinct typed asset IDs, versioned
+wrappers over existing numeric schemas, explicit World palettes and the
+definition-only Element catalog. Numeric payload references remain world-local
+semantic aliases; palette asset references use checked pack identity. Existing
+numeric compiler inputs and cell Material IDs retain their current meaning.
+
 ## Responsibility
 
 `engine.sim` owns deterministic, renderer-independent simulation state for the chunk world: the

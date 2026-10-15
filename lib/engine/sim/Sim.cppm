@@ -18,3 +18,4 @@ export import :worldgen.start;
 export import :worldgen.result;
 
 export import :particles;
+export import :asset;

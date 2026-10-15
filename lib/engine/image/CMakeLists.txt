@@ -7,10 +7,12 @@ target_sources(engine.image
       Image.Types.cppm
       Image.Decode.cppm
       Image.Mips.cppm
+      Image.Texture.cppm
   PRIVATE
       Image.Types.cpp
       Image.Decode.cpp
       Image.Mips.cpp
+      Image.Texture.cpp
 )
 
 setup_ppr_project(engine.image

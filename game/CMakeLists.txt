@@ -44,6 +44,7 @@ target_sources(app.game
         colony/ColonyTranslator.cpp
         colony/Content.cpp
         colony/Content.Pack.cpp
+        colony/Content.Descriptors.cpp
         colony/Content.Authoring.cpp
         colony/Metric.cpp
         colony/DigTool.cpp
@@ -63,7 +64,7 @@ target_sources(app.game
     )
 
 setup_ppr_project(app.game
-  INTERNAL_PUBLIC_DEPS engine.core engine.app engine.math engine.shader engine.rhi engine.sim engine.image
+  INTERNAL_PUBLIC_DEPS engine.core engine.asset engine.app engine.math engine.shader engine.rhi engine.sim engine.image
 )
 
 # Slice 4: driver-owned physics Scene + chunk colliders (explicit grant).
@@ -140,12 +141,14 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
             Game.Display.Tests.cpp
             colony/Content.cpp
             colony/Content.Pack.cpp
+            colony/Content.Descriptors.cpp
             colony/Content.Authoring.cpp
             colony/Content.Tests.cpp
             colony/Content.Biomes.Tests.cpp
             colony/Content.Features.Tests.cpp
             colony/Content.Worlds.Tests.cpp
             colony/Content.Pack.Tests.cpp
+            colony/Content.Descriptors.Tests.cpp
             colony/Checkpoint.Tests.cpp
             colony/Metric.cpp
             colony/Metric.Tests.cpp
@@ -178,7 +181,7 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
         )
 
     setup_ppr_project(game.tests
-      INTERNAL_PUBLIC_DEPS engine.core engine.app engine.sim engine.image engine.tests
+      INTERNAL_PUBLIC_DEPS engine.core engine.asset engine.app engine.sim engine.image engine.tests
     )
     target_link_libraries(game.tests PRIVATE engine.physics)
     add_dependencies(game.tests worldgen.assets)
