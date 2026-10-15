@@ -22,15 +22,42 @@ namespace pP::game::tests::detail::checkpoint {
 
     using namespace colony;
 
-    ContentCatalog loadCatalog() {
-        config::Diagnostics diagnostics;
-        const auto root = hal::process::currentExecutablePath().parent_path() / "worldgen/default";
-        auto catalog = loadContentCatalog(root, diagnostics);
-        if (not catalog) {
-            throw std::system_error(catalog.error(), diagnostics.format() + root.string());
+    class SharedTestCatalog {
+        ContentCatalog m_catalog;
+        const SharedTestCatalog *m_prev{nullptr};
+
+        static std::atomic<const SharedTestCatalog *> g_shared_catalog_ptr;
+
+        static ContentCatalog loadCatalog_() {
+            config::Diagnostics diagnostics;
+            const auto root = hal::process::currentExecutablePath().parent_path() / "worldgen/default";
+            auto catalog = loadContentCatalog(root, diagnostics);
+            if (not catalog) {
+                throw std::system_error(catalog.error(), diagnostics.format() + root.string());
+            }
+            return std::move(*catalog);
         }
-        return std::move(*catalog);
-    }
+
+    public:
+        SharedTestCatalog() : m_catalog(loadCatalog_()) {
+            m_prev = g_shared_catalog_ptr.exchange(this);
+        }
+
+        ~SharedTestCatalog() noexcept {
+            g_shared_catalog_ptr = m_prev;
+        }
+
+        static const ContentCatalog &get() noexcept {
+            PPR_ASSERT(g_shared_catalog_ptr);
+            if (const SharedTestCatalog *p_shared = g_shared_catalog_ptr.load()) [[likely]] {
+                return p_shared->m_catalog;
+            }
+            static const ContentCatalog g_empty_dummy{zero_v};
+            return g_empty_dummy;
+        }
+    };
+
+    std::atomic<const SharedTestCatalog *> SharedTestCatalog::g_shared_catalog_ptr{};
 
     // An explicitly edited world: its old authored starting area and reservoir
     // no longer have to satisfy generation-time containment or route guarantees.
@@ -118,7 +145,7 @@ namespace pP::game::tests::detail::checkpoint {
     }
 
     PPR_UNIT_TEST (generator_seven_checkpoint_is_incompatible_before_material_id_restore) {
-        const auto catalog = loadCatalog();
+        const auto catalog = SharedTestCatalog::get();
         auto checkpoint = editedCheckpoint(catalog);
         PPR_TEST_ASSERT(sim::kGeneratorAlgorithmVersion == 8u);
         PPR_TEST_ASSERT(not validateWorldCheckpoint(checkpoint, catalog));
@@ -136,7 +163,7 @@ namespace pP::game::tests::detail::checkpoint {
     };
 
     PPR_UNIT_TEST (round_trip_restores_edited_cells_actor_identity_and_frozen_full_capture) {
-        const auto catalog = loadCatalog();
+        const auto catalog = SharedTestCatalog::get();
         auto checkpoint = editedCheckpoint(catalog);
         checkpoint.m_report.m_retained_known_payload_bytes = 123456u;
         checkpoint.m_report.m_known_phase_scratch_bytes.fill(654321u);
@@ -159,7 +186,7 @@ namespace pP::game::tests::detail::checkpoint {
         PPR_TEST_ASSERT(
             decoded->m_particles.m_chunks[0].records()[0] == checkpoint.m_particles.m_chunks[0].records()[0]);
 
-        auto restored = restoreWorldCheckpoint(loadCatalog(), std::move(*decoded), 17u);
+        auto restored = restoreWorldCheckpoint(SharedTestCatalog::get(), std::move(*decoded), 17u);
         PPR_TEST_ASSERT(restored.has_value());
         auto &driver = **restored;
 
@@ -248,8 +275,8 @@ namespace pP::game::tests::detail::checkpoint {
     };
 
     PPR_UNIT_TEST (diagnostic_export_rejects_cancellation_and_unwritable_directory) {
-        const auto catalog = loadCatalog();
-        auto restored = restoreWorldCheckpoint(loadCatalog(), editedCheckpoint(catalog), 2u);
+        const auto catalog = SharedTestCatalog::get();
+        auto restored = restoreWorldCheckpoint(SharedTestCatalog::get(), editedCheckpoint(catalog), 2u);
         PPR_TEST_ASSERT(restored.has_value());
         const auto *const prepared = (*restored)->preparedWorld();
         PPR_TEST_ASSERT(prepared != nullptr);
@@ -280,8 +307,8 @@ namespace pP::game::tests::detail::checkpoint {
     };
 
     PPR_UNIT_TEST (authored_particles_survive_headless_digs_and_wait_for_complete_build_publication) {
-        const auto catalog = loadCatalog();
-        auto restored = restoreWorldCheckpoint(loadCatalog(), editedCheckpoint(catalog), 3u);
+        const auto catalog = SharedTestCatalog::get();
+        auto restored = restoreWorldCheckpoint(SharedTestCatalog::get(), editedCheckpoint(catalog), 3u);
         PPR_TEST_ASSERT(restored.has_value());
         auto &driver = **restored;
         driver.setPaused(true);
@@ -326,7 +353,7 @@ namespace pP::game::tests::detail::checkpoint {
     };
 
     PPR_UNIT_TEST (checkpoint_blob_references_ranges_and_wire_counts_are_checked) {
-        const auto catalog = loadCatalog();
+        const auto catalog = SharedTestCatalog::get();
         const auto original = editedCheckpoint(catalog);
         const auto plan = compileWorldPlan(catalog, "frontier", 42u);
         PPR_TEST_ASSERT(plan.has_value());
@@ -387,7 +414,7 @@ namespace pP::game::tests::detail::checkpoint {
     };
 
     PPR_UNIT_TEST (malformed_identity_metric_counts_and_payload_are_rejected_before_restore) {
-        const auto catalog = loadCatalog();
+        const auto catalog = SharedTestCatalog::get();
         const auto original = editedCheckpoint(catalog);
         auto bad = original;
         ++bad.m_descriptor.m_content_fingerprint;
@@ -395,7 +422,7 @@ namespace pP::game::tests::detail::checkpoint {
         PPR_TEST_ASSERT(validateWorldCheckpoint(bad, catalog) == std::errc::protocol_not_supported);
         bad = original;
         bad.m_descriptor.m_metric.m_cells_per_metre = 1u;
-        PPR_TEST_ASSERT(not restoreWorldCheckpoint(loadCatalog(), std::move(bad), 2u));
+        PPR_TEST_ASSERT(not restoreWorldCheckpoint(SharedTestCatalog::get(), std::move(bad), 2u));
         bad = original;
         ++bad.m_controlled->m_generation;
         PPR_TEST_ASSERT(validateWorldCheckpoint(bad, catalog) == std::errc::invalid_argument);
@@ -501,6 +528,7 @@ namespace pP::game::tests {
 
     const UnitTest checkpoint_tests = UnitTest::Named("checkpoint") / [](UnitTest::IRun &_) {
         using namespace detail::checkpoint;
+        [[maybe_unused]] const SharedTestCatalog shared_test_catalog{};
         _.recurse(
             {generator_seven_checkpoint_is_incompatible_before_material_id_restore,
                 diagnostic_export_rejects_cancellation_and_unwritable_directory,

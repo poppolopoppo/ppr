@@ -1077,7 +1077,7 @@ namespace pP::game::tests::detail::display {
 } // namespace pP::game::tests::detail::display
 
 namespace pP::game::tests {
-    const UnitTest game_display = UnitTest::Named("game_display") / [](UnitTest::IRun &_) -> void {
+    const UnitTest game_display = UnitTest::Named("display") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::display::draft_round_trip_matches_committed,
             detail::display::monitor_copy_failure_never_substitutes_defaults,

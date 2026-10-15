@@ -5067,6 +5067,7 @@ namespace demo {
 // ------------------------------------------------------------------
 
 int runGame(const int argc, char *argv[]) try {
+    [[maybe_unused]] const pP::hal::process::Context process_context{};
     const std::span<const char *const> args{argv, pP::checked_cast<std::size_t>(argc)};
 
     pP::config::Diagnostics diagnostics{};
@@ -5120,8 +5121,6 @@ int runGame(const int argc, char *argv[]) try {
     }
 
     if (settings.m_command == pP::game::EGameCommand::smoke) {
-        pP::hal::installDebugAssertHooks();
-        pP::hal::disableSystemErrorReporting();
         return pP::colony::runColonySmoke(pP::colony::SmokeOptions{startup.m_gpu_validation}).value();
     }
     demo::TurboLarbin app("ppr", args);

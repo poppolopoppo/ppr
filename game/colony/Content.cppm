@@ -430,6 +430,7 @@ export namespace pP::colony {
                             EnumEntry{EMaterialTextureSampling::repeat, "repeat"}}})};
         }
     };
+
     struct BiomeAppearance {
         std::string m_display_name{}, m_preview_color_rgba{};
         static constexpr auto describe() {
@@ -442,6 +443,7 @@ export namespace pP::colony {
                     config::StringDomain{8u, false}, config::EPresence::required)};
         }
     };
+
     struct FeatureAppearance {
         std::string m_display_name{};
         static constexpr auto describe() {
@@ -450,6 +452,7 @@ export namespace pP::colony {
                 config::StringDomain{256u, false}, config::EPresence::required)};
         }
     };
+
     struct WorldAppearance {
         std::string m_display_name{}, m_background_stack{};
         static constexpr auto describe() {
@@ -462,6 +465,7 @@ export namespace pP::colony {
                     config::StringDomain{128u, false}, config::EPresence::required)};
         }
     };
+
     struct BackgroundAppearanceLayer {
         u32 m_order{};
         std::string m_texture{}, m_color_rgba{};
@@ -485,6 +489,7 @@ export namespace pP::colony {
                     EPresence::required)};
         }
     };
+
     struct BackgroundAppearance {
         config::KeyedCollection<BackgroundAppearanceLayer> m_layers{};
         static constexpr auto describe() {
@@ -492,6 +497,7 @@ export namespace pP::colony {
                 config::collection(&BackgroundAppearance::m_layers, appearance_schema::metadata("layers"), {4u, 4u})};
         }
     };
+
     struct Appearance {
         config::KeyedCollection<MaterialAppearance> m_materials{};
         config::KeyedCollection<BiomeAppearance> m_biomes{};
@@ -507,6 +513,7 @@ export namespace pP::colony {
                 appearance_schema::collection(&Appearance::m_backgrounds, "backgrounds", kMaxContentWorlds)};
         }
     };
+
     struct PackDefinition : sim::definition::Definition {
         Appearance m_appearance{};
         static constexpr auto describe() {
@@ -517,6 +524,7 @@ export namespace pP::colony {
                     config::EPresence::required)});
         }
     };
+
     [[nodiscard]] Expected<config::Document> projectContentDocument(
         EContentDocument category, const PackDefinition &definition);
     [[nodiscard]] Expected<config::Document> contentVariantSubtree(
@@ -535,7 +543,7 @@ export namespace pP::colony {
 
     // Immutable owned material catalog. Decoding produces a candidate; callers
     // retain their previous catalog on failure. No parser views survive decoding.
-    class ContentCatalog {
+    class ContentCatalog : public safe_object {
         // state:
         PackDefinition m_definition{};
         Array<MaterialDefinition> m_materials{};
@@ -553,14 +561,21 @@ export namespace pP::colony {
             const std::filesystem::path &, config::Diagnostics &, const IContext *);
         friend Expected<ContentCatalog> loadContentCatalog(
             const std::filesystem::path &, const ContentPackSource &, config::Diagnostics &, const IContext *);
+
         [[nodiscard]] u64 computeContentFingerprint() const;
+
         ContentCatalog() = default;
+
         friend Expected<ContentCatalog> projectContentCatalog(
             PackDefinition, const config::Document &, config::Diagnostics &);
 
     public:
+        explicit ContentCatalog(ZeroValue) noexcept : ContentCatalog() {
+        }
+
         ContentCatalog(ContentCatalog &&) = default;
         ContentCatalog &operator=(ContentCatalog &&) = default;
+
         ContentCatalog(const ContentCatalog &) = default;
         ContentCatalog &operator=(const ContentCatalog &) = default;
 
@@ -583,6 +598,9 @@ export namespace pP::colony {
         // Present only after complete pack and asset validation.
         [[nodiscard]] std::optional<u64> contentFingerprint() const noexcept;
     };
+
+    using SharedContentCatalog = safe_ptr<const ContentCatalog>;
+
     [[nodiscard]] Expected<ContentCatalog> projectContentCatalog(
         PackDefinition definition, const config::Document &document, config::Diagnostics &diagnostics);
     [[nodiscard]] Expected<ContentCatalog> projectContentCatalog(

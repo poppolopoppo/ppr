@@ -86,6 +86,9 @@ set(game_asset_directories shaders textures)
 if(EXISTS "${CMAKE_SOURCE_DIR}/assets/meshes")
     list(APPEND game_asset_directories meshes)
 endif()
+if(EXISTS "${CMAKE_SOURCE_DIR}/assets/fonts")
+    list(APPEND game_asset_directories fonts)
+endif()
 ppr_stage_assets(app.game ${game_asset_directories})
 
 add_custom_target(run-app-game
