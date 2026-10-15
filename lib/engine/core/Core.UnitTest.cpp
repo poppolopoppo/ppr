@@ -72,6 +72,18 @@ namespace pP {
             m_cv.notify_all();
         }
 
+        void recurse() {
+            if (m_disabled) {
+                return;
+            }
+
+            const std::lock_guard scope_lock(m_mutex);
+            if (not m_stack.empty()) [[likely]] {
+                // Ignore timeouts for test groups
+                m_stack.front().m_recurse = true;
+            }
+        }
+
         void pop() noexcept {
             if (m_disabled) {
                 return;
@@ -94,6 +106,7 @@ namespace pP {
             const UnitTest *m_test;
             std::chrono::steady_clock::time_point m_started{};
             std::chrono::steady_clock::time_point m_last_report{};
+            bool m_recurse{false};
         };
 
         // ReSharper disable once CppPassValueParameterByConstReference
@@ -102,6 +115,7 @@ namespace pP {
             hal::setThreadPriority(hal::EPriority::low);
 
             std::unique_lock lock(m_mutex);
+            std::ostringstream path;
 
             while (not st.stop_requested()) {
                 if (m_stack.empty()) {
@@ -115,16 +129,18 @@ namespace pP {
                 const auto now = std::chrono::steady_clock::now();
                 const auto elapsed = now - m_stack.back().m_started;
 
-                if (elapsed >= m_timeout and now - m_stack.back().m_last_report >= m_repeat) {
-                    std::string path;
+                if (elapsed >= m_timeout and now - m_stack.back().m_last_report >= m_repeat and not m_stack.back().m_recurse) {
                     try {
-                        for (const Entry &entry: m_stack) {
-                            if (not path.empty()) {
-                                path += '/';
+                        path.clear();
+                        path.seekp(0);
+
+                        for (const auto &[id, entry]: std::ranges::views::enumerate(m_stack)) {
+                            if (id > 0) {
+                                path << '/';
                             }
 
                             const char *name = entry.m_test != nullptr ? entry.m_test->m_name : nullptr;
-                            path += name != nullptr ? std::string_view(name) : std::string_view("<unknown>");
+                            path << (name != nullptr ? std::string_view(name) : std::string_view("<unknown>"));
                         }
 
                         m_stack.back().m_last_report = now;
@@ -139,7 +155,7 @@ namespace pP {
                     lock.unlock();
                     try {
                         std::println(
-                            std::cerr, " ⏳ test stalled: {} elapsed={} (timeout={})", path, elapsed,
+                            std::cerr, " ⏳ test stalled: {} elapsed={} (timeout={})", path.view(), elapsed,
                             m_timeout);
                         std::cerr.flush();
                     } catch (...) {
@@ -358,6 +374,10 @@ namespace pP {
             if (!m_context.filterMatches(child_path)) {
                 return;
             }
+        }
+
+        if (m_root->m_watchdog) {
+            m_root->m_watchdog->recurse();
         }
 
         RunImpl new_run{m_context, test, *this};
