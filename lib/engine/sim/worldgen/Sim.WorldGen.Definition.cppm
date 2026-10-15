@@ -1272,13 +1272,26 @@ export namespace pP::sim::definition {
         Definition definition, const ProfileReference &profile, GenerationCompileParameters parameters,
         Diagnostics &diagnostics);
 
+    /// Explicit global bindings cover exactly the selected definition's catalogs.
+    /// Marker and rule bindings remain compiler-derived and must not be supplied.
+    [[nodiscard]] Expected<CompiledRecipe> compileRecipe(
+        Definition definition, const ProfileReference &profile, GenerationCompileParameters parameters,
+        const DefinitionBindings &bindings, Diagnostics &diagnostics);
+
     // Required/unknown authoring properties are enforced by config::resolveRecursive<Definition>.
     [[nodiscard]] std::error_code validateDefinition(const Definition &definition, Diagnostics &diagnostics);
     // A numeric fragment, NOT a validated world. Noise compilation remains in compileGenerationPlan.
     [[nodiscard]] Expected<CompiledDefinition> compileDefinition(
         Definition definition, double cell_size_m, Diagnostics &diagnostics);
+
+    [[nodiscard]] Expected<CompiledDefinition> compileDefinition(
+        Definition definition, double cell_size_m, const DefinitionBindings &bindings, Diagnostics &diagnostics);
     // Resolved fragment identity, not a full world fingerprint or a validation operation.
     [[nodiscard]] u64 definitionFingerprint(const Definition &definition);
+
+    /// Numeric semantic identity includes the explicit global alias-to-ID/index maps.
+    /// Binding vector order, derived owner maps, pack names and paths are excluded.
+    [[nodiscard]] u64 definitionFingerprint(const Definition &definition, const DefinitionBindings &bindings);
     // Rule collections projected from every profile, including profiles with no rules.
     [[nodiscard]] u64 definitionRulesFingerprint(const Definition &definition);
 }

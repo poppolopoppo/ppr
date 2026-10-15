@@ -97,6 +97,7 @@ descriptor = "cave.toml"
             material.m_appearance.m_display_name = "Rock";
             material.m_appearance.m_color_rgba = "808080ff";
             material.m_appearance.m_albedo_texture = "ppr.shared:albedo";
+            material.m_appearance.m_texture_period_m = 1.0;
             write(m_base / "rock.toml", material);
 
             material.m_appearance.m_display_name = "Other Rock";
@@ -167,7 +168,8 @@ descriptor = "cave.toml"
             world.m_profile.m_start.m_marker.m_key = "spawn";
             world.m_profile.m_start.m_x_fine = 128u;
             world.m_profile.m_start.m_y_fine = 128u;
-            world.m_profile.m_start.m_clearance_m = 1.0;
+            // The assembly tests compile a 1.8 m tall actor; the start must contain it.
+            world.m_profile.m_start.m_clearance_m = 2.0;
             world.m_profile.m_start.m_route_width_m = 1.0;
             sim::definition::BiomeChoice choice;
             choice.m_biome.m_key = "hearth";
@@ -386,6 +388,358 @@ mip_policy = "unsupported"
         Fixture::write(fixture.m_shared / "albedo.toml", normal);
         PPR_TEST_ASSERT(not fixture.catalog(diagnostics));
     };
+
+    // ------------------------------------------------------------------
+    // selected world numeric assembly and identity
+    // ------------------------------------------------------------------
+
+    constexpr sim::definition::GenerationCompileParameters kParameters{1.0 / 3.0, 1.0, 0.4, 0.9};
+
+    PPR_UNIT_TEST (selected_world_uses_explicit_material_ids_and_owned_texture_closure) {
+        Fixture fixture;
+        config::Diagnostics diagnostics{32u};
+        const auto catalog = fixture.catalog(diagnostics);
+        PPR_TEST_ASSERT(catalog.has_value());
+
+        auto assembled = colony::assembleWorld(*catalog, catalog->worlds().front().m_id, kParameters, diagnostics);
+        PPR_TEST_ASSERT(assembled.has_value());
+        PPR_TEST_ASSERT(not diagnostics.hasErrors());
+        PPR_TEST_ASSERT(assembled->m_compiled.m_bindings.m_materials.front().m_key == "rock_copy");
+        PPR_TEST_ASSERT(assembled->m_compiled.m_recipe.m_materials.front().m_id == 1u);
+        PPR_TEST_ASSERT(assembled->m_compiled.m_recipe.m_materials.back().m_id == 2u);
+        PPR_TEST_ASSERT(assembled->m_compiled.m_recipe.m_materials.front().m_reference_density_kg_m3 == 2000.0);
+        PPR_TEST_ASSERT(
+            assembled->m_compiled.m_recipe.m_materials.front().m_key !=
+            assembled->m_compiled.m_recipe.m_materials.back().m_key);
+        PPR_TEST_ASSERT(
+            assembled->m_compiled.m_recipe.m_biomes.front().m_bands.front().m_choices.front().m_material == 2u);
+        PPR_TEST_ASSERT(assembled->m_compiled.m_bindings.m_rules.front().m_profile == "frontier");
+        PPR_TEST_ASSERT(assembled->m_textures.size() == 1u);
+        PPR_TEST_ASSERT(assembled->m_textures.front().m_descriptor.m_value.m_source == "images/missing.png");
+        PPR_TEST_ASSERT(assembled->m_packs->packs().size() == 2u);
+    };
+
+    PPR_UNIT_TEST (numeric_identity_separates_appearance_density_and_source_provenance) {
+        Fixture fixture;
+        config::Diagnostics diagnostics{32u};
+        const auto original = fixture.catalog(diagnostics);
+        PPR_TEST_ASSERT(original.has_value());
+        const auto world = original->worlds().front().m_id;
+
+        const auto baseline = colony::assembleWorld(*original, world, kParameters, diagnostics);
+        PPR_TEST_ASSERT(baseline.has_value());
+
+        auto material = original->materials().front().m_descriptor.m_value;
+        material.m_appearance.m_color_rgba = "804020ff";
+        Fixture::write(fixture.m_base / "rock.toml", material);
+        const auto tinted = fixture.catalog(diagnostics);
+        PPR_TEST_ASSERT(tinted.has_value());
+
+        const auto tinted_world = colony::assembleWorld(*tinted, world, kParameters, diagnostics);
+        PPR_TEST_ASSERT(tinted_world.has_value());
+        PPR_TEST_ASSERT(tinted_world->m_numeric_fingerprint == baseline->m_numeric_fingerprint);
+        PPR_TEST_ASSERT(
+            tinted_world->m_presentation_descriptor_fingerprint != baseline->m_presentation_descriptor_fingerprint);
+
+        auto element = original->elements().definitions().front().m_descriptor.m_value;
+        element.m_density += 1.0;
+        Fixture::write(fixture.m_shared / "solid.toml", element);
+        const auto denser = fixture.catalog(diagnostics);
+        PPR_TEST_ASSERT(denser.has_value());
+
+        const auto denser_world = colony::assembleWorld(*denser, world, kParameters, diagnostics);
+        PPR_TEST_ASSERT(denser_world.has_value());
+        PPR_TEST_ASSERT(denser_world->m_numeric_fingerprint != tinted_world->m_numeric_fingerprint);
+        PPR_TEST_ASSERT(
+            denser_world->m_presentation_descriptor_fingerprint == tinted_world->m_presentation_descriptor_fingerprint);
+
+        Fixture::write(
+            fixture.m_shared / "solid.toml",
+            denser->elements().definitions().front().m_descriptor.m_source.m_bytes + "\n# provenance only\n");
+        const auto commented = fixture.catalog(diagnostics);
+        PPR_TEST_ASSERT(commented.has_value());
+
+        const auto commented_world = colony::assembleWorld(*commented, world, kParameters, diagnostics);
+        PPR_TEST_ASSERT(commented_world.has_value());
+        PPR_TEST_ASSERT(commented_world->m_numeric_fingerprint == denser_world->m_numeric_fingerprint);
+        PPR_TEST_ASSERT(
+            commented_world->m_presentation_descriptor_fingerprint ==
+            denser_world->m_presentation_descriptor_fingerprint);
+
+        const auto &shared_manifest = commented->packs().packs().back().m_manifest.m_source.m_bytes;
+        Fixture::write(
+            fixture.m_shared / "pack.toml",
+            shared_manifest +
+                "\n[assets.identical_solid]\nkind = \"sim.element\"\ndescriptor = \"identical_solid.toml\"\n");
+        Fixture::write(fixture.m_shared / "identical_solid.toml", element);
+        for (const auto &record: commented->materials()) {
+            auto relinked = record.m_descriptor.m_value;
+            relinked.m_element = "ppr.shared:identical_solid";
+            Fixture::write(record.m_descriptor.m_source.m_path, relinked);
+        }
+
+        const auto relinked = fixture.catalog(diagnostics);
+        PPR_TEST_ASSERT(relinked.has_value());
+
+        const auto relinked_world = colony::assembleWorld(*relinked, world, kParameters, diagnostics);
+        PPR_TEST_ASSERT(relinked_world.has_value());
+        PPR_TEST_ASSERT(relinked_world->m_numeric_fingerprint == commented_world->m_numeric_fingerprint);
+        PPR_TEST_ASSERT(
+            relinked_world->m_presentation_descriptor_fingerprint ==
+            commented_world->m_presentation_descriptor_fingerprint);
+    };
+
+    PPR_UNIT_TEST (unsampled_declared_biomes_remain_in_numeric_palette) {
+        Fixture fixture;
+        config::Diagnostics diagnostics{32u};
+        const auto original = fixture.catalog(diagnostics);
+        PPR_TEST_ASSERT(original.has_value());
+
+        auto biome = original->biomes().front().m_descriptor.m_value;
+        biome.m_definition.m_erosion.m_passes = 5u;
+        Fixture::write(fixture.m_shared / "unsampled.toml", biome);
+        const auto &manifest = original->packs().packs().back().m_manifest.m_source.m_bytes;
+        Fixture::write(
+            fixture.m_shared / "pack.toml",
+            manifest + "\n[assets.unsampled]\nkind = \"sim.biome\"\ndescriptor = \"unsampled.toml\"\n");
+
+        auto world = original->worlds().front().m_descriptor.m_value;
+        world.m_palette.m_biomes.m_entries.push_back({"unsampled", {"ppr.shared:unsampled", 1u}});
+        Fixture::write(fixture.m_base / "world.toml", world);
+        const auto expanded = fixture.catalog(diagnostics);
+        PPR_TEST_ASSERT(expanded.has_value());
+
+        const auto assembled = colony::assembleWorld(
+            *expanded, expanded->worlds().front().m_id, kParameters, diagnostics);
+        PPR_TEST_ASSERT(assembled.has_value());
+        PPR_TEST_ASSERT(assembled->m_compiled.m_recipe.m_constraints.size() == 1u);
+        PPR_TEST_ASSERT(assembled->m_compiled.m_recipe.m_biomes.size() == 2u);
+        PPR_TEST_ASSERT(assembled->m_compiled.m_recipe.m_biomes[1u].m_erosion_passes == 5u);
+    };
+
+    PPR_UNIT_TEST (unrelated_mounted_pack_cannot_change_selected_world_bindings_or_identity) {
+        Fixture fixture;
+        config::Diagnostics diagnostics{32u};
+        const auto original = fixture.catalog(diagnostics);
+        PPR_TEST_ASSERT(original.has_value());
+        const auto world = original->worlds().front().m_id;
+
+        const auto baseline = colony::assembleWorld(*original, world, kParameters, diagnostics);
+        PPR_TEST_ASSERT(baseline.has_value());
+
+        const auto unrelated = fixture.m_root / "unrelated";
+        PPR_TEST_ASSERT(std::filesystem::create_directory(unrelated));
+        Fixture::write(
+            unrelated / "pack.toml",
+            "schema_version = 1\npack_id = \"aaa.unrelated\"\n[assets.noise]\nkind = \"sim.field\"\ndescriptor = \"noise.toml\"\n");
+        Fixture::write(unrelated / "noise.toml", original->fields().front().m_descriptor.m_value);
+        auto extra = asset::readPackSource(unrelated, diagnostics);
+        PPR_TEST_ASSERT(extra.has_value());
+
+        Array<asset::PackSource> sources;
+        for (const auto &pack: original->packs().packs()) {
+            sources.push_back({pack.m_root, pack.m_manifest.m_source});
+        }
+
+        sources.push_back(std::move(*extra));
+        auto indexed = asset::PackSet::index(std::move(sources), colony::kContentAssetKinds, diagnostics);
+        PPR_TEST_ASSERT(indexed.has_value());
+
+        const auto expanded = colony::ContentDescriptorCatalog::importDefinitions(
+            std::make_shared<const asset::PackSet>(std::move(*indexed)), diagnostics);
+        PPR_TEST_ASSERT(expanded.has_value());
+
+        const auto assembled = colony::assembleWorld(*expanded, world, kParameters, diagnostics);
+        PPR_TEST_ASSERT(assembled.has_value());
+        PPR_TEST_ASSERT(assembled->m_numeric_fingerprint == baseline->m_numeric_fingerprint);
+        PPR_TEST_ASSERT(
+            assembled->m_presentation_descriptor_fingerprint == baseline->m_presentation_descriptor_fingerprint);
+        PPR_TEST_ASSERT(assembled->m_compiled.m_bindings.m_materials.front().m_id == 1u);
+        PPR_TEST_ASSERT(assembled->m_compiled.m_bindings.m_fields.size() == 1u);
+    };
+
+    PPR_UNIT_TEST (duplicate_asset_targets_reject_for_each_world_palette_kind) {
+        Fixture fixture;
+        config::Diagnostics diagnostics{32u};
+        const auto original = fixture.catalog(diagnostics);
+        PPR_TEST_ASSERT(original.has_value());
+        const auto baseline = original->worlds().front().m_descriptor.m_value;
+        const auto verify = [&](colony::WorldAssetDescriptor world) {
+            Fixture::write(fixture.m_base / "world.toml", world);
+            const auto catalog = fixture.catalog(diagnostics);
+            PPR_TEST_ASSERT(catalog.has_value());
+
+            const auto rejected = colony::assembleWorld(
+                *catalog, catalog->worlds().front().m_id, kParameters, diagnostics);
+            PPR_TEST_ASSERT(not rejected and rejected.error() == config::EConfigErrc::duplicate_key);
+        };
+
+        auto world = baseline;
+        world.m_palette.m_materials.m_entries.back().m_value.m_asset = "rock";
+        verify(world);
+
+        world = baseline;
+        world.m_palette.m_fields.m_entries.push_back({"other", {"ppr.shared:noise", 1u}});
+        verify(world);
+
+        world = baseline;
+        world.m_palette.m_biomes.m_entries.push_back({"other", {"ppr.shared:hearth", 1u}});
+        verify(world);
+
+        world = baseline;
+        world.m_palette.m_features.m_entries.push_back({"other", {"ppr.shared:landing", 1u}});
+        verify(world);
+
+        world = baseline;
+        world.m_palette.m_rules.m_entries.push_back({"other", {"ppr.shared:cave"}});
+        verify(world);
+    };
+
+    PPR_UNIT_TEST (world_alias_errors_keep_descriptor_origin_and_selected_world_context) {
+        Fixture fixture;
+        config::Diagnostics diagnostics{32u};
+        const auto original = fixture.catalog(diagnostics);
+        PPR_TEST_ASSERT(original.has_value());
+        auto biome = original->biomes().front().m_descriptor.m_value;
+        biome.m_definition.m_temperature.m_field.m_key = "missing";
+        Fixture::write(fixture.m_shared / "hearth.toml", biome);
+        const auto catalog = fixture.catalog(diagnostics);
+        PPR_TEST_ASSERT(catalog.has_value());
+
+        const auto rejected = colony::assembleWorld(*catalog, catalog->worlds().front().m_id, kParameters, diagnostics);
+        PPR_TEST_ASSERT(not rejected);
+        PPR_TEST_ASSERT(std::ranges::any_of(diagnostics.entries(), [](const auto &entry) {
+            return entry.m_property == "definition.temperature.field" and
+                   entry.m_location.find("hearth.toml") != std::string::npos and
+                   entry.m_message.find("World ppr.base:world") != std::string::npos;
+        }));
+    };
+
+    PPR_UNIT_TEST (assembled_appearance_requires_valid_rgba_period_and_background_order) {
+        Fixture fixture;
+        config::Diagnostics diagnostics{32u};
+        const auto original = fixture.catalog(diagnostics);
+        PPR_TEST_ASSERT(original.has_value());
+        auto material = original->materials().front().m_descriptor.m_value;
+        material.m_appearance.m_color_rgba = "nothex!!";
+        Fixture::write(fixture.m_base / "rock.toml", material);
+        const auto bad_color = fixture.catalog(diagnostics);
+        PPR_TEST_ASSERT(bad_color.has_value());
+        PPR_TEST_ASSERT(
+            not colony::assembleWorld(*bad_color, bad_color->worlds().front().m_id, kParameters, diagnostics));
+
+        material = original->materials().front().m_descriptor.m_value;
+        material.m_appearance.m_texture_period_m.reset();
+        Fixture::write(fixture.m_base / "rock.toml", material);
+        const auto no_period = fixture.catalog(diagnostics);
+        PPR_TEST_ASSERT(no_period.has_value());
+        PPR_TEST_ASSERT(
+            not colony::assembleWorld(*no_period, no_period->worlds().front().m_id, kParameters, diagnostics));
+
+        Fixture::write(fixture.m_base / "rock.toml", original->materials().front().m_descriptor.m_value);
+        auto background = original->backgrounds().front().m_descriptor.m_value;
+        background.m_definition.m_layers.m_entries.back().m_value.m_order = 0u;
+        Fixture::write(fixture.m_base / "skies.toml", background);
+        const auto bad_order = fixture.catalog(diagnostics);
+        PPR_TEST_ASSERT(bad_order.has_value());
+        PPR_TEST_ASSERT(
+            not colony::assembleWorld(*bad_order, bad_order->worlds().front().m_id, kParameters, diagnostics));
+    };
+
+    PPR_UNIT_TEST (shipped_definition_explicit_maps_preserve_current_numeric_recipe) {
+        config::Diagnostics diagnostics{32u};
+        const auto source = colony::loadContentPackSource(
+            hal::process::currentExecutablePath().parent_path() / "worldgen/default", diagnostics);
+        PPR_TEST_ASSERT(source.has_value());
+
+        const auto definition = colony::decodePackDefinition(*source, diagnostics);
+        PPR_TEST_ASSERT(definition.has_value());
+
+        const auto baseline = sim::definition::compileRecipe(*definition, {"frontier"}, kParameters, diagnostics);
+        PPR_TEST_ASSERT(baseline.has_value());
+
+        auto bindings = baseline->m_bindings;
+        bindings.m_rules.clear();
+        for (auto &feature: bindings.m_features) {
+            feature.m_markers.clear();
+        }
+
+        std::ranges::reverse(bindings.m_materials);
+        std::ranges::reverse(bindings.m_fields);
+        std::ranges::reverse(bindings.m_biomes);
+        std::ranges::reverse(bindings.m_features);
+        const auto explicit_result = sim::definition::compileRecipe(
+            *definition, {"frontier"}, kParameters, bindings, diagnostics);
+        PPR_TEST_ASSERT(explicit_result.has_value());
+
+        const auto &first = baseline->m_recipe;
+        const auto &second = explicit_result->m_recipe;
+        PPR_TEST_ASSERT(first.m_materials.size() == second.m_materials.size());
+        PPR_TEST_ASSERT(first.m_biomes.size() == second.m_biomes.size());
+        PPR_TEST_ASSERT(first.m_fields.size() == second.m_fields.size());
+        PPR_TEST_ASSERT(first.m_features.size() == second.m_features.size());
+        PPR_TEST_ASSERT(first.m_rules.size() == second.m_rules.size());
+        PPR_TEST_ASSERT(first.m_boundary_material == second.m_boundary_material);
+        PPR_TEST_ASSERT(first.m_start_biome == second.m_start_biome);
+        PPR_TEST_ASSERT(first.m_start_feature == second.m_start_feature);
+        PPR_TEST_ASSERT(first.m_start_marker == second.m_start_marker);
+
+        for (std::size_t index = 0u; index < first.m_materials.size(); ++index) {
+            const auto &left = first.m_materials[index];
+            const auto &right = second.m_materials[index];
+            PPR_TEST_ASSERT(
+                left.m_id == right.m_id and
+                left.m_key == right.m_key and
+                left.m_terrain == right.m_terrain and
+                left.m_diggable == right.m_diggable and
+                left.m_matter == right.m_matter and
+                left.m_reference_density_kg_m3 == right.m_reference_density_kg_m3);
+        }
+
+        for (std::size_t index = 0u; index < first.m_fields.size(); ++index) {
+            PPR_TEST_ASSERT(first.m_fields[index].m_key == second.m_fields[index].m_key);
+        }
+
+        for (std::size_t index = 0u; index < first.m_biomes.size(); ++index) {
+            PPR_TEST_ASSERT(first.m_biomes[index].m_key == second.m_biomes[index].m_key);
+            PPR_TEST_ASSERT(first.m_biomes[index].m_temperature_field == second.m_biomes[index].m_temperature_field);
+            PPR_TEST_ASSERT(first.m_biomes[index].m_bands.size() == second.m_biomes[index].m_bands.size());
+            PPR_TEST_ASSERT(first.m_biomes[index].m_erosion_passes == second.m_biomes[index].m_erosion_passes);
+        }
+
+        for (std::size_t index = 0u; index < first.m_rules.size(); ++index) {
+            PPR_TEST_ASSERT(first.m_rules[index].m_key == second.m_rules[index].m_key);
+            PPR_TEST_ASSERT(first.m_rules[index].m_order == second.m_rules[index].m_order);
+            PPR_TEST_ASSERT(first.m_rules[index].m_phase == second.m_rules[index].m_phase);
+        }
+
+        PPR_TEST_ASSERT(bindings.m_materials.size() > 1u and bindings.m_fields.size() > 1u);
+        std::swap(bindings.m_materials.front().m_id, bindings.m_materials.back().m_id);
+        std::swap(bindings.m_fields.front().m_index, bindings.m_fields.back().m_index);
+        const auto permuted = sim::definition::compileRecipe(
+            *definition, {"frontier"}, kParameters, bindings, diagnostics);
+        PPR_TEST_ASSERT(permuted.has_value());
+
+        for (const auto &binding: permuted->m_bindings.m_materials) {
+            const auto previous = std::ranges::find(
+                baseline->m_bindings.m_materials, binding.m_key, &sim::definition::MaterialBinding::m_key);
+            PPR_TEST_ASSERT(previous != baseline->m_bindings.m_materials.end());
+
+            const auto &before = first.m_materials[previous->m_id - 1u];
+            const auto &after = permuted->m_recipe.m_materials[binding.m_id - 1u];
+            PPR_TEST_ASSERT(
+                before.m_key == after.m_key and before.m_reference_density_kg_m3 == after.m_reference_density_kg_m3);
+        }
+
+        for (const auto &binding: permuted->m_bindings.m_fields) {
+            const auto previous = std::ranges::find(
+                baseline->m_bindings.m_fields, binding.m_key, &sim::definition::FieldBinding::m_key);
+            PPR_TEST_ASSERT(previous != baseline->m_bindings.m_fields.end());
+
+            PPR_TEST_ASSERT(
+                first.m_fields[previous->m_index].m_key == permuted->m_recipe.m_fields[binding.m_index].m_key);
+        }
+    };
 }
 
 namespace pP::game::tests {
@@ -408,5 +762,22 @@ namespace pP::game::tests {
 
     const UnitTest &gameContentDescriptorTests() noexcept {
         return content_descriptors;
+    }
+
+    const UnitTest world_assembly = UnitTest::Named("world_assembly") / [](UnitTest::IRun &_) -> void {
+        _.recurse({
+            detail::descriptors::selected_world_uses_explicit_material_ids_and_owned_texture_closure,
+            detail::descriptors::numeric_identity_separates_appearance_density_and_source_provenance,
+            detail::descriptors::unsampled_declared_biomes_remain_in_numeric_palette,
+            detail::descriptors::unrelated_mounted_pack_cannot_change_selected_world_bindings_or_identity,
+            detail::descriptors::duplicate_asset_targets_reject_for_each_world_palette_kind,
+            detail::descriptors::world_alias_errors_keep_descriptor_origin_and_selected_world_context,
+            detail::descriptors::assembled_appearance_requires_valid_rgba_period_and_background_order,
+            detail::descriptors::shipped_definition_explicit_maps_preserve_current_numeric_recipe,
+        });
+    };
+
+    const UnitTest &gameWorldAssemblyTests() noexcept {
+        return world_assembly;
     }
 }

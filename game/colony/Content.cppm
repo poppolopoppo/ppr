@@ -521,6 +521,10 @@ export namespace pP::colony {
     // ------------------------------------------------------------------
 
     PPR_DECLARE_LOG_CATEGORY(ContentDescriptors);
+    PPR_DECLARE_LOG_CATEGORY(ContentAssembly);
+
+    [[nodiscard]] Expected<u32> decodeAppearanceColor(
+        std::string_view value, std::string_view source, std::string_view property, config::Diagnostics &diagnostics);
 
     inline constexpr std::string_view kBackgroundAssetKind = "colony.background";
     inline constexpr std::string_view kContentAssetKinds[] = {
@@ -622,6 +626,7 @@ export namespace pP::colony {
             std::shared_ptr<const asset::PackSet> packs, config::Diagnostics &diagnostics);
 
         [[nodiscard]] const asset::PackSet &packs() const noexcept;
+        [[nodiscard]] std::shared_ptr<const asset::PackSet> packOwner() const noexcept;
         [[nodiscard]] const sim::asset::ElementCatalog &elements() const noexcept;
         [[nodiscard]] const image::TextureCatalog &textures() const noexcept;
         [[nodiscard]] std::span<const MaterialAsset> materials() const noexcept;
@@ -647,6 +652,25 @@ export namespace pP::colony {
                     config::EPresence::required)});
         }
     };
+
+    // ------------------------------------------------------------------
+    // selected world definition and numeric lowering
+    // ------------------------------------------------------------------
+
+    struct AssembledWorldDefinition {
+        std::shared_ptr<const asset::PackSet> m_packs{};
+        PackDefinition m_definition{};
+        sim::definition::CompiledRecipe m_compiled{};
+        Array<image::TextureDefinition> m_textures{};
+        sim::asset::WorldId m_world{};
+        u64 m_numeric_fingerprint{};
+        /// Descriptor semantics only; source-byte identities enter explicit image preparation.
+        u64 m_presentation_descriptor_fingerprint{};
+    };
+
+    [[nodiscard]] Expected<AssembledWorldDefinition> assembleWorld(
+        const ContentDescriptorCatalog &catalog, sim::asset::WorldId world,
+        sim::definition::GenerationCompileParameters parameters, config::Diagnostics &diagnostics);
 
     [[nodiscard]] Expected<config::Document> projectContentDocument(
         EContentDocument category, const PackDefinition &definition);

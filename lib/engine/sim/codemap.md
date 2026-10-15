@@ -7,6 +7,14 @@ definition-only Element catalog. Numeric payload references remain world-local
 semantic aliases; palette asset references use checked pack identity. Existing
 numeric compiler inputs and cell Material IDs retain their current meaning.
 
+`compileDefinition` and `compileRecipe` accept exact explicit global bindings;
+the convenience overloads generate lexical bindings and use the same lowering
+path. Numeric emission follows authored contiguous IDs/indices, while semantic
+aliases continue to determine RNG keys. Rule and marker maps remain derived
+from their owners. The binding-aware definition fingerprint includes global
+alias-to-number maps without binding-vector order. `sim/asset_bindings` covers
+ordering, malformed membership/domains and owner-map rejection.
+
 ## Responsibility
 
 `engine.sim` owns deterministic, renderer-independent simulation state for the chunk world: the

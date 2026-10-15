@@ -91,6 +91,9 @@ incidental observation, not a baseline comparison or performance claim.
 
 ## Domain descriptor seam gate
 
+Checkpoint commit: `47a4b1a`
+(`Add typed content descriptors and two-pack composition`).
+
 Implemented real `engine.image:texture` and `engine.sim:asset` descriptor schemas,
 typed definition-only catalogs, and the composed owned
 `ContentDescriptorCatalog`. The latter pins its immutable pack set. Texture
@@ -118,16 +121,69 @@ does not yet include full World alias/appearance validation, selected numeric
 lowering, binary preparation, or consumer readiness. Existing loaders still use
 the old format pending their coherent migration batch.
 
+## Explicit bindings and selected World assembly gate
+
+Implemented a single numeric compiler path with explicit global bindings;
+lexical convenience entry points produce bindings and forward to it. Preflight
+checks exact membership, unique aliases, contiguous unique IDs/indices, and
+rejects caller-supplied rule/marker maps. Emission follows numeric binding order;
+RNG paths retain semantic aliases. Feature markers are attached by the emitted
+feature's identity, independently of input binding-vector order.
+
+Selected World assembly resolves only its declared complete palettes, composes
+Element physical values into Materials, binds owner-local rules, validates
+appearance, and remaps diagnostics to owned descriptor provenance. Duplicate
+asset targets within each palette kind are rejected; distinct Materials may
+share an Element, and assets may be reused across Worlds.
+
+Numeric identity includes interpreted physical/domain values, semantic aliases,
+explicit bindings, compiler/schema versions, and actual compile parameters.
+Linkage-only asset-name changes are excluded when those inputs are identical.
+Presentation identity is currently descriptor-only; binary source-byte identity
+belongs to the forthcoming preparation phase.
+
+Source review passed after three paragraph-boundary corrections, with no
+functional findings. Format Check and semantic-style gates passed. Both
+`engine.tests.sim` and `game.tests` built from the final source snapshot.
+
+- Four `sim/asset_bindings` leaves passed.
+- Eight `game/world_assembly` leaves passed across the initial run and affected
+  rerun. Four initially failed because the shared fixture gave a 1.8 m actor
+  only 1 m clearance; the fixture was corrected to 2 m. Production validation
+  remained unchanged, and the correction passed independent review.
+- Eight descriptor regression leaves passed after that fixture correction.
+- The approved existing pinned fingerprint, rule canonicalization, deterministic
+  ID, binding/output reordering, and semantic reference-domain checks passed.
+
+Evidence: `out/validation/20261016/asset-pipeline/numeric-assembly/`. The execution
+record retains all failed attempts and actual matching leaves. An extra legacy
+pack filter was started outside the intended narrow golden scope; two leaves
+finished successfully in approximately 31 and 50 seconds before the remaining
+filter was stopped. This is incidental partial evidence, not a passed full
+suite or a performance comparison. No broad raster suite was run for this gate.
+
 ## Current next step and pending gates
 
-Next implement explicit compiler bindings, selected typed World assembly, and
-binding-aware numeric identity. Then migrate the live definition loader,
-authoring and application consumers and shipped formats; add asynchronous image
-preparation/publication, presentation reuse, documentation/skills, and final
-validation in the plan's order. Reject duplicate asset targets within each
-World palette kind, while allowing distinct Materials to share an Element and
-the same asset to be used in different Worlds. Numeric identity excludes source
-asset-name changes when interpreted semantics, aliases, and bindings are equal.
+Next implement and verify standalone asynchronous image preparation and joined
+presentation results. Then switch the live loader, dynamic authoring sources,
+startup/preview/checkpoint consumers, and checked-in formats in one coherent
+migration, followed by reuse, documentation/skills, and final validation.
+
+The all-world descriptor owner remains separate from a selected numeric catalog.
+`loadContentCatalog` will return definitions only. A selected World view will be
+assembled using actual compile parameters; plan construction will consume its
+matching bound recipe, not recompute lexical bindings. Runtime Material IDs
+are meaningful only within that selected World.
+
+Image owns bounded batch requests and processing; content only composes their
+results with selected World appearance. Workshop currently runs on
+`backgroundPool()`, so external update polling must adopt definition results,
+pump image requests, then schedule capture after readiness. WorldJob's separate
+coordinator may wait/drain image jobs. CPU preparation does not perform GPU
+uploads. A distinct owning presentation sidecar carries World/numeric/presentation
+identity and generation; capture requires a matching ready sidecar. Cancellation
+and stale-result handling still drain accepted work and surface fatal allocation
+failures at the external reporting boundary.
 
 Real domain integration, shipped-content migration, numeric output parity,
 cancellation/draining and GPU retirement, full applicable suites/interactive

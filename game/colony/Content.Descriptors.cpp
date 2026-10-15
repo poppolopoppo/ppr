@@ -279,6 +279,10 @@ namespace pP::colony {
         return *m_packs;
     }
 
+    std::shared_ptr<const asset::PackSet> ContentDescriptorCatalog::packOwner() const noexcept {
+        return m_packs;
+    }
+
     const sim::asset::ElementCatalog &ContentDescriptorCatalog::elements() const noexcept {
         return m_elements;
     }

@@ -903,9 +903,135 @@ namespace pP::sim::definition {
     // definition compilation
     // ------------------------------------------------------------------
 
+    namespace {
+        [[nodiscard]] DefinitionBindings lexicalBindings(const Definition &definition) {
+            DefinitionBindings result;
+
+            for (const auto *entry: sortedEntries(definition.m_materials)) {
+                result.m_materials.push_back({entry->m_key, static_cast<u16>(result.m_materials.size() + 1u)});
+            }
+
+            for (const auto *entry: sortedEntries(definition.m_fields)) {
+                result.m_fields.push_back({entry->m_key, static_cast<u32>(result.m_fields.size())});
+            }
+
+            for (const auto *entry: sortedEntries(definition.m_biomes)) {
+                result.m_biomes.push_back({entry->m_key, static_cast<u32>(result.m_biomes.size())});
+            }
+
+            for (const auto *entry: sortedEntries(definition.m_features)) {
+                result.m_features.push_back({entry->m_key, static_cast<u32>(result.m_features.size()), {}});
+            }
+
+            return result;
+        }
+
+        template<typename T, typename Binding, typename Position>
+        void validateBindingSet(
+            const KeyedCollection<T> &collection, const Array<Binding> &bindings, const u32 first_index,
+            const std::string_view category, Position position, Validation &validation) {
+            const auto path = "bindings." + std::string{category};
+            if (bindings.size() != collection.m_entries.size()) {
+                validation.reject(
+                    path, EConfigErrc::cross_field_invalid, "Bindings must cover exactly the selected catalog");
+                return;
+            }
+
+            std::set<std::string_view> names;
+            Array<u8> occupied(collection.m_entries.size(), 0u);
+
+            for (const auto &binding: bindings) {
+                const auto property = path + "." + binding.m_key;
+                if (not config::isValidKey(binding.m_key) or find(collection, binding.m_key) == nullptr) {
+                    validation.reject(
+                        property, EConfigErrc::cross_field_invalid, "Binding names an unknown semantic alias");
+                }
+
+                if (not names.insert(binding.m_key).second) {
+                    validation.reject(property, EConfigErrc::duplicate_key, "Duplicate semantic binding alias");
+                }
+
+                const auto index = static_cast<u64>(position(binding));
+                if (index < first_index or index - first_index >= occupied.size()) {
+                    validation.reject(
+                        property, EConfigErrc::out_of_range, "Binding ID/index is outside its contiguous domain");
+                    continue;
+                }
+
+                auto &used = occupied[static_cast<std::size_t>(index - first_index)];
+                if (used != 0u) {
+                    validation.reject(property, EConfigErrc::duplicate_key, "Duplicate numeric binding ID/index");
+                }
+
+                used = 1u;
+            }
+        }
+
+        [[nodiscard]] std::error_code validateBindings(
+            const Definition &definition, const DefinitionBindings &bindings, Diagnostics &diagnostics) {
+            Validation validation{diagnostics};
+            validateBindingSet(
+                definition.m_materials, bindings.m_materials, 1u, "materials",
+                [](const auto &binding) { return binding.m_id; }, validation);
+
+            validateBindingSet(
+                definition.m_fields, bindings.m_fields, 0u, "fields",
+                [](const auto &binding) { return binding.m_index; }, validation);
+
+            validateBindingSet(
+                definition.m_biomes, bindings.m_biomes, 0u, "biomes",
+                [](const auto &binding) { return binding.m_index; }, validation);
+
+            validateBindingSet(
+                definition.m_features, bindings.m_features, 0u, "features",
+                [](const auto &binding) { return binding.m_index; }, validation);
+
+            if (not bindings.m_rules.empty()) {
+                validation.reject(
+                    "bindings.rules", EConfigErrc::cross_field_invalid,
+                    "Rule bindings are profile-owned compiler output");
+            }
+
+            for (const auto &feature: bindings.m_features) {
+                if (not feature.m_markers.empty()) {
+                    validation.reject(
+                        "bindings.features." + feature.m_key + ".markers", EConfigErrc::cross_field_invalid,
+                        "Marker bindings are feature-owned compiler output");
+                }
+            }
+
+            PPR_RETURN_ERROR_ON_FAIL(WorldDefinition, validation.m_first);
+            return {};
+        }
+
+        template<typename T, typename Binding, typename Position>
+        [[nodiscard]] auto boundEntries(
+            const KeyedCollection<T> &collection, const Array<Binding> &bindings, const u32 first_index,
+            Position position) {
+            Array<const config::KeyedEntry<T> *> result(bindings.size());
+
+            for (const auto &binding: bindings) {
+                const auto entry = std::ranges::find(
+                    collection.m_entries, binding.m_key, &config::KeyedEntry<T>::m_key);
+                result[static_cast<std::size_t>(position(binding) - first_index)] = std::addressof(*entry);
+            }
+
+            return result;
+        }
+    }
+
     Expected<CompiledDefinition> compileDefinition(
         Definition definition, const double cell_size_m, Diagnostics &diagnostics) {
+        const auto bindings = lexicalBindings(definition);
+        return compileDefinition(std::move(definition), cell_size_m, bindings, diagnostics);
+    }
+
+    Expected<CompiledDefinition> compileDefinition(
+        Definition definition, const double cell_size_m, const DefinitionBindings &bindings, Diagnostics &diagnostics) {
         PPR_RETURN_UNEXPECTED_ON_FAIL(WorldDefinition, validateDefinition(definition, diagnostics));
+
+        PPR_RETURN_UNEXPECTED_ON_FAIL(WorldDefinition, validateBindings(definition, bindings, diagnostics));
+
         Validation validation{diagnostics};
         if (not std::isfinite(cell_size_m) or
             cell_size_m <= 0.0 or
@@ -961,7 +1087,8 @@ namespace pP::sim::definition {
         CompiledDefinition result{};
         StreamKeys keys{validation};
         u32 next_id = 1u;
-        for (const auto *entry: sortedEntries(definition.m_materials)) {
+        for (const auto *entry: boundEntries(
+                 definition.m_materials, bindings.m_materials, 1u, [](const auto &binding) { return binding.m_id; })) {
             const auto &source = entry->m_value;
             const auto id = static_cast<u16>(next_id++);
             result.m_bindings.m_materials.push_back({entry->m_key, id});
@@ -969,11 +1096,14 @@ namespace pP::sim::definition {
                 {id, source.m_representation == EMaterialRepresentation::terrain, source.m_diggable.value_or(false),
                     source.m_phase, source.m_density, keys.key({"materials", entry->m_key})});
         }
-        for (const auto *entry: sortedEntries(definition.m_fields)) {
+
+        for (const auto *entry: boundEntries(
+                 definition.m_fields, bindings.m_fields, 0u, [](const auto &binding) { return binding.m_index; })) {
             const auto index = static_cast<u32>(result.m_fields.size());
             result.m_bindings.m_fields.push_back({entry->m_key, index});
             result.m_fields.push_back({keys.key({"fields", entry->m_key}), entry->m_value});
         }
+
         const auto field_index = [&](const FieldReference &reference) {
             return std::ranges::find(result.m_bindings.m_fields, reference.m_key, &FieldBinding::m_key)->m_index;
         };
@@ -984,7 +1114,8 @@ namespace pP::sim::definition {
             return std::ranges::find(result.m_bindings.m_materials, reference.m_key, &MaterialBinding::m_key)->m_id;
         };
 
-        for (const auto *biome_entry: sortedEntries(definition.m_biomes)) {
+        for (const auto *biome_entry: boundEntries(
+                 definition.m_biomes, bindings.m_biomes, 0u, [](const auto &binding) { return binding.m_index; })) {
             const auto &entry = *biome_entry;
             const auto &source = entry.m_value;
             result.m_bindings.m_biomes.push_back({entry.m_key, static_cast<u32>(result.m_biomes.size())});
@@ -1092,7 +1223,9 @@ namespace pP::sim::definition {
 
             result.m_biomes.push_back(std::move(biome));
         }
-        for (const auto *entry: sortedEntries(definition.m_features)) {
+
+        for (const auto *entry: boundEntries(
+                 definition.m_features, bindings.m_features, 0u, [](const auto &binding) { return binding.m_index; })) {
             const auto &source = entry->m_value;
             const auto &bounds = source.m_reservation;
             FeatureBinding binding{entry->m_key, static_cast<u32>(result.m_features.size()), {}};
@@ -1128,6 +1261,13 @@ namespace pP::sim::definition {
     Expected<CompiledRecipe> compileRecipe(
         Definition definition, const ProfileReference &profile_reference, const GenerationCompileParameters parameters,
         Diagnostics &diagnostics) {
+        const auto bindings = lexicalBindings(definition);
+        return compileRecipe(std::move(definition), profile_reference, parameters, bindings, diagnostics);
+    }
+
+    Expected<CompiledRecipe> compileRecipe(
+        Definition definition, const ProfileReference &profile_reference, const GenerationCompileParameters parameters,
+        const DefinitionBindings &bindings, Diagnostics &diagnostics) {
         Validation validation{diagnostics};
         const auto positive = [&](const double value, const double maximum, const std::string &path) {
             if (not std::isfinite(value) or value <= 0.0 or value > maximum) {
@@ -1146,7 +1286,7 @@ namespace pP::sim::definition {
         // Compile the owned global catalogs before resolving the selected profile.
         auto globals = definition;
         globals.m_worlds.m_entries.clear();
-        auto fragment = compileDefinition(std::move(globals), parameters.m_cell_size_m, diagnostics);
+        auto fragment = compileDefinition(std::move(globals), parameters.m_cell_size_m, bindings, diagnostics);
         PPR_RETURN_UNEXPECTED_ON_FAIL(WorldDefinition, fragment);
 
         const auto *profile = find(definition.m_worlds, profile_reference.m_key);
@@ -1334,6 +1474,37 @@ namespace pP::sim::definition {
         SemanticFingerprint fingerprint{definition};
         fingerprint.string("ppr.worldgen.definition.v3");
         fingerprint.value(definition);
+        return fingerprint.hash();
+    }
+
+    u64 definitionFingerprint(const Definition &definition, const DefinitionBindings &bindings) {
+        SemanticFingerprint fingerprint{definition};
+        fingerprint.string("ppr.worldgen.bound-definition.v1");
+        fingerprint.integer(kDefinitionSchemaVersion);
+        fingerprint.value(definition);
+
+        const auto append = [&](const std::string_view name, const auto &entries, const auto position) {
+            Array<const typename std::remove_cvref_t<decltype(entries)>::value_type *> sorted;
+            sorted.reserve(entries.size());
+
+            for (const auto &entry: entries) {
+                sorted.push_back(std::addressof(entry));
+            }
+
+            std::ranges::sort(sorted, {}, [&](const auto *entry) { return position(*entry); });
+
+            fingerprint.string(name);
+            fingerprint.integer(sorted.size());
+            for (const auto *entry: sorted) {
+                fingerprint.string(entry->m_key);
+                fingerprint.integer(position(*entry));
+            }
+        };
+
+        append("materials", bindings.m_materials, [](const auto &binding) { return binding.m_id; });
+        append("fields", bindings.m_fields, [](const auto &binding) { return binding.m_index; });
+        append("biomes", bindings.m_biomes, [](const auto &binding) { return binding.m_index; });
+        append("features", bindings.m_features, [](const auto &binding) { return binding.m_index; });
         return fingerprint.hash();
     }
 

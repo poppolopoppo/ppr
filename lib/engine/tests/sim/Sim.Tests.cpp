@@ -3,6 +3,12 @@ module engine.tests.sim;
 import engine.core;
 
 namespace pP::tests {
+    // ------------------------------------------------------------------
+    // simulation suite registration
+    // ------------------------------------------------------------------
+
+    const UnitTest &assetBindingTests() noexcept;
+
     const UnitTest &chunkGridTests() noexcept;
 
     const UnitTest &tickTests() noexcept;
@@ -19,6 +25,7 @@ namespace pP::tests {
     // same MSVC C1001 shape as engine.tests.core.
     extern const UnitTest sim = UnitTest::Named("sim") / [](UnitTest::IRun &_) -> void {
         _.recurse({
+            assetBindingTests(),
             chunkGridTests(),
             tickTests(),
             snapshotTests(),

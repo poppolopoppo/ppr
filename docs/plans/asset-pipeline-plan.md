@@ -156,6 +156,7 @@ display_name = "Rock"
 color_rgba = "808080ff"
 albedo_texture = "rock_albedo"
 normal_texture = "ppr.shared:stone_normal"
+texture_period_m = 1.0
 roughness = 0.8
 ```
 
@@ -257,6 +258,16 @@ Each World declares explicit deterministic palettes/bindings:
 - Preserve semantic RNG keys; do not substitute asset hashes.
 - Reject duplicate, missing, or out-of-range bindings.
 - Never append per-pack palettes or derive offsets from mount order.
+
+The explicit compiler overload validates exact coverage and contiguous numeric
+domains before emission. Its convenience overload builds lexical bindings and
+uses the same lowering path. Rule and marker binding maps remain compiler-owned
+output. A selected World rejects duplicate asset targets within each palette
+kind; distinct Material assets may share one Element. Numeric identity includes
+interpreted definitions, semantic aliases, explicit IDs/indices and compiler
+parameters/versions, while excluding pack-qualified linkage names when the
+interpreted result is identical. Presentation descriptor identity is separate;
+binary source-byte identities enter only explicit preparation.
 
 Migrate the complete current palette, including unsampled biomes. Global raster
 pass maxima depend on those definitions; direct-reference pruning can change

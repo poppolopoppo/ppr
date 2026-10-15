@@ -212,15 +212,7 @@ namespace pP::colony {
         }
         Expected<u32> color(
             const std::string &value, const std::string &path, const Document &document, Diagnostics &diagnostics) {
-            u32 result{};
-            const auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), result, 16);
-            if (value.size() != 8u or error != std::errc{} or end != value.data() + value.size()) {
-                PPR_RETURN_UNEXPECTED_ON_FAIL(
-                    ColonyContent, reject(
-                                       diagnostics, location(document, path), path,
-                                       "Expected exactly eight hexadecimal RRGGBBAA digits"));
-            }
-            return result;
+            return decodeAppearanceColor(value, location(document, path), path, diagnostics);
         }
     }
 

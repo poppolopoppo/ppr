@@ -8,6 +8,15 @@ and validate true cross-domain asset links and explicit palette index domains.
 shared Elements, missing/corrupt binary sources, owned provenance and symlink
 containment. The existing loader remains until the consumer migration gate.
 
+`Content.Assembly.cpp` assembles one selected World from its exact palettes,
+rejects duplicate asset targets, composes shared Elements into distinct numeric
+Materials, and lowers through the sim compiler's explicit bindings. Descriptor
+provenance maps numeric alias diagnostics back to the owning file with selected
+World context. Numeric identity excludes asset linkage names and appearance;
+presentation descriptor identity includes selected appearance and texture
+settings, with source-byte identity deferred to explicit image preparation.
+`game/world_assembly` covers this seam and shipped definitions-only parity.
+
 `WorldGen.Capture.cpp` implements the `game.colony.smoke` blocking GPU diagnostic
 entry point. The invocation boundary passes an exclusively owned initialized
 authored driver and reproduction/camera values; no simulation ticks run during

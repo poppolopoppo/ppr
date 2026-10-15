@@ -15,6 +15,7 @@ target_sources(engine.tests.sim
         Sim.Snapshot.Tests.cpp
         Sim.Physics.Tests.cpp
         Sim.WorldGen.Tests.cpp
+        Sim.Asset.Bindings.Tests.cpp
     )
 
 setup_ppr_project(engine.tests.sim
