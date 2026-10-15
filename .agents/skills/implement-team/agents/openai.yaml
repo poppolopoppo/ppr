@@ -1,0 +1,4 @@
+interface:
+  display_name: "Implement with a team"
+  short_description: "Implement plans with Sol, Luna, and Astra agents"
+  default_prompt: "Use $implement-team to implement the accepted plan in this chat."
