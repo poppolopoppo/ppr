@@ -197,15 +197,17 @@ export namespace pP {
 
         [[nodiscard]] std::error_code forRange(
             std::size_t first, std::size_t last, std23::function_ref<void(std::size_t index)> closure,
-            ParallelScheduler &scheduler = foregroundPool());
+            ParallelScheduler &scheduler = foregroundPool(), std::size_t min_job_size = 1u);
 
         template<
             std::ranges::random_access_range ElementsT, std::invocable<std::ranges::range_reference_t<ElementsT>> EachF>
             requires std::ranges::sized_range<ElementsT>
         [[nodiscard]] std::error_code forEach(
-            ElementsT &&elements, EachF &&each, ParallelScheduler &scheduler = foregroundPool()) {
+            ElementsT &&elements, EachF &&each, ParallelScheduler &scheduler = foregroundPool(),
+            std::size_t min_job_size = 1u) {
             return forRange(
-                0u, std::ranges::size(elements), [&](const std::size_t index) { each(elements[index]); }, scheduler);
+                0u, std::ranges::size(elements), [&](const std::size_t index) { each(elements[index]); }, scheduler,
+                min_job_size);
         }
     }
 

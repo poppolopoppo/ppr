@@ -78,11 +78,14 @@ namespace pP::image {
             return result;
         }
 
-        void encodeLevel_(
+        [[nodiscard]] std::error_code encodeLevel_(
             const std::span<float> rgba, std::byte *const destination, const bool srgb,
             const bool normal_map) noexcept {
-            for (std::size_t i = 0u; i < rgba.size(); i += 4u) {
+            constexpr std::size_t scanline_pitch_in_pixels = 128u * 128u;
+            return parallel::forRange(0u, rgba.size() / 4u, [&](std::size_t index) {
+                const std::size_t i = index * 4u;
                 float4 pixel = float4::uload(rgba.data() + i);
+
                 if (normal_map) {
                     pixel = normalizeNormal_(pixel);
                     float4::ustore(rgba.data() + i, pixel);
@@ -91,7 +94,7 @@ namespace pP::image {
                 }
 
                 packPixel_(destination + i, encodePixel_(pixel, srgb));
-            }
+            }, parallel::backgroundPool(), scanline_pitch_in_pixels);
         }
 
         // ------------------------------------------------------------------
@@ -414,7 +417,7 @@ namespace pP::image {
 
         std::ranges::copy(top_bytes, chain->begin());
         if (desc.m_normal_map) {
-            encodeLevel_(top, chain->data(), false, true);
+            PPR_RETURN_ERROR_ON_FAIL(Image, encodeLevel_(top, chain->data(), false, true));
         }
 
         FloatWorkspace previous{};
@@ -440,7 +443,7 @@ namespace pP::image {
                 preserveCoverage_(next, target_coverage, desc.m_alpha_cutoff);
             }
 
-            encodeLevel_(next, chain->data() + offset, asset.m_is_srgb, desc.m_normal_map);
+            PPR_RETURN_ERROR_ON_FAIL(Image, encodeLevel_(next, chain->data() + offset, asset.m_is_srgb, desc.m_normal_map));
             offset += static_cast<std::size_t>(slicePitchFor(width, height, EBlockTag::none));
             previous.swap(next);
         }

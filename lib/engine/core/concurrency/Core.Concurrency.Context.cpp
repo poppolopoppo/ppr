@@ -9,46 +9,6 @@ import :timer;
 import std;
 
 namespace pP::context {
-    namespace {
-        // --------------------------------------------------------------
-        // background context is the default pass-through / noop
-        // --------------------------------------------------------------
-
-        class BackgroundContext final : public IContext {
-            NeverEvent m_done{};
-
-        public:
-            BackgroundContext() noexcept = default;
-
-            [[nodiscard]] std::error_code error() const noexcept override {
-                return default_value_v;
-            }
-
-            [[nodiscard]] std::optional<const opaque::Block::Value *> value(
-                const string_literal) const noexcept override {
-                return std::nullopt;
-            }
-
-            // IEvent interface:
-
-            TagPtr<ISignal> subscribeEvent(TagPtr<ISignal> signal) noexcept override {
-                return m_done.subscribeEvent(std::move(signal));
-            }
-
-            void unsubscribeEvent(TagPtr<ISignal> signal, TagPtr<ISignal> restore) noexcept override {
-                m_done.unsubscribeEvent(std::move(signal), std::move(restore));
-            }
-
-            [[nodiscard]] bool pollEvent() noexcept override {
-                return m_done.pollEvent();
-            }
-
-            void resetEvent() noexcept override {
-                m_done.resetEvent();
-            }
-        };
-    }
-
     // --------------------------------------------------------------
     // cancelable context, with or without an explicit error code
     // --------------------------------------------------------------

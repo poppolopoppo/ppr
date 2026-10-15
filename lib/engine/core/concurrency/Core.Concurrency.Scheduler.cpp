@@ -212,7 +212,12 @@ namespace pP {
                             }
                         };
 
-                        err = runTaskUnderSafetyNet_(*m_lifecycle, work->m_run);
+                        {
+                            const hal::ProfileScope scope_task{"Core.Scheduler.ExecuteTask"};
+
+                            err = runTaskUnderSafetyNet_(*m_lifecycle, work->m_run);
+                        }
+
                         if (err) [[unlikely]] {
                             m_owner->m_request_stop(err);
                             return true;
@@ -333,21 +338,28 @@ namespace pP {
 
     static std::error_code forRangeInternal_(
         std::size_t first, const std::size_t last, const std23::function_ref<void(std::size_t index)> closure,
-        ParallelScheduler &scheduler, const WaitGroup &wg) {
-        // Serial nested fallback: a worker participates synchronously instead of scheduling.
-        if (not scheduler.isWorkerThread()) [[likely]] {
-            const std::size_t total = last - first;
+        ParallelScheduler &scheduler, const std::size_t min_job_size, const WaitGroup &wg) {
+
+        // Serial nested fallback or work too small:
+        // Do not dispatch if the total number of elements is less than min_job_size or if we are already on a worker
+        // thread.
+        if (const std::size_t total = last - first; total >= min_job_size && !scheduler.isWorkerThread()) [[likely]] {
             // Calling thread also participates, hence +1
             const std::size_t lanes = scheduler.getNumWorkers() + 1u;
-            // Dispatch evenly and by excess, last slice would be smaller for the callee, at least 1 per worker
-            std::size_t chunk = std::max(total / lanes, static_cast<std::size_t>(1u));
-            if ((total & 1u) == 1u) {
-                ++chunk; // rounding by excess
-            }
 
-            for (; chunk < last - first; first += chunk) {
+            // Calculate chunk size using ceiling division, respecting min_job_size granularity
+            std::size_t chunk = std::max((total + lanes - 1u) / lanes, min_job_size);
+
+            // Ensure the chunk does not exceed the total elements
+            chunk = std::min(chunk, total);
+
+            // Dispatch in blocks
+            for (std::size_t current = first; current + chunk <= last; current += chunk) {
+                const std::size_t i_first = current;
+                const std::size_t i_last = current + chunk;
+
                 const std::error_code chunk_err = scheduler.schedule(
-                    [closure, i_first{first}, i_last{first + chunk}](const IContext &) {
+                    [closure, i_first, i_last](const IContext &) {
                         for (std::size_t i = i_first; i < i_last; ++i) {
                             closure(i);
                         }
@@ -356,14 +368,17 @@ namespace pP {
 
                 if (chunk_err) [[unlikely]] {
                     if (chunk_err == make_error_code(RawChannel::error_full)) {
-                        break; // Fallback on the caller drain when channel is full
+                        break; // Fallback on the caller drain if the channel is full
                     }
                     return chunk_err;
                 }
+
+                // Update first so scheduled elements are not reprocessed by the drain
+                first = i_last;
             }
         }
 
-        // Caller participates: drain the remaining items
+        // Caller participates: drain the remaining elements (or all if no dispatch occurred)
         return runTaskUnderSafetyNet_(scheduler.getContext(), [&](const IContext &) {
             for (; first < last; ++first) {
                 closure(first);
@@ -373,7 +388,9 @@ namespace pP {
 
     std::error_code parallel::forRange(
         const std::size_t first, const std::size_t last, const std23::function_ref<void(std::size_t index)> closure,
-        ParallelScheduler &scheduler) {
+        ParallelScheduler &scheduler, const std::size_t min_job_size) {
+        const hal::ProfileScope scope_range{"Core.Parallel.ForRange"};
+
         if (first > last) [[unlikely]] {
             return std::make_error_code(std::errc::invalid_argument);
         }
@@ -385,7 +402,7 @@ namespace pP {
         }
 
         const WaitGroup wg;
-        std::error_code err = forRangeInternal_(first, last, closure, scheduler, wg);
+        std::error_code err = forRangeInternal_(first, last, closure, scheduler, min_job_size, wg);
         err = err | wg.wait();
         err = err | scheduler.error();
         return err;
