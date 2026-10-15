@@ -262,9 +262,13 @@ namespace pP {
 
         if (GlfwWindow *const p_windows = m_window_service.get()) [[likely]] {
             {
-                const hal::ProfileScope scope_wait{"PPR.Frame.PlatformWait"};
+                // GLFW also dispatches native callbacks here: this is wait-call
+                // elapsed time, not a measurement of pure blocked time.
+                const hal::ProfileScope scope_wait{"PPR.Frame.PlatformWait", hal::profile_blocking_category};
+
                 PPR_RETURN_ERROR_ON_FAIL(GlfwPlatform, p_windows->waitEventsTimeout(timeout));
             }
+
             {
                 const hal::ProfileScope scope_collect{"PPR.Frame.PlatformCollect"};
                 PPR_RETURN_ERROR_ON_FAIL(GlfwPlatform, p_windows->pollEvents());
@@ -272,6 +276,8 @@ namespace pP {
         } else {
             // Headless: paced slice with no native queue to service.
             if (timeout > TimeSpan{}) {
+                const hal::ProfileScope scope_wait{"PPR.Frame.PlatformWait", hal::profile_blocking_category};
+
                 std::this_thread::sleep_for(timeout);
             }
         }

@@ -6,6 +6,7 @@ module engine.core;
 
 import :config;
 import :config.cli;
+import :hal;
 
 import std;
 
@@ -29,6 +30,7 @@ namespace pP::config {
         }
 
         [[nodiscard]] OptionMatch findOption(const CliSchema &schema, const std::string_view name) {
+            const hal::ProfileScope scope{"Config.Cli.FindOption"};
             // First pass: exact canonical, alias, and negation spellings.
             // Explicit spellings win over derived short names.
             for (const auto &option: schema.m_options) {
@@ -77,6 +79,7 @@ namespace pP::config {
 
     [[nodiscard]] Expected<CliResult> parseCliArgs(
         const std::span<const std::string_view> args, const CliSchema &schema, Diagnostics &diagnostics) {
+        const hal::ProfileScope scope{"Config.Cli.Parse"};
         CliResult result{};
         std::error_code first_error{};
         std::size_t order = 0;
@@ -292,6 +295,7 @@ namespace pP::config {
     }
 
     [[nodiscard]] std::string generateHelp(const CliSchema &schema) {
+        const hal::ProfileScope scope{"Config.Cli.GenerateHelp"};
         std::string result{};
         if (not schema.m_program.empty()) {
             result += configFormat("Usage: {}", schema.m_program);

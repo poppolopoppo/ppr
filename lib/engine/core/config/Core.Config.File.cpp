@@ -7,6 +7,7 @@ module engine.core;
 
 import :config;
 import :config.file;
+import :hal;
 import :logger;
 import :memory.arena;
 
@@ -92,6 +93,7 @@ namespace pP::config {
             }
 
             void walkTable(const toml::table &table, const std::string_view prefix) {
+                const hal::ProfileScope scope{"Config.File.WalkTable"};
                 for (auto &&kv: table) {
                     const std::string_view segment = keyText(kv.first);
                     ScratchText key;
@@ -184,6 +186,7 @@ namespace pP::config {
         [[nodiscard]] Expected<toml::table> parseToml(
             const std::string_view bytes, const std::string_view origin, Diagnostics &diagnostics,
             const EDecodeMode mode) {
+            const hal::ProfileScope scope{"Config.File.ParseToml"};
             const std::string origin_text = origin.empty() ? std::string{"config"} : std::string{origin};
             if (mode == EDecodeMode::tree and bytes.size() > 1024u * 1024u) {
                 diagnostics.add(
@@ -206,6 +209,7 @@ namespace pP::config {
         [[nodiscard]] Expected<Document> flattenParsed(
             const toml::table &table, const std::string_view origin, Diagnostics &diagnostics, const EDecodeMode mode,
             const bool retain_document = true) {
+            const hal::ProfileScope scope{"Config.File.Flatten"};
             const auto scratch_scope = mem::ScratchPad::open();
             TomlFlattener flattener{};
             flattener.m_origin = origin.empty() ? std::string{"config"} : std::string{origin};
@@ -268,6 +272,7 @@ namespace pP::config {
 
     [[nodiscard]] Expected<Document> decode(
         const std::string_view bytes, const std::string_view origin, Diagnostics &diagnostics, const EDecodeMode mode) {
+        const hal::ProfileScope scope{"Config.File.Decode"};
         auto table = parseToml(bytes, origin, diagnostics, mode);
         PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, table);
 
@@ -275,6 +280,7 @@ namespace pP::config {
     }
 
     [[nodiscard]] Expected<std::string> encode(const Document &document) {
+        const hal::ProfileScope scope{"Config.File.Encode"};
         // Duplicate keys are writer errors, reported without diagnostics.
         for (std::size_t i = 0; i < document.m_entries.size(); ++i) {
             for (std::size_t j = i + 1; j < document.m_entries.size(); ++j) {
@@ -414,6 +420,7 @@ namespace pP::config {
         // CR), and advances source lines on LF. Its reader consumes an initial BOM.
         [[nodiscard]] Expected<std::size_t> sourceOffset(
             const std::string_view bytes, const toml::source_position position) {
+            const hal::ProfileScope scope{"Config.File.SourceOffset"};
             std::size_t offset = bytes.starts_with("\xEF\xBB\xBF") ? 3u : 0u;
             u32 line = 1u;
             u32 column = 1u;
@@ -435,6 +442,7 @@ namespace pP::config {
         }
 
         [[nodiscard]] Expected<std::string> scalarText(const FileValue &value) {
+            const hal::ProfileScope scope{"Config.File.ScalarText"};
             Document document;
             document.m_entries.push_back(Entry{"value", value, {}});
             auto encoded = encode(document);
@@ -451,6 +459,7 @@ namespace pP::config {
 
     Expected<std::string> applySourcePatch(
         const std::string_view bytes, const ScalarSourcePatch &patch, const bool reverse) {
+        const hal::ProfileScope scope{"Config.File.ApplyPatch"};
         const auto &before = reverse ? patch.m_after : patch.m_before;
         const auto &after = reverse ? patch.m_before : patch.m_after;
         // Match the established content document source-byte limit, including growth.
@@ -473,6 +482,7 @@ namespace pP::config {
     Expected<ScalarSourcePatch> patchScalar(
         const std::string_view bytes, const std::string_view key, const FileValue &value, const std::string_view origin,
         Diagnostics &diagnostics) {
+        const hal::ProfileScope scope{"Config.File.PatchScalar"};
         const auto fail = [&](const std::string_view message) {
             const auto error = make_error_code(EConfigErrc::codec_error);
             diagnostics.add(std::string{origin}, std::string{key}, std::string{message}, error);
@@ -562,6 +572,7 @@ namespace pP::config {
         Expected<ScalarSourcePatch> insertSubtree(
             const std::string_view bytes, const std::string_view key, const Document &record,
             const std::string_view origin, Diagnostics &diagnostics, const EDecodeMode mode) {
+            const hal::ProfileScope scope{"Config.File.InsertSubtree"};
             PPR_RETURN_UNEXPECTED_ON_FAIL(
                 ConfigFile, bytes.size() <= 1024u * 1024u and
                                     isValidCanonicalName(key) and
@@ -632,6 +643,7 @@ namespace pP::config {
         Expected<ScalarSourcePatch> removeSubtree(
             const std::string_view bytes, const std::string_view key, const std::string_view origin,
             Diagnostics &diagnostics, const EDecodeMode mode) {
+            const hal::ProfileScope scope{"Config.File.RemoveSubtree"};
             PPR_RETURN_UNEXPECTED_ON_FAIL(
                 ConfigFile, bytes.size() <= 1024u * 1024u and isValidCanonicalName(key)
                                 ? std::error_code{}
@@ -806,6 +818,7 @@ namespace pP::config {
     Expected<ScalarSourcePatch> patchTree(
         const std::string_view bytes, const std::string_view key, const ETreeSourceEdit edit, const Document &subtree,
         const std::string_view origin, Diagnostics &diagnostics) {
+        const hal::ProfileScope scope{"Config.File.PatchTree"};
         const auto fail = [&](const std::error_code error, const std::string_view message) {
             diagnostics.add(std::string{origin}, std::string{key}, std::string{message}, error);
             return error;
@@ -863,6 +876,7 @@ namespace pP::config {
     }
 
     [[nodiscard]] Layer toLayer(Document document, std::string origin) {
+        const hal::ProfileScope scope{"Config.File.ToLayer"};
         Layer layer{};
         layer.m_source = ESource::file;
         layer.m_origin = origin;

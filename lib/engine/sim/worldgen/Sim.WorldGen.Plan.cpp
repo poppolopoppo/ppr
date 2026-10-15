@@ -706,7 +706,7 @@ namespace pP::sim {
             PPR_RETURN_ERROR_ON_FAIL(WorldPlan, first);
         }
 
-        constexpr std::array<u32, 4> caps{6u, 24u, 4u, 24u};
+        constexpr std::array<u32, 4> caps{10u, 25u, 10u, 25u};
         constexpr std::array<std::string_view, 4> names{
             "pore.passes", "relaxation_passes", "finish_passes", "erosion_passes"};
         std::array<u32, 4> maxima{};

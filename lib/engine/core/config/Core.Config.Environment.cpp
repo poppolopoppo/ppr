@@ -15,6 +15,7 @@ module engine.core;
 
 import :config;
 import :config.environment;
+import :hal;
 
 import std;
 
@@ -48,6 +49,7 @@ namespace pP::config {
     }
 
     [[nodiscard]] std::optional<std::string> getenvLookup(const std::string_view name) {
+        const hal::ProfileScope scope{"Config.Env.Getenv"};
         const std::string key{name};
 #if defined(_MSC_VER)
         char *raw = nullptr;

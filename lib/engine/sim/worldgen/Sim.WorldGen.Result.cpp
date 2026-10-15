@@ -230,8 +230,14 @@ namespace pP::sim {
         }
     }
 
+    // ------------------------------------------------------------------
+    // world generation
+    // ------------------------------------------------------------------
+
     Expected<GeneratedWorld> generateWorld(
         GenerationPlan plan, const ITimerClock &clock, const GenerationExecution &execution) {
+        const hal::ProfileScope scope{"Sim.WorldGen.Generate"};
+
         try {
             std::array<TimeSpan, 5u> timings;
             std::array<u64, 5u> scratch{};
@@ -248,28 +254,58 @@ namespace pP::sim {
             }
 
             stage(execution, EGenerationStage::layout);
-            auto layout = compileBiomeLayout(plan, execution.m_context, &scratch[0u]);
+            auto layout = [&] {
+                const hal::ProfileScope scope_layout{"Sim.WorldGen.Layout"};
+
+                return compileBiomeLayout(plan, execution.m_context, &scratch[0u]);
+            }();
             PPR_RETURN_UNEXPECTED_ON_FAIL(WorldResult, layout);
+
             finish(0u);
 
-            auto geometry = compileGenerationGeometry(plan, *layout, execution.m_context, &scratch[1u]);
+            auto geometry = [&] {
+                const hal::ProfileScope scope_geometry{"Sim.WorldGen.Geometry"};
+
+                return compileGenerationGeometry(plan, *layout, execution.m_context, &scratch[1u]);
+            }();
             PPR_RETURN_UNEXPECTED_ON_FAIL(WorldResult, geometry);
+
             finish(1u);
 
-            auto grid = rasterizeGenerationTerrain(plan, *layout, *geometry, execution, &scratch[2u]);
+            auto grid = [&] {
+                const hal::ProfileScope scope_terrain{"Sim.WorldGen.Terrain"};
+
+                return rasterizeGenerationTerrain(plan, *layout, *geometry, execution, &scratch[2u]);
+            }();
             PPR_RETURN_UNEXPECTED_ON_FAIL(WorldResult, grid);
+
             finish(2u);
 
             stage(execution, EGenerationStage::initial_matter);
-            auto matter = resolveInitialMatter(plan, *geometry, *grid, execution.m_context, &scratch[3u]);
+            auto matter = [&] {
+                const hal::ProfileScope scope_matter{"Sim.WorldGen.InitialMatter"};
+
+                return resolveInitialMatter(plan, *geometry, *grid, execution.m_context, &scratch[3u]);
+            }();
             PPR_RETURN_UNEXPECTED_ON_FAIL(WorldResult, matter);
+
             finish(3u);
 
             stage(execution, EGenerationStage::validation);
-            auto start = validateGenerationStart(plan, *grid, execution.m_context, &scratch[4u]);
+            auto start = [&] {
+                const hal::ProfileScope scope_start{"Sim.WorldGen.ValidateStart"};
+
+                return validateGenerationStart(plan, *grid, execution.m_context, &scratch[4u]);
+            }();
             PPR_RETURN_UNEXPECTED_ON_FAIL(WorldResult, start);
-            auto report = summarize(plan, *layout, *geometry, *grid, *matter, *start, execution, scratch[4u]);
+
+            auto report = [&] {
+                const hal::ProfileScope scope_report{"Sim.WorldGen.Report"};
+
+                return summarize(plan, *layout, *geometry, *grid, *matter, *start, execution, scratch[4u]);
+            }();
             PPR_RETURN_UNEXPECTED_ON_FAIL(WorldResult, report);
+
             finish(4u);
 
             report->m_phase_times = timings;

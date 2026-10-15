@@ -1037,6 +1037,11 @@ namespace pP::sim {
                             auto task = scheduler->schedule(
                                 [fill, chunk_index](const IContext &context) -> std::error_code {
                                     PPR_RETURN_ERROR_ON_FAIL(WorldRaster, context.error());
+
+                                    // One coarse job rasterizes an entire chunk; keep
+                                    // cell/noise work inside this worker interval.
+                                    const hal::ProfileScope scope_job{"Sim.WorldGen.RasterJob"};
+
                                     return fill(chunk_index);
                                 },
                                 wg, ParallelScheduler::wait_if_full);
@@ -1061,7 +1066,11 @@ namespace pP::sim {
 
             // WaitGroup tracks execution exceptions, while callable error codes
             // live in futures. Drain before observing every independent result.
-            const auto wait_error = wg.wait();
+            const auto wait_error = [&] {
+                const hal::ProfileScope scope_wait{"Sim.WorldGen.WaitForRaster", hal::profile_blocking_category};
+
+                return wg.wait();
+            }();
 
             for (auto &task: pending) {
                 std::error_code task_error{};

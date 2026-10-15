@@ -9,6 +9,7 @@ module engine.core;
 // ------------------------------------------------------------------
 
 import :config;
+import :hal;
 import :logger;
 
 import std;
@@ -363,6 +364,7 @@ namespace pP::config {
         }
 
         bool SourcePathIndex::supplied(const std::string_view path, const bool descendants) const {
+            const hal::ProfileScope scope{"Config.Index.Supplied"};
             if (not exact(path).empty()) {
                 return true;
             }
@@ -378,6 +380,7 @@ namespace pP::config {
         }
 
         Array<std::size_t, mem::ScratchPad> SourcePathIndex::subtree(const std::string_view path) const {
+            const hal::ProfileScope scope{"Config.Index.Subtree"};
             Array<std::size_t, mem::ScratchPad> positions;
             for (const auto &entry: exact(path)) {
                 positions.push_back(entry.m_position);
@@ -397,6 +400,7 @@ namespace pP::config {
         }
 
         void ResolveState::indexSources() {
+            const hal::ProfileScope scope{"Config.Resolve.IndexSources"};
             m_assignment_storage.clear();
             m_assignment_storage.reserve(m_layers.size());
             for (const auto *const layer: m_layers) {
@@ -407,6 +411,7 @@ namespace pP::config {
         }
 
         void ResolveState::indexOrigins() {
+            const hal::ProfileScope scope{"Config.Resolve.IndexOrigins"};
             if (m_origin_index_valid and m_origin_indices.size() == m_origins->size()) {
                 return;
             }
@@ -423,6 +428,7 @@ namespace pP::config {
 
         void ResolveState::upsertOrigin(
             const std::string_view name, const ESource source, const std::string_view location) {
+            const hal::ProfileScope scope{"Config.Resolve.UpsertOrigin"};
             if (m_origins == nullptr) {
                 return;
             }
@@ -445,6 +451,7 @@ namespace pP::config {
         }
 
         void ResolveState::rejectUnknown(const std::span<const std::string_view> names) {
+            const hal::ProfileScope scope{"Config.Resolve.RejectUnknown"};
             for (const auto *const layer: m_layers) {
                 for (const auto &assignment: layer->m_assignments) {
                     bool known = false;
@@ -476,6 +483,7 @@ namespace pP::config {
         }
 
         void ResolveState::replaceOrigins(const std::string_view path, Array<PropertyOrigin> &replacement) {
+            const hal::ProfileScope scope{"Config.Resolve.ReplaceOrigins"};
             PPR_ASSERT(m_origins != nullptr and m_origins != std::addressof(replacement));
             indexOrigins();
 
@@ -516,6 +524,7 @@ namespace pP::config {
         }
 
         bool TreeResolveState::supplied(const std::string_view path, const bool descendants) const {
+            const hal::ProfileScope scope{"Config.Tree.Supplied"};
             for (std::size_t layer = 0u; layer < m_layers.size(); ++layer) {
                 if (m_scalars.m_assignment_indices[layer].supplied(path, descendants) or
                     (descendants and m_group_indices[layer].supplied(path, true))) {
@@ -526,6 +535,7 @@ namespace pP::config {
         }
 
         void TreeResolveState::indexSources() {
+            const hal::ProfileScope scope{"Config.Tree.IndexSources"};
             m_scalars.indexSources();
             m_group_storage.clear();
             m_group_storage.reserve(m_layers.size());
@@ -537,6 +547,7 @@ namespace pP::config {
         }
 
         void TreeResolveState::presence(const std::string_view path, const Metadata &metadata, const bool required) {
+            const hal::ProfileScope scope{"Config.Tree.Presence"};
             m_group_paths.emplace_back(path);
             m_scalars.upsertOrigin(path, ESource::none, "default");
             bool found = false;
@@ -573,6 +584,7 @@ namespace pP::config {
         }
 
         Array<std::string_view, mem::ScratchPad> TreeResolveState::entryKeys(const std::string_view path) {
+            const hal::ProfileScope scope{"Config.Tree.EntryKeys"};
             Array<std::string_view, mem::ScratchPad> keys;
             ScratchText prefix{path};
             prefix.push_back('.');
@@ -606,6 +618,7 @@ namespace pP::config {
         }
 
         void TreeResolveState::rejectUnknown() {
+            const hal::ProfileScope scope{"Config.Tree.RejectUnknown"};
             const auto known = [](const auto &paths, const std::string_view name) {
                 return std::ranges::find(paths, name, [](const ScratchText &path) { return std::string_view{path}; }) !=
                        paths.end();

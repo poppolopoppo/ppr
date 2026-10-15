@@ -1147,7 +1147,9 @@ namespace pP {
             }
 
             void wait() noexcept override {
+                const hal::ProfileScope scope_wait{"PPR.Frame.LaneWait", hal::profile_blocking_category};
                 std::unique_lock guard{m_mutex};
+
                 m_cv.wait(guard, [this] { return m_pending.load(std::memory_order_acquire) != 0u; });
             }
 
@@ -1155,8 +1157,11 @@ namespace pP {
             // Used by the lane loop so retirement sweeps progress even when
             // no fresh work arrives (idle progress independent of frames).
             [[nodiscard]] bool waitFor(const std::chrono::milliseconds timeout) noexcept {
+                const hal::ProfileScope scope_wait{"PPR.Frame.LaneWaitForRetirement", hal::profile_blocking_category};
                 std::unique_lock guard{m_mutex};
+
                 m_cv.wait_for(guard, timeout, [this] { return m_pending.load(std::memory_order_acquire) != 0u; });
+
                 return m_pending.load(std::memory_order_acquire) != 0u;
             }
 

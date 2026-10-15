@@ -756,7 +756,7 @@ namespace pP {
                 std::error_code update_err{};
                 {
                     const hal::ProfileScope scope_update{"App.Frame.Update"};
-                    const hal::ProfileScope scope_frame_advance{"PPR.Frame.AdvanceClient"};
+
                     PPR_RETAIN_ERROR_ON_FAIL(App, first_err, update(effective_dt));
                     update_err = first_err;
                 }

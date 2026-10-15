@@ -69,6 +69,7 @@ namespace pP::game {
         /// explicit reset) fall through to resolution diagnostics.
         [[nodiscard]] std::error_code checkSelectorConflicts(
             const config::CliResult &cli, config::Diagnostics &diagnostics) {
+            const hal::ProfileScope scope{"Game.Config.CheckSelectors"};
             constexpr std::string_view kAliases[][2] = {
                 {"smoke", "smoke"},
                 {"validate-worldgen", "validate-worldgen"},
@@ -124,6 +125,7 @@ namespace pP::game {
 
         [[nodiscard]] Expected<config::Layer> loadConfigFile(
             const std::string &path, config::Diagnostics &diagnostics) {
+            const hal::ProfileScope scope{"Game.Config.LoadFile"};
             MappedFile file;
             try {
                 file = MappedFile{hal::io::mapFile(path, {})};
@@ -144,6 +146,7 @@ namespace pP::game {
     } // namespace
 
     [[nodiscard]] config::CliSchema gameCliSchema() {
+        const hal::ProfileScope scope{"Game.Config.Schema"};
         config::CliSchema schema{};
         schema.m_program = "ppr";
         schema.m_description = "PPR colony demo: interactive editor, headless commands, and profiling fixtures.";
@@ -238,6 +241,7 @@ namespace pP::game {
     }
 
     [[nodiscard]] Expected<void> validateGameSchemas(config::Diagnostics &diagnostics) {
+        const hal::ProfileScope scope{"Game.Config.ValidateSchemas"};
         if (auto valid = config::validateSchema<GameSettings>(diagnostics); not valid) {
             return std::unexpected{valid.error()};
         }
@@ -253,6 +257,7 @@ namespace pP::game {
     [[nodiscard]] Expected<GameInvocation> resolveGameCli(
         const config::CliResult &cli, const std::span<const config::Layer> lowerLayers,
         config::Diagnostics &diagnostics) {
+        const hal::ProfileScope scope{"Game.Config.ResolveCli"};
         if (auto valid = validateGameSchemas(diagnostics); not valid) {
             return std::unexpected{valid.error()};
         }
@@ -378,6 +383,7 @@ namespace pP::game {
     [[nodiscard]] Expected<GameInvocation> resolveGameInvocationWithOverlay(
         const int argc, char *const *argv, const std::filesystem::path &overlay_path,
         config::Diagnostics &diagnostics) {
+        const hal::ProfileScope scope{"Game.Config.ResolveWithOverlay"};
         const config::CliSchema schema = gameCliSchema();
         auto parsed = config::parseCliArgs(argc, argv, schema, diagnostics);
         if (not parsed) {
