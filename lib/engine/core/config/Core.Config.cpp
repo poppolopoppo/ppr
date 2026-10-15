@@ -349,6 +349,15 @@ namespace pP::config {
             sort_();
         }
 
+        SourcePathIndex::SourcePathIndex(const std::span<const ScratchText> paths) {
+            m_paths.reserve(paths.size());
+            for (std::size_t position = 0u; position < paths.size(); ++position) {
+                m_paths.push_back({std::string_view{paths[position]}, position});
+            }
+
+            sort_();
+        }
+
         void SourcePathIndex::sort_() {
             std::ranges::sort(m_paths, [](const Entry &left, const Entry &right) {
                 return left.m_path < right.m_path or
@@ -412,18 +421,40 @@ namespace pP::config {
 
         void ResolveState::indexOrigins() {
             const hal::ProfileScope scope{"Config.Resolve.IndexOrigins"};
-            if (m_origin_index_valid and m_origin_indices.size() == m_origins->size()) {
+            if (m_origin_index_valid) {
                 return;
             }
 
-            m_origin_indices.resize(m_origins->size());
-            std::iota(m_origin_indices.begin(), m_origin_indices.end(), std::size_t{0u});
-            std::ranges::sort(m_origin_indices, [&](const std::size_t left, const std::size_t right) {
-                const auto &a = (*m_origins)[left].m_name;
-                const auto &b = (*m_origins)[right].m_name;
-                return a < b or (a == b and left < right);
-            });
+            m_origin_live.resize(m_origins->size(), 1u);
+            for (std::size_t position = 0u; position < m_origins->size(); ++position) {
+                m_origin_indices[ScratchText{(*m_origins)[position].m_name}].push_back(position);
+            }
+
             m_origin_index_valid = true;
+        }
+
+        void ResolveState::finalizeOrigins() {
+            if (m_origins == nullptr or not m_origin_index_valid) {
+                return;
+            }
+
+            const hal::ProfileScope scope{"Config.Resolve.FinalizeOrigins"};
+            std::size_t kept = 0u;
+            for (std::size_t position = 0u; position < m_origins->size(); ++position) {
+                if (m_origin_live[position] == 0u) {
+                    continue;
+                }
+
+                if (kept != position) {
+                    (*m_origins)[kept] = std::move((*m_origins)[position]);
+                }
+                ++kept;
+            }
+
+            m_origins->resize(kept);
+            m_origin_indices.clear();
+            m_origin_live.clear();
+            m_origin_index_valid = false;
         }
 
         void ResolveState::upsertOrigin(
@@ -434,20 +465,18 @@ namespace pP::config {
             }
 
             indexOrigins();
-            const auto found = std::ranges::lower_bound(m_origin_indices, name, {}, [&](const std::size_t index) {
-                return std::string_view{(*m_origins)[index].m_name};
-            });
-            if (found != m_origin_indices.end() and (*m_origins)[*found].m_name == name) {
-                auto &origin = (*m_origins)[*found];
+            const auto found = m_origin_indices.find(name);
+            if (found != m_origin_indices.end()) {
+                auto &origin = (*m_origins)[found->second.front()];
                 origin.m_source = source;
                 origin.m_location = location;
                 return;
             }
 
-            const auto insertion = static_cast<std::size_t>(found - m_origin_indices.begin());
             const auto position = m_origins->size();
             m_origins->push_back(PropertyOrigin{std::string{name}, source, std::string{location}});
-            m_origin_indices.insert(m_origin_indices.begin() + insertion, position);
+            m_origin_live.push_back(1u);
+            m_origin_indices[ScratchText{name}].push_back(position);
         }
 
         void ResolveState::rejectUnknown(const std::span<const std::string_view> names) {
@@ -472,47 +501,36 @@ namespace pP::config {
             }
         }
 
-        namespace {
-            [[nodiscard]] bool inTree(
-                const std::string_view name, const std::string_view path, const bool descendants) {
-                return name == path or (descendants and
-                                           name.size() > path.size() and
-                                           name.starts_with(path) and
-                                           name[path.size()] == '.');
-            }
-        }
-
         void ResolveState::replaceOrigins(const std::string_view path, Array<PropertyOrigin> &replacement) {
             const hal::ProfileScope scope{"Config.Resolve.ReplaceOrigins"};
             PPR_ASSERT(m_origins != nullptr and m_origins != std::addressof(replacement));
             indexOrigins();
 
-            // Compute positions before compaction moves any owned names. Reuse the
-            // root state's scratch array across all replacements in this resolution.
-            constexpr auto removed = (std::numeric_limits<std::size_t>::max)();
-            m_origin_remap.resize(m_origins->size());
-            std::size_t kept = 0u;
-            for (std::size_t index = 0u; index < m_origins->size(); ++index) {
-                m_origin_remap[index] = inTree((*m_origins)[index].m_name, path, true) ? removed : kept++;
+            const auto discard = [&](const auto iterator) {
+                for (const auto position: iterator->second) {
+                    m_origin_live[position] = 0u;
+                }
+
+                return m_origin_indices.erase(iterator);
+            };
+
+            if (const auto exact = m_origin_indices.find(path); exact != m_origin_indices.end()) {
+                discard(exact);
             }
 
-            std::erase_if(m_origin_indices, [&](const std::size_t index) { return m_origin_remap[index] == removed; });
-            for (auto &index: m_origin_indices) {
-                index = m_origin_remap[index];
+            ScratchText prefix{path};
+            prefix.push_back('.');
+            auto descendant = m_origin_indices.lower_bound(std::string_view{prefix});
+            while (descendant != m_origin_indices.end() and descendant->first.starts_with(prefix)) {
+                descendant = discard(descendant);
             }
 
-            std::erase_if(*m_origins, [&](const auto &origin) { return inTree(origin.m_name, path, true); });
-
-            // Preserve the former raw append, including duplicates and source order.
-            // Equal names enter the lookup index after earlier vector positions.
+            // Keep survivors in place until finalization, then append replacement duplicates in source order.
             for (auto &origin: replacement) {
                 const auto position = m_origins->size();
                 m_origins->push_back(std::move(origin));
-                const std::string_view name = m_origins->back().m_name;
-                const auto insertion = std::ranges::upper_bound(
-                    m_origin_indices, name, {},
-                    [&](const std::size_t index) { return std::string_view{(*m_origins)[index].m_name}; });
-                m_origin_indices.insert(insertion, position);
+                m_origin_live.push_back(1u);
+                m_origin_indices[ScratchText{m_origins->back().m_name}].push_back(position);
             }
         }
 
@@ -586,6 +604,7 @@ namespace pP::config {
         Array<std::string_view, mem::ScratchPad> TreeResolveState::entryKeys(const std::string_view path) {
             const hal::ProfileScope scope{"Config.Tree.EntryKeys"};
             Array<std::string_view, mem::ScratchPad> keys;
+            std::set<std::string_view, std::less<>, mem::STL<std::string_view, mem::ScratchPad>> membership;
             ScratchText prefix{path};
             prefix.push_back('.');
 
@@ -599,7 +618,7 @@ namespace pP::config {
                     report(
                         location, recursivePath(path, key), "invalid collection key ([a-z0-9_-], 1..128)",
                         make_error_code(EConfigErrc::out_of_range));
-                } else if (std::ranges::find(keys, key) == keys.end()) {
+                } else if (membership.insert(key).second) {
                     keys.emplace_back(key);
                 }
             };
@@ -619,29 +638,39 @@ namespace pP::config {
 
         void TreeResolveState::rejectUnknown() {
             const hal::ProfileScope scope{"Config.Tree.RejectUnknown"};
-            const auto known = [](const auto &paths, const std::string_view name) {
-                return std::ranges::find(paths, name, [](const ScratchText &path) { return std::string_view{path}; }) !=
-                       paths.end();
-            };
+            const SourcePathIndex scalar_paths{m_scalar_paths};
+            const SourcePathIndex group_paths{m_group_paths};
+            const SourcePathIndex atomic_paths{m_atomic_paths};
 
-            const auto delegated = [&](const std::string_view path) {
-                return std::ranges::any_of(
-                    m_atomic_paths, [&](const auto &boundary) { return inTree(path, boundary, true); });
+            const auto delegated = [&](std::string_view path) {
+                for (;;) {
+                    if (not atomic_paths.exact(path).empty()) {
+                        return true;
+                    }
+
+                    const auto dot = path.rfind('.');
+                    if (dot == std::string_view::npos) {
+                        return false;
+                    }
+
+                    path = path.substr(0u, dot);
+                }
             };
 
             for (std::size_t layer_index = 0u; layer_index < m_layers.size(); ++layer_index) {
                 const auto &layer = m_layers[layer_index];
-                for (std::size_t i = 0; i < layer.m_groups.size(); ++i) {
+                const auto scoped_groups = m_scope.empty() ? Array<std::size_t, mem::ScratchPad>{}
+                                                           : m_group_indices[layer_index].subtree(m_scope);
+                const auto group_count = m_scope.empty() ? layer.m_groups.size() : scoped_groups.size();
+                for (std::size_t position = 0u; position < group_count; ++position) {
+                    const auto i = m_scope.empty() ? position : scoped_groups[position];
                     const auto &group = layer.m_groups[i];
-                    if (not m_scope.empty() and not inTree(group.m_path, m_scope, true)) {
-                        continue;
-                    }
 
                     if (delegated(group.m_path)) {
                         continue;
                     }
 
-                    if (not known(m_group_paths, group.m_path)) {
+                    if (group_paths.exact(group.m_path).empty()) {
                         report(
                             group.m_location, group.m_path, "unknown group",
                             make_error_code(EConfigErrc::unknown_property));
@@ -655,11 +684,14 @@ namespace pP::config {
                     }
                 }
 
-                for (std::size_t i = 0; i < layer.m_scalars.m_assignments.size(); ++i) {
+                const auto scoped_scalars = m_scope.empty()
+                                                ? Array<std::size_t, mem::ScratchPad>{}
+                                                : m_scalars.m_assignment_indices[layer_index].subtree(m_scope);
+                const auto scalar_count = m_scope.empty() ? layer.m_scalars.m_assignments.size()
+                                                          : scoped_scalars.size();
+                for (std::size_t position = 0u; position < scalar_count; ++position) {
+                    const auto i = m_scope.empty() ? position : scoped_scalars[position];
                     const auto &assignment = layer.m_scalars.m_assignments[i];
-                    if (not m_scope.empty() and not inTree(assignment.m_name, m_scope, true)) {
-                        continue;
-                    }
 
                     if (delegated(assignment.m_name)) {
                         continue;
@@ -674,11 +706,11 @@ namespace pP::config {
                         }
                     }
 
-                    if (known(m_scalar_paths, assignment.m_name)) {
+                    if (not scalar_paths.exact(assignment.m_name).empty()) {
                         continue;
                     }
 
-                    const bool group = known(m_group_paths, assignment.m_name);
+                    const bool group = not group_paths.exact(assignment.m_name).empty();
                     report(
                         assignment.m_location, assignment.m_name,
                         group ? "group/collection scalar assignment or reset is not supported" : "unknown property",

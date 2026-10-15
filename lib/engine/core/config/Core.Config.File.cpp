@@ -8,6 +8,7 @@ module engine.core;
 import :config;
 import :config.file;
 import :hal;
+import :hashing;
 import :logger;
 import :memory.arena;
 
@@ -39,9 +40,9 @@ namespace pP::config {
 
         using ScratchText = std::basic_string<char, std::char_traits<char>, mem::STL<char, mem::ScratchPad>>;
 
-        struct ScratchTextLess {
-            bool operator()(const ScratchText &left, const ScratchText &right) const noexcept {
-                return std::string_view{left} < std::string_view{right};
+        struct ScratchTextHash {
+            [[nodiscard]] std::size_t operator()(const ScratchText &value) const noexcept {
+                return static_cast<std::size_t>(hash::DefaultHash<ScratchText>{}(value).m_value);
             }
         };
 
@@ -49,7 +50,9 @@ namespace pP::config {
             std::string m_origin{"config"};
             Diagnostics *m_diagnostics{nullptr};
             Document m_document{};
-            std::set<ScratchText, ScratchTextLess, mem::STL<ScratchText, mem::ScratchPad>> m_keys{};
+            std::unordered_set<
+                ScratchText, ScratchTextHash, std::equal_to<ScratchText>, mem::STL<ScratchText, mem::ScratchPad>>
+                m_keys{};
             std::error_code m_first_error{};
             EDecodeMode m_mode{EDecodeMode::scalar};
             bool m_retain_document{true};
@@ -94,9 +97,12 @@ namespace pP::config {
 
             void walkTable(const toml::table &table, const std::string_view prefix) {
                 const hal::ProfileScope scope{"Config.File.WalkTable"};
+                // Child calls borrow this frame's key only until they return.
+                ScratchText key;
+
                 for (auto &&kv: table) {
                     const std::string_view segment = keyText(kv.first);
-                    ScratchText key;
+                    key.clear();
                     key.reserve(prefix.size() + (prefix.empty() ? 0u : 1u) + segment.size());
                     key.append(prefix);
                     if (not prefix.empty()) {
@@ -113,6 +119,7 @@ namespace pP::config {
                             EConfigErrc::codec_error);
                         continue;
                     }
+
                     switch (node.type()) {
                         case toml::node_type::table: {
                             const toml::table *nested = node.as_table();
@@ -127,6 +134,7 @@ namespace pP::config {
                                         EConfigErrc::missing_value);
                                     break;
                                 }
+
                                 walkTable(*nested, key);
                             }
                             break;
@@ -279,181 +287,315 @@ namespace pP::config {
         return flattenParsed(*table, origin, diagnostics, mode);
     }
 
-    [[nodiscard]] Expected<std::string> encode(const Document &document) {
-        const hal::ProfileScope scope{"Config.File.Encode"};
-        // Duplicate keys are writer errors, reported without diagnostics.
-        for (std::size_t i = 0; i < document.m_entries.size(); ++i) {
-            for (std::size_t j = i + 1; j < document.m_entries.size(); ++j) {
-                if (document.m_entries[i].m_key == document.m_entries[j].m_key) {
-                    return std::unexpected{make_error_code(EConfigErrc::duplicate_key)};
-                }
-            }
-        }
+    namespace {
+        // ------------------------------------------------------------------
+        // canonical writer validation and scalar emission
+        // ------------------------------------------------------------------
 
-        Array<std::string> sections{std::string{}};
-        // Slice 1a: canonical definition — explicit groups survive a canonical round-trip.
-        // Scalar-only documents retain the existing writer order and spelling.
-        for (std::size_t i = 0; i < document.m_groups.size(); ++i) {
-            const auto &group = document.m_groups[i];
-            PPR_RETURN_UNEXPECTED_ON_FAIL(
-                ConfigFile,
-                isValidCanonicalName(group.m_path) ? std::error_code{} : make_error_code(EConfigErrc::codec_error));
-            for (std::size_t j = 0; j < i; ++j) {
-                if (document.m_groups[j].m_path == group.m_path) {
-                    PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, EConfigErrc::duplicate_key);
+        struct EncodingIndex {
+            Array<const Entry *, mem::ScratchPad> m_entries;
+            Array<const GroupPresence *, mem::ScratchPad> m_groups;
+
+            explicit EncodingIndex(const Document &document) {
+                m_entries.reserve(document.m_entries.size());
+                for (const auto &entry: document.m_entries) {
+                    m_entries.push_back(std::addressof(entry));
+                }
+
+                m_groups.reserve(document.m_groups.size());
+                for (const auto &group: document.m_groups) {
+                    m_groups.push_back(std::addressof(group));
+                }
+
+                std::ranges::sort(m_entries, {}, [](const Entry *entry) { return std::string_view{entry->m_key}; });
+                std::ranges::sort(
+                    m_groups, {}, [](const GroupPresence *group) { return std::string_view{group->m_path}; });
+            }
+        };
+
+        [[nodiscard]] std::error_code validateEncoding(const Document &document, const EncodingIndex &index) {
+            for (std::size_t position = 1u; position < index.m_entries.size(); ++position) {
+                if (index.m_entries[position - 1u]->m_key == index.m_entries[position]->m_key) {
+                    PPR_RETURN_ERROR_ON_FAIL(ConfigFile, EConfigErrc::duplicate_key);
                 }
             }
-            sections.push_back(group.m_path);
-        }
-        if (not document.m_groups.empty()) {
-            // A scalar cannot also be a table, or an ancestor of another node.
+
+            // Retain source-order precedence between invalid and duplicate groups.
+            for (const auto &group: document.m_groups) {
+                PPR_RETURN_ERROR_ON_FAIL(
+                    ConfigFile,
+                    isValidCanonicalName(group.m_path) ? std::error_code{} : make_error_code(EConfigErrc::codec_error));
+
+                const auto equal = std::ranges::equal_range(
+                    index.m_groups, std::string_view{group.m_path}, {},
+                    [](const GroupPresence *value) { return std::string_view{value->m_path}; });
+                for (const auto *other: equal) {
+                    if (other < std::addressof(group)) {
+                        PPR_RETURN_ERROR_ON_FAIL(ConfigFile, EConfigErrc::duplicate_key);
+                    }
+                }
+            }
+
+            if (document.m_groups.empty()) {
+                return {};
+            }
+
             for (const auto &entry: document.m_entries) {
-                PPR_RETURN_UNEXPECTED_ON_FAIL(
+                PPR_RETURN_ERROR_ON_FAIL(
                     ConfigFile,
                     isValidCanonicalName(entry.m_key) ? std::error_code{} : make_error_code(EConfigErrc::codec_error));
-                const auto prefix = entry.m_key + ".";
-                for (const auto &group: document.m_groups) {
-                    if (group.m_path == entry.m_key or group.m_path.starts_with(prefix)) {
-                        PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, EConfigErrc::type_mismatch);
-                    }
+
+                const auto exact = std::ranges::lower_bound(
+                    index.m_groups, std::string_view{entry.m_key}, {},
+                    [](const GroupPresence *value) { return std::string_view{value->m_path}; });
+                if (exact != index.m_groups.end() and (*exact)->m_path == entry.m_key) {
+                    PPR_RETURN_ERROR_ON_FAIL(ConfigFile, EConfigErrc::type_mismatch);
                 }
-                for (const auto &other: document.m_entries) {
-                    if (other.m_key.starts_with(prefix)) {
-                        PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, EConfigErrc::type_mismatch);
-                    }
+
+                ScratchText prefix{entry.m_key};
+                prefix.push_back('.');
+                const auto group = std::ranges::lower_bound(
+                    index.m_groups, std::string_view{prefix}, {},
+                    [](const GroupPresence *value) { return std::string_view{value->m_path}; });
+                const auto scalar = std::ranges::lower_bound(
+                    index.m_entries, std::string_view{prefix}, {},
+                    [](const Entry *value) { return std::string_view{value->m_key}; });
+                if ((group != index.m_groups.end() and (*group)->m_path.starts_with(prefix)) or
+                    (scalar != index.m_entries.end() and (*scalar)->m_key.starts_with(prefix))) {
+                    PPR_RETURN_ERROR_ON_FAIL(ConfigFile, EConfigErrc::type_mismatch);
                 }
             }
+            return {};
         }
-        for (const auto &entry: document.m_entries) {
-            std::string section{};
-            if (const std::size_t dot = entry.m_key.rfind('.'); dot != std::string::npos) {
-                section = entry.m_key.substr(0, dot);
+
+        [[nodiscard]] std::error_code validateScalarKind(const FileValue &value) {
+            switch (value.m_kind) {
+                case EFileKind::boolean:
+                case EFileKind::integer:
+                case EFileKind::floating:
+                case EFileKind::text: return {};
+                default: PPR_RETURN_ERROR_ON_FAIL(ConfigFile, EConfigErrc::codec_error);
             }
-            bool known = false;
-            for (const auto &existing: sections) {
-                if (existing == section) {
-                    known = true;
+            std::unreachable();
+        }
+
+        [[nodiscard]] std::error_code appendScalarValue(std::string &out, const FileValue &value) {
+            PPR_RETURN_ERROR_ON_FAIL(ConfigFile, validateScalarKind(value));
+
+            switch (value.m_kind) {
+                case EFileKind::boolean: out += value.m_boolean ? "true" : "false"; break;
+                case EFileKind::integer: {
+                    std::array<char, 32> buffer{};
+                    const auto [end, error] = std::to_chars(
+                        buffer.data(), buffer.data() + buffer.size(), value.m_integer);
+                    PPR_RETURN_ERROR_ON_FAIL(ConfigFile, std::make_error_code(error));
+
+                    out.append(buffer.data(), end);
                     break;
                 }
+                case EFileKind::floating: {
+                    if (std::isnan(value.m_floating)) {
+                        out += "nan";
+                    } else if (not std::isfinite(value.m_floating)) {
+                        out += value.m_floating < 0.0 ? "-inf" : "inf";
+                    } else {
+                        std::array<char, 128> buffer{};
+                        const auto [end, error] = std::to_chars(
+                            buffer.data(), buffer.data() + buffer.size(), value.m_floating);
+                        PPR_RETURN_ERROR_ON_FAIL(ConfigFile, std::make_error_code(error));
+
+                        const std::string_view number{buffer.data(), static_cast<std::size_t>(end - buffer.data())};
+                        out += number;
+                        if (number.find_first_of(".eE") == std::string_view::npos) {
+                            out += ".0";
+                        }
+                    }
+                    break;
+                }
+                case EFileKind::text: out += escapeTomlString(value.m_text); break;
+                default: PPR_RETURN_ERROR_ON_FAIL(ConfigFile, EConfigErrc::codec_error);
             }
-            if (not known) {
+            return {};
+        }
+
+        [[nodiscard]] bool equalScalar(const FileValue &left, const FileValue &right) {
+            if (left.m_kind != right.m_kind) {
+                return false;
+            }
+
+            switch (left.m_kind) {
+                case EFileKind::boolean: return left.m_boolean == right.m_boolean;
+                case EFileKind::integer: return left.m_integer == right.m_integer;
+                case EFileKind::text: return left.m_text == right.m_text;
+                case EFileKind::floating:
+                    if (std::isnan(left.m_floating) and std::isnan(right.m_floating)) {
+                        return true;
+                    }
+
+                    return left.m_floating == right.m_floating and
+                           std::signbit(left.m_floating) == std::signbit(right.m_floating);
+                default: return false;
+            }
+        }
+
+        [[nodiscard]] std::error_code equalRetainedDocuments(const Document &left, const Document &right) {
+            const EncodingIndex left_index{left};
+            const EncodingIndex right_index{right};
+            PPR_RETURN_ERROR_ON_FAIL(ConfigFile, validateEncoding(left, left_index));
+
+            for (const auto *entry: left_index.m_entries) {
+                PPR_RETURN_ERROR_ON_FAIL(ConfigFile, validateScalarKind(entry->m_value));
+            }
+
+            PPR_RETURN_ERROR_ON_FAIL(ConfigFile, validateEncoding(right, right_index));
+
+            for (const auto *entry: right_index.m_entries) {
+                PPR_RETURN_ERROR_ON_FAIL(ConfigFile, validateScalarKind(entry->m_value));
+            }
+
+            if (left_index.m_entries.size() != right_index.m_entries.size() or
+                left_index.m_groups.size() != right_index.m_groups.size()) {
+                PPR_RETURN_ERROR_ON_FAIL(ConfigFile, EConfigErrc::codec_error);
+            }
+
+            for (std::size_t position = 0u; position < left_index.m_entries.size(); ++position) {
+                const auto &a = *left_index.m_entries[position];
+                const auto &b = *right_index.m_entries[position];
+                if (a.m_key != b.m_key or not equalScalar(a.m_value, b.m_value)) {
+                    PPR_RETURN_ERROR_ON_FAIL(ConfigFile, EConfigErrc::codec_error);
+                }
+            }
+
+            for (std::size_t position = 0u; position < left_index.m_groups.size(); ++position) {
+                if (left_index.m_groups[position]->m_path != right_index.m_groups[position]->m_path) {
+                    PPR_RETURN_ERROR_ON_FAIL(ConfigFile, EConfigErrc::codec_error);
+                }
+            }
+            return {};
+        }
+
+        [[nodiscard]] std::string_view entrySection(const Entry &entry) {
+            const std::string_view key{entry.m_key};
+            const auto dot = key.rfind('.');
+            return dot == std::string_view::npos ? std::string_view{} : key.substr(0u, dot);
+        }
+    }
+
+    [[nodiscard]] Expected<std::string> encode(const Document &document) {
+        const hal::ProfileScope scope{"Config.File.Encode"};
+        const auto scratch_scope = mem::ScratchPad::open();
+        const EncodingIndex index{document};
+        PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, validateEncoding(document, index));
+
+        Array<std::string_view, mem::ScratchPad> sections;
+        std::map<
+            std::string_view, std::size_t, std::less<>,
+            mem::STL<std::pair<const std::string_view, std::size_t>, mem::ScratchPad>>
+            section_index;
+        const auto add_section = [&](const std::string_view section) {
+            if (section_index.try_emplace(section, sections.size()).second) {
                 sections.push_back(section);
             }
+        };
+
+        add_section({});
+        for (const auto &group: document.m_groups) {
+            add_section(group.m_path);
         }
+
+        for (const auto &entry: document.m_entries) {
+            add_section(entrySection(entry));
+        }
+
+        if (not document.m_groups.empty()) {
+            std::ranges::sort(sections);
+            for (std::size_t position = 0u; position < sections.size(); ++position) {
+                section_index.find(sections[position])->second = position;
+            }
+        }
+
+        // Sort section memberships once; each section retains original entry order.
+        Array<std::pair<std::size_t, std::size_t>, mem::ScratchPad> memberships;
+        memberships.reserve(document.m_entries.size());
+        for (std::size_t position = 0u; position < document.m_entries.size(); ++position) {
+            memberships.emplace_back(section_index.find(entrySection(document.m_entries[position]))->second, position);
+        }
+
+        std::ranges::sort(memberships);
 
         std::string out{"# Generated by PPR config; comments are not preserved.\n"};
-        if (not document.m_groups.empty()) {
-            // Parent tables must precede descendants (TOML forbids redefining implicit parents).
-            std::sort(sections.begin() + 1, sections.end());
-        }
-        for (const auto &section: sections) {
-            // Root keys first, without a header.
-            if (not section.empty()) {
+        std::size_t cursor = 0u;
+        for (std::size_t section_position = 0u; section_position < sections.size(); ++section_position) {
+            const auto section = sections[section_position];
+            if (section.empty()) {
+                out += '\n';
+            } else {
                 out += configFormat("\n[{}]\n", section);
-            } else if (not out.empty()) {
-                out += "\n";
             }
-            for (const auto &entry: document.m_entries) {
-                std::string entry_section{};
-                std::string short_key = entry.m_key;
-                if (const std::size_t dot = entry.m_key.rfind('.'); dot != std::string::npos) {
-                    entry_section = entry.m_key.substr(0, dot);
-                    short_key = entry.m_key.substr(dot + 1);
-                }
-                if (entry_section != section) {
-                    continue;
-                }
 
-                const std::string key_text = isBareKey(short_key) ? short_key : escapeTomlString(short_key);
-                const FileValue &value = entry.m_value;
-                switch (value.m_kind) {
-                    case EFileKind::boolean:
-                        out += configFormat("{} = {}\n", key_text, value.m_boolean ? "true" : "false");
-                        break;
-                    case EFileKind::integer: {
-                        std::array<char, 32> buffer{};
-                        const auto [end, error] = std::to_chars(
-                            buffer.data(), buffer.data() + buffer.size(), value.m_integer);
-                        if (error != std::errc{}) {
-                            return std::unexpected{std::make_error_code(error)};
-                        }
-
-                        out += key_text + " = ";
-                        out.append(buffer.data(), end);
-                        out += '\n';
-                        break;
-                    }
-                    case EFileKind::floating: {
-                        if (std::isnan(value.m_floating)) {
-                            out += configFormat("{} = nan\n", key_text);
-                        } else if (not std::isfinite(value.m_floating)) {
-                            out += configFormat("{} = {}inf\n", key_text, value.m_floating < 0.0 ? "-" : "");
-                        } else {
-                            // Shortest locale-independent representation that round-trips to the same double.
-                            std::array<char, 128> buffer{};
-                            const auto [end, error] = std::to_chars(
-                                buffer.data(), buffer.data() + buffer.size(), value.m_floating);
-                            if (error != std::errc{}) {
-                                return std::unexpected{std::make_error_code(error)};
-                            }
-
-                            std::string number(buffer.data(), end);
-                            if (number.find_first_of(".eE") == std::string::npos) {
-                                number += ".0";
-                            }
-                            out += configFormat("{} = {}\n", key_text, number);
-                        }
-                        break;
-                    }
-                    case EFileKind::text:
-                        out += configFormat("{} = {}\n", key_text, escapeTomlString(value.m_text));
-                        break;
-                    default: return std::unexpected{make_error_code(EConfigErrc::codec_error)};
-                }
+            while (cursor < memberships.size() and memberships[cursor].first == section_position) {
+                const auto &entry = document.m_entries[memberships[cursor].second];
+                const std::string_view key{entry.m_key};
+                const auto dot = key.rfind('.');
+                const auto short_key = dot == std::string_view::npos ? key : key.substr(dot + 1u);
+                out += isBareKey(short_key) ? std::string{short_key} : escapeTomlString(short_key);
+                out += " = ";
+                PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, appendScalarValue(out, entry.m_value));
+                out += '\n';
+                ++cursor;
             }
         }
         return out;
     }
 
     namespace {
+        // ------------------------------------------------------------------
+        // parser positions and scalar text
+        // ------------------------------------------------------------------
+
         // toml++ increments source columns once per UTF-8 codepoint (including
         // CR), and advances source lines on LF. Its reader consumes an initial BOM.
+        struct SourceCursor {
+            std::size_t m_offset;
+            u32 m_line{1u};
+            u32 m_column{1u};
+        };
+
+        [[nodiscard]] Expected<std::size_t> sourceOffset(
+            const std::string_view bytes, const toml::source_position position, SourceCursor &cursor) {
+            while (cursor.m_offset < bytes.size() and
+                   (cursor.m_line != position.line or cursor.m_column != position.column)) {
+                const auto lead = static_cast<unsigned char>(bytes[cursor.m_offset]);
+                const std::size_t width = lead < 0x80u ? 1u : lead < 0xE0u ? 2u : lead < 0xF0u ? 3u : 4u;
+                if (bytes[cursor.m_offset] == '\n') {
+                    ++cursor.m_line;
+                    cursor.m_column = 1u;
+                } else {
+                    ++cursor.m_column;
+                }
+                cursor.m_offset += width;
+            }
+
+            if (cursor.m_offset > bytes.size() or
+                cursor.m_line != position.line or
+                cursor.m_column != position.column) {
+                PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, EConfigErrc::codec_error);
+            }
+            return cursor.m_offset;
+        }
+
         [[nodiscard]] Expected<std::size_t> sourceOffset(
             const std::string_view bytes, const toml::source_position position) {
             const hal::ProfileScope scope{"Config.File.SourceOffset"};
-            std::size_t offset = bytes.starts_with("\xEF\xBB\xBF") ? 3u : 0u;
-            u32 line = 1u;
-            u32 column = 1u;
-            while (offset < bytes.size() and (line != position.line or column != position.column)) {
-                const auto lead = static_cast<unsigned char>(bytes[offset]);
-                const std::size_t width = lead < 0x80u ? 1u : lead < 0xE0u ? 2u : lead < 0xF0u ? 3u : 4u;
-                if (bytes[offset] == '\n') {
-                    ++line;
-                    column = 1u;
-                } else {
-                    ++column;
-                }
-                offset += width;
-            }
-            if (offset > bytes.size() or line != position.line or column != position.column) {
-                PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, EConfigErrc::codec_error);
-            }
-            return offset;
+            SourceCursor cursor{bytes.starts_with("\xEF\xBB\xBF") ? 3u : 0u};
+            return sourceOffset(bytes, position, cursor);
         }
 
         [[nodiscard]] Expected<std::string> scalarText(const FileValue &value) {
             const hal::ProfileScope scope{"Config.File.ScalarText"};
-            Document document;
-            document.m_entries.push_back(Entry{"value", value, {}});
-            auto encoded = encode(document);
-            PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, encoded);
-
-            constexpr std::string_view marker = "value = ";
-            const auto begin = encoded->find(marker);
-            if (begin == std::string::npos or not encoded->ends_with('\n')) {
-                PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, EConfigErrc::codec_error);
-            }
-            return encoded->substr(begin + marker.size(), encoded->size() - begin - marker.size() - 1u);
+            std::string out;
+            PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, appendScalarValue(out, value));
+            return out;
         }
     }
 
@@ -523,9 +665,11 @@ namespace pP::config {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, fail("Scalar patch changes the authored value kind"));
             }
 
-            auto begin = sourceOffset(bytes, node->source().begin);
+            const hal::ProfileScope position_scope{"Config.File.SourceOffset"};
+            SourceCursor cursor{bytes.starts_with("\xEF\xBB\xBF") ? 3u : 0u};
+            auto begin = sourceOffset(bytes, node->source().begin, cursor);
             PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, begin);
-            auto end = sourceOffset(bytes, node->source().end);
+            auto end = sourceOffset(bytes, node->source().end, cursor);
             PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, end);
             if (*end < *begin) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, fail("Invalid parser source span"));
@@ -569,9 +713,20 @@ namespace pP::config {
     }
 
     namespace {
-        Expected<ScalarSourcePatch> insertSubtree(
+        // ------------------------------------------------------------------
+        // validated source transactions
+        // ------------------------------------------------------------------
+
+        struct ValidatedSourcePatch {
+            ScalarSourcePatch m_patch;
+            std::string m_bytes;
+            Document m_document;
+        };
+
+        Expected<ValidatedSourcePatch> insertSubtree(
             const std::string_view bytes, const std::string_view key, const Document &record,
-            const std::string_view origin, Diagnostics &diagnostics, const EDecodeMode mode) {
+            const std::string_view origin, Diagnostics &diagnostics, const EDecodeMode mode,
+            const Document *const original = nullptr) {
             const hal::ProfileScope scope{"Config.File.InsertSubtree"};
             PPR_RETURN_UNEXPECTED_ON_FAIL(
                 ConfigFile, bytes.size() <= 1024u * 1024u and
@@ -580,18 +735,23 @@ namespace pP::config {
                                 ? std::error_code{}
                                 : std::make_error_code(std::errc::invalid_argument));
 
-            auto decoded = decode(bytes, origin, diagnostics, mode);
-            PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, decoded);
+            Expected<Document> decoded;
+            if (original == nullptr) {
+                decoded = decode(bytes, origin, diagnostics, mode);
+                PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, decoded);
+            }
+
+            const auto &document = original == nullptr ? *decoded : *original;
             const auto prefix = std::string{key} + ".";
             if (std::ranges::any_of(
-                    decoded->m_entries,
+                    document.m_entries,
                     [&](const Entry &entry) { return entry.m_key == key or entry.m_key.starts_with(prefix); }) or
-                std::ranges::any_of(decoded->m_groups, [&](const GroupPresence &group) {
+                std::ranges::any_of(document.m_groups, [&](const GroupPresence &group) {
                     return group.m_path == key or group.m_path.starts_with(prefix);
                 })) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, EConfigErrc::duplicate_key);
             }
-            if (mode == EDecodeMode::tree and std::ranges::any_of(decoded->m_entries, [&](const Entry &entry) {
+            if (mode == EDecodeMode::tree and std::ranges::any_of(document.m_entries, [&](const Entry &entry) {
                     return key.starts_with(entry.m_key + ".");
                 })) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, EConfigErrc::type_mismatch);
@@ -608,6 +768,7 @@ namespace pP::config {
                     qualified.m_groups.push_back({prefix + group.m_path, {}});
                 }
             }
+
             for (const auto &entry: record.m_entries) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(
                     ConfigFile, isValidCanonicalName(entry.m_key) ? std::error_code{}
@@ -623,7 +784,9 @@ namespace pP::config {
             if (not bytes.empty() and not bytes.ends_with('\n')) {
                 appended += eol;
             }
+
             appended += eol;
+
             for (const char ch: *encoded) {
                 if (ch == '\n') {
                     appended += eol;
@@ -637,10 +800,10 @@ namespace pP::config {
             PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, candidate);
             auto checked = decode(*candidate, origin, diagnostics, mode);
             PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, checked);
-            return patch;
+            return ValidatedSourcePatch{std::move(patch), std::move(*candidate), std::move(*checked)};
         }
 
-        Expected<ScalarSourcePatch> removeSubtree(
+        Expected<ValidatedSourcePatch> removeSubtree(
             const std::string_view bytes, const std::string_view key, const std::string_view origin,
             Diagnostics &diagnostics, const EDecodeMode mode) {
             const hal::ProfileScope scope{"Config.File.RemoveSubtree"};
@@ -649,17 +812,13 @@ namespace pP::config {
                                 ? std::error_code{}
                                 : std::make_error_code(std::errc::invalid_argument));
 
-            auto decoded = decode(bytes, origin, diagnostics, mode);
+            const auto scratch_scope = mem::ScratchPad::open();
+            auto table = parseToml(bytes, origin, diagnostics, mode);
+            PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, table);
+            auto decoded = flattenParsed(*table, origin, diagnostics, mode);
             PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, decoded);
 
-            toml::table table;
-            try {
-                table = toml::parse(bytes, std::string{origin});
-            } catch (const toml::parse_error &) {
-                PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, EConfigErrc::codec_error);
-            }
-
-            const toml::node *node = std::addressof(table);
+            const toml::node *node = std::addressof(*table);
             std::string_view remaining = key;
             while (not remaining.empty()) {
                 // A descendant of an inline table shares its assignment line.
@@ -667,6 +826,7 @@ namespace pP::config {
                     ConfigFile, not node->as_table() or not node->as_table()->is_inline()
                                     ? std::error_code{}
                                     : std::make_error_code(std::errc::operation_not_supported));
+
                 const auto dot = remaining.find('.');
                 node = node->as_table() ? node->as_table()->get(remaining.substr(0u, dot)) : nullptr;
                 PPR_RETURN_UNEXPECTED_ON_FAIL(
@@ -674,6 +834,7 @@ namespace pP::config {
                 if (dot == std::string_view::npos) {
                     break;
                 }
+
                 remaining.remove_prefix(dot + 1u);
             }
 
@@ -682,33 +843,79 @@ namespace pP::config {
                                 ? std::error_code{}
                                 : std::make_error_code(std::errc::operation_not_supported));
 
-            using Span = std::pair<std::size_t, std::size_t>;
-            Array<Span> spans;
-            const auto collect = [&](auto &&self, const toml::node &current) -> std::error_code {
-                auto begin = sourceOffset(bytes, current.source().begin);
-                PPR_RETURN_ERROR_ON_FAIL(ConfigFile, begin);
+            struct PositionRequest {
+                std::size_t m_slot;
+                toml::source_position m_position;
+            };
+
+            struct NodeSpan {
+                const toml::node *m_node;
+                std::size_t m_begin;
+                std::size_t m_end;
+            };
+
+            Array<PositionRequest, mem::ScratchPad> requests;
+            Array<std::size_t, mem::ScratchPad> offsets;
+            Array<NodeSpan, mem::ScratchPad> nodes;
+            const auto request = [&](const toml::source_position position) {
+                const auto slot = offsets.size();
+                offsets.push_back(0u);
+                requests.push_back({slot, position});
+                return slot;
+            };
+
+            const auto collect = [&](auto &&self, const toml::node &current) -> void {
+                const auto begin = request(current.source().begin);
                 if (const auto *nested = current.as_table(); nested and not nested->is_inline()) {
-                    if (*begin < bytes.size() and bytes[*begin] == '[') {
-                        const auto end = bytes.find('\n', *begin);
-                        spans.emplace_back(*begin, end == std::string_view::npos ? bytes.size() : end + 1u);
-                    }
+                    nodes.push_back({std::addressof(current), begin, begin});
+
                     for (const auto &[unused, child]: *nested) {
-                        PPR_RETURN_ERROR_ON_FAIL(ConfigFile, self(self, child));
+                        self(self, child);
                     }
                 } else {
-                    auto end = sourceOffset(bytes, current.source().end);
-                    PPR_RETURN_ERROR_ON_FAIL(ConfigFile, end);
-                    const auto line_begin = *begin == 0u ? std::string_view::npos : bytes.rfind('\n', *begin - 1u);
-                    const auto line_end = bytes.find('\n', *end);
+                    nodes.push_back({std::addressof(current), begin, request(current.source().end)});
+                }
+            };
+
+            collect(collect, *node);
+
+            std::ranges::sort(requests, [](const PositionRequest &left, const PositionRequest &right) {
+                return std::tie(left.m_position.line, left.m_position.column) <
+                       std::tie(right.m_position.line, right.m_position.column);
+            });
+
+            {
+                const hal::ProfileScope position_scope{"Config.File.SourceOffset"};
+                SourceCursor cursor{bytes.starts_with("\xEF\xBB\xBF") ? 3u : 0u};
+                for (const auto &position: requests) {
+                    auto offset = sourceOffset(bytes, position.m_position, cursor);
+                    PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, offset);
+
+                    offsets[position.m_slot] = *offset;
+                }
+            }
+
+            using Span = std::pair<std::size_t, std::size_t>;
+            Array<Span, mem::ScratchPad> spans;
+            spans.reserve(nodes.size());
+            for (const auto &current: nodes) {
+                const auto begin = offsets[current.m_begin];
+                if (const auto *nested = current.m_node->as_table(); nested and not nested->is_inline()) {
+                    if (begin < bytes.size() and bytes[begin] == '[') {
+                        const auto end = bytes.find('\n', begin);
+                        spans.emplace_back(begin, end == std::string_view::npos ? bytes.size() : end + 1u);
+                    }
+                } else {
+                    const auto end = offsets[current.m_end];
+                    const auto line_begin = begin == 0u ? std::string_view::npos : bytes.rfind('\n', begin - 1u);
+                    const auto line_end = bytes.find('\n', end);
                     spans.emplace_back(
                         line_begin == std::string_view::npos ? (bytes.starts_with("\xEF\xBB\xBF") ? 3u : 0u)
                                                              : line_begin + 1u,
                         line_end == std::string_view::npos ? bytes.size() : line_end + 1u);
                 }
-                return {};
-            };
+            }
 
-            PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, collect(collect, *node));
             PPR_RETURN_UNEXPECTED_ON_FAIL(
                 ConfigFile, not spans.empty() ? std::error_code{} : make_error_code(EConfigErrc::codec_error));
 
@@ -726,6 +933,7 @@ namespace pP::config {
 
             auto candidate = applySourcePatch(bytes, patch);
             PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, candidate);
+
             auto checked = decode(*candidate, origin, diagnostics, mode);
             PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, checked);
 
@@ -748,17 +956,22 @@ namespace pP::config {
                     retained.m_entries.push_back(entry);
                 }
             }
+
             Document missing_ancestors;
+            const EncodingIndex checked_index{*checked};
             for (const auto &group: decoded->m_groups) {
                 if (group.m_path != key and not group.m_path.starts_with(prefix)) {
                     retained.m_groups.push_back(group);
-                    if (std::ranges::find(checked->m_groups, group.m_path, &GroupPresence::m_path) ==
-                            checked->m_groups.end() and
+
+                    if (not std::ranges::binary_search(
+                            checked_index.m_groups, std::string_view{group.m_path}, {},
+                            [](const GroupPresence *value) { return std::string_view{value->m_path}; }) and
                         key.starts_with(group.m_path + ".")) {
                         missing_ancestors.m_groups.push_back(group);
                     }
                 }
             }
+
             // Removing the last descendant can erase an implicit ancestor. Keep its
             // presence by materializing an empty header without rewriting other bytes.
             if (not missing_ancestors.m_groups.empty()) {
@@ -785,17 +998,8 @@ namespace pP::config {
                 patch.m_after += addition.m_after;
             }
 
-            std::ranges::sort(retained.m_entries, {}, &Entry::m_key);
-            std::ranges::sort(checked->m_entries, {}, &Entry::m_key);
-            std::ranges::sort(retained.m_groups, {}, &GroupPresence::m_path);
-            std::ranges::sort(checked->m_groups, {}, &GroupPresence::m_path);
-            auto expected = encode(retained);
-            PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, expected);
-            auto actual = encode(*checked);
-            PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, actual);
-            PPR_RETURN_UNEXPECTED_ON_FAIL(
-                ConfigFile, *expected == *actual ? std::error_code{} : make_error_code(EConfigErrc::codec_error));
-            return patch;
+            PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, equalRetainedDocuments(retained, *checked));
+            return ValidatedSourcePatch{std::move(patch), std::move(*candidate), std::move(*checked)};
         }
     } // namespace
 
@@ -804,7 +1008,7 @@ namespace pP::config {
         Diagnostics &diagnostics) {
         auto patch = insertSubtree(bytes, key, record, origin, diagnostics, EDecodeMode::records);
         PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, patch);
-        return patch;
+        return std::move(patch->m_patch);
     }
 
     Expected<ScalarSourcePatch> removeRecord(
@@ -812,7 +1016,7 @@ namespace pP::config {
         Diagnostics &diagnostics) {
         auto patch = removeSubtree(bytes, key, origin, diagnostics, EDecodeMode::records);
         PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, patch);
-        return patch;
+        return std::move(patch->m_patch);
     }
 
     Expected<ScalarSourcePatch> patchTree(
@@ -823,10 +1027,12 @@ namespace pP::config {
             diagnostics.add(std::string{origin}, std::string{key}, std::string{message}, error);
             return error;
         };
+
         if (bytes.size() > 1024u * 1024u) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(
                 ConfigFile, fail(make_error_code(EConfigErrc::out_of_range), "Tree source exceeds the 1 MiB limit"));
         }
+
         if (not isValidCanonicalName(key) or
             (edit != ETreeSourceEdit::insert and
                 edit != ETreeSourceEdit::remove and
@@ -837,33 +1043,34 @@ namespace pP::config {
         }
 
         std::string scratch{bytes};
+        std::optional<Document> checked;
         if (edit != ETreeSourceEdit::insert) {
             auto removal = removeSubtree(scratch, key, origin, diagnostics, EDecodeMode::tree);
             if (not removal) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, fail(removal.error(), "Cannot remove tree subtree"));
             }
-            auto removed = applySourcePatch(scratch, *removal);
-            PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, removed);
-            scratch = std::move(*removed);
+
+            scratch = std::move(removal->m_bytes);
+            checked.emplace(std::move(removal->m_document));
         }
+
         if (edit != ETreeSourceEdit::remove) {
-            auto insertion = insertSubtree(scratch, key, subtree, origin, diagnostics, EDecodeMode::tree);
+            auto insertion = insertSubtree(
+                scratch, key, subtree, origin, diagnostics, EDecodeMode::tree,
+                checked ? std::addressof(*checked) : nullptr);
             if (not insertion) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, fail(insertion.error(), "Cannot insert tree subtree"));
             }
-            auto inserted = applySourcePatch(scratch, *insertion);
-            PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, inserted);
-            scratch = std::move(*inserted);
-        }
 
-        auto checked = decode(scratch, origin, diagnostics, EDecodeMode::tree);
-        PPR_RETURN_UNEXPECTED_ON_FAIL(ConfigFile, checked);
+            scratch = std::move(insertion->m_bytes);
+        }
 
         // The scratch transaction is returned atomically as one reversible patch.
         std::size_t first = 0u;
         while (first < bytes.size() and first < scratch.size() and bytes[first] == scratch[first]) {
             ++first;
         }
+
         std::size_t suffix = 0u;
         while (suffix < bytes.size() - first and
                suffix < scratch.size() - first and
@@ -879,7 +1086,9 @@ namespace pP::config {
         const hal::ProfileScope scope{"Config.File.ToLayer"};
         Layer layer{};
         layer.m_source = ESource::file;
-        layer.m_origin = origin;
+        layer.m_origin = std::move(origin);
+        layer.m_assignments.reserve(document.m_entries.size());
+
         std::size_t order = 0;
         for (auto &entry: document.m_entries) {
             SourceValue value{};
@@ -890,9 +1099,11 @@ namespace pP::config {
                 case EFileKind::text: value = SourceValue::text(std::move(entry.m_value.m_text)); break;
                 default: value = SourceValue::text({}); break;
             }
+
             layer.m_assignments.push_back(
                 Assignment{std::move(entry.m_key), {}, std::move(value), std::move(entry.m_location), order++});
         }
+
         return layer;
     }
 

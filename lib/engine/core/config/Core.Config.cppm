@@ -914,6 +914,7 @@ namespace pP::config::details {
 
         explicit SourcePathIndex(std::span<const Assignment> assignments);
         explicit SourcePathIndex(std::span<const GroupPresence> groups);
+        explicit SourcePathIndex(std::span<const ScratchText> paths);
         [[nodiscard]] std::span<const Entry> exact(std::string_view path) const noexcept;
         [[nodiscard]] bool supplied(std::string_view path, bool descendants) const;
         [[nodiscard]] Array<std::size_t, mem::ScratchPad> subtree(std::string_view path) const;
@@ -932,11 +933,17 @@ export namespace pP::config {
         [[nodiscard]] bool iequals(std::string_view lhs, std::string_view rhs) noexcept;
 
         struct ResolveState {
+            using OriginPositions = Array<std::size_t, mem::ScratchPad>;
+            using OriginIndex = std::map<
+                ScratchText, OriginPositions, std::less<>,
+                mem::STL<std::pair<const ScratchText, OriginPositions>, mem::ScratchPad>>;
+
             std::span<const Layer *const> m_layers{};
             std::span<const SourcePathIndex> m_assignment_indices;
             Array<SourcePathIndex, mem::ScratchPad> m_assignment_storage;
-            Array<std::size_t, mem::ScratchPad> m_origin_indices;
-            Array<std::size_t, mem::ScratchPad> m_origin_remap;
+            OriginIndex m_origin_indices;
+            // Slots and liveness scale with all origins visited during this resolution.
+            Array<u8, mem::ScratchPad> m_origin_live;
             Diagnostics *m_diagnostics{nullptr};
             Array<PropertyOrigin> *m_origins{nullptr};
             std::error_code m_first_error{};
@@ -958,6 +965,7 @@ export namespace pP::config {
             void rejectUnknown(std::span<const std::string_view> names);
             void indexSources();
             void indexOrigins();
+            void finalizeOrigins();
         };
 
         template<typename S>
@@ -1807,6 +1815,8 @@ export namespace pP::config {
                 // latest complete subtree's origins (including same-tag edits).
                 replacement.rejectUnknown();
                 state.m_scalars.retain(replacement.m_scalars.m_first_error);
+
+                replacement.m_scalars.finalizeOrigins();
                 state.m_scalars.replaceOrigins(path, origins);
             }
         }
@@ -1971,6 +1981,8 @@ export namespace pP::config {
         if (state.m_first_error) {
             return std::unexpected{state.m_first_error};
         }
+
+        state.finalizeOrigins();
         return result;
     }
 
@@ -2016,6 +2028,7 @@ export namespace pP::config {
             return state.m_first_error;
         }
 
+        state.finalizeOrigins();
         resolved.m_value = std::move(scratch);
         resolved.m_origins = std::move(origins);
         return {};
@@ -2098,6 +2111,8 @@ export namespace pP::config {
         details::resolveTreeObject(result.m_value, {}, state);
         state.rejectUnknown();
         PPR_RETURN_UNEXPECTED_ON_FAIL(Config, state.m_scalars.m_first_error);
+
+        state.m_scalars.finalizeOrigins();
         return result;
     }
 } // namespace pP::config

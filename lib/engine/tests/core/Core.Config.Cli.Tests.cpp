@@ -108,6 +108,83 @@ namespace pP::tests::detail::cfg_cli {
         return args;
     }
 
+    PPR_UNIT_TEST (ambiguous_spellings_preserve_first_explicit_and_derived_matches) {
+        OptionDecl first;
+        first.m_canonical = "app.same";
+        first.m_aliases = {"shared", "neg"};
+        first.m_negations = {"off", "neg"};
+        first.m_is_switch = true;
+
+        OptionDecl second;
+        second.m_canonical = "shared";
+        second.m_aliases = {"off", "same"};
+        second.m_negations = {"neg"};
+        second.m_is_switch = true;
+
+        OptionDecl duplicate;
+        duplicate.m_canonical = "app.same";
+        duplicate.m_is_switch = false;
+
+        OptionDecl left;
+        left.m_canonical = "left.tail";
+        left.m_is_switch = true;
+
+        OptionDecl right;
+        right.m_canonical = "right.tail";
+        right.m_is_switch = true;
+
+        CliSchema schema;
+        schema.m_options = {first, second, duplicate, left, right};
+        Diagnostics diagnostics;
+
+        const auto parsed = parseCliArgs(
+            spell({"--shared", "--off", "--neg", "--same", "--app.same", "--tail"}), schema, diagnostics);
+        PPR_TEST_ASSERT(parsed.has_value() and not diagnostics.hasErrors());
+        const auto &assignments = parsed->m_assignments;
+        PPR_TEST_ASSERT(assignments.size() == 6u);
+        const std::string_view names[] = {"app.same", "app.same", "app.same", "shared", "app.same", "left.tail"};
+        const std::string_view aliases[] = {"shared", "off", "neg", "same", "", "tail"};
+
+        for (std::size_t position = 0u; position < assignments.size(); ++position) {
+            PPR_TEST_ASSERT(assignments[position].m_name == names[position]);
+            PPR_TEST_ASSERT(assignments[position].m_alias_used == aliases[position]);
+            PPR_TEST_ASSERT(assignments[position].m_value.m_kind == ESourceKind::boolean);
+            PPR_TEST_ASSERT(assignments[position].m_value.m_boolean == (position != 1u));
+        }
+    };
+
+    PPR_UNIT_TEST (parsed_assignments_own_schema_spellings_after_scratch_reuse) {
+        Expected<CliResult> parsed;
+        Diagnostics diagnostics;
+        {
+            const std::string canonical = "configuration." + std::string(80u, 'k');
+            const std::string alias(96u, 'a');
+            const std::string argument = "--" + alias + "=owned value";
+            OptionDecl option;
+            option.m_canonical = canonical;
+            option.m_aliases.push_back(alias);
+            CliSchema schema;
+            schema.m_options.push_back(std::move(option));
+            const std::string_view args[] = {argument};
+
+            parsed = parseCliArgs(args, schema, diagnostics);
+            PPR_TEST_ASSERT(parsed.has_value() and not diagnostics.hasErrors());
+        }
+
+        {
+            const auto scratch_scope = mem::ScratchPad::open();
+            Array<std::byte, mem::ScratchPad> overwrite(1024u * 1024u, std::byte{0x5a});
+            PPR_TEST_ASSERT(overwrite.front() == std::byte{0x5a});
+        }
+
+        PPR_TEST_ASSERT(parsed->m_assignments.size() == 1u);
+        const auto &assignment = parsed->m_assignments.front();
+        PPR_TEST_ASSERT(assignment.m_name == "configuration." + std::string(80u, 'k'));
+        PPR_TEST_ASSERT(assignment.m_alias_used == std::string(96u, 'a'));
+        PPR_TEST_ASSERT(assignment.m_value.m_text == "owned value");
+        PPR_TEST_ASSERT(assignment.m_location == "argv[0]");
+    };
+
     PPR_UNIT_TEST (long_value_forms) {
         const CliSchema schema = makeSchema();
 
@@ -429,6 +506,8 @@ namespace pP::tests {
     const UnitTest config_cli = UnitTest::Named("config_cli") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::cfg_cli::long_value_forms,
+            detail::cfg_cli::ambiguous_spellings_preserve_first_explicit_and_derived_matches,
+            detail::cfg_cli::parsed_assignments_own_schema_spellings_after_scratch_reuse,
             detail::cfg_cli::presence_switch_and_explicit_forms,
             detail::cfg_cli::negated_alias,
             detail::cfg_cli::short_alias,

@@ -6,7 +6,10 @@ module engine.core;
 
 import :config;
 import :config.cli;
+import :containers.hash_map;
 import :hal;
+import :hashing;
+import :memory.arena;
 
 import std;
 
@@ -19,7 +22,6 @@ namespace pP::config {
         struct OptionMatch {
             const OptionDecl *m_option{nullptr};
             bool m_negated{false};
-            std::string m_spelling{};
         };
 
         [[nodiscard]] std::string_view shortName(const std::string_view canonical) noexcept {
@@ -29,35 +31,56 @@ namespace pP::config {
             return canonical;
         }
 
-        [[nodiscard]] OptionMatch findOption(const CliSchema &schema, const std::string_view name) {
-            const hal::ProfileScope scope{"Config.Cli.FindOption"};
-            // First pass: exact canonical, alias, and negation spellings.
-            // Explicit spellings win over derived short names.
-            for (const auto &option: schema.m_options) {
-                if (option.m_canonical == name) {
-                    return {std::addressof(option), false, std::string{name}};
-                }
-                for (const std::string_view alias: option.m_aliases) {
-                    if (alias == name) {
-                        return {std::addressof(option), false, std::string{name}};
+        class OptionLookup {
+            using Index = HashMap<
+                std::string_view, OptionMatch, std::equal_to<std::string_view>, hash::DefaultHash<std::string_view>,
+                mem::ScratchPad>;
+
+            Index m_options;
+            bool m_built{};
+
+        public:
+            [[nodiscard]] OptionMatch find(const CliSchema &schema, const std::string_view name) {
+                const hal::ProfileScope scope{"Config.Cli.FindOption"};
+                if (not m_built) {
+                    const hal::ProfileScope index_scope{"Config.Cli.IndexOptions"};
+                    std::size_t spelling_count = schema.m_options.size() * 2u;
+                    for (const auto &option: schema.m_options) {
+                        spelling_count += option.m_aliases.size() + option.m_negations.size();
                     }
-                }
-                for (const std::string_view negation: option.m_negations) {
-                    if (negation == name) {
-                        return {std::addressof(option), true, std::string{name}};
+
+                    // Schema strings stay immutable and outlive this invocation's borrowed keys.
+                    m_options.reserve(spelling_count);
+
+                    for (const auto &option: schema.m_options) {
+                        const auto *const declaration = std::addressof(option);
+                        m_options.insert(std::pair{option.m_canonical, OptionMatch{declaration, false}});
+
+                        for (const auto alias: option.m_aliases) {
+                            m_options.insert(std::pair{alias, OptionMatch{declaration, false}});
+                        }
+
+                        for (const auto negation: option.m_negations) {
+                            m_options.insert(std::pair{negation, OptionMatch{declaration, true}});
+                        }
                     }
+
+                    // First insertion preserves declaration precedence; explicit names occupy
+                    // their slots before any derived trailing segment is considered.
+                    for (const auto &option: schema.m_options) {
+                        const auto suffix = shortName(option.m_canonical);
+                        if (suffix != option.m_canonical) {
+                            m_options.insert(std::pair{suffix, OptionMatch{std::addressof(option), false}});
+                        }
+                    }
+
+                    m_built = true;
                 }
+
+                const auto found = m_options.find(name);
+                return found == m_options.end() ? OptionMatch{} : found->second;
             }
-            // Second pass: trailing canonical segment ("app.loops" accepts
-            // "--loops"). Full canonicals above take precedence.
-            for (const auto &option: schema.m_options) {
-                const std::string_view suffix = shortName(option.m_canonical);
-                if (suffix != option.m_canonical and suffix == name) {
-                    return {std::addressof(option), false, std::string{name}};
-                }
-            }
-            return {};
-        }
+        };
 
         [[nodiscard]] bool looksLikeOption(const std::string_view token) noexcept {
             if (token.size() < 2 or token[0] != '-') {
@@ -80,6 +103,8 @@ namespace pP::config {
     [[nodiscard]] Expected<CliResult> parseCliArgs(
         const std::span<const std::string_view> args, const CliSchema &schema, Diagnostics &diagnostics) {
         const hal::ProfileScope scope{"Config.Cli.Parse"};
+        const auto scratch_scope = mem::ScratchPad::open();
+        OptionLookup options;
         CliResult result{};
         std::error_code first_error{};
         std::size_t order = 0;
@@ -186,7 +211,7 @@ namespace pP::config {
                 continue;
             }
 
-            const OptionMatch match = findOption(schema, name);
+            const OptionMatch match = options.find(schema, name);
             if (match.m_option == nullptr) {
                 const std::string display = configFormat("{}{}", is_long ? "--" : "-", name);
                 fail(

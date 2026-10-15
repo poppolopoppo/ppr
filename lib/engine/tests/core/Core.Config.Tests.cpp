@@ -185,6 +185,29 @@ namespace pP::tests::detail::cfg {
         PPR_TEST_ASSERT(validateSchema<PerfSettings>(no_records).has_value());
     };
 
+    PPR_UNIT_TEST (runtime_origin_updates_preserve_first_duplicate_and_order) {
+        Diagnostics diagnostics;
+        auto resolved = resolve<PerfSettings>({}, diagnostics);
+        PPR_TEST_ASSERT(resolved.has_value());
+
+        resolved->m_origins.push_back({"perf.cap_hz", ESource::file, "duplicate:unchanged"});
+        Array<std::string> names;
+        for (const auto &origin: resolved->m_origins) {
+            names.push_back(origin.m_name);
+        }
+
+        const auto layer = singleLayer(ESource::cli, "perf.cap_hz", SourceValue::text("120"), "argv:update");
+        PPR_TEST_ASSERT(not applyRuntime(*resolved, layer, diagnostics));
+        PPR_TEST_ASSERT(resolved->find("perf.cap_hz")->m_location == "argv:update");
+        PPR_TEST_ASSERT(resolved->m_origins.back().m_location == "duplicate:unchanged");
+        PPR_TEST_ASSERT(resolved->m_origins.back().m_source == ESource::file);
+
+        PPR_TEST_ASSERT(resolved->m_origins.size() == names.size());
+        for (std::size_t position = 0u; position < names.size(); ++position) {
+            PPR_TEST_ASSERT(resolved->m_origins[position].m_name == names[position]);
+        }
+    };
+
     PPR_UNIT_TEST (defaults_resolve) {
         Diagnostics diagnostics{};
         const auto result = resolve<PerfSettings>(std::span<const Layer>{}, diagnostics);
@@ -1612,6 +1635,7 @@ namespace pP::tests {
     const UnitTest config = UnitTest::Named("config") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::cfg::defaults_resolve,
+            detail::cfg::runtime_origin_updates_preserve_first_duplicate_and_order,
             detail::cfg::bounded_diagnostics_preserve_failure_count_and_clear_contract,
             detail::cfg::precedence_across_layers,
             detail::cfg::source_subsets_are_valid,
