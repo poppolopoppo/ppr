@@ -30,7 +30,7 @@ namespace pP {
             expect_crash = expect_fail | fork,
         };
 
-        [[nodiscard]] friend constexpr EFlags operator|(EFlags a, EFlags b) noexcept {
+        [[nodiscard]] friend constexpr EFlags operator|(const EFlags a, const EFlags b) noexcept {
             return static_cast<EFlags>(static_cast<u32>(a) | static_cast<u32>(b));
         }
 
@@ -69,32 +69,14 @@ namespace pP {
         public:
             [[nodiscard]] virtual Id getTestId() const noexcept = 0;
 
-            virtual void log(const char *msg) = 0;
+            virtual void log(const char *msg, const std::source_location &location = std::source_location::current()) = 0; // NOLINT(*-default-arguments)
 
-            virtual void failWith(const char *msg) noexcept(false) = 0;
+            virtual void failWith(const char *msg, const std::source_location &location = std::source_location::current()) noexcept(false) = 0; // NOLINT(*-default-arguments)
 
             virtual void recurse(const UnitTest &test) = 0;
             virtual void recurse(std::initializer_list<const UnitTest> tests) = 0;
 
             virtual void success() = 0;
-
-            template<typename... ArgsT>
-            void logFmt(const std::format_string<ArgsT...> &fmt, ArgsT &&...args) noexcept {
-                char buffer[2048];
-                const auto [out, size] = std::format_to_n(
-                    buffer, std::size(buffer) - 1, fmt, std::forward<ArgsT>(args)...);
-                *out = char{0};
-                log(buffer);
-            }
-
-            template<typename... ArgsT>
-            void failFmt(const std::format_string<ArgsT...> &fmt, ArgsT &&...args) noexcept(false) {
-                char buffer[2048];
-                const auto [out, size] = std::format_to_n(
-                    buffer, std::size(buffer) - 1, fmt, std::forward<ArgsT>(args)...);
-                *out = char{0};
-                failWith(buffer);
-            }
         };
 
         using test_func_t = void (*)(IRun &run);
@@ -116,13 +98,16 @@ namespace pP {
         void run(IRun &run) const noexcept;
 
         struct Context {
-            using LogHandler = std23::function_ref<void(const IRun &, const char *)>;
+            using LogHandler = std23::function_ref<void(const IRun &, const char *, const std::source_location &)>;
 
             std::string m_filter_path{};
 
             std::optional<LogHandler> m_fail_with{};
             std::optional<LogHandler> m_log{};
             std::optional<unsigned> m_shuffle_seed{};
+
+            TimeSpan m_watchdog_repeat{std::chrono::seconds(30)};
+            TimeSpan m_watchdog_timeout{std::chrono::seconds(30)};
 
             bool m_is_child_run = false;
 
@@ -136,7 +121,7 @@ namespace pP {
 
             void markAsChildRun() noexcept;
 
-            [[nodiscard]] bool filterMatches(const std::string_view path) const noexcept;
+            [[nodiscard]] bool filterMatches(std::string_view path) const noexcept;
 
             [[nodiscard]] u32 numExecuted() const noexcept {
                 return m_num_executed;
@@ -165,7 +150,7 @@ namespace pP {
             }
         };
 
-        static constexpr EFlags aggregateFlags(std::initializer_list<EFlags> flags) noexcept {
+        static constexpr EFlags aggregateFlags(const std::initializer_list<EFlags> flags) noexcept {
             u32 result = 0u;
             for (const auto flag: flags) {
                 result |= flag;
@@ -179,10 +164,17 @@ namespace pP {
         test_func_ec_t m_run_ec{nullptr};
         EFlags m_flags{none};
 
+        struct Watchdog;
+
         struct RunImpl final : IRun {
             const Context &m_context;
             const UnitTest &m_test;
+
             RunImpl *m_parent{nullptr};
+            RunImpl *m_root{nullptr};
+
+            std::unique_ptr<Watchdog> m_watchdog{};
+            std::stringstream m_retained_log{};
 
             std::optional<Log::Policy> m_prev_logger_policy{};
             std::optional<Log::ELevel> m_prev_logger_verbosity{};
@@ -190,7 +182,7 @@ namespace pP {
             std::optional<Assertion::Policy> m_prev_assert_policy{};
 #endif
 
-            std::string m_failure{"???"};
+            std::optional<std::pair<std::source_location, std::string>> m_failure;
 
             std::chrono::steady_clock::time_point m_start_time{};
             std::chrono::steady_clock::time_point m_end_time{};
@@ -209,7 +201,7 @@ namespace pP {
             void start() noexcept;
             void stop() noexcept;
 
-            [[nodiscard]] const RunImpl &getFirstRunImpl() const noexcept;
+            [[nodiscard]] const RunImpl &getFirstRunImpl() const noexcept { return *m_root; }
 
             [[nodiscard]] std::string getCurrentPath() const;
 
@@ -217,9 +209,9 @@ namespace pP {
 
             void logEntry(const Log::Entry &entry);
 
-            void log(const char *msg) override;
+            void log(const char *msg, const std::source_location &location) override;
 
-            void failWith(const char *msg) override;
+            void failWith(const char *msg, const std::source_location &location) override;
 
             void recurse(const UnitTest &test) override;
             void recurse(std::initializer_list<const UnitTest> tests) override;

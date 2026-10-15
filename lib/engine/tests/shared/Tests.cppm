@@ -23,6 +23,8 @@ export namespace pP::tests {
         std::optional<u32> m_shuffle_seed{};
         bool m_no_shuffle{false};
         u32 m_loops{mem::is_asan_enabled_v ? 3u : 1u};
+        u32 m_watchdog_timeout_s{30u};
+        u32 m_watchdog_repeat_s{30u};
 
         [[nodiscard]] static constexpr auto describe() {
             using namespace config;
@@ -56,6 +58,18 @@ export namespace pP::tests {
                     &TestSettings::m_loops,
                     Metadata{
                         "test.loops", "Run the full test suite N times (0 is a successful no-op)", "Execution",
+                        EMutability::startup, ESource::all, false},
+                    Range<u32>{0u, (std::numeric_limits<u32>::max)()}),
+                field(
+                    &TestSettings::m_watchdog_timeout_s,
+                    Metadata{
+                        "test.watchdog_timeout", "Report a test stalled longer than N seconds (0 disables)",
+                        "Execution", EMutability::startup, ESource::all, false},
+                    Range<u32>{0u, (std::numeric_limits<u32>::max)()}),
+                field(
+                    &TestSettings::m_watchdog_repeat_s,
+                    Metadata{
+                        "test.watchdog_repeat", "Repeat the stall report every N seconds (0 disables)", "Execution",
                         EMutability::startup, ESource::all, false},
                     Range<u32>{0u, (std::numeric_limits<u32>::max)()}),
             };

@@ -30,6 +30,145 @@ namespace pP {
     PPR_DEFINE_LOG_CATEGORY(UnitTest, debug, none)
 
     // ------------------------------------------------------------------
+    // Unit test watchdog detects stalls
+    // ------------------------------------------------------------------
+
+    struct UnitTest::Watchdog {
+        explicit Watchdog(const TimeSpan timeout, const TimeSpan repeat) noexcept
+            : m_timeout(timeout), m_repeat(repeat) {
+            if (m_timeout <= TimeSpan{}) {
+                m_disabled = true;
+                return;
+            }
+
+            try {
+                m_thread = std::jthread([this](const std::stop_token &st) noexcept { loop(st); });
+            } catch (...) {
+                // Best-effort diagnostics only: run without watchdog.
+                m_disabled = true;
+            }
+        }
+
+        ~Watchdog() noexcept = default;
+
+        Watchdog(const Watchdog &) = delete;
+        Watchdog &operator=(const Watchdog &) = delete;
+
+        void push(const UnitTest &unit_test) noexcept {
+            if (m_disabled) {
+                return;
+            }
+
+            try {
+                const auto now = std::chrono::steady_clock::now();
+
+                const std::lock_guard scope_lock(m_mutex);
+                m_stack.push_back(Entry{.m_test = std::addressof(unit_test), .m_started = now, .m_last_report = now});
+                ++m_gen;
+            } catch (...) {
+                // Best-effort diagnostics only: skip this report.
+            }
+
+            m_cv.notify_all();
+        }
+
+        void pop() noexcept {
+            if (m_disabled) {
+                return;
+            }
+
+            try {
+                const std::lock_guard scope_lock(m_mutex);
+                if (not m_stack.empty()) {
+                    m_stack.pop_back();
+                    ++m_gen;
+                }
+            } catch (...) {
+            }
+
+            m_cv.notify_all();
+        }
+
+    private:
+        struct Entry {
+            const UnitTest *m_test;
+            std::chrono::steady_clock::time_point m_started{};
+            std::chrono::steady_clock::time_point m_last_report{};
+        };
+
+        // ReSharper disable once CppPassValueParameterByConstReference
+        void loop(const std::stop_token st) noexcept {
+            hal::setThreadName("UnitTestWatchDog");
+            hal::setThreadPriority(hal::EPriority::low);
+
+            std::unique_lock lock(m_mutex);
+
+            while (not st.stop_requested()) {
+                if (m_stack.empty()) {
+                    m_cv.wait(lock, st, [&] { return st.stop_requested() or not m_stack.empty(); });
+                    continue;
+                }
+
+                const hal::ProfileScope profile_scope{"Loop", "UnitTestWatchDog"};
+
+                const u64 gen = m_gen;
+                const auto now = std::chrono::steady_clock::now();
+                const auto elapsed = now - m_stack.back().m_started;
+
+                if (elapsed >= m_timeout and now - m_stack.back().m_last_report >= m_repeat) {
+                    std::string path;
+                    try {
+                        for (const Entry &entry: m_stack) {
+                            if (not path.empty()) {
+                                path += '/';
+                            }
+
+                            const char *name = entry.m_test != nullptr ? entry.m_test->m_name : nullptr;
+                            path += name != nullptr ? std::string_view(name) : std::string_view("<unknown>");
+                        }
+
+                        m_stack.back().m_last_report = now;
+                    } catch (...) {
+                        // Best-effort diagnostics only (includes bad_alloc here).
+                        lock.unlock();
+                        m_cv.notify_all();
+                        lock.lock();
+                        continue;
+                    }
+
+                    lock.unlock();
+                    try {
+                        std::println(
+                            std::cerr, " ⏳ test stalled: {} elapsed={} (timeout={})", path, elapsed,
+                            m_timeout);
+                        std::cerr.flush();
+                    } catch (...) {
+                    }
+                    lock.lock();
+                    continue;
+                }
+
+                const auto next_due = elapsed >= m_timeout ? m_stack.back().m_last_report + m_repeat
+                                                           : m_stack.back().m_started + m_timeout;
+
+                (void) m_cv.wait_until(lock, st, next_due, [&] { return st.stop_requested() or gen != m_gen; });
+            }
+        }
+
+        mutable std::mutex m_mutex{};
+        std::condition_variable_any m_cv{};
+
+        std::vector<Entry> m_stack{};
+        u64 m_gen{0u};
+
+        const TimeSpan m_timeout{};
+        const TimeSpan m_repeat{};
+
+        bool m_disabled{false};
+        std::jthread m_thread{};
+    };
+
+    // ------------------------------------------------------------------
     // Unit test helper
     // ------------------------------------------------------------------
 
@@ -150,18 +289,15 @@ namespace pP {
     }
 
     UnitTest::RunImpl::RunImpl(const Context &context, const UnitTest &test) noexcept
-        : m_context(context), m_test(test) {
+        : m_context(context), m_test(test), m_root(this) {
+
+        if (m_context.m_watchdog_repeat > TimeSpan{} and m_context.m_watchdog_timeout > TimeSpan{}) {
+            m_watchdog = std::make_unique<Watchdog>(m_context.m_watchdog_timeout, m_context.m_watchdog_repeat);
+        }
     }
 
     UnitTest::RunImpl::RunImpl(const Context &context, const UnitTest &test, RunImpl &parent) noexcept
-        : m_context(context), m_test(test), m_parent(&parent), m_depth(parent.m_depth + 1u) {
-    }
-
-    const UnitTest::RunImpl &UnitTest::RunImpl::getFirstRunImpl() const noexcept {
-        if (m_parent) {
-            return m_parent->getFirstRunImpl();
-        }
-        return *this;
+        : m_context(context), m_test(test), m_parent(&parent), m_root(parent.m_root), m_depth(parent.m_depth + 1u) {
     }
 
     UnitTest::Id UnitTest::RunImpl::getTestId() const noexcept {
@@ -181,34 +317,36 @@ namespace pP {
         // still reported, without marking the test failed. Failures come only from
         // explicit paths: PPR_TEST_ASSERT / onAssertFailure, expected-exception
         // assertions, and unexpected escapes handled in UnitTest::run.
-        log(entry.m_message.data());
+        log(entry.m_message.data(), entry.m_site.m_location);
     }
 
-    void UnitTest::RunImpl::log(const char *msg) {
-        if (msg != nullptr) {
-            if (m_context.m_log.has_value()) {
-                (*m_context.m_log)(*this, msg);
-            } else {
-                std::println("{}: {}", std::string_view(m_test.m_name), std::string_view(msg));
-            }
+    void UnitTest::RunImpl::log(const char *msg, const std::source_location &location) {
+        if (msg == nullptr) [[unlikely]] {
+            return;
+        }
+
+        if (m_context.m_log.has_value()) {
+            (*m_context.m_log)(*this, msg, location);
         } else {
-            std::cout.flush();
+            std::println(
+                m_retained_log, "{}: {}({}): {}", std::string_view(m_test.m_name), location.file_name(),
+                location.line(), std::string_view(msg));
         }
     }
 
-    void UnitTest::RunImpl::failWith(const char *msg) noexcept(false) {
+    void UnitTest::RunImpl::failWith(const char *msg, const std::source_location &location) noexcept(false) {
         if (m_num_failed++ == 0u) {
             m_status = fail;
         }
 
-        if (m_failure.empty() and msg != nullptr) {
-            m_failure.assign(msg);
+        if (msg != nullptr and not m_failure.has_value()) {
+            m_failure.emplace(location, msg);
         }
 
         if (m_parent != nullptr) {
-            m_parent->failWith(msg);
+            m_parent->failWith(msg, location);
         } else if (m_context.m_fail_with.has_value()) {
-            (*m_context.m_fail_with)(*this, msg);
+            (*m_context.m_fail_with)(*this, msg, location);
         } else {
             PPR_THROW(UnitTest, std::logic_error{msg});
         }
@@ -285,6 +423,8 @@ namespace pP {
         m_prev_assert_policy = Assertion::setFailurePolicy(std::move(new_policy));
 #endif
 
+        m_retained_log.clear();
+
         m_prev_logger_verbosity = Log::setMinimumVerboseLevel(Log::ELevel::warning);
         m_prev_logger_policy = Log::setWriterPolicy({std23::nontype<&RunImpl::logEntry>, this});
 
@@ -292,12 +432,29 @@ namespace pP {
             m_context.m_num_executed++;
         }
 
+        if (m_root and m_root->m_watchdog) {
+            m_root->m_watchdog->push(m_test);
+        }
+
+        hal::profileBegin(m_test.m_name, m_parent ? m_parent->getCurrentPath().c_str() : "UnitTests");
+
         m_start_time = std::chrono::steady_clock::now();
     }
 
     void UnitTest::RunImpl::stop() noexcept {
         m_end_time = std::chrono::steady_clock::now();
+
+        hal::profileEnd();
+
+        if (m_root and m_root->m_watchdog) {
+            m_root->m_watchdog->pop();
+        }
+
         const TimeSpan test_duration{m_end_time - m_start_time};
+
+        PPR_DEFER {
+            m_retained_log.clear();
+        };
 
         // NOTE: the writer policy must be restored in every configuration. Gating this on
         // PPR_ENABLE_ASSERTIONS (via the assert policy) left the per-test writer installed in
@@ -327,16 +484,20 @@ namespace pP {
         const char *icon = m_status == pass ? "\u2705" : "\u274C";
 
         std::println(
-            std::cout, " {} {:>3}/{:<3}  {} {:<70} ({})", icon, m_num_passed, m_num_passed + m_num_failed, bullet,
+            std::cout, " {} {:>3}/{:<3}  {} {:<90} ({})", icon, m_num_passed, m_num_passed + m_num_failed, bullet,
             test_id, test_duration);
 
         if (m_status == fail) {
-            std::println(std::cout, "    \u2514\u2500 {}", m_failure);
+            std::cout << m_retained_log.rdbuf();
+
+            if (m_failure.has_value()) {
+                std::println(
+                    std::cout, "    \u2514\u2500 {}({}): {}", m_failure->first.file_name(), m_failure->first.line(),
+                    m_failure->second);
+            }
         }
         if (is_group) {
-            std::println(
-                std::cout,
-                "-----------------------------------------------------------------------------------------------");
+            std::println(std::cout);
         }
 
         std::cout.flush();

@@ -516,9 +516,17 @@ namespace pP::tests::detail {
                                                      1048576.0 /
                                                      (static_cast<double>(ms) / 1000.0)
                                                : 0.0;
-                std::printf(
+
+                char buf[1024]{};
+                const int log_len = std::snprintf(
+                    buf, std::size(buf),
                     "[ktx2-throughput-%s] threads=%d iters=%d bytes=%llu ms=%lld (%.1f MB/s)\n", label, kThreads, iters,
                     static_cast<unsigned long long>(decoded_bytes.load()), static_cast<long long>(ms), mb_per_s);
+                if (log_len > 0 and log_len < std::size(buf)) {
+                    buf[log_len] = '\0';
+                    _.log(buf);
+                }
+
                 PPR_TEST_ASSERT(failures.load(std::memory_order_relaxed) == 0);
             };
             probe(file, "plain", 128);

@@ -55,6 +55,18 @@ namespace pP::tests {
         loops.m_aliases.push_back("loop");
         schema.m_options.push_back(std::move(loops));
 
+        config::OptionDecl watchdog_timeout{};
+        watchdog_timeout.m_canonical = "test.watchdog_timeout";
+        watchdog_timeout.m_description = "Report a test stalled longer than N seconds (0 disables).";
+        watchdog_timeout.m_aliases.push_back("watchdog-timeout");
+        schema.m_options.push_back(std::move(watchdog_timeout));
+
+        config::OptionDecl watchdog_repeat{};
+        watchdog_repeat.m_canonical = "test.watchdog_repeat";
+        watchdog_repeat.m_description = "Repeat the stall report every N seconds (0 disables).";
+        watchdog_repeat.m_aliases.push_back("watchdog-repeat");
+        schema.m_options.push_back(std::move(watchdog_repeat));
+
         return schema;
     }
 
@@ -157,9 +169,11 @@ namespace pP::tests {
 
             const TestSettings &settings = parsed.m_settings.m_value;
             cli.m_loops = settings.m_loops;
-            cli.m_context.m_fail_with = [](const UnitTest::IRun &run, const char *failure) {
+            cli.m_context.m_fail_with = [](const UnitTest::IRun &run, const char *failure,
+                                            const std::source_location &site) {
                 g_tests_failed = true;
-                std::cerr << "unit-test <" << run.getTestId().path() << "> failed with: " << failure << std::endl;
+                std::cerr << site.file_name() << "(" << site.line() << "): "
+                          << "unit-test <" << run.getTestId().path() << "> failed with: " << failure << std::endl;
             };
             if (not settings.m_filter.empty()) {
                 cli.m_context.setFilter(settings.m_filter);
@@ -174,6 +188,9 @@ namespace pP::tests {
                 cli.m_context.m_shuffle_seed = std::nullopt;
             }
 
+            cli.m_context.m_watchdog_timeout = std::chrono::seconds(settings.m_watchdog_timeout_s);
+            cli.m_context.m_watchdog_repeat = std::chrono::seconds(settings.m_watchdog_repeat_s);
+
             return cli;
         }
     } // namespace
@@ -183,13 +200,11 @@ namespace pP::tests {
             return 0;
         }
 
-        hal::disableSystemErrorReporting();
-        hal::installDebugAssertHooks();
-
         if (cli.m_shuffle_enabled and not cli.m_context.m_shuffle_seed.has_value()) {
             std::random_device rng{};
             cli.m_context.m_shuffle_seed = rng();
         }
+
         if (not cli.m_shuffle_enabled) {
             cli.m_context.m_shuffle_seed = std::nullopt;
         }
@@ -220,12 +235,15 @@ namespace pP::tests {
     }
 
     [[nodiscard]] int runTests(const int argc, char *argv[], const UnitTest &root, const std::string_view program) {
+        [[maybe_unused]] const hal::process::Context process_context{};
+
         config::Diagnostics diagnostics{};
         auto parsed = parseTestInvocation(argc, argv, program, diagnostics);
         if (not parsed) {
             std::println(stderr, "{}", diagnostics.format());
             return config::kExitInvalidUsage;
         }
+
         if (parsed->m_help_requested) {
             std::println("{}", config::generateHelp(testCliSchema(program), parsed->m_settings.m_value));
             return 0;
