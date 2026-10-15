@@ -4,6 +4,7 @@ module;
 export module engine.sim:asset;
 
 import :worldgen.definition;
+import :element;
 import engine.asset;
 import engine.core;
 import std;
@@ -42,25 +43,6 @@ export namespace pP::sim::asset {
     // physical elements and material composition
     // ------------------------------------------------------------------
 
-    struct Element {
-        double m_density{};
-        EGenerationMatter m_phase{};
-
-        [[nodiscard]] static constexpr auto describe() {
-            using namespace config;
-            return std::tuple{
-                field(
-                    &Element::m_phase, pP::asset::metadata("phase"),
-                    EnumDomain<EGenerationMatter, 3>{
-                        {EnumEntry{EGenerationMatter::solid, "solid"}, EnumEntry{EGenerationMatter::liquid, "liquid"},
-                            EnumEntry{EGenerationMatter::gas, "gas"}}},
-                    EPresence::required),
-                field(
-                    &Element::m_density, pP::asset::metadata("density"),
-                    FloatDomain{0.0, (std::numeric_limits<double>::max)(), false, true}, EPresence::required)};
-        }
-    };
-
     struct ElementDescriptor : Element {
         u32 m_schema_version{};
 
@@ -80,7 +62,6 @@ export namespace pP::sim::asset {
 
         [[nodiscard]] static constexpr auto describe() {
             using namespace config;
-            using definition::EMaterialRepresentation;
             return std::tuple{
                 field(
                     &MaterialDescriptor::m_schema_version, pP::asset::metadata("schema_version"), Range{1u, 1u},
@@ -90,10 +71,7 @@ export namespace pP::sim::asset {
                     EPresence::required),
                 field(
                     &MaterialDescriptor::m_representation, pP::asset::metadata("representation"),
-                    EnumDomain<EMaterialRepresentation, 2>{
-                        {EnumEntry{EMaterialRepresentation::terrain, "terrain"},
-                            EnumEntry{EMaterialRepresentation::particle, "particle"}}},
-                    EPresence::required),
+                    definition::Material::representation_domain, EPresence::required),
                 field(
                     &MaterialDescriptor::m_diggable, pP::asset::metadata("diggable"), boolean_domain,
                     EPresence::optional)};

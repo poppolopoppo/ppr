@@ -20,13 +20,9 @@ namespace pP::sim::asset {
     Expected<definition::Material> composeMaterial(
         const MaterialDescriptor &material, const Element &element, config::Diagnostics &diagnostics,
         const std::string_view source) {
-        if (not std::isfinite(element.m_density) or
-            element.m_density <= 0.0 or
-            (element.m_phase != EGenerationMatter::solid and
-                element.m_phase != EGenerationMatter::liquid and
-                element.m_phase != EGenerationMatter::gas) or
-            (material.m_representation != definition::EMaterialRepresentation::terrain and
-                material.m_representation != definition::EMaterialRepresentation::particle)) {
+        if (Element::density_domain.validate(element.m_density) or
+            Element::phase_domain.validate(element.m_phase) or
+            definition::Material::representation_domain.validate(material.m_representation)) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(
                 SimAssets, pP::asset::reject(
                                diagnostics, source, "element", "Invalid physical Element or material representation",

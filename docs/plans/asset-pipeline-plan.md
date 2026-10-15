@@ -182,6 +182,14 @@ palettes with `asset`/`index`. `[palette.rules.<alias>]` names standalone Rule
 descriptors; rule order and profile ownership remain in the existing schema.
 Inline `profile.rules` is rejected rather than becoming a second rule format.
 
+Descriptor-declared property domains are authoritative. The lower sim Element
+descriptor owns phase/density constraints reused by flattened Material metadata
+and runtime validation; Material owns its representation domain. Processors and
+authoring controls reuse these constraints instead of restating scalar ranges.
+Collection capacities, contiguous binding membership and cross-field safety
+relationships remain distinct invariants. Image request budget defaults have
+one image-owned declaration reused by content policy aliases.
+
 World palette entry keys and references inside reused numeric descriptors are
 world-local semantic aliases (maximum 128 bytes). They resolve against the
 selected World's exact declared bindings, including unsampled biomes. Material

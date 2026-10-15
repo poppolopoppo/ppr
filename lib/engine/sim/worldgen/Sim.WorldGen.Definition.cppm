@@ -2,6 +2,7 @@ module;
 export module engine.sim:worldgen.definition;
 import :worldgen.noise;
 import :worldgen.plan;
+import :element;
 import engine.core;
 import std;
 
@@ -139,6 +140,10 @@ export namespace pP::sim::definition {
     };
 
     struct Material {
+        static constexpr config::EnumDomain<EMaterialRepresentation, 2> representation_domain{
+            {config::EnumEntry{EMaterialRepresentation::terrain, "terrain"},
+                config::EnumEntry{EMaterialRepresentation::particle, "particle"}}};
+
         EGenerationMatter m_phase{};
         EMaterialRepresentation m_representation{};
         std::optional<bool> m_diggable{};
@@ -147,22 +152,15 @@ export namespace pP::sim::definition {
         [[nodiscard]] static constexpr auto describe() {
             return std::tuple{
                 field(
-                    &Material::m_phase, schema::metadata("phase"),
-                    config::EnumDomain<EGenerationMatter, 3>{
-                        {config::EnumEntry{EGenerationMatter::solid, "solid"},
-                            config::EnumEntry{EGenerationMatter::liquid, "liquid"},
-                            config::EnumEntry{EGenerationMatter::gas, "gas"}}},
+                    &Material::m_phase, schema::metadata("phase"), pP::sim::asset::Element::phase_domain,
                     EPresence::required),
                 field(
-                    &Material::m_representation, schema::metadata("representation"),
-                    config::EnumDomain<EMaterialRepresentation, 2>{
-                        {config::EnumEntry{EMaterialRepresentation::terrain, "terrain"},
-                            config::EnumEntry{EMaterialRepresentation::particle, "particle"}}},
+                    &Material::m_representation, schema::metadata("representation"), representation_domain,
                     EPresence::required),
                 field(&Material::m_diggable, schema::metadata("diggable"), config::boolean_domain, EPresence::optional),
                 field(
-                    &Material::m_density, schema::metadata("density"),
-                    FloatDomain{0.0, (std::numeric_limits<double>::max)(), false, true}, EPresence::required)};
+                    &Material::m_density, schema::metadata("density"), pP::sim::asset::Element::density_domain,
+                    EPresence::required)};
         }
     };
 

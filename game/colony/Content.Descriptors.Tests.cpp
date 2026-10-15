@@ -390,10 +390,47 @@ mip_policy = "unsupported"
     };
 
     // ------------------------------------------------------------------
-    // selected world numeric assembly and identity
+    // descriptor domains and selected world assembly
     // ------------------------------------------------------------------
 
     constexpr sim::definition::GenerationCompileParameters kParameters{1.0 / 3.0, 1.0, 0.4, 0.9};
+
+    PPR_UNIT_TEST (physical_descriptor_domains_are_shared_by_import_and_composition) {
+        using Element = sim::asset::Element;
+        const auto element_density = std::get<1u>(Element::describe()).m_constraint;
+        const auto material_density = std::get<3u>(sim::definition::Material::describe()).m_constraint;
+        PPR_TEST_ASSERT(element_density.m_min == Element::density_domain.m_min);
+        PPR_TEST_ASSERT(element_density.m_max == Element::density_domain.m_max);
+        PPR_TEST_ASSERT(material_density.m_min == element_density.m_min);
+        PPR_TEST_ASSERT(material_density.m_max == element_density.m_max);
+        PPR_TEST_ASSERT(material_density.m_exclusive_min == element_density.m_exclusive_min);
+
+        Fixture fixture;
+        config::Diagnostics diagnostics{32u};
+        const auto original = fixture.catalog(diagnostics);
+        PPR_TEST_ASSERT(original.has_value());
+
+        const auto material = original->materials().front().m_descriptor.m_value;
+        auto element = original->elements().definitions().front().m_descriptor.m_value;
+
+        for (const double density:
+            {Element::density_domain.m_min, std::midpoint(Element::density_domain.m_min, Element::density_domain.m_max),
+                Element::density_domain.m_max}) {
+            element.m_density = density;
+            const auto expected_error = element_density.validate(density);
+            const auto composed = sim::asset::composeMaterial(material, element, diagnostics, "programmatic");
+            PPR_TEST_ASSERT(composed.has_value() == not static_cast<bool>(expected_error));
+
+            Fixture::write(fixture.m_shared / "solid.toml", element);
+            const auto imported = fixture.catalog(diagnostics);
+            PPR_TEST_ASSERT(imported.has_value() == composed.has_value());
+        }
+
+        element.m_density = std::midpoint(Element::density_domain.m_min, Element::density_domain.m_max);
+        element.m_phase = static_cast<sim::EGenerationMatter>(255u);
+        PPR_TEST_ASSERT(Element::phase_domain.validate(element.m_phase) == config::EConfigErrc::unknown_enum_value);
+        PPR_TEST_ASSERT(not sim::asset::composeMaterial(material, element, diagnostics, "programmatic"));
+    };
 
     PPR_UNIT_TEST (selected_world_uses_explicit_material_ids_and_owned_texture_closure) {
         Fixture fixture;
@@ -766,6 +803,7 @@ namespace pP::game::tests {
 
     const UnitTest world_assembly = UnitTest::Named("world_assembly") / [](UnitTest::IRun &_) -> void {
         _.recurse({
+            detail::descriptors::physical_descriptor_domains_are_shared_by_import_and_composition,
             detail::descriptors::selected_world_uses_explicit_material_ids_and_owned_texture_closure,
             detail::descriptors::numeric_identity_separates_appearance_density_and_source_provenance,
             detail::descriptors::unsampled_declared_biomes_remain_in_numeric_palette,

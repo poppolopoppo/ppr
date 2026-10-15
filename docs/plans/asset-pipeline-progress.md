@@ -123,6 +123,9 @@ the old format pending their coherent migration batch.
 
 ## Explicit bindings and selected World assembly gate
 
+Checkpoint commit: `a56a804`
+(`Compile selected worlds with explicit asset bindings`).
+
 Implemented a single numeric compiler path with explicit global bindings;
 lexical convenience entry points produce bindings and forward to it. Preflight
 checks exact membership, unique aliases, contiguous unique IDs/indices, and
@@ -162,6 +165,52 @@ finished successfully in approximately 31 and 50 seconds before the remaining
 filter was stopped. This is incidental partial evidence, not a passed full
 suite or a performance comparison. No broad raster suite was run for this gate.
 
+Evidence limitation discovered after this checkpoint: the persistent interactive
+shell did not capture immediate child process exit codes for numeric configure,
+builds, and most focused runs. The logs show completed link actions and named
+leaf outcomes; those are not substituted for process exit status. The manifest
+marks unavailable statuses explicitly. Only the final approved Sim golden run
+has a confirmed immediate exit code of zero. The next applicable stable closure
+must capture true exits using a task-local execution wrapper; these process-level
+acceptance checks remain pending until then. Do not repeat the incidental old
+full-pack workloads to repair metadata.
+
+## Canonical physical domains gate
+
+Implemented the first part of the user's single-domain requirement. A lower
+`Sim.Element.cppm` partition owns Element phase and density constraints.
+Flattened Material metadata, Material composition, and numeric material checks
+reuse them. Material representation likewise has one owning declaration reused
+by the asset descriptor. Existing object layouts, field ordering, enum names,
+inclusivity, nonfinite policy, error categories, and pinned fingerprints remain
+unchanged.
+
+Independent review passed after one paragraph separator in the boundary test.
+Scoped formatting/style gates passed. An ignored command wrapper was verified
+with harmless exit-zero and exit-seven children before use. Configure and both
+`engine.tests.sim`/`game.tests` builds then completed with captured exit zero.
+Focused binding, physical-domain boundary, assembly, descriptor, and all five
+approved existing semantic golden checks passed with captured exit zero. This
+refreshes the missing process-status evidence from the preceding numeric gate;
+it does not rerun the incidental old full-pack workloads.
+
+Evidence: `out/validation/20261016/asset-pipeline/canonical-domain/manifest.json`.
+Actual leaf lists distinguish prefix-matched extras from requested cases.
+
+The wider changed-scope range audit is not finished by this checkpoint. Next
+reuse owning Definition/Profile collection domains in World palettes, align
+texture alpha-cutoff declarations with the existing processor contract, and
+centralize qualified-reference length domains. Appearance reference metadata
+changes belong with the atomic old-format migration. Different intentional
+context policies, such as generic decoder capacity versus content preparation
+budgets, remain distinct rather than being unified by matching numbers.
+
+PIX status is ready and elevated. The server executable resolves to the pinned
+official `local-services/pix/pix-mcp.exe` with SHA-256
+`D3649B03359E989B33D16DA06CF2262B7680BCA46BCA77C25D8F0EAC8FA6B026`.
+PIX application/tool version and hash are recorded separately. No capture was
+needed for the canonical-domain correctness gate.
+
 ## Current next step and pending gates
 
 Next implement and verify standalone asynchronous image preparation and joined
@@ -184,6 +233,11 @@ uploads. A distinct owning presentation sidecar carries World/numeric/presentati
 identity and generation; capture requires a matching ready sidecar. Cancellation
 and stale-result handling still drain accepted work and surface fatal allocation
 failures at the external reporting boundary.
+
+The user requires one authoritative valid-input domain per descriptor property.
+Import, assembly, and processor validation must reuse the descriptor's declared
+range instead of repeating numeric bounds. Apply this to changed asset schemas
+and their affected validators without an unrelated engine-wide cleanup.
 
 Real domain integration, shipped-content migration, numeric output parity,
 cancellation/draining and GPU retirement, full applicable suites/interactive

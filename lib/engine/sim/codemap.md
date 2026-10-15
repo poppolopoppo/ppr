@@ -7,6 +7,14 @@ definition-only Element catalog. Numeric payload references remain world-local
 semantic aliases; palette asset references use checked pack identity. Existing
 numeric compiler inputs and cell Material IDs retain their current meaning.
 
+`Sim.Element.cppm` (`:element`) declares the physical Element descriptor and
+its authoritative phase/density domains. The flattened numeric Material schema,
+typed composition and numeric safety validation reuse those domains. Material
+owns the shared representation domain. The lower partition imports numeric
+matter vocabulary from `:worldgen.plan`, never `:worldgen.definition`, so the
+definition/asset dependency graph stays acyclic and flattened layouts/schema
+ordering remain unchanged.
+
 `compileDefinition` and `compileRecipe` accept exact explicit global bindings;
 the convenience overloads generate lexical bindings and use the same lowering
 path. Numeric emission follows authored contiguous IDs/indices, while semantic

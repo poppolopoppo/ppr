@@ -3,6 +3,7 @@ module;
 
 module engine.sim;
 import :worldgen.plan;
+import :element;
 import :chunk_grid;
 import engine.core;
 import std;
@@ -134,9 +135,9 @@ namespace pP::sim {
                 const auto &entry = recipe.m_materials[i];
                 if (entry.m_id == 0u or
                     entry.m_id == 65535u or
-                    entry.m_matter > EGenerationMatter::gas or
+                    asset::Element::phase_domain.validate(entry.m_matter) or
                     (entry.m_terrain and entry.m_matter != EGenerationMatter::solid) or
-                    not positive(entry.m_reference_density_kg_m3, (std::numeric_limits<double>::max)())) {
+                    asset::Element::density_domain.validate(entry.m_reference_density_kg_m3)) {
                     PPR_RETURN_ERROR_ON_FAIL(WorldPlan, std::errc::invalid_argument);
                 }
 

@@ -4,6 +4,7 @@ target_sources(engine.sim
   PUBLIC
     FILE_SET CXX_MODULES FILES
       Sim.cppm
+      Sim.Element.cppm
       Sim.Asset.cppm
       particles/Sim.Particles.cppm
       chunk_grid/Sim.ChunkGrid.cppm
