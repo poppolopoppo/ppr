@@ -1,0 +1,14 @@
+schema_version = 1
+
+[definition]
+order = 22
+
+[definition.payload]
+tag = "matter_fill"
+
+[definition.payload.matter_fill]
+marker = "anchor"
+material = "carbon_dioxide"
+temperature_k = 315.0
+bulk_density_kg_m3 = 1.8
+placement = "landmark_dune_bed"

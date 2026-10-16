@@ -1,0 +1,14 @@
+schema_version = 1
+
+[definition]
+order = 14
+
+[definition.payload]
+tag = "matter_fill"
+
+[definition.payload.matter_fill]
+marker = "anchor"
+material = "oxygen"
+temperature_k = 300.0
+bulk_density_kg_m3 = 1.2
+placement = "landmark_verdant_bulb"

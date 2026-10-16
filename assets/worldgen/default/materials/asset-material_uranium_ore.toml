@@ -1,0 +1,22 @@
+schema_version = 1
+element = "element_uranium_ore"
+representation = "terrain"
+diggable = true
+
+[appearance]
+display_name = "Uranium ore"
+color_rgba = "B8B3A3FF"
+albedo_texture = "texture_color_textures_uranium_ore_png"
+normal_texture = "texture_normal_textures_uranium_ore_normal_png"
+texture_period_m = 2.0
+roundness = 0.5
+metallic = 0.0
+roughness = 0.8
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "opaque"
+ior = 1.5
+normal_scale = 1.0
+refraction_depth_m = 0.0

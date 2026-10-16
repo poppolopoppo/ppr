@@ -1,0 +1,20 @@
+schema_version = 1
+element = "element_carbon_dioxide"
+representation = "particle"
+
+[appearance]
+display_name = "Carbon dioxide"
+color_rgba = "9A96AF24"
+albedo_texture = "texture_color_textures_carbon_dioxide_png"
+normal_texture = "texture_normal_textures_carbon_dioxide_normal_png"
+texture_period_m = 3.0
+metallic = 0.0
+roughness = 1.0
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "blend"
+ior = 1.00045
+normal_scale = 0.0
+refraction_depth_m = 0.0

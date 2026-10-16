@@ -1,0 +1,214 @@
+schema_version = 1
+
+[definition]
+
+[definition.temperature]
+field = "temperature"
+base_k = 248.0
+variation_k = 15.0
+
+[definition.composition]
+
+[definition.composition.shelves]
+order = 10
+field = "frozen_beds"
+bed_period_m = 62
+bed_warp_m = 8
+bed_dip = 0.018
+
+[definition.composition.shelves.materials]
+
+[definition.composition.shelves.materials.bed_01]
+material = "ice"
+weight = 8.3
+
+[definition.composition.shelves.materials.bed_02]
+material = "polluted_ice"
+weight = 0.9
+
+[definition.composition.shelves.materials.bed_03]
+material = "conglomerate"
+weight = 0.8
+
+[definition.composition.shelves.depth]
+min = 0
+max = 0.45
+
+[definition.composition.basement]
+order = 20
+field = "frozen_beds"
+bed_period_m = 112
+bed_warp_m = 15
+bed_dip = -0.045
+
+[definition.composition.basement.materials]
+
+[definition.composition.basement.materials.bed_01]
+material = "ice"
+weight = 6.4
+
+[definition.composition.basement.materials.bed_02]
+material = "gneiss"
+weight = 2.4
+
+[definition.composition.basement.materials.bed_03]
+material = "granite"
+weight = 1.2
+
+[definition.composition.basement.depth]
+min = 0.45
+max = 1
+
+[definition.deposits]
+
+[definition.deposits.granite_shelves]
+stage = "bulk"
+order = 1
+field = "frozen_edges"
+material = "granite"
+host_material = "ice"
+core_coverage = 1.0
+fringe_coverage = 1.0
+sprinkle_probability = 0.0
+
+[definition.deposits.granite_shelves.depth]
+min = 0.0
+max = 1.0
+
+[definition.deposits.granite_shelves.threshold]
+min = -1.0
+max = 1.0
+
+[definition.deposits.granite_shelves.blob]
+count = 30
+distortion = 0.22
+
+[definition.deposits.granite_shelves.blob.radius]
+min_m = 5.0
+max_m = 12.0
+
+[definition.deposits.granite_shelves.blob.stretch]
+min = 1.8
+max = 3.0
+
+[definition.deposits.granite_shelves.blob.orientation]
+min_degrees = 0.0
+max_degrees = 8.0
+
+[definition.deposits.polluted_ice]
+stage = "detail"
+order = 10
+field = "frozen_edges"
+material = "polluted_ice"
+host_material = "ice"
+core_coverage = 0.98
+fringe_coverage = 0.35
+sprinkle_probability = 0.0
+
+[definition.deposits.polluted_ice.depth]
+min = 0.0
+max = 1.0
+
+[definition.deposits.polluted_ice.threshold]
+min = -1.0
+max = 1.0
+
+[definition.deposits.polluted_ice.blob]
+count = 44
+distortion = 0.18
+
+[definition.deposits.polluted_ice.blob.radius]
+min_m = 3.0
+max_m = 9.0
+
+[definition.deposits.polluted_ice.blob.stretch]
+min = 1.5
+max = 2.8
+
+[definition.deposits.polluted_ice.blob.orientation]
+min_degrees = 0.0
+max_degrees = 12.0
+
+[definition.deposits.wolframite]
+stage = "detail"
+order = 11
+field = "mineral_edges"
+material = "wolframite"
+host_material = "granite"
+core_coverage = 0.98
+fringe_coverage = 0.05
+sprinkle_probability = 0.0005
+
+[definition.deposits.wolframite.depth]
+min = 0.0
+max = 1.0
+
+[definition.deposits.wolframite.threshold]
+min = -1.0
+max = 1.0
+
+[definition.deposits.wolframite.blob]
+count = 26
+distortion = 0.12
+
+[definition.deposits.wolframite.blob.radius]
+min_m = 1.0
+max_m = 2.5
+
+[definition.deposits.wolframite.blob.stretch]
+min = 1.4
+max = 2.5
+
+[definition.deposits.wolframite.blob.orientation]
+min_degrees = 65.0
+max_degrees = 115.0
+
+[definition.pore]
+field = "pore_affinity"
+probability = 0.065
+affinity_min = 0.1
+passes = 3
+
+[definition.pore.radius]
+min_m = 2.0
+max_m = 3.0
+
+[definition.lining]
+material = "granite"
+thickness_fine = 2
+
+[definition.relaxation]
+passes = 7
+adoption = 0.3
+
+[definition.sprinkle]
+probability = 0.035
+
+[definition.finish]
+passes = 3
+adoption = 0.12
+
+[definition.erosion]
+passes = 8
+
+[definition.formation]
+material = "ice"
+probability = 0.095
+length_m = 4.2
+
+[definition.rind]
+material = "clear_quartz"
+
+[definition.surface_layers]
+
+[definition.surface_layers.soil]
+material = "ice"
+depth_m = 1.7
+
+[definition.surface_layers.weathered]
+material = "polluted_ice"
+depth_m = 3.5
+
+[appearance]
+display_name = "Rime shelves"
+preview_color_rgba = "8CBED9FF"

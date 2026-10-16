@@ -1,0 +1,1017 @@
+schema_version = 1
+semantic_key = "frontier"
+
+[profile]
+
+[profile.layout]
+min_sites = 64
+max_sites = 80
+site_attempts = 60
+site_spacing_m = 110.0
+
+[profile.boundaries]
+material = "masonry"
+thickness_fine = 3
+warp_amplitude_m = 34.0
+warp_x_field = "warp_x"
+warp_y_field = "warp_y"
+
+[profile.start]
+biome = "hearth"
+feature = "landing"
+marker = "spawn"
+x_fine = 2000
+y_fine = 3000
+clearance_m = 3.0
+route_width_m = 1.0
+depth_m = 65.0
+
+[profile.resources]
+
+[profile.resources.stone]
+marker = "stone"
+material = "sandstone"
+minimum_fine_cells = 27
+max_distance_m = 20.0
+
+[profile.resources.ore]
+marker = "ore"
+material = "copper"
+minimum_fine_cells = 27
+max_distance_m = 20.0
+
+[profile.biomes]
+
+[profile.biomes.hearth]
+biome = "hearth"
+weight = 4.0
+required_count = 2
+distance_min_m = 0.0
+distance_max_m = 2048.0
+
+[profile.biomes.hearth.depth]
+min = 0.0
+max = 0.42
+
+[profile.biomes.verdant]
+biome = "verdant"
+weight = 2.7
+required_count = 1
+distance_min_m = 100.0
+distance_max_m = 2048.0
+
+[profile.biomes.verdant.depth]
+min = 0.04
+max = 0.45
+
+[profile.biomes.mire]
+biome = "mire"
+weight = 1.8
+required_count = 1
+distance_min_m = 160.0
+distance_max_m = 2048.0
+
+[profile.biomes.mire.depth]
+min = 0.18
+max = 0.65
+
+[profile.biomes.dunes]
+biome = "dunes"
+weight = 2.5
+required_count = 1
+distance_min_m = 200.0
+distance_max_m = 2048.0
+
+[profile.biomes.dunes.depth]
+min = 0.02
+max = 0.46
+
+[profile.biomes.rime]
+biome = "rime"
+weight = 2.5
+required_count = 1
+distance_min_m = 240.0
+distance_max_m = 2048.0
+
+[profile.biomes.rime.depth]
+min = 0.02
+max = 0.48
+
+[profile.biomes.lode]
+biome = "lode"
+weight = 3.0
+required_count = 2
+distance_min_m = 240.0
+distance_max_m = 2048.0
+
+[profile.biomes.lode.depth]
+min = 0.36
+max = 0.78
+
+[profile.biomes.karst]
+biome = "karst"
+weight = 2.0
+required_count = 1
+distance_min_m = 150.0
+distance_max_m = 2048.0
+
+[profile.biomes.karst.depth]
+min = 0.2
+max = 0.74
+
+[profile.biomes.saltworks]
+biome = "saltworks"
+weight = 1.8
+required_count = 1
+distance_min_m = 200.0
+distance_max_m = 2048.0
+
+[profile.biomes.saltworks.depth]
+min = 0.22
+max = 0.72
+
+[profile.biomes.fumaroles]
+biome = "fumaroles"
+weight = 1.3
+required_count = 1
+distance_min_m = 380.0
+distance_max_m = 2048.0
+
+[profile.biomes.fumaroles.depth]
+min = 0.56
+max = 0.92
+
+[profile.biomes.petroleum]
+biome = "petroleum"
+weight = 1.7
+required_count = 1
+distance_min_m = 400.0
+distance_max_m = 2048.0
+
+[profile.biomes.petroleum.depth]
+min = 0.63
+max = 0.94
+
+[profile.biomes.ember]
+biome = "ember"
+weight = 1.8
+required_count = 1
+distance_min_m = 500.0
+distance_max_m = 2048.0
+
+[profile.biomes.ember.depth]
+min = 0.82
+max = 1.0
+
+[profile.surface_bedrock]
+surface_field = "surface_height"
+bedrock_field = "bedrock_height"
+bedrock_material = "bedrock"
+surface_elevation_m = 1120.0
+surface_amplitude_m = 55.0
+bedrock_thickness_m = 27.5
+bedrock_variation_m = 12.5
+
+[palette]
+
+[palette.materials]
+
+[palette.materials.algae]
+asset = "material_algae"
+id = 1
+
+[palette.materials.aluminum]
+asset = "material_aluminum"
+id = 2
+
+[palette.materials.anhydrite]
+asset = "material_anhydrite"
+id = 3
+
+[palette.materials.ash]
+asset = "material_ash"
+id = 4
+
+[palette.materials.autunite]
+asset = "material_autunite"
+id = 5
+
+[palette.materials.azurite]
+asset = "material_azurite"
+id = 6
+
+[palette.materials.basalt]
+asset = "material_basalt"
+id = 7
+
+[palette.materials.bedrock]
+asset = "material_bedrock"
+id = 8
+
+[palette.materials.breccia]
+asset = "material_breccia"
+id = 9
+
+[palette.materials.brine]
+asset = "material_brine"
+id = 10
+
+[palette.materials.calcite]
+asset = "material_calcite"
+id = 11
+
+[palette.materials.carbon_dioxide]
+asset = "material_carbon_dioxide"
+id = 12
+
+[palette.materials.chalk]
+asset = "material_chalk"
+id = 13
+
+[palette.materials.chlorine]
+asset = "material_chlorine"
+id = 14
+
+[palette.materials.clay]
+asset = "material_clay"
+id = 15
+
+[palette.materials.clear_quartz]
+asset = "material_clear_quartz"
+id = 16
+
+[palette.materials.coal]
+asset = "material_coal"
+id = 17
+
+[palette.materials.conglomerate]
+asset = "material_conglomerate"
+id = 18
+
+[palette.materials.copper]
+asset = "material_copper"
+id = 19
+
+[palette.materials.copper_ore]
+asset = "material_copper_ore"
+id = 20
+
+[palette.materials.crude_oil]
+asset = "material_crude_oil"
+id = 21
+
+[palette.materials.crystal]
+asset = "material_crystal"
+id = 22
+
+[palette.materials.diamond]
+asset = "material_diamond"
+id = 23
+
+[palette.materials.dirt]
+asset = "material_dirt"
+id = 24
+
+[palette.materials.dolomite]
+asset = "material_dolomite"
+id = 25
+
+[palette.materials.emerald]
+asset = "material_emerald"
+id = 26
+
+[palette.materials.fluorite]
+asset = "material_fluorite"
+id = 27
+
+[palette.materials.glass]
+asset = "material_glass"
+id = 28
+
+[palette.materials.gneiss]
+asset = "material_gneiss"
+id = 29
+
+[palette.materials.granite]
+asset = "material_granite"
+id = 30
+
+[palette.materials.gypsum]
+asset = "material_gypsum"
+id = 31
+
+[palette.materials.hydrogen]
+asset = "material_hydrogen"
+id = 32
+
+[palette.materials.ice]
+asset = "material_ice"
+id = 33
+
+[palette.materials.iron]
+asset = "material_iron"
+id = 34
+
+[palette.materials.iron_ore]
+asset = "material_iron_ore"
+id = 35
+
+[palette.materials.laterite]
+asset = "material_laterite"
+id = 36
+
+[palette.materials.limestone]
+asset = "material_limestone"
+id = 37
+
+[palette.materials.magma]
+asset = "material_magma"
+id = 38
+
+[palette.materials.masonry]
+asset = "material_masonry"
+id = 39
+
+[palette.materials.natural_gas]
+asset = "material_natural_gas"
+id = 40
+
+[palette.materials.obsidian]
+asset = "material_obsidian"
+id = 41
+
+[palette.materials.oxygen]
+asset = "material_oxygen"
+id = 42
+
+[palette.materials.pebbles]
+asset = "material_pebbles"
+id = 43
+
+[palette.materials.phosphorite]
+asset = "material_phosphorite"
+id = 44
+
+[palette.materials.polluted_ice]
+asset = "material_polluted_ice"
+id = 45
+
+[palette.materials.polluted_oxygen]
+asset = "material_polluted_oxygen"
+id = 46
+
+[palette.materials.polluted_water]
+asset = "material_polluted_water"
+id = 47
+
+[palette.materials.pumice]
+asset = "material_pumice"
+id = 48
+
+[palette.materials.regolith]
+asset = "material_regolith"
+id = 49
+
+[palette.materials.ruby]
+asset = "material_ruby"
+id = 50
+
+[palette.materials.rust]
+asset = "material_rust"
+id = 51
+
+[palette.materials.salt]
+asset = "material_salt"
+id = 52
+
+[palette.materials.sand]
+asset = "material_sand"
+id = 53
+
+[palette.materials.sandstone]
+asset = "material_sandstone"
+id = 54
+
+[palette.materials.shale]
+asset = "material_shale"
+id = 55
+
+[palette.materials.slime]
+asset = "material_slime"
+id = 56
+
+[palette.materials.snow]
+asset = "material_snow"
+id = 57
+
+[palette.materials.steam]
+asset = "material_steam"
+id = 58
+
+[palette.materials.sulfur]
+asset = "material_sulfur"
+id = 59
+
+[palette.materials.tuff]
+asset = "material_tuff"
+id = 60
+
+[palette.materials.uranium_ore]
+asset = "material_uranium_ore"
+id = 61
+
+[palette.materials.water]
+asset = "material_water"
+id = 62
+
+[palette.materials.wolframite]
+asset = "material_wolframite"
+id = 63
+
+[palette.fields]
+
+[palette.fields.bedrock_height]
+asset = "field_bedrock_height"
+index = 0
+
+[palette.fields.beds]
+asset = "field_beds"
+index = 1
+
+[palette.fields.blob_edges]
+asset = "field_blob_edges"
+index = 2
+
+[palette.fields.branch_caves]
+asset = "field_branch_caves"
+index = 3
+
+[palette.fields.caverns]
+asset = "field_caverns"
+index = 4
+
+[palette.fields.chimney_fissures]
+asset = "field_chimney_fissures"
+index = 5
+
+[palette.fields.composition]
+asset = "field_composition"
+index = 6
+
+[palette.fields.dune_beds]
+asset = "field_dune_beds"
+index = 7
+
+[palette.fields.evaporite_beds]
+asset = "field_evaporite_beds"
+index = 8
+
+[palette.fields.fissures]
+asset = "field_fissures"
+index = 9
+
+[palette.fields.frozen_beds]
+asset = "field_frozen_beds"
+index = 10
+
+[palette.fields.frozen_edges]
+asset = "field_frozen_edges"
+index = 11
+
+[palette.fields.hearth_bedding]
+asset = "field_hearth_bedding"
+index = 12
+
+[palette.fields.hot_chambers]
+asset = "field_hot_chambers"
+index = 13
+
+[palette.fields.ice_fractures]
+asset = "field_ice_fractures"
+index = 14
+
+[palette.fields.karst_bedding]
+asset = "field_karst_bedding"
+index = 15
+
+[palette.fields.karst_cells]
+asset = "field_karst_cells"
+index = 16
+
+[palette.fields.karst_masses]
+asset = "field_karst_masses"
+index = 17
+
+[palette.fields.lava_flows]
+asset = "field_lava_flows"
+index = 18
+
+[palette.fields.lode_bedding]
+asset = "field_lode_bedding"
+index = 19
+
+[palette.fields.low_pools]
+asset = "field_low_pools"
+index = 20
+
+[palette.fields.mineral_edges]
+asset = "field_mineral_edges"
+index = 21
+
+[palette.fields.mire_masses]
+asset = "field_mire_masses"
+index = 22
+
+[palette.fields.oil_caps]
+asset = "field_oil_caps"
+index = 23
+
+[palette.fields.oil_channels]
+asset = "field_oil_channels"
+index = 24
+
+[palette.fields.ore_grain]
+asset = "field_ore_grain"
+index = 25
+
+[palette.fields.ore_lenses]
+asset = "field_ore_lenses"
+index = 26
+
+[palette.fields.ore_seams]
+asset = "field_ore_seams"
+index = 27
+
+[palette.fields.ore_tunnels]
+asset = "field_ore_tunnels"
+index = 28
+
+[palette.fields.organic_beds]
+asset = "field_organic_beds"
+index = 29
+
+[palette.fields.organic_edges]
+asset = "field_organic_edges"
+index = 30
+
+[palette.fields.organic_patches]
+asset = "field_organic_patches"
+index = 31
+
+[palette.fields.pore_affinity]
+asset = "field_pore_affinity"
+index = 32
+
+[palette.fields.rock_masses]
+asset = "field_rock_masses"
+index = 33
+
+[palette.fields.round_caves]
+asset = "field_round_caves"
+index = 34
+
+[palette.fields.salt_basins]
+asset = "field_salt_basins"
+index = 35
+
+[palette.fields.salt_beds]
+asset = "field_salt_beds"
+index = 36
+
+[palette.fields.sediment_edges]
+asset = "field_sediment_edges"
+index = 37
+
+[palette.fields.surface_height]
+asset = "field_surface_height"
+index = 38
+
+[palette.fields.tall_caves]
+asset = "field_tall_caves"
+index = 39
+
+[palette.fields.temperature]
+asset = "field_temperature"
+index = 40
+
+[palette.fields.volcanic_edges]
+asset = "field_volcanic_edges"
+index = 41
+
+[palette.fields.warp_x]
+asset = "field_warp_x"
+index = 42
+
+[palette.fields.warp_y]
+asset = "field_warp_y"
+index = 43
+
+[palette.biomes]
+
+[palette.biomes.dunes]
+asset = "biome_dunes"
+index = 0
+
+[palette.biomes.ember]
+asset = "biome_ember"
+index = 1
+
+[palette.biomes.fumaroles]
+asset = "biome_fumaroles"
+index = 2
+
+[palette.biomes.hearth]
+asset = "biome_hearth"
+index = 3
+
+[palette.biomes.karst]
+asset = "biome_karst"
+index = 4
+
+[palette.biomes.lode]
+asset = "biome_lode"
+index = 5
+
+[palette.biomes.mire]
+asset = "biome_mire"
+index = 6
+
+[palette.biomes.petroleum]
+asset = "biome_petroleum"
+index = 7
+
+[palette.biomes.rime]
+asset = "biome_rime"
+index = 8
+
+[palette.biomes.saltworks]
+asset = "biome_saltworks"
+index = 9
+
+[palette.biomes.verdant]
+asset = "biome_verdant"
+index = 10
+
+[palette.features]
+
+[palette.features.crystal_geode]
+asset = "feature_crystal_geode"
+index = 0
+
+[palette.features.dune_bed]
+asset = "feature_dune_bed"
+index = 1
+
+[palette.features.dune_vault]
+asset = "feature_dune_vault"
+index = 2
+
+[palette.features.ember_fracture]
+asset = "feature_ember_fracture"
+index = 3
+
+[palette.features.fumarole_cluster]
+asset = "feature_fumarole_cluster"
+index = 4
+
+[palette.features.hearth_promenade]
+asset = "feature_hearth_promenade"
+index = 5
+
+[palette.features.hearth_shelf]
+asset = "feature_hearth_shelf"
+index = 6
+
+[palette.features.karst_arcade]
+asset = "feature_karst_arcade"
+index = 7
+
+[palette.features.landing]
+asset = "feature_landing"
+index = 8
+
+[palette.features.lode_lens]
+asset = "feature_lode_lens"
+index = 9
+
+[palette.features.magma_vault]
+asset = "feature_magma_vault"
+index = 10
+
+[palette.features.mine_gallery]
+asset = "feature_mine_gallery"
+index = 11
+
+[palette.features.mire_chimney]
+asset = "feature_mire_chimney"
+index = 12
+
+[palette.features.mire_gallery]
+asset = "feature_mire_gallery"
+index = 13
+
+[palette.features.mire_pool]
+asset = "feature_mire_pool"
+index = 14
+
+[palette.features.oil_channels]
+asset = "feature_oil_channels"
+index = 15
+
+[palette.features.oil_reservoir]
+asset = "feature_oil_reservoir"
+index = 16
+
+[palette.features.pocket]
+asset = "feature_pocket"
+index = 17
+
+[palette.features.quartz_geode]
+asset = "feature_quartz_geode"
+index = 18
+
+[palette.features.rime_shelf]
+asset = "feature_rime_shelf"
+index = 19
+
+[palette.features.room]
+asset = "feature_room"
+index = 20
+
+[palette.features.ruin]
+asset = "feature_ruin"
+index = 21
+
+[palette.features.salt_basin]
+asset = "feature_salt_basin"
+index = 22
+
+[palette.features.vent]
+asset = "feature_vent"
+index = 23
+
+[palette.features.verdant_bulb]
+asset = "feature_verdant_bulb"
+index = 24
+
+[palette.features.verdant_root]
+asset = "feature_verdant_root"
+index = 25
+
+[palette.rules]
+
+[palette.rules.caves_hearth]
+asset = "rule_frontier_caves_hearth"
+
+[palette.rules.tunnels_hearth]
+asset = "rule_frontier_tunnels_hearth"
+
+[palette.rules.caves_verdant]
+asset = "rule_frontier_caves_verdant"
+
+[palette.rules.tunnels_verdant]
+asset = "rule_frontier_tunnels_verdant"
+
+[palette.rules.caves_mire]
+asset = "rule_frontier_caves_mire"
+
+[palette.rules.tunnels_mire]
+asset = "rule_frontier_tunnels_mire"
+
+[palette.rules.caves_dunes]
+asset = "rule_frontier_caves_dunes"
+
+[palette.rules.tunnels_dunes]
+asset = "rule_frontier_tunnels_dunes"
+
+[palette.rules.caves_rime]
+asset = "rule_frontier_caves_rime"
+
+[palette.rules.tunnels_rime]
+asset = "rule_frontier_tunnels_rime"
+
+[palette.rules.caves_lode]
+asset = "rule_frontier_caves_lode"
+
+[palette.rules.tunnels_lode]
+asset = "rule_frontier_tunnels_lode"
+
+[palette.rules.caves_karst]
+asset = "rule_frontier_caves_karst"
+
+[palette.rules.tunnels_karst]
+asset = "rule_frontier_tunnels_karst"
+
+[palette.rules.caves_saltworks]
+asset = "rule_frontier_caves_saltworks"
+
+[palette.rules.tunnels_saltworks]
+asset = "rule_frontier_tunnels_saltworks"
+
+[palette.rules.caves_fumaroles]
+asset = "rule_frontier_caves_fumaroles"
+
+[palette.rules.tunnels_fumaroles]
+asset = "rule_frontier_tunnels_fumaroles"
+
+[palette.rules.caves_petroleum]
+asset = "rule_frontier_caves_petroleum"
+
+[palette.rules.tunnels_petroleum]
+asset = "rule_frontier_tunnels_petroleum"
+
+[palette.rules.caves_ember]
+asset = "rule_frontier_caves_ember"
+
+[palette.rules.tunnels_ember]
+asset = "rule_frontier_tunnels_ember"
+
+[palette.rules.traversal_hearth]
+asset = "rule_frontier_traversal_hearth"
+
+[palette.rules.traversal_karst]
+asset = "rule_frontier_traversal_karst"
+
+[palette.rules.traversal_mire]
+asset = "rule_frontier_traversal_mire"
+
+[palette.rules.cisterns]
+asset = "rule_frontier_cisterns"
+
+[palette.rules.fill_pocket_water]
+asset = "rule_frontier_fill_pocket_water"
+
+[palette.rules.fill_pocket_oxygen]
+asset = "rule_frontier_fill_pocket_oxygen"
+
+[palette.rules.landmark_hearth_shelf]
+asset = "rule_frontier_landmark_hearth_shelf"
+
+[palette.rules.fill_hearth_shelf_oxygen]
+asset = "rule_frontier_fill_hearth_shelf_oxygen"
+
+[palette.rules.landmark_verdant_bulb]
+asset = "rule_frontier_landmark_verdant_bulb"
+
+[palette.rules.fill_verdant_bulb_water]
+asset = "rule_frontier_fill_verdant_bulb_water"
+
+[palette.rules.fill_verdant_bulb_oxygen]
+asset = "rule_frontier_fill_verdant_bulb_oxygen"
+
+[palette.rules.landmark_verdant_root]
+asset = "rule_frontier_landmark_verdant_root"
+
+[palette.rules.fill_verdant_root_polluted_oxygen]
+asset = "rule_frontier_fill_verdant_root_polluted_oxygen"
+
+[palette.rules.landmark_mire_pool]
+asset = "rule_frontier_landmark_mire_pool"
+
+[palette.rules.fill_mire_pool_polluted_water]
+asset = "rule_frontier_fill_mire_pool_polluted_water"
+
+[palette.rules.fill_mire_pool_polluted_oxygen]
+asset = "rule_frontier_fill_mire_pool_polluted_oxygen"
+
+[palette.rules.landmark_mire_chimney]
+asset = "rule_frontier_landmark_mire_chimney"
+
+[palette.rules.fill_mire_chimney_polluted_oxygen]
+asset = "rule_frontier_fill_mire_chimney_polluted_oxygen"
+
+[palette.rules.landmark_dune_vault]
+asset = "rule_frontier_landmark_dune_vault"
+
+[palette.rules.fill_dune_vault_regolith]
+asset = "rule_frontier_fill_dune_vault_regolith"
+
+[palette.rules.fill_dune_vault_carbon_dioxide]
+asset = "rule_frontier_fill_dune_vault_carbon_dioxide"
+
+[palette.rules.landmark_dune_bed]
+asset = "rule_frontier_landmark_dune_bed"
+
+[palette.rules.fill_dune_bed_sand]
+asset = "rule_frontier_fill_dune_bed_sand"
+
+[palette.rules.fill_dune_bed_carbon_dioxide]
+asset = "rule_frontier_fill_dune_bed_carbon_dioxide"
+
+[palette.rules.landmark_rime_shelf]
+asset = "rule_frontier_landmark_rime_shelf"
+
+[palette.rules.fill_rime_shelf_snow]
+asset = "rule_frontier_fill_rime_shelf_snow"
+
+[palette.rules.fill_rime_shelf_carbon_dioxide]
+asset = "rule_frontier_fill_rime_shelf_carbon_dioxide"
+
+[palette.rules.landmark_ruin]
+asset = "rule_frontier_landmark_ruin"
+
+[palette.rules.fill_ruin_brine]
+asset = "rule_frontier_fill_ruin_brine"
+
+[palette.rules.fill_ruin_carbon_dioxide]
+asset = "rule_frontier_fill_ruin_carbon_dioxide"
+
+[palette.rules.landmark_room]
+asset = "rule_frontier_landmark_room"
+
+[palette.rules.fill_room_pebbles]
+asset = "rule_frontier_fill_room_pebbles"
+
+[palette.rules.landmark_lode_lens]
+asset = "rule_frontier_landmark_lode_lens"
+
+[palette.rules.fill_lode_lens_hydrogen]
+asset = "rule_frontier_fill_lode_lens_hydrogen"
+
+[palette.rules.landmark_crystal_geode]
+asset = "rule_frontier_landmark_crystal_geode"
+
+[palette.rules.fill_crystal_geode_water]
+asset = "rule_frontier_fill_crystal_geode_water"
+
+[palette.rules.fill_crystal_geode_oxygen]
+asset = "rule_frontier_fill_crystal_geode_oxygen"
+
+[palette.rules.landmark_quartz_geode]
+asset = "rule_frontier_landmark_quartz_geode"
+
+[palette.rules.fill_quartz_geode_water]
+asset = "rule_frontier_fill_quartz_geode_water"
+
+[palette.rules.fill_quartz_geode_oxygen]
+asset = "rule_frontier_fill_quartz_geode_oxygen"
+
+[palette.rules.landmark_salt_basin]
+asset = "rule_frontier_landmark_salt_basin"
+
+[palette.rules.fill_salt_basin_brine]
+asset = "rule_frontier_fill_salt_basin_brine"
+
+[palette.rules.fill_salt_basin_carbon_dioxide]
+asset = "rule_frontier_fill_salt_basin_carbon_dioxide"
+
+[palette.rules.landmark_mine_gallery]
+asset = "rule_frontier_landmark_mine_gallery"
+
+[palette.rules.fill_mine_gallery_sand]
+asset = "rule_frontier_fill_mine_gallery_sand"
+
+[palette.rules.fill_mine_gallery_carbon_dioxide]
+asset = "rule_frontier_fill_mine_gallery_carbon_dioxide"
+
+[palette.rules.landmark_vent]
+asset = "rule_frontier_landmark_vent"
+
+[palette.rules.fill_vent_steam]
+asset = "rule_frontier_fill_vent_steam"
+
+[palette.rules.landmark_fumarole_cluster]
+asset = "rule_frontier_landmark_fumarole_cluster"
+
+[palette.rules.fill_fumarole_cluster_chlorine]
+asset = "rule_frontier_fill_fumarole_cluster_chlorine"
+
+[palette.rules.landmark_oil_reservoir]
+asset = "rule_frontier_landmark_oil_reservoir"
+
+[palette.rules.fill_oil_reservoir_crude_oil]
+asset = "rule_frontier_fill_oil_reservoir_crude_oil"
+
+[palette.rules.fill_oil_reservoir_natural_gas]
+asset = "rule_frontier_fill_oil_reservoir_natural_gas"
+
+[palette.rules.landmark_oil_channels]
+asset = "rule_frontier_landmark_oil_channels"
+
+[palette.rules.fill_oil_channels_crude_oil]
+asset = "rule_frontier_fill_oil_channels_crude_oil"
+
+[palette.rules.fill_oil_channels_carbon_dioxide]
+asset = "rule_frontier_fill_oil_channels_carbon_dioxide"
+
+[palette.rules.landmark_magma_vault]
+asset = "rule_frontier_landmark_magma_vault"
+
+[palette.rules.fill_magma_vault_magma]
+asset = "rule_frontier_fill_magma_vault_magma"
+
+[palette.rules.landmark_ember_fracture]
+asset = "rule_frontier_landmark_ember_fracture"
+
+[palette.rules.fill_ember_fracture_ash]
+asset = "rule_frontier_fill_ember_fracture_ash"
+
+[palette.rules.fill_ember_fracture_steam]
+asset = "rule_frontier_fill_ember_fracture_steam"
+
+[palette.rules.backbone]
+asset = "rule_frontier_backbone"
+
+[appearance]
+display_name = "Frontier basin"
+background_stack = "background_frontier"

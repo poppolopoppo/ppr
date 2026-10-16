@@ -1,0 +1,22 @@
+schema_version = 1
+element = "element_diamond"
+representation = "terrain"
+diggable = true
+
+[appearance]
+display_name = "Diamond"
+color_rgba = "DAEEFF65"
+albedo_texture = "texture_color_textures_diamond_png"
+normal_texture = "texture_normal_textures_diamond_normal_png"
+texture_period_m = 1.0
+roundness = 0.15
+metallic = 0.0
+roughness = 0.04
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "blend"
+ior = 2.42
+normal_scale = 0.65
+refraction_depth_m = 0.28

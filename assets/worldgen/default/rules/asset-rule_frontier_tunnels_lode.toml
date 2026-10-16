@@ -1,0 +1,26 @@
+schema_version = 1
+
+[definition]
+order = 35
+
+[definition.payload]
+tag = "carve_worm"
+
+[definition.payload.carve_worm]
+
+[definition.payload.carve_worm.geometry]
+biome = "lode"
+count = 24
+length_min_m = 25.0
+length_max_m = 105.0
+radius_min_m = 0.9
+radius_max_m = 2.6
+turn_probability = 0.12
+turn_smoothing = 0.9
+radius_variation = 0.3
+chamber_probability = 0.018
+chamber_scale = 1.8
+
+[definition.payload.carve_worm.geometry.depth]
+min = 0.0
+max = 1.0

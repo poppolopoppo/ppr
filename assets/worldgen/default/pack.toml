@@ -1,12 +1,2056 @@
-schema_version = 3
-# Canonical semantic keys; numeric IDs are assigned by compileDefinition.
+schema_version = 1
 pack_id = "ppr_frontier"
 
-[files]
-materials = "materials.toml"
-biomes = "biomes.toml"
-fields = "fields.toml"
-features = "features.toml"
-worlds = "worlds.toml"
-rules = "rules.toml"
-appearance = "appearance.toml"
+[assets]
+
+[assets.texture_color_textures_algae_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_algae_png.toml"
+
+[assets.texture_normal_textures_algae_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_algae_normal_png.toml"
+
+[assets.texture_color_textures_aluminum_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_aluminum_png.toml"
+
+[assets.texture_normal_textures_aluminum_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_aluminum_normal_png.toml"
+
+[assets.texture_color_textures_anhydrite_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_anhydrite_png.toml"
+
+[assets.texture_normal_textures_anhydrite_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_anhydrite_normal_png.toml"
+
+[assets.texture_color_textures_ash_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_ash_png.toml"
+
+[assets.texture_normal_textures_ash_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_ash_normal_png.toml"
+
+[assets.texture_color_textures_autunite_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_autunite_png.toml"
+
+[assets.texture_normal_textures_autunite_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_autunite_normal_png.toml"
+
+[assets.texture_color_textures_azurite_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_azurite_png.toml"
+
+[assets.texture_normal_textures_azurite_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_azurite_normal_png.toml"
+
+[assets.texture_color_textures_background_frontier_backwall_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_background_frontier_backwall_png.toml"
+
+[assets.texture_color_textures_background_frontier_caverns_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_background_frontier_caverns_png.toml"
+
+[assets.texture_color_textures_background_frontier_distant_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_background_frontier_distant_png.toml"
+
+[assets.texture_color_textures_background_frontier_formations_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_background_frontier_formations_png.toml"
+
+[assets.texture_color_textures_background_hollows_backwall_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_background_hollows_backwall_png.toml"
+
+[assets.texture_color_textures_background_hollows_caverns_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_background_hollows_caverns_png.toml"
+
+[assets.texture_color_textures_background_hollows_distant_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_background_hollows_distant_png.toml"
+
+[assets.texture_color_textures_background_hollows_formations_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_background_hollows_formations_png.toml"
+
+[assets.texture_color_textures_basalt_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_basalt_png.toml"
+
+[assets.texture_normal_textures_basalt_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_basalt_normal_png.toml"
+
+[assets.texture_color_textures_bedrock_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_bedrock_png.toml"
+
+[assets.texture_normal_textures_bedrock_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_bedrock_normal_png.toml"
+
+[assets.texture_color_textures_breccia_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_breccia_png.toml"
+
+[assets.texture_normal_textures_breccia_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_breccia_normal_png.toml"
+
+[assets.texture_color_textures_brine_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_brine_png.toml"
+
+[assets.texture_normal_textures_brine_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_brine_normal_png.toml"
+
+[assets.texture_color_textures_calcite_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_calcite_png.toml"
+
+[assets.texture_normal_textures_calcite_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_calcite_normal_png.toml"
+
+[assets.texture_color_textures_carbon_dioxide_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_carbon_dioxide_png.toml"
+
+[assets.texture_normal_textures_carbon_dioxide_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_carbon_dioxide_normal_png.toml"
+
+[assets.texture_color_textures_chalk_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_chalk_png.toml"
+
+[assets.texture_normal_textures_chalk_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_chalk_normal_png.toml"
+
+[assets.texture_color_textures_chlorine_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_chlorine_png.toml"
+
+[assets.texture_normal_textures_chlorine_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_chlorine_normal_png.toml"
+
+[assets.texture_color_textures_clay_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_clay_png.toml"
+
+[assets.texture_normal_textures_clay_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_clay_normal_png.toml"
+
+[assets.texture_color_textures_clear_quartz_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_clear_quartz_png.toml"
+
+[assets.texture_normal_textures_clear_quartz_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_clear_quartz_normal_png.toml"
+
+[assets.texture_color_textures_coal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_coal_png.toml"
+
+[assets.texture_normal_textures_coal_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_coal_normal_png.toml"
+
+[assets.texture_color_textures_conglomerate_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_conglomerate_png.toml"
+
+[assets.texture_normal_textures_conglomerate_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_conglomerate_normal_png.toml"
+
+[assets.texture_color_textures_copper_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_copper_png.toml"
+
+[assets.texture_normal_textures_copper_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_copper_normal_png.toml"
+
+[assets.texture_color_textures_copper_ore_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_copper_ore_png.toml"
+
+[assets.texture_normal_textures_copper_ore_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_copper_ore_normal_png.toml"
+
+[assets.texture_color_textures_crude_oil_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_crude_oil_png.toml"
+
+[assets.texture_normal_textures_crude_oil_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_crude_oil_normal_png.toml"
+
+[assets.texture_color_textures_crystal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_crystal_png.toml"
+
+[assets.texture_normal_textures_crystal_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_crystal_normal_png.toml"
+
+[assets.texture_color_textures_diamond_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_diamond_png.toml"
+
+[assets.texture_normal_textures_diamond_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_diamond_normal_png.toml"
+
+[assets.texture_color_textures_dirt_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_dirt_png.toml"
+
+[assets.texture_normal_textures_dirt_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_dirt_normal_png.toml"
+
+[assets.texture_color_textures_dolomite_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_dolomite_png.toml"
+
+[assets.texture_normal_textures_dolomite_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_dolomite_normal_png.toml"
+
+[assets.texture_color_textures_emerald_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_emerald_png.toml"
+
+[assets.texture_normal_textures_emerald_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_emerald_normal_png.toml"
+
+[assets.texture_color_textures_fluorite_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_fluorite_png.toml"
+
+[assets.texture_normal_textures_fluorite_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_fluorite_normal_png.toml"
+
+[assets.texture_color_textures_glass_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_glass_png.toml"
+
+[assets.texture_normal_textures_glass_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_glass_normal_png.toml"
+
+[assets.texture_color_textures_gneiss_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_gneiss_png.toml"
+
+[assets.texture_normal_textures_gneiss_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_gneiss_normal_png.toml"
+
+[assets.texture_color_textures_granite_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_granite_png.toml"
+
+[assets.texture_normal_textures_granite_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_granite_normal_png.toml"
+
+[assets.texture_color_textures_gypsum_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_gypsum_png.toml"
+
+[assets.texture_normal_textures_gypsum_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_gypsum_normal_png.toml"
+
+[assets.texture_color_textures_hydrogen_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_hydrogen_png.toml"
+
+[assets.texture_normal_textures_hydrogen_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_hydrogen_normal_png.toml"
+
+[assets.texture_color_textures_ice_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_ice_png.toml"
+
+[assets.texture_normal_textures_ice_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_ice_normal_png.toml"
+
+[assets.texture_color_textures_iron_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_iron_png.toml"
+
+[assets.texture_normal_textures_iron_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_iron_normal_png.toml"
+
+[assets.texture_color_textures_iron_ore_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_iron_ore_png.toml"
+
+[assets.texture_normal_textures_iron_ore_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_iron_ore_normal_png.toml"
+
+[assets.texture_color_textures_laterite_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_laterite_png.toml"
+
+[assets.texture_normal_textures_laterite_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_laterite_normal_png.toml"
+
+[assets.texture_color_textures_limestone_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_limestone_png.toml"
+
+[assets.texture_normal_textures_limestone_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_limestone_normal_png.toml"
+
+[assets.texture_color_textures_magma_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_magma_png.toml"
+
+[assets.texture_normal_textures_magma_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_magma_normal_png.toml"
+
+[assets.texture_color_textures_masonry_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_masonry_png.toml"
+
+[assets.texture_normal_textures_masonry_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_masonry_normal_png.toml"
+
+[assets.texture_color_textures_natural_gas_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_natural_gas_png.toml"
+
+[assets.texture_normal_textures_natural_gas_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_natural_gas_normal_png.toml"
+
+[assets.texture_color_textures_obsidian_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_obsidian_png.toml"
+
+[assets.texture_normal_textures_obsidian_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_obsidian_normal_png.toml"
+
+[assets.texture_color_textures_oxygen_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_oxygen_png.toml"
+
+[assets.texture_normal_textures_oxygen_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_oxygen_normal_png.toml"
+
+[assets.texture_color_textures_pebbles_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_pebbles_png.toml"
+
+[assets.texture_normal_textures_pebbles_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_pebbles_normal_png.toml"
+
+[assets.texture_color_textures_phosphorite_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_phosphorite_png.toml"
+
+[assets.texture_normal_textures_phosphorite_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_phosphorite_normal_png.toml"
+
+[assets.texture_color_textures_polluted_ice_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_polluted_ice_png.toml"
+
+[assets.texture_normal_textures_polluted_ice_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_polluted_ice_normal_png.toml"
+
+[assets.texture_color_textures_polluted_oxygen_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_polluted_oxygen_png.toml"
+
+[assets.texture_normal_textures_polluted_oxygen_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_polluted_oxygen_normal_png.toml"
+
+[assets.texture_color_textures_polluted_water_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_polluted_water_png.toml"
+
+[assets.texture_normal_textures_polluted_water_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_polluted_water_normal_png.toml"
+
+[assets.texture_color_textures_pumice_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_pumice_png.toml"
+
+[assets.texture_normal_textures_pumice_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_pumice_normal_png.toml"
+
+[assets.texture_color_textures_regolith_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_regolith_png.toml"
+
+[assets.texture_normal_textures_regolith_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_regolith_normal_png.toml"
+
+[assets.texture_color_textures_ruby_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_ruby_png.toml"
+
+[assets.texture_normal_textures_ruby_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_ruby_normal_png.toml"
+
+[assets.texture_color_textures_rust_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_rust_png.toml"
+
+[assets.texture_normal_textures_rust_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_rust_normal_png.toml"
+
+[assets.texture_color_textures_salt_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_salt_png.toml"
+
+[assets.texture_normal_textures_salt_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_salt_normal_png.toml"
+
+[assets.texture_color_textures_sand_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_sand_png.toml"
+
+[assets.texture_normal_textures_sand_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_sand_normal_png.toml"
+
+[assets.texture_color_textures_sandstone_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_sandstone_png.toml"
+
+[assets.texture_normal_textures_sandstone_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_sandstone_normal_png.toml"
+
+[assets.texture_color_textures_shale_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_shale_png.toml"
+
+[assets.texture_normal_textures_shale_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_shale_normal_png.toml"
+
+[assets.texture_color_textures_slime_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_slime_png.toml"
+
+[assets.texture_normal_textures_slime_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_slime_normal_png.toml"
+
+[assets.texture_color_textures_snow_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_snow_png.toml"
+
+[assets.texture_normal_textures_snow_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_snow_normal_png.toml"
+
+[assets.texture_color_textures_steam_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_steam_png.toml"
+
+[assets.texture_normal_textures_steam_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_steam_normal_png.toml"
+
+[assets.texture_color_textures_sulfur_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_sulfur_png.toml"
+
+[assets.texture_normal_textures_sulfur_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_sulfur_normal_png.toml"
+
+[assets.texture_color_textures_tuff_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_tuff_png.toml"
+
+[assets.texture_normal_textures_tuff_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_tuff_normal_png.toml"
+
+[assets.texture_color_textures_uranium_ore_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_uranium_ore_png.toml"
+
+[assets.texture_normal_textures_uranium_ore_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_uranium_ore_normal_png.toml"
+
+[assets.texture_color_textures_water_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_water_png.toml"
+
+[assets.texture_normal_textures_water_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_water_normal_png.toml"
+
+[assets.texture_color_textures_wolframite_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_wolframite_png.toml"
+
+[assets.texture_normal_textures_wolframite_normal_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_wolframite_normal_png.toml"
+
+[assets.element_basalt]
+kind = "sim.element"
+descriptor = "elements/asset-element_basalt.toml"
+
+[assets.material_basalt]
+kind = "sim.material"
+descriptor = "materials/asset-material_basalt.toml"
+
+[assets.element_sandstone]
+kind = "sim.element"
+descriptor = "elements/asset-element_sandstone.toml"
+
+[assets.material_sandstone]
+kind = "sim.material"
+descriptor = "materials/asset-material_sandstone.toml"
+
+[assets.element_copper]
+kind = "sim.element"
+descriptor = "elements/asset-element_copper.toml"
+
+[assets.material_copper]
+kind = "sim.material"
+descriptor = "materials/asset-material_copper.toml"
+
+[assets.element_iron]
+kind = "sim.element"
+descriptor = "elements/asset-element_iron.toml"
+
+[assets.material_iron]
+kind = "sim.material"
+descriptor = "materials/asset-material_iron.toml"
+
+[assets.element_ice]
+kind = "sim.element"
+descriptor = "elements/asset-element_ice.toml"
+
+[assets.material_ice]
+kind = "sim.material"
+descriptor = "materials/asset-material_ice.toml"
+
+[assets.element_masonry]
+kind = "sim.element"
+descriptor = "elements/asset-element_masonry.toml"
+
+[assets.material_masonry]
+kind = "sim.material"
+descriptor = "materials/asset-material_masonry.toml"
+
+[assets.element_obsidian]
+kind = "sim.element"
+descriptor = "elements/asset-element_obsidian.toml"
+
+[assets.material_obsidian]
+kind = "sim.material"
+descriptor = "materials/asset-material_obsidian.toml"
+
+[assets.element_clay]
+kind = "sim.element"
+descriptor = "elements/asset-element_clay.toml"
+
+[assets.material_clay]
+kind = "sim.material"
+descriptor = "materials/asset-material_clay.toml"
+
+[assets.element_limestone]
+kind = "sim.element"
+descriptor = "elements/asset-element_limestone.toml"
+
+[assets.material_limestone]
+kind = "sim.material"
+descriptor = "materials/asset-material_limestone.toml"
+
+[assets.element_salt]
+kind = "sim.element"
+descriptor = "elements/asset-element_salt.toml"
+
+[assets.material_salt]
+kind = "sim.material"
+descriptor = "materials/asset-material_salt.toml"
+
+[assets.element_sulfur]
+kind = "sim.element"
+descriptor = "elements/asset-element_sulfur.toml"
+
+[assets.material_sulfur]
+kind = "sim.material"
+descriptor = "materials/asset-material_sulfur.toml"
+
+[assets.element_crystal]
+kind = "sim.element"
+descriptor = "elements/asset-element_crystal.toml"
+
+[assets.material_crystal]
+kind = "sim.material"
+descriptor = "materials/asset-material_crystal.toml"
+
+[assets.element_granite]
+kind = "sim.element"
+descriptor = "elements/asset-element_granite.toml"
+
+[assets.material_granite]
+kind = "sim.material"
+descriptor = "materials/asset-material_granite.toml"
+
+[assets.element_shale]
+kind = "sim.element"
+descriptor = "elements/asset-element_shale.toml"
+
+[assets.material_shale]
+kind = "sim.material"
+descriptor = "materials/asset-material_shale.toml"
+
+[assets.element_dirt]
+kind = "sim.element"
+descriptor = "elements/asset-element_dirt.toml"
+
+[assets.material_dirt]
+kind = "sim.material"
+descriptor = "materials/asset-material_dirt.toml"
+
+[assets.element_algae]
+kind = "sim.element"
+descriptor = "elements/asset-element_algae.toml"
+
+[assets.material_algae]
+kind = "sim.material"
+descriptor = "materials/asset-material_algae.toml"
+
+[assets.element_slime]
+kind = "sim.element"
+descriptor = "elements/asset-element_slime.toml"
+
+[assets.material_slime]
+kind = "sim.material"
+descriptor = "materials/asset-material_slime.toml"
+
+[assets.element_coal]
+kind = "sim.element"
+descriptor = "elements/asset-element_coal.toml"
+
+[assets.material_coal]
+kind = "sim.material"
+descriptor = "materials/asset-material_coal.toml"
+
+[assets.element_rust]
+kind = "sim.element"
+descriptor = "elements/asset-element_rust.toml"
+
+[assets.material_rust]
+kind = "sim.material"
+descriptor = "materials/asset-material_rust.toml"
+
+[assets.element_phosphorite]
+kind = "sim.element"
+descriptor = "elements/asset-element_phosphorite.toml"
+
+[assets.material_phosphorite]
+kind = "sim.material"
+descriptor = "materials/asset-material_phosphorite.toml"
+
+[assets.element_aluminum]
+kind = "sim.element"
+descriptor = "elements/asset-element_aluminum.toml"
+
+[assets.material_aluminum]
+kind = "sim.material"
+descriptor = "materials/asset-material_aluminum.toml"
+
+[assets.element_wolframite]
+kind = "sim.element"
+descriptor = "elements/asset-element_wolframite.toml"
+
+[assets.material_wolframite]
+kind = "sim.material"
+descriptor = "materials/asset-material_wolframite.toml"
+
+[assets.element_diamond]
+kind = "sim.element"
+descriptor = "elements/asset-element_diamond.toml"
+
+[assets.material_diamond]
+kind = "sim.material"
+descriptor = "materials/asset-material_diamond.toml"
+
+[assets.element_clear_quartz]
+kind = "sim.element"
+descriptor = "elements/asset-element_clear_quartz.toml"
+
+[assets.material_clear_quartz]
+kind = "sim.material"
+descriptor = "materials/asset-material_clear_quartz.toml"
+
+[assets.element_glass]
+kind = "sim.element"
+descriptor = "elements/asset-element_glass.toml"
+
+[assets.material_glass]
+kind = "sim.material"
+descriptor = "materials/asset-material_glass.toml"
+
+[assets.element_polluted_ice]
+kind = "sim.element"
+descriptor = "elements/asset-element_polluted_ice.toml"
+
+[assets.material_polluted_ice]
+kind = "sim.material"
+descriptor = "materials/asset-material_polluted_ice.toml"
+
+[assets.element_iron_ore]
+kind = "sim.element"
+descriptor = "elements/asset-element_iron_ore.toml"
+
+[assets.material_iron_ore]
+kind = "sim.material"
+descriptor = "materials/asset-material_iron_ore.toml"
+
+[assets.element_copper_ore]
+kind = "sim.element"
+descriptor = "elements/asset-element_copper_ore.toml"
+
+[assets.material_copper_ore]
+kind = "sim.material"
+descriptor = "materials/asset-material_copper_ore.toml"
+
+[assets.element_sand]
+kind = "sim.element"
+descriptor = "elements/asset-element_sand.toml"
+
+[assets.material_sand]
+kind = "sim.material"
+descriptor = "materials/asset-material_sand.toml"
+
+[assets.element_snow]
+kind = "sim.element"
+descriptor = "elements/asset-element_snow.toml"
+
+[assets.material_snow]
+kind = "sim.material"
+descriptor = "materials/asset-material_snow.toml"
+
+[assets.element_pebbles]
+kind = "sim.element"
+descriptor = "elements/asset-element_pebbles.toml"
+
+[assets.material_pebbles]
+kind = "sim.material"
+descriptor = "materials/asset-material_pebbles.toml"
+
+[assets.element_regolith]
+kind = "sim.element"
+descriptor = "elements/asset-element_regolith.toml"
+
+[assets.material_regolith]
+kind = "sim.material"
+descriptor = "materials/asset-material_regolith.toml"
+
+[assets.element_ash]
+kind = "sim.element"
+descriptor = "elements/asset-element_ash.toml"
+
+[assets.material_ash]
+kind = "sim.material"
+descriptor = "materials/asset-material_ash.toml"
+
+[assets.element_water]
+kind = "sim.element"
+descriptor = "elements/asset-element_water.toml"
+
+[assets.material_water]
+kind = "sim.material"
+descriptor = "materials/asset-material_water.toml"
+
+[assets.element_polluted_water]
+kind = "sim.element"
+descriptor = "elements/asset-element_polluted_water.toml"
+
+[assets.material_polluted_water]
+kind = "sim.material"
+descriptor = "materials/asset-material_polluted_water.toml"
+
+[assets.element_brine]
+kind = "sim.element"
+descriptor = "elements/asset-element_brine.toml"
+
+[assets.material_brine]
+kind = "sim.material"
+descriptor = "materials/asset-material_brine.toml"
+
+[assets.element_crude_oil]
+kind = "sim.element"
+descriptor = "elements/asset-element_crude_oil.toml"
+
+[assets.material_crude_oil]
+kind = "sim.material"
+descriptor = "materials/asset-material_crude_oil.toml"
+
+[assets.element_magma]
+kind = "sim.element"
+descriptor = "elements/asset-element_magma.toml"
+
+[assets.material_magma]
+kind = "sim.material"
+descriptor = "materials/asset-material_magma.toml"
+
+[assets.element_oxygen]
+kind = "sim.element"
+descriptor = "elements/asset-element_oxygen.toml"
+
+[assets.material_oxygen]
+kind = "sim.material"
+descriptor = "materials/asset-material_oxygen.toml"
+
+[assets.element_polluted_oxygen]
+kind = "sim.element"
+descriptor = "elements/asset-element_polluted_oxygen.toml"
+
+[assets.material_polluted_oxygen]
+kind = "sim.material"
+descriptor = "materials/asset-material_polluted_oxygen.toml"
+
+[assets.element_carbon_dioxide]
+kind = "sim.element"
+descriptor = "elements/asset-element_carbon_dioxide.toml"
+
+[assets.material_carbon_dioxide]
+kind = "sim.material"
+descriptor = "materials/asset-material_carbon_dioxide.toml"
+
+[assets.element_hydrogen]
+kind = "sim.element"
+descriptor = "elements/asset-element_hydrogen.toml"
+
+[assets.material_hydrogen]
+kind = "sim.material"
+descriptor = "materials/asset-material_hydrogen.toml"
+
+[assets.element_chlorine]
+kind = "sim.element"
+descriptor = "elements/asset-element_chlorine.toml"
+
+[assets.material_chlorine]
+kind = "sim.material"
+descriptor = "materials/asset-material_chlorine.toml"
+
+[assets.element_steam]
+kind = "sim.element"
+descriptor = "elements/asset-element_steam.toml"
+
+[assets.material_steam]
+kind = "sim.material"
+descriptor = "materials/asset-material_steam.toml"
+
+[assets.element_natural_gas]
+kind = "sim.element"
+descriptor = "elements/asset-element_natural_gas.toml"
+
+[assets.material_natural_gas]
+kind = "sim.material"
+descriptor = "materials/asset-material_natural_gas.toml"
+
+[assets.element_calcite]
+kind = "sim.element"
+descriptor = "elements/asset-element_calcite.toml"
+
+[assets.material_calcite]
+kind = "sim.material"
+descriptor = "materials/asset-material_calcite.toml"
+
+[assets.element_dolomite]
+kind = "sim.element"
+descriptor = "elements/asset-element_dolomite.toml"
+
+[assets.material_dolomite]
+kind = "sim.material"
+descriptor = "materials/asset-material_dolomite.toml"
+
+[assets.element_chalk]
+kind = "sim.element"
+descriptor = "elements/asset-element_chalk.toml"
+
+[assets.material_chalk]
+kind = "sim.material"
+descriptor = "materials/asset-material_chalk.toml"
+
+[assets.element_gypsum]
+kind = "sim.element"
+descriptor = "elements/asset-element_gypsum.toml"
+
+[assets.material_gypsum]
+kind = "sim.material"
+descriptor = "materials/asset-material_gypsum.toml"
+
+[assets.element_anhydrite]
+kind = "sim.element"
+descriptor = "elements/asset-element_anhydrite.toml"
+
+[assets.material_anhydrite]
+kind = "sim.material"
+descriptor = "materials/asset-material_anhydrite.toml"
+
+[assets.element_conglomerate]
+kind = "sim.element"
+descriptor = "elements/asset-element_conglomerate.toml"
+
+[assets.material_conglomerate]
+kind = "sim.material"
+descriptor = "materials/asset-material_conglomerate.toml"
+
+[assets.element_breccia]
+kind = "sim.element"
+descriptor = "elements/asset-element_breccia.toml"
+
+[assets.material_breccia]
+kind = "sim.material"
+descriptor = "materials/asset-material_breccia.toml"
+
+[assets.element_gneiss]
+kind = "sim.element"
+descriptor = "elements/asset-element_gneiss.toml"
+
+[assets.material_gneiss]
+kind = "sim.material"
+descriptor = "materials/asset-material_gneiss.toml"
+
+[assets.element_pumice]
+kind = "sim.element"
+descriptor = "elements/asset-element_pumice.toml"
+
+[assets.material_pumice]
+kind = "sim.material"
+descriptor = "materials/asset-material_pumice.toml"
+
+[assets.element_laterite]
+kind = "sim.element"
+descriptor = "elements/asset-element_laterite.toml"
+
+[assets.material_laterite]
+kind = "sim.material"
+descriptor = "materials/asset-material_laterite.toml"
+
+[assets.element_ruby]
+kind = "sim.element"
+descriptor = "elements/asset-element_ruby.toml"
+
+[assets.material_ruby]
+kind = "sim.material"
+descriptor = "materials/asset-material_ruby.toml"
+
+[assets.element_emerald]
+kind = "sim.element"
+descriptor = "elements/asset-element_emerald.toml"
+
+[assets.material_emerald]
+kind = "sim.material"
+descriptor = "materials/asset-material_emerald.toml"
+
+[assets.element_fluorite]
+kind = "sim.element"
+descriptor = "elements/asset-element_fluorite.toml"
+
+[assets.material_fluorite]
+kind = "sim.material"
+descriptor = "materials/asset-material_fluorite.toml"
+
+[assets.element_azurite]
+kind = "sim.element"
+descriptor = "elements/asset-element_azurite.toml"
+
+[assets.material_azurite]
+kind = "sim.material"
+descriptor = "materials/asset-material_azurite.toml"
+
+[assets.element_uranium_ore]
+kind = "sim.element"
+descriptor = "elements/asset-element_uranium_ore.toml"
+
+[assets.material_uranium_ore]
+kind = "sim.material"
+descriptor = "materials/asset-material_uranium_ore.toml"
+
+[assets.element_autunite]
+kind = "sim.element"
+descriptor = "elements/asset-element_autunite.toml"
+
+[assets.material_autunite]
+kind = "sim.material"
+descriptor = "materials/asset-material_autunite.toml"
+
+[assets.element_tuff]
+kind = "sim.element"
+descriptor = "elements/asset-element_tuff.toml"
+
+[assets.material_tuff]
+kind = "sim.material"
+descriptor = "materials/asset-material_tuff.toml"
+
+[assets.element_bedrock]
+kind = "sim.element"
+descriptor = "elements/asset-element_bedrock.toml"
+
+[assets.material_bedrock]
+kind = "sim.material"
+descriptor = "materials/asset-material_bedrock.toml"
+
+[assets.field_composition]
+kind = "sim.field"
+descriptor = "fields/asset-field_composition.toml"
+
+[assets.field_temperature]
+kind = "sim.field"
+descriptor = "fields/asset-field_temperature.toml"
+
+[assets.field_caverns]
+kind = "sim.field"
+descriptor = "fields/asset-field_caverns.toml"
+
+[assets.field_fissures]
+kind = "sim.field"
+descriptor = "fields/asset-field_fissures.toml"
+
+[assets.field_ore_lenses]
+kind = "sim.field"
+descriptor = "fields/asset-field_ore_lenses.toml"
+
+[assets.field_warp_x]
+kind = "sim.field"
+descriptor = "fields/asset-field_warp_x.toml"
+
+[assets.field_warp_y]
+kind = "sim.field"
+descriptor = "fields/asset-field_warp_y.toml"
+
+[assets.field_beds]
+kind = "sim.field"
+descriptor = "fields/asset-field_beds.toml"
+
+[assets.field_organic_beds]
+kind = "sim.field"
+descriptor = "fields/asset-field_organic_beds.toml"
+
+[assets.field_frozen_beds]
+kind = "sim.field"
+descriptor = "fields/asset-field_frozen_beds.toml"
+
+[assets.field_rock_masses]
+kind = "sim.field"
+descriptor = "fields/asset-field_rock_masses.toml"
+
+[assets.field_karst_masses]
+kind = "sim.field"
+descriptor = "fields/asset-field_karst_masses.toml"
+
+[assets.field_salt_beds]
+kind = "sim.field"
+descriptor = "fields/asset-field_salt_beds.toml"
+
+[assets.field_oil_caps]
+kind = "sim.field"
+descriptor = "fields/asset-field_oil_caps.toml"
+
+[assets.field_round_caves]
+kind = "sim.field"
+descriptor = "fields/asset-field_round_caves.toml"
+
+[assets.field_branch_caves]
+kind = "sim.field"
+descriptor = "fields/asset-field_branch_caves.toml"
+
+[assets.field_low_pools]
+kind = "sim.field"
+descriptor = "fields/asset-field_low_pools.toml"
+
+[assets.field_tall_caves]
+kind = "sim.field"
+descriptor = "fields/asset-field_tall_caves.toml"
+
+[assets.field_ice_fractures]
+kind = "sim.field"
+descriptor = "fields/asset-field_ice_fractures.toml"
+
+[assets.field_ore_tunnels]
+kind = "sim.field"
+descriptor = "fields/asset-field_ore_tunnels.toml"
+
+[assets.field_karst_cells]
+kind = "sim.field"
+descriptor = "fields/asset-field_karst_cells.toml"
+
+[assets.field_salt_basins]
+kind = "sim.field"
+descriptor = "fields/asset-field_salt_basins.toml"
+
+[assets.field_chimney_fissures]
+kind = "sim.field"
+descriptor = "fields/asset-field_chimney_fissures.toml"
+
+[assets.field_oil_channels]
+kind = "sim.field"
+descriptor = "fields/asset-field_oil_channels.toml"
+
+[assets.field_hot_chambers]
+kind = "sim.field"
+descriptor = "fields/asset-field_hot_chambers.toml"
+
+[assets.field_ore_grain]
+kind = "sim.field"
+descriptor = "fields/asset-field_ore_grain.toml"
+
+[assets.field_ore_seams]
+kind = "sim.field"
+descriptor = "fields/asset-field_ore_seams.toml"
+
+[assets.field_organic_patches]
+kind = "sim.field"
+descriptor = "fields/asset-field_organic_patches.toml"
+
+[assets.field_blob_edges]
+kind = "sim.field"
+descriptor = "fields/asset-field_blob_edges.toml"
+
+[assets.field_organic_edges]
+kind = "sim.field"
+descriptor = "fields/asset-field_organic_edges.toml"
+
+[assets.field_sediment_edges]
+kind = "sim.field"
+descriptor = "fields/asset-field_sediment_edges.toml"
+
+[assets.field_frozen_edges]
+kind = "sim.field"
+descriptor = "fields/asset-field_frozen_edges.toml"
+
+[assets.field_volcanic_edges]
+kind = "sim.field"
+descriptor = "fields/asset-field_volcanic_edges.toml"
+
+[assets.field_mineral_edges]
+kind = "sim.field"
+descriptor = "fields/asset-field_mineral_edges.toml"
+
+[assets.field_mire_masses]
+kind = "sim.field"
+descriptor = "fields/asset-field_mire_masses.toml"
+
+[assets.field_dune_beds]
+kind = "sim.field"
+descriptor = "fields/asset-field_dune_beds.toml"
+
+[assets.field_evaporite_beds]
+kind = "sim.field"
+descriptor = "fields/asset-field_evaporite_beds.toml"
+
+[assets.field_lava_flows]
+kind = "sim.field"
+descriptor = "fields/asset-field_lava_flows.toml"
+
+[assets.field_surface_height]
+kind = "sim.field"
+descriptor = "fields/asset-field_surface_height.toml"
+
+[assets.field_bedrock_height]
+kind = "sim.field"
+descriptor = "fields/asset-field_bedrock_height.toml"
+
+[assets.field_hearth_bedding]
+kind = "sim.field"
+descriptor = "fields/asset-field_hearth_bedding.toml"
+
+[assets.field_lode_bedding]
+kind = "sim.field"
+descriptor = "fields/asset-field_lode_bedding.toml"
+
+[assets.field_karst_bedding]
+kind = "sim.field"
+descriptor = "fields/asset-field_karst_bedding.toml"
+
+[assets.field_pore_affinity]
+kind = "sim.field"
+descriptor = "fields/asset-field_pore_affinity.toml"
+
+[assets.biome_hearth]
+kind = "sim.biome"
+descriptor = "biomes/asset-biome_hearth.toml"
+
+[assets.biome_verdant]
+kind = "sim.biome"
+descriptor = "biomes/asset-biome_verdant.toml"
+
+[assets.biome_mire]
+kind = "sim.biome"
+descriptor = "biomes/asset-biome_mire.toml"
+
+[assets.biome_dunes]
+kind = "sim.biome"
+descriptor = "biomes/asset-biome_dunes.toml"
+
+[assets.biome_rime]
+kind = "sim.biome"
+descriptor = "biomes/asset-biome_rime.toml"
+
+[assets.biome_lode]
+kind = "sim.biome"
+descriptor = "biomes/asset-biome_lode.toml"
+
+[assets.biome_karst]
+kind = "sim.biome"
+descriptor = "biomes/asset-biome_karst.toml"
+
+[assets.biome_saltworks]
+kind = "sim.biome"
+descriptor = "biomes/asset-biome_saltworks.toml"
+
+[assets.biome_fumaroles]
+kind = "sim.biome"
+descriptor = "biomes/asset-biome_fumaroles.toml"
+
+[assets.biome_petroleum]
+kind = "sim.biome"
+descriptor = "biomes/asset-biome_petroleum.toml"
+
+[assets.biome_ember]
+kind = "sim.biome"
+descriptor = "biomes/asset-biome_ember.toml"
+
+[assets.feature_landing]
+kind = "sim.feature"
+descriptor = "features/asset-feature_landing.toml"
+
+[assets.feature_pocket]
+kind = "sim.feature"
+descriptor = "features/asset-feature_pocket.toml"
+
+[assets.feature_hearth_shelf]
+kind = "sim.feature"
+descriptor = "features/asset-feature_hearth_shelf.toml"
+
+[assets.feature_verdant_bulb]
+kind = "sim.feature"
+descriptor = "features/asset-feature_verdant_bulb.toml"
+
+[assets.feature_verdant_root]
+kind = "sim.feature"
+descriptor = "features/asset-feature_verdant_root.toml"
+
+[assets.feature_mire_pool]
+kind = "sim.feature"
+descriptor = "features/asset-feature_mire_pool.toml"
+
+[assets.feature_mire_chimney]
+kind = "sim.feature"
+descriptor = "features/asset-feature_mire_chimney.toml"
+
+[assets.feature_dune_vault]
+kind = "sim.feature"
+descriptor = "features/asset-feature_dune_vault.toml"
+
+[assets.feature_dune_bed]
+kind = "sim.feature"
+descriptor = "features/asset-feature_dune_bed.toml"
+
+[assets.feature_rime_shelf]
+kind = "sim.feature"
+descriptor = "features/asset-feature_rime_shelf.toml"
+
+[assets.feature_ruin]
+kind = "sim.feature"
+descriptor = "features/asset-feature_ruin.toml"
+
+[assets.feature_room]
+kind = "sim.feature"
+descriptor = "features/asset-feature_room.toml"
+
+[assets.feature_lode_lens]
+kind = "sim.feature"
+descriptor = "features/asset-feature_lode_lens.toml"
+
+[assets.feature_crystal_geode]
+kind = "sim.feature"
+descriptor = "features/asset-feature_crystal_geode.toml"
+
+[assets.feature_quartz_geode]
+kind = "sim.feature"
+descriptor = "features/asset-feature_quartz_geode.toml"
+
+[assets.feature_salt_basin]
+kind = "sim.feature"
+descriptor = "features/asset-feature_salt_basin.toml"
+
+[assets.feature_mine_gallery]
+kind = "sim.feature"
+descriptor = "features/asset-feature_mine_gallery.toml"
+
+[assets.feature_vent]
+kind = "sim.feature"
+descriptor = "features/asset-feature_vent.toml"
+
+[assets.feature_fumarole_cluster]
+kind = "sim.feature"
+descriptor = "features/asset-feature_fumarole_cluster.toml"
+
+[assets.feature_oil_reservoir]
+kind = "sim.feature"
+descriptor = "features/asset-feature_oil_reservoir.toml"
+
+[assets.feature_oil_channels]
+kind = "sim.feature"
+descriptor = "features/asset-feature_oil_channels.toml"
+
+[assets.feature_magma_vault]
+kind = "sim.feature"
+descriptor = "features/asset-feature_magma_vault.toml"
+
+[assets.feature_ember_fracture]
+kind = "sim.feature"
+descriptor = "features/asset-feature_ember_fracture.toml"
+
+[assets.feature_hearth_promenade]
+kind = "sim.feature"
+descriptor = "features/asset-feature_hearth_promenade.toml"
+
+[assets.feature_karst_arcade]
+kind = "sim.feature"
+descriptor = "features/asset-feature_karst_arcade.toml"
+
+[assets.feature_mire_gallery]
+kind = "sim.feature"
+descriptor = "features/asset-feature_mire_gallery.toml"
+
+[assets.rule_frontier_caves_hearth]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_caves_hearth.toml"
+
+[assets.rule_frontier_tunnels_hearth]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_tunnels_hearth.toml"
+
+[assets.rule_frontier_caves_verdant]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_caves_verdant.toml"
+
+[assets.rule_frontier_tunnels_verdant]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_tunnels_verdant.toml"
+
+[assets.rule_frontier_caves_mire]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_caves_mire.toml"
+
+[assets.rule_frontier_tunnels_mire]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_tunnels_mire.toml"
+
+[assets.rule_frontier_caves_dunes]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_caves_dunes.toml"
+
+[assets.rule_frontier_tunnels_dunes]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_tunnels_dunes.toml"
+
+[assets.rule_frontier_caves_rime]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_caves_rime.toml"
+
+[assets.rule_frontier_tunnels_rime]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_tunnels_rime.toml"
+
+[assets.rule_frontier_caves_lode]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_caves_lode.toml"
+
+[assets.rule_frontier_tunnels_lode]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_tunnels_lode.toml"
+
+[assets.rule_frontier_caves_karst]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_caves_karst.toml"
+
+[assets.rule_frontier_tunnels_karst]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_tunnels_karst.toml"
+
+[assets.rule_frontier_caves_saltworks]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_caves_saltworks.toml"
+
+[assets.rule_frontier_tunnels_saltworks]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_tunnels_saltworks.toml"
+
+[assets.rule_frontier_caves_fumaroles]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_caves_fumaroles.toml"
+
+[assets.rule_frontier_tunnels_fumaroles]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_tunnels_fumaroles.toml"
+
+[assets.rule_frontier_caves_petroleum]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_caves_petroleum.toml"
+
+[assets.rule_frontier_tunnels_petroleum]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_tunnels_petroleum.toml"
+
+[assets.rule_frontier_caves_ember]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_caves_ember.toml"
+
+[assets.rule_frontier_tunnels_ember]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_tunnels_ember.toml"
+
+[assets.rule_frontier_traversal_hearth]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_traversal_hearth.toml"
+
+[assets.rule_frontier_traversal_karst]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_traversal_karst.toml"
+
+[assets.rule_frontier_traversal_mire]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_traversal_mire.toml"
+
+[assets.rule_frontier_cisterns]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_cisterns.toml"
+
+[assets.rule_frontier_fill_pocket_water]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_fill_pocket_water.toml"
+
+[assets.rule_frontier_fill_pocket_oxygen]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_fill_pocket_oxygen.toml"
+
+[assets.rule_frontier_landmark_hearth_shelf]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_landmark_hearth_shelf.toml"
+
+[assets.rule_frontier_fill_hearth_shelf_oxygen]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_fill_hearth_shelf_oxygen.toml"
+
+[assets.rule_frontier_landmark_verdant_bulb]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_landmark_verdant_bulb.toml"
+
+[assets.rule_frontier_fill_verdant_bulb_water]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_fill_verdant_bulb_water.toml"
+
+[assets.rule_frontier_fill_verdant_bulb_oxygen]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_fill_verdant_bulb_oxygen.toml"
+
+[assets.rule_frontier_landmark_verdant_root]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_landmark_verdant_root.toml"
+
+[assets.rule_frontier_fill_verdant_root_polluted_oxygen]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_fill_verdant_root_polluted_oxygen.toml"
+
+[assets.rule_frontier_landmark_mire_pool]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_landmark_mire_pool.toml"
+
+[assets.rule_frontier_fill_mire_pool_polluted_water]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_fill_mire_pool_polluted_water.toml"
+
+[assets.rule_frontier_fill_mire_pool_polluted_oxygen]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_fill_mire_pool_polluted_oxygen.toml"
+
+[assets.rule_frontier_landmark_mire_chimney]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_landmark_mire_chimney.toml"
+
+[assets.rule_frontier_fill_mire_chimney_polluted_oxygen]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_fill_mire_chimney_polluted_oxygen.toml"
+
+[assets.rule_frontier_landmark_dune_vault]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_landmark_dune_vault.toml"
+
+[assets.rule_frontier_fill_dune_vault_regolith]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_fill_dune_vault_regolith.toml"
+
+[assets.rule_frontier_fill_dune_vault_carbon_dioxide]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_fill_dune_vault_carbon_dioxide.toml"
+
+[assets.rule_frontier_landmark_dune_bed]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_landmark_dune_bed.toml"
+
+[assets.rule_frontier_fill_dune_bed_sand]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_fill_dune_bed_sand.toml"
+
+[assets.rule_frontier_fill_dune_bed_carbon_dioxide]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_fill_dune_bed_carbon_dioxide.toml"
+
+[assets.rule_frontier_landmark_rime_shelf]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_landmark_rime_shelf.toml"
+
+[assets.rule_frontier_fill_rime_shelf_snow]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_fill_rime_shelf_snow.toml"
+
+[assets.rule_frontier_fill_rime_shelf_carbon_dioxide]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_fill_rime_shelf_carbon_dioxide.toml"
+
+[assets.rule_frontier_landmark_ruin]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_landmark_ruin.toml"
+
+[assets.rule_frontier_fill_ruin_brine]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_fill_ruin_brine.toml"
+
+[assets.rule_frontier_fill_ruin_carbon_dioxide]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_fill_ruin_carbon_dioxide.toml"
+
+[assets.rule_frontier_landmark_room]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_landmark_room.toml"
+
+[assets.rule_frontier_fill_room_pebbles]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_fill_room_pebbles.toml"
+
+[assets.rule_frontier_landmark_lode_lens]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_landmark_lode_lens.toml"
+
+[assets.rule_frontier_fill_lode_lens_hydrogen]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_fill_lode_lens_hydrogen.toml"
+
+[assets.rule_frontier_landmark_crystal_geode]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_landmark_crystal_geode.toml"
+
+[assets.rule_frontier_fill_crystal_geode_water]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_fill_crystal_geode_water.toml"
+
+[assets.rule_frontier_fill_crystal_geode_oxygen]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_fill_crystal_geode_oxygen.toml"
+
+[assets.rule_frontier_landmark_quartz_geode]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_landmark_quartz_geode.toml"
+
+[assets.rule_frontier_fill_quartz_geode_water]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_fill_quartz_geode_water.toml"
+
+[assets.rule_frontier_fill_quartz_geode_oxygen]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_fill_quartz_geode_oxygen.toml"
+
+[assets.rule_frontier_landmark_salt_basin]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_landmark_salt_basin.toml"
+
+[assets.rule_frontier_fill_salt_basin_brine]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_fill_salt_basin_brine.toml"
+
+[assets.rule_frontier_fill_salt_basin_carbon_dioxide]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_fill_salt_basin_carbon_dioxide.toml"
+
+[assets.rule_frontier_landmark_mine_gallery]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_landmark_mine_gallery.toml"
+
+[assets.rule_frontier_fill_mine_gallery_sand]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_fill_mine_gallery_sand.toml"
+
+[assets.rule_frontier_fill_mine_gallery_carbon_dioxide]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_fill_mine_gallery_carbon_dioxide.toml"
+
+[assets.rule_frontier_landmark_vent]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_landmark_vent.toml"
+
+[assets.rule_frontier_fill_vent_steam]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_fill_vent_steam.toml"
+
+[assets.rule_frontier_landmark_fumarole_cluster]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_landmark_fumarole_cluster.toml"
+
+[assets.rule_frontier_fill_fumarole_cluster_chlorine]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_fill_fumarole_cluster_chlorine.toml"
+
+[assets.rule_frontier_landmark_oil_reservoir]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_landmark_oil_reservoir.toml"
+
+[assets.rule_frontier_fill_oil_reservoir_crude_oil]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_fill_oil_reservoir_crude_oil.toml"
+
+[assets.rule_frontier_fill_oil_reservoir_natural_gas]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_fill_oil_reservoir_natural_gas.toml"
+
+[assets.rule_frontier_landmark_oil_channels]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_landmark_oil_channels.toml"
+
+[assets.rule_frontier_fill_oil_channels_crude_oil]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_fill_oil_channels_crude_oil.toml"
+
+[assets.rule_frontier_fill_oil_channels_carbon_dioxide]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_fill_oil_channels_carbon_dioxide.toml"
+
+[assets.rule_frontier_landmark_magma_vault]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_landmark_magma_vault.toml"
+
+[assets.rule_frontier_fill_magma_vault_magma]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_fill_magma_vault_magma.toml"
+
+[assets.rule_frontier_landmark_ember_fracture]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_landmark_ember_fracture.toml"
+
+[assets.rule_frontier_fill_ember_fracture_ash]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_fill_ember_fracture_ash.toml"
+
+[assets.rule_frontier_fill_ember_fracture_steam]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_fill_ember_fracture_steam.toml"
+
+[assets.rule_frontier_backbone]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_frontier_backbone.toml"
+
+[assets.rule_hollows_caves_hearth]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_caves_hearth.toml"
+
+[assets.rule_hollows_tunnels_hearth]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_tunnels_hearth.toml"
+
+[assets.rule_hollows_caves_verdant]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_caves_verdant.toml"
+
+[assets.rule_hollows_tunnels_verdant]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_tunnels_verdant.toml"
+
+[assets.rule_hollows_caves_mire]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_caves_mire.toml"
+
+[assets.rule_hollows_tunnels_mire]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_tunnels_mire.toml"
+
+[assets.rule_hollows_caves_dunes]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_caves_dunes.toml"
+
+[assets.rule_hollows_tunnels_dunes]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_tunnels_dunes.toml"
+
+[assets.rule_hollows_caves_rime]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_caves_rime.toml"
+
+[assets.rule_hollows_tunnels_rime]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_tunnels_rime.toml"
+
+[assets.rule_hollows_caves_lode]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_caves_lode.toml"
+
+[assets.rule_hollows_tunnels_lode]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_tunnels_lode.toml"
+
+[assets.rule_hollows_caves_karst]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_caves_karst.toml"
+
+[assets.rule_hollows_tunnels_karst]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_tunnels_karst.toml"
+
+[assets.rule_hollows_caves_saltworks]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_caves_saltworks.toml"
+
+[assets.rule_hollows_tunnels_saltworks]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_tunnels_saltworks.toml"
+
+[assets.rule_hollows_caves_fumaroles]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_caves_fumaroles.toml"
+
+[assets.rule_hollows_tunnels_fumaroles]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_tunnels_fumaroles.toml"
+
+[assets.rule_hollows_caves_petroleum]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_caves_petroleum.toml"
+
+[assets.rule_hollows_tunnels_petroleum]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_tunnels_petroleum.toml"
+
+[assets.rule_hollows_caves_ember]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_caves_ember.toml"
+
+[assets.rule_hollows_tunnels_ember]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_tunnels_ember.toml"
+
+[assets.rule_hollows_traversal_hearth]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_traversal_hearth.toml"
+
+[assets.rule_hollows_traversal_karst]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_traversal_karst.toml"
+
+[assets.rule_hollows_traversal_mire]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_traversal_mire.toml"
+
+[assets.rule_hollows_cisterns]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_cisterns.toml"
+
+[assets.rule_hollows_fill_pocket_water]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_fill_pocket_water.toml"
+
+[assets.rule_hollows_fill_pocket_oxygen]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_fill_pocket_oxygen.toml"
+
+[assets.rule_hollows_landmark_hearth_shelf]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_landmark_hearth_shelf.toml"
+
+[assets.rule_hollows_fill_hearth_shelf_oxygen]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_fill_hearth_shelf_oxygen.toml"
+
+[assets.rule_hollows_landmark_verdant_bulb]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_landmark_verdant_bulb.toml"
+
+[assets.rule_hollows_fill_verdant_bulb_water]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_fill_verdant_bulb_water.toml"
+
+[assets.rule_hollows_fill_verdant_bulb_oxygen]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_fill_verdant_bulb_oxygen.toml"
+
+[assets.rule_hollows_landmark_verdant_root]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_landmark_verdant_root.toml"
+
+[assets.rule_hollows_fill_verdant_root_polluted_oxygen]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_fill_verdant_root_polluted_oxygen.toml"
+
+[assets.rule_hollows_landmark_mire_pool]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_landmark_mire_pool.toml"
+
+[assets.rule_hollows_fill_mire_pool_polluted_water]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_fill_mire_pool_polluted_water.toml"
+
+[assets.rule_hollows_fill_mire_pool_polluted_oxygen]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_fill_mire_pool_polluted_oxygen.toml"
+
+[assets.rule_hollows_landmark_mire_chimney]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_landmark_mire_chimney.toml"
+
+[assets.rule_hollows_fill_mire_chimney_polluted_oxygen]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_fill_mire_chimney_polluted_oxygen.toml"
+
+[assets.rule_hollows_landmark_dune_vault]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_landmark_dune_vault.toml"
+
+[assets.rule_hollows_fill_dune_vault_regolith]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_fill_dune_vault_regolith.toml"
+
+[assets.rule_hollows_fill_dune_vault_carbon_dioxide]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_fill_dune_vault_carbon_dioxide.toml"
+
+[assets.rule_hollows_landmark_dune_bed]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_landmark_dune_bed.toml"
+
+[assets.rule_hollows_fill_dune_bed_sand]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_fill_dune_bed_sand.toml"
+
+[assets.rule_hollows_fill_dune_bed_carbon_dioxide]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_fill_dune_bed_carbon_dioxide.toml"
+
+[assets.rule_hollows_landmark_rime_shelf]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_landmark_rime_shelf.toml"
+
+[assets.rule_hollows_fill_rime_shelf_snow]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_fill_rime_shelf_snow.toml"
+
+[assets.rule_hollows_fill_rime_shelf_carbon_dioxide]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_fill_rime_shelf_carbon_dioxide.toml"
+
+[assets.rule_hollows_landmark_ruin]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_landmark_ruin.toml"
+
+[assets.rule_hollows_fill_ruin_brine]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_fill_ruin_brine.toml"
+
+[assets.rule_hollows_fill_ruin_carbon_dioxide]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_fill_ruin_carbon_dioxide.toml"
+
+[assets.rule_hollows_landmark_room]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_landmark_room.toml"
+
+[assets.rule_hollows_fill_room_pebbles]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_fill_room_pebbles.toml"
+
+[assets.rule_hollows_landmark_lode_lens]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_landmark_lode_lens.toml"
+
+[assets.rule_hollows_fill_lode_lens_hydrogen]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_fill_lode_lens_hydrogen.toml"
+
+[assets.rule_hollows_landmark_crystal_geode]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_landmark_crystal_geode.toml"
+
+[assets.rule_hollows_fill_crystal_geode_water]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_fill_crystal_geode_water.toml"
+
+[assets.rule_hollows_fill_crystal_geode_oxygen]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_fill_crystal_geode_oxygen.toml"
+
+[assets.rule_hollows_landmark_quartz_geode]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_landmark_quartz_geode.toml"
+
+[assets.rule_hollows_fill_quartz_geode_water]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_fill_quartz_geode_water.toml"
+
+[assets.rule_hollows_fill_quartz_geode_oxygen]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_fill_quartz_geode_oxygen.toml"
+
+[assets.rule_hollows_landmark_salt_basin]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_landmark_salt_basin.toml"
+
+[assets.rule_hollows_fill_salt_basin_brine]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_fill_salt_basin_brine.toml"
+
+[assets.rule_hollows_fill_salt_basin_carbon_dioxide]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_fill_salt_basin_carbon_dioxide.toml"
+
+[assets.rule_hollows_landmark_mine_gallery]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_landmark_mine_gallery.toml"
+
+[assets.rule_hollows_fill_mine_gallery_sand]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_fill_mine_gallery_sand.toml"
+
+[assets.rule_hollows_fill_mine_gallery_carbon_dioxide]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_fill_mine_gallery_carbon_dioxide.toml"
+
+[assets.rule_hollows_landmark_vent]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_landmark_vent.toml"
+
+[assets.rule_hollows_fill_vent_steam]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_fill_vent_steam.toml"
+
+[assets.rule_hollows_landmark_fumarole_cluster]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_landmark_fumarole_cluster.toml"
+
+[assets.rule_hollows_fill_fumarole_cluster_chlorine]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_fill_fumarole_cluster_chlorine.toml"
+
+[assets.rule_hollows_landmark_oil_reservoir]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_landmark_oil_reservoir.toml"
+
+[assets.rule_hollows_fill_oil_reservoir_crude_oil]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_fill_oil_reservoir_crude_oil.toml"
+
+[assets.rule_hollows_fill_oil_reservoir_natural_gas]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_fill_oil_reservoir_natural_gas.toml"
+
+[assets.rule_hollows_landmark_oil_channels]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_landmark_oil_channels.toml"
+
+[assets.rule_hollows_fill_oil_channels_crude_oil]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_fill_oil_channels_crude_oil.toml"
+
+[assets.rule_hollows_fill_oil_channels_carbon_dioxide]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_fill_oil_channels_carbon_dioxide.toml"
+
+[assets.rule_hollows_landmark_magma_vault]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_landmark_magma_vault.toml"
+
+[assets.rule_hollows_fill_magma_vault_magma]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_fill_magma_vault_magma.toml"
+
+[assets.rule_hollows_landmark_ember_fracture]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_landmark_ember_fracture.toml"
+
+[assets.rule_hollows_fill_ember_fracture_ash]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_fill_ember_fracture_ash.toml"
+
+[assets.rule_hollows_fill_ember_fracture_steam]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_fill_ember_fracture_steam.toml"
+
+[assets.rule_hollows_backbone]
+kind = "sim.rule"
+descriptor = "rules/asset-rule_hollows_backbone.toml"
+
+[assets.background_frontier]
+kind = "colony.background"
+descriptor = "backgrounds/asset-background_frontier.toml"
+
+[assets.background_hollows]
+kind = "colony.background"
+descriptor = "backgrounds/asset-background_hollows.toml"
+
+[assets.frontier]
+kind = "sim.world"
+descriptor = "worlds/asset-frontier.toml"
+
+[assets.hollows]
+kind = "sim.world"
+descriptor = "worlds/asset-hollows.toml"

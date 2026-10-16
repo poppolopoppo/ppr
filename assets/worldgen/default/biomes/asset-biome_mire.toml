@@ -1,0 +1,188 @@
+schema_version = 1
+
+[definition]
+
+[definition.temperature]
+field = "temperature"
+base_k = 305.0
+variation_k = 10.0
+
+[definition.composition]
+
+[definition.composition.peat]
+order = 10
+field = "mire_masses"
+bed_period_m = 0
+bed_warp_m = 0
+bed_dip = 0
+
+[definition.composition.peat.materials]
+
+[definition.composition.peat.materials.bed_01]
+material = "slime"
+weight = 5.8
+
+[definition.composition.peat.materials.bed_02]
+material = "clay"
+weight = 2.7
+
+[definition.composition.peat.materials.bed_03]
+material = "dirt"
+weight = 1.2
+
+[definition.composition.peat.materials.bed_04]
+material = "coal"
+weight = 0.3
+
+[definition.composition.peat.depth]
+min = 0
+max = 0.38
+
+[definition.composition.buried]
+order = 20
+field = "lode_bedding"
+bed_period_m = 74
+bed_warp_m = 30
+bed_dip = 0.065
+
+[definition.composition.buried.materials]
+
+[definition.composition.buried.materials.bed_01]
+material = "slime"
+weight = 4.3
+
+[definition.composition.buried.materials.bed_02]
+material = "clay"
+weight = 3.4
+
+[definition.composition.buried.materials.bed_03]
+material = "shale"
+weight = 1.9
+
+[definition.composition.buried.materials.bed_04]
+material = "coal"
+weight = 0.4
+
+[definition.composition.buried.depth]
+min = 0.38
+max = 1
+
+[definition.deposits]
+
+[definition.deposits.coal]
+stage = "detail"
+order = 10
+field = "organic_edges"
+material = "coal"
+host_material = "slime"
+core_coverage = 0.88
+fringe_coverage = 0.2
+sprinkle_probability = 0.002
+
+[definition.deposits.coal.depth]
+min = 0.0
+max = 0.72
+
+[definition.deposits.coal.threshold]
+min = -1.0
+max = 1.0
+
+[definition.deposits.coal.blob]
+count = 50
+distortion = 0.28
+
+[definition.deposits.coal.blob.radius]
+min_m = 2.0
+max_m = 5.0
+
+[definition.deposits.coal.blob.stretch]
+min = 2.0
+max = 3.5
+
+[definition.deposits.coal.blob.orientation]
+min_degrees = 165.0
+max_degrees = 180.0
+
+[definition.deposits.shale]
+stage = "detail"
+order = 11
+field = "sediment_edges"
+material = "shale"
+host_material = "clay"
+core_coverage = 0.98
+fringe_coverage = 0.3
+sprinkle_probability = 0.001
+
+[definition.deposits.shale.depth]
+min = 0.15
+max = 1.0
+
+[definition.deposits.shale.threshold]
+min = -1.0
+max = 1.0
+
+[definition.deposits.shale.blob]
+count = 38
+distortion = 0.23
+
+[definition.deposits.shale.blob.radius]
+min_m = 3.0
+max_m = 7.0
+
+[definition.deposits.shale.blob.stretch]
+min = 1.5
+max = 3.0
+
+[definition.deposits.shale.blob.orientation]
+min_degrees = 0.0
+max_degrees = 25.0
+
+[definition.pore]
+field = "pore_affinity"
+probability = 0.17
+affinity_min = -0.12
+passes = 3
+
+[definition.pore.radius]
+min_m = 2.0
+max_m = 3.0
+
+[definition.lining]
+material = "clay"
+thickness_fine = 1
+
+[definition.relaxation]
+passes = 10
+adoption = 0.4
+
+[definition.sprinkle]
+probability = 0.1
+
+[definition.finish]
+passes = 3
+adoption = 0.12
+
+[definition.erosion]
+passes = 8
+
+[definition.formation]
+material = "slime"
+probability = 0.12
+length_m = 3.2
+
+[definition.rind]
+material = "gypsum"
+
+[definition.surface_layers]
+
+[definition.surface_layers.soil]
+material = "dirt"
+depth_m = 2.0
+
+[definition.surface_layers.weathered]
+material = "clay"
+depth_m = 10.0
+
+[appearance]
+display_name = "Billowed mire"
+preview_color_rgba = "7E9754FF"

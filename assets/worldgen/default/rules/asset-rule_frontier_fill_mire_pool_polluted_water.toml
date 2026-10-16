@@ -1,0 +1,15 @@
+schema_version = 1
+
+[definition]
+order = 16
+
+[definition.payload]
+tag = "matter_fill"
+
+[definition.payload.matter_fill]
+marker = "anchor"
+material = "polluted_water"
+temperature_k = 305.0
+bulk_density_kg_m3 = 1030.0
+fill_height_m = 5.666666666666667
+placement = "landmark_mire_pool"

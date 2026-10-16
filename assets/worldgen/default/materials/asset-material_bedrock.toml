@@ -1,0 +1,22 @@
+schema_version = 1
+element = "element_bedrock"
+representation = "terrain"
+diggable = false
+
+[appearance]
+display_name = "Bedrock"
+color_rgba = "41434FFF"
+albedo_texture = "texture_color_textures_bedrock_png"
+normal_texture = "texture_normal_textures_bedrock_normal_png"
+texture_period_m = 2.0
+roundness = 0.25
+metallic = 0.0
+roughness = 0.88
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "opaque"
+ior = 1.5
+normal_scale = 1.0
+refraction_depth_m = 0.0

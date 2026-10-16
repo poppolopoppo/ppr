@@ -1,0 +1,15 @@
+schema_version = 1
+
+[definition]
+order = 19
+
+[definition.payload]
+tag = "matter_fill"
+
+[definition.payload.matter_fill]
+marker = "anchor"
+material = "regolith"
+temperature_k = 315.0
+bulk_density_kg_m3 = 1500.0
+fill_height_m = 4.0
+placement = "landmark_dune_vault"

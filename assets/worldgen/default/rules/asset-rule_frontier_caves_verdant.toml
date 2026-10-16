@@ -1,0 +1,19 @@
+schema_version = 1
+
+[definition]
+order = 11
+
+[definition.payload]
+tag = "cave"
+
+[definition.payload.cave]
+biome = "verdant"
+field = "branch_caves"
+
+[definition.payload.cave.depth]
+min = 0.0
+max = 1.0
+
+[definition.payload.cave.threshold]
+min = 0.31
+max = 1.0

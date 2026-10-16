@@ -1,0 +1,109 @@
+schema_version = 1
+
+[definition]
+allow_horizontal_reflection = true
+
+[definition.operations]
+
+[definition.operations.op_00]
+order = 10
+x_fine = 1
+y_fine = 1
+
+[definition.operations.op_00.action]
+tag = "paint"
+
+[definition.operations.op_00.action.paint]
+material = "granite"
+
+[definition.operations.op_00.action.paint.shape]
+tag = "ellipse"
+
+[definition.operations.op_00.action.paint.shape.ellipse]
+width_fine = 100
+height_fine = 37
+
+[definition.operations.op_01]
+order = 20
+x_fine = 9
+y_fine = 9
+
+[definition.operations.op_01.action]
+tag = "carve"
+
+[definition.operations.op_01.action.carve]
+
+[definition.operations.op_01.action.carve.shape]
+tag = "ellipse"
+
+[definition.operations.op_01.action.carve.shape.ellipse]
+width_fine = 62
+height_fine = 24
+
+[definition.operations.op_02]
+order = 30
+x_fine = 48
+y_fine = 5
+
+[definition.operations.op_02.action]
+tag = "carve"
+
+[definition.operations.op_02.action.carve]
+
+[definition.operations.op_02.action.carve.shape]
+tag = "ellipse"
+
+[definition.operations.op_02.action.carve.shape.ellipse]
+width_fine = 46
+height_fine = 22
+
+[definition.operations.op_03]
+order = 40
+x_fine = 56
+y_fine = 17
+
+[definition.operations.op_03.action]
+tag = "carve"
+
+[definition.operations.op_03.action.carve]
+
+[definition.operations.op_03.action.carve.shape]
+tag = "ellipse"
+
+[definition.operations.op_03.action.carve.shape.ellipse]
+width_fine = 31
+height_fine = 17
+
+[definition.operations.op_04]
+order = 50
+x_fine = 20
+y_fine = 3
+
+[definition.operations.op_04.action]
+tag = "paint"
+
+[definition.operations.op_04.action.paint]
+material = "polluted_ice"
+
+[definition.operations.op_04.action.paint.shape]
+tag = "ellipse"
+
+[definition.operations.op_04.action.paint.shape.ellipse]
+width_fine = 34
+height_fine = 4
+
+[definition.markers]
+
+[definition.markers.anchor]
+role = "sealed_pocket"
+x_fine = 51
+y_fine = 19
+
+[definition.reservation]
+min_x_fine = 0
+min_y_fine = 0
+max_x_fine = 102
+max_y_fine = 39
+
+[appearance]
+display_name = "Rime shelf"

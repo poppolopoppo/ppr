@@ -1,0 +1,14 @@
+schema_version = 1
+
+[definition]
+order = 40
+
+[definition.payload]
+tag = "matter_fill"
+
+[definition.payload.matter_fill]
+marker = "anchor"
+material = "natural_gas"
+temperature_k = 370.0
+bulk_density_kg_m3 = 0.8
+placement = "landmark_oil_reservoir"

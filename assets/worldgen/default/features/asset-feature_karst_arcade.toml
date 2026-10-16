@@ -1,0 +1,91 @@
+schema_version = 1
+
+[definition]
+allow_horizontal_reflection = true
+
+[definition.operations]
+
+[definition.operations.op_00]
+order = 10
+x_fine = 0
+y_fine = 0
+
+[definition.operations.op_00.action]
+tag = "paint"
+
+[definition.operations.op_00.action.paint]
+material = "limestone"
+
+[definition.operations.op_00.action.paint.shape]
+tag = "ellipse"
+
+[definition.operations.op_00.action.paint.shape.ellipse]
+width_fine = 126
+height_fine = 60
+
+[definition.operations.op_01]
+order = 20
+x_fine = 7
+y_fine = 8
+
+[definition.operations.op_01.action]
+tag = "carve"
+
+[definition.operations.op_01.action.carve]
+
+[definition.operations.op_01.action.carve.shape]
+tag = "ellipse"
+
+[definition.operations.op_01.action.carve.shape.ellipse]
+width_fine = 79
+height_fine = 45
+
+[definition.operations.op_02]
+order = 30
+x_fine = 55
+y_fine = 19
+
+[definition.operations.op_02.action]
+tag = "carve"
+
+[definition.operations.op_02.action.carve]
+
+[definition.operations.op_02.action.carve.shape]
+tag = "ellipse"
+
+[definition.operations.op_02.action.carve.shape.ellipse]
+width_fine = 64
+height_fine = 35
+
+[definition.operations.op_03]
+order = 40
+x_fine = 39
+y_fine = 5
+
+[definition.operations.op_03.action]
+tag = "carve"
+
+[definition.operations.op_03.action.carve]
+
+[definition.operations.op_03.action.carve.shape]
+tag = "ellipse"
+
+[definition.operations.op_03.action.carve.shape.ellipse]
+width_fine = 46
+height_fine = 37
+
+[definition.markers]
+
+[definition.markers.anchor]
+role = "traversal_room"
+x_fine = 63
+y_fine = 30
+
+[definition.reservation]
+min_x_fine = 0
+min_y_fine = 0
+max_x_fine = 126
+max_y_fine = 60
+
+[appearance]
+display_name = "Karst arcade"

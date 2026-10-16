@@ -1,0 +1,188 @@
+schema_version = 1
+
+[definition]
+
+[definition.temperature]
+field = "temperature"
+base_k = 305.0
+variation_k = 12.0
+
+[definition.composition]
+
+[definition.composition.evaporites]
+order = 10
+field = "evaporite_beds"
+bed_period_m = 39
+bed_warp_m = 5
+bed_dip = -0.025
+
+[definition.composition.evaporites.materials]
+
+[definition.composition.evaporites.materials.bed_01]
+material = "salt"
+weight = 4.8
+
+[definition.composition.evaporites.materials.bed_02]
+material = "gypsum"
+weight = 2.6
+
+[definition.composition.evaporites.materials.bed_03]
+material = "limestone"
+weight = 1.7
+
+[definition.composition.evaporites.materials.bed_04]
+material = "clay"
+weight = 0.9
+
+[definition.composition.evaporites.depth]
+min = 0
+max = 0.43
+
+[definition.composition.buried]
+order = 20
+field = "evaporite_beds"
+bed_period_m = 61
+bed_warp_m = 8
+bed_dip = 0.02
+
+[definition.composition.buried.materials]
+
+[definition.composition.buried.materials.bed_01]
+material = "salt"
+weight = 4.4
+
+[definition.composition.buried.materials.bed_02]
+material = "anhydrite"
+weight = 3.1
+
+[definition.composition.buried.materials.bed_03]
+material = "dolomite"
+weight = 2.0
+
+[definition.composition.buried.materials.bed_04]
+material = "shale"
+weight = 0.5
+
+[definition.composition.buried.depth]
+min = 0.43
+max = 1
+
+[definition.deposits]
+
+[definition.deposits.clay]
+stage = "detail"
+order = 10
+field = "sediment_edges"
+material = "clay"
+host_material = "salt"
+core_coverage = 1.0
+fringe_coverage = 0.4
+sprinkle_probability = 0.0
+
+[definition.deposits.clay.depth]
+min = 0.0
+max = 1.0
+
+[definition.deposits.clay.threshold]
+min = -1.0
+max = 1.0
+
+[definition.deposits.clay.blob]
+count = 38
+distortion = 0.08
+
+[definition.deposits.clay.blob.radius]
+min_m = 1.5
+max_m = 4.0
+
+[definition.deposits.clay.blob.stretch]
+min = 4.0
+max = 6.0
+
+[definition.deposits.clay.blob.orientation]
+min_degrees = 174.0
+max_degrees = 180.0
+
+[definition.deposits.fluorite]
+stage = "detail"
+order = 150
+field = "mineral_edges"
+material = "fluorite"
+host_material = "dolomite"
+core_coverage = 0.9
+fringe_coverage = 0.3
+sprinkle_probability = 0.002
+
+[definition.deposits.fluorite.depth]
+min = 0
+max = 1
+
+[definition.deposits.fluorite.threshold]
+min = -1.0
+max = 1.0
+
+[definition.deposits.fluorite.blob]
+count = 16
+distortion = 0.35
+
+[definition.deposits.fluorite.blob.radius]
+min_m = 2.5
+max_m = 5.0
+
+[definition.deposits.fluorite.blob.stretch]
+min = 1
+max = 1.8
+
+[definition.deposits.fluorite.blob.orientation]
+min_degrees = 0
+max_degrees = 360
+
+[definition.pore]
+field = "pore_affinity"
+probability = 0.08
+affinity_min = 0.1
+passes = 3
+
+[definition.pore.radius]
+min_m = 2.0
+max_m = 3.0
+
+[definition.lining]
+material = "salt"
+thickness_fine = 2
+
+[definition.relaxation]
+passes = 8
+adoption = 0.28
+
+[definition.sprinkle]
+probability = 0.055
+
+[definition.finish]
+passes = 3
+adoption = 0.12
+
+[definition.erosion]
+passes = 8
+
+[definition.formation]
+material = "gypsum"
+probability = 0.11
+length_m = 4.6
+
+[definition.rind]
+material = "anhydrite"
+
+[definition.surface_layers]
+
+[definition.surface_layers.soil]
+material = "salt"
+depth_m = 1.5
+
+[definition.surface_layers.weathered]
+material = "gypsum"
+depth_m = 5.0
+
+[appearance]
+display_name = "Evaporite shelves"
+preview_color_rgba = "D5C7A1FF"

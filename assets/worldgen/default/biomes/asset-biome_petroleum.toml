@@ -1,0 +1,222 @@
+schema_version = 1
+
+[definition]
+
+[definition.temperature]
+field = "temperature"
+base_k = 370.0
+variation_k = 20.0
+
+[definition.composition]
+
+[definition.composition.caprock]
+order = 10
+field = "oil_caps"
+bed_period_m = 52
+bed_warp_m = 6
+bed_dip = -0.025
+
+[definition.composition.caprock.materials]
+
+[definition.composition.caprock.materials.bed_01]
+material = "shale"
+weight = 6.3
+
+[definition.composition.caprock.materials.bed_02]
+material = "limestone"
+weight = 2.4
+
+[definition.composition.caprock.materials.bed_03]
+material = "clay"
+weight = 0.9
+
+[definition.composition.caprock.materials.bed_04]
+material = "coal"
+weight = 0.4
+
+[definition.composition.caprock.depth]
+min = 0
+max = 0.78
+
+[definition.composition.source]
+order = 20
+field = "oil_caps"
+bed_period_m = 87
+bed_warp_m = 11
+bed_dip = 0.04
+
+[definition.composition.source.materials]
+
+[definition.composition.source.materials.bed_01]
+material = "shale"
+weight = 5.8
+
+[definition.composition.source.materials.bed_02]
+material = "dolomite"
+weight = 2.5
+
+[definition.composition.source.materials.bed_03]
+material = "basalt"
+weight = 1.2
+
+[definition.composition.source.materials.bed_04]
+material = "coal"
+weight = 0.5
+
+[definition.composition.source.depth]
+min = 0.78
+max = 1
+
+[definition.deposits]
+
+[definition.deposits.basalt_caps]
+stage = "bulk"
+order = 1
+field = "sediment_edges"
+material = "basalt"
+host_material = "shale"
+core_coverage = 1.0
+fringe_coverage = 1.0
+sprinkle_probability = 0.0
+
+[definition.deposits.basalt_caps.depth]
+min = 0.0
+max = 1.0
+
+[definition.deposits.basalt_caps.threshold]
+min = -1.0
+max = 1.0
+
+[definition.deposits.basalt_caps.blob]
+count = 32
+distortion = 0.22
+
+[definition.deposits.basalt_caps.blob.radius]
+min_m = 4.0
+max_m = 10.0
+
+[definition.deposits.basalt_caps.blob.stretch]
+min = 2.0
+max = 3.5
+
+[definition.deposits.basalt_caps.blob.orientation]
+min_degrees = 174.0
+max_degrees = 180.0
+
+[definition.deposits.coal]
+stage = "detail"
+order = 10
+field = "organic_edges"
+material = "coal"
+host_material = "shale"
+core_coverage = 0.95
+fringe_coverage = 0.15
+sprinkle_probability = 0.001
+
+[definition.deposits.coal.depth]
+min = 0.0
+max = 1.0
+
+[definition.deposits.coal.threshold]
+min = -1.0
+max = 1.0
+
+[definition.deposits.coal.blob]
+count = 44
+distortion = 0.15
+
+[definition.deposits.coal.blob.radius]
+min_m = 2.0
+max_m = 5.0
+
+[definition.deposits.coal.blob.stretch]
+min = 2.5
+max = 4.0
+
+[definition.deposits.coal.blob.orientation]
+min_degrees = 170.0
+max_degrees = 180.0
+
+[definition.deposits.diamond]
+stage = "detail"
+order = 11
+field = "mineral_edges"
+material = "diamond"
+host_material = "basalt"
+core_coverage = 0.98
+fringe_coverage = 0.03
+sprinkle_probability = 0.0
+
+[definition.deposits.diamond.depth]
+min = 0.45
+max = 1.0
+
+[definition.deposits.diamond.threshold]
+min = -1.0
+max = 1.0
+
+[definition.deposits.diamond.blob]
+count = 14
+distortion = 0.1
+
+[definition.deposits.diamond.blob.radius]
+min_m = 0.8
+max_m = 1.8
+
+[definition.deposits.diamond.blob.stretch]
+min = 1.0
+max = 1.5
+
+[definition.deposits.diamond.blob.orientation]
+min_degrees = 0.0
+max_degrees = 360.0
+
+[definition.pore]
+field = "pore_affinity"
+probability = 0.055
+affinity_min = 0.2
+passes = 3
+
+[definition.pore.radius]
+min_m = 2.0
+max_m = 3.0
+
+[definition.lining]
+material = "basalt"
+thickness_fine = 3
+
+[definition.relaxation]
+passes = 8
+adoption = 0.25
+
+[definition.sprinkle]
+probability = 0.04
+
+[definition.finish]
+passes = 3
+adoption = 0.12
+
+[definition.erosion]
+passes = 8
+
+[definition.formation]
+material = "calcite"
+probability = 0.055
+length_m = 2.7
+
+[definition.rind]
+material = "azurite"
+
+[definition.surface_layers]
+
+[definition.surface_layers.soil]
+material = "clay"
+depth_m = 1.0
+
+[definition.surface_layers.weathered]
+material = "shale"
+depth_m = 7.0
+
+[appearance]
+display_name = "Capped petroleum basins"
+preview_color_rgba = "7A665DFF"

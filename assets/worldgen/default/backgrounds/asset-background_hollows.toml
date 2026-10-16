@@ -1,0 +1,33 @@
+schema_version = 1
+
+[definition]
+
+[definition.layers]
+
+[definition.layers.distant]
+order = 0
+texture = "texture_color_textures_background_hollows_distant_png"
+color_rgba = "FFFFFFFF"
+repeat_period_m = 256.0
+parallax_factor = 0.08
+
+[definition.layers.caverns]
+order = 1
+texture = "texture_color_textures_background_hollows_caverns_png"
+color_rgba = "FFFFFFFF"
+repeat_period_m = 180.0
+parallax_factor = 0.22
+
+[definition.layers.formations]
+order = 2
+texture = "texture_color_textures_background_hollows_formations_png"
+color_rgba = "FFFFFFFF"
+repeat_period_m = 112.0
+parallax_factor = 0.45
+
+[definition.layers.backwall]
+order = 3
+texture = "texture_color_textures_background_hollows_backwall_png"
+color_rgba = "FFFFFFFF"
+repeat_period_m = 64.0
+parallax_factor = 0.7

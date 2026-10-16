@@ -1,0 +1,222 @@
+schema_version = 1
+
+[definition]
+
+[definition.temperature]
+field = "temperature"
+base_k = 300.0
+variation_k = 8.0
+
+[definition.composition]
+
+[definition.composition.canopy]
+order = 10
+field = "organic_beds"
+bed_period_m = 0
+bed_warp_m = 0
+bed_dip = 0
+
+[definition.composition.canopy.materials]
+
+[definition.composition.canopy.materials.bed_01]
+material = "dirt"
+weight = 5.2
+
+[definition.composition.canopy.materials.bed_02]
+material = "clay"
+weight = 1.4
+
+[definition.composition.canopy.materials.bed_03]
+material = "limestone"
+weight = 2.8
+
+[definition.composition.canopy.materials.bed_04]
+material = "algae"
+weight = 0.6
+
+[definition.composition.canopy.depth]
+min = 0
+max = 0.32
+
+[definition.composition.galleries]
+order = 20
+field = "hearth_bedding"
+bed_period_m = 91
+bed_warp_m = 31
+bed_dip = -0.045
+
+[definition.composition.galleries.materials]
+
+[definition.composition.galleries.materials.bed_01]
+material = "dirt"
+weight = 4.5
+
+[definition.composition.galleries.materials.bed_02]
+material = "limestone"
+weight = 4.1
+
+[definition.composition.galleries.materials.bed_03]
+material = "phosphorite"
+weight = 0.6
+
+[definition.composition.galleries.materials.bed_04]
+material = "clay"
+weight = 0.8
+
+[definition.composition.galleries.depth]
+min = 0.32
+max = 1
+
+[definition.deposits]
+
+[definition.deposits.limestone_islands]
+stage = "bulk"
+order = 1
+field = "organic_edges"
+material = "limestone"
+host_material = "dirt"
+core_coverage = 1.0
+fringe_coverage = 1.0
+sprinkle_probability = 0.0
+
+[definition.deposits.limestone_islands.depth]
+min = 0.0
+max = 1.0
+
+[definition.deposits.limestone_islands.threshold]
+min = -1.0
+max = 1.0
+
+[definition.deposits.limestone_islands.blob]
+count = 44
+distortion = 0.3
+
+[definition.deposits.limestone_islands.blob.radius]
+min_m = 8.0
+max_m = 20.0
+
+[definition.deposits.limestone_islands.blob.stretch]
+min = 1.0
+max = 1.7
+
+[definition.deposits.limestone_islands.blob.orientation]
+min_degrees = 0.0
+max_degrees = 360.0
+
+[definition.deposits.algae]
+stage = "detail"
+order = 10
+field = "organic_edges"
+material = "algae"
+host_material = "dirt"
+core_coverage = 0.82
+fringe_coverage = 0.12
+sprinkle_probability = 0.002
+
+[definition.deposits.algae.depth]
+min = 0.0
+max = 1.0
+
+[definition.deposits.algae.threshold]
+min = -1.0
+max = 1.0
+
+[definition.deposits.algae.blob]
+count = 70
+distortion = 0.35
+
+[definition.deposits.algae.blob.radius]
+min_m = 2.0
+max_m = 6.0
+
+[definition.deposits.algae.blob.stretch]
+min = 1.0
+max = 1.5
+
+[definition.deposits.algae.blob.orientation]
+min_degrees = 0.0
+max_degrees = 360.0
+
+[definition.deposits.phosphorite]
+stage = "detail"
+order = 11
+field = "organic_edges"
+material = "phosphorite"
+host_material = "limestone"
+core_coverage = 0.96
+fringe_coverage = 0.08
+sprinkle_probability = 0.001
+
+[definition.deposits.phosphorite.depth]
+min = 0.0
+max = 1.0
+
+[definition.deposits.phosphorite.threshold]
+min = -1.0
+max = 1.0
+
+[definition.deposits.phosphorite.blob]
+count = 44
+distortion = 0.2
+
+[definition.deposits.phosphorite.blob.radius]
+min_m = 1.5
+max_m = 4.0
+
+[definition.deposits.phosphorite.blob.stretch]
+min = 1.1
+max = 2.0
+
+[definition.deposits.phosphorite.blob.orientation]
+min_degrees = 0.0
+max_degrees = 360.0
+
+[definition.pore]
+field = "pore_affinity"
+probability = 0.12
+affinity_min = -0.02
+passes = 3
+
+[definition.pore.radius]
+min_m = 2.0
+max_m = 3.0
+
+[definition.lining]
+material = "clay"
+thickness_fine = 1
+
+[definition.relaxation]
+passes = 9
+adoption = 0.37
+
+[definition.sprinkle]
+probability = 0.09
+
+[definition.finish]
+passes = 3
+adoption = 0.12
+
+[definition.erosion]
+passes = 8
+
+[definition.formation]
+material = "algae"
+probability = 0.085
+length_m = 2.7
+
+[definition.rind]
+material = "calcite"
+
+[definition.surface_layers]
+
+[definition.surface_layers.soil]
+material = "dirt"
+depth_m = 3.5
+
+[definition.surface_layers.weathered]
+material = "laterite"
+depth_m = 8.0
+
+[appearance]
+display_name = "Verdant galleries"
+preview_color_rgba = "86B76AFF"

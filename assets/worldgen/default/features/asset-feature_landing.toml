@@ -1,0 +1,103 @@
+schema_version = 1
+
+[definition]
+allow_horizontal_reflection = false
+
+[definition.operations]
+
+[definition.operations.op_00]
+order = 10
+x_fine = 0
+y_fine = 0
+
+[definition.operations.op_00.action]
+tag = "paint"
+
+[definition.operations.op_00.action.paint]
+material = "masonry"
+
+[definition.operations.op_00.action.paint.shape]
+tag = "rectangle"
+
+[definition.operations.op_00.action.paint.shape.rectangle]
+width_fine = 90
+height_fine = 36
+
+[definition.operations.op_01]
+order = 20
+x_fine = 3
+y_fine = 6
+
+[definition.operations.op_01.action]
+tag = "carve"
+
+[definition.operations.op_01.action.carve]
+
+[definition.operations.op_01.action.carve.shape]
+tag = "rectangle"
+
+[definition.operations.op_01.action.carve.shape.rectangle]
+width_fine = 84
+height_fine = 27
+
+[definition.operations.op_02]
+order = 30
+x_fine = 6
+y_fine = 0
+
+[definition.operations.op_02.action]
+tag = "paint"
+
+[definition.operations.op_02.action.paint]
+material = "sandstone"
+
+[definition.operations.op_02.action.paint.shape]
+tag = "rectangle"
+
+[definition.operations.op_02.action.paint.shape.rectangle]
+width_fine = 9
+height_fine = 6
+
+[definition.operations.op_03]
+order = 40
+x_fine = 75
+y_fine = 0
+
+[definition.operations.op_03.action]
+tag = "paint"
+
+[definition.operations.op_03.action.paint]
+material = "copper"
+
+[definition.operations.op_03.action.paint.shape]
+tag = "rectangle"
+
+[definition.operations.op_03.action.paint.shape.rectangle]
+width_fine = 9
+height_fine = 6
+
+[definition.markers]
+
+[definition.markers.spawn]
+role = "start"
+x_fine = 45
+y_fine = 10
+
+[definition.markers.stone]
+role = "resource_anchor"
+x_fine = 10
+y_fine = 5
+
+[definition.markers.ore]
+role = "resource_anchor"
+x_fine = 79
+y_fine = 5
+
+[definition.reservation]
+min_x_fine = 0
+min_y_fine = 0
+max_x_fine = 90
+max_y_fine = 36
+
+[appearance]
+display_name = "Hearth landing"

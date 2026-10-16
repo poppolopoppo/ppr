@@ -1,0 +1,26 @@
+schema_version = 1
+
+[definition]
+order = 30
+
+[definition.payload]
+tag = "carve_worm"
+
+[definition.payload.carve_worm]
+
+[definition.payload.carve_worm.geometry]
+biome = "hearth"
+count = 28
+length_min_m = 20.0
+length_max_m = 90.0
+radius_min_m = 1.2
+radius_max_m = 3.5
+turn_probability = 0.12
+turn_smoothing = 0.82
+radius_variation = 0.35
+chamber_probability = 0.025
+chamber_scale = 2.2
+
+[definition.payload.carve_worm.geometry.depth]
+min = 0.0
+max = 1.0

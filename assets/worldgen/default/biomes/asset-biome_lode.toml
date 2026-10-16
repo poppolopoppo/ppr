@@ -1,0 +1,472 @@
+schema_version = 1
+
+[definition]
+
+[definition.temperature]
+field = "temperature"
+base_k = 318.0
+variation_k = 18.0
+
+[definition.composition]
+
+[definition.composition.upper]
+order = 10
+field = "lode_bedding"
+bed_period_m = 78
+bed_warp_m = 18
+bed_dip = 0.14
+
+[definition.composition.upper.materials]
+
+[definition.composition.upper.materials.bed_01]
+material = "gneiss"
+weight = 4.8
+
+[definition.composition.upper.materials.bed_02]
+material = "granite"
+weight = 3.6
+
+[definition.composition.upper.materials.bed_03]
+material = "basalt"
+weight = 1.6
+
+[definition.composition.upper.depth]
+min = 0
+max = 0.44
+
+[definition.composition.deep]
+order = 20
+field = "beds"
+bed_period_m = 0
+bed_warp_m = 0
+bed_dip = 0
+
+[definition.composition.deep.materials]
+
+[definition.composition.deep.materials.bed_01]
+material = "granite"
+weight = 5.8
+
+[definition.composition.deep.materials.bed_02]
+material = "gneiss"
+weight = 2.8
+
+[definition.composition.deep.materials.bed_03]
+material = "basalt"
+weight = 1.4
+
+[definition.composition.deep.depth]
+min = 0.44
+max = 1
+
+[definition.deposits]
+
+[definition.deposits.secondary_host]
+stage = "bulk"
+order = 1
+field = "blob_edges"
+material = "basalt"
+host_material = "granite"
+core_coverage = 0.9
+fringe_coverage = 0.3
+sprinkle_probability = 0.0
+
+[definition.deposits.secondary_host.depth]
+min = 0.0
+max = 1.0
+
+[definition.deposits.secondary_host.threshold]
+min = -1.0
+max = 1.0
+
+[definition.deposits.secondary_host.blob]
+count = 36
+distortion = 0.38
+
+[definition.deposits.secondary_host.blob.radius]
+min_m = 9.0
+max_m = 25.0
+
+[definition.deposits.secondary_host.blob.stretch]
+min = 1.0
+max = 1.45
+
+[definition.deposits.secondary_host.blob.orientation]
+
+[definition.deposits.iron_ore]
+stage = "detail"
+order = 10
+field = "blob_edges"
+material = "iron_ore"
+host_material = "granite"
+core_coverage = 0.97
+fringe_coverage = 0.18
+sprinkle_probability = 0.004
+
+[definition.deposits.iron_ore.depth]
+min = 0.0
+max = 1.0
+
+[definition.deposits.iron_ore.threshold]
+min = -1.0
+max = 1.0
+
+[definition.deposits.iron_ore.blob]
+count = 60
+distortion = 0.22
+
+[definition.deposits.iron_ore.blob.radius]
+min_m = 2.5
+max_m = 8.0
+
+[definition.deposits.iron_ore.blob.stretch]
+min = 1.8
+max = 4.0
+
+[definition.deposits.iron_ore.blob.orientation]
+
+[definition.deposits.copper_ore]
+stage = "detail"
+order = 11
+field = "blob_edges"
+material = "copper_ore"
+host_material = "granite"
+core_coverage = 0.9
+fringe_coverage = 0.12
+sprinkle_probability = 0.003
+
+[definition.deposits.copper_ore.depth]
+min = 0.0
+max = 1.0
+
+[definition.deposits.copper_ore.threshold]
+min = -1.0
+max = 1.0
+
+[definition.deposits.copper_ore.blob]
+count = 44
+distortion = 0.22
+
+[definition.deposits.copper_ore.blob.radius]
+min_m = 2.0
+max_m = 6.0
+
+[definition.deposits.copper_ore.blob.stretch]
+min = 1.5
+max = 3.8
+
+[definition.deposits.copper_ore.blob.orientation]
+
+[definition.deposits.copper]
+stage = "detail"
+order = 12
+field = "blob_edges"
+material = "copper"
+host_material = "granite"
+core_coverage = 0.8
+fringe_coverage = 0.05
+sprinkle_probability = 0.002
+
+[definition.deposits.copper.depth]
+min = 0.0
+max = 1.0
+
+[definition.deposits.copper.threshold]
+min = -1.0
+max = 1.0
+
+[definition.deposits.copper.blob]
+count = 28
+distortion = 0.22
+
+[definition.deposits.copper.blob.radius]
+min_m = 1.0
+max_m = 3.0
+
+[definition.deposits.copper.blob.stretch]
+min = 2.0
+max = 4.5
+
+[definition.deposits.copper.blob.orientation]
+
+[definition.deposits.iron]
+stage = "detail"
+order = 13
+field = "blob_edges"
+material = "iron"
+host_material = "granite"
+core_coverage = 0.85
+fringe_coverage = 0.07
+sprinkle_probability = 0.002
+
+[definition.deposits.iron.depth]
+min = 0.0
+max = 1.0
+
+[definition.deposits.iron.threshold]
+min = -1.0
+max = 1.0
+
+[definition.deposits.iron.blob]
+count = 32
+distortion = 0.22
+
+[definition.deposits.iron.blob.radius]
+min_m = 1.2
+max_m = 3.5
+
+[definition.deposits.iron.blob.stretch]
+min = 2.0
+max = 4.0
+
+[definition.deposits.iron.blob.orientation]
+
+[definition.deposits.aluminum]
+stage = "detail"
+order = 14
+field = "blob_edges"
+material = "aluminum"
+host_material = "granite"
+core_coverage = 0.8
+fringe_coverage = 0.08
+sprinkle_probability = 0.002
+
+[definition.deposits.aluminum.depth]
+min = 0.0
+max = 1.0
+
+[definition.deposits.aluminum.threshold]
+min = -1.0
+max = 1.0
+
+[definition.deposits.aluminum.blob]
+count = 24
+distortion = 0.22
+
+[definition.deposits.aluminum.blob.radius]
+min_m = 1.5
+max_m = 4.0
+
+[definition.deposits.aluminum.blob.stretch]
+min = 1.5
+max = 3.0
+
+[definition.deposits.aluminum.blob.orientation]
+
+[definition.deposits.wolframite]
+stage = "detail"
+order = 15
+field = "blob_edges"
+material = "wolframite"
+host_material = "granite"
+core_coverage = 0.93
+fringe_coverage = 0.1
+sprinkle_probability = 0.002
+
+[definition.deposits.wolframite.depth]
+min = 0.0
+max = 1.0
+
+[definition.deposits.wolframite.threshold]
+min = -1.0
+max = 1.0
+
+[definition.deposits.wolframite.blob]
+count = 20
+distortion = 0.22
+
+[definition.deposits.wolframite.blob.radius]
+min_m = 1.2
+max_m = 3.0
+
+[definition.deposits.wolframite.blob.stretch]
+min = 1.4
+max = 3.6
+
+[definition.deposits.wolframite.blob.orientation]
+
+[definition.deposits.ruby]
+order = 200
+field = "mineral_edges"
+material = "ruby"
+host_material = "gneiss"
+stage = "detail"
+core_coverage = 0.85
+fringe_coverage = 0.25
+sprinkle_probability = 0.002
+
+[definition.deposits.ruby.depth]
+min = 0.12
+max = 1.0
+
+[definition.deposits.ruby.threshold]
+min = -1.0
+max = 1.0
+
+[definition.deposits.ruby.blob]
+count = 14
+distortion = 0.3
+
+[definition.deposits.ruby.blob.radius]
+min_m = 2.0
+max_m = 4.5
+
+[definition.deposits.ruby.blob.stretch]
+min = 1.0
+max = 1.9
+
+[definition.deposits.ruby.blob.orientation]
+min_degrees = 0.0
+max_degrees = 360.0
+
+[definition.deposits.emerald]
+order = 210
+field = "mineral_edges"
+material = "emerald"
+host_material = "gneiss"
+stage = "detail"
+core_coverage = 0.85
+fringe_coverage = 0.25
+sprinkle_probability = 0.002
+
+[definition.deposits.emerald.depth]
+min = 0.12
+max = 1.0
+
+[definition.deposits.emerald.threshold]
+min = -1.0
+max = 1.0
+
+[definition.deposits.emerald.blob]
+count = 16
+distortion = 0.3
+
+[definition.deposits.emerald.blob.radius]
+min_m = 2.0
+max_m = 5.0
+
+[definition.deposits.emerald.blob.stretch]
+min = 1.0
+max = 1.9
+
+[definition.deposits.emerald.blob.orientation]
+min_degrees = 0.0
+max_degrees = 360.0
+
+[definition.deposits.uranium_ore]
+order = 220
+field = "mineral_edges"
+material = "uranium_ore"
+host_material = "granite"
+stage = "detail"
+core_coverage = 0.85
+fringe_coverage = 0.25
+sprinkle_probability = 0.002
+
+[definition.deposits.uranium_ore.depth]
+min = 0.12
+max = 1.0
+
+[definition.deposits.uranium_ore.threshold]
+min = -1.0
+max = 1.0
+
+[definition.deposits.uranium_ore.blob]
+count = 16
+distortion = 0.3
+
+[definition.deposits.uranium_ore.blob.radius]
+min_m = 2.5
+max_m = 5.5
+
+[definition.deposits.uranium_ore.blob.stretch]
+min = 1.0
+max = 1.9
+
+[definition.deposits.uranium_ore.blob.orientation]
+min_degrees = 0.0
+max_degrees = 360.0
+
+[definition.deposits.autunite]
+stage = "detail"
+order = 240
+field = "mineral_edges"
+material = "autunite"
+host_material = "granite"
+core_coverage = 0.9
+fringe_coverage = 0.3
+sprinkle_probability = 0.002
+
+[definition.deposits.autunite.depth]
+min = 0.2
+max = 1.0
+
+[definition.deposits.autunite.threshold]
+min = -1.0
+max = 1.0
+
+[definition.deposits.autunite.blob]
+count = 14
+distortion = 0.35
+
+[definition.deposits.autunite.blob.radius]
+min_m = 1.5
+max_m = 3.5
+
+[definition.deposits.autunite.blob.stretch]
+min = 1.0
+max = 2.0
+
+[definition.deposits.autunite.blob.orientation]
+min_degrees = 0.0
+max_degrees = 360.0
+
+[definition.pore]
+field = "pore_affinity"
+probability = 0.05
+affinity_min = 0.22
+passes = 3
+
+[definition.pore.radius]
+min_m = 2.0
+max_m = 3.0
+
+[definition.lining]
+material = "basalt"
+thickness_fine = 3
+
+[definition.relaxation]
+passes = 9
+adoption = 0.26
+
+[definition.sprinkle]
+probability = 0.055
+
+[definition.finish]
+passes = 3
+adoption = 0.12
+
+[definition.erosion]
+passes = 8
+
+[definition.formation]
+material = "clear_quartz"
+probability = 0.035
+length_m = 2.7
+
+[definition.rind]
+material = "autunite"
+
+[definition.surface_layers]
+
+[definition.surface_layers.soil]
+material = "laterite"
+depth_m = 1.0
+
+[definition.surface_layers.weathered]
+material = "breccia"
+depth_m = 7.5
+
+[appearance]
+display_name = "Dense lode country"
+preview_color_rgba = "B18B64FF"

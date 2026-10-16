@@ -1,0 +1,188 @@
+schema_version = 1
+
+[definition]
+
+[definition.temperature]
+field = "temperature"
+base_k = 315.0
+variation_k = 15.0
+
+[definition.composition]
+
+[definition.composition.crossbeds]
+order = 10
+field = "dune_beds"
+bed_period_m = 34
+bed_warp_m = 5
+bed_dip = 0.16
+
+[definition.composition.crossbeds.materials]
+
+[definition.composition.crossbeds.materials.bed_01]
+material = "sandstone"
+weight = 7.8
+
+[definition.composition.crossbeds.materials.bed_02]
+material = "conglomerate"
+weight = 1.5
+
+[definition.composition.crossbeds.materials.bed_03]
+material = "clay"
+weight = 0.5
+
+[definition.composition.crossbeds.materials.bed_04]
+material = "rust"
+weight = 0.2
+
+[definition.composition.crossbeds.depth]
+min = 0
+max = 0.3
+
+[definition.composition.buried]
+order = 20
+field = "dune_beds"
+bed_period_m = 68
+bed_warp_m = 9
+bed_dip = -0.075
+
+[definition.composition.buried.materials]
+
+[definition.composition.buried.materials.bed_01]
+material = "sandstone"
+weight = 6.8
+
+[definition.composition.buried.materials.bed_02]
+material = "shale"
+weight = 1.8
+
+[definition.composition.buried.materials.bed_03]
+material = "conglomerate"
+weight = 1.1
+
+[definition.composition.buried.materials.bed_04]
+material = "iron_ore"
+weight = 0.3
+
+[definition.composition.buried.depth]
+min = 0.3
+max = 1
+
+[definition.deposits]
+
+[definition.deposits.rust]
+stage = "detail"
+order = 10
+field = "sediment_edges"
+material = "rust"
+host_material = "sandstone"
+core_coverage = 0.9
+fringe_coverage = 0.12
+sprinkle_probability = 0.001
+
+[definition.deposits.rust.depth]
+min = 0.0
+max = 1.0
+
+[definition.deposits.rust.threshold]
+min = -1.0
+max = 1.0
+
+[definition.deposits.rust.blob]
+count = 48
+distortion = 0.12
+
+[definition.deposits.rust.blob.radius]
+min_m = 1.5
+max_m = 4.0
+
+[definition.deposits.rust.blob.stretch]
+min = 3.0
+max = 5.0
+
+[definition.deposits.rust.blob.orientation]
+min_degrees = 4.0
+max_degrees = 14.0
+
+[definition.deposits.iron_ore]
+stage = "detail"
+order = 11
+field = "mineral_edges"
+material = "iron_ore"
+host_material = "sandstone"
+core_coverage = 0.97
+fringe_coverage = 0.06
+sprinkle_probability = 0.0005
+
+[definition.deposits.iron_ore.depth]
+min = 0.12
+max = 1.0
+
+[definition.deposits.iron_ore.threshold]
+min = -1.0
+max = 1.0
+
+[definition.deposits.iron_ore.blob]
+count = 32
+distortion = 0.25
+
+[definition.deposits.iron_ore.blob.radius]
+min_m = 1.0
+max_m = 3.0
+
+[definition.deposits.iron_ore.blob.stretch]
+min = 1.0
+max = 1.5
+
+[definition.deposits.iron_ore.blob.orientation]
+min_degrees = 0.0
+max_degrees = 360.0
+
+[definition.pore]
+field = "pore_affinity"
+probability = 0.06
+affinity_min = 0.16
+passes = 3
+
+[definition.pore.radius]
+min_m = 2.0
+max_m = 3.0
+
+[definition.lining]
+material = "shale"
+thickness_fine = 1
+
+[definition.relaxation]
+passes = 7
+adoption = 0.27
+
+[definition.sprinkle]
+probability = 0.045
+
+[definition.finish]
+passes = 3
+adoption = 0.12
+
+[definition.erosion]
+passes = 8
+
+[definition.formation]
+material = "gypsum"
+probability = 0.045
+length_m = 2.3
+
+[definition.rind]
+material = "rust"
+
+[definition.surface_layers]
+
+[definition.surface_layers.soil]
+material = "sandstone"
+depth_m = 1.0
+
+[definition.surface_layers.weathered]
+material = "laterite"
+depth_m = 4.0
+
+[appearance]
+display_name = "Ochre dunes"
+preview_color_rgba = "C4A16BFF"

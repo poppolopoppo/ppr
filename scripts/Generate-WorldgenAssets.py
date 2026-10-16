@@ -409,15 +409,38 @@ def main():
     parser.add_argument("--overwrite-textures", action="store_true",
                         help="Explicitly regenerate selected texture maps, including existing maps")
     args = parser.parse_args()
-    documents = {}
-    for path in ROOT.glob("*.toml"):
+    with (ROOT / "pack.toml").open("rb") as stream:
+        manifest = tomllib.load(stream)
+    if manifest.get("schema_version") != 1 or "assets" not in manifest:
+        parser.error("pack.toml: expected the named descriptor manifest schema 1")
+    declarations = manifest["assets"]
+    descriptors = {}
+    for key, declaration in declarations.items():
+        path = (ROOT / declaration["descriptor"]).resolve()
+        if not path.is_relative_to(ROOT.resolve()):
+            parser.error(f"{key}: descriptor escapes its pack root")
         with path.open("rb") as stream:
-            document = tomllib.load(stream)
-        if document.get("schema_version") != 3:
-            parser.error(f"{path.name}: expected content schema 3")
-        documents[path.stem] = document
-    appearance = documents["appearance"]["appearance"]
-    known = set(MATERIAL_FAMILIES) & documents["materials"]["materials"].keys()
+            descriptor = tomllib.load(stream)
+        if descriptor.get("schema_version") != 1:
+            parser.error(f"{path}: expected descriptor schema 1")
+        descriptors[key] = descriptor
+
+    def resolve(reference, kind):
+        namespace, separator, key = reference.partition(":")
+        if not separator:
+            key = namespace
+        elif namespace != manifest["pack_id"]:
+            parser.error("Procedural generation supports this explicit shipped pack only")
+        if key not in declarations or declarations[key]["kind"] != kind:
+            parser.error(f"{reference}: expected a declared {kind} asset")
+        return descriptors[key]
+
+    worlds = [descriptors[key] for key, declaration in declarations.items() if declaration["kind"] == "sim.world"]
+    materials = {}
+    for world in worlds:
+        for alias, binding in world["palette"]["materials"].items():
+            materials.setdefault(alias, []).append(resolve(binding["asset"], "sim.material")["appearance"])
+    known = set(MATERIAL_FAMILIES) & materials.keys()
     unknown = set(args.material) - known
     if unknown:
         parser.error("Unknown procedural material keys: " + ", ".join(sorted(unknown)))
@@ -427,16 +450,21 @@ def main():
     for key in sorted(known):
         if args.material and key not in args.material:
             continue
-        visual = appearance["materials"][key]
-        if visual.get("albedo_texture") != f"textures/{key}.png" or visual.get("normal_texture") != f"textures/{key}_normal.png":
-            parser.error(f"{key}: procedural generation requires its shipped texture paths")
+        for visual in materials[key]:
+            albedo = resolve(visual["albedo_texture"], "image.texture")
+            normal = resolve(visual["normal_texture"], "image.texture")
+            if albedo["source"] != f"textures/{key}.png" or normal["source"] != f"textures/{key}_normal.png":
+                parser.error(f"{key}: procedural generation requires its shipped texture source paths")
         generated += texture(key, MATERIAL_FAMILIES[key], args.overwrite_textures)
     if not args.material:
-        for profile, stack in appearance["backgrounds"].items():
+        for world in worlds:
+            profile = world["semantic_key"]
+            stack = resolve(world["appearance"]["background_stack"], "colony.background")["definition"]
             for layer, visual in stack["layers"].items():
-                if visual["texture"] != f"textures/background_{profile}_{layer}.png":
+                source = resolve(visual["texture"], "image.texture")["source"]
+                if source != f"textures/background_{profile}_{layer}.png":
                     parser.error(f"{profile}.{layer}: procedural generation requires its shipped texture path")
-                path = ROOT / visual["texture"]
+                path = ROOT / source
                 if args.overwrite_textures or not path.exists():
                     background_texture(profile, layer, visual["order"])
                     generated += 1

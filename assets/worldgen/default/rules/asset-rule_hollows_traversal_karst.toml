@@ -1,0 +1,21 @@
+schema_version = 1
+
+[definition]
+order = 71
+
+[definition.payload]
+tag = "feature"
+
+[definition.payload.feature]
+feature = "karst_arcade"
+biome = "karst"
+spacing_m = 45.0
+min_count = 1
+max_count = 5
+attempts = 4096
+priority = 49
+reflect = true
+
+[definition.payload.feature.depth]
+min = 0.0
+max = 1.0

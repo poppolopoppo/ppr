@@ -1,0 +1,14 @@
+schema_version = 1
+
+[definition]
+algorithm = "perlin"
+fractal = "ridged"
+frequency_per_metre = 0.027
+octaves = 3
+lacunarity = 2.0
+gain = 0.5
+warp_amplitude_m = 8.0
+warp_frequency_per_metre = 0.009
+axis_scale_x = 0.5
+axis_scale_y = 1.5
+rotation_degrees = -18.0

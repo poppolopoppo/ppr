@@ -1,0 +1,20 @@
+schema_version = 1
+element = "element_magma"
+representation = "particle"
+
+[appearance]
+display_name = "Magma"
+color_rgba = "FF6728E8"
+albedo_texture = "texture_color_textures_magma_png"
+normal_texture = "texture_normal_textures_magma_normal_png"
+texture_period_m = 2.0
+metallic = 0.0
+roughness = 0.48
+emissive_r = 1.0
+emissive_g = 0.19
+emissive_b = 0.025
+emissive_strength = 2.5
+alpha_mode = "blend"
+ior = 1.52
+normal_scale = 0.8
+refraction_depth_m = 0.1

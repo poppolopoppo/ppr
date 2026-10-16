@@ -1,0 +1,15 @@
+schema_version = 1
+
+[definition]
+order = 33
+
+[definition.payload]
+tag = "matter_fill"
+
+[definition.payload.matter_fill]
+marker = "anchor"
+material = "brine"
+temperature_k = 305.0
+bulk_density_kg_m3 = 1200.0
+fill_height_m = 5.666666666666667
+placement = "landmark_salt_basin"

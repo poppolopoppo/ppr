@@ -1,0 +1,314 @@
+schema_version = 1
+
+[definition]
+
+[definition.temperature]
+field = "temperature"
+base_k = 293.0
+variation_k = 8.0
+
+[definition.composition]
+
+[definition.composition.cover]
+order = 10
+field = "hearth_bedding"
+bed_period_m = 48
+bed_warp_m = 7
+bed_dip = 0.035
+
+[definition.composition.cover.materials]
+
+[definition.composition.cover.materials.bed_01]
+material = "sandstone"
+weight = 6.8
+
+[definition.composition.cover.materials.bed_02]
+material = "conglomerate"
+weight = 1.6
+
+[definition.composition.cover.materials.bed_03]
+material = "clay"
+weight = 0.7
+
+[definition.composition.cover.materials.bed_04]
+material = "shale"
+weight = 0.9
+
+[definition.composition.cover.depth]
+min = 0
+max = 0.22
+
+[definition.composition.basin]
+order = 20
+field = "hearth_bedding"
+bed_period_m = 82
+bed_warp_m = 12
+bed_dip = -0.02
+
+[definition.composition.basin.materials]
+
+[definition.composition.basin.materials.bed_01]
+material = "sandstone"
+weight = 6.2
+
+[definition.composition.basin.materials.bed_02]
+material = "limestone"
+weight = 1.8
+
+[definition.composition.basin.materials.bed_03]
+material = "shale"
+weight = 1.3
+
+[definition.composition.basin.materials.bed_04]
+material = "breccia"
+weight = 0.7
+
+[definition.composition.basin.depth]
+min = 0.22
+max = 1
+
+[definition.deposits]
+
+[definition.deposits.secondary_host]
+stage = "bulk"
+order = 1
+field = "blob_edges"
+material = "dirt"
+host_material = "sandstone"
+core_coverage = 0.9
+fringe_coverage = 0.3
+sprinkle_probability = 0.0
+
+[definition.deposits.secondary_host.depth]
+min = 0.0
+max = 1.0
+
+[definition.deposits.secondary_host.threshold]
+min = -1.0
+max = 1.0
+
+[definition.deposits.secondary_host.blob]
+count = 48
+distortion = 0.38
+
+[definition.deposits.secondary_host.blob.radius]
+min_m = 5.0
+max_m = 13.0
+
+[definition.deposits.secondary_host.blob.stretch]
+min = 1.0
+max = 1.8
+
+[definition.deposits.secondary_host.blob.orientation]
+
+[definition.deposits.clay]
+stage = "detail"
+order = 10
+field = "blob_edges"
+material = "clay"
+host_material = "sandstone"
+core_coverage = 0.95
+fringe_coverage = 0.22
+sprinkle_probability = 0.004
+
+[definition.deposits.clay.depth]
+min = 0.0
+max = 1.0
+
+[definition.deposits.clay.threshold]
+min = -1.0
+max = 1.0
+
+[definition.deposits.clay.blob]
+count = 60
+distortion = 0.22
+
+[definition.deposits.clay.blob.radius]
+min_m = 2.5
+max_m = 8.0
+
+[definition.deposits.clay.blob.stretch]
+min = 1.2
+max = 3.0
+
+[definition.deposits.clay.blob.orientation]
+
+[definition.deposits.copper_ore]
+stage = "detail"
+order = 11
+field = "blob_edges"
+material = "copper_ore"
+host_material = "sandstone"
+core_coverage = 0.9
+fringe_coverage = 0.1
+sprinkle_probability = 0.003
+
+[definition.deposits.copper_ore.depth]
+min = 0.0
+max = 1.0
+
+[definition.deposits.copper_ore.threshold]
+min = -1.0
+max = 1.0
+
+[definition.deposits.copper_ore.blob]
+count = 44
+distortion = 0.22
+
+[definition.deposits.copper_ore.blob.radius]
+min_m = 2.0
+max_m = 6.0
+
+[definition.deposits.copper_ore.blob.stretch]
+min = 1.3
+max = 3.5
+
+[definition.deposits.copper_ore.blob.orientation]
+
+[definition.deposits.coal]
+stage = "detail"
+order = 12
+field = "blob_edges"
+material = "coal"
+host_material = "sandstone"
+core_coverage = 0.88
+fringe_coverage = 0.18
+sprinkle_probability = 0.003
+
+[definition.deposits.coal.depth]
+min = 0.0
+max = 1.0
+
+[definition.deposits.coal.threshold]
+min = -1.0
+max = 1.0
+
+[definition.deposits.coal.blob]
+count = 36
+distortion = 0.22
+
+[definition.deposits.coal.blob.radius]
+min_m = 3.0
+max_m = 9.0
+
+[definition.deposits.coal.blob.stretch]
+min = 1.4
+max = 3.2
+
+[definition.deposits.coal.blob.orientation]
+
+[definition.deposits.algae]
+stage = "detail"
+order = 13
+field = "blob_edges"
+material = "algae"
+host_material = "sandstone"
+core_coverage = 0.7
+fringe_coverage = 0.08
+sprinkle_probability = 0.002
+
+[definition.deposits.algae.depth]
+min = 0.0
+max = 1.0
+
+[definition.deposits.algae.threshold]
+min = -1.0
+max = 1.0
+
+[definition.deposits.algae.blob]
+count = 32
+distortion = 0.22
+
+[definition.deposits.algae.blob.radius]
+min_m = 2.0
+max_m = 5.0
+
+[definition.deposits.algae.blob.stretch]
+min = 1.0
+max = 1.8
+
+[definition.deposits.algae.blob.orientation]
+
+[definition.deposits.azurite]
+order = 230
+field = "mineral_edges"
+material = "azurite"
+host_material = "sandstone"
+stage = "detail"
+core_coverage = 0.85
+fringe_coverage = 0.25
+sprinkle_probability = 0.002
+
+[definition.deposits.azurite.depth]
+min = 0.12
+max = 1.0
+
+[definition.deposits.azurite.threshold]
+min = -1.0
+max = 1.0
+
+[definition.deposits.azurite.blob]
+count = 14
+distortion = 0.3
+
+[definition.deposits.azurite.blob.radius]
+min_m = 2.5
+max_m = 5.5
+
+[definition.deposits.azurite.blob.stretch]
+min = 1.0
+max = 1.9
+
+[definition.deposits.azurite.blob.orientation]
+min_degrees = 0.0
+max_degrees = 360.0
+
+[definition.pore]
+field = "pore_affinity"
+probability = 0.055
+affinity_min = 0.08
+passes = 3
+
+[definition.pore.radius]
+min_m = 2.0
+max_m = 3.0
+
+[definition.lining]
+material = "sandstone"
+thickness_fine = 1
+
+[definition.relaxation]
+passes = 8
+adoption = 0.32
+
+[definition.sprinkle]
+probability = 0.08
+
+[definition.finish]
+passes = 3
+adoption = 0.12
+
+[definition.erosion]
+passes = 8
+
+[definition.formation]
+material = "clay"
+probability = 0.045
+length_m = 2.0
+
+[definition.rind]
+material = "calcite"
+
+[definition.surface_layers]
+
+[definition.surface_layers.soil]
+material = "dirt"
+depth_m = 2.5
+
+[definition.surface_layers.weathered]
+material = "laterite"
+depth_m = 6.0
+
+[appearance]
+display_name = "Hearth basin"
+preview_color_rgba = "9DB279FF"

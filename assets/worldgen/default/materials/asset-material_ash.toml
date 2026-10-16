@@ -1,0 +1,20 @@
+schema_version = 1
+element = "element_ash"
+representation = "particle"
+
+[appearance]
+display_name = "Ash"
+color_rgba = "77737FFF"
+albedo_texture = "texture_color_textures_ash_png"
+normal_texture = "texture_normal_textures_ash_normal_png"
+texture_period_m = 2.0
+metallic = 0.0
+roughness = 1.0
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "opaque"
+ior = 1.5
+normal_scale = 0.8
+refraction_depth_m = 0.0

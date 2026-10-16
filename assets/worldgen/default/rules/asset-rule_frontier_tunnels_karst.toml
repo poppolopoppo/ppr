@@ -1,0 +1,26 @@
+schema_version = 1
+
+[definition]
+order = 36
+
+[definition.payload]
+tag = "carve_worm"
+
+[definition.payload.carve_worm]
+
+[definition.payload.carve_worm.geometry]
+biome = "karst"
+count = 34
+length_min_m = 18.0
+length_max_m = 100.0
+radius_min_m = 1.4
+radius_max_m = 4.0
+turn_probability = 0.12
+turn_smoothing = 0.88
+radius_variation = 0.45
+chamber_probability = 0.04
+chamber_scale = 2.5
+
+[definition.payload.carve_worm.geometry.depth]
+min = 0.0
+max = 1.0

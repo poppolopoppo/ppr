@@ -1,0 +1,14 @@
+schema_version = 1
+
+[definition]
+algorithm = "cellular_value"
+fractal = "none"
+frequency_per_metre = 0.018
+octaves = 3
+lacunarity = 2.0
+gain = 0.5
+warp_amplitude_m = 28.0
+warp_frequency_per_metre = 0.022
+axis_scale_x = 1.15
+axis_scale_y = 0.85
+rotation_degrees = -7.0

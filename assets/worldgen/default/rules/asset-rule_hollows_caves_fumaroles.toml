@@ -1,0 +1,19 @@
+schema_version = 1
+
+[definition]
+order = 18
+
+[definition.payload]
+tag = "cave"
+
+[definition.payload.cave]
+biome = "fumaroles"
+field = "chimney_fissures"
+
+[definition.payload.cave.depth]
+min = 0.0
+max = 1.0
+
+[definition.payload.cave.threshold]
+min = 0.45
+max = 1.0

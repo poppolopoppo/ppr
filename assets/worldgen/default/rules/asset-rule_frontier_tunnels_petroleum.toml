@@ -1,0 +1,26 @@
+schema_version = 1
+
+[definition]
+order = 39
+
+[definition.payload]
+tag = "carve_worm"
+
+[definition.payload.carve_worm]
+
+[definition.payload.carve_worm.geometry]
+biome = "petroleum"
+count = 8
+length_min_m = 12.0
+length_max_m = 45.0
+radius_min_m = 0.8
+radius_max_m = 1.9
+turn_probability = 0.08
+turn_smoothing = 0.95
+radius_variation = 0.18
+chamber_probability = 0.0
+chamber_scale = 1.0
+
+[definition.payload.carve_worm.geometry.depth]
+min = 0.0
+max = 1.0

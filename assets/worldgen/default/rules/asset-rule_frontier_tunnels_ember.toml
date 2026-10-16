@@ -1,0 +1,26 @@
+schema_version = 1
+
+[definition]
+order = 40
+
+[definition.payload]
+tag = "carve_worm"
+
+[definition.payload.carve_worm]
+
+[definition.payload.carve_worm.geometry]
+biome = "ember"
+count = 18
+length_min_m = 20.0
+length_max_m = 85.0
+radius_min_m = 1.8
+radius_max_m = 4.5
+turn_probability = 0.18
+turn_smoothing = 0.8
+radius_variation = 0.6
+chamber_probability = 0.07
+chamber_scale = 2.8
+
+[definition.payload.carve_worm.geometry.depth]
+min = 0.0
+max = 1.0

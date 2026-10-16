@@ -1,0 +1,15 @@
+schema_version = 1
+
+[definition]
+order = 44
+
+[definition.payload]
+tag = "matter_fill"
+
+[definition.payload.matter_fill]
+marker = "anchor"
+material = "ash"
+temperature_k = 1100.0
+bulk_density_kg_m3 = 650.0
+fill_height_m = 4.666666666666667
+placement = "landmark_ember_fracture"

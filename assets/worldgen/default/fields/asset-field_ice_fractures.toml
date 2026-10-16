@@ -1,0 +1,14 @@
+schema_version = 1
+
+[definition]
+algorithm = "open_simplex2"
+fractal = "fbm"
+frequency_per_metre = 0.035
+octaves = 3
+lacunarity = 2.0
+gain = 0.5
+warp_amplitude_m = 4.0
+warp_frequency_per_metre = 0.035
+axis_scale_x = 0.9
+axis_scale_y = 1.25
+rotation_degrees = 7.0

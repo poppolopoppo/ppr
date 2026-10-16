@@ -1,0 +1,20 @@
+schema_version = 1
+element = "element_natural_gas"
+representation = "particle"
+
+[appearance]
+display_name = "Natural gas"
+color_rgba = "C7A36E2A"
+albedo_texture = "texture_color_textures_natural_gas_png"
+normal_texture = "texture_normal_textures_natural_gas_normal_png"
+texture_period_m = 3.0
+metallic = 0.0
+roughness = 1.0
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "blend"
+ior = 1.00044
+normal_scale = 0.0
+refraction_depth_m = 0.0

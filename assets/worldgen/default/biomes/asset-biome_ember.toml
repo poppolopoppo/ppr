@@ -1,0 +1,256 @@
+schema_version = 1
+
+[definition]
+
+[definition.temperature]
+field = "temperature"
+base_k = 1100.0
+variation_k = 100.0
+
+[definition.composition]
+
+[definition.composition.flows]
+order = 10
+field = "lava_flows"
+bed_period_m = 61
+bed_warp_m = 14
+bed_dip = 0.07
+
+[definition.composition.flows.materials]
+
+[definition.composition.flows.materials.bed_01]
+material = "basalt"
+weight = 5.7
+
+[definition.composition.flows.materials.bed_02]
+material = "tuff"
+weight = 2.2
+
+[definition.composition.flows.materials.bed_03]
+material = "pumice"
+weight = 1.5
+
+[definition.composition.flows.materials.bed_04]
+material = "obsidian"
+weight = 0.6
+
+[definition.composition.flows.depth]
+min = 0
+max = 0.9
+
+[definition.composition.basement]
+order = 20
+field = "lava_flows"
+bed_period_m = 102
+bed_warp_m = 24
+bed_dip = -0.055
+
+[definition.composition.basement.materials]
+
+[definition.composition.basement.materials.bed_01]
+material = "basalt"
+weight = 7.0
+
+[definition.composition.basement.materials.bed_02]
+material = "obsidian"
+weight = 1.8
+
+[definition.composition.basement.materials.bed_03]
+material = "breccia"
+weight = 1.0
+
+[definition.composition.basement.materials.bed_04]
+material = "tuff"
+weight = 0.2
+
+[definition.composition.basement.depth]
+min = 0.9
+max = 1
+
+[definition.deposits]
+
+[definition.deposits.glass]
+stage = "detail"
+order = 10
+field = "volcanic_edges"
+material = "glass"
+host_material = "obsidian"
+core_coverage = 0.96
+fringe_coverage = 0.18
+sprinkle_probability = 0.0
+
+[definition.deposits.glass.depth]
+min = 0.0
+max = 1.0
+
+[definition.deposits.glass.threshold]
+min = -1.0
+max = 1.0
+
+[definition.deposits.glass.blob]
+count = 36
+distortion = 0.2
+
+[definition.deposits.glass.blob.radius]
+min_m = 2.0
+max_m = 5.0
+
+[definition.deposits.glass.blob.stretch]
+min = 1.5
+max = 3.0
+
+[definition.deposits.glass.blob.orientation]
+min_degrees = 150.0
+max_degrees = 180.0
+
+[definition.deposits.iron]
+stage = "detail"
+order = 11
+field = "mineral_edges"
+material = "iron"
+host_material = "basalt"
+core_coverage = 0.93
+fringe_coverage = 0.05
+sprinkle_probability = 0.0005
+
+[definition.deposits.iron.depth]
+min = 0.0
+max = 1.0
+
+[definition.deposits.iron.threshold]
+min = -1.0
+max = 1.0
+
+[definition.deposits.iron.blob]
+count = 30
+distortion = 0.3
+
+[definition.deposits.iron.blob.radius]
+min_m = 1.0
+max_m = 3.0
+
+[definition.deposits.iron.blob.stretch]
+min = 1.0
+max = 1.7
+
+[definition.deposits.iron.blob.orientation]
+min_degrees = 0.0
+max_degrees = 360.0
+
+[definition.deposits.dikes]
+stage = "bulk"
+order = 5
+field = "volcanic_edges"
+material = "obsidian"
+host_material = "basalt"
+core_coverage = 0.9
+fringe_coverage = 0.3
+sprinkle_probability = 0.0
+
+[definition.deposits.dikes.depth]
+min = 0.12
+max = 1
+
+[definition.deposits.dikes.threshold]
+min = -1.0
+max = 1.0
+
+[definition.deposits.dikes.blob]
+count = 24
+distortion = 0.35
+
+[definition.deposits.dikes.blob.radius]
+min_m = 2.0
+max_m = 4.5
+
+[definition.deposits.dikes.blob.stretch]
+min = 4
+max = 7
+
+[definition.deposits.dikes.blob.orientation]
+min_degrees = 76
+max_degrees = 104
+
+[definition.deposits.fluorite]
+stage = "detail"
+order = 150
+field = "volcanic_edges"
+material = "fluorite"
+host_material = "obsidian"
+core_coverage = 0.9
+fringe_coverage = 0.3
+sprinkle_probability = 0.002
+
+[definition.deposits.fluorite.depth]
+min = 0.2
+max = 1
+
+[definition.deposits.fluorite.threshold]
+min = -1.0
+max = 1.0
+
+[definition.deposits.fluorite.blob]
+count = 14
+distortion = 0.35
+
+[definition.deposits.fluorite.blob.radius]
+min_m = 2.5
+max_m = 5.0
+
+[definition.deposits.fluorite.blob.stretch]
+min = 1
+max = 1.6
+
+[definition.deposits.fluorite.blob.orientation]
+min_degrees = 0
+max_degrees = 360
+
+[definition.pore]
+field = "pore_affinity"
+probability = 0.095
+affinity_min = 0.06
+passes = 3
+
+[definition.pore.radius]
+min_m = 2.0
+max_m = 3.0
+
+[definition.lining]
+material = "obsidian"
+thickness_fine = 3
+
+[definition.relaxation]
+passes = 9
+adoption = 0.28
+
+[definition.sprinkle]
+probability = 0.045
+
+[definition.finish]
+passes = 3
+adoption = 0.12
+
+[definition.erosion]
+passes = 8
+
+[definition.formation]
+material = "obsidian"
+probability = 0.075
+length_m = 3.8
+
+[definition.rind]
+material = "breccia"
+
+[definition.surface_layers]
+
+[definition.surface_layers.soil]
+material = "pumice"
+depth_m = 1.5
+
+[definition.surface_layers.weathered]
+material = "tuff"
+depth_m = 8.0
+
+[appearance]
+display_name = "Ember depths"
+preview_color_rgba = "B6644EFF"
