@@ -13,10 +13,117 @@ verified inline thin-factory workaround; outcome transport alone did not resolve
 the original MSVC ICE. Focused common/image/core checks and source review passed;
 the execution manifest remains the authority for exact tested leaves and exits.
 
-The next uncommitted batch switches complete owned sources, selected numeric
-catalogs, presentation, authoring/save, and their consumers together. It is
-currently transitional and has not passed a build. Stable portions are under
-independent review while consumer migration continues.
+The current uncommitted batch switches complete owned sources, selected numeric
+catalogs, presentation, authoring/save, and their consumers together. Authoring,
+formatting/style checks and independent source review passed. The current Dev
+configure passed; the first builds exposed ordinary explicit-conversion and
+unused/shadowed-variable errors. Five repaired files passed source review and
+scoped formatting/style checks. The next retry encountered MSVC C1001 in
+`SimFramePacket.cpp:150` (`function-signature.cpp:213`, IFC import detected),
+so affected production edits and builds stopped under `BLOCKED_PLAN`. Evidence
+is retained in `atomic-migration/build-retry2.log` and its result JSON. Two
+isolated full-translation-unit probes also reproduced the ICE: adding only a
+direct `engine.asset` import, and moving the identical short-circuit predicate
+into a local boolean before the unchanged error macro. The latter reports the
+ICE at the predicate itself. A third sequential, null-safe probe localizes the
+first triggering statement to `world->presentation()`, before catalog or
+generation operations. A coherent baseline/candidate probe rebuilt copied
+WorldGen, Colony, Driver and packet interfaces together. Both branches compiled
+their interfaces and WorldGen implementation, then reproduced the same consumer
+ICE; defining the getter inline is therefore rejected as a remedy. Exact source,
+map, compiler and IFC evidence is in `repro/graph-ab-results.json`. A tiny
+implementation-unit probe calling only the accessor also reproduces the ICE,
+as does the analogous existing `catalogOwner()` getter. Minimal companion
+owners with the actual presentation payload and with an empty cross-module
+payload both compile. The original PreparedWorld/module context remains
+necessary; this is not evidence of a universal shared-pointer-reference defect.
+The coherent borrowed-`safe_ptr` view candidate also reproduces the ICE and is
+rejected. A subsequent class-context reduction removes only the two friend
+factory declarations: all four interfaces and the same tiny getter caller now
+compile. This isolates those declarations as a necessary trigger in this exact
+compiler configuration, without establishing invalid C++. The private
+friend-class construction bridge then passed all six coherent compile stages,
+including the real factory implementation and original packet consumer.
+Evidence is `repro/private-construction-bridge/compile-results.json`. The
+coordinator approved integrating that exact reviewed two-file remedy; public
+factories, validation, ownership, private construction and member layout remain
+unchanged. This closes the affected-edit design blocker, not the production
+build or runtime acceptance gates.
+
+The failing baseline is preserved in `blocked-snapshot/blocked-snapshot.json`:
+216 hash-verified source/evidence/IFC files, including 127 unique IFCs. Approved
+image reuse implementation proceeds independently against that preserved
+diagnostic baseline. Runtime tests remain pending; reuse has not passed its
+implementation or execution gates. The next normal build waits for its coherent
+implementation handoff. A newer VS18 Insiders channel build is advertised, but
+the exact bridge proof passed on the installed compiler. No compiler update has
+been performed or proven necessary.
+
+The normal configure passed on the installed compiler. The five-target build
+compiled both actual packet consumers, confirming the private bridge at its
+original failure boundary, then encountered a separate C1001 in unchanged
+`ColonySmoke.cpp:108` at `parallel::backgroundPool()`. That app executable remains
+blocked. The verified independent four-test-target closure excludes `app.game`;
+its next build exposed ordinary namespace/import/CRT errors being repaired.
+No executable linked successfully in these attempts and no new runtime tests
+have run. The failure manifests retain source and pre-existing binary identities.
+The subsequent four-target retry passed and linked the current app/game test
+executables. Focused runtime validation is now authorized against recorded new
+binary identities; the separate `app.game` smoke compile blocker remains open.
+The first focused common preparation run passed 11 cases. Image preparation
+passed nine of eleven requested leaves; two new fixtures incorrectly queried
+progress after consuming the request. A reviewed test-only correction snapshots
+progress before `take()`, preserving work, drain and budget assertions, and moves
+zero-admission checks before consumption as well. After the affected asset
+target rebuilt, all eleven requested image-preparation leaves passed. Printed
+recursive group nodes are excluded from leaf counts and timing ranks; an earlier
+derived count incorrectly classified the `asset/image` group as an extra leaf.
+Production behavior was not changed for this repair. Source ownership (8),
+descriptor imports (8), sim asset bindings (4), and all five approved numeric
+golden/reference leaves passed. CLI checks passed 22 of 23; explicit pack-set
+root loading failed with `schema_invalid`. The private selection schema left
+`packs` defaulted while requiring at least one item, so its empty default failed
+schema validation before authored entries loaded. The bounded repair marks that
+collection required and adds missing/empty-table rejection cases. Formatting and
+author review passed, the affected `game.tests` build passed (7.551 seconds), and
+all 23 CLI leaves passed on rerun (1.290 seconds). These are execution observations,
+not a performance comparison. The pack-content group then passed 26 of 28 leaves
+(45.828 seconds); diagnostic-location and diagnostic-count assertions failed in
+two error-path fixtures. Review found that the shared collector returns on the
+first ordinary error before merging later settled outcomes' diagnostics. A
+bounded repair will merge all settled diagnostics in request order before
+selecting the first ordinary error, retaining fatal-exception precedence and
+draining. The fixtures must also derive numeric TextureId order rather than
+assuming lexical filenames. These failures are retained and do not count as a
+passed suite. All ten world-assembly leaves passed (16.266 seconds). Checkpoint
+validation passed six of ten leaves (4.165 seconds); four restore cases fail
+`Colony::install` validation. Source review found its remaining comparison with
+the old flattened catalog schema version instead of `asset::Manifest::schema_version`.
+The bounded correction is authorized, retaining all other install guards.
+The failure evidence is retained; the restore rerun remains pending.
+Preview validation passed one of three leaves. Bounded sample selection and a
+whole-world export-rejection assertion failed; the latter leaf completed after
+179.22 seconds. These timings are observations from single executions. A bounded
+PIX attachment to that already-running workload failed with `PIXTOOL18 - Process
+terminated` after seven seconds; no valid timing capture or performance conclusion
+resulted. Source review found invalid MatterFill heights in the custom-grid
+fixture and two production writers attempting exclusive creation of `biome.ppm`.
+The bounded fixes retain grid validation and destination-exclusive output while
+assigning that exact image one writer. The coordinator approved a required,
+synchronous borrowed biome-lookup overload for the existing region writer:
+uniform samples delegate with a constant lookup, while whole-world crops borrow
+the existing plan/layout to resolve each global cell. IDs are validated before
+color lookup; the callback is never retained. Their execution gates remain pending.
+Broader acceptance remains pending.
+
+Two tiny Smoke implementation-unit probes calling only `backgroundPool()`
+compiled successfully with both the original global-module headers and with
+those headers removed. This does not establish a header defect or repair the
+full translation unit. One next bounded probe preserves the original inputs and
+exact following `prepareWorld` call to investigate the necessary surrounding
+context. That prefix probe also compiled successfully (1.437 seconds), leaving
+the full function/translation-unit interaction unresolved. No production Smoke
+workaround is authorized by those observations.
 
 The independent data audit of the shipped format conversion passed: the manifest
 declares exactly 513 descriptor files, all declared files exist, the seven legacy
@@ -75,7 +182,8 @@ indexed assets and their returned paths must match indexed provenance. Missing
 declared records fail explicitly even if a disk file exists. Deleted records
 are absent from the candidate manifest, and empty bytes are decoder input rather
 than an absence sentinel. Reader/snapshot observers never escape synchronous
-import. This seam is independently reviewed but not yet implemented.
+import. This seam is now implemented and independently reviewed in the current
+atomic migration; its runtime acceptance checks remain pending.
 
 ## Shared preparation execution blocker
 
@@ -427,24 +535,27 @@ needed for the canonical-domain correctness gate.
 ## Current next step and pending gates
 
 Standalone shared asynchronous preparation and its image processor have passed
-their focused checkpoint. Next integrate joined presentation results and switch
-the live loader, dynamic authoring sources, startup/preview/checkpoint consumers,
-and checked-in formats in one coherent migration, followed by reuse,
-documentation/skills, and final validation.
+their focused checkpoint. The consumer/format migration is authored and its
+source review passed. The private construction bridge is integrated and passed
+its scoped mechanical gates after the coherent compile proof described above.
+Unchanged-image reuse bodies and seven new focused leaves passed author
+self-review, formatting and independent source review. The four test targets
+build; focused image preparation passes, while consumer and full-suite runtime
+acceptance remain in progress.
 
 The all-world descriptor owner remains separate from a selected numeric catalog.
-`loadContentCatalog` will return definitions only. A selected World view will be
-assembled using actual compile parameters; plan construction will consume its
-matching bound recipe, not recompute lexical bindings. Runtime Material IDs
+`loadContentCatalog` now returns definitions only. A selected World view is
+assembled using actual compile parameters; plan construction consumes its
+matching bound recipe without recomputing lexical bindings. Runtime Material IDs
 are meaningful only within that selected World.
 
 Asset owns bounded requests and their shared asynchronous lifecycle. Image owns
 processing stages and budget decisions; content composes their results with
 selected World appearance. The shared request receives an explicit non-owning
 scheduler dependency that must outlive the request and accepted captures; the
-texture factory supplies `backgroundPool()`. Workshop currently runs on
-`backgroundPool()`, so external update polling must adopt definition results,
-pump image requests, then schedule capture after readiness. WorldJob's separate
+texture factory supplies `backgroundPool()`. Workshop's external update polling
+adopts definition results, pumps image requests, then schedules capture after
+readiness. WorldJob's separate
 coordinator may wait/drain image jobs. CPU preparation does not perform GPU
 uploads. A distinct owning presentation sidecar carries World/numeric/presentation
 identity and generation; capture requires a matching ready sidecar. Cancellation
@@ -456,7 +567,15 @@ Import, assembly, and processor validation must reuse the descriptor's declared
 range instead of repeating numeric bounds. Apply this to changed asset schemas
 and their affected validators without an unrelated engine-wide cleanup.
 
-Real domain integration, shipped-content migration, numeric output parity,
-cancellation/draining and GPU retirement, full applicable suites/interactive
-matrix, IDE inspection, and focused timing evidence remain pending. The
-foundation pass does not establish those later behaviors.
+The independent four-test-target closure has built. Run focused
+source/pack/checkpoint/preview/CLI and
+shipped numeric parity checks, followed by the applicable twelve-entry matrix,
+interactive/lifetime gates and IDE inspection. Runtime integration, cancellation,
+draining, GPU retirement and numeric parity remain unverified for this migration.
+Diagnose the separate smoke compiler blocker before rebuilding `app.game` or
+running its shipped validators and interactive gates.
+Collect a fresh focused PIX trace from a required natural workload using the
+documented query route, and report test timings as observations, not benchmarks.
+Finish documentation/skill review and selectively commit passing milestones,
+preserving unrelated user changes. Earlier checkpoint passes do not establish
+these later behaviors.

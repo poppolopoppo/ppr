@@ -204,10 +204,32 @@ stay stable during admitted work. Replace binary files completely after draining
 A `ContentPresentation` sidecar owns prepared images and matches the selected
 catalog, World/numeric identity and expected generation. Asset-backed capture
 requires a matching ready sidecar and returns an explicit error otherwise.
+Draft revision identifies editable content; request generation identifies a
+preparation attempt. They can differ, including retries at the same revision.
+Preview results retain the caller's expected presentation generation separately
+and use it for attachment, capture and export checks.
 Headless numeric validation can omit preparation. Workshop's external update
 polls requests before scheduling capture; no background worker waits for image
 work queued to the same pool. WorldJob's separate coordinator may finish/drain.
 The existing passes retain GPU upload and fenced retirement ownership.
+
+Ready CPU images can be reused across definition edits within one binary-source
+epoch. This opaque shared token is independent of the draft revision, request
+generation and persistent fingerprints. Opening a session creates a fresh token;
+Workshop Open/Reload candidates mint a new one and adopt it only on success.
+Edits, undo and save retain the adopted token. A standalone presentation request
+without a token disables reuse. Callers supplying a token must keep binary sources
+unchanged within that epoch and mint a fresh token after replacing them.
+
+Reuse requires the same epoch and exact accepted canonical source provenance,
+descriptor settings and processing version, plus a valid owned mip chain. Only
+misses enter worker processing. The new sidecar still uses the current catalog,
+numeric identity and request generation; it shares owned pixels rather than
+adopting the previous sidecar. Full selected-input and retained-output budgets
+include hits in their original order. Reload rereads binary bytes even when
+paths, sizes and timestamps match. Presentation work counters distinguish source
+bytes read by processing, prepared images and reused images; they do not measure
+physical disk traffic or establish a benchmark result.
 
 ## In-game Worldgen Workshop
 

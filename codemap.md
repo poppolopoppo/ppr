@@ -9,7 +9,7 @@ entry points change. For durable architecture and coding policy, see
 
 ## Project Responsibility
 
-A real-time C++23 engine built on C++20 modules, with nine production libraries. Core supplies allocators, containers, concurrency, I/O, configuration and HAL; shader/RHI supply Slang-based GPU infrastructure. The game reference client exercises seeded colony simulation, physics, tools and generated rendering.
+A real-time C++23 engine built on C++20 modules, with ten production libraries. Core supplies allocators, containers, concurrency, I/O, configuration and HAL; asset supplies named pack indices, descriptor importing and shared asynchronous preparation; shader/RHI supply Slang-based GPU infrastructure. The game reference client exercises seeded colony simulation, physics, tools and generated rendering.
 
 `Application` owns lifecycle/platform/services/renderer and the render worker. `ApplicationEditor` owns window/input/player/camera/viewport, grid/triangle passes and UI. Interactive rendering defaults to the worker; headless hosts render inline. Game code captures owned simulation/pass payloads and acknowledges edits from matching consumed results. Kenney assets remain staged but the interactive demo draws generated grid/debug content rather than a committed fixture scene.
 
@@ -31,11 +31,12 @@ game/main.cpp → game.application → game.config / game.display / game.colony.
               → engine.app + engine.core + engine.math + engine.sim (app.game; plus PRIVATE engine.physics per Slice 4 Oracle grant — box2d stays behind engine.physics)
                   engine.app → engine.core / engine.math / engine.shader / engine.rhi / engine.image / engine.mesh
                  engine.rhi → engine.core / engine.math / engine.shader
-                 engine.sim → engine.core / engine.math
+                 engine.sim → engine.core / engine.math / engine.asset
                  engine.physics → engine.core / engine.math (+ PRIVATE box2d::box2d)
                   engine.shader → engine.core
+                  engine.asset → engine.core
                   engine.math → engine.core
-                  engine.image → engine.core / engine.math (+ PRIVATE mango-image)
+                  engine.image → engine.core / engine.math / engine.asset (+ PRIVATE mango-image / stb)
                   engine.mesh → engine.core / engine.math (+ PRIVATE mango-import3d)
 ```
 
@@ -64,6 +65,7 @@ game/main.cpp → game.application → game.config / game.display / game.colony.
 | Directory                       | Responsibility Summary                                                                                | Detailed Map                                        |
 |---------------------------------|-------------------------------------------------------------------------------------------------------|-----------------------------------------------------|
 | `lib/engine/core/`              | Umbrella foundation: types, memory, containers, concurrency, IO, configuration, services, opaque, HAL.               | [View Map](lib/engine/core/codemap.md)              |
+| `lib/engine/asset/`             | Named pack indices, checked typed descriptor importing, shared asynchronous preparation. | [View Map](lib/engine/asset/codemap.md) |
 | `lib/engine/core/config/` | Typed schemas, resolution/provenance, CLI/environment and TOML adapters. | [View Map](lib/engine/core/config/codemap.md) |
 | `lib/engine/core/memory/`       | Allocator concepts, page pools, Arena/ScopedArena/ScratchPad, composite allocators, PMR, STL, poison. | [View Map](lib/engine/core/memory/codemap.md)       |
 | `lib/engine/core/containers/`   | Stack/RingBuffer, Sparse/StableVector, HashMap/HashSet/FlatMap, Bitmask, views, RelPtr/TagPtr.        | [View Map](lib/engine/core/containers/codemap.md)   |
@@ -95,9 +97,9 @@ game/main.cpp → game.application → game.config / game.display / game.colony.
 | `cmake/`                        | Root CMake: presets, compilers, sanitizers, dependencies.                                             | [View Map](cmake/codemap.md)                        |
 | `cmake/compiler/`               | Per-compiler flag config (MSVC, Clang, GCC, sanitizers).                                              | [View Map](cmake/compiler/codemap.md)               |
 | `cmake/external/`               | External dependency CMake (CPM/vcpkg: GLFW, Mango, rapidhash, SlangRHI, STB, DearImGui).                                     | [View Map](cmake/external/codemap.md)               |
-| `game/`                         | Demo exe (`app.game`): editor-driven generated colony with `GridPass` + panel and a separate headless `--smoke` path; Every build synchronizes shaders/textures/meshes; POST_BUILD stages DLLs where configured. | [View Map](game/codemap.md)                         |
+| `game/`                         | Demo exe (`app.game`): editor-driven generated colony with `GridPass` + panel and a separate headless `--smoke` path; Every build synchronizes shaders/textures/meshes/fonts; POST_BUILD stages DLLs where configured. | [View Map](game/codemap.md)                         |
 | `include/pP/`                   | Single public non-module header `Macros.h` (build-mode/poison detection, attributes, assertions, logging, error returns, RAII helpers). | [View Map](include/pP/codemap.md)                   |
-| `assets/`                       | Runtime asset root: shaders + textures + meshes; Slang sources compiled at startup by `engine.shader`.                 | [View Map](assets/codemap.md)                       |
+| `assets/`                       | Runtime asset root: shaders + textures + meshes + fonts; Slang sources compiled at startup by `engine.shader`.                 | [View Map](assets/codemap.md)                       |
 | `assets/shaders/`               | Slang shader sources, compiled at startup by `engine.shader`: `mesh_bindless.slang` (`TrianglePass`) and `grid_tiles.slang` (`GridPass`). | [View Map](assets/shaders/codemap.md)               |
 | `lib/`                          | Umbrella for `lib/engine/*`; module graph overview.                                                            | [View Map](lib/codemap.md)                          |
 | `lib/engine/`                   | Umbrella for the engine modules; authoritative module inventory + dependency edges.                          | [View Map](lib/engine/codemap.md)                   |

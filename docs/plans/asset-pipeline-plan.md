@@ -78,6 +78,11 @@ implementations enter their owning targets together. Do not add
 The authoritative identity is a stable qualified name, such as `ppr.base:rock`,
 with its declared kind.
 
+Draft revisions and preparation request generations are independent. A preview
+retains its expected presentation generation separately; attachment, capture and
+export validate that stamp, while stale-edit checks retain the draft revision.
+Retrying the same revision can produce a different request generation.
+
 | Concept | Representation |
 |---|---|
 | Authoring identity | Stable pack namespace and stable local key; manifest declares kind. |
@@ -447,6 +452,17 @@ an unbounded sequence of pending candidates. Reuse independently owned
 presentation results when only definitions change. A small image-specific reuse
 table keyed by source revision and processing settings is permissible if needed;
 it is not a universal incremental store.
+
+Composition authorizes reuse with an opaque shared immutable binary-source epoch
+token. Explicit Open/Reload mints a fresh token for its replacement candidate;
+ordinary definition edits, undo and save retain the adopted token. A missing
+token disables reuse, and independent sessions cannot accidentally share an
+epoch merely because their counters match. Image processing does not depend on
+this composition token: it receives owning reusable results only after content
+checks token identity. Hits still require exact canonical provenance, processing
+settings and processor version. Whole-closure input limits and ordered retained
+output limits include hits; actual read/processing counts distinguish skipped
+work. Reload rereads source bytes even when paths, sizes and timestamps match.
 
 Explicit reload builds a replacement pack-set candidate. Unmount changes future
 snapshots. Existing worlds, jobs, and GPU work retain their owners until
