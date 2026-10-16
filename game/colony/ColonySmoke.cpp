@@ -83,11 +83,18 @@ namespace pP::colony {
                 PPR_RETURN_ERROR_ON_FAIL(ColonySmoke, std::errc::state_not_recoverable);
             }
 
-            for (const auto &[material, totals]: expected) {
-                const auto found = actual.find(material);
-                if (found == actual.end() or
-                    std::abs(found->second.m_volume - totals.m_volume) > 1.0e-8 * (std::max) (1.0, totals.m_volume) or
-                    std::abs(found->second.m_mass - totals.m_mass) > 1.0e-8 * (std::max) (1.0, totals.m_mass)) {
+            // Iterates regions rather than ranging over the map (MSVC function-signature.cpp:213 module ICE family).
+            // Coverage is identical: every expected key comes from a region, and stray actual-only keys trip the
+            // size check above.
+            for (const auto &region: generated.m_matter.m_regions) {
+                const auto expected_found = expected.find(region.m_material);
+                const auto actual_found = actual.find(region.m_material);
+                if (expected_found == expected.end() or
+                    actual_found == actual.end() or
+                    std::abs(actual_found->second.m_volume - expected_found->second.m_volume) >
+                        1.0e-8 * (std::max) (1.0, expected_found->second.m_volume) or
+                    std::abs(actual_found->second.m_mass - expected_found->second.m_mass) >
+                        1.0e-8 * (std::max) (1.0, expected_found->second.m_mass)) {
                     PPR_RETURN_ERROR_ON_FAIL(ColonySmoke, std::errc::state_not_recoverable);
                 }
             }
