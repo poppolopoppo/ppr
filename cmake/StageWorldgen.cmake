@@ -1,9 +1,21 @@
 # This tree is build-owned. Synchronize deletions as well as additions/edits.
 file(REAL_PATH "${BUILD_ROOT}" build_root)
-file(REAL_PATH "${DEPLOY_ROOT}" deploy_root)
+cmake_path(ABSOLUTE_PATH DEPLOY_ROOT NORMALIZE OUTPUT_VARIABLE deploy_root)
+# REAL_PATH warns for a missing tree. Resolve its nearest existing ancestor to
+# check redirects while permitting first-build and deleted-directory recovery.
+set(existing_parent "${deploy_root}")
+while(NOT EXISTS "${existing_parent}")
+    cmake_path(GET existing_parent PARENT_PATH parent)
+    if(parent STREQUAL existing_parent)
+        message(FATAL_ERROR "Cannot resolve worldgen destination: ${deploy_root}")
+    endif()
+    set(existing_parent "${parent}")
+endwhile()
+file(REAL_PATH "${existing_parent}" resolved_parent)
+cmake_path(IS_PREFIX build_root "${resolved_parent}" NORMALIZE parent_within_build)
 cmake_path(IS_PREFIX build_root "${deploy_root}" NORMALIZE within_build)
 cmake_path(GET deploy_root FILENAME leaf)
-if(NOT within_build OR NOT leaf STREQUAL "worldgen" OR deploy_root STREQUAL build_root)
+if(NOT within_build OR NOT parent_within_build OR NOT leaf STREQUAL "worldgen" OR deploy_root STREQUAL build_root)
     message(FATAL_ERROR "Refusing worldgen staging outside its build-owned directory: ${deploy_root}")
 endif()
 if(NOT IS_DIRECTORY "${SOURCE_ROOT}/default")
