@@ -103,6 +103,35 @@ namespace pP::tests::detail::ImagePreparation {
         }
     }
 
+    Array<image::TextureReuseCandidate> prepareReusable(
+        const std::shared_ptr<const asset::PackSet> &packs, const Array<image::TextureDefinition> &definitions,
+        config::Diagnostics &diagnostics) {
+        auto request = image::prepareTextures(
+            packs, definitions, asset::RequestGeneration{1u}, context::background(), diagnostics);
+        PPR_TEST_ASSERT(request.has_value());
+
+        auto result = request->finish(diagnostics);
+        PPR_TEST_ASSERT(result.has_value());
+        PPR_TEST_ASSERT(result->m_value.m_work.m_read_count == definitions.size());
+
+        Array<image::TextureReuseCandidate> reusable;
+        reusable.reserve(definitions.size());
+
+        for (auto &prepared: result->m_value.m_textures) {
+            const auto definition = std::ranges::find(definitions, prepared.m_id, &image::TextureDefinition::m_id);
+            PPR_TEST_ASSERT(definition != definitions.end());
+
+            const auto indexed = packs->resolve(asset::AssetKey{*prepared.m_id}, image::kTextureAssetKind, diagnostics);
+            PPR_TEST_ASSERT(indexed.has_value());
+
+            reusable.push_back(
+                {std::move(prepared), definition->m_descriptor.m_value, packs->packs()[(*indexed)->m_pack_index].m_root,
+                    definition->m_descriptor.m_source.m_path});
+        }
+
+        return reusable;
+    }
+
     // ------------------------------------------------------------------
     // actual processors and bounded owned results
     // ------------------------------------------------------------------
@@ -296,6 +325,173 @@ namespace pP::tests::detail::ImagePreparation {
         PPR_TEST_ASSERT(diagnostics.entries().back().m_message.find("escapes") != std::string::npos);
     };
 
+    // ------------------------------------------------------------------
+    // independently owned reuse and selected-order budgets
+    // ------------------------------------------------------------------
+
+    PPR_UNIT_TEST (all_hit_requests_own_results_without_worker_admission_and_still_cancel) {
+        Fixture fixture;
+        config::Diagnostics diagnostics{32u};
+        const auto packs = fixture.packs(diagnostics);
+        const auto definitions = Fixture::definitions(*packs, diagnostics);
+        auto reusable = prepareReusable(packs, definitions, diagnostics);
+        const auto pixels = reusable.front().m_prepared.m_image.m_storage.getBufferData().data();
+
+        auto request = image::prepareTextures(
+            packs, definitions, asset::RequestGeneration{2u}, context::background(), diagnostics, {}, reusable);
+        PPR_TEST_ASSERT(request.has_value() and request->poll());
+        PPR_TEST_ASSERT(request->progress().m_admitted == 0u and request->progress().m_peak_active == 0u);
+
+        auto result = request->take(diagnostics);
+        PPR_TEST_ASSERT(result.has_value() and *result->m_generation == 2u);
+        PPR_TEST_ASSERT(result->m_value.m_work.m_read_count == 0u and result->m_value.m_work.m_read_bytes == 0u);
+        PPR_TEST_ASSERT(result->m_value.m_work.m_prepared_count == 0u and result->m_value.m_work.m_reused_count == 3u);
+        PPR_TEST_ASSERT(result->m_value.m_input_bytes != 0u and result->m_value.m_output_bytes == 1020u);
+
+        reusable.clear();
+        PPR_TEST_ASSERT(result->m_value.m_textures.front().m_image.m_storage.getBufferData().data() == pixels);
+        PPR_TEST_ASSERT(
+            result->m_value.m_textures.front().m_source_path ==
+            std::filesystem::canonical(fixture.m_root / "texture_0.png"));
+
+        reusable = prepareReusable(packs, definitions, diagnostics);
+        auto cancelled = image::prepareTextures(
+            packs, definitions, asset::RequestGeneration{3u}, context::background(), diagnostics, {}, reusable);
+        PPR_TEST_ASSERT(cancelled.has_value());
+
+        cancelled->cancel();
+        settle(*cancelled);
+        PPR_TEST_ASSERT(cancelled->progress().m_admitted == 0u);
+
+        const auto stopped = cancelled->take(diagnostics);
+        PPR_TEST_ASSERT(not stopped and stopped.error() == std::errc::operation_canceled);
+
+        image::TexturePreparationLimits limits;
+        limits.m_max_count = 2u;
+        PPR_TEST_ASSERT(not image::prepareTextures(
+            packs, definitions, asset::RequestGeneration{4u}, context::background(), diagnostics, limits, reusable));
+
+        limits = {};
+        limits.m_max_output_bytes = 500u;
+        PPR_TEST_ASSERT(not image::prepareTextures(
+            packs, definitions, asset::RequestGeneration{5u}, context::background(), diagnostics, limits, reusable));
+
+        Fixture empty{0u};
+        const auto empty_packs = empty.packs(diagnostics);
+        auto empty_request = image::prepareTextures(
+            empty_packs, {}, asset::RequestGeneration{6u}, context::background(), diagnostics);
+        PPR_TEST_ASSERT(empty_request.has_value() and empty_request->poll());
+        PPR_TEST_ASSERT(empty_request->progress().m_admitted == 0u);
+
+        const auto empty_result = empty_request->take(diagnostics);
+        PPR_TEST_ASSERT(empty_result.has_value() and empty_result->m_value.m_textures.empty());
+    };
+
+    PPR_UNIT_TEST (changed_settings_prepare_only_the_affected_owned_image) {
+        Fixture fixture;
+        config::Diagnostics diagnostics{32u};
+        const auto packs = fixture.packs(diagnostics);
+        auto definitions = Fixture::definitions(*packs, diagnostics);
+        const auto reusable = prepareReusable(packs, definitions, diagnostics);
+        definitions[1u].m_descriptor.m_value.m_high_quality = true;
+
+        auto request = image::prepareTextures(
+            packs, definitions, asset::RequestGeneration{2u}, context::background(), diagnostics, {}, reusable);
+        PPR_TEST_ASSERT(request.has_value());
+
+        settle(*request);
+        const auto progress = request->progress();
+        PPR_TEST_ASSERT(progress.m_admitted == 1u and progress.m_completed == 1u and progress.m_active == 0u);
+
+        const auto result = request->take(diagnostics);
+        PPR_TEST_ASSERT(result.has_value());
+        PPR_TEST_ASSERT(result->m_value.m_work.m_read_count == 1u and result->m_value.m_work.m_prepared_count == 1u);
+        PPR_TEST_ASSERT(result->m_value.m_work.m_reused_count == 2u);
+        PPR_TEST_ASSERT(
+            result->m_value.m_textures[0u].m_image.m_storage.getBufferData().data() ==
+            reusable[0u].m_prepared.m_image.m_storage.getBufferData().data());
+        PPR_TEST_ASSERT(
+            result->m_value.m_textures[1u].m_settings_fingerprint != reusable[1u].m_prepared.m_settings_fingerprint);
+    };
+
+    PPR_UNIT_TEST (invalid_reuse_storage_layout_and_provenance_require_fresh_preparation) {
+        Fixture fixture{1u};
+        config::Diagnostics diagnostics{32u};
+        const auto packs = fixture.packs(diagnostics);
+        const auto definitions = Fixture::definitions(*packs, diagnostics);
+        const auto original = prepareReusable(packs, definitions, diagnostics);
+
+        for (u32 mutation = 0u; mutation < 6u; ++mutation) {
+            auto reusable = original;
+            auto &candidate = reusable.front();
+            if (mutation == 0u) {
+                candidate.m_prepared.m_image.m_subresources.front().m_row_pitch += 4u;
+            } else if (mutation == 1u) {
+                candidate.m_prepared.m_image.m_storage = candidate.m_prepared.m_image.m_storage.subspan(0u);
+                PPR_TEST_ASSERT(not candidate.m_prepared.m_image.m_storage.isOwned());
+            } else if (mutation == 2u) {
+                candidate.m_descriptor_path = fixture.m_root / "different.toml";
+            } else if (mutation == 3u) {
+                ++candidate.m_prepared.m_processor_version;
+            } else if (mutation == 4u) {
+                candidate.m_prepared.m_source_path = fixture.m_root / "different.png";
+            } else {
+                candidate.m_prepared.m_source_bytes = 0u;
+            }
+
+            auto request = image::prepareTextures(
+                packs, definitions, asset::RequestGeneration{2u + mutation}, context::background(), diagnostics, {},
+                reusable);
+            PPR_TEST_ASSERT(request.has_value());
+
+            const auto result = request->finish(diagnostics);
+            PPR_TEST_ASSERT(result.has_value());
+            PPR_TEST_ASSERT(
+                result->m_value.m_work.m_prepared_count == 1u and result->m_value.m_work.m_reused_count == 0u);
+            PPR_TEST_ASSERT(not image::validateMipChain(result->m_value.m_textures.front().m_image));
+        }
+    };
+
+    PPR_UNIT_TEST (mixed_reuse_charges_the_full_selected_prefix_and_cached_compressed_input) {
+        Fixture fixture;
+        config::Diagnostics diagnostics{32u};
+        const auto packs = fixture.packs(diagnostics);
+        const auto definitions = Fixture::definitions(*packs, diagnostics);
+        auto reusable = prepareReusable(packs, definitions, diagnostics);
+        reusable.erase(reusable.begin());
+        reusable.pop_back();
+        image::TexturePreparationLimits limits;
+        limits.m_max_output_bytes = 500u;
+
+        auto request = image::prepareTextures(
+            packs, definitions, asset::RequestGeneration{2u}, context::background(), diagnostics, limits, reusable);
+        PPR_TEST_ASSERT(request.has_value());
+
+        settle(*request);
+        const auto progress = request->progress();
+        PPR_TEST_ASSERT(progress.m_admitted == 2u and progress.m_completed == 2u and progress.m_active == 0u);
+        PPR_TEST_ASSERT(progress.m_peak_active <= image::TextureProcessor::maximum_active);
+
+        const auto result = request->take(diagnostics);
+        PPR_TEST_ASSERT(not result and result.error() == std::errc::file_too_large);
+
+        const auto crossing = std::ranges::find_if(diagnostics.entries(), [](const auto &entry) {
+            return entry.m_message == "Selected texture closure exceeds aggregate mip output limit";
+        });
+        PPR_TEST_ASSERT(crossing != diagnostics.entries().end());
+        PPR_TEST_ASSERT(crossing->m_location == (fixture.m_root / "texture_1.toml").string());
+        PPR_TEST_ASSERT(std::ranges::count_if(diagnostics.entries(), [](const auto &entry) {
+            return entry.m_message == "Selected texture closure exceeds aggregate mip output limit";
+        }) == 1u);
+
+        reusable = prepareReusable(packs, definitions, diagnostics);
+        limits = {};
+        limits.m_max_input_bytes = reusable[0u].m_prepared.m_source_bytes + reusable[1u].m_prepared.m_source_bytes;
+        const auto oversized = image::prepareTextures(
+            packs, definitions, asset::RequestGeneration{3u}, context::background(), diagnostics, limits, reusable);
+        PPR_TEST_ASSERT(not oversized and oversized.error() == config::EConfigErrc::out_of_range);
+    };
+
     PPR_UNIT_TEST (background_worker_cannot_start_or_block_finish) {
         Fixture fixture{1u};
         config::Diagnostics diagnostics{32u};
@@ -347,6 +543,10 @@ namespace pP::tests {
             detail::ImagePreparation::cancellation_drains_admitted_jobs_and_keeps_owned_generation,
             detail::ImagePreparation::binary_failure_and_revision_conflict_drain_the_request,
             detail::ImagePreparation::source_containment_is_rechecked_after_definition_import,
+            detail::ImagePreparation::all_hit_requests_own_results_without_worker_admission_and_still_cancel,
+            detail::ImagePreparation::changed_settings_prepare_only_the_affected_owned_image,
+            detail::ImagePreparation::invalid_reuse_storage_layout_and_provenance_require_fresh_preparation,
+            detail::ImagePreparation::mixed_reuse_charges_the_full_selected_prefix_and_cached_compressed_input,
             detail::ImagePreparation::background_worker_cannot_start_or_block_finish,
         });
     };

@@ -495,6 +495,9 @@ export namespace pP::asset {
 
             for (const auto &outcome: state->m_outcomes) {
                 preparation_detail::appendDiagnostics(diagnostics, outcome.m_diagnostics);
+            }
+
+            for (const auto &outcome: state->m_outcomes) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(Asset, outcome.m_error);
                 PPR_RETURN_UNEXPECTED_ON_FAIL(Asset, preparation_detail::exceptionError(outcome.m_exception));
             }

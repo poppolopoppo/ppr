@@ -32,6 +32,11 @@ no image/simulation payload registry, separate thread pool, or GPU state.
   worker stages, owner-side continuation decisions, and its result type. The
   injected scheduler is non-owning and must outlive the request and accepted
   captures. Domain factories select the scheduler at their boundary.
+  Worker stages return fresh `Outcome` values through scheduler-provided
+  `std::future<Outcome>` objects; cumulative outcomes remain owner-held.
+  Request-local capture settlement is required in addition
+  to future readiness. Non-image, move-only/nonresident result fixtures live in
+  `../tests/asset/Asset.Preparation.Tests.cpp`.
 
 `engine.tests.asset` registers CPU-only `asset/packs` tests. No binary image
 sources are opened by pack indexing or typed definition importing.

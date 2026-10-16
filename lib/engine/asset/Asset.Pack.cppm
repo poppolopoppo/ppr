@@ -114,6 +114,8 @@ export namespace pP::asset {
     };
 
     struct Manifest {
+        static constexpr u32 schema_version = 1u;
+
         std::string m_pack_id{};
         config::KeyedCollection<AssetDeclaration> m_assets{};
         config::KeyedCollection<PackDependency> m_requires{};
@@ -122,8 +124,8 @@ export namespace pP::asset {
         [[nodiscard]] static constexpr auto describe() {
             return std::tuple{
                 config::field(
-                    &Manifest::m_schema_version, metadata("schema_version"), config::Range{1u, 1u},
-                    config::EPresence::required),
+                    &Manifest::m_schema_version, metadata("schema_version"),
+                    config::Range{schema_version, schema_version}, config::EPresence::required),
                 config::field(
                     &Manifest::m_pack_id, metadata("pack_id"), QualifiedName::namespace_domain,
                     config::EPresence::required),
@@ -150,6 +152,12 @@ export namespace pP::asset {
         std::size_t m_pack_index{};
     };
 
+    /// Synchronous complete-snapshot reader. The callback and its source owner
+    /// are borrowed only during import; returned bytes and provenance are owned.
+    /// Missing records are errors. Empty bytes remain a descriptor to decode.
+    using DescriptorReader =
+        std23::function_ref<Expected<DescriptorSource>(const IndexedAsset &, config::Diagnostics &)>;
+
     // ------------------------------------------------------------------
     // immutable request index and checked lookup
     // ------------------------------------------------------------------
@@ -168,7 +176,7 @@ export namespace pP::asset {
         /// Supported kinds belong to the composition boundary, never a payload registry.
         [[nodiscard]] static Expected<PackSet> index(
             Array<PackSource> sources, std::span<const std::string_view> supported_kinds,
-            config::Diagnostics &diagnostics);
+            config::Diagnostics &diagnostics, const IContext *context = nullptr);
 
         // queries:
         [[nodiscard]] std::span<const IndexedPack> packs() const noexcept;
@@ -186,6 +194,10 @@ export namespace pP::asset {
         [[nodiscard]] Expected<DescriptorSource> readDescriptor(
             AssetKey key, std::string_view expected_kind, config::Diagnostics &diagnostics) const;
 
+        [[nodiscard]] Expected<DescriptorSource> readDescriptor(
+            AssetKey key, std::string_view expected_kind, DescriptorReader reader,
+            config::Diagnostics &diagnostics) const;
+
         [[nodiscard]] Expected<std::filesystem::path> containedPath(
             std::string_view pack, std::string_view relative, config::Diagnostics &diagnostics) const;
     };
@@ -195,11 +207,22 @@ export namespace pP::asset {
 
     template<typename Descriptor>
     [[nodiscard]] Expected<Imported<Descriptor>> importDescriptor(
-        const PackSet &packs, const AssetKey key, const std::string_view expected_kind,
+        const PackSet &packs, const AssetKey key, const std::string_view expected_kind, const DescriptorReader reader,
         config::Diagnostics &diagnostics) {
-        auto source = packs.readDescriptor(key, expected_kind, diagnostics);
+        auto source = packs.readDescriptor(key, expected_kind, reader, diagnostics);
         PPR_RETURN_UNEXPECTED_ON_FAIL(Asset, source);
 
         return importDescriptor<Descriptor>(std::move(*source), diagnostics);
+    }
+
+    template<typename Descriptor>
+    [[nodiscard]] Expected<Imported<Descriptor>> importDescriptor(
+        const PackSet &packs, const AssetKey key, const std::string_view expected_kind,
+        config::Diagnostics &diagnostics) {
+        const auto reader = [&](const IndexedAsset &entry, config::Diagnostics &local) {
+            return packs.readDescriptor(entry.m_key, entry.m_kind, local);
+        };
+
+        return importDescriptor<Descriptor>(packs, key, expected_kind, reader, diagnostics);
     }
 }

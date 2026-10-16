@@ -92,6 +92,9 @@ export namespace pP::image {
     // chain generation
     // ------------------------------------------------------------------
 
+    /// Checks the existing materialized RGBA8 chain layout without modifying it.
+    [[nodiscard]] std::error_code validateMipChain(const ImageAsset &asset);
+
     // Builds the full chain in place: color/data level 0 bytes are kept verbatim;
     // normal mode sanitizes and normalizes level 0. Subsequent levels
     // 1..mipCount-1 are appended into one frozen storage with tight pitches.

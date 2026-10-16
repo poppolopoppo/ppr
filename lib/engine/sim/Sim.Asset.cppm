@@ -214,6 +214,9 @@ export namespace pP::sim::asset {
         [[nodiscard]] static Expected<ElementCatalog> importDefinitions(
             const pP::asset::PackSet &packs, config::Diagnostics &diagnostics);
 
+        [[nodiscard]] static Expected<ElementCatalog> importDefinitions(
+            const pP::asset::PackSet &packs, pP::asset::DescriptorReader reader, config::Diagnostics &diagnostics);
+
         [[nodiscard]] std::span<const ElementDefinition> definitions() const noexcept;
         [[nodiscard]] const ElementDefinition *find(ElementId id) const noexcept;
     };

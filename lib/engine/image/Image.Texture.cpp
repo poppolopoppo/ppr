@@ -18,6 +18,15 @@ namespace pP::image {
 
     Expected<TextureCatalog> TextureCatalog::importDefinitions(
         const asset::PackSet &packs, config::Diagnostics &diagnostics) {
+        const auto reader = [&](const asset::IndexedAsset &entry, config::Diagnostics &local) {
+            return packs.readDescriptor(entry.m_key, entry.m_kind, local);
+        };
+
+        return importDefinitions(packs, reader, diagnostics);
+    }
+
+    Expected<TextureCatalog> TextureCatalog::importDefinitions(
+        const asset::PackSet &packs, const asset::DescriptorReader reader, config::Diagnostics &diagnostics) {
         const hal::ProfileScope scope{"Image.Texture.ImportDefinitions"};
         TextureCatalog result;
 
@@ -27,7 +36,7 @@ namespace pP::image {
             }
 
             auto imported = asset::importDescriptor<TextureDescriptor>(
-                packs, entry.m_key, kTextureAssetKind, diagnostics);
+                packs, entry.m_key, kTextureAssetKind, reader, diagnostics);
             PPR_RETURN_UNEXPECTED_ON_FAIL(Image, imported);
 
             const auto &descriptor = imported->m_value;

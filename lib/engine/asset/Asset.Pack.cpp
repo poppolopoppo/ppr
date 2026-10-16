@@ -184,8 +184,10 @@ namespace pP::asset {
 
     Expected<PackSet> PackSet::index(
         Array<PackSource> sources, const std::span<const std::string_view> supported_kinds,
-        config::Diagnostics &diagnostics) {
+        config::Diagnostics &diagnostics, const IContext *const context) {
         const hal::ProfileScope scope{"Asset.Pack.Index"};
+        PPR_RETURN_UNEXPECTED_ON_FAIL(Asset, context ? context->error() : std::error_code{});
+
         std::ranges::sort(sources, {}, [](const auto &source) {
             return std::tuple{
                 source.m_root.generic_string(), source.m_manifest.m_path.generic_string(),
@@ -196,6 +198,8 @@ namespace pP::asset {
         result.m_packs.reserve(sources.size());
 
         for (auto &source: sources) {
+            PPR_RETURN_UNEXPECTED_ON_FAIL(Asset, context ? context->error() : std::error_code{});
+
             if (source.m_manifest.m_bytes.size() > kMaxManifestBytes) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(
                     Asset, reject(
@@ -224,6 +228,8 @@ namespace pP::asset {
             result.m_packs, {}, [](const auto &pack) { return std::string_view{pack.m_manifest.m_value.m_pack_id}; });
 
         for (std::size_t index = 0u; index < result.m_packs.size(); ++index) {
+            PPR_RETURN_UNEXPECTED_ON_FAIL(Asset, context ? context->error() : std::error_code{});
+
             const auto &pack = result.m_packs[index];
             const auto &manifest = pack.m_manifest.m_value;
             const auto origin = pack.m_manifest.m_source.m_path.string();
@@ -384,6 +390,16 @@ namespace pP::asset {
 
     Expected<DescriptorSource> PackSet::readDescriptor(
         const AssetKey key, const std::string_view expected_kind, config::Diagnostics &diagnostics) const {
+        const auto reader = [](const IndexedAsset &entry, config::Diagnostics &local) {
+            return readSource(entry.m_descriptor, kMaxDescriptorBytes, local);
+        };
+
+        return readDescriptor(key, expected_kind, reader, diagnostics);
+    }
+
+    Expected<DescriptorSource> PackSet::readDescriptor(
+        const AssetKey key, const std::string_view expected_kind, const DescriptorReader reader,
+        config::Diagnostics &diagnostics) const {
         auto entry = resolve(key, expected_kind, diagnostics);
         PPR_RETURN_UNEXPECTED_ON_FAIL(Asset, entry);
 
@@ -392,6 +408,23 @@ namespace pP::asset {
         auto path = contained(pack.m_root, relative, diagnostics);
         PPR_RETURN_UNEXPECTED_ON_FAIL(Asset, path);
 
-        return readSource(*path, kMaxDescriptorBytes, diagnostics);
+        if (*path != (*entry)->m_descriptor) {
+            PPR_RETURN_UNEXPECTED_ON_FAIL(
+                Asset, reject(
+                           diagnostics, (*entry)->m_descriptor.string(), "descriptor",
+                           "Descriptor containment changed after indexing"));
+        }
+
+        auto source = reader(**entry, diagnostics);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(Asset, source);
+
+        if (source->m_path != (*entry)->m_descriptor) {
+            PPR_RETURN_UNEXPECTED_ON_FAIL(
+                Asset, reject(
+                           diagnostics, (*entry)->m_descriptor.string(), "descriptor",
+                           "Snapshot descriptor provenance does not match its indexed path"));
+        }
+
+        return source;
     }
 }

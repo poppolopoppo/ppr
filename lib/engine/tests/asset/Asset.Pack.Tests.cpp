@@ -17,6 +17,8 @@ namespace pP::tests::detail::Packs {
 
     constexpr std::string_view kKinds[] = {"sim.material", "sim.world", "image.texture"};
 
+    PPR_DEFINE_LOG_CATEGORY(AssetPackReaderTests, verbose, none);
+
     asset::PackSource source(const std::string_view name, std::string bytes) {
         const auto root = std::filesystem::current_path();
         return {root, {root / std::string{name}, std::move(bytes)}};
@@ -187,6 +189,95 @@ descriptor = "textures/rock.toml"
         PPR_TEST_ASSERT(imported->m_origins.front().m_location.find("base.pack.toml") != std::string::npos);
     };
 
+    PPR_UNIT_TEST (complete_snapshot_reader_owns_values_and_never_falls_back_to_disk) {
+        static std::atomic<u32> ordinal{};
+        std::filesystem::path root;
+        const auto parent = hal::process::currentExecutablePath().parent_path();
+
+        for (u32 attempt = 0u; attempt < 4096u; ++attempt) {
+            const auto candidate = parent / ("asset-reader-test-" + std::to_string(ordinal.fetch_add(1u)));
+            if (std::filesystem::create_directory(candidate)) {
+                root = std::filesystem::canonical(candidate);
+                break;
+            }
+        }
+
+        PPR_TEST_ASSERT(not root.empty());
+        PPR_DEFER {
+            // Best-effort fixture cleanup after owned imports are no longer used.
+            std::error_code error;
+            std::filesystem::remove_all(root, error);
+            PPR_LOG_WARNING_ON_FAIL(AssetPackReaderTests, error);
+        };
+
+        const auto path = root / "descriptor.toml";
+        {
+            std::ofstream disk{path, std::ios::binary};
+            disk << "This disk descriptor is intentionally corrupt.";
+            PPR_TEST_ASSERT(static_cast<bool>(disk));
+        }
+
+        config::Diagnostics diagnostics;
+        auto indexed = asset::PackSet::index(
+            {{root, {root / "pack.toml", "schema_version = 1\npack_id = \"reader\"\n"
+                                         "[assets.item]\nkind = \"sim.world\"\ndescriptor = \"descriptor.toml\"\n"}}},
+            kKinds, diagnostics);
+        PPR_TEST_ASSERT(indexed.has_value());
+        const auto key = indexed->assets().front().m_key;
+        std::size_t reads{};
+        std::optional<asset::Imported<asset::Manifest>> retained;
+
+        {
+            std::string snapshot = "schema_version = 1\npack_id = \"edited\"\n";
+            const auto reader = [&](const asset::IndexedAsset &entry,
+                                    config::Diagnostics &) -> Expected<asset::DescriptorSource> {
+                ++reads;
+                return asset::DescriptorSource{entry.m_descriptor, snapshot};
+            };
+
+            auto imported = asset::importDescriptor<asset::Manifest>(*indexed, key, "sim.world", reader, diagnostics);
+            PPR_TEST_ASSERT(imported.has_value() and reads == 1u);
+            retained.emplace(std::move(*imported));
+
+            const auto wrong_kind = asset::importDescriptor<asset::Manifest>(
+                *indexed, key, "image.texture", reader, diagnostics);
+            PPR_TEST_ASSERT(not wrong_kind and wrong_kind.error() == config::EConfigErrc::type_mismatch);
+            PPR_TEST_ASSERT(reads == 1u);
+
+            snapshot.clear();
+            const auto empty = asset::importDescriptor<asset::Manifest>(
+                *indexed, key, "sim.world", reader, diagnostics);
+            PPR_TEST_ASSERT(not empty and reads == 2u);
+        }
+
+        const auto missing = [](const asset::IndexedAsset &,
+                                 config::Diagnostics &) -> Expected<asset::DescriptorSource> {
+            PPR_RETURN_UNEXPECTED_ON_FAIL(AssetPackReaderTests, std::errc::no_such_file_or_directory);
+            std::unreachable();
+        };
+        const auto absent = asset::importDescriptor<asset::Manifest>(*indexed, key, "sim.world", missing, diagnostics);
+        PPR_TEST_ASSERT(not absent and absent.error() == std::errc::no_such_file_or_directory);
+
+        const auto wrong_provenance = [&](const asset::IndexedAsset &,
+                                          config::Diagnostics &) -> Expected<asset::DescriptorSource> {
+            ++reads;
+            return asset::DescriptorSource{root / "different.toml", "schema_version = 1\npack_id = \"edited\"\n"};
+        };
+        const auto mismatched = asset::importDescriptor<asset::Manifest>(
+            *indexed, key, "sim.world", wrong_provenance, diagnostics);
+        PPR_TEST_ASSERT(not mismatched and reads == 3u);
+
+        {
+            const auto scratch = mem::ScratchPad::open();
+            Array<std::string, mem::ScratchPad> reuse(128u, std::string(128u, 'x'));
+        }
+
+        PPR_TEST_ASSERT(retained->m_value.m_pack_id == "edited" and retained->m_source.m_path == path);
+        PPR_TEST_ASSERT(retained->m_source.m_bytes.find("edited") != std::string::npos);
+        const auto origin = std::ranges::find(retained->m_origins, "schema_version", &config::PropertyOrigin::m_name);
+        PPR_TEST_ASSERT(origin != retained->m_origins.end() and origin->m_location == path.string() + ":1");
+    };
+
     PPR_UNIT_TEST (diagnostics_are_bounded_and_deterministic) {
         const auto make_invalid = [] {
             auto input = twoPacks();
@@ -262,6 +353,7 @@ namespace pP::tests {
             detail::Packs::unsupported_kind_duplicate_local_key_and_old_manifest_reject,
             detail::Packs::containment_rejects_absolute_and_dot_segment_paths,
             detail::Packs::imported_values_and_provenance_own_source_storage,
+            detail::Packs::complete_snapshot_reader_owns_values_and_never_falls_back_to_disk,
             detail::Packs::diagnostics_are_bounded_and_deterministic,
             detail::Packs::invalid_same_root_manifests_have_deterministic_first_error,
             detail::Packs::prehashed_collision_fixture_uses_production_validator,

@@ -352,6 +352,12 @@ namespace pP::image {
     // mip chain generation
     // ------------------------------------------------------------------
 
+    std::error_code validateMipChain(const ImageAsset &asset) {
+        PPR_RETURN_ERROR_ON_FAIL(
+            Image, checkChainInvariants_(asset) ? std::error_code{} : make_error_code(errc::invalid_argument));
+        return {};
+    }
+
     [[nodiscard]] std::error_code generateMipChain(ImageAsset &asset, const MipGenDesc desc) {
         if (asset.m_dimension != EImageDimension::image2d or not validBaseExtent_(asset)) {
             PPR_RETURN_ERROR_ON_FAIL(Image, errc::invalid_argument);

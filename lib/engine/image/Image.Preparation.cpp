@@ -245,6 +245,48 @@ namespace pP::image {
             item.m_mapping.reset();
             return {};
         }
+
+        // ------------------------------------------------------------------
+        // owned reuse candidate checks
+        // ------------------------------------------------------------------
+
+        [[nodiscard]] bool sameDescriptor(const TextureDescriptor &left, const TextureDescriptor &right) noexcept {
+            return left.m_source == right.m_source and
+                   left.m_schema_version == right.m_schema_version and
+                   left.m_interpretation == right.m_interpretation and
+                   left.m_mip_policy == right.m_mip_policy and
+                   left.m_full_chain == right.m_full_chain and
+                   left.m_high_quality == right.m_high_quality and
+                   left.m_preserve_coverage == right.m_preserve_coverage and
+                   std::bit_cast<u32>(left.m_alpha_cutoff) == std::bit_cast<u32>(right.m_alpha_cutoff);
+        }
+
+        [[nodiscard]] bool reusableImage(
+            const PreparedTexture &prepared, const TextureDescriptor &descriptor,
+            const TexturePreparationLimits limits) {
+            const auto &image = prepared.m_image;
+            if (prepared.m_source_bytes == 0u or
+                not image.m_storage.isOwned() or
+                image.m_width > limits.m_max_dimension or
+                image.m_height > limits.m_max_dimension or
+                image.m_width == 0u or
+                image.m_height == 0u) {
+                return false;
+            }
+
+            const auto count = descriptor.m_full_chain ? std::bit_width((std::max) (image.m_width, image.m_height))
+                                                       : mipCountFor(image.m_width, image.m_height);
+            const auto format = descriptor.m_interpretation == ETextureInterpretation::color
+                                    ? ENativeImageFormat::rgba8_srgb
+                                    : ENativeImageFormat::rgba8_linear;
+            if (image.m_mip_count != count or image.m_format != format) {
+                return false;
+            }
+
+            // A malformed optional reuse candidate becomes a fresh preparation;
+            // it never grants ownership or bypasses the canonical layout check.
+            return not validateMipChain(image);
+        }
     }
 
     u64 textureSettingsFingerprint(const TextureDescriptor &descriptor) noexcept {
@@ -265,12 +307,15 @@ namespace pP::image {
     // metadata preflight and ordered image continuation
     // ------------------------------------------------------------------
 
-    TextureProcessor::TextureProcessor(Array<TextureDefinition> definitions, const TexturePreparationLimits limits)
-        : m_definitions(std::move(definitions)), m_limits(limits) {
+    TextureProcessor::TextureProcessor(
+        Array<TextureDefinition> definitions, const TexturePreparationLimits limits,
+        Array<TextureReuseCandidate> reusable)
+        : m_definitions(std::move(definitions)), m_reusable(std::move(reusable)), m_limits(limits) {
     }
 
     Expected<Array<std::shared_ptr<TextureProcessor::Item>>> TextureProcessor::prepare(
         const asset::PackSet &packs, const IContext &context, config::Diagnostics &diagnostics) {
+        const hal::ProfileScope scope{"Image.Preparation.Preflight"};
         PPR_RETURN_UNEXPECTED_ON_FAIL(Image, validateValues(m_limits, "texture request", diagnostics));
 
         if (m_definitions.size() > m_limits.m_max_count) {
@@ -282,6 +327,10 @@ namespace pP::image {
 
         Array<std::shared_ptr<Item>> items;
         items.reserve(m_definitions.size());
+        m_reused.resize(m_definitions.size());
+        m_chain_sizes.resize(m_definitions.size());
+        m_sources.reserve(m_definitions.size());
+        m_ordinals.reserve(m_definitions.size());
         m_budget_decisions.resize(m_definitions.size());
 
         std::set<u64> identities;
@@ -311,6 +360,41 @@ namespace pP::image {
 
             auto path = packs.containedPath((*identity)->m_name.m_pack, descriptor.m_source, diagnostics);
             PPR_RETURN_UNEXPECTED_ON_FAIL(Image, path);
+
+            const auto ordinal = m_sources.size();
+            m_sources.push_back(definition.m_descriptor.m_source.m_path);
+            const auto &root = packs.packs()[(*identity)->m_pack_index].m_root;
+            const auto reusable = std::ranges::find_if(m_reusable, [&](const TextureReuseCandidate &candidate) {
+                const auto &prepared = candidate.m_prepared;
+                return prepared.m_id == definition.m_id and
+                       candidate.m_pack_root == root and
+                       candidate.m_descriptor_path == definition.m_descriptor.m_source.m_path and
+                       prepared.m_name.m_pack == (*identity)->m_name.m_pack and
+                       prepared.m_name.m_local == (*identity)->m_name.m_local and
+                       prepared.m_source_path == *path and
+                       prepared.m_processor_version == kTextureProcessorVersion and
+                       prepared.m_settings_fingerprint == textureSettingsFingerprint(descriptor) and
+                       sameDescriptor(candidate.m_descriptor, descriptor) and
+                       reusableImage(prepared, descriptor, m_limits);
+            });
+
+            if (reusable != m_reusable.end()) {
+                const auto size = reusable->m_prepared.m_source_bytes;
+                if (size == 0u or
+                    size > m_limits.m_max_image_input_bytes or
+                    size > m_limits.m_max_input_bytes - m_input_bytes) {
+                    PPR_RETURN_UNEXPECTED_ON_FAIL(
+                        Image,
+                        asset::reject(
+                            diagnostics, source, "source", "Texture source exceeds per-image or aggregate input limit",
+                            config::EConfigErrc::out_of_range));
+                }
+
+                m_input_bytes += size;
+                m_chain_sizes[ordinal] = reusable->m_prepared.m_image.m_storage.getBufferData().size_bytes();
+                m_reused[ordinal] = std::move(reusable->m_prepared);
+                continue;
+            }
 
             std::error_code error;
             const bool regular = std::filesystem::is_regular_file(*path, error);
@@ -353,16 +437,47 @@ namespace pP::image {
             item->m_write_time = time;
             item->m_prepared.m_id = definition.m_id;
             item->m_prepared.m_name = (*identity)->m_name;
+            item->m_prepared.m_source_path = item->m_path;
             item->m_prepared.m_source_bytes = size;
             item->m_prepared.m_settings_fingerprint = textureSettingsFingerprint(descriptor);
             item->m_definition = std::move(definition);
 
             m_input_bytes += size;
+            m_ordinals.push_back(ordinal);
             items.push_back(std::move(item));
         }
 
         m_definitions.clear();
+        m_reusable.clear();
+
+        PPR_RETURN_UNEXPECTED_ON_FAIL(Image, admitReadyPrefix(diagnostics));
+
         return items;
+    }
+
+    std::error_code TextureProcessor::admitReadyPrefix(config::Diagnostics &diagnostics) {
+        while (m_budget_next < m_chain_sizes.size() and m_chain_sizes[m_budget_next].has_value()) {
+            PPR_RETURN_ERROR_ON_FAIL(
+                Image, m_budget_decisions[m_budget_next] == EBudgetDecision::rejected
+                           ? std::make_error_code(std::errc::file_too_large)
+                           : std::error_code{});
+
+            const auto bytes = *m_chain_sizes[m_budget_next];
+            if (bytes > m_limits.m_max_output_bytes - m_output_bytes) {
+                m_budget_decisions[m_budget_next] = EBudgetDecision::rejected;
+                diagnostics.add(
+                    m_sources[m_budget_next].string(), "source",
+                    "Selected texture closure exceeds aggregate mip output limit",
+                    std::make_error_code(std::errc::file_too_large));
+                PPR_RETURN_ERROR_ON_FAIL(Image, std::errc::file_too_large);
+            }
+
+            m_output_bytes += bytes;
+            m_budget_decisions[m_budget_next] = EBudgetDecision::admitted;
+            ++m_budget_next;
+        }
+
+        return {};
     }
 
     std::error_code TextureProcessor::process(
@@ -385,16 +500,14 @@ namespace pP::image {
 
     Expected<asset::EPreparationStep> TextureProcessor::advance(
         const std::size_t index, Item &item, const bool succeeded, config::Diagnostics &diagnostics) {
-        const auto advance_budget = [&] {
-            m_budget_decisions[index] = 1u;
-
-            while (m_budget_next < m_budget_decisions.size() and m_budget_decisions[m_budget_next] != 0u) {
-                ++m_budget_next;
-            }
-        };
+        const auto ordinal = m_ordinals[index];
 
         if (not succeeded) {
-            advance_budget();
+            // The common request retains the processing failure. A zero-size
+            // decision lets later accepted items settle without masking it.
+            m_chain_sizes[ordinal] = 0u;
+            PPR_RETURN_UNEXPECTED_ON_FAIL(Image, admitReadyPrefix(diagnostics));
+
             return asset::EPreparationStep::complete;
         }
 
@@ -406,20 +519,12 @@ namespace pP::image {
             Image, item.m_phase != Item::EPhase::base_ready ? std::make_error_code(std::errc::state_not_recoverable)
                                                             : std::error_code{});
 
-        if (index != m_budget_next) {
+        m_chain_sizes[ordinal] = item.m_chain_bytes;
+        PPR_RETURN_UNEXPECTED_ON_FAIL(Image, admitReadyPrefix(diagnostics));
+
+        if (m_budget_decisions[ordinal] != EBudgetDecision::admitted) {
             return asset::EPreparationStep::defer;
         }
-
-        if (item.m_chain_bytes > m_limits.m_max_output_bytes - m_output_bytes) {
-            advance_budget();
-            PPR_RETURN_UNEXPECTED_ON_FAIL(
-                Image, fail(
-                           item, diagnostics, std::make_error_code(std::errc::file_too_large),
-                           "Selected texture closure exceeds aggregate mip output limit"));
-        }
-
-        m_output_bytes += item.m_chain_bytes;
-        advance_budget();
 
         item.m_phase = Item::EPhase::mips;
         return asset::EPreparationStep::again;
@@ -430,10 +535,23 @@ namespace pP::image {
         Result result;
         result.m_input_bytes = m_input_bytes;
         result.m_output_bytes = m_output_bytes;
-        result.m_textures.reserve(items.size());
+        result.m_textures.reserve(m_reused.size());
 
-        for (const auto &item: items) {
-            result.m_textures.push_back(std::move(item->m_prepared));
+        for (std::size_t index = 0u; index < items.size(); ++index) {
+            auto &prepared = items[index]->m_prepared;
+            result.m_work.m_read_bytes += prepared.m_source_bytes;
+            m_reused[m_ordinals[index]] = std::move(prepared);
+        }
+
+        result.m_work.m_read_count = static_cast<u32>(items.size());
+        result.m_work.m_prepared_count = static_cast<u32>(items.size());
+        result.m_work.m_reused_count = static_cast<u32>(m_reused.size() - items.size());
+
+        for (auto &prepared: m_reused) {
+            PPR_RETURN_UNEXPECTED_ON_FAIL(
+                Image, not prepared ? std::make_error_code(std::errc::state_not_recoverable) : std::error_code{});
+
+            result.m_textures.push_back(std::move(*prepared));
         }
 
         return result;

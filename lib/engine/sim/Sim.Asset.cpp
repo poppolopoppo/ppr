@@ -56,6 +56,15 @@ namespace pP::sim::asset {
 
     Expected<ElementCatalog> ElementCatalog::importDefinitions(
         const pP::asset::PackSet &packs, config::Diagnostics &diagnostics) {
+        const auto reader = [&](const pP::asset::IndexedAsset &entry, config::Diagnostics &local) {
+            return packs.readDescriptor(entry.m_key, entry.m_kind, local);
+        };
+
+        return importDefinitions(packs, reader, diagnostics);
+    }
+
+    Expected<ElementCatalog> ElementCatalog::importDefinitions(
+        const pP::asset::PackSet &packs, const pP::asset::DescriptorReader reader, config::Diagnostics &diagnostics) {
         const hal::ProfileScope scope{"Sim.Asset.ImportElements"};
         ElementCatalog result;
 
@@ -65,7 +74,7 @@ namespace pP::sim::asset {
             }
 
             auto descriptor = pP::asset::importDescriptor<ElementDescriptor>(
-                packs, entry.m_key, kElementKind, diagnostics);
+                packs, entry.m_key, kElementKind, reader, diagnostics);
             PPR_RETURN_UNEXPECTED_ON_FAIL(SimAssets, descriptor);
 
             result.m_definitions.push_back({std::move(*descriptor), ElementId{*entry.m_key}});

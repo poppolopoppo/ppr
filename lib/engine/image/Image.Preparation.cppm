@@ -50,6 +50,8 @@ export namespace pP::image {
     struct PreparedTexture {
         ImageAsset m_image{};
         asset::QualifiedName m_name{};
+        /// Canonical binary path accepted by the actual preparation request.
+        std::filesystem::path m_source_path{};
         TextureId m_id{};
         u64 m_source_fingerprint{};
         u64 m_settings_fingerprint{};
@@ -57,9 +59,27 @@ export namespace pP::image {
         u32 m_processor_version{kTextureProcessorVersion};
     };
 
+    /// Actual successful-request work, separate from full selected input/output
+    /// budget totals. Reused images perform no binary read, decode, or mip work.
+    struct TexturePreparationWork {
+        u64 m_read_bytes{};
+        u32 m_read_count{}, m_prepared_count{}, m_reused_count{};
+    };
+
     struct TexturePreparationResult {
         Array<PreparedTexture> m_textures{};
         u64 m_input_bytes{}, m_output_bytes{};
+        TexturePreparationWork m_work{};
+    };
+
+    /// The caller authorizes reuse within one stable binary-source epoch. Every
+    /// value owns its pixels; metadata is checked against the selected definition.
+    /// An ineligible or malformed optional candidate requires fresh preparation.
+    struct TextureReuseCandidate {
+        PreparedTexture m_prepared;
+        TextureDescriptor m_descriptor;
+        std::filesystem::path m_pack_root;
+        std::filesystem::path m_descriptor_path;
     };
 
     [[nodiscard]] u64 textureSettingsFingerprint(const TextureDescriptor &descriptor) noexcept;
@@ -71,11 +91,27 @@ export namespace pP::image {
     /// Binary files must remain stable during the request; updates replace whole
     /// files after affected requests drain. Mappings are not immutable snapshots.
     class TextureProcessor {
+        enum class EBudgetDecision : u8 {
+            pending,
+            admitted,
+            rejected
+        };
+
         Array<TextureDefinition> m_definitions{};
-        Array<u8> m_budget_decisions{};
+        Array<TextureReuseCandidate> m_reusable{};
+
+        Array<std::optional<PreparedTexture>> m_reused{};
+
+        Array<std::optional<u64>> m_chain_sizes{};
+        Array<std::filesystem::path> m_sources{};
+        Array<std::size_t> m_ordinals{};
+        Array<EBudgetDecision> m_budget_decisions{};
+
         TexturePreparationLimits m_limits{};
         u64 m_input_bytes{}, m_output_bytes{};
         std::size_t m_budget_next{};
+
+        [[nodiscard]] std::error_code admitReadyPrefix(config::Diagnostics &diagnostics);
 
     public:
         struct Item;
@@ -83,7 +119,9 @@ export namespace pP::image {
         static constexpr std::size_t maximum_active = 2u;
         static constexpr u32 processing_revision = kTextureProcessorVersion;
 
-        TextureProcessor(Array<TextureDefinition> definitions, TexturePreparationLimits limits);
+        TextureProcessor(
+            Array<TextureDefinition> definitions, TexturePreparationLimits limits,
+            Array<TextureReuseCandidate> reusable = {});
 
         [[nodiscard]] Expected<Array<std::shared_ptr<Item>>> prepare(
             const asset::PackSet &packs, const IContext &context, config::Diagnostics &diagnostics);
@@ -113,10 +151,10 @@ export namespace pP::image {
     [[nodiscard]] inline Expected<TexturePreparation> prepareTextures(
         const std::shared_ptr<const asset::PackSet> &packs, const Array<TextureDefinition> &textures,
         const asset::RequestGeneration &generation, const SharedContext &context, config::Diagnostics &diagnostics,
-        const TexturePreparationLimits &limits = {}) {
+        const TexturePreparationLimits &limits = {}, const Array<TextureReuseCandidate> &reusable = {}) {
         return TexturePreparation::start(
-            parallel::backgroundPool(), packs, TextureProcessor{textures, limits}, generation, std::move(context),
-            diagnostics);
+            parallel::backgroundPool(), packs, TextureProcessor{textures, limits, reusable}, generation,
+            std::move(context), diagnostics);
     }
 #endif
 }

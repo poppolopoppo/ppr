@@ -51,6 +51,7 @@ namespace pP::tests::detail::Preparation {
             std::unique_ptr<std::ifstream> m_source{};
             std::size_t m_index{}, m_phase{};
             u32 m_fatal_tag{}, m_failed_advance_tag{}, m_notes_per_phase{1u};
+            std::errc m_ordinary_error{std::errc::invalid_argument};
             bool m_ordinary{}, m_fatal{}, m_throw_advance{}, m_defer_forever{}, m_wait_first{}, m_fail_again{},
                 m_emit_notes{};
         };
@@ -107,7 +108,7 @@ namespace pP::tests::detail::Preparation {
             }
 
             if (item.m_ordinary) {
-                const auto error = std::make_error_code(std::errc::invalid_argument);
+                const auto error = std::make_error_code(item.m_ordinary_error);
                 diagnostics.add("owned stream " + std::to_string(item.m_index), "source", "Rejected stream", error);
                 control.m_finished[item.m_index].store(true);
                 PPR_RETURN_ERROR_ON_FAIL(AssetPreparationTests, error);
@@ -400,6 +401,48 @@ namespace pP::tests::detail::Preparation {
         PPR_TEST_ASSERT(not consumed and consumed.error() == std::errc::invalid_argument);
     };
 
+    PPR_UNIT_TEST (settled_failures_publish_all_diagnostics_in_input_order_before_first_error) {
+        Fixture fixture;
+        config::Diagnostics diagnostics;
+        const auto packs = fixture.packs(diagnostics);
+        auto processor = fixture.processor(2u);
+        processor.m_inputs[0u]->m_ordinary = true;
+        processor.m_inputs[1u]->m_ordinary = true;
+        processor.m_inputs[1u]->m_ordinary_error = std::errc::permission_denied;
+        fixture.m_control->m_allowed[0u].store(false);
+        PPR_DEFER {
+            fixture.m_control->release();
+        };
+
+        auto request = Request::start(
+            fixture.m_pool, packs, std::move(processor), asset::RequestGeneration{12u}, context::background(),
+            diagnostics);
+        PPR_TEST_ASSERT(request.has_value());
+        PPR_TEST_ASSERT(not request->poll());
+        PPR_TEST_ASSERT(request->progress().m_admitted == 2u);
+
+        while (not fixture.m_control->m_finished[1u].load()) {
+            std::this_thread::yield();
+        }
+
+        fixture.m_control->release();
+        settle(*request);
+        const auto progress = request->progress();
+        PPR_TEST_ASSERT(progress.m_completed == 2u and progress.m_active == 0u);
+
+        const auto result = request->take(diagnostics);
+        PPR_TEST_ASSERT(not result and result.error() == std::errc::invalid_argument);
+        PPR_TEST_ASSERT(diagnostics.size() == 2u and diagnostics.entries().size() == 2u);
+
+        PPR_TEST_ASSERT(diagnostics.entries()[0u].m_location == "owned stream 0");
+        PPR_TEST_ASSERT(diagnostics.entries()[0u].m_code == std::errc::invalid_argument);
+
+        PPR_TEST_ASSERT(diagnostics.entries()[1u].m_location == "owned stream 1");
+        PPR_TEST_ASSERT(diagnostics.entries()[1u].m_code == std::errc::permission_denied);
+
+        PPR_TEST_ASSERT(not fixture.m_control->m_finish_called and fixture.m_control->m_active.load() == 0u);
+    };
+
     PPR_UNIT_TEST (first_allocation_failure_survives_failed_step_bookkeeping_exception) {
         Fixture fixture;
         config::Diagnostics diagnostics;
@@ -663,6 +706,7 @@ namespace pP::tests {
             detail::Preparation::deferred_continuation_holds_slot_and_retries_only_after_progress,
             detail::Preparation::cancel_after_partial_admission_drains_without_publishing_result,
             detail::Preparation::fatal_worker_outcome_wins_earlier_error_and_cancel_then_is_consumed,
+            detail::Preparation::settled_failures_publish_all_diagnostics_in_input_order_before_first_error,
             detail::Preparation::first_allocation_failure_survives_failed_step_bookkeeping_exception,
             detail::Preparation::owner_exception_is_attached_to_item_and_defer_deadlock_is_reported,
             detail::Preparation::result_construction_failure_is_consumed_after_capture_drain,

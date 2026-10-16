@@ -88,6 +88,9 @@ export namespace pP::image {
         [[nodiscard]] static Expected<TextureCatalog> importDefinitions(
             const asset::PackSet &packs, config::Diagnostics &diagnostics);
 
+        [[nodiscard]] static Expected<TextureCatalog> importDefinitions(
+            const asset::PackSet &packs, asset::DescriptorReader reader, config::Diagnostics &diagnostics);
+
         /// Observers remain valid only while this immutable catalog stays at its current address.
         [[nodiscard]] std::span<const TextureDefinition> definitions() const noexcept;
         [[nodiscard]] const TextureDefinition *find(TextureId id) const noexcept;
