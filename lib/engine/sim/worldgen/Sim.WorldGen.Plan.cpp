@@ -10,7 +10,7 @@ import std;
 
 namespace pP::sim {
     using pP::make_error_code;
-    PPR_DEFINE_LOG_CATEGORY(WorldPlan, info, none);
+    PPR_DEFINE_LOG_CATEGORY(WorldPlan, info, none)
 
     // ------------------------------------------------------------------
     // plan helpers
@@ -643,14 +643,14 @@ namespace pP::sim {
     double generationSurfaceHeight(const GenerationPlan &plan, const double x_m) noexcept {
         const auto &r = plan.recipe();
         return r.m_open_surface ? r.m_surface_elevation_m +
-                                      r.m_surface_amplitude_m * plan.fields()[r.m_surface_field].sample(x_m, 0.0)
+                                      r.m_surface_amplitude_m * static_cast<double>(plan.fields()[r.m_surface_field].sample(x_m, 0.0))
                                 : kWorldEdge * r.m_cell_size_m;
     }
 
     double generationBedrockHeight(const GenerationPlan &plan, const double x_m) noexcept {
         const auto &r = plan.recipe();
         return r.m_open_surface ? r.m_bedrock_thickness_m +
-                                      r.m_bedrock_variation_m * plan.fields()[r.m_bedrock_field].sample(x_m, 0.0)
+                                      r.m_bedrock_variation_m * static_cast<double>(plan.fields()[r.m_bedrock_field].sample(x_m, 0.0))
                                 : r.m_boundary_fine * r.m_cell_size_m;
     }
 

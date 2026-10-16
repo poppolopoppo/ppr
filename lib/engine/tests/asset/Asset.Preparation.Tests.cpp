@@ -13,7 +13,7 @@ namespace pP::tests::detail::Preparation {
     // owned nonresident processor fixture
     // ------------------------------------------------------------------
 
-    PPR_DEFINE_LOG_CATEGORY(AssetPreparationTests, verbose, none);
+    PPR_DEFINE_LOG_CATEGORY(AssetPreparationTests, verbose, none)
 
     struct TaggedBadAlloc final : std::bad_alloc {
         u32 m_tag{};
@@ -168,7 +168,7 @@ namespace pP::tests::detail::Preparation {
         [[nodiscard]] Expected<Result> finish(
             const std::span<const std::shared_ptr<Item>> items, config::Diagnostics &) {
             m_control->m_finish_called = true;
-            m_control->m_finish_owners = m_control->m_packs.use_count();
+            m_control->m_finish_owners = safe_narrowing{m_control->m_packs.use_count()};
             if (m_control->m_fatal_finish) {
                 throw std::bad_alloc{};
             }

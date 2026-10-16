@@ -121,7 +121,8 @@ namespace pP::image {
             const std::size_t count = rgba.size() / 4u;
             for (std::size_t i = 0u; i < count; i += 4u) {
                 const float4 alpha = pP::min(gatherAlphas_(rgba, i) * scale, 1.0f);
-                covered += std::popcount(pP::math::maskToInt(alpha >= cutoff));
+                const std::size_t hits = safe_narrowing{std::popcount(pP::math::maskToInt(alpha >= cutoff))};
+                covered += hits;
             }
 
             return static_cast<float>(covered) / static_cast<float>(count);
@@ -328,7 +329,7 @@ namespace pP::image {
                 (float4{static_cast<float>(x), static_cast<float>(y), 0.0f, 0.0f} + 0.5f) * scale / extent - 0.5f,
                 float4{0.0f}, upper);
             const float4 lower = pP::floor(coordinate);
-            const uint4 index = pP::truncToUInt<float, 4u>(lower);
+            const uint4 index = pP::truncToUInt<float, 4>(lower);
             const float4 fraction = coordinate - lower;
 
             // Large extents can round their final float coordinate upward.
@@ -371,7 +372,8 @@ namespace pP::image {
             PPR_RETURN_ERROR_ON_FAIL(Image, errc::invalid_argument);
         }
 
-        if (desc.m_has_preserve_coverage and MipGenDesc::alpha_cutoff_domain.validate(desc.m_alpha_cutoff)) {
+        if (desc.m_has_preserve_coverage and
+            MipGenDesc::alpha_cutoff_domain.validate(static_cast<double>(desc.m_alpha_cutoff))) {
             PPR_RETURN_ERROR_ON_FAIL(Image, errc::invalid_argument);
         }
 
@@ -381,8 +383,8 @@ namespace pP::image {
             PPR_RETURN_ERROR_ON_FAIL(Image, errc::invalid_argument);
         }
 
-        const u32 count = desc.m_full_chain ? std::bit_width((std::max) (asset.m_width, asset.m_height))
-                                            : mipCountFor(asset.m_width, asset.m_height);
+        const u32 full_count = safe_narrowing{std::bit_width((std::max) (asset.m_width, asset.m_height))};
+        const u32 count = desc.m_full_chain ? full_count : mipCountFor(asset.m_width, asset.m_height);
         if (count <= 1u and not desc.m_normal_map) {
             return {};
         }
@@ -483,12 +485,12 @@ namespace pP::image {
             color.m_height != alpha.m_height or
             (alpha.m_mip_count != 1u and alpha.m_mip_count < color.m_mip_count) or
             static_cast<u32>(desc.m_alpha_channel) > static_cast<u32>(EImageChannel::alpha) or
-            MipGenDesc::alpha_cutoff_domain.validate(desc.m_alpha_cutoff) or
+            MipGenDesc::alpha_cutoff_domain.validate(static_cast<double>(desc.m_alpha_cutoff)) or
             desc.m_is_premultiplied_alpha) {
             PPR_RETURN_ERROR_ON_FAIL(Image, errc::invalid_argument);
         }
 
-        const u32 support_count = std::bit_width((std::max) (color.m_width, color.m_height));
+        const u32 support_count = safe_narrowing{std::bit_width((std::max) (color.m_width, color.m_height))};
         std::array<FloodLevel, std::numeric_limits<u32>::digits> levels{};
         std::array<std::span<float>, std::numeric_limits<u32>::digits> masks{};
         std::size_t support_floats = 0u;

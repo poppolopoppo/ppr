@@ -7,7 +7,7 @@ import :memory.page_pool;
 import std;
 
 namespace pP::mem {
-    PPR_DECLARE_LOG_CATEGORY(Memory);
+    PPR_DECLARE_LOG_CATEGORY(Memory)
 
     // ------------------------------------------------------------------
     // OS page pooling allocator

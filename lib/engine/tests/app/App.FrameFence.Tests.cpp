@@ -1,6 +1,8 @@
 module;
 #include "pP/UnitTest.h"
 
+#include <slang.h>
+
 module engine.tests.app;
 
 import engine.core;

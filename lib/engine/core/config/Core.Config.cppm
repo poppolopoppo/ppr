@@ -1065,12 +1065,17 @@ export namespace pP::config {
             return constraint.validate(value);
         }
 
+        template<std::floating_point T>
+        [[nodiscard]] std::error_code checkConstraint(const FloatDomain &constraint, const T &value) {
+            return constraint.validate(static_cast<double>(value));
+        }
+
         template<typename C, typename T>
         [[nodiscard]] std::error_code checkConstraint(const C &constraint, const std::optional<T> &value) {
             if (not value.has_value()) {
                 return {};
             }
-            return constraint.validate(*value);
+            return checkConstraint(constraint, *value);
         }
 
         template<typename C, typename E>

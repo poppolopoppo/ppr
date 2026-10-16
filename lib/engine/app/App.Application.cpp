@@ -80,8 +80,8 @@ namespace pP {
         std::unique_ptr<IPlatform> platform, const ITimerClock &clock,
         const GpuTeardownFailureHandler on_gpu_teardown_failure)
         : m_application_clock(clock), m_pacer(clock), m_observation_clock(clock), m_platform(std::move(platform)),
-          m_arguments(argv.begin(), argv.end()), m_name(name), m_domain(std::move(domain)),
-          m_on_gpu_teardown_failure(on_gpu_teardown_failure) {
+          m_on_gpu_teardown_failure(on_gpu_teardown_failure), m_arguments(argv.begin(), argv.end()), m_name(name),
+          m_domain(std::move(domain)) {
         PPR_ASSERT(m_platform != nullptr);
 
         hal::disableSystemErrorReporting();

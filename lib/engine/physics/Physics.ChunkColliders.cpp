@@ -208,8 +208,8 @@ namespace pP::physics {
                 const std::span<const ColliderChunkView> chunks, const std::size_t upto) const noexcept {
                 if (m_overflow) {
                     return std::ranges::find(
-                               chunks.begin(), chunks.begin() + upto, chunks[upto].m_pos, &ColliderChunkView::m_pos) !=
-                           chunks.begin() + upto;
+                               chunks.begin(), chunks.begin() + safe_narrowing{upto}, chunks[upto].m_pos, &ColliderChunkView::m_pos) !=
+                           chunks.begin() + safe_narrowing{upto};
                 }
                 return find(chunks, chunks[upto].m_pos) >= 0;
             }
@@ -248,7 +248,10 @@ namespace pP::physics {
             }
             const i32 local_x = x - pos.m_x * edge;
             const i32 local_y = y - pos.m_y * edge;
-            return chunk->m_elements[static_cast<std::size_t>(local_y) * edge + local_x] != 0u;
+            const std::size_t flat_y = safe_narrowing{local_y};
+            const std::size_t flat_edge = safe_narrowing{edge};
+            const std::size_t flat_x = safe_narrowing{local_x};
+            return chunk->m_elements[flat_y * flat_edge + flat_x] != 0u;
         }
 
         template<class F>

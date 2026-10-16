@@ -198,6 +198,8 @@ namespace pP {
 
             RunImpl(const Context &context, const UnitTest &test, RunImpl &parent) noexcept;
 
+            ~RunImpl() noexcept;
+
             void start() noexcept;
             void stop() noexcept;
 

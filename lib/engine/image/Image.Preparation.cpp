@@ -54,8 +54,8 @@ namespace pP::image {
             void text(const std::string_view value) noexcept {
                 integer(value.size(), 8u);
 
-                for (const unsigned char byte: value) {
-                    integer(byte, 1u);
+                for (const char byte: value) {
+                    integer(static_cast<u8>(byte), 1u);
                 }
             }
         };
@@ -78,7 +78,16 @@ namespace pP::image {
             const Descriptor &descriptor, const std::string_view source, config::Diagnostics &diagnostics) {
             std::error_code first;
             config::visit(descriptor, [&](const auto &member, const auto &value) {
-                if (const auto error = member.m_constraint.validate(value)) {
+                // FloatDomain validates in double: widen explicitly here so
+                // float fields do not trip -Wdouble-promotion at the call.
+                std::error_code error;
+                if constexpr (std::is_same_v<
+                                  std::remove_cvref_t<decltype(member.m_constraint)>, config::FloatDomain>) {
+                    error = member.m_constraint.validate(static_cast<double>(value));
+                } else {
+                    error = member.m_constraint.validate(value);
+                }
+                if (error) {
                     diagnostics.add(
                         std::string{source}, std::string{member.m_metadata.m_name},
                         "Value is outside its descriptor domain", error);
@@ -197,8 +206,8 @@ namespace pP::image {
 
             item.m_prepared.m_image = std::move(*image);
             const auto &base = item.m_prepared.m_image;
-            const auto count = descriptor.m_full_chain ? std::bit_width((std::max) (base.m_width, base.m_height))
-                                                       : mipCountFor(base.m_width, base.m_height);
+            const u32 full_count = safe_narrowing{std::bit_width((std::max) (base.m_width, base.m_height))};
+            const auto count = descriptor.m_full_chain ? full_count : mipCountFor(base.m_width, base.m_height);
 
             for (u32 level = 0u; level < count; ++level) {
                 const auto bytes_at_level = slicePitchFor(
@@ -274,8 +283,8 @@ namespace pP::image {
                 return false;
             }
 
-            const auto count = descriptor.m_full_chain ? std::bit_width((std::max) (image.m_width, image.m_height))
-                                                       : mipCountFor(image.m_width, image.m_height);
+            const u32 full_count = safe_narrowing{std::bit_width((std::max) (image.m_width, image.m_height))};
+            const auto count = descriptor.m_full_chain ? full_count : mipCountFor(image.m_width, image.m_height);
             const auto format = descriptor.m_interpretation == ETextureInterpretation::color
                                     ? ENativeImageFormat::rgba8_srgb
                                     : ENativeImageFormat::rgba8_linear;

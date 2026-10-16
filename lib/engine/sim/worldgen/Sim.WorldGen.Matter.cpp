@@ -9,7 +9,7 @@ import std;
 
 namespace pP::sim {
     using pP::make_error_code;
-    PPR_DEFINE_LOG_CATEGORY(WorldMatter, info, none);
+    PPR_DEFINE_LOG_CATEGORY(WorldMatter, info, none)
 
     // ------------------------------------------------------------------
     // matter helpers
@@ -233,7 +233,8 @@ namespace pP::sim {
                 .m_identity = generationStreamSeed(plan.seed(), rule.m_key, instance.m_ordinal),
                 .m_material = fill.m_material,
                 .m_temperature_k = fill.m_temperature_k,
-                .m_bulk_density_kg_m3 = fill.m_bulk_density_kg_m3};
+                .m_bulk_density_kg_m3 = fill.m_bulk_density_kg_m3,
+                .m_spans = {}};
             const std::optional<i64> boundary =
                 fill.m_fill_height_m
                     ? std::optional<

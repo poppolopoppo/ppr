@@ -14,7 +14,7 @@ import std;
 
 namespace pP::sim {
     using pP::make_error_code;
-    PPR_DEFINE_LOG_CATEGORY(WorldResult, info, none);
+    PPR_DEFINE_LOG_CATEGORY(WorldResult, info, none)
 
     // ------------------------------------------------------------------
     // report helpers

@@ -440,7 +440,7 @@ namespace pP::tests::detail {
             const std::filesystem::path path = dir / ("hammer_" + std::to_string(tag) + ".png");
             std::array<std::byte, 4u * 4u * 4u> rgba{};
             for (std::size_t i = 0u; i < rgba.size(); i += 4u) {
-                rgba[i] = static_cast<std::byte>(tag * 31 + i);
+                rgba[i] = static_cast<std::byte>(tag * 31 + static_cast<int>(i));
                 rgba[i + 1u] = std::byte{128};
                 rgba[i + 2u] = std::byte{64};
                 rgba[i + 3u] = std::byte{255};

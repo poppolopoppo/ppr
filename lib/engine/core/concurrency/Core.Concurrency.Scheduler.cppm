@@ -17,7 +17,7 @@ import :logger;
 import std;
 
 export namespace pP {
-    PPR_DECLARE_LOG_CATEGORY(Scheduler);
+    PPR_DECLARE_LOG_CATEGORY(Scheduler)
 
     // ------------------------------------------------------------------
     // multi-tasking scheduler for fixed-size pool of parallel workers
@@ -47,7 +47,7 @@ export namespace pP {
         using EProducerPolicy = RawChannel::EBackPressure;
         using enum EProducerPolicy;
 
-        [[nodiscard]] friend std::error_code make_error_code(errc err) noexcept;
+        friend std::error_code make_error_code(errc err) noexcept;
 
         ParallelScheduler(
             string_literal description, std::size_t num_workers, std::size_t queue_bytes_per_worker,

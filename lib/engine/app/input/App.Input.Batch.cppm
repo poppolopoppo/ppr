@@ -5,6 +5,7 @@ export module engine.app:input.batch;
 import :input.device;
 import :input.key;
 import :input.listener;
+import :window.handle;
 
 import engine.core;
 import engine.math;
@@ -12,7 +13,6 @@ import std;
 
 export namespace pP {
     class IInputDevice;
-    class Window;
 
     // ------------------------------------------------------------------
     // P0 owned completed-batch boundary: native event collection appends

@@ -10,7 +10,7 @@ import std;
 
 namespace pP::sim::definition {
     using pP::make_error_code;
-    PPR_DEFINE_LOG_CATEGORY(WorldDefinition, info, none);
+    PPR_DEFINE_LOG_CATEGORY(WorldDefinition, info, none)
     // ------------------------------------------------------------------
     // validation helpers
     // ------------------------------------------------------------------

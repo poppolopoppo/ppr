@@ -10,7 +10,7 @@ import std;
 
 namespace pP::physics {
     // ReSharper disable once CppUseInternalLinkage
-    PPR_DEFINE_LOG_CATEGORY(Physics, debug, none);
+    PPR_DEFINE_LOG_CATEGORY(Physics, debug, none)
 
     // ------------------------------------------------------------------
     // validation helpers
@@ -257,8 +257,8 @@ namespace pP::physics {
         for (std::size_t i = 0; i < entities.size(); ++i) {
             const BodyDefinition &def = definitions[i];
             const bool invalid_entity = entities[i] == 0u or m_runtime->m_bodies.contains(entities[i]);
-            const bool repeated_entity = std::find(entities.begin(), entities.begin() + i, entities[i]) !=
-                                         entities.begin() + i;
+            const bool repeated_entity = std::find(entities.begin(), entities.begin() + safe_narrowing{i}, entities[i]) !=
+                                         entities.begin() + safe_narrowing{i};
             const bool invalid_motion = def.m_motion > EMotion::dynamic;
             const bool invalid_geometry = not validGeometry(def.m_geometry, def.m_half_width, def.m_half_height);
             const bool invalid_position = not std::isfinite(def.m_x) or not std::isfinite(def.m_y);
@@ -322,7 +322,7 @@ namespace pP::physics {
                     break;
                 }
                 try {
-                    m_runtime->m_bodies.emplace(entities[i], Runtime::Entry{body, m_next_serial});
+                    m_runtime->m_bodies.emplace(entities[i], Runtime::Entry{body, m_next_serial, {}});
                 } catch (...) {
                     b2DestroyBody(body);
                     PPR_RETHROW(Physics);

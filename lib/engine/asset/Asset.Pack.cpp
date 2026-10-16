@@ -10,7 +10,7 @@ import std;
 #include "Asset.Identity.Validation.hpp"
 
 namespace pP::asset {
-    PPR_DEFINE_LOG_CATEGORY(Asset, debug, none);
+    PPR_DEFINE_LOG_CATEGORY(Asset, debug, none)
 
     // ------------------------------------------------------------------
     // stable names and identity
@@ -65,8 +65,8 @@ namespace pP::asset {
             hash *= 1099511628211ull;
         };
 
-        for (const unsigned char byte: std::string_view{"ppr.asset.key"}) {
-            append(byte);
+        for (const char byte : std::string_view{"ppr.asset.key"}) {
+            append(safe_narrowing{byte});
         }
         append(0u);
         append(1u);
@@ -77,8 +77,8 @@ namespace pP::asset {
                 append(static_cast<u8>(length >> shift));
             }
 
-            for (const unsigned char byte: field) {
-                append(byte);
+            for (const char byte : field) {
+                append(safe_narrowing{byte});
             }
         }
 

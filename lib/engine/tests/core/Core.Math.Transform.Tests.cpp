@@ -911,7 +911,7 @@ namespace pP::tests::detail {
                 float3{0.5f, -0.75f, 0.25f},
             };
 
-            for (const float3 probe: probes) {
+            for (const float3 &probe: probes) {
                 const float3 direction = normalize(probe);
                 const float3 expected = normalize((float4(direction, 0.0f) * inverse_transpose).xyz);
                 PPR_TEST_ASSERT(nearEqual(value.transformNormal(direction), expected));
@@ -943,7 +943,7 @@ namespace pP::tests::detail {
                 float3{0.5f, -0.75f, 0.25f},
             };
 
-            for (const float3 probe: probes) {
+            for (const float3 &probe: probes) {
                 const float3 direction = normalize(probe);
                 PPR_TEST_ASSERT(nearEqual(value.invertTransformNormal(value.transformNormal(direction)), direction));
                 PPR_TEST_ASSERT(nearEqual(value.transformNormal(value.invertTransformNormal(direction)), direction));
@@ -953,7 +953,7 @@ namespace pP::tests::detail {
             const float4x4 back_basis = transpose(float4x4(value.m_rotate)) *
                                         float4x4::scale(value.m_scale.x, value.m_scale.y, value.m_scale.z);
 
-            for (const float3 probe: probes) {
+            for (const float3 &probe: probes) {
                 const float3 direction = normalize(probe);
                 const float3 expected = normalize((float4(direction, 0.0f) * back_basis).xyz);
                 PPR_TEST_ASSERT(nearEqual(value.invertTransformNormal(direction), expected));
@@ -991,7 +991,7 @@ namespace pP::tests::detail {
                 float3{0.0f, 0.0f, 1.0f},
             };
 
-            for (const float3 axis: axes) {
+            for (const float3 &axis: axes) {
                 const float3 result = fallbackPerpendicular(axis);
                 PPR_TEST_ASSERT(nearEqual(length(result), 1.0f));
                 PPR_TEST_ASSERT(std::abs(dot(axis, result)) < kEps);

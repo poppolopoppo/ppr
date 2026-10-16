@@ -11,7 +11,7 @@ import std;
 
 namespace pP {
     // ReSharper disable once CppUseInternalLinkage
-    PPR_DEFINE_LOG_CATEGORY(InputDevice, info, none);
+    PPR_DEFINE_LOG_CATEGORY(InputDevice, info, none)
 
     // ------------------------------------------------------------------
     // analog axis input state

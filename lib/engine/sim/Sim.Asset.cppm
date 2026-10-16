@@ -14,7 +14,7 @@ export namespace pP::sim::asset {
     // simulation asset identities
     // ------------------------------------------------------------------
 
-    PPR_DECLARE_LOG_CATEGORY(SimAssets);
+    PPR_DECLARE_LOG_CATEGORY(SimAssets)
 
     struct ElementIdTag;
     struct MaterialIdTag;

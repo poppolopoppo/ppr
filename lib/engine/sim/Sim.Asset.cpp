@@ -11,7 +11,7 @@ import std;
 namespace pP::sim::asset {
     using pP::make_error_code;
 
-    PPR_DEFINE_LOG_CATEGORY(SimAssets, debug, none);
+    PPR_DEFINE_LOG_CATEGORY(SimAssets, debug, none)
 
     // ------------------------------------------------------------------
     // physical material assembly

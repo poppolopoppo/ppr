@@ -12,7 +12,7 @@ export namespace pP::image {
     // image errors and formats
     // ------------------------------------------------------------------
 
-    PPR_DECLARE_LOG_CATEGORY(Image);
+    PPR_DECLARE_LOG_CATEGORY(Image)
 
     // CPU-only vocabulary. No mango/rhi types cross — native format + plain layout; RHI mapping happens
     // at upload inside engine.app caches.

@@ -7,7 +7,7 @@ import engine.core;
 import std;
 
 export namespace pP::physics {
-    PPR_DECLARE_LOG_CATEGORY(Physics);
+    PPR_DECLARE_LOG_CATEGORY(Physics)
 
     // ------------------------------------------------------------------
     // body identity

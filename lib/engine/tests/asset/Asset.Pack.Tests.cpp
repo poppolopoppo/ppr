@@ -17,7 +17,7 @@ namespace pP::tests::detail::Packs {
 
     constexpr std::string_view kKinds[] = {"sim.material", "sim.world", "image.texture"};
 
-    PPR_DEFINE_LOG_CATEGORY(AssetPackReaderTests, verbose, none);
+    PPR_DEFINE_LOG_CATEGORY(AssetPackReaderTests, verbose, none)
 
     asset::PackSource source(const std::string_view name, std::string bytes) {
         const auto root = std::filesystem::current_path();

@@ -15,7 +15,7 @@ namespace pP::tests::detail::ImagePreparation {
     // owned named image fixtures
     // ------------------------------------------------------------------
 
-    PPR_DEFINE_LOG_CATEGORY(ImagePreparationTests, verbose, none);
+    PPR_DEFINE_LOG_CATEGORY(ImagePreparationTests, verbose, none)
 
     struct Fixture {
         std::filesystem::path m_root{};

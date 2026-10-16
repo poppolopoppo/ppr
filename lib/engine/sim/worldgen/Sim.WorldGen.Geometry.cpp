@@ -8,7 +8,7 @@ import std;
 
 namespace pP::sim {
     using pP::make_error_code;
-    PPR_DEFINE_LOG_CATEGORY(WorldGeometry, info, none);
+    PPR_DEFINE_LOG_CATEGORY(WorldGeometry, info, none)
 
     // ------------------------------------------------------------------
     // geometry helpers
@@ -377,7 +377,7 @@ namespace pP::sim {
                 // One-metre maximum steps; the final step retains authored
                 // sub-metre lengths rather than rounding them onto the grid.
                 const double segment_count = std::ceil(worm->m_length_max_m);
-                if (segment_count * worm->m_count > kMaxGenerationSegments - geometry.m_segments.size()) {
+                if (segment_count * worm->m_count > kMaxGenerationSegments - static_cast<double>(geometry.m_segments.size())) {
                     PPR_RETURN_ERROR_ON_FAIL(WorldGeometry, make_error_code(EGenerationErrc::segment_limit));
                 }
                 for (u32 ordinal = 0u; ordinal < worm->m_count; ++ordinal) {

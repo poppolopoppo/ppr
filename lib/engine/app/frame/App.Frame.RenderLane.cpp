@@ -622,6 +622,7 @@ namespace pP {
                         m_world_executor = GridWorldExecutor{};
                     }
                     u64 drained = 0u;
+                    (void) drained;
                     for (;;) {
                         auto acquired = m_frames->consumerAcquire(RawChannel::peek_without_blocking);
                         if (not acquired.has_value()) {

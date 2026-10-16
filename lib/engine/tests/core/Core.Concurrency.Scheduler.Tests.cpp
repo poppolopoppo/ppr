@@ -339,8 +339,10 @@ namespace pP::tests::detail {
             ~ThrowingCapture() noexcept = default;
         };
 
-        using ThrowingScheduleTask = decltype([held = ThrowingCapture{}](const IContext &) {});
-        using ThrowingBroadcastTask = decltype([held = ThrowingCapture{}](const IContext &) {});
+        // The capture gives the closure a throwing move-constructor; the void
+        // cast keeps -Wunused-lambda-capture quiet without touching traits.
+        using ThrowingScheduleTask = decltype([held = ThrowingCapture{}](const IContext &) { (void)held; });
+        using ThrowingBroadcastTask = decltype([held = ThrowingCapture{}](const IContext &) { (void)held; });
 
         static_assert(std::invocable<ThrowingScheduleTask, const IContext &>);
         static_assert(std::invocable<ThrowingBroadcastTask, const IContext &>);
@@ -438,6 +440,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not sched.broadcast(
                 [count = per_copy, &ran, &wg](const IContext &) mutable {
                     ++count;
+                    (void)count;
                     ran.fetch_add(1u, std::memory_order_acq_rel);
                     wg.done();
                 },

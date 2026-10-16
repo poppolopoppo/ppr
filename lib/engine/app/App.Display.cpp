@@ -11,7 +11,7 @@ import engine.core;
 import std;
 
 namespace pP {
-    PPR_DEFINE_LOG_CATEGORY(DisplayPolicy, info, none);
+    PPR_DEFINE_LOG_CATEGORY(DisplayPolicy, info, none)
 
     // ------------------------------------------------------------------
     // display policy

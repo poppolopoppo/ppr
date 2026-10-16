@@ -9,7 +9,7 @@ import std;
 
 namespace pP::sim {
     using pP::make_error_code;
-    PPR_DEFINE_LOG_CATEGORY(WorldStart, info, none);
+    PPR_DEFINE_LOG_CATEGORY(WorldStart, info, none)
 
     // ------------------------------------------------------------------
     // start helpers
@@ -157,11 +157,11 @@ namespace pP::sim {
 
         const double scale = 1.0 / recipe.m_cell_size_m;
         const auto &marker = feature.m_markers[recipe.m_start_marker];
-        const double spawn_x = recipe.m_start_x_fine + marker.m_x + 0.5;
-        const double marker_y = recipe.m_start_y_fine + marker.m_y + 0.5;
+        const double spawn_x = static_cast<i32>(recipe.m_start_x_fine) + marker.m_x + 0.5;
+        const double marker_y = static_cast<i32>(recipe.m_start_y_fine) + marker.m_y + 0.5;
         double route_left = spawn_x, route_right = spawn_x;
         for (const auto &resource: recipe.m_resources) {
-            const double x = recipe.m_start_x_fine + feature.m_markers[resource.m_marker].m_x + 0.5;
+            const double x = static_cast<i32>(recipe.m_start_x_fine) + feature.m_markers[resource.m_marker].m_x + 0.5;
             route_left = std::min(route_left, x);
             route_right = std::max(route_right, x);
         }
@@ -192,7 +192,8 @@ namespace pP::sim {
                 }
                 const auto &shape = cases[mask];
                 const auto point = [&](const u32 index) -> Point {
-                    return {x + 0.5 + points[index].m_x, y + 0.5 + points[index].m_y};
+                    return {x + 0.5 + static_cast<double>(points[index].m_x),
+                        y + 0.5 + static_cast<double>(points[index].m_y)};
                 };
                 for (u32 s = 0u; s < shape.m_segment_count; ++s) {
                     const auto a = point(shape.m_segments[s].m_begin), b = point(shape.m_segments[s].m_end);
@@ -253,7 +254,7 @@ namespace pP::sim {
         }
 
         const double spawn_y = *floor + recipe.m_actor_half_height_m * scale;
-        GenerationStart result{spawn_x / scale, spawn_y / scale, *floor / scale};
+        GenerationStart result{spawn_x / scale, spawn_y / scale, *floor / scale, {}};
 
         for (const auto &resource: recipe.m_resources) {
             auto count = resourceCells(

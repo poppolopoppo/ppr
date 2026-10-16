@@ -10,7 +10,7 @@ import engine.core;
 import std;
 
 namespace pP {
-    PPR_DEFINE_LOG_CATEGORY(PlayerGraph, info, none);
+    PPR_DEFINE_LOG_CATEGORY(PlayerGraph, info, none)
 
     SharedPlayer PlayerGraph::getPlayer(const PlayerId &id) const noexcept {
         if (const auto it = m_players.find(id); it != m_players.end()) [[likely]] {

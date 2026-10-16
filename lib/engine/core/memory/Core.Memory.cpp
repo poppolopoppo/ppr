@@ -10,7 +10,7 @@ import :memory.pointer;
 import std;
 
 namespace pP::mem {
-    PPR_DEFINE_LOG_CATEGORY(Memory, debug, none);
+    PPR_DEFINE_LOG_CATEGORY(Memory, debug, none)
 
     [[noreturn]] void throwBadAlloc() {
         PPR_THROW(Memory, std::bad_alloc{});
@@ -100,7 +100,7 @@ namespace pP {
     // ------------------------------------------------------------------
 
 #if PPR_ENABLE_SAFE_OBJECT_TRACKING
-    PPR_DEFINE_LOG_CATEGORY(SafeObject, info, none);
+    PPR_DEFINE_LOG_CATEGORY(SafeObject, info, none)
 }
 namespace std {
     static void formatStackEntryTo(

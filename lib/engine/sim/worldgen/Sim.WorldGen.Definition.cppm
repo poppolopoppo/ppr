@@ -1070,7 +1070,7 @@ export namespace pP::sim::definition {
                 m_ordering.push_back(i);
             }
 
-            std::sort(m_ordering.begin() + frame, m_ordering.end(), [&](const auto left, const auto right) {
+            std::sort(m_ordering.begin() + safe_narrowing{frame}, m_ordering.end(), [&](const auto left, const auto right) {
                 const auto &left_key = collection.m_entries[left].m_key;
                 const auto &right_key = collection.m_entries[right].m_key;
                 return left_key < right_key or (left_key == right_key and left < right);

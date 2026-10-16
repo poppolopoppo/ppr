@@ -7,7 +7,7 @@ import :types;
 import std;
 
 namespace pP::image {
-    PPR_DEFINE_LOG_CATEGORY(Image, debug, none);
+    PPR_DEFINE_LOG_CATEGORY(Image, debug, none)
 
     // ------------------------------------------------------------------
     // image error category

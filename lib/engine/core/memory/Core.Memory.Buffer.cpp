@@ -13,7 +13,7 @@ import std;
 
 
 namespace pP::mem {
-    PPR_DECLARE_LOG_CATEGORY(Memory);
+    PPR_DECLARE_LOG_CATEGORY(Memory)
 
     // ------------------------------------------------------------------
     // BufferOwner owns an allocation & deleter to deallocate when destroyed

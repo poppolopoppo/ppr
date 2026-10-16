@@ -134,9 +134,12 @@ namespace pP {
                         path.clear();
                         path.seekp(0);
 
-                        for (const auto &[id, entry]: std::ranges::views::enumerate(m_stack)) {
-                            if (id > 0) {
+                        bool first_elem = true;
+                        for (const auto &entry: m_stack) {
+                            if (not first_elem) {
                                 path << '/';
+                            } else {
+                                first_elem = false;
                             }
 
                             const char *name = entry.m_test != nullptr ? entry.m_test->m_name : nullptr;
@@ -315,6 +318,8 @@ namespace pP {
     UnitTest::RunImpl::RunImpl(const Context &context, const UnitTest &test, RunImpl &parent) noexcept
         : m_context(context), m_test(test), m_parent(&parent), m_root(parent.m_root), m_depth(parent.m_depth + 1u) {
     }
+
+    UnitTest::RunImpl::~RunImpl() noexcept = default; // std::unique_ptr<WatchDog> is incomplete
 
     UnitTest::Id UnitTest::RunImpl::getTestId() const noexcept {
         return Id(*this);

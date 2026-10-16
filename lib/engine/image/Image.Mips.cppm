@@ -75,7 +75,7 @@ export namespace pP::image {
         if (small <= 1u) {
             return 1u;
         }
-        const u32 floor_log2 = std::bit_width(small) - 1u;
+        const u32 floor_log2 = safe_narrowing{std::bit_width(small) - 1};
         return floor_log2 >= 2u ? floor_log2 - 1u : 1u;
     }
 

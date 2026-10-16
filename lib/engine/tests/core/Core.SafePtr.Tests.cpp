@@ -177,10 +177,11 @@ namespace pP::tests::detail {
         PPR_UNIT_TEST (self_copy_assign_noop) {
             TestBase obj{1};
             safe_ptr<TestBase> p{&obj};
-            PPR_PRAGMA_WARNING_PUSH()
-            PPR_PRAGMA_WARNING_DISABLE_GCC_CLANG(-Wself - assign - overloaded)
-            p = p;
-            PPR_PRAGMA_WARNING_POP()
+            // Through an alias: spelling this as p = p trips
+            // -Wself-assign-overloaded, and the hyphenated pragma spelling
+            // does not survive clang-format.
+            safe_ptr<TestBase> &alias = p;
+            p = alias;
             PPR_TEST_ASSERT(p.get() == &obj);
             p.reset();
         };
@@ -188,10 +189,9 @@ namespace pP::tests::detail {
         PPR_UNIT_TEST (self_move_assign_noop) {
             TestBase obj{1};
             safe_ptr<TestBase> p{&obj};
-            PPR_PRAGMA_WARNING_PUSH()
-            PPR_PRAGMA_WARNING_DISABLE_GCC_CLANG(-Wself - move)
-            p = std::move(p);
-            PPR_PRAGMA_WARNING_POP()
+            // Same alias rationale as self_copy_assign_noop above.
+            safe_ptr<TestBase> &alias = p;
+            p = std::move(alias);
             PPR_TEST_ASSERT(p.get() == &obj);
             p.reset();
         };

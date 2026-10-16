@@ -1348,6 +1348,7 @@ namespace pP {
             .viewportCount = 1u,
             .scissorRects = {draw_context.m_scissor},
             .scissorRectCount = 1u,
+            .vertexBuffers = {},
             .indexBuffer = {},
         });
 
@@ -1504,6 +1505,7 @@ namespace pP {
             .viewportCount = 1u,
             .scissorRects = {draw_context.m_scissor},
             .scissorRectCount = 1u,
+            .vertexBuffers = {},
             .indexBuffer = {},
         });
 
@@ -2651,8 +2653,8 @@ namespace pP {
                                       std::isfinite(particle.m_volume_m3) and
                                       particle.m_volume_m3 > 0.0 and
                                       particle.m_volume_m3 <= static_cast<double>(stage.m_cell_size_m) *
-                                                                  stage.m_cell_size_m *
-                                                                  stage.m_reference_thickness_m *
+                                                                  static_cast<double>(stage.m_cell_size_m) *
+                                                                  static_cast<double>(stage.m_reference_thickness_m) *
                                                                   1.001 and
                                       std::isfinite(particle.m_mass_kg) and
                                       particle.m_mass_kg > 0.0 and
@@ -2738,9 +2740,10 @@ namespace pP {
                     value.m_position[0] = static_cast<float>(particle.m_position_x_m);
                     value.m_position[1] = static_cast<float>(particle.m_position_y_m);
                     value.m_radius_m = static_cast<float>(
-                        std::sqrt(particle.m_volume_m3 / m_world.m_reference_thickness_m / std::numbers::pi));
+                        std::sqrt(particle.m_volume_m3 / static_cast<double>(m_world.m_reference_thickness_m) / std::numbers::pi));
                     value.m_fill = static_cast<float>(std::clamp(
-                        particle.m_volume_m3 / (area * cell * cell * m_world.m_reference_thickness_m), 0.0, 1.0));
+                        particle.m_volume_m3 / (area * cell * cell * static_cast<double>(m_world.m_reference_thickness_m)),
+                        0.0, 1.0));
                     value.m_material_id = particle.m_material_id;
                     value.m_phase = particle.m_phase;
                     value.m_owner[0] = static_cast<u32>(x);
@@ -3009,6 +3012,7 @@ namespace pP {
                 .viewportCount = 1u,
                 .scissorRects = {rhi::ScissorRect::fromSize(width, height)},
                 .scissorRectCount = 1u,
+                .vertexBuffers = {},
                 .indexBuffer = {}});
         pass->bindPipeline((*pipeline)->m_pipeline, root);
         markPipelineUse_(**pipeline, selected);
@@ -3051,6 +3055,7 @@ namespace pP {
                 .viewportCount = 1u,
                 .scissorRects = {context.m_scissor},
                 .scissorRectCount = 1u,
+                .vertexBuffers = {},
                 .indexBuffer = {}});
         context.m_pass.bindPipeline((*pipeline)->m_pipeline, root);
         markPipelineUse_(**pipeline, slot);
@@ -3093,6 +3098,7 @@ namespace pP {
                 .viewportCount = 1u,
                 .scissorRects = {context.m_scissor},
                 .scissorRectCount = 1u,
+                .vertexBuffers = {},
                 .indexBuffer = {}});
 
         for (const auto &tile: plan->m_tiles) {

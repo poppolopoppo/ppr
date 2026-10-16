@@ -12,7 +12,7 @@ import :platform.glfw.input;
 
 namespace pP {
     // ReSharper disable once CppUseInternalLinkage
-    PPR_DEFINE_LOG_CATEGORY(GlfwInput, info, none);
+    PPR_DEFINE_LOG_CATEGORY(GlfwInput, info, none)
 
     static void glfwJoystickCallback_(int jid, int event);
 

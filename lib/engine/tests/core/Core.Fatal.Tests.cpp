@@ -3,6 +3,9 @@ module;
 
 #include <cstdio>
 #include <cstdlib>
+#if !defined(_WIN32)
+#include <cxxabi.h>
+#endif
 
 module engine.tests.core;
 
@@ -70,11 +73,20 @@ namespace pP::tests::detail {
             return std::filesystem::temp_directory_path() / ("ppr-core-fatal-" + std::string(fatal_case) + ".txt");
         }
 
+        [[nodiscard]] FILE *openMarkerFile(const std::string &path, const char *mode) noexcept {
+#ifdef _WIN32
+            FILE *file = nullptr;
+            return ::fopen_s(&file, path.c_str(), mode) == 0 ? file : nullptr;
+#else
+            return std::fopen(path.c_str(), mode);
+#endif
+        }
+
         void writeFatalMarker(const char *fatal_case, const char *line) noexcept {
             try {
                 const std::string path = markerPath(fatal_case).string();
-                FILE *file = nullptr;
-                if (::fopen_s(&file, path.c_str(), "a") == 0 and file != nullptr) {
+                FILE *file = openMarkerFile(path, "a");
+                if (file != nullptr) {
                     std::fputs(line, file);
                     std::fputs("\n", file);
                     std::fclose(file);
@@ -86,8 +98,8 @@ namespace pP::tests::detail {
         [[nodiscard]] std::string readFatalMarkers(const char *fatal_case) {
             std::string markers{};
             const std::string path = markerPath(fatal_case).string();
-            FILE *file = nullptr;
-            if (::fopen_s(&file, path.c_str(), "r") == 0 and file != nullptr) {
+            FILE *file = openMarkerFile(path, "r");
+            if (file != nullptr) {
                 char line[256];
                 while (std::fgets(line, sizeof(line), file) != nullptr) {
                     markers += line;
@@ -114,6 +126,7 @@ namespace pP::tests::detail {
 
         PPR_PRAGMA_WARNING_PUSH()
         PPR_PRAGMA_WARNING_DISABLE_MSVC(4297)
+        PPR_PRAGMA_WARNING_DISABLE_GCC_CLANG(-Wexceptions)
         [[noreturn]] void throwInNoexcept_() noexcept {
             throw std::runtime_error{"ppr-core-fatal-terminate"};
         }
@@ -126,6 +139,13 @@ namespace pP::tests::detail {
 
         PPR_PRAGMA_WARNING_PUSH()
         PPR_PRAGMA_WARNING_DISABLE_MSVC(4717)
+#ifdef __clang__
+        // Unbounded recursion is the test mechanism. Spelled directly: the
+        // hyphenated name cannot pass through
+        // PPR_PRAGMA_WARNING_DISABLE_GCC_CLANG (clang-format splits it and
+        // stringizing mangles it).
+        _Pragma("clang diagnostic ignored \"-Winfinite-recursion\"")
+#endif
         PPR_NO_INLINE void overflowRecurse_(unsigned depth) {
             volatile unsigned char frame[2048]{};
             frame[0] = static_cast<unsigned char>(depth & 0xFFu);
@@ -255,7 +275,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(installed != nullptr);
             installed();
 #else
-            __cxa_pure_virtual();
+            __cxxabiv1::__cxa_pure_virtual();
 #endif
         };
 

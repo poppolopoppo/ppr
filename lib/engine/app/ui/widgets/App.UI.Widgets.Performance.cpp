@@ -31,8 +31,9 @@ namespace pP::ui {
             const TimingStatistics &statistics, const float width) {
             ImGui::TextUnformatted(label);
             ImGui::Text(
-                "avg %.1f   p50 %.1f   p95 %.1f   p99 %.1f", statistics.m_average, statistics.m_p50, statistics.m_p95,
-                statistics.m_p99);
+                "avg %.1f   p50 %.1f   p95 %.1f   p99 %.1f", static_cast<double>(statistics.m_average),
+                static_cast<double>(statistics.m_p50), static_cast<double>(statistics.m_p95),
+                static_cast<double>(statistics.m_p99));
             const float ceiling = std::max(1.0f, statistics.m_maximum * 1.1f);
             ImGui::PushID(label);
             ImGui::PlotLines("##history", getter, data, count, 0, nullptr, 0.0f, ceiling, ImVec2{width, 64.0f});

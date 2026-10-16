@@ -247,7 +247,7 @@ namespace pP::tests::detail {
             constexpr physics::ColliderChunkPos pos{0, 0};
             std::array<u16, 64> elements{};
             for (int x = 0; x < 8; ++x) {
-                elements[x] = 1u;
+                elements[safe_narrowing{x}] = 1u;
             }
             const std::array chunks{physics::ColliderChunkView{pos, elements, true}};
             const std::array dirty{pos};
@@ -398,8 +398,8 @@ namespace pP::tests::detail {
             std::array<u16, 64> left{};
             std::array<u16, 64> right{};
             for (int x = 0; x < 8; ++x) {
-                left[x] = 1u;
-                right[x] = 1u;
+                left[safe_narrowing{x}] = 1u;
+                right[safe_narrowing{x}] = 1u;
             }
             const std::array chunks{
                 physics::ColliderChunkView{{0, 0}, left, true}, physics::ColliderChunkView{{1, 0}, right, true}};
@@ -437,8 +437,8 @@ namespace pP::tests::detail {
             std::array<physics::ColliderChunkView, 5> chunks{};
             std::array<physics::ColliderChunkPos, 5> dirty{};
             for (int i = 0; i < 5; ++i) {
-                dirty[i] = {i, 0};
-                chunks[i] = {dirty[i], cells[i], false};
+                dirty[safe_narrowing{i}] = {i, 0};
+                chunks[safe_narrowing{i}] = {dirty[safe_narrowing{i}], cells[safe_narrowing{i}], false};
             }
             u32 processed{};
             PPR_TEST_ASSERT(not colliders.rebuildDirtyChunks(scene, chunks, dirty, 8u, 2u, processed));
@@ -700,8 +700,8 @@ namespace pP::tests::detail {
             std::array<u16, 64> left_cells{};
             std::array<u16, 64> right_cells{};
             for (int x = 0; x < 8; ++x) {
-                left_cells[x] = 1u;
-                right_cells[x] = 1u;
+                left_cells[safe_narrowing{x}] = 1u;
+                right_cells[safe_narrowing{x}] = 1u;
             }
             const std::array views{
                 physics::ColliderChunkView{left, left_cells, true},

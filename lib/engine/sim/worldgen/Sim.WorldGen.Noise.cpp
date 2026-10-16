@@ -11,7 +11,7 @@ import std;
 
 namespace pP::sim {
     using pP::make_error_code;
-    PPR_DEFINE_LOG_CATEGORY(WorldNoise, info, none);
+    PPR_DEFINE_LOG_CATEGORY(WorldNoise, info, none)
 
     struct NoiseField::Impl {
         FastNoiseLite m_noise;
@@ -113,7 +113,8 @@ namespace pP::sim {
         if (m_impl->m_billow_count != 0u) {
             double sum = 0.0, amplitude = 1.0;
             for (u32 octave = 0u; octave < m_impl->m_billow_count; ++octave) {
-                sum += amplitude * (2.0 * std::abs(m_impl->m_billow_octaves[octave].GetNoise(x_m, y_m)) - 1.0);
+                const double noise{static_cast<double>(m_impl->m_billow_octaves[octave].GetNoise(x_m, y_m))};
+                sum += amplitude * (2.0 * std::abs(noise) - 1.0);
                 amplitude *= m_impl->m_gain;
             }
             return static_cast<float>(sum / m_impl->m_amplitude_sum);

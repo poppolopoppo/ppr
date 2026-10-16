@@ -11,7 +11,7 @@ export namespace pP::asset {
     // stable names and identity
     // ------------------------------------------------------------------
 
-    PPR_DECLARE_LOG_CATEGORY(Asset);
+    PPR_DECLARE_LOG_CATEGORY(Asset)
 
     struct AssetKeyTag;
     struct RequestGenerationTag;

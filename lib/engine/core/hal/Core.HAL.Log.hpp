@@ -6,6 +6,8 @@
 
 #pragma once
 
+#include "pP/Macros.h"
+
 namespace pP::hal {
-    PPR_DECLARE_LOG_CATEGORY(Hal);
+    PPR_DECLARE_LOG_CATEGORY(Hal)
 }

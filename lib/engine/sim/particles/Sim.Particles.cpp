@@ -7,7 +7,7 @@ import std;
 
 namespace pP::sim {
     using pP::make_error_code;
-    PPR_DEFINE_LOG_CATEGORY(MatterParticles, info, none);
+    PPR_DEFINE_LOG_CATEGORY(MatterParticles, info, none)
 
     // ------------------------------------------------------------------
     // validation helpers
@@ -50,7 +50,8 @@ namespace pP::sim {
 
                 const auto a = points[indices.m_a], b = points[indices.m_b], c = points[indices.m_c];
                 const auto cross = [&](const auto from, const auto to) {
-                    return (to.m_x - from.m_x) * (py - from.m_y) - (to.m_y - from.m_y) * (px - from.m_x);
+                    return static_cast<double>(to.m_x - from.m_x) * (py - static_cast<double>(from.m_y)) -
+                           static_cast<double>(to.m_y - from.m_y) * (px - static_cast<double>(from.m_x));
                 };
 
                 const double ab = cross(a, b), bc = cross(b, c), ca = cross(c, a);
@@ -312,7 +313,8 @@ namespace pP::sim {
             for (i32 dy = -1; dy <= 1; ++dy) {
                 for (i32 dx = -1; dx <= 1; ++dx) {
                     const i32 x = static_cast<i32>(position.m_x) + dx, y = static_cast<i32>(position.m_y) + dy;
-                    if (x >= 0 and y >= 0 and x < kChunksPerEdge and y < kChunksPerEdge) {
+                    if (x >= 0 and y >= 0 and static_cast<u32>(x) < kChunksPerEdge and
+                        static_cast<u32>(y) < kChunksPerEdge) {
                         affected.set(static_cast<u32>(y) * kChunksPerEdge + static_cast<u32>(x));
                     }
                 }
@@ -320,7 +322,7 @@ namespace pP::sim {
         }
 
         const auto read = [&](const i32 x, const i32 y, const bool edited) {
-            if (x < 0 or y < 0 or x >= kWorldEdge or y >= kWorldEdge) {
+            if (x < 0 or y < 0 or static_cast<u32>(x) >= kWorldEdge or static_cast<u32>(y) >= kWorldEdge) {
                 return true;
             }
 

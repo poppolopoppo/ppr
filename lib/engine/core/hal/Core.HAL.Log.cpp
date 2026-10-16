@@ -9,5 +9,5 @@ import std;
 
 namespace pP::hal {
     // ReSharper disable once CppUseInternalLinkage
-    PPR_DEFINE_LOG_CATEGORY(Hal, debug, none);
+    PPR_DEFINE_LOG_CATEGORY(Hal, debug, none)
 }

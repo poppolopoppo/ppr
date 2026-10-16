@@ -11,7 +11,7 @@ import engine.shader;
 import std;
 
 namespace pP::tests::detail::SharedGpu {
-    PPR_DEFINE_LOG_CATEGORY(AssetGpuFixture, info, none);
+    PPR_DEFINE_LOG_CATEGORY(AssetGpuFixture, info, none)
     // One headless rendering application shared by every GPU leaf in a group.
     // Plain Application never creates a window; Renderer::renderToTexture and
     // device readback are surface-free, so the window/input services are dead

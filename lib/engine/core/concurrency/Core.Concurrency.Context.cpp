@@ -291,17 +291,22 @@ namespace pP::context {
         return std::make_shared<BackgroundContext>();
     }
 
-    static std::atomic<SharedContext> g_app_context{};
+    static std::mutex g_app_context_mutex{};
+    static SharedContext g_app_context{};
 
     SharedContext application() noexcept {
-        if (SharedContext context = g_app_context.load()) {
+        const std::lock_guard guard{g_app_context_mutex};
+        if (SharedContext context = g_app_context) {
             return context;
         }
         return background();
     }
 
     SharedContext setApplication(SharedContext app_context) {
-        return g_app_context.exchange(std::move(app_context));
+        const std::lock_guard guard{g_app_context_mutex};
+        SharedContext previous = std::move(g_app_context);
+        g_app_context = std::move(app_context);
+        return previous;
     }
 
     std::pair<SharedContext, CancelFunc> withCancel(SharedContext parent) {

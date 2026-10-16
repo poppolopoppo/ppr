@@ -7,7 +7,7 @@ import :memory.arena;
 import std;
 
 namespace pP::mem {
-    PPR_DECLARE_LOG_CATEGORY(Memory);
+    PPR_DECLARE_LOG_CATEGORY(Memory)
 
     // ------------------------------------------------------------------
     // slab allocator has a single chunk of fixed size, which it does not own

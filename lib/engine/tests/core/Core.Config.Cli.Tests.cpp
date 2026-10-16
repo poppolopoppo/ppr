@@ -495,7 +495,7 @@ namespace pP::tests::detail::cfg_cli {
         PPR_TEST_ASSERT(text.find("public-default") != std::string::npos);
         PPR_TEST_ASSERT(text.find("hidden-default") == std::string::npos);
         PPR_TEST_ASSERT(text.find("app.unbound") == std::string::npos);
-    }
+    };
 
     PPR_UNIT_TEST (exit_code_constant) {
         PPR_TEST_ASSERT(kExitInvalidUsage == 2);

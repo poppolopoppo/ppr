@@ -652,14 +652,24 @@ float4 fragmentMain(PsInput input) : SV_Target {
                 for (int list = 0; list < draw_data->CmdListsCount; ++list) {
                     const ImDrawList *const cmd_list = draw_data->CmdLists[list];
                     // Layout-identical bulk copy (see the static_assert
-                    // above): memcpy is the blessed type-punning here, never
-                    // element reads through the imgui type.
+                    // above): memcpy is the blessed bulk transfer here, never
+                    // element reads through the imgui type. DetachedUiVertex
+                    // is deliberately not assignable from ImDrawVert, so
+                    // element-wise copy cannot express this.
+                    PPR_PRAGMA_WARNING_PUSH()
+#ifdef __clang__
+                    // Hyphenated names cannot pass through
+                    // PPR_PRAGMA_WARNING_DISABLE_GCC_CLANG (clang-format
+                    // splits them), so the spelling stays literal here.
+                    _Pragma("clang diagnostic ignored \"-Wnontrivial-memcall\"")
+#endif
                     const std::size_t list_vtx = checked_cast<std::size_t>(cmd_list->VtxBuffer.Size);
                     const std::size_t vtx_write_base = out.m_vertices.size();
                     out.m_vertices.resize(vtx_write_base + list_vtx);
                     std::memcpy(
                         out.m_vertices.data() + vtx_write_base, cmd_list->VtxBuffer.Data,
                         list_vtx * sizeof(ImDrawVert));
+                    PPR_PRAGMA_WARNING_POP()
                     for (int idx = 0; idx < cmd_list->IdxBuffer.Size; ++idx) {
                         out.m_indices.push_back(static_cast<u32>(cmd_list->IdxBuffer[idx]));
                     }
@@ -843,7 +853,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
                 if (cmd.m_element_count == 0u) {
                     continue;
                 }
-                const uint4 scissor_rect = roundToUInt<float, 4u>(
+                const uint4 scissor_rect = roundToUInt<float, 4>(
                     float4(max(cmd.m_clip_rect.xy, float2(0)), min(cmd.m_clip_rect.zw, float2(framebuffer_extent))));
                 if (scissor_rect.z <= scissor_rect.x or scissor_rect.w <= scissor_rect.y) {
                     continue;

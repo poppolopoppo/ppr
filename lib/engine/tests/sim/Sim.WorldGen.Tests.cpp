@@ -2599,7 +2599,8 @@ thickness_fine = 1
             ChunkGrid grid;
             InitialMatter matter;
             InitialMatterRegion region{
-                .m_identity = 1u, .m_material = 99u, .m_temperature_k = 293.0, .m_bulk_density_kg_m3 = 1000.0};
+                .m_identity = 1u, .m_material = 99u, .m_temperature_k = 293.0, .m_bulk_density_kg_m3 = 1000.0,
+                .m_spans = {}};
             for (u32 y = 10u; y < 110u; ++y) {
                 region.m_spans.push_back({y, 10u, 1010u});
                 for (u32 x = 10u; x < 1010u; ++x) {

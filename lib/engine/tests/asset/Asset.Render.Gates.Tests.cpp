@@ -4,6 +4,7 @@ module;
 
 #include <mango/image/image.hpp>
 #include <mango/import3d/mesh.hpp>
+#include <slang.h>
 
 module engine.tests.asset;
 
@@ -1353,8 +1354,8 @@ namespace pP::tests::detail {
             std::vector<std::byte> pixels(size * size * 4u);
             for (u32 y = 0u; y < size; ++y) {
                 for (u32 x = 0u; x < size; ++x) {
-                    const float a = std::sin((float(x) + 2.0f * y) * 2.0f * pi_v<float> / size);
-                    const float b = std::cos((3.0f * x - float(y)) * 2.0f * pi_v<float> / size);
+                    const float a = std::sin((float(x) + 2.0f * float(y)) * 2.0f * pi_v<float> / size);
+                    const float b = std::cos((3.0f * float(x) - float(y)) * 2.0f * pi_v<float> / size);
                     const auto byte = [](const float value) {
                         return std::byte{u8(std::lround(std::clamp(value, 0.0f, 1.0f) * 255.0f))};
                     };
@@ -1476,15 +1477,17 @@ namespace pP::tests::detail {
             const bool stochastic) {
             const float lx = u - v * 0.577350269f, ly = v * 1.154700538f;
             const int cx = int(std::floor(lx)), cy = int(std::floor(ly));
-            const float fx = lx - cx, fy = ly - cy;
+            const float fx = lx - static_cast<float>(cx), fy = ly - static_cast<float>(cy);
             std::array<std::array<int, 2u>, 3u> vertices{};
             std::array<double, 3u> weights{};
             if (fx + fy <= 1.0f) {
                 vertices = {{{cx, cy}, {cx + 1, cy}, {cx, cy + 1}}};
-                weights = {1.0 - fx - fy, fx, fy};
+                weights = {1.0 - static_cast<double>(fx) - static_cast<double>(fy), static_cast<double>(fx),
+                    static_cast<double>(fy)};
             } else {
                 vertices = {{{cx + 1, cy + 1}, {cx, cy + 1}, {cx + 1, cy}}};
-                weights = {fx + fy - 1.0, 1.0 - fx, 1.0 - fy};
+                weights = {static_cast<double>(fx) + static_cast<double>(fy) - 1.0, 1.0 - static_cast<double>(fx),
+                    1.0 - static_cast<double>(fy)};
             }
             if (not stochastic) {
                 weights = {1.0, 0.0, 0.0};
@@ -1498,8 +1501,8 @@ namespace pP::tests::detail {
                 hash ^= hash >> 15u;
                 hash *= 0x846ca68bu;
                 hash ^= hash >> 16u;
-                const double pu = u + (stochastic ? double(hash & 65535u) / 65536.0 : 0.0);
-                const double pv = v + (stochastic ? double(hash >> 16u) / 65536.0 : 0.0);
+                const double pu = static_cast<double>(u) + (stochastic ? double(hash & 65535u) / 65536.0 : 0.0);
+                const double pv = static_cast<double>(v) + (stochastic ? double(hash >> 16u) / 65536.0 : 0.0);
                 const auto a = gridBilinear_(albedo, pu, pv);
                 const auto n = gridBilinear_(normals, pu, pv);
                 for (u32 channel = 0u; channel < 3u; ++channel) {

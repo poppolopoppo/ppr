@@ -83,7 +83,8 @@ namespace pP {
             };
 
             const image::ImageAsset *reference = nullptr;
-            for (const auto [index, slot]: std::views::enumerate(source_slots)) {
+            for (std::size_t index = 0u; index < std::size(source_slots); ++index) {
+                const mesh::MaterialImageSlot *const slot = source_slots[index];
                 if (not slot->enabled()) {
                     continue;
                 }
@@ -98,7 +99,8 @@ namespace pP {
             }
 
             OrmSource sources[3]{};
-            for (const auto [index, source_image]: std::views::enumerate(source_images)) {
+            for (std::size_t index = 0u; index < std::size(source_images); ++index) {
+                const image::ImageAsset *const source_image = source_images[index];
                 Expected<OrmSource> source = ormSource_(source_image, reference->m_width, reference->m_height);
                 if (not source.has_value()) [[unlikely]] {
                     return std::unexpected{source.error()};
@@ -818,6 +820,7 @@ namespace pP {
             .viewportCount = 1u,
             .scissorRects = {draw_context.m_scissor},
             .scissorRectCount = 1u,
+            .vertexBuffers = {},
             .indexBuffer = {},
         });
 

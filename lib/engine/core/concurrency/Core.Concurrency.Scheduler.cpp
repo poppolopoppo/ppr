@@ -7,7 +7,7 @@ import :concurrency.thread;
 import std;
 
 namespace pP {
-    PPR_DEFINE_LOG_CATEGORY(Scheduler, debug, none);
+    PPR_DEFINE_LOG_CATEGORY(Scheduler, debug, none)
 
     namespace {
         class SchedulerErrorCategory final : public std::error_category {

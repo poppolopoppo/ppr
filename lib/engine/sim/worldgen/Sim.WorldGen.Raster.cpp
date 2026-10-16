@@ -7,7 +7,7 @@ import std;
 
 namespace pP::sim {
     using pP::make_error_code;
-    PPR_DEFINE_LOG_CATEGORY(WorldRaster, info, none);
+    PPR_DEFINE_LOG_CATEGORY(WorldRaster, info, none)
 
     // ------------------------------------------------------------------
     // raster helpers

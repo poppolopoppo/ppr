@@ -522,7 +522,7 @@ namespace pP::tests::detail {
                     buf, std::size(buf),
                     "[ktx2-throughput-%s] threads=%d iters=%d bytes=%llu ms=%lld (%.1f MB/s)\n", label, kThreads, iters,
                     static_cast<unsigned long long>(decoded_bytes.load()), static_cast<long long>(ms), mb_per_s);
-                if (log_len > 0 and log_len < std::size(buf)) {
+                if (log_len > 0 and log_len < static_cast<int>(std::size(buf))) {
                     buf[log_len] = '\0';
                     _.log(buf);
                 }
