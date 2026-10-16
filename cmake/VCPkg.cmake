@@ -28,9 +28,10 @@ else()
 endif()
 
 # Linux hosts: this vcpkg version defaults to a compiler-aware triplet
-# (e.g. x64-linux-clang) that it does not actually provide. The plain
-# x64-linux triplet is what clang-dev uses and covers our compiler-agnostic
-# C dependencies, so pin it unless the user already selected one.
+# (e.g. x64-linux-clang) that it does not actually provide. Clang presets
+# select the x64-linux-libcxx overlay triplet (libc++, matching
+# cmake/compiler/Clang.cmake) via their own cache variables; pin plain
+# x64-linux only as the fallback for presets without one (e.g. hidden GCC).
 # Darwin/Windows keep their own defaults.
 if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux" AND NOT DEFINED VCPKG_TARGET_TRIPLET)
     set(VCPKG_TARGET_TRIPLET "x64-linux" CACHE STRING "Vcpkg target triplet (ex. x86-windows)")

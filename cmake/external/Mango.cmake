@@ -66,15 +66,5 @@ foreach(mango_target IN ITEMS mango mango-core mango-image mango-import3d mango-
         if(_mango_target_inc)
             set_target_properties(${mango_target} PROPERTIES INTERFACE_SYSTEM_INCLUDE_DIRECTORIES "${_mango_target_inc}")
         endif()
-
-        # vcpkg builds mango's deps (fmt, ...) against libstdc++; PPR links
-        # libc++. Propagate the missing DSO on Linux so final links resolve
-        # libstdc++ symbols referenced from those static archives. It must be
-        # a single -Wl, flag: the clang driver silently drops a bare -lstdc++
-        # under -stdlib=libc++. The --no-as-needed guard is also required:
-        # Ubuntu ld drops the DSO otherwise, even with symbols pending.
-        if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-            target_link_libraries(${mango_target} INTERFACE "-Wl,--no-as-needed,-lstdc++,--as-needed")
-        endif()
     endif()
 endforeach()

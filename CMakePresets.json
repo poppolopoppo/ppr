@@ -221,6 +221,8 @@
       "cacheVariables": {
         "CMAKE_C_COMPILER": "clang",
         "CMAKE_CXX_COMPILER": "clang++",
+        "VCPKG_TARGET_TRIPLET": "x64-linux-libcxx",
+        "VCPKG_OVERLAY_TRIPLETS": "${sourceDir}/cmake/triplets",
         "PPR_ENABLE_DEVELOPER_MODE": "ON",
         "PPR_LOGGING_LEVEL": "DEBUG"
       }
@@ -234,6 +236,8 @@
         "CMAKE_BUILD_TYPE": "Release",
         "CMAKE_C_COMPILER": "clang",
         "CMAKE_CXX_COMPILER": "clang++",
+        "VCPKG_TARGET_TRIPLET": "x64-linux-libcxx",
+        "VCPKG_OVERLAY_TRIPLETS": "${sourceDir}/cmake/triplets",
         "PPR_ENABLE_DEVELOPER_MODE": "OFF"
       }
     }
