@@ -255,7 +255,8 @@
         ]
       },
       "explorer": {
-        "model": "opencode/mimo-v2.6-flash-free",
+        "model": "opencode/deepseek-v4.1-flash-free",
+        "variant": "high",
         "temperature": 0.2,
         "skills": [],
         "mcps": [
@@ -456,7 +457,8 @@
           "prompt": "Focus on performance, allocator composition throughput, RawChannel MPSC concurrency, and hot-path efficiency."
         },
         "gamma": {
-          "model": "opencode/mimo-v2.6-flash-free",
+          "model": "opencode/deepseek-v4.1-flash-free",
+          "variant": "high",
           "prompt": "Focus on correctness, edge cases, unit test coverage, and failure modes in engine subsystems."
         },
         "delta": {
