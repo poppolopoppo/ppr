@@ -13,7 +13,7 @@ import game.colony.worldgen;
 import std;
 
 namespace pP::game::tests::detail::descriptors {
-    PPR_DEFINE_LOG_CATEGORY(DescriptorTests, debug, none);
+    PPR_DEFINE_LOG_CATEGORY(DescriptorTests, debug, none)
 
     // ------------------------------------------------------------------
     // independent physical pack fixtures
@@ -601,7 +601,9 @@ mip_policy = "unsupported"
             commented_world->m_presentation_descriptor_fingerprint ==
             denser_world->m_presentation_descriptor_fingerprint);
 
-        const auto &shared_manifest = commented->packs().packs().back().m_manifest.m_source.m_bytes;
+        // Owning copy: packs() chains span views, so a reference would trip
+        // -Wdangling-gsl analysis at this boundary (as in Game.WorldgenWorkshop).
+        const std::string shared_manifest = commented->packs().packs().back().m_manifest.m_source.m_bytes;
         Fixture::write(
             fixture.m_shared / "pack.toml",
             shared_manifest +
@@ -633,7 +635,8 @@ mip_policy = "unsupported"
         auto biome = original->biomes().front().m_descriptor.m_value;
         biome.m_definition.m_erosion.m_passes = 5u;
         Fixture::write(fixture.m_shared / "unsampled.toml", biome);
-        const auto &manifest = original->packs().packs().back().m_manifest.m_source.m_bytes;
+        // Same owning-copy rationale as above.
+        const std::string manifest = original->packs().packs().back().m_manifest.m_source.m_bytes;
         Fixture::write(
             fixture.m_shared / "pack.toml",
             manifest + "\n[assets.unsampled]\nkind = \"sim.biome\"\ndescriptor = \"unsampled.toml\"\n");

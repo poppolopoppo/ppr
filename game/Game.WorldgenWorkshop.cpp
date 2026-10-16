@@ -15,7 +15,7 @@ namespace pP::colony {
     // preview presentation capture
     // ------------------------------------------------------------------
 
-    PPR_DEFINE_LOG_CATEGORY(Workshop, info, none);
+    PPR_DEFINE_LOG_CATEGORY(Workshop, info, none)
     Expected<GridPass::GridStagedFrame> captureWorldgenPreviewPresentation(
         const WorldgenPreviewResult &preview, const EGridDiagnosticMode mode, const u64 revision,
         const IContext &context) {
@@ -65,8 +65,9 @@ namespace pP::colony {
             auto surface = std::make_shared<GridSurfaceProfile>();
             surface->m_cell_size_m = packet.m_cell_size_m;
             for (u32 column = 0u; column < kGridSurfaceColumns; ++column) {
-                surface->m_heights_m[column / 4u][column % 4u] = static_cast<float>(
-                    sim::generationSurfaceHeight(preview.m_plan, (column + 0.5) * packet.m_cell_size_m));
+                surface->m_heights_m[column / 4u][column % 4u] = static_cast<float>(sim::generationSurfaceHeight(
+                    preview.m_plan,
+                    (static_cast<double>(column) + 0.5) * static_cast<double>(packet.m_cell_size_m)));
             }
             packet.m_surface_profile = std::move(surface);
         }
@@ -421,7 +422,9 @@ namespace pP::colony {
             }
 
             if (m_live_enabled and m_live_spec and state.m_preview) {
-                const std::string_view qualified = state.m_preview->m_catalog->worlds().front().m_key;
+                // Owning copy: worlds() is a span view, so a string_view would
+                // dangle against -Wdangling-gsl analysis at this boundary.
+                const std::string qualified{state.m_preview->m_catalog->worlds().front().m_key};
                 const std::string_view requested = m_live_spec->m_profile;
                 const bool world_matches = requested.find(':') != std::string_view::npos
                                                ? requested == qualified

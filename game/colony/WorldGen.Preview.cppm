@@ -41,7 +41,7 @@ export namespace pP::colony {
             u32 m_region{};
             sim::InitialMatterSpan m_span;
         };
-        std::array<Array<MatterSpan>, sim::kChunkCount> m_matter_chunks;
+        std::array<Array<MatterSpan>, sim::kChunkCount> m_matter_chunks{};
         u64 m_known_retained_payload_bytes{}, m_known_preparation_scratch_peak_bytes{};
         [[nodiscard]] bool matches(const ContentCatalog &catalog, const WorldgenPreviewSpec &spec) const noexcept;
     };
@@ -70,14 +70,14 @@ export namespace pP::colony {
         sim::GenerationCellBounds m_visible{}, m_support{}, m_formation_domain{};
         u32 m_biome_index{}, m_filter_halo_fine{};
         u64 m_checksum{}, m_solid_cells{}, m_known_scratch_peak_bytes{}, m_known_retained_payload_bytes{};
-        Array<sim::GenerationMaterialCount> m_material_counts;
-        Array<std::string> m_participating_rules;
-        Array<std::string> m_omissions;
-        sim::InitialMatter m_matter;
+        Array<sim::GenerationMaterialCount> m_material_counts{};
+        Array<std::string> m_participating_rules{};
+        Array<std::string> m_omissions{};
+        sim::InitialMatter m_matter{};
         u64 m_known_world_cache_payload_bytes{};
-        std::shared_ptr<const WorldgenPreviewWorld> m_exact_world;
-        sim::MatterParticleSnapshot m_particles;
-        std::shared_ptr<const ContentPresentation> m_presentation;
+        std::shared_ptr<const WorldgenPreviewWorld> m_exact_world{};
+        sim::MatterParticleSnapshot m_particles{};
+        std::shared_ptr<const ContentPresentation> m_presentation{};
         /// Request attempts and draft revisions have independent identities.
         asset::RequestGeneration m_presentation_generation{};
 

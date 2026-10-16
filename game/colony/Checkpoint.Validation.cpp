@@ -9,7 +9,7 @@ import game.colony.metric;
 import engine.asset;
 import std;
 namespace pP::colony {
-    PPR_DEFINE_LOG_CATEGORY(CheckpointValidation, info, none);
+    PPR_DEFINE_LOG_CATEGORY(CheckpointValidation, info, none)
 
     // ------------------------------------------------------------------
     // validation helpers

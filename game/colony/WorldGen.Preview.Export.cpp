@@ -11,12 +11,13 @@ namespace pP::colony {
     // preview export
     // ------------------------------------------------------------------
 
-    PPR_DEFINE_LOG_CATEGORY(PreviewExport, info, none);
+    PPR_DEFINE_LOG_CATEGORY(PreviewExport, info, none)
 
     namespace {
         std::string quote(const std::string_view text) {
             std::string result{"\""};
-            for (const unsigned char byte: text) {
+            for (const char raw: text) {
+                const auto byte = static_cast<unsigned char>(raw);
                 if (byte == '"' or byte == '\\') {
                     result += '\\';
                     result += static_cast<char>(byte);

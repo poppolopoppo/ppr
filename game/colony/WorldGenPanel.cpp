@@ -1148,8 +1148,9 @@ namespace pP::colony {
             ImGui::EndDisabled();
 
             ImGui::Text(
-                "%s | draft %llu / validated %llu%s", view.m_dirty ? "Unsaved changes" : "Saved", view.m_revision,
-                view.m_validated_revision, view.m_busy ? " | worker busy" : "");
+                "%s | draft %llu / validated %llu%s", view.m_dirty ? "Unsaved changes" : "Saved",
+                static_cast<unsigned long long>(view.m_revision),
+                static_cast<unsigned long long>(view.m_validated_revision), view.m_busy ? " | worker busy" : "");
             ImGui::TextWrapped("%.*s", static_cast<int>(view.m_status.size()), view.m_status.data());
 
             if (contentErrors(view)) {
@@ -1386,15 +1387,17 @@ namespace pP::colony {
                 const auto &preview = *view.m_preview;
                 ImGui::Separator();
                 ImGui::Text(
-                    "Preview draft %llu: %s", preview.m_spec.m_revision,
+                    "Preview draft %llu: %s", static_cast<unsigned long long>(preview.m_spec.m_revision),
                     view.m_preview_current ? "current" : "OUT OF DATE");
                 ImGui::Text(
                     "Solid %.2f%% | vacuum %.2f%% | checksum %016llx",
-                    100.0 * preview.m_solid_cells / (kWorldgenPreviewEdge * kWorldgenPreviewEdge),
-                    100.0 *
-                        (kWorldgenPreviewEdge * kWorldgenPreviewEdge - preview.m_solid_cells) /
+                    100.0 * static_cast<double>(preview.m_solid_cells) /
                         (kWorldgenPreviewEdge * kWorldgenPreviewEdge),
-                    preview.m_checksum);
+                    100.0 *
+                        static_cast<double>(
+                            kWorldgenPreviewEdge * kWorldgenPreviewEdge - preview.m_solid_cells) /
+                        (kWorldgenPreviewEdge * kWorldgenPreviewEdge),
+                    static_cast<unsigned long long>(preview.m_checksum));
                 ImGui::Text(
                     "Visible [%u,%u) x [%u,%u)", preview.m_visible.m_left, preview.m_visible.m_right,
                     preview.m_visible.m_bottom, preview.m_visible.m_top);
@@ -1404,7 +1407,7 @@ namespace pP::colony {
                         const auto *material = preview.m_catalog->findMaterial(count.m_material);
                         ImGui::Text(
                             "%u %s: %llu", count.m_material, material ? material->m_key.c_str() : "vacuum",
-                            count.m_cells);
+                            static_cast<unsigned long long>(count.m_cells));
                     }
 
                     ImGui::TreePop();

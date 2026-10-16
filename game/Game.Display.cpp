@@ -15,7 +15,7 @@ namespace pP::game {
     // display core
     // ------------------------------------------------------------------
 
-    PPR_DEFINE_LOG_CATEGORY(GameDisplay, info, none);
+    PPR_DEFINE_LOG_CATEGORY(GameDisplay, info, none)
     namespace {
         [[nodiscard]] std::error_code displayException() noexcept {
             try {

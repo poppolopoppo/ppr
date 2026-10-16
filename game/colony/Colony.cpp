@@ -12,7 +12,7 @@ import game.colony.content;
 import std;
 
 namespace pP::colony {
-    PPR_DEFINE_LOG_CATEGORY(ColonyWorld, info, none);
+    PPR_DEFINE_LOG_CATEGORY(ColonyWorld, info, none)
 
     // ------------------------------------------------------------------
     // colony lifecycle

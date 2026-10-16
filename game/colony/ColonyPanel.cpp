@@ -233,7 +233,7 @@ namespace pP::colony {
             }
             if (cell.m_element != kElementVacuum) {
                 ImGui::SameLine();
-                ImGui::TextDisabled("· %.1f K", cell.m_temperature);
+                ImGui::TextDisabled("· %.1f K", static_cast<double>(cell.m_temperature));
             }
         }
 
@@ -677,8 +677,10 @@ namespace pP::colony {
 
             // Nearest colonist within 8 metres of the inspected cell.
             ImGui::Spacing();
-            const float target_x = (static_cast<float>(target->m_x) + 0.5f) / driver.cellsPerMetre();
-            const float target_y = (static_cast<float>(target->m_y) + 0.5f) / driver.cellsPerMetre();
+            const float target_x =
+                (static_cast<float>(target->m_x) + 0.5f) / static_cast<float>(driver.cellsPerMetre());
+            const float target_y =
+                (static_cast<float>(target->m_y) + 0.5f) / static_cast<float>(driver.cellsPerMetre());
             std::optional<std::size_t> nearest{};
             float nearest_d2 = 8.0f * 8.0f;
             const std::span<const AgentSummary> agents = driver.agentSummaries();
@@ -698,7 +700,9 @@ namespace pP::colony {
             }
 
             const AgentSummary &row = agents[*nearest];
-            ImGui::Text("Nearest colonist  A%u @ %.0f,%.0f", keySuffix(row.m_key), row.m_x, row.m_y);
+            ImGui::Text(
+                "Nearest colonist  A%u @ %.0f,%.0f", keySuffix(row.m_key), static_cast<double>(row.m_x),
+                static_cast<double>(row.m_y));
             if (row.m_has_plan) {
                 ImGui::Text("Plan  %s · action %u · replans %u", goalName(row.m_goal), row.m_pc, row.m_replans);
             } else {
@@ -733,11 +737,12 @@ namespace pP::colony {
             }
             if (world.m_report.m_retained_known_payload_bytes != 0u) {
                 ImGui::Text(
-                    "Known retained payload: %.2f MiB", world.m_report.m_retained_known_payload_bytes / 1048576.0);
+                    "Known retained payload: %.2f MiB",
+                    static_cast<double>(world.m_report.m_retained_known_payload_bytes) / 1048576.0);
                 for (std::size_t index = 0u; index < phases.size(); ++index) {
                     ImGui::Text(
                         "%s scratch: %.2f MiB", phases[index],
-                        world.m_report.m_known_phase_scratch_bytes[index] / 1048576.0);
+                        static_cast<double>(world.m_report.m_known_phase_scratch_bytes[index]) / 1048576.0);
                 }
                 ImGui::TextDisabled("Payload estimates; exclude allocator, task and stack overhead");
             } else {
@@ -898,8 +903,8 @@ namespace pP::colony {
                     if (needs.m_key != row.m_key) {
                         continue;
                     }
-                    std::snprintf(o2_text, sizeof(o2_text), "%.0f", needs.m_o2);
-                    std::snprintf(rest_text, sizeof(rest_text), "%.0f", needs.m_rest);
+                    std::snprintf(o2_text, sizeof(o2_text), "%.0f", static_cast<double>(needs.m_o2));
+                    std::snprintf(rest_text, sizeof(rest_text), "%.0f", static_cast<double>(needs.m_rest));
                     break;
                 }
 
@@ -984,16 +989,17 @@ namespace pP::colony {
             const ColonyPerfView &perf = view.m_perf;
 
             ImGui::SeparatorText("Frame - inter-frame delta, not GPU/present");
-            ImGui::Text("Last       %.2f ms", perf.m_frame_ms);
-            ImGui::Text("Avg        %.2f ms  since launch", perf.m_avg_frame_ms);
-            ImGui::Text("Max        %.2f ms  since launch", perf.m_max_frame_ms);
+            ImGui::Text("Last       %.2f ms", static_cast<double>(perf.m_frame_ms));
+            ImGui::Text("Avg        %.2f ms  since launch", static_cast<double>(perf.m_avg_frame_ms));
+            ImGui::Text("Max        %.2f ms  since launch", static_cast<double>(perf.m_max_frame_ms));
             ImGui::Text(
-                "Split      total %.2f ms  main %.2f ms  render (lane) %.2f ms", perf.m_frame_ms, perf.m_main_ms,
-                perf.m_render_ms);
+                "Split      total %.2f ms  main %.2f ms  render (lane) %.2f ms", static_cast<double>(perf.m_frame_ms),
+                static_cast<double>(perf.m_main_ms), static_cast<double>(perf.m_render_ms));
             ImGui::Text("Frames     %llu since launch", static_cast<unsigned long long>(perf.m_frames));
             ImGui::Text(
-                "Window     min %.2f  p50 %.2f  p95 %.2f  max %.2f ms", perf.m_min_ms, perf.m_p50_ms, perf.m_p95_ms,
-                perf.m_window_max_ms);
+                "Window     min %.2f  p50 %.2f  p95 %.2f  max %.2f ms", static_cast<double>(perf.m_min_ms),
+                static_cast<double>(perf.m_p50_ms), static_cast<double>(perf.m_p95_ms),
+                static_cast<double>(perf.m_window_max_ms));
             ImGui::Text(
                 "Over       %llu in window above 16.67 ms", static_cast<unsigned long long>(perf.m_over_budget));
             ImGui::Text(

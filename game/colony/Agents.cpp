@@ -52,10 +52,10 @@ namespace pP::colony {
                 if (not errand.m_print.m_ladder) {
                     continue;
                 }
-                const float min_x = static_cast<float>(errand.m_print.m_min.m_x);
-                const float min_y = static_cast<float>(errand.m_print.m_min.m_y);
-                const float max_x = min_x + static_cast<float>(errand.m_print.m_width);
-                const float max_y = min_y + static_cast<float>(errand.m_print.m_height);
+                const double min_x = static_cast<double>(errand.m_print.m_min.m_x);
+                const double min_y = static_cast<double>(errand.m_print.m_min.m_y);
+                const double max_x = min_x + static_cast<double>(errand.m_print.m_width);
+                const double max_y = min_y + static_cast<double>(errand.m_print.m_height);
                 if (x >= min_x and x < max_x and y >= min_y and y < max_y) {
                     return true;
                 }
@@ -211,7 +211,7 @@ namespace pP::colony {
     std::error_code spawnAgents(
         const sim::ChunkGrid &grid, sim::Registry &registry, const u64 seed, u32 count, const IContext *const context,
         const u32 cells_per_metre) {
-        const float cell_size_m = 1.0f / cells_per_metre;
+        const float cell_size_m = 1.0f / static_cast<float>(cells_per_metre);
         if ((cells_per_metre != 1u and cells_per_metre != kFineCellsPerMetre)) {
             PPR_RETURN_ERROR_ON_FAIL(AgentPreparation, std::errc::invalid_argument);
         }
@@ -291,7 +291,8 @@ namespace pP::colony {
                 continue;
             }
 
-            const auto position = metreToFineCell({pose->m_x, pose->m_y}, cells_per_metre);
+            const auto position = metreToFineCell(
+                {static_cast<double>(pose->m_x), static_cast<double>(pose->m_y)}, cells_per_metre);
             if (not position) {
                 continue;
             }
@@ -367,7 +368,7 @@ namespace pP::colony {
 
     std::error_code agentIntent(
         sim::Registry &registry, const sim::Entity entity, Intent &intent, const u32 cells_per_metre) {
-        const float cell_size_m = 1.0f / cells_per_metre;
+        const float cell_size_m = 1.0f / static_cast<float>(cells_per_metre);
         intent = Intent{};
         const Agent *agent = registry.get<Agent>(entity);
         Plan *plan = registry.get<Plan>(entity);

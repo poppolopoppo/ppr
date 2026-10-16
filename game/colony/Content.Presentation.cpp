@@ -12,7 +12,7 @@ import std;
 namespace pP::colony {
     using pP::make_error_code;
 
-    PPR_DEFINE_LOG_CATEGORY(ContentPresentationLog, debug, none);
+    PPR_DEFINE_LOG_CATEGORY(ContentPresentationLog, debug, none)
 
     // ------------------------------------------------------------------
     // immutable presentation owners

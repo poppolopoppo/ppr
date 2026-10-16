@@ -8,7 +8,7 @@ namespace pP::colony {
     // world export
     // ------------------------------------------------------------------
 
-    PPR_DEFINE_LOG_CATEGORY(WorldExport, info, none);
+    PPR_DEFINE_LOG_CATEGORY(WorldExport, info, none)
     namespace {
         constexpr u32 kPreviewEdge = 1024u;
         constexpr u32 kSamplesPerEdge = sim::kWorldEdge / kPreviewEdge;
@@ -175,7 +175,7 @@ namespace pP::colony {
                 }
                 const std::array colors{
                     material ? rgb(material->m_color_rgba) : Color{}, biome_color,
-                    cell->m_element != 0u ? temperatureColor(cell->m_temperature) : Color{}};
+                    cell->m_element != 0u ? temperatureColor(static_cast<double>(cell->m_temperature)) : Color{}};
                 for (u32 mode = 0u; mode < files.size(); ++mode) {
                     for (u32 channel = 0u; channel < 3u; ++channel) {
                         rows[mode][image_x * 3u + channel] = static_cast<u8>(
@@ -253,7 +253,7 @@ namespace pP::colony {
                         world.m_plan, world.m_layout, (x + 0.5) * kFineCellMetres, (y + 0.5) * kFineCellMetres);
                     add(rows[1u][pixel], rgb(catalog.biomes()[biome].m_preview_color_rgba));
                     if (cell->m_element != 0u) {
-                        add(rows[2u][pixel], temperatureColor(cell->m_temperature));
+                        add(rows[2u][pixel], temperatureColor(static_cast<double>(cell->m_temperature)));
                     }
                     add(rows[3u][pixel], matter_row[x]);
                 }

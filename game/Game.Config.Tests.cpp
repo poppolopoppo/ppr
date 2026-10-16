@@ -4,6 +4,7 @@ module;
 
 module game.tests;
 
+import engine.app;
 import engine.core;
 import engine.asset;
 import game.config;

@@ -9,7 +9,7 @@ namespace pP::colony {
     // worldgen preview
     // ------------------------------------------------------------------
 
-    PPR_DEFINE_LOG_CATEGORY(BiomeSamplePreview, info, none);
+    PPR_DEFINE_LOG_CATEGORY(BiomeSamplePreview, info, none)
     namespace {
         sim::GenerationCellBounds expand(const sim::GenerationCellBounds bounds, const u32 padding) noexcept {
             return {
@@ -103,7 +103,8 @@ namespace pP::colony {
                     .m_material = source.m_material,
                     .m_temperature_k = source.m_temperature_k,
                     .m_bulk_density_kg_m3 = source.m_bulk_density_kg_m3,
-                    .m_fill_height_m = source.m_fill_height_m};
+                    .m_fill_height_m = source.m_fill_height_m,
+                    .m_spans = {}};
                 for (const auto span: clipped) {
                     PPR_RETURN_UNEXPECTED_ON_FAIL(BiomeSamplePreview, context ? context->error() : std::error_code{});
                     const u32 begin = span.m_begin_x, end = span.m_end_x;

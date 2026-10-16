@@ -35,7 +35,7 @@ import game.colony.agents;
 
 namespace demo {
     using namespace pP;
-    PPR_DEFINE_LOG_CATEGORY(Demo, info, none);
+    PPR_DEFINE_LOG_CATEGORY(Demo, info, none)
 
     // ------------------------------------------------------------------
     // headless worldgen validation
@@ -589,7 +589,7 @@ namespace demo {
         [[nodiscard]] std::error_code reportAcceptancePhase_() {
             const auto snapshot = renderDiagnostics().m_grid_observations;
             PPR_RETURN_ERROR_ON_FAIL(
-                Demo, snapshot ? std::error_code{} : std::make_error_code(std::errc::no_message_available));
+                Demo, snapshot ? std::error_code{} : std::make_error_code(std::errc::state_not_recoverable));
             const auto &now = *snapshot;
             std::println(
                 "[worldgen-acceptance] phase={} elapsed_ms={:.6f} presented_acks={} draws={} dispatches={} atlas_bytes={} atlas_writes={} serializations={} deferrals={} growth_waits={} table_builds={} table_uploads={} retained_atlases={} texture_entries={} texture_slots={}",
@@ -649,15 +649,16 @@ namespace demo {
                         m_driver->setPaused(true);
                         m_pan_controller->focusOn(
                             float2{
-                                static_cast<float>(seam) / m_driver->cellsPerMetre(),
-                                static_cast<float>(target.m_y) / m_driver->cellsPerMetre()});
+                                static_cast<float>(seam) / static_cast<float>(m_driver->cellsPerMetre()),
+                                static_cast<float>(target.m_y) /
+                                    static_cast<float>(m_driver->cellsPerMetre())});
                         PPR_RETURN_ERROR_ON_FAIL(Demo, m_driver->requestDig(target, 2u, 1u));
                         beginAcceptancePhase_(AcceptancePhase::seam);
                         return {};
                     }
                 }
             }
-            PPR_RETURN_ERROR_ON_FAIL(Demo, std::make_error_code(std::errc::no_message_available));
+            PPR_RETURN_ERROR_ON_FAIL(Demo, std::make_error_code(std::errc::state_not_recoverable));
             return {}; // The propagation macro above returns for this nonzero error.
         }
 
@@ -705,7 +706,7 @@ namespace demo {
                     const auto initial_resources = renderDiagnostics().m_grid_observations;
                     PPR_RETURN_ERROR_ON_FAIL(
                         Demo,
-                        initial_resources ? std::error_code{} : std::make_error_code(std::errc::no_message_available));
+                        initial_resources ? std::error_code{} : std::make_error_code(std::errc::state_not_recoverable));
                     m_acceptance_initial_texture_entries = initial_resources->m_texture_entries;
                     m_acceptance_initial_texture_slots = initial_resources->m_texture_slots;
                     m_acceptance_scale = m_pan_controller->getOrthoScale();
@@ -783,7 +784,7 @@ namespace demo {
                         const auto observations = renderDiagnostics().m_grid_observations;
                         PPR_RETURN_ERROR_ON_FAIL(
                             Demo,
-                            observations ? std::error_code{} : std::make_error_code(std::errc::no_message_available));
+                            observations ? std::error_code{} : std::make_error_code(std::errc::state_not_recoverable));
 
                         // Two seconds is the minimum observation window, not a
                         // disposal deadline. Bounded retirement must reach the
@@ -1625,12 +1626,15 @@ namespace demo {
                 }
                 const bool inside_world = world->x >= 0.0f and
                                           world->y >= 0.0f and
-                                          world->x < static_cast<float>(sim::kWorldEdge) / m_cells_per_metre and
-                                          world->y < static_cast<float>(sim::kWorldEdge) / m_cells_per_metre;
+                                          world->x < static_cast<float>(sim::kWorldEdge) /
+                                                         static_cast<float>(m_cells_per_metre) and
+                                          world->y < static_cast<float>(sim::kWorldEdge) /
+                                                         static_cast<float>(m_cells_per_metre);
                 if (not inside_world) {
                     return std::nullopt;
                 }
-                const auto cell = colony::metreToFineCell({world->x, world->y}, m_cells_per_metre);
+                const auto cell = colony::metreToFineCell(
+                    {static_cast<double>(world->x), static_cast<double>(world->y)}, m_cells_per_metre);
                 return cell ? std::optional{*cell} : std::nullopt;
             }
 
@@ -3716,7 +3720,9 @@ namespace demo {
                                    (3.0f * std::max(200.0f, m_pan_controller->getViewportSize().y * 0.75f)));
                     PPR_RETURN_ERROR_ON_FAIL(Demo, m_pan_controller->setOrthoScale(scale));
                     m_pan_controller->focusOn(
-                        float2{(bounds.m_left + bounds.m_right) / 6.0f, (bounds.m_bottom + bounds.m_top) / 6.0f} -
+                        float2{
+                            static_cast<float>(bounds.m_left + bounds.m_right) / 6.0f,
+                            static_cast<float>(bounds.m_bottom + bounds.m_top) / 6.0f} -
                         m_pan_controller->getViewportSize() * scale * 0.5f);
                     m_pan_controller->resetInputState();
                     m_workshop_focused = true;
@@ -3857,11 +3863,13 @@ namespace demo {
                         break;
                     case colony::EWorkshopIntent::export_preview: {
                         const auto &camera = getMainCamera()->getSnapshot();
-                        const double scale = m_pan_controller->getOrthoScale();
+                        const double scale = static_cast<double>(m_pan_controller->getOrthoScale());
                         error = m_workshop->exportPreview(
                             std::filesystem::path{m_workshop_ui.m_export_path.data()},
-                            {camera.m_origin.x + camera.m_viewport_size.x * scale * 0.5,
-                                camera.m_origin.y + camera.m_viewport_size.y * scale * 0.5, scale,
+                            {static_cast<double>(camera.m_origin.x) +
+                                     static_cast<double>(camera.m_viewport_size.x) * scale * 0.5,
+                                static_cast<double>(camera.m_origin.y) +
+                                    static_cast<double>(camera.m_viewport_size.y) * scale * 0.5, scale,
                                 static_cast<u32>(m_workshop_ui.m_mode)});
                         break;
                     }
@@ -3955,8 +3963,10 @@ namespace demo {
             if (const auto *const preview = m_workshop_displayed_preview.get(); preview and m_workshop_displayed) {
                 const auto map = screenMap_();
                 const auto &bounds = preview->m_visible;
-                const auto a = map.worldToClient(float2{bounds.m_left / 3.0f, bounds.m_bottom / 3.0f});
-                const auto b = map.worldToClient(float2{bounds.m_right / 3.0f, bounds.m_top / 3.0f});
+                const auto a = map.worldToClient(float2{
+                    static_cast<float>(bounds.m_left) / 3.0f, static_cast<float>(bounds.m_bottom) / 3.0f});
+                const auto b = map.worldToClient(float2{
+                    static_cast<float>(bounds.m_right) / 3.0f, static_cast<float>(bounds.m_top) / 3.0f});
                 if (a and b) {
                     const auto *const viewport = ImGui::GetMainViewport();
                     ImGui::GetForegroundDrawList()->AddRect(
@@ -4214,7 +4224,7 @@ namespace demo {
         [[nodiscard]] std::error_code submitChunkBorder_(
             TrianglePass::TriangleStagedFrame &stage, const sim::ChunkPos chunk, const u32 expand,
             const MaterialHandle material) {
-            const float cell_metres = 1.0f / m_driver->cellsPerMetre();
+            const float cell_metres = 1.0f / static_cast<float>(m_driver->cellsPerMetre());
             const float origin_x = static_cast<float>(chunk.m_x * sim::kChunkEdge) * cell_metres;
             const float origin_y = static_cast<float>(chunk.m_y * sim::kChunkEdge) * cell_metres;
             const float expand_f = static_cast<float>(expand) * cell_metres;
@@ -4320,7 +4330,7 @@ namespace demo {
         /// band, exactly as before.
         static void overlayCellBorder_(
             ImDrawList *const draw, const ScreenMap &map, const sim::GlobalCellPos cell, const ImU32 color) {
-            const float h = 1.0f / map.m_cells_per_metre;
+            const float h = 1.0f / static_cast<float>(map.m_cells_per_metre);
             overlayRectBorder_(
                 draw, map, (static_cast<float>(cell.m_x) + 0.5f) * h, (static_cast<float>(cell.m_y) + 0.5f) * h,
                 0.5f * h, 0.5f * h, 0.5f * h, color);
@@ -4341,7 +4351,7 @@ namespace demo {
                 return;
             }
 
-            const float cell_metres = 1.0f / map.m_cells_per_metre;
+            const float cell_metres = 1.0f / static_cast<float>(map.m_cells_per_metre);
             const float x0 = static_cast<float>(m_build_preview.m_min.m_x) * cell_metres;
             const float y0 = static_cast<float>(m_build_preview.m_min.m_y) * cell_metres;
             const float x1 = (static_cast<float>(m_build_preview.m_max.m_x) + 1.0f) * cell_metres;
@@ -4557,7 +4567,7 @@ namespace demo {
             // old pass.clearInstances()/submitInstance() loop that ran on
             // main and raced the render lane's reads of the same pass state.
             TrianglePass::TriangleStagedFrame stage{};
-            const float cell_metres = 1.0f / m_driver->cellsPerMetre();
+            const float cell_metres = 1.0f / static_cast<float>(m_driver->cellsPerMetre());
             if (not m_debug_draw_ready) {
                 submitTriangleStage(std::move(stage));
                 return {};

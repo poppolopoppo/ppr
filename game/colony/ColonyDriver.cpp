@@ -91,7 +91,8 @@ namespace pP::colony {
                 if (pose == nullptr) {
                     continue;
                 }
-                const auto cell = metreToFineCell({pose->m_x, pose->m_y}, cells_per_metre);
+                const auto cell = metreToFineCell(
+                    {static_cast<double>(pose->m_x), static_cast<double>(pose->m_y)}, cells_per_metre);
                 if (not cell) {
                     continue;
                 }
@@ -969,7 +970,8 @@ namespace pP::colony {
             if (pose == nullptr) {
                 continue;
             }
-            const auto position = metreToFineCell({pose->m_x, pose->m_y}, cellsPerMetre());
+            const auto position =
+                metreToFineCell({static_cast<double>(pose->m_x), static_cast<double>(pose->m_y)}, cellsPerMetre());
             if (not position) {
                 continue;
             }

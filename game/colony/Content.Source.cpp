@@ -12,7 +12,7 @@ import std;
 namespace pP::colony {
     using pP::make_error_code;
 
-    PPR_DEFINE_LOG_CATEGORY(ContentSources, debug, none);
+    PPR_DEFINE_LOG_CATEGORY(ContentSources, debug, none)
 
     // ------------------------------------------------------------------
     // complete source budgets and physical ownership

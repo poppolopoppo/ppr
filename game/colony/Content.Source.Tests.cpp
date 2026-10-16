@@ -11,7 +11,7 @@ import game.colony.content;
 import std;
 
 namespace pP::game::tests::detail::content_sources {
-    PPR_DEFINE_LOG_CATEGORY(ContentSourceTests, debug, none);
+    PPR_DEFINE_LOG_CATEGORY(ContentSourceTests, debug, none)
 
     // ------------------------------------------------------------------
     // complete two-pack text fixtures

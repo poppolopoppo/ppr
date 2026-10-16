@@ -20,7 +20,7 @@ namespace pP::colony {
     // world capture
     // ------------------------------------------------------------------
 
-    PPR_DEFINE_LOG_CATEGORY(WorldCapture, info, none);
+    PPR_DEFINE_LOG_CATEGORY(WorldCapture, info, none)
     namespace {
         constexpr u32 kCaptureEdge = 512u;
         struct CaptureView {

@@ -25,7 +25,7 @@ import std;
 namespace pP::game::tests::detail::pack {
     using namespace colony;
 
-    PPR_DEFINE_LOG_CATEGORY(PackContentTests, debug, none);
+    PPR_DEFINE_LOG_CATEGORY(PackContentTests, debug, none)
 
     // ------------------------------------------------------------------
     // small owned descriptor pack
@@ -1318,7 +1318,7 @@ namespace pP::game::tests::detail::pack {
             }
 
             bool matches = true;
-            for (const unsigned char byte: m_expected) {
+            for (const char byte: m_expected) {
                 if (std::fgetc(file) != byte) {
                     matches = false;
                     break;

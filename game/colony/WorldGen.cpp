@@ -24,7 +24,7 @@ namespace pP::colony {
     // prepared world
     // ------------------------------------------------------------------
 
-    PPR_DEFINE_LOG_CATEGORY(WorldPreparation, info, none);
+    PPR_DEFINE_LOG_CATEGORY(WorldPreparation, info, none)
 
     PreparedWorld::PreparedWorld(
         std::shared_ptr<const ContentCatalog> catalog, WorldDescriptor descriptor, sim::GeneratedWorld world)

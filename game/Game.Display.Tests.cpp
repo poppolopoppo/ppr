@@ -7,6 +7,7 @@ module game.tests;
 
 import engine.app;
 import engine.core;
+import engine.math;
 import game.config;
 import game.display;
 

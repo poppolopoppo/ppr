@@ -222,7 +222,7 @@ namespace pP::game::tests::detail::movement {
         for (const auto &[entity, agent]: registry.view<Agent>()) {
             actor = entity;
             const auto *const pose = registry.get<sim::BodyState>(entity);
-            PPR_TEST_ASSERT(std::abs(pose->m_x - (agent.m_spawn.m_x + 0.5f) / 3.0f) < 0.0002f);
+            PPR_TEST_ASSERT(std::abs(pose->m_x - (static_cast<float>(agent.m_spawn.m_x) + 0.5f) / 3.0f) < 0.0002f);
             const auto *const body = registry.get<sim::BodyDefinition>(entity);
             PPR_TEST_ASSERT(body->m_half_width == 0.4f and body->m_half_height == 0.9f);
         }
@@ -269,7 +269,7 @@ namespace pP::game::tests::detail::movement {
         for (const auto &[entity, agent]: registry.view<Agent>()) {
             (void) agent;
             actors.push_back(entity);
-            *registry.get<sim::BodyState>(entity) = {50.5f + actors.size() * 10.0f, 50.5f};
+            *registry.get<sim::BodyState>(entity) = {50.5f + static_cast<float>(actors.size()) * 10.0f, 50.5f};
             registry.get<Agent>(entity)->m_spawn = {80u, 50u};
         }
         PPR_TEST_ASSERT(actors.size() == 2u);
@@ -370,7 +370,7 @@ namespace pP::game::tests::detail::movement {
             const auto entity = actors[index];
             registry.get<Agent>(entity)->m_spawn = {80u, 50u};
             registry.get<Needs>(entity)->m_rest = 10.0f;
-            *registry.get<sim::BodyState>(entity) = {50.0f + index * 10.0f, 50.0f, 0.0f, 0.0f, -2.0f, 0.0f};
+            *registry.get<sim::BodyState>(entity) = {50.0f + static_cast<float>(index) * 10.0f, 50.0f, 0.0f, 0.0f, -2.0f, 0.0f};
             Plan plan{.m_goal = EGoal::seek, .m_site = {80u, 50u}};
             plan.m_actions[0u] = {.m_target = {80u, 50u}};
             plan.m_action_count = 1u;

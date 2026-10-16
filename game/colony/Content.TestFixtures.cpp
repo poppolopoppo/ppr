@@ -14,7 +14,7 @@ namespace pP::game::tests::fixtures {
     // test-owned programmatic definition fragments
     // ------------------------------------------------------------------
 
-    PPR_DEFINE_LOG_CATEGORY(ContentFixture, debug, none);
+    PPR_DEFINE_LOG_CATEGORY(ContentFixture, debug, none)
 
     /// These fragments exercise the flattened typed model and projection. They
     /// are not pack manifests/descriptors and never enter the production loader.

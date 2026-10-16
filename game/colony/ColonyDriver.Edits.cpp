@@ -5,7 +5,7 @@ import game.colony.digtool;
 import std;
 
 namespace pP::colony {
-    PPR_DEFINE_LOG_CATEGORY(ColonyEdits, info, none);
+    PPR_DEFINE_LOG_CATEGORY(ColonyEdits, info, none)
 
     // ------------------------------------------------------------------
     // edit publication

@@ -4,7 +4,7 @@ module game.colony.checkpoint;
 import engine.asset;
 import std;
 namespace pP::colony {
-    PPR_DEFINE_LOG_CATEGORY(CheckpointCodec, info, none);
+    PPR_DEFINE_LOG_CATEGORY(CheckpointCodec, info, none)
 
     // ------------------------------------------------------------------
     // codec helpers

@@ -571,8 +571,8 @@ export namespace pP::colony {
     // named descriptor composition
     // ------------------------------------------------------------------
 
-    PPR_DECLARE_LOG_CATEGORY(ContentDescriptors);
-    PPR_DECLARE_LOG_CATEGORY(ContentAssembly);
+    PPR_DECLARE_LOG_CATEGORY(ContentDescriptors)
+    PPR_DECLARE_LOG_CATEGORY(ContentAssembly)
 
     [[nodiscard]] Expected<u32> decodeAppearanceColor(
         std::string_view value, std::string_view source, std::string_view property, config::Diagnostics &diagnostics);

@@ -12,7 +12,7 @@ import std;
 namespace pP::colony {
     using pP::make_error_code;
 
-    PPR_DEFINE_LOG_CATEGORY(ContentDescriptors, debug, none);
+    PPR_DEFINE_LOG_CATEGORY(ContentDescriptors, debug, none)
 
     // ------------------------------------------------------------------
     // contextual descriptor references

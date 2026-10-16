@@ -30,7 +30,7 @@ namespace pP::game::tests::detail::content {
     // programmatic schema fixture
     // ------------------------------------------------------------------
 
-    PPR_DEFINE_LOG_CATEGORY(ContentSchemaTests, debug, none);
+    PPR_DEFINE_LOG_CATEGORY(ContentSchemaTests, debug, none)
 
     // Programmatic schema fragments, independent of the named pack file format.
     struct ProgrammaticInputs {
@@ -520,7 +520,7 @@ weight = 1.0
     };
 
     PPR_UNIT_TEST (version_names_types_and_budgets) {
-        for (const auto bytes:
+        for (const auto &bytes:
             {"schema_version = 2\n" + rock, "schema_version = '3'\n" + rock, std::string{""},
                 "" + replace(rock, "materials.sandstone", "materials.Sandstone"),
                 "" + replace(rock, "materials.sandstone", "materials.\"sand.stone\""),

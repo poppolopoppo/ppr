@@ -42,10 +42,10 @@ namespace pP::colony {
                     body->m_half_height <= 0.0f) {
                     PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyBuilding, std::errc::invalid_argument);
                 }
-                if (pose->m_x + body->m_half_width > left and
-                    pose->m_x - body->m_half_width < right and
-                    pose->m_y + body->m_half_height > bottom and
-                    pose->m_y - body->m_half_height < top) {
+                if (static_cast<double>(pose->m_x + body->m_half_width) > left and
+                    static_cast<double>(pose->m_x - body->m_half_width) < right and
+                    static_cast<double>(pose->m_y + body->m_half_height) > bottom and
+                    static_cast<double>(pose->m_y - body->m_half_height) < top) {
                     return true;
                 }
             }

@@ -143,8 +143,8 @@ namespace pP::colony {
 
             const auto *const pose = driver->registry().get<sim::BodyState>(*actor);
             if (not pose or
-                pose->m_x <= start.m_spawn_x_m + 0.2 or
-                std::abs(pose->m_y - start.m_floor_y_m - 0.9) > 0.1 or
+                static_cast<double>(pose->m_x) <= start.m_spawn_x_m + 0.2 or
+                std::abs(static_cast<double>(pose->m_y) - start.m_floor_y_m - 0.9) > 0.1 or
                 driver->registry().get<Plan>(*actor) or
                 driver->registry().get<PathReq>(*actor)) {
                 PPR_RETURN_ERROR_ON_FAIL(ColonySmoke, std::errc::state_not_recoverable);

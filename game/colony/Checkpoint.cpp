@@ -7,7 +7,7 @@ import game.colony.buildings;
 import game.colony.pathfinding;
 import std;
 namespace pP::colony {
-    PPR_DEFINE_LOG_CATEGORY(WorldCheckpointLog, info, none);
+    PPR_DEFINE_LOG_CATEGORY(WorldCheckpointLog, info, none)
 
     // ------------------------------------------------------------------
     // helpers

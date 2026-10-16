@@ -99,8 +99,8 @@ namespace pP::colony {
                         upload.m_diagnostic_indices[local] = static_cast<u16>(biome + 1u);
                     } else if ((*cells)[local].m_element != 0u) {
                         const double unit = std::clamp(
-                            (static_cast<double>((*cells)[local].m_temperature) - temperature_min_k) /
-                                (static_cast<double>(temperature_max_k) - temperature_min_k),
+                            (static_cast<double>((*cells)[local].m_temperature) - static_cast<double>(temperature_min_k)) /
+                                (static_cast<double>(temperature_max_k) - static_cast<double>(temperature_min_k)),
                             0.0, 1.0);
                         upload.m_diagnostic_indices[local] = static_cast<u16>(
                             std::min(255u, static_cast<u32>(unit * 256.0)) + 1u);

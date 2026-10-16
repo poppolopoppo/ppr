@@ -11,7 +11,7 @@ import std;
 
 namespace pP::colony {
     using pP::make_error_code;
-    PPR_DEFINE_LOG_CATEGORY(ContentAssembly, debug, none);
+    PPR_DEFINE_LOG_CATEGORY(ContentAssembly, debug, none)
 
     // ------------------------------------------------------------------
     // shared appearance interpretation

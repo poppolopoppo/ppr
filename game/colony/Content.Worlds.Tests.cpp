@@ -27,7 +27,7 @@ namespace pP::game::tests::detail::worlds {
     // programmatic schema fixture
     // ------------------------------------------------------------------
 
-    PPR_DEFINE_LOG_CATEGORY(WorldSchemaTests, debug, none);
+    PPR_DEFINE_LOG_CATEGORY(WorldSchemaTests, debug, none)
 
     // Programmatic schema fragments, independent of the named pack file format.
     struct ProgrammaticInputs {

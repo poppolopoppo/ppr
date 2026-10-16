@@ -6,11 +6,12 @@ module;
 module game.colony.sim_packet;
 
 import engine.sim;
+import engine.asset;
 import game.colony.content;
 import std;
 
 namespace pP::colony {
-    PPR_DEFINE_LOG_CATEGORY(SimPresentation, info, none);
+    PPR_DEFINE_LOG_CATEGORY(SimPresentation, info, none)
 
     // ------------------------------------------------------------------
     // presentation capture

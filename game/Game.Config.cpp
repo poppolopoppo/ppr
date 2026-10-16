@@ -17,7 +17,7 @@ namespace pP::game {
     // cli option definitions
     // ------------------------------------------------------------------
 
-    PPR_DEFINE_LOG_CATEGORY(GameConfig, info, none);
+    PPR_DEFINE_LOG_CATEGORY(GameConfig, info, none)
     namespace {
         [[nodiscard]] bool cliHas(const config::CliResult &cli, const std::string_view canonical) noexcept {
             for (const auto &assignment: cli.m_assignments) {

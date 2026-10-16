@@ -27,7 +27,7 @@ namespace pP::game::tests::detail::checkpoint {
 
     using namespace colony;
 
-    PPR_DEFINE_LOG_CATEGORY(CheckpointTests, debug, none);
+    PPR_DEFINE_LOG_CATEGORY(CheckpointTests, debug, none)
 
     struct Fixture {
         std::filesystem::path m_root;

@@ -4,7 +4,7 @@ module game.colony.driver;
 import std;
 
 namespace pP::colony {
-    PPR_DEFINE_LOG_CATEGORY(ColonyCheckpoint, info, none);
+    PPR_DEFINE_LOG_CATEGORY(ColonyCheckpoint, info, none)
 
     // ------------------------------------------------------------------
     // checkpoint capture and restore
