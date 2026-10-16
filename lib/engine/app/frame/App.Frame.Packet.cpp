@@ -32,6 +32,7 @@ namespace pP {
         // live Window.
         packet.m_surface_identity = window.m_handle;
         packet.m_surface_native = window.m_native;
+        packet.m_surface_display = window.m_display;
         return packet;
     }
 }

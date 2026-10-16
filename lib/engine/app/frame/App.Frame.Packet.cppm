@@ -53,6 +53,9 @@ export namespace pP {
         // P2 teardown order (windows die on main after the lane joins), so
         // the consume lane never touches the live Window for this.
         NativeWindowHandle m_surface_native{};
+        // Owned X11 Display snapshot (void*, null on Win32/Cocoa) paired with
+        // m_surface_native: the Vulkan surface needs both on Linux.
+        void *m_surface_display{};
     };
 
     [[nodiscard]] bool hasRenderTarget(const FramePacket &packet) noexcept;

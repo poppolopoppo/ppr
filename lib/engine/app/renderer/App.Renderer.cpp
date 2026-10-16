@@ -955,7 +955,7 @@ namespace pP {
         PPR_RETURN_ERROR_ON_FAIL(Renderer, buildRenderSignature_(render_pass, validated, validated_extent));
 
         SurfaceSignatureCache *cache = nullptr;
-        if (surface_pass.m_depth_policy != ESurfaceDepthPolicy::external and surface_pass.m_additional_colors.empty()) {
+        if (surface_pass.m_depth_policy != ESurfaceDepthPolicy::external and surface_pass.m_additional_colors.size() == 0u) {
             cache = std::addressof(record.m_signatures[static_cast<std::size_t>(surface_pass.m_depth_policy)]);
         }
 
@@ -990,6 +990,7 @@ namespace pP {
             SurfaceWindowSnapshot{
                 .m_handle = window.m_handle,
                 .m_native = window.m_native,
+                .m_display = window.m_display,
                 .m_framebuffer_size = window.m_framebuffer_size,
                 .m_title = window.m_title,
             },
@@ -1003,6 +1004,7 @@ namespace pP {
             SurfaceWindowSnapshot{
                 .m_handle = window.m_handle,
                 .m_native = window.m_native,
+                .m_display = window.m_display,
                 .m_framebuffer_size = window.m_framebuffer_size,
                 .m_title = window.m_title,
             },
@@ -1356,11 +1358,29 @@ namespace pP {
             window.m_handle == nullptr) [[unlikely]] {
             return std::make_error_code(std::errc::invalid_argument);
         }
+#if defined(__linux__)
+        // X11 surface creation additionally needs the Display connection the
+        // snapshot carried from window creation.
+        if (window.m_display == nullptr) [[unlikely]] {
+            return std::make_error_code(std::errc::invalid_argument);
+        }
+#endif
 
         rhi::ComPtr<rhi::ISurface> surface;
         rhi::IDevice &device = m_rhi_service->getDevice();
+#if defined(__linux__)
+        // The X11 backend accepts only an Xlib surface: the core HWND handle
+        // type is rejected with SLANG_E_INVALID_HANDLE. Pair the XID with the
+        // Display connection the snapshot carried from window creation.
+        const void *const native_pointer = window.m_native;
+        const auto xwindow = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(native_pointer));
+        PPR_RETURN_ERROR_ON_FAIL(
+            Renderer,
+            device.createSurface(rhi::WindowHandle::fromXlibWindow(window.m_display, xwindow), surface.writeRef()));
+#else
         PPR_RETURN_ERROR_ON_FAIL(
             Renderer, device.createSurface(rhi::WindowHandle::fromHwnd(window.m_native), surface.writeRef()));
+#endif
 
         SurfaceRecord record{};
         record.m_surface = std::move(surface);
@@ -1567,7 +1587,7 @@ namespace pP {
         static constexpr rhi::ClearValue depth_clear{.depthStencil = {1.f, 0}};
         rhi::TextureDesc depth_desc{};
         depth_desc.type = rhi::TextureType::Texture2D;
-        depth_desc.size = {safe_narrowing<u32>(extent.x), safe_narrowing<u32>(extent.y), 1u};
+        depth_desc.size = {safe_narrowing{extent.x}, safe_narrowing{extent.y}, 1u};
         depth_desc.arrayLength = 1u;
         depth_desc.mipCount = 1u;
         depth_desc.format = rhi::Format::D32Float;

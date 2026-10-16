@@ -19,8 +19,8 @@ executor per frame, sweeps fence completion on the lane, and settles queued work
   `m_camera`, `m_viewport` + `m_viewport_revision`, `m_window_title`, `m_framebuffer_size`,
   `m_surface_identity` (from the live handle at capture) + `m_surface_generation` (stamped by the producer from
   the Renderer generation or, on the lane, from the result-fed mirror; `kSurfaceGenerationNone` when no record
-  exists yet) + `m_surface_native` (snapshot so the consume lane can create the surface without touching the live
-  `Window`). The render-target verdict is derived from `m_framebuffer_size` alone (`hasRenderTarget`):
+  exists yet) + `m_surface_native` and `m_surface_display` (snapshots so the consume lane can create the surface
+  without touching the live `Window`). The render-target verdict is derived from `m_framebuffer_size` alone (`hasRenderTarget`):
   zero-size/minimized is an explicit non-rendering success, and no stored flag can desync from the size.
 - `makeFramePacket(...)` copies every field at capture time; `hasRenderTarget(...)` is pure. Both are defined in
   `App.Frame.Packet.cpp` (non-inline, non-template definitions live with the matching `.cpp`; the `.cppm` exports

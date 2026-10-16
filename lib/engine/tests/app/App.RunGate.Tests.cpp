@@ -129,7 +129,8 @@ namespace pP::tests::detail {
                 WindowModel{
                     .m_title = "scripted",
                     .m_window_size = int2{800, 600},
-                }};
+                },
+                reinterpret_cast<void *>(3)};
             Array<std::string> m_log{};
 
             // Per-pump script hook (stages arrivals, opens gates, ends the
@@ -624,7 +625,8 @@ namespace pP::tests::detail {
                     const auto tag = static_cast<std::uintptr_t>(m_windows.size() + 1u);
                     auto window = std::make_unique<Window>(
                         WindowHandle{reinterpret_cast<void *>(0x57A10000u + tag)},
-                        NativeWindowHandle{reinterpret_cast<void *>(0x0A71CE000u + tag)}, std::move(definition));
+                        NativeWindowHandle{reinterpret_cast<void *>(0x0A71CE000u + tag)}, std::move(definition),
+                        reinterpret_cast<void *>(0x0D15A000u + tag));
                     window->m_framebuffer_size = window->m_window_size;
                     window_write_ref->reset(window.get());
                     m_windows.push_back(std::move(window));
@@ -3382,10 +3384,19 @@ namespace pP::tests::detail {
             return std::filesystem::temp_directory_path() / "ppr-gate1-b1-markers.txt";
         }
 
+        [[nodiscard]] FILE *openDeathMarkerFile(const std::string &path, const char *mode) noexcept {
+#ifdef _WIN32
+            FILE *file = nullptr;
+            return ::fopen_s(&file, path.c_str(), mode) == 0 ? file : nullptr;
+#else
+            return std::fopen(path.c_str(), mode);
+#endif
+        }
+
         void writeDeathMarker(const char *line) noexcept {
             try {
-                FILE *file = nullptr;
-                if (::fopen_s(&file, deathMarkerPath().string().c_str(), "a") == 0 and file != nullptr) {
+                FILE *file = openDeathMarkerFile(deathMarkerPath().string(), "a");
+                if (file != nullptr) {
                     ::fputs(line, file);
                     ::fputs("\n", file);
                     ::fclose(file);
@@ -3422,14 +3433,21 @@ namespace pP::tests::detail {
             }
         };
 
-        [[nodiscard]] bool diagThrowArmed() noexcept {
+        [[nodiscard]] bool gateEnvArmed(const char *name) noexcept {
+#ifdef _WIN32
             char *stored = nullptr;
-            const bool armed = ::_dupenv_s(&stored, nullptr, "PPR_GATE1_B1_DIAG_THROW") == 0 and
-                               stored != nullptr and
-                               stored[0] == '1' and
+            const bool armed = ::_dupenv_s(&stored, nullptr, name) == 0 and stored != nullptr and stored[0] == '1' and
                                stored[1] == '\0';
             std::free(stored);
             return armed;
+#else
+            const char *stored = std::getenv(name);
+            return stored != nullptr and stored[0] == '1' and stored[1] == '\0';
+#endif
+        }
+
+        [[nodiscard]] bool diagThrowArmed() noexcept {
+            return gateEnvArmed("PPR_GATE1_B1_DIAG_THROW");
         }
 
         // Error category whose formatting throws: any error_code::message()
@@ -3453,13 +3471,7 @@ namespace pP::tests::detail {
         }
 
         [[nodiscard]] bool messageThrowArmed() noexcept {
-            char *stored = nullptr;
-            const bool armed = ::_dupenv_s(&stored, nullptr, "PPR_GATE1_B1_MESSAGE_THROW") == 0 and
-                               stored != nullptr and
-                               stored[0] == '1' and
-                               stored[1] == '\0';
-            std::free(stored);
-            return armed;
+            return gateEnvArmed("PPR_GATE1_B1_MESSAGE_THROW");
         }
 
         void runUnknownCompletionDeathChild() {
@@ -3587,13 +3599,7 @@ namespace pP::tests::detail {
         }
 
         PPR_UNIT_TEST (unknown_completion_child_fatal) {
-            char *stored = nullptr;
-            const bool armed = ::_dupenv_s(&stored, nullptr, "PPR_GATE1_B1_DEATH_ARMED") == 0 and
-                               stored != nullptr and
-                               stored[0] == '1' and
-                               stored[1] == '\0';
-            std::free(stored);
-            if (not armed) {
+            if (not gateEnvArmed("PPR_GATE1_B1_DEATH_ARMED")) {
                 return;
             }
             runUnknownCompletionDeathChild();
@@ -3659,8 +3665,8 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(exit_code == kUnknownGpuCompletionFatalExit);
 
             std::string markers{};
-            FILE *markers_file = nullptr;
-            if (::fopen_s(&markers_file, deathMarkerPath().string().c_str(), "r") == 0 and markers_file != nullptr) {
+            FILE *markers_file = openDeathMarkerFile(deathMarkerPath().string(), "r");
+            if (markers_file != nullptr) {
                 char line[256];
                 while (::fgets(line, sizeof(line), markers_file) != nullptr) {
                     markers += line;
@@ -3699,8 +3705,8 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(exit_code == kUnknownGpuCompletionFatalExit);
 
             std::string markers{};
-            FILE *markers_file = nullptr;
-            if (::fopen_s(&markers_file, deathMarkerPath().string().c_str(), "r") == 0 and markers_file != nullptr) {
+            FILE *markers_file = openDeathMarkerFile(deathMarkerPath().string(), "r");
+            if (markers_file != nullptr) {
                 char line[256];
                 while (::fgets(line, sizeof(line), markers_file) != nullptr) {
                     markers += line;
@@ -3743,8 +3749,8 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(exit_code == kUnknownGpuCompletionFatalExit);
 
             std::string markers{};
-            FILE *markers_file = nullptr;
-            if (::fopen_s(&markers_file, deathMarkerPath().string().c_str(), "r") == 0 and markers_file != nullptr) {
+            FILE *markers_file = openDeathMarkerFile(deathMarkerPath().string(), "r");
+            if (markers_file != nullptr) {
                 char line[256];
                 while (::fgets(line, sizeof(line), markers_file) != nullptr) {
                     markers += line;

@@ -1386,6 +1386,7 @@ namespace pP {
         };
         const std::initializer_list<SurfaceRenderPass> surface_passes{
             {
+                .m_additional_colors = {},
                 .m_depth_policy = ESurfaceDepthPolicy::renderer_owned,
                 .m_draws = {DrawSubmission{"grid.gpu", grid_draw}, DrawSubmission{"triangle", triangle_draw}},
                 .m_prepare = PreRenderCallback{grid_prepare},
@@ -1395,6 +1396,7 @@ namespace pP {
                     ColorAttachmentOps{
                         .m_load_op = rhi::LoadOp::Load,
                     },
+                .m_additional_colors = {},
                 // Detached UI draws, constructed synchronously on this lane
                 // (inline or worker): the encode reads ONLY the detached
                 // data, never the live ImGui frontend.
@@ -1419,6 +1421,7 @@ namespace pP {
         const SurfaceWindowSnapshot window_snapshot{
             .m_handle = packet.m_surface_identity,
             .m_native = packet.m_surface_native,
+            .m_display = packet.m_surface_display,
             .m_framebuffer_size = packet.m_framebuffer_size,
             .m_title = packet.m_window_title,
         };

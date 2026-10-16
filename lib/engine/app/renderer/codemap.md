@@ -173,7 +173,8 @@ on the render owner; shutdown/device-loss epoch resets discard old cache handles
   signature only when the slot is valid, the depth policy still matches, and the stored extent equals the record's
   current extent (compared componentwise); otherwise `buildRenderSignature_` runs and repopulates the slot.
   `resizeWindowSurface_` clears both slots right after its thread check, so a resize always rebuilds.
-- `createWindowSurface_` validates out-param/service/native/handle, `createSurface(fromHwnd(native))`,
+- `createWindowSurface_` validates out-param/service/native/handle (plus the X11 display on Linux),
+  `createSurface(fromXlibWindow(display, xid))` on Linux and `createSurface(fromHwnd(native))` elsewhere,
   `resizeWindowSurface_` to the current framebuffer size, `try_emplace` (duplicate handle: no clobber,
   transient released, `invalid_argument`; dead path — `renderAndPresent` checks first). `resizeWindowSurface_`: GPU-fences via `waitOnHost` whenever already configured
   (including the minimize path), then zero/negative extent unconfigures and releases depth (keeps the record,

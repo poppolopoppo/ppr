@@ -51,6 +51,9 @@ export namespace pP {
     struct SurfaceWindowSnapshot {
         WindowHandle m_handle{};
         NativeWindowHandle m_native{};
+        // X11 Display connection (void*, null on Win32/Cocoa) carried with the
+        // native window id so the Vulkan backend can build an Xlib surface.
+        void *m_display{};
         int2 m_framebuffer_size{zero_v};
         std::string_view m_title{};
     };
