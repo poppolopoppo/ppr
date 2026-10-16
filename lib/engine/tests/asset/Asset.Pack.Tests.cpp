@@ -64,9 +64,22 @@ descriptor = "textures/rock.toml"
         }
 
         PPR_TEST_ASSERT(asset::validLocalName("rock_1-sand"));
-        PPR_TEST_ASSERT(not asset::validLocalName(std::string(129u, 'a')));
-        PPR_TEST_ASSERT(not asset::validNamespace(std::string(129u, 'a')));
+        PPR_TEST_ASSERT(not asset::validLocalName(std::string(config::kMaxKeyBytes + 1u, 'a')));
+        PPR_TEST_ASSERT(
+            not asset::validNamespace(std::string(asset::QualifiedName::maximum_namespace_bytes + 1u, 'a')));
         PPR_TEST_ASSERT(*asset::identityKey(*local, "sim.material") != *asset::identityKey(*local, "image.texture"));
+
+        const std::string longest_local(config::kMaxKeyBytes, 'a');
+        const std::string longest_namespace(asset::QualifiedName::maximum_namespace_bytes, 'p');
+        const auto longest_reference = longest_namespace + ":" + longest_local;
+        PPR_TEST_ASSERT(config::isValidKey(longest_local) and asset::validLocalName(longest_local));
+        PPR_TEST_ASSERT(not asset::QualifiedName::reference_domain.validate(longest_reference));
+        PPR_TEST_ASSERT(asset::qualifyName(longest_reference, "ppr.base").has_value());
+
+        const auto too_long_reference = longest_reference + "a";
+        PPR_TEST_ASSERT(
+            asset::QualifiedName::reference_domain.validate(too_long_reference) == config::EConfigErrc::out_of_range);
+        PPR_TEST_ASSERT(not asset::qualifyName(too_long_reference, "ppr.base"));
     };
 
     PPR_UNIT_TEST (two_pack_checked_resolution_is_mount_order_independent) {

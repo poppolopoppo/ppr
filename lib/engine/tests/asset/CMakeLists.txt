@@ -10,9 +10,11 @@ target_sources(engine.tests.asset
     PRIVATE
         Asset.Tests.cpp
         Asset.Pack.Tests.cpp
+        Asset.Preparation.Tests.cpp
         # Image: image goldens + mip goldens + fixture path-join (all CPU-only).
         Asset.Image.Tests.cpp
         Asset.Image.Mips.Tests.cpp
+        Asset.Image.Preparation.Tests.cpp
         # Mesh: mesh import, UV/normal bakes (all CPU-only). Material/pipeline
         # proofs moved to engine.tests.app (App.RenderView).
         Asset.Search.Tests.cpp

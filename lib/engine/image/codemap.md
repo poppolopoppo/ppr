@@ -17,7 +17,18 @@ decode (P1a RGBA first, then P1b blocks) + `:mips` CPU chain generation (Phase 8
 
 ## Design
 
-- Partitioned umbrella: `Image.cppm` re-exports `:types` + `:decode` + `:mips`.
+- Partitioned umbrella: `Image.cppm` re-exports `:types`, `:decode`, `:mips`,
+  `:texture` and `:preparation`.
+- `:texture` owns named texture descriptors and definition-only importing.
+  `:preparation` supplies `TextureProcessor` and the thin `prepareTextures`
+  factory. `TexturePreparation` aliases the shared
+  `asset::PreparationRequest<TextureProcessor>`; image has no independent
+  asynchronous request lifecycle. The thin factory is inline in the interface;
+  processor implementations remain in the matching `.cpp`. Metadata preflight precedes admission,
+  workers map/hash/decode and generate mips, and owner-side continuations reserve
+  exact retained-output bytes in deterministic item order. Completed bases keep
+  their occupied slot while waiting for that decision. Binary files must remain
+  stable until requests drain; an owning mapping is not an immutable snapshot.
 - `:types` holds `image::errc` (+ category, `function_not_supported`/`invalid_argument` map to
   `std::errc`), `EBlockTag`, `ENativeImageFormat`, `EImageUsage`, `EImageDimension`, `ImageLimits`/
   `kDefaultImageLimits` (8K / 256 MiB production caps — over-limit inputs fail closed with
@@ -74,14 +85,16 @@ hold) lives. Caches/consumers live in `engine.app`.
 
 ## Integration
 
-- Depends on: `engine.core` + `engine.math` (public), `mango-image` + `stb` (private).
+- Depends on: `engine.core` + `engine.math` + `engine.asset` (public),
+  `mango-image` + `stb` (private).
 - Consumed by: `engine.app` pass caches (upload consumes all mips, per-level pitch
   validated) + scene ownership; `engine.tests.asset` (image decode/format/block/hash/error
   tests plus `mips_chain`/`mips_coverage`/`mips_bleed`/`mips_quality` goldens with
   runtime-generated fixtures).
-- Build: `Image.cppm`, `Image.Types.cppm`, `Image.Decode.cppm`, `Image.Mips.cppm` in
-  `FILE_SET CXX_MODULES`; `Image.Types.cpp` + `Image.Decode.cpp` + `Image.Mips.cpp` as PRIVATE
-  sources; `setup_ppr_project(engine.image INTERNAL_PUBLIC_DEPS engine.core engine.math
+- Build: `Image.cppm`, `Image.Types.cppm`, `Image.Decode.cppm`, `Image.Mips.cppm`,
+  `Image.Texture.cppm` and `Image.Preparation.cppm` in `FILE_SET CXX_MODULES`;
+  their matching implementation files are PRIVATE sources;
+  `setup_ppr_project(engine.image INTERNAL_PUBLIC_DEPS engine.core engine.math engine.asset
   EXTERNAL_SYSTEM_PRIVATE_DEPS mango-image stb)`.
 
 ## Key Files
@@ -94,4 +107,6 @@ hold) lives. Caches/consumers live in `engine.app`.
 - `Image.Mips.cppm` — `:mips` declarations (`mipCountFor`/`mipExtentAt`/`generateMipChain`, no
   stb types in the interface).
 - `Image.Mips.cpp` — stb-backed implementation (private dep, never exported).
+- `Image.Texture.cppm/.cpp` — named descriptors and definition-only catalog.
+- `Image.Preparation.cppm/.cpp` — processor and thin shared-request factory.
 - `CMakeLists.txt` — `engine.image` target registration (see Integration).

@@ -57,6 +57,10 @@ export namespace pP {
 
         [[nodiscard]] std::error_code error() const noexcept;
 
+        /// Snapshot of this group's count, not global pool quiescence. The owner
+        /// must stop or serialize further add() before treating zero as terminal.
+        [[nodiscard]] bool isReady() const noexcept;
+
         [[nodiscard]] std::error_code wait() const noexcept;
 
     private:

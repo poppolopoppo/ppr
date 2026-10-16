@@ -19,6 +19,11 @@ export namespace pP::asset {
     using RequestGeneration = Numeric<u64, RequestGenerationTag>;
 
     struct QualifiedName {
+        static constexpr std::size_t maximum_namespace_bytes = 128u;
+        static constexpr config::StringDomain namespace_domain{maximum_namespace_bytes, false};
+        static constexpr config::StringDomain reference_domain{
+            maximum_namespace_bytes + 1u + config::kMaxKeyBytes, false};
+
         std::string m_pack{}, m_local{};
 
         [[nodiscard]] std::string string() const;
@@ -103,7 +108,7 @@ export namespace pP::asset {
 
         [[nodiscard]] static constexpr auto describe() {
             return std::tuple{config::field(
-                &PackDependency::m_pack_id, metadata("pack_id"), config::StringDomain{128u, false},
+                &PackDependency::m_pack_id, metadata("pack_id"), QualifiedName::namespace_domain,
                 config::EPresence::required)};
         }
     };
@@ -120,7 +125,7 @@ export namespace pP::asset {
                     &Manifest::m_schema_version, metadata("schema_version"), config::Range{1u, 1u},
                     config::EPresence::required),
                 config::field(
-                    &Manifest::m_pack_id, metadata("pack_id"), config::StringDomain{128u, false},
+                    &Manifest::m_pack_id, metadata("pack_id"), QualifiedName::namespace_domain,
                     config::EPresence::required),
                 config::collection(&Manifest::m_requires, metadata("requires"), {0u, 128u}),
                 config::collection(&Manifest::m_assets, metadata("assets"), {0u, 4096u})};

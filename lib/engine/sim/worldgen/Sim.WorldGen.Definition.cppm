@@ -962,6 +962,8 @@ export namespace pP::sim::definition {
     // ------------------------------------------------------------------
 
     struct ProfileDefinition {
+        static constexpr config::CollectionDomain rules_domain{0u, kMaxGenerationRules};
+
         Layout m_layout{};
         Boundaries m_boundaries{};
         std::optional<SurfaceBedrock> m_surface_bedrock{};
@@ -978,11 +980,17 @@ export namespace pP::sim::definition {
                 schema::collection(&ProfileDefinition::m_resources, "resources", 0u, 8u, EPresence::defaulted),
                 schema::collection(&ProfileDefinition::m_biomes, "biomes", 1u, kMaxGenerationBiomes),
                 schema::collection(
-                    &ProfileDefinition::m_rules, "rules", 0u, kMaxGenerationRules, EPresence::defaulted)};
+                    &ProfileDefinition::m_rules, "rules", rules_domain.m_min, rules_domain.m_max,
+                    EPresence::defaulted)};
         }
     };
 
     struct Definition {
+        static constexpr config::CollectionDomain materials_domain{1u, kMaxGenerationMaterials};
+        static constexpr config::CollectionDomain fields_domain{1u, kMaxGenerationFields};
+        static constexpr config::CollectionDomain biomes_domain{1u, kMaxGenerationBiomes};
+        static constexpr config::CollectionDomain features_domain{0u, kMaxGenerationFeatures};
+
         KeyedCollection<Material> m_materials{};
         KeyedCollection<NoiseFieldDesc> m_fields{};
         KeyedCollection<Biome> m_biomes{};
@@ -991,11 +999,13 @@ export namespace pP::sim::definition {
 
         [[nodiscard]] static constexpr auto describe() {
             return std::tuple{
-                schema::collection(&Definition::m_materials, "materials", 1u, 256u),
-                schema::collection(&Definition::m_fields, "fields", 1u, 256u),
-                schema::collection(&Definition::m_biomes, "biomes", 1u, kMaxGenerationBiomes),
                 schema::collection(
-                    &Definition::m_features, "features", 0u, kMaxGenerationFeatures, EPresence::defaulted),
+                    &Definition::m_materials, "materials", materials_domain.m_min, materials_domain.m_max),
+                schema::collection(&Definition::m_fields, "fields", fields_domain.m_min, fields_domain.m_max),
+                schema::collection(&Definition::m_biomes, "biomes", biomes_domain.m_min, biomes_domain.m_max),
+                schema::collection(
+                    &Definition::m_features, "features", features_domain.m_min, features_domain.m_max,
+                    EPresence::defaulted),
                 schema::collection(&Definition::m_worlds, "worlds", 0u, 128u, EPresence::defaulted)};
         }
     };

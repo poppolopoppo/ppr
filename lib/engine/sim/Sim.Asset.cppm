@@ -67,8 +67,8 @@ export namespace pP::sim::asset {
                     &MaterialDescriptor::m_schema_version, pP::asset::metadata("schema_version"), Range{1u, 1u},
                     EPresence::required),
                 field(
-                    &MaterialDescriptor::m_element, pP::asset::metadata("element"), StringDomain{257u, false},
-                    EPresence::required),
+                    &MaterialDescriptor::m_element, pP::asset::metadata("element"),
+                    pP::asset::QualifiedName::reference_domain, EPresence::required),
                 field(
                     &MaterialDescriptor::m_representation, pP::asset::metadata("representation"),
                     definition::Material::representation_domain, EPresence::required),
@@ -118,8 +118,8 @@ export namespace pP::sim::asset {
         [[nodiscard]] static constexpr auto describe() {
             return std::tuple{
                 config::field(
-                    &MaterialAssetBinding::m_asset, pP::asset::metadata("asset"), config::StringDomain{257u, false},
-                    config::EPresence::required),
+                    &MaterialAssetBinding::m_asset, pP::asset::metadata("asset"),
+                    pP::asset::QualifiedName::reference_domain, config::EPresence::required),
                 config::field(
                     &MaterialAssetBinding::m_id, pP::asset::metadata("id"), config::Range{1u, 65534u},
                     config::EPresence::required)};
@@ -133,8 +133,8 @@ export namespace pP::sim::asset {
         [[nodiscard]] static constexpr auto describe() {
             return std::tuple{
                 config::field(
-                    &IndexedAssetBinding::m_asset, pP::asset::metadata("asset"), config::StringDomain{257u, false},
-                    config::EPresence::required),
+                    &IndexedAssetBinding::m_asset, pP::asset::metadata("asset"),
+                    pP::asset::QualifiedName::reference_domain, config::EPresence::required),
                 config::field(
                     &IndexedAssetBinding::m_index, pP::asset::metadata("index"),
                     config::Range{0u, (std::numeric_limits<u32>::max)()}, config::EPresence::required)};
@@ -146,7 +146,7 @@ export namespace pP::sim::asset {
 
         [[nodiscard]] static constexpr auto describe() {
             return std::tuple{config::field(
-                &RuleAssetBinding::m_asset, pP::asset::metadata("asset"), config::StringDomain{257u, false},
+                &RuleAssetBinding::m_asset, pP::asset::metadata("asset"), pP::asset::QualifiedName::reference_domain,
                 config::EPresence::required)};
         }
     };
@@ -158,12 +158,18 @@ export namespace pP::sim::asset {
 
         [[nodiscard]] static constexpr auto describe() {
             return std::tuple{
-                config::collection(&WorldPalette::m_materials, pP::asset::metadata("materials"), {1u, 256u}),
-                config::collection(&WorldPalette::m_fields, pP::asset::metadata("fields"), {1u, 256u}),
-                config::collection(&WorldPalette::m_biomes, pP::asset::metadata("biomes"), {1u, kMaxGenerationBiomes}),
                 config::collection(
-                    &WorldPalette::m_features, pP::asset::metadata("features"), {0u, kMaxGenerationFeatures}),
-                config::collection(&WorldPalette::m_rules, pP::asset::metadata("rules"), {0u, kMaxGenerationRules})};
+                    &WorldPalette::m_materials, pP::asset::metadata("materials"),
+                    definition::Definition::materials_domain),
+                config::collection(
+                    &WorldPalette::m_fields, pP::asset::metadata("fields"), definition::Definition::fields_domain),
+                config::collection(
+                    &WorldPalette::m_biomes, pP::asset::metadata("biomes"), definition::Definition::biomes_domain),
+                config::collection(
+                    &WorldPalette::m_features, pP::asset::metadata("features"),
+                    definition::Definition::features_domain),
+                config::collection(
+                    &WorldPalette::m_rules, pP::asset::metadata("rules"), definition::ProfileDefinition::rules_domain)};
         }
     };
 

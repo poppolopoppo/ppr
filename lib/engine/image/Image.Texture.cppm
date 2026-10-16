@@ -3,6 +3,7 @@ module;
 
 export module engine.image:texture;
 
+import :mips;
 import engine.asset;
 import engine.core;
 import std;
@@ -63,7 +64,7 @@ export namespace pP::image {
                 field(&TextureDescriptor::m_preserve_coverage, asset::metadata("preserve_coverage"), boolean_domain),
                 field(
                     &TextureDescriptor::m_alpha_cutoff, asset::metadata("alpha_cutoff"),
-                    FloatDomain{0.0, 1.0, false, true})};
+                    MipGenDesc::alpha_cutoff_domain)};
         }
     };
 

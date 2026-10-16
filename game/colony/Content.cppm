@@ -348,11 +348,11 @@ export namespace pP::colony {
     // ------------------------------------------------------------------
 
     inline constexpr u32 kContentSchemaVersion = 3u;
-    inline constexpr u64 kMaxTextureInputBytes = 16u * 1024u * 1024u;
-    inline constexpr u64 kMaxPackTextureInputBytes = 64u * 1024u * 1024u;
-    inline constexpr u64 kMaxPackTextureDecodedBytes = 128u * 1024u * 1024u;
-    inline constexpr u32 kMaxContentTextureDimension = 2048u;
-    inline constexpr u32 kMaxContentTextures = 256u;
+    inline constexpr u64 kMaxTextureInputBytes = image::TexturePreparationLimits::image_input_domain.m_max;
+    inline constexpr u64 kMaxPackTextureInputBytes = image::TexturePreparationLimits::total_input_domain.m_max;
+    inline constexpr u64 kMaxPackTextureDecodedBytes = image::TexturePreparationLimits::total_output_domain.m_max;
+    inline constexpr u32 kMaxContentTextureDimension = image::TexturePreparationLimits::dimension_domain.m_max;
+    inline constexpr u32 kMaxContentTextures = image::TexturePreparationLimits::count_domain.m_max;
     struct ContentTexture {
         std::string m_path{};
         u64 m_source_size{};
@@ -464,7 +464,7 @@ export namespace pP::colony {
                     config::StringDomain{256u, false}, config::EPresence::required),
                 config::field(
                     &WorldAppearance::m_background_stack, appearance_schema::metadata("background_stack"),
-                    config::StringDomain{257u, false}, config::EPresence::required)};
+                    asset::QualifiedName::reference_domain, config::EPresence::required)};
         }
     };
 

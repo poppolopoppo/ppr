@@ -83,6 +83,62 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not wg.wait());
         };
 
+        PPR_UNIT_TEST (waitgroup_readiness_publishes_values_and_completed_captures) {
+            WaitGroup group;
+            PPR_TEST_ASSERT(group.isReady());
+
+            group.add();
+            PPR_TEST_ASSERT(not group.isReady());
+            PPR_TEST_ASSERT(group.done());
+            PPR_TEST_ASSERT(group.isReady());
+
+            int published{};
+            group.add();
+            std::jthread writer{[&] {
+                published = 42;
+                std::ignore = group.done();
+            }};
+
+            while (not group.isReady()) {
+                std::this_thread::yield();
+            }
+
+            // The readiness acquire is the only reader synchronization before
+            // this observation; join/wait happen after it.
+            PPR_TEST_ASSERT(published == 42);
+            writer.join();
+            PPR_TEST_ASSERT(not group.wait());
+
+            bool destroyed{};
+            ParallelScheduler scheduler{"readiness-capture", 1u, queueBytes()};
+            struct Capture {
+                bool &m_destroyed;
+                int m_value{7};
+
+                explicit Capture(bool &destroyed) : m_destroyed(destroyed) {
+                }
+
+                ~Capture() {
+                    m_destroyed = true;
+                }
+            };
+
+            auto capture = std::make_shared<Capture>(destroyed);
+            auto task = scheduler.schedule(
+                [capture = std::move(capture)](const IContext &) { return capture->m_value; }, group,
+                Policy::wait_if_full);
+            PPR_TEST_ASSERT(task.has_value());
+
+            while (not group.isReady()) {
+                std::this_thread::yield();
+            }
+
+            PPR_TEST_ASSERT(destroyed);
+            PPR_TEST_ASSERT(task->get() == 7);
+            PPR_TEST_ASSERT(not group.wait());
+            PPR_TEST_ASSERT(not scheduler.join());
+        };
+
         PPR_UNIT_TEST (waitgroup_multiple_outstanding) {
             WaitGroup wg{};
             constexpr std::size_t n = 8u;
@@ -1567,10 +1623,15 @@ namespace pP::tests::detail {
 } // namespace pP::tests::detail
 
 namespace pP::tests {
+    // ------------------------------------------------------------------
+    // scheduler suite registration
+    // ------------------------------------------------------------------
+
     const UnitTest scheduler = UnitTest::Named("scheduler") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::Scheduler::waitgroup_empty_wait_returns,
             detail::Scheduler::waitgroup_single_add_done,
+            detail::Scheduler::waitgroup_readiness_publishes_values_and_completed_captures,
             detail::Scheduler::waitgroup_multiple_outstanding,
             detail::Scheduler::waitgroup_concurrent_done,
             detail::Scheduler::waitgroup_reuse_after_wait,

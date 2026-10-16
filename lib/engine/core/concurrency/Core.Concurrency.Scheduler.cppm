@@ -121,8 +121,7 @@ export namespace pP {
             std::promise<value_type> m_promise;
             std::decay_t<TaskF> m_work;
 
-            explicit TaskPromise_(TaskF &&work) noexcept(std::is_nothrow_constructible_v<std::decay_t<TaskF>, TaskF &&>)
-                : m_work(std::forward<TaskF>(work)) {
+            explicit TaskPromise_(TaskF &&work) : m_work(std::forward<TaskF>(work)) {
             }
 
             [[nodiscard]] explicit operator std::expected<std::future<value_type>, std::error_code>() noexcept(

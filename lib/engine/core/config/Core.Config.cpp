@@ -114,9 +114,10 @@ namespace pP::config {
 
     // Slice 1a: canonical definition — collection/reference keys are not paths.
     bool isValidKey(const std::string_view key) noexcept {
-        if (key.empty() or key.size() > 128u) {
+        if (key.empty() or key.size() > kMaxKeyBytes) {
             return false;
         }
+
         for (const char ch: key) {
             if (not ((ch >= 'a' and ch <= 'z') or (ch >= '0' and ch <= '9') or ch == '_' or ch == '-')) {
                 return false;
@@ -616,7 +617,8 @@ namespace pP::config {
                 const auto key = tail.substr(0u, tail.find('.'));
                 if (not isValidKey(key)) {
                     report(
-                        location, recursivePath(path, key), "invalid collection key ([a-z0-9_-], 1..128)",
+                        location, recursivePath(path, key),
+                        configFormat("invalid collection key ([a-z0-9_-], 1..{})", kMaxKeyBytes),
                         make_error_code(EConfigErrc::out_of_range));
                 } else if (membership.insert(key).second) {
                     keys.emplace_back(key);

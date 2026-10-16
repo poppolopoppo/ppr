@@ -217,6 +217,8 @@ export namespace pP::config {
         return {tag};
     }
 
+    inline constexpr std::size_t kMaxKeyBytes = 128u;
+
     [[nodiscard]] bool isValidKey(std::string_view key) noexcept;
 
     template<typename Ref>
@@ -231,7 +233,7 @@ export namespace pP::config {
         }
 
         [[nodiscard]] std::string describe() const {
-            return "reference key ([a-z0-9_-], 1..128 characters)";
+            return configFormat("reference key ([a-z0-9_-], 1..{} characters)", kMaxKeyBytes);
         }
     };
 

@@ -64,4 +64,8 @@ namespace pP {
         m_state->m_done.wait(done_guard, [this] { return m_state->m_count == 0u; });
         return std::exchange(m_state->m_error, std::error_code{});
     }
+
+    bool WaitGroup::isReady() const noexcept {
+        return m_state->m_count.load(std::memory_order_acquire) == 0u;
+    }
 }

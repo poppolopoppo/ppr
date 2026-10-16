@@ -2,7 +2,8 @@
 
 Date: 2026-10-16
 
-Status: final refined design for the current task; implementation has not begun.
+Status: implementation in progress; shared asynchronous API boundary corrected
+after the user's 2026-10-16 review and independent Astra assessment.
 Prepared by the original Astra reviewer after the independent max-effort audit
 and the user's subsequent identity and future-audio requirements. This replaces
 the broader asset-pipeline proposal from this conversation for this task; it is
@@ -38,8 +39,8 @@ into simulation.
 
 | Owner | Responsibility |
 |---|---|
-| New `engine.asset`, depending only on core | Pack identity and immutable request indices; qualified names; checked lookup and containment; source provenance; reusable typed config importing; request generations and preparation contracts. |
-| Existing `engine.image` | Texture descriptors and settings, source processing on background jobs, decode/mips, and typed owning CPU results. |
+| New `engine.asset`, depending only on core | Pack identity and immutable request indices; qualified names; checked lookup and containment; source provenance; reusable typed config importing; shared typed asynchronous preparation API, admission, cancellation, polling, settlement, draining, and outcome handling. |
+| Existing `engine.image` | Texture descriptors and settings, typed texture processor inputs/results, source mapping/hash/decode/mip stages, and image-specific budget decisions using the shared asset request. |
 | Existing `engine.sim` | Physical Element/Material definitions, fields, biomes, features, rules, world definitions, domain validation, and world-context numeric lowering. |
 | Existing `game.colony.content` | Compose simulation definitions with material appearance and backgrounds; cross-domain reference checks; definition catalog and presentation requests. |
 | Game/application and existing render passes | Candidate activation, editor/export/checkpoint workflows, GPU uploads and residency, gameplay state, and retirement. |
@@ -321,11 +322,49 @@ Texture processing reuses `mem::SharedBuffer::mapFile()` and
 `parallel::backgroundPool()`. Do not introduce another thread pool or general
 dependency scheduler.
 
-The shared preparation contract carries explicit source/settings/processor
-version, request generation, and cancellation context. A typed result owns its
-data and reports success, cancellation, or failure explicitly. All admitted work
-settles before request storage is released. Consumers pin the version they use,
-and stale completions cannot replace current results.
+The asynchronous API itself belongs in `engine.asset`, shared by asset types.
+Providing only a generation typedef and cancellation context is insufficient.
+Do not implement a complete texture-owned request lifecycle for later audio or
+mesh processors to duplicate.
+
+Use a small typed request abstraction, provisionally
+`asset::PreparationRequest<Processor>`, with `Processor::Result` as its owning
+result type. Concrete names may follow existing conventions. The common request
+owns its pack snapshot/context and generation, bounded admission through the
+existing pool, polling, cancellation, completion publication, ordered outcomes,
+fatal-exception precedence, draining, and external-owner take/finish/teardown.
+Shared lifecycle behavior is implemented and tested once. A texture convenience
+factory returns this shared request rather than another independent lifecycle.
+Each worker stage returns a fresh owned outcome through `std::future<Outcome>`.
+Cumulative per-item diagnostics, errors and exceptions remain exclusively on
+the request owner; tentative admission never transfers that cumulative state.
+Collection retains exception/error state and transitions the consumed slot
+before any allocating diagnostic merge. Outcome moves and destruction must be
+nonthrowing. Preserve the first retained fatal allocation exception when later
+failures arrive, while promoting an earlier ordinary exception to fatal.
+The request receives an explicit non-owning scheduler dependency; its owner
+keeps that scheduler alive through request destruction and accepted-capture
+settlement. The texture factory supplies `backgroundPool()` at its boundary.
+Blocking guards use that exact scheduler, and the request never cancels or joins
+the scheduler itself. Isolated local-pool tests exercise the same admission path.
+
+The concrete processor supplies owned per-item inputs, its processing revision,
+metadata validation, worker steps, typed result, and domain-specific decisions.
+Support an owner-side continuation between completed processing steps: the image
+processor needs decoded dimensions before deciding exact mip-output admission.
+The asset request schedules a continuation or settles the item while retaining
+the same bounded item slot. Image owns its base/decode/mip state and byte-budget
+calculations; asset owns admission and asynchronous settlement. Completed bases
+waiting for an earlier item's budget decision still occupy slots. This is a
+flat batch with sequential per-item steps, not a processing dependency graph.
+
+The shared contract carries explicit source/settings/processor version,
+generation, and cancellation. Typed results report success, cancellation, or
+failure explicitly and own their data. All admitted work and worker captures
+settle before request storage is released. Consumers pin result versions; stale
+adoption is rejected at the application boundary using the carried generation.
+Domain worker state must never own the coordinating request or cause blocking
+teardown on the shared pool's worker threads.
 
 Audio is a firm future consumer. Do not define every prepared result as a fully
 decoded, permanently resident buffer. Later audio can prepare metadata plus an
@@ -352,6 +391,21 @@ Drain every admitted job before releasing captured state. Ordinary failures
 remain contextual error results. Capture worker exceptions privately; fatal
 `bad_alloc` reaches the owning reporting boundary after draining accepted work.
 Never cancel or join the shared pool itself.
+
+The common request preserves allocation-failure priority over earlier ordinary
+errors, cancellation, and staleness. Cover partial submission, terminal polling,
+explicit finish, destruction, and replacement. Future readiness alone does not
+prove callable-capture destruction; use request-local WaitGroup settlement.
+Its nonblocking readiness query is a snapshot and does not imply success or
+prevent future admission. Noexcept cleanup fallback must drain before reporting
+a fatal allocation failure; it cannot silently downgrade it.
+
+Prove the shared boundary with concrete non-image test processors, including a
+move-only owning result that does not represent a resident decoded buffer.
+Exercise delayed/out-of-order completion, partial admission failure,
+cancellation, fatal-error precedence, capture destruction, and bounded
+continuation slots through the real shared API. These processors test a genuine
+architectural contract, rather than adding a test-only injection API.
 
 ## Source stability
 
@@ -440,12 +494,18 @@ validation performs no binary image I/O or processing, unrelated packs cannot
 change numeric bindings, and shipped numeric/golden outputs remain unchanged.
 Exercise both Materials sharing an Element and full unsampled-biome palettes.
 
-### 3. Image preparation and transactional activation
+### 3. Shared preparation, image processing, and transactional activation
+
+First implement and verify the shared `engine.asset` request with non-image
+processors, then supply the image processor and thin texture factory. Rework the
+uncommitted image-specific lifecycle into that common owner; retain useful
+processing/source/budget code and existing committed foundations.
 
 Replace synchronous catalog textures and byte-wave machinery. Verify identical
 mip output, bounded admission and aggregate limits, cancellation, partial failure,
 exception draining, deterministic diagnostics, stale completion rejection, owned
-storage after scratch reuse, and GPU activation/retirement.
+storage after scratch reuse, and GPU activation/retirement. Image and content
+must not retain a second implementation of the shared request lifecycle.
 
 ### 4. Consumer and format migration
 
@@ -466,7 +526,8 @@ Use test-suite timings to track high-level gains; report revision/environment an
 variance rather than claiming controlled benchmark results. Follow the task's
 PIX profiling requirement for fresh performance runs and the documented focused
 capture/analysis workflow. Do not resume analysis of the canceled oversized
-`Timing 1.wpix` trace. This planning task runs no tests or captures.
+`Timing 1.wpix` trace. Implementation validation executes only the applicable
+checks; a design assessment alone establishes no runtime or performance result.
 
 ## Execution and review
 

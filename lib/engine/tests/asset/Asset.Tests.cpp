@@ -24,7 +24,11 @@ namespace pP::tests {
 
     const UnitTest &packTests() noexcept;
 
+    const UnitTest &preparationTests() noexcept;
+
     const UnitTest &imageTests() noexcept;
+
+    const UnitTest &imagePreparationTests() noexcept;
 
     const UnitTest &meshTests() noexcept;
 
@@ -82,7 +86,9 @@ namespace pP::tests {
         // Phase 1: CPU-only tops hold no SharedGpu refs and never acquire.
         _.recurse({
             packTests(),
+            preparationTests(),
             imageTests(),
+            imagePreparationTests(),
             meshTests(),
             resilienceTests(),
             observeTests(),

@@ -26,6 +26,8 @@ export namespace pP::image {
     // predecessor; high-quality mode (true, opt-in) filters every level from
     // the top level directly.
     struct MipGenDesc {
+        static constexpr config::FloatDomain alpha_cutoff_domain{0.0, 1.0, false, true};
+
         ImageLimits m_limits = kDefaultImageLimits;
 
         float m_alpha_cutoff = 0.5f;

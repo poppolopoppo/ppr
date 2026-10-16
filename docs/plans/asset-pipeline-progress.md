@@ -4,6 +4,168 @@ Plan: [Scoped asset pipeline](asset-pipeline-plan.md).
 
 Updated: 2026-10-16. Implementation is in progress; the full plan is not delivered.
 
+## Corrected asynchronous boundary and resume
+
+The user stopped the texture-specific asynchronous implementation and requested
+an independent Astra assessment. That assessment found the objection justified:
+generation/context reuse alone did not deliver the intended shared asset API.
+The user has now explicitly resumed implementation with the corrected approach.
+This correction supersedes earlier entries assigning the complete request
+lifecycle to image.
+
+`engine.asset` owns the typed shared preparation request, bounded admission,
+poll/cancel/take/finish, owned context/snapshot/generation, ordered outcomes,
+capture settlement, fatal-exception precedence, and draining/teardown. Image
+supplies typed worker stages and owner-side continuations for source processing
+and exact image budget decisions. Content composes the resulting presentation
+sidecar and activation identities. A flat batch with per-item continuations does
+not introduce the deferred universal dependency graph or payload store.
+
+Retain committed foundations (`42b7be5`, `47a4b1a`, `a56a804`, `ea1c385`) and
+useful uncommitted domain/source/processing work. Rework the uncommitted
+texture-owned lifecycle into the common request instead of rolling back unrelated
+work. The stopped image phase was unformatted, unbuilt, and untested; its
+authored tests do not establish correctness. Non-image processors and move-only
+owning results must verify the shared API before live-loader integration.
+
+The shared request uses the existing scheduler's `std::future` for each worker
+stage. It coordinates the larger batch around those futures: bounded occupied
+slots, per-item continuations, cancellation, ordered diagnostics, fatal-error
+priority and request-local capture settlement. An aggregate future alone would
+still need that coordinator. Independent review found this shared owner
+proportionate, while identifying direct future-carried outcomes as a possible
+local transport simplification, not a required architectural change.
+
+Review exposed an existing scheduler exception-specification defect:
+`TaskPromise_` construction cannot be `noexcept` based only on the callable move,
+because constructing its `std::promise` may allocate. The bounded correction lets
+admission failure reach the request's drain/report boundary. Core config now
+owns the local-key length constant used by both key validation and qualified
+reference limits. These source changes and the new shared/image fixtures still
+require the current batch's execution gate; review alone is not a test result.
+
+The next migration will import complete owned authoring snapshots through a
+synchronous `DescriptorReader` returning `Expected<DescriptorSource>` by value.
+Disk convenience overloads delegate through the same typed importing path.
+Candidate manifests build the checked index first; callbacks receive validated
+indexed assets and their returned paths must match indexed provenance. Missing
+declared records fail explicitly even if a disk file exists. Deleted records
+are absent from the candidate manifest, and empty bytes are decoder input rather
+than an absence sentinel. Reader/snapshot observers never escape synchronous
+import. This seam is independently reviewed but not yet implemented.
+
+## Shared preparation execution blocker
+
+Scoped formatting/style and independent source review passed. The current
+`msvc-dev` configure passed with captured exit zero. The first asset build
+revealed ordinary fixture logging/move-only declaration errors, which were
+corrected. Its retry compiled the common module and non-image request fixture,
+but MSVC 19.51.36257 (14.51.36231) reported C1001 in
+`Image.Preparation.cpp:445`, compiler `function-signature.cpp:213`, with an IFC
+import note. Both failed builds and their exit-two records are retained under
+`out/validation/20261016/asset-pipeline/shared-preparation/`.
+
+Affected production edits and builds stopped under `BLOCKED_PLAN`; no substitute
+lifecycle or speculative production workaround was attempted. A separate image
+fixture's const-capture move constraint was corrected without weakening scheduler
+constraints. The coordinator authorized one compile-only copied-source probe,
+with separate object/PDB outputs and the original flags/import map, to separate
+factory signature/import handling from `start` instantiation. Further probes or
+production remedies require an evidence-led planning decision. Correctness tests
+have not run, and this phase is not complete.
+
+All three authorized copied-TU probes reproduced C1001 with the same IFC-import
+note: a stubbed factory body, a renamed implementation-only factory retaining
+the original body, and original-name trailing-return spelling. The `start` call
+and matching imported declaration are therefore not necessary triggers; syntax
+alone did not avoid the failure. These results do not prove an invalid language
+construct or justify changing the ownership/module boundary. Source-shape probes
+stopped after that finite set. Independent core validation may proceed; image
+integration still needs a compiler/reproducer decision. No correctness or
+performance claim is established for the blocked batch.
+
+The user resumed execution and suggested future-carried outcomes as a possible
+simplification. Independent design review approved evaluating
+`std::future<Outcome>`: workers return fresh owned step diagnostics/errors/
+exceptions; the request retains cumulative per-item outcomes exclusively on the
+owner. Admission must never transfer cumulative diagnostics into a callable
+that a full queue can reject. Collection retains exception/error state before
+any allocating diagnostic merge. Outcome moves/destruction must be nonthrowing,
+and all existing fatal-priority and capture-settlement guarantees remain.
+This is not yet evidence that the MSVC ICE is resolved.
+
+Independent core closure now passed with captured exits: the core target build,
+the new WaitGroup readiness/capture leaf, and two existing config-key grammar
+leaves. A guessed initial filter matched no tests and is retained as a failed
+selection attempt; it is not counted as a test pass. Image/common runtime checks
+remain unrun. Unexpected factory-signature edits made while work was stopped are
+preserved separately from the recorded original compiler baseline.
+
+The finite companion comparison compiled the full copied request and image
+processor in both baseline and outcome variants: all six interface/implementation
+stages passed. Baseline success means the companion context did not reproduce
+the original C1001. Candidate success establishes transport/template and
+nonthrowing-move compilation only, not an ICE remedy or runtime correctness.
+Ordinary response-map and copied-namespace setup failures are retained in
+`repro/companion-results.json`, alongside final source/artifact hashes.
+
+The coordinator accepted integrating the reviewed outcome transport on its
+design merits, plus first-fatal preservation and a public-API regression.
+Only common request/helper/test edits resume; external image experiments remain
+untouched. Original-module compilation and lifecycle/image tests remain gates.
+
+The actual target retry with outcome transport and the preserved const-reference
+image signature still failed C1001 at `Image.Preparation.cpp:460`, with the same
+compiler signature/IFC note. Source and old executable/PDB hashes were stable;
+linking and asset tests did not run. Outcome transport is therefore not an
+established remedy. Evidence: `shared-preparation/integration/manifest.json`.
+
+After this result, independent design review approved one interface-only probe:
+copy the actual image partition, preserve the active signature/body, and place
+the thin factory definition inline at its declaration. This fits the module
+contract and tests declaration-time definition versus imported-signature
+reconstruction without changing ownership, payload visibility or the common API.
+Production image files remain untouched. Interface-only success would still
+require a coherent module graph and full target/runtime validation.
+
+The inline partition, copied primary umbrella and factory-removed copied
+implementation all passed against a consistent candidate IFC graph. Independent
+review accepted the thin inline factory as a same-contract compiler workaround,
+without claiming a diagnosed compiler defect. Surgical integration preserved the
+active const-reference API/forwarding semantics and disabled experiment tokens;
+full pre-change image files are retained in
+`shared-preparation/integration/pre-inline-user-snapshot/`. The two-file formatted
+source review passed. Actual target linking and runtime validation remain pending.
+
+## Shared preparation checkpoint
+
+The real `engine.tests.asset` target built and linked after the inline relocation,
+with captured exit zero; `game.tests` also rebuilt successfully. One-loop focused
+checks passed: 11 common preparation leaves, seven image preparation leaves,
+nine pack leaves, two selected mip-domain leaves, eight requested descriptor
+leaves and nine World assembly leaves. Prefix-matched extras and group nodes are
+distinguished in the manifest rather than counted as additional requested tests.
+The earlier independent core build and three focused leaves also passed.
+Formatted-source review is clear for the common transport/helper/tests and image
+factory relocation. All compiled source hashes matched the validation manifest
+at the coordinator's checkpoint verification.
+
+The current module graph is unblocked; this does not establish a diagnosed
+compiler cause or a performance improvement. Historical failures and the
+companion experiment's non-reproduction remain part of the evidence. The active
+factory signature/semantics and disabled user experiments are retained, with
+pre-inline snapshots available for comparison.
+
+Next is the coherent live-loader, dynamic authoring, presentation and shipped
+format migration. Complete snapshots use the required synchronous descriptor
+reader without disk fallback. New authoring targets use a fixed injective
+kind-directory mapping and `asset-<local_key>.toml`; existing contained paths
+retain their spelling. Canonical existing-path indexing, hard-link candidate
+checks and exceptional network-parent equivalence preserve save ownership;
+missing targets are validated separately from operational metadata failures.
+Final interactive/asset acceptance, IDE inspection, representative timing and
+documentation/skill closure remain pending.
+
 ## Team and execution
 
 - Coordinator: design decisions and acceptance.
@@ -213,10 +375,11 @@ needed for the canonical-domain correctness gate.
 
 ## Current next step and pending gates
 
-Next implement and verify standalone asynchronous image preparation and joined
-presentation results. Then switch the live loader, dynamic authoring sources,
-startup/preview/checkpoint consumers, and checked-in formats in one coherent
-migration, followed by reuse, documentation/skills, and final validation.
+Standalone shared asynchronous preparation and its image processor have passed
+their focused checkpoint. Next integrate joined presentation results and switch
+the live loader, dynamic authoring sources, startup/preview/checkpoint consumers,
+and checked-in formats in one coherent migration, followed by reuse,
+documentation/skills, and final validation.
 
 The all-world descriptor owner remains separate from a selected numeric catalog.
 `loadContentCatalog` will return definitions only. A selected World view will be
@@ -224,8 +387,11 @@ assembled using actual compile parameters; plan construction will consume its
 matching bound recipe, not recompute lexical bindings. Runtime Material IDs
 are meaningful only within that selected World.
 
-Image owns bounded batch requests and processing; content only composes their
-results with selected World appearance. Workshop currently runs on
+Asset owns bounded requests and their shared asynchronous lifecycle. Image owns
+processing stages and budget decisions; content composes their results with
+selected World appearance. The shared request receives an explicit non-owning
+scheduler dependency that must outlive the request and accepted captures; the
+texture factory supplies `backgroundPool()`. Workshop currently runs on
 `backgroundPool()`, so external update polling must adopt definition results,
 pump image requests, then schedule capture after readiness. WorldJob's separate
 coordinator may wait/drain image jobs. CPU preparation does not perform GPU

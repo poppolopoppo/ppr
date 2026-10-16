@@ -25,7 +25,7 @@ namespace pP::asset {
     }
 
     bool validNamespace(const std::string_view name) noexcept {
-        if (name.empty() or name.size() > 128u) {
+        if (name.empty() or name.size() > QualifiedName::namespace_domain.m_max_length) {
             return false;
         }
 

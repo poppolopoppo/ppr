@@ -365,7 +365,7 @@ namespace pP::image {
             PPR_RETURN_ERROR_ON_FAIL(Image, errc::invalid_argument);
         }
 
-        if (desc.m_has_preserve_coverage and (not (desc.m_alpha_cutoff > 0.0f) or not (desc.m_alpha_cutoff <= 1.0f))) {
+        if (desc.m_has_preserve_coverage and MipGenDesc::alpha_cutoff_domain.validate(desc.m_alpha_cutoff)) {
             PPR_RETURN_ERROR_ON_FAIL(Image, errc::invalid_argument);
         }
 
@@ -477,8 +477,7 @@ namespace pP::image {
             color.m_height != alpha.m_height or
             (alpha.m_mip_count != 1u and alpha.m_mip_count < color.m_mip_count) or
             static_cast<u32>(desc.m_alpha_channel) > static_cast<u32>(EImageChannel::alpha) or
-            not (desc.m_alpha_cutoff > 0.0f) or
-            not (desc.m_alpha_cutoff <= 1.0f) or
+            MipGenDesc::alpha_cutoff_domain.validate(desc.m_alpha_cutoff) or
             desc.m_is_premultiplied_alpha) {
             PPR_RETURN_ERROR_ON_FAIL(Image, errc::invalid_argument);
         }
