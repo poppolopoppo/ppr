@@ -87,6 +87,12 @@ namespace pP {
         return gpu;
     }
 
+    // Defined out-of-line (MSVC function-signature.cpp:213 module ICE family: any inline definition here ICEs;
+    // decl-only is clean).
+    hash_t hashValue(const TrianglePipelineVariant variant) noexcept {
+        return hash::combine(hash::trivial(&variant.m_is_two_sided, hash::default_seed_v), enumOrd(variant.m_alpha));
+    }
+
     std::error_code checkPipelineVariant(const TrianglePipelineVariant variant) noexcept {
         if (variant.m_alpha == mesh::EAlphaMode::blend) [[unlikely]] {
             return std::make_error_code(std::errc::function_not_supported);

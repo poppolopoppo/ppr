@@ -164,9 +164,7 @@ export namespace pP {
         }
     };
 
-    [[nodiscard]] inline hash_t hashValue(const TrianglePipelineVariant variant) noexcept {
-        return hash::combine(hash::trivial(&variant.m_is_two_sided, hash::default_seed_v), enumOrd(variant.m_alpha));
-    }
+    [[nodiscard]] hash_t hashValue(TrianglePipelineVariant variant) noexcept;
 
     [[nodiscard]] std::error_code checkPipelineVariant(TrianglePipelineVariant variant) noexcept;
 
