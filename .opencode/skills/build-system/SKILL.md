@@ -35,6 +35,11 @@ are governed by the `AGENTS.md` guard; the post-change checklist lives in
   `.slim/tmp/configure-msvc-dev.cmd` (vcvars, then `cmake --preset msvc-dev`)
   and `.slim/tmp/build2a.bat` (vcvars, then configure, then
   `cmake --build --target ...`).
+- A saved execution-session ID can expire. If the executor reports an unknown
+  process, retain that evidence and replace the unavailable shell once through
+  the same approved activation helper. Verify the new child directory and
+  toolchain before resuming; an expired session is not evidence of toolchain
+  contamination. Avoid creating an idle replacement far ahead of the batch.
 - **A shell that skips Insiders vcvars fails fast.** The MSVC pre-project
   guard rejects the configure with the required `vcvars64.bat` recovery
   (historically, before the guard, configure silently picked VS 2022
@@ -280,6 +285,13 @@ old primary IFC with new partition IFCs invalidates the comparison. A successful
 isolated probe establishes only the behavior it reproduces, not the cause of an
 unreproduced production failure. Follow AGENTS.md's `BLOCKED_PLAN` handoff before
 changing production architecture or adopting a workaround.
+
+Separate execution setup failures from compiler evidence. Preflight isolated
+output directories, complete module-map dependency closures and rewritten
+object/debug-output arguments. Preserve a failed setup attempt and correct it
+within the same approved case; it does not establish that the source reproduces
+or avoids an ICE. Respect an explicit invocation limit, and obtain a new design
+decision before adding cases or changing production APIs.
 
 | Work | Owner |
 |---|---|

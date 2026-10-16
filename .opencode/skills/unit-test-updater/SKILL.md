@@ -32,6 +32,10 @@ directly.
   cannot prove whole-production parity or stress when those are the claim.
   Reuse the task's existing acceptance brief; do not require another plan or
   specialist pass for routine work.
+- Check descriptor presence as well as authored values: a defaulted collection's
+  default must satisfy its declared minimum. Supplying valid document entries
+  cannot repair an invalid schema; use required presence or a legal default
+  according to the actual contract.
 - Test public or otherwise observable boundaries, not private representation or
   call sequencing. Cover internal regressions through their public boundary.
   Drive time-dependent behavior with an injected clock/tick rather than sleeps
@@ -41,6 +45,10 @@ directly.
   ordering: detach or disable callbacks/listeners/submissions and prevent new
   work; cancel, wake, drain, or join; then release resources while preserving
   the first cleanup error. Avoid timing-dependent assumptions.
+- Check whether result retrieval consumes the request. When `take()` or
+  `finish()` releases its state, settle and snapshot progress before retrieval,
+  then assert result ownership/errors separately. A zero-valued query after
+  consumption cannot prove that no work was admitted or remained active.
 - Use `PPR_TEST_ASSERT` for test assertions in every build configuration; do not use raw `new`/`delete` where engine allocator or lifetime rules apply.
 - Follow the test group convention (thematic private `.cpp` group files in
   the owning suite directory, never new `.cppm`

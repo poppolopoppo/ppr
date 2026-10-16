@@ -156,6 +156,11 @@ canonical output.
   `pwsh -NoProfile -File scripts/Format-Cpp.ps1 -Mode Fix`
 - Gate:
   `pwsh -NoProfile -File scripts/Format-Cpp.ps1` (or `-Base <merge-base>` in CI)
+- For an explicit `-Paths` handoff, invoke the script from PowerShell with a
+  real string array, such as paths read from the handoff file. Do not pass many
+  native `pwsh -File` arguments expecting them to bind to one array parameter;
+  later arguments can bind to other parameters. The separate semantic-style
+  script uses its documented joined `-Files` argument instead.
 - Exit 0 is required. `DRIFT` means lines are not canonical, `UNSAFE` means the
   formatter would change the code token stream, and `UNSTABLE` means no fixed
   point within the pass budget. Each class blocks validation and is routed to the
