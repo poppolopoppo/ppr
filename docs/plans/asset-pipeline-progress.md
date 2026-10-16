@@ -4,6 +4,29 @@ Plan: [Scoped asset pipeline](asset-pipeline-plan.md).
 
 Updated: 2026-10-16. Implementation is in progress; the full plan is not delivered.
 
+## Current atomic migration
+
+The shared preparation checkpoint is committed as `71d3f2e`, using
+`std::future<Outcome>` with owner-held cumulative diagnostics and explicit
+capture settlement. The production image factory compiled after a separately
+verified inline thin-factory workaround; outcome transport alone did not resolve
+the original MSVC ICE. Focused common/image/core checks and source review passed;
+the execution manifest remains the authority for exact tested leaves and exits.
+
+The next uncommitted batch switches complete owned sources, selected numeric
+catalogs, presentation, authoring/save, and their consumers together. It is
+currently transitional and has not passed a build. Stable portions are under
+independent review while consumer migration continues.
+
+The independent data audit of the shipped format conversion passed: the manifest
+declares exactly 513 descriptor files, all declared files exist, the seven legacy
+category documents are removed, mapped values/order agree with the frozen
+legacy sources, and all 134 PNG hashes are unchanged. The manifest is 62,516
+bytes and total manifest/descriptor text is 319,782 bytes. Evidence is
+`out/validation/20261016/asset-pipeline/atomic-migration/audit-result.json`.
+This establishes data conversion preservation, not runtime/compiler/numeric
+parity; those gates remain pending.
+
 ## Corrected asynchronous boundary and resume
 
 The user stopped the texture-specific asynchronous implementation and requested
@@ -165,6 +188,34 @@ checks and exceptional network-parent equivalence preserve save ownership;
 missing targets are validated separately from operational metadata failures.
 Final interactive/asset acceptance, IDE inspection, representative timing and
 documentation/skill closure remain pending.
+
+## Atomic consumer and format migration in progress
+
+Checkpoint `71d3f2e` is the passing shared-preparation baseline. The next batch
+adds synchronous complete-snapshot reading, an immutable source/index owner,
+dynamic source/history/save state, selected-world recipe projection and joined
+presentation readiness before switching all consumers together. Early reader
+and source-ownership review found bounded fixture/provenance, network-alias and
+repeated-manifest-import issues; their corrections remain part of this unbuilt
+batch. Partial-save state uses a separate identity-bound disk ledger, global
+phase barriers and tombstone-backed undo restoration; obsolete orphan cleanup
+does not block reusable files still referenced by the desired candidate.
+
+The old shipped text is retained under
+`out/validation/20261016/asset-pipeline/shipped-source-baseline/`, with ordered
+semantic data and hashes for all 134 referenced texture inputs. No extra legacy
+runtime benchmark was run. The recorded shipped recipe leaf took 6.86 seconds
+in the existing successful run; this is an observation, not a controlled
+comparison.
+
+The one-shot port produced 513 descriptors and 319,782 total text bytes.
+Its first all-quoted manifest preflight exceeded the cap at 66,626 bytes and
+stopped before writing. Approved bare valid TOML keys reduced it to 62,516 bytes
+without changing parsed keys/values/order, schema, identities or the 64 KiB cap.
+Ordered semantic roundtrips preceded the write; PNG files were untouched.
+Old aggregate documents were removed only after all new descriptor files were
+written. Consumer conversion is still underway, so no buildable/checkpoint or
+runtime parity claim is made for this transitional state.
 
 ## Team and execution
 

@@ -450,6 +450,49 @@ requests, then releases resources in dependency order. Draining belongs to the
 external coordinator; last worker-owned references must not trigger blocking
 same-pool teardown. Preserve best-effort cleanup and first-error reporting.
 
+## Owned authoring sources
+
+Authoring owns a complete candidate root set, manifests and per-asset descriptor
+bytes. A required synchronous `DescriptorReader` returns owned source values
+through the ordinary typed import path; disk convenience overloads delegate to
+that same path. Index/kind checks precede the callback, returned provenance must
+match the indexed path, and missing snapshot records fail without disk fallback.
+Readers and snapshot views never escape synchronous importing.
+An immutable `ContentSourceSnapshot` pins its exact owned source set and built
+pack index. Disk loading, source validation and catalog import reuse that index;
+mutable/invalid draft bytes stay separate and explicitly build a fresh snapshot.
+
+Reuse foundation per-file limits (1 MiB descriptors, 64 KiB manifests). One
+composition-owned source limit retains the former aggregate text ceiling,
+`7 * asset::kMaxDescriptorBytes + asset::kMaxManifestBytes`, across all manifests
+and descriptors in the candidate's mounted roots. This counts logical retained
+source bytes once, not scratch, history or simultaneous candidate-copy peaks.
+Validate owned candidates before typed importing; keep disk retention bounded.
+
+New authoring targets use an injective supported-kind directory mapping and
+`asset-<local_key>.toml`, keeping valid keys such as `con` safe on Windows.
+Existing valid contained paths retain their spelling. Index canonical existing
+paths including manifests, then inspect hard-link counts once and compare only
+alias candidates. Exceptional network namespaces require conservative
+equivalence checks; missing targets compare existing parents plus the generated
+suffix. Those exceptional groups may remain quadratic. Metadata errors are not
+absence, a new action cannot take over an unrelated existing file, and save
+revalidates containment and ownership under the stable-file contract.
+
+Partial saves use a separate owned per-file disk ledger, including expected
+absence, rather than importing orphan files as a complete candidate. Commit
+descriptor creations/edits first; replace manifests only after all prerequisites
+reach desired bytes; remove obsolete files only after all affected manifests
+reach desired bytes. Reconcile actual successes without replacing newer drafts
+or undo intent. This is not a global filesystem-atomicity promise or journal.
+Save preflight rejects unexpected external changes even for descriptors left
+untouched by the draft. Adopt external content through explicit whole-candidate
+reload, never by silently merging disk bytes into the validated owned candidate.
+Restore an arbitrary deleted path only for the same prior owned asset identity,
+kind and path, backed by its tombstone/history. Retire unreachable tombstones;
+reconcile owned unreferenced files before admitting additional fresh file growth
+after a partial failure. Cleanup failure remains visible and retains newer intent.
+
 ## Fingerprints and workflow migration
 
 Keep these identities separate:

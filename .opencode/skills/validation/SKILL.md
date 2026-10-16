@@ -48,6 +48,14 @@ AGENTS.md's delegated-implementation contract. Only affected checks are repeated
    automatic additional independent review for every iteration.
 5. Configure, build, and test the selected scope through `build-system` in the
    persistent shell, with builds and executable checks serialized.
+   Set the child working directory explicitly: repository root for relative
+   CMake paths, or the generated build root for compiler commands whose module
+   maps contain relative paths. A persistent shell's displayed prompt is not
+   evidence of a helper child's directory. Capture the immediate child exit
+   status before logging or another command overwrites it; retain the raw
+   status alongside any normalized result. Verify a new execution wrapper with
+   harmless zero and nonzero exits before trusting it. Produce structured result
+   JSON with a serializer rather than interpolating command text into JSON.
    The game harness caps `--run-test` at 1024 characters; preflight filter length
    and split longer filters across serialized runs while preserving the approved
    aggregate leaf scope and checking that the expected leaves actually ran.

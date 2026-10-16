@@ -19,6 +19,9 @@ no image/simulation payload registry, separate thread pool, or GPU state.
   indices. `resolve` returns observers tied to the value's lifetime.
 - `importDescriptor<T>` invokes core tree decoding/resolution once and returns
   the typed value, owned source bytes and owned property provenance.
+  The synchronous `DescriptorReader` overload imports edited owned bytes through
+  the same path after checked lookup. It does not retain the callback or fall
+  back to disk when a supplied source is absent.
 - Identity encodes the fixed domain/version and three length-prefixed text
   fields with FNV-1a-64. `Asset.Identity.Validation.hpp` is a private collision
   validator shared only with the forced-collision fixture.

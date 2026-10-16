@@ -57,6 +57,9 @@ capabilities and result compatibility in the intended client before adopting it.
 Building another checkout does not replace `local-services/pix/pix-mcp.exe`.
 Compare path, hash, and timestamp; Cargo package versions can stay unchanged,
 and the idempotent installer can retain an existing executable at the pin.
+Record the MCP server release and executable identity separately from the
+installed PIX application or `pixtool.exe` version. A PIX application version
+reported by status does not identify the connected MCP server binary.
 
 ## Choose capture mode
 

@@ -2,7 +2,7 @@
 
 ## Responsibility
 
-Engine source lives in `engine/`: nine production C++20 module libraries plus the shared test infrastructure and engine test executables. The game client lives separately in `../game/`.
+Engine source lives in `engine/`: ten production C++20 module libraries plus the shared test infrastructure and engine test executables. The game client lives separately in `../game/`.
 
 ## Navigation
 

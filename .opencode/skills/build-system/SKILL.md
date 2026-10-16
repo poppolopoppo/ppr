@@ -272,6 +272,15 @@ configure/build evidence to the validation owner.
 
 ## Delegation
 
+For an authorized module compiler-ICE investigation, retain the exact command,
+working directory, response/module-map inputs, toolchain, and first diagnostic.
+Keep probe outputs isolated from the production build. Compile dependent probe
+units against a coherent set of primary-module and partition IFCs; mixing an
+old primary IFC with new partition IFCs invalidates the comparison. A successful
+isolated probe establishes only the behavior it reproduces, not the cause of an
+unreproduced production failure. Follow AGENTS.md's `BLOCKED_PLAN` handoff before
+changing production architecture or adopting a workaround.
+
 | Work | Owner |
 |---|---|
 | Find existing CMake/preset patterns | `@explorer` |

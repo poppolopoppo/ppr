@@ -149,6 +149,11 @@ For test timing evidence, retain the exact binary, source revision/working-tree
 state, effective configuration, loop/shuffle settings, and measured runtime.
 A long-running suite's timeout does not establish a focused test's expected
 runtime. The capture skill owns reproducible test setup and launch/attach steps.
+For a focused capture, record the actual test process PID, exact leaf selector,
+effective parameters and seed, and relevant output identity. Use a naturally
+representative required run with its normal repetition count; do not add delays
+or repeat a short leaf just to fill the capture interval. Select another required
+workload if launch-and-attach cannot observe the phase of interest.
 
 Before an algorithm change, retain deterministic baseline output checksums over
 semantic fields, such as material IDs and temperature bit patterns, excluding
