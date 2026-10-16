@@ -4,6 +4,8 @@ module;
 module game.tests;
 import engine.core;
 import engine.sim;
+import engine.asset;
+import game.colony.worldgen;
 import game.colony.content;
 import game.colony.worldgen_preview;
 import game.colony.worldgen_panel;
@@ -25,6 +27,7 @@ namespace pP::game::tests::detail::worldgen_preview {
             ImGui::DestroyContext(context);
             ImGui::SetCurrentContext(previous);
         };
+
         auto &io = ImGui::GetIO();
         io.IniFilename = nullptr;
         io.DisplaySize = ImVec2{1400.0f, 1000.0f};
@@ -43,9 +46,11 @@ namespace pP::game::tests::detail::worldgen_preview {
             ImGui::Render();
             return intents;
         };
+
         const auto emitted = [](const Array<WorkshopIntent> &intents, const EWorkshopIntent kind) {
             return std::ranges::any_of(intents, [&](const WorkshopIntent &intent) { return intent.m_kind == kind; });
         };
+
         static_cast<void>(frame(ImVec2{-1.0f, -1.0f}, false));
         auto *const window = ImGui::FindWindowByName("Worldgen Workshop");
         PPR_TEST_ASSERT(window != nullptr);
@@ -63,10 +68,20 @@ namespace pP::game::tests::detail::worldgen_preview {
         static_cast<void>(frame(open_position, true));
         PPR_TEST_ASSERT(emitted(frame(open_position, false), EWorkshopIntent::open));
 
-        ContentPackSource source;
-        source.m_documents[1u].m_bytes = "schema_version = 3\n[biomes.hearth]\ntemperature.base_k = 293.0\n"
-                                         "[biomes.hearth.composition.band]\nbed_period_m = 4.0\n";
+        const auto root = std::filesystem::canonical(hal::process::currentExecutablePath().parent_path());
+        ContentSourceSet source;
+        source.m_packs.push_back(
+            {root,
+                {root / "pack.toml",
+                    "schema_version = 1\npack_id = 'widget'\n[assets.hearth]\nkind = 'sim.biome'\ndescriptor = 'biome.toml'\n"}});
+        source.m_descriptors.push_back(
+            {root / "biome.toml", "schema_version = 1\n[definition]\ntemperature.base_k = 293.0\n"
+                                  "[definition.composition.band]\nbed_period_m = 4.0\n"});
+        config::Diagnostics index_diagnostics;
+        auto index = asset::PackSet::index(source.m_packs, kContentAssetKinds, index_diagnostics);
+        PPR_TEST_ASSERT(index.has_value());
         view.m_source = &source;
+        view.m_index = &*index;
         view.m_revision = 1u;
         view.m_busy = true;
         view.m_dirty = true;
@@ -80,11 +95,11 @@ namespace pP::game::tests::detail::worldgen_preview {
         PPR_TEST_ASSERT(emitted(frame(save_position, false), EWorkshopIntent::save));
 
         const config::Diagnostic diagnostic{
-            "biomes.toml:5", "biomes.hearth.composition.band.bed_period_m", {}, "Expected a positive period",
-            std::make_error_code(std::errc::result_out_of_range)};
+            (root / "biome.toml").string() + ":5", "definition.composition.band.bed_period_m", {},
+            "Expected a positive period", std::make_error_code(std::errc::result_out_of_range)};
         view.m_property_diagnostics = std::span{&diagnostic, 1u};
         view.m_diagnostics_revision = 1u;
-        state.m_selected_key = "hearth";
+        state.m_selected_key = "widget:hearth";
         state.m_focus_property = diagnostic.m_property;
         std::snprintf(state.m_property_search.data(), state.m_property_search.size(), "%s", "bed_period_m");
         static_cast<void>(frame(ImVec2{-1.0f, -1.0f}, false));
@@ -100,17 +115,19 @@ namespace pP::game::tests::detail::worldgen_preview {
                 break;
             }
         }
+
         PPR_TEST_ASSERT(inspector_window != nullptr);
         // The tab contributes an ID scope, so find the drawn table through its
         // actual owner rather than reconstructing the tab's internal ID stack.
         const ImGuiTable *table{};
-        for (int index = 0; index < context->Tables.GetBufSize(); ++index) {
-            const auto *const candidate = context->Tables.GetByIndex(index);
+        for (int table_index = 0; table_index < context->Tables.GetBufSize(); ++table_index) {
+            const auto *const candidate = context->Tables.GetByIndex(table_index);
             if (candidate->OuterWindow == inspector_window and candidate->ColumnsCount == 2) {
                 table = candidate;
                 break;
             }
         }
+
         PPR_TEST_ASSERT(table != nullptr);
         const float left = table->Columns[1u].WorkMinX;
         const float slider_width = table->Columns[1u].WorkMaxX - left - 38.0f;
@@ -119,16 +136,17 @@ namespace pP::game::tests::detail::worldgen_preview {
             not emitted(frame(ImVec2{left + slider_width * 0.3f, slider_y}, true), EWorkshopIntent::edit_definition));
         PPR_TEST_ASSERT(
             not emitted(frame(ImVec2{left + slider_width * 0.7f, slider_y}, true), EWorkshopIntent::edit_definition));
-        PPR_TEST_ASSERT(state.m_numeric_edit_key == "biomes.hearth.temperature.base_k");
+        PPR_TEST_ASSERT(state.m_numeric_edit_key == "definition.temperature.base_k");
         const auto dragged = state.m_numeric_edit.m_floating;
         const auto released = frame(ImVec2{left + slider_width * 0.7f, slider_y}, false);
         const auto edit = std::ranges::find(released, EWorkshopIntent::edit_definition, &WorkshopIntent::m_kind);
         PPR_TEST_ASSERT(
             edit != released.end() and
-            edit->m_property == "temperature.base_k" and
+            edit->m_property == "definition.temperature.base_k" and
             edit->m_value.m_floating == dragged);
         PPR_TEST_ASSERT(state.m_numeric_edit_key.empty());
     };
+
     struct OutputDirectory {
         std::filesystem::path m_parent{hal::process::currentExecutablePath().parent_path()};
         std::filesystem::path m_root;
@@ -141,8 +159,10 @@ namespace pP::game::tests::detail::worldgen_preview {
                     break;
                 }
             }
+
             PPR_TEST_ASSERT(not m_root.empty());
         }
+
         ~OutputDirectory() {
             // Best-effort fixture cleanup only; never remove anything outside
             // the explicitly owned sibling directory created above.
@@ -152,11 +172,58 @@ namespace pP::game::tests::detail::worldgen_preview {
             }
         }
     };
+
     std::string readBytes(const std::filesystem::path &path) {
         std::ifstream file{path, std::ios::binary};
         PPR_TEST_ASSERT(file.good());
         return {std::istreambuf_iterator<char>{file}, {}};
     }
+
+    std::shared_ptr<const ContentCatalog> selectFixture(
+        const ContentSourceSet &source, config::Diagnostics &diagnostics,
+        const sim::definition::GenerationCompileParameters parameters = kWorldCompileParameters) {
+        auto definitions = loadContentCatalog(source, diagnostics);
+        PPR_TEST_ASSERT(definitions.has_value());
+
+        auto owner = std::make_shared<const ContentDescriptorCatalog>(std::move(*definitions));
+        auto world = resolveContentWorld(*owner, "ppr_frontier:frontier", diagnostics);
+        PPR_TEST_ASSERT(world.has_value());
+
+        auto selected = selectWorldCatalog(std::move(owner), *world, parameters, diagnostics);
+        PPR_TEST_ASSERT(selected.has_value());
+
+        return std::make_shared<const ContentCatalog>(std::move(*selected));
+    }
+
+    void prepareFixturePresentation(WorldgenPreviewResult &preview, config::Diagnostics &diagnostics) {
+        const asset::RequestGeneration generation{preview.m_spec.m_revision + 1009u};
+        auto request = ContentPresentationRequest::start(
+            preview.m_catalog, generation, context::background(), diagnostics);
+        PPR_TEST_ASSERT(request.has_value());
+
+        auto result = request->finish(diagnostics);
+        PPR_TEST_ASSERT(result.has_value());
+
+        PPR_TEST_ASSERT(not preview.attachPresentation(*result, generation));
+        const auto previous = preview.m_presentation;
+        PPR_TEST_ASSERT(preview.m_presentation_generation == generation);
+        PPR_TEST_ASSERT(*generation != preview.m_spec.m_revision);
+
+        PPR_TEST_ASSERT(preview.attachPresentation(*result, {}) == std::errc::invalid_argument);
+        PPR_TEST_ASSERT(preview.m_presentation == previous and preview.m_presentation_generation == generation);
+
+        PPR_TEST_ASSERT(
+            preview.attachPresentation(*result, asset::RequestGeneration{*generation + 1u}) ==
+            std::errc::invalid_argument);
+        PPR_TEST_ASSERT(preview.m_presentation == previous and preview.m_presentation_generation == generation);
+
+        const auto catalog = preview.m_catalog;
+        preview.m_catalog = std::make_shared<const ContentCatalog>(*catalog);
+        PPR_TEST_ASSERT(preview.attachPresentation(*result, generation) == std::errc::invalid_argument);
+        PPR_TEST_ASSERT(preview.m_presentation == previous and preview.m_presentation_generation == generation);
+        preview.m_catalog = catalog;
+    }
+
     void verifySample(const WorldgenPreviewResult &sample, const sim::GlobalCellPos origin) {
         PPR_TEST_ASSERT(
             sample.m_visible ==
@@ -172,20 +239,22 @@ namespace pP::game::tests::detail::worldgen_preview {
             cells += count.m_cells;
             solid += count.m_material != 0u ? count.m_cells : 0u;
         }
+
         PPR_TEST_ASSERT(cells == 256u * 256u and solid == sample.m_solid_cells);
         PPR_TEST_ASSERT(sample.m_geometry.m_instances.empty());
         PPR_TEST_ASSERT(not sample.m_omissions.empty());
         PPR_TEST_ASSERT(sample.m_known_scratch_peak_bytes > 0u and sample.m_known_retained_payload_bytes > 0u);
 
-        // Eight metres at 3:1 is a24-cell formation; its complete candidate
-        // roots and four-cell support/validation ring must be resident.
-        constexpr u32 reach = 28u;
+        // The eight-metre formation uses this preview's actual cell size. Its
+        // complete roots and four-cell support/validation ring must be resident.
+        const auto formation_length = static_cast<u32>(std::ceil(8.0 / sample.m_plan.recipe().m_cell_size_m));
+        const u32 reach = formation_length + 4u;
         const auto &domain = sample.m_formation_domain;
         const auto &support = sample.m_support;
-        PPR_TEST_ASSERT(domain.m_left <= (origin.m_x > 24u ? origin.m_x - 24u : 0u));
-        PPR_TEST_ASSERT(domain.m_bottom <= (origin.m_y > 24u ? origin.m_y - 24u : 0u));
-        PPR_TEST_ASSERT(domain.m_right >= std::min(sim::kWorldEdge, origin.m_x + 256u + 24u));
-        PPR_TEST_ASSERT(domain.m_top >= std::min(sim::kWorldEdge, origin.m_y + 256u + 24u));
+        PPR_TEST_ASSERT(domain.m_left <= (origin.m_x > formation_length ? origin.m_x - formation_length : 0u));
+        PPR_TEST_ASSERT(domain.m_bottom <= (origin.m_y > formation_length ? origin.m_y - formation_length : 0u));
+        PPR_TEST_ASSERT(domain.m_right >= std::min(sim::kWorldEdge, origin.m_x + 256u + formation_length));
+        PPR_TEST_ASSERT(domain.m_top >= std::min(sim::kWorldEdge, origin.m_y + 256u + formation_length));
         PPR_TEST_ASSERT(support.m_left <= (domain.m_left > reach ? domain.m_left - reach : 0u));
         PPR_TEST_ASSERT(support.m_bottom <= (domain.m_bottom > reach ? domain.m_bottom - reach : 0u));
         PPR_TEST_ASSERT(support.m_right >= std::min(sim::kWorldEdge, domain.m_right + reach));
@@ -197,6 +266,7 @@ namespace pP::game::tests::detail::worldgen_preview {
             }
         }
     }
+
     void verifyImages(const WorldgenPreviewResult &sample, const std::filesystem::path &directory) {
         constexpr std::string_view header{"P6\n256 256\n255\n"};
         constexpr std::size_t image_bytes = 256u * 256u * 3u;
@@ -208,7 +278,7 @@ namespace pP::game::tests::detail::worldgen_preview {
             PPR_TEST_ASSERT(bytes.starts_with(header) and bytes.size() == header.size() + image_bytes);
         }
 
-        const u32 biome_rgba = sample.m_catalog.biomes()[sample.m_biome_index].m_preview_color_rgba;
+        const u32 biome_rgba = sample.m_catalog->biomes()[sample.m_biome_index].m_preview_color_rgba;
         bool unequal_rows{};
 
         for (u32 row = 0u; row < 256u; ++row) {
@@ -217,7 +287,7 @@ namespace pP::game::tests::detail::worldgen_preview {
                 const u32 x = sample.m_visible.m_left + column;
                 const auto cell = sample.m_grid.getCell({x, y});
                 PPR_TEST_ASSERT(cell.has_value());
-                const auto *const material = sample.m_catalog.findMaterial(cell->m_element);
+                const auto *const material = sample.m_catalog->findMaterial(cell->m_element);
                 const u32 rgba = material ? material->m_color_rgba : 0u;
                 const std::size_t pixel = header.size() + (row * 256u + column) * 3u;
                 for (u32 channel = 0u; channel < 3u; ++channel) {
@@ -237,27 +307,35 @@ namespace pP::game::tests::detail::worldgen_preview {
 
     PPR_UNIT_TEST (bounded_samples_replay_and_export_the_exact_visible_draft) {
         const auto root = hal::process::currentExecutablePath().parent_path() / "worldgen/default";
+        const std::filesystem::path roots[] = {root};
         config::Diagnostics diagnostics;
-        auto source = loadContentPackSource(root, diagnostics);
-        PPR_TEST_ASSERT(source.has_value());
-        auto &biomes = source->m_documents[static_cast<std::size_t>(EContentDocument::biomes)];
+        auto loaded = loadContentSourceSet(roots, diagnostics);
+        PPR_TEST_ASSERT(loaded.has_value());
+        auto source = loaded->source();
+        const auto biome_id = loaded->packOwner()->resolve(
+            "ppr_frontier", "biome_hearth", sim::asset::kBiomeKind, diagnostics);
+        PPR_TEST_ASSERT(biome_id.has_value());
+        auto biome = std::ranges::find(
+            source.m_descriptors, (*biome_id)->m_descriptor, &asset::DescriptorSource::m_path);
+        PPR_TEST_ASSERT(biome != source.m_descriptors.end());
         const auto patch = config::patchScalar(
-            biomes.m_bytes, "biomes.hearth.formation.length_m", config::FileValue::floating(8.0),
-            biomes.m_path.string(), diagnostics);
+            biome->m_bytes, "definition.formation.length_m", config::FileValue::floating(8.0), biome->m_path.string(),
+            diagnostics);
         PPR_TEST_ASSERT(patch.has_value());
-        auto edited = config::applySourcePatch(biomes.m_bytes, *patch);
+        auto edited = config::applySourcePatch(biome->m_bytes, *patch);
         PPR_TEST_ASSERT(edited.has_value());
-        biomes.m_bytes = std::move(*edited);
-        const auto catalog = loadContentCatalog(root, *source, diagnostics);
-        PPR_TEST_ASSERT(catalog.has_value());
+        biome->m_bytes = std::move(*edited);
 
-        const WorldgenPreviewSpec spec{"frontier", "hearth", 0xfedcba9876543210ull, 73u, {1879u, 2993u}};
-        auto sample = prepareWorldgenPreview(*catalog, spec);
+        const sim::definition::GenerationCompileParameters parameters{0.5, 2.0, 0.3, 0.7};
+        const auto catalog = selectFixture(source, diagnostics, parameters);
+
+        const WorldgenPreviewSpec spec{"ppr_frontier:frontier", "hearth", 0xfedcba9876543210ull, 73u, {1879u, 2993u}};
+        auto sample = prepareWorldgenPreview(catalog, spec);
         PPR_TEST_ASSERT(sample.has_value());
         PPR_TEST_ASSERT(sample->m_plan.recipe().m_biomes[sample->m_biome_index].m_formation_length_m == 8.0);
         verifySample(*sample, spec.m_origin);
         {
-            const auto replay = prepareWorldgenPreview(*catalog, spec);
+            const auto replay = prepareWorldgenPreview(catalog, spec);
             PPR_TEST_ASSERT(replay.has_value() and replay->m_checksum == sample->m_checksum);
             PPR_TEST_ASSERT(
                 replay->m_support == sample->m_support and replay->m_formation_domain == sample->m_formation_domain);
@@ -267,40 +345,64 @@ namespace pP::game::tests::detail::worldgen_preview {
                 }
             }
         }
+
         for (const sim::GlobalCellPos origin: {sim::GlobalCellPos{0u, 0u}, sim::GlobalCellPos{3840u, 3840u}}) {
             auto boundary_spec = spec;
             boundary_spec.m_origin = origin;
-            const auto boundary = prepareWorldgenPreview(*catalog, boundary_spec);
+            const auto boundary = prepareWorldgenPreview(catalog, boundary_spec);
             PPR_TEST_ASSERT(boundary.has_value());
             verifySample(*boundary, origin);
         }
         auto invalid_spec = spec;
         invalid_spec.m_origin.m_x = 3841u;
-        const auto out_of_bounds = prepareWorldgenPreview(*catalog, invalid_spec);
+        const auto out_of_bounds = prepareWorldgenPreview(catalog, invalid_spec);
         PPR_TEST_ASSERT(not out_of_bounds and out_of_bounds.error() == std::errc::result_out_of_range);
         invalid_spec = spec;
         invalid_spec.m_biome = "missing-biome";
-        const auto missing_biome = prepareWorldgenPreview(*catalog, invalid_spec);
+        const auto missing_biome = prepareWorldgenPreview(catalog, invalid_spec);
         PPR_TEST_ASSERT(not missing_biome and missing_biome.error() == std::errc::invalid_argument);
         invalid_spec = spec;
         invalid_spec.m_profile = "missing-profile";
-        const auto missing_profile = prepareWorldgenPreview(*catalog, invalid_spec);
+        const auto missing_profile = prepareWorldgenPreview(catalog, invalid_spec);
         PPR_TEST_ASSERT(not missing_profile and missing_profile.error() == std::errc::invalid_argument);
         const auto [context, cancel] = context::withCancel(context::background());
         cancel();
-        const auto cancelled = prepareWorldgenPreview(*catalog, spec, context);
+        const auto cancelled = prepareWorldgenPreview(catalog, spec, context);
         PPR_TEST_ASSERT(not cancelled and cancelled.error() == std::errc::operation_canceled);
 
         OutputDirectory output;
         const auto successful = output.m_root / "complete";
         const WorldgenPreviewDisplay display{670.5, 1040.0, 1.75, 0u};
-        PPR_TEST_ASSERT(not exportWorldgenPreview(*sample, *source, display, successful));
+        PPR_TEST_ASSERT(exportWorldgenPreview(*sample, source, display, successful) == std::errc::invalid_argument);
+        PPR_TEST_ASSERT(not std::filesystem::exists(successful));
+        PPR_TEST_ASSERT(sample->m_presentation_generation == asset::RequestGeneration{});
+
+        prepareFixturePresentation(*sample, diagnostics);
+
+        const auto generation = sample->m_presentation_generation;
+        sample->m_presentation_generation = asset::RequestGeneration{*generation + 1u};
+        PPR_TEST_ASSERT(exportWorldgenPreview(*sample, source, display, successful) == std::errc::invalid_argument);
+        PPR_TEST_ASSERT(not std::filesystem::exists(successful));
+        sample->m_presentation_generation = generation;
+
+        const auto selected_owner = sample->m_catalog;
+        sample->m_catalog = std::make_shared<const ContentCatalog>(*selected_owner);
+        PPR_TEST_ASSERT(exportWorldgenPreview(*sample, source, display, successful) == std::errc::invalid_argument);
+        PPR_TEST_ASSERT(not std::filesystem::exists(successful));
+        sample->m_catalog = selected_owner;
+
+        PPR_TEST_ASSERT(not exportWorldgenPreview(*sample, source, display, successful));
         verifyImages(*sample, successful);
-        PPR_TEST_ASSERT(readBytes(successful / "source/pack.toml") == source->m_manifest_source.m_bytes);
-        for (std::size_t i = 0u; i < source->m_documents.size(); ++i) {
+        const auto exported_root = successful / "source/packs/pack-ppr_frontier";
+        PPR_TEST_ASSERT(readBytes(exported_root / "pack.toml") == source.m_packs.front().m_manifest.m_bytes);
+        for (const auto &descriptor: source.m_descriptors) {
             PPR_TEST_ASSERT(
-                readBytes(successful / "source" / source->m_manifest.m_files[i]) == source->m_documents[i].m_bytes);
+                readBytes(exported_root / descriptor.m_path.lexically_relative(source.m_packs.front().m_root)) ==
+                descriptor.m_bytes);
         }
+
+        PPR_TEST_ASSERT(
+            readBytes(successful / "source/pack-set.toml").find("packs/pack-ppr_frontier") != std::string::npos);
         const auto report = readBytes(successful / "preview.json");
         PPR_TEST_ASSERT(report.find("\"semantics\":\"Biome sample\"") != std::string::npos);
         PPR_TEST_ASSERT(report.find("\"revision\":73") != std::string::npos);
@@ -308,13 +410,35 @@ namespace pP::game::tests::detail::worldgen_preview {
         PPR_TEST_ASSERT(report.find("\"temperature_max_k\":1000") != std::string::npos);
         PPR_TEST_ASSERT(
             report.find(std::format("\"cell_checksum\":\"{:016x}\"", sample->m_checksum)) != std::string::npos);
+        PPR_TEST_ASSERT(report.find("\"export_version\":2") != std::string::npos);
+        PPR_TEST_ASSERT(report.find("\"cell_size_m\":0.5") != std::string::npos);
+        PPR_TEST_ASSERT(report.find("\"cells_per_metre\":2") != std::string::npos);
+        PPR_TEST_ASSERT(report.find("\"reference_thickness_m\":2") != std::string::npos);
+        PPR_TEST_ASSERT(report.find("\"actor_half_width_m\":0.3") != std::string::npos);
+        PPR_TEST_ASSERT(report.find("\"actor_half_height_m\":0.7") != std::string::npos);
+        PPR_TEST_ASSERT(report.find("exported pack-set alone is not runnable") != std::string::npos);
+        PPR_TEST_ASSERT(report.find("\"numeric_fingerprint\":") != std::string::npos);
+        PPR_TEST_ASSERT(report.find("\"presentation_fingerprint\":") != std::string::npos);
+        PPR_TEST_ASSERT(report.find("\"settings_fingerprint\":") != std::string::npos);
+        for (const auto &entry: std::filesystem::recursive_directory_iterator(exported_root)) {
+            PPR_TEST_ASSERT(entry.path().extension() != ".png");
+        }
+
+        auto different_source = source;
+        different_source.m_descriptors.front().m_bytes += "\n# newer draft\n";
+        const auto mismatched_output = output.m_root / "mismatched";
+        PPR_TEST_ASSERT(
+            exportWorldgenPreview(*sample, different_source, display, mismatched_output) ==
+            std::errc::invalid_argument);
+        PPR_TEST_ASSERT(not std::filesystem::exists(mismatched_output));
+
         const auto completion = readBytes(successful / "complete.json");
         PPR_TEST_ASSERT(completion.find("\"revision\":73") != std::string::npos);
-        PPR_TEST_ASSERT(exportWorldgenPreview(*sample, *source, display, successful) == std::errc::file_exists);
+        PPR_TEST_ASSERT(exportWorldgenPreview(*sample, source, display, successful) == std::errc::file_exists);
         PPR_TEST_ASSERT(readBytes(successful / "complete.json") == completion);
         const auto cancelled_output = output.m_root / "cancelled";
         PPR_TEST_ASSERT(
-            exportWorldgenPreview(*sample, *source, display, cancelled_output, context.get()) ==
+            exportWorldgenPreview(*sample, source, display, cancelled_output, context.get()) ==
             std::errc::operation_canceled);
         PPR_TEST_ASSERT(not std::filesystem::exists(cancelled_output / "complete.json"));
     };
@@ -328,27 +452,38 @@ namespace pP::game::tests::detail::worldgen_preview {
             }
         } clock;
         const auto root = hal::process::currentExecutablePath().parent_path() / "worldgen/default";
+        const std::filesystem::path roots[] = {root};
         config::Diagnostics diagnostics;
-        auto source = loadContentPackSource(root, diagnostics);
-        PPR_TEST_ASSERT(source.has_value());
-        // Exercise the maximum supported formation probability and length across
-        // tile/chunk seams, retaining every authored production terrain phase.
-        auto &bytes = source->m_documents[static_cast<std::size_t>(EContentDocument::biomes)].m_bytes;
-        for (const std::string_view key: {"formation_probability = ", "formation_length_m = "}) {
-            std::size_t offset{};
-            while ((offset = bytes.find(key, offset)) != std::string::npos) {
-                const auto begin = offset + key.size(), end = bytes.find_first_of("\r\n", begin);
-                PPR_TEST_ASSERT(end != std::string::npos);
-                const std::string_view value = key == "formation_probability = " ? "0.2" : "8.0";
-                bytes.replace(begin, end - begin, value);
-                offset = begin + value.size();
+        auto loaded = loadContentSourceSet(roots, diagnostics);
+        PPR_TEST_ASSERT(loaded.has_value());
+        auto source = loaded->source();
+        // Exercise formation limits in every declared Biome descriptor, keeping
+        // the full explicit palette and every other production terrain phase.
+        for (const auto &entry: loaded->packOwner()->assets()) {
+            if (entry.m_kind != sim::asset::kBiomeKind) {
+                continue;
+            }
+
+            auto descriptor = std::ranges::find(
+                source.m_descriptors, entry.m_descriptor, &asset::DescriptorSource::m_path);
+            PPR_TEST_ASSERT(descriptor != source.m_descriptors.end());
+            for (const auto &[path, value]:
+                {std::pair{"definition.formation.probability", 0.2}, std::pair{"definition.formation.length_m", 8.0}}) {
+                auto patch = config::patchScalar(
+                    descriptor->m_bytes, path, config::FileValue::floating(value), descriptor->m_path.string(),
+                    diagnostics);
+                PPR_TEST_ASSERT(patch.has_value());
+                auto changed = config::applySourcePatch(descriptor->m_bytes, *patch);
+                PPR_TEST_ASSERT(changed.has_value());
+                descriptor->m_bytes = std::move(*changed);
             }
         }
-        const auto catalog = loadContentCatalog(root, *source, diagnostics);
-        PPR_TEST_ASSERT(catalog.has_value());
+
+        const auto catalog = selectFixture(source, diagnostics);
         WorldgenPreviewSpec spec{
-            "frontier", "ignored-in-world-mode", 42u, 9u, {127u, 127u}, EWorldgenPreviewMode::whole_world_crop};
-        const auto missing = prepareWorldgenPreview(*catalog, spec);
+            "ppr_frontier:frontier", "ignored-in-world-mode", 42u, 9u, {127u, 127u},
+            EWorldgenPreviewMode::whole_world_crop};
+        const auto missing = prepareWorldgenPreview(catalog, spec);
         PPR_TEST_ASSERT(not missing and missing.error() == std::errc::invalid_argument);
         ParallelScheduler generation_pool{
             "Preview generation test", std::max(1u, std::min(8u, std::thread::hardware_concurrency())),
@@ -388,6 +523,7 @@ namespace pP::game::tests::detail::worldgen_preview {
                 if (not candidate) {
                     continue;
                 }
+
                 const auto before = raster->chunk({cx, cy});
                 PPR_TEST_ASSERT(before.has_value());
                 for (u32 index = 0u; index < sim::kCellsPerChunk; ++index) {
@@ -400,12 +536,14 @@ namespace pP::game::tests::detail::worldgen_preview {
                 }
             }
         }
+
         PPR_TEST_ASSERT(formation.has_value());
         const auto cropOrigin = [](const sim::GlobalCellPos center) {
             return sim::GlobalCellPos{
                 std::min(center.m_x > 127u ? center.m_x - 127u : 0u, sim::kWorldEdge - kWorldgenPreviewEdge),
                 std::min(center.m_y > 127u ? center.m_y - 127u : 0u, sim::kWorldEdge - kWorldgenPreviewEdge)};
         };
+
         PPR_TEST_ASSERT(not world.m_matter.m_regions.empty());
         const auto &matter_region = world.m_matter.m_regions.front();
         PPR_TEST_ASSERT(not matter_region.m_spans.empty());
@@ -428,7 +566,7 @@ namespace pP::game::tests::detail::worldgen_preview {
             spec.m_origin = origin;
             ++spec.m_revision;
             const u32 clock_calls = clock.m_calls;
-            const auto crop = prepareWorldgenPreview(*catalog, spec, nullptr, *prepared);
+            const auto crop = prepareWorldgenPreview(catalog, spec, nullptr, *prepared);
             PPR_TEST_ASSERT(crop.has_value() and clock.m_calls == clock_calls);
             PPR_TEST_ASSERT(crop->m_spec == spec and crop->m_exact_world == *prepared);
             PPR_TEST_ASSERT(crop->m_grid.residentChunkCount() <= 16u);
@@ -438,6 +576,7 @@ namespace pP::game::tests::detail::worldgen_preview {
             for (const auto count: crop->m_material_counts) {
                 cell_count += count.m_cells;
             }
+
             PPR_TEST_ASSERT(cell_count == 256u * 256u);
             PPR_TEST_ASSERT(crop->m_known_world_cache_payload_bytes >= world.m_report.m_retained_known_payload_bytes);
             for (u32 y = crop->m_visible.m_bottom; y < crop->m_visible.m_top; ++y) {
@@ -450,12 +589,14 @@ namespace pP::game::tests::detail::worldgen_preview {
                         sim::generationBiomeAt(world.m_plan, world.m_layout, xm, ym));
                 }
             }
+
             for (const auto &batch: crop->m_particles.m_chunks) {
                 const auto expected = std::ranges::find(
                     (*prepared)->m_particles.m_chunks, batch.m_position, &sim::MatterParticleBatch::m_position);
                 PPR_TEST_ASSERT(expected != (*prepared)->m_particles.m_chunks.end());
                 PPR_TEST_ASSERT(expected->m_particles == batch.m_particles);
             }
+
             for (const auto &region: crop->m_matter.m_regions) {
                 const auto expected = std::ranges::find(
                     world.m_matter.m_regions, region.m_identity, &sim::InitialMatterRegion::m_identity);
@@ -469,6 +610,7 @@ namespace pP::game::tests::detail::worldgen_preview {
                         span.m_end_x <= crop->m_visible.m_right);
                 }
             }
+
             if (origin == matter_origin) {
                 PPR_TEST_ASSERT(not crop->m_matter.m_regions.empty() and not crop->m_particles.m_chunks.empty());
                 const auto clipped_region = std::ranges::find(
@@ -490,7 +632,7 @@ namespace pP::game::tests::detail::worldgen_preview {
         }
         auto mismatch = spec;
         ++mismatch.m_seed;
-        const auto rejected = prepareWorldgenPreview(*catalog, mismatch, nullptr, *prepared);
+        const auto rejected = prepareWorldgenPreview(catalog, mismatch, nullptr, *prepared);
         PPR_TEST_ASSERT(not rejected and rejected.error() == std::errc::invalid_argument);
         const auto [context, cancel] = context::withCancel(context::background());
         cancel();
@@ -498,15 +640,17 @@ namespace pP::game::tests::detail::worldgen_preview {
         const auto cancelled_world = prepareWorldgenPreviewWorld(*catalog, spec, clock, context);
         PPR_TEST_ASSERT(not cancelled_world and cancelled_world.error() == std::errc::operation_canceled);
         PPR_TEST_ASSERT(clock.m_calls == clock_calls);
-        const auto cancelled_crop = prepareWorldgenPreview(*catalog, spec, context, *prepared);
+        const auto cancelled_crop = prepareWorldgenPreview(catalog, spec, context, *prepared);
         PPR_TEST_ASSERT(not cancelled_crop and cancelled_crop.error() == std::errc::operation_canceled);
 
         spec.m_origin = cropOrigin(*formation);
-        const auto crop = prepareWorldgenPreview(*catalog, spec, nullptr, *prepared);
+        auto crop = prepareWorldgenPreview(catalog, spec, nullptr, *prepared);
         PPR_TEST_ASSERT(crop.has_value());
+        prepareFixturePresentation(*crop, diagnostics);
+
         OutputDirectory output;
         const auto directory = output.m_root / "exact";
-        PPR_TEST_ASSERT(not exportWorldgenPreview(*crop, *source, {}, directory));
+        PPR_TEST_ASSERT(not exportWorldgenPreview(*crop, source, {}, directory));
         const auto report = readBytes(directory / "preview.json");
         PPR_TEST_ASSERT(report.find("\"semantics\":\"Exact whole-world crop\"") != std::string::npos);
         PPR_TEST_ASSERT(report.find("\"whole_world_preparation\":") != std::string::npos);
@@ -529,6 +673,7 @@ namespace pP::game::tests::detail::worldgen_preview {
                 }
             }
         }
+
         PPR_TEST_ASSERT(std::filesystem::exists(directory / "complete.json"));
     };
 }
@@ -540,6 +685,7 @@ namespace pP::game::tests {
                 detail::worldgen_preview::workshop_widgets_block_invalid_actions_and_focus_nested_property_errors,
                 detail::worldgen_preview::whole_world_crops_preserve_production_formations_seams_and_matter});
     };
+
     const UnitTest &gameWorldgenPreviewTests() noexcept {
         return worldgen_preview;
     }

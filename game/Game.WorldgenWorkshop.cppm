@@ -9,12 +9,19 @@ import game.colony.worldgen_preview;
 import std;
 
 export namespace pP::colony {
+    // ------------------------------------------------------------------
+    // asynchronous authoring workshop
+    // ------------------------------------------------------------------
+
     /// Main-lane authoring owner; worker requests contain owned immutable snapshots.
     class WorldgenWorkshop {
     public:
+        // construction:
         explicit WorldgenWorkshop(
             ParallelScheduler &pool, const ITimerClock &clock, ParallelScheduler *generation_pool = nullptr);
         ~WorldgenWorkshop() noexcept;
+
+        // queries:
         [[nodiscard]] ContentAuthoringSession *session() noexcept;
         [[nodiscard]] const WorldgenPreviewResult *preview() const noexcept;
         [[nodiscard]] std::shared_ptr<const WorldgenPreviewResult> previewHandle() const noexcept;
@@ -23,8 +30,12 @@ export namespace pP::colony {
         [[nodiscard]] std::span<const config::Diagnostic> propertyDiagnostics() const noexcept;
         [[nodiscard]] bool draftInvalid() const noexcept;
         [[nodiscard]] bool busy() const noexcept;
+
+        // operations:
         [[nodiscard]] std::error_code open(
             std::filesystem::path root, std::optional<u64> discard_revision = std::nullopt);
+        [[nodiscard]] std::error_code open(
+            std::span<const std::filesystem::path> roots, std::optional<u64> discard_revision = std::nullopt);
         [[nodiscard]] std::error_code validate();
         [[nodiscard]] std::error_code requestPreview(WorldgenPreviewSpec spec, EGridDiagnosticMode mode);
         void configureLivePreview(bool enabled, WorldgenPreviewSpec spec, EGridDiagnosticMode mode);
@@ -39,18 +50,22 @@ export namespace pP::colony {
     private:
         struct Request;
         struct State;
+
+        // execution and owned results:
         ParallelScheduler &m_pool;
         const ITimerClock &m_clock;
         ParallelScheduler *m_generation_pool;
         std::shared_ptr<const WorldgenPreviewWorld> m_world_cache{};
         std::optional<WorldgenPreviewSpec> m_live_spec{};
-        EGridDiagnosticMode m_live_mode{};
         TimePoint m_live_due{};
-        bool m_live_enabled{}, m_live_pending{}, m_validation_pending{};
         std::unique_ptr<ContentAuthoringSession> m_session{};
         std::shared_ptr<State> m_running{}, m_completed{}, m_last_preview{}, m_retired_preview{};
         std::unique_ptr<Request> m_replacement{};
         std::future<std::error_code> m_task{};
+
+        // Only this external main-lane owner retains an unfinished asset request.
+        // Worker State values never own its coordinator or destructor drain.
+        std::optional<ContentPresentationRequest> m_images{};
         std::unique_ptr<GridPass::GridStagedFrame> m_presentation{};
         std::string m_status{"Open an authored pack root to begin."}, m_diagnostics{};
         config::Diagnostics m_property_diagnostics{64u};
@@ -59,7 +74,10 @@ export namespace pP::colony {
         std::filesystem::path m_invalid_draft_root{};
         u64 m_invalid_draft_revision{};
         u64 m_next_request{1u}, m_latest_request{};
-        bool m_closing{};
+        EGridDiagnosticMode m_live_mode{};
+        bool m_live_enabled{}, m_live_pending{}, m_validation_pending{}, m_closing{};
+
+        // admission:
         [[nodiscard]] std::error_code queue_(Request request);
         [[nodiscard]] bool explicitOperationPending_() const noexcept;
     };

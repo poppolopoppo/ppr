@@ -158,7 +158,7 @@ namespace pP::colony {
                 for (u32 x = result.m_visible.m_left; x < result.m_visible.m_right; ++x) {
                     const auto cell = result.m_grid.getCell({x, y});
                     PPR_RETURN_ERROR_ON_FAIL(BiomeSamplePreview, cell);
-                    const auto *const material = result.m_catalog.findMaterial(cell->m_element);
+                    const auto *const material = result.m_catalog->findMaterial(cell->m_element);
                     if (not std::isfinite(cell->m_temperature) or
                         (cell->m_element != 0u and
                             (material == nullptr or material->m_representation != EMaterialRepresentation::terrain))) {
@@ -192,8 +192,29 @@ namespace pP::colony {
     }
 
     // ------------------------------------------------------------------
-    // preview result geometry
+    // preview result presentation and geometry
     // ------------------------------------------------------------------
+
+    std::error_code WorldgenPreviewResult::attachPresentation(
+        std::shared_ptr<const ContentPresentation> presentation, const asset::RequestGeneration expected_generation) {
+        PPR_RETURN_ERROR_ON_FAIL(
+            BiomeSamplePreview, not m_catalog or
+                                        not presentation or
+                                        expected_generation == asset::RequestGeneration{} or
+                                        presentation->catalog() != m_catalog or
+                                        presentation->generation() != expected_generation or
+                                        not m_catalog->contentFingerprint() or
+                                        not m_catalog->selectedRecipe() or
+                                        not m_catalog->findWorld(m_spec.m_profile) or
+                                        presentation->catalog()->worldId() != m_catalog->worldId() or
+                                        presentation->catalog()->contentFingerprint() != m_catalog->contentFingerprint()
+                                    ? std::make_error_code(std::errc::invalid_argument)
+                                    : std::error_code{});
+
+        m_presentation = std::move(presentation);
+        m_presentation_generation = expected_generation;
+        return {};
+    }
 
     const sim::GenerationGeometry &WorldgenPreviewResult::geometry() const noexcept {
         return m_exact_world ? m_exact_world->m_world.m_geometry : m_geometry;
@@ -269,13 +290,22 @@ namespace pP::colony {
     Expected<WorldgenPreviewResult> prepareWorldgenPreview(
         ContentCatalog catalog, WorldgenPreviewSpec spec, const SharedContext &context,
         std::shared_ptr<const WorldgenPreviewWorld> world) {
+        return prepareWorldgenPreview(
+            std::make_shared<const ContentCatalog>(std::move(catalog)), std::move(spec), context, std::move(world));
+    }
+
+    Expected<WorldgenPreviewResult> prepareWorldgenPreview(
+        std::shared_ptr<const ContentCatalog> catalog, WorldgenPreviewSpec spec, const SharedContext &context,
+        std::shared_ptr<const WorldgenPreviewWorld> world) {
         PPR_RETURN_UNEXPECTED_ON_FAIL(BiomeSamplePreview, context ? context->error() : std::error_code{});
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            BiomeSamplePreview, not catalog ? std::make_error_code(std::errc::invalid_argument) : std::error_code{});
         if (spec.m_origin.m_x > sim::kWorldEdge - kWorldgenPreviewEdge or
             spec.m_origin.m_y > sim::kWorldEdge - kWorldgenPreviewEdge) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(BiomeSamplePreview, std::errc::result_out_of_range);
         }
 
-        auto plan = compileWorldPlan(catalog, spec.m_profile, spec.m_seed);
+        auto plan = compileWorldPlan(*catalog, spec.m_profile, spec.m_seed);
         PPR_RETURN_UNEXPECTED_ON_FAIL(BiomeSamplePreview, plan);
 
         const sim::GenerationCellBounds visible{
@@ -283,7 +313,7 @@ namespace pP::colony {
             spec.m_origin.m_y + kWorldgenPreviewEdge};
 
         if (spec.m_mode == EWorldgenPreviewMode::whole_world_crop) {
-            if (not world or not world->matches(catalog, spec)) {
+            if (not world or not world->matches(*catalog, spec)) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(BiomeSamplePreview, std::errc::invalid_argument);
             }
 
@@ -331,7 +361,7 @@ namespace pP::colony {
             result.m_filter_halo_fine = filterHalo(result.m_plan);
             result.m_known_scratch_peak_bytes = std::max(scratch, world->m_known_preparation_scratch_peak_bytes);
 
-            for (const auto &key: result.m_catalog.findWorld(result.m_spec.m_profile)->m_rule_keys) {
+            for (const auto &key: result.m_catalog->findWorld(result.m_spec.m_profile)->m_rule_keys) {
                 result.m_participating_rules.push_back(key);
             }
 
@@ -344,12 +374,12 @@ namespace pP::colony {
             PPR_RETURN_UNEXPECTED_ON_FAIL(BiomeSamplePreview, std::errc::invalid_argument);
         }
 
-        const auto biome = std::ranges::find(catalog.biomes(), spec.m_biome, &BiomeDefinition::m_key);
-        if (biome == catalog.biomes().end()) {
+        const auto biome = std::ranges::find(catalog->biomes(), spec.m_biome, &BiomeDefinition::m_key);
+        if (biome == catalog->biomes().end()) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(BiomeSamplePreview, std::errc::invalid_argument);
         }
 
-        const u32 biome_index = static_cast<u32>(biome - catalog.biomes().begin());
+        const u32 biome_index = static_cast<u32>(biome - catalog->biomes().begin());
 
         auto layout = sim::compileBiomeSampleLayout(*plan, biome_index, context);
         PPR_RETURN_UNEXPECTED_ON_FAIL(BiomeSamplePreview, layout);
@@ -401,7 +431,7 @@ namespace pP::colony {
             std::move(grid), visible, support, domain, biome_index};
         result.m_known_scratch_peak_bytes = scratch;
         result.m_filter_halo_fine = filterHalo(result.m_plan);
-        const auto *const profile = result.m_catalog.findWorld(result.m_spec.m_profile);
+        const auto *const profile = result.m_catalog->findWorld(result.m_spec.m_profile);
         for (u32 i = 0u; i < result.m_plan.recipe().m_rules.size(); ++i) {
             const auto &rule = result.m_plan.recipe().m_rules[i];
             const auto *const cave = std::get_if<sim::GenerationCave>(&rule.m_parameters);

@@ -5,6 +5,7 @@ module;
 module game.tests;
 
 import engine.core;
+import engine.asset;
 import game.config;
 
 import std;
@@ -111,6 +112,90 @@ namespace pP::game::tests::detail::compat {
             PPR_TEST_ASSERT(not resolveCli({selector, "--worldgen-acceptance"}, invalid));
             PPR_TEST_ASSERT(invalid.hasErrors());
         }
+    };
+
+    PPR_UNIT_TEST (worldgen_pack_set_and_qualified_world_are_explicit_inputs) {
+        Diagnostics diagnostics;
+        const auto invocation = resolveCli(
+            {"--validate-worldgen", "--worldgen-pack-set=sets/selection.toml", "--worldgen-profile=addon:frontier"},
+            diagnostics);
+        PPR_TEST_ASSERT(invocation.has_value());
+        PPR_TEST_ASSERT(invocation->m_game.m_value.m_worldgen_pack_set == "sets/selection.toml");
+        PPR_TEST_ASSERT(not invocation->m_game.m_value.m_worldgen_root);
+        PPR_TEST_ASSERT(invocation->m_game.m_value.m_worldgen_profile == "addon:frontier");
+
+        const std::string qualified = std::string(asset::QualifiedName::maximum_namespace_bytes, 'a') +
+                                      ":" +
+                                      std::string(config::kMaxKeyBytes, 'b');
+        const auto option = "--worldgen-profile=" + qualified;
+        Diagnostics boundary;
+        PPR_TEST_ASSERT(resolveCli({option.c_str()}, boundary).has_value());
+
+        const auto too_long = option + "b";
+        Diagnostics oversized;
+        PPR_TEST_ASSERT(not resolveCli({too_long.c_str()}, oversized));
+        PPR_TEST_ASSERT(oversized.entries().front().m_code == EConfigErrc::out_of_range);
+
+        Diagnostics conflict;
+        PPR_TEST_ASSERT(not resolveCli({"--worldgen-root=base", "--worldgen-pack-set=selection.toml"}, conflict));
+        PPR_TEST_ASSERT(conflict.hasErrors());
+        PPR_TEST_ASSERT(gameHelpText().find("worldgen-pack-set") != std::string::npos);
+    };
+
+    PPR_UNIT_TEST (pack_set_roots_are_relative_owned_and_never_discovered) {
+        const auto parent = hal::process::currentExecutablePath().parent_path();
+        std::filesystem::path directory;
+        static std::atomic<u32> ordinal{};
+        for (u32 attempt = 0u; attempt != 4096u; ++attempt) {
+            const auto candidate = parent / ("pack-selection-test-" + std::to_string(ordinal.fetch_add(1u)));
+            if (std::filesystem::create_directory(candidate)) {
+                directory = std::filesystem::canonical(candidate);
+                break;
+            }
+        }
+
+        PPR_TEST_ASSERT(not directory.empty());
+        PPR_DEFER {
+            std::error_code cleanup;
+            std::filesystem::remove_all(directory, cleanup);
+            PPR_TEST_ASSERT(not cleanup);
+        };
+
+        PPR_TEST_ASSERT(std::filesystem::create_directory(directory / "base"));
+        PPR_TEST_ASSERT(std::filesystem::create_directory(directory / "addon"));
+        const auto selection = directory / "selection.toml";
+        const auto write = [&](const std::string_view bytes) {
+            std::ofstream output{selection, std::ios::binary | std::ios::trunc};
+            output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+            PPR_TEST_ASSERT(output.good());
+        };
+
+        // Alias ordering is deterministic; neither root needs a discoverable
+        // manifest merely to resolve this application-owned selection file.
+        write("schema_version = 1\n[packs.z_addon]\nroot = 'addon'\n[packs.a_base]\nroot = 'base'\n");
+        GameSettings settings;
+        settings.m_worldgen_pack_set = selection.string();
+        Diagnostics diagnostics;
+        const auto roots = loadWorldgenRoots(settings, diagnostics);
+        PPR_TEST_ASSERT(roots and roots->size() == 2u);
+        PPR_TEST_ASSERT((*roots)[0u] == directory / "base");
+        PPR_TEST_ASSERT((*roots)[1u] == directory / "addon");
+
+        for (const std::string_view bytes:
+            {"schema_version = 1\n", "schema_version = 1\n[packs]\n",
+                "schema_version = 1\n[packs.a]\nroot = 'addon'\n[packs.b]\nroot = './addon'\n",
+                "schema_version = 1\n[packs.a]\nroot = 'missing'\n", "schema_version = 2\n[packs.a]\nroot = 'base'\n",
+                "schema_version = 1\n[packs.a]\nroot = 'base'\nunknown = true\n"}) {
+            write(bytes);
+            Diagnostics invalid;
+            PPR_TEST_ASSERT(not loadWorldgenRoots(settings, invalid));
+        }
+
+        std::filesystem::resize_file(selection, asset::kMaxManifestBytes + 1u);
+        Diagnostics large;
+        const auto oversized = loadWorldgenRoots(settings, large);
+        PPR_TEST_ASSERT(not oversized and oversized.error() == std::errc::file_too_large);
+        PPR_TEST_ASSERT(roots->front() == directory / "base");
     };
 
     PPR_UNIT_TEST (worldgen_preview_is_distinct_and_requires_explicit_output) {
@@ -557,6 +642,8 @@ namespace pP::game::tests {
         _.recurse({
             detail::compat::selectors_pick_commands,
             detail::compat::worldgen_validation_invocation,
+            detail::compat::worldgen_pack_set_and_qualified_world_are_explicit_inputs,
+            detail::compat::pack_set_roots_are_relative_owned_and_never_discovered,
             detail::compat::worldgen_preview_is_distinct_and_requires_explicit_output,
             detail::compat::worldgen_acceptance_is_explicit_and_interactive_only,
             detail::compat::retired_workload_commands_rejected,

@@ -6,6 +6,7 @@ import game.colony.agents;
 import game.colony.buildings;
 import game.colony.pathfinding;
 import game.colony.metric;
+import engine.asset;
 import std;
 namespace pP::colony {
     PPR_DEFINE_LOG_CATEGORY(CheckpointValidation, info, none);
@@ -181,8 +182,10 @@ namespace pP::colony {
         PPR_RETURN_ERROR_ON_FAIL(CheckpointValidation, context ? context->error() : std::error_code{});
         PPR_RETURN_ERROR_ON_FAIL(CheckpointValidation, validateWorldMetric(descriptor.m_metric));
         PPR_RETURN_ERROR_ON_FAIL(
-            CheckpointValidation, descriptor.m_profile.size() <= 1024u and
-                                          descriptor.m_pack_schema_version == kContentSchemaVersion and
+            CheckpointValidation, descriptor.m_profile.size() <= asset::QualifiedName::reference_domain.m_max_length and
+                                          descriptor.m_profile.find(':') != std::string::npos and
+                                          asset::qualifyName(descriptor.m_profile, {}) and
+                                          descriptor.m_pack_schema_version == asset::Manifest::schema_version and
                                           descriptor.m_generator_version == sim::kGeneratorAlgorithmVersion and
                                           catalog.contentFingerprint() and
                                           *catalog.contentFingerprint() == descriptor.m_content_fingerprint and
@@ -199,7 +202,7 @@ namespace pP::colony {
             PPR_RETURN_ERROR_ON_FAIL(
                 CheckpointValidation, ((material.m_id == 0u and material.m_key == "vacuum") or
                                           (authored and authored->m_key == material.m_key)) and
-                                              material.m_key.size() <= 1024u and
+                                              asset::validLocalName(material.m_key) and
                                               (first_id or material.m_id > previous_id)
                                           ? std::error_code{}
                                           : incompatible);
@@ -219,6 +222,7 @@ namespace pP::colony {
         auto plan = compileWorldPlan(catalog, descriptor.m_profile, descriptor.m_seed);
         PPR_RETURN_ERROR_ON_FAIL(CheckpointValidation, plan);
         const auto &recipe = plan->recipe();
+        PPR_RETURN_ERROR_ON_FAIL(CheckpointValidation, validateRuntimeWorldParameters(recipe));
         PPR_RETURN_ERROR_ON_FAIL(
             CheckpointValidation, sim::validateMatterParticles(
                                       checkpoint.m_particles, recipe.m_materials, recipe.m_cell_size_m, context,

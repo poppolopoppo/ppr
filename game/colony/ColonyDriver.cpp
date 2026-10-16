@@ -1130,8 +1130,8 @@ namespace pP::colony {
                 entity, sim::BodyDefinition{
                             .m_motion = sim::EMotionKind::dynamic,
                             .m_geometry = sim::EBodyGeometry::box,
-                            .m_half_width = 0.4f,
-                            .m_half_height = 0.9f,
+                            .m_half_width = static_cast<float>(kWorldCompileParameters.m_actor_half_width_m),
+                            .m_half_height = static_cast<float>(kWorldCompileParameters.m_actor_half_height_m),
                             .m_fixed_rotation = true});
             controlled = entity;
         } else {

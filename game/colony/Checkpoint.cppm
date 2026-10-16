@@ -12,7 +12,10 @@ export namespace pP::colony {
     // world checkpoint
     // ------------------------------------------------------------------
 
-    inline constexpr u32 kWorldCheckpointVersion = 3u;
+    // Version 4 identifies named asset packs and numeric-only content identity.
+    // Earlier monolithic-pack envelopes are unsupported; raw sim snapshots have
+    // their independent version and codec.
+    inline constexpr u32 kWorldCheckpointVersion = 4u;
     inline constexpr u64 kMaxWorldCheckpointBytes = 256u * 1024u * 1024u;
 
     // ------------------------------------------------------------------
@@ -60,4 +63,9 @@ export namespace pP::colony {
     [[nodiscard]] Expected<std::unique_ptr<ColonyDriver>> restoreWorldCheckpoint(
         ContentCatalog catalog, WorldCheckpoint checkpoint, u64 world_generation,
         const sim::GenerationExecution &execution = {});
+    /// A supplied presentation must belong to this exact catalog and carry the
+    /// explicitly requested world_generation stamp. Absence is numeric/headless.
+    [[nodiscard]] Expected<std::unique_ptr<ColonyDriver>> restoreWorldCheckpoint(
+        std::shared_ptr<const ContentCatalog> catalog, WorldCheckpoint checkpoint, u64 world_generation,
+        const sim::GenerationExecution &execution = {}, std::shared_ptr<const ContentPresentation> presentation = {});
 }

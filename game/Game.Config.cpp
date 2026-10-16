@@ -6,6 +6,7 @@ module game.config;
 
 import engine.app;
 import engine.core;
+import engine.asset;
 import game.display;
 
 import std;
@@ -145,6 +146,107 @@ namespace pP::game {
         }
     } // namespace
 
+    // ------------------------------------------------------------------
+    // explicit world-generation pack selection
+    // ------------------------------------------------------------------
+
+    namespace {
+        struct PackRootDeclaration {
+            std::string m_root;
+
+            static constexpr auto describe() {
+                return std::tuple{config::field(
+                    &PackRootDeclaration::m_root, asset::metadata("root"), GameSettings::pack_path_domain,
+                    config::EPresence::required)};
+            }
+        };
+
+        struct PackSetSelection {
+            config::KeyedCollection<PackRootDeclaration> m_packs;
+            u32 m_schema_version{};
+
+            static constexpr auto describe() {
+                auto packs = config::collection(
+                    &PackSetSelection::m_packs, asset::metadata("packs"),
+                    {1u, (std::numeric_limits<std::size_t>::max)()});
+                packs.m_presence = config::EPresence::required;
+
+                return std::tuple{
+                    config::field(
+                        &PackSetSelection::m_schema_version, asset::metadata("schema_version"), config::Range{1u, 1u},
+                        config::EPresence::required),
+                    packs};
+            }
+        };
+    }
+
+    Expected<Array<std::filesystem::path>> loadWorldgenRoots(
+        const GameSettings &settings, config::Diagnostics &diagnostics) {
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            GameConfig, settings.m_worldgen_root and settings.m_worldgen_pack_set
+                            ? asset::reject(
+                                  diagnostics, "invocation", "game.worldgen_pack_set",
+                                  "--worldgen-pack-set and --worldgen-root cannot be supplied together")
+                            : std::error_code{});
+
+        Array<std::filesystem::path> roots;
+        if (not settings.m_worldgen_pack_set) {
+            const auto requested = settings.m_worldgen_root
+                                       ? std::filesystem::path{*settings.m_worldgen_root}
+                                       : hal::process::currentExecutablePath().parent_path() / "worldgen" / "default";
+            std::error_code error;
+            auto root = std::filesystem::canonical(requested, error);
+            PPR_RETURN_UNEXPECTED_ON_FAIL(GameConfig, error);
+
+            roots.push_back(std::move(root));
+            return roots;
+        }
+
+        const hal::ProfileScope scope{"Game.Config.LoadWorldgenPackSet"};
+        std::error_code error;
+        const auto file = std::filesystem::canonical(*settings.m_worldgen_pack_set, error);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(GameConfig, error);
+        const auto size = std::filesystem::file_size(file, error);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(GameConfig, error);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            GameConfig,
+            size > asset::kMaxManifestBytes ? std::make_error_code(std::errc::file_too_large) : std::error_code{});
+        auto mapped = io::mapFile(file);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(GameConfig, mapped);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            GameConfig, mapped->size() != size ? std::make_error_code(std::errc::resource_unavailable_try_again)
+                                               : std::error_code{});
+
+        auto imported = asset::importDescriptor<PackSetSelection>(
+            {file, std::string{mapped->c_str(), mapped->size()}}, diagnostics);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(GameConfig, imported);
+
+        auto &entries = imported->m_value.m_packs.m_entries;
+        std::ranges::sort(entries, {}, &config::KeyedEntry<PackRootDeclaration>::m_key);
+
+        std::set<std::filesystem::path> mounted;
+        roots.reserve(entries.size());
+
+        for (const auto &entry: entries) {
+            const auto path = std::filesystem::canonical(file.parent_path() / entry.m_value.m_root, error);
+            PPR_RETURN_UNEXPECTED_ON_FAIL(GameConfig, error);
+            PPR_RETURN_UNEXPECTED_ON_FAIL(
+                GameConfig, not mounted.insert(path).second
+                                ? asset::reject(
+                                      diagnostics, file.string(), "packs." + entry.m_key,
+                                      "Pack-set roots must be distinct", config::EConfigErrc::duplicate_key)
+                                : std::error_code{});
+
+            roots.push_back(path);
+        }
+
+        return roots;
+    }
+
+    // ------------------------------------------------------------------
+    // invocation option declarations
+    // ------------------------------------------------------------------
+
     [[nodiscard]] config::CliSchema gameCliSchema() {
         const hal::ProfileScope scope{"Game.Config.Schema"};
         config::CliSchema schema{};
@@ -162,7 +264,7 @@ namespace pP::game {
         appendOption(
             schema.m_options, selectorOption(
                                   "validate-worldgen", "validate-worldgen",
-                                  "Validate the complete content pack and textures without a window or GPU."));
+                                  "Validate content definitions without binary textures, a window or GPU."));
         appendOption(
             schema.m_options, selectorOption(
                                   "worldgen-preview", "worldgen-preview",
@@ -174,6 +276,10 @@ namespace pP::game {
                 "Exercise camera, seam edit, previews and two New Games; report and exit, fail if incomplete."));
         appendOption(
             schema.m_options, valueOption("game.worldgen_root", "worldgen-root", "Explicit content pack root."));
+        appendOption(
+            schema.m_options, valueOption(
+                                  "game.worldgen_pack_set", "worldgen-pack-set",
+                                  "Explicit pack-set TOML; mounts only listed roots, relative to this file."));
         appendOption(
             schema.m_options, switchOption(
                                   "game.worldgen_report", "worldgen-report",
@@ -188,7 +294,8 @@ namespace pP::game {
                                   "Export flat PPM diagnostics and report with --worldgen-preview."));
         appendOption(
             schema.m_options,
-            valueOption("game.worldgen_profile", "worldgen-profile", "World profile key (default frontier)."));
+            valueOption(
+                "game.worldgen_profile", "worldgen-profile", "Qualified World asset (local only for one pack)."));
         appendOption(
             schema.m_options, valueOption("game.worldgen_seed", "worldgen-seed", "Unsigned 64-bit world seed."));
         appendOption(
@@ -344,6 +451,13 @@ namespace pP::game {
         }
 
         const auto &settings = game->m_value;
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            GameConfig, settings.m_worldgen_root and settings.m_worldgen_pack_set
+                            ? asset::reject(
+                                  diagnostics, "invocation", "game.worldgen_pack_set",
+                                  "--worldgen-pack-set and --worldgen-root cannot be supplied together")
+                            : std::error_code{});
+
         if ((settings.m_command == EGameCommand::worldgen_preview and
                 not settings.m_worldgen_output and
                 not settings.m_worldgen_gpu_output) or

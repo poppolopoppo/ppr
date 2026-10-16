@@ -58,6 +58,10 @@ target_sources(engine.tests.app
         ${CMAKE_SOURCE_DIR}/game/colony/WorldGen.Export.cpp
         ${CMAKE_SOURCE_DIR}/game/colony/Content.cpp
         ${CMAKE_SOURCE_DIR}/game/colony/Content.Pack.cpp
+        ${CMAKE_SOURCE_DIR}/game/colony/Content.Source.cpp
+        ${CMAKE_SOURCE_DIR}/game/colony/Content.Descriptors.cpp
+        ${CMAKE_SOURCE_DIR}/game/colony/Content.Assembly.cpp
+        ${CMAKE_SOURCE_DIR}/game/colony/Content.Presentation.cpp
         ${CMAKE_SOURCE_DIR}/game/colony/Metric.cpp
         ${CMAKE_SOURCE_DIR}/game/colony/ColonyDriver.cpp
         ${CMAKE_SOURCE_DIR}/game/colony/ColonyDriver.Checkpoint.cpp

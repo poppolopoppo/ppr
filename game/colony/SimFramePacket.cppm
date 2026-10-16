@@ -107,7 +107,7 @@ export namespace pP::colony {
     // Captures tick/epoch/counters plus the render payload: resident coords
     // always, cell contents for the present chunks (or for every resident
     // chunk when full_refresh). Never touches translator/pass state.
-    [[nodiscard]] SimFramePacket makeSimFramePacket(
+    [[nodiscard]] Expected<SimFramePacket> makeSimFramePacket(
         u64 frame_id, const ColonyDriver &driver, bool full_refresh = false,
         ParticlePresentationCache *particles = nullptr);
 
@@ -124,8 +124,8 @@ export namespace pP::colony {
     [[nodiscard]] Expected<GridPass::GridStagedFrame> captureWorldPresentation(
         const ColonyDriver &driver, const IContext *context = nullptr);
     /// Shared catalog appearance conversion for complete worlds and sparse samples.
-    [[nodiscard]] SimFramePacket captureCatalogPresentation(
-        const ContentCatalog &catalog, std::string_view profile, u32 boundary_material, u32 cells_per_metre,
+    [[nodiscard]] Expected<SimFramePacket> captureCatalogPresentation(
+        const ContentPresentation &presentation, std::string_view profile, u32 boundary_material, u32 cells_per_metre,
         double reference_thickness);
     /// Whole-world preview preparation from an exclusively frozen session.
     /// Generated metadata belongs to this driver's exclusively frozen prepared world.

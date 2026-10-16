@@ -1,6 +1,7 @@
 module;
 #include "pP/Macros.h"
 module game.colony.checkpoint;
+import engine.asset;
 import std;
 namespace pP::colony {
     PPR_DEFINE_LOG_CATEGORY(CheckpointCodec, info, none);
@@ -119,8 +120,8 @@ namespace pP::colony {
                 return value;
             }
 
-            std::string string() {
-                const auto size = count(1024u, 1u);
+            std::string string(const std::size_t maximum) {
+                const auto size = count(static_cast<u32>(maximum), 1u);
                 const auto bytes = take(size);
                 return {bytes.begin(), bytes.end()};
             }
@@ -470,7 +471,7 @@ namespace pP::colony {
         auto &descriptor = checkpoint.m_descriptor;
         descriptor.m_pack_schema_version = reader.u32value();
         descriptor.m_generator_version = reader.u32value();
-        descriptor.m_profile = reader.string();
+        descriptor.m_profile = reader.string(asset::QualifiedName::reference_domain.m_max_length);
         descriptor.m_seed = reader.u64value();
         descriptor.m_content_fingerprint = reader.u64value();
         descriptor.m_metric.m_cells_per_metre = reader.u32value();
@@ -480,7 +481,7 @@ namespace pP::colony {
         checkpoint.m_materials.resize(reader.count(kMaxContentMaterials + 1u, 6u));
         for (auto &material: checkpoint.m_materials) {
             material.m_id = static_cast<u16>(reader.integer(2u));
-            material.m_key = reader.string();
+            material.m_key = reader.string(config::kMaxKeyBytes);
         }
 
         checkpoint.m_tick = reader.u64value();

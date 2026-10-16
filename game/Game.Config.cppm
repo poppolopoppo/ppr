@@ -6,6 +6,7 @@ export module game.config;
 
 import engine.app;
 import engine.core;
+import engine.asset;
 
 import std;
 
@@ -37,17 +38,18 @@ export namespace pP::game {
     /// schemas; this schema only declares the game.* bindings of the combined
     /// invocation CLI.
     struct GameSettings {
-        EGameCommand m_command{EGameCommand::interactive};
-        bool m_profile100{false};
+        static constexpr config::PathDomain pack_path_domain{1024u, false};
+
         std::optional<double> m_exit_after{};
         std::optional<std::string> m_config{};
         std::optional<std::string> m_worldgen_root{};
+        std::optional<std::string> m_worldgen_pack_set{};
         std::optional<std::string> m_worldgen_output{};
         std::optional<std::string> m_worldgen_gpu_output{};
-        bool m_worldgen_report{};
-        bool m_worldgen_acceptance{};
         std::string m_worldgen_profile{"frontier"};
         u64 m_worldgen_seed{42u};
+        EGameCommand m_command{EGameCommand::interactive};
+        bool m_profile100{false}, m_worldgen_report{}, m_worldgen_acceptance{};
 
         [[nodiscard]] static constexpr auto describe() {
             using namespace config;
@@ -78,17 +80,23 @@ export namespace pP::game {
                         EMutability::startup, ESource::all, false},
                     PathDomain{1024u, false}),
                 field(
+                    &GameSettings::m_worldgen_pack_set,
+                    Metadata{
+                        "game.worldgen_pack_set", "Explicit pack-set TOML file (roots relative to that file)",
+                        "World generation", EMutability::startup, ESource::all, false},
+                    pack_path_domain),
+                field(
                     &GameSettings::m_worldgen_root,
                     Metadata{
                         "game.worldgen_root", "Explicit world-generation pack root", "World generation",
                         EMutability::startup, ESource::all, false},
-                    PathDomain{1024u, false}),
+                    pack_path_domain),
                 field(
                     &GameSettings::m_worldgen_profile,
                     Metadata{
                         "game.worldgen_profile", "World-generation profile key", "World generation",
                         EMutability::startup, ESource::all, false},
-                    StringDomain{128u, false}),
+                    asset::QualifiedName::reference_domain),
                 field(
                     &GameSettings::m_worldgen_seed,
                     Metadata{
@@ -139,6 +147,11 @@ export namespace pP::game {
     /// bindings owned by engine.app. `--help`/`-h` are reserved by the CLI
     /// adapter and suppress execution deterministically.
     [[nodiscard]] config::CliSchema gameCliSchema();
+
+    /// Explicit roots only. A pack-set never implicitly mounts the default pack;
+    /// supplying both root and pack-set is an invocation conflict.
+    [[nodiscard]] Expected<Array<std::filesystem::path>> loadWorldgenRoots(
+        const GameSettings &settings, config::Diagnostics &diagnostics);
 
     /// Named profiling-default layer: supplies display.throttle_unfocused =
     /// false at the lowest precedence so an explicit setting overrides it.

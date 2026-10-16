@@ -20,6 +20,14 @@ namespace pP::tests::detail {
     // ------------------------------------------------------------------
 
     namespace SimPacket {
+        colony::SimFramePacket captureFixturePacket(
+            const u64 frame, const colony::ColonyDriver &driver, const bool full_refresh = false) {
+            auto result = colony::makeSimFramePacket(frame, driver, full_refresh);
+            PPR_TEST_ASSERT(result.has_value());
+
+            return std::move(*result);
+        }
+
         // F1 game payload: owned copies captured after the tick, consumed by
         // the present/overlay phases on the same thread. These tests run the
         // production capture (makeSimFramePacket) and staged-build
@@ -147,7 +155,7 @@ namespace pP::tests::detail {
 
         PPR_UNIT_TEST (default_driver_builds_empty_coherent_packet) {
             colony::ColonyDriver driver{};
-            colony::SimFramePacket packet = colony::makeSimFramePacket(3u, driver);
+            colony::SimFramePacket packet = captureFixturePacket(3u, driver);
 
             PPR_TEST_ASSERT(packet.m_frame_id == 3u);
             PPR_TEST_ASSERT(packet.m_tick == driver.tickCount());
@@ -330,7 +338,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not driver.initialMatterBaselineValid());
 
             // Real capture: residency, the present chunk, and its cells.
-            colony::SimFramePacket packet = colony::makeSimFramePacket(9u, driver);
+            colony::SimFramePacket packet = captureFixturePacket(9u, driver);
             PPR_TEST_ASSERT(packet.m_present_chunks.size() == 1u);
             PPR_TEST_ASSERT(packet.m_chunk_cells.size() == 1u);
             PPR_TEST_ASSERT(packet.m_chunk_cells[0u].m_pos == sim::ChunkPos{0u, 0u});
@@ -409,7 +417,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(driver.lastEditChunks().size() == 1u);
             PPR_TEST_ASSERT(driver.lastEditChunks()[0u] == sim::ChunkPos{1u, 0u});
 
-            colony::SimFramePacket packet = colony::makeSimFramePacket(11u, driver);
+            colony::SimFramePacket packet = captureFixturePacket(11u, driver);
             PPR_TEST_ASSERT(packet.m_present_chunks.size() == 2u);
             PPR_TEST_ASSERT(packet.m_present_chunks[0u] == sim::ChunkPos{0u, 0u});
             PPR_TEST_ASSERT(packet.m_present_chunks[1u] == sim::ChunkPos{1u, 0u});
@@ -427,7 +435,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(driver.presentEditsCapture().empty());
 
             // Next frame with no new edits uploads nothing: nothing went stale.
-            colony::SimFramePacket follow = colony::makeSimFramePacket(12u, driver);
+            colony::SimFramePacket follow = captureFixturePacket(12u, driver);
             PPR_TEST_ASSERT(follow.m_present_chunks.empty());
             PPR_TEST_ASSERT(follow.m_chunk_cells.empty());
             GridPass follow_pass{};
@@ -449,7 +457,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not driver.grid().setCells(sim::ChunkPos{0u, 0u}, std::move(rock)));
             PPR_TEST_ASSERT(not driver.grid().setCells(sim::ChunkPos{1u, 2u}, std::move(rock_copy)));
 
-            colony::SimFramePacket packet = colony::makeSimFramePacket(4u, driver, true);
+            colony::SimFramePacket packet = captureFixturePacket(4u, driver, true);
             PPR_TEST_ASSERT(packet.m_full_refresh);
             PPR_TEST_ASSERT(packet.m_present_chunks.empty());
             PPR_TEST_ASSERT(packet.m_resident_chunks.size() == 2u);
@@ -537,7 +545,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not driver.requestDig({10u, 10u}, 1u, 1u));
             PPR_TEST_ASSERT(not driver.update(std::chrono::milliseconds{16}));
 
-            const colony::SimFramePacket first = colony::makeSimFramePacket(21u, driver);
+            const colony::SimFramePacket first = captureFixturePacket(21u, driver);
             PPR_TEST_ASSERT(first.m_present_chunks.size() == 1u);
             const u64 first_revision = first.m_present_revisions[0u];
 
@@ -557,7 +565,7 @@ namespace pP::tests::detail {
 
             // A fresh capture + settlement acknowledges exactly its own
             // generation and empties the set.
-            const colony::SimFramePacket second = colony::makeSimFramePacket(22u, driver);
+            const colony::SimFramePacket second = captureFixturePacket(22u, driver);
             const Array<colony::ColonyDriver::DirtyChunk> fresh_ack = packetAckSet(second);
             driver.ackPresentChunks(std::span<const colony::ColonyDriver::DirtyChunk>{fresh_ack});
             PPR_TEST_ASSERT(driver.presentEditsCapture().empty());
@@ -578,7 +586,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not driver.requestDig({10u, 10u}, 1u, 1u));
             PPR_TEST_ASSERT(not driver.update(std::chrono::milliseconds{16}));
 
-            const colony::SimFramePacket first = colony::makeSimFramePacket(41u, driver);
+            const colony::SimFramePacket first = captureFixturePacket(41u, driver);
             const u64 first_revision = first.m_present_revisions[0u];
             const Array<colony::ColonyDriver::DirtyChunk> first_ack = packetAckSet(first);
             driver.ackPresentChunks(std::span<const colony::ColonyDriver::DirtyChunk>{first_ack});
@@ -598,7 +606,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(driver.presentEditsCapture().size() == 1u);
             PPR_TEST_ASSERT(driver.presentEditsCapture()[0u].m_revision == second_revision);
 
-            const colony::SimFramePacket second = colony::makeSimFramePacket(42u, driver);
+            const colony::SimFramePacket second = captureFixturePacket(42u, driver);
             const Array<colony::ColonyDriver::DirtyChunk> second_ack = packetAckSet(second);
             driver.ackPresentChunks(std::span<const colony::ColonyDriver::DirtyChunk>{second_ack});
             PPR_TEST_ASSERT(driver.presentEditsCapture().empty());
@@ -616,7 +624,7 @@ namespace pP::tests::detail {
             };
 
             const u64 generation_before = driver.worldGeneration();
-            colony::SimFramePacket packet = colony::makeSimFramePacket(43u, driver);
+            colony::SimFramePacket packet = captureFixturePacket(43u, driver);
             PPR_TEST_ASSERT(packet.m_world_generation == generation_before);
             GridPass::GridStagedFrame stage{};
             PPR_TEST_ASSERT(not colony::buildGridStagedFrame(packet, stage));
@@ -645,7 +653,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not driver.requestDig({10u, 10u}, 1u, 1u));
             PPR_TEST_ASSERT(not driver.update(std::chrono::milliseconds{16}));
 
-            const colony::SimFramePacket stale = colony::makeSimFramePacket(31u, driver);
+            const colony::SimFramePacket stale = captureFixturePacket(31u, driver);
             PPR_TEST_ASSERT(driver.presentEditsCapture().size() == 1u);
 
             PPR_TEST_ASSERT(not driver.regenerateLegacyFixture(99u));
@@ -656,7 +664,7 @@ namespace pP::tests::detail {
             driver.ackPresentChunks(std::span<const colony::ColonyDriver::DirtyChunk>{stale_ack});
             PPR_TEST_ASSERT(driver.presentEditsCapture().empty());
 
-            const colony::SimFramePacket fresh = colony::makeSimFramePacket(32u, driver, true);
+            const colony::SimFramePacket fresh = captureFixturePacket(32u, driver, true);
             PPR_TEST_ASSERT(fresh.m_full_refresh);
             PPR_TEST_ASSERT(fresh.m_present_chunks.empty());
             PPR_TEST_ASSERT(fresh.m_chunk_cells.size() == fresh.m_resident_chunks.size());
@@ -682,7 +690,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not driver.requestDig({10u, 10u}, 1u, 1u));
             PPR_TEST_ASSERT(not driver.update(std::chrono::milliseconds{16}));
 
-            const colony::SimFramePacket packet = colony::makeSimFramePacket(41u, driver);
+            const colony::SimFramePacket packet = captureFixturePacket(41u, driver);
             PPR_TEST_ASSERT(packet.m_present_chunks.size() == 1u);
 
             colony::SimFramePacket corrupt = packet;
@@ -720,14 +728,14 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not driver.requestDig({10u, 10u}, 1u, 1u));
             PPR_TEST_ASSERT(not driver.update(std::chrono::milliseconds{16}));
 
-            const colony::SimFramePacket packet = colony::makeSimFramePacket(51u, driver);
+            const colony::SimFramePacket packet = captureFixturePacket(51u, driver);
             PPR_TEST_ASSERT(packet.m_present_chunks.size() == 1u);
 
             // Settlement returns m_dropped/error without an applied stage:
             // the owner re-arms presentation state and acks nothing here.
             PPR_TEST_ASSERT(driver.presentEditsCapture().size() == 1u);
 
-            const colony::SimFramePacket retry = colony::makeSimFramePacket(52u, driver);
+            const colony::SimFramePacket retry = captureFixturePacket(52u, driver);
             GridPass::GridStagedFrame retry_stage{};
             PPR_TEST_ASSERT(not colony::buildGridStagedFrame(retry, retry_stage));
             GridPass retry_pass{};
@@ -752,7 +760,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not driver.requestDig({10u, 10u}, 1u, 1u));
             PPR_TEST_ASSERT(not driver.update(std::chrono::milliseconds{16}));
 
-            const colony::SimFramePacket packet = colony::makeSimFramePacket(61u, driver);
+            const colony::SimFramePacket packet = captureFixturePacket(61u, driver);
             colony::SimFramePacket corrupt = packet;
             corrupt.m_present_chunks.push_back(sim::ChunkPos{1u, 1u});
             PPR_TEST_ASSERT(corrupt.m_chunk_cells.size() == 1u);
@@ -781,7 +789,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not driver.requestDig({10u, 10u}, 1u, 1u));
             PPR_TEST_ASSERT(not driver.update(std::chrono::milliseconds{16}));
 
-            const colony::SimFramePacket packet = colony::makeSimFramePacket(71u, driver);
+            const colony::SimFramePacket packet = captureFixturePacket(71u, driver);
             GridPass::GridStagedFrame stage{};
             PPR_TEST_ASSERT(not colony::buildGridStagedFrame(packet, stage));
             // The owned stage carries the ack manifest forward.

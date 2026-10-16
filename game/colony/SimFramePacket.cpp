@@ -17,16 +17,22 @@ namespace pP::colony {
     // ------------------------------------------------------------------
 
     namespace {
-        void captureCatalogPresentation_(
-            SimFramePacket &packet, const ContentCatalog &content, const std::string_view profile_key,
+        std::error_code captureCatalogPresentation_(
+            SimFramePacket &packet, const ContentPresentation &presentation, const std::string_view profile_key,
             const u32 boundary_material, const u32 cells_per_metre, const double reference_thickness) {
+            PPR_RETURN_ERROR_ON_FAIL(
+                SimPresentation,
+                not presentation.catalog() or not presentation.catalog()->contentFingerprint() or cells_per_metre == 0u
+                    ? std::make_error_code(std::errc::invalid_argument)
+                    : std::error_code{});
+
+            const auto &content = *presentation.catalog();
             packet.m_cell_size_m = 1.0f / static_cast<float>(cells_per_metre);
             packet.m_has_catalog = true;
             packet.m_boundary_material_id = boundary_material;
-            PPR_ASSERT(content.contentFingerprint().has_value());
-            packet.m_content_fingerprint = *content.contentFingerprint();
+            packet.m_content_fingerprint = presentation.fingerprint();
 
-            for (const auto &texture: content.textures()) {
+            for (const auto &texture: presentation.textures()) {
                 packet.m_terrain_images.push_back(texture.m_image);
             }
 
@@ -56,34 +62,48 @@ namespace pP::colony {
                     (material.m_alpha_mode == EMaterialAlphaMode::blend ? kGridSurfaceOpticalBlend : 0u) |
                     (material.m_texture_sampling == EMaterialTextureSampling::repeat ? kGridSurfaceTextureRepeat : 0u);
                 if (material.m_albedo_texture) {
-                    const auto textures = content.textures();
+                    const auto textures = presentation.textures();
                     for (u32 index = 0u; index < textures.size(); ++index) {
                         if (textures[index].m_path == *material.m_albedo_texture and not textures[index].m_normal_map) {
                             visual.m_texture_index = index;
                             break;
                         }
                     }
-                    PPR_ASSERT(visual.m_texture_index != 0xffffffffu);
+
+                    PPR_RETURN_ERROR_ON_FAIL(
+                        SimPresentation, visual.m_texture_index == 0xffffffffu
+                                             ? std::make_error_code(std::errc::invalid_argument)
+                                             : std::error_code{});
                 }
+
                 if (material.m_normal_texture) {
-                    const auto textures = content.textures();
+                    const auto textures = presentation.textures();
                     for (u32 index = 0u; index < textures.size(); ++index) {
                         if (textures[index].m_path == *material.m_normal_texture and textures[index].m_normal_map) {
                             visual.m_normal_texture_index = index;
                             break;
                         }
                     }
-                    PPR_ASSERT(visual.m_normal_texture_index != 0xffffffffu);
+
+                    PPR_RETURN_ERROR_ON_FAIL(
+                        SimPresentation, visual.m_normal_texture_index == 0xffffffffu
+                                             ? std::make_error_code(std::errc::invalid_argument)
+                                             : std::error_code{});
                 }
+
                 packet.m_terrain_visuals.push_back(visual);
             }
 
             packet.m_reference_thickness_m = static_cast<float>(reference_thickness);
             const auto *const profile = content.findWorld(profile_key);
-            PPR_ASSERT(profile != nullptr);
+            PPR_RETURN_ERROR_ON_FAIL(
+                SimPresentation, not profile ? std::make_error_code(std::errc::invalid_argument) : std::error_code{});
             const auto stack = std::ranges::find(
                 content.backgrounds(), profile->m_background_stack, &BackgroundStackDefinition::m_key);
-            PPR_ASSERT(stack != content.backgrounds().end());
+            PPR_RETURN_ERROR_ON_FAIL(
+                SimPresentation, stack == content.backgrounds().end()
+                                     ? std::make_error_code(std::errc::invalid_argument)
+                                     : std::error_code{});
 
             packet.m_has_background = true;
             for (const auto &layer: stack->m_layers) {
@@ -92,34 +112,53 @@ namespace pP::colony {
                 target.m_color_rgba = layer.m_color_rgba;
                 target.m_repeat_period_m = static_cast<float>(layer.m_repeat_period_m);
                 target.m_parallax_factor = static_cast<float>(layer.m_parallax_factor);
-                const auto textures = content.textures();
+                const auto textures = presentation.textures();
                 for (u32 index = 0u; index < textures.size(); ++index) {
                     if (textures[index].m_path == layer.m_texture and not textures[index].m_normal_map) {
                         target.m_texture_index = index;
                         break;
                     }
                 }
+
+                PPR_RETURN_ERROR_ON_FAIL(
+                    SimPresentation, target.m_texture_index == 0xffffffffu
+                                         ? std::make_error_code(std::errc::invalid_argument)
+                                         : std::error_code{});
             }
+
+            return {};
         }
 
-        void capturePresentation_(
+        std::error_code capturePresentation_(
             SimFramePacket &packet, const ColonyDriver &driver,
             ParticlePresentationCache *const particle_cache = nullptr) {
             packet.m_initial_matter_valid = driver.initialMatterBaselineValid();
             packet.m_cell_size_m = 1.0f / static_cast<float>(driver.cellsPerMetre());
             const ContentCatalog *const catalog = driver.contentCatalog();
             if (catalog == nullptr) {
-                return;
+                return {};
             }
 
-            captureCatalogPresentation_(
-                packet, *catalog, driver.profileKey(), driver.boundaryMaterial(), driver.cellsPerMetre(),
-                driver.referenceThicknessMetres());
+            const auto *world = driver.preparedWorld();
+            PPR_RETURN_ERROR_ON_FAIL(
+                SimPresentation,
+                not world or
+                        not world->presentation() or
+                        world->presentation()->catalog().get() != catalog or
+                        world->presentation()->generation() != asset::RequestGeneration{driver.worldGeneration()}
+                    ? std::make_error_code(std::errc::invalid_argument)
+                    : std::error_code{});
+
+            PPR_RETURN_ERROR_ON_FAIL(
+                SimPresentation, captureCatalogPresentation_(
+                                     packet, *world->presentation(), driver.profileKey(), driver.boundaryMaterial(),
+                                     driver.cellsPerMetre(), driver.referenceThicknessMetres()));
 
             ParticlePresentationCache temporary;
             auto &cache = particle_cache ? *particle_cache : temporary;
             packet.m_particle_batches = cache.capture(driver);
             packet.m_surface_profile = cache.captureSurface(driver);
+            return {};
         }
 
         [[nodiscard]] std::error_code validatePresentation_(const SimFramePacket &packet) {
@@ -234,11 +273,14 @@ namespace pP::colony {
     // packet assembly
     // ------------------------------------------------------------------
 
-    SimFramePacket captureCatalogPresentation(
-        const ContentCatalog &catalog, const std::string_view profile, const u32 boundary_material,
+    Expected<SimFramePacket> captureCatalogPresentation(
+        const ContentPresentation &presentation, const std::string_view profile, const u32 boundary_material,
         const u32 cells_per_metre, const double reference_thickness) {
         SimFramePacket packet{};
-        captureCatalogPresentation_(packet, catalog, profile, boundary_material, cells_per_metre, reference_thickness);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            SimPresentation,
+            captureCatalogPresentation_(
+                packet, presentation, profile, boundary_material, cells_per_metre, reference_thickness));
         return packet;
     }
     Array<GridParticleBatch> ParticlePresentationCache::capture(const ColonyDriver &driver) {
@@ -316,11 +358,11 @@ namespace pP::colony {
         return m_surface_profile;
     }
 
-    SimFramePacket makeSimFramePacket(
+    Expected<SimFramePacket> makeSimFramePacket(
         const u64 frame_id, const ColonyDriver &driver, const bool full_refresh,
         ParticlePresentationCache *const particles) {
         SimFramePacket packet{};
-        capturePresentation_(packet, driver, particles);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(SimPresentation, capturePresentation_(packet, driver, particles));
 
         packet.m_frame_id = frame_id;
         packet.m_seed = driver.seed();
@@ -404,7 +446,7 @@ namespace pP::colony {
             PPR_RETURN_UNEXPECTED_ON_FAIL(SimPresentation, std::errc::invalid_argument);
         }
         SimFramePacket packet{};
-        capturePresentation_(packet, driver, particles);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(SimPresentation, capturePresentation_(packet, driver, particles));
 
         packet.m_frame_id = frame_id;
         packet.m_seed = driver.seed();
@@ -448,7 +490,7 @@ namespace pP::colony {
     Expected<GridPass::GridStagedFrame> captureWorldPresentation(
         const ColonyDriver &driver, const IContext *const context) {
         SimFramePacket presentation{};
-        capturePresentation_(presentation, driver);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(SimPresentation, capturePresentation_(presentation, driver));
         PPR_RETURN_UNEXPECTED_ON_FAIL(SimPresentation, validatePresentation_(presentation));
 
         const auto dirty = driver.presentEditsCapture();
@@ -520,7 +562,7 @@ namespace pP::colony {
     Expected<GridPass::GridStagedFrame> InitialPresentation::stage(const u64 frame_id, const ColonyDriver &driver) {
         GridPass::GridStagedFrame stage{};
         SimFramePacket presentation{};
-        capturePresentation_(presentation, driver, &m_particle_cache);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(SimPresentation, capturePresentation_(presentation, driver, &m_particle_cache));
 
         stage.m_cell_size_m = presentation.m_cell_size_m;
         stage.m_has_catalog = presentation.m_has_catalog;

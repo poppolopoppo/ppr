@@ -1,6 +1,7 @@
 module;
 #include "pP/Macros.h"
 module game.colony.checkpoint;
+import engine.asset;
 import game.colony.agents;
 import game.colony.buildings;
 import game.colony.pathfinding;
@@ -80,13 +81,23 @@ namespace pP::colony {
     Expected<std::unique_ptr<ColonyDriver>> restoreWorldCheckpoint(
         ContentCatalog catalog, WorldCheckpoint checkpoint, const u64 world_generation,
         const sim::GenerationExecution &execution) {
+        auto restored = restoreWorldCheckpoint(
+            std::make_shared<const ContentCatalog>(std::move(catalog)), std::move(checkpoint), world_generation,
+            execution);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(WorldCheckpointLog, restored);
+        return restored;
+    }
+
+    Expected<std::unique_ptr<ColonyDriver>> restoreWorldCheckpoint(
+        std::shared_ptr<const ContentCatalog> catalog, WorldCheckpoint checkpoint, const u64 world_generation,
+        const sim::GenerationExecution &execution, std::shared_ptr<const ContentPresentation> presentation) {
         PPR_RETURN_UNEXPECTED_ON_FAIL(
             WorldCheckpointLog,
-            world_generation != 0u ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
+            catalog and world_generation != 0u ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
         PPR_RETURN_UNEXPECTED_ON_FAIL(
-            WorldCheckpointLog, validateWorldCheckpoint(checkpoint, catalog, execution.m_context));
+            WorldCheckpointLog, validateWorldCheckpoint(checkpoint, *catalog, execution.m_context));
 
-        auto plan = compileWorldPlan(catalog, checkpoint.m_descriptor.m_profile, checkpoint.m_descriptor.m_seed);
+        auto plan = compileWorldPlan(*catalog, checkpoint.m_descriptor.m_profile, checkpoint.m_descriptor.m_seed);
         PPR_RETURN_UNEXPECTED_ON_FAIL(WorldCheckpointLog, plan);
 
         auto layout = sim::restoreBiomeLayout(*plan, checkpoint.m_sites);
@@ -101,6 +112,12 @@ namespace pP::colony {
 
         auto prepared = restorePreparedWorld(std::move(catalog), checkpoint.m_descriptor, std::move(world));
         PPR_RETURN_UNEXPECTED_ON_FAIL(WorldCheckpointLog, prepared);
+
+        if (presentation) {
+            PPR_RETURN_UNEXPECTED_ON_FAIL(
+                WorldCheckpointLog,
+                prepared->attachPresentation(std::move(presentation), asset::RequestGeneration{world_generation}));
+        }
 
         auto driver = std::make_unique<ColonyDriver>();
         PPR_RETURN_UNEXPECTED_ON_FAIL(

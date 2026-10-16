@@ -18,6 +18,7 @@ namespace pP::game::tests {
     const UnitTest &gameWorldContentTests() noexcept;
     const UnitTest &gamePackContentTests() noexcept;
     const UnitTest &gameContentDescriptorTests() noexcept;
+    const UnitTest &gameContentSourceTests() noexcept;
     const UnitTest &gameWorldAssemblyTests() noexcept;
     const UnitTest &gameCheckpointTests() noexcept;
     const UnitTest &gameLegacyFixtureTests() noexcept;
@@ -38,6 +39,7 @@ namespace pP::game::tests {
             gameWorldContentTests(),
             gamePackContentTests(),
             gameContentDescriptorTests(),
+            gameContentSourceTests(),
             gameWorldAssemblyTests(),
             gameCheckpointTests(),
             gameLegacyFixtureTests(),

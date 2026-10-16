@@ -3,6 +3,7 @@ module;
 module game.colony;
 
 import engine.core;
+import engine.asset;
 import engine.sim;
 import game.colony.worldgen;
 import game.colony.metric;
@@ -18,9 +19,12 @@ namespace pP::colony {
     // ------------------------------------------------------------------
 
     Colony::Colony() = default;
+
     Colony::Colony(Colony &&) noexcept = default;
     Colony &Colony::operator=(Colony &&) noexcept = default;
+
     Colony::~Colony() = default;
+
     const sim::ChunkGrid &Colony::grid() const noexcept {
         if (m_prepared) {
             return m_prepared->generated().m_grid;
@@ -64,7 +68,8 @@ namespace pP::colony {
         const auto &descriptor = world.descriptor();
         const auto &recipe = world.generated().m_plan.recipe();
         PPR_RETURN_ERROR_ON_FAIL(ColonyWorld, validateWorldMetric(descriptor.m_metric));
-        if (descriptor.m_pack_schema_version != kContentSchemaVersion or
+
+        if (descriptor.m_pack_schema_version != asset::Manifest::schema_version or
             descriptor.m_generator_version != sim::kGeneratorAlgorithmVersion or
             descriptor.m_content_fingerprint != world.catalog().contentFingerprint() or
             world.catalog().findWorld(descriptor.m_profile) == nullptr or

@@ -46,6 +46,8 @@ target_sources(app.game
         colony/Content.Pack.cpp
         colony/Content.Descriptors.cpp
         colony/Content.Assembly.cpp
+        colony/Content.Source.cpp
+        colony/Content.Presentation.cpp
         colony/Content.Authoring.cpp
         colony/Metric.cpp
         colony/DigTool.cpp
@@ -144,12 +146,16 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
             colony/Content.Pack.cpp
             colony/Content.Descriptors.cpp
             colony/Content.Assembly.cpp
+            colony/Content.Source.cpp
+            colony/Content.Presentation.cpp
             colony/Content.Authoring.cpp
             colony/Content.Tests.cpp
             colony/Content.Biomes.Tests.cpp
             colony/Content.Features.Tests.cpp
             colony/Content.Worlds.Tests.cpp
             colony/Content.Pack.Tests.cpp
+            colony/Content.Source.Tests.cpp
+            colony/Content.TestFixtures.cpp
             colony/Content.Descriptors.Tests.cpp
             colony/Checkpoint.Tests.cpp
             colony/Metric.cpp

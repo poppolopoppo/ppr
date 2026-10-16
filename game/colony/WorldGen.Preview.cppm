@@ -2,6 +2,7 @@ module;
 export module game.colony.worldgen_preview;
 import engine.core;
 import engine.sim;
+import engine.asset;
 import game.colony.content;
 import game.colony.metric;
 import std;
@@ -60,7 +61,7 @@ export namespace pP::colony {
     /// A bounded biome sample or an exact crop of validated production terrain.
     /// Support chunks are owned and globally anchored; camera movement is external.
     struct WorldgenPreviewResult {
-        ContentCatalog m_catalog;
+        std::shared_ptr<const ContentCatalog> m_catalog;
         WorldgenPreviewSpec m_spec;
         sim::GenerationPlan m_plan;
         sim::BiomeLayout m_layout;
@@ -76,6 +77,13 @@ export namespace pP::colony {
         u64 m_known_world_cache_payload_bytes{};
         std::shared_ptr<const WorldgenPreviewWorld> m_exact_world;
         sim::MatterParticleSnapshot m_particles;
+        std::shared_ptr<const ContentPresentation> m_presentation;
+        /// Request attempts and draft revisions have independent identities.
+        asset::RequestGeneration m_presentation_generation{};
+
+        [[nodiscard]] std::error_code attachPresentation(
+            std::shared_ptr<const ContentPresentation> presentation, asset::RequestGeneration expected_generation);
+
         [[nodiscard]] const sim::GenerationGeometry &geometry() const noexcept;
     };
 
@@ -87,6 +95,9 @@ export namespace pP::colony {
     /// On failure/cancellation the caller's previous result is untouched.
     [[nodiscard]] Expected<WorldgenPreviewResult> prepareWorldgenPreview(
         ContentCatalog catalog, WorldgenPreviewSpec spec, const SharedContext &context = {},
+        std::shared_ptr<const WorldgenPreviewWorld> world = {});
+    [[nodiscard]] Expected<WorldgenPreviewResult> prepareWorldgenPreview(
+        std::shared_ptr<const ContentCatalog> catalog, WorldgenPreviewSpec spec, const SharedContext &context = {},
         std::shared_ptr<const WorldgenPreviewWorld> world = {});
 
     // ------------------------------------------------------------------
@@ -105,6 +116,6 @@ export namespace pP::colony {
     /// Fresh directory only. Completion manifest is written last; failures may
     /// leave partial output. Source must be the exact snapshot used by the result.
     [[nodiscard]] std::error_code exportWorldgenPreview(
-        const WorldgenPreviewResult &preview, const ContentPackSource &source, const WorldgenPreviewDisplay &display,
+        const WorldgenPreviewResult &preview, const ContentSourceSet &source, const WorldgenPreviewDisplay &display,
         const std::filesystem::path &directory, const IContext *context = nullptr);
 }

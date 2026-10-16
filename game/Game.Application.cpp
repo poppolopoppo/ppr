@@ -7,6 +7,7 @@ module game.application;
 
 import engine.app;
 import engine.core;
+import engine.asset;
 import engine.math;
 import engine.mesh;
 import engine.rhi;
@@ -41,16 +42,16 @@ namespace demo {
     // ------------------------------------------------------------------
 
     int runWorldgenValidation(const game::GameSettings &settings) {
-
-        std::filesystem::path root{};
-        if (settings.m_worldgen_root) {
-            root = *settings.m_worldgen_root;
-        } else {
-            const auto executable = pP::hal::process::currentExecutablePath();
-            root = executable.parent_path() / "worldgen" / "default";
-        }
         pP::config::Diagnostics content_diagnostics{64u};
-        auto catalog = pP::colony::loadContentCatalog(root, content_diagnostics);
+        auto catalog = [&]() -> Expected<colony::ContentDraftValidation> {
+            auto roots = game::loadWorldgenRoots(settings, content_diagnostics);
+            PPR_RETURN_UNEXPECTED_ON_FAIL(Demo, roots);
+            auto source = colony::loadContentSourceSet(*roots, content_diagnostics);
+            PPR_RETURN_UNEXPECTED_ON_FAIL(Demo, source);
+
+            return colony::validateContentDraft(
+                *source, colony::kWorldCompileParameters, content_diagnostics, nullptr, settings.m_worldgen_profile);
+        }();
         if (not catalog) {
             std::cerr << "[worldgen] " << catalog.error().message() << '\n';
             for (const auto &entry: content_diagnostics.entries()) {
@@ -63,24 +64,23 @@ namespace demo {
             }
             return 1;
         }
-        if (not catalog->findWorld(settings.m_worldgen_profile)) {
-            std::cerr << "[worldgen] Unknown profile: " << settings.m_worldgen_profile << '\n';
-            return pP::config::kExitInvalidUsage;
-        }
+        const auto selected = catalog->m_selected;
+        const auto profile = selected->worlds().front().m_key;
+
         if (settings.m_command == game::EGameCommand::validate_worldgen and not settings.m_worldgen_output) {
-            const auto plan = colony::compileWorldPlan(*catalog, settings.m_worldgen_profile, settings.m_worldgen_seed);
+            const auto plan = colony::compileWorldPlan(*selected, profile, settings.m_worldgen_seed);
             if (not plan) {
                 std::cerr << "[worldgen] Compilation failed: " << plan.error().message() << '\n';
                 return 1;
             }
             std::println(
-                "Worldgen pack {} validated; fingerprint {:016x}", catalog->packId(), *catalog->contentFingerprint());
+                "Worldgen definitions validated across {} packs; selected World {} numeric fingerprint {:016x}",
+                catalog->m_definitions->packs().packs().size(), profile, *selected->contentFingerprint());
             return 0;
         }
         auto &chunks = parallel::backgroundPool();
         auto prepared = colony::prepareWorld(
-            std::move(*catalog), settings.m_worldgen_profile, settings.m_worldgen_seed, ITimerClock::steady(),
-            {.m_scheduler = &chunks});
+            selected, profile, settings.m_worldgen_seed, ITimerClock::steady(), {.m_scheduler = &chunks});
         if (not prepared) {
             std::cerr << "[worldgen] Generation failed: " << prepared.error().message() << '\n';
             return 1;
@@ -88,9 +88,9 @@ namespace demo {
         const auto &content = prepared->catalog();
         const auto &world = prepared->generated();
         std::println(
-            "Worldgen pack {} validated: {} materials, {} biomes, {} features, {} profiles, {} textures; fingerprint {:016x}",
+            "Worldgen pack {} validated: {} materials, {} biomes, {} features, {} selected World, {} texture definitions; numeric fingerprint {:016x}",
             content.packId(), content.materials().size(), content.biomes().size(), content.features().size(),
-            content.worlds().size(), content.textures().size(), prepared->descriptor().m_content_fingerprint);
+            content.worlds().size(), content.textureDefinitions().size(), prepared->descriptor().m_content_fingerprint);
         std::println(
             "Seed {:016x}; terrain {:016x}; output {:016x}; {} sites, {} features, {} matter regions, {} spans; grid payload {} bytes",
             settings.m_worldgen_seed, world.m_report.m_terrain_checksum, world.m_report.m_output_checksum,
@@ -109,11 +109,31 @@ namespace demo {
             std::println("Flat world diagnostics exported to {}", *settings.m_worldgen_output);
         }
         if (settings.m_worldgen_gpu_output) {
+            const asset::RequestGeneration generation{1u};
+            auto images = colony::ContentPresentationRequest::start(
+                prepared->catalogOwner(), generation, context::background(), content_diagnostics);
+            if (not images) {
+                std::cerr << "[worldgen] Image preparation failed: " << images.error().message() << '\n';
+                return 1;
+            }
+
+            auto presentation = images->finish(content_diagnostics);
+            if (not presentation) {
+                std::cerr << "[worldgen] Image preparation failed: " << presentation.error().message() << '\n';
+                return 1;
+            }
+
+            if (const auto error = prepared->attachPresentation(std::move(*presentation), generation)) {
+                std::cerr << "[worldgen] Presentation identity mismatch: " << error.message() << '\n';
+                return 1;
+            }
+
             const auto &descriptor = prepared->descriptor();
             const auto start = world.m_start;
             const auto identity = std::format(
-                "profile={} seed={:016x} fingerprint={:016x}\n", descriptor.m_profile, descriptor.m_seed,
-                descriptor.m_content_fingerprint);
+                "profile={} seed={:016x} numeric_fingerprint={:016x} presentation_fingerprint={:016x}\n",
+                descriptor.m_profile, descriptor.m_seed, descriptor.m_content_fingerprint,
+                prepared->presentation()->fingerprint());
             auto driver = std::make_unique<colony::ColonyDriver>();
             const auto init_error = driver->initPrepared(
                 {.m_seed = descriptor.m_seed, .m_agent_count = 1u, .m_world_generation = 1u}, std::move(*prepared));
@@ -315,6 +335,7 @@ namespace demo {
         };
         WorkshopTransition m_workshop_transition{};
         std::filesystem::path m_workshop_transition_root{};
+        Array<std::filesystem::path> m_workshop_transition_roots{};
         u64 m_workshop_transition_revision{};
         bool m_workshop_transition_saving{};
         bool m_workshop_exit_authorized{};
@@ -342,7 +363,7 @@ namespace demo {
         colony::WorldJobView m_world_view{};
         u64 m_consumed_terminal_job{};
         u64 m_requested_seed{42u};
-        std::filesystem::path m_worldgen_root{};
+        Array<std::filesystem::path> m_worldgen_roots{};
         std::string m_worldgen_profile{"frontier"};
         std::shared_ptr<const GridWorldCommand> m_world_command{};
         std::optional<GridWorldResult> m_world_result{};
@@ -3307,7 +3328,18 @@ namespace demo {
         using super_t = ApplicationEditor;
         using super_t::super_t;
 
-        void setWorldgenSettings(const game::GameSettings &settings, const ITimerClock &clock) {
+        [[nodiscard]] std::error_code setWorldgenSettings(
+            const game::GameSettings &settings, const ITimerClock &clock, config::Diagnostics &diagnostics) {
+            if (not settings.m_profile100 or
+                settings.m_command == game::EGameCommand::worldgen_workshop or
+                settings.m_worldgen_root or
+                settings.m_worldgen_pack_set) {
+                auto roots = game::loadWorldgenRoots(settings, diagnostics);
+                PPR_RETURN_ERROR_ON_FAIL(Demo, roots);
+
+                m_worldgen_roots = std::move(*roots);
+            }
+
             m_observation_clock = &clock;
             m_observation_start = clock.now();
             m_worldgen_acceptance = settings.m_worldgen_acceptance;
@@ -3317,10 +3349,9 @@ namespace demo {
             enableFrameAdmissionObservations(m_worldgen_report);
             m_agent_count = 1u;
             m_workshop_startup = settings.m_command == game::EGameCommand::worldgen_workshop;
-            m_worldgen_root = settings.m_worldgen_root
-                                  ? *settings.m_worldgen_root
-                                  : hal::process::currentExecutablePath().parent_path() / "worldgen" / "default";
-            m_workshop_root = m_worldgen_root;
+            m_workshop_root = m_worldgen_roots.empty()
+                                  ? hal::process::currentExecutablePath().parent_path() / "worldgen" / "default"
+                                  : m_worldgen_roots.front();
             std::snprintf(
                 m_workshop_ui.m_root.data(), m_workshop_ui.m_root.size(), "%s", m_workshop_root.string().c_str());
             std::snprintf(
@@ -3330,6 +3361,7 @@ namespace demo {
             m_workshop_ui.m_seed = settings.m_worldgen_seed;
             m_worldgen_profile = settings.m_worldgen_profile;
             m_requested_seed = settings.m_worldgen_seed;
+            return {};
         }
 
         [[nodiscard]] bool acceptanceComplete() const noexcept {
@@ -3381,7 +3413,14 @@ namespace demo {
                 return false;
             }
             const auto desired = workshopSpec_();
-            if (preview.m_spec.m_profile != desired.m_profile or
+            const std::string_view qualified = preview.m_spec.m_profile;
+            const std::string_view requested = desired.m_profile;
+            const bool world_matches = requested.find(':') != std::string_view::npos
+                                           ? requested == qualified
+                                           : session->draftSource().m_packs.size() == 1u and
+                                                 requested == qualified.substr(qualified.find(':') + 1u);
+
+            if (not world_matches or
                 preview.m_spec.m_seed != desired.m_seed or
                 preview.m_spec.m_origin != desired.m_origin or
                 preview.m_spec.m_mode != desired.m_mode or
@@ -3395,9 +3434,10 @@ namespace demo {
             if (not session->validatedCatalog()) {
                 return false;
             }
-            const auto preview_fingerprint = preview.m_catalog.contentFingerprint();
-            const auto validated_fingerprint = session->validatedCatalog()->contentFingerprint();
-            return preview_fingerprint and validated_fingerprint and *preview_fingerprint == *validated_fingerprint;
+            return preview.m_catalog and
+                   preview.m_catalog->contentFingerprint() and
+                   preview.m_catalog->descriptorOwner() and
+                   session->draftSource().sameMounts(preview.m_catalog->descriptorOwner()->packs());
         }
 
         [[nodiscard]] std::error_code completeWorkshopTransition_() {
@@ -3407,30 +3447,35 @@ namespace demo {
                           ? std::error_code{}
                           : std::make_error_code(std::errc::operation_not_permitted));
             if (m_workshop_transition == WorkshopTransition::open) {
-                PPR_RETURN_ERROR_ON_FAIL(
-                    Demo, m_workshop->open(m_workshop_transition_root, m_workshop_transition_revision));
+                const auto error = m_workshop_transition_roots.empty()
+                                       ? m_workshop->open(m_workshop_transition_root, m_workshop_transition_revision)
+                                       : m_workshop->open(m_workshop_transition_roots, m_workshop_transition_revision);
+                PPR_RETURN_ERROR_ON_FAIL(Demo, error);
             } else if (m_workshop_transition == WorkshopTransition::exit) {
                 m_workshop_exit_authorized = true;
                 m_close_requested.store(true, std::memory_order_release);
                 m_workshop_closing = true;
             }
             m_workshop_transition = WorkshopTransition::none;
+            m_workshop_transition_roots.clear();
             return {};
         }
 
         [[nodiscard]] std::error_code requestWorkshopTransition_(
-            const WorkshopTransition transition, std::filesystem::path root = {}) {
+            const WorkshopTransition transition, std::filesystem::path root = {},
+            Array<std::filesystem::path> roots = {}) {
             if (m_workshop_transition != WorkshopTransition::none) {
                 return {};
             }
             // Reject invalid input before entering a transition that would keep
             // reopening the unsaved-edits modal on each attempted Open.
             PPR_RETURN_ERROR_ON_FAIL(
-                Demo, transition != WorkshopTransition::open or not root.empty()
+                Demo, transition != WorkshopTransition::open or not root.empty() or not roots.empty()
                           ? std::error_code{}
                           : std::make_error_code(std::errc::invalid_argument));
             m_workshop_transition = transition;
             m_workshop_transition_root = std::move(root);
+            m_workshop_transition_roots = std::move(roots);
             auto *const session = m_workshop->session();
             m_workshop_transition_revision = session ? session->revision() : 0u;
             if (session and session->dirty()) {
@@ -3477,7 +3522,9 @@ namespace demo {
             m_workshop_displayed = false;
             m_world_modal = true;
             if (not m_workshop->session() and not m_workshop_root.empty()) {
-                if (const auto error = m_workshop->open(m_workshop_root)) {
+                const auto error = m_worldgen_roots.empty() ? m_workshop->open(m_workshop_root)
+                                                            : m_workshop->open(m_worldgen_roots);
+                if (error) {
                     m_workshop_error = error.message();
                 }
             }
@@ -3708,6 +3755,11 @@ namespace demo {
                 .m_preview = m_workshop_displayed_preview.get(),
                 .m_revision = session ? session->revision() : 0u,
                 .m_validated_revision = session ? session->validatedRevision() : 0u,
+                .m_status = m_workshop_error.empty() ? m_workshop->status() : std::string_view{m_workshop_error},
+                .m_diagnostics = m_workshop->diagnostics(),
+                .m_property_diagnostics = property_diagnostics,
+                .m_diagnostics_revision = session ? session->revision() : 0u,
+                .m_index = session ? &session->sourceIndex() : nullptr,
                 .m_dirty = session and session->dirty(),
                 .m_busy = m_workshop->busy(),
                 .m_can_undo = session and session->canUndo(),
@@ -3720,11 +3772,7 @@ namespace demo {
                                          m_workshop_displayed_mode),
                 .m_can_export = m_workshop_displayed_preview and
                                 m_workshop_displayed_preview.get() == m_workshop->preview(),
-                .m_draft_invalid = m_workshop->draftInvalid(),
-                .m_status = m_workshop_error.empty() ? m_workshop->status() : std::string_view{m_workshop_error},
-                .m_diagnostics = m_workshop->diagnostics(),
-                .m_property_diagnostics = property_diagnostics,
-                .m_diagnostics_revision = session ? session->revision() : 0u};
+                .m_draft_invalid = m_workshop->draftInvalid()};
             for (const auto &intent: colony::drawWorldgenPanel(m_workshop_ui, view)) {
                 std::error_code error{};
                 config::Diagnostics diagnostics{32u};
@@ -3748,13 +3796,21 @@ namespace demo {
                     case colony::EWorkshopIntent::save: error = m_workshop->save(); break;
                     case colony::EWorkshopIntent::reload:
                         if (session) {
-                            error = requestWorkshopTransition_(WorkshopTransition::open, session->root());
+                            Array<std::filesystem::path> roots;
+                            roots.reserve(session->draftSource().m_packs.size());
+                            for (const auto &pack: session->draftSource().m_packs) {
+                                roots.push_back(pack.m_root);
+                            }
+
+                            error = requestWorkshopTransition_(WorkshopTransition::open, {}, std::move(roots));
                         }
                         break;
                     case colony::EWorkshopIntent::revert:
                         if (session) {
-                            session->revert();
-                            error = m_workshop->validate();
+                            error = session->revert();
+                            if (not error) {
+                                error = m_workshop->validate();
+                            }
                         }
                         break;
                     case colony::EWorkshopIntent::undo:
@@ -3922,9 +3978,18 @@ namespace demo {
                         cell->m_y < bounds.m_top) {
                         const auto value = preview->m_grid.getCell(*cell);
                         if (value) {
-                            const auto *const material = preview->m_catalog.findMaterial(value->m_element);
                             m_workshop_ui.m_selected_category = "materials";
-                            m_workshop_ui.m_selected_key = material ? material->m_key : "vacuum";
+                            if (value->m_element == 0u) {
+                                m_workshop_ui.m_selected_key = "vacuum";
+                            } else {
+                                config::Diagnostics diagnostics;
+                                auto name = preview->m_catalog->materialAssetName(value->m_element, diagnostics);
+                                if (name) {
+                                    m_workshop_ui.m_selected_key = name->string();
+                                } else {
+                                    m_workshop_error = name.error().message() + "\n" + diagnostics.format();
+                                }
+                            }
                         }
                     }
                 }
@@ -4002,12 +4067,22 @@ namespace demo {
             } else {
                 m_world_job = std::make_unique<colony::WorldJob>(
                     parallel::backgroundPool(),
-                    [root = m_worldgen_root, profile = m_worldgen_profile, &clock](
+                    [roots = m_worldgen_roots, profile = m_worldgen_profile, &clock](
                         const colony::ColonyDriverDesc &request, const sim::GenerationExecution &execution,
                         config::Diagnostics &diagnostics) -> Expected<std::unique_ptr<colony::ColonyDriver>> {
                         auto prepared = colony::prepareWorld(
-                            root, profile, request.m_seed, clock, diagnostics, execution);
+                            roots, profile, request.m_seed, clock, diagnostics, execution);
                         PPR_RETURN_UNEXPECTED_ON_FAIL(Demo, prepared);
+                        PPR_RETURN_UNEXPECTED_ON_FAIL(Demo, execution.m_context->error());
+
+                        const asset::RequestGeneration generation{request.m_world_generation};
+                        auto images = colony::ContentPresentationRequest::start(
+                            prepared->catalogOwner(), generation, execution.m_context, diagnostics);
+                        PPR_RETURN_UNEXPECTED_ON_FAIL(Demo, images);
+                        auto ready = images->finish(diagnostics);
+                        PPR_RETURN_UNEXPECTED_ON_FAIL(Demo, ready);
+                        PPR_RETURN_UNEXPECTED_ON_FAIL(
+                            Demo, prepared->attachPresentation(std::move(*ready), generation));
                         PPR_RETURN_UNEXPECTED_ON_FAIL(Demo, execution.m_context->error());
                         auto driver = std::make_unique<colony::ColonyDriver>();
                         PPR_RETURN_UNEXPECTED_ON_FAIL(
@@ -4929,8 +5004,11 @@ namespace demo {
                 PPR_RETURN_ERROR_ON_FAIL(Demo, drawPanel_({}));
                 return {};
             }
-            m_sim_packet = colony::makeSimFramePacket(
+            auto captured = colony::makeSimFramePacket(
                 getFrameIndex(), *m_driver, m_present_full_refresh, &m_particle_presentation);
+            PPR_RETURN_ERROR_ON_FAIL(Demo, captured);
+
+            m_sim_packet = std::move(*captured);
 
             // Phase: present. Consume the owned packet on this same thread:
             // selectively ack exactly the captured present set (post-capture
@@ -5124,7 +5202,10 @@ int runGame(const int argc, char *argv[]) try {
         return pP::colony::runColonySmoke(pP::colony::SmokeOptions{startup.m_gpu_validation}).value();
     }
     demo::TurboLarbin app("ppr", args);
-    app.setWorldgenSettings(settings, pP::ITimerClock::steady());
+    if (const auto error = app.setWorldgenSettings(settings, pP::ITimerClock::steady(), diagnostics)) {
+        std::cerr << "[worldgen] " << error.message() << '\n' << diagnostics.format();
+        return pP::config::kExitInvalidUsage;
+    }
     // Optional larger workload for external profiler captures.
     if (settings.m_profile100) {
         app.setAgentCount(100u);
