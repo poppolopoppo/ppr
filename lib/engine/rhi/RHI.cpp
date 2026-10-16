@@ -165,6 +165,117 @@ namespace pP {
     }
 
     // ------------------------------------------------------------------
+    // adapter selection
+    // ------------------------------------------------------------------
+
+    namespace {
+        // slang-rhi's public AdapterInfo exposes no per-adapter extension
+        // list, so unusable ICD bridges are identified by name. The Microsoft
+        // Direct3D12 (DZN) bridge advertises itself as a Vulkan adapter but
+        // lacks VK_KHR_shader_non_semantic_info, which the required feature
+        // set and bindless budgets need, so vkCreateDevice fails on it. On
+        // Ubuntu WSL the loader sorts it ahead of llvmpipe, so relying on
+        // slang-rhi's first-listed default adapter selects the failing one.
+        [[nodiscard]] bool isUsableAdapterName_(const std::string_view name) noexcept {
+            return not name.contains("DZN") and not name.contains("Direct3D12");
+        }
+
+        // Preference order among usable adapters: hardware first, software
+        // (llvmpipe/lavapipe) as the fallback.
+        [[nodiscard]] int adapterSelectionRank_(const slang_rhi::AdapterInfo &info) noexcept {
+            switch (info.adapterType) {
+                using enum slang_rhi::AdapterType;
+                case Discrete: return 0;
+                case Integrated: return 1;
+                case Software: return 2;
+                case Unknown: return 3;
+            }
+            std::unreachable();
+        }
+
+#if PPR_ENABLE_LOGGING
+        [[nodiscard]] string_literal getAdapterTypeName_(const slang_rhi::AdapterType type) noexcept {
+            switch (type) {
+                using enum slang_rhi::AdapterType;
+                case Discrete: return "discrete";
+                case Integrated: return "integrated";
+                case Software: return "software";
+                case Unknown: return "unknown";
+            }
+            std::unreachable();
+        }
+#endif
+
+        // Only the Vulkan backend is probed for a usable adapter: the DZN
+        // bridge that breaks device creation is a Vulkan ICD, and Vulkan is
+        // the sole backend behind DeviceType::Default on Linux. Explicit
+        // non-Vulkan types, and Default elsewhere (whose slang-rhi resolution
+        // falls back across APIs), keep slang-rhi's own adapter selection.
+        [[nodiscard]] std::optional<rhi::DeviceType> resolveProbeDeviceType_(
+            const rhi::DeviceType device_type) noexcept {
+            if (device_type == rhi::DeviceType::Vulkan) {
+                return rhi::DeviceType::Vulkan;
+            }
+#if defined(__linux__)
+            if (device_type == rhi::DeviceType::Default) {
+                return rhi::DeviceType::Vulkan;
+            }
+#endif
+            return std::nullopt;
+        }
+
+        struct AdapterSelection {
+            rhi::IAdapter *m_selected{nullptr};
+            u32 m_candidate_count{0};
+            u32 m_rejected_count{0};
+        };
+
+        // Enumerate the resolved backend's adapters, log each candidate, and
+        // return the best usable one. Leaves m_selected null when the backend
+        // exposes no adapters, so the caller can fall back to slang-rhi's own
+        // resolution.
+        [[nodiscard]] AdapterSelection selectConformantAdapter_(
+            rhi::IRHI &instance, const rhi::DeviceType device_type) {
+            AdapterSelection selection{};
+            int best_rank = -1;
+
+            for (u32 index = 0;; ++index) {
+                rhi::IAdapter *const adapter = instance.getAdapter(device_type, index);
+                if (not adapter) {
+                    break;
+                }
+
+                const slang_rhi::AdapterInfo &info = adapter->getInfo();
+                const std::string_view name{info.name};
+                const bool usable = isUsableAdapterName_(name);
+                ++selection.m_candidate_count;
+
+                PPR_LOG(
+                    RHI, info, "RHI adapter candidate",
+                    {
+                        {"index", index},
+                        {"name", name},
+                        {"type", getAdapterTypeName_(info.adapterType)},
+                        {"usable", usable},
+                    });
+
+                if (not usable) {
+                    ++selection.m_rejected_count;
+                    continue;
+                }
+
+                const int rank = adapterSelectionRank_(info);
+                if (not selection.m_selected or rank < best_rank) {
+                    selection.m_selected = adapter;
+                    best_rank = rank;
+                }
+            }
+
+            return selection;
+        }
+    }
+
+    // ------------------------------------------------------------------
     // projection free functions
     // ------------------------------------------------------------------
 
@@ -277,6 +388,37 @@ namespace pP {
                 desc.bindless.combinedTextureSamplerCount = rhi::kBindlessCombinedBudget;
                 desc.bindless.samplerCount = rhi::kBindlessSamplerBudget;
                 desc.bindless.bufferCount = rhi::kBindlessBufferBudget;
+
+                AdapterSelection selection{};
+                if (const std::optional<rhi::DeviceType> probe_type = resolveProbeDeviceType_(device_type);
+                    probe_type) {
+                    selection = selectConformantAdapter_(*p_instance, *probe_type);
+
+                    if (selection.m_candidate_count == 0) {
+                        PPR_LOG(RHI, warning, "no RHI adapters enumerated; deferring to slang-rhi selection");
+                    }
+                }
+
+                if (selection.m_selected) {
+                    desc.adapter = selection.m_selected;
+                    PPR_LOG(
+                        RHI, info, "selected RHI adapter",
+                        {
+                            {"name", std::string_view{selection.m_selected->getInfo().name}},
+                            {"type", getAdapterTypeName_(selection.m_selected->getInfo().adapterType)},
+                        });
+                }
+
+                if (selection.m_candidate_count > 0 and not selection.m_selected) {
+                    // Every enumerated adapter is a non-conformant bridge
+                    // (e.g. DZN). Fail with a named cause instead of letting
+                    // slang-rhi pick the first adapter and surface an opaque
+                    // vkCreateDevice extension error.
+                    PPR_LOG(
+                        RHI, error, "no usable RHI adapter; set VK_ICD_FILENAMES to a conformant ICD",
+                        {{"device_type", getDeviceTypeName_(device_type)}, {"rejected", selection.m_rejected_count}});
+                    PPR_RETURN_ERROR_ON_FAIL(RHI, rhi::errc::not_available);
+                }
 
 #if PPR_ENABLE_LOGGING
                 if (m_debug_options.isDebugLayersEnabled()) {
