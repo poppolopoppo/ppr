@@ -9,6 +9,7 @@ import engine.core;
 import engine.sim;
 import engine.image;
 import game.colony.content;
+import game.colony.worldgen;
 import std;
 
 namespace pP::game::tests::detail::descriptors {
@@ -218,10 +219,11 @@ descriptor = "cave.toml"
         }
 
         Expected<colony::ContentDescriptorCatalog> catalog(config::Diagnostics &diagnostics) const {
-            auto indexed = packs(diagnostics);
-            PPR_RETURN_UNEXPECTED_ON_FAIL(DescriptorTests, indexed);
+            const std::filesystem::path roots[] = {m_base, m_shared};
+            auto source = colony::loadContentSourceSet(roots, diagnostics);
+            PPR_RETURN_UNEXPECTED_ON_FAIL(DescriptorTests, source);
 
-            return colony::ContentDescriptorCatalog::importDefinitions(std::move(*indexed), diagnostics);
+            return colony::loadContentCatalog(*source, diagnostics);
         }
     };
 
@@ -290,6 +292,102 @@ descriptor = "cave.toml"
         auto catalog = fixture.catalog(diagnostics);
         PPR_TEST_ASSERT(catalog.has_value());
         PPR_TEST_ASSERT(not diagnostics.hasErrors());
+    };
+
+    PPR_UNIT_TEST (selected_runtime_view_preserves_explicit_palette_and_actual_compile_parameters) {
+        Fixture fixture;
+        config::Diagnostics diagnostics;
+        auto definitions = fixture.catalog(diagnostics);
+        PPR_TEST_ASSERT(definitions.has_value());
+        auto owner = std::make_shared<const colony::ContentDescriptorCatalog>(std::move(*definitions));
+
+        PPR_TEST_ASSERT(not colony::resolveContentWorld(*owner, "world", diagnostics));
+        const auto world = colony::resolveContentWorld(*owner, "ppr.base:world", diagnostics);
+        PPR_TEST_ASSERT(world.has_value());
+        const sim::definition::GenerationCompileParameters first_parameters{1.0 / 3.0, 1.0, 0.4, 0.9};
+        const sim::definition::GenerationCompileParameters second_parameters{0.5, 2.0, 0.3, 0.7};
+        auto first = colony::selectWorldCatalog(owner, *world, first_parameters, diagnostics);
+        auto second = colony::selectWorldCatalog(owner, *world, second_parameters, diagnostics);
+        PPR_TEST_ASSERT(first.has_value() and second.has_value());
+
+        const auto *material_one = first->findMaterial(1u);
+        const auto *material_two = first->findMaterial(2u);
+        PPR_TEST_ASSERT(material_one != nullptr and material_two != nullptr);
+        PPR_TEST_ASSERT(material_one->m_key == "rock_copy" and material_two->m_key == "rock");
+        PPR_TEST_ASSERT(first->worlds().size() == 1u and first->worlds().front().m_key == "ppr.base:world");
+        PPR_TEST_ASSERT(first->definition().m_worlds.m_entries.front().m_key == "frontier");
+        PPR_TEST_ASSERT(first->descriptorOwner() == owner and first->worldId() == *world);
+        PPR_TEST_ASSERT(first->textureDefinitions().size() == 1u);
+        PPR_TEST_ASSERT(first->contentFingerprint() != second->contentFingerprint());
+
+        const auto one = first->materialAssetName(1u, diagnostics);
+        const auto two = first->materialAssetName(2u, diagnostics);
+        PPR_TEST_ASSERT(one and one->string() == "ppr.base:rock_copy");
+        PPR_TEST_ASSERT(two and two->string() == "ppr.base:rock");
+        PPR_TEST_ASSERT(not first->materialAssetName(0u, diagnostics));
+        PPR_TEST_ASSERT(not first->materialAssetName(65535u, diagnostics));
+        const colony::ContentCatalog unselected{ZeroValue{}};
+        PPR_TEST_ASSERT(not unselected.materialAssetName(1u, diagnostics));
+
+        const auto first_plan = colony::compileWorldPlan(*first, "ppr.base:world", 41u);
+        const auto second_plan = colony::compileWorldPlan(*second, "ppr.base:world", 41u);
+        PPR_TEST_ASSERT(first_plan.has_value() and second_plan.has_value());
+        PPR_TEST_ASSERT(first_plan->recipe().m_cell_size_m == first_parameters.m_cell_size_m);
+        PPR_TEST_ASSERT(second_plan->recipe().m_cell_size_m == second_parameters.m_cell_size_m);
+        PPR_TEST_ASSERT(second_plan->recipe().m_reference_thickness_m == second_parameters.m_reference_thickness_m);
+        PPR_TEST_ASSERT(second_plan->recipe().m_actor_half_width_m == second_parameters.m_actor_half_width_m);
+        PPR_TEST_ASSERT(second_plan->recipe().m_actor_half_height_m == second_parameters.m_actor_half_height_m);
+        PPR_TEST_ASSERT(not colony::compileWorldPlan(*first, "ppr.shared:world", 41u));
+
+        struct CountingClock final : ITimerClock {
+            mutable u32 m_reads{};
+
+            TimePoint now() const noexcept override {
+                ++m_reads;
+                return {};
+            }
+        } clock;
+
+        for (u32 parameter = 0u; parameter != 4u; ++parameter) {
+            auto custom = colony::kWorldCompileParameters;
+            switch (parameter) {
+                case 0u: custom.m_cell_size_m = second_parameters.m_cell_size_m; break;
+                case 1u: custom.m_reference_thickness_m = second_parameters.m_reference_thickness_m; break;
+                case 2u: custom.m_actor_half_width_m = second_parameters.m_actor_half_width_m; break;
+                case 3u: custom.m_actor_half_height_m = second_parameters.m_actor_half_height_m; break;
+            }
+
+            auto selected = colony::selectWorldCatalog(owner, *world, custom, diagnostics);
+            PPR_TEST_ASSERT(selected.has_value());
+
+            const auto rejected = colony::prepareWorld(std::move(*selected), "ppr.base:world", 41u, clock);
+            PPR_TEST_ASSERT(not rejected and rejected.error() == std::errc::not_supported);
+            PPR_TEST_ASSERT(clock.m_reads == 0u);
+        }
+
+        Fixture::write(fixture.m_shared / "cross_material.toml", owner->materials().front().m_descriptor.m_value);
+        Fixture::write(
+            fixture.m_shared / "pack.toml",
+            owner->packs().packs().back().m_manifest.m_source.m_bytes +
+                "\n[assets.cross_material]\nkind = 'sim.material'\ndescriptor = 'cross_material.toml'\n");
+        auto cross_world = owner->worlds().front().m_descriptor.m_value;
+        const auto binding = std::ranges::find_if(
+            cross_world.m_palette.m_materials.m_entries, [](const auto &entry) { return entry.m_key == "rock"; });
+        PPR_TEST_ASSERT(binding != cross_world.m_palette.m_materials.m_entries.end());
+        binding->m_value.m_asset = "ppr.shared:cross_material";
+        Fixture::write(fixture.m_base / "world.toml", cross_world);
+
+        auto cross_definitions = fixture.catalog(diagnostics);
+        PPR_TEST_ASSERT(cross_definitions.has_value());
+
+        auto cross_owner = std::make_shared<const colony::ContentDescriptorCatalog>(std::move(*cross_definitions));
+        auto selected = colony::selectWorldCatalog(cross_owner, *world, first_parameters, diagnostics);
+        PPR_TEST_ASSERT(selected.has_value());
+
+        const auto cross_name = selected->materialAssetName(2u, diagnostics);
+        PPR_TEST_ASSERT(cross_name and cross_name->string() == "ppr.shared:cross_material");
+        PPR_TEST_ASSERT(selected->findMaterial(2u)->m_key == "rock");
+        PPR_TEST_ASSERT(selected->contentFingerprint() == first->contentFingerprint());
     };
 
     PPR_UNIT_TEST (physical_material_composition_keeps_shared_element_and_validates_roles) {
@@ -685,15 +783,37 @@ mip_policy = "unsupported"
 
     PPR_UNIT_TEST (shipped_definition_explicit_maps_preserve_current_numeric_recipe) {
         config::Diagnostics diagnostics{32u};
-        const auto source = colony::loadContentPackSource(
+        const auto source = colony::loadContentCatalog(
             hal::process::currentExecutablePath().parent_path() / "worldgen/default", diagnostics);
         PPR_TEST_ASSERT(source.has_value());
 
-        const auto definition = colony::decodePackDefinition(*source, diagnostics);
-        PPR_TEST_ASSERT(definition.has_value());
+        const auto world = colony::resolveContentWorld(*source, "frontier", diagnostics);
+        PPR_TEST_ASSERT(world.has_value());
+
+        const auto assembled = colony::assembleWorld(*source, *world, kParameters, diagnostics);
+        PPR_TEST_ASSERT(assembled.has_value());
+
+        const auto *const definition = &assembled->m_definition;
+        PPR_TEST_ASSERT(definition->m_materials.m_entries.size() == 63u);
+        PPR_TEST_ASSERT(definition->m_fields.m_entries.size() == 44u);
+        PPR_TEST_ASSERT(definition->m_biomes.m_entries.size() == 11u);
+        PPR_TEST_ASSERT(definition->m_features.m_entries.size() == 26u);
 
         const auto baseline = sim::definition::compileRecipe(*definition, {"frontier"}, kParameters, diagnostics);
         PPR_TEST_ASSERT(baseline.has_value());
+
+        const auto same_binding = [](const auto &left, const auto &right) {
+            if constexpr (requires { left.m_id; }) {
+                return left.m_key == right.m_key and left.m_id == right.m_id;
+            } else {
+                return left.m_key == right.m_key and left.m_index == right.m_index;
+            }
+        };
+        const auto &declared = assembled->m_compiled.m_bindings;
+        PPR_TEST_ASSERT(std::ranges::equal(baseline->m_bindings.m_materials, declared.m_materials, same_binding));
+        PPR_TEST_ASSERT(std::ranges::equal(baseline->m_bindings.m_fields, declared.m_fields, same_binding));
+        PPR_TEST_ASSERT(std::ranges::equal(baseline->m_bindings.m_biomes, declared.m_biomes, same_binding));
+        PPR_TEST_ASSERT(std::ranges::equal(baseline->m_bindings.m_features, declared.m_features, same_binding));
 
         auto bindings = baseline->m_bindings;
         bindings.m_rules.clear();
@@ -805,6 +925,7 @@ namespace pP::game::tests {
         _.recurse({
             detail::descriptors::physical_descriptor_domains_are_shared_by_import_and_composition,
             detail::descriptors::selected_world_uses_explicit_material_ids_and_owned_texture_closure,
+            detail::descriptors::selected_runtime_view_preserves_explicit_palette_and_actual_compile_parameters,
             detail::descriptors::numeric_identity_separates_appearance_density_and_source_provenance,
             detail::descriptors::unsampled_declared_biomes_remain_in_numeric_palette,
             detail::descriptors::unrelated_mounted_pack_cannot_change_selected_world_bindings_or_identity,

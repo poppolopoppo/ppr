@@ -389,4 +389,109 @@ namespace pP::colony {
         result.m_presentation_descriptor_fingerprint = presentation.hash();
         return result;
     }
+
+    // ------------------------------------------------------------------
+    // selected runtime views using the actual compiled recipe
+    // ------------------------------------------------------------------
+
+    Expected<sim::asset::WorldId> resolveContentWorld(
+        const ContentDescriptorCatalog &catalog, const std::string_view name, config::Diagnostics &diagnostics) {
+        const auto packs = catalog.packs().packs();
+        if (packs.empty() or (name.find(':') == std::string_view::npos and packs.size() != 1u)) {
+            PPR_RETURN_UNEXPECTED_ON_FAIL(
+                ContentAssembly,
+                asset::reject(
+                    diagnostics, "world selection", "world",
+                    "Select a qualified World name (pack.namespace:local_key) when mounting multiple packs"));
+        }
+
+        auto qualified = asset::qualifyName(name, packs.front().m_manifest.m_value.m_pack_id);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(ContentAssembly, qualified);
+        auto world = catalog.packs().resolve(
+            qualified->m_pack, qualified->string(), sim::asset::kWorldKind, diagnostics);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(ContentAssembly, world);
+
+        return sim::asset::WorldId{*(*world)->m_key};
+    }
+
+    Expected<ContentCatalog> selectWorldCatalog(
+        std::shared_ptr<const ContentDescriptorCatalog> catalog, const sim::asset::WorldId world,
+        const sim::definition::GenerationCompileParameters parameters, config::Diagnostics &diagnostics) {
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            ContentAssembly, not catalog ? std::make_error_code(std::errc::invalid_argument) : std::error_code{});
+
+        auto assembled = assembleWorld(*catalog, world, parameters, diagnostics);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(ContentAssembly, assembled);
+        auto identity = catalog->packs().resolve(asset::AssetKey{*world}, sim::asset::kWorldKind, diagnostics);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(ContentAssembly, identity);
+
+        // Assembly already validated imported domains and world-context edges.
+        // Projection consumes the same recipe; it never serializes or recompiles.
+        const config::Document provenance;
+        auto selected = ContentCatalog::project(
+            std::move(assembled->m_definition), provenance, nullptr, std::addressof(assembled->m_compiled),
+            diagnostics);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(ContentAssembly, selected);
+
+        selected->m_descriptors = std::move(catalog);
+        selected->m_selected_recipe.emplace(std::move(assembled->m_compiled));
+        selected->m_texture_definitions = std::move(assembled->m_textures);
+        selected->m_world = world;
+        selected->m_pack_id = (*identity)->m_name.m_pack;
+        selected->m_content_fingerprint = assembled->m_numeric_fingerprint;
+        selected->m_presentation_descriptor_fingerprint = assembled->m_presentation_descriptor_fingerprint;
+        selected->m_worlds.front().m_key = (*identity)->m_name.string();
+        return selected;
+    }
+
+    const sim::definition::CompiledRecipe *ContentCatalog::selectedRecipe() const noexcept {
+        return m_selected_recipe ? std::addressof(*m_selected_recipe) : nullptr;
+    }
+
+    sim::asset::WorldId ContentCatalog::worldId() const noexcept {
+        return m_world;
+    }
+
+    std::span<const image::TextureDefinition> ContentCatalog::textureDefinitions() const noexcept {
+        return m_texture_definitions;
+    }
+
+    Expected<asset::QualifiedName> ContentCatalog::materialAssetName(
+        const u16 numeric_id, config::Diagnostics &diagnostics) const {
+        const auto *const material = findMaterial(numeric_id);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            ContentAssembly,
+            numeric_id == 0u or not m_descriptors or not m_selected_recipe or material == nullptr
+                ? asset::reject(diagnostics, "selected World", "materials", "No selected Material binding for this ID")
+                : std::error_code{});
+
+        const auto world = std::ranges::find(m_descriptors->worlds(), m_world, &WorldAsset::m_id);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            ContentAssembly, world == m_descriptors->worlds().end()
+                                 ? std::make_error_code(std::errc::state_not_recoverable)
+                                 : std::error_code{});
+        auto owner = m_descriptors->packs().resolve(asset::AssetKey{*m_world}, sim::asset::kWorldKind, diagnostics);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(ContentAssembly, owner);
+
+        const auto &palette = world->m_descriptor.m_value.m_palette.m_materials.m_entries;
+        const auto binding = std::ranges::find_if(palette, [&](const auto &entry) {
+            return entry.m_key == material->m_key and entry.m_value.m_id == numeric_id;
+        });
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            ContentAssembly,
+            binding == palette.end() ? std::make_error_code(std::errc::state_not_recoverable) : std::error_code{});
+        auto linked = m_descriptors->packs().resolve(
+            (*owner)->m_name.m_pack, binding->m_value.m_asset, sim::asset::kMaterialKind, diagnostics);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(ContentAssembly, linked);
+
+        return (*linked)->m_name;
+    }
+
+    const std::shared_ptr<const ContentDescriptorCatalog> &ContentCatalog::descriptorOwner() const noexcept {
+        return m_descriptors;
+    }
+
+    u64 ContentCatalog::presentationDescriptorFingerprint() const noexcept {
+        return m_presentation_descriptor_fingerprint;
+    }
 }

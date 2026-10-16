@@ -4,18 +4,45 @@ module;
 module game.tests;
 
 import engine.core;
+import engine.asset;
 import engine.sim;
 import game.colony.content;
 import std;
 
+namespace pP::game::tests::fixtures {
+    // ------------------------------------------------------------------
+    // programmatic fixture declarations
+    // ------------------------------------------------------------------
+
+    Expected<config::Document> definitionDocument(
+        std::span<const asset::DescriptorSource> fragments, config::Diagnostics &diagnostics);
+    Expected<colony::PackDefinition> resolveDefinition(
+        const config::Document &document, config::Diagnostics &diagnostics);
+    Expected<colony::PackDefinition> resolveDefinition(
+        std::span<const asset::DescriptorSource> fragments, config::Diagnostics &diagnostics);
+}
+
 namespace pP::game::tests::detail::features {
+    // ------------------------------------------------------------------
+    // programmatic schema fixture
+    // ------------------------------------------------------------------
+
+    // Programmatic schema fragments, independent of the named pack file format.
+    struct ProgrammaticInputs {
+        std::array<asset::DescriptorSource, 7u> m_documents;
+    };
+
+    Expected<colony::PackDefinition> resolveFixtureDefinition(
+        const ProgrammaticInputs &input, config::Diagnostics &diagnostics) {
+        return fixtures::resolveDefinition(input.m_documents, diagnostics);
+    }
+
     // ------------------------------------------------------------------
     // content features
     // ------------------------------------------------------------------
 
     using namespace colony;
-    constexpr std::string_view materials_text = R"(schema_version = 3
-[materials.rock]
+    constexpr std::string_view materials_text = R"([materials.rock]
 phase = "solid"
 representation = "terrain"
 diggable = true
@@ -67,7 +94,7 @@ x_fine = 0
 y_fine = 0
 )";
     std::string validDocument() {
-        return "schema_version = 3\n" + base + tunnel + room + wall + marker;
+        return "" + base + tunnel + room + wall + marker;
     }
     void replace(std::string &text, const std::string_view before, const std::string_view after) {
         const auto position = text.find(before);
@@ -75,13 +102,13 @@ y_fine = 0
         text.replace(position, before.size(), after);
     }
 
-    ContentPackSource packSource(const std::string_view text, const std::string_view origin) {
-        ContentPackSource source{};
+    ProgrammaticInputs packSource(const std::string_view text, const std::string_view origin) {
+        ProgrammaticInputs source{};
         const char *names[] = {
             "materials.toml", "biomes.toml", "fields.toml", "features.toml", "worlds.toml", "rules.toml",
             "appearance.toml"};
-        for (std::size_t i = 0u; i < kContentDocumentCount; ++i) {
-            source.m_documents[i] = {names[i], "schema_version = 3\n"};
+        for (std::size_t i = 0u; i < 7u; ++i) {
+            source.m_documents[i] = {names[i], ""};
         }
 
         source.m_documents[0u].m_bytes = std::string{materials_text};
@@ -102,7 +129,7 @@ weight = 1.0
         source.m_documents[6u].m_bytes += R"([appearance.materials.rock]
 display_name = "Rock"
 color_rgba = "778899FF"
-albedo_texture = "textures/rock.png"
+albedo_texture = "rock_texture"
 texture_period_m = 1.0
 [appearance.materials.water]
 display_name = "Water"
@@ -118,7 +145,7 @@ display_name = "Room"
 
     Expected<Array<FeatureDefinition>> decodeFeatures(
         const std::string_view text, const std::string_view origin, config::Diagnostics &diagnostics) {
-        return decodePackDefinition(packSource(text, origin), diagnostics)
+        return resolveFixtureDefinition(packSource(text, origin), diagnostics)
             .and_then(
                 [&](PackDefinition definition) { return projectContentCatalog(std::move(definition), diagnostics); })
             .transform([](ContentCatalog catalog) {
@@ -128,7 +155,7 @@ display_name = "Room"
 
     u16 materialId(const std::string_view key) {
         config::Diagnostics diagnostics;
-        const auto definition = decodePackDefinition(packSource(validDocument(), "features.toml"), diagnostics);
+        const auto definition = resolveFixtureDefinition(packSource(validDocument(), "features.toml"), diagnostics);
         PPR_TEST_ASSERT(definition.has_value());
         const auto compiled = sim::definition::compileDefinition(*definition, 1.0 / 3.0, diagnostics);
         PPR_TEST_ASSERT(compiled.has_value());
@@ -155,13 +182,12 @@ display_name = "Room"
         PPR_TEST_ASSERT(feature.m_operations[2u].m_radius_m == 1.0);
         PPR_TEST_ASSERT(feature.m_markers[0u].m_role == EFeatureMarkerRole::start);
 
-        const auto reordered = decodeFeatures(
-            "schema_version = 3\n" + marker + wall + room + tunnel + base, "reordered.toml", diagnostics);
+        const auto reordered = decodeFeatures("" + marker + wall + room + tunnel + base, "reordered.toml", diagnostics);
         PPR_TEST_ASSERT(reordered.has_value());
         for (std::size_t i = 0u; i < feature.m_operations.size(); ++i) {
             PPR_TEST_ASSERT(reordered->front().m_operations[i].m_key == feature.m_operations[i].m_key);
         }
-        const auto no_markers = decodeFeatures("schema_version = 3\n" + base + wall, "features.toml", diagnostics);
+        const auto no_markers = decodeFeatures("" + base + wall, "features.toml", diagnostics);
         PPR_TEST_ASSERT(no_markers.has_value() and no_markers->front().m_markers.empty());
     };
 
@@ -218,7 +244,7 @@ display_name = "Room"
             } else {
                 replace(bad_marker, "y_fine = 0", "y_fine = 18");
             }
-            const std::string source = "schema_version = 3\n" + bad_base + wall + bad_marker;
+            const std::string source = "" + bad_base + wall + bad_marker;
             const std::string property = reservation ? "features.room.reservation.max_y_fine"
                                                      : "features.room.markers.spawn.y_fine";
             config::Diagnostics codec_diagnostics{};
@@ -244,14 +270,11 @@ display_name = "Room"
             replace(bad_marker, coordinate[0] == 'x' ? "x_fine = 0" : "y_fine = 0", coordinate);
             config::Diagnostics diagnostics{};
             PPR_TEST_ASSERT(
-                not decodeFeatures("schema_version = 3\n" + base + wall + bad_marker, "features.toml", diagnostics)
-                    .has_value());
+                not decodeFeatures("" + base + wall + bad_marker, "features.toml", diagnostics).has_value());
         }
         for (const auto &[collection, cap]:
             {std::pair{"operations", kMaxFeatureOperations}, std::pair{"markers", kMaxFeatureMarkers}}) {
-            std::string source = "schema_version = 3\n" +
-                                 base +
-                                 (std::string_view{collection} == "markers" ? wall : std::string{});
+            std::string source = "" + base + (std::string_view{collection} == "markers" ? wall : std::string{});
             for (std::size_t i = 0u; i <= cap; ++i) {
                 source += "[features.room." +
                           std::string{collection} +
@@ -275,8 +298,8 @@ display_name = "Room"
                 failed.error() == config::make_error_code(config::EConfigErrc::out_of_range));
         }
         config::Diagnostics empty{};
-        PPR_TEST_ASSERT(not decodeFeatures("schema_version = 3\n" + base, "features.toml", empty).has_value());
-        std::string excessive = "schema_version = 3\n";
+        PPR_TEST_ASSERT(not decodeFeatures("" + base, "features.toml", empty).has_value());
+        std::string excessive = "";
         for (std::size_t i = 0u; i <= kMaxContentFeatures; ++i) {
             auto feature = base + wall;
             replace(feature, "features.room", "features.item" + std::to_string(i));
@@ -287,7 +310,7 @@ display_name = "Room"
         auto excessive_source = packSource(excessive, "features.toml");
         auto &appearance = excessive_source.m_documents[6u].m_bytes;
         appearance.erase(appearance.find("[appearance.features.room]"));
-        const auto too_many = decodePackDefinition(excessive_source, count_diagnostics);
+        const auto too_many = resolveFixtureDefinition(excessive_source, count_diagnostics);
         if (not too_many and too_many.error() != config::make_error_code(config::EConfigErrc::out_of_range)) {
             throw std::system_error(too_many.error(), count_diagnostics.format());
         }

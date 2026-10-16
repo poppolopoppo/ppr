@@ -4,19 +4,46 @@ module;
 module game.tests;
 
 import engine.core;
+import engine.asset;
 import engine.sim;
 import game.colony.content;
 import std;
 
+namespace pP::game::tests::fixtures {
+    // ------------------------------------------------------------------
+    // programmatic fixture declarations
+    // ------------------------------------------------------------------
+
+    Expected<config::Document> definitionDocument(
+        std::span<const asset::DescriptorSource> fragments, config::Diagnostics &diagnostics);
+    Expected<colony::PackDefinition> resolveDefinition(
+        const config::Document &document, config::Diagnostics &diagnostics);
+    Expected<colony::PackDefinition> resolveDefinition(
+        std::span<const asset::DescriptorSource> fragments, config::Diagnostics &diagnostics);
+}
+
 namespace pP::game::tests::detail::biomes {
+    // ------------------------------------------------------------------
+    // programmatic schema fixture
+    // ------------------------------------------------------------------
+
+    // Programmatic schema fragments, independent of the named pack file format.
+    struct ProgrammaticInputs {
+        std::array<asset::DescriptorSource, 7u> m_documents;
+    };
+
+    Expected<colony::PackDefinition> resolveFixtureDefinition(
+        const ProgrammaticInputs &input, config::Diagnostics &diagnostics) {
+        return fixtures::resolveDefinition(input.m_documents, diagnostics);
+    }
+
     // ------------------------------------------------------------------
     // content biomes
     // ------------------------------------------------------------------
 
     using namespace colony;
 
-    const std::string materials_text = R"(schema_version = 3
-[materials.rock]
+    const std::string materials_text = R"([materials.rock]
 phase = "solid"
 representation = "terrain"
 diggable = true
@@ -31,8 +58,7 @@ phase = "solid"
 representation = "particle"
 density = 1600.0
 )";
-    const std::string fields_text = R"(schema_version = 3
-[fields.composition]
+    const std::string fields_text = R"([fields.composition]
 algorithm = "perlin"
 frequency_per_metre = 0.05
 [fields.temperature]
@@ -80,7 +106,7 @@ threshold.min = 0.3
 threshold.max = 1.0
 )";
     std::string validDocument() {
-        return "schema_version = 3\n" + base + shallow + deep + deposit;
+        return "" + base + shallow + deep + deposit;
     }
 
     void replace(std::string &text, const std::string_view before, const std::string_view after) {
@@ -91,26 +117,25 @@ threshold.max = 1.0
 
     Expected<Array<BiomeDefinition>> decodeBiomes(
         const std::string_view text, const std::string_view origin, config::Diagnostics &diagnostics) {
-        ContentPackSource source{};
+        ProgrammaticInputs source{};
         const char *names[] = {
             "materials.toml", "biomes.toml", "fields.toml", "features.toml", "worlds.toml", "rules.toml",
             "appearance.toml"};
-        for (std::size_t i = 0u; i < kContentDocumentCount; ++i) {
-            source.m_documents[i] = {names[i], "schema_version = 3\n"};
+        for (std::size_t i = 0u; i < 7u; ++i) {
+            source.m_documents[i] = {names[i], ""};
         }
         source.m_documents[0u].m_bytes = materials_text;
         source.m_documents[1u] = {std::string{origin}, std::string{text}};
         source.m_documents[2u].m_bytes = fields_text;
-        source.m_documents[6u].m_bytes = R"(schema_version = 3
-[appearance.materials.rock]
+        source.m_documents[6u].m_bytes = R"([appearance.materials.rock]
 display_name = "Rock"
 color_rgba = "AABBCCFF"
-albedo_texture = "textures/rock.png"
+albedo_texture = "rock_texture"
 texture_period_m = 2.0
 [appearance.materials.ore]
 display_name = "Ore"
 color_rgba = "112233FF"
-albedo_texture = "textures/ore.png"
+albedo_texture = "ore_texture"
 texture_period_m = 1.0
 [appearance.materials.sand]
 display_name = "Sand"
@@ -119,7 +144,7 @@ color_rgba = "EECCAAFF"
 display_name = "Temperate"
 preview_color_rgba = "709040FF"
 )";
-        return decodePackDefinition(source, diagnostics)
+        return resolveFixtureDefinition(source, diagnostics)
             .and_then(
                 [&](PackDefinition definition) { return projectContentCatalog(std::move(definition), diagnostics); })
             .transform([](ContentCatalog catalog) {
@@ -169,13 +194,11 @@ preview_color_rgba = "709040FF"
             biome.m_deposits[0u].m_material_id == materialId("ore") and
             biome.m_deposits[0u].m_host_material_id == materialId("rock"));
 
-        const auto reordered = decodeBiomes(
-            "schema_version = 3\n" + deposit + deep + shallow + base, "other/location.toml", diagnostics);
+        const auto reordered = decodeBiomes("" + deposit + deep + shallow + base, "other/location.toml", diagnostics);
         PPR_TEST_ASSERT(reordered.has_value());
         PPR_TEST_ASSERT(reordered->front().m_composition[0u].m_materials[0u].m_material_id == materialId("ore"));
         PPR_TEST_ASSERT(reordered->front().m_composition[0u].m_total_weight == band.m_total_weight);
-        const auto no_deposits = decodeBiomes(
-            "schema_version = 3\n" + base + shallow + deep, "biomes.toml", diagnostics);
+        const auto no_deposits = decodeBiomes("" + base + shallow + deep, "biomes.toml", diagnostics);
         PPR_TEST_ASSERT(no_deposits.has_value() and no_deposits->front().m_deposits.empty());
         auto zero_variation = validDocument();
         replace(zero_variation, "temperature.variation_k = 10.0", "temperature.variation_k = 0.0");
@@ -360,7 +383,7 @@ sprinkle_probability = 0.02)");
             replace(
                 invalid_deposit, invalid_depth ? "depth.max = 0.8" : "threshold.max = 1.0",
                 invalid_depth ? "depth.max = 0.1" : "threshold.max = 0.1");
-            const auto source = "schema_version = 3\n" + base + shallow + deep + invalid_deposit;
+            const auto source = "" + base + shallow + deep + invalid_deposit;
             const std::string property = std::string{"biomes.temperate.deposits.copper."} +
                                          (invalid_depth ? "depth.max" : "threshold.max");
             config::Diagnostics codec_diagnostics{};
@@ -382,7 +405,7 @@ sprinkle_probability = 0.02)");
             {"composition", kMaxBiomeCompositionBands}, {"deposits", kMaxBiomeDeposits},
             {"composition.shallow.materials", kMaxCompositionMaterials}};
         for (const auto &[collection, limit]: collections) {
-            std::string source = "schema_version = 3\n" + base;
+            std::string source = "" + base;
             if (collection == "deposits") {
                 source += shallow + deep;
             } else if (collection == "composition.shallow.materials") {

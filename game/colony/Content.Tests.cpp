@@ -7,11 +7,41 @@ module;
 module game.tests;
 
 import engine.core;
+import engine.asset;
 import engine.sim;
 import game.colony.content;
 import std;
 
+namespace pP::game::tests::fixtures {
+    // ------------------------------------------------------------------
+    // programmatic fixture declarations
+    // ------------------------------------------------------------------
+
+    Expected<config::Document> definitionDocument(
+        std::span<const asset::DescriptorSource> fragments, config::Diagnostics &diagnostics);
+    Expected<colony::PackDefinition> resolveDefinition(
+        const config::Document &document, config::Diagnostics &diagnostics);
+    Expected<colony::PackDefinition> resolveDefinition(
+        std::span<const asset::DescriptorSource> fragments, config::Diagnostics &diagnostics);
+}
+
 namespace pP::game::tests::detail::content {
+    // ------------------------------------------------------------------
+    // programmatic schema fixture
+    // ------------------------------------------------------------------
+
+    PPR_DEFINE_LOG_CATEGORY(ContentSchemaTests, debug, none);
+
+    // Programmatic schema fragments, independent of the named pack file format.
+    struct ProgrammaticInputs {
+        std::array<asset::DescriptorSource, 7u> m_documents;
+    };
+
+    Expected<colony::PackDefinition> resolveFixtureDefinition(
+        const ProgrammaticInputs &input, config::Diagnostics &diagnostics) {
+        return fixtures::resolveDefinition(input.m_documents, diagnostics);
+    }
+
     // ------------------------------------------------------------------
     // content
     // ------------------------------------------------------------------
@@ -32,24 +62,20 @@ density = 300.0
     const std::string rock_appearance = R"([appearance.materials.sandstone]
 display_name = "Sandstone"
 color_rgba = "B59C72FF"
-albedo_texture = "textures/sandstone.png"
+albedo_texture = "sandstone_texture"
 texture_period_m = 2.0
 )";
     const std::string snow_appearance = R"([appearance.materials.snow]
 display_name = "Snow"
 color_rgba = "FFFFFFFF"
 )";
-    const std::string manifest = R"(schema_version = 3
+    const std::string manifest = R"(schema_version = 1
 pack_id = "default"
-[files]
-materials = "materials.toml"
-biomes = "biomes.toml"
-fields = "fields.toml"
-features = "features.toml"
-worlds = "worlds.toml"
-rules = "rules.toml"
-appearance = "appearance.toml"
+[assets.rock]
+kind = "sim.element"
+descriptor = "rock.toml"
 )";
+    const std::string element = "schema_version = 1\nphase = 'solid'\ndensity = 2200.0\n";
 
     [[nodiscard]] static std::string replace(
         std::string source, const std::string_view from, const std::string_view to) {
@@ -59,13 +85,13 @@ appearance = "appearance.toml"
         return source;
     }
 
-    ContentPackSource fixtureSource() {
-        ContentPackSource source{};
+    ProgrammaticInputs fixtureSource() {
+        ProgrammaticInputs source{};
         const char *names[] = {
             "materials.toml", "biomes.toml", "fields.toml", "features.toml", "worlds.toml", "rules.toml",
             "appearance.toml"};
-        for (std::size_t i = 0u; i < kContentDocumentCount; ++i) {
-            source.m_documents[i] = {names[i], "schema_version = 3\n"};
+        for (std::size_t i = 0u; i < 7u; ++i) {
+            source.m_documents[i] = {names[i], ""};
         }
         source.m_documents[0u].m_bytes += rock + snow;
         source.m_documents[1u].m_bytes += R"([biomes.plain]
@@ -87,20 +113,13 @@ preview_color_rgba = "709040FF"
         return source;
     }
 
-    Expected<ContentCatalog> decodeCatalog(const ContentPackSource &source, config::Diagnostics &diagnostics) {
-        return decodePackDefinition(source, diagnostics).and_then([&](PackDefinition definition) {
-            std::array<config::Document, kContentDocumentCount> documents;
-            for (std::size_t i = 0u; i < kContentDocumentCount; ++i) {
-                const auto decoded = config::decode(
-                    source.m_documents[i].m_bytes, source.m_documents[i].m_path.string(), diagnostics,
-                    config::EDecodeMode::tree);
-                PPR_TEST_ASSERT(decoded.has_value());
-                documents[i] = *decoded;
-            }
-            const auto merged = mergeContentDocuments(documents, diagnostics);
-            PPR_TEST_ASSERT(merged.has_value());
-            return projectContentCatalog(std::move(definition), *merged, diagnostics);
-        });
+    Expected<ContentCatalog> decodeCatalog(const ProgrammaticInputs &source, config::Diagnostics &diagnostics) {
+        auto document = fixtures::definitionDocument(source.m_documents, diagnostics);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(ContentSchemaTests, document);
+        auto definition = fixtures::resolveDefinition(*document, diagnostics);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(ContentSchemaTests, definition);
+
+        return projectContentCatalog(std::move(*definition), *document, diagnostics);
     }
 
     Expected<Array<FieldDefinition>> decodeFields(
@@ -219,7 +238,7 @@ weight = 1.0
                                          not sim::validateNoiseFieldDescription(canonical->m_value);
 
             config::Diagnostics pack_errors{};
-            const auto pack = decodeFields("schema_version = 3\n[fields.probe]\n" + source, "fields.toml", pack_errors);
+            const auto pack = decodeFields("[fields.probe]\n" + source, "fields.toml", pack_errors);
             PPR_TEST_ASSERT(canonical_valid == accepted and pack.has_value() == canonical_valid);
             if (pack) {
                 PPR_TEST_ASSERT(pack->size() == 1u and not pack_errors.hasErrors());
@@ -254,7 +273,7 @@ weight = 1.0
             PPR_TEST_ASSERT(canonical.error() == config::make_error_code(code));
             PPR_TEST_ASSERT(canonical_errors.entries().front().m_property == property);
 
-            const std::string pack_source = "schema_version = 3\n[fields.probe]\n" + std::string{source};
+            const std::string pack_source = "[fields.probe]\n" + std::string{source};
             config::Diagnostics pack_errors{};
             const auto pack = decodeFields(pack_source, "fields.toml", pack_errors);
             PPR_TEST_ASSERT(not pack.has_value() and pack_errors.hasErrors());
@@ -314,23 +333,20 @@ weight = 1.0
         PPR_TEST_ASSERT(plan->fields().size() == fragment->m_fields.size());
     };
 
-    PPR_UNIT_TEST (manifest_requires_complete_distinct_portable_file_set) {
+    PPR_UNIT_TEST (named_manifest_schema_and_background_validation) {
         config::Diagnostics diagnostics;
-        const auto decoded = decodePackManifest(manifest, "pack.toml", diagnostics);
-        PPR_TEST_ASSERT(decoded and decoded->m_pack_id == "default");
-        PPR_TEST_ASSERT(decoded->m_files[static_cast<std::size_t>(EContentDocument::rules)] == "rules.toml");
-        PPR_TEST_ASSERT(decoded->m_files[static_cast<std::size_t>(EContentDocument::appearance)] == "appearance.toml");
+        const auto decoded = asset::importDescriptor<asset::Manifest>({"pack.toml", manifest}, diagnostics);
+        PPR_TEST_ASSERT(decoded and decoded->m_value.m_pack_id == "default");
+        PPR_TEST_ASSERT(decoded->m_value.m_assets.m_entries.front().m_key == "rock");
+
         for (const auto &invalid:
-            {replace(manifest, "schema_version = 3", "schema_version = 2"),
-                replace(manifest, "pack_id = \"default\"", "pack_id = \"Default\""),
-                replace(manifest, "materials.toml", "../materials.toml"),
-                replace(manifest, "worlds.toml", "biomes.toml"), replace(manifest, "worlds.toml", "pack.toml"),
-                replace(manifest, "worlds.toml", "C:/worlds.toml"), replace(manifest, "worlds.toml", "worlds.json"),
-                replace(manifest, "rules = \"rules.toml\"", ""),
-                replace(manifest, "appearance = \"appearance.toml\"", "backgrounds = \"appearance.toml\""),
-                manifest + "extra = 2\n"}) {
+            {replace(manifest, "schema_version = 1", "schema_version = 3"),
+                replace(manifest, "schema_version = 1", "schema_version = '1'"),
+                replace(manifest, "schema_version = 1", ""), replace(manifest, "descriptor = \"rock.toml\"", ""),
+                manifest + "\n[files]\nmaterials = 'materials.toml'\n"}) {
             config::Diagnostics errors;
-            PPR_TEST_ASSERT(not decodePackManifest(invalid, "pack.toml", errors) and errors.hasErrors());
+            PPR_TEST_ASSERT(not asset::importDescriptor<asset::Manifest>({"pack.toml", invalid}, errors));
+            PPR_TEST_ASSERT(errors.hasErrors());
         }
 
         auto source = fixtureSource();
@@ -340,13 +356,13 @@ weight = 1.0
                 std::to_string(index) +
                 "]\norder = " +
                 std::to_string(index) +
-                "\ntexture = 'backgrounds/layer.png'\ncolor_rgba = 'FFFFFFFF'\nrepeat_period_m = 256.0\nparallax_factor = 0.22\n";
+                "\ntexture = 'background_texture'\ncolor_rgba = 'FFFFFFFF'\nrepeat_period_m = 256.0\nparallax_factor = 0.22\n";
         }
         const auto valid = decodeCatalog(source, diagnostics);
         PPR_TEST_ASSERT(valid and valid->backgrounds().front().m_layers.size() == 4u);
         for (const auto &[before, after]:
             {std::pair{"order = 1", "order = 0"}, std::pair{"256.0", "0.0"}, std::pair{"0.22", "1.01"},
-                std::pair{"backgrounds/layer.png", "../layer.png"},
+                std::pair{"background_texture", "../layer.png"},
                 std::pair{"color_rgba = 'FFFFFFFF'", "color_rgba = 'FFFFFF80'"}}) {
             auto invalid = source;
             invalid.m_documents[6u].m_bytes = replace(invalid.m_documents[6u].m_bytes, before, after);
@@ -358,11 +374,11 @@ weight = 1.0
     PPR_UNIT_TEST (owned_materials_use_derived_ids_and_preserve_appearance) {
         auto source = fixtureSource();
         source.m_documents[6u].m_bytes =
-            "schema_version = 3\n" +
+            "" +
             rock_appearance +
-            "metallic = 0.7\nroughness = 0.2\nemissive_r = 0.4\nemissive_strength = 3.0\nalpha_mode = 'blend'\nior = 1.33\nnormal_texture = 'textures/normal.png'\nnormal_scale = 2.0\nrefraction_depth_m = 0.3\n" +
+            "metallic = 0.7\nroughness = 0.2\nemissive_r = 0.4\nemissive_strength = 3.0\nalpha_mode = 'blend'\nior = 1.33\nnormal_texture = 'normal_texture'\nnormal_scale = 2.0\nrefraction_depth_m = 0.3\n" +
             snow_appearance +
-            "albedo_texture = 'snow.png'\nnormal_texture = 'normal.png'\ntexture_period_m = 1.0\n" +
+            "albedo_texture = 'snow_texture'\nnormal_texture = 'normal_texture'\ntexture_period_m = 1.0\n" +
             "[appearance.biomes.plain]\ndisplay_name = 'Plain'\npreview_color_rgba = '709040FF'\n";
         config::Diagnostics diagnostics;
         auto catalog = decodeCatalog(source, diagnostics);
@@ -376,7 +392,7 @@ weight = 1.0
         PPR_TEST_ASSERT(optical->m_color_rgba == 0xB59C72FFu and optical->m_texture_period_m == 2.0);
         PPR_TEST_ASSERT(optical->m_diggable == true and optical->m_roundness == 1.0);
         PPR_TEST_ASSERT(optical->m_texture_sampling == EMaterialTextureSampling::stochastic);
-        PPR_TEST_ASSERT(catalog->findMaterial("snow")->m_albedo_texture == "snow.png");
+        PPR_TEST_ASSERT(catalog->findMaterial("snow")->m_albedo_texture == "snow_texture");
         PPR_TEST_ASSERT(catalog->findMaterial("snow")->m_representation == EMaterialRepresentation::particle);
         const auto compiled = sim::definition::compileDefinition(catalog->definition(), 1.0 / 3.0, diagnostics);
         PPR_TEST_ASSERT(compiled.has_value());
@@ -394,7 +410,7 @@ weight = 1.0
         config::Diagnostics diagnostics;
         const auto first = decodeCatalog(source, diagnostics);
         PPR_TEST_ASSERT(first.has_value());
-        source.m_documents[0u].m_bytes = "# reordered\nschema_version = 3\n" + snow + rock;
+        source.m_documents[0u].m_bytes = "# reordered\n" + snow + rock;
         const auto second = decodeCatalog(source, diagnostics);
         PPR_TEST_ASSERT(second and first->materialFingerprint() == second->materialFingerprint());
         for (const auto &suffix: {"texture_sampling = 'repeat'\n", "roundness = 0.25\n", "roughness = 0.2\n"}) {
@@ -403,7 +419,7 @@ weight = 1.0
                 changed.m_documents[6u].m_bytes, "texture_period_m = 2.0\n",
                 std::string{"texture_period_m = 2.0\n"} + suffix);
             const auto candidate = decodeCatalog(changed, diagnostics);
-            PPR_TEST_ASSERT(candidate and candidate->materialFingerprint() != first->materialFingerprint());
+            PPR_TEST_ASSERT(candidate and candidate->materialFingerprint() == first->materialFingerprint());
         }
         auto explicit_default = fixtureSource();
         explicit_default.m_documents[6u].m_bytes = replace(
@@ -481,7 +497,7 @@ weight = 1.0
                     normal ? replace(
                                  source.m_documents[6u].m_bytes, "texture_period_m = 2.0",
                                  "texture_period_m = 2.0\nnormal_texture = \"" + std::string{path} + "\"")
-                           : replace(source.m_documents[6u].m_bytes, "textures/sandstone.png", path);
+                           : replace(source.m_documents[6u].m_bytes, "sandstone_texture", path);
                 config::Diagnostics diagnostics;
                 PPR_TEST_ASSERT(not decodeCatalog(source, diagnostics));
                 PPR_TEST_ASSERT(
@@ -505,10 +521,10 @@ weight = 1.0
 
     PPR_UNIT_TEST (version_names_types_and_budgets) {
         for (const auto bytes:
-            {rock, "schema_version = 2\n" + rock, "schema_version = '3'\n" + rock, std::string{"schema_version = 3\n"},
-                "schema_version = 3\n" + replace(rock, "materials.sandstone", "materials.Sandstone"),
-                "schema_version = 3\n" + replace(rock, "materials.sandstone", "materials.\"sand.stone\""),
-                "schema_version = 3\n" + rock + "values = [1,2]\n"}) {
+            {"schema_version = 2\n" + rock, "schema_version = '3'\n" + rock, std::string{""},
+                "" + replace(rock, "materials.sandstone", "materials.Sandstone"),
+                "" + replace(rock, "materials.sandstone", "materials.\"sand.stone\""),
+                "" + rock + "values = [1,2]\n"}) {
             auto source = fixtureSource();
             source.m_documents[0u].m_bytes = bytes;
             config::Diagnostics diagnostics;
@@ -517,16 +533,16 @@ weight = 1.0
         auto source = fixtureSource();
         source.m_documents[0u].m_bytes.assign(kMaxMaterialDocumentBytes + 1u, ' ');
         config::Diagnostics large;
-        PPR_TEST_ASSERT(not decodePackDefinition(source, large));
-        source.m_documents[0u].m_bytes = "schema_version = 3\n";
+        PPR_TEST_ASSERT(not resolveFixtureDefinition(source, large));
+        source.m_documents[0u].m_bytes = "";
         for (std::size_t i = 0u; i <= kMaxContentMaterials; ++i) {
             source.m_documents[0u].m_bytes += replace(
                 rock, "materials.sandstone", "materials.rock_" + std::to_string(i));
         }
         config::Diagnostics count;
         source.m_documents[6u].m_bytes =
-            "schema_version = 3\n[appearance.biomes.plain]\ndisplay_name = 'Plain'\npreview_color_rgba = '709040FF'\n";
-        const auto result = decodePackDefinition(source, count);
+            "[appearance.biomes.plain]\ndisplay_name = 'Plain'\npreview_color_rgba = '709040FF'\n";
+        const auto result = resolveFixtureDefinition(source, count);
         PPR_TEST_ASSERT(not result and result.error() == config::make_error_code(config::EConfigErrc::out_of_range));
     };
 
@@ -568,11 +584,11 @@ weight = 1.0
         source.m_documents[0u].m_bytes = replace(
             source.m_documents[0u].m_bytes, "density = 2200.0\n", "density = 2200.0\n" + extras);
         config::Diagnostics capped{2u};
-        PPR_TEST_ASSERT(not decodePackDefinition(source, capped) and capped.hasErrors());
+        PPR_TEST_ASSERT(not resolveFixtureDefinition(source, capped) and capped.hasErrors());
         PPR_TEST_ASSERT(capped.entries().size() == 2u and capped.size() == 200u and capped.omittedCount() == 198u);
         PPR_TEST_ASSERT(capped.entries().front().m_property.starts_with("materials.sandstone."));
         PPR_TEST_ASSERT(capped.format().find("further diagnostics omitted") != std::string::npos);
-        PPR_TEST_ASSERT(not decodePackDefinition(source, capped));
+        PPR_TEST_ASSERT(not resolveFixtureDefinition(source, capped));
         PPR_TEST_ASSERT(capped.entries().size() == 2u and capped.size() == 400u and capped.omittedCount() == 398u);
     };
 
@@ -632,7 +648,7 @@ weight = 1.0
         });
         try {
             AllocationFailure failure{};
-            (void) decodePackDefinition(source, diagnostics);
+            (void) resolveFixtureDefinition(source, diagnostics);
         } catch (const std::bad_alloc &) {
             std::_Exit(73);
         } catch (...) {
@@ -645,60 +661,57 @@ weight = 1.0
                           ("ppr-worldgen-pack-" + std::to_string(std::random_device{}()));
         PPR_TEST_ASSERT(std::filesystem::create_directory(root));
         PPR_DEFER {
-            std::error_code cleanup{};
+            std::error_code cleanup;
             std::filesystem::remove_all(root, cleanup);
             PPR_TEST_ASSERT(not cleanup);
         };
+
         const auto write = [&](const char *name, const std::string_view bytes) {
             std::ofstream file{root / name, std::ios::binary | std::ios::trunc};
             file.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
             PPR_TEST_ASSERT(file.good());
         };
-        write("pack.toml", manifest);
-        for (const char *name:
-            {"materials.toml", "biomes.toml", "fields.toml", "features.toml", "worlds.toml", "rules.toml",
-                "appearance.toml"}) {
-            write(name, "schema_version = 3\n");
-        }
-        config::Diagnostics diagnostics{};
-        auto loaded = loadContentPackSource(root, diagnostics);
-        if (not loaded) {
-            throw std::system_error(loaded.error(), diagnostics.format() + root.string());
-        }
-        PPR_TEST_ASSERT(loaded->m_manifest_source.m_bytes == manifest);
-        PPR_TEST_ASSERT(loaded->m_manifest_source.m_path == std::filesystem::canonical(root / "pack.toml"));
-        write("materials.toml", "changed\n");
-        PPR_TEST_ASSERT(loaded->m_documents[0u].m_bytes == "schema_version = 3\n");
 
+        write("pack.toml", manifest);
+        write("rock.toml", element);
+
+        const std::filesystem::path roots[] = {root};
+        config::Diagnostics diagnostics;
+        auto loaded = loadContentSourceSet(roots, diagnostics);
+        PPR_TEST_ASSERT(loaded.has_value());
+        PPR_TEST_ASSERT(loaded->source().m_packs.front().m_manifest.m_bytes == manifest);
+        PPR_TEST_ASSERT(
+            loaded->source().m_descriptors.front().m_path == std::filesystem::canonical(root / "rock.toml"));
+
+        write("rock.toml", "changed\n");
+        PPR_TEST_ASSERT(loaded->source().m_descriptors.front().m_bytes == element);
         auto [job_context, cancel] = context::withCancelClause(context::background());
         cancel(std::make_error_code(std::errc::operation_canceled));
-        const auto cancelled = loadContentPackSource(root, diagnostics, job_context.get());
+        const auto cancelled = loadContentSourceSet(roots, diagnostics, job_context.get());
         PPR_TEST_ASSERT(not cancelled and cancelled.error() == std::errc::operation_canceled);
-        std::filesystem::resize_file(root / "materials.toml", kMaxMaterialDocumentBytes + 1u);
-        const auto oversized = loadContentPackSource(root, diagnostics);
-        PPR_TEST_ASSERT(
-            not oversized and oversized.error() == config::make_error_code(config::EConfigErrc::out_of_range));
-        std::filesystem::remove(root / "materials.toml");
-        const auto missing = loadContentPackSource(root, diagnostics);
+
+        std::filesystem::resize_file(root / "rock.toml", asset::kMaxDescriptorBytes + 1u);
+        const auto oversized = loadContentSourceSet(roots, diagnostics);
+        PPR_TEST_ASSERT(not oversized and oversized.error() == config::EConfigErrc::out_of_range);
+
+        std::filesystem::remove(root / "rock.toml");
+        const auto missing = loadContentSourceSet(roots, diagnostics);
         PPR_TEST_ASSERT(not missing and missing.error() == std::errc::no_such_file_or_directory);
 
-        write("materials.toml", "schema_version = 3\n");
-        std::filesystem::create_hard_link(root / "materials.toml", root / "alias.toml");
-        write("pack.toml", replace(manifest, "worlds.toml", "alias.toml"));
-        const auto duplicate = loadContentPackSource(root, diagnostics);
-        PPR_TEST_ASSERT(
-            not duplicate and duplicate.error() == config::make_error_code(config::EConfigErrc::duplicate_key));
+        write("rock.toml", element);
+        std::filesystem::create_hard_link(root / "rock.toml", root / "alias.toml");
+        write("pack.toml", manifest + "\n[assets.rock_alias]\nkind = 'sim.element'\ndescriptor = 'alias.toml'\n");
+        const auto duplicate = loadContentSourceSet(roots, diagnostics);
+        PPR_TEST_ASSERT(not duplicate and duplicate.error() == config::EConfigErrc::duplicate_key);
+
         std::filesystem::remove(root / "alias.toml");
         std::filesystem::create_hard_link(root / "pack.toml", root / "alias.toml");
-        const auto manifest_alias = loadContentPackSource(root, diagnostics);
-        PPR_TEST_ASSERT(
-            not manifest_alias and
-            manifest_alias.error() == config::make_error_code(config::EConfigErrc::duplicate_key));
+        const auto manifest_alias = loadContentSourceSet(roots, diagnostics);
+        PPR_TEST_ASSERT(not manifest_alias and manifest_alias.error() == config::EConfigErrc::duplicate_key);
     };
 
     PPR_UNIT_TEST (field_optional_controls_accept_finite_inclusive_endpoints) {
-        const std::string header =
-            "schema_version = 3\n[fields.boundary]\nalgorithm = \"perlin\"\nfrequency_per_metre = 0.001\n";
+        const std::string header = "[fields.boundary]\nalgorithm = \"perlin\"\nfrequency_per_metre = 0.001\n";
         for (const auto controls:
             {"lacunarity = 1.0\ngain = 0.0\nwarp_amplitude_m = 0.0\n",
                 "lacunarity = 4.0\ngain = 1.0\nwarp_amplitude_m = 4096.0\n"}) {
@@ -734,15 +747,15 @@ algorithm = "cellular_distance"
 frequency_per_metre = 0.125
 )";
         config::Diagnostics diagnostics{};
-        auto fields = decodeFields("schema_version = 3\n" + deposits + caves, "fields.toml", diagnostics);
-        auto reordered = decodeFields("schema_version = 3\n" + caves + deposits, "other.toml", diagnostics);
+        auto fields = decodeFields("" + deposits + caves, "fields.toml", diagnostics);
+        auto reordered = decodeFields("" + caves + deposits, "other.toml", diagnostics);
         PPR_TEST_ASSERT(fields and reordered and not diagnostics.hasErrors());
         PPR_TEST_ASSERT(fields->size() == 2u and fields->front().m_key == "caves");
         PPR_TEST_ASSERT(fields->back().m_noise.m_fractal == sim::ENoiseFractal::none);
         PPR_TEST_ASSERT(fields->back().m_noise.m_octaves == 4u);
         const auto categorical = decodeFields(
-            "schema_version = 3\n[fields.palette]\nalgorithm = \"cellular_value\"\nfrequency_per_metre = 0.125\n",
-            "fields.toml", diagnostics);
+            "[fields.palette]\nalgorithm = \"cellular_value\"\nfrequency_per_metre = 0.125\n", "fields.toml",
+            diagnostics);
         PPR_TEST_ASSERT(categorical.has_value());
         PPR_TEST_ASSERT(categorical->front().m_noise.m_algorithm == sim::ENoiseAlgorithm::cellular_value);
         auto compiled = sim::compileNoiseField(fields->front().m_noise, 42u);
@@ -752,8 +765,7 @@ frequency_per_metre = 0.125
     };
 
     PPR_UNIT_TEST (field_required_values_and_numeric_limits_are_enforced) {
-        const std::string valid =
-            "schema_version = 3\n[fields.caves]\nalgorithm = \"perlin\"\nfrequency_per_metre = 0.025\n";
+        const std::string valid = "[fields.caves]\nalgorithm = \"perlin\"\nfrequency_per_metre = 0.025\n";
         using config::EConfigErrc;
         const std::tuple<std::string_view, std::string_view, std::string_view, EConfigErrc> cases[] = {
             {"algorithm = \"perlin\"\n", "", "algorithm", EConfigErrc::missing_value},
@@ -798,7 +810,7 @@ frequency_per_metre = 0.125
                 PPR_TEST_ASSERT(diagnostics.entries().front().m_location == group->m_location);
             }
         }
-        std::string excessive = "schema_version = 3\n";
+        std::string excessive = "";
         for (std::size_t index = 0u; index <= kMaxContentFields; ++index) {
             excessive += "[fields.field_" +
                          std::to_string(index) +
@@ -820,7 +832,7 @@ namespace pP::game::tests {
                 detail::content::pack_fields_delegate_to_canonical_noise_schema,
                 detail::content::pack_field_presence_and_domain_errors_match_canonical_schema,
                 detail::content::decoded_fragment_requires_explicit_world_completion_to_compile,
-                detail::content::manifest_requires_complete_distinct_portable_file_set,
+                detail::content::named_manifest_schema_and_background_validation,
                 detail::content::owned_materials_use_derived_ids_and_preserve_appearance,
                 detail::content::canonical_material_identity, detail::content::required_values_are_not_cpp_defaults,
                 detail::content::invalid_materials_fail_with_authored_key,

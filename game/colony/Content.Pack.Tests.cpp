@@ -1,8 +1,16 @@
 module;
+#include "pP/Macros.h"
 #include "pP/UnitTest.h"
+#include <cstdio>
+
 module game.tests;
+
+import engine.asset;
+import engine.app;
 import engine.core;
 import engine.physics;
+import engine.sim;
+import engine.image;
 import game.colony.content;
 import game.colony.content.authoring;
 import game.colony.worldgen;
@@ -11,57 +19,290 @@ import game.colony.digtool;
 import game.colony.buildings;
 import game.colony.agents;
 import game.colony.pathfinding;
-import engine.sim;
-import engine.image;
 import game.application;
 import std;
 
 namespace pP::game::tests::detail::pack {
+    using namespace colony;
+
+    PPR_DEFINE_LOG_CATEGORY(PackContentTests, debug, none);
+
     // ------------------------------------------------------------------
-    // content pack
+    // small owned descriptor pack
     // ------------------------------------------------------------------
 
-    using namespace colony;
+    constexpr std::string_view kWorld = "ppr.test:frontier";
+
     struct Fixture {
         std::filesystem::path m_root;
+        std::string m_manifest{"schema_version = 1\npack_id = \"ppr.test\"\n"};
+
         Fixture() {
-            const auto executable = hal::process::currentExecutablePath();
             static std::atomic<u32> ordinal{};
+            const auto parent = hal::process::currentExecutablePath().parent_path();
+
             for (u32 attempt = 0u; attempt < 4096u; ++attempt) {
-                m_root = executable.parent_path() / ("worldgen-pack-test-" + std::to_string(ordinal.fetch_add(1u)));
-                if (std::filesystem::create_directory(m_root)) {
+                const auto candidate = parent / ("worldgen-pack-test-" + std::to_string(ordinal.fetch_add(1u)));
+                if (std::filesystem::create_directory(candidate)) {
+                    m_root = std::filesystem::canonical(candidate);
                     break;
                 }
-                m_root.clear();
             }
+
             PPR_TEST_ASSERT(not m_root.empty());
-            std::filesystem::copy(
-                executable.parent_path() / "worldgen/default", m_root,
-                std::filesystem::copy_options::recursive | std::filesystem::copy_options::overwrite_existing);
+
+            sim::asset::ElementDescriptor element;
+            element.m_schema_version = 1u;
+            element.m_density = 2000.0;
+            element.m_phase = sim::EGenerationMatter::solid;
+            add("solid", sim::asset::kElementKind, element);
+
+            element.m_phase = sim::EGenerationMatter::liquid;
+            element.m_density = 1000.0;
+            add("liquid", sim::asset::kElementKind, element);
+
+            image::TextureDescriptor texture;
+            texture.m_schema_version = 1u;
+            texture.m_source = "images/color.png";
+            add("albedo", image::kTextureAssetKind, texture);
+
+            texture.m_interpretation = image::ETextureInterpretation::normal;
+            add("normal", image::kTextureAssetKind, texture);
+
+            MaterialAssetDescriptor material;
+            material.m_schema_version = 1u;
+            material.m_element = "solid";
+            material.m_diggable = true;
+            material.m_appearance.m_display_name = "Basalt";
+            material.m_appearance.m_color_rgba = "808080ff";
+            material.m_appearance.m_albedo_texture = "albedo";
+            material.m_appearance.m_normal_texture = "normal";
+            material.m_appearance.m_texture_period_m = 1.0;
+            add("basalt", sim::asset::kMaterialKind, material);
+
+            material.m_diggable = false;
+            material.m_appearance.m_display_name = "Masonry";
+            add("masonry", sim::asset::kMaterialKind, material);
+
+            material.m_diggable = true;
+            material.m_appearance.m_display_name = "Sandstone";
+            add("sandstone", sim::asset::kMaterialKind, material);
+            add("spare", sim::asset::kMaterialKind, material, "Odd-Original.TOML");
+
+            material.m_element = "liquid";
+            material.m_diggable.reset();
+            material.m_representation = sim::definition::EMaterialRepresentation::particle;
+            material.m_appearance.m_display_name = "Water";
+            add("water", sim::asset::kMaterialKind, material);
+
+            sim::asset::FieldDescriptor field;
+            field.m_schema_version = 1u;
+            field.m_definition.m_frequency_per_metre = 0.01;
+            add("composition", sim::asset::kFieldKind, field);
+
+            BiomeAssetDescriptor biome;
+            biome.m_schema_version = 1u;
+            biome.m_appearance.m_display_name = "Hearth";
+            biome.m_appearance.m_preview_color_rgba = "808080ff";
+            biome.m_definition.m_temperature = {{"composition"}, 300.0, 1.0};
+            sim::definition::CompositionBand band;
+            band.m_field.m_key = "composition";
+            band.m_materials.m_entries.push_back({"stone", {{"basalt"}, 1.0}});
+            biome.m_definition.m_composition.m_entries.push_back({"cover", std::move(band)});
+            add("hearth", sim::asset::kBiomeKind, biome);
+
+            FeatureAssetDescriptor feature;
+            feature.m_schema_version = 1u;
+            feature.m_appearance.m_display_name = "Landing";
+            feature.m_definition.m_reservation = {0, 0, 16, 16};
+            sim::definition::Operation operation;
+            operation.m_action = sim::definition::Carve{sim::definition::Rectangle{16u, 16u}};
+            feature.m_definition.m_operations.m_entries.push_back({"op_01", std::move(operation)});
+            feature.m_definition.m_markers.m_entries.push_back({"spawn", {sim::EGenerationMarker::start, 8, 8}});
+            add("landing", sim::asset::kFeatureKind, feature);
+
+            sim::asset::RuleDescriptor rule;
+            rule.m_schema_version = 1u;
+            sim::definition::Cave cave;
+            cave.m_biome.m_key = "hearth";
+            cave.m_field.m_key = "composition";
+            cave.m_threshold = {0.95, 1.0};
+            rule.m_definition.m_payload = cave;
+            add("caves", sim::asset::kRuleKind, rule);
+
+            BackgroundAssetDescriptor background;
+            background.m_schema_version = 1u;
+
+            for (u32 index = 0u; index < 4u; ++index) {
+                BackgroundAppearanceLayer layer;
+                layer.m_order = index;
+                layer.m_texture = "albedo";
+                layer.m_color_rgba = "ffffffff";
+                layer.m_repeat_period_m = 1.0;
+                background.m_definition.m_layers.m_entries.push_back(
+                    {"layer_" + std::to_string(index), std::move(layer)});
+            }
+
+            add("skies", kBackgroundAssetKind, background);
+
+            WorldAssetDescriptor world;
+            world.m_schema_version = 1u;
+            world.m_semantic_key = "frontier";
+            world.m_appearance.m_display_name = "Frontier";
+            world.m_appearance.m_background_stack = "skies";
+            world.m_palette.m_materials.m_entries = {
+                {"basalt", {"basalt", 1u}}, {"masonry", {"masonry", 2u}}, {"sandstone", {"sandstone", 3u}},
+                {"water", {"water", 4u}}};
+            world.m_palette.m_fields.m_entries.push_back({"composition", {"composition", 0u}});
+            world.m_palette.m_biomes.m_entries.push_back({"hearth", {"hearth", 0u}});
+            world.m_palette.m_features.m_entries.push_back({"landing", {"landing", 0u}});
+            world.m_palette.m_rules.m_entries.push_back({"caves", {"caves"}});
+            world.m_profile.m_layout = {1u, 1u, 16u, 1.0};
+            world.m_profile.m_boundaries = {{"basalt"}, 1u, 0.0, {"composition"}, {"composition"}};
+            world.m_profile.m_start.m_biome.m_key = "hearth";
+            world.m_profile.m_start.m_feature.m_key = "landing";
+            world.m_profile.m_start.m_marker.m_key = "spawn";
+            world.m_profile.m_start.m_x_fine = 128u;
+            world.m_profile.m_start.m_y_fine = 128u;
+            world.m_profile.m_start.m_clearance_m = 2.0;
+            world.m_profile.m_start.m_route_width_m = 1.0;
+            sim::definition::BiomeChoice choice;
+            choice.m_biome.m_key = "hearth";
+            choice.m_required_count = 1u;
+            choice.m_distance_max_m = 1024.0;
+            world.m_profile.m_biomes.m_entries.push_back({"hearth", std::move(choice)});
+            add("frontier", sim::asset::kWorldKind, world);
+
+            world.m_semantic_key = "hollows";
+            world.m_appearance.m_display_name = "Hollows";
+            add("hollows", sim::asset::kWorldKind, world);
+            write("pack.toml", m_manifest);
         }
+
         ~Fixture() {
-            // Best-effort test-fixture cleanup; a failed removal cannot affect catalog ownership.
-            std::error_code error{};
+            // Best-effort fixture cleanup; retained catalogs and snapshots own their bytes.
+            std::error_code error;
             std::filesystem::remove_all(m_root, error);
+            PPR_LOG_WARNING_ON_FAIL(PackContentTests, error);
         }
+
+        Fixture(const Fixture &) = delete;
+        Fixture &operator=(const Fixture &) = delete;
+
         std::string read(const std::string_view name) const {
             std::ifstream file{m_root / name, std::ios::binary};
             PPR_TEST_ASSERT(file.good());
             return {std::istreambuf_iterator<char>{file}, {}};
         }
+
         void write(const std::string_view name, const std::string_view bytes) const {
-            std::ofstream file{m_root / name, std::ios::binary | std::ios::trunc};
+            const auto path = m_root / name;
+            std::filesystem::create_directories(path.parent_path());
+            std::ofstream file{path, std::ios::binary | std::ios::trunc};
             file.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
-            PPR_TEST_ASSERT(file.good());
+            file.close();
+            PPR_TEST_ASSERT(not file.fail());
         }
+
+        template<typename T>
+            requires requires { T::describe(); }
+        void write(const std::string_view name, const T &value) const {
+            const auto document = config::documentFrom(value);
+            PPR_TEST_ASSERT(document.has_value());
+            const auto encoded = config::encode(*document);
+            PPR_TEST_ASSERT(encoded.has_value());
+
+            write(name, std::string_view{*encoded});
+        }
+
+        template<typename T>
+        void add(
+            const std::string_view key, const std::string_view kind, const T &value,
+            const std::string_view existing = {}) {
+            const auto file = existing.empty() ? std::string{key} + ".toml" : std::string{existing};
+            m_manifest += "\n[assets." +
+                          std::string{key} +
+                          "]\nkind = \"" +
+                          std::string{kind} +
+                          "\"\ndescriptor = \"" +
+                          file +
+                          "\"\n";
+
+            write(file, value);
+        }
+
         Expected<ContentCatalog> load(config::Diagnostics &diagnostics) const {
-            return loadContentCatalog(m_root, diagnostics);
+            auto definitions = loadContentCatalog(m_root, diagnostics);
+            PPR_RETURN_UNEXPECTED_ON_FAIL(PackContentTests, definitions);
+
+            auto owner = std::make_shared<const ContentDescriptorCatalog>(std::move(*definitions));
+            const auto id = resolveContentWorld(*owner, kWorld, diagnostics);
+            PPR_RETURN_UNEXPECTED_ON_FAIL(PackContentTests, id);
+
+            return selectWorldCatalog(owner, *id, kWorldCompileParameters, diagnostics);
+        }
+
+        ContentAuthoringSession open(config::Diagnostics &diagnostics) const {
+            auto opened = ContentAuthoringSession::open(m_root, diagnostics);
+            PPR_TEST_ASSERT(opened.has_value());
+            return std::move(*opened);
         }
     };
-    void useSmallIdentityImages(const Fixture &fixture) {
-        // Identity mutations exercise source-byte hashing and usage separation.
-        // The 4x4 bases satisfy the mip contract while retaining the two original pixel colors.
-        // Full-size authored maps and mip chains have a dedicated catalog test.
+
+    const asset::DescriptorSource &descriptor(const ContentSourceSet &source, const std::filesystem::path &path) {
+        const auto found = std::ranges::find(source.m_descriptors, path, &asset::DescriptorSource::m_path);
+        PPR_TEST_ASSERT(found != source.m_descriptors.end());
+        return *found;
+    }
+
+    const ContentDiskRecord &ledger(const ContentDiskBaseline &baseline, const std::filesystem::path &path) {
+        const auto found = std::ranges::find_if(baseline.m_descriptors, [&](const auto &record) {
+            return record.m_target and record.m_target->path() == path;
+        });
+        PPR_TEST_ASSERT(found != baseline.m_descriptors.end());
+        return *found;
+    }
+
+    std::filesystem::path target(
+        const ContentAuthoringSession &session, const std::string_view key, const std::string_view kind,
+        config::Diagnostics &diagnostics) {
+        const auto entry = session.sourceIndex().resolve("ppr.test", key, kind, diagnostics);
+        PPR_TEST_ASSERT(entry.has_value());
+        return (*entry)->m_descriptor;
+    }
+
+    void save(ContentAuthoringSession &session, config::Diagnostics &diagnostics) {
+        auto result = saveContentDraft(session.draftSnapshot(), diagnostics);
+        PPR_TEST_ASSERT(result.has_value() and not result->m_error);
+        PPR_TEST_ASSERT(session.acceptSave(std::move(*result)));
+        PPR_TEST_ASSERT(not session.dirty());
+    }
+
+    std::string reverseTables(const std::string &text) {
+        const auto first = text.find("\n[");
+        PPR_TEST_ASSERT(first != std::string::npos);
+
+        Array<std::string_view> tables;
+        auto position = first;
+
+        while (position != std::string::npos) {
+            const auto next = text.find("\n[", position + 2u);
+            tables.push_back(
+                std::string_view{text}.substr(
+                    position, next == std::string::npos ? std::string::npos : next - position));
+            position = next;
+        }
+
+        std::string result = text.substr(0u, first);
+        for (const auto table: tables | std::views::reverse) {
+            result += table;
+        }
+
+        return result;
+    }
+
+    void useSmallIdentityImages(const Fixture &fixture, const bool alternate = false) {
+        // Real 4x4 PNGs with different pixel values, both valid for mip generation.
         constexpr std::array<u8, 75u> first{
             0x89u, 0x50u, 0x4eu, 0x47u, 0x0du, 0x0au, 0x1au, 0x0au, 0x00u, 0x00u, 0x00u, 0x0du, 0x49u, 0x48u, 0x44u,
             0x52u, 0x00u, 0x00u, 0x00u, 0x04u, 0x00u, 0x00u, 0x00u, 0x04u, 0x08u, 0x06u, 0x00u, 0x00u, 0x00u, 0xa9u,
@@ -74,74 +315,30 @@ namespace pP::game::tests::detail::pack {
             0xf1u, 0x9eu, 0x7eu, 0x00u, 0x00u, 0x00u, 0x12u, 0x49u, 0x44u, 0x41u, 0x54u, 0x78u, 0x9cu, 0x63u, 0x38u,
             0xd0u, 0xf0u, 0xeeu, 0x3fu, 0x32u, 0x66u, 0x20u, 0x5du, 0x00u, 0x00u, 0xb6u, 0xe6u, 0x32u, 0xd1u, 0xedu,
             0xfbu, 0xd5u, 0x33u, 0x00u, 0x00u, 0x00u, 0x00u, 0x49u, 0x45u, 0x4eu, 0x44u, 0xaeu, 0x42u, 0x60u, 0x82u};
+        const auto bytes = alternate ? std::span<const u8>{second} : std::span<const u8>{first};
 
-        for (const auto &entry: std::filesystem::directory_iterator{fixture.m_root / "textures"}) {
-            if (entry.path().extension() != ".png") {
-                continue;
-            }
-
-            const auto name = entry.path().filename().string();
-            const bool alternate = name == "ice.png" or
-                                   name == "ice_normal.png" or
-                                   name == "background_hollows_distant.png";
-            const auto bytes = alternate ? std::span<const u8>{second} : std::span<const u8>{first};
-            fixture.write(
-                "textures/" + name, std::string_view{reinterpret_cast<const char *>(bytes.data()), bytes.size()});
-        }
+        fixture.write("images/color.png", {reinterpret_cast<const char *>(bytes.data()), bytes.size()});
     }
 
-    void replace(std::string &text, const std::string_view before, const std::string_view after) {
-        const auto at = text.find(before);
-        PPR_TEST_ASSERT(at != std::string::npos);
-        text.replace(at, before.size(), after);
-    }
-    std::string reorder(const std::string &text) {
-        Array<std::string_view> tables{};
-        const auto first = text.find('\n' + std::string{"["});
-        PPR_TEST_ASSERT(first != std::string::npos);
-        auto at = first;
-        while (at != std::string::npos) {
-            const auto next = text.find("\n[", at + 1u);
-            tables.push_back(std::string_view{text}.substr(at, next == std::string::npos ? next : next - at));
-            at = next;
-        }
-        std::string result = "# Reordered without changing resolved values\n" + text.substr(0u, first);
-        for (const auto table: tables | std::views::reverse) {
-            result.append(table);
-            // Splitting at LF may leave a Windows CR at the end of a block.
-            result.push_back('\n');
-        }
-        return result;
+    std::shared_ptr<const ContentPresentation> present(
+        std::shared_ptr<const ContentCatalog> catalog, config::Diagnostics &diagnostics,
+        const asset::RequestGeneration generation = asset::RequestGeneration{1u}, ContentSourceEpochToken epoch = {},
+        const std::shared_ptr<const ContentPresentation> &previous = {}) {
+        auto request = ContentPresentationRequest::start(
+            std::move(catalog), generation, context::background(), diagnostics, std::move(epoch), previous);
+        PPR_TEST_ASSERT(request.has_value());
+        auto result = request->finish(diagnostics);
+        PPR_TEST_ASSERT(result.has_value());
+        return *result;
     }
 
-    PPR_UNIT_TEST (definition_keys_own_sorted_unique_segments_from_raw_drafts) {
-        Array<std::string> owned;
-        {
-            config::Document document;
-            for (const std::string_view path:
-                {"materials.zeta.phase", "materials.alpha.phase", "materials.alpha.density", "materials.a-b.phase",
-                    "materials..ignored", "materials2.other.phase", "materials.foo[bar].phase",
-                    "materials.\"quoted\".phase"}) {
-                document.m_entries.push_back({std::string{path}, config::FileValue::integer(1), "draft:1"});
-            }
-
-            document.m_groups = {{"materials.alpha", "draft:2"}, {"materials.beta", "draft:3"}};
-
-            owned = contentDefinitionKeys(EContentDocument::materials, document);
-        }
-
-        {
-            const auto scratch_scope = mem::ScratchPad::open();
-            Array<std::byte, mem::ScratchPad> overwrite(1024u * 1024u, std::byte{0x4b});
-            PPR_TEST_ASSERT(overwrite.front() == std::byte{0x4b});
-        }
-
-        PPR_TEST_ASSERT(owned == (Array<std::string>{"\"quoted\"", "a-b", "alpha", "beta", "foo[bar]", "zeta"}));
-    };
+    // ------------------------------------------------------------------
+    // catalog tools and small numeric plans
+    // ------------------------------------------------------------------
 
     PPR_UNIT_TEST (catalog_dig_respects_protected_material_and_preflights_the_complete_rectangle) {
-        Fixture fixture{};
-        config::Diagnostics diagnostics{};
+        Fixture fixture;
+        config::Diagnostics diagnostics;
         const auto catalog = fixture.load(diagnostics);
         PPR_TEST_ASSERT(catalog.has_value());
         sim::ChunkGrid grid;
@@ -149,14 +346,17 @@ namespace pP::game::tests::detail::pack {
         PPR_TEST_ASSERT(not grid.setCell({128u, 20u}, {catalog->findMaterial("masonry")->m_numeric_id, 302.0f}));
         PPR_TEST_ASSERT(not grid.setCell({129u, 20u}, {catalog->findMaterial("water")->m_numeric_id, 303.0f}));
         grid.clearAllDirty();
+
         const DigRect rect{{127u, 20u}, 3u, 1u};
         const auto particle = digCells(grid, rect, &*catalog);
         PPR_TEST_ASSERT(not particle and particle.error() == std::errc::invalid_argument);
         PPR_TEST_ASSERT(grid.getCell({127u, 20u})->m_element == catalog->findMaterial("basalt")->m_numeric_id);
+
         PPR_TEST_ASSERT(not grid.setCell({129u, 20u}, {60000u, 303.0f}));
         const auto unknown = digCells(grid, rect, &*catalog);
         PPR_TEST_ASSERT(not unknown and unknown.error() == std::errc::invalid_argument);
         PPR_TEST_ASSERT(grid.getCell({127u, 20u})->m_element == catalog->findMaterial("basalt")->m_numeric_id);
+
         PPR_TEST_ASSERT(not grid.setCell({129u, 20u}, {catalog->findMaterial("sandstone")->m_numeric_id, 303.0f}));
         const auto result = digCells(grid, rect, &*catalog);
         PPR_TEST_ASSERT(result.has_value() and result->m_dug == 2u and result->m_touched.size() == 2u);
@@ -164,13 +364,14 @@ namespace pP::game::tests::detail::pack {
         PPR_TEST_ASSERT(grid.getCell({127u, 20u})->m_temperature == 301.0f);
         PPR_TEST_ASSERT(grid.getCell({128u, 20u})->m_element == catalog->findMaterial("masonry")->m_numeric_id);
         PPR_TEST_ASSERT(grid.getCell({129u, 20u})->m_element == 0u);
+
         const auto repeated = digCells(grid, rect, &*catalog);
         PPR_TEST_ASSERT(repeated.has_value() and repeated->m_dug == 0u and repeated->m_touched.empty());
     };
 
     PPR_UNIT_TEST (construction_checks_complete_tiles_reservations_and_live_actor_overlap) {
-        Fixture fixture{};
-        config::Diagnostics diagnostics{};
+        Fixture fixture;
+        config::Diagnostics diagnostics;
         const auto catalog = fixture.load(diagnostics);
         PPR_TEST_ASSERT(catalog.has_value());
         sim::ChunkGrid grid;
@@ -178,6 +379,7 @@ namespace pP::game::tests::detail::pack {
         PPR_TEST_ASSERT(not registerColonyComponents(registry));
         const Footprint print{{126u, 21u}, 3u, 3u, catalog->findMaterial("masonry")->m_numeric_id};
         PPR_TEST_ASSERT(not validateConstruction(grid, registry, print, *catalog));
+
         auto invalid = print;
         invalid.m_element = catalog->findMaterial("water")->m_numeric_id;
         PPR_TEST_ASSERT(validateConstruction(grid, registry, invalid, *catalog) == std::errc::invalid_argument);
@@ -186,9 +388,11 @@ namespace pP::game::tests::detail::pack {
         PPR_TEST_ASSERT(validateConstruction(grid, registry, invalid, *catalog) == std::errc::invalid_argument);
         invalid.m_min.m_x = 4095u;
         PPR_TEST_ASSERT(validateConstruction(grid, registry, invalid, *catalog) == std::errc::invalid_argument);
+
         PPR_TEST_ASSERT(not grid.setCell({128u, 23u}, {catalog->findMaterial("basalt")->m_numeric_id, 299.0f}));
         PPR_TEST_ASSERT(validateConstruction(grid, registry, print, *catalog) == std::errc::device_or_resource_busy);
         PPR_TEST_ASSERT(not grid.setCell({128u, 23u}, {0u, 299.0f}));
+
         const auto actor = registry.create();
         registry.emplace<Agent>(actor, Agent{});
         registry.emplace<sim::BodyState>(actor, sim::BodyState{42.5f, 7.5f});
@@ -196,6 +400,7 @@ namespace pP::game::tests::detail::pack {
         PPR_TEST_ASSERT(validateConstruction(grid, registry, print, *catalog) == std::errc::device_or_resource_busy);
         registry.get<sim::BodyState>(actor)->m_x = 10.0f;
         PPR_TEST_ASSERT(not validateConstruction(grid, registry, print, *catalog));
+
         const auto entity = registry.create();
         registry.emplace<BuildErrand>(entity, BuildErrand{print, 0u, 9u});
         PPR_TEST_ASSERT(validateConstruction(grid, registry, print, *catalog) == std::errc::device_or_resource_busy);
@@ -204,11 +409,13 @@ namespace pP::game::tests::detail::pack {
         registry.get<sim::BodyState>(actor)->m_x = 42.5f;
         PPR_TEST_ASSERT(not advanceErrands(grid, registry, finder, touched, 64u, &*catalog));
         PPR_TEST_ASSERT(registry.get<BuildErrand>(entity)->m_progress == 0u and touched.empty());
+
         registry.get<sim::BodyState>(actor)->m_x = 10.0f;
         PPR_TEST_ASSERT(not advanceErrands(grid, registry, finder, touched, 4u, &*catalog));
         PPR_TEST_ASSERT(registry.get<BuildErrand>(entity)->m_progress == 4u and touched.size() == 2u);
         PPR_TEST_ASSERT(not advanceErrands(grid, registry, finder, touched, 64u, &*catalog));
         PPR_TEST_ASSERT(registry.get<BuildErrand>(entity)->m_progress == 9u);
+
         registry.get<BuildErrand>(entity)->m_print.m_solid = false;
         registry.get<BuildErrand>(entity)->m_print.m_element = 0u;
         registry.get<BuildErrand>(entity)->m_progress = 0u;
@@ -217,8 +424,8 @@ namespace pP::game::tests::detail::pack {
     };
 
     PPR_UNIT_TEST (errand_preflight_rejects_invalid_actor_before_any_demolition_writes) {
-        Fixture fixture{};
-        config::Diagnostics diagnostics{};
+        Fixture fixture;
+        config::Diagnostics diagnostics;
         const auto catalog = fixture.load(diagnostics);
         PPR_TEST_ASSERT(catalog.has_value());
         sim::ChunkGrid grid;
@@ -233,953 +440,1139 @@ namespace pP::game::tests::detail::pack {
         const auto actor = registry.create();
         registry.emplace<Agent>(actor, Agent{});
         registry.emplace<sim::BodyState>(actor, sim::BodyState{10.0f, 10.0f});
+
         Pathfinder finder;
         Array<sim::ChunkPos> touched;
         PPR_TEST_ASSERT(advanceErrands(grid, registry, finder, touched, 64u, &*catalog) == std::errc::invalid_argument);
-        PPR_TEST_ASSERT(
-            grid.getCell({30u, 30u})->m_element == catalog->findMaterial("basalt")->m_numeric_id and touched.empty());
+        PPR_TEST_ASSERT(grid.getCell({30u, 30u})->m_element == catalog->findMaterial("basalt")->m_numeric_id);
+        PPR_TEST_ASSERT(touched.empty());
         PPR_TEST_ASSERT(registry.get<BuildErrand>(demolition)->m_progress == 0u);
         PPR_TEST_ASSERT(registry.get<BuildErrand>(build)->m_progress == 0u);
     };
 
     PPR_UNIT_TEST (data_only_material_extension_reaches_raster_tools_and_colliders) {
-        Fixture fixture{};
-        config::Diagnostics baseline_diagnostics{};
-        const auto baseline_catalog = fixture.load(baseline_diagnostics);
-        PPR_TEST_ASSERT(baseline_catalog.has_value());
-        fixture.write("materials.toml", fixture.read("materials.toml") + R"(
-[materials.violet_ore]
-phase = "solid"
-representation = "terrain"
-diggable = true
-density = 3100.0
-)");
-        fixture.write("appearance.toml", fixture.read("appearance.toml") + R"(
-[appearance.materials.violet_ore]
-display_name = "Violet ore"
-color_rgba = "C07CFFFF"
-albedo_texture = "textures/violet_ore.png"
-texture_period_m = 0.75
-)");
-        std::filesystem::copy_file(fixture.m_root / "textures/ice.png", fixture.m_root / "textures/violet_ore.png");
-        auto biomes = fixture.read("biomes.toml");
-        fixture.write("biomes.toml", biomes + R"(
-[biomes.hearth.deposits.violet_lens]
-order = 65535
-field = "ore_grain"
-material = "violet_ore"
-host_material = "sandstone"
-depth.min = 0.0
-depth.max = 1.0
-threshold.min = -1.0
-threshold.max = 1.0
-)");
-        config::Diagnostics diagnostics{};
-        const auto catalog = fixture.load(diagnostics);
-        PPR_TEST_ASSERT(catalog.has_value() and not diagnostics.hasErrors());
-        const auto *const material = catalog->findMaterial("violet_ore");
-        PPR_TEST_ASSERT(material and material->m_display_name == "Violet ore");
-        PPR_TEST_ASSERT(material->m_diggable == true and material->m_color_rgba == 0xC07CFFFFu);
-        PPR_TEST_ASSERT(
-            material->m_texture_period_m == 0.75 and material->m_albedo_texture == "textures/violet_ore.png");
-        const auto texture = std::ranges::find(
-            catalog->textures(), *material->m_albedo_texture, &ContentTexture::m_path);
-        PPR_TEST_ASSERT(texture != catalog->textures().end() and texture->m_image.m_storage.isOwned());
-        PPR_TEST_ASSERT(
-            catalog->textures().size() == 135u and
-            catalog->contentFingerprint() != baseline_catalog->contentFingerprint());
+        Fixture fixture;
+        config::Diagnostics diagnostics;
+        auto session = fixture.open(diagnostics);
+        PPR_TEST_ASSERT(not session.cloneDefinition(EContentDocument::materials, "basalt", "violet_ore", diagnostics));
+        PPR_TEST_ASSERT(not session.editDefinition(
+            EContentDocument::materials, "violet_ore", "appearance.display_name", config::FileValue::text("Violet ore"),
+            diagnostics));
+        PPR_TEST_ASSERT(not session.editDefinition(
+            EContentDocument::materials, "violet_ore", "appearance.color_rgba", config::FileValue::text("c07cffff"),
+            diagnostics));
 
-        const auto plan = compileWorldPlan(*catalog, "frontier", 42u);
+        const auto palette = config::decode(
+            "asset = 'violet_ore'\nid = 5\n", "palette", diagnostics, config::EDecodeMode::tree);
+        PPR_TEST_ASSERT(palette.has_value());
+        auto draft = session.draftSnapshot();
+
+        for (const auto name: {"frontier.toml", "hollows.toml"}) {
+            auto &worlds = draft.m_source.m_descriptors;
+            const auto found = std::ranges::find(worlds, fixture.m_root / name, &asset::DescriptorSource::m_path);
+            PPR_TEST_ASSERT(found != worlds.end());
+            const auto insertion = config::patchTree(
+                found->m_bytes, "palette.materials.violet_ore", config::ETreeSourceEdit::insert, *palette,
+                found->m_path.string(), diagnostics);
+            PPR_TEST_ASSERT(insertion.has_value());
+            const auto bytes = config::applySourcePatch(found->m_bytes, *insertion);
+            PPR_TEST_ASSERT(bytes.has_value());
+
+            found->m_bytes = *bytes;
+        }
+
+        const auto cover = config::decode(
+            "material = 'violet_ore'\nweight = 1.0\n", "cover", diagnostics, config::EDecodeMode::tree);
+        PPR_TEST_ASSERT(cover.has_value());
+        PPR_TEST_ASSERT(not session.replaceDefinitionSubtree(
+            EContentDocument::biomes, "hearth", "definition.composition.cover.materials.stone", *cover, diagnostics));
+        const auto biome_path = fixture.m_root / "hearth.toml";
+        const auto biome = std::ranges::find(
+            draft.m_source.m_descriptors, biome_path, &asset::DescriptorSource::m_path);
+        PPR_TEST_ASSERT(biome != draft.m_source.m_descriptors.end());
+
+        biome->m_bytes = descriptor(session.draftSource(), biome_path).m_bytes;
+
+        const auto validated = validateContentDraft(draft, diagnostics, nullptr, kWorld);
+        PPR_TEST_ASSERT(validated.has_value() and validated->m_selected);
+        const auto &catalog = *validated->m_selected;
+
+        const auto *material = catalog.findMaterial("violet_ore");
+        PPR_TEST_ASSERT(material != nullptr and material->m_color_rgba == 0xc07cffffu);
+
+        const auto plan = compileWorldPlan(catalog, kWorld, 42u);
         PPR_TEST_ASSERT(plan.has_value());
+
         const auto layout = sim::compileBiomeLayout(*plan);
         PPR_TEST_ASSERT(layout.has_value());
+
         const auto geometry = sim::compileGenerationGeometry(*plan, *layout);
         PPR_TEST_ASSERT(geometry.has_value());
+
         const auto raster = sim::compileGenerationRaster(*plan, *layout, *geometry);
         PPR_TEST_ASSERT(raster.has_value());
-        std::optional<sim::Cell> generated{};
-        for (const auto &site: layout->sites()) {
-            const sim::ChunkPos pos{
-                static_cast<u32>(site.m_x_m * 3.0) / sim::kChunkEdge,
-                static_cast<u32>(site.m_y_m * 3.0) / sim::kChunkEdge};
-            const auto cells = raster->chunk(pos);
-            PPR_TEST_ASSERT(cells.has_value());
-            const auto found = std::ranges::find(*cells, material->m_numeric_id, &sim::Cell::m_element);
-            if (found != cells->end()) {
-                generated = *found;
-                break;
-            }
-        }
-        PPR_TEST_ASSERT(generated.has_value());
-        sim::ChunkGrid grid{};
+        const auto cells = raster->chunk({0u, 0u});
+        PPR_TEST_ASSERT(cells.has_value());
+        const auto generated = std::ranges::find(*cells, material->m_numeric_id, &sim::Cell::m_element);
+        PPR_TEST_ASSERT(generated != cells->end());
+
+        sim::ChunkGrid grid;
         PPR_TEST_ASSERT(not grid.setCell({1u, 1u}, *generated));
-        physics::Scene scene{};
+        physics::Scene scene;
         physics::ChunkColliders colliders{{1.0f / 3.0f}};
         PPR_TEST_ASSERT(not scene.initialize({}));
         std::array<u16, 16u> occupancy{};
-        occupancy[5u] = grid.getCell({1u, 1u})->m_element;
+        occupancy[5u] = material->m_numeric_id;
         const std::array chunks{physics::ColliderChunkView{{0, 0}, occupancy, true}};
         const std::array dirty{physics::ColliderChunkPos{0, 0}};
         u32 processed{};
         PPR_TEST_ASSERT(not colliders.rebuildDirtyChunks(scene, chunks, dirty, 4u, 1u, processed));
         PPR_TEST_ASSERT(colliders.chainCount({0, 0}) == 1u);
-        const auto dug = digCells(grid, DigRect{{1u, 1u}, 1u, 1u}, &*catalog);
-        PPR_TEST_ASSERT(dug and dug->m_dug == 1u and grid.getCell({1u, 1u})->m_element == 0u);
+
+        const auto dug = digCells(grid, DigRect{{1u, 1u}, 1u, 1u}, &catalog);
+        PPR_TEST_ASSERT(dug.has_value() and dug->m_dug == 1u);
         occupancy[5u] = grid.getCell({1u, 1u})->m_element;
         PPR_TEST_ASSERT(not colliders.rebuildDirtyChunks(scene, chunks, dirty, 4u, 1u, processed));
         PPR_TEST_ASSERT(colliders.chainCount({0, 0}) == 0u);
         PPR_TEST_ASSERT(not scene.shutdown());
     };
 
-    PPR_UNIT_TEST (complete_shipped_catalog_is_owned) {
-        Fixture fixture{};
-        config::Diagnostics diagnostics{};
-        auto catalog = fixture.load(diagnostics);
-        if (not catalog) {
-            std::println("{}", diagnostics.format());
-        }
-        PPR_TEST_ASSERT(catalog.has_value() and not diagnostics.hasErrors());
-        PPR_TEST_ASSERT(catalog->packId() == "ppr_frontier");
-        PPR_TEST_ASSERT(catalog->materials().size() == 63u and catalog->textures().size() == 134u);
-        PPR_TEST_ASSERT(catalog->biomes().size() == 11u and catalog->features().size() == 26u);
-        PPR_TEST_ASSERT(
-            catalog->worlds().size() == 2u and catalog->fields().size() == 44u and catalog->backgrounds().size() == 2u);
-        PPR_TEST_ASSERT(catalog->findWorld("frontier") != nullptr and catalog->findWorld("hollows") != nullptr);
-        PPR_TEST_ASSERT(catalog->findWorld("unknown") == nullptr);
-        PPR_TEST_ASSERT(catalog->contentFingerprint().has_value());
-        // Definition fingerprint v3 uses structural owners and rapidhash block chaining;
-        // content fingerprint v4 includes the split documents and asset identities.
-        // Authored scalars are preserved, including explicit former blob threshold defaults [-1, 1].
-        PPR_TEST_ASSERT(catalog->contentFingerprint() == 0xbccb226c4455552bull);
-        PPR_TEST_ASSERT(catalog->findMaterial("water")->m_representation == EMaterialRepresentation::particle);
-        PPR_TEST_ASSERT(catalog->findMaterial("masonry")->m_texture_sampling == EMaterialTextureSampling::repeat);
-        PPR_TEST_ASSERT(catalog->findMaterial("basalt")->m_texture_sampling == EMaterialTextureSampling::stochastic);
-        for (const auto key: {"clay", "limestone", "salt", "sulfur", "crystal"}) {
-            const auto *const material = catalog->findMaterial(key);
-            PPR_TEST_ASSERT(material != nullptr);
-            PPR_TEST_ASSERT(material->m_representation == EMaterialRepresentation::terrain);
-            PPR_TEST_ASSERT(material->m_diggable == true);
-            PPR_TEST_ASSERT(material->m_albedo_texture.has_value());
-        }
-        for (const auto &texture: catalog->textures()) {
-            const bool background = texture.m_path.starts_with("textures/background_");
-            const u32 edge = background ? 512u : 128u;
-            const u32 levels = background ? 10u : 8u;
-            PPR_TEST_ASSERT(texture.m_image.m_width == edge and texture.m_image.m_height == edge);
-            PPR_TEST_ASSERT(texture.m_image.m_mip_count == levels);
-            PPR_TEST_ASSERT(texture.m_image.m_subresources.size() == levels);
-            PPR_TEST_ASSERT(texture.m_image.m_subresources.back().m_slice_pitch == 4u);
-            PPR_TEST_ASSERT(texture.m_image.m_storage.isOwned());
-            PPR_TEST_ASSERT(texture.m_image.m_is_srgb == not texture.m_normal_map);
-        }
-        const auto before = catalog->textures().front().m_image.m_storage.getBufferData().front();
-        // SharedBuffer exposes read-only bytes. Extracting a mutable copy while
-        // the catalog owns the image must clone rather than alter its storage.
-        auto shared = catalog->textures().front().m_image.m_storage;
-        auto mutable_copy = shared.moveToUnique();
-        auto mutable_bytes = mutable_copy.getMutableData();
-        PPR_TEST_ASSERT(mutable_bytes.has_value());
-        mutable_bytes->front() ^= std::byte{1u};
-        PPR_TEST_ASSERT(catalog->textures().front().m_image.m_storage.getBufferData().front() == before);
-
-        config::Diagnostics source_diagnostics;
-        const auto appearance = config::decode(
-            fixture.read("appearance.toml"), std::filesystem::canonical(fixture.m_root / "appearance.toml").string(),
-            source_diagnostics, config::EDecodeMode::tree);
-        PPR_TEST_ASSERT(appearance.has_value());
-        const auto albedo = std::ranges::find(
-            appearance->m_entries, "appearance.materials.basalt.albedo_texture", &config::Entry::m_key);
-        PPR_TEST_ASSERT(albedo != appearance->m_entries.end());
-
-        fixture.write("textures/basalt.png", "corrupt");
-        const auto failed = fixture.load(diagnostics);
-        PPR_TEST_ASSERT(not failed);
-        PPR_TEST_ASSERT(catalog->textures().front().m_image.m_storage.getBufferData().front() == before);
-        PPR_TEST_ASSERT(diagnostics.entries().back().m_property == albedo->m_key);
-        PPR_TEST_ASSERT(diagnostics.entries().back().m_location == albedo->m_location);
-        PPR_TEST_ASSERT(diagnostics.entries().back().m_message.find("basalt.png") != std::string::npos);
-    };
-
-    PPR_UNIT_TEST (shipped_profiles_compile_owned_numeric_plans) {
-        Fixture fixture{};
-        config::Diagnostics diagnostics{};
-        auto catalog = fixture.load(diagnostics);
-        PPR_TEST_ASSERT(catalog.has_value());
-        PPR_TEST_ASSERT(not compileWorldPlan(*catalog, "unknown", 42u));
-        std::array<bool, 26u> seen_features{};
-        for (const auto profile: {"frontier", "hollows"}) {
-            for (const u64 seed: {0ull, 1ull, 42ull, 0xffffffffffffffffull}) {
-                auto plan = compileWorldPlan(*catalog, profile, seed);
-                PPR_TEST_ASSERT(plan.has_value());
-                PPR_TEST_ASSERT(plan->seed() == seed);
-                PPR_TEST_ASSERT(plan->recipe().m_materials.size() == 63u);
-                PPR_TEST_ASSERT(plan->fields().size() == 44u);
-                PPR_TEST_ASSERT(plan->recipe().m_boundary_material == catalog->findMaterial("masonry")->m_numeric_id);
-                PPR_TEST_ASSERT(plan->recipe().m_cell_size_m == 1.0 / 3.0);
-                PPR_TEST_ASSERT(
-                    plan->recipe().m_open_surface and
-                    plan->recipe().m_bedrock_material == catalog->findMaterial("bedrock")->m_numeric_id);
-                PPR_TEST_ASSERT(catalog->findMaterial("bedrock")->m_diggable == false);
-                const auto &start_feature = plan->recipe().m_features[plan->recipe().m_start_feature];
-                const auto &bounds = start_feature.m_bounds;
-                PPR_TEST_ASSERT(
-                    sim::generationSubsurfaceBounds(
-                        *plan, static_cast<i64>(plan->recipe().m_start_x_fine) + bounds.m_min_x,
-                        static_cast<i64>(plan->recipe().m_start_y_fine) + bounds.m_min_y,
-                        static_cast<i64>(plan->recipe().m_start_x_fine) + bounds.m_max_x,
-                        static_cast<i64>(plan->recipe().m_start_y_fine) + bounds.m_max_y));
-                for (std::size_t i = 0u; i < catalog->biomes().size(); ++i) {
-                    const auto &source = catalog->biomes()[i];
-                    const auto &target = plan->recipe().m_biomes[i];
-                    PPR_TEST_ASSERT(target.m_relaxation_passes == source.m_relaxation_passes);
-                    PPR_TEST_ASSERT(target.m_relaxation_adoption == source.m_relaxation_adoption);
-                    PPR_TEST_ASSERT(target.m_erosion_passes == source.m_erosion_passes);
-                    PPR_TEST_ASSERT(target.m_sprinkle_probability == source.m_sprinkle_probability);
-                    PPR_TEST_ASSERT(
-                        target.m_pore_probability == source.m_pore_probability and
-                        target.m_pore_passes == source.m_pore_passes);
-                    PPR_TEST_ASSERT(
-                        target.m_finish_passes == source.m_finish_passes and
-                        target.m_finish_adoption == source.m_finish_adoption);
-                    PPR_TEST_ASSERT(
-                        target.m_formation_material == source.m_formation_material_id and
-                        target.m_formation_probability == source.m_formation_probability);
-                    for (std::size_t j = 0u; j < source.m_composition.size(); ++j) {
-                        PPR_TEST_ASSERT(target.m_bands[j].m_bed_period_m == source.m_composition[j].m_bed_period_m);
-                        PPR_TEST_ASSERT(target.m_bands[j].m_bed_warp_m == source.m_composition[j].m_bed_warp_m);
-                    }
-                    PPR_TEST_ASSERT(target.m_deposits.size() == source.m_deposits.size());
-                    for (std::size_t j = 0u; j < source.m_deposits.size(); ++j) {
-                        const auto &from = source.m_deposits[j];
-                        const auto &to = target.m_deposits[j];
-                        PPR_TEST_ASSERT(to.m_shape == from.m_shape and to.m_stage == from.m_stage);
-                        PPR_TEST_ASSERT(to.m_blob_count == from.m_blob_count);
-                        PPR_TEST_ASSERT(
-                            to.m_orientation_min_degrees == from.m_orientation_min_degrees and
-                            to.m_orientation_max_degrees == from.m_orientation_max_degrees);
-                        PPR_TEST_ASSERT(
-                            to.m_radius_min_m == from.m_radius_min_m and to.m_radius_max_m == from.m_radius_max_m);
-                        PPR_TEST_ASSERT(
-                            to.m_stretch_min == from.m_stretch_min and to.m_stretch_max == from.m_stretch_max);
-                        PPR_TEST_ASSERT(
-                            to.m_distortion == from.m_distortion and to.m_core_coverage == from.m_core_coverage);
-                        PPR_TEST_ASSERT(
-                            to.m_fringe_coverage == from.m_fringe_coverage and
-                            to.m_sprinkle_probability == from.m_sprinkle_probability);
-                    }
-                }
-                const auto &profile_definition = *std::ranges::find_if(
-                    catalog->definition().m_worlds.m_entries,
-                    [&](const auto &entry) { return entry.m_key == profile; });
-                for (std::size_t i = 0u; i < catalog->findWorld(profile)->m_rule_keys.size(); ++i) {
-                    const auto &key = catalog->findWorld(profile)->m_rule_keys[i];
-                    const auto rule = std::ranges::find_if(
-                        profile_definition.m_value.m_rules.m_entries,
-                        [&](const auto &entry) { return entry.m_key == key; });
-                    PPR_TEST_ASSERT(rule != profile_definition.m_value.m_rules.m_entries.end());
-                    const sim::definition::WormGeometry *from{};
-                    if (const auto *carve = std::get_if<sim::definition::CarveWorm>(&rule->m_value.m_payload)) {
-                        from = &carve->m_geometry;
-                    } else if (const auto *vein = std::get_if<sim::definition::VeinWorm>(&rule->m_value.m_payload)) {
-                        from = &vein->m_geometry;
-                    }
-                    if (from == nullptr) {
-                        continue;
-                    }
-                    const auto &to = std::get<sim::GenerationWorm>(plan->recipe().m_rules[i].m_parameters);
-                    PPR_TEST_ASSERT(
-                        to.m_turn_smoothing == from->m_turn_smoothing and
-                        to.m_radius_variation == from->m_radius_variation);
-                    PPR_TEST_ASSERT(
-                        to.m_chamber_probability == from->m_chamber_probability and
-                        to.m_chamber_scale == from->m_chamber_scale);
-                }
-                auto layout = sim::compileBiomeLayout(*plan);
-                PPR_TEST_ASSERT(layout.has_value());
-                PPR_TEST_ASSERT(layout->sites().size() >= plan->recipe().m_min_sites);
-                auto geometry = sim::compileGenerationGeometry(*plan, *layout);
-                PPR_TEST_ASSERT(geometry.has_value());
-                PPR_TEST_ASSERT(not geometry->m_instances.empty());
-                PPR_TEST_ASSERT(geometry->m_instances.front().m_rule == sim::kGenerationStartRule);
-                PPR_TEST_ASSERT(
-                    std::ranges::count(
-                        geometry->m_instances, sim::kGenerationStartRule, &sim::GenerationInstance::m_rule) == 1);
-                for (const auto &instance: geometry->m_instances) {
-                    PPR_TEST_ASSERT(instance.m_feature < seen_features.size());
-                    seen_features[instance.m_feature] = true;
-                }
-                PPR_TEST_ASSERT(not geometry->m_segments.empty());
-                std::array<u32, 11u> counts{};
-                for (const auto &site: layout->sites()) {
-                    ++counts[site.m_biome];
-                }
-                for (const auto &constraint: plan->recipe().m_constraints) {
-                    PPR_TEST_ASSERT(counts[constraint.m_biome] >= constraint.m_required_count);
-                }
-            }
-        }
-        // Optional landmarks need not all fit one world, but the fixed seed set
-        // must exercise every shipped template, including the new landmarks.
-        PPR_TEST_ASSERT(std::ranges::all_of(seen_features, [](const bool seen) { return seen; }));
-        auto owned = [&] {
-            auto temporary = fixture.load(diagnostics);
-            PPR_TEST_ASSERT(temporary.has_value());
-            return compileWorldPlan(*temporary, "frontier", 42u);
-        }();
-        PPR_TEST_ASSERT(owned.has_value());
-        PPR_TEST_ASSERT(std::isfinite(owned->fields().front().sample(100.0, 200.0)));
-        PPR_TEST_ASSERT(not sim::validateGenerationRecipe(owned->recipe()));
-    };
-
     PPR_UNIT_TEST (prepared_world_rejects_invalid_inputs_and_cancellation_before_generation) {
         struct Clock final : ITimerClock {
             mutable u32 m_calls{};
+
             TimePoint now() const noexcept override {
                 ++m_calls;
                 return {};
             }
         } clock;
-        Fixture fixture{};
-        config::Diagnostics diagnostics{};
+
+        Fixture fixture;
+        config::Diagnostics diagnostics;
         auto catalog = fixture.load(diagnostics);
         PPR_TEST_ASSERT(catalog.has_value());
-        const auto unknown = prepareWorld(*catalog, "unknown", 42u, clock);
+        const auto unknown = prepareWorld(*catalog, "ppr.test:unknown", 42u, clock);
         PPR_TEST_ASSERT(not unknown and clock.m_calls == 0u);
 
-        auto materials = projectContentCatalog(catalog->definition(), diagnostics);
-        PPR_TEST_ASSERT(materials.has_value());
-        const auto incomplete = prepareWorld(std::move(*materials), "frontier", 42u, clock);
+        const auto incomplete = prepareWorld(ContentCatalog{zero_v}, kWorld, 42u, clock);
         PPR_TEST_ASSERT(not incomplete and incomplete.error() == std::errc::invalid_argument);
 
         auto [job_context, cancel] = context::withCancelClause(context::background());
         cancel(std::make_error_code(std::errc::operation_canceled));
-        const auto cancelled = prepareWorld(
-            std::move(*catalog), "frontier", 0xffffffffffffffffull, clock, {.m_context = job_context});
+        const auto cancelled = prepareWorld(std::move(*catalog), kWorld, 42u, clock, {.m_context = job_context});
         PPR_TEST_ASSERT(not cancelled and cancelled.error() == std::errc::operation_canceled);
         const auto cancelled_load = prepareWorld(
-            fixture.m_root, "hollows", 42u, clock, diagnostics, {.m_context = job_context});
+            fixture.m_root, kWorld, 42u, clock, diagnostics, {.m_context = job_context});
         PPR_TEST_ASSERT(not cancelled_load and cancelled_load.error() == std::errc::operation_canceled);
         PPR_TEST_ASSERT(clock.m_calls == 0u);
     };
 
-    PPR_UNIT_TEST (numeric_streams_ignore_document_order_and_unused_materials) {
-        Fixture fixture{};
-        config::Diagnostics diagnostics{};
-        auto catalog = fixture.load(diagnostics);
-        PPR_TEST_ASSERT(catalog.has_value());
-        auto baseline = compileWorldPlan(*catalog, "frontier", 42u);
-        PPR_TEST_ASSERT(baseline.has_value());
-        for (const auto name:
-            {"materials.toml", "fields.toml", "biomes.toml", "features.toml", "worlds.toml", "rules.toml",
-                "appearance.toml"}) {
-            fixture.write(name, reorder(fixture.read(name)));
-        }
-        auto materials = fixture.read("materials.toml");
-        materials += "\n[materials.aaa_unused]\nphase = 'solid'\nrepresentation = 'particle'\ndensity = 1000.0\n";
-        fixture.write("materials.toml", materials);
-        fixture.write(
-            "appearance.toml",
-            fixture.read("appearance.toml") +
-                "\n[appearance.materials.aaa_unused]\ndisplay_name = 'Unused'\ncolor_rgba = 'FFFFFFFF'\n");
-        catalog = fixture.load(diagnostics);
-        PPR_TEST_ASSERT(catalog.has_value());
-        auto changed = compileWorldPlan(*catalog, "frontier", 42u);
-        PPR_TEST_ASSERT(changed.has_value());
-        PPR_TEST_ASSERT(changed->recipe().m_materials.size() == 64u);
-        PPR_TEST_ASSERT(baseline->recipe().m_rules.size() == changed->recipe().m_rules.size());
-        for (std::size_t i = 0u; i < baseline->recipe().m_rules.size(); ++i) {
-            PPR_TEST_ASSERT(baseline->recipe().m_rules[i].m_key == changed->recipe().m_rules[i].m_key);
-        }
-        for (std::size_t i = 0u; i < baseline->fields().size(); ++i) {
-            for (u32 sample = 0u; sample < 32u; ++sample) {
-                PPR_TEST_ASSERT(
-                    baseline->fields()[i].sample(sample * 13.25, 123.75) ==
-                    changed->fields()[i].sample(sample * 13.25, 123.75));
-            }
-        }
-    };
+    // ------------------------------------------------------------------
+    // split identity and explicit presentation ownership
+    // ------------------------------------------------------------------
 
-    PPR_UNIT_TEST (complete_identity_ignores_document_order_comments_and_source_paths) {
-        Fixture fixture{};
-        config::Diagnostics diagnostics{};
-        const auto first = fixture.load(diagnostics);
-        PPR_TEST_ASSERT(first.has_value());
-        const auto identity = first->contentFingerprint();
-        for (const auto name:
-            {"materials.toml", "fields.toml", "biomes.toml", "features.toml", "worlds.toml", "rules.toml",
-                "appearance.toml"}) {
-            fixture.write(name, reorder(fixture.read(name)));
-        }
-        auto manifest = fixture.read("pack.toml");
-        replace(manifest, "materials.toml", "renamed.toml");
-        std::filesystem::rename(fixture.m_root / "materials.toml", fixture.m_root / "renamed.toml");
-        fixture.write("pack.toml", manifest);
-        const auto renamed_source = fixture.load(diagnostics);
-        PPR_TEST_ASSERT(renamed_source and renamed_source->contentFingerprint() == identity);
-        auto material = fixture.read("appearance.toml");
-        replace(material, "textures/basalt.png", "textures/renamed.png");
-        fixture.write("appearance.toml", material);
-        std::filesystem::rename(fixture.m_root / "textures/basalt.png", fixture.m_root / "textures/renamed.png");
-        replace(material, "textures/basalt_normal.png", "textures/renamed_normal.png");
-        fixture.write("appearance.toml", material);
-        std::filesystem::rename(
-            fixture.m_root / "textures/basalt_normal.png", fixture.m_root / "textures/renamed_normal.png");
-        auto backgrounds = fixture.read("appearance.toml");
-        replace(backgrounds, "textures/background_frontier_distant.png", "textures/renamed_background.png");
-        fixture.write("appearance.toml", backgrounds);
-        std::filesystem::rename(
-            fixture.m_root / "textures/background_frontier_distant.png",
-            fixture.m_root / "textures/renamed_background.png");
-        const auto reordered = fixture.load(diagnostics);
-        if (not reordered) {
-            std::println("{}", diagnostics.format());
-        }
-        PPR_TEST_ASSERT(reordered.has_value());
-        PPR_TEST_ASSERT(reordered->contentFingerprint() != identity);
-    };
-
-    PPR_UNIT_TEST (identity_changes_for_every_definition_kind_and_texture_bytes) {
-        Fixture fixture{};
-        useSmallIdentityImages(fixture);
-
-        config::Diagnostics diagnostics{};
+    PPR_UNIT_TEST (numeric_streams_ignore_manifest_order_comments_and_unused_assets) {
+        Fixture fixture;
+        config::Diagnostics diagnostics;
         const auto baseline = fixture.load(diagnostics);
         PPR_TEST_ASSERT(baseline.has_value());
+        const auto first = compileWorldPlan(*baseline, kWorld, 42u);
+        PPR_TEST_ASSERT(first.has_value());
 
-        auto source = loadContentPackSource(fixture.m_root, diagnostics);
+        auto source = loadContentSourceSet(std::array{fixture.m_root}, diagnostics);
         PPR_TEST_ASSERT(source.has_value());
+        auto changed = source->source();
+        std::ranges::reverse(changed.m_descriptors);
+        changed.m_packs.front().m_manifest.m_bytes = reverseTables(changed.m_packs.front().m_manifest.m_bytes);
+        changed.m_packs.front().m_manifest.m_bytes += "\n# provenance only\n";
 
-        struct Change {
-            std::string_view file, property;
-            config::FileValue value;
-        };
-        const Change changes[] = {
-            {"materials.toml", "materials.basalt.density", config::FileValue::floating(2901.0)},
-            {"fields.toml", "fields.composition.frequency_per_metre", config::FileValue::floating(0.071)},
-            {"fields.toml", "fields.composition.axis_scale_x", config::FileValue::floating(1.1)},
-            {"appearance.toml", "appearance.materials.basalt.metallic", config::FileValue::floating(0.1)},
-            {"appearance.toml", "appearance.materials.basalt.roughness", config::FileValue::floating(0.88)},
-            {"appearance.toml", "appearance.materials.basalt.emissive_r", config::FileValue::floating(0.1)},
-            {"appearance.toml", "appearance.materials.basalt.emissive_g", config::FileValue::floating(0.1)},
-            {"appearance.toml", "appearance.materials.basalt.emissive_b", config::FileValue::floating(0.1)},
-            {"appearance.toml", "appearance.materials.basalt.emissive_strength", config::FileValue::floating(1.1)},
-            {"appearance.toml", "appearance.materials.basalt.ior", config::FileValue::floating(1.6)},
-            {"appearance.toml", "appearance.materials.basalt.normal_scale", config::FileValue::floating(0.9)},
-            {"appearance.toml", "appearance.materials.basalt.refraction_depth_m", config::FileValue::floating(0.1)},
-            {"appearance.toml", "appearance.materials.basalt.alpha_mode", config::FileValue::text("blend")},
-            {"appearance.toml", "appearance.materials.basalt.texture_sampling", config::FileValue::text("repeat")},
-            {"appearance.toml", "appearance.backgrounds.frontier.layers.distant.parallax_factor",
-                config::FileValue::floating(0.09)},
-            {"biomes.toml", "biomes.hearth.temperature.base_k", config::FileValue::floating(294.0)},
-            {"biomes.toml", "biomes.hearth.composition.cover.bed_period_m", config::FileValue::integer(49)},
-            {"biomes.toml", "biomes.hearth.pore.probability", config::FileValue::floating(0.056)},
-            {"biomes.toml", "biomes.hearth.pore.passes", config::FileValue::integer(2)},
-            {"biomes.toml", "biomes.hearth.erosion.passes", config::FileValue::integer(7)},
-            {"biomes.toml", "biomes.hearth.finish.adoption", config::FileValue::floating(0.13)},
-            {"biomes.toml", "biomes.hearth.formation.probability", config::FileValue::floating(0.046)},
-            {"biomes.toml", "biomes.hearth.relaxation.passes", config::FileValue::integer(9)},
-            {"biomes.toml", "biomes.hearth.sprinkle.probability", config::FileValue::floating(0.09)},
-            {"biomes.toml", "biomes.hearth.relaxation.adoption", config::FileValue::floating(0.33)},
-            {"biomes.toml", "biomes.hearth.deposits.secondary_host.stage", config::FileValue::text("detail")},
-            {"biomes.toml", "biomes.hearth.deposits.secondary_host.blob.count", config::FileValue::integer(47)},
-            {"biomes.toml", "biomes.hearth.deposits.secondary_host.blob.radius.min_m",
-                config::FileValue::floating(4.5)},
-            {"biomes.toml", "biomes.hearth.deposits.secondary_host.blob.radius.max_m",
-                config::FileValue::floating(14.0)},
-            {"biomes.toml", "biomes.hearth.deposits.secondary_host.blob.stretch.min", config::FileValue::floating(1.1)},
-            {"biomes.toml", "biomes.hearth.deposits.secondary_host.blob.stretch.max", config::FileValue::floating(1.9)},
-            {"biomes.toml", "biomes.hearth.deposits.secondary_host.blob.distortion", config::FileValue::floating(0.37)},
-            {"biomes.toml", "biomes.hearth.deposits.azurite.blob.orientation.min_degrees",
-                config::FileValue::floating(1.0)},
-            {"biomes.toml", "biomes.hearth.deposits.azurite.blob.orientation.max_degrees",
-                config::FileValue::floating(359.0)},
-            {"biomes.toml", "biomes.hearth.deposits.secondary_host.core_coverage", config::FileValue::floating(0.89)},
-            {"biomes.toml", "biomes.hearth.deposits.secondary_host.fringe_coverage", config::FileValue::floating(0.29)},
-            {"biomes.toml", "biomes.hearth.deposits.clay.sprinkle_probability", config::FileValue::floating(0.001)},
-            {"worlds.toml", "worlds.frontier.surface_bedrock.surface_amplitude_m", config::FileValue::floating(56.0)},
-            {"worlds.toml", "worlds.frontier.surface_bedrock.bedrock_variation_m", config::FileValue::floating(12.4)},
-            {"worlds.toml", "worlds.frontier.start.depth_m", config::FileValue::floating(66.0)},
-            {"worlds.toml", "worlds.frontier.layout.site_spacing_m", config::FileValue::floating(111.0)},
-            {"rules.toml", "rules.frontier.backbone.payload.connection.natural_anchors",
-                config::FileValue::integer(29)},
-            {"rules.toml", "rules.frontier.backbone.payload.connection.roughness_m", config::FileValue::floating(4.4)},
-            {"rules.toml", "rules.frontier.tunnels_hearth.payload.carve_worm.geometry.turn_smoothing",
-                config::FileValue::floating(0.83)},
-            {"rules.toml", "rules.frontier.tunnels_hearth.payload.carve_worm.geometry.radius_variation",
-                config::FileValue::floating(0.34)},
-            {"rules.toml", "rules.frontier.tunnels_hearth.payload.carve_worm.geometry.chamber_probability",
-                config::FileValue::floating(0.026)},
-            {"rules.toml", "rules.frontier.tunnels_hearth.payload.carve_worm.geometry.chamber_scale",
-                config::FileValue::floating(2.3)},
-            {"rules.toml", "rules.frontier.tunnels_hearth.payload.carve_worm.geometry.turn_probability",
-                config::FileValue::floating(0.13)},
-            {"rules.toml", "rules.frontier.fill_pocket_water.payload.matter_fill.fill_height_m",
-                config::FileValue::floating(4.666666666666667)},
-            {"appearance.toml", "appearance.features.landing.display_name",
-                config::FileValue::text("Hearth landing revised")}};
-
-        for (const auto &change: changes) {
-            const auto file = std::ranges::find(source->m_manifest.m_files, change.file);
-            PPR_TEST_ASSERT(file != source->m_manifest.m_files.end());
-
-            const auto index = static_cast<std::size_t>(file - source->m_manifest.m_files.begin());
-            auto &document = source->m_documents[index];
-
-            const auto patch = config::patchScalar(
-                document.m_bytes, change.property, change.value, change.file, diagnostics);
-            if (not patch) {
-                throw std::system_error(patch.error(), std::string{change.property} + "\n" + diagnostics.format());
-            }
-
-            PPR_TEST_ASSERT(patch.has_value() and patch->m_before != patch->m_after);
-
-            auto changed = config::applySourcePatch(document.m_bytes, *patch);
-            PPR_TEST_ASSERT(changed.has_value());
-
-            auto original = std::exchange(document.m_bytes, std::move(*changed));
-
-            const auto candidate = loadContentCatalog(fixture.m_root, *source, diagnostics);
-            PPR_TEST_ASSERT(candidate.has_value());
-            PPR_TEST_ASSERT(candidate->contentFingerprint() != baseline->contentFingerprint());
-
-            document.m_bytes = std::move(original);
+        for (auto &entry: changed.m_descriptors) {
+            entry.m_bytes += "\n# provenance only\n";
         }
 
-        for (const auto &paths:
-            {std::pair{"textures/basalt.png", "textures/ice.png"},
-                std::pair{"textures/basalt_normal.png", "textures/ice_normal.png"},
-                std::pair{"textures/background_frontier_distant.png", "textures/background_hollows_distant.png"}}) {
-            const auto original = fixture.read(paths.first);
-            fixture.write(paths.first, fixture.read(paths.second));
-            const auto texture_change = fixture.load(diagnostics);
-            PPR_TEST_ASSERT(texture_change.has_value());
-            PPR_TEST_ASSERT(texture_change->contentFingerprint() != baseline->contentFingerprint());
-            fixture.write(paths.first, original);
+        auto &manifest = changed.m_packs.front().m_manifest.m_bytes;
+        manifest += "\n[assets.aaa_unused]\nkind = 'sim.material'\ndescriptor = 'materials/asset-aaa_unused.toml'\n";
+        changed.m_descriptors.push_back(
+            {fixture.m_root / "materials/asset-aaa_unused.toml",
+                descriptor(changed, fixture.m_root / "basalt.toml").m_bytes});
+
+        const auto moved_path = fixture.m_root / "renamed.toml";
+        const auto renamed = std::ranges::find(
+            changed.m_descriptors, fixture.m_root / "basalt.toml", &asset::DescriptorSource::m_path);
+        PPR_TEST_ASSERT(renamed != changed.m_descriptors.end());
+        std::filesystem::rename(renamed->m_path, moved_path);
+        renamed->m_path = moved_path;
+        const auto location = config::patchScalar(
+            manifest, "assets.basalt.descriptor", config::FileValue::text("renamed.toml"), "manifest", diagnostics);
+        PPR_TEST_ASSERT(location.has_value());
+        const auto relocated = config::applySourcePatch(manifest, *location);
+        PPR_TEST_ASSERT(relocated.has_value());
+        manifest = *relocated;
+
+        auto imported = loadContentCatalog(changed, diagnostics);
+        PPR_TEST_ASSERT(imported.has_value());
+        auto owner = std::make_shared<const ContentDescriptorCatalog>(std::move(*imported));
+        const auto selected = selectWorldCatalog(owner, baseline->worldId(), kWorldCompileParameters, diagnostics);
+        PPR_TEST_ASSERT(selected.has_value());
+        PPR_TEST_ASSERT(selected->contentFingerprint() == baseline->contentFingerprint());
+        PPR_TEST_ASSERT(selected->presentationDescriptorFingerprint() == baseline->presentationDescriptorFingerprint());
+        const auto second = compileWorldPlan(*selected, kWorld, 42u);
+        PPR_TEST_ASSERT(second.has_value());
+
+        for (u32 sample = 0u; sample < 32u; ++sample) {
+            PPR_TEST_ASSERT(
+                first->fields().front().sample(sample * 13.25, 123.75) ==
+                second->fields().front().sample(sample * 13.25, 123.75));
         }
     };
 
+    PPR_UNIT_TEST (identity_separates_numeric_appearance_descriptor_and_binary_changes) {
+        Fixture fixture;
+        useSmallIdentityImages(fixture);
+        config::Diagnostics diagnostics;
+        auto baseline_value = fixture.load(diagnostics);
+        PPR_TEST_ASSERT(baseline_value.has_value());
+        auto baseline = std::make_shared<const ContentCatalog>(std::move(*baseline_value));
+        const auto baseline_images = present(baseline, diagnostics);
+        auto session = fixture.open(diagnostics);
+        const auto original = session.draftSnapshot();
+
+        struct Change {
+            config::FileValue m_value;
+            std::string_view m_key, m_property;
+            EContentDocument m_category;
+            bool m_numeric;
+
+            Change(
+                config::FileValue value, const EContentDocument category, const std::string_view key,
+                const std::string_view property, const bool numeric)
+                : m_value{std::move(value)}, m_key{key}, m_property{property}, m_category{category},
+                  m_numeric{numeric} {
+            }
+        };
+
+        const Change changes[] = {
+            {config::FileValue::floating(2100.0), EContentDocument::elements, "solid", "density", true},
+            {config::FileValue::floating(0.02), EContentDocument::fields, "composition",
+                "definition.frequency_per_metre", true},
+            {config::FileValue::floating(301.0), EContentDocument::biomes, "hearth", "definition.temperature.base_k",
+                true},
+            {config::FileValue::integer(15), EContentDocument::features, "landing",
+                "definition.operations.op_01.action.carve.shape.rectangle.width_fine", true},
+            {config::FileValue::floating(0.2), EContentDocument::rules, "caves",
+                "definition.payload.cave.threshold.min", true},
+            {config::FileValue::integer(129), EContentDocument::worlds, "frontier", "profile.start.x_fine", true},
+            {config::FileValue::floating(0.1), EContentDocument::materials, "basalt", "appearance.metallic", false},
+            {config::FileValue::floating(0.9), EContentDocument::materials, "basalt", "appearance.roughness", false},
+            {config::FileValue::floating(0.1), EContentDocument::materials, "basalt", "appearance.emissive_r", false},
+            {config::FileValue::floating(1.1), EContentDocument::materials, "basalt", "appearance.emissive_strength",
+                false},
+            {config::FileValue::floating(1.6), EContentDocument::materials, "basalt", "appearance.ior", false},
+            {config::FileValue::floating(0.9), EContentDocument::materials, "basalt", "appearance.normal_scale", false},
+            {config::FileValue::floating(0.1), EContentDocument::materials, "basalt", "appearance.refraction_depth_m",
+                false},
+            {config::FileValue::text("blend"), EContentDocument::materials, "basalt", "appearance.alpha_mode", false},
+            {config::FileValue::text("repeat"), EContentDocument::materials, "basalt", "appearance.texture_sampling",
+                false},
+            {config::FileValue::floating(0.1), EContentDocument::backgrounds, "skies",
+                "definition.layers.layer_0.parallax_factor", false},
+            {config::FileValue::boolean(false), EContentDocument::textures, "albedo", "full_chain", false},
+        };
+
+        for (const auto &change: changes) {
+            PPR_TEST_ASSERT(not session.editDefinition(
+                change.m_category, change.m_key, change.m_property, change.m_value, diagnostics));
+            const auto candidate = validateContentDraft(session.draftSnapshot(), diagnostics, nullptr, kWorld);
+            PPR_TEST_ASSERT(candidate.has_value() and candidate->m_selected);
+            const auto &catalog = *candidate->m_selected;
+            PPR_TEST_ASSERT((catalog.contentFingerprint() != baseline->contentFingerprint()) == change.m_numeric);
+            if (not change.m_numeric) {
+                PPR_TEST_ASSERT(
+                    catalog.presentationDescriptorFingerprint() != baseline->presentationDescriptorFingerprint());
+            }
+
+            PPR_TEST_ASSERT(session.undo().value());
+        }
+
+        PPR_TEST_ASSERT(not session.dirty());
+        PPR_TEST_ASSERT(session.draftSource().m_descriptors.size() == original.m_source.m_descriptors.size());
+        useSmallIdentityImages(fixture, true);
+        auto unchanged_value = fixture.load(diagnostics);
+        PPR_TEST_ASSERT(unchanged_value.has_value());
+        auto unchanged = std::make_shared<const ContentCatalog>(std::move(*unchanged_value));
+        PPR_TEST_ASSERT(unchanged->contentFingerprint() == baseline->contentFingerprint());
+        PPR_TEST_ASSERT(
+            unchanged->presentationDescriptorFingerprint() == baseline->presentationDescriptorFingerprint());
+        const auto different_images = present(unchanged, diagnostics);
+        PPR_TEST_ASSERT(different_images->fingerprint() != baseline_images->fingerprint());
+    };
+
+    PPR_UNIT_TEST (explicit_presentation_owns_distinct_usages_and_survives_source_removal) {
+        config::Diagnostics diagnostics;
+        std::shared_ptr<const ContentPresentation> retained;
+
+        {
+            Fixture fixture;
+            useSmallIdentityImages(fixture);
+            auto value = fixture.load(diagnostics);
+            PPR_TEST_ASSERT(value.has_value());
+            auto catalog = std::make_shared<const ContentCatalog>(std::move(*value));
+            retained = present(catalog, diagnostics, asset::RequestGeneration{7u});
+            PPR_TEST_ASSERT(retained->catalog() == catalog and retained->generation() == asset::RequestGeneration{7u});
+            PPR_TEST_ASSERT(retained->textures().size() == 2u);
+
+            for (const auto &texture: retained->textures()) {
+                PPR_TEST_ASSERT(texture.m_image.m_width == 4u and texture.m_image.m_height == 4u);
+                PPR_TEST_ASSERT(texture.m_image.m_mip_count == 3u and texture.m_image.m_storage.isOwned());
+                PPR_TEST_ASSERT(texture.m_image.m_is_srgb == not texture.m_normal_map);
+            }
+
+            const auto before = retained->textures().front().m_image.m_storage.getBufferData().front();
+            auto shared = retained->textures().front().m_image.m_storage;
+            auto mutable_copy = shared.moveToUnique();
+            const auto mutable_bytes = mutable_copy.getMutableData();
+            PPR_TEST_ASSERT(mutable_bytes.has_value());
+            mutable_bytes->front() ^= std::byte{1u};
+            PPR_TEST_ASSERT(retained->textures().front().m_image.m_storage.getBufferData().front() == before);
+
+            fixture.write("images/color.png", "corrupt");
+            PPR_TEST_ASSERT(fixture.load(diagnostics).has_value());
+            auto request = ContentPresentationRequest::start(
+                catalog, asset::RequestGeneration{8u}, context::background(), diagnostics);
+            PPR_TEST_ASSERT(request.has_value());
+            PPR_TEST_ASSERT(not request->finish(diagnostics));
+        }
+
+        const auto scratch = mem::ScratchPad::open();
+        Array<std::string, mem::ScratchPad> reuse(64u, std::string(128u, 'x'));
+        PPR_TEST_ASSERT(retained->textures().front().m_image.m_storage.isOwned());
+        PPR_TEST_ASSERT(not retained->textures().front().m_image.m_storage.getBufferData().empty());
+    };
+
     // ------------------------------------------------------------------
-    // texture admission and generation
+    // source epochs and independently owned image reuse
     // ------------------------------------------------------------------
+
+    PPR_UNIT_TEST (definition_edits_recompose_current_presentation_with_unchanged_owned_images) {
+        Fixture fixture;
+        useSmallIdentityImages(fixture);
+        config::Diagnostics diagnostics;
+        auto session = fixture.open(diagnostics);
+        const auto epoch = session.sourceEpoch();
+        PPR_TEST_ASSERT(epoch != nullptr);
+
+        const auto original = validateContentDraft(session.draftSnapshot(), diagnostics, nullptr, kWorld);
+        PPR_TEST_ASSERT(original.has_value() and original->m_selected);
+
+        auto previous = present(original->m_selected, diagnostics, asset::RequestGeneration{1u}, epoch);
+        const auto pixels = previous->textures().front().m_image.m_storage.getBufferData().data();
+
+        auto comment = session.draftSnapshot();
+        const auto comment_source = std::ranges::find(
+            comment.m_source.m_descriptors, fixture.m_root / "solid.toml", &asset::DescriptorSource::m_path);
+        PPR_TEST_ASSERT(comment_source != comment.m_source.m_descriptors.end());
+
+        comment_source->m_bytes += "\n# author comment\n";
+
+        const auto commented = validateContentDraft(comment, diagnostics, nullptr, kWorld);
+        PPR_TEST_ASSERT(commented.has_value() and commented->m_selected);
+
+        const auto unchanged = present(
+            commented->m_selected, diagnostics, asset::RequestGeneration{2u}, comment.m_source_epoch, previous);
+        PPR_TEST_ASSERT(unchanged->catalog() == commented->m_selected and unchanged->catalog() != previous->catalog());
+        PPR_TEST_ASSERT(unchanged->generation() == asset::RequestGeneration{2u} and unchanged->sourceEpoch() == epoch);
+        PPR_TEST_ASSERT(
+            unchanged->work().m_read_count == 0u and
+            unchanged->work().m_prepared_count == 0u and
+            unchanged->work().m_reused_count == 2u);
+        PPR_TEST_ASSERT(unchanged->fingerprint() == previous->fingerprint());
+
+        PPR_TEST_ASSERT(not session.editDefinition(
+            EContentDocument::elements, "solid", "density", config::FileValue::floating(2100.0), diagnostics));
+        PPR_TEST_ASSERT(session.sourceEpoch() == epoch and session.draftSnapshot().m_source_epoch == epoch);
+
+        const auto density = validateContentDraft(session.draftSnapshot(), diagnostics, nullptr, kWorld);
+        PPR_TEST_ASSERT(density.has_value() and density->m_selected);
+
+        const auto recomposed = present(
+            density->m_selected, diagnostics, asset::RequestGeneration{3u}, epoch, unchanged);
+        PPR_TEST_ASSERT(recomposed->catalog()->contentFingerprint() != previous->catalog()->contentFingerprint());
+        PPR_TEST_ASSERT(recomposed->fingerprint() != previous->fingerprint());
+        PPR_TEST_ASSERT(recomposed->work().m_read_count == 0u and recomposed->work().m_reused_count == 2u);
+
+        const std::weak_ptr<const ContentPresentation> previous_owner = previous;
+        previous.reset();
+        PPR_TEST_ASSERT(previous_owner.expired());
+        PPR_TEST_ASSERT(recomposed->textures().front().m_image.m_storage.getBufferData().data() == pixels);
+        PPR_TEST_ASSERT(
+            recomposed->textures().front().m_source_path ==
+            std::filesystem::canonical(fixture.m_root / "images/color.png"));
+
+        PPR_TEST_ASSERT(session.undo().value());
+        PPR_TEST_ASSERT(session.sourceEpoch() == epoch);
+    };
+
+    PPR_UNIT_TEST (texture_setting_edit_prepares_one_image_while_null_epoch_disables_reuse) {
+        Fixture fixture;
+        useSmallIdentityImages(fixture);
+        config::Diagnostics diagnostics;
+        auto session = fixture.open(diagnostics);
+        const auto original = validateContentDraft(session.draftSnapshot(), diagnostics, nullptr, kWorld);
+        PPR_TEST_ASSERT(original.has_value() and original->m_selected);
+
+        const auto previous = present(
+            original->m_selected, diagnostics, asset::RequestGeneration{1u}, session.sourceEpoch());
+
+        PPR_TEST_ASSERT(not session.editDefinition(
+            EContentDocument::textures, "albedo", "high_quality", config::FileValue::boolean(true), diagnostics));
+
+        const auto edited = validateContentDraft(session.draftSnapshot(), diagnostics, nullptr, kWorld);
+        PPR_TEST_ASSERT(edited.has_value() and edited->m_selected);
+
+        const auto changed = present(
+            edited->m_selected, diagnostics, asset::RequestGeneration{2u}, session.sourceEpoch(), previous);
+        PPR_TEST_ASSERT(
+            changed->work().m_read_count == 1u and
+            changed->work().m_prepared_count == 1u and
+            changed->work().m_reused_count == 1u);
+        PPR_TEST_ASSERT(changed->fingerprint() != previous->fingerprint());
+
+        const auto fresh = present(edited->m_selected, diagnostics, asset::RequestGeneration{3u}, {}, changed);
+        PPR_TEST_ASSERT(not fresh->sourceEpoch());
+        PPR_TEST_ASSERT(fresh->work().m_read_count == 2u and fresh->work().m_reused_count == 0u);
+    };
+
+    PPR_UNIT_TEST (independent_open_epochs_force_binary_reread_even_with_equal_size_and_time) {
+        Fixture fixture;
+        useSmallIdentityImages(fixture);
+        config::Diagnostics diagnostics;
+        auto first = fixture.open(diagnostics);
+        const auto original = validateContentDraft(first.draftSnapshot(), diagnostics, nullptr, kWorld);
+        PPR_TEST_ASSERT(original.has_value() and original->m_selected);
+
+        const auto previous = present(
+            original->m_selected, diagnostics, asset::RequestGeneration{1u}, first.sourceEpoch());
+        const auto path = fixture.m_root / "images/color.png";
+        const auto size = std::filesystem::file_size(path);
+        const auto time = std::filesystem::last_write_time(path);
+
+        useSmallIdentityImages(fixture, true);
+        std::filesystem::last_write_time(path, time);
+        PPR_TEST_ASSERT(std::filesystem::file_size(path) == size and std::filesystem::last_write_time(path) == time);
+
+        auto reloaded = fixture.open(diagnostics);
+        PPR_TEST_ASSERT(reloaded.sourceEpoch() and reloaded.sourceEpoch() != first.sourceEpoch());
+
+        const auto selected = validateContentDraft(reloaded.draftSnapshot(), diagnostics, nullptr, kWorld);
+        PPR_TEST_ASSERT(selected.has_value() and selected->m_selected);
+
+        const auto fresh = present(
+            selected->m_selected, diagnostics, asset::RequestGeneration{2u}, reloaded.sourceEpoch(), previous);
+        PPR_TEST_ASSERT(fresh->work().m_read_count == 2u and fresh->work().m_reused_count == 0u);
+        PPR_TEST_ASSERT(fresh->fingerprint() != previous->fingerprint());
+        PPR_TEST_ASSERT(
+            fresh->textures().front().m_source_fingerprint != previous->textures().front().m_source_fingerprint);
+    };
+
+    PPR_UNIT_TEST (required_texture_limits_missing_and_cancel_are_errors) {
+        Fixture fixture;
+        useSmallIdentityImages(fixture);
+        config::Diagnostics diagnostics;
+        auto value = fixture.load(diagnostics);
+        PPR_TEST_ASSERT(value.has_value());
+        auto catalog = std::make_shared<const ContentCatalog>(std::move(*value));
+        const auto original = fixture.read("images/color.png");
+
+        std::filesystem::resize_file(fixture.m_root / "images/color.png", kMaxTextureInputBytes + 1u);
+        const auto oversized = ContentPresentationRequest::start(
+            catalog, asset::RequestGeneration{1u}, context::background(), diagnostics);
+        PPR_TEST_ASSERT(not oversized and oversized.error() == config::EConfigErrc::out_of_range);
+
+        fixture.write("images/color.png", original);
+        PPR_TEST_ASSERT(std::filesystem::remove(fixture.m_root / "images/color.png"));
+        const auto before_absence = diagnostics.size();
+        const auto absent = ContentPresentationRequest::start(
+            catalog, asset::RequestGeneration{2u}, context::background(), diagnostics);
+        PPR_TEST_ASSERT(not absent and absent.error() == std::errc::no_such_file_or_directory);
+        PPR_TEST_ASSERT(diagnostics.size() == before_absence + 1u);
+        PPR_TEST_ASSERT(diagnostics.entries().back().m_property == "source");
+        PPR_TEST_ASSERT(
+            diagnostics.entries().back().m_location ==
+            catalog->textureDefinitions().front().m_descriptor.m_source.m_path.string());
+
+        auto [job_context, cancel] = context::withCancelClause(context::background());
+        cancel(std::make_error_code(std::errc::operation_canceled));
+        const auto cancelled = loadContentCatalog(fixture.m_root, diagnostics, job_context.get());
+        PPR_TEST_ASSERT(not cancelled and cancelled.error() == std::errc::operation_canceled);
+        const auto cancelled_images = ContentPresentationRequest::start(
+            catalog, asset::RequestGeneration{3u}, job_context, diagnostics);
+        PPR_TEST_ASSERT(not cancelled_images and cancelled_images.error() == std::errc::operation_canceled);
+
+        fixture.write("images/color.png", original);
+        auto admitted = ContentPresentationRequest::start(
+            catalog, asset::RequestGeneration{4u}, context::background(), diagnostics);
+        PPR_TEST_ASSERT(admitted.has_value());
+        admitted->cancel();
+        const auto stopped = admitted->finish(diagnostics);
+        PPR_TEST_ASSERT(not stopped and stopped.error() == std::errc::operation_canceled);
+    };
 
     PPR_UNIT_TEST (earlier_mip_failure_precedes_later_texture_preparation_failure) {
-        Fixture fixture{};
-        useSmallIdentityImages(fixture);
-
-        // Decoding succeeds, but the existing mip contract rejects this 1x1 base.
+        Fixture fixture;
         constexpr std::array<u8, 70u> pixel{
             0x89u, 0x50u, 0x4eu, 0x47u, 0x0du, 0x0au, 0x1au, 0x0au, 0x00u, 0x00u, 0x00u, 0x0du, 0x49u, 0x48u, 0x44u,
             0x52u, 0x00u, 0x00u, 0x00u, 0x01u, 0x00u, 0x00u, 0x00u, 0x01u, 0x08u, 0x06u, 0x00u, 0x00u, 0x00u, 0x1fu,
             0x15u, 0xc4u, 0x89u, 0x00u, 0x00u, 0x00u, 0x0du, 0x49u, 0x44u, 0x41u, 0x54u, 0x78u, 0x9cu, 0x63u, 0x68u,
             0x68u, 0xf8u, 0xffu, 0x1fu, 0x00u, 0x06u, 0x82u, 0x02u, 0xffu, 0xb3u, 0xbeu, 0x51u, 0x33u, 0x00u, 0x00u,
             0x00u, 0x00u, 0x49u, 0x45u, 0x4eu, 0x44u, 0xaeu, 0x42u, 0x60u, 0x82u};
-        fixture.write("textures/basalt.png", {reinterpret_cast<const char *>(pixel.data()), pixel.size()});
-        std::filesystem::remove(fixture.m_root / "textures/basalt_normal.png");
+        fixture.write("images/color.png", {reinterpret_cast<const char *>(pixel.data()), pixel.size()});
+        fixture.write("images/broken.png", "corrupt");
+        config::Diagnostics diagnostics;
+        const auto original = fixture.load(diagnostics);
+        PPR_TEST_ASSERT(original.has_value() and original->textureDefinitions().size() == 2u);
 
-        config::Diagnostics diagnostics{};
-        const auto catalog = fixture.load(diagnostics);
-        PPR_TEST_ASSERT(not catalog and catalog.error() == image::make_error_code(image::errc::invalid_argument));
-        PPR_TEST_ASSERT(diagnostics.size() == 1u and diagnostics.entries().size() == 1u);
-        PPR_TEST_ASSERT(diagnostics.entries().front().m_property == "appearance.materials.basalt.albedo_texture");
-        PPR_TEST_ASSERT(diagnostics.entries().front().m_message.starts_with("Cannot generate terrain mip chain:"));
-        PPR_TEST_ASSERT(diagnostics.entries().front().m_location.find("appearance.toml:") != std::string::npos);
+        const auto first = original->textureDefinitions().front();
+        const auto second = original->textureDefinitions().back();
+
+        // Assign the failure roles in the selected closure's actual ID order;
+        // lexical descriptor names do not determine preparation precedence.
+        auto mip = first.m_descriptor.m_value;
+        mip.m_source = "images/color.png";
+        fixture.write(first.m_descriptor.m_source.m_path.filename().string(), mip);
+
+        auto broken = second.m_descriptor.m_value;
+        broken.m_source = "images/broken.png";
+        fixture.write(second.m_descriptor.m_source.m_path.filename().string(), broken);
+
+        auto value = fixture.load(diagnostics);
+        PPR_TEST_ASSERT(value.has_value());
+        auto catalog = std::make_shared<const ContentCatalog>(std::move(*value));
+        PPR_TEST_ASSERT(catalog->textureDefinitions().front().m_id == first.m_id);
+
+        auto request = ContentPresentationRequest::start(
+            catalog, asset::RequestGeneration{1u}, context::background(), diagnostics);
+        PPR_TEST_ASSERT(request.has_value());
+
+        const auto result = request->finish(diagnostics);
+        PPR_TEST_ASSERT(not result and result.error() == image::make_error_code(image::errc::invalid_argument));
+        PPR_TEST_ASSERT(diagnostics.entries().size() == 2u);
+        PPR_TEST_ASSERT(diagnostics.entries().front().m_location == first.m_descriptor.m_source.m_path.string());
+        PPR_TEST_ASSERT(diagnostics.entries().front().m_message.starts_with("Cannot generate texture mip chain"));
+        PPR_TEST_ASSERT(diagnostics.entries().back().m_location == second.m_descriptor.m_source.m_path.string());
+        PPR_TEST_ASSERT(
+            diagnostics.entries().back().m_message.starts_with("Cannot decode texture within image limits"));
     };
 
-    PPR_UNIT_TEST (texture_input_admission_falls_back_serially_and_preserves_owned_mip_bytes) {
-        Fixture fixture{};
-        useSmallIdentityImages(fixture);
+    // ------------------------------------------------------------------
+    // descriptor schema and complete candidate validation
+    // ------------------------------------------------------------------
 
-        auto png = fixture.read("textures/basalt.png");
-        PPR_TEST_ASSERT(png.size() == 75u);
-
-        const auto ending = png.substr(png.size() - 12u);
-        png.resize(png.size() - 12u);
-
-        const auto append_big_endian = [&](const u32 value) {
-            for (u32 shift: {24u, 16u, 8u, 0u}) {
-                png.push_back(static_cast<char>((value >> shift) & 0xffu));
-            }
-        };
-
-        // A valid private ancillary chunk pads the PNG to the exact per-image input limit.
-        // Its fixed CRC was checked offline: zlib.crc32(b'npAD' + bytes(16777129)) == 0x01ca3580.
-        constexpr u32 padding_bytes = static_cast<u32>(kMaxTextureInputBytes) - 75u - 12u;
-        append_big_endian(padding_bytes);
-        png += "npAD";
-        png.append(padding_bytes, '\0');
-        append_big_endian(0x01ca3580u);
-        png += ending;
-        PPR_TEST_ASSERT(png.size() == kMaxTextureInputBytes);
-
-        fixture.write("textures/basalt.png", png);
-
-        auto appearance = fixture.read("appearance.toml");
-        replace(
-            appearance, "normal_texture = \"textures/basalt_normal.png\"", "normal_texture = \"textures/basalt.png\"");
-        fixture.write("appearance.toml", appearance);
-
-        config::Diagnostics diagnostics{};
-        const auto catalog = fixture.load(diagnostics);
-        PPR_TEST_ASSERT(catalog.has_value() and not diagnostics.hasErrors());
-        PPR_TEST_ASSERT(catalog->contentFingerprint().has_value());
-
-        const auto usages = std::ranges::count_if(catalog->textures(), [](const ContentTexture &texture) {
-            return texture.m_path == "textures/basalt.png" and texture.m_source_size == kMaxTextureInputBytes;
-        });
-        PPR_TEST_ASSERT(usages == 2);
-
-        // Loading on an existing background worker exercises the nested serial fallback.
-        // The returned catalog must own all bytes independently of that worker's local workspaces.
-        auto scheduled = parallel::backgroundPool().schedule([root = fixture.m_root](const IContext &) {
-            config::Diagnostics errors{};
-            return loadContentCatalog(root, errors);
-        });
-        PPR_TEST_ASSERT(scheduled.has_value());
-
-        const auto nested = scheduled->get();
-        PPR_TEST_ASSERT(nested.has_value());
-        PPR_TEST_ASSERT(nested->contentFingerprint() == catalog->contentFingerprint());
-        PPR_TEST_ASSERT(nested->textures().size() == catalog->textures().size());
-
-        for (std::size_t index = 0u; index < catalog->textures().size(); ++index) {
-            const auto &expected = catalog->textures()[index];
-            const auto &actual = nested->textures()[index];
-            PPR_TEST_ASSERT(actual.m_path == expected.m_path and actual.m_normal_map == expected.m_normal_map);
-            PPR_TEST_ASSERT(actual.m_image.m_storage.isOwned());
-            PPR_TEST_ASSERT(
-                std::ranges::equal(
-                    actual.m_image.m_storage.getBufferData(), expected.m_image.m_storage.getBufferData()));
-        }
-    };
-
-    PPR_UNIT_TEST (texture_usage_is_distinct_and_background_diagnostics_preserve_source_keys) {
+    PPR_UNIT_TEST (old_formats_ranges_references_and_versions_reject_without_binary_work) {
         Fixture fixture;
         config::Diagnostics diagnostics;
-        auto materials = fixture.read("appearance.toml");
-        replace(
-            materials, "normal_texture = \"textures/basalt_normal.png\"", "normal_texture = \"textures/basalt.png\"");
-        fixture.write("appearance.toml", materials);
-        const auto catalog = fixture.load(diagnostics);
-        PPR_TEST_ASSERT(catalog.has_value());
-        u32 usages = 0u;
-        for (const auto &texture: catalog->textures()) {
-            if (texture.m_path == "textures/basalt.png") {
-                ++usages;
-                PPR_TEST_ASSERT(texture.m_image.m_is_srgb == not texture.m_normal_map);
-            }
-        }
-        PPR_TEST_ASSERT(usages == 2u);
-        auto worlds = fixture.read("appearance.toml");
-        replace(worlds, "background_stack = \"frontier\"", "background_stack = \"absent\"");
-        fixture.write("appearance.toml", worlds);
-        config::Diagnostics missing;
-        PPR_TEST_ASSERT(not fixture.load(missing));
-        PPR_TEST_ASSERT(missing.entries().back().m_property == "appearance.worlds.frontier.background_stack");
-        replace(worlds, "background_stack = \"absent\"", "background_stack = \"frontier\"");
-        fixture.write("appearance.toml", worlds);
-        std::filesystem::remove(fixture.m_root / "textures/background_frontier_distant.png");
-        config::Diagnostics background;
-        PPR_TEST_ASSERT(not fixture.load(background));
+        auto session = fixture.open(diagnostics);
+        const auto original = fixture.read("hearth.toml");
+        PPR_TEST_ASSERT(not session.editBiome(
+            "hearth", "definition.composition.cover.bed_dip", config::FileValue::floating(1.0), diagnostics));
+        const auto range = validateContentDraft(session.draftSnapshot(), diagnostics);
+        PPR_TEST_ASSERT(not range and range.error() == config::EConfigErrc::out_of_range);
+        PPR_TEST_ASSERT(not saveContentDraft(session.draftSnapshot(), diagnostics));
+        PPR_TEST_ASSERT(fixture.read("hearth.toml") == original);
+        PPR_TEST_ASSERT(session.undo().value());
+
+        PPR_TEST_ASSERT(not session.editBiome(
+            "hearth", "definition.temperature.field", config::FileValue::text("missing"), diagnostics));
+        PPR_TEST_ASSERT(not validateContentDraft(session.draftSnapshot(), diagnostics));
+        PPR_TEST_ASSERT(session.undo().value());
+        PPR_TEST_ASSERT(not session.editDefinition(
+            EContentDocument::elements, "solid", "schema_version", config::FileValue::integer(99), diagnostics));
+        const auto version = validateContentDraft(session.draftSnapshot(), diagnostics);
+        PPR_TEST_ASSERT(not version and version.error() == config::EConfigErrc::out_of_range);
+        PPR_TEST_ASSERT(session.undo().value());
+
+        fixture.write("pack.toml", "schema_version = 1\npack_id = 'old'\n[files]\nmaterials = 'materials.toml'\n");
+        PPR_TEST_ASSERT(not loadContentCatalog(fixture.m_root, diagnostics));
+        PPR_TEST_ASSERT(not std::filesystem::exists(fixture.m_root / "images/color.png"));
+    };
+
+    PPR_UNIT_TEST (valid_selected_world_does_not_hide_broken_unselected_world) {
+        Fixture fixture;
+        config::Diagnostics diagnostics;
+        auto session = fixture.open(diagnostics);
+        PPR_TEST_ASSERT(not session.editDefinition(
+            EContentDocument::worlds, "hollows", "profile.start.marker", config::FileValue::text("missing"),
+            diagnostics));
+        const auto draft = session.draftSnapshot();
+        auto definitions = loadContentCatalog(draft.m_source, diagnostics);
+        PPR_TEST_ASSERT(definitions.has_value());
+        auto owner = std::make_shared<const ContentDescriptorCatalog>(std::move(*definitions));
+        const auto selected = resolveContentWorld(*owner, kWorld, diagnostics);
+        PPR_TEST_ASSERT(selected.has_value());
+        PPR_TEST_ASSERT(selectWorldCatalog(owner, *selected, draft.m_parameters, diagnostics).has_value());
+
+        PPR_TEST_ASSERT(not validateContentDraft(draft, diagnostics, nullptr, kWorld));
+        PPR_TEST_ASSERT(not saveContentDraft(draft, diagnostics));
         PPR_TEST_ASSERT(
-            background.entries().back().m_property == "appearance.backgrounds.frontier.layers.distant.texture");
-        PPR_TEST_ASSERT(background.entries().back().m_location.find("appearance.toml:") != std::string::npos);
+            fixture.read("hollows.toml") != descriptor(draft.m_source, fixture.m_root / "hollows.toml").m_bytes);
+    };
+
+    PPR_UNIT_TEST (public_snapshots_reject_null_and_duplicate_ownership_records) {
+        Fixture fixture;
+        config::Diagnostics diagnostics;
+        auto session = fixture.open(diagnostics);
+        auto missing = session.draftSnapshot();
+        missing.m_baseline.m_descriptors.front().m_target.reset();
+        const auto null_validation = validateContentDraft(missing, diagnostics);
+        PPR_TEST_ASSERT(not null_validation and null_validation.error() == std::errc::invalid_argument);
+        const auto null_save = saveContentDraft(std::move(missing), diagnostics);
+        PPR_TEST_ASSERT(not null_save and null_save.error() == std::errc::invalid_argument);
+
+        auto duplicate = session.draftSnapshot();
+        duplicate.m_baseline.m_descriptors.push_back(duplicate.m_baseline.m_descriptors.front());
+        const auto duplicate_validation = validateContentDraft(duplicate, diagnostics);
+        PPR_TEST_ASSERT(not duplicate_validation and duplicate_validation.error() == std::errc::invalid_argument);
+        const auto duplicate_save = saveContentDraft(std::move(duplicate), diagnostics);
+        PPR_TEST_ASSERT(not duplicate_save and duplicate_save.error() == std::errc::invalid_argument);
+        PPR_TEST_ASSERT(not session.dirty());
+    };
+
+    PPR_UNIT_TEST (multi_pack_authoring_requires_qualified_names_and_checks_untouched_packs) {
+        Fixture fixture;
+        fixture.write(
+            "addon/pack.toml", "schema_version = 1\npack_id = 'ppr.addon'\n"
+                               "[assets.noise]\nkind = 'sim.field'\ndescriptor = 'noise.toml'\n");
+        sim::asset::FieldDescriptor field;
+        field.m_schema_version = 1u;
+        field.m_definition.m_frequency_per_metre = 0.01;
+        fixture.write("addon/noise.toml", field);
+        const std::filesystem::path roots[] = {fixture.m_root, fixture.m_root / "addon"};
+        config::Diagnostics diagnostics;
+        auto opened = ContentAuthoringSession::open(roots, diagnostics);
+        PPR_TEST_ASSERT(opened.has_value());
+        auto session = std::move(*opened);
+        const auto revision = session.revision();
+
+        PPR_TEST_ASSERT(
+            session.editBiome(
+                "hearth", "definition.temperature.base_k", config::FileValue::floating(301.0), diagnostics) ==
+            config::EConfigErrc::cross_field_invalid);
+        PPR_TEST_ASSERT(session.revision() == revision and not session.dirty());
+        PPR_TEST_ASSERT(not session.editBiome(
+            "ppr.test:hearth", "definition.temperature.base_k", config::FileValue::floating(301.0), diagnostics));
+        PPR_TEST_ASSERT(
+            session.cloneDefinition(EContentDocument::fields, "ppr.test:composition", "ppr.addon:copy", diagnostics) ==
+            std::errc::file_exists);
+
+        const auto external = fixture.read("addon/noise.toml");
+        fixture.write("addon/noise.toml", external + "\n# external pack edit\n");
+        const auto rejected = saveContentDraft(session.draftSnapshot(), diagnostics);
+        PPR_TEST_ASSERT(not rejected and rejected.error() == config::EConfigErrc::cross_field_invalid);
+        PPR_TEST_ASSERT(
+            fixture.read("hearth.toml") == *ledger(session.baselineSource(), fixture.m_root / "hearth.toml").m_bytes);
+
+        fixture.write("addon/noise.toml", external);
+        save(session, diagnostics);
+    };
+
+    PPR_UNIT_TEST (workshop_property_metadata_tracks_descriptor_schemas_and_reference_categories) {
+        const config::Document document;
+        const auto metadata = [&](const EContentDocument category, const std::string_view property) {
+            return contentPropertyDescriptor(category, property, document, "selected");
+        };
+
+        const auto probability = metadata(EContentDocument::biomes, "definition.formation.probability");
+        PPR_TEST_ASSERT(probability and probability->m_min == 0.0 and probability->m_max == 0.2);
+
+        const auto phase = metadata(EContentDocument::elements, "phase");
+        PPR_TEST_ASSERT(phase and phase->m_choices.size() == sim::asset::Element::phase_domain.m_entries.size());
+        PPR_TEST_ASSERT(std::ranges::find(phase->m_choices, "liquid") != phase->m_choices.end());
+
+        const auto octaves = metadata(EContentDocument::fields, "definition.octaves");
+        PPR_TEST_ASSERT(octaves and octaves->m_min == 1.0 and octaves->m_max == 16.0);
+
+        const auto frequency = metadata(EContentDocument::fields, "definition.frequency_per_metre");
+        PPR_TEST_ASSERT(frequency and frequency->m_exclusive_min and std::isfinite(frequency->m_slider_max));
+
+        const auto band = metadata(EContentDocument::biomes, "definition.composition.cover.bed_dip");
+        PPR_TEST_ASSERT(band and band->m_min == -0.5 and band->m_max == 0.5);
+
+        const auto weight = metadata(EContentDocument::biomes, "definition.composition.cover.materials.stone.weight");
+        PPR_TEST_ASSERT(weight and weight->m_exclusive_min and weight->m_min == 0.0);
+
+        const auto operation = metadata(
+            EContentDocument::features, "definition.operations.op_01.action.carve.shape.tag");
+        PPR_TEST_ASSERT(operation and operation->m_choices.size() == 3u);
+
+        const auto element = metadata(EContentDocument::materials, "element");
+        PPR_TEST_ASSERT(element and not element->m_optional);
+
+        const auto material = metadata(EContentDocument::biomes, "definition.surface_layers.soil.material");
+        PPR_TEST_ASSERT(material and material->m_reference_category == EContentDocument::materials);
+
+        const auto kind = metadata(EContentDocument::rules, "definition.payload.tag");
+        PPR_TEST_ASSERT(kind and not kind->m_read_only and kind->m_choices.size() == 6u);
+        PPR_TEST_ASSERT(not metadata(EContentDocument::rules, "definition.payload.cave.unknown"));
+
+        const auto lifetime = operation->m_choices;
+        PPR_TEST_ASSERT(lifetime.front() == "rectangle");
     };
 
     // ------------------------------------------------------------------
-    // content authoring
+    // authoring history and independent definition edits
     // ------------------------------------------------------------------
 
-    PPR_UNIT_TEST (authoring_all_definition_categories_round_trip_and_multidocument_save_retains_newer_edits) {
+    PPR_UNIT_TEST (authoring_all_descriptor_categories_clone_delete_and_round_trip) {
         Fixture fixture;
-        useSmallIdentityImages(fixture);
-        config::Diagnostics diagnostics{64u};
-        auto opened = ContentAuthoringSession::open(fixture.m_root, diagnostics);
-        PPR_TEST_ASSERT(opened.has_value());
-        auto session = std::move(*opened);
+        config::Diagnostics diagnostics;
+        auto session = fixture.open(diagnostics);
         const auto original = session.draftSnapshot();
         constexpr std::array<std::string_view, kContentDocumentCount> keys{
-            "basalt", "hearth", "composition", "landing", "frontier", "frontier.caves_hearth", "materials.basalt"};
-        constexpr std::array<std::string_view, kContentDocumentCount> copies{
-            "workshop_copy", "workshop_copy", "workshop_copy", "workshop_copy", "workshop_copy",
-            "frontier.workshop_copy", "materials.workshop_copy"};
-        for (std::size_t index = 0u; index < kContentDocumentCount; ++index) {
-            const auto kind = static_cast<EContentDocument>(index);
-            PPR_TEST_ASSERT(not session.cloneDefinition(kind, keys[index], copies[index], diagnostics));
+            "basalt", "hearth", "composition", "landing", "frontier", "caves", "solid", "albedo", "skies"};
+
+        for (std::size_t index = 0u; index < keys.size(); ++index) {
+            const auto category = static_cast<EContentDocument>(index);
+            const auto copy = "copy_" + std::to_string(index);
+            PPR_TEST_ASSERT(not session.cloneDefinition(category, keys[index], copy, diagnostics));
+            const auto copied_path = target(session, copy, contentAssetKind(category), diagnostics);
             const auto cloned = session.draftSnapshot();
-            PPR_TEST_ASSERT(
-                cloned.m_source.m_documents[index].m_bytes.starts_with(original.m_source.m_documents[index].m_bytes));
+            PPR_TEST_ASSERT(cloned.m_source.m_descriptors.size() == original.m_source.m_descriptors.size() + 1u);
+            PPR_TEST_ASSERT(not std::filesystem::exists(copied_path));
+
             PPR_TEST_ASSERT(session.undo().value());
-            PPR_TEST_ASSERT(
-                session.draftSource().m_documents[index].m_bytes == original.m_source.m_documents[index].m_bytes);
-            PPR_TEST_ASSERT(session.redo().value());
-            PPR_TEST_ASSERT(not session.deleteDefinition(kind, copies[index], diagnostics));
-            const auto removed = session.draftSnapshot();
-            PPR_TEST_ASSERT(session.undo().value());
-            PPR_TEST_ASSERT(
-                session.draftSource().m_documents[index].m_bytes == cloned.m_source.m_documents[index].m_bytes);
+            PPR_TEST_ASSERT(not session.dirty());
             PPR_TEST_ASSERT(session.redo().value());
             PPR_TEST_ASSERT(
-                session.draftSource().m_documents[index].m_bytes == removed.m_source.m_documents[index].m_bytes);
-            session.revert();
+                descriptor(session.draftSource(), copied_path).m_bytes ==
+                descriptor(cloned.m_source, copied_path).m_bytes);
+            PPR_TEST_ASSERT(not session.deleteDefinition(category, copy, diagnostics));
+            PPR_TEST_ASSERT(session.undo().value());
+            PPR_TEST_ASSERT(
+                descriptor(session.draftSource(), copied_path).m_bytes ==
+                descriptor(cloned.m_source, copied_path).m_bytes);
+            PPR_TEST_ASSERT(session.redo().value());
+            PPR_TEST_ASSERT(not session.revert());
         }
-        PPR_TEST_ASSERT(
-            not session.cloneDefinition(EContentDocument::materials, "basalt", "workshop_copy", diagnostics));
-        PPR_TEST_ASSERT(not session.cloneDefinition(
-            EContentDocument::appearance, "materials.basalt", "materials.workshop_copy", diagnostics));
-        const auto cloned_catalog = validateContentDraft(session.draftSnapshot(), diagnostics);
-        PPR_TEST_ASSERT(cloned_catalog.has_value());
-        PPR_TEST_ASSERT((*cloned_catalog)->findMaterial("workshop_copy") != nullptr);
-        PPR_TEST_ASSERT(
-            (*cloned_catalog)->findMaterial("workshop_copy")->m_numeric_id !=
-            (*cloned_catalog)->findMaterial("basalt")->m_numeric_id);
-        session.revert();
+
         PPR_TEST_ASSERT(
             session.cloneDefinition(EContentDocument::materials, "basalt", "basalt", diagnostics) ==
-            config::EConfigErrc::duplicate_key);
-        const auto referenced_field = session.validatedCatalog()->biomes().front().m_temperature_field;
-        PPR_TEST_ASSERT(not session.deleteDefinition(EContentDocument::fields, referenced_field, diagnostics));
-        config::Diagnostics references;
-        PPR_TEST_ASSERT(not validateContentDraft(session.draftSnapshot(), references) and references.hasErrors());
-        PPR_TEST_ASSERT(not saveContentDraft(session.draftSnapshot(), references));
-        PPR_TEST_ASSERT(session.dirty() and fixture.read("fields.toml") == original.m_source.m_documents[2u].m_bytes);
-        PPR_TEST_ASSERT(session.undo().value() and not session.dirty());
+            std::errc::file_exists);
 
-        PPR_TEST_ASSERT(not session.editDefinition(
-            EContentDocument::materials, "basalt", "density", config::FileValue::floating(2901.0), diagnostics));
-        PPR_TEST_ASSERT(not session.editDefinition(
-            EContentDocument::fields, "composition", "frequency_per_metre", config::FileValue::floating(0.06),
-            diagnostics));
-        PPR_TEST_ASSERT(not session.editDefinition(
-            EContentDocument::appearance, "worlds.frontier", "display_name", config::FileValue::text("Edited profile"),
-            diagnostics));
-        const auto submitted = session.draftSnapshot();
-        // Staging collisions are discovered before any document commits.
-        fixture.write("appearance.toml.workshop.tmp", "another owner");
-        PPR_TEST_ASSERT(not saveContentDraft(submitted, diagnostics));
-        PPR_TEST_ASSERT(fixture.read("materials.toml") == original.m_source.m_documents[0u].m_bytes);
-        PPR_TEST_ASSERT(fixture.read("fields.toml") == original.m_source.m_documents[2u].m_bytes);
-        PPR_TEST_ASSERT(fixture.read("appearance.toml.workshop.tmp") == "another owner");
-        std::filesystem::remove(fixture.m_root / "appearance.toml.workshop.tmp");
-        PPR_TEST_ASSERT(not session.editDefinition(
-            EContentDocument::fields, "composition", "frequency_per_metre", config::FileValue::floating(0.07),
-            diagnostics));
-        const auto newer = session.draftSnapshot();
-        auto saved = saveContentDraft(submitted, diagnostics);
-        PPR_TEST_ASSERT(saved.has_value() and not session.acceptSave(std::move(*saved)));
-        PPR_TEST_ASSERT(session.dirty());
-        PPR_TEST_ASSERT(fixture.read("materials.toml") == submitted.m_source.m_documents[0u].m_bytes);
-        PPR_TEST_ASSERT(fixture.read("fields.toml") == submitted.m_source.m_documents[2u].m_bytes);
-        PPR_TEST_ASSERT(fixture.read("appearance.toml") == submitted.m_source.m_documents[6u].m_bytes);
-        PPR_TEST_ASSERT(session.draftSource().m_documents[2u].m_bytes == newer.m_source.m_documents[2u].m_bytes);
-        auto retry = saveContentDraft(session.draftSnapshot(), diagnostics);
-        PPR_TEST_ASSERT(retry.has_value() and session.acceptSave(std::move(*retry)) and not session.dirty());
+        const auto revision = session.revision();
+        const auto unrelated = fixture.read("basalt.toml");
+        fixture.write("materials/asset-taken.toml", unrelated);
+        PPR_TEST_ASSERT(
+            session.cloneDefinition(EContentDocument::materials, "basalt", "taken", diagnostics) ==
+            config::EConfigErrc::cross_field_invalid);
+        PPR_TEST_ASSERT(session.revision() == revision and not session.dirty());
+        PPR_TEST_ASSERT(fixture.read("materials/asset-taken.toml") == unrelated);
+
+        PPR_TEST_ASSERT(not session.deleteDefinition(EContentDocument::fields, "composition", diagnostics));
+        PPR_TEST_ASSERT(not validateContentDraft(session.draftSnapshot(), diagnostics));
+        PPR_TEST_ASSERT(not saveContentDraft(session.draftSnapshot(), diagnostics));
+        PPR_TEST_ASSERT(session.undo().value() and not session.dirty());
     };
 
-    PPR_UNIT_TEST (authoring_partial_commit_reconciles_baseline_preserves_newer_edits_and_undo_intent) {
-#ifdef _WIN32
+    PPR_UNIT_TEST (authoring_optional_group_and_variant_transactions_are_atomic) {
         Fixture fixture;
-        useSmallIdentityImages(fixture);
-        config::Diagnostics diagnostics{64u};
-        auto opened = ContentAuthoringSession::open(fixture.m_root, diagnostics);
-        PPR_TEST_ASSERT(opened.has_value());
-        auto session = std::move(*opened);
-        const auto catalog = session.validatedCatalog();
+        config::Diagnostics diagnostics;
+        auto session = fixture.open(diagnostics);
+        const auto original = session.draftSnapshot();
+        const auto material_path = fixture.m_root / "basalt.toml";
+        const auto feature_path = fixture.m_root / "landing.toml";
+        PPR_TEST_ASSERT(not session.clearDefinitionProperty(
+            EContentDocument::materials, "basalt", "appearance.normal_texture", diagnostics));
+        const auto cleared = descriptor(session.draftSource(), material_path).m_bytes;
+        PPR_TEST_ASSERT(cleared != descriptor(original.m_source, material_path).m_bytes);
+        const auto revision = session.revision();
+        PPR_TEST_ASSERT(not session.clearDefinitionProperty(
+            EContentDocument::materials, "basalt", "appearance.normal_texture", diagnostics));
+        PPR_TEST_ASSERT(session.revision() == revision);
+        PPR_TEST_ASSERT(
+            session.clearDefinitionProperty(
+                EContentDocument::materials, "basalt", "appearance.display_name", diagnostics) ==
+            config::EConfigErrc::cross_field_invalid);
+        PPR_TEST_ASSERT(session.undo().value() and not session.dirty());
+        PPR_TEST_ASSERT(session.redo().value());
+        PPR_TEST_ASSERT(descriptor(session.draftSource(), material_path).m_bytes == cleared);
+        PPR_TEST_ASSERT(session.undo().value());
+
+        const auto before_same_tag = session.revision();
         PPR_TEST_ASSERT(not session.editDefinition(
-            EContentDocument::materials, "basalt", "density", config::FileValue::floating(2901.0), diagnostics));
+            EContentDocument::features, "landing", "definition.operations.op_01.action.tag",
+            config::FileValue::text("carve"), diagnostics));
         PPR_TEST_ASSERT(not session.editDefinition(
-            EContentDocument::fields, "composition", "frequency_per_metre", config::FileValue::floating(0.06),
+            EContentDocument::features, "landing", "definition.operations.op_01.action.carve.shape.tag",
+            config::FileValue::text("rectangle"), diagnostics));
+        PPR_TEST_ASSERT(session.revision() == before_same_tag and not session.dirty());
+
+        PPR_TEST_ASSERT(not session.editDefinition(
+            EContentDocument::features, "landing", "definition.operations.op_01.action.carve.shape.tag",
+            config::FileValue::text("capsule"), diagnostics));
+        const auto invalid = session.draftSnapshot();
+        PPR_TEST_ASSERT(not validateContentDraft(invalid, diagnostics));
+        PPR_TEST_ASSERT(session.undo().value());
+        PPR_TEST_ASSERT(
+            descriptor(session.draftSource(), feature_path).m_bytes ==
+            descriptor(original.m_source, feature_path).m_bytes);
+        PPR_TEST_ASSERT(session.redo().value());
+        PPR_TEST_ASSERT(
+            descriptor(session.draftSource(), feature_path).m_bytes ==
+            descriptor(invalid.m_source, feature_path).m_bytes);
+        PPR_TEST_ASSERT(session.undo().value());
+
+        const auto ellipse = config::decode(
+            "tag = 'ellipse'\n[ellipse]\nwidth_fine = 16\nheight_fine = 16\n", "replacement", diagnostics,
+            config::EDecodeMode::tree);
+        PPR_TEST_ASSERT(ellipse.has_value());
+        PPR_TEST_ASSERT(not session.replaceDefinitionSubtree(
+            EContentDocument::features, "landing", "definition.operations.op_01.action.carve.shape", *ellipse,
             diagnostics));
+        const auto variant = session.draftSnapshot();
+        PPR_TEST_ASSERT(validateContentDraft(variant, diagnostics).has_value());
+        PPR_TEST_ASSERT(session.undo().value());
+        PPR_TEST_ASSERT(session.redo().value());
+        PPR_TEST_ASSERT(
+            descriptor(session.draftSource(), feature_path).m_bytes ==
+            descriptor(variant.m_source, feature_path).m_bytes);
+
+        const auto temperature = config::decode(
+            "field = 'composition'\nbase_k = 301.0\nvariation_k = 2.0\n", "replacement", diagnostics,
+            config::EDecodeMode::tree);
+        PPR_TEST_ASSERT(temperature.has_value());
+        PPR_TEST_ASSERT(not session.replaceDefinitionSubtree(
+            EContentDocument::biomes, "hearth", "definition.temperature", *temperature, diagnostics));
+        const auto grouped = session.draftSnapshot();
+        PPR_TEST_ASSERT(validateContentDraft(grouped, diagnostics).has_value());
+        PPR_TEST_ASSERT(session.undo().value());
+        PPR_TEST_ASSERT(session.redo().value());
+        PPR_TEST_ASSERT(
+            descriptor(session.draftSource(), fixture.m_root / "hearth.toml").m_bytes ==
+            descriptor(grouped.m_source, fixture.m_root / "hearth.toml").m_bytes);
+        PPR_TEST_ASSERT(
+            descriptor(session.draftSource(), material_path).m_bytes ==
+            descriptor(original.m_source, material_path).m_bytes);
+    };
+
+    PPR_UNIT_TEST (authoring_validation_and_save_preserve_newer_drafts_and_revision_history) {
+        Fixture fixture;
+        config::Diagnostics diagnostics;
+        auto session = fixture.open(diagnostics);
+        const auto catalog = session.validatedCatalog();
+        const auto baseline_revision = session.validatedRevision();
+        PPR_TEST_ASSERT(not session.dirty() and not session.canUndo());
+        PPR_TEST_ASSERT(not session.editBiome(
+            "hearth", "definition.temperature.base_k", config::FileValue::floating(301.0), diagnostics));
         const auto submitted = session.draftSnapshot();
-        // MSVC file streams share reading/writing but not deletion: reading and
-        // staging succeed while the second document's replacement is denied.
-        std::ifstream locked{fixture.m_root / "fields.toml", std::ios::binary};
-        PPR_TEST_ASSERT(locked.good());
-        auto partial = saveContentDraft(submitted, diagnostics);
-        PPR_TEST_ASSERT(partial.has_value() and partial->m_error != std::error_code{} and not partial->m_catalog);
-        PPR_TEST_ASSERT(fixture.read("materials.toml") == submitted.m_source.m_documents[0u].m_bytes);
-        PPR_TEST_ASSERT(fixture.read("fields.toml") == submitted.m_baseline.m_documents[2u].m_bytes);
+        auto validated = validateContentDraft(submitted, diagnostics, nullptr, kWorld);
+        PPR_TEST_ASSERT(validated.has_value());
+        PPR_TEST_ASSERT(session.acceptValidation(submitted.m_revision, validated->m_definitions));
+
+        PPR_TEST_ASSERT(not session.editBiome(
+            "hearth", "definition.temperature.base_k", config::FileValue::floating(302.0), diagnostics));
+        const auto newer = session.draftSnapshot();
+        PPR_TEST_ASSERT(not session.acceptValidation(submitted.m_revision, catalog));
+        auto saved = saveContentDraft(submitted, diagnostics);
+        PPR_TEST_ASSERT(saved.has_value() and not saved->m_error);
+        PPR_TEST_ASSERT(not session.acceptSave(std::move(*saved)) and session.dirty());
+        PPR_TEST_ASSERT(
+            descriptor(session.draftSource(), fixture.m_root / "hearth.toml").m_bytes ==
+            descriptor(newer.m_source, fixture.m_root / "hearth.toml").m_bytes);
+        PPR_TEST_ASSERT(session.validatedRevision() != baseline_revision);
+        save(session, diagnostics);
+
+        auto reopened = fixture.open(diagnostics);
+        PPR_TEST_ASSERT(
+            descriptor(reopened.draftSource(), fixture.m_root / "hearth.toml").m_bytes ==
+            descriptor(session.draftSource(), fixture.m_root / "hearth.toml").m_bytes);
+        PPR_TEST_ASSERT(session.undo().value() and session.dirty());
+        PPR_TEST_ASSERT(not session.revert());
+        PPR_TEST_ASSERT(not session.dirty() and not session.canUndo() and not session.canRedo());
+    };
+
+    // ------------------------------------------------------------------
+    // partial saves, ownership conflicts and history restoration
+    // ------------------------------------------------------------------
+
+    class CancelAfterDiskCommit final : public IContext {
+        std::string m_path, m_expected;
+        SharedContext m_parent{context::background()};
+
+    public:
+        CancelAfterDiskCommit(const std::filesystem::path &path, std::string expected)
+            : m_path{path.string()}, m_expected{std::move(expected)} {
+        }
+
+        std::error_code error() const noexcept override {
+            // Nonthrowing C I/O observes a physical result, independent of query count.
+            std::FILE *file{};
+#ifdef _WIN32
+            if (::fopen_s(&file, m_path.c_str(), "rb") != 0) {
+                return {};
+            }
+#else
+            file = std::fopen(m_path.c_str(), "rb");
+#endif
+
+            if (file == nullptr) {
+                return {};
+            }
+
+            bool matches = true;
+            for (const unsigned char byte: m_expected) {
+                if (std::fgetc(file) != byte) {
+                    matches = false;
+                    break;
+                }
+            }
+
+            const auto ending = std::fgetc(file);
+            matches = matches and ending < 0 and std::feof(file) != 0 and std::ferror(file) == 0;
+            std::fclose(file);
+            return matches ? std::make_error_code(std::errc::operation_canceled) : std::error_code{};
+        }
+
+        std::optional<const opaque::Block::Value *> value(const string_literal key) const noexcept override {
+            return m_parent->value(key);
+        }
+
+        TagPtr<ISignal> subscribeEvent(TagPtr<ISignal> signal) noexcept override {
+            return m_parent->subscribeEvent(std::move(signal));
+        }
+
+        void unsubscribeEvent(TagPtr<ISignal> signal, TagPtr<ISignal> restore) noexcept override {
+            m_parent->unsubscribeEvent(std::move(signal), std::move(restore));
+        }
+
+        bool pollEvent() noexcept override {
+            return error() != std::error_code{};
+        }
+
+        void resetEvent() noexcept override {
+            m_parent->resetEvent();
+        }
+    };
+
+    PPR_UNIT_TEST (cancellation_after_physical_success_retains_every_observed_disk_outcome) {
+        Fixture fixture;
+        config::Diagnostics diagnostics;
+        auto session = fixture.open(diagnostics);
+        const auto catalog = session.validatedCatalog();
+        PPR_TEST_ASSERT(not session.editBiome(
+            "hearth", "definition.temperature.base_k", config::FileValue::floating(301.0), diagnostics));
         PPR_TEST_ASSERT(not session.editDefinition(
-            EContentDocument::materials, "basalt", "density", config::FileValue::floating(2902.0), diagnostics));
+            EContentDocument::fields, "composition", "definition.frequency_per_metre",
+            config::FileValue::floating(0.02), diagnostics));
+        const auto submitted = session.draftSnapshot();
+        const auto field_path = fixture.m_root / "composition.toml";
+        const auto biome_path = fixture.m_root / "hearth.toml";
+        CancelAfterDiskCommit cancellation{field_path, descriptor(submitted.m_source, field_path).m_bytes};
+        PPR_TEST_ASSERT(not cancellation.error());
+
+        auto result = saveContentDraft(submitted, diagnostics, std::addressof(cancellation));
+        PPR_TEST_ASSERT(
+            result.has_value() and result->m_error == std::errc::operation_canceled and not result->m_catalog);
+        PPR_TEST_ASSERT(fixture.read("composition.toml") == descriptor(submitted.m_source, field_path).m_bytes);
+        PPR_TEST_ASSERT(fixture.read("hearth.toml") == descriptor(submitted.m_source, biome_path).m_bytes);
+        PPR_TEST_ASSERT(ledger(result->m_snapshot.m_baseline, field_path).m_bytes == fixture.read("composition.toml"));
+        PPR_TEST_ASSERT(ledger(result->m_snapshot.m_baseline, biome_path).m_bytes == fixture.read("hearth.toml"));
+
+        PPR_TEST_ASSERT(not session.editBiome(
+            "hearth", "definition.temperature.base_k", config::FileValue::floating(302.0), diagnostics));
+        const auto newer = session.draftSnapshot();
+        PPR_TEST_ASSERT(not session.acceptSave(std::move(*result)) and session.validatedCatalog() == catalog);
+        PPR_TEST_ASSERT(
+            descriptor(session.draftSource(), biome_path).m_bytes == descriptor(newer.m_source, biome_path).m_bytes);
+        PPR_TEST_ASSERT(session.dirty());
+        save(session, diagnostics);
+    };
+
+    PPR_UNIT_TEST (save_checks_all_owned_sources_and_never_adopts_external_bytes) {
+        Fixture fixture;
+        config::Diagnostics diagnostics;
+        auto session = fixture.open(diagnostics);
+        PPR_TEST_ASSERT(not session.editBiome(
+            "hearth", "definition.temperature.base_k", config::FileValue::floating(301.0), diagnostics));
+        const auto before = session.draftSnapshot();
+        const auto field = fixture.read("composition.toml");
+        fixture.write("composition.toml", field + "\n# external untouched descriptor\n");
+        const auto conflict = saveContentDraft(before, diagnostics);
+        PPR_TEST_ASSERT(not conflict and conflict.error() == config::EConfigErrc::cross_field_invalid);
+        PPR_TEST_ASSERT(session.revision() == before.m_revision and session.dirty());
+        PPR_TEST_ASSERT(
+            fixture.read("hearth.toml") == *ledger(before.m_baseline, fixture.m_root / "hearth.toml").m_bytes);
+        PPR_TEST_ASSERT(descriptor(session.draftSource(), fixture.m_root / "composition.toml").m_bytes == field);
+
+        fixture.write("composition.toml", field);
+        fixture.write("pack.toml", fixture.m_manifest + "\n# external manifest\n");
+        const auto manifest_conflict = saveContentDraft(before, diagnostics);
+        PPR_TEST_ASSERT(
+            not manifest_conflict and manifest_conflict.error() == config::EConfigErrc::cross_field_invalid);
+
+        fixture.write("pack.toml", fixture.m_manifest);
+        auto [job_context, cancel] = context::withCancelClause(context::background());
+        cancel(std::make_error_code(std::errc::operation_canceled));
+        const auto cancelled = saveContentDraft(before, diagnostics, job_context.get());
+        PPR_TEST_ASSERT(not cancelled and cancelled.error() == std::errc::operation_canceled);
+        PPR_TEST_ASSERT(
+            fixture.read("hearth.toml") == *ledger(before.m_baseline, fixture.m_root / "hearth.toml").m_bytes);
+    };
+
+    PPR_UNIT_TEST (descriptor_failure_blocks_manifest_and_obsolete_removal) {
+        Fixture fixture;
+        config::Diagnostics diagnostics;
+        auto session = fixture.open(diagnostics);
+        PPR_TEST_ASSERT(not session.cloneDefinition(EContentDocument::fields, "composition", "x", diagnostics));
+        PPR_TEST_ASSERT(not session.cloneDefinition(EContentDocument::fields, "composition", "y", diagnostics));
+        PPR_TEST_ASSERT(not session.deleteDefinition(EContentDocument::materials, "spare", diagnostics));
+        const auto x = target(session, "x", sim::asset::kFieldKind, diagnostics);
+        const auto y = target(session, "y", sim::asset::kFieldKind, diagnostics);
+        const auto y_temporary = y.lexically_relative(fixture.m_root).generic_string() + ".workshop.tmp";
+        fixture.write(y_temporary, "another owner");
+        const auto before = session.draftSnapshot();
+        const auto catalog = session.validatedCatalog();
+        auto result = saveContentDraft(before, diagnostics);
+        PPR_TEST_ASSERT(result.has_value() and result->m_error == std::errc::io_error and not result->m_catalog);
+        PPR_TEST_ASSERT(std::filesystem::exists(x) and not std::filesystem::exists(y));
+        PPR_TEST_ASSERT(fixture.read("pack.toml") == fixture.m_manifest);
+        PPR_TEST_ASSERT(std::filesystem::exists(fixture.m_root / "Odd-Original.TOML"));
+        PPR_TEST_ASSERT(ledger(result->m_snapshot.m_baseline, x).m_bytes.has_value());
+        PPR_TEST_ASSERT(not ledger(result->m_snapshot.m_baseline, y).m_bytes.has_value());
+        PPR_TEST_ASSERT(not session.acceptSave(std::move(*result)));
+        PPR_TEST_ASSERT(session.validatedCatalog() == catalog and session.dirty());
+        PPR_TEST_ASSERT(fixture.read(y_temporary) == "another owner");
+        PPR_TEST_ASSERT(std::filesystem::remove(fixture.m_root / y_temporary));
+        save(session, diagnostics);
+        PPR_TEST_ASSERT(not std::filesystem::exists(fixture.m_root / "Odd-Original.TOML"));
+    };
+
+    PPR_UNIT_TEST (manifest_failure_retains_orphan_ledger_and_newer_x_and_y_intent) {
+        Fixture fixture;
+        config::Diagnostics diagnostics;
+        auto session = fixture.open(diagnostics);
+        PPR_TEST_ASSERT(not session.cloneDefinition(EContentDocument::fields, "composition", "x", diagnostics));
+        const auto x = target(session, "x", sim::asset::kFieldKind, diagnostics);
+        const auto submitted = session.draftSnapshot();
+        fixture.write("pack.toml.workshop.tmp", "another owner");
+        auto partial = saveContentDraft(submitted, diagnostics);
+        PPR_TEST_ASSERT(partial.has_value() and partial->m_error == std::errc::io_error);
+        PPR_TEST_ASSERT(std::filesystem::exists(x));
+        PPR_TEST_ASSERT(fixture.read("pack.toml") == fixture.m_manifest);
+
+        PPR_TEST_ASSERT(not session.editDefinition(
+            EContentDocument::fields, "x", "definition.frequency_per_metre", config::FileValue::floating(0.02),
+            diagnostics));
+        PPR_TEST_ASSERT(not session.cloneDefinition(EContentDocument::fields, "composition", "y", diagnostics));
+        const auto y = target(session, "y", sim::asset::kFieldKind, diagnostics);
         const auto newer = session.draftSnapshot();
         PPR_TEST_ASSERT(not session.acceptSave(std::move(*partial)));
-        PPR_TEST_ASSERT(session.dirty() and session.validatedCatalog() == catalog);
-        PPR_TEST_ASSERT(session.baselineSource().m_documents[0u].m_bytes == submitted.m_source.m_documents[0u].m_bytes);
-        PPR_TEST_ASSERT(session.draftSource().m_documents[0u].m_bytes == newer.m_source.m_documents[0u].m_bytes);
-        locked.close();
-        auto retry = saveContentDraft(session.draftSnapshot(), diagnostics);
-        PPR_TEST_ASSERT(retry.has_value() and not retry->m_error and session.acceptSave(std::move(*retry)));
-        PPR_TEST_ASSERT(not session.dirty());
+        PPR_TEST_ASSERT(ledger(session.baselineSource(), x).m_bytes == descriptor(submitted.m_source, x).m_bytes);
+        PPR_TEST_ASSERT(not ledger(session.baselineSource(), y).m_bytes);
+        PPR_TEST_ASSERT(descriptor(session.draftSource(), x).m_bytes == descriptor(newer.m_source, x).m_bytes);
+        PPR_TEST_ASSERT(descriptor(session.draftSource(), y).m_bytes == descriptor(newer.m_source, y).m_bytes);
 
-        const auto before_undo = session.draftSnapshot();
-        PPR_TEST_ASSERT(not session.editDefinition(
-            EContentDocument::materials, "basalt", "density", config::FileValue::floating(2903.0), diagnostics));
-        PPR_TEST_ASSERT(not session.editDefinition(
-            EContentDocument::fields, "composition", "frequency_per_metre", config::FileValue::floating(0.08),
-            diagnostics));
-        locked.open(fixture.m_root / "fields.toml", std::ios::binary);
+        PPR_TEST_ASSERT(std::filesystem::remove(fixture.m_root / "pack.toml.workshop.tmp"));
+        save(session, diagnostics);
+        PPR_TEST_ASSERT(
+            fixture.read(x.lexically_relative(fixture.m_root).generic_string()) ==
+            descriptor(newer.m_source, x).m_bytes);
+        PPR_TEST_ASSERT(std::filesystem::exists(y));
+        PPR_TEST_ASSERT(session.undo().value());
+        PPR_TEST_ASSERT(session.undo().value());
+        PPR_TEST_ASSERT(descriptor(session.draftSource(), x).m_bytes == descriptor(submitted.m_source, x).m_bytes);
+        PPR_TEST_ASSERT(session.dirty());
+        save(session, diagnostics);
+        PPR_TEST_ASSERT(not std::filesystem::exists(y));
+    };
+
+    PPR_UNIT_TEST (saved_delete_undo_restores_exact_arbitrary_path_and_reappearance_conflicts) {
+        Fixture fixture;
+        config::Diagnostics diagnostics;
+        auto session = fixture.open(diagnostics);
+        const auto path = fixture.m_root / "Odd-Original.TOML";
+        const auto original = fixture.read("Odd-Original.TOML");
+        PPR_TEST_ASSERT(not session.deleteDefinition(EContentDocument::materials, "spare", diagnostics));
+        save(session, diagnostics);
+        PPR_TEST_ASSERT(not std::filesystem::exists(path));
+        PPR_TEST_ASSERT(not ledger(session.baselineSource(), path).m_bytes);
+        PPR_TEST_ASSERT(session.undo().value());
+        PPR_TEST_ASSERT(target(session, "spare", sim::asset::kMaterialKind, diagnostics) == path);
+        save(session, diagnostics);
+        PPR_TEST_ASSERT(fixture.read("Odd-Original.TOML") == original);
+
+        PPR_TEST_ASSERT(session.redo().value());
+        save(session, diagnostics);
+        PPR_TEST_ASSERT(session.undo().value());
+        fixture.write("Odd-Original.TOML", original);
+        const auto reappeared = saveContentDraft(session.draftSnapshot(), diagnostics);
+        PPR_TEST_ASSERT(not reappeared and reappeared.error() == config::EConfigErrc::cross_field_invalid);
+        PPR_TEST_ASSERT(session.dirty() and fixture.read("Odd-Original.TOML") == original);
+    };
+
+    PPR_UNIT_TEST (obsolete_orphan_cleanup_blocks_fresh_growth_but_desired_orphans_are_reusable) {
+#ifdef _WIN32
+        Fixture fixture;
+        config::Diagnostics diagnostics;
+        auto session = fixture.open(diagnostics);
+        PPR_TEST_ASSERT(not session.cloneDefinition(EContentDocument::fields, "composition", "x", diagnostics));
+        const auto x = target(session, "x", sim::asset::kFieldKind, diagnostics);
+        fixture.write("pack.toml.workshop.tmp", "another owner");
+        auto orphaned = saveContentDraft(session.draftSnapshot(), diagnostics);
+        PPR_TEST_ASSERT(orphaned.has_value() and orphaned->m_error == std::errc::io_error);
+        PPR_TEST_ASSERT(not session.acceptSave(std::move(*orphaned)));
+        PPR_TEST_ASSERT(std::filesystem::remove(fixture.m_root / "pack.toml.workshop.tmp"));
+
+        // MSVC streams allow reading but deny deletion/replacement of this file.
+        std::ifstream locked{x, std::ios::binary};
         PPR_TEST_ASSERT(locked.good());
-        auto undo_partial = saveContentDraft(session.draftSnapshot(), diagnostics);
-        PPR_TEST_ASSERT(undo_partial.has_value() and undo_partial->m_error != std::error_code{});
-        PPR_TEST_ASSERT(session.undo().value() and session.undo().value());
-        PPR_TEST_ASSERT(not session.acceptSave(std::move(*undo_partial)) and session.dirty());
-        PPR_TEST_ASSERT(session.draftSource().m_documents[0u].m_bytes == before_undo.m_source.m_documents[0u].m_bytes);
-        PPR_TEST_ASSERT(
-            session.baselineSource().m_documents[0u].m_bytes != before_undo.m_source.m_documents[0u].m_bytes);
+        save(session, diagnostics);
+        PPR_TEST_ASSERT(ledger(session.baselineSource(), x).m_bytes.has_value());
         locked.close();
-        auto restore = saveContentDraft(session.draftSnapshot(), diagnostics);
-        PPR_TEST_ASSERT(restore.has_value() and not restore->m_error and session.acceptSave(std::move(*restore)));
-        PPR_TEST_ASSERT(
-            not session.dirty() and fixture.read("materials.toml") == before_undo.m_source.m_documents[0u].m_bytes);
+
+        PPR_TEST_ASSERT(session.undo().value());
+        fixture.write("pack.toml.workshop.tmp", "another owner");
+        auto removed_manifest = saveContentDraft(session.draftSnapshot(), diagnostics);
+        PPR_TEST_ASSERT(removed_manifest.has_value() and removed_manifest->m_error == std::errc::io_error);
+        PPR_TEST_ASSERT(not session.acceptSave(std::move(*removed_manifest)));
+        PPR_TEST_ASSERT(std::filesystem::remove(fixture.m_root / "pack.toml.workshop.tmp"));
+        save(session, diagnostics);
+        PPR_TEST_ASSERT(not std::filesystem::exists(x));
+
+        PPR_TEST_ASSERT(session.redo().value());
+        fixture.write("pack.toml.workshop.tmp", "another owner");
+        auto unpublished = saveContentDraft(session.draftSnapshot(), diagnostics);
+        PPR_TEST_ASSERT(unpublished.has_value() and unpublished->m_error == std::errc::io_error);
+        PPR_TEST_ASSERT(not session.acceptSave(std::move(*unpublished)));
+        PPR_TEST_ASSERT(std::filesystem::remove(fixture.m_root / "pack.toml.workshop.tmp"));
+        PPR_TEST_ASSERT(session.undo().value());
+        PPR_TEST_ASSERT(not session.cloneDefinition(EContentDocument::fields, "composition", "y", diagnostics));
+        const auto y = target(session, "y", sim::asset::kFieldKind, diagnostics);
+        locked.open(x, std::ios::binary);
+        PPR_TEST_ASSERT(locked.good());
+        auto blocked = saveContentDraft(session.draftSnapshot(), diagnostics);
+        PPR_TEST_ASSERT(blocked.has_value() and blocked->m_error != std::error_code{});
+        PPR_TEST_ASSERT(not std::filesystem::exists(y) and std::filesystem::exists(x));
+        PPR_TEST_ASSERT(not session.acceptSave(std::move(*blocked)));
+
+        locked.close();
+        save(session, diagnostics);
+        PPR_TEST_ASSERT(not std::filesystem::exists(x) and std::filesystem::exists(y));
 #endif
     };
 
-    PPR_UNIT_TEST (authoring_drafts_validate_independently_and_save_without_losing_newer_edits) {
-        Fixture fixture;
-        useSmallIdentityImages(fixture);
-        const auto original = fixture.read("biomes.toml");
-        config::Diagnostics diagnostics{64u};
-        auto opened = ContentAuthoringSession::open(fixture.m_root, diagnostics);
-        PPR_TEST_ASSERT(opened.has_value());
-        auto session = std::move(*opened);
-        const auto baseline_catalog = session.validatedCatalog();
-        const auto baseline_revision = session.validatedRevision();
-        PPR_TEST_ASSERT(not session.dirty() and not session.canUndo());
-        constexpr auto materials = static_cast<std::size_t>(EContentDocument::appearance);
-        const auto original_materials = session.draftSource().m_documents[materials].m_bytes;
-        PPR_TEST_ASSERT(not session.clearDefinitionProperty(
-            EContentDocument::appearance, "materials.basalt", "normal_texture", diagnostics));
-        const auto cleared_materials = session.draftSource().m_documents[materials].m_bytes;
-        PPR_TEST_ASSERT(cleared_materials != original_materials and session.dirty() and session.canUndo());
-        const auto cleared = config::decode(cleared_materials, "cleared.toml", diagnostics, config::EDecodeMode::tree);
-        PPR_TEST_ASSERT(cleared.has_value());
-        PPR_TEST_ASSERT(
-            std::ranges::find(
-                cleared->m_entries, "appearance.materials.basalt.normal_texture", &config::Entry::m_key) ==
-            cleared->m_entries.end());
-        const auto clear_revision = session.revision();
-        PPR_TEST_ASSERT(not session.clearDefinitionProperty(
-            EContentDocument::appearance, "materials.basalt", "normal_texture", diagnostics));
-        PPR_TEST_ASSERT(session.revision() == clear_revision);
-        const auto required_error = session.clearDefinitionProperty(
-            EContentDocument::appearance, "materials.basalt", "display_name", diagnostics);
-        PPR_TEST_ASSERT(required_error != std::error_code{} and session.revision() == clear_revision);
-        diagnostics.clear();
-        PPR_TEST_ASSERT(session.undo().value() and not session.dirty());
-        PPR_TEST_ASSERT(session.draftSource().m_documents[materials].m_bytes == original_materials);
-        PPR_TEST_ASSERT(session.redo().value());
-        PPR_TEST_ASSERT(session.draftSource().m_documents[materials].m_bytes == cleared_materials);
-        PPR_TEST_ASSERT(session.undo().value() and not session.dirty());
-        PPR_TEST_ASSERT(session.validatedCatalog() == baseline_catalog);
-        PPR_TEST_ASSERT(
-            not session.editBiome("hearth", "temperature.base_k", config::FileValue::floating(300.0), diagnostics));
-        const auto valid_snapshot = session.draftSnapshot();
-        PPR_TEST_ASSERT(session.dirty() and session.revision() != baseline_revision);
-        PPR_TEST_ASSERT(
-            session.validatedRevision() == baseline_revision and session.validatedCatalog() == baseline_catalog);
-        PPR_TEST_ASSERT(fixture.read("biomes.toml") == original);
-
-        PPR_TEST_ASSERT(not session.editBiome(
-            "hearth", "temperature.field", config::FileValue::text("missing-field"), diagnostics));
-        config::Diagnostics invalid_diagnostics{64u};
-        const auto invalid = validateContentDraft(session.draftSnapshot(), invalid_diagnostics);
-        PPR_TEST_ASSERT(not invalid and invalid_diagnostics.hasErrors());
-        PPR_TEST_ASSERT(session.validatedCatalog() == baseline_catalog);
-        PPR_TEST_ASSERT(session.undo().value());
-        PPR_TEST_ASSERT(
-            session.draftSource().m_documents[static_cast<std::size_t>(EContentDocument::biomes)].m_bytes ==
-            valid_snapshot.m_source.m_documents[static_cast<std::size_t>(EContentDocument::biomes)].m_bytes);
-        PPR_TEST_ASSERT(not session.acceptValidation(valid_snapshot.m_revision, baseline_catalog));
-        PPR_TEST_ASSERT(session.redo().value() and session.undo().value());
-        auto validated = validateContentDraft(session.draftSnapshot(), diagnostics);
-        PPR_TEST_ASSERT(validated.has_value());
-        PPR_TEST_ASSERT((*validated)->contentFingerprint() != baseline_catalog->contentFingerprint());
-        PPR_TEST_ASSERT(session.acceptValidation(session.revision(), *validated));
-
-        auto save_snapshot = session.draftSnapshot();
-        PPR_TEST_ASSERT(
-            not session.editBiome("hearth", "temperature.base_k", config::FileValue::floating(301.0), diagnostics));
-        auto saved = saveContentDraft(std::move(save_snapshot), diagnostics);
-        PPR_TEST_ASSERT(saved.has_value());
-        PPR_TEST_ASSERT(not session.acceptSave(std::move(*saved)) and session.dirty());
-        auto newer_save = saveContentDraft(session.draftSnapshot(), diagnostics);
-        PPR_TEST_ASSERT(newer_save.has_value() and session.acceptSave(std::move(*newer_save)));
-        PPR_TEST_ASSERT(not session.dirty());
-        auto reopened = ContentAuthoringSession::open(fixture.m_root, diagnostics);
-        PPR_TEST_ASSERT(reopened.has_value());
-        PPR_TEST_ASSERT(
-            reopened->validatedCatalog()->contentFingerprint() == session.validatedCatalog()->contentFingerprint());
-        PPR_TEST_ASSERT(session.undo().value() and session.dirty());
-        session.revert();
-        PPR_TEST_ASSERT(not session.dirty() and not session.canUndo() and not session.canRedo());
-
-        PPR_TEST_ASSERT(
-            not session.editBiome("hearth", "temperature.base_k", config::FileValue::floating(301.5), diagnostics));
-        const auto before_external_fields = session.draftSnapshot();
-        auto old_validation = validateContentDraft(before_external_fields, diagnostics);
-        PPR_TEST_ASSERT(old_validation.has_value());
-        PPR_TEST_ASSERT(session.acceptValidation(before_external_fields.m_revision, *old_validation));
-        auto changed_fields = fixture.read("fields.toml");
-        replace(changed_fields, "frequency_per_metre = 0.008", "frequency_per_metre = 0.01");
-        fixture.write("fields.toml", changed_fields);
-        auto save_with_external_fields = saveContentDraft(before_external_fields, diagnostics);
-        PPR_TEST_ASSERT(save_with_external_fields.has_value());
-        PPR_TEST_ASSERT(session.acceptSave(std::move(*save_with_external_fields)));
-        PPR_TEST_ASSERT(not session.dirty() and session.revision() != before_external_fields.m_revision);
-        PPR_TEST_ASSERT(session.validatedRevision() == session.revision());
-        PPR_TEST_ASSERT(session.validatedCatalog()->contentFingerprint() != (*old_validation)->contentFingerprint());
-        PPR_TEST_ASSERT(
-            session.draftSource().m_documents[static_cast<std::size_t>(EContentDocument::fields)].m_bytes ==
-            changed_fields);
-        PPR_TEST_ASSERT(not session.acceptValidation(before_external_fields.m_revision, *old_validation));
-
-        const auto before_external_texture = session.draftSnapshot();
-        const auto before_texture_catalog = session.validatedCatalog();
-        std::filesystem::copy_file(
-            fixture.m_root / "textures/ice.png", fixture.m_root / "textures/basalt.png",
-            std::filesystem::copy_options::overwrite_existing);
-        auto save_with_external_texture = saveContentDraft(before_external_texture, diagnostics);
-        PPR_TEST_ASSERT(save_with_external_texture.has_value());
-        PPR_TEST_ASSERT(session.acceptSave(std::move(*save_with_external_texture)));
-        PPR_TEST_ASSERT(not session.dirty() and session.revision() != before_external_texture.m_revision);
-        PPR_TEST_ASSERT(session.validatedRevision() == session.revision());
-        PPR_TEST_ASSERT(
-            session.validatedCatalog()->contentFingerprint() != before_texture_catalog->contentFingerprint());
-        PPR_TEST_ASSERT(
-            session.draftSource().m_documents[static_cast<std::size_t>(EContentDocument::biomes)].m_bytes ==
-            before_external_texture.m_source.m_documents[static_cast<std::size_t>(EContentDocument::biomes)].m_bytes);
-        PPR_TEST_ASSERT(not session.acceptValidation(before_external_texture.m_revision, before_texture_catalog));
-
-        const auto committed = fixture.read("biomes.toml");
-        PPR_TEST_ASSERT(
-            not session.editBiome("hearth", "temperature.base_k", config::FileValue::floating(302.0), diagnostics));
-        const auto retained = session.draftSnapshot();
-        fixture.write("biomes.toml", committed + "\n# external edit\n");
-        const auto conflicting = saveContentDraft(session.draftSnapshot(), diagnostics);
-        PPR_TEST_ASSERT(not conflicting and conflicting.error() == std::errc::resource_unavailable_try_again);
-        PPR_TEST_ASSERT(session.dirty() and session.revision() == retained.m_revision);
-        PPR_TEST_ASSERT(fixture.read("biomes.toml") == committed + "\n# external edit\n");
-        fixture.write("biomes.toml", committed);
-
-        fixture.write("biomes.toml.workshop.tmp", "another owner's staging file");
-        const auto collision = saveContentDraft(session.draftSnapshot(), diagnostics);
-        PPR_TEST_ASSERT(not collision and collision.error() == std::errc::io_error);
-        PPR_TEST_ASSERT(fixture.read("biomes.toml.workshop.tmp") == "another owner's staging file");
-        PPR_TEST_ASSERT(fixture.read("biomes.toml") == committed and session.dirty());
-        auto [job_context, cancel] = context::withCancelClause(context::background());
-        cancel(std::make_error_code(std::errc::operation_canceled));
-        const auto cancelled = saveContentDraft(session.draftSnapshot(), diagnostics, job_context.get());
-        PPR_TEST_ASSERT(not cancelled and cancelled.error() == std::errc::operation_canceled);
-        PPR_TEST_ASSERT(fixture.read("biomes.toml") == committed and session.dirty());
-    };
+    // ------------------------------------------------------------------
+    // queued workshop requests and external-owner teardown
+    // ------------------------------------------------------------------
 
     PPR_UNIT_TEST (workshop_queued_requests_preserve_newer_drafts_and_require_current_discard_authority) {
         struct Clock final : ITimerClock {
             TimePoint m_now{};
+
             TimePoint now() const noexcept override {
                 return m_now;
             }
         } clock;
-        Fixture fixture{};
+
+        Fixture fixture;
         useSmallIdentityImages(fixture);
         ParallelScheduler pool{"Workshop request contracts", 1u, static_cast<std::size_t>(hal::page_granularity)};
         WorldgenWorkshop workshop{pool, clock};
@@ -1189,84 +1582,63 @@ threshold.max = 1.0
                 std::this_thread::yield();
             }
         };
-        // Queuing never starts I/O. A replacement supersedes an invalid root,
-        // and cancellation removes both before the first admission update.
+
         PPR_TEST_ASSERT(not workshop.open(fixture.m_root / "missing"));
         PPR_TEST_ASSERT(not workshop.open(fixture.m_root));
         PPR_TEST_ASSERT(workshop.busy() and workshop.session() == nullptr);
         workshop.cancel();
         PPR_TEST_ASSERT(not workshop.busy());
         PPR_TEST_ASSERT(not workshop.update() and workshop.session() == nullptr);
-        PPR_TEST_ASSERT(not workshop.open(fixture.m_root / "missing"));
         PPR_TEST_ASSERT(not workshop.open(fixture.m_root));
         settle();
         auto *const session = workshop.session();
         PPR_TEST_ASSERT(session != nullptr and not session->dirty());
-        PPR_TEST_ASSERT(session->root() == std::filesystem::canonical(fixture.m_root));
-        const auto catalog = session->validatedCatalog();
-        const u64 validated_revision = session->validatedRevision();
         const auto original = session->draftSnapshot();
-        constexpr auto biomes = static_cast<std::size_t>(EContentDocument::biomes);
+        const auto catalog = session->validatedCatalog();
+        const auto validated_revision = session->validatedRevision();
         config::Diagnostics diagnostics;
-        PPR_TEST_ASSERT(
-            not session->editBiome("hearth", "temperature.base_k", config::FileValue::floating(301.0), diagnostics));
-        const auto validation_input = session->draftSnapshot();
+        PPR_TEST_ASSERT(not session->editBiome(
+            "hearth", "definition.temperature.base_k", config::FileValue::floating(301.0), diagnostics));
+        const auto submitted = session->draftSnapshot();
         PPR_TEST_ASSERT(not workshop.validate());
-        // The immutable request has revisionR, but admission has not run yet.
-        PPR_TEST_ASSERT(
-            not session->editBiome("hearth", "temperature.base_k", config::FileValue::floating(302.0), diagnostics));
+        PPR_TEST_ASSERT(not session->editBiome(
+            "hearth", "definition.temperature.base_k", config::FileValue::floating(302.0), diagnostics));
         const auto newer = session->draftSnapshot();
-        PPR_TEST_ASSERT(newer.m_revision > validation_input.m_revision);
         settle();
         PPR_TEST_ASSERT(workshop.session() == session and session->revision() == newer.m_revision);
         PPR_TEST_ASSERT(session->validatedRevision() == validated_revision and session->validatedCatalog() == catalog);
         PPR_TEST_ASSERT(
-            session->draftSource().m_documents[biomes].m_bytes == newer.m_source.m_documents[biomes].m_bytes);
-        PPR_TEST_ASSERT(session->dirty() and session->canUndo() and not session->canRedo());
+            descriptor(session->draftSource(), fixture.m_root / "hearth.toml").m_bytes ==
+            descriptor(newer.m_source, fixture.m_root / "hearth.toml").m_bytes);
 
         PPR_TEST_ASSERT(workshop.open(fixture.m_root) == std::errc::operation_not_permitted);
-        PPR_TEST_ASSERT(not workshop.busy() and session->revision() == newer.m_revision);
+        PPR_TEST_ASSERT(session->undo().value());
         PPR_TEST_ASSERT(
-            session->draftSource().m_documents[biomes].m_bytes == newer.m_source.m_documents[biomes].m_bytes);
-        PPR_TEST_ASSERT(session->canUndo() and not session->canRedo());
-        const auto undo = session->undo();
-        PPR_TEST_ASSERT(undo.has_value() and *undo);
-        PPR_TEST_ASSERT(
-            session->draftSource().m_documents[biomes].m_bytes ==
-            validation_input.m_source.m_documents[biomes].m_bytes);
-        const auto redo = session->redo();
-        PPR_TEST_ASSERT(redo.has_value() and *redo);
-        PPR_TEST_ASSERT(
-            session->draftSource().m_documents[biomes].m_bytes == newer.m_source.m_documents[biomes].m_bytes);
+            descriptor(session->draftSource(), fixture.m_root / "hearth.toml").m_bytes ==
+            descriptor(submitted.m_source, fixture.m_root / "hearth.toml").m_bytes);
+        PPR_TEST_ASSERT(session->redo().value());
 
-        const u64 discard_revision = session->revision();
-        PPR_TEST_ASSERT(not workshop.open(fixture.m_root, discard_revision));
-        PPR_TEST_ASSERT(
-            not session->editBiome("hearth", "temperature.base_k", config::FileValue::floating(303.0), diagnostics));
-        const auto after_discard_authorization = session->draftSnapshot();
-        PPR_TEST_ASSERT(after_discard_authorization.m_revision > discard_revision);
+        const auto discard = session->revision();
+        PPR_TEST_ASSERT(not workshop.open(fixture.m_root, discard));
+        PPR_TEST_ASSERT(not session->editBiome(
+            "hearth", "definition.temperature.base_k", config::FileValue::floating(303.0), diagnostics));
+        const auto after_authorization = session->revision();
         settle();
-        PPR_TEST_ASSERT(
-            workshop.session() == session and session->revision() == after_discard_authorization.m_revision);
-        PPR_TEST_ASSERT(
-            session->draftSource().m_documents[biomes].m_bytes ==
-            after_discard_authorization.m_source.m_documents[biomes].m_bytes);
-        PPR_TEST_ASSERT(session->dirty() and session->canUndo() and not session->canRedo());
-        PPR_TEST_ASSERT(session->validatedRevision() == validated_revision and session->validatedCatalog() == catalog);
+        PPR_TEST_ASSERT(workshop.session() == session and session->revision() == after_authorization);
+        PPR_TEST_ASSERT(session->dirty() and session->canUndo());
+
         PPR_TEST_ASSERT(not workshop.open(fixture.m_root, session->revision()));
         settle();
-        const auto *const reopened = workshop.session();
+        auto *const reopened = workshop.session();
         PPR_TEST_ASSERT(reopened != nullptr and not reopened->dirty());
-        PPR_TEST_ASSERT(reopened->validatedRevision() == reopened->revision());
         PPR_TEST_ASSERT(not reopened->canUndo() and not reopened->canRedo());
         PPR_TEST_ASSERT(
-            reopened->draftSource().m_documents[biomes].m_bytes == original.m_source.m_documents[biomes].m_bytes);
-        PPR_TEST_ASSERT(reopened->validatedCatalog()->contentFingerprint() == catalog->contentFingerprint());
-        WorldgenPreviewSpec spec{"frontier", "hearth", 42u, reopened->revision()};
-        workshop.configureLivePreview(true, spec, pP::EGridDiagnosticMode::material);
-        PPR_TEST_ASSERT(not workshop.busy());
+            descriptor(reopened->draftSource(), fixture.m_root / "hearth.toml").m_bytes ==
+            descriptor(original.m_source, fixture.m_root / "hearth.toml").m_bytes);
+
+        WorldgenPreviewSpec spec{std::string{kWorld}, "hearth", 42u, reopened->revision()};
+        workshop.configureLivePreview(true, spec, EGridDiagnosticMode::material);
         clock.m_now += std::chrono::milliseconds{349};
-        workshop.configureLivePreview(true, spec, pP::EGridDiagnosticMode::material);
         PPR_TEST_ASSERT(not workshop.update() and not workshop.busy());
         clock.m_now += std::chrono::milliseconds{1};
         PPR_TEST_ASSERT(not workshop.update() and workshop.busy());
@@ -1274,233 +1646,124 @@ threshold.max = 1.0
         settle();
         PPR_TEST_ASSERT(workshop.preview() == nullptr);
         clock.m_now += std::chrono::seconds{1};
-        workshop.configureLivePreview(true, spec, pP::EGridDiagnosticMode::material);
+        workshop.configureLivePreview(true, spec, EGridDiagnosticMode::material);
         PPR_TEST_ASSERT(not workshop.update() and not workshop.busy());
-        // Toggling re-arms the same identity. An explicit preview satisfies the
-        // pending automatic request, so the elapsed deadline cannot duplicate it.
-        workshop.configureLivePreview(false, spec, pP::EGridDiagnosticMode::material);
-        workshop.configureLivePreview(true, spec, pP::EGridDiagnosticMode::material);
-        PPR_TEST_ASSERT(not workshop.requestPreview(spec, pP::EGridDiagnosticMode::material));
+
+        workshop.configureLivePreview(false, spec, EGridDiagnosticMode::material);
+        workshop.configureLivePreview(true, spec, EGridDiagnosticMode::material);
+        PPR_TEST_ASSERT(not workshop.requestPreview(spec, EGridDiagnosticMode::material));
         clock.m_now += std::chrono::seconds{1};
         PPR_TEST_ASSERT(not workshop.update() and workshop.busy());
         settle();
-        PPR_TEST_ASSERT(workshop.preview() != nullptr and workshop.preview()->m_spec.m_seed == spec.m_seed);
+        const auto preview = workshop.previewHandle();
+        PPR_TEST_ASSERT(preview and preview->m_spec.m_seed == spec.m_seed and preview->m_presentation);
+        PPR_TEST_ASSERT(preview->m_presentation_generation == preview->m_presentation->generation());
+        PPR_TEST_ASSERT(*preview->m_presentation_generation != preview->m_spec.m_revision);
+
+        const auto stage = workshop.takePresentation();
+        PPR_TEST_ASSERT(stage and stage->m_ack_seed == *preview->m_presentation_generation);
+        PPR_TEST_ASSERT(stage->m_content_fingerprint == preview->m_presentation->fingerprint());
+        PPR_TEST_ASSERT(
+            not exportWorldgenPreview(*preview, reopened->draftSource(), {}, fixture.m_root / "workshop-export"));
+
         PPR_TEST_ASSERT(not workshop.update() and not workshop.busy());
-        ++spec.m_seed;
-        workshop.configureLivePreview(true, spec, pP::EGridDiagnosticMode::material);
-        PPR_TEST_ASSERT(not workshop.open(fixture.m_root));
-        clock.m_now += std::chrono::seconds{1};
+        PPR_TEST_ASSERT(workshop.previewHandle() == preview);
+
+        const auto opened_epoch = reopened->sourceEpoch();
+        PPR_TEST_ASSERT(preview->m_presentation->sourceEpoch() == opened_epoch);
+        PPR_TEST_ASSERT(preview->m_presentation->work().m_read_count == 2u);
+        PPR_TEST_ASSERT(not workshop.requestPreview(spec, EGridDiagnosticMode::material));
+        PPR_TEST_ASSERT(not workshop.update());
+        PPR_TEST_ASSERT(not workshop.requestPreview(spec, EGridDiagnosticMode::material));
         settle();
-        PPR_TEST_ASSERT(not workshop.update() and not workshop.busy());
-        auto *const qa_session = workshop.session();
-        PPR_TEST_ASSERT(qa_session != nullptr);
-        const auto hearth = std::ranges::find(
-            qa_session->validatedCatalog()->biomes(), "hearth", &BiomeDefinition::m_key);
-        PPR_TEST_ASSERT(hearth != qa_session->validatedCatalog()->biomes().end() and not hearth->m_composition.empty());
-        const std::string bed_dip = "composition." + hearth->m_composition.front().m_key + ".bed_dip";
-        workshop.configureLivePreview(false, spec, pP::EGridDiagnosticMode::material);
-        PPR_TEST_ASSERT(not qa_session->editBiome("hearth", bed_dip, config::FileValue::floating(1.0), diagnostics));
+        const auto reused_preview = workshop.previewHandle();
+        PPR_TEST_ASSERT(reused_preview and reused_preview != preview);
+        PPR_TEST_ASSERT(reused_preview->m_presentation_generation != preview->m_presentation_generation);
+        PPR_TEST_ASSERT(reused_preview->m_presentation->sourceEpoch() == opened_epoch);
+        PPR_TEST_ASSERT(
+            reused_preview->m_presentation->work().m_read_count == 0u and
+            reused_preview->m_presentation->work().m_reused_count == 2u);
+        PPR_TEST_ASSERT(reused_preview->m_presentation->catalog() == reused_preview->m_catalog);
+        PPR_TEST_ASSERT(
+            reused_preview->m_presentation->textures().front().m_image.m_storage.getBufferData().data() ==
+            preview->m_presentation->textures().front().m_image.m_storage.getBufferData().data());
+
+        workshop.configureLivePreview(false, spec, EGridDiagnosticMode::material);
+        PPR_TEST_ASSERT(not reopened->editBiome(
+            "hearth", "definition.composition.cover.bed_dip", config::FileValue::floating(1.0), diagnostics));
         PPR_TEST_ASSERT(not workshop.validate());
         settle();
-        const auto property_diagnostics = workshop.propertyDiagnostics();
-        PPR_TEST_ASSERT(not property_diagnostics.empty());
-        PPR_TEST_ASSERT(std::ranges::any_of(property_diagnostics, [&](const auto &diagnostic) {
-            return diagnostic.m_property == "biomes.hearth." + bed_dip and not diagnostic.m_message.empty();
+        PPR_TEST_ASSERT(workshop.draftInvalid() and not workshop.propertyDiagnostics().empty());
+        PPR_TEST_ASSERT(std::ranges::any_of(workshop.propertyDiagnostics(), [&](const auto &diagnostic) {
+            return diagnostic.m_property == "definition.composition.cover.bed_dip" and
+                   diagnostic.m_location.starts_with((fixture.m_root / "hearth.toml").string()) and
+                   not diagnostic.m_message.empty();
         }));
-        spec.m_revision = qa_session->revision();
-        workshop.configureLivePreview(true, spec, pP::EGridDiagnosticMode::material);
-        clock.m_now += std::chrono::seconds{1};
-        PPR_TEST_ASSERT(not workshop.update() and not workshop.busy());
-        PPR_TEST_ASSERT(qa_session->undo().value());
+
+        PPR_TEST_ASSERT(reopened->undo().value());
         PPR_TEST_ASSERT(workshop.propertyDiagnostics().empty());
-        workshop.configureLivePreview(false, spec, pP::EGridDiagnosticMode::material);
-        PPR_TEST_ASSERT(not workshop.validate());
+
+        PPR_TEST_ASSERT(not workshop.open(fixture.m_root, reopened->revision()));
         settle();
-        PPR_TEST_ASSERT(workshop.propertyDiagnostics().empty());
+        auto *const reloaded = workshop.session();
+        PPR_TEST_ASSERT(reloaded and reloaded->sourceEpoch() != opened_epoch);
+        spec.m_revision = reloaded->revision();
+        PPR_TEST_ASSERT(not workshop.requestPreview(spec, EGridDiagnosticMode::material));
+        settle();
+        const auto fresh_preview = workshop.previewHandle();
+        PPR_TEST_ASSERT(fresh_preview and fresh_preview->m_presentation->sourceEpoch() == reloaded->sourceEpoch());
+        PPR_TEST_ASSERT(
+            fresh_preview->m_presentation->work().m_read_count == 2u and
+            fresh_preview->m_presentation->work().m_reused_count == 0u);
+
+        PPR_TEST_ASSERT(not workshop.validate());
+        // Shutdown drains an admitted request while the explicit scheduler still lives.
+        PPR_TEST_ASSERT(not workshop.update());
         PPR_TEST_ASSERT(not workshop.shutdown());
-    };
-
-    PPR_UNIT_TEST (authoring_group_and_variant_transactions_are_atomic_and_same_tag_is_a_noop) {
-        Fixture fixture;
-        useSmallIdentityImages(fixture);
-        config::Diagnostics diagnostics;
-        auto opened = ContentAuthoringSession::open(fixture.m_root, diagnostics);
-        PPR_TEST_ASSERT(opened.has_value());
-        auto session = std::move(*opened);
-        const auto original = session.draftSnapshot();
-        const auto catalog = session.validatedCatalog();
-        PPR_TEST_ASSERT(not session.editDefinition(
-            EContentDocument::features, "landing", "operations.op_01.action.tag", config::FileValue::text("carve"),
-            diagnostics));
-        PPR_TEST_ASSERT(not session.editDefinition(
-            EContentDocument::features, "landing", "operations.op_01.action.carve.shape.tag",
-            config::FileValue::text("rectangle"), diagnostics));
-        PPR_TEST_ASSERT(session.revision() == original.m_revision and not session.canUndo() and not session.dirty());
-        PPR_TEST_ASSERT(session.draftSource().m_documents[3u].m_bytes == original.m_source.m_documents[3u].m_bytes);
-
-        PPR_TEST_ASSERT(not session.editDefinition(
-            EContentDocument::features, "landing", "operations.op_01.action.carve.shape.tag",
-            config::FileValue::text("capsule"), diagnostics));
-        const auto invalid = session.draftSnapshot();
-        PPR_TEST_ASSERT(invalid.m_revision != original.m_revision and session.canUndo());
-        config::Diagnostics invalid_errors;
-        PPR_TEST_ASSERT(not validateContentDraft(invalid, invalid_errors) and invalid_errors.hasErrors());
-        PPR_TEST_ASSERT(session.validatedCatalog() == catalog);
-        PPR_TEST_ASSERT(session.undo().value());
-        PPR_TEST_ASSERT(session.draftSource().m_documents[3u].m_bytes == original.m_source.m_documents[3u].m_bytes);
-        PPR_TEST_ASSERT(session.redo().value());
-        PPR_TEST_ASSERT(session.draftSource().m_documents[3u].m_bytes == invalid.m_source.m_documents[3u].m_bytes);
-        PPR_TEST_ASSERT(session.undo().value());
-
-        const auto ellipse = config::decode(
-            "tag = 'ellipse'\n[ellipse]\nwidth_fine = 84\nheight_fine = 27\n", "replacement.toml", diagnostics,
-            config::EDecodeMode::tree);
-        PPR_TEST_ASSERT(ellipse.has_value());
-        PPR_TEST_ASSERT(not session.replaceDefinitionSubtree(
-            EContentDocument::features, "landing", "operations.op_01.action.carve.shape", *ellipse, diagnostics));
-        const auto variant = session.draftSnapshot();
-        PPR_TEST_ASSERT(validateContentDraft(variant, diagnostics).has_value());
-        PPR_TEST_ASSERT(session.undo().value());
-        PPR_TEST_ASSERT(session.draftSource().m_documents[3u].m_bytes == original.m_source.m_documents[3u].m_bytes);
-        PPR_TEST_ASSERT(session.redo().value());
-        PPR_TEST_ASSERT(session.draftSource().m_documents[3u].m_bytes == variant.m_source.m_documents[3u].m_bytes);
-
-        const auto temperature = config::decode(
-            "field = 'temperature'\nbase_k = 300.0\nvariation_k = 8.0\n", "replacement.toml", diagnostics,
-            config::EDecodeMode::tree);
-        PPR_TEST_ASSERT(temperature.has_value());
-        PPR_TEST_ASSERT(not session.replaceDefinitionSubtree(
-            EContentDocument::biomes, "hearth", "temperature", *temperature, diagnostics));
-        const auto group = session.draftSnapshot();
-        PPR_TEST_ASSERT(validateContentDraft(group, diagnostics).has_value());
-        PPR_TEST_ASSERT(session.undo().value());
-        PPR_TEST_ASSERT(session.draftSource().m_documents[1u].m_bytes == variant.m_source.m_documents[1u].m_bytes);
-        PPR_TEST_ASSERT(session.redo().value());
-        PPR_TEST_ASSERT(session.draftSource().m_documents[1u].m_bytes == group.m_source.m_documents[1u].m_bytes);
-        PPR_TEST_ASSERT(session.draftSource().m_documents[6u].m_bytes == original.m_source.m_documents[6u].m_bytes);
-        PPR_TEST_ASSERT(not session.acceptValidation(original.m_revision, catalog));
-    };
-
-    PPR_UNIT_TEST (workshop_property_metadata_tracks_schemas_and_contextual_references) {
-        Fixture fixture;
-        config::Diagnostics diagnostics;
-        const auto source = loadContentPackSource(fixture.m_root, diagnostics);
-        PPR_TEST_ASSERT(source.has_value());
-        std::array<config::Document, kContentDocumentCount> documents;
-        for (std::size_t i = 0u; i < kContentDocumentCount; ++i) {
-            const auto document = config::decode(
-                source->m_documents[i].m_bytes, source->m_documents[i].m_path.string(), diagnostics,
-                config::EDecodeMode::tree);
-            PPR_TEST_ASSERT(document.has_value());
-            documents[i] = *document;
-        }
-        const auto descriptor = [&](const EContentDocument category, const std::string_view key,
-                                    const std::string_view property) {
-            return contentPropertyDescriptor(category, property, documents[static_cast<std::size_t>(category)], key);
-        };
-        const auto probability = descriptor(EContentDocument::biomes, "hearth", "formation.probability");
-        PPR_TEST_ASSERT(probability and probability->m_min == 0.0 and probability->m_max == 0.2);
-        const auto phase = descriptor(EContentDocument::materials, "basalt", "phase");
-        PPR_TEST_ASSERT(phase and phase->m_choices.size() == 3u and not phase->m_optional);
-        PPR_TEST_ASSERT(std::ranges::find(phase->m_choices, "liquid") != phase->m_choices.end());
-        const auto octaves = descriptor(EContentDocument::fields, "composition", "octaves");
-        PPR_TEST_ASSERT(octaves and octaves->m_min == 1.0 and octaves->m_max == 16.0);
-        const auto frequency = descriptor(EContentDocument::fields, "composition", "frequency_per_metre");
-        PPR_TEST_ASSERT(frequency and frequency->m_exclusive_min and std::isfinite(frequency->m_slider_max));
-        const auto band = descriptor(EContentDocument::biomes, "hearth", "composition.cover.bed_dip");
-        PPR_TEST_ASSERT(band and band->m_min == -0.5 and band->m_max == 0.5);
-        const auto weight = descriptor(EContentDocument::biomes, "hearth", "composition.cover.materials.bed_01.weight");
-        PPR_TEST_ASSERT(weight and weight->m_exclusive_min and weight->m_min == 0.0);
-        const auto operation = descriptor(
-            EContentDocument::features, "landing", "operations.op_01.action.carve.shape.tag");
-        PPR_TEST_ASSERT(operation and operation->m_choices.size() == 3u);
-        PPR_TEST_ASSERT(std::ranges::find(operation->m_choices, "capsule") != operation->m_choices.end());
-        const auto layer = descriptor(
-            EContentDocument::appearance, "backgrounds.frontier", "layers.distant.parallax_factor");
-        PPR_TEST_ASSERT(layer and layer->m_min == 0.0 and layer->m_max == 1.0);
-        const auto material = descriptor(EContentDocument::biomes, "hearth", "surface_layers.soil.material");
-        PPR_TEST_ASSERT(material and material->m_reference_category == EContentDocument::materials);
-        PPR_TEST_ASSERT(not descriptor(EContentDocument::biomes, "hearth", "composition.cover.unknown"));
-
-        const auto kind = descriptor(EContentDocument::rules, "frontier.caves_hearth", "payload.tag");
-        PPR_TEST_ASSERT(kind and not kind->m_read_only and kind->m_choices.size() == 6u);
-        PPR_TEST_ASSERT(std::ranges::find(kind->m_choices, "matter_fill") != kind->m_choices.end());
-        PPR_TEST_ASSERT(
-            descriptor(EContentDocument::rules, "frontier.caves_hearth", "payload.cave.threshold.min").has_value());
-        PPR_TEST_ASSERT(not descriptor(EContentDocument::rules, "frontier.caves_hearth", "payload.cave.unknown"));
-        const auto radius = descriptor(
-            EContentDocument::rules, "frontier.tunnels_hearth", "payload.carve_worm.geometry.radius_min_m");
-        PPR_TEST_ASSERT(radius and radius->m_min == 0.0 and radius->m_max == 256.0 and radius->m_exclusive_min);
-        const auto choices = [&](const EContentDocument category, const std::string_view key,
-                                 const std::string_view property) {
-            return contentPropertyReferenceChoices(category, property, documents, key);
-        };
-        const auto biomes = choices(EContentDocument::rules, "frontier.caves_hearth", "payload.cave.biome");
-        PPR_TEST_ASSERT(std::ranges::find(biomes, "hearth") != biomes.end());
-        const auto placements = choices(
-            EContentDocument::rules, "frontier.fill_pocket_water", "payload.matter_fill.placement");
-        PPR_TEST_ASSERT(std::ranges::find(placements, "cisterns") != placements.end());
-        PPR_TEST_ASSERT(
-            choices(EContentDocument::rules, "frontier.fill_pocket_water", "payload.matter_fill.marker") ==
-            Array<std::string>{"anchor"});
-        PPR_TEST_ASSERT(choices(EContentDocument::worlds, "frontier", "start.marker") == Array<std::string>{"spawn"});
-        auto &rules = documents[static_cast<std::size_t>(EContentDocument::rules)];
-        const auto placement = std::ranges::find(
-            rules.m_entries, "rules.frontier.fill_pocket_water.payload.matter_fill.placement", &config::Entry::m_key);
-        PPR_TEST_ASSERT(placement != rules.m_entries.end());
-        placement->m_value = config::FileValue::text("missing");
-        PPR_TEST_ASSERT(
-            choices(EContentDocument::rules, "frontier.fill_pocket_water", "payload.matter_fill.marker").empty());
-        const auto lifetime = operation->m_choices;
-        documents = {};
-        PPR_TEST_ASSERT(lifetime.size() == 3u and lifetime[0u] == "rectangle");
-    };
-
-    PPR_UNIT_TEST (required_texture_limits_missing_and_cancel_are_errors) {
-        Fixture fixture{};
-        config::Diagnostics diagnostics{};
-        const auto original = fixture.read("textures/basalt.png");
-        std::filesystem::resize_file(fixture.m_root / "textures/basalt.png", kMaxTextureInputBytes + 1u);
-        const auto large = fixture.load(diagnostics);
-        PPR_TEST_ASSERT(not large and large.error() == std::errc::file_too_large);
-        fixture.write("textures/basalt.png", original);
-        std::filesystem::remove(fixture.m_root / "textures/basalt.png");
-        const auto missing = fixture.load(diagnostics);
-        PPR_TEST_ASSERT(not missing and missing.error() == std::errc::no_such_file_or_directory);
-        auto [job_context, cancel] = context::withCancelClause(context::background());
-        cancel(std::make_error_code(std::errc::operation_canceled));
-        const auto cancelled = loadContentCatalog(fixture.m_root, diagnostics, job_context.get());
-        PPR_TEST_ASSERT(not cancelled and cancelled.error() == std::errc::operation_canceled);
+        PPR_TEST_ASSERT(not workshop.busy());
+        PPR_TEST_ASSERT(preview->m_presentation->textures().front().m_image.m_storage.isOwned());
     };
 }
+
 namespace pP::game::tests {
+    // ------------------------------------------------------------------
+    // descriptor pack and authoring suite
+    // ------------------------------------------------------------------
+
+    const UnitTest pack_content = UnitTest::Named("pack_content") / [](UnitTest::IRun &_) -> void {
+        _.recurse({
+            detail::pack::catalog_dig_respects_protected_material_and_preflights_the_complete_rectangle,
+            detail::pack::construction_checks_complete_tiles_reservations_and_live_actor_overlap,
+            detail::pack::errand_preflight_rejects_invalid_actor_before_any_demolition_writes,
+            detail::pack::data_only_material_extension_reaches_raster_tools_and_colliders,
+            detail::pack::prepared_world_rejects_invalid_inputs_and_cancellation_before_generation,
+            detail::pack::numeric_streams_ignore_manifest_order_comments_and_unused_assets,
+            detail::pack::identity_separates_numeric_appearance_descriptor_and_binary_changes,
+            detail::pack::explicit_presentation_owns_distinct_usages_and_survives_source_removal,
+            detail::pack::definition_edits_recompose_current_presentation_with_unchanged_owned_images,
+            detail::pack::texture_setting_edit_prepares_one_image_while_null_epoch_disables_reuse,
+            detail::pack::independent_open_epochs_force_binary_reread_even_with_equal_size_and_time,
+            detail::pack::required_texture_limits_missing_and_cancel_are_errors,
+            detail::pack::earlier_mip_failure_precedes_later_texture_preparation_failure,
+            detail::pack::old_formats_ranges_references_and_versions_reject_without_binary_work,
+            detail::pack::valid_selected_world_does_not_hide_broken_unselected_world,
+            detail::pack::public_snapshots_reject_null_and_duplicate_ownership_records,
+            detail::pack::multi_pack_authoring_requires_qualified_names_and_checks_untouched_packs,
+            detail::pack::workshop_property_metadata_tracks_descriptor_schemas_and_reference_categories,
+            detail::pack::authoring_all_descriptor_categories_clone_delete_and_round_trip,
+            detail::pack::authoring_optional_group_and_variant_transactions_are_atomic,
+            detail::pack::authoring_validation_and_save_preserve_newer_drafts_and_revision_history,
+            detail::pack::cancellation_after_physical_success_retains_every_observed_disk_outcome,
+            detail::pack::save_checks_all_owned_sources_and_never_adopts_external_bytes,
+            detail::pack::descriptor_failure_blocks_manifest_and_obsolete_removal,
+            detail::pack::manifest_failure_retains_orphan_ledger_and_newer_x_and_y_intent,
+            detail::pack::saved_delete_undo_restores_exact_arbitrary_path_and_reappearance_conflicts,
+            detail::pack::obsolete_orphan_cleanup_blocks_fresh_growth_but_desired_orphans_are_reusable,
+            detail::pack::workshop_queued_requests_preserve_newer_drafts_and_require_current_discard_authority,
+        });
+    };
+
     const UnitTest &gamePackContentTests() noexcept {
-        static const UnitTest tests = UnitTest::Named("pack_content") / [](UnitTest::IRun &_) -> void {
-            _.recurse(
-                {detail::pack::definition_keys_own_sorted_unique_segments_from_raw_drafts,
-                    detail::pack::catalog_dig_respects_protected_material_and_preflights_the_complete_rectangle,
-                    detail::pack::construction_checks_complete_tiles_reservations_and_live_actor_overlap,
-                    detail::pack::errand_preflight_rejects_invalid_actor_before_any_demolition_writes,
-                    detail::pack::complete_shipped_catalog_is_owned,
-                    detail::pack::data_only_material_extension_reaches_raster_tools_and_colliders,
-                    detail::pack::shipped_profiles_compile_owned_numeric_plans,
-                    detail::pack::prepared_world_rejects_invalid_inputs_and_cancellation_before_generation,
-                    detail::pack::numeric_streams_ignore_document_order_and_unused_materials,
-                    detail::pack::complete_identity_ignores_document_order_comments_and_source_paths,
-                    detail::pack::identity_changes_for_every_definition_kind_and_texture_bytes,
-                    detail::pack::earlier_mip_failure_precedes_later_texture_preparation_failure,
-                    detail::pack::texture_input_admission_falls_back_serially_and_preserves_owned_mip_bytes,
-                    detail::pack::texture_usage_is_distinct_and_background_diagnostics_preserve_source_keys,
-                    detail::pack::required_texture_limits_missing_and_cancel_are_errors,
-                    detail::pack::workshop_property_metadata_tracks_schemas_and_contextual_references,
-                    detail::pack::authoring_group_and_variant_transactions_are_atomic_and_same_tag_is_a_noop,
-                    detail::pack::authoring_drafts_validate_independently_and_save_without_losing_newer_edits,
-                    detail::pack::authoring_partial_commit_reconciles_baseline_preserves_newer_edits_and_undo_intent,
-                    detail::pack::
-                        authoring_all_definition_categories_round_trip_and_multidocument_save_retains_newer_edits,
-                    detail::pack::
-                        workshop_queued_requests_preserve_newer_drafts_and_require_current_discard_authority});
-        };
-        return tests;
+        return pack_content;
     }
 }

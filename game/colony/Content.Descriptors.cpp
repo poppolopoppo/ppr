@@ -86,15 +86,28 @@ namespace pP::colony {
 
     Expected<ContentDescriptorCatalog> ContentDescriptorCatalog::importDefinitions(
         std::shared_ptr<const asset::PackSet> packs, config::Diagnostics &diagnostics) {
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            ContentDescriptors, not packs ? std::make_error_code(std::errc::invalid_argument) : std::error_code{});
+
+        const auto reader = [&](const asset::IndexedAsset &entry, config::Diagnostics &local) {
+            return packs->readDescriptor(entry.m_key, entry.m_kind, local);
+        };
+
+        return importDefinitions(packs, reader, diagnostics);
+    }
+
+    Expected<ContentDescriptorCatalog> ContentDescriptorCatalog::importDefinitions(
+        std::shared_ptr<const asset::PackSet> packs, const asset::DescriptorReader reader,
+        config::Diagnostics &diagnostics) {
         const hal::ProfileScope scope{"Content.Descriptors.ImportDefinitions"};
         if (not packs) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(ContentDescriptors, std::errc::invalid_argument);
         }
 
-        auto elements = sim::asset::ElementCatalog::importDefinitions(*packs, diagnostics);
+        auto elements = sim::asset::ElementCatalog::importDefinitions(*packs, reader, diagnostics);
         PPR_RETURN_UNEXPECTED_ON_FAIL(ContentDescriptors, elements);
 
-        auto textures = image::TextureCatalog::importDefinitions(*packs, diagnostics);
+        auto textures = image::TextureCatalog::importDefinitions(*packs, reader, diagnostics);
         PPR_RETURN_UNEXPECTED_ON_FAIL(ContentDescriptors, textures);
 
         ContentDescriptorCatalog result{std::move(packs), std::move(*elements), std::move(*textures)};
@@ -103,7 +116,7 @@ namespace pP::colony {
             const auto append = [&]<typename Descriptor, typename Id>(
                                     Array<ContentDescriptor<Descriptor, Id>> &destination) {
                 auto imported = asset::importDescriptor<Descriptor>(
-                    *result.m_packs, entry.m_key, entry.m_kind, diagnostics);
+                    *result.m_packs, entry.m_key, entry.m_kind, reader, diagnostics);
                 PPR_RETURN_ERROR_ON_FAIL(ContentDescriptors, imported);
 
                 destination.push_back({std::move(*imported), Id{*entry.m_key}});

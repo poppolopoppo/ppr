@@ -62,21 +62,21 @@ export namespace pP::colony {
     // limits
     // ------------------------------------------------------------------
 
-    inline constexpr std::size_t kMaxMaterialDocumentBytes = 1024u * 1024u;
-    inline constexpr std::size_t kMaxContentMaterials = 256u;
-    inline constexpr std::size_t kMaxContentFields = 256u;
-    inline constexpr std::size_t kMaxContentBiomes = 64u;
+    inline constexpr std::size_t kMaxMaterialDocumentBytes = asset::kMaxDescriptorBytes;
+    inline constexpr std::size_t kMaxContentMaterials = sim::definition::Definition::materials_domain.m_max;
+    inline constexpr std::size_t kMaxContentFields = sim::definition::Definition::fields_domain.m_max;
+    inline constexpr std::size_t kMaxContentBiomes = sim::definition::Definition::biomes_domain.m_max;
     inline constexpr std::size_t kMaxBiomeCompositionBands = 16u;
     inline constexpr std::size_t kMaxCompositionMaterials = 64u;
     inline constexpr std::size_t kMaxBiomeDeposits = 64u;
-    inline constexpr std::size_t kMaxContentFeatures = 128u;
+    inline constexpr std::size_t kMaxContentFeatures = sim::definition::Definition::features_domain.m_max;
     inline constexpr std::size_t kMaxFeatureOperations = 128u;
     inline constexpr std::size_t kMaxFeatureMarkers = 64u;
     inline constexpr std::size_t kMaxContentWorlds = 16u;
-    inline constexpr std::size_t kMaxWorldRules = 128u;
+    inline constexpr std::size_t kMaxWorldRules = sim::definition::ProfileDefinition::rules_domain.m_max;
     inline constexpr std::size_t kMaxWorldSites = 4096u;
     inline constexpr std::size_t kMaxStartResources = 8u;
-    inline constexpr std::size_t kMaxPackManifestBytes = 64u * 1024u;
+    inline constexpr std::size_t kMaxPackManifestBytes = asset::kMaxManifestBytes;
 
     // ------------------------------------------------------------------
     // documents
@@ -89,59 +89,117 @@ export namespace pP::colony {
         features,
         worlds,
         rules,
-        appearance,
+        elements,
+        textures,
+        backgrounds,
         count
     };
     inline constexpr std::size_t kContentDocumentCount = static_cast<std::size_t>(EContentDocument::count);
 
     struct ContentDocumentBinding {
         EContentDocument m_document{};
-        std::string_view m_collection{}, m_label{}, m_schema_root{};
-        bool m_attached_rules{};
-        std::size_t m_definition_depth{1u};
+        std::string_view m_collection{}, m_label{};
     };
     [[nodiscard]] std::span<const ContentDocumentBinding> contentDocumentBindings() noexcept;
-    [[nodiscard]] std::string contentDocumentPath(
-        EContentDocument category, std::string_view definition_key, std::string_view relative_property = {});
-    [[nodiscard]] std::string contentCanonicalPath(EContentDocument category, std::string_view document_path);
-    [[nodiscard]] std::optional<std::pair<EContentDocument, std::string>> contentSourcePath(
-        std::string_view canonical_path);
-    [[nodiscard]] Array<std::string> contentDefinitionKeys(EContentDocument category, const config::Document &document);
-
+    [[nodiscard]] std::string_view contentAssetKind(EContentDocument category) noexcept;
     /// Numeric limits and enum choices come from the decoding schemas. Slider
     /// bounds are viewport hints only; editors must include the current value.
     /// Choice lists are owned; their string views have immutable static lifetime.
     struct ContentPropertyDescriptor : config::PropertyDescriptor {
+        std::optional<std::size_t> m_text_length{};
         std::optional<EContentDocument> m_reference_category{};
     };
     [[nodiscard]] std::optional<ContentPropertyDescriptor> contentPropertyDescriptor(
         EContentDocument category, std::string_view relative_property, const config::Document &document,
         std::string_view definition_key);
-    /// Contextual reference choices from current draft documents, including
-    /// profile-enabled biomes, feature rules and their selected template markers.
-    [[nodiscard]] Array<std::string> contentPropertyReferenceChoices(
-        EContentDocument category, std::string_view relative_property,
-        const std::array<config::Document, kContentDocumentCount> &documents, std::string_view definition_key);
-
     // ------------------------------------------------------------------
-    // manifests
+    // complete owned multi-pack descriptor sources
     // ------------------------------------------------------------------
 
-    struct ContentPackManifest {
-        std::string m_pack_id{};
-        // Indexed by EContentDocument; the manifest is the complete file set.
-        std::array<std::string, kContentDocumentCount> m_files{};
-        std::array<std::string, kContentDocumentCount> m_file_locations{};
+    struct ContentSourceLimits {
+        /// Logical source text per complete candidate, excluding history and
+        /// transient copies. Individual files retain foundation byte limits.
+        static constexpr std::size_t maximum_text_bytes = 7u * asset::kMaxDescriptorBytes + asset::kMaxManifestBytes;
     };
-    struct ContentSourceDocument {
-        std::filesystem::path m_path{};
-        std::string m_bytes{};
+
+    struct ContentSourceSet {
+        Array<asset::PackSource> m_packs{};
+        Array<asset::DescriptorSource> m_descriptors{};
+
+        [[nodiscard]] Expected<asset::DescriptorSource> readDescriptor(
+            const asset::IndexedAsset &entry, config::Diagnostics &diagnostics) const;
+        [[nodiscard]] bool sameMounts(const ContentSourceSet &other) const noexcept;
+        [[nodiscard]] bool sameMounts(const asset::PackSet &other) const noexcept;
     };
-    struct ContentPackSource {
-        ContentPackManifest m_manifest{};
-        ContentSourceDocument m_manifest_source{};
-        std::array<ContentSourceDocument, kContentDocumentCount> m_documents{};
+
+    /// Matching owned text and immutable index for one candidate. Editing starts
+    /// from a separate SourceSet value and requires an explicit new snapshot.
+    class ContentSourceSnapshot {
+    public:
+        class Restoration {
+            asset::QualifiedName m_name;
+            std::string m_kind;
+            std::filesystem::path m_root, m_path;
+            bool m_valid{true};
+
+            Restoration(
+                asset::QualifiedName name, std::string kind, std::filesystem::path root, std::filesystem::path path);
+            friend class ContentSourceSnapshot;
+
+        public:
+            Restoration(const Restoration &) = default;
+            Restoration &operator=(const Restoration &) = default;
+
+            Restoration(Restoration &&other) noexcept;
+            Restoration &operator=(Restoration &&other) noexcept;
+
+            [[nodiscard]] const asset::QualifiedName &name() const noexcept;
+            [[nodiscard]] std::string_view kind() const noexcept;
+            [[nodiscard]] const std::filesystem::path &root() const noexcept;
+            [[nodiscard]] const std::filesystem::path &path() const noexcept;
+            [[nodiscard]] bool matches(const asset::PackSet &packs, const asset::IndexedAsset &entry) const noexcept;
+        };
+
+    private:
+        ContentSourceSet m_source;
+        std::shared_ptr<const asset::PackSet> m_index;
+
+        ContentSourceSnapshot(ContentSourceSet source, std::shared_ptr<const asset::PackSet> index);
+        friend Expected<ContentSourceSnapshot> loadContentSourceSet(
+            std::span<const std::filesystem::path>, config::Diagnostics &, const IContext *);
+
+    public:
+        ContentSourceSnapshot(ContentSourceSnapshot &&) noexcept = default;
+        ContentSourceSnapshot &operator=(ContentSourceSnapshot &&) noexcept = default;
+
+        ContentSourceSnapshot(const ContentSourceSnapshot &) = delete;
+        ContentSourceSnapshot &operator=(const ContentSourceSnapshot &) = delete;
+
+        [[nodiscard]] static Expected<ContentSourceSnapshot> index(
+            ContentSourceSet source, config::Diagnostics &diagnostics, const IContext *context = nullptr);
+        [[nodiscard]] static Expected<ContentSourceSnapshot> index(
+            ContentSourceSet source, std::span<const Restoration> restorations, config::Diagnostics &diagnostics,
+            const IContext *context = nullptr);
+        /// Builds the manifest index once, then obtains its exact descriptor set.
+        /// The required reader is synchronous and never retained or bypassed.
+        [[nodiscard]] static Expected<ContentSourceSnapshot> index(
+            Array<asset::PackSource> manifests, asset::DescriptorReader reader,
+            std::span<const Restoration> restorations, config::Diagnostics &diagnostics,
+            const IContext *context = nullptr);
+        [[nodiscard]] Expected<Restoration> ownedTarget(asset::AssetKey key, config::Diagnostics &diagnostics) const;
+
+        [[nodiscard]] const ContentSourceSet &source() const noexcept;
+        [[nodiscard]] std::shared_ptr<const asset::PackSet> packOwner() const noexcept;
     };
+
+    /// New authored targets use an injective kind directory and a device-safe
+    /// lowercase filename. Existing declared paths retain their original spelling.
+    [[nodiscard]] Expected<std::filesystem::path> newContentDescriptorPath(
+        const asset::PackSet &packs, const asset::QualifiedName &name, std::string_view kind,
+        config::Diagnostics &diagnostics);
+    [[nodiscard]] Expected<ContentSourceSnapshot> loadContentSourceSet(
+        std::span<const std::filesystem::path> roots, config::Diagnostics &diagnostics,
+        const IContext *context = nullptr);
 
     // ------------------------------------------------------------------
     // fields
@@ -151,16 +209,6 @@ export namespace pP::colony {
         std::string m_key{};
         sim::NoiseFieldDesc m_noise{};
     };
-
-    // Owned, canonically sorted named fields; numeric validation reuses sim's
-    // allocation-free compiler preflight. No noise object or parser view survives.
-    [[nodiscard]] Expected<ContentPackManifest> decodePackManifest(
-        std::string_view bytes, std::string_view origin, config::Diagnostics &diagnostics);
-    /// Blocking I/O boundary: call on the world coordinator, never the UI lane.
-    /// Resolves an explicit root, checks containment and size before mapping,
-    /// and returns owned bytes. No application/service lookup or parser views.
-    [[nodiscard]] Expected<ContentPackSource> loadContentPackSource(
-        const std::filesystem::path &root, config::Diagnostics &diagnostics, const IContext *context = nullptr);
 
     class ContentCatalog;
 
@@ -347,6 +395,8 @@ export namespace pP::colony {
     // textures
     // ------------------------------------------------------------------
 
+    /// Internal flattened definition model used by typed projection. Pack
+    /// manifests and individual descriptors declare their own schema versions.
     inline constexpr u32 kContentSchemaVersion = 3u;
     inline constexpr u64 kMaxTextureInputBytes = image::TexturePreparationLimits::image_input_domain.m_max;
     inline constexpr u64 kMaxPackTextureInputBytes = image::TexturePreparationLimits::total_input_domain.m_max;
@@ -355,6 +405,7 @@ export namespace pP::colony {
     inline constexpr u32 kMaxContentTextures = image::TexturePreparationLimits::count_domain.m_max;
     struct ContentTexture {
         std::string m_path{};
+        std::filesystem::path m_source_path{};
         u64 m_source_size{};
         u64 m_source_fingerprint{};
         image::ImageAsset m_image{};
@@ -395,11 +446,11 @@ export namespace pP::colony {
                     &MaterialAppearance::m_color_rgba, metadata("color_rgba"), StringDomain{8u, false},
                     EPresence::required),
                 field(
-                    &MaterialAppearance::m_albedo_texture, metadata("albedo_texture"), StringDomain{1024u, false},
-                    EPresence::optional),
+                    &MaterialAppearance::m_albedo_texture, metadata("albedo_texture"),
+                    asset::QualifiedName::reference_domain, EPresence::optional),
                 field(
-                    &MaterialAppearance::m_normal_texture, metadata("normal_texture"), StringDomain{1024u, false},
-                    EPresence::optional),
+                    &MaterialAppearance::m_normal_texture, metadata("normal_texture"),
+                    asset::QualifiedName::reference_domain, EPresence::optional),
                 field(
                     &MaterialAppearance::m_texture_period_m, metadata("texture_period_m"),
                     FloatDomain{
@@ -478,7 +529,7 @@ export namespace pP::colony {
             return std::tuple{
                 field(&BackgroundAppearanceLayer::m_order, metadata("order"), Range{0u, 3u}, EPresence::required),
                 field(
-                    &BackgroundAppearanceLayer::m_texture, metadata("texture"), StringDomain{1024u, false},
+                    &BackgroundAppearanceLayer::m_texture, metadata("texture"), asset::QualifiedName::reference_domain,
                     EPresence::required),
                 field(
                     &BackgroundAppearanceLayer::m_color_rgba, metadata("color_rgba"), StringDomain{8u, false},
@@ -625,6 +676,10 @@ export namespace pP::colony {
         [[nodiscard]] static Expected<ContentDescriptorCatalog> importDefinitions(
             std::shared_ptr<const asset::PackSet> packs, config::Diagnostics &diagnostics);
 
+        [[nodiscard]] static Expected<ContentDescriptorCatalog> importDefinitions(
+            std::shared_ptr<const asset::PackSet> packs, asset::DescriptorReader reader,
+            config::Diagnostics &diagnostics);
+
         [[nodiscard]] const asset::PackSet &packs() const noexcept;
         [[nodiscard]] std::shared_ptr<const asset::PackSet> packOwner() const noexcept;
         [[nodiscard]] const sim::asset::ElementCatalog &elements() const noexcept;
@@ -672,17 +727,9 @@ export namespace pP::colony {
         const ContentDescriptorCatalog &catalog, sim::asset::WorldId world,
         sim::definition::GenerationCompileParameters parameters, config::Diagnostics &diagnostics);
 
-    [[nodiscard]] Expected<config::Document> projectContentDocument(
-        EContentDocument category, const PackDefinition &definition);
     [[nodiscard]] Expected<config::Document> contentVariantSubtree(
         EContentDocument category, std::string_view definition_key, std::string_view relative_variant_path,
         std::string_view tag);
-    [[nodiscard]] Expected<config::Document> mergeContentDocuments(
-        const std::array<config::Document, kContentDocumentCount> &documents, config::Diagnostics &diagnostics);
-    [[nodiscard]] Expected<PackDefinition> decodePackDefinition(
-        const ContentPackSource &source, config::Diagnostics &diagnostics);
-    [[nodiscard]] Expected<PackDefinition> resolvePackDefinition(
-        const config::Document &document, config::Diagnostics &diagnostics);
 
     // ------------------------------------------------------------------
     // content catalog
@@ -692,29 +739,33 @@ export namespace pP::colony {
     // retain their previous catalog on failure. No parser views survive decoding.
     class ContentCatalog : public safe_object {
         // state:
+        std::shared_ptr<const ContentDescriptorCatalog> m_descriptors{};
         PackDefinition m_definition{};
+        std::optional<sim::definition::CompiledRecipe> m_selected_recipe{};
+        Array<image::TextureDefinition> m_texture_definitions{};
         Array<MaterialDefinition> m_materials{};
         std::string m_pack_id{};
         Array<FieldDefinition> m_fields{};
         Array<BiomeDefinition> m_biomes{};
         Array<FeatureDefinition> m_features{};
         Array<WorldProfileDefinition> m_worlds{};
-        Array<ContentTexture> m_textures{};
         Array<BackgroundStackDefinition> m_backgrounds{};
         std::optional<u64> m_content_fingerprint{};
-
-        // friends:
-        friend Expected<ContentCatalog> loadContentCatalog(
-            const std::filesystem::path &, config::Diagnostics &, const IContext *);
-        friend Expected<ContentCatalog> loadContentCatalog(
-            const std::filesystem::path &, const ContentPackSource &, config::Diagnostics &, const IContext *);
-
-        [[nodiscard]] u64 computeContentFingerprint() const;
+        sim::asset::WorldId m_world{};
+        u64 m_presentation_descriptor_fingerprint{};
 
         ContentCatalog() = default;
 
+        [[nodiscard]] static Expected<ContentCatalog> project(
+            PackDefinition definition, const config::Document &document,
+            const sim::definition::CompiledDefinition *standalone, const sim::definition::CompiledRecipe *selected,
+            config::Diagnostics &diagnostics);
+
         friend Expected<ContentCatalog> projectContentCatalog(
             PackDefinition, const config::Document &, config::Diagnostics &);
+        friend Expected<ContentCatalog> selectWorldCatalog(
+            std::shared_ptr<const ContentDescriptorCatalog>, sim::asset::WorldId,
+            sim::definition::GenerationCompileParameters, config::Diagnostics &);
 
     public:
         explicit ContentCatalog(ZeroValue) noexcept : ContentCatalog() {
@@ -727,26 +778,107 @@ export namespace pP::colony {
         ContentCatalog &operator=(const ContentCatalog &) = default;
 
         [[nodiscard]] const PackDefinition &definition() const noexcept;
+        [[nodiscard]] const sim::definition::CompiledRecipe *selectedRecipe() const noexcept;
+        [[nodiscard]] sim::asset::WorldId worldId() const noexcept;
+        [[nodiscard]] std::span<const image::TextureDefinition> textureDefinitions() const noexcept;
+        [[nodiscard]] const std::shared_ptr<const ContentDescriptorCatalog> &descriptorOwner() const noexcept;
+        [[nodiscard]] u64 presentationDescriptorFingerprint() const noexcept;
 
         [[nodiscard]] std::span<const MaterialDefinition> materials() const noexcept;
         [[nodiscard]] const MaterialDefinition *findMaterial(u16 numeric_id) const noexcept;
         [[nodiscard]] const MaterialDefinition *findMaterial(std::string_view key) const noexcept;
-        // Rapidhash block chaining over canonical material values, with explicit
-        // lengths and little-endian numeric bytes. Not the complete pack identity.
+        /// Resolves a nonzero runtime ID through this selected World's palette.
+        [[nodiscard]] Expected<asset::QualifiedName> materialAssetName(
+            u16 numeric_id, config::Diagnostics &diagnostics) const;
+        // Physical semantics and numeric material bindings; presentation is separate.
         [[nodiscard]] u64 materialFingerprint() const;
         [[nodiscard]] std::string_view packId() const noexcept;
         [[nodiscard]] std::span<const FieldDefinition> fields() const noexcept;
         [[nodiscard]] std::span<const BiomeDefinition> biomes() const noexcept;
         [[nodiscard]] std::span<const FeatureDefinition> features() const noexcept;
         [[nodiscard]] std::span<const WorldProfileDefinition> worlds() const noexcept;
-        [[nodiscard]] std::span<const ContentTexture> textures() const noexcept;
         [[nodiscard]] std::span<const BackgroundStackDefinition> backgrounds() const noexcept;
         [[nodiscard]] const WorldProfileDefinition *findWorld(std::string_view key) const noexcept;
-        // Present only after complete pack and asset validation.
+        // Present on a selected world compiled with its actual parameters.
         [[nodiscard]] std::optional<u64> contentFingerprint() const noexcept;
     };
 
     using SharedContentCatalog = safe_ptr<const ContentCatalog>;
+
+    // ------------------------------------------------------------------
+    // explicitly prepared presentation sidecars
+    // ------------------------------------------------------------------
+
+    class ContentPresentationRequest;
+
+    /// Identity only: a fresh token belongs to one explicit Open/Reload candidate.
+    /// Binary replacements are adopted by a fresh epoch; null disables reuse.
+    class ContentSourceEpoch;
+    using ContentSourceEpochToken = std::shared_ptr<const ContentSourceEpoch>;
+
+    [[nodiscard]] ContentSourceEpochToken makeContentSourceEpoch();
+
+    class ContentPresentation : public safe_object {
+        std::shared_ptr<const ContentCatalog> m_catalog{};
+        ContentSourceEpochToken m_source_epoch{};
+        Array<ContentTexture> m_textures{};
+        asset::RequestGeneration m_generation{};
+        u64 m_fingerprint{};
+        image::TexturePreparationWork m_work{};
+        u32 m_processing_revision{};
+
+        ContentPresentation(
+            std::shared_ptr<const ContentCatalog> catalog, Array<ContentTexture> textures,
+            asset::RequestGeneration generation, u64 fingerprint, ContentSourceEpochToken source_epoch,
+            u32 processing_revision, image::TexturePreparationWork work);
+        friend class ContentPresentationRequest;
+
+    public:
+        [[nodiscard]] const std::shared_ptr<const ContentCatalog> &catalog() const noexcept;
+        [[nodiscard]] std::span<const ContentTexture> textures() const noexcept;
+        [[nodiscard]] asset::RequestGeneration generation() const noexcept;
+        [[nodiscard]] u64 fingerprint() const noexcept;
+        [[nodiscard]] const ContentSourceEpochToken &sourceEpoch() const noexcept;
+        [[nodiscard]] u32 processingRevision() const noexcept;
+        [[nodiscard]] const image::TexturePreparationWork &work() const noexcept;
+    };
+
+    /// Composition only: the image processor and shared asset request own every
+    /// asynchronous lifecycle transition. Take/finish publishes a matched sidecar.
+    class ContentPresentationRequest {
+        std::shared_ptr<const ContentCatalog> m_catalog{};
+        ContentSourceEpochToken m_source_epoch{};
+        image::TexturePreparation m_request;
+
+        ContentPresentationRequest(
+            std::shared_ptr<const ContentCatalog> catalog, image::TexturePreparation request,
+            ContentSourceEpochToken source_epoch);
+        [[nodiscard]] Expected<std::shared_ptr<const ContentPresentation>> complete(
+            Expected<image::TexturePreparation::Result> result, config::Diagnostics &diagnostics);
+
+    public:
+        ContentPresentationRequest(ContentPresentationRequest &&) noexcept = default;
+        ContentPresentationRequest &operator=(ContentPresentationRequest &&) = delete;
+
+        ContentPresentationRequest(const ContentPresentationRequest &) = delete;
+        ContentPresentationRequest &operator=(const ContentPresentationRequest &) = delete;
+
+        [[nodiscard]] static Expected<ContentPresentationRequest> start(
+            std::shared_ptr<const ContentCatalog> catalog, asset::RequestGeneration generation, SharedContext context,
+            config::Diagnostics &diagnostics, ContentSourceEpochToken source_epoch = {},
+            const std::shared_ptr<const ContentPresentation> &previous = {});
+        [[nodiscard]] bool poll() noexcept;
+        void cancel() noexcept;
+        [[nodiscard]] asset::PreparationProgress progress() const noexcept;
+        [[nodiscard]] Expected<std::shared_ptr<const ContentPresentation>> take(config::Diagnostics &diagnostics);
+        [[nodiscard]] Expected<std::shared_ptr<const ContentPresentation>> finish(config::Diagnostics &diagnostics);
+    };
+
+    [[nodiscard]] Expected<sim::asset::WorldId> resolveContentWorld(
+        const ContentDescriptorCatalog &catalog, std::string_view name, config::Diagnostics &diagnostics);
+    [[nodiscard]] Expected<ContentCatalog> selectWorldCatalog(
+        std::shared_ptr<const ContentDescriptorCatalog> catalog, sim::asset::WorldId world,
+        sim::definition::GenerationCompileParameters parameters, config::Diagnostics &diagnostics);
 
     [[nodiscard]] Expected<ContentCatalog> projectContentCatalog(
         PackDefinition definition, const config::Document &document, config::Diagnostics &diagnostics);
@@ -756,11 +888,15 @@ export namespace pP::colony {
     [[nodiscard]] Expected<sim::definition::Definition> decodeWorldGenDefinition(
         std::string_view bytes, std::string_view origin, config::Diagnostics &diagnostics);
 
-    // Worker/headless boundary: all documents and referenced textures are validated
-    // before a complete owned candidate is returned. No GPU or services are accessed.
-    [[nodiscard]] Expected<ContentCatalog> loadContentCatalog(
+    /// Definition-only import. Binary texture preparation is an explicit sidecar.
+    [[nodiscard]] Expected<ContentDescriptorCatalog> loadContentCatalog(
         const std::filesystem::path &root, config::Diagnostics &diagnostics, const IContext *context = nullptr);
-    [[nodiscard]] Expected<ContentCatalog> loadContentCatalog(
-        const std::filesystem::path &root, const ContentPackSource &source, config::Diagnostics &diagnostics,
+    [[nodiscard]] Expected<ContentDescriptorCatalog> loadContentCatalog(
+        std::span<const std::filesystem::path> roots, config::Diagnostics &diagnostics,
         const IContext *context = nullptr);
+
+    [[nodiscard]] Expected<ContentDescriptorCatalog> loadContentCatalog(
+        const ContentSourceSet &source, config::Diagnostics &diagnostics, const IContext *context = nullptr);
+    [[nodiscard]] Expected<ContentDescriptorCatalog> loadContentCatalog(
+        const ContentSourceSnapshot &source, config::Diagnostics &diagnostics, const IContext *context = nullptr);
 }

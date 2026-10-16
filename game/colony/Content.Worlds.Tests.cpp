@@ -4,18 +4,47 @@ module;
 module game.tests;
 
 import engine.core;
+import engine.asset;
 import engine.sim;
 import game.colony.content;
 import std;
 
+namespace pP::game::tests::fixtures {
+    // ------------------------------------------------------------------
+    // programmatic fixture declarations
+    // ------------------------------------------------------------------
+
+    Expected<config::Document> definitionDocument(
+        std::span<const asset::DescriptorSource> fragments, config::Diagnostics &diagnostics);
+    Expected<colony::PackDefinition> resolveDefinition(
+        const config::Document &document, config::Diagnostics &diagnostics);
+    Expected<colony::PackDefinition> resolveDefinition(
+        std::span<const asset::DescriptorSource> fragments, config::Diagnostics &diagnostics);
+}
+
 namespace pP::game::tests::detail::worlds {
+    // ------------------------------------------------------------------
+    // programmatic schema fixture
+    // ------------------------------------------------------------------
+
+    PPR_DEFINE_LOG_CATEGORY(WorldSchemaTests, debug, none);
+
+    // Programmatic schema fragments, independent of the named pack file format.
+    struct ProgrammaticInputs {
+        std::array<asset::DescriptorSource, 7u> m_documents;
+    };
+
+    Expected<colony::PackDefinition> resolveFixtureDefinition(
+        const ProgrammaticInputs &input, config::Diagnostics &diagnostics) {
+        return fixtures::resolveDefinition(input.m_documents, diagnostics);
+    }
+
     // ------------------------------------------------------------------
     // content worlds
     // ------------------------------------------------------------------
 
     using namespace colony;
-    constexpr std::string_view materials_text = R"(schema_version = 3
-[materials.rock]
+    constexpr std::string_view materials_text = R"([materials.rock]
 phase = "solid"
 representation = "terrain"
 diggable = true
@@ -34,13 +63,13 @@ phase = "gas"
 representation = "particle"
 density = 1.2
 )";
-    ContentPackSource inputs() {
-        ContentPackSource source{};
+    ProgrammaticInputs inputs() {
+        ProgrammaticInputs source{};
         const char *names[] = {
             "materials.toml", "biomes.toml", "fields.toml", "features.toml", "worlds.toml", "rules.toml",
             "appearance.toml"};
-        for (std::size_t i = 0u; i < kContentDocumentCount; ++i) {
-            source.m_documents[i] = {names[i], "schema_version = 3\n"};
+        for (std::size_t i = 0u; i < 7u; ++i) {
+            source.m_documents[i] = {names[i], ""};
         }
 
         source.m_documents[0u].m_bytes = std::string{materials_text};
@@ -104,12 +133,12 @@ y_fine = 15
         source.m_documents[6u].m_bytes += R"([appearance.materials.rock]
 display_name = "Rock"
 color_rgba = "778899FF"
-albedo_texture = "textures/rock.png"
+albedo_texture = "rock_texture"
 texture_period_m = 1.0
 [appearance.materials.wall]
 display_name = "Wall"
 color_rgba = "778899FF"
-albedo_texture = "textures/wall.png"
+albedo_texture = "wall_texture"
 texture_period_m = 1.0
 [appearance.materials.water]
 display_name = "Water"
@@ -134,7 +163,7 @@ background_stack = "default"
                 std::to_string(i) +
                 "]\norder = " +
                 std::to_string(i) +
-                "\ntexture = 'textures/background.png'\ncolor_rgba = 'FFFFFFFF'\nrepeat_period_m = 256.0\nparallax_factor = 0.22\n";
+                "\ntexture = 'background_texture'\ncolor_rgba = 'FFFFFFFF'\nrepeat_period_m = 256.0\nparallax_factor = 0.22\n";
         }
 
         return source;
@@ -246,14 +275,14 @@ payload.matter_fill.bulk_density_kg_m3 = 1000.0
 payload.matter_fill.fill_height_m = 4.0
 )";
     std::string validDocument() {
-        return "schema_version = 3\n" + fill + feature + connection + vein + carve + caves + resources + biome + base;
+        return "" + fill + feature + connection + vein + carve + caves + resources + biome + base;
     }
     void replace(std::string &text, const std::string_view before, const std::string_view after) {
         const auto position = text.find(before);
         PPR_TEST_ASSERT(position != std::string::npos);
         text.replace(position, before.size(), after);
     }
-    ContentPackSource bindWorldSource(const std::string_view text, const ContentPackSource &input) {
+    ProgrammaticInputs bindWorldSource(const std::string_view text, const ProgrammaticInputs &input) {
         auto source = input;
         auto &worlds = source.m_documents[4u].m_bytes;
         auto &rules = source.m_documents[5u].m_bytes;
@@ -282,31 +311,23 @@ payload.matter_fill.fill_height_m = 4.0
     }
 
     Expected<Array<WorldProfileDefinition>> decode(
-        const std::string_view text, const ContentPackSource &input, config::Diagnostics &diagnostics) {
+        const std::string_view text, const ProgrammaticInputs &input, config::Diagnostics &diagnostics) {
         auto source = bindWorldSource(text, input);
-        return decodePackDefinition(source, diagnostics)
-            .and_then([&](PackDefinition definition) {
-                std::array<config::Document, kContentDocumentCount> documents;
-                for (std::size_t i = 0u; i < documents.size(); ++i) {
-                    const auto document = config::decode(
-                        source.m_documents[i].m_bytes, source.m_documents[i].m_path.string(), diagnostics,
-                        config::EDecodeMode::tree);
-                    PPR_TEST_ASSERT(document.has_value());
-                    documents[i] = *document;
-                }
-                const auto merged = mergeContentDocuments(documents, diagnostics);
-                PPR_TEST_ASSERT(merged.has_value());
-                return projectContentCatalog(std::move(definition), *merged, diagnostics);
-            })
+        auto document = fixtures::definitionDocument(source.m_documents, diagnostics);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(WorldSchemaTests, document);
+        auto definition = fixtures::resolveDefinition(*document, diagnostics);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(WorldSchemaTests, definition);
+
+        return projectContentCatalog(std::move(*definition), *document, diagnostics)
             .transform([](ContentCatalog catalog) {
                 return Array<WorldProfileDefinition>{catalog.worlds().begin(), catalog.worlds().end()};
             });
     }
 
     Expected<PackDefinition> decodeDefinition(
-        const std::string_view text, const ContentPackSource &input, config::Diagnostics &diagnostics) {
+        const std::string_view text, const ProgrammaticInputs &input, config::Diagnostics &diagnostics) {
         auto source = bindWorldSource(text, input);
-        return decodePackDefinition(source, diagnostics);
+        return resolveFixtureDefinition(source, diagnostics);
     }
 
     const sim::definition::RuleDefinition &ruleValue(const PackDefinition &definition, const std::string_view key) {
@@ -319,7 +340,7 @@ payload.matter_fill.fill_height_m = 4.0
     u16 materialId(const std::string_view key) {
         auto source = bindWorldSource(validDocument(), inputs());
         config::Diagnostics diagnostics;
-        const auto definition = decodePackDefinition(source, diagnostics);
+        const auto definition = resolveFixtureDefinition(source, diagnostics);
         PPR_TEST_ASSERT(definition.has_value());
         const auto compiled = sim::definition::compileDefinition(*definition, 1.0 / 3.0, diagnostics);
         PPR_TEST_ASSERT(compiled.has_value());
@@ -358,8 +379,7 @@ payload.matter_fill.fill_height_m = 4.0
             std::get<sim::definition::MatterFill>(ruleValue(*canonical, "water").m_payload).m_material.m_key ==
             "water");
         const auto reordered = decode(
-            "schema_version = 3\n" + base + biome + resources + caves + carve + vein + connection + feature + fill,
-            input, diagnostics);
+            "" + base + biome + resources + caves + carve + vein + connection + feature + fill, input, diagnostics);
         PPR_TEST_ASSERT(reordered.has_value());
         for (std::size_t i = 0u; i < profile.m_rule_keys.size(); ++i) {
             PPR_TEST_ASSERT(reordered->front().m_rule_keys[i] == profile.m_rule_keys[i]);
@@ -367,8 +387,7 @@ payload.matter_fill.fill_height_m = 4.0
         auto gas = fill;
         replace(gas, "payload.matter_fill.material = \"water\"", "payload.matter_fill.material = \"air\"");
         replace(gas, "payload.matter_fill.fill_height_m = 4.0", "");
-        const auto gas_profile = decodeDefinition(
-            "schema_version = 3\n" + base + biome + resources + feature + gas, input, diagnostics);
+        const auto gas_profile = decodeDefinition("" + base + biome + resources + feature + gas, input, diagnostics);
         PPR_TEST_ASSERT(gas_profile.has_value());
         PPR_TEST_ASSERT(
             not std::get<sim::definition::MatterFill>(ruleValue(*gas_profile, "water").m_payload).m_fill_height_m);
@@ -609,7 +628,7 @@ payload.carve_worm.geometry.chamber_scale = 4.0)");
         const std::pair<std::string_view, std::size_t> collections[] = {
             {"rules", kMaxWorldRules}, {"biomes", kMaxContentBiomes}, {"resources", kMaxStartResources}};
         for (const auto &[collection, cap]: collections) {
-            std::string source = "schema_version = 3\n" + base + (collection == "biomes" ? std::string{} : biome);
+            std::string source = "" + base + (collection == "biomes" ? std::string{} : biome);
             for (std::size_t i = 0u; i <= cap; ++i) {
                 if (collection == "rules") {
                     auto rule = caves;
@@ -652,15 +671,11 @@ payload.carve_worm.geometry.chamber_scale = 4.0)");
             replace(z, "biomes.temperate", "biomes.z");
             replace(z, "biome = \"temperate\"", "biome = \"secondary\"");
             config::Diagnostics valid_diagnostics;
-            PPR_TEST_ASSERT(
-                decode("schema_version = 3\n" + base + resources + caves + a + z, weight_input, valid_diagnostics)
-                    .has_value());
+            PPR_TEST_ASSERT(decode("" + base + resources + caves + a + z, weight_input, valid_diagnostics).has_value());
             replace(a, "weight = 1.0", std::string{"weight = "} + first);
             replace(z, "weight = 1.0", std::string{"weight = "} + second);
             config::Diagnostics diagnostics{};
-            PPR_TEST_ASSERT(
-                not decode("schema_version = 3\n" + base + resources + caves + a + z, weight_input, diagnostics)
-                    .has_value());
+            PPR_TEST_ASSERT(not decode("" + base + resources + caves + a + z, weight_input, diagnostics).has_value());
         }
         auto duplicate_connection = connection;
         replace(duplicate_connection, "rules.default.rooms", "rules.default.second");
@@ -686,7 +701,7 @@ payload.carve_worm.geometry.chamber_scale = 4.0)");
         PPR_TEST_ASSERT(
             not excessive_worms.has_value() and
             excessive_worms.error() == config::make_error_code(config::EConfigErrc::out_of_range));
-        std::string excessive_profiles = "schema_version = 3\n";
+        std::string excessive_profiles = "";
         for (std::size_t i = 0u; i <= 128u; ++i) {
             auto profile = base + biome + resources;
             for (auto at = profile.find("worlds.default"); at != std::string::npos;
@@ -709,20 +724,20 @@ payload.carve_worm.geometry.chamber_scale = 4.0)");
             too_many.error() == config::make_error_code(config::EConfigErrc::out_of_range));
     };
 
-    PPR_UNIT_TEST (rule_documents_bind_explicit_profiles_and_reject_orphans_and_cross_document_duplicates) {
+    PPR_UNIT_TEST (programmatic_owner_rules_reject_orphans_and_duplicate_properties) {
         auto source = inputs();
-        source.m_documents[4u].m_bytes = "schema_version = 3\n" + base + biome + resources;
+        source.m_documents[4u].m_bytes = "" + base + biome + resources;
         auto rules = fill + feature + connection + vein + carve + caves;
         source.m_documents[5u].m_bytes += rules;
         config::Diagnostics diagnostics;
-        const auto first = decodePackDefinition(source, diagnostics);
+        const auto first = resolveFixtureDefinition(source, diagnostics);
         PPR_TEST_ASSERT(first.has_value() and not diagnostics.hasErrors());
         PPR_TEST_ASSERT(first->m_worlds.m_entries.front().m_value.m_rules.m_entries.size() == 6u);
 
         auto orphan = source;
         replace(orphan.m_documents[5u].m_bytes, "rules.default.water", "rules.missing.water");
         config::Diagnostics orphan_errors;
-        PPR_TEST_ASSERT(not decodePackDefinition(orphan, orphan_errors));
+        PPR_TEST_ASSERT(not resolveFixtureDefinition(orphan, orphan_errors));
         PPR_TEST_ASSERT(orphan_errors.hasErrors());
         PPR_TEST_ASSERT(orphan_errors.entries().front().m_location.starts_with("rules.toml"));
 
@@ -731,29 +746,18 @@ payload.carve_worm.geometry.chamber_scale = 4.0)");
         replace(forbidden_rule, "[rules.default.caves]", "[worlds.default.rules.caves]");
         duplicate.m_documents[4u].m_bytes += forbidden_rule;
         config::Diagnostics duplicate_errors;
-        const auto rejected = decodePackDefinition(duplicate, duplicate_errors);
+        const auto rejected = resolveFixtureDefinition(duplicate, duplicate_errors);
         PPR_TEST_ASSERT(
-            not rejected and rejected.error() == config::make_error_code(config::EConfigErrc::unknown_property));
+            not rejected and rejected.error() == config::make_error_code(config::EConfigErrc::duplicate_key));
 
-        std::array<config::Document, kContentDocumentCount> raw;
-        for (std::size_t i = 0u; i < raw.size(); ++i) {
-            const auto document = config::decode(
-                source.m_documents[i].m_bytes, source.m_documents[i].m_path.string(), diagnostics,
-                config::EDecodeMode::tree);
-            PPR_TEST_ASSERT(document.has_value());
-            raw[i] = *document;
-        }
-        const auto scalar = std::ranges::find(raw[5u].m_entries, "rules.default.water.order", &config::Entry::m_key);
-        PPR_TEST_ASSERT(scalar != raw[5u].m_entries.end());
-        const auto duplicate_scalar = *scalar;
-        raw[5u].m_entries.push_back(duplicate_scalar);
+        auto scalar_duplicate = source;
+        replace(scalar_duplicate.m_documents[5u].m_bytes, "order = 40", "order = 40\norder = 40");
         config::Diagnostics scalar_errors;
-        const auto duplicated = mergeContentDocuments(raw, scalar_errors);
-        PPR_TEST_ASSERT(
-            not duplicated and duplicated.error() == config::make_error_code(config::EConfigErrc::duplicate_key));
+        const auto duplicated = resolveFixtureDefinition(scalar_duplicate, scalar_errors);
+        PPR_TEST_ASSERT(not duplicated and scalar_errors.hasErrors());
 
         auto nested_owner = source;
-        nested_owner.m_documents[4u].m_bytes = "schema_version = 3\n" + biome + resources + R"(
+        nested_owner.m_documents[4u].m_bytes = "" + biome + resources + R"(
 [worlds.default.boundaries]
 material = "wall"
 thickness_fine = 3
@@ -775,7 +779,7 @@ clearance_m = 3.0
 route_width_m = 1.0
 )";
         config::Diagnostics declaration_errors;
-        PPR_TEST_ASSERT(decodePackDefinition(nested_owner, declaration_errors).has_value());
+        PPR_TEST_ASSERT(resolveFixtureDefinition(nested_owner, declaration_errors).has_value());
         PPR_TEST_ASSERT(not declaration_errors.hasErrors());
     };
 }
@@ -789,8 +793,7 @@ namespace pP::game::tests {
                 detail::worlds::world_diagnostics_preserve_exact_fields_and_locations,
                 detail::worlds::world_counts_and_weight_intervals_are_bounded,
                 detail::worlds::fill_heights_require_exact_signed_fine_cell_boundaries,
-                detail::worlds::
-                    rule_documents_bind_explicit_profiles_and_reject_orphans_and_cross_document_duplicates});
+                detail::worlds::programmatic_owner_rules_reject_orphans_and_duplicate_properties});
     };
     const UnitTest &gameWorldContentTests() noexcept {
         return world_content;

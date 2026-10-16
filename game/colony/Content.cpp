@@ -18,55 +18,12 @@ namespace pP::colony {
             return {name, "World content", "Content", EMutability::startup, ESource::file};
         }
         constexpr std::array<ContentDocumentBinding, kContentDocumentCount> kBindings{
-            {{EContentDocument::materials, "materials", "Materials", "materials", false},
-                {EContentDocument::biomes, "biomes", "Biomes", "biomes", false},
-                {EContentDocument::fields, "fields", "Fields", "fields", false},
-                {EContentDocument::features, "features", "Features", "features", false},
-                {EContentDocument::worlds, "worlds", "Worlds", "worlds", false},
-                {EContentDocument::rules, "rules", "Rules", "worlds.{key}.rules", true, 2u},
-                {EContentDocument::appearance, "appearance", "Appearance", "appearance", false, 2u}}};
-        struct DocumentEnvelope {
-            u32 m_schema_version{};
-            static constexpr auto describe() {
-                return std::tuple{field(
-                    &DocumentEnvelope::m_schema_version, metadata("schema_version"),
-                    Range{kContentSchemaVersion, kContentSchemaVersion}, EPresence::required)};
-            }
-        };
-        struct ManifestFiles {
-            std::string m_materials{}, m_biomes{}, m_fields{}, m_features{}, m_worlds{}, m_rules{}, m_appearance{};
-            static constexpr auto describe() {
-                return std::tuple{
-                    field(
-                        &ManifestFiles::m_materials, metadata("materials"), StringDomain{1024u, false},
-                        EPresence::required),
-                    field(
-                        &ManifestFiles::m_biomes, metadata("biomes"), StringDomain{1024u, false}, EPresence::required),
-                    field(
-                        &ManifestFiles::m_fields, metadata("fields"), StringDomain{1024u, false}, EPresence::required),
-                    field(
-                        &ManifestFiles::m_features, metadata("features"), StringDomain{1024u, false},
-                        EPresence::required),
-                    field(
-                        &ManifestFiles::m_worlds, metadata("worlds"), StringDomain{1024u, false}, EPresence::required),
-                    field(&ManifestFiles::m_rules, metadata("rules"), StringDomain{1024u, false}, EPresence::required),
-                    field(
-                        &ManifestFiles::m_appearance, metadata("appearance"), StringDomain{1024u, false},
-                        EPresence::required)};
-            }
-        };
-        struct Manifest : DocumentEnvelope {
-            std::string m_pack_id{};
-            ManifestFiles m_files{};
-            static constexpr auto describe() {
-                return std::tuple_cat(
-                    DocumentEnvelope::describe(),
-                    std::tuple{
-                        field(
-                            &Manifest::m_pack_id, metadata("pack_id"), StringDomain{128u, false}, EPresence::required),
-                        group(&Manifest::m_files, metadata("files"), EPresence::required)});
-            }
-        };
+            {{EContentDocument::materials, "materials", "Materials"}, {EContentDocument::biomes, "biomes", "Biomes"},
+                {EContentDocument::fields, "fields", "Fields"}, {EContentDocument::features, "features", "Features"},
+                {EContentDocument::worlds, "worlds", "Worlds"}, {EContentDocument::rules, "rules", "Rules"},
+                {EContentDocument::elements, "elements", "Elements"},
+                {EContentDocument::textures, "textures", "Textures"},
+                {EContentDocument::backgrounds, "backgrounds", "Backgrounds"}}};
         struct WorldGenDefinitionEnvelope : sim::definition::Definition {
             u32 m_definition_schema_version{};
             static constexpr auto describe() {
@@ -84,33 +41,6 @@ namespace pP::colony {
             const auto error = config::make_error_code(code);
             diagnostics.add(std::string{location}, std::string{path}, std::string{message}, error);
             return error;
-        }
-        bool validName(const std::string_view name) noexcept {
-            return not name.empty() and
-                   name.front() >= 'a' and
-                   name.front() <= 'z' and
-                   std::ranges::all_of(name, [](const char c) {
-                       return (c >= 'a' and c <= 'z') or (c >= '0' and c <= '9') or c == '_';
-                   });
-        }
-        bool validTexturePath(const std::string_view path) noexcept {
-            if (path.empty() or path.front() == '/' or path.find_first_of("\\:\0", 0u, 3u) != std::string_view::npos) {
-                return false;
-            }
-            std::size_t start = 0u;
-            while (start < path.size()) {
-                const auto end = path.find('/', start);
-                const auto segment = path.substr(
-                    start, end == std::string_view::npos ? path.size() - start : end - start);
-                if (segment.empty() or segment == "." or segment == "..") {
-                    return false;
-                }
-                if (end == std::string_view::npos) {
-                    return true;
-                }
-                start = end + 1u;
-            }
-            return false;
         }
         std::string_view location(const Document &document, std::string_view path) {
             while (not path.empty()) {
@@ -135,50 +65,6 @@ namespace pP::colony {
             }
             to.addOmitted(from.omittedCount());
         }
-        std::string_view documentText(const Document &document, const std::string_view path) {
-            const auto entry = std::ranges::find(document.m_entries, path, &Entry::m_key);
-            return entry != document.m_entries.end() and entry->m_value.m_kind == EFileKind::text
-                       ? std::string_view{entry->m_value.m_text}
-                       : std::string_view{};
-        }
-        Array<std::string_view, mem::ScratchPad> keyViews(const Document &document, const std::string_view root) {
-            const std::string prefix = std::string{root} + ".";
-            Array<std::string_view, mem::ScratchPad> result;
-            const auto add = [&](const std::string_view path) {
-                if (path.starts_with(prefix)) {
-                    const auto tail = path.substr(prefix.size());
-                    const auto dot = tail.find('.');
-                    const auto key = tail.substr(0u, dot);
-                    if (not key.empty()) {
-                        result.push_back(key);
-                    }
-                }
-            };
-
-            for (const auto &entry: document.m_entries) {
-                add(entry.m_key);
-            }
-
-            for (const auto &group: document.m_groups) {
-                add(group.m_path);
-            }
-
-            std::ranges::sort(result);
-            result.erase(std::unique(result.begin(), result.end()), result.end());
-            return result;
-        }
-
-        Array<std::string> keys(const Document &document, const std::string_view root) {
-            const auto scratch_scope = mem::ScratchPad::open();
-            const auto views = keyViews(document, root);
-            Array<std::string> result;
-            result.reserve(views.size());
-            for (const auto view: views) {
-                result.emplace_back(view);
-            }
-            return result;
-        }
-
         bool schemaMatches(std::string_view schema, std::string_view path) {
             while (not schema.empty() and not path.empty()) {
                 const auto schema_dot = schema.find('.');
@@ -196,6 +82,23 @@ namespace pP::colony {
             }
             return schema.empty() and path.empty();
         }
+
+        template<typename Visitor>
+        void visitDescriptorSchema(const EContentDocument category, Visitor &&visitor) {
+            switch (category) {
+                case EContentDocument::elements: visitor(std::type_identity<sim::asset::ElementDescriptor>{}); break;
+                case EContentDocument::materials: visitor(std::type_identity<MaterialAssetDescriptor>{}); break;
+                case EContentDocument::fields: visitor(std::type_identity<sim::asset::FieldDescriptor>{}); break;
+                case EContentDocument::biomes: visitor(std::type_identity<BiomeAssetDescriptor>{}); break;
+                case EContentDocument::features: visitor(std::type_identity<FeatureAssetDescriptor>{}); break;
+                case EContentDocument::rules: visitor(std::type_identity<sim::asset::RuleDescriptor>{}); break;
+                case EContentDocument::worlds: visitor(std::type_identity<WorldAssetDescriptor>{}); break;
+                case EContentDocument::textures: visitor(std::type_identity<image::TextureDescriptor>{}); break;
+                case EContentDocument::backgrounds: visitor(std::type_identity<BackgroundAssetDescriptor>{}); break;
+                default: break;
+            }
+        }
+
         template<typename T>
         const T *findEntry(const KeyedCollection<T> &collection, const std::string_view key) {
             const auto entry = std::ranges::find(collection.m_entries, key, &KeyedEntry<T>::m_key);
@@ -223,292 +126,15 @@ namespace pP::colony {
     std::span<const ContentDocumentBinding> contentDocumentBindings() noexcept {
         return kBindings;
     }
-    std::string contentDocumentPath(
-        const EContentDocument category, const std::string_view key, const std::string_view relative) {
-        const auto index = static_cast<std::size_t>(category);
-        if (index >= kBindings.size()) {
-            return {};
-        }
-        if (not key.empty()) {
-            std::size_t depth = 0u;
-            std::string_view remaining = key;
-            while (not remaining.empty()) {
-                const auto dot = remaining.find('.');
-                if (not config::isValidKey(remaining.substr(0u, dot))) {
-                    return {};
-                }
-                ++depth;
-                if (dot == std::string_view::npos) {
-                    break;
-                }
-                remaining.remove_prefix(dot + 1u);
-                if (remaining.empty()) {
-                    return {};
-                }
-            }
-            if (depth != kBindings[index].m_definition_depth) {
-                return {};
-            }
-        }
-        std::string result{kBindings[index].m_collection};
-        if (not key.empty()) {
-            result += ".";
-            result += key;
-        }
-        if (not relative.empty()) {
-            result += ".";
-            result += relative;
-        }
-        return result;
-    }
-    std::string contentCanonicalPath(const EContentDocument category, const std::string_view path) {
-        if (category != EContentDocument::rules) {
-            return std::string{path};
-        }
-        if (path == "rules") {
-            return "worlds";
-        }
-        if (not path.starts_with("rules.")) {
-            return {};
-        }
-        const auto tail = path.substr(6u);
-        const auto dot = tail.find('.');
-        std::string result = "worlds." + std::string{tail.substr(0u, dot)};
-        if (dot != std::string_view::npos) {
-            result += ".rules.";
-            result += tail.substr(dot + 1u);
-        }
-        return result;
-    }
-
-    std::optional<std::pair<EContentDocument, std::string>> contentSourcePath(const std::string_view canonical_path) {
-        const auto match = [&](const ContentDocumentBinding &binding) -> std::optional<std::string> {
-            std::string_view schema = binding.m_schema_root;
-            std::string_view remaining = canonical_path;
-            std::string result{binding.m_collection};
-            while (not schema.empty()) {
-                if (remaining.empty()) {
-                    return std::nullopt;
-                }
-
-                const auto schema_dot = schema.find('.');
-                const auto path_dot = remaining.find('.');
-                const auto expected = schema.substr(0u, schema_dot);
-                const auto actual = remaining.substr(0u, path_dot);
-
-                if (expected == "{key}") {
-                    if (not config::isValidKey(actual)) {
-                        return std::nullopt;
-                    }
-                    result += ".";
-                    result += actual;
-                } else if (expected != actual) {
-                    return std::nullopt;
-                }
-
-                schema = schema_dot == std::string_view::npos ? std::string_view{} : schema.substr(schema_dot + 1u);
-                remaining = path_dot == std::string_view::npos ? std::string_view{} : remaining.substr(path_dot + 1u);
-            }
-
-            if (not remaining.empty()) {
-                result += ".";
-                result += remaining;
-            }
-
-            return result;
-        };
-
-        // An attachment owns its subtree even when a broader document owns its ancestor.
-        for (const bool attachments: {true, false}) {
-            for (const auto &binding: kBindings) {
-                if (binding.m_attached_rules == attachments) {
-                    if (auto path = match(binding)) {
-                        return std::pair{binding.m_document, std::move(*path)};
-                    }
-                }
-            }
-        }
-        return std::nullopt;
-    }
-
-    // ------------------------------------------------------------------
-    // document merge
-    // ------------------------------------------------------------------
-
-    Expected<Document> mergeContentDocuments(
-        const std::array<Document, kContentDocumentCount> &documents, Diagnostics &diagnostics) {
-        const auto scratch_scope = mem::ScratchPad::open();
-        Document merged;
-        std::size_t entry_count{}, group_count{};
-        for (const auto &document: documents) {
-            entry_count += document.m_entries.size();
-            group_count += document.m_groups.size();
-        }
-
-        // Destination arrays stay fixed while the scratch index borrows their owned keys.
-        merged.m_entries.reserve(entry_count);
-        merged.m_groups.reserve(group_count);
-        std::set<std::string_view, std::less<>, mem::STL<std::string_view, mem::ScratchPad>> destinations;
-
-        const auto &worlds = documents[static_cast<std::size_t>(EContentDocument::worlds)];
-        const auto owners = keyViews(worlds, "worlds");
-        Array<std::string_view, mem::ScratchPad> explicit_world_groups;
-        explicit_world_groups.reserve(worlds.m_groups.size());
-        for (const auto &group: worlds.m_groups) {
-            explicit_world_groups.push_back(group.m_path);
-        }
-
-        std::ranges::sort(explicit_world_groups);
-
-        const auto &appearance = documents[static_cast<std::size_t>(EContentDocument::appearance)];
-        for (const auto &binding: kBindings) {
-            if (binding.m_attached_rules or binding.m_document == EContentDocument::appearance) {
-                continue;
-            }
-            const auto declared = keyViews(
-                documents[static_cast<std::size_t>(binding.m_document)], binding.m_collection);
-            const std::string root = "appearance." + std::string{binding.m_collection};
-            for (const auto key: keyViews(appearance, root)) {
-                if (not std::ranges::binary_search(declared, key)) {
-                    std::string path = root + ".";
-                    path.append(key);
-                    PPR_RETURN_UNEXPECTED_ON_FAIL(
-                        ColonyContent,
-                        reject(diagnostics, location(appearance, path), path, "Appearance owner does not exist"));
-                }
-            }
-        }
-
-        for (std::size_t index = 0u; index < documents.size(); ++index) {
-            const auto &binding = kBindings[index];
-            const auto &document = documents[index];
-            Document envelope;
-            for (const auto &entry: document.m_entries) {
-                if (entry.m_key == "schema_version") {
-                    envelope.m_entries.push_back(entry);
-                }
-            }
-            const TreeLayer envelope_layers[] = {toTreeLayer(envelope, "pack")};
-            auto version = resolveRecursive<DocumentEnvelope>(envelope_layers, diagnostics);
-            PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, version);
-
-            const auto validate = [&](const std::string_view path, const std::string_view source) -> std::error_code {
-                const std::string prefix = std::string{binding.m_collection} + ".";
-                if (path != binding.m_collection and not path.starts_with(prefix)) {
-                    PPR_RETURN_ERROR_ON_FAIL(
-                        ColonyContent, reject(
-                                           diagnostics, source, path, "Document does not own this schema root",
-                                           EConfigErrc::unknown_property));
-                }
-                if (binding.m_attached_rules and path.starts_with(prefix)) {
-                    const auto tail = path.substr(prefix.size());
-                    const auto owner = tail.substr(0u, tail.find('.'));
-                    const std::string declaration = "worlds." + std::string{owner};
-                    // A rule cannot synthesize a profile: require its explicit worlds.toml declaration.
-                    if (not std::ranges::binary_search(owners, owner) or
-                        not std::ranges::binary_search(explicit_world_groups, std::string_view{declaration})) {
-                        PPR_RETURN_ERROR_ON_FAIL(
-                            ColonyContent,
-                            reject(diagnostics, source, path, "Rule owner must be explicitly declared in worlds.toml"));
-                    }
-                }
-                if (binding.m_document == EContentDocument::worlds and path.starts_with("worlds.")) {
-                    const auto tail = path.substr(7u);
-                    const auto dot = tail.find('.');
-                    if (dot != std::string_view::npos and
-                        (tail.substr(dot + 1u) == "rules" or tail.substr(dot + 1u).starts_with("rules."))) {
-                        PPR_RETURN_ERROR_ON_FAIL(
-                            ColonyContent, reject(
-                                               diagnostics, source, path, "Profile rules are owned by rules.toml",
-                                               EConfigErrc::unknown_property));
-                    }
-                }
-                return {};
-            };
-            for (const auto &entry: document.m_entries) {
-                if (entry.m_key == "schema_version") {
-                    continue;
-                }
-                PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, validate(entry.m_key, entry.m_location));
-                Entry mapped = entry;
-                mapped.m_key = contentCanonicalPath(binding.m_document, entry.m_key);
-                if (destinations.contains(mapped.m_key)) {
-                    PPR_RETURN_UNEXPECTED_ON_FAIL(
-                        ColonyContent, reject(
-                                           diagnostics, entry.m_location, mapped.m_key,
-                                           "Multiple sources target the same destination", EConfigErrc::duplicate_key));
-                }
-
-                merged.m_entries.push_back(std::move(mapped));
-                destinations.insert(merged.m_entries.back().m_key);
-            }
-            for (const auto &group: document.m_groups) {
-                PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, validate(group.m_path, group.m_location));
-                // Rule document framing is not a second declaration of the profile/world collection.
-                if (binding.m_attached_rules and
-                    (group.m_path == "rules" or group.m_path.find('.', 6u) == std::string::npos)) {
-                    continue;
-                }
-                GroupPresence mapped{contentCanonicalPath(binding.m_document, group.m_path), group.m_location};
-                if (destinations.contains(mapped.m_path)) {
-                    PPR_RETURN_UNEXPECTED_ON_FAIL(
-                        ColonyContent,
-                        reject(
-                            diagnostics, group.m_location, mapped.m_path,
-                            "Multiple sources declare the same destination", EConfigErrc::duplicate_key));
-                }
-
-                merged.m_groups.push_back(std::move(mapped));
-                destinations.insert(merged.m_groups.back().m_path);
-            }
-        }
-        return merged;
-    }
-
-    Expected<PackDefinition> decodePackDefinition(const ContentPackSource &source, Diagnostics &diagnostics) {
-        std::array<Document, kContentDocumentCount> documents;
-        for (std::size_t index = 0u; index < documents.size(); ++index) {
-            const auto &input = source.m_documents[index];
-            if (input.m_bytes.size() > kMaxMaterialDocumentBytes) {
-                PPR_RETURN_UNEXPECTED_ON_FAIL(
-                    ColonyContent, reject(
-                                       diagnostics, input.m_path.string(), "", "Content document exceeds 1 MiB",
-                                       EConfigErrc::out_of_range));
-            }
-            auto document = decode(input.m_bytes, input.m_path.string(), diagnostics, EDecodeMode::tree);
-            PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, document);
-            documents[index] = std::move(*document);
-        }
-        auto document = mergeContentDocuments(documents, diagnostics);
-        PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, document);
-        return resolvePackDefinition(*document, diagnostics);
-    }
-
-    Expected<PackDefinition> resolvePackDefinition(const Document &document, Diagnostics &diagnostics) {
-        const TreeLayer layers[] = {toTreeLayer(document, "pack")};
-        Diagnostics local{128u};
-        auto resolved = resolveRecursive<PackDefinition>(layers, local);
-        if (resolved) {
-            const auto error = sim::definition::validateDefinition(resolved->m_value, local);
-            appendDiagnostics(diagnostics, local, document);
-            PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, error);
-        } else {
-            appendDiagnostics(diagnostics, local, document);
-            PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, resolved);
-        }
-        return std::move(resolved->m_value);
-    }
-
     // ------------------------------------------------------------------
     // property metadata
     // ------------------------------------------------------------------
 
     std::optional<ContentPropertyDescriptor> contentPropertyDescriptor(
-        const EContentDocument category, const std::string_view relative, const Document &,
-        const std::string_view key) {
-        const auto path = contentCanonicalPath(category, contentDocumentPath(category, key, relative));
+        const EContentDocument category, const std::string_view relative, const Document &, const std::string_view) {
+        const std::string_view path = relative;
         std::optional<ContentPropertyDescriptor> result;
-        config::describeRecursive<PackDefinition>([&](const std::string &schema_path, const auto &member, const auto) {
+        const auto inspect = [&](const std::string &schema_path, const auto &member, const auto) {
             const auto descriptor = config::describeProperty(member);
             const bool tag = descriptor.m_kind == ENodeKind::variant and
                              path.ends_with(".tag") and
@@ -516,6 +142,9 @@ namespace pP::colony {
             if (schemaMatches(schema_path, path) or tag) {
                 ContentPropertyDescriptor value;
                 static_cast<PropertyDescriptor &>(value) = descriptor;
+                if constexpr (requires { member.m_constraint.m_max_length; }) {
+                    value.m_text_length = member.m_constraint.m_max_length;
+                }
                 if (tag) {
                     value.m_kind = ENodeKind::scalar;
                 }
@@ -526,232 +155,12 @@ namespace pP::colony {
                 }
                 result = std::move(value);
             }
-        });
-        return result;
-    }
-
-    Array<std::string> contentPropertyReferenceChoices(
-        const EContentDocument category, const std::string_view relative,
-        const std::array<Document, kContentDocumentCount> &documents, const std::string_view key) {
-        const auto index = static_cast<std::size_t>(category);
-        if (index >= documents.size()) {
-            return {};
-        }
-        const auto descriptor = contentPropertyDescriptor(category, relative, documents[index], key);
-        if (not descriptor or not descriptor->m_reference_target) {
-            return {};
-        }
-        // Merge raw paths only: incomplete/invalid drafts must retain reference editing.
-        Document raw;
-        for (std::size_t i = 0u; i < documents.size(); ++i) {
-            for (const auto &entry: documents[i].m_entries) {
-                auto copy = entry;
-                copy.m_key = contentCanonicalPath(kBindings[i].m_document, copy.m_key);
-                raw.m_entries.push_back(std::move(copy));
-            }
-            for (const auto &group: documents[i].m_groups) {
-                raw.m_groups.push_back({contentCanonicalPath(kBindings[i].m_document, group.m_path), group.m_location});
-            }
-        }
-        const auto path = contentCanonicalPath(category, contentDocumentPath(category, key, relative));
-        const auto &target = *descriptor->m_reference_target;
-        std::string root{target.m_collection};
-        const auto profile_end = path.find('.', 7u);
-        const std::string profile = path.starts_with("worlds.") ? path.substr(0u, profile_end) : std::string{};
-        if (target.m_scope == EReferenceScope::owner) {
-            if (target.m_collection == "rules") {
-                root = profile + ".rules";
-            }
-            if (target.m_collection == "markers") {
-                std::string feature;
-                if (path.starts_with(profile + ".rules.")) {
-                    const auto rule_end = path.find('.', profile.size() + 7u);
-                    const std::string rule = path.substr(0u, rule_end);
-                    const auto placement = documentText(raw, rule + ".payload.matter_fill.placement");
-                    feature = documentText(
-                        raw, profile + ".rules." + std::string{placement} + ".payload.feature.feature");
-                } else {
-                    feature = documentText(raw, profile + ".start.feature");
-                }
-                if (feature.empty()) {
-                    return {};
-                }
-                root = "features." + feature + ".markers";
-            }
-        }
-        auto result = keys(raw, root);
-        std::erase_if(result, [&](const auto &choice) {
-            const auto base = root + "." + choice;
-            if (target.m_collection == "rules") {
-                const auto enabled = std::ranges::find(raw.m_entries, base + ".enabled", &Entry::m_key);
-                return documentText(raw, base + ".payload.tag") != "feature" or
-                       (enabled != raw.m_entries.end() and
-                           enabled->m_value.m_kind == EFileKind::boolean and
-                           not enabled->m_value.m_boolean);
-            }
-            if (target.m_collection == "markers") {
-                return documentText(raw, base + ".role") != target.m_suitability;
-            }
-            if (target.m_collection == "materials") {
-                const auto representation = documentText(raw, base + ".representation");
-                return target.m_suitability == "particle" ? representation != "particle" : representation != "terrain";
-            }
-            if (target.m_collection == "biomes" and
-                not profile.empty() and
-                not path.starts_with(profile + ".biomes.")) {
-                for (const auto &enabled: keys(raw, profile + ".biomes")) {
-                    if (documentText(raw, profile + ".biomes." + enabled + ".biome") == choice) {
-                        return false;
-                    }
-                }
-                return true;
-            }
-            return false;
-        });
-        if (target.m_suitability == "terrain_or_vacuum") {
-            result.insert(result.begin(), "vacuum");
-        }
-        return result;
-    }
-
-    // ------------------------------------------------------------------
-    // pack manifest and source
-    // ------------------------------------------------------------------
-
-    Expected<ContentPackManifest> decodePackManifest(
-        const std::string_view bytes, const std::string_view origin, Diagnostics &diagnostics) {
-        if (bytes.size() > kMaxPackManifestBytes) {
-            PPR_RETURN_UNEXPECTED_ON_FAIL(
-                ColonyContent,
-                reject(diagnostics, origin, "", "Pack manifest exceeds 64 KiB", EConfigErrc::out_of_range));
-        }
-        auto document = decode(bytes, origin, diagnostics, EDecodeMode::tree);
-        PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, document);
-        const TreeLayer layers[] = {toTreeLayer(*document, std::string{origin})};
-        auto resolved = resolveRecursive<Manifest>(layers, diagnostics);
-        PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, resolved);
-        if (not validName(resolved->m_value.m_pack_id)) {
-            PPR_RETURN_UNEXPECTED_ON_FAIL(
-                ColonyContent, reject(diagnostics, origin, "pack_id", "Expected a lowercase stable pack name"));
-        }
-        const auto &files = resolved->m_value.m_files;
-        ContentPackManifest result{
-            .m_pack_id = resolved->m_value.m_pack_id,
-            .m_files = {
-                files.m_materials, files.m_biomes, files.m_fields, files.m_features, files.m_worlds, files.m_rules,
-                files.m_appearance}};
-        for (std::size_t index = 0u; index < result.m_files.size(); ++index) {
-            const auto &path = result.m_files[index];
-            const std::string property = "files." + std::string{kBindings[index].m_collection};
-            result.m_file_locations[index] = location(*document, property);
-            if (not validTexturePath(path) or not path.ends_with(".toml") or path == "pack.toml") {
-                PPR_RETURN_UNEXPECTED_ON_FAIL(
-                    ColonyContent, reject(
-                                       diagnostics, location(*document, property), property,
-                                       "Expected a distinct pack-relative TOML file without dot segments"));
-            }
-            for (std::size_t previous = 0u; previous < index; ++previous) {
-                if (path == result.m_files[previous]) {
-                    PPR_RETURN_UNEXPECTED_ON_FAIL(
-                        ColonyContent, reject(
-                                           diagnostics, location(*document, property), property,
-                                           "Manifest file is listed more than once", EConfigErrc::duplicate_key));
-                }
-            }
-        }
-        return result;
-    }
-    Expected<ContentPackSource> loadContentPackSource(
-        const std::filesystem::path &root, Diagnostics &diagnostics, const IContext *const context) {
-        const auto cancelled = [&]() -> std::error_code { return context ? context->error() : std::error_code{}; };
-        PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, cancelled());
-        std::error_code error{};
-        const auto canonical_root = std::filesystem::canonical(root, error);
-        if (error) {
-            diagnostics.add(root.string(), "pack", "Cannot resolve pack root", error);
-            PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, error);
-        }
-        const auto origin = (canonical_root / "pack.toml").string();
-        const auto read = [&](const std::string &relative, const std::string_view key, const std::string_view location,
-                              const std::size_t limit) -> Expected<ContentSourceDocument> {
-            PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, cancelled());
-            std::error_code file_error{};
-            const auto path = std::filesystem::canonical(canonical_root / relative, file_error);
-            if (file_error) {
-                diagnostics.add(
-                    std::string{location}, std::string{key}, "Cannot resolve pack file " + relative, file_error);
-                PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, file_error);
-            }
-            const auto within = path.lexically_relative(canonical_root);
-            if (within.empty() or within.is_absolute() or *within.begin() == "..") {
-                PPR_RETURN_UNEXPECTED_ON_FAIL(
-                    ColonyContent, reject(diagnostics, location, key, "Resolved file escapes the pack root"));
-            }
-            const bool regular = std::filesystem::is_regular_file(path, file_error);
-            PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, file_error);
-            if (not regular) {
-                PPR_RETURN_UNEXPECTED_ON_FAIL(
-                    ColonyContent, reject(diagnostics, location, key, "Pack entry must be a regular file"));
-            }
-            const auto size = std::filesystem::file_size(path, file_error);
-            PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, file_error);
-            if (size > limit) {
-                PPR_RETURN_UNEXPECTED_ON_FAIL(
-                    ColonyContent,
-                    reject(diagnostics, location, key, "Pack file exceeds its byte limit", EConfigErrc::out_of_range));
-            }
-            ContentSourceDocument source{.m_path = path};
-            if (size == 0u) {
-                return source;
-            }
-            auto mapped = io::mapFile(path);
-            // Core mapping translates allocator failure; this application's
-            // allocation policy is fatal, including at this I/O boundary.
-            if (not mapped and mapped.error() == std::errc::not_enough_memory) {
-                throw std::bad_alloc{};
-            }
-            if (not mapped) {
-                diagnostics.add(
-                    std::string{location}, std::string{key}, "Cannot map pack file " + relative, mapped.error());
-                PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, mapped);
-            }
-            if (mapped->size() != size) {
-                PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, std::errc::resource_unavailable_try_again);
-            }
-            source.m_bytes.assign(mapped->c_str(), mapped->size());
-            PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, cancelled());
-            return source;
         };
-        auto manifest_source = read("pack.toml", "pack", origin, kMaxPackManifestBytes);
-        PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, manifest_source);
-        auto manifest = decodePackManifest(manifest_source->m_bytes, origin, diagnostics);
-        PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, manifest);
-        ContentPackSource source{.m_manifest = std::move(*manifest)};
-        for (std::size_t index = 0u; index < kContentDocumentCount; ++index) {
-            const auto &location = source.m_manifest.m_file_locations[index];
-            const std::string property = "files." + std::string{kBindings[index].m_collection};
-            auto document = read(source.m_manifest.m_files[index], property, location, kMaxMaterialDocumentBytes);
-            PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, document);
-            if (std::filesystem::equivalent(document->m_path, manifest_source->m_path, error)) {
-                PPR_RETURN_UNEXPECTED_ON_FAIL(
-                    ColonyContent, reject(
-                                       diagnostics, location, property, "A content document aliases pack.toml",
-                                       EConfigErrc::duplicate_key));
-            }
-            PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, error);
-            for (std::size_t previous = 0u; previous < index; ++previous) {
-                if (std::filesystem::equivalent(document->m_path, source.m_documents[previous].m_path, error)) {
-                    PPR_RETURN_UNEXPECTED_ON_FAIL(
-                        ColonyContent, reject(
-                                           diagnostics, location, property, "Manifest entries resolve to the same file",
-                                           EConfigErrc::duplicate_key));
-                }
-                PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, error);
-            }
-            source.m_documents[index] = std::move(*document);
-        }
-        source.m_manifest_source = std::move(*manifest_source);
-        return source;
+
+        visitDescriptorSchema(
+            category, [&]<typename T>(const std::type_identity<T>) { config::describeRecursive<T>(inspect); });
+
+        return result;
     }
 
     // ------------------------------------------------------------------
@@ -805,93 +214,6 @@ namespace pP::colony {
     }
 
     // ------------------------------------------------------------------
-    // document projection
-    // ------------------------------------------------------------------
-
-    Array<std::string> contentDefinitionKeys(const EContentDocument category, const Document &document) {
-        const auto index = static_cast<std::size_t>(category);
-        if (index >= kBindings.size()) {
-            return {};
-        }
-        const auto &binding = kBindings[index];
-        Array<std::string> result;
-        for (const auto &first: keys(document, binding.m_collection)) {
-            if (binding.m_definition_depth == 1u) {
-                result.push_back(first);
-            } else {
-                for (const auto &second: keys(document, std::string{binding.m_collection} + "." + first)) {
-                    result.push_back(first + "." + second);
-                }
-            }
-        }
-        return result;
-    }
-
-    Expected<Document> projectContentDocument(const EContentDocument category, const PackDefinition &definition) {
-        const auto index = static_cast<std::size_t>(category);
-        if (index >= kBindings.size()) {
-            PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, std::errc::invalid_argument);
-        }
-        auto all = config::documentFrom(definition);
-        PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, all);
-
-        Document result;
-        result.m_entries.push_back({"schema_version", FileValue::integer(kContentSchemaVersion), "default"});
-
-        const auto project = [&](const std::string_view path) -> std::optional<std::string> {
-            if (category == EContentDocument::rules or category == EContentDocument::worlds) {
-                if (not path.starts_with("worlds.")) {
-                    return category == EContentDocument::worlds and path == "worlds"
-                               ? std::optional<std::string>{"worlds"}
-                               : std::nullopt;
-                }
-
-                const auto end = path.find('.', 7u);
-                const auto tail = end == std::string_view::npos ? std::string_view{} : path.substr(end + 1u);
-                const bool rule = tail == "rules" or tail.starts_with("rules.");
-
-                if (category == EContentDocument::worlds) {
-                    return rule ? std::nullopt : std::optional<std::string>{path};
-                }
-                if (not rule) {
-                    return std::nullopt;
-                }
-
-                const auto owner = path.substr(7u, end - 7u);
-                std::string mapped = "rules." + std::string{owner};
-                if (tail.size() > 5u) {
-                    mapped += tail.substr(5u);
-                }
-                return mapped;
-            }
-
-            const auto root = kBindings[index].m_collection;
-            if (path != root and not path.starts_with(std::string{root} + ".")) {
-                return std::nullopt;
-            }
-            return std::string{path};
-        };
-
-        for (const auto &entry: all->m_entries) {
-            if (auto path = project(entry.m_key)) {
-                auto copy = entry;
-                copy.m_key = std::move(*path);
-                result.m_entries.push_back(std::move(copy));
-            }
-        }
-
-        for (const auto &group: all->m_groups) {
-            if (auto path = project(group.m_path)) {
-                result.m_groups.push_back({std::move(*path), group.m_location});
-            }
-        }
-
-        std::ranges::sort(result.m_entries, {}, &Entry::m_key);
-        std::ranges::sort(result.m_groups, {}, &GroupPresence::m_path);
-        return result;
-    }
-
-    // ------------------------------------------------------------------
     // content catalog
     // ------------------------------------------------------------------
 
@@ -912,28 +234,41 @@ namespace pP::colony {
 
     Expected<ContentCatalog> projectContentCatalog(
         PackDefinition definition, const Document &document, Diagnostics &diagnostics) {
-        // Typed callers receive the same appearance domains/cardinality checks as decoded files.
-        auto visual_document = config::documentFrom(definition.m_appearance);
-        PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, visual_document);
-        const TreeLayer visual_layers[] = {toTreeLayer(*visual_document, "appearance")};
+        // Programmatic callers validate the typed tree's declared domains.
+        // Descriptor imports have already resolved these domains once.
         Diagnostics visual_diagnostics{64u};
-        auto resolved_appearance = resolveRecursive<Appearance>(visual_layers, visual_diagnostics);
+        config::details::validateStoredTreeValue(definition.m_appearance, "", visual_diagnostics);
         for (const auto &entry: visual_diagnostics.entries()) {
             const std::string path = "appearance." + entry.m_property;
             diagnostics.add(std::string{location(document, path)}, path, entry.m_message, entry.m_code);
         }
         diagnostics.addOmitted(visual_diagnostics.omittedCount());
-        PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, resolved_appearance);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            ColonyContent,
+            visual_diagnostics.hasErrors() ? visual_diagnostics.entries().front().m_code : std::error_code{});
 
         Diagnostics compile_diagnostics{128u};
         auto compiled = sim::definition::compileDefinition(definition, 1.0 / 3.0, compile_diagnostics);
         appendDiagnostics(diagnostics, compile_diagnostics, document);
         PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, compiled);
+
+        return ContentCatalog::project(
+            std::move(definition), document, std::addressof(*compiled), nullptr, diagnostics);
+    }
+
+    Expected<ContentCatalog> ContentCatalog::project(
+        PackDefinition definition, const Document &document,
+        const sim::definition::CompiledDefinition *const standalone,
+        const sim::definition::CompiledRecipe *const selected, Diagnostics &diagnostics) {
         ContentCatalog catalog;
         catalog.m_definition = std::move(definition);
         const auto &source = catalog.m_definition;
         const auto &appearance = source.m_appearance;
-        const auto &bindings = compiled->m_bindings;
+        const auto &bindings = selected ? selected->m_bindings : standalone->m_bindings;
+        const auto &materials = selected ? selected->m_recipe.m_materials : standalone->m_materials;
+        const auto &fields = selected ? selected->m_recipe.m_fields : standalone->m_fields;
+        const auto &biomes = selected ? selected->m_recipe.m_biomes : standalone->m_biomes;
+        const auto &features = selected ? selected->m_recipe.m_features : standalone->m_features;
 
         // Appearance entries must name a real simulation owner; every owner needs its visual projection.
         const auto owners = [&](const auto &visuals, const auto &simulation,
@@ -964,7 +299,7 @@ namespace pP::colony {
 
         for (std::size_t i = 0u; i < bindings.m_materials.size(); ++i) {
             const auto &binding = bindings.m_materials[i];
-            const auto &numeric = compiled->m_materials[i];
+            const auto &numeric = materials[i];
             const auto &visual = *findEntry(appearance.m_materials, binding.m_key);
             const auto &semantic = *findEntry(source.m_materials, binding.m_key);
             const std::string root = "appearance.materials." + binding.m_key;
@@ -992,11 +327,11 @@ namespace pP::colony {
             for (const auto &name: {"albedo_texture", "normal_texture"}) {
                 const auto &path = std::string_view{name} == "albedo_texture" ? visual.m_albedo_texture
                                                                               : visual.m_normal_texture;
-                if (path and not validTexturePath(*path)) {
+                if (path and not asset::qualifyName(*path, "programmatic")) {
                     PPR_RETURN_UNEXPECTED_ON_FAIL(
                         ColonyContent, reject(
                                            diagnostics, location(document, root + "." + name), root + "." + name,
-                                           "Expected a portable pack-relative path without dot segments"));
+                                           "Expected a valid local or qualified Texture asset name"));
                 }
             }
             catalog.m_materials.push_back(
@@ -1011,7 +346,7 @@ namespace pP::colony {
                     visual.m_texture_sampling});
         }
         for (const auto &binding: bindings.m_fields) {
-            catalog.m_fields.push_back({binding.m_key, compiled->m_fields[binding.m_index].m_noise});
+            catalog.m_fields.push_back({binding.m_key, fields[binding.m_index].m_noise});
         }
         const auto fieldKey = [&](const u32 index) -> const std::string & { return bindings.m_fields[index].m_key; };
         const auto biomeKey = [&](const u32 index) -> const std::string & { return bindings.m_biomes[index].m_key; };
@@ -1019,7 +354,7 @@ namespace pP::colony {
             return bindings.m_features[index].m_key;
         };
         for (const auto &binding: bindings.m_biomes) {
-            const auto &numeric = compiled->m_biomes[binding.m_index];
+            const auto &numeric = biomes[binding.m_index];
             const auto &semantic = *findEntry(source.m_biomes, binding.m_key);
             const auto &visual = *findEntry(appearance.m_biomes, binding.m_key);
             auto tint = color(
@@ -1087,7 +422,7 @@ namespace pP::colony {
             catalog.m_biomes.push_back(std::move(biome));
         }
         for (const auto &binding: bindings.m_features) {
-            const auto &numeric = compiled->m_features[binding.m_index];
+            const auto &numeric = features[binding.m_index];
             const auto &semantic = *findEntry(source.m_features, binding.m_key);
             const auto &visual = *findEntry(appearance.m_features, binding.m_key);
             FeatureDefinition feature{
@@ -1115,11 +450,19 @@ namespace pP::colony {
             catalog.m_features.push_back(std::move(feature));
         }
         for (const auto *entry: sorted(source.m_worlds)) {
-            Diagnostics recipe_diagnostics{128u};
-            auto compiled_world = sim::definition::compileRecipe(
-                source, {entry->m_key}, {1.0 / 3.0, 1.0, 0.4, 0.9}, recipe_diagnostics);
-            appendDiagnostics(diagnostics, recipe_diagnostics, document);
-            PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, compiled_world);
+            std::optional<sim::definition::CompiledRecipe> programmatic;
+            const auto *compiled_world = selected;
+            if (compiled_world == nullptr) {
+                Diagnostics recipe_diagnostics{128u};
+                auto compiled = sim::definition::compileRecipe(
+                    source, {entry->m_key}, {1.0 / 3.0, 1.0, 0.4, 0.9}, recipe_diagnostics);
+                appendDiagnostics(diagnostics, recipe_diagnostics, document);
+                PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, compiled);
+
+                programmatic.emplace(std::move(*compiled));
+                compiled_world = std::addressof(*programmatic);
+            }
+
             const auto &recipe = compiled_world->m_recipe;
             const auto &visual = *findEntry(appearance.m_worlds, entry->m_key);
             WorldProfileDefinition world{
@@ -1184,11 +527,11 @@ namespace pP::colony {
                 const std::string path = "appearance.backgrounds." + entry->m_key + ".layers." + layer->m_key;
                 auto tint = color(value.m_color_rgba, path + ".color_rgba", document, diagnostics);
                 PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, tint);
-                if (not validTexturePath(value.m_texture)) {
+                if (not asset::qualifyName(value.m_texture, "programmatic")) {
                     PPR_RETURN_UNEXPECTED_ON_FAIL(
                         ColonyContent, reject(
                                            diagnostics, location(document, path + ".texture"), path + ".texture",
-                                           "Expected a portable texture path without dot segments"));
+                                           "Expected a valid local or qualified Texture asset name"));
                 }
                 stack.m_layers.push_back(
                     {layer->m_key, value.m_texture, std::string{location(document, path + ".texture")}, value.m_order,
@@ -1212,7 +555,7 @@ namespace pP::colony {
     Expected<Document> contentVariantSubtree(
         const EContentDocument category, const std::string_view key, const std::string_view relative,
         const std::string_view tag) {
-        const auto path = contentCanonicalPath(category, contentDocumentPath(category, key, relative));
+        const std::string path{relative};
         const Document draft;
         const auto descriptor = contentPropertyDescriptor(category, relative, draft, key);
         if (not descriptor or
@@ -1223,30 +566,34 @@ namespace pP::colony {
         const std::string selected = path + "." + std::string{tag};
         std::optional<Document> result;
         std::error_code error;
-        config::describeRecursive<PackDefinition>(
-            [&]<typename T>(const std::string &schema_path, const auto &, const std::type_identity<T>) {
-                if constexpr (config::details::TDescribed<T>) {
-                    if (schemaMatches(schema_path, selected)) {
-                        auto payload = config::documentFrom(T{});
-                        if (not payload) {
-                            error = payload.error();
-                            return;
-                        }
-                        Document subtree;
-                        subtree.m_entries.push_back({"tag", FileValue::text(std::string{tag}), "default"});
-                        subtree.m_groups.push_back({std::string{tag}, "default"});
-                        for (auto &entry: payload->m_entries) {
-                            entry.m_key = std::string{tag} + "." + entry.m_key;
-                            subtree.m_entries.push_back(std::move(entry));
-                        }
-                        for (auto &group: payload->m_groups) {
-                            group.m_path = std::string{tag} + "." + group.m_path;
-                            subtree.m_groups.push_back(std::move(group));
-                        }
-                        result = std::move(subtree);
+        const auto inspect = [&]<typename T>(
+                                 const std::string &schema_path, const auto &, const std::type_identity<T>) {
+            if constexpr (config::details::TDescribed<T>) {
+                if (schemaMatches(schema_path, selected)) {
+                    auto payload = config::documentFrom(T{});
+                    if (not payload) {
+                        error = payload.error();
+                        return;
                     }
+                    Document subtree;
+                    subtree.m_entries.push_back({"tag", FileValue::text(std::string{tag}), "default"});
+                    subtree.m_groups.push_back({std::string{tag}, "default"});
+                    for (auto &entry: payload->m_entries) {
+                        entry.m_key = std::string{tag} + "." + entry.m_key;
+                        subtree.m_entries.push_back(std::move(entry));
+                    }
+                    for (auto &group: payload->m_groups) {
+                        group.m_path = std::string{tag} + "." + group.m_path;
+                        subtree.m_groups.push_back(std::move(group));
+                    }
+                    result = std::move(subtree);
                 }
-            });
+            }
+        };
+
+        visitDescriptorSchema(
+            category, [&]<typename T>(const std::type_identity<T>) { config::describeRecursive<T>(inspect); });
+
         PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, error);
         if (not result) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, std::errc::invalid_argument);
@@ -1255,10 +602,7 @@ namespace pP::colony {
     }
 
     Expected<ContentCatalog> projectContentCatalog(PackDefinition definition, Diagnostics &diagnostics) {
-        auto document = config::documentFrom(definition);
-        PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, document);
-        auto resolved = resolvePackDefinition(*document, diagnostics);
-        PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyContent, resolved);
-        return projectContentCatalog(std::move(*resolved), *document, diagnostics);
+        const Document provenance;
+        return projectContentCatalog(std::move(definition), provenance, diagnostics);
     }
 }
