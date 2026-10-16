@@ -6,7 +6,8 @@ sim definitions and existing appearance metadata, pin immutable pack metadata,
 and validate true cross-domain asset links and explicit palette index domains.
 `Content.Descriptors.Tests.cpp` exercises the real two-root module/config seam,
 shared Elements, missing/corrupt binary sources, owned provenance and symlink
-containment. The existing loader remains until the consumer migration gate.
+containment. `loadContentCatalog` returns this all-World definition catalog;
+binary texture preparation is a separate explicit request.
 
 `Content.Assembly.cpp` assembles one selected World from its exact palettes,
 rejects duplicate asset targets, composes shared Elements into distinct numeric
@@ -36,7 +37,7 @@ Game-owned colony simulation, tools, presentation translation and headless workl
 | `game.colony.worldgen` | `WorldGen.cppm/.cpp`, `WorldGen.Plan.cpp`, `WorldGen.Fixture.cpp` | Authored numeric-plan preparation and explicitly named legacy fixtures |
 | `game.colony.worldgen_preview` | `WorldGen.Preview.cppm/.cpp`, `WorldGen.Preview.Export.cpp` | Bounded biome samples and exact crops of cached production worlds, canonical initial particles, diagnostic/source export |
 | `game.colony.worldgen_panel` | `WorldGenPanel.cppm/.cpp` | Workshop browser, all-document property controls, clone/delete and live-preview intents; no I/O or renderer mutation |
-| `game.colony.content` | `Content.cppm/.cpp` | `PackDefinition` combines sim descriptors and game appearance. Seven schema-3 documents bind through generic core tree resolution; profile-owned rules attach only to worlds-document owners. `decodeWorldGenDefinition` handles the separate version-2 definition envelope. Runtime catalogs project compiled bindings; explicit-root loading, shared semantic identity and CPU texture validation live in Content.Pack.cpp. |
+| `game.colony.content` | `Content.cppm/.cpp`, `Content.Source.cpp`, `Content.Descriptors.cpp`, `Content.Assembly.cpp`, `Content.Presentation.cpp` | Owned multi-pack sources and definition-only importing; all-World descriptor catalog; direct selected-World numeric projection; separately prepared presentation through the shared asset request. `decodeWorldGenDefinition` handles the separate version-2 definition envelope. |
 | `game.colony.metric` | `Metric.cppm/.cpp` | Checked 3:1 fine-cell/metre conversions, globally anchored construction footprints, nominal volume and persisted metric compatibility preflight. Authored sessions use this metric for actors, colliders, tools and rendering. |
 | `game.colony.driver` | `ColonyDriver.cppm/.cpp` | Explicit-time fixed step, pause/step/speed/regenerate, ECS and driver-local physics |
 | `game.colony.agents` | `Agents.cppm/.cpp` | Agent state, planning and movement vocabulary |
@@ -59,27 +60,29 @@ Check each `export module` declaration and `../CMakeLists.txt` for exact module 
 
 ## Simulation and presentation contracts
 
-`Content.Authoring.cppm/.cpp` (`game.colony.content.authoring`) owns an explicitly
-opened pack root, baseline bytes, all seven content-document drafts, bounded shared command
-history, and the last validated catalog. Typed invalid drafts remain editable;
-revision checks prevent stale validation acceptance. Worker requests copy owned
-source snapshots, including the original manifest and all seven documents.
-`Content.Pack.cpp` validates snapshots through the same decoder, reference,
-texture and fingerprint path as ordinary disk loading.
+`Content.Source.cpp` owns complete manifest/descriptor source sets and immutable
+checked snapshots. Snapshots pin one pack index; the synchronous required reader
+imports their owned bytes without disk fallback. Text budgets and physical path
+ownership are checked before importing. `Content.Presentation.cpp` composes
+selected appearance with image preparation; its sidecar owns completed images
+and identifies the selected catalog and request generation.
 
-`saveContentDraft` validates every edited document against the current disk pack,
-checks manifest and changed-document baselines for conflicts, exclusively stages
-and verifies sibling temporary files, then rechecks source bytes before committing.
-Individual same-volume replacements are atomic; the pack transaction is not.
-Partial outcomes retain committed baselines and report the operational error,
-preserving unsaved/newer edits for retry. Conflict detection is optimistic;
-concurrent external writes during commit are unsupported.
-Only acceptance matching the current draft revision clears dirty state; newer
-edits retain their bytes while the saved baseline advances. Reload uses `open`
-to produce a complete replacement session before the caller replaces its owner.
-Every save acceptance advances the revision, because validation rereads pack and
-texture inputs. A matching save publishes its catalog at that new revision,
-invalidating older previews and validation results even when TOML bytes match.
+`Content.Authoring.cppm/.cpp` (`game.colony.content.authoring`) owns multiple
+explicit pack roots, a complete desired source set, a separate per-file disk
+baseline, grouped command history, compile parameters, and the last validated
+definition catalog. Invalid typed drafts remain editable. Snapshot workers never
+borrow the mutable session. Draft/save validation checks every declared World
+through the already imported descriptors without binary texture work.
+
+`saveContentDraft` checks all owned files for external conflicts, writes
+descriptors before publishing manifests, and removes obsolete files only after
+manifest success. Individual replacements are atomic; the pack transaction is
+not. Partial outcomes retain observed disk successes while preserving newer
+draft/history intent. Private identity-bound restoration proofs support undo of
+saved deletions; orphan files never enter complete imported candidates.
+Explicit reload adopts external changes through a complete replacement session.
+Only matching full success publishes the validated catalog. Concurrent external
+writes during commit are unsupported.
 
 `ColonyDriver` owns Colony, ECS, fixed-step accumulator, physics Scene and ChunkColliders. Default tick is 60 Hz; physics uses fixed 1/60 s. The declared steps are tool, build, pathfind, aiplan, movestep and physics. Simulation consumes explicit elapsed time; wall-clock profiling does not enter simulation state.
 

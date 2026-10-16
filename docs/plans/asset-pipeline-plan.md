@@ -283,6 +283,14 @@ pass maxima depend on those definitions; direct-reference pruning can change
 output even if the omitted biome is absent from sampled chunks. Unrelated
 mounted packs remain outside a world's declared palette.
 
+Retain the selected recipe compiled with actual supplied parameters; runtime
+plan construction consumes that recipe rather than rebuilding lexical bindings.
+Numeric selection/preview support their explicit parameter domains. Prepared
+runtime generation/restoration preserves the existing canonical application
+metric and actor-size restriction, rejecting other recipes before work instead
+of mislabeling them with default metadata. Driver spawn sizes reuse the owning
+application compile-parameter declaration.
+
 ## Import each descriptor once
 
 Reuse the actual configuration facilities; there is no current
@@ -488,6 +496,9 @@ or undo intent. This is not a global filesystem-atomicity promise or journal.
 Save preflight rejects unexpected external changes even for descriptors left
 untouched by the draft. Adopt external content through explicit whole-candidate
 reload, never by silently merging disk bytes into the validated owned candidate.
+Whole-candidate draft/save validation lowers every declared World with explicit
+application compile parameters, reusing the imported descriptors. It performs
+no image work; a valid selected preview does not hide a broken unselected World.
 Restore an arbitrary deleted path only for the same prior owned asset identity,
 kind and path, backed by its tombstone/history. Retire unreachable tombstones;
 reconcile owned unreferenced files before admitting additional fresh file growth
@@ -515,6 +526,10 @@ preparation.
 
 Port checked-in assets, fixtures, and checkpoint identities directly. Reject
 unsupported old formats clearly, with no compatibility adapters or dual formats.
+World checkpoint envelope version 4 records the owning manifest schema version;
+the earlier flattened content model's version is not a manifest version. Reject
+earlier checkpoint envelopes at the header. Raw sim snapshot version 4 remains
+an independent unchanged format.
 Numeric output stability does not imply old combined fingerprints stay identical
 after splitting their contract.
 

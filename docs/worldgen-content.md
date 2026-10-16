@@ -1,278 +1,213 @@
 # Canonical world-generation packs
 
-The authored model belongs to `engine.sim:worldgen.definition`. Game code owns
-appearance, background stacks, source documents and assets. `PackDefinition`
-combines them; `ContentCatalog` is an immutable runtime projection. Normal startup,
-previews, checkpoints and Workshop validation share this model and
-`compileRecipe` → `compileGenerationPlan`. The explicit numeric test and
-`--profile100` fixtures remain separate opt-in workloads.
+Content uses named, individually described assets in explicitly mounted packs.
+`loadContentCatalog()` returns an owned all-World definition catalog. Selecting
+one World creates its numeric catalog with explicit bindings and actual compile
+parameters. Preparing its texture payloads is a separate asynchronous operation.
+Definition validation does not map, hash, decode or generate mips for binary images.
 
-The current compatibility boundaries are definition schema **2**, content schema
-**3**, and generator algorithm **8**. Old versions are rejected; there is no
-compatibility writer, implicit migration or second authored compilation pipeline.
-The checkpoint envelope remains **3** and the raw sim snapshot remains **4**.
+The pack manifest and asset descriptors use schema **1**. The separate standalone
+numeric-definition envelope remains schema **2**; the internal flattened content
+model is not a pack file format. The World checkpoint envelope is **4**, distinct
+from raw sim snapshot **4**. Old seven-document packs and earlier checkpoint
+envelopes are rejected rather than adapted. Generator versions remain owned by
+the sim implementation. Historical acceptance below predates this migration.
 
-The consolidation preserves authored physical, noise, geometric and appearance
-values while changing their ownership and paths. Material IDs now come only from
-`compileDefinition`'s canonical key bindings. Rules derive phase from their active
-payload rather than storing a second phase/kind pair. These identity changes
-invalidate earlier pack fingerprints, generated goldens and checkpoints. Earlier
-v2 performance/preview evidence does not establish v3 acceptance.
+## Ownership and loading
 
-## Pack source boundary
+| Owner | Responsibility |
+|---|---|
+| `engine.asset` | Names, stable typed identity, immutable pack indices, checked importing, shared asynchronous preparation lifecycle. |
+| `engine.image` | Texture descriptors, mapping/hash/decode/mip stages and image budgets. |
+| `engine.sim` | Element/Material physics, World/WorldPalette/Profile schemas, explicit-binding validation and numeric lowering. |
+| `game.colony.content` | World appearance composition, backgrounds, multi-pack catalogs and presentation sidecars. |
+| Application and render passes | Activation, GPU upload, fenced retirement, editing and capture policy. |
 
-`pack.toml` names the complete seven-document set:
+Asset depends only on core. Sim does not depend on image or rendering. The shared
+request is typed by its processor; it is not a universal payload registry or
+dependency scheduler. Future domain processors can use the same request lifecycle;
+audio and mesh pack processing are not implemented by this delivery.
+
+`ContentSourceSet` owns manifests and per-descriptor bytes. An immutable
+`ContentSourceSnapshot` validates a complete candidate and pins one built pack
+index. Each descriptor goes through core tree decode/resolve once per import.
+The required synchronous `DescriptorReader` supports edited owned bytes through
+that same path: a missing record is an error, never a fallback to disk. Callback
+views do not escape importing. Source locations and typed values remain owned.
+
+Per-file limits are 64 KiB per manifest and 1 MiB per descriptor. The combined
+retained-text limit is `7 * asset::kMaxDescriptorBytes + asset::kMaxManifestBytes`
+across all mounted manifests/descriptors. This is a logical source cap, not a
+process-peak or history-memory bound. Canonical containment, physical file aliases
+and metadata errors are checked; exceptional network alias comparisons can remain
+quadratic. Allocation failure reaches the fatal boundary after admitted work drains.
+
+## Manifest, names and multiple packs
+
+A manifest declares every descriptor explicitly. This fragment illustrates local
+and dependency references; it is not a complete runnable pack:
 
 ```toml
-schema_version = 3
-pack_id = "ppr_frontier"
-[files]
-materials = "materials.toml"
-fields = "fields.toml"
-biomes = "biomes.toml"
-features = "features.toml"
-worlds = "worlds.toml"
-rules = "rules.toml"
-appearance = "appearance.toml"
+schema_version = 1
+pack_id = "ppr.base"
+
+[requires.shared]
+pack_id = "ppr.shared"
+
+[assets.rock]
+kind = "sim.material"
+descriptor = "materials/asset-rock.toml"
+
+[assets.rock_element]
+kind = "sim.element"
+descriptor = "elements/asset-rock_element.toml"
 ```
 
-Every document requires `schema_version = 3`. `ContentDocumentBinding` maps each
-document to its canonical schema root. `worlds.toml` declares profile owners;
-`rules.<profile>.<rule>` attaches to `worlds.<profile>.rules.<rule>`. A profile
-authored through nested tables in worlds.toml is a declaration. A profile present
-only in rules.toml is an error. Duplicate destinations and missing owners fail
-before merged resolution, independently of record ordering.
+Local keys use lowercase ASCII `[a-z0-9_-]{1,128}`. Namespaces use nonempty,
+dot-separated local-key segments, with 128 bytes total. An asset reference is
+either a local key or exactly `namespace:key`. Unqualified references resolve
+only in the declaring pack; qualified references require a declared dependency.
+There is no discovery, implicit override or last-mounted-wins policy. Duplicate
+namespaces, keys, hash collisions, missing targets and wrong kinds fail.
 
-`loadContentPackSource(root, diagnostics, context)` resolves the explicit root and
-files canonically, rejects containment escapes and file aliases, checks regular
-files and sizes, and returns owned source bytes. Limits are 64 KiB for the manifest
-and 1 MiB per document. Cancellation is checked between bounded reads; mapped-size
-changes fail. `decodePackDefinition` merges and resolves through generic core tree
-schemas, then validates sim references and game appearance. Logical diagnostics
-retain source locations. `loadContentCatalog` additionally validates and loads
-required textures before publishing an owned candidate. Allocation failure reaches
-the application's fatal boundary.
+The stable identity is pack namespace, local key and declared kind, encoded by a
+versioned deterministic hash. Names remain available to reject hash collisions.
+Moving a descriptor preserves identity; changing its key or namespace changes it.
+Asset keys are separate from numeric Material IDs, catalog slots, generations
+and processing revisions. See the [implementation plan](plans/asset-pipeline-plan.md)
+for frozen hash encoding and test vectors.
 
-Core tree decoding preserves table presence, including empty groups, and rejects
-ambiguous dotted/literal key segments, arrays and dates. Required, defaulted and
-optional members have distinct contracts. A failed candidate never mutates an
-accepted catalog; invalid Workshop drafts retain their source and last accepted
-preview.
-
-## Materials and appearance
-
-Simulation properties live in materials.toml:
+`--worldgen-root=<directory>` mounts one pack. Alternatively,
+`--worldgen-pack-set=<file>` mounts an explicit schema-1 root list, relative to
+that file; it does not also mount the default pack. Supplying both selectors is
+an error. A pack-set example is:
 
 ```toml
-schema_version = 3
-[materials.sandstone]
+schema_version = 1
+[packs.base]
+root = "packs/base"
+[packs.shared]
+root = "packs/shared"
+```
+
+## Element, Material and Texture descriptors
+
+An Element owns phase/density. A Material retains distinct cell identity even
+when it shares an Element with another Material. These fragments belong in
+separate manifest-indexed files:
+
+```toml
+schema_version = 1
 phase = "solid"
-representation = "terrain"
-diggable = true
 density = 2200.0
 ```
 
-Visual properties live in appearance.toml under the same semantic owner key:
-
 ```toml
-schema_version = 3
-[appearance.materials.sandstone]
-display_name = "Sandstone"
-color_rgba = "B59C72FF"
-albedo_texture = "textures/sandstone.png"
-normal_texture = "textures/sandstone_normal.png"
+schema_version = 1
+element = "rock_element"
+representation = "terrain"
+diggable = true
+
+[appearance]
+display_name = "Rock"
+color_rgba = "B99A6CFF"
+albedo_texture = "rock_albedo"
+normal_texture = "ppr.shared:rock_normal"
 texture_period_m = 2.0
 ```
 
-Material keys use core's canonical key grammar. Vacuum is the built-in ID zero;
-authored `numeric_id` is unknown and rejected. Terrain materials are solid and
-diggable metadata is terrain-only. Density is finite and positive. Particle
-materials can be solid, liquid or gas; matter-fill references accept all three
-particle phases. Appearance owners must exist in the corresponding
-simulation collection. Display names, colors and texture/PBR controls never enter
-the sim-owned descriptor model.
-
-These values are game tuning examples, not measured material data. The fragments
-reference illustrative paths and do not constitute a complete deployed pack.
-
-Optional appearance fields use these finite domains and defaults:
-
-| Field | Domain | Default |
-|---|---|---|
-| `metallic`, `roughness` | [0,1] | 0, 1 |
-| `emissive_r`, `emissive_g`, `emissive_b` | [0,1] linear RGB | 0 |
-| `emissive_strength` | [0, float max] | 1 |
-| `alpha_mode` | `opaque`, `blend` | `opaque` |
-| `texture_sampling` | `stochastic`, `repeat` | `stochastic` |
-| `ior` | [1,3] | 1.5 |
-| `normal_texture` | Portable relative path | absent |
-| `normal_scale` | [0,4] | 1 |
-| `refraction_depth_m` | [0,1] metres | 0 |
-
-A normal or albedo map requires `texture_period_m`. Albedo and background maps use
-sRGB decoding; normal maps use linear data decoding and renormalized signed-vector
-mips including level zero. The material tint alpha is authored optical opacity;
-geometric contour and particle fill coverage are separate. Within covered surface,
-`S = opacity*material + (1-opacity)*refracted_background`; coverage composites S
-with the destination exactly once. IOR1, flat normals, zero depth and opaque
-materials have no displacement. A covered zero-opacity surface may still refract.
-
-Natural materials use three translated patches on a triangular lattice to reduce
-repetition. Albedo and normal maps share patch coordinates, weights and explicit
-world-space sampling gradients. Linear RGB receives approximate mean/variance
-contrast correction; alpha uses ordinary blending. This is not full histogram
-transport. `texture_sampling = "repeat"` preserves structured patterns such as
-masonry mortar, using one matching albedo/normal lookup. Both modes remain anchored
-in world coordinates, including particles. Sampling mode participates in content
-identity; changing it intentionally invalidates checkpoints tied to the old pack.
-
-Solid boundary strokes retain their opacity independently of material optical
-opacity. Translucent solids participate in internal solid interfaces; gas and
-liquid particles leave the terrain boundary exterior.
-
-Texture paths use portable relative slash-separated components. Absolute,
-drive-qualified, backslash, empty, dot, and parent components are rejected.
-Typed pack resolution performs no filesystem access. The complete pack loader validates existence, canonical containment, required image decoding, byte budgets and source-byte identity.
-
-## Biomes and noise
-
-Fields use `NoiseFieldDesc::describe()` directly. Each field requires an algorithm
-and a finite positive frequency. Supported algorithms are `open_simplex2`,
-`perlin`, `cellular_distance` and `cellular_value`; fractals, warp and work bounds
-come from that same schema. Compiled noise is immutable and allocation-free when
-sampling. No parser or renderer dependency enters sim.
-
-Biome properties are nested canonical groups, for example:
+Appearance references name Texture assets, not raw image paths. A Texture owns
+its source path and processing settings:
 
 ```toml
-schema_version = 3
-[biomes.temperate.temperature]
-field = "temperature"
-base_k = 295.0
-variation_k = 10.0
-[biomes.temperate.composition.host]
-order = 10
-field = "composition"
-[biomes.temperate.composition.host.depth]
-min = 0.0
-max = 1.0
-[biomes.temperate.composition.host.materials.stone]
-material = "sandstone"
-weight = 1.0
+schema_version = 1
+source = "textures/rock.png"
+interpretation = "color"
+mip_policy = "mitchell"
+full_chain = true
+high_quality = false
+preserve_coverage = false
+alpha_cutoff = 0.5
 ```
 
-Appearance provides `appearance.biomes.<key>.display_name` and
-`preview_color_rgba`. Biomes support ordered composition/deposits and optional
-`pore`, `lining`, `surface_layers.soil`, `surface_layers.weathered`, `formation`
-and `rind` groups. `relaxation`, `sprinkle`, `finish` and `erosion` are defaulted
-groups. Deposits use `depth` and `threshold` intervals; presence of `blob` selects
-blob geometry instead of an authored shape discriminator. Blob radius, stretch
-and orientation are nested groups. There is no duplicated threshold kind.
+Interpretation is `color`, `data` or `normal`. Normal processing renormalizes
+vectors, including level zero, and rejects coverage preservation. Source paths
+remain contained in their declaring pack. Albedo/background references require
+color interpretation; normal references require normal interpretation. Descriptor
+metadata owns property domains; runtime validation and authoring controls reuse
+them. Cross-field suitability and numeric safety remain separate checks.
 
-The supported scope is 64 biomes, 16 composition bands per biome, 64 choices per
-band and 64 deposits per biome. Ordered composition covers normalized depth [0,1]
-without gaps or overlaps. Choice weights are positive and accumulated in canonical
-key order; overflow or collapsed normalized intervals fail. Terrain choices may
-reference `vacuum`; deposits require suitable terrain materials. Temperature base
-must exceed its nonnegative variation. Halo/work limits remain checked by sim;
-do not infer a new engine-wide budget from these content limits.
+Field/Biome/Feature/Rule descriptors wrap existing sim schemas under `[definition]`.
+Game display properties use `[appearance]` where supported. Biome composition,
+noise, feature shapes and rule payloads retain their sim-owned interpretation;
+splitting files does not create independently compilable numeric biomes or rules.
+Marker references remain feature-scoped and rule references remain World-scoped.
+See [sim navigation](../lib/engine/sim/codemap.md) for owning schemas and compilers.
 
-## Features and rules
+## World palettes and identities
 
-Features own `reservation`, required `allow_horizontal_reflection`, keyed
-`operations` and keyed `markers`. Each operation has order, x/y coordinates and a
-tagged action. Paint owns a material reference; carve has none. Both own a tagged
-rectangle, ellipse or capsule shape. A rectangle paint example is:
+A World owns `semantic_key`, `[profile]`, explicit `[palette]` bindings, and
+optional appearance/background references. An illustrative palette fragment is:
 
 ```toml
-[features.landing.operations.floor]
-order = 10
-x_fine = 0
-y_fine = 0
-[features.landing.operations.floor.action]
-tag = "paint"
-[features.landing.operations.floor.action.paint]
-material = "sandstone"
-[features.landing.operations.floor.action.paint.shape]
-tag = "rectangle"
-[features.landing.operations.floor.action.paint.shape.rectangle]
-width_fine = 30
-height_fine = 3
+[palette.materials.sandstone]
+asset = "material_sandstone"
+id = 54
 ```
 
-Marker roles are `start`, `traversal_room`, `sealed_pocket`, `resource_anchor` and
-`inert`. Marker references resolve in the selected feature, never in a global
-same-name pool. Bounds, role suitability, canonical fine lengths and reservation
-containment are validated. Appearance supplies feature display names.
+Other palettes use `asset` and `index` for Fields, Biomes and Features; Rules
+name standalone assets under the World palette. Alias references inside numeric
+definitions resolve in this World, not in a global asset-name pool. Alias keys
+continue to determine semantic RNG streams. Vacuum remains ID zero. Palettes
+must provide the exact valid numeric domains and include unsampled biomes whose
+limits affect raster work. Mount order and unrelated packs do not assign IDs.
 
-Rules are authored separately, scoped by their profile:
+Selected-World lowering uses actual cell size, reference thickness and actor
+half-extents. `compileWorldPlan` consumes the retained matching recipe rather
+than compiling a second lexical binding set. Draft/save validation lowers every
+declared World with request-owned compile parameters; a broken unselected World
+rejects the complete candidate without processing textures.
+Numeric selection and previews support their explicit parameter domains. The
+current prepared runtime/driver supports only the canonical application metric
+and actor size; it rejects other recipes before generation/restoration instead
+of labeling them with default runtime metadata.
 
-```toml
-schema_version = 3
-[rules.frontier.caves]
-order = 10
-enabled = true
-[rules.frontier.caves.payload]
-tag = "cave"
-[rules.frontier.caves.payload.cave]
-biome = "temperate"
-field = "caves"
-[rules.frontier.caves.payload.cave.depth]
-min = 0.0
-max = 1.0
-[rules.frontier.caves.payload.cave.threshold]
-min = 0.25
-max = 1.0
-```
+| Identity | Includes |
+|---|---|
+| Stable asset | Pack namespace, local key and kind. |
+| Numeric World | Physical/numeric definitions, semantic aliases, explicit bindings and compile parameters/versions. |
+| Presentation descriptor | Selected appearance, texture descriptors and settings. |
+| Joined presentation | Numeric World identity, presentation descriptors, binary source-byte identities and processing revisions. |
+| Provenance | Source paths, comments and locations for diagnostics/editing. |
 
-The payload alternatives are `cave`, `carve_worm`, `vein_worm`, `connection`,
-`feature` and `matter_fill`. Worms own a `geometry` group; vein worms additionally
-own material/host references. Phase is derived from the payload. Disabled rules
-retain authored identity but produce no numeric work. Matter fill references an
-enabled feature placement in the same profile and a suitable sealed marker in
-that placement's feature. Solid/liquid fills require height; gas fills require
-height to be absent. Unsupported tags and inactive payload fields are errors.
+Tint or texture changes affect presentation without changing numeric terrain
+identity. Physical changes affect numeric compatibility. Comments update
+provenance without semantic changes. Absolute roots, mount order and request
+generations are not persistent semantic identities. Hashes detect changes; they
+are not cryptographic authentication. Mip output bytes need independent checks
+when processor algorithms or scheduling change.
 
-## Profiles, identity and runtime
+## Asynchronous presentation
 
-Profiles own `layout`, `boundaries`, optional `surface_bedrock`, `start`, keyed
-`resources`, keyed `biomes`, and attached `rules`. Their display name and
-background-stack choice live in `appearance.worlds.<profile>`. Background stacks
-live in `appearance.backgrounds.<stack>.layers.<layer>` with order, texture,
-color, repeat period and parallax factor. Four layers have unique orders zero
-through three; the farthest tint is opaque.
+`asset::PreparationRequest<Processor>` owns bounded admission, polling,
+cancellation, ordered outcomes, capture settlement and draining on the existing
+scheduler. Each worker returns a fresh `future<Outcome>`; cumulative diagnostics
+remain on the owner. A future becoming ready does not by itself establish that
+all accepted captures have been destroyed. Fatal allocation errors take priority
+and are reported after draining.
 
-The metric remains three fine cells per metre and one metre reference thickness.
-Cell centres are `(i + 0.5) / 3`; picking uses half-open intervals. Discrete authored
-lengths must equal canonical fine boundaries. Construction tiles remain aligned
-globally, including across chunk seams. The numeric compile parameters provide
-the actual actor half-extents .4/.9 m; profiles cannot resize actors.
+Image supplies metadata preflight and map/hash/decode/mip stages. The request
+owner uses decoded dimensions for exact retained-output admission. Owning mappings
+keep storage handles alive but are not immutable snapshots: source files must
+stay stable during admitted work. Replace binary files completely after draining.
 
-`SemanticFingerprint` is shared by definition, rules, materials and full-pack
-identity. It walks described members in declaration order and keyed collections
-in sorted key order. Optional presence, textual variant tags and active payloads
-are explicit. References encode collection, scope, suitability, key and actual
-owner path. Numeric values use little-endian bytes, lengths are explicit, and
-negative zero is normalized. Indices, assigned IDs, comments, source ordering and
-provenance never define semantic identity.
-
-Definition identity uses `ppr.worldgen.definition.v2`. The rules projection uses
-`ppr.worldgen.rules.v2`, framing profile keys in canonical order, including empty
-profiles. Material identity uses `ppr.materials.v3`. Full-pack identity uses
-`ppr.content.v3`, schema version, pack ID, complete definition, appearance and
-canonically ordered asset-usage identities (path, normal/albedo usage, byte count
-and source-byte checksum). FNV-1a identities detect content changes; they are not
-cryptographic authentication. Shipped v3 goldens require explicit validation.
-Appearance colors remain described strings: changing hexadecimal letter case
-conservatively changes identity even when the rendered color is identical.
-
-The game retains renderer-independent simulation ownership and injected execution
-dependencies. A preparation candidate owns its catalog and complete numeric world.
-Cancellation drains accepted work before borrowed input release. The coordinator
-keeps gameplay paused while control/render work continues, and publishes only
-after matching GPU activation/presentation. Teardown reverses setup; allocation
-failure remains fatal. See the diagnostic and checkpoint sections below for the
-existing bounded workload and evidence contracts.
+A `ContentPresentation` sidecar owns prepared images and matches the selected
+catalog, World/numeric identity and expected generation. Asset-backed capture
+requires a matching ready sidecar and returns an explicit error otherwise.
+Headless numeric validation can omit preparation. Workshop's external update
+polls requests before scheduling capture; no background worker waits for image
+work queued to the same pool. WorldJob's separate coordinator may finish/drain.
+The existing passes retain GPU upload and fenced retirement ownership.
 
 ## In-game Worldgen Workshop
 
@@ -292,6 +227,12 @@ The browser shows the opened pack, materials/elements, fields, biomes, features,
 world profiles, profile-owned rules, appearance and textures. Schema descriptors
 provide the nested groups, tagged payloads, ranges and reference choices. Rules
 retain their world-profile ownership across document boundaries. Pack manifests and referenced textures remain inspectable.
+Browser metadata comes from the immutable ownership index; descriptor documents
+are decoded lazily and reused while their owned bytes are unchanged. Complete
+"Used by" results come from the current validated typed draft. Unvalidated
+drafts explicitly show that reverse-reference information is unavailable until
+validation. Unvalidated descriptors remain selectable, and source-backed
+controls keep invalid typed drafts editable.
 
 The resizable Workshop separates the content browser from the inspector. Search
 definitions in the browser or filter the inspector's nested property tree.
@@ -310,8 +251,8 @@ Live preview pauses on a known invalid draft until an edit fixes it, retaining t
 last successful picture. Open and Save explain when their prerequisites are missing.
 
 **Create from selected** clones a definition with a new semantic key. Scoped
-rules and appearance entries retain their owner. Numeric IDs are derived during
-compilation and are never authored or selected in the editor. **Delete selected definition** is undoable. Unresolved
+references retain their declared scope. Worlds explicitly own numeric palette
+bindings; cloning a descriptor does not silently append it to those palettes. **Delete selected definition** is undoable. Unresolved
 references remain visible as validation errors and block saving or generation;
 deletion never silently cascades. Structural editing supports the explicit-table
 and dotted-record syntax used by the shipped packs; inline-table record deletion
@@ -352,9 +293,11 @@ and successful preview. Preview and I/O run on owned background snapshots; Cance
 and newer requests cannot publish an obsolete result. Open, Reload and application
 exit require an explicit decision before discarding dirty drafts.
 
-**Save** validates against the current rest of the pack and stages every changed
-content document while preserving comments, line endings and untouched text. Disk
-conflicts retain the draft. An accepted save advances the session revision; it
+**Save** validates the complete owned candidate and stages changed descriptor
+files while preserving comments, line endings and untouched text. Unexpected
+external changes conflict even for untouched draft files; explicit Reload adopts
+external content. Conflicts retain the draft. Descriptors commit before manifests,
+and obsolete files are removed only after manifest success. An accepted save advances the session revision; it
 advances validation to that revision when the saved draft still matches. Edits
 made while saving remain dirty. Each document replacement is atomic; the complete
 pack is not a single atomic transaction. Partial failures report committed paths,
@@ -362,12 +305,16 @@ retain the draft, and allow retry when disk bytes match the baseline or requeste
 version. Simultaneous external writes during the optimistic commit are unsupported.
 
 **Export Preview** writes material, biome and temperature P6 PPM images,
-`preview.json`, and the exact validated manifest/source snapshot used by the
-completed preview, including unsaved edits. Images contain one pixel per visible
-fine cell, with highest +Y first. Use a fresh output directory; completion metadata
-is written last. Referenced texture identities are recorded, but assets are not
-copied: reproduction requires the original unchanged asset root. Exact mode also
-exports `initial-matter.ppm` and production generation identity/cache metadata.
+`preview.json` envelope 2, and the exact validated source snapshot, including
+unsaved edits. Sources are grouped under `source/packs/pack-<namespace>/`, with a
+schema-1 pack-set listing relative roots. Reports distinguish numeric and joined
+presentation identity and record original roots and texture source identities.
+Images contain one pixel per visible fine cell, with highest +Y first. Use a
+fresh output directory; completion metadata is written last. Binary assets are
+not copied: the exported pack-set is not self-contained. Reproduction needs the
+original unchanged binary layout or owned source reconstruction against those
+original roots. Exact mode also exports `initial-matter.ppm` and production
+generation identity/cache metadata.
 
 Returning from Workshop restores the retained game presentation, camera and
 pause state without regenerating its terrain. Shared `engine.core` command history
@@ -389,9 +336,10 @@ The default root is `worldgen/default` beside the executable. This command reads
 and decodes the complete pack before reporting its fingerprint; it creates no
 window, RHI service or GPU work. `--worldgen-profile` selects a validated profile;
 `--worldgen-seed` accepts the complete unsigned 64-bit range for subsequent
-numeric generation. Plain validation loads and validates content and assets and
-compiles the owned numeric plan; it does not generate a world. The preview command
-additionally rasterizes all 1024 chunks using the injected background pool,
+numeric generation. Plain validation imports definitions and
+compiles the owned numeric plan without binary texture preparation; it does not
+generate a world. The preview command additionally rasterizes all 1024 chunks
+using the injected background pool,
 resolves initial matter, and validates final terrain and the supported start.
 Its report contains canonical terrain/output checksums, five phase
 timings, metadata counts and resident grid payload bytes. Checksums use FNV-1a
@@ -422,14 +370,16 @@ Complete numeric results own the plan, layout, geometry, grid, start, matter
 and report; the injected clock affects timings only. Game factories bind that
 result to an owned catalog and immutable reproduction descriptor; Colony can
 adopt the complete owner without regenerating. The production job builds and publishes this complete candidate. Full allocation/scratch accounting remains an acceptance measurement.
-Third-party dependency cleanup is deferred until all seven implementation stages
-are complete, as requested.
 
 
 ## Full world checkpoints
 
+The descriptor pipeline uses checkpoint envelope version 4 and rejects earlier
+envelopes. Raw sim snapshot version 4 is a separate format.
+
 `game.colony.checkpoint` wraps the unchanged low-level sim snapshot v4 in a
-version-3 game envelope (versioned `PPRWGEN1` magic). It stores the exact pack schema/generator
+version-4 game envelope (versioned `PPRWGEN1` magic). It stores the exact pack
+schema/generator
 version, profile, unsigned seed, content fingerprint and 3:1 metric, plus the
 sorted numeric-ID/material-key manifest (including reserved vacuum ID 0), biome
 sites, feature instances/segments/omissions and finite blob records, start/resource results, initial
@@ -437,7 +387,7 @@ matter spans/fill heights and baseline validity, current particle batches and ne
 generation report, fixed tick
 and frequency, and controlled entity slot/generation. Fields are explicit
 little-endian integers and IEEE-754 doubles; strings/counts are length-prefixed.
-Version-1 and version-2 envelopes are rejected explicitly; there is no implicit migration.
+Earlier envelope versions are rejected explicitly; there is no implicit migration.
 The complete encoded envelope is bounded at 256 MiB. This is an application
 checkpoint for the current component layouts, not an ABI migration facility.
 
@@ -457,7 +407,9 @@ bytes, excessive counts, unknown or particle terrain IDs, bad entity selection,
 invalid component layouts, unordered/overlapping matter spans and nonfinite
 metadata before constructing a candidate. Restore creates a fresh terrain grid
 from saved cells and reconstructs derived biome lookup, physics and presentation
-state; it never regenerates the terrain baseline. Tick and actor selection
+state; it never regenerates the terrain baseline. Presentation assets are
+prepared separately against the compatible selected numeric catalog. Tick and
+actor selection
 survive; held input and GPU descriptors do not. Body values survive, but Box2D
 solver/contact internals are rebuilt rather than promising bit-exact solver
 continuation. An edited world remains loadable when historical generation containment or the
@@ -561,7 +513,7 @@ These figures exclude allocator metadata, simultaneous old/new reallocation
 buffers, opaque noise and task allocations, thread stacks, content catalogs,
 physics and GPU storage. They are neither total allocations nor process peak
 memory. Record process peaks separately. These observations do not affect
-persistent checksums and are deliberately absent from checkpoint v3; restored
+persistent checksums and are deliberately absent from checkpoint v4; restored
 checkpoints display allocation observations as unrecorded rather than zero cost.
 
 With `--worldgen-report`, admission observations also report attempted/skipped
@@ -573,6 +525,10 @@ not native input latency or GPU terrain execution. Ordinary runs leave this
 instrumentation disabled.
 
 ## Bounded interactive acceptance command
+
+The historical results in this section predate the descriptor/async migration
+and do not establish its acceptance. Current execution evidence belongs in the
+[asset pipeline progress](plans/asset-pipeline-progress.md).
 
 Run `app.game --worldgen-acceptance --worldgen-profile=frontier --worldgen-seed=42`
 (and repeat with `hollows`) on the desired backend. It enables the cadence report,

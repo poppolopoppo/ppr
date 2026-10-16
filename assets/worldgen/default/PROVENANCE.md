@@ -1,4 +1,4 @@
-# PPR Frontier v3 — original content and asset provenance
+# PPR Frontier descriptor pack — original content and asset provenance
 
 All 134 referenced PNGs are original procedural artwork made for PPR. No ONI artwork,
 textures, code, extracted game data, or other third-party assets are included.
@@ -6,11 +6,14 @@ The user-provided `docs/oni_v22.slang` and references listed in
 `docs/worldgen-overhaul-plan.md` informed broad geological themes only. They
 remain preserved as references and are not generator inputs.
 
-The seven schema-3 TOML documents are authored source. The consolidation splits
-simulation descriptors from appearance and profile-owned rules, preserves their
-scalar tuning, removes authored numeric IDs and derives rule phases from payloads.
-Definition schema 2 and generator 8 reject prior identities. Previous validation
-and measurements below describe the historical v2 pack, not acceptance of v3.
+The schema-1 `pack.toml` explicitly indexes 513 authored descriptors. Elements
+own physical properties; Materials reference Elements and compose appearance;
+Texture descriptors name the existing binary sources. The two Worlds own
+explicit palette bindings and reference standalone Rules. Migration preserves
+the prior scalar tuning, palette IDs/order, semantic aliases and all 134 PNG
+bytes. Rule phases still derive from payloads. This is a breaking source-format
+change with no seven-document loader. Historical validation and measurements
+below do not establish acceptance of the descriptor migration.
 
 Run `python scripts/Generate-WorldgenAssets.py` to generate missing PNGs with Python
 3.11+ and no external packages. It never rewrites TOML. Use `--material <key>` to
@@ -48,9 +51,10 @@ memory and make no frame-performance claim.
 
 ## Semantic material identity
 
-Material keys own authored identity. `compileDefinition` assigns runtime bindings
-in canonical key order, with vacuum fixed at zero. Runtime IDs are excluded from
-semantic fingerprints. Display labels remain unchanged (copper/iron are native
+Qualified pack/key/kind names own stable asset identity. Worlds explicitly bind
+semantic Material aliases to numeric IDs, with vacuum fixed at zero; these
+bindings participate in numeric World identity. Materials remain distinct even
+when they share one Element. Display labels remain unchanged (copper/iron are native
 metals; crystal is amethyst). Existing explicit numeric test fixtures are separate
 from this pack. The texture pattern families are keyed by these semantic names.
 

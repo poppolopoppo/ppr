@@ -61,15 +61,17 @@ aggregate phases such as batch loading, decoding, and upload preparation when
 they distinguish the cause of a slowdown. Do not add an event for every texture
 or helper call merely to increase coverage. Preserve existing useful phase names.
 
-The content loader prepares bounded two-texture waves serially, then generates
-mips and hashes on the existing background pool. `Content.Textures.Load` measures
-the caller's complete synchronous texture phase, including preparation and waits.
-`Content.Texture.Prepare`/`Map`/`Decode` describe preparation;
-`Content.Texture.Mips`/`HashSource` run on the executing thread. `Image.Mips.Resize`
-isolates the stb resize call for this investigation. Existing encoding work is
-visible through `Core.Parallel.ForRange`; these intervals overlap their parents.
-The former per-texture `Content.Texture.Load` interval is not directly comparable
-to the preparation-only interval.
+Definition loading is separate from texture preparation. `Content.Sources.Load`
+measures owned text loading, while image worker stages use
+`Image.Preparation.Base`, `Map`, `HashSource`, `Decode`, and `Mips` under the
+`Image.Preparation` prefix. `Content.Presentation.Join` identifies composition of
+completed image results. Shared request waits use `Asset.Preparation.Admit`,
+`SettleCaptures`, and `Drain` under the `Asset.Preparation` prefix; polling and
+worker execution are separate intervals. `Image.Mips.Resize` isolates stb resize
+work. Existing encoding work is visible through `Core.Parallel.ForRange`;
+inclusive and parallel intervals overlap. Historical `Content.Textures.Load`
+and `Content.Texture.*` traces describe the removed synchronous loader and are
+not directly comparable to the new worker phases.
 
 Place scopes on the thread executing work. Submission, execution, and completion
 are different boundaries; a submitter's scope cannot describe the worker's work.
@@ -161,8 +163,10 @@ structure padding. Check the candidate against that baseline as well as meaningf
 behavior assertions. Replaying the same implementation proves repeatability,
 not equivalence between the previous and changed algorithms.
 
-Content fingerprints include definitions and texture source bytes, but exclude
-generated mip bytes. Check owned mip bytes independently when changing generation
+Numeric World identity excludes appearance and texture bytes. Joined presentation
+identity includes numeric World identity, selected appearance, texture settings, source-byte identities
+and processing revisions, but excludes generated mip bytes. Check owned mip bytes
+independently when changing generation
 or scheduling. The current mip path filters linear floats with stb's Mitchell
 downsampling, clamp edges, and straight-alpha handling. A faster box/tiled path
 would change output semantics; timing evidence alone does not authorize that
