@@ -3,6 +3,13 @@ module;
 #include "pP/Macros.h"
 #include "App.Platform.Glfw.include.hpp"
 
+#if defined(__linux__)
+// The shared GLFW include exposes the native accessors only on Win32/Cocoa.
+// This partition also surfaces the X11 window handle, so expose it locally.
+#define GLFW_EXPOSE_NATIVE_X11
+#include <GLFW/glfw3native.h>
+#endif
+
 module engine.app;
 
 import :platform;
@@ -15,7 +22,7 @@ import :window.viewport;
 import std;
 
 namespace pP {
-    PPR_DEFINE_LOG_CATEGORY(GlfwWindow, info, none);
+    PPR_DEFINE_LOG_CATEGORY(GlfwWindow, info, none)
 
     [[nodiscard]] static Expected<std::string> glfwMonitorIdentity_(GLFWmonitor *const native) {
 #ifdef _WIN32
@@ -682,6 +689,34 @@ namespace pP {
             return ::glfwGetWin32Window(p_glfw_window);
 #elif defined(__APPLE__)
             return (void *) ::glfwGetCocoaWindow(p_glfw_window);
+#elif defined(GLFW_EXPOSE_NATIVE_X11)
+            // The GLFW linked on Linux is X11-only, so the X11 window id is
+            // the only native handle available; a Wayland session reports no
+            // handle rather than a foreign XID.
+            if (::glfwGetPlatform() == GLFW_PLATFORM_X11) {
+                return reinterpret_cast<void *>(::glfwGetX11Window(p_glfw_window));
+            }
+            return nullptr;
+#else
+            return nullptr;
+#endif
+        }
+        return nullptr;
+    }
+
+    static void *glfwGetNativeWindowDisplay(GLFWwindow *p_glfw_window) {
+        if (p_glfw_window != nullptr) [[likely]] {
+#ifdef _WIN32
+            return nullptr;
+#elif defined(__APPLE__)
+            return nullptr;
+#elif defined(GLFW_EXPOSE_NATIVE_X11)
+            // X11 surface creation needs the Display connection alongside the
+            // window id; a Wayland session reports neither.
+            if (::glfwGetPlatform() == GLFW_PLATFORM_X11) {
+                return static_cast<void *>(::glfwGetX11Display());
+            }
+            return nullptr;
 #else
             return nullptr;
 #endif
@@ -745,9 +780,15 @@ namespace pP {
         ::glfwSetDropCallback(p_glfw_window.get(), &glfwDropCallback_);
 
         const NativeWindowHandle native_handle{glfwGetNativeWindowHandle(p_glfw_window.get())};
+        void *const display_handle = glfwGetNativeWindowDisplay(p_glfw_window.get());
+        if (native_handle == nullptr) {
+            // Surface creation needs a native window handle; the owning
+            // unique_ptr destroys the GLFW window on this early return.
+            PPR_RETURN_ERROR_ON_FAIL(GlfwWindow, std::errc::not_supported);
+        }
 
         auto window = std::make_unique<Window>(
-            WindowHandle{p_glfw_window.release()}, native_handle, std::move(definition));
+            WindowHandle{p_glfw_window.release()}, native_handle, std::move(definition), display_handle);
         window->m_content_scale = content_scale;
         window->m_framebuffer_size = framebuffer_size;
         window->m_window_position = window_position;
@@ -758,7 +799,7 @@ namespace pP {
         window_write_ref->reset(window.get());
         m_windows.push_back(std::move(window));
 
-        if (const std::error_code err = m_when_window_created(*window)) [[unlikely]] {
+        if (const std::error_code err = m_when_window_created(**window_write_ref)) [[unlikely]] {
             std::ignore = destroyWindow(*window_write_ref);
             return err;
         }

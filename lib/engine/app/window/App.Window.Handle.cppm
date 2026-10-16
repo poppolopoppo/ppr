@@ -52,6 +52,9 @@ export namespace pP {
         WindowHandle m_handle{};
         /// native window handle from operating system
         NativeWindowHandle m_native{};
+        /// native display/connection handle (X11 Display* as void*) paired
+        /// with m_native for surface creation; null on Win32/Cocoa
+        void *m_display{};
 
         float2 m_content_scale{1.0};
         int2 m_framebuffer_size{};
@@ -77,7 +80,7 @@ export namespace pP {
 
         WindowDelegate<std::span<const char *>> m_when_drag_and_dropped{};
 
-        Window(WindowHandle handle, NativeWindowHandle native, WindowModel &&model) noexcept;
+        Window(WindowHandle handle, NativeWindowHandle native, WindowModel &&model, void *display = nullptr) noexcept;
 
         Window(const Window &) = delete;
 
