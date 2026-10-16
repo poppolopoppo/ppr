@@ -53,7 +53,7 @@ namespace pP::math::details {
         return std::round(value);
     }
 
-    template<std::floating_point T, u32 DimV>
+    template<std::floating_point T, int DimV>
     [[nodiscard]] constexpr mango::math::Vector<T, DimV> roundHalfAwayFromZero(
         const mango::math::Vector<T, DimV> &value) noexcept {
         return pP::static_iota<u32, DimV>([&](auto... idx) constexpr noexcept -> mango::math::Vector<T, DimV> {
@@ -63,7 +63,7 @@ namespace pP::math::details {
         });
     }
 
-    template<typename ToT, typename FromT, u32 DimV>
+    template<typename ToT, typename FromT, int DimV>
     [[nodiscard]] constexpr mango::math::Vector<ToT, DimV> vectorCast(
         const mango::math::Vector<FromT, DimV> &value) noexcept {
         return pP::static_iota<u32, DimV>([&](auto... idx) constexpr noexcept -> mango::math::Vector<ToT, DimV> {
@@ -74,27 +74,27 @@ namespace pP::math::details {
     }
 
     template<>
-    [[nodiscard]] constexpr mango::math::Vector<i32, 4u> vectorCast<i32, float, 4u>(
-        const mango::math::Vector<float, 4u> &value) noexcept {
-        return mango::math::truncate<mango::math::Vector<i32, 4u>>(value);
+    [[nodiscard]] constexpr mango::math::Vector<i32, 4> vectorCast<i32, float, 4>(
+        const mango::math::Vector<float, 4> &value) noexcept {
+        return mango::math::truncate<mango::math::Vector<i32, 4>>(value);
     }
 
     template<>
-    [[nodiscard]] constexpr mango::math::Vector<float, 4u> vectorCast<float, i32, 4u>(
-        const mango::math::Vector<i32, 4u> &value) noexcept {
-        return mango::math::convert<mango::math::Vector<float, 4u>>(value);
+    [[nodiscard]] constexpr mango::math::Vector<float, 4> vectorCast<float, i32, 4>(
+        const mango::math::Vector<i32, 4> &value) noexcept {
+        return mango::math::convert<mango::math::Vector<float, 4>>(value);
     }
 
     template<>
-    [[nodiscard]] constexpr mango::math::Vector<float, 4u> vectorCast<float, u32, 4u>(
-        const mango::math::Vector<u32, 4u> &value) noexcept {
-        return mango::math::convert<mango::math::Vector<float, 4u>>(value);
+    [[nodiscard]] constexpr mango::math::Vector<float, 4> vectorCast<float, u32, 4>(
+        const mango::math::Vector<u32, 4> &value) noexcept {
+        return mango::math::convert<mango::math::Vector<float, 4>>(value);
     }
 
     template<>
-    [[nodiscard]] constexpr mango::math::Vector<u32, 4u> vectorCast<u32, float, 4u>(
-        const mango::math::Vector<float, 4u> &value) noexcept {
-        return mango::math::convert<mango::math::Vector<u32, 4u>>(value);
+    [[nodiscard]] constexpr mango::math::Vector<u32, 4> vectorCast<u32, float, 4>(
+        const mango::math::Vector<float, 4> &value) noexcept {
+        return mango::math::convert<mango::math::Vector<u32, 4>>(value);
     }
 
     template<typename ToT, typename FromT>
@@ -349,7 +349,7 @@ export namespace pP {
             };
         }
 
-        template<details::TArithmetic T, std::size_t DimV>
+        template<details::TArithmetic T, int DimV>
         using Vector = mango::math::Vector<T, DimV>;
 
         template<details::TArithmetic T, std::size_t WidthV, std::size_t HeightV>
@@ -499,7 +499,7 @@ export namespace pP {
     }
 
     // checked_cast integration
-    template<std::integral ToT, std::integral FromT, u32 DimV>
+    template<std::integral ToT, std::integral FromT, int DimV>
     [[nodiscard]] constexpr Vector<ToT, DimV> checked_cast(const Vector<FromT, DimV> &value) noexcept {
         return pP::static_iota<u32, DimV>([&](auto... idx) constexpr noexcept -> Vector<ToT, DimV> {
             return Vector<ToT, DimV>(checked_cast<ToT>(value[idx])...);
@@ -511,7 +511,7 @@ export namespace pP {
         return math::details::scalarCast<i32>(ceil(value));
     }
 
-    template<std::floating_point T, u32 DimV>
+    template<std::floating_point T, int DimV>
     [[nodiscard]] constexpr Vector<i32, DimV> ceilToInt(const Vector<T, DimV> &value) noexcept {
         return math::details::vectorCast<i32, T, DimV>(ceil(value));
     }
@@ -521,7 +521,7 @@ export namespace pP {
         return math::details::scalarCast<i32>(floor(value));
     }
 
-    template<std::floating_point T, u32 DimV>
+    template<std::floating_point T, int DimV>
     [[nodiscard]] constexpr Vector<i32, DimV> floorToInt(const Vector<T, DimV> &value) noexcept {
         return math::details::vectorCast<i32, T, DimV>(floor(value));
     }
@@ -531,7 +531,7 @@ export namespace pP {
         return math::details::scalarCast<i32>(math::details::roundHalfAwayFromZero(value));
     }
 
-    template<std::floating_point T, u32 DimV>
+    template<std::floating_point T, int DimV>
     [[nodiscard]] constexpr Vector<i32, DimV> roundToInt(const Vector<T, DimV> &value) noexcept {
         return math::details::vectorCast<i32, T, DimV>(math::details::roundHalfAwayFromZero<T, DimV>(value));
     }
@@ -541,7 +541,7 @@ export namespace pP {
         return math::details::scalarCast<i32>(trunc(value));
     }
 
-    template<std::floating_point T, u32 DimV>
+    template<std::floating_point T, int DimV>
     [[nodiscard]] constexpr Vector<i32, DimV> truncToInt(const Vector<T, DimV> &value) noexcept {
         return math::details::vectorCast<i32, T, DimV>(trunc(value));
     }
@@ -551,7 +551,7 @@ export namespace pP {
         return math::details::scalarCast<u32>(ceil(value));
     }
 
-    template<std::floating_point T, u32 DimV>
+    template<std::floating_point T, int DimV>
     [[nodiscard]] constexpr Vector<u32, DimV> ceilToUInt(const Vector<T, DimV> &value) noexcept {
         return math::details::vectorCast<u32, T, DimV>(ceil(value));
     }
@@ -561,7 +561,7 @@ export namespace pP {
         return math::details::scalarCast<u32>(floor(value));
     }
 
-    template<std::floating_point T, u32 DimV>
+    template<std::floating_point T, int DimV>
     [[nodiscard]] constexpr Vector<u32, DimV> floorToUInt(const Vector<T, DimV> &value) noexcept {
         return math::details::vectorCast<u32, T, DimV>(floor(value));
     }
@@ -571,7 +571,7 @@ export namespace pP {
         return math::details::scalarCast<u32>(math::details::roundHalfAwayFromZero(value));
     }
 
-    template<std::floating_point T, u32 DimV>
+    template<std::floating_point T, int DimV>
     [[nodiscard]] constexpr Vector<u32, DimV> roundToUInt(const Vector<T, DimV> &value) noexcept {
         return math::details::vectorCast<u32, T, DimV>(math::details::roundHalfAwayFromZero<T, DimV>(value));
     }
@@ -581,7 +581,7 @@ export namespace pP {
         return math::details::scalarCast<u32>(trunc(value));
     }
 
-    template<std::floating_point T, u32 DimV>
+    template<std::floating_point T, int DimV>
     [[nodiscard]] constexpr Vector<u32, DimV> truncToUInt(const Vector<T, DimV> &value) noexcept {
         return math::details::vectorCast<u32, T, DimV>(trunc(value));
     }
@@ -591,12 +591,12 @@ export namespace pP {
         return math::details::scalarCast<float>(value);
     }
 
-    template<std::integral T, u32 DimV>
+    template<std::integral T, int DimV>
     [[nodiscard]] constexpr Vector<float, DimV> toFloat(const Vector<T, DimV> &value) noexcept {
         return math::details::vectorCast<float, T, DimV>(value);
     }
 
-    template<typename T, u32 DimV>
+    template<typename T, int DimV>
     [[nodiscard]] constexpr Vector<T, DimV> saturate(const Vector<T, DimV> &value) noexcept {
         return clamp(value, Vector<T, DimV>(0), Vector<T, DimV>(1));
     }
@@ -613,7 +613,7 @@ export namespace pP {
     }
 
     // check if any component isInf
-    template<std::floating_point T, std::size_t DimV>
+    template<std::floating_point T, int DimV>
     [[nodiscard]] constexpr bool isInf(const Vector<T, DimV> &value) noexcept {
         return pP::static_iota<std::size_t, DimV>(
             [&](auto... idx) constexpr noexcept -> bool { return (isInf(value[idx]) or ...); });
@@ -638,7 +638,7 @@ export namespace pP {
     }
 
     // check if any component isnan
-    template<std::floating_point T, std::size_t DimV>
+    template<std::floating_point T, int DimV>
     [[nodiscard]] constexpr bool isNan(const Vector<T, DimV> &value) noexcept {
         return pP::static_iota<std::size_t, DimV>(
             [&](auto... idx) constexpr noexcept -> bool { return (isNan(value[idx]) or ...); });
@@ -652,7 +652,7 @@ export namespace pP {
     }
 
     // Single source of truth is epsilon_v above (10x eps for floats, 0 for ints).
-    template<std::floating_point T, u32 DimV>
+    template<std::floating_point T, int DimV>
     [[nodiscard]] constexpr bool isNormalized(const Vector<T, DimV> &value, const T epsilon = epsilon_v<T>) noexcept {
         return std::abs(1 - dot2(value)) < epsilon;
     }
@@ -661,7 +661,7 @@ export namespace pP {
         return std::abs(1 - dot2(value)) < epsilon;
     }
 
-    template<std::floating_point T, u32 DimV>
+    template<std::floating_point T, int DimV>
     [[nodiscard]] constexpr Vector<T, DimV> safeNormalize(
         const Vector<T, DimV> &value, const Vector<T, DimV> &fallback, const T epsilon = epsilon_v<T>) noexcept {
         const T norm_sq = dot(value, value);
@@ -956,17 +956,17 @@ export namespace pP {
 
 export namespace mango::math {
     // hashing infrastructure integration
-    template<typename T, u32 DimV>
+    template<typename T, int DimV>
     [[nodiscard]] constexpr pP::hash_t hashValue(const Vector<T, DimV> &value) noexcept {
-        return pP::hash::contiguousRange(std::span<const T, DimV>(value.data(), DimV));
+        return pP::hash::contiguousRange(std::span<const T, DimV>(value.data(), pP::safe_narrowing{DimV}));
     }
 
     // opaque infrastructure integration
-    template<typename T, u32 DimV>
+    template<typename T, int DimV>
     [[nodiscard]] constexpr pP::opaque::Value opaqueValue(const Vector<T, DimV> &value) noexcept {
         // Capture the span by value: it references value.data() (alive for the whole
         // log expression), but the span object itself must outlive the TransformView
         // construction inside the lambda, otherwise the returned TransformView dangles.
-        return pP::opaqueValue(std::span<const T, DimV>(value.data(), DimV));
+        return pP::opaqueValue(std::span<const T, DimV>(value.data(), pP::safe_narrowing{DimV}));
     }
 }
