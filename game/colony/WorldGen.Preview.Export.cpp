@@ -46,8 +46,13 @@ namespace pP::colony {
             return result + ']';
         }
 
-        std::error_code writePreviewText(const std::filesystem::path &path, const std::string_view bytes) {
-            std::ofstream file{path, std::ios::binary | std::ios::noreplace};
+        constexpr std::ios::openmode kPreviewCreate = std::ios::binary | std::ios::noreplace;
+        constexpr std::ios::openmode kPreviewOverwrite = std::ios::binary | std::ios::trunc;
+
+        std::error_code writePreviewText(
+            const std::filesystem::path &path, const std::string_view bytes,
+            const std::ios::openmode mode = kPreviewCreate) {
+            std::ofstream file{path, mode};
             PPR_RETURN_ERROR_ON_FAIL(
                 PreviewExport, file ? std::error_code{} : std::make_error_code(std::errc::io_error));
             file.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
@@ -237,8 +242,10 @@ namespace pP::colony {
                 }
             }
 
-            PPR_RETURN_ERROR_ON_FAIL(PreviewExport, writePreviewText(directory / "biome.ppm", biomes));
-            PPR_RETURN_ERROR_ON_FAIL(PreviewExport, writePreviewText(directory / "initial-matter.ppm", fills));
+            PPR_RETURN_ERROR_ON_FAIL(
+                PreviewExport, writePreviewText(directory / "biome.ppm", biomes, kPreviewOverwrite));
+            PPR_RETURN_ERROR_ON_FAIL(
+                PreviewExport, writePreviewText(directory / "initial-matter.ppm", fills, kPreviewOverwrite));
             return {};
         }
 
