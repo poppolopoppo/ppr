@@ -55,6 +55,11 @@ the visible desktop: keep the target unobscured and avoid simultaneous user inpu
 - `key --pid PID KEYS` uses [pywinauto key syntax](https://pywinauto.readthedocs.io/en/latest/code/pywinauto.keyboard.html), e.g. `{SPACE}`, `n`, `{F1}`. Do not send unmatched key-down sequences.
 
 These input commands accept `--capture PATH` for an observation after the action.
+Input is held for at least one frame: `click` and `drag` keep the button down for
+`--hold` (default 0.12 s), and `--settle` (default 0.5 s) delays a post-action
+capture so a slow frame has rendered before the screenshot is taken. The JSON
+result reports the resolved `screen` coordinates and the window `client_size`, so
+a click that lands elsewhere is visible instead of silent.
 Use Space to pause/resume, N to step while paused, and F1 for the game's current
 shortcut list. Prefer observed UI labels over maintaining a duplicate key map.
 Close posts the normal window-close request and waits for process exit; it does
