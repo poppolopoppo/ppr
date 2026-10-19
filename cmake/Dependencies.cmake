@@ -10,6 +10,12 @@ include(external/Mango)
 include(external/rapidhash)
 include(external/SlangRHI)
 include(external/STB)
+if(PPR_IMGUI_FREETYPE)
+    # M4 evaluation: opt-in FreeType backend for the ImGui FreeType wrapper
+    # wired inside cmake/external/DearImGui.cmake. Off by default; see
+    # cmake/external/FreeType.cmake for the pin and license record.
+    include(external/FreeType)
+endif()
 include(external/DearImGui)
 include(external/tomlplusplus)
 include(external/FastNoiseLite)

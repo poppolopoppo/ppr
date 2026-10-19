@@ -104,6 +104,16 @@
       }
     },
     {
+      "name": "msvc-dev-freetype",
+      "displayName": "MSVC Developer (ImGui FreeType evaluation)",
+      "description": "M4 evaluation preset: msvc-dev plus the opt-in imgui-freetype manifest feature and the PPR_IMGUI_FREETYPE wrapper. Reserved for the stb-vs-FreeType comparison; never a shipped default.",
+      "inherits": "msvc-dev",
+      "cacheVariables": {
+        "PPR_IMGUI_FREETYPE": "ON",
+        "VCPKG_MANIFEST_FEATURES": "imgui-freetype"
+      }
+    },
+    {
       "name": "msvc-rel",
       "displayName": "MSVC Release",
       "description": "Target Windows with the msvc compiler, release build type",

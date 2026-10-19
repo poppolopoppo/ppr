@@ -16,6 +16,14 @@
     "vulkan-headers",
     { "name": "winpixevent", "platform": "windows" }
   ],
+  "features": {
+    "imgui-freetype": {
+      "description": "M4 evaluation: vendored ImGui FreeType font rasterizer. Opt-in build-time alternative to stb_truetype; no default preset selects this feature, so the shipped configuration stays unchanged.",
+      "dependencies": [
+        "freetype"
+      ]
+    }
+  },
   "overrides": [
     {
       "name": "box2d",

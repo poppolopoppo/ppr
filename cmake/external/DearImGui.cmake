@@ -16,6 +16,23 @@ if(imgui_ADDED)
         "${imgui_SOURCE_DIR}/imgui_widgets.cpp"
     )
 
+    # M4 evaluation (opt-in, PPR_IMGUI_FREETYPE=ON): swap the atlas loader from
+    # `imgui_draw.cpp`'s bundled stb_truetype to the vendored FreeType wrapper
+    # shipped in the pinned tree. The wrapper TU is the same revision as the
+    # rest of imgui.base (GIT_TAG above), so no separate pin can drift.
+    #
+    # PUBLIC (not PRIVATE) IMGUI_ENABLE_FREETYPE: imgui_internal.h:127-131
+    # compiles the stb loader OUT only when this macro is defined, and the
+    # generated `imgui` module bindings are compiled inside this directory and
+    # re-export the same headers from the same build — the definition must
+    # reach every consumer (module BMIs and `engine.app`) so the loaded loader
+    # and the `imgui.h` view stay consistent.
+    if(PPR_IMGUI_FREETYPE)
+        target_sources(imgui.base PRIVATE "${imgui_SOURCE_DIR}/misc/freetype/imgui_freetype.cpp")
+        target_compile_definitions(imgui.base PUBLIC IMGUI_ENABLE_FREETYPE)
+        target_link_libraries(imgui.base PRIVATE Freetype::Freetype)
+    endif()
+
     target_include_directories(imgui.base SYSTEM PUBLIC "${imgui_SOURCE_DIR}")
     set_target_properties(imgui.base PROPERTIES CXX_MODULE_STD OFF)
 endif()
