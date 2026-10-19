@@ -40,11 +40,11 @@ export namespace pP::config {
         std::string_view m_canonical{};
         std::string_view m_description{};
         Array<std::string_view> m_aliases{};
+        std::string_view m_absent_value{"true"};
+        Array<std::string_view> m_negations{};
         bool m_is_switch{false};
         bool m_value_optional{false};
-        std::string_view m_absent_value{"true"};
         bool m_repeatable{false};
-        Array<std::string_view> m_negations{};
         // Keep explicitly empty text ("--name=", "--name \"\"") instead of
         // recording a reset. For string properties whose domain allows
         // empty; the absent-value path (bare "--name" on value-optional
