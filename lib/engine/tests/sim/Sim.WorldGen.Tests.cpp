@@ -27,7 +27,7 @@ namespace pP::tests::detail {
             biome.m_bands.push_back(std::move(band));
             recipe.m_biomes.push_back(std::move(biome));
             GenerationFeature feature{.m_key = 301u, .m_bounds = {0, 0, 30, 30}};
-            feature.m_operations.push_back({.m_key = 302u, .m_carve = true, .m_width = 30u, .m_height = 30u});
+            feature.m_operations.push_back({.m_key = 302u, .m_width = 30u, .m_height = 30u, .m_carve = true});
             feature.m_markers.push_back({303u, EGenerationMarker::start, 15, 10});
             recipe.m_features.push_back(std::move(feature));
             recipe.m_constraints.push_back({401u, 0u, 1u, 1.0, 0.0, 1.0, 0.0, 2048.0});
@@ -1748,7 +1748,7 @@ material='rock'
             source.m_materials.m_entries.push_back(
                 {"ash", {EGenerationMatter::solid, EMaterialRepresentation::terrain, false, 1000.0}});
             source.m_fields.m_entries.push_back(
-                {"alpha", {.m_algorithm = ENoiseAlgorithm::perlin, .m_frequency_per_metre = 0.01}});
+                {"alpha", {.m_frequency_per_metre = 0.01, .m_algorithm = ENoiseAlgorithm::perlin}});
             auto &biome = source.m_biomes.m_entries.front().m_value;
             biome.m_lining = Lining{{"ash"}, 2u};
             biome.m_relaxation = {3u, 0.25};
@@ -2466,12 +2466,12 @@ thickness_fine = 1
                     .m_phase = EGenerationPhase::carve,
                     .m_parameters = GenerationWorm{
                         .m_count = 1u,
-                        .m_carve = true,
                         .m_depth_max = 1.0,
                         .m_length_min_m = 0.1,
                         .m_length_max_m = 0.1,
                         .m_radius_min_m = 0.1,
-                        .m_radius_max_m = 0.1}});
+                        .m_radius_max_m = 0.1,
+                        .m_carve = true}});
             recipe.m_materials[0u].m_reference_density_kg_m3 = 1.0e100;
             recipe.m_biomes[0u].m_temperature_base_k = 1.0e30;
             PPR_TEST_ASSERT(not validateGenerationRecipe(recipe));
@@ -2481,13 +2481,13 @@ thickness_fine = 1
             auto recipe = numericRecipe();
             recipe.m_features[0u].m_operations[0u] = {
                 .m_key = 302u,
-                .m_shape = EGenerationShape::capsule,
-                .m_carve = true,
+                .m_radius_m = 7.0 / 3.0,
                 .m_x = 7,
                 .m_y = 7,
                 .m_end_x = 20,
                 .m_end_y = 20,
-                .m_radius_m = 7.0 / 3.0};
+                .m_shape = EGenerationShape::capsule,
+                .m_carve = true};
             PPR_TEST_ASSERT(not validateGenerationRecipe(recipe));
 
             recipe.m_features[0u].m_bounds = {0, 0, 2000, 2000};
@@ -2564,12 +2564,12 @@ thickness_fine = 1
                     GenerationWorm{
                         .m_biome = 0u,
                         .m_count = 1u,
-                        .m_carve = true,
                         .m_depth_max = 1.0,
                         .m_length_min_m = 1.0,
                         .m_length_max_m = 1.0,
                         .m_radius_min_m = 0.2,
-                        .m_radius_max_m = 0.2}});
+                        .m_radius_max_m = 0.2,
+                        .m_carve = true}});
             const auto plan = compileGenerationPlan(recipe, 42u);
             PPR_TEST_ASSERT(plan.has_value());
             const auto layout = compileBiomeSampleLayout(*plan, 1u);
@@ -2793,13 +2793,13 @@ thickness_fine = 1
                     .m_phase = EGenerationPhase::carve,
                     .m_parameters = GenerationWorm{
                         .m_count = 2u,
-                        .m_carve = true,
                         .m_depth_max = 1.0,
                         .m_length_min_m = 3.25,
                         .m_length_max_m = 3.25,
                         .m_radius_min_m = 0.5,
                         .m_radius_max_m = 0.5,
-                        .m_turn_probability = 0.5}});
+                        .m_turn_probability = 0.5,
+                        .m_carve = true}});
             recipe.m_rules.push_back(
                 {.m_key = 602u,
                     .m_order = 1u,
@@ -2884,12 +2884,12 @@ thickness_fine = 1
                     .m_phase = EGenerationPhase::carve,
                     .m_parameters = GenerationWorm{
                         .m_count = 1024u,
-                        .m_carve = true,
                         .m_depth_max = 1.0,
                         .m_length_min_m = 4096.0,
                         .m_length_max_m = 4096.0,
                         .m_radius_min_m = 0.5,
-                        .m_radius_max_m = 0.5}}};
+                        .m_radius_max_m = 0.5,
+                        .m_carve = true}}};
             result = run();
             PPR_TEST_ASSERT(not result and result.error() == make_error_code(EGenerationErrc::segment_limit));
             std::get<GenerationWorm>(recipe.m_rules.front().m_parameters).m_count = 1025u;
@@ -2919,13 +2919,13 @@ thickness_fine = 1
                     .m_phase = EGenerationPhase::carve,
                     .m_parameters = GenerationWorm{
                         .m_count = 1u,
-                        .m_carve = true,
                         .m_depth_max = 1.0,
                         .m_length_min_m = 80.25,
                         .m_length_max_m = 80.25,
                         .m_radius_min_m = 1.0,
                         .m_radius_max_m = 3.0,
                         .m_turn_probability = 0.5,
+                        .m_carve = true,
                         .m_turn_smoothing = 0.85,
                         .m_radius_variation = 1.0,
                         .m_chamber_probability = 0.1,
@@ -3510,7 +3510,7 @@ thickness_fine = 1
             recipe.m_features[0u].m_operations[0u].m_carve = false;
             recipe.m_features[0u].m_operations[0u].m_material = 17u;
             recipe.m_features[0u].m_operations.push_back(
-                {.m_key = 999u, .m_order = 1u, .m_carve = true, .m_x = 4, .m_y = 4, .m_width = 22u, .m_height = 22u});
+                {.m_key = 999u, .m_x = 4, .m_y = 4, .m_width = 22u, .m_height = 22u, .m_order = 1u, .m_carve = true});
             recipe.m_rules.push_back(
                 {.m_key = 601u,
                     .m_phase = EGenerationPhase::carve,
@@ -3613,13 +3613,13 @@ thickness_fine = 1
             auto &pocket = recipe.m_features[1u];
             pocket.m_operations = {
                 {.m_key = 703u,
-                    .m_shape = EGenerationShape::ellipse,
                     .m_x = 1,
                     .m_y = 1,
                     .m_width = 7u,
                     .m_height = 7u,
+                    .m_shape = EGenerationShape::ellipse,
                     .m_material = 17u},
-                {.m_key = 704u, .m_order = 1u, .m_carve = true, .m_x = 1, .m_y = 1, .m_width = 7u, .m_height = 7u}};
+                {.m_key = 704u, .m_x = 1, .m_y = 1, .m_width = 7u, .m_height = 7u, .m_order = 1u, .m_carve = true}};
             const auto plan = compileGenerationPlan(recipe, 42u);
             PPR_TEST_ASSERT(plan.has_value());
             const auto layout = compileBiomeLayout(*plan);
@@ -4008,10 +4008,10 @@ thickness_fine = 1
                 for (const auto fractal:
                     {ENoiseFractal::none, ENoiseFractal::fbm, ENoiseFractal::ridged, ENoiseFractal::billow}) {
                     const NoiseFieldDesc desc{
-                        .m_algorithm = algorithm,
-                        .m_fractal = fractal,
                         .m_frequency_per_metre = 0.025,
-                        .m_warp_amplitude_m = 12.0};
+                        .m_warp_amplitude_m = 12.0,
+                        .m_algorithm = algorithm,
+                        .m_fractal = fractal};
                     auto field = compileNoiseField(desc, 0x8000000012345678ull);
                     auto replay = compileNoiseField(desc, 0x8000000012345678ull);
                     auto other = compileNoiseField(desc, 0x12345678ull);
@@ -4049,12 +4049,12 @@ thickness_fine = 1
                 {ENoiseAlgorithm::open_simplex2, ENoiseAlgorithm::perlin, ENoiseAlgorithm::cellular_distance,
                     ENoiseAlgorithm::cellular_value}) {
                 const NoiseFieldDesc desc{
-                    .m_algorithm = algorithm,
-                    .m_fractal = ENoiseFractal::fbm,
                     .m_frequency_per_metre = 0.125,
-                    .m_octaves = 16u,
                     .m_lacunarity = 1.25,
-                    .m_warp_amplitude_m = kNoiseCoordinateLimitMetres};
+                    .m_warp_amplitude_m = kNoiseCoordinateLimitMetres,
+                    .m_octaves = 16u,
+                    .m_algorithm = algorithm,
+                    .m_fractal = ENoiseFractal::fbm};
                 for (const u64 seed: {0ull, 0x7fffffffull, 0x80000000ull, 0xffffffffffffffffull}) {
                     auto field = compileNoiseField(desc, seed);
                     PPR_TEST_ASSERT(field.has_value());

@@ -124,20 +124,20 @@ export namespace pP::colony {
     /// the draft but never cancels an armed trial: expiry reverts to the
     /// known-good values, which is the safe direction.
     struct ColonyDisplaySession final {
-        bool m_synced{false};
-        game::DisplayDraft m_draft{};
         game::DisplayConfirm m_confirm{};
-        bool m_watch_ack{false};
-        u64 m_watch_revision{0u};
-        bool m_watch_vsync_affecting{false};
-        bool m_watch_window_change{false};
-        bool m_watch_revert{false};
-        DisplaySettings m_watch_prior{};
         /// Pre-submit native geometry carried to the trial arm, so the
         /// revert restores observed state instead of re-requesting zeros.
         std::optional<WindowDisplayGeometry> m_watch_geometry{std::nullopt};
-        bool m_revert_failed{false};
+        game::DisplayDraft m_draft{};
+        DisplaySettings m_watch_prior{};
         std::string m_last_error{};
+        u64 m_watch_revision{0u};
+        bool m_synced{false};
+        bool m_watch_ack{false};
+        bool m_watch_vsync_affecting{false};
+        bool m_watch_window_change{false};
+        bool m_watch_revert{false};
+        bool m_revert_failed{false};
     };
 
     /// Mutable UI session state owned by the caller. The panel reads all of

@@ -28,7 +28,7 @@ namespace pP::colony {
         }
 
         void emit(Array<WorkshopIntent> &intents, const EWorkshopIntent kind) {
-            intents.push_back({kind});
+            intents.push_back({.m_kind = kind});
         }
 
         WorldgenPanelState::DescriptorDocument *findDocument(WorldgenPanelState &state, const std::string_view name) {
@@ -554,7 +554,7 @@ namespace pP::colony {
             }
 
             const auto commit = [&](const std::string &property, const config::FileValue &value) {
-                WorkshopIntent intent{EWorkshopIntent::edit_definition};
+                WorkshopIntent intent{.m_kind = EWorkshopIntent::edit_definition};
                 intent.m_document = record->m_category;
                 intent.m_key = record->m_name;
                 intent.m_property = property;
@@ -1108,7 +1108,8 @@ namespace pP::colony {
             }
 
             if (changed) {
-                WorkshopIntent intent{cleared ? EWorkshopIntent::clear_property : EWorkshopIntent::edit_definition};
+                WorkshopIntent intent{
+                    .m_kind = cleared ? EWorkshopIntent::clear_property : EWorkshopIntent::edit_definition};
                 intent.m_document = static_cast<EContentDocument>(category);
                 intent.m_key = definition_key;
                 intent.m_property = property;
@@ -1482,7 +1483,7 @@ namespace pP::colony {
 
             ImGui::BeginDisabled(reason[0u] != '\0');
             if (ImGui::Button("Create from selected")) {
-                WorkshopIntent intent{EWorkshopIntent::clone_definition};
+                WorkshopIntent intent{.m_kind = EWorkshopIntent::clone_definition};
                 intent.m_document = static_cast<EContentDocument>(category);
                 intent.m_source_key = state.m_selected_key;
                 intent.m_key = qualified_key;
@@ -1494,7 +1495,7 @@ namespace pP::colony {
             ImGui::SameLine();
             ImGui::BeginDisabled(view.m_closing);
             if (ImGui::Button("Delete selected")) {
-                WorkshopIntent intent{EWorkshopIntent::delete_definition};
+                WorkshopIntent intent{.m_kind = EWorkshopIntent::delete_definition};
                 intent.m_document = static_cast<EContentDocument>(category);
                 intent.m_key = state.m_selected_key;
                 intents.push_back(std::move(intent));

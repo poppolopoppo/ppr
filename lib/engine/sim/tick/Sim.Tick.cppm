@@ -22,11 +22,11 @@ export namespace pP::sim {
     };
 
     struct TickReport {
-        /// Whole slices consumed by this advance, never above the slice budget.
-        u32 m_slices{};
-
         /// Unsliced time still held after this advance; grows under `defer`.
         TimeSpan m_backlog{};
+
+        /// Whole slices consumed by this advance, never above the slice budget.
+        u32 m_slices{};
 
         /// True when the advance produced more whole slices than the budget.
         bool m_overran{};

@@ -2598,10 +2598,10 @@ namespace pP::colony {
                 const i32 left = static_cast<i32>(chunk.m_x * sim::kChunkEdge);
                 const i32 bottom = static_cast<i32>(chunk.m_y * sim::kChunkEdge);
                 const GridTileSubmission sample{
-                    .m_chunk_id = sim::chunkIndexOf(chunk),
                     .m_tile_range =
                         {left, bottom, left + static_cast<i32>(sim::kChunkEdge),
                             bottom + static_cast<i32>(sim::kChunkEdge)},
+                    .m_chunk_id = sim::chunkIndexOf(chunk),
                 };
                 const auto plan = GridPass::planTiles(m_camera_view, std::span<const GridTileSubmission>{&sample, 1u});
                 if (not plan) [[unlikely]] {

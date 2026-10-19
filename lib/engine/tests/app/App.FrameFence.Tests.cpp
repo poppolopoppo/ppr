@@ -729,7 +729,7 @@ namespace pP::tests::detail {
             // Load: submitted frames left GPU-pending (no retire call),
             // with grid work staged so pass-owned rings are referenced.
             const GridTileSubmission staged[] = {
-                {.m_chunk_id = 0u, .m_tile_range = {0, 0, 128, 128}, .m_dirty_mask = 1u, .m_material_id = 3u},
+                {.m_dirty_mask = 1u, .m_tile_range = {0, 0, 128, 128}, .m_chunk_id = 0u, .m_material_id = 3u},
             };
             PPR_TEST_ASSERT(not grid.submitTiles(staged));
             const DrawSubmission grid_draws = submissionForTarget(grid, 64u);
@@ -778,7 +778,7 @@ namespace pP::tests::detail {
             // First use builds the ring at 1-tile capacity (flat tile: no
             // atlas wait, no cells).
             const GridTileSubmission staged[] = {
-                {.m_chunk_id = 0u, .m_tile_range = {0, 0, 128, 128}, .m_dirty_mask = 1u, .m_material_id = 3u},
+                {.m_dirty_mask = 1u, .m_tile_range = {0, 0, 128, 128}, .m_chunk_id = 0u, .m_material_id = 3u},
             };
             PPR_TEST_ASSERT(not grid.submitTiles(staged));
             const GridTilePayload payload{.m_rect = {0.0f, 0.0f, 128.0f, 128.0f}, .m_material = 3u};
@@ -800,9 +800,9 @@ namespace pP::tests::detail {
             // completion already passes it — either way the rule holds and
             // the frame encodes through the per-slot roots).
             const GridTileSubmission grown[] = {
-                {.m_chunk_id = 0u, .m_tile_range = {0, 0, 128, 128}, .m_dirty_mask = 1u, .m_material_id = 3u},
-                {.m_chunk_id = 1u, .m_tile_range = {128, 0, 256, 128}, .m_dirty_mask = 1u, .m_material_id = 4u},
-                {.m_chunk_id = 2u, .m_tile_range = {0, 128, 128, 256}, .m_dirty_mask = 1u, .m_material_id = 5u},
+                {.m_dirty_mask = 1u, .m_tile_range = {0, 0, 128, 128}, .m_chunk_id = 0u, .m_material_id = 3u},
+                {.m_dirty_mask = 1u, .m_tile_range = {128, 0, 256, 128}, .m_chunk_id = 1u, .m_material_id = 4u},
+                {.m_dirty_mask = 1u, .m_tile_range = {0, 128, 128, 256}, .m_chunk_id = 2u, .m_material_id = 5u},
             };
             PPR_TEST_ASSERT(not grid.submitTiles(grown));
             const DrawSubmission grown_draws = submissionForTarget(grid, 64u);
@@ -816,7 +816,7 @@ namespace pP::tests::detail {
             Array<u16> cell_materials{};
             cell_materials.resize(GridPass::kCellsPerChunk, 1u);
             const GridTileSubmission cell_staged[] = {
-                {.m_chunk_id = 5u, .m_tile_range = {640, 0, 768, 128}, .m_dirty_mask = 1u, .m_material_id = 7u},
+                {.m_dirty_mask = 1u, .m_tile_range = {640, 0, 768, 128}, .m_chunk_id = 5u, .m_material_id = 7u},
             };
             PPR_TEST_ASSERT(not grid.submitTiles(cell_staged));
             const Expected<u32> cell_uploaded = grid.requestUpload(
@@ -933,7 +933,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not triangles.update(kDt, orthoSnapshot800x600()));
 
             const GridTileSubmission staged[] = {
-                {.m_chunk_id = 0u, .m_tile_range = {0, 0, 128, 128}, .m_dirty_mask = 1u, .m_material_id = 3u},
+                {.m_dirty_mask = 1u, .m_tile_range = {0, 0, 128, 128}, .m_chunk_id = 0u, .m_material_id = 3u},
             };
             PPR_TEST_ASSERT(not grid.submitTiles(staged));
 
@@ -1181,10 +1181,10 @@ namespace pP::tests::detail {
             // slot (edge 128: 5 % 32 = 5, 5 / 32 = 0), which requestUpload
             // requires for cell data.
             const GridTileSubmission grown[] = {
-                {.m_chunk_id = 0u, .m_tile_range = {0, 0, 128, 128}, .m_dirty_mask = 1u, .m_material_id = 3u},
-                {.m_chunk_id = 1u, .m_tile_range = {128, 0, 256, 128}, .m_dirty_mask = 1u, .m_material_id = 4u},
-                {.m_chunk_id = 2u, .m_tile_range = {0, 128, 128, 256}, .m_dirty_mask = 1u, .m_material_id = 5u},
-                {.m_chunk_id = 5u, .m_tile_range = {640, 0, 768, 128}, .m_dirty_mask = 1u, .m_material_id = 7u},
+                {.m_dirty_mask = 1u, .m_tile_range = {0, 0, 128, 128}, .m_chunk_id = 0u, .m_material_id = 3u},
+                {.m_dirty_mask = 1u, .m_tile_range = {128, 0, 256, 128}, .m_chunk_id = 1u, .m_material_id = 4u},
+                {.m_dirty_mask = 1u, .m_tile_range = {0, 128, 128, 256}, .m_chunk_id = 2u, .m_material_id = 5u},
+                {.m_dirty_mask = 1u, .m_tile_range = {640, 0, 768, 128}, .m_chunk_id = 5u, .m_material_id = 7u},
             };
             PPR_TEST_ASSERT(not grid.submitTiles(grown));
             const GridTilePayload cell_payload{.m_rect = {0.0f, 0.0f, 128.0f, 128.0f}, .m_material = 7u};
@@ -1564,7 +1564,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not editor.m_grid.update(kDt, orthoSnapshot800x600()));
             PPR_TEST_ASSERT(not editor.m_triangles.update(kDt, orthoSnapshot800x600()));
             const GridTileSubmission staged[] = {
-                {.m_chunk_id = 0u, .m_tile_range = {0, 0, 128, 128}, .m_dirty_mask = 1u, .m_material_id = 3u},
+                {.m_dirty_mask = 1u, .m_tile_range = {0, 0, 128, 128}, .m_chunk_id = 0u, .m_material_id = 3u},
             };
             PPR_TEST_ASSERT(not editor.m_grid.submitTiles(staged));
 

@@ -364,10 +364,10 @@ namespace pP::colony {
             BiomeDefinition biome{
                 .m_key = binding.m_key,
                 .m_display_name = visual.m_display_name,
-                .m_preview_color_rgba = *tint,
+                .m_temperature_field = fieldKey(numeric.m_temperature_field),
                 .m_temperature_base_k = numeric.m_temperature_base_k,
                 .m_temperature_variation_k = numeric.m_temperature_variation_k,
-                .m_temperature_field = fieldKey(numeric.m_temperature_field)};
+                .m_preview_color_rgba = *tint};
             biome.m_lining_material_id = numeric.m_lining_material;
             biome.m_lining_thickness_fine = numeric.m_lining_thickness_fine;
             biome.m_relaxation_passes = numeric.m_relaxation_passes;
@@ -412,12 +412,12 @@ namespace pP::colony {
                     return item.m_value.m_order == deposit.m_order;
                 });
                 biome.m_deposits.push_back(
-                    {entry->m_key, deposit.m_order, fieldKey(deposit.m_field), deposit.m_material, deposit.m_host,
-                        deposit.m_depth_min, deposit.m_depth_max, deposit.m_threshold_min, deposit.m_threshold_max,
-                        deposit.m_shape, deposit.m_stage, deposit.m_blob_count, deposit.m_radius_min_m,
+                    {entry->m_key, fieldKey(deposit.m_field), deposit.m_depth_min, deposit.m_depth_max,
+                        deposit.m_threshold_min, deposit.m_threshold_max, deposit.m_radius_min_m,
                         deposit.m_radius_max_m, deposit.m_stretch_min, deposit.m_stretch_max, deposit.m_distortion,
                         deposit.m_core_coverage, deposit.m_fringe_coverage, deposit.m_sprinkle_probability,
-                        deposit.m_orientation_min_degrees, deposit.m_orientation_max_degrees});
+                        deposit.m_orientation_min_degrees, deposit.m_orientation_max_degrees, deposit.m_order,
+                        deposit.m_blob_count, deposit.m_material, deposit.m_host, deposit.m_shape, deposit.m_stage});
             }
             catalog.m_biomes.push_back(std::move(biome));
         }

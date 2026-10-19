@@ -35,11 +35,11 @@ export namespace pP::colony {
         clear_property
     };
     struct WorkshopIntent {
-        EWorkshopIntent m_kind{};
-        std::string m_biome{}, m_property{};
         config::FileValue m_value{};
-        EContentDocument m_document{EContentDocument::biomes};
+        std::string m_biome{}, m_property{};
         std::string m_key{}, m_source_key{};
+        EWorkshopIntent m_kind{};
+        EContentDocument m_document{EContentDocument::biomes};
     };
 
     // ------------------------------------------------------------------

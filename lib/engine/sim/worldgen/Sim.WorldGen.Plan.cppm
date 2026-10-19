@@ -89,32 +89,32 @@ export namespace pP::sim {
 
     struct GenerationBiome {
         u64 m_key{};
-        u32 m_temperature_field{};
         double m_temperature_base_k{}, m_temperature_variation_k{};
         Array<GenerationBand> m_bands{};
         Array<GenerationDeposit> m_deposits{};
-        u16 m_lining_material{};
-        u32 m_lining_thickness_fine{};
-        u32 m_relaxation_passes{};
         double m_relaxation_adoption{0.5};
         double m_sprinkle_probability{};
-        u32 m_pore_field{};
         double m_pore_probability{};
         double m_pore_radius_min_m{2.0};
         double m_pore_radius_max_m{3.0};
         double m_pore_affinity_min{};
-        u32 m_pore_passes{};
-        u32 m_finish_passes{};
         double m_finish_adoption{0.15};
-        u16 m_soil_material{};
-        u16 m_weathered_material{};
         double m_soil_depth_m{};
         double m_weathered_depth_m{};
-        u16 m_formation_material{};
-        u16 m_rind_material{};
         double m_formation_probability{};
         double m_formation_length_m{3.0};
+        u32 m_temperature_field{};
+        u32 m_lining_thickness_fine{};
+        u32 m_relaxation_passes{};
+        u32 m_pore_field{};
+        u32 m_pore_passes{};
+        u32 m_finish_passes{};
         u32 m_erosion_passes{};
+        u16 m_lining_material{};
+        u16 m_soil_material{};
+        u16 m_weathered_material{};
+        u16 m_formation_material{};
+        u16 m_rind_material{};
     };
 
     enum class EGenerationShape : u8 {
@@ -137,12 +137,12 @@ export namespace pP::sim {
 
     struct GenerationOperation {
         u64 m_key{};
+        double m_radius_m{};
+        i32 m_x{}, m_y{}, m_end_x{}, m_end_y{};
+        u32 m_width{}, m_height{};
         u32 m_order{};
         EGenerationShape m_shape{};
         bool m_carve{};
-        i32 m_x{}, m_y{}, m_end_x{}, m_end_y{};
-        u32 m_width{}, m_height{};
-        double m_radius_m{};
         u16 m_material{};
     };
 
@@ -181,10 +181,10 @@ export namespace pP::sim {
 
     struct GenerationWorm {
         u32 m_biome{}, m_count{};
-        bool m_carve{};
         double m_depth_min{}, m_depth_max{}, m_length_min_m{}, m_length_max_m{}, m_radius_min_m{}, m_radius_max_m{},
             m_turn_probability{};
         u16 m_material{}, m_host{};
+        bool m_carve{};
         double m_turn_smoothing{}, m_radius_variation{}, m_chamber_probability{}, m_chamber_scale{1.0};
     };
 

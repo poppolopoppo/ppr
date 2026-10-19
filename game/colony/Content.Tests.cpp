@@ -316,7 +316,7 @@ weight = 1.0
         recipe.m_site_spacing_m = 100.0;
         recipe.m_constraints.push_back({401u, 0u, 1u, 1.0, 0.0, 1.0, 0.0, 2048.0});
         sim::GenerationFeature start{.m_key = 301u, .m_bounds = {0, 0, 30, 30}};
-        start.m_operations.push_back({.m_key = 302u, .m_carve = true, .m_width = 30u, .m_height = 30u});
+        start.m_operations.push_back({.m_key = 302u, .m_width = 30u, .m_height = 30u, .m_carve = true});
         start.m_markers.push_back({303u, sim::EGenerationMarker::start, 15, 10});
         recipe.m_features.push_back(std::move(start));
         recipe.m_start_x_fine = 2000u;

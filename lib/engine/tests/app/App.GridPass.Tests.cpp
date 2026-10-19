@@ -87,8 +87,8 @@ namespace pP::tests::detail {
         PPR_UNIT_TEST (grid_plan_converts_fine_bounds_to_metres) {
             const CameraSnapshot snapshot = orthoSnapshot800x600();
             const GridTileSubmission tiles[] = {
-                {.m_chunk_id = 0u, .m_tile_range = {2304, 0, 2432, 128}},
-                {.m_chunk_id = 1u, .m_tile_range = {2432, 0, 2560, 128}},
+                {.m_tile_range = {2304, 0, 2432, 128}, .m_chunk_id = 0u},
+                {.m_tile_range = {2432, 0, 2560, 128}, .m_chunk_id = 1u},
             };
             const auto legacy = GridPass::planTiles(snapshot, tiles);
             PPR_TEST_ASSERT(legacy and legacy->m_tiles.empty());
@@ -111,10 +111,10 @@ namespace pP::tests::detail {
             const CameraSnapshot snapshot = orthoSnapshot800x600();
 
             const GridTileSubmission submissions[] = {
-                {.m_chunk_id = 0u, .m_tile_range = {0, 0, 128, 128}, .m_dirty_mask = 1u, .m_material_id = 3u},
-                {.m_chunk_id = 1u, .m_tile_range = {2000, 2000, 2128, 2128}, .m_dirty_mask = 1u, .m_material_id = 4u},
-                {.m_chunk_id = 2u, .m_tile_range = {800, 0, 928, 128}, .m_dirty_mask = 0u, .m_material_id = 5u},
-                {.m_chunk_id = 3u, .m_tile_range = {801, 0, 929, 128}, .m_dirty_mask = 0u, .m_material_id = 6u},
+                {.m_dirty_mask = 1u, .m_tile_range = {0, 0, 128, 128}, .m_chunk_id = 0u, .m_material_id = 3u},
+                {.m_dirty_mask = 1u, .m_tile_range = {2000, 2000, 2128, 2128}, .m_chunk_id = 1u, .m_material_id = 4u},
+                {.m_dirty_mask = 0u, .m_tile_range = {800, 0, 928, 128}, .m_chunk_id = 2u, .m_material_id = 5u},
+                {.m_dirty_mask = 0u, .m_tile_range = {801, 0, 929, 128}, .m_chunk_id = 3u, .m_material_id = 6u},
             };
             const Expected<GridTilePlan> plan = GridPass::planTiles(snapshot, submissions);
             PPR_TEST_ASSERT(plan.has_value());
@@ -134,7 +134,7 @@ namespace pP::tests::detail {
 
             // Malformed ranges fail closed instead of planning garbage.
             const GridTileSubmission malformed[] = {
-                {.m_chunk_id = 9u, .m_tile_range = {128, 0, 0, 128}, .m_dirty_mask = 1u},
+                {.m_dirty_mask = 1u, .m_tile_range = {128, 0, 0, 128}, .m_chunk_id = 9u},
             };
             const Expected<GridTilePlan> malformed_plan = GridPass::planTiles(snapshot, malformed);
             PPR_TEST_ASSERT(not malformed_plan.has_value());
@@ -143,7 +143,7 @@ namespace pP::tests::detail {
             // Reserved dirty-mask bits name tiles that do not exist (chunk-sized
             // tiles use bit 0 only), so they fail closed as well.
             const GridTileSubmission reserved[] = {
-                {.m_chunk_id = 7u, .m_tile_range = {0, 0, 128, 128}, .m_dirty_mask = 2u},
+                {.m_dirty_mask = 2u, .m_tile_range = {0, 0, 128, 128}, .m_chunk_id = 7u},
             };
             const Expected<GridTilePlan> reserved_plan = GridPass::planTiles(snapshot, reserved);
             PPR_TEST_ASSERT(not reserved_plan.has_value());
@@ -162,8 +162,8 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(pass.cachedTileCount() == 0u);
 
             const GridTileSubmission staged[] = {
-                {.m_chunk_id = 7u, .m_tile_range = {0, 0, 128, 128}, .m_dirty_mask = 1u, .m_material_id = 2u},
-                {.m_chunk_id = 9u, .m_tile_range = {128, 0, 256, 128}, .m_dirty_mask = 1u, .m_material_id = 5u},
+                {.m_dirty_mask = 1u, .m_tile_range = {0, 0, 128, 128}, .m_chunk_id = 7u, .m_material_id = 2u},
+                {.m_dirty_mask = 1u, .m_tile_range = {128, 0, 256, 128}, .m_chunk_id = 9u, .m_material_id = 5u},
             };
             PPR_TEST_ASSERT(not pass.submitTiles(staged));
             PPR_TEST_ASSERT(pass.stagedTileCount() == 2u);
@@ -185,8 +185,8 @@ namespace pP::tests::detail {
             // The edit moves on: both chunks resubmit clean, so their uploads
             // must be no-ops while the cache keeps serving them.
             const GridTileSubmission quiescent[] = {
-                {.m_chunk_id = 7u, .m_tile_range = {0, 0, 128, 128}, .m_dirty_mask = 0u, .m_material_id = 2u},
-                {.m_chunk_id = 9u, .m_tile_range = {128, 0, 256, 128}, .m_dirty_mask = 0u, .m_material_id = 5u},
+                {.m_dirty_mask = 0u, .m_tile_range = {0, 0, 128, 128}, .m_chunk_id = 7u, .m_material_id = 2u},
+                {.m_dirty_mask = 0u, .m_tile_range = {128, 0, 256, 128}, .m_chunk_id = 9u, .m_material_id = 5u},
             };
             PPR_TEST_ASSERT(not pass.submitTiles(quiescent));
             const Expected<u32> reuploaded_a = pass.requestUpload({.m_chunk_id = 7u});
@@ -222,7 +222,7 @@ namespace pP::tests::detail {
         PPR_UNIT_TEST (grid_cell_upload_rejects_invalid_requests_without_mutation) {
             GridPass pass{};
             const GridTileSubmission staged[] = {
-                {.m_chunk_id = 1u, .m_tile_range = {128, 0, 256, 128}, .m_dirty_mask = 1u},
+                {.m_dirty_mask = 1u, .m_tile_range = {128, 0, 256, 128}, .m_chunk_id = 1u},
             };
             PPR_TEST_ASSERT(not pass.submitTiles(staged));
             const GridTilePayload original{.m_rect = {128.0f, 0.0f, 256.0f, 128.0f}, .m_material = 3u};
@@ -247,8 +247,8 @@ namespace pP::tests::detail {
             rejects(1024u, cells); // unknown/out-of-domain chunk
 
             const GridTileSubmission wrong_range[] = {
-                {.m_chunk_id = 1u, .m_tile_range = {0, 0, 128, 128}, .m_dirty_mask = 1u},
-                {.m_chunk_id = 1024u, .m_tile_range = {0, 0, 128, 128}, .m_dirty_mask = 1u},
+                {.m_dirty_mask = 1u, .m_tile_range = {0, 0, 128, 128}, .m_chunk_id = 1u},
+                {.m_dirty_mask = 1u, .m_tile_range = {0, 0, 128, 128}, .m_chunk_id = 1024u},
             };
             PPR_TEST_ASSERT(not pass.submitTiles(wrong_range));
             rejects(1u, cells);
@@ -264,7 +264,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(pass.resolveCached(1u)->m_material == 9u);
 
             const GridTileSubmission clean_wrong_range[] = {
-                {.m_chunk_id = 1u, .m_tile_range = {0, 0, 128, 128}, .m_dirty_mask = 0u},
+                {.m_dirty_mask = 0u, .m_tile_range = {0, 0, 128, 128}, .m_chunk_id = 1u},
             };
             PPR_TEST_ASSERT(not pass.submitTiles(clean_wrong_range));
             rejects(1u, cells); // valid-length cells still check geometry on a clean request
@@ -279,7 +279,7 @@ namespace pP::tests::detail {
         PPR_UNIT_TEST (grid_cell_upload_replaces_dirty_and_clean_requests_are_no_ops) {
             GridPass pass{};
             const GridTileSubmission dirty[] = {
-                {.m_chunk_id = 33u, .m_tile_range = {128, 128, 256, 256}, .m_dirty_mask = 1u},
+                {.m_dirty_mask = 1u, .m_tile_range = {128, 128, 256, 256}, .m_chunk_id = 33u},
             };
             PPR_TEST_ASSERT(not pass.submitTiles(dirty));
             std::vector<u16> cells(GridPass::kCellsPerChunk, 0xffffu);
@@ -302,7 +302,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(pass.resolveCached(33u)->m_material == 8u);
 
             const GridTileSubmission clean[] = {
-                {.m_chunk_id = 33u, .m_tile_range = {128, 128, 256, 256}, .m_dirty_mask = 0u},
+                {.m_dirty_mask = 0u, .m_tile_range = {128, 128, 256, 256}, .m_chunk_id = 33u},
             };
             PPR_TEST_ASSERT(not pass.submitTiles(clean));
             cells.resize(GridPass::kCellsPerChunk, 12u);
@@ -323,7 +323,7 @@ namespace pP::tests::detail {
         PPR_UNIT_TEST (grid_clear_cache_preserves_staging_but_clear_tiles_does_not_invalidate_cache) {
             GridPass pass{};
             const GridTileSubmission staged[] = {
-                {.m_chunk_id = 0u, .m_tile_range = {0, 0, 128, 128}, .m_dirty_mask = 1u},
+                {.m_dirty_mask = 1u, .m_tile_range = {0, 0, 128, 128}, .m_chunk_id = 0u},
             };
             const GridTilePayload payload{.m_rect = {0.0f, 0.0f, 128.0f, 128.0f}, .m_material = 5u};
             const GridTilePayload view[] = {payload};
@@ -367,11 +367,11 @@ namespace pP::tests::detail {
                     const i32 min_y = static_cast<i32>(chunk_y * GridPass::kGridTileEdge);
                     staged.push_back(
                         GridTileSubmission{
-                            .m_chunk_id = chunk_y * 32u + chunk_x,
+                            .m_dirty_mask = 1u,
                             .m_tile_range =
                                 {min_x, min_y, min_x + static_cast<i32>(GridPass::kGridTileEdge),
                                     min_y + static_cast<i32>(GridPass::kGridTileEdge)},
-                            .m_dirty_mask = 1u,
+                            .m_chunk_id = chunk_y * 32u + chunk_x,
                         });
                 }
             }
@@ -397,7 +397,7 @@ namespace pP::tests::detail {
 
             // A 1025th distinct chunk has no slot left: fail closed.
             const GridTileSubmission overflow[] = {
-                {.m_chunk_id = GridPass::kGridTileCacheCapacity, .m_tile_range = {0, 0, 128, 128}, .m_dirty_mask = 1u},
+                {.m_dirty_mask = 1u, .m_tile_range = {0, 0, 128, 128}, .m_chunk_id = GridPass::kGridTileCacheCapacity},
             };
             PPR_TEST_ASSERT(not pass.submitTiles(overflow));
             const Expected<u32> clamped = pass.requestUpload(
@@ -419,10 +419,10 @@ namespace pP::tests::detail {
             const CameraSnapshot snapshot = orthoSnapshot800x600();
 
             const GridTileSubmission submissions[] = {
-                {.m_chunk_id = 0u, .m_tile_range = {0, 0, 128, 128}, .m_dirty_mask = 1u, .m_material_id = 3u},
-                {.m_chunk_id = 1u, .m_tile_range = {2000, 2000, 2128, 2128}, .m_dirty_mask = 1u, .m_material_id = 4u},
-                {.m_chunk_id = 2u, .m_tile_range = {800, 0, 928, 128}, .m_dirty_mask = 0u, .m_material_id = 5u},
-                {.m_chunk_id = 3u, .m_tile_range = {801, 0, 929, 128}, .m_dirty_mask = 0u, .m_material_id = 6u},
+                {.m_dirty_mask = 1u, .m_tile_range = {0, 0, 128, 128}, .m_chunk_id = 0u, .m_material_id = 3u},
+                {.m_dirty_mask = 1u, .m_tile_range = {2000, 2000, 2128, 2128}, .m_chunk_id = 1u, .m_material_id = 4u},
+                {.m_dirty_mask = 0u, .m_tile_range = {800, 0, 928, 128}, .m_chunk_id = 2u, .m_material_id = 5u},
+                {.m_dirty_mask = 0u, .m_tile_range = {801, 0, 929, 128}, .m_chunk_id = 3u, .m_material_id = 6u},
             };
             const Expected<GridTilePlan> plan = GridPass::planTiles(snapshot, submissions);
             PPR_TEST_ASSERT(plan.has_value());
@@ -497,7 +497,7 @@ namespace pP::tests::detail {
             original.m_has_catalog = true;
             original.m_terrain_visuals.push_back(GridTerrainVisual{.m_material_id = 1u});
             original.m_tiles.push_back(
-                GridTileSubmission{.m_chunk_id = 0u, .m_tile_range = {0, 0, 128, 128}, .m_dirty_mask = 1u});
+                GridTileSubmission{.m_dirty_mask = 1u, .m_tile_range = {0, 0, 128, 128}, .m_chunk_id = 0u});
             GridPass::GridStagedUpload upload{};
             upload.m_payload.m_material = 1u;
             upload.m_payload.m_rect[2] = 128.0f;
@@ -566,10 +566,10 @@ namespace pP::tests::detail {
         PPR_UNIT_TEST (grid_cpu_and_indirect_lanes_agree_on_plan) {
             GridPass pass{};
             const GridTileSubmission staged[] = {
-                {.m_chunk_id = 10u, .m_tile_range = {0, 0, 128, 128}, .m_dirty_mask = 1u, .m_material_id = 1u},
-                {.m_chunk_id = 11u, .m_tile_range = {2000, 2000, 2128, 2128}, .m_dirty_mask = 1u, .m_material_id = 2u},
-                {.m_chunk_id = 12u, .m_tile_range = {128, 0, 256, 128}, .m_dirty_mask = 0u, .m_material_id = 3u},
-                {.m_chunk_id = 13u, .m_tile_range = {3000, 3000, 3128, 3128}, .m_dirty_mask = 0u, .m_material_id = 4u},
+                {.m_dirty_mask = 1u, .m_tile_range = {0, 0, 128, 128}, .m_chunk_id = 10u, .m_material_id = 1u},
+                {.m_dirty_mask = 1u, .m_tile_range = {2000, 2000, 2128, 2128}, .m_chunk_id = 11u, .m_material_id = 2u},
+                {.m_dirty_mask = 0u, .m_tile_range = {128, 0, 256, 128}, .m_chunk_id = 12u, .m_material_id = 3u},
+                {.m_dirty_mask = 0u, .m_tile_range = {3000, 3000, 3128, 3128}, .m_chunk_id = 13u, .m_material_id = 4u},
             };
             PPR_TEST_ASSERT(not pass.submitTiles(staged));
             PPR_TEST_ASSERT(pass.stagedTileCount() == 4u);

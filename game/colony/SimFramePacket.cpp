@@ -520,7 +520,7 @@ namespace pP::colony {
                                      ? std::error_code{}
                                      : std::make_error_code(std::errc::state_not_recoverable));
             const auto range = tileRange(pos);
-            stage.m_tiles.push_back(GridTileSubmission{.m_chunk_id = index, .m_tile_range = range, .m_dirty_mask = 1u});
+            stage.m_tiles.push_back(GridTileSubmission{.m_dirty_mask = 1u, .m_tile_range = range, .m_chunk_id = index});
             GridPass::GridStagedUpload upload{};
             upload.m_chunk_id = index;
             upload.m_payload.m_rect[0] = static_cast<float>(range.m_min_x);
@@ -673,9 +673,9 @@ namespace pP::colony {
             const bool dirty = packet.m_full_refresh or containsChunk(packet.m_present_chunks, pos);
             stage.m_tiles.push_back(
                 GridTileSubmission{
-                    .m_chunk_id = sim::chunkIndexOf(pos),
-                    .m_tile_range = tileRange(pos),
                     .m_dirty_mask = dirty ? 1u : 0u,
+                    .m_tile_range = tileRange(pos),
+                    .m_chunk_id = sim::chunkIndexOf(pos),
                     .m_material_id = 0u,
                 });
         }

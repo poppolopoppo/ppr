@@ -74,11 +74,11 @@ export namespace pP::physics {
     // ------------------------------------------------------------------
 
     struct SensorDefinition {
+        u64 m_category_bits{1u};
+        u64 m_mask_bits{~u64{0}};
         EGeometry m_geometry{EGeometry::box};
         float m_half_width{0.5f};
         float m_half_height{0.5f};
-        u64 m_category_bits{1u};
-        u64 m_mask_bits{~u64{0}};
         i32 m_group_index{};
         u32 m_kind{};
         bool m_enabled{true};

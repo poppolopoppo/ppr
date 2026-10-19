@@ -25,10 +25,7 @@ export namespace pP::sim {
     };
 
     struct NoiseFieldDesc {
-        ENoiseAlgorithm m_algorithm{ENoiseAlgorithm::open_simplex2};
-        ENoiseFractal m_fractal{ENoiseFractal::none};
         double m_frequency_per_metre{};
-        u32 m_octaves{4u};
         double m_lacunarity{2.0};
         double m_gain{0.5};
         double m_warp_amplitude_m{};
@@ -36,6 +33,9 @@ export namespace pP::sim {
         double m_axis_scale_x{1.0};
         double m_axis_scale_y{1.0};
         double m_rotation_degrees{};
+        u32 m_octaves{4u};
+        ENoiseAlgorithm m_algorithm{ENoiseAlgorithm::open_simplex2};
+        ENoiseFractal m_fractal{ENoiseFractal::none};
 
         // Slice 1a: canonical definition — the sole authored noise schema.
         inline static constexpr auto describe() {

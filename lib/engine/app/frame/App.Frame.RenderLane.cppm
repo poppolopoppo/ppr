@@ -60,22 +60,22 @@ export namespace pP {
     };
 
     struct GridWorldCommand {
-        EGridWorldCommand m_kind{EGridWorldCommand::begin};
+        GridPass::GridStagedFrame m_stage{};
         u64 m_sequence{};
         u64 m_job_id{};
         u64 m_world_generation{};
         u64 m_content_fingerprint{};
-        GridPass::GridStagedFrame m_stage{};
+        EGridWorldCommand m_kind{EGridWorldCommand::begin};
         bool m_final_batch{false};
     };
 
     struct GridWorldResult {
-        EGridWorldCommand m_kind{EGridWorldCommand::begin};
         u64 m_sequence{};
         u64 m_job_id{};
         u64 m_world_generation{};
         u64 m_content_fingerprint{};
         std::error_code m_error{};
+        EGridWorldCommand m_kind{EGridWorldCommand::begin};
         bool m_applied{false};
         bool m_ready{false};
     };

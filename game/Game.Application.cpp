@@ -3103,10 +3103,10 @@ namespace demo {
                     const i32 min_y = static_cast<i32>(y * sim::kChunkEdge);
                     submissions.push_back(
                         GridTileSubmission{
-                            .m_chunk_id = sim::chunkIndexOf(pos),
                             .m_tile_range =
                                 {min_x, min_y, min_x + static_cast<i32>(sim::kChunkEdge),
                                     min_y + static_cast<i32>(sim::kChunkEdge)},
+                            .m_chunk_id = sim::chunkIndexOf(pos),
                         });
                 }
             }

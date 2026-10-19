@@ -303,14 +303,14 @@ export namespace pP::sim::definition {
     };
 
     struct Deposit {
-        u32 m_order{};
         FieldReference m_field{};
         MaterialReference m_material{}, m_host_material{};
         DepositDepthInterval m_depth{};
         ThresholdInterval m_threshold{};
-        EGenerationDepositStage m_stage{EGenerationDepositStage::bulk};
         double m_core_coverage{1.0}, m_fringe_coverage{1.0}, m_sprinkle_probability{};
         std::optional<DepositBlob> m_blob{};
+        u32 m_order{};
+        EGenerationDepositStage m_stage{EGenerationDepositStage::bulk};
 
         [[nodiscard]] static constexpr auto describe() {
             return std::tuple{

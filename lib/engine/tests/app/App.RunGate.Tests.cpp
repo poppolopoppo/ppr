@@ -1552,7 +1552,7 @@ namespace pP::tests::detail {
                     return ec;
                 }
                 const GridTileSubmission staged[] = {
-                    {.m_chunk_id = 0u, .m_tile_range = {0, 0, 128, 128}, .m_dirty_mask = 1u, .m_material_id = 3u},
+                    {.m_dirty_mask = 1u, .m_tile_range = {0, 0, 128, 128}, .m_chunk_id = 0u, .m_material_id = 3u},
                 };
                 if (const std::error_code ec = m_grid.submitTiles(staged)) {
                     return ec;
@@ -2049,7 +2049,7 @@ namespace pP::tests::detail {
                 m_pending_grid = GridPass::GridStagedFrame{};
                 m_pending_grid.m_tiles.push_back(
                     GridTileSubmission{
-                        .m_chunk_id = 0u, .m_tile_range = {0, 0, 128, 128}, .m_dirty_mask = 1u, .m_material_id = 3u});
+                        .m_dirty_mask = 1u, .m_tile_range = {0, 0, 128, 128}, .m_chunk_id = 0u, .m_material_id = 3u});
                 m_pending_tri = TrianglePass::TriangleStagedFrame{};
                 m_pending_tri.m_instances.push_back(
                     TrianglePass::SubmittedInstance{
@@ -3621,7 +3621,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not grid.update(kFrameStep, camera.getSnapshot()));
             PPR_TEST_ASSERT(not triangles.update(kFrameStep, camera.getSnapshot()));
             const GridTileSubmission staged[] = {
-                {.m_chunk_id = 0u, .m_tile_range = {0, 0, 128, 128}, .m_dirty_mask = 1u, .m_material_id = 3u},
+                {.m_dirty_mask = 1u, .m_tile_range = {0, 0, 128, 128}, .m_chunk_id = 0u, .m_material_id = 3u},
             };
             PPR_TEST_ASSERT(not grid.submitTiles(staged));
 

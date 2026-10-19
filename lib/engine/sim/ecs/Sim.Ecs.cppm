@@ -458,8 +458,8 @@ export namespace pP::sim {
         }
 
         RegistryT *m_world = nullptr;
-        std::array<ComponentId, sizeof...(Cs)> m_ids{};
         ComponentMask m_required{};
+        std::array<ComponentId, sizeof...(Cs)> m_ids{};
         bool m_valid = true;
 
     public:

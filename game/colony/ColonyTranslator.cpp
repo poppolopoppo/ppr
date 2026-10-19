@@ -95,9 +95,9 @@ namespace pP::colony {
                     const u32 chunk_id = sim::chunkIndexOf(pos);
                     tiles.push_back(
                         GridTileSubmission{
-                            .m_chunk_id = chunk_id,
-                            .m_tile_range = tileRange(pos),
                             .m_dirty_mask = m_presented[chunk_id] ? 0u : 1u,
+                            .m_tile_range = tileRange(pos),
+                            .m_chunk_id = chunk_id,
                             .m_material_id = 0u,
                         });
                 }

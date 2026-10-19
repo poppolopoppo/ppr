@@ -391,23 +391,23 @@ export namespace pP::config {
 
     template<typename Owner, typename T, typename Constraint>
     struct Member {
-        T Owner::*m_member;
         Metadata m_metadata;
         Constraint m_constraint;
+        T Owner::*m_member;
         EPresence m_presence{EPresence::defaulted};
     };
 
     template<typename Owner, typename T, typename Constraint>
     [[nodiscard]] constexpr Member<Owner, T, Constraint> field(
         T Owner::*member, const Metadata metadata, const Constraint constraint) {
-        return Member<Owner, T, Constraint>{member, metadata, constraint};
+        return Member<Owner, T, Constraint>{metadata, constraint, member};
     }
 
     // Slice 1a: canonical definition — typed recursive member declarations.
     template<typename Owner, typename T, typename Constraint>
     [[nodiscard]] constexpr Member<Owner, T, Constraint> field(
         T Owner::*member, const Metadata metadata, const Constraint constraint, const EPresence presence) {
-        return {member, metadata, constraint, presence};
+        return {metadata, constraint, member, presence};
     }
 
     namespace details {
@@ -417,19 +417,19 @@ export namespace pP::config {
     template<typename Owner, typename T>
     [[nodiscard]] constexpr Member<Owner, T, details::GroupDomain> group(
         T Owner::*member, const Metadata metadata, const EPresence presence) {
-        return {member, metadata, {}, presence};
+        return {metadata, {}, member, presence};
     }
 
     template<typename Owner, typename T>
     [[nodiscard]] constexpr Member<Owner, KeyedCollection<T>, CollectionDomain> collection(
         KeyedCollection<T> Owner::*member, const Metadata metadata, const CollectionDomain domain) {
-        return {member, metadata, domain, EPresence::defaulted};
+        return {metadata, domain, member, EPresence::defaulted};
     }
 
     template<typename Owner, typename T, typename... A>
     [[nodiscard]] constexpr Member<Owner, T, VariantDomain<A...>> taggedVariant(
         T Owner::*member, const Metadata metadata, const EPresence presence, const Alternative<A>... alternatives) {
-        return {member, metadata, {std::tuple{alternatives...}}, presence};
+        return {metadata, {std::tuple{alternatives...}}, member, presence};
     }
 
     /// Display-neutral runtime projection of a schema member. Enum names refer

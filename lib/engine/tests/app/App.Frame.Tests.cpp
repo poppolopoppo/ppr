@@ -457,7 +457,7 @@ namespace pP::tests::detail {
             // Preparation proof on the CPU planner: the packet plan still
             // sees the home tile, while the mutated live snapshot culls it.
             const GridTileSubmission submissions[] = {
-                {.m_chunk_id = 0u, .m_tile_range = {0, 0, 128, 128}, .m_dirty_mask = 1u, .m_material_id = 3u},
+                {.m_dirty_mask = 1u, .m_tile_range = {0, 0, 128, 128}, .m_chunk_id = 0u, .m_material_id = 3u},
             };
             const Expected<GridTilePlan> packet_plan = GridPass::planTiles(packet.m_camera, submissions);
             PPR_TEST_ASSERT(packet_plan.has_value());

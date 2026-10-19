@@ -583,11 +583,11 @@ export namespace pP {
                 kQuarantined
             };
 
-            bool m_active{false};
             u64 m_epoch{0u};
             u64 m_frame_id{0u};
-            State m_state{State::kLocal};
             FenceCompletionValue m_submit_value{kFenceValueNone};
+            bool m_active{false};
+            State m_state{State::kLocal};
             // Becomes true once the lane published its result; the record
             // survives until the matching GPU retirement (submitted) or a
             // quarantine settle.

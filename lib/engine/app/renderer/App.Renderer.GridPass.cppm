@@ -151,9 +151,9 @@ export namespace pP {
     // chunk-sized tiles use bit 0 only and every higher bit is rejected.
     // m_material_id is the element/material tint index.
     struct GridTileSubmission {
-        u32 m_chunk_id = 0u;
-        GridTileRange m_tile_range{};
         u64 m_dirty_mask = 0u;
+        GridTileRange m_tile_range{};
+        u32 m_chunk_id = 0u;
         u32 m_material_id = 0u;
     };
 
