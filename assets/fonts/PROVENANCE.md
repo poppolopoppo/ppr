@@ -1,10 +1,10 @@
 # assets/fonts/ — Provenance
 
 Pinned UI assets for [the ImGui refinement plan](../../docs/plans/imgui-ricing-plan.md).
-All three font files and three notice files below were present and their byte
-counts/full SHA-256 values reverified on 2026-10-15. This proves local file
-identity, not deployment, ImGui loadability or visual acceptance. Runtime font
-loading remains planned.
+The current default composition is recorded under **Concept typography** below.
+The original three font files and notices were present and their byte counts/
+full SHA-256 values reverified on 2026-10-15. They remain fixtures; that historical
+identity check alone does not establish deployment, loadability or visual acceptance.
 
 ## Pinned binaries
 
@@ -60,11 +60,23 @@ The plan must define baked text coverage; no universal Unicode support is claime
 
 ## Staging
 
-`game/CMakeLists.txt` conditionally registers the fonts directory with the existing
-asset facility; `StageAssets.cmake` admits its destination leaf. Make registration
-required when runtime depends on these files. Data-only synchronization,
-deployed-file identity and cross-CWD chosen-font loading remain verification
-tasks; configure success alone does not prove them.
+`game/CMakeLists.txt` requires the fonts directory through the existing asset
+facility; `StageAssets.cmake` admits its destination leaf. The focused font tests
+use the staged executable-relative files and validate their exact bytes before
+baking. Native deployment/cross-CWD acceptance is recorded separately in progress;
+configure success alone does not prove those checks.
 
 Local execution details: [font manifest](../../.slim/deepwork/imgui-ricing/font-manifest.md).
 That Git-ignored record is supplementary; the artifact pins above are self-contained.
+
+## Concept typography — selected 2026-10-18
+
+Pixelify Sans Regular (400) and SemiBold (600) are the default body/emphasis faces at 16 logical px. Big Shoulders Display Bold (700) supplies 22 px headings. The Inspector read-out binds the body file a second time at 12 px for its compact key/value table, which adds a baked face but no artifact or licence. Font Awesome remains merged into body only. All are static upstream TTF artifacts; no conversion/subsetting. Earlier Inter/JBMono files remain as legacy test fixtures. Runtime checks exact byte counts and SHA-256 before atlas creation.
+
+| File | Pinned upstream commit/path | Bytes | SHA-256 |
+|---|---|---:|---|
+| PixelifySans-Regular.ttf | [39df74aba80df8157546034b878e8be1eb565ced / fonts/ttf/PixelifySans-Regular.ttf](https://raw.githubusercontent.com/eifetx/Pixelify-Sans/39df74aba80df8157546034b878e8be1eb565ced/fonts/ttf/PixelifySans-Regular.ttf) | 93780 | 5436d485d1713afa376e1744911cbbcc0849eae1eb55ec9bc34c0753993ffef9 |
+| PixelifySans-SemiBold.ttf | [39df74aba80df8157546034b878e8be1eb565ced / fonts/ttf/PixelifySans-SemiBold.ttf](https://raw.githubusercontent.com/eifetx/Pixelify-Sans/39df74aba80df8157546034b878e8be1eb565ced/fonts/ttf/PixelifySans-SemiBold.ttf) | 97492 | a4b54982991cd47450df317a451a7f066bf6b91aa033e105643aba2cf7bd35c3 |
+| PixelifySans-OFL.txt | [39df74aba80df8157546034b878e8be1eb565ced / OFL.txt](https://raw.githubusercontent.com/eifetx/Pixelify-Sans/39df74aba80df8157546034b878e8be1eb565ced/OFL.txt) | 4488 | b66ba46f511a851ab09998b5a5a9fdbb102545a3864cb993095e1745996873a7 |
+| BigShouldersDisplay-Bold.ttf | [8ba99c9e347396d828b263b8b818269cb99eb27c / Big-Shoulders/fonts/ttf/BigShouldersDisplay-Bold.ttf](https://raw.githubusercontent.com/xotypeco/big_shoulders/8ba99c9e347396d828b263b8b818269cb99eb27c/Big-Shoulders/fonts/ttf/BigShouldersDisplay-Bold.ttf) | 122896 | cbfe03f89e2bb3aba487644cdaf9abc9b3eb59946efaf894dda5cd05e1690c83 |
+| BigShouldersDisplay-OFL.txt | [8ba99c9e347396d828b263b8b818269cb99eb27c / OFL.txt](https://raw.githubusercontent.com/xotypeco/big_shoulders/8ba99c9e347396d828b263b8b818269cb99eb27c/OFL.txt) | 4396 | 338f9c050f19daeda1d597243faf79f3a3d437c338af58cb7047617d0ce08771 |
