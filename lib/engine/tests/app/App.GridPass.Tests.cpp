@@ -596,6 +596,80 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(covered_instances == plan->m_tiles.size());
         };
     }
+
+    // ------------------------------------------------------------------
+    // retro pass
+    // ------------------------------------------------------------------
+
+    namespace Retro {
+        // mango vectors compare lane-wise into a mask, not bool, so the
+        // extent contract is pinned per axis.
+        [[nodiscard]] bool sameExtent(const int2 actual, const int2 expected) noexcept {
+            return actual.x == expected.x and actual.y == expected.y;
+        }
+
+        PPR_UNIT_TEST (retro_pixel_scale_clamps_to_supported_range) {
+            PPR_TEST_ASSERT(RetroPass::kMinPixelScale == 2u);
+            PPR_TEST_ASSERT(RetroPass::clampPixelScale(0u) == RetroPass::kMinPixelScale);
+            PPR_TEST_ASSERT(RetroPass::clampPixelScale(1u) == RetroPass::kMinPixelScale);
+
+            PPR_TEST_ASSERT(RetroPass::clampPixelScale(2u) == 2u);
+            PPR_TEST_ASSERT(RetroPass::clampPixelScale(3u) == 3u);
+            PPR_TEST_ASSERT(RetroPass::clampPixelScale(8u) == 8u);
+
+            PPR_TEST_ASSERT(RetroPass::kMaxPixelScale == 8u);
+            PPR_TEST_ASSERT(RetroPass::clampPixelScale(9u) == RetroPass::kMaxPixelScale);
+            PPR_TEST_ASSERT(RetroPass::clampPixelScale(1000u) == RetroPass::kMaxPixelScale);
+
+            PPR_TEST_ASSERT(RetroPass::kPaletteSize == 32u);
+        };
+
+        PPR_UNIT_TEST (retro_scene_extent_divides_both_axes_and_floors_at_one) {
+            PPR_TEST_ASSERT(sameExtent(RetroPass::sceneExtent(int2{1920, 1080}, 3u), int2{640, 360}));
+            PPR_TEST_ASSERT(sameExtent(RetroPass::sceneExtent(int2{100, 50}, 2u), int2{50, 25}));
+
+            PPR_TEST_ASSERT(sameExtent(RetroPass::sceneExtent(int2{3, 3}, 8u), int2{1, 1}));
+            PPR_TEST_ASSERT(sameExtent(RetroPass::sceneExtent(int2{7, 7}, 8u), int2{1, 1}));
+
+            PPR_TEST_ASSERT(sameExtent(RetroPass::sceneExtent(int2{0, -4}, 3u), int2{1, 1}));
+            PPR_TEST_ASSERT(sameExtent(RetroPass::sceneExtent(int2{-5, 128}, 3u), int2{1, 42}));
+
+            PPR_TEST_ASSERT(sameExtent(RetroPass::sceneExtent(int2{1921, 1081}, 3u), int2{640, 360}));
+
+            PPR_TEST_ASSERT(sameExtent(RetroPass::sceneExtent(int2{20, 20}, 1u), int2{10, 10}));
+            PPR_TEST_ASSERT(sameExtent(RetroPass::sceneExtent(int2{20, 20}, 99u), int2{2, 2}));
+        };
+
+        PPR_UNIT_TEST (retro_scene_signature_is_linear_hdr_with_depth) {
+            const RenderPipelineSignature signature = RetroPass::scenePipelineSignature();
+
+            PPR_TEST_ASSERT(signature.colorFormats().size() == 1u);
+            PPR_TEST_ASSERT(signature.colorFormats().front() == rhi::Format::RGBA16Float);
+            PPR_TEST_ASSERT(signature.m_depth_stencil_format.has_value());
+            PPR_TEST_ASSERT(*signature.m_depth_stencil_format == rhi::Format::D32Float);
+            PPR_TEST_ASSERT(signature.m_sample_count == SampleCount::x1);
+        };
+
+        PPR_UNIT_TEST (retro_settings_default_to_disabled_engine_policy) {
+            const RetroSettings defaults{};
+            PPR_TEST_ASSERT(not defaults.m_enabled);
+            PPR_TEST_ASSERT(defaults.m_pixel_scale == 3u);
+
+            const RetroSettings configured{.m_enabled = true, .m_pixel_scale = 4u};
+            PPR_TEST_ASSERT(configured.m_enabled);
+            PPR_TEST_ASSERT(configured.m_pixel_scale == 4u);
+        };
+
+        PPR_UNIT_TEST (retro_teardown_is_idempotent_before_initialize) {
+            RetroPass pass;
+
+            PPR_TEST_ASSERT(not pass.shutdown());
+            PPR_TEST_ASSERT(not pass.shutdown());
+
+            PPR_TEST_ASSERT(not pass.notifyDeviceLost());
+            PPR_TEST_ASSERT(not pass.notifyDeviceLost());
+        };
+    }
 } // namespace pP::tests::detail
 
 namespace pP::tests {
@@ -613,6 +687,11 @@ namespace pP::tests {
             detail::GridTiles::grid_indirect_compaction_clamps_and_handles_empty,
             detail::GridTiles::grid_cpu_and_indirect_lanes_agree_on_plan,
             detail::GridTiles::grid_particle_rejection_preserves_the_retained_stage,
+            detail::Retro::retro_pixel_scale_clamps_to_supported_range,
+            detail::Retro::retro_scene_extent_divides_both_axes_and_floors_at_one,
+            detail::Retro::retro_scene_signature_is_linear_hdr_with_depth,
+            detail::Retro::retro_settings_default_to_disabled_engine_policy,
+            detail::Retro::retro_teardown_is_idempotent_before_initialize,
         });
     };
 

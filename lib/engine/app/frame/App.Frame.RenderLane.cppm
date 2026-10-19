@@ -6,6 +6,7 @@ import :frame.packet;
 import :renderer;
 import :renderer.frame_fence;
 import :renderer.grid_pass;
+import :renderer.retro_pass;
 import :renderer.triangle_pass;
 import :ui.imgui;
 import :window.handle;
@@ -84,6 +85,10 @@ export namespace pP {
 
     struct RenderFrameRequest {
         bool m_observe_grid{false};
+        // Retro presentation policy for this frame: value-only, clamped by
+        // the client before publication; the lane never reads live client
+        // policy state.
+        RetroSettings m_retro{};
         std::shared_ptr<const FramePacket> m_packet{};
         DetachedUiDrawData m_ui{};
         GridPass::GridStagedFrame m_grid_stage{};

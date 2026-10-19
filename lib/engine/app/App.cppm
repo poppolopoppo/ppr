@@ -26,6 +26,7 @@ export import :player;
 export import :renderer.frame_fence;
 export import :renderer.gpu_caches;
 export import :renderer.grid_pass;
+export import :renderer.retro_pass;
 export import :renderer.triangle_pass;
 export import :renderer.types;
 export import :renderer;

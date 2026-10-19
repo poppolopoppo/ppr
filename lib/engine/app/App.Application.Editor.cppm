@@ -7,6 +7,7 @@ import :frame.packet;
 import :frame.render_lane;
 import :scene.camera;
 import :renderer.grid_pass;
+import :renderer.retro_pass;
 import :renderer.triangle_pass;
 import :service.client;
 import :service.input;
@@ -75,6 +76,11 @@ export namespace pP {
         [[nodiscard]] GridPass &getGridPass() noexcept {
             return *m_grid_pass;
         }
+
+        // Retro scene-lane policy: the pixel scale is clamped here so every
+        // owned frame request carries a valid value. CPU-only: no GPU work
+        // and no frame drain; the next submit picks the stored settings up.
+        void setRetroSettings(const RetroSettings &settings) noexcept;
 
         // Post-initialize only. Rebuilds the camera input mapping before
         // releasing the previous controller; the editor keeps camera ownership.
@@ -218,6 +224,8 @@ export namespace pP {
         std::unique_ptr<WindowViewport> m_main_viewport{};
         std::unique_ptr<TrianglePass> m_triangle_pass{};
         std::unique_ptr<GridPass> m_grid_pass{};
+        std::unique_ptr<RetroPass> m_retro_pass{};
+        RetroSettings m_retro_settings{};
 
         // Background-drag actuator @ detector priority; registrar == owner.
         // Routing-owned latch; actuator borrows it (detach-before-destroy).

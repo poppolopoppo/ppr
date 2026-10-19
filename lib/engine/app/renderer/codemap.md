@@ -3,7 +3,7 @@
 ## Responsibility
 
 The `engine.app:renderer` module provides the content-free generic `Renderer` (surface registry + graphics
-queue + validated submission only; multi-surface capable, single main window in production). Scene content lives in `engine.app:renderer.triangle_pass` (`TrianglePass`) and `engine.app:renderer.grid_pass` (`GridPass`, chunk-sized tile quads over the cell world);
+queue + validated submission only; multi-surface capable, single main window in production). Scene content lives in `engine.app:renderer.triangle_pass` (`TrianglePass`) and `engine.app:renderer.grid_pass` (`GridPass`, chunk-sized tile quads over the cell world); `engine.app:renderer.retro_pass` (`RetroPass`) resolves the scene into a low-resolution offscreen ring and presents it nearest-upscaled with 32-color quantization and ordered dithering, leaving the UI pass native;
 camera-free RHI-facing submission shapes (`RenderPipelineSignature/Key`, `DrawContext/Callback/Submission`,
 `ColorAttachmentOps`, `ESurfaceDepthPolicy`, `SurfaceRenderPass`) live header-only in
 `engine.app:renderer.types`. There is no `App.Renderer.Types.cpp` — the partition is fully inline in
@@ -254,6 +254,18 @@ on the render owner; shutdown/device-loss epoch resets discard old cache handles
   serves flat-only rendering; both direct and MDI lanes bind the explicit full buffer range.
   `GridTilePayload` retains its 32-byte stride; offsets 20/24/28 carry cell-word base/flags/pad.
   MDI `SV_InstanceID`/startInstanceLocation parity remains to be proven with GPU readback on each backend.
+- **RetroPass** (`App.Renderer.RetroPass.cppm/.cpp`): content-free present pass beside `GridPass`/`TrianglePass`.
+  `RetroSettings{bool m_enabled; u32 m_pixel_scale{3}}` is session policy; `clampPixelScale` pins 2..8,
+  `sceneExtent` floor-divides the native extent per axis with a one-pixel floor, and `scenePipelineSignature`
+  is one RGBA16Float color target with D32Float depth at 1x. `prepareScene` selects a 3-slot
+  completion-governed target ring, recreates on extent change, clears and opens one offscreen pass, forwards
+  the frame's value-scoped fence-wait hook, and invokes the caller's scene encode with the low-resolution
+  `DrawContext`; the caller's content passes rebuild their signature-keyed pipelines for that target.
+  `render` reclaims deferred releases, caches the present pipeline per surface signature (retiring the old one
+  at the last submitted fence value), uploads the 528-byte `RetroParameters` (32 DawnBringer-32 sRGB entries,
+  source extent, dither strength), binds the selected slot's color view plus one sampler, and draws one
+  fullscreen triangle. `notifyFrameSubmitted` stamps the recorded slot. Render fails closed without a ready
+  scene; shutdown/device-loss are wait-free, drain deferred releases, and release the ring targets and roots.
 - **GpuCaches** (`App.Renderer.GpuCaches.cppm/.cpp`): `TriangleBagCache` (vertex-type-agnostic bump buckets,
   stable `TriangleBagRange`, **no dedup** — one range per upload), `BindlessTextureCache` (**content-hash dedup
   + refcount + pin-while-held**, heap slot 0 pinned to the white fallback and host slots start at 1),
@@ -289,25 +301,28 @@ on the render owner; shutdown/device-loss epoch resets discard old cache handles
 
 1. Startup → `renderer.initialize(rhi_service)` (graphics queue only); first `renderAndPresent(window, …)`
    lazily creates + configures the window surface from `Window::m_framebuffer_size/m_native`
-2. Per-frame → stack 3D and UI `DrawSubmission` arrays → two `SurfaceRenderPass` records →
-   `renderAndPresent` (resize on drift → acquire → depth-enabled 3D render pass → color-load/no-depth UI
-   render pass → present); `TrianglePass::update(snapshot)` then `TrianglePass::render` inside the 3D callback.
+2. Per-frame → stack the scene and UI `DrawSubmission` arrays → two `SurfaceRenderPass` records →
+   `renderAndPresent` (resize on drift → acquire → depth-enabled 3D render pass, or a retro prepare into the
+   low-resolution ring plus a depth-free nearest/palette present → color-load/no-depth UI render pass →
+   present); `TrianglePass::update(snapshot)` precedes submission; the scene submission carries
+   `TrianglePass::render` after the grid background/GPU lanes, and with retro enabled it encodes inside
+   `RetroPass::prepareScene` instead of the surface pass.
 3. Offscreen/tests → `renderToTexture(target, …)` → `waitOnHost()` → readback
 4. On minimize/resize-to-zero → surface unconfigures but the record stays; next non-zero frame reconfigures
 5. Shutdown → Editor proves GPU idle first (`waitOnHost`; UNKNOWN → quarantine + retain + return error for
    process exit where the OS reclaims; confirmed loss → `notifyDeviceLost` everywhere,
-   surface destroy skipped) → `triangle.shutdown()` + `grid.shutdown()` (safe: nothing pending) →
+   surface destroy skipped) → `triangle.shutdown()` + `grid.shutdown()` + `retro.shutdown()` (safe: nothing pending) →
    `destroyWindowSurface(*main_window)` → window destroyed via the window
    service → `renderer.shutdown()` (wait, unconfigure any survivor, release)
 
 ## Integration
 
-- **Consumers**: owning application shell (owns `Renderer` + `TrianglePass` + `GridPass`, drives update/render/shutdown)
+- **Consumers**: owning application shell (owns `Renderer` + `TrianglePass` + `GridPass` + `RetroPass`, drives update/render/shutdown)
 - **Depends on**: `engine.core`, `engine.math`, `engine.rhi` (devices, queues, surfaces, passes, pipelines),
-  `engine.shader` (TrianglePass program load), `engine.image` + `engine.mesh` (cache upload types only),
+  `engine.shader` (per-pass program loads), `engine.image` + `engine.mesh` (cache upload types only),
   `:service.window` + `:window.handle` (Window resolves surfaces),
   `:scene.camera` (TrianglePass `CameraSnapshot` only — never a mutable `Camera`)
-- **Provides**: `engine.app:renderer`, `engine.app:renderer.frame_fence`, `engine.app:renderer.gpu_caches`, `engine.app:renderer.triangle_pass`, `engine.app:renderer.grid_pass`, `engine.app:renderer.types`
+- **Provides**: `engine.app:renderer`, `engine.app:renderer.frame_fence`, `engine.app:renderer.gpu_caches`, `engine.app:renderer.triangle_pass`, `engine.app:renderer.grid_pass`, `engine.app:renderer.retro_pass`, `engine.app:renderer.types`
   (camera-free boundary: passes consume `DrawContext`/snapshot data while drawing)
 
 ## Key Files
@@ -319,6 +334,8 @@ on the render owner; shutdown/device-loss epoch resets discard old cache handles
 - `App.Renderer.TrianglePass.cpp` — TrianglePass implementations (invariant state, shader program, variant pipelines, resolve/plan/upload/encode, frame-constant upload)
 - `App.Renderer.GridPass.cppm` — `GridPass` declaration (boundary structs, tile payload mirror, snapshot cache, CPU tile cache, pipeline helper)
 - `App.Renderer.GridPass.cpp` — GridPass implementations (validation/planTiles, shader program, single pipeline, upload lane, ring upload, single-draw encode)
+- `App.Renderer.RetroPass.cppm` — `RetroPass`/`RetroSettings` declaration (pixel-scale/extent/signature helpers, offscreen ring, present API)
+- `App.Renderer.RetroPass.cpp` — RetroPass implementations (ring targets, offscreen scene pass, palette upload, present pipeline, deferred release, teardown)
 - `App.Renderer.GpuCaches.cppm` — pass-owned cache vocabulary (handles, `TriangleBagRange`, `ResolvedBag`, `GpuMaterial`, caches)
 - `App.Renderer.GpuCaches.cpp` — cache implementations (uploads, dedup, pack, teardown)
 - `App.Renderer.Types.cppm` — boundary types (`RenderPipelineSignature/Key`, `DrawContext/Callback/Submission`, `ColorAttachmentOps`, depth policy, `SurfaceRenderPass`); header-only, no matching `.cpp`

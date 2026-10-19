@@ -17,6 +17,7 @@ import :input.routing;
 import :platform.glfw.input;
 import :renderer;
 import :renderer.grid_pass;
+import :renderer.retro_pass;
 import :renderer.frame_fence;
 import :renderer.triangle_pass;
 import :renderer.types;
@@ -228,6 +229,17 @@ namespace pP {
             return grid_err;
         }
 
+        m_retro_pass = std::make_unique<RetroPass>();
+        const std::error_code retro_err = m_retro_pass->initialize(*rhi_service, *shader_service, getContentDir());
+        if (retro_err) [[unlikely]] {
+            // Mirror the grid failure path: release whatever the partial
+            // initialization created and retain the original error.
+            std::error_code cleanup_err{};
+            PPR_RETAIN_ERROR_ON_FAIL(Editor, cleanup_err, m_retro_pass->shutdown());
+            m_retro_pass.reset();
+            PPR_RETURN_ERROR_ON_FAIL(Editor, retro_err);
+        }
+
         m_ui_service = ui::createImGuiService();
 
         // Default Site Office face slots: Pixelify body/emphasis, then Big
@@ -404,6 +416,14 @@ namespace pP {
                 });
         }
         return default_value_v;
+    }
+
+    void ApplicationEditor::setRetroSettings(const RetroSettings &settings) noexcept {
+        // CPU-only policy set: no GPU work and no frame drain. Clamping once
+        // here keeps every owned frame request value-valid; the next submit
+        // copies the stored settings onto both request paths.
+        m_retro_settings = settings;
+        m_retro_settings.m_pixel_scale = RetroPass::clampPixelScale(settings.m_pixel_scale);
     }
 
     // ------------------------------------------------------------------
@@ -635,6 +655,9 @@ namespace pP {
                             if (m_grid_pass) {
                                 PPR_RETAIN_ERROR_ON_FAIL(Editor, lane_err, m_grid_pass->notifyDeviceLost());
                             }
+                            if (m_retro_pass) {
+                                PPR_RETAIN_ERROR_ON_FAIL(Editor, lane_err, m_retro_pass->notifyDeviceLost());
+                            }
                             // Triangle device-loss notification runs on main
                             // below: its GpuCaches captured the initializing
                             // main thread and reject other threads.
@@ -644,6 +667,9 @@ namespace pP {
                         // still alive).
                         if (m_grid_pass) {
                             PPR_RETAIN_ERROR_ON_FAIL(Editor, lane_err, m_grid_pass->shutdown());
+                        }
+                        if (m_retro_pass) {
+                            PPR_RETAIN_ERROR_ON_FAIL(Editor, lane_err, m_retro_pass->shutdown());
                         }
                         // Triangle shutdown runs on main below, before the
                         // resets and the base shutdown's renderer/RHI release.
@@ -733,6 +759,7 @@ namespace pP {
                 m_triangle_pass->clearInstances();
             }
             m_grid_pass.reset();
+            m_retro_pass.reset();
             m_triangle_pass.reset();
             lane_releases_done = true;
         }
@@ -745,6 +772,9 @@ namespace pP {
             getRenderer().notifyDeviceLost();
             if (m_grid_pass) {
                 PPR_RETAIN_ERROR_ON_FAIL(Editor, first_err, m_grid_pass->notifyDeviceLost());
+            }
+            if (m_retro_pass) {
+                PPR_RETAIN_ERROR_ON_FAIL(Editor, first_err, m_retro_pass->notifyDeviceLost());
             }
             if (m_triangle_pass) {
                 PPR_RETAIN_ERROR_ON_FAIL(Editor, first_err, m_triangle_pass->notifyDeviceLost());
@@ -822,6 +852,11 @@ namespace pP {
         if (m_grid_pass and not lane_releases_done) {
             PPR_RETAIN_ERROR_ON_FAIL(Editor, first_err, m_grid_pass->shutdown());
             m_grid_pass.reset();
+        }
+
+        if (m_retro_pass and not lane_releases_done) {
+            PPR_RETAIN_ERROR_ON_FAIL(Editor, first_err, m_retro_pass->shutdown());
+            m_retro_pass.reset();
         }
 
         if (m_triangle_pass and not lane_releases_done) {
@@ -1059,6 +1094,9 @@ namespace pP {
         }
         m_grid_pass->notifyFrameSubmitted(accepted);
         m_triangle_pass->notifyFrameSubmitted(accepted);
+        if (m_retro_pass) {
+            m_retro_pass->notifyFrameSubmitted(accepted);
+        }
         if (auto *fence_aware = dynamic_cast<IFenceAwareUiService *>(m_ui_service.get())) {
             fence_aware->notifyFrameSubmitted(accepted);
         }
@@ -1108,6 +1146,7 @@ namespace pP {
         if (renderLaneOwnsRenderer_()) {
             RenderFrameRequest request{};
             request.m_observe_grid = m_observe_grid;
+            request.m_retro = m_retro_settings;
             try {
                 request.m_packet = std::make_shared<const FramePacket>(packet);
                 request.m_ui = std::move(detached);
@@ -1176,6 +1215,7 @@ namespace pP {
         // Inline reference: build the same request, then apply on main.
         RenderFrameRequest inline_request{};
         inline_request.m_observe_grid = m_observe_grid;
+        inline_request.m_retro = m_retro_settings;
         try {
             inline_request.m_packet = std::make_shared<const FramePacket>(packet);
             inline_request.m_ui = std::move(detached);
@@ -1321,10 +1361,18 @@ namespace pP {
         const DetachedUiDrawData &ui = request.m_ui;
         const GridPass::GridStagedFrame &grid_stage = request.m_grid_stage;
         const TrianglePass::TriangleStagedFrame &triangle_stage = request.m_triangle_stage;
+        const bool retro = request.m_retro.m_enabled;
         out_result.m_frame_id = packet.m_frame_id;
         out_result.m_reservation_epoch = request.m_reservation_epoch;
         out_result.m_reservation_frame_id = request.m_reservation_frame_id;
         stampGridEcho(grid_stage, out_result);
+
+        // Retro is a lane-owned pass: a policy-enabled request without a live
+        // pass (initialization failed or teardown raced) fails closed instead
+        // of silently falling back to the native path.
+        if (retro and not m_retro_pass) [[unlikely]] {
+            PPR_RETURN_ERROR_ON_FAIL(Editor, make_error_code(std::errc::not_connected));
+        }
 
         // Cell uploads write a mapped atlas shared with earlier GPU frames.
         // Fence and publish pending visible cells before opening the
@@ -1426,28 +1474,73 @@ namespace pP {
             static_cast<float>(packet.m_framebuffer_size.x), static_cast<float>(packet.m_framebuffer_size.y));
         const auto grid_scissor = rhi::ScissorRect::fromSize(
             safe_narrowing(packet.m_framebuffer_size.x), safe_narrowing(packet.m_framebuffer_size.y));
-        const auto grid_prepare = [&](const PreRenderContext &context) {
+        const int2 retro_extent = RetroPass::sceneExtent(packet.m_framebuffer_size, request.m_retro.m_pixel_scale);
+        const auto retro_viewport = rhi::Viewport::fromSize(
+            static_cast<float>(retro_extent.x), static_cast<float>(retro_extent.y));
+        const auto retro_scissor = rhi::ScissorRect::fromSize(
+            safe_narrowing(retro_extent.x), safe_narrowing(retro_extent.y));
+
+        // Scene contents shared by both presentation policies: the retro
+        // scene draw forwards here through RetroPass::prepareScene; the
+        // native policy encodes it directly. The per-part CPU observation
+        // scopes stay attached to the work they time in either mode.
+        const auto draw_scene_contents = [&](const DrawContext &context) -> std::error_code {
+            {
+                const CpuObservationScope cpu_draw{clock, cpu.m_grid_draw};
+                PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->renderBackground(context));
+                PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->renderGpuIndirect(context));
+                PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->renderParticles(context));
+            }
+
+            const CpuObservationScope cpu_draw{clock, cpu.m_triangle_draw};
+            return m_triangle_pass->render(context);
+        };
+
+        const auto retro_scene_draw = [&](const DrawContext &context) -> std::error_code {
+            return draw_scene_contents(context);
+        };
+
+        const auto scene_draw = [&](const DrawContext &context) -> std::error_code {
+            if (retro) {
+                return m_retro_pass->render(context);
+            }
+            return draw_scene_contents(context);
+        };
+
+        // Policy branch: retro prepares the grid against the low-res extent
+        // and hands the scene encode to the pass's offscreen scene pass;
+        // native keeps the framebuffer viewport. Grid preparation is timed
+        // separately from the scene encode, whose draw observations are
+        // recorded in either mode.
+        const auto scene_prepare = [&](const PreRenderContext &context) -> std::error_code {
+            if (retro) {
+                {
+                    const CpuObservationScope cpu_prepare{clock, cpu.m_grid_prepare};
+                    PPR_RETURN_ERROR_ON_FAIL(
+                        Editor,
+                        m_grid_pass->prepareBackground(context, packet.m_camera, retro_viewport, retro_scissor));
+                    PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->prepareGpuVisibility(context));
+                }
+
+                return m_retro_pass->prepareScene(
+                    context, RetroPass::scenePipelineSignature(), retro_extent, retro_scene_draw);
+            }
             const CpuObservationScope cpu_prepare{clock, cpu.m_grid_prepare};
             PPR_RETURN_ERROR_ON_FAIL(
                 Editor, m_grid_pass->prepareBackground(context, packet.m_camera, grid_viewport, grid_scissor));
             return m_grid_pass->prepareGpuVisibility(context);
         };
-        const auto grid_draw = [&](const DrawContext &context) {
-            const CpuObservationScope cpu_draw{clock, cpu.m_grid_draw};
-            PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->renderBackground(context));
-            PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->renderGpuIndirect(context));
-            return m_grid_pass->renderParticles(context);
-        };
-        const auto triangle_draw = [&](const DrawContext &context) {
-            const CpuObservationScope cpu_draw{clock, cpu.m_triangle_draw};
-            return m_triangle_pass->render(context);
-        };
+
+        const DrawSubmission scene_submission{"scene", scene_draw};
         const std::initializer_list<SurfaceRenderPass> surface_passes{
             {
                 .m_additional_colors = {},
-                .m_depth_policy = ESurfaceDepthPolicy::renderer_owned,
-                .m_draws = {DrawSubmission{"grid.gpu", grid_draw}, DrawSubmission{"triangle", triangle_draw}},
-                .m_prepare = PreRenderCallback{grid_prepare},
+                // Retro scene work renders into the pass's scene target and
+                // composites as a fullscreen blit, so the surface pass owns
+                // no depth attachment in that mode.
+                .m_depth_policy = retro ? ESurfaceDepthPolicy::none : ESurfaceDepthPolicy::renderer_owned,
+                .m_draws = {scene_submission},
+                .m_prepare = PreRenderCallback{scene_prepare},
             },
             {
                 .m_surface_color =
