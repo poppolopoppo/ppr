@@ -1,6 +1,6 @@
 {
   "$schema": "https://unpkg.com/oh-my-opencode-slim@latest/oh-my-opencode-slim.schema.json",
-  "preset": "opencode-zen-free",
+  "preset": "hybrid",
   "companion": {
     "enabled": false,
     "position": "bottom-right",
@@ -13,8 +13,8 @@
   "presets": {
     "hybrid": {
       "orchestrator": {
-        "model": "opencode/muse-spark-1.3-contributor-free",
-        "variant": "max",
+        "model": "openai/gpt-6.1-sol",
+        "variant": "medium",
         "skills": [
           "*"
         ],
@@ -43,8 +43,8 @@
         ]
       },
       "fixer": {
-        "model": "openai/gpt-6.1-sol",
-        "variant": "high",
+        "model": "opencode/deepseek-v4.1-flash-free",
+        "variant": "max",
         "skills": [
           "clion-debugger",
           "module-architect",
@@ -66,7 +66,7 @@
         ]
       },
       "explorer": {
-        "model": "opencode/mimo-v2.6-flash-free",
+        "model": "opencode/deepseek-v4.1-flash-free",
         "temperature": 0.2,
         "skills": [],
         "mcps": [
@@ -75,7 +75,7 @@
         ]
       },
       "librarian": {
-        "model": "opencode/mimo-v2.6-flash-free",
+        "model": "opencode/deepseek-v4.1-flash-free",
         "temperature": 0.7,
         "skills": [],
         "mcps": [
@@ -87,7 +87,7 @@
         ]
       },
       "designer": {
-        "model": "openai/gpt-6-luna",
+        "model": "openai/gpt-6.1-sol",
         "variant": "medium",
         "temperature": 0.6,
         "skills": [
