@@ -5,6 +5,7 @@ module;
 
 module game.colony.sim_packet;
 
+import engine.core;
 import engine.sim;
 import engine.asset;
 import game.colony.content;
@@ -21,6 +22,8 @@ namespace pP::colony {
         std::error_code captureCatalogPresentation_(
             SimFramePacket &packet, const ContentPresentation &presentation, const std::string_view profile_key,
             const u32 boundary_material, const u32 cells_per_metre, const double reference_thickness) {
+            const hal::ProfileScope scope{"Game.SimPacket.Catalog"};
+
             PPR_RETURN_ERROR_ON_FAIL(
                 SimPresentation,
                 not presentation.catalog() or not presentation.catalog()->contentFingerprint() or cells_per_metre == 0u
@@ -133,6 +136,8 @@ namespace pP::colony {
         std::error_code capturePresentation_(
             SimFramePacket &packet, const ColonyDriver &driver,
             ParticlePresentationCache *const particle_cache = nullptr) {
+            const hal::ProfileScope scope{"Game.SimPacket.Presentation"};
+
             packet.m_initial_matter_valid = driver.initialMatterBaselineValid();
             packet.m_cell_size_m = 1.0f / static_cast<float>(driver.cellsPerMetre());
             const ContentCatalog *const catalog = driver.contentCatalog();

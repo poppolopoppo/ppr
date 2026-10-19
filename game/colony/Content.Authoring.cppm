@@ -93,6 +93,12 @@ export namespace pP::colony {
         u64 m_validated_revision{1u};
         std::shared_ptr<const ContentDescriptorCatalog> m_catalog;
 
+        // owner-lane dirty memo:
+        // Draft and adopted disk-baseline commits advance m_revision.
+        // Workers own snapshots and never query the mutable session.
+        mutable u64 m_dirty_revision{};
+        mutable bool m_dirty_value{};
+
         // construction and command application:
         ContentAuthoringSession() = default;
 

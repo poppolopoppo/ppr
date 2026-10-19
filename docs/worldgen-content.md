@@ -233,7 +233,19 @@ physical disk traffic or establish a benchmark result.
 
 ## In-game Worldgen Workshop
 
-Open **Worldgen Workshop** from the colony panel, or start directly without
+The authoring window starts fitted to the viewport and can be resized beyond
+that initial size; it has no application-imposed maximum. Return to game retains
+the current session, while Quit app uses the same dirty Save/Discard/Cancel and
+work-drain transition as the native window close control.
+
+Neighbor stages accept the full authored combination: 6 pore, 24 relaxation,
+4 finish and 24 erosion passes. Generation validates the sum of each stage's
+maximum across all participating biomes against 58, including unused biomes;
+it does not sum one biome at a time. The lower-level numeric stage caps remain
+10/25/10/25. Larger pass counts expand the existing per-chunk halo and increase
+generation work; they do not silently clamp UI values.
+
+Open **Workspace** from the gameplay ribbon, or start directly without
 generating a complete world:
 
 ```text
@@ -256,8 +268,14 @@ drafts explicitly show that reverse-reference information is unavailable until
 validation. Unvalidated descriptors remain selectable, and source-backed
 controls keep invalid typed drafts editable.
 
-The resizable Workshop separates the content browser from the inspector. Search
-definitions in the browser or filter the inspector's nested property tree.
+One resizable authoring workspace contains a pack command ribbon, an icon grid
+on the left, the selected asset's existing schema controls, and secondary Preview
+and Diagnostics tabs. Narrow windows use Assets/Editor tabs. Search the grid by
+name, kind, pack or path, or filter the inspector's nested property tree.
+Kind icons are symbolic font glyphs, not texture previews. Stable asset identity
+survives filtering/sorting and re-resolves against the current draft index;
+unsupported kinds display read-only metadata. Empty terrain (reserved vacuum)
+remains separately reachable. Old text/number edits commit before switching assets.
 Numeric sliders use the production decoder's legal ranges, with practical editing
 ranges for unbounded values; text entry remains available for precise values.
 Enums and content references offer their available choices in combo boxes.
@@ -338,8 +356,16 @@ original unchanged binary layout or owned source reconstruction against those
 original roots. Exact mode also exports `initial-matter.ppm` and production
 generation identity/cache metadata.
 
-Returning from Workshop restores the retained game presentation, camera and
-pause state without regenerating its terrain. Shared `engine.core` command history
+**Return to game** restores an existing game's presentation, camera and pause
+state without regenerating its terrain, retaining the authoring session and
+selection for reopening. Standalone mode instead offers **Start game** for the
+current validated draft, selected qualified World and seed. It owns the authored
+descriptor snapshot, drains preview work, and uses the normal world preparation/
+publication pipeline. Invalid, stale or busy drafts cannot start. Cancellation
+or failure retains the workspace; successful publication retains that authored
+source for subsequent New Game. Binary appearance sources may still require I/O.
+**Quit app** is a separate action. Open/Reload/Quit retain the unsaved
+Save/Discard/Cancel decision. Shared `engine.core` command history
 owns bounded reversible edits; content-specific patches and disk dirty state stay
 in the game authoring session.
 

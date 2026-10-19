@@ -1128,6 +1128,7 @@ namespace pP::game::tests::detail::pack {
         const auto original = session.draftSnapshot();
         constexpr std::array<std::string_view, kContentDocumentCount> keys{
             "basalt", "hearth", "composition", "landing", "frontier", "caves", "solid", "albedo", "skies"};
+        PPR_TEST_ASSERT(not session.dirty());
 
         for (std::size_t index = 0u; index < keys.size(); ++index) {
             const auto category = static_cast<EContentDocument>(index);
@@ -1137,20 +1138,28 @@ namespace pP::game::tests::detail::pack {
             const auto cloned = session.draftSnapshot();
             PPR_TEST_ASSERT(cloned.m_source.m_descriptors.size() == original.m_source.m_descriptors.size() + 1u);
             PPR_TEST_ASSERT(not std::filesystem::exists(copied_path));
+            PPR_TEST_ASSERT(session.dirty());
 
             PPR_TEST_ASSERT(session.undo().value());
             PPR_TEST_ASSERT(not session.dirty());
+
             PPR_TEST_ASSERT(session.redo().value());
+            PPR_TEST_ASSERT(session.dirty());
             PPR_TEST_ASSERT(
                 descriptor(session.draftSource(), copied_path).m_bytes ==
                 descriptor(cloned.m_source, copied_path).m_bytes);
+
             PPR_TEST_ASSERT(not session.deleteDefinition(category, copy, diagnostics));
+
             PPR_TEST_ASSERT(session.undo().value());
             PPR_TEST_ASSERT(
                 descriptor(session.draftSource(), copied_path).m_bytes ==
                 descriptor(cloned.m_source, copied_path).m_bytes);
+
             PPR_TEST_ASSERT(session.redo().value());
+
             PPR_TEST_ASSERT(not session.revert());
+            PPR_TEST_ASSERT(not session.dirty());
         }
 
         PPR_TEST_ASSERT(
@@ -1179,22 +1188,34 @@ namespace pP::game::tests::detail::pack {
         const auto original = session.draftSnapshot();
         const auto material_path = fixture.m_root / "basalt.toml";
         const auto feature_path = fixture.m_root / "landing.toml";
+        PPR_TEST_ASSERT(not session.dirty());
+
         PPR_TEST_ASSERT(not session.clearDefinitionProperty(
             EContentDocument::materials, "basalt", "appearance.normal_texture", diagnostics));
         const auto cleared = descriptor(session.draftSource(), material_path).m_bytes;
         PPR_TEST_ASSERT(cleared != descriptor(original.m_source, material_path).m_bytes);
+        PPR_TEST_ASSERT(session.dirty());
+
         const auto revision = session.revision();
         PPR_TEST_ASSERT(not session.clearDefinitionProperty(
             EContentDocument::materials, "basalt", "appearance.normal_texture", diagnostics));
         PPR_TEST_ASSERT(session.revision() == revision);
+        PPR_TEST_ASSERT(session.dirty());
+
         PPR_TEST_ASSERT(
             session.clearDefinitionProperty(
                 EContentDocument::materials, "basalt", "appearance.display_name", diagnostics) ==
             config::EConfigErrc::cross_field_invalid);
+        PPR_TEST_ASSERT(session.revision() == revision and session.dirty());
+
         PPR_TEST_ASSERT(session.undo().value() and not session.dirty());
+
         PPR_TEST_ASSERT(session.redo().value());
+        PPR_TEST_ASSERT(session.dirty());
         PPR_TEST_ASSERT(descriptor(session.draftSource(), material_path).m_bytes == cleared);
+
         PPR_TEST_ASSERT(session.undo().value());
+        PPR_TEST_ASSERT(not session.dirty());
 
         const auto before_same_tag = session.revision();
         PPR_TEST_ASSERT(not session.editDefinition(
@@ -1210,14 +1231,17 @@ namespace pP::game::tests::detail::pack {
             config::FileValue::text("capsule"), diagnostics));
         const auto invalid = session.draftSnapshot();
         PPR_TEST_ASSERT(not validateContentDraft(invalid, diagnostics));
+
         PPR_TEST_ASSERT(session.undo().value());
         PPR_TEST_ASSERT(
             descriptor(session.draftSource(), feature_path).m_bytes ==
             descriptor(original.m_source, feature_path).m_bytes);
+
         PPR_TEST_ASSERT(session.redo().value());
         PPR_TEST_ASSERT(
             descriptor(session.draftSource(), feature_path).m_bytes ==
             descriptor(invalid.m_source, feature_path).m_bytes);
+
         PPR_TEST_ASSERT(session.undo().value());
 
         const auto ellipse = config::decode(
@@ -1229,7 +1253,9 @@ namespace pP::game::tests::detail::pack {
             diagnostics));
         const auto variant = session.draftSnapshot();
         PPR_TEST_ASSERT(validateContentDraft(variant, diagnostics).has_value());
+
         PPR_TEST_ASSERT(session.undo().value());
+
         PPR_TEST_ASSERT(session.redo().value());
         PPR_TEST_ASSERT(
             descriptor(session.draftSource(), feature_path).m_bytes ==
@@ -1243,7 +1269,9 @@ namespace pP::game::tests::detail::pack {
             EContentDocument::biomes, "hearth", "definition.temperature", *temperature, diagnostics));
         const auto grouped = session.draftSnapshot();
         PPR_TEST_ASSERT(validateContentDraft(grouped, diagnostics).has_value());
+
         PPR_TEST_ASSERT(session.undo().value());
+
         PPR_TEST_ASSERT(session.redo().value());
         PPR_TEST_ASSERT(
             descriptor(session.draftSource(), fixture.m_root / "hearth.toml").m_bytes ==
@@ -1260,17 +1288,23 @@ namespace pP::game::tests::detail::pack {
         const auto catalog = session.validatedCatalog();
         const auto baseline_revision = session.validatedRevision();
         PPR_TEST_ASSERT(not session.dirty() and not session.canUndo());
+
         PPR_TEST_ASSERT(not session.editBiome(
             "hearth", "definition.temperature.base_k", config::FileValue::floating(301.0), diagnostics));
+        PPR_TEST_ASSERT(session.dirty());
+
         const auto submitted = session.draftSnapshot();
         auto validated = validateContentDraft(submitted, diagnostics, nullptr, kWorld);
         PPR_TEST_ASSERT(validated.has_value());
         PPR_TEST_ASSERT(session.acceptValidation(submitted.m_revision, validated->m_definitions));
+        PPR_TEST_ASSERT(session.dirty());
 
         PPR_TEST_ASSERT(not session.editBiome(
             "hearth", "definition.temperature.base_k", config::FileValue::floating(302.0), diagnostics));
         const auto newer = session.draftSnapshot();
         PPR_TEST_ASSERT(not session.acceptValidation(submitted.m_revision, catalog));
+        PPR_TEST_ASSERT(session.dirty());
+
         auto saved = saveContentDraft(submitted, diagnostics);
         PPR_TEST_ASSERT(saved.has_value() and not saved->m_error);
         PPR_TEST_ASSERT(not session.acceptSave(std::move(*saved)) and session.dirty());
@@ -1281,10 +1315,19 @@ namespace pP::game::tests::detail::pack {
         save(session, diagnostics);
 
         auto reopened = fixture.open(diagnostics);
+        PPR_TEST_ASSERT(not reopened.dirty());
+
+        auto moved = std::move(reopened);
+        PPR_TEST_ASSERT(not moved.dirty());
+
+        reopened = std::move(moved);
+        PPR_TEST_ASSERT(not reopened.dirty());
         PPR_TEST_ASSERT(
             descriptor(reopened.draftSource(), fixture.m_root / "hearth.toml").m_bytes ==
             descriptor(session.draftSource(), fixture.m_root / "hearth.toml").m_bytes);
+
         PPR_TEST_ASSERT(session.undo().value() and session.dirty());
+
         PPR_TEST_ASSERT(not session.revert());
         PPR_TEST_ASSERT(not session.dirty() and not session.canUndo() and not session.canRedo());
     };
@@ -1379,11 +1422,51 @@ namespace pP::game::tests::detail::pack {
         PPR_TEST_ASSERT(not session.editBiome(
             "hearth", "definition.temperature.base_k", config::FileValue::floating(302.0), diagnostics));
         const auto newer = session.draftSnapshot();
+        PPR_TEST_ASSERT(session.dirty());
+
         PPR_TEST_ASSERT(not session.acceptSave(std::move(*result)) and session.validatedCatalog() == catalog);
         PPR_TEST_ASSERT(
             descriptor(session.draftSource(), biome_path).m_bytes == descriptor(newer.m_source, biome_path).m_bytes);
         PPR_TEST_ASSERT(session.dirty());
         save(session, diagnostics);
+    };
+
+    PPR_UNIT_TEST (canceled_save_adoption_clears_dirty_when_all_current_bytes_reached_disk) {
+        Fixture fixture;
+        config::Diagnostics diagnostics;
+        auto session = fixture.open(diagnostics);
+        const auto catalog = session.validatedCatalog();
+        PPR_TEST_ASSERT(not session.dirty());
+
+        PPR_TEST_ASSERT(not session.editBiome(
+            "hearth", "definition.temperature.base_k", config::FileValue::floating(301.0), diagnostics));
+        PPR_TEST_ASSERT(not session.editDefinition(
+            EContentDocument::fields, "composition", "definition.frequency_per_metre",
+            config::FileValue::floating(0.02), diagnostics));
+        PPR_TEST_ASSERT(session.dirty());
+
+        const auto submitted = session.draftSnapshot();
+        const auto field_path = fixture.m_root / "composition.toml";
+        const auto biome_path = fixture.m_root / "hearth.toml";
+        CancelAfterDiskCommit cancellation{field_path, descriptor(submitted.m_source, field_path).m_bytes};
+        PPR_TEST_ASSERT(not cancellation.error());
+
+        auto result = saveContentDraft(submitted, diagnostics, std::addressof(cancellation));
+        PPR_TEST_ASSERT(
+            result.has_value() and result->m_error == std::errc::operation_canceled and not result->m_catalog);
+        PPR_TEST_ASSERT(fixture.read("composition.toml") == descriptor(submitted.m_source, field_path).m_bytes);
+        PPR_TEST_ASSERT(fixture.read("hearth.toml") == descriptor(submitted.m_source, biome_path).m_bytes);
+
+        PPR_TEST_ASSERT(not session.acceptSave(std::move(*result)));
+        PPR_TEST_ASSERT(session.validatedCatalog() == catalog);
+        PPR_TEST_ASSERT(not session.dirty());
+        PPR_TEST_ASSERT(session.canUndo());
+
+        PPR_TEST_ASSERT(session.undo().value());
+        PPR_TEST_ASSERT(session.dirty());
+
+        PPR_TEST_ASSERT(session.redo().value());
+        PPR_TEST_ASSERT(not session.dirty());
     };
 
     PPR_UNIT_TEST (save_checks_all_owned_sources_and_never_adopts_external_bytes) {
@@ -1464,7 +1547,10 @@ namespace pP::game::tests::detail::pack {
         PPR_TEST_ASSERT(not session.cloneDefinition(EContentDocument::fields, "composition", "y", diagnostics));
         const auto y = target(session, "y", sim::asset::kFieldKind, diagnostics);
         const auto newer = session.draftSnapshot();
+        PPR_TEST_ASSERT(session.dirty());
+
         PPR_TEST_ASSERT(not session.acceptSave(std::move(*partial)));
+        PPR_TEST_ASSERT(session.dirty());
         PPR_TEST_ASSERT(ledger(session.baselineSource(), x).m_bytes == descriptor(submitted.m_source, x).m_bytes);
         PPR_TEST_ASSERT(not ledger(session.baselineSource(), y).m_bytes);
         PPR_TEST_ASSERT(descriptor(session.draftSource(), x).m_bytes == descriptor(newer.m_source, x).m_bytes);
@@ -1562,6 +1648,58 @@ namespace pP::game::tests::detail::pack {
     // ------------------------------------------------------------------
     // queued workshop requests and external-owner teardown
     // ------------------------------------------------------------------
+
+    PPR_UNIT_TEST (authored_start_uses_owned_draft_and_restoration_proofs_before_generation_cancellation) {
+        Fixture fixture;
+        useSmallIdentityImages(fixture);
+        config::Diagnostics diagnostics;
+        auto session = fixture.open(diagnostics);
+        PPR_TEST_ASSERT(not session.cloneDefinition(
+            EContentDocument::materials, "ppr.test:basalt", "ppr.test:authored_clone", diagnostics));
+
+        const AuthoredGameSource source{session.draftSnapshot(), std::string{kWorld}};
+        const auto disk_path = target(session, "ppr.test:basalt", sim::asset::kMaterialKind, diagnostics);
+        fixture.write(disk_path.string(), "this is not a descriptor");
+        PPR_TEST_ASSERT(not std::filesystem::exists(
+            target(session, "ppr.test:authored_clone", sim::asset::kMaterialKind, diagnostics)));
+
+        auto [work_context, cancel] = context::withCancelClause(context::background());
+        struct CancelAtGeneration final : ITimerClock {
+            context::CancelClauseFunc &m_cancel;
+            mutable bool m_generation_entered{};
+
+            explicit CancelAtGeneration(context::CancelClauseFunc &cancel) : m_cancel(cancel) {
+            }
+
+            TimePoint now() const noexcept override {
+                m_generation_entered = true;
+                m_cancel(std::make_error_code(std::errc::operation_canceled));
+                return {};
+            }
+        } clock{cancel};
+
+        // Generation receives an explicit clock only after the owned descriptors validate and compile.
+        // The on-disk descriptor is invalid and the unsaved clone has no file; neither may replace the snapshot.
+        auto prepared = prepareAuthoredGame(
+            source, {.m_seed = 42u, .m_world_generation = 1u}, clock, {.m_context = work_context}, diagnostics);
+        PPR_TEST_ASSERT(not prepared and prepared.error() == std::errc::operation_canceled);
+        PPR_TEST_ASSERT(clock.m_generation_entered);
+
+        auto invalid_profile = source;
+        invalid_profile.m_profile = "ppr.test:missing";
+        diagnostics.clear();
+        auto rejected = prepareAuthoredGame(
+            invalid_profile, {.m_seed = 42u, .m_world_generation = 1u}, clock, {.m_context = context::background()},
+            diagnostics);
+        PPR_TEST_ASSERT(not rejected and rejected.error() != std::errc::operation_canceled);
+        PPR_TEST_ASSERT(diagnostics.hasErrors());
+
+        clock.m_generation_entered = false;
+        auto cancelled = prepareAuthoredGame(
+            source, {.m_seed = 42u, .m_world_generation = 1u}, clock, {.m_context = work_context}, diagnostics);
+        PPR_TEST_ASSERT(not cancelled and cancelled.error() == std::errc::operation_canceled);
+        PPR_TEST_ASSERT(not clock.m_generation_entered);
+    };
 
     PPR_UNIT_TEST (workshop_queued_requests_preserve_newer_drafts_and_require_current_discard_authority) {
         struct Clock final : ITimerClock {
@@ -1754,12 +1892,14 @@ namespace pP::game::tests {
             detail::pack::authoring_optional_group_and_variant_transactions_are_atomic,
             detail::pack::authoring_validation_and_save_preserve_newer_drafts_and_revision_history,
             detail::pack::cancellation_after_physical_success_retains_every_observed_disk_outcome,
+            detail::pack::canceled_save_adoption_clears_dirty_when_all_current_bytes_reached_disk,
             detail::pack::save_checks_all_owned_sources_and_never_adopts_external_bytes,
             detail::pack::descriptor_failure_blocks_manifest_and_obsolete_removal,
             detail::pack::manifest_failure_retains_orphan_ledger_and_newer_x_and_y_intent,
             detail::pack::saved_delete_undo_restores_exact_arbitrary_path_and_reappearance_conflicts,
             detail::pack::obsolete_orphan_cleanup_blocks_fresh_growth_but_desired_orphans_are_reusable,
             detail::pack::workshop_queued_requests_preserve_newer_drafts_and_require_current_discard_authority,
+            detail::pack::authored_start_uses_owned_draft_and_restoration_proofs_before_generation_cancellation,
         });
     };
 

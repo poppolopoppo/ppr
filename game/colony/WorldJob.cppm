@@ -2,6 +2,8 @@ module;
 
 export module game.application:world_job;
 
+export import game.colony.world_progress;
+
 import engine.app;
 import engine.core;
 import engine.sim;
@@ -13,39 +15,6 @@ export namespace pP::colony {
     // ------------------------------------------------------------------
     // job state
     // ------------------------------------------------------------------
-
-    enum class EWorldJobState : u8 {
-        idle,
-        queued,
-        generating,
-        cancelling,
-        prepared,
-        retiring,
-        succeeded,
-        failed,
-        cancelled
-    };
-    enum class EWorldJobStage : u8 {
-        queued,
-        layout,
-        terrain,
-        caves,
-        initial_matter,
-        validation,
-        physics,
-        publishing,
-        retiring,
-        capturing
-    };
-
-    struct WorldJobView {
-        u64 m_id{};
-        EWorldJobState m_state{EWorldJobState::idle};
-        EWorldJobStage m_stage{EWorldJobStage::queued};
-        u32 m_completed{};
-        u32 m_total{}; // Zero denotes an indeterminate stage.
-        std::error_code m_error{};
-    };
 
     // ------------------------------------------------------------------
     // world job
@@ -67,7 +36,9 @@ export namespace pP::colony {
         WorldJob(const WorldJob &) = delete;
         WorldJob &operator=(const WorldJob &) = delete;
 
-        [[nodiscard]] std::error_code request(ColonyDriverDesc request);
+        /// An override owns one request's immutable authored inputs through worker retirement.
+        /// Empty keeps the application's default preparation policy.
+        [[nodiscard]] std::error_code request(ColonyDriverDesc request, Prepare prepare = {});
         /// Caller freezes at a completed tick and mirrors Scene state first.
         /// Transfers ownership only on success. Until takeCaptured(), all live
         /// inspection, ticks, tools and render acknowledgments must be deferred.

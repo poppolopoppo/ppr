@@ -66,8 +66,7 @@ namespace pP::colony {
             surface->m_cell_size_m = packet.m_cell_size_m;
             for (u32 column = 0u; column < kGridSurfaceColumns; ++column) {
                 surface->m_heights_m[column / 4u][column % 4u] = static_cast<float>(sim::generationSurfaceHeight(
-                    preview.m_plan,
-                    (static_cast<double>(column) + 0.5) * static_cast<double>(packet.m_cell_size_m)));
+                    preview.m_plan, (static_cast<double>(column) + 0.5) * static_cast<double>(packet.m_cell_size_m)));
             }
             packet.m_surface_profile = std::move(surface);
         }
@@ -185,6 +184,42 @@ namespace pP::colony {
         std::error_code m_error{};
         bool m_capture_pending{}, m_ready{};
     };
+
+    // ------------------------------------------------------------------
+    // owned authored game preparation
+    // ------------------------------------------------------------------
+
+    Expected<std::unique_ptr<ColonyDriver>> prepareAuthoredGame(
+        const AuthoredGameSource &source, const ColonyDriverDesc &request, const ITimerClock &clock,
+        const sim::GenerationExecution &execution, config::Diagnostics &diagnostics) {
+        const hal::ProfileScope scope{"Workshop.Start.Prepare"};
+        const auto &snapshot = source.m_snapshot;
+        auto validated = validateContentDraft(snapshot, diagnostics, execution.m_context.get(), source.m_profile);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(Workshop, validated);
+
+        auto prepared = prepareWorld(validated->m_selected, source.m_profile, request.m_seed, clock, execution);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(Workshop, prepared);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(Workshop, execution.m_context ? execution.m_context->error() : std::error_code{});
+
+        const asset::RequestGeneration generation{request.m_world_generation};
+        auto images = ContentPresentationRequest::start(
+            prepared->catalogOwner(), generation, execution.m_context, diagnostics);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(Workshop, images);
+        auto ready = images->finish(diagnostics);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(Workshop, ready);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(Workshop, prepared->attachPresentation(std::move(*ready), generation));
+        PPR_RETURN_UNEXPECTED_ON_FAIL(Workshop, execution.m_context ? execution.m_context->error() : std::error_code{});
+
+        auto driver = std::make_unique<ColonyDriver>();
+        const auto error = driver->initPrepared(request, std::move(*prepared), &execution);
+        if (error) {
+            // Preserve initialization failure while attempting partial driver teardown on this owning worker.
+            PPR_LOG_WARNING_ON_FAIL(Workshop, driver->shutdown());
+            PPR_RETURN_UNEXPECTED_ON_FAIL(Workshop, error);
+        }
+
+        return driver;
+    }
 
     // ------------------------------------------------------------------
     // main-lane ownership and request queue

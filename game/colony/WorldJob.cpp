@@ -28,6 +28,7 @@ namespace pP::colony {
         std::unique_ptr<GridPass::GridStagedFrame> m_presentation{};
         std::optional<WorldCheckpoint> m_checkpoint{};
         Capture m_capture{};
+        Prepare m_prepare{};
         bool m_is_capture{}; // Immutable after admission; cleanup may release the callback concurrently.
     };
 
@@ -58,7 +59,7 @@ namespace pP::colony {
     // request
     // ------------------------------------------------------------------
 
-    std::error_code WorldJob::request(const ColonyDriverDesc request) {
+    std::error_code WorldJob::request(const ColonyDriverDesc request, Prepare prepare) {
         if (busy()) {
             PPR_RETURN_ERROR_ON_FAIL(WorldJobs, std::errc::device_or_resource_busy);
         }
@@ -69,6 +70,7 @@ namespace pP::colony {
         m_diagnostic_text.clear();
         m_job = std::make_shared<State>();
         m_job->m_request = request;
+        m_job->m_prepare = std::move(prepare);
         std::tie(m_job->m_context, m_job->m_cancel) = context::withCancelClause(context::background());
         m_view = WorldJobView{.m_id = m_next_id++, .m_state = EWorldJobState::queued};
         m_cancelled = false;
@@ -251,6 +253,7 @@ namespace pP::colony {
                 state->m_presentation.reset();
                 state->m_checkpoint.reset();
                 state->m_capture = {}; // Captured output owners are also disposed off-main.
+                state->m_prepare = {};
                 if (state->m_candidate) {
                     PPR_RETAIN_ERROR_ON_FAIL(WorldJobs, error, state->m_candidate->shutdown());
                     state->m_candidate.reset();
@@ -288,6 +291,13 @@ namespace pP::colony {
 
         if (m_view.m_state == EWorldJobState::queued) {
             if (m_cancelled) {
+                if (m_job->m_prepare) {
+                    // An authored request may own substantial source bytes even before worker admission.
+                    m_view.m_state = EWorldJobState::retiring;
+                    m_cleanup_pending = true;
+                    return allow_cleanup ? admitCleanup_() : std::error_code{};
+                }
+
                 m_view.m_state = EWorldJobState::cancelled;
                 m_job.reset(); // No candidate or work was admitted.
                 return {};
@@ -304,7 +314,8 @@ namespace pP::colony {
                         .m_completed_chunks = &state->m_completed,
                         .m_stage = &state->m_stage};
                     PPR_RETURN_ERROR_ON_FAIL(WorldJobs, state->m_context->error());
-                    auto candidate = m_prepare(state->m_request, execution, state->m_diagnostics);
+                    auto &prepare = state->m_prepare ? state->m_prepare : m_prepare;
+                    auto candidate = prepare(state->m_request, execution, state->m_diagnostics);
                     if (not candidate) {
                         state->m_diagnostic_text = state->m_diagnostics.format();
                         if (state->m_diagnostic_text.size() > 64u * 1024u) {

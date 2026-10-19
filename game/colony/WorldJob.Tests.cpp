@@ -62,6 +62,97 @@ namespace pP::game::tests::detail::world_job {
         }
     }
 
+    PPR_UNIT_TEST (owned_request_override_survives_cancel_and_default_policy_is_unchanged) {
+        ParallelScheduler chunks{"Authored override chunks", 1u, static_cast<std::size_t>(hal::page_granularity)};
+        std::atomic<u32> default_calls{};
+        WorldJob job{
+            chunks,
+            [&](const ColonyDriverDesc &, const sim::GenerationExecution &,
+                config::Diagnostics &) -> Expected<std::unique_ptr<ColonyDriver>> {
+                ++default_calls;
+                return std::make_unique<ColonyDriver>();
+            }};
+
+        auto source = std::make_shared<const std::string>("ppr.authored:chosen");
+        const std::weak_ptr<const std::string> observer = source;
+        std::latch entered{1}, release{1};
+        std::atomic<bool> cancellation_observed{};
+        bool released = false;
+        PPR_DEFER {
+            if (not released) {
+                release.count_down();
+            }
+
+            // Best-effort assertion unwinding must join before the captured latches disappear.
+            std::ignore = job.shutdown();
+        };
+
+        PPR_TEST_ASSERT(not job.request(
+            {.m_seed = 17u, .m_world_generation = 1u},
+            [source, &entered, &release, &cancellation_observed](
+                const ColonyDriverDesc &request, const sim::GenerationExecution &execution,
+                config::Diagnostics &diagnostics) -> Expected<std::unique_ptr<ColonyDriver>> {
+                PPR_TEST_ASSERT(request.m_seed == 17u and *source == "ppr.authored:chosen");
+                entered.count_down();
+                release.wait();
+
+                const auto error = execution.m_context->error();
+                cancellation_observed = error == std::errc::operation_canceled;
+                diagnostics.add("owned snapshot", "profile", "cancelled override", error);
+                return std::unexpected{error};
+            }));
+
+        source.reset();
+        PPR_TEST_ASSERT(not observer.expired());
+
+        PPR_TEST_ASSERT(not job.update(true));
+        entered.wait();
+        PPR_TEST_ASSERT(default_calls == 0u and not observer.expired());
+
+        job.cancel();
+        PPR_TEST_ASSERT(not observer.expired());
+        release.count_down();
+        released = true;
+        PPR_TEST_ASSERT(not job.update(true));
+        settle(job);
+        PPR_TEST_ASSERT(cancellation_observed and observer.expired());
+        PPR_TEST_ASSERT(job.diagnosticText().find("owned snapshot") != std::string_view::npos);
+
+        PPR_TEST_ASSERT(not job.request({.m_world_generation = 2u}));
+        PPR_TEST_ASSERT(not job.update(true));
+        settle(job);
+        PPR_TEST_ASSERT(default_calls == 1u);
+
+        job.cancel();
+        PPR_TEST_ASSERT(not job.update(true));
+        settle(job);
+        PPR_TEST_ASSERT(not job.shutdown());
+    };
+
+    PPR_UNIT_TEST (queued_override_payload_is_released_after_coordinator_retirement) {
+        ParallelScheduler chunks{"Queued authored chunks", 1u, static_cast<std::size_t>(hal::page_granularity)};
+        WorldJob job{chunks, WorldJob::legacyFixturePrepare()};
+        PPR_DEFER {
+            std::ignore = job.shutdown();
+        };
+
+        auto source = std::make_shared<const std::string>("owned draft");
+        const std::weak_ptr<const std::string> observer = source;
+        PPR_TEST_ASSERT(not job.request(
+            {.m_world_generation = 1u},
+            [source](const ColonyDriverDesc &, const sim::GenerationExecution &, config::Diagnostics &)
+                -> Expected<std::unique_ptr<ColonyDriver>> { return std::make_unique<ColonyDriver>(); }));
+
+        source.reset();
+
+        job.cancel();
+        PPR_TEST_ASSERT(not job.update(false));
+        settle(job);
+        PPR_TEST_ASSERT(not job.busy() and job.view().m_state == EWorldJobState::cancelled);
+        PPR_TEST_ASSERT(observer.expired());
+        PPR_TEST_ASSERT(not job.shutdown());
+    };
+
     PPR_UNIT_TEST (cancelled_header_retains_catalog_until_external_release) {
         ParallelScheduler chunks{"Header retirement chunks", 1u, static_cast<std::size_t>(hal::page_granularity)};
         WorldJob job{
@@ -408,6 +499,8 @@ namespace pP::game::tests::detail::world_job {
 namespace pP::game::tests {
     const UnitTest world_jobs = UnitTest::Named("world_jobs") / [](UnitTest::IRun &_) -> void {
         _.recurse({
+            detail::world_job::owned_request_override_survives_cancel_and_default_policy_is_unchanged,
+            detail::world_job::queued_override_payload_is_released_after_coordinator_retirement,
             detail::world_job::loading_presentation_gates_admission_and_cancel_is_reusable,
             detail::world_job::cancelled_header_retains_catalog_until_external_release,
             detail::world_job::gated_worker_keeps_control_polling_and_cancellation_live,

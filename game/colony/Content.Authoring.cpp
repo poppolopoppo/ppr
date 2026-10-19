@@ -241,27 +241,39 @@ namespace pP::colony {
     }
 
     bool ContentAuthoringSession::dirty() const noexcept {
-        for (const auto &pack: m_draft.m_packs) {
-            const auto baseline = std::ranges::find(
-                m_baseline.m_packs, pack.m_manifest.m_path,
-                [](const auto &value) -> const auto & { return value.m_manifest.m_path; });
-            if (baseline == m_baseline.m_packs.end() or baseline->m_manifest.m_bytes != pack.m_manifest.m_bytes) {
-                return true;
-            }
+        if (m_dirty_revision == m_revision) {
+            return m_dirty_value;
         }
 
-        for (const auto &record: m_draft.m_descriptors) {
-            const auto baseline = ledgerRecord(m_baseline, record.m_path);
-            if (baseline == m_baseline.m_descriptors.end() or
-                not baseline->m_bytes or
-                *baseline->m_bytes != record.m_bytes) {
-                return true;
-            }
-        }
+        const bool value = [&]() {
+            const hal::ProfileScope scope{"Content.Authoring.Dirty"};
 
-        return std::ranges::any_of(m_baseline.m_descriptors, [&](const auto &record) {
-            return record.m_bytes.has_value() and not sourceBytes(m_draft, record.m_target->path());
-        });
+            for (const auto &pack: m_draft.m_packs) {
+                const auto baseline = std::ranges::find(
+                    m_baseline.m_packs, pack.m_manifest.m_path,
+                    [](const auto &value) -> const auto & { return value.m_manifest.m_path; });
+                if (baseline == m_baseline.m_packs.end() or baseline->m_manifest.m_bytes != pack.m_manifest.m_bytes) {
+                    return true;
+                }
+            }
+
+            for (const auto &record: m_draft.m_descriptors) {
+                const auto baseline = ledgerRecord(m_baseline, record.m_path);
+                if (baseline == m_baseline.m_descriptors.end() or
+                    not baseline->m_bytes or
+                    *baseline->m_bytes != record.m_bytes) {
+                    return true;
+                }
+            }
+
+            return std::ranges::any_of(m_baseline.m_descriptors, [&](const auto &record) {
+                return record.m_bytes.has_value() and not sourceBytes(m_draft, record.m_target->path());
+            });
+        }();
+
+        m_dirty_value = value;
+        m_dirty_revision = m_revision;
+        return value;
     }
 
     bool ContentAuthoringSession::canUndo() const noexcept {

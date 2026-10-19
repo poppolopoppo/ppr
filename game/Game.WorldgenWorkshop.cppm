@@ -3,12 +3,28 @@ export module game.application:worldgen_workshop;
 
 import engine.core;
 import engine.app;
+import engine.sim;
+import game.colony.driver;
 import game.colony.content;
 import game.colony.content.authoring;
 import game.colony.worldgen_preview;
 import std;
 
 export namespace pP::colony {
+    // ------------------------------------------------------------------
+    // owned authored game preparation
+    // ------------------------------------------------------------------
+
+    struct AuthoredGameSource {
+        ContentAuthoringSnapshot m_snapshot;
+        std::string m_profile;
+    };
+
+    /// Descriptor bytes come from the owned snapshot. Presentation sources may still require filesystem I/O.
+    [[nodiscard]] Expected<std::unique_ptr<ColonyDriver>> prepareAuthoredGame(
+        const AuthoredGameSource &source, const ColonyDriverDesc &request, const ITimerClock &clock,
+        const sim::GenerationExecution &execution, config::Diagnostics &diagnostics);
+
     // ------------------------------------------------------------------
     // asynchronous authoring workshop
     // ------------------------------------------------------------------

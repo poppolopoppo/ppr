@@ -33,10 +33,11 @@ Game-owned colony simulation, tools, presentation translation and headless workl
 | Module | Files | Responsibility |
 |---|---|---|
 | `game.colony` | `Colony.cppm/.cpp` | RAII grid ownership and generation lifecycle |
-| `game.application:world_job` | `WorldJob.cppm/.cpp` | Game-owned asynchronous candidate preparation, cancellation, pointer publication and background retirement |
+| `game.colony.world_progress` | `WorldProgress.cppm` | Shared world-work state/stage/read-only progress vocabulary, independent of the application host |
+| `game.application:world_job` | `WorldJob.cppm/.cpp` | Asynchronous candidate preparation, cancellation, pointer publication and retirement; optional owned per-request Prepare overrides reuse the default worker/context/cleanup pipeline |
 | `game.colony.worldgen` | `WorldGen.cppm/.cpp`, `WorldGen.Plan.cpp`, `WorldGen.Fixture.cpp` | Authored numeric-plan preparation and explicitly named legacy fixtures |
 | `game.colony.worldgen_preview` | `WorldGen.Preview.cppm/.cpp`, `WorldGen.Preview.Export.cpp` | Bounded biome samples and exact crops of cached production worlds, canonical initial particles, diagnostic/source export |
-| `game.colony.worldgen_panel` | `WorldGenPanel.cppm/.cpp` | Workshop browser, all-document property controls, clone/delete and live-preview intents; no I/O or renderer mutation |
+| `game.colony.worldgen_panel` | `../ui/WorldGenPanel.cppm/.cpp` | Merged authoring workspace, embedded stable-key browser, all-document property controls and preview/Start/Return/Quit intents; no I/O or renderer mutation |
 | `game.colony.content` | `Content.cppm/.cpp`, `Content.Source.cpp`, `Content.Descriptors.cpp`, `Content.Assembly.cpp`, `Content.Presentation.cpp` | Owned multi-pack sources and definition-only importing; all-World descriptor catalog; direct selected-World numeric projection; separately prepared presentation through the shared asset request. `decodeWorldGenDefinition` handles the separate version-2 definition envelope. |
 | `game.colony.metric` | `Metric.cppm/.cpp` | Checked 3:1 fine-cell/metre conversions, globally anchored construction footprints, nominal volume and persisted metric compatibility preflight. Authored sessions use this metric for actors, colliders, tools and rendering. |
 | `game.colony.driver` | `ColonyDriver.cppm/.cpp` | Explicit-time fixed step, pause/step/speed/regenerate, ECS and driver-local physics |
@@ -46,7 +47,7 @@ Game-owned colony simulation, tools, presentation translation and headless workl
 | `game.colony.digtool` | `DigTool.cppm/.cpp` | Rectangular dig edits |
 | `game.colony.sim_packet` | `SimFramePacket.cppm/.cpp`, `SimFramePacket.Diagnostics.cpp` | Frozen diagnostic maps, immutable particle translation cache, owned simulation snapshots, bounded initial presentation batches, confirmed-prefix cursor, coherence checks and grid staging |
 | `game.colony.translator` | `ColonyTranslator.cppm/.cpp` | Resident-chunk translation/cache revisions, presentation invalidation |
-| `game.colony.panel` | `ColonyPanel.cppm/.cpp` | ImGui views/state/intents; no renderer/service resolution |
+| `game.colony.panel` | `../ui/ColonyPanel.cppm/.cpp` | Prepared presentation values/state/intents; no driver/renderer/service access while drawing |
 | `game.colony.smoke` | `ColonySmoke.cppm/.cpp` | Headless readback smoke |
 
 Prepared simulation packets own numeric terrain visuals, catalog identity and
@@ -55,6 +56,11 @@ zero; explicit legacy fixtures retain their transparent sentinel. The driver
 exposes a borrowed immutable `contentCatalog()` view, copied at packet capture.
 The render lane never borrows the live catalog. Authored texture periods are
 bounded for finite float UV arithmetic before generation.
+
+Aggregate `Game.SimPacket.Presentation` and nested `Game.SimPacket.Catalog`
+profiling scopes isolate packet presentation capture and its combined image/
+material/background translation batch. They do not measure image copying alone
+or change packet ownership/caching.
 
 Check each `export module` declaration and `../CMakeLists.txt` for exact module names/registration. `Colony.Elements.h` owns element IDs (vacuum is 0).
 
@@ -95,7 +101,7 @@ successful publication and presentation.
 
 Translator's submitted/resident counts are not frustum-visible counts. Cache invalidation and sim dirty state are separate concerns; do not clear simulation dirt merely because a descriptor was submitted. Debug triangle instances for agents, paths, grid and edit feedback are actively staged alongside grid tiles.
 
-`ColonyPanel` consumes views and returns intents/chrome; the main client applies actions. Display draft/persistence policy lives in `../Game.Display.*`. Pathfinding/build bounds and diagnostic row inventories live in their declarations; avoid duplicating stale numeric inventories here.
+`ColonyPanel` lives in [game UI](../ui/codemap.md), consumes prepared views and returns intents/chrome; the main client applies actions. Display draft/persistence policy lives in `../Game.Display.*`. Pathfinding/build bounds and diagnostic row inventories live in their declarations; avoid duplicating stale numeric inventories here.
 
 Display controls and telemetry render through `engine.app:ui.widgets.display`.
 The colony panel retains draft synchronization and adapts widget actions to game
