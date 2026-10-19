@@ -68,26 +68,26 @@ For agent-driven interactive debugging, [game-control](.opencode/skills/game-con
 
 ## Tests
 
-With tests enabled, current CMake registers twelve entries:
+With tests enabled, current CMake registers twelve entries named `<target>[.<qualifier>]` by the shared `ppr_add_test_entry` helper (`cmake/Tests.cmake`):
 
 | Entry | Coverage |
 |---|---|
-| `EngineCoreUnitTests` | Foundation, including configuration; GLFW-free |
-| `EngineSimUnitTests` | Grid, timestep, snapshots, ECS, world generation, physics; GLFW-free |
-| `app_a1_death_lifecycle` | Death/lifecycle and fast run gates |
-| `app_a2_gates` | Slow lifecycle/admission gates |
-| `app_a3_display_window` | Display/window transactions |
-| `app_b_sim` | Input/player/camera, packets, pacing, grid and display groups |
-| `app_c_fence` | Frame fences |
-| `app_d_io` | Services, shader, renderer/UI lifecycle, render lane and window input |
-| `EngineAssetUnitTests` | Image/mesh processing, GPU caches and render integration |
-| `GameConfigUnitTests` | Game invocation and display model/persistence |
-| `WorldgenValidateFrontier` | CPU-only shipped Frontier pack load/compile validation |
-| `WorldgenValidateHollows` | CPU-only shipped Hollows pack load/compile validation |
+| `engine.tests.core` | Foundation, including configuration; GLFW-free |
+| `engine.tests.sim` | Grid, timestep, snapshots, ECS, world generation, physics; GLFW-free |
+| `engine.tests.app.death_lifecycle` | Death/lifecycle and fast run gates |
+| `engine.tests.app.slow_gates` | Slow lifecycle/admission gates |
+| `engine.tests.app.display_window` | Display/window transactions |
+| `engine.tests.app.functional_groups` | Input/player/camera, packets, pacing, grid and display groups |
+| `engine.tests.app.frame_fence` | Frame fences |
+| `engine.tests.app.services_io` | Services, shader, renderer/UI lifecycle, render lane and window input |
+| `engine.tests.asset` | Image/mesh processing, GPU caches and render integration |
+| `game.tests` | Game invocation and display model/persistence |
+| `app.game.worldgen_frontier` | CPU-only shipped Frontier pack load/compile validation |
+| `app.game.worldgen_hollows` | CPU-only shipped Hollows pack load/compile validation |
 
 All six app shards and the asset suite have `RUN_SERIAL TRUE`; `-j4` respects those properties. Keep independent matrix invocations exclusive on one machine. App/GPU tests need the platform/GPU facilities documented in their owning CMake files; Linux CI runs under Xvfb with Mesa.
 
-`PPR_TEST_LOOPS` defaults to **1**, including ASan builds. Configure with `-DPPR_TEST_LOOPS=3` for stress, then explicitly restore `1` when reusing that build tree. Focused runs use `ctest --test-dir out/build/<preset> -R <entry> --output-on-failure`. Counts and filters are defined in [app tests](lib/engine/tests/app/CMakeLists.txt), [engine tests](lib/engine/tests/CMakeLists.txt), and [game](game/CMakeLists.txt).
+`PPR_TEST_LOOPS` defaults to **1**, including ASan builds. Configure with `-DPPR_TEST_LOOPS=3` for stress, then explicitly restore `1` when reusing that build tree. Focused runs use `ctest --test-dir out/build/<preset> -R <ctest-regex> --output-on-failure` with the entry names above (dots are regex metacharacters — quote and escape them, e.g. `-R "engine\.tests\.app\.frame_fence"`). Counts and filters are defined in [app tests](lib/engine/tests/app/CMakeLists.txt), [engine tests](lib/engine/tests/CMakeLists.txt), and [game](game/CMakeLists.txt).
 
 ## Scope and contribution
 

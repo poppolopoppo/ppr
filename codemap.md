@@ -19,7 +19,7 @@ A real-time C++23 engine built on C++20 modules, with ten production libraries. 
 - [ColonySmoke.cpp](game/colony/ColonySmoke.cpp): headless GPU readback and simulation checks.
 - [CMakeLists.txt](CMakeLists.txt) and [CMakePresets.json](CMakePresets.json): target graph, global options and configure presets. `msvc-dev` is diagnostic/ASan; `msvc-live` is Debug Edit & Continue without sanitizers/cache; `msvc-rel` disables tests; `msvc-profile` inherits release and adds profiling/EMPHASIS logging. Hidden gcc presets do not support modules. See [cmake map](cmake/codemap.md) and [build-system](.opencode/skills/build-system/SKILL.md) for toolchain, dependency and execution procedures.
 - [include/pP/Macros.h](include/pP/Macros.h): public macro header for build detection, compiler attributes, assertions, logging, error propagation and RAII helpers. `PPR_LOGGING_LEVEL` selects the compiled severity threshold; `OFF` removes all severities. Runtime visibility and backpressure live in `Core.Logger.*`. Old successful runs and compiler-failure hypotheses do not establish current validation status.
-- [vcpkg.json](vcpkg.json) and [cmake/external](cmake/external/codemap.md): dependency manifest and package/CPM fallback wiring.
+- [vcpkg.json](vcpkg.json) and [cmake/external](cmake/external/codemap.md): dependency manifest and package/CPM fallback wiring. Per-dependency upstream pins, preserved license notices, and integration scope live in [third_party](third_party/README.md).
 - [Documentation guide](docs/README.md): current references versus design proposals, historical plans and diagrams.
 
 ## Architecture Overview
@@ -98,6 +98,7 @@ game/main.cpp → game.application → game.config / game.display / game.colony.
 | `cmake/compiler/`               | Per-compiler flag config (MSVC, Clang, GCC, sanitizers).                                              | [View Map](cmake/compiler/codemap.md)               |
 | `cmake/external/`               | External dependency CMake (CPM/vcpkg: GLFW, Mango, rapidhash, SlangRHI, STB, DearImGui).                                     | [View Map](cmake/external/codemap.md)               |
 | `game/`                         | Demo exe (`app.game`): editor-driven generated colony with `GridPass` + panel and a separate headless `--smoke` path; Every build synchronizes shaders/textures/meshes/fonts; POST_BUILD stages DLLs where configured. | [View Map](game/codemap.md)                         |
+| `game/ui/` | Game-owned snapshot adapter, colony/workshop/asset panels, typed modal actions and projected feedback; native ImGui composition. | [View Map](game/ui/codemap.md) |
 | `include/pP/`                   | Single public non-module header `Macros.h` (build-mode/poison detection, attributes, assertions, logging, error returns, RAII helpers). | [View Map](include/pP/codemap.md)                   |
 | `assets/`                       | Runtime asset root: shaders + textures + meshes + fonts; Slang sources compiled at startup by `engine.shader`.                 | [View Map](assets/codemap.md)                       |
 | `assets/shaders/`               | Slang shader sources, compiled at startup by `engine.shader`: `mesh_bindless.slang` (`TrianglePass`) and `grid_tiles.slang` (`GridPass`). | [View Map](assets/shaders/codemap.md)               |
@@ -119,14 +120,14 @@ game/main.cpp → game.application → game.config / game.display / game.colony.
 
 Tests exist unless `BUILD_TESTING` is explicitly OFF (`msvc-rel` and inherited `msvc-profile`). `PPR_TEST_LOOPS` defaults to 1 even under ASan; configure 3 for stress and restore 1 explicitly when reusing the build directory.
 
-Current CMake registers twelve entries: `EngineCoreUnitTests`, `EngineSimUnitTests`, `EngineAssetUnitTests`, `GameConfigUnitTests`, `WorldgenValidateFrontier`, `WorldgenValidateHollows`, and six app shards: `app_a1_death_lifecycle`, `app_a2_gates`, `app_a3_display_window`, `app_b_sim`, `app_c_fence`, `app_d_io`. The two profile entries perform CPU-only pack load/compile validation. All app shards and asset use `RUN_SERIAL TRUE`; `ctest --test-dir out/build/msvc-dev -j4 --output-on-failure` honors those exclusions. Only one independent matrix invocation per machine may run at once, without competing profiling/game workloads. Core/sim are GLFW-free; app and GPU asset tiers require platform/GPU facilities.
+Current CMake registers twelve entries named `<target>[.<qualifier>]` by `ppr_add_test_entry` (`cmake/Tests.cmake`): `engine.tests.core`, `engine.tests.sim`, `engine.tests.asset`, `game.tests`, six `engine.tests.app.*` shards (`death_lifecycle`, `slow_gates`, `display_window`, `functional_groups`, `frame_fence`, `services_io`), and two `app.game.worldgen_*` profile validations (`worldgen_frontier`, `worldgen_hollows`). The profile entries perform CPU-only pack load/compile validation. All app shards and asset use `RUN_SERIAL TRUE`; `ctest --test-dir out/build/msvc-dev -j4 --output-on-failure` honors those exclusions. Only one independent matrix invocation per machine may run at once, without competing profiling/game workloads. Core/sim are GLFW-free; app and GPU asset tiers require platform/GPU facilities.
 
 - `lib/engine/tests/CMakeLists.txt`: shared loop setting, engine suites, aggregate engine-test target. The aggregate does not run game tests; full CTest includes them.
 - `lib/engine/tests/app/CMakeLists.txt`: exact shard filters, timeouts and serialization. Filter matching is prefix-based both ways; use complete group paths (`app/player/` avoids sibling matches) and full run-gate leaf tokens. App a3 isolates display/window transactions.
 - `lib/engine/tests/core/`: memory, containers, concurrency, I/O, configuration, services and other foundation behavior.
 - `lib/engine/tests/sim/`: chunks, fixed timestep, snapshots, ECS, world generation, physics; physics links privately.
 - [asset tests](lib/engine/tests/asset/codemap.md): CPU image/mesh processing and GPU caches/render integration.
-- `game/CMakeLists.txt`: `game.tests` / `GameConfigUnitTests`, covering invocation and game display model/persistence without an upward engine-test dependency.
+- `game/CMakeLists.txt`: the `game.tests` entry plus the two `app.game.worldgen_*` profile validations, covering invocation and game display model/persistence without an upward engine-test dependency.
 - `lib/engine/tests/shared/`: shared invocation/run harness. Tests use `PPR_TEST_ASSERT`, not engine assumptions/assertions.
 
 Suite interfaces export declaration-only `extern const UnitTest` roots; implementations assemble private groups through `Tests()` accessors. Use `unit-test-updater` for test changes and owning CMake files for current file/group inventories rather than old counts.

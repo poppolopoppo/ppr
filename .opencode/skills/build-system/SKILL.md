@@ -241,10 +241,14 @@ configure/build evidence to the validation owner.
 
 - Shared test infrastructure is the `engine.tests` static library (never run);
   runnable test executables are listed in the target-kinds table.
-- The twelve CTest entries are `EngineCoreUnitTests`, `EngineSimUnitTests`,
-  `app_a1_death_lifecycle`, `app_a2_gates`, `app_a3_display_window`, `app_b_sim`, `app_c_fence`,
-  `app_d_io`, `EngineAssetUnitTests`, `GameConfigUnitTests`,
-  `WorldgenValidateFrontier`, and `WorldgenValidateHollows`.
+- The twelve CTest entries are `engine.tests.core`, `engine.tests.sim`,
+  `engine.tests.app.death_lifecycle`, `engine.tests.app.slow_gates`,
+  `engine.tests.app.display_window`, `engine.tests.app.functional_groups`,
+  `engine.tests.app.frame_fence`, `engine.tests.app.services_io`,
+  `engine.tests.asset`, `game.tests`, `app.game.worldgen_frontier`, and
+  `app.game.worldgen_hollows`. `ppr_add_test_entry` (`cmake/Tests.cmake`)
+  derives every entry name as `<target>[.<qualifier>]` and owns the shared
+  working directory and PATH runtime properties.
 - `PPR_TEST_LOOPS` is a cache switch: default `1` for development;
   configure with `-DPPR_TEST_LOOPS=3` for CI stress (three same-process
   shuffled loops). When reusing that build directory for development,
@@ -253,7 +257,7 @@ configure/build evidence to the validation owner.
   the selected local scope. When the full matrix is required under `validation`,
   use the approved scheduling command
   `ctest --test-dir out/build/msvc-dev -j4 --output-on-failure`.
-- All six app shards and `EngineAssetUnitTests` currently set `RUN_SERIAL TRUE`;
+- All six app shards and `engine.tests.asset` currently set `RUN_SERIAL TRUE`;
   CTest honors that exclusion even under `-j4`.
 - Run only one matrix invocation per machine at a time, with no competing
   profiling/game workload. For tests requiring exclusive scheduling within

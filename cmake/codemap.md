@@ -65,6 +65,11 @@ Sets up C++23 modules, compiler toolchains, sanitizers, and external dependency 
   `ppr_stage_winpix_event_runtime()` additionally stages `WinPixEventRuntime.dll` from `slang-rhi`
   (ordered after `slang-rhi-copy-files`) when `WIN32` with target `slang-rhi` and `SLANG_RHI_ENABLE_D3D12`.
   `Assets.cmake` provides `ppr_stage_assets()` for the game and shader-using test executables. Its always-run `<target>.assets` prerequisite invokes `StageAssets.cmake` for each owned asset directory: stale files are pruned, changed/missing files are copied, unchanged file timestamps are preserved, and no relink is forced. The script rejects deployment outside the build tree.
+- **`Tests.cmake`**: `ppr_add_test_entry()` registers every CTest entry. Entry names are
+  `<target>[.<qualifier>]` (suite targets register their name bare; shards and
+  `app.game.worldgen_*` profile validations append a qualifier); the helper owns
+  `--run-test`/`--loop` proxying, required `TIMEOUT`/`LABELS`, optional `RUN_SERIAL`,
+  and the working-directory/PATH runtime properties applied uniformly.
 
 ## Flow
 
@@ -79,7 +84,7 @@ Sets up C++23 modules, compiler toolchains, sanitizers, and external dependency 
 ## Integration
 
 - Root `CMakeLists.txt` includes: `PreventInSourceBuilds`, conditional `MSVCToolchain`, `VCPkg`, `HAL`, `Compilers`, `RuntimeDlls`,
-  `Sanitizers`, `StaticAnalyzers`, `Cache`, and `Dependencies`.
+  `Assets`, `Tests`, `Sanitizers`, `StaticAnalyzers`, `Cache`, and `Dependencies`.
 - Compiler specifics: see [compiler/codemap.md](compiler/codemap.md); third-party wiring:
   see [external/codemap.md](external/codemap.md).
 - PPR targets opt in to `CXX_MODULE_STD` through `setup_ppr_project()`; external exceptions set it OFF locally.
@@ -94,6 +99,7 @@ Sets up C++23 modules, compiler toolchains, sanitizers, and external dependency 
 - `cmake/MSVCToolchain.cmake` — native MSVC pre-project guard and vcpkg VS path normalization.
 - `cmake/Compilers.cmake` — dispatcher + `setup_ppr_project`.
 - `cmake/RuntimeDlls.cmake` — executable-only Windows runtime-DLL staging helper.
+- `cmake/Tests.cmake` — `ppr_add_test_entry()` test-entry naming and shared-property helper.
 - `cmake/Cache.cmake` — `ENABLE_CACHE`, ccache/sccache launcher, `ppr_disable_compiler_cache()`.
 - `cmake/VCPkg.cmake` — optional vcpkg toolchain, triplet-derived MSVC runtime, EnC triplet guards, prefix path.
 - `cmake/Sanitizers.cmake` — ASAN/UBSAN enable per compiler.

@@ -44,22 +44,18 @@ if(MSVC AND PPR_ENABLE_SANITIZER_ADDRESS)
     target_link_options(engine.tests.asset PRIVATE "/alternatename:?__tlregdtor@@YAHXZ=__tlregdtor")
 endif()
 
-set(asset_fixture_directories shaders textures)
+set(asset_fixture_directories shaders textures fonts)
 if(EXISTS "${CMAKE_SOURCE_DIR}/assets/meshes")
     list(APPEND asset_fixture_directories meshes)
 endif()
 ppr_stage_assets(engine.tests.asset ${asset_fixture_directories})
 
-add_test(NAME EngineAssetUnitTests COMMAND engine.tests.asset --loop ${PPR_TEST_LOOPS})
-
-set_tests_properties(EngineAssetUnitTests
-        PROPERTIES
-        # Full run uses PPR_TEST_LOOPS (default 1), serialized for GPU gates.
-        # cpu + stress + gpu + gate retain margin over the old 120 s budget
-        # (gate readbacks alone are ~100 s).
-        RUN_SERIAL TRUE
-        TIMEOUT 450
-        LABELS "unit;engine;asset"
-        WORKING_DIRECTORY "$<TARGET_FILE_DIR:engine.tests.asset>"
-        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:engine.tests.asset>"
+# Full run uses PPR_TEST_LOOPS (default 1), serialized for GPU gates.
+# cpu + stress + gpu + gate retain margin over the old 120 s budget
+# (gate readbacks alone are ~100 s).
+ppr_add_test_entry(TARGET engine.tests.asset
+    LOOPS
+    RUN_SERIAL
+    TIMEOUT 450
+    LABELS unit engine asset
 )
