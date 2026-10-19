@@ -74,6 +74,8 @@ namespace pP::ui {
             "Pace", "Frame cap (Hz)", "Vsync in paced mode", "Slow down when unfocused", "Monitor cap",
             // Window:
             "Mode", "Monitor", "Width", "Height", "Resolution", "Refresh",
+            // Retro:
+            "Pixel art", "Pixel scale",
             // Requested:
             "Cap", "Size", "Vsync", "Foreground CPU target", "Effective CPU target", "Unfocused slowing",
             // Device report:
@@ -655,6 +657,35 @@ namespace pP::ui {
                 noteText(failure);
             }
         }
+
+        // Retro is a live session control: the game pushes these values to the
+        // editor every frame, so this section never edits the display draft,
+        // emits a widget action, or joins the apply/save transaction.
+        ImGui::SeparatorText("Retro");
+        if (beginLabelTable("##display_retro", label_width)) {
+            {
+                beginValueRow("Pixel art");
+                ImGui::Checkbox("##retro_enabled", &state.m_retro.m_enabled);
+                ImGui::SetItemTooltip("Render the scene in the retro pixel-art style.");
+            }
+
+            {
+                DisplayDisabledScope scale_disabled{not state.m_retro.m_enabled};
+                beginValueRow("Pixel scale");
+                int scale = static_cast<int>(std::clamp(state.m_retro.m_pixel_scale, 2u, 8u));
+                ImGui::SetNextItemWidth(-1.0f);
+                if (ImGui::SliderInt("##retro_scale", &scale, 2, 8)) {
+                    state.m_retro.m_pixel_scale = static_cast<u32>(scale);
+                }
+                scale_disabled.close();
+                ImGui::SetItemTooltip("Pixel scale of the retro picture, from 2 to 8.");
+            }
+
+            ImGui::EndTable();
+        }
+        noteText(
+            "The scene renders at a lower internal resolution with a 32-color palette and ordered "
+            "dithering; the UI stays native. Changes apply immediately and are not part of Apply or Save.");
 
         ImGui::SeparatorText("Requested");
         if (beginLabelTable("##display_requested", label_width)) {

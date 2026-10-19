@@ -1415,6 +1415,7 @@ namespace pP::colony {
                 .m_draft =
                     {draft.m_pacing, draft.m_cap_hz, draft.m_paced_vsync, draft.m_throttle_unfocused,
                         draft.m_window_mode, draft.m_monitor, draft.m_width, draft.m_height, draft.m_refresh_hz},
+                .m_retro = {state.m_retro.m_enabled, state.m_retro.m_pixel_scale},
                 .m_matches = game::displayDraftMatches(draft, snap.m_view.m_committed),
                 .m_availability = {availability.m_supported, availability.m_reason},
                 .m_trial_open = game::displayTrialUnresolved(session.m_confirm),

@@ -161,6 +161,10 @@ export namespace pP::colony {
         std::optional<u64> m_focus_agent{};
         ColonyNotice m_notice{};
         ColonyDisplaySession m_display{};
+        /// Live retro picture controls, session-only: pushed to the editor
+        /// every rendered frame (never part of the display draft or its
+        /// transaction, and never persisted).
+        RetroSettings m_retro{.m_enabled = true, .m_pixel_scale = 3u};
 
         // selection and diagnostic controls:
         std::optional<sim::GlobalCellPos> m_pinned{};

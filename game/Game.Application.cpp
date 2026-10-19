@@ -4188,6 +4188,11 @@ namespace demo {
                     m_max_render_work = std::max(m_max_render_work, m_observation_clock->now() - begin);
                 }
             };
+            // Live retro controls ride every rendered frame: the game-owned
+            // session value is pushed before the render work reads it, with no
+            // display transaction and no wait.
+            setRetroSettings(m_ui_state.m_retro);
+
             return super_t::render();
         }
         [[nodiscard]] std::error_code serviceControls_() override {

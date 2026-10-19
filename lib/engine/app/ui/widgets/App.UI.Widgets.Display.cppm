@@ -65,6 +65,15 @@ export namespace pP::ui {
         u32 &m_height;
         u32 &m_refresh_hz;
     };
+
+    /// Borrowed live retro fields; caller owns the values for the session.
+    /// The widget edits them immediately and never folds them into the
+    /// display draft, its validation, or a transaction.
+    struct RetroWidgetDraft {
+        bool &m_enabled;
+        u32 &m_pixel_scale;
+    };
+
     struct DisplayWidgetAvailability {
         bool m_supported{};
         const char *m_reason{};
@@ -72,6 +81,7 @@ export namespace pP::ui {
     /// Read-only policy/confirmation projection; widget does not tick or commit trials.
     struct DisplayWidgetState {
         DisplayWidgetDraft m_draft;
+        RetroWidgetDraft m_retro;
         bool m_matches{};
         DisplayWidgetAvailability m_availability{};
         bool m_trial_open{};
