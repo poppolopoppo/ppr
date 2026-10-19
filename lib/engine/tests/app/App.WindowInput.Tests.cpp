@@ -474,7 +474,7 @@ namespace pP::tests::detail {
                 WindowInputContext routed{safe_ptr<IInputService>{&inputs}};
                 PPR_TEST_ASSERT(not routed.initialize(safe_ptr<Window>{&window}));
                 auto ui = ui::createImGuiService();
-                PPR_TEST_ASSERT(not ui->initialize(routed, *rhi, *shader, 0));
+                PPR_TEST_ASSERT(not ui->initialize(routed, *rhi, *shader, {}, 0));
 
                 WindowViewport viewport{safe_ptr<Window>{&window}, ViewportLayout{}};
                 std::ignore = viewport.updateFromWindow();
@@ -607,7 +607,7 @@ namespace pP::tests::detail {
                 PPR_TEST_ASSERT(not routed.initialize(safe_ptr<Window>{&window}));
                 routed.m_context.addInputListener(safe_ptr<InputListener>{&player_listener}, 2);
                 auto ui = ui::createImGuiService();
-                PPR_TEST_ASSERT(not ui->initialize(routed, *rhi, *shader, 0));
+                PPR_TEST_ASSERT(not ui->initialize(routed, *rhi, *shader, {}, 0));
 
                 WindowViewport viewport{safe_ptr<Window>{&window}, ViewportLayout{}};
                 std::ignore = viewport.updateFromWindow();
@@ -706,7 +706,7 @@ namespace pP::tests::detail {
                 PPR_TEST_ASSERT(not routed.initialize(safe_ptr<Window>{&window}));
                 routed.m_context.addInputListener(safe_ptr<InputListener>{&player_listener}, 2);
                 auto ui = ui::createImGuiService();
-                PPR_TEST_ASSERT(not ui->initialize(routed, *rhi, *shader, 0));
+                PPR_TEST_ASSERT(not ui->initialize(routed, *rhi, *shader, {}, 0));
 
                 WindowViewport viewport{safe_ptr<Window>{&window}, ViewportLayout{}};
                 std::ignore = viewport.updateFromWindow();
@@ -785,7 +785,7 @@ namespace pP::tests::detail {
                 PPR_TEST_ASSERT(not routed.initialize(safe_ptr<Window>{&window}));
                 routed.m_context.addInputListener(safe_ptr<InputListener>{&camera_listener}, 1);
                 auto ui = ui::createImGuiService();
-                PPR_TEST_ASSERT(not ui->initialize(routed, *rhi, *shader, 0));
+                PPR_TEST_ASSERT(not ui->initialize(routed, *rhi, *shader, {}, 0));
 
                 WindowViewport viewport{safe_ptr<Window>{&window}, ViewportLayout{}};
                 std::ignore = viewport.updateFromWindow();
@@ -857,7 +857,7 @@ namespace pP::tests::detail {
                 PPR_TEST_ASSERT(not routed.initialize(safe_ptr<Window>{&window}));
                 routed.m_context.addInputListener(safe_ptr<InputListener>{&player_listener}, 2);
                 auto ui = ui::createImGuiService();
-                PPR_TEST_ASSERT(not ui->initialize(routed, *rhi, *shader, 0));
+                PPR_TEST_ASSERT(not ui->initialize(routed, *rhi, *shader, {}, 0));
 
                 WindowViewport viewport{safe_ptr<Window>{&window}, ViewportLayout{}};
                 std::ignore = viewport.updateFromWindow();
@@ -888,7 +888,7 @@ namespace pP::tests::detail {
 
                 // Second life, no update yet: reset flags route to the player.
                 PPR_TEST_ASSERT(not routed.initialize(safe_ptr<Window>{&window}));
-                PPR_TEST_ASSERT(not ui->initialize(routed, *rhi, *shader, 0));
+                PPR_TEST_ASSERT(not ui->initialize(routed, *rhi, *shader, {}, 0));
                 PPR_TEST_ASSERT(routed.m_context.postKeyEvent(TimeSpan{}, w_press) == EInputMessageResponse::consumed);
                 PPR_TEST_ASSERT(move_count == 1);
 
@@ -1137,7 +1137,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not routed.initialize(safe_ptr<Window>{&window}));
             auto ui = ui::createImGuiService();
             PPR_TEST_ASSERT(ui != nullptr);
-            PPR_TEST_ASSERT(not ui->initialize(routed, *rhi, *shader, 0));
+            PPR_TEST_ASSERT(not ui->initialize(routed, *rhi, *shader, {}, 0));
             PPR_TEST_ASSERT(ui->getContext() != nullptr);
             PPR_TEST_ASSERT(not ui->shutdown());
             PPR_TEST_ASSERT(not ui->shutdown());
@@ -1192,13 +1192,13 @@ namespace pP::tests::detail {
             WindowViewport viewport{safe_ptr<Window>{&window}, ViewportLayout{}};
             WindowInput::ImGuiDrawable drawable{*ui};
 
-            PPR_TEST_ASSERT(not ui->initialize(routed, *rhi, *shader, 0));
+            PPR_TEST_ASSERT(not ui->initialize(routed, *rhi, *shader, {}, 0));
             PPR_TEST_ASSERT(not ui->update(TimeSpan{}, viewport));
             PPR_TEST_ASSERT(not renderer.renderToTexture(*target, {drawable}, ColorAttachmentOps{}));
             PPR_TEST_ASSERT(not renderer.waitOnHost());
             PPR_TEST_ASSERT(not ui->shutdown());
 
-            PPR_TEST_ASSERT(not ui->initialize(routed, *rhi, *shader, 0));
+            PPR_TEST_ASSERT(not ui->initialize(routed, *rhi, *shader, {}, 0));
             PPR_TEST_ASSERT(not ui->update(TimeSpan{}, viewport));
             PPR_TEST_ASSERT(not renderer.renderToTexture(*target, {drawable}, ColorAttachmentOps{}));
             PPR_TEST_ASSERT(not renderer.waitOnHost());

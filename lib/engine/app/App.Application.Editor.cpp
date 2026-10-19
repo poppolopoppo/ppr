@@ -229,10 +229,57 @@ namespace pP {
         }
 
         m_ui_service = ui::createImGuiService();
+
+        // Default Site Office face slots: Pixelify body/emphasis, then Big
+        // Shoulders headings, then the body family again at the smaller size
+        // the Inspector read-out binds (ui::theme::EFont::tiny). Font Awesome
+        // merges into the body, so it does not consume a separate slot. Keep
+        // ui::theme::font's contract in sync.
+        // Static pinned artifacts are staged beside the executable. The
+        // digests pin the exact bytes: a missing or altered file fails UI
+        // initialization instead of silently substituting a default font.
+        const std::filesystem::path font_root = getContentDir().path() / "fonts";
+        const std::array font_sources{
+            UIFontSource{
+                .m_path = font_root / "PixelifySans-Regular.ttf",
+                .m_expected_bytes = 93780u,
+                .m_size_pixels = 16.0f,
+                .m_sha256 = sha256DigestFromHex("5436d485d1713afa376e1744911cbbcc0849eae1eb55ec9bc34c0753993ffef9"),
+            },
+            UIFontSource{
+                .m_path = font_root / "Font Awesome 7 Free-Solid-900.otf",
+                .m_merge_glyphs = ui::icons::kMergeRanges,
+                .m_expected_bytes = 414704u,
+                .m_size_pixels = 16.0f,
+                .m_sha256 = sha256DigestFromHex("daa92774861a14e9ccbccc5e73a5fba514271ba4d1bd7e5adbf952182bc00835"),
+                .m_merge_into_previous = true,
+            },
+            UIFontSource{
+                .m_path = font_root / "PixelifySans-SemiBold.ttf",
+                .m_expected_bytes = 97492u,
+                .m_size_pixels = 16.0f,
+                .m_sha256 = sha256DigestFromHex("a4b54982991cd47450df317a451a7f066bf6b91aa033e105643aba2cf7bd35c3"),
+            },
+            UIFontSource{
+                .m_path = font_root / "BigShouldersDisplay-Bold.ttf",
+                .m_expected_bytes = 122896u,
+                .m_size_pixels = 22.0f,
+                .m_sha256 = sha256DigestFromHex("cbfe03f89e2bb3aba487644cdaf9abc9b3eb59946efaf894dda5cd05e1690c83"),
+            },
+            // The compact read-out binding: the same pinned body file at a
+            // smaller size, so no new artifact or licence enters the set.
+            UIFontSource{
+                .m_path = font_root / "PixelifySans-Regular.ttf",
+                .m_expected_bytes = 93780u,
+                .m_size_pixels = 12.0f,
+                .m_sha256 = sha256DigestFromHex("5436d485d1713afa376e1744911cbbcc0849eae1eb55ec9bc34c0753993ffef9"),
+            },
+        };
+
         PPR_RETURN_ERROR_ON_FAIL(
-            Editor,
-            m_ui_service->initialize(
-                *m_main_input_context, *rhi_service, *shader_service, m_input_background_latch->m_foreground_priority));
+            Editor, m_ui_service->initialize(
+                        *m_main_input_context, *rhi_service, *shader_service, font_sources,
+                        m_input_background_latch->m_foreground_priority));
 
         PPR_RETURN_ERROR_ON_FAIL(
             Editor,
@@ -274,35 +321,46 @@ namespace pP {
             display_settings.m_monitor = selected_capability->m_identity;
             setDisplaySettings(display_settings);
         }
-        if (displayWindowChange(display_settings, DisplaySettings{})) {
-            SharedMonitor monitor{};
-            PPR_RETURN_ERROR_ON_FAIL(Editor, window_service.enumerateMonitors([&](const SharedMonitor &entry) {
-                if (selected_capability != nullptr and
-                    (not selected_capability->m_identity.empty() ? entry->m_identity == selected_capability->m_identity
-                                                                 : entry->m_name == selected_capability->m_name)) {
-                    if (monitor) {
-                        PPR_RETURN_ERROR_ON_FAIL(Editor, std::make_error_code(std::errc::invalid_argument));
-                    }
-                    monitor = entry;
+
+        SharedMonitor monitor{};
+        PPR_RETURN_ERROR_ON_FAIL(Editor, window_service.enumerateMonitors([&](const SharedMonitor &entry) {
+            if (selected_capability != nullptr and
+                (not selected_capability->m_identity.empty() ? entry->m_identity == selected_capability->m_identity
+                                                             : entry->m_name == selected_capability->m_name)) {
+                if (monitor) {
+                    PPR_RETURN_ERROR_ON_FAIL(Editor, std::make_error_code(std::errc::invalid_argument));
                 }
-                return std::error_code{};
-            }));
-            if (display_settings.m_window_mode == EDisplayWindowMode::fullscreen and not monitor) {
-                PPR_RETURN_ERROR_ON_FAIL(Editor, std::make_error_code(std::errc::no_such_device));
+
+                monitor = entry;
             }
+
+            return std::error_code{};
+        }));
+
+        if (not monitor) {
+            PPR_RETURN_ERROR_ON_FAIL(Editor, std::make_error_code(std::errc::no_such_device));
+        }
+
+        if (displayWindowChange(display_settings, DisplaySettings{})) {
             int2 size = main_window->m_window_size;
             if (display_settings.m_width != 0u) {
                 size = int2{static_cast<int>(display_settings.m_width), static_cast<int>(display_settings.m_height)};
             } else if (display_settings.m_window_mode == EDisplayWindowMode::fullscreen) {
                 size = monitor->m_video_mode.m_resolution;
             }
+
             const auto geometry = window_service.configureDisplayWindow(
                 *main_window, display_settings.m_window_mode == EDisplayWindowMode::fullscreen ? &*monitor : nullptr,
-                monitor ? monitor->m_virtual_position : main_window->m_window_position, size,
+                display_settings.m_window_mode == EDisplayWindowMode::fullscreen ? monitor->m_virtual_position
+                                                                                 : main_window->m_window_position,
+                size,
                 display_settings.m_refresh_hz != 0u ? std::optional<u32>{display_settings.m_refresh_hz} : std::nullopt);
-            if (not geometry) {
-                return geometry.error();
-            }
+            PPR_RETURN_ERROR_ON_FAIL(Editor, geometry);
+        }
+
+        if (display_settings.m_window_mode == EDisplayWindowMode::windowed) {
+            const auto centered = window_service.centerDisplayWindow(*main_window, *monitor);
+            PPR_RETURN_ERROR_ON_FAIL(Editor, centered);
         }
 
         // Phase 3 approved default (follow-vsync): no monitor-derived CPU

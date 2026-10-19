@@ -92,5 +92,8 @@ export namespace pP::ui {
         use_monitor_cap
     };
     [[nodiscard]] std::optional<EDisplayWidgetAction> drawDisplayWidget(
-        const DisplayWidgetSnapshot &snapshot, DisplayWidgetState state);
+        const DisplayWidgetSnapshot &snapshot, DisplayWidgetState state, bool &open);
+    [[nodiscard]] std::optional<EDisplayWidgetAction> drawDisplayConfirmation(
+        bool trial_open, bool confirm_armed, bool revert_pending, bool countdown_active, float seconds_left,
+        bool revert_failed, std::string_view last_error);
 }

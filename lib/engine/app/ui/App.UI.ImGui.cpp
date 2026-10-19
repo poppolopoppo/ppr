@@ -45,6 +45,7 @@ struct PsInput {
 };
 float2 g_scale;
         float2 g_offset;
+        uint g_decode_vertex_srgb;
         Texture2D g_fontTexture : register(t0, space0);
         SamplerState g_fontSampler : register(s0, space0);
 [shader("vertex")]
@@ -53,6 +54,13 @@ PsInput vertexMain(VsInput input) {
     output.pos = float4(input.pos * g_scale + g_offset, 0.0, 1.0);
     output.uv = input.uv;
     output.col = input.col;
+
+    if (g_decode_vertex_srgb != 0u) {
+        // Decode authored bytes before interpolation and linear target blending.
+        output.col.rgb = select(input.col.rgb <= 0.04045, input.col.rgb / 12.92,
+            pow((input.col.rgb + 0.055) / 1.055, float3(2.4)));
+    }
+
     return output;
 }
 [shader("fragment")]
@@ -67,7 +75,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
             PPR_LOG_RAW(UI, debug, buffer);
         }
 
-        [[nodiscard, maybe_unused]] float2 framebufferScaleFor(const int2 &logical, const int2 &framebuffer) noexcept {
+        [[nodiscard]] float2 framebufferScaleFor(const int2 &logical, const int2 &framebuffer) noexcept {
             float2 scale{1.0f};
             if (logical.x > 0) {
                 scale.x = static_cast<float>(framebuffer.x) / static_cast<float>(logical.x);
@@ -82,6 +90,567 @@ float4 fragmentMain(PsInput input) : SV_Target {
                 scale.y = 1.0f;
             }
             return scale;
+        }
+
+        // ------------------------------------------------------------------
+        // site office style
+        // ------------------------------------------------------------------
+
+        /// Site Office geometry from the token table: container and control
+        /// radius, applied with the single-pixel strokes and 12px scrollbars
+        /// below. The concept board draws every panel, card and control with
+        /// hard corners (0-2px), so both roles now resolve to the same 2px and
+        /// the pair is kept as two named roles rather than one value.
+        constexpr float kContainerRounding = 2.0f;
+        constexpr float kControlRounding = 2.0f;
+
+        /// Map the Site Office token table onto the live ImGui style exactly
+        /// once, at context initialization. StyleColorsLight() seeds only the
+        /// roles the theme does not name; every assignment below is absolute,
+        /// so repeating this call cannot accumulate scaling and no frame
+        /// resets or rescales the style.
+        void applyThemeStyle() {
+            ImGui::StyleColorsLight();
+            ImGuiStyle &style = ImGui::GetStyle();
+
+            // spacing and geometry:
+            style.WindowPadding = ImVec2{12.0f, 12.0f};
+            style.FramePadding = ImVec2{8.0f, 4.0f};
+            style.ItemSpacing = ImVec2{8.0f, 8.0f};
+            style.WindowRounding = kContainerRounding;
+            style.ChildRounding = kContainerRounding;
+            style.PopupRounding = kContainerRounding;
+            style.FrameRounding = kControlRounding;
+            style.FrameBorderSize = 1.0f;
+            style.GrabRounding = kControlRounding;
+            style.MenuItemRounding = kControlRounding;
+            style.ScrollbarRounding = kControlRounding;
+            style.TabRounding = kControlRounding;
+            style.WindowBorderSize = 3.0f;
+            style.ChildBorderSize = 2.0f;
+            style.PopupBorderSize = 3.0f;
+            style.ScrollbarSize = 12.0f;
+            style.DisabledAlpha = 0.6f;
+            style.WindowTitleAlign = ImVec2{0.0f, 0.5f};
+
+            // surfaces and text:
+            style.Colors[ImGuiCol_Text] = ui::theme::kTextPrimary.vec4();
+            style.Colors[ImGuiCol_TextDisabled] = ui::theme::kTextSecondary.vec4();
+            style.Colors[ImGuiCol_WindowBg] = ui::theme::kRaised.vec4();
+            style.Colors[ImGuiCol_ChildBg] = ui::theme::kPanel.vec4(0.0f);
+            style.Colors[ImGuiCol_PopupBg] = ui::theme::kPaper.vec4();
+            style.Colors[ImGuiCol_Border] = ui::theme::kBorderStrong.vec4();
+            style.Colors[ImGuiCol_BorderShadow] = ui::theme::kCanvas.vec4(0.0f);
+
+            // One yellow header per panel. The pinned ImGui has no dedicated
+            // title-text role, so the title reads with ImGuiCol_Text: ink
+            // #25221C scores 10.16:1 on kAccent, 11.46:1 on kAccentHover and
+            // 8.04:1 on kAccentActive, and focus moves to the lighter accent
+            // so an active title never reads weaker than a resting one.
+            style.Colors[ImGuiCol_TitleBg] = ui::theme::kAccent.vec4();
+            style.Colors[ImGuiCol_TitleBgActive] = ui::theme::kAccentHover.vec4();
+            style.Colors[ImGuiCol_TitleBgCollapsed] = ui::theme::kAccentActive.vec4();
+            style.Colors[ImGuiCol_MenuBarBg] = ui::theme::kRaised.vec4();
+            style.Colors[ImGuiCol_DockingEmptyBg] = ui::theme::kCanvas.vec4();
+
+            // frames, buttons and rows (secondary actions stay neutral):
+            style.Colors[ImGuiCol_FrameBg] = ui::theme::kPaper.vec4();
+            style.Colors[ImGuiCol_FrameBgHovered] = ui::theme::kHover.vec4();
+            style.Colors[ImGuiCol_FrameBgActive] = ui::theme::kAccentActive.vec4();
+            style.Colors[ImGuiCol_Button] = ui::theme::kPaper.vec4();
+            style.Colors[ImGuiCol_ButtonHovered] = ui::theme::kHover.vec4();
+            style.Colors[ImGuiCol_ButtonActive] = ui::theme::kAccentActive.vec4();
+            style.Colors[ImGuiCol_Header] = ui::theme::kSelection.vec4(0.18f);
+            style.Colors[ImGuiCol_HeaderHovered] = ui::theme::kSelection.vec4(0.28f);
+            style.Colors[ImGuiCol_HeaderActive] = ui::theme::kSelection.vec4(0.36f);
+            style.Colors[ImGuiCol_TableHeaderBg] = ui::theme::kHover.vec4();
+            style.Colors[ImGuiCol_TableRowBg] = ui::theme::kPanel.vec4(0.0f);
+            // Striping must still read on the now-cream window: kRaised at low
+            // alpha over kRaised composites to itself and would vanish, so the
+            // alternating row uses the darker kHover instead.
+            style.Colors[ImGuiCol_TableRowBgAlt] = ui::theme::kHover.vec4(0.35f);
+            style.Colors[ImGuiCol_TableBorderStrong] = ui::theme::kBorderStrong.vec4();
+            style.Colors[ImGuiCol_TableBorderLight] = ui::theme::kBorder.vec4();
+
+            // selection, focus and navigation:
+            style.Colors[ImGuiCol_CheckMark] = ui::theme::kSelectionText.vec4();
+            style.Colors[ImGuiCol_CheckboxSelectedBg] = ui::theme::kSelection.vec4(0.18f);
+            style.Colors[ImGuiCol_SliderGrab] = ui::theme::kSelectionText.vec4();
+            style.Colors[ImGuiCol_SliderGrabActive] = ui::theme::kSelectionText.vec4();
+            style.Colors[ImGuiCol_TextLink] = ui::theme::kSelectionText.vec4();
+            style.Colors[ImGuiCol_TextSelectedBg] = ui::theme::kSelection.vec4(0.28f);
+            style.Colors[ImGuiCol_InputTextCursor] = ui::theme::kSelectionText.vec4();
+            style.Colors[ImGuiCol_NavCursor] = ui::theme::kSelectionText.vec4();
+            style.Colors[ImGuiCol_NavWindowingHighlight] = ui::theme::kAccentHover.vec4();
+            style.Colors[ImGuiCol_NavWindowingDimBg] = ui::theme::kCanvas.vec4(0.35f);
+            style.Colors[ImGuiCol_ModalWindowDimBg] = ui::theme::kTextPrimary.vec4(0.40f);
+            style.Colors[ImGuiCol_DockingPreview] = ui::theme::kSelection.vec4(0.50f);
+
+            // separators, scrollbars and grips:
+            style.Colors[ImGuiCol_Separator] = ui::theme::kBorder.vec4();
+            style.Colors[ImGuiCol_SeparatorHovered] = ui::theme::kBorderStrong.vec4();
+            style.Colors[ImGuiCol_SeparatorActive] = ui::theme::kAccent.vec4();
+            style.Colors[ImGuiCol_ScrollbarBg] = ui::theme::kCanvas.vec4();
+            style.Colors[ImGuiCol_ScrollbarGrab] = ui::theme::kBorder.vec4();
+            style.Colors[ImGuiCol_ScrollbarGrabHovered] = ui::theme::kBorderStrong.vec4();
+            style.Colors[ImGuiCol_ScrollbarGrabActive] = ui::theme::kAccent.vec4();
+            style.Colors[ImGuiCol_ResizeGrip] = ui::theme::kBorder.vec4(0.60f);
+            style.Colors[ImGuiCol_ResizeGripHovered] = ui::theme::kBorderStrong.vec4(0.80f);
+            style.Colors[ImGuiCol_ResizeGripActive] = ui::theme::kAccent.vec4();
+
+            // tabs and tree lines:
+            style.Colors[ImGuiCol_Tab] = ui::theme::kPanel.vec4();
+            style.Colors[ImGuiCol_TabHovered] = ui::theme::kHover.vec4();
+            style.Colors[ImGuiCol_TabSelected] = ui::theme::kPaper.vec4();
+            style.Colors[ImGuiCol_TabSelectedOverline] = ui::theme::kAccent.vec4();
+            style.Colors[ImGuiCol_TabDimmed] = ui::theme::kCanvas.vec4();
+            style.Colors[ImGuiCol_TabDimmedSelected] = ui::theme::kRaised.vec4();
+            style.Colors[ImGuiCol_TabDimmedSelectedOverline] = ui::theme::kBorderStrong.vec4();
+            style.Colors[ImGuiCol_TreeLines] = ui::theme::kBorder.vec4();
+
+            // plots and drag-drop markers:
+            style.Colors[ImGuiCol_PlotLines] = ui::theme::kTextSecondary.vec4();
+            style.Colors[ImGuiCol_PlotLinesHovered] = ui::theme::kAccentHover.vec4();
+            style.Colors[ImGuiCol_PlotHistogram] = ui::theme::kAccent.vec4();
+            style.Colors[ImGuiCol_PlotHistogramHovered] = ui::theme::kAccentHover.vec4();
+            style.Colors[ImGuiCol_DragDropTarget] = ui::theme::kAccent.vec4();
+            style.Colors[ImGuiCol_DragDropTargetBg] = ui::theme::kRaised.vec4(0.0f);
+            style.Colors[ImGuiCol_UnsavedMarker] = ui::theme::kAccent.vec4();
+        }
+
+        // ------------------------------------------------------------------
+        // font input
+        // ------------------------------------------------------------------
+
+        /// Engine-owned font bytes for one loaded face: read and validated at
+        /// initialize, kept alive until the atlas is destroyed. `m_glyph_ranges`
+        /// is the zero-terminated ImWchar array of a merged source (empty for
+        /// a base face, which keeps the default range); ImGui stores only the
+        /// pointer, so the vector must live for the whole atlas lifetime.
+        struct LoadedFont {
+            std::filesystem::path m_path{};
+            std::vector<std::byte> m_bytes{};
+            std::vector<ImWchar> m_glyph_ranges{};
+            float m_size_pixels{0.0f};
+            bool m_merge_into_previous{false};
+        };
+
+        /// ImGui's AddFontFromMemoryTTF hard-asserts font_data_size > 100 and
+        /// takes an int: both bounds are enforced before the call.
+        constexpr u64 kFontMinBytes{100u};
+        constexpr u64 kFontMaxBytes{static_cast<u64>(std::numeric_limits<int>::max())};
+
+        /// ImWchar is 16-bit in this build (no IMGUI_USE_WCHAR32 override),
+        /// so any declared codepoint above this can never be baked.
+        constexpr char32_t kMaxFontCodepoint{0xFFFFu};
+
+        /// Bounded bake-density clamp: minimize/restore and extreme monitor
+        /// ratios must not melt the atlas; one scalar drives every face.
+        constexpr float kMinFontBakeDensity{1.0f};
+        constexpr float kMaxFontBakeDensity{4.0f};
+
+        /// Sanity bound for a freshly baked atlas before it is handed to the
+        /// RHI texture path (ImGui's own packer caps at 8192).
+        constexpr int kMaxFontAtlasExtent{8192};
+
+        /// The pinned "no texture" identity for a retired atlas texture.
+        /// imgui.h declares ImTextureID_Invalid as a macro (`((ImTextureID)0)`)
+        /// and macros do not cross a module boundary; imgui_draw.cpp compares
+        /// TexID against that exact value when removing a
+        /// WantDestroyNextFrame texture from the atlas list, and this repo has
+        /// no imconfig.h override, so the upstream default is restated here.
+        constexpr ImTextureID kInvalidTextureId{0};
+
+        // ------------------------------------------------------------------
+        // sha-256
+        // ------------------------------------------------------------------
+
+        constexpr std::array<u32, 8> kSha256InitialState{
+            0x6a09e667u,
+            0xbb67ae85u,
+            0x3c6ef372u,
+            0xa54ff53au,
+            0x510e527fu,
+            0x9b05688cu,
+            0x1f83d9abu,
+            0x5be0cd19u,
+        };
+
+        constexpr std::array<u32, 64> kSha256RoundConstants{
+            0x428a2f98u,
+            0x71374491u,
+            0xb5c0fbcfu,
+            0xe9b5dba5u,
+            0x3956c25bu,
+            0x59f111f1u,
+            0x923f82a4u,
+            0xab1c5ed5u,
+            0xd807aa98u,
+            0x12835b01u,
+            0x243185beu,
+            0x550c7dc3u,
+            0x72be5d74u,
+            0x80deb1feu,
+            0x9bdc06a7u,
+            0xc19bf174u,
+            0xe49b69c1u,
+            0xefbe4786u,
+            0x0fc19dc6u,
+            0x240ca1ccu,
+            0x2de92c6fu,
+            0x4a7484aau,
+            0x5cb0a9dcu,
+            0x76f988dau,
+            0x983e5152u,
+            0xa831c66du,
+            0xb00327c8u,
+            0xbf597fc7u,
+            0xc6e00bf3u,
+            0xd5a79147u,
+            0x06ca6351u,
+            0x14292967u,
+            0x27b70a85u,
+            0x2e1b2138u,
+            0x4d2c6dfcu,
+            0x53380d13u,
+            0x650a7354u,
+            0x766a0abbu,
+            0x81c2c92eu,
+            0x92722c85u,
+            0xa2bfe8a1u,
+            0xa81a664bu,
+            0xc24b8b70u,
+            0xc76c51a3u,
+            0xd192e819u,
+            0xd6990624u,
+            0xf40e3585u,
+            0x106aa070u,
+            0x19a4c116u,
+            0x1e376c08u,
+            0x2748774cu,
+            0x34b0bcb5u,
+            0x391c0cb3u,
+            0x4ed8aa4au,
+            0x5b9cca4fu,
+            0x682e6ff3u,
+            0x748f82eeu,
+            0x78a5636fu,
+            0x84c87814u,
+            0x8cc70208u,
+            0x90befffau,
+            0xa4506cebu,
+            0xbef9a3f7u,
+            0xc67178f2u,
+        };
+
+        /// FIPS 180-4 SHA-256 over one buffer, used to pin font bytes before
+        /// AddFontFromMemoryTTF. Local to the service (no engine-wide digest
+        /// facility exists); correctness is covered by the pinned font
+        /// digests in the app tests.
+        [[nodiscard]] std::array<std::byte, 32> sha256OfBytes(const std::span<const std::byte> bytes) noexcept {
+            constexpr auto rotateRight = [](const u32 value, const u32 shift) constexpr noexcept -> u32 {
+                return (value >> shift) | (value << (32u - shift));
+            };
+
+            std::array<u32, 8> state = kSha256InitialState;
+            std::array<u32, 64> schedule{};
+            const auto compress = [&state, &schedule](const std::byte *const block) noexcept {
+                for (u32 round = 0u; round < 16u; ++round) {
+                    const std::size_t offset = static_cast<std::size_t>(round) * 4u;
+                    schedule[round] = (static_cast<u32>(std::to_integer<u8>(block[offset])) << 24u) |
+                                      (static_cast<u32>(std::to_integer<u8>(block[offset + 1u])) << 16u) |
+                                      (static_cast<u32>(std::to_integer<u8>(block[offset + 2u])) << 8u) |
+                                      static_cast<u32>(std::to_integer<u8>(block[offset + 3u]));
+                }
+
+                for (u32 round = 16u; round < 64u; ++round) {
+                    const u32 s0 = rotateRight(schedule[round - 15u], 7u) ^
+                                   rotateRight(schedule[round - 15u], 18u) ^
+                                   (schedule[round - 15u] >> 3u);
+                    const u32 s1 = rotateRight(schedule[round - 2u], 17u) ^
+                                   rotateRight(schedule[round - 2u], 19u) ^
+                                   (schedule[round - 2u] >> 10u);
+                    schedule[round] = schedule[round - 16u] + s0 + schedule[round - 7u] + s1;
+                }
+
+                u32 a = state[0];
+                u32 b = state[1];
+                u32 c = state[2];
+                u32 d = state[3];
+                u32 e = state[4];
+                u32 f = state[5];
+                u32 g = state[6];
+                u32 h = state[7];
+
+                for (u32 round = 0u; round < 64u; ++round) {
+                    const u32 s1 = rotateRight(e, 6u) ^ rotateRight(e, 11u) ^ rotateRight(e, 25u);
+                    const u32 choice = (e & f) ^ (~e & g);
+                    const u32 temp1 = h + s1 + choice + kSha256RoundConstants[round] + schedule[round];
+                    const u32 s0 = rotateRight(a, 2u) ^ rotateRight(a, 13u) ^ rotateRight(a, 22u);
+                    const u32 majority = (a & b) ^ (a & c) ^ (b & c);
+                    const u32 temp2 = s0 + majority;
+
+                    h = g;
+                    g = f;
+                    f = e;
+                    e = d + temp1;
+                    d = c;
+                    c = b;
+                    b = a;
+                    a = temp1 + temp2;
+                }
+
+                state[0] += a;
+                state[1] += b;
+                state[2] += c;
+                state[3] += d;
+                state[4] += e;
+                state[5] += f;
+                state[6] += g;
+                state[7] += h;
+            };
+
+            std::size_t consumed = 0u;
+            while (bytes.size() - consumed >= 64u) {
+                compress(bytes.data() + consumed);
+                consumed += 64u;
+            }
+
+            // Padding: remainder, a 0x80 terminator, zero fill, and the
+            // 64-bit big-endian bit length — splitting into two blocks when
+            // the remainder leaves no room for the length.
+            std::array<std::byte, 128> tail{};
+            const std::size_t remainder = bytes.size() - consumed;
+            if (remainder > 0u) {
+                std::memcpy(tail.data(), bytes.data() + consumed, remainder);
+            }
+            tail[remainder] = std::byte{0x80};
+            constexpr std::size_t kLengthBytes{8u};
+            const std::size_t tail_blocks = (remainder + 1u + kLengthBytes > 64u) ? 2u : 1u;
+            const u64 bit_length = static_cast<u64>(bytes.size()) * 8u;
+            for (std::size_t byte = 0u; byte < kLengthBytes; ++byte) {
+                tail[tail_blocks * 64u - 1u - byte] = static_cast<std::byte>((bit_length >> (byte * 8u)) & 0xFFu);
+            }
+
+            compress(tail.data());
+            if (tail_blocks == 2u) {
+                compress(tail.data() + 64u);
+            }
+
+            std::array<std::byte, 32> digest{};
+            for (std::size_t word = 0u; word < state.size(); ++word) {
+                const u32 value = state[word];
+                digest[word * 4u] = static_cast<std::byte>((value >> 24u) & 0xFFu);
+                digest[word * 4u + 1u] = static_cast<std::byte>((value >> 16u) & 0xFFu);
+                digest[word * 4u + 2u] = static_cast<std::byte>((value >> 8u) & 0xFFu);
+                digest[word * 4u + 3u] = static_cast<std::byte>(value & 0xFFu);
+            }
+
+            return digest;
+        }
+
+        // ------------------------------------------------------------------
+        // font input validation
+        // ------------------------------------------------------------------
+
+        /// Reads exactly `expected_bytes` of content through engine I/O: a
+        /// probe one byte longer proves the exact size (short AND long files
+        /// reject) and a truncated buffer can never reach the font parser.
+        [[nodiscard]] std::error_code readExactFontBytes(
+            const std::filesystem::path &path, const u64 expected_bytes, std::vector<std::byte> &out_bytes) {
+            io::IoPort port = io::createPort();
+            std::expected<IoFile, std::error_code> file_result = port.open(path);
+            if (not file_result) [[unlikely]] {
+                PPR_LOG(UI, error, "font file open failed", {{"path", path.string()}});
+                PPR_RETURN_ERROR_ON_FAIL(UI, file_result);
+            }
+
+            std::vector<std::byte> probe(static_cast<std::size_t>(expected_bytes) + 1u);
+            IoRequest request{};
+            port.read(request, *file_result, probe, 0u);
+            while (request.isPending()) {
+                if (port.waitForCompletions() == 0u) [[unlikely]] {
+                    PPR_LOG(UI, error, "font read stalled", {{"path", path.string()}});
+                    PPR_RETURN_ERROR_ON_FAIL(UI, std::errc::io_error);
+                }
+            }
+
+            PPR_RETURN_ERROR_ON_FAIL(UI, request.error());
+
+            if (request.bytesTransferred() != expected_bytes) {
+                PPR_LOG(
+                    UI, error, "font file size mismatch",
+                    {
+                        {"path", path.string()},
+                        {"expected_bytes", expected_bytes},
+                        {"actual_bytes", request.bytesTransferred()},
+                    });
+                PPR_RETURN_ERROR_ON_FAIL(UI, std::errc::invalid_argument);
+            }
+
+            probe.resize(static_cast<std::size_t>(expected_bytes));
+            out_bytes = std::move(probe);
+            return default_value_v;
+        }
+
+        /// Rejects a merge declaration the atlas could not honor: a merge as
+        /// the first source has no destination face, a merge must declare at
+        /// least one span, every span must be nonempty, ordered, start at 1
+        /// or later (0 terminates the pinned range list, imgui_draw.cpp:3556),
+        /// and stay inside the 16-bit ImWchar codepoint space; a base face
+        /// must not carry spans at all. Pure validation: runs before any file
+        /// access and before any ImGui state exists.
+        [[nodiscard]] std::error_code validateMergeDeclaration(
+            const std::span<const UIFontSource> sources, const std::size_t index) {
+            const UIFontSource &source = sources[index];
+            if (not source.m_merge_into_previous) {
+                if (not source.m_merge_glyphs.empty()) {
+                    PPR_LOG(
+                        UI, error, "glyph ranges declared on a standalone font source",
+                        {{"path", source.m_path.string()}});
+                    PPR_RETURN_ERROR_ON_FAIL(UI, std::errc::invalid_argument);
+                }
+
+                return default_value_v;
+            }
+
+            if (index == 0u) {
+                PPR_LOG(UI, error, "merged font source has no destination face", {{"path", source.m_path.string()}});
+                PPR_RETURN_ERROR_ON_FAIL(UI, std::errc::invalid_argument);
+            }
+
+            if (source.m_merge_glyphs.empty()) {
+                PPR_LOG(UI, error, "merged font source declares no glyphs", {{"path", source.m_path.string()}});
+                PPR_RETURN_ERROR_ON_FAIL(UI, std::errc::invalid_argument);
+            }
+
+            for (const UIFontGlyphRange &range: source.m_merge_glyphs) {
+                // Codepoint 0 terminates the range array in the pinned legacy
+                // preload (imgui_draw.cpp:3556 iterates while ranges[0]), so a
+                // span starting there would silently drop itself and every
+                // span after it instead of failing.
+                if (range.m_first > range.m_last or range.m_first < 1u or range.m_last > kMaxFontCodepoint) {
+                    PPR_LOG(
+                        UI, error,
+                        "merged glyph range is empty, starts at zero, or is beyond the 16-bit codepoint space",
+                        {
+                            {"path", source.m_path.string()},
+                            {"first", static_cast<u64>(range.m_first)},
+                            {"last", static_cast<u64>(range.m_last)},
+                        });
+                    PPR_RETURN_ERROR_ON_FAIL(UI, std::errc::invalid_argument);
+                }
+            }
+
+            return default_value_v;
+        }
+
+        /// Reads and validates every declared font source. Pure I/O: runs
+        /// before any ImGui context exists, so a rejection here can never
+        /// leave a partially built atlas or a substituted default font.
+        [[nodiscard]] std::expected<std::vector<LoadedFont>, std::error_code> loadFontSources(
+            const std::span<const UIFontSource> sources) {
+            const hal::ProfileScope scope{"App.UI.Fonts.Load"};
+
+            std::vector<LoadedFont> loaded{};
+            loaded.reserve(sources.size());
+            for (std::size_t index = 0u; index < sources.size(); ++index) {
+                const UIFontSource &source = sources[index];
+                if (not (source.m_size_pixels > 0.0f)) {
+                    PPR_LOG(
+                        UI, error, "font size must be positive",
+                        {{"path", source.m_path.string()}, {"size_pixels", source.m_size_pixels}});
+                    PPR_RETURN_UNEXPECTED_ON_FAIL(UI, std::errc::invalid_argument);
+                }
+
+                if (source.m_expected_bytes <= kFontMinBytes or source.m_expected_bytes > kFontMaxBytes) {
+                    PPR_LOG(
+                        UI, error, "font byte count outside the supported range",
+                        {{"path", source.m_path.string()}, {"expected_bytes", source.m_expected_bytes}});
+                    PPR_RETURN_UNEXPECTED_ON_FAIL(UI, std::errc::invalid_argument);
+                }
+
+                PPR_RETURN_UNEXPECTED_ON_FAIL(UI, validateMergeDeclaration(sources, index));
+
+                std::vector<std::byte> bytes{};
+                PPR_RETURN_UNEXPECTED_ON_FAIL(UI, readExactFontBytes(source.m_path, source.m_expected_bytes, bytes));
+
+                if (sha256OfBytes(bytes) != source.m_sha256) {
+                    PPR_LOG(UI, error, "font content hash mismatch", {{"path", source.m_path.string()}});
+                    PPR_RETURN_UNEXPECTED_ON_FAIL(UI, std::errc::invalid_argument);
+                }
+
+                LoadedFont font{
+                    .m_path = source.m_path,
+                    .m_bytes = std::move(bytes),
+                    .m_size_pixels = source.m_size_pixels,
+                    .m_merge_into_previous = source.m_merge_into_previous};
+
+                // The atlas keeps only the pointer into this array, so the
+                // ranges are copied into the LoadedFont that owns them for
+                // the atlas lifetime.
+                if (source.m_merge_into_previous) {
+                    font.m_glyph_ranges.reserve(source.m_merge_glyphs.size() * 2u + 1u);
+                    for (const UIFontGlyphRange &range: source.m_merge_glyphs) {
+                        font.m_glyph_ranges.push_back(static_cast<ImWchar>(range.m_first));
+                        font.m_glyph_ranges.push_back(static_cast<ImWchar>(range.m_last));
+                    }
+
+                    font.m_glyph_ranges.push_back(ImWchar{0});
+                }
+
+                loaded.push_back(std::move(font));
+            }
+
+            return loaded;
+        }
+
+        /// Adds the validated engine-owned buffers to the live atlas. An
+        /// empty set keeps the stock ImGui default font: an explicit caller
+        /// decision, never a substitution for a rejected input. A merge
+        /// source extends the preceding face with its declared glyph spans
+        /// (ImGui merges into the font added last); the range array stays
+        /// owned by the LoadedFont for the whole atlas lifetime.
+        [[nodiscard]] std::error_code addFontsToAtlas(
+            const std::span<LoadedFont> fonts, const float logical_scale = 1.0f) {
+            ImGuiIO &io = ImGui::GetIO();
+            if (fonts.empty()) {
+                ImFontConfig config{};
+                config.SizePixels = 13.0f * logical_scale;
+                PPR_RETURN_ERROR_ON_FAIL(
+                    UI, io.Fonts->AddFontDefault(&config) != nullptr
+                            ? std::error_code{}
+                            : std::make_error_code(std::errc::invalid_argument));
+                return {};
+            }
+
+            for (LoadedFont &font: fonts) {
+                ImFontConfig config{};
+                // Engine owns the bytes for the whole atlas lifetime; ImGui
+                // must never free them. Density stays 1.0 here and is driven
+                // only through ImFont::CurrentRasterizerDensity afterwards.
+                config.FontDataOwnedByAtlas = false;
+                config.RasterizerDensity = 1.0f;
+                // A merged source contributes its declared spans to the face
+                // added before it; a base face keeps the default range
+                // (Basic Latin + Latin-1 Supplement, 0x20-0xFF) when none is
+                // declared.
+                config.MergeMode = font.m_merge_into_previous;
+                config.GlyphRanges = font.m_glyph_ranges.empty() ? nullptr : font.m_glyph_ranges.data();
+
+                const std::string stem = font.m_path.stem().string();
+                std::ignore = std::snprintf(config.Name, sizeof(config.Name), "%s", stem.c_str());
+
+                ImFont *const added = io.Fonts->AddFontFromMemoryTTF(
+                    font.m_bytes.data(), checked_cast<int>(font.m_bytes.size()), font.m_size_pixels * logical_scale,
+                    &config);
+                if (added == nullptr) [[unlikely]] {
+                    PPR_LOG(UI, error, "font rejected by the atlas builder", {{"path", font.m_path.string()}});
+                    PPR_RETURN_ERROR_ON_FAIL(UI, std::errc::invalid_argument);
+                }
+            }
+
+            return default_value_v;
         }
 
         class ImGuiService final : public IUIService, public IFenceAwareUiService {
@@ -138,21 +707,34 @@ float4 fragmentMain(PsInput input) : SV_Target {
             DeferredReleaseQueue m_deferred_releases{};
             FenceCompletionValue m_last_submitted_value{kFenceValueNone};
 
-            // Font atlas generation: rebuilt when the display framebuffer
-            // scale changes (DPI), installed after the upload's own
-            // global-idle wait, then rebound into every slot root. The
-            // previous atlas drops only after that wait, so no submission
-            // ever samples a destroyed texture.
+            // Engine-owned font bytes for the atlas lifetime: loaded and
+            // validated at initialize, released only after context destroy.
+            // The bytes are read through engine I/O and pinned to the
+            // declared size + SHA-256; no default-font substitution exists.
+            std::vector<LoadedFont> m_font_buffers{};
+
+            // Font bytes retain base sizes. The immutable style is copied on
+            // transitions; geometry and font logical size never accumulate scale.
+            ImGuiStyle m_unscaled_style{};
+            float m_font_density{1.0f};
+            float m_ui_logical_scale{1.0f};
+
+            // Font atlas generation: rebaked when the bake density moves
+            // (DPI), staged into a detached publication, installed by the
+            // encode lane, then rebound into every slot root. The previous
+            // atlas drops only after the upload's own queue wait, so no
+            // submission ever samples a destroyed texture.
             //
             // P2 ownership split: the CLIENT stages owned pixels + a version
-            // into the detached data (m_font_scale/staged_* are main-side
+            // into the detached data (revisions*/staged_* are main-side
             // only); the encode lane installs them and publishes
             // m_font_installed_version (atomic: the client re-stages while
             // its staged version is unacknowledged, so a dropped frame
-            // cannot lose a DPI rebuild). The TexID is frozen at init and
+            // cannot lose a rebuild). The TexID is frozen at init and
             // never rewritten afterwards, so the lane performs zero live
             // IO/context writes.
-            float2 m_font_scale{0.0f, 0.0f};
+            u64 m_font_content_revision{0u};
+            u64 m_font_published_revision{0u};
             u64 m_font_staged_version{0u};
             std::atomic<u64> m_font_installed_version{0u};
             u64 m_font_texid_init{0u};
@@ -168,6 +750,11 @@ float4 fragmentMain(PsInput input) : SV_Target {
             std::error_code createShaderProgram_(IShaderService &shader_service, rhi::IDevice &device);
 
             std::error_code createFontTexture_(rhi::IDevice &device, rhi::ICommandQueue &device_queue);
+
+            // Rebakes the atlas at a new bake density before a frame opens
+            // (atlas unlocked); publishes the new content through the next
+            // detached build.
+            std::error_code rebuildFontAtlasForDensity_(float density, float logical_scale);
 
             std::error_code createRenderPipeline_(rhi::IDevice &device, const RenderPipelineSignature &signature);
 
@@ -315,15 +902,26 @@ float4 fragmentMain(PsInput input) : SV_Target {
 
             [[nodiscard]] std::error_code initialize(
                 WindowInputContext &window_input_context, IRhiService &rhi_service, IShaderService &shader_service,
-                const int input_listener_priority) override {
+                const std::span<const UIFontSource> fonts, const int input_listener_priority) override {
                 const hal::ProfileScope scope{"App.UI.Init"};
                 PPR_ASSERT(m_imgui_context == nullptr);
+
+                // Font input first: read and validate every source before any
+                // ImGui state exists. A rejection here leaves the service with
+                // no context and no atlas, so the caller's shutdown is a
+                // no-op and no default-font substitution can occur.
+                std::vector<LoadedFont> loaded_fonts{};
+                if (not fonts.empty()) {
+                    std::expected<std::vector<LoadedFont>, std::error_code> loaded = loadFontSources(fonts);
+                    PPR_RETURN_ERROR_ON_FAIL(UI, loaded);
+                    loaded_fonts = std::move(*loaded);
+                }
 
                 m_frame_revision = 0u;
                 m_imgui_context = ImGui::CreateContext();
                 if (not m_imgui_context) {
                     PPR_LOG(UI, error, "failed to create ImGui context");
-                    return std::make_error_code(std::errc::not_supported);
+                    PPR_RETURN_ERROR_ON_FAIL(UI, std::errc::not_supported);
                 }
 
                 // Route all ImGui recoverable errors through the engine logger.
@@ -336,6 +934,10 @@ float4 fragmentMain(PsInput input) : SV_Target {
                 m_imgui_context->ErrorCallbackUserData = nullptr;
 
                 ImGui::SetCurrentContext(m_imgui_context);
+
+                applyThemeStyle();
+                m_unscaled_style = ImGui::GetStyle();
+                m_ui_logical_scale = 1.0f;
 
                 ImGuiIO &io = ImGui::GetIO();
                 io.ConfigErrorRecovery = true;
@@ -351,10 +953,15 @@ float4 fragmentMain(PsInput input) : SV_Target {
                 io.BackendFlags |= ImGuiBackendFlags_RendererHasVtxOffset;
 
                 io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
-                io.ConfigFlags |= ImGuiConfigFlags_DpiEnableScaleFonts;
-                io.ConfigFlags |= ImGuiConfigFlags_DpiEnableScaleViewports;
                 io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
                 io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+
+                // Fonts enter the atlas before the input listener attaches
+                // and before the first bake: a malformed face fails here
+                // (AddFont rolls back and returns NULL), and the caller's
+                // shutdown path destroys the partially built context.
+                m_font_buffers = std::move(loaded_fonts);
+                PPR_RETURN_ERROR_ON_FAIL(UI, addFontsToAtlas(m_font_buffers));
 
                 m_input_context = &window_input_context.m_context;
                 m_input_context->addInputListener(&m_input_listener, input_listener_priority);
@@ -465,6 +1072,10 @@ float4 fragmentMain(PsInput input) : SV_Target {
                     ImGui::DestroyContext(m_imgui_context);
                     m_imgui_context = nullptr;
                 }
+
+                // The atlas is gone: release the engine-owned bytes it
+                // borrowed (FontDataOwnedByAtlas = false kept ImGui out).
+                m_font_buffers.clear();
                 return default_value_v;
             }
 
@@ -500,6 +1111,10 @@ float4 fragmentMain(PsInput input) : SV_Target {
                     ImGui::DestroyContext(m_imgui_context);
                     m_imgui_context = nullptr;
                 }
+
+                // The atlas is gone: release the engine-owned bytes it
+                // borrowed (FontDataOwnedByAtlas = false kept ImGui out).
+                m_font_buffers.clear();
                 return default_value_v;
             }
 
@@ -559,7 +1174,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
                 const hal::ProfileScope scope{"App.UI.Update"};
                 const AffinityScope affinity{*this, false};
                 if (not m_imgui_context) {
-                    return std::make_error_code(std::errc::not_connected);
+                    PPR_RETURN_ERROR_ON_FAIL(UI, std::errc::not_connected);
                 }
                 ImGui::SetCurrentContext(m_imgui_context);
                 ImGuiIO &io = ImGui::GetIO();
@@ -569,8 +1184,32 @@ float4 fragmentMain(PsInput input) : SV_Target {
                 const int2 &display_size = viewport.getViewport().getClientRect().m_extent;
                 io.DisplaySize = ImVec2{static_cast<float>(display_size.x), static_cast<float>(display_size.y)};
 
-                const float2 &content_scale = viewport.getWindow().m_content_scale;
-                io.DisplayFramebufferScale = ImVec2{content_scale.x, content_scale.y};
+                // Framebuffer ratio from the actual surface: logical client
+                // extent vs the window's framebuffer size. The same ratio
+                // feeds both the IO scale and the font bake density below.
+                const float2 ratio = framebufferScaleFor(display_size, viewport.getWindow().m_framebuffer_size);
+                io.DisplayFramebufferScale = ImVec2{ratio.x, ratio.y};
+
+                // Monitor content scale is a physical-size request, independent
+                // of framebuffer/client ratio. Use one scalar for UI geometry
+                // (maximum valid axis); clipping retains both actual ratio axes.
+                const float2 content = viewport.getWindow().m_content_scale;
+                const float content_x = std::isfinite(content.x) and content.x > 0.0f ? content.x : 1.0f;
+                const float content_y = std::isfinite(content.y) and content.y > 0.0f ? content.y : 1.0f;
+                const float physical_scale = std::clamp(std::max(content_x, content_y), 1.0f, 4.0f);
+                const float framebuffer_ratio = std::max(ratio.x, ratio.y);
+                const float logical_scale = physical_scale / framebuffer_ratio;
+                const float density = std::clamp(framebuffer_ratio, kMinFontBakeDensity, kMaxFontBakeDensity);
+                if (density != m_font_density or logical_scale != m_ui_logical_scale) {
+                    PPR_RETURN_ERROR_ON_FAIL(UI, rebuildFontAtlasForDensity_(density, logical_scale));
+
+                    ImGuiStyle &style = ImGui::GetStyle();
+                    style = m_unscaled_style;
+                    style.ScaleAllSizes(logical_scale);
+                    style.FontSizeBase = io.Fonts->Fonts[0]->LegacySize;
+                    style.FontScaleMain = 1.0f;
+                    style.FontScaleDpi = 1.0f;
+                }
 
                 ++m_frame_revision;
                 ImGui::NewFrame();
@@ -663,7 +1302,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
                     // splits them), so the spelling stays literal here.
                     _Pragma("clang diagnostic ignored \"-Wnontrivial-memcall\"")
 #endif
-                    const std::size_t list_vtx = checked_cast<std::size_t>(cmd_list->VtxBuffer.Size);
+                        const std::size_t list_vtx = checked_cast<std::size_t>(cmd_list->VtxBuffer.Size);
                     const std::size_t vtx_write_base = out.m_vertices.size();
                     out.m_vertices.resize(vtx_write_base + list_vtx);
                     std::memcpy(
@@ -715,18 +1354,15 @@ float4 fragmentMain(PsInput input) : SV_Target {
                 }
                 out.m_has_content = not out.m_commands.empty();
 
-                // Font publication: stage owned pixels only when the atlas
-                // content/scale actually changed; an unacknowledged pending
-                // generation retransmits the SAME version until the consumer
-                // installs it. Empty pixels mean "keep the installed atlas".
-                const float2 display_scale{io.DisplayFramebufferScale.x, io.DisplayFramebufferScale.y};
-                // Component-wise compare (mango float2 equality yields a
-                // mask, not bool — same idiom as the pre-split DPI check).
-                const bool font_scale_changed =
-                    (display_scale.x != m_font_scale.x or display_scale.y != m_font_scale.y);
+                // Font publication: stage owned pixels whenever the atlas
+                // content changed (a rebake mints a content revision even at
+                // an unchanged scale); an unacknowledged pending generation
+                // retransmits the SAME version until the consumer installs
+                // it. Empty pixels mean "keep the installed atlas".
+                const bool font_content_changed = (m_font_content_revision != m_font_published_revision);
                 const bool font_unacknowledged =
                     (m_font_staged_version != m_font_installed_version.load(std::memory_order_acquire));
-                if (font_scale_changed or font_unacknowledged) {
+                if (font_content_changed or font_unacknowledged) {
                     u8 *pixels = nullptr;
                     int width = 0, height = 0, bpp = 0;
                     io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height, &bpp);
@@ -738,9 +1374,10 @@ float4 fragmentMain(PsInput input) : SV_Target {
                                                     4u;
                     out.m_font_pixels.assign(pixels, pixels + pixel_bytes);
                     out.m_font_extent = int2{width, height};
-                    if (font_scale_changed) {
-                        // New atlas content/scale: mint the next generation.
-                        m_font_scale = display_scale;
+                    if (font_content_changed) {
+                        // New atlas content (scale or same-scale change):
+                        // mint the next generation.
+                        m_font_published_revision = m_font_content_revision;
                         out.m_font_version = ++m_font_staged_version;
                     } else {
                         // Retransmit the SAME pending generation until it is
@@ -1112,7 +1749,11 @@ float4 fragmentMain(PsInput input) : SV_Target {
 
             m_font_texture = std::move(texture);
             m_font_texture_view = std::move(view);
-            m_font_scale = float2{ImGui::GetIO().DisplayFramebufferScale.x, ImGui::GetIO().DisplayFramebufferScale.y};
+
+            // The initial bake happens at the config density (1.0) with no
+            // window surface yet; the first update brings the real ratio and
+            // rebakes if it differs.
+            m_font_density = 1.0f;
 
             // TexID is frozen here, once, on the client lane: every later
             // detached command carries this identity, and the encode lane
@@ -1122,11 +1763,89 @@ float4 fragmentMain(PsInput input) : SV_Target {
             m_font_staged_version = 1u;
             m_font_installed_version.store(1u, std::memory_order_release);
 
+            // Init publishes its own content: the first detached build is
+            // steady state and carries no publication.
+            m_font_content_revision = 1u;
+            m_font_published_revision = 1u;
+
             PPR_LOG(
                 UI, info, "font texture created",
                 {
                     {"width", m_font_texture->getDesc().size.width},
                     {"height", m_font_texture->getDesc().size.height},
+                });
+            return default_value_v;
+        }
+
+        std::error_code ImGuiService::rebuildFontAtlasForDensity_(const float density, const float logical_scale) {
+            const hal::ProfileScope scope{"App.UI.Fonts.Rebake"};
+            ImFontAtlas *const atlas = ImGui::GetIO().Fonts;
+
+            // Re-add from verified, retained bytes at the requested logical
+            // size. Clear notifies the context before destroying old ImFont
+            // objects; consumers must reacquire fonts after an update.
+            atlas->Clear();
+            PPR_RETURN_ERROR_ON_FAIL(UI, addFontsToAtlas(m_font_buffers, logical_scale));
+
+            // Exactly one raster-density knob; source configs remain 1.0.
+            for (ImFont *const font: atlas->Fonts) {
+                font->CurrentRasterizerDensity = density;
+            }
+
+            // Rebuild from the still-live engine buffers at the new density.
+            // ImGui queues the previous atlas texture for destruction; it is
+            // retired locally below because it was never handed to the
+            // backend individually (one frozen TexID for all generations).
+            ImFontAtlasBuildClear(atlas);
+
+            // Force the legacy bake (Build + per-font range preload) at the
+            // new density. Callable here because update runs before NewFrame:
+            // the atlas is unlocked.
+            u8 *pixels = nullptr;
+            int width = 0;
+            int height = 0;
+            int bpp = 0;
+            atlas->GetTexDataAsRGBA32(&pixels, &width, &height, &bpp);
+            if (pixels == nullptr or
+                width <= 0 or
+                height <= 0 or
+                width > kMaxFontAtlasExtent or
+                height > kMaxFontAtlasExtent) [[unlikely]] {
+                PPR_LOG(
+                    UI, error, "rebaked font atlas rejected",
+                    {
+                        {"width", width},
+                        {"height", height},
+                        {"density", density},
+                    });
+                PPR_RETURN_ERROR_ON_FAIL(UI, std::errc::invalid_argument);
+            }
+
+            // The fresh TexData has an invalid TexID; re-arm the frozen
+            // identity so detached commands keep a valid texture reference
+            // while the new pixels travel to the encode lane.
+            atlas->SetTexID(reinterpret_cast<ImTextureID>(m_font_texid_init));
+
+            // Retire predecessor textures now: clearing the identity and
+            // marking them destroyed keeps NewFrame's reclaim asserts (clear
+            // TexID, no backend user data) honest, and removes them at the
+            // next frame instead of leaking them in the atlas list.
+            for (ImTextureData *const texture: atlas->TexList) {
+                if (texture != atlas->TexData and texture->WantDestroyNextFrame) {
+                    texture->SetTexID(kInvalidTextureId);
+                    texture->SetStatus(ImTextureStatus_Destroyed);
+                }
+            }
+
+            m_font_density = density;
+            m_ui_logical_scale = logical_scale;
+            ++m_font_content_revision;
+            PPR_LOG(
+                UI, info, "font atlas rebaked",
+                {
+                    {"density", density},
+                    {"width", width},
+                    {"height", height},
                 });
             return default_value_v;
         }
@@ -1222,7 +1941,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
                         {"has_depth_stencil", signature.m_depth_stencil_format.has_value()},
                         {"sample_count", static_cast<u32>(signature.m_sample_count)},
                     });
-                return make_error_code(std::errc::invalid_argument);
+                PPR_RETURN_ERROR_ON_FAIL(UI, std::errc::invalid_argument);
             }
 
             rhi::ColorTargetDesc color_target{};
@@ -1257,6 +1976,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
             // submission can reference objects that did not exist a moment
             // ago. The previous pipeline/roots (if any) defer with the
             // latest submission that could reference them.
+            const u32 decode_vertex_srgb = rhi::getFormatInfo(signature.colorFormats().front()).isSrgb ? 1u : 0u;
             std::array<rhi::ComPtr<rhi::IShaderObject>, kUiFrameSlots> slot_roots{};
             for (u32 slot = 0u; slot < kUiFrameSlots; ++slot) {
                 rhi::ComPtr<rhi::IShaderObject> root{};
@@ -1265,6 +1985,9 @@ float4 fragmentMain(PsInput input) : SV_Target {
                 rhi::ShaderCursor cursor{root.get()};
                 PPR_RETURN_ERROR_ON_FAIL(UI, cursor["g_fontSampler"].setBinding(m_font_sampler));
                 PPR_RETURN_ERROR_ON_FAIL(UI, cursor["g_fontTexture"].setBinding(m_font_texture_view));
+                PPR_RETURN_ERROR_ON_FAIL(
+                    UI, cursor["g_decode_vertex_srgb"].setData(&decode_vertex_srgb, sizeof(decode_vertex_srgb)));
+
                 slot_roots[slot] = std::move(root);
             }
 
@@ -1603,10 +2326,46 @@ float4 fragmentMain(PsInput input) : SV_Target {
     }
 
     // ------------------------------------------------------------------
-    // service factory
+    // panel chrome helpers and service factory
     // ------------------------------------------------------------------
 
     namespace ui {
+        WindowTitleFont::WindowTitleFont() noexcept {
+            ImFont *const heading = theme::font(theme::EFont::heading);
+            ImGui::PushFont(heading, heading->LegacySize);
+            m_pushed = true;
+        }
+
+        void WindowTitleFont::close() noexcept {
+            if (m_pushed) {
+                m_pushed = false;
+                ImGui::PopFont();
+            }
+        }
+
+        WindowTitleFont::~WindowTitleFont() noexcept {
+            close();
+        }
+
+        void helpMarker(const char *const tooltip) {
+            ImFont *const body = theme::font(theme::EFont::body);
+            ImGui::PushFont(body, body->LegacySize);
+            ImGui::TextDisabled("%s", icons::kHelpMarkerGlyph.data());
+            ImGui::PopFont();
+
+            ImGui::SetItemTooltip("%s", tooltip);
+        }
+
+        ImFont *theme::font(const EFont role) noexcept {
+            const auto &fonts = ImGui::GetIO().Fonts->Fonts;
+            if (fonts.Size == 4) {
+                return fonts[static_cast<int>(role)];
+            }
+
+            // Test/service callers may deliberately initialize only the stock face.
+            return ImGui::GetFont();
+        }
+
         std::unique_ptr<IUIService> createImGuiService() {
             return std::make_unique<ImGuiService>();
         }

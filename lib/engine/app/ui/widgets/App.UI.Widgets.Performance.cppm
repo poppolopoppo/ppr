@@ -33,6 +33,10 @@ export namespace pP::ui {
         void observe(float frame_ms, float render_ms) noexcept;
         void observeGpu(u64 submission, float milliseconds) noexcept;
         void draw(float bottom_inset) const;
+
+        /// Draw the existing histories in the caller's current window; no window ownership or positioning.
+        void drawContents() const;
+
         [[nodiscard]] std::size_t gpuSampleCount() const noexcept;
         [[nodiscard]] const TimingStatistics &gpuStatistics() const noexcept;
         [[nodiscard]] std::size_t sampleCount() const noexcept;

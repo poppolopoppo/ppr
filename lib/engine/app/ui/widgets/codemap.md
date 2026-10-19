@@ -25,3 +25,10 @@ widget seam; the game consumes the timing widget. See the
 GPU samples have their own bounded history and completed-submission identity.
 Repeated or older observations are ignored, so a delayed GPU result is not
 counted again on every CPU frame. Missing initial samples show waiting/unavailable.
+
+`PerformanceWidget::drawContents` draws those existing plots in the caller's
+current window, sizing plots to available content width. The game embeds it in
+its independent Performance window; there is no overlapping standalone graph
+overlay. `draw(bottom_inset)` remains the standalone native-window wrapper for
+other clients. Sampling and history ownership remain client-owned regardless of
+window visibility; synchronous draws borrow the widget without retaining it.
