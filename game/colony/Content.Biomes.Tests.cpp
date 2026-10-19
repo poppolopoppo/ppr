@@ -233,7 +233,8 @@ preview_color_rgba = "709040FF"
             erosion, "temperature.field = \"temperature\"", "temperature.field = \"temperature\"\nerosion.passes = 24");
         const auto erosion_only = decodeBiomes(erosion, "biomes.toml", setup);
         PPR_TEST_ASSERT(erosion_only and erosion_only->front().m_erosion_passes == 24u);
-        for (const auto replacement: {"erosion.passes = 25", "erosion.passes = 24\nrelaxation.passes = 1"}) {
+        // The sequential-halo budget now accommodates every schema maximum, so each sample must fail on its own field.
+        for (const auto replacement: {"erosion.passes = 25", "erosion.passes = 24\nfinish.passes = 5"}) {
             auto invalid = erosion;
             replace(invalid, "erosion.passes = 24", replacement);
             config::Diagnostics rejected;
