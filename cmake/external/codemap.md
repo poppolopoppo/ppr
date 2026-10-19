@@ -42,6 +42,9 @@ module bindings for third-party libraries consumed by the engine.
 - **vcpkg** (`cmake/VCPkg.cmake` + `vcpkg.json`): when `VCPKG_ROOT` is set (or the `vcpkg` preset toolchain),
   manifest-mode deps (fmt, zlib, libdeflate, zstd, lcms, simdjson, glfw3, vulkan-headers, …) resolve from
   `VCPKG_INSTALLED_DIR` on `CMAKE_PREFIX_PATH`; otherwise CPM fetches from GitHub.
+- **Survey entries** (`third_party/<Library>/README.md`): upstream, exact pin, why that version, preserved
+  license notice (+ bytes/SHA-256), and integration scope for every declared dependency; the front matter and
+  index live in `third_party/README.md`. Update an entry together with its pin or route change.
 
 ## Flow
 
