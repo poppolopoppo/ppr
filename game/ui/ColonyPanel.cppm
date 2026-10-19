@@ -81,8 +81,8 @@ export namespace pP::colony {
     /// and the panel's Esc mirror can all hand it across the frame boundary
     /// without allocation.
     struct ColonyIntent final {
-        EColonyIntent m_kind{};
         u32 m_arg{};
+        EColonyIntent m_kind{};
         bool m_confirmed{};
     };
 

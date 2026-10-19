@@ -1813,7 +1813,7 @@ namespace demo {
                 bindAction_(
                     index, row.m_description, row.m_key,
                     [this, kind = row.m_kind, arg = row.m_arg](const InputActionEvent &, const InputKey &) {
-                        dispatchIntent_(colony::ColonyIntent{.m_kind = kind, .m_arg = arg});
+                        dispatchIntent_(colony::ColonyIntent{.m_arg = arg, .m_kind = kind});
                     });
             }
 

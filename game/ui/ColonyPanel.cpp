@@ -472,7 +472,7 @@ namespace pP::colony {
             constexpr const char *speeds[]{"1x", "2x", "3x"};
             int speed = static_cast<int>(colony.m_speed) - 1;
             if (ImGui::Combo("##speed", &speed, speeds, 3)) {
-                intent = ColonyIntent{.m_kind = EColonyIntent::set_speed, .m_arg = static_cast<u32>(speed + 1)};
+                intent = ColonyIntent{.m_arg = static_cast<u32>(speed + 1), .m_kind = EColonyIntent::set_speed};
             }
 
             char status[128]{};
@@ -765,14 +765,14 @@ namespace pP::colony {
             int selected = static_cast<int>(state.m_preview_mode);
             if (ImGui::Combo("Preview", &selected, modes.data(), static_cast<int>(modes.size()))) {
                 state.m_preview_mode = static_cast<EGridDiagnosticMode>(selected);
-                intent = ColonyIntent{.m_kind = EColonyIntent::select_preview, .m_arg = static_cast<u32>(selected)};
+                intent = ColonyIntent{.m_arg = static_cast<u32>(selected), .m_kind = EColonyIntent::select_preview};
             }
             if (state.m_preview_mode == EGridDiagnosticMode::temperature) {
                 ImGui::InputFloat("Minimum K", &state.m_temperature_min_k);
                 ImGui::InputFloat("Maximum K", &state.m_temperature_max_k);
                 if (ImGui::Button("Apply temperature range")) {
                     intent = ColonyIntent{
-                        .m_kind = EColonyIntent::select_preview, .m_arg = static_cast<u32>(state.m_preview_mode)};
+                        .m_arg = static_cast<u32>(state.m_preview_mode), .m_kind = EColonyIntent::select_preview};
                 }
             }
             if (ImGui::Button("Reload content and start new game")) {
@@ -1264,7 +1264,7 @@ namespace pP::colony {
                 }
 
                 if (pressed) {
-                    intent = ColonyIntent{.m_kind = kind, .m_arg = argument};
+                    intent = ColonyIntent{.m_arg = argument, .m_kind = kind};
                 }
             }
 
@@ -1277,12 +1277,12 @@ namespace pP::colony {
             if (ImGui::BeginPopup("Build tools")) {
                 if (ImGui::MenuItem("Wall")) {
                     intent = ColonyIntent{
-                        .m_kind = EColonyIntent::select_tool, .m_arg = static_cast<u32>(EColonyTool::build_wall)};
+                        .m_arg = static_cast<u32>(EColonyTool::build_wall), .m_kind = EColonyIntent::select_tool};
                 }
 
                 if (ImGui::MenuItem("Demolish")) {
                     intent = ColonyIntent{
-                        .m_kind = EColonyIntent::select_tool, .m_arg = static_cast<u32>(EColonyTool::demolish)};
+                        .m_arg = static_cast<u32>(EColonyTool::demolish), .m_kind = EColonyIntent::select_tool};
                 }
 
                 ImGui::EndPopup();
