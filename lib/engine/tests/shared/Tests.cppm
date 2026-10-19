@@ -19,6 +19,7 @@ export namespace pP::tests {
     /// file can never flip the forked-runner marker.
     struct TestSettings {
         std::string m_filter{};
+        std::string m_skip_filter{};
         bool m_child_run{false};
         std::optional<u32> m_shuffle_seed{};
         bool m_no_shuffle{false};
@@ -35,6 +36,12 @@ export namespace pP::tests {
                     Metadata{
                         "test.filter", "Run a specific test (or subtree) by path", "Selection", EMutability::startup,
                         ESource::all, false},
+                    StringDomain{1024u, true}),
+                field(
+                    &TestSettings::m_skip_filter,
+                    Metadata{
+                        "test.skip_filter", "Skip a test or subtree by path; comma-separated list", "Selection",
+                        EMutability::startup, ESource::all, false},
                     StringDomain{1024u, true}),
                 field(
                     &TestSettings::m_child_run,

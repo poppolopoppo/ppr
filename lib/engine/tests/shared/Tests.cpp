@@ -27,6 +27,14 @@ namespace pP::tests {
         filter.m_aliases.push_back("run-test");
         schema.m_options.push_back(std::move(filter));
 
+        config::OptionDecl skip{};
+        skip.m_canonical = "test.skip_filter";
+        skip.m_description = "Skip a test (or subtree) by path. Comma-separated test or subtree paths are excluded "
+                             "from the run.";
+        skip.m_aliases.push_back("skip-test");
+        skip.m_aliases.push_back("skip-filter");
+        schema.m_options.push_back(std::move(skip));
+
         config::OptionDecl child{};
         child.m_canonical = "test.child_run";
         child.m_description = "Mark this process as a child (forked) test runner.";
@@ -178,6 +186,9 @@ namespace pP::tests {
             if (not settings.m_filter.empty()) {
                 cli.m_context.setFilter(settings.m_filter);
             }
+            if (not settings.m_skip_filter.empty()) {
+                cli.m_context.setSkipFilter(settings.m_skip_filter);
+            }
             if (settings.m_child_run) {
                 cli.m_context.markAsChildRun();
             }
@@ -211,6 +222,9 @@ namespace pP::tests {
 
         if (cli.m_context.hasFilter()) {
             std::cerr << "[Filter: " << cli.m_context.m_filter_path << "]" << std::endl;
+        }
+        if (cli.m_context.hasSkipFilter()) {
+            std::cerr << "[Skip: " << cli.m_context.m_skip_filter_path << "]" << std::endl;
         }
 
         for (unsigned iter = 0u; iter < cli.m_loops; ++iter) {

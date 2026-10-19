@@ -219,11 +219,26 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
         target_link_options(game.tests PRIVATE "/alternatename:?__tlregdtor@@YAHXZ=__tlregdtor")
     endif()
 
-    # Full shipped-content and checkpoint coverage measured 358 s for one complete loop.
+    # Shipped-content and checkpoint coverage measured 358 s for one complete
+    # loop. The two worldgen preview replay/crop leaves dominate that budget
+    # and own a separate entry; the remaining preview widget leaf stays here.
     ppr_add_test_entry(TARGET game.tests
+        EXCLUDE "game/worldgen_preview/bounded_samples_replay_and_export_the_exact_visible_draft,game/worldgen_preview/whole_world_crops_preserve_production_formations_seams_and_matter"
         LOOPS
         TIMEOUT 600
-        LABELS unit game
+        LABELS unit game cpu
+    )
+
+    # Heavy worldgen preview leaves: exact-visible-draft sample replay/export
+    # and whole-world crop formation checks. PROCESSORS 4 reserves four CTest
+    # scheduling slots for this entry.
+    ppr_add_test_entry(TARGET game.tests
+        NAME worldgen_preview
+        FILTER "game/worldgen_preview/bounded_samples_replay_and_export_the_exact_visible_draft,game/worldgen_preview/whole_world_crops_preserve_production_formations_seams_and_matter"
+        LOOPS
+        PROCESSORS 4
+        TIMEOUT 600
+        LABELS unit game worldgen
     )
 
     ppr_add_test_entry(TARGET app.game

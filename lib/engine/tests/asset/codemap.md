@@ -2,7 +2,7 @@
 
 ## Responsibility
 
-`engine.tests.asset` is the executable behind the single `engine.tests.asset` CTest entry. It covers CPU image/mesh processing, resilience and logging, plus shared GPU render/cache tests and private-app quarantine/lifecycle tests. Current group registration lives in `Asset.Tests.cpp`; avoid copying leaf counts into navigation docs.
+`engine.tests.asset` is the executable behind the `engine.tests.asset.cpu`, `engine.tests.asset.gpu`, and `engine.tests.asset.gpu_validation` CTest entries. It covers CPU image/mesh processing, resilience and logging, plus shared GPU render/cache tests and private-app quarantine/lifecycle tests. Current group registration lives in `Asset.Tests.cpp`; avoid copying leaf counts into navigation docs.
 
 ## Registration and fixture lifetime
 
@@ -14,9 +14,9 @@ The root first runs CPU image, mesh, resilience and observe groups. The `asset/r
 
 ## Running
 
-`engine.tests.asset` uses `--loop ${PPR_TEST_LOOPS}`, default 1, `RUN_SERIAL TRUE`, and TIMEOUT 450. ASan does not select three loops automatically. Configure `PPR_TEST_LOOPS=3` for stress and restore 1 afterward.
+The CPU and GPU entries use `--loop ${PPR_TEST_LOOPS}`, default 1, and TIMEOUT 450. `engine.tests.asset.cpu` runs `asset` with `--skip-test asset/render`; `engine.tests.asset.gpu` runs `asset/render` under `RESOURCE_LOCK gpu`. ASan does not select three loops automatically. Configure `PPR_TEST_LOOPS=3` for stress and restore 1 afterward.
 
-There are no separate `tier-cpu` / `tier-gpu` CTest registrations or `ppr_asset_tier` helper in current CMake. Run the full entry with `ctest --test-dir out/build/<preset> -R "engine\.tests\.asset" --output-on-failure`. For focused CPU/GPU groups, invoke the executable with the shared runner's `--run-test` filters matching current group paths; run from its staged executable directory. GPU groups require the documented platform/GPU environment.
+Run both routine entries with `ctest --test-dir out/build/<preset> -L engine.tests.asset --output-on-failure -LE gpu_validation`. The opt-in `engine.tests.asset.gpu_validation` entry sets `PPR_TEST_GPU_VALIDATION=1` and runs the representative grid visibility gate with the RHI debug layers; run it separately with `-L gpu_validation`. For focused groups, invoke the executable with the shared runner's `--run-test`/`--skip-test` filters matching current group paths; run from its staged executable directory. GPU groups require the documented platform/GPU environment.
 
 See [root test policy](../../../../codemap.md#test-infrastructure) for machine exclusivity, required asset gates and loop selection.
 

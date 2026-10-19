@@ -302,6 +302,32 @@ namespace pP {
         return false;
     }
 
+    void UnitTest::Context::setSkipFilter(std::string_view path) noexcept {
+        m_skip_filter_path = path;
+    }
+
+    bool UnitTest::Context::hasSkipFilter() const noexcept {
+        return !m_skip_filter_path.empty();
+    }
+
+    bool UnitTest::Context::skipMatches(const std::string_view path) const noexcept {
+        std::string_view remaining = m_skip_filter_path;
+        while (not remaining.empty()) {
+            const auto comma = remaining.find(',');
+            const std::string_view token = remaining.substr(0, comma);
+            if (not token.empty() and
+                path.starts_with(token) and
+                (path.size() == token.size() or path[token.size()] == '/')) {
+                return true;
+            }
+            if (comma == std::string_view::npos) {
+                break;
+            }
+            remaining.remove_prefix(comma + 1);
+        }
+        return false;
+    }
+
     void UnitTest::run(const Context &context, const UnitTest &test) noexcept {
         RunImpl first_run{context, test};
         test.run(first_run);
@@ -374,9 +400,12 @@ namespace pP {
     }
 
     void UnitTest::RunImpl::recurse(const UnitTest &test) {
-        if (m_context.hasFilter()) {
+        if (m_context.hasFilter() or m_context.hasSkipFilter()) {
             const std::string child_path = getCurrentPath() + "/" + test.m_name;
-            if (!m_context.filterMatches(child_path)) {
+            if (m_context.hasFilter() and not m_context.filterMatches(child_path)) {
+                return;
+            }
+            if (m_context.hasSkipFilter() and m_context.skipMatches(child_path)) {
                 return;
             }
         }

@@ -101,6 +101,7 @@ namespace pP {
             using LogHandler = std23::function_ref<void(const IRun &, const char *, const std::source_location &)>;
 
             std::string m_filter_path{};
+            std::string m_skip_filter_path{};
 
             std::optional<LogHandler> m_fail_with{};
             std::optional<LogHandler> m_log{};
@@ -122,6 +123,12 @@ namespace pP {
             void markAsChildRun() noexcept;
 
             [[nodiscard]] bool filterMatches(std::string_view path) const noexcept;
+
+            void setSkipFilter(std::string_view path) noexcept;
+
+            [[nodiscard]] bool hasSkipFilter() const noexcept;
+
+            [[nodiscard]] bool skipMatches(std::string_view path) const noexcept;
 
             [[nodiscard]] u32 numExecuted() const noexcept {
                 return m_num_executed;

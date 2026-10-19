@@ -12,15 +12,18 @@
 #   ppr_add_test_entry(TARGET <target>
 #     [NAME <qualifier>]  # omit for the one-suite-per-target entry name
 #     [FILTER <path>]     # invoke with --run-test <path>; one token, no ';'
+#     [EXCLUDE <path>]    # invoke with --skip-test <path>; comma list; may combine with FILTER
 #     [LOOPS]             # invoke with --loop ${PPR_TEST_LOOPS}
 #     [ARGS <word>...]    # raw extra command words (exclusive with FILTER)
 #     [RUN_SERIAL]
+#     [PROCESSORS <count>]     # CTest PROCESSORS scheduling property
+#     [RESOURCE_LOCK <name>...] # CTest RESOURCE_LOCK property; names joined with ';'
 #     TIMEOUT <seconds>   # required
 #     LABELS <label>...)  # required; bare words (function args lose ';')
 function(ppr_add_test_entry)
   set(options LOOPS RUN_SERIAL)
-  set(oneValueArgs TARGET NAME FILTER TIMEOUT)
-  set(multiValueArgs ARGS LABELS)
+  set(oneValueArgs TARGET NAME FILTER EXCLUDE PROCESSORS TIMEOUT)
+  set(multiValueArgs ARGS RESOURCE_LOCK LABELS)
   cmake_parse_arguments(PPR_TEST_ENTRY "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
   if(NOT PPR_TEST_ENTRY_TARGET)
@@ -54,6 +57,9 @@ function(ppr_add_test_entry)
   if(PPR_TEST_ENTRY_FILTER)
     list(APPEND ppr_test_entry_command --run-test "${PPR_TEST_ENTRY_FILTER}")
   endif()
+  if(PPR_TEST_ENTRY_EXCLUDE)
+    list(APPEND ppr_test_entry_command --skip-test "${PPR_TEST_ENTRY_EXCLUDE}")
+  endif()
   if(PPR_TEST_ENTRY_LOOPS)
     list(APPEND ppr_test_entry_command --loop "${PPR_TEST_LOOPS}")
   endif()
@@ -76,7 +82,17 @@ function(ppr_add_test_entry)
   if(PPR_TEST_ENTRY_RUN_SERIAL)
     set_tests_properties("${ppr_test_entry_name}" PROPERTIES RUN_SERIAL "TRUE")
   endif()
+  if(PPR_TEST_ENTRY_PROCESSORS)
+    set_tests_properties("${ppr_test_entry_name}" PROPERTIES PROCESSORS "${PPR_TEST_ENTRY_PROCESSORS}")
+  endif()
+  if(PPR_TEST_ENTRY_RESOURCE_LOCK)
+    # RESOURCE_LOCK is a ';'-separated property: join before handing it over,
+    # or the additional names would be parsed as more property names.
+    list(JOIN PPR_TEST_ENTRY_RESOURCE_LOCK ";" ppr_test_entry_resource_lock)
+    set_tests_properties("${ppr_test_entry_name}" PROPERTIES RESOURCE_LOCK "${ppr_test_entry_resource_lock}")
+  endif()
 
   unset(ppr_test_entry_name)
   unset(ppr_test_entry_command)
+  unset(ppr_test_entry_resource_lock)
 endfunction()

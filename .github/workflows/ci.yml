@@ -105,7 +105,16 @@ jobs:
         shell: bash
         run: |
           if [ "$RUNNER_OS" = "Linux" ]; then
-            xvfb-run --auto-servernum -- ctest --test-dir "out/build/${{ matrix.preset }}" --output-on-failure
+            xvfb-run --auto-servernum -- ctest --test-dir "out/build/${{ matrix.preset }}" --parallel --output-on-failure -LE gpu_validation
           else
-            ctest --test-dir "out/build/${{ matrix.preset }}" --output-on-failure
+            ctest --test-dir "out/build/${{ matrix.preset }}" --parallel --output-on-failure -LE gpu_validation
+          fi
+
+      - name: GPU validation
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            xvfb-run --auto-servernum -- ctest --test-dir "out/build/${{ matrix.preset }}" -L gpu_validation --output-on-failure
+          else
+            ctest --test-dir "out/build/${{ matrix.preset }}" -L gpu_validation --output-on-failure
           fi

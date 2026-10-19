@@ -102,8 +102,9 @@ endif()
 # the UI service reads its pinned font set from the staged `fonts` tree.
 ppr_stage_assets(engine.tests.app shaders fonts)
 
-# Phase 2.5 A1: EngineAppUnitTests split into 6 serialized ctest shards.
-# Each shard invokes the same exe with --run-test <comma-list> and
+# Phase 3: CTest entries share the target by resource class instead of
+# serializing every app shard. Each shard invokes the same exe with
+# --run-test <comma-list> (plus an optional --skip-test exclusion list) and
 # --loop PPR_TEST_LOOPS (default 1); ppr_add_test_entry names every entry
 # `engine.tests.app.<shard>`. Filter matching
 # is prefix-based in both directions (Core.UnitTest.cpp filterMatches), so
@@ -118,18 +119,24 @@ ppr_stage_assets(engine.tests.app shaders fonts)
 # leaves; slow_gates owns the slow gates; display_window owns the
 # display_window_ family, including placement regressions; the prefix keeps
 # that filter under the 1024-character harness limit.
-# Every recurse child in App.Tests.cpp appears in exactly one shard (48/48);
-# the 15 flat app/* leaves (renderer_*/imgui_live_*/app_*,
-# owned by the WindowInput/PixelReadback TUs) ride with services_io.
+# Every top-level recurse child in App.Tests.cpp appears in exactly one shard
+# (41/41), and the 33 run_gate leaves are partitioned across death_lifecycle,
+# slow_gates, and display_window. The 15 flat app/* leaves
+# (renderer_*/imgui_live_*/app_*) are split across services_cpu,
+# services_gpu, and services_window by their resource use.
+# GPU-backed shards claim the `gpu` resource lock; window/display shards also
+# claim `window`, so CTest schedules CPU-only shards alongside them instead of
+# globally serializing the target.
 
 # death_lifecycle ~66s loop-1 dev (death x3 ~16s + saturated 11.0s +
 # terminal 10.4s + focus 10.8s + busy 9.6s + precedence 3.0s + removal
-# 3.1s + sim 2.3s + child no-op); highest budget.
+# 3.1s + sim 2.3s + child no-op); highest budget. The gpu lock keeps its
+# GPU-backed phases from contending with other device users.
 ppr_add_test_entry(TARGET engine.tests.app
     NAME death_lifecycle
     FILTER "app/run_gate/unknown_completion_fail_stops_process,app/run_gate/unknown_completion_diag_fail_still_fail_stops,app/run_gate/unknown_completion_message_throw_still_fail_stops,app/run_gate/saturated_run_preserves_time_and_input,app/run_gate/terminal_probe_runs_zero_client_work,app/run_gate/busy_collection_failure_latches_first,app/run_gate/focus_loss_gain_ordered_across_busy,app/run_gate/first_error_precedence_clock_over_terminal,app/run_gate/removal_confirmed_preserves_first_error,app/run_gate/sim_catch_up_preserves_skipped_time,app/run_gate/unknown_completion_child_fatal,app/run_gate/monitor_change_and_revert_report_operational_errors"
     LOOPS
-    RUN_SERIAL
+    RESOURCE_LOCK gpu
     TIMEOUT 600
     LABELS unit engine app
 )
@@ -139,52 +146,113 @@ ppr_add_test_entry(TARGET engine.tests.app
 # timeout_overlap 0.4s); highest budget.
 ppr_add_test_entry(TARGET engine.tests.app
     NAME slow_gates
-    FILTER "app/run_gate/two_runs_reestablish_quiescence_independently,app/run_gate/healthy_teardown_releases_in_order,app/run_gate/healthy_teardown_survives_diagnostic_failure,app/run_gate/lane_gate_blocks_third_until_retirement,app/run_gate/lane_gate_paused_worker_blocks_third,app/run_gate/rejected_frame_does_not_inherit_previous_submit_fate,app/run_gate/lane_gate_timeout_overlapping_gate_entry_serialized,app/run_gate/throwing_native_pump_and_wait_shutdown_retains_first_error,app/run_gate/shutdown_drops_queued_frames_before_backend_quarantine"
+    FILTER "app/run_gate/two_runs_reestablish_quiescence_independently,app/run_gate/healthy_teardown_releases_in_order,app/run_gate/healthy_teardown_survives_diagnostic_failure,app/run_gate/lane_gate_blocks_third_until_retirement,app/run_gate/lane_gate_paused_worker_blocks_third,app/run_gate/rejected_frame_does_not_inherit_previous_submit_fate,app/run_gate/lane_gate_timeout_overlapping_gate_entry_serialized,app/run_gate/throwing_native_pump_and_wait_shutdown_retains_first_error,app/run_gate/shutdown_drops_queued_frames_before_backend_quarantine,app/run_gate/admission_observations_report_skips_with_explicit_time,app/run_gate/paced_credit_retries_preserve_elapsed_deadline"
     LOOPS
-    RUN_SERIAL
+    RESOURCE_LOCK gpu
     TIMEOUT 600
     LABELS unit engine app
 )
 
-# Timing-sensitive display/window GPU and lane tests run uncontended.
+# Timing-sensitive display/window and lane tests claim both the device and the
+# native window state; CTest still runs CPU-only shards alongside them.
 ppr_add_test_entry(TARGET engine.tests.app
     NAME display_window
     FILTER "app/run_gate/display_window_"
     LOOPS
-    RUN_SERIAL
+    RESOURCE_LOCK gpu window
     TIMEOUT 600
     LABELS unit engine app
 )
 
-# sim_packet 16.9s + sub-second groups ~0.5s live loop-1; higher budget.
-# Timing-bound Gate-0 pacing evidence (frame_stages 200ms bound) runs
-# uncontended, as do all app shards and the asset suite.
+# GPU functional groups create device resources; the gpu lock serializes them
+# against other device users without holding back CPU-only shards.
 ppr_add_test_entry(TARGET engine.tests.app
-    NAME functional_groups
-    FILTER "app/devices,app/player/,app/dispatch,app/snapshot,app/player_graph,app/viewport,app/render_view,app/grid_pass,app/pixel_readback,app/camera,app/frame_stages,app/display,app/sim_packet,app/quaternion,app/input_listener,app/filtered_analog,app/imgui_dpi,app/performance_widget,app/zerov_probe"
+    NAME functional_gpu
+    FILTER "app/grid_pass,app/pixel_readback"
+    LOOPS
+    RESOURCE_LOCK gpu
+    TIMEOUT 600
+    LABELS unit engine app
+)
+
+# CPU functional groups: sim_packet 16.9s + sub-second groups ~0.5s live
+# loop-1; higher budget. No device or window state, so no lock.
+ppr_add_test_entry(TARGET engine.tests.app
+    NAME functional_cpu
+    FILTER "app/devices,app/player/,app/dispatch,app/snapshot,app/player_graph,app/viewport,app/render_view,app/camera,app/display,app/sim_packet,app/quaternion,app/input_listener,app/filtered_analog,app/imgui_dpi,app/performance_widget,app/zerov_probe"
+    LOOPS
+    TIMEOUT 600
+    LABELS unit engine app
+)
+
+# Timing-bound Gate-0 pacing evidence (frame_stages 200ms bound) runs alone
+# with a short budget.
+ppr_add_test_entry(TARGET engine.tests.app
+    NAME frame_stages
+    FILTER "app/frame_stages"
     LOOPS
     RUN_SERIAL
-    TIMEOUT 600
+    TIMEOUT 120
     LABELS unit engine app
 )
 
-# frame_fence 14.0s live loop-1; higher budget.
+# frame_fence 14.0s live loop-1; higher budget. Device-backed, so it claims
+# the gpu lock rather than serializing the whole target.
 ppr_add_test_entry(TARGET engine.tests.app
     NAME frame_fence
     FILTER "app/frame_fence"
     LOOPS
-    RUN_SERIAL
+    RESOURCE_LOCK gpu
     TIMEOUT 600
     LABELS unit engine app
 )
 
-# window_input 4.2s + shader 3.3s + imgui_routing 3.1s + player_service
-# 1.3s + render_lane 0.4s + 15 flat app/* leaves ~5.9s live loop-1.
+# shader 3.3s + renderer reinit/off-thread + imgui_live shutdown/reinit are
+# GPU-backed and claim the gpu lock.
 ppr_add_test_entry(TARGET engine.tests.app
-    NAME services_io
-    FILTER "app/player_service,app/shader,app/renderer_triangle_reinit_ok,app/renderer_off_thread_fails_closed,app/imgui_live_shutdown_idempotent,app/imgui_live_same_object_reinit,app/app_init_rollback_on_window_create_failure,app/app_init_rollback_on_input_connect_failure,app/app_teardown_double_shutdown_no_refire,app/app_teardown_reports_subsystem_failure_but_completes,app/app_preserves_pre_registered_graphics_services,app/app_empty_request_exit_signals_exit_without_error,app/app_error_request_exit_latches_cause,app/app_empty_request_exit_run_returns_success,app/app_error_request_exit_run_reports_cause,app/app_headless_lifecycle_is_idempotent,app/app_run_shutdowns_after_nonstandard_hook_exception,app/render_lane,app/window_input,app/imgui_routing"
+    NAME services_gpu
+    FILTER "app/shader,app/renderer_triangle_reinit_ok,app/renderer_off_thread_fails_closed,app/imgui_live_shutdown_idempotent,app/imgui_live_same_object_reinit"
     LOOPS
-    RUN_SERIAL
+    RESOURCE_LOCK gpu
     TIMEOUT 300
     LABELS unit engine app
+)
+
+# window_input 4.2s + imgui_routing 3.1s + player_service 1.3s live loop-1;
+# these touch native window and device state, so they claim both locks.
+ppr_add_test_entry(TARGET engine.tests.app
+    NAME services_window
+    FILTER "app/window_input,app/imgui_routing,app/player_service"
+    LOOPS
+    RESOURCE_LOCK gpu window
+    TIMEOUT 300
+    LABELS unit engine app
+)
+
+# render_lane 0.4s + the 11 flat app/* leaves ~5.9s live loop-1; CPU-only, so
+# no lock.
+ppr_add_test_entry(TARGET engine.tests.app
+    NAME services_cpu
+    FILTER "app/render_lane,app/app_init_rollback_on_window_create_failure,app/app_init_rollback_on_input_connect_failure,app/app_teardown_double_shutdown_no_refire,app/app_teardown_reports_subsystem_failure_but_completes,app/app_preserves_pre_registered_graphics_services,app/app_empty_request_exit_signals_exit_without_error,app/app_error_request_exit_latches_cause,app/app_empty_request_exit_run_returns_success,app/app_error_request_exit_run_reports_cause,app/app_headless_lifecycle_is_idempotent,app/app_run_shutdowns_after_nonstandard_hook_exception"
+    LOOPS
+    TIMEOUT 300
+    LABELS unit engine app
+)
+
+# GPU validation entry: main.cpp pins both RHI validation modes off unless
+# PPR_TEST_GPU_VALIDATION=1, so the debug core/GPU-assisted layers reach the
+# real-GPU frame_fence paths only through this entry's environment. The
+# RESOURCE_LOCK keeps it from contending with the asset validation entry
+# without globally serializing CTest.
+ppr_add_test_entry(TARGET engine.tests.app
+    NAME gpu_validation
+    FILTER "app/frame_fence"
+    LOOPS
+    RESOURCE_LOCK gpu
+    TIMEOUT 300
+    LABELS unit engine app gpu_validation
+)
+
+set_tests_properties(engine.tests.app.gpu_validation PROPERTIES
+    ENVIRONMENT "PPR_TEST_GPU_VALIDATION=1"
 )

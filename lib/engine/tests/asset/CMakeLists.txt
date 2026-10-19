@@ -50,12 +50,42 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/assets/meshes")
 endif()
 ppr_stage_assets(engine.tests.asset ${asset_fixture_directories})
 
-# Full run uses PPR_TEST_LOOPS (default 1), serialized for GPU gates.
-# cpu + stress + gpu + gate retain margin over the old 120 s budget
-# (gate readbacks alone are ~100 s).
+# CPU and GPU halves are separate entries. The CPU entry excludes the
+# asset/render subtree and owns no lock; the GPU entry owns that subtree and
+# claims the gpu lock so it cannot overlap another device user while CTest
+# runs the rest of the suite in parallel. Both retain PPR_TEST_LOOPS and the
+# 450 s budget (cpu + stress + gpu + gate; gate readbacks alone are ~100 s).
 ppr_add_test_entry(TARGET engine.tests.asset
+    NAME cpu
+    FILTER "asset"
+    EXCLUDE "asset/render"
     LOOPS
-    RUN_SERIAL
     TIMEOUT 450
-    LABELS unit engine asset
+    LABELS unit engine asset cpu
+)
+
+ppr_add_test_entry(TARGET engine.tests.asset
+    NAME gpu
+    FILTER "asset/render"
+    LOOPS
+    RESOURCE_LOCK gpu
+    TIMEOUT 450
+    LABELS unit engine asset gpu
+)
+
+# GPU validation entry, mirroring the app-side twin: PPR_TEST_GPU_VALIDATION=1
+# enables the RHI debug core/GPU-assisted validation layers for the grid
+# compute visibility gate, and RESOURCE_LOCK gpu serializes it against
+# engine.tests.app.gpu_validation without globally serializing CTest.
+ppr_add_test_entry(TARGET engine.tests.asset
+    NAME gpu_validation
+    FILTER "asset/render/gates/grid_compute_visibility_matches_reference_and_draws"
+    LOOPS
+    RESOURCE_LOCK gpu
+    TIMEOUT 300
+    LABELS unit engine asset gpu_validation
+)
+
+set_tests_properties(engine.tests.asset.gpu_validation PROPERTIES
+    ENVIRONMENT "PPR_TEST_GPU_VALIDATION=1"
 )

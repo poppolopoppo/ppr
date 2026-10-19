@@ -33,6 +33,7 @@ namespace pP::tests::detail::harness {
         PPR_TEST_ASSERT(not parsed->m_help_requested);
         PPR_TEST_ASSERT(parsed->m_settings.m_value.m_loops == (mem::is_asan_enabled_v ? 3u : 1u));
         PPR_TEST_ASSERT(parsed->m_settings.m_value.m_filter.empty());
+        PPR_TEST_ASSERT(parsed->m_settings.m_value.m_skip_filter.empty());
         PPR_TEST_ASSERT(not parsed->m_settings.m_value.m_child_run);
         PPR_TEST_ASSERT(not parsed->m_settings.m_value.m_shuffle_seed.has_value());
         PPR_TEST_ASSERT(not parsed->m_settings.m_value.m_no_shuffle);
@@ -45,6 +46,41 @@ namespace pP::tests::detail::harness {
         PPR_TEST_ASSERT(parsed.has_value());
         PPR_TEST_ASSERT(parsed->m_settings.m_value.m_filter == "core/math");
         PPR_TEST_ASSERT(parsed->m_settings.m_value.m_child_run);
+    };
+
+    PPR_UNIT_TEST (skip_filter_forms) {
+        Diagnostics alias_diagnostics{};
+        auto alias = parse({"--skip-test", "asset/render,net"}, alias_diagnostics);
+        PPR_TEST_ASSERT(alias.has_value());
+        PPR_TEST_ASSERT(alias->m_settings.m_value.m_skip_filter == "asset/render,net");
+
+        Diagnostics canonical_diagnostics{};
+        auto canonical = parse({"--skip-filter", "asset/render,net"}, canonical_diagnostics);
+        PPR_TEST_ASSERT(canonical.has_value());
+        PPR_TEST_ASSERT(canonical->m_settings.m_value.m_skip_filter == "asset/render,net");
+    };
+
+    PPR_UNIT_TEST (skip_filter_is_subtree_only) {
+        UnitTest::Context context{};
+        PPR_TEST_ASSERT(not context.hasSkipFilter());
+        PPR_TEST_ASSERT(not context.skipMatches("asset"));
+
+        context.setSkipFilter("asset/render,net");
+        PPR_TEST_ASSERT(context.hasSkipFilter());
+
+        // Exact and descendant paths match the token.
+        PPR_TEST_ASSERT(context.skipMatches("asset/render"));
+        PPR_TEST_ASSERT(context.skipMatches("asset/render/mesh"));
+
+        // Ancestors and siblings are not skipped: the token only affects its own subtree.
+        PPR_TEST_ASSERT(not context.skipMatches("asset"));
+        PPR_TEST_ASSERT(not context.skipMatches("asset/input"));
+        PPR_TEST_ASSERT(not context.skipMatches("asset/renderer"));
+
+        // Every comma-separated token is considered.
+        PPR_TEST_ASSERT(context.skipMatches("net"));
+        PPR_TEST_ASSERT(context.skipMatches("net/http"));
+        PPR_TEST_ASSERT(not context.skipMatches("sound"));
     };
 
     PPR_UNIT_TEST (shuffle_forms) {
@@ -201,6 +237,8 @@ namespace pP::tests {
         _.recurse({
             detail::harness::defaults_match_legacy,
             detail::harness::legacy_selection_flags,
+            detail::harness::skip_filter_forms,
+            detail::harness::skip_filter_is_subtree_only,
             detail::harness::shuffle_forms,
             detail::harness::shuffle_option_order_precedence,
             detail::harness::explicit_false_no_shuffle_enables_shuffling,
