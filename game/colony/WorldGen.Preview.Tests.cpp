@@ -33,6 +33,7 @@ namespace pP::game::tests::detail::worldgen_preview {
         io.DisplaySize = ImVec2{1400.0f, 1000.0f};
         io.DeltaTime = 1.0f / 60.0f;
         io.ConfigInputTrickleEventQueue = false;
+        io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
         unsigned char *pixels{};
         int width{}, height{};
         io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
@@ -52,21 +53,45 @@ namespace pP::game::tests::detail::worldgen_preview {
         };
 
         static_cast<void>(frame(ImVec2{-1.0f, -1.0f}, false));
-        auto *const window = ImGui::FindWindowByName("Worldgen Workshop");
+        auto *const window = ImGui::FindWindowByName("Authoring Workspace###Worldgen Workshop");
         PPR_TEST_ASSERT(window != nullptr);
-        const auto &style = ImGui::GetStyle();
-        const ImVec2 open_position{
-            window->WorkRect.Max.x -
-                240.0f +
-                style.ItemSpacing.x +
-                style.FramePadding.x +
-                ImGui::CalcTextSize("Open pack").x * 0.5f,
-            window->WorkRect.Min.y + ImGui::GetFrameHeight() * 0.5f};
-        PPR_TEST_ASSERT(not emitted(frame(open_position, true), EWorkshopIntent::open));
-        PPR_TEST_ASSERT(not emitted(frame(open_position, false), EWorkshopIntent::open));
+
+        // Internals locate a submitted item's navigation rectangle; real mouse
+        // down/up frames then drive the same Button, MenuItem and BeginMenu the
+        // pointer would.
+        const auto itemCenter = [&](ImGuiWindow *const target, const ImGuiID id, const ImGuiNavLayer layer) {
+            PPR_TEST_ASSERT(target != nullptr);
+
+            // Settle native navigation first so the previous pointer cannot
+            // override the requested navigation target.
+            static_cast<void>(frame(ImVec2{-100.0f, -100.0f}, false));
+            ImGui::FocusWindow(target);
+            ImGui::SetNavCursorVisible(true);
+            ImGui::SetNavID(id, layer, 0u, ImRect{});
+            static_cast<void>(frame(ImVec2{-100.0f, -100.0f}, false));
+
+            const ImRect rect = target->NavRectRel[layer];
+            PPR_TEST_ASSERT(rect.GetWidth() > 0.0f and rect.GetHeight() > 0.0f);
+            return ImGui::WindowRectRelToAbs(target, rect).GetCenter();
+        };
+
+        const auto click = [&](const ImVec2 position) {
+            static_cast<void>(frame(position, false));
+            static_cast<void>(frame(position, true));
+            return frame(position, false);
+        };
+
+        const auto clickItem = [&](ImGuiWindow *const target, const ImGuiID id, const ImGuiNavLayer layer) {
+            return click(itemCenter(target, id, layer));
+        };
+
+        // "Load pack" carries the open intent and stays disabled while the pack
+        // root is blank.
+        const auto load_pack = [&]() { return clickItem(window, window->GetID("Load pack"), ImGuiNavLayer_Main); };
+
+        PPR_TEST_ASSERT(not emitted(load_pack(), EWorkshopIntent::open));
         std::snprintf(state.m_root.data(), state.m_root.size(), "%s", "authored-pack");
-        static_cast<void>(frame(open_position, true));
-        PPR_TEST_ASSERT(emitted(frame(open_position, false), EWorkshopIntent::open));
+        PPR_TEST_ASSERT(emitted(load_pack(), EWorkshopIntent::open));
 
         const auto root = std::filesystem::canonical(hal::process::currentExecutablePath().parent_path());
         ContentSourceSet source;
@@ -85,14 +110,27 @@ namespace pP::game::tests::detail::worldgen_preview {
         view.m_revision = 1u;
         view.m_busy = true;
         view.m_dirty = true;
-        const ImVec2 save_position{
-            window->WorkRect.Min.x + style.FramePadding.x + ImGui::CalcTextSize("Save documents").x * 0.5f,
-            window->WorkRect.Min.y + ImGui::GetFrameHeight() * 1.5f + style.ItemSpacing.y};
-        PPR_TEST_ASSERT(not emitted(frame(save_position, true), EWorkshopIntent::save));
-        PPR_TEST_ASSERT(not emitted(frame(save_position, false), EWorkshopIntent::save));
+
+        // "Save documents" is a File-menu item. The menu bar pushes its own ID
+        // scope, so the File menu's identity is hashed against "##MenuBar".
+        const ImGuiID file_menu = ImHashStr("File", 0, ImHashStr("##MenuBar", 0, window->ID));
+
+        const auto open_file_menu = [&]() {
+            static_cast<void>(clickItem(window, file_menu, ImGuiNavLayer_Menu));
+            PPR_TEST_ASSERT(not context->OpenPopupStack.empty());
+            return context->OpenPopupStack.back().Window;
+        };
+
+        const auto save_documents = [&](ImGuiWindow *const popup) {
+            // Only the text after "###" hashes; the icon and the visible label
+            // are ui::icons::kSaveDocumentsLabel's decoration.
+            return clickItem(popup, popup->GetID("###Save documents"), ImGuiNavLayer_Main);
+        };
+
+        PPR_TEST_ASSERT(not emitted(save_documents(open_file_menu()), EWorkshopIntent::save));
         view.m_busy = false;
-        static_cast<void>(frame(save_position, true));
-        PPR_TEST_ASSERT(emitted(frame(save_position, false), EWorkshopIntent::save));
+        auto *const popup = context->OpenPopupStack.empty() ? open_file_menu() : context->OpenPopupStack.back().Window;
+        PPR_TEST_ASSERT(emitted(save_documents(popup), EWorkshopIntent::save));
 
         const config::Diagnostic diagnostic{
             (root / "biome.toml").string() + ":5", "definition.composition.band.bed_period_m", {},
@@ -108,21 +146,26 @@ namespace pP::game::tests::detail::worldgen_preview {
         ImGui::ClosePopupToLevel(0, false);
         std::snprintf(state.m_property_search.data(), state.m_property_search.size(), "%s", "temperature.base_k");
         static_cast<void>(frame(ImVec2{-1.0f, -1.0f}, false));
-        ImGuiWindow *inspector_window{};
+        // The live panel draws its property inspector inside the "Properties"
+        // child of the workspace window. ImGui mangles child names as
+        // "<parent>/Properties_%08X", so match the workspace prefix and the leaf.
+        ImGuiWindow *properties_window{};
         for (auto *candidate: context->Windows) {
-            if (std::string_view{candidate->Name}.find("Definition inspector") != std::string_view::npos) {
-                inspector_window = candidate;
+            const std::string_view name{candidate->Name};
+            if (name.starts_with(window->Name) and name.find("/Properties_") != std::string_view::npos) {
+                properties_window = candidate;
                 break;
             }
         }
 
-        PPR_TEST_ASSERT(inspector_window != nullptr);
-        // The tab contributes an ID scope, so find the drawn table through its
-        // actual owner rather than reconstructing the tab's internal ID stack.
+        PPR_TEST_ASSERT(properties_window != nullptr);
+        // That child owns the panel's only two-column table, "Property tree";
+        // find the drawn table through its owner rather than reconstructing the
+        // child's internal ID stack.
         const ImGuiTable *table{};
         for (int table_index = 0; table_index < context->Tables.GetBufSize(); ++table_index) {
             const auto *const candidate = context->Tables.GetByIndex(table_index);
-            if (candidate->OuterWindow == inspector_window and candidate->ColumnsCount == 2) {
+            if (candidate->OuterWindow == properties_window and candidate->ColumnsCount == 2) {
                 table = candidate;
                 break;
             }
@@ -326,7 +369,9 @@ namespace pP::game::tests::detail::worldgen_preview {
         PPR_TEST_ASSERT(edited.has_value());
         biome->m_bytes = std::move(*edited);
 
-        const sim::definition::GenerationCompileParameters parameters{0.5, 2.0, 0.3, 0.7};
+        // Authored matter-fill heights are thirds of a metre, so the preview must
+        // compile against the fine-cell metric.
+        const sim::definition::GenerationCompileParameters parameters{1.0 / 3.0, 2.0, 0.3, 0.7};
         const auto catalog = selectFixture(source, diagnostics, parameters);
 
         const WorldgenPreviewSpec spec{"ppr_frontier:frontier", "hearth", 0xfedcba9876543210ull, 73u, {1879u, 2993u}};
@@ -411,11 +456,18 @@ namespace pP::game::tests::detail::worldgen_preview {
         PPR_TEST_ASSERT(
             report.find(std::format("\"cell_checksum\":\"{:016x}\"", sample->m_checksum)) != std::string::npos);
         PPR_TEST_ASSERT(report.find("\"export_version\":2") != std::string::npos);
-        PPR_TEST_ASSERT(report.find("\"cell_size_m\":0.5") != std::string::npos);
-        PPR_TEST_ASSERT(report.find("\"cells_per_metre\":2") != std::string::npos);
-        PPR_TEST_ASSERT(report.find("\"reference_thickness_m\":2") != std::string::npos);
-        PPR_TEST_ASSERT(report.find("\"actor_half_width_m\":0.3") != std::string::npos);
-        PPR_TEST_ASSERT(report.find("\"actor_half_height_m\":0.7") != std::string::npos);
+        PPR_TEST_ASSERT(report.find(std::format("\"cell_size_m\":{}", parameters.m_cell_size_m)) != std::string::npos);
+        PPR_TEST_ASSERT(
+            report.find(std::format("\"cells_per_metre\":{}", 1.0 / parameters.m_cell_size_m)) != std::string::npos);
+        PPR_TEST_ASSERT(
+            report.find(std::format("\"reference_thickness_m\":{}", parameters.m_reference_thickness_m)) !=
+            std::string::npos);
+        PPR_TEST_ASSERT(
+            report.find(std::format("\"actor_half_width_m\":{}", parameters.m_actor_half_width_m)) !=
+            std::string::npos);
+        PPR_TEST_ASSERT(
+            report.find(std::format("\"actor_half_height_m\":{}", parameters.m_actor_half_height_m)) !=
+            std::string::npos);
         PPR_TEST_ASSERT(report.find("exported pack-set alone is not runnable") != std::string::npos);
         PPR_TEST_ASSERT(report.find("\"numeric_fingerprint\":") != std::string::npos);
         PPR_TEST_ASSERT(report.find("\"presentation_fingerprint\":") != std::string::npos);
