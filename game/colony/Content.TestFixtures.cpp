@@ -22,6 +22,7 @@ namespace pP::game::tests::fixtures {
         const std::span<const asset::DescriptorSource> fragments, config::Diagnostics &diagnostics) {
         config::Document result;
         std::set<std::string> destinations;
+        std::vector<config::GroupPresence> deferred_group_presence;
 
         const auto rulePath = [](const std::string_view path) {
             if (not path.starts_with("rules.")) {
@@ -63,10 +64,30 @@ namespace pP::game::tests::fixtures {
                     continue;
                 }
 
+                const auto original_path = group.m_path;
                 group.m_path = rulePath(group.m_path);
                 if (not group.m_path.empty()) {
                     result.m_groups.push_back(std::move(group));
+                    continue;
                 }
+
+                // An intermediate rules.<name> table names a world that its rules
+                // fragment also supplies. Defer its presence so a phantom world's
+                // orphan errors stay attributed to that fragment rather than
+                // falling back to a broader ancestor.
+                if (original_path.starts_with("rules.") and original_path.size() > 6u) {
+                    deferred_group_presence.push_back({"worlds." + original_path.substr(6u), group.m_location});
+                }
+            }
+        }
+
+        // Append deferred presence only when the owning worlds document did not
+        // already declare it; a duplicate group path would be rejected as a
+        // duplicate declaration in the layer.
+        for (auto &presence: deferred_group_presence) {
+            const auto existing = std::ranges::find(result.m_groups, presence.m_path, &config::GroupPresence::m_path);
+            if (existing == result.m_groups.end()) {
+                result.m_groups.push_back(std::move(presence));
             }
         }
 
