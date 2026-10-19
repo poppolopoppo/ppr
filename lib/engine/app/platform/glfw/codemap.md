@@ -33,6 +33,7 @@ Windows monitor identities use `EnumDisplayDevicesW(..., EDD_GET_DEVICE_INTERFAC
 5. `shutdown(app)` → erase + shutdown player → input → window → `glfwTerminate()` + clear error callback; safe to re-enter (second call returns success)
 
 ## Integration
+- Windowed placement: `centerDisplayWindow` centers the decorated outer rectangle in the selected monitor work area after final size/mode application, with a bounded destination-DPI correction. Oversized windows retain their client size and align outer right/top edges. Native errors propagate and observed geometry refreshes the model. Startup uses this operation; runtime uses it only for a changed explicit windowed monitor preference, preserving ordinary resize and rollback positions.
 - Display switching: `configureDisplayWindow` supports windowed (null monitor) and exclusive fullscreen,
   optional explicit refresh, and error-reporting native apply/rollback. `displayWindowGeometry` queries logical
   and framebuffer extents plus exclusive monitor/refresh without guessing windowed observations. Monitor

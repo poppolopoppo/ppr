@@ -529,9 +529,12 @@ namespace pP::tests::detail {
                 Monitor m_display_monitor{
                     MonitorHandle{}, "scripted", VideoMode{int2{1920, 1080}, int3{}, 60}, int2{}, int2{}, true};
                 WindowDisplayGeometry m_display_geometry{int2{20, 30}, int2{800, 600}, int2{1600, 1200}};
+                int2 m_center_position{320, 180};
+                std::error_code m_center_error{};
                 Array<std::thread::id> m_display_threads{};
                 Array<std::error_code> m_display_errors{};
                 u32 m_display_calls{0u};
+                u32 m_center_calls{};
 
                 explicit WindowService(ScriptedPlatform *owner) noexcept : m_owner(owner) {
                 }
@@ -601,6 +604,21 @@ namespace pP::tests::detail {
                         m_owner->m_window.m_window_size = size;
                         m_owner->m_window.m_framebuffer_size = m_display_geometry.m_framebuffer_size;
                     }
+                    return m_display_geometry;
+                }
+
+                Expected<WindowDisplayGeometry> centerDisplayWindow(const Window &window, const Monitor &) override {
+                    ++m_center_calls;
+                    if (m_center_error) {
+                        return std::unexpected{m_center_error};
+                    }
+
+                    PPR_TEST_ASSERT(not m_display_geometry.m_fullscreen);
+                    m_display_geometry.m_position = m_center_position;
+                    if (window.m_handle == m_owner->m_window.m_handle) {
+                        m_owner->m_window.m_window_position = m_center_position;
+                    }
+
                     return m_display_geometry;
                 }
 
@@ -1197,6 +1215,106 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(test_app.displayController().resolved().m_revision == 0u);
             PPR_TEST_ASSERT(
                 test_app.displayController().transactionError() == std::make_error_code(std::errc::io_error));
+            PPR_TEST_ASSERT(not test_app.close());
+        };
+
+        void settleDisplayWindow(WindowTransactionHarness &test_app) {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{30};
+            while (test_app.displayController().transactionState() != EDisplayTransaction::idle) {
+                PPR_TEST_ASSERT(std::chrono::steady_clock::now() < deadline);
+                PPR_TEST_ASSERT(not test_app.pump());
+                PPR_TEST_ASSERT(not test_app.synchronize());
+                PPR_TEST_ASSERT(not test_app.pump());
+            }
+        }
+
+        PPR_UNIT_TEST (display_window_monitor_center_then_named_resize_preserves_position) {
+            WindowTransactionHarness test_app{};
+            PPR_TEST_ASSERT(not test_app.boot());
+            auto &service = *test_app.m_scripted->m_window_service;
+            test_app.executor([](const RenderSurfaceRequest &request, RenderSurfaceResult &result) {
+                result.m_applied = {request.m_identity.m_generation + 1u, *request.m_settings.m_extent, true, true};
+            });
+
+            config::Resolved<DisplaySettings> candidate{};
+            candidate.m_value.m_monitor = "scripted";
+            candidate.m_value.m_width = 1280u;
+            candidate.m_value.m_height = 720u;
+            PPR_TEST_ASSERT(not test_app.requestDisplaySettings(candidate));
+            settleDisplayWindow(test_app);
+
+            PPR_TEST_ASSERT(service.m_center_calls == 1u and service.m_display_calls == 1u);
+            PPR_TEST_ASSERT(service.m_display_geometry.m_position.x == service.m_center_position.x);
+            PPR_TEST_ASSERT(service.m_display_geometry.m_position.y == service.m_center_position.y);
+            PPR_TEST_ASSERT(service.m_display_geometry.m_size.x == 1280 and service.m_display_geometry.m_size.y == 720);
+
+            // A subsequent user move survives a size-only apply with the same
+            // named preference; a legitimate zero coordinate is also a position.
+            service.m_display_geometry.m_position = int2{0, 53};
+            test_app.m_scripted->m_window.m_window_position = int2{0, 53};
+            candidate.m_value.m_width = 1000u;
+            candidate.m_value.m_height = 700u;
+            PPR_TEST_ASSERT(not test_app.requestDisplaySettings(candidate));
+            settleDisplayWindow(test_app);
+
+            PPR_TEST_ASSERT(service.m_center_calls == 1u and service.m_display_calls == 2u);
+            PPR_TEST_ASSERT(
+                service.m_display_geometry.m_position.x == 0 and service.m_display_geometry.m_position.y == 53);
+
+            PPR_TEST_ASSERT(not test_app.close());
+        };
+
+        PPR_UNIT_TEST (display_window_auto_resize_preserves_zero_and_nonzero_positions) {
+            for (const int2 position: {int2{0, 0}, int2{20, 30}}) {
+                WindowTransactionHarness test_app{};
+                PPR_TEST_ASSERT(not test_app.boot());
+                auto &service = *test_app.m_scripted->m_window_service;
+                service.m_display_geometry.m_position = position;
+                test_app.m_scripted->m_window.m_window_position = position;
+                test_app.executor([](const RenderSurfaceRequest &request, RenderSurfaceResult &result) {
+                    result.m_applied = {request.m_identity.m_generation + 1u, *request.m_settings.m_extent, true, true};
+                });
+
+                config::Resolved<DisplaySettings> candidate{};
+                candidate.m_value.m_width = 1024u;
+                candidate.m_value.m_height = 768u;
+                PPR_TEST_ASSERT(not test_app.requestDisplaySettings(candidate));
+                settleDisplayWindow(test_app);
+
+                PPR_TEST_ASSERT(service.m_center_calls == 0u and service.m_display_calls == 1u);
+                PPR_TEST_ASSERT(service.m_display_geometry.m_position.x == position.x);
+                PPR_TEST_ASSERT(service.m_display_geometry.m_position.y == position.y);
+
+                PPR_TEST_ASSERT(not test_app.close());
+            }
+        };
+
+        PPR_UNIT_TEST (display_window_center_failure_restores_exact_geometry) {
+            WindowTransactionHarness test_app{};
+            PPR_TEST_ASSERT(not test_app.boot());
+            auto &service = *test_app.m_scripted->m_window_service;
+            const WindowDisplayGeometry before = service.m_display_geometry;
+            const std::error_code error = std::make_error_code(std::errc::io_error);
+            service.m_center_error = error;
+            test_app.executor([](const RenderSurfaceRequest &request, RenderSurfaceResult &result) {
+                result.m_applied = {request.m_identity.m_generation + 1u, *request.m_settings.m_extent, true, true};
+            });
+
+            config::Resolved<DisplaySettings> candidate{};
+            candidate.m_value.m_monitor = "scripted";
+            candidate.m_value.m_width = 1280u;
+            candidate.m_value.m_height = 720u;
+            PPR_TEST_ASSERT(not test_app.requestDisplaySettings(candidate));
+            settleDisplayWindow(test_app);
+
+            PPR_TEST_ASSERT(service.m_center_calls == 1u and service.m_display_calls == 2u);
+            PPR_TEST_ASSERT(service.m_display_geometry.m_position.x == before.m_position.x);
+            PPR_TEST_ASSERT(service.m_display_geometry.m_position.y == before.m_position.y);
+            PPR_TEST_ASSERT(service.m_display_geometry.m_size.x == before.m_size.x);
+            PPR_TEST_ASSERT(service.m_display_geometry.m_size.y == before.m_size.y);
+            PPR_TEST_ASSERT(test_app.displayController().transactionError() == error);
+            PPR_TEST_ASSERT(test_app.displayController().committed().m_monitor == "auto");
+
             PPR_TEST_ASSERT(not test_app.close());
         };
 
@@ -3436,7 +3554,9 @@ namespace pP::tests::detail {
         [[nodiscard]] bool gateEnvArmed(const char *name) noexcept {
 #ifdef _WIN32
             char *stored = nullptr;
-            const bool armed = ::_dupenv_s(&stored, nullptr, name) == 0 and stored != nullptr and stored[0] == '1' and
+            const bool armed = ::_dupenv_s(&stored, nullptr, name) == 0 and
+                               stored != nullptr and
+                               stored[0] == '1' and
                                stored[1] == '\0';
             std::free(stored);
             return armed;
@@ -3783,6 +3903,9 @@ namespace pP::tests {
             detail::RunGate::display_window_reenumeration_rejects_removed_monitor_before_apply,
             detail::RunGate::display_window_surface_failure_restores_native_geometry,
             detail::RunGate::display_window_stale_ack_cannot_publish_recreated_window,
+            detail::RunGate::display_window_monitor_center_then_named_resize_preserves_position,
+            detail::RunGate::display_window_auto_resize_preserves_zero_and_nonzero_positions,
+            detail::RunGate::display_window_center_failure_restores_exact_geometry,
             detail::RunGate::admission_observations_report_skips_with_explicit_time,
             detail::RunGate::paced_credit_retries_preserve_elapsed_deadline,
             detail::RunGate::saturated_run_preserves_time_and_input,

@@ -115,6 +115,9 @@ export namespace pP {
             const Window &window, const Monitor *monitor, const int2 &position, const int2 &size,
             std::optional<u32> refresh_hz) override;
 
+        [[nodiscard]] Expected<WindowDisplayGeometry> centerDisplayWindow(
+            const Window &window, const Monitor &monitor) override;
+
         [[nodiscard]] SharedMonitor getWindowFullscreenMonitor(const Window &window) const noexcept override;
 
         [[nodiscard]] std::error_code setWindowMonitor(

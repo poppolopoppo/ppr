@@ -1,10 +1,15 @@
 module;
 #include "pP/UnitTest.h"
 
+#if defined(_WIN32)
+#include <windows.h>
+#endif
+
 module engine.tests.app;
 
 import engine.core;
 import engine.app;
+import engine.math;
 import std;
 
 namespace pP::tests::detail {
@@ -108,6 +113,77 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not windows->waitEventsTimeout(std::chrono::milliseconds{50}));
             PPR_TEST_ASSERT(not windows->pollEvents());
         }
+    };
+
+    PPR_UNIT_TEST (native_window_center_keeps_decorations_in_work_area) {
+        PlayerServiceWindowedTestApp test_app{};
+        PPR_TEST_ASSERT(not test_app.boot());
+        PPR_DEFER {
+            std::ignore = test_app.teardown();
+        };
+
+        auto windows = test_app.getServices().get<IWindowService>();
+        PPR_TEST_ASSERT(windows.get() != nullptr);
+        safe_ptr<Window> window{};
+        PPR_TEST_ASSERT(not windows->createWindow(
+            WindowModel{.m_title = "Centered window test", .m_window_size = int2{512, 320}}, &window));
+        PPR_DEFER {
+            // Best-effort unwinding; normal cleanup below checks both results.
+            if (window) {
+                SharedWindow retiring{window};
+                window.reset();
+                std::ignore = windows->destroyWindow(std::move(retiring));
+            }
+        };
+
+        unsigned monitor_count{};
+        const std::error_code enumeration_error = windows->enumerateMonitors(
+            [&](const SharedMonitor &monitor) -> std::error_code {
+                ++monitor_count;
+                const auto centered = windows->centerDisplayWindow(*window, *monitor);
+                PPR_TEST_ASSERT(centered.has_value() and not centered->m_fullscreen);
+                PPR_TEST_ASSERT(window->m_window_position.x == centered->m_position.x);
+                PPR_TEST_ASSERT(window->m_window_position.y == centered->m_position.y);
+
+#if defined(_WIN32)
+                const HWND native = static_cast<HWND>(windows->getWindowNativeHandle(*window));
+                const POINT monitor_center{
+                    monitor->m_virtual_position.x + monitor->m_video_mode.m_resolution.x / 2,
+                    monitor->m_virtual_position.y + monitor->m_video_mode.m_resolution.y / 2};
+                const HMONITOR native_monitor = ::MonitorFromPoint(monitor_center, MONITOR_DEFAULTTONULL);
+                MONITORINFO info{};
+                info.cbSize = sizeof(info);
+                PPR_TEST_ASSERT(native_monitor != nullptr and ::GetMonitorInfoW(native_monitor, &info));
+
+                RECT outer{};
+                RECT client{};
+                PPR_TEST_ASSERT(::GetWindowRect(native, &outer));
+                PPR_TEST_ASSERT(::GetClientRect(native, &client));
+                const LONG horizontal_room = info.rcWork.right - info.rcWork.left - (outer.right - outer.left);
+                const LONG vertical_room = info.rcWork.bottom - info.rcWork.top - (outer.bottom - outer.top);
+                const LONG expected_left = info.rcWork.left +
+                                           (horizontal_room >= 0 ? horizontal_room / 2 : horizontal_room);
+                const LONG expected_top = info.rcWork.top + (vertical_room >= 0 ? vertical_room / 2 : 0);
+                PPR_TEST_ASSERT(std::abs(outer.left - expected_left) <= 1);
+                PPR_TEST_ASSERT(std::abs(outer.top - expected_top) <= 1);
+                PPR_TEST_ASSERT(outer.top >= info.rcWork.top and outer.right <= info.rcWork.right);
+                PPR_TEST_ASSERT(centered->m_size.x == client.right - client.left);
+                PPR_TEST_ASSERT(centered->m_size.y == client.bottom - client.top);
+#endif
+
+                return {};
+            });
+        PPR_TEST_ASSERT(not enumeration_error);
+
+        PPR_TEST_ASSERT(monitor_count > 0u);
+
+        SharedWindow retiring{window};
+        window.reset();
+        const std::error_code destroy_error = windows->destroyWindow(std::move(retiring));
+        PPR_TEST_ASSERT(not destroy_error);
+
+        windows.reset();
+        PPR_TEST_ASSERT(not test_app.teardown());
     };
 
     PPR_UNIT_TEST (gamepad_player_creation) {
@@ -215,6 +291,7 @@ namespace pP::tests {
         _.recurse({
             detail::player_service_keyboard_and_gamepad,
             detail::native_window_wait_accepts_timeout_and_posted_wake,
+            detail::native_window_center_keeps_decorations_in_work_area,
             detail::gamepad_player_creation,
             detail::remove_nonexistent_player_returns_false,
             detail::get_or_create_keyboard_is_idempotent,

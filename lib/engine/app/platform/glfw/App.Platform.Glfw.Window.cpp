@@ -465,7 +465,6 @@ namespace pP {
 
         if (service.m_main_window == &window) {
             service.m_main_window.reset();
-
         }
     }
 
@@ -926,6 +925,84 @@ namespace pP {
             stored.m_fullscreen_monitor = monitor != nullptr ? SharedMonitor{monitor} : SharedMonitor{};
         }
         return geometry;
+    }
+
+    Expected<WindowDisplayGeometry> GlfwWindow::centerDisplayWindow(const Window &window, const Monitor &monitor) {
+        if (glfwAllocation_(m_windows, window.m_handle) == m_windows.end() or
+            glfwAllocation_(m_monitors, monitor.m_handle) == m_monitors.end()) {
+            PPR_RETURN_UNEXPECTED_ON_FAIL(GlfwWindow, std::make_error_code(std::errc::no_such_device));
+        }
+
+        auto observed = displayWindowGeometry(window);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(GlfwWindow, observed);
+        if (observed->m_fullscreen or observed->m_size.x <= 0 or observed->m_size.y <= 0) {
+            PPR_RETURN_UNEXPECTED_ON_FAIL(GlfwWindow, std::make_error_code(std::errc::invalid_argument));
+        }
+
+        // Crossing monitor DPI can change native decorations and the client rect.
+        // Re-query at the destination once before the corrective placement.
+        for (unsigned placement = 0u; placement < 2u; ++placement) {
+            int2 work_position{};
+            int2 work_size{};
+            int left{};
+            int top{};
+            int right{};
+            int bottom{};
+            ::GLFWwindow *const native = glfwHandle_(window.m_handle);
+            std::ignore = ::glfwGetError(nullptr);
+            ::glfwGetMonitorWorkarea(
+                glfwHandle_(monitor.m_handle), &work_position.x, &work_position.y, &work_size.x, &work_size.y);
+            ::glfwGetWindowFrameSize(native, &left, &top, &right, &bottom);
+            if (::glfwGetError(nullptr) != GLFW_NO_ERROR) {
+                PPR_RETURN_UNEXPECTED_ON_FAIL(GlfwWindow, platform::make_error_code(GLFW_FALSE));
+            }
+
+            if (work_size.x <= 0 or work_size.y <= 0 or left < 0 or top < 0 or right < 0 or bottom < 0) {
+                PPR_RETURN_UNEXPECTED_ON_FAIL(GlfwWindow, std::make_error_code(std::errc::invalid_argument));
+            }
+
+            // GLFW positions the client area. Center the decorated outer rectangle,
+            // then add its frame offsets. Widen before adding legal INT_MAX sizes.
+            const std::int64_t horizontal_room = static_cast<std::int64_t>(work_size.x) -
+                                                 observed->m_size.x -
+                                                 left -
+                                                 right;
+            const std::int64_t vertical_room = static_cast<std::int64_t>(work_size.y) -
+                                               observed->m_size.y -
+                                               top -
+                                               bottom;
+            const std::int64_t x = static_cast<std::int64_t>(work_position.x) +
+                                   (horizontal_room >= 0 ? horizontal_room / 2 : horizontal_room) +
+                                   left;
+            const std::int64_t y = static_cast<std::int64_t>(work_position.y) +
+                                   (vertical_room >= 0 ? vertical_room / 2 : 0) +
+                                   top;
+            if (x < (std::numeric_limits<int>::min)() or
+                x > (std::numeric_limits<int>::max)() or
+                y < (std::numeric_limits<int>::min)() or
+                y > (std::numeric_limits<int>::max)()) {
+                PPR_RETURN_UNEXPECTED_ON_FAIL(GlfwWindow, std::make_error_code(std::errc::result_out_of_range));
+            }
+
+            ::glfwSetWindowPos(native, static_cast<int>(x), static_cast<int>(y));
+            if (::glfwGetError(nullptr) != GLFW_NO_ERROR) {
+                PPR_RETURN_UNEXPECTED_ON_FAIL(GlfwWindow, platform::make_error_code(GLFW_FALSE));
+            }
+
+            observed = displayWindowGeometry(window);
+            PPR_RETURN_UNEXPECTED_ON_FAIL(GlfwWindow, observed);
+        }
+
+        const auto stored_window = glfwAllocation_(m_windows, window.m_handle);
+        if (stored_window == m_windows.end()) {
+            PPR_RETURN_UNEXPECTED_ON_FAIL(GlfwWindow, std::make_error_code(std::errc::no_such_device));
+        }
+
+        Window &stored = **stored_window;
+        stored.m_window_position = observed->m_position;
+        stored.m_window_size = observed->m_size;
+        stored.m_framebuffer_size = observed->m_framebuffer_size;
+        return observed;
     }
 
     Expected<WindowDisplayGeometry> GlfwWindow::displayWindowGeometry(const Window &window) const {

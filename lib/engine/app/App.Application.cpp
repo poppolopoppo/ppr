@@ -397,9 +397,7 @@ namespace pP {
         } else if (settings.m_window_mode == EDisplayWindowMode::fullscreen) {
             size = selected->m_video_mode.m_resolution;
         }
-        if (not restore and
-            selected and
-            (settings.m_monitor != "auto" or settings.m_window_mode == EDisplayWindowMode::fullscreen)) {
+        if (not restore and selected and settings.m_window_mode == EDisplayWindowMode::fullscreen) {
             position = selected->m_virtual_position;
         }
         // Mark before entering the operational boundary: even allocation failure
@@ -409,6 +407,19 @@ namespace pP {
             window, settings.m_window_mode == EDisplayWindowMode::fullscreen ? &*selected : nullptr, position, size,
             settings.m_refresh_hz != 0u ? std::optional<u32>{settings.m_refresh_hz} : std::nullopt);
         PPR_RETURN_UNEXPECTED_ON_FAIL(App, configured);
+
+        // A size-only apply keeps the user's position, even with a named monitor
+        // preference. Center only an explicit new windowed monitor preference;
+        // rollback restores the captured geometry without another placement pass.
+        if (not restore and
+            selected and
+            settings.m_window_mode == EDisplayWindowMode::windowed and
+            settings.m_monitor != "auto" and
+            settings.m_monitor != m_display_controller.committed().m_monitor) {
+            configured = service->centerDisplayWindow(window, *selected);
+            PPR_RETURN_UNEXPECTED_ON_FAIL(App, configured);
+        }
+
         return configured;
     }
 

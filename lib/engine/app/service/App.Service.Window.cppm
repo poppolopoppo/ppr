@@ -113,6 +113,13 @@ export namespace pP {
             return std::unexpected{std::make_error_code(std::errc::operation_not_supported)};
         }
 
+        /// Main/native-thread only, after applying windowed size and decorations.
+        /// Centers the decorated window in the monitor work area without resizing.
+        /// Oversized windows align their outer right/top edges to the work area.
+        [[nodiscard]] virtual Expected<WindowDisplayGeometry> centerDisplayWindow(const Window &, const Monitor &) {
+            return std::unexpected{std::make_error_code(std::errc::operation_not_supported)};
+        }
+
         [[nodiscard]] virtual bool getWindowShouldClose(const Window &window) const noexcept = 0;
 
         virtual void setWindowShouldClose(const Window &window, bool value) = 0;
