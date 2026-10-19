@@ -4,14 +4,17 @@ add_executable(app.game main.cpp)
 target_sources(app.game
     PUBLIC
         FILE_SET CXX_MODULES FILES
+            ui/Game.UI.cppm
+            ui/Game.UI.Model.cppm
             Game.Application.cppm
             Game.WorldgenWorkshop.cppm
             colony/Agents.cppm
+            ui/AssetBrowserPanel.cppm
             colony/Buildings.cppm
             colony/Checkpoint.cppm
             colony/Colony.cppm
             colony/ColonyDriver.cppm
-            colony/ColonyPanel.cppm
+            ui/ColonyPanel.cppm
             colony/ColonySmoke.cppm
             colony/ColonyTranslator.cppm
             colony/Content.cppm
@@ -22,14 +25,18 @@ target_sources(app.game
             colony/SimFramePacket.cppm
             colony/WorldGen.cppm
             colony/WorldGen.Preview.cppm
-            colony/WorldGenPanel.cppm
+            ui/WorldGenPanel.cppm
+            colony/WorldProgress.cppm
             colony/WorldJob.cppm
             Game.Config.cppm
             Game.Display.cppm
     PRIVATE
+        ui/Game.UI.cpp
+        ui/Game.UI.Model.cpp
         Game.Application.cpp
         Game.WorldgenWorkshop.cpp
         colony/Agents.cpp
+        ui/AssetBrowserPanel.cpp
         colony/Buildings.cpp
         colony/Checkpoint.cpp
         colony/Checkpoint.Codec.cpp
@@ -38,7 +45,7 @@ target_sources(app.game
         colony/ColonyDriver.cpp
         colony/ColonyDriver.Checkpoint.cpp
         colony/ColonyDriver.Edits.cpp
-        colony/ColonyPanel.cpp
+        ui/ColonyPanel.cpp
         colony/ColonySmoke.cpp
         colony/WorldGen.Capture.cpp
         colony/ColonyTranslator.cpp
@@ -60,7 +67,7 @@ target_sources(app.game
         colony/WorldGen.Export.cpp
         colony/WorldGen.Preview.cpp
         colony/WorldGen.Preview.Export.cpp
-        colony/WorldGenPanel.cpp
+        ui/WorldGenPanel.cpp
         colony/WorldJob.cpp
         Game.Config.cpp
         Game.Display.cpp
@@ -86,12 +93,12 @@ add_custom_target(worldgen.assets
 )
 add_dependencies(app.game worldgen.assets)
 
-set(game_asset_directories shaders textures)
+# The UI service always reads its pinned font set at startup, so `fonts` is
+# a hard runtime requirement of app.game (not an optional content tree:
+# a missing directory must fail staging loudly, never degrade silently).
+set(game_asset_directories shaders textures fonts)
 if(EXISTS "${CMAKE_SOURCE_DIR}/assets/meshes")
     list(APPEND game_asset_directories meshes)
-endif()
-if(EXISTS "${CMAKE_SOURCE_DIR}/assets/fonts")
-    list(APPEND game_asset_directories fonts)
 endif()
 ppr_stage_assets(app.game ${game_asset_directories})
 
@@ -114,6 +121,9 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
     target_sources(game.tests
         PUBLIC
             FILE_SET CXX_MODULES FILES
+                ui/Game.UI.cppm
+                ui/Game.UI.Model.cppm
+                ui/ColonyPanel.cppm
                 Game.Application.cppm
                 Game.WorldgenWorkshop.cppm
                 Game.Config.cppm
@@ -123,8 +133,9 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
                 colony/Content.Authoring.cppm
                 colony/Metric.cppm
                 colony/Agents.cppm
+                ui/AssetBrowserPanel.cppm
                 colony/Buildings.cppm
-                    colony/Checkpoint.cppm
+                colony/Checkpoint.cppm
                 colony/Colony.cppm
                 colony/ColonyDriver.cppm
                 colony/ColonyTranslator.cppm
@@ -132,10 +143,15 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
                 colony/Pathfinding.cppm
                 colony/WorldGen.cppm
                 colony/WorldGen.Preview.cppm
-                colony/WorldGenPanel.cppm
+                ui/WorldGenPanel.cppm
                 colony/SimFramePacket.cppm
+                colony/WorldProgress.cppm
                 colony/WorldJob.cppm
         PRIVATE
+            ui/Game.UI.cpp
+            ui/Game.UI.Model.cpp
+            ui/Game.UI.Tests.cpp
+            ui/ColonyPanel.cpp
             Game.Config.cpp
             Game.Display.cpp
             Game.WorldgenWorkshop.cpp
@@ -149,6 +165,8 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
             colony/Content.Source.cpp
             colony/Content.Presentation.cpp
             colony/Content.Authoring.cpp
+            ui/AssetBrowserPanel.cpp
+            ui/AssetBrowserPanel.Tests.cpp
             colony/Content.Tests.cpp
             colony/Content.Biomes.Tests.cpp
             colony/Content.Features.Tests.cpp
@@ -180,7 +198,7 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
             colony/WorldGen.Preview.cpp
             colony/WorldGen.Preview.Export.cpp
             colony/WorldGen.Preview.Tests.cpp
-            colony/WorldGenPanel.cpp
+            ui/WorldGenPanel.cpp
             colony/SimFramePacket.cpp
             colony/SimFramePacket.Diagnostics.cpp
             colony/WorldJob.cpp
@@ -189,7 +207,7 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
         )
 
     setup_ppr_project(game.tests
-      INTERNAL_PUBLIC_DEPS engine.core engine.asset engine.app engine.sim engine.image engine.tests
+      INTERNAL_PUBLIC_DEPS engine.core engine.asset engine.app engine.math engine.sim engine.image engine.tests
     )
     target_link_libraries(game.tests PRIVATE engine.physics)
     add_dependencies(game.tests worldgen.assets)
@@ -201,21 +219,24 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
         target_link_options(game.tests PRIVATE "/alternatename:?__tlregdtor@@YAHXZ=__tlregdtor")
     endif()
 
-    add_test(NAME GameConfigUnitTests COMMAND game.tests --loop ${PPR_TEST_LOOPS})
-    add_test(NAME WorldgenValidateFrontier COMMAND app.game --validate-worldgen --worldgen-profile=frontier)
-    add_test(NAME WorldgenValidateHollows COMMAND app.game --validate-worldgen --worldgen-profile=hollows)
-    set_tests_properties(WorldgenValidateFrontier WorldgenValidateHollows PROPERTIES
-        TIMEOUT 300 LABELS "game;worldgen;cpu"
-        WORKING_DIRECTORY "$<TARGET_FILE_DIR:app.game>"
-        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:app.game>"
+    # Full shipped-content and checkpoint coverage measured 358 s for one complete loop.
+    ppr_add_test_entry(TARGET game.tests
+        LOOPS
+        TIMEOUT 600
+        LABELS unit game
     )
 
-    set_tests_properties(GameConfigUnitTests
-        PROPERTIES
-            # Full shipped-content and checkpoint coverage measured 358 s for one complete loop.
-            TIMEOUT 600
-            LABELS "unit;game"
-            WORKING_DIRECTORY "$<TARGET_FILE_DIR:game.tests>"
-            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:game.tests>"
+    ppr_add_test_entry(TARGET app.game
+        NAME worldgen_frontier
+        ARGS "--validate-worldgen;--worldgen-profile=frontier"
+        TIMEOUT 300
+        LABELS game worldgen cpu
+    )
+
+    ppr_add_test_entry(TARGET app.game
+        NAME worldgen_hollows
+        ARGS "--validate-worldgen;--worldgen-profile=hollows"
+        TIMEOUT 300
+        LABELS game worldgen cpu
     )
 endif()

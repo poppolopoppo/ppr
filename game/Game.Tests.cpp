@@ -23,6 +23,8 @@ namespace pP::game::tests {
     const UnitTest &gameCheckpointTests() noexcept;
     const UnitTest &gameLegacyFixtureTests() noexcept;
     const UnitTest &gameWorldgenPreviewTests() noexcept;
+    const UnitTest &gameAssetBrowserTests() noexcept;
+    const UnitTest &gameUiTests() noexcept;
 
     // Defined here rather than as an inline constexpr umbrella in
     // Game.Tests.cppm: same MSVC C1001 shape as engine.tests.core/app.
@@ -44,6 +46,8 @@ namespace pP::game::tests {
             gameCheckpointTests(),
             gameLegacyFixtureTests(),
             gameWorldgenPreviewTests(),
+            gameAssetBrowserTests(),
+            gameUiTests(),
         });
     };
 } // namespace pP::game::tests

@@ -6,7 +6,7 @@ export module game.colony.panel;
 import engine.app;
 import engine.core;
 import engine.sim;
-import game.colony.driver;
+import game.colony.agents;
 import game.display;
 import std;
 
@@ -42,13 +42,6 @@ export namespace pP::colony {
         demolish,
     };
 
-    /// Sections of the right side panel; `EColonyIntent::select_tab` carries
-    /// one in `ColonyIntent::m_arg`.
-    enum class EColonyPanelTab : u8 {
-        colony,
-        performance,
-    };
-
     /// The single intent vocabulary for the colony UI. Every toolbar button,
     /// menu item, section tab, and keyboard shortcut dispatches one of these
     /// through the caller's one dispatch function, so button/shortcut parity
@@ -57,7 +50,7 @@ export namespace pP::colony {
         pause_toggle,
         step,
         set_speed, // m_arg = 1 | 2 | 3
-        regenerate, // m_confirmed = false opens the confirm modal
+        regenerate, // opens the in-game New Game workspace
         // (R and "New world"); true performs it
         select_tool, // m_arg = EColonyTool
         toggle_dig, // G and the Dig button arm/stow the dig tool
@@ -66,12 +59,12 @@ export namespace pP::colony {
         cancel, // Esc chain: follow, held gesture, tool, pin, help
         focus_selection, // jump to the selection and follow it (no argument)
         find_next, // F: select the next colonist in stable-key order
-        toggle_performance, // F3: flip between the two panel sections
+        toggle_performance, // F3: toggle only the independent Performance window
+        toggle_colony, // independent Colony/context window
         help, // F1: toggle the help window
         open_build_menu, // B: opens the menu; never places by itself
-        toggle_pin, // Inspector pin button; cell clicks pin directly
-        dismiss_notice, // status-line Dismiss button
-        select_tab, // m_arg = EColonyPanelTab (section buttons)
+        toggle_pin, // pin or unpin the inspected cell (world click or Esc today)
+        dismiss_notice, // context notice Dismiss button
         toggle_display, // Display button: open or close the Display window
         display_apply, // apply the Display draft through a display transaction
         display_reset_overrides, // runtime values back to the startup snapshot, same path
@@ -81,6 +74,7 @@ export namespace pP::colony {
         display_use_monitor_cap, // draft paced + cap from the reported monitor refresh
         select_preview, // m_arg = EGridDiagnosticMode; range lives in UI draft.
         open_workshop,
+        quit, // same graceful host transition as the native close control
     };
 
     /// One typed intent; trivially copyable so keyboard callbacks, buttons,
@@ -102,7 +96,7 @@ export namespace pP::colony {
         const char *m_tip{}; // "Pause or resume the simulation"
     };
 
-    /// How long a posted notice stays on the status line (seconds).
+    /// How long a posted notice stays in the tool context (seconds).
     inline constexpr float kNoticeSeconds = 6.0f;
 
     /// Bounded, short-lived, dismissible status notice. Keeps the
@@ -148,8 +142,7 @@ export namespace pP::colony {
 
     /// Mutable UI session state owned by the caller. The panel reads all of
     /// it and writes only session bookkeeping (`m_build_menu_open` as a
-    /// one-shot trigger, `m_regen_confirm_open` when the player decides,
-    /// `m_popup_visible_last_frame` for focus hand-back, and
+    /// one-shot trigger, `m_popup_visible_last_frame` for focus hand-back, and
     /// `m_focus_agent` as the one-shot Focus key hand-off); everything else
     /// changes through the intent dispatch.
     ///
@@ -158,21 +151,8 @@ export namespace pP::colony {
     /// discarded when the window closes), while Apply/Reset/Save/Keep/Revert
     /// are intents the caller submits through the display transaction path.
     struct ColonyUiState final {
-        EColonyTool m_tool{EColonyTool::inspect};
-        EColonyPanelTab m_tab{EColonyPanelTab::colony};
-        std::optional<sim::GlobalCellPos> m_pinned{};
+        // owned values and drafts:
         std::string m_instruction{"Inspect: click a cell to pin it in the Inspector."};
-        bool m_build_menu_open{false};
-        bool m_regen_confirm_open{false};
-        bool m_help_open{false};
-        /// First-run hint block inside the Help window, dismissed for this
-        /// session only. Deliberately not persisted (this boundary writes no
-        /// config or file), so the next launch shows it again; "?"/F1 still
-        /// reopens Help whenever the player wants the reference back.
-        bool m_intro_dismissed{false};
-        /// Panel bookkeeping: was any popup open at the end of the last
-        /// frame (drives focus hand-back on the popup-close transition).
-        bool m_popup_visible_last_frame{false};
         /// One-shot Focus hand-off: a row's Focus button parks the key it
         /// was pressed for here BEFORE it emits `focus_selection`, because
         /// that intent carries no argument. The caller adopts the key
@@ -180,15 +160,33 @@ export namespace pP::colony {
         /// cleared on consumption, so a stale key can never fire twice.
         std::optional<u64> m_focus_agent{};
         ColonyNotice m_notice{};
-        bool m_display_open{false};
         ColonyDisplaySession m_display{};
+
+        // selection and diagnostic controls:
+        std::optional<sim::GlobalCellPos> m_pinned{};
         EGridDiagnosticMode m_preview_mode{EGridDiagnosticMode::textured};
         float m_temperature_min_k{200.0f};
         float m_temperature_max_k{400.0f};
+
+        // tool and independent window visibility:
+        EColonyTool m_tool{EColonyTool::inspect};
+        bool m_colony_open{true};
+        bool m_performance_open{false};
+        bool m_display_open{false};
+        bool m_build_menu_open{false};
+        bool m_help_open{false};
+        /// First-run hint block inside the Help window, dismissed for this
+        /// session only. Deliberately not persisted (this boundary writes no
+        /// config or file), so the next launch shows it again; Help/F1 still
+        /// reopens Help whenever the player wants the reference back.
+        bool m_intro_dismissed{false};
+        /// Panel bookkeeping: was any popup open at the end of the last
+        /// frame (drives focus hand-back on the popup-close transition).
+        bool m_popup_visible_last_frame{false};
     };
 
     /// Resolved pointer hover over the world, from the caller's single
-    /// `pickCell_` path, so the preview outline and the status/Inspector
+    /// `pickCell_` path, so the preview outline and the tool/selection context
     /// reads describe exactly the cell a click would act on.
     struct ColonyHover final {
         bool m_over_ui{}; // pointer captured by chrome (unless a
@@ -200,6 +198,14 @@ export namespace pP::colony {
         /// short, ASCII: "pointer over the panel", "outside the world",
         /// "chunk not resident", "vacuum: nothing to dig".
         const char *m_reason{""};
+    };
+
+    /// A client-pixel point the caller has already projected from the world.
+    /// The frame's client extent equals the ImGui display extent, so this is
+    /// an ImGui coordinate; the panel never owns a camera and never projects.
+    struct ColonyScreenPoint final {
+        float m_x{};
+        float m_y{};
     };
 
     struct ColonyPerfView final {
@@ -286,8 +292,78 @@ export namespace pP::colony {
         float m_rest{};
     };
 
+    // ------------------------------------------------------------------
+    // synchronous presentation snapshot
+    // ------------------------------------------------------------------
+
+    enum class ECellPresence : u8 {
+        unavailable,
+        unresident,
+        vacuum,
+        material,
+        invalid_material
+    };
+
+    struct ColonyParticlePresentation final {
+        std::string_view m_material{};
+        u64 m_id{};
+        double m_temperature_k{};
+        double m_volume_m3{};
+        double m_mass_kg{};
+    };
+
+    struct ColonyCellPresentation final {
+        std::string_view m_material{};
+        std::string_view m_biome{};
+        Array<std::string_view> m_features{};
+        std::optional<ColonyParticlePresentation> m_particle{};
+        std::optional<AgentSummary> m_nearest{};
+        sim::GlobalCellPos m_position{};
+        float m_temperature_k{};
+        u16 m_material_id{};
+        ECellPresence m_presence{ECellPresence::unavailable};
+        bool m_generated{};
+    };
+
+    struct ColonyWorldPresentation final {
+        std::string_view m_pack{};
+        std::string_view m_profile{};
+        std::array<u64, 5u> m_scratch_bytes{};
+        std::array<double, 5u> m_phase_seconds{};
+        u64 m_seed{};
+        u64 m_content_fingerprint{};
+        u64 m_retained_bytes{};
+        u64 m_sites{};
+        u64 m_features{};
+        u64 m_matter_regions{};
+        u32 m_generator_version{};
+        u32 m_particles{};
+        bool m_available{};
+    };
+
+    /// The adapter refreshes this reusable storage before drawing. Borrowed
+    /// names and rows are valid only until the synchronous draw returns;
+    /// neither this object nor detached rendering retains a driver pointer.
+    struct ColonyPresentation final {
+        ColonyCellPresentation m_hover{};
+        ColonyCellPresentation m_inspected{};
+        ColonyWorldPresentation m_world{};
+        std::span<const AgentSummary> m_agents{};
+        u64 m_seed{};
+        u64 m_tick_count{};
+        double m_simulated_ms{};
+        u32 m_speed{};
+        u32 m_resident_chunks{};
+        bool m_paused{};
+        bool m_has_hover{};
+        bool m_has_inspected{};
+    };
+
     /// Everything the panel renders this frame; all read-only snapshots.
     struct ColonyUiView final {
+        const ColonyPresentation *m_colony{};
+        /// Host-owned history; borrowed only by this synchronous draw, never retained or observed here.
+        const ui::PerformanceWidget *m_performance{};
         ColonyPanelCounts m_counts{};
         ColonyHover m_hover{};
         ColonyPerfView m_perf{};
@@ -301,31 +377,34 @@ export namespace pP::colony {
         std::optional<u64> m_hovered_agent{};
         bool m_following{};
         std::span<const AgentNeedsRow> m_agent_needs{};
+        /// Screen anchor for a pinned Inspector cell, projected by the caller
+        /// from the live camera. Absent when nothing is pinned or the pinned
+        /// cell is off screen; a pinned read-out then falls back to the pointer.
+        std::optional<ColonyScreenPoint> m_pinned_screen{};
     };
 
     /// Result of one panel frame: at most one intent, plus the request that
     /// the caller hand keyboard focus back to the game, plus the chrome
-    /// geometry the caller needs to clip its screen-space feedback overlay
-    /// (ImGui coords / logical px, measured this frame: top-bar height,
-    /// status-line height, right side-panel width, 0 when the side panel
-    /// skipped a degenerate window). The overlay clips to DisplaySize minus
-    /// these bands so feedback never draws over chrome.
+    /// geometry for screen-space feedback (logical px). Only the full-width
+    /// ribbon reserves an edge; bottom/left/right are zero. Finite panels use
+    /// native input capture and cover background feedback with opaque surfaces.
     struct ColonyUiFrame final {
         std::optional<ColonyIntent> m_intent{};
-        bool m_focus_release{false};
         float m_chrome_top{};
         float m_chrome_bottom{};
         float m_chrome_right{};
+        float m_chrome_left{};
+        bool m_focus_release{false};
     };
 
     // ------------------------------------------------------------------
     // panel api
     // ------------------------------------------------------------------
 
-    /// Draws the full colony chrome: a wrapping top simulation bar plus a
-    /// contextual tool strip, a right side panel (Colony and Performance
-    /// sections with a persistent Inspector), a bottom status line, the help
-    /// window, the display window, and the build/regenerate popups. The central world stays
+    /// Draws a simulation/management ribbon, left supported-tool rail, a
+    /// pointer-following or pinned-cell Inspect read-out and compact left
+    /// Colony/Performance summary, contextual bottom status, native utilities
+    /// and build/regenerate popups. The central world stays
     /// mouse pass-through: no dockspace, no full-screen host window, no
     /// invisible input sinks, fixed chrome bands only.
     ///
@@ -343,6 +422,6 @@ export namespace pP::colony {
     /// functions, or resolves services. Every applied display change leaves
     /// as a typed intent the caller submits through requestDisplaySettings.
     [[nodiscard]] ColonyUiFrame drawColonyUi(
-        const ColonyDriver &driver, const ColonyUiView &view, const ColonyDisplaySnapshot &display,
-        const std::span<const ColonyShortcut> shortcuts, ColonyUiState &state);
+        const ColonyUiView &view, const ColonyDisplaySnapshot &display, const std::span<const ColonyShortcut> shortcuts,
+        ColonyUiState &state);
 } // namespace pP::colony

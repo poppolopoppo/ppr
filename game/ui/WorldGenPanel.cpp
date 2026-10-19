@@ -2,9 +2,11 @@ module;
 #include "pP/Macros.h"
 module game.colony.worldgen_panel;
 import imgui;
+import engine.app;
 import engine.asset;
 import engine.image;
 import std;
+import game.ui;
 
 namespace pP::colony {
     // ------------------------------------------------------------------
@@ -148,24 +150,33 @@ namespace pP::colony {
             return found and found->m_category == EContentDocument::worlds ? found : nullptr;
         }
 
-        Array<std::string> sampleBiomes(WorldgenPanelState &state) {
-            auto *const world = worldDocument(state);
-            if (not world) {
-                return {};
+        /// References are synchronous: finish consuming them before changing the profile and querying again.
+        const Array<std::string> &sampleBiomes(WorldgenPanelState &state) {
+            const std::string_view profile{state.m_profile.data()};
+            if (state.m_sample_choices_current and state.m_sample_profile == profile) {
+                return state.m_sample_biomes;
             }
 
-            auto &value = document(state, *world);
+            const hal::ProfileScope scope{"Workshop.UI.PreviewChoices"};
+            auto *const world = worldDocument(state);
             Array<std::string> result;
-            for (const auto &key: children(value, "profile.biomes")) {
-                const auto alias = text(value, "profile.biomes." + key + ".biome");
-                if (not alias.empty()) {
-                    result.emplace_back(alias);
+            if (world) {
+                auto &value = document(state, *world);
+                for (const auto &key: children(value, "profile.biomes")) {
+                    const auto alias = text(value, "profile.biomes." + key + ".biome");
+                    if (not alias.empty()) {
+                        result.emplace_back(alias);
+                    }
                 }
             }
 
             std::ranges::sort(result);
             result.erase(std::unique(result.begin(), result.end()), result.end());
-            return result;
+
+            state.m_sample_biomes = std::move(result);
+            state.m_sample_profile = profile;
+            state.m_sample_choices_current = true;
+            return state.m_sample_biomes;
         }
 
         // ------------------------------------------------------------------
@@ -491,23 +502,82 @@ namespace pP::colony {
             }
         }
 
+        /// One workshop action. The reason text drives the disabled state and
+        /// its hover tooltip; a primary action carries the filled accent with
+        /// its dark text token, and the disabled alpha still applies over it.
         void actionButton(
             const char *label, const std::string_view reason, const EWorkshopIntent kind,
-            Array<WorkshopIntent> &intents) {
+            Array<WorkshopIntent> &intents, const bool primary = false) {
             ImGui::BeginDisabled(not reason.empty());
-            if (ImGui::Button(label)) {
+            if (primary) {
+                ImGui::PushStyleColor(ImGuiCol_Button, ui::theme::kAccent.vec4());
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ui::theme::kAccentHover.vec4());
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, ui::theme::kAccentActive.vec4());
+                ImGui::PushStyleColor(ImGuiCol_Text, ui::theme::kAccentText.vec4());
+            }
+            const bool pressed = ImGui::Button(label);
+            if (primary) {
+                ImGui::PopStyleColor(4);
+            }
+            ImGui::EndDisabled();
+            disabledReason(reason);
+            if (pressed) {
+                emit(intents, kind);
+            }
+        }
+
+        /// One workshop action as a menu item. The reason text shares the
+        /// actionButton contract: it both disables the item and rides its hover
+        /// tooltip, so a menu entry and a button for one intent stay in step.
+        void actionMenuItem(
+            const char *label, const std::string_view reason, const EWorkshopIntent kind,
+            Array<WorkshopIntent> &intents) {
+            if (ImGui::MenuItem(label, nullptr, false, reason.empty())) {
                 emit(intents, kind);
             }
 
-            ImGui::EndDisabled();
             disabledReason(reason);
         }
 
         void selectDefinition(WorldgenPanelState &state, const std::string_view category, const std::string_view key) {
-            state.m_selected_category = category;
-            state.m_selected_key = key;
-            state.m_edit_key.clear();
-            state.m_numeric_edit_key.clear();
+            state.m_pending_category = category;
+            state.m_pending_key = key;
+            state.m_pending_property.clear();
+            state.m_selection_pending = true;
+            state.m_show_properties = true;
+        }
+
+        void flushPendingEdits(WorldgenPanelState &state, Array<WorkshopIntent> &intents) {
+            auto *const record = findDocument(state, state.m_selected_key);
+            if (not record) {
+                return;
+            }
+
+            const auto commit = [&](const std::string &property, const config::FileValue &value) {
+                WorkshopIntent intent{EWorkshopIntent::edit_definition};
+                intent.m_document = record->m_category;
+                intent.m_key = record->m_name;
+                intent.m_property = property;
+                intent.m_value = value;
+                intents.push_back(std::move(intent));
+            };
+
+            if (not state.m_numeric_edit_key.empty()) {
+                commit(state.m_numeric_edit_key, state.m_numeric_edit);
+                state.m_numeric_edit_key.clear();
+            }
+
+            if (not state.m_edit_key.empty() and not state.m_text_edit.empty()) {
+                const auto &entries = document(state, *record).m_entries;
+                const auto entry = std::ranges::find(entries, state.m_edit_key, &config::Entry::m_key);
+                if (entry != entries.end() and entry->m_value.m_text != state.m_text_edit.data()) {
+                    auto value = entry->m_value;
+                    value.m_text = state.m_text_edit.data();
+                    commit(state.m_edit_key, value);
+                }
+
+                state.m_edit_key.clear();
+            }
         }
 
         bool navigateDiagnostic(WorldgenPanelState &state, const config::Diagnostic &diagnostic) {
@@ -515,7 +585,7 @@ namespace pP::colony {
                 const auto path = record.m_path.string();
                 if (diagnostic.m_location == path or diagnostic.m_location.starts_with(path + ":")) {
                     selectDefinition(state, categories()[static_cast<std::size_t>(record.m_category)], record.m_name);
-                    state.m_focus_property = diagnostic.m_property;
+                    state.m_pending_property = diagnostic.m_property;
                     state.m_property_search[0u] = '\0';
                     state.m_show_properties = true;
                     return true;
@@ -534,6 +604,7 @@ namespace pP::colony {
                 return;
             }
 
+            const hal::ProfileScope scope{"Workshop.UI.Documents.Refresh"};
             auto previous = std::move(state.m_documents);
             state.m_document_source = view.m_source;
             state.m_document_index = view.m_index;
@@ -542,12 +613,25 @@ namespace pP::colony {
             state.m_document_catalog = view.m_catalog;
             state.m_tree_selection.clear();
             state.m_use_selection.clear();
+            state.m_sample_choices_current = false;
             for (auto &keys: state.m_record_keys) {
                 keys.clear();
             }
 
             if (not view.m_source or not view.m_index) {
                 return;
+            }
+
+            if (state.m_selected_asset) {
+                const auto assets = view.m_index->assets();
+                const auto active = std::ranges::find(assets, *state.m_selected_asset, &asset::IndexedAsset::m_key);
+                if (active == assets.end()) {
+                    state.m_selected_asset.reset();
+                    state.m_browser.m_active_key.reset();
+                    state.m_selected_key.clear();
+                    state.m_edit_key.clear();
+                    state.m_numeric_edit_key.clear();
+                }
             }
 
             std::map<std::filesystem::path, const asset::DescriptorSource *> sources;
@@ -604,6 +688,7 @@ namespace pP::colony {
                 return;
             }
 
+            const hal::ProfileScope scope{"Workshop.UI.PropertyTree.Refresh"};
             state.m_tree_selection = selection;
             state.m_property_tree.clear();
 
@@ -687,11 +772,12 @@ namespace pP::colony {
                     state.m_text_edit.assign(temporary.begin(), temporary.end());
                 }
             } else {
-                if (ImGui::InputText(
-                        "##value", state.m_text_edit.data(), state.m_text_edit.size(),
-                        ImGuiInputTextFlags_EnterReturnsTrue)) {
+                const bool entered = ImGui::InputText(
+                    "##value", state.m_text_edit.data(), state.m_text_edit.size(),
+                    ImGuiInputTextFlags_EnterReturnsTrue);
+                if (entered or ImGui::IsItemDeactivatedAfterEdit()) {
                     value.m_text = state.m_text_edit.data();
-                    changed = true;
+                    changed = value.m_text != entry.m_value.m_text;
                 }
 
                 if (not ImGui::IsItemActive()) {
@@ -702,12 +788,25 @@ namespace pP::colony {
             return changed;
         }
 
-        bool numericControl(const WorldgenPanelState::PropertyNode &node, config::FileValue &value) {
+        /// One numeric property: the metadata-hinted range slider plus an
+        /// exact-entry field clamped to the authoritative schema domain rather
+        /// than the slider's display hint range. Returns a live edit and reports
+        /// a completed one through `finished` for the caller's pending-edit commit.
+        bool numericControl(
+            const WorldgenPanelState::PropertyNode &node, config::FileValue &value, bool &finished,
+            const bool can_reset) {
             if (not node.m_descriptor) {
-                return value.m_kind == config::EFileKind::integer
-                           ? ImGui::InputScalar("##value", ImGuiDataType_S64, &value.m_integer)
-                           : ImGui::InputDouble("##value", &value.m_floating, 0.0, 0.0, "%.8g");
+                bool changed = false;
+                if (value.m_kind == config::EFileKind::integer) {
+                    changed = ImGui::InputScalar("##value", ImGuiDataType_S64, &value.m_integer);
+                } else {
+                    changed = ImGui::InputDouble("##value", &value.m_floating, 0.0, 0.0, "%.8g");
+                }
+
+                finished = ImGui::IsItemDeactivatedAfterEdit();
+                return changed;
             }
+
             const auto &descriptor = *node.m_descriptor;
             double lower = descriptor.m_slider_min, upper = descriptor.m_slider_max;
 
@@ -725,30 +824,93 @@ namespace pP::colony {
                         : *descriptor.m_max);
             }
 
+            const auto toInteger = [](const double number) {
+                if (number >= static_cast<double>((std::numeric_limits<i64>::max)())) {
+                    return (std::numeric_limits<i64>::max)();
+                }
+
+                if (number <= static_cast<double>((std::numeric_limits<i64>::lowest)())) {
+                    return (std::numeric_limits<i64>::lowest)();
+                }
+
+                return static_cast<i64>(number);
+            };
+
+            // The authoritative schema bounds, which may be wider or narrower
+            // than the slider's display hint range computed above.
+            double domain_lower = -(std::numeric_limits<double>::infinity());
+            double domain_upper = std::numeric_limits<double>::infinity();
+            if (descriptor.m_min) {
+                domain_lower = *descriptor.m_min;
+                if (descriptor.m_exclusive_min) {
+                    domain_lower = std::nextafter(domain_lower, std::numeric_limits<double>::infinity());
+                }
+            }
+
+            if (descriptor.m_max) {
+                domain_upper = *descriptor.m_max;
+                if (descriptor.m_exclusive_max) {
+                    domain_upper = std::nextafter(domain_upper, -std::numeric_limits<double>::infinity());
+                }
+            }
+
+            const float exact_width = ImGui::GetFontSize() * 7.0f;
+            const float trailing = can_reset ? 88.0f : 38.0f;
+            ImGui::SetNextItemWidth(-(exact_width + ImGui::GetStyle().ItemSpacing.x + trailing));
+
+            bool changed = false;
             if (value.m_kind == config::EFileKind::integer) {
-                const auto toInteger = [](const double number) {
-                    if (number >= static_cast<double>((std::numeric_limits<i64>::max)())) {
-                        return (std::numeric_limits<i64>::max)();
-                    }
-
-                    if (number <= static_cast<double>((std::numeric_limits<i64>::lowest)())) {
-                        return (std::numeric_limits<i64>::lowest)();
-                    }
-
-                    return static_cast<i64>(number);
-                };
-
                 i64 minimum = (std::min) (toInteger(std::ceil(lower)), value.m_integer);
                 i64 maximum = (std::max) (toInteger(std::floor(upper)), value.m_integer);
-                return ImGui::SliderScalar("##value", ImGuiDataType_S64, &value.m_integer, &minimum, &maximum, "%lld");
+                changed = ImGui::SliderScalar(
+                    "##value", ImGuiDataType_S64, &value.m_integer, &minimum, &maximum, "%lld");
+            } else {
+                if (std::isfinite(value.m_floating)) {
+                    lower = (std::min) (lower, value.m_floating);
+                    upper = (std::max) (upper, value.m_floating);
+                }
+
+                changed = ImGui::SliderScalar(
+                    "##value", ImGuiDataType_Double, &value.m_floating, &lower, &upper, "%.6g");
+            }
+            finished = ImGui::IsItemDeactivatedAfterEdit();
+
+            // The exact entry commits through the same pending-edit path as the
+            // slider; only its clamp target differs (the schema domain, not the
+            // slider hint), and a cleared or unparsable entry writes nothing.
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(exact_width);
+            if (value.m_kind == config::EFileKind::integer) {
+                const auto previous = value.m_integer;
+                i64 typed = previous;
+                const bool entered = ImGui::InputScalar("##exact", ImGuiDataType_S64, &typed, nullptr, nullptr, "%lld");
+                if (entered or ImGui::IsItemDeactivatedAfterEdit()) {
+                    i64 minimum = (std::numeric_limits<i64>::lowest)();
+                    i64 maximum = (std::numeric_limits<i64>::max)();
+                    if (descriptor.m_min) {
+                        minimum = toInteger(std::ceil(domain_lower));
+                    }
+
+                    if (descriptor.m_max) {
+                        maximum = toInteger(std::floor(domain_upper));
+                    }
+
+                    value.m_integer = std::clamp(typed, minimum, maximum);
+                    changed = changed or value.m_integer != previous;
+                }
+            } else {
+                const auto previous = value.m_floating;
+                double typed = previous;
+                const bool entered = ImGui::InputScalar(
+                    "##exact", ImGuiDataType_Double, &typed, nullptr, nullptr, "%.6g");
+                if (entered or ImGui::IsItemDeactivatedAfterEdit()) {
+                    value.m_floating = std::clamp(typed, domain_lower, domain_upper);
+                    changed = changed or value.m_floating != previous;
+                }
             }
 
-            if (std::isfinite(value.m_floating)) {
-                lower = (std::min) (lower, value.m_floating);
-                upper = (std::max) (upper, value.m_floating);
-            }
-
-            return ImGui::SliderScalar("##value", ImGuiDataType_Double, &value.m_floating, &lower, &upper, "%.6g");
+            finished = finished or ImGui::IsItemDeactivatedAfterEdit();
+            return changed;
         }
 
         bool choiceControl(
@@ -891,12 +1053,15 @@ namespace pP::colony {
             }
             bool changed = false;
             bool cleared = false;
+            bool numeric_finished = false;
 
             ImGui::BeginDisabled(not editable);
             switch (value.m_kind) {
                 case config::EFileKind::boolean: changed = ImGui::Checkbox("##value", &value.m_boolean); break;
                 case config::EFileKind::integer:
-                case config::EFileKind::floating: changed = numericControl(node, value); break;
+                case config::EFileKind::floating:
+                    changed = numericControl(node, value, numeric_finished, can_reset);
+                    break;
                 case config::EFileKind::text:
                     changed = choice_control
                                   ? choiceControl(
@@ -914,7 +1079,7 @@ namespace pP::colony {
                     state.m_numeric_edit = value;
                 }
 
-                changed = ImGui::IsItemDeactivatedAfterEdit() and state.m_numeric_edit_key == entry.m_key;
+                changed = numeric_finished and state.m_numeric_edit_key == entry.m_key;
                 if (changed) {
                     value = state.m_numeric_edit;
                     state.m_numeric_edit_key.clear();
@@ -984,18 +1149,48 @@ namespace pP::colony {
             ImGui::PopID();
         }
 
-        bool treeMatches(const WorldgenPanelState::PropertyNode &node, const std::string_view search) {
-            return matches(node.m_path, search) or
-                   std::ranges::any_of(node.m_children, [&](const auto &child) { return treeMatches(child, search); });
+        /// The text the Value column renders for one property, so the nested
+        /// search can match authored values as well as keys.
+        std::string propertyValueText(const WorldgenPanelState::PropertyNode &node, const config::FileValue &value) {
+            switch (value.m_kind) {
+                case config::EFileKind::boolean: return value.m_boolean ? "true" : "false";
+                case config::EFileKind::integer: {
+                    std::array<char, 32u> text{};
+                    std::snprintf(text.data(), text.size(), "%lld", static_cast<long long>(value.m_integer));
+                    return text.data();
+                }
+                case config::EFileKind::floating: {
+                    std::array<char, 48u> text{};
+                    std::snprintf(text.data(), text.size(), node.m_descriptor ? "%.6g" : "%.8g", value.m_floating);
+                    return text.data();
+                }
+                case config::EFileKind::text: return value.m_text;
+            }
+            return {};
+        }
+
+        bool treeMatches(
+            const WorldgenPanelState::PropertyNode &node, const Array<config::Entry> &entries,
+            const std::string_view search) {
+            if (matches(node.m_path, search)) {
+                return true;
+            }
+
+            if (node.m_entry and matches(propertyValueText(node, entries[*node.m_entry].m_value), search)) {
+                return true;
+            }
+
+            return std::ranges::any_of(
+                node.m_children, [&](const auto &child) { return treeMatches(child, entries, search); });
         }
 
         void propertyTree(
             WorldgenPanelState &state, const Array<WorldgenPanelState::PropertyNode> &nodes, const std::size_t category,
-            const WorldgenPanelView &view, Array<WorkshopIntent> &intents) {
+            const WorldgenPanelView &view, Array<WorkshopIntent> &intents, const Array<config::Entry> &entries) {
             const std::string_view search = state.m_property_search.data();
 
             for (const auto &node: nodes) {
-                if (not treeMatches(node, search)) {
+                if (not treeMatches(node, entries, search)) {
                     continue;
                 }
 
@@ -1014,7 +1209,7 @@ namespace pP::colony {
                 const bool open = ImGui::TreeNodeEx(node.m_name.c_str(), ImGuiTreeNodeFlags_SpanFullWidth);
                 propertyErrors(state, node.m_path, view);
                 if (open) {
-                    propertyTree(state, node.m_children, category, view, intents);
+                    propertyTree(state, node.m_children, category, view, intents, entries);
                     ImGui::TreePop();
                 }
 
@@ -1059,7 +1254,7 @@ namespace pP::colony {
                 return "Choose an existing world profile.";
             }
 
-            const auto biomes = sampleBiomes(state);
+            const auto &biomes = sampleBiomes(state);
             if (state.m_preview_mode == EWorldgenPreviewMode::biome_sample and
                 std::ranges::find(biomes, state.m_biome.data()) == biomes.end()) {
                 return "Choose an existing sample biome.";
@@ -1075,141 +1270,184 @@ namespace pP::colony {
             return {};
         }
 
-        void toolbar(WorldgenPanelState &state, const WorldgenPanelView &view, Array<WorkshopIntent> &intents) {
-            ImGui::SetNextItemWidth(-240.0f);
-            ImGui::InputText("##pack-root", state.m_root.data(), state.m_root.size());
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Authored pack root. Build-staged assets may be overwritten by a build.");
+        // ------------------------------------------------------------------
+        // workshop chrome
+        // ------------------------------------------------------------------
+
+        /// The menu-bar copy of every file, history and view action. Each entry
+        /// shares its enable reason and intent with the toolbar button of the
+        /// same name, so a menu item and its button never drift apart.
+        void workshopMenuBar(WorldgenPanelState &state, const WorldgenPanelView &view, Array<WorkshopIntent> &intents) {
+            if (not ImGui::BeginMenuBar()) {
+                return;
             }
 
+            if (ImGui::BeginMenu("File")) {
+                const auto unavailable = view.m_closing      ? "Workshop is closing."
+                                         : not view.m_source ? "Open a content pack first."
+                                         : view.m_busy       ? "Wait for the current operation or cancel it first."
+                                                             : "";
+                actionMenuItem(
+                    ui::icons::kSaveDocumentsLabel.data(),
+                    unavailable[0u] != '\0' ? unavailable
+                    : not view.m_dirty      ? "No authored changes to save."
+                    : contentErrors(view)   ? "Fix highlighted definition errors before saving."
+                                            : "",
+                    EWorkshopIntent::save, intents);
+                actionMenuItem(ui::icons::kReloadLabel.data(), unavailable, EWorkshopIntent::reload, intents);
+                actionMenuItem(
+                    "Revert",
+                    unavailable[0u] != '\0' ? unavailable
+                    : not view.m_dirty      ? "The draft already matches the saved baseline."
+                                            : "",
+                    EWorkshopIntent::revert, intents);
+                ImGui::EndMenu();
+            }
+
+            if (ImGui::BeginMenu("Edit")) {
+                actionMenuItem(
+                    ui::icons::kUndoLabel.data(),
+                    view.m_closing        ? "Workshop is closing."
+                    : not view.m_can_undo ? "No command to undo."
+                                          : "",
+                    EWorkshopIntent::undo, intents);
+                actionMenuItem(
+                    ui::icons::kRedoLabel.data(),
+                    view.m_closing        ? "Workshop is closing."
+                    : not view.m_can_redo ? "No command to redo."
+                                          : "",
+                    EWorkshopIntent::redo, intents);
+                ImGui::EndMenu();
+            }
+
+            if (ImGui::BeginMenu("View")) {
+                ImGui::BeginDisabled(not view.m_source or view.m_closing);
+                if (ImGui::MenuItem("Live preview", nullptr, &state.m_automatic_live)) {
+                    emit(intents, EWorkshopIntent::preview_settings_changed);
+                }
+
+                ImGui::EndDisabled();
+                if (ImGui::MenuItem("Show errors", nullptr, false, contentErrors(view))) {
+                    state.m_show_diagnostics = true;
+                }
+
+                ImGui::EndMenu();
+            }
+
+            if (ImGui::BeginMenu("Help")) {
+                ImGui::PushTextWrapPos(ImGui::GetCursorPos().x + ImGui::GetFontSize() * 24.0f);
+                ImGui::TextUnformatted(
+                    "File saves, reloads or reverts the draft. Edit undoes or redoes authored changes. View toggles the live preview and the error list. The preview settings column controls the counted crop.");
+                ImGui::PopTextWrapPos();
+                ImGui::EndMenu();
+            }
+
+            ImGui::EndMenuBar();
+        }
+
+        /// The single status line under the menu bar: the draft state, the
+        /// revision counters and the worker message. It carries the draft
+        /// heading that the window title no longer duplicates.
+        void statusLine(const WorldgenPanelView &view) {
+            ImGui::TextUnformatted(view.m_dirty ? "Modified draft" : "Saved draft");
             ImGui::SameLine();
+            ImGui::TextDisabled(
+                "| draft %llu / validated %llu%s", static_cast<unsigned long long>(view.m_revision),
+                static_cast<unsigned long long>(view.m_validated_revision), view.m_busy ? " | worker busy" : "");
+            ImGui::TextWrapped("%.*s", static_cast<int>(view.m_status.size()), view.m_status.data());
+
+            if (contentErrors(view)) {
+                ImGui::TextColored(ui::theme::kError.vec4(), "This draft has property errors.");
+            }
+        }
+
+        void toolbar(WorldgenPanelState &state, const WorldgenPanelView &view, Array<WorkshopIntent> &intents) {
+            const auto continue_row = [](const char *const label) {
+                const float width = ImGui::CalcTextSize(label, nullptr, true).x +
+                                    2.0f * ImGui::GetStyle().FramePadding.x;
+                const float remaining = ImGui::GetCursorScreenPos().x +
+                                        ImGui::GetContentRegionAvail().x -
+                                        ImGui::GetItemRectMax().x;
+                if (remaining >= width + ImGui::GetStyle().ItemSpacing.x) {
+                    ImGui::SameLine();
+                }
+            };
+
+            ImGui::TextUnformatted("Pack folder");
+            ImGui::SetNextItemWidth(-1.0f);
+            ImGui::InputText("##pack-root", state.m_root.data(), state.m_root.size());
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Enter a pack root, then Load pack to replace the active source.");
+            }
+
+            const bool load_path_pending = std::filesystem::path{state.m_root.data()}.lexically_normal().string() !=
+                                           view.m_loaded_root;
+
+            if (view.m_source and not view.m_source->m_packs.empty()) {
+                const auto &active_root = view.m_source->m_packs.front().m_root;
+                ImGui::TextDisabled(
+                    "Loaded source: %s%s", active_root.string().c_str(),
+                    view.m_source->m_packs.size() > 1u ? " (dependency pack set)" : "");
+            }
+
             const bool empty_root = std::string_view{state.m_root.data()}.find_first_not_of(" \t\r\n") ==
                                     std::string_view::npos;
             actionButton(
-                "Open pack",
+                "Load pack",
                 view.m_closing ? "Workshop is closing."
                 : view.m_busy  ? "Wait for the current operation or cancel it first."
-                : empty_root   ? "Enter a content pack root before opening."
+                : empty_root   ? "Enter a content pack root before loading."
                                : "",
                 EWorkshopIntent::open, intents);
-            ImGui::SameLine();
-            actionButton("Close", view.m_closing ? "Workshop is closing." : "", EWorkshopIntent::close, intents);
-            if (empty_root and not view.m_source) {
-                ImGui::TextDisabled("Enter an authored pack directory to enable Open pack.");
+
+            const char *const game_label = view.m_has_game ? "Return to game###workshop_game"
+                                                           : "Start game###workshop_game";
+            continue_row(game_label);
+            const char *const game_reason = view.m_closing or view.m_starting ? "Wait for the current transition."
+                                            : view.m_has_game                 ? ""
+                                            : not view.m_source               ? "Load a pack first."
+                                            : view.m_busy                     ? "Wait for validation and current work."
+                                            : load_path_pending ? "Load the selected source before starting."
+                                            : not view.m_can_start_game
+                                                ? "Select a world and validate the current draft before starting."
+                                                : "";
+            actionButton(
+                game_label, game_reason,
+                view.m_has_game ? EWorkshopIntent::return_to_game : EWorkshopIntent::start_game, intents, true);
+
+            if (view.m_has_game) {
+                continue_row("New game###workshop_new_game");
+                const char *const new_game_reason =
+                    view.m_closing or view.m_starting ? "Wait for the current transition."
+                    : not view.m_source               ? "Load a pack first."
+                    : view.m_busy                     ? "Wait for validation and current work."
+                    : load_path_pending               ? "Load the selected source before starting."
+                    : not view.m_can_start_game       ? "Select a world and validate the current draft before starting."
+                                                      : "";
+                actionButton(
+                    "New game###workshop_new_game", new_game_reason, EWorkshopIntent::start_game, intents, true);
             }
 
-            const auto unavailable = view.m_closing      ? "Workshop is closing."
-                                     : not view.m_source ? "Open a content pack first."
-                                     : view.m_busy       ? "Wait for the current operation or cancel it first."
-                                                         : "";
+            continue_row("Quit app");
             actionButton(
-                "Save documents",
-                unavailable[0u] != '\0' ? unavailable
-                : not view.m_dirty      ? "No authored changes to save."
-                : contentErrors(view)   ? "Fix highlighted definition errors before saving."
-                                        : "",
-                EWorkshopIntent::save, intents);
-            ImGui::SameLine();
-            actionButton("Reload", unavailable, EWorkshopIntent::reload, intents);
-            ImGui::SameLine();
-            actionButton(
-                "Revert",
-                unavailable[0u] != '\0' ? unavailable
-                : not view.m_dirty      ? "The draft already matches the saved baseline."
-                                        : "",
-                EWorkshopIntent::revert, intents);
-            ImGui::SameLine();
-            actionButton(
-                "Undo",
-                view.m_closing        ? "Workshop is closing."
-                : not view.m_can_undo ? "No command to undo."
-                                      : "",
-                EWorkshopIntent::undo, intents);
-            ImGui::SameLine();
-            actionButton(
-                "Redo",
-                view.m_closing        ? "Workshop is closing."
-                : not view.m_can_redo ? "No command to redo."
-                                      : "",
-                EWorkshopIntent::redo, intents);
-            ImGui::SameLine();
+                "Quit app###workshop_quit", view.m_closing ? "Workshop is closing." : "", EWorkshopIntent::close,
+                intents);
+
+            if (empty_root and not view.m_source) {
+                ImGui::TextDisabled("Enter an authored pack directory to enable Load pack.");
+            }
+
+            continue_row("Prepare preview");
+            actionButton("Prepare preview", previewReason(state, view), EWorkshopIntent::preview, intents, true);
+            continue_row("Cancel work");
             actionButton(
                 "Cancel work",
                 view.m_closing or (not view.m_busy and not state.m_automatic_live)
                     ? "No active operation or automatic preview to cancel."
                     : "",
                 EWorkshopIntent::cancel, intents);
-            ImGui::SameLine();
-            ImGui::BeginDisabled(not view.m_source or view.m_closing);
-            if (ImGui::Checkbox("Live preview", &state.m_automatic_live)) {
-                emit(intents, EWorkshopIntent::preview_settings_changed);
-            }
-
-            ImGui::EndDisabled();
-
-            ImGui::Text(
-                "%s | draft %llu / validated %llu%s", view.m_dirty ? "Unsaved changes" : "Saved",
-                static_cast<unsigned long long>(view.m_revision),
-                static_cast<unsigned long long>(view.m_validated_revision), view.m_busy ? " | worker busy" : "");
-            ImGui::TextWrapped("%.*s", static_cast<int>(view.m_status.size()), view.m_status.data());
-
-            if (contentErrors(view)) {
-                ImGui::TextColored(ImVec4{1.0f, 0.45f, 0.35f, 1.0f}, "This draft has property errors.");
-                ImGui::SameLine();
-                if (ImGui::SmallButton("Show errors")) {
-                    state.m_show_diagnostics = true;
-                }
-            }
 
             ImGui::Separator();
-        }
-
-        void browser(WorldgenPanelState &state, const WorldgenPanelView &view) {
-            ImGui::TextUnformatted("CONTENT BROWSER");
-            ImGui::SetNextItemWidth(-1.0f);
-            ImGui::InputTextWithHint(
-                "##content-search", "Search definitions", state.m_search.data(), state.m_search.size());
-            const std::string_view search = state.m_search.data();
-
-            for (std::size_t category = 0u; category < categories().size(); ++category) {
-                if (not search.empty()) {
-                    ImGui::SetNextItemOpen(true, ImGuiCond_Always);
-                }
-
-                const auto label = std::string{categories()[category]} +
-                                   " (" +
-                                   std::to_string(state.m_record_keys[category].size()) +
-                                   ")";
-                if (ImGui::TreeNodeEx(label.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
-                    if (category == 0u and
-                        matches("vacuum", search) and
-                        ImGui::Selectable("0 vacuum", state.m_selected_key == "vacuum")) {
-                        selectDefinition(state, "materials", "vacuum");
-                    }
-
-                    for (const auto &key: state.m_record_keys[category]) {
-                        if (not matches(key, search) and not matches(categories()[category], search)) {
-                            continue;
-                        }
-
-                        if (ImGui::Selectable(
-                                key.c_str(),
-                                state.m_selected_category == categories()[category] and state.m_selected_key == key)) {
-                            selectDefinition(state, categories()[category], key);
-                        }
-                    }
-
-                    ImGui::TreePop();
-                }
-            }
-
-            if (view.m_source and ImGui::TreeNode("Pack sources")) {
-                for (const auto &pack: view.m_source->m_packs) {
-                    ImGui::TextWrapped("%s", pack.m_manifest.m_path.string().c_str());
-                }
-
-                ImGui::TreePop();
-            }
         }
 
         void definitionActions(
@@ -1218,6 +1456,10 @@ namespace pP::colony {
             if (not ImGui::CollapsingHeader("Create / delete definition")) {
                 return;
             }
+
+            ImGui::SameLine();
+            ui::helpMarker(
+                "Cloning keeps the selected settings and references. Deletion is undoable; existing references may need repair.");
 
             ImGui::SetNextItemWidth(-1.0f);
             ImGui::InputTextWithHint(
@@ -1259,11 +1501,10 @@ namespace pP::colony {
             }
 
             ImGui::EndDisabled();
-            ImGui::TextWrapped(
-                "Cloning keeps the selected settings and references. Deletion is undoable; existing references may need repair.");
         }
 
         void inspector(WorldgenPanelState &state, const WorldgenPanelView &view, Array<WorkshopIntent> &intents) {
+            const hal::ProfileScope scope{"Workshop.UI.Properties"};
             const auto category = std::ranges::find(categories(), state.m_selected_category);
 
             if (state.m_selected_key.empty()) {
@@ -1292,12 +1533,14 @@ namespace pP::colony {
                 "##property-search", "Search nested properties", state.m_property_search.data(),
                 state.m_property_search.size());
             if (index == 1u) {
-                ImGui::TextWrapped(
-                    "Linked constraints: lining thickness needs a lining material; enabled pore passes need a pore field and ordered radii. Soil, weathering and formations need their materials. Relaxation + pore + finish + erosion passes must total at most 100.");
+                ui::helpMarker(
+                    "Linked constraints: lining thickness needs a lining material; enabled pore passes need a pore field and ordered radii. Soil, weathering and formations need their materials. The sum of participant-wide pore, relaxation, finish and erosion pass maxima must be at most 58.");
             }
 
-            ImGui::TextDisabled(
-                "Hover labels for source, units and schema bounds. Ctrl-click sliders for exact values.");
+            ui::helpMarker("Hover labels for source, units and schema bounds. Ctrl-click sliders for exact values.");
+
+            auto *const record = findDocument(state, state.m_selected_key);
+            PPR_ASSERT(record);
 
             if (ImGui::BeginTable(
                     "Property tree", 2,
@@ -1305,7 +1548,7 @@ namespace pP::colony {
                 ImGui::TableSetupColumn("Property", ImGuiTableColumnFlags_WidthFixed, 230.0f);
                 ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
                 ImGui::TableHeadersRow();
-                propertyTree(state, state.m_property_tree, index, view, intents);
+                propertyTree(state, state.m_property_tree, index, view, intents, document(state, *record).m_entries);
                 ImGui::EndTable();
             }
 
@@ -1333,9 +1576,13 @@ namespace pP::colony {
             }
         }
 
-        void previewControls(WorldgenPanelState &state, const WorldgenPanelView &view, Array<WorkshopIntent> &intents) {
+        /// The preview settings column: the counted crop, the profile, scope,
+        /// sample biome, seed, crop origin and the diagnostic view. Every
+        /// control here drives one preview-settings change intent.
+        void previewSettings(WorldgenPanelState &state, const WorldgenPanelView &view, Array<WorkshopIntent> &intents) {
             ImGui::TextUnformatted("256 x 256 fine cells | 85.33 m square");
-            ImGui::TextWrapped(
+            ImGui::SameLine();
+            ui::helpMarker(
                 "The cyan outline marks the counted and exported interior. Extra rendered cells provide contour support.");
 
             bool changed = keyCombo(
@@ -1348,10 +1595,11 @@ namespace pP::colony {
             }
 
             ImGui::BeginDisabled(state.m_preview_mode != EWorldgenPreviewMode::biome_sample);
-            const auto biomes = sampleBiomes(state);
+            const auto &biomes = sampleBiomes(state);
             changed = keyCombo("Sample biome", state.m_biome.data(), state.m_biome.size(), biomes) or changed;
             ImGui::EndDisabled();
             changed = ImGui::InputScalar("Full 64-bit seed", ImGuiDataType_U64, &state.m_seed) or changed;
+
             constexpr int maximum_origin = static_cast<int>(sim::kWorldEdge - kWorldgenPreviewEdge);
             changed = ImGui::SliderInt(
                           "Origin X (fine cells)", &state.m_origin[0u], 0, maximum_origin, "%d",
@@ -1361,7 +1609,9 @@ namespace pP::colony {
                           "Origin Y (fine cells)", &state.m_origin[1u], 0, maximum_origin, "%d",
                           ImGuiSliderFlags_AlwaysClamp) or
                       changed;
-            ImGui::TextDisabled("Global +Y is height; depth follows the selected profile surface.");
+            ImGui::SameLine();
+            ui::helpMarker("Global +Y is height; depth follows the selected profile surface.");
+
             constexpr const char *modes[]{"Textured", "Material", "Biome", "Temperature (200-1000 K)"};
             int mode = static_cast<int>(state.m_mode);
             if (ImGui::Combo("Diagnostic view", &mode, modes, 4)) {
@@ -1374,11 +1624,16 @@ namespace pP::colony {
             }
 
             const auto reason = previewReason(state, view);
-            actionButton("Prepare preview", reason, EWorkshopIntent::preview, intents);
+            actionButton("Prepare preview", reason, EWorkshopIntent::preview, intents, true);
             if (not reason.empty()) {
                 ImGui::TextWrapped("%.*s", static_cast<int>(reason.size()), reason.data());
             }
+        }
 
+        /// The preview report: the publishing status, the crop statistics, the
+        /// participating rules and omissions, and the fresh diagnostic export
+        /// directory. It lives in the editor's Preview tab.
+        void previewReport(WorldgenPanelState &state, const WorldgenPanelView &view, Array<WorkshopIntent> &intents) {
             if (view.m_publishing) {
                 ImGui::TextWrapped("Preparing the render preview; the previous picture remains visible.");
             }
@@ -1391,11 +1646,9 @@ namespace pP::colony {
                     view.m_preview_current ? "current" : "OUT OF DATE");
                 ImGui::Text(
                     "Solid %.2f%% | vacuum %.2f%% | checksum %016llx",
-                    100.0 * static_cast<double>(preview.m_solid_cells) /
-                        (kWorldgenPreviewEdge * kWorldgenPreviewEdge),
+                    100.0 * static_cast<double>(preview.m_solid_cells) / (kWorldgenPreviewEdge * kWorldgenPreviewEdge),
                     100.0 *
-                        static_cast<double>(
-                            kWorldgenPreviewEdge * kWorldgenPreviewEdge - preview.m_solid_cells) /
+                        static_cast<double>(kWorldgenPreviewEdge * kWorldgenPreviewEdge - preview.m_solid_cells) /
                         (kWorldgenPreviewEdge * kWorldgenPreviewEdge),
                     static_cast<unsigned long long>(preview.m_checksum));
                 ImGui::Text(
@@ -1454,7 +1707,9 @@ namespace pP::colony {
             if (diagnostics.empty()) {
                 ImGui::TextWrapped("No property diagnostics for the current draft.");
             } else {
-                ImGui::TextWrapped(
+                ImGui::TextUnformatted("Property errors");
+                ImGui::SameLine();
+                ui::helpMarker(
                     "Select an error to open its definition and property. The ! badge shows the complete message beside that control.");
                 for (std::size_t index = 0u; index < diagnostics.size(); ++index) {
                     const auto &diagnostic = diagnostics[index];
@@ -1488,57 +1743,184 @@ namespace pP::colony {
         Array<WorkshopIntent> intents{};
         refreshDocuments(state, view);
 
-        ImGui::SetNextWindowPos(ImVec2{12.0f, 34.0f}, ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(ImVec2{1100.0f, 820.0f}, ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSizeConstraints(
-            ImVec2{900.0f, 520.0f}, ImVec2{(std::numeric_limits<float>::max)(), (std::numeric_limits<float>::max)()});
-        if (not ImGui::Begin("Worldgen Workshop")) {
+        game::ui::prepareUtilityWindow(1100.0f, 820.0f, false);
+        ImGui::SetNextWindowBgAlpha(ui::theme::kFloatingPanelAlpha);
+        ui::WindowTitleFont title_font{};
+        const bool visible = ImGui::Begin("Authoring Workspace###Worldgen Workshop", nullptr, ImGuiWindowFlags_MenuBar);
+        title_font.close();
+        if (not visible) {
             ImGui::End();
             return intents;
         }
 
+        workshopMenuBar(state, view, intents);
+        statusLine(view);
         toolbar(state, view, intents);
+        std::optional<asset::AssetKey> activated{};
+        const auto navigation = [&]() {
+            const hal::ProfileScope scope{"Workshop.UI.AssetBrowser"};
 
-        if (ImGui::BeginTable("Workshop layout", 2, ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInnerV)) {
-            ImGui::TableSetupColumn("Browser", ImGuiTableColumnFlags_WidthFixed, 235.0f);
-            ImGui::TableSetupColumn("Inspector", ImGuiTableColumnFlags_WidthStretch);
-            ImGui::TableNextRow();
-            ImGui::TableSetColumnIndex(0);
-            ImGui::BeginChild("Content browser", ImVec2{0.0f, 0.0f});
-            browser(state, view);
-            ImGui::EndChild();
-            ImGui::TableSetColumnIndex(1);
-            ImGui::BeginChild("Definition inspector", ImVec2{0.0f, 0.0f});
-            ImGui::Text(
-                "%s / %s", state.m_selected_category.c_str(),
-                state.m_selected_key.empty() ? "Choose a definition" : state.m_selected_key.c_str());
+            if (ImGui::Selectable("Empty terrain (reserved vacuum)", state.m_selected_key == "vacuum")) {
+                selectDefinition(state, "materials", "vacuum");
+            }
+
+            activated = drawAssetBrowserPanel(
+                state.m_browser, {.m_index = view.m_index, .m_index_revision = view.m_revision});
+        };
+
+        const auto editor = [&]() {
+            ImGui::TextUnformatted(state.m_selected_key.empty() ? "Choose an asset" : state.m_selected_key.c_str());
             refreshPropertyTree(state);
-            if (ImGui::BeginTabBar("Inspector tabs")) {
-                const auto property_flags = state.m_show_properties ? ImGuiTabItemFlags_SetSelected
-                                                                    : ImGuiTabItemFlags_None;
-                if (ImGui::BeginTabItem("Properties", nullptr, property_flags)) {
-                    state.m_show_properties = false;
-                    inspector(state, view, intents);
+
+            const float secondary_height = std::min(
+                ImGui::GetContentRegionAvail().y * 0.35f, ImGui::GetFontSize() * 17.0f);
+            ImGui::BeginChild("Properties", ImVec2{0.0f, -secondary_height}, ImGuiChildFlags_Borders);
+            if (state.m_selected_asset and state.m_selected_category.empty()) {
+                const auto assets = view.m_index ? view.m_index->assets() : std::span<const asset::IndexedAsset>{};
+                const auto entry = std::ranges::find(assets, *state.m_selected_asset, &asset::IndexedAsset::m_key);
+                if (entry != assets.end()) {
+                    ImGui::TextWrapped("Kind: %s", entry->m_kind.c_str());
+                    ImGui::TextWrapped("Descriptor: %s", entry->m_descriptor.string().c_str());
+                    ImGui::TextWrapped("Pack: %s", entry->m_name.m_pack.c_str());
+                }
+
+                ImGui::TextWrapped("Read-only asset: this kind has no property editor.");
+            } else {
+                inspector(state, view, intents);
+            }
+
+            ImGui::EndChild();
+            if (ImGui::BeginTabBar("Workspace details")) {
+                if (ImGui::BeginTabItem("Preview")) {
+                    ImGui::BeginChild("Preview report");
+                    previewReport(state, view, intents);
+                    ImGui::EndChild();
                     ImGui::EndTabItem();
                 }
 
-                if (ImGui::BeginTabItem("Preview")) {
-                    previewControls(state, view, intents);
-                    ImGui::EndTabItem();
-                }
-                const auto diagnostic_flags = state.m_show_diagnostics ? ImGuiTabItemFlags_SetSelected
-                                                                       : ImGuiTabItemFlags_None;
-                if (ImGui::BeginTabItem("Diagnostics", nullptr, diagnostic_flags)) {
+                const auto flags = state.m_show_diagnostics ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
+                if (ImGui::BeginTabItem("Diagnostics", nullptr, flags)) {
                     state.m_show_diagnostics = false;
+                    ImGui::BeginChild("Workspace diagnostics");
                     diagnosticsPanel(state, view);
+                    ImGui::EndChild();
                     ImGui::EndTabItem();
                 }
 
                 ImGui::EndTabBar();
             }
+        };
 
+        ImGui::BeginDisabled(view.m_starting);
+        const bool narrow = ImGui::GetContentRegionAvail().x < ImGui::GetFontSize() * 48.0f;
+        if (narrow and ImGui::BeginTabBar("Workspace panes")) {
+            if (ImGui::BeginTabItem("Assets")) {
+                ImGui::BeginChild("Asset navigation");
+                navigation();
+                ImGui::EndChild();
+                ImGui::EndTabItem();
+            }
+
+            if (ImGui::BeginTabItem(
+                    "Editor", nullptr,
+                    state.m_show_properties ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None)) {
+                state.m_show_properties = false;
+                editor();
+                ImGui::EndTabItem();
+            }
+
+            if (ImGui::BeginTabItem("Preview")) {
+                ImGui::BeginChild("Preview settings");
+                previewSettings(state, view, intents);
+                ImGui::EndChild();
+                ImGui::EndTabItem();
+            }
+
+            ImGui::EndTabBar();
+        } else if (not narrow) {
+            const float strip_height = std::clamp(
+                ImGui::GetContentRegionAvail().y * 0.28f, ImGui::GetFontSize() * 8.0f, ImGui::GetFontSize() * 20.0f);
+            const float top_height = std::max(
+                ImGui::GetContentRegionAvail().y - strip_height - ImGui::GetStyle().ItemSpacing.y,
+                ImGui::GetFontSize() * 6.0f);
+            const float settings_width = std::min(
+                ImGui::GetContentRegionAvail().x * 0.32f, ImGui::GetFontSize() * 26.0f);
+            state.m_show_properties = false;
+
+            ImGui::SetNextWindowSizeConstraints(
+                ImVec2{ImGui::GetFontSize() * 16.0f, 0.0f},
+                ImVec2{ImGui::GetContentRegionAvail().x, (std::numeric_limits<float>::max)()});
+            ImGui::BeginChild(
+                "Preview settings", ImVec2{settings_width, top_height},
+                ImGuiChildFlags_Borders | ImGuiChildFlags_ResizeX);
+            previewSettings(state, view, intents);
             ImGui::EndChild();
-            ImGui::EndTable();
+
+            ImGui::SameLine();
+            ImGui::BeginChild("Editor", ImVec2{0.0f, top_height}, ImGuiChildFlags_Borders);
+            editor();
+            ImGui::EndChild();
+
+            ImGui::BeginChild("Asset strip", ImVec2{0.0f, strip_height}, ImGuiChildFlags_Borders);
+            navigation();
+            ImGui::EndChild();
+        }
+
+        ImGui::EndDisabled();
+
+        const bool operation_requested = std::ranges::any_of(intents, [](const auto &intent) {
+            return intent.m_kind != EWorkshopIntent::edit_definition and
+                   intent.m_kind != EWorkshopIntent::clear_property;
+        });
+        if (activated or state.m_selection_pending or operation_requested) {
+            flushPendingEdits(state, intents);
+        }
+
+        // Selection is adopted only after the old inspector has processed deactivation.
+        // The host applies these owning edit intents before starting any transition.
+        if (activated and view.m_index) {
+            const auto assets = view.m_index->assets();
+            const auto entry = std::ranges::find(assets, *activated, &asset::IndexedAsset::m_key);
+            if (entry != assets.end()) {
+                const auto bindings = contentDocumentBindings();
+                const auto binding = std::ranges::find_if(bindings, [&](const auto &candidate) {
+                    return contentAssetKind(candidate.m_document) == entry->m_kind;
+                });
+                selectDefinition(
+                    state, binding == bindings.end() ? std::string_view{} : binding->m_collection,
+                    entry->m_name.string());
+                state.m_selected_asset = entry->m_key;
+                state.m_browser.m_active_key = entry->m_key;
+            }
+        }
+
+        if (state.m_selection_pending) {
+            state.m_selected_category = std::move(state.m_pending_category);
+            state.m_selected_key = std::move(state.m_pending_key);
+            state.m_focus_property = std::move(state.m_pending_property);
+            state.m_edit_key.clear();
+            state.m_numeric_edit_key.clear();
+            state.m_selection_pending = false;
+
+            if (view.m_index) {
+                const auto assets = view.m_index->assets();
+                const auto found = std::ranges::find_if(assets, [&](const auto &entry) {
+                    if (entry.m_name.string() != state.m_selected_key) {
+                        return false;
+                    }
+
+                    if (state.m_selected_category.empty()) {
+                        return state.m_selected_asset == entry.m_key;
+                    }
+
+                    const auto bindings = contentDocumentBindings();
+                    const auto binding = std::ranges::find(
+                        bindings, state.m_selected_category, &ContentDocumentBinding::m_collection);
+                    return binding != bindings.end() and contentAssetKind(binding->m_document) == entry.m_kind;
+                });
+                state.m_selected_asset = found == assets.end() ? std::nullopt : std::optional{found->m_key};
+                state.m_browser.m_active_key = state.m_selected_asset;
+            }
         }
 
         ImGui::End();

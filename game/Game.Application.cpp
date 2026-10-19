@@ -12,7 +12,6 @@ import engine.math;
 import engine.mesh;
 import engine.rhi;
 import engine.sim;
-import imgui;
 import std;
 
 import game.colony.buildings;
@@ -27,10 +26,13 @@ import game.colony.worldgen;
 import game.colony.sim_packet;
 import game.colony.translator;
 import game.colony.panel;
+import game.colony.asset_browser_panel;
 import game.colony.pathfinding;
 import game.colony.smoke;
 import game.config;
 import game.display;
+import game.ui;
+import game.ui.model;
 import game.colony.agents;
 
 namespace demo {
@@ -323,7 +325,17 @@ namespace demo {
         std::unique_ptr<colony::WorldJob> m_world_job{};
         std::unique_ptr<colony::WorldgenWorkshop> m_workshop{};
         colony::WorldgenPanelState m_workshop_ui{};
+        game::ui::ChromeBounds m_ui_chrome{};
+        std::shared_ptr<const colony::AuthoredGameSource> m_authored_game_source{}, m_pending_authored_game_source{};
+        colony::ContentSourceEpochToken m_workshop_load_prior_epoch{};
+        enum class WorkshopGamePhase : u8 {
+            none,
+            draining_preview,
+            generating
+        };
+        WorkshopGamePhase m_workshop_game_phase{};
         std::filesystem::path m_workshop_root{};
+        std::filesystem::path m_workshop_pending_load_root{};
         std::unique_ptr<GridPass::GridStagedFrame> m_workshop_restore{}, m_workshop_stage{}, m_workshop_queued{};
         std::shared_ptr<const colony::WorldgenPreviewResult> m_workshop_staged_preview{}, m_workshop_queued_preview{},
             m_workshop_displayed_preview{};
@@ -341,13 +353,14 @@ namespace demo {
         bool m_workshop_exit_authorized{};
         bool m_workshop_startup{}, m_workshop_pending{}, m_workshop_open{}, m_workshop_capturing{},
             m_workshop_closing{}, m_workshop_restoring{};
-        bool m_workshop_pause{}, m_workshop_focused{}, m_workshop_displayed{};
+        bool m_workshop_pause{}, m_workshop_focused{}, m_workshop_displayed{}, m_workshop_load_pending{};
         EGridDiagnosticMode m_workshop_displayed_mode{EGridDiagnosticMode::textured};
         float3 m_workshop_game_eye{zero_v};
         float m_workshop_game_scale{0.5f};
         std::optional<float3> m_workshop_game_follow{};
         u64 m_workshop_epoch{1ull << 63u};
         std::string m_workshop_error{};
+        std::string m_workshop_loaded_root_text{};
         config::Diagnostics m_workshop_edit_diagnostics{32u};
         u64 m_workshop_edit_diagnostics_revision{};
         std::filesystem::path m_workshop_edit_diagnostics_root{};
@@ -490,6 +503,8 @@ namespace demo {
         // the Performance section, and the client extent last pushed to the
         // camera controller (Slice 2 resize-deviation fix).
         colony::ColonyUiState m_ui_state{};
+        colony::ColonyPresentation m_ui_presentation{};
+        Array<game::ui::FeedbackRect> m_ui_feedback{};
         colony::ColonyHover m_hover{};
         // Phase 5 display session, all game-owned. The startup baseline is
         // the "Back to startup" reset target (captured once from the
@@ -568,7 +583,6 @@ namespace demo {
         float2 m_viewport_extent{zero_v};
         /// Confirmed regeneration waiting for the next update() head (see
         /// the regenerate case in dispatchIntent_ for why it defers).
-        bool m_regen_pending{false};
         std::optional<EGridDiagnosticMode> m_preview_pending{};
         bool m_preview_job{};
         EGridDiagnosticMode m_committed_preview_mode{EGridDiagnosticMode::textured};
@@ -650,8 +664,7 @@ namespace demo {
                         m_pan_controller->focusOn(
                             float2{
                                 static_cast<float>(seam) / static_cast<float>(m_driver->cellsPerMetre()),
-                                static_cast<float>(target.m_y) /
-                                    static_cast<float>(m_driver->cellsPerMetre())});
+                                static_cast<float>(target.m_y) / static_cast<float>(m_driver->cellsPerMetre())});
                         PPR_RETURN_ERROR_ON_FAIL(Demo, m_driver->requestDig(target, 2u, 1u));
                         beginAcceptancePhase_(AcceptancePhase::seam);
                         return {};
@@ -843,33 +856,31 @@ namespace demo {
             return {};
         }
 
-        [[nodiscard]] std::error_code regenerate_() {
-            // Entropy is chosen at the application boundary, never inside the simulation.
-            try {
-                std::random_device entropy{};
-                const u64 seed = std::mt19937_64{entropy()}();
-                PPR_LOG(
-                    Demo, info, "new game requested",
-                    {
-                        {"seed", seed},
-                    });
-                return requestWorld_(seed);
-            } catch (const std::system_error &error) {
-                return error.code() ? error.code() : std::make_error_code(std::errc::state_not_recoverable);
-            }
+        colony::WorldJob::Prepare authoredGamePrepare_(std::shared_ptr<const colony::AuthoredGameSource> source) {
+            const ITimerClock *const clock = m_observation_clock;
+            return [source = std::move(source), clock](
+                       const colony::ColonyDriverDesc &request, const sim::GenerationExecution &execution,
+                       config::Diagnostics &diagnostics) {
+                return colony::prepareAuthoredGame(*source, request, *clock, execution, diagnostics);
+            };
         }
 
-        [[nodiscard]] std::error_code requestWorld_(const u64 seed) {
+        [[nodiscard]] std::error_code requestWorld_(const u64 seed, colony::WorldJob::Prepare prepare = {}) {
             PPR_RETURN_ERROR_ON_FAIL(
                 Demo, not m_world_command and not m_world_result and not m_candidate_cancel_needed
                           ? std::error_code{}
                           : std::make_error_code(std::errc::device_or_resource_busy));
+            if (not prepare and m_authored_game_source) {
+                prepare = authoredGamePrepare_(m_authored_game_source);
+            }
+
             PPR_RETURN_ERROR_ON_FAIL(
                 Demo, m_world_job->request(
                           colony::ColonyDriverDesc{
                               .m_seed = seed,
                               .m_agent_count = m_agent_count,
-                              .m_world_generation = m_driver ? m_driver->worldGeneration() + 1u : 1u}));
+                              .m_world_generation = m_driver ? m_driver->worldGeneration() + 1u : 1u},
+                          std::move(prepare)));
             m_requested_seed = seed;
             m_candidate_generation = m_driver ? m_driver->worldGeneration() + 1u : 1u;
             m_candidate_fingerprint = 0u;
@@ -1000,7 +1011,6 @@ namespace demo {
             if (m_close_requested.load(std::memory_order_acquire) and
                 not activationPending_() and
                 not m_candidate_activated) {
-                m_regen_pending = false;
                 m_preview_pending.reset();
                 m_world_job->cancel();
             }
@@ -1087,7 +1097,6 @@ namespace demo {
                     m_ui_state.m_tool = colony::EColonyTool::inspect;
                     m_ui_state.m_pinned.reset();
                     m_ui_state.m_build_menu_open = false;
-                    m_ui_state.m_regen_confirm_open = false;
                     m_ui_state.m_notice = {};
                     m_ui_state.m_preview_mode = EGridDiagnosticMode::textured;
                     m_committed_preview_mode = EGridDiagnosticMode::textured;
@@ -1172,103 +1181,32 @@ namespace demo {
         }
 
         void drawWorldModal_() {
-            if (not m_world_modal and not m_close_requested.load(std::memory_order_acquire)) {
-                if (ImGui::BeginPopupModal("Generating terrain", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-                    ImGui::CloseCurrentPopup();
-                    ImGui::EndPopup();
-                }
-                return;
-            }
-            ImGui::OpenPopup("Generating terrain");
-            const ImGuiViewport *const viewport = ImGui::GetMainViewport();
-            const ImVec2 center{viewport->Pos.x + viewport->Size.x * 0.5f, viewport->Pos.y + viewport->Size.y * 0.5f};
-            ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2{0.5f, 0.5f});
-            if (ImGui::BeginPopupModal("Generating terrain", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-                const auto view = m_world_view;
-                const bool closing = m_close_requested.load(std::memory_order_acquire);
-                const bool terminal = not m_world_command and
-                                      not m_world_result and
-                                      not m_candidate_cancel_needed and
-                                      (view.m_state == colony::EWorldJobState::failed or
-                                          view.m_state == colony::EWorldJobState::cancelled);
-                const char *label = "Queued";
-                switch (view.m_stage) {
-                    case colony::EWorldJobStage::queued: break;
-                    case colony::EWorldJobStage::layout: label = "Layout"; break;
-                    case colony::EWorldJobStage::terrain: label = "Terrain composition"; break;
-                    case colony::EWorldJobStage::caves: label = "Caves and features"; break;
-                    case colony::EWorldJobStage::initial_matter: label = "Initial matter"; break;
-                    case colony::EWorldJobStage::validation: label = "Final validation"; break;
-                    case colony::EWorldJobStage::physics: label = "Preparing physics"; break;
-                    case colony::EWorldJobStage::publishing: label = "Publishing"; break;
-                    case colony::EWorldJobStage::retiring: label = "Retiring previous session"; break;
-                    case colony::EWorldJobStage::capturing: label = "Preparing diagnostic preview"; break;
-                }
-                if (closing) {
-                    label = "Closing: draining world work";
-                } else if (view.m_state == colony::EWorldJobState::cancelling) {
-                    label = "Cancelling...";
-                } else if (terminal) {
-                    label = "World unavailable";
-                } else if (m_world_published) {
-                    label = "Preparing graphics: waiting for world presentation";
-                }
-                if (not closing and view.m_state == colony::EWorldJobState::prepared and not m_world_published) {
-                    label = activationPending_() ? "Activating new session"
-                            : m_candidate_ready  ? "Terrain ready"
-                                                 : "Preparing candidate graphics";
-                }
-                ImGui::TextUnformatted(label);
-                // Report only the current measurable unit of work. Staged
-                // chunks do not measure GPU readiness or final presentation.
-                if (not closing and
-                    view.m_state == colony::EWorldJobState::prepared and
-                    not m_world_published and
-                    m_candidate_next_chunk < sim::kChunkCount) {
-                    ImGui::ProgressBar(
-                        static_cast<float>(m_candidate_next_chunk) / static_cast<float>(sim::kChunkCount),
-                        ImVec2{380.0f, 0.0f}, "Terrain batches staged");
-                    ImGui::Text("%zu / %u chunks staged", m_candidate_next_chunk, sim::kChunkCount);
-                } else if (not closing and
-                           view.m_state == colony::EWorldJobState::generating and
-                           view.m_total != 0u and
-                           not m_world_published) {
-                    ImGui::ProgressBar(
-                        static_cast<float>(view.m_completed) / static_cast<float>(view.m_total), ImVec2{380.0f, 0.0f},
-                        "Current-stage progress");
-                    ImGui::Text("%u / %u chunks", view.m_completed, view.m_total);
-                } else {
-                    // ImGui animates negative fractions. Use the injected
-                    // application clock, without inventing a completion ratio.
-                    const double seconds = time::seconds(m_observation_clock->now() - TimePoint{});
-                    const float fraction = terminal ? 0.0f : -1.0f - static_cast<float>(std::fmod(seconds, 1.0));
-                    ImGui::ProgressBar(
-                        fraction, ImVec2{380.0f, 0.0f}, terminal ? "Preparation stopped" : "Working (indeterminate)");
-                }
-                if (view.m_error) {
-                    ImGui::TextWrapped("%s", view.m_error.message().c_str());
-                    const auto diagnostic = m_world_job->diagnosticText();
-                    if (not diagnostic.empty()) {
-                        ImGui::PushTextWrapPos(380.0f);
-                        ImGui::TextUnformatted(diagnostic.data(), diagnostic.data() + diagnostic.size());
-                        ImGui::PopTextWrapPos();
-                    }
-                }
-                if (terminal and not closing) {
-                    if (ImGui::Button("Retry")) {
-                        retainInputError_(requestWorld_(m_requested_seed));
-                    }
-                    ImGui::SameLine();
-                    if (ImGui::Button("Quit")) {
-                        requestExit();
-                    }
-                } else if (not closing and
-                           not m_world_published and
-                           not activationPending_() and
-                           ImGui::Button("Cancel")) {
-                    m_world_job->cancel();
-                }
-                ImGui::EndPopup();
+            const bool closing = m_close_requested.load(std::memory_order_acquire);
+            const bool open = m_world_modal or closing;
+            const bool terminal = not m_world_command and
+                                  not m_world_result and
+                                  not m_candidate_cancel_needed and
+                                  (m_world_view.m_state == colony::EWorldJobState::failed or
+                                      m_world_view.m_state == colony::EWorldJobState::cancelled);
+            const game::ui::WorldProgressView view{
+                .m_job = m_world_view,
+                .m_diagnostic = m_world_view.m_error and m_world_job ? m_world_job->diagnosticText()
+                                                                     : std::string_view{},
+                .m_animation_seconds = open ? time::seconds(m_observation_clock->now() - TimePoint{}) : 0.0,
+                .m_staged_chunks = static_cast<u32>(m_candidate_next_chunk),
+                .m_total_chunks = sim::kChunkCount,
+                .m_open = open,
+                .m_closing = closing,
+                .m_terminal = terminal,
+                .m_published = m_world_published,
+                .m_activation_pending = activationPending_(),
+                .m_candidate_ready = m_candidate_ready};
+
+            switch (game::ui::drawWorldProgress(view)) {
+                case game::ui::EWorldAction::retry: retainInputError_(requestWorld_(m_requested_seed)); break;
+                case game::ui::EWorldAction::quit: requestExit(); break;
+                case game::ui::EWorldAction::cancel: m_world_job->cancel(); break;
+                case game::ui::EWorldAction::none: break;
             }
         }
 
@@ -1697,7 +1635,12 @@ namespace demo {
         }
 
         [[nodiscard]] std::optional<sim::GlobalCellPos> pickCell_(const float2 cursor_client) const noexcept {
-            return screenMap_().pickCell(cursor_client);
+            const auto map = screenMap_();
+            if (not m_workshop_open and not game::ui::isWorldPoint(cursor_client, map.m_extent, m_ui_chrome)) {
+                return std::nullopt;
+            }
+
+            return map.pickCell(cursor_client);
         }
 
         [[nodiscard]] float2 cellCentreWorld_(const sim::GlobalCellPos cell) const noexcept {
@@ -1719,7 +1662,7 @@ namespace demo {
                                 not m_driver->paused() and
                                 not m_world_modal and
                                 m_window_focused and
-                                not ImGui::GetIO().WantCaptureKeyboard;
+                                not game::ui::frontendInput().m_keyboard_captured;
             if (m_control_enabled and not was_enabled and m_pan_controller) {
                 // A key released after this ownership handoff is consumed here;
                 // retire camera rates established while gameplay was paused.
@@ -1858,7 +1801,7 @@ namespace demo {
                     .m_key = InputKey::f3,
                     .m_description = "ColonyPerformance",
                     .m_label = "F3",
-                    .m_tip = "Switch the panel between Colony and Performance"},
+                    .m_tip = "Show or hide Performance independently of Colony"},
             }};
 
             for (std::size_t index = 0u; index < bindings.size(); ++index) {
@@ -1944,6 +1887,16 @@ namespace demo {
             }
         }
 
+        [[nodiscard]] bool allowWorkshopEntry_() {
+            if (not displayController().pending() and
+                not game::displayTrialUnresolved(m_ui_state.m_display.m_confirm)) {
+                return true;
+            }
+
+            postNotice_("Resolve the display change before opening New Game.", std::errc::operation_in_progress);
+            return false;
+        }
+
         /// The single intent dispatch: every keyboard shortcut (the binding
         /// table above) and every panel button, menu item, and section tab
         /// lands here, so button/shortcut parity holds by construction. Not
@@ -1956,7 +1909,11 @@ namespace demo {
             }
 
             switch (intent.m_kind) {
-                case colony::EColonyIntent::open_workshop: m_workshop_pending = true; break;
+                case colony::EColonyIntent::open_workshop:
+                    if (allowWorkshopEntry_()) {
+                        m_workshop_pending = true;
+                    }
+                    break;
                 case colony::EColonyIntent::pause_toggle:
                     clearControlInput_();
                     m_driver->togglePaused();
@@ -1983,14 +1940,9 @@ namespace demo {
                     break;
 
                 case colony::EColonyIntent::regenerate:
-                    if (not intent.m_confirmed) {
-                        // R and "New world" only ask; the modal's Confirm
-                        // re-dispatches the same intent with m_confirmed.
-                        m_ui_state.m_regen_confirm_open = true;
-                        break;
+                    if (allowWorkshopEntry_()) {
+                        m_workshop_pending = true;
                     }
-                    // Regenerate before the next update stages the new world.
-                    m_regen_pending = true;
                     break;
 
                 case colony::EColonyIntent::select_preview:
@@ -2060,10 +2012,14 @@ namespace demo {
                     break;
 
                 case colony::EColonyIntent::toggle_performance:
-                    m_ui_state.m_tab = m_ui_state.m_tab == colony::EColonyPanelTab::performance
-                                           ? colony::EColonyPanelTab::colony
-                                           : colony::EColonyPanelTab::performance;
+                    m_ui_state.m_performance_open = not m_ui_state.m_performance_open;
                     break;
+
+                case colony::EColonyIntent::toggle_colony:
+                    m_ui_state.m_colony_open = not m_ui_state.m_colony_open;
+                    break;
+
+                case colony::EColonyIntent::quit: requestExit({}); break;
 
                 case colony::EColonyIntent::help: m_ui_state.m_help_open = not m_ui_state.m_help_open; break;
 
@@ -2076,12 +2032,6 @@ namespace demo {
                 case colony::EColonyIntent::toggle_pin: togglePin_(); break;
 
                 case colony::EColonyIntent::dismiss_notice: m_ui_state.m_notice = {}; break;
-
-                case colony::EColonyIntent::select_tab:
-                    if (intent.m_arg <= static_cast<u32>(colony::EColonyPanelTab::performance)) {
-                        m_ui_state.m_tab = static_cast<colony::EColonyPanelTab>(intent.m_arg);
-                    }
-                    break;
 
                 case colony::EColonyIntent::toggle_display:
                     // The window's draft is uncommitted scratch: closing
@@ -3203,7 +3153,42 @@ namespace demo {
 
             // One read-only view assembled from live state; the panel never
             // touches simulation state and returns at most one intent.
+            const std::optional<sim::GlobalCellPos> hovered_cell =
+                m_hover.m_world ? std::optional<sim::GlobalCellPos>{m_hover.m_target} : std::nullopt;
+            std::optional<sim::GlobalCellPos> inspected_cell = m_ui_state.m_pinned;
+            if (not inspected_cell and not m_selected_agent and m_ui_state.m_tool == colony::EColonyTool::inspect) {
+                inspected_cell = hovered_cell;
+            }
+
+            game::ui::captureColonyPresentation(m_ui_presentation, *m_driver, hovered_cell, inspected_cell);
+
+            // Screen anchor for the pinned Inspector: the same camera snapshot
+            // the world rendered with, so the read-out sits on the pinned cell
+            // across pan/zoom and disappears when that cell leaves the frame.
+            // The cell centre uses the mapping's own scale (the workshop
+            // preview maps to fine cells), so the anchor matches the marker
+            // ring drawn for that same cell.
+            const auto pinned_screen = [&]() -> std::optional<colony::ColonyScreenPoint> {
+                if (not m_ui_state.m_pinned) {
+                    return std::nullopt;
+                }
+
+                const ScreenMap map = screenMap_();
+                const float metres = 1.0f / static_cast<float>(map.m_cells_per_metre);
+                const float2 centre{
+                    (static_cast<float>(m_ui_state.m_pinned->m_x) + 0.5f) * metres,
+                    (static_cast<float>(m_ui_state.m_pinned->m_y) + 0.5f) * metres};
+                const std::optional<float2> client = map.worldToClient(centre);
+                if (not client.has_value()) {
+                    return std::nullopt;
+                }
+
+                return colony::ColonyScreenPoint{.m_x = client->x, .m_y = client->y};
+            }();
+
             const colony::ColonyUiView view{
+                .m_colony = &m_ui_presentation,
+                .m_performance = &m_performance_widget,
                 .m_counts =
                     colony::ColonyPanelCounts{
                         .m_visible_chunks = visible,
@@ -3270,6 +3255,7 @@ namespace demo {
                 .m_hovered_agent = m_hovered_agent,
                 .m_following = following,
                 .m_agent_needs = m_agent_needs_rows,
+                .m_pinned_screen = pinned_screen,
             };
 
             // Display snapshot: the copied controller view (§5.1 requested
@@ -3299,7 +3285,13 @@ namespace demo {
             };
 
             const colony::ColonyUiFrame frame = colony::drawColonyUi(
-                *m_driver, view, display_snapshot, m_shortcut_rows, m_ui_state);
+                view, display_snapshot, m_shortcut_rows, m_ui_state);
+            m_ui_chrome = {
+                .m_top = frame.m_chrome_top,
+                .m_bottom = frame.m_chrome_bottom,
+                .m_right = frame.m_chrome_right,
+                .m_left = frame.m_chrome_left};
+
             if (frame.m_intent.has_value()) {
                 dispatchIntent_(*frame.m_intent);
             }
@@ -3318,13 +3310,9 @@ namespace demo {
                 }
             }
             // Screen-space feedback (rings/outlines/preview) draws on the
-            // non-consuming foreground list after chrome, clipped to the
-            // world region; input routing is untouched.
+            // non-consuming background list behind chrome, clipped to the
+            // world region; opaque native overlays cover it.
             drawFeedbackOverlay_(frame);
-            // Bounded lane readout in the same overlay (total + main +
-            // render (lane)); the Performance tab Split line reads the same
-            // worker gauge.
-            m_performance_widget.draw(frame.m_chrome_bottom);
             return {};
         }
 
@@ -3356,6 +3344,7 @@ namespace demo {
             m_workshop_root = m_worldgen_roots.empty()
                                   ? hal::process::currentExecutablePath().parent_path() / "worldgen" / "default"
                                   : m_worldgen_roots.front();
+            m_workshop_loaded_root_text = m_workshop_root.lexically_normal().string();
             std::snprintf(
                 m_workshop_ui.m_root.data(), m_workshop_ui.m_root.size(), "%s", m_workshop_root.string().c_str());
             std::snprintf(
@@ -3451,10 +3440,19 @@ namespace demo {
                           ? std::error_code{}
                           : std::make_error_code(std::errc::operation_not_permitted));
             if (m_workshop_transition == WorkshopTransition::open) {
+                const std::filesystem::path requested_root =
+                    m_workshop_transition_root.empty()
+                        ? (m_workshop_transition_roots.empty() ? std::filesystem::path{m_workshop_ui.m_root.data()}
+                              : m_workshop_loaded_root_text.empty()
+                                  ? m_workshop_transition_roots.front()
+                                  : std::filesystem::path{m_workshop_loaded_root_text})
+                        : m_workshop_transition_root;
                 const auto error = m_workshop_transition_roots.empty()
                                        ? m_workshop->open(m_workshop_transition_root, m_workshop_transition_revision)
                                        : m_workshop->open(m_workshop_transition_roots, m_workshop_transition_revision);
                 PPR_RETURN_ERROR_ON_FAIL(Demo, error);
+
+                beginWorkshopSourceLoad_(requested_root);
             } else if (m_workshop_transition == WorkshopTransition::exit) {
                 m_workshop_exit_authorized = true;
                 m_close_requested.store(true, std::memory_order_release);
@@ -3463,6 +3461,34 @@ namespace demo {
             m_workshop_transition = WorkshopTransition::none;
             m_workshop_transition_roots.clear();
             return {};
+        }
+
+        void beginWorkshopSourceLoad_(std::filesystem::path requested_root) {
+            const auto *const session = m_workshop->session();
+            m_workshop_load_prior_epoch = session ? session->sourceEpoch() : colony::ContentSourceEpochToken{};
+            m_workshop_pending_load_root = requested_root.lexically_normal();
+            m_workshop_load_pending = true;
+        }
+
+        void settleWorkshopSourceLoad_() {
+            if (not m_workshop_load_pending or m_workshop->busy()) {
+                return;
+            }
+
+            const auto *const session = m_workshop->session();
+            if (session and session->sourceEpoch() != m_workshop_load_prior_epoch) {
+                m_workshop_loaded_root_text = m_workshop_pending_load_root.string();
+                const std::filesystem::path typed_root{m_workshop_ui.m_root.data()};
+                if (typed_root.lexically_normal() == m_workshop_pending_load_root) {
+                    std::snprintf(
+                        m_workshop_ui.m_root.data(), m_workshop_ui.m_root.size(), "%s",
+                        m_workshop_loaded_root_text.c_str());
+                }
+            }
+
+            m_workshop_pending_load_root.clear();
+            m_workshop_load_prior_epoch.reset();
+            m_workshop_load_pending = false;
         }
 
         [[nodiscard]] std::error_code requestWorkshopTransition_(
@@ -3489,6 +3515,11 @@ namespace demo {
         }
 
         [[nodiscard]] std::error_code openWorkshop_() {
+            if (not allowWorkshopEntry_()) {
+                m_workshop_pending = false;
+                return {};
+            }
+
             PPR_RETURN_ERROR_ON_FAIL(
                 Demo, not m_world_job->busy() and not m_world_command
                           ? std::error_code{}
@@ -3498,7 +3529,6 @@ namespace demo {
             m_tool.m_accepted_click.reset();
             m_tool.m_drag_queue.clear();
             m_preview_pending.reset();
-            m_regen_pending = false;
             m_workshop_pause = m_driver and m_driver->paused();
             if (m_pan_controller) {
                 m_workshop_game_eye = getMainCamera()->getSnapshot().m_origin;
@@ -3526,10 +3556,14 @@ namespace demo {
             m_workshop_displayed = false;
             m_world_modal = true;
             if (not m_workshop->session() and not m_workshop_root.empty()) {
+                const std::filesystem::path requested_root = m_worldgen_roots.empty() ? m_workshop_root
+                                                                                      : m_worldgen_roots.front();
                 const auto error = m_worldgen_roots.empty() ? m_workshop->open(m_workshop_root)
                                                             : m_workshop->open(m_worldgen_roots);
                 if (error) {
                     m_workshop_error = error.message();
+                } else {
+                    beginWorkshopSourceLoad_(requested_root);
                 }
             }
             return {};
@@ -3571,18 +3605,88 @@ namespace demo {
             return {};
         }
 
+        [[nodiscard]] std::error_code requestWorkshopGame_(config::Diagnostics &diagnostics) {
+            const auto *const session = m_workshop->session();
+            const std::filesystem::path typed_root{m_workshop_ui.m_root.data()};
+            const bool loaded_source_selected = not m_workshop_loaded_root_text.empty() and
+                                                typed_root.lexically_normal().string() == m_workshop_loaded_root_text;
+            PPR_RETURN_ERROR_ON_FAIL(
+                Demo, session and
+                              loaded_source_selected and
+                              not m_workshop_capturing and
+                              not m_workshop->busy() and
+                              m_workshop_game_phase == WorkshopGamePhase::none and
+                              session->validatedRevision() == session->revision() and
+                              session->validatedCatalog() and
+                              not m_workshop->draftInvalid()
+                          ? std::error_code{}
+                          : std::make_error_code(std::errc::operation_not_permitted));
+
+            const std::string profile{m_workshop_ui.m_profile.data()};
+            const auto world = colony::resolveContentWorld(*session->validatedCatalog(), profile, diagnostics);
+            PPR_RETURN_ERROR_ON_FAIL(Demo, world);
+
+            const auto packs = session->sourceIndex().packs();
+            auto qualified = asset::qualifyName(profile, packs.front().m_manifest.m_value.m_pack_id);
+            PPR_RETURN_ERROR_ON_FAIL(Demo, qualified);
+
+            m_pending_authored_game_source = std::make_shared<const colony::AuthoredGameSource>(
+                colony::AuthoredGameSource{session->draftSnapshot(), qualified->string()});
+            m_workshop->configureLivePreview(false, {}, m_workshop_ui.m_mode);
+            m_workshop->cancel();
+            m_workshop_queued.reset();
+            m_workshop_queued_preview.reset();
+            m_workshop_game_phase = WorkshopGamePhase::draining_preview;
+            return {};
+        }
+
         [[nodiscard]] std::error_code advanceWorkshop_() {
+            if (m_workshop_game_phase == WorkshopGamePhase::generating) {
+                PPR_RETURN_ERROR_ON_FAIL(Demo, advanceWorldJob_());
+                if (m_driver and m_world_published) {
+                    m_authored_game_source = std::move(m_pending_authored_game_source);
+                    m_workshop_game_phase = WorkshopGamePhase::none;
+                    m_workshop_open = false;
+                    m_workshop_stage.reset();
+                    m_workshop_queued.reset();
+                    m_workshop_displayed_preview.reset();
+                    m_workshop_restore.reset();
+                    m_workshop_displayed = false;
+                } else if (not m_world_job->busy() and not m_world_command and not m_candidate_cancel_needed) {
+                    const auto job = m_world_job->view();
+                    if (job.m_state == colony::EWorldJobState::failed or
+                        job.m_state == colony::EWorldJobState::cancelled) {
+                        m_workshop_error = job.m_error ? job.m_error.message() +
+                                                             "\n" +
+                                                             std::string{m_world_job->diagnosticText()}
+                                                       : "Game preparation cancelled; authoring draft retained.";
+                        m_pending_authored_game_source.reset();
+                        m_workshop_game_phase = WorkshopGamePhase::none;
+                        m_world_modal = false;
+                    }
+                }
+
+                return {};
+            }
+
             if (m_close_requested.load(std::memory_order_acquire) and not m_workshop_closing) {
                 m_close_requested.store(false, std::memory_order_release);
                 PPR_RETURN_ERROR_ON_FAIL(Demo, requestWorkshopTransition_(WorkshopTransition::exit));
             }
             if (m_workshop_closing) {
+                if (m_workshop_game_phase == WorkshopGamePhase::draining_preview) {
+                    m_workshop_game_phase = WorkshopGamePhase::none;
+                    m_pending_authored_game_source.reset();
+                }
+
+                m_workshop->configureLivePreview(false, {}, m_workshop_ui.m_mode);
                 m_workshop->cancel();
                 m_workshop_queued.reset();
                 m_workshop_queued_preview.reset();
             }
 
             PPR_RETURN_ERROR_ON_FAIL(Demo, m_workshop->update());
+            settleWorkshopSourceLoad_();
 
             if (m_workshop_transition_saving and not m_workshop->busy()) {
                 m_workshop_transition_saving = false;
@@ -3617,7 +3721,8 @@ namespace demo {
                 PPR_RETURN_ERROR_ON_FAIL(Demo, m_world_job->update(true));
             }
 
-            if (auto prepared = m_workshop->takePresentation(); prepared and not m_workshop_closing) {
+            if (auto prepared = m_workshop->takePresentation();
+                prepared and not m_workshop_closing and m_workshop_game_phase == WorkshopGamePhase::none) {
                 m_workshop_queued = std::move(prepared);
                 m_workshop_queued_preview = m_workshop->previewHandle();
                 m_workshop_queued_root = m_workshop->session()->root();
@@ -3667,7 +3772,10 @@ namespace demo {
                 }
             }
 
-            if (m_workshop_closing and m_workshop_stage and not m_workshop_restoring and not activationPending_()) {
+            if ((m_workshop_closing or m_workshop_game_phase == WorkshopGamePhase::draining_preview) and
+                m_workshop_stage and
+                not m_workshop_restoring and
+                not activationPending_()) {
                 m_candidate_cancel_needed = true;
             }
             if (m_workshop_stage and
@@ -3686,6 +3794,26 @@ namespace demo {
             if (m_candidate_cancel_needed) {
                 queueWorldCommand_(EGridWorldCommand::cancel);
                 return submitWorldCommand_();
+            }
+
+            if (m_workshop_game_phase == WorkshopGamePhase::draining_preview and
+                not m_workshop_stage and
+                not m_workshop_capturing and
+                not m_workshop->busy() and
+                not m_world_job->busy()) {
+                m_loading_presented = false;
+                const auto error = requestWorld_(
+                    m_workshop_ui.m_seed, authoredGamePrepare_(m_pending_authored_game_source));
+                if (error) {
+                    // Failed admission is a recoverable authoring operation; keep the workspace and its draft.
+                    m_workshop_error = "Could not start the game: " + error.message();
+                    m_pending_authored_game_source.reset();
+                    m_workshop_game_phase = WorkshopGamePhase::none;
+                    return {};
+                }
+
+                m_workshop_game_phase = WorkshopGamePhase::generating;
+                return {};
             }
 
             if (m_workshop_closing and not m_workshop_stage and not m_workshop_capturing and not m_workshop->busy()) {
@@ -3745,41 +3873,78 @@ namespace demo {
         void drawWorkshop_() {
             auto *const session = m_workshop->session();
             Array<config::Diagnostic> property_diagnostics;
-            const auto worker_diagnostics = m_workshop->propertyDiagnostics();
-            property_diagnostics.assign(worker_diagnostics.begin(), worker_diagnostics.end());
+            const colony::WorldgenPanelView view = [&]() {
+                const hal::ProfileScope scope{"Workshop.UI.Model"};
 
-            if (session and
-                m_workshop_edit_diagnostics_root == session->root() and
-                m_workshop_edit_diagnostics_revision == session->revision()) {
-                property_diagnostics.insert(
-                    property_diagnostics.end(), m_workshop_edit_diagnostics.entries().begin(),
-                    m_workshop_edit_diagnostics.entries().end());
-            }
-            const colony::WorldgenPanelView view{
-                .m_source = session ? &session->draftSource() : nullptr,
-                .m_catalog = session ? session->validatedCatalog().get() : nullptr,
-                .m_preview = m_workshop_displayed_preview.get(),
-                .m_revision = session ? session->revision() : 0u,
-                .m_validated_revision = session ? session->validatedRevision() : 0u,
-                .m_status = m_workshop_error.empty() ? m_workshop->status() : std::string_view{m_workshop_error},
-                .m_diagnostics = m_workshop->diagnostics(),
-                .m_property_diagnostics = property_diagnostics,
-                .m_diagnostics_revision = session ? session->revision() : 0u,
-                .m_index = session ? &session->sourceIndex() : nullptr,
-                .m_dirty = session and session->dirty(),
-                .m_busy = m_workshop->busy(),
-                .m_can_undo = session and session->canUndo(),
-                .m_can_redo = session and session->canRedo(),
-                .m_publishing = m_workshop_stage != nullptr,
-                .m_closing = m_workshop_closing or m_workshop_transition != WorkshopTransition::none,
-                .m_preview_current = m_workshop_displayed_preview and
-                                     workshopPreviewMatches_(
-                                         *m_workshop_displayed_preview, m_workshop_displayed_root,
-                                         m_workshop_displayed_mode),
-                .m_can_export = m_workshop_displayed_preview and
-                                m_workshop_displayed_preview.get() == m_workshop->preview(),
-                .m_draft_invalid = m_workshop->draftInvalid()};
-            for (const auto &intent: colony::drawWorldgenPanel(m_workshop_ui, view)) {
+                const auto worker_diagnostics = m_workshop->propertyDiagnostics();
+                property_diagnostics.assign(worker_diagnostics.begin(), worker_diagnostics.end());
+
+                if (session and
+                    m_workshop_edit_diagnostics_root == session->root() and
+                    m_workshop_edit_diagnostics_revision == session->revision()) {
+                    property_diagnostics.insert(
+                        property_diagnostics.end(), m_workshop_edit_diagnostics.entries().begin(),
+                        m_workshop_edit_diagnostics.entries().end());
+                }
+
+                return colony::WorldgenPanelView{
+                    .m_source = session ? &session->draftSource() : nullptr,
+                    .m_catalog = session ? session->validatedCatalog().get() : nullptr,
+                    .m_preview = m_workshop_displayed_preview.get(),
+                    .m_revision = session ? session->revision() : 0u,
+                    .m_validated_revision = session ? session->validatedRevision() : 0u,
+                    .m_status = m_workshop_error.empty() ? m_workshop->status() : std::string_view{m_workshop_error},
+                    .m_diagnostics = m_workshop->diagnostics(),
+                    .m_loaded_root = m_workshop_loaded_root_text,
+                    .m_property_diagnostics = property_diagnostics,
+                    .m_diagnostics_revision = session ? session->revision() : 0u,
+                    .m_index = session ? &session->sourceIndex() : nullptr,
+                    .m_dirty = session and session->dirty(),
+                    .m_busy = m_workshop->busy(),
+                    .m_can_undo = session and session->canUndo(),
+                    .m_can_redo = session and session->canRedo(),
+                    .m_publishing = m_workshop_stage != nullptr,
+                    .m_closing = m_workshop_closing or
+                                 m_workshop_transition != WorkshopTransition::none or
+                                 m_workshop_game_phase != WorkshopGamePhase::none,
+                    .m_preview_current = m_workshop_displayed_preview and
+                                         workshopPreviewMatches_(
+                                             *m_workshop_displayed_preview, m_workshop_displayed_root,
+                                             m_workshop_displayed_mode),
+                    .m_can_export = m_workshop_displayed_preview and
+                                    m_workshop_displayed_preview.get() == m_workshop->preview(),
+                    .m_draft_invalid = m_workshop->draftInvalid(),
+                    .m_has_game = m_driver != nullptr or m_workshop_capturing,
+                    .m_starting = m_workshop_game_phase != WorkshopGamePhase::none,
+                    .m_can_start_game = session and
+                                        not m_workshop_capturing and
+                                        not m_workshop->busy() and
+                                        session->validatedCatalog() and
+                                        session->validatedRevision() == session->revision() and
+                                        not m_workshop->draftInvalid() and
+                                        std::ranges::find(
+                                            m_workshop_ui.m_record_keys[4u],
+                                            std::string_view{m_workshop_ui.m_profile.data()}) !=
+                                            m_workshop_ui.m_record_keys[4u].end()};
+            }();
+
+            auto workshop_intents = [&]() {
+                const hal::ProfileScope scope{"Workshop.UI.Worldgen"};
+
+                return colony::drawWorldgenPanel(m_workshop_ui, view);
+            }();
+
+            const auto mutates_draft = [](const colony::WorkshopIntent &intent) {
+                return intent.m_kind == colony::EWorkshopIntent::edit_definition or
+                       intent.m_kind == colony::EWorkshopIntent::edit_biome or
+                       intent.m_kind == colony::EWorkshopIntent::clear_property or
+                       intent.m_kind == colony::EWorkshopIntent::clone_definition or
+                       intent.m_kind == colony::EWorkshopIntent::delete_definition;
+            };
+
+            std::stable_partition(workshop_intents.begin(), workshop_intents.end(), mutates_draft);
+            bool edit_rejected = false;
+            for (const auto &intent: workshop_intents) {
                 std::error_code error{};
                 config::Diagnostics diagnostics{32u};
                 switch (intent.m_kind) {
@@ -3867,21 +4032,28 @@ namespace demo {
                         error = m_workshop->exportPreview(
                             std::filesystem::path{m_workshop_ui.m_export_path.data()},
                             {static_cast<double>(camera.m_origin.x) +
-                                     static_cast<double>(camera.m_viewport_size.x) * scale * 0.5,
+                                    static_cast<double>(camera.m_viewport_size.x) * scale * 0.5,
                                 static_cast<double>(camera.m_origin.y) +
-                                    static_cast<double>(camera.m_viewport_size.y) * scale * 0.5, scale,
-                                static_cast<u32>(m_workshop_ui.m_mode)});
+                                    static_cast<double>(camera.m_viewport_size.y) * scale * 0.5,
+                                scale, static_cast<u32>(m_workshop_ui.m_mode)});
                         break;
                     }
-                    case colony::EWorkshopIntent::close:
+                    case colony::EWorkshopIntent::return_to_game:
                         if (m_driver or m_workshop_capturing) {
+                            m_workshop->configureLivePreview(false, {}, m_workshop_ui.m_mode);
                             m_workshop_closing = true;
-                        } else {
-                            error = requestWorkshopTransition_(WorkshopTransition::exit);
                         }
+                        break;
+                    case colony::EWorkshopIntent::start_game:
+                        error = edit_rejected ? std::make_error_code(std::errc::operation_not_permitted)
+                                              : requestWorkshopGame_(diagnostics);
+                        break;
+                    case colony::EWorkshopIntent::close:
+                        error = requestWorkshopTransition_(WorkshopTransition::exit);
                         break;
                 }
                 if (error) {
+                    edit_rejected = edit_rejected or mutates_draft(intent);
                     if (diagnostics.hasErrors() and session) {
                         m_workshop_edit_diagnostics = diagnostics;
                         m_workshop_edit_diagnostics_revision = session->revision();
@@ -3910,77 +4082,71 @@ namespace demo {
                     }
                 }
             }
+
             m_workshop->configureLivePreview(
                 m_workshop_ui.m_automatic_live and
                     not m_workshop_closing and
+                    m_workshop_game_phase == WorkshopGamePhase::none and
                     m_workshop_transition == WorkshopTransition::none,
                 workshopSpec_(), m_workshop_ui.m_mode);
-            if (m_workshop_transition != WorkshopTransition::none) {
-                ImGui::OpenPopup("Unsaved biome edits");
-            }
-            if (ImGui::BeginPopupModal("Unsaved biome edits", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-                ImGui::TextWrapped(
-                    "Save biome edits before continuing? Discard replaces this draft and its history only after the requested operation succeeds.");
-                ImGui::TextWrapped("%.*s", static_cast<int>(m_workshop->status().size()), m_workshop->status().data());
-                ImGui::BeginDisabled(m_workshop->busy() or m_workshop_transition_saving);
-                if (ImGui::Button("Save and continue")) {
+            const game::ui::UnsavedEditsView transition_view{
+                .m_status = m_workshop->status(),
+                .m_open = m_workshop_transition != WorkshopTransition::none,
+                .m_busy = m_workshop->busy(),
+                .m_saving = m_workshop_transition_saving};
+            switch (game::ui::drawUnsavedEdits(transition_view)) {
+                case game::ui::EUnsavedAction::save:
                     if (const auto error = m_workshop->save()) {
                         m_workshop_error = error.message();
                     } else {
                         m_workshop_transition_saving = true;
                     }
-                }
-                ImGui::EndDisabled();
-                ImGui::SameLine();
-                ImGui::BeginDisabled(m_workshop_transition_saving);
-                if (ImGui::Button("Discard and continue")) {
+                    break;
+
+                case game::ui::EUnsavedAction::discard:
                     if (const auto error = completeWorkshopTransition_()) {
                         m_workshop_error = error.message();
-                    } else {
-                        ImGui::CloseCurrentPopup();
                     }
-                }
-                ImGui::EndDisabled();
-                ImGui::SameLine();
-                if (ImGui::Button("Cancel transition")) {
-                    // Let an already admitted save settle without replacing the draft.
+                    break;
+
+                case game::ui::EUnsavedAction::cancel:
                     if (m_workshop_transition == WorkshopTransition::exit and
                         m_driver and
                         not m_workshop_restore and
                         not m_workshop_displayed) {
                         m_workshop_closing = true;
                     }
+
                     m_workshop_transition = WorkshopTransition::none;
                     m_workshop_transition_saving = false;
                     m_close_requested.store(false, std::memory_order_release);
-                    ImGui::CloseCurrentPopup();
-                }
-                if (m_workshop_transition == WorkshopTransition::none) {
-                    ImGui::CloseCurrentPopup();
-                }
-                ImGui::EndPopup();
+                    break;
+
+                case game::ui::EUnsavedAction::none: break;
             }
+
             if (const auto *const preview = m_workshop_displayed_preview.get(); preview and m_workshop_displayed) {
                 const auto map = screenMap_();
                 const auto &bounds = preview->m_visible;
-                const auto a = map.worldToClient(float2{
-                    static_cast<float>(bounds.m_left) / 3.0f, static_cast<float>(bounds.m_bottom) / 3.0f});
-                const auto b = map.worldToClient(float2{
-                    static_cast<float>(bounds.m_right) / 3.0f, static_cast<float>(bounds.m_top) / 3.0f});
+                const auto a = map.worldToClient(
+                    float2{static_cast<float>(bounds.m_left) / 3.0f, static_cast<float>(bounds.m_bottom) / 3.0f});
+                const auto b = map.worldToClient(
+                    float2{static_cast<float>(bounds.m_right) / 3.0f, static_cast<float>(bounds.m_top) / 3.0f});
                 if (a and b) {
-                    const auto *const viewport = ImGui::GetMainViewport();
-                    ImGui::GetForegroundDrawList()->AddRect(
-                        ImVec2{viewport->Pos.x + a->x, viewport->Pos.y + b->y},
-                        ImVec2{viewport->Pos.x + b->x, viewport->Pos.y + a->y}, 0xffffff00u, 0.0f, ImDrawFlags_None,
-                        2.0f);
+                    const std::array marks{game::ui::FeedbackRect{
+                        .m_min = float2{a->x, b->y},
+                        .m_max = float2{b->x, a->y},
+                        .m_thickness = 2.0f,
+                        .m_role = game::ui::EFeedbackRole::preview}};
+                    game::ui::drawFeedback(marks, map.m_extent, {});
                 }
-                if (not ImGui::GetIO().WantCaptureMouse and
-                    ImGui::IsMouseClicked(ImGuiMouseButton_Left) and
+
+                const auto input = game::ui::frontendInput();
+                if (not input.m_mouse_captured and
+                    input.m_primary_pressed and
                     not m_workshop_stage and
                     not m_workshop_queued) {
-                    const auto point = ImGui::GetMousePos();
-                    const auto *const viewport = ImGui::GetMainViewport();
-                    const auto cell = map.pickCell(float2{point.x - viewport->Pos.x, point.y - viewport->Pos.y});
+                    const auto cell = map.pickCell(input.m_pointer);
                     if (cell and
                         cell->m_x >= bounds.m_left and
                         cell->m_x < bounds.m_right and
@@ -3988,17 +4154,25 @@ namespace demo {
                         cell->m_y < bounds.m_top) {
                         const auto value = preview->m_grid.getCell(*cell);
                         if (value) {
-                            m_workshop_ui.m_selected_category = "materials";
+                            std::string selected_key{};
                             if (value->m_element == 0u) {
-                                m_workshop_ui.m_selected_key = "vacuum";
+                                selected_key = "vacuum";
                             } else {
                                 config::Diagnostics diagnostics;
                                 auto name = preview->m_catalog->materialAssetName(value->m_element, diagnostics);
                                 if (name) {
-                                    m_workshop_ui.m_selected_key = name->string();
+                                    selected_key = name->string();
                                 } else {
                                     m_workshop_error = name.error().message() + "\n" + diagnostics.format();
                                 }
+                            }
+
+                            if (not selected_key.empty()) {
+                                m_workshop_ui.m_pending_category = "materials";
+                                m_workshop_ui.m_pending_key = std::move(selected_key);
+                                m_workshop_ui.m_pending_property.clear();
+                                m_workshop_ui.m_selection_pending = true;
+                                m_workshop_ui.m_show_properties = true;
                             }
                         }
                     }
@@ -4265,8 +4439,8 @@ namespace demo {
         /// materials use, so overlay, chrome, and (remaining) world outlines
         /// agree. Cyan marks selection and diggable/pinned structure; orange
         /// marks hover and the footprint preview.
-        inline static const ImU32 kFeedbackCyan = ImGui::ColorConvertFloat4ToU32(ImVec4{0.2f, 0.9f, 0.9f, 1.0f});
-        inline static const ImU32 kFeedbackOrange = ImGui::ColorConvertFloat4ToU32(ImVec4{1.0f, 0.55f, 0.15f, 1.0f});
+        inline static constexpr auto kFeedbackCyan = game::ui::EFeedbackRole::selection;
+        inline static constexpr auto kFeedbackOrange = game::ui::EFeedbackRole::hover;
 
         /// Projection-derived pixels per world unit at a world point: two
         /// unit-separated points through the same forward formula the pick
@@ -4292,15 +4466,15 @@ namespace demo {
         /// rect; false when any corner has no screen position (degenerate
         /// or behind-camera), and the caller skips that shape.
         [[nodiscard]] static bool overlayProjectRect_(
-            const ScreenMap &map, const float x0, const float y0, const float x1, const float y1, ImVec2 &min_out,
-            ImVec2 &max_out) noexcept {
+            const ScreenMap &map, const float x0, const float y0, const float x1, const float y1, float2 &min_out,
+            float2 &max_out) noexcept {
             const std::optional<float2> a = map.worldToClient(float2{x0, y0});
             const std::optional<float2> b = map.worldToClient(float2{x1, y1});
             if (not a.has_value() or not b.has_value()) {
                 return false;
             }
-            min_out = ImVec2{std::min(a->x, b->x), std::min(a->y, b->y)};
-            max_out = ImVec2{std::max(a->x, b->x), std::max(a->y, b->y)};
+            min_out = float2{std::min(a->x, b->x), std::min(a->y, b->y)};
+            max_out = float2{std::max(a->x, b->x), std::max(a->y, b->y)};
             return true;
         }
 
@@ -4308,13 +4482,10 @@ namespace demo {
         /// whose thickness centres on the edge, matching the old bands that
         /// straddled the rect edges half in and half out.
         static void overlayRectBorder_(
-            ImDrawList *const draw, const ScreenMap &map, const float cx, const float cy, const float hx,
-            const float hy, const float band_world, const ImU32 color) {
-            if (draw == nullptr) {
-                return;
-            }
-            ImVec2 min{};
-            ImVec2 max{};
+            Array<game::ui::FeedbackRect> &marks, const ScreenMap &map, const float cx, const float cy, const float hx,
+            const float hy, const float band_world, const game::ui::EFeedbackRole color) {
+            float2 min{};
+            float2 max{};
             if (not overlayProjectRect_(map, cx - hx, cy - hy, cx + hx, cy + hy, min, max)) {
                 return;
             }
@@ -4322,17 +4493,18 @@ namespace demo {
             if (not ppw.has_value()) {
                 return;
             }
-            draw->AddRect(min, max, color, 0.0f, ImDrawFlags_None, band_world * *ppw);
+            marks.push_back({.m_min = min, .m_max = max, .m_thickness = band_world * *ppw, .m_role = color});
         }
 
         /// One hovered/pinned cell outline: the shared rect-border helper at
         /// the cell centre with half extents 0.5 and the standing 0.5-cell
         /// band, exactly as before.
         static void overlayCellBorder_(
-            ImDrawList *const draw, const ScreenMap &map, const sim::GlobalCellPos cell, const ImU32 color) {
+            Array<game::ui::FeedbackRect> &marks, const ScreenMap &map, const sim::GlobalCellPos cell,
+            const game::ui::EFeedbackRole color) {
             const float h = 1.0f / static_cast<float>(map.m_cells_per_metre);
             overlayRectBorder_(
-                draw, map, (static_cast<float>(cell.m_x) + 0.5f) * h, (static_cast<float>(cell.m_y) + 0.5f) * h,
+                marks, map, (static_cast<float>(cell.m_x) + 0.5f) * h, (static_cast<float>(cell.m_y) + 0.5f) * h,
                 0.5f * h, 0.5f * h, 0.5f * h, color);
         }
 
@@ -4342,10 +4514,7 @@ namespace demo {
         /// three states as before (valid solid, clamped with badges on the
         /// capped sides, invalid broken with corner gaps). The reason stays
         /// text in the tool strip, never drawn into the world.
-        void overlayFootprintPreview_(ImDrawList *const draw, const ScreenMap &map) {
-            if (draw == nullptr) {
-                return;
-            }
+        void overlayFootprintPreview_(Array<game::ui::FeedbackRect> &marks, const ScreenMap &map) {
             const bool committable = m_build_preview.m_reason[0] == '\0';
             if (not committable and not m_tool.m_footprint_anchor.has_value()) {
                 return;
@@ -4395,16 +4564,34 @@ namespace demo {
                 if (not complete) {
                     return;
                 }
-                draw->AddLine(ImVec2{top_a->x, top_a->y}, ImVec2{top_b->x, top_b->y}, kFeedbackOrange, thickness);
-                draw->AddLine(
-                    ImVec2{bottom_a->x, bottom_a->y}, ImVec2{bottom_b->x, bottom_b->y}, kFeedbackOrange, thickness);
-                draw->AddLine(ImVec2{left_a->x, left_a->y}, ImVec2{left_b->x, left_b->y}, kFeedbackOrange, thickness);
-                draw->AddLine(
-                    ImVec2{right_a->x, right_a->y}, ImVec2{right_b->x, right_b->y}, kFeedbackOrange, thickness);
+                marks.push_back(
+                    {.m_min = float2{top_a->x, top_a->y},
+                        .m_max = float2{top_b->x, top_b->y},
+                        .m_thickness = thickness,
+                        .m_role = kFeedbackOrange,
+                        .m_kind = game::ui::EFeedbackKind::line});
+                marks.push_back(
+                    {.m_min = float2{bottom_a->x, bottom_a->y},
+                        .m_max = float2{bottom_b->x, bottom_b->y},
+                        .m_thickness = thickness,
+                        .m_role = kFeedbackOrange,
+                        .m_kind = game::ui::EFeedbackKind::line});
+                marks.push_back(
+                    {.m_min = float2{left_a->x, left_a->y},
+                        .m_max = float2{left_b->x, left_b->y},
+                        .m_thickness = thickness,
+                        .m_role = kFeedbackOrange,
+                        .m_kind = game::ui::EFeedbackKind::line});
+                marks.push_back(
+                    {.m_min = float2{right_a->x, right_a->y},
+                        .m_max = float2{right_b->x, right_b->y},
+                        .m_thickness = thickness,
+                        .m_role = kFeedbackOrange,
+                        .m_kind = game::ui::EFeedbackKind::line});
                 return;
             }
 
-            overlayRectBorder_(draw, map, cx, cy, w * 0.5f, h * 0.5f, band, kFeedbackOrange);
+            overlayRectBorder_(marks, map, cx, cy, w * 0.5f, h * 0.5f, band, kFeedbackOrange);
             if (not m_build_preview.m_clamped) {
                 return;
             }
@@ -4429,29 +4616,37 @@ namespace demo {
                 const bool cut_max_x = m_build_preview.m_anchor.m_x < m_build_preview.m_min.m_x + 3u;
                 const float edge = cut_max_x ? x1 : x0;
                 const float dir = cut_max_x ? offset : -offset;
-                ImVec2 min{};
-                ImVec2 max{};
+                float2 min{};
+                float2 max{};
                 if (overlayProjectRect_(
                         map, edge + dir - badge * 0.5f, cy - (h + band) * 0.5f, edge + dir + badge * 0.5f,
                         cy + (h + band) * 0.5f, min, max)) {
-                    draw->AddRectFilled(min, max, kFeedbackOrange);
+                    marks.push_back(
+                        {.m_min = min,
+                            .m_max = max,
+                            .m_role = kFeedbackOrange,
+                            .m_kind = game::ui::EFeedbackKind::fill});
                 }
             }
             if (cap_y) {
                 const bool cut_max_y = m_build_preview.m_anchor.m_y < m_build_preview.m_min.m_y + 3u;
                 const float edge = cut_max_y ? y1 : y0;
                 const float dir = cut_max_y ? offset : -offset;
-                ImVec2 min{};
-                ImVec2 max{};
+                float2 min{};
+                float2 max{};
                 if (overlayProjectRect_(
                         map, cx - (w + band) * 0.5f, edge + dir - badge * 0.5f, cx + (w + band) * 0.5f,
                         edge + dir + badge * 0.5f, min, max)) {
-                    draw->AddRectFilled(min, max, kFeedbackOrange);
+                    marks.push_back(
+                        {.m_min = min,
+                            .m_max = max,
+                            .m_role = kFeedbackOrange,
+                            .m_kind = game::ui::EFeedbackKind::fill});
                 }
             }
         }
 
-        /// Screen-space feedback on the non-consuming ImGui foreground draw
+        /// Screen-space feedback on the non-consuming ImGui background draw
         /// list: no window, no capture, input routing untouched. Bound to
         /// live agents plus hover, selection, and the active preview.
         /// Chrome-occlusion policy: feedback is CLIPPED to the world region
@@ -4469,41 +4664,9 @@ namespace demo {
             if (not map.m_valid) {
                 return;
             }
-            const ImGuiIO &io = ImGui::GetIO();
-            if (io.DisplaySize.x <= 0.0f or io.DisplaySize.y <= 0.0f) {
-                return;
-            }
-            const bool extent_match = std::abs(io.DisplaySize.x - map.m_extent.x) <= 1.0f and
-                                      std::abs(io.DisplaySize.y - map.m_extent.y) <= 1.0f;
-            if (not extent_match) {
-                return;
-            }
-            if (io.DisplayFramebufferScale.x <= 0.0f or io.DisplayFramebufferScale.y <= 0.0f) {
-                return;
-            }
-            ImDrawList *draw = ImGui::GetForegroundDrawList();
-            if (draw == nullptr) {
-                return;
-            }
-
-            // Clip source: framebuffer viewport rect to ImGui coords.
-            const float fb_w = map.m_extent.x * io.DisplayFramebufferScale.x;
-            const float fb_h = map.m_extent.y * io.DisplayFramebufferScale.y;
-            const float ui_w = fb_w / io.DisplayFramebufferScale.x;
-            const float ui_h = fb_h / io.DisplayFramebufferScale.y;
-            const ImVec2 clip_min{0.0f, frame.m_chrome_top};
-            const ImVec2 clip_max{std::ceil(ui_w) - frame.m_chrome_right, std::ceil(ui_h) - frame.m_chrome_bottom};
-            const bool clip_ok = clip_max.x > clip_min.x and clip_max.y > clip_min.y;
-            if (not clip_ok) {
-                return;
-            }
-            draw->PushClipRect(clip_min, clip_max, true);
-            struct ClipScope {
-                ImDrawList *draw;
-                ~ClipScope() noexcept {
-                    draw->PopClipRect();
-                }
-            } clip_scope{draw};
+            const hal::ProfileScope scope{"Game.UI.ProjectFeedback"};
+            m_ui_feedback.clear();
+            auto &marks = m_ui_feedback;
 
             // Colonist outlines, one treatment per agent — a persistent
             // selection outranks a transient hover, so the two never draw
@@ -4524,16 +4687,16 @@ namespace demo {
                 const float ring_y = 0.9f + gap + band * 0.5f;
 
                 if (agent.m_key == m_selected_agent) {
-                    overlayRectBorder_(draw, map, agent.m_x, agent.m_y, ring_x, ring_y, band, kFeedbackCyan);
+                    overlayRectBorder_(marks, map, agent.m_x, agent.m_y, ring_x, ring_y, band, kFeedbackCyan);
                     // Outer ring: one outer_gap clear of the inner ring's
                     // outer edge, same band width.
                     const float outer_x = ring_x + outer_gap + band;
                     const float outer_y = ring_y + outer_gap + band;
-                    overlayRectBorder_(draw, map, agent.m_x, agent.m_y, outer_x, outer_y, band, kFeedbackCyan);
+                    overlayRectBorder_(marks, map, agent.m_x, agent.m_y, outer_x, outer_y, band, kFeedbackCyan);
                 } else if (agent.m_key == m_hovered_agent) {
-                    overlayRectBorder_(draw, map, agent.m_x, agent.m_y, ring_x, ring_y, band * 1.8f, kFeedbackOrange);
+                    overlayRectBorder_(marks, map, agent.m_x, agent.m_y, ring_x, ring_y, band * 1.8f, kFeedbackOrange);
                 } else {
-                    overlayRectBorder_(draw, map, agent.m_x, agent.m_y, ring_x, ring_y, band, kFeedbackCyan);
+                    overlayRectBorder_(marks, map, agent.m_x, agent.m_y, ring_x, ring_y, band, kFeedbackCyan);
                 }
             }
 
@@ -4549,15 +4712,22 @@ namespace demo {
                                         m_ui_state.m_tool == colony::EColonyTool::demolish;
             if (m_build_preview.m_active and footprint_tool) {
                 if (m_ui_state.m_pinned.has_value()) {
-                    overlayCellBorder_(draw, map, *m_ui_state.m_pinned, kFeedbackCyan);
+                    overlayCellBorder_(marks, map, *m_ui_state.m_pinned, kFeedbackCyan);
                 }
-                overlayFootprintPreview_(draw, map);
+                overlayFootprintPreview_(marks, map);
             } else if (m_tool.m_dig_armed and m_hover.m_world) {
-                const ImU32 color = m_hover.m_diggable ? kFeedbackCyan : kFeedbackOrange;
-                overlayCellBorder_(draw, map, m_hover.m_target, color);
+                const game::ui::EFeedbackRole color = m_hover.m_diggable ? kFeedbackCyan : kFeedbackOrange;
+                overlayCellBorder_(marks, map, m_hover.m_target, color);
             } else if (m_ui_state.m_pinned.has_value()) {
-                overlayCellBorder_(draw, map, *m_ui_state.m_pinned, kFeedbackCyan);
+                overlayCellBorder_(marks, map, *m_ui_state.m_pinned, kFeedbackCyan);
             }
+
+            game::ui::drawFeedback(
+                marks, map.m_extent,
+                {.m_top = frame.m_chrome_top,
+                    .m_bottom = frame.m_chrome_bottom,
+                    .m_right = frame.m_chrome_right,
+                    .m_left = frame.m_chrome_left});
         }
 
         [[nodiscard]] std::error_code submitDebugInstances_() {
@@ -4699,7 +4869,7 @@ namespace demo {
         void onLaneFrameConsumed_(const RenderFrameResult &result) override {
             ApplicationEditor::onLaneFrameConsumed_(result);
 
-            if (m_workshop_open) {
+            if (m_workshop_open and m_workshop_game_phase != WorkshopGamePhase::generating) {
                 return;
             }
 
@@ -4752,7 +4922,10 @@ namespace demo {
                 m_grid_reset_pending = false;
             }
             if (result.m_presented and not result.m_error and not result.m_dropped) {
-                if (not m_driver) {
+                // Arm the loading latch once a frame was presented with the progress
+                // modal up. A workshop -> game request keeps a live (paused) driver, so
+                // a driverless-only predicate would leave the queued job gated forever.
+                if (not m_driver or m_world_modal) {
                     m_loading_presented = true;
                 }
                 if (m_driver and
@@ -4866,6 +5039,10 @@ namespace demo {
                     submitGridStage(std::move(retained));
                     submitTriangleStage(TrianglePass::TriangleStagedFrame{});
                     drawWorkshop_();
+                    if (m_workshop_game_phase == WorkshopGamePhase::generating) {
+                        drawWorldModal_();
+                    }
+
                     return {};
                 }
             }
@@ -4875,27 +5052,6 @@ namespace demo {
                 const auto mode = *std::exchange(m_preview_pending, std::nullopt);
                 PPR_RETURN_ERROR_ON_FAIL(Demo, requestPreview_(mode));
             }
-            // Phase: new-game request. End gestures and discard accepted tool
-            // commands before pausing gameplay; none may target the new session.
-            if (m_regen_pending and (not m_driver or not m_driver->editPending())) {
-                m_regen_pending = false;
-                cancelToolGesture_();
-                m_ui_state.m_pinned.reset();
-                // Stable keys die with the world: selection and follow go
-                // here, before regenerate_() rebuilds the summaries.
-                clearAgentSelection_();
-                // Slice 6: the driver's digTotal resets on the same regen
-                // path (clearToolState), so the game-side issued count
-                // resets here to keep the pending estimate aligned.
-                m_dig_issued = 0u;
-                if (not m_input_error) {
-                    m_input_error = regenerate_();
-                }
-                if (m_input_error) [[unlikely]] {
-                    return m_input_error;
-                }
-            }
-
             // Phase: UI observation. Notice countdown + honest inter-frame
             // timing first, so this frame's Performance section reports the
             // dt this frame is about to run with.

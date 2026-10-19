@@ -6,6 +6,7 @@ import engine.sim;
 import engine.asset;
 import game.colony.content;
 import game.colony.worldgen_preview;
+import game.colony.asset_browser_panel;
 import std;
 
 export namespace pP::colony {
@@ -24,6 +25,8 @@ export namespace pP::colony {
         redo,
         export_preview,
         close,
+        return_to_game,
+        start_game,
         edit_biome,
         edit_definition,
         clone_definition,
@@ -65,6 +68,10 @@ export namespace pP::colony {
             EContentDocument m_category{};
         };
 
+        AssetBrowserPanelState m_browser{};
+        std::optional<asset::AssetKey> m_selected_asset{};
+        std::string m_pending_category{}, m_pending_key{}, m_pending_property{};
+
         u64 m_seed{42u};
         std::string m_selected_category{"biomes"}, m_selected_key{};
         std::string m_edit_key{};
@@ -77,6 +84,11 @@ export namespace pP::colony {
         std::string m_tree_selection{}, m_focus_property{};
         Array<ReferenceUse> m_uses;
         std::string m_use_selection;
+
+        // owned preview choices, invalidated with document refresh or selected profile:
+        Array<std::string> m_sample_biomes{};
+        std::string m_sample_profile{};
+
         u64 m_document_revision{};
         u64 m_document_validated_revision{};
         const ContentSourceSet *m_document_source{};
@@ -86,10 +98,11 @@ export namespace pP::colony {
         int m_origin[2]{1920, 1920};
         EGridDiagnosticMode m_mode{EGridDiagnosticMode::textured};
         EWorldgenPreviewMode m_preview_mode{EWorldgenPreviewMode::biome_sample};
-        bool m_automatic_live{}, m_show_properties{}, m_show_diagnostics{};
+        bool m_automatic_live{}, m_show_properties{}, m_show_diagnostics{}, m_selection_pending{};
+        bool m_sample_choices_current{};
         std::array<char, 1025u> m_root{}, m_export_path{};
         std::array<char, asset::QualifiedName::reference_domain.m_max_length + 1u> m_profile{};
-        std::array<char, config::kMaxKeyBytes + 1u> m_biome{}, m_search{}, m_new_key{};
+        std::array<char, config::kMaxKeyBytes + 1u> m_biome{}, m_new_key{};
         std::array<char, 129u> m_property_search{};
     };
 
@@ -98,12 +111,12 @@ export namespace pP::colony {
         const ContentDescriptorCatalog *m_catalog{};
         const WorldgenPreviewResult *m_preview{};
         u64 m_revision{}, m_validated_revision{};
-        std::string_view m_status{}, m_diagnostics{};
+        std::string_view m_status{}, m_diagnostics{}, m_loaded_root{};
         std::span<const config::Diagnostic> m_property_diagnostics{};
         u64 m_diagnostics_revision{};
         const asset::PackSet *m_index{};
         bool m_dirty{}, m_busy{}, m_can_undo{}, m_can_redo{}, m_publishing{}, m_closing{};
-        bool m_preview_current{}, m_can_export{}, m_draft_invalid{};
+        bool m_preview_current{}, m_can_export{}, m_draft_invalid{}, m_has_game{}, m_starting{}, m_can_start_game{};
     };
 
     [[nodiscard]] Array<WorkshopIntent> drawWorldgenPanel(WorldgenPanelState &state, const WorldgenPanelView &view);

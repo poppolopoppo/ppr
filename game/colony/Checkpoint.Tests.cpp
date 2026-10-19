@@ -18,6 +18,8 @@ import game.colony.driver;
 import game.colony.worldgen;
 import game.colony.sim_packet;
 import game.application;
+import game.colony.panel;
+import game.ui.model;
 import std;
 
 namespace pP::game::tests::detail::checkpoint {
@@ -357,6 +359,38 @@ namespace pP::game::tests::detail::checkpoint {
 
         checkpoint.m_descriptor.m_generator_version = sim::kGeneratorAlgorithmVersion;
         PPR_TEST_ASSERT(validateWorldCheckpoint(checkpoint, catalog) == std::errc::invalid_argument);
+    };
+
+    PPR_UNIT_TEST (ui_model_preserves_authored_metadata_and_nearest_agent_for_unresident_cells) {
+        Fixture fixture;
+        auto restored = restoreWorldCheckpoint(fixture.m_catalog, editedCheckpoint(*fixture.m_catalog), 2u);
+        PPR_TEST_ASSERT(restored.has_value());
+        auto &driver = **restored;
+        PPR_DEFER {
+            std::ignore = driver.shutdown();
+        };
+
+        // Retain the authored recipe/layout and actor while terrain residency
+        // is absent. Inspection must not fabricate a vacuum/temperature read.
+        driver.grid() = sim::ChunkGrid{};
+        const sim::GlobalCellPos target{30u, 45u};
+        ColonyPresentation snapshot{};
+        pP::game::ui::captureColonyPresentation(snapshot, driver, target, target);
+
+        PPR_TEST_ASSERT(snapshot.m_inspected.m_presence == ECellPresence::unresident);
+        PPR_TEST_ASSERT(snapshot.m_inspected.m_material.empty());
+        PPR_TEST_ASSERT(snapshot.m_inspected.m_temperature_k == 0.0f);
+        PPR_TEST_ASSERT(driver.grid().residentChunkCount() == 0u);
+        PPR_TEST_ASSERT(snapshot.m_inspected.m_generated);
+        PPR_TEST_ASSERT(snapshot.m_inspected.m_biome == "Hearth");
+        PPR_TEST_ASSERT(snapshot.m_inspected.m_nearest.has_value());
+        PPR_TEST_ASSERT(snapshot.m_inspected.m_nearest->m_key == 100u);
+
+        const sim::GlobalCellPos outside{sim::kWorldEdge, 45u};
+        pP::game::ui::captureColonyPresentation(snapshot, driver, outside, outside);
+        PPR_TEST_ASSERT(snapshot.m_inspected.m_presence == ECellPresence::unavailable);
+        PPR_TEST_ASSERT(not snapshot.m_inspected.m_generated and not snapshot.m_inspected.m_nearest);
+        PPR_TEST_ASSERT(driver.grid().residentChunkCount() == 0u);
     };
 
     PPR_UNIT_TEST (round_trip_restores_edited_cells_actor_identity_and_frozen_full_capture) {
@@ -953,6 +987,7 @@ namespace pP::game::tests {
         _.recurse(
             {generator_seven_checkpoint_is_incompatible_before_material_id_restore,
                 diagnostic_export_rejects_cancellation_and_unwritable_directory,
+                ui_model_preserves_authored_metadata_and_nearest_agent_for_unresident_cells,
                 round_trip_restores_edited_cells_actor_identity_and_frozen_full_capture,
                 authored_particles_survive_headless_digs_and_wait_for_complete_build_publication,
                 malformed_identity_metric_counts_and_payload_are_rejected_before_restore,
