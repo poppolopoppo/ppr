@@ -643,14 +643,16 @@ namespace pP::sim {
     double generationSurfaceHeight(const GenerationPlan &plan, const double x_m) noexcept {
         const auto &r = plan.recipe();
         return r.m_open_surface ? r.m_surface_elevation_m +
-                                      r.m_surface_amplitude_m * static_cast<double>(plan.fields()[r.m_surface_field].sample(x_m, 0.0))
+                                      r.m_surface_amplitude_m *
+                                          static_cast<double>(plan.fields()[r.m_surface_field].sample(x_m, 0.0))
                                 : kWorldEdge * r.m_cell_size_m;
     }
 
     double generationBedrockHeight(const GenerationPlan &plan, const double x_m) noexcept {
         const auto &r = plan.recipe();
         return r.m_open_surface ? r.m_bedrock_thickness_m +
-                                      r.m_bedrock_variation_m * static_cast<double>(plan.fields()[r.m_bedrock_field].sample(x_m, 0.0))
+                                      r.m_bedrock_variation_m *
+                                          static_cast<double>(plan.fields()[r.m_bedrock_field].sample(x_m, 0.0))
                                 : r.m_boundary_fine * r.m_cell_size_m;
     }
 
@@ -734,7 +736,10 @@ namespace pP::sim {
         for (const auto maximum: maxima) {
             total += maximum;
         }
-        if (total > 24u) {
+
+        // Accommodate all authored stage maxima together: 6 pore + 24 relaxation
+        // + 4 finish + 24 erosion. Numeric per-stage caps remain independent.
+        if (total > 58u) {
             Array<std::string> related;
             for (std::size_t i = 0u; i < biomes.size(); ++i) {
                 const auto values = counts(biomes[i]);
@@ -748,7 +753,7 @@ namespace pP::sim {
             related.erase(std::unique(related.begin(), related.end()), related.end());
             reject(
                 "biomes", EConfigErrc::cross_field_invalid,
-                "Sum of participant-wide sequential halo maxima exceeds 24 fine cells", std::move(related));
+                "Sum of participant-wide sequential halo maxima exceeds 58 fine cells", std::move(related));
         }
         PPR_RETURN_ERROR_ON_FAIL(WorldPlan, first);
         return {};

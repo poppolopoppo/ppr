@@ -140,7 +140,7 @@ ullptr`) and `mask` (empty). Components are
   by the numeric plan compiler. The fragment is not a validated world.
 - Generic dispatch restored; the known MSVC `fbt-resolve` ICE is user-owned.
 - `validateGenerationHalo` validates maxima over ALL supplied recipe biomes,
-  with deterministic contributor paths, shared per-pass caps and the 24-cell bound.
+  with deterministic contributor paths, separate numeric per-pass caps and the 58-cell aggregate bound.
   Game's `decodeWorldGenDefinition` adds required file envelope version 2 and
   source locations. `compileRecipe` resolves profile-owned rules and references
   through canonical bindings; appearance and pack documents remain game-owned.
@@ -240,7 +240,8 @@ surface-relative start resolution. Raster uses global tile pore seeds and the
 sum of pore/material/finishing/erosion halos. Weighted geological competition and
 weak solid-only finishing precede the optional final unweighted eight-neighbor
 erosion, which includes vacuum at fixed 50% adoption. Semantic keys resolve ties;
-all sequential passes share the 24-cell halo bound.
+all sequential passes share the 58-cell halo bound (participant-wide maxima,
+matching authored maxima6/24/4/24; numeric per-stage caps stay10/25/10/25).
 Geometry routes selected cave anchors around protected obstacles. Final terrain
 finishing discovers at most 4096 supported formation records against the frozen
 grid, applies them in stable order, and certifies selected backbone connectivity

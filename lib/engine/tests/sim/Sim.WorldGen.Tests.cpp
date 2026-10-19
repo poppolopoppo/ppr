@@ -1882,33 +1882,28 @@ material='rock'
                 source.m_biomes.m_entries.push_back({key, prototype});
             }
             source.m_biomes.m_entries[0u].m_value.m_pore = Pore{{"climate"}, 0.0, {}, 0.0, 6u};
-            source.m_biomes.m_entries[1u].m_value.m_relaxation.m_passes = 10u;
+            source.m_biomes.m_entries[1u].m_value.m_relaxation.m_passes = 24u;
             source.m_biomes.m_entries[2u].m_value.m_finish.m_passes = 4u;
-            source.m_biomes.m_entries[3u].m_value.m_erosion.m_passes = 4u;
+            source.m_biomes.m_entries[3u].m_value.m_erosion.m_passes = 24u;
             config::Diagnostics diagnostics;
             const auto accepted = compileDefinition(source, 1.0 / 3.0, diagnostics);
             PPR_TEST_ASSERT(accepted.has_value() and not diagnostics.hasErrors());
             PPR_TEST_ASSERT(accepted->m_biomes.size() == 5u and accepted->m_biomes.back().m_pore_passes == 0u);
 
-            // No layout selects this biome: authored participants still contribute and every tie is reported.
+            // No layout selects this biome: all authored participants still contribute at the full limit.
             auto &unused = source.m_biomes.m_entries.back().m_value;
             unused.m_pore = source.m_biomes.m_entries.front().m_value.m_pore;
-            unused.m_relaxation.m_passes = 10u;
+            unused.m_relaxation.m_passes = 24u;
             unused.m_finish.m_passes = 4u;
-            unused.m_erosion.m_passes = 5u;
-            const Array<std::string> contributors{
-                "biomes.a.pore.passes", "biomes.b.relaxation.passes", "biomes.c.finish.passes",
-                "biomes.unused.erosion.passes", "biomes.unused.finish.passes", "biomes.unused.pore.passes",
-                "biomes.unused.relaxation.passes"};
+            unused.m_erosion.m_passes = 24u;
             for (u32 order = 0u; order < 2u; ++order) {
                 diagnostics.clear();
-                const auto rejected = compileDefinition(source, 1.0 / 3.0, diagnostics);
-                PPR_TEST_ASSERT(
-                    not rejected and
-                    rejected.error() == config::make_error_code(config::EConfigErrc::cross_field_invalid));
-                PPR_TEST_ASSERT(diagnostics.entries().size() == 1u);
-                PPR_TEST_ASSERT(diagnostics.entries().front().m_property == "biomes");
-                PPR_TEST_ASSERT(diagnostics.entries().front().m_related_properties == contributors);
+                const auto compiled = compileDefinition(source, 1.0 / 3.0, diagnostics);
+                PPR_TEST_ASSERT(compiled.has_value() and not diagnostics.hasErrors());
+                const auto &numeric = compiled->m_biomes.back();
+                PPR_TEST_ASSERT(numeric.m_pore_passes == 6u and numeric.m_relaxation_passes == 24u);
+                PPR_TEST_ASSERT(numeric.m_finish_passes == 4u and numeric.m_erosion_passes == 24u);
+
                 std::ranges::reverse(source.m_biomes.m_entries);
             }
 
@@ -2159,14 +2154,14 @@ thickness_fine = 1
             std::array<GenerationBiome, 4u> biomes{};
             const std::array<std::string_view, 4u> paths{"biomes.a", "biomes.b", "biomes.c", "biomes.d"};
             biomes[0u].m_pore_passes = 6u;
-            biomes[1u].m_relaxation_passes = 10u;
+            biomes[1u].m_relaxation_passes = 24u;
             biomes[2u].m_finish_passes = 4u;
-            biomes[3u].m_erosion_passes = 4u;
+            biomes[3u].m_erosion_passes = 24u;
             config::Diagnostics diagnostics;
             PPR_TEST_ASSERT(not validateGenerationHalo(biomes, paths, &diagnostics));
             PPR_TEST_ASSERT(not diagnostics.hasErrors());
 
-            biomes[3u].m_erosion_passes = 5u;
+            biomes[3u].m_erosion_passes = 25u;
             PPR_TEST_ASSERT(
                 validateGenerationHalo(biomes, paths, &diagnostics) ==
                 config::make_error_code(config::EConfigErrc::cross_field_invalid));
@@ -2384,19 +2379,24 @@ thickness_fine = 1
             };
 
             rejects([](auto &recipe) { recipe.m_biomes[0u].m_temperature_field = 1u; });
-            rejects([](auto &recipe) { recipe.m_biomes[0u].m_erosion_passes = 25u; });
+            rejects([](auto &recipe) { recipe.m_biomes[0u].m_erosion_passes = 26u; });
             rejects([](auto &recipe) {
-                recipe.m_biomes[0u].m_relaxation_passes = 17u;
-                recipe.m_biomes[0u].m_erosion_passes = 8u;
+                recipe.m_biomes[0u].m_relaxation_passes = 25u;
+                recipe.m_biomes[0u].m_pore_passes = 10u;
+                recipe.m_biomes[0u].m_finish_passes = 10u;
+                recipe.m_biomes[0u].m_erosion_passes = 14u;
+                PPR_TEST_ASSERT(validateGenerationRecipe(recipe) == std::errc::invalid_argument);
             });
             rejects([](auto &recipe) {
                 recipe.m_biomes[0u].m_relaxation_passes = (std::numeric_limits<u32>::max)();
                 recipe.m_biomes[0u].m_pore_passes = 1u;
             });
             rejects([](auto &recipe) {
-                recipe.m_biomes[0u].m_relaxation_passes = 20u;
-                recipe.m_biomes[0u].m_pore_passes = 3u;
-                recipe.m_biomes[0u].m_finish_passes = 2u;
+                recipe.m_biomes[0u].m_relaxation_passes = 24u;
+                recipe.m_biomes[0u].m_pore_passes = 7u;
+                recipe.m_biomes[0u].m_finish_passes = 4u;
+                recipe.m_biomes[0u].m_erosion_passes = 24u;
+                PPR_TEST_ASSERT(validateGenerationRecipe(recipe) == std::errc::invalid_argument);
             });
             rejects([](auto &recipe) { recipe.m_fields.push_back(recipe.m_fields[0u]); });
             rejects([](auto &recipe) { recipe.m_biomes[0u].m_lining_material = 17u; });
@@ -2599,7 +2599,10 @@ thickness_fine = 1
             ChunkGrid grid;
             InitialMatter matter;
             InitialMatterRegion region{
-                .m_identity = 1u, .m_material = 99u, .m_temperature_k = 293.0, .m_bulk_density_kg_m3 = 1000.0,
+                .m_identity = 1u,
+                .m_material = 99u,
+                .m_temperature_k = 293.0,
+                .m_bulk_density_kg_m3 = 1000.0,
                 .m_spans = {}};
             for (u32 y = 10u; y < 110u; ++y) {
                 region.m_spans.push_back({y, 10u, 1010u});
@@ -3001,7 +3004,13 @@ thickness_fine = 1
             recipe.m_biomes[0u].m_deposits[0u].m_radius_min_m = 0.0;
             PPR_TEST_ASSERT(validateGenerationRecipe(recipe) == std::errc::invalid_argument);
             recipe.m_biomes[0u].m_deposits[0u].m_radius_min_m = 4.0;
+
+            // Every per-stage cap can hold while the participant-wide sequential halo
+            // budget (58 fine cells) is exceeded - the caps stay independent of it.
+            recipe.m_biomes[0u].m_pore_passes = 10u;
             recipe.m_biomes[0u].m_relaxation_passes = 25u;
+            recipe.m_biomes[0u].m_finish_passes = 10u;
+            recipe.m_biomes[0u].m_erosion_passes = 25u;
             PPR_TEST_ASSERT(validateGenerationRecipe(recipe) == std::errc::invalid_argument);
             const auto [context, cancel] = context::withCancel(context::background());
             cancel();
@@ -3353,6 +3362,65 @@ thickness_fine = 1
             // Pin the full global-pass output using semantic fields, never Cell padding.
             PPR_TEST_ASSERT(checksum(*left) == 0x40b7d1729d078c3bull);
             PPR_TEST_ASSERT(checksum(*right) == 0x5cac8b4b33fa15b9ull);
+        };
+
+        PPR_UNIT_TEST (maximum_authored_neighbor_passes_replay_seams_and_cancel) {
+            auto recipe = numericRecipe();
+            recipe.m_cell_size_m = 1.0;
+            recipe.m_materials.push_back({33u, true, true, EGenerationMatter::solid, 2700.0});
+            auto &biome = recipe.m_biomes.front();
+            biome.m_bands[0u].m_choices.push_back({204u, 33u, 1.0});
+            biome.m_pore_probability = 0.15;
+            biome.m_pore_affinity_min = -1.0;
+            biome.m_pore_passes = 6u;
+            biome.m_relaxation_passes = 24u;
+            biome.m_finish_passes = 4u;
+            biome.m_erosion_passes = 24u;
+            biome.m_lining_material = 17u;
+            biome.m_lining_thickness_fine = 3u;
+
+            const auto plan = compileGenerationPlan(recipe, 42u);
+            PPR_TEST_ASSERT(plan.has_value());
+            const auto layout = compileBiomeLayout(*plan);
+            PPR_TEST_ASSERT(layout.has_value());
+            GenerationGeometry geometry;
+            geometry.m_instances.push_back({0u, kGenerationStartRule, 0u, 120, 80, false});
+            const auto raster = compileGenerationRaster(*plan, *layout, geometry);
+            PPR_TEST_ASSERT(raster.has_value());
+            _.log(
+                std::format(
+                    "Maximum-pass known working payload per active chunk: {} bytes", raster->chunkWorkingPayloadBytes())
+                    .c_str());
+
+            // Two independently generated chunks exercise the larger halo concurrently.
+            auto left_work = std::async(std::launch::async, [&] { return raster->chunk({0u, 0u}); });
+            auto right_work = std::async(std::launch::async, [&] { return raster->chunk({1u, 0u}); });
+            const auto left = left_work.get();
+            const auto right = right_work.get();
+            PPR_TEST_ASSERT(left.has_value() and right.has_value());
+
+            const auto right_replay = raster->chunk({1u, 0u});
+            const auto left_replay = raster->chunk({0u, 0u});
+            PPR_TEST_ASSERT(left_replay.has_value() and right_replay.has_value());
+            PPR_TEST_ASSERT(*left == *left_replay and *right == *right_replay);
+
+            // Protected geometry crosses the independently rasterized seam.
+            for (u32 y = 80u; y < 110u; ++y) {
+                for (u32 x = 120u; x < 150u; ++x) {
+                    const auto &cells = x < kChunkEdge ? *left : *right;
+                    PPR_TEST_ASSERT(cells[y * kChunkEdge + x % kChunkEdge] == Cell{});
+                }
+            }
+
+            for (u32 x = 0u; x < kChunkEdge; ++x) {
+                PPR_TEST_ASSERT((*left)[x].m_element == recipe.m_boundary_material);
+                PPR_TEST_ASSERT((*right)[x].m_element == recipe.m_boundary_material);
+            }
+
+            const auto [cancel_context, cancel] = context::withCancel(context::background());
+            cancel();
+            const auto cancelled = raster->chunk({0u, 0u}, cancel_context);
+            PPR_TEST_ASSERT(not cancelled and cancelled.error() == std::errc::operation_canceled);
         };
 
         PPR_UNIT_TEST (chunk_raster_preserves_boundaries_host_replacement_and_global_seams) {
@@ -4323,6 +4391,7 @@ namespace pP::tests {
             detail::WorldGen::coherent_vacuum_palette_is_salted_before_bounded_relaxation,
             detail::WorldGen::relaxation_crosses_chunk_seams_preserves_reservations_and_precedes_detail,
             detail::WorldGen::absent_biome_pass_maxima_preserve_sampled_chunk_output,
+            detail::WorldGen::maximum_authored_neighbor_passes_replay_seams_and_cancel,
             detail::WorldGen::chunk_raster_preserves_boundaries_host_replacement_and_global_seams,
             detail::WorldGen::chunk_raster_opens_room_portals_but_preserves_mixed_role_sealed_pockets,
             detail::WorldGen::chunk_raster_protects_template_reservations_from_cave_fields,
