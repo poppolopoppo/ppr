@@ -293,6 +293,16 @@ export namespace pP {
         /// be admitted. Does not advance gameplay or submit render work.
         [[nodiscard]] virtual std::error_code serviceControls_();
 
+        /// Terminal collection only. Settle owned callbacks and compute before
+        /// the renderer's separate teardown proof or lane stop.
+        [[nodiscard]] virtual GpuQuiescenceResult settleOwnedDeviceWorkBeforeTeardown_();
+        [[nodiscard]] std::error_code collectOwnedDeviceWait_();
+
+        /// Main-owner simulation service, independent of render admission.
+        /// Null opts out without reading the injected boundary clock.
+        [[nodiscard]] virtual std::optional<TimePoint> nextSimulationDeadline() const noexcept;
+        [[nodiscard]] virtual std::error_code serviceSimulation(TimePoint now);
+
         // Test-seam construction: scripted platform + injected clock (the
         // production ctor delegates with IPlatform::create() and the steady
         // clock). The clock outlives the application (non-owning view).
@@ -340,6 +350,7 @@ export namespace pP {
         // The renderer ledger is the source of truth; pacer/lane signals
         // are hints rechecked here before sleeping or building.
         [[nodiscard]] std::error_code admitClientFrame_(TimeSpan *out_delta_time, bool &out_skip);
+        [[nodiscard]] std::error_code serviceSimulationDue_();
 
         // P2 backpressure hint wait: after a transport drop, parks in
         // bounded pump+wait slices until a credit hint, exit, terminal, or
@@ -492,6 +503,7 @@ export namespace pP {
 
     private:
         std::unique_ptr<Renderer> m_renderer{};
+
         TimerManager m_application_clock{};
         std::optional<TimePoint> m_last_admitted_tick{};
         FramePacer m_pacer{};
@@ -621,9 +633,11 @@ export namespace pP {
         GpuTeardownFailureHandler m_on_gpu_teardown_failure{nullptr};
         GpuQuiescence m_gpu_teardown_disposition{GpuQuiescence::kUnknown};
         std::error_code m_gpu_teardown_error{};
+        std::error_code m_owned_device_error{};
         Array<std::string> m_gpu_teardown_stages{};
         std23::move_only_function<void()> m_gpu_teardown_entry_hook{};
         bool m_gpu_teardown_prepared{false};
+        bool m_owned_device_prepared{};
 
         /// throttle refresh loop to low frame-rate when application is in background
         bool m_has_background_priority{false};

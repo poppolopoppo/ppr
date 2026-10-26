@@ -646,7 +646,7 @@ namespace pP {
             // a handoff failure means the releases may still be pending.
             bool lane_acknowledged = false;
             try {
-                lane_sync_err = renderLane()->runOnLaneSync(
+                auto operation_owner = std::make_unique<RenderLaneOperation>(
                     [this, device_loss_confirmed]() -> std::error_code {
                         std::error_code lane_err{};
                         if (device_loss_confirmed) {
@@ -674,8 +674,19 @@ namespace pP {
                         // Triangle shutdown runs on main below, before the
                         // resets and the base shutdown's renderer/RHI release.
                         return lane_err;
-                    },
-                    &lane_acknowledged);
+                    });
+
+                auto operation_ticket = renderLane()->tryBeginOperation(operation_owner);
+
+                const auto operation_completion = operation_ticket ? renderLane()->waitOperation(*operation_ticket)
+                                                                   : Expected<RenderLaneOperationCompletion>{
+                                                                         std::unexpected{operation_ticket.error()}};
+
+                lane_acknowledged = operation_completion and operation_completion->m_ran;
+                lane_sync_err = operation_completion ? (operation_completion->m_operation_error
+                                                               ? operation_completion->m_operation_error
+                                                               : operation_completion->m_transport_error)
+                                                     : operation_completion.error();
             } catch (...) {
                 lane_sync_err = std::make_error_code(std::errc::state_not_recoverable);
             }
@@ -824,9 +835,20 @@ namespace pP {
                 std::error_code ui_err{};
                 bool ui_acknowledged = false;
                 try {
-                    ui_err = renderLane()->runOnLaneSync(
-                        [this]() -> std::error_code { return releaseImGuiGpuResourcesOnOwnerLane(*m_ui_service); },
-                        &ui_acknowledged);
+                    auto operation_owner = std::make_unique<RenderLaneOperation>(
+                        [this]() -> std::error_code { return releaseImGuiGpuResourcesOnOwnerLane(*m_ui_service); });
+
+                    auto operation_ticket = renderLane()->tryBeginOperation(operation_owner);
+
+                    const auto operation_completion = operation_ticket ? renderLane()->waitOperation(*operation_ticket)
+                                                                       : Expected<RenderLaneOperationCompletion>{
+                                                                             std::unexpected{operation_ticket.error()}};
+
+                    ui_acknowledged = operation_completion and operation_completion->m_ran;
+                    ui_err = operation_completion
+                                 ? (operation_completion->m_operation_error ? operation_completion->m_operation_error
+                                                                            : operation_completion->m_transport_error)
+                                 : operation_completion.error();
                 } catch (...) {
                     ui_err = std::make_error_code(std::errc::state_not_recoverable);
                 }
@@ -907,11 +929,23 @@ namespace pP {
                     std::error_code surface_err{};
                     bool surface_acknowledged = false;
                     try {
-                        surface_err = renderLane()->runOnLaneSync(
+                        auto operation_owner = std::make_unique<RenderLaneOperation>(
                             [this, doomed_handle]() -> std::error_code {
                                 return getRenderer().destroyWindowSurface(doomed_handle);
-                            },
-                            &surface_acknowledged);
+                            });
+
+                        auto operation_ticket = renderLane()->tryBeginOperation(operation_owner);
+
+                        const auto operation_completion = operation_ticket
+                                                              ? renderLane()->waitOperation(*operation_ticket)
+                                                              : Expected<RenderLaneOperationCompletion>{
+                                                                    std::unexpected{operation_ticket.error()}};
+
+                        surface_acknowledged = operation_completion and operation_completion->m_ran;
+                        surface_err = operation_completion ? (operation_completion->m_operation_error
+                                                                     ? operation_completion->m_operation_error
+                                                                     : operation_completion->m_transport_error)
+                                                           : operation_completion.error();
                     } catch (...) {
                         surface_err = std::make_error_code(std::errc::state_not_recoverable);
                     }
@@ -1338,6 +1372,9 @@ namespace pP {
 
     std::error_code ApplicationEditor::executeRenderWork_(
         const RenderFrameRequest &request, RenderFrameResult &out_result) {
+        out_result.m_presented_grid = {};
+        out_result.m_presented_particles.reset();
+
         const ITimerClock *const clock = request.m_observe_grid ? &observationClock() : nullptr;
         RenderCpuObservations cpu{};
         if (clock) {
@@ -1420,6 +1457,13 @@ namespace pP {
             return default_value_v;
         }
 
+        // A numerical buffer can become the solver's next candidate after
+        // publication. Reject its obsolete value before any uploads or binding.
+        if (not m_grid_pass->gpuParticleFrameCurrent(grid_stage.m_gpu_particles)) {
+            out_result.m_dropped = true;
+            return {};
+        }
+
         // P2 pass-affinity: ALL pass CPU-state mutations run here, on the
         // pass's owner lane (worker or main-inline), applied from the
         // owned payload captured in update(). The camera snapshot +
@@ -1440,6 +1484,10 @@ namespace pP {
             if (not grid_stage.m_retain_content) {
                 PPR_RETURN_ERROR_ON_FAIL(Editor, m_triangle_pass->applyStagedFrame(triangle_stage));
             }
+
+            if (grid_stage.m_gpu_particles) {
+                PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->applyGpuParticleView(*grid_stage.m_gpu_particles));
+            }
         }
         out_result.m_grid_staged_tiles = m_grid_pass->stagedTileCount();
         out_result.m_grid_cached_tiles = m_grid_pass->cachedTileCount();
@@ -1451,6 +1499,12 @@ namespace pP {
                 rhi_service->getDevice(), renderer.completedFenceValue());
             PPR_RETURN_ERROR_ON_FAIL(Editor, published);
             out_result.m_grid_stage_applied = out_result.m_grid_staging_applied and *published;
+
+            // Resident particles and their clipping terrain form one cohort.
+            // A partial terrain upload cannot draw the new numerical view.
+            if (grid_stage.m_gpu_particles and not *published) {
+                return {};
+            }
         }
 
         // Detached UI submission, bound synchronously on this lane: the
@@ -1520,6 +1574,7 @@ namespace pP {
                         Editor,
                         m_grid_pass->prepareBackground(context, packet.m_camera, retro_viewport, retro_scissor));
                     PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->prepareGpuVisibility(context));
+                    PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->prepareGpuParticles(context));
                 }
 
                 return m_retro_pass->prepareScene(
@@ -1528,7 +1583,8 @@ namespace pP {
             const CpuObservationScope cpu_prepare{clock, cpu.m_grid_prepare};
             PPR_RETURN_ERROR_ON_FAIL(
                 Editor, m_grid_pass->prepareBackground(context, packet.m_camera, grid_viewport, grid_scissor));
-            return m_grid_pass->prepareGpuVisibility(context);
+            PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->prepareGpuVisibility(context));
+            return m_grid_pass->prepareGpuParticles(context);
         };
 
         const DrawSubmission scene_submission{"scene", scene_draw};
@@ -1656,6 +1712,12 @@ namespace pP {
             return default_value_v;
         }
         PPR_RETURN_ERROR_ON_FAIL(Editor, frame_err);
+
+        if (out_result.m_presented) {
+            out_result.m_presented_grid = m_grid_pass->activeWorldIdentity();
+            out_result.m_presented_particles = m_grid_pass->activeParticlePresentation();
+        }
+
         return default_value_v;
     }
 }

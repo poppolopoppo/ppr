@@ -155,6 +155,48 @@ namespace pP {
         return {};
     }
 
+    GpuQuiescenceResult Application::settleOwnedDeviceWorkBeforeTeardown_() {
+        return {.m_disposition = GpuQuiescence::kIdleProven};
+    }
+
+    std::error_code Application::collectOwnedDeviceWait_() {
+        std::error_code first{};
+        PPR_RETAIN_ERROR_ON_FAIL(App, first, pumpRenderCompletions_());
+        if (m_platform) {
+            PPR_RETAIN_ERROR_ON_FAIL(App, first, m_platform->pumpNativeEvents());
+
+            const hal::ProfileScope wait_scope{"App.OwnedDevice.Wait", hal::profile_blocking_category};
+            PPR_RETAIN_ERROR_ON_FAIL(App, first, m_platform->waitNativeEvents(FramePacer::kWakeQuantum));
+        } else {
+            const hal::ProfileScope wait_scope{"App.OwnedDevice.Wait", hal::profile_blocking_category};
+            std::this_thread::sleep_for(FramePacer::kWakeQuantum);
+        }
+
+        return first;
+    }
+
+    std::optional<TimePoint> Application::nextSimulationDeadline() const noexcept {
+        return std::nullopt;
+    }
+
+    std::error_code Application::serviceSimulation(const TimePoint) {
+        return {};
+    }
+
+    std::error_code Application::serviceSimulationDue_() {
+        const auto deadline = nextSimulationDeadline();
+        if (not deadline or isExitRequested())
+            return {};
+
+        const TimePoint now = m_observation_clock.now();
+        if (now < *deadline)
+            return {};
+
+        const hal::ProfileScope scope{"App.SimulationService"};
+        PPR_RETURN_ERROR_ON_FAIL(App, serviceSimulation(now));
+        return {};
+    }
+
     bool Application::isExitRequested() const noexcept {
         if (m_exit_requested.load(std::memory_order_acquire)) {
             return true;
@@ -1657,6 +1699,10 @@ namespace pP {
         // from the same admitted frame before admission. A denied credit
         // does not re-arm the cap, but its elapsed time still ticks/carries.
         for (;;) {
+            PPR_RETURN_ERROR_ON_FAIL(App, serviceSimulationDue_());
+            if (isExitRequested())
+                break;
+
             const std::optional<TimeSpan> target = getTargetFrameTime();
             const TimeSpan period = target.value_or(TimeSpan{});
             const TimePoint previous_tick = m_last_admitted_tick.value_or(m_application_clock.now());
@@ -1666,11 +1712,18 @@ namespace pP {
             if (not m_pacer.shouldWait(FramePacer::deadlineFor(previous_tick, period))) {
                 break;
             }
-            m_pacer.waitForTarget(period, previous_tick, [this, target]() noexcept -> bool {
+            bool simulation_due = false;
+            m_pacer.waitForTarget(period, previous_tick, [this, target, &simulation_due]() noexcept -> bool {
                 if (isExitRequested()) {
                     return true;
                 }
-                return getTargetFrameTime() != target;
+
+                if (getTargetFrameTime() != target)
+                    return true;
+
+                const auto deadline = nextSimulationDeadline();
+                simulation_due = deadline and m_observation_clock.now() >= *deadline;
+                return simulation_due;
             });
             if (isExitRequested()) {
                 break;
@@ -1678,8 +1731,19 @@ namespace pP {
             if (getTargetFrameTime() != target) {
                 continue;
             }
+
+            if (simulation_due) {
+                PPR_RETURN_ERROR_ON_FAIL(App, serviceSimulationDue_());
+                // Service never admits an early render: keep the same cap anchor.
+                continue;
+            }
+
             break;
         }
+
+        // The final sleep can reach both deadlines without another predicate
+        // call. Service the simulation before ticking/admitting the client.
+        PPR_RETURN_ERROR_ON_FAIL(App, serviceSimulationDue_());
         return m_application_clock.tick(out_delta_time, TimeSpan{});
     }
 
@@ -1854,12 +1918,22 @@ namespace pP {
                 std::error_code renderer_err{};
                 bool renderer_acknowledged = false;
                 try {
-                    renderer_err = m_render_lane->runOnLaneSync(
-                        [this]() -> std::error_code {
-                            PPR_ASSERT(m_renderer != nullptr);
-                            return m_renderer->shutdown();
-                        },
-                        &renderer_acknowledged);
+                    auto operation_owner = std::make_unique<RenderLaneOperation>([this]() -> std::error_code {
+                        PPR_ASSERT(m_renderer != nullptr);
+                        return m_renderer->shutdown();
+                    });
+
+                    auto operation_ticket = m_render_lane->tryBeginOperation(operation_owner);
+
+                    const auto operation_completion = operation_ticket ? m_render_lane->waitOperation(*operation_ticket)
+                                                                       : Expected<RenderLaneOperationCompletion>{
+                                                                             std::unexpected{operation_ticket.error()}};
+
+                    renderer_acknowledged = operation_completion and operation_completion->m_ran;
+                    renderer_err = operation_completion ? (operation_completion->m_operation_error
+                                                                  ? operation_completion->m_operation_error
+                                                                  : operation_completion->m_transport_error)
+                                                        : operation_completion.error();
                 } catch (...) {
                     renderer_err = std::make_error_code(std::errc::state_not_recoverable);
                 }
@@ -1929,6 +2003,8 @@ namespace pP {
     }
 
     void Application::resetGpuTeardownEpoch_() noexcept {
+        m_owned_device_prepared = false;
+        m_owned_device_error = {};
         // Allocation-free by construction: Array::clear releases without
         // allocating; error_code/disposition/flag assignment cannot throw.
         m_gpu_teardown_prepared = false;
@@ -1964,12 +2040,26 @@ namespace pP {
     }
 
     std::error_code Application::prepareGpuTeardown_() {
+        if (not m_owned_device_prepared) {
+            try {
+                const auto owned = settleOwnedDeviceWorkBeforeTeardown_();
+                if (owned.m_disposition == GpuQuiescence::kUnknown) {
+                    failStopOnUnknownGpuTeardown_(owned.m_error);
+                }
+
+                m_owned_device_error = owned.m_error;
+                m_owned_device_prepared = true;
+            } catch (...) {
+                failStopOnUnknownGpuTeardown_(applicationExceptionError_());
+            }
+        }
+
         // B1'b fail-closed: no exception escapes this function before the
         // caller fail-stops on UNKNOWN. Every allocating/best-effort step
         // below is guarded; completion flags publish only after
         // classification; the prepared flag sets last.
         if (m_gpu_teardown_prepared) {
-            return m_gpu_teardown_error;
+            return m_owned_device_error ? m_owned_device_error : m_gpu_teardown_error;
         }
 
         m_display_transactions_stopped = true;
@@ -2002,8 +2092,22 @@ namespace pP {
                     }
                     if (renderLaneOwnsRenderer_()) {
                         bool acknowledged = false;
-                        const std::error_code drain_error = m_render_lane->runOnLaneSync(
-                            []() -> std::error_code { return {}; }, &acknowledged);
+                        auto operation_owner = std::make_unique<RenderLaneOperation>(
+                            []() -> std::error_code { return {}; });
+
+                        auto operation_ticket = m_render_lane->tryBeginOperation(operation_owner);
+
+                        const auto operation_completion = operation_ticket
+                                                              ? m_render_lane->waitOperation(*operation_ticket)
+                                                              : Expected<RenderLaneOperationCompletion>{
+                                                                    std::unexpected{operation_ticket.error()}};
+
+                        acknowledged = operation_completion and operation_completion->m_ran;
+                        const std::error_code drain_error = operation_completion
+                                                                ? (operation_completion->m_operation_error
+                                                                          ? operation_completion->m_operation_error
+                                                                          : operation_completion->m_transport_error)
+                                                                : operation_completion.error();
                         if (drain_error or not acknowledged) {
                             if (not m_wait_pump_error) {
                                 m_wait_pump_error = drain_error ? drain_error
@@ -2041,7 +2145,7 @@ namespace pP {
             m_gpu_teardown_prepared = true;
             noteGpuTeardownStageBestEffort_("quiescence");
             noteGpuTeardownStageBestEffort_("idle-proven");
-            return default_value_v;
+            return m_owned_device_error;
         }
 
         // Quiescence is established WITHOUT releasing anything; release
@@ -2082,14 +2186,25 @@ namespace pP {
                 }
 
                 handoff_state = std::make_shared<QuiescenceHandoffState>();
-                sync_err = m_render_lane->runOnLaneSync(
+                auto operation_owner = std::make_unique<RenderLaneOperation>(
                     [this, handoff_state]() -> std::error_code {
                         PPR_ASSERT(m_renderer != nullptr);
                         m_renderer->quarantineAdmission();
                         handoff_state->m_quiescence = m_renderer->establishGpuQuiescence();
                         return handoff_state->m_quiescence.m_error;
-                    },
-                    &acknowledged);
+                    });
+
+                auto operation_ticket = m_render_lane->tryBeginOperation(operation_owner);
+
+                const auto operation_completion = operation_ticket ? m_render_lane->waitOperation(*operation_ticket)
+                                                                   : Expected<RenderLaneOperationCompletion>{
+                                                                         std::unexpected{operation_ticket.error()}};
+
+                acknowledged = operation_completion and operation_completion->m_ran;
+                sync_err = operation_completion
+                               ? (operation_completion->m_operation_error ? operation_completion->m_operation_error
+                                                                          : operation_completion->m_transport_error)
+                               : operation_completion.error();
             } catch (...) {
                 sync_err = std::make_error_code(std::errc::state_not_recoverable);
             }
@@ -2142,7 +2257,7 @@ namespace pP {
             case GpuQuiescence::kRemovalConfirmed: noteGpuTeardownStageBestEffort_("removal-confirmed"); break;
             case GpuQuiescence::kUnknown: noteGpuTeardownStageBestEffort_("unknown"); break;
         }
-        return m_gpu_teardown_error;
+        return m_owned_device_error ? m_owned_device_error : m_gpu_teardown_error;
     }
 
     void Application::failStopOnUnknownGpuTeardown_(const std::error_code quiescence_error) noexcept {

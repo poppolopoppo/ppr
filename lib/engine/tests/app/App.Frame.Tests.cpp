@@ -691,10 +691,11 @@ namespace pP::tests::detail {
         };
 
         struct PaceSpyPlatform final : IPlatform {
-            u32 m_pumps{0u};
-            u32 m_waits{0u};
+            PaceSpyClock *m_clock{};
             TimeSpan m_waited{};
             safe_ptr<Application> m_application{};
+            u32 m_pumps{0u};
+            u32 m_waits{0u};
 
             [[nodiscard]] std::error_code initialize(Application &application) override {
                 m_application.reset(&application);
@@ -736,6 +737,11 @@ namespace pP::tests::detail {
 
             [[nodiscard]] std::error_code pumpNativeEvents() override {
                 ++m_pumps;
+                if (m_clock != nullptr) {
+                    // Controlled time advances once per production pacer slice;
+                    // native-wait wall-clock remainder is deliberately irrelevant.
+                    m_clock->m_now += FramePacer::kWakeQuantum;
+                }
                 return default_value_v;
             }
 
@@ -777,6 +783,80 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(spy->m_waits == 0u);
             PPR_TEST_ASSERT(spy->m_waited == TimeSpan{});
             PPR_TEST_ASSERT(dt == TimeSpan{});
+        };
+
+        // ------------------------------------------------------------------
+        // independently serviced simulation deadlines
+        // ------------------------------------------------------------------
+
+        struct SimulationClockApp final : HeadlessApp {
+            using HeadlessApp::HeadlessApp;
+            using Application::advanceClock_;
+
+            std::optional<TimePoint> m_deadline{};
+            Array<TimePoint> m_services{};
+
+            [[nodiscard]] std::optional<TimePoint> nextSimulationDeadline() const noexcept override {
+                return m_deadline;
+            }
+
+            [[nodiscard]] std::error_code serviceSimulation(const TimePoint now) override {
+                m_services.push_back(now);
+                m_deadline.reset();
+                return {};
+            }
+        };
+
+        PPR_UNIT_TEST (simulation_deadline_preserves_cap_and_services_final_sleep) {
+            // Early predicate wake, final wake quantum and exact cap equality.
+            // Each case reaches the SAME 100ms render deadline and accounts dt once.
+            for (const auto due:
+                {std::chrono::milliseconds{30}, std::chrono::milliseconds{99}, std::chrono::milliseconds{100}}) {
+                PaceSpyClock clock{};
+                auto platform = std::make_unique<PaceSpyPlatform>();
+                auto *const spy = platform.get();
+                spy->m_clock = &clock;
+                SimulationClockApp simulation_app{"SimulationDeadline", std::move(platform), clock};
+                PPR_TEST_ASSERT(not simulation_app.boot());
+                PPR_DEFER {
+                    PPR_TEST_ASSERT(not simulation_app.teardown());
+                };
+                simulation_app.setTargetFrameRate(10);
+                simulation_app.m_deadline = TimePoint{} + due;
+
+                TimeSpan dt{};
+                PPR_TEST_ASSERT(not simulation_app.advanceClock_(&dt));
+                PPR_TEST_ASSERT(simulation_app.m_services.size() == 1u);
+                const auto expected_service = due == std::chrono::milliseconds{30}
+                                                  ? TimeSpan{std::chrono::milliseconds{30}}
+                                                  : TimeSpan{std::chrono::milliseconds{100}};
+                PPR_TEST_ASSERT(simulation_app.m_services[0u] == TimePoint{} + expected_service);
+                PPR_TEST_ASSERT(clock.m_now == TimePoint{} + std::chrono::milliseconds{100});
+                PPR_TEST_ASSERT(spy->m_pumps == 50u);
+                PPR_TEST_ASSERT(dt == std::chrono::milliseconds{100});
+            }
+        };
+
+        PPR_UNIT_TEST (uncapped_simulation_service_needs_no_target_or_native_wait) {
+            PaceSpyClock clock{};
+            auto platform = std::make_unique<PaceSpyPlatform>();
+            auto *const spy = platform.get();
+            SimulationClockApp simulation_app{"UncappedSimulation", std::move(platform), clock};
+            PPR_TEST_ASSERT(not simulation_app.boot());
+            PPR_DEFER {
+                PPR_TEST_ASSERT(not simulation_app.teardown());
+            };
+            simulation_app.m_deadline = clock.m_now;
+
+            TimeSpan dt{};
+            PPR_TEST_ASSERT(not simulation_app.advanceClock_(&dt));
+            PPR_TEST_ASSERT(simulation_app.m_services.size() == 1u);
+            PPR_TEST_ASSERT(spy->m_waits == 0u and spy->m_pumps == 0u);
+            PPR_TEST_ASSERT(dt == TimeSpan{});
+
+            // Null deadline is inactive; a second clock admission adds no service.
+            PPR_TEST_ASSERT(not simulation_app.advanceClock_(&dt));
+            PPR_TEST_ASSERT(simulation_app.m_services.size() == 1u and spy->m_waits == 0u);
         };
 
         // Blur → enable → refocus: blurring while throttling is disabled
@@ -839,6 +919,31 @@ namespace pP::tests::detail {
             }
         };
 
+        PPR_UNIT_TEST (owned_device_proof_precedes_renderer_proof_and_repeats_per_epoch) {
+            struct OwnedApp final : HeadlessApp {
+                using HeadlessApp::HeadlessApp;
+
+                u32 m_proofs{};
+                bool m_idle_before_proof{};
+
+                GpuQuiescenceResult settleOwnedDeviceWorkBeforeTeardown_() override {
+                    ++m_proofs;
+                    m_idle_before_proof = gpuTeardownDisposition() == GpuQuiescence::kIdleProven;
+                    return {.m_disposition = GpuQuiescence::kIdleProven};
+                }
+            };
+
+            OwnedApp owned_app{"OwnedProof"};
+            for (u32 epoch = 1u; epoch <= 2u; ++epoch) {
+                PPR_TEST_ASSERT(not owned_app.boot());
+                PPR_TEST_ASSERT(not owned_app.teardown());
+                PPR_TEST_ASSERT(owned_app.m_proofs == epoch and not owned_app.m_idle_before_proof);
+                PPR_TEST_ASSERT(owned_app.gpuTeardownDisposition() == GpuQuiescence::kIdleProven);
+                PPR_TEST_ASSERT(not owned_app.teardown());
+                PPR_TEST_ASSERT(owned_app.m_proofs == epoch);
+            }
+        };
+
         // Fused cleanup: a shutdown failure on a graceful exit must become
         // run()'s return value (previously unreachable behind the defer).
         PPR_UNIT_TEST (run_returns_shutdown_error_on_graceful_exit) {
@@ -882,8 +987,11 @@ namespace pP::tests {
             detail::FrameStages::display_settings_before_initialization_retain_presentation_request,
             detail::FrameStages::editor_blur_enable_refocus_activates_throttle,
             detail::FrameStages::preset_exit_stops_clock_admission,
+            detail::FrameStages::simulation_deadline_preserves_cap_and_services_final_sleep,
+            detail::FrameStages::uncapped_simulation_service_needs_no_target_or_native_wait,
             detail::FrameStages::run_returns_shutdown_error_on_graceful_exit,
             detail::FrameStages::run_keeps_first_error_across_shutdown_failure,
+            detail::FrameStages::owned_device_proof_precedes_renderer_proof_and_repeats_per_epoch,
         });
     };
 

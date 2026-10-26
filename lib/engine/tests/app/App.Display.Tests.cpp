@@ -15,6 +15,30 @@ namespace pP::tests::detail {
     // ------------------------------------------------------------------
 
     namespace Display {
+        // ------------------------------------------------------------------
+        // owned lifecycle wait fixture
+        // ------------------------------------------------------------------
+
+        PPR_DEFINE_LOG_CATEGORY(DisplayWaitFixture, debug, none)
+
+        std::error_code finishOwnedOperation(
+            RenderLane &lane, std::unique_ptr<RenderLaneOperation> operation, bool *const out_ran) {
+            PPR_TEST_ASSERT(out_ran != nullptr);
+            *out_ran = false;
+
+            auto ticket = lane.tryBeginOperation(operation);
+            PPR_RETURN_ERROR_ON_FAIL(DisplayWaitFixture, ticket);
+
+            auto completion = lane.waitOperation(*ticket);
+            PPR_RETURN_ERROR_ON_FAIL(DisplayWaitFixture, completion);
+            *out_ran = completion->m_ran;
+
+            PPR_RETURN_ERROR_ON_FAIL(
+                DisplayWaitFixture,
+                completion->m_operation_error ? completion->m_operation_error : completion->m_transport_error);
+            return {};
+        }
+
         struct TransactionApp final : Application {
             u32 m_settlements{0u};
             u32 m_updates{0u};
@@ -53,7 +77,8 @@ namespace pP::tests::detail {
             }
             std::error_code synchronize() {
                 bool ran = false;
-                const std::error_code error = renderLane()->runOnLaneSync([]() -> std::error_code { return {}; }, &ran);
+                const std::error_code error = finishOwnedOperation(
+                    *renderLane(), std::make_unique<RenderLaneOperation>([]() -> std::error_code { return {}; }), &ran);
                 return ran ? error : std::make_error_code(std::errc::not_connected);
             }
             std::error_code close() {

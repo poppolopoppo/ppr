@@ -85,6 +85,14 @@ namespace pP::tests {
 
     const UnitTest &zerov_probeTests() noexcept;
 
+    const UnitTest &matter_forkTests() noexcept;
+
+    const UnitTest &matter_gpuTests() noexcept;
+
+    const UnitTest &matter_adapterTests() noexcept;
+
+    const UnitTest &matter_runtime_gpuTests() noexcept;
+
     // Defined here rather than as an inline constexpr umbrella in App.Tests.cppm:
     // same MSVC C1001 shape as engine.tests.core. Same test set and order as before.
     extern const UnitTest app = UnitTest::Named("app") / [](UnitTest::IRun &_) -> void {
@@ -130,6 +138,10 @@ namespace pP::tests {
             imgui_dpiTests(),
             performance_widgetTests(),
             zerov_probeTests(),
+            matter_forkTests(),
+            matter_gpuTests(),
+            matter_adapterTests(),
+            matter_runtime_gpuTests(),
         });
     };
 } // namespace pP::tests

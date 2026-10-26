@@ -809,8 +809,8 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not renderer.renderToTexture(*target, {grown_draws}));
             grid.notifyFrameSubmitted(renderer.lastSubmittedFenceValue());
 
-            // Atlas write path: dirty visible cells serialize through the
-            // existing global-idle wait (counted, overlap never claimed).
+            // Dirty cells publish through bounded cohorts and completion-safe
+            // slots; no pass-owned queue-idle serialization remains.
             const GridTilePayload cell_payload{.m_rect = {0.0f, 0.0f, 128.0f, 128.0f}, .m_material = 7u};
             const GridTilePayload cell_views[] = {cell_payload};
             Array<u16> cell_materials{};
@@ -827,9 +827,19 @@ namespace pP::tests::detail {
                 });
             PPR_TEST_ASSERT(cell_uploaded.has_value());
             const u64 serializations_before = grid.atlasSerializationCount();
-            const auto wait_for_idle = [&renderer]() -> std::error_code { return renderer.waitOnHost(); };
-            PPR_TEST_ASSERT(not grid.prepareCellUploads(device, wait_for_idle));
-            PPR_TEST_ASSERT(grid.atlasSerializationCount() == serializations_before + 1u);
+            for (;;) {
+                PPR_TEST_ASSERT(not renderer.retireCompletedFrames());
+
+                const auto prepared = grid.tryPrepareCellUploads(device, renderer.completedFenceValue());
+                PPR_TEST_ASSERT(prepared.has_value());
+
+                if (*prepared)
+                    break;
+
+                PPR_TEST_ASSERT(not renderer.waitOnHost());
+            }
+
+            PPR_TEST_ASSERT(grid.atlasSerializationCount() == serializations_before);
             PPR_TEST_ASSERT(grid.atlasWriteCount() >= 1u);
         };
 
@@ -1203,8 +1213,17 @@ namespace pP::tests::detail {
             // encode (operation_in_progress). The uncached growth tiles
             // cold-stage from their submissions, so only chunk 5 needs the
             // atlas resident here.
-            const auto wait_for_idle = [&renderer]() -> std::error_code { return renderer.waitOnHost(); };
-            PPR_TEST_ASSERT(not grid.prepareCellUploads(device, wait_for_idle));
+            for (;;) {
+                PPR_TEST_ASSERT(not renderer.retireCompletedFrames());
+
+                const auto prepared = grid.tryPrepareCellUploads(device, renderer.completedFenceValue());
+                PPR_TEST_ASSERT(prepared.has_value());
+
+                if (*prepared)
+                    break;
+
+                PPR_TEST_ASSERT(not renderer.waitOnHost());
+            }
 
             target_a = makeOffscreenTarget(device);
             target_b = makeOffscreenTarget(device);

@@ -1,4 +1,5 @@
 module;
+#include "pP/Macros.h"
 #include "pP/UnitTest.h"
 
 module engine.tests.app;
@@ -8,11 +9,16 @@ import engine.app;
 import engine.math;
 import engine.image;
 import engine.sim;
+import engine.asset;
+import game.colony.content;
+import game.colony.worldgen;
 import std;
 
 import game.colony.driver;
 import game.colony.sim_packet;
 import game.colony.translator;
+
+#include "Colony.AuthoredFixture.Tests.h"
 
 namespace pP::tests::detail {
     // ------------------------------------------------------------------
@@ -313,8 +319,10 @@ namespace pP::tests::detail {
         // consumption (a live read would fail closed); only the captured
         // content reaches the pass.
         PPR_UNIT_TEST (capture_mutation_consume_uses_packet_content) {
+            colony::test_fixture::AuthoredFixture authored;
+
             colony::ColonyDriver driver{};
-            PPR_TEST_ASSERT(not driver.initLegacyFixture(colony::ColonyDriverDesc{.m_seed = 1234567u}));
+            PPR_TEST_ASSERT(not authored.initialize(driver, colony::ColonyDriverDesc{.m_seed = 1234567u}));
             PPR_DEFER {
                 std::ignore = driver.shutdown();
             };
@@ -396,8 +404,10 @@ namespace pP::tests::detail {
         // uploads nothing, so no stale remainder survives a successful
         // present (which clears the full-refresh flag in production).
         PPR_UNIT_TEST (two_chunks_across_updates_capture_and_upload_both) {
+            colony::test_fixture::AuthoredFixture authored;
+
             colony::ColonyDriver driver{};
-            PPR_TEST_ASSERT(not driver.initLegacyFixture(colony::ColonyDriverDesc{.m_seed = 1234567u}));
+            PPR_TEST_ASSERT(not authored.initialize(driver, colony::ColonyDriverDesc{.m_seed = 1234567u}));
             PPR_DEFER {
                 std::ignore = driver.shutdown();
             };
@@ -534,8 +544,10 @@ namespace pP::tests::detail {
         // clear the pending newer generation — only a matching revision
         // clears.
         PPR_UNIT_TEST (same_chunk_reedit_stale_ack_keeps_newer_revision) {
+            colony::test_fixture::AuthoredFixture authored;
+
             colony::ColonyDriver driver{};
-            PPR_TEST_ASSERT(not driver.initLegacyFixture(colony::ColonyDriverDesc{.m_seed = 77u}));
+            PPR_TEST_ASSERT(not authored.initialize(driver, colony::ColonyDriverDesc{.m_seed = 77u}));
             PPR_DEFER {
                 std::ignore = driver.shutdown();
             };
@@ -576,8 +588,10 @@ namespace pP::tests::detail {
         // overlapping in-flight packet carrying the old revision-1 ack can
         // never clear the new edit.
         PPR_UNIT_TEST (revision_continues_beyond_ack_row_removal) {
+            colony::test_fixture::AuthoredFixture authored;
+
             colony::ColonyDriver driver{};
-            PPR_TEST_ASSERT(not driver.initLegacyFixture(colony::ColonyDriverDesc{.m_seed = 55u}));
+            PPR_TEST_ASSERT(not authored.initialize(driver, colony::ColonyDriverDesc{.m_seed = 55u}));
             PPR_DEFER {
                 std::ignore = driver.shutdown();
             };
@@ -617,8 +631,10 @@ namespace pP::tests::detail {
         // it — a stale late result cannot resurrect them, and the
         // generation advances even when a regenerate reuses the same seed.
         PPR_UNIT_TEST (ack_manifest_carries_world_generation) {
+            colony::test_fixture::AuthoredFixture authored;
+
             colony::ColonyDriver driver{};
-            PPR_TEST_ASSERT(not driver.initLegacyFixture(colony::ColonyDriverDesc{.m_seed = 77u}));
+            PPR_TEST_ASSERT(not authored.initialize(driver, colony::ColonyDriverDesc{.m_seed = 77u}));
             PPR_DEFER {
                 std::ignore = driver.shutdown();
             };
@@ -632,7 +648,7 @@ namespace pP::tests::detail {
 
             // Same user seed, NEW generation: the stale manifest no longer
             // matches, so neither the ack nor a full-refresh clear applies.
-            PPR_TEST_ASSERT(not driver.regenerateLegacyFixture(77u));
+            PPR_TEST_ASSERT(not authored.initialize(driver, {.m_seed = 77u, .m_agent_count = 1u}));
             PPR_TEST_ASSERT(driver.worldGeneration() > generation_before);
             PPR_TEST_ASSERT(stage.m_ack_seed != driver.worldGeneration());
             PPR_TEST_ASSERT(not colony::isSimPacketCoherent(packet, driver.tickCount(), driver.worldGeneration()));
@@ -643,8 +659,10 @@ namespace pP::tests::detail {
         // stale lane ack is a no-op against the cleared set. The replacement
         // frame re-stages the whole world via the full-refresh capture.
         PPR_UNIT_TEST (regeneration_invalidates_packet_and_drops_dirty_set) {
+            colony::test_fixture::AuthoredFixture authored;
+
             colony::ColonyDriver driver{};
-            PPR_TEST_ASSERT(not driver.initLegacyFixture(colony::ColonyDriverDesc{.m_seed = 11u}));
+            PPR_TEST_ASSERT(not authored.initialize(driver, colony::ColonyDriverDesc{.m_seed = 11u}));
             PPR_DEFER {
                 std::ignore = driver.shutdown();
             };
@@ -656,7 +674,7 @@ namespace pP::tests::detail {
             const colony::SimFramePacket stale = captureFixturePacket(31u, driver);
             PPR_TEST_ASSERT(driver.presentEditsCapture().size() == 1u);
 
-            PPR_TEST_ASSERT(not driver.regenerateLegacyFixture(99u));
+            PPR_TEST_ASSERT(not authored.initialize(driver, {.m_seed = 99u, .m_agent_count = 1u}));
             PPR_TEST_ASSERT(not colony::isSimPacketCoherent(stale, driver.tickCount(), driver.worldGeneration()));
             PPR_TEST_ASSERT(driver.presentEditsCapture().empty());
 
@@ -680,8 +698,10 @@ namespace pP::tests::detail {
         // pending for the retry. The intact retry builds, applies, and
         // acknowledges normally.
         PPR_UNIT_TEST (rejected_frame_replays_dirty_set) {
+            colony::test_fixture::AuthoredFixture authored;
+
             colony::ColonyDriver driver{};
-            PPR_TEST_ASSERT(not driver.initLegacyFixture(colony::ColonyDriverDesc{.m_seed = 5u}));
+            PPR_TEST_ASSERT(not authored.initialize(driver, colony::ColonyDriverDesc{.m_seed = 5u}));
             PPR_DEFER {
                 std::ignore = driver.shutdown();
             };
@@ -718,8 +738,10 @@ namespace pP::tests::detail {
         // NOTHING — presentation state stays pending, so the world edits
         // inside it survive for the next buildable frame.
         PPR_UNIT_TEST (dropped_frame_never_acks_dirty_set) {
+            colony::test_fixture::AuthoredFixture authored;
+
             colony::ColonyDriver driver{};
-            PPR_TEST_ASSERT(not driver.initLegacyFixture(colony::ColonyDriverDesc{.m_seed = 21u}));
+            PPR_TEST_ASSERT(not authored.initialize(driver, colony::ColonyDriverDesc{.m_seed = 21u}));
             PPR_DEFER {
                 std::ignore = driver.shutdown();
             };
@@ -750,8 +772,10 @@ namespace pP::tests::detail {
         // propagates an error — the driver dirty set is untouched until a
         // successful consumption explicitly acknowledges it.
         PPR_UNIT_TEST (staged_build_failure_preserves_dirty_set) {
+            colony::test_fixture::AuthoredFixture authored;
+
             colony::ColonyDriver driver{};
-            PPR_TEST_ASSERT(not driver.initLegacyFixture(colony::ColonyDriverDesc{.m_seed = 33u}));
+            PPR_TEST_ASSERT(not authored.initialize(driver, colony::ColonyDriverDesc{.m_seed = 33u}));
             PPR_DEFER {
                 std::ignore = driver.shutdown();
             };
@@ -779,8 +803,10 @@ namespace pP::tests::detail {
         // ack set is untouched, the captured ack manifest still round-trips
         // from the owned stage, and a retry consumes normally.
         PPR_UNIT_TEST (exception_during_settlement_preserves_pending_set) {
+            colony::test_fixture::AuthoredFixture authored;
+
             colony::ColonyDriver driver{};
-            PPR_TEST_ASSERT(not driver.initLegacyFixture(colony::ColonyDriverDesc{.m_seed = 41u}));
+            PPR_TEST_ASSERT(not authored.initialize(driver, colony::ColonyDriverDesc{.m_seed = 41u}));
             PPR_DEFER {
                 std::ignore = driver.shutdown();
             };

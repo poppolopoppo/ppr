@@ -1,4 +1,5 @@
 module;
+#include "pP/Macros.h"
 #include "pP/UnitTest.h"
 
 #include <cstdio>
@@ -13,12 +14,42 @@ import engine.mesh;
 import engine.rhi;
 import engine.shader;
 import engine.sim;
+import engine.asset;
+import engine.image;
+import game.colony.content;
+import game.colony.worldgen;
 import std;
 
 import game.colony.driver;
 
+#include "Colony.AuthoredFixture.Tests.h"
+
 namespace pP::tests::detail {
     namespace RunGate {
+        // ------------------------------------------------------------------
+        // owned lifecycle wait fixture
+        // ------------------------------------------------------------------
+
+        PPR_DEFINE_LOG_CATEGORY(RunWaitFixture, debug, none)
+
+        std::error_code finishOwnedOperation(
+            RenderLane &lane, std::unique_ptr<RenderLaneOperation> operation, bool *const out_ran) {
+            PPR_TEST_ASSERT(out_ran != nullptr);
+            *out_ran = false;
+
+            auto ticket = lane.tryBeginOperation(operation);
+            PPR_RETURN_ERROR_ON_FAIL(RunWaitFixture, ticket);
+
+            auto completion = lane.waitOperation(*ticket);
+            PPR_RETURN_ERROR_ON_FAIL(RunWaitFixture, completion);
+            *out_ran = completion->m_ran;
+
+            PPR_RETURN_ERROR_ON_FAIL(
+                RunWaitFixture,
+                completion->m_operation_error ? completion->m_operation_error : completion->m_transport_error);
+            return {};
+        }
+
         // ------------------------------------------------------------------
         // B1'/B2'/B3' run-level evidence: real Application::run() through a
         // derived Editor fixture with an injected clock and a scripted
@@ -904,11 +935,13 @@ namespace pP::tests::detail {
             }
             std::error_code synchronize() {
                 bool ran = false;
-                const auto error = renderLane()->runOnLaneSync([]() -> std::error_code { return {}; }, &ran);
+                const auto error = finishOwnedOperation(
+                    *renderLane(), std::make_unique<RenderLaneOperation>([]() -> std::error_code { return {}; }), &ran);
                 return ran ? error : std::make_error_code(std::errc::not_connected);
             }
             std::error_code synchronize(RenderLaneOperation operation, bool &ran) {
-                return renderLane()->runOnLaneSync(std::move(operation), &ran);
+                return finishOwnedOperation(
+                    *renderLane(), std::make_unique<RenderLaneOperation>(std::move(operation)), &ran);
             }
             void recreate() {
                 bindDisplaySurface_(m_scripted->m_window.m_handle, 99u);
@@ -1675,7 +1708,7 @@ namespace pP::tests::detail {
         // every GPU touch here runs ON the lane: Grid/Triangle pass
         // initialize, per-frame update/apply/encode, the 64x64 offscreen
         // target create/release, and the retirement-gate hold/open all ride
-        // runOnLaneSync or the installed lane executor. Main only builds the
+        // an owned lane operation or the installed lane executor. Main only builds the
         // owned packet plus plain-value staged payloads and moves them
         // across the lane transports.
         //
@@ -1805,71 +1838,73 @@ namespace pP::tests::detail {
                 // stay GPU-pending until the test opens it lane-side.
                 bool ran = false;
                 const auto lane_bringup_t0 = std::chrono::steady_clock::now();
-                const std::error_code lane_ec = renderLane()->runOnLaneSync(
-                    [this, rhi, shaders, content, boot_timing]() -> std::error_code {
-                        const auto grid_t0 = std::chrono::steady_clock::now();
-                        const std::error_code grid_ec = m_grid.initialize(*rhi, *shaders, content);
-                        runGateBootTimingLogIf(
-                            boot_timing, "lane.boot.grid_initialize", runGateBootTimingMsSince(grid_t0));
-                        if (grid_ec) {
-                            return grid_ec;
-                        }
-                        const auto tri_t0 = std::chrono::steady_clock::now();
-                        const std::error_code tri_ec = m_triangles.initialize(*rhi, *shaders, content);
-                        runGateBootTimingLogIf(
-                            boot_timing, "lane.boot.triangles_initialize", runGateBootTimingMsSince(tri_t0));
-                        if (tri_ec) {
-                            return tri_ec;
-                        }
-                        const mesh::StaticMeshVertex verts[] = {
-                            {.m_position = {0.0f, 0.0f, 0.0f}, .m_normal = {0.0f, 0.0f, 1.0f}},
-                            {.m_position = {1.0f, 0.0f, 0.0f}, .m_normal = {0.0f, 0.0f, 1.0f}},
-                            {.m_position = {0.0f, 1.0f, 0.0f}, .m_normal = {0.0f, 0.0f, 1.0f}},
-                        };
-                        const u32 indices[] = {0u, 1u, 2u};
-                        const auto upload_t0 = std::chrono::steady_clock::now();
-                        const Expected<TriangleBagHandle> bag = m_triangles.uploadMesh(
-                            std::span<const mesh::StaticMeshVertex>{verts}, std::span<const u32>{indices});
-                        runGateBootTimingLogIf(
-                            boot_timing, "lane.boot.upload_mesh", runGateBootTimingMsSince(upload_t0));
-                        if (not bag.has_value()) {
-                            return bag.error();
-                        }
-                        m_tri_bag = *bag;
-                        const TextureHandle no_textures[] = {
-                            TextureHandle{}, TextureHandle{}, TextureHandle{}, TextureHandle{}};
-                        const auto pack_t0 = std::chrono::steady_clock::now();
-                        const Expected<MaterialHandle> material = m_triangles.packMaterial(
-                            mesh::MaterialAsset{}, std::span<const TextureHandle>{no_textures});
-                        runGateBootTimingLogIf(
-                            boot_timing, "lane.boot.pack_material", runGateBootTimingMsSince(pack_t0));
-                        if (not material.has_value()) {
-                            return material.error();
-                        }
-                        m_tri_material = *material;
+                const std::error_code lane_ec = finishOwnedOperation(
+                    *renderLane(),
+                    std::make_unique<RenderLaneOperation>(
+                        [this, rhi, shaders, content, boot_timing]() -> std::error_code {
+                            const auto grid_t0 = std::chrono::steady_clock::now();
+                            const std::error_code grid_ec = m_grid.initialize(*rhi, *shaders, content);
+                            runGateBootTimingLogIf(
+                                boot_timing, "lane.boot.grid_initialize", runGateBootTimingMsSince(grid_t0));
+                            if (grid_ec) {
+                                return grid_ec;
+                            }
+                            const auto tri_t0 = std::chrono::steady_clock::now();
+                            const std::error_code tri_ec = m_triangles.initialize(*rhi, *shaders, content);
+                            runGateBootTimingLogIf(
+                                boot_timing, "lane.boot.triangles_initialize", runGateBootTimingMsSince(tri_t0));
+                            if (tri_ec) {
+                                return tri_ec;
+                            }
+                            const mesh::StaticMeshVertex verts[] = {
+                                {.m_position = {0.0f, 0.0f, 0.0f}, .m_normal = {0.0f, 0.0f, 1.0f}},
+                                {.m_position = {1.0f, 0.0f, 0.0f}, .m_normal = {0.0f, 0.0f, 1.0f}},
+                                {.m_position = {0.0f, 1.0f, 0.0f}, .m_normal = {0.0f, 0.0f, 1.0f}},
+                            };
+                            const u32 indices[] = {0u, 1u, 2u};
+                            const auto upload_t0 = std::chrono::steady_clock::now();
+                            const Expected<TriangleBagHandle> bag = m_triangles.uploadMesh(
+                                std::span<const mesh::StaticMeshVertex>{verts}, std::span<const u32>{indices});
+                            runGateBootTimingLogIf(
+                                boot_timing, "lane.boot.upload_mesh", runGateBootTimingMsSince(upload_t0));
+                            if (not bag.has_value()) {
+                                return bag.error();
+                            }
+                            m_tri_bag = *bag;
+                            const TextureHandle no_textures[] = {
+                                TextureHandle{}, TextureHandle{}, TextureHandle{}, TextureHandle{}};
+                            const auto pack_t0 = std::chrono::steady_clock::now();
+                            const Expected<MaterialHandle> material = m_triangles.packMaterial(
+                                mesh::MaterialAsset{}, std::span<const TextureHandle>{no_textures});
+                            runGateBootTimingLogIf(
+                                boot_timing, "lane.boot.pack_material", runGateBootTimingMsSince(pack_t0));
+                            if (not material.has_value()) {
+                                return material.error();
+                            }
+                            m_tri_material = *material;
 
-                        rhi::TextureDesc target_desc{};
-                        target_desc.type = rhi::TextureType::Texture2D;
-                        target_desc.size = {64u, 64u, 1u};
-                        target_desc.arrayLength = 1u;
-                        target_desc.mipCount = 1u;
-                        target_desc.format = rhi::Format::RGBA8Unorm;
-                        target_desc.sampleCount = 1u;
-                        target_desc.memoryType = rhi::MemoryType::DeviceLocal;
-                        target_desc.usage = rhi::TextureUsage::RenderTarget;
-                        target_desc.defaultState = rhi::ResourceState::RenderTarget;
-                        target_desc.label = "lane-gate target";
-                        const auto target_t0 = std::chrono::steady_clock::now();
-                        const std::error_code target_ec = make_error_code(
-                            rhi->getDevice().createTexture(target_desc, nullptr, m_target.writeRef()));
-                        runGateBootTimingLogIf(
-                            boot_timing, "lane.boot.create_target", runGateBootTimingMsSince(target_t0));
-                        if (target_ec) {
-                            return target_ec;
-                        }
-                        getRenderer().setTestHoldSweep(true);
-                        return default_value_v;
-                    },
+                            rhi::TextureDesc target_desc{};
+                            target_desc.type = rhi::TextureType::Texture2D;
+                            target_desc.size = {64u, 64u, 1u};
+                            target_desc.arrayLength = 1u;
+                            target_desc.mipCount = 1u;
+                            target_desc.format = rhi::Format::RGBA8Unorm;
+                            target_desc.sampleCount = 1u;
+                            target_desc.memoryType = rhi::MemoryType::DeviceLocal;
+                            target_desc.usage = rhi::TextureUsage::RenderTarget;
+                            target_desc.defaultState = rhi::ResourceState::RenderTarget;
+                            target_desc.label = "lane-gate target";
+                            const auto target_t0 = std::chrono::steady_clock::now();
+                            const std::error_code target_ec = make_error_code(
+                                rhi->getDevice().createTexture(target_desc, nullptr, m_target.writeRef()));
+                            runGateBootTimingLogIf(
+                                boot_timing, "lane.boot.create_target", runGateBootTimingMsSince(target_t0));
+                            if (target_ec) {
+                                return target_ec;
+                            }
+                            getRenderer().setTestHoldSweep(true);
+                            return default_value_v;
+                        }),
                     &ran);
                 runGateBootTimingLogIf(
                     boot_timing, "lane.boot.lane_bringup", runGateBootTimingMsSince(lane_bringup_t0));
@@ -1974,8 +2009,8 @@ namespace pP::tests::detail {
                 // the later shutdown join stays bounded without the slice —
                 // the scripted platform needs no servicing.
                 renderLane()->setWaitPump({});
-                return renderLane()->runOnLaneSync(
-                    [this]() -> std::error_code {
+                return finishOwnedOperation(
+                    *renderLane(), std::make_unique<RenderLaneOperation>([this]() -> std::error_code {
                         // Release the hold only: retirement plus frontier
                         // publication ride the ordinary production sweep
                         // (the handoff's own kWake trips the lane's
@@ -2001,7 +2036,7 @@ namespace pP::tests::detail {
                             runGateBootTimingEnabled(), "lane.first_sweep.wait_for_fence",
                             runGateBootTimingMsSince(retire_t0));
                         return default_value_v;
-                    },
+                    }),
                     out_ran);
             }
 
@@ -2164,8 +2199,8 @@ namespace pP::tests::detail {
                     bool acknowledged = false;
                     std::error_code lane_err{};
                     try {
-                        lane_err = renderLane()->runOnLaneSync(
-                            [this]() -> std::error_code {
+                        lane_err = finishOwnedOperation(
+                            *renderLane(), std::make_unique<RenderLaneOperation>([this]() -> std::error_code {
                                 // First-error retain inside the handoff: a
                                 // grid failure must not skip the triangles
                                 // shutdown (target → grid → triangles order).
@@ -2182,7 +2217,7 @@ namespace pP::tests::detail {
                                     }
                                 }
                                 return lane_first_err;
-                            },
+                            }),
                             &acknowledged);
                     } catch (...) {
                         lane_err = std::make_error_code(std::errc::state_not_recoverable);
@@ -3232,12 +3267,14 @@ namespace pP::tests::detail {
         };
 
         PPR_UNIT_TEST (sim_catch_up_preserves_skipped_time) {
+            colony::test_fixture::AuthoredFixture authored;
+
             // Real ColonyDriver: one lumped effective_dt (dt + carry) ticks
             // the same fixed-step slices as the split frames would have —
             // GPU backpressure never loses sim time (5-slice clamp bounds a
             // single frame; the remainder stays in the defer backlog).
             colony::ColonyDriver lumped{};
-            PPR_TEST_ASSERT(not lumped.initLegacyFixture(colony::ColonyDriverDesc{.m_seed = 424242u}));
+            PPR_TEST_ASSERT(not authored.initialize(lumped, colony::ColonyDriverDesc{.m_seed = 424242u}));
             PPR_DEFER {
                 std::ignore = lumped.shutdown();
             };
@@ -3246,7 +3283,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(lumped.tickCount() == tick_before + 3u);
 
             colony::ColonyDriver split{};
-            PPR_TEST_ASSERT(not split.initLegacyFixture(colony::ColonyDriverDesc{.m_seed = 424242u}));
+            PPR_TEST_ASSERT(not authored.initialize(split, colony::ColonyDriverDesc{.m_seed = 424242u}));
             PPR_DEFER {
                 std::ignore = split.shutdown();
             };

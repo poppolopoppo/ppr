@@ -16,6 +16,21 @@
 
 ## Runtime flow
 
+Before renderer teardown, `settleOwnedDeviceWorkBeforeTeardown_` collects
+derived-owned callbacks and compute while the lane/dependencies remain live.
+Its proof is separate from the renderer proof. The default is idle; unknown
+completion/throw follows the existing fail-stop boundary. The boundary applies
+to normal finish, direct shutdown, exception and partial-initialization cleanup.
+`collectOwnedDeviceWait_` pumps existing frame/native acknowledgments and waits
+at the existing wake quantum without admitting gameplay.
+
+Opted-in clients may supply `nextSimulationDeadline` and `serviceSimulation(now)`.
+The main loop services due simulation before render-credit admission and during
+cap waits, outside predicate callbacks, then retains the same render deadline.
+The normal final-sleep path also checks due work before the single TimerManager
+tick. Default null deadlines perform no additional clock read or simulation work.
+Control pumping remains observation/ack work, separate from simulation mutation.
+
 1. `Application::run()` re-arms its epoch and initializes. Platform and shader/RHI services bootstrap before renderer setup. The renderer initializes on the worker when that lane is enabled; headless rendering initializes inline. Editor initialization creates client objects, resources, input routing, window and viewport. Startup service references are captured for worker callbacks.
 2. The main loop advances its explicit clock and services completions/display control. Admission happens before virtual client update. A capacity-busy frame collects native events without advancing client work and carries elapsed time to the next admitted update. Pacing deadlines stay anchored to the last admitted frame, so denied credits do not re-arm a full frame interval. Terminal failures stop client/render work; an empty `requestExit()` is graceful success, while an error exit retains its cause.
 3. Editor update runs platform/input work, syncs viewport, advances the camera, captures an owned `FramePacket`, prepares client-side content payloads, and updates UI. Game overrides add simulation and staged grid/debug data. Main does not mutate worker-owned pass caches.
@@ -50,3 +65,9 @@ busy waits and completion servicing. Main snapshots and resets it before the
 next virtual update; its outstanding-reservation peak is sampled at attempts.
 
 Opt-in grid observations also transport fixed-size CPU frame timings with frame identity and explicit-clock endpoints. The injected application clock must support concurrent `now()` calls while render observations are enabled and outlive the render-lane join. Surface timings contain their preparation/draw callbacks; they are CPU wall durations, not GPU timestamps.
+
+Blocking teardown/display barriers explicitly admit an owned RenderLane operation
+then wait on its exact ticket using the existing pump/deadline. Invocation/result
+acknowledgement remains separate from GPU completion; unknown completion retains
+dependent resources and follows the existing fail-stop boundary. UI frontend
+release stays on main, GPU release on its lane. Ordinary frames stay nonblocking.
