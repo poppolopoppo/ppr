@@ -1,4 +1,5 @@
 module;
+#include "pP/Macros.h"
 #include "pP/UnitTest.h"
 #include <cstdlib>
 
@@ -11,6 +12,30 @@ import std;
 
 namespace pP::tests::detail {
     namespace RenderLaneGate {
+        // ------------------------------------------------------------------
+        // owned lifecycle wait fixture
+        // ------------------------------------------------------------------
+
+        PPR_DEFINE_LOG_CATEGORY(LaneWaitFixture, debug, none)
+
+        std::error_code finishOwnedOperation(
+            RenderLane &lane, std::unique_ptr<RenderLaneOperation> operation, bool *const out_ran) {
+            PPR_TEST_ASSERT(out_ran != nullptr);
+            *out_ran = false;
+
+            auto ticket = lane.tryBeginOperation(operation);
+            PPR_RETURN_ERROR_ON_FAIL(LaneWaitFixture, ticket);
+
+            auto completion = lane.waitOperation(*ticket);
+            PPR_RETURN_ERROR_ON_FAIL(LaneWaitFixture, completion);
+            *out_ran = completion->m_ran;
+
+            PPR_RETURN_ERROR_ON_FAIL(
+                LaneWaitFixture,
+                completion->m_operation_error ? completion->m_operation_error : completion->m_transport_error);
+            return {};
+        }
+
         // ------------------------------------------------------------------
         // P2 demo tests per the wait/wake mechanism spec:
         // - 2.A pacer-seam tests (event-serving slices, posted wake,
@@ -354,6 +379,8 @@ namespace pP::tests::detail {
                     result.m_submit_value = request.m_packet->m_frame_id;
                     result.m_grid_ack_seed = request.m_grid_stage.m_ack_seed;
                     result.m_grid_ack_chunk_ids = request.m_grid_stage.m_ack_chunk_ids;
+                    result.m_presented = true;
+                    result.m_presented_grid = {37u, 20u, 103u};
                     outstanding.fetch_add(1u);
                     return {};
                 },
@@ -381,7 +408,15 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(results[0].m_grid_ack_seed == 19u and results[1].m_grid_ack_seed == 20u);
             PPR_TEST_ASSERT(results[0].m_grid_ack_chunk_ids[0] == 3u);
             PPR_TEST_ASSERT(results[1].m_grid_ack_chunk_ids[0] == 4u);
+            for (u32 index = 0u; index < 2u; ++index) {
+                PPR_TEST_ASSERT(results[index].m_presented and not results[index].m_grid_stage_applied);
+                PPR_TEST_ASSERT(results[index].m_presented_grid.m_job_id == 37u);
+                PPR_TEST_ASSERT(results[index].m_presented_grid.m_world_generation == 20u);
+                PPR_TEST_ASSERT(results[index].m_presented_grid.m_content_fingerprint == 103u);
+            }
+
             PPR_TEST_ASSERT(results[2].m_surface_result and not results[2].m_surface_result->m_error);
+            PPR_TEST_ASSERT(results[2].m_presented_grid.m_job_id == 0u);
             PPR_TEST_ASSERT(outstanding.load() == 2u);
             results.clear();
             PPR_TEST_ASSERT(not lane.drainResults(results) and results.empty());
@@ -654,11 +689,11 @@ namespace pP::tests::detail {
                 }
             });
             bool ran = false;
-            const std::error_code error = lane.runOnLaneSync(
-                [&]() -> std::error_code {
+            const std::error_code error = finishOwnedOperation(
+                lane, std::make_unique<RenderLaneOperation>([&]() -> std::error_code {
                     release.acquire();
                     return {};
-                },
+                }),
                 &ran);
             PPR_TEST_ASSERT(ran);
             PPR_TEST_ASSERT(error == first);
@@ -698,17 +733,698 @@ namespace pP::tests::detail {
                 throw std::runtime_error{"original pump"};
             });
             bool ran = false;
-            const std::error_code error = lane.runOnLaneSync(
-                [&]() -> std::error_code {
+            const std::error_code error = finishOwnedOperation(
+                lane, std::make_unique<RenderLaneOperation>([&]() -> std::error_code {
                     release.acquire();
                     return {};
-                },
+                }),
                 &ran);
             PPR_TEST_ASSERT(ran);
             PPR_TEST_ASSERT(error == std::make_error_code(std::errc::state_not_recoverable));
             PPR_TEST_ASSERT(lane.terminalError() == error);
             PPR_TEST_ASSERT(original_calls == 1u);
             PPR_TEST_ASSERT(replacement_calls >= 2u);
+            lane.requestStop();
+            PPR_TEST_ASSERT(not lane.join());
+        };
+
+        // ------------------------------------------------------------------
+        // correlated owned operation settlement
+        // ------------------------------------------------------------------
+
+        [[nodiscard]] RenderLaneOperationCompletion awaitOperation(
+            RenderLane &lane, const RenderLaneOperationTicket &ticket, std::counting_semaphore<> &wake) {
+            for (;;) {
+                const auto result = lane.takeOperation(ticket);
+                PPR_TEST_ASSERT(result.has_value());
+                if (result->has_value()) {
+                    return **result;
+                }
+
+                PPR_TEST_ASSERT(wake.try_acquire_for(std::chrono::seconds{30}));
+            }
+        }
+
+        struct SignalOnOperationDestruction {
+            std::binary_semaphore &m_destroyed;
+
+            explicit SignalOnOperationDestruction(std::binary_semaphore &destroyed) : m_destroyed(destroyed) {
+            }
+
+            ~SignalOnOperationDestruction() {
+                m_destroyed.release();
+            }
+        };
+
+        PPR_UNIT_TEST (owned_operation_wakes_without_frames_and_holds_completed_slot) {
+            std::binary_semaphore entered{0}, release{0};
+            std::counting_semaphore<> wake{0};
+            std::atomic<u32> wake_count{};
+            bool released = false;
+            std::thread::id operation_thread{};
+            RenderLane lane{};
+            RenderLane other_lane{};
+            PPR_DEFER {
+                if (not released) {
+                    release.release();
+                }
+
+                lane.requestStop();
+                other_lane.requestStop();
+                std::ignore = lane.join();
+                std::ignore = other_lane.join();
+            };
+
+            const auto stopped_availability = lane.operationAvailability();
+            PPR_TEST_ASSERT(not stopped_availability.m_live and not stopped_availability.m_available);
+
+            PPR_TEST_ASSERT(not lane.start({}, {}, {}, [&] {
+                wake_count.fetch_add(1u);
+                wake.release();
+            }));
+            PPR_TEST_ASSERT(not other_lane.start({}, {}, {}, {}));
+
+            const auto idle_availability = lane.operationAvailability();
+            PPR_TEST_ASSERT(idle_availability.m_live and idle_availability.m_available);
+
+            const auto input = std::make_shared<const u32>(71u);
+            auto operation = std::make_unique<RenderLaneOperation>([&, owned = input]() -> std::error_code {
+                entered.release();
+                release.acquire();
+                operation_thread = std::this_thread::get_id();
+                return *owned == 71u ? std::error_code{} : std::make_error_code(std::errc::invalid_argument);
+            });
+            const auto ticket = lane.tryBeginOperation(operation);
+            PPR_TEST_ASSERT(ticket.has_value() and not operation);
+            PPR_TEST_ASSERT(entered.try_acquire_for(std::chrono::seconds{30}));
+
+            const auto pending = lane.takeOperation(*ticket);
+            PPR_TEST_ASSERT(pending.has_value() and not pending->has_value());
+            PPR_TEST_ASSERT(lane.operationStatus(*ticket) == ERenderLaneOperationStatus::pending);
+
+            const auto occupied_availability = lane.operationAvailability();
+            PPR_TEST_ASSERT(occupied_availability.m_live and not occupied_availability.m_available);
+
+            PPR_TEST_ASSERT(other_lane.operationStatus(*ticket) == ERenderLaneOperationStatus::invalid);
+            const auto wrong_lane_take = other_lane.takeOperation(*ticket);
+            PPR_TEST_ASSERT(not wrong_lane_take.has_value() and wrong_lane_take.error() == std::errc::invalid_argument);
+            const auto wrong_lane_cancel = other_lane.cancelOperation(*ticket);
+            PPR_TEST_ASSERT(
+                not wrong_lane_cancel.has_value() and wrong_lane_cancel.error() == std::errc::invalid_argument);
+
+            const auto wrong_lane_wait = other_lane.waitOperation(*ticket);
+            PPR_TEST_ASSERT(not wrong_lane_wait and wrong_lane_wait.error() == std::errc::invalid_argument);
+            const auto empty_wait = lane.waitOperation(RenderLaneOperationTicket{});
+            PPR_TEST_ASSERT(not empty_wait and empty_wait.error() == std::errc::invalid_argument);
+
+            release.release();
+            released = true;
+            PPR_TEST_ASSERT(wake.try_acquire_for(std::chrono::seconds{30}));
+
+            // Readiness can make a service eligible without consuming the
+            // completion or opening the slot to another retained request.
+            const RenderLane &observer = lane;
+            PPR_TEST_ASSERT(observer.operationStatus(*ticket) == ERenderLaneOperationStatus::completed);
+            PPR_TEST_ASSERT(observer.operationStatus(*ticket) == ERenderLaneOperationStatus::completed);
+            PPR_TEST_ASSERT(not observer.operationAvailability().m_available);
+
+            auto next = std::make_unique<RenderLaneOperation>([]() -> std::error_code { return {}; });
+            const auto busy = lane.tryBeginOperation(next);
+            PPR_TEST_ASSERT(not busy.has_value() and busy.error() == std::errc::device_or_resource_busy);
+            PPR_TEST_ASSERT(static_cast<bool>(next));
+
+            bool sync_ran = true;
+            PPR_TEST_ASSERT(
+                finishOwnedOperation(
+                    lane, std::make_unique<RenderLaneOperation>([]() -> std::error_code { return {}; }), &sync_ran) ==
+                std::errc::device_or_resource_busy);
+            PPR_TEST_ASSERT(not sync_ran);
+
+            const u32 wakes_before_take = wake_count.load();
+            const auto completed = lane.takeOperation(*ticket);
+            PPR_TEST_ASSERT(completed.has_value() and completed->has_value());
+            PPR_TEST_ASSERT((**completed).m_ran and not (**completed).m_cancel_requested);
+            PPR_TEST_ASSERT(not (**completed).m_operation_error and not (**completed).m_transport_error);
+            PPR_TEST_ASSERT(operation_thread != std::this_thread::get_id());
+            PPR_TEST_ASSERT(wake_count.load() >= wakes_before_take + 1u);
+            PPR_TEST_ASSERT(observer.operationStatus(*ticket) == ERenderLaneOperationStatus::invalid);
+            PPR_TEST_ASSERT(observer.operationAvailability().m_available);
+
+            const auto repeated = lane.takeOperation(*ticket);
+            PPR_TEST_ASSERT(not repeated.has_value() and repeated.error() == std::errc::invalid_argument);
+
+            const auto next_ticket = lane.tryBeginOperation(next);
+            PPR_TEST_ASSERT(next_ticket.has_value() and not next);
+
+            PPR_TEST_ASSERT(observer.operationStatus(*ticket) == ERenderLaneOperationStatus::invalid);
+            const auto stale_take = lane.takeOperation(*ticket);
+            PPR_TEST_ASSERT(not stale_take.has_value() and stale_take.error() == std::errc::invalid_argument);
+            const auto stale_cancel = lane.cancelOperation(*ticket);
+            PPR_TEST_ASSERT(not stale_cancel.has_value() and stale_cancel.error() == std::errc::invalid_argument);
+
+            const auto stale_wait = lane.waitOperation(*ticket);
+            PPR_TEST_ASSERT(not stale_wait and stale_wait.error() == std::errc::invalid_argument);
+
+            const auto next_result = lane.waitOperation(*next_ticket);
+            PPR_TEST_ASSERT(next_result and next_result->m_ran);
+            PPR_TEST_ASSERT(not next_result->m_operation_error and not next_result->m_transport_error);
+
+            const auto repeated_wait = lane.waitOperation(*next_ticket);
+            PPR_TEST_ASSERT(not repeated_wait and repeated_wait.error() == std::errc::invalid_argument);
+
+            std::println(
+                "owned lane layout ticket={}/{} completion={}/{} lane={}/{} availability={}/{}",
+                sizeof(RenderLaneOperationTicket), alignof(RenderLaneOperationTicket),
+                sizeof(RenderLaneOperationCompletion), alignof(RenderLaneOperationCompletion), sizeof(RenderLane),
+                alignof(RenderLane), sizeof(RenderLaneOperationAvailability), alignof(RenderLaneOperationAvailability));
+        };
+
+        PPR_UNIT_TEST (queued_operation_cancel_destroys_captures_before_acknowledgement) {
+            std::binary_semaphore entered{0}, release{0};
+            bool released = false;
+            bool invoked = false;
+            bool destroyed = false;
+            bool destructor_pending = false;
+            bool destructor_settling = false;
+            bool destructor_busy = false;
+            RenderLaneOperationTicket ticket{};
+            RenderLane lane{};
+            PPR_DEFER {
+                if (not released) {
+                    release.release();
+                }
+
+                lane.requestStop();
+                std::ignore = lane.join();
+            };
+
+            PPR_TEST_ASSERT(not lane.start(
+                {},
+                [&](const RenderFrameRequest &, RenderFrameResult &) -> std::error_code {
+                    entered.release();
+                    release.acquire();
+                    return {};
+                },
+                {}, {}));
+            PPR_TEST_ASSERT(not lane.submitFrame(makeRequest(1u)));
+            PPR_TEST_ASSERT(entered.try_acquire_for(std::chrono::seconds{30}));
+
+            // The last owned capture reenters the production APIs during queued
+            // cancellation. No internal slot lock may be held across its destruction.
+            struct Capture {
+                RenderLane &m_lane;
+                const RenderLaneOperationTicket &m_ticket;
+                bool &m_destroyed;
+                bool &m_pending;
+                bool &m_settling;
+                bool &m_busy;
+
+                ~Capture() {
+                    const auto taken = m_lane.takeOperation(m_ticket);
+                    m_pending = taken.has_value() and
+                                not taken->has_value() and
+                                m_lane.operationStatus(m_ticket) == ERenderLaneOperationStatus::pending;
+
+                    const auto cancellation = m_lane.cancelOperation(m_ticket);
+                    m_settling = cancellation.has_value() and *cancellation == ERenderLaneCancelDisposition::settling;
+
+                    auto nested = std::make_unique<RenderLaneOperation>([]() -> std::error_code { return {}; });
+                    const auto admitted = m_lane.tryBeginOperation(nested);
+                    m_busy = not admitted.has_value() and
+                             admitted.error() == std::errc::device_or_resource_busy and
+                             static_cast<bool>(nested);
+                    m_destroyed = true;
+                }
+            };
+
+            auto capture = std::make_shared<Capture>(
+                lane, ticket, destroyed, destructor_pending, destructor_settling, destructor_busy);
+            auto operation = std::make_unique<RenderLaneOperation>(
+                [&, owned = std::move(capture)]() -> std::error_code {
+                    invoked = true;
+                    return {};
+                });
+            const auto admitted = lane.tryBeginOperation(operation);
+            PPR_TEST_ASSERT(admitted.has_value());
+            ticket = *admitted;
+
+            const auto cancellation = lane.cancelOperation(ticket);
+            PPR_TEST_ASSERT(
+                cancellation.has_value() and *cancellation == ERenderLaneCancelDisposition::cancelled_before_run);
+            PPR_TEST_ASSERT(destroyed and destructor_pending and destructor_settling and destructor_busy);
+            PPR_TEST_ASSERT(not invoked);
+
+            const auto completed = lane.waitOperation(ticket);
+            PPR_TEST_ASSERT(completed.has_value());
+            PPR_TEST_ASSERT(not completed->m_ran and completed->m_cancel_requested);
+            PPR_TEST_ASSERT(completed->m_operation_error == std::errc::operation_canceled);
+            PPR_TEST_ASSERT(not completed->m_transport_error);
+
+            const auto repeated = lane.cancelOperation(ticket);
+            PPR_TEST_ASSERT(not repeated.has_value() and repeated.error() == std::errc::invalid_argument);
+
+            release.release();
+            released = true;
+        };
+
+        PPR_UNIT_TEST (small_callable_reentry_never_runs_under_slot_lock) {
+            // One-pointer, nontrivial, nothrow-movable callable exercises the
+            // pinned STL small-object move/destruction path, not shared_ptr payload cleanup.
+            struct Probe {
+                RenderLane *m_lane{};
+                RenderLaneOperationTicket m_invalid_ticket{};
+                std::atomic<u32> m_moves{};
+                std::atomic<u32> m_destructors{};
+                std::atomic<u32> m_calls{};
+                std::atomic<u32> m_checks{};
+                std::atomic<bool> m_failed{};
+
+                void reenter() noexcept {
+                    try {
+                        const auto result = m_lane->takeOperation(m_invalid_ticket);
+                        if (result.has_value() or result.error() != std::errc::invalid_argument) {
+                            m_failed.store(true);
+                        }
+
+                        m_checks.fetch_add(1u);
+                    } catch (const std::bad_alloc &) {
+                        hal::fatalExit("allocation-failure");
+                    } catch (...) {
+                        // Destructor/move must remain nothrow; the test checks
+                        // this observable failure rather than hiding an exception.
+                        m_failed.store(true);
+                    }
+                }
+            };
+
+            struct SmallCallable {
+                Probe *m_probe{};
+
+                explicit SmallCallable(Probe &probe) noexcept : m_probe(&probe) {
+                }
+
+                SmallCallable(SmallCallable &&other) noexcept : m_probe(other.m_probe) {
+                    m_probe->m_moves.fetch_add(1u);
+                    m_probe->reenter();
+                }
+
+                ~SmallCallable() {
+                    m_probe->m_destructors.fetch_add(1u);
+                    m_probe->reenter();
+                }
+
+                std::error_code operator()() const {
+                    m_probe->m_calls.fetch_add(1u);
+                    return {};
+                }
+            };
+            static_assert(std::is_nothrow_move_constructible_v<SmallCallable>);
+
+            std::binary_semaphore entered{0}, release{0};
+            std::counting_semaphore<> wake{0};
+            Probe probe{};
+            bool released = false;
+            RenderLane lane{};
+            probe.m_lane = &lane;
+            PPR_DEFER {
+                if (not released) {
+                    release.release();
+                }
+
+                lane.requestStop();
+                std::ignore = lane.join();
+            };
+
+            PPR_TEST_ASSERT(not lane.start(
+                {},
+                [&](const RenderFrameRequest &, RenderFrameResult &) -> std::error_code {
+                    entered.release();
+                    release.acquire();
+                    return {};
+                },
+                {}, [&] { wake.release(); }));
+            PPR_TEST_ASSERT(not lane.submitFrame(makeRequest(1u)));
+            PPR_TEST_ASSERT(entered.try_acquire_for(std::chrono::seconds{30}));
+
+            SmallCallable queued_callable{probe};
+            auto queued = std::make_unique<RenderLaneOperation>(std::move(queued_callable));
+            const u32 queued_moves = probe.m_moves.load();
+            const u32 queued_destructors = probe.m_destructors.load();
+
+            const auto queued_ticket = lane.tryBeginOperation(queued);
+            PPR_TEST_ASSERT(queued_ticket.has_value() and not queued);
+            PPR_TEST_ASSERT(probe.m_moves.load() == queued_moves);
+            PPR_TEST_ASSERT(probe.m_destructors.load() == queued_destructors);
+
+            const auto cancellation = lane.cancelOperation(*queued_ticket);
+            PPR_TEST_ASSERT(
+                cancellation.has_value() and *cancellation == ERenderLaneCancelDisposition::cancelled_before_run);
+
+            const auto cancelled = lane.takeOperation(*queued_ticket);
+            PPR_TEST_ASSERT(cancelled.has_value() and cancelled->has_value() and not (**cancelled).m_ran);
+            PPR_TEST_ASSERT(probe.m_calls.load() == 0u);
+            PPR_TEST_ASSERT(probe.m_moves.load() == queued_moves);
+            PPR_TEST_ASSERT(probe.m_destructors.load() == queued_destructors + 1u);
+
+            SmallCallable running_callable{probe};
+            auto running = std::make_unique<RenderLaneOperation>(std::move(running_callable));
+            const u32 running_moves = probe.m_moves.load();
+            const u32 running_destructors = probe.m_destructors.load();
+
+            const auto running_ticket = lane.tryBeginOperation(running);
+            PPR_TEST_ASSERT(running_ticket.has_value() and not running);
+
+            release.release();
+            released = true;
+
+            const auto completed = awaitOperation(lane, *running_ticket, wake);
+            PPR_TEST_ASSERT(completed.m_ran and not completed.m_operation_error);
+            PPR_TEST_ASSERT(probe.m_calls.load() == 1u and probe.m_moves.load() == running_moves);
+            PPR_TEST_ASSERT(probe.m_destructors.load() == running_destructors + 1u);
+            PPR_TEST_ASSERT(probe.m_checks.load() >= 4u and not probe.m_failed.load());
+
+            std::println(
+                "small lane callable size={} align={} nothrow_move={}", sizeof(SmallCallable), alignof(SmallCallable),
+                std::is_nothrow_move_constructible_v<SmallCallable>);
+        };
+
+        PPR_UNIT_TEST (running_operation_cancel_retains_original_error_and_post_stop_take) {
+            std::binary_semaphore entered{0}, release{0};
+            bool released = false;
+            u32 pumps = 0u;
+            const std::error_code original{1234, std::system_category()};
+            const auto transport = std::make_error_code(std::errc::io_error);
+            RenderLane lane{};
+            PPR_DEFER {
+                if (not released) {
+                    release.release();
+                }
+
+                lane.requestStop();
+                std::ignore = lane.join();
+            };
+
+            PPR_TEST_ASSERT(not lane.start({}, {}, {}, {}));
+
+            auto operation = std::make_unique<RenderLaneOperation>([&]() -> std::error_code {
+                entered.release();
+                release.acquire();
+                throw std::system_error{original};
+            });
+            const auto ticket = lane.tryBeginOperation(operation);
+            PPR_TEST_ASSERT(ticket.has_value());
+            PPR_TEST_ASSERT(entered.try_acquire_for(std::chrono::seconds{30}));
+
+            const auto cancellation = lane.cancelOperation(*ticket);
+            PPR_TEST_ASSERT(cancellation.has_value() and *cancellation == ERenderLaneCancelDisposition::running);
+
+            const auto pending = lane.takeOperation(*ticket);
+            PPR_TEST_ASSERT(pending.has_value() and not pending->has_value());
+
+            lane.setWaitPump([&] {
+                if (++pumps == 1u) {
+                    throw std::system_error{transport};
+                }
+
+                if (not released) {
+                    release.release();
+                    released = true;
+                }
+            });
+
+            lane.requestStop();
+            auto denied = std::make_unique<RenderLaneOperation>([]() -> std::error_code { return {}; });
+            const auto denied_result = lane.tryBeginOperation(denied);
+            PPR_TEST_ASSERT(not denied_result.has_value() and denied_result.error() == std::errc::not_connected);
+            PPR_TEST_ASSERT(static_cast<bool>(denied));
+
+            PPR_TEST_ASSERT(not lane.join());
+
+            const auto cancellation_after_stop = lane.cancelOperation(*ticket);
+            PPR_TEST_ASSERT(
+                cancellation_after_stop.has_value() and
+                *cancellation_after_stop == ERenderLaneCancelDisposition::completed);
+
+            const auto completed = lane.waitOperation(*ticket);
+            PPR_TEST_ASSERT(completed.has_value());
+            PPR_TEST_ASSERT(completed->m_ran and completed->m_cancel_requested);
+            PPR_TEST_ASSERT(completed->m_operation_error == original);
+            PPR_TEST_ASSERT(&completed->m_operation_error.category() == &std::system_category());
+            PPR_TEST_ASSERT(completed->m_transport_error == transport);
+        };
+
+        PPR_UNIT_TEST (accepted_queued_operation_runs_across_stop) {
+            std::binary_semaphore entered{0}, release{0};
+            bool released = false;
+            u32 calls = 0u;
+            RenderLane lane{};
+            PPR_DEFER {
+                if (not released) {
+                    release.release();
+                }
+
+                lane.requestStop();
+                std::ignore = lane.join();
+            };
+
+            PPR_TEST_ASSERT(not lane.start(
+                {},
+                [&](const RenderFrameRequest &, RenderFrameResult &) -> std::error_code {
+                    entered.release();
+                    release.acquire();
+                    return {};
+                },
+                {}, {}));
+            PPR_TEST_ASSERT(not lane.submitFrame(makeRequest(1u)));
+            PPR_TEST_ASSERT(entered.try_acquire_for(std::chrono::seconds{30}));
+
+            auto operation = std::make_unique<RenderLaneOperation>([&]() -> std::error_code {
+                ++calls;
+                return {};
+            });
+            const auto ticket = lane.tryBeginOperation(operation);
+            PPR_TEST_ASSERT(ticket.has_value());
+
+            lane.requestStop();
+            const auto closed_availability = lane.operationAvailability();
+            PPR_TEST_ASSERT(not closed_availability.m_live and not closed_availability.m_available);
+            PPR_TEST_ASSERT(lane.operationStatus(*ticket) == ERenderLaneOperationStatus::pending);
+
+            release.release();
+            released = true;
+            PPR_TEST_ASSERT(not lane.join());
+
+            PPR_TEST_ASSERT(lane.operationStatus(*ticket) == ERenderLaneOperationStatus::completed);
+
+            const auto completed = lane.takeOperation(*ticket);
+            PPR_TEST_ASSERT(completed.has_value() and completed->has_value());
+            PPR_TEST_ASSERT((**completed).m_ran and not (**completed).m_cancel_requested);
+            PPR_TEST_ASSERT(not (**completed).m_operation_error and not (**completed).m_transport_error);
+            PPR_TEST_ASSERT(calls == 1u);
+            PPR_TEST_ASSERT(lane.operationStatus(*ticket) == ERenderLaneOperationStatus::invalid);
+            PPR_TEST_ASSERT(not lane.operationAvailability().m_live);
+        };
+
+        PPR_UNIT_TEST (sync_pumped_reentry_cannot_replace_unconsumed_completion) {
+            std::binary_semaphore release{0}, destroyed{0};
+            std::counting_semaphore<> wake{0};
+            std::atomic<u32> wakes{};
+            bool released = false;
+            bool reentered = false;
+            bool destroyed_observed = false;
+            bool nested_ran = true;
+            u32 nested_calls = 0u;
+            std::error_code nested_error{};
+            const std::error_code original{1234, std::system_category()};
+            RenderLane lane{};
+            PPR_DEFER {
+                if (not released) {
+                    release.release();
+                }
+
+                lane.requestStop();
+                std::ignore = lane.join();
+            };
+
+            PPR_TEST_ASSERT(not lane.start({}, {}, {}, [&] {
+                wakes.fetch_add(1u);
+                wake.release();
+            }));
+
+            lane.setWaitPump([&] {
+                if (reentered) {
+                    return;
+                }
+
+                reentered = true;
+                release.release();
+                released = true;
+
+                destroyed_observed = destroyed.try_acquire_for(std::chrono::seconds{30});
+
+                nested_error = finishOwnedOperation(
+                    lane, std::make_unique<RenderLaneOperation>([&]() -> std::error_code {
+                        ++nested_calls;
+                        return {};
+                    }),
+                    &nested_ran);
+            });
+
+            auto capture = std::make_shared<SignalOnOperationDestruction>(destroyed);
+            bool ran = false;
+            const auto error = finishOwnedOperation(
+                lane, std::make_unique<RenderLaneOperation>([&, owned = std::move(capture)]() -> std::error_code {
+                    release.acquire();
+                    return original;
+                }),
+                &ran);
+            PPR_TEST_ASSERT(reentered and destroyed_observed and ran);
+            PPR_TEST_ASSERT(error == original);
+            PPR_TEST_ASSERT(nested_error == std::errc::device_or_resource_busy and not nested_ran);
+            PPR_TEST_ASSERT(nested_calls == 0u);
+
+            // Completion publication can wake its waiter before the worker's
+            // hint runs. Wait for both durable-completion and slot-release hints.
+            PPR_TEST_ASSERT(wake.try_acquire_for(std::chrono::seconds{30}));
+            PPR_TEST_ASSERT(wake.try_acquire_for(std::chrono::seconds{30}));
+            PPR_TEST_ASSERT(wakes.load() >= 2u);
+            PPR_TEST_ASSERT(lane.operationAvailability().m_available);
+
+            PPR_TEST_ASSERT(not finishOwnedOperation(
+                lane, std::make_unique<RenderLaneOperation>([&]() -> std::error_code {
+                    ++nested_calls;
+                    return {};
+                }),
+                &nested_ran));
+            PPR_TEST_ASSERT(nested_ran and nested_calls == 1u);
+        };
+
+        PPR_UNIT_TEST (running_sync_timeout_retains_slot_until_capture_destruction) {
+            std::binary_semaphore entered{0}, release{0}, destroyed{0};
+            std::counting_semaphore<> wake{0};
+            bool released = false;
+            bool observed_entered = false;
+            bool pump_entered = false;
+            RenderLane lane{};
+            PPR_DEFER {
+                if (not released) {
+                    release.release();
+                }
+
+                lane.requestStop();
+                std::ignore = lane.join();
+            };
+
+            PPR_TEST_ASSERT(not lane.start({}, {}, {}, [&] { wake.release(); }));
+
+            lane.setWaitPump([&] {
+                if (pump_entered) {
+                    return;
+                }
+
+                // Ensure the worker has claimed the operation before allowing
+                // the existing real 30-second policy to expire. No test deadline knob.
+                pump_entered = true;
+                observed_entered = entered.try_acquire_for(std::chrono::seconds{30});
+            });
+
+            auto capture = std::make_shared<SignalOnOperationDestruction>(destroyed);
+            bool ran = true;
+            const auto error = finishOwnedOperation(
+                lane, std::make_unique<RenderLaneOperation>([&, owned = std::move(capture)]() -> std::error_code {
+                    entered.release();
+                    release.acquire();
+                    return {};
+                }),
+                &ran);
+            PPR_TEST_ASSERT(error == std::errc::timed_out and not ran);
+            PPR_TEST_ASSERT(observed_entered);
+            PPR_TEST_ASSERT(not destroyed.try_acquire());
+
+            auto next = std::make_unique<RenderLaneOperation>([]() -> std::error_code { return {}; });
+            const auto busy = lane.tryBeginOperation(next);
+            PPR_TEST_ASSERT(not busy.has_value() and busy.error() == std::errc::device_or_resource_busy);
+            PPR_TEST_ASSERT(static_cast<bool>(next));
+
+            release.release();
+            released = true;
+            PPR_TEST_ASSERT(destroyed.try_acquire_for(std::chrono::seconds{30}));
+
+            // The timeout wake may precede the completion wake. Retry only on
+            // durable busy, waiting for a wake between attempts.
+            auto next_ticket = lane.tryBeginOperation(next);
+            while (not next_ticket.has_value()) {
+                PPR_TEST_ASSERT(next_ticket.error() == std::errc::device_or_resource_busy);
+                PPR_TEST_ASSERT(wake.try_acquire_for(std::chrono::seconds{30}));
+                next_ticket = lane.tryBeginOperation(next);
+            }
+
+            const auto completed = awaitOperation(lane, *next_ticket, wake);
+            PPR_TEST_ASSERT(completed.m_ran and not completed.m_operation_error);
+            PPR_TEST_ASSERT(completed.m_transport_error == std::errc::timed_out);
+        };
+
+        // ------------------------------------------------------------------
+        // frame result settlement
+        // ------------------------------------------------------------------
+
+        PPR_UNIT_TEST (queued_wait_timeout_cancels_owned_capture_and_rejects_reentry) {
+            std::binary_semaphore entered{0}, release{0}, destroyed{0};
+            bool released = false, invoked = false, reentered = false;
+            RenderLane lane{};
+            PPR_DEFER {
+                if (not released) {
+                    release.release();
+                }
+
+                lane.requestStop();
+                std::ignore = lane.join();
+            };
+
+            PPR_TEST_ASSERT(not lane.start(
+                {},
+                [&](const RenderFrameRequest &, RenderFrameResult &) -> std::error_code {
+                    entered.release();
+                    release.acquire();
+                    return {};
+                },
+                {}, {}));
+            PPR_TEST_ASSERT(not lane.submitFrame(makeRequest(1u)));
+            PPR_TEST_ASSERT(entered.try_acquire_for(std::chrono::seconds{30}));
+
+            auto capture = std::make_shared<SignalOnOperationDestruction>(destroyed);
+            auto operation = std::make_unique<RenderLaneOperation>(
+                [&, owned = std::move(capture)]() -> std::error_code {
+                    invoked = true;
+                    return {};
+                });
+            const auto ticket = lane.tryBeginOperation(operation);
+            PPR_TEST_ASSERT(ticket.has_value() and not operation);
+
+            lane.setWaitPump([&] {
+                if (reentered)
+                    return;
+
+                reentered = true;
+                const auto nested = lane.waitOperation(*ticket);
+                PPR_TEST_ASSERT(not nested and nested.error() == std::errc::device_or_resource_busy);
+            });
+
+            // Keep the existing real30s lifecycle policy. The frame owns the lane,
+            // so the operation must remain queued until the timeout cancels it.
+            const auto completed = lane.waitOperation(*ticket);
+            PPR_TEST_ASSERT(completed.has_value());
+            PPR_TEST_ASSERT(not completed->m_ran and completed->m_cancel_requested);
+            PPR_TEST_ASSERT(completed->m_operation_error == std::errc::timed_out);
+            PPR_TEST_ASSERT(completed->m_transport_error == std::errc::timed_out);
+            PPR_TEST_ASSERT(reentered and not invoked and destroyed.try_acquire());
+            PPR_TEST_ASSERT(lane.operationAvailability().m_available);
+
+            const auto consumed = lane.waitOperation(*ticket);
+            PPR_TEST_ASSERT(not consumed and consumed.error() == std::errc::invalid_argument);
+
+            release.release();
+            released = true;
             lane.requestStop();
             PPR_TEST_ASSERT(not lane.join());
         };
@@ -1312,6 +2028,14 @@ namespace pP::tests {
             detail::RenderLaneGate::throwing_init_reports_mapped_error_and_joins_worker,
             detail::RenderLaneGate::throwing_wait_pump_restored_and_first_terminal_error_retained,
             detail::RenderLaneGate::throwing_wait_pump_keeps_installed_replacement,
+            detail::RenderLaneGate::owned_operation_wakes_without_frames_and_holds_completed_slot,
+            detail::RenderLaneGate::queued_operation_cancel_destroys_captures_before_acknowledgement,
+            detail::RenderLaneGate::small_callable_reentry_never_runs_under_slot_lock,
+            detail::RenderLaneGate::running_operation_cancel_retains_original_error_and_post_stop_take,
+            detail::RenderLaneGate::accepted_queued_operation_runs_across_stop,
+            detail::RenderLaneGate::sync_pumped_reentry_cannot_replace_unconsumed_completion,
+            detail::RenderLaneGate::running_sync_timeout_retains_slot_until_capture_destruction,
+            detail::RenderLaneGate::queued_wait_timeout_cancels_owned_capture_and_rejects_reentry,
             detail::RenderLaneGate::saturated_results_preserve_order_and_exactly_once_delivery,
             detail::RenderLaneGate::throwing_wake_keeps_terminal_and_results_observable,
             detail::RenderLaneGate::lane_credit_return_wakes_main,

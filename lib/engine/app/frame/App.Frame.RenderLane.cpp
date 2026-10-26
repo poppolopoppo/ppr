@@ -53,6 +53,30 @@ namespace pP {
     }
 
     // ------------------------------------------------------------------
+    // correlated operation storage
+    // ------------------------------------------------------------------
+
+    struct RenderLaneOperationTicket::Record {
+        enum class Phase : u8 {
+            queued,
+            running,
+            settling,
+            completed
+        };
+
+        std::unique_ptr<RenderLaneOperation> m_operation{};
+        std::error_code m_result{};
+        u64 m_sequence{};
+        Phase m_phase{Phase::queued};
+        bool m_waiting{};
+        bool m_ran{};
+        bool m_cancel_requested{};
+        bool m_abandoned_wait{};
+    };
+
+    RenderLaneOperationTicket::RenderLaneOperationTicket() noexcept = default;
+
+    // ------------------------------------------------------------------
     // render lane
     // ------------------------------------------------------------------
 
@@ -314,91 +338,263 @@ namespace pP {
         // exit atomic and both queues every iteration, so nothing is lost.
     }
 
-    std::error_code RenderLane::runOnLaneSync(RenderLaneOperation operation, bool *out_operation_ran) {
-        auto publish_ack_ = [out_operation_ran](const bool ran) noexcept {
-            if (out_operation_ran != nullptr) {
-                *out_operation_ran = ran;
-            }
-        };
-        if (not operation) [[unlikely]] {
-            publish_ack_(false);
-            return std::make_error_code(std::errc::invalid_argument);
-        }
+    Expected<std::shared_ptr<RenderLaneOperationTicket::Record>> RenderLane::admitOperation_(
+        std::unique_ptr<RenderLaneOperation> &operation) {
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            WorldControls,
+            operation and *operation ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
+
+        std::error_code error{};
+        std::shared_ptr<RenderLaneOperationTicket::Record> record;
         {
             const std::lock_guard guard{m_sync_mutex};
-            // Accepted only while the lane is live and no stop was
-            // initiated: a release posted after the exit signal would never
-            // run, so it fails closed instead of hanging the caller.
             if (m_stop_initiated.load(std::memory_order_acquire) or
                 not m_running.load(std::memory_order_acquire) or
-                not m_thread.joinable()) [[unlikely]] {
-                publish_ack_(false);
-                return std::make_error_code(std::errc::not_connected);
+                not m_thread.joinable()) {
+                error = std::make_error_code(std::errc::not_connected);
+            } else if (m_operation_record) {
+                error = std::make_error_code(std::errc::device_or_resource_busy);
+            } else if (m_operation_sequence == std::numeric_limits<u64>::max()) {
+                error = std::make_error_code(std::errc::value_too_large);
+            } else {
+                // The callable already has stable ownership. Only a fixed pointer
+                // moves here: a small callable's move/destructor may reenter us.
+                // The weak ticket retains this record identity, not the lane.
+                record = std::make_shared<RenderLaneOperationTicket::Record>();
+                record->m_sequence = m_operation_sequence + 1u;
+                record->m_operation = std::move(operation);
+                m_operation_sequence = record->m_sequence;
+                m_operation_record = record;
             }
-            if (m_sync_pending) [[unlikely]] {
-                publish_ack_(false);
-                return std::make_error_code(std::errc::device_or_resource_busy);
-            }
-            m_sync_operation = std::move(operation);
-            m_sync_pending = true;
-            m_sync_done = false;
         }
-        // Wake the lane out of its multiplex wait; the handoff check runs
-        // every iteration even when both queues are empty.
+
+        PPR_RETURN_UNEXPECTED_ON_FAIL(WorldControls, error);
+
         postControl(RenderControl::Kind::kWake);
-        // Pump-compatible wait: every slice keeps the platform service
-        // alive (oracle P2 teardown protocol step 4) and a hang budget
-        // fails closed with a timeout instead of an unbounded block.
+        return record;
+    }
+
+    Expected<RenderLaneOperationTicket> RenderLane::tryBeginOperation(std::unique_ptr<RenderLaneOperation> &operation) {
+        auto admitted = admitOperation_(operation);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(WorldControls, admitted);
+
+        RenderLaneOperationTicket ticket;
+        ticket.m_record = *admitted;
+        ticket.m_sequence = (*admitted)->m_sequence;
+        return ticket;
+    }
+
+    std::optional<RenderLaneOperationCompletion> RenderLane::consumeOperationLocked_(
+        const std::shared_ptr<RenderLaneOperationTicket::Record> &record) noexcept {
+        PPR_ASSERT(m_operation_record == record);
+        if (record->m_phase != RenderLaneOperationTicket::Record::Phase::completed)
+            return std::nullopt;
+
+        RenderLaneOperationCompletion completion{
+            .m_operation_error = record->m_result,
+            .m_transport_error = terminalError(),
+            .m_ran = record->m_ran,
+            .m_cancel_requested = record->m_cancel_requested};
+
+        // The caller still owns record, whose callback/captures are already gone.
+        m_operation_record.reset();
+        return completion;
+    }
+
+    Expected<std::optional<RenderLaneOperationCompletion>> RenderLane::takeOperation(
+        const RenderLaneOperationTicket &ticket) {
+        const auto record = ticket.m_record.lock();
+        std::error_code error{};
+        std::optional<RenderLaneOperationCompletion> completion;
+        {
+            const std::lock_guard guard{m_sync_mutex};
+            if (not record or m_operation_record != record or record->m_sequence != ticket.m_sequence) {
+                error = std::make_error_code(std::errc::invalid_argument);
+            } else {
+                completion = consumeOperationLocked_(record);
+            }
+        }
+
+        PPR_RETURN_UNEXPECTED_ON_FAIL(WorldControls, error);
+
+        if (completion)
+            wakeMain_();
+
+        return completion;
+    }
+
+    ERenderLaneOperationStatus RenderLane::operationStatus(const RenderLaneOperationTicket &ticket) const noexcept {
+        const auto record = ticket.m_record.lock();
+        const std::lock_guard guard{m_sync_mutex};
+        if (not record or m_operation_record != record or record->m_sequence != ticket.m_sequence) {
+            return ERenderLaneOperationStatus::invalid;
+        }
+
+        return record->m_phase == RenderLaneOperationTicket::Record::Phase::completed
+                   ? ERenderLaneOperationStatus::completed
+                   : ERenderLaneOperationStatus::pending;
+    }
+
+    RenderLaneOperationAvailability RenderLane::operationAvailability() const noexcept {
+        const std::lock_guard guard{m_sync_mutex};
+        const bool live = m_running.load(std::memory_order_acquire) and
+                          not m_stop_initiated.load(std::memory_order_acquire);
+        return {.m_live = live, .m_available = live and not m_operation_record};
+    }
+
+    void RenderLane::completeOperation_(const std::shared_ptr<RenderLaneOperationTicket::Record> &record) noexcept {
+        {
+            const std::lock_guard guard{m_sync_mutex};
+            PPR_ASSERT(m_operation_record == record);
+            PPR_ASSERT(record->m_phase == RenderLaneOperationTicket::Record::Phase::settling);
+            record->m_phase = RenderLaneOperationTicket::Record::Phase::completed;
+            if (record->m_abandoned_wait) {
+                // A bounded wait abandoned this exact record. Release only now,
+                // after actual callback and capture access ends.
+                m_operation_record.reset();
+            }
+        }
+
+        m_sync_condition.notify_all();
+        wakeMain_();
+    }
+
+    Expected<ERenderLaneCancelDisposition> RenderLane::cancelOperation(const RenderLaneOperationTicket &ticket) {
+        using Phase = RenderLaneOperationTicket::Record::Phase;
+        const auto record = ticket.m_record.lock();
+        std::error_code error{};
+        ERenderLaneCancelDisposition disposition{ERenderLaneCancelDisposition::completed};
+        {
+            const std::lock_guard guard{m_sync_mutex};
+            if (not record or m_operation_record != record or record->m_sequence != ticket.m_sequence) {
+                error = std::make_error_code(std::errc::invalid_argument);
+            } else if (record->m_phase == Phase::queued) {
+                record->m_cancel_requested = true;
+                record->m_result = std::make_error_code(std::errc::operation_canceled);
+                record->m_phase = Phase::settling;
+                disposition = ERenderLaneCancelDisposition::cancelled_before_run;
+            } else if (record->m_phase == Phase::running) {
+                record->m_cancel_requested = true;
+                disposition = ERenderLaneCancelDisposition::running;
+            } else if (record->m_phase == Phase::settling) {
+                record->m_cancel_requested = true;
+                disposition = ERenderLaneCancelDisposition::settling;
+            }
+        }
+
+        PPR_RETURN_UNEXPECTED_ON_FAIL(WorldControls, error);
+
+        if (disposition == ERenderLaneCancelDisposition::cancelled_before_run) {
+            // Destructors may reenter take/cancel. They see pending/settling,
+            // never a false running state or premature no-further-access proof.
+            record->m_operation.reset();
+            completeOperation_(record);
+        }
+
+        return disposition;
+    }
+
+    Expected<RenderLaneOperationCompletion> RenderLane::waitOperation(const RenderLaneOperationTicket &ticket) {
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            WorldControls, m_thread.get_id() != std::this_thread::get_id()
+                               ? std::error_code{}
+                               : std::make_error_code(std::errc::resource_deadlock_would_occur));
+
+        const auto record = ticket.m_record.lock();
+        std::error_code admission_error{};
+        {
+            const std::lock_guard guard{m_sync_mutex};
+            if (not record or m_operation_record != record or record->m_sequence != ticket.m_sequence) {
+                admission_error = std::make_error_code(std::errc::invalid_argument);
+            } else if (record->m_waiting) {
+                admission_error = std::make_error_code(std::errc::device_or_resource_busy);
+            } else {
+                record->m_waiting = true;
+            }
+        }
+
+        PPR_RETURN_UNEXPECTED_ON_FAIL(WorldControls, admission_error);
+
+        PPR_DEFER {
+            const std::lock_guard guard{m_sync_mutex};
+            record->m_waiting = false;
+        };
+
         const auto deadline = std::chrono::steady_clock::now() + kLaneSyncWaitTimeout;
         for (;;) {
+            std::optional<RenderLaneOperationCompletion> completion;
+            bool current = false;
             {
                 std::unique_lock guard{m_sync_mutex};
-                if (m_sync_condition.wait_for(guard, kLaneSyncWaitSlice, [this] { return m_sync_done; })) {
-                    publish_ack_(true);
-                    return m_sync_result ? m_sync_result : terminalError();
+                {
+                    const hal::ProfileScope wait_scope{"PPR.Frame.LaneOperationWait", hal::profile_blocking_category};
+                    std::ignore = m_sync_condition.wait_for(guard, kLaneSyncWaitSlice, [&] {
+                        return m_operation_record != record or
+                               record->m_phase == RenderLaneOperationTicket::Record::Phase::completed;
+                    });
+                }
+
+                current = m_operation_record == record;
+                if (current) {
+                    completion = consumeOperationLocked_(record);
                 }
             }
-            // Slice elapsed without the lane acknowledging: let main do its
-            // pump duties before re-entering the bounded wait. invokePumpSlice_
-            // restores the slice afterwards, so every slice pumps identically.
+
+            PPR_RETURN_UNEXPECTED_ON_FAIL(
+                WorldControls, current ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
+
+            if (completion) {
+                wakeMain_();
+                return *completion;
+            }
+
             invokePumpSlice_();
-            if (std::chrono::steady_clock::now() >= deadline) {
-                const std::error_code timeout{std::make_error_code(std::errc::timed_out)};
-                noteFirstError_(timeout);
-                setTerminal_(timeout);
-                // Explicit cancellation acknowledgement (shared phase
-                // protocol): reclaim an unstarted handoff so it never runs
-                // late behind teardown with expired captures. A lane-owned
-                // running operation is left for the lane to finish (join
-                // waits for it); the caller still fails closed via ack.
-                try {
-                    bool reclaimed = false;
-                    {
-                        const std::lock_guard guard{m_sync_mutex};
-                        if (m_sync_done) {
-                            publish_ack_(true);
-                            return m_sync_result;
-                        }
-                        if (m_sync_pending and m_sync_operation) {
-                            m_sync_operation = RenderLaneOperation{};
-                            m_sync_pending = false;
-                            m_sync_done = true;
-                            m_sync_result = timeout;
-                            reclaimed = true;
-                        }
+            if (std::chrono::steady_clock::now() < deadline)
+                continue;
+
+            const auto timeout = std::make_error_code(std::errc::timed_out);
+            noteFirstError_(timeout);
+            setTerminal_(timeout);
+
+            bool queued_cancel = false;
+            {
+                const std::lock_guard guard{m_sync_mutex};
+                current = m_operation_record == record;
+                if (current) {
+                    if (record->m_phase == RenderLaneOperationTicket::Record::Phase::completed) {
+                        completion = consumeOperationLocked_(record);
+                    } else if (record->m_phase == RenderLaneOperationTicket::Record::Phase::queued) {
+                        record->m_result = timeout;
+                        record->m_cancel_requested = true;
+                        record->m_phase = RenderLaneOperationTicket::Record::Phase::settling;
+                        queued_cancel = true;
+                    } else {
+                        // Unknown completion retains the exact callable and its
+                        // captures until actual callback/destruction settlement.
+                        record->m_abandoned_wait = true;
                     }
-                    if (reclaimed) {
-                        m_sync_condition.notify_all();
-                    }
-                } catch (const std::bad_alloc &) {
-                    hal::fatalExit("allocation-failure");
-                } catch (...) {
-                    // Timeout is already latched. Failed reclaim proves nothing; a false execution ack
-                    // grants no permission to release captures or storage behind potentially running work.
                 }
-                publish_ack_(false);
-                return timeout;
             }
+
+            PPR_RETURN_UNEXPECTED_ON_FAIL(
+                WorldControls, current ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
+
+            if (queued_cancel) {
+                record->m_operation.reset();
+                completeOperation_(record);
+
+                const std::lock_guard guard{m_sync_mutex};
+                if (m_operation_record == record) {
+                    completion = consumeOperationLocked_(record);
+                }
+            }
+
+            if (completion) {
+                wakeMain_();
+                return *completion;
+            }
+
+            PPR_RETURN_UNEXPECTED_ON_FAIL(WorldControls, timeout);
         }
     }
 
@@ -590,8 +786,11 @@ namespace pP {
     void RenderLane::requestStop() noexcept {
         // Serialize admission publication with exit: every accepted request
         // precedes stop and will receive a canceled or completed ack.
-        const std::lock_guard guard{m_result_stash_mutex};
-        m_stop_initiated.store(true, std::memory_order_release);
+        {
+            const std::scoped_lock guard{m_result_stash_mutex, m_sync_mutex};
+            m_stop_initiated.store(true, std::memory_order_release);
+        }
+
         postControl(RenderControl::Kind::kExit);
     }
 
@@ -614,69 +813,80 @@ namespace pP {
         };
         try {
             bool handoff_ran = false;
-            const std::error_code handoff_err = runOnLaneSync(
-                [this]() -> std::error_code {
-                    {
-                        const std::lock_guard guard{m_callback_mutex};
-                        m_executor = RenderFrameExecutor{};
-                        m_world_executor = GridWorldExecutor{};
+            auto operation_owner = std::make_unique<RenderLaneOperation>([this]() -> std::error_code {
+                {
+                    const std::lock_guard guard{m_callback_mutex};
+                    m_executor = RenderFrameExecutor{};
+                    m_world_executor = GridWorldExecutor{};
+                }
+                u64 drained = 0u;
+                (void) drained;
+                for (;;) {
+                    auto acquired = m_frames->consumerAcquire(RawChannel::peek_without_blocking);
+                    if (not acquired.has_value()) {
+                        break;
                     }
-                    u64 drained = 0u;
-                    (void) drained;
-                    for (;;) {
-                        auto acquired = m_frames->consumerAcquire(RawChannel::peek_without_blocking);
-                        if (not acquired.has_value()) {
-                            break;
-                        }
-                        std::shared_ptr<const RenderFrameRequest> request = std::move(
-                            *static_cast<std::shared_ptr<const RenderFrameRequest> *>(acquired->data()));
-                        std::destroy_at(static_cast<std::shared_ptr<const RenderFrameRequest> *>(acquired->data()));
-                        m_frames->consumerRelease(*acquired);
-                        ++drained;
-                        m_dropped_count.fetch_add(1u, std::memory_order_acq_rel);
-                        if (request and request->m_packet) {
-                            try {
-                                RenderFrameResult dropped{
+                    std::shared_ptr<const RenderFrameRequest> request = std::move(
+                        *static_cast<std::shared_ptr<const RenderFrameRequest> *>(acquired->data()));
+                    std::destroy_at(static_cast<std::shared_ptr<const RenderFrameRequest> *>(acquired->data()));
+                    m_frames->consumerRelease(*acquired);
+                    ++drained;
+                    m_dropped_count.fetch_add(1u, std::memory_order_acq_rel);
+                    if (request and request->m_packet) {
+                        try {
+                            RenderFrameResult dropped{
+                                .m_frame_id = request->m_packet->m_frame_id,
+                                .m_error = std::make_error_code(std::errc::operation_canceled),
+                                .m_dropped = true,
+                                .m_reservation_epoch = request->m_reservation_epoch,
+                                .m_reservation_frame_id = request->m_reservation_frame_id,
+                                .m_grid_reset_caches = request->m_grid_stage.m_reset_caches,
+                                .m_grid_full_refresh = request->m_grid_stage.m_full_refresh,
+                                .m_grid_ack_seed = request->m_grid_stage.m_ack_seed,
+                                .m_grid_ack_chunk_ids = request->m_grid_stage.m_ack_chunk_ids,
+                                .m_grid_ack_revisions = request->m_grid_stage.m_ack_revisions,
+                            };
+                            postResult_(std::move(dropped));
+                        } catch (const std::bad_alloc &) {
+                            hal::fatalExit("allocation-failure");
+                        } catch (...) {
+                            // Unexpected manifest-copy failure: still settle the
+                            // slot (never shed a credit), but durably stop
+                            // admission — the owner must not ack what it
+                            // cannot verify.
+                            const std::error_code error{std::make_error_code(std::errc::state_not_recoverable)};
+                            noteFirstError_(error);
+                            setTerminal_(error);
+                            static_assert(std::is_nothrow_default_constructible_v<RenderFrameResult>);
+                            postResult_(
+                                RenderFrameResult{
                                     .m_frame_id = request->m_packet->m_frame_id,
                                     .m_error = std::make_error_code(std::errc::operation_canceled),
                                     .m_dropped = true,
                                     .m_reservation_epoch = request->m_reservation_epoch,
                                     .m_reservation_frame_id = request->m_reservation_frame_id,
-                                    .m_grid_reset_caches = request->m_grid_stage.m_reset_caches,
-                                    .m_grid_full_refresh = request->m_grid_stage.m_full_refresh,
-                                    .m_grid_ack_seed = request->m_grid_stage.m_ack_seed,
-                                    .m_grid_ack_chunk_ids = request->m_grid_stage.m_ack_chunk_ids,
-                                    .m_grid_ack_revisions = request->m_grid_stage.m_ack_revisions,
-                                };
-                                postResult_(std::move(dropped));
-                            } catch (const std::bad_alloc &) {
-                                hal::fatalExit("allocation-failure");
-                            } catch (...) {
-                                // Unexpected manifest-copy failure: still settle the
-                                // slot (never shed a credit), but durably stop
-                                // admission — the owner must not ack what it
-                                // cannot verify.
-                                const std::error_code error{std::make_error_code(std::errc::state_not_recoverable)};
-                                noteFirstError_(error);
-                                setTerminal_(error);
-                                static_assert(std::is_nothrow_default_constructible_v<RenderFrameResult>);
-                                postResult_(
-                                    RenderFrameResult{
-                                        .m_frame_id = request->m_packet->m_frame_id,
-                                        .m_error = std::make_error_code(std::errc::operation_canceled),
-                                        .m_dropped = true,
-                                        .m_reservation_epoch = request->m_reservation_epoch,
-                                        .m_reservation_frame_id = request->m_reservation_frame_id,
-                                    });
-                            }
+                                });
                         }
                     }
-                    m_queued_frames.store(0u, std::memory_order_release);
-                    refreshEstimate_();
-                    std::ignore = handleControlEvent_();
-                    return default_value_v;
-                },
-                &handoff_ran);
+                }
+                m_queued_frames.store(0u, std::memory_order_release);
+                refreshEstimate_();
+                std::ignore = handleControlEvent_();
+                return default_value_v;
+            });
+
+            auto operation_ticket = tryBeginOperation(operation_owner);
+
+            const auto operation_completion = operation_ticket ? waitOperation(*operation_ticket)
+                                                               : Expected<RenderLaneOperationCompletion>{
+                                                                     std::unexpected{operation_ticket.error()}};
+
+            handoff_ran = operation_completion and operation_completion->m_ran;
+            const std::error_code handoff_err = operation_completion
+                                                    ? (operation_completion->m_operation_error
+                                                              ? operation_completion->m_operation_error
+                                                              : operation_completion->m_transport_error)
+                                                    : operation_completion.error();
             publish_drain_ack_(handoff_ran);
             return handoff_err;
         } catch (const std::bad_alloc &) {
@@ -795,33 +1005,38 @@ namespace pP {
         }
     }
 
-    void RenderLane::runSyncHandoffIfPending_() noexcept {
-        RenderLaneOperation operation{};
+    void RenderLane::runOperationIfPending_() noexcept {
+        using Phase = RenderLaneOperationTicket::Record::Phase;
+        std::shared_ptr<RenderLaneOperationTicket::Record> record;
         {
             const std::lock_guard guard{m_sync_mutex};
-            if (not m_sync_pending or not m_sync_operation) {
+            if (not m_operation_record or m_operation_record->m_phase != Phase::queued)
                 return;
-            }
-            operation = std::move(m_sync_operation);
+
+            record = m_operation_record;
+            record->m_phase = Phase::running;
+            record->m_ran = true;
         }
+
         std::error_code result{};
         try {
-            result = operation();
-        } catch (const std::bad_alloc &) {
-            hal::fatalExit("allocation-failure");
+            result = (*record->m_operation)();
         } catch (...) {
-            result = std::make_error_code(std::errc::state_not_recoverable);
+            result = laneExceptionError_();
         }
+
         {
             const std::lock_guard guard{m_sync_mutex};
-            m_sync_result = result;
-            m_sync_pending = false;
-            m_sync_done = true;
+            record->m_result = result;
+            record->m_phase = Phase::settling;
         }
-        m_sync_condition.notify_one();
-        if (result) {
+
+        record->m_operation.reset();
+
+        if (result)
             noteFirstError_(result);
-        }
+
+        completeOperation_(record);
     }
 
     void RenderLane::handleFrameEvent_() noexcept {
@@ -1233,7 +1448,7 @@ namespace pP {
 
         advance();
         for (;;) {
-            runSyncHandoffIfPending_();
+            runOperationIfPending_();
             // Control first: exit/config must preempt queued frames.
             const bool control_seen = handleControlEvent_();
             // Control path must sweep: kWake/post-config may have pushed
@@ -1248,7 +1463,7 @@ namespace pP {
             if (have_event and event_index == 0u) {
                 handleFrameEvent_();
             }
-            runSyncHandoffIfPending_();
+            runOperationIfPending_();
             if (m_exit_requested.load(std::memory_order_acquire)) {
                 break;
             }
@@ -1339,17 +1554,16 @@ namespace pP {
             m_final_sweep_error.compare_exchange_strong(expected, value, std::memory_order_acq_rel);
             noteFirstError_(err);
         }
-        runSyncHandoffIfPending_();
-        // Two-step park: run the handoff, publish the stop, then run it
-        // once more. A sync accepted before the publish is caught by the
-        // second run; one accepted after sees the published stop and fails
-        // closed instead of hanging.
+        runOperationIfPending_();
+        // Two-step park: settle an accepted operation before and after the
+        // stopped publication. Stop serialized admission earlier; accepted
+        // async completions remain occupied and can still be taken after join.
         m_running.store(false, std::memory_order_release);
         // Catch all accepted controls before storage can be released. Stop
         // serializes with request publication; these acknowledgements require
         // neither a new frame nor client update to be consumed.
         std::ignore = handleControlEvent_();
-        runSyncHandoffIfPending_();
+        runOperationIfPending_();
         wakeMain_();
     }
 }

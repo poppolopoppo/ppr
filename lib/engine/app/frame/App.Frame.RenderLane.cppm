@@ -141,6 +141,12 @@ export namespace pP {
         std::optional<RenderSurfaceResult> m_surface_result{};
         // Independent world preparation has no frame reservation or dirty ack.
         std::optional<GridWorldResult> m_world_result{};
+        // Actual active bundle rendered by a successful surface presentation.
+        // Independent of staging/edit acknowledgments; empty on every other fate.
+        GridWorldIdentity m_presented_grid{};
+        // Same actual-present proof for the selected jointly committed resident
+        // state. CPU preparation frames and every non-present fate leave it empty.
+        std::optional<GridParticlePresentationIdentity> m_presented_particles{};
         u64 m_frame_id{0u};
         FenceCompletionValue m_submit_value{kFenceValueNone};
         std::error_code m_error{};
@@ -220,12 +226,62 @@ export namespace pP {
     // count feeding the main-side admission hint. Runs on the lane.
     using RenderLaneSweep = std23::move_only_function<std::error_code(u32 &out_outstanding)>;
 
-    // Startup/shutdown operation executed ON the lane (Renderer init,
-    // pass-GPU release, Renderer shutdown). Runs on the lane.
+    // Owned operation executed ON the lane (startup/teardown or an explicitly
+    // admitted device-owner action). No frame or draw target is required.
     using RenderLaneOperation = std23::move_only_function<std::error_code()>;
 
-    // Pure wake hint toward main (credit returned, terminal latched, exit
-    // acknowledged). Runs on the lane; must only signal, never block.
+    // ------------------------------------------------------------------
+    // correlated owned lane operations
+    // ------------------------------------------------------------------
+
+    /// Opaque operation identity. Weak ownership retains only the admission's
+    /// control block, never the lane or its resources. Caller-held stale tickets
+    /// may therefore retain a control block after take. Copying a ticket does not
+    /// grant a second consume; only its matching occupied slot may be taken.
+    class RenderLaneOperationTicket {
+    public:
+        RenderLaneOperationTicket() noexcept;
+
+    private:
+        friend class RenderLane;
+
+        struct Record;
+        std::weak_ptr<Record> m_record{};
+        u64 m_sequence{};
+    };
+
+    struct RenderLaneOperationCompletion {
+        std::error_code m_operation_error{};
+        /// Terminal transport status observed at take, separate from the
+        /// original callback error/category. Neither status proves GPU completion.
+        std::error_code m_transport_error{};
+        bool m_ran{};
+        bool m_cancel_requested{};
+    };
+
+    enum class ERenderLaneOperationStatus : u8 {
+        invalid,
+        pending,
+        completed
+    };
+
+    struct RenderLaneOperationAvailability {
+        bool m_live{};
+        bool m_available{};
+    };
+
+    enum class ERenderLaneCancelDisposition : u8 {
+        cancelled_before_run,
+        running,
+        /// The callback has returned, or queued cancellation has claimed it,
+        /// but capture destruction has not yet granted no-further-access proof.
+        settling,
+        completed,
+    };
+
+    // Pure wake hint toward main (credit returned, operation settled, terminal
+    // latched, exit acknowledged). May also run on the cancelling caller;
+    // must only signal, never block.
     using RenderLaneWake = std23::move_only_function<void()>;
 
     // Main-side pump slice: native event collection + a bounded wait.
@@ -299,16 +355,46 @@ export namespace pP {
         // behind a full queue still terminates promptly.
         void postControl(RenderControl::Kind kind) noexcept;
 
-        // Synchronous operation ON the lane (pass-GPU release, Renderer
-        // shutdown, quiescence probes). Teardown paths only: blocks the
-        // caller until the lane runs it. Fails closed when stopped.
-        // `out_operation_ran` distinguishes acknowledged completion (true:
-        // the lane ran the operation, which may itself have returned an
-        // error) from handoff failure (false: not_connected /
-        // device_or_resource_busy / timed_out — the operation never
-        // acknowledged; on timeout it may STILL run later). Callers must
-        // only read operation-published outcome storage when this is true.
-        [[nodiscard]] std::error_code runOnLaneSync(RenderLaneOperation operation, bool *out_operation_ran = nullptr);
+        // One shared operation slot, including completed-but-unconsumed work.
+        // Construct the callable's unique owner before entry. Non-admission
+        // leaves that handle/callable intact; only the fixed owning handle moves
+        // under the slot lock. Admission adds one record/control-block allocation,
+        // in addition to the caller's callable allocation. Sequence exhaustion rejects
+        // before wrap. There is no queue or frame credit and no new deadline.
+        [[nodiscard]] Expected<RenderLaneOperationTicket> tryBeginOperation(
+            std::unique_ptr<RenderLaneOperation> &operation);
+
+        // Expected absence means only this exact accepted ticket is pending.
+        // Wrong, expired or consumed tickets fail without touching another slot.
+        // Completion is published after callback/capture access ends, before
+        // wakeMain; take releases the slot. Still available after lane stop.
+        [[nodiscard]] Expected<std::optional<RenderLaneOperationCompletion>> takeOperation(
+            const RenderLaneOperationTicket &ticket);
+
+        // Blocking lifecycle boundary for an already admitted owned ticket.
+        // Uses the existing pump slices and 30-second deadline. Completion keeps
+        // actual invocation, operation result and terminal transport separate.
+        // Timeout cancels/takes queued work; running/settling work is abandoned
+        // and retains captures until actual settlement. A wait error is never
+        // permission to destroy dependent resources or read callback outputs.
+        // Ordinary frame/simulation service uses nonblocking take instead.
+        [[nodiscard]] Expected<RenderLaneOperationCompletion> waitOperation(const RenderLaneOperationTicket &ticket);
+
+        // Queued cancellation wins atomically, destroys captures outside locks,
+        // then leaves a not-run completion requiring take. Running cancellation
+        // records intent only; settling is not running or safe-to-release proof.
+        // The original running result is retained. Stop does not cancel accepted
+        // work by itself, and take/cancel remain available after stop.
+        // Queued cancellation destroys captures on the cancelling caller; invoked
+        // work destroys them on the lane. Captures must support either thread.
+        [[nodiscard]] Expected<ERenderLaneCancelDisposition> cancelOperation(const RenderLaneOperationTicket &ticket);
+
+        // Allocation/log-free eligibility observations. Neither consumes a result,
+        // releases a slot nor proves GPU completion. Accepted tickets remain
+        // observable after stop; completed-but-unconsumed slots stay unavailable.
+        [[nodiscard]] ERenderLaneOperationStatus operationStatus(
+            const RenderLaneOperationTicket &ticket) const noexcept;
+        [[nodiscard]] RenderLaneOperationAvailability operationAvailability() const noexcept;
 
         // Install the main-side pump slice used while the caller waits for
         // a sync handoff or a parked worker to settle (oracle P2 teardown
@@ -401,7 +487,17 @@ export namespace pP {
         // Returns true when any control message was serviced.
         bool handleControlEvent_() noexcept;
 
-        void runSyncHandoffIfPending_() noexcept;
+        [[nodiscard]] Expected<std::shared_ptr<RenderLaneOperationTicket::Record>> admitOperation_(
+            std::unique_ptr<RenderLaneOperation> &operation);
+
+        // Caller holds m_sync_mutex and an independent owning record reference.
+        [[nodiscard]] std::optional<RenderLaneOperationCompletion> consumeOperationLocked_(
+            const std::shared_ptr<RenderLaneOperationTicket::Record> &record) noexcept;
+
+        // Capture destruction has already finished outside every internal lock.
+        void completeOperation_(const std::shared_ptr<RenderLaneOperationTicket::Record> &record) noexcept;
+
+        void runOperationIfPending_() noexcept;
 
         // One logical retirement sweep for the current moment: retires
         // fence work ON the lane and refreshes the main-side admission
@@ -472,14 +568,13 @@ export namespace pP {
         RenderLaneSweep m_sweep{};
         RenderLaneWake m_wake{};
 
-        // Synchronous handoff for teardown-time lane operations.
-        std::mutex m_sync_mutex{};
+        // All admissions share exactly one occupied operation record.
+        // The mutex publishes inputs to the lane and completed values to take.
+        mutable std::mutex m_sync_mutex{};
         std::condition_variable m_sync_condition{};
-        RenderLaneOperation m_sync_operation{};
-        std::error_code m_sync_result{};
-        bool m_sync_pending{false};
-        bool m_sync_done{false};
-        // Set by requestStop: no new sync handoff is accepted afterwards,
+        std::shared_ptr<RenderLaneOperationTicket::Record> m_operation_record{};
+        u64 m_operation_sequence{};
+        // Set by requestStop: no new owned operation is accepted afterwards,
         // so a release can never be posted behind the exit it precedes.
         std::atomic<bool> m_stop_initiated{false};
         std::atomic<bool> m_surface_admission_closed{false};
