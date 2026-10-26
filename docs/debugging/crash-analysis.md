@@ -147,13 +147,19 @@ claiming symbols match.
 2. Discover tools, use `list_sessions`, and select the intended WinDbg PID with
    `connect_session`. Verify `get_target_state`. One MCP client can connect to a
    session at a time; do not replace a target already under investigation.
-3. Use `open_dump` with the selected full dump path and no active target. Use
-   `show_output` with a debugger command and a short explanation for each query.
-4. Set `.sympath` to the request's `symbolPath` and `.srcpath` to its `sourceRoot`,
-   quoting paths as needed. The symbol path combines the original image directory
-   with `srv*<cache>*https://msdl.microsoft.com/download/symbols`. Inspect `get_logs`
-   when loading fails. Verify original image/PDB identity with module/symbol
-   evidence; a rebuild does not recreate matching symbols for an old dump.
+3. Discover the connected session's tools. If `open_dump` is advertised, use its
+   actual schema with the selected full dump path and no active target. Otherwise
+   load the dump through the available supported route; do not invent a tool or
+   replace an existing target. Use `show_output` with a debugger command and a
+   short explanation for each query.
+4. Check the active security policy before applying the request's suggested
+   `symbolPath`. It combines the original image directory with a Microsoft
+   symbol-server/cache path, which Secure Mode can restrict. Use available
+   matching local symbols when required; do not disable protections to apply
+   that suggestion. Set `.srcpath` to the source root and pass path-setting
+   commands separately. Inspect `get_logs` when loading fails. Verify original
+   image/PDB identity with module/symbol evidence; rebuilding does not recreate
+   matching symbols for an old dump.
 5. Inspect exception, context, stack, and modules as appropriate (`!analyze -v`,
    `.exr -1`, `.ecxr`, `kv`, `lm`). Test alternatives rather than treating a stack
    pattern as a cause. Save `triage-summary.md` with target/binary identity,
@@ -161,6 +167,9 @@ claiming symbols match.
    next checks. Preserve prior reports and do not invent the old JSON envelope.
 
 Follow `.opencode/skills/windbg-triage/SKILL.md` for live/hang/TTD investigations.
+For CLion live execution, PIX timing and the known failed CDB terminal route,
+see [execution-tools](execution-tools.md). Its dated verification table separates
+responsive MCP interfaces from successful target control and captured evidence.
 Microsoft documents Codex/custom clients as best effort; protected output requires
 MCP sampling and may be blocked. Keep WinDbg security settings unchanged and
 report the blocker. See [official setup](https://learn.microsoft.com/en-us/windows-hardware/drivers/debuggercmds/set-up-windbg-mcp)

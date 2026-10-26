@@ -5,6 +5,11 @@ The [PIX profiling skill](../.opencode/skills/pix-profiling/SKILL.md) owns captu
 and analysis procedures. This guide explains the existing HAL markers and how
 to choose useful boundaries.
 
+Before a new tool-driven capture, use the
+[execution-tools runbook](debugging/execution-tools.md) to verify the target,
+capture coverage, client deadline and cleanup route. Server readiness alone is
+not a successful timing or stack capture.
+
 ## What the helpers measure
 
 `pP::hal::profileBegin(name, category)` and `profileEnd()` bracket a CPU duration
