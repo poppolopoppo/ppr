@@ -108,7 +108,7 @@ namespace pP::game::tests::detail::compat {
         Diagnostics disabled;
         const auto off = resolveCli({"--worldgen-acceptance=false"}, disabled);
         PPR_TEST_ASSERT(off and not off->m_game.m_value.m_worldgen_acceptance);
-        for (const auto *const selector: {"--smoke", "--validate-worldgen", "--profile100"}) {
+        for (const auto *const selector: {"--smoke", "--validate-worldgen"}) {
             Diagnostics invalid;
             PPR_TEST_ASSERT(not resolveCli({selector, "--worldgen-acceptance"}, invalid));
             PPR_TEST_ASSERT(invalid.hasErrors());
@@ -316,10 +316,9 @@ namespace pP::game::tests::detail::compat {
 
     PPR_UNIT_TEST (profiling_defaults_and_explicit_override) {
         Diagnostics preset_diagnostics{};
-        auto preset = resolveCli({"--profile100"}, preset_diagnostics);
-        PPR_TEST_ASSERT(preset.has_value());
-        PPR_TEST_ASSERT(preset->m_profiling);
-        PPR_TEST_ASSERT(not preset->m_display.m_value.m_throttle_unfocused);
+        const auto retired = resolveCli({"--profile100"}, preset_diagnostics);
+        PPR_TEST_ASSERT(not retired.has_value() and preset_diagnostics.hasErrors());
+        PPR_TEST_ASSERT(gameHelpText().find("profile100") == std::string::npos);
 
         Diagnostics report_diagnostics{};
         const auto report = resolveCli({"--worldgen-report"}, report_diagnostics);
@@ -342,7 +341,7 @@ namespace pP::game::tests::detail::compat {
 
         // An explicit display setting overrides the profiling default.
         Diagnostics override_diagnostics{};
-        auto overridden = resolveCli({"--profile100", "--focus-throttle"}, override_diagnostics);
+        auto overridden = resolveCli({"--exit-after=5", "--focus-throttle"}, override_diagnostics);
         PPR_TEST_ASSERT(overridden.has_value());
         PPR_TEST_ASSERT(overridden->m_profiling);
         PPR_TEST_ASSERT(overridden->m_display.m_value.m_throttle_unfocused);
@@ -507,7 +506,7 @@ namespace pP::game::tests::detail::compat {
         Diagnostics diagnostics{};
         const auto parsed = parseCliArgs(
             spell(
-                {"--profile100", "--display.pacing=follow-vsync", "--display.pacing=paced", "--display.cap_hz=60",
+                {"--exit-after=5", "--display.pacing=follow-vsync", "--display.pacing=paced", "--display.cap_hz=60",
                     "--display.cap_hz=30", "--display.paced_vsync=false", "--no-focus-throttle",
                     "--display.throttle_unfocused=true"}),
             schema, diagnostics);

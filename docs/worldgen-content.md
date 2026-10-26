@@ -585,7 +585,7 @@ then measures stationary and moving/zooming cameras, a real two-cell chunk-seam
 dig through the publication transaction, biome/textured preview switches, and two
 New Games (seed 1, then the requested seed). It waits for final retirement and
 exits. An optional `--exit-after=300` bounds the process; early close or timeout
-is failure, never an acceptance pass. Acceptance excludes `--profile100`.
+is failure, never an acceptance pass. The retired `--profile100` option is rejected.
 
 The scenario checks that camera changes upload no terrain or resident tables,
 that actual terrain draw/compute commands were encoded, that a successful frame

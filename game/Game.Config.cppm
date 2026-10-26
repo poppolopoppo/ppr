@@ -49,7 +49,7 @@ export namespace pP::game {
         std::string m_worldgen_profile{"frontier"};
         u64 m_worldgen_seed{42u};
         EGameCommand m_command{EGameCommand::interactive};
-        bool m_profile100{false}, m_worldgen_report{}, m_worldgen_acceptance{};
+        bool m_worldgen_report{}, m_worldgen_acceptance{};
 
         [[nodiscard]] static constexpr auto describe() {
             using namespace config;
@@ -108,12 +108,6 @@ export namespace pP::game {
                     Metadata{
                         "game.command", "Game command selector", "Command", EMutability::startup, ESource::cli, false},
                     game_command_domain),
-                field(
-                    &GameSettings::m_profile100,
-                    Metadata{
-                        "game.profile100", "100-agent profiling preset (also selects profiling defaults)", "Profiling",
-                        EMutability::startup, ESource::cli, false},
-                    boolean_domain),
                 field(
                     &GameSettings::m_exit_after,
                     Metadata{

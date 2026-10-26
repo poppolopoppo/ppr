@@ -300,10 +300,6 @@ namespace pP::game {
             schema.m_options, valueOption("game.worldgen_seed", "worldgen-seed", "Unsigned 64-bit world seed."));
         appendOption(
             schema.m_options,
-            switchOption(
-                "game.profile100", "profile100", "100-agent profiling preset (also selects profiling defaults)."));
-        appendOption(
-            schema.m_options,
             valueOption(
                 "game.exit_after", "auto-exit", "Exit gracefully after S wall-clock seconds (alias: exit-after)."));
         schema.m_options.back().m_aliases.push_back("exit-after");
@@ -335,7 +331,7 @@ namespace pP::game {
         const config::CliSchema schema = gameCliSchema();
         std::string text = config::generateHelp(schema, GameSettings{});
         text += "\nProfiling policy:\n"
-                "  --profile100, --auto-exit/--exit-after, and --no-focus-throttle\n"
+                "  --auto-exit/--exit-after and --no-focus-throttle\n"
                 "  select profiling defaults (display.throttle_unfocused = false). An explicit\n"
                 "  display setting overrides the profiling default.\n"
                 "\nPicture settings file:\n"
@@ -423,9 +419,8 @@ namespace pP::game {
 
         auto game = config::resolve<GameSettings>(
             std::span<const config::Layer>{game_layers.data(), game_layers.size()}, diagnostics);
-        const bool profiling = game.has_value() and (game->m_value.m_profile100 or
-                                                        cliHas(cli, "game.exit_after") or
-                                                        cliHas(cli, "display.throttle_unfocused"));
+        const bool profiling = game.has_value() and
+                               (cliHas(cli, "game.exit_after") or cliHas(cli, "display.throttle_unfocused"));
 
         Array<config::Layer> display_precedence{};
         if (profiling) {
@@ -470,12 +465,10 @@ namespace pP::game {
             PPR_RETURN_UNEXPECTED_ON_FAIL(GameConfig, error);
         }
 
-        if (settings.m_worldgen_acceptance and
-            (settings.m_command != EGameCommand::interactive or settings.m_profile100)) {
+        if (settings.m_worldgen_acceptance and settings.m_command != EGameCommand::interactive) {
             const auto error = config::make_error_code(config::EConfigErrc::cross_field_invalid);
             diagnostics.add(
-                "invocation", "game.worldgen_acceptance",
-                "Acceptance requires an authored interactive session without --profile100", error);
+                "invocation", "game.worldgen_acceptance", "Acceptance requires an authored interactive session", error);
             PPR_RETURN_UNEXPECTED_ON_FAIL(GameConfig, error);
         }
 
