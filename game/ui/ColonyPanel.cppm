@@ -322,11 +322,13 @@ export namespace pP::colony {
         Array<std::string_view> m_features{};
         std::optional<ColonyParticlePresentation> m_particle{};
         std::optional<AgentSummary> m_nearest{};
+        u64 m_particle_snapshot_tick{};
         sim::GlobalCellPos m_position{};
         float m_temperature_k{};
         u16 m_material_id{};
         ECellPresence m_presence{ECellPresence::unavailable};
         bool m_generated{};
+        bool m_particle_snapshot_current{};
     };
 
     struct ColonyWorldPresentation final {

@@ -8,6 +8,12 @@ supplies synchronous presentation data and applies returned typed actions after
 drawing. Engine UI continues to own ImGui lifecycle, input routing, static font
 publication and detached GPU rendering.
 
+Particle inspection uses explicit demand snapshots. Pinning a cell asks the
+host to freeze and capture the current joint tick while UI/rendering continue.
+The model reports snapshot availability and tick; after resident evolution it
+does not interpret unavailable coordinates as an empty particle cell. Terrain,
+authored metadata and agent inspection remain live without a particle mirror.
+
 ## Navigation
 
 | Module | Files | Responsibility |

@@ -22,6 +22,8 @@ namespace pP::game::ui {
             const bool metadata) {
             out.m_features.clear();
             out.m_particle.reset();
+            out.m_particle_snapshot_current = driver.particleSnapshotCurrent();
+            out.m_particle_snapshot_tick = driver.particleSnapshotTick();
             out.m_nearest.reset();
             out.m_material = {};
             out.m_biome = {};
@@ -115,9 +117,20 @@ namespace pP::game::ui {
                 }
             }
 
-            for (const auto &particle: driver.particleChunk(sim::chunkOf(position))) {
-                const u32 x = static_cast<u32>(particle.m_x_m / recipe.m_cell_size_m);
-                const u32 y = static_cast<u32>(particle.m_y_m / recipe.m_cell_size_m);
+            if (not out.m_particle_snapshot_current) {
+                return;
+            }
+
+            const auto particles = driver.particleChunk(sim::chunkOf(position));
+            if (not particles) {
+                // A demand snapshot is explicitly unavailable after a resident
+                // tick. Terrain/agent inspection remains live during capture.
+                return;
+            }
+
+            for (const auto &particle: *particles) {
+                const u32 x = std::min(static_cast<u32>(particle.m_x_m / recipe.m_cell_size_m), sim::kWorldEdge - 1u);
+                const u32 y = std::min(static_cast<u32>(particle.m_y_m / recipe.m_cell_size_m), sim::kWorldEdge - 1u);
                 if (x != position.m_x or y != position.m_y) {
                     continue;
                 }

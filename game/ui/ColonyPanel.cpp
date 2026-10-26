@@ -635,7 +635,9 @@ namespace pP::colony {
                             fieldRow(row++, "Feature", value);
                         }
 
-                        if (cell.m_particle) {
+                        if (not cell.m_particle_snapshot_current) {
+                            fieldRow(row++, "Particle", "Unavailable; pin to capture");
+                        } else if (cell.m_particle) {
                             const ColonyParticlePresentation &particle = *cell.m_particle;
                             std::snprintf(
                                 value, sizeof(value), "%llu %.*s", static_cast<unsigned long long>(particle.m_id),
@@ -650,6 +652,11 @@ namespace pP::colony {
                         } else {
                             fieldRow(row++, "Particle", "none");
                         }
+
+                        std::snprintf(
+                            value, sizeof(value), "%llu",
+                            static_cast<unsigned long long>(cell.m_particle_snapshot_tick));
+                        fieldRow(row++, "Particle tick", value);
                     }
 
                     if (cell.m_nearest) {
