@@ -89,6 +89,7 @@ target_sources(engine.app
         renderer/App.Renderer.FrameFence.cpp
         renderer/App.Renderer.GpuCaches.cpp
         renderer/App.Renderer.GridPass.cpp
+        renderer/App.Renderer.GridPass.Particles.cpp
         renderer/App.Renderer.RetroPass.cpp
         renderer/App.Renderer.TrianglePass.cpp
 

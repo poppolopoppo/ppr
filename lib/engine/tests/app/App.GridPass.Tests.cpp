@@ -514,7 +514,6 @@ namespace pP::tests::detail {
             particle.m_mass_kg = 1.0;
             particle.m_temperature_k = 300.0;
             particle.m_material_id = 1u;
-            particle.m_phase = 1u;
             const auto rejects = [&](const Array<GridParticleInstance> &records) {
                 auto rejected = original;
                 rejected.m_reset_caches = true;
@@ -537,8 +536,8 @@ namespace pP::tests::detail {
             invalid.m_temperature_k = (std::numeric_limits<double>::quiet_NaN)();
             rejects(Array<GridParticleInstance>{invalid});
             invalid = particle;
-            invalid.m_id = 2u;
-            rejects(Array<GridParticleInstance>{particle, invalid});
+            invalid.m_material_id = 2u;
+            rejects(Array<GridParticleInstance>{invalid});
 
             auto accepted = original;
             accepted.m_tiles[0].m_dirty_mask = 0u;
@@ -547,6 +546,14 @@ namespace pP::tests::detail {
                 GridParticleBatch{
                     0u, std::make_shared<const Array<GridParticleInstance>>(Array<GridParticleInstance>{particle})});
             PPR_TEST_ASSERT(not pass.applyStagedFrame(accepted));
+
+            auto coincident = accepted;
+            auto overlapping = particle;
+            overlapping.m_id = 2u;
+            coincident.m_particle_batches[0].m_particles = std::make_shared<const Array<GridParticleInstance>>(
+                Array<GridParticleInstance>{particle, overlapping});
+            PPR_TEST_ASSERT(not pass.applyStagedFrame(coincident));
+
             auto changed_thickness = accepted;
             changed_thickness.m_reference_thickness_m = 2.0f;
             PPR_TEST_ASSERT(
@@ -561,6 +568,38 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(pass.applyStagedFrame(changed_optics) == std::make_error_code(std::errc::invalid_argument));
             PPR_TEST_ASSERT(not pass.applyStagedFrame(accepted));
             PPR_TEST_ASSERT(pass.uploadCount() == uploads);
+        };
+
+        PPR_UNIT_TEST (grid_moving_particles_allow_dense_chunks_and_closed_endpoints) {
+            for (const double cell: {1.0, 1.0 / 3.0}) {
+                GridPass pass{};
+                GridPass::GridStagedFrame stage{};
+                stage.m_cell_size_m = static_cast<float>(cell);
+                stage.m_has_catalog = true;
+                stage.m_terrain_visuals.push_back(GridTerrainVisual{.m_material_id = 1u});
+                Array<GridParticleInstance> dense;
+                dense.reserve(GridPass::kCellsPerChunk + 1u);
+                for (u32 index = 0u; index <= GridPass::kCellsPerChunk; ++index) {
+                    dense.push_back({index + 1u, 10.5 * cell, 10.5 * cell, cell * cell, 1.0, 300.0, 1u});
+                }
+
+                stage.m_particle_batches.push_back(
+                    {0u, std::make_shared<const Array<GridParticleInstance>>(std::move(dense))});
+                PPR_TEST_ASSERT(not pass.applyStagedFrame(stage));
+
+                GridParticleInstance endpoint{
+                    GridPass::kCellsPerChunk + 2u, 4096.0 * cell, 4096.0 * cell, cell * cell, 1.0, 300.0, 1u};
+                stage.m_particle_batches.clear();
+                stage.m_particle_batches.push_back(
+                    {1023u,
+                        std::make_shared<const Array<GridParticleInstance>>(Array<GridParticleInstance>{endpoint})});
+                PPR_TEST_ASSERT(not pass.applyStagedFrame(stage));
+
+                // The coordinate stays exact while only its owner bin is bounded.
+                PPR_TEST_ASSERT((*stage.m_particle_batches[0u].m_particles)[0u].m_position_x_m == 4096.0 * cell);
+                stage.m_particle_batches[0u].m_chunk_id = 1022u;
+                PPR_TEST_ASSERT(pass.applyStagedFrame(stage) == std::errc::invalid_argument);
+            }
         };
 
         PPR_UNIT_TEST (grid_cpu_and_indirect_lanes_agree_on_plan) {
@@ -687,6 +726,7 @@ namespace pP::tests {
             detail::GridTiles::grid_indirect_compaction_clamps_and_handles_empty,
             detail::GridTiles::grid_cpu_and_indirect_lanes_agree_on_plan,
             detail::GridTiles::grid_particle_rejection_preserves_the_retained_stage,
+            detail::GridTiles::grid_moving_particles_allow_dense_chunks_and_closed_endpoints,
             detail::Retro::retro_pixel_scale_clamps_to_supported_range,
             detail::Retro::retro_scene_extent_divides_both_axes_and_floors_at_one,
             detail::Retro::retro_scene_signature_is_linear_hdr_with_depth,

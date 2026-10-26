@@ -42,9 +42,12 @@ Published slots and retained-table references stay pinned; retired slots become
 reusable only after their last submitted reader fence completes. Upload batches
 copy at most eight chunks by default and publish complete cohorts together with
 the resident table. Deferral retains the previous terrain and pending edit
-acknowledgments. Identical retries preserve partial progress. Explicit reference
-fixtures still support queue-idle preparation; when needed, that path completes
-all pending chunks so switching preparation APIs cannot pin both slot banks.
+acknowledgments. Identical retries preserve partial progress. Reference fixtures,
+smoke and frozen headless capture drive this same bounded publication path and
+refresh renderer fence observations after explicit boundary waits. The synchronous
+GridPass preparation API is retired; its historical internal-serialization telemetry
+is zero by construction, without mutable counter state. External diagnostic-host
+waits are separate and are not represented by that compatibility field.
 
 World-specific terrain, atlas mappings and retained draw state live in one
 `GridPass::WorldResources` value. Owner-lane candidate staging/preparation keeps
@@ -62,6 +65,31 @@ until disposal finishes. The final fixed number of GPU-object releases remains
 on the render owner; shutdown/device-loss epoch resets discard old cache handles.
 
 ## Design
+
+Resident particle presentation accepts a renderer-neutral layout-v3 view with
+joint strong owners of hot64 positions and cold32 volume/RGB rows, immutable
+stable-ID-ordered metadata, and an epoch-revocation token. The editor rejects
+stale unencoded values before backend work. Prepared slots pin both exact source
+owners through the existing frame fence, including world retirement.
+
+`App.Renderer.GridPass.Particles.cpp` owns `grid_particle_prepare.slang`: one pack
+dispatch on source changes, then three stable frustum-compaction dispatches per
+frame and one GPU-counted indirect draw. Scratch is O(N), bounded by the global
+1M-particle capacity; numerical rows never reorder. Each row draws an independent
+continuous camera-facing quad. A pass-owned, once-generated mipmapped RGBA8 disk
+texture supplies sampled alpha; cold32 supplies moving-particle RGB. Radius in
+metres is `cell_size_m * sqrt(volume_cells / pi)`, where solver volume is physical
+volume divided by `cell_size_m^2 * reference_thickness_m`. Gas metadata carries
+physical position/radius and uses the material palette. Occlusion follows the
+terrain mode actually drawn. Straight alpha blending has depth writes disabled.
+
+Before a resident runtime view exists, owned preview/offline seeds use the same
+GPU pipeline after one upload per changed inventory. The chunk cache accelerates
+admission/version checks only. Selecting a resident view revokes this seed lease;
+stale or failed runtime views cannot select the seed adapter. CPU draw geometry,
+cell proxies, owner tables, chunk radix sorting and FP64 admission are retired.
+Runtime shader compilation and offscreen native/retro4 pixel gates remain
+validation requirements; user visual acceptance is separate.
 
 - **Renderer** (`App.Renderer.cppm/.cpp`): private config (backend-preferred format, image count 3),
   explicit `Renderer(SurfaceSettings initial_settings = {})` captures startup vsync for new surfaces;
@@ -247,11 +275,11 @@ on the render owner; shutdown/device-loss epoch resets discard old cache handles
   chunk ID and its exact 128x128 chunk rect, even on clean/no-op requests. Dirty requests pack pairs into
   8192 u32 words per chunk in a lazy pass-owned CPU cache (latest wins). `clearCache()` invalidates cached
   tiles and cells independently of `clearTiles()` staging; regeneration calls clearCache before resubmission.
-  Before entering a render callback, the editor must call
-  `prepareCellUploads(device, waitForGpuIdle)` using its renderer-owned queue wait. Clean/offscreen/flat-only
-  frames do not wait; dirty visible chunks are batched into their slots of a persistently mapped, GPU-readable
-  32 MiB max atlas only after one successful wait, and stale draws fail closed. A valid 4-byte dummy SRV
-  serves flat-only rendering; both direct and MDI lanes bind the explicit full buffer range.
+  Before entering a render callback, owners advance `tryPrepareCellUploads`
+  with the renderer's refreshed completion value. Incomplete cohorts retain the
+  previous table and reject stale pending draws. Slots remain pinned by resident
+  tables and reader fences; the pass never invokes a queue-idle callback. A valid
+  4-byte dummy SRV serves flat-only rendering; direct and MDI lanes bind full ranges.
   `GridTilePayload` retains its 32-byte stride; offsets 20/24/28 carry cell-word base/flags/pad.
   MDI `SV_InstanceID`/startInstanceLocation parity remains to be proven with GPU readback on each backend.
 - **RetroPass** (`App.Renderer.RetroPass.cppm/.cpp`): content-free present pass beside `GridPass`/`TrianglePass`.

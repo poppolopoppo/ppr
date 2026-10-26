@@ -15,6 +15,8 @@ import engine.shader;
 import std;
 
 export namespace pP {
+    PPR_DECLARE_LOG_CATEGORY(GridPass)
+
     // ------------------------------------------------------------------
     // grid pass: chunk-sized tile quads over the cell world
     // ------------------------------------------------------------------
@@ -35,6 +37,16 @@ export namespace pP {
     // Graph note: game/colony (which owns the engine.sim link) translates
     // grid state into these plain structs; engine.app gains NO engine.sim
     // dependency and no sim type crosses this boundary.
+
+    // Value identity of an activated world bundle. Zero job/generation means
+    // no activated world; the owner lane is the only reader of bundle state.
+    struct GridWorldIdentity {
+        u64 m_job_id{};
+        u64 m_world_generation{};
+        u64 m_content_fingerprint{};
+
+        [[nodiscard]] bool operator==(const GridWorldIdentity &) const noexcept = default;
+    };
 
     // Tile rect in world-cell units. Signed so camera-centred test layouts
     // stay representable; production submissions always land in [0, edge).
@@ -106,8 +118,8 @@ export namespace pP {
         GridSurfaceHeights m_heights_m{};
     };
 
-    // Immutable source records stay in physical units. Only changed chunks are
-    // repacked for the GPU; no simulation type crosses the renderer boundary.
+    // Initial-state admission seeds in physical units, before a resident solver
+    // view exists. Uploaded once per changed inventory; never CPU draw geometry.
     struct GridParticleInstance {
         u64 m_id{};
         double m_position_x_m{};
@@ -116,11 +128,75 @@ export namespace pP {
         double m_mass_kg{};
         double m_temperature_k{};
         u32 m_material_id{};
-        u32 m_phase{};
     };
     struct GridParticleBatch {
         u32 m_chunk_id{};
         std::shared_ptr<const Array<GridParticleInstance>> m_particles{};
+    };
+
+    // ------------------------------------------------------------------
+    // versioned resident-particle presentation input
+    // ------------------------------------------------------------------
+
+    inline constexpr u32 kGridParticleNumericalLayout = 3u;
+    inline constexpr u32 kGridParticleNumericalStride = 64u;
+    inline constexpr u32 kGridParticleReadonlyStride = 32u;
+    inline constexpr u32 kGridParticleCapacity = 1024u * 1024u;
+
+    // Stable row/ID mapping and gas-only physical inputs. Moving radius is
+    // cell_metres*sqrt(Cold32.volume/pi); gas radius is sqrt(volume/thickness/pi).
+    struct GridParticleMetadataRow {
+        u32 m_id_low{}, m_id_high{}, m_source_row{0xffff'ffffu}, m_material{};
+        float m_gas_x{}, m_gas_y{}, m_radius{};
+        u32 m_reserved{};
+    };
+
+    static_assert(sizeof(GridParticleMetadataRow) == 32u and alignof(GridParticleMetadataRow) == 4u);
+    static_assert(PPR_OFFSETOF(GridParticleMetadataRow, m_gas_x) == 16u);
+    static_assert(PPR_OFFSETOF(GridParticleMetadataRow, m_radius) == 24u);
+
+    struct GridParticleMetadataResource {
+        rhi::ComPtr<rhi::IBuffer> m_rows{};
+        Array<u32> m_materials{};
+        u64 m_version{};
+        double m_cell_metres{};
+        u32 m_count{}, m_moving_count{};
+    };
+
+    [[nodiscard]] Expected<std::shared_ptr<const GridParticleMetadataResource>> prepareGridParticleMetadata(
+        rhi::IDevice &device, std::span<const GridParticleMetadataRow> rows, u32 moving_count, double cell_metres,
+        u64 version);
+
+    struct GridParticlePresentationIdentity {
+        GridWorldIdentity m_world{};
+        u64 m_publication{}, m_terrain_revision{}, m_joint_tick{};
+
+        [[nodiscard]] bool operator==(const GridParticlePresentationIdentity &) const noexcept = default;
+    };
+
+    struct GridParticleGpuView {
+        rhi::ComPtr<rhi::IBuffer> m_numerical{};
+        rhi::ComPtr<rhi::IBuffer> m_readonly{};
+        std::shared_ptr<const GridParticleMetadataResource> m_metadata{};
+        std::shared_ptr<const std::atomic<u64>> m_live_epoch{};
+        GridWorldIdentity m_world{};
+        u64 m_device_epoch{}, m_publication{}, m_terrain_revision{}, m_joint_tick{};
+        double m_origin{3.0};
+        u32 m_layout{kGridParticleNumericalLayout};
+        u32 m_stride{kGridParticleNumericalStride};
+        u32 m_readonly_stride{kGridParticleReadonlyStride};
+
+        [[nodiscard]] bool current() const noexcept {
+            return m_numerical and
+                   m_readonly and
+                   m_layout == kGridParticleNumericalLayout and
+                   m_stride == kGridParticleNumericalStride and
+                   m_readonly_stride == kGridParticleReadonlyStride and
+                   m_numerical->getDesc().elementSize == kGridParticleNumericalStride and
+                   m_readonly->getDesc().elementSize == kGridParticleReadonlyStride and
+                   m_live_epoch and
+                   m_live_epoch->load(std::memory_order_acquire) == m_device_epoch;
+        }
     };
 
     enum class EGridDiagnosticMode : u32 {
@@ -230,6 +306,18 @@ export namespace pP {
         u64 m_texture_decoded_bytes{};
     };
 
+    // ------------------------------------------------------------------
+    // staged frame
+    // ------------------------------------------------------------------
+    // Namespace scope, not nested GridPass types: a module interface or type
+    // definition outside engine.app that names a nested type of an imported
+    // class makes the MSVC front end unable to materialize unrelated class
+    // definitions in that translation unit (C1001, function-signature.cpp:213).
+    // GridPass keeps the established nested spellings as aliases.
+    struct GridStagedUpload;
+
+    struct GridStagedFrame;
+
     class GridPass {
     public:
         // Chunk-sized tiles: one tile per chunk over the 32x32-chunk grid of
@@ -288,6 +376,13 @@ export namespace pP {
         [[nodiscard]] std::error_code renderBackground(const DrawContext &context);
         [[nodiscard]] std::error_code renderParticles(const DrawContext &context);
 
+        // A host selects this view only after joint CPU/GPU commit. Old packets
+        // are rejected on the owner lane before any upload/encoding touches it.
+        [[nodiscard]] bool gpuParticleFrameCurrent(const std::optional<GridParticleGpuView> &view) const noexcept;
+        [[nodiscard]] std::optional<GridParticlePresentationIdentity> activeParticlePresentation() const noexcept;
+        [[nodiscard]] std::error_code applyGpuParticleView(const GridParticleGpuView &view);
+        [[nodiscard]] std::error_code prepareGpuParticles(const PreRenderContext &context);
+
         // Pure CPU planner: keeps the submissions whose tile boxes (expanded
         // by kGridCullEpsilon) intersect the snapshot frustum. Renders
         // nothing, so it is unit-testable without a device.
@@ -330,6 +425,16 @@ export namespace pP {
             return {slot.m_args.get(), slot.m_ids.get()};
         }
 
+        [[nodiscard]] std::array<rhi::IBuffer *, 3u> particleBuffersForTest() const noexcept {
+            if (not m_world.m_gpu_particles) {
+                return {};
+            }
+
+            const auto &particles = *m_world.m_gpu_particles;
+            const auto &slot = particles.m_slots[particles.m_selected_slot];
+            return {particles.m_packed.get(), slot.m_args.get(), slot.m_ids.get()};
+        }
+
         // Infallible teardown: clears staged submissions, tile cache, and
         // counters, then releases GPU objects; always returns success.
         [[nodiscard]] std::error_code shutdown();
@@ -350,7 +455,7 @@ export namespace pP {
 
         // Invalidates CPU tile/cell caches without discarding staged tiles.
         // Render-thread confined; keeps the GPU atlas alive until teardown,
-        // and later slot rewrites require prepareCellUploads' idle fence.
+        // and slot rewrites require completed reader-fence proof.
         void clearCache() noexcept;
 
         // Dirty-chunk upload lane: writes the request view into the
@@ -361,58 +466,13 @@ export namespace pP {
         // every other mutator.
         [[nodiscard]] Expected<u32> requestUpload(const GridUploadRequest &request);
 
-        // Owned per-frame staging payload, built on the CLIENT lane and
-        // applied on the pass's owner lane (encoded pass-affinity: the
-        // client never touches pass CPU state directly anymore). Plain
-        // values + owned storage only — never a live grid or pass view.
-        struct GridStagedUpload {
-            u32 m_chunk_id = 0u;
-            GridTilePayload m_payload{};
-            Array<u16> m_cell_materials{};
-            Array<u16> m_diagnostic_indices{};
-        };
+        /// Staged upload row carried by a staged frame; the type itself lives at
+        /// namespace scope (see below) and keeps the established nested spelling.
+        using GridStagedUpload = ::pP::GridStagedUpload;
 
-        struct GridStagedFrame {
-            // Render the retained grid and actors while the client session is frozen.
-            bool m_retain_content{false};
-            float m_cell_size_m{1.0f};
-            bool m_has_catalog{false};
-            u32 m_boundary_material_id{1u};
-            u64 m_content_fingerprint{};
-            Array<GridTerrainVisual> m_terrain_visuals{};
-            Array<image::ImageAsset> m_terrain_images{};
-            bool m_has_background{false};
-            std::array<GridBackgroundLayer, 4u> m_background_layers{};
-            std::shared_ptr<const GridSurfaceProfile> m_surface_profile{};
-            float m_reference_thickness_m{1.0f};
-            Array<GridParticleBatch> m_particle_batches{};
-            Array<GridTileSubmission> m_tiles{};
-            Array<GridStagedUpload> m_uploads{};
-            EGridDiagnosticMode m_diagnostic_mode{EGridDiagnosticMode::textured};
-            u64 m_diagnostic_revision{};
-            Array<GridDiagnosticColor> m_diagnostic_palette{};
-            bool m_initial_matter_valid{true};
-            // Dropped before staging: translator reset / regeneration /
-            // fail-closed recovery. The client sets this; the lane applies
-            // the clear so regeneration recovery never edits pass state
-            // from main.
-            bool m_reset_caches = false;
-            // The client's single armed full-refresh flag at capture: if this
-            // stage exits on the non-applied path (rejected, minimized,
-            // cancelled, absorb-and-drop, worker error), the derived host
-            // must re-arm its full-refresh flag so the retry re-stages the
-            // world. The true value clears it at settlement.
-            bool m_full_refresh{false};
-            // Consumption-ack manifest for the driver dirty-set covered by
-            // this frame's staging payload: (seed, chunk ids, revisions)
-            // captured at the capture point. The lane round-trips it
-            // into RenderFrameResult; the derived owner consumes it there
-            // so the ack rides the reliable per-slot settlement path
-            // (applied, not dropped, not errored) rather than staging.
-            u64 m_ack_seed{};
-            Array<u32> m_ack_chunk_ids{};
-            Array<u64> m_ack_revisions{};
-        };
+        /// Staged frame applied by this pass; the type itself lives at namespace
+        /// scope (see below) and keeps the established nested spelling here.
+        using GridStagedFrame = ::pP::GridStagedFrame;
 
         // Applies one owned staging payload on the pass's owner lane:
         // optional cache drop, then staged tiles, then dirty uploads (the
@@ -420,12 +480,6 @@ export namespace pP {
         // upload failure the pass clears its staged tiles + cache and
         // returns the error; the client must full-refresh on recovery.
         [[nodiscard]] std::error_code applyStagedFrame(const GridStagedFrame &stage);
-
-        // Explicit reference fixtures may synchronously prepare visible or all
-        // chunks after the supplied queue-idle proof. Interactive rendering uses
-        // the bounded, nonblocking publication method below.
-        [[nodiscard]] std::error_code prepareCellUploads(
-            rhi::IDevice &device, std23::function_ref<std::error_code()> wait_for_gpu_idle, bool all_tiles = false);
 
         // Interactive publication never waits. False retains the previous GPU
         // table and edit acknowledgments while a bounded cohort is prepared.
@@ -448,6 +502,11 @@ export namespace pP {
         [[nodiscard]] u64 worldGeneration() const noexcept {
             return m_world.m_world_generation;
         }
+
+        [[nodiscard]] GridWorldIdentity activeWorldIdentity() const noexcept {
+            return {m_world.m_job_id, m_world.m_world_generation, m_world.m_content_fingerprint};
+        }
+
         [[nodiscard]] u32 retainedAtlasCountForTest() const noexcept;
         [[nodiscard]] GridPassObservations observations() const noexcept;
         [[nodiscard]] u64 atlasDeferredCount() const noexcept {
@@ -470,11 +529,10 @@ export namespace pP {
         // overwritten before any later use).
         void notifyFrameSubmitted(FenceCompletionValue submit_value) noexcept;
 
-        // Telemetry for Gate 1: how often the atlas write took the
-        // global-idle serialization, how many atlas writes happened, and how
-        // often a ring growth waited for in-flight work.
+        // The retired queue-idle preparation path leaves zero serializations.
+        // Keep that historical telemetry query alongside actual writes/growth waits.
         [[nodiscard]] u64 atlasSerializationCount() const noexcept {
-            return m_atlas_serialization_count;
+            return 0u;
         }
         [[nodiscard]] u64 atlasWriteCount() const noexcept {
             return m_atlas_write_count;
@@ -562,23 +620,40 @@ export namespace pP {
 
         [[nodiscard]] std::error_code ensurePipelineRoots_(rhi::IDevice &device, GridCachedPipeline &pipeline);
 
-        struct alignas(16) ParticleGpu {
+        struct ParticleGpu {
             float m_position[2]{};
             float m_radius_m{};
-            float m_fill{};
             u32 m_material_id{};
-            u32 m_phase{};
-            u32 m_owner[2]{};
+            float m_color[4]{};
         };
-        static_assert(sizeof(ParticleGpu) == 32u);
-        static_assert(PPR_OFFSETOF(ParticleGpu, m_material_id) == 16u);
-        static_assert(PPR_OFFSETOF(ParticleGpu, m_owner) == 24u);
+        static_assert(sizeof(ParticleGpu) == 32u and alignof(ParticleGpu) == 4u);
+        static_assert(PPR_OFFSETOF(ParticleGpu, m_material_id) == 12u);
+        static_assert(PPR_OFFSETOF(ParticleGpu, m_color) == 16u);
+
         struct ParticleChunk {
             std::shared_ptr<const Array<GridParticleInstance>> m_source{};
-            rhi::ComPtr<rhi::IBuffer> m_buffer{};
-            u32 m_count{};
             bool m_dirty{};
         };
+
+        struct GpuParticleSlot {
+            rhi::ComPtr<rhi::IBuffer> m_ids{}, m_args{};
+            std::optional<GridParticleGpuView> m_reader{};
+        };
+
+        struct GpuParticleStorage {
+            std::array<std::array<rhi::ComPtr<rhi::IShaderObject>, kTileRingSize>, 4u> m_roots{};
+            std::array<GpuParticleSlot, kTileRingSize> m_slots{};
+            rhi::ComPtr<rhi::IBuffer> m_packed{}, m_ranks{}, m_counts{}, m_prefix{};
+
+            GridParticleGpuView m_view{};
+            std::shared_ptr<const std::atomic<u64>> m_packed_owner{}, m_pending_owner{};
+
+            u64 m_packed_epoch{std::numeric_limits<u64>::max()}, m_packed_metadata{}, m_packed_terrain{};
+            u64 m_pending_epoch{}, m_pending_metadata{}, m_pending_terrain{};
+            u32 m_capacity{}, m_selected_slot{};
+            bool m_pending_pack{}, m_prepared{}, m_slot_encoded{};
+        };
+
         struct BackgroundSlot {
             rhi::ComPtr<rhi::ITexture> m_texture{};
             rhi::ComPtr<rhi::ITextureView> m_view{};
@@ -589,7 +664,13 @@ export namespace pP {
         [[nodiscard]] std::error_code validateParticles_(const GridStagedFrame &stage) const;
         void stageParticles_(const GridStagedFrame &stage);
         void markPipelineUse_(GridCachedPipeline &pipeline, u32 slot) noexcept;
-        [[nodiscard]] std::error_code prepareParticles_(rhi::IDevice &device);
+        [[nodiscard]] std::error_code admitParticleSeeds_(rhi::IDevice &device);
+        [[nodiscard]] std::error_code createGpuParticlePrograms_(
+            IShaderService &service, rhi::IDevice &device, const std::filesystem::path &content_dir);
+        [[nodiscard]] std::error_code ensureParticleMask_(rhi::IDevice &device);
+        [[nodiscard]] std::error_code ensureGpuParticleStorage_(rhi::IDevice &device, u32 count);
+        [[nodiscard]] std::error_code renderGpuParticles_(const DrawContext &context);
+        void prepareChunkSlotMap_(bool retained_table);
         [[nodiscard]] std::error_code createOpticalPrograms_(
             IShaderService &service, rhi::IDevice &device, const std::filesystem::path &content_dir);
         [[nodiscard]] Expected<GridCachedPipeline *> opticalPipeline_(
@@ -656,6 +737,15 @@ export namespace pP {
         };
         std::array<VisibilitySlot, kTileRingSize> m_visibility_slots{};
         std::array<VisibilityProgram, 2u> m_visibility_programs{};
+
+        struct GpuParticleProgram {
+            rhi::ComPtr<rhi::IShaderProgram> m_program{};
+            rhi::ComPtr<rhi::IComputePipeline> m_pipeline{};
+        };
+        std::array<GpuParticleProgram, 4u> m_particle_prepare_programs{};
+        rhi::ComPtr<rhi::IShaderProgram> m_gpu_particle_program{};
+        std::optional<RenderPipelineKey> m_gpu_particle_key{};
+        std::optional<GridCachedPipeline> m_gpu_particle_pipeline{};
         bool m_visibility_prepared{false};
 
 
@@ -664,6 +754,9 @@ export namespace pP {
         std::array<rhi::ComPtr<rhi::IBuffer>, kTileRingSize> m_chunk_slot_buffers{};
         std::array<void *, kTileRingSize> m_chunk_slot_mapped{};
         std::array<bool, kTileRingSize> m_chunk_slot_uploaded{};
+        rhi::ComPtr<rhi::ITexture> m_particle_mask{};
+        rhi::ComPtr<rhi::ITextureView> m_particle_mask_view{};
+        rhi::ComPtr<rhi::ISampler> m_particle_mask_sampler{};
         rhi::ComPtr<rhi::ITexture> m_boundary_noise{};
         rhi::ComPtr<rhi::ITextureView> m_boundary_noise_view{};
         rhi::ComPtr<rhi::ITexture> m_terrain_fallback{};
@@ -710,7 +803,6 @@ export namespace pP {
         FenceCompletionValue m_last_submitted_value{kFenceValueNone};
 
         // Gate 1 telemetry (see accessors above).
-        u64 m_atlas_serialization_count{0u};
         u64 m_atlas_write_count{0u};
         u64 m_growth_wait_count{0u};
 
@@ -756,6 +848,10 @@ export namespace pP {
         // state. Candidate preparation can exchange this value on the owner
         // lane without moving pass programs, completion rings or the camera.
         struct WorldResources {
+            std::unique_ptr<GpuParticleStorage> m_gpu_particles{};
+            std::shared_ptr<std::atomic<u64>> m_initial_particle_epoch{};
+            u64 m_particle_seed_version{};
+            bool m_particle_seeds_dirty{};
             bool m_has_background{};
             std::array<GridBackgroundLayer, 4u> m_background_layers{};
             std::shared_ptr<const GridSurfaceProfile> m_surface_profile{};
@@ -827,13 +923,69 @@ export namespace pP {
         rhi::Viewport m_background_viewport{};
         rhi::ScissorRect m_background_scissor{};
         CameraSnapshot m_background_camera{};
-        rhi::ComPtr<rhi::IShaderProgram> m_particle_program{};
         rhi::ComPtr<rhi::IShaderProgram> m_background_program{};
         rhi::ComPtr<rhi::IShaderProgram> m_background_copy_program{};
-        std::optional<RenderPipelineKey> m_particle_key{}, m_background_key{}, m_background_copy_key{};
-        std::optional<GridCachedPipeline> m_particle_pipeline{}, m_background_pipeline{}, m_background_copy_pipeline{};
+        std::optional<RenderPipelineKey> m_background_key{}, m_background_copy_key{};
+        std::optional<GridCachedPipeline> m_background_pipeline{}, m_background_copy_pipeline{};
         u64 m_particle_uploads{};
         u64 m_particle_uploaded_bytes{};
         bool m_ready = false;
+    };
+
+    // ------------------------------------------------------------------
+    // staged frame
+    // ------------------------------------------------------------------
+
+    /// One staged tile upload carried by a staged frame.
+    struct GridStagedUpload {
+        u32 m_chunk_id = 0u;
+        GridTilePayload m_payload{};
+        Array<u16> m_cell_materials{};
+        Array<u16> m_diagnostic_indices{};
+    };
+
+    /// Owned per-frame staging payload, built on the CLIENT lane and applied on
+    /// the pass's owner lane (encoded pass-affinity: the client never touches
+    /// pass CPU state directly anymore). Plain values + owned storage only —
+    /// never a live grid or pass view.
+    struct GridStagedFrame {
+        // Render the retained grid and actors while the client session is frozen.
+        bool m_retain_content{false};
+        float m_cell_size_m{1.0f};
+        bool m_has_catalog{false};
+        u32 m_boundary_material_id{1u};
+        u64 m_content_fingerprint{};
+        Array<GridTerrainVisual> m_terrain_visuals{};
+        Array<image::ImageAsset> m_terrain_images{};
+        bool m_has_background{false};
+        std::array<GridBackgroundLayer, 4u> m_background_layers{};
+        std::shared_ptr<const GridSurfaceProfile> m_surface_profile{};
+        float m_reference_thickness_m{1.0f};
+        Array<GridParticleBatch> m_particle_batches{};
+        std::optional<GridParticleGpuView> m_gpu_particles{};
+        Array<GridTileSubmission> m_tiles{};
+        Array<GridStagedUpload> m_uploads{};
+        EGridDiagnosticMode m_diagnostic_mode{EGridDiagnosticMode::textured};
+        u64 m_diagnostic_revision{};
+        Array<GridDiagnosticColor> m_diagnostic_palette{};
+        bool m_initial_matter_valid{true};
+        // Dropped before staging: translator reset / regeneration / fail-closed
+        // recovery. The client sets this; the lane applies the clear so
+        // regeneration recovery never edits pass state from main.
+        bool m_reset_caches = false;
+        // The client's single armed full-refresh flag at capture: if this stage
+        // exits on the non-applied path (rejected, minimized, cancelled,
+        // absorb-and-drop, worker error), the derived host must re-arm its
+        // full-refresh flag so the retry re-stages the world. The true value
+        // clears it at settlement.
+        bool m_full_refresh{false};
+        // Consumption-ack manifest for the driver dirty-set covered by this
+        // frame's staging payload: (seed, chunk ids, revisions) captured at the
+        // capture point. The lane round-trips it into RenderFrameResult; the
+        // derived owner consumes it there so the ack rides the reliable per-slot
+        // settlement path (applied, not dropped, not errored) rather than staging.
+        u64 m_ack_seed{};
+        Array<u32> m_ack_chunk_ids{};
+        Array<u64> m_ack_revisions{};
     };
 }
