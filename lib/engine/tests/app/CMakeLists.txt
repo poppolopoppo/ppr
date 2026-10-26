@@ -15,6 +15,7 @@ target_sources(engine.tests.app
             ${CMAKE_SOURCE_DIR}/game/colony/Content.cppm
             ${CMAKE_SOURCE_DIR}/game/colony/Metric.cppm
             ${CMAKE_SOURCE_DIR}/game/colony/ColonyDriver.cppm
+            ${CMAKE_SOURCE_DIR}/game/colony/MatterRuntime.cppm
             ${CMAKE_SOURCE_DIR}/game/colony/DigTool.cppm
             ${CMAKE_SOURCE_DIR}/game/colony/Pathfinding.cppm
             ${CMAKE_SOURCE_DIR}/game/colony/ColonyTranslator.cppm
@@ -27,6 +28,7 @@ target_sources(engine.tests.app
     PRIVATE
         App.Tests.cpp
         App.SimPacket.Tests.cpp
+        ${CMAKE_SOURCE_DIR}/game/colony/Colony.AuthoredFixture.Tests.h
         App.Player.Tests.cpp
         App.PlayerService.Tests.cpp
         App.Player.Graph.Tests.cpp
@@ -50,10 +52,13 @@ target_sources(engine.tests.app
         App.ImguiDpi.Tests.cpp
         App.PerformanceWidget.Tests.cpp
         App.ZeroVProbe.Tests.cpp
+        App.MatterGpu.Tests.cpp
+        App.MatterFork.Tests.cpp
+        App.MatterFork.Oracle.h
+        App.MatterRuntime.Tests.cpp
 
         ${CMAKE_SOURCE_DIR}/game/colony/Colony.cpp
         ${CMAKE_SOURCE_DIR}/game/colony/WorldGen.cpp
-        ${CMAKE_SOURCE_DIR}/game/colony/WorldGen.Fixture.cpp
         ${CMAKE_SOURCE_DIR}/game/colony/WorldGen.Plan.cpp
         ${CMAKE_SOURCE_DIR}/game/colony/WorldGen.Export.cpp
         ${CMAKE_SOURCE_DIR}/game/colony/Content.cpp
@@ -64,6 +69,8 @@ target_sources(engine.tests.app
         ${CMAKE_SOURCE_DIR}/game/colony/Content.Presentation.cpp
         ${CMAKE_SOURCE_DIR}/game/colony/Metric.cpp
         ${CMAKE_SOURCE_DIR}/game/colony/ColonyDriver.cpp
+        ${CMAKE_SOURCE_DIR}/game/colony/ColonyDriver.Matter.cpp
+        ${CMAKE_SOURCE_DIR}/game/colony/MatterRuntime.cpp
         ${CMAKE_SOURCE_DIR}/game/colony/ColonyDriver.Checkpoint.cpp
         ${CMAKE_SOURCE_DIR}/game/colony/ColonyDriver.Edits.cpp
         ${CMAKE_SOURCE_DIR}/game/colony/DigTool.cpp
@@ -85,7 +92,7 @@ setup_ppr_project(engine.tests.app
 
 # ColonyDriver links physics privately (same shape as engine.tests.sim);
 # the colony headers include Colony.Elements.h by relative name.
-target_link_libraries(engine.tests.app PRIVATE engine.physics)
+target_link_libraries(engine.tests.app PRIVATE engine.physics engine.matter)
 
 target_include_directories(engine.tests.app PRIVATE
     ${CMAKE_SOURCE_DIR}/lib/engine/tests/include
@@ -101,6 +108,72 @@ endif()
 # Renderer resolves shader assets through the executable's content directory;
 # the UI service reads its pinned font set from the staged `fonts` tree.
 ppr_stage_assets(engine.tests.app shaders fonts)
+
+# Keep the measured source-kernel/extension group within its existing ceiling.
+# Transfer, contact, pool and dam continuations own exact leaves, excluded from that group.
+# Pinned-fork conformance uses its own exact group, leaving old workloads/deadlines intact.
+# The300s ceiling matches the existing matter_gpu and matter_resident_gpu device gates.
+ppr_add_test_entry(TARGET engine.tests.app
+    NAME matter_fork_gpu
+    FILTER "app/matter_fork"
+    LOOPS
+    RESOURCE_LOCK gpu
+    TIMEOUT 300
+    LABELS unit engine app gpu_validation
+)
+
+set(ppr_matter_resident_filter "app/matter_gpu/resident_status_and_frozen_snapshot_preserve_full_state_without_feedback,app/matter_gpu/publication_validation_checks_every_scalar_and_matches_upload_admission,app/matter_gpu/resident_append_copies_the_current_prefix_and_uploads_only_new_rows,app/matter_runtime_gpu/resident_completion_keeps_metadata_and_freezes_exact_demand_snapshot")
+
+ppr_add_test_entry(TARGET engine.tests.app
+    NAME matter_gpu
+    FILTER "app/matter_gpu"
+    EXCLUDE "${ppr_matter_resident_filter}"
+    LOOPS
+    RESOURCE_LOCK gpu
+    TIMEOUT 300
+    LABELS unit engine app gpu_validation
+)
+
+ppr_add_test_entry(TARGET engine.tests.app
+    NAME matter_resident_gpu
+    FILTER "${ppr_matter_resident_filter}"
+    LOOPS
+    RESOURCE_LOCK gpu
+    TIMEOUT 300
+    LABELS unit engine app gpu_validation
+)
+
+unset(ppr_matter_resident_filter)
+
+# Numeric adapters need no device. Actual-domain pending physics owns a separate
+# GPU entry rather than extending the already measured source-kernel group.
+ppr_add_test_entry(TARGET engine.tests.app
+    NAME matter_adapter
+    FILTER "app/matter_adapter"
+    LOOPS
+    TIMEOUT 120
+    LABELS unit engine app cpu
+)
+
+ppr_add_test_entry(TARGET engine.tests.app
+    NAME matter_runtime_gpu
+    FILTER "app/matter_runtime_gpu"
+    EXCLUDE "app/matter_runtime_gpu/dedicated_actual_domain_cold_reused_acknowledgment_and_completion_are_distinct,app/matter_runtime_gpu/resident_completion_keeps_metadata_and_freezes_exact_demand_snapshot"
+    LOOPS
+    RESOURCE_LOCK gpu
+    TIMEOUT 180
+    LABELS unit engine app gpu_validation
+)
+
+ppr_add_test_entry(TARGET engine.tests.app
+    NAME matter_dedicated_gpu
+    FILTER "app/matter_runtime_gpu/dedicated_actual_domain_cold_reused_acknowledgment_and_completion_are_distinct"
+    LOOPS
+    RESOURCE_LOCK gpu
+    TIMEOUT 180
+    LABELS unit engine app gpu_validation
+)
+
 
 # Phase 3: CTest entries share the target by resource class instead of
 # serializing every app shard. Each shard invokes the same exe with
@@ -120,7 +193,7 @@ ppr_stage_assets(engine.tests.app shaders fonts)
 # display_window_ family, including placement regressions; the prefix keeps
 # that filter under the 1024-character harness limit.
 # Every top-level recurse child in App.Tests.cpp appears in exactly one shard
-# (41/41), and the 33 run_gate leaves are partitioned across death_lifecycle,
+# (45/45), and the 33 run_gate leaves are partitioned across death_lifecycle,
 # slow_gates, and display_window. The 15 flat app/* leaves
 # (renderer_*/imgui_live_*/app_*) are split across services_cpu,
 # services_gpu, and services_window by their resource use.

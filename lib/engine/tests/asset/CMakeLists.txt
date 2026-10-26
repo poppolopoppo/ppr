@@ -67,10 +67,25 @@ ppr_add_test_entry(TARGET engine.tests.asset
 ppr_add_test_entry(TARGET engine.tests.asset
     NAME gpu
     FILTER "asset/render"
+    EXCLUDE "asset/render/gates/grid_resident_circle_mask_motion_overlap_occlusion_and_leases"
     LOOPS
     RESOURCE_LOCK gpu
     TIMEOUT 450
     LABELS unit engine asset gpu
+)
+
+# Keep the resident circle pixel/lease gate in its existing validation entry.
+ppr_add_test_entry(TARGET engine.tests.asset
+    NAME resident_particles_gpu
+    FILTER "asset/render/gates/grid_resident_circle_mask_motion_overlap_occlusion_and_leases"
+    LOOPS
+    RESOURCE_LOCK gpu
+    TIMEOUT 300
+    LABELS unit engine asset gpu_validation
+)
+
+set_tests_properties(engine.tests.asset.resident_particles_gpu PROPERTIES
+    ENVIRONMENT "PPR_TEST_GPU_VALIDATION=1"
 )
 
 # GPU validation entry, mirroring the app-side twin: PPR_TEST_GPU_VALIDATION=1

@@ -29,3 +29,8 @@ backend. Invalid values and initialization/readback failures fail the tests;
 the runner has no skip result, so unavailable Vulkan/bindless support must be
 reported separately rather than counted as passing coverage. Private-application
 quarantine tests do not use this shared-fixture override.
+
+Grid reference/readback fixtures prepare bounded cell cohorts with
+`tryPrepareCellUploads`, refreshing renderer fence completion before retries.
+They retain content/pixel and candidate-retirement assertions; the removed
+queue-idle convenience API is not a separate reference publication path.

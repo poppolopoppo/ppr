@@ -475,14 +475,18 @@ namespace pP::tests::detail::ImagePreparation {
         const auto result = request->take(diagnostics);
         PPR_TEST_ASSERT(not result and result.error() == std::errc::file_too_large);
 
-        const auto crossing = std::ranges::find_if(diagnostics.entries(), [](const auto &entry) {
-            return entry.m_message == "Selected texture closure exceeds aggregate mip output limit";
-        });
-        PPR_TEST_ASSERT(crossing != diagnostics.entries().end());
-        PPR_TEST_ASSERT(crossing->m_location == (fixture.m_root / "texture_1.toml").string());
-        PPR_TEST_ASSERT(std::ranges::count_if(diagnostics.entries(), [](const auto &entry) {
-            return entry.m_message == "Selected texture closure exceeds aggregate mip output limit";
-        }) == 1u);
+        std::string crossing_location;
+        std::size_t crossing_count = 0u;
+        for (const auto &entry: diagnostics.entries()) {
+            if (entry.m_message == "Selected texture closure exceeds aggregate mip output limit") {
+                if (crossing_count == 0u) {
+                    crossing_location = entry.m_location;
+                }
+                ++crossing_count;
+            }
+        }
+        PPR_TEST_ASSERT(crossing_count == 1u);
+        PPR_TEST_ASSERT(crossing_location == (fixture.m_root / "texture_1.toml").string());
 
         reusable = prepareReusable(packs, definitions, diagnostics);
         limits = {};
