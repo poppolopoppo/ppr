@@ -14,6 +14,108 @@ namespace pP::tests::detail {
     // ------------------------------------------------------------------
 
     namespace PhysicsSuite {
+        // ------------------------------------------------------------------
+        // particle reaction admission and once-only publication
+        // ------------------------------------------------------------------
+
+        PPR_UNIT_TEST (particle_impulse_batch_rejects_atomically_and_retries_once) {
+            physics::Scene scene;
+            PPR_TEST_ASSERT(not scene.initialize({0.0f, 0.0f}));
+            PPR_DEFER {
+                PPR_TEST_ASSERT(not scene.shutdown());
+            };
+            const std::array<u64, 2u> entities{101u, 102u};
+            std::array<physics::BodyDefinition, 2u> definitions{};
+            for (auto &definition: definitions)
+                definition.m_motion = physics::EMotion::dynamic;
+
+            definitions[1u].m_x = 10.0f;
+            std::array<physics::BodyHandle, 2u> handles{};
+            PPR_TEST_ASSERT(not scene.createBodies(entities, definitions, handles));
+            PPR_TEST_ASSERT(not scene.setAwake(handles[0u], false));
+            const auto first = scene.boundarySnapshot(handles[0u]);
+            const auto second = scene.boundarySnapshot(handles[1u]);
+            PPR_TEST_ASSERT(first and second and first->m_mass > 0.0f and first->m_inertia > 0.0f);
+
+            const physics::ParticleCouplingEpoch epoch{1u, 7u, 3u};
+            std::array<physics::ParticleImpulse, 2u> impulses{
+                physics::ParticleImpulse{handles[0u], first->m_state, first->m_mass * 2.0f, 0.0f, first->m_inertia},
+                physics::ParticleImpulse{handles[1u], second->m_state, 0.0f, second->m_mass, 0.0f}};
+
+            PPR_TEST_ASSERT(not scene.beginParticleCoupling(epoch));
+            PPR_TEST_ASSERT(scene.step() == std::errc::device_or_resource_busy);
+            ++impulses[1u].m_handle.m_serial;
+            PPR_TEST_ASSERT(scene.applyParticleImpulses(epoch, impulses) == std::errc::invalid_argument);
+            PPR_TEST_ASSERT(scene.state(handles[0u]) == first->m_state);
+            PPR_TEST_ASSERT(not *scene.isAwake(handles[0u]));
+
+            impulses[1u].m_handle = handles[1u];
+            impulses[1u].m_source.m_x += 1.0f;
+            PPR_TEST_ASSERT(scene.validateParticleImpulses(epoch, impulses) == std::errc::state_not_recoverable);
+            PPR_TEST_ASSERT(scene.applyParticleImpulses(epoch, impulses) == std::errc::state_not_recoverable);
+            PPR_TEST_ASSERT(scene.state(handles[0u]) == first->m_state);
+
+            impulses[1u].m_source = second->m_state;
+            const physics::Scene &preflight = scene;
+            PPR_TEST_ASSERT(not preflight.validateParticleImpulses(epoch, impulses));
+            PPR_TEST_ASSERT(scene.state(handles[0u]) == first->m_state);
+            PPR_TEST_ASSERT(not *scene.isAwake(handles[0u]));
+
+            PPR_TEST_ASSERT(not scene.applyParticleImpulses(epoch, impulses));
+            const auto applied = scene.state(handles[0u]);
+            PPR_TEST_ASSERT(applied and applied->m_velocity_x == 2.0f and applied->m_angular_velocity == 1.0f);
+            PPR_TEST_ASSERT(*scene.isAwake(handles[0u]));
+
+            PPR_TEST_ASSERT(scene.applyParticleImpulses(epoch, impulses) == std::errc::operation_not_permitted);
+            PPR_TEST_ASSERT(scene.beginParticleCoupling(epoch) == std::errc::operation_not_permitted);
+            PPR_TEST_ASSERT(scene.beginParticleCoupling({1u, 7u, 4u}) == std::errc::operation_not_permitted);
+            PPR_TEST_ASSERT(scene.beginParticleCoupling({1u, 6u, 3u}) == std::errc::operation_not_permitted);
+            PPR_TEST_ASSERT(scene.beginParticleCoupling({2u, 8u, 3u}) == std::errc::operation_not_permitted);
+            PPR_TEST_ASSERT(scene.state(handles[0u]) == applied);
+
+            const physics::ParticleCouplingEpoch next{1u, 8u, 3u};
+            PPR_TEST_ASSERT(not scene.beginParticleCoupling(next));
+            PPR_TEST_ASSERT(not scene.cancelParticleCoupling(next));
+            PPR_TEST_ASSERT(not scene.beginParticleCoupling(next));
+            PPR_TEST_ASSERT(not scene.cancelParticleCoupling(next));
+            PPR_TEST_ASSERT(not scene.step());
+
+            PPR_TEST_ASSERT(not scene.clear());
+            PPR_TEST_ASSERT(not scene.state(handles[0u]));
+            const physics::ParticleCouplingEpoch rebound{2u, 0u, 1u};
+            PPR_TEST_ASSERT(not scene.beginParticleCoupling(rebound));
+            PPR_TEST_ASSERT(not scene.applyParticleImpulses(rebound, {}));
+            PPR_TEST_ASSERT(scene.beginParticleCoupling(rebound) == std::errc::operation_not_permitted);
+
+            // One-way publication advances the same frontier while leaving
+            // sleeping bodies and their velocity/pose completely untouched.
+            PPR_TEST_ASSERT(not scene.clear());
+            PPR_TEST_ASSERT(not scene.createBodies(entities, definitions, handles));
+            PPR_TEST_ASSERT(not scene.setAwake(handles[0u], false));
+            const auto before_one_way = scene.state(handles[0u]);
+            PPR_TEST_ASSERT(before_one_way.has_value());
+
+            const physics::ParticleCouplingEpoch one_way{3u, 4u, 2u};
+            PPR_TEST_ASSERT(not scene.beginParticleCoupling(one_way));
+            PPR_TEST_ASSERT(scene.commitParticleCoupling({3u, 3u, 2u}) == std::errc::operation_not_permitted);
+            PPR_TEST_ASSERT(scene.step() == std::errc::device_or_resource_busy);
+            PPR_TEST_ASSERT(not scene.cancelParticleCoupling(one_way));
+            PPR_TEST_ASSERT(not scene.beginParticleCoupling(one_way));
+
+            PPR_TEST_ASSERT(not scene.commitParticleCoupling(one_way));
+            PPR_TEST_ASSERT(scene.state(handles[0u]) == before_one_way);
+            PPR_TEST_ASSERT(not *scene.isAwake(handles[0u]));
+            PPR_TEST_ASSERT(scene.commitParticleCoupling(one_way) == std::errc::operation_not_permitted);
+            PPR_TEST_ASSERT(scene.beginParticleCoupling(one_way) == std::errc::operation_not_permitted);
+            PPR_TEST_ASSERT(not scene.step());
+            PPR_TEST_ASSERT(scene.state(handles[0u]) == before_one_way);
+            PPR_TEST_ASSERT(not *scene.isAwake(handles[0u]));
+        };
+
+        // ------------------------------------------------------------------
+        // shared contour topology and body behavior
+        // ------------------------------------------------------------------
+
         PPR_UNIT_TEST (shared_contours_preserve_all_binary_topologies) {
             for (u32 bits = 0u; bits < 16u; ++bits) {
                 physics::Scene scene;
@@ -809,7 +911,8 @@ namespace pP::tests::detail {
 namespace pP::tests {
     const UnitTest physics = UnitTest::Named("physics") / [](UnitTest::IRun &_) -> void {
         _.recurse(
-            {detail::PhysicsSuite::shared_contours_preserve_all_binary_topologies,
+            {detail::PhysicsSuite::particle_impulse_batch_rejects_atomically_and_retries_once,
+                detail::PhysicsSuite::shared_contours_preserve_all_binary_topologies,
                 detail::PhysicsSuite::four_chunk_corner_edits_rebuild_every_contour_owner_with_budget,
                 detail::PhysicsSuite::contour_metric_transform_and_protected_exterior_match_physics,
                 detail::PhysicsSuite::fixed_replay_produces_identical_body_states,

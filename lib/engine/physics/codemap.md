@@ -24,6 +24,18 @@ dependency between the modules.
 
 ## Seams
 
+`Scene::validateParticleImpulses` exposes the same const whole-batch preflight
+used by apply, allowing a game owner to validate before acknowledging GPU
+publication. The caller must retain exclusive pending-tick ownership through
+preflight, GPU acknowledgment, impulse apply and Scene step; validation alone
+does not grant a mutation lease.
+
+`Scene::commitParticleCoupling` advances that same validated pending frontier
+without applying an impulse or waking a body. The game's resident route checks
+the captured body states independently before GPU publication, commits this
+one-way frontier, then steps once. Bidirectional apply retains its existing
+whole-batch checks and delegates only its bookkeeping tail to this commit.
+
 - `:scene` (`Physics.Scene.cppm` / `Physics.Scene.cpp`) — opaque, RAII-owned
   world with fixed-step configuration, body and sensor creation, sensor/contact
   event draining, sleep controls, and generation-safe handles.
@@ -65,6 +77,17 @@ dependency between the modules.
     end/begin/hit kind, then contact point, normal, and approach speed.
   - Sleep control is `enableSleep` / `setAwake` / `isAwake`; `state()` returns
     the pose plus linear/angular velocity snapshot.
+  - Particle coupling uses plain numeric `BodyBoundarySnapshot` records and
+    `ParticleImpulse` batches. `beginParticleCoupling` excludes stepping and
+    contour-cohort admission until apply/cancel. Apply validates the complete
+    sorted identity/serial/source-pose/finite batch before Box2D impulse calls,
+    waking only bodies receiving a nonzero impulse. A successfully published
+    tick advances a monotonic frontier bound to one world; failed/cancelled
+    admission permits retry, while clear/reconstruction resets that binding.
+    The Scene owns physical impulse application; no GPU or matter import exists.
+    The ledger records submitted impulses. Static/kinematic/fixed-rotation bodies
+    and Box2D's existing velocity guard need not realize that full momentum gain;
+    this adapter adds no cap and does not overwrite resulting velocities.
 - `:chunk_colliders` (`Physics.ChunkColliders.cppm` /
   `Physics.ChunkColliders.cpp`) — accepts caller-owned row-major element-ID
   spans (nonzero means solid, missing chunks mean empty), dirty-position

@@ -70,6 +70,44 @@ export namespace pP::physics {
     };
 
     // ------------------------------------------------------------------
+    // particle coupling snapshots and impulse publication
+    // ------------------------------------------------------------------
+
+    struct ParticleCouplingEpoch {
+        u64 m_world{};
+        u64 m_source_tick{};
+        u64 m_terrain_revision{};
+
+        [[nodiscard]] constexpr bool operator==(const ParticleCouplingEpoch &) const noexcept = default;
+    };
+
+    /// Numeric snapshot only; no Box2D handle or GPU type crosses this boundary.
+    struct BodyBoundarySnapshot {
+        BodyHandle m_handle{};
+        BodyState m_state{};
+        float m_com_x{};
+        float m_com_y{};
+        float m_half_width{};
+        float m_half_height{};
+        float m_mass{};
+        float m_inertia{};
+        EMotion m_motion{EMotion::static_body};
+        EGeometry m_geometry{EGeometry::box};
+    };
+
+    /// Source state detects an intervening body mutation before any batch applies.
+    /// Impulses are physical kg*m/s and kg*m^2/s, never velocity replacements.
+    /// These are submitted impulses: Box2D's body constraints/inverse mass and
+    /// existing velocity safeguard determine the actual resulting momentum.
+    struct ParticleImpulse {
+        BodyHandle m_handle{};
+        BodyState m_source{};
+        float m_x{};
+        float m_y{};
+        float m_angular{};
+    };
+
+    // ------------------------------------------------------------------
     // sensors + contacts
     // ------------------------------------------------------------------
 
@@ -205,5 +243,18 @@ export namespace pP::physics {
         [[nodiscard]] std::expected<bool, std::error_code> isAwake(BodyHandle handle) const noexcept;
 
         [[nodiscard]] std::expected<BodyState, std::error_code> state(BodyHandle handle) const noexcept;
+
+        [[nodiscard]] Expected<BodyBoundarySnapshot> boundarySnapshot(BodyHandle handle) const;
+
+        /// Arms one world/tick/terrain identity. Physics stepping and terrain
+        /// cohort admission pause until its impulse publication or cancellation.
+        [[nodiscard]] std::error_code beginParticleCoupling(ParticleCouplingEpoch epoch);
+        [[nodiscard]] std::error_code validateParticleImpulses(
+            ParticleCouplingEpoch epoch, std::span<const ParticleImpulse> impulses) const;
+        [[nodiscard]] std::error_code applyParticleImpulses(
+            ParticleCouplingEpoch epoch, std::span<const ParticleImpulse> impulses);
+        /// Commits one-way coupling without applying impulses or waking bodies.
+        [[nodiscard]] std::error_code commitParticleCoupling(ParticleCouplingEpoch epoch);
+        [[nodiscard]] std::error_code cancelParticleCoupling(ParticleCouplingEpoch epoch);
     };
 }

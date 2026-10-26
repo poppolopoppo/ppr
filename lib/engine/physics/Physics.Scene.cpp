@@ -53,19 +53,25 @@ namespace pP::physics {
         };
 
         struct Entry {
-            b2BodyId m_body{b2_nullBodyId};
-            u64 m_serial{};
             std::vector<SensorShape> m_sensors;
+            u64 m_serial{};
+            b2BodyId m_body{b2_nullBodyId};
+            EGeometry m_geometry{EGeometry::box};
+            float m_half_width{};
+            float m_half_height{};
         };
 
-        b2WorldId m_world{b2_nullWorldId};
-        float m_dt{};
-        int m_substeps{};
         std::unordered_map<u64, Entry> m_bodies;
         std::vector<SensorEvent> m_events;
-        bool m_contacts_drained{true};
-        b2BodyId m_chain_body{b2_nullBodyId};
         std::unordered_map<u64, b2ChainId> m_chains;
+        std::optional<ParticleCouplingEpoch> m_pending_particle_epoch;
+        std::optional<ParticleCouplingEpoch> m_last_particle_epoch;
+
+        b2WorldId m_world{b2_nullWorldId};
+        b2BodyId m_chain_body{b2_nullBodyId};
+        float m_dt{};
+        int m_substeps{};
+        bool m_contacts_drained{true};
 
         [[nodiscard]] Entry *find(const BodyHandle handle) noexcept {
             const auto it = m_bodies.find(handle.m_entity);
@@ -163,6 +169,8 @@ namespace pP::physics {
             b2DestroyBody(entry.m_body);
         }
         m_runtime->m_bodies.clear();
+        m_runtime->m_pending_particle_epoch.reset();
+        m_runtime->m_last_particle_epoch.reset();
         return {};
     }
 
@@ -176,6 +184,9 @@ namespace pP::physics {
         PPR_RETURN_UNEXPECTED_ON_FAIL(
             Physics,
             not m_runtime->m_chunk_chain_update ? std::error_code{} : error(std::errc::device_or_resource_busy));
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            Physics,
+            not m_runtime->m_pending_particle_epoch ? std::error_code{} : error(std::errc::device_or_resource_busy));
         PPR_RETURN_UNEXPECTED_ON_FAIL(
             Physics, m_next_chunk_update != 0u ? std::error_code{} : error(std::errc::value_too_large));
         m_runtime->m_chunk_chain_update = m_next_chunk_update++;
@@ -204,6 +215,9 @@ namespace pP::physics {
         PPR_RETURN_ERROR_ON_FAIL(
             Physics,
             not m_runtime->m_chunk_chain_update ? std::error_code{} : error(std::errc::device_or_resource_busy));
+        PPR_RETURN_ERROR_ON_FAIL(
+            Physics,
+            not m_runtime->m_pending_particle_epoch ? std::error_code{} : error(std::errc::device_or_resource_busy));
 
         m_runtime->m_events.clear();
         m_runtime->m_contacts_drained = false;
@@ -257,7 +271,8 @@ namespace pP::physics {
         for (std::size_t i = 0; i < entities.size(); ++i) {
             const BodyDefinition &def = definitions[i];
             const bool invalid_entity = entities[i] == 0u or m_runtime->m_bodies.contains(entities[i]);
-            const bool repeated_entity = std::find(entities.begin(), entities.begin() + safe_narrowing{i}, entities[i]) !=
+            const bool repeated_entity = std::find(
+                                             entities.begin(), entities.begin() + safe_narrowing{i}, entities[i]) !=
                                          entities.begin() + safe_narrowing{i};
             const bool invalid_motion = def.m_motion > EMotion::dynamic;
             const bool invalid_geometry = not validGeometry(def.m_geometry, def.m_half_width, def.m_half_height);
@@ -322,7 +337,9 @@ namespace pP::physics {
                     break;
                 }
                 try {
-                    m_runtime->m_bodies.emplace(entities[i], Runtime::Entry{body, m_next_serial, {}});
+                    m_runtime->m_bodies.emplace(
+                        entities[i],
+                        Runtime::Entry{{}, m_next_serial, body, def.m_geometry, def.m_half_width, def.m_half_height});
                 } catch (...) {
                     b2DestroyBody(body);
                     PPR_RETHROW(Physics);
@@ -695,5 +712,132 @@ namespace pP::physics {
         return BodyState{
             position.x, position.y, b2Rot_GetAngle(b2Body_GetRotation(entry->m_body)), velocity.x, velocity.y,
             b2Body_GetAngularVelocity(entry->m_body)};
+    }
+
+    // ------------------------------------------------------------------
+    // validated particle reaction publication
+    // ------------------------------------------------------------------
+
+    Expected<BodyBoundarySnapshot> Scene::boundarySnapshot(const BodyHandle handle) const {
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            Physics, m_runtime ? std::error_code{} : error(std::errc::operation_not_permitted));
+        const Runtime::Entry *const entry = m_runtime->find(handle);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            Physics, entry != nullptr ? std::error_code{} : error(std::errc::invalid_argument));
+
+        const auto pose = state(handle);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(Physics, pose);
+        const b2Vec2 com = b2Body_GetWorldCenterOfMass(entry->m_body);
+        BodyBoundarySnapshot result{};
+        result.m_handle = handle;
+        result.m_state = *pose;
+        result.m_com_x = com.x;
+        result.m_com_y = com.y;
+        result.m_half_width = entry->m_half_width;
+        result.m_half_height = entry->m_half_height;
+        result.m_mass = b2Body_GetMass(entry->m_body);
+        result.m_inertia = b2Body_GetRotationalInertia(entry->m_body);
+        result.m_motion = static_cast<EMotion>(b2Body_GetType(entry->m_body));
+        result.m_geometry = entry->m_geometry;
+        return result;
+    }
+
+    std::error_code Scene::beginParticleCoupling(const ParticleCouplingEpoch epoch) {
+        PPR_RETURN_ERROR_ON_FAIL(Physics, m_runtime ? std::error_code{} : error(std::errc::operation_not_permitted));
+        PPR_RETURN_ERROR_ON_FAIL(
+            Physics, epoch.m_world != 0u and epoch.m_terrain_revision != 0u ? std::error_code{}
+                                                                            : error(std::errc::invalid_argument));
+        PPR_RETURN_ERROR_ON_FAIL(
+            Physics, not m_runtime->m_pending_particle_epoch and not m_runtime->m_chunk_chain_update
+                         ? std::error_code{}
+                         : error(std::errc::device_or_resource_busy));
+        if (m_runtime->m_last_particle_epoch) {
+            const ParticleCouplingEpoch last = *m_runtime->m_last_particle_epoch;
+            PPR_RETURN_ERROR_ON_FAIL(
+                Physics, epoch.m_world == last.m_world and epoch.m_source_tick > last.m_source_tick
+                             ? std::error_code{}
+                             : error(std::errc::operation_not_permitted));
+        }
+
+        m_runtime->m_pending_particle_epoch = epoch;
+        return {};
+    }
+
+    std::error_code Scene::validateParticleImpulses(
+        const ParticleCouplingEpoch epoch, const std::span<const ParticleImpulse> impulses) const {
+        PPR_RETURN_ERROR_ON_FAIL(
+            Physics, m_runtime and m_runtime->m_pending_particle_epoch == epoch
+                         ? std::error_code{}
+                         : error(std::errc::operation_not_permitted));
+        const hal::ProfileScope scope{"Physics.ValidateParticleImpulses"};
+        for (std::size_t index = 0u; index < impulses.size(); ++index) {
+            const ParticleImpulse &impulse = impulses[index];
+            const Runtime::Entry *const entry = m_runtime->find(impulse.m_handle);
+            const bool ordered = index == 0u or impulses[index - 1u].m_handle.m_entity < impulse.m_handle.m_entity;
+            PPR_RETURN_ERROR_ON_FAIL(
+                Physics, entry != nullptr and
+                                 ordered and
+                                 std::isfinite(impulse.m_x) and
+                                 std::isfinite(impulse.m_y) and
+                                 std::isfinite(impulse.m_angular)
+                             ? std::error_code{}
+                             : error(std::errc::invalid_argument));
+
+            const auto current = state(impulse.m_handle);
+            PPR_RETURN_ERROR_ON_FAIL(Physics, current);
+            PPR_RETURN_ERROR_ON_FAIL(
+                Physics, *current == impulse.m_source ? std::error_code{} : error(std::errc::state_not_recoverable));
+
+            const float mass = b2Body_GetMass(entry->m_body);
+            const float inertia = b2Body_GetRotationalInertia(entry->m_body);
+            const float vx = current->m_velocity_x + (mass > 0.0f ? impulse.m_x / mass : 0.0f);
+            const float vy = current->m_velocity_y + (mass > 0.0f ? impulse.m_y / mass : 0.0f);
+            const float omega = current->m_angular_velocity + (inertia > 0.0f ? impulse.m_angular / inertia : 0.0f);
+            PPR_RETURN_ERROR_ON_FAIL(
+                Physics, std::isfinite(vx) and std::isfinite(vy) and std::isfinite(omega)
+                             ? std::error_code{}
+                             : error(std::errc::result_out_of_range));
+        }
+
+        return {};
+    }
+
+    std::error_code Scene::applyParticleImpulses(
+        const ParticleCouplingEpoch epoch, const std::span<const ParticleImpulse> impulses) {
+        PPR_RETURN_ERROR_ON_FAIL(Physics, validateParticleImpulses(epoch, impulses));
+        const hal::ProfileScope scope{"Physics.ParticleImpulses"};
+
+        // Every ordinary rejection precedes mutation. Box2D's impulse APIs are
+        // infallible for these validated live handles; source states remain intact.
+        for (const ParticleImpulse &impulse: impulses) {
+            const Runtime::Entry *const entry = m_runtime->find(impulse.m_handle);
+            if (impulse.m_x != 0.0f or impulse.m_y != 0.0f) {
+                b2Body_ApplyLinearImpulseToCenter(entry->m_body, {impulse.m_x, impulse.m_y}, true);
+            }
+
+            if (impulse.m_angular != 0.0f) {
+                b2Body_ApplyAngularImpulse(entry->m_body, impulse.m_angular, true);
+            }
+        }
+
+        return commitParticleCoupling(epoch);
+    }
+
+    std::error_code Scene::commitParticleCoupling(const ParticleCouplingEpoch epoch) {
+        PPR_RETURN_ERROR_ON_FAIL(Physics, validateParticleImpulses(epoch, {}));
+
+        m_runtime->m_last_particle_epoch = epoch;
+        m_runtime->m_pending_particle_epoch.reset();
+        return {};
+    }
+
+    std::error_code Scene::cancelParticleCoupling(const ParticleCouplingEpoch epoch) {
+        PPR_RETURN_ERROR_ON_FAIL(
+            Physics, m_runtime and m_runtime->m_pending_particle_epoch == epoch
+                         ? std::error_code{}
+                         : error(std::errc::operation_not_permitted));
+
+        m_runtime->m_pending_particle_epoch.reset();
+        return {};
     }
 }
