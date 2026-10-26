@@ -11,6 +11,7 @@ namespace pP::game::tests {
     const UnitTest &gameDisplayTests() noexcept;
     const UnitTest &gameContentTests() noexcept;
     const UnitTest &gameWorldJobTests() noexcept;
+    const UnitTest &gameSessionServiceTests() noexcept;
     const UnitTest &gameMovementTests() noexcept;
     const UnitTest &gameMetricTests() noexcept;
     const UnitTest &gameBiomeContentTests() noexcept;
@@ -21,7 +22,7 @@ namespace pP::game::tests {
     const UnitTest &gameContentSourceTests() noexcept;
     const UnitTest &gameWorldAssemblyTests() noexcept;
     const UnitTest &gameCheckpointTests() noexcept;
-    const UnitTest &gameLegacyFixtureTests() noexcept;
+    const UnitTest &gameCheckpointGpuTests() noexcept;
     const UnitTest &gameWorldgenPreviewTests() noexcept;
     const UnitTest &gameAssetBrowserTests() noexcept;
     const UnitTest &gameUiTests() noexcept;
@@ -34,6 +35,7 @@ namespace pP::game::tests {
             gameDisplayTests(),
             gameContentTests(),
             gameWorldJobTests(),
+            gameSessionServiceTests(),
             gameMovementTests(),
             gameMetricTests(),
             gameBiomeContentTests(),
@@ -44,7 +46,7 @@ namespace pP::game::tests {
             gameContentSourceTests(),
             gameWorldAssemblyTests(),
             gameCheckpointTests(),
-            gameLegacyFixtureTests(),
+            gameCheckpointGpuTests(),
             gameWorldgenPreviewTests(),
             gameAssetBrowserTests(),
             gameUiTests(),

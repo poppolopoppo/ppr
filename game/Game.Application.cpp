@@ -11,11 +11,13 @@ import engine.asset;
 import engine.math;
 import engine.mesh;
 import engine.rhi;
+import engine.shader;
 import engine.sim;
 import std;
 
 import game.colony.buildings;
 import game.colony.driver;
+import game.colony.matter;
 import game.colony.content;
 import game.colony.metric;
 import game.colony.content.authoring;
@@ -172,6 +174,7 @@ namespace demo {
             TimePoint m_gap_start{}, m_gap_end{};
         };
         std::array<WorldgenPhaseObservation, 11u> m_worldgen_observations{};
+        std::unique_ptr<colony::MatterSubmissionJournal> m_matter_inputs;
         const ITimerClock *m_observation_clock{};
         bool m_worldgen_report{};
         bool m_worldgen_acceptance{};
@@ -245,6 +248,31 @@ namespace demo {
             m_last_update_phase = phase;
             m_peak_background_outstanding = std::max(
                 m_peak_background_outstanding, static_cast<u64>(parallel::backgroundPool().getNumOutstandingTasks()));
+        }
+
+        [[nodiscard]] std::error_code writeMatterInputs_() const {
+            if (not m_matter_inputs)
+                return {};
+
+            std::error_code error;
+            const auto parent = std::filesystem::current_path(error);
+            PPR_RETURN_ERROR_ON_FAIL(Demo, error);
+
+            for (u32 index = 0u; index < 4096u; ++index) {
+                const auto directory = parent / ("pbmpm-live-inputs-" + std::to_string(index));
+                const bool created = std::filesystem::create_directory(directory, error);
+                PPR_RETURN_ERROR_ON_FAIL(Demo, error);
+                if (not created)
+                    continue;
+
+                const auto path = directory / "inputs.bin";
+                PPR_RETURN_ERROR_ON_FAIL(Demo, m_matter_inputs->write(path));
+                std::println("[pbmpm-live-inputs] {}", path.generic_string());
+                return {};
+            }
+
+            PPR_RETURN_ERROR_ON_FAIL(Demo, std::errc::file_exists);
+            return {};
         }
 
         void reportWorldgenObservations_() {
@@ -322,6 +350,17 @@ namespace demo {
         }
 
         std::unique_ptr<colony::ColonyDriver> m_driver{};
+        std::unique_ptr<colony::ColonyDriver> m_retiring_driver{};
+        colony::MatterRuntime m_matter_runtime{};
+        std::optional<colony::MatterRequest> m_runtime_request{};
+        Array<game::SessionDelivery> m_retained_deliveries{};
+        std::size_t m_delivery_cursor{};
+        game::SessionWorldTransition m_world_transition{};
+        game::SessionWorldFacts m_workshop_game_facts{};
+        std::optional<GridParticleGpuView> m_workshop_game_particles{};
+        std::optional<TimePoint> m_simulation_deadline{};
+        std::optional<TimePoint> m_simulation_anchor{};
+        game::SessionService m_session_service{};
         std::unique_ptr<colony::WorldJob> m_world_job{};
         std::unique_ptr<colony::WorldgenWorkshop> m_workshop{};
         colony::WorldgenPanelState m_workshop_ui{};
@@ -336,7 +375,7 @@ namespace demo {
         WorkshopGamePhase m_workshop_game_phase{};
         std::filesystem::path m_workshop_root{};
         std::filesystem::path m_workshop_pending_load_root{};
-        std::unique_ptr<GridPass::GridStagedFrame> m_workshop_restore{}, m_workshop_stage{}, m_workshop_queued{};
+        std::unique_ptr<GridStagedFrame> m_workshop_restore{}, m_workshop_stage{}, m_workshop_queued{};
         std::shared_ptr<const colony::WorldgenPreviewResult> m_workshop_staged_preview{}, m_workshop_queued_preview{},
             m_workshop_displayed_preview{};
         std::filesystem::path m_workshop_staged_root{}, m_workshop_queued_root{}, m_workshop_displayed_root{};
@@ -389,6 +428,7 @@ namespace demo {
         bool m_candidate_ready{};
         bool m_candidate_activated{};
         bool m_candidate_cancel_needed{};
+        bool m_world_cancel_requested{};
         TriangleBagHandle m_quad_bag{};
         MaterialHandle m_agent_material{};
         MaterialHandle m_path_material{};
@@ -428,8 +468,10 @@ namespace demo {
         std::array<colony::ColonyShortcut, kColonyKeyActions> m_shortcut_rows{};
         std::error_code m_input_error{};
         bool m_driver_ready{false};
+        bool m_resume_matter{};
+        bool m_workshop_finish_pending{};
+        bool m_owned_device_settled{};
         bool m_debug_draw_ready{false};
-        u32 m_agent_count{colony::kAgentCount};
         // Bounded-run fixture: `--auto-exit S` (alias `--exit-after S`) exits
         // gracefully after S wall-clock seconds from the first update();
         // the start stamps lazily to avoid pre-initialize issues.
@@ -453,6 +495,7 @@ namespace demo {
         static constexpr std::size_t kMaxDragVisitedCells = 2048u;
 
         struct ToolGesture {
+            u64 m_world_generation{};
             bool m_dig_armed{false};
             EToolGestureOwner m_owner{EToolGestureOwner::none};
             bool m_held{false};
@@ -585,6 +628,7 @@ namespace demo {
         /// the regenerate case in dispatchIntent_ for why it defers).
         std::optional<EGridDiagnosticMode> m_preview_pending{};
         bool m_preview_job{};
+        bool m_inspection_capture_requested{};
         EGridDiagnosticMode m_committed_preview_mode{EGridDiagnosticMode::textured};
         float m_committed_temperature_min_k{200.0f};
         float m_committed_temperature_max_k{400.0f};
@@ -686,6 +730,7 @@ namespace demo {
 
             const bool ready = m_driver and
                                m_driver_ready and
+                               m_driver->captureReady() and
                                not m_world_modal and
                                m_world_published and
                                m_world_frame_presented and
@@ -839,6 +884,8 @@ namespace demo {
                 m_driver->setPaused(m_pause_before_job);
                 PPR_RETURN_ERROR_ON_FAIL(Demo, error);
             }
+            m_world_transition = {};
+            m_world_cancel_requested = false;
             m_capture_access = true;
             m_driver_ready = false;
             m_capture_ack_revisions.fill(0u);
@@ -878,9 +925,18 @@ namespace demo {
                 Demo, m_world_job->request(
                           colony::ColonyDriverDesc{
                               .m_seed = seed,
-                              .m_agent_count = m_agent_count,
+                              .m_agent_count = 1u,
                               .m_world_generation = m_driver ? m_driver->worldGeneration() + 1u : 1u},
                           std::move(prepare)));
+
+            m_workshop_game_particles.reset();
+
+            m_world_transition = {};
+            m_world_transition.m_previous = m_workshop_open ? m_workshop_game_facts : currentWorldFacts_();
+            m_world_transition.m_phase = game::ESessionWorldPhase::detaching;
+            m_world_transition.m_reservation_epoch = reservationEpoch_();
+            m_world_cancel_requested = false;
+
             m_requested_seed = seed;
             m_candidate_generation = m_driver ? m_driver->worldGeneration() + 1u : 1u;
             m_candidate_fingerprint = 0u;
@@ -906,10 +962,91 @@ namespace demo {
             return {};
         }
 
+        [[nodiscard]] game::SessionWorldFacts currentWorldFacts_() const noexcept {
+            return {
+                {m_world_view.m_id, m_candidate_generation, m_candidate_fingerprint}, m_world_published,
+                m_candidate_activated, m_world_frame_presented, m_driver_ready, m_driver and m_driver->paused()};
+        }
+
+        void restoreWorldFacts_(const game::SessionWorldFacts &facts) {
+            m_world_view.m_id = facts.m_world.m_job_id;
+            m_candidate_generation = facts.m_world.m_world_generation;
+            m_candidate_fingerprint = facts.m_world.m_content_fingerprint;
+            m_world_published = facts.m_published;
+            m_candidate_activated = facts.m_activated;
+            m_world_frame_presented = facts.m_presented;
+            m_driver_ready = facts.m_ready;
+
+            if (m_driver) {
+                m_driver->bindParticlePresentation(facts.m_world);
+                m_driver->setPaused(facts.m_paused);
+            }
+
+            m_simulation_anchor.reset();
+            clearControlInput_();
+        }
+
+        [[nodiscard]] bool replacementCommitted_() const noexcept {
+            using Phase = game::ESessionWorldPhase;
+            return m_world_transition.m_phase == Phase::activating or
+                   m_world_transition.m_phase == Phase::attaching or
+                   m_world_transition.m_phase == Phase::awaiting_presentation or
+                   m_world_transition.m_phase == Phase::complete;
+        }
+
         [[nodiscard]] bool activationPending_() const noexcept {
-            return m_world_command_waiting and
-                   m_world_command and
-                   m_world_command->m_kind == EGridWorldCommand::activate;
+            return (m_world_command_waiting and
+                       m_world_command and
+                       m_world_command->m_kind == EGridWorldCommand::activate) or
+                   (not m_preview_job and (m_world_transition.m_phase == game::ESessionWorldPhase::activating or
+                                              m_world_transition.m_phase == game::ESessionWorldPhase::attaching));
+        }
+
+        void submitSessionGridStage_(GridStagedFrame stage) {
+            // An admitted activation may already have changed the bundle before
+            // its ACK arrives. Never feed the old world's view into that bundle.
+            if (not game::canSelectSessionWorldView(m_world_transition)) {
+                stage = {};
+                stage.m_retain_content = true;
+                super_t::submitGridStage(std::move(stage));
+                return;
+            }
+
+            const bool returning = m_workshop_finish_pending and
+                                   m_world_transition.m_returning and
+                                   m_world_transition.m_phase == game::ESessionWorldPhase::awaiting_presentation;
+            if (m_driver and
+                (not m_workshop_open or m_workshop_game_phase == WorkshopGamePhase::generating or returning)) {
+                if ((m_world_published and m_candidate_activated) or m_world_view.m_id == 0u) {
+                    m_driver->bindParticlePresentation(
+                        {m_world_view.m_id, m_candidate_generation, m_candidate_fingerprint});
+                }
+
+                if (not m_workshop_open or returning or (m_world_published and m_candidate_activated)) {
+                    stage.m_gpu_particles = m_driver->particleView();
+                }
+            }
+
+            if (auto retained = game::selectWorkshopRetainedParticles(
+                    m_workshop_game_particles, m_workshop_game_facts.m_world, stage.m_retain_content, m_workshop_open,
+                    m_workshop_displayed, m_workshop_finish_pending, activationPending_())) {
+                // The last numerical publication may precede its first terrain
+                // frame. Freeze that exact committed lease, not the pass's older cache.
+                stage.m_gpu_particles = std::move(retained);
+            }
+
+            super_t::submitGridStage(std::move(stage));
+        }
+
+        [[nodiscard]] std::optional<GridParticlePresentationIdentity> expectedResidentPresentation_() const noexcept {
+            const auto view = m_driver ? m_driver->particleView() : std::nullopt;
+            if (not view) {
+                return std::nullopt;
+            }
+
+            return GridParticlePresentationIdentity{
+                {m_world_view.m_id, m_candidate_generation, m_candidate_fingerprint}, view->m_publication,
+                view->m_terrain_revision, view->m_joint_tick};
         }
 
         void queueWorldCommand_(const EGridWorldCommand kind) {
@@ -935,6 +1072,11 @@ namespace demo {
                 header.m_background_layers = source.m_background_layers;
                 header.m_surface_profile = source.m_surface_profile;
                 header.m_particle_batches = source.m_particle_batches;
+                header.m_gpu_particles = source.m_gpu_particles;
+                if (header.m_gpu_particles) {
+                    header.m_gpu_particles->m_world = {
+                        command->m_job_id, command->m_world_generation, command->m_content_fingerprint};
+                }
                 header.m_tiles = source.m_tiles;
                 header.m_diagnostic_mode = source.m_diagnostic_mode;
                 header.m_diagnostic_revision = source.m_diagnostic_revision;
@@ -957,6 +1099,20 @@ namespace demo {
             if (not m_world_command or m_world_command_waiting) {
                 return {};
             }
+
+            // Recheck at admission, including close that arrived while an
+            // inline preparation was executing. An unaccepted activation is
+            // still reversible and must not become commit intent accidentally.
+            if (m_world_command->m_kind == EGridWorldCommand::activate and
+                not m_preview_job and
+                not m_workshop_stage and
+                not replacementCommitted_() and
+                (m_world_cancel_requested or m_close_requested.load(std::memory_order_acquire))) {
+                m_world_command.reset();
+                m_world_cancel_requested = true;
+                return {};
+            }
+
             // Set before dispatch: inline execution can synchronously return an acknowledgment.
             m_world_command_waiting = true;
             const auto error = submitGridWorld(m_world_command);
@@ -967,6 +1123,20 @@ namespace demo {
                 }
                 PPR_RETURN_ERROR_ON_FAIL(Demo, error);
             }
+
+            if (m_world_command->m_kind == EGridWorldCommand::activate) {
+                // Admission can switch the lane's active bundle before its ACK.
+                // An old game's retained lease loses selection authority here.
+                m_workshop_game_particles.reset();
+            }
+
+            if (m_world_command->m_kind == EGridWorldCommand::activate and not m_preview_job and not m_workshop_stage) {
+                const auto step = game::advanceSessionWorldTransition(
+                    m_world_transition, m_driver.get(), m_world_job->preparedDriver(), m_matter_runtime,
+                    {.m_activation_admitted = true});
+                PPR_RETURN_ERROR_ON_FAIL(Demo, step);
+            }
+
             return {};
         }
 
@@ -985,8 +1155,11 @@ namespace demo {
                             PPR_RETURN_ERROR_ON_FAIL(Demo, result.m_error);
                         }
                         m_candidate_cancel_needed = true;
-                        if (m_world_job->view().m_state == colony::EWorldJobState::prepared) {
-                            m_world_job->discardPrepared(result.m_error);
+                        if (not m_preview_job) {
+                            PPR_RETAIN_ERROR_ON_FAIL(Demo, m_world_transition.m_error, result.m_error);
+                            m_world_transition.m_phase = game::ESessionWorldPhase::cancelling;
+                        } else if (m_world_job->view().m_state == colony::EWorldJobState::prepared) {
+                            PPR_RETURN_ERROR_ON_FAIL(Demo, m_world_job->presentationFailed(result.m_error));
                         }
                     } else {
                         switch (result.m_kind) {
@@ -1006,25 +1179,48 @@ namespace demo {
                 }
             }
 
-            // Once activation is admitted, settle its acknowledgment before close/cancel.
-            // It is the transaction's irreversible publication boundary.
-            if (m_close_requested.load(std::memory_order_acquire) and
-                not activationPending_() and
-                not m_candidate_activated) {
+            // Admission is commit intent. Later close/cancel waits for activation
+            // and acknowledged attachment rather than discarding either owner.
+            const bool cancelling = not m_preview_job and
+                                    m_world_transition.m_phase != game::ESessionWorldPhase::restored and
+                                    not replacementCommitted_() and
+                                    (m_world_cancel_requested or
+                                        m_close_requested.load(std::memory_order_acquire) or
+                                        m_world_transition.m_phase == game::ESessionWorldPhase::cancelling or
+                                        m_world_job->view().m_state == colony::EWorldJobState::failed or
+                                        m_world_job->view().m_state == colony::EWorldJobState::cancelled);
+            if (cancelling) {
+                m_world_cancel_requested = true;
                 m_preview_pending.reset();
-                m_world_job->cancel();
+                if (m_world_command and
+                    not m_world_command_waiting and
+                    m_world_command->m_kind != EGridWorldCommand::cancel) {
+                    m_world_command.reset();
+                }
+
+                m_candidate_cancel_needed = m_candidate_cancel_needed or m_candidate_begun;
+                if (not m_world_job->preparedDriver()) {
+                    m_world_job->cancel();
+                }
             }
 
-            // Header images share catalog pixels. Keep the coordinator's owners
-            // until this command is settled/dropped, so its UI-side reset can
-            // never become the last large image release during cancellation.
+            // Device preparation never lends a candidate to worker cleanup.
+            if (not m_preview_job and
+                m_world_job->preparedDriver() and
+                m_world_transition.m_phase != game::ESessionWorldPhase::resuming and
+                m_world_transition.m_phase != game::ESessionWorldPhase::restored) {
+                m_world_job->holdPreparedDeviceOwner(true);
+            }
+
             const bool header_retained = m_world_command and m_world_command->m_kind == EGridWorldCommand::begin;
-            PPR_RETURN_ERROR_ON_FAIL(Demo, m_world_job->update(m_loading_presented, not header_retained));
+            PPR_RETURN_ERROR_ON_FAIL(Demo, m_world_job->update(m_loading_presented, not header_retained, true));
 
             if (m_capture_access and m_world_job->view().m_state == colony::EWorldJobState::prepared) {
                 m_driver = m_world_job->takeCaptured(true);
                 m_driver_ready = true;
                 m_capture_access = false;
+                m_resume_matter = true;
+                m_simulation_anchor.reset();
                 Array<colony::ColonyDriver::DirtyChunk> ack{};
                 for (u32 chunk = 0u; chunk < sim::kChunkCount; ++chunk) {
                     if (m_capture_ack_revisions[chunk] != 0u) {
@@ -1045,11 +1241,83 @@ namespace demo {
             }
 
             const auto view = m_world_job->view();
-            m_world_view = view;
+            if (not m_world_transition.m_returning and
+                m_world_transition.m_phase != game::ESessionWorldPhase::restored) {
+                m_world_view = view;
+            }
 
-            if (m_candidate_activated and not m_world_published) {
-                m_world_job->commitPublication();
+            // Snapshot/detach the old joint state before preparing a candidate.
+            // Its active Runtime owner stays intact until graphics activation
+            // acknowledges and the new attachment actually publishes.
+            if (not m_preview_job and
+                (not m_world_published or m_world_transition.m_phase == game::ESessionWorldPhase::resuming) and
+                (m_world_job->preparedDriver() or
+                    cancelling or
+                    m_world_transition.m_phase == game::ESessionWorldPhase::resuming)) {
+                auto *const candidate = m_world_job->preparedDriver();
+                if (m_worldgen_report and candidate) {
+                    if (not m_matter_inputs) {
+                        const auto *const prepared = candidate->preparedWorld();
+                        std::string provenance{"role=live prepared_world=absent"};
+                        if (prepared) {
+                            const auto &descriptor = prepared->descriptor();
+                            const auto &report = prepared->generated().m_report;
+                            provenance = std::format(
+                                "role=live profile={} seed={} content={:016x} terrain={:016x} output={:016x}",
+                                descriptor.m_profile, descriptor.m_seed, descriptor.m_content_fingerprint,
+                                report.m_terrain_checksum, report.m_output_checksum);
+                        }
+
+                        m_matter_inputs = std::make_unique<colony::MatterSubmissionJournal>(std::move(provenance));
+                    }
+
+                    candidate->setMatterSubmissionObserverForTest(m_matter_inputs.get());
+                }
+
+                const auto step = game::advanceSessionWorldTransition(
+                    m_world_transition, m_driver.get(), candidate, m_matter_runtime,
+                    {.m_world = {view.m_id, m_candidate_generation, m_candidate_fingerprint},
+                        .m_cancel = cancelling,
+                        .m_renderer_idle = not m_world_command and
+                                           not m_candidate_begun and
+                                           not m_candidate_cancel_needed,
+                        .m_activated = m_candidate_activated});
+                PPR_RETURN_ERROR_ON_FAIL(Demo, step);
+
+                if (*step == game::ESessionWorldStep::release_candidate) {
+                    m_world_job->holdPreparedDeviceOwner(false);
+                    if (candidate and m_world_transition.m_error) {
+                        m_world_job->discardPrepared(m_world_transition.m_error);
+                    } else {
+                        m_world_job->cancel();
+                    }
+                } else if (*step == game::ESessionWorldStep::restore) {
+                    restoreWorldFacts_(m_world_transition.m_previous);
+                } else if (*step == game::ESessionWorldStep::publish) {
+                    m_world_job->commitPublication();
+                    m_retiring_driver = std::move(m_driver);
+                    m_driver = m_world_job->publish();
+                    m_driver->requireEditPublication();
+                    m_driver->setPaused(true);
+                    m_driver_ready = true;
+                    m_world_published = true;
+                    m_initial_presentation = false;
+                    m_simulation_anchor.reset();
+                    m_present_full_refresh = true;
+
+                    // Ownership transfer is mandatory even when its successful
+                    // operation also reports an independent transport failure.
+                    PPR_RETURN_ERROR_ON_FAIL(Demo, m_world_transition.m_error);
+                }
+            }
+
+            if (m_candidate_activated and
+                (m_preview_job or m_world_published) and
+                (not m_world_published or
+                    m_retiring_driver or
+                    (view.m_state == colony::EWorldJobState::prepared and not m_preview_job))) {
                 if (m_preview_job) {
+                    m_world_job->commitPublication();
                     m_committed_preview_mode = m_ui_state.m_preview_mode;
                     m_committed_temperature_min_k = m_ui_state.m_temperature_min_k;
                     m_committed_temperature_max_k = m_ui_state.m_temperature_max_k;
@@ -1057,10 +1325,6 @@ namespace demo {
                     m_world_published = true;
                 } else {
                     auto &presentation = m_world_job->presentation();
-                    auto candidate = m_world_job->publish();
-                    m_driver.swap(candidate);
-                    m_driver->requireEditPublication();
-                    m_world_job->retire(std::move(candidate));
 
                     if (const auto *const prepared = m_driver->preparedWorld(); prepared and m_pan_controller) {
                         const float extent = static_cast<float>(colony::kWorldExtentMetres);
@@ -1089,6 +1353,7 @@ namespace demo {
                                 presentation.m_ack_revisions[index]});
                     }
                     m_driver->ackPresentChunks(acknowledged);
+                    m_world_job->retire(std::move(m_retiring_driver));
                     m_initial_graphics = {};
 
                     // A successful request starts a fresh session. Display settings
@@ -1103,7 +1368,7 @@ namespace demo {
                     m_ui_state.m_instruction = "Inspect: click a cell to pin it in the Inspector.";
                     m_hover = {};
                     m_grid_reset_pending = false;
-                    m_present_full_refresh = false;
+                    m_present_full_refresh = true;
                     m_dig_issued = 0u;
                 }
             }
@@ -1121,7 +1386,12 @@ namespace demo {
             if (not m_world_command) {
                 if (m_candidate_cancel_needed) {
                     queueWorldCommand_(EGridWorldCommand::cancel);
-                } else if (prepared and not m_world_published and allow_preparation) {
+                } else if (prepared and
+                           not m_candidate_activated and
+                           allow_preparation and
+                           not m_world_cancel_requested and
+                           m_world_transition.m_phase != game::ESessionWorldPhase::cancelling and
+                           m_world_transition.m_phase != game::ESessionWorldPhase::resuming) {
                     auto &source = m_world_job->presentation();
                     m_candidate_fingerprint = source.m_content_fingerprint;
                     if (not m_candidate_begun) {
@@ -1129,8 +1399,11 @@ namespace demo {
                     } else if (m_candidate_next_chunk < source.m_uploads.size()) {
                         queueWorldCommand_(EGridWorldCommand::append);
                     } else {
-                        queueWorldCommand_(
-                            m_candidate_ready ? EGridWorldCommand::activate : EGridWorldCommand::advance);
+                        if (not m_candidate_ready) {
+                            queueWorldCommand_(EGridWorldCommand::advance);
+                        } else if (m_preview_job or m_world_transition.m_phase == game::ESessionWorldPhase::prepared) {
+                            queueWorldCommand_(EGridWorldCommand::activate);
+                        }
                     }
                 }
             }
@@ -1145,12 +1418,20 @@ namespace demo {
                         m_tool.m_drag_queue.clear();
                         clearAgentSelection_();
                         m_driver_ready = false;
+                        const auto detached = m_driver->advanceDetachMatter();
+                        PPR_RETURN_ERROR_ON_FAIL(Demo, detached);
+                        if (not *detached) {
+                            return {};
+                        }
                         m_world_job->dispose(std::move(m_driver));
                     } else {
                         m_defer_close.store(false, std::memory_order_release);
                         requestExit();
                     }
-                } else if (m_world_published and m_world_frame_presented) {
+                } else if (m_world_published and
+                           m_world_frame_presented and
+                           view.m_state != colony::EWorldJobState::failed and
+                           view.m_state != colony::EWorldJobState::cancelled) {
                     m_world_modal = false;
                     if (m_preview_job) {
                         m_driver->setPaused(m_pause_before_job);
@@ -1160,14 +1441,19 @@ namespace demo {
                 } else if (m_driver and
                            view.m_id != m_consumed_terminal_job and
                            (view.m_state == colony::EWorldJobState::failed or
-                               view.m_state == colony::EWorldJobState::cancelled)) {
+                               view.m_state == colony::EWorldJobState::cancelled) and
+                           (m_preview_job or m_world_transition.m_phase == game::ESessionWorldPhase::restored)) {
                     m_consumed_terminal_job = view.m_id;
                     if (m_preview_job) {
                         m_ui_state.m_preview_mode = m_committed_preview_mode;
                         m_ui_state.m_temperature_min_k = m_committed_temperature_min_k;
                         m_ui_state.m_temperature_max_k = m_committed_temperature_max_k;
                     }
-                    m_driver->setPaused(m_pause_before_job);
+                    if (m_preview_job) {
+                        m_driver->setPaused(m_pause_before_job);
+                    }
+
+                    m_world_cancel_requested = false;
                     m_preview_job = false;
                     m_world_modal = false;
                     if (view.m_error == std::errc::operation_canceled) {
@@ -1202,11 +1488,9 @@ namespace demo {
                 .m_activation_pending = activationPending_(),
                 .m_candidate_ready = m_candidate_ready};
 
-            switch (game::ui::drawWorldProgress(view)) {
-                case game::ui::EWorldAction::retry: retainInputError_(requestWorld_(m_requested_seed)); break;
-                case game::ui::EWorldAction::quit: requestExit(); break;
-                case game::ui::EWorldAction::cancel: m_world_job->cancel(); break;
-                case game::ui::EWorldAction::none: break;
+            const auto action = game::ui::drawWorldProgress(view);
+            if (action != game::ui::EWorldAction::none) {
+                retainInputError_(m_session_service.post(game::SessionWorldAction{m_world_view.m_id, action}));
             }
         }
 
@@ -1261,6 +1545,7 @@ namespace demo {
 
                 m_tool.m_held = true;
                 m_tool.m_owner = EToolGestureOwner::world;
+                m_tool.m_world_generation = m_driver->worldGeneration();
                 m_actions[kToolPressAction]->setConsumeInput(true);
                 m_actions[kToolCursorAction]->setConsumeInput(true);
 
@@ -1432,8 +1717,8 @@ namespace demo {
             m_build_preview.m_reason = "";
         }
 
-        /// Slice 5 release commit: exactly one direct driver order for the
-        /// preview rect, never through the dig FIFO. Invalid previews post
+        /// Release captures one owned, world-tagged order for main service,
+        /// never through the dig FIFO. Invalid previews post
         /// their reason; driver rejections post with the driver error code;
         /// success names the rect and its queue state. No cells mutate on any
         /// failure path; the caller always clears the gesture after this.
@@ -1452,14 +1737,40 @@ namespace demo {
             const sim::GlobalCellPos min = m_build_preview.m_min;
             const u32 width = m_build_preview.m_max.m_x - min.m_x + 1u;
             const u32 height = m_build_preview.m_max.m_y - min.m_y + 1u;
-            Expected<sim::Entity> placed{std::unexpect, std::make_error_code(std::errc::invalid_argument)};
-            if (is_wall) {
-                placed = m_driver->buildWall(
-                    colony::Footprint{
-                        .m_min = min, .m_width = width, .m_height = height, .m_element = m_driver->boundaryMaterial()});
-            } else {
-                placed = m_driver->demolish(min, width, height);
+            try {
+                retainInputError_(m_session_service.post(
+                    game::SessionBuildOrder{
+                        m_tool.m_world_generation,
+                        colony::Footprint{
+                            .m_min = min,
+                            .m_width = width,
+                            .m_height = height,
+                            .m_element = m_driver->boundaryMaterial()},
+                        is_wall ? colony::EColonyTool::build_wall : colony::EColonyTool::demolish}));
+            } catch (...) {
+                retainInputError_(currentException_());
             }
+        }
+
+        void applyBuildOrder_(const game::SessionBuildOrder &order) {
+            if (not m_driver or not m_driver_ready) {
+                return;
+            }
+
+            const u64 displayed_world = m_world_frame_presented and not m_world_modal ? m_driver->worldGeneration()
+                                                                                      : 0u;
+            const auto placed = game::applySessionBuildOrder(*m_driver, order, displayed_world);
+            if (not placed and placed.error() == std::errc::device_or_resource_busy) {
+                retainInputError_(m_session_service.deferTool(order));
+                return;
+            }
+
+            if (placed and not placed->has_value()) {
+                return; // This order belongs to a stale or undisplayed world.
+            }
+
+            const bool is_wall = order.m_tool == colony::EColonyTool::build_wall;
+            const u32 width = order.m_footprint.m_width, height = order.m_footprint.m_height;
             if (not placed) {
                 const std::error_code error = placed.error();
                 PPR_LOG(
@@ -1500,8 +1811,8 @@ namespace demo {
             if (not owned) {
                 return;
             }
-            // Slice 5: footprint tools commit one direct driver order here;
-            // dig orders drain through update() and inspect holds nothing.
+            // Footprint tools enqueue one owned order here; accepted dig cells
+            // drain during independent service and inspect holds nothing.
             // cancelToolGesture_() below clears held, so a second release
             // can never commit twice.
             if (m_ui_state.m_tool == colony::EColonyTool::build_wall or
@@ -1650,9 +1961,6 @@ namespace demo {
 
         void clearControlInput_() noexcept {
             m_control_held.fill(false);
-            if (m_driver) {
-                m_driver->clearPlayerCommand();
-            }
         }
 
         void refreshControlInput_() noexcept {
@@ -1689,10 +1997,19 @@ namespace demo {
                 return;
             }
             m_control_held[index] = held;
+        }
+
+        [[nodiscard]] std::error_code applyControlInput_() {
+            if (not m_driver->controlledEntity() or not m_control_enabled or m_driver->paused() or m_world_modal) {
+                m_driver->clearPlayerCommand();
+                return {};
+            }
+
             const colony::PlayerCommand command{
                 static_cast<i8>(static_cast<int>(m_control_held[1u]) - static_cast<int>(m_control_held[0u])),
                 static_cast<i8>(static_cast<int>(m_control_held[2u]) - static_cast<int>(m_control_held[3u]))};
-            retainInputError_(m_driver->setPlayerCommand(command));
+            PPR_RETURN_ERROR_ON_FAIL(Demo, m_driver->setPlayerCommand(command));
+            return {};
         }
 
         void initializeInput_() {
@@ -1904,6 +2221,13 @@ namespace demo {
         /// way the old R binding did (sticky, aborting at the next frame's
         /// error check before any further driver use).
         void dispatchIntent_(const colony::ColonyIntent intent) {
+            if (m_driver) {
+                retainInputError_(
+                    m_session_service.post(game::SessionColonyIntent{m_driver->worldGeneration(), intent}));
+            }
+        }
+
+        void applyIntent_(const colony::ColonyIntent intent) {
             if (not m_driver or m_world_modal) {
                 return;
             }
@@ -1917,6 +2241,7 @@ namespace demo {
                 case colony::EColonyIntent::pause_toggle:
                     clearControlInput_();
                     m_driver->togglePaused();
+                    m_simulation_anchor.reset();
                     break;
 
                 case colony::EColonyIntent::step:
@@ -2019,7 +2344,7 @@ namespace demo {
                     m_ui_state.m_colony_open = not m_ui_state.m_colony_open;
                     break;
 
-                case colony::EColonyIntent::quit: requestExit({}); break;
+                case colony::EColonyIntent::quit: m_close_requested.store(true, std::memory_order_release); break;
 
                 case colony::EColonyIntent::help: m_ui_state.m_help_open = not m_ui_state.m_help_open; break;
 
@@ -2725,6 +3050,7 @@ namespace demo {
             }
             if (m_hover.m_world) {
                 m_ui_state.m_pinned = m_hover.m_target;
+                m_inspection_capture_requested = true;
                 return;
             }
             postNotice_("Nothing under the pointer to pin", std::errc::invalid_argument);
@@ -2769,6 +3095,7 @@ namespace demo {
             } else {
                 clearAgentSelection_();
                 m_ui_state.m_pinned = cell;
+                m_inspection_capture_requested = true;
             }
         }
 
@@ -3322,15 +3649,10 @@ namespace demo {
 
         [[nodiscard]] std::error_code setWorldgenSettings(
             const game::GameSettings &settings, const ITimerClock &clock, config::Diagnostics &diagnostics) {
-            if (not settings.m_profile100 or
-                settings.m_command == game::EGameCommand::worldgen_workshop or
-                settings.m_worldgen_root or
-                settings.m_worldgen_pack_set) {
-                auto roots = game::loadWorldgenRoots(settings, diagnostics);
-                PPR_RETURN_ERROR_ON_FAIL(Demo, roots);
+            auto roots = game::loadWorldgenRoots(settings, diagnostics);
+            PPR_RETURN_ERROR_ON_FAIL(Demo, roots);
 
-                m_worldgen_roots = std::move(*roots);
-            }
+            m_worldgen_roots = std::move(*roots);
 
             m_observation_clock = &clock;
             m_observation_start = clock.now();
@@ -3339,7 +3661,6 @@ namespace demo {
             m_worldgen_report = settings.m_worldgen_report or m_worldgen_acceptance;
             enableGridObservations(m_worldgen_report);
             enableFrameAdmissionObservations(m_worldgen_report);
-            m_agent_count = 1u;
             m_workshop_startup = settings.m_command == game::EGameCommand::worldgen_workshop;
             m_workshop_root = m_worldgen_roots.empty()
                                   ? hal::process::currentExecutablePath().parent_path() / "worldgen" / "default"
@@ -3359,12 +3680,6 @@ namespace demo {
 
         [[nodiscard]] bool acceptanceComplete() const noexcept {
             return not m_worldgen_acceptance or m_acceptance_phase == AcceptancePhase::done;
-        }
-
-        /// Profiling fixture override (agent count for the driver spawn path).
-        /// Defaults to the production count; `--profile100` sets 100.
-        void setAgentCount(const u32 count) noexcept {
-            m_agent_count = count;
         }
 
         /// Bounded run: exit gracefully after the given wall-clock seconds
@@ -3529,7 +3844,16 @@ namespace demo {
             m_tool.m_accepted_click.reset();
             m_tool.m_drag_queue.clear();
             m_preview_pending.reset();
+            m_workshop_game_facts = currentWorldFacts_();
+            m_world_transition = {};
+
             m_workshop_pause = m_driver and m_driver->paused();
+            const auto final_particles = m_driver ? m_driver->particleView() : std::nullopt;
+            PPR_RETURN_ERROR_ON_FAIL(
+                Demo, not m_driver or (final_particles and final_particles->current())
+                          ? std::error_code{}
+                          : std::make_error_code(std::errc::state_not_recoverable));
+
             if (m_pan_controller) {
                 m_workshop_game_eye = getMainCamera()->getSnapshot().m_origin;
                 m_workshop_game_scale = m_pan_controller->getOrthoScale();
@@ -3548,6 +3872,8 @@ namespace demo {
                 m_workshop_capturing = true;
                 m_driver_ready = false;
             }
+
+            m_workshop_game_particles = final_particles;
             m_workshop_open = true;
             m_workshop_pending = false;
             m_workshop_closing = false;
@@ -3569,7 +3895,62 @@ namespace demo {
             return {};
         }
 
+        [[nodiscard]] std::error_code restoreWorkshopCamera_() {
+            if (m_pan_controller) {
+                const float extent = m_driver->cellsPerMetre() == colony::kFineCellsPerMetre
+                                         ? static_cast<float>(colony::kWorldExtentMetres)
+                                         : static_cast<float>(sim::kWorldEdge);
+                PPR_RETURN_ERROR_ON_FAIL(
+                    Demo, m_pan_controller->setWorldBounds(float2{0.0f, 0.0f}, float2{extent, extent}));
+
+                PPR_RETURN_ERROR_ON_FAIL(Demo, m_pan_controller->setOrthoScale(m_workshop_game_scale));
+                m_pan_controller->translate(m_workshop_game_eye, true);
+                m_pan_controller->resetInputState();
+                m_pan_controller->setFollowTarget(m_workshop_game_follow);
+            }
+
+            return {};
+        }
+
         [[nodiscard]] std::error_code finishWorkshop_() {
+            m_workshop_finish_pending = true;
+            if (m_driver and not m_world_transition.m_returning) {
+                m_world_transition = {};
+                m_world_transition.m_previous = m_workshop_game_facts;
+                m_world_transition.m_reservation_epoch = reservationEpoch_();
+                m_world_transition.m_returning = true;
+                m_world_transition.m_phase = game::ESessionWorldPhase::resuming;
+                if (not m_workshop_restoring) {
+                    restoreWorldFacts_(m_workshop_game_facts);
+                }
+
+                m_driver->setPaused(true);
+                m_world_frame_presented = false;
+            }
+
+            if (m_driver and m_world_transition.m_phase != game::ESessionWorldPhase::complete) {
+                const auto step = game::advanceSessionWorldTransition(
+                    m_world_transition, m_driver.get(), nullptr, m_matter_runtime,
+                    {.m_world = {m_world_view.m_id, m_candidate_generation, m_candidate_fingerprint}});
+                PPR_RETURN_ERROR_ON_FAIL(Demo, step);
+                if (*step == game::ESessionWorldStep::render_return) {
+                    m_world_published = true;
+                    m_candidate_activated = true;
+                    m_driver_ready = true;
+                    m_world_modal = true;
+                    PPR_RETURN_ERROR_ON_FAIL(Demo, restoreWorkshopCamera_());
+                }
+
+                // Close may abandon visibility, but never an admitted owner
+                // operation. It proceeds through the same terminal detach/drain.
+                if (m_world_transition.m_phase != game::ESessionWorldPhase::awaiting_presentation or
+                    not m_close_requested.load(std::memory_order_acquire)) {
+                    return {};
+                }
+            }
+
+            m_workshop_finish_pending = false;
+            m_workshop_game_particles.reset();
             m_workshop_open = false;
             m_workshop_closing = false;
             m_workshop_restoring = false;
@@ -3581,24 +3962,16 @@ namespace demo {
             m_workshop_displayed_preview.reset();
             m_world_modal = false;
             m_world_published = true;
-            m_world_frame_presented = true;
             m_candidate_begun = false;
             m_candidate_cancel_needed = false;
-            m_candidate_activated = false;
             if (m_driver) {
-                m_driver->setPaused(m_workshop_pause);
-                clearControlInput_();
-                if (m_pan_controller) {
-                    const float extent = m_driver->cellsPerMetre() == colony::kFineCellsPerMetre
-                                             ? static_cast<float>(colony::kWorldExtentMetres)
-                                             : static_cast<float>(sim::kWorldEdge);
-                    PPR_RETURN_ERROR_ON_FAIL(
-                        Demo, m_pan_controller->setWorldBounds(float2{0.0f, 0.0f}, float2{extent, extent}));
-                    PPR_RETURN_ERROR_ON_FAIL(Demo, m_pan_controller->setOrthoScale(m_workshop_game_scale));
-                    m_pan_controller->translate(m_workshop_game_eye, true);
-                    m_pan_controller->resetInputState();
-                    m_pan_controller->setFollowTarget(m_workshop_game_follow);
+                if (not m_driver->matterAttached() and m_driver->matterState() != nullptr) {
+                    m_resume_matter = true;
                 }
+
+                m_driver->setPaused(m_workshop_pause);
+                m_simulation_anchor.reset();
+                clearControlInput_();
             } else {
                 m_close_requested.store(true, std::memory_order_release);
             }
@@ -3701,8 +4074,7 @@ namespace demo {
                 PPR_RETURN_ERROR_ON_FAIL(Demo, m_world_job->update(true));
                 if (m_world_job->view().m_state == colony::EWorldJobState::prepared) {
                     if (not m_world_job->view().m_error) {
-                        m_workshop_restore = std::make_unique<GridPass::GridStagedFrame>(
-                            std::move(m_world_job->presentation()));
+                        m_workshop_restore = std::make_unique<GridStagedFrame>(std::move(m_world_job->presentation()));
                     } else {
                         m_workshop_error = m_world_job->view().m_error.message();
                     }
@@ -3832,7 +4204,8 @@ namespace demo {
                 m_workshop_staged_root = std::move(m_workshop_queued_root);
                 m_world_view.m_id = ++m_workshop_epoch;
                 m_workshop_stage->m_diagnostic_revision = m_world_view.m_id;
-                m_candidate_generation = m_workshop_epoch;
+                m_candidate_generation = m_workshop_restoring and m_driver ? m_driver->worldGeneration()
+                                                                           : m_workshop_epoch;
                 m_candidate_fingerprint = m_workshop_stage->m_content_fingerprint;
                 m_candidate_next_chunk = 0u;
                 m_candidate_begun = false;
@@ -3868,6 +4241,197 @@ namespace demo {
                 PPR_RETURN_ERROR_ON_FAIL(Demo, submitWorldCommand_());
             }
             return {};
+        }
+
+        [[nodiscard]] static bool mutatesWorkshopDraft_(const colony::WorkshopIntent &intent) {
+            return intent.m_kind == colony::EWorkshopIntent::edit_definition or
+                   intent.m_kind == colony::EWorkshopIntent::edit_biome or
+                   intent.m_kind == colony::EWorkshopIntent::clear_property or
+                   intent.m_kind == colony::EWorkshopIntent::clone_definition or
+                   intent.m_kind == colony::EWorkshopIntent::delete_definition;
+        }
+
+        void applyWorkshopIntent_(const colony::WorkshopIntent &intent, bool &edit_rejected) {
+            auto *const session = m_workshop->session();
+
+            std::error_code error{};
+            config::Diagnostics diagnostics{32u};
+            switch (intent.m_kind) {
+                case colony::EWorkshopIntent::open:
+                    error = requestWorkshopTransition_(
+                        WorkshopTransition::open, std::filesystem::path{m_workshop_ui.m_root.data()});
+                    break;
+                case colony::EWorkshopIntent::preview:
+                    error = m_workshop->requestPreview(workshopSpec_(), m_workshop_ui.m_mode);
+                    break;
+                case colony::EWorkshopIntent::preview_settings_changed: break;
+                case colony::EWorkshopIntent::cancel:
+                    m_workshop->cancel();
+                    m_workshop_queued.reset();
+                    m_workshop_queued_preview.reset();
+                    if (m_workshop_stage and not activationPending_()) {
+                        m_candidate_cancel_needed = true;
+                    }
+                    break;
+                case colony::EWorkshopIntent::save: error = m_workshop->save(); break;
+                case colony::EWorkshopIntent::reload:
+                    if (session) {
+                        Array<std::filesystem::path> roots;
+                        roots.reserve(session->draftSource().m_packs.size());
+                        for (const auto &pack: session->draftSource().m_packs) {
+                            roots.push_back(pack.m_root);
+                        }
+
+                        error = requestWorkshopTransition_(WorkshopTransition::open, {}, std::move(roots));
+                    }
+                    break;
+                case colony::EWorkshopIntent::revert:
+                    if (session) {
+                        error = session->revert();
+                        if (not error) {
+                            error = m_workshop->validate();
+                        }
+                    }
+                    break;
+                case colony::EWorkshopIntent::undo:
+                case colony::EWorkshopIntent::redo:
+                    if (session) {
+                        const auto changed = intent.m_kind == colony::EWorkshopIntent::undo ? session->undo()
+                                                                                            : session->redo();
+                        if (not changed) {
+                            error = changed.error();
+                        } else if (*changed) {
+                            error = m_workshop->validate();
+                        }
+                    }
+                    break;
+                case colony::EWorkshopIntent::edit_biome:
+                    if (session) {
+                        error = session->editBiome(intent.m_biome, intent.m_property, intent.m_value, diagnostics);
+                        if (not error) {
+                            error = m_workshop->validate();
+                        }
+                    }
+                    break;
+                case colony::EWorkshopIntent::edit_definition:
+                case colony::EWorkshopIntent::clear_property:
+                case colony::EWorkshopIntent::clone_definition:
+                case colony::EWorkshopIntent::delete_definition:
+                    if (session) {
+                        if (intent.m_kind == colony::EWorkshopIntent::edit_definition) {
+                            error = session->editDefinition(
+                                intent.m_document, intent.m_key, intent.m_property, intent.m_value, diagnostics);
+                        } else if (intent.m_kind == colony::EWorkshopIntent::clear_property) {
+                            error = session->clearDefinitionProperty(
+                                intent.m_document, intent.m_key, intent.m_property, diagnostics);
+                        } else if (intent.m_kind == colony::EWorkshopIntent::clone_definition) {
+                            error = session->cloneDefinition(
+                                intent.m_document, intent.m_source_key, intent.m_key, diagnostics);
+                        } else {
+                            error = session->deleteDefinition(intent.m_document, intent.m_key, diagnostics);
+                        }
+                        if (not error) {
+                            error = m_workshop->validate();
+                        }
+                    }
+                    break;
+                case colony::EWorkshopIntent::export_preview: {
+                    const auto &camera = getMainCamera()->getSnapshot();
+                    const double scale = static_cast<double>(m_pan_controller->getOrthoScale());
+                    error = m_workshop->exportPreview(
+                        std::filesystem::path{m_workshop_ui.m_export_path.data()},
+                        {static_cast<double>(camera.m_origin.x) +
+                                static_cast<double>(camera.m_viewport_size.x) * scale * 0.5,
+                            static_cast<double>(camera.m_origin.y) +
+                                static_cast<double>(camera.m_viewport_size.y) * scale * 0.5,
+                            scale, static_cast<u32>(m_workshop_ui.m_mode)});
+                    break;
+                }
+                case colony::EWorkshopIntent::return_to_game:
+                    if (m_driver or m_workshop_capturing) {
+                        m_workshop->configureLivePreview(false, {}, m_workshop_ui.m_mode);
+                        m_workshop_closing = true;
+                    }
+                    break;
+                case colony::EWorkshopIntent::start_game:
+                    error = edit_rejected ? std::make_error_code(std::errc::operation_not_permitted)
+                                          : requestWorkshopGame_(diagnostics);
+                    break;
+                case colony::EWorkshopIntent::close:
+                    error = requestWorkshopTransition_(WorkshopTransition::exit);
+                    break;
+            }
+
+            if (error) {
+                edit_rejected = edit_rejected or mutatesWorkshopDraft_(intent);
+                if (diagnostics.hasErrors() and session) {
+                    m_workshop_edit_diagnostics = diagnostics;
+                    m_workshop_edit_diagnostics_revision = session->revision();
+                    m_workshop_edit_diagnostics_root = session->root();
+                    m_workshop_error = "Edit rejected. Select its diagnostic to find the property that needs fixing.";
+                } else if (intent.m_kind == colony::EWorkshopIntent::open) {
+                    m_workshop_error = "Could not open the pack. Check the pack root path: " + error.message();
+                } else if (intent.m_kind == colony::EWorkshopIntent::save) {
+                    m_workshop_error = "Could not save. Wait for current work to finish and check Diagnostics: " +
+                                       error.message();
+                } else {
+                    m_workshop_error = error.message() + "\n" + diagnostics.format();
+                }
+            } else {
+                if (intent.m_kind != colony::EWorkshopIntent::preview_settings_changed) {
+                    m_workshop_error.clear();
+                }
+                if (intent.m_kind == colony::EWorkshopIntent::edit_definition or
+                    intent.m_kind == colony::EWorkshopIntent::clear_property or
+                    intent.m_kind == colony::EWorkshopIntent::edit_biome or
+                    intent.m_kind == colony::EWorkshopIntent::undo or
+                    intent.m_kind == colony::EWorkshopIntent::redo or
+                    intent.m_kind == colony::EWorkshopIntent::revert) {
+                    m_workshop_edit_diagnostics.clear();
+                }
+            }
+        }
+
+        void configureWorkshopPreview_() {
+            m_workshop->configureLivePreview(
+                m_workshop_ui.m_automatic_live and
+                    not m_workshop_closing and
+                    m_workshop_game_phase == WorkshopGamePhase::none and
+                    m_workshop_transition == WorkshopTransition::none,
+                workshopSpec_(), m_workshop_ui.m_mode);
+        }
+
+        void applyUnsavedAction_(const game::ui::EUnsavedAction action) {
+            switch (action) {
+                case game::ui::EUnsavedAction::save:
+                    if (const auto error = m_workshop->save()) {
+                        m_workshop_error = error.message();
+                    } else {
+                        m_workshop_transition_saving = true;
+                    }
+                    break;
+
+                case game::ui::EUnsavedAction::discard:
+                    if (const auto error = completeWorkshopTransition_()) {
+                        m_workshop_error = error.message();
+                    }
+                    break;
+
+                case game::ui::EUnsavedAction::cancel:
+                    if (m_workshop_transition == WorkshopTransition::exit and
+                        m_driver and
+                        not m_workshop_restore and
+                        not m_workshop_displayed) {
+                        m_workshop_closing = true;
+                    }
+
+                    m_workshop_transition = WorkshopTransition::none;
+                    m_workshop_transition_saving = false;
+                    m_close_requested.store(false, std::memory_order_release);
+                    break;
+
+                case game::ui::EUnsavedAction::none: break;
+            }
         }
 
         void drawWorkshop_() {
@@ -3934,195 +4498,19 @@ namespace demo {
                 return colony::drawWorldgenPanel(m_workshop_ui, view);
             }();
 
-            const auto mutates_draft = [](const colony::WorkshopIntent &intent) {
-                return intent.m_kind == colony::EWorkshopIntent::edit_definition or
-                       intent.m_kind == colony::EWorkshopIntent::edit_biome or
-                       intent.m_kind == colony::EWorkshopIntent::clear_property or
-                       intent.m_kind == colony::EWorkshopIntent::clone_definition or
-                       intent.m_kind == colony::EWorkshopIntent::delete_definition;
-            };
-
-            std::stable_partition(workshop_intents.begin(), workshop_intents.end(), mutates_draft);
-            bool edit_rejected = false;
-            for (const auto &intent: workshop_intents) {
-                std::error_code error{};
-                config::Diagnostics diagnostics{32u};
-                switch (intent.m_kind) {
-                    case colony::EWorkshopIntent::open:
-                        error = requestWorkshopTransition_(
-                            WorkshopTransition::open, std::filesystem::path{m_workshop_ui.m_root.data()});
-                        break;
-                    case colony::EWorkshopIntent::preview:
-                        error = m_workshop->requestPreview(workshopSpec_(), m_workshop_ui.m_mode);
-                        break;
-                    case colony::EWorkshopIntent::preview_settings_changed: break;
-                    case colony::EWorkshopIntent::cancel:
-                        m_workshop->cancel();
-                        m_workshop_queued.reset();
-                        m_workshop_queued_preview.reset();
-                        if (m_workshop_stage and not activationPending_()) {
-                            m_candidate_cancel_needed = true;
-                        }
-                        break;
-                    case colony::EWorkshopIntent::save: error = m_workshop->save(); break;
-                    case colony::EWorkshopIntent::reload:
-                        if (session) {
-                            Array<std::filesystem::path> roots;
-                            roots.reserve(session->draftSource().m_packs.size());
-                            for (const auto &pack: session->draftSource().m_packs) {
-                                roots.push_back(pack.m_root);
-                            }
-
-                            error = requestWorkshopTransition_(WorkshopTransition::open, {}, std::move(roots));
-                        }
-                        break;
-                    case colony::EWorkshopIntent::revert:
-                        if (session) {
-                            error = session->revert();
-                            if (not error) {
-                                error = m_workshop->validate();
-                            }
-                        }
-                        break;
-                    case colony::EWorkshopIntent::undo:
-                    case colony::EWorkshopIntent::redo:
-                        if (session) {
-                            const auto changed = intent.m_kind == colony::EWorkshopIntent::undo ? session->undo()
-                                                                                                : session->redo();
-                            if (not changed) {
-                                error = changed.error();
-                            } else if (*changed) {
-                                error = m_workshop->validate();
-                            }
-                        }
-                        break;
-                    case colony::EWorkshopIntent::edit_biome:
-                        if (session) {
-                            error = session->editBiome(intent.m_biome, intent.m_property, intent.m_value, diagnostics);
-                            if (not error) {
-                                error = m_workshop->validate();
-                            }
-                        }
-                        break;
-                    case colony::EWorkshopIntent::edit_definition:
-                    case colony::EWorkshopIntent::clear_property:
-                    case colony::EWorkshopIntent::clone_definition:
-                    case colony::EWorkshopIntent::delete_definition:
-                        if (session) {
-                            if (intent.m_kind == colony::EWorkshopIntent::edit_definition) {
-                                error = session->editDefinition(
-                                    intent.m_document, intent.m_key, intent.m_property, intent.m_value, diagnostics);
-                            } else if (intent.m_kind == colony::EWorkshopIntent::clear_property) {
-                                error = session->clearDefinitionProperty(
-                                    intent.m_document, intent.m_key, intent.m_property, diagnostics);
-                            } else if (intent.m_kind == colony::EWorkshopIntent::clone_definition) {
-                                error = session->cloneDefinition(
-                                    intent.m_document, intent.m_source_key, intent.m_key, diagnostics);
-                            } else {
-                                error = session->deleteDefinition(intent.m_document, intent.m_key, diagnostics);
-                            }
-                            if (not error) {
-                                error = m_workshop->validate();
-                            }
-                        }
-                        break;
-                    case colony::EWorkshopIntent::export_preview: {
-                        const auto &camera = getMainCamera()->getSnapshot();
-                        const double scale = static_cast<double>(m_pan_controller->getOrthoScale());
-                        error = m_workshop->exportPreview(
-                            std::filesystem::path{m_workshop_ui.m_export_path.data()},
-                            {static_cast<double>(camera.m_origin.x) +
-                                    static_cast<double>(camera.m_viewport_size.x) * scale * 0.5,
-                                static_cast<double>(camera.m_origin.y) +
-                                    static_cast<double>(camera.m_viewport_size.y) * scale * 0.5,
-                                scale, static_cast<u32>(m_workshop_ui.m_mode)});
-                        break;
-                    }
-                    case colony::EWorkshopIntent::return_to_game:
-                        if (m_driver or m_workshop_capturing) {
-                            m_workshop->configureLivePreview(false, {}, m_workshop_ui.m_mode);
-                            m_workshop_closing = true;
-                        }
-                        break;
-                    case colony::EWorkshopIntent::start_game:
-                        error = edit_rejected ? std::make_error_code(std::errc::operation_not_permitted)
-                                              : requestWorkshopGame_(diagnostics);
-                        break;
-                    case colony::EWorkshopIntent::close:
-                        error = requestWorkshopTransition_(WorkshopTransition::exit);
-                        break;
-                }
-                if (error) {
-                    edit_rejected = edit_rejected or mutates_draft(intent);
-                    if (diagnostics.hasErrors() and session) {
-                        m_workshop_edit_diagnostics = diagnostics;
-                        m_workshop_edit_diagnostics_revision = session->revision();
-                        m_workshop_edit_diagnostics_root = session->root();
-                        m_workshop_error =
-                            "Edit rejected. Select its diagnostic to find the property that needs fixing.";
-                    } else if (intent.m_kind == colony::EWorkshopIntent::open) {
-                        m_workshop_error = "Could not open the pack. Check the pack root path: " + error.message();
-                    } else if (intent.m_kind == colony::EWorkshopIntent::save) {
-                        m_workshop_error = "Could not save. Wait for current work to finish and check Diagnostics: " +
-                                           error.message();
-                    } else {
-                        m_workshop_error = error.message() + "\n" + diagnostics.format();
-                    }
-                } else {
-                    if (intent.m_kind != colony::EWorkshopIntent::preview_settings_changed) {
-                        m_workshop_error.clear();
-                    }
-                    if (intent.m_kind == colony::EWorkshopIntent::edit_definition or
-                        intent.m_kind == colony::EWorkshopIntent::clear_property or
-                        intent.m_kind == colony::EWorkshopIntent::edit_biome or
-                        intent.m_kind == colony::EWorkshopIntent::undo or
-                        intent.m_kind == colony::EWorkshopIntent::redo or
-                        intent.m_kind == colony::EWorkshopIntent::revert) {
-                        m_workshop_edit_diagnostics.clear();
-                    }
-                }
+            std::stable_partition(workshop_intents.begin(), workshop_intents.end(), mutatesWorkshopDraft_);
+            for (auto &intent: workshop_intents) {
+                retainInputError_(m_session_service.post(std::move(intent)));
             }
 
-            m_workshop->configureLivePreview(
-                m_workshop_ui.m_automatic_live and
-                    not m_workshop_closing and
-                    m_workshop_game_phase == WorkshopGamePhase::none and
-                    m_workshop_transition == WorkshopTransition::none,
-                workshopSpec_(), m_workshop_ui.m_mode);
             const game::ui::UnsavedEditsView transition_view{
                 .m_status = m_workshop->status(),
                 .m_open = m_workshop_transition != WorkshopTransition::none,
                 .m_busy = m_workshop->busy(),
                 .m_saving = m_workshop_transition_saving};
-            switch (game::ui::drawUnsavedEdits(transition_view)) {
-                case game::ui::EUnsavedAction::save:
-                    if (const auto error = m_workshop->save()) {
-                        m_workshop_error = error.message();
-                    } else {
-                        m_workshop_transition_saving = true;
-                    }
-                    break;
-
-                case game::ui::EUnsavedAction::discard:
-                    if (const auto error = completeWorkshopTransition_()) {
-                        m_workshop_error = error.message();
-                    }
-                    break;
-
-                case game::ui::EUnsavedAction::cancel:
-                    if (m_workshop_transition == WorkshopTransition::exit and
-                        m_driver and
-                        not m_workshop_restore and
-                        not m_workshop_displayed) {
-                        m_workshop_closing = true;
-                    }
-
-                    m_workshop_transition = WorkshopTransition::none;
-                    m_workshop_transition_saving = false;
-                    m_close_requested.store(false, std::memory_order_release);
-                    break;
-
-                case game::ui::EUnsavedAction::none: break;
+            const auto action = game::ui::drawUnsavedEdits(transition_view);
+            if (action != game::ui::EUnsavedAction::none) {
+                retainInputError_(m_session_service.post(action));
             }
 
             if (const auto *const preview = m_workshop_displayed_preview.get(); preview and m_workshop_displayed) {
@@ -4209,6 +4597,148 @@ namespace demo {
                     m_max_control_work = std::max(m_max_control_work, m_observation_clock->now() - begin);
                 }
             };
+            // Pumped control slices observe/latch only. World/driver mutation
+            // belongs to serviceSimulation, outside render admission and waits.
+            return {};
+        }
+
+        [[nodiscard]] std::optional<TimePoint> nextSimulationDeadline() const noexcept override {
+            if (not m_simulation_deadline or m_session_service.active()) {
+                return std::nullopt;
+            }
+
+            if (m_session_service.acknowledgmentsPending()) {
+                return TimePoint{};
+            }
+
+            if (m_matter_runtime.requestPending()) {
+                return m_matter_runtime.serviceReady() ? std::optional{TimePoint{}} : std::nullopt;
+            }
+
+            const bool exclusive = m_driver and m_driver->matterServicePending();
+            return not exclusive and (m_session_service.pending() or m_delivery_cursor < m_retained_deliveries.size())
+                       ? std::optional{TimePoint{}}
+                       : m_simulation_deadline;
+        }
+
+        [[nodiscard]] std::error_code serviceSimulation(const TimePoint now) override {
+            if (m_session_service.active()) {
+                return {};
+            }
+
+            bool edit_rejected = false;
+            auto acknowledgments = m_session_service.takeAcknowledgments();
+            auto current = m_retained_deliveries.begin() + static_cast<std::ptrdiff_t>(m_delivery_cursor);
+            while (current != m_retained_deliveries.end()) {
+                if (std::holds_alternative<RenderFrameResult>(*current) or
+                    std::holds_alternative<GridWorldResult>(*current)) {
+                    acknowledgments.push_back(std::move(*current));
+                    current = m_retained_deliveries.erase(current);
+                } else {
+                    ++current;
+                }
+            }
+
+            for (const auto &acknowledgment: acknowledgments) {
+                PPR_RETURN_ERROR_ON_FAIL(Demo, applySessionDelivery_(acknowledgment, edit_rejected));
+            }
+
+            if (m_session_service.takeClose()) {
+                m_close_requested.store(true, std::memory_order_release);
+            }
+
+            PPR_DEFER {
+                const bool pending = (m_driver and (m_driver->matterServicePending() or m_driver->editPending())) or
+                                     (m_world_job and m_world_job->busy()) or
+                                     m_world_command or
+                                     m_workshop_open or
+                                     m_session_service.retriesPending();
+                m_simulation_deadline = now + (pending ? TimeSpan{std::chrono::milliseconds{1}}
+                                                       : TimeSpan{std::chrono::seconds{1}} / 60);
+            };
+
+            if (m_runtime_request) {
+                auto completion = m_matter_runtime.advance(*m_runtime_request);
+                PPR_RETURN_ERROR_ON_FAIL(Demo, completion);
+                if (not *completion) {
+                    return {};
+                }
+
+                m_runtime_request.reset();
+                PPR_RETURN_ERROR_ON_FAIL(Demo, (**completion).m_execution.m_operation_error);
+                PPR_RETURN_ERROR_ON_FAIL(Demo, (**completion).m_execution.m_transport_error);
+                if (not (**completion).m_execution.m_ran) {
+                    PPR_RETURN_ERROR_ON_FAIL(Demo, std::errc::operation_canceled);
+                }
+            }
+
+            if (m_matter_runtime.requestPending() and not m_matter_runtime.serviceReady()) {
+                return {};
+            }
+
+            if (m_workshop_finish_pending) {
+                PPR_RETURN_ERROR_ON_FAIL(Demo, finishWorkshop_());
+                return {};
+            }
+
+            // The rollback's owned resume may still be queued/running while
+            // the old durable driver is detached. Service that exact protocol
+            // before ordinary update, including a latched close request.
+            if (game::sessionTransitionOwnsDriverService(m_world_transition)) {
+                PPR_RETURN_ERROR_ON_FAIL(Demo, advanceWorldJob_());
+
+                m_simulation_anchor = now;
+                return {};
+            }
+
+            if (m_resume_matter and m_driver) {
+                auto resumed = m_driver->advanceResumeMatter(m_matter_runtime);
+                PPR_RETURN_ERROR_ON_FAIL(Demo, resumed);
+                if (not *resumed) {
+                    return {};
+                }
+
+                m_resume_matter = false;
+            }
+
+            if (m_driver and (m_driver->matterServicePending() or m_driver->editPending())) {
+                PPR_RETURN_ERROR_ON_FAIL(Demo, m_driver->update({}));
+                return {};
+            }
+
+            auto batch = m_session_service.beginService();
+            if (not batch) {
+                return {};
+            }
+
+            PPR_DEFER {
+                m_session_service.endService();
+            };
+            if (batch->m_close) {
+                m_close_requested.store(true, std::memory_order_release);
+            }
+
+            if (m_delivery_cursor == m_retained_deliveries.size()) {
+                m_retained_deliveries = std::move(batch->m_deliveries);
+                m_delivery_cursor = 0u;
+            } else {
+                for (auto &delivery: batch->m_deliveries) {
+                    m_retained_deliveries.push_back(std::move(delivery));
+                }
+            }
+
+            while (m_delivery_cursor < m_retained_deliveries.size()) {
+                PPR_RETURN_ERROR_ON_FAIL(
+                    Demo, applySessionDelivery_(m_retained_deliveries[m_delivery_cursor], edit_rejected));
+                ++m_delivery_cursor;
+                if (m_matter_runtime.requestPending()) {
+                    return {};
+                }
+            }
+
+            m_retained_deliveries.clear();
+            m_delivery_cursor = 0u;
+
             if (not m_workshop_open and
                 not m_workshop_exit_authorized and
                 m_workshop and
@@ -4218,13 +4748,144 @@ namespace demo {
                 PPR_RETURN_ERROR_ON_FAIL(Demo, requestWorkshopTransition_(WorkshopTransition::exit));
                 m_workshop_pending = true;
             }
+
             if (m_workshop_open) {
-                return advanceWorkshop_();
+                configureWorkshopPreview_();
+                PPR_RETURN_ERROR_ON_FAIL(Demo, advanceWorkshop_());
+                m_simulation_anchor = now;
+                return {};
             }
-            return m_world_job ? advanceWorldJob_(false) : std::error_code{};
+
+            if (m_world_job) {
+                PPR_RETURN_ERROR_ON_FAIL(Demo, advanceWorldJob_());
+                if (m_matter_runtime.requestPending() or m_resume_matter) {
+                    return {};
+                }
+            }
+
+            if (m_workshop_pending and
+                m_driver and
+                m_driver->captureReady() and
+                not m_world_job->busy() and
+                not m_world_command) {
+                PPR_RETURN_ERROR_ON_FAIL(Demo, openWorkshop_());
+                m_simulation_anchor = now;
+                return {};
+            }
+
+            PPR_RETURN_ERROR_ON_FAIL(Demo, advanceAcceptance_());
+
+            if (m_preview_pending and (not m_driver or m_driver->captureReady())) {
+                const auto mode = *std::exchange(m_preview_pending, std::nullopt);
+                PPR_RETURN_ERROR_ON_FAIL(Demo, requestPreview_(mode));
+            }
+
+            if (m_driver and m_driver_ready) {
+                if (m_world_modal and not m_driver->physicsPending() and not m_driver->editPending()) {
+                    // Keep the expected initial joint publication stable until
+                    // its actual resident presentation acknowledges the modal.
+                    m_simulation_anchor = now;
+                    return {};
+                }
+
+                if (m_inspection_capture_requested and not m_driver->physicsPending() and not m_driver->editPending()) {
+                    const auto captured = m_driver->advanceMatterSnapshot();
+                    PPR_RETURN_ERROR_ON_FAIL(Demo, captured);
+                    if (*captured) {
+                        m_inspection_capture_requested = false;
+                    }
+
+                    m_simulation_anchor = now;
+                    return {};
+                }
+
+                PPR_RETURN_ERROR_ON_FAIL(Demo, applyControlInput_());
+                if (not m_world_modal) {
+                    PPR_RETURN_ERROR_ON_FAIL(Demo, drainToolRequests_());
+                }
+
+                if (not m_simulation_anchor or m_driver->paused()) {
+                    m_simulation_anchor = now;
+                }
+
+                const bool fresh = m_driver->admitsElapsed();
+                const TimeSpan elapsed = fresh ? now - *m_simulation_anchor : TimeSpan{};
+                PPR_RETURN_ERROR_ON_FAIL(Demo, m_driver->update(elapsed));
+
+                if (const auto deferred = m_driver->takeEditRejection()) {
+                    postNotice_(
+                        "Terrain edit deferred while it would cover material", std::errc::device_or_resource_busy);
+                }
+
+                if (fresh) {
+                    m_simulation_anchor = now;
+                }
+            } else {
+                m_simulation_anchor = now;
+            }
+            return {};
+        }
+
+        [[nodiscard]] std::error_code applySessionDelivery_(
+            const game::SessionDelivery &delivery, bool &edit_rejected) {
+            PPR_RETURN_ERROR_ON_FAIL(
+                Demo, std::visit(
+                          [&](const auto &value) -> std::error_code {
+                              using T = std::remove_cvref_t<decltype(value)>;
+                              if constexpr (std::is_same_v<T, RenderFrameResult>) {
+                                  settleGameFrame_(value);
+                              } else if constexpr (std::is_same_v<T, GridWorldResult>) {
+                                  applyGridWorldResult_(value);
+                              } else if constexpr (std::is_same_v<T, game::SessionColonyIntent>) {
+                                  if (m_driver and
+                                      value.m_world == m_driver->worldGeneration() and
+                                      m_world_frame_presented and
+                                      not m_world_modal) {
+                                      applyIntent_(value.m_intent);
+                                  }
+                              } else if constexpr (std::is_same_v<T, colony::WorkshopIntent>) {
+                                  applyWorkshopIntent_(value, edit_rejected);
+                              } else if constexpr (std::is_same_v<T, game::ui::EUnsavedAction>) {
+                                  applyUnsavedAction_(value);
+                              } else if constexpr (std::is_same_v<T, game::SessionBuildOrder>) {
+                                  applyBuildOrder_(value);
+                              } else if constexpr (std::is_same_v<T, game::SessionDigOrder>) {
+                                  PPR_RETURN_ERROR_ON_FAIL(Demo, applyDigOrder_(value));
+                              } else {
+                                  if (not m_world_job or value.m_job != m_world_job->view().m_id) {
+                                      return {}; // A modal action must not affect a later job.
+                                  }
+
+                                  switch (value.m_action) {
+                                      case game::ui::EWorldAction::retry:
+                                          PPR_RETURN_ERROR_ON_FAIL(Demo, requestWorld_(m_requested_seed));
+                                          break;
+                                      case game::ui::EWorldAction::quit:
+                                          m_close_requested.store(true, std::memory_order_release);
+                                          break;
+                                      case game::ui::EWorldAction::cancel:
+                                          if (m_preview_job) {
+                                              m_world_job->cancel();
+                                          } else {
+                                              m_world_cancel_requested = true;
+                                          }
+                                          break;
+                                      case game::ui::EWorldAction::none: break;
+                                  }
+                              }
+
+                              PPR_RETURN_ERROR_ON_FAIL(Demo, m_input_error);
+                              return {};
+                          },
+                          delivery));
+            return {};
         }
 
         void onGridWorldCompleted_(const GridWorldResult &result) override {
+            retainInputError_(m_session_service.post(result));
+        }
+
+        void applyGridWorldResult_(const GridWorldResult &result) {
             if (m_world_command and
                 m_world_command_waiting and
                 result.m_sequence == m_world_command->m_sequence and
@@ -4242,43 +4903,51 @@ namespace demo {
             if (not m_defer_close.load(std::memory_order_acquire)) {
                 return false;
             }
-            m_close_requested.store(true, std::memory_order_release);
+            m_session_service.requestClose();
             return true;
         }
 
         [[nodiscard]] std::error_code initialize() override {
             PPR_RETURN_ERROR_ON_FAIL(Demo, super_t::initialize());
-            const auto &clock = ITimerClock::steady();
-            if (m_agent_count == 100u) {
-                // Explicit many-agent profiling fixture retains the numeric legacy recipe.
-                m_world_job = std::make_unique<colony::WorldJob>(
-                    parallel::backgroundPool(), colony::WorldJob::legacyFixturePrepare());
-            } else {
-                m_world_job = std::make_unique<colony::WorldJob>(
-                    parallel::backgroundPool(),
-                    [roots = m_worldgen_roots, profile = m_worldgen_profile, &clock](
-                        const colony::ColonyDriverDesc &request, const sim::GenerationExecution &execution,
-                        config::Diagnostics &diagnostics) -> Expected<std::unique_ptr<colony::ColonyDriver>> {
-                        auto prepared = colony::prepareWorld(
-                            roots, profile, request.m_seed, clock, diagnostics, execution);
-                        PPR_RETURN_UNEXPECTED_ON_FAIL(Demo, prepared);
-                        PPR_RETURN_UNEXPECTED_ON_FAIL(Demo, execution.m_context->error());
+            m_owned_device_settled = false;
+            auto rhi_service = getServices().get<IRhiService>();
+            auto shader_service = getServices().get<IShaderService>();
+            PPR_RETURN_ERROR_ON_FAIL(
+                Demo, rhi_service.isValid() and shader_service.isValid()
+                          ? std::error_code{}
+                          : std::make_error_code(std::errc::not_connected));
+            auto request = m_matter_runtime.beginInitialize(
+                renderLane(), rhi_service->getDevice(), *shader_service, getContentDir().path(),
+                m_worldgen_report ? m_observation_clock : nullptr);
+            PPR_RETURN_ERROR_ON_FAIL(Demo, request);
+            m_runtime_request = *request;
+            m_simulation_deadline = TimePoint{};
+            m_simulation_anchor.reset();
 
-                        const asset::RequestGeneration generation{request.m_world_generation};
-                        auto images = colony::ContentPresentationRequest::start(
-                            prepared->catalogOwner(), generation, execution.m_context, diagnostics);
-                        PPR_RETURN_UNEXPECTED_ON_FAIL(Demo, images);
-                        auto ready = images->finish(diagnostics);
-                        PPR_RETURN_UNEXPECTED_ON_FAIL(Demo, ready);
-                        PPR_RETURN_UNEXPECTED_ON_FAIL(
-                            Demo, prepared->attachPresentation(std::move(*ready), generation));
-                        PPR_RETURN_UNEXPECTED_ON_FAIL(Demo, execution.m_context->error());
-                        auto driver = std::make_unique<colony::ColonyDriver>();
-                        PPR_RETURN_UNEXPECTED_ON_FAIL(
-                            Demo, driver->initPrepared(request, std::move(*prepared), &execution));
-                        return driver;
-                    });
-            }
+            const auto &clock = ITimerClock::steady();
+            m_world_job = std::make_unique<colony::WorldJob>(
+                parallel::backgroundPool(),
+                [roots = m_worldgen_roots, profile = m_worldgen_profile, &clock](
+                    const colony::ColonyDriverDesc &request, const sim::GenerationExecution &execution,
+                    config::Diagnostics &diagnostics) -> Expected<std::unique_ptr<colony::ColonyDriver>> {
+                    auto prepared = colony::prepareWorld(roots, profile, request.m_seed, clock, diagnostics, execution);
+                    PPR_RETURN_UNEXPECTED_ON_FAIL(Demo, prepared);
+                    PPR_RETURN_UNEXPECTED_ON_FAIL(Demo, execution.m_context->error());
+
+                    const asset::RequestGeneration generation{request.m_world_generation};
+                    auto images = colony::ContentPresentationRequest::start(
+                        prepared->catalogOwner(), generation, execution.m_context, diagnostics);
+                    PPR_RETURN_UNEXPECTED_ON_FAIL(Demo, images);
+                    auto ready = images->finish(diagnostics);
+                    PPR_RETURN_UNEXPECTED_ON_FAIL(Demo, ready);
+                    PPR_RETURN_UNEXPECTED_ON_FAIL(Demo, prepared->attachPresentation(std::move(*ready), generation));
+                    PPR_RETURN_UNEXPECTED_ON_FAIL(Demo, execution.m_context->error());
+                    auto driver = std::make_unique<colony::ColonyDriver>();
+                    PPR_RETURN_UNEXPECTED_ON_FAIL(
+                        Demo, driver->initPrepared(request, std::move(*prepared), &execution));
+                    return driver;
+                });
+
             m_close_requested.store(false, std::memory_order_release);
             m_defer_close.store(true, std::memory_order_release);
             m_loading_presented = false;
@@ -4874,7 +5543,16 @@ namespace demo {
         void onLaneFrameConsumed_(const RenderFrameResult &result) override {
             ApplicationEditor::onLaneFrameConsumed_(result);
 
-            if (m_workshop_open and m_workshop_game_phase != WorkshopGamePhase::generating) {
+            // Base credit settlement is immediate; game mutation waits for an
+            // exclusive main service, including callbacks pumped by laneSync.
+            retainInputError_(m_session_service.post(result));
+        }
+
+        void settleGameFrame_(const RenderFrameResult &result) {
+
+            if (m_workshop_open and
+                m_workshop_game_phase != WorkshopGamePhase::generating and
+                not m_workshop_finish_pending) {
                 return;
             }
 
@@ -4933,11 +5611,20 @@ namespace demo {
                 if (not m_driver or m_world_modal) {
                     m_loading_presented = true;
                 }
-                if (m_driver and
-                    m_world_published and
-                    not m_initial_presentation and
-                    result.m_grid_stage_applied and
-                    result.m_grid_ack_seed == m_driver->worldGeneration()) {
+                if (m_world_transition.m_phase == game::ESessionWorldPhase::awaiting_presentation) {
+                    const auto step = game::advanceSessionWorldTransition(
+                        m_world_transition, m_driver.get(), nullptr, m_matter_runtime, {.m_frame = &result});
+                    if (not step) {
+                        retainInputError_(step.error());
+                    } else if (*step == game::ESessionWorldStep::finish) {
+                        m_world_frame_presented = true;
+                    }
+                } else if (m_driver and
+                           not m_initial_presentation and
+                           game::hasSessionWorldPresentation(
+                               result, reservationEpoch_(),
+                               {m_world_view.m_id, m_candidate_generation, m_candidate_fingerprint}, m_world_published,
+                               m_candidate_activated, expectedResidentPresentation_())) {
                     m_world_frame_presented = true;
                 }
             }
@@ -5013,6 +5700,41 @@ namespace demo {
             }
         }
 
+        [[nodiscard]] std::error_code applyDigOrder_(const game::SessionDigOrder &order) {
+            if (not m_driver or not m_driver_ready) {
+                return {};
+            }
+
+            const u64 displayed_world = m_world_frame_presented and not m_world_modal ? m_driver->worldGeneration()
+                                                                                      : 0u;
+            const auto accepted = game::applySessionDigOrder(*m_driver, order, displayed_world);
+            if (not accepted and accepted.error() == std::errc::device_or_resource_busy) {
+                PPR_RETURN_ERROR_ON_FAIL(Demo, m_session_service.deferTool(order));
+                return {};
+            }
+
+            PPR_RETURN_ERROR_ON_FAIL(Demo, accepted);
+            if (*accepted) {
+                ++m_dig_issued;
+            }
+            return {};
+        }
+
+        [[nodiscard]] std::error_code drainToolRequests_() {
+            // Accepted click precedes drag cells, with the press-time world tag.
+            if (m_tool.m_accepted_click) {
+                const auto cell = *std::exchange(m_tool.m_accepted_click, std::nullopt);
+                PPR_RETURN_ERROR_ON_FAIL(Demo, applyDigOrder_({m_tool.m_world_generation, {cell, 1u, 1u}}));
+            }
+
+            while (not m_tool.m_drag_queue.empty()) {
+                const auto cell = m_tool.m_drag_queue.front();
+                m_tool.m_drag_queue.erase(m_tool.m_drag_queue.begin());
+                PPR_RETURN_ERROR_ON_FAIL(Demo, applyDigOrder_({m_tool.m_world_generation, {cell, 1u, 1u}}));
+            }
+            return {};
+        }
+
         [[nodiscard]] std::error_code update(const TimeSpan dt) override {
             const auto observation_begin = m_observation_clock->now();
             const auto observation_phase = observationPhase_();
@@ -5026,36 +5748,27 @@ namespace demo {
                     m_last_update_work = elapsed;
                 }
             };
-            if (m_workshop_pending and
-                m_driver and
-                m_driver->captureReady() and
-                not m_world_job->busy() and
-                not m_world_command) {
-                PPR_RETURN_ERROR_ON_FAIL(Demo, openWorkshop_());
-            }
             if (m_workshop_open) {
-                PPR_RETURN_ERROR_ON_FAIL(Demo, advanceWorkshop_());
                 if (m_workshop_open) {
                     refreshControllerViewport_();
                     clearControlInput_();
                     PPR_RETURN_ERROR_ON_FAIL(Demo, super_t::update(dt));
-                    GridPass::GridStagedFrame retained{};
+                    GridStagedFrame retained{};
                     retained.m_retain_content = true;
-                    submitGridStage(std::move(retained));
+                    submitSessionGridStage_(std::move(retained));
                     submitTriangleStage(TrianglePass::TriangleStagedFrame{});
-                    drawWorkshop_();
+                    if (m_workshop_finish_pending) {
+                        drawWorldModal_();
+                    } else {
+                        drawWorkshop_();
+                    }
+
                     if (m_workshop_game_phase == WorkshopGamePhase::generating) {
                         drawWorldModal_();
                     }
 
                     return {};
                 }
-            }
-            PPR_RETURN_ERROR_ON_FAIL(Demo, advanceWorldJob_());
-            PPR_RETURN_ERROR_ON_FAIL(Demo, advanceAcceptance_());
-            if (m_preview_pending and (not m_driver or m_driver->captureReady())) {
-                const auto mode = *std::exchange(m_preview_pending, std::nullopt);
-                PPR_RETURN_ERROR_ON_FAIL(Demo, requestPreview_(mode));
             }
             // Phase: UI observation. Notice countdown + honest inter-frame
             // timing first, so this frame's Performance section reports the
@@ -5080,13 +5793,22 @@ namespace demo {
             refreshControlInput_();
             PPR_RETURN_ERROR_ON_FAIL(Demo, m_input_error);
             if (not m_driver) {
-                GridPass::GridStagedFrame frozen{};
+                GridStagedFrame frozen{};
                 // Close disposes the CPU session on the worker while its last
                 // render bundle remains live. Do not replace its catalog header
                 // with an empty no-world stage during that drain.
                 frozen.m_retain_content = m_capture_access or m_close_requested.load(std::memory_order_acquire);
                 frozen.m_ack_seed = m_capture_generation;
-                submitGridStage(std::move(frozen));
+                submitSessionGridStage_(std::move(frozen));
+                submitTriangleStage(TrianglePass::TriangleStagedFrame{});
+                drawWorldModal_();
+                return {};
+            }
+
+            if (m_world_modal) {
+                GridStagedFrame retained{};
+                retained.m_retain_content = true;
+                submitSessionGridStage_(std::move(retained));
                 submitTriangleStage(TrianglePass::TriangleStagedFrame{});
                 drawWorldModal_();
                 return {};
@@ -5095,82 +5817,26 @@ namespace demo {
             if (m_initial_presentation) {
                 auto stage = m_initial_graphics.stage(getFrameIndex(), *m_driver);
                 PPR_RETURN_ERROR_ON_FAIL(Demo, stage);
-                submitGridStage(std::move(*stage));
+                submitSessionGridStage_(std::move(*stage));
                 submitTriangleStage(TrianglePass::TriangleStagedFrame{});
                 PPR_RETURN_ERROR_ON_FAIL(Demo, pollDisplaySession_(std::chrono::duration<float>(dt).count()));
                 drawWorldModal_();
                 return {};
             }
 
-            // Non-admitted frames never reach update(): the run-level gate
-            // leaves busy frames before the whole virtual stage, and
-            // platform/control was already serviced there. Queued tool intent
-            // and undriven sim state wait for the next admitted frame. Busy
-            // never fails. Sim-time preservation (B2a): skipped dt
-            // accumulated into Application::m_pending_skipped_dt by the
-            // run-level busy branch, so the next admitted frame's update()
-            // receives dt + carry and ColonyDriver::update bounds catch-up
-            // to its existing 5-slice clamp (FixedTimestep defer backlog
-            // carries any remainder).
-
-            // Phase: input/edit. Accepted commands drain in accept order
-            // (click first, then drag cells); pop-then-issue so a failing
-            // command cannot wedge the queue. A same-poll press/release
-            // still digs exactly once; errors stay sticky and abort.
-            if (m_tool.m_accepted_click.has_value()) {
-                const sim::GlobalCellPos cell = *m_tool.m_accepted_click;
-                m_tool.m_accepted_click.reset();
-                if (const std::error_code error = m_driver->requestDig(cell, 1u, 1u)) {
-                    PPR_LOG(
-                        Demo, warning, "tool drain failed",
-                        {
-                            {"x", cell.m_x},
-                            {"y", cell.m_y},
-                            {"error", error.value()},
-                            {"category", error.category().name()},
-                        });
-                    m_input_error = error;
-                    return error;
-                }
-                // Slice 6: one cell issued (only on success, so the
-                // issued-minus-applied estimate never counts rejections).
-                ++m_dig_issued;
-            }
-            while (not m_tool.m_drag_queue.empty()) {
-                const sim::GlobalCellPos cell = m_tool.m_drag_queue.front();
-                m_tool.m_drag_queue.erase(m_tool.m_drag_queue.begin());
-                if (const std::error_code error = m_driver->requestDig(cell, 1u, 1u)) {
-                    PPR_LOG(
-                        Demo, warning, "tool drain failed",
-                        {
-                            {"x", cell.m_x},
-                            {"y", cell.m_y},
-                            {"error", error.value()},
-                            {"category", error.category().name()},
-                        });
-                    m_input_error = error;
-                    return error;
-                }
-                ++m_dig_issued;
-            }
-
-            // Phase: simulate. Paused updates apply the pending tool intent with
-            // zero runSystems; zero-tick frames keep the intent queued for the
-            // next tick.
-            if (not m_world_modal) {
-                PPR_RETURN_ERROR_ON_FAIL(Demo, m_driver->update(dt));
-            }
+            // Presentation consumes committed snapshots. Independent service
+            // owns simulation elapsed time and queued tool admission.
 
             // P0 serial-explicit sim packet: owned copy of tick/epoch/
             // counters/chunks/chunk-cells captured after the tick, consumed
             // by the present + overlay phases below on this same thread. A
             // regeneration or previous present failure makes this a full-refresh packet
             // carrying every resident chunk's cells.
-            if (m_driver->editPending() and not m_driver->editReadyForPresentation()) {
-                GridPass::GridStagedFrame frozen{};
+            if (m_driver->physicsPending() or (m_driver->editPending() and not m_driver->editReadyForPresentation())) {
+                GridStagedFrame frozen{};
                 frozen.m_retain_content = true;
                 frozen.m_ack_seed = m_driver->worldGeneration();
-                submitGridStage(std::move(frozen));
+                submitSessionGridStage_(std::move(frozen));
                 PPR_RETURN_ERROR_ON_FAIL(Demo, pollDisplaySession_(std::chrono::duration<float>(dt).count()));
                 PPR_RETURN_ERROR_ON_FAIL(Demo, drawPanel_({}));
                 return {};
@@ -5194,7 +5860,7 @@ namespace demo {
                 not colony::isSimPacketCoherent(*m_sim_packet, m_driver->tickCount(), m_driver->worldGeneration())) {
                 return std::make_error_code(std::errc::state_not_recoverable);
             }
-            GridPass::GridStagedFrame frame_stage{};
+            GridStagedFrame frame_stage{};
             // Reset intent rides the stage; BuildStagedFrame derives the
             // full-refresh flag and the consumption-ack manifest from the
             // owned packet (seed, chunk ids, edit revisions).
@@ -5206,7 +5872,7 @@ namespace demo {
                 m_present_full_refresh = true;
                 return error;
             }
-            submitGridStage(std::move(frame_stage));
+            submitSessionGridStage_(std::move(frame_stage));
 
             // Phase: overlay + panel. Hover resolves first so the preview
             // outline, status line, and Inspector all describe the cell a
@@ -5234,32 +5900,188 @@ namespace demo {
             return {};
         }
 
+        [[nodiscard]] GpuQuiescenceResult settleOwnedDeviceWorkBeforeTeardown_() override {
+            if (m_owned_device_settled) {
+                return {.m_disposition = GpuQuiescence::kIdleProven};
+            }
+
+            std::error_code first{};
+            m_simulation_deadline.reset();
+            m_session_service.stopControls();
+            if (m_driver)
+                m_driver->setMatterSubmissionObserverForTest(nullptr);
+            if (m_retiring_driver)
+                m_retiring_driver->setMatterSubmissionObserverForTest(nullptr);
+            if (m_world_job and m_world_job->preparedDriver())
+                m_world_job->preparedDriver()->setMatterSubmissionObserverForTest(nullptr);
+
+            m_workshop_game_particles.reset();
+            m_defer_close.store(false, std::memory_order_release);
+
+            const auto wait = [&] { PPR_RETAIN_ERROR_ON_FAIL(Demo, first, collectOwnedDeviceWait_()); };
+
+            if (m_runtime_request) {
+                for (;;) {
+                    auto completion = m_matter_runtime.advance(*m_runtime_request);
+                    if (not completion) {
+                        return {.m_disposition = GpuQuiescence::kUnknown, .m_error = completion.error()};
+                    }
+
+                    if (*completion) {
+                        if (not (**completion).m_execution.m_ran) {
+                            return {
+                                .m_disposition = GpuQuiescence::kUnknown,
+                                .m_error = std::make_error_code(std::errc::operation_canceled)};
+                        }
+
+                        m_runtime_request.reset();
+                        PPR_RETAIN_ERROR_ON_FAIL(Demo, first, (**completion).m_execution.m_operation_error);
+                        PPR_RETAIN_ERROR_ON_FAIL(Demo, first, (**completion).m_execution.m_transport_error);
+                        break;
+                    }
+
+                    wait();
+                }
+            }
+
+            const auto detach = [&](colony::ColonyDriver *const driver) -> std::error_code {
+                if (not driver) {
+                    return {};
+                }
+
+                for (;;) {
+                    auto detached = driver->advanceTerminalDetachMatter(first);
+                    PPR_RETURN_ERROR_ON_FAIL(Demo, detached);
+                    if (*detached) {
+                        return {};
+                    }
+
+                    wait();
+                }
+            };
+
+            // Each owner remains alive on main until its exact callback has
+            // acknowledged and any irreversible publication has settled.
+            std::error_code detach_error{};
+            PPR_RETAIN_ERROR_ON_FAIL(Demo, detach_error, detach(m_driver.get()));
+            PPR_RETAIN_ERROR_ON_FAIL(Demo, detach_error, detach(m_retiring_driver.get()));
+            if (m_world_job) {
+                PPR_RETAIN_ERROR_ON_FAIL(Demo, detach_error, detach(m_world_job->preparedDriver()));
+            }
+
+            if (detach_error) {
+                return {.m_disposition = GpuQuiescence::kUnknown, .m_error = first ? first : detach_error};
+            }
+
+            auto request = m_matter_runtime.beginShutdown();
+            if (not request) {
+                return {.m_disposition = GpuQuiescence::kUnknown, .m_error = first ? first : request.error()};
+            }
+
+            for (;;) {
+                auto completion = m_matter_runtime.advance(*request);
+                if (not completion) {
+                    return {.m_disposition = GpuQuiescence::kUnknown, .m_error = first ? first : completion.error()};
+                }
+
+                if (*completion) {
+                    const auto &execution = (**completion).m_execution;
+                    if (not execution.m_ran or execution.m_operation_error) {
+                        return {
+                            .m_disposition = GpuQuiescence::kUnknown,
+                            .m_error = first ? first
+                                       : execution.m_operation_error
+                                           ? execution.m_operation_error
+                                           : std::make_error_code(std::errc::operation_canceled)};
+                    }
+
+                    PPR_RETAIN_ERROR_ON_FAIL(Demo, first, execution.m_transport_error);
+                    break;
+                }
+
+                wait();
+            }
+
+            if (m_world_job) {
+                m_world_job->holdPreparedDeviceOwner(false);
+            }
+
+            m_owned_device_settled = true;
+            return {.m_disposition = GpuQuiescence::kIdleProven, .m_error = first};
+        }
+
         [[nodiscard]] std::error_code shutdown() override {
             std::error_code first_error{};
-            m_defer_close.store(false, std::memory_order_release);
-            if (m_workshop) {
-                PPR_RETAIN_ERROR_ON_FAIL(Demo, first_error, m_workshop->shutdown());
+            // Direct and partial-initialization shutdown shares the same proof
+            // boundary as normal finishRun and exception cleanup.
+            const auto owned = settleOwnedDeviceWorkBeforeTeardown_();
+            if (owned.m_disposition == GpuQuiescence::kUnknown) {
+                failStopOnUnknownGpuTeardown_(owned.m_error);
             }
-            // Ordinary close has already drained in the normal loop. This
-            // synchronous fallback is reserved for bootstrap/terminal failure.
+
+            PPR_RETAIN_ERROR_ON_FAIL(Demo, first_error, owned.m_error);
+
+            // Retain all CPU presentation/header owners while outstanding
+            // device controls and frames establish their real completion.
             if (m_world_job) {
-                PPR_RETAIN_ERROR_ON_FAIL(Demo, first_error, m_world_job->shutdown());
-                m_world_job.reset();
+                m_world_job->cancel();
             }
-            // Establish GPU quiescence before driver shutdown:
-            // an UNKNOWN disposition fail-stops in super_t::shutdown() before
-            // any further release.
+            if (m_workshop) {
+                m_workshop->cancel();
+            }
+
             const auto quiescence_error = prepareGpuTeardown_();
             if (gpuTeardownDisposition() == GpuQuiescence::kUnknown) {
                 failStopOnUnknownGpuTeardown_(quiescence_error);
             }
             PPR_RETAIN_ERROR_ON_FAIL(Demo, first_error, quiescence_error);
+
+            // The lane is now stopped/drained. Finite owned acknowledgments
+            // no longer drive gameplay during terminal cleanup; base credit
+            // settlement already occurred in their receiver hook.
+            if (auto batch = m_session_service.beginService()) {
+                PPR_DEFER {
+                    m_session_service.endService();
+                };
+                batch->m_deliveries.clear();
+            }
+
+            PPR_RETAIN_ERROR_ON_FAIL(Demo, first_error, m_session_service.close());
+            m_retained_deliveries.clear();
+            m_delivery_cursor = 0u;
+            m_world_command.reset();
+            m_world_result.reset();
+            if (m_workshop) {
+                PPR_RETAIN_ERROR_ON_FAIL(Demo, first_error, m_workshop->shutdown());
+            }
+
+            // Every transferred driver is detached, and no header command can
+            // still borrow the coordinator's catalog/presentation storage.
+            if (m_world_job) {
+                PPR_RETAIN_ERROR_ON_FAIL(Demo, first_error, m_world_job->shutdown());
+                m_world_job.reset();
+            }
+
+            if (m_retiring_driver) {
+                PPR_RETAIN_ERROR_ON_FAIL(Demo, first_error, m_retiring_driver->shutdown());
+                m_retiring_driver.reset();
+            }
+
             try {
                 reportWorldgenObservations_();
             } catch (...) {
                 // A reporting failure must not skip independent resource cleanup.
                 PPR_RETAIN_ERROR_ON_FAIL(Demo, first_error, currentException_());
             }
+
+            try {
+                PPR_RETAIN_ERROR_ON_FAIL(Demo, first_error, writeMatterInputs_());
+            } catch (...) {
+                // Best-effort diagnostic export preserves the original failure
+                // and independent cleanup; allocation remains fatal at this boundary.
+                PPR_RETAIN_ERROR_ON_FAIL(Demo, first_error, currentException_());
+            }
+
             // Detach the tool gesture first: cancel ownership so the camera
             // mapping below never observes a half-torn suppressor, drop the
             // focus subscription, then drop the higher-priority tool mapping
@@ -5377,10 +6199,6 @@ int runGame(const int argc, char *argv[]) try {
         std::cerr << "[worldgen] " << error.message() << '\n' << diagnostics.format();
         return pP::config::kExitInvalidUsage;
     }
-    // Optional larger workload for external profiler captures.
-    if (settings.m_profile100) {
-        app.setAgentCount(100u);
-    }
     if (settings.m_exit_after.has_value()) {
         app.setAutoExitSeconds(pP::TimeDuration{*settings.m_exit_after});
     }
@@ -5415,3 +6233,4 @@ int runGame(const int argc, char *argv[]) try {
 } catch (const std::bad_alloc &) {
     pP::hal::fatalExit("out-of-memory");
 }
+
