@@ -104,7 +104,7 @@ export namespace pP::asset {
             context::CancelFunc m_cancel{};
 
             // external execution dependency and capture settlement:
-            safe_ptr<ParallelScheduler> m_pool{};
+            ParallelScheduler *m_pool{};
             WaitGroup m_group{};
 
             // retained reporting state:

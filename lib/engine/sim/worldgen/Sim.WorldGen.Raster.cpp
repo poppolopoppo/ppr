@@ -1012,7 +1012,7 @@ namespace pP::sim {
             u64 *const known_scratch_peak) {
             std::atomic<u32> active{}, peak{};
             WaitGroup wg{};
-            ParallelScheduler *const scheduler = execution.m_scheduler.get();
+            ParallelScheduler *const scheduler = execution.m_scheduler;
             const bool parallel = scheduler != nullptr and not scheduler->isWorkerThread();
             Array<std::future<std::error_code>> pending;
             if (parallel) {

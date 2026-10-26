@@ -72,8 +72,7 @@ namespace pP {
         const std::size_t queue_bytes = alignForward(queue_bytes_per_worker, hal::page_granularity);
 
         for (const u32 worker_index: std::views::iota(0u, checked_cast<u32>(num_workers))) {
-            m_workers[worker_index] = std::make_unique<WorkerState_>(
-                safe_ptr<const ParallelScheduler>(this), worker_index, queue_bytes);
+            m_workers[worker_index] = std::make_unique<WorkerState_>(this, worker_index, queue_bytes);
         }
 
         PPR_LOG(
@@ -141,9 +140,9 @@ namespace pP {
     }
 
     ParallelScheduler::WorkerState_::WorkerState_( // NOLINT(*-pro-type-member-init)
-        safe_ptr<const ParallelScheduler> owner, const std::size_t index, const std::size_t capacity_bytes)
+        const ParallelScheduler *owner, const std::size_t index, const std::size_t capacity_bytes)
         : m_tasks_queued(std::bit_ceil(capacity_bytes)), m_lifecycle(owner->m_lifecycle),
-          m_index(checked_cast<u32>(index)), m_owner(std::move(owner)), m_signal(*m_lifecycle, m_tasks_queued),
+          m_index(checked_cast<u32>(index)), m_owner(owner), m_signal(*m_lifecycle, m_tasks_queued),
           m_thread(&WorkerState_::workerLoop, this) {
     }
 

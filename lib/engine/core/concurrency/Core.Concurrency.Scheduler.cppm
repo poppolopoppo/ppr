@@ -23,7 +23,7 @@ export namespace pP {
     // multi-tasking scheduler for fixed-size pool of parallel workers
     // ------------------------------------------------------------------
 
-    class ParallelScheduler final : public safe_object {
+    class ParallelScheduler final {
         template<typename TaskF>
         using task_result_t = std::invoke_result_t<std::decay_t<TaskF> &, const IContext &>;
 
@@ -129,7 +129,20 @@ export namespace pP {
                 return m_promise.get_future();
             }
 
-            void operator()(const IContext &context);
+            void operator()(const IContext &context) {
+                try {
+                    if constexpr (std::is_void_v<value_type>) {
+                        std::invoke(m_work, context);
+                        m_promise.set_value();
+                    } else {
+                        m_promise.set_value(std::invoke(m_work, context));
+                    }
+
+                } catch (...) {
+                    m_promise.set_exception(std::current_exception());
+                    throw; // preserve safety-net + WaitGroup::done(err)
+                }
+            }
         };
 
         /// Internal state of each worker with task queue and std::thread
@@ -140,12 +153,12 @@ export namespace pP {
             std::atomic<u32> m_num_outstanding{0u};
             const u32 m_index;
 
-            const safe_ptr<const ParallelScheduler> m_owner;
+            const ParallelScheduler *m_owner;
             // Keep close notifications valid after workerLoop exits; join precedes signal/source destruction.
             Signal<IContext, RawChannel> m_signal;
             std::jthread m_thread;
 
-            WorkerState_(safe_ptr<const ParallelScheduler> owner, std::size_t index, std::size_t capacity_bytes);
+            WorkerState_(const ParallelScheduler *owner, std::size_t index, std::size_t capacity_bytes);
 
             void workerLoop() noexcept;
         };
@@ -303,22 +316,6 @@ export namespace pP {
             err = dispatchWork_(*m_workers[worker_indices.second], std::forward<TaskF>(work), std::move(wg), policy);
         }
         return err;
-    }
-
-    template<typename TaskF>
-    void ParallelScheduler::TaskPromise_<TaskF>::operator()(const IContext &context) {
-        try {
-            if constexpr (std::is_void_v<value_type>) {
-                std::invoke(m_work, context);
-                m_promise.set_value();
-            } else {
-                m_promise.set_value(std::invoke(m_work, context));
-            }
-
-        } catch (...) {
-            m_promise.set_exception(std::current_exception());
-            throw; // preserve safety-net + WaitGroup::done(err)
-        }
     }
 
     template<typename TaskF>
