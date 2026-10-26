@@ -34,6 +34,12 @@ through owned simulation packets; the sim module itself has no renderer or scrip
 
 ## Design
 
+`:particles` keeps static seed validation separate from moving-record admission.
+`validateMovingMatterParticles`/`MatterParticleState::restoreMoving` preserve IDs,
+catalog phase and physical-ledger checks while allowing overlapping current cells,
+detached terrain solids with their original material ID, and closed upper world
+endpoints assigned to the final presentation chunk without moving the particle.
+
 - Partitioned umbrella: `Sim.cppm` re-exports `:chunk_grid`, `:ecs`, `:footprint`, `:snapshot`, `:tick`, `:worldgen`, and `:particles` (snapshot before tick per Sim.cppm:5-10).
 - `:chunk_grid` holds the geometry vocabulary (`kChunkEdge`=128, `kChunksPerEdge`=32,
   `kWorldEdge`=4096, `kChunkCount`=1024, `kCellsPerChunk`=16384), the `GlobalCellPos`/`ChunkPos`/

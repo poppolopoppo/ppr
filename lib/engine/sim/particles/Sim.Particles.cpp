@@ -168,9 +168,9 @@ namespace pP::sim {
     // validation
     // ------------------------------------------------------------------
 
-    std::error_code validateMatterParticles(
+    static std::error_code validateParticleRecords(
         const MatterParticleSnapshot &snapshot, const std::span<const GenerationMaterial> materials,
-        const double cell_size, const SharedContext &context, const double reference_thickness) {
+        const double cell_size, const SharedContext &context, const double reference_thickness, const bool moving) {
         PPR_RETURN_ERROR_ON_FAIL(MatterParticles, canceled(context));
         if (not positive(cell_size) or
             not positive(reference_thickness) or
@@ -205,14 +205,14 @@ namespace pP::sim {
                 if (particle.m_id == 0u or
                     particle.m_id >= snapshot.m_next_id or
                     definition == nullptr or
-                    definition->m_terrain or
+                    (definition->m_terrain and (not moving or particle.m_phase != EGenerationMatter::solid)) or
                     definition->m_matter != particle.m_phase or
                     not std::isfinite(particle.m_x_m) or
                     not std::isfinite(particle.m_y_m) or
                     particle.m_x_m < 0.0 or
                     particle.m_y_m < 0.0 or
-                    particle.m_x_m >= kWorldEdge * cell_size or
-                    particle.m_y_m >= kWorldEdge * cell_size or
+                    (moving ? particle.m_x_m > kWorldEdge * cell_size : particle.m_x_m >= kWorldEdge * cell_size) or
+                    (moving ? particle.m_y_m > kWorldEdge * cell_size : particle.m_y_m >= kWorldEdge * cell_size) or
                     not positive(particle.m_volume_m3) or
                     particle.m_volume_m3 > cell_size * cell_size * reference_thickness * 1.001 or
                     not positive(particle.m_mass_kg) or
@@ -224,7 +224,8 @@ namespace pP::sim {
                 }
 
                 const GlobalCellPos cell{
-                    static_cast<u32>(particle.m_x_m / cell_size), static_cast<u32>(particle.m_y_m / cell_size)};
+                    std::min(static_cast<u32>(particle.m_x_m / cell_size), kWorldEdge - 1u),
+                    std::min(static_cast<u32>(particle.m_y_m / cell_size), kWorldEdge - 1u)};
                 if (chunkOf(cell) != batch.m_position or
                     std::abs(particle.m_mass_kg - particle.m_volume_m3 * particle.m_bulk_density_kg_m3) >
                         1.0e-9 * (std::max) (1.0, particle.m_mass_kg)) {
@@ -232,17 +233,42 @@ namespace pP::sim {
                 }
 
                 ids.push_back(particle.m_id);
-                cells.push_back(cell.m_y * kWorldEdge + cell.m_x);
+                if (not moving) {
+                    cells.push_back(cell.m_y * kWorldEdge + cell.m_x);
+                }
             }
         }
 
         std::ranges::sort(ids);
-        std::ranges::sort(cells);
-        if (std::ranges::adjacent_find(ids) != ids.end() or std::ranges::adjacent_find(cells) != cells.end()) {
+        if (not moving) {
+            std::ranges::sort(cells);
+        }
+
+        if (std::ranges::adjacent_find(ids) != ids.end() or
+            (not moving and std::ranges::adjacent_find(cells) != cells.end())) {
             PPR_RETURN_ERROR_ON_FAIL(MatterParticles, std::errc::invalid_argument);
         }
         return {};
     }
+
+    std::error_code validateMatterParticles(
+        const MatterParticleSnapshot &snapshot, const std::span<const GenerationMaterial> materials,
+        const double cell_size, const SharedContext &context, const double reference_thickness) {
+        PPR_RETURN_ERROR_ON_FAIL(
+            MatterParticles,
+            validateParticleRecords(snapshot, materials, cell_size, context, reference_thickness, false));
+        return {};
+    }
+
+    std::error_code validateMovingMatterParticles(
+        const MatterParticleSnapshot &snapshot, const std::span<const GenerationMaterial> materials,
+        const double cell_size, const SharedContext &context, const double reference_thickness) {
+        PPR_RETURN_ERROR_ON_FAIL(
+            MatterParticles,
+            validateParticleRecords(snapshot, materials, cell_size, context, reference_thickness, true));
+        return {};
+    }
+
     // ------------------------------------------------------------------
     // particle state
     // ------------------------------------------------------------------
@@ -274,6 +300,26 @@ namespace pP::sim {
         }
         return result;
     }
+
+    std::error_code MatterParticleState::restoreMoving(
+        const MatterParticleSnapshot &snapshot, const std::span<const GenerationMaterial> materials,
+        const double cell_size, const double thickness) {
+        PPR_RETURN_ERROR_ON_FAIL(
+            MatterParticles, validateMovingMatterParticles(snapshot, materials, cell_size, nullptr, thickness));
+
+        std::array<std::shared_ptr<const Array<MatterParticle>>, kChunkCount> chunks{};
+        u32 count{};
+        for (const auto &batch: snapshot.m_chunks) {
+            chunks[chunkIndexOf(batch.m_position)] = batch.m_particles;
+            count += static_cast<u32>(batch.records().size());
+        }
+
+        m_chunks.swap(chunks);
+        m_count = count;
+        m_next_id = snapshot.m_next_id;
+        return {};
+    }
+
     std::span<const MatterParticle> MatterParticleState::chunk(const ChunkPos position) const noexcept {
         const auto &batch = m_chunks[chunkIndexOf(position)];
         return batch ? std::span<const MatterParticle>{batch->data(), batch->size()}
@@ -313,7 +359,9 @@ namespace pP::sim {
             for (i32 dy = -1; dy <= 1; ++dy) {
                 for (i32 dx = -1; dx <= 1; ++dx) {
                     const i32 x = static_cast<i32>(position.m_x) + dx, y = static_cast<i32>(position.m_y) + dy;
-                    if (x >= 0 and y >= 0 and static_cast<u32>(x) < kChunksPerEdge and
+                    if (x >= 0 and
+                        y >= 0 and
+                        static_cast<u32>(x) < kChunksPerEdge and
                         static_cast<u32>(y) < kChunksPerEdge) {
                         affected.set(static_cast<u32>(y) * kChunksPerEdge + static_cast<u32>(x));
                     }

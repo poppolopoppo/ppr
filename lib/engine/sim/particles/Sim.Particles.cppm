@@ -49,6 +49,12 @@ export namespace pP::sim {
         const MatterParticleSnapshot &snapshot, std::span<const GenerationMaterial> materials, double cell_size_m,
         const SharedContext &context = nullptr, double reference_thickness_m = 1.0);
 
+    /// Moving state permits overlapping cells, detached terrain solids and the
+    /// closed upper world endpoint. Physical inventory and IDs remain checked.
+    [[nodiscard]] std::error_code validateMovingMatterParticles(
+        const MatterParticleSnapshot &snapshot, std::span<const GenerationMaterial> materials, double cell_size_m,
+        const SharedContext &context = nullptr, double reference_thickness_m = 1.0);
+
     // ------------------------------------------------------------------
     // particle state
     // ------------------------------------------------------------------
@@ -63,6 +69,9 @@ export namespace pP::sim {
             const MatterParticleSnapshot &snapshot, std::span<const GenerationMaterial> materials, double cell_size_m,
             const SharedContext &context = nullptr, double reference_thickness_m = 1.0);
         [[nodiscard]] MatterParticleSnapshot capture() const;
+        [[nodiscard]] std::error_code restoreMoving(
+            const MatterParticleSnapshot &snapshot, std::span<const GenerationMaterial> materials, double cell_size_m,
+            double reference_thickness_m);
         [[nodiscard]] std::span<const MatterParticle> chunk(ChunkPos position) const noexcept;
         [[nodiscard]] u32 count() const noexcept;
         // The live grid is original; captured chunks contain the complete edit
