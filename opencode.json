@@ -17,6 +17,28 @@
       "options": {
         "setCacheKey": true
       }
+    },
+    "zen-proxy": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Zen Proxy (local)",
+      "options": {
+        "baseURL": "http://127.0.0.1:8787/v1",
+        "apiKey": "public"
+      },
+      "models": {
+        "big-pickle": {
+          "name": "Big Pickle (Free)"
+        },
+        "mimo-v2.5-free": {
+          "name": "MiMo v2.5 Free"
+        },
+        "deepseek-v4.1-flash-free": {
+          "name": "DeepSeek 4.1 Flash"
+        },
+        "glm-5.3-flash-free": {
+          "name": "GLM 5.3 Free"
+        }
+      }
     }
   },
   "skills": [

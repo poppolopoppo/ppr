@@ -13,6 +13,12 @@ must be verified separately. The upstream
 and setup details. Discover the installed tool schemas before calling them;
 the connected executable may differ from upstream or the repository pin.
 
+For a new capture workflow, read the
+[execution-tools runbook](../../../docs/debugging/execution-tools.md) first.
+It records the October 2026 PID-discovery/deadline failures and distinguishes
+verified capture evidence from server readiness. Do not repeat an expensive
+workload merely to rediscover a known orchestration failure.
+
 Coverage policy lives in [AGENTS.md](../../../AGENTS.md#runtime-cost); the
 [profiling guide](../../../docs/profiling.md) explains HAL scope placement and
 interpretation. HAL helpers emit CPU events from inside the target process.
@@ -92,9 +98,20 @@ reported by status does not identify the connected MCP server binary.
    optional callstack collection using documented controls, including presets or
    overrides only when exposed. Inspect reported effective settings.
    Enable GPU timings only when needed. PIX events are independent of sampling.
-   The tool-call timeout must cover capture duration plus the documented 30-second
-   server margin and transport overhead. If the client cannot accommodate that,
-   choose a meaningful shorter trace; do not assume a global config change.
+   The tool-call timeout must exceed capture duration plus attachment,
+   finalization and response overhead. Verify any server-specific margin in the
+   deployed version; do not assume a fixed 30s margin. In Codex inspect the
+   effective `mcp_servers.<name>.tool_timeout_sec` (default 60s). A 60-65s capture
+   cannot reliably finish through a 60s deadline; 120s is an example client
+   allowance, not an engine/test timeout change. If configuration changes are
+   outside the task, choose a meaningful shorter capture and report the limit.
+
+Process discovery must parse complete structured output with explicit zero,
+single and multiple-match handling. Never strip the leading array bracket by
+slicing JSON from its first opening brace, or suppress parse errors. Retain PID
+creation time and discovery failures; a missing parsed PID is not proof the
+application was never running. Shell helpers must return while the workload is
+still live; a buffered launch response is not a reliable attachment trigger.
 
 Some installed versions expose only `process_id`, `duration_ms`, and
 `output_path`, with no effective settings in the result. That schema cannot
@@ -148,6 +165,11 @@ the error, capture path, and effective request. A transport/response error may
 follow successful capture creation; a nonempty file does not prove analysis.
 Distinguish capture creation, client response delivery, and successful inspection.
 Avoid blind retries, repeated UAC prompts, or terminating unrelated processes.
+Client timeout/cancellation is not proof that pixtool or the target terminated.
+Any required process bound needs an enforceable watchdog and owned-process
+cleanup, not merely a timeout written in the plan. Validate success by inspecting
+the requested process/phase evidence. Nonempty files and `clipped=0` on paired
+intervals do not establish that an earlier long phase was captured.
 
 For suspected client compatibility, inspect the actual response shape and compare
 against the pinned official release in an isolated location with a verified

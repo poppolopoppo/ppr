@@ -28,6 +28,12 @@ Use subagents within the current chat. Set model and effort through the delegati
 
 ## Validation and review
 
+- For native execution diagnosis, load the repository's
+  [execution-tools guidance](../../../docs/debugging/execution-tools.md) and the
+  selected debugger/profiler skill before delegating a reproduction. Verify
+  target control or capture evidence separately from server connectivity; use
+  the documented native MCP route before an unproven terminal fallback.
+
 - Keep builds serialized under one execution owner. Follow the project's test and profiling exclusions; avoid competing workloads when collecting timings.
 - Before expensive runs, establish the applicable commands, targets, filters, repetition count, runtime environment, and timeout strategy. Escalate unresolved infrastructure problems to the coordinator with the command, error, and attempted remedies.
 - Reuse passed checks until changes invalidate them. Follow the accepted scope for profiling and benchmarking. Performance comparisons require compatible workloads, configurations, and known binary/source provenance; qualify weaker evidence.

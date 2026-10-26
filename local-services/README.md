@@ -67,6 +67,11 @@ Get-Content .\local-services\runtime-report.txt
 
 ## Official WinDbg MCP (host-native)
 
+For actual launch/target-control and capture preflight, use the
+[execution-tools runbook](../docs/debugging/execution-tools.md). Installation,
+proxy registration and `--help` checks do not establish usable debugger stacks
+or complete profiling evidence.
+
 WinDbg 1.2610.1001.0 or newer includes the MCP service and stdio proxy. The
 `WinDbg` registration in `opencode.json` invokes the installed app alias
 `DbgX.Mcp.Proxy.exe` directly with no arguments. Codex uses the same proxy.
@@ -97,6 +102,11 @@ Leave debugger protections unchanged unless an authorized operator decides other
 - Follow the [PIX profiling skill](../.opencode/skills/pix-profiling/SKILL.md) for capture setup, elevation verification, and response-error triage.
 - Named CPU scopes can also be inspected without UI through the [read-only timing-query procedure and helper](../.opencode/skills/pix-profiling/references/timing-queries.md), using the trusted installed `PixStorage.dll`. Preserve the original capture; marker JSON does not reconstruct sampled callstacks.
 - opencode (`opencode.json`, native V2 shape): `{"mcp":{"servers":{"pix-mcp":{"type":"local","command":["local-services/pix/pix-mcp.exe"],"disabled":false,"timeout":{"catalog":60000,"execution":60000}}}}}`.
+- The 60000ms execution setting above is a connection configuration example, not
+  enough allowance for a 60-65s timing capture. Check the actual client's effective
+  tool deadline and budget attachment/finalization/response overhead. Codex uses
+  `mcp_servers.<name>.tool_timeout_sec`; longer tool allowance does not change an
+  engine or CTest timeout. Do not assume a timed-out client stopped pixtool.
 - Artifacts (never commit, gitignored): `local-services/pix/pix-mcp.exe`, `local-services/pix/*.zip`, `local-services/pix/_staging/`, `local-services/pix/captures/`.
 
 ## OpenCode environment
