@@ -101,11 +101,11 @@ Texture2D<float4> g_backdrop;
 struct ParticleGpu {
     float2 m_position;
     float m_radius_m;
-    float m_fill;
     uint m_material_id;
-    uint m_phase;
-    uint2 m_owner;
+    float4 m_color;
 };
+Texture2D<float4> g_particle_mask;
+SamplerState g_particle_mask_sampler;
 StructuredBuffer<ParticleGpu> g_particles;
 struct DiagnosticColor {
     uint m_color_rgba;
@@ -868,76 +868,69 @@ float4 fragmentGridMain(
 }
 
 struct ParticleVertexOutput {
-    float4 position : SV_Position;
-    float2 fine_position : TEXCOORD0;
-    nointerpolation uint material : TEXCOORD1;
-    nointerpolation float fill : TEXCOORD2;
-    nointerpolation uint2 owner : TEXCOORD3;
+    float4 position:SV_Position;
+    float2 fine_position:TEXCOORD0;
+    float2 uv:TEXCOORD1;
+    nointerpolation uint material:TEXCOORD2;
+    nointerpolation float4 color:COLOR0;
 };
 
-[shader("vertex")]
-ParticleVertexOutput vertexParticleMain(uint vertex : SV_VertexID, uint instance : SV_InstanceID) {
-    static const float2 corners[6] = {float2(-0.5,-0.5), float2(0.5,-0.5), float2(0.5,0.5),
-        float2(-0.5,-0.5), float2(0.5,0.5), float2(-0.5,0.5)};
-    ParticleGpu particle = g_particles[instance];
-    float2 owner_center = (float2(particle.m_owner) + 0.5) * g_grid_frame.m_cell_size_m;
-    // Conservative source-volume support: translate with the continuous center
-    // and expand to cover its unique owner region. Clipping cannot discard mass
-    // when a restored center approaches an owner edge. Radius is physical 2D
-    // sqrt(volume/thickness/pi); the cell proxy also covers contour-cut volumes.
-    float2 half_extent = max(float2(particle.m_radius_m),
-        0.5 * g_grid_frame.m_cell_size_m + abs(particle.m_position - owner_center));
-    float2 world = particle.m_position + corners[vertex] * (2.0 * half_extent);
+ParticleVertexOutput particleVertex(uint vertex,uint instance) {
+    static const float2 corners[6]={float2(-1,-1),float2(1,-1),float2(1,1),
+        float2(-1,-1),float2(1,1),float2(-1,1)};
+    ParticleGpu particle=g_particles[instance];
+    float3 right=normalize(mul(float4(1,0,0,0),g_grid_frame.m_inverse_view_projection).xyz);
+    float3 up=normalize(mul(float4(0,1,0,0),g_grid_frame.m_inverse_view_projection).xyz);
+    // The mask's disk radius is62 texels in a128-square texture. Its two-texel
+    // transparent border extends support without changing the physical radius.
+    float halfExtent=particle.m_radius_m*(64.0/62.0);
+    float3 world=float3(particle.m_position,0)+(right*corners[vertex].x+up*corners[vertex].y)*halfExtent;
     ParticleVertexOutput output;
-    output.position = mul(float4(world, 0.0, 1.0), g_grid_frame.m_view_projection);
-    output.fine_position = world / g_grid_frame.m_cell_size_m;
-    output.material = particle.m_material_id;
-    output.fill = particle.m_fill;
-    output.owner = particle.m_owner;
+    output.position=mul(float4(world,1),g_grid_frame.m_view_projection);
+    output.fine_position=world.xy/g_grid_frame.m_cell_size_m;
+    output.uv=corners[vertex]*0.5+0.5;
+    output.material=particle.m_material_id;
+    output.color=particle.m_color;
     return output;
+}
+
+StructuredBuffer<uint> g_particle_ids;
+
+[shader("vertex")]
+ParticleVertexOutput vertexParticleIndirectMain(uint vertex:SV_VertexID,uint instance:SV_InstanceID) {
+    return particleVertex(vertex,g_particle_ids[instance]);
 }
 
 [shader("fragment")]
 float4 fragmentParticleMain(ParticleVertexOutput input,
     uniform StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
-    uniform SamplerState.Handle g_sampler) : SV_Target {
-    float2 world_pixel_x = ddx(input.fine_position);
-    float2 world_pixel_y = ddy(input.fine_position);
-    float2 contour = input.fine_position;
-    if ((g_grid_frame.m_surface_mode & 3u) == 3u) {
-        contour += boundaryDisplacement(input.fine_position, world_pixel_x, world_pixel_y, g_sampler);
+    uniform SamplerState.Handle g_sampler):SV_Target {
+    // Actual alpha texture, with filtered mip levels. No analytic circle mask.
+    float alpha=g_particle_mask.Sample(g_particle_mask_sampler,input.uv).a;
+    if (alpha==0) discard;
+
+    float2 contour=input.fine_position;
+    float2 world_pixel_x=ddx(contour),world_pixel_y=ddy(contour);
+    if ((g_grid_frame.m_surface_mode&3u)==3u) {
+        contour+=boundaryDisplacement(input.fine_position,world_pixel_x,world_pixel_y,g_sampler);
     }
-    float2 pixel_x = ddx(contour), pixel_y = ddy(contour);
-    float width = clamp(length(fwidth(contour)), 1.0e-6, 1.0);
-    float2 gradient_x = clamp(world_pixel_x * g_grid_frame.m_cell_size_m, -2048.0, 2048.0);
-    float2 gradient_y = clamp(world_pixel_y * g_grid_frame.m_cell_size_m, -2048.0, 2048.0);
-    // Half-open ownership eliminates double opacity at every world/chunk seam.
-    // Expanded continuous support conserves each source record's owner volume.
-    if (any(input.fine_position < float2(input.owner)) || any(input.fine_position >= float2(input.owner + 1u))) { discard; }
-    float coverage = 0.0, outline = 0.0;
-    int2 sample = int2(input.owner);
-    TerrainStencil stencil = terrainStencil(contour);
-    uint terrain = contourMaterial(contour, pixel_x, pixel_y, width, stencil, coverage, sample, outline);
-    // The terrain draw already owns fully covered pixels. Do not shade hidden
-    // particle material or reconstruct a terrain surface a second time here.
-    if (coverage == 1.0) { discard; }
-    float3 background = g_grid_frame.m_has_background != 0u ? backdropColor(input.position.xy, g_sampler) : float3(0.0);
-    float4 particle = materialSurface(input.material, input.fine_position, gradient_x, gradient_y,
-        input.position.xy, float2(0.0), true, background, g_textures, g_sampler);
-    float fill = saturate(input.fill);
-    if (g_grid_frame.m_has_background == 0u) {
-        return float4(particle.rgb, particle.a * fill * (1.0 - coverage));
+
+    float2 pixel_x=ddx(contour),pixel_y=ddy(contour);
+    float width=clamp(length(fwidth(contour)),1.0e-6,1.0);
+    float coverage=0,outline=0;
+    int2 sample=int2(floor(contour));
+    if ((g_grid_frame.m_surface_mode&1u)!=0u) {
+        TerrainStencil stencil=terrainStencil(contour);
+        contourMaterial(contour,pixel_x,pixel_y,width,stencil,coverage,sample,outline);
+    } else {
+        uint terrain=terrainSample(sample);
+        coverage=terrain!=0u && terrain!=0xffffu ? 1.0 : 0.0;
     }
-    float3 color = lerp(background, particle.rgb, fill);
-    float2 decoration = contourDecoration(contour, pixel_x, pixel_y, terrain, coverage < 1.0, stencil);
-    color = lerp(color, float3(0.015), 0.45 * decoration.y);
-    // Reconstruct the shared contour's complete pixel, avoiding a second
-    // multiplication of terrain AA against particle AA at the same boundary.
-    if (coverage > 0.0 && terrain > 0u && terrain < 0xffffu) {
-        decoration.x = max(decoration.x, outline);
-        float4 surface = materialSurface(terrain, input.fine_position, gradient_x, gradient_y,
-            input.position.xy, decoration, true, background, g_textures, g_sampler);
-        color = lerp(color, surface.rgb, coverage);
-    }
-    return float4(color, 1.0);
+    if (coverage==1.0) discard;
+
+    TerrainVisual visual=g_terrain_visuals[input.material];
+    float materialAlpha=float(visual.m_color_rgba&255u)/255.0;
+    // Straight-alpha RGB comes directly from Cold32 (gas uses its catalog RGB).
+    // Blend once over the already drawn terrain/background, preserving overlap.
+    return float4(input.color.rgb,alpha*input.color.a*materialAlpha*visual.m_opacity*(1.0-coverage));
 }

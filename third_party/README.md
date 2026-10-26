@@ -43,12 +43,16 @@ Sources of dependency versions:
 | [WinPixEventRuntime](WinPixEventRuntime/README.md) | 1.0.240308001 | vcpkg | `engine.core` HAL PIX markers (`pix3.h`) |
 | [FastNoiseLite](FastNoiseLite/README.md) | 1.1.1 @ `7ccfbc16…` | CPM pinned source + local patch | `engine.sim` worldgen noise |
 | [FreeType](FreeType/README.md) | 2.13.3 (port 0) | vcpkg registry port | opt-in M4 ImGui FreeType rasterizer evaluation |
+| [PB-MPM](PBMPM/README.md) | `main` @ `5a2f438` (v1.0.0) | reference source (not built) | `engine.matter` pinned Slang PB-MPM compute port |
 
 Transitive second-order fetches (Slang-RHI's DXC, Agility SDK, NVAPI, Dawn,
 its own Vulkan-Headers copy, its own WinPixEventRuntime copy) are documented
 inside the Slang-RHI entry rather than as separate folders, because they are
 fetch targets of that library's pinned CMake, not declarations of this
 repository.
+
+Reference-source pins such as PB-MPM record provenance for ported equations;
+the build neither fetches nor links them.
 
 Adding a dependency: extend `vcpkg.json` and/or `cmake/external/<Library>.cmake`,
 link it from the owning target only, and add a folder here with the model

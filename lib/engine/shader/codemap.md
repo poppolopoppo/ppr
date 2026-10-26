@@ -34,8 +34,9 @@ Row-major matrix layout is fixed at session creation for cross-API portability.
   `defaultMatrixLayoutMode = SLANG_MATRIX_LAYOUT_ROW_MAJOR`); DXIL targets pin `sm_6_6` (`Shader.cpp:146-151,185,223`); `setTargetFormat(target)` requires prior
   `initialize()` (`uninitialized` otherwise), rejects post-load changes (`invalid_arg`), no-ops on the
   current target (`default_value_v`), else stores the target, nulls `m_session`, and recreates it with the
-  same row-major single-target desc; `shutdown()` warns when `m_modules_loaded` (modules are session-owned
-  and die with it), then clears the flag and nulls session before global session; `getGlobalSession()`
+  same row-major single-target desc; `shutdown()` clears the target-change latch and nulls session before
+  global session. Session-owned cached modules are normal cleanup, and the latch does not measure external
+  owners or justify a lifetime warning; `getGlobalSession()`
   exposes the global session for `engine.rhi` `DeviceDesc` wiring. Lifecycle emits info logs
   (`Shader service initialized`, `shader target format set`, `Shader service shutdown`).
 - `loadModuleFromFile(path, name, out)` maps the file via `io::mapFile` (on failure logs path +

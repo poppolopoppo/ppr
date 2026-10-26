@@ -1,5 +1,10 @@
 # assets/shaders/
 
+`pbmpm/solver.slang` and `pbmpm/types.slang` are the direct pinned PB-MPM
+compute port owned by `engine.matter`. Their source attribution, six-entry-point
+schedule plus publication validator, explicit scalar CPU/GPU ABI and admitted scope are recorded in
+`pbmpm/README.md`; `pbmpm/LICENSE.md` retains the upstream BSD-3-Clause notice.
+
 ## Responsibility
 
 Slang shader assets for application render passes. Three live programs: `mesh_bindless.slang` is the
@@ -15,6 +20,14 @@ vertex entry optionally resolves instances through those IDs. Reset, cull,
 barriers and drawing share one encoder and submission.
 
 ## Design
+
+`grid_particle_prepare.slang` is GridPass-owned resident-particle presentation,
+with reflected numerical64/metadata64/packed32/frame144 byte protocols. It
+requires an explicitly admitted D3D12 FP64 device for exact metric conversion.
+Stable ten-bit chunk radix partitions preserve metadata ID order without
+reordering solver storage; a bounded hierarchical scan produces ordered visible
+IDs and indirect arguments entirely on GPU. `grid_tiles.slang` shares one
+particle geometry helper between direct and indirect vertex entries.
 
 - `mesh_bindless.slang` uses PPR's row-major, row-vector convention: transforms call
   `mul(vector, matrix)`, never `mul(matrix, vector)`. View-projection remains `view * projection`.
@@ -162,3 +175,14 @@ columns in a separate 16 KiB constant buffer. The existing 304-byte frame
 carries its enable flag and cell metric. Above each column's surface it draws
 a sky gradient; below it retains the four authored parallax layers. The same
 rendered backdrop supplies optical terrain and particle refraction.
+
+## Selected-fork conformance fixture
+
+`pbmpm/fork_conformance.slang` is test-only native conformance for the selected
+ErikSom859c449 fork: split64/32 particle rows, GPU buckets/indirect fused stages,
+explicit workgroup zeroing and guarded signed reductions. It is consumed only
+by `app/matter_fork`, comparing frozen actual-WGSL words. Production GpuSolver shares `fork_core.slang` arithmetic and uses count/allocate/insert
+plus two indirect fused stages at K2. Its production-path oracle leaf observes
+eight post-integration stages and exact semantic restart. Circle presentation
+remains a separate implementation gate. Current evidence/limitations live under
+`out/diagnostics/pbmpm-recovery-20261022/native-batch1/`.
