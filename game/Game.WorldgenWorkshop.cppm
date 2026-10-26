@@ -60,7 +60,7 @@ export namespace pP::colony {
         void cancel() noexcept;
         void close() noexcept;
         [[nodiscard]] std::error_code update();
-        [[nodiscard]] std::unique_ptr<GridPass::GridStagedFrame> takePresentation();
+        [[nodiscard]] std::unique_ptr<GridStagedFrame> takePresentation();
         [[nodiscard]] std::error_code shutdown();
 
     private:
@@ -82,7 +82,7 @@ export namespace pP::colony {
         // Only this external main-lane owner retains an unfinished asset request.
         // Worker State values never own its coordinator or destructor drain.
         std::optional<ContentPresentationRequest> m_images{};
-        std::unique_ptr<GridPass::GridStagedFrame> m_presentation{};
+        std::unique_ptr<GridStagedFrame> m_presentation{};
         std::string m_status{"Open an authored pack root to begin."}, m_diagnostics{};
         config::Diagnostics m_property_diagnostics{64u};
         std::filesystem::path m_diagnostic_root{};

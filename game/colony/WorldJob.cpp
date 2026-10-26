@@ -25,28 +25,19 @@ namespace pP::colony {
         std::atomic<u32> m_completed{};
         std::unique_ptr<ColonyDriver> m_candidate{};
         std::unique_ptr<ColonyDriver> m_retired{};
-        std::unique_ptr<GridPass::GridStagedFrame> m_presentation{};
+        std::unique_ptr<GridStagedFrame> m_presentation{};
         std::optional<WorldCheckpoint> m_checkpoint{};
         Capture m_capture{};
         Prepare m_prepare{};
         bool m_is_capture{}; // Immutable after admission; cleanup may release the callback concurrently.
     };
 
-    WorldJob::Prepare WorldJob::legacyFixturePrepare() {
-        return [](const ColonyDriverDesc &request, const sim::GenerationExecution &execution,
-                   config::Diagnostics &) -> Expected<std::unique_ptr<ColonyDriver>> {
-            auto driver = std::make_unique<ColonyDriver>();
-            PPR_RETURN_UNEXPECTED_ON_FAIL(WorldJobs, driver->initLegacyFixture(request, &execution));
-            PPR_RETURN_UNEXPECTED_ON_FAIL(WorldJobs, execution.m_context->error());
-            return driver;
-        };
-    }
-
     WorldJob::WorldJob(ParallelScheduler &chunks, Prepare prepare)
         : m_chunks(chunks), m_prepare(std::move(prepare)),
           m_coordinator(
-              "World coordinator", 1u, 4u * static_cast<std::size_t>(hal::page_granularity), context::background(),
-              hal::EPriority::low) {
+              std::unique_ptr<ParallelScheduler>{new ParallelScheduler(
+                  "World coordinator", 1u, 4u * static_cast<std::size_t>(hal::page_granularity), context::background(),
+                  hal::EPriority::low)}) {
         PPR_ASSERT(static_cast<bool>(m_prepare));
     }
     WorldJob::~WorldJob() noexcept {
@@ -110,16 +101,33 @@ namespace pP::colony {
 
     std::error_code WorldJob::updateCapture_(const bool loading_presented) {
         if (m_view.m_state == EWorldJobState::queued) {
+            // The queued owner remains main-lane exclusive until the exact GPU
+            // copy and existing-worker reconstruction settle. Cancellation also
+            // drains this prefix before any capture/disposal worker can own it.
+            const auto captured = m_job->m_candidate->advanceMatterSnapshot(&m_chunks);
+            PPR_RETURN_ERROR_ON_FAIL(WorldJobs, captured);
+            if (not *captured) {
+                return {};
+            }
+
+            const auto detached = m_job->m_candidate->advanceDetachMatter();
+            PPR_RETURN_ERROR_ON_FAIL(WorldJobs, detached);
+            if (not *detached) {
+                return {};
+            }
+
             if (m_cancelled) {
                 m_view.m_error = std::make_error_code(std::errc::operation_canceled);
                 m_view.m_state = EWorldJobState::prepared;
                 return {};
             }
+
             if (not loading_presented) {
                 return {};
             }
+
             const auto state = m_job;
-            auto task = m_coordinator.schedule(
+            auto task = m_coordinator->schedule(
                 [state](const IContext &) -> std::error_code {
                     PPR_RETURN_ERROR_ON_FAIL(WorldJobs, state->m_context->error());
                     PPR_RETURN_ERROR_ON_FAIL(WorldJobs, state->m_capture(*state->m_candidate, *state->m_context));
@@ -163,7 +171,7 @@ namespace pP::colony {
             auto presentation = captureDiagnosticPresentation(
                 driver, prepared->generated(), mode, revision, temperature_min_k, temperature_max_k, context);
             PPR_RETURN_ERROR_ON_FAIL(WorldJobs, presentation);
-            state->m_presentation = std::make_unique<GridPass::GridStagedFrame>(std::move(*presentation));
+            state->m_presentation = std::make_unique<GridStagedFrame>(std::move(*presentation));
             return std::error_code{};
         };
         return {};
@@ -246,8 +254,16 @@ namespace pP::colony {
     }
 
     std::error_code WorldJob::admitCleanup_() {
+        if (m_device_owner_held or
+            (m_job->m_candidate and m_job->m_candidate->matterDeviceOwned()) or
+            (m_job->m_retired and m_job->m_retired->matterDeviceOwned())) {
+            // Device ownership must be detached on the live main/device lane
+            // before an ordinary CPU cleanup task can be admitted.
+            PPR_RETURN_ERROR_ON_FAIL(WorldJobs, std::errc::operation_not_permitted);
+        }
+
         const auto state = m_job;
-        auto task = m_coordinator.schedule(
+        auto task = m_coordinator->schedule(
             [state](const IContext &) -> std::error_code {
                 std::error_code error{};
                 state->m_presentation.reset();
@@ -278,7 +294,8 @@ namespace pP::colony {
     // update
     // ------------------------------------------------------------------
 
-    std::error_code WorldJob::update(const bool loading_presented, const bool allow_cleanup) {
+    std::error_code WorldJob::update(
+        const bool loading_presented, const bool allow_cleanup, const bool independent_work_admission) {
         if (not m_job) {
             return {};
         }
@@ -286,7 +303,7 @@ namespace pP::colony {
             return allow_cleanup ? admitCleanup_() : std::error_code{};
         }
         if (m_job->m_is_capture and m_view.m_state != EWorldJobState::retiring) {
-            return updateCapture_(loading_presented);
+            return updateCapture_(loading_presented or independent_work_admission);
         }
 
         if (m_view.m_state == EWorldJobState::queued) {
@@ -302,11 +319,11 @@ namespace pP::colony {
                 m_job.reset(); // No candidate or work was admitted.
                 return {};
             }
-            if (not loading_presented) {
+            if (not loading_presented and not independent_work_admission) {
                 return {};
             }
             const auto state = m_job;
-            auto task = m_coordinator.schedule(
+            auto task = m_coordinator->schedule(
                 [this, state](const IContext &) -> std::error_code {
                     const sim::GenerationExecution execution{
                         .m_scheduler = &m_chunks,
@@ -332,7 +349,7 @@ namespace pP::colony {
                     state->m_candidate = std::move(*candidate);
                     auto presentation = captureWorldPresentation(*state->m_candidate, execution.m_context.get());
                     PPR_RETURN_ERROR_ON_FAIL(WorldJobs, presentation);
-                    state->m_presentation = std::make_unique<GridPass::GridStagedFrame>(std::move(*presentation));
+                    state->m_presentation = std::make_unique<GridStagedFrame>(std::move(*presentation));
                     return {};
                 },
                 std::nullopt, ParallelScheduler::drop_if_full);
@@ -365,7 +382,7 @@ namespace pP::colony {
             m_view.m_stage = EWorldJobStage::publishing;
         }
 
-        if (m_view.m_state == EWorldJobState::prepared and m_cancelled) {
+        if (m_view.m_state == EWorldJobState::prepared and m_cancelled and not m_device_owner_held) {
             m_view.m_state = EWorldJobState::retiring;
             m_cleanup_pending = true;
             return allow_cleanup ? admitCleanup_() : std::error_code{};
@@ -382,13 +399,28 @@ namespace pP::colony {
         return std::move(m_job->m_candidate);
     }
 
-    GridPass::GridStagedFrame &WorldJob::presentation() {
+    ColonyDriver *WorldJob::preparedDriver() noexcept {
+        return m_job and m_view.m_state == EWorldJobState::prepared and not m_job->m_is_capture
+                   ? m_job->m_candidate.get()
+                   : nullptr;
+    }
+
+    void WorldJob::holdPreparedDeviceOwner(const bool hold) noexcept {
+        m_device_owner_held = hold;
+    }
+
+    GridStagedFrame &WorldJob::presentation() {
         PPR_ASSERT(m_job and m_view.m_state == EWorldJobState::prepared and m_job->m_presentation);
         return *m_job->m_presentation;
     }
 
     void WorldJob::commitPublication() {
-        PPR_ASSERT(m_job and m_view.m_state == EWorldJobState::prepared and not m_cancelled);
+        PPR_ASSERT(m_job and m_view.m_state == EWorldJobState::prepared and (not m_cancelled or m_device_owner_held));
+
+        // An acknowledged device publication is irreversible even if close/cancel
+        // arrived after its admission. Its owner must transfer to main exactly once.
+        m_cancelled = false;
+        m_device_owner_held = false;
         m_publication_committed = true;
     }
 
@@ -400,8 +432,25 @@ namespace pP::colony {
         m_cleanup_pending = true;
     }
 
+    std::error_code WorldJob::presentationFailed(const std::error_code error) {
+        if (not m_job or m_view.m_state != EWorldJobState::prepared or not error) {
+            PPR_RETURN_ERROR_ON_FAIL(WorldJobs, std::errc::invalid_argument);
+        }
+
+        if (m_publication_committed) {
+            // Presentation failure cannot undo an already published simulation.
+            // Keep catalog/header storage alive until terminal lane retirement.
+            m_view.m_error = error;
+            PPR_RETURN_ERROR_ON_FAIL(WorldJobs, error);
+        }
+
+        discardPrepared(error);
+        return {};
+    }
+
     void WorldJob::retire(std::unique_ptr<ColonyDriver> old) {
         PPR_ASSERT(m_job and m_view.m_state == EWorldJobState::prepared and not m_job->m_candidate);
+        PPR_ASSERT(not old or not old->matterAttached());
         m_job->m_retired = std::move(old);
         m_view.m_state = EWorldJobState::retiring;
         m_view.m_stage = EWorldJobStage::retiring;
@@ -410,6 +459,7 @@ namespace pP::colony {
 
     void WorldJob::dispose(std::unique_ptr<ColonyDriver> old) {
         PPR_ASSERT(not busy());
+        PPR_ASSERT(not old or not old->matterAttached());
         m_job = std::make_shared<State>();
         m_job->m_retired = std::move(old);
         m_view = WorldJobView{
@@ -428,6 +478,35 @@ namespace pP::colony {
         if (m_task.valid()) {
             PPR_RETAIN_ERROR_ON_FAIL(WorldJobs, error, m_task.get());
         }
+
+        if (m_job and m_job->m_is_capture and m_job->m_candidate and m_job->m_candidate->matterDeviceOwned()) {
+            // Fallback teardown can arrive before queued capture admission.
+            // This wait also pumps its small main-lane acknowledgement steps;
+            // the numerical readback/reconstruction owners settle before release.
+            const hal::ProfileScope wait{"World.Capture.Drain", hal::profile_blocking_category};
+            for (;;) {
+                const auto captured = m_job->m_candidate->advanceMatterSnapshot(&m_chunks);
+                if (not captured) {
+                    PPR_RETAIN_ERROR_ON_FAIL(WorldJobs, error, captured.error());
+                    break;
+                }
+
+                if (*captured) {
+                    const auto detached = m_job->m_candidate->advanceDetachMatter();
+                    if (not detached) {
+                        PPR_RETAIN_ERROR_ON_FAIL(WorldJobs, error, detached.error());
+                        break;
+                    }
+
+                    if (*detached) {
+                        break;
+                    }
+                }
+
+                std::this_thread::yield();
+            }
+        }
+
         if (m_job) {
             m_view.m_state = EWorldJobState::retiring;
             m_cleanup_pending = true;
@@ -437,7 +516,8 @@ namespace pP::colony {
             }
             m_job.reset();
         }
-        PPR_RETAIN_ERROR_ON_FAIL(WorldJobs, error, m_coordinator.join());
+        PPR_RETAIN_ERROR_ON_FAIL(WorldJobs, error, m_coordinator->join());
         return error;
     }
 }
+

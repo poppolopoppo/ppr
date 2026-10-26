@@ -43,18 +43,6 @@ namespace pP::colony {
         return m_initialized;
     }
 
-    std::error_code Colony::initLegacyFixture(const ColonyDesc &desc, const sim::GenerationExecution *const execution) {
-        m_initialized = false;
-        m_prepared.reset();
-        m_particles = sim::MatterParticleState{};
-        m_grid = sim::ChunkGrid{};
-
-        PPR_RETURN_ERROR_ON_FAIL(ColonyWorld, generateLegacyFixture(desc.m_seed, m_grid, execution));
-
-        m_initialized = true;
-        return {};
-    }
-
     std::error_code Colony::shutdown() {
         m_prepared.reset();
         m_particles = sim::MatterParticleState{};
@@ -81,10 +69,10 @@ namespace pP::colony {
 
         sim::MatterParticleState particles;
         if (restored) {
+            PPR_RETURN_ERROR_ON_FAIL(ColonyWorld, context ? context->error() : std::error_code{});
             PPR_RETURN_ERROR_ON_FAIL(
-                ColonyWorld,
-                particles.restore(
-                    *restored, recipe.m_materials, recipe.m_cell_size_m, context, recipe.m_reference_thickness_m));
+                ColonyWorld, particles.restoreMoving(
+                                 *restored, recipe.m_materials, recipe.m_cell_size_m, recipe.m_reference_thickness_m));
         } else {
             const auto seeded = sim::seedMatterParticles(
                 world.generated().m_matter, world.generated().m_grid, recipe, context);

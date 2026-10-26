@@ -159,10 +159,19 @@ namespace pP::colony {
                 auto &device = service->getDevice();
                 auto &renderer = getRenderer();
 
-                // Explicit blocking diagnostic host, never used by interactive publication.
-                PPR_RETURN_ERROR_ON_FAIL(
-                    WorldCapture,
-                    m_pass.prepareCellUploads(device, [&renderer] { return renderer.waitOnHost(); }, true));
+                // The frozen diagnostic host advances the same bounded cohorts
+                // as interactive publication, refreshing fence observations after waits.
+                for (;;) {
+                    PPR_RETURN_ERROR_ON_FAIL(WorldCapture, renderer.retireCompletedFrames());
+
+                    const auto prepared = m_pass.tryPrepareCellUploads(device, renderer.completedFenceValue());
+                    PPR_RETURN_ERROR_ON_FAIL(WorldCapture, prepared);
+
+                    if (*prepared)
+                        break;
+
+                    PPR_RETURN_ERROR_ON_FAIL(WorldCapture, renderer.waitOnHost());
+                }
 
                 rhi::TextureDesc desc{};
                 desc.type = rhi::TextureType::Texture2D;

@@ -4,6 +4,7 @@ import engine.core;
 import engine.sim;
 import game.colony.content;
 import game.colony.driver;
+import game.colony.matter;
 import game.colony.worldgen;
 import std;
 
@@ -12,10 +13,9 @@ export namespace pP::colony {
     // world checkpoint
     // ------------------------------------------------------------------
 
-    // Version 4 identifies named asset packs and numeric-only content identity.
-    // Earlier monolithic-pack envelopes are unsupported; raw sim snapshots have
-    // their independent version and codec.
-    inline constexpr u32 kWorldCheckpointVersion = 4u;
+    // Version 5 requires complete current PB-MPM columns and durable identity.
+    // Older envelopes cannot reconstruct omitted carried fields; no migration.
+    inline constexpr u32 kWorldCheckpointVersion = 5u;
     inline constexpr u64 kMaxWorldCheckpointBytes = 256u * 1024u * 1024u;
 
     // ------------------------------------------------------------------
@@ -36,6 +36,7 @@ export namespace pP::colony {
         sim::GenerationGeometry m_geometry{};
         sim::InitialMatter m_matter{}; // Historical generation metadata only.
         sim::MatterParticleSnapshot m_particles{};
+        MatterState m_current_matter{};
         sim::GenerationStart m_start{};
         sim::GenerationReport m_report{};
         sim::Snapshot m_snapshot{};

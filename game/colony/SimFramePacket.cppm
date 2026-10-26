@@ -43,7 +43,7 @@ export namespace pP::colony {
         bool m_surface_captured{};
 
     public:
-        [[nodiscard]] Array<GridParticleBatch> capture(const ColonyDriver &driver);
+        [[nodiscard]] Expected<Array<GridParticleBatch>> capture(const ColonyDriver &driver);
         [[nodiscard]] std::shared_ptr<const GridSurfaceProfile> captureSurface(const ColonyDriver &driver);
     };
 
@@ -61,6 +61,7 @@ export namespace pP::colony {
         std::array<GridBackgroundLayer, 4u> m_background_layers{};
         std::shared_ptr<const GridSurfaceProfile> m_surface_profile{};
         Array<GridParticleBatch> m_particle_batches{};
+        std::optional<GridParticleGpuView> m_gpu_particles{};
         u64 m_frame_id{};
 
         // World epoch + committed tick at capture time. m_seed identifies
@@ -121,7 +122,7 @@ export namespace pP::colony {
     /// Coordinator-only capture from an exclusively owned prepared session.
     /// Converts resident cells directly to owned u16 uploads, with no full sim
     /// snapshot or live-session borrow crossing into the rendering lane.
-    [[nodiscard]] Expected<GridPass::GridStagedFrame> captureWorldPresentation(
+    [[nodiscard]] Expected<GridStagedFrame> captureWorldPresentation(
         const ColonyDriver &driver, const IContext *context = nullptr);
     /// Shared catalog appearance conversion for complete worlds and sparse samples.
     [[nodiscard]] Expected<SimFramePacket> captureCatalogPresentation(
@@ -130,7 +131,7 @@ export namespace pP::colony {
     /// Whole-world preview preparation from an exclusively frozen session.
     /// Generated metadata belongs to this driver's exclusively frozen prepared world.
     /// The caller supplies a monotonic revision; terrain IDs remain unchanged.
-    [[nodiscard]] Expected<GridPass::GridStagedFrame> captureDiagnosticPresentation(
+    [[nodiscard]] Expected<GridStagedFrame> captureDiagnosticPresentation(
         const ColonyDriver &driver, const sim::GeneratedWorld &generated, EGridDiagnosticMode mode, u64 revision,
         float temperature_min_k, float temperature_max_k, const IContext &context);
 
@@ -147,7 +148,7 @@ export namespace pP::colony {
 
     public:
         [[nodiscard]] u32 completedChunks() const noexcept;
-        [[nodiscard]] Expected<GridPass::GridStagedFrame> stage(u64 frame_id, const ColonyDriver &driver);
+        [[nodiscard]] Expected<GridStagedFrame> stage(u64 frame_id, const ColonyDriver &driver);
         /// Returns true only when the final batch was successfully presented.
         [[nodiscard]] bool consume(const RenderFrameResult &result, u64 world_generation);
     };
@@ -163,5 +164,5 @@ export namespace pP::colony {
     // consumption (see onLaneFrameConsumed_), not here. On an invalid
     // payload the stage is cleared and the error returned fail-closed; the
     // client sets up a full-refresh + reset-caches retry.
-    [[nodiscard]] std::error_code buildGridStagedFrame(const SimFramePacket &packet, GridPass::GridStagedFrame &stage);
+    [[nodiscard]] std::error_code buildGridStagedFrame(const SimFramePacket &packet, GridStagedFrame &stage);
 }

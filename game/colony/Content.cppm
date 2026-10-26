@@ -857,6 +857,10 @@ export namespace pP::colony {
             Expected<image::TexturePreparation::Result> result, config::Diagnostics &diagnostics);
 
     public:
+        /// Out-of-line: a triviality query on this type must not instantiate the
+        /// cross-module request destructor in consumers (MSVC C1001).
+        ~ContentPresentationRequest() noexcept;
+
         ContentPresentationRequest(ContentPresentationRequest &&) noexcept = default;
         ContentPresentationRequest &operator=(ContentPresentationRequest &&) = delete;
 

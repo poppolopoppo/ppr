@@ -162,7 +162,25 @@ namespace pP::colony {
 
             ParticlePresentationCache temporary;
             auto &cache = particle_cache ? *particle_cache : temporary;
-            packet.m_particle_batches = cache.capture(driver);
+            packet.m_gpu_particles = driver.particleView();
+            if (not packet.m_gpu_particles) {
+                // Only a pre-runtime CPU owner may provide initial admission
+                // seeds. An attached source must never become a CPU fallback.
+                PPR_RETURN_ERROR_ON_FAIL(
+                    SimPresentation, not driver.matterAttached()
+                                         ? std::error_code{}
+                                         : std::make_error_code(std::errc::state_not_recoverable));
+
+                auto particles = cache.capture(driver);
+                PPR_RETURN_ERROR_ON_FAIL(SimPresentation, particles);
+                packet.m_particle_batches = std::move(*particles);
+            } else {
+                PPR_RETURN_ERROR_ON_FAIL(
+                    SimPresentation, packet.m_gpu_particles->current()
+                                         ? std::error_code{}
+                                         : std::make_error_code(std::errc::resource_unavailable_try_again));
+            }
+
             packet.m_surface_profile = cache.captureSurface(driver);
             return {};
         }
@@ -289,7 +307,7 @@ namespace pP::colony {
                 packet, presentation, profile, boundary_material, cells_per_metre, reference_thickness));
         return packet;
     }
-    Array<GridParticleBatch> ParticlePresentationCache::capture(const ColonyDriver &driver) {
+    Expected<Array<GridParticleBatch>> ParticlePresentationCache::capture(const ColonyDriver &driver) {
         if (m_generation != driver.worldGeneration()) {
             m_chunks = {};
             m_surface_profile.reset();
@@ -299,8 +317,9 @@ namespace pP::colony {
 
         std::array<std::shared_ptr<const Array<sim::MatterParticle>>, sim::kChunkCount> sources{};
         const auto snapshot = driver.captureParticles();
+        PPR_RETURN_UNEXPECTED_ON_FAIL(SimPresentation, snapshot);
 
-        for (const auto &batch: snapshot.m_chunks) {
+        for (const auto &batch: snapshot->m_chunks) {
             sources[sim::chunkIndexOf(batch.m_position)] = batch.m_particles;
         }
 
@@ -319,7 +338,7 @@ namespace pP::colony {
                     for (const auto &particle: *sources[index]) {
                         particles.push_back(
                             {particle.m_id, particle.m_x_m, particle.m_y_m, particle.m_volume_m3, particle.m_mass_kg,
-                                particle.m_temperature_k, particle.m_material, static_cast<u32>(particle.m_phase)});
+                                particle.m_temperature_k, particle.m_material});
                     }
                 }
                 entry.m_target = std::make_shared<const Array<GridParticleInstance>>(std::move(particles));
@@ -493,8 +512,7 @@ namespace pP::colony {
         return packet;
     }
 
-    Expected<GridPass::GridStagedFrame> captureWorldPresentation(
-        const ColonyDriver &driver, const IContext *const context) {
+    Expected<GridStagedFrame> captureWorldPresentation(const ColonyDriver &driver, const IContext *const context) {
         SimFramePacket presentation{};
         PPR_RETURN_UNEXPECTED_ON_FAIL(SimPresentation, capturePresentation_(presentation, driver));
         PPR_RETURN_UNEXPECTED_ON_FAIL(SimPresentation, validatePresentation_(presentation));
@@ -502,7 +520,7 @@ namespace pP::colony {
         const auto dirty = driver.presentEditsCapture();
         const auto &grid = driver.grid();
 
-        GridPass::GridStagedFrame stage{};
+        GridStagedFrame stage{};
         stage.m_ack_seed = driver.worldGeneration();
         stage.m_full_refresh = true;
 
@@ -521,7 +539,7 @@ namespace pP::colony {
                                      : std::make_error_code(std::errc::state_not_recoverable));
             const auto range = tileRange(pos);
             stage.m_tiles.push_back(GridTileSubmission{.m_dirty_mask = 1u, .m_tile_range = range, .m_chunk_id = index});
-            GridPass::GridStagedUpload upload{};
+            GridStagedUpload upload{};
             upload.m_chunk_id = index;
             upload.m_payload.m_rect[0] = static_cast<float>(range.m_min_x);
             upload.m_payload.m_rect[1] = static_cast<float>(range.m_min_y);
@@ -554,6 +572,7 @@ namespace pP::colony {
         stage.m_background_layers = presentation.m_background_layers;
         stage.m_surface_profile = presentation.m_surface_profile;
         stage.m_particle_batches = presentation.m_particle_batches;
+        stage.m_gpu_particles = presentation.m_gpu_particles;
         return stage;
     }
 
@@ -565,8 +584,8 @@ namespace pP::colony {
         return m_next_chunk;
     }
 
-    Expected<GridPass::GridStagedFrame> InitialPresentation::stage(const u64 frame_id, const ColonyDriver &driver) {
-        GridPass::GridStagedFrame stage{};
+    Expected<GridStagedFrame> InitialPresentation::stage(const u64 frame_id, const ColonyDriver &driver) {
+        GridStagedFrame stage{};
         SimFramePacket presentation{};
         PPR_RETURN_UNEXPECTED_ON_FAIL(SimPresentation, capturePresentation_(presentation, driver, &m_particle_cache));
 
@@ -582,6 +601,7 @@ namespace pP::colony {
         stage.m_background_layers = presentation.m_background_layers;
         stage.m_surface_profile = presentation.m_surface_profile;
         stage.m_particle_batches = presentation.m_particle_batches;
+        stage.m_gpu_particles = presentation.m_gpu_particles;
 
         if (m_frame or m_next_chunk == sim::kChunkCount) {
             stage.m_tiles = m_visible;
@@ -622,7 +642,7 @@ namespace pP::colony {
     // grid staging
     // ------------------------------------------------------------------
 
-    std::error_code buildGridStagedFrame(const SimFramePacket &packet, GridPass::GridStagedFrame &stage) {
+    std::error_code buildGridStagedFrame(const SimFramePacket &packet, GridStagedFrame &stage) {
         if (const std::error_code error = validatePresentation_(packet)) {
             stage = {};
             PPR_RETURN_ERROR_ON_FAIL(SimPresentation, error);
@@ -640,6 +660,7 @@ namespace pP::colony {
         stage.m_background_layers = packet.m_background_layers;
         stage.m_surface_profile = packet.m_surface_profile;
         stage.m_particle_batches = packet.m_particle_batches;
+        stage.m_gpu_particles = packet.m_gpu_particles;
 
         // Owned payload only: no driver ack, no translator contact, and no
         // pass mutation happen on the client. The pass-side contact runs
@@ -711,7 +732,7 @@ namespace pP::colony {
                 stage.m_ack_revisions.clear();
                 return error;
             }
-            GridPass::GridStagedUpload upload{};
+            GridStagedUpload upload{};
             upload.m_chunk_id = tile.m_chunk_id;
             upload.m_payload.m_rect[0] = static_cast<float>(tile.m_tile_range.m_min_x);
             upload.m_payload.m_rect[1] = static_cast<float>(tile.m_tile_range.m_min_y);
@@ -724,3 +745,4 @@ namespace pP::colony {
         return {};
     }
 }
+

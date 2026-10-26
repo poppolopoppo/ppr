@@ -24,6 +24,153 @@ namespace pP::colony {
     PPR_DEFINE_LOG_CATEGORY(ColonyPreparation, info, none)
 
     // ------------------------------------------------------------------
+    // bounded finalized-input diagnostic journal
+    // ------------------------------------------------------------------
+
+    struct MatterSubmissionJournalState {
+        u64 m_seen{};
+        std::string m_provenance;
+        std::array<u32, 64u> m_admission{};
+        std::array<std::array<u32, 152u>, 512u> m_records{};
+        u32 m_recorded{}, m_flags{};
+        bool m_admission_seen{};
+    };
+
+    static_assert(sizeof(MatterSubmissionJournalState) + 4096u < 1024u * 1024u);
+    static_assert(sizeof(std::array<u32, 152u>) == 608u);
+    static_assert(std::endian::native == std::endian::little);
+    static_assert(sizeof(MatterIdentity) == 24u and sizeof(matter::GpuBodyBoundary) == 64u);
+
+    namespace {
+        u64 inputJournalHash(const std::span<const std::byte> bytes, u64 hash = 14695981039346656037ull) noexcept {
+            for (const auto byte: bytes)
+                hash = (hash ^ std::to_integer<u8>(byte)) * 1099511628211ull;
+
+            return hash;
+        }
+    }
+
+    void IMatterSubmissionObserverForTest::observeAdmission(
+        const MatterState &, std::span<const u32>, u32, u32, float, float, u32) {
+    }
+
+    MatterSubmissionJournal::MatterSubmissionJournal(std::string provenance)
+        : m_state(std::make_unique<MatterSubmissionJournalState>()) {
+        if (provenance.size() > 4096u) {
+            m_state->m_flags |= 16u;
+            return;
+        }
+
+        m_state->m_provenance = provenance;
+    }
+
+    MatterSubmissionJournal::~MatterSubmissionJournal() = default;
+
+    void MatterSubmissionJournal::observeAdmission(
+        const MatterState &source, const std::span<const u32> terrain, const u32 width, const u32 height,
+        const float origin_x, const float origin_y, const u32 tick_hz) noexcept {
+        std::array<u32, 64u> admission{};
+        std::ranges::copy(std::bit_cast<std::array<u32, 6u>>(source.m_identity), admission.begin());
+        std::ranges::copy(std::bit_cast<std::array<u32, 16u>>(source.m_profile), admission.begin() + 6u);
+        admission[22u] = static_cast<u32>(source.m_particles.size());
+        admission[23u] = width;
+        admission[24u] = height;
+        admission[25u] = std::bit_cast<u32>(origin_x);
+        admission[26u] = std::bit_cast<u32>(origin_y);
+        admission[27u] = tick_hz;
+        std::ranges::copy(std::bit_cast<std::array<u32, 2u>>(source.m_cell_metres), admission.begin() + 28u);
+        std::ranges::copy(std::bit_cast<std::array<u32, 2u>>(source.m_thickness_metres), admission.begin() + 30u);
+        std::ranges::copy(std::bit_cast<std::array<u32, 2u>>(source.m_next_id), admission.begin() + 32u);
+
+        u64 particles = 14695981039346656037ull;
+        for (const auto &particle: source.m_particles) {
+            const auto words = std::bit_cast<std::array<u32, 22u>>(particle);
+            particles = inputJournalHash(std::as_bytes(std::span{words}), particles);
+        }
+
+        const u64 masks = inputJournalHash(std::as_bytes(terrain));
+        std::ranges::copy(std::bit_cast<std::array<u32, 2u>>(particles), admission.begin() + 34u);
+        std::ranges::copy(std::bit_cast<std::array<u32, 2u>>(masks), admission.begin() + 36u);
+        const u64 terrain_words = terrain.size();
+        std::ranges::copy(std::bit_cast<std::array<u32, 2u>>(terrain_words), admission.begin() + 38u);
+
+        if (m_state->m_admission_seen) {
+            if (m_state->m_admission != admission)
+                m_state->m_flags |= 4u;
+            return;
+        }
+
+        m_state->m_admission = admission;
+        m_state->m_admission_seen = true;
+    }
+
+    void MatterSubmissionJournal::observe(
+        const MatterIdentity source, const matter::GpuParameters &profile,
+        const std::span<const matter::GpuBodyBoundary> bodies, const u32 body_count) noexcept {
+        if (m_state->m_seen != std::numeric_limits<u64>::max())
+            ++m_state->m_seen;
+
+        if (body_count != 1u or bodies.size() != matter::kGameSubsteps) {
+            m_state->m_flags |= 1u;
+            return;
+        }
+
+        if (m_state->m_seen > m_state->m_records.size()) {
+            m_state->m_flags |= 2u;
+            return;
+        }
+
+        auto &record = m_state->m_records[m_state->m_recorded++];
+        std::ranges::copy(std::bit_cast<std::array<u32, 6u>>(source), record.begin());
+        std::ranges::copy(std::bit_cast<std::array<u32, 16u>>(profile), record.begin() + 6u);
+        record[22u] = static_cast<u32>(m_state->m_seen);
+        record[23u] = body_count;
+
+        for (u32 slice = 0u; slice < bodies.size(); ++slice) {
+            std::ranges::copy(std::bit_cast<std::array<u32, 16u>>(bodies[slice]), record.begin() + 24u + slice * 16u);
+        }
+    }
+
+    std::error_code MatterSubmissionJournal::write(const std::filesystem::path &path) const {
+        const u32 flags = m_state->m_flags | (m_state->m_admission_seen ? 0u : 8u);
+        const auto seen = std::bit_cast<std::array<u32, 2u>>(m_state->m_seen);
+        const std::array<u32, 16u> header{
+            0x49525050u, 1u, 80u, 152u, m_state->m_recorded, flags, seen[0u], seen[1u], 512u, 1u, matter::kGameSubsteps,
+            matter::kSourceIterations, 64u, 64u, 0x01020304u, 1u};
+        std::ofstream stream{path, std::ios::binary | std::ios::trunc};
+        PPR_RETURN_ERROR_ON_FAIL(
+            ColonyPreparation, stream.good() ? std::error_code{} : std::make_error_code(std::errc::io_error));
+
+        stream.write(reinterpret_cast<const char *>(header.data()), static_cast<std::streamsize>(sizeof(header)));
+        stream.write(
+            reinterpret_cast<const char *>(m_state->m_admission.data()),
+            static_cast<std::streamsize>(sizeof(m_state->m_admission)));
+        stream.write(
+            reinterpret_cast<const char *>(m_state->m_records.data()),
+            static_cast<std::streamsize>(m_state->m_recorded * sizeof(m_state->m_records[0u])));
+        stream.close();
+        PPR_RETURN_ERROR_ON_FAIL(
+            ColonyPreparation, not stream.fail() ? std::error_code{} : std::make_error_code(std::errc::io_error));
+
+        auto manifest_path = path;
+        manifest_path += ".txt";
+        std::ofstream manifest{manifest_path, std::ios::trunc};
+        manifest << "protocol=PPRI/1 endian=little header_words=80 record_words=152\n"
+                 << "recorded=" << m_state->m_recorded << " attempts=" << m_state->m_seen << " flags=" << flags
+                 << " valid=" << (flags == 0u) << '\n'
+                 << "admission_fnv1a64=" << std::hex << inputJournalHash(std::as_bytes(std::span{m_state->m_admission}))
+                 << " records_fnv1a64="
+                 << inputJournalHash(std::as_bytes(std::span{m_state->m_records.data(), m_state->m_recorded}))
+                 << std::dec << " storage_bytes=" << sizeof(MatterSubmissionJournalState)
+                 << " owner_size=" << sizeof(MatterSubmissionJournal) << '\n'
+                 << m_state->m_provenance << '\n';
+        manifest.close();
+        PPR_RETURN_ERROR_ON_FAIL(
+            ColonyPreparation, not manifest.fail() ? std::error_code{} : std::make_error_code(std::errc::io_error));
+        return {};
+    }
+
+    // ------------------------------------------------------------------
     // driver helpers
     // ------------------------------------------------------------------
 
@@ -149,42 +296,6 @@ namespace pP::colony {
     // driver initialization
     // ------------------------------------------------------------------
 
-    std::error_code ColonyDriver::initLegacyFixture(
-        const ColonyDriverDesc &desc, const sim::GenerationExecution *const execution) {
-        if (desc.m_tick_hz == 0u) [[unlikely]] {
-            return std::make_error_code(std::errc::invalid_argument);
-        }
-        if (desc.m_agent_count > kAgentCountMax) [[unlikely]] {
-            return std::make_error_code(std::errc::value_too_large);
-        }
-
-        const TimeSpan period = std::chrono::duration_cast<TimeSpan>(std::chrono::seconds{1}) /
-                                static_cast<TimeSpan::rep>(desc.m_tick_hz);
-        if (period <= TimeSpan{}) [[unlikely]] {
-            return std::make_error_code(std::errc::invalid_argument);
-        }
-
-        const std::error_code shutdown_error = shutdown();
-        if (shutdown_error) [[unlikely]] {
-            return shutdown_error;
-        }
-
-        const hal::ProfileScope scope_worldgen{"Colony.WorldGen"};
-        const std::error_code init_error = m_colony.initLegacyFixture(ColonyDesc{desc.m_seed}, execution);
-        if (init_error) [[unlikely]] {
-            // A failed generation must not expose a partially written world.
-            (void) m_colony.shutdown();
-            return init_error;
-        }
-
-        std::error_code result = initializeRuntime(desc, period, execution);
-        if (result) {
-            PPR_RETAIN_ERROR_ON_FAIL(ColonyPreparation, result, shutdown());
-            PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, result);
-        }
-        return {};
-    }
-
     std::error_code ColonyDriver::initPrepared(
         const ColonyDriverDesc &desc, PreparedWorld world, const sim::GenerationExecution *const execution) {
         if (desc.m_tick_hz == 0u or desc.m_seed != world.descriptor().m_seed or desc.m_agent_count != 1u) {
@@ -215,16 +326,27 @@ namespace pP::colony {
         return m_colony.preparedWorld();
     }
 
-    sim::MatterParticleSnapshot ColonyDriver::captureParticles() const {
+    Expected<sim::MatterParticleSnapshot> ColonyDriver::captureParticles() const {
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            ColonyPreparation, m_cpu_particles_current
+                                   ? std::error_code{}
+                                   : std::make_error_code(std::errc::resource_unavailable_try_again));
+
         return m_colony.particles().capture();
     }
 
-    std::span<const sim::MatterParticle> ColonyDriver::particleChunk(const sim::ChunkPos position) const noexcept {
+    Expected<std::span<const sim::MatterParticle>> ColonyDriver::particleChunk(const sim::ChunkPos position) const {
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            ColonyPreparation, m_cpu_particles_current
+                                   ? std::error_code{}
+                                   : std::make_error_code(std::errc::resource_unavailable_try_again));
+
         return m_colony.particles().chunk(position);
     }
 
     u32 ColonyDriver::particleCount() const noexcept {
-        return m_colony.particles().count();
+        return m_matter ? static_cast<u32>(m_matter->m_records.size() + m_matter->m_gas.size())
+                        : m_colony.particles().count();
     }
 
     std::span<const sim::MatterParticleBatch> ColonyDriver::editParticles() const noexcept {
@@ -291,6 +413,10 @@ namespace pP::colony {
     std::error_code ColonyDriver::initializeRuntime(
         const ColonyDriverDesc &desc, const TimeSpan period, const sim::GenerationExecution *const execution,
         const sim::Snapshot *const restored) {
+        PPR_RETURN_ERROR_ON_FAIL(
+            ColonyPreparation,
+            not m_matter_terminal ? std::error_code{} : std::make_error_code(std::errc::operation_not_permitted));
+
         m_timestep.emplace(period, kMaxSlices, sim::EOverrunPolicy::clamp);
         if (const std::error_code error = registerColonyComponents(m_registry)) [[unlikely]] {
             (void) m_colony.shutdown();
@@ -343,7 +469,7 @@ namespace pP::colony {
                 if (m_resume_edit_tick or m_edit or m_step_error) {
                     return;
                 }
-                if (m_require_edit_publication or preparedWorld() != nullptr) {
+                if (m_matter_runtime != nullptr or m_require_edit_publication or preparedWorld() != nullptr) {
                     PPR_RETAIN_ERROR_ON_FAIL(ColonyPreparation, m_step_error, prepareEdit(true));
                 } else {
                     applyToolEdits();
@@ -355,7 +481,10 @@ namespace pP::colony {
                 return bound_tool.error();
             }
             const Expected<void> bound_build = m_steps.addSystem(*build, [this](sim::Registry &registry) {
-                if (m_require_edit_publication or preparedWorld() != nullptr) {
+                if (m_step_error or
+                    m_matter_runtime != nullptr or
+                    m_require_edit_publication or
+                    preparedWorld() != nullptr) {
                     return;
                 }
                 const hal::ProfileScope scope_build{"Colony.Build"};
@@ -377,7 +506,7 @@ namespace pP::colony {
                 return bound_build.error();
             }
             const Expected<void> bound = m_steps.addSystem(*declared, [this](sim::Registry &registry) {
-                if (m_edit) {
+                if (m_edit or m_step_error or m_snapshot_phase != ESnapshotPhase::idle) {
                     return;
                 }
                 const hal::ProfileScope scope_pathfind{"Colony.Pathfind"};
@@ -392,7 +521,7 @@ namespace pP::colony {
                 return bound.error();
             }
             const Expected<void> bound_plan = m_steps.addSystem(*aiplan, [this](sim::Registry &registry) {
-                if (m_edit) {
+                if (m_edit or m_step_error or m_snapshot_phase != ESnapshotPhase::idle) {
                     return;
                 }
                 const hal::ProfileScope scope_plan{"Colony.Plan"};
@@ -407,7 +536,7 @@ namespace pP::colony {
                 return bound_plan.error();
             }
             const Expected<void> bound_move = m_steps.addSystem(*movestep, [this](sim::Registry &) {
-                if (m_edit) {
+                if (m_edit or m_step_error or m_snapshot_phase != ESnapshotPhase::idle) {
                     return;
                 }
                 if (not m_step_error) {
@@ -421,7 +550,7 @@ namespace pP::colony {
                 return bound_move.error();
             }
             const Expected<void> bound_physics = m_steps.addSystem(*physics, [this](sim::Registry &) {
-                if (m_edit) {
+                if (m_edit or m_step_error or m_snapshot_phase != ESnapshotPhase::idle) {
                     return;
                 }
                 if (not m_step_error) {
@@ -447,7 +576,6 @@ namespace pP::colony {
             return error;
         }
 
-        m_agent_count = desc.m_agent_count == 0u ? kAgentCount : desc.m_agent_count;
         m_seed = desc.m_seed;
         m_tick_hz = desc.m_tick_hz;
 
@@ -468,16 +596,28 @@ namespace pP::colony {
         }
         m_seed = desc.m_seed;
         m_world_generation = desc.m_world_generation != 0u ? desc.m_world_generation : m_world_generation + 1u;
+        m_snapshot_workers = execution ? execution->m_scheduler : nullptr;
         return {};
     }
 
     std::error_code ColonyDriver::shutdown() {
+        m_submission_observer = nullptr;
+        PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, detachMatter());
+        m_matter.reset();
+        m_particle_view.reset();
+        m_snapshot_workers = nullptr;
+        m_snapshot_ready.reset();
+        m_capture_awake.clear();
+        m_capture_awake_valid = false;
+        m_cpu_particles_current = true;
+        m_snapshot_tick = 0u;
+
         m_controlled.reset();
         clearPlayerCommand();
         m_timestep.reset();
         m_held_slices = 0u;
         m_resume_edit_tick = false;
-        m_single_step_pending = false;
+        m_pending_single_steps = 0u;
         shutdownPhysics();
         m_edit.reset();
         m_require_edit_publication = false;
@@ -488,11 +628,11 @@ namespace pP::colony {
         m_errands = 0u;
         m_agents = Array<AgentSummary>{};
         m_step_error = std::error_code{};
+        m_edit_rejection = {};
         m_step_stage = "";
         const std::error_code error = m_colony.shutdown();
         m_seed = 0u;
         m_tick_count = 0u;
-        m_agent_count = kAgentCount;
         m_speed = 1u;
         m_paused = false;
         m_initial_matter_baseline_valid = true;
@@ -504,6 +644,22 @@ namespace pP::colony {
     // ------------------------------------------------------------------
 
     std::error_code ColonyDriver::update(const TimeSpan elapsed) {
+        PPR_RETURN_ERROR_ON_FAIL(
+            ColonyPreparation,
+            not m_matter_terminal ? std::error_code{} : std::make_error_code(std::errc::operation_not_permitted));
+
+        if (m_snapshot_phase != ESnapshotPhase::idle) {
+            const auto ready = advanceMatterSnapshot();
+            PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, ready);
+            return {};
+        }
+
+        if (m_matter and m_matter_runtime == nullptr) {
+            // Detached durable sessions are frozen CPU owners, never an implicit
+            // Box2D-only fallback while GPU state remains unchanged.
+            PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, std::errc::operation_not_permitted);
+        }
+
         if (not m_timestep) [[unlikely]] {
             return std::make_error_code(std::errc::operation_not_permitted);
         }
@@ -515,11 +671,12 @@ namespace pP::colony {
             return {};
         }
 
-        if (m_single_step_pending and m_held_slices == 0u) {
+        if (m_pending_single_steps != 0u and m_held_slices == 0u) {
             m_held_slices = 1u;
         }
+
         if (m_held_slices != 0u) {
-            if (m_paused and not m_single_step_pending) {
+            if (m_paused and m_pending_single_steps == 0u and not m_matter_pending) {
                 // Hold simulation slices, while preserving paused tool edits.
                 PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, prepareEdit(false));
                 return {};
@@ -528,7 +685,7 @@ namespace pP::colony {
         }
 
         if (m_paused) {
-            if (m_require_edit_publication or preparedWorld() != nullptr) {
+            if (m_matter_runtime != nullptr or m_require_edit_publication or preparedWorld() != nullptr) {
                 PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, prepareEdit(false));
                 return {};
             }
@@ -621,22 +778,35 @@ namespace pP::colony {
         m_player_command = {};
     }
 
-    std::error_code ColonyDriver::stepOne() noexcept {
-        if (not m_timestep) [[unlikely]] {
-            return std::make_error_code(std::errc::operation_not_permitted);
-        }
-        if (not m_paused) [[unlikely]] {
-            return std::make_error_code(std::errc::invalid_argument);
+    std::error_code ColonyDriver::stepOne() {
+        if (m_matter and m_matter_runtime == nullptr) {
+            PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, std::errc::operation_not_permitted);
         }
 
-        m_single_step_pending = true;
-        if (m_edit) {
-            return prepareEditColliders();
+        if (not m_timestep) [[unlikely]] {
+            PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, std::errc::operation_not_permitted);
         }
+
+        if (not m_paused) [[unlikely]] {
+            PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, std::errc::invalid_argument);
+        }
+
+        if (m_pending_single_steps == std::numeric_limits<u32>::max()) {
+            PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, std::errc::value_too_large);
+        }
+
+        ++m_pending_single_steps;
+        if (m_edit) {
+            PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, prepareEditColliders());
+            return {};
+        }
+
         if (m_held_slices == 0u) {
             m_held_slices = 1u;
         }
-        return runHeldTicks();
+
+        PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, runHeldTicks());
+        return {};
     }
 
     std::error_code ColonyDriver::setSpeed(const u32 speed) noexcept {
@@ -645,76 +815,6 @@ namespace pP::colony {
         }
         m_speed = speed;
         return {};
-    }
-
-    // ------------------------------------------------------------------
-    // world replacement
-    // ------------------------------------------------------------------
-
-    std::error_code ColonyDriver::regenerateLegacyFixture(const u64 seed) {
-        PPR_RETURN_ERROR_ON_FAIL(
-            ColonyPreparation,
-            not m_edit ? std::error_code{} : std::make_error_code(std::errc::device_or_resource_busy));
-        // Prepared worlds are replaced transactionally through WorldJob.
-        if (preparedWorld()) {
-            PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, std::errc::operation_not_permitted);
-        }
-        if (not m_timestep) [[unlikely]] {
-            return std::make_error_code(std::errc::operation_not_permitted);
-        }
-
-        m_controlled.reset();
-        clearPlayerCommand();
-        m_timestep->reset();
-        m_tick_count = 0u;
-        m_seed = 0u;
-        shutdownPhysics();
-        m_registry.clear();
-        m_finder = Pathfinder{};
-        clearToolState();
-        const hal::ProfileScope scope_worldgen{"Colony.WorldGen"};
-        m_counts = PathCounts{};
-        m_errands = 0u;
-        m_agents = Array<AgentSummary>{};
-        m_step_error = std::error_code{};
-        m_step_stage = "";
-        const std::error_code shutdown_error = m_colony.shutdown();
-        if (shutdown_error) [[unlikely]] {
-            m_timestep.reset();
-            return shutdown_error;
-        }
-
-        const std::error_code init_error = m_colony.initLegacyFixture(ColonyDesc{seed});
-        if (init_error) [[unlikely]] {
-            (void) m_colony.shutdown();
-            m_timestep.reset();
-            return init_error;
-        }
-
-        if (const std::error_code error = initPhysics()) [[unlikely]] {
-            (void) shutdown();
-            return error;
-        }
-
-        if (const std::error_code error = spawnColonyAgents()) [[unlikely]] {
-            (void) shutdown();
-            return error;
-        }
-
-        m_seed = seed;
-        ++m_world_generation;
-        return {};
-    }
-
-    std::error_code ColonyDriver::regenerateLegacyFixture(const u64 seed, const u32 agent_count) {
-        PPR_RETURN_ERROR_ON_FAIL(
-            ColonyPreparation,
-            not m_edit ? std::error_code{} : std::make_error_code(std::errc::device_or_resource_busy));
-        if (agent_count > kAgentCountMax) [[unlikely]] {
-            return std::make_error_code(std::errc::value_too_large);
-        }
-        m_agent_count = agent_count == 0u ? kAgentCount : agent_count;
-        return regenerateLegacyFixture(seed);
     }
 
     // ------------------------------------------------------------------
@@ -970,8 +1070,8 @@ namespace pP::colony {
             if (pose == nullptr) {
                 continue;
             }
-            const auto position =
-                metreToFineCell({static_cast<double>(pose->m_x), static_cast<double>(pose->m_y)}, cellsPerMetre());
+            const auto position = metreToFineCell(
+                {static_cast<double>(pose->m_x), static_cast<double>(pose->m_y)}, cellsPerMetre());
             if (not position) {
                 continue;
             }
@@ -1078,7 +1178,7 @@ namespace pP::colony {
         }
         constexpr physics::Scene::Desc desc{
             .m_gravity_x = 0.0f,
-            .m_gravity_y = -9.8f,
+            .m_gravity_y = kGravityY,
             .m_fixed_dt = 1.0f / 60.0f,
             .m_substeps = 4u,
             .m_enable_sleep = false};
@@ -1137,8 +1237,7 @@ namespace pP::colony {
                             .m_fixed_rotation = true});
             controlled = entity;
         } else {
-            PPR_RETURN_ERROR_ON_FAIL(
-                ColonyPreparation, spawnAgents(m_colony.grid(), m_registry, m_seed, m_agent_count, context));
+            PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, std::errc::operation_not_permitted);
         }
 
         if (const std::error_code error = createAgentBodies(context)) {
@@ -1295,9 +1394,13 @@ namespace pP::colony {
         agentNeighbourhood(m_registry, needed, cellsPerMetre());
     }
 
-    void ColonyDriver::stepPhysics() noexcept {
+    void ColonyDriver::setMatterSubmissionObserverForTest(IMatterSubmissionObserverForTest *const observer) noexcept {
+        m_submission_observer = observer;
+    }
+
+    void ColonyDriver::stepPhysics() {
         const hal::ProfileScope scope_physics{"Colony.Physics"};
-        if (not m_physics_ready) {
+        if (not m_physics_ready or m_step_error) {
             return;
         }
         Array<sim::ChunkPos> needed{};
@@ -1316,6 +1419,59 @@ namespace pP::colony {
         // Split ownership: m_collider_dirty drains here on success only, so a
         // failed rebuild retains it for retry; presentEdits never touches it.
         m_collider_dirty = Array<sim::ChunkPos>{};
+
+        if (m_matter_runtime != nullptr) {
+            m_step_stage = "matter-submit";
+            m_matter_bodies.clear();
+            for (const auto &body: m_bodies) {
+                const auto snapshot = m_scene.boundarySnapshot(body.m_handle);
+                if (not snapshot) {
+                    PPR_RETAIN_ERROR_ON_FAIL(ColonyPreparation, m_step_error, snapshot.error());
+                    return;
+                }
+
+                m_matter_bodies.push_back(*snapshot);
+            }
+
+            std::ranges::sort(m_matter_bodies, [](const auto &a, const auto &b) {
+                return a.m_handle.m_entity < b.m_handle.m_entity;
+            });
+            auto predicted = predictMatterBodies(m_matter_bodies, m_matter->m_cell_metres, m_matter->m_profile);
+            if (not predicted) {
+                PPR_RETAIN_ERROR_ON_FAIL(ColonyPreparation, m_step_error, predicted.error());
+                return;
+            }
+
+            const physics::ParticleCouplingEpoch epoch{
+                m_world_generation, m_tick_count, m_matter->m_identity.m_terrain_revision};
+            PPR_RETAIN_ERROR_ON_FAIL(ColonyPreparation, m_step_error, m_scene.beginParticleCoupling(epoch));
+            if (m_step_error) {
+                return;
+            }
+
+            m_matter_pending = true;
+            auto completion = advanceMatterRequest(*m_matter_runtime, EMatterOperation::submit, [&] {
+                if (m_submission_observer) {
+                    m_submission_observer->observe(
+                        m_matter->m_identity, m_matter->m_profile, *predicted,
+                        static_cast<u32>(m_matter_bodies.size()));
+                }
+
+                return m_matter_runtime->beginSubmitResident(
+                    m_matter->m_identity, std::move(*predicted), static_cast<u32>(m_matter_bodies.size()));
+            });
+            if (not completion) {
+                PPR_RETAIN_ERROR_ON_FAIL(ColonyPreparation, m_step_error, completion.error());
+                return;
+            }
+
+            if (*completion) {
+                PPR_RETAIN_ERROR_ON_FAIL(ColonyPreparation, m_step_error, (**completion).m_execution.m_operation_error);
+                PPR_RETAIN_ERROR_ON_FAIL(ColonyPreparation, m_step_error, (**completion).m_execution.m_transport_error);
+            }
+
+            return;
+        }
 
         if (not m_step_error) {
             m_step_stage = "scene-step";
@@ -1755,12 +1911,16 @@ namespace pP::colony {
     }
 
     std::error_code ColonyDriver::restoreBodies() {
+        if (m_matter_runtime != nullptr) {
+            PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, std::errc::operation_not_permitted);
+        }
+
         PPR_RETURN_ERROR_ON_FAIL(
             ColonyPreparation,
             not m_edit ? std::error_code{} : std::make_error_code(std::errc::device_or_resource_busy));
         clearPlayerCommand();
 
-        if (not m_physics_ready) {
+        if (not m_physics_ready or m_step_error) {
             return std::make_error_code(std::errc::operation_not_permitted);
         }
 

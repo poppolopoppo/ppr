@@ -224,9 +224,32 @@ namespace pP::colony {
         const auto &recipe = plan->recipe();
         PPR_RETURN_ERROR_ON_FAIL(CheckpointValidation, validateRuntimeWorldParameters(recipe));
         PPR_RETURN_ERROR_ON_FAIL(
-            CheckpointValidation, sim::validateMatterParticles(
+            CheckpointValidation, sim::validateMovingMatterParticles(
                                       checkpoint.m_particles, recipe.m_materials, recipe.m_cell_size_m, context,
                                       descriptor.m_metric.m_reference_thickness_m));
+        PPR_RETURN_ERROR_ON_FAIL(
+            CheckpointValidation, validateMatterState(
+                                      checkpoint.m_current_matter, recipe.m_materials, recipe.m_cell_size_m,
+                                      descriptor.m_metric.m_reference_thickness_m, kMatterGravityY));
+
+        if (checkpoint.m_tick_hz != 60u or checkpoint.m_current_matter.m_next_id != checkpoint.m_particles.m_next_id) {
+            PPR_RETURN_ERROR_ON_FAIL(CheckpointValidation, std::errc::invalid_argument);
+        }
+
+        Array<sim::MatterParticle> physical;
+        for (const auto &batch: checkpoint.m_particles.m_chunks)
+            physical.insert(physical.end(), batch.records().begin(), batch.records().end());
+
+        Array<sim::MatterParticle> carried = checkpoint.m_current_matter.m_records;
+        carried.insert(
+            carried.end(), checkpoint.m_current_matter.m_gas.begin(), checkpoint.m_current_matter.m_gas.end());
+
+        std::ranges::sort(physical, {}, &sim::MatterParticle::m_id);
+        std::ranges::sort(carried, {}, &sim::MatterParticle::m_id);
+        if (physical != carried) {
+            PPR_RETURN_ERROR_ON_FAIL(CheckpointValidation, std::errc::invalid_argument);
+        }
+
         PPR_RETURN_ERROR_ON_FAIL(
             CheckpointValidation,
             not checkpoint.m_sites.empty() and checkpoint.m_sites.size() <= sim::kMaxGenerationSites ? std::error_code{}

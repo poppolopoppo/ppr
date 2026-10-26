@@ -18,7 +18,7 @@ namespace pP::colony {
     // diagnostic presentation
     // ------------------------------------------------------------------
 
-    Expected<GridPass::GridStagedFrame> captureDiagnosticPresentation(
+    Expected<GridStagedFrame> captureDiagnosticPresentation(
         const ColonyDriver &driver, const sim::GeneratedWorld &generated, const EGridDiagnosticMode mode,
         const u64 revision, const float temperature_min_k, const float temperature_max_k, const IContext &context) {
         const PreparedWorld *const prepared = driver.preparedWorld();
@@ -76,7 +76,7 @@ namespace pP::colony {
             }
         }
 
-        std::array<GridPass::GridStagedUpload *, sim::kChunkCount> chunks{};
+        std::array<GridStagedUpload *, sim::kChunkCount> chunks{};
         for (auto &upload: stage->m_uploads) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(WorldPreview, context.error());
             upload.m_diagnostic_indices.resize(sim::kCellsPerChunk, 0u);
@@ -99,7 +99,8 @@ namespace pP::colony {
                         upload.m_diagnostic_indices[local] = static_cast<u16>(biome + 1u);
                     } else if ((*cells)[local].m_element != 0u) {
                         const double unit = std::clamp(
-                            (static_cast<double>((*cells)[local].m_temperature) - static_cast<double>(temperature_min_k)) /
+                            (static_cast<double>((*cells)[local].m_temperature) -
+                                static_cast<double>(temperature_min_k)) /
                                 (static_cast<double>(temperature_max_k) - static_cast<double>(temperature_min_k)),
                             0.0, 1.0);
                         upload.m_diagnostic_indices[local] = static_cast<u16>(
@@ -111,15 +112,18 @@ namespace pP::colony {
 
         if (mode == EGridDiagnosticMode::initial_matter) {
             const auto particles = driver.captureParticles();
-            for (const auto &batch: particles.m_chunks) {
+            PPR_RETURN_UNEXPECTED_ON_FAIL(WorldPreview, particles);
+
+            for (const auto &batch: particles->m_chunks) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(WorldPreview, context.error());
                 const u32 chunk = sim::chunkIndexOf(batch.m_position);
                 if (chunks[chunk] == nullptr) {
                     continue;
                 }
                 for (const auto &particle: batch.records()) {
-                    const u32 x = static_cast<u32>(particle.m_x_m * driver.cellsPerMetre());
-                    const u32 y = static_cast<u32>(particle.m_y_m * driver.cellsPerMetre());
+                    const double cell = 1.0 / driver.cellsPerMetre();
+                    const u32 x = std::min(static_cast<u32>(particle.m_x_m / cell), sim::kWorldEdge - 1u);
+                    const u32 y = std::min(static_cast<u32>(particle.m_y_m / cell), sim::kWorldEdge - 1u);
                     const u32 local = (y % sim::kChunkEdge) * sim::kChunkEdge + x % sim::kChunkEdge;
                     chunks[chunk]->m_diagnostic_indices[local] = particle.m_material;
                 }
@@ -130,3 +134,4 @@ namespace pP::colony {
         return stage;
     }
 }
+

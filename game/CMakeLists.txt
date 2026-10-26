@@ -7,6 +7,7 @@ target_sources(app.game
             ui/Game.UI.cppm
             ui/Game.UI.Model.cppm
             Game.Application.cppm
+            Game.SessionService.cppm
             Game.WorldgenWorkshop.cppm
             colony/Agents.cppm
             ui/AssetBrowserPanel.cppm
@@ -14,6 +15,7 @@ target_sources(app.game
             colony/Checkpoint.cppm
             colony/Colony.cppm
             colony/ColonyDriver.cppm
+            colony/MatterRuntime.cppm
             ui/ColonyPanel.cppm
             colony/ColonySmoke.cppm
             colony/ColonyTranslator.cppm
@@ -34,6 +36,7 @@ target_sources(app.game
         ui/Game.UI.cpp
         ui/Game.UI.Model.cpp
         Game.Application.cpp
+        Game.SessionService.cpp
         Game.WorldgenWorkshop.cpp
         colony/Agents.cpp
         ui/AssetBrowserPanel.cpp
@@ -43,6 +46,8 @@ target_sources(app.game
         colony/Checkpoint.Validation.cpp
         colony/Colony.cpp
         colony/ColonyDriver.cpp
+        colony/ColonyDriver.Matter.cpp
+        colony/MatterRuntime.cpp
         colony/ColonyDriver.Checkpoint.cpp
         colony/ColonyDriver.Edits.cpp
         ui/ColonyPanel.cpp
@@ -62,7 +67,6 @@ target_sources(app.game
         colony/SimFramePacket.cpp
         colony/SimFramePacket.Diagnostics.cpp
         colony/WorldGen.cpp
-        colony/WorldGen.Fixture.cpp
         colony/WorldGen.Plan.cpp
         colony/WorldGen.Export.cpp
         colony/WorldGen.Preview.cpp
@@ -79,7 +83,7 @@ setup_ppr_project(app.game
 
 # Slice 4: driver-owned physics Scene + chunk colliders (explicit grant).
 # PRIVATE shape mirrors engine.tests.sim; box2d stays behind engine.physics.
-target_link_libraries(app.game PRIVATE engine.physics)
+target_link_libraries(app.game PRIVATE engine.physics engine.matter)
 
 # Always run on an explicit game build: data-only edits must reach deployment
 # without requiring a C++ relink, including removal of deleted source assets.
@@ -125,6 +129,7 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
                 ui/Game.UI.Model.cppm
                 ui/ColonyPanel.cppm
                 Game.Application.cppm
+                Game.SessionService.cppm
                 Game.WorldgenWorkshop.cppm
                 Game.Config.cppm
                 Game.Display.cppm
@@ -138,6 +143,7 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
                 colony/Checkpoint.cppm
                 colony/Colony.cppm
                 colony/ColonyDriver.cppm
+                colony/MatterRuntime.cppm
                 colony/ColonyTranslator.cppm
                 colony/DigTool.cppm
                 colony/Pathfinding.cppm
@@ -156,6 +162,8 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
             Game.Display.cpp
             Game.WorldgenWorkshop.cpp
             Game.Tests.cpp
+            Game.SessionService.cpp
+            Game.SessionService.Tests.cpp
             Game.Config.Tests.cpp
             Game.Display.Tests.cpp
             colony/Content.cpp
@@ -176,6 +184,7 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
             colony/Content.TestFixtures.cpp
             colony/Content.Descriptors.Tests.cpp
             colony/Checkpoint.Tests.cpp
+            colony/Checkpoint.Gpu.Tests.cpp
             colony/Metric.cpp
             colony/Metric.Tests.cpp
             colony/Agents.cpp
@@ -185,14 +194,15 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
             colony/Checkpoint.Validation.cpp
             colony/Colony.cpp
             colony/ColonyDriver.cpp
+            colony/ColonyDriver.Matter.cpp
+            colony/MatterRuntime.cpp
             colony/ColonyDriver.Checkpoint.cpp
             colony/ColonyDriver.Edits.cpp
             colony/ColonyTranslator.cpp
             colony/DigTool.cpp
             colony/Pathfinding.cpp
             colony/WorldGen.cpp
-            colony/WorldGen.Fixture.cpp
-            colony/WorldGen.Fixture.Tests.cpp
+            colony/Colony.AuthoredFixture.Tests.h
             colony/WorldGen.Plan.cpp
             colony/WorldGen.Export.cpp
             colony/WorldGen.Preview.cpp
@@ -209,8 +219,9 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
     setup_ppr_project(game.tests
       INTERNAL_PUBLIC_DEPS engine.core engine.asset engine.app engine.math engine.sim engine.image engine.tests
     )
-    target_link_libraries(game.tests PRIVATE engine.physics)
+    target_link_libraries(game.tests PRIVATE engine.physics engine.matter)
     add_dependencies(game.tests worldgen.assets)
+    ppr_stage_assets(game.tests shaders)
 
     target_include_directories(game.tests PRIVATE ${CMAKE_SOURCE_DIR}/lib/engine/tests/include)
 
@@ -223,10 +234,59 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
     # loop. The two worldgen preview replay/crop leaves dominate that budget
     # and own a separate entry; the remaining preview widget leaf stays here.
     ppr_add_test_entry(TARGET game.tests
-        EXCLUDE "game/worldgen_preview/bounded_samples_replay_and_export_the_exact_visible_draft,game/worldgen_preview/whole_world_crops_preserve_production_formations_seams_and_matter"
+        EXCLUDE "game/worldgen_preview/bounded_samples_replay_and_export_the_exact_visible_draft,game/worldgen_preview/whole_world_crops_preserve_production_formations_seams_and_matter,game/checkpoint_gpu"
         LOOPS
         TIMEOUT 600
         LABELS unit game cpu
+    )
+
+    # Each full-domain lifecycle witness has its own device lock and existing
+    # 180-second ceiling; do not aggregate cold-owner submissions in the CPU shard.
+    ppr_add_test_entry(TARGET game.tests
+        NAME matter_edit_gpu
+        FILTER "game/checkpoint_gpu/attached_dig_preparation_retry_publishes_inventory_once_without_render_ack"
+        LOOPS
+        RESOURCE_LOCK gpu
+        TIMEOUT 180
+        LABELS unit game gpu_validation
+    )
+    ppr_add_test_entry(TARGET game.tests
+        NAME matter_coverage_gpu
+        FILTER "game/checkpoint_gpu/coverage_deferral_keeps_cohort_then_evolution_allows_a_later_tick_retry"
+        LOOPS
+        RESOURCE_LOCK gpu
+        TIMEOUT 180
+        LABELS unit game gpu_validation
+    )
+    ppr_add_test_entry(TARGET game.tests
+        NAME matter_restore_gpu
+        FILTER "game/checkpoint_gpu/identically_restored_attached_owners_preserve_columns_and_resume_the_same_tick"
+        LOOPS
+        RESOURCE_LOCK gpu
+        TIMEOUT 180
+        LABELS unit game gpu_validation
+    )
+
+    ppr_add_test_entry(TARGET game.tests
+        NAME matter_sand_gpu
+        FILTER "game/checkpoint_gpu/dug_sand_sustains_sixty_runtime_ticks_on_shared_terrain"
+        LOOPS
+        RESOURCE_LOCK gpu
+        TIMEOUT 180
+        LABELS unit game gpu_validation
+    )
+
+    # Temporary opt-in frozen-artifact diagnostic. The ordinary game entry
+    # excludes checkpoint_gpu; missing frozen evidence is an explicit failure here.
+    ppr_add_test_entry(TARGET game.tests
+        NAME matter_fused_paired
+        ARGS --run-test "game/checkpoint_gpu/full_frontier_frozen_fused_budget_pair" --loop 1
+        RESOURCE_LOCK gpu
+        TIMEOUT 180
+        LABELS game diagnostic gpu_validation
+    )
+    set_tests_properties(game.tests.matter_fused_paired PROPERTIES
+        ENVIRONMENT "PPR_TEST_FUSED_PAIRED_ROOT=${PROJECT_SOURCE_DIR}/out/diagnostics/pbmpm-recovery-20261022/full-matrix-20261024/fused-paired-1"
     )
 
     # Heavy worldgen preview leaves: exact-visible-draft sample replay/export

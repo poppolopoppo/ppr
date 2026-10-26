@@ -1,6 +1,7 @@
 module;
 #include "pP/Macros.h"
 #include "pP/UnitTest.h"
+#include <cstdio>
 
 module game.tests;
 
@@ -9,12 +10,17 @@ import engine.core;
 import engine.sim;
 import engine.app;
 import engine.image;
+import engine.matter;
+import engine.shader;
+import engine.rhi;
+import game.colony.matter;
 import game.colony.agents;
 import game.colony.buildings;
 import game.colony.pathfinding;
 import game.colony.checkpoint;
 import game.colony.content;
 import game.colony.driver;
+import game.colony.digtool;
 import game.colony.worldgen;
 import game.colony.sim_packet;
 import game.application;
@@ -22,325 +28,297 @@ import game.colony.panel;
 import game.ui.model;
 import std;
 
+#include "Checkpoint.Tests.Support.h"
+
 namespace pP::game::tests::detail::checkpoint {
-    // ------------------------------------------------------------------
-    // explicit owned descriptor fixtures
-    // ------------------------------------------------------------------
-
-    using namespace colony;
-
     PPR_DEFINE_LOG_CATEGORY(CheckpointTests, debug, none)
-
-    struct Fixture {
-        std::filesystem::path m_root;
-        std::string m_namespace, m_world_key, m_manifest;
-        std::shared_ptr<const ContentCatalog> m_catalog;
-
-        explicit Fixture(std::string name_space = "checkpoint", std::string world_key = "frontier")
-            : m_namespace{std::move(name_space)}, m_world_key{std::move(world_key)},
-              m_manifest{"schema_version = 1\npack_id = '" + m_namespace + "'\n"} {
-            static std::atomic<u32> ordinal{};
-            const auto parent = hal::process::currentExecutablePath().parent_path();
-
-            for (u32 attempt = 0u; attempt < 4096u; ++attempt) {
-                const auto candidate = parent / ("checkpoint-pack-test-" + std::to_string(ordinal.fetch_add(1u)));
-                if (std::filesystem::create_directory(candidate)) {
-                    m_root = std::filesystem::canonical(candidate);
-                    break;
-                }
-            }
-
-            PPR_TEST_ASSERT(not m_root.empty());
-
-            sim::asset::ElementDescriptor element;
-            element.m_schema_version = 1u;
-            element.m_density = 2000.0;
-            element.m_phase = sim::EGenerationMatter::solid;
-            add("solid", sim::asset::kElementKind, "solid.toml", element);
-
-            element.m_density = 1.0;
-            element.m_phase = sim::EGenerationMatter::liquid;
-            add("liquid", sim::asset::kElementKind, "liquid.toml", element);
-
-            image::TextureDescriptor texture;
-            texture.m_schema_version = 1u;
-            texture.m_source = "pixel.png";
-            add("albedo", image::kTextureAssetKind, "albedo.toml", texture);
-
-            MaterialAssetDescriptor material;
-            material.m_schema_version = 1u;
-            material.m_element = "solid";
-            material.m_diggable = true;
-            material.m_appearance.m_display_name = "Basalt";
-            material.m_appearance.m_color_rgba = "808080ff";
-            material.m_appearance.m_albedo_texture = "albedo";
-            material.m_appearance.m_texture_period_m = 1.0;
-            add("basalt", sim::asset::kMaterialKind, "basalt.toml", material);
-
-            material.m_appearance.m_display_name = "Sandstone";
-            material.m_appearance.m_alpha_mode = EMaterialAlphaMode::blend;
-            material.m_appearance.m_texture_sampling = EMaterialTextureSampling::repeat;
-            add("sandstone", sim::asset::kMaterialKind, "sandstone.toml", material);
-
-            material.m_element = "liquid";
-            material.m_diggable.reset();
-            material.m_representation = sim::definition::EMaterialRepresentation::particle;
-            material.m_appearance.m_display_name = "Water";
-            add("water", sim::asset::kMaterialKind, "water.toml", material);
-
-            sim::asset::FieldDescriptor field;
-            field.m_schema_version = 1u;
-            field.m_definition.m_frequency_per_metre = 0.01;
-            add("noise", sim::asset::kFieldKind, "noise.toml", field);
-
-            BiomeAssetDescriptor biome;
-            biome.m_schema_version = 1u;
-            biome.m_appearance.m_display_name = "Hearth";
-            biome.m_appearance.m_preview_color_rgba = "808080ff";
-            biome.m_definition.m_temperature = {{"noise"}, 300.0, 1.0};
-            sim::definition::CompositionBand band;
-            band.m_field.m_key = "noise";
-            band.m_materials.m_entries.push_back({"stone", {{"basalt"}, 1.0}});
-            biome.m_definition.m_composition.m_entries.push_back({"cover", std::move(band)});
-
-            sim::definition::Deposit deposit;
-            deposit.m_field.m_key = "noise";
-            deposit.m_material.m_key = "sandstone";
-            deposit.m_host_material.m_key = "basalt";
-            deposit.m_blob.emplace();
-            deposit.m_blob->m_count = 2u;
-            deposit.m_blob->m_radius = {1.0, 2.0};
-            deposit.m_blob->m_stretch = {1.0, 2.0};
-            deposit.m_blob->m_orientation = {30.0, 180.0};
-            biome.m_definition.m_deposits.m_entries.push_back({"lens", std::move(deposit)});
-            add("hearth", sim::asset::kBiomeKind, "hearth.toml", biome);
-
-            FeatureAssetDescriptor feature;
-            feature.m_schema_version = 1u;
-            feature.m_appearance.m_display_name = "Landing";
-            feature.m_definition.m_reservation = {0, 0, 16, 16};
-            sim::definition::Operation operation;
-            operation.m_action = sim::definition::Carve{sim::definition::Rectangle{16u, 16u}};
-            feature.m_definition.m_operations.m_entries.push_back({"clear", std::move(operation)});
-            feature.m_definition.m_markers.m_entries.push_back({"spawn", {sim::EGenerationMarker::start, 8, 8}});
-            add("landing", sim::asset::kFeatureKind, "landing.toml", feature);
-
-            BackgroundAssetDescriptor background;
-            background.m_schema_version = 1u;
-
-            for (u32 index = 0u; index < 4u; ++index) {
-                BackgroundAppearanceLayer layer;
-                layer.m_order = index;
-                layer.m_texture = "albedo";
-                layer.m_color_rgba = "ffffffff";
-                layer.m_repeat_period_m = 1.0;
-                background.m_definition.m_layers.m_entries.push_back(
-                    {"layer_" + std::to_string(index), std::move(layer)});
-            }
-
-            add("skies", kBackgroundAssetKind, "skies.toml", background);
-
-            WorldAssetDescriptor world;
-            world.m_schema_version = 1u;
-            world.m_semantic_key = "frontier";
-            world.m_appearance.m_display_name = "Frontier";
-            world.m_appearance.m_background_stack = "skies";
-            world.m_palette.m_materials.m_entries = {
-                {"basalt", {"basalt", 1u}}, {"sandstone", {"sandstone", 2u}}, {"water", {"water", 3u}}};
-            world.m_palette.m_fields.m_entries.push_back({"noise", {"noise", 0u}});
-            world.m_palette.m_biomes.m_entries.push_back({"hearth", {"hearth", 0u}});
-            world.m_palette.m_features.m_entries.push_back({"landing", {"landing", 0u}});
-            world.m_profile.m_layout = {1u, 1u, 16u, 1.0};
-            world.m_profile.m_boundaries = {{"basalt"}, 1u, 0.0, {"noise"}, {"noise"}};
-            world.m_profile.m_start.m_biome.m_key = "hearth";
-            world.m_profile.m_start.m_feature.m_key = "landing";
-            world.m_profile.m_start.m_marker.m_key = "spawn";
-            world.m_profile.m_start.m_x_fine = 128u;
-            world.m_profile.m_start.m_y_fine = 128u;
-            world.m_profile.m_start.m_clearance_m = 2.0;
-            world.m_profile.m_start.m_route_width_m = 1.0;
-            sim::definition::BiomeChoice choice;
-            choice.m_biome.m_key = "hearth";
-            choice.m_required_count = 1u;
-            choice.m_distance_max_m = 1024.0;
-            world.m_profile.m_biomes.m_entries.push_back({"hearth", std::move(choice)});
-            add(m_world_key, sim::asset::kWorldKind, "world.toml", world);
-            write("pack.toml", m_manifest);
-
-            config::Diagnostics diagnostics;
-            auto imported = loadContentCatalog(m_root, diagnostics);
-            PPR_TEST_ASSERT(imported.has_value());
-
-            auto definitions = std::make_shared<const ContentDescriptorCatalog>(std::move(*imported));
-            const auto id = resolveContentWorld(*definitions, m_namespace + ":" + m_world_key, diagnostics);
-            PPR_TEST_ASSERT(id.has_value());
-
-            auto selected = selectWorldCatalog(definitions, *id, kWorldCompileParameters, diagnostics);
-            PPR_TEST_ASSERT(selected.has_value());
-
-            m_catalog = std::make_shared<const ContentCatalog>(std::move(*selected));
-        }
-
-        ~Fixture() {
-            // Best-effort fixture cleanup; retained catalog and sidecar owners are independent of disk.
-            std::error_code error;
-            std::filesystem::remove_all(m_root, error);
-            PPR_LOG_WARNING_ON_FAIL(CheckpointTests, error);
-        }
-
-        Fixture(const Fixture &) = delete;
-        Fixture &operator=(const Fixture &) = delete;
-
-        void write(const std::string_view file, const std::string_view bytes) const {
-            std::ofstream stream{m_root / file, std::ios::binary | std::ios::trunc};
-            stream.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
-            stream.close();
-            PPR_TEST_ASSERT(not stream.fail());
-        }
-
-        template<typename T>
-            requires requires { T::describe(); }
-        void write(const std::string_view file, const T &value) const {
-            const auto document = config::documentFrom(value);
-            PPR_TEST_ASSERT(document.has_value());
-
-            const auto bytes = config::encode(*document);
-            PPR_TEST_ASSERT(bytes.has_value());
-
-            write(file, std::string_view{*bytes});
-        }
-
-        template<typename T>
-        void add(const std::string_view key, const std::string_view kind, const std::string_view file, const T &value) {
-            m_manifest += "\n[assets." +
-                          std::string{key} +
-                          "]\nkind = '" +
-                          std::string{kind} +
-                          "'\ndescriptor = '" +
-                          std::string{file} +
-                          "'\n";
-
-            write(file, value);
-        }
-
-        std::shared_ptr<const ContentPresentation> presentation(
-            const u64 generation, std::shared_ptr<const ContentCatalog> catalog = {}) const {
-            constexpr std::array<u8, 75u> pixel{
-                0x89u, 0x50u, 0x4eu, 0x47u, 0x0du, 0x0au, 0x1au, 0x0au, 0x00u, 0x00u, 0x00u, 0x0du, 0x49u, 0x48u, 0x44u,
-                0x52u, 0x00u, 0x00u, 0x00u, 0x04u, 0x00u, 0x00u, 0x00u, 0x04u, 0x08u, 0x06u, 0x00u, 0x00u, 0x00u, 0xa9u,
-                0xf1u, 0x9eu, 0x7eu, 0x00u, 0x00u, 0x00u, 0x12u, 0x49u, 0x44u, 0x41u, 0x54u, 0x78u, 0x9cu, 0x63u, 0x68u,
-                0x68u, 0xf8u, 0xffu, 0x1fu, 0x19u, 0x33u, 0x90u, 0x2eu, 0x00u, 0x00u, 0x4cu, 0x7eu, 0x2fu, 0xe1u, 0x74u,
-                0xdcu, 0xdau, 0x7cu, 0x00u, 0x00u, 0x00u, 0x00u, 0x49u, 0x45u, 0x4eu, 0x44u, 0xaeu, 0x42u, 0x60u,
-                0x82u};
-            write("pixel.png", {reinterpret_cast<const char *>(pixel.data()), pixel.size()});
-
-            config::Diagnostics diagnostics;
-            auto request = ContentPresentationRequest::start(
-                catalog ? std::move(catalog) : m_catalog, asset::RequestGeneration{generation}, context::background(),
-                diagnostics);
-            PPR_TEST_ASSERT(request.has_value());
-
-            auto prepared = request->finish(diagnostics);
-            PPR_TEST_ASSERT(prepared.has_value());
-            return *prepared;
-        }
-    };
-
-    // ------------------------------------------------------------------
-    // edited numeric checkpoint values
-    // ------------------------------------------------------------------
-
-    // An explicitly edited world: its old authored starting area and reservoir
-    // no longer have to satisfy generation-time containment or route guarantees.
-    WorldCheckpoint editedCheckpoint(const ContentCatalog &catalog) {
-        WorldCheckpoint checkpoint;
-        checkpoint.m_descriptor.m_profile = catalog.worlds().front().m_key;
-        checkpoint.m_descriptor.m_seed = 42u;
-        checkpoint.m_descriptor.m_content_fingerprint = *catalog.contentFingerprint();
-        checkpoint.m_materials.push_back({0u, "vacuum"});
-        for (const auto &material: catalog.materials()) {
-            checkpoint.m_materials.push_back({material.m_numeric_id, material.m_key});
-        }
-
-        std::ranges::sort(checkpoint.m_materials, {}, &CheckpointMaterial::m_id);
-
-        auto plan = compileWorldPlan(catalog, checkpoint.m_descriptor.m_profile, 42u);
-        PPR_TEST_ASSERT(plan.has_value());
-
-        auto layout = sim::compileBiomeLayout(*plan);
-        PPR_TEST_ASSERT(layout.has_value());
-        checkpoint.m_sites.assign(layout->sites().begin(), layout->sites().end());
-
-        for (u32 b = 0u; b < plan->recipe().m_biomes.size() and checkpoint.m_geometry.m_blobs.empty(); ++b) {
-            const auto &deposits = plan->recipe().m_biomes[b].m_deposits;
-            for (u32 d = 0u; d < deposits.size(); ++d) {
-                const auto &deposit = deposits[d];
-                if (deposit.m_shape == sim::EGenerationDepositShape::blob and deposit.m_blob_count >= 2u) {
-                    checkpoint.m_geometry.m_blobs.push_back(
-                        {b, d, 0u, 12.3456789, 45.125, deposit.m_radius_min_m, deposit.m_stretch_min,
-                            2.0 * std::numbers::pi * (deposit.m_orientation_min_degrees / 360.0), 100.0, 200.0});
-                    checkpoint.m_geometry.m_blobs.push_back(
-                        {b, d, 1u, 90.25, 75.5, deposit.m_radius_max_m, deposit.m_stretch_max,
-                            2.0 * std::numbers::pi * (deposit.m_orientation_max_degrees / 360.0), 500.0, 900.0});
-                    break;
-                }
-            }
-        }
-
-        PPR_TEST_ASSERT(checkpoint.m_geometry.m_blobs.size() == 2u);
-
-        checkpoint.m_start.m_resource_fine_cells.resize(plan->recipe().m_resources.size());
-        checkpoint.m_start.m_spawn_x_m = 10.0;
-        checkpoint.m_start.m_spawn_y_m = 15.0;
-        checkpoint.m_start.m_floor_y_m = 14.0;
-        checkpoint.m_initial_matter_valid = false;
-        checkpoint.m_tick = 19u;
-        checkpoint.m_report.m_material_counts.push_back({0u, 100u});
-
-        sim::ChunkGrid grid;
-        PPR_TEST_ASSERT(not grid.setCell({127u, 40u}, {catalog.findMaterial("basalt")->m_numeric_id, 321.0f}));
-        grid.clearAllDirty();
-        PPR_TEST_ASSERT(not grid.setCell({128u, 40u}, {catalog.findMaterial("sandstone")->m_numeric_id, 345.0f}));
-
-        sim::Registry registry;
-        PPR_TEST_ASSERT(not registerColonyComponents(registry));
-        const auto actor = registry.create();
-        registry.emplace<Agent>(actor, {.m_key = 100u, .m_spawn = {30u, 45u}});
-        registry.emplace<Needs>(actor, {85.0f, 73.0f});
-        registry.emplace<sim::BodyState>(actor, {10.0f, 15.0f, 0.0f, 1.25f, -0.5f});
-        registry.emplace<sim::BodyDefinition>(
-            actor, {.m_motion = sim::EMotionKind::dynamic,
-                       .m_half_width = 0.4f,
-                       .m_half_height = 0.9f,
-                       .m_fixed_rotation = true});
-
-        auto snapshot = sim::captureFull(grid, registry, 42u);
-        PPR_TEST_ASSERT(snapshot.has_value());
-        checkpoint.m_snapshot = std::move(*snapshot);
-        checkpoint.m_snapshot.m_bodies.m_replay_ticks = checkpoint.m_tick;
-        checkpoint.m_controlled = actor;
-
-        checkpoint.m_matter.m_regions.push_back(
-            {.m_identity = 3u,
-                .m_material = catalog.findMaterial("water")->m_numeric_id,
-                .m_temperature_k = 293.0,
-                .m_bulk_density_kg_m3 = 1.0,
-                .m_volume_m3 = 0.1,
-                .m_mass_kg = 0.1,
-                .m_spans = {{40u, 127u, 129u}}});
-        checkpoint.m_matter.m_span_count = 1u;
-
-        checkpoint.m_particles.m_next_id = 12u;
-        checkpoint.m_particles.m_chunks.push_back(
-            {{1u, 0u}, std::make_shared<const Array<sim::MatterParticle>>(Array<sim::MatterParticle>{
-                           {11u, 130.5 / 3.0, 40.5 / 3.0, 0.1, 0.1, 293.0, 1.0,
-                               catalog.findMaterial("water")->m_numeric_id, sim::EGenerationMatter::liquid}})});
-        return checkpoint;
-    }
 
     // ------------------------------------------------------------------
     // checkpoint restore, frozen capture and edit publication
     // ------------------------------------------------------------------
+
+    PPR_UNIT_TEST (dig_candidate_preserves_carried_columns_and_emits_original_seam_inventory_once) {
+        Fixture fixture;
+        const auto *const oxygen = fixture.m_catalog->findMaterial("oxygen");
+        PPR_TEST_ASSERT(oxygen != nullptr);
+
+        auto checkpoint = editedCheckpoint(*fixture.m_catalog);
+        auto &source = checkpoint.m_current_matter;
+        source.m_identity.m_publication = 7u;
+        source.m_particles[0u].m_displacement_x = 0.125f;
+        source.m_particles[0u].m_deformation_gradient = {1.0f, 0.25f, -0.125f, 0.75f};
+        source.m_particles[0u].m_deformation_displacement = {0.125f, 0.25f, -0.5f, -0.125f};
+        source.m_particles[0u].m_liquid_density = 0.5f;
+        source.m_particles[0u].m_log_jp = 0.75f;
+        source.m_gas.push_back(
+            {5u, 100.5 * source.m_cell_metres, 100.5 * source.m_cell_metres, 0.1, 0.1, 300.0, 1.0, oxygen->m_numeric_id,
+                sim::EGenerationMatter::gas});
+        const auto original = source;
+
+        sim::ChunkGrid grid;
+        PPR_TEST_ASSERT(not sim::apply(grid, checkpoint.m_snapshot));
+        Array<sim::ChunkGrid::CapturedChunk> edits;
+        for (u32 x: {127u, 128u}) {
+            auto captured = grid.captureChunk(sim::chunkOf({x, 40u}));
+            PPR_TEST_ASSERT(captured.has_value());
+            PPR_TEST_ASSERT(not grid.setCell({x, 40u}, {0u, 99.0f}));
+            grid.exchangeChunk(*captured);
+            edits.push_back(std::move(*captured));
+        }
+
+        const auto prepared = prepareMatterTerrainEdit(source, grid, edits, *fixture.m_catalog);
+        PPR_TEST_ASSERT(prepared and prepared->has_value());
+        const auto *const candidate = &**prepared;
+        PPR_TEST_ASSERT(candidate->m_next_id == 14u and candidate->m_records.size() == 3u);
+        PPR_TEST_ASSERT(candidate->m_identity.m_publication == 8u and candidate->m_identity.m_terrain_revision == 2u);
+        PPR_TEST_ASSERT(candidate->m_gas == original.m_gas);
+        PPR_TEST_ASSERT(
+            std::bit_cast<std::array<u32, 22u>>(candidate->m_particles[0u]) ==
+            std::bit_cast<std::array<u32, 22u>>(source.m_particles[0u]));
+
+        for (std::size_t i = 0u; i < 2u; ++i) {
+            const u32 x = 127u + static_cast<u32>(i);
+            const auto before = *grid.getCell({x, 40u});
+            const auto &record = candidate->m_records[i + 1u];
+            const double density = fixture.m_catalog->findMaterial(before.m_element)->m_reference_density_kg_m3;
+            const double volume = source.m_cell_metres * source.m_cell_metres * source.m_thickness_metres;
+
+            PPR_TEST_ASSERT(record.m_id == 12u + i and record.m_material == before.m_element);
+            PPR_TEST_ASSERT(record.m_mass_kg == density * volume and record.m_volume_m3 == volume);
+            PPR_TEST_ASSERT(record.m_temperature_k == static_cast<double>(before.m_temperature));
+            PPR_TEST_ASSERT(record.m_x_m == (x + 0.5) * source.m_cell_metres);
+            PPR_TEST_ASSERT(
+                candidate->m_particles[i + 1u].m_material == static_cast<float>(matter::ESourceMaterial::sand));
+            PPR_TEST_ASSERT(candidate->m_particles[i + 1u].m_displacement_x == 0.0f);
+        }
+
+        const auto retry = prepareMatterTerrainEdit(source, grid, edits, *fixture.m_catalog);
+        PPR_TEST_ASSERT(retry and retry->has_value());
+        PPR_TEST_ASSERT((**retry).m_next_id == candidate->m_next_id);
+        PPR_TEST_ASSERT((**retry).m_records == candidate->m_records);
+        PPR_TEST_ASSERT(source.m_next_id == original.m_next_id and source.m_identity == original.m_identity);
+        PPR_TEST_ASSERT(source.m_records == original.m_records);
+        PPR_TEST_ASSERT(grid.getCell({127u, 40u})->m_element != 0u and grid.getCell({128u, 40u})->m_element != 0u);
+    };
+
+    PPR_UNIT_TEST (new_contour_coverage_rejects_moving_and_gas_but_preserves_prior_overlap) {
+        Fixture fixture;
+        const auto *const oxygen = fixture.m_catalog->findMaterial("oxygen");
+        PPR_TEST_ASSERT(oxygen != nullptr);
+
+        const auto checkpoint = editedCheckpoint(*fixture.m_catalog);
+        const auto solid = fixture.m_catalog->findMaterial("basalt")->m_numeric_id;
+
+        for (u32 gas = 0u; gas < 2u; ++gas) {
+            auto source = checkpoint.m_current_matter;
+            auto record = source.m_records[0u];
+            record.m_x_m = 128.0 * source.m_cell_metres;
+            record.m_y_m = 40.5 * source.m_cell_metres;
+            PPR_TEST_ASSERT(record.m_x_m / source.m_cell_metres == 128.0);
+            PPR_TEST_ASSERT(record.m_y_m / source.m_cell_metres == 40.5);
+            source.m_records[0u] = record;
+            source.m_particles[0u].m_position_x = 131.0f;
+            source.m_particles[0u].m_position_y = 43.5f;
+
+            if (gas != 0u) {
+                record.m_material = oxygen->m_numeric_id;
+                record.m_phase = sim::EGenerationMatter::gas;
+                source.m_gas = {record};
+                source.m_records.clear();
+                source.m_particles.clear();
+                source.m_profile.m_particle_count = 0u;
+            }
+
+            sim::ChunkGrid grid;
+            auto chunk = grid.captureChunk({1u, 0u});
+            PPR_TEST_ASSERT(chunk.has_value());
+            PPR_TEST_ASSERT(not grid.setCell({128u, 40u}, {solid, 300.0f}));
+            grid.exchangeChunk(*chunk);
+            Array<sim::ChunkGrid::CapturedChunk> edits;
+            edits.push_back(std::move(*chunk));
+
+            const auto rejected = prepareMatterTerrainEdit(source, grid, edits, *fixture.m_catalog);
+            PPR_TEST_ASSERT(rejected and not rejected->has_value());
+            PPR_TEST_ASSERT(source.m_next_id == 12u and source.m_identity.m_publication == 0u);
+            PPR_TEST_ASSERT(grid.getCell({128u, 40u})->m_element == 0u);
+        }
+
+        auto source = checkpoint.m_current_matter;
+        sim::ChunkGrid grid;
+        PPR_TEST_ASSERT(not grid.setCell({130u, 40u}, {solid, 300.0f}));
+        auto chunk = grid.captureChunk({0u, 0u});
+        PPR_TEST_ASSERT(chunk.has_value());
+        PPR_TEST_ASSERT(not grid.setCell({5u, 5u}, {solid, 300.0f}));
+        grid.exchangeChunk(*chunk);
+        Array<sim::ChunkGrid::CapturedChunk> edits;
+        edits.push_back(std::move(*chunk));
+
+        const auto unrelated = prepareMatterTerrainEdit(source, grid, edits, *fixture.m_catalog);
+        PPR_TEST_ASSERT(unrelated and unrelated->has_value());
+        PPR_TEST_ASSERT((**unrelated).m_records == source.m_records);
+        PPR_TEST_ASSERT((**unrelated).m_particles.size() == source.m_particles.size());
+
+        // A nonzero catalog particle material is not solid contour occupancy.
+        sim::ChunkGrid nonsolid;
+        auto non_solid_chunk = nonsolid.captureChunk({1u, 0u});
+        PPR_TEST_ASSERT(non_solid_chunk.has_value());
+        PPR_TEST_ASSERT(not nonsolid.setCell({130u, 40u}, {oxygen->m_numeric_id, 300.0f}));
+        nonsolid.exchangeChunk(*non_solid_chunk);
+        Array<sim::ChunkGrid::CapturedChunk> non_solid_edits;
+        non_solid_edits.push_back(std::move(*non_solid_chunk));
+
+        const auto ignored = prepareMatterTerrainEdit(source, nonsolid, non_solid_edits, *fixture.m_catalog);
+        PPR_TEST_ASSERT(ignored and ignored->has_value());
+        PPR_TEST_ASSERT((**ignored).m_records == source.m_records);
+
+        // The rejected cohort includes a locally reserved dug-cell emission;
+        // neither its reserved ID nor any carried column escapes rejection.
+        sim::ChunkGrid cohort;
+        PPR_TEST_ASSERT(not sim::apply(cohort, checkpoint.m_snapshot));
+        auto removed = cohort.captureChunk({0u, 0u});
+        auto added = cohort.captureChunk({1u, 0u});
+        PPR_TEST_ASSERT(removed and added);
+        PPR_TEST_ASSERT(not cohort.setCell({127u, 40u}, {0u, 0.0f}));
+        PPR_TEST_ASSERT(not cohort.setCell({130u, 40u}, {solid, 300.0f}));
+        cohort.exchangeChunk(*removed);
+        cohort.exchangeChunk(*added);
+        Array<sim::ChunkGrid::CapturedChunk> cohort_edits;
+        cohort_edits.push_back(std::move(*removed));
+        cohort_edits.push_back(std::move(*added));
+
+        const auto deferred = prepareMatterTerrainEdit(source, cohort, cohort_edits, *fixture.m_catalog);
+        PPR_TEST_ASSERT(deferred and not deferred->has_value());
+        PPR_TEST_ASSERT(source.m_next_id == checkpoint.m_current_matter.m_next_id);
+        PPR_TEST_ASSERT(source.m_identity == checkpoint.m_current_matter.m_identity);
+        PPR_TEST_ASSERT(
+            std::bit_cast<std::array<u32, 22u>>(source.m_particles[0u]) ==
+            std::bit_cast<std::array<u32, 22u>>(checkpoint.m_current_matter.m_particles[0u]));
+        PPR_TEST_ASSERT(cohort.getCell({127u, 40u})->m_element != 0u and cohort.getCell({130u, 40u})->m_element == 0u);
+    };
+
+    PPR_UNIT_TEST (v5_round_trip_preserves_all_current_words_and_rebinds_only_world) {
+        Fixture fixture;
+        auto checkpoint = editedCheckpoint(*fixture.m_catalog);
+        auto &state = checkpoint.m_current_matter;
+        state.m_identity = {91u, 7u, 4u};
+        auto &particle = state.m_particles[0u];
+        particle.m_displacement_x = 0.125f;
+        particle.m_displacement_y = -0.25f;
+        particle.m_deformation_gradient = {1.0f, 0.25f, -0.125f, 0.75f};
+        particle.m_deformation_displacement = {0.125f, 0.25f, -0.5f, -0.125f};
+        particle.m_liquid_density = 0.5f;
+        particle.m_lambda = 0.375f;
+        particle.m_log_jp = 0.75f;
+        const auto words = std::bit_cast<std::array<u32, 22u>>(particle);
+
+        const auto bytes = encodeWorldCheckpoint(checkpoint, *fixture.m_catalog);
+        PPR_TEST_ASSERT(bytes.has_value());
+        const auto decoded = decodeWorldCheckpoint(*bytes, *fixture.m_catalog);
+        PPR_TEST_ASSERT(decoded.has_value());
+        PPR_TEST_ASSERT(std::bit_cast<std::array<u32, 22u>>(decoded->m_current_matter.m_particles[0u]) == words);
+        PPR_TEST_ASSERT(decoded->m_current_matter.m_identity == state.m_identity);
+
+        const auto snapshot_bytes = sim::save(checkpoint.m_snapshot);
+        PPR_TEST_ASSERT(snapshot_bytes.has_value());
+        const auto profile_offset = bytes->size() - snapshot_bytes->size() - 8u - 88u - 4u - 64u;
+        auto corrupt_profile = *bytes;
+        corrupt_profile[profile_offset] ^= 1u;
+        const auto rejected_profile = decodeWorldCheckpoint(corrupt_profile, *fixture.m_catalog);
+        PPR_TEST_ASSERT(not rejected_profile and rejected_profile.error() == std::errc::invalid_argument);
+
+        const auto incomplete = decodeWorldCheckpoint(
+            std::span<const u8>{bytes->data(), profile_offset + 63u}, *fixture.m_catalog);
+        PPR_TEST_ASSERT(not incomplete and incomplete.error() == sim::errc::truncated);
+
+        auto restored = restoreWorldCheckpoint(fixture.m_catalog, *decoded, 92u);
+        PPR_TEST_ASSERT(restored.has_value());
+        PPR_DEFER {
+            PPR_TEST_ASSERT(not (*restored)->shutdown());
+        };
+
+        const auto &current = *(*restored)->matterState();
+        PPR_TEST_ASSERT(current.m_identity == MatterIdentity{92u, 7u, 4u});
+        PPR_TEST_ASSERT(std::bit_cast<std::array<u32, 22u>>(current.m_particles[0u]) == words);
+        PPR_TEST_ASSERT((*restored)->update(TimeSpan{}) == std::errc::operation_not_permitted);
+
+        const auto captured = captureWorldCheckpoint(**restored, (*restored)->preparedWorld()->generated());
+        PPR_TEST_ASSERT(captured.has_value());
+        PPR_TEST_ASSERT(std::bit_cast<std::array<u32, 22u>>(captured->m_current_matter.m_particles[0u]) == words);
+
+        for (u32 scenario = 0u; scenario < 8u; ++scenario) {
+            auto bad = checkpoint;
+            auto &invalid = bad.m_current_matter;
+            switch (scenario) {
+                case 0u: --invalid.m_profile.m_grid_width; break;
+                case 1u: invalid.m_profile.m_delta_time *= 2.0f; break;
+                case 2u: invalid.m_cell_metres *= 2.0; break;
+                case 3u: invalid.m_particles[0u].m_mass *= 2.0f; break;
+                case 4u: invalid.m_particles[0u].m_volume *= 2.0f; break;
+                case 5u: invalid.m_particles[0u].m_material = 2.0f; break;
+                case 6u:
+                    invalid.m_particles[0u].m_deformation_gradient.m_c0y = std::numeric_limits<float>::quiet_NaN();
+                    break;
+                case 7u: invalid.m_particles.clear(); break;
+            }
+
+            PPR_TEST_ASSERT(validateWorldCheckpoint(bad, *fixture.m_catalog) == std::errc::invalid_argument);
+        }
+
+        std::fprintf(
+            stderr, "[checkpoint-layout] WorldCheckpoint=%zu/%zu MatterState=%zu/%zu ColonyDriver=%zu/%zu\n",
+            sizeof(WorldCheckpoint), alignof(WorldCheckpoint), sizeof(MatterState), alignof(MatterState),
+            sizeof(ColonyDriver), alignof(ColonyDriver));
+    };
+
+
+    // ------------------------------------------------------------------
+    // checkpoint envelope and frozen capture
+    // ------------------------------------------------------------------
+
+    PPR_UNIT_TEST (v5_particle_wire_payload_is_the_exact_semantic_word_sequence) {
+        Fixture fixture;
+        const auto &catalog = *fixture.m_catalog;
+        auto checkpoint = editedCheckpoint(catalog);
+        auto &particle = checkpoint.m_current_matter.m_particles[0u];
+        particle.m_displacement_x = 0.125f;
+        particle.m_displacement_y = -0.25f;
+        particle.m_deformation_gradient = {1.0f, 0.25f, -0.125f, 0.75f};
+        particle.m_deformation_displacement = {0.125f, 0.25f, -0.5f, -0.125f};
+        particle.m_liquid_density = 0.5f;
+        particle.m_lambda = 0.375f;
+        particle.m_log_jp = 0.75f;
+        particle.m_color_r = 0.25f;
+        particle.m_color_g = -0.5f;
+        particle.m_color_b = 0.375f;
+        particle.m_enabled = 1.0f;
+
+        const auto words = std::bit_cast<std::array<u32, 22u>>(particle);
+        PPR_TEST_ASSERT(not validateWorldCheckpoint(checkpoint, catalog));
+
+        const auto encoded = encodeWorldCheckpoint(checkpoint, catalog);
+        PPR_TEST_ASSERT(encoded.has_value());
+        const auto repeated = encodeWorldCheckpoint(checkpoint, catalog);
+        PPR_TEST_ASSERT(repeated.has_value() and *repeated == *encoded);
+
+        // The carried matter block ends the envelope: profile, particle count,
+        // the 22-word semantic payload, then the raw snapshot length and bytes.
+        const auto snapshot_bytes = sim::save(checkpoint.m_snapshot);
+        PPR_TEST_ASSERT(snapshot_bytes.has_value());
+        const std::size_t payload_offset =
+            encoded->size() - snapshot_bytes->size() - sizeof(u64) - words.size() * sizeof(u32) - sizeof(u32);
+        PPR_TEST_ASSERT(
+            payload_offset + 4u + words.size() * sizeof(u32) + 8u + snapshot_bytes->size() == encoded->size());
+        PPR_TEST_ASSERT((*encoded)[payload_offset - 1u] == 0u and (*encoded)[payload_offset - 4u] == 1u);
+
+        for (std::size_t index = 0u; index < words.size(); ++index) {
+            u32 actual{};
+            for (u32 byte = 0u; byte < sizeof(u32); ++byte) {
+                actual |= static_cast<u32>((*encoded)[payload_offset + index * sizeof(u32) + byte]) << (byte * 8u);
+            }
+
+            PPR_TEST_ASSERT(actual == words[index]);
+        }
+    };
 
     PPR_UNIT_TEST (generator_seven_checkpoint_is_incompatible_before_material_id_restore) {
         Fixture fixture;
@@ -442,8 +420,9 @@ namespace pP::game::tests::detail::checkpoint {
         PPR_TEST_ASSERT(driver.controlledEntity() == checkpoint.m_controlled);
         PPR_TEST_ASSERT(not driver.initialMatterBaselineValid());
         const auto particles = driver.captureParticles();
-        PPR_TEST_ASSERT(particles.m_next_id == 12u and particles.m_chunks.size() == 1u);
-        PPR_TEST_ASSERT(particles.m_chunks[0].records()[0].m_id == 11u);
+        PPR_TEST_ASSERT(particles.has_value());
+        PPR_TEST_ASSERT(particles->m_next_id == 12u and particles->m_chunks.size() == 1u);
+        PPR_TEST_ASSERT(particles->m_chunks[0].records()[0].m_id == 11u);
         PPR_TEST_ASSERT(driver.grid().getCell({127u, 40u})->m_element == catalog.findMaterial("basalt")->m_numeric_id);
         PPR_TEST_ASSERT(driver.grid().getCell({128u, 40u})->m_temperature == 345.0f);
 
@@ -458,7 +437,13 @@ namespace pP::game::tests::detail::checkpoint {
         const auto before = sim::capture(driver.grid(), 42u);
 
         ParallelScheduler chunks{"Checkpoint capture chunks", 1u, static_cast<std::size_t>(hal::page_granularity)};
-        WorldJob job{chunks, WorldJob::legacyFixturePrepare()};
+        WorldJob job{
+            chunks,
+            [](const ColonyDriverDesc &, const sim::GenerationExecution &,
+                config::Diagnostics &) -> Expected<std::unique_ptr<ColonyDriver>> {
+                // Capture/override-only fixtures must never admit a default generation.
+                return std::unexpected{std::make_error_code(std::errc::operation_not_permitted)};
+            }};
         const auto address = restored->get();
         PPR_TEST_ASSERT(not job.requestCheckpoint(*restored));
         PPR_TEST_ASSERT(not *restored);
@@ -549,7 +534,7 @@ namespace pP::game::tests::detail::checkpoint {
         PPR_TEST_ASSERT(not (*restored)->shutdown());
     };
 
-    PPR_UNIT_TEST (authored_particles_survive_headless_digs_and_wait_for_complete_build_publication) {
+    PPR_UNIT_TEST (restored_current_matter_is_frozen_until_attached_and_keeps_physical_inventory) {
         Fixture fixture;
         const auto &catalog = *fixture.m_catalog;
         auto restored = restoreWorldCheckpoint(fixture.m_catalog, editedCheckpoint(catalog), 3u);
@@ -557,42 +542,20 @@ namespace pP::game::tests::detail::checkpoint {
         auto &driver = **restored;
         driver.setPaused(true);
         const auto frozen = driver.captureParticles();
+        PPR_TEST_ASSERT(frozen.has_value());
 
         PPR_TEST_ASSERT(not driver.requestDig({127u, 40u}, 2u, 1u));
-        PPR_TEST_ASSERT(not driver.update(TimeSpan{}));
+        PPR_TEST_ASSERT(driver.update(TimeSpan{}) == std::errc::operation_not_permitted);
         PPR_TEST_ASSERT(not driver.editPending());
-        PPR_TEST_ASSERT(driver.grid().getCell({127u, 40u})->m_element == 0u);
+        PPR_TEST_ASSERT(driver.grid().getCell({127u, 40u})->m_element == catalog.findMaterial("basalt")->m_numeric_id);
         PPR_TEST_ASSERT(driver.particleCount() == 1u);
-        PPR_TEST_ASSERT(driver.captureParticles().m_chunks[0].m_particles == frozen.m_chunks[0].m_particles);
+        const auto current = driver.captureParticles();
+        PPR_TEST_ASSERT(current and current->m_chunks[0].m_particles == frozen->m_chunks[0].m_particles);
 
-        driver.requireEditPublication();
-        const auto errand = driver.buildWall({{126u, 39u}, 9u, 3u, catalog.findMaterial("basalt")->m_numeric_id});
-        PPR_TEST_ASSERT(errand.has_value());
-        PPR_TEST_ASSERT(not driver.stepOne());
-        for (u32 batch = 0u; batch < 32u and not driver.editReadyForPresentation(); ++batch) {
-            PPR_TEST_ASSERT(not driver.update(TimeSpan{}));
-        }
-
-        PPR_TEST_ASSERT(driver.editReadyForPresentation());
-
-        const auto body = *driver.registry().get<sim::BodyState>(*driver.controlledEntity());
-        Array<ColonyDriver::DirtyChunk> manifest(driver.editManifest().begin(), driver.editManifest().end());
-        PPR_TEST_ASSERT(manifest.size() == 2u);
-
-        PPR_TEST_ASSERT(not driver.settleEdit({}));
-        PPR_TEST_ASSERT(not driver.settleEdit(std::span<const ColonyDriver::DirtyChunk>{manifest.data(), 1u}));
-        auto stale = manifest;
-        --stale[0].m_revision;
-        PPR_TEST_ASSERT(not driver.settleEdit(stale));
-        PPR_TEST_ASSERT(driver.editPending() and driver.particleCount() == 1u);
-        PPR_TEST_ASSERT(driver.grid().getCell({130u, 40u})->m_element == 0u);
-        PPR_TEST_ASSERT(driver.registry().get<sim::BodyState>(*driver.controlledEntity())->m_y == body.m_y);
-        PPR_TEST_ASSERT(driver.registry().get<BuildErrand>(*errand)->m_progress == 0u);
-
-        PPR_TEST_ASSERT(not driver.settleEdit(manifest));
-        PPR_TEST_ASSERT(not driver.editPending() and driver.particleCount() == 0u);
-        PPR_TEST_ASSERT(driver.grid().getCell({130u, 40u})->m_element == driver.boundaryMaterial());
-        PPR_TEST_ASSERT(frozen.m_chunks[0].records()[0].m_id == 11u);
+        PPR_TEST_ASSERT(driver.stepOne() == std::errc::operation_not_permitted);
+        PPR_TEST_ASSERT(driver.tickCount() == 19u);
+        PPR_TEST_ASSERT(driver.matterState() != nullptr and not driver.matterAttached());
+        PPR_TEST_ASSERT(frozen->m_chunks[0].records()[0].m_id == 11u);
 
         PPR_TEST_ASSERT(not driver.shutdown());
     };
@@ -799,18 +762,18 @@ namespace pP::game::tests::detail::checkpoint {
     // named pack envelope and qualified profile wire contract
     // ------------------------------------------------------------------
 
-    PPR_UNIT_TEST (envelope_four_manifest_one_and_raw_snapshot_four_have_distinct_headers) {
+    PPR_UNIT_TEST (envelope_five_manifest_one_and_raw_snapshot_four_have_distinct_headers) {
         Fixture fixture;
         const auto &catalog = *fixture.m_catalog;
         const auto checkpoint = editedCheckpoint(catalog);
-        PPR_TEST_ASSERT(kWorldCheckpointVersion == 4u and asset::Manifest::schema_version == 1u);
+        PPR_TEST_ASSERT(kWorldCheckpointVersion == 5u and asset::Manifest::schema_version == 1u);
         PPR_TEST_ASSERT(sim::kSnapshotVersion == 4u and checkpoint.m_descriptor.m_pack_schema_version == 1u);
 
         const auto encoded = encodeWorldCheckpoint(checkpoint, catalog);
         PPR_TEST_ASSERT(encoded.has_value());
 
         constexpr std::array<u8, 25u> header{
-            0x50u, 0x50u, 0x52u, 0x57u, 0x47u, 0x45u, 0x4eu, 0x31u, 0x04u, 0x00u, 0x00u, 0x00u, 0x01u, 0x01u, 0x00u,
+            0x50u, 0x50u, 0x52u, 0x57u, 0x47u, 0x45u, 0x4eu, 0x31u, 0x05u, 0x00u, 0x00u, 0x00u, 0x01u, 0x01u, 0x00u,
             0x00u, 0x00u, 0x08u, 0x00u, 0x00u, 0x00u, 0x13u, 0x00u, 0x00u, 0x00u};
         PPR_TEST_ASSERT(encoded->size() > header.size());
         PPR_TEST_ASSERT(std::ranges::equal(std::span{encoded->data(), header.size()}, header));
@@ -822,7 +785,7 @@ namespace pP::game::tests::detail::checkpoint {
         constexpr std::array<u8, 4u> raw_header{4u, 0u, 0u, 0u};
         PPR_TEST_ASSERT(std::ranges::equal(std::span{raw->data(), raw_header.size()}, raw_header));
 
-        for (const u32 old_version: {0u, 1u, 2u, 3u}) {
+        for (const u32 old_version: {0u, 1u, 2u, 3u, 4u}) {
             auto earlier = *encoded;
             earlier[8u] = static_cast<u8>(old_version);
             earlier.resize(12u);
@@ -989,10 +952,13 @@ namespace pP::game::tests {
                 diagnostic_export_rejects_cancellation_and_unwritable_directory,
                 ui_model_preserves_authored_metadata_and_nearest_agent_for_unresident_cells,
                 round_trip_restores_edited_cells_actor_identity_and_frozen_full_capture,
-                authored_particles_survive_headless_digs_and_wait_for_complete_build_publication,
+                restored_current_matter_is_frozen_until_attached_and_keeps_physical_inventory,
+                dig_candidate_preserves_carried_columns_and_emits_original_seam_inventory_once,
+                new_contour_coverage_rejects_moving_and_gas_but_preserves_prior_overlap,
+                v5_round_trip_preserves_all_current_words_and_rebinds_only_world,
                 malformed_identity_metric_counts_and_payload_are_rejected_before_restore,
                 checkpoint_blob_references_ranges_and_wire_counts_are_checked,
-                envelope_four_manifest_one_and_raw_snapshot_four_have_distinct_headers,
+                envelope_five_manifest_one_and_raw_snapshot_four_have_distinct_headers,
                 qualified_world_profiles_round_trip_at_the_authoritative_name_limit,
                 runtime_generation_and_restore_reject_each_noncanonical_compile_parameter,
                 numeric_restore_omits_images_and_render_restore_requires_matching_owner_and_generation});

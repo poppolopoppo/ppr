@@ -107,8 +107,4 @@ export namespace pP::colony {
     [[nodiscard]] std::error_code exportWorldgenRegionImages(
         const ContentCatalog &catalog, const sim::ChunkGrid &grid, sim::GenerationCellBounds bounds, u32 biome_index,
         const std::filesystem::path &directory, const IContext *context = nullptr);
-    /// Explicit legacy smoke/many-agent fixture only; authored sessions use prepareWorld.
-    /// Kept game-owned so engine generation remains numeric-plan driven.
-    [[nodiscard]] std::error_code generateLegacyFixture(
-        u64 seed, sim::ChunkGrid &grid, const sim::GenerationExecution *execution = nullptr);
 }

@@ -14,11 +14,24 @@
 
 ## Interactive flow
 
-1. Initialize the editor, orthographic pan controller, game input mapping, and debug geometry/materials, then request a candidate session. Admit the world job only after a successful loading-screen presentation. Kenney assets are staged but no committed fixture scene is loaded.
-2. On admitted update, the editor advances platform/input/camera/UI. Game update handles deferred intents, advances `ColonyDriver` with explicit elapsed time only outside the generation modal, then captures an owned `SimFramePacket` containing simulation identity, counters and chunk copies. Preparation validates tick/world-generation coherence and builds owned `GridStagedFrame`; debug instances become `TriangleStagedFrame`. The UI uses client data and result-fed render diagnostics, not live worker caches.
+1. Initialize the editor and lane-affine game matter runtime, then request a candidate session. Independent main-owner simulation service admits worker generation and publishes the CPU driver after acknowledged simulation-resource preparation; a loading presentation is telemetry, not admission permission. Kenney assets are staged but no committed fixture scene is loaded.
+2. The main-owner simulation deadline runs independently of render credits/drawable targets, using explicit elapsed admission and pending fixed slices. Presentation update advances platform/input/camera/UI and captures only committed owned `SimFramePacket` state. Preparation validates tick/world-generation coherence and builds owned `GridStagedFrame`; debug instances become `TriangleStagedFrame`. The UI uses client data and result-fed render diagnostics, not live worker caches.
 3. Editor render sends owned frame/pass/UI payloads to the render lane. Grid/triangle pass mutation, upload preparation, encoding and presentation run there. Inline hosts consume the same request structure without transport.
-4. `TurboLarbin::onLaneFrameConsumed_` validates matching packet/epoch/revision acknowledgments before clearing pending edit obligations. Dropped or unapplied payloads remain pending for a later frame. CPU consumption is distinct from GPU completion.
-5. Shutdown detaches game input/callbacks, resets game staging, shuts down driver resources, and delegates worker/GPU/window teardown to the editor while preserving the first cleanup error.
+4. `game.application:session_service` owns typed control/result delivery. The base frame-credit receiver settles immediately; game acknowledgments, UI controls and native close wait for exclusive main service through GPU publication and dependent Scene commit. FIFO controls preserve repeated toggles/steps; native close is an unordered safe-point latch. World/job stamps reject stale orders. Dropped or unapplied presentation payloads remain pending for a real later frame.
+5. Shutdown stops mutating-control admission, detaches/drains matter on the live lane, proves independent frame/control completion while retaining CPU header owners, closes the finite result receiver, drains detached worker owners, and finally delegates service/window teardown. Unknown completion fail-stops before dependent release.
+
+The resident solver owns current/candidate numerical particles. Normal ticks
+return compact status, check the captured body epoch, commit one-way Scene
+coupling and step Box2D once; normal frames carry a shared GPU view without a
+CPU particle mirror or batch upload. Metadata prepares only at world/inventory
+admission. Checkpoint, preview, inspection and edit coverage request exact demand
+snapshots on existing workers, with simulation admission frozen while UI/render
+continues. Complete v5 payloads and atomic file saving remain unchanged.
+
+Preparation readiness separately matches an actual-present resident stamp for
+the acknowledged world/job/generation, publication, terrain revision and joint
+tick. CPU preparation, queue acceptance and GPU completion do not release it.
+The initial expected publication is held stable while the modal is open.
 
 Controls and panel intents are declared in `Game.Application.cpp` and `ui/ColonyPanel.*`: pause/step/speed/regenerate, inspect/dig/build/demolish, agent selection/follow, grid/edit overlays, help, independently visible Colony/Performance, Display and Menu Quit. Regeneration is confirmed and deferred to an update boundary; Quit and native close share the host's dirty-draft/cancellation/drain path.
 
@@ -53,22 +66,40 @@ summary overlay and background feedback cannot cover opaque windows.
 
 ## Colony modules and workloads
 
-See [colony/codemap.md](colony/codemap.md) for the twelve `game.colony.*` modules. Driver/simulation code is renderer-independent; `SimFramePacket` and translator bridge to owned presentation data. Physics Scene and ChunkColliders are driver-owned; Box2D stays inside `engine.physics`.
+Matter lifecycle requests continue across main-service turns on the existing
+single RenderLane operation slot. Session mutations retain their FIFO/cursor
+while frame/grid acknowledgments and the independent close latch remain
+collectable. Slot readiness drives notified continuation eligibility; only GPU
+fences and existing worker/tool predicates use timed polling. Workshop return
+retains its own resume/finalization continuation. Game settles Matter before
+the base renderer teardown proof and lane stop.
+
+See [colony/codemap.md](colony/codemap.md) for the `game.colony.*` modules. Sim numerical state remains renderer-independent; the game driver and `SimFramePacket` bridge the explicit renderer-neutral GPU view to app rendering. Physics Scene and ChunkColliders are driver-owned; Box2D stays inside `engine.physics`.
 
 - `--smoke`: separate headless rendering-enabled Application, generated-cell offscreen readback.
-- `--profile100`: interactive 100-agent fixture for external profilers; `--exit-after S` bounds the run.
+- `--auto-exit` / `--exit-after S` bound graceful runs; the retired `--profile100` option is rejected.
 - CSV timing, scripted profiling edits/pan, load/time-trial commands and game-local exception interception are retired. HAL profiler scopes and crash handling remain.
 
 ## Build and tests
 
-`CMakeLists.txt` registers twelve colony modules plus `game.config` and `game.display`, their implementations, `game.application` with its `:world_job` partition, and the thin `main.cpp`. `app.game` links core/app/math/shader/rhi/sim publicly and physics privately. Every explicit executable build stages shaders, textures and meshes when present through the independent `app.game.assets` prerequisite. Asset edits, additions and missing deployment files do not require relinking; files removed from source are pruned from deployment.
+`CMakeLists.txt` registers the colony modules including `game.colony.matter`, plus `game.config`, `game.display`, `game.application` and its `:world_job`, `:worldgen_workshop`, `:session_service` partitions, and thin `main.cpp`. `app.game` links core/app/math/shader/rhi/sim publicly and physics/matter privately. `Game.SessionService.Tests.cpp` exercises the actual production inbox through a real render-lane wait pump and stale tool delivery; it is registered in `game.tests`. Every explicit executable build stages shaders, textures and meshes when present through the independent `app.game.assets` prerequisite. Asset edits, additions and missing deployment files do not require relinking; files removed from source are pruned from deployment.
 
-The game build registers `game.tests`, the split `game.tests.worldgen_preview` entry, and the `app.game.worldgen_frontier`/`worldgen_hollows` profile validations unless tests are explicitly disabled. `game.tests` excludes the two heavy preview replay/crop leaves; the worldgen entry runs them with `PROCESSORS 4`. `Game.Config.Tests.cpp` covers invocation compatibility, source precedence and help; `Game.Display.Tests.cpp` covers drafts, persistence and Keep/Revert. Engine test targets never depend on these game modules.
+The game build registers `game.tests`, the split `game.tests.worldgen_preview`
+entry, three independently locked GPU lifecycle entries
+(`game.tests.matter_edit_gpu`, `matter_coverage_gpu`, `matter_restore_gpu`), and
+the `app.game.worldgen_frontier`/`worldgen_hollows` profile validations unless tests
+are explicitly disabled. The CPU entry excludes `game/checkpoint_gpu` and the two
+heavy preview replay/crop leaves; the worldgen entry uses `PROCESSORS 4`.
+Each GPU entry has its own 180-second ceiling and unchanged explicit validated
+D3D12/4103-grid/eight-substep/K2 fixture. `game.tests` stages its shader assets
+independently. `Game.Config.Tests.cpp` covers invocation compatibility, source
+precedence and help; `Game.Display.Tests.cpp` covers drafts, persistence and
+Keep/Revert. Engine test targets never depend on these game modules.
 
-The game-owned world coordinator retains immutable requests, job-local cancellation and isolated candidate drivers. Admission and readiness polling do not wait. Cancel/failure preserves the old paused session and restores its previous pause state once; success replaces the whole session. Old/cancelled sessions are disposed on the coordinator. Ordinary close defers the exit latch and drains through control servicing, including when frame admission is busy. The modal remains until the replacement frame is actually presented. Normal startup loads the configured authored pack/profile/seed on the coordinator; the explicit 100-agent profile retains its legacy fixture. The coordinator captures owned terrain uploads before readiness. Independent render controls admit a metadata header and at most eight chunks per admitted update, then prepare and activate the candidate. Only matching activation publishes the CPU session; admitted activation settles before close. Cancellation and Retry include both CPU cleanup and outstanding GPU controls. The modal remains through the first replacement presentation. End-to-end responsiveness remains an acceptance gate.
+The game-owned world coordinator retains immutable requests, job-local cancellation and isolated candidate drivers. Independent worker admission is explicit; default WorldJob callers retain the original loading-presented gate. Cancel/failure before renderer activation admission preserves the old session; activation admission latches commit intent, and post-activation attachment/presentation failure is terminal while owners remain retained through real retirement. Only detached drivers may enter worker cleanup/capture. Normal startup loads the authored pack/profile/seed and initializes one actor. Independent render controls stage/activate owned terrain separately, and the modal remains through real presentation. No frame result or loading acknowledgment is fabricated. Integrated responsiveness remains unverified: cold command finalization occupies the sole device lane for about40s. Matter now uses retained asynchronous operations; the renderer retains its existing synchronous teardown policy. No timeout, resolution, schedule or backend workaround is adopted.
 
 
-`--worldgen-preview --worldgen-output=<directory>` exports material/biome/temperature/initial-matter P6 PPM overviews and a bounded JSON report through `colony/WorldGen.Export.cpp`. It is a headless authoring path; see `docs/worldgen-content.md` for resolution, orientation and baseline semantics. The game checkpoint envelope is owned by `game.colony.checkpoint`, leaving raw sim snapshot v4 unchanged.
+`--worldgen-preview --worldgen-output=<directory>` exports material/biome/temperature/initial-matter P6 PPM overviews and a bounded JSON report through `colony/WorldGen.Export.cpp`. It is a headless authoring path; see `docs/worldgen-content.md` for resolution, orientation and baseline semantics. Mandatory current-state checkpoint envelope v5 is owned by `game.colony.checkpoint`, leaving raw sim snapshot v4 unchanged. Historical seeds never replace evolved columns; detached restored owners stay frozen until runtime attachment.
 
 `--worldgen-preview --worldgen-gpu-output=<directory>` explicitly enables a rendering-capable,
 UI-free frozen diagnostic host after generation. `colony/WorldGen.Capture.cpp`
@@ -86,3 +117,43 @@ measurement limits. `--worldgen-report` mirrors render-owner observations throug
 frame results; neither option reads worker-owned pass state from main.
 
 The world-work modal displays one stage-local progress bar: measured raster/staged chunk counts when available, otherwise an explicitly indeterminate animation driven by the injected application clock. It does not infer overall completion or number preview/cleanup states as generation steps.
+
+## Joint world transition
+
+`Game.SessionService` owns value-only transition phases used by the real host
+and focused tests. Replacement snapshots/logically detaches the old driver
+before candidate GPU preparation, keeps the old Runtime owner valid through
+reversible preparation, and treats renderer activation admission as commit
+intent. Its exact activation ACK precedes candidate attachment and the
+exactly-once WorldJob/host ownership transfer. Old GPU view selection is disabled
+between activation admission and joint publication; ordinary frames remain
+nonblocking. Pre-activation cancellation drains both candidates before resuming
+the retained identity/pause/readiness facts. Post-activation attachment or
+unknown completion errors retain the established terminal/quiescence policy.
+
+Workshop Return resumes/binds the retained driver and restores the camera while
+remaining frozen. It emits the restored resident bundle with progress UI and
+finishes only when the delivered actual-present stamp matches its reservation,
+world/job/generation/fingerprint, publication, terrain and joint tick. Activation
+alone cannot clear the modal. Close may abandon visibility after owned operations
+settle, then follows normal detach/drain. Normal simulation does not wait for
+presentation after this one-time transition.
+
+Workshop entry holds an O(1) strong copy of the final jointly committed particle
+view before transferring Driver to the capture job. Retained game frames select
+that exact lease through `selectWorkshopRetainedParticles`; otherwise a final
+publication can revoke the pass's older cached view and reject the whole frame,
+including detached UI. Selection requires the retained game identity and stops
+at preview activation admission, preview display, finish or another world
+transition. The held copy clears at activation/new-world admission, completion
+and terminal cleanup; existing renderer epoch/world checks and fence-held readers
+remain authoritative. The current correction is implemented pending focused
+execution and unchanged interactive verification.
+
+Rollback's retained resume phase owns Driver service through its exact Runtime
+acknowledgement. `sessionTransitionOwnsDriverService` routes the host before
+ordinary Driver update, including a latched close; the logically detached durable
+owner is never updated through the generic path. The route relinquishes service
+immediately when old identity/pause/readiness restoration acknowledges. The
+existing checkpoint GPU restore leaf uses an admitted queued/ready resume across
+multiple host-style turns to exercise that same production routing predicate.

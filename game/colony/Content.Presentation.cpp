@@ -71,6 +71,8 @@ namespace pP::colony {
         : m_catalog{std::move(catalog)}, m_source_epoch{std::move(source_epoch)}, m_request{std::move(request)} {
     }
 
+    ContentPresentationRequest::~ContentPresentationRequest() noexcept = default;
+
     Expected<ContentPresentationRequest> ContentPresentationRequest::start(
         std::shared_ptr<const ContentCatalog> catalog, const asset::RequestGeneration generation, SharedContext context,
         config::Diagnostics &diagnostics, ContentSourceEpochToken source_epoch,

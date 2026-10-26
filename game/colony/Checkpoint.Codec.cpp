@@ -2,6 +2,7 @@ module;
 #include "pP/Macros.h"
 module game.colony.checkpoint;
 import engine.asset;
+import engine.matter;
 import std;
 namespace pP::colony {
     PPR_DEFINE_LOG_CATEGORY(CheckpointCodec, info, none)
@@ -423,7 +424,12 @@ namespace pP::colony {
             particle_bytes += batch.records().size() * 59u;
         }
 
-        const u64 encoded_size = writer.m_bytes.size() + particle_bytes + 8u + snapshot->size();
+        // The reflected scalar ABI has no padding: sixteen profile words and
+        // twenty-two particle words. Persist each numeric word little-endian.
+        const auto &carried = checkpoint.m_current_matter;
+        const u64 matter_bytes = 116u + carried.m_particles.size() * 88u;
+
+        const u64 encoded_size = writer.m_bytes.size() + particle_bytes + matter_bytes + 8u + snapshot->size();
         PPR_RETURN_UNEXPECTED_ON_FAIL(
             CheckpointCodec, encoded_size <= kMaxWorldCheckpointBytes
                                  ? std::error_code{}
@@ -431,6 +437,22 @@ namespace pP::colony {
         writer.m_bytes.reserve(static_cast<std::size_t>(encoded_size));
 
         PPR_RETURN_UNEXPECTED_ON_FAIL(CheckpointCodec, encodeParticles(writer, checkpoint.m_particles, context.get()));
+
+        writer.u64value(carried.m_identity.m_world);
+        writer.u64value(carried.m_identity.m_publication);
+        writer.u64value(carried.m_identity.m_terrain_revision);
+        writer.u64value(carried.m_next_id);
+        writer.real(carried.m_cell_metres);
+        writer.real(carried.m_thickness_metres);
+        for (const u32 word: std::bit_cast<std::array<u32, 16u>>(carried.m_profile))
+            writer.u32value(word);
+
+        writer.count(carried.m_particles.size());
+        for (const auto &particle: carried.m_particles) {
+            PPR_RETURN_UNEXPECTED_ON_FAIL(CheckpointCodec, context ? context->error() : std::error_code{});
+            for (const u32 word: std::bit_cast<std::array<u32, 22u>>(particle))
+                writer.u32value(word);
+        }
 
         writer.u64value(snapshot->size());
         writer.m_bytes.insert(writer.m_bytes.end(), snapshot->begin(), snapshot->end());
@@ -496,6 +518,57 @@ namespace pP::colony {
         decodeMetadata(reader, checkpoint);
 
         PPR_RETURN_UNEXPECTED_ON_FAIL(CheckpointCodec, decodeParticles(reader, checkpoint.m_particles, context.get()));
+
+        auto &carried = checkpoint.m_current_matter;
+        carried.m_identity.m_world = reader.u64value();
+        carried.m_identity.m_publication = reader.u64value();
+        carried.m_identity.m_terrain_revision = reader.u64value();
+        carried.m_next_id = reader.u64value();
+        carried.m_cell_metres = reader.real();
+        carried.m_thickness_metres = reader.real();
+        std::array<u32, 16u> profile{};
+        for (auto &word: profile)
+            word = reader.u32value();
+
+        carried.m_profile = std::bit_cast<matter::GpuParameters>(profile);
+
+        PPR_RETURN_UNEXPECTED_ON_FAIL(CheckpointCodec, reader.m_error);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(CheckpointCodec, validateWorldMetric(descriptor.m_metric));
+        if (carried.m_cell_metres != 1.0 / descriptor.m_metric.m_cells_per_metre or
+            carried.m_thickness_metres != descriptor.m_metric.m_reference_thickness_m or
+            carried.m_identity.m_world == 0u or
+            carried.m_identity.m_terrain_revision == 0u) {
+            PPR_RETURN_UNEXPECTED_ON_FAIL(CheckpointCodec, std::errc::invalid_argument);
+        }
+
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            CheckpointCodec,
+            validateMatterProfile(
+                carried.m_profile, carried.m_cell_metres, carried.m_thickness_metres, kMatterGravityY));
+
+        carried.m_particles.resize(reader.count(sim::kMaxMatterParticles, 88u));
+        for (auto &particle: carried.m_particles) {
+            PPR_RETURN_UNEXPECTED_ON_FAIL(CheckpointCodec, context ? context->error() : std::error_code{});
+            std::array<u32, 22u> words{};
+            for (auto &word: words)
+                word = reader.u32value();
+
+            particle = std::bit_cast<matter::GpuParticle>(words);
+        }
+
+        // Decode owned physical metadata without initializing solver columns.
+        for (const auto &batch: checkpoint.m_particles.m_chunks) {
+            for (const auto &record: batch.records()) {
+                if (record.m_phase == sim::EGenerationMatter::gas)
+                    carried.m_gas.push_back(record);
+                else
+                    carried.m_records.push_back(record);
+            }
+        }
+
+        std::ranges::sort(carried.m_records, {}, &sim::MatterParticle::m_id);
+        std::ranges::sort(carried.m_gas, {}, &sim::MatterParticle::m_id);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(CheckpointCodec, reader.m_error);
 
         const auto snapshot_size = reader.u64value();
         PPR_RETURN_UNEXPECTED_ON_FAIL(CheckpointCodec, reader.m_error);

@@ -1,4 +1,5 @@
 module;
+#include "pP/Macros.h"
 #include "pP/UnitTest.h"
 
 module game.tests;
@@ -7,7 +8,13 @@ import engine.core;
 import engine.sim;
 import game.colony.driver;
 import game.application;
+import engine.asset;
+import engine.image;
+import game.colony.content;
+import game.colony.worldgen;
 import std;
+
+#include "Colony.AuthoredFixture.Tests.h"
 
 namespace pP::game::tests::detail::world_job {
     // ------------------------------------------------------------------
@@ -61,6 +68,42 @@ namespace pP::game::tests::detail::world_job {
             std::this_thread::yield();
         }
     }
+
+    PPR_UNIT_TEST (authored_fixture_replays_owned_terrain_and_marks_every_chunk_dirty) {
+        colony::test_fixture::AuthoredFixture authored;
+        auto first = authored.prepare(1234567u, 1u);
+        auto second = authored.prepare(1234567u, 2u);
+        PPR_TEST_ASSERT(first.has_value() and second.has_value());
+        PPR_TEST_ASSERT(first->grid().residentChunkCount() == sim::kChunkCount);
+        PPR_TEST_ASSERT(first->grid().dirtyChunkCount() == sim::kChunkCount);
+        PPR_TEST_ASSERT(first->grid().dirtyChunks().size() == sim::kChunkCount);
+
+        for (u32 y = 0u; y < sim::kChunksPerEdge; ++y) {
+            for (u32 x = 0u; x < sim::kChunksPerEdge; ++x) {
+                const auto expected = first->grid().residentCells({x, y});
+                const auto actual = second->grid().residentCells({x, y});
+                PPR_TEST_ASSERT(expected.has_value() and actual.has_value());
+                PPR_TEST_ASSERT(std::ranges::equal(*expected, *actual));
+            }
+        }
+
+        auto other = authored.prepare(7654321u, 3u);
+        PPR_TEST_ASSERT(other.has_value());
+        PPR_TEST_ASSERT(
+            first->generated().m_report.m_terrain_checksum != other->generated().m_report.m_terrain_checksum);
+    };
+
+    PPR_UNIT_TEST (authored_fixture_cancelled_generation_returns_no_owner_or_completed_chunks) {
+        colony::test_fixture::AuthoredFixture authored;
+        const auto [context, cancel] = context::withCancel(context::background());
+        cancel();
+        std::atomic<u32> completed{};
+        const sim::GenerationExecution execution{.m_context = context, .m_completed_chunks = &completed};
+
+        const auto result = authored.prepare(42u, 1u, execution);
+        PPR_TEST_ASSERT(not result.has_value() and result.error() == std::errc::operation_canceled);
+        PPR_TEST_ASSERT(completed.load() == 0u);
+    };
 
     PPR_UNIT_TEST (owned_request_override_survives_cancel_and_default_policy_is_unchanged) {
         ParallelScheduler chunks{"Authored override chunks", 1u, static_cast<std::size_t>(hal::page_granularity)};
@@ -131,7 +174,13 @@ namespace pP::game::tests::detail::world_job {
 
     PPR_UNIT_TEST (queued_override_payload_is_released_after_coordinator_retirement) {
         ParallelScheduler chunks{"Queued authored chunks", 1u, static_cast<std::size_t>(hal::page_granularity)};
-        WorldJob job{chunks, WorldJob::legacyFixturePrepare()};
+        WorldJob job{
+            chunks,
+            [](const ColonyDriverDesc &, const sim::GenerationExecution &,
+                config::Diagnostics &) -> Expected<std::unique_ptr<ColonyDriver>> {
+                // Capture/override-only fixtures must never admit a default generation.
+                return std::unexpected{std::make_error_code(std::errc::operation_not_permitted)};
+            }};
         PPR_DEFER {
             std::ignore = job.shutdown();
         };
@@ -274,7 +323,13 @@ namespace pP::game::tests::detail::world_job {
 
     PPR_UNIT_TEST (frozen_capture_returns_same_owner_after_queued_cancel) {
         ParallelScheduler chunks{"Frozen capture chunks", 1u, static_cast<std::size_t>(hal::page_granularity)};
-        WorldJob job{chunks, WorldJob::legacyFixturePrepare()};
+        WorldJob job{
+            chunks,
+            [](const ColonyDriverDesc &, const sim::GenerationExecution &,
+                config::Diagnostics &) -> Expected<std::unique_ptr<ColonyDriver>> {
+                // Capture/override-only fixtures must never admit a default generation.
+                return std::unexpected{std::make_error_code(std::errc::operation_not_permitted)};
+            }};
         auto driver = std::make_unique<ColonyDriver>();
         const auto address = driver.get();
         std::atomic<u32> calls{};
@@ -298,7 +353,13 @@ namespace pP::game::tests::detail::world_job {
 
     PPR_UNIT_TEST (frozen_capture_gate_preserves_exclusivity_and_returns_owner_on_failure) {
         ParallelScheduler chunks{"Frozen gated chunks", 1u, static_cast<std::size_t>(hal::page_granularity)};
-        WorldJob job{chunks, WorldJob::legacyFixturePrepare()};
+        WorldJob job{
+            chunks,
+            [](const ColonyDriverDesc &, const sim::GenerationExecution &,
+                config::Diagnostics &) -> Expected<std::unique_ptr<ColonyDriver>> {
+                // Capture/override-only fixtures must never admit a default generation.
+                return std::unexpected{std::make_error_code(std::errc::operation_not_permitted)};
+            }};
         auto driver = std::make_unique<ColonyDriver>();
         const auto address = driver.get();
         std::latch entered{1};
@@ -345,7 +406,13 @@ namespace pP::game::tests::detail::world_job {
 
     PPR_UNIT_TEST (frozen_capture_success_and_prepared_cancel_have_consistent_outcomes) {
         ParallelScheduler chunks{"Frozen completion chunks", 1u, static_cast<std::size_t>(hal::page_granularity)};
-        WorldJob job{chunks, WorldJob::legacyFixturePrepare()};
+        WorldJob job{
+            chunks,
+            [](const ColonyDriverDesc &, const sim::GenerationExecution &,
+                config::Diagnostics &) -> Expected<std::unique_ptr<ColonyDriver>> {
+                // Capture/override-only fixtures must never admit a default generation.
+                return std::unexpected{std::make_error_code(std::errc::operation_not_permitted)};
+            }};
         auto driver = std::make_unique<ColonyDriver>();
         const auto address = driver.get();
         for (const bool cancel_ready: {false, true}) {
@@ -372,7 +439,13 @@ namespace pP::game::tests::detail::world_job {
 
     PPR_UNIT_TEST (preview_failure_and_queued_cancel_return_frozen_owner) {
         ParallelScheduler chunks{"Preview failure chunks", 1u, static_cast<std::size_t>(hal::page_granularity)};
-        WorldJob job{chunks, WorldJob::legacyFixturePrepare()};
+        WorldJob job{
+            chunks,
+            [](const ColonyDriverDesc &, const sim::GenerationExecution &,
+                config::Diagnostics &) -> Expected<std::unique_ptr<ColonyDriver>> {
+                // Capture/override-only fixtures must never admit a default generation.
+                return std::unexpected{std::make_error_code(std::errc::operation_not_permitted)};
+            }};
         auto driver = std::make_unique<ColonyDriver>();
         const auto address = driver.get();
         for (const bool cancel_queued: {false, true}) {
@@ -402,6 +475,7 @@ namespace pP::game::tests::detail::world_job {
         std::latch entered{1};
         std::latch release{1};
         bool released = false;
+        colony::test_fixture::AuthoredFixture authored;
         WorldJob job{
             chunks,
             [&](const ColonyDriverDesc &request, const sim::GenerationExecution &execution,
@@ -411,7 +485,7 @@ namespace pP::game::tests::detail::world_job {
                     *execution.m_context, *execution.m_stage, entered, release);
 
                 auto driver = std::make_unique<ColonyDriver>();
-                const auto error = driver->initLegacyFixture(request, &local);
+                const auto error = authored.initialize(*driver, request, &local);
                 if (error) {
                     return std::unexpected{error};
                 }
@@ -425,7 +499,7 @@ namespace pP::game::tests::detail::world_job {
         };
 
         PPR_TEST_ASSERT(
-            not job.request(ColonyDriverDesc{.m_seed = 42u, .m_agent_count = 100u, .m_world_generation = 7u}));
+            not job.request(ColonyDriverDesc{.m_seed = 42u, .m_agent_count = 1u, .m_world_generation = 7u}));
         PPR_TEST_ASSERT(not job.update(true));
         entered.wait();
         PPR_TEST_ASSERT(job.view().m_stage == EWorldJobStage::physics);
@@ -450,12 +524,89 @@ namespace pP::game::tests::detail::world_job {
         settle(job);
         PPR_TEST_ASSERT(job.view().m_state == EWorldJobState::prepared);
         PPR_TEST_ASSERT(job.presentation().m_tiles.empty());
-        job.discardPrepared(std::make_error_code(std::errc::io_error));
+        PPR_TEST_ASSERT(not job.presentationFailed(std::make_error_code(std::errc::io_error)));
         settle(job);
         PPR_TEST_ASSERT(not job.busy());
         PPR_TEST_ASSERT(job.view().m_state == EWorldJobState::failed);
         PPR_TEST_ASSERT(job.view().m_error == std::errc::io_error);
         PPR_TEST_ASSERT(not job.shutdown());
+    };
+
+    PPR_UNIT_TEST (independent_work_admission_prepares_without_loading_presentation) {
+        ParallelScheduler chunks{"Independent world admission", 1u, static_cast<std::size_t>(hal::page_granularity)};
+        std::atomic<u32> calls{};
+        WorldJob job{
+            chunks,
+            [&](const ColonyDriverDesc &, const sim::GenerationExecution &,
+                config::Diagnostics &) -> Expected<std::unique_ptr<ColonyDriver>> {
+                ++calls;
+                return std::make_unique<ColonyDriver>();
+            }};
+        PPR_DEFER {
+            PPR_TEST_ASSERT(not job.shutdown());
+        };
+
+        PPR_TEST_ASSERT(not job.request({.m_world_generation = 1u}));
+        PPR_TEST_ASSERT(not job.update(false));
+        PPR_TEST_ASSERT(calls == 0u and job.view().m_state == EWorldJobState::queued);
+
+        do {
+            PPR_TEST_ASSERT(not job.update(false, true, true));
+            std::this_thread::yield();
+        } while (job.view().m_state != EWorldJobState::prepared);
+
+        PPR_TEST_ASSERT(calls == 1u and job.preparedDriver() != nullptr);
+
+        job.cancel();
+        while (job.busy()) {
+            PPR_TEST_ASSERT(not job.update(false, true, true));
+            std::this_thread::yield();
+        }
+
+        PPR_TEST_ASSERT(job.view().m_state == EWorldJobState::cancelled);
+    };
+
+    PPR_UNIT_TEST (postcommit_presentation_failure_retains_live_driver_and_header_until_retirement) {
+        ParallelScheduler chunks{"Published presentation failure", 1u, static_cast<std::size_t>(hal::page_granularity)};
+        WorldJob job{
+            chunks,
+            [](const ColonyDriverDesc &, const sim::GenerationExecution &, config::Diagnostics &)
+                -> Expected<std::unique_ptr<ColonyDriver>> { return std::make_unique<ColonyDriver>(); }};
+        std::unique_ptr<ColonyDriver> published;
+        PPR_DEFER {
+            if (published) {
+                PPR_TEST_ASSERT(not published->shutdown());
+            }
+
+            PPR_TEST_ASSERT(not job.shutdown());
+        };
+
+        PPR_TEST_ASSERT(not job.request({.m_world_generation = 1u}));
+        PPR_TEST_ASSERT(not job.update(false, true, true));
+        settle(job);
+
+        auto *const candidate = job.preparedDriver();
+        auto *const presentation = &job.presentation();
+        presentation->m_diagnostic_palette.resize(65536u);
+
+        job.commitPublication();
+        published = job.publish();
+
+        const auto cause = std::make_error_code(std::errc::io_error);
+        PPR_TEST_ASSERT(job.presentationFailed(cause) == cause);
+        job.cancel();
+        PPR_TEST_ASSERT(not job.update(false, false, true));
+
+        PPR_TEST_ASSERT(published.get() == candidate and job.preparedDriver() == nullptr);
+        PPR_TEST_ASSERT(job.view().m_state == EWorldJobState::prepared and job.view().m_error == cause);
+        PPR_TEST_ASSERT(&job.presentation() == presentation and presentation->m_diagnostic_palette.size() == 65536u);
+
+        // The real transport has now settled. Retire only presentation storage;
+        // the published simulation remains owned by the host.
+        job.retire({});
+        settle(job);
+        PPR_TEST_ASSERT(not job.busy() and job.view().m_state == EWorldJobState::failed);
+        PPR_TEST_ASSERT(job.view().m_error == cause and published.get() == candidate);
     };
 
     PPR_UNIT_TEST (failure_is_retained_and_ready_candidate_can_still_be_cancelled) {
@@ -499,6 +650,8 @@ namespace pP::game::tests::detail::world_job {
 namespace pP::game::tests {
     const UnitTest world_jobs = UnitTest::Named("world_jobs") / [](UnitTest::IRun &_) -> void {
         _.recurse({
+            detail::world_job::authored_fixture_replays_owned_terrain_and_marks_every_chunk_dirty,
+            detail::world_job::authored_fixture_cancelled_generation_returns_no_owner_or_completed_chunks,
             detail::world_job::owned_request_override_survives_cancel_and_default_policy_is_unchanged,
             detail::world_job::queued_override_payload_is_released_after_coordinator_retirement,
             detail::world_job::loading_presentation_gates_admission_and_cancel_is_reusable,
@@ -511,6 +664,8 @@ namespace pP::game::tests {
             detail::world_job::cancel_during_real_physics_preparation_discards_candidate,
             detail::world_job::failure_is_retained_and_ready_candidate_can_still_be_cancelled,
             detail::world_job::candidate_graphics_failure_retires_cpu_owner_and_preserves_failure,
+            detail::world_job::independent_work_admission_prepares_without_loading_presentation,
+            detail::world_job::postcommit_presentation_failure_retains_live_driver_and_header_until_retirement,
         });
     };
     const UnitTest &gameWorldJobTests() noexcept {

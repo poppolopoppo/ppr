@@ -20,7 +20,7 @@ namespace pP::colony {
     }
 
     bool ColonyDriver::editReadyForPresentation() const noexcept {
-        return m_edit and m_edit->m_colliders_ready;
+        return m_edit and m_edit->m_colliders_ready and (not m_edit->m_matter or m_edit->m_matter_copied);
     }
 
     std::span<const sim::ChunkGrid::CapturedChunk> ColonyDriver::editChunks() const noexcept {
@@ -39,8 +39,19 @@ namespace pP::colony {
 
     std::error_code ColonyDriver::runHeldTicks() {
         while (m_held_slices != 0u) {
-            PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, m_steps.runSystems(m_registry));
-            PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, m_step_error);
+            if (m_matter_pending) {
+                const auto finished = finishMatterPhysics();
+                PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, finished);
+                if (not *finished) {
+                    return {};
+                }
+            } else {
+                PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, m_steps.runSystems(m_registry));
+                PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, m_step_error);
+                if (m_matter_pending or m_snapshot_phase != ESnapshotPhase::idle) {
+                    return {};
+                }
+            }
 
             if (m_edit) {
                 m_resume_edit_tick = true;
@@ -55,8 +66,15 @@ namespace pP::colony {
             m_counts = pP::colony::pathCounts(m_registry);
             m_errands = liveErrandCount(m_registry);
             refreshAgents();
-            if (m_single_step_pending) {
-                m_single_step_pending = false;
+
+            if (m_pending_single_steps != 0u) {
+                --m_pending_single_steps;
+                return {};
+            }
+
+            if (m_paused) {
+                // Finish the already-admitted in-flight slice, then retain all
+                // later catch-up slices until an explicit resume/single-step.
                 return {};
             }
         }
@@ -68,6 +86,23 @@ namespace pP::colony {
     // ------------------------------------------------------------------
 
     std::error_code ColonyDriver::prepareEdit(const bool advance_build) {
+        if (m_matter_runtime != nullptr and
+            not m_cpu_particles_current and
+            (not m_pending_digs.empty() or (advance_build and liveErrandCount(m_registry) != 0u))) {
+            const auto captured = advanceMatterSnapshot();
+            PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, captured);
+            if (not *captured) {
+                return {};
+            }
+        }
+
+        if (m_matter_runtime != nullptr and
+            contentCatalog() == nullptr and
+            (not m_pending_digs.empty() or (advance_build and liveErrandCount(m_registry) != 0u))) {
+            // Legacy fixtures have no authoritative emission density.
+            PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, std::errc::not_supported);
+        }
+
         EditCandidate candidate{};
         auto capture = [&](const sim::ChunkPos pos) -> std::error_code {
             if (std::ranges::any_of(candidate.m_chunks, [pos](const auto &chunk) { return chunk.position() == pos; })) {
@@ -151,9 +186,53 @@ namespace pP::colony {
             return std::ranges::find(candidate.m_touched, chunk.position()) == candidate.m_touched.end();
         });
 
-        auto particles = m_colony.particles().prepareTerrainEdit(grid(), candidate.m_chunks, 1.0 / cellsPerMetre());
-        PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, particles);
-        candidate.m_particles = std::move(*particles);
+        if (m_matter_runtime != nullptr) {
+            auto matter = prepareMatterTerrainEdit(*m_matter, grid(), candidate.m_chunks, *contentCatalog());
+            PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, matter);
+            if (not matter->has_value()) {
+                // Expected coverage deferral retains the whole tool cohort.
+                // Continue physics on committed terrain; retry on a later tick.
+                m_edit_rejection = std::make_error_code(std::errc::device_or_resource_busy);
+                return {};
+            }
+
+            auto &working = **matter;
+            // An edit does not integrate position. Preserve the current physical
+            // ledger exactly instead of reconstructing it through FP32 readback.
+            std::array<Array<sim::MatterParticle>, sim::kChunkCount> rows{};
+            for (const auto records:
+                {std::span<const sim::MatterParticle>{working.m_records},
+                    std::span<const sim::MatterParticle>{working.m_gas}}) {
+                for (const auto &record: records) {
+                    const sim::GlobalCellPos position{
+                        std::min(static_cast<u32>(record.m_x_m / working.m_cell_metres), sim::kWorldEdge - 1u),
+                        std::min(static_cast<u32>(record.m_y_m / working.m_cell_metres), sim::kWorldEdge - 1u)};
+                    rows[sim::chunkIndexOf(sim::chunkOf(position))].push_back(record);
+                }
+            }
+
+            sim::MatterParticleSnapshot snapshot{.m_next_id = working.m_next_id};
+            for (u32 index = 0u; index < sim::kChunkCount; ++index) {
+                if (rows[index].empty())
+                    continue;
+
+                std::ranges::sort(rows[index], {}, &sim::MatterParticle::m_id);
+                snapshot.m_chunks.push_back(
+                    {{index % sim::kChunksPerEdge, index / sim::kChunksPerEdge},
+                        std::make_shared<const Array<sim::MatterParticle>>(std::move(rows[index]))});
+            }
+
+            PPR_RETURN_ERROR_ON_FAIL(
+                ColonyEdits, candidate.m_moving_particles.restoreMoving(
+                                 snapshot, preparedWorld()->generated().m_plan.recipe().m_materials,
+                                 working.m_cell_metres, working.m_thickness_metres));
+
+            candidate.m_matter = std::move(working);
+        } else {
+            auto particles = m_colony.particles().prepareTerrainEdit(grid(), candidate.m_chunks, 1.0 / cellsPerMetre());
+            PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, particles);
+            candidate.m_particles = std::move(*particles);
+        }
 
         for (const auto pos: candidate.m_touched) {
             u64 revision = 1u;
@@ -178,13 +257,18 @@ namespace pP::colony {
         invalidateColliderCache();
         PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, prepareEditColliders());
 
+        if (not m_edit)
+            return {}; // Attached simulation settlement has no render prerequisite.
+
         if (not m_require_edit_publication) {
             // Headless authored sessions publish the same prepared transaction
             // synchronously, without depending on a render acknowledgement.
-            while (not editReadyForPresentation()) {
+            while (m_edit and not editReadyForPresentation()) {
                 PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, prepareEditColliders());
             }
-            PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, settleEdit(m_edit->m_manifest));
+
+            if (m_edit)
+                PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, settleEdit(m_edit->m_manifest));
         }
         return {};
     }
@@ -195,40 +279,113 @@ namespace pP::colony {
 
     std::error_code ColonyDriver::prepareEditColliders() {
         PPR_ASSERT(m_edit.has_value());
-        if (m_edit->m_colliders_ready) {
+        if (m_edit->m_colliders_ready and not m_edit->m_matter) {
             return {};
         }
 
-        Array<sim::ChunkPos> needed{};
-        collectColliderInterest(needed);
+        if (not m_edit->m_colliders_ready) {
+            Array<sim::ChunkPos> needed{};
+            collectColliderInterest(needed);
 
-        if (not m_edit->m_colliders_started) {
-            if (m_colliders.pendingCount() != 0u) {
-                PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, rebuildChunks({}, needed, 2u));
+            if (not m_edit->m_colliders_started) {
                 if (m_colliders.pendingCount() != 0u) {
-                    return {};
+                    PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, rebuildChunks({}, needed, 2u));
+                    if (m_colliders.pendingCount() != 0u) {
+                        return {};
+                    }
                 }
-            }
-            PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, m_colliders.beginCohort(m_scene));
-            m_edit->m_colliders_started = true;
-            // Candidate cells are exposed only inside this main-thread call;
-            // cached collider views own their numeric copies. UI and rendering
-            // keep the original grid throughout every inter-frame wait.
-            for (auto &chunk: m_edit->m_chunks) {
-                grid().exchangeChunk(chunk);
-            }
-            PPR_DEFER {
+
+                PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, m_colliders.beginCohort(m_scene));
+                m_edit->m_colliders_started = true;
+
+                // Candidate cells are exposed only inside this main-thread call;
+                // cached collider views own their numeric copies. UI and rendering
+                // keep the original grid throughout every inter-frame wait.
                 for (auto &chunk: m_edit->m_chunks) {
                     grid().exchangeChunk(chunk);
                 }
-            };
-            PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, rebuildChunks(m_edit->m_touched, needed, 2u));
-        } else {
-            // The frozen candidate cache already owns the complete neighbor closure.
-            PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, rebuildChunks({}, needed, 2u));
+                PPR_DEFER {
+                    for (auto &chunk: m_edit->m_chunks) {
+                        grid().exchangeChunk(chunk);
+                    }
+                };
+
+                PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, rebuildChunks(m_edit->m_touched, needed, 2u));
+            } else {
+                // The frozen candidate cache already owns the complete neighbor closure.
+                PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, rebuildChunks({}, needed, 2u));
+            }
+
+            m_edit->m_colliders_ready = m_colliders.pendingCount() == 0u;
         }
 
-        m_edit->m_colliders_ready = m_colliders.pendingCount() == 0u;
+        if (m_edit->m_colliders_ready and m_edit->m_matter) {
+            // Reserve all bookkeeping before the first irreversible publication.
+            m_present_dirty.reserve(m_present_dirty.size() + m_edit->m_manifest.size());
+            m_present_revision_history.reserve(m_present_revision_history.size() + m_edit->m_manifest.size());
+
+            if (m_edit->m_matter_prepared) {
+                if (not m_edit->m_matter_copied) {
+                    auto completion = advanceMatterRequest(*m_matter_runtime, EMatterOperation::edit_poll, [&] {
+                        return m_matter_runtime->beginPollEdit(m_edit->m_matter->m_identity);
+                    });
+                    PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, completion);
+                    if (not *completion) {
+                        return {};
+                    }
+
+                    PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, (**completion).m_execution.m_operation_error);
+                    PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, (**completion).m_execution.m_transport_error);
+                    if (not (**completion).m_readback) {
+                        return {};
+                    }
+
+                    m_edit->m_matter_copied = true;
+                }
+
+                return settleEdit(m_edit->m_manifest);
+            }
+
+            auto completion = advanceMatterRequest(
+                *m_matter_runtime, EMatterOperation::edit_prepare, [&]() -> Expected<MatterRequest> {
+                    Array<u16> solids;
+                    for (const auto &material: contentCatalog()->materials()) {
+                        if (material.m_representation == EMaterialRepresentation::terrain and
+                            material.m_phase == EMaterialPhase::solid) {
+                            solids.push_back(material.m_numeric_id);
+                        }
+                    }
+
+                    for (auto &chunk: m_edit->m_chunks) {
+                        grid().exchangeChunk(chunk);
+                    }
+
+                    auto terrain = [&] {
+                        PPR_DEFER {
+                            for (auto &chunk: m_edit->m_chunks) {
+                                grid().exchangeChunk(chunk);
+                            }
+                        };
+
+                        return makeMatterTerrain(grid(), solids);
+                    }();
+                    PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyEdits, terrain);
+                    return m_matter_runtime->beginPrepareEdit(
+                        m_matter->m_identity, *m_edit->m_matter, m_matter->m_profile.m_particle_count,
+                        std::move(*terrain));
+                });
+            PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, completion);
+            if (not *completion) {
+                return {};
+            }
+
+            PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, (**completion).m_execution.m_operation_error);
+            m_edit->m_matter_prepared = true;
+            PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, (**completion).m_execution.m_transport_error);
+
+            // Acknowledged upload submission is distinct from its copy fence.
+            // The next poll alone can admit joint publication.
+        }
         return {};
     }
 
@@ -246,6 +403,71 @@ namespace pP::colony {
             });
         });
         if (not matches) {
+            return {};
+        }
+
+        if (m_edit->m_matter) {
+            PPR_ASSERT(m_matter_runtime != nullptr and m_edit->m_matter_prepared);
+            // Prepared CPU/GPU state and collider cohort are frozen together.
+            // Either publication may be irreversible even on an unexpected error.
+            auto completion = advanceMatterRequest(*m_matter_runtime, EMatterOperation::edit_publish, [&] {
+                return m_matter_runtime->beginPublishEdit(m_edit->m_matter->m_identity);
+            });
+            PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, completion);
+            if (not *completion) {
+                return {};
+            }
+
+            if ((**completion).m_execution.m_operation_error or m_colliders.commitCohort(m_scene)) {
+                hal::fatalExit("matter-terrain-joint-publication-failure");
+            }
+
+            m_edit->m_colliders_started = false;
+            m_edit->m_matter_prepared = false;
+
+            for (auto &chunk: m_edit->m_chunks)
+                grid().exchangeChunk(chunk);
+
+            m_matter = std::move(m_edit->m_matter);
+            m_colony.particles() = std::move(m_edit->m_moving_particles);
+            const auto presentation_world = m_particle_view->m_world;
+            m_particle_view = (**completion).m_view;
+            PPR_ASSERT(m_particle_view.has_value());
+            m_particle_view->m_world = presentation_world;
+            m_particle_view->m_joint_tick = m_tick_count;
+            m_cpu_particles_current = true;
+            m_snapshot_tick = m_tick_count;
+            m_capture_awake_valid = false;
+
+            for (const auto &row: m_edit->m_errands)
+                m_registry.get<BuildErrand>(row.m_entity)->m_progress = row.m_candidate;
+
+            for (const auto &row: m_edit->m_manifest) {
+                auto present = std::ranges::find(m_present_dirty, row.m_pos, &DirtyChunk::m_pos);
+                if (present == m_present_dirty.end())
+                    m_present_dirty.push_back(row);
+                else
+                    *present = row;
+
+                auto history = std::ranges::find(m_present_revision_history, row.m_pos, &DirtyChunk::m_pos);
+                if (history == m_present_revision_history.end())
+                    m_present_revision_history.push_back(row);
+                else
+                    *history = row;
+            }
+
+            m_collider_dirty.clear();
+            m_finder = Pathfinder{};
+            m_dig_stats.m_dug_total += m_edit->m_dug;
+            m_initial_matter_baseline_valid = false;
+            invalidateColliderCache();
+
+            if (wakeBodiesNearEdit(m_edit->m_touched))
+                hal::fatalExit("matter-terrain-postcommit-wake-failure");
+
+            m_dig_stats.m_last_chunks = std::move(m_edit->m_touched);
+            m_edit.reset();
+            PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, (**completion).m_execution.m_transport_error);
             return {};
         }
 

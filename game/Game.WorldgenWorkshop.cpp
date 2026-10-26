@@ -16,7 +16,7 @@ namespace pP::colony {
     // ------------------------------------------------------------------
 
     PPR_DEFINE_LOG_CATEGORY(Workshop, info, none)
-    Expected<GridPass::GridStagedFrame> captureWorldgenPreviewPresentation(
+    Expected<GridStagedFrame> captureWorldgenPreviewPresentation(
         const WorldgenPreviewResult &preview, const EGridDiagnosticMode mode, const u64 revision,
         const IContext &context) {
         PPR_RETURN_UNEXPECTED_ON_FAIL(Workshop, context.error());
@@ -25,12 +25,13 @@ namespace pP::colony {
                           ? std::error_code{}
                           : std::make_error_code(std::errc::invalid_argument));
 
+        // Spelled as equality: the rewritten operator!= on these types crashes cl 19.52 here (C1001).
         PPR_RETURN_UNEXPECTED_ON_FAIL(
             Workshop, not preview.m_catalog or
                               not preview.m_presentation or
-                              preview.m_presentation->catalog() != preview.m_catalog or
-                              preview.m_presentation_generation != asset::RequestGeneration{revision} or
-                              preview.m_presentation->generation() != preview.m_presentation_generation
+                              not (preview.m_presentation->catalog() == preview.m_catalog) or
+                              not (preview.m_presentation_generation == asset::RequestGeneration{revision}) or
+                              not (preview.m_presentation->generation() == preview.m_presentation_generation)
                           ? std::make_error_code(std::errc::invalid_argument)
                           : std::error_code{});
 
@@ -54,7 +55,7 @@ namespace pP::colony {
             for (const auto &particle: *batch.m_particles) {
                 particles.push_back(
                     {particle.m_id, particle.m_x_m, particle.m_y_m, particle.m_volume_m3, particle.m_mass_kg,
-                        particle.m_temperature_k, particle.m_material, static_cast<u32>(particle.m_phase)});
+                        particle.m_temperature_k, particle.m_material});
             }
             packet.m_particle_batches.push_back(
                 {sim::chunkIndexOf(batch.m_position),
@@ -86,7 +87,7 @@ namespace pP::colony {
             }
         }
 
-        GridPass::GridStagedFrame stage{};
+        GridStagedFrame stage{};
         PPR_RETURN_UNEXPECTED_ON_FAIL(Workshop, buildGridStagedFrame(packet, stage));
 
         // GridPass requires complete chunk ranges. The client marks the visible
@@ -179,7 +180,7 @@ namespace pP::colony {
         std::optional<ContentAuthoringSaveResult> m_saved{};
         std::optional<WorldgenPreviewResult> m_preview{};
         std::shared_ptr<const WorldgenPreviewWorld> m_world{}, m_retired_world{};
-        std::unique_ptr<GridPass::GridStagedFrame> m_stage{};
+        std::unique_ptr<GridStagedFrame> m_stage{};
         std::string m_diagnostic_text{};
         std::error_code m_error{};
         bool m_capture_pending{}, m_ready{};
@@ -424,7 +425,7 @@ namespace pP::colony {
         cancel();
     }
 
-    std::unique_ptr<GridPass::GridStagedFrame> WorldgenWorkshop::takePresentation() {
+    std::unique_ptr<GridStagedFrame> WorldgenWorkshop::takePresentation() {
         return std::move(m_presentation);
     }
 
@@ -539,7 +540,7 @@ namespace pP::colony {
                             *state->m_preview, state->m_request.m_mode, state->m_request.m_id, *state->m_context);
                         PPR_RETURN_ERROR_ON_FAIL(Workshop, stage);
 
-                        state->m_stage = std::make_unique<GridPass::GridStagedFrame>(std::move(*stage));
+                        state->m_stage = std::make_unique<GridStagedFrame>(std::move(*stage));
                         return {};
                     },
                     std::nullopt, ParallelScheduler::drop_if_full);
@@ -897,3 +898,4 @@ namespace pP::colony {
         return {};
     }
 }
+

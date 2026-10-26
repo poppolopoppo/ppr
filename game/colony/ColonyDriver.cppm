@@ -4,7 +4,9 @@ export module game.colony.driver;
 
 import engine.core;
 import engine.physics;
+import engine.matter;
 import engine.sim;
+import engine.app;
 import game.colony;
 import game.colony.agents;
 import game.colony.buildings;
@@ -12,6 +14,7 @@ import game.colony.pathfinding;
 import game.colony.translator;
 import game.colony.worldgen;
 import game.colony.content;
+import game.colony.matter;
 
 import std;
 
@@ -39,13 +42,10 @@ export namespace pP::colony {
     struct ColonyDriverDesc {
         u64 m_seed{1234567u};
         u32 m_tick_hz{60u};
-        /// Spawn-count override for profiling fixtures (agent count, not cells
-        /// or ticks). 0 fails closed to `kAgentCount`; values above
-        /// `kAgentCountMax` reject init/regenerate with `value_too_large`.
-        /// Production default stays `kAgentCount` (3).
-        u32 m_agent_count{kAgentCount};
-        /// Explicit publication identity for isolated candidates. Zero keeps
-        /// the legacy in-place lifecycle's monotonically incremented identity.
+        /// Authored initialization requires exactly one actor.
+        u32 m_agent_count{1u};
+        /// Explicit publication identity for isolated candidates. Zero derives
+        /// the next identity when adopting a newly prepared owner.
         u64 m_world_generation{};
     };
 
@@ -66,10 +66,51 @@ export namespace pP::colony {
     };
 
     // ------------------------------------------------------------------
+    // borrowed diagnostic submission observation
+    // ------------------------------------------------------------------
+
+    class IMatterSubmissionObserverForTest {
+    public:
+        virtual ~IMatterSubmissionObserverForTest() = default;
+
+        /// Optional one-time admission observation; borrowed spans expire on return.
+        virtual void observeAdmission(
+            const MatterState &source, std::span<const u32> terrain, u32 width, u32 height, float origin_x,
+            float origin_y, u32 tick_hz);
+
+        /// Called synchronously before transfer; no submission or borrowed-view retention.
+        virtual void observe(
+            MatterIdentity source, const matter::GpuParameters &profile,
+            std::span<const matter::GpuBodyBoundary> bodies, u32 body_count) = 0;
+    };
+
+    struct MatterSubmissionJournalState;
+
+    /// Bounded diagnostic only: allocation precedes callbacks; write follows detachment.
+    class MatterSubmissionJournal final : public IMatterSubmissionObserverForTest {
+        std::unique_ptr<MatterSubmissionJournalState> m_state;
+
+    public:
+        explicit MatterSubmissionJournal(std::string provenance);
+        ~MatterSubmissionJournal() override;
+
+        void observeAdmission(
+            const MatterState &source, std::span<const u32> terrain, u32 width, u32 height, float origin_x,
+            float origin_y, u32 tick_hz) noexcept override;
+        void observe(
+            MatterIdentity source, const matter::GpuParameters &profile,
+            std::span<const matter::GpuBodyBoundary> bodies, u32 body_count) noexcept override;
+
+        [[nodiscard]] std::error_code write(const std::filesystem::path &path) const;
+    };
+
+    // ------------------------------------------------------------------
     // colony driver
     // ------------------------------------------------------------------
 
     class ColonyDriver {
+        static constexpr float kGravityY = kMatterGravityY;
+
     public:
         /// Revision-tagged dirty-set row used for capture and ack.
         struct DirtyChunk {
@@ -90,6 +131,8 @@ export namespace pP::colony {
             u32 m_candidate{};
         };
         struct EditCandidate {
+            std::optional<MatterState> m_matter{};
+            sim::MatterParticleState m_moving_particles{};
             Array<sim::ChunkGrid::CapturedChunk> m_chunks{};
             Array<sim::MatterParticleBatch> m_particles{};
             Array<sim::ChunkPos> m_touched{};
@@ -99,23 +142,23 @@ export namespace pP::colony {
             bool m_has_dig{};
             bool m_colliders_started{};
             bool m_colliders_ready{};
+            bool m_matter_prepared{};
+            bool m_matter_copied{};
         };
         std::optional<EditCandidate> m_edit{};
+        u32 m_held_slices{};
+        // Accepted single steps belong to this world's driver and survive waits.
+        u32 m_pending_single_steps{};
         bool m_require_edit_publication{};
         bool m_resume_edit_tick{};
-        bool m_single_step_pending{};
-        u32 m_held_slices{};
 
         Colony m_colony{};
         std::optional<sim::FixedTimestep> m_timestep{};
         u64 m_seed{};
-        // Genuine world generation: bumped on every successful init/
-        // regenerate. The ack manifest rides this (not the user seed), so
-        // a regenerated world — even one re-using the same seed value —
-        // can never match a stale result's ack tags.
+        // Publication identity of each adopted authored world. A replacement
+        // reusing the seed cannot match the retired world's acknowledgment.
         u64 m_world_generation{0u};
         u64 m_tick_count{};
-        u32 m_agent_count{kAgentCount};
         u32 m_tick_hz{60u};
         u32 m_speed{1u};
         bool m_paused{false};
@@ -172,10 +215,75 @@ export namespace pP::colony {
         /// future destroy path must rebuild the map.
         Array<u32> m_body_by_slot{};
         Array<AgentSummary> m_agents{};
+
+        // ------------------------------------------------------------------
+        // resident authority and exact demand capture
+        // ------------------------------------------------------------------
+
+        enum class EMatterOperation : u8 {
+            idle,
+            prepare,
+            attach,
+            resume,
+            submit,
+            poll,
+            publish,
+            cancel,
+            edit_prepare,
+            edit_poll,
+            snapshot_begin,
+            snapshot_poll,
+            snapshot_end,
+            edit_publish,
+            terminal_discard
+        };
+
+        struct MatterPublication {
+            MatterReadback m_candidate{};
+        };
+
+        struct DemandSnapshot {
+            MatterState m_matter{};
+            sim::MatterParticleState m_particles{};
+        };
+
+        enum class ESnapshotPhase : u8 {
+            idle,
+            begin,
+            poll,
+            reconstruct,
+            end
+        };
+
+        std::optional<MatterState> m_matter{};
+        std::optional<GridParticleGpuView> m_particle_view{};
+        std::shared_ptr<DemandSnapshot> m_snapshot_work{};
+        std::future<Expected<DemandSnapshot>> m_snapshot_task{};
+        std::optional<DemandSnapshot> m_snapshot_ready{};
+        Array<std::pair<sim::Entity, bool>> m_capture_awake{};
+        std::optional<MatterPublication> m_matter_publication{};
+        std::optional<MatterRequest> m_matter_request{};
+        Array<physics::BodyBoundarySnapshot> m_matter_bodies{};
+        MatterRuntime *m_matter_runtime{};
+        MatterRuntime *m_preparing_runtime{};
+        IMatterSubmissionObserverForTest *m_submission_observer{};
+        // Injected generation/capture pool; its application owner outlives this
+        // driver and every demand task. No worker callback borrows the driver.
+        ParallelScheduler *m_snapshot_workers{};
+        u64 m_snapshot_tick{};
+        std::error_code m_snapshot_error{};
         std::error_code m_step_error{};
+        std::error_code m_edit_rejection{};
         const char *m_step_stage{""};
         bool m_steps_bound{false};
         bool m_physics_ready{false};
+        bool m_matter_pending{};
+        bool m_cpu_particles_current{true};
+        bool m_capture_awake_valid{};
+        // Irreversible admission latch; grouped with the existing byte-aligned state.
+        bool m_matter_terminal{};
+        ESnapshotPhase m_snapshot_phase{ESnapshotPhase::idle};
+        EMatterOperation m_matter_operation{EMatterOperation::idle};
 
     private:
         std::error_code initPhysics();
@@ -201,7 +309,10 @@ export namespace pP::colony {
 
         [[nodiscard]] std::error_code moveAgent(sim::Entity entity) noexcept;
 
-        void stepPhysics() noexcept;
+        void stepPhysics();
+        [[nodiscard]] Expected<bool> finishMatterPhysics();
+        [[nodiscard]] Expected<std::optional<MatterCompletion>> advanceMatterRequest(
+            MatterRuntime &runtime, EMatterOperation operation, std23::function_ref<Expected<MatterRequest>()> begin);
 
         void mirrorBodyStates() noexcept;
 
@@ -236,9 +347,48 @@ export namespace pP::colony {
         [[nodiscard]] std::error_code copyColliderChunk(sim::ChunkPos position, Array<u16> &occupancy) const;
 
     public:
-        /// Explicit legacy smoke/many-agent fixture; production uses initPrepared.
-        [[nodiscard]] std::error_code initLegacyFixture(
-            const ColonyDriverDesc &desc, const sim::GenerationExecution *execution = nullptr);
+        /// Borrowed observer must outlive use and be detached before its owner is destroyed.
+        void setMatterSubmissionObserverForTest(IMatterSubmissionObserverForTest *observer) noexcept;
+
+        [[nodiscard]] Expected<bool> advancePrepareMatter(MatterRuntime &runtime);
+        [[nodiscard]] Expected<bool> advanceAttachMatter(MatterRuntime &runtime);
+        [[nodiscard]] Expected<bool> advanceResumeMatter(MatterRuntime &runtime);
+        [[nodiscard]] Expected<bool> advanceDetachMatter();
+        /// Terminal teardown only: abandons the joint tick after owned drain/discard.
+        /// Confirmed operation/transport errors accumulate without undoing cleanup.
+        /// Failure/absence of its matching cleanup acknowledgement retains owners.
+        [[nodiscard]] Expected<bool> advanceTerminalDetachMatter(std::error_code &first_error);
+        [[nodiscard]] bool matterServicePending() const noexcept;
+        [[nodiscard]] bool matterAttachmentPending() const noexcept;
+        [[nodiscard]] bool matterDeviceOwned() const noexcept;
+
+        /// Preparation does not attach a device owner to a worker-owned driver.
+        [[nodiscard]] std::error_code prepareMatter(MatterRuntime &runtime);
+        [[nodiscard]] std::error_code attachMatter(MatterRuntime &runtime);
+        [[nodiscard]] std::error_code resumeMatter(MatterRuntime &runtime);
+        [[nodiscard]] std::error_code detachMatter();
+
+        [[nodiscard]] bool matterAttached() const noexcept;
+        [[nodiscard]] bool physicsPending() const noexcept;
+        [[nodiscard]] bool admitsElapsed() const noexcept;
+        [[nodiscard]] const MatterState *matterState() const noexcept;
+        [[nodiscard]] std::optional<GridParticleGpuView> particleView() const noexcept;
+        /// Game adapter binds the acknowledged presentation bundle to the
+        /// existing value view; numerical ownership and epoch do not change.
+        void bindParticlePresentation(GridWorldIdentity world) noexcept;
+        [[nodiscard]] bool particleSnapshotCurrent() const noexcept;
+        [[nodiscard]] u64 particleSnapshotTick() const noexcept;
+        /// Freezes the current joint tick until its owning readback has been
+        /// reconstructed and validated on the injected existing worker pool.
+        /// An explicitly supplied pool must outlive this driver and its tasks.
+        [[nodiscard]] Expected<bool> advanceMatterSnapshot(ParallelScheduler *workers = nullptr);
+
+        /// Current owned columns, or explicit unavailable after resident evolution.
+        /// A never-attached owner initializes from its exact physical ledger.
+        [[nodiscard]] Expected<MatterState> captureMatterState() const;
+
+        /// Consumes only the copied expected coverage-deferral notice.
+        [[nodiscard]] std::error_code takeEditRejection() noexcept;
 
         /// Adopts a complete generated owner at this driver's stable address.
         /// Prepared sessions start one controlled actor at the validated start.
@@ -247,15 +397,15 @@ export namespace pP::colony {
         /// Initializes an unpublished checkpoint candidate without spawning actors.
         [[nodiscard]] std::error_code initRestored(
             const ColonyDriverDesc &desc, PreparedWorld world, const sim::Snapshot &snapshot,
-            const sim::MatterParticleSnapshot &particles, u64 tick, bool initial_matter_valid,
+            const sim::MatterParticleSnapshot &particles, MatterState matter, u64 tick, bool initial_matter_valid,
             std::optional<sim::Entity> controlled, const sim::GenerationExecution *execution = nullptr);
         [[nodiscard]] Expected<sim::Snapshot> captureFullWithBodies(const IContext *context = nullptr) const;
         [[nodiscard]] u32 tickHz() const noexcept;
         [[nodiscard]] bool captureReady() const noexcept;
         [[nodiscard]] const PreparedWorld *preparedWorld() const noexcept;
         [[nodiscard]] bool initialMatterBaselineValid() const noexcept;
-        [[nodiscard]] sim::MatterParticleSnapshot captureParticles() const;
-        [[nodiscard]] std::span<const sim::MatterParticle> particleChunk(sim::ChunkPos position) const noexcept;
+        [[nodiscard]] Expected<sim::MatterParticleSnapshot> captureParticles() const;
+        [[nodiscard]] Expected<std::span<const sim::MatterParticle>> particleChunk(sim::ChunkPos position) const;
         [[nodiscard]] u32 particleCount() const noexcept;
         [[nodiscard]] std::span<const sim::MatterParticleBatch> editParticles() const noexcept;
         // Borrowed immutable catalog; absent for explicit legacy fixtures.
@@ -268,14 +418,15 @@ export namespace pP::colony {
         [[nodiscard]] double referenceThicknessMetres() const noexcept;
         [[nodiscard]] std::string_view profileKey() const noexcept;
 
-        /// Interactive owner enables matching render-publication settlement.
-        /// Headless fixtures retain synchronous edit execution.
+        /// Legacy edits wait for a matching presentation manifest. Attached
+        /// matter instead commits acknowledged solver/collider preparation;
+        /// presentation catches up independently through its dirty manifest.
         void requireEditPublication() noexcept;
         [[nodiscard]] bool editPending() const noexcept;
         [[nodiscard]] bool editReadyForPresentation() const noexcept;
         [[nodiscard]] std::span<const sim::ChunkGrid::CapturedChunk> editChunks() const noexcept;
         [[nodiscard]] std::span<const DirtyChunk> editManifest() const noexcept;
-        /// Matching complete GPU-consumption manifest commits the held edit.
+        /// Matching complete manifest commits a jointly prepared candidate.
         [[nodiscard]] std::error_code settleEdit(std::span<const DirtyChunk> manifest);
 
         [[nodiscard]] std::error_code shutdown();
@@ -293,20 +444,10 @@ export namespace pP::colony {
         void clearPlayerCommand() noexcept;
 
         /// Only valid while initialized and paused; runs exactly one tick.
-        [[nodiscard]] std::error_code stepOne() noexcept;
+        [[nodiscard]] std::error_code stepOne();
 
         /// Accepts only speeds 1, 2, or 3.
         [[nodiscard]] std::error_code setSpeed(u32 speed) noexcept;
-
-        /// Replaces the generated world, discarding tick and time backlog.
-        /// Keeps the current spawn count, so a profiling load persists across
-        /// regeneration.
-        [[nodiscard]] std::error_code regenerateLegacyFixture(u64 seed);
-
-        /// Replaces the generated world with a spawn-count override (agent
-        /// count; 0 fails closed to `kAgentCount`, above `kAgentCountMax`
-        /// returns `value_too_large`). Snapshot/registration order untouched.
-        [[nodiscard]] std::error_code regenerateLegacyFixture(u64 seed, u32 agent_count);
 
         [[nodiscard]] const sim::ChunkGrid &grid() const noexcept;
 
