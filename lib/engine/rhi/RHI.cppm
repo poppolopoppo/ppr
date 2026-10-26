@@ -50,6 +50,8 @@ export namespace pP::rhi {
     using slang_rhi::QueryPoolDesc;
     using slang_rhi::QueryType;
     using slang_rhi::QueryResultState;
+    using slang_rhi::TimestampCalibration;
+    using slang_rhi::CpuTimestampDomain;
     using slang_rhi::IHeap;
     using slang_rhi::IInputLayout;
     using slang_rhi::IRenderPipeline;

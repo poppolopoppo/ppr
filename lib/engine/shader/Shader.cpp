@@ -240,12 +240,8 @@ namespace pP {
             }
 
             std::error_code shutdown() override {
-                if (m_modules_loaded) {
-                    PPR_LOG(
-                        Shader, warning,
-                        "shutting down with loaded modules — modules are owned by the session and will be destroyed with it");
-                }
-
+                // Loaded modules belong to the session. This target-change
+                // latch does not measure outstanding external owners.
                 m_modules_loaded = false;
                 m_session.setNull();
                 m_global_session.setNull();

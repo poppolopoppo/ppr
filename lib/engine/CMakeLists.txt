@@ -6,6 +6,7 @@ add_subdirectory(mesh)
 add_subdirectory(shader)
 add_subdirectory(rhi)
 add_subdirectory(sim)
+add_subdirectory(matter)
 add_subdirectory(physics)
 add_subdirectory(app)
 # Dev-only test aggregates (core/app/sim/asset: engine.tests, engine.tests.core, engine.tests.app, engine.tests.sim, engine.tests.asset):

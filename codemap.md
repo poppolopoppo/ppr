@@ -38,6 +38,7 @@ game/main.cpp → game.application → game.config / game.display / game.colony.
                   engine.math → engine.core
                   engine.image → engine.core / engine.math / engine.asset (+ PRIVATE mango-image / stb)
                   engine.mesh → engine.core / engine.math (+ PRIVATE mango-import3d)
+                  engine.matter → engine.core / engine.math / engine.shader / engine.rhi (private link from engine.tests.app)
 ```
 
 - **Service Locator**: `IService` → `FlatMap<std::type_index, safe_ptr<IService>>` keyed by `typeid(T)` (`Core.Service.cppm:27-83`) → `ServicesStore` with parent-chain fallback →
@@ -84,6 +85,7 @@ game/main.cpp → game.application → game.config / game.display / game.colony.
 | `lib/engine/shader/`            | Wraps Slang: IShaderService, SharedModule, row-major session.                                         | [View Map](lib/engine/shader/codemap.md)            |
 | `lib/engine/sim/`               | Deterministic simulation: 4096x4096-cell world as 32x32 chunks of 128x128 (1024 chunks), fixed-timestep tick driver with a step registry, versioned snapshot save/load, ECS columns, footprint, worldgen. Renderer-independent.  | [View Map](lib/engine/sim/codemap.md)               |
 | `lib/engine/physics/`           | Box2D boundary — box2d types never leak past it: `Scene` world, indexed/diffed `ChunkColliders` rebuild, `Coupling` publish (used by `engine.tests.sim` only). | [View Map](lib/engine/physics/codemap.md)           |
+| `lib/engine/matter/`            | Pinned PB-MPM GPU owner: `:gpu.types` scalar ABI and source defaults, `:gpu` checked transfers, asynchronous working batches and explicit publication. | [View Map](lib/engine/matter/codemap.md)            |
 | `lib/engine/app/`               | Application umbrella: slim Application base + ApplicationEditor subclass (IClientService), re-exports all app submodules. | [View Map](lib/engine/app/codemap.md)               |
 | `lib/engine/app/input/`         | Input action/key/listener + FilteredAnalog/device message layer + Routing background-drag latch (12 files, 6 partitions).                      | [View Map](lib/engine/app/input/codemap.md)         |
 | `lib/engine/app/platform/`      | IPlatform 9-method interface + create() factory, platform errc/version helpers.                        | [View Map](lib/engine/app/platform/codemap.md)      |
@@ -120,13 +122,13 @@ game/main.cpp → game.application → game.config / game.display / game.colony.
 
 Tests exist unless `BUILD_TESTING` is explicitly OFF (`msvc-rel` and inherited `msvc-profile`). `PPR_TEST_LOOPS` defaults to 1 even under ASan; configure 3 for stress and restore 1 explicitly when reusing the build directory.
 
-Current CMake registers twenty entries named `<target>[.<qualifier>]` by `ppr_add_test_entry` (`cmake/Tests.cmake`): `engine.tests.core`, `engine.tests.sim`, eleven `engine.tests.app.*` entries, three `engine.tests.asset.*` entries, two `game.tests*` entries, and two `app.game.worldgen_*` profile validations. The profile entries perform CPU-only pack load/compile validation.
+Current CMake registers thirty-two entries named `<target>[.<qualifier>]` by `ppr_add_test_entry` (`cmake/Tests.cmake`): `engine.tests.core`, `engine.tests.sim`, nineteen `engine.tests.app.*` entries, three `engine.tests.asset.*` entries, six `game.tests*` entries, and two `app.game.worldgen_*` profile validations. The profile entries perform CPU-only pack load/compile validation. The matter entries cover GPU kernels, separately locked transfer/contact/pool/dam observations, CPU unit/ownership adapters, full-domain runtime lifecycle, dig/coverage/restore integration and sustained dug-sand continuation; their evidence and the final integration matrix are separate gates. The original kernel entry excludes the exact transfer/contact/pool/dam leaf union so each runs once without extending its deadline.
 Routine CTest excludes the opt-in GPU validation entries with `-LE gpu_validation`; `engine.tests.app.gpu_validation` and `engine.tests.asset.gpu_validation` set `PPR_TEST_GPU_VALIDATION=1` so the RHI debug layers run only there. GPU/window shards use `RESOURCE_LOCK gpu`/`window` instead of global `RUN_SERIAL`; only the short `frame_stages` timing entry remains serialized. `game.tests.worldgen_preview` declares `PROCESSORS 4` so its heavy leaves reserve scheduler capacity. Run `ctest --test-dir out/build/msvc-dev --parallel --output-on-failure -LE gpu_validation` for the routine suite and a separate `-L gpu_validation` pass for validation. Only one independent matrix invocation per machine may run at once, without competing profiling/game workloads. Core/sim are GLFW-free; app and GPU asset tiers require platform/GPU facilities.
 
 - `lib/engine/tests/CMakeLists.txt`: shared loop setting, engine suites, aggregate engine-test target. The aggregate does not run game tests; full CTest includes them.
 - `lib/engine/tests/app/CMakeLists.txt`: exact shard filters, timeouts and resource locks. Filter matching is prefix-based both ways; use complete group paths (`app/player/` avoids sibling matches) and full run-gate leaf tokens. GPU-backed shards claim `gpu`; display/window shards also claim `window`, while CPU-only shards run unlocked.
 - `lib/engine/tests/core/`: memory, containers, concurrency, I/O, configuration, services and other foundation behavior.
-- `lib/engine/tests/sim/`: chunks, fixed timestep, snapshots, ECS, world generation, physics; physics links privately.
+- `lib/engine/tests/sim/`: chunks, fixed timestep, snapshots, ECS, world generation and physics; physics links privately. GPU matter tests live in the app tier (`matter_gpuTests()`).
 - [asset tests](lib/engine/tests/asset/codemap.md): CPU image/mesh processing and GPU caches/render integration.
 - `game/CMakeLists.txt`: the `game.tests` entry, the split `game.tests.worldgen_preview` heavy-leaf entry, and the two `app.game.worldgen_*` profile validations, covering invocation and game display model/persistence without an upward engine-test dependency.
 - `lib/engine/tests/shared/`: shared invocation/run harness. `--run-test` selects a subtree and `--skip-test` excludes one; tests use `PPR_TEST_ASSERT`, not engine assumptions/assertions.
