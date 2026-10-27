@@ -1,6 +1,6 @@
 // Continuous GPU circle presentation; no terrain bins or occupancy geometry.
 struct NumericalRow { float positionX, positionY; float carried[14]; };
-struct ReadonlyRow { float mass, volume, material, padding0, r, g, b, padding1; };
+struct ReadonlyRow { float mass, volume, material, r, g, b; };
 struct MetadataRow {
     uint idLow, idHigh, sourceRow, material;
     float gasX, gasY, radius;

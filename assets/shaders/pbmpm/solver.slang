@@ -99,21 +99,30 @@ void engineEndpointContacts(float2 position, inout float2 d, uint row) {
 
 // Grid contact is one production operation, also inspected by the test-only
 // contact entry. Source shapes, engine terrain/bodies, then guardian, in order.
-float4 contactGridState(int2 node, uint key, int4 source) {
-        float2 d=float2(decodeWord(source.x),decodeWord(source.y));
-        float mass=decodeWord(source.z);
+float4 contactGridState<let Cooperative : bool>(int2 node, uint key, int4 source, bool valid) {
+    float2 d=float2(0.0);
+    float mass=0.0;
+    if (valid) {
+        d=float2(decodeWord(source.x),decodeWord(source.y));
+        mass=decodeWord(source.z);
         d=mass<1e-5 ? float2(0) : d/mass;
         for (uint i=0;i<g_parameters.shapeCount;++i) {
             Contact contact=collide(g_shapes[i],float2(node)+d);
             if (contact.collides) d-=max(dot(contact.normal,d)-min(0.0,dot(contact.normal,contact.point-float2(node))),0.0)*contact.normal;
         }
+    }
 
+    float2 terrainEndpoint = float2(node) + d;
+    Contact terrain = {false, 0.0, float2(0.0), float2(0.0)};
+    if (Cooperative) {
+        terrain = terrainContactWave(terrainEndpoint, valid && mass > 0.0, key, 0xffffffffu);
+    } else if (valid && mass > 0.0) {
+        terrain = terrainContact(terrainEndpoint, key, 0xffffffffu);
+    }
 
     // Extensions apply only where encoded mass represents material. Empty
     // unsupported nodes neither query terrain nor query moving body boundaries.
-    if (mass > 0) {
-        float2 terrainEndpoint = float2(node) + d;
-        Contact terrain = terrainContact(terrainEndpoint, key, 0xffffffffu);
+    if (valid && mass > 0) {
         if (terrain.collides) {
             // Explicit contour adaptation: the response point is the queried
             // endpoint, matching the source unrotated box's interior semantics.
@@ -137,23 +146,71 @@ float4 contactGridState(int2 node, uint key, int4 source) {
         }
     }
 
-
+    if (valid) {
         float2 endpoint=float2(node)+d;
         float2 correction=guardian(endpoint,uint2(g_parameters.gridWidth,g_parameters.gridHeight),4.0)-endpoint;
         if (correction.x!=0) { d.x=0; d.y=lerp(d.y,0.0,0.5); }
         if (correction.y!=0) { d.y=0; d.x=lerp(d.x,0.0,0.5); }
+    }
+
     return float4(d,mass,decodeWord(source.w));
+}
+
+float4 contactGridState(int2 node, uint key, int4 source) {
+    return contactGridState<false>(node, key, source, true);
+}
+
+// ------------------------------------------------------------------
+// bootstrap error acceptance without an unused numerical source tile
+// ------------------------------------------------------------------
+
+bool bootstrapGridCertified() {
+    if (g_parameters.shapeCount != 0u || g_environment.bodyCount > 1u ||
+        g_parameters.fixedPointMultiplier == 0u || !isfinite(g_parameters.deltaTime) ||
+        g_parameters.deltaTime <= 0.0 || g_parameters.deltaTime > 1.0) return false;
+
+    if (g_environment.bodyCount != 0u) {
+        BodyBoundary body = g_bodies[g_environment.bodyBase];
+        if (body.shape.shapeType != ShapeTypeBox) return false;
+
+        float fields[11] = {body.shape.positionX, body.shape.positionY, body.shape.halfSizeX,
+            body.shape.halfSizeY, body.shape.radius, body.shape.rotationDegrees, body.comX, body.comY,
+            body.velocityX, body.velocityY, body.angularVelocity};
+        for (uint index = 0u; index < 11u; ++index) {
+            if (!isfinite(fields[index]) || abs(fields[index]) > 1048576.0) return false;
+        }
+    }
+
+    // Integer payload / positive multiplier and the 1e-5 mass cutoff bound d
+    // below 2^48. Canonical terrain has extent <=2^22 and nonzero half-grid
+    // segments; its finite normal/response and one bounded box keep arithmetic
+    // below 2^64, and scaled node checks below 2^96. Thus conversion cannot
+    // reject here. Only terrain coverage can fail; arbitrary colliders and
+    // uncertified constants retain the complete original checks below.
+    return true;
+}
+
+void checkBootstrapGridCoverage(int2 node, uint key, int4 source, bool valid) {
+    if (!valid || g_environment.hasTerrain == 0u || (g_environment.reserved & 1u) != 0u) return;
+
+    float mass = decodeWord(source.z);
+    if (mass <= 0.0) return;
+
+    float2 d = float2(decodeWord(source.x), decodeWord(source.y));
+    d = mass < 1e-5 ? float2(0.0) : d / mass;
+    checkTerrainCoverage(float2(node) + d, key);
 }
 
 // ------------------------------------------------------------------
 // fused selected source stage; all lanes cross shared barriers on rejection
 // ------------------------------------------------------------------
-void fusedIteration<let Iteration : uint>(uint lane,uint3 group) {
+void fusedIteration<let Iteration : uint, let Cooperative : bool>(uint lane,uint3 group) {
     uint groupIndex=sparseGroup(group);
     if (groupIndex>=g_sparseCounters[2]) return;
 
     for (uint i=lane;i<256;i+=64) {
-        s_src[i]=0; s_dst[i]=0;
+        if (Iteration != 0u) s_src[i]=0;
+        s_dst[i]=0;
         s_absolute[i]=0u; s_contributor[i]=0xffffffffu;
     }
     GroupMemoryBarrierWithGroupSync();
@@ -162,20 +219,32 @@ void fusedIteration<let Iteration : uint>(uint lane,uint3 group) {
     int2 origin=int2(bucket.x,bucket.y)*6-1;
     int2 local=int2(lane%8,lane/8), node=origin+local;
     uint tile=(uint(local.y)*8+uint(local.x))*4;
-    uint key;
+    uint key=0xffffffffu;
     bool valid=sparseFlatKey(node,key);
+    bool bootstrap = false;
+    if (Iteration == 0u) bootstrap = bootstrapGridCertified();
+
     int4 source=int4(0);
-    if (valid) {
+    if (valid && (!bootstrap || (g_environment.hasTerrain != 0u && (g_environment.reserved & 1u) == 0u))) {
         bool sourceA=g_sparse.destinationA==0u;
         uint generation=sourceA ? g_sparse.sourceGeneration : g_sparse.generation;
         source=sparseSource(key,sourceA,generation);
-        float4 state=contactGridState(node,key,source);
-        float2 d=state.xy;
-        float mass=state.z;
-        s_src[tile]=checkedEncodeNode(d.x,key,0u);
-        s_src[tile+1]=checkedEncodeNode(d.y,key,1u);
-        s_src[tile+2]=checkedEncodeNode(mass,key,2u);
-        s_src[tile+3]=checkedEncodeNode(decodeWord(source.w),key,3u);
+    }
+
+    // The certificate depends only on uniform constants/body rows. Every lane
+    // therefore takes the same branch and the fallback wave remains converged.
+    if (bootstrap) {
+        checkBootstrapGridCoverage(node, key, source, valid);
+    } else {
+        float4 state=contactGridState<Cooperative>(node,key,source,valid);
+        if (valid) {
+            float2 d=state.xy;
+            float mass=state.z;
+            s_src[tile]=checkedEncodeNode(d.x,key,0u);
+            s_src[tile+1]=checkedEncodeNode(d.y,key,1u);
+            s_src[tile+2]=checkedEncodeNode(mass,key,2u);
+            s_src[tile+3]=checkedEncodeNode(decodeWord(source.w),key,3u);
+        }
     }
 
     GroupMemoryBarrierWithGroupSync();
@@ -268,11 +337,23 @@ void fusedIteration<let Iteration : uint>(uint lane,uint3 group) {
 [shader("compute")]
 [numthreads(64,1,1)]
 void fused0(uint lane:SV_GroupIndex,uint3 group:SV_GroupID) {
-    fusedIteration<0u>(lane,group);
+    fusedIteration<0u, false>(lane,group);
 }
 
 [shader("compute")]
 [numthreads(64,1,1)]
 void fused1(uint lane:SV_GroupIndex,uint3 group:SV_GroupID) {
-    fusedIteration<1u>(lane,group);
+    fusedIteration<1u, false>(lane,group);
+}
+
+[shader("compute")]
+[numthreads(64,1,1)]
+void fused0Wave(uint lane:SV_GroupIndex,uint3 group:SV_GroupID) {
+    fusedIteration<0u, true>(lane,group);
+}
+
+[shader("compute")]
+[numthreads(64,1,1)]
+void fused1Wave(uint lane:SV_GroupIndex,uint3 group:SV_GroupID) {
+    fusedIteration<1u, true>(lane,group);
 }

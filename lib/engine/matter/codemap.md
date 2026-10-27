@@ -12,16 +12,20 @@ terrain, Box2D, edit and checkpoint adapters. Drawing never advances this solver
 - `Matter.Gpu.Types.cppm` (`:gpu.types`): source material enum, source default
   profile and explicit scalar CPU/GPU protocol. The semantic record `GpuParticle`
   is 88 bytes (CPU rows, snapshots, checkpoints, v5 wire); the device stores each
-  particle as a 64-byte `ParticleWrite` hot row plus a 32-byte `ParticleReadonly`
+  particle as a 64-byte `ParticleWrite` hot row plus a 24-byte `ParticleReadonly`
   cold row, packed and unpacked by field name. Static collider stride32,
   parameter constant buffer64. F/D are four explicitly named source column
   components; no engine matrix storage inference.
 - The contour/body extension has separate environment constants (32 bytes),
-  immutable predicted end-pose body rows (64 bytes). Terrain owns dense dual-cell masks and
-  uploads the actual shared math contour tables; no physics/sim types enter.
-- `Matter.Gpu.cppm` / `.cpp` (`:gpu`): sole move-only `GpuSolver` owner. The `fused0`/`fused1`
-  entries compile through injected `IShaderService` from one generic body with
-  compile-time iteration; `:gpu.sparse` owns maintenance
+  immutable predicted end-pose body rows (64 bytes). `Matter.Gpu.Compact.cpp`
+  losslessly encodes validated semantic terrain masks and canonical math tables;
+  no physics/sim types enter. Eight masks share each u32, each contour case uses
+  two u32 words (55 used bits), and all eight dyadic points share one u32.
+  Geometry, case ordering and FP32 search arithmetic remain unchanged.
+- `Matter.Gpu.cppm` / `.cpp` (`:gpu`): sole move-only `GpuSolver` owner. Devices with
+  `WaveOps` select `fused0Wave`/`fused1Wave`; other devices retain `fused0`/`fused1`.
+  These entries compile through injected `IShaderService` from one generic body
+  with compile-time iteration and cooperation; `:gpu.sparse` owns maintenance
   pipelines, sparse maps, two payload pools, one budget pool and first-error resources. Every
   particle binding is the `g_hot`/`g_cold` row pair; the solver never sees the
   88-byte semantic record on the device.
@@ -42,7 +46,11 @@ terrain, Box2D, edit and checkpoint adapters. Drawing never advances this solver
   production uses eight evolving dt1/480 substeps. Iteration0 bootstraps scatter;
   iteration1 gathers and integrates. Each fused dispatch owns immutable selector
   and body-base constants through fence completion; its root belongs to the
-  matching iteration-specific program. Contact/error checks remain in both variants. Previous sparse A survives
+  matching iteration-specific program. Fused0 omits unused numerical node preparation
+  when a uniform finite-arithmetic certificate covers zero or one bounded box.
+  Its coverage-only check uses a boundary-existence bit published with validated terrain;
+  other collider/constants cases retain the original converged contact/error path.
+  Fused1 retains full node preparation. Previous sparse A survives
   iteration0; current A is remapped only before iteration1. Destination pages and
   their one shared budget are initialized explicitly. Sparse capacity joins the
   prepared replacement transaction independently of spare Hot/Cold capacity.
@@ -72,6 +80,22 @@ All four source material branches, F/SVD/plasticity, static rotated boxes and
 circles, tiny-mass threshold, post-contact re-encoding, volume feedback and
 source integration/guardian safeguards are ported. Browser mouse/emitter/drain
 controls are outside the admitted runtime.
+
+Terrain replacement derives one boundary-presence bit per 8-by-8 dual-cell tile,
+with 32 tiles per u32, alongside its validated packed masks. The table follows the same prepared,
+published and cancelled resource ownership and peak accounting as those masks;
+absent terrain uses the existing dummy binding. A 4097-by-4097 domain stores
+8,392,708 mask bytes and 32,900 boundary-table bytes. These are allocation sizes,
+not measured traffic or timing gains. Serial contour searches skip paired ring spans only
+when both tiles lack segments, preserving nonempty-cell order, nearest ties and
+the existing search termination and contact arithmetic.
+
+Grid terrain queries converge every fused-group lane before wave cooperation.
+Active lanes traverse one query's ring in parallel, select squared distance then
+the original cell ordinal, and retain the prior ring's result on an equal
+distance. Per-cell segment arithmetic and complete-ring termination are unchanged.
+Endpoint queries retain the serial search. This adds no dispatch or device buffer;
+the serial entries remain the capability fallback on devices without `WaveOps`.
 
 Checked finite integer conversion and per-node/per-field uint CAS absolute-sum
 budgets prevent signed scatter overflow; every cycle resets all four budgets.

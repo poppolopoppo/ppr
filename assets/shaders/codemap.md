@@ -179,7 +179,7 @@ rendered backdrop supplies optical terrain and particle refraction.
 ## Selected-fork conformance fixture
 
 `pbmpm/fork_conformance.slang` is test-only native conformance for the selected
-ErikSom859c449 fork: split64/32 particle rows, GPU buckets/indirect fused stages,
+ErikSom859c449 fork: split64/24 particle rows, GPU buckets/indirect fused stages,
 explicit workgroup zeroing and guarded signed reductions. It is consumed only
 by `app/matter_fork`, comparing frozen actual-WGSL words. Production GpuSolver shares `fork_core.slang` arithmetic and uses count/allocate/insert
 plus two indirect fused stages at K2. Its production-path oracle leaf observes

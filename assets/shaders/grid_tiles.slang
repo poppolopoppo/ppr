@@ -930,7 +930,7 @@ float4 fragmentParticleMain(ParticleVertexOutput input,
 
     TerrainVisual visual=g_terrain_visuals[input.material];
     float materialAlpha=float(visual.m_color_rgba&255u)/255.0;
-    // Straight-alpha RGB comes directly from Cold32 (gas uses its catalog RGB).
+    // Straight-alpha RGB comes directly from Cold24 (gas uses its catalog RGB).
     // Blend once over the already drawn terrain/background, preserving overlap.
     return float4(input.color.rgb,alpha*input.color.a*materialAlpha*visual.m_opacity*(1.0-coverage));
 }

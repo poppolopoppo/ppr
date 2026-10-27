@@ -138,13 +138,13 @@ export namespace pP {
     // versioned resident-particle presentation input
     // ------------------------------------------------------------------
 
-    inline constexpr u32 kGridParticleNumericalLayout = 3u;
+    inline constexpr u32 kGridParticleNumericalLayout = 4u;
     inline constexpr u32 kGridParticleNumericalStride = 64u;
-    inline constexpr u32 kGridParticleReadonlyStride = 32u;
+    inline constexpr u32 kGridParticleReadonlyStride = 24u;
     inline constexpr u32 kGridParticleCapacity = 1024u * 1024u;
 
     // Stable row/ID mapping and gas-only physical inputs. Moving radius is
-    // cell_metres*sqrt(Cold32.volume/pi); gas radius is sqrt(volume/thickness/pi).
+    // cell_metres*sqrt(Cold24.volume/pi); gas radius is sqrt(volume/thickness/pi).
     struct GridParticleMetadataRow {
         u32 m_id_low{}, m_id_high{}, m_source_row{0xffff'ffffu}, m_material{};
         float m_gas_x{}, m_gas_y{}, m_radius{};

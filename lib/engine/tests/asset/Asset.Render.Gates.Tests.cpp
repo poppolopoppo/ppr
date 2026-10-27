@@ -1958,7 +1958,7 @@ namespace pP::tests::detail {
                 std::ignore = drawOpticalGrid_(grid, 63.5f, 63.5f, 4.0f);
             }
             const auto stable = grid.observations();
-            PPR_TEST_ASSERT(stable.m_particle_instances == 2u and stable.m_particle_buffer_bytes == 412u);
+            PPR_TEST_ASSERT(stable.m_particle_instances == 2u and stable.m_particle_buffer_bytes == 396u);
             PPR_TEST_ASSERT(stable.m_background_targets == 3u);
             PPR_TEST_ASSERT(stable.m_background_target_bytes == 3u * 128u * 128u * 8u);
             for (u32 frame = 0u; frame < 6u; ++frame) {
@@ -1982,7 +1982,7 @@ namespace pP::tests::detail {
                 std::ignore = drawOpticalGrid_(grid, 63.5f, 63.5f, 4.0f, 64u);
             }
             const auto empty = grid.observations();
-            PPR_TEST_ASSERT(empty.m_particle_instances == 0u and empty.m_particle_buffer_bytes == 284u);
+            PPR_TEST_ASSERT(empty.m_particle_instances == 0u and empty.m_particle_buffer_bytes == 276u);
             PPR_TEST_ASSERT(empty.m_particle_root_bindings <= 3u);
             PPR_TEST_ASSERT(empty.m_background_targets == 3u);
             PPR_TEST_ASSERT(empty.m_background_target_bytes == 3u * 64u * 64u * 8u);
@@ -2037,7 +2037,7 @@ namespace pP::tests::detail {
                 std::ignore = drawOpticalGrid_(grid, 63.5f, 63.5f, 4.0f, 64u, nullptr, &admitted);
                 PPR_TEST_ASSERT(admitted);
                 const auto settled = grid.observations();
-                PPR_TEST_ASSERT(settled.m_particle_instances == 2u and settled.m_particle_buffer_bytes == 412u);
+                PPR_TEST_ASSERT(settled.m_particle_instances == 2u and settled.m_particle_buffer_bytes == 396u);
                 PPR_TEST_ASSERT(settled.m_texture_entries == stable.m_texture_entries);
                 PPR_TEST_ASSERT(settled.m_texture_decoded_bytes == stable.m_texture_decoded_bytes);
                 PPR_TEST_ASSERT(settled.m_background_target_bytes == empty.m_background_target_bytes);
@@ -2079,9 +2079,9 @@ namespace pP::tests::detail {
                 std::array<float, 16u> fields{};
             };
             struct Cold {
-                std::array<float, 8u> fields{};
+                std::array<float, 6u> fields{};
             };
-            static_assert(sizeof(Hot) == 64u and sizeof(Cold) == 32u);
+            static_assert(sizeof(Hot) == 64u and sizeof(Cold) == 24u);
             std::array<Hot, 2u> hot{};
             std::array<Cold, 2u> cold{};
             for (u32 row = 0u; row < 2u; ++row) {
@@ -2089,7 +2089,7 @@ namespace pP::tests::detail {
                 hot[row].fields[1u] = 67.0f;
                 hot[row].fields[15u] = 1.0f;
                 cold[row].fields[1u] = std::numbers::pi_v<float>;
-                cold[row].fields[4u + row] = 1.0f;
+                cold[row].fields[3u + row] = 1.0f;
             }
 
             auto live = std::make_shared<std::atomic<u64>>(0u);
@@ -2893,11 +2893,11 @@ namespace pP::tests::detail {
                     std::array<float, 16u> hot{};
                     hot[0u] = hot[1u] = 3.0f;
                     hot[15u] = 1.0f;
-                    std::array<float, 8u> cold{};
+                    std::array<float, 6u> cold{};
                     cold[0u] = 1.0f;
                     cold[1u] = std::numbers::pi_v<float> * 0.25f;
                     cold[2u] = static_cast<float>(particle_material);
-                    cold[4u] = 1.0f;
+                    cold[3u] = 1.0f;
 
                     const auto buffer = [&](const u64 bytes, const void *const data) {
                         rhi::BufferDesc desc{};

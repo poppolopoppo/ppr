@@ -9,6 +9,7 @@ target_sources(engine.matter
       Matter.Gpu.cppm
   PRIVATE
       Matter.Gpu.cpp
+      Matter.Gpu.Compact.cpp
       Matter.Gpu.Sparse.cpp
 )
 

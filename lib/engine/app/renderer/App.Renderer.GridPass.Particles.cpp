@@ -157,11 +157,11 @@ namespace pP {
             std::array<float, 16u> m_fields{};
         };
         struct ColdRow {
-            float m_mass{}, m_volume{}, m_material{}, m_pad0{}, m_r{}, m_g{}, m_b{}, m_pad1{};
+            float m_mass{}, m_volume{}, m_material{}, m_r{}, m_g{}, m_b{};
         };
         static_assert(sizeof(HotRow) == kGridParticleNumericalStride and alignof(HotRow) == 4u);
         static_assert(sizeof(ColdRow) == kGridParticleReadonlyStride and alignof(ColdRow) == 4u);
-        static_assert(PPR_OFFSETOF(ColdRow, m_r) == 16u);
+        static_assert(PPR_OFFSETOF(ColdRow, m_r) == 12u);
         Array<HotRow> hot(std::max<std::size_t>(1u, seeds.size()));
         Array<ColdRow> cold(std::max<std::size_t>(1u, seeds.size()));
         Array<GridParticleMetadataRow> rows(seeds.size());

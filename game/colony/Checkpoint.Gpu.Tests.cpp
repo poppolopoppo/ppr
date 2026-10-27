@@ -39,6 +39,7 @@ namespace pP::game::tests::detail::checkpoint {
     class GpuOwner {
         decltype(IShaderService::get()) m_shaders{IShaderService::get()};
         decltype(IRhiService::get()) m_rhi{IRhiService::get()};
+        rhi::ComPtr<rhi::ICommandQueue> m_queue;
         std::shared_ptr<const ContentCatalog> m_catalog;
         std::optional<WorldCheckpoint> m_before_admission;
 
@@ -254,26 +255,72 @@ namespace pP::game::tests::detail::checkpoint {
             if (runtime_error)
                 hal::fatalExit("checkpoint-test-gpu-completion-unknown");
 
+            // Solver fences prove execution; the queue must also retire its
+            // retained command buffers before releasing the device dependency.
+            std::error_code queue_error{};
+            if (m_queue) {
+                const hal::ProfileScope queue_wait{
+                    "Checkpoint.GpuOwner.QueueRetirement", hal::profile_blocking_category};
+                PPR_RETAIN_ERROR_ON_FAIL(CheckpointTests, queue_error, make_error_code(m_queue->waitOnHost()));
+            }
+
+            if (queue_error)
+                hal::fatalExit("checkpoint-test-queue-completion-unknown");
+
+            m_queue.setNull();
+
             const auto rhi_error = m_rhi_attempted ? m_rhi->shutdown() : std::error_code{};
             const auto shader_error = m_shaders_attempted ? m_shaders->shutdown() : std::error_code{};
             if (driver_error or rhi_error or shader_error)
                 hal::fatalExit("checkpoint-test-dependent-cleanup-failure");
         }
 
-        void initialize(RenderLane *const lane = nullptr) {
+        void initialize(RenderLane *const lane = nullptr, const bool validation = true) {
             m_lane = lane;
 
             m_shaders_attempted = true;
             PPR_TEST_ASSERT(not m_shaders->initialize());
 
-            m_rhi->setCoreValidation(true);
-            m_rhi->setGpuAssistedValidation(true);
+            m_rhi->setCoreValidation(validation);
+            m_rhi->setGpuAssistedValidation(validation);
+            PPR_TEST_ASSERT(m_rhi->isCoreValidationEnabled() == validation);
+            PPR_TEST_ASSERT(m_rhi->isGpuAssistedValidationEnabled() == validation);
             m_rhi_attempted = true;
             PPR_TEST_ASSERT(not m_rhi->initialize(rhi::DeviceType::D3D12, *m_shaders));
             PPR_TEST_ASSERT(m_rhi->getDevice().getDeviceType() == rhi::DeviceType::D3D12);
+            PPR_TEST_ASSERT(
+                not make_error_code(m_rhi->getDevice().getQueue(rhi::QueueType::Graphics, m_queue.writeRef())));
 
             PPR_TEST_ASSERT(not completeOwned(
                 m_runtime.beginInitialize(lane, m_rhi->getDevice(), *m_shaders, std::filesystem::current_path())));
+        }
+
+        void admitPrepared(
+            PreparedWorld prepared, const sim::GenerationExecution &execution,
+            IMatterSubmissionObserverForTest *const observer) {
+            m_catalog = prepared.catalogOwner();
+            m_driver = std::make_unique<ColonyDriver>();
+            PPR_TEST_ASSERT(not m_driver->initPrepared({.m_seed = 0x2aull}, std::move(prepared), &execution));
+            m_driver->setMatterSubmissionObserverForTest(observer);
+            rememberAdmission();
+
+            for (;;) {
+                const auto ready = m_driver->advancePrepareMatter(m_runtime);
+                PPR_TEST_ASSERT(ready.has_value());
+                if (*ready)
+                    break;
+
+                std::this_thread::yield();
+            }
+
+            for (;;) {
+                const auto ready = m_driver->advanceAttachMatter(m_runtime);
+                PPR_TEST_ASSERT(ready.has_value());
+                if (*ready)
+                    break;
+
+                std::this_thread::yield();
+            }
         }
 
         void restore(
@@ -520,6 +567,213 @@ namespace pP::game::tests::detail::checkpoint {
             ++m_calls;
         }
     };
+
+    // ------------------------------------------------------------------
+    // opt-in canonical trajectory exports for compact-format comparisons
+    // ------------------------------------------------------------------
+
+    PPR_UNIT_TEST (compact_formats_frontier_trajectory_export) {
+        const auto configured = config::getenvLookup("PPR_TEST_COMPACT_TRAJECTORY_ROOT");
+        if (not configured)
+            return;
+
+        const auto root = std::filesystem::canonical(*configured);
+        static_assert(sizeof(matter::GpuParticle) == 88u and alignof(matter::GpuParticle) == 4u);
+        static_assert(sizeof(sim::MatterParticle) == 64u and alignof(sim::MatterParticle) == 8u);
+        static_assert(PPR_OFFSETOF(sim::MatterParticle, m_material) == 56u);
+        static_assert(PPR_OFFSETOF(sim::MatterParticle, m_phase) == 58u);
+        static_assert(sizeof(sim::EGenerationMatter) == 1u);
+
+        std::filesystem::path output;
+        for (u32 attempt = 0u; attempt < 4096u; ++attempt) {
+            const auto path = root / ("trajectory-" + std::to_string(attempt));
+            if (std::filesystem::create_directory(path)) {
+                output = path;
+                break;
+            }
+        }
+
+        PPR_TEST_ASSERT(not output.empty());
+
+        struct Clock final : ITimerClock {
+            TimePoint now() const noexcept override {
+                return time::now();
+            }
+        } clock;
+
+        ParallelScheduler workers{
+            "Compact trajectory preparation", std::max(1u, std::min(8u, std::thread::hardware_concurrency())),
+            4u * static_cast<std::size_t>(hal::page_granularity)};
+        const sim::GenerationExecution execution{.m_scheduler = &workers};
+        config::Diagnostics diagnostics;
+        auto prepared = prepareWorld(
+            std::filesystem::current_path() / "worldgen/default", "frontier", 0x2aull, clock, diagnostics, execution);
+        PPR_TEST_ASSERT(prepared.has_value());
+
+        const auto descriptor = prepared->descriptor();
+        const auto terrain_checksum = prepared->generated().m_report.m_terrain_checksum;
+        const auto output_checksum = prepared->generated().m_report.m_output_checksum;
+
+        PairedSubmission observed;
+        const std::string provenance = std::format(
+            "compact-trajectory seed=42 profile={} content={:016x} terrain={:016x} output={:016x} core=0 gbv=0",
+            descriptor.m_profile, descriptor.m_content_fingerprint, terrain_checksum, output_checksum);
+        observed.m_journal = std::make_unique<MatterSubmissionJournal>(provenance + " segment=0 ticks=1..450");
+        observed.m_bodies.resize(matter::kGameSubsteps);
+
+        GpuOwner owner;
+        PPR_DEFER {
+            if (owner.m_driver)
+                owner.m_driver->setMatterSubmissionObserverForTest(nullptr);
+        };
+
+        // Focused correctness leaves validate with core+GBV. Both matched export
+        // variants use the normal performance device configuration explicitly.
+        owner.initialize(nullptr, false);
+        owner.admitPrepared(std::move(*prepared), execution, &observed);
+        auto &driver = *owner.m_driver;
+        driver.setPaused(true);
+        PPR_TEST_ASSERT(driver.tickCount() == 0u and driver.tickHz() == 60u);
+        PPR_TEST_ASSERT(driver.matterState() != nullptr);
+        const MatterState initial = *driver.matterState();
+        PPR_TEST_ASSERT(initial.m_particles.size() == 13044u and initial.m_records.size() == 13044u);
+        PPR_TEST_ASSERT(initial.m_profile.m_grid_width == 4103u and initial.m_profile.m_grid_height == 4103u);
+        PPR_TEST_ASSERT(initial.m_profile.m_delta_time == 1.0f / 480.0f and initial.m_profile.m_shape_count == 0u);
+
+        Array<u16> solids;
+        for (const auto &material: driver.contentCatalog()->materials()) {
+            if (material.m_representation == EMaterialRepresentation::terrain and
+                material.m_phase == EMaterialPhase::solid)
+                solids.push_back(material.m_numeric_id);
+        }
+
+        const auto terrain = makeMatterTerrain(driver.grid(), solids);
+        PPR_TEST_ASSERT(terrain.has_value());
+
+        pairedWrite(output / "terrain.bin", std::as_bytes(std::span{*terrain}));
+        pairedWrite(output / "profile.bin", std::as_bytes(std::span{&initial.m_profile, 1u}));
+        std::ofstream manifest{output / "manifest.txt", std::ios::trunc};
+        manifest << provenance << "\nrow_stride=88 record_stride=64 endian=little snapshots=0,80,711,3600\n"
+                 << "tick_hz=60 substeps=8 iterations=2 dt=" << std::setprecision(17) << initial.m_profile.m_delta_time
+                 << " terrain_width=4097 terrain_height=4097 origin=2.5,2.5\n"
+                 << "initial_particle_fnv1a64=" << std::hex
+                 << pairedFingerprint(std::as_bytes(std::span{initial.m_particles}))
+                 << " terrain_fnv1a64=" << pairedFingerprint(std::as_bytes(std::span{*terrain})) << std::dec
+                 << "\ncell_metres=" << std::setprecision(17) << initial.m_cell_metres
+                 << " thickness_metres=" << initial.m_thickness_metres << '\n';
+        std::ofstream statuses{output / "status.csv", std::ios::trunc};
+        statuses << "tick,device_epoch,error,flags,node,field,particle,body\n";
+        PPR_TEST_ASSERT(manifest.good() and statuses.good());
+
+        const auto capture = [&](const u32 tick) {
+            if (tick != 0u) {
+                for (;;) {
+                    const auto ready = driver.advanceMatterSnapshot(&workers);
+                    PPR_TEST_ASSERT(ready.has_value());
+                    if (*ready)
+                        break;
+
+                    std::this_thread::yield();
+                }
+            }
+
+            const auto *const state = driver.matterState();
+            const auto accounting = owner.m_runtime.accounting();
+            PPR_TEST_ASSERT(state != nullptr and accounting and driver.tickCount() == tick);
+            PPR_TEST_ASSERT(state->m_particles.size() == initial.m_particles.size());
+            PPR_TEST_ASSERT(state->m_records.size() == initial.m_records.size());
+            PPR_TEST_ASSERT(state->m_next_id == initial.m_next_id and std::ranges::equal(state->m_gas, initial.m_gas));
+
+            std::array<u64, 4u> distribution{};
+            for (std::size_t row = 0u; row < state->m_particles.size(); ++row) {
+                const auto &particle = state->m_particles[row];
+                PPR_TEST_ASSERT(state->m_records[row].m_id == initial.m_records[row].m_id);
+                PPR_TEST_ASSERT(state->m_records[row].m_material == initial.m_records[row].m_material);
+                PPR_TEST_ASSERT(particle.m_material == initial.m_particles[row].m_material);
+                PPR_TEST_ASSERT(
+                    particle.m_mass == initial.m_particles[row].m_mass and
+                    particle.m_volume == initial.m_particles[row].m_volume and
+                    particle.m_enabled == 1.0f);
+                for (const float field: std::bit_cast<std::array<float, 22u>>(particle))
+                    PPR_TEST_ASSERT(std::isfinite(field));
+
+                const auto material = static_cast<u32>(particle.m_material);
+                PPR_TEST_ASSERT(material < distribution.size());
+                ++distribution[material];
+            }
+
+            pairedWrite(
+                output / std::format("tick-{}.particles.bin", tick), std::as_bytes(std::span{state->m_particles}));
+            pairedWrite(output / std::format("tick-{}.records.bin", tick), std::as_bytes(std::span{state->m_records}));
+            manifest << "completed_tick=" << tick << " device_epoch=" << accounting->m_epoch
+                     << " world=" << state->m_identity.m_world << " publication=" << state->m_identity.m_publication
+                     << " terrain_revision=" << state->m_identity.m_terrain_revision << " next_id=" << state->m_next_id
+                     << " rows=" << state->m_particles.size() << " material_counts=" << distribution[0u] << ','
+                     << distribution[1u] << ',' << distribution[2u] << ',' << distribution[3u] << '\n';
+            manifest.flush();
+            statuses.flush();
+            PPR_TEST_ASSERT(manifest.good() and statuses.good());
+
+            std::fprintf(
+                stderr, "[compact-trajectory] captured=%u rows=%zu output=%s\n", tick, state->m_particles.size(),
+                output.string().c_str());
+            std::fflush(stderr);
+        };
+
+        capture(0u);
+        for (u32 tick = 1u; tick <= 3600u; ++tick) {
+            const u32 prior_calls = observed.m_calls;
+            auto error = driver.stepOne();
+            while (not error and driver.physicsPending()) {
+                error = driver.update(TimeSpan{});
+                if (not error and driver.physicsPending())
+                    std::this_thread::yield();
+            }
+
+            const auto failure = owner.m_runtime.failure();
+            const auto accounting = owner.m_runtime.accounting();
+            PPR_TEST_ASSERT(failure and accounting);
+            statuses << tick << ',' << accounting->m_epoch << ',' << error.value() << ',' << failure->m_flags << ','
+                     << failure->m_node << ',' << failure->m_field << ',' << failure->m_particle << ','
+                     << failure->m_body << '\n';
+
+            if (error or failure->m_flags != 0u)
+                statuses.flush();
+            PPR_TEST_ASSERT(not error and not failure->m_cause and failure->m_flags == 0u);
+            PPR_TEST_ASSERT(driver.tickCount() == tick and observed.m_calls == prior_calls + 1u);
+            PPR_TEST_ASSERT(observed.m_body_count == 1u);
+
+            if (tick == 80u or tick == 711u or tick == 3600u)
+                capture(tick);
+
+            // Reuse the existing bounded512-record protocol in eight450-tick
+            // segments. Every segment names the same initial-state anchor.
+            if (tick % 450u == 0u) {
+                driver.setMatterSubmissionObserverForTest(nullptr);
+                PPR_TEST_ASSERT(not observed.m_journal->write(output / std::format("inputs-{}.bin", tick / 450u - 1u)));
+
+                if (tick != 3600u) {
+                    observed.m_journal = std::make_unique<MatterSubmissionJournal>(
+                        provenance +
+                        std::format(" segment={} ticks={}..{} initial_anchor=0", tick / 450u, tick + 1u, tick + 450u));
+                    observed.observeAdmission(
+                        initial, *terrain, kMatterTerrainEdge, kMatterTerrainEdge, 2.5f, 2.5f, 60u);
+                    driver.setMatterSubmissionObserverForTest(&observed);
+                }
+
+                statuses.flush();
+                PPR_TEST_ASSERT(statuses.good());
+            }
+        }
+
+        manifest.close();
+        statuses.close();
+        PPR_TEST_ASSERT(not manifest.fail() and not statuses.fail());
+    };
+
+    // ------------------------------------------------------------------
+    // legacy frozen fused-budget comparison
+    // ------------------------------------------------------------------
 
     PPR_UNIT_TEST (full_frontier_frozen_fused_budget_pair) {
         const auto configured_root = config::getenvLookup("PPR_TEST_FUSED_PAIRED_ROOT");
@@ -1947,6 +2201,7 @@ namespace pP::game::tests {
             detail::checkpoint::identically_restored_attached_owners_preserve_columns_and_resume_the_same_tick,
             detail::checkpoint::dug_sand_sustains_sixty_runtime_ticks_on_shared_terrain,
             detail::checkpoint::full_frontier_frozen_fused_budget_pair,
+            detail::checkpoint::compact_formats_frontier_trajectory_export,
         });
     };
 

@@ -25,6 +25,7 @@ namespace pP::matter {
     namespace {
         constexpr u64 kErrorBytes = 6u * sizeof(u32);
         constexpr std::array<const char *, 2u> kEntries{"fused0", "fused1"};
+        constexpr std::array<const char *, 2u> kWaveEntries{"fused0Wave", "fused1Wave"};
 
         rhi::BufferRange fullRange(rhi::IBuffer *const buffer) noexcept {
             return {.offset = 0u, .size = buffer->getDesc().size};
@@ -102,6 +103,7 @@ namespace pP::matter {
             rhi::ComPtr<rhi::IBuffer> m_shapes;
             rhi::ComPtr<rhi::IBuffer> m_readback;
             rhi::ComPtr<rhi::IBuffer> m_terrain_masks;
+            rhi::ComPtr<rhi::IBuffer> m_terrain_boundary_tiles;
             u64 m_hot_bytes{};
             u64 m_cold_bytes{};
             u32 m_particle_count{};
@@ -485,6 +487,12 @@ namespace pP::matter {
                 MatterGpu, bind(
                                "g_terrain_masks", m_particles.m_terrain_masks ? m_particles.m_terrain_masks.get()
                                                                               : m_empty_terrain.get()));
+            PPR_RETURN_ERROR_ON_FAIL(
+                MatterGpu, bind(
+                               "g_terrain_boundary_tiles", m_particles.m_terrain_boundary_tiles
+                                                               ? m_particles.m_terrain_boundary_tiles.get()
+                                                               : m_empty_terrain.get()));
+
             PPR_RETURN_ERROR_ON_FAIL(MatterGpu, bind("g_contour_points", m_contour_points));
             PPR_RETURN_ERROR_ON_FAIL(MatterGpu, bind("g_contour_cases", m_contour_cases));
             PPR_RETURN_ERROR_ON_FAIL(MatterGpu, bind("g_bodies", m_boundaries.m_bodies));
@@ -559,6 +567,8 @@ namespace pP::matter {
         state->m_profile.m_particle_count = 0u;
         state->m_profile.m_shape_count = 0u;
 
+        const bool use_wave = device.hasFeature(rhi::Feature::WaveOps);
+
         shader::SharedModule module;
         PPR_RETURN_ERROR_ON_FAIL(
             MatterGpu, shaders.loadModuleFromFile(
@@ -566,7 +576,9 @@ namespace pP::matter {
 
         for (u32 index = 0u; index < state->m_kernels.size(); ++index) {
             shader::ComPtr<slang::IEntryPoint> entry;
-            PPR_RETURN_ERROR_ON_FAIL(MatterGpu, module->findEntryPointByName(kEntries[index], entry.writeRef()));
+            PPR_RETURN_ERROR_ON_FAIL(
+                MatterGpu,
+                module->findEntryPointByName(use_wave ? kWaveEntries[index] : kEntries[index], entry.writeRef()));
 
             slang::IComponentType *entries[]{entry.get()};
             rhi::ShaderProgramDesc desc{};
@@ -587,26 +599,23 @@ namespace pP::matter {
         rhi::FenceDesc fence{};
         fence.label = "PBMPM completion";
         PPR_RETURN_ERROR_ON_FAIL(MatterGpu, device.createFence(fence, state->m_fence.writeRef()));
-        static_assert(sizeof(math::ContourPoint) == 8u and alignof(math::ContourPoint) == 4u);
-        static_assert(sizeof(math::ContourCase) == 72u and alignof(math::ContourCase) == 4u);
-        static_assert(PPR_OFFSETOF(math::ContourCase, m_segments) == 8u);
-        static_assert(PPR_OFFSETOF(math::ContourCase, m_triangles) == 24u);
+        const auto tables = packContourTables(math::contourPoints(), math::contourCases());
+        PPR_RETURN_ERROR_ON_FAIL(MatterGpu, tables);
+
         PPR_RETURN_ERROR_ON_FAIL(
             MatterGpu, createBuffer(
-                           device, 8u * sizeof(math::ContourPoint), sizeof(math::ContourPoint),
-                           math::contourPoints().data(), "PBMPM shared contour points", state->m_contour_points));
+                           device, sizeof(u32), sizeof(u32), &tables->m_points, "PBMPM compact contour points",
+                           state->m_contour_points));
         PPR_RETURN_ERROR_ON_FAIL(
             MatterGpu, createBuffer(
-                           device, 16u * sizeof(math::ContourCase), sizeof(math::ContourCase),
-                           math::contourCases().data(), "PBMPM shared contour cases", state->m_contour_cases));
+                           device, sizeof(tables->m_cases), sizeof(PackedContourCase), tables->m_cases.data(),
+                           "PBMPM compact contour cases", state->m_contour_cases));
         const u32 empty_mask{};
         PPR_RETURN_ERROR_ON_FAIL(
             MatterGpu,
             createBuffer(
                 device, sizeof(u32), sizeof(u32), &empty_mask, "PBMPM absent terrain binding", state->m_empty_terrain));
-        state->m_accounting.m_device_bytes += 8u * sizeof(math::ContourPoint) +
-                                              16u * sizeof(math::ContourCase) +
-                                              sizeof(u32);
+        state->m_accounting.m_device_bytes += sizeof(PackedContourTables) + sizeof(u32);
         PPR_RETURN_ERROR_ON_FAIL(MatterGpu, state->ensureBoundaries(0u));
 
         m_state = std::move(state);
@@ -727,12 +736,11 @@ namespace pP::matter {
         PPR_RETURN_ERROR_ON_FAIL(
             MatterGpu, terrain_dimensions and terrain_origin ? std::error_code{}
                                                              : std::make_error_code(std::errc::invalid_argument));
-        for (const u32 mask: terrain.m_masks) {
-            PPR_RETURN_ERROR_ON_FAIL(
-                MatterGpu, mask <= 15u ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
-        }
 
         const hal::ProfileScope scope{"Matter.Gpu.PrepareReplacement"};
+        const auto packed_terrain = packTerrain(terrain);
+        PPR_RETURN_ERROR_ON_FAIL(MatterGpu, packed_terrain);
+
         ParticleStorage replacement;
         replacement.m_particle_count = old_count + static_cast<u32>(particles.size());
         replacement.m_hot_bytes = std::max<u64>(1u, replacement.m_particle_count) * sizeof(ParticleWrite);
@@ -748,9 +756,12 @@ namespace pP::matter {
         replacement.m_environment.m_terrain_origin_x = terrain.m_origin_x;
         replacement.m_environment.m_terrain_origin_y = terrain.m_origin_y;
         replacement.m_environment.m_has_terrain = terrain_present ? 1u : 0u;
+        // Canonical masks and this existence witness publish/cancel together.
+        replacement.m_environment.m_reserved =
+            std::ranges::any_of(packed_terrain->m_boundary_tiles, [](const u32 word) { return word != 0u; }) ? 1u : 0u;
 
         // Named-field packing is the only crossing between the semantic record and
-        // the split device rows; the reserved cold words are uploaded as zero.
+        // the split device rows; all six compact cold fields remain FP32.
         Array<ParticleWrite> hot_rows;
         Array<ParticleReadonly> cold_rows;
         if (not particles.empty()) {
@@ -806,8 +817,13 @@ namespace pP::matter {
         if (terrain_present) {
             PPR_RETURN_ERROR_ON_FAIL(
                 MatterGpu, createBuffer(
-                               *state.m_device, terrain_cells * sizeof(u32), sizeof(u32), terrain.m_masks.data(),
-                               "PBMPM contour cell bins", replacement.m_terrain_masks));
+                               *state.m_device, packed_terrain->m_masks.size() * sizeof(u32), sizeof(u32),
+                               packed_terrain->m_masks.data(), "PBMPM contour cell bins", replacement.m_terrain_masks));
+            PPR_RETURN_ERROR_ON_FAIL(
+                MatterGpu, createBuffer(
+                               *state.m_device, packed_terrain->m_boundary_tiles.size() * sizeof(u32), sizeof(u32),
+                               packed_terrain->m_boundary_tiles.data(), "PBMPM contour boundary tiles",
+                               replacement.m_terrain_boundary_tiles));
         }
 
         const u64 row_bytes = sizeof(ParticleWrite) + sizeof(ParticleReadonly);
@@ -1084,6 +1100,8 @@ namespace pP::matter {
                 encoder->setBufferState(state.m_particles.m_shapes, rhi::ResourceState::ShaderResource);
                 if (state.m_particles.m_terrain_masks) {
                     encoder->setBufferState(state.m_particles.m_terrain_masks, rhi::ResourceState::ShaderResource);
+                    encoder->setBufferState(
+                        state.m_particles.m_terrain_boundary_tiles, rhi::ResourceState::ShaderResource);
                 }
 
                 encoder->setBufferState(state.m_contour_points, rhi::ResourceState::ShaderResource);
@@ -1516,6 +1534,9 @@ namespace pP::matter {
         if (particles.m_terrain_masks)
             result.m_device_bytes += particles.m_terrain_masks->getDesc().size;
 
+        if (particles.m_terrain_boundary_tiles)
+            result.m_device_bytes += particles.m_terrain_boundary_tiles->getDesc().size;
+
         if (m_state->m_replacement) {
             const ParticleStorage &replacement = *m_state->m_replacement;
             result.m_device_bytes += 2u * (replacement.m_hot_bytes + replacement.m_cold_bytes);
@@ -1528,6 +1549,9 @@ namespace pP::matter {
             result.m_readback_capacity_bytes += replacement.m_hot_bytes + replacement.m_cold_bytes + kErrorBytes;
             if (replacement.m_terrain_masks)
                 result.m_device_bytes += replacement.m_terrain_masks->getDesc().size;
+
+            if (replacement.m_terrain_boundary_tiles)
+                result.m_device_bytes += replacement.m_terrain_boundary_tiles->getDesc().size;
         }
 
         if (m_state->m_append_upload_hot) {

@@ -5,6 +5,7 @@ export module engine.matter:gpu.types;
 
 import std;
 import engine.core;
+import engine.math;
 
 export namespace pP::matter {
     // ------------------------------------------------------------------
@@ -85,17 +86,14 @@ export namespace pP::matter {
         float m_enabled{1.0f};
     };
 
-    /// Immutable 32-byte device row. Both reserved words are uploaded as zero and
-    /// never participate in pack/unpack; they only keep the fixed 8-word stride.
+    /// Immutable 24-byte device row; all six semantic fields remain FP32.
     struct ParticleReadonly {
         float m_mass{1.0f};
         float m_volume{1.0f};
         float m_material{};
-        float m_reserved0{};
         float m_color_r{};
         float m_color_g{};
         float m_color_b{};
-        float m_reserved1{};
     };
 
     /// Named-field device pack. Never a byte copy: hot and cold reorder the record.
@@ -114,17 +112,15 @@ export namespace pP::matter {
         return row;
     }
 
-    /// Named-field cold pack; the reserved words are always written as zero.
+    /// Named-field cold pack without device-only padding words.
     [[nodiscard]] inline ParticleReadonly packReadonly(const GpuParticle &particle) noexcept {
         ParticleReadonly row{};
         row.m_mass = particle.m_mass;
         row.m_volume = particle.m_volume;
         row.m_material = particle.m_material;
-        row.m_reserved0 = 0.0f;
         row.m_color_r = particle.m_color_r;
         row.m_color_g = particle.m_color_g;
         row.m_color_b = particle.m_color_b;
-        row.m_reserved1 = 0.0f;
         return row;
     }
 
@@ -189,7 +185,7 @@ export namespace pP::matter {
     // ------------------------------------------------------------------
 
     /// One mask per unit dual cell; its origin is the lower-left sample centre
-    /// in solver cells. Cases/points are uploaded from engine.math unchanged.
+    /// in solver cells. The semantic input is validated before lossless packing.
     /// The caller supplies the complete contour halo, including world edges.
     struct TerrainView {
         std::span<const u32> m_masks{};
@@ -198,6 +194,46 @@ export namespace pP::matter {
         float m_origin_x{};
         float m_origin_y{};
     };
+
+    // ------------------------------------------------------------------
+    // lossless device terrain protocol
+    // ------------------------------------------------------------------
+
+    struct PackedContourCase {
+        u32 m_low{};
+        u32 m_high{};
+    };
+
+    struct PackedContourTables {
+        std::array<PackedContourCase, 16u> m_cases{};
+        u32 m_points{};
+    };
+
+    struct PackedTerrain {
+        Array<u32> m_masks;
+        Array<u32> m_boundary_tiles;
+    };
+
+    /// Two count pairs, four 3-bit endpoint IDs and three 13-bit triangles;
+    /// the top nine bits are zero. All eight dyadic points share one u32.
+    [[nodiscard]] Expected<PackedContourTables> packContourTables(
+        std::span<const math::ContourPoint, 8u> points, std::span<const math::ContourCase, 16u> cases);
+    [[nodiscard]] math::ContourCase unpackContourCase(PackedContourCase packed) noexcept;
+    [[nodiscard]] math::ContourPoint unpackContourPoint(u32 packed, u32 index) noexcept;
+
+    /// Eight validated row-major masks per word and 32 boundary-tile bits per
+    /// word. Empty inputs retain empty arrays for the existing dummy binding.
+    [[nodiscard]] Expected<PackedTerrain> packTerrain(TerrainView terrain);
+
+    static_assert(sizeof(PackedContourCase) == 8u and alignof(PackedContourCase) == 4u);
+    static_assert(PPR_OFFSETOF(PackedContourCase, m_low) == 0u);
+    static_assert(PPR_OFFSETOF(PackedContourCase, m_high) == 4u);
+    static_assert(sizeof(PackedContourTables) == 132u and alignof(PackedContourTables) == 4u);
+    static_assert(PPR_OFFSETOF(PackedContourTables, m_points) == 128u);
+
+    // ------------------------------------------------------------------
+    // predicted boundaries and environment constants
+    // ------------------------------------------------------------------
 
     /// Predicted END-pose boundary for one substep. Shape angles follow the
     /// source's world-to-local rotation convention (negative Box2D angle).
@@ -223,6 +259,7 @@ export namespace pP::matter {
         float m_terrain_origin_x{};
         float m_terrain_origin_y{};
         u32 m_has_terrain{};
+        // Bit 0: validated canonical terrain contains at least one boundary segment.
         u32 m_reserved{};
     };
 
@@ -252,15 +289,13 @@ export namespace pP::matter {
     static_assert(PPR_OFFSETOF(ParticleWrite, m_lambda) == 56u);
     static_assert(PPR_OFFSETOF(ParticleWrite, m_enabled) == 60u);
     static_assert(std::is_standard_layout_v<ParticleReadonly> and std::is_trivially_copyable_v<ParticleReadonly>);
-    static_assert(sizeof(ParticleReadonly) == 32u and alignof(ParticleReadonly) == 4u);
+    static_assert(sizeof(ParticleReadonly) == 24u and alignof(ParticleReadonly) == 4u);
     static_assert(PPR_OFFSETOF(ParticleReadonly, m_mass) == 0u);
     static_assert(PPR_OFFSETOF(ParticleReadonly, m_volume) == 4u);
     static_assert(PPR_OFFSETOF(ParticleReadonly, m_material) == 8u);
-    static_assert(PPR_OFFSETOF(ParticleReadonly, m_reserved0) == 12u);
-    static_assert(PPR_OFFSETOF(ParticleReadonly, m_color_r) == 16u);
-    static_assert(PPR_OFFSETOF(ParticleReadonly, m_color_g) == 20u);
-    static_assert(PPR_OFFSETOF(ParticleReadonly, m_color_b) == 24u);
-    static_assert(PPR_OFFSETOF(ParticleReadonly, m_reserved1) == 28u);
+    static_assert(PPR_OFFSETOF(ParticleReadonly, m_color_r) == 12u);
+    static_assert(PPR_OFFSETOF(ParticleReadonly, m_color_g) == 16u);
+    static_assert(PPR_OFFSETOF(ParticleReadonly, m_color_b) == 20u);
     static_assert(std::is_standard_layout_v<GpuStaticShape> and std::is_trivially_copyable_v<GpuStaticShape>);
     static_assert(sizeof(GpuStaticShape) == 32u and alignof(GpuStaticShape) == 4u);
     static_assert(PPR_OFFSETOF(GpuStaticShape, m_radius) == 16u and PPR_OFFSETOF(GpuStaticShape, m_shape) == 24u);

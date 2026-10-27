@@ -51,17 +51,14 @@ struct ParticleWrite {
     float enabled;
 };
 
-// Immutable 32-byte device row. Both reserved words are uploaded as zero and are
-// never loaded or stored by the solver.
+// Immutable 24-byte device row; every semantic field remains FP32.
 struct ParticleReadonly {
     float mass;
     float volume;
     float material;
-    float reserved0;
     float colorR;
     float colorG;
     float colorB;
-    float reserved1;
 };
 
 // Only admitted collider functionality; browser emitters/drains are absent.
@@ -145,6 +142,7 @@ struct Environment {
     float terrainOriginX;
     float terrainOriginY;
     uint hasTerrain;
+    // Bit 0: validated canonical terrain contains at least one boundary segment.
     uint reserved;
 };
 

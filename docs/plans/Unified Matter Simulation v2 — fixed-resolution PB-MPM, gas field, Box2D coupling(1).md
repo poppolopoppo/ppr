@@ -1,10 +1,10 @@
 # Unified Matter Simulation v2 — fixed-resolution PB-MPM, gas field, Box2D coupling
 
-Oct 18, 2026 · @poppolopoppo · revised after the bandwidth and stability review
+Oct 18, 2026 · @poppolopoppo · updated Oct 19 with excavation-to-MPM and live diagnostics
 
 ## Summary and scope
 
-Keep fixed-resolution PB-MPM for moving liquids and granular matter, Eulerian cells for gas, and Box2D for rigid bodies. Drop v1's adaptive particle split/merge. The initial implementation is deliberately smaller than the earlier v2 draft: one liquid first, terrain collision, conservative sleeping, one cellular gas representation, and analytic fluid forces on bodies. Liquid stratification remains a required behavior, with an early feasibility experiment before committing to its coupling algorithm.
+Keep fixed-resolution PB-MPM for moving liquids and released solid matter, Eulerian cells for gas, and Box2D for rigid bodies. **Digging converts terrain cells into material-preserving MPM particles:** sand piles as granular matter, clay resists deformation and yields plastically, and slime deforms elastically. These three released-material behaviors are required scope, not optional visual debris or deferred soft-material research. Drop v1's adaptive particle split/merge. Keep one liquid first as the solver bring-up sequence, followed by transactional excavation, the required solid models, conservative sleeping, one cellular gas representation and analytic fluid forces on bodies. Liquid stratification remains required, with an early feasibility experiment; its unresolved research must not block independent excavation/model work. Live diagnostic overlays are delivered alongside each feature.
 
 This is a design/proposal record, not an implementation inventory. It supersedes the matter sections of [v1](../physics/unified_particle_simulation.md) only for tasks adopting this plan. The [documentation guide](../README.md), [engineering contract](../../AGENTS.md), current source and CMake retain their authority. No timings or target capacities in this document are measured.
 
@@ -12,7 +12,9 @@ This is a design/proposal record, not an implementation inventory. It supersedes
 
 | Area | Initial decision | Deferred or removed |
 | --- | --- | --- |
-| Matter | Fixed dx = 1/3 m; N = 4 equal-reference-volume samples per cell; PB-MPM | Adaptive split/merge; replacing PB-MPM without a new design decision |
+| Matter | Fixed dx = 1/3 m; N = 4 equal-reference-volume samples per cell; PB-MPM for liquids and released solids | Adaptive split/merge; replacing PB-MPM without a new design decision |
+| Excavation | Atomic terrain → MPM transfer, same element identity; catalog selects granular, cohesive/plastic or elastic behavior | Deleting excavated mass; universal rubble fallback; Box2D body per particle |
+| Diagnostics | Live GPU-driven overlays of elements, model state, grid, collision, coupling and activity | Full-world readback to draw overlays; hiding debug cost inside shipping performance claims |
 | Gas | One species per cell; integer mass; isothermal conservative pair exchanges | Building several mixture rungs; entrained bubbles; acoustic or general compressible-flow accuracy |
 | Sleeping | Remove whole quiescent interacting regions from solver work while retaining their state | Partial-reservoir freezing without a support model; automatic quantization of constitutive history |
 | Storage | Separate iteration-hot state, read-mostly mechanical metadata, cold state and visual output | One universal 20-byte particle contract; unvalidated FP16 state |
@@ -32,7 +34,9 @@ This is a design/proposal record, not an implementation inventory. It supersedes
 - Report logical access bytes, allocated/resident bytes, measured GPU time and hardware memory counters as different quantities. Do not call source-level byte counts measured DRAM traffic.
 - Treat workgroup size, wave specialization, precision, iteration count and timestep as measured choices, not universal speedups. Change one optimization at a time and retain a compatible baseline.
 - Reuse engine allocation, jobs, RHI/shader, completion and error facilities. Keep simulation ownership outside the content-free Renderer. Follow [Slang guidance](../../.opencode/skills/slang-shader-developer/SKILL.md) for layouts, bindings and target validation.
-- Every capacity limit needs an explicit failure/result path. No particle or gas mass may be silently deleted, clipped, overwritten, or frozen because the active budget was exceeded.
+- Every capacity limit needs an explicit failure/result path. No terrain, particle or gas mass may be silently deleted, clipped, overwritten, or frozen because the active budget was exceeded. A rejected/cancelled dig leaves its terrain and ledger unchanged.
+- Every released terrain element must have a validated particle model. Material identity, physical phase and current representation are distinct: a solid element can be stored as terrain before digging and simulated as MPM particles afterward.
+- Deliver dynamic overlays with their owning phase; overlays consume a versioned simulation view and never become authoritative state or introduce an upward UI/render dependency into matter.
 - Preserve user work. An unexpected compiler/feasibility blocker is returned with evidence under the repository's delegated-plan procedure, not worked around by changing the selected solver.
 - Use the [validation](../../.opencode/skills/validation/SKILL.md) and [build-system](../../.opencode/skills/build-system/SKILL.md) procedures for implementation. Documentation changes alone do not establish runtime or performance acceptance.
 
@@ -49,7 +53,7 @@ The following are integration inputs from the existing plans and previous source
 | [Shader map](../../assets/shaders/codemap.md) | Runtime Slang asset and staging conventions |
 | `docs/oni_v26.slang` prototype | A compact visual/map cell encoding and catalog vocabulary; not evidence of a PB-MPM solver |
 
-Proposed `engine.matter` depends on core, math and RHI/shader, never on sim or physics. The game driver supplies numeric material tables, terrain geometry/deltas, initial matter, body descriptions and commands. Renderer encodes submitted work without owning matter state. Add partitions only as their phase needs them: catalog, particles/grid, scheduling, terrain, gas, colliders/coupling and diagnostics. A new source and its CMake registration remain one implementation change.
+Proposed `engine.matter` depends on core, math and RHI/shader, never on sim or physics. The game driver supplies numeric material tables, terrain geometry/deltas, initial matter, body descriptions and commands. It also coordinates excavation transactions across terrain storage, terrain colliders, GPU matter and presentation. Extend the existing terrain/particle catalog representation field into an initial-representation choice plus explicit release-model capability; do not reject an excavated material ID merely because its authored terrain representation was static. Renderer encodes submitted work without owning matter state. Add partitions only as their phase needs them: catalog, particles/grid, scheduling, terrain, gas, colliders/coupling and diagnostics. A new source and its CMake registration remain one implementation change.
 
 Use the existing application clock and fixed-tick identity. Compute submission must execute every accepted simulation tick even if no surface is visible; a render callback cannot become the simulation clock or silently skip ticks. Verify the compute submission seam before choosing its integration point. Lower-level kernels consume explicit dt and iteration indices.
 
@@ -69,19 +73,22 @@ Running six or seven independent copies on the RTX is an optional stress experim
 
 ### What must be accounted for
 
-Maintain a per-pass ledger with: invocation count per tick, active particles P, owned nodes G, tiles T, gas cells C, input/output fields and byte widths, logical reads/writes, atomic operations, transient/resident allocation, dispatch/barrier count and timestamp. Include setup, initial/final transfers, clears, bucketing, allocation/compaction, wake/sleep, SDF edits, bodies, diagnostics, checkpoint staging and the visual bridge.
+Maintain a per-pass ledger with: invocation count per tick, active particles P, owned nodes G, tiles T, gas cells C, input/output fields and byte widths, logical reads/writes, atomic operations, transient/resident allocation, dispatch/barrier count and timestamp. Include setup, initial/final transfers, clears, bucketing, allocation/compaction, wake/sleep, terrain-to-particle emission and model-sidecar initialization, SDF edits, bodies, diagnostics, checkpoint staging and the visual bridge. Report overlay extraction and drawing separately from the minimal shipping counters.
 
 Use the actual schedule:
 
 ```text
 B_logical_tick =
-    B_commands + B_activation + B_bucketing
+    B_commands + B_activation + B_excavation + B_bucketing
   + B_initial_transfer
   + sum(iteration passes, including grids and clears)
   + B_final_integration + B_sleep
   + sum(gas exchange phases)
   + B_geometry + B_body_sampling + B_reductions + B_visual_bridge
+  + B_shipping_diagnostics + B_checkpoint_staging_when_requested
 ```
+
+Count each access once under its owning pass; for example, emission-sidecar writes belong to excavation rather than also to activation. Add requested overlay extraction/readback/drawing as a separate diagnostic-mode ledger, with its own temporary-memory peak.
 
 Track logical traffic separately from DRAM/cache traffic. Reused cache lines can lower DRAM demand; uncoalesced accesses, atomic transactions and spills can increase cost. For each serial pass, time is bounded below by its limiting resource (memory traffic/effective bandwidth, arithmetic/effective throughput, or atomic service rate); dispatch, barriers and dependencies add further costs. Do not derive a frame prediction from bytes alone or add mutually overlapping resource bounds as if they were independent work.
 
@@ -104,6 +111,8 @@ ARITHMETIC: decimal MB/GB, 60 Hz, hypothetical complete matter costs; gas, rende
 
 The old gas estimate, (1.56 reads + 1 write) × record size, describes one 8 × 8 tile stencil with a one-cell halo. It does not price a complete conservative transport algorithm. The selected four-phase pair exchange below costs approximately 4 × (8 B read + 8 B write) = 64 logical B per stepped cell when all pairs participate, before geometry, activity and probes. At 5 M cells and 60 Hz that alone is 19.2 GB/s; a proven 4-byte cell candidate halves those state bytes. Count the real active phase set.
 
+Excavation is an active-load source even in a dry world. At the nominal N = 4 accounting convention below, digging D cells emits 4D samples and may wake existing connected matter; price both. Model F/history, emission scratch, reservations and duplicate committed/working state are additional to the liquid figures. Include sustained mining and large multi-element dig batches in cost sweeps.
+
 Memory capacity also needs a budget. Fully expanding 16.8 M cells into N = 4 particles at 40 B would require 2.5 GiB for those fields alone; a 24 B candidate still needs 1.5 GiB. Particle/grid scratch, gas, terrain, staging and rendering are extra. Initial slot bricks and sleeping pages must not all be expanded on world load.
 
 ### Acceptance without target hardware
@@ -118,7 +127,7 @@ Memory capacity also needs a budget. Fully expanding 16.8 M cells into N = 4 par
 
 Use metres, seconds and kilograms, +Y up, and the existing row-vector matrix convention. The 1 m reference thickness remains the working assumption: cell volume = 1/9 m³ and particle reference volume = 1/36 m³. Particle mass is reference density × reference volume; current volume can change under the material model. N and dx do not change by hardware tier.
 
-1. **Material ledger:** exact integer particle/slot counts per material and exact gas quanta, including displaced/overflow records. Compute diagnostic masses from those quantities; floating-point P2G sums are not the authoritative mass ledger. Future phase changes need a defined cross-representation mass quantum/remainder policy.
+1. **Material ledger:** include static terrain inventory, exact integer particle/slot counts per material and exact gas quanta, including displaced/overflow records. Excavation is an internal transfer, not a gameplay source/sink. Under the nominal-cell terrain convention below, one terrain cell debits N particle-equivalent quanta and emits exactly N of the same element. Compute diagnostic masses from those quantities; floating-point P2G sums are not the authoritative mass ledger. Future phase changes need a defined cross-representation mass quantum/remainder policy.
 2. **Finite state:** validate persistent and scratch outputs; invalid state or overflow fails the affected tick with a diagnostic, not deletion.
 3. **Complete ticks:** commit mutations and publish results only for a complete tick. Preflight page, particle, command and readback capacity. A GPU-detected failure leaves a recoverable committed state via versioned source/destination or equivalent bounded transaction storage; include its cost.
 4. **Geometry:** consistent terrain contour and face connectivity; no accepted penetration beyond the tested tolerance. Projection is a recovery mechanism, not a proof of continuous collision.
@@ -138,17 +147,21 @@ Changing iteration count or dt is a behavioral change. Start comparisons at 60 H
 | --- | --- | --- |
 | Iteration-hot liquid state | Candidate displacement d, affine displacement D, tracked liquid-volume state J | FP32 2 + 4 + 1 scalars = 28 B; avoid spilling intermediate results between fused operations |
 | Read-mostly particle inputs | Position for stencil weights; material/model lookup | FP32 local position 8 B + metadata word 4 B; read-hot but mostly write-cold during iterations |
-| Model-specific hot state | Deformation F, plasticity history for granular/soft models | Separate sidecars only for models using them; no universal scalar substitute for F |
+| Model-specific hot state | Deformation F, plasticity history for required sand/clay/slime models | Separate model pools/sidecars; sand/clay retain yield/plastic history, slime retains elastic reference/deformation. No universal scalar substitute for F |
 | Scheduling metadata | Stable identity/generation, page/tile membership, ranges, free lists, neighbor pages | Separate integer arrays, accessed by activation/bucketing/reorder; indirection bytes count even when the solver record is compact |
-| Mechanical catalog | Density/reference mass, relaxation, friction and precomputed constants | Small read-only table; separate liquid/granular parameter subsets where useful |
+| Mechanical catalog | Density/reference mass, release model, relaxation, friction/cohesion, yield and damping constants | Compile model tags and numeric parameter blocks from content; keep release capability/initialization metadata out of per-iteration streams when unused |
 | Cold catalog | Names, authoring data, color, reaction descriptions and unused thermal data | CPU/content ownership or distinct GPU tables; never embedded in every particle |
 | Sleeping state | Positions, model state and the adopted motion state of dormant regions | Retain complete state initially; no per-iteration scan or GPU/CPU round trip |
 | Gas mechanics | Species and integer mass, activity and face connectivity | Isothermal 8 B cell baseline; pressure derived, temperature uniform until thermal work |
 | Geometry | Terrain narrow-band SDF/apertures, body tile lists | Persistent, dirty-region updates; no full rebuild per tick |
+| Excavation records | Source world/cell/version, material, transfer quanta, reserved output ranges, initialization policy | Sparse command/event data; retire after commit/acknowledgment. Do not carry source-cell provenance in every hot particle forever |
+| Debug views | Visible/selected grid, particle, collision and model fields; compact glyphs and counters | GPU-side extraction on demand, capped instance buffers, shared read-only state where possible; retain only requested snapshot/history data |
 | Rendering/GI | Quantized dominant material, visual mass/coverage and temperature when available | Separate 4 B candidate plane; explicitly lossy and never authoritative for simulation |
 | Checkpoint/diagnostics | Snapshot staging, ledgers and sampled probes | Versioned staging and small readback summaries; full-pool audit on validation/save, not every shipping tick |
 
 A liquid FP32 baseline comprises 28 + 8 + 4 = **40 B of fields**, excluding stable IDs, indices, allocation metadata, model sidecars and transaction copies. A velocity/displacement buffer may be reused across timestep phases: initialize d from v and forces once, iterate d, then recover v = d/dt at commit. Name phase semantics explicitly; never apply gravity once per solver iteration.
+
+A 2 × 2 FP32 F adds 16 B per participating solid sample; scalar history adds 4 B per field. These are illustrative sidecar costs, not one universal solid format: do not allocate liquid J to models that do not use it, and account for each model's complete state. For an unstrained freshly emitted sample, F = identity and zero plastic history can be initialized procedurally at emission; once evolved, those values must be retained. Slime deformation and clay plasticity are persistent physical state, not disposable debug data.
 
 Begin with coalesced SoA streams. Compare small AoSoA blocks if the fused kernel consumes most fields together; SoA is not automatically superior for every access pattern. Use explicit integer words for packed storage, and verify target reflection, offsets and stride rather than assuming C++/Slang padding.
 
@@ -224,7 +237,25 @@ Build a narrow-band SDF from the same contour as terrain rendering and Box2D cha
 
 Use grid normal projection with the adopted friction model and final particle recovery. Validate swept motion against thin and diagonal surfaces; an endpoint SDF test and velocity clamp alone do not prove no tunnelling. The total displacement bound must include constraint correction, drift if later adopted, terrain recovery and moving-body sweep. Handle degenerate/zero SDF gradients explicitly.
 
-Dig/build commands preflight affected matter, slot and gas capacity before committing. Digging wakes affected support-connected matter. Building either relocates material through valid connected free space under a bounded deterministic policy or rejects the edit without loss. A logged deletion is not a successful conservative edit. Async preparation is versioned and cancelled on incompatible world replacement.
+Dig/build commands preflight affected terrain, particle/model-sidecar, slot and gas capacity before committing. Digging converts the removed material into active particles and wakes affected support-connected matter; it is not just a collider removal. Building either relocates existing matter through valid connected free space under a bounded deterministic policy or rejects the edit without loss. Rebonding loose matter into terrain is a separate explicit construction/compaction operation, never an automatic consequence of sleep. Async preparation is versioned and cancelled on incompatible world replacement.
+
+### Excavation: terrain becomes MPM material
+
+**Required gameplay contract.** Terrain is the static representation of bonded material. A successful dig removes that representation and emits the same element into the particle solver, where its catalog-selected constitutive model determines the response. Physical solid phase does not imply rigid-body representation. Box2D still owns authored rigid bodies such as crates and actors; excavated grains, clay and slime remain MPM matter. No generic “rubble” substitution or phase change is implicit.
+
+**PROPOSED inventory convention:** a fully occupied terrain cell owns one nominal cell volume (1/9 m³ at 1 m thickness), so it converts to N = 4 particles of reference volume 1/36 m³ and the same reference density. Terrain inventory is discrete; smoothing the collision/render contour does not create or destroy that inventory. This is not a claim of exact contour-volume conservation. Keep contour-clipped *initial mobile-matter* accounting distinct. Before implementing any partial-mass terrain feature, define its quanta/remainder representation explicitly; do not round away a fractional cell, alter particle density to conceal it, or duplicate contour-neighbor mass when recomputing geometry.
+
+The catalog gives every diggable element a release-model tag and a validated numeric parameter block, plus a versioned rest-state initializer. The initial terrain/particle authoring choice is not a lifetime restriction. Validate all gameplay-diggable elements at content load; an unimplemented model is an explicit unsupported-content result, not silent fallback to water or sand. Additional elements using an existing model should require data changes, not element-name branches in kernels.
+
+Use a versioned, at-most-once transaction:
+
+1. Validate source cell material/version/diggability and reserve the cells against conflicting dig/build operations. Empty/stale requests cannot emit particles again. Decide the bounded batch's acceptance before changing terrain.
+2. Reserve particle IDs, hot state, model sidecars, stencil pages, event/readback capacity and any affected gas-displacement records. Prepare candidate terrain/contour/collider changes and seed locations in the resulting free region. Four reference samples per full cell are the initial placement candidate; validate against the new SDF and nearby bodies. Do not drop samples that fail a capacity mask. If no admissible placement exists within the tested compression/recovery envelope, reject/defer the batch intact.
+3. Initialize samples with unchanged element identity, exact transfer quanta and model reference volume. Static terrain releases at zero velocity and affine motion by default; initialize unstrained elastic F to identity and plastic history according to the model. Any tool impulse is an explicit bounded input with momentum/energy diagnostics. Pre-stressed terrain is not represented by this baseline and cannot be claimed preserved.
+4. Prepare the complete candidate tick using the new terrain geometry and released samples. Publish terrain removal, collider/SDF versions, particle activation and the ledger transfer as one logical commit. Old-state consumers continue using the old coherent epoch until the new one is ready; no frame/tick observes both collidable source terrain and committed debris, or a committed hole without its material. Cross CPU/GPU readiness may defer the dig acknowledgment; it must not introduce a per-particle readback or an unbounded synchronous stall.
+5. Retire reservations only after completion/acknowledgment; on cancellation, allocation failure or stale world version, release candidates and retain the prior committed terrain and matter. A committed transaction ID cannot be replayed as a new emission. Checkpoints capture either side of the commit, never a mixed epoch.
+
+Test isolated cells, contiguous batches, chunk/contour seams, unlike neighboring elements, repeated commands, simultaneous body contact, gas-filled openings, cancellation and exhausted particle/sidecar/page pools. The before/after invariant is material mass over terrain + active + sleeping/settled + other owned ledger records. Digging is not allowed to pass merely because the new hole looks correct.
 
 ### Sleeping baseline
 
@@ -250,7 +281,7 @@ The accepted grid-oriented save direction remains: **checkpoints do not serializ
 
 Packed save, wake and re-pack must be idempotent for the declared supported fixtures; per-material counts including excess are exact. Test height/surface changes, not merely particle counts. Bound admitted unresolved compression with load tests. Unsupported cases may fail checkpoint creation; “reported mass loss” is not success.
 
-Granular persistence is a separate M3 gate: define cell-oriented constitutive sidecars or explicitly restrict the supported material model/checkpoint states before exposing it in persistent worlds. Grid-only saving does not authorize resetting arbitrary plastic strain. Thermal persistence waits for M8.
+Persistence for all three required released-solid models is a M3 gate. Keep grid/cell-oriented storage, but retain the model's necessary rest/deformation/plastic state in typed cell-associated sidecars with an unambiguous sample/slot association. A material-ID/count-only cell cannot reproduce strained slime or yielded clay. Do not reset F to identity or erase plastic history on sleep/load, and do not aggregate unlike constitutive states into one excess count. Define bounded reconstruction error and replay/rest tests for the chosen cell-oriented encoding before admitting these materials in persistent gameplay. If the encoding cannot meet them, revise that encoding explicitly; basic sand/clay/slime persistence cannot simply be deferred to M8. Thermal persistence waits for M8.
 
 The former 352 MiB absolute save bound is withdrawn because species records, constitutive history and excess data were omitted. Report real sparse storage, worst admitted snapshot expansion and checkpoint staging separately. Compression is optional after correctness; it cannot make an incomplete representation conservative.
 
@@ -299,7 +330,7 @@ Gas-to-matter pressure force, U-tube pressure matching, entrained bubbles and ga
 
 Sources/sinks and up to 256 requested probes use tick-stamped commands and bounded output storage. Validate accepted quantities before mutation and return rejected capacity/species requests explicitly. Probes report their originating tick and representation status, not a guaranteed one-tick freshness.
 
-## Stratification, granular matter and rigid bodies
+## Released-solid models, stratification and rigid bodies
 
 ### Early stratification experiment and M3 decision
 
@@ -307,11 +338,25 @@ A single grid velocity can suppress unresolved relative phase motion, but it doe
 
 The earlier particle drift is not adopted. Subtracting a gathered nodal mean from particle velocities does not produce an exact nodal volume-neutral projection. As a simple two-particle/two-node illustration, weights (0.75, 0.25) and (0.25, 0.75) with drifts +1 and -1 leave nodal corrected fluxes +0.375 and -0.375 after that subtraction. Density-only drift can also keep acting on an already stable interface.
 
-If the unmodified solver fails the required stratification scenes, M3 stops production expansion and tests one bounded two-liquid extension. First candidate: sparse phase-specific momentum/velocity fields only on mixed-support nodes, with explicit interphase exchange, shared occupancy/contact and a defined pressure/constraint partition. Conserving a volume-weighted slip sum at a node is necessary but not a complete solver; specify momentum/energy exchange and particle transfer before implementation.
+If the unmodified solver fails the required stratification scenes, the multi-liquid part of M3 stops production expansion and tests one bounded two-liquid extension. First candidate: sparse phase-specific momentum/velocity fields only on mixed-support nodes, with explicit interphase exchange, shared occupancy/contact and a defined pressure/constraint partition. Conserving a volume-weighted slip sum at a node is necessary but not a complete solver; specify momentum/energy exchange and particle transfer before implementation.
 
-This candidate requires a separate derivation and reference implementation gate. Price extra node fields, transfers and mixed-region expansion before adoption. Do not silently generalize to an arbitrary per-material velocity grid, or substitute ad hoc position drift to make a scene look right. Stratification remains required for a completed multi-liquid phase even while unrelated one-liquid work proceeds.
+This candidate requires a separate derivation and reference implementation gate. Price extra node fields, transfers and mixed-region expansion before adoption. Do not silently generalize to an arbitrary per-material velocity grid, or substitute ad hoc position drift to make a scene look right. Stratification remains required for a completed multi-liquid phase even while unrelated one-liquid and released-solid work proceeds.
 
-Add one granular model only after liquid contracts pass. Use a documented 2D deformation/plasticity model, with its F/history sidecars and stable constitutive projection. The inspected EA implementation is a reference, not proof that arbitrary sand/snow/clay parameters share one scalar state. Validate pile rest, friction/angle of repose, shear, compression/release, liquid interaction and persistence. Defer broad viscoplastic/soft-material catalogs.
+### Required material behavior after digging
+
+Use the same PB-MPM transfer/scheduling framework with explicit constitutive-model tags and model-specific state. “Solid particle” describes material represented by continuum samples; one sample is not a separately resolved rigid grain. Sand must exhibit a granular pile at the chosen grid/sample scale, without claiming microscopic grain contacts.
+
+| Example / required family | Initial algorithm choice (PROPOSED) | Persistent state and acceptance |
+| --- | --- | --- |
+| Sand: frictional granular | 2D elastoplastic granular projection, using the documented Drucker–Prager-style reference as the first candidate; low/no cohesion and frictional yield | F plus the selected compaction/plastic-history fields. Forms a pile and avalanches when support is removed; exhibits bounded angle of repose and no tensile rubber-like response |
+| Clay: cohesive elastoplastic/viscoplastic | Elastic predictor with finite yield and cohesion; plastic return/projection leaves permanent deformation, with viscosity/rate effects only if the clay scene needs them | F and required plastic/yield history. Resists small loads more than loose sand, yields under larger loads and retains deformation after unloading; not merely high-viscosity water |
+| Slime: elastic soft solid | 2D corotational elastic shape/volume constraints in the PB-MPM displacement solve, plus controlled damping; plastic flow disabled for the baseline elastic material | Elastic F/reference-state information required by that model. Deforms, rebounds and tends toward its reference shape after unloading; no hidden reset at each tick, sleep or reload |
+
+EA's deformation/projection code is an implementation reference, not proof that these authored behaviors or parameters are correct. No arbitrary stiffness value is guaranteed affordable at two iterations. Run compression, shear, unloading and large-deformation tests at the adopted dt/iterations, including poorly conditioned F. Numerical repair must retain material and expose the intervention; never copy a reference implementation's particle-deletion safeguard into the mass-conserving game.
+
+M0 contains small probes for all three families; M1 exercises transactional release with the first validated granular fixture; M3 completes sand, clay and slime, plus their sleep/persistence gates. Models may be implemented sequentially, but only implementing sand does not complete the gameplay requirement. Liquid–liquid stratification research is not a prerequisite for the independent solid-model substeps.
+
+Reuse model parameter tables and optional sidecar pools; allocate and initialize the proper sidecar during the dig transaction. Compare mixed-model dispatch against model-specific lists, including list-building and extra grid-flush costs. Keep a liquid fast path when useful, but do not put F/plasticity in every liquid record. Additional solid behaviors such as fracture, damage and automatic structural collapse remain deferred; material-dependent release through digging is now core scope.
 
 ### Body geometry and analytic fluid forces
 
@@ -329,13 +374,13 @@ Do not add liquid grid-reaction impulses on top of analytic buoyancy/drag. Granu
 
 ## Implementation phases and gates
 
-Phases below refine the original M0–M8 names. The early probes are intentionally small; they challenge consequential choices before storage/coupling infrastructure grows. Gates record correctness, cost evidence and TARGET-PENDING independently. A failed feature blocks its dependent work, not unrelated already-approved one-liquid development.
+Phases below refine the original M0–M8 names. The early probes are intentionally small; they challenge consequential choices before storage/coupling infrastructure grows. Gates record correctness, cost evidence and TARGET-PENDING independently. A failed feature blocks its dependent work, not unrelated already-approved one-liquid or released-solid development. Each gate includes the phase's live diagnostic overlays described below.
 
 ### M0 — analytical contract, native reference and early feasibility
 
 **Algorithm:** CPU reference and simple Slang FP32 PB-MPM tank, N = 4; fixed-position iterations and one final integration; explicit active bounds, basic integer P2G with range/error analysis and per-pass timestamps. Use existing RHI/shader facilities and a scalar/groupshared-compatible path. No wave feature or packing is required for correctness.
 
-**Work:** enumerate fields, pass dependencies, transaction buffers and budgets; use P/G/T sweeps and 2/3/5-iteration comparisons. Add 10 k-particle CPU/GPU comparisons, a deep pool and a dam break. Run the oil/water probes and a simple prescribed box/displacement probe now; record unsupported cases rather than grafting drift or pressure heuristics onto the reference.
+**Work:** enumerate fields, pass dependencies, transaction buffers and budgets; use P/G/T sweeps and 2/3/5-iteration comparisons. Add 10 k-particle CPU/GPU comparisons, a deep pool and a dam break. Run the oil/water probes, small sand/clay/slime constitutive probes and a simple prescribed box/displacement probe now; record unsupported cases rather than grafting drift or pressure heuristics onto the reference. Bring up the overlay viewer with element/model-colored particles and grid occupancy/velocity from a coherent tick.
 
 **Gate:** exact ledger over 10^5 validation ticks; no invalid state or range overflow; reference agreement under stated quantization tolerances; replay hashes in canonical identity order; bounded volume loss/rest motion; complete allocation and logical-byte ledger. Record unresolved multi-liquid findings. All timings are development observations. Target devices are not a prerequisite.
 
@@ -343,31 +388,31 @@ Phases below refine the original M0–M8 names. The early probes are intentional
 
 **Algorithm:** contour SDF/apertures, bounded sparse page table, count/scan/scatter buckets, active indirect dispatch and swept/recovery collision. Compare split passes against fused G2P/constraint/P2G with groupshared grid patches. Start with all shared-node flushes atomic; specialize only after ownership proofs.
 
-**Work:** tune group/tile sizes, benchmark compact tanks versus spray, compression/overfull buckets and overlapping body probes. Test one packing candidate at a time against FP32. Add committed-tick resource exhaustion and cancellation cases. Only adopt radix sorting if the complete bucket/sort-plus-solver timing improves.
+**Work:** tune group/tile sizes, benchmark compact tanks versus spray, compression/overfull buckets and overlapping body probes. Test one packing candidate at a time against FP32. Add committed-tick resource exhaustion and cancellation cases, including a first terrain-to-granular dig transaction after that fixture's M0 model gate passes. Unsupported release models remain unavailable explicitly until their M3 subgate passes. Only adopt radix sorting if the complete bucket/sort-plus-solver timing improves. Add terrain/SDF/contact overlays and dig transaction/epoch inspection.
 
-**Gate:** cave dam break, thin/diagonal wall and rapid-edit tests; contour/body/particle resting surfaces agree within a declared geometry tolerance; no lost particles during tile migration; fused/reference agreement; sparse cost follows active pages; spills/atomics/barriers and full tick traffic reported. No million-particle target claim or hardware-before-M2 gate.
+**Gate:** cave dam break, thin/diagonal wall and rapid-edit tests; contour/body/particle resting surfaces agree within a declared geometry tolerance; no lost particles during tile migration; fused/reference agreement; sparse cost follows active pages; spills/atomics/barriers and full tick traffic reported. Digging conserves terrain-plus-particle inventory and emits exactly once under retry/cancellation; hole, colliders and debris share one committed epoch. No million-particle target claim or hardware-before-M2 gate.
 
 ### M2 — conservative sleeping and liquid checkpoint packing
 
 **Algorithm:** component activity over tile/stencil connectivity, full-state dormant pages and complete-component wake. Initial authored slots expand on demand. Separate checkpoint worker packs a consistent committed liquid snapshot into slots plus typed integer excess records.
 
-**Work:** test cold-page residency and memory pressure; compare full-state sleeping with optional eligible-liquid slot quantization. Measure connectivity rebuild, wake bursts, snapshot staging and worst admitted expansion. Leave internal reservoir freezing disabled.
+**Work:** test cold-page residency and memory pressure; compare full-state sleeping with optional eligible-liquid slot quantization. Measure connectivity rebuild, wake bursts, snapshot staging and worst admitted expansion. Leave internal reservoir freezing disabled. Add active/dormant component, wake-cause and slot/capacity overlays; reserve model-state preservation tests for the solid subgates in M3.
 
 **Gate:** sleeping/awake comparison for pool rest, digging and approaching bodies; no invented support boundary; all interactions wake the required component before use; exact counts/material identity; save cancellation preserves the previous checkpoint; pack/load/repack idempotence on supported fixtures; failed excess/capacity cases are visible. Report geometry/motion loss separately. Target performance remains pending.
 
-### M3 — liquid stratification and one granular model
+### M3 — required released-solid models and liquid stratification
 
-**Algorithm:** extend the accepted reference only from the M0 evidence. Validate unmodified multi-density PB-MPM first. If needed, evaluate the bounded mixed-node two-liquid formulation through an explicit design gate before production edits. Add one documented granular constitutive model with specialized sidecars.
+**Algorithm:** complete independently tracked substeps: M3a sand/granular release, M3b clay/cohesive plasticity, M3c slime/elasticity, and M3d multi-liquid stratification. Reuse the accepted PB-MPM reference, the M1 dig transaction and model-specific state. In M3d, validate unmodified multi-density PB-MPM first; adopt the bounded mixed-node two-liquid extension only after its explicit design gate. A failed M3d does not block independent M3a–c work, but remains an unmet requirement.
 
-**Work:** measure extra bytes/nodes/dispatches from mixed phases and model divergence; preserve a single-liquid fast path if it pays for its partitioning. Specify granular sleep and cell-oriented persistence without discarding required history.
+**Work:** author catalog-driven release fixtures for the three families; complete content capability checks and all-diggable-material mapping. Measure dry excavation bursts, required sidecar initialization/traffic, mixed models and deformed sleeping state. Retain required elastic/plastic history in grid-oriented checkpoints and test it across dig/save/load. Add stress/strain, F determinant/conditioning, yield/plastic-history and model-state overlays where those fields are defined; mark unavailable quantities explicitly.
 
-**Gate:** inverted layers separate; stable layers remain quiet; isolated translation/rotation does not acquire spurious drift; phase masses exact; compression and surface error bounded; granular pile/shear tests and declared persistence pass. Passing a visual separation scene alone does not pass momentum/volume/rest tests. If the formulation is unresolved, M3 is incomplete, not silently replaced with the rejected drift.
+**Gate:** sand piles/avalanches, clay resists then yields permanently, and slime deforms/rebounds at the adopted scale/dt. Terrain-to-particle mass and element identity remain exact across retries and rollback. Rest, compression/shear, unloading, collision, sleeping and strained-state persistence pass for every required family. Mixed-model scenes do not destabilize previously passing materials, and their complete traffic is reported. Separately, inverted liquid layers separate, stable layers remain quiet and isolated motion has no spurious drift. No generic rubble fallback, reset constitutive history, or rejected ad hoc drift may stand in for a missing subgate.
 
 ### M4 — cellular gas only
 
 **Algorithm:** one-species integer cells, four disjoint conservative face phases, same-species/empty-cell transfer, guarded vertical unlike-species swaps, sparse activity/frontier and uniform isothermal state. Geometry and capacity checks precede writes.
 
-**Work:** quantify integer equilibrium error, phase-order bias, pressure relaxation, blocked unlike-species faces and wake propagation. Compare 8 B baseline with the checked 4 B candidate. Compare a global 30 Hz gas step with 60 Hz. Do not build rungs 1/2/3 pre-emptively.
+**Work:** quantify integer equilibrium error, phase-order bias, pressure relaxation, blocked unlike-species faces and wake propagation. Compare 8 B baseline with the checked 4 B candidate. Compare a global 30 Hz gas step with 60 Hz. Do not build rungs 1/2/3 pre-emptively. Add gas species, mass, diagnostic pressure, active-face flux and blocked-face overlays.
 
 **Gate:** exact species ledger; no negative/overflowing mass; same-species vent equalization is monotonic under the adopted coefficients; sealed uniform room rests; vertical pooling is bounded and repeatable; coordinate-origin invariance; cross-tile parity and capacity tests. Record the unlike-interface ventilation limitation. A gameplay scene requiring behavior outside it triggers a specific representation decision.
 
@@ -375,7 +420,7 @@ Phases below refine the original M0–M8 names. The early probes are intentional
 
 **Algorithm:** hysteretic cell availability, geometry-derived open faces, deterministic bounded relocation with receiver reservations, cold displaced-gas records, tick-stamped probes/sources. Matter does not receive gas pressure forces in this milestone.
 
-**Work:** test flooding/opening, rapidly alternating occupancy and multiple donors; ensure retries are event-driven. Publish distinct active-gas and displaced-gas status. Add a minimal dirty visual plane so rendering/GI does not read full particle/gas state.
+**Work:** test flooding/opening, rapidly alternating occupancy and multiple donors; ensure retries are event-driven. Publish distinct active-gas and displaced-gas status. Add a minimal dirty visual plane so rendering/GI does not read full particle/gas state. Overlay open/closed occupancy, relocation destinations and displaced-gas records distinctly.
 
 **Gate:** exact cross-representation gas ledger; no overwrite or duplication; disconnected rooms do not exchange through solid geometry; reopening conservatively releases retained gas; probe age/status is correct; occupancy hysteresis does not lose material. The initial flooding scene does not claim U-tube, bubble-rise or diving-bell physics.
 
@@ -383,7 +428,7 @@ Phases below refine the original M0–M8 names. The early probes are intentional
 
 **Algorithm:** game-owned shape/pose table, tile-local broad phase, kinematic grid collision, exterior liquid reconstruction and body quadrature; aggregate Archimedes/drag forces and torque; completion-governed readback with at-most-once generation-checked application.
 
-**Work:** tune spatial sampling against known shapes; separate shape-cache changes from pose uploads; test delayed/missing results, light bodies, high damping and overlapping tile halos. Include body occupation in gas displacement and sleep wake footprints.
+**Work:** tune spatial sampling against known shapes; separate shape-cache changes from pose uploads; test delayed/missing results, light bodies, high damping and overlapping tile halos. Include body occupation in gas displacement and sleep wake footprints. Overlay collider poses/sweeps, contact normals, sampled submerged area, buoyancy/drag/torque, clamps and result age.
 
 **Gate:** expected box submerged fraction and circle displaced area; heavy body sinks; long plank reaches stable orientation; still-water force/torque balance; dissipative drag/terminal-speed behavior within adopted tolerances; stale handles/late results/capacity and shutdown paths. No granular reaction or precise splash impulse claim.
 
@@ -391,7 +436,7 @@ Phases below refine the original M0–M8 names. The early probes are intentional
 
 **Algorithm:** compose the accepted passes; use dirty lists, cached topology with explicit invalidation, compact GPU work lists and bounded allocations. Fuse ledger/visual reductions into existing unique-owner passes where this preserves validation visibility. Avoid full-world scans for diagnostics.
 
-**Work:** representative game + GI scenes: dense lake, fragmented spray, deep reservoir, several distant simultaneous disturbances, widespread dig/build, gas-filled caves, moving bodies, wake storm and checkpoint during motion. Compare reference/optimized profiles and instrumentation overhead. Budget both steady state and bursts.
+**Work:** representative game + GI scenes: dense lake, fragmented spray, deep reservoir, several distant simultaneous disturbances, sustained and burst digging of sand/clay/slime and mixed terrain, build displacement, gas-filled caves, moving bodies, wake storm and checkpoint during motion/deformation. Compare reference/optimized profiles and instrumentation/overlay overhead. Budget both steady state and bursts.
 
 **Gate:** all adopted feature gates remain passed under combined load; no unbounded resource growth; timing distributions and resident/transient memory fit the adopted product budgets on measured hardware. Exhausted capacity fails/defer-rejects the responsible command or tick visibly before partial publication. Never drop matter, freeze arbitrary camera-distant bricks, or run unbounded catch-up.
 
@@ -399,15 +444,42 @@ Without target hardware, deliver the integrated development evidence and mark ta
 
 ### M8 — separately adopted extensions
 
-Thermal transport, latent heat/phase changes, richer gas mixtures, trapped-gas pressure/entrainment, broad soft materials, partial-component sleeping, granular reaction feedback and multirate integration are outside the initial acceptance scope. Each needs its own state/traffic additions and behavior gate. The basic visual/GI bridge already belongs to M5/M7 and is not postponed with thermal work.
+Thermal transport, latent heat/phase changes, richer gas mixtures, trapped-gas pressure/entrainment, additional soft-material families beyond required sand/clay/slime, fracture/damage, partial-component sleeping, granular reaction feedback and multirate integration are outside the initial acceptance scope. Each needs its own state/traffic additions and behavior gate. Basic sand/clay/slime release and persistence belong to M1/M3, and live overlays belong to every phase. The basic visual/GI bridge already belongs to M5/M7 and is not postponed with thermal work.
 
 Phase changes must reconcile particle mass quanta with gas quanta without hidden remainders. Richer gas state must earn its cost in required gameplay. A two-way pressure coupling must establish rest, compression, energy and timestep behavior before adding bubbles. Per-brick tick skipping requires a conservative multirate scheme across shared nodes; adjacency rate limits alone are insufficient.
 
 ## Diagnostics, lifecycle and stop criteria
 
+### Live simulation overlays and inspection
+
+Dynamic overlays are part of feature delivery, starting in M0. They must reveal the actual simulation state and its approximation boundaries, not just make particle rendering attractive.
+
+| View | Required content | Owning milestone |
+| --- | --- | --- |
+| Matter / elements | Particles colored by element or constitutive model; sample/reference-volume scale; velocity and active/dormant status; terrain versus released material | M0, extended by M1–M3 |
+| MPM grid | Owned nodes/tiles, occupancy/mass/volume, grid velocity or candidate displacement, stencil/halo footprints, empty/overloaded buckets | M0–M1 |
+| Collision | Terrain contour and SDF zero line/band, normals, particle penetration/recovery, contact constraints, body shapes and swept bounds | M1, body details M6 |
+| Excavation | Selected source cell/material, pending/reserved/committed transaction, emitted sample range, old/new terrain/collider epochs and rejected-capacity reason | M1–M3 |
+| Constitutive state | Model-defined strain/stress measures, F determinant/condition estimate, plastic/yield state and rest-error; distinguish a PB-MPM diagnostic from physical pressure/stress | M3 |
+| Sleeping / storage | Component/page boundaries, wake reason, dormant/quantized representation, slot capacity/excess and model-sidecar residency | M2–M3 |
+| Gas | Species, conserved mass, diagnostic pressure, pair transfer direction/magnitude, open/blocked faces and activity frontier | M4 |
+| Gas–matter seam | Matter occupancy and gas availability, hysteresis state, displacement routes and retained gas with its blocked status | M5 |
+| Body coupling | Sampled liquid coverage, buoyancy/drag vectors, torque, requested versus applied impulse, clamp flags and source/result age | M6 |
+| Cost / health | P/G/T, bucket distribution, per-model counts/bytes, pass times, pool high-water marks, ledger errors, range failures, NaNs and dropped/late diagnostic samples | M0 onward; integrated M7 |
+
+Game/editor UI owns toggles, palettes/legends, units/ranges, selected cell/particle/body and display cadence. A game-owned diagnostic render pass consumes a versioned matter debug view and a CameraSnapshot, with per-draw viewport/scissor; Renderer stays content-free and engine.matter acquires no UI/camera dependency. Material names/colors come from the game catalog. Reuse the engine UI/renderer facilities instead of adding another inspection service.
+
+Render from the committed tick by default. Every view carries world/tick/version and, for body feedback, the sample/application tick. If an iteration-level scratch view is explicitly captured, label it as provisional and hold its storage until the GPU copy/render completes. Do not present mixed old/new collision, terrain and particle states as one coherent snapshot. A frozen diagnostic snapshot must be labeled frozen; inspection does not freeze simulation implicitly. Optional pause/single-step controls use the existing fixed-tick command boundary.
+
+Read existing GPU fields directly for drawing when safe, or extract only requested visible/selected tiles into compact instance/glyph buffers. Cull by viewport/selection, cap glyph counts, and use deterministic decimation for dense fields; show that sampling/overflow occurred. No all-particle/all-grid CPU readback for overlays. CPU inspection receives small asynchronous selected samples/counters with age/status; unavailable fields or incomplete readbacks show unavailable, not fabricated zero.
+
+Overlay-only stress derivation, F conditioning, arrows, contact traces and history buffers run only when requested. Keep histories bounded and snapshot resources completion-governed; account for their memory while frozen. The disabled path does not allocate/extract/draw these views; retain only independently justified shipping counters. Measure overlay extraction, drawing and readback costs separately, including the bandwidth saved by selection/decimation. Normal performance gates use overlays off; diagnostic stress tests report overlays on.
+
+Each phase validates that overlays agree with reference values/known scenes, selections survive or invalidate cleanly across dig/world replacement, scalar units/ranges are labeled, and debug drawing does not change simulation results. Include contour/contact alignment, a known velocity vector, known species/mass, and strained clay/slime fixtures. A pretty overlay is not proof of solver correctness, but missing or misleading required views leave the phase incomplete.
+
 ### Shipping counters versus validation audits
 
-Accumulate cheap counters with work already being done: active P/G/T, bucket occupancy, particle/slot transitions, accepted sources/sinks, displaced records, range failures, collision recovery, clamp hits, blocked flux, readback age and allocation high-water marks. Maintain exact ledger deltas at mutations. Validate those incremental ledgers against full independent reductions in validation scenes and at save/load boundaries.
+Accumulate cheap counters with work already being done: active P/G/T, bucket occupancy, particle/slot transitions, terrain-to-particle quanta by element/model, dig reservations/commits/rejections, accepted sources/sinks, displaced records, range failures, collision recovery, clamp hits, blocked flux, readback age and allocation high-water marks. Maintain exact ledger deltas at mutations. Validate those incremental ledgers against full independent reductions in validation scenes and at save/load boundaries.
 
 Do not scan all sleeping cells every tick merely to prove they are asleep. Full NaN/state-hash/mass audits are validation modes with their overhead reported separately. Per-pass GPU timestamps and useful aggregate CPU profiling scopes remain; instrumentation overhead must not be included in an uninstrumented speedup claim.
 
@@ -424,7 +496,10 @@ On world replacement/shutdown: stop new submissions and callbacks, cancel/wake/d
 | PB-MPM volume error at affordable iterations | Compare depth/impact scenes and uniform dt/iteration profiles; do not claim stiffness retuning fixes convergence |
 | Active region exceeds available cost | Report complete-region cost and scope limits; evaluate an explicitly adopted global profile. A cell-based liquid transport redesign is a future product decision, not authorized by this plan |
 | Sleep removes support or causes pops | Retain full state and sleep whole interacting components; leave partial sleeping/slot conversion disabled |
-| Multi-liquid separation fails | Stop M3 expansion; derive/test the bounded two-liquid candidate and account for its added grid state |
+| Dig conversion loses/duplicates material or tears epochs | Reject/rollback before commit; verify terrain debit, exact-once emission, collider/SDF/presentation versions and checkpoint boundary |
+| Clay/slime reset or behave as generic rubble | Treat required M3 subgate as failed; retain material-selected constitutive state through emission, sleep and checkpoint |
+| Debug views consume unbounded bandwidth or misreport state | Limit extraction/instances/history, expose sampling/age and compare overlays-off timing; never feed diagnostic quantization back into physics |
+| Multi-liquid separation fails | Stop the multi-liquid M3 substep; derive/test the bounded two-liquid candidate and account for its added grid state |
 | Packing changes creep, rest or volume | Reject that field's quantization; preserve independently successful packing |
 | Integer range/determinism fails | Correct units/range/input envelope or choose a separately validated reduction; do not saturate physics or claim integer sums alone solve replay |
 | Gas interfaces block required gameplay | Make the limitation explicit; select one justified richer representation through a new decision |
@@ -435,20 +510,23 @@ On world replacement/shutdown: stop new submissions and callbacks, cancel/wake/d
 
 ## Supersession and current decisions
 
-The historical log below is preserved verbatim for rounds 0–4. Its older statements describe the proposal at that time; this revised body and the appended decisions supersede contradictory requirements.
+The historical log below is preserved verbatim for rounds 0–6. Its older statements describe the proposal at that time; this revised body and the appended decisions supersede contradictory requirements.
 
 | v1 / earlier v2 area | Current action |
 | --- | --- |
 | v1 adaptive hierarchy, kernels, split/merge and affine coarse levels | Removed; fixed-resolution PB-MPM and tile grouping |
 | v1 unified gas particles | Replaced by cellular gas |
-| v1 particle rigid clusters | Replaced by Box2D |
+| v1 particle rigid clusters | Authored rigid bodies use Box2D; excavated granular, clay and elastic slime use PB-MPM constitutive models, not rigid particle clusters |
+| Previous v2 deferred broad soft-material scope | Basic sand/clay/slime release and persistence are now required M1/M3 work; only additional families/fracture/damage remain deferred |
+| Previous v2 dig behavior | Terrain removal plus wake becomes an atomic material-preserving terrain → MPM transfer |
+| Previous diagnostics scope | Live GPU-driven overlays and selected inspection accompany each phase, in addition to counters and validation audits |
 | Earlier v2 universal packing and capacity estimates | Replaced by explicit hot/cold layouts, conditional quantization and complete-pass accounting |
 | Earlier v2 drift, singular gas pressure and guaranteed one-tick feedback | Withdrawn; early stratification gate, limited occupancy coupling and completion-aware feedback |
 | Earlier v2 lossless sleep and fixed save-size bound | Replaced by full-state sleeping plus explicitly lossy geometry packing with exact typed material counts |
 | Earlier v2 target-before-M2 / desktop load multiplier gate | Replaced by design/development acceptance now and independent TARGET-PENDING acceptance |
 | v1/v2 diagnostics and staged gates | Retained with audit overhead and measurement scope explicit |
 
-Decided for implementation planning: keep PB-MPM; keep dx = 1/3 m and N = 4 initially; separate gas and Box2D; simplify the initial coupling; treat bandwidth and capacity as measured constraints; preserve grid-oriented liquid checkpoints; defer dupe control and broad soft/thermal mechanics. Correctness work may proceed without target hardware.
+Decided for implementation planning: keep PB-MPM; keep dx = 1/3 m and N = 4 initially; separate gas and Box2D; simplify the initial coupling; treat bandwidth and capacity as measured constraints; preserve grid-oriented checkpoints with required model-state sidecars; make terrain-to-MPM digging and sand/clay/slime behavior core gameplay scope; deliver live diagnostic overlays per phase; defer dupe control, additional soft-material families/fracture and thermal mechanics. Correctness work may proceed without target hardware.
 
 Open product/design decisions are: the adopted CPU/GPU/memory budgets and maximum simultaneous gameplay disturbance; native/Proton Deck deployment and Xbox SDK/RHI route; 30 Hz acceptability if needed; exact admissible save displacement/compression bounds; gas behavior needed at unlike-species interfaces; the outcome of the early stratification experiment. These do not authorize silent changes to the selected algorithms. Record resolutions in the log.
 
@@ -486,3 +564,6 @@ Questions, answers and their effect, kept as evidence. Quotes are the user's wor
 | 4 | 2026-10-18 | Open Q1: reference devices; M0 microbenchmark preamble | "steam deck and xbox one s, my actual pc is a amd 3950x with 2080 gpu and 64gb -which is not really representative of the market and quite aged, but it should help not overshoot the target. About M0 microbenchmark preamble: it's a nice idea but I don't have yet the target hardware at disposal" | Reference hardware named; bytes-first method, load-multiplier proxy and first-Deck checkpoint replace the M0 microbenchmark; new open questions on route to targets and Deck acquisition |
 | 5 | 2026-10-18 | Performance and stability review | User requested an honest review for Steam Deck and Xbox One S, including shared memory, wave operations, radix sorting and simplification where risk is high | Retain PB-MPM; reject optimistic capacity claims and hardware emulation by desktop load multipliers; identify coupling/sleep/precision risks and reuse EA's bucketed fused-transfer implementation as a reference |
 | 6 | 2026-10-18 | Adopt review in v2 | "Update the v2 plan with these recommendations. Keep PB-MPM, correct the bandwidth and stability claims, simplify the initial scope, and revise M0 so we can proceed without target hardware. Refine each phase implementation algorithm choices. You should also identify cold / hot storage optimization opportunities, as well as data packing/quantization: bandwidth is critical. Preserve the decision log." | Supersedes earlier mandatory drift, singular gas coupling, lossless-sleep claims, universal 20 B/135 B estimates and target-before-M2/load-multiplier gates. Adds detailed M0–M8 algorithms, hot/cold and model sidecars, checked 40 B/24 B liquid and 8 B/4 B gas candidates, conservative typed excess, whole-component sleeping, analytic body forces, limited gas occupancy coupling, and separate design/development/target acceptance; rounds 0–4 preserved |
+| 7 | 2026-10-19 | Excavation is a material representation change | "when a cell is dug it is transformed into solid particles, leveraging mpm framework to get different behavior per element once in the particle world"; sand piles as grains, clay has more resistance, slime is elastic | Terrain → MPM is a mass/identity-preserving transaction; add required catalog-selected granular, cohesive/plastic and elastic models with state/lifetime/persistence gates. Supersedes one-granular-only scope and deferral of basic clay/slime; nominal-cell inventory accounting is a proposed implementation convention |
+| 8 | 2026-10-19 | Live diagnostic overlays | "you should also add to the plan dynamic overlays to visualize the state of the simulation, the collisions, the grid, the elements, etc." | Add phase-owned, versioned GPU-driven overlays and selected inspection for elements/models, MPM grid, collisions, excavation, constitutive state, sleep/storage, gas and body coupling; cap and separately measure extraction/render/readback cost |
+

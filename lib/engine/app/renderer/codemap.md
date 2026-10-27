@@ -66,8 +66,8 @@ on the render owner; shutdown/device-loss epoch resets discard old cache handles
 
 ## Design
 
-Resident particle presentation accepts a renderer-neutral layout-v3 view with
-joint strong owners of hot64 positions and cold32 volume/RGB rows, immutable
+Resident particle presentation accepts a renderer-neutral layout-v4 view with
+joint strong owners of hot64 positions and cold24 volume/RGB rows, immutable
 stable-ID-ordered metadata, and an epoch-revocation token. The editor rejects
 stale unencoded values before backend work. Prepared slots pin both exact source
 owners through the existing frame fence, including world retirement.
@@ -77,7 +77,7 @@ dispatch on source changes, then three stable frustum-compaction dispatches per
 frame and one GPU-counted indirect draw. Scratch is O(N), bounded by the global
 1M-particle capacity; numerical rows never reorder. Each row draws an independent
 continuous camera-facing quad. A pass-owned, once-generated mipmapped RGBA8 disk
-texture supplies sampled alpha; cold32 supplies moving-particle RGB. Radius in
+texture supplies sampled alpha; cold24 supplies moving-particle RGB. Radius in
 metres is `cell_size_m * sqrt(volume_cells / pi)`, where solver volume is physical
 volume divided by `cell_size_m^2 * reference_thickness_m`. Gas metadata carries
 physical position/radius and uses the material palette. Occlusion follows the

@@ -56,9 +56,12 @@ is independent of spare row-buffer capacity. Bounded atomic reservation rejects 
 or issuing an out-of-range indirect dispatch. Stable rows are only permuted in
 the bucket index buffer; particle storage/order and metadata identity stay fixed.
 
-The device ABI is a64-byte hot row plus a32-byte cold row. The saved semantic
+The device ABI is a64-byte hot row plus a24-byte cold row. The saved semantic
 record remains22 fields/88 bytes, packed by field name; no v5 codec change.
-Both cold padding words are canonical zero. CPU admission retains `enabled==1`;
+All evolving fields retain FP32 storage. Terrain masks use4 bits per cell,
+boundary tile occupancy uses1 bit per8x8 tile, and the exact contour tables use
+8 bytes per case plus one4-byte word for all8 contour points.
+CPU admission retains `enabled==1`;
 the fork's disabled-row branch is unreachable in production. Every saved row
 passes complete semantic validation. Ordinary completion reads only the24-byte
 status; full committed readback requires an explicit frozen-epoch snapshot.
@@ -102,8 +105,7 @@ the full conformance fixture retains disabled-row coverage. Production exposes
 no grid readback. No claim of full material fidelity follows from the two oracle
 scenarios. `contact_checks.slang` is test-only inspection of the production grid
 contact helper; it is not another solver or product entry. `source_checks.slang`
-inspects the actual shared algebra/validation helpers. `terrain_checks.slang`
-remains a preserved diagnostic asset outside ordinary execution.
+inspects the actual shared algebra/validation helpers.
 
 Build, conformance, production parity, contact and lifetime gates must run after
 independent adapter/root review; source editing alone is not validation evidence.

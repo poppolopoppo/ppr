@@ -2,7 +2,7 @@
 // BSD-3-Clause notice: LICENSE.md. Arithmetic expressions are retained verbatim.
 // The two engine-only insertion sites preserve the no-hook conformance order.
 struct Hot { float px, py, dx, dy; SourceMatrix F, D; float J, logJp, lambda, enabled; };
-struct Cold { float mass, volume, material, padding0, r, g, b, padding1; };
+struct Cold { float mass, volume, material, r, g, b; };
 struct Bucket { uint start, count, x, y; };
 ConstantBuffer<Parameters> g_parameters;
 RWStructuredBuffer<Hot> g_hot;

@@ -29,12 +29,23 @@ namespace pP::tests::detail::MatterFork {
         float J, logJp, lambda, enabled;
     };
     struct Cold {
-        float mass, volume, material, padding0, r, g, b, padding1;
+        float mass, volume, material, r, g, b;
     };
     static_assert(sizeof(Hot) == 64u and alignof(Hot) == 4u);
-    static_assert(sizeof(Cold) == 32u and alignof(Cold) == 4u);
+    static_assert(sizeof(Cold) == 24u and alignof(Cold) == 4u);
     static_assert(PPR_OFFSETOF(Hot, logJp) == 52u and PPR_OFFSETOF(Hot, lambda) == 56u);
-    static_assert(PPR_OFFSETOF(Cold, r) == 16u and PPR_OFFSETOF(Cold, padding1) == 28u);
+    static_assert(PPR_OFFSETOF(Cold, r) == 12u and PPR_OFFSETOF(Cold, b) == 20u);
+
+    // The frozen WGSL oracle keeps its original eight-word representation.
+    // Translate only its two proven-zero padding words at the device boundary.
+    std::array<u32, 6u> compactCold(const u32 *const words) {
+        PPR_TEST_ASSERT(words[3u] == 0u and words[7u] == 0u);
+        return {words[0u], words[1u], words[2u], words[4u], words[5u], words[6u]};
+    }
+
+    std::array<u32, 8u> oracleCold(const u32 *const words) {
+        return {words[0u], words[1u], words[2u], 0u, words[3u], words[4u], words[5u], 0u};
+    }
 
     struct Fixture {
         safe_ptr<IShaderService> shaders{IShaderService::get()};
@@ -63,7 +74,7 @@ namespace pP::tests::detail::MatterFork {
             auto *layout = module->getLayout();
             PPR_TEST_ASSERT(layout != nullptr);
             for (const auto &[name, size]:
-                std::array<std::pair<const char *, std::size_t>, 2>{{{"g_hot", 64u}, {"g_cold", 32u}}}) {
+                std::array<std::pair<const char *, std::size_t>, 2>{{{"g_hot", 64u}, {"g_cold", 24u}}}) {
                 slang::TypeLayoutReflection *element{};
                 for (unsigned i = 0; i < layout->getParameterCount(); ++i) {
                     auto *parameter = layout->getParameterByIndex(i);
@@ -74,7 +85,7 @@ namespace pP::tests::detail::MatterFork {
                 PPR_TEST_ASSERT(element != nullptr);
                 PPR_TEST_ASSERT(element->getSize(SLANG_PARAMETER_CATEGORY_UNIFORM) == size);
                 const char *member = std::string_view{name} == "g_hot" ? "logJp" : "r";
-                const std::size_t expected_offset = std::string_view{name} == "g_hot" ? 52u : 16u;
+                const std::size_t expected_offset = std::string_view{name} == "g_hot" ? 52u : 12u;
                 bool found = false;
                 for (unsigned i = 0; i < element->getFieldCount(); ++i) {
                     auto *field = element->getFieldByIndex(i);
@@ -176,7 +187,14 @@ namespace pP::tests::detail::MatterFork {
             const std::array<u32, 4> dispatch{0u, 1u, 1u, 0u};
 
             hot = fixture.buffer(N * 64u, 64u, hot_words ? hot_words : input.hot);
-            cold = fixture.buffer(N * 32u, 32u, cold_words ? cold_words : input.cold);
+            std::vector<u32> packed_cold;
+            packed_cold.reserve(N * 6u);
+            for (u32 row = 0u; row < N; ++row) {
+                const auto packed = compactCold((cold_words ? cold_words : input.cold) + row * 8u);
+                packed_cold.insert(packed_cold.end(), packed.begin(), packed.end());
+            }
+
+            cold = fixture.buffer(N * 24u, 24u, packed_cold.data());
             shapes = fixture.buffer(sizeof(GpuStaticShape), sizeof(GpuStaticShape), &input.shape);
             for (auto &item: grid)
                 item = fixture.buffer(sizeof(zero), sizeof(u32), zero.data());
@@ -196,6 +214,17 @@ namespace pP::tests::detail::MatterFork {
             std::vector<u32> words(static_cast<std::size_t>(buffer->getDesc().size / 4u));
             PPR_TEST_ASSERT(not make_error_code(
                 fixture.rhi_service->getDevice().readBuffer(buffer, 0u, buffer->getDesc().size, words.data())));
+            if (buffer == cold.get()) {
+                std::vector<u32> oracle_words;
+                oracle_words.reserve(parameters.m_particle_count * 8u);
+                for (u32 row = 0u; row < parameters.m_particle_count; ++row) {
+                    const auto expanded = oracleCold(words.data() + row * 6u);
+                    oracle_words.insert(oracle_words.end(), expanded.begin(), expanded.end());
+                }
+
+                return oracle_words;
+            }
+
             return words;
         }
 
@@ -732,7 +761,8 @@ namespace pP::tests::detail::MatterFork {
         std::vector<u32> hot, cold;
         for (const auto &particle: snapshot.m_particles) {
             const auto h = std::bit_cast<std::array<u32, 16u>>(matter::packWrite(particle));
-            const auto c = std::bit_cast<std::array<u32, 8u>>(matter::packReadonly(particle));
+            const auto compact = std::bit_cast<std::array<u32, 6u>>(matter::packReadonly(particle));
+            const auto c = oracleCold(compact.data());
             hot.insert(hot.end(), h.begin(), h.end());
             cold.insert(cold.end(), c.begin(), c.end());
         }
@@ -761,7 +791,7 @@ namespace pP::tests::detail::MatterFork {
                 std::copy_n(input.hot + original * 16u, 16u, hot_words.begin());
                 std::copy_n(input.cold + original * 8u, 8u, cold_words.begin());
                 const auto hot = std::bit_cast<matter::ParticleWrite>(hot_words);
-                const auto cold = std::bit_cast<matter::ParticleReadonly>(cold_words);
+                const auto cold = std::bit_cast<matter::ParticleReadonly>(compactCold(cold_words.data()));
                 if (hot.m_enabled == 0.0f) {
                     // The fork's bucket admission skips exactly these rows, so
                     // they produce no count/scatter. Full disabled-row behavior

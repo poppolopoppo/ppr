@@ -24,12 +24,21 @@ namespace pP::tests::detail::MatterGpu {
         safe_ptr<IShaderService> m_shaders{IShaderService::get()};
         safe_ptr<IRhiService> m_rhi{IRhiService::get()};
         rhi::ComPtr<rhi::ICommandQueue> m_queue;
+        rhi::ComPtr<rhi::IComputePipeline> m_contact_pipeline;
+        rhi::ComPtr<rhi::IComputePipeline> m_compare_pipeline;
+        rhi::ComPtr<rhi::IComputePipeline> m_wave_compare_pipeline;
+        rhi::ComPtr<rhi::IComputePipeline> m_codec_pipeline;
+        rhi::ComPtr<rhi::IComputePipeline> m_bootstrap_pipeline;
         GpuSolver m_solver;
 
-        void initialize(const bool use_volume = true, const u32 grid_width = 32u, const u32 grid_height = 32u) {
+        void initialize(
+            const bool use_volume = true, const u32 grid_width = 32u, const u32 grid_height = 32u,
+            const bool validation = true, const ITimerClock *const observation_clock = nullptr) {
             PPR_TEST_ASSERT(not m_shaders->initialize());
-            m_rhi->setCoreValidation(true);
-            m_rhi->setGpuAssistedValidation(true);
+            m_rhi->setCoreValidation(validation);
+            m_rhi->setGpuAssistedValidation(validation);
+            PPR_TEST_ASSERT(m_rhi->isCoreValidationEnabled() == validation);
+            PPR_TEST_ASSERT(m_rhi->isGpuAssistedValidationEnabled() == validation);
             PPR_TEST_ASSERT(not m_rhi->initialize(rhi::DeviceType::D3D12, *m_shaders));
             PPR_TEST_ASSERT(m_rhi->getDevice().getDeviceType() == rhi::DeviceType::D3D12);
             PPR_TEST_ASSERT(
@@ -40,7 +49,8 @@ namespace pP::tests::detail::MatterGpu {
             parameters.m_grid_height = grid_height;
             parameters.m_use_grid_volume_for_liquid = use_volume ? 1u : 0u;
             PPR_TEST_ASSERT(not m_solver.initialize(
-                m_rhi->getDevice(), *m_queue, *m_shaders, std::filesystem::current_path(), parameters));
+                m_rhi->getDevice(), *m_queue, *m_shaders, std::filesystem::current_path(), parameters,
+                observation_clock));
         }
 
         void shutdown() {
@@ -48,6 +58,11 @@ namespace pP::tests::detail::MatterGpu {
             // A failed completion boundary must retain resources, so stop before
             // destroying their injected dependencies in that exceptional case.
             PPR_TEST_ASSERT(not solver_error);
+            m_bootstrap_pipeline.setNull();
+            m_codec_pipeline.setNull();
+            m_wave_compare_pipeline.setNull();
+            m_compare_pipeline.setNull();
+            m_contact_pipeline.setNull();
             m_queue.setNull();
             const std::error_code rhi_error = m_rhi->shutdown();
             const std::error_code shader_error = m_shaders->shutdown();
@@ -137,10 +152,103 @@ namespace pP::tests::detail::MatterGpu {
         PPR_TEST_ASSERT(hot.m_liquid_density == 0.875f and hot.m_log_jp == 0.125f and hot.m_lambda == -0.75f);
         PPR_TEST_ASSERT(hot.m_enabled == 1.0f and cold.m_mass == 2.5f and cold.m_volume == 0.03125f);
         PPR_TEST_ASSERT(cold.m_material == 2.0f and cold.m_color_b == 0.6875f);
-        PPR_TEST_ASSERT(cold.m_reserved0 == 0.0f and cold.m_reserved1 == 0.0f);
+        PPR_TEST_ASSERT(sizeof(cold) == 24u and sizeof(hot) == 64u and sizeof(particle) == 88u);
 
         const GpuParticle restored = unpack(hot, cold);
         PPR_TEST_ASSERT(std::bit_cast<std::array<u32, 22u>>(restored) == std::bit_cast<std::array<u32, 22u>>(particle));
+    };
+
+    PPR_UNIT_TEST (lossless_terrain_codecs_preserve_tables_tails_and_reject_invalid_input) {
+        const auto packed = packContourTables(math::contourPoints(), math::contourCases());
+        PPR_TEST_ASSERT(packed.has_value());
+
+        for (u32 index = 0u; index < 16u; ++index) {
+            const auto restored = unpackContourCase(packed->m_cases[index]);
+            PPR_TEST_ASSERT(
+                std::bit_cast<std::array<u32, 18u>>(restored) ==
+                std::bit_cast<std::array<u32, 18u>>(math::contourCases()[index]));
+            PPR_TEST_ASSERT((packed->m_cases[index].m_high >> 23u) == 0u);
+        }
+
+        for (u32 index = 0u; index < 8u; ++index) {
+            const auto restored = unpackContourPoint(packed->m_points, index);
+            PPR_TEST_ASSERT(
+                std::bit_cast<std::array<u32, 2u>>(restored) ==
+                std::bit_cast<std::array<u32, 2u>>(math::contourPoints()[index]));
+        }
+
+        for (const u32 width: {1u, 7u, 8u, 9u, 31u, 32u, 33u, 257u, 4097u}) {
+            constexpr u32 height = 9u;
+            Array<u32> masks(static_cast<std::size_t>(width) * height);
+            for (std::size_t index = 0u; index < masks.size(); ++index)
+                masks[index] = static_cast<u32>(index % 16u);
+
+            const auto terrain = packTerrain({masks, width, height});
+            PPR_TEST_ASSERT(terrain.has_value());
+            PPR_TEST_ASSERT(terrain->m_masks.size() == (masks.size() + 7u) / 8u);
+            for (std::size_t index = 0u; index < masks.size(); ++index) {
+                const u32 restored = (terrain->m_masks[index / 8u] >> (4u * (index % 8u))) & 15u;
+                PPR_TEST_ASSERT(restored == masks[index]);
+            }
+
+            const u32 mask_tail = static_cast<u32>(masks.size() % 8u) * 4u;
+            if (mask_tail != 0u)
+                PPR_TEST_ASSERT((terrain->m_masks.back() >> mask_tail) == 0u);
+
+            const u32 columns = (width + 7u) / 8u;
+            const u32 tile_count = columns * ((height + 7u) / 8u);
+            PPR_TEST_ASSERT(terrain->m_boundary_tiles.size() == (tile_count + 31u) / 32u);
+            for (u32 tile = 0u; tile < tile_count; ++tile) {
+                bool expected = false;
+                for (u32 y = (tile / columns) * 8u; y < std::min(height, (tile / columns + 1u) * 8u); ++y) {
+                    for (u32 x = (tile % columns) * 8u; x < std::min(width, (tile % columns + 1u) * 8u); ++x) {
+                        const u32 mask = masks[static_cast<std::size_t>(y) * width + x];
+                        expected = expected or (mask != 0u and mask != 15u);
+                    }
+                }
+
+                PPR_TEST_ASSERT(
+                    ((terrain->m_boundary_tiles[tile / 32u] >> (tile % 32u)) & 1u) == static_cast<u32>(expected));
+            }
+
+            if (tile_count % 32u != 0u) {
+                PPR_TEST_ASSERT((terrain->m_boundary_tiles.back() >> (tile_count % 32u)) == 0u);
+            }
+
+            masks.back() = 16u;
+            const auto invalid = packTerrain({masks, width, height});
+            PPR_TEST_ASSERT(not invalid and invalid.error() == std::errc::invalid_argument);
+        }
+
+        const auto empty = packTerrain({});
+        PPR_TEST_ASSERT(empty and empty->m_masks.empty() and empty->m_boundary_tiles.empty());
+        const auto invalid_empty = packTerrain({{}, 1u, 0u});
+        PPR_TEST_ASSERT(not invalid_empty and invalid_empty.error() == std::errc::invalid_argument);
+        const std::array<u32, 1u> one_mask{1u};
+        const auto invalid_dimensions = packTerrain({one_mask, 2u, 1u});
+        PPR_TEST_ASSERT(not invalid_dimensions and invalid_dimensions.error() == std::errc::invalid_argument);
+
+        std::array<math::ContourPoint, 8u> points;
+        std::ranges::copy(math::contourPoints(), points.begin());
+        points[0u].m_x = 0.25f;
+        const auto invalid_point = packContourTables(points, math::contourCases());
+        PPR_TEST_ASSERT(not invalid_point and invalid_point.error() == std::errc::invalid_argument);
+
+        for (u32 invalid_field = 0u; invalid_field < 4u; ++invalid_field) {
+            std::array<math::ContourCase, 16u> cases;
+            std::ranges::copy(math::contourCases(), cases.begin());
+            if (invalid_field == 0u)
+                cases[0u].m_segment_count = 3u;
+            if (invalid_field == 1u)
+                cases[0u].m_triangle_count = 4u;
+            if (invalid_field == 2u)
+                cases[0u].m_segments[1u].m_end = 8u;
+            if (invalid_field == 3u)
+                cases[0u].m_triangles[2u].m_solid_corners = 16u;
+
+            const auto invalid = packContourTables(math::contourPoints(), cases);
+            PPR_TEST_ASSERT(not invalid and invalid.error() == std::errc::invalid_argument);
+        }
     };
 
     // ------------------------------------------------------------------
@@ -148,37 +256,57 @@ namespace pP::tests::detail::MatterGpu {
     // ------------------------------------------------------------------
 
     struct GridResult {
+        Array<u32> m_wave_contacts;
         std::array<i32, 4u> m_node{};
         std::array<u32, 6u> m_errors{};
+        std::array<u32, 12u> m_contacts{};
+        std::array<u32, 64u> m_codec{};
+        bool m_bootstrap_certified{};
     };
 
-    GridResult gridContact(
+    GridResult contactProbe(
         Fixture &fixture, const TerrainView terrain, const std::span<const GpuBodyBoundary> bodies,
         const float displacement_y, const std::span<const GpuStaticShape> shapes = {},
-        const i32 encoded_mass = 10'000'000, const float displacement_x = 0.0f) {
+        const i32 encoded_mass = 10'000'000, const float displacement_x = 0.0f,
+        const std::optional<std::array<float, 2u>> contact_query = {},
+        const std::span<const std::array<float, 2u>> wave_queries = {}, const std::span<const u32> wave_enabled = {},
+        const bool inspect_codec = false, const bool inspect_bootstrap = false) {
         auto &device = fixture.m_rhi->getDevice();
-        shader::SharedModule module;
-        PPR_TEST_ASSERT(not fixture.m_shaders->loadModuleFromFile(
-            std::filesystem::current_path() / "shaders" / "pbmpm" / "contact_checks.slang", "pbmpm_contact_checks",
-            module.writeRef()));
-        shader::ComPtr<slang::IEntryPoint> entry;
-        PPR_TEST_ASSERT(not make_error_code(module->findEntryPointByName("inspectContact", entry.writeRef())));
+        const bool wave = not wave_queries.empty();
+        auto &pipeline = inspect_bootstrap ? fixture.m_bootstrap_pipeline
+                         : inspect_codec   ? fixture.m_codec_pipeline
+                         : wave            ? fixture.m_wave_compare_pipeline
+                         : contact_query   ? fixture.m_compare_pipeline
+                                           : fixture.m_contact_pipeline;
+        if (not pipeline) {
+            shader::SharedModule module;
+            PPR_TEST_ASSERT(not fixture.m_shaders->loadModuleFromFile(
+                std::filesystem::current_path() / "shaders" / "pbmpm" / "contact_checks.slang", "pbmpm_contact_checks",
+                module.writeRef()));
+            shader::ComPtr<slang::IEntryPoint> entry;
+            PPR_TEST_ASSERT(not make_error_code(module->findEntryPointByName(
+                inspect_bootstrap ? "compareBootstrapChecks"
+                : inspect_codec   ? "inspectCompactTerrain"
+                : wave            ? "compareWaveTerrainSearch"
+                : contact_query   ? "compareTerrainSearch"
+                                  : "inspectContact",
+                entry.writeRef())));
 
-        slang::IComponentType *entries[]{entry.get()};
-        rhi::ShaderProgramDesc program_desc{};
-        program_desc.linkingStyle = rhi::LinkingStyle::SingleProgram;
-        program_desc.slangGlobalScope = module.get();
-        program_desc.slangEntryPoints = entries;
-        program_desc.slangEntryPointCount = 1u;
-        shader::Diagnose diagnostics;
-        rhi::ComPtr<rhi::IShaderProgram> program;
-        PPR_TEST_ASSERT(
-            not make_error_code(device.createShaderProgram(program_desc, program.writeRef(), diagnostics.writeRef())));
+            slang::IComponentType *entries[]{entry.get()};
+            rhi::ShaderProgramDesc program_desc{};
+            program_desc.linkingStyle = rhi::LinkingStyle::SingleProgram;
+            program_desc.slangGlobalScope = module.get();
+            program_desc.slangEntryPoints = entries;
+            program_desc.slangEntryPointCount = 1u;
+            shader::Diagnose diagnostics;
+            rhi::ComPtr<rhi::IShaderProgram> program;
+            PPR_TEST_ASSERT(not make_error_code(
+                device.createShaderProgram(program_desc, program.writeRef(), diagnostics.writeRef())));
 
-        rhi::ComputePipelineDesc pipeline_desc{};
-        pipeline_desc.program = program;
-        rhi::ComPtr<rhi::IComputePipeline> pipeline;
-        PPR_TEST_ASSERT(not make_error_code(device.createComputePipeline(pipeline_desc, pipeline.writeRef())));
+            rhi::ComputePipelineDesc pipeline_desc{};
+            pipeline_desc.program = program;
+            PPR_TEST_ASSERT(not make_error_code(device.createComputePipeline(pipeline_desc, pipeline.writeRef())));
+        }
 
         const auto buffer = [&](const u64 bytes, const u32 stride, const void *const data) {
             rhi::BufferDesc desc{};
@@ -204,15 +332,26 @@ namespace pP::tests::detail::MatterGpu {
         const GpuStaticShape empty_shape{};
         const GpuBodyBoundary empty_body{};
         auto grid_buffer = buffer(sizeof(grid), sizeof(i32), grid.data());
-        const std::array<i32, 4u> zero_node{};
-        auto result_buffer = buffer(sizeof(zero_node), sizeof(i32), zero_node.data());
+        const Array<i32> zero_node(inspect_bootstrap ? 13u : inspect_codec ? 64u : wave ? 64u * 13u + 12u : 12u, 0);
+        auto result_buffer = buffer(zero_node.size() * sizeof(i32), sizeof(i32), zero_node.data());
         auto errors_buffer = buffer(sizeof(zero_errors), sizeof(u32), zero_errors.data());
+        const auto packed = packTerrain(terrain);
+        const auto tables = packContourTables(math::contourPoints(), math::contourCases());
+        PPR_TEST_ASSERT(packed and tables);
         auto masks_buffer = buffer(
+            std::max<u64>(sizeof(u32), packed->m_masks.size() * sizeof(u32)), sizeof(u32),
+            packed->m_masks.empty() ? &empty_mask : packed->m_masks.data());
+        auto tiles_buffer = buffer(
+            std::max<u64>(sizeof(u32), packed->m_boundary_tiles.size() * sizeof(u32)), sizeof(u32),
+            packed->m_boundary_tiles.empty() ? &empty_mask : packed->m_boundary_tiles.data());
+        auto points_buffer = buffer(sizeof(u32), sizeof(u32), &tables->m_points);
+        auto cases_buffer = buffer(sizeof(tables->m_cases), sizeof(PackedContourCase), tables->m_cases.data());
+        auto reference_masks = buffer(
             std::max<u64>(sizeof(u32), terrain.m_masks.size_bytes()), sizeof(u32),
             terrain.m_masks.empty() ? &empty_mask : terrain.m_masks.data());
-        auto points_buffer = buffer(
+        auto reference_points = buffer(
             8u * sizeof(math::ContourPoint), sizeof(math::ContourPoint), math::contourPoints().data());
-        auto cases_buffer = buffer(
+        auto reference_cases = buffer(
             16u * sizeof(math::ContourCase), sizeof(math::ContourCase), math::contourCases().data());
         auto bodies_buffer = buffer(
             std::max<u64>(sizeof(GpuBodyBoundary), bodies.size_bytes()), sizeof(GpuBodyBoundary),
@@ -220,6 +359,14 @@ namespace pP::tests::detail::MatterGpu {
         auto shapes_buffer = buffer(
             std::max<u64>(sizeof(GpuStaticShape), shapes.size_bytes()), sizeof(GpuStaticShape),
             shapes.empty() ? &empty_shape : shapes.data());
+
+        rhi::ComPtr<rhi::IBuffer> wave_points_buffer;
+        rhi::ComPtr<rhi::IBuffer> wave_enabled_buffer;
+        if (wave) {
+            PPR_TEST_ASSERT(wave_queries.size() == 64u and wave_enabled.size() == 64u);
+            wave_points_buffer = buffer(wave_queries.size_bytes(), 2u * sizeof(float), wave_queries.data());
+            wave_enabled_buffer = buffer(wave_enabled.size_bytes(), sizeof(u32), wave_enabled.data());
+        }
 
         GpuParameters parameters{};
         parameters.m_grid_width = 32u;
@@ -233,15 +380,24 @@ namespace pP::tests::detail::MatterGpu {
         environment.m_terrain_origin_x = terrain.m_origin_x;
         environment.m_terrain_origin_y = terrain.m_origin_y;
         environment.m_body_count = static_cast<u32>(bodies.size());
+        environment.m_reserved = std::ranges::any_of(
+                                     packed->m_boundary_tiles, [](const u32 word) { return word != 0u; })
+                                     ? 1u
+                                     : 0u;
 
         rhi::ComPtr<rhi::ICommandEncoder> encoder;
         PPR_TEST_ASSERT(not make_error_code(fixture.m_queue->createCommandEncoder(encoder.writeRef())));
         for (auto *const resource:
-            {masks_buffer.get(), points_buffer.get(), cases_buffer.get(), bodies_buffer.get(), shapes_buffer.get()}) {
+            {masks_buffer.get(), tiles_buffer.get(), points_buffer.get(), cases_buffer.get(), bodies_buffer.get(),
+                shapes_buffer.get(), reference_masks.get(), reference_points.get(), reference_cases.get()}) {
             encoder->setBufferState(resource, rhi::ResourceState::ShaderResource);
         }
 
         encoder->setBufferState(grid_buffer, rhi::ResourceState::ShaderResource);
+        if (wave) {
+            encoder->setBufferState(wave_points_buffer, rhi::ResourceState::ShaderResource);
+            encoder->setBufferState(wave_enabled_buffer, rhi::ResourceState::ShaderResource);
+        }
 
         auto *const pass = encoder->beginComputePass();
         PPR_TEST_ASSERT(pass != nullptr);
@@ -253,6 +409,12 @@ namespace pP::tests::detail::MatterGpu {
         PPR_TEST_ASSERT(not make_error_code(constants.setData(&parameters, sizeof(parameters))));
         PPR_TEST_ASSERT(not make_error_code(cursor["g_environment"].getDereferenced(constants)));
         PPR_TEST_ASSERT(not make_error_code(constants.setData(&environment, sizeof(environment))));
+
+        if (contact_query) {
+            PPR_TEST_ASSERT(
+                not make_error_code(cursor["g_contact_query"].setData(contact_query->data(), sizeof(*contact_query))));
+        }
+
         const auto bind = [&](const char *const name, rhi::IBuffer *const resource) {
             PPR_TEST_ASSERT(not make_error_code(
                 cursor[name].setBinding(rhi::Binding(resource, {.offset = 0u, .size = resource->getDesc().size}))));
@@ -263,9 +425,18 @@ namespace pP::tests::detail::MatterGpu {
         bind("g_errors", errors_buffer);
         bind("g_shapes", shapes_buffer);
         bind("g_terrain_masks", masks_buffer);
+        bind("g_terrain_boundary_tiles", tiles_buffer);
         bind("g_contour_points", points_buffer);
         bind("g_contour_cases", cases_buffer);
+        bind("g_reference_masks", reference_masks);
+        bind("g_reference_points", reference_points);
+        bind("g_reference_cases", reference_cases);
         bind("g_bodies", bodies_buffer);
+        if (wave) {
+            bind("g_wave_query_points", wave_points_buffer);
+            bind("g_wave_query_enabled", wave_enabled_buffer);
+            bind("g_wave_query_results", result_buffer);
+        }
         pass->dispatchCompute(1u, 1u, 1u);
         pass->end();
 
@@ -286,8 +457,113 @@ namespace pP::tests::detail::MatterGpu {
             not make_error_code(device.readBuffer(result_buffer, 0u, sizeof(result.m_node), result.m_node.data())));
         PPR_TEST_ASSERT(
             not make_error_code(device.readBuffer(errors_buffer, 0u, sizeof(result.m_errors), result.m_errors.data())));
+        PPR_TEST_ASSERT(not make_error_code(
+            device.readBuffer(result_buffer, 0u, sizeof(result.m_contacts), result.m_contacts.data())));
+        if (wave) {
+            result.m_wave_contacts.resize(zero_node.size());
+            PPR_TEST_ASSERT(not make_error_code(device.readBuffer(
+                result_buffer, 0u, result.m_wave_contacts.size() * sizeof(u32), result.m_wave_contacts.data())));
+        }
+
+        if (inspect_codec) {
+            PPR_TEST_ASSERT(not make_error_code(
+                device.readBuffer(result_buffer, 0u, sizeof(result.m_codec), result.m_codec.data())));
+        }
+        if (inspect_bootstrap) {
+            u32 certified{};
+            PPR_TEST_ASSERT(not make_error_code(
+                device.readBuffer(result_buffer, 12u * sizeof(u32), sizeof(certified), &certified)));
+            result.m_bootstrap_certified = certified != 0u;
+        }
         return result;
     }
+
+    GridResult gridContact(
+        Fixture &fixture, const TerrainView terrain, const std::span<const GpuBodyBoundary> bodies,
+        const float displacement_y, const std::span<const GpuStaticShape> shapes = {},
+        const i32 encoded_mass = 10'000'000, const float displacement_x = 0.0f) {
+        return contactProbe(fixture, terrain, bodies, displacement_y, shapes, encoded_mass, displacement_x);
+    }
+
+    GridResult compareTerrainSearch(Fixture &fixture, const TerrainView terrain, const std::array<float, 2u> point) {
+        return contactProbe(fixture, terrain, {}, 0.0f, {}, 10'000'000, 0.0f, point);
+    }
+
+    // ------------------------------------------------------------------
+    // bootstrap coverage certificate and unchanged fallback errors
+    // ------------------------------------------------------------------
+
+    PPR_UNIT_TEST (bootstrap_grid_checks_preserve_fast_and_fallback_error_acceptance) {
+        Fixture fixture;
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+        fixture.initialize(false);
+
+        const auto compare = [&](const TerrainView terrain, const std::span<const GpuBodyBoundary> bodies,
+                                 const std::span<const GpuStaticShape> shapes, const bool certified, const u32 flags,
+                                 const i32 mass = 10'000'000, const float dy = 0.0f) {
+            const auto result = contactProbe(fixture, terrain, bodies, dy, shapes, mass, 0.0f, {}, {}, {}, false, true);
+            PPR_TEST_ASSERT(result.m_bootstrap_certified == certified);
+            PPR_TEST_ASSERT(result.m_contacts[0u] == flags);
+            for (u32 field = 0u; field < 6u; ++field) {
+                PPR_TEST_ASSERT(result.m_contacts[field] == result.m_contacts[6u + field]);
+            }
+        };
+
+        // Mask 14 contains (.5,.5) and has a boundary; a missing witness
+        // would incorrectly reject this interior query as flag 16.
+        const std::array<u32, 1u> boundary{14u};
+        const std::array<u32, 1u> solid{15u};
+        const TerrainView with_boundary{boundary, 1u, 1u, 5.5f, 6.5f};
+        const TerrainView without_boundary{solid, 1u, 1u, 5.5f, 6.5f};
+        compare(with_boundary, {}, {}, true, 0u);
+        compare(without_boundary, {}, {}, true, 16u);
+        compare(without_boundary, {}, {}, true, 0u, 0);
+        compare(without_boundary, {}, {}, true, 0u, 10'000'000, 2.0f);
+
+        GpuBodyBoundary body{};
+        body.m_shape.m_position_x = body.m_com_x = 6.0f;
+        body.m_shape.m_position_y = body.m_com_y = 7.0f;
+        body.m_shape.m_half_size_x = body.m_shape.m_half_size_y = 1.0f;
+        body.m_shape.m_rotation_degrees = 45.0f;
+        body.m_velocity_x = 2.0f;
+        body.m_angular_velocity = 0.25f;
+        compare(with_boundary, {&body, 1u}, {}, true, 0u);
+
+        body.m_shape.m_shape = EStaticShape::circle;
+        body.m_shape.m_radius = 1.0f;
+        compare(with_boundary, {&body, 1u}, {}, false, 0u);
+        body.m_shape.m_shape = EStaticShape::box;
+        body.m_velocity_x = std::nextafter(1048576.0f, std::numeric_limits<float>::infinity());
+        compare({}, {&body, 1u}, {}, false, 0u);
+
+        const GpuStaticShape shape{};
+        compare(without_boundary, {}, {&shape, 1u}, false, 16u);
+    };
+
+    PPR_UNIT_TEST (compact_terrain_gpu_decode_matches_wide_tables_masks_and_tile_bits) {
+        Fixture fixture;
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+        fixture.initialize(false);
+
+        for (const u32 width: {7u, 8u, 9u, 31u, 32u, 33u, 257u}) {
+            constexpr u32 height = 17u;
+            Array<u32> masks(width * height);
+            for (u32 y = 0u; y < height; ++y) {
+                for (u32 x = 0u; x < width; ++x) {
+                    masks[y * width + x] = ((x / 8u + y / 8u) % 3u) == 0u ? ((x + y) % 2u) * 15u : (x + y) % 16u;
+                }
+            }
+
+            const auto result = contactProbe(fixture, {masks, width, height}, {}, 0.0f, {}, 0, 0.0f, {}, {}, {}, true);
+            for (const u32 failed: result.m_codec)
+                PPR_TEST_ASSERT(failed == 0u);
+            PPR_TEST_ASSERT(result.m_errors[0u] == 0u);
+        }
+    };
 
     // ------------------------------------------------------------------
     // exact WGSL node conversion and strict accumulating conversion
@@ -1084,6 +1360,161 @@ namespace pP::tests::detail::MatterGpu {
     // opt-in diagnostic timing
     // ------------------------------------------------------------------
 
+    PPR_UNIT_TEST (deterministic_1024_sparse_dense_scene) {
+        const auto configured = config::getenvLookup("PPR_TEST_DENSE1024_ROOT");
+        if (not configured)
+            return;
+
+        std::error_code path_error;
+        const auto root = std::filesystem::canonical(*configured, path_error);
+        PPR_TEST_ASSERT(not path_error);
+        std::filesystem::path output;
+        for (u32 attempt = 0u; attempt < 4096u; ++attempt) {
+            const auto path = root / ("scene-" + std::to_string(attempt));
+            if (std::filesystem::create_directory(path, path_error)) {
+                output = path;
+                break;
+            }
+
+            PPR_TEST_ASSERT(not path_error);
+        }
+
+        PPR_TEST_ASSERT(not output.empty());
+        const auto configured_validation = config::getenvLookup("PPR_TEST_DENSE1024_VALIDATE");
+        const bool validation = configured_validation and *configured_validation == "1";
+        std::ofstream timing_log{output / "timing.log", std::ios::binary};
+        PPR_TEST_ASSERT(timing_log.is_open());
+        const auto timing_writer = [&](const Log::Entry &entry) {
+            if (not entry.m_message.empty()) {
+                std::println(timing_log, "{} {}", entry.m_message, entry.m_params);
+            }
+        };
+
+        PPR_TEST_ASSERT(not Log::flush(true));
+        const auto previous_level = Log::setMinimumVerboseLevel(Log::ELevel::emphasis);
+        const auto previous_writer = Log::setWriterPolicy(timing_writer);
+        PPR_DEFER {
+            const auto flushed = Log::flush(true);
+            Log::setWriterPolicy(previous_writer);
+            Log::setMinimumVerboseLevel(previous_level);
+            timing_log.flush();
+            PPR_TEST_ASSERT(not flushed and not timing_log.fail());
+        };
+
+        constexpr u32 edge = 1024u;
+        constexpr u32 particle_count = 13044u;
+        constexpr u32 ticks = 711u;
+        static_assert(sizeof(GpuParticle) == 88u);
+        const auto &clock = ITimerClock::steady();
+        Fixture fixture;
+        PPR_DEFER {
+            PPR_TEST_ASSERT(not fixture.m_solver.shutdown());
+            if (fixture.m_queue) {
+                const hal::ProfileScope queue_wait{"MatterGpu.Scene.QueueRetirement", hal::profile_blocking_category};
+                PPR_TEST_ASSERT(not make_error_code(fixture.m_queue->waitOnHost()));
+            }
+
+            fixture.shutdown();
+        };
+        fixture.initialize(true, edge, edge, validation, &clock);
+
+        Array<GpuParticle> initial(particle_count);
+        for (u32 row = 0u; row < particle_count; ++row) {
+            initial[row] = restParticle();
+            initial[row].m_position_x = 256.5f + static_cast<float>(row % 128u);
+            initial[row].m_position_y = 160.5f + static_cast<float>(row / 128u);
+        }
+
+        const auto masks = rectangleMasks(edge, edge, 128u);
+        PPR_TEST_ASSERT(not fixture.m_solver.prepareReplacement(
+            initial, {}, fixture.m_solver.accounting().m_epoch, {masks, edge, edge, 0.0f, 0.0f}));
+        fixture.m_solver.publishReplacement();
+        const auto profile = fixture.m_solver.profile();
+
+        const auto write = [&](const std::filesystem::path &name, const void *const data, const u64 bytes) {
+            std::ofstream stream{output / name, std::ios::binary};
+            PPR_TEST_ASSERT(stream.is_open());
+            stream.write(static_cast<const char *>(data), static_cast<std::streamsize>(bytes));
+            stream.close();
+            PPR_TEST_ASSERT(not stream.fail());
+        };
+
+        write("profile.bin", &profile, sizeof(profile));
+        write("terrain.bin", masks.data(), masks.size() * sizeof(u32));
+        write("initial.bin", initial.data(), initial.size() * sizeof(GpuParticle));
+        std::ofstream manifest{output / "manifest.txt", std::ios::binary};
+        std::ofstream status{output / "status.csv", std::ios::binary};
+        PPR_TEST_ASSERT(manifest.is_open() and status.is_open());
+        std::println(
+            manifest,
+            "scene=default-liquid-block-floor\ngrid_width={}\ngrid_height={}\nparticles={}\nrow_bytes={}\nrow_id=ordered_index\nsubsteps=8\niterations=2\ndelta_time={}\ncompleted_ticks={}\ncore_validation={}\ngpu_validation={}\nterrain_width={}\nterrain_height={}\nterrain_origin_x=0\nterrain_origin_y=0\nshapes=0\nbodies=0",
+            edge, edge, particle_count, sizeof(GpuParticle), profile.m_delta_time, ticks, validation, validation, edge,
+            edge);
+        std::println(status, "tick,device_epoch,error,flags,node,field,particle,body");
+
+        const auto capture = [&](const u32 completed_ticks) {
+            const auto rows = fixture.snapshot();
+            PPR_TEST_ASSERT(rows.size() == initial.size());
+            for (u32 row = 0u; row < rows.size(); ++row) {
+                const auto actual = std::bit_cast<std::array<u32, 22u>>(rows[row]);
+                const auto admitted = std::bit_cast<std::array<u32, 22u>>(initial[row]);
+                for (const float field: std::bit_cast<std::array<float, 22u>>(rows[row])) {
+                    PPR_TEST_ASSERT(std::isfinite(field));
+                }
+
+                for (const u32 field: {13u, 14u, 15u, 18u, 19u, 20u, 21u}) {
+                    PPR_TEST_ASSERT(actual[field] == admitted[field]);
+                }
+
+                if (completed_ticks == 0u)
+                    PPR_TEST_ASSERT(actual == admitted);
+            }
+
+            write(
+                "tick-" + std::to_string(completed_ticks) + ".particles.bin", rows.data(),
+                rows.size() * sizeof(GpuParticle));
+            std::println(manifest, "checkpoint={},{}", completed_ticks, fixture.m_solver.accounting().m_epoch);
+            manifest.flush();
+            PPR_TEST_ASSERT(not manifest.fail());
+        };
+
+        capture(0u);
+        for (u32 tick = 1u; tick <= ticks; ++tick) {
+            const u64 epoch = fixture.m_solver.accounting().m_epoch;
+            const auto submitted = fixture.m_solver.submitResidentTick(epoch, 8u, 2u);
+            if (submitted) {
+                std::println(
+                    stderr, "[dense1024] submit failed tick={} epoch={} error={}", tick, epoch, submitted.value());
+            }
+
+            PPR_TEST_ASSERT(not submitted);
+            PPR_TEST_ASSERT(not fixture.m_solver.drain());
+            const auto complete = fixture.m_solver.pollTick();
+            const auto failure = fixture.m_solver.failure();
+            std::println(
+                status, "{},{},{},{},{},{},{},{}", tick, epoch, complete ? 0 : complete.error().value(),
+                failure.m_flags, failure.m_node, failure.m_field, failure.m_particle, failure.m_body);
+            status.flush();
+            PPR_TEST_ASSERT(not status.fail());
+            PPR_TEST_ASSERT(complete and *complete);
+            PPR_TEST_ASSERT(not failure.m_cause and failure.m_flags == 0u);
+
+            fixture.m_solver.publishTick();
+            PPR_TEST_ASSERT(fixture.m_solver.accounting().m_epoch == epoch + 1u);
+            if (tick == 80u or tick == ticks)
+                capture(tick);
+        }
+
+        const auto timing = fixture.m_solver.inspectTimingForTest();
+        PPR_TEST_ASSERT(not timing.m_error and timing.m_completed_samples == ticks);
+        std::println(manifest, "device_bytes={}", fixture.m_solver.accounting().m_device_bytes);
+        manifest.close();
+        status.close();
+        PPR_TEST_ASSERT(not manifest.fail() and not status.fail());
+        std::println(
+            stderr, "[dense1024] completed_ticks={} particles={} validation={}", ticks, particle_count, validation);
+    };
+
     PPR_UNIT_TEST (opt_in_stage_timing_follows_completed_fence_and_epoch) {
         Fixture fixture;
         GpuSolver observed;
@@ -1557,7 +1988,7 @@ namespace pP::tests::detail::MatterGpu {
             hot->getFieldByIndex(5u)->getOffset() == PPR_OFFSETOF(ParticleWrite, m_deformation_displacement));
         PPR_TEST_ASSERT(hot->getFieldByIndex(9u)->getOffset() == PPR_OFFSETOF(ParticleWrite, m_enabled));
         PPR_TEST_ASSERT(cold->getFieldByIndex(0u)->getOffset() == PPR_OFFSETOF(ParticleReadonly, m_mass));
-        PPR_TEST_ASSERT(cold->getFieldByIndex(4u)->getOffset() == PPR_OFFSETOF(ParticleReadonly, m_color_r));
+        PPR_TEST_ASSERT(cold->getFieldByIndex(3u)->getOffset() == PPR_OFFSETOF(ParticleReadonly, m_color_r));
 
         auto *const sparse = find("g_sparse");
         auto *const page_index = find("g_pageIndexA");
@@ -1574,7 +2005,11 @@ namespace pP::tests::detail::MatterGpu {
         auto *const body = find("g_bodies");
         auto *const environment = find("g_environment");
         auto *const contour = find("g_contour_cases");
-        PPR_TEST_ASSERT(body != nullptr and environment != nullptr and contour != nullptr);
+        auto *const points = find("g_contour_points");
+        auto *const boundary_tiles = find("g_terrain_boundary_tiles");
+        PPR_TEST_ASSERT(body != nullptr and environment != nullptr and contour != nullptr and points != nullptr);
+        PPR_TEST_ASSERT(boundary_tiles != nullptr);
+        PPR_TEST_ASSERT(boundary_tiles->getStride(SLANG_PARAMETER_CATEGORY_UNIFORM) == sizeof(u32));
         PPR_TEST_ASSERT(find("g_reactions") == nullptr and find("g_reaction_budget") == nullptr);
         PPR_TEST_ASSERT(body->getStride(SLANG_PARAMETER_CATEGORY_UNIFORM) == sizeof(GpuBodyBoundary));
         PPR_TEST_ASSERT(body->getFieldByIndex(1u)->getOffset() == PPR_OFFSETOF(GpuBodyBoundary, m_com_x));
@@ -1583,7 +2018,8 @@ namespace pP::tests::detail::MatterGpu {
         PPR_TEST_ASSERT(environment->getFieldByIndex(7u)->getOffset() == PPR_OFFSETOF(GpuEnvironment, m_reserved));
         PPR_TEST_ASSERT(
             environment->getFieldByIndex(4u)->getOffset() == PPR_OFFSETOF(GpuEnvironment, m_terrain_origin_x));
-        PPR_TEST_ASSERT(contour->getStride(SLANG_PARAMETER_CATEGORY_UNIFORM) == sizeof(math::ContourCase));
+        PPR_TEST_ASSERT(contour->getStride(SLANG_PARAMETER_CATEGORY_UNIFORM) == sizeof(PackedContourCase));
+        PPR_TEST_ASSERT(points->getStride(SLANG_PARAMETER_CATEGORY_UNIFORM) == sizeof(u32));
 
         shader::SharedModule checks;
         PPR_TEST_ASSERT(not fixture.m_shaders->loadModuleFromFile(
@@ -1926,12 +2362,129 @@ namespace pP::tests::detail::MatterGpu {
         PPR_TEST_ASSERT(result.m_node[0u] == 1'250'000 and result.m_node[1u] == 0);
     };
 
+    PPR_UNIT_TEST (wave_boundary_search_matches_serial_for_full_mixed_groups) {
+        Fixture fixture;
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+        fixture.initialize(false);
+        PPR_TEST_ASSERT(fixture.m_rhi->getDevice().hasFeature(rhi::Feature::WaveOps));
+
+        std::array<std::array<float, 2u>, 64u> points{};
+        std::array<u32, 64u> enabled{};
+        u32 minimum_width = 128u;
+        u32 maximum_width = 0u;
+        const auto compare_group = [&](const TerrainView terrain, const u32 expected_flags) {
+            const auto result = contactProbe(fixture, terrain, {}, 0.0f, {}, 10'000'000, 0.0f, {}, points, enabled);
+            PPR_TEST_ASSERT(result.m_wave_contacts.size() == 64u * 13u + 12u);
+            for (std::size_t lane = 0u; lane < 64u; ++lane) {
+                const std::size_t at = lane * 13u;
+                for (std::size_t field = 0u; field < 6u; ++field) {
+                    PPR_TEST_ASSERT(result.m_wave_contacts[at + field] == result.m_wave_contacts[at + 6u + field]);
+                }
+
+                const u32 width = result.m_wave_contacts[at + 12u];
+                PPR_TEST_ASSERT(width >= 4u and width <= 128u);
+                minimum_width = std::min(minimum_width, width);
+                maximum_width = std::max(maximum_width, width);
+            }
+
+            constexpr std::size_t errors_at = 64u * 13u;
+            PPR_TEST_ASSERT(result.m_wave_contacts[errors_at] == expected_flags);
+            for (std::size_t field = 0u; field < 6u; ++field) {
+                PPR_TEST_ASSERT(
+                    result.m_wave_contacts[errors_at + field] == result.m_wave_contacts[errors_at + 6u + field]);
+            }
+
+            return result;
+        };
+
+        // Masked participants remain helpers. Pending lanes mix long searches,
+        // tile edges, empty/outside queries and a rejected nonfinite coordinate.
+        const auto deep_masks = rectangleMasks(256u, 200u, 180u);
+        const std::array<std::array<float, 2u>, 8u> mixed{
+            {{132.0f, 83.5f}, {131.5f, 91.0f}, {4.25f, 3.75f}, {-1.0f, 80.0f}, {131.5f, 193.0f},
+                {std::numeric_limits<float>::quiet_NaN(), 80.0f}, {258.75f, 182.75f}, {204.0f, 83.5f}}};
+        for (std::size_t lane = 0u; lane < points.size(); ++lane) {
+            points[lane] = mixed[lane % mixed.size()];
+            enabled[lane] = lane % 5u != 0u ? 1u : 0u;
+        }
+
+        const auto deep = compare_group({deep_masks, 256u, 200u, 3.5f, 3.0f}, 0u);
+        PPR_TEST_ASSERT(deep.m_wave_contacts[13u] == 1u);
+
+        // Owners near the end of the cohort exercise uniform dynamic broadcasts
+        // and exact equal-distance nearest-boundary tie selection.
+        const auto tie_masks = rectangleMasks(17u, 17u, 16u);
+        points.fill({12.0f, 11.5f});
+        enabled.fill(0u);
+        enabled[31u] = 1u;
+        enabled[63u] = 1u;
+        compare_group({tie_masks, 17u, 17u, 3.5f, 3.0f}, 0u);
+
+        const auto edge_masks = rectangleMasks(19u, 25u, 17u);
+        const std::array<std::array<float, 2u>, 4u> edges{
+            {{11.0f, 11.5f}, {11.5f, 18.5f}, {21.75f, 19.75f}, {4.25f, 3.75f}}};
+        for (std::size_t lane = 0u; lane < points.size(); ++lane)
+            points[lane] = edges[lane % edges.size()];
+
+        enabled.fill(1u);
+        compare_group({edge_masks, 19u, 25u, 3.5f, 3.0f}, 0u);
+
+        // Exactly one malformed query makes all six first-error words stable.
+        const std::array<u32, 1u> solid{15u};
+        points.fill({4.0f, 3.5f});
+        enabled.fill(0u);
+        enabled[31u] = 1u;
+        compare_group({solid, 1u, 1u, 3.5f, 3.0f}, 16u);
+
+        enabled.fill(1u);
+        compare_group({}, 0u);
+        std::println(
+            "[terrain-wave-check] threads=64 wave_lanes_min={} wave_lanes_max={}", minimum_width, maximum_width);
+    };
+
     PPR_UNIT_TEST (terrain_endpoint_response_and_complete_boundary_search) {
         Fixture fixture;
         PPR_DEFER {
             fixture.shutdown();
         };
         fixture.initialize(false);
+
+        // Compare every Contact field bit-for-bit with the frozen ring search.
+        // The first case crosses more than 76 empty rings. The remaining cases
+        // cover tile boundaries, partial edge tiles, out-of-world ring spans,
+        // and equal nearest distances whose winner depends on traversal order.
+        const auto compare_search = [&](const u32 width, const u32 height, const u32 solid_top,
+                                        const std::span<const std::array<float, 2u>> queries) {
+            const auto reference_masks = rectangleMasks(width, height, solid_top);
+            const TerrainView reference_terrain{reference_masks, width, height, 3.5f, 3.0f};
+            for (const auto &local: queries) {
+                const std::array<float, 2u> point{local[0] + 3.5f, local[1] + 3.0f};
+                const auto result = compareTerrainSearch(fixture, reference_terrain, point);
+                PPR_TEST_ASSERT(result.m_errors[0u] == 0u);
+                PPR_TEST_ASSERT(result.m_contacts[0u] == 1u);
+                for (std::size_t field = 0u; field < 6u; ++field) {
+                    PPR_TEST_ASSERT(result.m_contacts[field] == result.m_contacts[field + 6u]);
+                }
+            }
+        };
+
+        const std::array<std::array<float, 2u>, 2u> long_queries{{{128.5f, 80.5f}, {128.0f, 88.0f}}};
+        compare_search(256u, 200u, 180u, long_queries);
+
+        const std::array<std::array<float, 2u>, 4u> edge_queries{
+            {{7.5f, 8.5f}, {8.0f, 15.5f}, {18.25f, 16.75f}, {0.75f, 0.75f}}};
+        compare_search(19u, 25u, 17u, edge_queries);
+
+        const std::array<std::array<float, 2u>, 1u> tie_queries{{{8.5f, 8.5f}}};
+        compare_search(17u, 17u, 16u, tie_queries);
+
+        // Retain the non-power-of-two depth-six geometry as an exact GPU
+        // old/new Contact comparison, without a CPU division-parity premise.
+        const std::array<std::array<float, 2u>, 1u> depth_six_queries{{{9.0f, 9.5f}}};
+        compare_search(24u, 24u, 15u, depth_six_queries);
+
         const auto masks = rectangleMasks(8u, 4u, 2u);
         const TerrainView terrain{masks, 8u, 4u, 3.0f, 5.0f};
         for (const float dy: {0.0f, -0.25f, 0.25f}) {
@@ -1979,6 +2532,20 @@ namespace pP::tests::detail::MatterGpu {
         PPR_TEST_ASSERT(candidate.m_position_x == 12.5f and candidate.m_position_y == 12.5f);
         PPR_TEST_ASSERT(candidate.m_displacement_x == 0.0f);
         PPR_TEST_ASSERT(candidate.m_displacement_y == gravity + 8.0f);
+
+        // A replacement with the same dimensions moves its boundary to a new
+        // tile row. Depth four retains the original power-of-two normalization
+        // premise; the old table has no boundary in the new interior tile.
+        const auto changed_masks = rectangleMasks(24u, 24u, 13u);
+        PPR_TEST_ASSERT(not fixture.m_solver.prepareReplacement(
+            {&particle, 1u}, {}, fixture.m_solver.accounting().m_epoch, {changed_masks, 24u, 24u, 3.5f, 3.0f}));
+        fixture.m_solver.publishReplacement();
+        fixture.finishOneSubstep();
+
+        const GpuParticle changed = fixture.publishSnapshot(fixture.m_solver.accounting().m_epoch)[0];
+        PPR_TEST_ASSERT(changed.m_position_x == 12.5f and changed.m_position_y == 12.5f);
+        PPR_TEST_ASSERT(changed.m_displacement_x == 0.0f);
+        PPR_TEST_ASSERT(changed.m_displacement_y == gravity + 4.0f);
     };
 
     PPR_UNIT_TEST (moving_body_static_limit_translation_rotation_and_one_way_contact) {
@@ -2133,16 +2700,12 @@ namespace pP::tests::detail::MatterGpu {
         constexpr u64 kPageEdge = (kEdge + 7u) / 8u;
         constexpr u64 kPageCount = kPageEdge * kPageEdge;
         constexpr u64 kLookupBytes = 8u * kBucketCount + 16u * kPageCount;
-        static_assert(kRowBytes == 96u and kLookupBytes == 7'953'552u);
+        static_assert(kRowBytes == 88u and kLookupBytes == 7'953'552u);
 
         // Independent allocation arithmetic, including every zero-row dummy.
         // No solver accounting subtotal or sparseCapacity result is the oracle.
-        constexpr u64 kFixedBytes = kLookupBytes +
-                                    8u * sizeof(math::ContourPoint) +
-                                    16u * sizeof(math::ContourCase) +
-                                    sizeof(u32) +
-                                    sizeof(GpuBodyBoundary) +
-                                    sizeof(GpuStaticShape);
+        constexpr u64 kFixedBytes =
+            kLookupBytes + sizeof(PackedContourTables) + sizeof(u32) + sizeof(GpuBodyBoundary) + sizeof(GpuStaticShape);
         constexpr auto storageBytes = [=](const u64 count) {
             const u64 rows = std::max<u64>(1u, count);
             const u64 buckets = std::min(count, kBucketCount);
@@ -2167,9 +2730,9 @@ namespace pP::tests::detail::MatterGpu {
                                                  12u * (256u * 6u * kAdmitted - 1u) +
                                                  16u * (kAdmitted - 1u) +
                                                  4u * (kAdmitted - 1u));
-        static_assert(kEmptyPeak == 15'910'400u);
-        static_assert(kProjectedPeak == 503'338'104u);
-        static_assert(kExpectedGrowth == 487'427'704u and kProjectedPeak - kEmptyPeak == kExpectedGrowth);
+        static_assert(kEmptyPeak == 15'908'200u);
+        static_assert(kProjectedPeak == 502'918'528u);
+        static_assert(kExpectedGrowth == 487'010'328u and kProjectedPeak - kEmptyPeak == kExpectedGrowth);
 
         Fixture fixture;
         PPR_DEFER {
@@ -2221,15 +2784,19 @@ namespace pP::tests {
         static const UnitTest group = UnitTest::Named("matter_gpu") / [](UnitTest::IRun &run) {
             run.recurse({
                 detail::MatterGpu::node_wgsl_conversion_preserves_endpoints_and_scatter_rejection,
+                detail::MatterGpu::bootstrap_grid_checks_preserve_fast_and_fallback_error_acceptance,
                 detail::MatterGpu::sparse_capacity_layout_and_independent_admission_bounds,
                 detail::MatterGpu::sparse_gpu_aprons_publish_unique_flat_keys_and_group_rows,
                 detail::MatterGpu::sparse_generations_poison_capacity_and_cross_group_budget_are_transactional,
                 detail::MatterGpu::opt_in_stage_timing_follows_completed_fence_and_epoch,
+                detail::MatterGpu::deterministic_1024_sparse_dense_scene,
                 detail::MatterGpu::initialized_rest_gravity_and_publication,
                 detail::MatterGpu::all_materials_preserve_inventory_and_publish_finite_state_at_k2,
                 detail::MatterGpu::k2_only_rejects_other_counts_before_work,
                 detail::MatterGpu::guardian_blocks_normal_and_halves_tangent_analytically,
                 detail::MatterGpu::split_device_rows_pack_and_unpack_every_semantic_field_by_name,
+                detail::MatterGpu::lossless_terrain_codecs_preserve_tables_tails_and_reject_invalid_input,
+                detail::MatterGpu::compact_terrain_gpu_decode_matches_wide_tables_masks_and_tile_bits,
                 detail::MatterGpu::reflected_scalar_protocol_and_source_helpers,
                 detail::MatterGpu::resident_status_and_frozen_snapshot_preserve_full_state_without_feedback,
                 detail::MatterGpu::resident_append_copies_the_current_prefix_and_uploads_only_new_rows,
@@ -2238,6 +2805,7 @@ namespace pP::tests {
                 detail::MatterGpu::strict_conversion_and_collection_retry_preserve_cause,
                 detail::MatterGpu::prepared_replacement_accounts_peak_and_freezes_admission,
                 detail::MatterGpu::terrain_endpoint_response_and_complete_boundary_search,
+                detail::MatterGpu::wave_boundary_search_matches_serial_for_full_mixed_groups,
                 detail::MatterGpu::moving_body_static_limit_translation_rotation_and_one_way_contact,
                 detail::MatterGpu::body_admission_rejection_and_same_epoch_contact_publication,
                 detail::MatterGpu::predicted_body_slices_select_distinct_substep_rows,
