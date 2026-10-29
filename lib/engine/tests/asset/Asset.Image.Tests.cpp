@@ -544,7 +544,8 @@ namespace pP::tests::detail {
             const Expected<image::ImageAsset> reinterpreted = image::decodeToBlocks(
                 plain.getBufferData(), ".ktx2", image::EBlockTag::bc1, image::ImageDecodeDesc{});
             PPR_TEST_ASSERT(not reinterpreted.has_value());
-            PPR_TEST_ASSERT(reinterpreted.error() == std::errc::invalid_argument);
+            // Valid RGBA storage cannot serve compressed blocks without unsupported recompression.
+            PPR_TEST_ASSERT(reinterpreted.error() == std::errc::function_not_supported);
         };
 
         PPR_UNIT_TEST (block_geometry_math) {
