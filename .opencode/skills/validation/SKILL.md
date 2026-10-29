@@ -10,7 +10,7 @@ description: >
 ## Contract
 
 Validation is execution-focused and orchestrator-owned. Apart from the required
-`scripts/Format-Cpp.ps1 -Mode Fix` pass, it does not edit the working tree. It
+`scripts/format_cpp.py --mode fix` pass, it does not edit the working tree. It
 selects and runs the requested checks, records exact results, and treats the
 `code-reviewer` verdict as a release gate rather than duplicating review
 dimensions. In-plan implementation defects go to `@fixer`; unexplained compiler
@@ -81,7 +81,7 @@ AGENTS.md's delegated-implementation contract. Only affected checks are repeated
   explicit request or concrete compatibility, optimization, or toolchain risk.
 - **Completed behavior/local phase:** one loop of all affected suites and one
   independent review, reusing applicable earlier results. Cross-cutting shared
-  app/render-lane transaction changes require the full twelve-entry matrix,
+  app/render-lane transaction changes require the full registered CTest matrix,
   including asset and both shipped-profile validators; a bounded app/UI edit
   alone does not trigger it. Define completion at a coherent behavior boundary,
   not at every tool call, file edit, or conversational turn.
@@ -148,19 +148,22 @@ Applies whenever the change set includes a C++ file. The repository-root
 `.clang-format` is the canonical mechanical formatting authority; the CLion project
 style is IDE convenience only. Mechanical formatting goes through one script, which
 applies clang-format to changed lines only and enforces three invariants: the
-ASCII code token stream is unchanged, the result is a fixed point within a
-bounded pass budget, and in Check mode the working tree already holds the
+case-sensitive code token stream (including literal contents) is unchanged, the
+result is a fixed point within a bounded pass budget, and in Check mode the working tree already holds the
 canonical output.
 
 - Fix, once over the change set:
-  `pwsh -NoProfile -File scripts/Format-Cpp.ps1 -Mode Fix`
+  `python scripts/format_cpp.py --mode fix`
 - Gate:
-  `pwsh -NoProfile -File scripts/Format-Cpp.ps1` (or `-Base <merge-base>` in CI)
-- For an explicit `-Paths` handoff, invoke the script from PowerShell with a
-  real string array, such as paths read from the handoff file. Do not pass many
-  native `pwsh -File` arguments expecting them to bind to one array parameter;
-  later arguments can bind to other parameters. The separate semantic-style
-  script uses its documented joined `-Files` argument instead.
+  `python scripts/format_cpp.py` (or `--base <merge-base>` in CI)
+- Both Windows and Linux use Python 3.10+ plus clang-format on PATH. `python`
+  denotes that interpreter; use `python3` or `py -3` if needed. Preflight versions
+  before C++ edits. PowerShell availability has no bearing on these gates.
+- For explicit whole-file scope use `--paths a.cpp b.cpp`; quote each path that
+  contains spaces. Default scope is changed lines against `--base` (HEAD by
+  default), including untracked C++ sources in full. Do not pass `--paths` for
+  changed-line scope. `--all --mode fix --jobs 8` is a deliberate full-source
+  audit, not a routine gate.
 - Exit 0 is required. `DRIFT` means lines are not canonical, `UNSAFE` means the
   formatter would change the code token stream, and `UNSTABLE` means no fixed
   point within the pass budget. Each class blocks validation and is routed to the
@@ -185,17 +188,17 @@ This gate is deterministic only. Design-level readability is not, and lives with
 `code-reviewer`; validation does not duplicate that pass.
 
 - Run the tripwire on the touched files only, never repo-wide:
-  `pwsh -NoProfile -File scripts/Check-SemanticStyle.ps1 -Files '<a.cpp,b.cpp>'`.
-  `pwsh -File` cannot pass a real array, so pass one comma/semicolon-joined
-  argument. An unresolvable path exits 2 rather than reporting a false clean.
+  `python scripts/check_semantic_style.py --files a.cpp b.cpp`.
+  Pass paths as separate arguments (comma/semicolon-joined lists are also
+  accepted). An unresolvable path exits 2 rather than reporting a false clean.
 - Blocking classes are A-STRANDED, B-OP, and C-LEADING. B-CMP, C-DETACHED, and
   D-DENSE are advisory: B-CMP cannot separate template brackets such as `view<T>`
   from a genuine `x<max`, C-DETACHED brace placement is owned by the formatter,
   and D-DENSE is a blank-line count heuristic that must not become a blocking
   numeric line limit. Exit 1 on blocking findings, exit 0 on advisory-only.
-- Add `-Strict` only for a deliberate full audit; it also fails on advisory hits.
+- Add `--strict` only for a deliberate full audit; it also fails on advisory hits.
   Default output contains blocker details and advisory counts; use
-  `-ShowAdvisories` for detailed advisory inspection. Counts do not prove semantic
+  `--show-advisories` for detailed advisory inspection. Counts do not prove semantic
   readability, and a single arbitrary blank line is not a readability fix.
 - Route blocking findings to the orchestrator for a bounded fix, then repeat the
   formatting and style gates.
@@ -217,7 +220,7 @@ states the procedure and how those results enter the validation record.
   sequentially; never batch or run inspections concurrently. Every
   `execute_tool` call (e.g. `command="open_file_in_editor ..."` /
   `command="get_file_problems ..."`) must retain
-  `projectPath="E:/Code/ppr"`.
+  the discovered project path on the IDE host (which may differ from the agent host).
 - Wait for CLion indexing, project-model, and resolve-configuration activity to
   settle. There is no MCP index-ready endpoint; the IDE indexing indicator is
   authoritative. Do not inspect during active scans or model updates.
@@ -236,8 +239,8 @@ states the procedure and how those results enter the validation record.
   inspection-unavailable/skipped, include the timeout evidence, and do not
   claim it passed. Do not automatically substitute direct clang-tidy.
 - CLion/JetBrains/ReSharper remains the primary inspection gate. Direct
-  clang-tidy does not replace it here because module jobs fail with the current
-  MSVC/C++23 module setup. Do not disable the broad profile or clang-tidy first;
+  clang-tidy does not replace it here because module jobs have failed with the recorded
+  MSVC/C++23 module setup; that observation does not establish Linux tool support. Do not disable the broad profile or clang-tidy first;
   profile reduction is only a later fallback for clean, settled inspections that
   remain slow.
 

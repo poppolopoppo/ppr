@@ -122,7 +122,7 @@ hierarchy. Tiny umbrella/forwarding files need no invented section.
 ## What validation establishes
 
 The author supplies paragraphs, declaration groups, and headers in the first
-implementation. `Format-Cpp.ps1` handles mechanical layout; the lexical style
+implementation. `format_cpp.py` handles mechanical layout; the lexical style
 checker catches its defined token patterns. Neither can infer an algorithm's
 logical steps or certify meaningful section names. A missing boundary or header
 remains a defect after both scripts pass. Inspect complete touched bodies and
