@@ -59,7 +59,7 @@ replays a commit-plan payload.
 2. Orchestrator inline secret scan of the staged diff before drafting;
    on an actual credential hit stop and require removal and rotation
    before any draft:
-   ```powershell
+   ```sh
    git diff --cached -p | rg -i '(api[_-]?key|secret|password|token|credential|bearer|private[_-]?key)' -C 1
    ```
 3. Orchestrator inline heuristic split (no `@oracle`, no `@explorer`).
@@ -79,7 +79,7 @@ grouping judgment only. Tier 1 never writes `.slim/commit-plan.json`.
 
 ## Tier 2 — over-cap (over 15 paths or 204800 bytes `git diff --cached` size heuristic)
 
-1. Batch discovery: run the bundled [Get-CommitPlanBatches.ps1](scripts/Get-CommitPlanBatches.ps1), present at
+1. Batch discovery: run the bundled [commit_plan.py discover](scripts/commit_plan.py), present at
    most 8 chunks. If too fragmented (>8 chunks, single-file splinters,
    or chunks violating the atomicity heuristic), the orchestrator merges
    small batches into bigger logical commits inline via
@@ -96,8 +96,8 @@ grouping judgment only. Tier 1 never writes `.slim/commit-plan.json`.
    or obtain approval once, then commit one-by-one in logical order per
    commit-path semantics. Stop on first failure (hook, conflict,
    error): abort the sequence, report remaining uncommitted.
-4. Verified replay only via the bundled [Invoke-CommitPlan.ps1](scripts/Invoke-CommitPlan.ps1) on explicit
-   user request, never silently. [Build-CommitPlan.ps1](scripts/Build-CommitPlan.ps1) builds
+4. Verified replay only via the bundled [commit_plan.py replay](scripts/commit_plan.py) on explicit
+   user request, never silently. [commit_plan.py build](scripts/commit_plan.py) builds
    the `.slim/commit-plan.json` replay payload; the bundled replay script
    executes that verified payload. Tier 2 writes `.slim/commit-plan.json`
    only through the bundled builder as part of an explicitly
@@ -111,25 +111,79 @@ Markdown links under `scripts/` and `references/` are relative to this skill's
 directory, not the repository root. Run helpers from the repository root so Git
 and `.slim/` paths resolve correctly; pass the full repository-relative script path:
 
-```powershell
-pwsh -NoProfile -File .opencode/skills/git-commit-planner/scripts/Get-CommitPlanBatches.ps1
+```sh
+python .opencode/skills/git-commit-planner/scripts/commit_plan.py discover
 ```
 
 Discovery defaults to staged changes and does not mutate the index. Its JSON
-describes path/byte batches, not semantic commit boundaries. `-AllLocal` also
+describes path/byte batches, not semantic commit boundaries. `--all-local` also
 reads unstaged tracked changes and rejects matching untracked files; do not use
 it as a substitute for staging the authorized scope. The helper's per-unit caps
 may reject a large indivisible file/rename; ordinary commit grouping can proceed
 inline because those caps are artifact limits, not a limit on committing work.
 
-The optional builder and replay scripts also live under
-`.opencode/skills/git-commit-planner/scripts/` and require PowerShell 7. Before
-execution, verify the selected helper exists. A missing helper is a broken skill
+All helper commands use Python 3.10+ and Git on both Windows and Linux;
+PowerShell is not required. Here `python` means the Python 3.10+ interpreter
+(`python3` on Linux or `py -3` on Windows if needed). Before execution, verify
+the helper exists and check the interpreter version. A missing helper is a broken skill
 reference: report it, locate the bundled resource, and correct the reference;
 do not invent a repository-root path or claim it was deleted without history.
-For an explicitly requested replay, inspect the builder's parameters and schema,
-build the payload, verify/dry-run it, and supply the exact verified plan ID for
-execution. Ordinary commits do not require replay artifacts.
+For an explicitly requested replay, inspect the parameters and schema below, build the payload, verify/dry-run it,
+and supply the exact verified plan ID for execution. Ordinary commits do not
+require replay artifacts.
+
+## Python helper interface
+
+Use `discover --paths path/to/file path/to/directory` for a literal selection;
+quote paths containing spaces. Discovery emits up to eight candidates without
+changing the index. Rename/copy endpoints stay together. Grouping JSON must list
+exact file paths (both endpoints for renames), rather than directory selections:
+
+```json
+{
+  "commits": [
+    {
+      "files": ["path/to/file.cpp"],
+      "component": "component",
+      "subject": "update the behavior",
+      "body": "Explain why the change is needed.",
+      "content_mode": "staged"
+    }
+  ]
+}
+```
+
+`body` is optional; authored paragraph breaks and trailer records are preserved.
+`content_mode` defaults to `staged`; `all-local` explicitly captures tracked
+working-tree content against HEAD and rejects matching untracked files. Never
+switch modes to circumvent staged-only authorization. Optional
+`discovery_selection.total_batch_count` carries the selected discovery count.
+The schema-v4 plan records HEAD, branch, index fingerprint, ordered messages,
+approved/touched paths, exact base64 patches and SHA-256 payload hashes.
+
+For an explicitly requested verified replay, run these commands in order:
+
+```sh
+python .opencode/skills/git-commit-planner/scripts/commit_plan.py build --grouping-json .slim/grouping.json
+python .opencode/skills/git-commit-planner/scripts/commit_plan.py verify --plan-json .slim/commit-plan.json
+python .opencode/skills/git-commit-planner/scripts/commit_plan.py replay --plan-json .slim/commit-plan.json --dry-run
+```
+
+Only after replay authorization, execute `replay --plan-json
+.slim/commit-plan.json --confirmed-plan-id <verified-sha256>`. The ID hashes the
+exact plan bytes. A changed HEAD, branch, index fingerprint or selected content
+requires a new plan; verification alone does not establish freshness. Execution
+uses an isolated temporary index, retains unrelated staged content and unstaged
+hunks, and runs normal Git hooks. It stops at the first failure, reports completed
+commit hashes and final status, and retains a failed replay index for diagnosis.
+Completed commits are not rolled back. Successful `all-local` steps synchronize
+only their selected paths in the original index. Grouping inputs are retained
+when building a plan. Discovery/verification never commit.
+
+Run helper regression tests with `python -m unittest discover -s scripts/tests
+-p test_commit_plan.py -v`. Tests create disposable repositories; they never
+commit or alter the index in the developer checkout. Native Windows execution
+needs a Windows host; the executable-hook fixture is POSIX-specific.
 
 ## Routing
 
