@@ -1,0 +1,13 @@
+diff --git a/src/x11_monitor.c b/src/x11_monitor.c
+--- a/src/x11_monitor.c
++++ b/src/x11_monitor.c
+@@ -137,6 +137,9 @@ void _glfwPollMonitorsX11(void)
+                 if (disconnected[j] &&
+                     disconnected[j]->x11.output == sr->outputs[i])
+                 {
++                    // RandR can move a retained output to another CRTC.
++                    // Subsequent mode/position queries must use its current ID.
++                    disconnected[j]->x11.crtc = oi->crtc;
+                     disconnected[j] = NULL;
+                     break;
+                 }

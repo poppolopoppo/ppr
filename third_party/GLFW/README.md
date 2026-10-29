@@ -3,7 +3,7 @@
 Upstream: https://github.com/glfw/glfw (main website with changelogs: https://www.glfw.org/)
 
 Version: **3.4** — resolved by the vcpkg manifest at the pinned baseline; the
-installed port is `glfw3 3.4#1` (`#1` is the vcpkg port revision). There is no
+local overlay port is `glfw3 3.4#2` (based on baseline revision `#1`). There is no
 CPM fallback for GLFW: `cmake/external/GLFW.cmake` only runs
 `find_package(glfw3 REQUIRED CONFIG)`, so builds rely on the vcpkg manifest
 (or a system config package).
@@ -40,3 +40,31 @@ The preserved file is the installed vcpkg notice (`share/glfw3/copyright`).
   (`WindowHandle` keying) via the platform-owned `Window`.
 - Gamepad rumble is not supported (upstream GLFW limitation recorded in the
   GLFW backend map).
+
+## Local X11 fixes
+
+`vcpkg-configuration.json` selects `cmake/ports/glfw3`, a copy of the pinned
+baseline port with `x11-refresh-crtc.patch` and
+`x11-visibility-timeout.patch`. The source revision, download hash,
+features and dependency graph stay the same. The copied port retains its MIT
+notice in `cmake/ports/glfw3/LICENSE.vcpkg.txt`.
+
+RandR can reassign the CRTC of a retained output. GLFW 3.4 matches existing
+monitors by output ID but leaves their cached CRTC unchanged. Refresh that ID
+before the matched-monitor branch returns, so mode/position queries use the
+current identity. The patch does not fabricate a disconnect or swallow X errors.
+
+A native GDB probe invalidates only the diagnostic process's cached CRTC, calls
+`_glfwPollMonitorsX11`, and checks that it recovers the live output's CRTC. No
+desktop topology changes are needed. Baseline and patched results are recorded
+in `out/validation/particles-runtime-fixes-20261029/`. The original intermittent
+`BadRRCrtc` has not been reproduced on the current desktop; the stale-cache
+defect is independently reproduced.
+
+The visibility wait previously decremented its 100 ms allowance only inside
+`poll`. An unrelated queued X11 event makes `XPending` return immediately, so
+that loop can spin indefinitely when no matching VisibilityNotify arrives.
+Measure total elapsed time using GLFW's existing timer for the whole wait,
+including the queued-event path. The existing 100 ms limit and event handling
+remain unchanged. A second native probe uses an unmapped diagnostic window and
+one unrelated queued event; it must return false instead of spinning.

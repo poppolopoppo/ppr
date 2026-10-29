@@ -1,0 +1,23 @@
+--- a/src/x11_window.c
++++ b/src/x11_window.c
+@@ -139,13 +139,17 @@
+ static GLFWbool waitForVisibilityNotify(_GLFWwindow* window)
+ {
+     XEvent dummy;
+-    double timeout = 0.1;
++    const uint64_t base = _glfwPlatformGetTimerValue();
++    const uint64_t frequency = _glfwPlatformGetTimerFrequency();
+-
++
+     while (!XCheckTypedWindowEvent(_glfw.x11.display,
+                                    window->x11.handle,
+                                    VisibilityNotify,
+                                    &dummy))
+     {
+-        if (!waitForX11Event(&timeout))
++        // Unrelated queued events must also consume the visibility deadline.
++        double timeout = 0.1 - (_glfwPlatformGetTimerValue() - base) /
++            (double) frequency;
++        if (timeout <= 0.0 || !waitForX11Event(&timeout))
+             return GLFW_FALSE;
+     }

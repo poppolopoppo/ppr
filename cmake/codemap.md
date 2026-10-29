@@ -8,6 +8,11 @@ Sets up C++23 modules, compiler toolchains, sanitizers, and external dependency 
 
 ## Design
 
+- `ports/glfw3` overlays the pinned vcpkg GLFW 3.4 port to refresh retained
+  X11 monitor CRTC identities after RandR changes and bound visibility waits
+  even with unrelated queued events; `vcpkg-configuration.json`
+  selects it without changing the dependency baseline.
+
 - Linux Clang executables load libc++/libc++abi before codec dependencies through
   `Compilers.cmake`, avoiding mixed exception runtime entry points. Linux ASan
   test/launch policy and narrowly scoped driver exclusions are documented in

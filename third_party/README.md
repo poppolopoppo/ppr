@@ -31,7 +31,7 @@ Sources of dependency versions:
 | [Dear ImGui](DearImGui/README.md) | `v1.93.0-docking` | CPM source build | `engine.app` (`imgui.base` static + UI layer), game UI |
 | [imgui-module bindings](imgui-module/README.md) | `v1.93.0` | CMake download into shared dir | `imgui` C++20 module target |
 | [toml++](tomlplusplus/README.md) | 3.4.0 (port `3.4.0#1`) | vcpkg; CPM fallback pins `v3.4.0` | `engine.core` config file codec |
-| [GLFW](GLFW/README.md) | 3.4 (port `3.4#1`) | vcpkg (no CPM fallback) | `engine.app` platform/input/window/player backend |
+| [GLFW](GLFW/README.md) | 3.4 (local port `3.4#2`) | vcpkg overlay with X11 monitor/visibility fixes (no CPM fallback) | `engine.app` platform/input/window/player backend |
 | [Box2D](box2d/README.md) | 3.1.1 (manifest override) | vcpkg | `engine.physics` |
 | [{fmt}](fmt/README.md) | 12.1.0 | vcpkg | Mango (no direct PPR include) |
 | [zlib](zlib/README.md) | 1.3.1 | vcpkg | Mango |
