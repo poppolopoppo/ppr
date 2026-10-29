@@ -371,6 +371,7 @@ namespace pP::tests::detail::Preparation {
         auto processor = fixture.processor(4u);
         processor.m_inputs[0u]->m_ordinary = true;
         processor.m_inputs[1u]->m_fatal = true;
+        fixture.m_control->m_allowed[0u].store(false);
         fixture.m_control->m_allowed[1u].store(false);
         PPR_DEFER {
             fixture.m_control->release();
@@ -381,6 +382,13 @@ namespace pP::tests::detail::Preparation {
             diagnostics);
         PPR_TEST_ASSERT(request.has_value());
         PPR_TEST_ASSERT(not request->poll());
+
+        // Both workers must be processing before the ordinary failure can stop admission.
+        while (not fixture.m_control->m_started[0u].load() or not fixture.m_control->m_started[1u].load()) {
+            std::this_thread::yield();
+        }
+
+        fixture.m_control->m_allowed[0u].store(true);
         while (not fixture.m_control->m_finished[0u].load()) {
             std::this_thread::yield();
         }

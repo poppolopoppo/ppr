@@ -239,7 +239,7 @@ float4 fragmentMain(VSOutput input) : SV_Target {
 }
 )";
 
-        PPR_UNIT_TEST (compile_invalid_shader_recovery, UnitTest::expect_crash) {
+        PPR_UNIT_TEST (compile_invalid_shader_recovery) {
             const auto svc = IShaderService::get();
             PPR_TEST_ASSERT(!svc->initialize());
 
@@ -253,7 +253,7 @@ float4 fragmentMain(VSOutput input) : SV_Target {
             PPR_TEST_ASSERT(!recovery_ec);
             PPR_TEST_ASSERT(handle.get() != nullptr);
 
-            std::ignore = svc->shutdown();
+            PPR_TEST_ASSERT(not svc->shutdown());
         };
 
         PPR_UNIT_TEST (shader_parameter_reflection) {
@@ -313,7 +313,7 @@ float4 fragmentMain(VSOutput input) : SV_Target {
             std::ignore = svc->shutdown();
         };
 
-        PPR_UNIT_TEST (set_target_format_lifecycle, UnitTest::expect_crash) {
+        PPR_UNIT_TEST (set_target_format_lifecycle) {
             const auto svc = IShaderService::get();
             std::ignore = svc->shutdown();
 

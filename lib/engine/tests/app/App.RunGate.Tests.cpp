@@ -1265,7 +1265,7 @@ namespace pP::tests::detail {
         };
 
         PPR_UNIT_TEST (display_window_auto_resize_preserves_zero_and_nonzero_positions) {
-            for (const int2 position: {int2{0, 0}, int2{20, 30}}) {
+            for (const int2 &position: {int2{0, 0}, int2{20, 30}}) {
                 WindowTransactionHarness test_app{};
                 PPR_TEST_ASSERT(not test_app.boot());
                 auto &service = *test_app.m_scripted->m_window_service;

@@ -37,11 +37,18 @@ namespace pP::tests::detail {
         };
 
         struct ThrowingRunApp final : TestApp {
+            u32 m_shutdown_count{};
+
             using TestApp::TestApp;
 
         protected:
             [[nodiscard]] std::error_code update([[maybe_unused]] const TimeSpan dt) override {
                 throw std::runtime_error{"pixel-readback test failure"};
+            }
+
+            [[nodiscard]] std::error_code shutdown() override {
+                ++m_shutdown_count;
+                return TestApp::shutdown();
             }
         };
     }
@@ -71,11 +78,15 @@ namespace pP::tests::detail {
         PPR_TEST_ASSERT(not test_app.teardown());
     };
 
-    PPR_UNIT_TEST (app_run_shutdowns_after_nonstandard_hook_exception, UnitTest::expect_fail) {
+    PPR_UNIT_TEST (app_run_shutdowns_after_nonstandard_hook_exception) {
         using namespace detail;
         ThrowingRunApp test_app{"ThrowingRun", std::span<const char *const>{}};
+
         PPR_TEST_ASSERT(test_app.run() == std::make_error_code(std::errc::state_not_recoverable));
-        PPR_TEST_ASSERT(test_app.run() == std::make_error_code(std::errc::operation_not_permitted));
+        PPR_TEST_ASSERT(test_app.m_shutdown_count == 1u);
+
+        PPR_TEST_ASSERT(test_app.run() == std::make_error_code(std::errc::state_not_recoverable));
+        PPR_TEST_ASSERT(test_app.m_shutdown_count == 2u);
     };
 } // namespace pP::tests::detail
 

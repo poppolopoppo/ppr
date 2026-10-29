@@ -570,7 +570,8 @@ namespace pP::tests::detail {
 
                 PPR_TEST_ASSERT(not ui->shutdown());
                 PPR_TEST_ASSERT(not ui->shutdown());
-                std::ignore = ui.release();
+                ui.reset();
+
                 PPR_TEST_ASSERT(not routed.shutdown());
             }
             std::ignore = window.release();
@@ -670,7 +671,8 @@ namespace pP::tests::detail {
 
                 PPR_TEST_ASSERT(not ui->shutdown());
                 PPR_TEST_ASSERT(not ui->shutdown());
-                std::ignore = ui.release();
+                ui.reset();
+
                 PPR_TEST_ASSERT(not routed.shutdown());
             }
             std::ignore = window.release();
@@ -751,7 +753,8 @@ namespace pP::tests::detail {
 
                 PPR_TEST_ASSERT(not ui->shutdown());
                 PPR_TEST_ASSERT(not ui->shutdown());
-                std::ignore = ui.release();
+                ui.reset();
+
                 PPR_TEST_ASSERT(not routed.shutdown());
             }
             std::ignore = window.release();
@@ -821,7 +824,8 @@ namespace pP::tests::detail {
 
                 PPR_TEST_ASSERT(not ui->shutdown());
                 PPR_TEST_ASSERT(not ui->shutdown());
-                std::ignore = ui.release();
+                ui.reset();
+
                 PPR_TEST_ASSERT(not routed.shutdown());
             }
             std::ignore = window.release();
@@ -894,7 +898,8 @@ namespace pP::tests::detail {
 
                 PPR_TEST_ASSERT(not ui->shutdown());
                 PPR_TEST_ASSERT(not ui->shutdown());
-                std::ignore = ui.release();
+                ui.reset();
+
                 PPR_TEST_ASSERT(not routed.shutdown());
             }
             std::ignore = window.release();
@@ -1141,10 +1146,8 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(ui->getContext() != nullptr);
             PPR_TEST_ASSERT(not ui->shutdown());
             PPR_TEST_ASSERT(not ui->shutdown());
-            // ImGuiService::~ImGuiService ENSUREs a live context, so a shut-down
-            // instance cannot be destroyed while assert hooks are installed; the
-            // emptied shell is released here. Dtor ownership stays engine-side.
-            std::ignore = ui.release();
+            ui.reset();
+
             PPR_TEST_ASSERT(not routed.shutdown());
         }
         std::ignore = window.release();

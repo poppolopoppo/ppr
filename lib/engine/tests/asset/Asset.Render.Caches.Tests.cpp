@@ -948,14 +948,30 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not pass.shutdown());
             std::ignore = Log::flush(true);
 
+            // Compile-filtered severities cannot reach the capture writer.
+#if PPR_LOG_LEVEL_THRESHOLD <= PPR_LOG_LEVEL_INFO
             PPR_TEST_ASSERT(countAt_(Log::ELevel::info, "shader module loaded from file") >= 1u);
-            PPR_TEST_ASSERT(countAt_(Log::ELevel::debug, "texture upload dedup hit") == 1u);
             PPR_TEST_ASSERT(countAt_(Log::ELevel::info, "released texture") == 2u);
-            PPR_TEST_ASSERT(countAt_(Log::ELevel::debug, "texture entry retired") == 1u);
             PPR_TEST_ASSERT(countAt_(Log::ELevel::info, "TriangleBagCache released range") == 1u);
             PPR_TEST_ASSERT(countAt_(Log::ELevel::info, "TriangleBagCache shut down") == 1u);
             PPR_TEST_ASSERT(countAt_(Log::ELevel::info, "BindlessTextureCache shut down") == 1u);
             PPR_TEST_ASSERT(countAt_(Log::ELevel::info, "BindlessMaterialCache shut down") == 1u);
+#else
+            PPR_TEST_ASSERT(countAt_(Log::ELevel::info, "shader module loaded from file") == 0u);
+            PPR_TEST_ASSERT(countAt_(Log::ELevel::info, "released texture") == 0u);
+            PPR_TEST_ASSERT(countAt_(Log::ELevel::info, "TriangleBagCache released range") == 0u);
+            PPR_TEST_ASSERT(countAt_(Log::ELevel::info, "TriangleBagCache shut down") == 0u);
+            PPR_TEST_ASSERT(countAt_(Log::ELevel::info, "BindlessTextureCache shut down") == 0u);
+            PPR_TEST_ASSERT(countAt_(Log::ELevel::info, "BindlessMaterialCache shut down") == 0u);
+#endif
+
+#if PPR_LOG_LEVEL_THRESHOLD <= PPR_LOG_LEVEL_DEBUG
+            PPR_TEST_ASSERT(countAt_(Log::ELevel::debug, "texture upload dedup hit") == 1u);
+            PPR_TEST_ASSERT(countAt_(Log::ELevel::debug, "texture entry retired") == 1u);
+#else
+            PPR_TEST_ASSERT(countAt_(Log::ELevel::debug, "texture upload dedup hit") == 0u);
+            PPR_TEST_ASSERT(countAt_(Log::ELevel::debug, "texture entry retired") == 0u);
+#endif
         };
     } // namespace LoggingGpu
 } // namespace pP::tests::detail

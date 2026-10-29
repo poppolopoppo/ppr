@@ -150,7 +150,12 @@ namespace pP::tests::detail {
             volatile unsigned char frame[2048]{};
             frame[0] = static_cast<unsigned char>(depth & 0xFFu);
             frame[sizeof(frame) - 1u] = static_cast<unsigned char>((depth + 1u) & 0xFFu);
-            overflowRecurse_(depth + 1u);
+
+            // The indirect call hides unbounded recursion; the later volatile read keeps this frame alive.
+            void (*volatile recurse)(unsigned) = &overflowRecurse_;
+            recurse(depth + 1u);
+
+            (void) frame[0];
         }
         PPR_PRAGMA_WARNING_POP()
 
@@ -284,8 +289,8 @@ namespace pP::tests::detail {
                 return;
             }
             writeFatalMarker("stack_overflow", "stack_overflow-armed");
-            // Unbounded recursion with a volatile frame (PPR_NO_INLINE defeats
-            // tail-call optimization): guard-page exhaustion. Windows dies via
+            // Unbounded recursion retains a volatile frame across each indirect
+            // call to prevent tail-call optimization and exhaust guard pages. Windows dies via
             // STATUS_STACK_OVERFLOW through WER; POSIX via SIGSEGV.
             overflowRecurse_(0u);
         };
