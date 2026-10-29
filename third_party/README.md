@@ -27,7 +27,7 @@ Sources of dependency versions:
 | [rapidhash](rapidhash/README.md) | `master` @ `1ae7842` (2026-08-19) | CPM source | `engine.core` hashing |
 | [Slang-RHI](SlangRHI/README.md) | `ad1b92f` = `ad1b92f16…` (#864, 2026-09-17) | CPM source build | `engine.rhi` |
 | [Slang](Slang/README.md) | 2026.17.1 prebuilt | fetched by Slang-RHI (`SLANG_RHI_FETCH_SLANG`) | `engine.shader`, `engine.rhi`, render passes, game |
-| [STB](STB/README.md) | `master` @ `2c980bb` (2026-08-01) | CPM source | `engine.image` mip chain (`stb_image_resize2`) |
+| [STB](STB/README.md) | `2b2e64bc4778df6a06fbea3a5dbe61f7a76ecf19` | CPM source + private alignment patch | `engine.image` mip chain (`stb_image_resize2`) |
 | [Dear ImGui](DearImGui/README.md) | `v1.92.9b-docking` | CPM source build | `engine.app` (`imgui.base` static + UI layer), game UI |
 | [imgui-module bindings](imgui-module/README.md) | `v1.92.9b` | CMake download into shared dir | `imgui` C++20 module target |
 | [toml++](tomlplusplus/README.md) | 3.4.0 (port `3.4.0#1`) | vcpkg; CPM fallback pins `v3.4.0` | `engine.core` config file codec |

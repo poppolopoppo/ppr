@@ -2,14 +2,15 @@
 
 Upstream: https://github.com/nothings/stb
 
-Build route: CPM source, `GIT_TAG master` — a **moving branch, not an
-immutable pin**. Resolved revision consumed by the local CPM cache when this
-survey was written:
+Build route: CPM source pinned to `2b2e64bc4778df6a06fbea3a5dbe61f7a76ecf19`,
+before upstream moved `stb_image_resize2.h` into `deprecated/`.
 
-- commit: `2c980bb59875b0d32144a71867fbdebb2f77cd20` (2026-08-01)
-
-`STB.cmake` only exposes the source dir as a SYSTEM include via an INTERFACE
-IMPORTED `stb` target; no library targets are built.
+`PatchStbResize.cmake` verifies the resize header hash and generates a private
+copy whose scalar coefficient-packing operations use constant-sized `memmove`.
+The original integer-pointer copies violated float alignment and aliasing rules;
+packing can also overlap. SIMD paths and sanitizer instrumentation remain intact.
+The INTERFACE IMPORTED `stb` target exposes that copy before the original SYSTEM
+include directory; no library target is built and CPM sources are not modified.
 
 ## License
 
