@@ -16,7 +16,49 @@ the validation owner or a builder lane. Tool access and IDE-side diagnostics
 are governed by the `AGENTS.md` guard; the post-change checklist lives in
 `validation`.
 
-## 0 Environment precondition — one persistent Insiders vcvars shell
+## 0 Environment precondition — select the host toolchain
+
+Use the current checkout root as the working directory. On Linux select
+`clang-dev` for development and `clang-rel` for Release checks; on Windows use
+`msvc-dev`, adding `msvc-live` / `msvc-rel` when required. Keep separate build
+trees per preset and host; never reuse Windows caches or module artifacts on Linux.
+
+### Linux — native shell and Clang/libc++
+
+Use a native shell with CMake 4.3+, Ninja, Clang/clang++, matching
+`clang-scan-deps`, and libc++/libc++abi with `import std` module sources/manifest.
+Check tool versions and paths before configuring; do not assume the system's
+unversioned Clang points to the intended installation. The Clang helper discovers
+`libc++.modules.json`; `PPR_LIBCXX_MODULES_JSON` can select an installed manifest.
+Keep compiler, scanner, standard library and manifest compatible.
+
+The presets obtain the vcpkg toolchain from `VCPKG_ROOT`; verify that it names an
+existing installation. Linux Clang presets currently select the repository's
+`x64-linux-libcxx` overlay triplet so C++ dependencies use the same standard
+library ABI. Do not substitute plain `x64-linux` C++ binaries to bypass link errors.
+Python 3.10+ and clang-format on PATH run the same format/style gates on Linux
+and Windows; no PowerShell is required for them. Check `python --version` (or
+`python3 --version`) and `clang-format --version` before a C++ edit batch.
+The separate legacy build-introspection helper remains a PowerShell tool; its
+availability does not control format/style validation.
+
+From the repository root, after prerequisites are available:
+
+```sh
+cmake --preset clang-dev
+cmake --build --preset clang-dev --target engine.tests.core
+ctest --preset clang-dev -R '^engine[.]tests[.]core$'
+```
+
+Select targets/tests for the task under `validation`; the example covers core only.
+A native Linux shell needs no vcvars activation. Verify compiler/cache paths in
+`out/build/clang-dev/CMakeCache.txt`; do not infer a successful configure or build
+from preset presence. Display/GPU tests require the corresponding runtime facilities;
+headless core/sim checks do not establish interactive or GPU readiness.
+Darwin needs separately verified toolchain/triplet settings: the current Clang
+presets explicitly select a Linux triplet and are not proof of Darwin readiness.
+
+### Windows — one persistent Insiders vcvars shell
 
 - Windows requires VS 18 Insiders MSVC 14.51 for `import std` /
   `CXX_MODULE_STD` (see `lib/engine/tests/core/Core.Tests.cppm:9`).
@@ -76,13 +118,15 @@ are governed by the `AGENTS.md` guard; the post-change checklist lives in
 ## Build authority
 
 - **Builds are cmake-direct in the persistent shell** — the strategy of
-  record. Inside the one long-lived Insiders `vcvars64` shell from §0:
+  record. Inside the host toolchain environment from §0 (persistent Insiders
+  `vcvars64` shell on Windows, native shell on Linux):
   configure with `cmake --preset <preset>`, build with
   `cmake --build out/build/<preset> --target <target>`, test with
-  `ctest --test-dir out/build/<preset> --output-on-failure` (no build/test
-  presets exist in `CMakePresets.json` — it defines `configurePresets` only,
-  ending at `:240`). CLion is reserved
-  for debugging and code search; it is not the build runner.
+  `ctest --test-dir out/build/<preset> --output-on-failure`. `CMakePresets.json`
+  also provides build presets for supported toolchains and test presets for
+  `msvc-dev`, `msvc-live`, and `clang-dev` (`cmake --build --preset <preset>`, `ctest --preset <preset>`), and
+  the `run-game-<preset>` build presets invoke the `run-app-game` target. CLion
+  is reserved for debugging and code search; it is not the build runner.
 - Discover the current CLion router catalog before using IDE functionality;
   historical tool counts are not a current capability guarantee. Keep configure,
   build, and test execution on this skill's persistent-shell path.
@@ -90,7 +134,7 @@ are governed by the `AGENTS.md` guard; the post-change checklist lives in
   do not invoke a library as a run configuration.
 - Builds and tests are owned above fixer (orchestrator / builder lane),
   batched — not per-edit; the builder lane keeps the persistent shell open so
-  vcvars is paid once for the whole batch.
+  Windows vcvars activation is paid once for the whole batch.
 - **Fixer must NOT build or run anything.** Fixer edits and reports; the owner
   above batches configure/build/test.
 
@@ -120,12 +164,12 @@ build target, not a test executable.
   C++23 language prerequisite, but the hidden `gcc-dev` and `gcc-rel` presets
   do not support this project's module builds and are not validation candidates.
 - For a local edit batch, default to the affected target/dependent closure in
-  `msvc-dev` on Windows or `clang-dev` on Linux/Darwin, plus the focused tests
+  `msvc-dev` on Windows or `clang-dev` on Linux, plus the focused tests
   selected under `validation`. Do not build every preset after each edit.
   Add `msvc-live` for Edit-and-Continue/toolchain compatibility and `msvc-rel`
   or `clang-rel` for Release/optimization compatibility when affected or requested.
   The pre-merge/release platform matrix remains `msvc-dev`, `msvc-live`,
-  `msvc-rel` on Windows and `clang-dev`, `clang-rel` on Linux/Darwin.
+  `msvc-rel` on Windows and `clang-dev`, `clang-rel` on Linux.
   `msvc-profile` is instrumented Release runtime profiling, not a default gate.
 
 ## Build-performance workflow
@@ -151,7 +195,8 @@ and preset, not the slowest TU.
 | Release code generation/LTCG | `msvc-rel`, not extrapolated Debug results |
 | Edit-and-Continue | `msvc-live` |
 
-Default to `msvc-dev`; select other presets by risk. Separate dependency
+Default to the host Dev preset (`msvc-dev` on Windows, `clang-dev` on Linux);
+select other presets by risk. Separate dependency
 acquisition and configure from compilation. Distinguish clean outputs from cold
 OS cache. Use an isolated tree for cleaning/source-mutation experiments; NEVER
 clean the developer's active tree.
@@ -241,27 +286,28 @@ configure/build evidence to the validation owner.
 
 - Shared test infrastructure is the `engine.tests` static library (never run);
   runnable test executables are listed in the target-kinds table.
-- The twelve CTest entries are `engine.tests.core`, `engine.tests.sim`,
-  `engine.tests.app.death_lifecycle`, `engine.tests.app.slow_gates`,
-  `engine.tests.app.display_window`, `engine.tests.app.functional_groups`,
-  `engine.tests.app.frame_fence`, `engine.tests.app.services_io`,
-  `engine.tests.asset`, `game.tests`, `app.game.worldgen_frontier`, and
-  `app.game.worldgen_hollows`. `ppr_add_test_entry` (`cmake/Tests.cmake`)
-  derives every entry name as `<target>[.<qualifier>]` and owns the shared
-  working directory and PATH runtime properties.
+- Discover current CTest entries from the configured tree with
+  `ctest --test-dir out/build/<preset> -N`; owning suite CMake files define
+  shard filters, labels, timeouts, and resource locks. Do not rely on historical
+  entry counts. `ppr_add_test_entry` (`cmake/Tests.cmake`) derives each name as
+  `<target>[.<qualifier>]` and owns runtime properties.
 - `PPR_TEST_LOOPS` is a cache switch: default `1` for development;
   configure with `-DPPR_TEST_LOOPS=3` for CI stress (three same-process
   shuffled loops). When reusing that build directory for development,
   explicitly restore `-DPPR_TEST_LOOPS=1`.
-- There are no CTest *test presets*. Use exact leaf/group executable filters for
-  the selected local scope. When the full matrix is required under `validation`,
-  use the approved scheduling command
-  `ctest --test-dir out/build/msvc-dev -j4 --output-on-failure`.
-- All six app shards and `engine.tests.asset` currently set `RUN_SERIAL TRUE`;
-  CTest honors that exclusion even under `-j4`.
+- Test presets mirror the dev configure presets: the preset of the same name
+  runs the routine suite with `-j4` and excludes label `gpu_validation`, while
+  `<preset>-gpu` runs only that label serially. Use exact leaf/group executable
+  filters for the selected local scope. When the full matrix is required under
+  `validation`, use the approved scheduling command
+  `ctest --test-dir out/build/<preset> -j4 --output-on-failure -LE gpu_validation`,
+  then a separate `-L gpu_validation` pass when required.
+- Preserve the owning CMake scheduling: GPU/window entries use resource locks,
+  and timing-sensitive entries may use `RUN_SERIAL`. Do not flatten these into
+  a blanket serial policy.
 - Run only one matrix invocation per machine at a time, with no competing
   profiling/game workload. For tests requiring exclusive scheduling within
-  the matrix, prefer `RUN_SERIAL` over `RESOURCE_LOCK`; neither replaces
+  the matrix, honor their declared resource locks or serialization; neither replaces
   machine-wide exclusivity between independent invocations.
 - Never use `gcc-*` presets for module builds.
 

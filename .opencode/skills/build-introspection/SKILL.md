@@ -16,7 +16,9 @@ from `CMakeLists.txt` reconstruction.
 ## Contract
 
 This skill reads CMake File API replies from an existing configured build tree,
-defaulting to `out/build/msvc-dev`. It is authoritative for generated build
+using the requested build tree, or `out/build/clang-dev` on Linux and
+`out/build/msvc-dev` on Windows. Pass `-BuildDir` explicitly; the helper may
+retain a Windows default. It is authoritative for generated build
 metadata and intentionally avoids scraping `CMakeLists.txt` as a substitute for
 what CMake already emitted. It does not add dependencies, install runtime
 hooks, or reconfigure/build unless the caller explicitly asks for a refresh.
@@ -41,14 +43,14 @@ Emit raw JSON only when explicitly requested.
 
 ## Default build tree
 
-- Default build dir: `out/build/msvc-dev`
+- Default build dir: `out/build/clang-dev` on Linux; `out/build/msvc-dev` on Windows
 - Default generator expectation in this repo: single-config Ninja
 - Default stance: **read existing replies first**
 - Reconfigure only when replies are missing/stale and the caller explicitly
   wants fresh metadata
 
 This matches repo constraints from `AGENTS.md`: C++23/module-oriented builds,
-`msvc-dev` as the recommended preset, no `gcc-*` module validation path, and no
+the host Dev preset as the recommended preset, no `gcc-*` module validation path, and no
 inventing source/module registration by reading `CMakeLists.txt` instead of the
 generated graph.
 
@@ -118,7 +120,13 @@ Never silently fall back to `CMakeLists.txt` inspection to fill gaps.
 
 ## Safe PowerShell usage
 
-Use repository-root working directory. Quote paths with spaces.
+Use PowerShell 7 (`pwsh`) on either host, from the repository root. Quote paths
+with spaces. The examples below use the Windows build tree; on Linux pass
+`out/build/clang-dev` explicitly. From Bash, for example:
+
+```sh
+pwsh -NoProfile -File .opencode/skills/build-introspection/Inspect-BuildFileApi.ps1 -BuildDir out/build/clang-dev -View compiler
+```
 
 ### Default summary
 
@@ -179,7 +187,8 @@ Only with explicit caller approval:
 cmake --preset msvc-dev
 ```
 
-Use this only to refresh File API replies or when the build tree is missing.
+The command above is Windows-specific; on Linux use `cmake --preset clang-dev`
+in the environment defined by `build-system`. Use this only to refresh File API replies or when the build tree is missing.
 Do not build targets just to answer introspection questions.
 
 ## Proportional verification for this skill

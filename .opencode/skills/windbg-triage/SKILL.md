@@ -5,6 +5,10 @@ description: Native crash, hang, and TTD investigation through Microsoft's offic
 
 # WinDbg Triage
 
+This procedure requires a Windows debugger host and a live WinDbg connection.
+On Linux, preserve matching binaries/debug symbols and available crash evidence;
+report this gate unavailable unless a Windows debugger host is connected.
+
 Use the official `WinDbg` server in `opencode.json`. Its command is the installed
 `DbgX.Mcp.Proxy.exe` app alias with no arguments. Do not install another debugger
 daemon. Microsoft's [setup](https://learn.microsoft.com/en-us/windows-hardware/drivers/debuggercmds/set-up-windbg-mcp)

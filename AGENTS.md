@@ -39,6 +39,24 @@ For presets, exclusions, and gates see `codemap.md` and **`build-system`**.
 Read the root `codemap.md` before working; read a directory's `codemap.md` for
 work in that area.
 
+## Agent host and platform support
+
+Windows and Linux are supported development hosts. Detect the current host and
+resolve the checkout root from the task environment; historical drive letters,
+user directories, tool locations, and session IDs are not portable defaults.
+Use the host-specific setup and presets in **`build-system`**. A Linux validation
+result does not establish Windows compatibility, or vice versa; preserve both
+platform implementations and report required checks that need another host.
+
+Format/style tooling uses Python 3.10+ and clang-format on both Windows and
+Linux; PowerShell is not a prerequisite for these gates. In the commands below,
+`python` means a Python 3.10+ interpreter (`python3` on Linux or `py -3` on Windows
+if needed). Check its version and `clang-format --version` before C++ edits.
+Keep paths case-correct and quote them for the executing shell.
+Discover live MCP capabilities before use. Windows-only PIX, WinDbg, vcvars,
+WER, and game-control fallback procedures require a Windows execution host;
+report unavailable tooling without treating its checks as passed.
+
 ## Architecture and module boundaries
 
 - Dependencies may only point down the graph above. A lower layer must not
@@ -340,17 +358,24 @@ The repository-root `.clang-format` is the canonical mechanical formatting autho
 The CLion project style (`Project.xml`) is demoted to IDE convenience only and
 never overrides it, and the IDE must be configured to format C/C++ through the
 external `clang-format` binary rather than its own engine. Mechanical formatting
-is applied by script; authors insert semantic blank lines as described above:
+is applied by script; authors insert semantic blank lines as described above.
 
-- `pwsh -NoProfile -File scripts/Format-Cpp.ps1 -Mode Fix` rewrites the lines the
-  working tree changes.
-- `pwsh -NoProfile -File scripts/Format-Cpp.ps1` (Check) is the gate. It exits 0
+Both platforms use `python scripts/format_cpp.py` and
+`python scripts/check_semantic_style.py`. Resolve a missing Python/clang-format
+prerequisite before claiming validation complete; do not skip these gates because
+PowerShell is unavailable. Whole-repository formatting is an explicit audit only:
+`python scripts/format_cpp.py --all --mode fix --jobs 8` replaces the former
+separate bulk-format wrapper.
+
+- `python scripts/format_cpp.py --mode fix` rewrites the lines the
+  working tree changes, including untracked sources in full.
+- `python scripts/format_cpp.py` (Check) is the gate. It exits 0
   only when the working tree already holds the canonical output, the case-sensitive
   code token stream (including string and char literal contents) is unchanged, and
   repeated formatting is a fixed point. Run it on touched C++ before finishing.
-- `pwsh -NoProfile -File scripts/Check-SemanticStyle.ps1 -Files '<a.cpp,b.cpp>'`
+- `python scripts/check_semantic_style.py --files a.cpp b.cpp`
   checks the alternative-token rules on those files. Blocking classes are
-  A-STRANDED, B-OP, and C-LEADING; `-Strict` also fails on advisory findings.
+  A-STRANDED, B-OP, and C-LEADING; `--strict` also fails on advisory findings.
   Run it repo-wide only as a deliberate audit, never as a per-change gate.
 
 `ColumnLimit` is `120`, so the formatter wraps and reflows expressions and
@@ -375,7 +400,7 @@ the editor cannot disagree.
 
 Expression wrapping remains script-owned, but the alternative-token rules above
 are not fully enforced by the formatter: clang-format re-flows these chains but has no option to
-normalise their spacing or operator placement. `scripts/Check-SemanticStyle.ps1` is
+normalise their spacing or operator placement. `scripts/check_semantic_style.py` is
 that enforcement. Run it on any file where you wrote or changed `and`/`or`/`not`.
 
 ## Specialist authorities and workflow
@@ -395,8 +420,9 @@ reproducing its procedure here:
 | Validation | `validation` |
 
 The `fixer` agent is edit-only (no builds); builds and tests run via the
-orchestrator per `build-system`. The `clion` MCP server exposes exactly one
-tool, the `execute_tool` router; agents call it with `projectPath="E:/Code/ppr"`.
+orchestrator per `build-system`. When a CLion MCP connection is available, discover its current router and use
+the project path on the IDE host. Do not hard-code a historical checkout path
+or assume that the IDE host and agent host share a filesystem.
 
 ### Delegated implementation and plan changes
 

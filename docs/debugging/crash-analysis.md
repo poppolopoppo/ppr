@@ -6,7 +6,11 @@
 > before claiming an end-to-end diagnosis. The remaining fatal-path capture
 > matrix and original binary/PDB matching checks remain outstanding.
 
-All commands run from the repo root (`E:\Code\ppr`). Stock 5.1-compatible
+This runbook is Windows-specific (WER, registry, WinDbg and PDBs). It does not
+provide a Linux core-dump procedure. Use it only on a Windows execution host;
+report unavailable crash tooling explicitly from Linux.
+
+All commands run from the checkout root on that Windows host. Stock 5.1-compatible
 syntax; invoke with either `powershell.exe` (Windows PowerShell 5.1) or `pwsh`
 (PowerShell 7) — examples use `pwsh`. No script prompts, pauses, builds, or
 configures. Never dot-source the scripts (`exit` sets the process exit code).

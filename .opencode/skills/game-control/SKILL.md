@@ -5,6 +5,11 @@ description: Launch, observe, and interact with the Windows game process using e
 
 # Game control
 
+The terminal fallback below is Windows-only. On Linux, discover whether the
+current computer-use tools support the required desktop interaction; if they do
+not, report interactive control unavailable. Do not invoke pywinauto or Windows
+venv executable paths on Linux.
+
 Use the installed Computer Use plugin when available; read its skill and use its
 window-targeted APIs. The repository also provides a terminal-driven controller
 at `scripts/game-control/control.py`, based on pywinauto and Pillow. It requires

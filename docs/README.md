@@ -7,6 +7,12 @@
 3. [Repository map](../codemap.md) and subsystem `codemap.md` files locate implementation. Read the owning map, then verify the relevant symbols. CodeGraph is the first code-navigation tool when `.codegraph/` exists; it returns current source, while graph coverage depends on indexing.
 4. [.opencode/skills](../.opencode/skills/) own specialized procedures. Historical tool probes in a procedure are evidence from that session, not proof a tool is available in the current session; discover current capabilities before invoking them.
 
+Host setup and agent tool availability are documented in
+[AGENTS.md](../AGENTS.md#agent-host-and-platform-support) and
+[build-system](../.opencode/skills/build-system/SKILL.md). Windows-only debugger,
+capture, and desktop-control procedures remain available for Windows work; they
+are not Linux prerequisites or evidence of Linux validation.
+
 ## Current entry points
 
 - [Custom logger, public macros, and mandatory error propagation](logging-and-errors.md)
