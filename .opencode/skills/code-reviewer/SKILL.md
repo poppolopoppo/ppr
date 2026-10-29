@@ -178,7 +178,7 @@ evidence without treating successful capture or no-fault tests as sufficient.
 
 ### 7. Project formatting and local conventions
 - Changes follow the repository-root `.clang-format` as enforced by
-  `scripts/Format-Cpp.ps1`, plus `AGENTS.md`, naming, module split, macro, and
+  `scripts/format_cpp.py`, plus `AGENTS.md`, naming, module split, macro, and
   comment conventions. The mechanical gates own indentation, spacing, and
   alignment and expression wrapping; this review owns logical paragraph and
   declaration boundaries and [section headers](../../../AGENTS.md#section-headers).
