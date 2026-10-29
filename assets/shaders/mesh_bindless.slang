@@ -4,9 +4,10 @@
 // Texture descriptors reside in one StructuredBuffer heap. Heap slot 0 is the
 // reserved 1x1 white fallback; kNoTexture resolves to slot 0, so albedo, ORM,
 // and emissive all multiply by 1.0 rather than 0.0 when a map is absent.
+// Scalar arrays preserve the CPU 12-byte triples under SPIR-V std430 as well as DX layout.
 struct BagVertex {
-    float3 m_position;
-    float3 m_normal;
+    float m_position[3];
+    float m_normal[3];
     float2 m_uv;
     float4 m_tangent;
     float4 m_color;
@@ -52,7 +53,8 @@ struct InstancePayload {
     uint m_index_count;
     uint m_material;
     int m_base_vertex;
-    uint3 m_pad;
+    // A uint3 would align this padding to 16 bytes in std430 and inflate the stride to 112.
+    uint m_pad[3];
 };
 
 // Global scope carries NO ordinary data: a ConstantBuffer nested beside $Globals
@@ -123,7 +125,7 @@ BindlessVertexOutput vertexIndirectMain(
     BindlessVertexOutput output;
     // Row-vector convention (mirrors the CPU Mango transform): translation in
     // row 3, positive clip.w for +Z view-space points.
-    float4 world = mul(float4(v.m_position, 1.0), payload.m_model);
+    float4 world = mul(float4(v.m_position[0], v.m_position[1], v.m_position[2], 1.0), payload.m_model);
     output.position = mul(world, g_frame.m_view_projection);
     output.world = world.xyz;
     output.uv = v.m_uv;
@@ -131,7 +133,7 @@ BindlessVertexOutput vertexIndirectMain(
     // direction with mul() instead of the inverse-transpose is exact only in
     // that case; non-uniform scale would need the normal matrix, which would
     // change this payload's 96 B size and its CPU-side assertions.
-    output.normal = mul(float4(v.m_normal, 0.0), payload.m_model).xyz;
+    output.normal = mul(float4(v.m_normal[0], v.m_normal[1], v.m_normal[2], 0.0), payload.m_model).xyz;
     output.tangent = float4(mul(float4(v.m_tangent.xyz, 0.0), payload.m_model).xyz, v.m_tangent.w);
     output.material = payload.m_material;
     return output;
