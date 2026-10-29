@@ -25,6 +25,8 @@ namespace pP::hal {
     void outputDebug(const char *ansi_msg) noexcept {
 #if PPR_ENABLE_DEBUG
         ::write(STDERR_FILENO, ansi_msg, std::strlen(ansi_msg));
+#else
+        (void) ansi_msg;
 #endif
     }
 

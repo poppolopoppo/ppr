@@ -1633,6 +1633,10 @@ namespace pP::mesh {
             return std::unexpected{converted.error()};
         }
 
+// The accumulator feeds only the info-level log field, and the caller-side
+// gate erases sub-threshold calls together with their argument expressions;
+// guard the whole block on the log threshold or Release compiles it unused.
+#if PPR_LOG_LEVEL_THRESHOLD <= PPR_LOG_LEVEL_INFO
         if (details::isGlbFile(filename)) {
             u64 embed_bytes = 0u;
             for (const mem::SharedBuffer &embed: glb_embeds) {
@@ -1642,6 +1646,7 @@ namespace pP::mesh {
             PPR_LOG(
                 Mesh, info, "GLB import succeeded", {{"embeds", (glb_embeds.size())}, {"embed_bytes", embed_bytes}});
         }
+#endif
 
         // Scene drops here: every ImageRef owns PPR-mapped bytes or a
         // mapped file. No mango view is ever read, so nothing of Mango can
