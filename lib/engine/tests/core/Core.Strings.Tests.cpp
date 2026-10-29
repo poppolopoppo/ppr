@@ -238,9 +238,14 @@ namespace pP::tests::detail {
                 PPR_TEST_ASSERT(hb != hbi);
                 PPR_TEST_ASSERT(ha != hbi);
 
-                const hash_t hat = hashValue(trim(a));
-                const hash_t hbt = hashValue(trim(b));
-                const hash_t hct = hashValue(trim(c));
+                PPR_TEST_ASSERT(hashValue(trim(a)) == ha);
+                PPR_TEST_ASSERT(hashValue(trim(b)) == hb);
+                PPR_TEST_ASSERT(hashValue(trim(c)) == ha);
+
+                // Generic lazy trim keeps the noncontiguous range-hashing path used by case folding.
+                const hash_t hat = hashValue(trim(basic_string_range(a)));
+                const hash_t hbt = hashValue(trim(basic_string_range(b)));
+                const hash_t hct = hashValue(trim(basic_string_range(c)));
                 PPR_TEST_ASSERT(hat != hbt);
                 PPR_TEST_ASSERT(hbt != hct);
                 PPR_TEST_ASSERT(hct == hat);

@@ -46,8 +46,8 @@ struct PsInput {
 float2 g_scale;
         float2 g_offset;
         uint g_decode_vertex_srgb;
-        Texture2D g_fontTexture : register(t0, space0);
-        SamplerState g_fontSampler : register(s0, space0);
+        Texture2D g_fontTexture;
+        SamplerState g_fontSampler;
 [shader("vertex")]
 PsInput vertexMain(VsInput input) {
     PsInput output;
@@ -265,6 +265,11 @@ float4 fragmentMain(PsInput input) : SV_Target {
         // sha-256
         // ------------------------------------------------------------------
 
+        /// FIPS 180-4 rotate-right used by the SHA-256 rounds.
+        [[nodiscard]] constexpr u32 rotateRight(const u32 value, const u32 shift) noexcept {
+            return (value >> shift) | (value << (32u - shift));
+        }
+
         constexpr std::array<u32, 8> kSha256InitialState{
             0x6a09e667u,
             0xbb67ae85u,
@@ -348,10 +353,6 @@ float4 fragmentMain(PsInput input) : SV_Target {
         /// facility exists); correctness is covered by the pinned font
         /// digests in the app tests.
         [[nodiscard]] std::array<std::byte, 32> sha256OfBytes(const std::span<const std::byte> bytes) noexcept {
-            constexpr auto rotateRight = [](const u32 value, const u32 shift) constexpr noexcept -> u32 {
-                return (value >> shift) | (value << (32u - shift));
-            };
-
             std::array<u32, 8> state = kSha256InitialState;
             std::array<u32, 64> schedule{};
             const auto compress = [&state, &schedule](const std::byte *const block) noexcept {
@@ -1824,7 +1825,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
             // The fresh TexData has an invalid TexID; re-arm the frozen
             // identity so detached commands keep a valid texture reference
             // while the new pixels travel to the encode lane.
-            atlas->SetTexID(reinterpret_cast<ImTextureID>(m_font_texid_init));
+            atlas->SetTexID(static_cast<ImTextureID>(m_font_texid_init));
 
             // Retire predecessor textures now: clearing the identity and
             // marking them destroyed keeps NewFrame's reclaim asserts (clear

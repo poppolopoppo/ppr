@@ -27,7 +27,7 @@ namespace pP::game::tests::detail::presentation {
     // ------------------------------------------------------------------
 
     PPR_UNIT_TEST (utility_windows_fit_normal_narrow_and_degenerate_viewports) {
-        for (const auto viewport: {float2{1280.0f, 720.0f}, float2{480.0f, 320.0f}, float2{1.0f, 1.0f}}) {
+        for (const auto &viewport: {float2{1280.0f, 720.0f}, float2{480.0f, 320.0f}, float2{1.0f, 1.0f}}) {
             const auto placement = ui::fitUtilityWindow(viewport, float2{1100.0f, 820.0f}, 12.0f);
 
             PPR_TEST_ASSERT(placement.m_position.x >= 0.0f and placement.m_position.y >= 0.0f);

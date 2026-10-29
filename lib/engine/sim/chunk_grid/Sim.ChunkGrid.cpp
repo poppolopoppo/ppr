@@ -50,6 +50,8 @@ namespace pP::sim {
         return *this;
     }
 
+    ChunkGrid::CapturedChunk::~CapturedChunk() noexcept = default;
+
     ChunkPos ChunkGrid::CapturedChunk::position() const noexcept {
         PPR_ASSERT(m_valid);
         return m_pos;

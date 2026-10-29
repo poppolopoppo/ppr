@@ -44,6 +44,7 @@ namespace pP {
             } catch (...) {
                 error = applicationExceptionError_();
             }
+
             if (error and error != std::make_error_code(std::errc::operation_canceled) and not first_error) {
                 first_error = error;
                 try {
@@ -122,6 +123,7 @@ namespace pP {
                 m_request_exit(clause);
                 requestFrameAdmissionWake();
             }
+
             try {
                 PPR_LOG(
                     App, info, "request exit", {{"category", clause.category().name()}, {"cause", clause.message()}});
@@ -220,6 +222,7 @@ namespace pP {
         if (std::this_thread::get_id() != m_display_thread) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(App, std::make_error_code(std::errc::operation_not_permitted));
         }
+
         DisplayCapabilities capabilities{};
         const safe_ptr<IWindowService> service = m_platform->getWindowService();
         if (not service) {
@@ -227,6 +230,7 @@ namespace pP {
         }
         capabilities.m_window_changes = service->supportsDisplayWindowChanges();
         capabilities.m_exclusive_refresh = service->supportsExclusiveRefresh();
+
         const auto modeView = [](const VideoMode &mode) {
             return DisplayModeCapability{
                 mode.m_resolution.x > 0 ? static_cast<u32>(mode.m_resolution.x) : 0u,
@@ -251,6 +255,7 @@ namespace pP {
             capabilities.m_monitors.push_back(std::move(entry));
             return std::error_code{};
         });
+
         if (error or modes_error) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(App, error ? error : modes_error);
         }
@@ -267,6 +272,7 @@ namespace pP {
             service->getMainWindow()->m_handle != m_display_surface_handle) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(App, std::make_error_code(std::errc::not_connected));
         }
+
         auto geometry = service->displayWindowGeometry(*service->getMainWindow());
         PPR_RETURN_UNEXPECTED_ON_FAIL(App, geometry);
         return geometry;
@@ -289,6 +295,7 @@ namespace pP {
         if (generation == kSurfaceGenerationNone) {
             PPR_RETURN_ERROR_ON_FAIL(App, std::make_error_code(std::errc::resource_unavailable_try_again));
         }
+
         const auto capabilities = displayCapabilities();
         if (not capabilities) {
             PPR_RETURN_ERROR_ON_FAIL(App, capabilities.error());
@@ -319,6 +326,7 @@ namespace pP {
             service->getMainWindow()->m_handle != m_pending_surface_identity.m_handle) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(App, std::make_error_code(std::errc::not_connected));
         }
+
         const Window &window = *service->getMainWindow();
         if (not restore) {
             auto geometry = service->displayWindowGeometry(window);
@@ -350,6 +358,7 @@ namespace pP {
                 m_windowed_geometry = *geometry;
             }
         }
+
         const auto capabilities = displayCapabilities();
         if (not capabilities) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(App, capabilities.error());
@@ -431,12 +440,14 @@ namespace pP {
         if (state != EDisplayTransaction::unsubmitted and state != EDisplayTransaction::restore_unsubmitted) {
             return {};
         }
+
         if (m_display_transactions_stopped) {
             m_display_controller.cancelUnsubmitted();
             if (not m_display_controller.restoring()) {
                 return {};
             }
         }
+
         if (m_pending_surface_lifetime != m_display_surface_lifetime) {
             m_display_controller.invalidatePending();
             return {};
@@ -490,6 +501,7 @@ namespace pP {
             }
             surface.m_extent = m_pending_window_geometry->m_framebuffer_size;
         }
+
         RenderSurfaceRequest request{
             m_display_controller.pending()->m_transaction_id, m_pending_surface_identity, surface};
 
@@ -575,6 +587,7 @@ namespace pP {
 
         m_lane_surface_handle = result.m_identity.m_handle;
         m_lane_surface_generation = applied.m_generation;
+
         if (m_display_controller.transactionState() == EDisplayTransaction::idle) {
             if (not was_restoring) {
                 const PacingTargets targets = pacingTargets(m_display_controller.committed());
@@ -677,6 +690,7 @@ namespace pP {
                 settlement_before = m_renderer->lastSubmitSettlement();
                 inline_submit_observed = true;
             }
+
             try {
                 // B2' admission outcome from admitClientFrame_ above (deadline
                 // AND credit, before the whole virtual update stage including
@@ -721,6 +735,7 @@ namespace pP {
                         admission_interval.m_busy_wait += now - busy_begin;
                         busy_begin = now;
                     }
+
                     // Recheck completions so a credit freed during the wait
                     // is observed before the next probe: lane drain plus
                     // the inline retire/mirror when no lane owns the
@@ -744,6 +759,7 @@ namespace pP {
                         m_lane_retirement_frontier.store(m_renderer->retirementFrontier(), std::memory_order_release);
                     }
                     reconcileSubmittedReservations_();
+
                     if (m_observe_admission) {
                         admission_interval.m_busy_service += m_observation_clock.now() - busy_begin;
                     }
@@ -764,6 +780,7 @@ namespace pP {
                     m_admission_observations.m_last_interval = admission_interval;
                     admission_interval = {};
                 }
+
                 std::error_code update_err{};
                 {
                     const hal::ProfileScope scope_update{"App.Frame.Update"};
@@ -771,7 +788,6 @@ namespace pP {
                     PPR_RETAIN_ERROR_ON_FAIL(App, first_err, update(effective_dt));
                     update_err = first_err;
                 }
-
 
                 // Render only when update succeeded: a failed update already
                 // latched its error and the loop retires below.
@@ -911,6 +927,7 @@ namespace pP {
         const auto begin = m_observe_admission ? m_observation_clock.now() : TimePoint{};
         auto phase_begin = begin;
         auto *phase_maximum = &m_admission_observations.m_max_controls;
+
         const auto finish_phase = [&](TimeSpan &maximum) {
             if (m_observe_admission) {
                 const auto now = m_observation_clock.now();
@@ -918,6 +935,7 @@ namespace pP {
                 phase_begin = now;
             }
         };
+
         PPR_DEFER {
             if (m_observe_admission) {
                 // Include a failed or throwing phase before the boundary propagates it.
@@ -941,6 +959,7 @@ namespace pP {
         // rechecked here. Fail-closed like the loop boundary it replaces:
         // unexpected exceptions convert to error codes, never escape.
         out_skip = false;
+
         PPR_RETURN_ERROR_ON_FAIL(App, serviceControls_());
         finish_phase(m_admission_observations.m_max_controls);
         phase_maximum = &m_admission_observations.m_max_clock;
@@ -995,6 +1014,7 @@ namespace pP {
                 } catch (...) {
                 }
             }
+
             if (isExitRequested() or (m_render_lane and m_render_lane->terminalError())) {
                 return;
             }
@@ -1021,6 +1041,7 @@ namespace pP {
                 }
                 m_lane_retirement_frontier.store(m_renderer->retirementFrontier(), std::memory_order_release);
             }
+
             reconcileSubmittedReservations_();
             if (m_frame_reservations.outstanding() < kMaxOutstandingFrames) {
                 return;
@@ -1028,6 +1049,7 @@ namespace pP {
             if (m_admission_wake.pollEvent()) {
                 return;
             }
+
             if (m_platform) {
                 if (const std::error_code hint_pump_err = m_platform->pumpNativeEvents();
                     hint_pump_err and
@@ -1080,6 +1102,7 @@ namespace pP {
         // outcome and every accounting side effect below runs regardless.
         const std::error_code drain_error = m_render_lane->drainResults(m_render_result_scratch);
         std::error_code first_err{};
+
         for (const RenderFrameResult &result: m_render_result_scratch) {
             if (result.m_world_result) {
                 onGridWorldCompleted_(*result.m_world_result);
@@ -1120,6 +1143,7 @@ namespace pP {
                 first_err = result.m_sweep_error;
             }
         }
+
         m_render_result_scratch.clear();
         if (const std::error_code transaction_error = serviceDisplayTransaction_();
             transaction_error and not first_err) {
@@ -1175,6 +1199,7 @@ namespace pP {
             // accounted for. Nothing to reconcile.
             return;
         }
+
         FrameReservation &record = *it;
         if (result.m_submit_possibly_executed) {
             // FrameSettlement::kSubmitFailed: admission is stopped and the
@@ -1183,6 +1208,7 @@ namespace pP {
             record.m_cpu_settled = true;
             return;
         }
+
         if (result.m_submit_value != kFenceValueNone) {
             // An accepted submission was made — the charge holds until the
             // retirement frontier covers this value. Even a later present
@@ -1201,6 +1227,7 @@ namespace pP {
             }
             return;
         }
+
         if (result.m_dropped) {
             // Never-applied slot (lane drop, transport rejection, obsolete
             // generation sizing, minimized surface): the runtime never has
@@ -1208,6 +1235,7 @@ namespace pP {
             releaseReservation_(record);
             return;
         }
+
         if (result.m_error) {
             // Definitely unsubmitted failure (transport rejection, definite
             // pre-submission rejection): release now.
@@ -1240,6 +1268,7 @@ namespace pP {
                 releaseReservation_(record);
             }
         }
+
         std::erase_if(m_reservations, [](const FrameReservation &record) { return not record.m_active; });
     }
 
@@ -1290,6 +1319,7 @@ namespace pP {
                     m_admission_observations.m_max_sleep_overshoot, elapsed - slice);
             }
         };
+
         // Every pacer sleep slice pumps then waits natively so waits stay
         // event-driven. The incoming slice is a REQUESTED quantum
         // (FramePacer::kWakeQuantum, 2ms): best-effort, no wall-clock
@@ -1304,11 +1334,13 @@ namespace pP {
         // retention is assignment-only, never throwing.
         try {
             const TimePoint deadline = time::now() + slice;
+
             if (m_platform) {
                 const hal::ProfileScope scope_frame_service{"PPR.Frame.ServicePlatform"};
                 std::ignore = pumpOperationBestEffort_(
                     [this] { return m_platform->pumpNativeEvents(); }, m_wait_pump_error);
                 std::ignore = pumpOperationBestEffort_([this] { return serviceControls_(); }, m_wait_pump_error);
+
                 // A long old CPU cap must not defer a display acknowledgement
                 // until another admitted frame. Retargeting still uses the
                 // existing wakeable pacer and its original tick anchor.
@@ -1322,6 +1354,7 @@ namespace pP {
                         requestExit(m_wait_pump_error);
                     }
                 }
+
                 const TimeSpan remaining = deadline - time::now();
                 if (remaining <= TimeSpan{}) {
                     return;
@@ -1368,6 +1401,7 @@ namespace pP {
         // initialize); unbound frames fail closed until then.
         PPR_ASSERT(m_renderer != nullptr);
         PPR_ASSERT(not renderLaneOwnsRenderer_());
+
         auto lane = std::make_unique<RenderLane>();
         RenderLane *const lane_view = lane.get();
         lane_view->setSurfaceExecutor([this](const RenderSurfaceRequest &request, RenderSurfaceResult &result) {
@@ -1382,6 +1416,7 @@ namespace pP {
                 result.m_error = applied.error();
             }
         });
+
         RenderLaneSweep sweep{[this](u32 &out_outstanding) -> std::error_code {
             // Fail-closed, never teardown-abort: the lane can still issue a
             // settle sweep during stop+join ordering gaps; a null renderer
@@ -1399,10 +1434,12 @@ namespace pP {
             publishLaneRetirementFrontier_();
             return sweep_err;
         }};
+
         RenderLaneWake wake{[this]() noexcept { requestFrameAdmissionWake(); }};
         safe_ptr<IRhiService> rhi_service{getServices().get<IRhiService>()};
         // Publish ownership before thread startup. Every later failure must stop/join the owned lane.
         m_render_lane = std::move(lane);
+
         if (const std::error_code start_err = lane_view->start(
                 [this, rhi_service]() -> std::error_code {
                     PPR_ASSERT(m_renderer != nullptr);
@@ -1415,6 +1452,7 @@ namespace pP {
             std::ignore = stopRenderLane_();
             return start_err;
         }
+
         // P2 teardown protocol: while the caller waits on a sync
         // handoff or a lane join, main keeps the platform service
         // alive. Mirror waitForAdmissionHint_: completions first, then
@@ -1465,6 +1503,7 @@ namespace pP {
                 // No proven join: never reset ownership or free transports behind potentially live work.
                 failStopOnUnknownGpuTeardown_(applicationExceptionError_());
             }
+
             if (not lane_err) {
                 lane_err = m_wait_pump_error;
             }
@@ -1493,8 +1532,10 @@ namespace pP {
                     lane_err = applicationExceptionError_();
                 }
             }
+
             m_render_lane.reset();
         }
+
         if (m_wait_pump_error) {
             try {
                 PPR_LOG(
@@ -1539,6 +1580,7 @@ namespace pP {
                 out_skip = true;
                 return default_value_v;
             }
+
             // Reconcile FIRST: a CPU-settled/GPU-pending record only leaves
             // the ledger here, so the capacity gate must run after the drain,
             // never before it (otherwise it can never release on the threaded
@@ -1548,6 +1590,7 @@ namespace pP {
                 out_skip = true;
                 return default_value_v;
             }
+
             if (m_frame_reservations.outstanding() >= kMaxOutstandingFrames) {
                 // The frontier mirror may have retired a still-charged record
                 // above. Only the settled/retired half leaves — a merely
@@ -1555,6 +1598,7 @@ namespace pP {
                 out_skip = true;
                 return default_value_v;
             }
+
             if (const std::error_code acquire_err = m_frame_reservations.acquire();
                 acquire_err == std::make_error_code(std::errc::device_or_resource_busy)) {
                 out_skip = true;
@@ -1562,6 +1606,7 @@ namespace pP {
             } else if (acquire_err) [[unlikely]] {
                 return acquire_err;
             }
+
             // Keyed record replaces the lane pending counter: the credit
             // stays charged from BEFORE construction through CPU settlement
             // AND (for accepted submissions) GPU retirement.
@@ -1579,6 +1624,7 @@ namespace pP {
             reservation.m_state = FrameReservation::State::kLocal;
             return default_value_v;
         }
+
         if (const std::error_code retire_err = m_renderer->retireCompletedFrames()) {
             // Terminal precedence: an abandoned/lost fence reports its poll
             // failure here, but the pipeline fate is device loss — report
@@ -1592,6 +1638,7 @@ namespace pP {
             }
             return retire_err;
         }
+
         if (const std::error_code probe_err = m_renderer->checkFrameAdmission()) {
             if (probe_err == std::make_error_code(std::errc::device_or_resource_busy)) {
                 out_skip = true;
@@ -1599,6 +1646,7 @@ namespace pP {
             }
             return probe_err;
         }
+
         // Inline branch: the renderer's own ledger is the GPU-side truth,
         // but construction is gated by the same main-side reservation so a
         // third frame is never built while two are outstanding.
@@ -1608,17 +1656,21 @@ namespace pP {
         // all keep it where it last proved a real one).
         m_lane_retirement_frontier.store(m_renderer->retirementFrontier(), std::memory_order_release);
         reconcileSubmittedReservations_();
+
         if (const std::error_code transaction_error = serviceDisplayTransaction_()) {
             return transaction_error;
         }
+
         if (m_display_controller.admissionSuspended()) {
             out_skip = true;
             return default_value_v;
         }
+
         if (m_frame_reservations.outstanding() >= kMaxOutstandingFrames) {
             out_skip = true;
             return default_value_v;
         }
+
         if (const std::error_code acquire_err = m_frame_reservations.acquire();
             acquire_err == std::make_error_code(std::errc::device_or_resource_busy)) {
             out_skip = true;
@@ -1626,6 +1678,7 @@ namespace pP {
         } else if (acquire_err) [[unlikely]] {
             return acquire_err;
         }
+
         // Same keyed record as the lane branch: the credit releases only
         // after CPU settlement AND the matching GPU retirement.
         FrameReservation &reservation = [this]() -> FrameReservation & {
@@ -1660,12 +1713,15 @@ namespace pP {
             const std::optional<TimeSpan> target = getTargetFrameTime();
             const TimeSpan period = target.value_or(TimeSpan{});
             const TimePoint previous_tick = m_last_admitted_tick.value_or(m_application_clock.now());
+
             if (period <= TimeSpan{}) {
                 break;
             }
+
             if (not m_pacer.shouldWait(FramePacer::deadlineFor(previous_tick, period))) {
                 break;
             }
+
             m_pacer.waitForTarget(period, previous_tick, [this, target]() noexcept -> bool {
                 if (isExitRequested()) {
                     return true;
@@ -1678,6 +1734,7 @@ namespace pP {
             if (getTargetFrameTime() != target) {
                 continue;
             }
+
             break;
         }
         return m_application_clock.tick(out_delta_time, TimeSpan{});
@@ -1701,6 +1758,7 @@ namespace pP {
                 result = teardown_err;
             }
         }
+
         PPR_RETAIN_ERROR_ON_FAIL(App, result, shutdown());
 
         // Synchronous exit-time drain: the logger worker is async and
@@ -1762,6 +1820,7 @@ namespace pP {
                 const hal::ProfileScope scope_shader{"App.Initialize.Shader"};
                 PPR_RETURN_ERROR_ON_FAIL(App, shader_service->initialize());
             }
+
             m_services.insert_or_assign(shader_service);
 
             const safe_ptr<IRhiService> rhi_service = IRhiService::get();
@@ -1769,6 +1828,7 @@ namespace pP {
                 const hal::ProfileScope scope_rhi{"App.Initialize.RHI"};
                 PPR_RETURN_ERROR_ON_FAIL(App, rhi_service->initialize(rhi::DeviceType::Default, *shader_service));
             }
+
             m_services.insert_or_assign(rhi_service);
 
             auto renderer = std::make_unique<Renderer>(SurfaceSettings{.m_vsync = m_presentation_vsync});
@@ -1881,6 +1941,7 @@ namespace pP {
             // stopRenderLane_() join and renderer release below.
             noteGpuTeardownStageBestEffort_("renderer");
         }
+
         // The worker is gone BEFORE the renderer it references is released:
         // the sweep/executor lambdas capture `this` and dereference
         // m_renderer, so any lane iteration running between release and
@@ -1890,6 +1951,7 @@ namespace pP {
         if (m_renderer) {
             m_renderer.reset();
         }
+
         // Reservation-economy teardown: clear records, reset the main
         // ledger and the frontier mirror only NOW — after admission stopped,
         // every GPU-pending submission has been retired (or its loss
@@ -1912,6 +1974,7 @@ namespace pP {
 
             const safe_ptr<IShaderService> shader_service = IShaderService::get();
             if (m_services.tryGet<IShaderService>() == shader_service) {
+
                 const std::error_code shutdown_error = shader_service->shutdown();
                 PPR_RETAIN_ERROR_ON_FAIL(App, first_err, shutdown_error);
                 if (not shutdown_error) {
@@ -1937,6 +2000,7 @@ namespace pP {
         m_gpu_teardown_stages.clear();
         m_wait_pump_error = default_value_v;
         m_display_transactions_stopped = false;
+
         m_display_controller.startTransactions();
         bindDisplaySurface_({});
         // Fresh settlement epoch: stale lane results from a finished run
@@ -1996,10 +2060,12 @@ namespace pP {
             try {
                 for (u32 attempt = 0u; attempt < 3u and m_display_controller.pending(); ++attempt) {
                     m_display_controller.cancelUnsubmitted();
+
                     const std::error_code transaction_error = serviceDisplayTransaction_();
                     if (transaction_error and not m_wait_pump_error) {
                         m_wait_pump_error = transaction_error;
                     }
+
                     if (renderLaneOwnsRenderer_()) {
                         bool acknowledged = false;
                         const std::error_code drain_error = m_render_lane->runOnLaneSync(
@@ -2012,10 +2078,12 @@ namespace pP {
                             break;
                         }
                     }
+
                     if (const std::error_code error = pumpRenderCompletions_(); error and not m_wait_pump_error) {
                         m_wait_pump_error = error;
                     }
                 }
+
                 if (m_display_controller.pending() and not m_wait_pump_error) {
                     m_wait_pump_error = std::make_error_code(std::errc::state_not_recoverable);
                 }
@@ -2093,6 +2161,7 @@ namespace pP {
             } catch (...) {
                 sync_err = std::make_error_code(std::errc::state_not_recoverable);
             }
+
             if (acknowledged) {
                 // The lane finished the operation and published the result
                 // before the handoff acknowledged: the outcome is stable.
@@ -2130,6 +2199,7 @@ namespace pP {
                 };
             }
         }
+
         // Publish completion flags ONLY after classification above.
         m_gpu_teardown_disposition = quiescence.m_disposition;
         m_gpu_teardown_error = quiescence.m_error;
