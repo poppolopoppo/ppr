@@ -35,6 +35,8 @@ CPMAddPackage(
         "CMAKE_CXX_MODULE_STD OFF"
 )
 
+include("${CMAKE_CURRENT_LIST_DIR}/PatchSlangRhiSurface.cmake")
+
 set_target_properties(slang-rhi PROPERTIES UNITY_BUILD ON)
 set_target_properties(slang-rhi PROPERTIES CXX_MODULE_STD OFF)
 

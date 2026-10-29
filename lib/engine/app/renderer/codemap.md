@@ -73,6 +73,10 @@ on the render owner; shutdown/device-loss epoch resets discard old cache handles
   original error, publishes restoration failure/unavailability through `appliedSurfaceSettingsFor`, and
   quarantines admission if unavailable. Restored configurations also mint a new generation.
   Applied vsync denotes successful backend configuration, not proof of physical display synchronization.
+  Vulkan acquisition/presentation can return the integration's `errc::pending`
+  for an outdated swapchain. The renderer refreshes it through the same fenced
+  configuration path, advances its generation, and leaves that frame unpresented;
+  an already accepted submission retains its fence settlement.
   State `FlatMap<WindowHandle, SurfaceRecord>` +
   `m_graphics_queue` + `safe_ptr<IRhiService>` + `m_owner` thread id. `SurfaceRecord` owns `ISurface`, a resize-matched D32Float
   depth texture/view, last `m_extent`, `m_configured`, and a generational `m_generation` minted from
