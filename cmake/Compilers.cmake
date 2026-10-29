@@ -26,6 +26,15 @@ function(setup_ppr_project project_name)
   # Set compiler warnings and warning as error IFN
   target_compile_options(${project_name} PRIVATE ${PPR_PROJECT_WARNINGS_CXX})
   target_compile_options(${project_name} INTERFACE ${PROJECT_FLAGS_CXX})
+  # The synthesized `std` module target inherits this target's compile options
+  # but not flags that arrive through dependency interfaces (simdjson brings
+  # Threads::Threads, i.e. -pthread). Keeping -pthread target-local keeps the
+  # std BMI and the project TUs identically configured; Clang otherwise rejects
+  # the BMI with a POSIX thread support mismatch.
+  if(NOT WIN32)
+    target_compile_options(${project_name} PRIVATE -pthread)
+  endif()
+
   # Add global engine include directories, since legacy headers with macros are still the only way to handle assertions
   target_include_directories(${project_name} PUBLIC ${CMAKE_SOURCE_DIR}/include)
   # Enable code sanitization IFN
@@ -74,6 +83,14 @@ function(setup_ppr_project project_name)
 
   get_target_property(_ppr_type ${project_name} TYPE)
   if(_ppr_type STREQUAL "EXECUTABLE")
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID MATCHES ".*Clang")
+      # Image codecs and prebuilt tools can bring libstdc++ into this process.
+      # Load the selected libc++ runtime first so exception_ptr/terminate cannot
+      # bind to a mixture of incompatible libc++abi and libsupc++ entry points.
+      target_link_options(${project_name} PRIVATE
+        "SHELL:-Wl,--push-state,--no-as-needed -lc++ -lc++abi -Wl,--pop-state"
+      )
+    endif()
     ppr_stage_runtime_dlls(${project_name})
   endif()
   unset(_ppr_type)

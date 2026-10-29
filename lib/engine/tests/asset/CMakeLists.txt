@@ -73,6 +73,13 @@ ppr_add_test_entry(TARGET engine.tests.asset
     LABELS unit engine asset gpu
 )
 
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND PPR_ENABLE_SANITIZER_ADDRESS)
+    # Retain the NVIDIA caller below DBus frames for the existing driver-only suppressions.
+    set_property(TEST engine.tests.asset.gpu APPEND PROPERTY ENVIRONMENT_MODIFICATION
+        "ASAN_OPTIONS=string_append::fast_unwind_on_malloc=0:malloc_context_size=20"
+    )
+endif()
+
 # GPU validation entry, mirroring the app-side twin: PPR_TEST_GPU_VALIDATION=1
 # enables the RHI debug core/GPU-assisted validation layers for the grid
 # compute visibility gate, and RESOURCE_LOCK gpu serializes it against

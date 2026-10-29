@@ -85,7 +85,9 @@
       },
       "vendor": {
         "microsoft.com/VisualStudioSettings/CMake/1.0": {
-          "hostOS": [ "Linux" ]
+          "hostOS": [
+            "Linux"
+          ]
         },
         "microsoft.com/VisualStudioRemoteSettings/CMake/1.0": {
           "sourceDir": "$env{HOME}/.vs/$ms{projectDirName}"
@@ -249,6 +251,259 @@
         "VCPKG_TARGET_TRIPLET": "x64-linux-libcxx",
         "VCPKG_OVERLAY_TRIPLETS": "${sourceDir}/cmake/triplets",
         "PPR_ENABLE_DEVELOPER_MODE": "OFF"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "windows-build",
+      "description": "Platform gate for build presets on Windows hosts.",
+      "hidden": true,
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      }
+    },
+    {
+      "name": "unix-like-build",
+      "description": "Platform gate for build presets on Darwin and Linux hosts.",
+      "hidden": true,
+      "condition": {
+        "type": "inList",
+        "string": "${hostSystemName}",
+        "list": [
+          "Darwin",
+          "Linux"
+        ]
+      }
+    },
+    {
+      "name": "msvc-dev",
+      "inherits": "windows-build",
+      "displayName": "MSVC Developer Build",
+      "description": "Build the msvc-dev tree. Add --target to narrow the build to one target.",
+      "configurePreset": "msvc-dev"
+    },
+    {
+      "name": "msvc-live",
+      "inherits": "windows-build",
+      "displayName": "MSVC Live Build",
+      "description": "Build the msvc-live Edit & Continue tree.",
+      "configurePreset": "msvc-live"
+    },
+    {
+      "name": "msvc-rel",
+      "inherits": "windows-build",
+      "displayName": "MSVC Release Build",
+      "description": "Build the msvc-rel tree.",
+      "configurePreset": "msvc-rel"
+    },
+    {
+      "name": "msvc-profile",
+      "inherits": "windows-build",
+      "displayName": "MSVC Profile Build",
+      "description": "Build the instrumented msvc-profile tree.",
+      "configurePreset": "msvc-profile"
+    },
+    {
+      "name": "clang-cl-dev",
+      "inherits": "windows-build",
+      "displayName": "Clang-cl Developer Build",
+      "description": "Build the clang-cl-dev tree.",
+      "configurePreset": "clang-cl-dev"
+    },
+    {
+      "name": "clang-cl-rel",
+      "inherits": "windows-build",
+      "displayName": "Clang-cl Release Build",
+      "description": "Build the clang-cl-rel tree.",
+      "configurePreset": "clang-cl-rel"
+    },
+    {
+      "name": "clang-dev",
+      "inherits": "unix-like-build",
+      "displayName": "Clang Developer Build",
+      "description": "Build the clang-dev tree. Add --target to narrow the build to one target.",
+      "configurePreset": "clang-dev"
+    },
+    {
+      "name": "clang-rel",
+      "inherits": "unix-like-build",
+      "displayName": "Clang Release Build",
+      "description": "Build the clang-rel tree.",
+      "configurePreset": "clang-rel"
+    },
+    {
+      "name": "run-game-msvc-dev",
+      "inherits": "windows-build",
+      "displayName": "Run app.game (MSVC Developer)",
+      "description": "Build and run app.game from its output directory. Game arguments require invoking the executable directly.",
+      "configurePreset": "msvc-dev",
+      "targets": [
+        "run-app-game"
+      ]
+    },
+    {
+      "name": "run-game-msvc-profile",
+      "inherits": "windows-build",
+      "displayName": "Run app.game (MSVC Profile)",
+      "description": "Build and run the instrumented app.game from its output directory.",
+      "configurePreset": "msvc-profile",
+      "targets": [
+        "run-app-game"
+      ]
+    },
+    {
+      "name": "run-game-msvc-rel",
+      "inherits": "windows-build",
+      "displayName": "Run app.game (MSVC Release)",
+      "description": "Build and run the release app.game from its output directory.",
+      "configurePreset": "msvc-rel",
+      "targets": [
+        "run-app-game"
+      ]
+    },
+    {
+      "name": "run-game-clang-dev",
+      "inherits": "unix-like-build",
+      "displayName": "Run app.game (Clang Developer)",
+      "description": "Build and run app.game from its output directory. Game arguments require invoking the executable directly.",
+      "configurePreset": "clang-dev",
+      "targets": [
+        "run-app-game"
+      ],
+      "environment": {
+        "VK_LOADER_DISABLE_DYNAMIC_LIBRARY_UNLOADING": "1",
+        "LSAN_OPTIONS": "$penv{LSAN_OPTIONS}:suppressions=${sourceDir}/cmake/sanitizers/nvidia.lsan.supp"
+      }
+    },
+    {
+      "name": "run-game-clang-rel",
+      "inherits": "unix-like-build",
+      "displayName": "Run app.game (Clang Release)",
+      "description": "Build and run the release app.game from its output directory.",
+      "configurePreset": "clang-rel",
+      "targets": [
+        "run-app-game"
+      ]
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "windows-test",
+      "description": "Platform gate for test presets on Windows hosts.",
+      "hidden": true,
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      }
+    },
+    {
+      "name": "unix-like-test",
+      "description": "Platform gate for test presets on Darwin and Linux hosts.",
+      "hidden": true,
+      "condition": {
+        "type": "inList",
+        "string": "${hostSystemName}",
+        "list": [
+          "Darwin",
+          "Linux"
+        ]
+      }
+    },
+    {
+      "name": "msvc-dev",
+      "inherits": "windows-test",
+      "displayName": "MSVC Developer Tests",
+      "description": "Routine suite; excludes the opt-in GPU validation entries.",
+      "configurePreset": "msvc-dev",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "jobs": 4,
+        "noTestsAction": "error"
+      },
+      "filter": {
+        "exclude": {
+          "label": "gpu_validation"
+        }
+      }
+    },
+    {
+      "name": "msvc-dev-gpu",
+      "inherits": "windows-test",
+      "displayName": "MSVC Developer GPU Validation",
+      "description": "Opt-in GPU validation entries; runs serially and exclusively.",
+      "configurePreset": "msvc-dev",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      },
+      "filter": {
+        "include": {
+          "label": "gpu_validation"
+        }
+      }
+    },
+    {
+      "name": "msvc-live",
+      "inherits": "windows-test",
+      "displayName": "MSVC Live Tests",
+      "description": "Routine suite in the msvc-live Edit & Continue tree.",
+      "configurePreset": "msvc-live",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "jobs": 4,
+        "noTestsAction": "error"
+      },
+      "filter": {
+        "exclude": {
+          "label": "gpu_validation"
+        }
+      }
+    },
+    {
+      "name": "clang-dev",
+      "inherits": "unix-like-test",
+      "displayName": "Clang Developer Tests",
+      "description": "Routine suite; excludes the opt-in GPU validation entries.",
+      "configurePreset": "clang-dev",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "jobs": 4,
+        "noTestsAction": "error"
+      },
+      "filter": {
+        "exclude": {
+          "label": "gpu_validation"
+        }
+      }
+    },
+    {
+      "name": "clang-dev-gpu",
+      "inherits": "unix-like-test",
+      "displayName": "Clang Developer GPU Validation",
+      "description": "Opt-in GPU validation entries; runs serially and exclusively.",
+      "configurePreset": "clang-dev",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      },
+      "filter": {
+        "include": {
+          "label": "gpu_validation"
+        }
       }
     }
   ]

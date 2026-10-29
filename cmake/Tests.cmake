@@ -79,6 +79,20 @@ function(ppr_add_test_entry)
   set_tests_properties("${ppr_test_entry_name}" PROPERTIES
     LABELS "${PPR_TEST_ENTRY_LABELS}"
   )
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND PPR_ENABLE_SANITIZER_ADDRESS)
+    # Preserve driver symbols for the narrowly scoped, documented NVIDIA cache
+    # suppressions. Existing LSAN_OPTIONS and all engine leak checks stay active.
+    set_property(TEST "${ppr_test_entry_name}" APPEND PROPERTY ENVIRONMENT_MODIFICATION
+      "VK_LOADER_DISABLE_DYNAMIC_LIBRARY_UNLOADING=set:1"
+      "LSAN_OPTIONS=string_append::suppressions=${CMAKE_SOURCE_DIR}/cmake/sanitizers/nvidia.lsan.supp"
+    )
+  endif()
+  if(PPR_ENABLE_SANITIZER_UNDEFINED AND NOT MSVC)
+    # A diagnostic is a failed check, not a passing test with an ignored warning.
+    set_property(TEST "${ppr_test_entry_name}" APPEND PROPERTY ENVIRONMENT_MODIFICATION
+      "UBSAN_OPTIONS=string_append::halt_on_error=1:print_stacktrace=1"
+    )
+  endif()
   if(PPR_TEST_ENTRY_RUN_SERIAL)
     set_tests_properties("${ppr_test_entry_name}" PROPERTIES RUN_SERIAL "TRUE")
   endif()
