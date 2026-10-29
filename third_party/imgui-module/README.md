@@ -3,7 +3,7 @@
 Upstream: https://github.com/stripe2933/imgui-module
 
 Generated C++20 module bindings for Dear ImGui. Build route: the two binding
-files at the `v1.92.9b` tag (`generated/imgui.cppm`,
+files at the `v1.93.0` tag (`generated/imgui.cppm`,
 `generated/imgui_internal.cppm`) are downloaded once by CMake
 (`file(DOWNLOAD)` with `TLS_VERIFY ON`, fatal on failure) into
 `out/build/imgui_module_bindings` — a directory shared by every CMake preset
@@ -33,10 +33,10 @@ software.
 |---|---:|---|
 | LICENSE.txt | 1071 | 0c2066ec7d94f0eff06b06c913f26e80902c9ecc7430cb7fd7c1382cd10af438 |
 
-Hash taken from the upstream raw file at the pinned tag (`v1.92.9b`,
+Hash taken from the upstream raw file at the pinned tag (`v1.93.0`,
 `LICENSE.txt`). The binding generator also derives from
 [cimgui](https://github.com/cimgui/cimgui)/Dear ImGui (MIT); see
 [Dear ImGui](../DearImGui/README.md) for the consumed upstream notice.
 
 Bump ImGui and these bindings together; the tag must track the pinned ImGui
-tree: `v1.92.9b-docking` pairs with bindings `v1.92.9b`.
+tree: `v1.93.0-docking` pairs with bindings `v1.93.0`.

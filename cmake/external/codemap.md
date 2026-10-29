@@ -12,7 +12,7 @@ module bindings for third-party libraries consumed by the engine.
 - **CPM packages** (`cmake/Dependencies.cmake` + per-lib files): GLFW (`find_package(glfw3)`, SYSTEM includes),
   Mango (poppolopoppo/mango `main` branch, vcpkg prefix path + triplet passthrough, AVX/AVX2/SSE2/SSE4, `BUILD_IMPORT3D ON`,
   `BUILD_TESTS OFF` + `BUILD_TOOLS OFF` (Linux bring-up: skip unneeded Mango tests/tools), no examples/OpenGL/Vulkan/shared-libs; ASan adds `/D_ANNOTATE_STL` via `CMAKE_CXX_FLAGS`), rapidhash (interface
-  target), SlangRHI (pinned `ad1b92f`, `SLANG_RHI_FETCH_SLANG ON` + `SLANG_RHI_FETCH_SLANG_VERSION 2026.17.1`, unity build, CPU/D3D11/Optix/CUDA off, `CXX_MODULE_STD OFF`), and STB (interface target).
+  target), SlangRHI (pinned `a78e208`, `SLANG_RHI_FETCH_SLANG ON` + `SLANG_RHI_FETCH_SLANG_VERSION 2026.17.1`, unity build, CPU/D3D11/Optix/CUDA off, `CXX_MODULE_STD OFF`), and STB (interface target).
 - **Mango normalization** (`Mango.cmake`): each concrete `mango*` target (`mango`, `mango-core`, `mango-image`,
   `mango-import3d`, `mango-window`, `mango-opengl`, `mango-vulkan`) sets `CXX_MODULE_STD OFF` locally and strips
   `/MP`, `/arch:AVX*`, `/Ox` (genex-wrapped) plus Clang `-m(avx512|avx|sse|bmi|fma|sha|aes|pclmul|popcnt|f16c|lzcnt)`
@@ -25,9 +25,9 @@ module bindings for third-party libraries consumed by the engine.
   the clang driver drops a bare `-lstdc++` under `-stdlib=libc++`; `--no-as-needed` because Ubuntu ld drops the
   DSO otherwise). Other external dependencies use
   only the workarounds their own target structure requires.
-- **DearImGui** (`DearImGui.cmake`, `imgui` v1.92.9b-docking via CPM): split into `imgui.base` (static lib over
+- **DearImGui** (`DearImGui.cmake`, `imgui` v1.93.0-docking via CPM): split into `imgui.base` (static lib over
   `imgui*.cpp`, SYSTEM includes, `CXX_MODULE_STD OFF`) and `imgui` (module lib over downloaded
-  `imgui.cppm`/`imgui_internal.cppm` "Combined Module" bindings from `stripe2933/imgui-module` v1.92.9b —
+  `imgui.cppm`/`imgui_internal.cppm` "Combined Module" bindings from `stripe2933/imgui-module` v1.93.0 —
   `using`-re-export of `imgui.h`, full `ImGuiContext` for `ErrorCallback`, `IMGUI_HAS_DOCK`-guarded docking
   symbols). Bindings download once (TLS_VERIFY, fatal on failure) into the preset-shared
   `${CMAKE_BINARY_DIR}/../imgui_module_bindings` so a single physical `export module imgui;` exists — multiple

@@ -3,7 +3,7 @@
 CPMAddPackage(
     NAME imgui
     GITHUB_REPOSITORY ocornut/imgui
-    GIT_TAG v1.92.9b-docking
+    GIT_TAG v1.93.0-docking
 )
 
 if(imgui_ADDED)
@@ -41,7 +41,7 @@ endif()
 # `generated/imgui.cppm` re-exports every public imgui.h symbol via `using` declarations, so
 # consumers write `import imgui;` instead of textually including <imgui.h>. `imgui_internal.cppm`
 # (implicitly exporting `imgui`) provides the full `ImGuiContext` definition the engine needs to
-# access `ImGuiContext::ErrorCallback`. Both are the "Combined Module" form (v1.92.9b), supporting
+# access `ImGuiContext::ErrorCallback`. Both are the "Combined Module" form (v1.93.0), supporting
 # the master and docking branches (docking-only symbols are guarded by IMGUI_HAS_DOCK, which the
 # docking-pinned `imgui.base` static library above defines). We download only the generated module
 # files (NOT configuring the third-party CMake, which would pull in example backends) and build
@@ -58,7 +58,7 @@ foreach(_imgui_module_file ${_imgui_module_files})
     set(_imgui_module_src "${_imgui_module_dir}/${_imgui_module_file}")
     if(NOT EXISTS "${_imgui_module_src}")
         file(DOWNLOAD
-            https://raw.githubusercontent.com/stripe2933/imgui-module/v1.92.9b/generated/${_imgui_module_file}
+            https://raw.githubusercontent.com/stripe2933/imgui-module/v1.93.0/generated/${_imgui_module_file}
             "${_imgui_module_src}"
             TLS_VERIFY ON
             STATUS _imgui_module_dl_status
