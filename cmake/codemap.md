@@ -23,7 +23,12 @@ Sets up C++23 modules, compiler toolchains, sanitizers, and external dependency 
   excludes ADDRESS/THREAD/LEAK); LNK4075 validators reject EnC-breaking link flags (`/INCREMENTAL:NO`,
   `/OPT:REF/ICF`, `/DEBUG:FASTLINK`, `/LTCG`) at configure time — configuration, not build, is the validated gate.
 - **`CMakePresets.json`** (single-config Ninja throughout — avoids the CMake 4.4 multi-config genex leak into
-  C++ module BMIs): `default` (Debug + CPM/vcpkg cache vars), `developer` (+ `PPR_ENABLE_DEVELOPER_MODE`),
+  C++ module BMIs): `default` (Debug + CPM/vcpkg cache vars; presets schema v12 with
+  `warnings.experimental=OFF`, silencing the per-configure experimental `import std` notice set in
+  `CMakeLists.txt:9-15`), `developer` (+ `PPR_ENABLE_DEVELOPER_MODE`; dev mode sets
+  `PPR_WARNINGS_AS_ERRORS` internally), all `*-rel` presets plus `msvc-live` set `PPR_WARNINGS_AS_ERRORS=ON`
+  explicitly (developer mode stays OFF there; warnings-as-errors must not depend on it) —
+  `msvc-profile` inherits it through `msvc-rel`,
   `vcpkg` (toolchain from `$VCPKG_ROOT`), hidden `windows-default` (MSVC/Clang: `VS_SEGMENT_HEAP_ALLOWLIST`
   for game+tests, `SegmentHeap.cmake`, `x64-windows` triplet), hidden `windows-msvc-toolchain` (native VS 18
   Insiders x64 `cl`/`link`/`lib` and vcpkg VS selection, inherited only by `msvc-*`), and `unix-like-default` (inherits `vcpkg`),

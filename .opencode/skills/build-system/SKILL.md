@@ -314,7 +314,10 @@ configure/build evidence to the validation owner.
 ## Toolchain constraints
 
 - Developer mode enables warnings-as-errors and the configured sanitizer/static
-  analysis options. `msvc-live` is the `/ZI` Edit-and-Continue Debug preset and
+  analysis options. Every `*-rel` configure preset and `msvc-live` sets
+  `PPR_WARNINGS_AS_ERRORS=ON` directly (developer mode stays OFF in those
+  presets), so warnings are errors in Debug and Release alike;
+  `msvc-profile` inherits it through `msvc-rel`. `msvc-live` is the `/ZI` Edit-and-Continue Debug preset and
   intentionally disables ASan and the compiler cache; unoptimized Debug code
   comes from `CMAKE_BUILD_TYPE=Debug`, and `PPR_RELEASE_PERF_FLAGS=OFF` there
   only gates Release-genexed flags (`cmake/compiler/MSVC.cmake:70-79`).
