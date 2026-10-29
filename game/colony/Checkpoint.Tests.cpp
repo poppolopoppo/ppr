@@ -276,6 +276,65 @@ namespace pP::game::tests::detail::checkpoint {
     // checkpoint envelope and frozen capture
     // ------------------------------------------------------------------
 
+    PPR_UNIT_TEST (v5_legacy_liquid_relaxation_migrates_without_resetting_carried_state) {
+        Fixture fixture;
+        const auto &catalog = *fixture.m_catalog;
+        auto checkpoint = editedCheckpoint(catalog);
+        auto &state = checkpoint.m_current_matter;
+        PPR_TEST_ASSERT(state.m_particles.size() == 1u and state.m_profile.m_liquid_relaxation == 1.0f);
+        state.m_identity = {91u, 7u, 4u};
+        auto &particle = state.m_particles[0u];
+        particle.m_displacement_x = 0.125f;
+        particle.m_displacement_y = -0.25f;
+        particle.m_deformation_gradient = {1.0f, 0.25f, -0.125f, 0.75f};
+        particle.m_deformation_displacement = {0.125f, 0.25f, -0.5f, -0.125f};
+        particle.m_liquid_density = 0.5f;
+        particle.m_lambda = 0.375f;
+        particle.m_log_jp = 0.75f;
+        const auto words = std::bit_cast<std::array<u32, 22u>>(particle);
+        const auto profile = std::bit_cast<std::array<u32, 16u>>(state.m_profile);
+
+        const auto encoded = encodeWorldCheckpoint(checkpoint, catalog);
+        const auto snapshot = sim::save(checkpoint.m_snapshot);
+        PPR_TEST_ASSERT(encoded.has_value() and snapshot.has_value());
+        // The v5 tail is profile, row count, one 88-byte semantic row,
+        // snapshot length, and snapshot payload. Locate the profile from it.
+        const std::size_t profile_offset = encoded->size() -
+                                           snapshot->size() -
+                                           sizeof(u64) -
+                                           sizeof(matter::GpuParticle) -
+                                           sizeof(u32) -
+                                           sizeof(matter::GpuParameters);
+        const std::size_t relaxation_offset = profile_offset + PPR_OFFSETOF(matter::GpuParameters, m_liquid_relaxation);
+        const auto with_relaxation = [&](const float value) {
+            auto bytes = *encoded;
+            const u32 bits = std::bit_cast<u32>(value);
+            for (u32 byte = 0u; byte < sizeof(u32); ++byte)
+                bytes[relaxation_offset + byte] = static_cast<u8>(bits >> (byte * 8u));
+
+            return bytes;
+        };
+
+        const auto legacy = with_relaxation(2.0f);
+        const auto decoded = decodeWorldCheckpoint(legacy, catalog);
+        PPR_TEST_ASSERT(decoded.has_value());
+        PPR_TEST_ASSERT(std::bit_cast<std::array<u32, 16u>>(decoded->m_current_matter.m_profile) == profile);
+        PPR_TEST_ASSERT(std::bit_cast<std::array<u32, 22u>>(decoded->m_current_matter.m_particles[0u]) == words);
+        PPR_TEST_ASSERT(decoded->m_current_matter.m_identity == state.m_identity);
+        PPR_TEST_ASSERT(decoded->m_current_matter.m_next_id == state.m_next_id);
+        PPR_TEST_ASSERT(decoded->m_current_matter.m_records == state.m_records);
+        PPR_TEST_ASSERT(decoded->m_current_matter.m_gas == state.m_gas);
+        const auto reencoded = encodeWorldCheckpoint(*decoded, catalog);
+        PPR_TEST_ASSERT(reencoded.has_value() and *reencoded == *encoded);
+
+        const auto unsupported = decodeWorldCheckpoint(with_relaxation(3.0f), catalog);
+        PPR_TEST_ASSERT(not unsupported and unsupported.error() == std::errc::invalid_argument);
+        auto invalid_legacy = legacy;
+        invalid_legacy[profile_offset] ^= 1u;
+        const auto rejected = decodeWorldCheckpoint(invalid_legacy, catalog);
+        PPR_TEST_ASSERT(not rejected and rejected.error() == std::errc::invalid_argument);
+    };
+
     PPR_UNIT_TEST (v5_particle_wire_payload_is_the_exact_semantic_word_sequence) {
         Fixture fixture;
         const auto &catalog = *fixture.m_catalog;
@@ -957,6 +1016,7 @@ namespace pP::game::tests {
                 dig_candidate_preserves_carried_columns_and_emits_original_seam_inventory_once,
                 new_contour_coverage_rejects_moving_and_gas_but_preserves_prior_overlap,
                 v5_round_trip_preserves_all_current_words_and_rebinds_only_world,
+                v5_legacy_liquid_relaxation_migrates_without_resetting_carried_state,
                 malformed_identity_metric_counts_and_payload_are_rejected_before_restore,
                 checkpoint_blob_references_ranges_and_wire_counts_are_checked,
                 envelope_five_manifest_one_and_raw_snapshot_four_have_distinct_headers,

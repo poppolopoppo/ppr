@@ -276,6 +276,25 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
         LABELS unit game gpu_validation
     )
 
+    # Separate process budgets cover developer sanitizer startup for each
+    # default-world regression without sharing the longer digging deadline.
+    ppr_add_test_entry(TARGET game.tests
+        NAME matter_pressure_gpu
+        FILTER "game/checkpoint_gpu/frontier_seed_42_five_by_seven_dig_stays_stable_for_3700_ticks"
+        LOOPS
+        RESOURCE_LOCK gpu
+        TIMEOUT 600
+        LABELS unit game gpu_validation
+    )
+    ppr_add_test_entry(TARGET game.tests
+        NAME matter_pressure_onset_gpu
+        FILTER "game/checkpoint_gpu/frontier_seed_42_liquids_stay_stable_past_prior_explosion"
+        LOOPS
+        RESOURCE_LOCK gpu
+        TIMEOUT 300
+        LABELS unit game gpu_validation
+    )
+
     # Temporary opt-in frozen-artifact diagnostic. The ordinary game entry
     # excludes checkpoint_gpu; missing frozen evidence is an explicit failure here.
     ppr_add_test_entry(TARGET game.tests

@@ -313,3 +313,8 @@ writes it under its existing reporting path, preserving prior errors. The paired
 fixture composes the same journal. PPRI/1 layout, hashes, bounds and conditional
 comparison protocol are documented in fused-live-inputs-1/handoff.md. This is a
 temporary diagnostic sidecar, not a checkpoint or numerical backend.
+
+Checkpoint v5 decoding migrates the former liquid-relaxation value2 to the
+stable K2 default1 before strict profile validation. The wire layout and all
+carried particle fields are preserved; other unsupported settings still fail
+validation. Migration does not repair an already-exploded carried state.

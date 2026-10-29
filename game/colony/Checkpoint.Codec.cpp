@@ -532,6 +532,12 @@ namespace pP::colony {
 
         carried.m_profile = std::bit_cast<matter::GpuParameters>(profile);
 
+        // Earlier v5 checkpoints carried the unstable K2 liquid relaxation.
+        // Upgrade only that known profile value; preserve every particle field
+        // and let ordinary validation reject any other unsupported settings.
+        if (carried.m_profile.m_liquid_relaxation == 2.0f)
+            carried.m_profile.m_liquid_relaxation = 1.0f;
+
         PPR_RETURN_UNEXPECTED_ON_FAIL(CheckpointCodec, reader.m_error);
         PPR_RETURN_UNEXPECTED_ON_FAIL(CheckpointCodec, validateWorldMetric(descriptor.m_metric));
         if (carried.m_cell_metres != 1.0 / descriptor.m_metric.m_cells_per_metre or

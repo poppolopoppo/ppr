@@ -61,8 +61,15 @@ namespace pP::tests::detail::MatterFork {
 
             rhi_service->setCoreValidation(true);
             rhi_service->setGpuAssistedValidation(true);
+#ifdef _WIN32
+            constexpr auto backend = rhi::DeviceType::D3D12;
+#else
+            constexpr auto backend = rhi::DeviceType::Vulkan;
+#endif
+
             rhi_attempted = true;
-            PPR_TEST_ASSERT(not rhi_service->initialize(rhi::DeviceType::D3D12, *shaders));
+            PPR_TEST_ASSERT(not rhi_service->initialize(backend, *shaders));
+            PPR_TEST_ASSERT(rhi_service->getDevice().getDeviceType() == backend);
 
             auto &device = rhi_service->getDevice();
             PPR_TEST_ASSERT(not make_error_code(device.getQueue(rhi::QueueType::Graphics, queue.writeRef())));

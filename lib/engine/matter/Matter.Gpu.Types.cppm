@@ -160,7 +160,9 @@ export namespace pP::matter {
     };
 
     /// Four full constant-buffer rows, mirrored by shader Parameters. Defaults
-    /// are the pin's solver defaults; the game explicitly configures shared gravity.
+    /// follow the pin except for unit liquid relaxation: its value of two
+    /// amplifies density error with the admitted K2 gather/integration schedule.
+    /// The game explicitly configures shared gravity.
     struct GpuParameters {
         u32 m_grid_width{};
         u32 m_grid_height{};
@@ -169,7 +171,7 @@ export namespace pP::matter {
         float m_delta_time{1.0f / 480.0f};
         float m_elasticity_ratio{1.0f};
         float m_gravity_strength{2.5f};
-        float m_liquid_relaxation{2.0f};
+        float m_liquid_relaxation{1.0f};
         float m_elastic_relaxation{1.5f};
         float m_liquid_viscosity{0.01f};
         u32 m_fixed_point_multiplier{10'000'000u};

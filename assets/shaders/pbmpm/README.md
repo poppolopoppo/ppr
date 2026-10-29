@@ -5,6 +5,14 @@ The numerical authority is [ErikSom/pbmpm at
 The original BSD-3-Clause notice is in `LICENSE.md`. Historical EA pins remain
 provenance, not alternative production backends.
 
+PPR uses liquid relaxation **1** with its admitted K2 schedule, rather than
+this fork's default of2. The equations remain unchanged. With default viscosity
+0.01, the isolated isotropic pressure mode linearized about unit density has an
+amplifying eigenvalue about−2.402 at relaxation2; unit relaxation removes that
+mode. This is an explicit profile correction, not a scatter clamp or a change
+to the dense source oracle. Both production and oracle consume the supplied
+profile. See the isolated pressure and frontier5×7-dig regression tests.
+
 `solver.slang` has two production entry points, `fused0` and `fused1`,
 instantiating the same fused body with compile-time iteration0/1. Both retain
 the node contact/error stage and shared barriers; only the existing gather/
@@ -57,7 +65,7 @@ or issuing an out-of-range indirect dispatch. Stable rows are only permuted in
 the bucket index buffer; particle storage/order and metadata identity stay fixed.
 
 The device ABI is a64-byte hot row plus a24-byte cold row. The saved semantic
-record remains22 fields/88 bytes, packed by field name; no v5 codec change.
+record remains22 fields/88 bytes, packed by field name; no v5 wire-layout change.
 All evolving fields retain FP32 storage. Terrain masks use4 bits per cell,
 boundary tile occupancy uses1 bit per8x8 tile, and the exact contour tables use
 8 bytes per case plus one4-byte word for all8 contour points.

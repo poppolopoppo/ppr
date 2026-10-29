@@ -287,9 +287,16 @@ namespace pP::game::tests::detail::checkpoint {
             m_rhi->setGpuAssistedValidation(validation);
             PPR_TEST_ASSERT(m_rhi->isCoreValidationEnabled() == validation);
             PPR_TEST_ASSERT(m_rhi->isGpuAssistedValidationEnabled() == validation);
+
+#ifdef _WIN32
+            constexpr auto backend = rhi::DeviceType::D3D12;
+#else
+            constexpr auto backend = rhi::DeviceType::Vulkan;
+#endif
+
             m_rhi_attempted = true;
-            PPR_TEST_ASSERT(not m_rhi->initialize(rhi::DeviceType::D3D12, *m_shaders));
-            PPR_TEST_ASSERT(m_rhi->getDevice().getDeviceType() == rhi::DeviceType::D3D12);
+            PPR_TEST_ASSERT(not m_rhi->initialize(backend, *m_shaders));
+            PPR_TEST_ASSERT(m_rhi->getDevice().getDeviceType() == backend);
             PPR_TEST_ASSERT(
                 not make_error_code(m_rhi->getDevice().getQueue(rhi::QueueType::Graphics, m_queue.writeRef())));
 
@@ -304,7 +311,6 @@ namespace pP::game::tests::detail::checkpoint {
             m_driver = std::make_unique<ColonyDriver>();
             PPR_TEST_ASSERT(not m_driver->initPrepared({.m_seed = 0x2aull}, std::move(prepared), &execution));
             m_driver->setMatterSubmissionObserverForTest(observer);
-            rememberAdmission();
 
             for (;;) {
                 const auto ready = m_driver->advancePrepareMatter(m_runtime);
@@ -323,6 +329,9 @@ namespace pP::game::tests::detail::checkpoint {
 
                 std::this_thread::yield();
             }
+
+            captureCurrent();
+            rememberAdmission();
         }
 
         void restore(
@@ -452,7 +461,9 @@ namespace pP::game::tests::detail::checkpoint {
         }
 
         void step() {
-            rememberAdmission();
+            if (m_driver->captureReady() and m_driver->particleSnapshotCurrent())
+                rememberAdmission();
+
             requireSuccess(m_driver->stepOne(), "stepOne");
         }
 
@@ -1923,6 +1934,347 @@ namespace pP::game::tests::detail::checkpoint {
     // sustained actual dug-sand integration
     // ------------------------------------------------------------------
 
+    void exerciseDenseDigDiagnostic(const DigRect dig, const bool confined) {
+        PPR_TEST_ASSERT(dig.m_width > 0u and dig.m_width <= 16u);
+        PPR_TEST_ASSERT(dig.m_height > 0u and dig.m_height <= 16u);
+
+        const u32 particle_count = dig.m_width * dig.m_height;
+
+        Fixture fixture;
+        const auto *const basalt = fixture.m_catalog->findMaterial("basalt");
+        PPR_TEST_ASSERT(basalt != nullptr and basalt->m_reference_density_kg_m3 == 2000.0);
+
+        auto checkpoint = editedCheckpoint(*fixture.m_catalog);
+        checkpoint.m_matter = {};
+        checkpoint.m_particles = {.m_next_id = 12u};
+        auto empty = makeMatterState(
+            checkpoint.m_particles, kFineCellMetres, checkpoint.m_descriptor.m_metric.m_reference_thickness_m,
+            kMatterGravityY, 1u);
+        PPR_TEST_ASSERT(empty.has_value());
+
+        empty->m_identity.m_terrain_revision = 1u;
+        checkpoint.m_current_matter = std::move(*empty);
+        PPR_TEST_ASSERT(checkpoint.m_current_matter.m_records.empty() and checkpoint.m_current_matter.m_gas.empty());
+
+        sim::ChunkGrid terrain_grid;
+        PPR_TEST_ASSERT(not sim::apply(terrain_grid, checkpoint.m_snapshot));
+        PPR_TEST_ASSERT(dig.m_min.m_x >= 8u and dig.m_min.m_y >= 8u);
+        PPR_TEST_ASSERT(dig.m_min.m_x + dig.m_width + 8u <= sim::kWorldEdge);
+        PPR_TEST_ASSERT(dig.m_min.m_y + dig.m_height + 4u <= sim::kWorldEdge);
+
+        if (confined) {
+            // Four solid cells enclose every edge of the actual dug cavity.
+            for (u32 y = dig.m_min.m_y - 4u; y < dig.m_min.m_y + dig.m_height + 4u; ++y) {
+                for (u32 x = dig.m_min.m_x - 4u; x < dig.m_min.m_x + dig.m_width + 4u; ++x)
+                    PPR_TEST_ASSERT(not terrain_grid.setCell({x, y}, {basalt->m_numeric_id, 300.0f}));
+            }
+        } else {
+            // The emitted block falls through four empty cell rows onto a
+            // four-cell-thick floor, without containing side walls or a roof.
+            for (u32 y = dig.m_min.m_y - 8u; y < dig.m_min.m_y - 4u; ++y) {
+                for (u32 x = dig.m_min.m_x - 8u; x < dig.m_min.m_x + dig.m_width + 8u; ++x)
+                    PPR_TEST_ASSERT(not terrain_grid.setCell({x, y}, {basalt->m_numeric_id, 300.0f}));
+            }
+
+            for (u32 y = dig.m_min.m_y; y < dig.m_min.m_y + dig.m_height; ++y) {
+                for (u32 x = dig.m_min.m_x; x < dig.m_min.m_x + dig.m_width; ++x)
+                    PPR_TEST_ASSERT(not terrain_grid.setCell({x, y}, {basalt->m_numeric_id, 300.0f}));
+            }
+        }
+
+        auto terrain_snapshot = sim::captureFull(terrain_grid, checkpoint.m_descriptor.m_seed);
+        PPR_TEST_ASSERT(terrain_snapshot.has_value());
+
+        checkpoint.m_snapshot.m_deltas = std::move(terrain_snapshot->m_deltas);
+        PPR_TEST_ASSERT(not validateWorldCheckpoint(checkpoint, *fixture.m_catalog));
+
+        GpuOwner owner;
+        owner.initialize();
+        owner.restore(fixture.m_catalog, checkpoint, 61u);
+
+        auto &driver = *owner.m_driver;
+        driver.setPaused(true);
+        PPR_TEST_ASSERT(driver.particleCount() == 0u);
+        PPR_TEST_ASSERT(not driver.requestDig(dig.m_min, dig.m_width, dig.m_height));
+
+        owner.update(TimeSpan{});
+        PPR_TEST_ASSERT(not driver.editPending() and driver.captureReady());
+        PPR_TEST_ASSERT(driver.digTotal() == particle_count and driver.tickCount() == checkpoint.m_tick);
+
+        const auto emitted = *driver.matterState();
+        PPR_TEST_ASSERT(emitted.m_particles.size() == particle_count and emitted.m_records.size() == particle_count);
+        PPR_TEST_ASSERT(emitted.m_gas.empty() and emitted.m_next_id == 12u + particle_count);
+
+        std::fprintf(
+            stderr,
+            "[dense-dug-sand-input] dig=(%u,%u,%u,%u) confined=%u rows=%u endpoints=120 "
+            "source_substeps_per_tick=%u density=2000 h=%.17g thickness=%.17g; "
+            "bounded dig reproducer, not full-world parity\n",
+            static_cast<unsigned>(dig.m_min.m_x), static_cast<unsigned>(dig.m_min.m_y),
+            static_cast<unsigned>(dig.m_width), static_cast<unsigned>(dig.m_height), static_cast<unsigned>(confined),
+            static_cast<unsigned>(particle_count), static_cast<unsigned>(matter::kGameSubsteps), emitted.m_cell_metres,
+            emitted.m_thickness_metres);
+        std::fflush(stderr);
+
+        for (u32 tick = 1u; tick <= 120u; ++tick) {
+            std::fprintf(stderr, "[dense-dug-sand-begin] endpoint=%u\n", static_cast<unsigned>(tick));
+            std::fflush(stderr);
+
+            owner.step();
+            owner.drain();
+            owner.update(TimeSpan{});
+            owner.captureCurrent();
+
+            const auto &state = *driver.matterState();
+            PPR_TEST_ASSERT(state.m_particles.size() == particle_count and state.m_records.size() == particle_count);
+            PPR_TEST_ASSERT(driver.tickCount() == checkpoint.m_tick + tick and driver.captureReady());
+
+            float min_x = std::numeric_limits<float>::max(), min_y = min_x;
+            float max_x = std::numeric_limits<float>::lowest(), max_y = max_x;
+            float max_displacement{}, max_deformation{}, max_gradient{};
+
+            for (const auto &particle: state.m_particles) {
+                min_x = std::min(min_x, particle.m_position_x);
+                min_y = std::min(min_y, particle.m_position_y);
+                max_x = std::max(max_x, particle.m_position_x);
+                max_y = std::max(max_y, particle.m_position_y);
+
+                max_displacement = std::max(
+                    {max_displacement, std::abs(particle.m_displacement_x), std::abs(particle.m_displacement_y)});
+
+                for (const float field: std::bit_cast<std::array<float, 4u>>(particle.m_deformation_displacement))
+                    max_deformation = std::max(max_deformation, std::abs(field));
+
+                for (const float field: std::bit_cast<std::array<float, 4u>>(particle.m_deformation_gradient))
+                    max_gradient = std::max(max_gradient, std::abs(field));
+            }
+
+            std::fprintf(
+                stderr,
+                "[dense-dug-sand-collected] endpoint=%u tick=%llu publication=%llu rows=%zu "
+                "solver_x=[%.9g,%.9g] solver_y=[%.9g,%.9g] max_abs_d=%.9g max_abs_D=%.9g max_abs_F=%.9g\n",
+                static_cast<unsigned>(tick), static_cast<unsigned long long>(driver.tickCount()),
+                static_cast<unsigned long long>(state.m_identity.m_publication), state.m_particles.size(),
+                static_cast<double>(min_x), static_cast<double>(max_x), static_cast<double>(min_y),
+                static_cast<double>(max_y), static_cast<double>(max_displacement), static_cast<double>(max_deformation),
+                static_cast<double>(max_gradient));
+            std::fflush(stderr);
+
+            const auto validity = validateMatterState(
+                state, driver.preparedWorld()->generated().m_plan.recipe().m_materials, kFineCellMetres,
+                checkpoint.m_descriptor.m_metric.m_reference_thickness_m, kMatterGravityY);
+            if (validity)
+                owner.reportFailure(validity, "dense-dug-sand-published-state");
+
+            PPR_TEST_ASSERT(not validity);
+            PPR_TEST_ASSERT(state.m_identity.m_publication == emitted.m_identity.m_publication + tick);
+            PPR_TEST_ASSERT(state.m_identity.m_terrain_revision == emitted.m_identity.m_terrain_revision);
+        }
+
+        PPR_TEST_ASSERT(driver.digTotal() == particle_count and driver.matterState()->m_next_id == emitted.m_next_id);
+    }
+
+    // ------------------------------------------------------------------
+    // authored frontier pressure stability
+    // ------------------------------------------------------------------
+
+    void exerciseFrontierPressureStability(const bool onset_only) {
+        struct Clock final : ITimerClock {
+            TimePoint now() const noexcept override {
+                return time::now();
+            }
+        } clock;
+
+        ParallelScheduler workers{
+            "Frontier pressure regression preparation", std::max(1u, std::min(8u, std::thread::hardware_concurrency())),
+            4u * static_cast<std::size_t>(hal::page_granularity)};
+        const sim::GenerationExecution execution{.m_scheduler = &workers};
+        config::Diagnostics diagnostics;
+        auto prepared = prepareWorld(
+            std::filesystem::current_path() / "worldgen/default", "frontier", 0x2aull, clock, diagnostics, execution);
+        PPR_TEST_ASSERT(prepared.has_value());
+
+        GpuOwner owner;
+        owner.initialize();
+        owner.admitPrepared(std::move(*prepared), execution, nullptr);
+        auto &driver = *owner.m_driver;
+        driver.setPaused(true);
+        PPR_TEST_ASSERT(driver.matterState() != nullptr);
+        PPR_TEST_ASSERT(driver.matterState()->m_particles.size() == 13044u);
+        const auto initial = *driver.matterState();
+        const double thickness = initial.m_thickness_metres;
+        PPR_TEST_ASSERT(initial.m_profile.m_liquid_relaxation == 1.0f);
+
+        u32 endpoint{}, removed_cells{};
+        bool dig_requested{}, passed{};
+        PPR_DEFER {
+            if (not passed) {
+                std::fprintf(
+                    stderr, "[frontier-late-dig-failed] endpoint=%u phase=%s\n", static_cast<unsigned>(endpoint),
+                    dig_requested ? "after-dig-request" : "before-dig");
+                std::fflush(stderr);
+                owner.reportFailure(std::make_error_code(std::errc::state_not_recoverable), "frontier-late-dig");
+            }
+        };
+
+        const auto observe = [&] {
+            owner.captureCurrent();
+            const auto &state = *driver.matterState();
+            PPR_TEST_ASSERT(state.m_particles.size() == initial.m_particles.size() + removed_cells);
+            PPR_TEST_ASSERT(state.m_particles.size() == state.m_records.size());
+            PPR_TEST_ASSERT(state.m_next_id == initial.m_next_id + removed_cells);
+            PPR_TEST_ASSERT(state.m_gas == initial.m_gas);
+            PPR_TEST_ASSERT(
+                state.m_identity.m_publication ==
+                initial.m_identity.m_publication + driver.tickCount() + static_cast<u64>(dig_requested));
+            PPR_TEST_ASSERT(
+                state.m_identity.m_terrain_revision ==
+                initial.m_identity.m_terrain_revision + static_cast<u64>(dig_requested));
+
+            for (std::size_t row = 0u; row < initial.m_particles.size(); ++row) {
+                const auto &particle = state.m_particles[row];
+                const auto &source = initial.m_particles[row];
+                PPR_TEST_ASSERT(particle.m_mass == source.m_mass and particle.m_volume == source.m_volume);
+                PPR_TEST_ASSERT(particle.m_material == source.m_material);
+                PPR_TEST_ASSERT(state.m_records[row].m_id == initial.m_records[row].m_id);
+            }
+
+            float max_d{}, max_D{}, max_F{};
+            std::size_t worst_row{};
+
+            for (std::size_t row = 0u; row < state.m_particles.size(); ++row) {
+                const auto &particle = state.m_particles[row];
+                const float displacement = std::max(
+                    std::abs(particle.m_displacement_x), std::abs(particle.m_displacement_y));
+                if (displacement > max_d) {
+                    max_d = displacement;
+                    worst_row = row;
+                }
+
+                for (const float field: std::bit_cast<std::array<float, 4u>>(particle.m_deformation_displacement)) {
+                    max_D = std::max(max_D, std::abs(field));
+                }
+
+                for (const float field: std::bit_cast<std::array<float, 4u>>(particle.m_deformation_gradient))
+                    max_F = std::max(max_F, std::abs(field));
+            }
+
+            std::fprintf(
+                stderr,
+                "[frontier-late-dig-collected] endpoint=%u tick=%llu phase=%s rows=%zu max_abs_d=%.9g max_abs_D=%.9g max_abs_F=%.9g worst_d_row=%zu",
+                static_cast<unsigned>(endpoint), static_cast<unsigned long long>(driver.tickCount()),
+                dig_requested ? "after-dig-request" : "before-dig", state.m_particles.size(),
+                static_cast<double>(max_d), static_cast<double>(max_D), static_cast<double>(max_F), worst_row);
+            if (not state.m_particles.empty()) {
+                const auto &particle = state.m_particles[worst_row];
+                std::fprintf(
+                    stderr, " material=%u solver_position=(%.9g,%.9g)",
+                    static_cast<unsigned>(state.m_records[worst_row].m_material),
+                    static_cast<double>(particle.m_position_x), static_cast<double>(particle.m_position_y));
+            }
+
+            std::fprintf(stderr, "\n");
+            std::fflush(stderr);
+
+            const auto validity = validateMatterState(
+                state, driver.preparedWorld()->generated().m_plan.recipe().m_materials, kFineCellMetres, thickness,
+                kMatterGravityY);
+            if (validity)
+                owner.reportFailure(validity, "frontier-late-dig-published-state");
+
+            PPR_TEST_ASSERT(not validity);
+            // Healthy default-world motion is about 0.003 cells/substep. These
+            // scene-specific bounds leave room for impacts while detecting the
+            // former pressure runaway (displacement > 5 and affine D > 16).
+            PPR_TEST_ASSERT(max_d < 0.1f and max_D < 0.1f);
+        };
+
+        observe();
+        const u32 last_endpoint = onset_only ? 320u : 3700u;
+        for (endpoint = 1u; endpoint <= last_endpoint; ++endpoint) {
+            if (not onset_only and endpoint == 3601u) {
+                // Choose a nearby 5x7 selection with the same 23 emitted cells
+                // as the reported failure, using only the authored terrain.
+                std::optional<DigRect> selected;
+                for (u32 y = 458u; y <= 498u and not selected; ++y) {
+                    for (u32 x = 3256u; x <= 3296u and not selected; ++x) {
+                        u32 diggable{};
+                        bool valid = true;
+                        for (u32 row = 0u; row < 7u; ++row) {
+                            for (u32 col = 0u; col < 5u; ++col) {
+                                const auto cell = driver.grid().getCell({x + col, y + row});
+                                PPR_TEST_ASSERT(cell.has_value());
+                                if (cell->m_element == 0u)
+                                    continue;
+
+                                const auto *const material = driver.contentCatalog()->findMaterial(cell->m_element);
+                                PPR_TEST_ASSERT(material != nullptr);
+                                if (material->m_representation != EMaterialRepresentation::terrain or
+                                    material->m_phase != EMaterialPhase::solid) {
+                                    valid = false;
+                                    continue;
+                                }
+
+                                diggable += material->m_diggable.value_or(false) ? 1u : 0u;
+                            }
+                        }
+
+                        if (valid and diggable == 23u)
+                            selected = DigRect{{x, y}, 5u, 7u};
+                    }
+                }
+
+                PPR_TEST_ASSERT(selected.has_value());
+                const DigRect dig = *selected;
+                const auto before = driver.digTotal();
+                dig_requested = true;
+                PPR_TEST_ASSERT(not driver.requestDig(dig.m_min, dig.m_width, dig.m_height));
+
+                owner.update(TimeSpan{});
+                PPR_TEST_ASSERT(not driver.editPending());
+                removed_cells = static_cast<u32>(driver.digTotal() - before);
+                PPR_TEST_ASSERT(removed_cells == 23u);
+                std::fprintf(
+                    stderr, "[frontier-late-dig-edit] tick=%llu dig=(%u,%u,5,7) removed=%u total=%llu\n",
+                    static_cast<unsigned long long>(driver.tickCount()), static_cast<unsigned>(dig.m_min.m_x),
+                    static_cast<unsigned>(dig.m_min.m_y), static_cast<unsigned>(removed_cells),
+                    static_cast<unsigned long long>(driver.digTotal()));
+                std::fflush(stderr);
+                observe();
+            }
+
+            owner.step();
+            owner.drain();
+            owner.update(TimeSpan{});
+            PPR_TEST_ASSERT(driver.tickCount() == endpoint);
+
+            if (endpoint % 60u == 0u or (dig_requested and endpoint % 10u == 0u) or endpoint == last_endpoint)
+                observe();
+        }
+
+        passed = true;
+    }
+
+    PPR_UNIT_TEST (frontier_seed_42_five_by_seven_dig_stays_stable_for_3700_ticks) {
+        exerciseFrontierPressureStability(false);
+    };
+
+    PPR_UNIT_TEST (frontier_seed_42_liquids_stay_stable_past_prior_explosion) {
+        exerciseFrontierPressureStability(true);
+    };
+
+    // ------------------------------------------------------------------
+    // sustained actual dug-sand integration
+    // ------------------------------------------------------------------
+
+    PPR_UNIT_TEST (dense_dug_sand_cavity_preserves_valid_resident_state_for_120_ticks) {
+        exerciseDenseDigDiagnostic({{120u, 40u}, 16u, 16u}, true);
+    };
+
+    PPR_UNIT_TEST (dense_dug_sand_drop_preserves_valid_resident_state_for_120_ticks) {
+        exerciseDenseDigDiagnostic({{3274u, 482u}, 16u, 16u}, false);
+    };
+
     PPR_UNIT_TEST (dug_sand_sustains_sixty_runtime_ticks_on_shared_terrain) {
         constexpr DigRect dig{{127u, 40u}, 2u, 1u};
         static_assert(dig.m_width <= kMaxDigEdge and dig.m_height <= kMaxDigEdge);
@@ -2205,6 +2557,10 @@ namespace pP::game::tests {
             detail::checkpoint::coverage_deferral_keeps_cohort_then_evolution_allows_a_later_tick_retry,
             detail::checkpoint::identically_restored_attached_owners_preserve_columns_and_resume_the_same_tick,
             detail::checkpoint::dug_sand_sustains_sixty_runtime_ticks_on_shared_terrain,
+            detail::checkpoint::frontier_seed_42_five_by_seven_dig_stays_stable_for_3700_ticks,
+            detail::checkpoint::frontier_seed_42_liquids_stay_stable_past_prior_explosion,
+            detail::checkpoint::dense_dug_sand_cavity_preserves_valid_resident_state_for_120_ticks,
+            detail::checkpoint::dense_dug_sand_drop_preserves_valid_resident_state_for_120_ticks,
             detail::checkpoint::full_frontier_frozen_fused_budget_pair,
             detail::checkpoint::compact_formats_frontier_trajectory_export,
         });

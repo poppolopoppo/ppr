@@ -9,7 +9,7 @@ terrain, Box2D, edit and checkpoint adapters. Drawing never advances this solver
 
 ## Public seams
 
-- `Matter.Gpu.Types.cppm` (`:gpu.types`): source material enum, source default
+- `Matter.Gpu.Types.cppm` (`:gpu.types`): source material enum, source-derived default
   profile and explicit scalar CPU/GPU protocol. The semantic record `GpuParticle`
   is 88 bytes (CPU rows, snapshots, checkpoints, v5 wire); the device stores each
   particle as a 64-byte `ParticleWrite` hot row plus a 24-byte `ParticleReadonly`
@@ -173,3 +173,8 @@ Current numerical, resident-status, publication-validator and append fixtures
 use the same resident execution path. The completion coverage/retirement ledger
 is in `out/diagnostics/gpu-authoritative-20261020/completion-20261021/`;
 current integrated execution remains a separate validation gate.
+
+The default liquid relaxation is1 for the admitted K2 integration schedule. The
+pin's value2 has an amplifying isolated density/affine-pressure mode; shader
+arithmetic and fixed-point overflow checks are unchanged. Regression coverage
+asserts density-error decay and bounded full-frontier motion after a5×7 dig.

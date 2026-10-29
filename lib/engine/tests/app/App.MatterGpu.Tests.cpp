@@ -17,7 +17,7 @@ namespace pP::tests::detail::MatterGpu {
     using namespace pP::matter;
 
     // ------------------------------------------------------------------
-    // explicit headless D3D12 fixture
+    // explicit native headless GPU fixture
     // ------------------------------------------------------------------
 
     struct Fixture {
@@ -39,8 +39,14 @@ namespace pP::tests::detail::MatterGpu {
             m_rhi->setGpuAssistedValidation(validation);
             PPR_TEST_ASSERT(m_rhi->isCoreValidationEnabled() == validation);
             PPR_TEST_ASSERT(m_rhi->isGpuAssistedValidationEnabled() == validation);
-            PPR_TEST_ASSERT(not m_rhi->initialize(rhi::DeviceType::D3D12, *m_shaders));
-            PPR_TEST_ASSERT(m_rhi->getDevice().getDeviceType() == rhi::DeviceType::D3D12);
+#ifdef _WIN32
+            constexpr auto backend = rhi::DeviceType::D3D12;
+#else
+            constexpr auto backend = rhi::DeviceType::Vulkan;
+#endif
+
+            PPR_TEST_ASSERT(not m_rhi->initialize(backend, *m_shaders));
+            PPR_TEST_ASSERT(m_rhi->getDevice().getDeviceType() == backend);
             PPR_TEST_ASSERT(
                 not make_error_code(m_rhi->getDevice().getQueue(rhi::QueueType::Graphics, m_queue.writeRef())));
 
@@ -1569,6 +1575,87 @@ namespace pP::tests::detail::MatterGpu {
         PPR_TEST_ASSERT(fixture.m_solver.inspectTimingForTest().m_query_count == 0u);
     };
 
+    // ------------------------------------------------------------------
+    // isolated liquid pressure recurrence diagnostic
+    // ------------------------------------------------------------------
+
+    PPR_UNIT_TEST (isolated_liquid_density_error_decays_without_affine_growth) {
+        Fixture fixture;
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+        // One isolated sample has sum(W^2) < 1, so gathered reciprocal
+        // volume exceeds one and the default volume blend remains inactive.
+        fixture.initialize(true, 256u, 256u);
+
+        GpuParameters parameters = fixture.m_solver.profile();
+        PPR_TEST_ASSERT(parameters.m_liquid_relaxation == 1.0f);
+        parameters.m_gravity_strength = 0.0f;
+        parameters.m_delta_time = 1.0f / 480.0f;
+        parameters.m_fixed_point_multiplier = 10'000'000u;
+
+        PPR_TEST_ASSERT(not fixture.m_solver.shutdown());
+        PPR_TEST_ASSERT(not fixture.m_solver.initialize(
+            fixture.m_rhi->getDevice(), *fixture.m_queue, *fixture.m_shaders, std::filesystem::current_path(),
+            parameters));
+
+        const std::array<std::pair<float, float>, 2u> cases{{{1.001f, 0.0f}, {0.999f, 0.00025f}}};
+        for (const auto &[initial_density, initial_diagonal]: cases) {
+            auto particle = restParticle();
+            particle.m_position_x = 128.5f;
+            particle.m_position_y = 128.5f;
+            particle.m_material = static_cast<float>(ESourceMaterial::liquid);
+            particle.m_mass = 1.0f;
+            particle.m_volume = 1.0f;
+            particle.m_liquid_density = initial_density;
+            particle.m_deformation_displacement = {initial_diagonal, 0.0f, 0.0f, initial_diagonal};
+            fixture.replace({&particle, 1u});
+
+            for (u32 substep = 0u; substep <= 8u; ++substep) {
+                if (substep != 0u) {
+                    const u64 epoch = fixture.m_solver.accounting().m_epoch;
+                    fixture.finishOneSubstep();
+                    const auto snapshot = fixture.publishSnapshot(epoch);
+                    PPR_TEST_ASSERT(snapshot.size() == 1u);
+                    particle = snapshot[0u];
+                }
+
+                float max_D{};
+                for (const float field: std::bit_cast<std::array<float, 4u>>(particle.m_deformation_displacement))
+                    max_D = std::max(max_D, std::abs(field));
+
+                std::fprintf(
+                    stderr,
+                    "[isolated-liquid-pressure] initial_J=%.9g initial_D_diagonal=%.9g substep=%u K=2 J=%.9g trace_D=%.9g d=(%.9g,%.9g) max_abs_D=%.9g lambda=%.9g position=(%.9g,%.9g)\n",
+                    static_cast<double>(initial_density), static_cast<double>(initial_diagonal),
+                    static_cast<unsigned>(substep), static_cast<double>(particle.m_liquid_density),
+                    static_cast<double>(
+                        particle.m_deformation_displacement.m_c0x + particle.m_deformation_displacement.m_c1y),
+                    static_cast<double>(particle.m_displacement_x), static_cast<double>(particle.m_displacement_y),
+                    static_cast<double>(max_D), static_cast<double>(particle.m_lambda),
+                    static_cast<double>(particle.m_position_x), static_cast<double>(particle.m_position_y));
+                std::fflush(stderr);
+
+                for (const float field: std::bit_cast<std::array<float, 22u>>(particle))
+                    PPR_TEST_ASSERT(std::isfinite(field));
+
+                PPR_TEST_ASSERT(std::abs(particle.m_liquid_density - 1.0f) < 0.0011f);
+                PPR_TEST_ASSERT(max_D < 0.0011f);
+                PPR_TEST_ASSERT(std::abs(particle.m_displacement_x) < 0.00001f);
+                PPR_TEST_ASSERT(std::abs(particle.m_displacement_y) < 0.00001f);
+                PPR_TEST_ASSERT(particle.m_mass == 1.0f and particle.m_volume == 1.0f);
+                PPR_TEST_ASSERT(particle.m_material == static_cast<float>(ESourceMaterial::liquid));
+                PPR_TEST_ASSERT(particle.m_enabled == 1.0f and particle.m_lambda == 0.0f);
+                PPR_TEST_ASSERT(particle.m_position_x == 128.5f and particle.m_position_y == 128.5f);
+
+                if (substep >= 2u) {
+                    PPR_TEST_ASSERT(std::abs(particle.m_liquid_density - 1.0f) < 0.00001f);
+                    PPR_TEST_ASSERT(max_D < 0.00001f);
+                }
+            }
+        }
+    };
+
     PPR_UNIT_TEST (initialized_rest_gravity_and_publication) {
         Fixture fixture;
         PPR_DEFER {
@@ -2790,6 +2877,7 @@ namespace pP::tests {
                 detail::MatterGpu::sparse_generations_poison_capacity_and_cross_group_budget_are_transactional,
                 detail::MatterGpu::opt_in_stage_timing_follows_completed_fence_and_epoch,
                 detail::MatterGpu::deterministic_1024_sparse_dense_scene,
+                detail::MatterGpu::isolated_liquid_density_error_decays_without_affine_growth,
                 detail::MatterGpu::initialized_rest_gravity_and_publication,
                 detail::MatterGpu::all_materials_preserve_inventory_and_publish_finite_state_at_k2,
                 detail::MatterGpu::k2_only_rejects_other_counts_before_work,
