@@ -66,6 +66,10 @@ module bindings for third-party libraries consumed by the engine.
 - `cmake/Dependencies.cmake` — package list (GLFW, Mango, rapidhash, SlangRHI, STB, DearImGui).
 - `DearImGui.cmake` — `imgui.base` static + `imgui` module, shared bindings cache, `CXX_MODULE_STD OFF`.
 - `SlangRHI.cmake` — Slang-RHI CPM, unity build, `CXX_MODULE_STD OFF`.
+- `PatchStbResize.cmake` — hash-checked private resize header with overlap-safe,
+  alignment-safe scalar coefficient packing; the original SIMD path is retained.
+- `PatchSlangRhiSurface.cmake` — hash-checked private Vulkan surface source copy,
+  preserving outdated-swapchain status for renderer recovery without mutating CPM.
 - `GLFW.cmake` / `Mango.cmake` / `rapidhash.cmake` / `STB.cmake` — per-dependency fetch/link settings.
 - `vcpkg.json` — manifest (fmt, zlib, libdeflate, zstd, lcms, glfw, …).
 `FastNoiseLite.cmake` pins Auburn/FastNoiseLite v1.1.1 at immutable commit `7ccfbc16eb1c932568f177d63a9ba51d89bbe516` via CPM. Its SYSTEM interface include target `ppr.fast_noise_lite` is a PRIVATE dependency of `engine.sim`. The upstream header is included only by `Sim.WorldGen.Noise.cpp`. License notices and provenance are retained in `third_party/FastNoiseLite/`.
