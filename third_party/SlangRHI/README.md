@@ -4,10 +4,11 @@ Upstream: https://github.com/shader-slang/slang-rhi
 
 Build route: CPM source build, `cmake/external/SlangRHI.cmake`:
 
-- `GIT_TAG ad1b92f` — prefix of the fully verified
-  `ad1b92f161a116716fab2eff34090de6a4b9ff5d` (2026-09-17, #864), matching the
-  implementation-verified working-copy HEAD in the CPM cache; the comment in
-  `SlangRHI.cmake` records that provenance rather than inferring it.
+- `GIT_TAG a78e208` — prefix of the reviewed
+  `a78e208be303df9f934a52e5557665b9b3538cb9` (2026-10-29, #949); the patch's
+  hash gate in `PatchSlangRhiSurface.cmake` re-records the reviewed
+  `vk-surface.cpp` at this revision, and `SlangRHI.cmake` records the pin
+  provenance rather than inferring it.
 - `SLANG_RHI_ENABLE_CUDA/OPTIX/CPU/D3D11` all `OFF`; Vulkan and D3D12 keep
   their upstream defaults (`ON`). Runtime device creation goes through
   `DeviceType::Default` (slang-rhi's own API resolution) with an
@@ -34,7 +35,10 @@ with redistribution, keep the applicable notices.
 surface implementation. Acquisition/presentation `VK_ERROR_OUT_OF_DATE_KHR`
 returns `SLANG_E_PENDING`, allowing Renderer to fence and reconfigure the
 swapchain without claiming presentation or treating resize as device failure.
-Other Vulkan errors retain upstream failure behavior; the CPM cache is unchanged.
+Since 2026-10-29 upstream itself drops an outdated present with `SLANG_OK`;
+the patch keeps the observable `SLANG_E_PENDING` so the not-presented image
+stays visible to `settlePresent()`. Other Vulkan errors retain upstream
+failure behavior; the CPM cache is unchanged.
 
 - `engine.rhi` (EXTERNAL_SYSTEM_PUBLIC_DEPS slang-rhi slang) wraps the RHI
   interfaces into `pP::rhi`: `using`-aliases for `IDevice`, buffers, textures,

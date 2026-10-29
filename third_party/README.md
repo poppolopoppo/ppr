@@ -25,11 +25,11 @@ Sources of dependency versions:
 |---|---|---|---|
 | [Mango](Mango/README.md) | `main` @ `a091541` (2026-09-24) | CPM source build | `engine.math` (math re-export), `engine.image` (`mango-image`), `engine.mesh` (`mango-import3d`) |
 | [rapidhash](rapidhash/README.md) | `master` @ `1ae7842` (2026-08-19) | CPM source | `engine.core` hashing |
-| [Slang-RHI](SlangRHI/README.md) | `ad1b92f` = `ad1b92f16…` (#864, 2026-09-17) | CPM source build | `engine.rhi` |
+| [Slang-RHI](SlangRHI/README.md) | `a78e208` = `a78e208b…` (#949, 2026-10-29) | CPM source build | `engine.rhi` |
 | [Slang](Slang/README.md) | 2026.17.1 prebuilt | fetched by Slang-RHI (`SLANG_RHI_FETCH_SLANG`) | `engine.shader`, `engine.rhi`, render passes, game |
 | [STB](STB/README.md) | `2b2e64bc4778df6a06fbea3a5dbe61f7a76ecf19` | CPM source + private alignment patch | `engine.image` mip chain (`stb_image_resize2`) |
-| [Dear ImGui](DearImGui/README.md) | `v1.92.9b-docking` | CPM source build | `engine.app` (`imgui.base` static + UI layer), game UI |
-| [imgui-module bindings](imgui-module/README.md) | `v1.92.9b` | CMake download into shared dir | `imgui` C++20 module target |
+| [Dear ImGui](DearImGui/README.md) | `v1.93.0-docking` | CPM source build | `engine.app` (`imgui.base` static + UI layer), game UI |
+| [imgui-module bindings](imgui-module/README.md) | `v1.93.0` | CMake download into shared dir | `imgui` C++20 module target |
 | [toml++](tomlplusplus/README.md) | 3.4.0 (port `3.4.0#1`) | vcpkg; CPM fallback pins `v3.4.0` | `engine.core` config file codec |
 | [GLFW](GLFW/README.md) | 3.4 (port `3.4#1`) | vcpkg (no CPM fallback) | `engine.app` platform/input/window/player backend |
 | [Box2D](box2d/README.md) | 3.1.1 (manifest override) | vcpkg | `engine.physics` |

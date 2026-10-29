@@ -54,7 +54,7 @@ binary must carry that disclaimer; no such build ships today.
   `cmake/external/DearImGui.cmake`. The only preset that sets it is
   `msvc-dev-freetype`; no default or release preset links this dependency.
 - The consumer is the vendored wrapper `misc/freetype/imgui_freetype.cpp` from
-  the same pinned ImGui tree (`v1.92.9b-docking`) already used by `imgui.base`.
+  the same pinned ImGui tree (`v1.93.0-docking`) already used by `imgui.base`.
 - FreeType assumes **linear** blending upstream. PPR renders the UI in gamma
   space today, so adopting FreeType requires a separate blending/color-space
   decision that is explicitly out of scope here (see

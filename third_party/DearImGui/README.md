@@ -5,7 +5,7 @@ repository's `docking` branch
 
 Build route: CPM source, `cmake/external/DearImGui.cmake`:
 
-- `GIT_TAG v1.92.9b-docking` — an immutable tag pointing at the docking
+- `GIT_TAG v1.93.0-docking` — an immutable tag pointing at the docking
   branch release; the same revision supplies the vendored
   `misc/freetype/imgui_freetype.cpp` wrapper (see
   [FreeType](../FreeType/README.md)), so no second pin can drift.
@@ -41,4 +41,4 @@ software.
   blending caveat when evaluating that backend.
 
 Version bumps of ImGui change the module binding contract too — keep the
-`imgui-module` version in lockstep (both currently `1.92.9b`).
+`imgui-module` version in lockstep (both currently `1.93.0`).
