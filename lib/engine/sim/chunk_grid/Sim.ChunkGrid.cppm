@@ -164,6 +164,10 @@ export namespace pP::sim {
             CapturedChunk &operator=(const CapturedChunk &) = delete;
             CapturedChunk(CapturedChunk &&other) noexcept;
             CapturedChunk &operator=(CapturedChunk &&other) noexcept;
+            /// Defined out of line: clang 23 crashes in codegen
+            /// (CodeGenFunction::GetVTTParameter) when an importer emits this
+            /// implicitly-defined destructor from the module.
+            ~CapturedChunk() noexcept;
             [[nodiscard]] ChunkPos position() const noexcept;
             [[nodiscard]] std::optional<std::span<const Cell>> residentCells() const noexcept;
         };

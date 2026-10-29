@@ -126,7 +126,7 @@ namespace pP {
                     case Error: level = Log::ELevel::error; break;
                 }
 
-                Log::logRaw({category, level, loc}, message, {{"source", source_name}});
+                Log::logRaw({category, level, loc}, trim(std::string_view(message)), {{"source", source_name}});
             }
         };
 
@@ -377,6 +377,10 @@ namespace pP {
                 rhi::DeviceDesc desc{};
                 desc.deviceType = device_type;
                 desc.slang.slangGlobalSession = shader_service.getGlobalSession();
+
+                // PPR does not launch CUDA kernels from graphics command buffers.
+                // VK_NVX_binary_import fails device creation on some NVIDIA drivers.
+                desc.enableCUDALaunchFromGfx = false;
 
                 desc.requiredFeatures = required_features;
                 desc.requiredFeatureCount = safe_narrowing(std::size(required_features));

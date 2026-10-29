@@ -42,14 +42,6 @@ namespace pP::ui {
             }
         };
 
-        constexpr ImGuiWindowFlags kChromeFlags = ImGuiWindowFlags_NoTitleBar |
-                                                  ImGuiWindowFlags_NoMove |
-                                                  ImGuiWindowFlags_NoResize |
-                                                  ImGuiWindowFlags_NoCollapse |
-                                                  ImGuiWindowFlags_NoSavedSettings |
-                                                  ImGuiWindowFlags_NoFocusOnAppearing |
-                                                  ImGuiWindowFlags_NoDocking;
-
         // ------------------------------------------------------------------
         // graphite presentation
         // ------------------------------------------------------------------

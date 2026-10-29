@@ -656,6 +656,17 @@ export namespace pP {
         return trimLeft(trimRight(std::forward<CharactersT>(characters)));
     }
 
+    template<details::TChar CharT>
+    std::basic_string_view<CharT> trim(const std::basic_string_view<CharT> sv) {
+        const auto start = std::ranges::find_if_not(sv, isSpace<CharT>);
+        const auto end = std::ranges::find_if_not(sv | std::views::reverse, isSpace<CharT>).base();
+
+        if (start < end) {
+            return {&*start, safe_narrowing{std::distance(start, end)}};
+        }
+        return {};
+    }
+
     template<details::TCharRange CharactersT>
         requires std::ranges::contiguous_range<CharactersT>
     [[nodiscard]] constexpr auto xmlEscape(CharactersT &&characters) noexcept {

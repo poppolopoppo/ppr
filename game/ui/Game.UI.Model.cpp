@@ -7,6 +7,7 @@ module game.ui.model;
 
 import engine.core;
 import engine.sim;
+import game.colony.agents;
 import game.colony.content;
 import game.colony.worldgen;
 import std;

@@ -93,7 +93,12 @@ extern "C" void _ReadWriteBarrier();
 #define PPR_PRAGMA_WARNING_POP() __pragma(warning(pop))
 #elif defined(__clang__) || defined(__GNUC__)
 #define PPR_ATTRIBUTE_CODE_SEGMENT(_NAME)
+#if defined(__clang__)
+// The C++23 attribute avoids ambiguous builtin declarations imported from separate modules.
+#define PPR_ASSUME(...) ([&]() noexcept { [[assume(__VA_ARGS__)]]; }())
+#else
 #define PPR_ASSUME(...) ::__builtin_assume(__VA_ARGS__)
+#endif
 #define PPR_COMPILER_READWRITE_BARRIER() asm volatile("" ::: "memory")
 #define PPR_EMPTY_BASES
 #define PPR_FLATTEN [[gnu::flatten]]
