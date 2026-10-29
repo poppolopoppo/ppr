@@ -8,6 +8,11 @@ Sets up C++23 modules, compiler toolchains, sanitizers, and external dependency 
 
 ## Design
 
+- Linux Clang executables load libc++/libc++abi before codec dependencies through
+  `Compilers.cmake`, avoiding mixed exception runtime entry points. Linux ASan
+  test/launch policy and narrowly scoped driver exclusions are documented in
+  [sanitizers](sanitizers/README.md).
+
 - **Root `CMakeLists.txt`**: C++23 (`CMAKE_CXX_STANDARD 23`, `SCAN_FOR_MODULES ON`,
   `EXPORT_COMPILE_COMMANDS ON`), project `PPR`; version-gated `CMAKE_EXPERIMENTAL_CXX_IMPORT_STD` UUIDs
   (4.2/4.3/4.4+) + `EXPORT_BUILD_DATABASE` before `project()`; `CMAKE_CXX_STANDARD_INCLUDE_DIRECTORIES`
@@ -28,7 +33,11 @@ Sets up C++23 modules, compiler toolchains, sanitizers, and external dependency 
   `CMakePresets.json:117-127`), `clang-cl-dev`/`clang-cl-rel`, `msvc-live` (Debug + `/ZI` Edit & Continue with the live link set
   `/DEBUG:FULL` + `/INCREMENTAL` + `/OPT:NOREF,NOICF` + `/LTCG:OFF` + `/PDBTMCACHE`, all
   `PPR_EDIT_AND_CONTINUE`-scoped; no sanitizers/ccache, `PPR_RELEASE_PERF_FLAGS OFF`, `PPR_EDIT_AND_CONTINUE ON`), `clang-dev`/`clang-rel`,
-  hidden `gcc-dev`/`gcc-rel` (**no modules**).
+  hidden `gcc-dev`/`gcc-rel` (**no modules**). `buildPresets` mirror every supported configure preset,
+  with `run-game-<preset>` entries targeting the `run-app-game` custom target; `testPresets` split the
+  routine suite (label `gpu_validation` excluded, `-j4`) from `<preset>-gpu` (that label only, serial).
+  Hidden `windows-build`/`unix-like-build` and `windows-test`/`unix-like-test` bases gate the new presets
+  so unsupported platforms do not list them.
 - **`MSVCToolchain.cmake`** (gated by `PPR_REQUIRE_MSVC_TOOLCHAIN`, set only by the hidden
   `windows-msvc-toolchain` preset; included before `VCPkg.cmake` and `project()` for native `msvc-*` only):
   requires a Windows host on x64 vcvars64 (`VSCMD_ARG_HOST_ARCH`/`VSCMD_ARG_TGT_ARCH` = `x64`), VS 18

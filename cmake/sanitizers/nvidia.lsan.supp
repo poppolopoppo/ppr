@@ -1,0 +1,5 @@
+# NVIDIA 615.78.08: process-owned allocations reproduced by the isolated UI GPU
+# readback test and absent with Mesa llvmpipe. Keep Vulkan DSOs mapped so these
+# stacks retain names; never suppress unknown-module, engine, or allocator frames.
+leak:libnvidia-glcore.so
+leak:libnvidia-glsi.so
