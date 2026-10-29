@@ -276,14 +276,16 @@ namespace pP::tests::detail::MatterGpu {
         const i32 encoded_mass = 10'000'000, const float displacement_x = 0.0f,
         const std::optional<std::array<float, 2u>> contact_query = {},
         const std::span<const std::array<float, 2u>> wave_queries = {}, const std::span<const u32> wave_enabled = {},
-        const bool inspect_codec = false, const bool inspect_bootstrap = false) {
+        const bool inspect_codec = false, const bool inspect_bootstrap = false, const bool inspect_transport = false) {
         auto &device = fixture.m_rhi->getDevice();
         const bool wave = not wave_queries.empty();
-        auto &pipeline = inspect_bootstrap ? fixture.m_bootstrap_pipeline
-                         : inspect_codec   ? fixture.m_codec_pipeline
-                         : wave            ? fixture.m_wave_compare_pipeline
-                         : contact_query   ? fixture.m_compare_pipeline
-                                           : fixture.m_contact_pipeline;
+        rhi::ComPtr<rhi::IComputePipeline> transport_pipeline;
+        auto &pipeline = inspect_transport   ? transport_pipeline
+                         : inspect_bootstrap ? fixture.m_bootstrap_pipeline
+                         : inspect_codec     ? fixture.m_codec_pipeline
+                         : wave              ? fixture.m_wave_compare_pipeline
+                         : contact_query     ? fixture.m_compare_pipeline
+                                             : fixture.m_contact_pipeline;
         if (not pipeline) {
             shader::SharedModule module;
             PPR_TEST_ASSERT(not fixture.m_shaders->loadModuleFromFile(
@@ -291,11 +293,12 @@ namespace pP::tests::detail::MatterGpu {
                 module.writeRef()));
             shader::ComPtr<slang::IEntryPoint> entry;
             PPR_TEST_ASSERT(not make_error_code(module->findEntryPointByName(
-                inspect_bootstrap ? "compareBootstrapChecks"
-                : inspect_codec   ? "inspectCompactTerrain"
-                : wave            ? "compareWaveTerrainSearch"
-                : contact_query   ? "compareTerrainSearch"
-                                  : "inspectContact",
+                inspect_transport   ? "inspectTerrainTransportBudget"
+                : inspect_bootstrap ? "compareBootstrapChecks"
+                : inspect_codec     ? "inspectCompactTerrain"
+                : wave              ? "compareWaveTerrainSearch"
+                : contact_query     ? "compareTerrainSearch"
+                                    : "inspectContact",
                 entry.writeRef())));
 
             slang::IComponentType *entries[]{entry.get()};
@@ -521,8 +524,8 @@ namespace pP::tests::detail::MatterGpu {
         // would incorrectly reject this interior query as flag 16.
         const std::array<u32, 1u> boundary{14u};
         const std::array<u32, 1u> solid{15u};
-        const TerrainView with_boundary{boundary, 1u, 1u, 5.5f, 6.5f};
-        const TerrainView without_boundary{solid, 1u, 1u, 5.5f, 6.5f};
+        const TerrainView with_boundary{boundary, 1u, 1u, 6.0f, 7.0f};
+        const TerrainView without_boundary{solid, 1u, 1u, 6.0f, 7.0f};
         compare(with_boundary, {}, {}, true, 0u);
         compare(without_boundary, {}, {}, true, 16u);
         compare(without_boundary, {}, {}, true, 0u, 0);
@@ -2531,6 +2534,422 @@ namespace pP::tests::detail::MatterGpu {
             "[terrain-wave-check] threads=64 wave_lanes_min={} wave_lanes_max={}", minimum_width, maximum_width);
     };
 
+    // ------------------------------------------------------------------
+    // published terrain recovery and continuous point contact
+    // ------------------------------------------------------------------
+
+    PPR_UNIT_TEST (terrain_recovery_sweeps_and_rest_preserve_published_contact) {
+        Fixture fixture;
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+        fixture.initialize(true, 64u, 64u);
+
+        GpuParameters parameters = fixture.m_solver.profile();
+        parameters.m_gravity_strength = 0.0f;
+        PPR_TEST_ASSERT(parameters.m_delta_time == 1.0f / 480.0f);
+        PPR_TEST_ASSERT(parameters.m_liquid_relaxation == 1.0f);
+        PPR_TEST_ASSERT(not fixture.m_solver.shutdown());
+        PPR_TEST_ASSERT(not fixture.m_solver.initialize(
+            fixture.m_rhi->getDevice(), *fixture.m_queue, *fixture.m_shaders, std::filesystem::current_path(),
+            parameters));
+
+        // Eight FP32 relative roundoff units cover the short geometric
+        // calculations at these coordinates, without a physical contact skin.
+        const auto tolerance = [](const float coordinate) {
+            return 8.0f * std::numeric_limits<float>::epsilon() * std::max(1.0f, std::abs(coordinate));
+        };
+
+        const auto valid = [&](const GpuParticle &particle, const GpuParticle &initial) {
+            for (const float field: std::bit_cast<std::array<float, 22u>>(particle))
+                PPR_TEST_ASSERT(std::isfinite(field));
+
+            PPR_TEST_ASSERT(particle.m_mass == initial.m_mass and particle.m_volume == initial.m_volume);
+            PPR_TEST_ASSERT(particle.m_material == initial.m_material and particle.m_enabled == initial.m_enabled);
+            PPR_TEST_ASSERT(fixture.m_solver.accounting().m_particle_count == 1u);
+            PPR_TEST_ASSERT(fixture.m_solver.failure().m_flags == 0u);
+        };
+
+        const auto replace = [&](const GpuParticle &initial, const TerrainView terrain) {
+            PPR_TEST_ASSERT(not fixture.m_solver.prepareReplacement(
+                {&initial, 1u}, {}, fixture.m_solver.accounting().m_epoch, terrain));
+            fixture.m_solver.publishReplacement();
+        };
+
+        const auto step = [&](const GpuParticle &initial) {
+            const u64 epoch = fixture.m_solver.accounting().m_epoch;
+
+            fixture.finishOneSubstep();
+            const auto rows = fixture.publishSnapshot(epoch);
+            PPR_TEST_ASSERT(rows.size() == 1u);
+            valid(rows[0u], initial);
+            return rows[0u];
+        };
+
+        const auto outside = [&](const GpuParticle &particle, const TerrainView terrain) {
+            const auto contact = compareTerrainSearch(fixture, terrain, {particle.m_position_x, particle.m_position_y});
+            PPR_TEST_ASSERT(contact.m_errors[0u] == 0u);
+            const float depth = std::bit_cast<float>(contact.m_contacts[1u]);
+            const float scale = std::max(std::abs(particle.m_position_x), std::abs(particle.m_position_y));
+            PPR_TEST_ASSERT(contact.m_contacts[0u] == 0u or depth <= tolerance(scale));
+        };
+
+        const auto sample_masks = [](const auto &solid) {
+            std::vector<u32> masks(32u * 32u);
+            for (u32 y = 0u; y < 32u; ++y) {
+                for (u32 x = 0u; x < 32u; ++x) {
+                    masks[y * 32u + x] = (solid(x, y) ? 1u : 0u) |
+                                         (solid(x + 1u, y) ? 2u : 0u) |
+                                         (solid(x + 1u, y + 1u) ? 4u : 0u) |
+                                         (solid(x, y + 1u) ? 8u : 0u);
+                }
+            }
+
+            return masks;
+        };
+
+        const auto floor_masks = rectangleMasks(32u, 32u, 8u);
+        const auto ceiling_masks = sample_masks(
+            [](const u32 x, const u32 y) { return x > 0u and x < 32u and y >= 24u and y < 32u; });
+        const auto wall_masks = sample_masks(
+            [](const u32 x, const u32 y) { return x >= 16u and x < 32u and y > 0u and y < 32u; });
+
+        // Reflections and admitted half-cell translations must retain the same
+        // same-step recovery and inward-velocity contract at the actual point.
+        for (const float shift: {-0.5f, 0.0f, 0.5f}) {
+            for (u32 orientation = 0u; orientation < 3u; ++orientation) {
+                const auto &masks = orientation == 0u ? floor_masks : orientation == 1u ? ceiling_masks : wall_masks;
+                const TerrainView terrain{masks, 32u, 32u, 3.0f + shift, 3.0f + shift};
+                const float boundary = (orientation == 0u ? 11.5f : orientation == 1u ? 26.5f : 18.5f) + shift;
+                const float normal = orientation == 0u ? 1.0f : -1.0f;
+                for (const bool at_boundary: {false, true}) {
+                    GpuParticle initial = restParticle();
+                    initial.m_position_x = 20.5f + shift;
+                    initial.m_position_y = 20.5f + shift;
+                    float &position = orientation == 2u ? initial.m_position_x : initial.m_position_y;
+                    float &displacement = orientation == 2u ? initial.m_displacement_x : initial.m_displacement_y;
+                    position = boundary - (at_boundary ? 0.0f : normal * 0.125f);
+                    displacement = at_boundary ? -normal * 0.25f : 0.0f;
+                    replace(initial, terrain);
+
+                    const GpuParticle particle = step(initial);
+                    const float coordinate = orientation == 2u ? particle.m_position_x : particle.m_position_y;
+                    const float carry = orientation == 2u ? particle.m_displacement_x : particle.m_displacement_y;
+                    PPR_TEST_ASSERT(normal * (coordinate - boundary) >= -tolerance(boundary));
+                    PPR_TEST_ASSERT(normal * carry >= -tolerance(boundary));
+                    outside(particle, terrain);
+
+                    if (not at_boundary) {
+                        PPR_TEST_ASSERT(std::abs(coordinate - boundary) <= tolerance(boundary));
+                        PPR_TEST_ASSERT(particle.m_displacement_x == 0.0f and particle.m_displacement_y == 0.0f);
+                        PPR_TEST_ASSERT(
+                            std::bit_cast<std::array<float, 4u>>(particle.m_deformation_gradient) ==
+                            std::bit_cast<std::array<float, 4u>>(initial.m_deformation_gradient));
+                        PPR_TEST_ASSERT(
+                            std::bit_cast<std::array<float, 4u>>(particle.m_deformation_displacement) ==
+                            std::bit_cast<std::array<float, 4u>>(initial.m_deformation_displacement));
+                        PPR_TEST_ASSERT(particle.m_liquid_density == initial.m_liquid_density);
+                    }
+                }
+            }
+        }
+
+        // A point slightly inside the diagonal is recovered geometrically;
+        // recovery must not turn into retained velocity or constitutive strain.
+        const TerrainView corner_floor{floor_masks, 32u, 32u, 11.5f, 3.0f};
+        GpuParticle initial = restParticle();
+        initial.m_position_x = 12.1875f;
+        initial.m_position_y = 11.125f;
+        replace(initial, corner_floor);
+
+        GpuParticle particle = step(initial);
+        PPR_TEST_ASSERT(particle.m_position_x - particle.m_position_y <= 1.0f + tolerance(12.5f));
+        PPR_TEST_ASSERT(particle.m_displacement_x == 0.0f and particle.m_displacement_y == 0.0f);
+        PPR_TEST_ASSERT(
+            std::bit_cast<std::array<float, 4u>>(particle.m_deformation_gradient) ==
+            std::bit_cast<std::array<float, 4u>>(initial.m_deformation_gradient));
+        PPR_TEST_ASSERT(
+            std::bit_cast<std::array<float, 4u>>(particle.m_deformation_displacement) ==
+            std::bit_cast<std::array<float, 4u>>(initial.m_deformation_displacement));
+        PPR_TEST_ASSERT(particle.m_liquid_density == initial.m_liquid_density);
+        outside(particle, corner_floor);
+
+        initial.m_position_x = 12.25f;
+        initial.m_position_y = 11.25f;
+        initial.m_displacement_x = 0.125f;
+        initial.m_displacement_y = -0.125f;
+        replace(initial, corner_floor);
+
+        particle = step(initial);
+        PPR_TEST_ASSERT(particle.m_position_x - particle.m_position_y <= 1.0f + tolerance(12.5f));
+        PPR_TEST_ASSERT(particle.m_displacement_x - particle.m_displacement_y <= tolerance(12.5f));
+        outside(particle, corner_floor);
+
+        // The wall is only one sample wide: both endpoints of either free
+        // trajectory are outside, so endpoint-only projection misses it.
+        const auto thin_masks = sample_masks([](const u32 x, const u32 y) { return x == 12u and y > 0u and y < 32u; });
+        const TerrainView thin_wall{thin_masks, 32u, 32u, 0.0f, 0.0f};
+        for (const float direction: {-1.0f, 1.0f}) {
+            initial = restParticle();
+            initial.m_position_x = direction > 0.0f ? 9.5f : 14.5f;
+            initial.m_position_y = 16.5f;
+            initial.m_displacement_x = direction * 6.0f;
+            replace(initial, thin_wall);
+
+            particle = step(initial);
+            const float boundary = direction > 0.0f ? 11.5f : 12.5f;
+            PPR_TEST_ASSERT(direction * (particle.m_position_x - boundary) <= tolerance(boundary));
+            PPR_TEST_ASSERT(direction * particle.m_displacement_x <= tolerance(boundary));
+            outside(particle, thin_wall);
+        }
+
+        // Oblique incidence preserves admissible sliding instead of stopping
+        // all transport, including when the first segment ends at a vertex.
+        for (const float horizontal: {0.5f, 1.0f}) {
+            initial = restParticle();
+            initial.m_position_x = 12.0f;
+            initial.m_position_y = 11.25f;
+            initial.m_displacement_x = horizontal;
+            replace(initial, corner_floor);
+
+            particle = step(initial);
+            outside(particle, corner_floor);
+            PPR_TEST_ASSERT(particle.m_position_x > initial.m_position_x);
+            PPR_TEST_ASSERT(particle.m_position_y >= initial.m_position_y - tolerance(12.5f));
+
+            if (particle.m_position_x < 12.5f - tolerance(12.5f)) {
+                PPR_TEST_ASSERT(particle.m_displacement_x - particle.m_displacement_y <= tolerance(12.5f));
+            } else {
+                PPR_TEST_ASSERT(particle.m_position_y >= 11.5f - tolerance(11.5f));
+                PPR_TEST_ASSERT(particle.m_displacement_y >= -tolerance(11.5f));
+            }
+        }
+
+        // A consistent sampled L has mask14 at local cell(16,16). Its notch
+        // vertex joins y=19.5 to x+y=38.5; free motion must satisfy both
+        // half-planes, while escape and tangency must remain possible.
+        const auto concave_masks = sample_masks([](const u32 x, const u32 y) {
+            return x > 0u and x < 32u and y > 0u and y < 32u and (x >= 17u or y >= 17u);
+        });
+        const TerrainView concave{concave_masks, 32u, 32u, 3.0f, 3.0f};
+        const std::array<std::array<float, 2u>, 3u> notch_motion{{{0.25f, 0.25f}, {-0.25f, -0.25f}, {-0.25f, 0.0f}}};
+        for (const auto &motion: notch_motion) {
+            initial = restParticle();
+            initial.m_position_x = 19.0f;
+            initial.m_position_y = 19.5f;
+            initial.m_displacement_x = motion[0u];
+            initial.m_displacement_y = motion[1u];
+            replace(initial, concave);
+
+            particle = step(initial);
+            PPR_TEST_ASSERT(particle.m_position_y <= 19.5f + tolerance(19.5f));
+            PPR_TEST_ASSERT(particle.m_position_x + particle.m_position_y <= 38.5f + tolerance(38.5f));
+            PPR_TEST_ASSERT(particle.m_displacement_y <= tolerance(19.5f));
+            PPR_TEST_ASSERT(particle.m_displacement_x + particle.m_displacement_y <= tolerance(19.5f));
+            outside(particle, concave);
+
+            if (motion[0u] < 0.0f) {
+                PPR_TEST_ASSERT(particle.m_position_x < initial.m_position_x);
+                PPR_TEST_ASSERT(particle.m_displacement_x < 0.0f);
+            }
+        }
+
+        // The same swept path first reaches a flat floor, then the corner
+        // toward a right wall. A reduced budget must reject it, while the
+        // production budget completes both geometric contacts successfully.
+        const auto funnel_masks = sample_masks([](const u32 x, const u32 y) {
+            return x > 0u and x < 32u and y > 0u and y < 32u and (y <= 8u or x >= 24u);
+        });
+        const TerrainView funnel{funnel_masks, 32u, 32u, 3.0f, 3.0f};
+        const auto budget = contactProbe(
+            fixture, funnel, {}, -4.0f, {}, 10'000'000, 8.0f, std::array<float, 2u>{20.5f, 13.5f}, {}, {}, false, false,
+            true);
+        PPR_TEST_ASSERT(budget.m_contacts[4u] == 1u and budget.m_contacts[5u] == 1u);
+        PPR_TEST_ASSERT(budget.m_contacts[11u] == 0u);
+        PPR_TEST_ASSERT((budget.m_errors[0u] & 256u) != 0u);
+        PPR_TEST_ASSERT(budget.m_errors[3u] == 7u and budget.m_errors[4u] == 0u);
+        for (std::size_t field = 0u; field < 4u; ++field)
+            PPR_TEST_ASSERT(std::isfinite(std::bit_cast<float>(budget.m_contacts[field])));
+
+        PPR_TEST_ASSERT(std::bit_cast<float>(budget.m_contacts[0u]) <= 26.5f + tolerance(26.5f));
+        PPR_TEST_ASSERT(std::bit_cast<float>(budget.m_contacts[1u]) >= 11.5f - tolerance(11.5f));
+        PPR_TEST_ASSERT(std::bit_cast<float>(budget.m_contacts[6u]) < std::bit_cast<float>(budget.m_contacts[8u]));
+
+        // Consuming one contact still permits the terminal no-hit query to
+        // finish the remaining sliding leg with the same one-contact budget.
+        const auto sliding = contactProbe(
+            fixture, {floor_masks, 32u, 32u, 3.0f, 3.0f}, {}, -4.0f, {}, 10'000'000, 2.0f,
+            std::array<float, 2u>{20.5f, 13.5f}, {}, {}, false, false, true);
+        PPR_TEST_ASSERT(sliding.m_contacts[4u] == 1u and sliding.m_contacts[5u] == 0u);
+        PPR_TEST_ASSERT(sliding.m_errors[0u] == 0u and sliding.m_contacts[11u] == 0u);
+        PPR_TEST_ASSERT(std::bit_cast<float>(sliding.m_contacts[0u]) > 21.5f);
+        PPR_TEST_ASSERT(std::bit_cast<float>(sliding.m_contacts[1u]) >= 11.5f);
+
+        // Rest recovery is independent of the constitutive material branch.
+        // Repeated zero-force contact must not manufacture pressure or strain.
+        const TerrainView floor{floor_masks, 32u, 32u, 3.0f, 3.0f};
+        for (const auto material:
+            {ESourceMaterial::liquid, ESourceMaterial::elastic, ESourceMaterial::sand, ESourceMaterial::visco}) {
+            initial = restParticle();
+            initial.m_position_x = 20.5f;
+            initial.m_position_y = 11.375f;
+            initial.m_material = static_cast<float>(material);
+            replace(initial, floor);
+
+            for (u32 substep = 0u; substep < 16u; ++substep) {
+                particle = step(initial);
+                PPR_TEST_ASSERT(particle.m_position_y >= 11.5f - tolerance(11.5f));
+                PPR_TEST_ASSERT(particle.m_displacement_x == 0.0f and particle.m_displacement_y == 0.0f);
+                PPR_TEST_ASSERT(
+                    std::bit_cast<std::array<float, 4u>>(particle.m_deformation_gradient) ==
+                    std::bit_cast<std::array<float, 4u>>(initial.m_deformation_gradient));
+                PPR_TEST_ASSERT(
+                    std::bit_cast<std::array<float, 4u>>(particle.m_deformation_displacement) ==
+                    std::bit_cast<std::array<float, 4u>>(initial.m_deformation_displacement));
+                PPR_TEST_ASSERT(particle.m_liquid_density == initial.m_liquid_density);
+                outside(particle, floor);
+            }
+
+            // Impact exercises the normal constitutive update as well as
+            // contact. Observe a bounded sequence rather than asserting rest
+            // identity for deformation generated by the physical transport.
+            initial.m_position_y = 11.625f;
+            initial.m_displacement_y = -0.25f;
+            replace(initial, floor);
+
+            for (u32 substep = 0u; substep < 8u; ++substep) {
+                particle = step(initial);
+                PPR_TEST_ASSERT(particle.m_position_y >= 11.5f - tolerance(11.5f));
+                PPR_TEST_ASSERT(particle.m_liquid_density > 0.0f);
+                outside(particle, floor);
+            }
+        }
+
+        // Admission accepts individual canonical masks, but this isolated
+        // interior cell deliberately has orphaned contour vertices. Detecting
+        // that malformed manifold must reject the working transaction.
+        std::vector<u32> orphan_masks(32u * 32u);
+        orphan_masks[16u * 32u + 16u] = 1u;
+        const TerrainView orphan{orphan_masks, 32u, 32u, 3.0f, 3.0f};
+        initial = restParticle();
+        initial.m_position_x = 19.5f;
+        initial.m_position_y = 19.0f;
+        replace(initial, orphan);
+        const u64 rejected_epoch = fixture.m_solver.accounting().m_epoch;
+        const auto committed = fixture.m_solver.committedView();
+        PPR_TEST_ASSERT(committed and committed->m_epoch == rejected_epoch);
+
+        PPR_TEST_ASSERT(not fixture.m_solver.submitResidentTick(rejected_epoch, 1u, 2u));
+        PPR_TEST_ASSERT(not fixture.m_solver.drain());
+
+        const auto rejected = fixture.m_solver.pollTick();
+        PPR_TEST_ASSERT(not rejected and rejected.error() == std::errc::result_out_of_range);
+        PPR_TEST_ASSERT((fixture.m_solver.failure().m_flags & 256u) != 0u);
+        PPR_TEST_ASSERT(fixture.m_solver.accounting().m_epoch == rejected_epoch);
+        PPR_TEST_ASSERT(committed->m_live_epoch->load() == rejected_epoch);
+
+        PPR_TEST_ASSERT(not fixture.m_solver.discardTick());
+        const auto unchanged = fixture.snapshot();
+        PPR_TEST_ASSERT(unchanged.size() == 1u);
+        PPR_TEST_ASSERT(
+            std::bit_cast<std::array<u32, 22u>>(unchanged[0u]) == std::bit_cast<std::array<u32, 22u>>(initial));
+
+        initial = restParticle();
+        initial.m_position_x = 20.5f;
+        initial.m_position_y = 11.625f;
+        replace(initial, floor);
+        particle = step(initial);
+        outside(particle, floor);
+
+        const auto rejected_input = [&](const GpuParticle &input, const TerrainView terrain, const u32 flags) {
+            replace(input, terrain);
+            const u64 epoch = fixture.m_solver.accounting().m_epoch;
+            const auto view = fixture.m_solver.committedView();
+            PPR_TEST_ASSERT(view and view->m_epoch == epoch);
+
+            PPR_TEST_ASSERT(not fixture.m_solver.submitResidentTick(epoch, 1u, 2u));
+            PPR_TEST_ASSERT(not fixture.m_solver.drain());
+
+            const auto failed = fixture.m_solver.pollTick();
+            PPR_TEST_ASSERT(not failed and failed.error() == std::errc::result_out_of_range);
+            PPR_TEST_ASSERT((fixture.m_solver.failure().m_flags & flags) != 0u);
+            PPR_TEST_ASSERT(fixture.m_solver.accounting().m_epoch == epoch);
+            PPR_TEST_ASSERT(view->m_live_epoch->load() == epoch);
+
+            PPR_TEST_ASSERT(not fixture.m_solver.discardTick());
+            const auto rows = fixture.snapshot();
+            PPR_TEST_ASSERT(rows.size() == 1u);
+            PPR_TEST_ASSERT(
+                std::bit_cast<std::array<u32, 22u>>(rows[0u]) == std::bit_cast<std::array<u32, 22u>>(input));
+        };
+
+        // Both trajectory endpoints miss this finite solid domain. Entering
+        // an incomplete slab must still reject the unpublishable transaction.
+        const std::array<u32, 1u> full_cell{15u};
+        initial = restParticle();
+        initial.m_position_x = 9.5f;
+        initial.m_position_y = 11.5f;
+        initial.m_displacement_x = 4.0f;
+        rejected_input(initial, {full_cell, 1u, 1u, 11.0f, 11.0f}, 16u | 256u);
+
+        // A represented contour endpoint admits an exactly tangent entry and
+        // an escaping ray. These remain valid despite touching the domain.
+        const std::array<u32, 1u> endpoint_cell{1u};
+        for (const float downward: {-1.0f, -0.5f}) {
+            const auto endpoint = contactProbe(
+                fixture, {endpoint_cell, 1u, 1u, 11.0f, 11.0f}, {}, downward, {}, 10'000'000, 1.0f,
+                std::array<float, 2u>{10.5f, 12.0f}, {}, {}, false, false, true);
+            PPR_TEST_ASSERT(endpoint.m_errors[0u] == 0u and endpoint.m_contacts[11u] == 0u);
+            PPR_TEST_ASSERT(std::bit_cast<float>(endpoint.m_contacts[0u]) == 11.5f);
+            PPR_TEST_ASSERT(std::bit_cast<float>(endpoint.m_contacts[1u]) >= 11.0f);
+        }
+
+        // A finite admitted gravity can overflow the grid-height product.
+        // Contact must reject its nonfinite carry instead of hiding it by
+        // projecting the inward component to zero.
+        PPR_TEST_ASSERT(not fixture.m_solver.shutdown());
+        parameters.m_gravity_strength = std::numeric_limits<float>::max();
+        PPR_TEST_ASSERT(not fixture.m_solver.initialize(
+            fixture.m_rhi->getDevice(), *fixture.m_queue, *fixture.m_shaders, std::filesystem::current_path(),
+            parameters));
+        initial = restParticle();
+        initial.m_position_x = 20.5f;
+        initial.m_position_y = 11.5f;
+        rejected_input(initial, floor, 8u);
+
+        // At world-scale X, the separately rounded target is not parallel to
+        // the diagonal even though the authored transport is. Test the actual
+        // published FP32 point using local coordinates, avoiding cancellation
+        // in a world-space x+y comparison.
+        PPR_TEST_ASSERT(not fixture.m_solver.shutdown());
+        parameters.m_grid_width = 4096u;
+        parameters.m_grid_height = 512u;
+        parameters.m_gravity_strength = 0.0f;
+        PPR_TEST_ASSERT(not fixture.m_solver.initialize(
+            fixture.m_rhi->getDevice(), *fixture.m_queue, *fixture.m_shaders, std::filesystem::current_path(),
+            parameters));
+        const std::array<u32, 1u> diagonal_cell{1u};
+        const TerrainView large_diagonal{diagonal_cell, 1u, 1u, 3175.5f, 430.5f};
+        initial = restParticle();
+        initial.m_position_x = 3175.75f;
+        initial.m_position_y = std::nextafter(430.75f, std::numeric_limits<float>::infinity());
+        initial.m_displacement_x = 0.0001f;
+        initial.m_displacement_y = -0.0001f;
+        replace(initial, large_diagonal);
+
+        particle = step(initial);
+        PPR_TEST_ASSERT((particle.m_position_x - 3175.5f) + (particle.m_position_y - 430.5f) >= 0.5f);
+        const auto rounded_contact = compareTerrainSearch(
+            fixture, large_diagonal, {particle.m_position_x, particle.m_position_y});
+        PPR_TEST_ASSERT(rounded_contact.m_errors[0u] == 0u);
+        PPR_TEST_ASSERT(
+            rounded_contact.m_contacts[0u] == 0u or std::bit_cast<float>(rounded_contact.m_contacts[1u]) == 0.0f);
+    };
+
+    // ------------------------------------------------------------------
+    // complete terrain boundary search and moving-body contacts
+    // ------------------------------------------------------------------
+
     PPR_UNIT_TEST (terrain_endpoint_response_and_complete_boundary_search) {
         Fixture fixture;
         PPR_DEFER {
@@ -2573,7 +2992,7 @@ namespace pP::tests::detail::MatterGpu {
         compare_search(24u, 24u, 15u, depth_six_queries);
 
         const auto masks = rectangleMasks(8u, 4u, 2u);
-        const TerrainView terrain{masks, 8u, 4u, 3.0f, 5.0f};
+        const TerrainView terrain{masks, 8u, 4u, 3.5f, 5.5f};
         for (const float dy: {0.0f, -0.25f, 0.25f}) {
             const GridResult result = gridContact(fixture, terrain, {}, dy);
             PPR_TEST_ASSERT(result.m_errors[0] == 0u);
@@ -2584,14 +3003,14 @@ namespace pP::tests::detail::MatterGpu {
         // The centre of either disconnected saddle is outside both triangles.
         for (const u32 saddle: {5u, 10u}) {
             const std::array<u32, 1u> mask{saddle};
-            const GridResult result = gridContact(fixture, {mask, 1u, 1u, 5.5f, 6.5f}, {}, 0.125f);
+            const GridResult result = gridContact(fixture, {mask, 1u, 1u, 6.0f, 7.0f}, {}, 0.125f);
             PPR_TEST_ASSERT(result.m_errors[0] == 0u and result.m_node[1] == 1'250'000);
         }
 
         // An unsupported node must not query a solid mask lacking a boundary.
         // Supported admission of that same incomplete geometry reports flag16.
         const std::array<u32, 1u> solid_mask{15u};
-        const TerrainView incomplete{solid_mask, 1u, 1u, 5.5f, 6.5f};
+        const TerrainView incomplete{solid_mask, 1u, 1u, 6.0f, 7.0f};
         const GridResult empty = gridContact(fixture, incomplete, {}, 0.0f, {}, 0);
         PPR_TEST_ASSERT(empty.m_errors[0] == 0u and empty.m_node[1] == 0);
         const GridResult missing_boundary = gridContact(fixture, incomplete, {}, 0.0f);
@@ -2600,7 +3019,8 @@ namespace pP::tests::detail::MatterGpu {
         // The unique nearest boundary is eight cells above the sample (left
         // 8.5, bottom 9, right 14.5). Its power-of-two depth makes normalization
         // exact for this dyadic geometry; no CPU/GPU division-parity assumption.
-        // No grid motion exists, so p stays fixed and only retained d changes.
+        // Recovery reaches the surface in this publication, without storing
+        // the positional correction as outward velocity for the next substep.
         const auto deep_masks = rectangleMasks(24u, 24u, 17u);
         GpuParticle particle = restParticle();
         particle.m_position_x = 12.5f;
@@ -2610,15 +3030,10 @@ namespace pP::tests::detail::MatterGpu {
         fixture.m_solver.publishReplacement();
         fixture.finishOneSubstep();
         const GpuParticle candidate = fixture.publishSnapshot(fixture.m_solver.accounting().m_epoch)[0];
-        const auto profile = fixture.m_solver.profile();
-        const float gravity = -static_cast<float>(profile.m_grid_height) *
-                              profile.m_gravity_strength *
-                              profile.m_delta_time *
-                              profile.m_delta_time;
-
-        PPR_TEST_ASSERT(candidate.m_position_x == 12.5f and candidate.m_position_y == 12.5f);
-        PPR_TEST_ASSERT(candidate.m_displacement_x == 0.0f);
-        PPR_TEST_ASSERT(candidate.m_displacement_y == gravity + 8.0f);
+        PPR_TEST_ASSERT(candidate.m_position_x == 12.5f);
+        PPR_TEST_ASSERT(candidate.m_position_y >= 20.5f);
+        PPR_TEST_ASSERT(candidate.m_position_y <= std::nextafter(20.5f, std::numeric_limits<float>::infinity()));
+        PPR_TEST_ASSERT(candidate.m_displacement_x == 0.0f and candidate.m_displacement_y == 0.0f);
 
         // A replacement with the same dimensions moves its boundary to a new
         // tile row. Depth four retains the original power-of-two normalization
@@ -2630,9 +3045,10 @@ namespace pP::tests::detail::MatterGpu {
         fixture.finishOneSubstep();
 
         const GpuParticle changed = fixture.publishSnapshot(fixture.m_solver.accounting().m_epoch)[0];
-        PPR_TEST_ASSERT(changed.m_position_x == 12.5f and changed.m_position_y == 12.5f);
-        PPR_TEST_ASSERT(changed.m_displacement_x == 0.0f);
-        PPR_TEST_ASSERT(changed.m_displacement_y == gravity + 4.0f);
+        PPR_TEST_ASSERT(changed.m_position_x == 12.5f);
+        PPR_TEST_ASSERT(changed.m_position_y >= 16.5f);
+        PPR_TEST_ASSERT(changed.m_position_y <= std::nextafter(16.5f, std::numeric_limits<float>::infinity()));
+        PPR_TEST_ASSERT(changed.m_displacement_x == 0.0f and changed.m_displacement_y == 0.0f);
     };
 
     PPR_UNIT_TEST (moving_body_static_limit_translation_rotation_and_one_way_contact) {
@@ -2892,6 +3308,7 @@ namespace pP::tests {
                 detail::MatterGpu::all_four_absolute_budgets_reject_without_publication,
                 detail::MatterGpu::strict_conversion_and_collection_retry_preserve_cause,
                 detail::MatterGpu::prepared_replacement_accounts_peak_and_freezes_admission,
+                detail::MatterGpu::terrain_recovery_sweeps_and_rest_preserve_published_contact,
                 detail::MatterGpu::terrain_endpoint_response_and_complete_boundary_search,
                 detail::MatterGpu::wave_boundary_search_matches_serial_for_full_mixed_groups,
                 detail::MatterGpu::moving_body_static_limit_translation_rotation_and_one_way_contact,

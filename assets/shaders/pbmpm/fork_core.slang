@@ -1,6 +1,6 @@
 // Selected ErikSom/pbmpm 859c449 numerical/storage core.
 // BSD-3-Clause notice: LICENSE.md. Arithmetic expressions are retained verbatim.
-// The two engine-only insertion sites preserve the no-hook conformance order.
+// Engine-only hooks preserve the no-hook conformance order.
 struct Hot { float px, py, dx, dy; SourceMatrix F, D; float J, logJp, lambda, enabled; };
 struct Cold { float mass, volume, material, r, g, b; };
 struct Bucket { uint start, count, x, y; };
@@ -191,9 +191,14 @@ Particle integration(Particle p, uint row) {
     }
 
 #ifdef PBMPM_ENGINE_ADAPTERS
-    engineEndpointContacts(position,d,row);
+    // Terrain transport/recovery is geometric and must not enter F/D/J or be
+    // added to next-step motion. The no-adapter conformance path is unchanged.
+    engineEndpointContacts(float2(p.positionX,p.positionY),float2(p.displacementX,p.displacementY),position,d,row);
 #endif
     position=guardian(position,uint2(g_parameters.gridWidth,g_parameters.gridHeight),3.0);
+#ifdef PBMPM_ENGINE_ADAPTERS
+    terrainValidatePosition(position,row);
+#endif
     p.positionX=position.x; p.positionY=position.y; p.displacementX=d.x; p.displacementY=d.y;
     return p;
 }

@@ -97,6 +97,15 @@ distance. Per-cell segment arithmetic and complete-ring termination are unchange
 Endpoint queries retain the serial search. This adds no dispatch or device buffer;
 the serial entries remain the capability fallback on devices without `WaveOps`.
 
+Terrain grid queries use sample centres (`node+0.5`), matching the quadratic
+weights/APIC offsets. `terrain_motion.slang` retains canonical segments for
+same-substep particle recovery and swept transport, with separate carried motion
+and unchanged constitutive updates. Its clipped supercover DDA and local directed
+vertex cones allow sliding without endpoint tunnelling. Recovery is not launch
+velocity. Rounding/position certification and a 32-contact work budget fail the
+working transaction with flag 256; no new device resources or CPU/GPU ABI are
+introduced. The shader README documents resolution reasons and body ordering.
+
 Checked finite integer conversion and per-node/per-field uint CAS absolute-sum
 budgets prevent signed scatter overflow; every cycle resets all four budgets.
 Production reserves each rounded contribution in a shared absolute budget before

@@ -95,6 +95,49 @@ void inspectContact() {
     g_contact_result[3]=checkedEncodeNode(state.w,base/4u,3u);
 }
 
+// ------------------------------------------------------------------
+// production terrain transport with a reduced contact budget
+// ------------------------------------------------------------------
+
+[shader("compute")]
+[numthreads(1,1,1)]
+void inspectTerrainTransportBudget(uniform float2 g_contact_query) {
+    uint base = (7u * 32u + 6u) * 4u;
+    float2 motion = float2(g_gridSrc[base], g_gridSrc[base + 1u]) / float(g_parameters.fixedPointMultiplier);
+    float2 position = g_contact_query + motion;
+    float2 carry = motion;
+    terrainTransport(g_contact_query, motion, position, carry, 0u);
+    g_contact_result[0] = asint(position.x);
+    g_contact_result[1] = asint(position.y);
+    g_contact_result[2] = asint(carry.x);
+    g_contact_result[3] = asint(carry.y);
+    g_contact_result[11] = int(g_errors[0]);
+
+    // Prove this is a real multi-contact path, rather than merely a nonzero
+    // tangent left after one impact. Use the same first-contact operations.
+    float first;
+    TerrainFeature feature;
+    bool firstHit = terrainSweep(g_contact_query, motion, 0u, first, feature);
+    g_contact_result[4] = firstHit ? 1 : 0;
+    g_contact_result[5] = 0;
+    if (firstHit) {
+        TerrainCone cone = terrainFeatureCone(feature, 0u);
+        float2 remaining = terrainConstrain(cone, (1.0 - first) * motion);
+        float2 start = terrainExteriorPoint(feature, cone, remaining, 0u);
+        g_contact_result[6] = asint(feature.point.x);
+        g_contact_result[7] = asint(feature.point.y);
+        bool secondHit = terrainSweep(start, remaining, 0u, first, feature);
+        g_contact_result[5] = secondHit ? 1 : 0;
+        g_contact_result[8] = asint(feature.point.x);
+        g_contact_result[9] = asint(feature.point.y);
+    }
+
+    position = g_contact_query + motion;
+    carry = motion;
+    terrainTransportLimited<1u>(g_contact_query, motion, position, carry, 0u);
+    g_contact_result[10] = asint(position.x);
+}
+
 // Both paths use the production error helpers with a mixed full-group cohort.
 // The candidate compares error acceptance, not its deliberately unused values.
 [shader("compute")]

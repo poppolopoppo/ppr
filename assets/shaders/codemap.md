@@ -5,6 +5,14 @@ compute port owned by `engine.matter`. Their source attribution, six-entry-point
 schedule plus publication validator, explicit scalar CPU/GPU ABI and admitted scope are recorded in
 `pbmpm/README.md`; `pbmpm/LICENSE.md` retains the upstream BSD-3-Clause notice.
 
+`pbmpm/terrain_motion.slang` is the production terrain adapter: sample-centred
+grid coordinates, same-substep point recovery, canonical-segment sweeps and
+local convex/concave vertex response. It separates geometry from retained
+motion and constitutive state, certifies published positions, and rejects
+unresolved/incomplete paths through the existing transaction error buffer.
+Its terrain-local rounded-leg helper protects two FP32 operations on the pinned
+Slang compiler; source/core arithmetic and resource layouts are unchanged.
+
 ## Responsibility
 
 Slang shader assets for application render passes. Three live programs: `mesh_bindless.slang` is the

@@ -37,8 +37,9 @@ keeps its separate three-word sink.
 
 Two sparse page payload pools and one shared absolute-budget pool replace the
 dense production node arrays. Canonical 8-by-8 pages preserve the legacy flat
-node key, including its right-edge alias, and the original contact coordinate
-tuple. A dispatch reads its predecessor's source: previous A survives iteration0,
+node key, including its right-edge alias. Source-shape/body contact retains the
+original coordinate tuple; terrain uses the grid sample centres described below.
+A dispatch reads its predecessor's source: previous A survives iteration0,
 then the current page list remaps A for iteration1. Tick-start A is logically
 empty. Each destination and its budget are initialized before scatter; absent
 source pages return zero words. Shared tile storage is explicitly zeroed and
@@ -96,13 +97,45 @@ absolute-sum accounting.
 Old v5 semantic fields still load exactly; subsequent trajectories follow this
 replacement solver implementation.
 
-Terrain and one-way predicted bodies are engine adapters. Grid contact runs
-after literal source shapes and before the source guardian; particle endpoint
-contact runs after source shapes and before endpoint clamping. Grid moving-body
-contact projects relative to local boundary displacement; particle endpoints
-retain direct geometric penetration subtraction. `environment.slang` preserves the
-complete contour search and explicit incomplete-boundary errors. No reciprocal
-reaction readback or ordinary per-particle CPU loop is introduced.
+Terrain and one-way predicted bodies are engine adapters. Terrain grid contact
+uses `node + 0.5`, matching the quadratic weights and APIC offsets. Source shapes,
+grid bodies and the guardian retain their selected-fork coordinate conventions.
+Grid moving-body contact projects relative to local boundary displacement.
+Particle body carry terms are evaluated at the original integrated endpoint;
+terrain then applies the final constraint when both adapters are present.
+
+`terrain_motion.slang` separates geometric transport, initial-overlap recovery,
+and retained motion. The existing F/D/J update still occurs once from the gathered
+grid state. Recovery moves the published point to the nearest canonical boundary
+in the same substep, without turning its distance into carry or strain. Particle
+transport sweeps directed canonical segments using a slab-clipped 3x3-supercover
+DDA, then consumes admissible tangential remainder. Convex and concave vertices
+use their distinct local free-space cones. Physical samples remain points; the
+rendered sprite radius is not a collision radius.
+
+Boundary rounding uses at most three representable outward steps, not a fixed
+skin. Successful positions are certified against strict solid interior, including
+after the guardian. Closed, zero-depth boundary contacts are allowed. Incomplete
+finite-domain entry reports flag 16 rather than inventing a domain collider.
+Ambiguous clipping, malformed feature topology, failed rounding certification,
+or unresolved transport beyond 32 contact events reports flag 256 and rejects the
+working transaction. For flag 256 the field records the resolution reason:
+1 reversed straight edge, 2 malformed vertex, 3 outward rounding, 4 missing local
+feature, 5 DDA exhaustion, 6 final position, 7 contact budget, 8 domain-entry proof.
+The budget counts contacts; a final no-hit sweep can complete sliding motion.
+
+Each geometric leg sweeps the saved representable FP32 target, rather than an
+unrounded displacement whose endpoint can round across a diagonal at large
+coordinates. Slang 2026.17.1 ignores per-variable `precise` on direct SPIR-V
+(upstream #12198/#12208), so the terrain-local rounded-leg helper emits explicit
+`NoContraction` for just its add/subtract pair; HLSL uses local `precise` values.
+No global floating-point mode or constitutive expression changes. Recheck this
+pinned-version workaround when upgrading Slang.
+
+`environment.slang` preserves the complete nearest-contour search and its
+explicit incomplete-boundary errors. Terrain masks, tables, resource bindings,
+and ownership are unchanged. No reciprocal reaction readback or ordinary
+per-particle CPU loop is introduced.
 
 `fork_conformance.slang` retains the explicitly test-only dense storage route and
 full frozen-WGSL stage/grid comparison. It is not a production fallback.

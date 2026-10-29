@@ -83,11 +83,9 @@ bool validParticle(Particle p, uint row) {
 }
 
 #include "environment.slang"
+#include "terrain_motion.slang"
 
-void engineEndpointContacts(float2 position, inout float2 d, uint row) {
-    Contact terrain=terrainContact(position,0xffffffffu,row);
-    if (terrain.collides) d-=terrain.penetration*terrain.normal;
-
+void engineEndpointContacts(float2 oldPosition, float2 transport, inout float2 position, inout float2 d, uint row) {
     for (uint body=0u;body<g_environment.bodyCount;++body) {
         BodyBoundary boundary=g_bodies[g_environment.bodyBase+body];
         Contact contact=collide(boundary.shape,position);
@@ -95,6 +93,10 @@ void engineEndpointContacts(float2 position, inout float2 d, uint row) {
 
         d-=contact.penetration*contact.normal;
     }
+
+    // Bodies retain their original integrated-endpoint query and carry term.
+    // Terrain is the final motion constraint when both adapters are present.
+    terrainTransport(oldPosition, transport, position, d, row);
 }
 
 // Grid contact is one production operation, also inspected by the test-only
@@ -112,7 +114,11 @@ float4 contactGridState<let Cooperative : bool>(int2 node, uint key, int4 source
         }
     }
 
-    float2 terrainEndpoint = float2(node) + d;
+    // Quadratic weights and APIC offsets represent node centres at index+0.5.
+    // Only the terrain adapter changes convention; source/body hooks retain
+    // their selected-fork coordinates and response order.
+    float2 terrainNode = float2(node) + 0.5;
+    float2 terrainEndpoint = terrainNode + d;
     Contact terrain = {false, 0.0, float2(0.0), float2(0.0)};
     if (Cooperative) {
         terrain = terrainContactWave(terrainEndpoint, valid && mass > 0.0, key, 0xffffffffu);
@@ -127,7 +133,7 @@ float4 contactGridState<let Cooperative : bool>(int2 node, uint key, int4 source
             // Explicit contour adaptation: the response point is the queried
             // endpoint, matching the source unrotated box's interior semantics.
             // The geometric closest point is retained separately by the query.
-            float gap = min(0.0, dot(terrain.normal, terrainEndpoint - float2(node)));
+            float gap = min(0.0, dot(terrain.normal, terrainEndpoint - terrainNode));
             float penetration = dot(terrain.normal, d) - gap;
             d -= max(penetration, 0.0) * terrain.normal;
         }
@@ -198,7 +204,7 @@ void checkBootstrapGridCoverage(int2 node, uint key, int4 source, bool valid) {
 
     float2 d = float2(decodeWord(source.x), decodeWord(source.y));
     d = mass < 1e-5 ? float2(0.0) : d / mass;
-    checkTerrainCoverage(float2(node) + d, key);
+    checkTerrainCoverage(float2(node) + 0.5 + d, key);
 }
 
 // ------------------------------------------------------------------
