@@ -988,8 +988,8 @@ namespace pP::tests::detail {
         };
 
         PPR_UNIT_TEST (small_callable_reentry_never_runs_under_slot_lock) {
-            // One-pointer, nontrivial, nothrow-movable callable exercises the
-            // pinned STL small-object move/destruction path, not shared_ptr payload cleanup.
+            // One-pointer, nontrivial callable exercises STL callable lifetime
+            // operations directly, including the copyable libc++ fallback.
             struct Probe {
                 RenderLane *m_lane{};
                 RenderLaneOperationTicket m_invalid_ticket{};
@@ -1010,7 +1010,7 @@ namespace pP::tests::detail {
                     } catch (const std::bad_alloc &) {
                         hal::fatalExit("allocation-failure");
                     } catch (...) {
-                        // Destructor/move must remain nothrow; the test checks
+                        // Callable lifetime operations must remain nothrow; the test checks
                         // this observable failure rather than hiding an exception.
                         m_failed.store(true);
                     }
@@ -1021,6 +1021,10 @@ namespace pP::tests::detail {
                 Probe *m_probe{};
 
                 explicit SmallCallable(Probe &probe) noexcept : m_probe(&probe) {
+                }
+
+                SmallCallable(const SmallCallable &other) noexcept : m_probe(other.m_probe) {
+                    m_probe->reenter();
                 }
 
                 SmallCallable(SmallCallable &&other) noexcept : m_probe(other.m_probe) {

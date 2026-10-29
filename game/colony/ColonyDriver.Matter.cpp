@@ -547,10 +547,10 @@ namespace pP::colony {
 
                         for (std::size_t row = 0u; row < source.m_records.size(); ++row) {
                             source.m_records[row].m_x_m = (static_cast<double>(source.m_particles[row].m_position_x) -
-                                                              kMatterOrigin) *
+                                                              static_cast<double>(kMatterOrigin)) *
                                                           source.m_cell_metres;
                             source.m_records[row].m_y_m = (static_cast<double>(source.m_particles[row].m_position_y) -
-                                                              kMatterOrigin) *
+                                                              static_cast<double>(kMatterOrigin)) *
                                                           source.m_cell_metres;
                         }
 

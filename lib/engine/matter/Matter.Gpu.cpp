@@ -166,7 +166,7 @@ namespace pP::matter {
                 return time::seconds(span) * 1000.0;
             }
 
-            void calibrate(rhi::ICommandQueue &queue, const bool final) {
+            void calibrate(rhi::ICommandQueue &queue, [[maybe_unused]] const bool final) {
                 if (not m_calibration_supported or m_error)
                     return;
 
@@ -317,7 +317,7 @@ namespace pP::matter {
 
                 const u64 recent_count = std::min<u64>(m_samples, m_recent.size());
                 std::array<u64, kTimingStages.size()> recent_sum{}, recent_max{};
-                u64 polls{};
+                [[maybe_unused]] u64 polls{};
                 TimeSpan poll_work{}, max_gap{}, submit_work{}, observed_latency{};
                 for (u64 index = 0u; index < recent_count; ++index) {
                     const auto &record = m_recent[index];
@@ -332,10 +332,11 @@ namespace pP::matter {
                     }
                 }
 
-                const auto &oldest = m_recent[m_samples >= m_recent.size() ? m_samples % m_recent.size() : 0u];
-                const double frequency = m_frequency > 0.0 ? m_frequency : 1.0;
-                const u64 total_ticks = std::accumulate(m_sum.begin(), m_sum.end(), u64{});
-                const u64 recent_ticks = std::accumulate(recent_sum.begin(), recent_sum.end(), u64{});
+                [[maybe_unused]] const auto &oldest =
+                    m_recent[m_samples >= m_recent.size() ? m_samples % m_recent.size() : 0u];
+                [[maybe_unused]] const double frequency = m_frequency > 0.0 ? m_frequency : 1.0;
+                [[maybe_unused]] const u64 total_ticks = std::accumulate(m_sum.begin(), m_sum.end(), u64{});
+                [[maybe_unused]] const u64 recent_ticks = std::accumulate(recent_sum.begin(), recent_sum.end(), u64{});
                 PPR_LOG(
                     MatterGpu, emphasis, "GPU tick timing summary",
                     {{"valid", not m_error}, {"samples", m_samples}, {"recent_samples", recent_count},
@@ -368,7 +369,7 @@ namespace pP::matter {
                 }
 
                 if (m_samples != 0u) {
-                    const auto &last = m_recent[(m_samples - 1u) % m_recent.size()];
+                    [[maybe_unused]] const auto &last = m_recent[(m_samples - 1u) % m_recent.size()];
                     PPR_LOG(
                         MatterGpu, emphasis, "GPU tick timing last fence observation",
                         {{"epoch", last.m_epoch}, {"signal", last.m_signal}, {"substeps", last.m_substeps},

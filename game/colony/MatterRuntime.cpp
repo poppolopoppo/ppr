@@ -32,7 +32,8 @@ namespace pP::colony {
         result.m_identity.m_world = world;
         result.m_profile.m_grid_width = kMatterGridEdge;
         result.m_profile.m_grid_height = kMatterGridEdge;
-        result.m_profile.m_gravity_strength = static_cast<float>(std::abs(gravity_y) / (kMatterGridEdge * h));
+        result.m_profile.m_gravity_strength = static_cast<float>(
+            static_cast<double>(std::abs(gravity_y)) / (kMatterGridEdge * h));
         const double volume_unit = h * h * thickness;
         const double mass_unit = 1000.0 * volume_unit;
         if (not std::isfinite(mass_unit) or
@@ -63,8 +64,8 @@ namespace pP::colony {
         result.m_particles.reserve(result.m_records.size());
         for (const auto &record: result.m_records) {
             matter::GpuParticle particle{};
-            particle.m_position_x = static_cast<float>(record.m_x_m / h + kMatterOrigin);
-            particle.m_position_y = static_cast<float>(record.m_y_m / h + kMatterOrigin);
+            particle.m_position_x = static_cast<float>(record.m_x_m / h + static_cast<double>(kMatterOrigin));
+            particle.m_position_y = static_cast<float>(record.m_y_m / h + static_cast<double>(kMatterOrigin));
             particle.m_mass = static_cast<float>(record.m_mass_kg / mass_unit);
             particle.m_volume = static_cast<float>(record.m_volume_m3 / volume_unit);
             particle.m_material = static_cast<float>(
@@ -115,8 +116,10 @@ namespace pP::colony {
 
         for (std::size_t row = 0u; row < particles.size(); ++row) {
             auto record = state.m_records[row];
-            record.m_x_m = (static_cast<double>(particles[row].m_position_x) - kMatterOrigin) * state.m_cell_metres;
-            record.m_y_m = (static_cast<double>(particles[row].m_position_y) - kMatterOrigin) * state.m_cell_metres;
+            record.m_x_m = (static_cast<double>(particles[row].m_position_x) - static_cast<double>(kMatterOrigin)) *
+                           state.m_cell_metres;
+            record.m_y_m = (static_cast<double>(particles[row].m_position_y) - static_cast<double>(kMatterOrigin)) *
+                           state.m_cell_metres;
             PPR_RETURN_UNEXPECTED_ON_FAIL(GameMatter, append(record));
         }
 
@@ -160,7 +163,8 @@ namespace pP::colony {
         expected.m_grid_width = kMatterGridEdge;
         expected.m_grid_height = kMatterGridEdge;
         expected.m_particle_count = profile.m_particle_count;
-        expected.m_gravity_strength = static_cast<float>(std::abs(gravity_y) / (kMatterGridEdge * h));
+        expected.m_gravity_strength = static_cast<float>(
+            static_cast<double>(std::abs(gravity_y)) / (kMatterGridEdge * h));
         if (not std::isfinite(expected.m_gravity_strength) or
             std::bit_cast<std::array<u32, 16u>>(profile) != std::bit_cast<std::array<u32, 16u>>(expected)) {
             PPR_RETURN_ERROR_ON_FAIL(GameMatter, std::errc::invalid_argument);
@@ -215,8 +219,8 @@ namespace pP::colony {
                 record.m_y_m < 0.0 or
                 record.m_x_m > sim::kWorldEdge * h or
                 record.m_y_m > sim::kWorldEdge * h or
-                static_cast<float>(record.m_x_m / h + kMatterOrigin) != particle.m_position_x or
-                static_cast<float>(record.m_y_m / h + kMatterOrigin) != particle.m_position_y or
+                static_cast<float>(record.m_x_m / h + static_cast<double>(kMatterOrigin)) != particle.m_position_x or
+                static_cast<float>(record.m_y_m / h + static_cast<double>(kMatterOrigin)) != particle.m_position_y or
                 (row != 0u and record.m_id <= state.m_records[row - 1u].m_id)) {
                 PPR_RETURN_ERROR_ON_FAIL(GameMatter, std::errc::invalid_argument);
             }
@@ -317,8 +321,8 @@ namespace pP::colony {
             for (u32 triangle = 0u; triangle < shape.m_triangle_count; ++triangle) {
                 const auto indices = shape.m_triangles[triangle];
                 const auto cross = [&](const auto from, const auto to) {
-                    return static_cast<double>(to.m_x - from.m_x) * (py - from.m_y) -
-                           static_cast<double>(to.m_y - from.m_y) * (px - from.m_x);
+                    return static_cast<double>(to.m_x - from.m_x) * (py - static_cast<double>(from.m_y)) -
+                           static_cast<double>(to.m_y - from.m_y) * (px - static_cast<double>(from.m_x));
                 };
 
                 const auto a = points[indices.m_a], b = points[indices.m_b], c = points[indices.m_c];
@@ -365,8 +369,8 @@ namespace pP::colony {
 
             sim::MatterParticle record{
                 result.m_next_id++, (position.m_x + 0.5) * source.m_cell_metres,
-                (position.m_y + 0.5) * source.m_cell_metres, volume, mass, before.m_temperature, density,
-                before.m_element, sim::EGenerationMatter::solid};
+                (position.m_y + 0.5) * source.m_cell_metres, volume, mass, static_cast<double>(before.m_temperature),
+                density, before.m_element, sim::EGenerationMatter::solid};
             matter::GpuParticle particle{};
             particle.m_position_x = static_cast<float>(position.m_x) + 0.5f + kMatterOrigin;
             particle.m_position_y = static_cast<float>(position.m_y) + 0.5f + kMatterOrigin;
@@ -454,19 +458,21 @@ namespace pP::colony {
                 const float cy = body.m_com_y + body.m_state.m_velocity_y * t;
                 matter::GpuBodyBoundary row{};
                 row.m_shape.m_position_x = static_cast<float>(
-                    (cx + std::cos(da) * rx - std::sin(da) * ry) / h + kMatterOrigin);
+                    static_cast<double>(cx + std::cos(da) * rx - std::sin(da) * ry) / h +
+                    static_cast<double>(kMatterOrigin));
                 row.m_shape.m_position_y = static_cast<float>(
-                    (cy + std::sin(da) * rx + std::cos(da) * ry) / h + kMatterOrigin);
-                row.m_shape.m_half_size_x = static_cast<float>(body.m_half_width / h);
-                row.m_shape.m_half_size_y = static_cast<float>(body.m_half_height / h);
+                    static_cast<double>(cy + std::sin(da) * rx + std::cos(da) * ry) / h +
+                    static_cast<double>(kMatterOrigin));
+                row.m_shape.m_half_size_x = static_cast<float>(static_cast<double>(body.m_half_width) / h);
+                row.m_shape.m_half_size_y = static_cast<float>(static_cast<double>(body.m_half_height) / h);
                 row.m_shape.m_radius = row.m_shape.m_half_size_x;
                 row.m_shape.m_rotation_degrees = -angle * (180.0f / std::numbers::pi_v<float>);
                 row.m_shape.m_shape = body.m_geometry == physics::EGeometry::circle ? matter::EStaticShape::circle
                                                                                     : matter::EStaticShape::box;
-                row.m_com_x = static_cast<float>(cx / h + kMatterOrigin);
-                row.m_com_y = static_cast<float>(cy / h + kMatterOrigin);
-                row.m_velocity_x = static_cast<float>(body.m_state.m_velocity_x / h);
-                row.m_velocity_y = static_cast<float>(body.m_state.m_velocity_y / h);
+                row.m_com_x = static_cast<float>(static_cast<double>(cx) / h + static_cast<double>(kMatterOrigin));
+                row.m_com_y = static_cast<float>(static_cast<double>(cy) / h + static_cast<double>(kMatterOrigin));
+                row.m_velocity_x = static_cast<float>(static_cast<double>(body.m_state.m_velocity_x) / h);
+                row.m_velocity_y = static_cast<float>(static_cast<double>(body.m_state.m_velocity_y) / h);
                 row.m_angular_velocity = body.m_state.m_angular_velocity;
                 result.push_back(row);
             }

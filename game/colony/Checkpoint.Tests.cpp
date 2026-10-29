@@ -14,6 +14,7 @@ import engine.matter;
 import engine.shader;
 import engine.rhi;
 import game.colony.matter;
+import game.colony.metric;
 import game.colony.agents;
 import game.colony.buildings;
 import game.colony.pathfinding;

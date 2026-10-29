@@ -8,6 +8,7 @@ module game.tests;
 
 import engine.asset;
 import engine.core;
+import engine.math;
 import engine.sim;
 import engine.app;
 import engine.image;
@@ -15,6 +16,7 @@ import engine.matter;
 import engine.shader;
 import engine.rhi;
 import game.colony.matter;
+import game.colony.metric;
 import game.colony.agents;
 import game.colony.buildings;
 import game.colony.pathfinding;
@@ -2095,8 +2097,8 @@ namespace pP::game::tests::detail::checkpoint {
                 for (const u32 word: {13u, 14u, 15u, 18u, 19u, 20u, 21u})
                     metadata = metadata and words[word] == original_words[word];
 
-                const double x = static_cast<double>(particle.m_position_x) - kMatterOrigin;
-                const double y = static_cast<double>(particle.m_position_y) - kMatterOrigin;
+                const double x = static_cast<double>(particle.m_position_x) - static_cast<double>(kMatterOrigin);
+                const double y = static_cast<double>(particle.m_position_y) - static_cast<double>(kMatterOrigin);
                 const bool in_span = x >= 120.5 and x <= 135.5;
                 const bool overlap = in_span and y < 36.0 and y > 32.0;
                 top_overlap_endpoints[row] += static_cast<u32>(overlap);
@@ -2113,16 +2115,19 @@ namespace pP::game::tests::detail::checkpoint {
 
                 const auto f = std::bit_cast<std::array<float, 4u>>(particle.m_deformation_gradient);
                 const auto d = std::bit_cast<std::array<float, 4u>>(particle.m_deformation_displacement);
-                const double det_f = static_cast<double>(f[0u]) * f[3u] - static_cast<double>(f[2u]) * f[1u];
-                const double dx = static_cast<double>(particle.m_position_x) - previous[row].m_position_x;
-                const double dy = static_cast<double>(particle.m_position_y) - previous[row].m_position_y;
+                const double det_f = static_cast<double>(f[0u]) * static_cast<double>(f[3u]) -
+                                     static_cast<double>(f[2u]) * static_cast<double>(f[1u]);
+                const double dx = static_cast<double>(particle.m_position_x) -
+                                  static_cast<double>(previous[row].m_position_x);
+                const double dy = static_cast<double>(particle.m_position_y) -
+                                  static_cast<double>(previous[row].m_position_y);
                 const double applied = std::sqrt(dx * dx + dy * dy);
                 const double carried = std::sqrt(
-                    static_cast<double>(particle.m_displacement_x) * particle.m_displacement_x +
-                    static_cast<double>(particle.m_displacement_y) * particle.m_displacement_y);
+                    static_cast<double>(particle.m_displacement_x) * static_cast<double>(particle.m_displacement_x) +
+                    static_cast<double>(particle.m_displacement_y) * static_cast<double>(particle.m_displacement_y));
 
-                kernel_mass += particle.m_mass;
-                nominal_volume += particle.m_volume;
+                kernel_mass += static_cast<double>(particle.m_mass);
+                nominal_volume += static_cast<double>(particle.m_volume);
                 physical_mass += record.m_mass_kg;
                 mass_y += record.m_mass_kg * y;
                 elastic_volume_proxy += record.m_volume_m3 * det_f;

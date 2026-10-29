@@ -70,7 +70,9 @@ namespace pP::tests::detail::MatterAdapter {
         PPR_TEST_ASSERT(state.m_particles[1u].m_mass == 1.5f and state.m_particles[1u].m_material == 2.0f);
         PPR_TEST_ASSERT(state.m_particles[0u].m_material == 0.0f);
         PPR_TEST_ASSERT(state.m_profile.m_grid_width == 4103u and state.m_profile.m_grid_height == 4103u);
-        PPR_TEST_ASSERT(state.m_profile.m_gravity_strength == static_cast<float>(std::abs(-9.8f) / (4103u * 0.5)));
+        PPR_TEST_ASSERT(
+            state.m_profile.m_gravity_strength ==
+            static_cast<float>(static_cast<double>(std::abs(-9.8f)) / (4103u * 0.5)));
         PPR_TEST_ASSERT(state.m_profile.m_delta_time == 1.0f / 480.0f);
         PPR_TEST_ASSERT(state.m_identity.m_world == 71u and state.m_identity.m_publication == 0u);
 
@@ -241,7 +243,8 @@ namespace pP::tests::detail::MatterAdapter {
         const auto predicted = colony::predictMatterBodies(bodies, 0.5, state.m_profile);
         PPR_TEST_ASSERT(predicted and predicted->size() == 8u);
         PPR_TEST_ASSERT(
-            (*predicted)[0u].m_com_x == static_cast<float>((2.0f + 3.0f * state.m_profile.m_delta_time) / 0.5 + 3.0));
+            (*predicted)[0u].m_com_x ==
+            static_cast<float>(static_cast<double>(2.0f + 3.0f * state.m_profile.m_delta_time) / 0.5 + 3.0));
         PPR_TEST_ASSERT((*predicted)[7u].m_com_x != (*predicted)[0u].m_com_x);
         PPR_TEST_ASSERT((*predicted)[0u].m_shape.m_rotation_degrees < 0.0f);
 

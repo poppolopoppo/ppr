@@ -166,7 +166,7 @@ namespace pP {
         Array<ColdRow> cold(std::max<std::size_t>(1u, seeds.size()));
         Array<GridParticleMetadataRow> rows(seeds.size());
         const double cell = m_world.m_cell_size_m == 1.0f ? 1.0 : 1.0 / 3.0;
-        const double volume_unit = cell * cell * m_world.m_reference_thickness_m;
+        const double volume_unit = cell * cell * static_cast<double>(m_world.m_reference_thickness_m);
         for (u32 row = 0u; row < seeds.size(); ++row) {
             const auto &seed = *seeds[row];
             hot[row].m_fields[0u] = static_cast<float>(seed.m_position_x_m / cell + 3.0);
@@ -187,7 +187,7 @@ namespace pP {
             rows[row].m_source_row = row;
             rows[row].m_material = seed.m_material_id;
             rows[row].m_radius = static_cast<float>(
-                std::sqrt(seed.m_volume_m3 / m_world.m_reference_thickness_m / std::numbers::pi));
+                std::sqrt(seed.m_volume_m3 / static_cast<double>(m_world.m_reference_thickness_m) / std::numbers::pi));
         }
 
         PPR_RETURN_ERROR_ON_FAIL(
@@ -494,7 +494,8 @@ namespace pP {
             }
         }
 
-        auto retired = std::move(m_world.m_gpu_particles);
+        // The callable fallback requires a copyable owner through the reader fence.
+        std::shared_ptr<GpuParticleStorage> retired{std::move(m_world.m_gpu_particles)};
         m_world.m_gpu_particles = std::move(replacement);
         m_deferred_releases.defer(m_world.m_last_reader, [held = std::move(retired)]() mutable { held.reset(); });
         return {};
