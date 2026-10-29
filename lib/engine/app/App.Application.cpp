@@ -1767,9 +1767,6 @@ namespace pP {
             if (not m_pacer.shouldWait(FramePacer::deadlineFor(previous_tick, period))) {
                 break;
             }
-            if (not m_pacer.shouldWait(FramePacer::deadlineFor(previous_tick, period))) {
-                break;
-            }
 
             bool simulation_due = false;
             m_pacer.waitForTarget(period, previous_tick, [this, target, &simulation_due]() noexcept -> bool {
