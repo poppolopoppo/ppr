@@ -193,7 +193,11 @@ namespace pP {
             std::unreachable();
         }
 
-#if PPR_ENABLE_LOGGING
+// Both callers are info-level PPR_LOG sites: the definition must gate on the
+// log threshold, not on the coarse PPR_ENABLE_LOGGING switch. At a WARNING
+// threshold the caller-side gate erases info-level calls with their argument
+// expressions, and this helper would otherwise compile unused on Release.
+#if PPR_LOG_LEVEL_THRESHOLD <= PPR_LOG_LEVEL_INFO
         [[nodiscard]] string_literal getAdapterTypeName_(const slang_rhi::AdapterType type) noexcept {
             switch (type) {
                 using enum slang_rhi::AdapterType;
