@@ -383,7 +383,8 @@
       ],
       "environment": {
         "VK_LOADER_DISABLE_DYNAMIC_LIBRARY_UNLOADING": "1",
-        "LSAN_OPTIONS": "$penv{LSAN_OPTIONS}:suppressions=${sourceDir}/cmake/sanitizers/nvidia.lsan.supp"
+        "LSAN_OPTIONS": "$penv{LSAN_OPTIONS}:suppressions=${sourceDir}/cmake/sanitizers/nvidia.lsan.supp",
+        "ASAN_OPTIONS": "$penv{ASAN_OPTIONS}:fast_unwind_on_malloc=0:malloc_context_size=20"
       }
     },
     {

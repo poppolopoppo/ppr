@@ -34,10 +34,10 @@ Run a direct executable without these environment settings to inspect the
 unsuppressed baseline. Reassess the suppressions when updating the NVIDIA driver;
 new modules or new engine allocations are not covered by this policy.
 
-## Asset GPU allocation stacks
+## GPU allocation stacks
 
 Linux ASan uses the slow allocation-stack unwinder with a 20-frame context only
-for `engine.tests.asset.gpu`. The default fast unwinder can stop inside DBus,
+for `engine.tests.asset.gpu` and the `run-game-clang-dev` launch preset. The default fast unwinder can stop inside DBus,
 omitting the NVIDIA caller responsible for a reported allocation. Retaining that
 caller lets the existing NVIDIA-only suppression match; no DBus or general
 suppression is added, and engine allocation checks remain active. CTest appends
@@ -49,6 +49,18 @@ NVIDIA 615.78.08 in `clang-dev`. Earlier approximately 23-second runs failed
 rendering assertions and are not equivalent timing baselines. Its
 450-second timeout and all assertions remain unchanged. Other CTest entries
 retain their existing unwinder settings; this change adds no library preload.
+
+The interactive game can produce the same DBus-truncated NVIDIA stacks. Its
+Debug run preset preserves inherited `ASAN_OPTIONS` and appends the same unwind
+settings. Direct launches need those settings alongside the loader and
+`LSAN_OPTIONS` values above. No DBus suppression is used; the existing
+NVIDIA-only suppression must match a retained driver caller.
+
+Native investigation separated expensive Slang allocation-stack unwinding from
+an unbounded GLFW X11 visibility wait. The local GLFW overlay fixes that wait;
+the existing 20-frame diagnostic depth, assertions and 450-second GPU test
+timeout are retained. Shorter-depth diagnostic experiments are recorded with
+the runtime-fix evidence, but are not the shipped policy.
 
 ## STB resize
 
