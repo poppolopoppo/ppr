@@ -162,3 +162,7 @@ columns in a separate 16 KiB constant buffer. The existing 304-byte frame
 carries its enable flag and cell metric. Above each column's surface it draws
 a sky gradient; below it retains the four authored parallax layers. The same
 rendered backdrop supplies optical terrain and particle refraction.
+
+Mesh vertex triples and instance padding use scalar arrays so SPIR-V std430
+retains the CPU offsets and 64-byte vertex / 96-byte instance strides. A float3
+or uint3 in these locations adds alignment padding on Vulkan.
