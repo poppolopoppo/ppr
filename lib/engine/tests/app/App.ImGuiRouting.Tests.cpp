@@ -3,6 +3,8 @@ module;
 
 #include <cstring>
 
+#include <slang.h>
+
 // Atlas PNG captures for the M4 font-rasterizer harness (CPU-only encoder).
 #include <mango/image/image.hpp>
 
@@ -2192,7 +2194,7 @@ namespace pP::tests::detail {
         // dimensions: ~4x at 2x density (quadratic), bounded below 6x so a
         // doubly applied density (config x engine RasterizerDensity, ~16x)
         // still fails.
-        PPR_TEST_ASSERT(doubled_ink >= 1.5f * static_cast<float>(base_ink));
+        PPR_TEST_ASSERT(static_cast<float>(doubled_ink) >= 1.5f * static_cast<float>(base_ink));
         PPR_TEST_ASSERT(static_cast<float>(doubled_ink) < 6.0f * static_cast<float>(base_ink));
 
         // Back to 1x: the glyph raster returns to the density-1 metrics.

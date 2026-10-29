@@ -269,7 +269,7 @@ namespace pP::tests::detail {
                 std::array<std::byte, 64> buf{};
                 port.read(req, file, buf, 0u);
 
-                (void) port.pollCompletions();
+                (void) port.waitForCompletions();
 
                 auto signal = select(req);
                 const auto result = signal.poll();
@@ -309,7 +309,9 @@ namespace pP::tests::detail {
                 {
                     std::array<std::byte, 64> buf{};
                     port.read(req, file, buf, 0u);
-                    (void) port.pollCompletions();
+
+                    (void) port.waitForCompletions();
+
                     PPR_TEST_ASSERT(req.pollEvent());
                     PPR_TEST_ASSERT(req.bytesTransferred() == kContent.size());
                 }
@@ -319,7 +321,9 @@ namespace pP::tests::detail {
                 {
                     std::array<std::byte, 64> buf{};
                     port.read(req, file, buf, 0u);
-                    (void) port.pollCompletions();
+
+                    (void) port.waitForCompletions();
+
                     PPR_TEST_ASSERT(req.pollEvent());
                     PPR_TEST_ASSERT(req.bytesTransferred() == kContent.size());
                 }
@@ -346,7 +350,7 @@ namespace pP::tests::detail {
                 std::array<std::byte, 64> buf{};
                 port.read(req, file, buf, 0u);
 
-                (void) port.pollCompletions();
+                (void) port.waitForCompletions();
 
                 PulseEvent timer;
                 auto signal = select(req, timer);

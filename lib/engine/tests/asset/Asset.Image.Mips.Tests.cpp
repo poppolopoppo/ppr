@@ -156,9 +156,12 @@ namespace pP::tests::detail {
                 PPR_TEST_ASSERT(not image::generateMipChain(
                     opposed,
                     image::MipGenDesc{.m_is_high_quality = high_quality, .m_full_chain = true, .m_normal_map = true}));
+
                 const auto tail = opposed.m_subresources.back().m_view.getBufferData();
-                PPR_TEST_ASSERT(
-                    tail[0u] == std::byte{128} and tail[1u] == std::byte{128} and tail[2u] == std::byte{255});
+                // Zero X/Y encodes at 127.5: resampling roundoff can choose either adjacent byte.
+                PPR_TEST_ASSERT(tail[0u] == std::byte{127} or tail[0u] == std::byte{128});
+                PPR_TEST_ASSERT(tail[1u] == std::byte{127} or tail[1u] == std::byte{128});
+                PPR_TEST_ASSERT(tail[2u] == std::byte{255} and tail[3u] == std::byte{255});
             }
 
             auto tiny_normal = normal_fixture(4u);

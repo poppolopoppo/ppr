@@ -167,16 +167,30 @@ namespace pP::tests::detail {
                 file.getBufferData(), ".png", image::ImageDecodeDesc{}, image::EImageUsage::data);
             PPR_TEST_ASSERT(data.has_value());
             PPR_TEST_ASSERT(not data->m_is_srgb);
+
             std::ignore = Log::flush(true);
+
+            // Compile-filtered severities cannot reach the capture writer.
+#if PPR_LOG_LEVEL_THRESHOLD <= PPR_LOG_LEVEL_INFO
             PPR_TEST_ASSERT(countAt_(Log::ELevel::info, "coerces sRGB source to linear") == 1u);
+#else
+            PPR_TEST_ASSERT(countAt_(Log::ELevel::info, "coerces sRGB source to linear") == 0u);
+#endif
         };
 
         PPR_UNIT_TEST (glb_import_logs_success_with_embeds) {
             CaptureGuard capture{};
             const Expected<mesh::SceneAsset> scene = mesh::importAndConvert(loggingMeshDir(), "textured_quad.glb");
             PPR_TEST_ASSERT(scene.has_value());
+
             std::ignore = Log::flush(true);
+
+            // Compile-filtered severities cannot reach the capture writer.
+#if PPR_LOG_LEVEL_THRESHOLD <= PPR_LOG_LEVEL_INFO
             PPR_TEST_ASSERT(countAt_(Log::ELevel::info, "GLB import succeeded") == 1u);
+#else
+            PPR_TEST_ASSERT(countAt_(Log::ELevel::info, "GLB import succeeded") == 0u);
+#endif
         };
 
         [[nodiscard]] std::filesystem::path writeTwinImageGltf_() {
@@ -217,8 +231,15 @@ namespace pP::tests::detail {
             const Expected<mesh::SceneAsset> scene = mesh::importAndConvert(dir, "twin_box.gltf");
             PPR_TEST_ASSERT(scene.has_value());
             PPR_TEST_ASSERT(scene->m_images.size() == 2u);
+
             std::ignore = Log::flush(true);
+
+            // Compile-filtered severities cannot reach the capture writer.
+#if PPR_LOG_LEVEL_THRESHOLD <= PPR_LOG_LEVEL_DEBUG
             PPR_TEST_ASSERT(countAt_(Log::ELevel::debug, "texture-file dedup hit") == 1u);
+#else
+            PPR_TEST_ASSERT(countAt_(Log::ELevel::debug, "texture-file dedup hit") == 0u);
+#endif
         };
 
         [[nodiscard]] std::filesystem::path writeEmptyImageGltf_() {
