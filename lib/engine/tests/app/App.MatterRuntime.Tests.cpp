@@ -24,6 +24,16 @@ import std;
 
 namespace pP::tests::detail::MatterAdapter {
     // ------------------------------------------------------------------
+    // host-native GPU fixture backend
+    // ------------------------------------------------------------------
+
+#ifdef _WIN32
+    constexpr auto kFixtureBackend = rhi::DeviceType::D3D12;
+#else
+    constexpr auto kFixtureBackend = rhi::DeviceType::Vulkan;
+#endif
+
+    // ------------------------------------------------------------------
     // owned request execution for explicitly inline fixtures
     // ------------------------------------------------------------------
 
@@ -270,7 +280,7 @@ namespace pP::tests::detail::MatterAdapter {
         PPR_TEST_ASSERT(not shaders->initialize());
         rhi_service->setCoreValidation(true);
         rhi_service->setGpuAssistedValidation(true);
-        PPR_TEST_ASSERT(not rhi_service->initialize(rhi::DeviceType::D3D12, *shaders));
+        PPR_TEST_ASSERT(not rhi_service->initialize(kFixtureBackend, *shaders));
         PPR_TEST_ASSERT(not lane.start({}, {}, {}, [&] { wake.release(); }));
 
         const auto await = [&](Expected<colony::MatterRequest> request) {
@@ -485,7 +495,7 @@ namespace pP::tests::detail::MatterAdapter {
         PPR_TEST_ASSERT(not shaders->initialize());
         rhi_service->setCoreValidation(true);
         rhi_service->setGpuAssistedValidation(true);
-        PPR_TEST_ASSERT(not rhi_service->initialize(rhi::DeviceType::D3D12, *shaders));
+        PPR_TEST_ASSERT(not rhi_service->initialize(kFixtureBackend, *shaders));
         PPR_DEFER {
             PPR_TEST_ASSERT(not completeInline(runtime, runtime.beginShutdown()).m_execution.m_operation_error);
             PPR_TEST_ASSERT(not rhi_service->shutdown());
@@ -576,7 +586,7 @@ namespace pP::tests::detail::MatterAdapter {
         PPR_TEST_ASSERT(not shaders->initialize());
         rhi_service->setCoreValidation(true);
         rhi_service->setGpuAssistedValidation(true);
-        PPR_TEST_ASSERT(not rhi_service->initialize(rhi::DeviceType::D3D12, *shaders));
+        PPR_TEST_ASSERT(not rhi_service->initialize(kFixtureBackend, *shaders));
         PPR_DEFER {
             PPR_TEST_ASSERT(not driver.shutdown());
             PPR_TEST_ASSERT(not completeInline(runtime, runtime.beginShutdown()).m_execution.m_operation_error);
@@ -653,8 +663,8 @@ namespace pP::tests::detail::MatterAdapter {
         rhi_service->setCoreValidation(true);
         rhi_service->setGpuAssistedValidation(true);
         rhi_attempted = true;
-        PPR_TEST_ASSERT(not rhi_service->initialize(rhi::DeviceType::D3D12, *shaders));
-        PPR_TEST_ASSERT(rhi_service->getDevice().getDeviceType() == rhi::DeviceType::D3D12);
+        PPR_TEST_ASSERT(not rhi_service->initialize(kFixtureBackend, *shaders));
+        PPR_TEST_ASSERT(rhi_service->getDevice().getDeviceType() == kFixtureBackend);
         const auto &device = rhi_service->getDevice().getInfo();
         std::fprintf(
             stderr, "[matter-domain-device] api=%s adapter=%s workload=empty-particle-dense-grid-lifecycle-pause\n",
