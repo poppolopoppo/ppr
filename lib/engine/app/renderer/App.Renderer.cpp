@@ -955,7 +955,8 @@ namespace pP {
         PPR_RETURN_ERROR_ON_FAIL(Renderer, buildRenderSignature_(render_pass, validated, validated_extent));
 
         SurfaceSignatureCache *cache = nullptr;
-        if (surface_pass.m_depth_policy != ESurfaceDepthPolicy::external and surface_pass.m_additional_colors.size() == 0u) {
+        if (surface_pass.m_depth_policy != ESurfaceDepthPolicy::external and
+            surface_pass.m_additional_colors.size() == 0u) {
             cache = std::addressof(record.m_signatures[static_cast<std::size_t>(surface_pass.m_depth_policy)]);
         }
 
@@ -1128,7 +1129,14 @@ namespace pP {
         rhi::ComPtr<rhi::ITexture> image;
         {
             const hal::ProfileScope scope_acquire{"App.Renderer.Acquire"};
-            PPR_RETURN_ERROR_ON_FAIL(Renderer, make_error_code(record->m_surface->acquireNextImage(image.writeRef())));
+            const auto acquire_error = make_error_code(record->m_surface->acquireNextImage(image.writeRef()));
+            if (acquire_error == make_error_code(rhi::errc::pending)) {
+                // No image was acquired. Refresh the outdated swapchain and retry next frame.
+                PPR_RETURN_ERROR_ON_FAIL(Renderer, resizeWindowSurface_(*record, window.m_framebuffer_size));
+                return {};
+            }
+
+            PPR_RETURN_ERROR_ON_FAIL(Renderer, acquire_error);
         }
 
         // Acquired-image settlement guard, armed IMMEDIATELY post-acquire:
@@ -1326,7 +1334,16 @@ namespace pP {
         // including the present-only path above.
         {
             const hal::ProfileScope scope_present{"App.Renderer.PresentFinal"};
-            PPR_RETAIN_ERROR_ON_FAIL(Renderer, first_err, acquired_guard.settlePresent());
+            const auto present_error = acquired_guard.settlePresent();
+            if (present_error == make_error_code(rhi::errc::pending)) {
+                // Submission is still accepted, but this image was not presented.
+                // Release our image before the existing fenced reconfiguration path.
+                image.setNull();
+                PPR_RETAIN_ERROR_ON_FAIL(Renderer, first_err, resizeWindowSurface_(*record, window.m_framebuffer_size));
+                return first_err;
+            }
+
+            PPR_RETAIN_ERROR_ON_FAIL(Renderer, first_err, present_error);
         }
         if (presented != nullptr) {
             *presented = not first_err and settlement == FrameSettlement::kSubmitted;

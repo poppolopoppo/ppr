@@ -30,6 +30,12 @@ with redistribution, keep the applicable notices.
 
 ## Integration scope
 
+`PatchSlangRhiSurface.cmake` builds a hash-checked private copy of the Vulkan
+surface implementation. Acquisition/presentation `VK_ERROR_OUT_OF_DATE_KHR`
+returns `SLANG_E_PENDING`, allowing Renderer to fence and reconfigure the
+swapchain without claiming presentation or treating resize as device failure.
+Other Vulkan errors retain upstream failure behavior; the CPM cache is unchanged.
+
 - `engine.rhi` (EXTERNAL_SYSTEM_PUBLIC_DEPS slang-rhi slang) wraps the RHI
   interfaces into `pP::rhi`: `using`-aliases for `IDevice`, buffers, textures,
   pipelines, encoders, projections and descriptors; one shared Slang result
