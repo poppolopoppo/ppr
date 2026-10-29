@@ -5,6 +5,10 @@ description: Capture and analyze PPR CPU timing scopes and app.game DirectX 12 w
 
 # PIX Profiling
 
+This is a Windows PIX/DirectX procedure. A Linux session requires a connected
+Windows capture host to use it. Do not treat a Linux build or missing PIX
+connection as trace validation; report the required capture as unavailable.
+
 Use the connected PozLabs `pix-mcp` server. `opencode.json` under `mcp.servers`
 describes the repository's OpenCode registration; another client's live connection
 must be verified separately. The upstream

@@ -43,16 +43,28 @@ Windows: keep one developer shell for configure, build, and test:
 call "C:\Program Files\Microsoft Visual Studio\18\Insiders\VC\Auxiliary\Build\vcvars64.bat"
 cmake --preset msvc-dev
 cmake --build out/build/msvc-dev --parallel
-ctest --test-dir out/build/msvc-dev -j4 --output-on-failure
+ctest --preset msvc-dev
 ```
 
-Linux/macOS use `clang-dev` or `clang-rel`; Unix presets reference the vcpkg toolchain through `VCPKG_ROOT`. First-time dependency setup needs network access. Dependency resolution and GPU backend requirements are documented in [cmake/codemap.md](cmake/codemap.md). There are configure presets only, so build/test commands take explicit directories.
+Linux uses Clang/libc++ with matching module tooling and `VCPKG_ROOT` pointing to vcpkg. The Clang presets select the repository's `x64-linux-libcxx` overlay triplet. First-time dependency setup needs network access. See [build-system](.opencode/skills/build-system/SKILL.md) for prerequisites and [cmake/codemap.md](cmake/codemap.md) for dependency/backend details. macOS needs separate toolchain/triplet verification; these Linux triplet settings are not a macOS setup.
+
+```sh
+cmake --preset clang-dev
+cmake --build --preset clang-dev --target engine.tests.core
+ctest --preset clang-dev -R '^engine[.]tests[.]core$'
+```
+
+The example verifies core only. Build presets support both platforms; test presets provide routine and GPU-validation selections. Select the task's required targets and tests under [validation](.opencode/skills/validation/SKILL.md).
 
 `msvc-dev` enables developer diagnostics and ASan. `msvc-live` enables Debug Edit & Continue and disables sanitizers/cache. `msvc-rel` is optimized with tests disabled; `msvc-profile` inherits it and enables profiling markers plus EMPHASIS logging. Other release presets do not automatically disable tests. See [CMakePresets.json](CMakePresets.json).
 
 Windows and Linux have jobs in [.github/workflows/ci.yml](.github/workflows/ci.yml); macOS has a HAL and Clang presets but no CI job. Workflow presence does not establish a currently passing build, and its Windows environment activation must satisfy the stricter MSVC guard.
 
 ## Demo
+
+On Linux, run `./out/build/clang-dev/game/app.game --help` after building
+`app.game`; executable names have no `.exe` suffix. Run from the generated game
+directory when the invocation needs staged assets. Windows examples:
 
 ```bat
 out\build\msvc-dev\game\app.game.exe --help

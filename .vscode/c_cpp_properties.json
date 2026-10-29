@@ -1,12 +1,19 @@
 {
     "configurations": [
         {
-            "name": "Win32",
-            "compileCommands": "${workspaceFolder}/out/build/msvc-dev/compile_commands.vscode.json",
-            "compilerPath": "C:/Program Files/Microsoft Visual Studio/18/Insiders/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/cl.exe",
-            "windowsSdkVersion": "10.0.26100.0",
+            "name": "PPR",
+            "compileCommands": "${workspaceFolder}/compile_commands.json",
             "cppStandard": "c++23",
-            "intelliSenseMode": "windows-msvc-x64"
+            "intelliSenseMode": "${default}",
+            "windows": {
+                "compileCommands": "${workspaceFolder}/out/build/msvc-dev/compile_commands.vscode.json",
+                "compilerPath": "C:/Program Files/Microsoft Visual Studio/18/Insiders/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/cl.exe",
+                "windowsSdkVersion": "10.0.26100.0",
+                "intelliSenseMode": "windows-msvc-x64"
+            },
+            "linux": {
+                "intelliSenseMode": "linux-clang-x64"
+            }
         }
     ],
     "version": 4
