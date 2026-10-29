@@ -186,17 +186,7 @@ plus two indirect fused stages at K2. Its production-path oracle leaf observes
 eight post-integration stages and exact semantic restart. Circle presentation
 remains a separate implementation gate. Current evidence/limitations live under
 `out/diagnostics/pbmpm-recovery-20261022/native-batch1/`.
+
 Mesh vertex triples and instance padding use scalar arrays so SPIR-V std430
 retains the CPU offsets and 64-byte vertex / 96-byte instance strides. A float3
 or uint3 in these locations adds alignment padding on Vulkan.
-
-## Selected-fork conformance fixture
-
-`pbmpm/fork_conformance.slang` is test-only native conformance for the selected
-ErikSom859c449 fork: split64/32 particle rows, GPU buckets/indirect fused stages,
-explicit workgroup zeroing and guarded signed reductions. It is consumed only
-by `app/matter_fork`, comparing frozen actual-WGSL words. Production GpuSolver shares `fork_core.slang` arithmetic and uses count/allocate/insert
-plus two indirect fused stages at K2. Its production-path oracle leaf observes
-eight post-integration stages and exact semantic restart. Circle presentation
-remains a separate implementation gate. Current evidence/limitations live under
-`out/diagnostics/pbmpm-recovery-20261022/native-batch1/`.
