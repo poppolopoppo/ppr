@@ -7,6 +7,7 @@ ImGui frontend and GPU overlay backend behind `IUIService`. `ui::createImGuiServ
 ## Thread and data boundary
 
 - Main/client owns the live ImGui context, input routing, DPI/frame setup and UI construction. `update(dt, viewport)` begins frontend work. `buildDetachedUiFrame` completes `ImGui::Render()` and deep-copies vertices, indices and commands into `DetachedUiDrawData`.
+- Input callbacks address their owning service's IO directly, including before `update`; a null or different current ImGui context does not change the recipient or get replaced by input dispatch. The input listener detaches before its context is destroyed.
 - Detached commands carry baked framebuffer clip/scale data and opaque texture identities. Unknown texture identities are rejected; arbitrary client callbacks do not cross the lane. A known reset-render-state command is represented explicitly.
 - The render owner lane calls `renderDetachedUiFrame(detached, draw_context)`. It uses detached inputs and lane-confined GPU state, never live ImGui IO/context/GetDrawData. The inline reference consumes the same payload shape.
 - Font rebuilds publish owned pixels, dimensions and a version. The worker installs the atlas and reports its version; results acknowledge the publication. A dropped frame must not lose an unacknowledged font update.

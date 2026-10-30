@@ -799,17 +799,17 @@ float4 fragmentMain(PsInput input) : SV_Target {
 
             void drainPendingDeselect_();
 
-            static EInputMessageResponse onInputCharacter_(hal::native::char_t codepoint) noexcept;
+            EInputMessageResponse onInputCharacter_(hal::native::char_t codepoint) noexcept;
 
-            static void onInputAnyDigital_(const InputActionEvent &event, const InputKey &trigger) noexcept;
+            void onInputAnyDigital_(const InputActionEvent &event, const InputKey &trigger) noexcept;
 
-            static void onInputMouseCursor_(const InputActionEvent &event, const InputKey &trigger) noexcept;
+            void onInputMouseCursor_(const InputActionEvent &event, const InputKey &trigger) noexcept;
 
-            static void onInputMouseWheel_(const InputActionEvent &event, const InputKey &trigger) noexcept;
+            void onInputMouseWheel_(const InputActionEvent &event, const InputKey &trigger) noexcept;
 
-            static void onInputGamepadStick_(const InputActionEvent &event, const InputKey &trigger) noexcept;
+            void onInputGamepadStick_(const InputActionEvent &event, const InputKey &trigger) noexcept;
 
-            static void onInputGamepadTrigger_(const InputActionEvent &event, const InputKey &trigger) noexcept;
+            void onInputGamepadTrigger_(const InputActionEvent &event, const InputKey &trigger) noexcept;
 
         public:
             ImGuiService() noexcept {
@@ -817,23 +817,39 @@ float4 fragmentMain(PsInput input) : SV_Target {
                     [](const std::size_t sz, [[maybe_unused]] void *user_data) -> void * { return std::malloc(sz); },
                     [](void *ptr, [[maybe_unused]] void *user_data) -> void { std::free(ptr); }, nullptr);
 
-                m_input_any_keyboard_key.setStarted(&onInputAnyDigital_);
-                m_input_any_keyboard_key.setTriggered(&onInputAnyDigital_);
-                m_input_any_keyboard_key.setCompleted(&onInputAnyDigital_);
+                const auto digital_input = [this](const InputActionEvent &event, const InputKey &trigger) noexcept {
+                    onInputAnyDigital_(event, trigger);
+                };
 
-                m_input_any_gamepad_button.setStarted(&onInputAnyDigital_);
-                m_input_any_gamepad_button.setTriggered(&onInputAnyDigital_);
-                m_input_any_gamepad_button.setCompleted(&onInputAnyDigital_);
+                m_input_any_keyboard_key.setStarted(digital_input);
+                m_input_any_keyboard_key.setTriggered(digital_input);
+                m_input_any_keyboard_key.setCompleted(digital_input);
 
-                m_input_any_mouse_button.setStarted(&onInputAnyDigital_);
-                m_input_any_mouse_button.setTriggered(&onInputAnyDigital_);
-                m_input_any_mouse_button.setCompleted(&onInputAnyDigital_);
+                m_input_any_gamepad_button.setStarted(digital_input);
+                m_input_any_gamepad_button.setTriggered(digital_input);
+                m_input_any_gamepad_button.setCompleted(digital_input);
 
-                m_input_mouse_cursor.setTriggered(&onInputMouseCursor_);
-                m_input_mouse_wheel.setTriggered(&onInputMouseWheel_);
+                m_input_any_mouse_button.setStarted(digital_input);
+                m_input_any_mouse_button.setTriggered(digital_input);
+                m_input_any_mouse_button.setCompleted(digital_input);
 
-                m_input_gamepad_stick.setTriggered(&onInputGamepadStick_);
-                m_input_gamepad_trigger.setTriggered(&onInputGamepadTrigger_);
+                m_input_mouse_cursor.setTriggered(
+                    [this](const InputActionEvent &event, const InputKey &trigger) noexcept {
+                        onInputMouseCursor_(event, trigger);
+                    });
+                m_input_mouse_wheel.setTriggered(
+                    [this](const InputActionEvent &event, const InputKey &trigger) noexcept {
+                        onInputMouseWheel_(event, trigger);
+                    });
+
+                m_input_gamepad_stick.setTriggered(
+                    [this](const InputActionEvent &event, const InputKey &trigger) noexcept {
+                        onInputGamepadStick_(event, trigger);
+                    });
+                m_input_gamepad_trigger.setTriggered(
+                    [this](const InputActionEvent &event, const InputKey &trigger) noexcept {
+                        onInputGamepadTrigger_(event, trigger);
+                    });
 
                 m_input_mapping.mapInputKey(safe_ptr(&m_input_any_keyboard_key), InputKey::any_keyboard_key);
                 m_input_mapping.mapInputKey(safe_ptr(&m_input_any_gamepad_button), InputKey::any_gamepad_button);
@@ -857,7 +873,8 @@ float4 fragmentMain(PsInput input) : SV_Target {
                     });
 
                 m_input_listener.addInputMapping(&m_input_mapping, 0);
-                m_input_listener.setCharacterInputCallback(&onInputCharacter_);
+                m_input_listener.setCharacterInputCallback(
+                    [this](const hal::native::char_t codepoint) noexcept { return onInputCharacter_(codepoint); });
                 m_input_listener.setRawKeyCallback(
                     [this]([[maybe_unused]] const TimeSpan dt, const InputMessage &message) {
                         if (const EMouseButton *const button = std::get_if<EMouseButton>(&message.m_key.m_code);
@@ -2030,11 +2047,15 @@ float4 fragmentMain(PsInput input) : SV_Target {
         // ------------------------------------------------------------------
 
         EInputMessageResponse ImGuiService::onInputCharacter_(const hal::native::char_t codepoint) noexcept {
+            // Input dispatch precedes update(), so a caller's current context may
+            // be null or belong to another UI. Route through this service's IO;
+            // ImGui's event methods retain their owning context in IO.Ctx.
             // Ctrl+key produces a control character (e.g. Ctrl+A -> 0x01), not text.
-            if (ImGui::GetIO().KeyCtrl) {
+            if (m_imgui_context->IO.KeyCtrl) {
                 return EInputMessageResponse::unhandled;
             }
-            if (ImGuiIO &io = ImGui::GetIO(); io.WantTextInput) {
+
+            if (ImGuiIO &io = m_imgui_context->IO; io.WantTextInput) {
                 char8_t utf8_input[8]{};
                 const std::size_t utf8_len = hal::native::utf8(
                     {&codepoint, 1u}, utf8_input, std::size(utf8_input) - 1u /*\0*/);
@@ -2057,7 +2078,7 @@ float4 fragmentMain(PsInput input) : SV_Target {
                             imgui_key != ImGuiKey_None) {
                             const bool is_key_down = event.getDigitalValue();
 
-                            ImGuiIO &io = ImGui::GetIO();
+                            ImGuiIO &io = m_imgui_context->IO;
                             io.AddKeyEvent(imgui_key, is_key_down);
 
                             // handle modifier keys:
@@ -2077,12 +2098,12 @@ float4 fragmentMain(PsInput input) : SV_Target {
                     [&](const EGamepadButton gamepad_button) noexcept {
                         if (const ImGuiKey imgui_key = gamepadButtonToImGuiKey(gamepad_button);
                             imgui_key != ImGuiKey_None) {
-                            ImGui::GetIO().AddKeyEvent(imgui_key, event.getDigitalValue());
+                            m_imgui_context->IO.AddKeyEvent(imgui_key, event.getDigitalValue());
                         }
                     },
                     [&](const EMouseButton mouse_button) noexcept {
                         if (const ImGuiMouseButton imgui_button = mouseButtonToImGui(mouse_button); imgui_button >= 0) {
-                            ImGui::GetIO().AddMouseButtonEvent(imgui_button, event.getDigitalValue());
+                            m_imgui_context->IO.AddMouseButtonEvent(imgui_button, event.getDigitalValue());
                         }
                     },
                     [](auto) noexcept { std::unreachable(); }),
@@ -2091,12 +2112,12 @@ float4 fragmentMain(PsInput input) : SV_Target {
 
         void ImGuiService::onInputMouseCursor_(const InputActionEvent &event, const InputKey &) noexcept {
             const float2 client_pos = event.getAxis2DValue().m_absolute;
-            ImGui::GetIO().AddMousePosEvent(client_pos.x, client_pos.y);
+            m_imgui_context->IO.AddMousePosEvent(client_pos.x, client_pos.y);
         }
 
         void ImGuiService::onInputMouseWheel_(const InputActionEvent &event, const InputKey &) noexcept {
             const float2 wheel_delta = event.getAxis2DValue().m_relative;
-            ImGui::GetIO().AddMouseWheelEvent(wheel_delta.x, wheel_delta.y);
+            m_imgui_context->IO.AddMouseWheelEvent(wheel_delta.x, wheel_delta.y);
         }
 
         void ImGuiService::onInputGamepadStick_(const InputActionEvent &event, const InputKey &trigger) noexcept {
@@ -2119,19 +2140,22 @@ float4 fragmentMain(PsInput input) : SV_Target {
 
             // left
             if (stick_value.x < 0) {
-                ImGui::GetIO().AddKeyAnalogEvent(stick_axes[stick_index][0], true, -stick_value.x);
+                m_imgui_context->IO.AddKeyAnalogEvent(stick_axes[stick_index][0], true, -stick_value.x);
             }
+
             // right
             if (stick_value.x > 0) {
-                ImGui::GetIO().AddKeyAnalogEvent(stick_axes[stick_index][1], true, stick_value.x);
+                m_imgui_context->IO.AddKeyAnalogEvent(stick_axes[stick_index][1], true, stick_value.x);
             }
+
             // down
             if (stick_value.y < 0) {
-                ImGui::GetIO().AddKeyAnalogEvent(stick_axes[stick_index][2], true, -stick_value.y);
+                m_imgui_context->IO.AddKeyAnalogEvent(stick_axes[stick_index][2], true, -stick_value.y);
             }
+
             // up
             if (stick_value.y > 0) {
-                ImGui::GetIO().AddKeyAnalogEvent(stick_axes[stick_index][3], true, stick_value.y);
+                m_imgui_context->IO.AddKeyAnalogEvent(stick_axes[stick_index][3], true, stick_value.y);
             }
         }
 
@@ -2139,11 +2163,11 @@ float4 fragmentMain(PsInput input) : SV_Target {
             const float trigger_value = event.getAxis1DValue().m_absolute;
 
             if (trigger == InputKey::gamepad_left_trigger_axis) {
-                ImGui::GetIO().AddKeyAnalogEvent(ImGuiKey_GamepadL2, true, trigger_value);
+                m_imgui_context->IO.AddKeyAnalogEvent(ImGuiKey_GamepadL2, true, trigger_value);
             }
 
             if (trigger == InputKey::gamepad_right_trigger_axis) {
-                ImGui::GetIO().AddKeyAnalogEvent(ImGuiKey_GamepadR2, true, trigger_value);
+                m_imgui_context->IO.AddKeyAnalogEvent(ImGuiKey_GamepadR2, true, trigger_value);
             }
         }
 

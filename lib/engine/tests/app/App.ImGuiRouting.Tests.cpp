@@ -849,6 +849,131 @@ namespace pP::tests::detail {
         std::ignore = window.release();
     };
 
+    // ------------------------------------------------------------------
+    // input context ownership
+    // ------------------------------------------------------------------
+
+    PPR_UNIT_TEST (input_callbacks_target_owned_context_without_changing_current_context) {
+        const auto shader = IShaderService::get();
+        const auto rhi = IRhiService::get();
+        std::ignore = rhi->shutdown();
+        std::ignore = shader->shutdown();
+        PPR_DEFER {
+            std::ignore = rhi->shutdown();
+            std::ignore = shader->shutdown();
+        };
+        PPR_TEST_ASSERT(not shader->initialize());
+        PPR_TEST_ASSERT(not rhi->initialize(rhi::DeviceType::Default, *shader));
+
+        ImGuiRouting::StubInputService inputs{};
+        Window window{
+            WindowHandle{reinterpret_cast<void *>(1)}, NativeWindowHandle{reinterpret_cast<void *>(1)},
+            WindowModel{.m_window_size = int2{800, 600}}};
+        window.m_framebuffer_size = int2{800, 600};
+        PPR_DEFER {
+            std::ignore = window.release();
+        };
+
+        WindowInputContext routed{safe_ptr<IInputService>{&inputs}};
+        PPR_TEST_ASSERT(not routed.initialize(safe_ptr<Window>{&window}));
+        PPR_DEFER {
+            std::ignore = routed.shutdown();
+        };
+        auto ui = ui::createImGuiService();
+        PPR_DEFER {
+            std::ignore = ui->shutdown();
+        };
+        PPR_TEST_ASSERT(not ui->initialize(routed, *rhi, *shader, {}, 0));
+
+        WindowViewport viewport{safe_ptr<Window>{&window}, ViewportLayout{}};
+        std::ignore = viewport.updateFromWindow();
+        const TimeSpan frame{std::chrono::milliseconds{16}};
+        PPR_TEST_ASSERT(not ui->update(frame, viewport));
+        ImGui::EndFrame();
+        auto *const owner = static_cast<ImGuiContext *>(ui->getContext());
+        PPR_TEST_ASSERT(owner != nullptr);
+        ImGuiIO &owner_io = owner->IO;
+        owner_io.ConfigInputTrickleEventQueue = false;
+        owner_io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
+        owner_io.BackendFlags |= ImGuiBackendFlags_HasGamepad;
+
+        ImGuiContext *const foreign = ImGui::CreateContext();
+        PPR_TEST_ASSERT(foreign != nullptr);
+        PPR_DEFER {
+            ImGui::DestroyContext(foreign);
+        };
+        ImGuiIO &foreign_io = foreign->IO;
+        foreign_io.IniFilename = nullptr;
+        foreign_io.DisplaySize = ImVec2{800.0f, 600.0f};
+        foreign_io.DeltaTime = 0.016f;
+        foreign_io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
+        foreign_io.BackendFlags |= ImGuiBackendFlags_HasGamepad;
+        unsigned char *font_pixels{};
+        int font_width{}, font_height{};
+        foreign_io.Fonts->GetTexDataAsRGBA32(&font_pixels, &font_width, &font_height);
+        PPR_TEST_ASSERT(font_pixels != nullptr and font_width > 0 and font_height > 0);
+
+        for (ImGuiContext *const current: {static_cast<ImGuiContext *>(nullptr), foreign}) {
+            owner_io.ClearInputKeys();
+            owner_io.ClearEventsQueue();
+            owner_io.WantTextInput = true;
+            foreign_io.WantTextInput = true;
+            ImGui::SetCurrentContext(current);
+
+            const auto post = [&](const InputKey &key, const InputValue &value, const EInputMessageEvent event) {
+                const InputMessage message{key, value, InputDeviceID{0u}, event};
+                PPR_TEST_ASSERT(routed.m_context.postKeyEvent(TimeSpan{}, message) != EInputMessageResponse::unhandled);
+                PPR_TEST_ASSERT(ImGui::GetCurrentContext() == current);
+            };
+
+            post(InputKey::back_space, InputValue{InputDigital{true}}, EInputMessageEvent::pressed);
+            post(InputKey::left_mouse_button, InputValue{InputDigital{true}}, EInputMessageEvent::pressed);
+            post(
+                InputKey::mouse_2d, InputValue{InputAxis2D{float2{125.0f, 175.0f}, float2{0.0f, 0.0f}}},
+                EInputMessageEvent::axis);
+            post(InputKey::mouse_wheel_axis_y, InputValue{InputAxis1D{0.0f, 2.0f}}, EInputMessageEvent::axis);
+            post(InputKey::gamepad_face_button_bottom, InputValue{InputDigital{true}}, EInputMessageEvent::pressed);
+            post(
+                InputKey::gamepad_left_2d, InputValue{InputAxis2D{float2{0.75f, 0.0f}, float2{0.0f, 0.0f}}},
+                EInputMessageEvent::axis);
+            post(InputKey::gamepad_left_trigger_axis, InputValue{InputAxis1D{0.625f, 0.0f}}, EInputMessageEvent::axis);
+            PPR_TEST_ASSERT(
+                routed.m_context.postCharacterInput(static_cast<hal::native::char_t>('q')) ==
+                EInputMessageResponse::consumed);
+            PPR_TEST_ASSERT(ImGui::GetCurrentContext() == current);
+
+            // Frame processing exposes the queued input through ImGui's public IO API.
+            PPR_TEST_ASSERT(not ui->update(frame, viewport));
+            PPR_TEST_ASSERT(ImGui::IsKeyDown(ImGuiKey_Backspace));
+            PPR_TEST_ASSERT(owner_io.MouseDown[ImGuiMouseButton_Left]);
+            PPR_TEST_ASSERT(owner_io.MousePos.x == 125.0f and owner_io.MousePos.y == 175.0f);
+            PPR_TEST_ASSERT(owner_io.MouseWheel == 2.0f);
+            PPR_TEST_ASSERT(ImGui::IsKeyDown(ImGuiKey_GamepadFaceDown));
+            PPR_TEST_ASSERT(ImGui::GetKeyData(ImGuiKey_GamepadLStickRight)->AnalogValue == 0.75f);
+            PPR_TEST_ASSERT(ImGui::GetKeyData(ImGuiKey_GamepadL2)->AnalogValue == 0.625f);
+            PPR_TEST_ASSERT(owner_io.InputQueueCharacters.Size == 1 and owner_io.InputQueueCharacters[0] == 'q');
+            ImGui::EndFrame();
+
+            // A different current context must receive none of the owning service's events.
+            ImGui::SetCurrentContext(foreign);
+            ImGui::NewFrame();
+            PPR_TEST_ASSERT(not ImGui::IsKeyDown(ImGuiKey_Backspace));
+            PPR_TEST_ASSERT(not foreign_io.MouseDown[ImGuiMouseButton_Left]);
+            PPR_TEST_ASSERT(foreign_io.MousePos.x < 0.0f and foreign_io.MousePos.y < 0.0f);
+            PPR_TEST_ASSERT(foreign_io.MouseWheel == 0.0f);
+            PPR_TEST_ASSERT(not ImGui::IsKeyDown(ImGuiKey_GamepadFaceDown));
+            PPR_TEST_ASSERT(not ImGui::IsKeyDown(ImGuiKey_GamepadLStickRight));
+            PPR_TEST_ASSERT(not ImGui::IsKeyDown(ImGuiKey_GamepadL2));
+            PPR_TEST_ASSERT(foreign_io.InputQueueCharacters.empty());
+            ImGui::EndFrame();
+        }
+
+        PPR_TEST_ASSERT(not ui->shutdown());
+        PPR_TEST_ASSERT(
+            routed.m_context.postCharacterInput(static_cast<hal::native::char_t>('q')) ==
+            EInputMessageResponse::unhandled);
+    };
+
     // --- Detached-UI contract (Finding 5 + Finding 3 coverage) -----------
     // The build/encode boundary carries ONLY owned DetachedUiDrawData.
     // These leaves pin the client-side contract without a GPU encode:
@@ -3400,6 +3525,7 @@ namespace pP::tests {
             detail::latch_notify_press_release_tracks_per_button_overlap,
             detail::latch_reset_input_state_clears_blur_stale_hold,
             detail::pending_deselect_drain_clears_focus_without_explicit_clear,
+            detail::input_callbacks_target_owned_context_without_changing_current_context,
             detail::detached_snapshot_outlives_live_state,
             detail::detached_build_rejects_foreign_callbacks_and_flags_reset,
             detail::detached_font_publication_retransmits_same_generation_until_ack,
