@@ -339,7 +339,7 @@ namespace pP::colony {
         if (m_matter_runtime != nullptr and
             contentCatalog() == nullptr and
             (not m_pending_digs.empty() or (advance_build and liveErrandCount(m_registry) != 0u))) {
-            // Legacy fixtures have no authoritative emission density.
+            // Numeric fixtures have no authoritative emission density.
             PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, std::errc::not_supported);
         }
 

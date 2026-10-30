@@ -44,9 +44,5 @@ export namespace pP::colony {
 
         /// Submitted resident chunks (not camera-frustum visibility).
         [[nodiscard]] u32 submittedChunks() const noexcept;
-
-        [[nodiscard]] static constexpr u32 totalChunks() noexcept {
-            return sim::kChunkCount;
-        }
     };
 }

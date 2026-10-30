@@ -1,16 +1,9 @@
 #pragma once
 
-// Canonical element-id registry for the colony world generator.
-//
-// The sim never names biomes: `engine.sim:worldgen` assigns only opaque `u16`
-// ids, and the numeric values below must match those assignments exactly.
-// Vacuum is id 0 by convention — confirmed on disk by the physics collider
-// solid test (`chunk->m_elements[...] != 0u` in
-// `lib/engine/physics/Physics.ChunkColliders.cpp`) and by the `Cell{}`
-// default (a non-resident chunk reads back as all-vacuum).
-//
-// Plain header (not a module): colony fixture code and tests include it
-// without taking a module dependency. Uses fixed-width integers only.
+// Fixed numeric material IDs for explicit colony fixtures and smoke scenarios.
+// Authored worlds resolve material IDs through ContentCatalog; these constants
+// describe only the fixture contract. Vacuum remains zero, matching Cell{}.
+// A plain header lets fixture code and tests share IDs without a module edge.
 
 #include <cstdint>
 
@@ -28,16 +21,4 @@ namespace pP::colony {
     inline constexpr std::uint16_t kElementAbyssal = 6u;
     inline constexpr std::uint16_t kElementVent = 7u;
 
-    // ------------------------------------------------------------------
-    // nominal temperatures
-    // ------------------------------------------------------------------
-
-    // Nominal (noise-free) temperatures in Kelvin assigned per archetype.
-    inline constexpr float kTempRock = 293.0f;
-    inline constexpr float kTempIce = 228.0f;
-    inline constexpr float kTempCaustic = 332.0f;
-    inline constexpr float kTempOil = 284.0f;
-    inline constexpr float kTempRuins = 296.0f;
-    inline constexpr float kTempAbyssal = 208.0f;
-    inline constexpr float kTempVent = 402.0f;
 } // namespace pP::colony

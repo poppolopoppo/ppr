@@ -264,7 +264,7 @@ namespace pP::colony {
         }
 
         // Prepared worlds retain catalog IDs, including vacuum zero. Explicit
-        // legacy fixtures retain the translator's transparent sentinel.
+        // numeric fixtures retain the translator's transparent sentinel.
         [[nodiscard]] std::error_code convertCells(
             const std::span<const sim::Cell> cells, const SimFramePacket &packet, Array<u16> &scratch) {
             std::bitset<65536u> terrain_ids{};

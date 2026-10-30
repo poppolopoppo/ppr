@@ -308,19 +308,6 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
         LABELS unit game gpu_validation
     )
 
-    # Temporary opt-in frozen-artifact diagnostic. The ordinary game entry
-    # excludes checkpoint_gpu; missing frozen evidence is an explicit failure here.
-    ppr_add_test_entry(TARGET game.tests
-        NAME matter_fused_paired
-        ARGS --run-test "game/checkpoint_gpu/full_frontier_frozen_fused_budget_pair" --loop 1
-        RESOURCE_LOCK gpu
-        TIMEOUT 180
-        LABELS game diagnostic gpu_validation
-    )
-    set_tests_properties(game.tests.matter_fused_paired PROPERTIES
-        ENVIRONMENT "PPR_TEST_FUSED_PAIRED_ROOT=${PROJECT_SOURCE_DIR}/out/diagnostics/pbmpm-recovery-20261022/full-matrix-20261024/fused-paired-1"
-    )
-
     # Heavy worldgen preview leaves: exact-visible-draft sample replay/export
     # and whole-world crop formation checks. PROCESSORS 4 reserves four CTest
     # scheduling slots for this entry.

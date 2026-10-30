@@ -6,11 +6,16 @@ import engine.core;
 import std;
 
 export namespace pP::sim {
+    // ------------------------------------------------------------------
+    // body definitions and state
+    // ------------------------------------------------------------------
+
     enum class EMotionKind : u32 {
         static_body,
         kinematic,
         dynamic
     };
+
     enum class EBodyGeometry : u32 {
         box,
         circle
@@ -42,26 +47,8 @@ export namespace pP::sim {
         bool m_fixed_rotation{};
     };
 
-    struct SolidFootprint {
-        u32 m_x{};
-        u32 m_y{};
-        u32 m_width{};
-        u32 m_height{};
-    };
-
-    struct Sensor {
-        u32 m_kind{};
-        bool m_enabled{true};
-        u64 m_category_bits{1u};
-        u64 m_mask_bits{~u64{0}};
-    };
-
     static_assert(std::is_standard_layout_v<BodyState> and std::is_trivially_copyable_v<BodyState>);
     static_assert(std::is_standard_layout_v<BodyDefinition> and std::is_trivially_copyable_v<BodyDefinition>);
-    static_assert(std::is_standard_layout_v<SolidFootprint> and std::is_trivially_copyable_v<SolidFootprint>);
-    static_assert(std::is_standard_layout_v<Sensor> and std::is_trivially_copyable_v<Sensor>);
     static_assert(sizeof(BodyState) == 24u);
     static_assert(sizeof(BodyDefinition) == 56u);
-    static_assert(sizeof(SolidFootprint) == 16u);
-    static_assert(sizeof(Sensor) == 24u);
 }

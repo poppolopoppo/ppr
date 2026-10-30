@@ -29,8 +29,8 @@ ordering, malformed membership/domains and owner-map rejection.
 per-world square cell grid, the fixed-timestep tick driver plus declared system order, the snapshot
 (save/load) contract, and the ECS registry/views substrate. The game already integrates this state with rendering
 through owned simulation packets; the sim module itself has no renderer or script-engine dependency.
-  `:footprint` adds plain ECS body vocabulary (`BodyState`/`BodyDefinition` live; `SolidFootprint`
-  (Sim.Footprint.cppm:45-50) and `Sensor` (:52-57) declared but zero external refs) without importing physics.
+  `:footprint` supplies the pointer-free ECS body vocabulary `BodyState` and
+  `BodyDefinition` without importing physics.
 
 ## Design
 
@@ -238,7 +238,7 @@ snapshot.
 - `chunk_grid/Sim.ChunkGrid.cpp` — lazy residency, dirty/activity bookkeeping.
 - `ecs/Sim.Ecs.cppm` — `Entity`, `ComponentMask`, `Registry`, `View`, `EcsSection`/`EcsColumnData` interface.
 - `ecs/Sim.Ecs.cpp` — slot lifecycle, column bookkeeping, `sim.ecs` error category.
-- `footprint/Sim.Footprint.cppm` — pointer-free BodyState, BodyDefinition, SolidFootprint and Sensor vocabulary.
+- `footprint/Sim.Footprint.cppm` — pointer-free BodyState and BodyDefinition vocabulary.
 - `tick/Sim.Tick.cppm` — `FixedTimestep`, `TickReport`, `StepRegistry` interface.
 - `tick/Sim.Tick.cpp` — accumulator/policy math, fail-closed declaration + stable Kahn order.
 - `particles/Sim.Particles.cppm/.cpp` — persistent matter records, seed/restore and local edit preparation/commit.

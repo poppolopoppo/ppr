@@ -289,36 +289,8 @@ Frozen worldgen capture and smoke prepare grid cells through the same bounded
 boundaries may wait for GPU progress, then refresh completed fences before retry;
 they preserve captured content and do not add waits to ordinary game frames.
 
-Temporary full-frontier aggregation diagnosis lives in Checkpoint.Gpu.Tests.cpp
-(ull_frontier_frozen_fused_budget_pair), explicitly excluded with the existing
-checkpoint GPU group from ordinary game.tests. Its exact diagnostic registration
-owns the existing GPU lock and 180-second ceiling, one loop and at most 512 pairs.
-The actual Driver/Box2D owner uses the frozen baseline solver; one normal candidate
-GpuSolver runs strictly after each completed baseline tick and demand snapshot.
-IMatterSubmissionObserverForTest borrows the finalized profile/source and all
-eight per-body slices synchronously before Runtime transfer; the normal null path
-copies nothing. The fixture detaches this borrowed observer before terminal drain.
-Frozen source/module identities and first exact 22-field mismatch/rejection are
-retained under fused-paired-1. This is a temporary diagnostic reference, not a
-production backend; removal/retention is decided after the concrete result.
-
-The temporary live-input diagnostic reuses the finalized submission observer.
-Under --worldgen-report only, the app owns MatterSubmissionJournal and attaches
-it before the actual Driver admission boundary; ordinary null observers allocate
-and copy nothing. Its default-noop admission callback hashes actual semantic
-rows/profile and the existing terrain masks once; repeated mismatched admission
-invalidates evidence. A preallocated512-attempt, one-body CPU journal records exact
-eight-slice inputs without callback I/O/allocation or GPU work. Driver shutdown
-detaches first; the application retains CPU evidence through orderly shutdown and
-writes it under its existing reporting path, preserving prior errors. The paired
-fixture composes the same journal. PPRI/1 layout, hashes, bounds and conditional
-comparison protocol are documented in fused-live-inputs-1/handoff.md. This is a
-temporary diagnostic sidecar, not a checkpoint or numerical backend.
-
-Checkpoint v6 decoding migrates the former liquid-relaxation value2 to the
-stable K2 default1 before strict profile validation. The wire layout and all
-carried particle fields are preserved; other unsupported settings still fail
-validation. Migration does not repair an already-exploded carried state.
+Checkpoint v6 accepts only the current validated matter profile. Unsupported
+liquid-relaxation values are rejected without rewriting carried solver state.
 
 Runtime maps carry an explicit edge (1024/2048/4096) through `ChunkGrid`,
 `GenerationRecipe`, `WorldDescriptor` and `MatterState`. Grid directories,

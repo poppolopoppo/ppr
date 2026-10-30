@@ -241,7 +241,7 @@ export namespace pP::sim {
         u32 m_warp_x_field{}, m_warp_y_field{};
         u32 m_start_biome{}, m_start_feature{}, m_start_marker{}, m_start_x_fine{}, m_start_y_fine{};
         double m_start_clearance_m{}, m_start_route_width_m{}, m_actor_half_width_m{}, m_actor_half_height_m{};
-        // Disabled in small legacy fixtures; authored worlds use an open surface.
+        // Disabled in small numeric fixtures; authored worlds use an open surface.
         bool m_open_surface{};
         u32 m_surface_field{}, m_bedrock_field{};
         // Zero uses m_max_sites; an explicit bounded pool supports compact-world matching.

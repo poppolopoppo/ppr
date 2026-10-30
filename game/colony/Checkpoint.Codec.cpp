@@ -275,7 +275,7 @@ namespace pP::colony {
             writer.u64value(checkpoint.m_report.m_output_checksum);
             writer.u64value(checkpoint.m_report.m_grid_payload_bytes);
             // Allocation observations describe the generating process/build,
-            // not durable world state. They are intentionally absent from v3.
+            // not durable world state. They are intentionally absent from the wire.
         }
 
         void decodeMetadata(Reader &reader, WorldCheckpoint &checkpoint) {
@@ -534,12 +534,6 @@ namespace pP::colony {
             word = reader.u32value();
 
         carried.m_profile = std::bit_cast<matter::GpuParameters>(profile);
-
-        // Earlier v5 checkpoints carried the unstable K2 liquid relaxation.
-        // Upgrade only that known profile value; preserve every particle field
-        // and let ordinary validation reject any other unsupported settings.
-        if (carried.m_profile.m_liquid_relaxation == 2.0f)
-            carried.m_profile.m_liquid_relaxation = 1.0f;
 
         PPR_RETURN_UNEXPECTED_ON_FAIL(CheckpointCodec, reader.m_error);
         PPR_RETURN_UNEXPECTED_ON_FAIL(CheckpointCodec, validateWorldMetric(descriptor.m_metric));

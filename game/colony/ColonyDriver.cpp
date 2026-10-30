@@ -24,153 +24,6 @@ namespace pP::colony {
     PPR_DEFINE_LOG_CATEGORY(ColonyPreparation, info, none)
 
     // ------------------------------------------------------------------
-    // bounded finalized-input diagnostic journal
-    // ------------------------------------------------------------------
-
-    struct MatterSubmissionJournalState {
-        u64 m_seen{};
-        std::string m_provenance;
-        std::array<u32, 64u> m_admission{};
-        std::array<std::array<u32, 152u>, 512u> m_records{};
-        u32 m_recorded{}, m_flags{};
-        bool m_admission_seen{};
-    };
-
-    static_assert(sizeof(MatterSubmissionJournalState) + 4096u < 1024u * 1024u);
-    static_assert(sizeof(std::array<u32, 152u>) == 608u);
-    static_assert(std::endian::native == std::endian::little);
-    static_assert(sizeof(MatterIdentity) == 24u and sizeof(matter::GpuBodyBoundary) == 64u);
-
-    namespace {
-        u64 inputJournalHash(const std::span<const std::byte> bytes, u64 hash = 14695981039346656037ull) noexcept {
-            for (const auto byte: bytes)
-                hash = (hash ^ std::to_integer<u8>(byte)) * 1099511628211ull;
-
-            return hash;
-        }
-    }
-
-    void IMatterSubmissionObserverForTest::observeAdmission(
-        const MatterState &, std::span<const u32>, u32, u32, float, float, u32) {
-    }
-
-    MatterSubmissionJournal::MatterSubmissionJournal(std::string provenance)
-        : m_state(std::make_unique<MatterSubmissionJournalState>()) {
-        if (provenance.size() > 4096u) {
-            m_state->m_flags |= 16u;
-            return;
-        }
-
-        m_state->m_provenance = provenance;
-    }
-
-    MatterSubmissionJournal::~MatterSubmissionJournal() = default;
-
-    void MatterSubmissionJournal::observeAdmission(
-        const MatterState &source, const std::span<const u32> terrain, const u32 width, const u32 height,
-        const float origin_x, const float origin_y, const u32 tick_hz) noexcept {
-        std::array<u32, 64u> admission{};
-        std::ranges::copy(std::bit_cast<std::array<u32, 6u>>(source.m_identity), admission.begin());
-        std::ranges::copy(std::bit_cast<std::array<u32, 16u>>(source.m_profile), admission.begin() + 6u);
-        admission[22u] = static_cast<u32>(source.m_particles.size());
-        admission[23u] = width;
-        admission[24u] = height;
-        admission[25u] = std::bit_cast<u32>(origin_x);
-        admission[26u] = std::bit_cast<u32>(origin_y);
-        admission[27u] = tick_hz;
-        std::ranges::copy(std::bit_cast<std::array<u32, 2u>>(source.m_cell_metres), admission.begin() + 28u);
-        std::ranges::copy(std::bit_cast<std::array<u32, 2u>>(source.m_thickness_metres), admission.begin() + 30u);
-        std::ranges::copy(std::bit_cast<std::array<u32, 2u>>(source.m_next_id), admission.begin() + 32u);
-
-        u64 particles = 14695981039346656037ull;
-        for (const auto &particle: source.m_particles) {
-            const auto words = std::bit_cast<std::array<u32, 22u>>(particle);
-            particles = inputJournalHash(std::as_bytes(std::span{words}), particles);
-        }
-
-        const u64 masks = inputJournalHash(std::as_bytes(terrain));
-        std::ranges::copy(std::bit_cast<std::array<u32, 2u>>(particles), admission.begin() + 34u);
-        std::ranges::copy(std::bit_cast<std::array<u32, 2u>>(masks), admission.begin() + 36u);
-        const u64 terrain_words = terrain.size();
-        std::ranges::copy(std::bit_cast<std::array<u32, 2u>>(terrain_words), admission.begin() + 38u);
-
-        if (m_state->m_admission_seen) {
-            if (m_state->m_admission != admission)
-                m_state->m_flags |= 4u;
-            return;
-        }
-
-        m_state->m_admission = admission;
-        m_state->m_admission_seen = true;
-    }
-
-    void MatterSubmissionJournal::observe(
-        const MatterIdentity source, const matter::GpuParameters &profile,
-        const std::span<const matter::GpuBodyBoundary> bodies, const u32 body_count) noexcept {
-        if (m_state->m_seen != std::numeric_limits<u64>::max())
-            ++m_state->m_seen;
-
-        if (body_count != 1u or bodies.size() != matter::kGameSubsteps) {
-            m_state->m_flags |= 1u;
-            return;
-        }
-
-        if (m_state->m_seen > m_state->m_records.size()) {
-            m_state->m_flags |= 2u;
-            return;
-        }
-
-        auto &record = m_state->m_records[m_state->m_recorded++];
-        std::ranges::copy(std::bit_cast<std::array<u32, 6u>>(source), record.begin());
-        std::ranges::copy(std::bit_cast<std::array<u32, 16u>>(profile), record.begin() + 6u);
-        record[22u] = static_cast<u32>(m_state->m_seen);
-        record[23u] = body_count;
-
-        for (u32 slice = 0u; slice < bodies.size(); ++slice) {
-            std::ranges::copy(std::bit_cast<std::array<u32, 16u>>(bodies[slice]), record.begin() + 24u + slice * 16u);
-        }
-    }
-
-    std::error_code MatterSubmissionJournal::write(const std::filesystem::path &path) const {
-        const u32 flags = m_state->m_flags | (m_state->m_admission_seen ? 0u : 8u);
-        const auto seen = std::bit_cast<std::array<u32, 2u>>(m_state->m_seen);
-        const std::array<u32, 16u> header{
-            0x49525050u, 1u, 80u, 152u, m_state->m_recorded, flags, seen[0u], seen[1u], 512u, 1u, matter::kGameSubsteps,
-            matter::kSourceIterations, 64u, 64u, 0x01020304u, 1u};
-        std::ofstream stream{path, std::ios::binary | std::ios::trunc};
-        PPR_RETURN_ERROR_ON_FAIL(
-            ColonyPreparation, stream.good() ? std::error_code{} : std::make_error_code(std::errc::io_error));
-
-        stream.write(reinterpret_cast<const char *>(header.data()), static_cast<std::streamsize>(sizeof(header)));
-        stream.write(
-            reinterpret_cast<const char *>(m_state->m_admission.data()),
-            static_cast<std::streamsize>(sizeof(m_state->m_admission)));
-        stream.write(
-            reinterpret_cast<const char *>(m_state->m_records.data()),
-            static_cast<std::streamsize>(m_state->m_recorded * sizeof(m_state->m_records[0u])));
-        stream.close();
-        PPR_RETURN_ERROR_ON_FAIL(
-            ColonyPreparation, not stream.fail() ? std::error_code{} : std::make_error_code(std::errc::io_error));
-
-        auto manifest_path = path;
-        manifest_path += ".txt";
-        std::ofstream manifest{manifest_path, std::ios::trunc};
-        manifest << "protocol=PPRI/1 endian=little header_words=80 record_words=152\n"
-                 << "recorded=" << m_state->m_recorded << " attempts=" << m_state->m_seen << " flags=" << flags
-                 << " valid=" << (flags == 0u) << '\n'
-                 << "admission_fnv1a64=" << std::hex << inputJournalHash(std::as_bytes(std::span{m_state->m_admission}))
-                 << " records_fnv1a64="
-                 << inputJournalHash(std::as_bytes(std::span{m_state->m_records.data(), m_state->m_recorded}))
-                 << std::dec << " storage_bytes=" << sizeof(MatterSubmissionJournalState)
-                 << " owner_size=" << sizeof(MatterSubmissionJournal) << '\n'
-                 << m_state->m_provenance << '\n';
-        manifest.close();
-        PPR_RETURN_ERROR_ON_FAIL(
-            ColonyPreparation, not manifest.fail() ? std::error_code{} : std::make_error_code(std::errc::io_error));
-        return {};
-    }
-
-    // ------------------------------------------------------------------
     // driver helpers
     // ------------------------------------------------------------------
 
@@ -612,7 +465,6 @@ namespace pP::colony {
     }
 
     std::error_code ColonyDriver::shutdown() {
-        m_submission_observer = nullptr;
         PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, detachMatter());
         m_matter.reset();
         m_particle_view.reset();
@@ -1413,10 +1265,6 @@ namespace pP::colony {
         agentNeighbourhood(m_registry, needed, cellsPerMetre(), grid());
     }
 
-    void ColonyDriver::setMatterSubmissionObserverForTest(IMatterSubmissionObserverForTest *const observer) noexcept {
-        m_submission_observer = observer;
-    }
-
     void ColonyDriver::stepPhysics() {
         const hal::ProfileScope scope_physics{"Colony.Physics"};
         if (not m_physics_ready or m_step_error) {
@@ -1479,12 +1327,6 @@ namespace pP::colony {
 
             m_matter_pending = true;
             auto completion = advanceMatterRequest(*m_matter_runtime, EMatterOperation::submit, [&] {
-                if (m_submission_observer) {
-                    m_submission_observer->observe(
-                        m_matter->m_identity, m_matter->m_profile, *predicted,
-                        static_cast<u32>(m_matter_bodies.size()));
-                }
-
                 return m_matter_runtime->beginSubmitResident(
                     m_matter->m_identity, std::move(*predicted), static_cast<u32>(m_matter_bodies.size()), force);
             });

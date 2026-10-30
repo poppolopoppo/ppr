@@ -68,45 +68,6 @@ export namespace pP::colony {
     };
 
     // ------------------------------------------------------------------
-    // borrowed diagnostic submission observation
-    // ------------------------------------------------------------------
-
-    class IMatterSubmissionObserverForTest {
-    public:
-        virtual ~IMatterSubmissionObserverForTest() = default;
-
-        /// Optional one-time admission observation; borrowed spans expire on return.
-        virtual void observeAdmission(
-            const MatterState &source, std::span<const u32> terrain, u32 width, u32 height, float origin_x,
-            float origin_y, u32 tick_hz);
-
-        /// Called synchronously before transfer; no submission or borrowed-view retention.
-        virtual void observe(
-            MatterIdentity source, const matter::GpuParameters &profile,
-            std::span<const matter::GpuBodyBoundary> bodies, u32 body_count) = 0;
-    };
-
-    struct MatterSubmissionJournalState;
-
-    /// Bounded diagnostic only: allocation precedes callbacks; write follows detachment.
-    class MatterSubmissionJournal final : public IMatterSubmissionObserverForTest {
-        std::unique_ptr<MatterSubmissionJournalState> m_state;
-
-    public:
-        explicit MatterSubmissionJournal(std::string provenance);
-        ~MatterSubmissionJournal() override;
-
-        void observeAdmission(
-            const MatterState &source, std::span<const u32> terrain, u32 width, u32 height, float origin_x,
-            float origin_y, u32 tick_hz) noexcept override;
-        void observe(
-            MatterIdentity source, const matter::GpuParameters &profile,
-            std::span<const matter::GpuBodyBoundary> bodies, u32 body_count) noexcept override;
-
-        [[nodiscard]] std::error_code write(const std::filesystem::path &path) const;
-    };
-
-    // ------------------------------------------------------------------
     // colony driver
     // ------------------------------------------------------------------
 
@@ -272,7 +233,6 @@ export namespace pP::colony {
         Array<physics::BodyBoundarySnapshot> m_matter_bodies{};
         MatterRuntime *m_matter_runtime{};
         MatterRuntime *m_preparing_runtime{};
-        IMatterSubmissionObserverForTest *m_submission_observer{};
         // Injected generation/capture pool; its application owner outlives this
         // driver and every demand task. No worker callback borrows the driver.
         ParallelScheduler *m_snapshot_workers{};
@@ -354,9 +314,6 @@ export namespace pP::colony {
         [[nodiscard]] std::error_code copyColliderChunk(sim::ChunkPos position, Array<u16> &occupancy) const;
 
     public:
-        /// Borrowed observer must outlive use and be detached before its owner is destroyed.
-        void setMatterSubmissionObserverForTest(IMatterSubmissionObserverForTest *observer) noexcept;
-
         [[nodiscard]] Expected<bool> advancePrepareMatter(MatterRuntime &runtime);
         [[nodiscard]] Expected<bool> advanceAttachMatter(MatterRuntime &runtime);
         [[nodiscard]] Expected<bool> advanceResumeMatter(MatterRuntime &runtime);
@@ -415,17 +372,17 @@ export namespace pP::colony {
         [[nodiscard]] Expected<std::span<const sim::MatterParticle>> particleChunk(sim::ChunkPos position) const;
         [[nodiscard]] u32 particleCount() const noexcept;
         [[nodiscard]] std::span<const sim::MatterParticleBatch> editParticles() const noexcept;
-        // Borrowed immutable catalog; absent for explicit legacy fixtures.
+        // Borrowed immutable catalog; absent for explicit numeric fixtures.
         [[nodiscard]] const ContentCatalog *contentCatalog() const noexcept;
         [[nodiscard]] u16 boundaryMaterial() const noexcept;
         [[nodiscard]] u32 cellsPerMetre() const noexcept;
-        // Exactly 4096 column-centre heights. False denotes a legacy fixture
+        // Exactly grid().edge() column-centre heights. False denotes a numeric fixture
         // or closed world and leaves the caller's output untouched.
         [[nodiscard]] bool sampleSurfaceHeights(std::span<float> heights) const noexcept;
         [[nodiscard]] double referenceThicknessMetres() const noexcept;
         [[nodiscard]] std::string_view profileKey() const noexcept;
 
-        /// Legacy edits wait for a matching presentation manifest. Attached
+        /// Numeric fixture edits wait for a matching presentation manifest. Attached
         /// matter instead commits acknowledged solver/collider preparation;
         /// presentation catches up independently through its dirty manifest.
         void requireEditPublication() noexcept;

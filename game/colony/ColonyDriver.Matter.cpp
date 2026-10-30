@@ -84,7 +84,7 @@ namespace pP::colony {
                 }
             }
         } else {
-            // The explicit legacy fixture uses the same nonzero-solid contract
+            // The explicit numeric fixture uses the same nonzero-solid contract
             // as copyColliderChunk; it has no material catalog or matter seeds.
             for (u32 id = 1u; id <= std::numeric_limits<u16>::max(); ++id) {
                 solids.push_back(static_cast<u16>(id));
@@ -95,11 +95,6 @@ namespace pP::colony {
         PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyMatter, terrain);
         m_preparing_runtime = &runtime;
         auto completion = advanceMatterRequest(runtime, EMatterOperation::prepare, [&] {
-            if (m_submission_observer) {
-                m_submission_observer->observeAdmission(
-                    *m_matter, *terrain, grid().edge() + 1u, grid().edge() + 1u, 2.5f, 2.5f, tickHz());
-            }
-
             return runtime.beginPrepareResidentWorld(*m_matter, std::move(*terrain));
         });
         PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyMatter, completion);

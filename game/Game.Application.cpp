@@ -180,7 +180,6 @@ namespace demo {
             TimePoint m_gap_start{}, m_gap_end{};
         };
         std::array<WorldgenPhaseObservation, 11u> m_worldgen_observations{};
-        std::unique_ptr<colony::MatterSubmissionJournal> m_matter_inputs;
         const ITimerClock *m_observation_clock{};
         bool m_worldgen_report{};
         bool m_worldgen_acceptance{};
@@ -255,31 +254,6 @@ namespace demo {
             m_last_update_phase = phase;
             m_peak_background_outstanding = std::max(
                 m_peak_background_outstanding, static_cast<u64>(parallel::backgroundPool().getNumOutstandingTasks()));
-        }
-
-        [[nodiscard]] std::error_code writeMatterInputs_() const {
-            if (not m_matter_inputs)
-                return {};
-
-            std::error_code error;
-            const auto parent = std::filesystem::current_path(error);
-            PPR_RETURN_ERROR_ON_FAIL(Demo, error);
-
-            for (u32 index = 0u; index < 4096u; ++index) {
-                const auto directory = parent / ("pbmpm-live-inputs-" + std::to_string(index));
-                const bool created = std::filesystem::create_directory(directory, error);
-                PPR_RETURN_ERROR_ON_FAIL(Demo, error);
-                if (not created)
-                    continue;
-
-                const auto path = directory / "inputs.bin";
-                PPR_RETURN_ERROR_ON_FAIL(Demo, m_matter_inputs->write(path));
-                std::println("[pbmpm-live-inputs] {}", path.generic_string());
-                return {};
-            }
-
-            PPR_RETURN_ERROR_ON_FAIL(Demo, std::errc::file_exists);
-            return {};
         }
 
         void reportWorldgenObservations_() {
@@ -1264,25 +1238,6 @@ namespace demo {
                     cancelling or
                     m_world_transition.m_phase == game::ESessionWorldPhase::resuming)) {
                 auto *const candidate = m_world_job->preparedDriver();
-                if (m_worldgen_report and candidate) {
-                    if (not m_matter_inputs) {
-                        const auto *const prepared = candidate->preparedWorld();
-                        std::string provenance{"role=live prepared_world=absent"};
-                        if (prepared) {
-                            const auto &descriptor = prepared->descriptor();
-                            const auto &report = prepared->generated().m_report;
-                            provenance = std::format(
-                                "role=live profile={} seed={} content={:016x} terrain={:016x} output={:016x}",
-                                descriptor.m_profile, descriptor.m_seed, descriptor.m_content_fingerprint,
-                                report.m_terrain_checksum, report.m_output_checksum);
-                        }
-
-                        m_matter_inputs = std::make_unique<colony::MatterSubmissionJournal>(std::move(provenance));
-                    }
-
-                    candidate->setMatterSubmissionObserverForTest(m_matter_inputs.get());
-                }
-
                 const auto step = game::advanceSessionWorldTransition(
                     m_world_transition, m_driver.get(), candidate, m_matter_runtime,
                     {.m_world = {view.m_id, m_candidate_generation, m_candidate_fingerprint},
@@ -6082,12 +6037,6 @@ namespace demo {
             std::error_code first{};
             m_simulation_deadline.reset();
             m_session_service.stopControls();
-            if (m_driver)
-                m_driver->setMatterSubmissionObserverForTest(nullptr);
-            if (m_retiring_driver)
-                m_retiring_driver->setMatterSubmissionObserverForTest(nullptr);
-            if (m_world_job and m_world_job->preparedDriver())
-                m_world_job->preparedDriver()->setMatterSubmissionObserverForTest(nullptr);
 
             m_workshop_game_particles.reset();
             m_defer_close.store(false, std::memory_order_release);
@@ -6245,14 +6194,6 @@ namespace demo {
                 reportWorldgenObservations_();
             } catch (...) {
                 // A reporting failure must not skip independent resource cleanup.
-                PPR_RETAIN_ERROR_ON_FAIL(Demo, first_error, currentException_());
-            }
-
-            try {
-                PPR_RETAIN_ERROR_ON_FAIL(Demo, first_error, writeMatterInputs_());
-            } catch (...) {
-                // Best-effort diagnostic export preserves the original failure
-                // and independent cleanup; allocation remains fatal at this boundary.
                 PPR_RETAIN_ERROR_ON_FAIL(Demo, first_error, currentException_());
             }
 
