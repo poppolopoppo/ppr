@@ -116,6 +116,10 @@ export namespace pP {
             inline constexpr char32_t kInspect{0xF05Bu};
             inline constexpr char32_t kDig{0xF6E3u};
             inline constexpr char32_t kDemolish{0xF05Eu};
+            inline constexpr char32_t kPush{0xF424u}; // up-right-and-down-left-from-center
+            inline constexpr char32_t kPull{0xF78Cu}; // minimize
+            inline constexpr char32_t kSpawn{0xF067u}; // plus
+            inline constexpr char32_t kDestroy{0xF1F8u}; // trash
             inline constexpr char32_t kSettings{0xF013u};
             inline constexpr char32_t kChart{0xF201u};
             inline constexpr char32_t kFolder{0xF07Cu};
@@ -146,6 +150,10 @@ export namespace pP {
                 UIFontGlyphRange{.m_first = kInspect, .m_last = kInspect},
                 UIFontGlyphRange{.m_first = kDig, .m_last = kDig},
                 UIFontGlyphRange{.m_first = kDemolish, .m_last = kDemolish},
+                UIFontGlyphRange{.m_first = kPush, .m_last = kPush},
+                UIFontGlyphRange{.m_first = kPull, .m_last = kPull},
+                UIFontGlyphRange{.m_first = kSpawn, .m_last = kSpawn},
+                UIFontGlyphRange{.m_first = kDestroy, .m_last = kDestroy},
                 UIFontGlyphRange{.m_first = kSettings, .m_last = kSettings},
                 UIFontGlyphRange{.m_first = kChart, .m_last = kChart},
                 UIFontGlyphRange{.m_first = kFolder, .m_last = kFolder},
@@ -179,6 +187,10 @@ export namespace pP {
             inline constexpr std::string_view kInspectLabel{"\uf05b Inspect###tool0"};
             inline constexpr std::string_view kDigLabel{"\uf6e3 Dig###tool1"};
             inline constexpr std::string_view kDemolishLabel{"\uf05e Demolish###tool3"};
+            inline constexpr std::string_view kPushLabel{"\uf424 Push###tool4"};
+            inline constexpr std::string_view kPullLabel{"\uf78c Pull###tool5"};
+            inline constexpr std::string_view kSpawnLabel{"\uf067 Spawn###tool6"};
+            inline constexpr std::string_view kDestroyLabel{"\uf1f8 Destroy###tool7"};
             inline constexpr std::string_view kSettingsLabel{"\uf013 Display###Display"};
             inline constexpr std::string_view kChartLabel{"\uf201 Performance###Performance"};
             inline constexpr std::string_view kFolderLabel{"\uf07c Workspace###Workspace"};
@@ -190,8 +202,8 @@ export namespace pP {
             inline constexpr std::array kLabels{
                 kCloseLabel, kReloadLabel, kSaveDocumentsLabel, kUndoLabel, kRedoLabel, kReloadDescriptorLabel,
                 kCubesLabel, kLeafLabel, kSlidersLabel, kMountainLabel, kGlobeLabel, kImageLabel, kLayersLabel,
-                kFileLabel, kPlayLabel, kPauseLabel, kStepLabel, kInspectLabel, kDigLabel, kDemolishLabel,
-                kSettingsLabel, kChartLabel, kFolderLabel, kHelpLabel};
+                kFileLabel, kPlayLabel, kPauseLabel, kStepLabel, kInspectLabel, kDigLabel, kDemolishLabel, kPushLabel,
+                kPullLabel, kSpawnLabel, kDestroyLabel, kSettingsLabel, kChartLabel, kFolderLabel, kHelpLabel};
 
             /// Icon-only help affordance: the top bar's Help glyph without its
             /// words, so a caveat beside a label costs one baked glyph and the

@@ -1299,10 +1299,10 @@ namespace pP::colony {
                                   : tool == EColonyTool::dig        ? ui::icons::kDigLabel
                                   : tool == EColonyTool::build_wall ? ui::icons::kCubesLabel
                                   : tool == EColonyTool::demolish   ? ui::icons::kDemolishLabel
-                                  : tool == EColonyTool::push       ? std::string_view{"P+"}
-                                  : tool == EColonyTool::pull       ? std::string_view{"P-"}
-                                  : tool == EColonyTool::spawn      ? std::string_view{"S"}
-                                                                    : std::string_view{"X"};
+                                  : tool == EColonyTool::push       ? ui::icons::kPushLabel
+                                  : tool == EColonyTool::pull       ? ui::icons::kPullLabel
+                                  : tool == EColonyTool::spawn      ? ui::icons::kSpawnLabel
+                                                                    : ui::icons::kDestroyLabel;
                 char label[48]{};
                 std::snprintf(label, sizeof(label), "%.*s###tool%u", 3, icon.data(), static_cast<u32>(tool));
                 if (selected) {
@@ -1323,7 +1323,7 @@ namespace pP::colony {
                                                                     : EColonyIntent::select_tool;
                 const u32 argument = kind == EColonyIntent::select_tool ? static_cast<u32>(tool) : 0u;
                 shortcutTip(shortcuts, kind, argument);
-                if (ImGui::IsItemHovered() and shortcuts.empty()) {
+                if (ImGui::IsItemHovered() and findShortcut(shortcuts, kind, argument) == nullptr) {
                     ImGui::SetTooltip("%s", tool == EColonyTool::build_wall ? "Build" : toolName(tool));
                 }
 
