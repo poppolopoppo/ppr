@@ -481,6 +481,7 @@ namespace pP::game::tests::detail::presentation {
             io.IniFilename = nullptr;
             io.DisplaySize = extent;
             io.DeltaTime = 1.0f / 60.0f;
+
             unsigned char *pixels{};
             int width{}, height{};
             io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
@@ -489,9 +490,25 @@ namespace pP::game::tests::detail::presentation {
             const colony::ColonyUiView view{.m_colony = &snapshot};
             colony::ColonyUiState state{};
             state.m_colony_open = false;
+
+            // Copy glyph UV identity while the current font bake is valid;
+            // ImGui clears current baked-font state at frame completion.
+            constexpr std::array glyphs{
+                pP::ui::icons::kInspect, pP::ui::icons::kDig, pP::ui::icons::kCubes, pP::ui::icons::kDemolish,
+                pP::ui::icons::kPush, pP::ui::icons::kPull, pP::ui::icons::kSpawn, pP::ui::icons::kDestroy};
+            std::array<ImVec4, glyphs.size()> glyph_uvs{};
             const auto frame = [&]() {
                 ImGui::NewFrame();
                 const auto result = colony::drawColonyUi(view, {}, {}, state);
+
+                ImFontBaked *const baked = ImGui::GetFontBaked();
+                PPR_TEST_ASSERT(baked != nullptr);
+                for (std::size_t index = 0u; index < glyphs.size(); ++index) {
+                    const auto *const glyph = baked->FindGlyph(static_cast<ImWchar>(glyphs[index]));
+                    PPR_TEST_ASSERT(glyph != nullptr and glyph->Visible);
+                    glyph_uvs[index] = {glyph->U0, glyph->V0, glyph->U1, glyph->V1};
+                }
+
                 ImGui::Render();
                 return result;
             };
@@ -505,6 +522,48 @@ namespace pP::game::tests::detail::presentation {
             const float edge = rail->ContentSize.x;
             PPR_TEST_ASSERT(edge > 0.0f and rail->Pos.y + rail->Size.y <= extent.y);
             PPR_TEST_ASSERT(not rail->ScrollbarY and rail->ScrollMax.y == 0.0f and rail->Scroll.y == 0.0f);
+
+            Array<ImVec2> glyph_vertices;
+            for (const ImDrawVert &vertex: rail->DrawList->VtxBuffer) {
+                if (std::ranges::any_of(glyph_uvs, [&](const ImVec4 bounds) {
+                        return vertex.uv.x >= bounds.x and
+                               vertex.uv.x <= bounds.z and
+                               vertex.uv.y >= bounds.y and
+                               vertex.uv.y <= bounds.w;
+                    })) {
+                    glyph_vertices.push_back(vertex.pos);
+                }
+            }
+
+            if (glyph_vertices.size() != 8u * 4u) {
+                _.log(
+                    std::format(
+                        "Rail glyph vertices: {} (expected 32), viewport {} x {}", glyph_vertices.size(), extent.x,
+                        extent.y)
+                        .c_str());
+            }
+
+            PPR_TEST_ASSERT(glyph_vertices.size() == 8u * 4u);
+
+            for (u32 index = 0u; index < 8u; ++index) {
+                ImVec2 minimum{std::numeric_limits<float>::max(), std::numeric_limits<float>::max()};
+                ImVec2 maximum{std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest()};
+                for (std::size_t corner = 0u; corner < 4u; ++corner) {
+                    const auto position = glyph_vertices[static_cast<std::size_t>(index) * 4u + corner];
+                    minimum.x = std::min(minimum.x, position.x);
+                    minimum.y = std::min(minimum.y, position.y);
+                    maximum.x = std::max(maximum.x, position.x);
+                    maximum.y = std::max(maximum.y, position.y);
+                }
+
+                const ImVec2 button_minimum{
+                    rail->DC.CursorStartPos.x, rail->DC.CursorStartPos.y + static_cast<float>(index) * (edge + gap)};
+                const ImVec2 centre{button_minimum.x + edge * 0.5f, button_minimum.y + edge * 0.5f};
+                PPR_TEST_ASSERT(std::abs((minimum.x + maximum.x) * 0.5f - centre.x) <= 1.0f);
+                PPR_TEST_ASSERT(std::abs((minimum.y + maximum.y) * 0.5f - centre.y) <= 1.0f);
+                PPR_TEST_ASSERT(minimum.x >= button_minimum.x and minimum.y >= button_minimum.y);
+                PPR_TEST_ASSERT(maximum.x <= button_minimum.x + edge and maximum.y <= button_minimum.y + edge);
+            }
 
             for (u32 index = 0u; index < 8u; ++index) {
                 const ImVec2 position{

@@ -1284,6 +1284,9 @@ namespace pP::colony {
             constexpr std::array tools{
                 EColonyTool::inspect, EColonyTool::dig, EColonyTool::build_wall, EColonyTool::demolish,
                 EColonyTool::push, EColonyTool::pull, EColonyTool::spawn, EColonyTool::destroy};
+            constexpr std::array glyphs{
+                ui::icons::kInspect, ui::icons::kDig, ui::icons::kCubes, ui::icons::kDemolish, ui::icons::kPush,
+                ui::icons::kPull, ui::icons::kSpawn, ui::icons::kDestroy};
             const auto &style = ImGui::GetStyle();
             const float tool_count = static_cast<float>(tools.size());
             const float padding = fs * 0.25f;
@@ -1300,7 +1303,8 @@ namespace pP::colony {
             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{padding, padding});
             ImGui::Begin("##tool_rail", nullptr, kChromeFlags);
 
-            for (const auto tool: tools) {
+            for (std::size_t index = 0u; index < tools.size(); ++index) {
+                const auto tool = tools[index];
                 const bool selected = state.m_tool == tool;
                 const auto icon = tool == EColonyTool::inspect      ? ui::icons::kInspectLabel
                                   : tool == EColonyTool::dig        ? ui::icons::kDigLabel
@@ -1311,7 +1315,7 @@ namespace pP::colony {
                                   : tool == EColonyTool::spawn      ? ui::icons::kSpawnLabel
                                                                     : ui::icons::kDestroyLabel;
                 char label[48]{};
-                std::snprintf(label, sizeof(label), "%.*s###tool%u", 3, icon.data(), static_cast<u32>(tool));
+                std::snprintf(label, sizeof(label), "###tool%u", static_cast<u32>(tool));
                 if (selected) {
                     ImGui::PushStyleColor(ImGuiCol_Button, ui::theme::kAccent.vec4());
                     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ui::theme::kAccentHover.vec4());
@@ -1323,6 +1327,25 @@ namespace pP::colony {
                 ImGui::PopStyleVar();
                 if (selected) {
                     ImGui::PopStyleColor(3);
+                }
+
+                // Centre visible glyph bounds rather than font advance and
+                // line height. Reacquire the bake after any font/DPI rebuild.
+                ImFont *const font = ImGui::GetFont();
+                ImFontBaked *const baked = font->GetFontBaked(fs);
+                const auto *const glyph = baked->FindGlyph(static_cast<ImWchar>(glyphs[index]));
+                if (glyph and glyph->Visible) {
+                    const ImVec2 minimum = ImGui::GetItemRectMin();
+                    const ImVec2 maximum = ImGui::GetItemRectMax();
+                    const float scale = fs / baked->Size;
+                    const ImVec2 position{
+                        std::round((minimum.x + maximum.x - (glyph->X0 + glyph->X1) * scale) * 0.5f),
+                        std::round((minimum.y + maximum.y - (glyph->Y0 + glyph->Y1) * scale) * 0.5f)};
+                    const ImVec4 clip{minimum.x, minimum.y, maximum.x, maximum.y};
+
+                    ImGui::GetWindowDrawList()->AddText(
+                        font, fs, position, ImGui::GetColorU32(ImGuiCol_Text), icon.data(), icon.data() + 3u, 0.0f,
+                        &clip);
                 }
 
                 const auto kind = tool == EColonyTool::dig          ? EColonyIntent::toggle_dig
