@@ -429,6 +429,12 @@ to interactive New Games, Workshop previews and headless generation. Existing
 worlds retain their own dimensions; changing startup settings does not resize a
 checkpoint.
 
+The Workshop's Map size combo offers the same three sizes, initialized from the
+startup setting (2048 by default). Changing it clamps the preview crop and
+revalidates the current draft for that extent. Both preview modes and Start New
+Game use the selected dimensions. New Game from that authored session keeps its
+captured size; Return to Game preserves the retained world's original extent.
+
 The physical scale stays three cells per metre. Generation scales global site
 spacing, biome distance constraints, start coordinates and surface elevation to
 the selected extent. Optional site counts scale by area while preserving required

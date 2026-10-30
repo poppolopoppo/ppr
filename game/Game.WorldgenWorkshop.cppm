@@ -53,6 +53,7 @@ export namespace pP::colony {
             std::filesystem::path root, std::optional<u64> discard_revision = std::nullopt);
         [[nodiscard]] std::error_code open(
             std::span<const std::filesystem::path> roots, std::optional<u64> discard_revision = std::nullopt);
+        [[nodiscard]] std::error_code setWorldEdge(u32 world_edge);
         [[nodiscard]] std::error_code validate();
         [[nodiscard]] std::error_code requestPreview(WorldgenPreviewSpec spec, EGridDiagnosticMode mode);
         void configureLivePreview(bool enabled, WorldgenPreviewSpec spec, EGridDiagnosticMode mode);

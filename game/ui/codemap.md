@@ -54,6 +54,12 @@ The tool rail shows all eight square tool buttons without scrolling. Short
 viewports reduce button size so every tool remains reachable; selecting tools
 or expanding their context leaves the rail geometry unchanged.
 
+The Workshop preview settings include a 1024/2048/4096 Map size combo, defaulting
+to the startup selection (2048 normally). Shrinking the map clamps the crop
+origin. The control is disabled during owned work or publication; accepted
+changes revalidate preview and new-game compilation without resizing a retained
+game.
+
 ## Lifetime and cost
 
 `ColonyPresentation` copies scalar and queried-cell values. Its names and the

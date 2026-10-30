@@ -1586,8 +1586,24 @@ namespace pP::colony {
             ui::helpMarker(
                 "The cyan outline marks the counted and exported interior. Extra rendered cells provide contour support.");
 
-            bool changed = keyCombo(
-                "World profile", state.m_profile.data(), state.m_profile.size(), state.m_record_keys[4u]);
+            constexpr std::array<u32, 3u> world_edges{1024u, 2048u, 4096u};
+            constexpr const char *world_sizes[]{"1024", "2048", "4096"};
+            int world_size = state.m_world_edge == 1024u ? 0 : state.m_world_edge == 2048u ? 1 : 2;
+            bool changed{};
+            ImGui::BeginDisabled(
+                not view.m_source or view.m_busy or view.m_publishing or view.m_closing or view.m_starting);
+            if (ImGui::Combo("Map size (fine cells)", &world_size, world_sizes, 3)) {
+                state.m_world_edge = world_edges[static_cast<std::size_t>(world_size)];
+                const int maximum_origin = static_cast<int>(state.m_world_edge - kWorldgenPreviewEdge);
+                state.m_origin[0u] = std::clamp(state.m_origin[0u], 0, maximum_origin);
+                state.m_origin[1u] = std::clamp(state.m_origin[1u], 0, maximum_origin);
+                changed = true;
+            }
+
+            ImGui::EndDisabled();
+            changed = keyCombo(
+                          "World profile", state.m_profile.data(), state.m_profile.size(), state.m_record_keys[4u]) or
+                      changed;
             constexpr const char *scopes[]{"Biome sample", "Exact whole-world crop"};
             int scope = static_cast<int>(state.m_preview_mode);
             if (ImGui::Combo("Preview scope", &scope, scopes, 2)) {

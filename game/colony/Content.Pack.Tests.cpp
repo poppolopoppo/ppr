@@ -1731,6 +1731,29 @@ namespace pP::game::tests::detail::pack {
         settle();
         auto *const session = workshop.session();
         PPR_TEST_ASSERT(session != nullptr and not session->dirty());
+        const auto initial_epoch = session->sourceEpoch();
+        const auto initial_source = session->draftSnapshot().m_source;
+        PPR_TEST_ASSERT(workshop.setWorldEdge(1536u) == std::errc::invalid_argument);
+        for (const u32 edge: {1024u, 2048u, 4096u}) {
+            const auto previous = session->draftSnapshot();
+            const auto old_catalog = session->validatedCatalog();
+            PPR_TEST_ASSERT(not workshop.setWorldEdge(edge));
+            PPR_TEST_ASSERT(session->draftSnapshot().m_parameters.m_world_edge == edge);
+            PPR_TEST_ASSERT(session->revision() == previous.m_revision + 1u);
+            PPR_TEST_ASSERT(session->validatedRevision() != session->revision());
+            PPR_TEST_ASSERT(not session->acceptValidation(previous.m_revision, old_catalog));
+            PPR_TEST_ASSERT(
+                not session->dirty() and not session->canUndo() and session->sourceEpoch() == initial_epoch);
+            PPR_TEST_ASSERT(session->draftSource().sameMounts(initial_source));
+
+            const auto selected_revision = session->revision();
+            PPR_TEST_ASSERT(not workshop.setWorldEdge(edge));
+            PPR_TEST_ASSERT(session->revision() == selected_revision);
+            PPR_TEST_ASSERT(workshop.setWorldEdge(edge == 1024u ? 2048u : 1024u) == std::errc::device_or_resource_busy);
+            settle();
+            PPR_TEST_ASSERT(session->validatedRevision() == session->revision() and not workshop.draftInvalid());
+        }
+
         const auto original = session->draftSnapshot();
         const auto catalog = session->validatedCatalog();
         const auto validated_revision = session->validatedRevision();
@@ -1825,6 +1848,29 @@ namespace pP::game::tests::detail::pack {
         PPR_TEST_ASSERT(
             reused_preview->m_presentation->textures().front().m_image.m_storage.getBufferData().data() ==
             preview->m_presentation->textures().front().m_image.m_storage.getBufferData().data());
+
+        const auto before_resize = reopened->draftSnapshot();
+        const bool dirty_before_resize = reopened->dirty();
+        const bool undo_before_resize = reopened->canUndo();
+        PPR_TEST_ASSERT(not workshop.setWorldEdge(2048u));
+        PPR_TEST_ASSERT(workshop.preview() == nullptr and not workshop.previewHandle());
+        PPR_TEST_ASSERT(reopened->dirty() == dirty_before_resize and reopened->canUndo() == undo_before_resize);
+        PPR_TEST_ASSERT(reopened->sourceEpoch() == before_resize.m_source_epoch);
+        PPR_TEST_ASSERT(reopened->draftSnapshot().m_parameters.m_world_edge == 2048u);
+        settle();
+        PPR_TEST_ASSERT(reopened->validatedRevision() == reopened->revision());
+        auto resized_spec = spec;
+        resized_spec.m_origin = {0u, 0u};
+        PPR_TEST_ASSERT(not workshop.requestPreview(resized_spec, EGridDiagnosticMode::material));
+        settle();
+        const auto resized_preview = workshop.previewHandle();
+        PPR_TEST_ASSERT(resized_preview and resized_preview->m_catalog->selectedRecipe());
+        PPR_TEST_ASSERT(resized_preview->m_catalog->selectedRecipe()->m_recipe.m_world_edge == 2048u);
+
+        PPR_TEST_ASSERT(not workshop.setWorldEdge(4096u));
+        settle();
+        PPR_TEST_ASSERT(not workshop.requestPreview(spec, EGridDiagnosticMode::material));
+        settle();
 
         workshop.configureLivePreview(false, spec, EGridDiagnosticMode::material);
         PPR_TEST_ASSERT(not reopened->editBiome(

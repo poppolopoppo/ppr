@@ -143,6 +143,8 @@ export namespace pP::colony {
         [[nodiscard]] bool canRedo() const noexcept;
 
         // edits:
+        /// Changes runtime compilation policy without changing authored bytes or undo history.
+        [[nodiscard]] std::error_code setWorldEdge(u32 world_edge);
         [[nodiscard]] std::error_code editBiome(
             std::string_view biome_key, std::string_view relative_property, const config::FileValue &value,
             config::Diagnostics &diagnostics);

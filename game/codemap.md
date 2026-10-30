@@ -158,11 +158,17 @@ immediately when old identity/pause/readiness restoration acknowledges. The
 existing checkpoint GPU restore leaf uses an admitted queued/ready resume across
 multiple host-style turns to exercise that same production routing predicate.
 
-Map size is startup policy (`--map-size` / `game.map_size`): 1024, 2048 or
+The startup map size (`--map-size` / `game.map_size`) is 1024, 2048 or
 4096 fine cells per edge, default 2048. Explicit per-world bounds travel through
 generation, prepared descriptors, grid/particle state and checkpoint formats;
 maximum-stride chunk identities remain stable. Smaller maps retain the same
 physical cell and actor scale.
+
+The Workshop Map size combo owns a session choice initialized from startup.
+Changes invalidate compiled validation and previews while preserving authored
+bytes, undo history and source epoch. Preview and Start New Game compile the
+selected extent; later New Game uses that owned authored snapshot's extent.
+Returning to a retained game or restoring a checkpoint keeps its saved bounds.
 
 Simulation tools share the existing world-owned pointer gesture. Push and pull
 apply a held radial acceleration; spawn and destroy admit one owned particle

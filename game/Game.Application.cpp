@@ -214,7 +214,7 @@ namespace demo {
         TimePoint m_observation_start{};
         std::optional<TimePoint> m_last_update_observed{}, m_last_presentation_observed{};
         u32 m_last_update_phase{};
-        u32 m_map_size{2048u};
+        u32 m_map_size{2048u}, m_requested_map_size{2048u};
         TimeSpan m_last_update_work{};
         std::optional<TimePoint> m_first_loading_observed{}, m_first_world_observed{};
         TimeSpan m_max_control_work{};
@@ -894,24 +894,31 @@ namespace demo {
             };
         }
 
-        [[nodiscard]] std::error_code requestWorld_(const u64 seed, colony::WorldJob::Prepare prepare = {}) {
+        [[nodiscard]] std::error_code requestWorld_(
+            const u64 seed, colony::WorldJob::Prepare prepare = {}, std::optional<u32> world_edge = {}) {
             PPR_RETURN_ERROR_ON_FAIL(
                 Demo, not m_world_command and not m_world_result and not m_candidate_cancel_needed
                           ? std::error_code{}
                           : std::make_error_code(std::errc::device_or_resource_busy));
             if (not prepare and m_authored_game_source) {
                 prepare = authoredGamePrepare_(m_authored_game_source);
+                world_edge = m_authored_game_source->m_snapshot.m_parameters.m_world_edge;
             }
 
+            const u32 selected_edge = world_edge.value_or(m_map_size);
+            PPR_RETURN_ERROR_ON_FAIL(
+                Demo, sim::isSupportedWorldEdge(selected_edge) ? std::error_code{}
+                                                               : std::make_error_code(std::errc::invalid_argument));
             PPR_RETURN_ERROR_ON_FAIL(
                 Demo, m_world_job->request(
                           colony::ColonyDriverDesc{
                               .m_seed = seed,
                               .m_agent_count = 1u,
                               .m_world_generation = m_driver ? m_driver->worldGeneration() + 1u : 1u,
-                              .m_world_edge = m_map_size},
+                              .m_world_edge = selected_edge},
                           std::move(prepare)));
 
+            m_requested_map_size = selected_edge;
             m_workshop_game_particles.reset();
 
             m_world_transition = {};
@@ -1445,7 +1452,7 @@ namespace demo {
                                                                      : std::string_view{},
                 .m_animation_seconds = open ? time::seconds(m_observation_clock->now() - TimePoint{}) : 0.0,
                 .m_staged_chunks = static_cast<u32>(m_candidate_next_chunk),
-                .m_total_chunks = (m_map_size / sim::kChunkEdge) * (m_map_size / sim::kChunkEdge),
+                .m_total_chunks = (m_requested_map_size / sim::kChunkEdge) * (m_requested_map_size / sim::kChunkEdge),
                 .m_open = open,
                 .m_closing = closing,
                 .m_terminal = terminal,
@@ -1923,7 +1930,8 @@ namespace demo {
                 return map;
             }
             map.m_snapshot = camera->getSnapshot();
-            map.m_world_edge = m_workshop_open ? m_map_size : (m_driver ? m_driver->grid().edge() : m_map_size);
+            map.m_world_edge = m_workshop_open ? m_workshop_ui.m_world_edge
+                                               : (m_driver ? m_driver->grid().edge() : m_map_size);
             map.m_cells_per_metre = m_workshop_open ? colony::kFineCellsPerMetre
                                                     : (m_driver ? m_driver->cellsPerMetre() : 1u);
             map.m_extent = float2{static_cast<float>(extent.x), static_cast<float>(extent.y)};
@@ -3733,7 +3741,10 @@ namespace demo {
             if (not session or
                 root != session->root() or
                 preview.m_spec.m_revision != session->revision() or
-                mode != m_workshop_ui.m_mode) {
+                mode != m_workshop_ui.m_mode or
+                not preview.m_catalog or
+                not preview.m_catalog->selectedRecipe() or
+                preview.m_catalog->selectedRecipe()->m_recipe.m_world_edge != m_workshop_ui.m_world_edge) {
                 return false;
             }
             const auto desired = workshopSpec_();
@@ -4190,7 +4201,8 @@ namespace demo {
                 not m_world_job->busy()) {
                 m_loading_presented = false;
                 const auto error = requestWorld_(
-                    m_workshop_ui.m_seed, authoredGamePrepare_(m_pending_authored_game_source));
+                    m_workshop_ui.m_seed, authoredGamePrepare_(m_pending_authored_game_source),
+                    m_pending_authored_game_source->m_snapshot.m_parameters.m_world_edge);
                 if (error) {
                     // Failed admission is a recoverable authoring operation; keep the workspace and its draft.
                     m_workshop_error = "Could not start the game: " + error.message();
@@ -4279,7 +4291,9 @@ namespace demo {
                 case colony::EWorkshopIntent::preview:
                     error = m_workshop->requestPreview(workshopSpec_(), m_workshop_ui.m_mode);
                     break;
-                case colony::EWorkshopIntent::preview_settings_changed: break;
+                case colony::EWorkshopIntent::preview_settings_changed:
+                    error = m_workshop->setWorldEdge(m_workshop_ui.m_world_edge);
+                    break;
                 case colony::EWorkshopIntent::cancel:
                     m_workshop->cancel();
                     m_workshop_queued.reset();

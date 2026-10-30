@@ -5,6 +5,7 @@ module game.colony.content.authoring;
 import engine.core;
 import engine.asset;
 import game.colony.content;
+import game.colony.worldgen;
 import std;
 
 namespace pP::colony {
@@ -693,6 +694,25 @@ namespace pP::colony {
         m_history.clear();
         ++m_revision;
         pruneTombstones();
+        return {};
+    }
+
+    std::error_code ContentAuthoringSession::setWorldEdge(const u32 world_edge) {
+        PPR_RETURN_ERROR_ON_FAIL(
+            ContentAuthoring, sim::isSupportedWorldEdge(world_edge)
+                                  ? std::error_code{}
+                                  : std::make_error_code(std::errc::invalid_argument));
+        if (m_parameters.m_world_edge == world_edge) {
+            return {};
+        }
+
+        PPR_RETURN_ERROR_ON_FAIL(
+            ContentAuthoring, m_revision != std::numeric_limits<u64>::max()
+                                  ? std::error_code{}
+                                  : std::make_error_code(std::errc::value_too_large));
+
+        m_parameters = worldCompileParameters(world_edge);
+        ++m_revision;
         return {};
     }
 

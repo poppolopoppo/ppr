@@ -181,6 +181,7 @@ namespace pP::colony {
         std::optional<ContentAuthoringSaveResult> m_saved{};
         std::optional<WorldgenPreviewResult> m_preview{};
         std::shared_ptr<const WorldgenPreviewWorld> m_world{}, m_retired_world{};
+        std::array<std::shared_ptr<State>, 2u> m_retired_previews{};
         std::unique_ptr<GridStagedFrame> m_stage{};
         std::string m_diagnostic_text{};
         std::error_code m_error{};
@@ -324,6 +325,41 @@ namespace pP::colony {
         request.m_source_epoch = makeContentSourceEpoch();
         request.m_world_edge = m_world_edge;
         return queue_(std::move(request));
+    }
+
+    std::error_code WorldgenWorkshop::setWorldEdge(const u32 world_edge) {
+        PPR_RETURN_ERROR_ON_FAIL(
+            Workshop, sim::isSupportedWorldEdge(world_edge) ? std::error_code{}
+                                                            : std::make_error_code(std::errc::invalid_argument));
+        PPR_RETURN_ERROR_ON_FAIL(
+            Workshop,
+            m_session and not m_closing ? std::error_code{} : std::make_error_code(std::errc::operation_not_permitted));
+        if (m_world_edge == world_edge) {
+            return {};
+        }
+
+        PPR_RETURN_ERROR_ON_FAIL(
+            Workshop, not busy() ? std::error_code{} : std::make_error_code(std::errc::device_or_resource_busy));
+
+        auto retired = std::make_shared<State>();
+        PPR_RETURN_ERROR_ON_FAIL(Workshop, m_session->setWorldEdge(world_edge));
+        m_world_edge = world_edge;
+
+        // Retire both previous owners and the cache on a worker, never by
+        // dropping the final large numerical allocation on this main lane.
+        retired->m_retired_previews = {std::move(m_retired_preview), std::move(m_last_preview)};
+        retired->m_retired_world = std::move(m_world_cache);
+        retired->m_stage = std::move(m_presentation);
+        m_retired_preview = std::move(retired);
+
+        m_live_spec.reset();
+        m_live_pending = false;
+        m_invalid_draft_root.clear();
+        m_invalid_draft_revision = 0u;
+        m_property_diagnostics.clear();
+        m_diagnostics.clear();
+        PPR_RETURN_ERROR_ON_FAIL(Workshop, validate());
+        return {};
     }
 
     std::error_code WorldgenWorkshop::validate() {

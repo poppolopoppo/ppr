@@ -11,6 +11,7 @@ import engine.math;
 import engine.asset;
 import game.colony.content;
 import game.colony.worldgen_panel;
+import game.colony.worldgen_preview;
 import engine.sim;
 import game.ui;
 import game.ui.model;
@@ -668,6 +669,7 @@ namespace pP::game::tests::detail::presentation {
         colony::WorldgenPanelState m_state{};
         u64 m_revision{1u};
         bool m_has_game{}, m_can_start_game{true};
+        bool m_busy{}, m_publishing{}, m_closing{}, m_starting{};
 
         explicit WorkspaceFixture(const bool numeric) {
             const auto root = std::filesystem::current_path();
@@ -723,7 +725,11 @@ display_name = "Before"
                              .m_revision = m_revision,
                              .m_validated_revision = m_revision,
                              .m_index = &*m_index,
+                             .m_busy = m_busy,
+                             .m_publishing = m_publishing,
+                             .m_closing = m_closing,
                              .m_has_game = m_has_game,
+                             .m_starting = m_starting,
                              .m_can_start_game = m_can_start_game});
             ImGui::Render();
             return intents;
@@ -773,6 +779,82 @@ biome = "{}"
         PPR_TEST_ASSERT(false);
         return nullptr;
     }
+
+    PPR_UNIT_TEST (workspace_map_size_selects_each_extent_clamps_crop_and_disables_during_owned_work) {
+        ImGuiContext *const context = ImGui::CreateContext();
+        PPR_DEFER {
+            ImGui::DestroyContext(context);
+        };
+        auto &io = ImGui::GetIO();
+        io.IniFilename = nullptr;
+        io.DisplaySize = ImVec2{1280.0f, 720.0f};
+        io.DeltaTime = 1.0f / 60.0f;
+        io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+        unsigned char *pixels{};
+        int width{}, height{};
+        io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+
+        WorkspaceFixture fixture{false};
+        PPR_TEST_ASSERT(fixture.m_state.m_world_edge == 2048u);
+        std::ignore = fixture.frame();
+        std::ignore = fixture.frame();
+        auto *const settings = workspaceChild(*context, "Preview settings");
+        const auto item_center = [&](ImGuiWindow *const window, const ImGuiID id) {
+            io.AddMousePosEvent(-100.0f, -100.0f);
+            std::ignore = fixture.frame();
+            ImGui::FocusWindow(window);
+            ImGui::SetNavCursorVisible(true);
+            ImGui::SetNavID(id, ImGuiNavLayer_Main, 0u, ImRect{});
+            std::ignore = fixture.frame();
+            const auto rect = window->NavRectRel[ImGuiNavLayer_Main];
+            PPR_TEST_ASSERT(rect.GetWidth() > 0.0f and rect.GetHeight() > 0.0f);
+            return ImGui::WindowRectRelToAbs(window, rect).GetCenter();
+        };
+
+        const auto click = [&](const ImVec2 position) {
+            io.AddMousePosEvent(position.x, position.y);
+            std::ignore = fixture.frame();
+            io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+            std::ignore = fixture.frame();
+            io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+            return fixture.frame();
+        };
+
+        for (const u32 edge: {4096u, 1024u, 2048u}) {
+            fixture.m_state.m_origin[0u] = static_cast<int>(
+                fixture.m_state.m_world_edge - colony::kWorldgenPreviewEdge);
+            fixture.m_state.m_origin[1u] = fixture.m_state.m_origin[0u];
+            const int old_origin = fixture.m_state.m_origin[0u];
+            std::ignore = click(item_center(settings, settings->GetID("Map size (fine cells)")));
+            PPR_TEST_ASSERT(not context->OpenPopupStack.empty());
+            auto *const popup = context->OpenPopupStack.back().Window;
+            PPR_TEST_ASSERT(popup != nullptr and popup->Active);
+            const auto label = std::to_string(edge);
+            const int choice_index = edge == 1024u ? 0 : edge == 2048u ? 1 : 2;
+            const ImGuiID row_id = ImHashStr(label.c_str(), 0u, popup->GetID(choice_index));
+            const auto selected = click(item_center(popup, row_id));
+            PPR_TEST_ASSERT(fixture.m_state.m_world_edge == edge);
+            PPR_TEST_ASSERT(std::ranges::count_if(selected, [](const auto &intent) {
+                return intent.m_kind == colony::EWorkshopIntent::preview_settings_changed;
+            }) == 1);
+            const int expected_origin = std::min(old_origin, static_cast<int>(edge - colony::kWorldgenPreviewEdge));
+            PPR_TEST_ASSERT(fixture.m_state.m_origin[0u] == expected_origin);
+            PPR_TEST_ASSERT(fixture.m_state.m_origin[1u] == expected_origin);
+        }
+
+        const auto position = item_center(settings, settings->GetID("Map size (fine cells)"));
+        for (bool *const owned: {&fixture.m_busy, &fixture.m_publishing, &fixture.m_closing, &fixture.m_starting}) {
+            *owned = true;
+            const auto unchanged = click(position);
+            PPR_TEST_ASSERT(context->OpenPopupStack.empty() and fixture.m_state.m_world_edge == 2048u);
+            PPR_TEST_ASSERT(std::ranges::none_of(unchanged, [](const auto &intent) {
+                return intent.m_kind == colony::EWorkshopIntent::preview_settings_changed;
+            }));
+
+            *owned = false;
+            std::ignore = fixture.frame();
+        }
+    };
 
     PPR_UNIT_TEST (workspace_tile_navigation_commits_old_text_and_numeric_edits) {
         for (const u32 mode: {0u, 1u, 2u}) {
@@ -1204,6 +1286,7 @@ namespace pP::game::tests {
             detail::presentation::native_menu_click_opens_utilities_and_display_emits_one_intent,
             detail::presentation::all_eight_tools_are_reachable_without_scroll_at_normal_and_short_heights,
             detail::presentation::particle_tool_controls_select_and_edit_independent_settings_while_paused,
+            detail::presentation::workspace_map_size_selects_each_extent_clamps_crop_and_disables_during_owned_work,
             detail::presentation::workspace_tile_navigation_commits_old_text_and_numeric_edits,
             detail::presentation::workspace_identity_survives_filter_revision_and_native_game_actions_are_distinct,
             detail::presentation::workspace_preview_choices_follow_current_draft_profile_and_replacement_source,
