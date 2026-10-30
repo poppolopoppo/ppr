@@ -3,8 +3,21 @@
 ## Responsibility
 
 The `engine.app:renderer` module provides the content-free generic `Renderer` (surface registry + graphics
-queue + validated submission only; multi-surface capable, single main window in production). Scene content lives in `engine.app:renderer.triangle_pass` (`TrianglePass`) and `engine.app:renderer.grid_pass` (`GridPass`, chunk-sized tile quads over the cell world); `engine.app:renderer.retro_pass` (`RetroPass`) resolves the scene into a low-resolution offscreen ring and presents it nearest-upscaled with 32-color quantization and ordered dithering, leaving the UI pass native;
-camera-free RHI-facing submission shapes (`RenderPipelineSignature/Key`, `DrawContext/Callback/Submission`,
+queue + validated submission only; multi-surface capable, single main window in production). Scene content lives in `engine.app:renderer.triangle_pass` (`TrianglePass`) and `engine.app:renderer.grid_pass` (`GridPass`, chunk-sized tile quads over the cell world); `engine.app:renderer.retro_pass` (`RetroPass`) owns a fenced offscreen ring with independent pixelization and 32-color palette/dither controls.
+Optional temporal supersampling operates at the chosen scene resolution, combining four-phase jitter,
+raw 4x MSAA color bounds, camera/depth reprojection and clamped Catmull–Rom RGB history before palette treatment; UI stays native.
+Unsupported multisample shader loads retain spatial rendering. History commits only on accepted submits
+and resets on cuts, extent/world/policy/projection-mode changes. History alpha stores orthographic
+device Z or perspective reciprocal clip W, with a negative background sentinel. During motion every
+nonzero color tap in the full 4x4 reconstruction must match the expected class and a single affine
+surface-depth fit. Metadata reprojection aligns current/previous jitter phases separately from RGB
+motion, avoiding phase-dependent rejection on perspective slopes. Current-frame
+influence grows from 5% stationary to 50% at 0.25 internal pixels/frame. Composite parallax backgrounds
+render with the unjittered camera and retain a stable cubic spatial fallback during motion.
+Center-depth camera reprojection is exact for the shipped orthographic pan/roll/zoom; translated
+perspective slopes use the nearest-MSAA-depth center approximation. Object motion uses reactive color
+rejection (no object motion buffer).
+Camera-free RHI-facing submission shapes (`RenderPipelineSignature/Key`, `DrawContext/Callback/Submission`,
 `ColorAttachmentOps`, `ESurfaceDepthPolicy`, `SurfaceRenderPass`) live header-only in
 `engine.app:renderer.types`. There is no `App.Renderer.Types.cpp` — the partition is fully inline in
 `App.Renderer.Types.cppm`.

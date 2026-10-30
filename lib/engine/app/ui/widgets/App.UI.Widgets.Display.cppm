@@ -72,6 +72,8 @@ export namespace pP::ui {
     struct RetroWidgetDraft {
         bool &m_enabled;
         u32 &m_pixel_scale;
+        bool &m_palette_enabled;
+        bool &m_temporal_enabled;
     };
 
     struct DisplayWidgetAvailability {

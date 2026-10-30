@@ -345,8 +345,8 @@ export namespace pP {
         // same geometry the CPU-staged drawInstanced path draws.
         static constexpr u32 kGridTileVertexCount{6u};
 
-        // Per-frame constants: unjittered view-projection and visibility lookup
-        // mode. Jitter never enters the pipeline key or frame upload.
+        // Per-frame raster view-projection and visibility lookup mode. The
+        // render owner may supply temporal jitter; it never enters pipeline keys.
         struct GridFrame {
             float4x4 m_view_projection{identity_v};
             u32 m_use_visible_ids{};

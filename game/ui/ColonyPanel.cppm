@@ -164,7 +164,7 @@ export namespace pP::colony {
         /// Live retro picture controls, session-only: pushed to the editor
         /// every rendered frame (never part of the display draft or its
         /// transaction, and never persisted).
-        RetroSettings m_retro{.m_enabled = true, .m_pixel_scale = 3u};
+        RetroSettings m_retro{.m_enabled = true, .m_palette_enabled = true, .m_pixel_scale = 3u};
 
         // selection and diagnostic controls:
         std::optional<sim::GlobalCellPos> m_pinned{};

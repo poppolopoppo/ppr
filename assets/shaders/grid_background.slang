@@ -53,6 +53,50 @@ float4 linearTint(uint rgba) {
     return color;
 }
 
+// Cubic B-spline reconstruction uses four hardware bilinear taps instead of
+// sixteen point taps. The shared wrap sampler keeps the support continuous
+// across repeated texture boundaries, including negative world coordinates.
+float4 sampleBackground(DescriptorHandle<Texture2D<float4>> texture, SamplerState.Handle sampler,
+    float2 uv, float2 dx, float2 dy) {
+    uint width, height;
+    nonuniform(texture).GetDimensions(width, height);
+    float2 extent = float2(width, height);
+    float footprint = max(length(dx * extent), length(dy * extent));
+    if (footprint >= 1.0) {
+        return nonuniform(texture).SampleGrad(sampler, uv, dx, dy);
+    }
+
+    float2 pixel = uv * extent - 0.5;
+    float2 base = floor(pixel);
+    float2 f = pixel - base;
+    float2 f2 = f * f;
+    float2 f3 = f2 * f;
+    float2 w0 = (1.0 - 3.0 * f + 3.0 * f2 - f3) / 6.0;
+    float2 w1 = (4.0 - 6.0 * f2 + 3.0 * f3) / 6.0;
+    float2 w2 = (1.0 + 3.0 * f + 3.0 * f2 - 3.0 * f3) / 6.0;
+    float2 w3 = f3 / 6.0;
+    float2 left_weight = w0 + w1;
+    float2 right_weight = w2 + w3;
+    float2 left_uv = (base - 0.5 + w1 / left_weight) / extent;
+    float2 right_uv = (base + 1.5 + w3 / right_weight) / extent;
+
+    float4 lower = lerp(
+        nonuniform(texture).SampleLevel(sampler, left_uv, 0.0),
+        nonuniform(texture).SampleLevel(sampler, float2(right_uv.x, left_uv.y), 0.0), right_weight.x);
+    float4 upper = lerp(
+        nonuniform(texture).SampleLevel(sampler, float2(left_uv.x, right_uv.y), 0.0),
+        nonuniform(texture).SampleLevel(sampler, right_uv, 0.0), right_weight.x);
+    float4 cubic = lerp(lower, upper, right_weight.y);
+    if (footprint <= 0.75) {
+        return cubic;
+    }
+
+    // Fade back to the existing gradient/mip filter as the texture approaches
+    // minification, avoiding a sudden reconstruction change at one texel/pixel.
+    float4 filtered = nonuniform(texture).SampleGrad(sampler, uv, dx, dy);
+    return lerp(cubic, filtered, smoothstep(0.75, 1.0, footprint));
+}
+
 [shader("fragment")]
 float4 fragmentBackgroundMain(BackgroundVertexOutput input,
     uniform StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
@@ -84,8 +128,8 @@ float4 fragmentBackgroundMain(BackgroundVertexOutput input,
     for (uint index = 0u; index < 4u; ++index) {
         BackgroundLayer layer = g_grid_frame.m_layers[index];
         float2 uv = (world - g_grid_frame.m_camera_origin * (1.0 - layer.m_parallax_factor)) / layer.m_repeat_period_m;
-        float4 texel = nonuniform(g_textures[layer.m_texture_index]).SampleGrad(
-            g_sampler, uv, dx / layer.m_repeat_period_m, dy / layer.m_repeat_period_m);
+        float4 texel = sampleBackground(g_textures[layer.m_texture_index], g_sampler,
+            uv, dx / layer.m_repeat_period_m, dy / layer.m_repeat_period_m);
         float4 tint = linearTint(layer.m_color_rgba);
         float alpha = index == 0u ? 1.0 : saturate(texel.a * tint.a);
         result = lerp(result, texel.rgb * tint.rgb, alpha);

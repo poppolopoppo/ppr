@@ -66,8 +66,8 @@ namespace pP::ui {
             "Pace", "Frame cap (Hz)", "Vsync in paced mode", "Slow down when unfocused", "Monitor cap",
             // Window:
             "Mode", "Monitor", "Width", "Height", "Resolution", "Refresh",
-            // Retro:
-            "Pixel art", "Pixel scale",
+            // Rendering:
+            "Pixelization", "Pixel scale", "Palette mapping", "Temporal supersampling",
             // Requested:
             "Cap", "Size", "Vsync", "Foreground CPU target", "Effective CPU target", "Unfocused slowing",
             // Device report:
@@ -653,12 +653,12 @@ namespace pP::ui {
         // Retro is a live session control: the game pushes these values to the
         // editor every frame, so this section never edits the display draft,
         // emits a widget action, or joins the apply/save transaction.
-        ImGui::SeparatorText("Retro");
+        ImGui::SeparatorText("Rendering");
         if (beginLabelTable("##display_retro", label_width)) {
             {
-                beginValueRow("Pixel art");
+                beginValueRow("Pixelization");
                 ImGui::Checkbox("##retro_enabled", &state.m_retro.m_enabled);
-                ImGui::SetItemTooltip("Render the scene in the retro pixel-art style.");
+                ImGui::SetItemTooltip("Render the scene at a lower resolution and enlarge its pixels.");
             }
 
             {
@@ -673,11 +673,24 @@ namespace pP::ui {
                 ImGui::SetItemTooltip("Pixel scale of the retro picture, from 2 to 8.");
             }
 
+            {
+                beginValueRow("Palette mapping");
+                ImGui::Checkbox("##retro_palette", &state.m_retro.m_palette_enabled);
+                ImGui::SetItemTooltip("Quantize scene colors to the 32-color palette with ordered dithering.");
+            }
+
+            {
+                beginValueRow("Temporal supersampling");
+                ImGui::Checkbox("##temporal_supersampling", &state.m_retro.m_temporal_enabled);
+                ImGui::SetItemTooltip(
+                    "Accumulate 4x MSAA over time in both looks; increases GPU work and scene-buffer memory.");
+            }
+
             ImGui::EndTable();
         }
         noteText(
-            "The scene renders at a lower internal resolution with a 32-color palette and ordered "
-            "dithering; the UI stays native. Changes apply immediately and are not part of Apply or Save.");
+            "Pixelization, palette mapping and temporal supersampling are independent; the UI stays native. "
+            "Changes apply immediately and are not part of Apply or Save.");
 
         ImGui::SeparatorText("Requested");
         if (beginLabelTable("##display_requested", label_width)) {

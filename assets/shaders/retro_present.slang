@@ -6,7 +6,7 @@ struct RetroParameters {
     float4 m_palette[32];
     float2 m_source_extent;
     float m_dither_strength;
-    uint m_reserved;
+    uint m_palette_enabled;
 };
 ConstantBuffer<RetroParameters> g_retro;
 // The low-resolution scene resolve. Pixel-center fractional taps plus an
@@ -44,7 +44,11 @@ float4 fragmentRetroPresent(RetroVertexOutput input,
     float2 source_pixel = floor(clamp(input.uv, 0.0, 1.0) * extent);
     float2 source_uv = clamp((source_pixel + 0.5) / extent, 0.0, 1.0);
     float3 source_linear = g_scene.SampleLevel(g_sampler, source_uv, 0.0).rgb;
-    float3 source_srgb = linearToSrgb(source_linear);
+    if (g_retro.m_palette_enabled == 0u) {
+        return float4(source_linear, 1.0);
+    }
+
+    float3 source_srgb = linearToSrgb(max(source_linear, 0.0));
     // Ordered 4x4 Bayer threshold in [-0.5, 0.5): biases each output pixel
     // around its true color before palette matching, so gradients resolve into
     // stable dither patterns instead of banding.

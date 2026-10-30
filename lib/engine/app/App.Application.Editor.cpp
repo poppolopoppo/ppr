@@ -1398,7 +1398,9 @@ namespace pP {
         const DetachedUiDrawData &ui = request.m_ui;
         const GridPass::GridStagedFrame &grid_stage = request.m_grid_stage;
         const TrianglePass::TriangleStagedFrame &triangle_stage = request.m_triangle_stage;
-        const bool retro = request.m_retro.m_enabled;
+        const bool offscreen_requested = request.m_retro.m_enabled or
+                                         request.m_retro.m_palette_enabled or
+                                         request.m_retro.m_temporal_enabled;
         out_result.m_frame_id = packet.m_frame_id;
         out_result.m_reservation_epoch = request.m_reservation_epoch;
         out_result.m_reservation_frame_id = request.m_reservation_frame_id;
@@ -1407,7 +1409,7 @@ namespace pP {
         // Retro is a lane-owned pass: a policy-enabled request without a live
         // pass (initialization failed or teardown raced) fails closed instead
         // of silently falling back to the native path.
-        if (retro and not m_retro_pass) [[unlikely]] {
+        if (offscreen_requested and not m_retro_pass) [[unlikely]] {
             PPR_RETURN_ERROR_ON_FAIL(Editor, make_error_code(std::errc::not_connected));
         }
 
@@ -1464,6 +1466,11 @@ namespace pP {
             return {};
         }
 
+        const int2 retro_extent = request.m_retro.m_enabled
+                                      ? RetroPass::sceneExtent(packet.m_framebuffer_size, request.m_retro.m_pixel_scale)
+                                      : packet.m_framebuffer_size;
+        CameraSnapshot raster_camera = packet.m_camera;
+
         // P2 pass-affinity: ALL pass CPU-state mutations run here, on the
         // pass's owner lane (worker or main-inline), applied from the
         // owned payload captured in update(). The camera snapshot +
@@ -1473,8 +1480,6 @@ namespace pP {
         {
             const hal::ProfileScope scope_frame_prepare{"PPR.Frame.PrepareRender"};
             const CpuObservationScope cpu_staging{clock, cpu.m_staging};
-            PPR_RETURN_ERROR_ON_FAIL(Editor, m_triangle_pass->update(packet.m_delta_time, packet.m_camera));
-            PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->update(packet.m_delta_time, packet.m_camera));
             const u64 active_generation = m_grid_pass->worldGeneration();
             if (not grid_stage.m_retain_content and
                 (active_generation == 0u or grid_stage.m_ack_seed == active_generation)) {
@@ -1485,10 +1490,23 @@ namespace pP {
                 PPR_RETURN_ERROR_ON_FAIL(Editor, m_triangle_pass->applyStagedFrame(triangle_stage));
             }
 
+            if (m_retro_pass) {
+                const auto identity = m_grid_pass->activeWorldIdentity();
+                raster_camera = m_retro_pass->beginFrame(
+                    request.m_retro, packet.m_camera, retro_extent, identity.m_world_generation, identity.m_job_id,
+                    identity.m_content_fingerprint);
+            }
+
+            PPR_RETURN_ERROR_ON_FAIL(Editor, m_triangle_pass->update(packet.m_delta_time, raster_camera));
+            PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->update(packet.m_delta_time, raster_camera));
+
             if (grid_stage.m_gpu_particles) {
                 PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->applyGpuParticleView(*grid_stage.m_gpu_particles));
             }
         }
+        const bool offscreen = request.m_retro.m_enabled or
+                               request.m_retro.m_palette_enabled or
+                               (m_retro_pass and m_retro_pass->temporalActive());
         out_result.m_grid_staged_tiles = m_grid_pass->stagedTileCount();
         out_result.m_grid_cached_tiles = m_grid_pass->cachedTileCount();
 
@@ -1528,7 +1546,6 @@ namespace pP {
             static_cast<float>(packet.m_framebuffer_size.x), static_cast<float>(packet.m_framebuffer_size.y));
         const auto grid_scissor = rhi::ScissorRect::fromSize(
             safe_narrowing(packet.m_framebuffer_size.x), safe_narrowing(packet.m_framebuffer_size.y));
-        const int2 retro_extent = RetroPass::sceneExtent(packet.m_framebuffer_size, request.m_retro.m_pixel_scale);
         const auto retro_viewport = rhi::Viewport::fromSize(
             static_cast<float>(retro_extent.x), static_cast<float>(retro_extent.y));
         const auto retro_scissor = rhi::ScissorRect::fromSize(
@@ -1555,7 +1572,7 @@ namespace pP {
         };
 
         const auto scene_draw = [&](const DrawContext &context) -> std::error_code {
-            if (retro) {
+            if (offscreen) {
                 return m_retro_pass->render(context);
             }
             return draw_scene_contents(context);
@@ -1567,7 +1584,7 @@ namespace pP {
         // separately from the scene encode, whose draw observations are
         // recorded in either mode.
         const auto scene_prepare = [&](const PreRenderContext &context) -> std::error_code {
-            if (retro) {
+            if (offscreen) {
                 {
                     const CpuObservationScope cpu_prepare{clock, cpu.m_grid_prepare};
                     PPR_RETURN_ERROR_ON_FAIL(
@@ -1578,7 +1595,8 @@ namespace pP {
                 }
 
                 return m_retro_pass->prepareScene(
-                    context, RetroPass::scenePipelineSignature(), retro_extent, retro_scene_draw);
+                    context, RetroPass::scenePipelineSignature(m_retro_pass->temporalActive()), retro_extent,
+                    retro_scene_draw);
             }
             const CpuObservationScope cpu_prepare{clock, cpu.m_grid_prepare};
             PPR_RETURN_ERROR_ON_FAIL(
@@ -1594,7 +1612,7 @@ namespace pP {
                 // Retro scene work renders into the pass's scene target and
                 // composites as a fullscreen blit, so the surface pass owns
                 // no depth attachment in that mode.
-                .m_depth_policy = retro ? ESurfaceDepthPolicy::none : ESurfaceDepthPolicy::renderer_owned,
+                .m_depth_policy = offscreen ? ESurfaceDepthPolicy::none : ESurfaceDepthPolicy::renderer_owned,
                 .m_draws = {scene_submission},
                 .m_prepare = PreRenderCallback{scene_prepare},
             },

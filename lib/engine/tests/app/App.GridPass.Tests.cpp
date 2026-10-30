@@ -687,16 +687,79 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(signature.m_depth_stencil_format.has_value());
             PPR_TEST_ASSERT(*signature.m_depth_stencil_format == rhi::Format::D32Float);
             PPR_TEST_ASSERT(signature.m_sample_count == SampleCount::x1);
+
+            const RenderPipelineSignature temporal = RetroPass::scenePipelineSignature(true);
+            PPR_TEST_ASSERT(temporal.colorFormats().front() == signature.colorFormats().front());
+            PPR_TEST_ASSERT(temporal.m_depth_stencil_format == signature.m_depth_stencil_format);
+            PPR_TEST_ASSERT(temporal.m_sample_count == SampleCount::x4);
         };
 
         PPR_UNIT_TEST (retro_settings_default_to_disabled_engine_policy) {
             const RetroSettings defaults{};
             PPR_TEST_ASSERT(not defaults.m_enabled);
+            PPR_TEST_ASSERT(not defaults.m_palette_enabled);
+            PPR_TEST_ASSERT(not defaults.m_temporal_enabled);
             PPR_TEST_ASSERT(defaults.m_pixel_scale == 3u);
 
             const RetroSettings configured{.m_enabled = true, .m_pixel_scale = 4u};
             PPR_TEST_ASSERT(configured.m_enabled);
+            PPR_TEST_ASSERT(not configured.m_palette_enabled);
+            PPR_TEST_ASSERT(not configured.m_temporal_enabled);
             PPR_TEST_ASSERT(configured.m_pixel_scale == 4u);
+        };
+
+        PPR_UNIT_TEST (temporal_jitter_visits_a_centered_half_pixel_cycle) {
+            float2 sum{zero_v};
+            for (u32 phase = 0u; phase < 4u; ++phase) {
+                const float2 jitter = RetroPass::temporalJitter(phase);
+                PPR_TEST_ASSERT(std::abs(jitter.x) == 0.25f and std::abs(jitter.y) == 0.25f);
+                const float2 repeated = RetroPass::temporalJitter(phase + 4u);
+                PPR_TEST_ASSERT(jitter.x == repeated.x and jitter.y == repeated.y);
+
+                for (u32 previous = 0u; previous < phase; ++previous) {
+                    const float2 other = RetroPass::temporalJitter(previous);
+                    PPR_TEST_ASSERT(jitter.x != other.x or jitter.y != other.y);
+                }
+
+                sum += jitter;
+            }
+
+            PPR_TEST_ASSERT(sum.x == 0.0f and sum.y == 0.0f);
+        };
+
+        PPR_UNIT_TEST (uninitialized_temporal_fallback_preserves_camera_and_requested_settings) {
+            RetroPass pass;
+            const CameraSnapshot camera = GridTiles::orthoSnapshot800x600();
+            for (const bool pixelized: {false, true}) {
+                for (const bool palette: {false, true}) {
+                    const RetroSettings requested{
+                        .m_enabled = pixelized,
+                        .m_palette_enabled = palette,
+                        .m_temporal_enabled = true,
+                        .m_pixel_scale = 4u};
+                    const CameraSnapshot raster = pass.beginFrame(requested, camera, int2{800, 600}, 1u);
+                    PPR_TEST_ASSERT(not pass.temporalActive());
+                    PPR_TEST_ASSERT(requested.m_enabled == pixelized);
+                    PPR_TEST_ASSERT(requested.m_palette_enabled == palette);
+                    PPR_TEST_ASSERT(requested.m_temporal_enabled);
+                    PPR_TEST_ASSERT(requested.m_pixel_scale == 4u);
+
+                    for (u32 row = 0u; row < 4u; ++row) {
+                        for (u32 column = 0u; column < 4u; ++column) {
+                            PPR_TEST_ASSERT(
+                                raster.m_view_projection[row][column] == camera.m_view_projection[row][column]);
+                            PPR_TEST_ASSERT(
+                                raster.m_invert_view_projection[row][column] ==
+                                camera.m_invert_view_projection[row][column]);
+                        }
+                    }
+                }
+            }
+
+            const CameraSnapshot disabled = pass.beginFrame(RetroSettings{}, camera, int2{800, 600}, 1u);
+            PPR_TEST_ASSERT(not pass.temporalActive());
+            PPR_TEST_ASSERT(disabled.m_revision == camera.m_revision);
+            PPR_TEST_ASSERT(not pass.shutdown());
         };
 
         PPR_UNIT_TEST (retro_teardown_is_idempotent_before_initialize) {
@@ -731,6 +794,8 @@ namespace pP::tests {
             detail::Retro::retro_scene_extent_divides_both_axes_and_floors_at_one,
             detail::Retro::retro_scene_signature_is_linear_hdr_with_depth,
             detail::Retro::retro_settings_default_to_disabled_engine_policy,
+            detail::Retro::temporal_jitter_visits_a_centered_half_pixel_cycle,
+            detail::Retro::uninitialized_temporal_fallback_preserves_camera_and_requested_settings,
             detail::Retro::retro_teardown_is_idempotent_before_initialize,
         });
     };

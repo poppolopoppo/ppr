@@ -15,10 +15,11 @@ Slang compiler; source/core arithmetic and resource layouts are unchanged.
 
 ## Responsibility
 
-Slang shader assets for application render passes. Three live programs: `mesh_bindless.slang` is the
-`TrianglePass` static-mesh program, `grid_tiles.slang` is the `GridPass` debug-grid program (flat
-tinted or per-cell quads, one instance per visible chunk-sized tile), and `retro_present.slang` is the
-`RetroPass` low-resolution present program. The former `triangle.slang`
+Slang shader assets for application render passes. `mesh_bindless.slang` is the
+`TrianglePass` static-mesh program; `grid_tiles.slang` is the `GridPass` debug-grid program (flat
+tinted or per-cell quads, one instance per visible chunk-sized tile). `retro_present.slang` and
+`temporal_resolve.slang` supply independent picture treatment and optional temporal reconstruction
+through `RetroPass`. The former `triangle.slang`
 reference asset was deleted; `TrianglePass`, `GridPass`, and `RetroPass` are the only loaders from this directory.
 
 `grid_visibility.slang` supplies GridPass compute reset and cull entries. It
@@ -70,7 +71,7 @@ particle geometry helper between direct and indirect vertex entries.
   looks it up by string.
 - `grid_tiles.slang` shares the row-major, row-vector convention (`mul(world, m_view_projection)`,
   `view * projection`, `[0,1]` depth, no transpose/Y flip) on the z = 0 plane. Its
-  `ConstantBuffer<GridFrame> g_grid_frame` carries the unjittered matrix, visibility
+  `ConstantBuffer<GridFrame> g_grid_frame` carries the raster matrix (optionally jittered), visibility
   lookup flag, cell metric, surface/diagnostic mode and boundary material ID.
 - `grid_tiles.slang` draws six non-indexed verts (two triangles) per tile rect from
   `StructuredBuffer<GridTilePayload> g_tiles` (CPU-mirrored 32 B: rect + material + cell-word base +
@@ -113,13 +114,25 @@ particle geometry helper between direct and indirect vertex entries.
   neighboring terrain reads add bounded fragment work.
 - `grid_tiles.slang` entry points: `[shader("vertex")] vertexGridMain` and
   `[shader("fragment")] fragmentGridMain`.
-- `retro_present.slang` is the `RetroPass` present program: one fullscreen triangle samples the
-  low-resolution scene with clamped pixel-center nearest taps (`SampleLevel 0`), converts linear→sRGB,
-  applies a 4×4 Bayer threshold scaled by `m_dither_strength`, selects the nearest DawnBringer-32 entry
-  by luma-weighted squared distance in sRGB, and converts the selected color back to linear. Its
-  `ConstantBuffer<RetroParameters>` is 528 B (32 float4 sRGB entries, float2 source extent, float dither
-  strength, uint reserved) mirrored by `RetroPass`; `uniform SamplerState.Handle g_sampler` is the only
-  entry-point ordinary-data parameter. Entry points: `vertexRetroPresent` + `fragmentRetroPresent`.
+- `retro_present.slang` samples the chosen scene resolution with clamped pixel-center nearest taps
+  (`SampleLevel 0`). Optional palette mapping converts linear→sRGB, applies a 4×4 Bayer threshold,
+  selects the DawnBringer-32 entry by luma-weighted squared distance, then returns linear color.
+  Palette bypass preserves full scene color independently of pixelization. Its
+  `ConstantBuffer<RetroParameters>` is 528 B (32 float4 palette entries, float2 source extent,
+  float dither strength, uint palette-enabled flag). `uniform SamplerState.Handle g_sampler`
+  remains the present entry's only ordinary-data parameter. Entries: `vertexRetroPresent`,
+  `fragmentRetroPresent`.
+- `temporal_resolve.slang` uses a 160-byte constant-buffer mirror: current inverse and previous
+  unjittered view-projection, physical current/previous jitter offsets, extent, flags and reserved
+  word. Four-phase 4x MSAA color accumulates in linear RGBA16Float history before palette mapping.
+  Catmull-Rom RGB and depth validation share the full 4x4 point-load footprint. History alpha is
+  orthographic device Z or perspective reciprocal clip W; negative alpha marks background.
+  Camera motion requires a coherent affine metadata plane over all contributing taps. Auxiliary
+  reprojection aligns depth jitter phases separately from RGB motion; cuts and full world/policy identity or
+  projection-mode changes invalidate history. Shader entries are `vertexTemporal` and
+  `fragmentTemporal`, with no sampler or ordinary entry-point data. Composite parallax backgrounds
+  use unjittered cubic spatial filtering and reject history during motion. Near/above-Nyquist
+  patterns and dynamic silhouettes without object-motion vectors retain reconstruction limits.
 - CPU mirrors and cursor bindings live in `TrianglePass`, `GpuCaches`, and `Mesh.Types`.
 - The ImGui shader remains embedded in `App.UI.ImGui.cpp`, not under this asset directory.
 - CMake stages the whole shader directory beside application and relevant test executables, so
@@ -136,7 +149,8 @@ each draw. `GridPass::initialize` follows the same chain for `<content_dir>/shad
 contour/diagnostic buffers, and the bindless texture heap/shared sampler. `RetroPass::initialize`
 loads `<content_dir>/shaders/retro_present.slang` (`vertexRetroPresent` + `fragmentRetroPresent`),
 then binds the 528-byte palette/extent constant, the selected scene view, and one sampler before each
-fullscreen present.
+fullscreen present. Supported devices also load `temporal_resolve.slang`; its pass-owned targets,
+roots and history are reused only through accepted-submit fence accounting.
 
 ## Integration
 
@@ -156,7 +170,8 @@ fullscreen present.
 
 - `mesh_bindless.slang` - the live bindless static-mesh vertex/fragment program.
 - `grid_tiles.slang` - the live debug-grid tile vertex/fragment program (`vertexGridMain` + `fragmentGridMain`).
-- `retro_present.slang` - the live retro present program (`vertexRetroPresent` + `fragmentRetroPresent`).
+- `retro_present.slang` - the live picture present program (`vertexRetroPresent` + `fragmentRetroPresent`).
+- `temporal_resolve.slang` - optional MSAA temporal reconstruction (`vertexTemporal` + `fragmentTemporal`).
 
 Catalog terrain uploads the shared `engine.math` contour points and 16-case
 connectivity table verbatim (8-byte points, 72-byte cases). The fragment shader

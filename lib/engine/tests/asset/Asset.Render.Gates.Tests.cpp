@@ -1157,23 +1157,31 @@ namespace pP::tests::detail {
             GridPass &grid, const float origin_x = 56.0f, const float origin_y = 56.0f, const float width_m = 16.0f,
             const u32 edge = 128u, u32 *const forced_background_waits = nullptr,
             bool *const admission_during_draw = nullptr, const bool retro = false, const u32 viewport_height = 0u,
-            const float roll = 0.0f) {
+            const float roll = 0.0f, const RetroSettings *const picture = nullptr,
+            RetroPass *const retained_pass = nullptr, const bool camera_cut = false, const u64 world_job = 0u,
+            const u64 world_content = 0u) {
             const auto rhi = SharedGpu::rhiService();
             Renderer *const renderer = SharedGpu::renderer();
             PPR_TEST_ASSERT(rhi.isValid() and renderer != nullptr);
             auto &device = rhi->getDevice();
             const auto target = makeRenderTarget_(device, edge);
             PPR_TEST_ASSERT(target.has_value());
-            RetroPass retro_pass;
-            if (retro)
+            const bool offscreen = retro or picture != nullptr;
+            RetroPass owned_pass;
+            RetroPass &retro_pass = retained_pass != nullptr ? *retained_pass : owned_pass;
+            if (offscreen and retained_pass == nullptr)
                 PPR_TEST_ASSERT(
                     not retro_pass.initialize(*rhi, *SharedGpu::shaderService(), std::filesystem::current_path()));
 
             PPR_DEFER {
                 PPR_TEST_ASSERT(not renderer->waitOnHost());
-                PPR_TEST_ASSERT(not retro_pass.shutdown());
+                if (retained_pass == nullptr)
+                    PPR_TEST_ASSERT(not retro_pass.shutdown());
             };
-            const u32 scene_edge = retro ? edge / 4u : edge;
+            const RetroSettings settings =
+                picture != nullptr ? *picture
+                                   : RetroSettings{.m_enabled = retro, .m_palette_enabled = retro, .m_pixel_scale = 4u};
+            const u32 scene_edge = settings.m_enabled ? edge / settings.m_pixel_scale : edge;
             const u32 scene_height = viewport_height != 0u ? viewport_height : scene_edge;
             CameraModel model{};
             model.m_camera_mode = ECameraProjection::orthographic;
@@ -1186,7 +1194,14 @@ namespace pP::tests::detail {
             const float3 centre{origin_x + width_m * 0.5f, origin_y + height_m * 0.5f, -0.5f};
             model.m_origin = centre - camera.getRight() * (width_m * 0.5f) - camera.getUp() * (height_m * 0.5f);
             camera.updateModel(TimeSpan{}, model, Viewport{PixelRect{0, 0, int(scene_edge), int(scene_height)}});
-            const auto snapshot = camera.getSnapshot();
+            auto snapshot = camera.getSnapshot();
+            snapshot.m_has_camera_cut = camera_cut;
+            const CameraSnapshot background_snapshot = snapshot;
+            if (offscreen)
+                snapshot = retro_pass.beginFrame(
+                    settings, snapshot, int2{int(scene_edge), int(scene_height)}, grid.worldGeneration(), world_job,
+                    world_content);
+
             PPR_TEST_ASSERT(not grid.update(TimeSpan{}, snapshot));
             for (;;) {
                 PPR_TEST_ASSERT(not renderer->retireCompletedFrames());
@@ -1215,10 +1230,10 @@ namespace pP::tests::detail {
                     const PreRenderContext stale{
                         context.m_device, context.m_encoder, kFenceValueNone, FenceWaitHook{wait}};
                     PPR_RETURN_ERROR_ON_FAIL(
-                        GridMaterialGate, grid.prepareBackground(stale, snapshot, viewport, scissor));
+                        GridMaterialGate, grid.prepareBackground(stale, background_snapshot, viewport, scissor));
                 } else {
                     PPR_RETURN_ERROR_ON_FAIL(
-                        GridMaterialGate, grid.prepareBackground(context, snapshot, viewport, scissor));
+                        GridMaterialGate, grid.prepareBackground(context, background_snapshot, viewport, scissor));
                 }
 
                 PPR_RETURN_ERROR_ON_FAIL(GridMaterialGate, grid.prepareGpuParticles(context));
@@ -1249,19 +1264,19 @@ namespace pP::tests::detail {
             };
             const auto prepare = [&](const PreRenderContext &context) -> std::error_code {
                 PPR_RETURN_ERROR_ON_FAIL(GridMaterialGate, prepare_content(context));
-                if (retro) {
+                if (offscreen) {
                     return retro_pass.prepareScene(
-                        context, RetroPass::scenePipelineSignature(), int2{int(scene_edge), int(scene_height)},
-                        DrawCallback{draw_content});
+                        context, RetroPass::scenePipelineSignature(retro_pass.temporalActive()),
+                        int2{int(scene_edge), int(scene_height)}, DrawCallback{draw_content});
                 }
 
                 return {};
             };
             const auto draw = [&](const DrawContext &context) -> std::error_code {
-                return retro ? retro_pass.render(context) : draw_content(context);
+                return offscreen ? retro_pass.render(context) : draw_content(context);
             };
             DrawSubmission submission{"grid optical gate", draw};
-            if (not retro) {
+            if (not offscreen) {
                 submission.m_viewport = viewport;
                 submission.m_scissor = scissor;
             }
@@ -1269,7 +1284,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(
                 not renderer->renderToTexture(targetRef_(target), {submission}, {}, PreRenderCallback{prepare}));
             grid.notifyFrameSubmitted(renderer->lastSubmittedFenceValue());
-            if (retro)
+            if (offscreen)
                 retro_pass.notifyFrameSubmitted(renderer->lastSubmittedFenceValue());
             PPR_TEST_ASSERT(not renderer->waitOnHost());
             PPR_TEST_ASSERT(not renderer->retireCompletedFrames());
@@ -1475,6 +1490,828 @@ namespace pP::tests::detail {
                 pixels.m_row_pitch, pixels.m_bytes.data()};
             PPR_TEST_ASSERT(static_cast<bool>(surface.save((root / (std::string{name} + ".png")).string())));
         }
+
+        PPR_UNIT_TEST (picture_controls_preserve_independent_color_and_temporal_history) {
+            const auto rhi = SharedGpu::rhiService();
+            const auto shader = SharedGpu::shaderService();
+            Renderer *const renderer = SharedGpu::renderer();
+            PPR_TEST_ASSERT(rhi.isValid() and shader.isValid() and renderer != nullptr);
+            GridPass grid;
+            RetroPass picture_pass;
+            PPR_TEST_ASSERT(not grid.initialize(*rhi, *shader, std::filesystem::current_path()));
+            PPR_TEST_ASSERT(not picture_pass.initialize(*rhi, *shader, std::filesystem::current_path()));
+            RetroPass fresh_reference;
+            PPR_TEST_ASSERT(not fresh_reference.initialize(*rhi, *shader, std::filesystem::current_path()));
+            PPR_DEFER {
+                PPR_TEST_ASSERT(not renderer->waitOnHost());
+                PPR_TEST_ASSERT(not fresh_reference.shutdown());
+                PPR_TEST_ASSERT(not picture_pass.shutdown());
+                PPR_TEST_ASSERT(not grid.shutdown());
+            };
+
+            GridTerrainVisual visual{};
+            visual.m_material_id = 1u;
+            visual.m_color_rgba = 0x7090b0ffu;
+            std::ignore = captureOpticalGrid_(grid, opticalGridFixture_(visual, 0u), 1u);
+            const auto capture = [&](const RetroSettings &settings, const u32 edge = 128u, const bool cut = false,
+                                     const u64 job = 0u, const u64 content = 0u) {
+                return drawOpticalGrid_(
+                    grid, 56.0f, 56.0f, 16.0f, edge, nullptr, nullptr, false, 0u, 0.0f, &settings, &picture_pass, cut,
+                    job, content);
+            };
+
+            const auto differing_pixels = [](const GatePixels &a, const GatePixels &b) {
+                PPR_TEST_ASSERT(a.m_size == b.m_size);
+                u32 changed = 0u;
+                for (u32 y = 0u; y < a.m_size; ++y) {
+                    for (u32 x = 0u; x < a.m_size; ++x) {
+                        changed += gateTexel_(a, x, y) != gateTexel_(b, x, y) ? 1u : 0u;
+                    }
+                }
+
+                return changed;
+            };
+
+            RetroSettings settings{};
+            const auto native = drawOpticalGrid_(grid);
+            const auto bypass = capture(settings);
+            PPR_TEST_ASSERT(changedOpticalPixels_(native, bypass) == 0u);
+            settings.m_palette_enabled = true;
+            const auto native_palette = capture(settings);
+            PPR_TEST_ASSERT(changedOpticalPixels_(native, native_palette) > 100u);
+
+            settings.m_enabled = true;
+            settings.m_pixel_scale = 4u;
+            settings.m_palette_enabled = false;
+            const auto pixelized = capture(settings);
+            PPR_TEST_ASSERT(gateTexel_(pixelized, 17u, 17u) == gateTexel_(pixelized, 18u, 18u));
+            settings.m_palette_enabled = true;
+            const auto pixelized_palette = capture(settings);
+            PPR_TEST_ASSERT(changedOpticalPixels_(pixelized, pixelized_palette) > 100u);
+            saveGridQa_(pixelized, "picture-pixelized-full-color");
+            saveGridQa_(pixelized_palette, "picture-pixelized-palette");
+
+            // Four accepted submits exercise every jitter phase and retain a
+            // previous image while the unjittered composite background stays stable.
+            for (const bool pixelization: {false, true}) {
+                settings.m_enabled = pixelization;
+                settings.m_palette_enabled = false;
+                settings.m_temporal_enabled = true;
+                const auto first = capture(settings, 128u, true);
+                PPR_TEST_ASSERT(picture_pass.temporalActive());
+                GatePixels converged{};
+                for (u32 frame = 1u; frame < 4u; ++frame) {
+                    converged = capture(settings);
+                }
+
+                // The composite background stays spatial and unjittered; its
+                // appearance must remain stable across the temporal cycle.
+                const auto repeated_phase = capture(settings);
+                PPR_TEST_ASSERT(differing_pixels(first, repeated_phase) == 0u);
+                PPR_TEST_ASSERT(texelDist_(gateTexel_(converged, 64u, 64u), {0u, 0u, 0u, 255u}) > 20u);
+                saveGridQa_(converged, pixelization ? "picture-temporal-pixelized" : "picture-temporal-native");
+                settings.m_palette_enabled = true;
+                const auto temporal_palette = capture(settings);
+                PPR_TEST_ASSERT(changedOpticalPixels_(first, temporal_palette) > 100u);
+            }
+
+            // Occupied cells form a diagonal silhouette. Unlike the background
+            // checks above, this path writes scene depth and reprojects it.
+            auto diagonal = opticalGridFixture_(visual, 0u);
+            for (u32 y = 0u; y < 128u; ++y) {
+                for (u32 x = 0u; x < 128u; ++x) {
+                    diagonal.m_uploads[0u].m_cell_materials[y * 128u + x] = x < y ? 1u : 0u;
+                }
+            }
+
+            const auto geometry_native = captureOpticalGrid_(grid, diagonal, 2u);
+            PPR_TEST_ASSERT(changedOpticalPixels_(geometry_native, native) > 100u);
+            saveGridQa_(geometry_native, "picture-diagonal-native");
+            for (const bool pixelization: {false, true}) {
+                settings.m_enabled = pixelization;
+                settings.m_palette_enabled = false;
+                settings.m_temporal_enabled = true;
+                GatePixels geometry{};
+                for (u32 frame = 0u; frame < 4u; ++frame) {
+                    geometry = capture(settings, 128u, frame == 0u);
+                }
+
+                saveGridQa_(
+                    geometry,
+                    pixelization ? "picture-diagonal-temporal-pixelized" : "picture-diagonal-temporal-native");
+                const auto moving = drawOpticalGrid_(
+                    grid, 56.125f, 56.0f, 16.0f, 128u, nullptr, nullptr, false, 0u, 0.0f, &settings, &picture_pass);
+                const auto moving_cut = drawOpticalGrid_(
+                    grid, 56.125f, 56.0f, 16.0f, 128u, nullptr, nullptr, false, 0u, 0.0f, &settings, &picture_pass,
+                    true);
+                PPR_TEST_ASSERT(changedOpticalPixels_(geometry, moving) > 0u);
+                PPR_TEST_ASSERT(texelDist_(gateTexel_(moving, 32u, 32u), gateTexel_(moving_cut, 32u, 32u)) <= 3u);
+                PPR_TEST_ASSERT(texelDist_(gateTexel_(moving, 96u, 96u), gateTexel_(moving_cut, 96u, 96u)) <= 3u);
+                saveGridQa_(moving, pixelization ? "picture-diagonal-pan-pixelized" : "picture-diagonal-pan-native");
+            }
+
+            // Remove textured-background variation from the coverage proof.
+            // Half an internal pixel places cell boundaries on sample centers,
+            // so the four phases visit both sides of the fixed silhouette.
+            diagonal.m_has_background = false;
+            diagonal.m_terrain_visuals[0u].m_color_rgba = 0xff0000ffu;
+            std::ignore = captureOpticalGrid_(grid, diagonal, 3u);
+            for (const bool pixelization: {false, true}) {
+                settings.m_enabled = pixelization;
+                const float origin = pixelization ? 56.25f : 56.0625f;
+                const auto coverage = [&](const bool cut = false) {
+                    return drawOpticalGrid_(
+                        grid, origin, origin, 16.0f, 128u, nullptr, nullptr, false, 0u, 0.0f, &settings, &picture_pass,
+                        cut);
+                };
+
+                const auto first = coverage(true);
+                for (u32 phase = 1u; phase < 4u; ++phase) {
+                    std::ignore = coverage();
+                }
+
+                const auto accumulated = coverage();
+                const auto foreground = gateTexel_(first, 16u, 16u);
+                const auto background = gateTexel_(first, 112u, 112u);
+                PPR_TEST_ASSERT(texelDist_(foreground, background) > 30u);
+                PPR_TEST_ASSERT(texelDist_(gateTexel_(accumulated, 16u, 16u), foreground) <= 1u);
+                PPR_TEST_ASSERT(texelDist_(gateTexel_(accumulated, 112u, 112u), background) <= 1u);
+
+                u32 intermediate_edges = 0u;
+                for (u32 y = 8u; y < 120u; ++y) {
+                    for (u32 x = 8u; x < 120u; ++x) {
+                        if (std::abs(int(x + y) - 127) > 8)
+                            continue;
+
+                        const auto fresh = gateTexel_(first, x, y);
+                        const auto temporal = gateTexel_(accumulated, x, y);
+                        const bool fresh_endpoint = texelDist_(fresh, foreground) <= 1u or
+                                                    texelDist_(fresh, background) <= 1u;
+                        intermediate_edges += fresh_endpoint and
+                                                      texelDist_(temporal, foreground) > 3u and
+                                                      texelDist_(temporal, background) > 3u
+                                                  ? 1u
+                                                  : 0u;
+                    }
+                }
+
+                PPR_TEST_ASSERT(intermediate_edges > 0u);
+                std::println(
+                    "TEMPORAL-COVERAGE pixelized={} intermediate_edge_pixels={}", pixelization, intermediate_edges);
+                saveGridQa_(
+                    first,
+                    pixelization ? "picture-flat-diagonal-first-pixelized" : "picture-flat-diagonal-first-native");
+                saveGridQa_(
+                    accumulated, pixelization ? "picture-flat-diagonal-accumulated-pixelized"
+                                              : "picture-flat-diagonal-accumulated-native");
+            }
+
+            // Reset checks use the flat diagonal so phase accumulation changes
+            // geometry pixels before each reset is compared with fresh phase zero.
+            for (const bool pixelization: {false, true}) {
+                settings.m_enabled = pixelization;
+                settings.m_palette_enabled = false;
+                settings.m_temporal_enabled = true;
+                const u32 edge = 128u;
+                const float origin = pixelization ? 56.25f : 56.0625f;
+                const auto render = [&](RetroPass &pass, const RetroSettings &active, const u32 extent, const bool cut,
+                                        const u64 job, const u64 content) {
+                    return drawOpticalGrid_(
+                        grid, origin, origin, 16.0f, extent, nullptr, nullptr, false, 0u, 0.0f, &active, &pass, cut,
+                        job, content);
+                };
+                const auto prove_accumulation = [&](const u32 extent, const u64 job, const u64 content) {
+                    GatePixels accumulated{};
+                    for (u32 phase = 0u; phase < 5u; ++phase) {
+                        accumulated = render(picture_pass, settings, extent, phase == 0u, job, content);
+                    }
+
+                    const auto fresh = render(fresh_reference, settings, extent, true, job, content);
+                    PPR_TEST_ASSERT(differing_pixels(accumulated, fresh) > 0u);
+                };
+
+                prove_accumulation(edge, 0u, 0u);
+                const auto cut = render(picture_pass, settings, edge, true, 0u, 0u);
+                const auto cut_reference = render(fresh_reference, settings, edge, true, 0u, 0u);
+                PPR_TEST_ASSERT(differing_pixels(cut, cut_reference) == 0u);
+
+                // Job and content identity changes must restart at phase zero
+                // after the same diagonal has visibly accumulated prior history.
+                prove_accumulation(edge, 17u, 23u);
+                const auto new_job = render(picture_pass, settings, edge, false, 18u, 23u);
+                const auto new_job_reference = render(fresh_reference, settings, edge, true, 18u, 23u);
+                PPR_TEST_ASSERT(differing_pixels(new_job, new_job_reference) == 0u);
+
+                prove_accumulation(edge, 18u, 23u);
+                const auto new_content = render(picture_pass, settings, edge, false, 18u, 24u);
+                const auto new_content_reference = render(fresh_reference, settings, edge, true, 18u, 24u);
+                PPR_TEST_ASSERT(differing_pixels(new_content, new_content_reference) == 0u);
+
+                prove_accumulation(edge, 0u, 0u);
+                const auto resized = render(picture_pass, settings, 64u, false, 0u, 0u);
+                const auto resized_reference = render(fresh_reference, settings, 64u, true, 0u, 0u);
+                PPR_TEST_ASSERT(differing_pixels(resized, resized_reference) == 0u);
+
+                prove_accumulation(edge, 0u, 0u);
+                RetroSettings spatial = settings;
+                spatial.m_temporal_enabled = false;
+                std::ignore = render(picture_pass, spatial, edge, false, 0u, 0u);
+                PPR_TEST_ASSERT(not picture_pass.temporalActive());
+                const auto reenabled = render(picture_pass, settings, edge, false, 0u, 0u);
+                const auto reenabled_reference = render(fresh_reference, settings, edge, true, 0u, 0u);
+                PPR_TEST_ASSERT(differing_pixels(reenabled, reenabled_reference) == 0u);
+            }
+        };
+
+        PPR_UNIT_TEST (background_magnification_matches_wrapped_cubic_reference) {
+            const auto rhi = SharedGpu::rhiService();
+            const auto shader = SharedGpu::shaderService();
+            Renderer *const renderer = SharedGpu::renderer();
+            PPR_TEST_ASSERT(rhi.isValid() and shader.isValid() and renderer != nullptr);
+            GridPass grid;
+            PPR_TEST_ASSERT(not grid.initialize(*rhi, *shader, std::filesystem::current_path()));
+            PPR_DEFER {
+                PPR_TEST_ASSERT(not renderer->waitOnHost());
+                PPR_TEST_ASSERT(not grid.shutdown());
+            };
+
+            GridTerrainVisual visual{};
+            visual.m_material_id = 1u;
+            auto stage = opticalGridFixture_(visual, 0u);
+            stage.m_terrain_images[0u].m_format = image::ENativeImageFormat::rgba8_linear;
+            stage.m_background_layers[0u].m_parallax_factor = 1.0f;
+            std::ignore = captureOpticalGrid_(grid, stage, 1u);
+            const auto pixels = drawOpticalGrid_(grid, 7.8f, -0.2f, 0.8f);
+            const auto &image = stage.m_terrain_images[0u];
+            const auto &level = image.m_subresources.front();
+            const auto bytes = level.m_view.getBufferData();
+            const auto basis = [](const double distance) {
+                const double d = std::abs(distance);
+                if (d < 1.0)
+                    return (4.0 - 6.0 * d * d + 3.0 * d * d * d) / 6.0;
+
+                return d < 2.0 ? std::pow(2.0 - d, 3.0) / 6.0 : 0.0;
+            };
+
+            // This is a sixteen-point cardinal-basis convolution, independent
+            // of the shader's four bilinear taps. The view crosses both repeat
+            // seams and magnifies each source texel to hundreds of pixels.
+            for (const u32 y: {4u, 31u, 63u, 95u, 123u}) {
+                for (const u32 x: {4u, 31u, 63u, 95u, 123u}) {
+                    const double world_x = 7.8 + (double(x) + 0.5) * 0.8 / 128.0;
+                    const double world_y = -0.2 + (127.5 - double(y)) * 0.8 / 128.0;
+                    const double tx = world_x * 0.5 - 0.5;
+                    const double ty = world_y * 0.5 - 0.5;
+                    const int base_x = int(std::floor(tx)), base_y = int(std::floor(ty));
+                    std::array<double, 3u> expected{};
+                    for (int dy = -1; dy <= 2; ++dy) {
+                        for (int dx = -1; dx <= 2; ++dx) {
+                            const int ix = base_x + dx, iy = base_y + dy;
+                            const u32 sx = u32((ix % 4 + 4) % 4), sy = u32((iy % 4 + 4) % 4);
+                            const double weight = basis(tx - ix) * basis(ty - iy);
+                            for (u32 channel = 0u; channel < 3u; ++channel) {
+                                expected[channel] += weight * std::to_integer<u8>(
+                                                                  bytes[sy * level.m_row_pitch + sx * 4u + channel]);
+                            }
+                        }
+                    }
+
+                    const auto actual = gateTexel_(pixels, x, y);
+                    for (u32 channel = 0u; channel < 3u; ++channel) {
+                        PPR_TEST_ASSERT(std::abs(int(actual[channel]) - int(std::lround(expected[channel]))) <= 2);
+                    }
+                }
+            }
+
+            saveGridQa_(pixels, "background-cubic-repeat-seams");
+        };
+
+        // ------------------------------------------------------------------
+        // temporal motion quality against an analytic spatial reference
+        // ------------------------------------------------------------------
+
+        PPR_UNIT_TEST (temporal_layered_background_pan_uses_stable_spatial_fallback) {
+            const auto rhi = SharedGpu::rhiService();
+            const auto shader = SharedGpu::shaderService();
+            Renderer *const renderer = SharedGpu::renderer();
+            PPR_TEST_ASSERT(rhi.isValid() and shader.isValid() and renderer != nullptr);
+            GridPass grid;
+            RetroPass picture;
+            RetroPass spatial_reference;
+            PPR_TEST_ASSERT(not grid.initialize(*rhi, *shader, std::filesystem::current_path()));
+            PPR_TEST_ASSERT(not picture.initialize(*rhi, *shader, std::filesystem::current_path()));
+            PPR_TEST_ASSERT(not spatial_reference.initialize(*rhi, *shader, std::filesystem::current_path()));
+            PPR_DEFER {
+                PPR_TEST_ASSERT(not renderer->waitOnHost());
+                PPR_TEST_ASSERT(not spatial_reference.shutdown());
+                PPR_TEST_ASSERT(not picture.shutdown());
+                PPR_TEST_ASSERT(not grid.shutdown());
+            };
+
+            GridTerrainVisual visual{};
+            visual.m_material_id = 1u;
+            std::ignore = captureOpticalGrid_(grid, opticalGridFixture_(visual, 0u, true), 1u);
+            for (const bool pixelized: {false, true}) {
+                RetroSettings settings{.m_enabled = pixelized, .m_temporal_enabled = true, .m_pixel_scale = 4u};
+                const auto capture = [&](const float pan, const RetroSettings &policy, RetroPass *const retained) {
+                    return drawOpticalGrid_(
+                        grid, pan, 56.0f, 16.0f, 128u, nullptr, nullptr, false, 0u, 0.0f, &policy, retained);
+                };
+
+                GatePixels last{};
+                for (u32 frame = 0u; frame < 8u; ++frame) {
+                    const float pan = 56.0f + float(frame) * 0.03125f;
+                    last = capture(pan, settings, &picture);
+                    RetroSettings spatial = settings;
+                    spatial.m_temporal_enabled = false;
+                    const auto reference = capture(pan, spatial, &spatial_reference);
+                    PPR_TEST_ASSERT(changedOpticalPixels_(last, reference) == 0u);
+                }
+
+                for (u32 frame = 0u; frame < 4u; ++frame) {
+                    const auto stopped = capture(56.21875f, settings, &picture);
+                    PPR_TEST_ASSERT(changedOpticalPixels_(last, stopped) == 0u);
+                }
+
+                saveGridQa_(
+                    last,
+                    pixelized ? "background-pan-spatial-fallback-pixelized" : "background-pan-spatial-fallback-native");
+            }
+        };
+
+        PPR_UNIT_TEST (temporal_camera_pan_preserves_pattern_contrast_and_phase) {
+            const auto rhi = SharedGpu::rhiService();
+            const auto shader_service = SharedGpu::shaderService();
+            Renderer *const renderer = SharedGpu::renderer();
+            PPR_TEST_ASSERT(rhi.isValid() and shader_service.isValid() and renderer != nullptr);
+            auto &device = rhi->getDevice();
+            constexpr string_literal source = R"(
+struct PatternFrame { float4x4 view_projection; float4 foreground; };
+ConstantBuffer<PatternFrame> g_pattern;
+struct VertexOutput { float4 position : SV_Position; float2 world : TEXCOORD0; nointerpolation uint layer : TEXCOORD1; };
+[shader("vertex")]
+VertexOutput vertexPattern(uint vertex : SV_VertexID) {
+    static const float2 corners[3] = {
+        float2(-512.0, -512.0), float2(2048.0, -512.0), float2(-512.0, 2048.0)};
+    float2 xy;
+    float z;
+    uint layer = vertex >= 3u ? 1u : 0u;
+    if (layer != 0u) {
+        static const float2 quad[6] = {
+            float2(0,0), float2(1,0), float2(1,1), float2(0,0), float2(1,1), float2(0,1)};
+        float2 uv = quad[vertex - 3u];
+        xy = float2(g_pattern.foreground.y + uv.x * 8.0, -512.0 + uv.y * 2560.0);
+        z = g_pattern.foreground.x;
+    } else {
+        xy = corners[vertex];
+        z = 0.2 + g_pattern.foreground.z * xy.x;
+    }
+    VertexOutput output;
+    output.position = mul(float4(xy, z, 1.0), g_pattern.view_projection);
+    output.world = xy;
+    output.layer = layer;
+    return output;
+}
+[shader("fragment")]
+float4 fragmentPattern(VertexOutput input) : SV_Target {
+    if (input.layer != 0u) return float4(0.9, 0.1, 0.2, 1.0);
+    float value = 0.5 + 0.4 * sin(input.world.x * 6.283185307179586 / g_pattern.foreground.w);
+    return float4(value, value, value, 1.0);
+}
+)";
+            struct alignas(16) PatternFrame {
+                float4x4 m_view_projection{identity_v};
+                float m_foreground[4]{};
+            };
+            static_assert(sizeof(PatternFrame) == 80u);
+            static_assert(alignof(PatternFrame) == 16u);
+            static_assert(PPR_OFFSETOF(PatternFrame, m_foreground) == 64u);
+
+            shader::SharedModule module{};
+            PPR_TEST_ASSERT(not shader_service->loadModuleFromSource(
+                "temporal_motion_pattern", "temporal_motion_pattern.slang", source, module.writeRef()));
+            shader::ComPtr<shader::IEntryPoint> vertex;
+            shader::ComPtr<shader::IEntryPoint> fragment;
+            PPR_TEST_ASSERT(not make_error_code(module->findEntryPointByName("vertexPattern", vertex.writeRef())));
+            PPR_TEST_ASSERT(not make_error_code(module->findEntryPointByName("fragmentPattern", fragment.writeRef())));
+            shader::IComponentType *entries[] = {vertex.get(), fragment.get()};
+            rhi::ShaderProgramDesc program_desc{};
+            program_desc.linkingStyle = rhi::LinkingStyle::SingleProgram;
+            program_desc.slangGlobalScope = module.get();
+            program_desc.slangEntryPoints = entries;
+            program_desc.slangEntryPointCount = 2u;
+            rhi::ComPtr<rhi::IShaderProgram> program;
+            shader::Diagnose diagnostics;
+            PPR_TEST_ASSERT(not make_error_code(
+                device.createShaderProgram(program_desc, program.writeRef(), diagnostics.writeRef())));
+
+            rhi::ColorTargetDesc color{};
+            color.format = rhi::Format::RGBA16Float;
+            rhi::RenderPipelineDesc pipeline_desc{};
+            pipeline_desc.program = program;
+            pipeline_desc.primitiveTopology = rhi::PrimitiveTopology::TriangleList;
+            pipeline_desc.targets = &color;
+            pipeline_desc.targetCount = 1u;
+            pipeline_desc.multisample.sampleCount = 4u;
+            pipeline_desc.depthStencil.format = rhi::Format::D32Float;
+            pipeline_desc.depthStencil.depthTestEnable = true;
+            pipeline_desc.depthStencil.depthWriteEnable = true;
+            pipeline_desc.depthStencil.depthFunc = rhi::ComparisonFunc::LessEqual;
+            pipeline_desc.rasterizer.cullMode = rhi::CullMode::None;
+            rhi::ComPtr<rhi::IRenderPipeline> pipeline;
+            rhi::ComPtr<rhi::IShaderObject> root;
+            PPR_TEST_ASSERT(not make_error_code(device.createRenderPipeline(pipeline_desc, pipeline.writeRef())));
+            PPR_TEST_ASSERT(not make_error_code(device.createRootShaderObject(program, root.writeRef())));
+
+            constexpr u32 output_edge = 128u;
+            const auto target = makeRenderTarget_(device, output_edge);
+            PPR_TEST_ASSERT(target.has_value());
+            RetroPass moving;
+            RetroPass fresh;
+            PPR_TEST_ASSERT(not moving.initialize(*rhi, *shader_service, std::filesystem::current_path()));
+            PPR_TEST_ASSERT(not fresh.initialize(*rhi, *shader_service, std::filesystem::current_path()));
+            PPR_DEFER {
+                PPR_TEST_ASSERT(not renderer->waitOnHost());
+                PPR_TEST_ASSERT(not fresh.shutdown());
+                PPR_TEST_ASSERT(not moving.shutdown());
+            };
+
+            struct Quality {
+                double m_contrast{};
+                double m_phase_lag_pixels{};
+                double m_mse{};
+            };
+            bool motion_quality_passed = true;
+            bool stopped_quality_passed = true;
+            bool transformed_quality_passed = true;
+
+            constexpr float orthographic_slope = 0.0005f;
+            constexpr float perspective_slope = 0.25f;
+            constexpr float representable_period = 8.0f;
+            constexpr float stress_period = 4.0f;
+            for (const bool pixelized: {false, true}) {
+                const u32 scale = pixelized ? 4u : 1u;
+                const u32 scene_edge = output_edge / scale;
+                const RetroSettings settings{.m_enabled = pixelized, .m_temporal_enabled = true, .m_pixel_scale = 4u};
+                const auto snapshot_for = [&](const float pan, const float roll, const float zoom,
+                                              const bool perspective) {
+                    CameraModel model{};
+                    model.m_camera_mode = perspective ? ECameraProjection::perspective
+                                                      : ECameraProjection::orthographic;
+                    model.m_origin =
+                        perspective
+                            ? float3{pan + float(scene_edge) * 0.5f, float(scene_edge) * 0.5f, -float(scene_edge)}
+                            : float3{pan, 0.0f, -0.5f};
+                    model.m_basis = Quaternion::rotateZ(roll);
+                    model.m_ortho_scale = zoom;
+
+                    Camera camera{model.m_camera_mode};
+                    camera.updateModel(TimeSpan{}, model, Viewport{PixelRect{0, 0, int(scene_edge), int(scene_edge)}});
+                    return camera.getSnapshot();
+                };
+
+                const auto render = [&](RetroPass &picture, const float pan, const bool cut, const bool read_pixels,
+                                        const float roll = 0.0f, const float zoom = 1.0f,
+                                        const bool perspective = false, const bool occluder = false,
+                                        const float world_period = stress_period) {
+                    auto snapshot = snapshot_for(pan, roll, zoom, perspective);
+                    snapshot.m_has_camera_cut = cut;
+                    const auto raster = picture.beginFrame(
+                        settings, snapshot, int2{int(scene_edge), int(scene_edge)}, 1u);
+                    PPR_TEST_ASSERT(picture.temporalActive());
+
+                    const auto draw_pattern = [&](const DrawContext &context) -> std::error_code {
+                        PatternFrame frame{};
+                        frame.m_view_projection = raster.m_view_projection;
+                        frame.m_foreground[0u] = -float(scene_edge) * 0.5f;
+                        frame.m_foreground[1u] = 17.2f + float(scene_edge) * 0.5f;
+                        frame.m_foreground[2u] = perspective ? perspective_slope : orthographic_slope;
+                        frame.m_foreground[3u] = world_period;
+
+                        rhi::ShaderCursor constants{};
+                        PPR_RETURN_ERROR_ON_FAIL(
+                            GridMaterialGate, rhi::ShaderCursor{root}["g_pattern"].getDereferenced(constants));
+                        PPR_RETURN_ERROR_ON_FAIL(GridMaterialGate, constants.setData(&frame, sizeof(frame)));
+
+                        context.m_pass.setRenderState(
+                            {.viewports = {context.m_viewport},
+                                .viewportCount = 1u,
+                                .scissorRects = {context.m_scissor},
+                                .scissorRectCount = 1u,
+                                .vertexBuffers = {},
+                                .indexBuffer = {}});
+                        context.m_pass.bindPipeline(pipeline, root);
+                        context.m_pass.draw({.vertexCount = occluder ? 9u : 3u});
+                        return {};
+                    };
+                    const auto prepare = [&](const PreRenderContext &context) {
+                        return picture.prepareScene(
+                            context, RetroPass::scenePipelineSignature(true), int2{int(scene_edge), int(scene_edge)},
+                            DrawCallback{draw_pattern});
+                    };
+                    const auto present = [&](const DrawContext &context) { return picture.render(context); };
+                    PPR_TEST_ASSERT(not renderer->renderToTexture(
+                        targetRef_(target), {DrawSubmission{"temporal motion pattern", present}}, {},
+                        PreRenderCallback{prepare}));
+                    picture.notifyFrameSubmitted(renderer->lastSubmittedFenceValue());
+                    PPR_TEST_ASSERT(not renderer->waitOnHost());
+                    PPR_TEST_ASSERT(not renderer->retireCompletedFrames());
+                    if (not read_pixels)
+                        return GatePixels{};
+
+                    const auto pixels = readback_(device, targetRef_(target), output_edge);
+                    PPR_TEST_ASSERT(pixels.has_value());
+                    return *pixels;
+                };
+
+                const auto quality = [&](const GatePixels &pixels, const double pan,
+                                         const double world_period = double(stress_period)) {
+                    // Integrate the world sinusoid over the unjittered pixel
+                    // footprint. This consumed reference is independent of
+                    // temporal filtering and has the correct box-filter MTF.
+                    const double frequency = 2.0 * std::numbers::pi_v<double> / world_period;
+                    const double amplitude = 0.4 * std::sin(frequency * 0.5) / (frequency * 0.5);
+                    double sine = 0.0, cosine = 0.0, error = 0.0;
+                    u32 count = 0u;
+                    for (u32 x = 4u; x + 4u < scene_edge; ++x) {
+                        const double phase = frequency * (pan + double(x) + 0.5);
+                        const double value = double(gateTexel_(pixels, x * scale + scale / 2u, output_edge / 2u)[0]) /
+                                             255.0;
+                        const double centered = value - 0.5;
+                        sine += centered * std::sin(phase);
+                        cosine += centered * std::cos(phase);
+                        error += std::pow(centered - amplitude * std::sin(phase), 2.0);
+                        ++count;
+                    }
+
+                    sine *= 2.0 / double(count);
+                    cosine *= 2.0 / double(count);
+                    return Quality{
+                        std::hypot(sine, cosine) / amplitude, std::atan2(cosine, sine) / frequency,
+                        error / double(count)};
+                };
+
+                const auto reference_pixel = [&](const CameraSnapshot &snapshot, const double pixel_x,
+                                                 const double pixel_y, const double world_period) {
+                    const double slope = snapshot.m_camera_mode == ECameraProjection::perspective
+                                             ? double(perspective_slope)
+                                             : double(orthographic_slope);
+                    const double frequency = 2.0 * std::numbers::pi_v<double> / world_period;
+
+                    double result = 0.0;
+                    for (u32 sy = 0u; sy < 8u; ++sy) {
+                        for (u32 sx = 0u; sx < 8u; ++sx) {
+                            const double ndc_x = (pixel_x + (double(sx) + 0.5) / 8.0) * 2.0 / double(scene_edge) - 1.0;
+                            const double ndc_y = 1.0 - (pixel_y + (double(sy) + 0.5) / 8.0) * 2.0 / double(scene_edge);
+                            const auto unproject = [&](const double depth) {
+                                const std::array<double, 4u> clip{ndc_x, ndc_y, depth, 1.0};
+                                std::array<double, 4u> world{};
+                                for (u32 column = 0u; column < 4u; ++column) {
+                                    for (u32 row = 0u; row < 4u; ++row) {
+                                        world[column] += clip[row] *
+                                                         double(snapshot.m_invert_view_projection[row][column]);
+                                    }
+                                }
+
+                                for (u32 axis = 0u; axis < 3u; ++axis)
+                                    world[axis] /= world[3u];
+
+                                return world;
+                            };
+
+                            const auto near_point = unproject(0.0);
+                            const auto far_point = unproject(1.0);
+                            const double dx = far_point[0u] - near_point[0u];
+                            const double dz = far_point[2u] - near_point[2u];
+                            const double t = (0.2 + slope * near_point[0u] - near_point[2u]) / (dz - slope * dx);
+                            const double world_x = near_point[0u] + dx * t;
+                            result += 0.5 + 0.4 * std::sin(world_x * frequency);
+                        }
+                    }
+
+                    return result / 64.0;
+                };
+
+                const auto transformed_quality = [&](const GatePixels &pixels, const CameraSnapshot &snapshot,
+                                                     const double world_period) {
+                    double reference_energy = 0.0, observed_reference = 0.0, gradient_energy = 0.0;
+                    double residual_gradient = 0.0, error = 0.0;
+                    u32 count = 0u;
+                    for (const u32 y: {scene_edge / 4u, scene_edge / 2u, scene_edge * 3u / 4u}) {
+                        for (u32 x = 4u; x + 4u < scene_edge; ++x) {
+                            const double expected = reference_pixel(snapshot, double(x), double(y), world_period);
+                            const double gradient =
+                                (reference_pixel(snapshot, double(x) + 0.1, double(y), world_period) -
+                                    reference_pixel(snapshot, double(x) - 0.1, double(y), world_period)) /
+                                0.2;
+                            const double observed = double(gateTexel_(
+                                                        pixels, x * scale + scale / 2u, y * scale + scale / 2u)[0]) /
+                                                    255.0;
+                            reference_energy += std::pow(expected - 0.5, 2.0);
+                            observed_reference += (observed - 0.5) * (expected - 0.5);
+                            gradient_energy += gradient * gradient;
+                            residual_gradient += (observed - expected) * gradient;
+                            error += std::pow(observed - expected, 2.0);
+                            ++count;
+                        }
+                    }
+
+                    return Quality{
+                        observed_reference / reference_energy, residual_gradient / gradient_energy,
+                        error / double(count)};
+                };
+
+                const auto max_projected_frequency = [&](const CameraSnapshot &snapshot, const double world_period) {
+                    const double q = std::tan(double(snapshot.m_fov) * 0.5) * double(snapshot.m_aspect_ratio);
+                    const double depth = 0.2 -
+                                         double(snapshot.m_origin.z) +
+                                         double(perspective_slope) * double(snapshot.m_origin.x);
+                    const double slope_q = std::abs(double(perspective_slope) * q);
+                    const double max_world_dx = 2.0 *
+                                                q *
+                                                depth /
+                                                (double(scene_edge) * (1.0 - slope_q) * (1.0 - slope_q));
+                    return max_world_dx / world_period;
+                };
+
+                for (const float speed: {0.125f, 0.5f, 2.25f}) {
+                    constexpr float initial_pan = 17.2f;
+                    for (u32 frame = 0u; frame < 8u; ++frame) {
+                        std::ignore = render(moving, initial_pan, frame == 0u, false);
+                    }
+
+                    GatePixels moving_pixels{};
+                    for (u32 frame = 1u; frame <= 16u; ++frame) {
+                        moving_pixels = render(moving, initial_pan + speed * float(frame), false, frame == 16u);
+                    }
+
+                    const float final_pan = initial_pan + speed * 16.0f;
+                    const Quality motion = quality(moving_pixels, double(final_pan));
+                    const auto current_only = render(fresh, final_pan, true, true);
+                    const Quality current = quality(current_only, double(final_pan));
+                    GatePixels stopped_pixels{};
+                    for (u32 frame = 0u; frame < 32u; ++frame) {
+                        stopped_pixels = render(moving, final_pan, false, frame == 31u);
+                    }
+
+                    const Quality stopped = quality(stopped_pixels, double(final_pan));
+                    std::println(
+                        "TEMPORAL-MOTION pixelized={} speed_internal_pixels={} contrast={} lag_pixels={} mse={} "
+                        "stopped_contrast={} stopped_lag={} stopped_mse={} fresh_mse={}",
+                        pixelized, speed, motion.m_contrast, motion.m_phase_lag_pixels, motion.m_mse,
+                        stopped.m_contrast, stopped.m_phase_lag_pixels, stopped.m_mse, current.m_mse);
+                    motion_quality_passed = motion_quality_passed and
+                                            motion.m_contrast >= 0.85 and
+                                            std::abs(motion.m_phase_lag_pixels) <= 0.15 and
+                                            motion.m_mse <= 0.006;
+                    stopped_quality_passed = stopped_quality_passed and
+                                             stopped.m_contrast >= 0.85 and
+                                             std::abs(stopped.m_phase_lag_pixels) <= 0.15 and
+                                             stopped.m_mse < current.m_mse * 0.6;
+                    saveGridQa_(moving_pixels, std::format("motion-pattern-moving-{}-{}", pixelized, speed));
+                    saveGridQa_(stopped_pixels, std::format("motion-pattern-stopped-{}-{}", pixelized, speed));
+                }
+
+                const std::array cases{"roll", "zoom", "reversal", "perspective-slow", "perspective-fast"};
+                for (u32 scenario = 0u; scenario < cases.size(); ++scenario) {
+                    constexpr float initial_pan = 17.2f;
+                    const bool perspective = scenario >= 3u;
+                    const float world_period = perspective ? representable_period : stress_period;
+                    for (u32 frame = 0u; frame < 8u; ++frame) {
+                        std::ignore = render(
+                            moving, initial_pan, frame == 0u, false, 0.0f, 1.0f, perspective, false, world_period);
+                    }
+
+                    float pan = initial_pan, roll = 0.0f, zoom = 1.0f;
+                    GatePixels pixels{};
+                    for (u32 frame = 1u; frame <= 16u; ++frame) {
+                        if (scenario == 0u)
+                            roll = float(frame) * 0.002f;
+                        else if (scenario == 1u)
+                            zoom = 1.0f - float(frame) * 0.00125f;
+                        else if (scenario == 2u)
+                            pan = initial_pan + float(frame <= 8u ? frame : 16u - frame) * 0.5f;
+                        else
+                            pan = initial_pan + float(frame) * (scenario == 3u ? 0.125f : 2.25f);
+
+                        pixels = render(moving, pan, false, frame == 16u, roll, zoom, perspective, false, world_period);
+                    }
+
+                    const auto snapshot = snapshot_for(pan, roll, zoom, perspective);
+                    const Quality motion = transformed_quality(pixels, snapshot, double(world_period));
+                    const Quality current = transformed_quality(
+                        render(fresh, pan, true, true, roll, zoom, perspective, false, world_period), snapshot,
+                        double(world_period));
+                    GatePixels stopped{};
+                    for (u32 frame = 0u; frame < 32u; ++frame) {
+                        stopped = render(
+                            moving, pan, false, frame == 31u, roll, zoom, perspective, false, world_period);
+                    }
+
+                    const Quality settled = transformed_quality(stopped, snapshot, double(world_period));
+                    const double max_frequency = perspective ? max_projected_frequency(snapshot, double(world_period))
+                                                             : 0.0;
+                    if (perspective)
+                        PPR_TEST_ASSERT(max_frequency < 0.5);
+
+                    std::println(
+                        "TEMPORAL-TRANSFORM pixelized={} case={} period={} max_cycles_per_pixel={} "
+                        "contrast={} lag_pixels={} mse={} "
+                        "stopped_contrast={} stopped_lag={} stopped_mse={} fresh_mse={}",
+                        pixelized, cases[scenario], world_period, max_frequency, motion.m_contrast,
+                        motion.m_phase_lag_pixels, motion.m_mse, settled.m_contrast, settled.m_phase_lag_pixels,
+                        settled.m_mse, current.m_mse);
+                    transformed_quality_passed = transformed_quality_passed and
+                                                 motion.m_contrast >= 0.85 and
+                                                 std::abs(motion.m_phase_lag_pixels) <= 0.2 and
+                                                 motion.m_mse <= 0.008;
+                    stopped_quality_passed = stopped_quality_passed and
+                                             settled.m_contrast >= 0.85 and
+                                             std::abs(settled.m_phase_lag_pixels) <= 0.2 and
+                                             settled.m_mse < current.m_mse * 0.6;
+                    saveGridQa_(pixels, std::format("motion-pattern-transform-{}-{}", pixelized, cases[scenario]));
+                }
+
+                // Period-four perspective stress approaches or exceeds Nyquist
+                // across the cases; report it without applying acceptance gates.
+                for (const float speed: {0.125f, 2.25f}) {
+                    constexpr float initial_pan = 17.2f;
+                    for (u32 frame = 0u; frame < 8u; ++frame) {
+                        std::ignore = render(
+                            moving, initial_pan, frame == 0u, false, 0.0f, 1.0f, true, false, stress_period);
+                    }
+
+                    float pan = initial_pan;
+                    GatePixels pixels{};
+                    for (u32 frame = 1u; frame <= 16u; ++frame) {
+                        pan = initial_pan + speed * float(frame);
+                        pixels = render(moving, pan, false, frame == 16u, 0.0f, 1.0f, true, false, stress_period);
+                    }
+
+                    const auto snapshot = snapshot_for(pan, 0.0f, 1.0f, true);
+                    const Quality motion = transformed_quality(pixels, snapshot, double(stress_period));
+                    const auto fresh_pixels = render(fresh, pan, true, true, 0.0f, 1.0f, true, false, stress_period);
+                    const Quality current = transformed_quality(fresh_pixels, snapshot, double(stress_period));
+                    GatePixels stopped{};
+                    for (u32 frame = 0u; frame < 32u; ++frame) {
+                        stopped = render(moving, pan, false, frame == 31u, 0.0f, 1.0f, true, false, stress_period);
+                    }
+
+                    const Quality settled = transformed_quality(stopped, snapshot, double(stress_period));
+                    const double max_frequency = max_projected_frequency(snapshot, double(stress_period));
+                    std::println(
+                        "TEMPORAL-PERSPECTIVE-STRESS pixelized={} case={} period={} "
+                        "max_cycles_per_pixel={} moving_contrast={} moving_lag_pixels={} moving_mse={} "
+                        "fresh_contrast={} fresh_lag_pixels={} fresh_mse={} "
+                        "stopped_contrast={} stopped_lag_pixels={} stopped_mse={}",
+                        pixelized, speed == 0.125f ? "slow" : "fast", stress_period, max_frequency, motion.m_contrast,
+                        motion.m_phase_lag_pixels, motion.m_mse, current.m_contrast, current.m_phase_lag_pixels,
+                        current.m_mse, settled.m_contrast, settled.m_phase_lag_pixels, settled.m_mse);
+                    saveGridQa_(
+                        pixels,
+                        std::format("motion-pattern-perspective-period4-stress-moving-{}-{}", pixelized, speed));
+                    saveGridQa_(
+                        fresh_pixels,
+                        std::format("motion-pattern-perspective-period4-stress-fresh-{}-{}", pixelized, speed));
+                    saveGridQa_(
+                        stopped,
+                        std::format("motion-pattern-perspective-period4-stress-stopped-{}-{}", pixelized, speed));
+                }
+
+                // Two actual rasterized depth planes produce newly revealed
+                // background under perspective translation. Its gray pattern
+                // must not retain the foreground's distinct red/green colors.
+                for (u32 frame = 0u; frame < 8u; ++frame) {
+                    std::ignore = render(moving, 17.2f, frame == 0u, false, 0.0f, 1.0f, true, true);
+                }
+
+                GatePixels revealed{};
+                for (u32 frame = 1u; frame <= 16u; ++frame) {
+                    revealed = render(moving, 17.2f + float(frame) * 0.5f, false, frame == 16u, 0.0f, 1.0f, true, true);
+                }
+
+                const auto revealed_reference = render(fresh, 25.2f, true, true, 0.0f, 1.0f, true, true);
+                u32 revealed_samples = 0u;
+                for (u32 x = scene_edge / 2u + 2u; x <= scene_edge / 2u + 6u; ++x) {
+                    const auto actual = gateTexel_(revealed, x * scale + scale / 2u, output_edge / 2u);
+                    const auto reference = gateTexel_(revealed_reference, x * scale + scale / 2u, output_edge / 2u);
+                    PPR_TEST_ASSERT(std::abs(int(reference[0u]) - int(reference[1u])) <= 1);
+                    PPR_TEST_ASSERT(std::abs(int(actual[0u]) - int(actual[1u])) <= 2);
+                    PPR_TEST_ASSERT(std::abs(int(actual[1u]) - int(actual[2u])) <= 2);
+                    ++revealed_samples;
+                }
+
+                const auto foreground = gateTexel_(
+                    revealed, (scene_edge / 2u - 3u) * scale + scale / 2u, output_edge / 2u);
+                PPR_TEST_ASSERT(foreground[0u] > 220u and foreground[1u] < 30u);
+                std::println("TEMPORAL-DISOCCLUSION pixelized={} revealed_samples={}", pixelized, revealed_samples);
+                saveGridQa_(revealed, std::format("motion-pattern-disocclusion-{}", pixelized));
+            }
+
+            PPR_TEST_ASSERT(motion_quality_passed);
+            PPR_TEST_ASSERT(stopped_quality_passed);
+            PPR_TEST_ASSERT(transformed_quality_passed);
+        };
 
         void addAdjacentGridChunk_(GridPass::GridStagedFrame &stage) {
             stage.m_tiles.push_back(
@@ -1908,6 +2745,117 @@ namespace pP::tests::detail {
                     names[scenario], edge, sample_frames, samples.front(), samples[sample_frames / 2u], samples.back(),
                     mean, observations.m_texture_decoded_bytes, observations.m_particle_buffer_bytes,
                     observations.m_background_target_bytes);
+            }
+        };
+
+        PPR_UNIT_TEST (picture_temporal_cost_samples) {
+            const auto rhi = SharedGpu::rhiService();
+            const auto shader = SharedGpu::shaderService();
+            Renderer *const renderer = SharedGpu::renderer();
+            PPR_TEST_ASSERT(rhi.isValid() and shader.isValid() and renderer != nullptr);
+            auto &device = rhi->getDevice();
+            constexpr u32 edge = 1024u;
+            constexpr u32 warm_frames = 5u;
+            constexpr u32 sample_frames = 5u;
+            const auto target = makeRenderTarget_(device, edge);
+            PPR_TEST_ASSERT(target.has_value());
+            GridPass grid;
+            RetroPass picture;
+            PPR_TEST_ASSERT(not grid.initialize(*rhi, *shader, std::filesystem::current_path()));
+            PPR_TEST_ASSERT(not picture.initialize(*rhi, *shader, std::filesystem::current_path()));
+            PPR_DEFER {
+                PPR_TEST_ASSERT(not renderer->waitOnHost());
+                PPR_TEST_ASSERT(not renderer->retireCompletedFrames());
+                PPR_TEST_ASSERT(not picture.shutdown());
+                PPR_TEST_ASSERT(not grid.shutdown());
+            };
+
+            GridTerrainVisual visual{};
+            visual.m_material_id = 1u;
+            visual.m_color_rgba = 0x7090b080u;
+            visual.m_texture_index = 0u;
+            visual.m_texture_period_m = 8.0f;
+            visual.m_surface_flags = kGridSurfaceOpticalBlend | kGridSurfaceTextureRepeat;
+            visual.m_opacity = 0.5f;
+            visual.m_ior = 1.0f;
+            std::ignore = captureOpticalGrid_(grid, opticalGridFixture_(visual, 1u, true), 1u);
+            std::println(
+                "TEMPORAL-COST device_type={} core_validation={} gpu_assisted_validation={} output_edge={}",
+                static_cast<int>(device.getDeviceType()), rhi->isCoreValidationEnabled(),
+                rhi->isGpuAssistedValidationEnabled(), edge);
+
+            for (const bool pixelized: {false, true}) {
+                const u32 scene_edge = pixelized ? edge / 4u : edge;
+                const auto viewport = rhi::Viewport::fromSize(float(scene_edge), float(scene_edge));
+                const auto scissor = rhi::ScissorRect::fromSize(scene_edge, scene_edge);
+                CameraModel model{};
+                model.m_camera_mode = ECameraProjection::orthographic;
+                model.m_origin = float3{56.0f, 56.0f, -0.5f};
+                model.m_ortho_scale = 16.0f / static_cast<float>(scene_edge);
+                Camera camera{ECameraProjection::orthographic};
+                camera.updateModel(TimeSpan{}, model, Viewport{PixelRect{0, 0, int(scene_edge), int(scene_edge)}});
+                auto snapshot = camera.getSnapshot();
+                snapshot.m_has_camera_cut = false;
+
+                for (const bool temporal: {false, true}) {
+                    const RetroSettings settings{
+                        .m_enabled = pixelized,
+                        .m_palette_enabled = pixelized,
+                        .m_temporal_enabled = temporal,
+                        .m_pixel_scale = 4u};
+                    const bool offscreen = pixelized or temporal;
+                    std::array<float, sample_frames> samples{};
+                    for (u32 frame = 0u; frame < warm_frames + sample_frames; ++frame) {
+                        const CameraSnapshot raster = picture.beginFrame(
+                            settings, snapshot, int2{int(scene_edge), int(scene_edge)}, grid.worldGeneration());
+                        PPR_TEST_ASSERT(picture.temporalActive() == temporal);
+                        PPR_TEST_ASSERT(not grid.update(TimeSpan{}, raster));
+                        const auto draw_content = [&](const DrawContext &context) -> std::error_code {
+                            PPR_RETURN_ERROR_ON_FAIL(GridMaterialGate, grid.renderBackground(context));
+                            return grid.render(context);
+                        };
+                        const auto prepare = [&](const PreRenderContext &context) -> std::error_code {
+                            PPR_RETURN_ERROR_ON_FAIL(
+                                GridMaterialGate, grid.prepareBackground(context, snapshot, viewport, scissor));
+                            if (offscreen) {
+                                return picture.prepareScene(
+                                    context, RetroPass::scenePipelineSignature(temporal),
+                                    int2{int(scene_edge), int(scene_edge)}, DrawCallback{draw_content});
+                            }
+
+                            return {};
+                        };
+                        const auto present = [&](const DrawContext &context) {
+                            return offscreen ? picture.render(context) : draw_content(context);
+                        };
+
+                        // Keep targets, world, and pass resources alive across
+                        // warmup/samples; readback is outside this measured loop.
+                        PPR_TEST_ASSERT(not renderer->renderToTexture(
+                            targetRef_(target), {DrawSubmission{"temporal picture cost", present}}, {},
+                            PreRenderCallback{prepare}));
+                        const auto submitted = renderer->lastSubmittedFenceValue();
+                        grid.notifyFrameSubmitted(submitted);
+                        if (offscreen)
+                            picture.notifyFrameSubmitted(submitted);
+                        PPR_TEST_ASSERT(not renderer->waitOnHost());
+                        PPR_TEST_ASSERT(not renderer->retireCompletedFrames());
+                        const auto timing = renderer->lastGpuFrameTiming();
+                        PPR_TEST_ASSERT(timing.has_value() and timing->m_submission == submitted);
+                        PPR_TEST_ASSERT(std::isfinite(timing->m_milliseconds) and timing->m_milliseconds >= 0.0f);
+                        if (frame >= warm_frames) {
+                            samples[frame - warm_frames] = timing->m_milliseconds;
+                        }
+                    }
+
+                    std::ranges::sort(samples);
+                    const float mean = std::accumulate(samples.begin(), samples.end(), 0.0f) / float(sample_frames);
+                    std::println(
+                        "TEMPORAL-COST pixelized={} palette={} temporal={} scene_edge={} samples={} "
+                        "gpu_ms_min={} median={} max={} mean={}",
+                        pixelized, settings.m_palette_enabled, temporal, scene_edge, sample_frames, samples.front(),
+                        samples[sample_frames / 2u], samples.back(), mean);
+                }
             }
         };
 
@@ -3061,8 +4009,13 @@ namespace pP::tests {
             detail::Gate::grid_resident_circle_mask_motion_overlap_occlusion_and_leases,
             detail::Gate::grid_candidate_world_retains_active_until_matching_activation,
             detail::Gate::grid_optical_controls_and_four_layer_parallax,
+            detail::Gate::picture_controls_preserve_independent_color_and_temporal_history,
+            detail::Gate::background_magnification_matches_wrapped_cubic_reference,
+            detail::Gate::temporal_layered_background_pan_uses_stable_spatial_fallback,
+            detail::Gate::temporal_camera_pan_preserves_pattern_contrast_and_phase,
             detail::Gate::grid_particle_support_and_resource_repeat,
             detail::Gate::grid_material_shading_cost_samples,
+            detail::Gate::picture_temporal_cost_samples,
             detail::Gate::grid_stochastic_world_uvs_mips_and_chunk_seams,
             detail::Gate::grid_translucent_solid_borders_and_internal_boundaries,
         });
