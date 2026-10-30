@@ -675,6 +675,10 @@ namespace pP::game::tests::detail::compat {
     };
 
     PPR_UNIT_TEST (simulation_tools_resolve_bounded_physical_settings) {
+        Diagnostics defaults;
+        const auto normal = resolveCli({}, defaults);
+        PPR_TEST_ASSERT(normal and normal->m_game.m_value.m_tool_acceleration_m_s2 == 100.0);
+
         Diagnostics diagnostics;
         const auto configured = resolveCli(
             {"--tool-radius=3.5", "--tool-strength=0", "--spawn-count=4096", "--spawn-material=addon:sand"},

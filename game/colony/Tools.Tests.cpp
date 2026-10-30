@@ -17,6 +17,7 @@ namespace pP::game::tests::detail::tools {
 
     PPR_UNIT_TEST (settings_domains_and_disabled_driver_cleanup) {
         ToolSettings settings{};
+        PPR_TEST_ASSERT(settings.m_acceleration_m_s2 == 100.0);
         PPR_TEST_ASSERT(not validateToolSettings(settings));
 
         settings.m_radius_m = 1.0 / 3.0;

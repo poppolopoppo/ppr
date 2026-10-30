@@ -54,7 +54,7 @@ export namespace pP::game {
         std::optional<std::string> m_worldgen_gpu_output{};
         std::string m_worldgen_profile{"frontier"};
         std::string m_tool_spawn_material{"water"};
-        double m_tool_radius_m{2.0}, m_tool_acceleration_m_s2{20.0};
+        double m_tool_radius_m{2.0}, m_tool_acceleration_m_s2{100.0};
         u64 m_worldgen_seed{42u};
         u32 m_tool_spawn_count{64u};
         u32 m_map_size{4096u};

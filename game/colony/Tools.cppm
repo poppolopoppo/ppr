@@ -11,7 +11,7 @@ export namespace pP::colony {
     struct ToolSettings {
         std::string m_spawn_material{"water"};
         double m_radius_m{2.0};
-        double m_acceleration_m_s2{20.0};
+        double m_acceleration_m_s2{100.0};
         u32 m_spawn_count{64u};
     };
 
