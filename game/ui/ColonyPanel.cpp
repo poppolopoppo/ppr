@@ -1281,19 +1281,26 @@ namespace pP::colony {
             const float top) {
             const auto &io = ImGui::GetIO();
             const float fs = ImGui::GetFontSize();
-            const float width = std::min(fs * 2.875f, io.DisplaySize.x);
-            const float height = std::max(
-                1.0f, std::min(fs * 18.5f + ImGui::GetStyle().ItemSpacing.y * 7.0f, (io.DisplaySize.y - top) * 0.5f));
+            constexpr std::array tools{
+                EColonyTool::inspect, EColonyTool::dig, EColonyTool::build_wall, EColonyTool::demolish,
+                EColonyTool::push, EColonyTool::pull, EColonyTool::spawn, EColonyTool::destroy};
+            const auto &style = ImGui::GetStyle();
+            const float tool_count = static_cast<float>(tools.size());
+            const float padding = fs * 0.25f;
+            const float frame = (padding + style.WindowBorderSize) * 2.0f;
+            const float gaps = style.ItemSpacing.y * static_cast<float>(tools.size() - 1u);
+            const float available_height = std::max(1.0f, io.DisplaySize.y - top);
+            const float button_size = std::max(
+                1.0f, std::floor(std::min(fs * 2.25f, (available_height - frame - gaps) / tool_count)));
+            const float width = std::min(button_size + frame, io.DisplaySize.x);
+            const float height = button_size * tool_count + gaps + frame;
+
             ImGui::SetNextWindowPos(ImVec2{0.0f, top}, ImGuiCond_Always);
             ImGui::SetNextWindowSize(ImVec2{width, height}, ImGuiCond_Always);
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{fs * 0.25f, fs * 0.25f});
-            ImGui::Begin(
-                "##tool_rail", nullptr,
-                kChromeFlags & ~(ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse));
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{padding, padding});
+            ImGui::Begin("##tool_rail", nullptr, kChromeFlags);
 
-            for (const auto tool:
-                {EColonyTool::inspect, EColonyTool::dig, EColonyTool::build_wall, EColonyTool::demolish,
-                    EColonyTool::push, EColonyTool::pull, EColonyTool::spawn, EColonyTool::destroy}) {
+            for (const auto tool: tools) {
                 const bool selected = state.m_tool == tool;
                 const auto icon = tool == EColonyTool::inspect      ? ui::icons::kInspectLabel
                                   : tool == EColonyTool::dig        ? ui::icons::kDigLabel
@@ -1312,7 +1319,7 @@ namespace pP::colony {
                 }
 
                 ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, selected ? 2.0f : 1.0f);
-                const bool pressed = ImGui::Button(label, ImVec2{fs * 2.25f, fs * 2.25f});
+                const bool pressed = ImGui::Button(label, ImVec2{button_size, button_size});
                 ImGui::PopStyleVar();
                 if (selected) {
                     ImGui::PopStyleColor(3);

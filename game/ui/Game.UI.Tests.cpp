@@ -161,7 +161,8 @@ namespace pP::game::tests::detail::presentation {
             const float available_height = extent.y - frame.m_chrome_top - frame.m_chrome_bottom;
             PPR_TEST_ASSERT(summary->Size.y <= available_height);
             const ImGuiWindow *const rail = ImGui::FindWindowByName("##tool_rail");
-            PPR_TEST_ASSERT(rail != nullptr and rail->Size.y < available_height * 0.6f);
+            PPR_TEST_ASSERT(rail != nullptr and rail->Size.y <= available_height);
+            PPR_TEST_ASSERT(not rail->ScrollbarY and rail->ScrollMax.y == 0.0f);
             PPR_TEST_ASSERT(ImGui::FindWindowByName("##side") == nullptr);
             PPR_TEST_ASSERT(ImGui::FindWindowByName("##status") == nullptr);
             PPR_TEST_ASSERT(ui::isWorldPoint(float2{8.0f, extent.y - 8.0f}, client, chrome));
@@ -468,6 +469,68 @@ namespace pP::game::tests::detail::presentation {
     // ------------------------------------------------------------------
     // simulation brush controls
     // ------------------------------------------------------------------
+
+    PPR_UNIT_TEST (all_eight_tools_are_reachable_without_scroll_at_normal_and_short_heights) {
+        for (const ImVec2 extent: {ImVec2{1280.0f, 720.0f}, ImVec2{640.0f, 480.0f}, ImVec2{480.0f, 320.0f}}) {
+            ImGuiContext *const context = ImGui::CreateContext();
+            PPR_DEFER {
+                ImGui::DestroyContext(context);
+            };
+            auto &io = ImGui::GetIO();
+            io.IniFilename = nullptr;
+            io.DisplaySize = extent;
+            io.DeltaTime = 1.0f / 60.0f;
+            unsigned char *pixels{};
+            int width{}, height{};
+            io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+
+            colony::ColonyPresentation snapshot{.m_speed = 1u};
+            const colony::ColonyUiView view{.m_colony = &snapshot};
+            colony::ColonyUiState state{};
+            state.m_colony_open = false;
+            const auto frame = [&]() {
+                ImGui::NewFrame();
+                const auto result = colony::drawColonyUi(view, {}, {}, state);
+                ImGui::Render();
+                return result;
+            };
+
+            std::ignore = frame();
+            std::ignore = frame();
+            auto *const rail = ImGui::FindWindowByName("##tool_rail");
+            PPR_TEST_ASSERT(rail != nullptr and rail->Active);
+            const ImVec2 original_size = rail->Size;
+            const float gap = ImGui::GetStyle().ItemSpacing.y;
+            const float edge = rail->ContentSize.x;
+            PPR_TEST_ASSERT(edge > 0.0f and rail->Pos.y + rail->Size.y <= extent.y);
+            PPR_TEST_ASSERT(not rail->ScrollbarY and rail->ScrollMax.y == 0.0f and rail->Scroll.y == 0.0f);
+
+            for (u32 index = 0u; index < 8u; ++index) {
+                const ImVec2 position{
+                    rail->DC.CursorStartPos.x + edge * 0.5f,
+                    rail->DC.CursorStartPos.y + static_cast<float>(index) * (edge + gap) + edge * 0.5f};
+                PPR_TEST_ASSERT(rail->ClipRect.Contains(position));
+                io.AddMousePosEvent(position.x, position.y);
+                std::ignore = frame();
+                io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+                std::ignore = frame();
+                io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+                const auto selected = frame();
+                const auto expected = index == 1u   ? colony::EColonyIntent::toggle_dig
+                                      : index == 2u ? colony::EColonyIntent::open_build_menu
+                                                    : colony::EColonyIntent::select_tool;
+                PPR_TEST_ASSERT(selected.m_intent and selected.m_intent->m_kind == expected);
+                if (expected == colony::EColonyIntent::select_tool) {
+                    PPR_TEST_ASSERT(selected.m_intent->m_arg == index);
+                }
+
+                state.m_tool = static_cast<colony::EColonyTool>(index);
+                std::ignore = frame();
+                PPR_TEST_ASSERT(rail->Size.x == original_size.x and rail->Size.y == original_size.y);
+                PPR_TEST_ASSERT(not rail->ScrollbarY and rail->ScrollMax.y == 0.0f and rail->Scroll.y == 0.0f);
+            }
+        }
+    };
 
     PPR_UNIT_TEST (particle_tool_controls_select_and_edit_independent_settings_while_paused) {
         ImGuiContext *const context = ImGui::CreateContext();
@@ -1139,6 +1202,7 @@ namespace pP::game::tests {
             detail::presentation::colony_and_performance_visibility_are_independent,
             detail::presentation::inspector_is_a_passive_pointer_readout_only_in_inspect_mode,
             detail::presentation::native_menu_click_opens_utilities_and_display_emits_one_intent,
+            detail::presentation::all_eight_tools_are_reachable_without_scroll_at_normal_and_short_heights,
             detail::presentation::particle_tool_controls_select_and_edit_independent_settings_while_paused,
             detail::presentation::workspace_tile_navigation_commits_old_text_and_numeric_edits,
             detail::presentation::workspace_identity_survives_filter_revision_and_native_game_actions_are_distinct,

@@ -50,6 +50,10 @@ Font Awesome `?` affordance. It draws on the icon-merged body face and carries
 its explanation in the hover tooltip. Panels use it for control documentation;
 data, status, error, section-header and field-label text remain visible.
 
+The tool rail shows all eight square tool buttons without scrolling. Short
+viewports reduce button size so every tool remains reachable; selecting tools
+or expanding their context leaves the rail geometry unchanged.
+
 ## Lifetime and cost
 
 `ColonyPresentation` copies scalar and queried-cell values. Its names and the
