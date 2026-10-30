@@ -77,7 +77,7 @@ namespace pP::game::tests::detail::compat {
     PPR_UNIT_TEST (map_size_uses_one_numeric_domain_for_cli_and_toml) {
         Diagnostics defaults;
         const auto normal = resolveCli({}, defaults);
-        PPR_TEST_ASSERT(normal and normal->m_game.m_value.m_map_size == 4096u);
+        PPR_TEST_ASSERT(normal and normal->m_game.m_value.m_map_size == 2048u);
         PPR_TEST_ASSERT(gameHelpText().find("map-size") != std::string::npos);
 
         for (const u32 edge: {1024u, 2048u, 4096u}) {

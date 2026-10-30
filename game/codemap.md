@@ -159,7 +159,7 @@ existing checkpoint GPU restore leaf uses an admitted queued/ready resume across
 multiple host-style turns to exercise that same production routing predicate.
 
 Map size is startup policy (`--map-size` / `game.map_size`): 1024, 2048 or
-4096 fine cells per edge, default4096. Explicit per-world bounds travel through
+4096 fine cells per edge, default 2048. Explicit per-world bounds travel through
 generation, prepared descriptors, grid/particle state and checkpoint formats;
 maximum-stride chunk identities remain stable. Smaller maps retain the same
 physical cell and actor scale.

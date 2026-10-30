@@ -57,7 +57,7 @@ export namespace pP::game {
         double m_tool_radius_m{2.0}, m_tool_acceleration_m_s2{100.0};
         u64 m_worldgen_seed{42u};
         u32 m_tool_spawn_count{64u};
-        u32 m_map_size{4096u};
+        u32 m_map_size{2048u};
         EGameCommand m_command{EGameCommand::interactive};
         bool m_worldgen_report{}, m_worldgen_acceptance{};
 

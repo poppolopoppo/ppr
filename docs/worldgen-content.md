@@ -423,7 +423,7 @@ adopt the complete owner without regenerating. The production job builds and pub
 ## Map size
 
 `--map-size=1024`, `--map-size=2048` and `--map-size=4096` select the square
-map edge in fine cells; 4096 is the default. The same startup setting is
+map edge in fine cells; 2048 is the default. The same startup setting is
 `game.map_size` in TOML or `PPR_GAME__MAP_SIZE` in the environment. It applies
 to interactive New Games, Workshop previews and headless generation. Existing
 worlds retain their own dimensions; changing startup settings does not resize a

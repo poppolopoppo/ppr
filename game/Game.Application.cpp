@@ -214,7 +214,7 @@ namespace demo {
         TimePoint m_observation_start{};
         std::optional<TimePoint> m_last_update_observed{}, m_last_presentation_observed{};
         u32 m_last_update_phase{};
-        u32 m_map_size{sim::kWorldEdge};
+        u32 m_map_size{2048u};
         TimeSpan m_last_update_work{};
         std::optional<TimePoint> m_first_loading_observed{}, m_first_world_observed{};
         TimeSpan m_max_control_work{};
