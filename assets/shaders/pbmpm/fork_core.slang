@@ -5,6 +5,10 @@ struct Hot { float px, py, dx, dy; SourceMatrix F, D; float J, logJp, lambda, en
 struct Cold { float mass, volume, material, r, g, b; };
 struct Bucket { uint start, count, x, y; };
 ConstantBuffer<Parameters> g_parameters;
+#ifdef PBMPM_ENGINE_ADAPTERS
+struct RadialForce { float centerX, centerY, radius, acceleration; };
+ConstantBuffer<RadialForce> g_radial_force;
+#endif
 RWStructuredBuffer<Hot> g_hot;
 StructuredBuffer<Cold> g_cold;
 StructuredBuffer<StaticShape> g_shapes;
@@ -185,6 +189,21 @@ Particle integration(Particle p, uint row) {
 #endif
     float2 d=float2(p.displacementX,p.displacementY);
     d.y-=float(g_parameters.gridHeight)*g_parameters.gravityStrength*g_parameters.deltaTime*g_parameters.deltaTime;
+#ifdef PBMPM_ENGINE_ADAPTERS
+    // The source/no-force path retains its arithmetic. Acceleration enters only
+    // integration (iteration1), after gather and before endpoint constraints.
+    if (g_radial_force.acceleration != 0.0) {
+        float2 offset = float2(p.positionX, p.positionY) - float2(g_radial_force.centerX, g_radial_force.centerY);
+        float squaredDistance = dot(offset, offset);
+        if (squaredDistance > 0.0 && squaredDistance < g_radial_force.radius * g_radial_force.radius) {
+            float distance = sqrt(squaredDistance);
+            float falloff = 1.0 - distance / g_radial_force.radius;
+            float stepAcceleration = g_radial_force.acceleration * g_parameters.deltaTime * g_parameters.deltaTime;
+            d += (offset / distance) * (falloff * falloff * stepAcceleration);
+        }
+    }
+#endif
+
     for (uint i=0;i<g_parameters.shapeCount;++i) {
         Contact contact=collide(g_shapes[i],position);
         if (contact.collides) d-=contact.penetration*contact.normal;

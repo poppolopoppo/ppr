@@ -443,7 +443,8 @@ namespace pP::matter {
             return {};
         }
 
-        std::error_code bindAndDispatch(rhi::ICommandEncoder &encoder, const u32 iteration) {
+        std::error_code bindAndDispatch(
+            rhi::ICommandEncoder &encoder, const u32 iteration, const GpuRadialForce &force) {
             Kernel &kernel = m_kernels[iteration];
             const u32 dispatch_index = m_substep * 2u + iteration;
             rhi::IShaderObject *const root = m_dispatch_roots[dispatch_index].get();
@@ -453,6 +454,11 @@ namespace pP::matter {
             constants.m_reserved0 = iteration;
             PPR_RETURN_ERROR_ON_FAIL(MatterGpu, cursor["g_parameters"].getDereferenced(parameters));
             PPR_RETURN_ERROR_ON_FAIL(MatterGpu, parameters.setData(&constants, sizeof(constants)));
+
+            if (iteration == 1u) {
+                PPR_RETURN_ERROR_ON_FAIL(MatterGpu, cursor["g_radial_force"].getDereferenced(parameters));
+                PPR_RETURN_ERROR_ON_FAIL(MatterGpu, parameters.setData(&force, sizeof(force)));
+            }
 
             const auto sparse = m_particles.m_sparse.constants(iteration != 0u);
             const auto &buffers = m_particles.m_sparse.buffers();
@@ -658,18 +664,19 @@ namespace pP::matter {
 
     std::error_code GpuSolver::prepareReplacement(
         const std::span<const GpuParticle> particles, const std::span<const GpuStaticShape> shapes,
-        const u64 expected_epoch, const TerrainView terrain) {
-        return prepareReplacement_(particles, shapes, expected_epoch, terrain, false);
+        const u64 expected_epoch, const TerrainView terrain, const ETerrainUpdate terrain_update) {
+        return prepareReplacement_(particles, shapes, expected_epoch, terrain, false, terrain_update);
     }
 
     std::error_code GpuSolver::prepareAppend(
-        const std::span<const GpuParticle> appended, const u64 expected_epoch, const TerrainView terrain) {
-        return prepareReplacement_(appended, {}, expected_epoch, terrain, true);
+        const std::span<const GpuParticle> appended, const u64 expected_epoch, const TerrainView terrain,
+        const ETerrainUpdate terrain_update) {
+        return prepareReplacement_(appended, {}, expected_epoch, terrain, true, terrain_update);
     }
 
     std::error_code GpuSolver::prepareReplacement_(
         const std::span<const GpuParticle> particles, const std::span<const GpuStaticShape> shapes,
-        const u64 expected_epoch, const TerrainView terrain, const bool append) {
+        const u64 expected_epoch, const TerrainView terrain, const bool append, const ETerrainUpdate terrain_update) {
         PPR_RETURN_ERROR_ON_FAIL(
             MatterGpu,
             m_state and not busy() ? std::error_code{} : std::make_error_code(std::errc::device_or_resource_busy));
@@ -684,6 +691,18 @@ namespace pP::matter {
             particles.size() <= std::numeric_limits<u32>::max() and shapes.size() <= std::numeric_limits<u32>::max()
                 ? std::error_code{}
                 : std::make_error_code(std::errc::value_too_large));
+
+        const bool preserve_terrain = terrain_update == ETerrainUpdate::preserve;
+        const bool empty_terrain_input = terrain.m_masks.empty() and
+                                         terrain.m_width == 0u and
+                                         terrain.m_height == 0u and
+                                         terrain.m_origin_x == 0.0f and
+                                         terrain.m_origin_y == 0.0f;
+        PPR_RETURN_ERROR_ON_FAIL(
+            MatterGpu, (terrain_update == ETerrainUpdate::replace or preserve_terrain) and
+                               (not preserve_terrain or empty_terrain_input)
+                           ? std::error_code{}
+                           : std::make_error_code(std::errc::invalid_argument));
 
         const u32 old_count = append ? state.m_profile.m_particle_count : 0u;
         PPR_RETURN_ERROR_ON_FAIL(
@@ -739,8 +758,13 @@ namespace pP::matter {
                                                              : std::make_error_code(std::errc::invalid_argument));
 
         const hal::ProfileScope scope{"Matter.Gpu.PrepareReplacement"};
-        const auto packed_terrain = packTerrain(terrain);
-        PPR_RETURN_ERROR_ON_FAIL(MatterGpu, packed_terrain);
+        PackedTerrain packed_terrain;
+        if (not preserve_terrain) {
+            auto packed = packTerrain(terrain);
+            PPR_RETURN_ERROR_ON_FAIL(MatterGpu, packed);
+
+            packed_terrain = std::move(*packed);
+        }
 
         ParticleStorage replacement;
         replacement.m_particle_count = old_count + static_cast<u32>(particles.size());
@@ -752,14 +776,36 @@ namespace pP::matter {
                            state.m_profile.m_grid_width, state.m_profile.m_grid_height));
 
         replacement.m_shape_count = static_cast<u32>(shapes.size());
-        replacement.m_environment.m_terrain_width = terrain.m_width;
-        replacement.m_environment.m_terrain_height = terrain.m_height;
-        replacement.m_environment.m_terrain_origin_x = terrain.m_origin_x;
-        replacement.m_environment.m_terrain_origin_y = terrain.m_origin_y;
-        replacement.m_environment.m_has_terrain = terrain_present ? 1u : 0u;
-        // Canonical masks and this existence witness publish/cancel together.
-        replacement.m_environment.m_reserved =
-            std::ranges::any_of(packed_terrain->m_boundary_tiles, [](const u32 word) { return word != 0u; }) ? 1u : 0u;
+        if (preserve_terrain) {
+            replacement.m_environment = state.m_particles.m_environment;
+            replacement.m_terrain_masks = state.m_particles.m_terrain_masks;
+            replacement.m_terrain_boundary_tiles = state.m_particles.m_terrain_boundary_tiles;
+        } else {
+            replacement.m_environment.m_terrain_width = terrain.m_width;
+            replacement.m_environment.m_terrain_height = terrain.m_height;
+            replacement.m_environment.m_terrain_origin_x = terrain.m_origin_x;
+            replacement.m_environment.m_terrain_origin_y = terrain.m_origin_y;
+            replacement.m_environment.m_has_terrain = terrain_present ? 1u : 0u;
+            // Canonical masks and this existence witness publish/cancel together.
+            replacement.m_environment.m_reserved = std::ranges::any_of(
+                                                       packed_terrain.m_boundary_tiles,
+                                                       [](const u32 word) { return word != 0u; })
+                                                       ? 1u
+                                                       : 0u;
+
+            if (terrain_present) {
+                PPR_RETURN_ERROR_ON_FAIL(
+                    MatterGpu,
+                    createBuffer(
+                        *state.m_device, packed_terrain.m_masks.size() * sizeof(u32), sizeof(u32),
+                        packed_terrain.m_masks.data(), "PBMPM contour cell bins", replacement.m_terrain_masks));
+                PPR_RETURN_ERROR_ON_FAIL(
+                    MatterGpu, createBuffer(
+                                   *state.m_device, packed_terrain.m_boundary_tiles.size() * sizeof(u32), sizeof(u32),
+                                   packed_terrain.m_boundary_tiles.data(), "PBMPM contour boundary tiles",
+                                   replacement.m_terrain_boundary_tiles));
+            }
+        }
 
         // Named-field packing is the only crossing between the semantic record and
         // the split device rows; all six compact cold fields remain FP32.
@@ -814,18 +860,6 @@ namespace pP::matter {
             MatterGpu, createBuffer(
                            *state.m_device, replacement.m_hot_bytes + replacement.m_cold_bytes + kErrorBytes, 0u,
                            nullptr, "PBMPM tick readback", replacement.m_readback, true));
-
-        if (terrain_present) {
-            PPR_RETURN_ERROR_ON_FAIL(
-                MatterGpu, createBuffer(
-                               *state.m_device, packed_terrain->m_masks.size() * sizeof(u32), sizeof(u32),
-                               packed_terrain->m_masks.data(), "PBMPM contour cell bins", replacement.m_terrain_masks));
-            PPR_RETURN_ERROR_ON_FAIL(
-                MatterGpu, createBuffer(
-                               *state.m_device, packed_terrain->m_boundary_tiles.size() * sizeof(u32), sizeof(u32),
-                               packed_terrain->m_boundary_tiles.data(), "PBMPM contour boundary tiles",
-                               replacement.m_terrain_boundary_tiles));
-        }
 
         const u64 row_bytes = sizeof(ParticleWrite) + sizeof(ParticleReadonly);
         state.m_accounting.m_last_particle_upload_bytes = particles.size() * row_bytes;
@@ -979,7 +1013,7 @@ namespace pP::matter {
 
     std::error_code GpuSolver::submitResidentTick(
         const u64 expected_epoch, const u32 substeps, const u32 iterations,
-        const std::span<const GpuBodyBoundary> predicted_boundaries, const u32 body_count) {
+        const std::span<const GpuBodyBoundary> predicted_boundaries, const u32 body_count, const GpuRadialForce force) {
         PPR_RETURN_ERROR_ON_FAIL(
             MatterGpu,
             m_state and not busy() ? std::error_code{} : std::make_error_code(std::errc::device_or_resource_busy));
@@ -994,6 +1028,25 @@ namespace pP::matter {
                                iterations == kSourceIterations and
                                substeps <= std::numeric_limits<u32>::max() / 2u and
                                state.m_next_signal != std::numeric_limits<u64>::max()
+                           ? std::error_code{}
+                           : std::make_error_code(std::errc::invalid_argument));
+
+        const bool finite_force = std::isfinite(force.m_center_x) and
+                                  std::isfinite(force.m_center_y) and
+                                  std::isfinite(force.m_radius) and
+                                  std::isfinite(force.m_acceleration);
+        const bool enabled_force_valid =
+            force.m_acceleration == 0.0f or
+            (force.m_radius > 0.0f and
+                force.m_center_x >= 0.0f and
+                force.m_center_y >= 0.0f and
+                force.m_center_x <= static_cast<float>(state.m_profile.m_grid_width) and
+                force.m_center_y <= static_cast<float>(state.m_profile.m_grid_height) and
+                force.m_radius <=
+                    static_cast<float>(std::max(state.m_profile.m_grid_width, state.m_profile.m_grid_height)) and
+                std::isfinite(force.m_acceleration * state.m_profile.m_delta_time * state.m_profile.m_delta_time));
+        PPR_RETURN_ERROR_ON_FAIL(
+            MatterGpu, finite_force and force.m_radius >= 0.0f and enabled_force_valid
                            ? std::error_code{}
                            : std::make_error_code(std::errc::invalid_argument));
 
@@ -1157,7 +1210,7 @@ namespace pP::matter {
                             encoder->popDebugGroup();
                         };
 
-                        PPR_RETURN_ERROR_ON_FAIL(MatterGpu, state.bindAndDispatch(*encoder, iteration));
+                        PPR_RETURN_ERROR_ON_FAIL(MatterGpu, state.bindAndDispatch(*encoder, iteration, force));
                         if (timing)
                             timing->mark(*encoder);
                     }
@@ -1548,10 +1601,11 @@ namespace pP::matter {
             }
 
             result.m_readback_capacity_bytes += replacement.m_hot_bytes + replacement.m_cold_bytes + kErrorBytes;
-            if (replacement.m_terrain_masks)
+            if (replacement.m_terrain_masks and replacement.m_terrain_masks != particles.m_terrain_masks)
                 result.m_device_bytes += replacement.m_terrain_masks->getDesc().size;
 
-            if (replacement.m_terrain_boundary_tiles)
+            if (replacement.m_terrain_boundary_tiles and
+                replacement.m_terrain_boundary_tiles != particles.m_terrain_boundary_tiles)
                 result.m_device_bytes += replacement.m_terrain_boundary_tiles->getDesc().size;
         }
 

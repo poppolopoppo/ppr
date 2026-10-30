@@ -925,9 +925,10 @@ namespace pP::colony {
     }
 
     Expected<MatterRequest> MatterRuntime::beginSubmitResident(
-        const MatterIdentity source, Array<matter::GpuBodyBoundary> bodies, const u32 body_count) {
+        const MatterIdentity source, Array<matter::GpuBodyBoundary> bodies, const u32 body_count,
+        const matter::GpuRadialForce force) {
         const auto state = m_state;
-        return enqueue([state, source, bodies = std::move(bodies), body_count]() -> std::error_code {
+        return enqueue([state, source, bodies = std::move(bodies), body_count, force]() -> std::error_code {
             if (not state or not state->m_active or state->m_identity != source or state->m_submitted) {
                 PPR_RETURN_ERROR_ON_FAIL(GameMatter, std::errc::invalid_argument);
             }
@@ -941,7 +942,7 @@ namespace pP::colony {
             state->m_ready = false;
             state->m_submit_error = state->m_active->submitResidentTick(
                 state->m_active->accounting().m_epoch, matter::kGameSubsteps, matter::kSourceIterations, bodies,
-                body_count);
+                body_count, force);
             // An unsuccessful queue submit may still execute. Keep the
             // attempted batch frozen until explicit completion/discard.
             PPR_RETURN_ERROR_ON_FAIL(GameMatter, state->m_submit_error);
@@ -1001,6 +1002,13 @@ namespace pP::colony {
         const auto state = m_state;
         return enqueue(
             [state]() -> std::error_code {
+                if (state and state->m_append_prepared) {
+                    PPR_RETURN_ERROR_ON_FAIL(GameMatter, state->m_active->cancelPreparedReplacement());
+                    state->m_append_prepared = false;
+                    state->m_append_ready = false;
+                    state->m_prepared_metadata.reset();
+                }
+
                 if (state and state->m_active and state->m_submitted) {
                     PPR_RETURN_ERROR_ON_FAIL(GameMatter, state->m_active->drain());
                     PPR_RETURN_ERROR_ON_FAIL(GameMatter, state->m_active->discardTick());
@@ -1098,24 +1106,33 @@ namespace pP::colony {
     }
 
     Expected<MatterRequest> MatterRuntime::beginPrepareEdit(
-        const MatterIdentity source, const MatterState &candidate, const u32 retained_count, Array<u32> terrain) {
+        const MatterIdentity source, const MatterState &candidate, const u32 retained_count, Array<u32> terrain,
+        const EMatterEditKind kind) {
+        const bool terrain_edit = kind == EMatterEditKind::terrain_append;
+        const bool replace = kind == EMatterEditKind::particle_replace;
+        const bool known_kind = terrain_edit or replace or kind == EMatterEditKind::particle_append;
         PPR_RETURN_UNEXPECTED_ON_FAIL(
-            GameMatter,
-            sim::isSupportedWorldEdge(candidate.m_world_edge) and
-                    candidate.m_records.size() == candidate.m_particles.size() and
-                    candidate.m_particles.size() <= sim::kMaxMatterParticles and
-                    retained_count <= candidate.m_particles.size() and
-                    source.m_publication != std::numeric_limits<u64>::max() and
-                    source.m_terrain_revision != std::numeric_limits<u64>::max() and
-                    candidate.m_identity ==
-                        MatterIdentity{source.m_world, source.m_publication + 1u, source.m_terrain_revision + 1u}
-                ? std::error_code{}
-                : std::make_error_code(std::errc::invalid_argument));
+            GameMatter, known_kind and
+                                (terrain_edit or terrain.empty()) and
+                                sim::isSupportedWorldEdge(candidate.m_world_edge) and
+                                candidate.m_records.size() == candidate.m_particles.size() and
+                                candidate.m_particles.size() + candidate.m_gas.size() <= sim::kMaxMatterParticles and
+                                (replace or retained_count <= candidate.m_particles.size()) and
+                                candidate.m_profile.m_particle_count == candidate.m_particles.size() and
+                                source.m_publication != std::numeric_limits<u64>::max() and
+                                (not terrain_edit or source.m_terrain_revision != std::numeric_limits<u64>::max()) and
+                                candidate.m_identity ==
+                                    MatterIdentity{
+                                        source.m_world, source.m_publication + 1u,
+                                        source.m_terrain_revision + (terrain_edit ? 1u : 0u)}
+                            ? std::error_code{}
+                            : std::make_error_code(std::errc::invalid_argument));
 
-        Array<matter::GpuParticle> appended(
-            candidate.m_particles.begin() + retained_count, candidate.m_particles.end());
+        Array<matter::GpuParticle> uploaded(
+            candidate.m_particles.begin() + (replace ? 0u : retained_count), candidate.m_particles.end());
         Array<GridParticleMetadataRow> metadata;
-        if (not appended.empty()) {
+        const bool refresh_metadata = not terrain_edit or not uploaded.empty();
+        if (refresh_metadata) {
             auto prepared = presentationMetadata(candidate);
             PPR_RETURN_UNEXPECTED_ON_FAIL(GameMatter, prepared);
             metadata = std::move(*prepared);
@@ -1125,9 +1142,12 @@ namespace pP::colony {
         const auto target = candidate.m_identity;
         const double cell = candidate.m_cell_metres;
         const u32 terrain_edge = candidate.m_world_edge + 1u;
+        const auto profile = candidate.m_profile;
+        const u32 moving_count = static_cast<u32>(candidate.m_particles.size());
         return enqueue(
-            [state, source, target, retained_count, cell, terrain_edge, appended = std::move(appended),
-                metadata = std::move(metadata), terrain = std::move(terrain)]() -> std::error_code {
+            [state, source, target, retained_count, cell, terrain_edge, profile, moving_count, replace, terrain_edit,
+                refresh_metadata, uploaded = std::move(uploaded), metadata = std::move(metadata),
+                terrain = std::move(terrain)]() -> std::error_code {
                 PPR_RETURN_ERROR_ON_FAIL(
                     GameMatter, state and
                                         state->m_active and
@@ -1145,11 +1165,18 @@ namespace pP::colony {
                                     ? std::error_code{}
                                     : std::make_error_code(std::errc::device_or_resource_busy));
 
+                auto expected_profile = state->m_active->profile();
+                expected_profile.m_particle_count = moving_count;
+                PPR_RETURN_ERROR_ON_FAIL(
+                    GameMatter, std::bit_cast<std::array<u32, 16u>>(profile) ==
+                                        std::bit_cast<std::array<u32, 16u>>(expected_profile)
+                                    ? std::error_code{}
+                                    : std::make_error_code(std::errc::invalid_argument));
+
                 auto prepared_metadata = state->m_active_metadata;
-                if (not metadata.empty()) {
+                if (refresh_metadata) {
                     auto resource = prepareGridParticleMetadata(
-                        *state->m_device, metadata, retained_count + static_cast<u32>(appended.size()), cell,
-                        target.m_terrain_revision);
+                        *state->m_device, metadata, moving_count, cell, target.m_terrain_revision);
                     PPR_RETURN_ERROR_ON_FAIL(GameMatter, resource);
                     prepared_metadata = std::move(*resource);
                 }
@@ -1158,10 +1185,15 @@ namespace pP::colony {
                 state->m_append_ready = false;
                 state->m_prepared_identity = target;
                 state->m_prepared_metadata = std::move(prepared_metadata);
-                PPR_RETURN_ERROR_ON_FAIL(
-                    GameMatter, state->m_active->prepareAppend(
-                                    appended, state->m_active->accounting().m_epoch,
-                                    {terrain, terrain_edge, terrain_edge, 2.5f, 2.5f}));
+                const matter::TerrainView view =
+                    terrain_edit ? matter::TerrainView{terrain, terrain_edge, terrain_edge, 2.5f, 2.5f}
+                                 : matter::TerrainView{};
+                const auto policy = terrain_edit ? matter::ETerrainUpdate::replace : matter::ETerrainUpdate::preserve;
+                const auto prepared = replace ? state->m_active->prepareReplacement(
+                                                    uploaded, {}, state->m_active->accounting().m_epoch, view, policy)
+                                              : state->m_active->prepareAppend(
+                                                    uploaded, state->m_active->accounting().m_epoch, view, policy);
+                PPR_RETURN_ERROR_ON_FAIL(GameMatter, prepared);
                 return {};
             });
     }

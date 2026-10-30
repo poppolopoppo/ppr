@@ -20,6 +20,7 @@ import game.colony.driver;
 import game.colony.matter;
 import game.colony.content;
 import game.colony.metric;
+import game.colony.tools;
 import game.colony.content.authoring;
 import game.colony.worldgen_panel;
 import game.colony.worldgen_preview;
@@ -554,6 +555,7 @@ namespace demo {
         colony::ColonyUiState m_ui_state{};
         colony::ColonyPresentation m_ui_presentation{};
         Array<game::ui::FeedbackRect> m_ui_feedback{};
+        Array<colony::ToolMaterialChoice> m_ui_tool_materials{};
         colony::ColonyHover m_hover{};
         // Phase 5 display session, all game-owned. The startup baseline is
         // the "Back to startup" reset target (captured once from the
@@ -1511,6 +1513,10 @@ namespace demo {
         }
 
         void cancelToolGesture_() noexcept {
+            if (m_driver) {
+                retainInputError_(m_driver->setRadialForce({}));
+            }
+
             // Release consume FIRST, then relinquish ownership; the accepted
             // queue survives (the update() drain owns it after accept).
             if (m_actions[kToolPressAction]) {
@@ -1539,7 +1545,13 @@ namespace demo {
                 // otherwise byte-identical.
                 const bool footprint_tool = m_ui_state.m_tool == colony::EColonyTool::build_wall or
                                             m_ui_state.m_tool == colony::EColonyTool::demolish;
-                const bool armed = (m_tool.m_dig_armed or footprint_tool) and not m_tool.m_held and not m_input_error;
+                const bool simulation_tool = m_ui_state.m_tool == colony::EColonyTool::push or
+                                             m_ui_state.m_tool == colony::EColonyTool::pull or
+                                             m_ui_state.m_tool == colony::EColonyTool::spawn or
+                                             m_ui_state.m_tool == colony::EColonyTool::destroy;
+                const bool armed = (m_tool.m_dig_armed or footprint_tool or simulation_tool) and
+                                   not m_tool.m_held and
+                                   not m_input_error;
                 if (not armed) {
                     return;
                 }
@@ -1556,6 +1568,15 @@ namespace demo {
                 m_tool.m_world_generation = m_driver->worldGeneration();
                 m_actions[kToolPressAction]->setConsumeInput(true);
                 m_actions[kToolCursorAction]->setConsumeInput(true);
+
+                if (simulation_tool) {
+                    if (m_ui_state.m_tool == colony::EColonyTool::spawn or
+                        m_ui_state.m_tool == colony::EColonyTool::destroy) {
+                        queueParticleGesture_();
+                    }
+
+                    return;
+                }
 
                 if (m_tool.m_dig_armed) {
                     // Press immediately queues one accepted click (latest wins if an
@@ -2287,7 +2308,7 @@ namespace demo {
                     break;
 
                 case colony::EColonyIntent::select_tool:
-                    if (intent.m_arg <= static_cast<u32>(colony::EColonyTool::demolish)) {
+                    if (intent.m_arg <= static_cast<u32>(colony::EColonyTool::destroy)) {
                         selectTool_(static_cast<colony::EColonyTool>(intent.m_arg));
                     }
                     break;
@@ -3001,6 +3022,16 @@ namespace demo {
             }
 
             switch (tool) {
+                case colony::EColonyTool::push:
+                    setStatus_("Push: hold LMB to push particles away from the brush centre.");
+                    break;
+                case colony::EColonyTool::pull:
+                    setStatus_("Pull: hold LMB to pull particles toward the brush centre.");
+                    break;
+                case colony::EColonyTool::spawn: setStatus_("Spawn: click to add particles in clear terrain."); break;
+                case colony::EColonyTool::destroy:
+                    setStatus_("Destroy: click to remove particles inside the brush.");
+                    break;
                 case colony::EColonyTool::dig: setStatus_("Dig: click a cell to dig it, hold to drag."); break;
                 case colony::EColonyTool::build_wall:
                     setStatus_("Wall: press and drag a rect, release to order.");
@@ -3523,7 +3554,18 @@ namespace demo {
                 return colony::ColonyScreenPoint{.m_x = client->x, .m_y = client->y};
             }();
 
+            m_ui_tool_materials.clear();
+            if (const auto *const prepared = m_driver->preparedWorld()) {
+                for (const auto &material: prepared->catalog().materials()) {
+                    if (material.m_representation == colony::EMaterialRepresentation::particle and
+                        material.m_phase != colony::EMaterialPhase::gas) {
+                        m_ui_tool_materials.push_back({material.m_key, material.m_key});
+                    }
+                }
+            }
+
             const colony::ColonyUiView view{
+                .m_tool_materials = m_ui_tool_materials,
                 .m_colony = &m_ui_presentation,
                 .m_performance = &m_performance_widget,
                 .m_counts =
@@ -3685,6 +3727,11 @@ namespace demo {
             m_workshop_ui.m_seed = settings.m_worldgen_seed;
             m_worldgen_profile = settings.m_worldgen_profile;
             m_requested_seed = settings.m_worldgen_seed;
+            m_ui_state.m_tools = {
+                settings.m_tool_spawn_material, settings.m_tool_radius_m, settings.m_tool_acceleration_m_s2,
+                settings.m_tool_spawn_count};
+            PPR_RETURN_ERROR_ON_FAIL(Demo, colony::validateToolSettings(m_ui_state.m_tools));
+
             m_map_size = settings.m_map_size;
             m_workshop_ui.m_world_edge = m_map_size;
             m_workshop_ui.m_origin[0] = static_cast<int>(m_map_size / 2u - 128u);
@@ -4812,6 +4859,7 @@ namespace demo {
                     return {};
                 }
 
+                PPR_RETURN_ERROR_ON_FAIL(Demo, refreshRadialForce_());
                 PPR_RETURN_ERROR_ON_FAIL(Demo, applyControlInput_());
                 if (not m_world_modal) {
                     PPR_RETURN_ERROR_ON_FAIL(Demo, drainToolRequests_());
@@ -4864,6 +4912,8 @@ namespace demo {
                                   applyBuildOrder_(value);
                               } else if constexpr (std::is_same_v<T, game::SessionDigOrder>) {
                                   PPR_RETURN_ERROR_ON_FAIL(Demo, applyDigOrder_(value));
+                              } else if constexpr (std::is_same_v<T, game::SessionParticleOrder>) {
+                                  PPR_RETURN_ERROR_ON_FAIL(Demo, applyParticleOrder_(value));
                               } else {
                                   if (not m_world_job or value.m_job != m_world_job->view().m_id) {
                                       return {}; // A modal action must not affect a later job.
@@ -5403,6 +5453,31 @@ namespace demo {
                     overlayCellBorder_(marks, map, *m_ui_state.m_pinned, kFeedbackCyan);
                 }
                 overlayFootprintPreview_(marks, map);
+            } else if (m_hover.m_world and (m_ui_state.m_tool == colony::EColonyTool::push or
+                                               m_ui_state.m_tool == colony::EColonyTool::pull or
+                                               m_ui_state.m_tool == colony::EColonyTool::spawn or
+                                               m_ui_state.m_tool == colony::EColonyTool::destroy)) {
+                const float2 centre = cellCentreWorld_(m_hover.m_target);
+                const float radius = static_cast<float>(m_ui_state.m_tools.m_radius_m);
+                constexpr u32 segments = 48u;
+
+                for (u32 index = 0u; index < segments; ++index) {
+                    const float a = static_cast<float>(index) * (2.0f * std::numbers::pi_v<float> / segments);
+                    const float b = static_cast<float>(index + 1u) * (2.0f * std::numbers::pi_v<float> / segments);
+                    const auto from = map.worldToClient(
+                        float2{centre.x + std::cos(a) * radius, centre.y + std::sin(a) * radius});
+                    const auto to = map.worldToClient(
+                        float2{centre.x + std::cos(b) * radius, centre.y + std::sin(b) * radius});
+
+                    if (from and to) {
+                        marks.push_back(
+                            {.m_min = *from,
+                                .m_max = *to,
+                                .m_thickness = 1.5f,
+                                .m_role = game::ui::EFeedbackRole::preview,
+                                .m_kind = game::ui::EFeedbackKind::line});
+                    }
+                }
             } else if (m_tool.m_dig_armed and m_hover.m_world) {
                 const game::ui::EFeedbackRole color = m_hover.m_diggable ? kFeedbackCyan : kFeedbackOrange;
                 overlayCellBorder_(marks, map, m_hover.m_target, color);
@@ -5731,6 +5806,91 @@ namespace demo {
             if (*accepted) {
                 ++m_dig_issued;
             }
+            return {};
+        }
+
+        // ------------------------------------------------------------------
+        // simulation brushes
+        // ------------------------------------------------------------------
+
+        void queueParticleGesture_() {
+            const auto cell = pickCell_(m_tool.m_cursor_client);
+            if (not cell) {
+                return;
+            }
+
+            const auto &settings = m_ui_state.m_tools;
+            const bool spawn = m_ui_state.m_tool == colony::EColonyTool::spawn;
+            u16 material_id{};
+            if (spawn) {
+                const auto *const prepared = m_driver->preparedWorld();
+                const auto *const material = prepared ? prepared->catalog().findMaterial(settings.m_spawn_material)
+                                                      : nullptr;
+                if (not material or
+                    material->m_representation != colony::EMaterialRepresentation::particle or
+                    material->m_phase == colony::EMaterialPhase::gas) {
+                    postNotice_("Choose a solid or liquid particle material to spawn", std::errc::invalid_argument);
+                    return;
+                }
+
+                material_id = material->m_numeric_id;
+            }
+
+            const double cell_metres = 1.0 / m_driver->cellsPerMetre();
+            colony::ParticleToolCommand command{
+                (cell->m_x + 0.5) * cell_metres, (cell->m_y + 0.5) * cell_metres, settings.m_radius_m,
+                settings.m_spawn_count, material_id,
+                spawn ? colony::EParticleToolKind::spawn : colony::EParticleToolKind::destroy};
+            retainInputError_(m_session_service.post(game::SessionParticleOrder{m_tool.m_world_generation, command}));
+        }
+
+        [[nodiscard]] std::error_code refreshRadialForce_() {
+            colony::RadialForce force{};
+            const bool radial_tool = m_ui_state.m_tool == colony::EColonyTool::push or
+                                     m_ui_state.m_tool == colony::EColonyTool::pull;
+            if (radial_tool and
+                m_tool.m_held and
+                m_tool.m_owner == EToolGestureOwner::world and
+                m_tool.m_world_generation == m_driver->worldGeneration() and
+                m_world_frame_presented and
+                not m_world_modal) {
+                if (const auto cell = pickCell_(m_tool.m_cursor_client)) {
+                    const auto &settings = m_ui_state.m_tools;
+                    const double cell_metres = 1.0 / m_driver->cellsPerMetre();
+                    force = {
+                        (cell->m_x + 0.5) * cell_metres, (cell->m_y + 0.5) * cell_metres, settings.m_radius_m,
+                        settings.m_acceleration_m_s2 * (m_ui_state.m_tool == colony::EColonyTool::push ? 1.0 : -1.0)};
+                }
+            }
+
+            PPR_RETURN_ERROR_ON_FAIL(Demo, m_driver->setRadialForce(force));
+            return {};
+        }
+
+        [[nodiscard]] std::error_code applyParticleOrder_(const game::SessionParticleOrder &order) {
+            if (not m_driver or not m_driver_ready) {
+                return {};
+            }
+
+            const u64 displayed_world = m_world_frame_presented and not m_world_modal ? m_driver->worldGeneration()
+                                                                                      : 0u;
+            const auto accepted = game::applySessionParticleOrder(*m_driver, order, displayed_world);
+            if (not accepted and accepted.error() == std::errc::device_or_resource_busy) {
+                PPR_RETURN_ERROR_ON_FAIL(Demo, m_session_service.deferTool(order));
+                return {};
+            }
+
+            if (not accepted) {
+                postDisplayNotice_("Particle stroke rejected", accepted.error());
+                return {};
+            }
+
+            if (*accepted) {
+                setStatus_(
+                    order.m_command.m_kind == colony::EParticleToolKind::spawn ? "Spawn stroke queued."
+                                                                               : "Destroy stroke queued.");
+            }
+
             return {};
         }
 

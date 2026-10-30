@@ -9,6 +9,7 @@ import game.application;
 import game.colony.driver;
 import game.colony.matter;
 import game.colony.panel;
+import game.colony.tools;
 import game.ui;
 import engine.app;
 import engine.core;
@@ -637,6 +638,93 @@ namespace pP::game::tests::detail {
         PPR_TEST_ASSERT(
             after and after->m_element == before->m_element and after->m_temperature == before->m_temperature);
     };
+
+    PPR_UNIT_TEST (particle_orders_ignore_stale_and_hidden_worlds_and_report_unavailable_runtime) {
+        colony::test_fixture::AuthoredFixture authored;
+        colony::ColonyDriver driver;
+        PPR_DEFER {
+            PPR_TEST_ASSERT(not driver.shutdown());
+        };
+        PPR_TEST_ASSERT(not authored.initialize(driver, {.m_agent_count = 1u, .m_world_generation = 20u}));
+        driver.setPaused(true);
+
+        const auto before = driver.grid().getCell({32u, 32u});
+        PPR_TEST_ASSERT(before.has_value());
+        const auto particle_count = driver.particleCount();
+        const auto errands = driver.errandCount();
+        const auto dug = driver.digTotal();
+        for (const auto kind: {colony::EParticleToolKind::spawn, colony::EParticleToolKind::destroy}) {
+            SessionParticleOrder order{
+                19u,
+                {.m_x_m = 12.0, .m_y_m = 12.0, .m_radius_m = 2.0, .m_count = 1u, .m_material = 1u, .m_kind = kind}};
+            const auto stale = applySessionParticleOrder(driver, order, 20u);
+            PPR_TEST_ASSERT(stale and not *stale);
+
+            order.m_world = 20u;
+            const auto hidden = applySessionParticleOrder(driver, order, 19u);
+            PPR_TEST_ASSERT(hidden and not *hidden);
+
+            // The authored CPU fixture deliberately has no resident runtime.
+            // A current delivery must expose that absence, never silently edit.
+            const auto unavailable = applySessionParticleOrder(driver, order, 20u);
+            PPR_TEST_ASSERT(not unavailable and unavailable.error() == std::errc::operation_not_permitted);
+            PPR_TEST_ASSERT(driver.captureReady() and driver.paused());
+            PPR_TEST_ASSERT(driver.particleCount() == particle_count and driver.tickCount() == 0u);
+            PPR_TEST_ASSERT(driver.errandCount() == errands and driver.digTotal() == dug);
+        }
+
+        const auto after = driver.grid().getCell({32u, 32u});
+        PPR_TEST_ASSERT(
+            after and after->m_element == before->m_element and after->m_temperature == before->m_temperature);
+    };
+
+    // ------------------------------------------------------------------
+    // owned particle-tool delivery and retry
+    // ------------------------------------------------------------------
+
+    PPR_UNIT_TEST (particle_orders_keep_owned_parameters_through_delivery_and_retry) {
+        SessionService service;
+        SessionParticleOrder spawn{
+            7u, {.m_x_m = 12.5,
+                    .m_y_m = 20.5,
+                    .m_radius_m = 3.5,
+                    .m_count = 17u,
+                    .m_material = 4u,
+                    .m_kind = colony::EParticleToolKind::spawn}};
+        auto destroy = spawn;
+        destroy.m_command.m_kind = colony::EParticleToolKind::destroy;
+        destroy.m_command.m_radius_m = 6.0;
+        PPR_TEST_ASSERT(not service.post(spawn));
+        PPR_TEST_ASSERT(not service.deferTool(destroy));
+
+        spawn.m_world = 99u;
+        spawn.m_command.m_count = 4096u;
+        destroy.m_command.m_radius_m = 1.0;
+        {
+            auto batch = service.beginService();
+            PPR_TEST_ASSERT(batch.has_value());
+            PPR_DEFER {
+                service.endService();
+            };
+            PPR_TEST_ASSERT(batch->m_deliveries.size() == 2u);
+            const auto &delivered = std::get<SessionParticleOrder>(batch->m_deliveries[0u]);
+            const auto &retried = std::get<SessionParticleOrder>(batch->m_deliveries[1u]);
+            PPR_TEST_ASSERT(delivered.m_world == 7u and delivered.m_command.m_count == 17u);
+            PPR_TEST_ASSERT(delivered.m_command.m_x_m == 12.5 and delivered.m_command.m_y_m == 20.5);
+            PPR_TEST_ASSERT(delivered.m_command.m_radius_m == 3.5 and delivered.m_command.m_material == 4u);
+            PPR_TEST_ASSERT(delivered.m_command.m_kind == colony::EParticleToolKind::spawn);
+            PPR_TEST_ASSERT(retried.m_world == 7u and retried.m_command.m_kind == colony::EParticleToolKind::destroy);
+            PPR_TEST_ASSERT(retried.m_command.m_radius_m == 6.0);
+
+            PPR_TEST_ASSERT(not service.deferTool(retried));
+        }
+
+        PPR_TEST_ASSERT(service.retriesPending());
+        service.stopControls();
+        PPR_TEST_ASSERT(not service.retriesPending());
+        PPR_TEST_ASSERT(service.post(spawn) == std::errc::operation_canceled);
+        PPR_TEST_ASSERT(not service.close());
+    };
 }
 
 namespace pP::game::tests {
@@ -655,6 +743,8 @@ namespace pP::game::tests {
             detail::blocked_tool_retries_do_not_make_fresh_service_immediately_due,
             detail::terminal_control_stop_retains_acknowledgments_until_receiver_close,
             detail::stale_build_and_dig_orders_never_touch_replacement_driver,
+            detail::particle_orders_ignore_stale_and_hidden_worlds_and_report_unavailable_runtime,
+            detail::particle_orders_keep_owned_parameters_through_delivery_and_retry,
         });
     };
 

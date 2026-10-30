@@ -682,6 +682,11 @@ namespace pP::colony {
             return {};
         }
 
+        if (m_pending_particle_tool) {
+            PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, prepareParticleTool());
+            return {};
+        }
+
         if (m_pending_single_steps != 0u and m_held_slices == 0u) {
             m_held_slices = 1u;
         }
@@ -1162,6 +1167,8 @@ namespace pP::colony {
         m_present_revision_history = Array<DirtyChunk>{};
         m_collider_dirty = Array<sim::ChunkPos>{};
         m_pending_digs.clear();
+        m_pending_particle_tool.reset();
+        m_radial_force = {};
         m_dig_stats.m_dug_total = 0u;
         m_dig_stats.m_last_chunks = Array<sim::ChunkPos>{};
         invalidateColliderCache();
@@ -1461,6 +1468,15 @@ namespace pP::colony {
                 return;
             }
 
+            matter::GpuRadialForce force{};
+            if (m_radial_force.m_acceleration_m_s2 != 0.0) {
+                const double cell = m_matter->m_cell_metres;
+                force.m_center_x = static_cast<float>(m_radial_force.m_x_m / cell + static_cast<double>(kMatterOrigin));
+                force.m_center_y = static_cast<float>(m_radial_force.m_y_m / cell + static_cast<double>(kMatterOrigin));
+                force.m_radius = static_cast<float>(m_radial_force.m_radius_m / cell);
+                force.m_acceleration = static_cast<float>(m_radial_force.m_acceleration_m_s2 / cell);
+            }
+
             m_matter_pending = true;
             auto completion = advanceMatterRequest(*m_matter_runtime, EMatterOperation::submit, [&] {
                 if (m_submission_observer) {
@@ -1470,7 +1486,7 @@ namespace pP::colony {
                 }
 
                 return m_matter_runtime->beginSubmitResident(
-                    m_matter->m_identity, std::move(*predicted), static_cast<u32>(m_matter_bodies.size()));
+                    m_matter->m_identity, std::move(*predicted), static_cast<u32>(m_matter_bodies.size()), force);
             });
             if (not completion) {
                 PPR_RETAIN_ERROR_ON_FAIL(ColonyPreparation, m_step_error, completion.error());

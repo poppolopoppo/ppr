@@ -17,6 +17,7 @@ import game.ui.model;
 import game.colony.driver;
 import game.colony.agents;
 import game.colony.panel;
+import game.colony.tools;
 import imgui;
 import imgui_internal;
 import std;
@@ -462,6 +463,136 @@ namespace pP::game::tests::detail::presentation {
         PPR_TEST_ASSERT(wall.m_intent and wall.m_intent->m_kind == colony::EColonyIntent::select_tool);
         PPR_TEST_ASSERT(wall.m_intent->m_arg == static_cast<u32>(colony::EColonyTool::build_wall));
         PPR_TEST_ASSERT(not frame().m_intent);
+    };
+
+    // ------------------------------------------------------------------
+    // simulation brush controls
+    // ------------------------------------------------------------------
+
+    PPR_UNIT_TEST (particle_tool_controls_select_and_edit_independent_settings_while_paused) {
+        ImGuiContext *const context = ImGui::CreateContext();
+        PPR_DEFER {
+            ImGui::DestroyContext(context);
+        };
+        ImGui::SetCurrentContext(context);
+        auto &io = ImGui::GetIO();
+        io.IniFilename = nullptr;
+        io.DeltaTime = 1.0f / 60.0f;
+        io.DisplaySize = ImVec2{1280.0f, 720.0f};
+        io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+        io.Fonts->AddFontDefault();
+        unsigned char *pixels{};
+        int width{}, height{};
+        io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+
+        colony::ColonyPresentation snapshot{.m_speed = 1u, .m_paused = true};
+        const std::array materials{
+            colony::ToolMaterialChoice{"ppr.test:water", "Water"}, colony::ToolMaterialChoice{"ppr.test:sand", "Sand"}};
+        const colony::ColonyUiView view{.m_tool_materials = materials, .m_colony = &snapshot};
+        colony::ColonyUiState state{};
+        state.m_colony_open = false;
+        state.m_tools.m_spawn_material = "ppr.test:water";
+        const auto frame = [&]() {
+            ImGui::NewFrame();
+            const auto result = colony::drawColonyUi(view, {}, {}, state);
+            ImGui::Render();
+            return result;
+        };
+
+        const auto item_center = [&](ImGuiWindow *const window, const ImGuiID id) {
+            PPR_TEST_ASSERT(window != nullptr);
+            io.AddMousePosEvent(-100.0f, -100.0f);
+            std::ignore = frame();
+            ImGui::FocusWindow(window);
+            ImGui::SetNavCursorVisible(true);
+            ImGui::SetNavID(id, ImGuiNavLayer_Main, 0u, ImRect{});
+            std::ignore = frame();
+
+            const ImRect rect = window->NavRectRel[ImGuiNavLayer_Main];
+            PPR_TEST_ASSERT(rect.GetWidth() > 0.0f and rect.GetHeight() > 0.0f);
+            return ImGui::WindowRectRelToAbs(window, rect).GetCenter();
+        };
+
+        const auto click = [&](const ImVec2 position) {
+            io.AddMousePosEvent(position.x, position.y);
+            std::ignore = frame();
+            io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+            std::ignore = frame();
+            io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+            return frame();
+        };
+
+        const auto edit_number = [&](ImGuiWindow *const window, const char *const label, const char *const text) {
+            const auto id = window->GetID(label);
+            const auto position = item_center(window, id);
+            io.AddKeyEvent(ImGuiMod_Ctrl, true);
+            std::ignore = click(position);
+            io.AddKeyEvent(ImGuiMod_Ctrl, false);
+            std::ignore = frame();
+            PPR_TEST_ASSERT(context->ActiveId == id);
+
+            io.AddKeyEvent(ImGuiMod_Ctrl, true);
+            io.AddKeyEvent(ImGuiKey_A, true);
+            std::ignore = frame();
+            io.AddKeyEvent(ImGuiKey_A, false);
+            io.AddKeyEvent(ImGuiMod_Ctrl, false);
+            std::ignore = frame();
+
+            io.AddInputCharactersUTF8(text);
+            std::ignore = frame();
+            io.AddKeyEvent(ImGuiKey_Enter, true);
+            std::ignore = frame();
+            io.AddKeyEvent(ImGuiKey_Enter, false);
+            std::ignore = frame();
+        };
+
+        std::ignore = frame();
+        std::ignore = frame();
+        auto *const rail = ImGui::FindWindowByName("##tool_rail");
+        PPR_TEST_ASSERT(rail != nullptr);
+        for (const auto tool:
+            {colony::EColonyTool::push, colony::EColonyTool::pull, colony::EColonyTool::spawn,
+                colony::EColonyTool::destroy}) {
+            const auto label = std::format("###tool{}", static_cast<u32>(tool));
+            const auto result = click(item_center(rail, rail->GetID(label.c_str())));
+            PPR_TEST_ASSERT(result.m_intent and result.m_intent->m_kind == colony::EColonyIntent::select_tool);
+            PPR_TEST_ASSERT(result.m_intent->m_arg == static_cast<u32>(tool));
+            PPR_TEST_ASSERT(state.m_tool == colony::EColonyTool::inspect);
+        }
+
+        state.m_tool = colony::EColonyTool::push;
+        std::ignore = frame();
+        std::ignore = frame();
+        auto *const panel = ImGui::FindWindowByName("Tool context###colony_summary");
+        PPR_TEST_ASSERT(panel != nullptr and panel->Active);
+        edit_number(panel, "Radius (m)", "3.5");
+        edit_number(panel, "Strength (m/s²)", "125");
+        PPR_TEST_ASSERT(state.m_tools.m_radius_m == 3.5 and state.m_tools.m_acceleration_m_s2 == 125.0);
+
+        state.m_tool = colony::EColonyTool::pull;
+        std::ignore = frame();
+        PPR_TEST_ASSERT(panel->Active and not state.m_colony_open);
+        PPR_TEST_ASSERT(state.m_tools.m_radius_m == 3.5 and state.m_tools.m_acceleration_m_s2 == 125.0);
+
+        state.m_tool = colony::EColonyTool::spawn;
+        std::ignore = frame();
+        std::ignore = frame();
+        edit_number(panel, "Maximum particles", "17");
+        PPR_TEST_ASSERT(state.m_tools.m_spawn_count == 17u);
+
+        std::ignore = click(item_center(panel, panel->GetID("Material")));
+        PPR_TEST_ASSERT(not context->OpenPopupStack.empty());
+        auto *const popup = context->OpenPopupStack.back().Window;
+        PPR_TEST_ASSERT(popup != nullptr);
+        std::ignore = click(item_center(popup, popup->GetID("Sand")));
+        PPR_TEST_ASSERT(state.m_tools.m_spawn_material == "ppr.test:sand");
+
+        state.m_tool = colony::EColonyTool::destroy;
+        std::ignore = frame();
+        PPR_TEST_ASSERT(panel->Active and snapshot.m_paused);
+        PPR_TEST_ASSERT(state.m_tools.m_radius_m == 3.5 and state.m_tools.m_acceleration_m_s2 == 125.0);
+        PPR_TEST_ASSERT(state.m_tools.m_spawn_count == 17u and state.m_tools.m_spawn_material == "ppr.test:sand");
+        PPR_TEST_ASSERT(not colony::validateToolSettings(state.m_tools));
     };
 
     // ------------------------------------------------------------------
@@ -1008,6 +1139,7 @@ namespace pP::game::tests {
             detail::presentation::colony_and_performance_visibility_are_independent,
             detail::presentation::inspector_is_a_passive_pointer_readout_only_in_inspect_mode,
             detail::presentation::native_menu_click_opens_utilities_and_display_emits_one_intent,
+            detail::presentation::particle_tool_controls_select_and_edit_independent_settings_while_paused,
             detail::presentation::workspace_tile_navigation_commits_old_text_and_numeric_edits,
             detail::presentation::workspace_identity_survives_filter_revision_and_native_game_actions_are_distinct,
             detail::presentation::workspace_preview_choices_follow_current_draft_profile_and_replacement_source,

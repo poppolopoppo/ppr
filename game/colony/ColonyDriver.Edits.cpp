@@ -16,7 +16,7 @@ namespace pP::colony {
     }
 
     bool ColonyDriver::editPending() const noexcept {
-        return m_edit.has_value();
+        return m_edit.has_value() or m_pending_particle_tool.has_value();
     }
 
     bool ColonyDriver::editReadyForPresentation() const noexcept {
@@ -31,6 +31,242 @@ namespace pP::colony {
     std::span<const ColonyDriver::DirtyChunk> ColonyDriver::editManifest() const noexcept {
         return editReadyForPresentation() ? std::span<const DirtyChunk>{m_edit->m_manifest}
                                           : std::span<const DirtyChunk>{};
+    }
+
+    // ------------------------------------------------------------------
+    // physical tool admission
+    // ------------------------------------------------------------------
+
+    std::error_code ColonyDriver::setRadialForce(const RadialForce force) {
+        if (force.m_acceleration_m_s2 == 0.0) {
+            m_radial_force = {};
+            return {};
+        }
+
+        if (m_matter_terminal or not m_timestep or not m_matter_runtime or not m_matter) {
+            PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, std::errc::operation_not_permitted);
+        }
+
+        const double extent = static_cast<double>(grid().edge()) / cellsPerMetre();
+        if (not std::isfinite(force.m_x_m) or
+            not std::isfinite(force.m_y_m) or
+            not std::isfinite(force.m_radius_m) or
+            not std::isfinite(force.m_acceleration_m_s2) or
+            force.m_x_m < 0.0 or
+            force.m_y_m < 0.0 or
+            force.m_x_m >= extent or
+            force.m_y_m >= extent or
+            force.m_radius_m < 1.0 / 3.0 or
+            force.m_radius_m > 32.0 or
+            std::abs(force.m_acceleration_m_s2) > 1000.0) {
+            PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, std::errc::invalid_argument);
+        }
+
+        m_radial_force = force;
+        return {};
+    }
+
+    std::error_code ColonyDriver::requestParticleTool(const ParticleToolCommand command) {
+        if (m_matter_terminal or not m_timestep or not m_matter_runtime or not m_matter or not preparedWorld()) {
+            PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, std::errc::operation_not_permitted);
+        }
+
+        const double extent = static_cast<double>(grid().edge()) / cellsPerMetre();
+        const bool spawn = command.m_kind == EParticleToolKind::spawn;
+        if ((not spawn and command.m_kind != EParticleToolKind::destroy) or
+            not std::isfinite(command.m_x_m) or
+            not std::isfinite(command.m_y_m) or
+            not std::isfinite(command.m_radius_m) or
+            command.m_x_m < 0.0 or
+            command.m_y_m < 0.0 or
+            command.m_x_m >= extent or
+            command.m_y_m >= extent or
+            command.m_radius_m < 1.0 / 3.0 or
+            command.m_radius_m > 32.0 or
+            (spawn and (command.m_count == 0u or command.m_count > 4096u))) {
+            PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, std::errc::invalid_argument);
+        }
+
+        if (m_matter->m_identity.m_publication == std::numeric_limits<u64>::max()) {
+            PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, std::errc::value_too_large);
+        }
+
+        if (spawn) {
+            const auto count = m_matter->m_records.size() + m_matter->m_gas.size();
+            if (command.m_count > sim::kMaxMatterParticles - count or
+                m_matter->m_next_id == 0u or
+                command.m_count > std::numeric_limits<u64>::max() - m_matter->m_next_id) {
+                PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, std::errc::value_too_large);
+            }
+
+            const auto *const material = contentCatalog()->findMaterial(command.m_material);
+            if (material == nullptr or
+                material->m_representation != EMaterialRepresentation::particle or
+                (material->m_phase != EMaterialPhase::solid and material->m_phase != EMaterialPhase::liquid)) {
+                PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, std::errc::invalid_argument);
+            }
+        }
+
+        if (not captureReady() or
+            m_pending_particle_tool or
+            not m_pending_digs.empty() or
+            (not m_cpu_particles_current and m_snapshot_workers == nullptr)) {
+            PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, std::errc::device_or_resource_busy);
+        }
+
+        m_pending_particle_tool = command;
+        return {};
+    }
+
+    std::error_code ColonyDriver::prepareParticleTool() {
+        PPR_ASSERT(m_pending_particle_tool and m_matter_runtime and m_matter and preparedWorld());
+        if (not m_cpu_particles_current) {
+            const auto captured = advanceMatterSnapshot();
+            PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, captured);
+            if (not *captured) {
+                return {};
+            }
+        }
+
+        const hal::ProfileScope scope{"Colony.Tools.PrepareInventory"};
+        const auto command = *m_pending_particle_tool;
+        MatterState working = *m_matter;
+        const double radius_squared = command.m_radius_m * command.m_radius_m;
+        const auto inside = [&](const double x, const double y) {
+            const double dx = x - command.m_x_m, dy = y - command.m_y_m;
+            return dx * dx + dy * dy <= radius_squared;
+        };
+
+        const auto before_count = working.m_records.size() + working.m_gas.size();
+        if (command.m_kind == EParticleToolKind::destroy) {
+            Array<sim::MatterParticle> records;
+            Array<matter::GpuParticle> particles;
+            records.reserve(working.m_records.size());
+            particles.reserve(working.m_particles.size());
+
+            for (std::size_t row = 0u; row < working.m_records.size(); ++row) {
+                const auto &record = working.m_records[row];
+                if (inside(record.m_x_m, record.m_y_m)) {
+                    continue;
+                }
+
+                records.push_back(record);
+                particles.push_back(working.m_particles[row]);
+            }
+
+            working.m_records = std::move(records);
+            working.m_particles = std::move(particles);
+            std::erase_if(
+                working.m_gas, [&](const sim::MatterParticle &record) { return inside(record.m_x_m, record.m_y_m); });
+        } else {
+            const auto *const material = contentCatalog()->findMaterial(command.m_material);
+            PPR_ASSERT(material != nullptr);
+            const double cell = working.m_cell_metres;
+            const auto first_x = static_cast<u32>(
+                std::max(0.0, std::floor((command.m_x_m - command.m_radius_m) / cell)));
+            const auto first_y = static_cast<u32>(
+                std::max(0.0, std::floor((command.m_y_m - command.m_radius_m) / cell)));
+            const auto end_x = static_cast<u32>(std::min(
+                static_cast<double>(grid().edge()), std::floor((command.m_x_m + command.m_radius_m) / cell) + 1.0));
+            const auto end_y = static_cast<u32>(std::min(
+                static_cast<double>(grid().edge()), std::floor((command.m_y_m + command.m_radius_m) / cell) + 1.0));
+            const u32 width = end_x - first_x, height = end_y - first_y;
+            Array<u8> occupied(static_cast<std::size_t>(width) * height, u8{});
+
+            for (const auto &record: working.m_records) {
+                const auto x = std::min(static_cast<u32>(record.m_x_m / cell), grid().edge() - 1u);
+                const auto y = std::min(static_cast<u32>(record.m_y_m / cell), grid().edge() - 1u);
+                if (x >= first_x and y >= first_y and x < end_x and y < end_y) {
+                    occupied[static_cast<std::size_t>(y - first_y) * width + x - first_x] = 1u;
+                }
+            }
+
+            const double volume = cell * cell * working.m_thickness_metres;
+            const double mass = material->m_reference_density_kg_m3 * volume;
+            if (not std::isfinite(mass) or mass <= 0.0) {
+                PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, std::errc::invalid_argument);
+            }
+
+            u32 spawned{};
+            for (u32 y = first_y; y < end_y and spawned < command.m_count; ++y) {
+                for (u32 x = first_x; x < end_x and spawned < command.m_count; ++x) {
+                    if (occupied[static_cast<std::size_t>(y - first_y) * width + x - first_x] != 0u or
+                        not inside((x + 0.5) * cell, (y + 0.5) * cell)) {
+                        continue;
+                    }
+
+                    // Marching terrain interpolates neighboring samples. Keep
+                    // spawned centres and their cell support clear of that contour.
+                    bool terrain_clear = true;
+                    for (u32 sy = y == 0u ? 0u : y - 1u; sy <= std::min(y + 1u, grid().edge() - 1u); ++sy) {
+                        for (u32 sx = x == 0u ? 0u : x - 1u; sx <= std::min(x + 1u, grid().edge() - 1u); ++sx) {
+                            const auto terrain = grid().getCell({sx, sy});
+                            PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, terrain);
+                            terrain_clear = terrain_clear and terrain->m_element == 0u;
+                        }
+                    }
+
+                    if (not terrain_clear) {
+                        continue;
+                    }
+
+                    if (working.m_next_id == 0u or
+                        working.m_next_id == std::numeric_limits<u64>::max() or
+                        working.m_records.size() + working.m_gas.size() == sim::kMaxMatterParticles) {
+                        PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, std::errc::value_too_large);
+                    }
+
+                    sim::MatterParticle record{
+                        working.m_next_id++, (x + 0.5) * cell, (y + 0.5) * cell, volume, mass, 300.0,
+                        material->m_reference_density_kg_m3, command.m_material,
+                        material->m_phase == EMaterialPhase::liquid ? sim::EGenerationMatter::liquid
+                                                                    : sim::EGenerationMatter::solid};
+                    matter::GpuParticle particle{};
+                    particle.m_position_x = static_cast<float>(x) + 0.5f + kMatterOrigin;
+                    particle.m_position_y = static_cast<float>(y) + 0.5f + kMatterOrigin;
+                    particle.m_mass = static_cast<float>(mass / (1000.0 * volume));
+                    particle.m_material = static_cast<float>(
+                        material->m_phase == EMaterialPhase::liquid ? matter::ESourceMaterial::liquid
+                                                                    : matter::ESourceMaterial::sand);
+                    working.m_records.push_back(record);
+                    working.m_particles.push_back(particle);
+                    ++spawned;
+                }
+            }
+        }
+
+        if (working.m_records.size() + working.m_gas.size() == before_count) {
+            m_pending_particle_tool.reset();
+            return {};
+        }
+
+        if (working.m_identity.m_publication == std::numeric_limits<u64>::max()) {
+            PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, std::errc::value_too_large);
+        }
+
+        ++working.m_identity.m_publication;
+        working.m_profile.m_particle_count = static_cast<u32>(working.m_particles.size());
+        PPR_RETURN_ERROR_ON_FAIL(
+            ColonyEdits, validateMatterState(
+                             working, preparedWorld()->generated().m_plan.recipe().m_materials, working.m_cell_metres,
+                             working.m_thickness_metres, kGravityY));
+
+        auto snapshot = captureMovingMatter(working, working.m_particles);
+        PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, snapshot);
+        EditCandidate candidate{};
+        PPR_RETURN_ERROR_ON_FAIL(
+            ColonyEdits, candidate.m_moving_particles.restoreMoving(
+                             *snapshot, preparedWorld()->generated().m_plan.recipe().m_materials, working.m_cell_metres,
+                             working.m_thickness_metres, working.m_world_edge));
+        candidate.m_matter = std::move(working);
+        candidate.m_inventory_only = true;
+        candidate.m_replace_inventory = command.m_kind == EParticleToolKind::destroy;
+        candidate.m_colliders_ready = true;
+
+        m_edit.emplace(std::move(candidate));
+        m_pending_particle_tool.reset();
+        PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, prepareEditColliders());
+        return {};
     }
 
     // ------------------------------------------------------------------
@@ -86,6 +322,10 @@ namespace pP::colony {
     // ------------------------------------------------------------------
 
     std::error_code ColonyDriver::prepareEdit(const bool advance_build) {
+        if (m_pending_particle_tool) {
+            return prepareParticleTool();
+        }
+
         if (m_matter_runtime != nullptr and
             not m_cpu_particles_current and
             (not m_pending_digs.empty() or (advance_build and liveErrandCount(m_registry) != 0u))) {
@@ -348,6 +588,13 @@ namespace pP::colony {
 
             auto completion = advanceMatterRequest(
                 *m_matter_runtime, EMatterOperation::edit_prepare, [&]() -> Expected<MatterRequest> {
+                    if (m_edit->m_inventory_only) {
+                        return m_matter_runtime->beginPrepareEdit(
+                            m_matter->m_identity, *m_edit->m_matter, m_matter->m_profile.m_particle_count, {},
+                            m_edit->m_replace_inventory ? EMatterEditKind::particle_replace
+                                                        : EMatterEditKind::particle_append);
+                    }
+
                     Array<u16> solids;
                     for (const auto &material: contentCatalog()->materials()) {
                         if (material.m_representation == EMaterialRepresentation::terrain and
@@ -372,7 +619,10 @@ namespace pP::colony {
                     PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyEdits, terrain);
                     return m_matter_runtime->beginPrepareEdit(
                         m_matter->m_identity, *m_edit->m_matter, m_matter->m_profile.m_particle_count,
-                        std::move(*terrain));
+                        std::move(*terrain),
+                        m_edit->m_inventory_only ? (m_edit->m_replace_inventory ? EMatterEditKind::particle_replace
+                                                                                : EMatterEditKind::particle_append)
+                                                 : EMatterEditKind::terrain_append);
                 });
             PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, completion);
             if (not *completion) {
@@ -418,7 +668,8 @@ namespace pP::colony {
                 return {};
             }
 
-            if ((**completion).m_execution.m_operation_error or m_colliders.commitCohort(m_scene)) {
+            if ((**completion).m_execution.m_operation_error or
+                (not m_edit->m_inventory_only and m_colliders.commitCohort(m_scene))) {
                 hal::fatalExit("matter-terrain-joint-publication-failure");
             }
 
@@ -438,6 +689,13 @@ namespace pP::colony {
             m_cpu_particles_current = true;
             m_snapshot_tick = m_tick_count;
             m_capture_awake_valid = false;
+            m_initial_matter_baseline_valid = false;
+
+            if (m_edit->m_inventory_only) {
+                m_edit.reset();
+                PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, (**completion).m_execution.m_transport_error);
+                return {};
+            }
 
             for (const auto &row: m_edit->m_errands)
                 m_registry.get<BuildErrand>(row.m_entity)->m_progress = row.m_candidate;

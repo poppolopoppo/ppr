@@ -96,6 +96,12 @@ export namespace pP::colony {
         RenderLaneOperationCompletion m_execution{};
     };
 
+    enum class EMatterEditKind : u8 {
+        terrain_append,
+        particle_append,
+        particle_replace,
+    };
+
     /// Application owns this facade. Every solver/RHI/shader operation, including
     /// release, runs on the injected device lane; nullptr denotes an inline owner.
     /// Requests/results own their storage. No GPU span crosses the lane boundary.
@@ -132,7 +138,8 @@ export namespace pP::colony {
         [[nodiscard]] Expected<MatterRequest> beginCancelWorld();
         [[nodiscard]] Expected<MatterRequest> beginResumeWorld(MatterIdentity identity);
         [[nodiscard]] Expected<MatterRequest> beginSubmitResident(
-            MatterIdentity source, Array<matter::GpuBodyBoundary> predicted_bodies, u32 body_count);
+            MatterIdentity source, Array<matter::GpuBodyBoundary> predicted_bodies, u32 body_count,
+            matter::GpuRadialForce force = {});
         [[nodiscard]] Expected<MatterRequest> beginPoll(MatterIdentity source);
         [[nodiscard]] Expected<MatterRequest> beginPublish(MatterIdentity source);
         [[nodiscard]] Expected<MatterRequest> beginDiscard();
@@ -147,7 +154,8 @@ export namespace pP::colony {
 
         // Inventory edits share the active solver and retain its current rows.
         [[nodiscard]] Expected<MatterRequest> beginPrepareEdit(
-            MatterIdentity source, const MatterState &candidate, u32 retained_count, Array<u32> terrain);
+            MatterIdentity source, const MatterState &candidate, u32 retained_count, Array<u32> terrain,
+            EMatterEditKind kind = EMatterEditKind::terrain_append);
         [[nodiscard]] Expected<MatterRequest> beginPollEdit(MatterIdentity target);
         [[nodiscard]] Expected<MatterRequest> beginPublishEdit(MatterIdentity target);
         [[nodiscard]] Expected<MatterRequest> beginDrain();

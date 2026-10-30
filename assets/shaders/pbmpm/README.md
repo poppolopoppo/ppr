@@ -97,6 +97,14 @@ absolute-sum accounting.
 Old v5 semantic fields still load exactly; subsequent trajectories follow this
 replacement solver implementation.
 
+The game radial brush is another explicit engine adapter, enabled only under
+`PBMPM_ENGINE_ADAPTERS`. A separate16-byte constant supplies centre, radius and
+signed acceleration in solver-cell units. Iteration1 adds
+`direction * (1 - distance/radius)^2 * acceleration * dt^2` to displacement
+beside gravity, before endpoint constraints. The exact centre receives no radial
+impulse. Zero acceleration bypasses this arithmetic; the independent source
+conformance path has no brush binding or altered equations.
+
 Terrain and one-way predicted bodies are engine adapters. Terrain grid contact
 uses `node + 0.5`, matching the quadratic weights and APIC offsets. Source shapes,
 grid bodies and the guardian retain their selected-fork coordinate conventions.

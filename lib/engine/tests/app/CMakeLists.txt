@@ -13,6 +13,7 @@ target_sources(engine.tests.app
             ${CMAKE_SOURCE_DIR}/game/colony/Colony.cppm
             ${CMAKE_SOURCE_DIR}/game/colony/WorldGen.cppm
             ${CMAKE_SOURCE_DIR}/game/colony/Content.cppm
+            ${CMAKE_SOURCE_DIR}/game/colony/Tools.cppm
             ${CMAKE_SOURCE_DIR}/game/colony/Metric.cppm
             ${CMAKE_SOURCE_DIR}/game/colony/ColonyDriver.cppm
             ${CMAKE_SOURCE_DIR}/game/colony/MatterRuntime.cppm
@@ -67,6 +68,7 @@ target_sources(engine.tests.app
         ${CMAKE_SOURCE_DIR}/game/colony/Content.Descriptors.cpp
         ${CMAKE_SOURCE_DIR}/game/colony/Content.Assembly.cpp
         ${CMAKE_SOURCE_DIR}/game/colony/Content.Presentation.cpp
+        ${CMAKE_SOURCE_DIR}/game/colony/Tools.cpp
         ${CMAKE_SOURCE_DIR}/game/colony/Metric.cpp
         ${CMAKE_SOURCE_DIR}/game/colony/ColonyDriver.cpp
         ${CMAKE_SOURCE_DIR}/game/colony/ColonyDriver.Matter.cpp

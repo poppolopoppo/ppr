@@ -23,6 +23,7 @@ import game.colony.pathfinding;
 import game.colony.checkpoint;
 import game.colony.content;
 import game.colony.driver;
+import game.colony.tools;
 import game.colony.digtool;
 import game.colony.worldgen;
 import game.colony.sim_packet;
@@ -1374,6 +1375,117 @@ namespace pP::game::tests::detail::checkpoint {
     // attached GPU edit and cold restore continuation
     // ------------------------------------------------------------------
 
+    PPR_UNIT_TEST (paused_particle_tools_preserve_prefix_ids_and_terrain_then_destroy_to_zero) {
+        Fixture fixture{"tool_inventory", "frontier", 1024u};
+        const auto checkpoint = editedCheckpoint(*fixture.m_catalog);
+        const auto water = fixture.m_catalog->findMaterial("water")->m_numeric_id;
+
+        GpuOwner owner;
+        owner.initialize();
+        owner.restore(fixture.m_catalog, checkpoint, 3u);
+        auto &driver = *owner.m_driver;
+        driver.setPaused(true);
+        const auto original = *driver.matterState();
+        const auto tick = driver.tickCount();
+        PPR_TEST_ASSERT(original.m_records.size() == 1u);
+
+        PPR_TEST_ASSERT(driver.setRadialForce({20.0, 20.0, 1.0, -20.0}) == std::error_code{});
+        PPR_TEST_ASSERT(driver.setRadialForce({20.0, 20.0, 1.0, 20.0}) == std::error_code{});
+        PPR_TEST_ASSERT(driver.setRadialForce({20.0, 20.0, 0.0, 20.0}) == std::errc::invalid_argument);
+        PPR_TEST_ASSERT(not driver.setRadialForce({}));
+
+        const ParticleToolCommand spawn{20.0, 20.0, 1.0, 3u, water, EParticleToolKind::spawn};
+        PPR_TEST_ASSERT(not driver.requestParticleTool(spawn));
+        PPR_TEST_ASSERT(not driver.captureReady() and driver.editPending() and not driver.admitsElapsed());
+        PPR_TEST_ASSERT(driver.requestParticleTool(spawn) == std::errc::device_or_resource_busy);
+        owner.update(TimeSpan{});
+
+        const auto spawned = *driver.matterState();
+        PPR_TEST_ASSERT(driver.captureReady() and driver.tickCount() == tick);
+        PPR_TEST_ASSERT(spawned.m_records.size() == original.m_records.size() + 3u);
+        PPR_TEST_ASSERT(spawned.m_next_id == original.m_next_id + 3u);
+        PPR_TEST_ASSERT(spawned.m_identity.m_publication == original.m_identity.m_publication + 1u);
+        PPR_TEST_ASSERT(spawned.m_identity.m_terrain_revision == original.m_identity.m_terrain_revision);
+        PPR_TEST_ASSERT(spawned.m_records.front() == original.m_records.front());
+        PPR_TEST_ASSERT(
+            std::bit_cast<std::array<u32, 22u>>(spawned.m_particles.front()) ==
+            std::bit_cast<std::array<u32, 22u>>(original.m_particles.front()));
+        for (std::size_t row = 1u; row < spawned.m_records.size(); ++row) {
+            PPR_TEST_ASSERT(spawned.m_records[row].m_id == original.m_next_id + row - 1u);
+            PPR_TEST_ASSERT(spawned.m_records[row].m_material == water);
+        }
+
+        PPR_TEST_ASSERT(not driver.requestParticleTool({100.0, 100.0, 1.0, 0u, 0u, EParticleToolKind::destroy}));
+        owner.update(TimeSpan{});
+        PPR_TEST_ASSERT(driver.matterState()->m_identity == spawned.m_identity);
+        PPR_TEST_ASSERT(driver.matterState()->m_next_id == spawned.m_next_id);
+
+        const auto &old = original.m_records.front();
+        PPR_TEST_ASSERT(
+            not driver.requestParticleTool({old.m_x_m, old.m_y_m, 0.5, 0u, 0u, EParticleToolKind::destroy}));
+        owner.update(TimeSpan{});
+        const auto survivors = *driver.matterState();
+        PPR_TEST_ASSERT(survivors.m_records.size() == 3u and survivors.m_next_id == spawned.m_next_id);
+        PPR_TEST_ASSERT(survivors.m_identity.m_publication == spawned.m_identity.m_publication + 1u);
+        for (std::size_t row = 0u; row < survivors.m_records.size(); ++row) {
+            PPR_TEST_ASSERT(survivors.m_records[row] == spawned.m_records[row + 1u]);
+            PPR_TEST_ASSERT(
+                std::bit_cast<std::array<u32, 22u>>(survivors.m_particles[row]) ==
+                std::bit_cast<std::array<u32, 22u>>(spawned.m_particles[row + 1u]));
+        }
+
+        PPR_TEST_ASSERT(not driver.requestParticleTool({20.0, 20.0, 1.0, 0u, 0u, EParticleToolKind::destroy}));
+        owner.update(TimeSpan{});
+        const auto &empty = *driver.matterState();
+        PPR_TEST_ASSERT(empty.m_records.empty() and empty.m_particles.empty() and empty.m_gas.empty());
+        PPR_TEST_ASSERT(empty.m_next_id == spawned.m_next_id and empty.m_profile.m_particle_count == 0u);
+        PPR_TEST_ASSERT(empty.m_identity.m_publication == survivors.m_identity.m_publication + 1u);
+        PPR_TEST_ASSERT(empty.m_identity.m_terrain_revision == original.m_identity.m_terrain_revision);
+        PPR_TEST_ASSERT(driver.captureReady() and driver.tickCount() == tick and driver.particleCount() == 0u);
+
+        // Demand the actual committed replacement buffer: an empty CPU candidate
+        // alone cannot prove GPU count/metadata replacement was published.
+        const auto identity = empty.m_identity;
+        PPR_TEST_ASSERT(not owner.completeOwned(owner.m_runtime.beginSnapshot(identity)));
+        for (;;) {
+            auto request = owner.m_runtime.beginPollSnapshot(identity);
+            PPR_TEST_ASSERT(request.has_value());
+            auto completion = owner.m_runtime.advance(*request);
+            PPR_TEST_ASSERT(completion.has_value() and completion->has_value());
+            PPR_TEST_ASSERT(not (**completion).m_execution.m_operation_error);
+            if ((**completion).m_readback) {
+                PPR_TEST_ASSERT((**completion).m_readback->m_particles.empty());
+                break;
+            }
+
+            owner.drain();
+        }
+
+        PPR_TEST_ASSERT(not owner.completeOwned(owner.m_runtime.beginEndSnapshot(identity)));
+
+        // One update prepares the owned append but does not poll/publish it.
+        // Terminal discard must drain that candidate without consuming IDs.
+        PPR_TEST_ASSERT(not driver.requestParticleTool(spawn));
+        PPR_TEST_ASSERT(not driver.update(TimeSpan{}));
+        PPR_TEST_ASSERT(driver.editPending() and driver.matterState()->m_identity == identity);
+
+        std::error_code cleanup{};
+        for (;;) {
+            const auto detached = driver.advanceTerminalDetachMatter(cleanup);
+            PPR_TEST_ASSERT(detached.has_value());
+            if (*detached) {
+                break;
+            }
+
+            owner.drain();
+        }
+
+        PPR_TEST_ASSERT(not cleanup and not driver.editPending() and not driver.captureReady());
+        PPR_TEST_ASSERT(driver.matterState()->m_next_id == spawned.m_next_id);
+        PPR_TEST_ASSERT(driver.requestParticleTool(spawn) == std::errc::operation_not_permitted);
+        PPR_TEST_ASSERT(not driver.setRadialForce({}));
+    };
+
     PPR_UNIT_TEST (attached_dig_preparation_retry_publishes_inventory_once_without_render_ack) {
         constexpr DigRect second_dig{{255u, 127u}, 2u, 2u};
         static_assert(second_dig.m_width > 0u and second_dig.m_width <= kMaxDigEdge);
@@ -2553,6 +2665,7 @@ namespace pP::game::tests::detail::checkpoint {
 namespace pP::game::tests {
     const UnitTest checkpoint_gpu = UnitTest::Named("checkpoint_gpu") / [](UnitTest::IRun &_) {
         _.recurse({
+            detail::checkpoint::paused_particle_tools_preserve_prefix_ids_and_terrain_then_destroy_to_zero,
             detail::checkpoint::attached_dig_preparation_retry_publishes_inventory_once_without_render_ack,
             detail::checkpoint::coverage_deferral_keeps_cohort_then_evolution_allows_a_later_tick_retry,
             detail::checkpoint::identically_restored_attached_owners_preserve_columns_and_resume_the_same_tick,

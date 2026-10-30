@@ -53,7 +53,10 @@ export namespace pP::game {
         std::optional<std::string> m_worldgen_output{};
         std::optional<std::string> m_worldgen_gpu_output{};
         std::string m_worldgen_profile{"frontier"};
+        std::string m_tool_spawn_material{"water"};
+        double m_tool_radius_m{2.0}, m_tool_acceleration_m_s2{20.0};
         u64 m_worldgen_seed{42u};
+        u32 m_tool_spawn_count{64u};
         u32 m_map_size{4096u};
         EGameCommand m_command{EGameCommand::interactive};
         bool m_worldgen_report{}, m_worldgen_acceptance{};
@@ -102,6 +105,30 @@ export namespace pP::game {
                     &GameSettings::m_worldgen_profile,
                     Metadata{
                         "game.worldgen_profile", "World-generation profile key", "World generation",
+                        EMutability::startup, ESource::all, false},
+                    asset::QualifiedName::reference_domain),
+                field(
+                    &GameSettings::m_tool_radius_m,
+                    Metadata{
+                        "game.tool_radius_m", "Simulation brush radius in metres", "Simulation tools",
+                        EMutability::startup, ESource::all, false},
+                    Range<double>{1.0 / 3.0, 32.0}),
+                field(
+                    &GameSettings::m_tool_acceleration_m_s2,
+                    Metadata{
+                        "game.tool_acceleration_m_s2", "Push and pull acceleration in metres per second squared",
+                        "Simulation tools", EMutability::startup, ESource::all, false},
+                    Range<double>{0.0, 1000.0}),
+                field(
+                    &GameSettings::m_tool_spawn_count,
+                    Metadata{
+                        "game.tool_spawn_count", "Maximum particles created by one spawn stroke", "Simulation tools",
+                        EMutability::startup, ESource::all, false},
+                    Range<u32>{1u, 4096u}),
+                field(
+                    &GameSettings::m_tool_spawn_material,
+                    Metadata{
+                        "game.tool_spawn_material", "Particle material key used by the spawn tool", "Simulation tools",
                         EMutability::startup, ESource::all, false},
                     asset::QualifiedName::reference_domain),
                 field(

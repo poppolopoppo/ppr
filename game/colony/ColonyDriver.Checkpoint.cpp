@@ -19,6 +19,7 @@ namespace pP::colony {
                not m_matter_request and
                m_snapshot_phase == ESnapshotPhase::idle and
                not m_edit and
+               not m_pending_particle_tool and
                not m_matter_pending and
                m_held_slices == 0u and
                m_pending_single_steps == 0u;

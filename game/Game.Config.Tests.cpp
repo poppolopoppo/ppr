@@ -674,6 +674,25 @@ namespace pP::game::tests::detail::compat {
         PPR_TEST_ASSERT(unknown.error() == make_error_code(EConfigErrc::unknown_option));
     };
 
+    PPR_UNIT_TEST (simulation_tools_resolve_bounded_physical_settings) {
+        Diagnostics diagnostics;
+        const auto configured = resolveCli(
+            {"--tool-radius=3.5", "--tool-strength=0", "--spawn-count=4096", "--spawn-material=addon:sand"},
+            diagnostics);
+        PPR_TEST_ASSERT(configured.has_value());
+        const auto &settings = configured->m_game.m_value;
+        PPR_TEST_ASSERT(settings.m_tool_radius_m == 3.5 and settings.m_tool_acceleration_m_s2 == 0.0);
+        PPR_TEST_ASSERT(settings.m_tool_spawn_count == 4096u and settings.m_tool_spawn_material == "addon:sand");
+
+        for (const auto *const invalid:
+            {"--tool-radius=0", "--tool-radius=33", "--tool-strength=-1", "--tool-strength=1001", "--tool-strength=nan",
+                "--spawn-count=0", "--spawn-count=4097", "--spawn-material="}) {
+            Diagnostics rejected;
+            PPR_TEST_ASSERT(not resolveCli({invalid}, rejected));
+            PPR_TEST_ASSERT(rejected.hasErrors());
+        }
+    };
+
     PPR_UNIT_TEST (retired_crash_harness_rejected) {
         Diagnostics diagnostics{};
         const auto result = resolveCli({"--diag-crash=abort"}, diagnostics);
@@ -686,6 +705,7 @@ namespace pP::game::tests {
     const UnitTest game_config = UnitTest::Named("game_config") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::compat::selectors_pick_commands,
+            detail::compat::simulation_tools_resolve_bounded_physical_settings,
             detail::compat::worldgen_validation_invocation,
             detail::compat::map_size_uses_one_numeric_domain_for_cli_and_toml,
             detail::compat::worldgen_pack_set_and_qualified_world_are_explicit_inputs,

@@ -269,6 +269,9 @@ namespace pP::colony {
 
     Expected<bool> ColonyDriver::advanceTerminalDetachMatter(std::error_code &first_error) {
         m_matter_terminal = true;
+        m_radial_force = {};
+        m_pending_particle_tool.reset();
+
         PPR_RETAIN_ERROR_ON_FAIL(ColonyMatter, first_error, m_step_error);
 
         // A retained request must settle on its exact original owner, including
@@ -328,6 +331,10 @@ namespace pP::colony {
 
         // Only successful drain/discard plus its matching acknowledgement release
         // readers and publication state. The abandoned Scene never commits/steps.
+        if (m_edit and m_edit->m_inventory_only) {
+            m_edit.reset();
+        }
+
         m_matter_request.reset();
         m_matter_operation = EMatterOperation::idle;
         m_matter_publication.reset();
@@ -345,7 +352,10 @@ namespace pP::colony {
     }
 
     bool ColonyDriver::matterServicePending() const noexcept {
-        return m_matter_request.has_value() or m_matter_pending or m_snapshot_phase != ESnapshotPhase::idle;
+        return m_matter_request.has_value() or
+               m_matter_pending or
+               m_pending_particle_tool.has_value() or
+               m_snapshot_phase != ESnapshotPhase::idle;
     }
 
     bool ColonyDriver::matterAttachmentPending() const noexcept {
@@ -409,6 +419,7 @@ namespace pP::colony {
                m_timestep.has_value() and
                not m_paused and
                not m_edit and
+               not m_pending_particle_tool and
                not m_matter_pending and
                m_snapshot_phase == ESnapshotPhase::idle and
                m_held_slices == 0u and

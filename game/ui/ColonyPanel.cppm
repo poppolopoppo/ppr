@@ -7,6 +7,7 @@ import engine.app;
 import engine.core;
 import engine.sim;
 import game.colony.agents;
+import game.colony.tools;
 import game.display;
 import std;
 
@@ -40,6 +41,10 @@ export namespace pP::colony {
         dig,
         build_wall,
         demolish,
+        push,
+        pull,
+        spawn,
+        destroy,
     };
 
     /// The single intent vocabulary for the colony UI. Every toolbar button,
@@ -144,7 +149,8 @@ export namespace pP::colony {
     /// it and writes only session bookkeeping (`m_build_menu_open` as a
     /// one-shot trigger, `m_popup_visible_last_frame` for focus hand-back, and
     /// `m_focus_agent` as the one-shot Focus key hand-off); everything else
-    /// changes through the intent dispatch.
+    /// changes through the intent dispatch, except the live picture and tool
+    /// settings drafts that the host snapshots for subsequent work.
     ///
     /// The Display session below follows the same rule one level down: the
     /// panel edits the draft + trial countdown in place (uncommitted scratch,
@@ -165,6 +171,9 @@ export namespace pP::colony {
         /// every rendered frame (never part of the display draft or its
         /// transaction, and never persisted).
         RetroSettings m_retro{.m_enabled = true, .m_palette_enabled = true, .m_pixel_scale = 3u};
+
+        /// Host reads this live draft when it snapshots a tool gesture.
+        ToolSettings m_tools{};
 
         // selection and diagnostic controls:
         std::optional<sim::GlobalCellPos> m_pinned{};
@@ -366,8 +375,13 @@ export namespace pP::colony {
         bool m_has_inspected{};
     };
 
+    struct ToolMaterialChoice {
+        std::string_view m_key{}, m_label{};
+    };
+
     /// Everything the panel renders this frame; all read-only snapshots.
     struct ColonyUiView final {
+        std::span<const ToolMaterialChoice> m_tool_materials{};
         const ColonyPresentation *m_colony{};
         /// Host-owned history; borrowed only by this synchronous draw, never retained or observed here.
         const ui::PerformanceWidget *m_performance{};

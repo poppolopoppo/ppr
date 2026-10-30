@@ -15,6 +15,7 @@ import game.colony.translator;
 import game.colony.worldgen;
 import game.colony.content;
 import game.colony.matter;
+import game.colony.tools;
 
 import std;
 
@@ -141,12 +142,16 @@ export namespace pP::colony {
             Array<ErrandProgress> m_errands{};
             u32 m_dug{};
             bool m_has_dig{};
+            bool m_inventory_only{};
+            bool m_replace_inventory{};
             bool m_colliders_started{};
             bool m_colliders_ready{};
             bool m_matter_prepared{};
             bool m_matter_copied{};
         };
         std::optional<EditCandidate> m_edit{};
+        std::optional<ParticleToolCommand> m_pending_particle_tool{};
+        RadialForce m_radial_force{};
         u32 m_held_slices{};
         // Accepted single steps belong to this world's driver and survive waits.
         u32 m_pending_single_steps{};
@@ -296,6 +301,7 @@ export namespace pP::colony {
         void shutdownPhysics() noexcept;
         void collectColliderInterest(Array<sim::ChunkPos> &needed);
         [[nodiscard]] std::error_code prepareEdit(bool advance_build);
+        [[nodiscard]] std::error_code prepareParticleTool();
         [[nodiscard]] std::error_code prepareEditColliders();
         [[nodiscard]] std::error_code runHeldTicks();
 
@@ -496,6 +502,11 @@ export namespace pP::colony {
 
         /// Records a durable path request served by the `pathfind` step.
         [[nodiscard]] Expected<sim::Entity> requestPath(sim::GlobalCellPos from, sim::GlobalCellPos to, u32 caps);
+
+        /// A zero acceleration clears the current brush even before initialization.
+        [[nodiscard]] std::error_code setRadialForce(RadialForce force);
+        /// Admits one discrete inventory edit, including while simulation is paused.
+        [[nodiscard]] std::error_code requestParticleTool(ParticleToolCommand command);
 
         /// Records a rectangular dig intent served by the `tool` step on the
         /// next committed tick, stepOne, or paused update; the latest intent

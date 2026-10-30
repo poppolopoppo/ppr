@@ -21,6 +21,7 @@ target_sources(app.game
             colony/ColonyTranslator.cppm
             colony/Content.cppm
             colony/Content.Authoring.cppm
+            colony/Tools.cppm
             colony/Metric.cppm
             colony/DigTool.cppm
             colony/Pathfinding.cppm
@@ -61,6 +62,7 @@ target_sources(app.game
         colony/Content.Source.cpp
         colony/Content.Presentation.cpp
         colony/Content.Authoring.cpp
+        colony/Tools.cpp
         colony/Metric.cpp
         colony/DigTool.cpp
         colony/Pathfinding.cpp
@@ -136,6 +138,7 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
                 Game.Tests.cppm
                 colony/Content.cppm
                 colony/Content.Authoring.cppm
+                colony/Tools.cppm
                 colony/Metric.cppm
                 colony/Agents.cppm
                 ui/AssetBrowserPanel.cppm
@@ -185,8 +188,10 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
             colony/Content.Descriptors.Tests.cpp
             colony/Checkpoint.Tests.cpp
             colony/Checkpoint.Gpu.Tests.cpp
+            colony/Tools.cpp
             colony/Metric.cpp
             colony/Metric.Tests.cpp
+            colony/Tools.Tests.cpp
             colony/Agents.cpp
             colony/Buildings.cpp
             colony/Checkpoint.cpp
@@ -242,6 +247,14 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
 
     # Each full-domain lifecycle witness has its own device lock and existing
     # 180-second ceiling; do not aggregate cold-owner submissions in the CPU shard.
+    ppr_add_test_entry(TARGET game.tests
+        NAME particle_tools_gpu
+        FILTER "game/checkpoint_gpu/paused_particle_tools_preserve_prefix_ids_and_terrain_then_destroy_to_zero"
+        LOOPS
+        RESOURCE_LOCK gpu
+        TIMEOUT 180
+        LABELS unit game gpu_validation
+    )
     ppr_add_test_entry(TARGET game.tests
         NAME matter_edit_gpu
         FILTER "game/checkpoint_gpu/attached_dig_preparation_retry_publishes_inventory_once_without_render_ack"

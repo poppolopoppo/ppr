@@ -317,6 +317,18 @@ namespace pP::game {
         appendOption(
             schema.m_options, valueOption("game.map_size", "map-size", "Square map edge: 1024, 2048 or 4096 cells."));
         appendOption(
+            schema.m_options, valueOption("game.tool_radius_m", "tool-radius", "Simulation brush radius in metres."));
+        appendOption(
+            schema.m_options, valueOption(
+                                  "game.tool_acceleration_m_s2", "tool-strength",
+                                  "Push/pull acceleration in metres per second squared."));
+        appendOption(
+            schema.m_options,
+            valueOption("game.tool_spawn_count", "spawn-count", "Particles per spawn stroke (1-4096)."));
+        appendOption(
+            schema.m_options,
+            valueOption("game.tool_spawn_material", "spawn-material", "Particle material key to spawn."));
+        appendOption(
             schema.m_options,
             valueOption(
                 "game.exit_after", "auto-exit", "Exit gracefully after S wall-clock seconds (alias: exit-after)."));

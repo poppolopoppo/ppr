@@ -280,6 +280,20 @@ namespace pP::game {
         return true;
     }
 
+    Expected<bool> applySessionParticleOrder(
+        colony::ColonyDriver &driver, const SessionParticleOrder &order, const u64 displayed_world) {
+        if (order.m_world != driver.worldGeneration() or order.m_world != displayed_world) {
+            return false;
+        }
+
+        if (not driver.captureReady()) {
+            PPR_RETURN_UNEXPECTED_ON_FAIL(SessionDeliveryLog, std::errc::device_or_resource_busy);
+        }
+
+        PPR_RETURN_UNEXPECTED_ON_FAIL(SessionDeliveryLog, driver.requestParticleTool(order.m_command));
+        return true;
+    }
+
     // ------------------------------------------------------------------
     // admission and owned inbox
     // ------------------------------------------------------------------

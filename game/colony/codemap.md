@@ -95,6 +95,7 @@ paired production performance remain separate executable acceptance gates.
 | `game.colony.worldgen_preview` | `WorldGen.Preview.cppm/.cpp`, `WorldGen.Preview.Export.cpp` | Bounded biome samples and exact crops of cached production worlds, canonical initial particles, diagnostic/source export |
 | `game.colony.worldgen_panel` | `../ui/WorldGenPanel.cppm/.cpp` | Merged authoring workspace, embedded stable-key browser, all-document property controls and preview/Start/Return/Quit intents; no I/O or renderer mutation |
 | `game.colony.content` | `Content.cppm/.cpp`, `Content.Source.cpp`, `Content.Descriptors.cpp`, `Content.Assembly.cpp`, `Content.Presentation.cpp` | Owned multi-pack sources and definition-only importing; all-World descriptor catalog; direct selected-World numeric projection; separately prepared presentation through the shared asset request. `decodeWorldGenDefinition` handles the separate version-2 definition envelope. |
+| `game.colony.tools` | `Tools.cppm/.cpp` | Physical brush settings and owned particle commands; no rendering, configuration parser or mutable world dependency. |
 | `game.colony.metric` | `Metric.cppm/.cpp` | Checked 3:1 fine-cell/metre conversions, globally anchored construction footprints, nominal volume and persisted metric compatibility preflight. Authored sessions use this metric for actors, colliders, tools and rendering. |
 | `game.colony.driver` | `ColonyDriver.cppm/.cpp` | Explicit-time fixed step, pause/step/speed/regenerate, ECS and driver-local physics |
 | `game.colony.agents` | `Agents.cppm/.cpp` | Agent state, planning and movement vocabulary |
@@ -325,3 +326,12 @@ chunk IDs, search packing and the fixed surface-profile ABI retain maximum
 strides; active traversal, admission, solver/terrain dimensions and physical
 bounds use the owning world. Checkpoint6 validates descriptor, numeric recipe,
 raw snapshot5 and carried matter dimensions before restoring an owner.
+
+Particle tools reuse the driver's exact demand snapshot and asynchronous edit
+publication. Spawn preserves the resident prefix and allocates new stable IDs;
+destroy filters exact physical/GPU rows together, preserving survivor IDs and
+next-ID state, including an empty inventory. Inventory-only edits advance
+publication without changing terrain revision or rebuilding colliders. Paused
+sessions service the same transaction. Radial force is copied into each resident
+tick after physical-to-solver unit conversion; disabled force preserves the
+existing integration path.

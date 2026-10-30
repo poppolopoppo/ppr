@@ -323,6 +323,10 @@ namespace pP::colony {
                 case EColonyTool::dig: return "Dig";
                 case EColonyTool::build_wall: return "Build wall";
                 case EColonyTool::demolish: return "Demolish";
+                case EColonyTool::push: return "Push";
+                case EColonyTool::pull: return "Pull";
+                case EColonyTool::spawn: return "Spawn";
+                case EColonyTool::destroy: return "Destroy";
                 default: return "Inspect";
             }
         }
@@ -333,6 +337,10 @@ namespace pP::colony {
         /// size line, so the cap is stated once, not twice.
         [[nodiscard]] const char *gestureText(const EColonyTool tool) noexcept {
             switch (tool) {
+                case EColonyTool::push: return "LMB: hold to push particles away from the brush centre";
+                case EColonyTool::pull: return "LMB: hold to pull particles toward the brush centre";
+                case EColonyTool::spawn: return "LMB: click to spawn particles in clear terrain";
+                case EColonyTool::destroy: return "LMB: click to remove particles inside the brush";
                 case EColonyTool::inspect: return "LMB: click a cell to pin";
                 case EColonyTool::dig: return "LMB: click digs 1 cell, hold drags";
                 case EColonyTool::build_wall: return "LMB: press, drag a rect, release to queue one wall; Esc cancels";
@@ -408,6 +416,50 @@ namespace pP::colony {
 
             ImGui::SeparatorText(toolName(state.m_tool));
             ImGui::TextWrapped("%s", state.m_instruction.c_str());
+            if (state.m_tool == EColonyTool::push or
+                state.m_tool == EColonyTool::pull or
+                state.m_tool == EColonyTool::spawn or
+                state.m_tool == EColonyTool::destroy) {
+                float radius = static_cast<float>(state.m_tools.m_radius_m);
+                if (ImGui::SliderFloat(
+                        "Radius (m)", &radius, 1.0f / 3.0f, 32.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp)) {
+                    if (std::isfinite(radius)) {
+                        state.m_tools.m_radius_m = static_cast<double>(radius);
+                    }
+                }
+
+                if (state.m_tool == EColonyTool::push or state.m_tool == EColonyTool::pull) {
+                    float strength = static_cast<float>(state.m_tools.m_acceleration_m_s2);
+                    if (ImGui::SliderFloat(
+                            "Strength (m/s²)", &strength, 0.0f, 1000.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp)) {
+                        if (std::isfinite(strength)) {
+                            state.m_tools.m_acceleration_m_s2 = static_cast<double>(strength);
+                        }
+                    }
+                } else if (state.m_tool == EColonyTool::spawn) {
+                    int count = static_cast<int>(state.m_tools.m_spawn_count);
+                    if (ImGui::InputInt("Maximum particles", &count, 1, 16)) {
+                        state.m_tools.m_spawn_count = static_cast<u32>(std::clamp(count, 1, 4096));
+                    }
+
+                    if (ImGui::BeginCombo("Material", state.m_tools.m_spawn_material.c_str())) {
+                        for (const auto &choice: view.m_tool_materials) {
+                            const std::string label{choice.m_label};
+                            const bool selected = choice.m_key == state.m_tools.m_spawn_material;
+                            if (ImGui::Selectable(label.c_str(), selected)) {
+                                state.m_tools.m_spawn_material = choice.m_key;
+                            }
+                        }
+
+                        ImGui::EndCombo();
+                    }
+
+                    if (view.m_tool_materials.empty()) {
+                        ImGui::TextWrapped("This world has no supported solid or liquid particle materials.");
+                    }
+                }
+            }
+
             if (view.m_preview.m_active) {
                 const auto &preview = view.m_preview;
                 if (preview.m_reason[0] != '\0') {
@@ -1231,7 +1283,7 @@ namespace pP::colony {
             const float fs = ImGui::GetFontSize();
             const float width = std::min(fs * 2.875f, io.DisplaySize.x);
             const float height = std::max(
-                1.0f, std::min(fs * 9.5f + ImGui::GetStyle().ItemSpacing.y * 3.0f, io.DisplaySize.y - top));
+                1.0f, std::min(fs * 18.5f + ImGui::GetStyle().ItemSpacing.y * 7.0f, (io.DisplaySize.y - top) * 0.5f));
             ImGui::SetNextWindowPos(ImVec2{0.0f, top}, ImGuiCond_Always);
             ImGui::SetNextWindowSize(ImVec2{width, height}, ImGuiCond_Always);
             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{fs * 0.25f, fs * 0.25f});
@@ -1240,12 +1292,17 @@ namespace pP::colony {
                 kChromeFlags & ~(ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse));
 
             for (const auto tool:
-                {EColonyTool::inspect, EColonyTool::dig, EColonyTool::build_wall, EColonyTool::demolish}) {
+                {EColonyTool::inspect, EColonyTool::dig, EColonyTool::build_wall, EColonyTool::demolish,
+                    EColonyTool::push, EColonyTool::pull, EColonyTool::spawn, EColonyTool::destroy}) {
                 const bool selected = state.m_tool == tool;
                 const auto icon = tool == EColonyTool::inspect      ? ui::icons::kInspectLabel
                                   : tool == EColonyTool::dig        ? ui::icons::kDigLabel
                                   : tool == EColonyTool::build_wall ? ui::icons::kCubesLabel
-                                                                    : ui::icons::kDemolishLabel;
+                                  : tool == EColonyTool::demolish   ? ui::icons::kDemolishLabel
+                                  : tool == EColonyTool::push       ? std::string_view{"P+"}
+                                  : tool == EColonyTool::pull       ? std::string_view{"P-"}
+                                  : tool == EColonyTool::spawn      ? std::string_view{"S"}
+                                                                    : std::string_view{"X"};
                 char label[48]{};
                 std::snprintf(label, sizeof(label), "%.*s###tool%u", 3, icon.data(), static_cast<u32>(tool));
                 if (selected) {
@@ -1355,8 +1412,9 @@ namespace pP::colony {
 
             ImGui::Spacing();
             ImGui::SeparatorText("Tools");
-            const EColonyTool tools[4]{
-                EColonyTool::inspect, EColonyTool::dig, EColonyTool::build_wall, EColonyTool::demolish};
+            const EColonyTool tools[]{
+                EColonyTool::inspect, EColonyTool::dig, EColonyTool::build_wall, EColonyTool::demolish,
+                EColonyTool::push, EColonyTool::pull, EColonyTool::spawn, EColonyTool::destroy};
             if (beginLabelTable("##help_tools", label_width)) {
                 for (const EColonyTool tool: tools) {
                     textRow(toolName(tool), gestureText(tool));

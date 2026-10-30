@@ -68,6 +68,13 @@ export namespace pP::matter {
         u32 m_query_count{};
     };
 
+    /// Inventory-only edits retain the exact committed terrain resources and
+    /// constants. Preserve requires an empty TerrainView, avoiding two inputs.
+    enum class ETerrainUpdate : u8 {
+        replace,
+        preserve,
+    };
+
     /// Single-owner runtime. Device, queue and shader session are injected and
     /// must outlive shutdown. No renderer, sim, physics or service lookup occurs.
     /// A submitted working batch never replaces committed state automatically.
@@ -77,7 +84,7 @@ export namespace pP::matter {
 
         [[nodiscard]] std::error_code prepareReplacement_(
             std::span<const GpuParticle> particles, std::span<const GpuStaticShape> shapes, u64 expected_epoch,
-            TerrainView terrain, bool append);
+            TerrainView terrain, bool append, ETerrainUpdate terrain_update);
 
     public:
         GpuSolver() noexcept;
@@ -101,12 +108,13 @@ export namespace pP::matter {
         /// This freezes step admission until publication or explicit cancellation.
         [[nodiscard]] std::error_code prepareReplacement(
             std::span<const GpuParticle> particles, std::span<const GpuStaticShape> shapes, u64 expected_epoch,
-            TerrainView terrain = {});
+            TerrainView terrain = {}, ETerrainUpdate terrain_update = ETerrainUpdate::replace);
 
         /// Frozen edit candidate: preserve old rows by GPU copy and upload only
         /// appended rows. pollReplacement must prove its copy before publication.
         [[nodiscard]] std::error_code prepareAppend(
-            std::span<const GpuParticle> appended, u64 expected_epoch, TerrainView terrain);
+            std::span<const GpuParticle> appended, u64 expected_epoch, TerrainView terrain = {},
+            ETerrainUpdate terrain_update = ETerrainUpdate::replace);
         [[nodiscard]] Expected<bool> pollReplacement();
         [[nodiscard]] std::error_code cancelPreparedReplacement();
 
@@ -122,7 +130,7 @@ export namespace pP::matter {
         /// No full particle copy, CPU candidate construction or reaction readback.
         [[nodiscard]] std::error_code submitResidentTick(
             u64 expected_epoch, u32 substeps = kGameSubsteps, u32 iterations = kSourceIterations,
-            std::span<const GpuBodyBoundary> predicted_boundaries = {}, u32 body_count = 0u);
+            std::span<const GpuBodyBoundary> predicted_boundaries = {}, u32 body_count = 0u, GpuRadialForce force = {});
 
         /// Freezes mutation at this exact committed epoch until pollSnapshot takes
         /// the owned bytes. Cancellation/teardown must drain an admitted copy.

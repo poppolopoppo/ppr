@@ -874,6 +874,292 @@ namespace pP::tests::detail::MatterFork {
         }
     };
 
+    // ------------------------------------------------------------------
+    // immutable radial force protocol and resident integration
+    // ------------------------------------------------------------------
+
+    PPR_UNIT_TEST (radial_force_reflection_and_codegen_preserve_scalar_layout_on_spirv_and_hlsl) {
+        const auto shaders = IShaderService::get();
+        for (const auto target: {SLANG_SPIRV, SLANG_HLSL}) {
+            PPR_TEST_ASSERT(not shaders->initialize());
+            PPR_DEFER {
+                PPR_TEST_ASSERT(not shaders->shutdown());
+            };
+            PPR_TEST_ASSERT(not shaders->setTargetFormat(target));
+
+            shader::SharedModule module;
+            PPR_TEST_ASSERT(not shaders->loadModuleFromFile(
+                std::filesystem::current_path() / "shaders" / "pbmpm" / "solver.slang", "radial_force_layout",
+                module.writeRef()));
+            for (const char *const entry_name: {"fused0", "fused1", "fused0Wave", "fused1Wave"}) {
+                shader::ComPtr<slang::IEntryPoint> entry;
+                PPR_TEST_ASSERT(not make_error_code(module->findEntryPointByName(entry_name, entry.writeRef())));
+
+                slang::IComponentType *components[]{module.get(), entry.get()};
+                shader::ComPtr<slang::IComponentType> composite;
+                shader::Diagnose diagnostics;
+                PPR_TEST_ASSERT(not make_error_code(module->getSession()->createCompositeComponentType(
+                    components, 2, composite.writeRef(), diagnostics.writeRef())));
+                shader::ComPtr<slang::IComponentType> linked;
+                PPR_TEST_ASSERT(not make_error_code(composite->link(linked.writeRef(), diagnostics.writeRef())));
+
+                if (std::string_view{entry_name} == "fused1" or std::string_view{entry_name} == "fused1Wave") {
+                    auto *const layout = linked->getLayout();
+                    PPR_TEST_ASSERT(layout != nullptr);
+
+                    slang::TypeLayoutReflection *force_layout{};
+                    for (unsigned index = 0u; index < layout->getParameterCount(); ++index) {
+                        auto *const parameter = layout->getParameterByIndex(index);
+                        if (std::string_view{parameter->getName()} == "g_radial_force") {
+                            PPR_TEST_ASSERT(
+                                parameter->getType()->getKind() == slang::TypeReflection::Kind::ConstantBuffer);
+                            force_layout = parameter->getTypeLayout()->getElementTypeLayout();
+                        }
+                    }
+
+                    PPR_TEST_ASSERT(force_layout != nullptr);
+                    PPR_TEST_ASSERT(
+                        force_layout->getSize(SLANG_PARAMETER_CATEGORY_UNIFORM) == sizeof(matter::GpuRadialForce));
+                    PPR_TEST_ASSERT(force_layout->getFieldCount() == 4u);
+                    constexpr std::array names{"centerX", "centerY", "radius", "acceleration"};
+                    for (unsigned index = 0u; index < names.size(); ++index) {
+                        auto *const field = force_layout->getFieldByIndex(index);
+                        PPR_TEST_ASSERT(std::string_view{field->getName()} == names[index]);
+                        PPR_TEST_ASSERT(field->getOffset(SLANG_PARAMETER_CATEGORY_UNIFORM) == index * sizeof(float));
+                    }
+                }
+
+                shader::ComPtr<slang::IBlob> code;
+                PPR_TEST_ASSERT(
+                    not make_error_code(linked->getEntryPointCode(0, 0, code.writeRef(), diagnostics.writeRef())));
+                PPR_TEST_ASSERT(code and code->getBufferSize() != 0u);
+            }
+        }
+    };
+
+    PPR_UNIT_TEST (resident_radial_force_preserves_zero_path_pushes_pulls_and_rejects_invalid_inputs) {
+        Fixture fixture;
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+        fixture.initialize();
+
+        matter::GpuSolver solver;
+        PPR_DEFER {
+            PPR_TEST_ASSERT(not solver.shutdown());
+        };
+        GpuParameters parameters{};
+        parameters.m_grid_width = 32u;
+        parameters.m_grid_height = 32u;
+        parameters.m_gravity_strength = 0.0f;
+        parameters.m_use_grid_volume_for_liquid = 0u;
+        PPR_TEST_ASSERT(not solver.initialize(
+            fixture.rhi_service->getDevice(), *fixture.queue, *fixture.shaders, std::filesystem::current_path(),
+            parameters));
+
+        std::array<matter::GpuParticle, 4u> particles{};
+        constexpr std::array positions{8.5f, 10.5f, 14.5f, 22.5f};
+        for (std::size_t index = 0u; index < particles.size(); ++index) {
+            auto &particle = particles[index];
+            particle.m_position_x = positions[index];
+            particle.m_position_y = 8.5f;
+            particle.m_material = static_cast<float>(matter::ESourceMaterial::elastic);
+        }
+
+        const auto run_force = [&](const std::optional<matter::GpuRadialForce> force) {
+            PPR_TEST_ASSERT(not solver.prepareReplacement(particles, {}, solver.accounting().m_epoch));
+            solver.publishReplacement();
+
+            if (force) {
+                PPR_TEST_ASSERT(not solver.submitResidentTick(solver.accounting().m_epoch, 1u, 2u, {}, 0u, *force));
+            } else {
+                PPR_TEST_ASSERT(not solver.submitResidentTick(solver.accounting().m_epoch, 1u, 2u));
+            }
+
+            PPR_TEST_ASSERT(not solver.drain());
+            const auto ready = solver.pollTick();
+            PPR_TEST_ASSERT(ready and *ready);
+            solver.publishTick();
+
+            return captureProduction(solver);
+        };
+
+        const auto baseline = run_force(std::nullopt);
+        const auto disabled = run_force(matter::GpuRadialForce{100.0f, -100.0f, 0.0f, 0.0f});
+        PPR_TEST_ASSERT(baseline.m_particles.size() == particles.size());
+        PPR_TEST_ASSERT(disabled.m_particles.size() == baseline.m_particles.size());
+        PPR_TEST_ASSERT(
+            std::memcmp(
+                baseline.m_particles.data(), disabled.m_particles.data(),
+                particles.size() * sizeof(matter::GpuParticle)) == 0);
+
+        const auto pushed = run_force(matter::GpuRadialForce{8.5f, 8.5f, 6.0f, 480.0f});
+        const auto pulled = run_force(matter::GpuRadialForce{8.5f, 8.5f, 6.0f, -480.0f});
+        PPR_TEST_ASSERT(
+            pushed.m_particles.size() == particles.size() and pulled.m_particles.size() == particles.size());
+        PPR_TEST_ASSERT(pushed.m_particles[1u].m_displacement_x > 0.0f);
+        PPR_TEST_ASSERT(pulled.m_particles[1u].m_displacement_x < 0.0f);
+        PPR_TEST_ASSERT(pushed.m_particles[1u].m_displacement_x == -pulled.m_particles[1u].m_displacement_x);
+        for (const std::size_t index: {0u, 2u, 3u}) {
+            PPR_TEST_ASSERT(
+                std::memcmp(&pushed.m_particles[index], &baseline.m_particles[index], sizeof(matter::GpuParticle)) ==
+                0);
+            PPR_TEST_ASSERT(
+                std::memcmp(&pulled.m_particles[index], &baseline.m_particles[index], sizeof(matter::GpuParticle)) ==
+                0);
+        }
+
+        const auto before = solver.accounting();
+        const float nan = std::numeric_limits<float>::quiet_NaN();
+        const float infinity = std::numeric_limits<float>::infinity();
+        for (const matter::GpuRadialForce force:
+            {matter::GpuRadialForce{nan, 8.5f, 6.0f, 480.0f}, matter::GpuRadialForce{8.5f, infinity, 6.0f, 480.0f},
+                matter::GpuRadialForce{8.5f, 8.5f, nan, 0.0f}, matter::GpuRadialForce{8.5f, 8.5f, 6.0f, infinity},
+                matter::GpuRadialForce{8.5f, 8.5f, 0.0f, 480.0f}, matter::GpuRadialForce{8.5f, 8.5f, -1.0f, 0.0f},
+                matter::GpuRadialForce{-1.0f, 8.5f, 6.0f, 480.0f}, matter::GpuRadialForce{8.5f, 33.0f, 6.0f, 480.0f},
+                matter::GpuRadialForce{8.5f, 8.5f, 33.0f, 480.0f}}) {
+            PPR_TEST_ASSERT(
+                solver.submitResidentTick(before.m_epoch, 1u, 2u, {}, 0u, force) == std::errc::invalid_argument);
+            PPR_TEST_ASSERT(not solver.busy());
+            PPR_TEST_ASSERT(solver.accounting().m_epoch == before.m_epoch);
+            PPR_TEST_ASSERT(solver.accounting().m_dispatches == before.m_dispatches);
+        }
+
+        const auto after = captureProduction(solver);
+        PPR_TEST_ASSERT(after.m_particles.size() == pulled.m_particles.size());
+        PPR_TEST_ASSERT(
+            std::memcmp(
+                after.m_particles.data(), pulled.m_particles.data(), particles.size() * sizeof(matter::GpuParticle)) ==
+            0);
+    };
+
+    // ------------------------------------------------------------------
+    // inventory-only terrain ownership
+    // ------------------------------------------------------------------
+
+    PPR_UNIT_TEST (inventory_replacements_preserve_terrain_ownership_accounting_and_contact) {
+        Fixture fixture;
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+        fixture.initialize();
+
+        matter::GpuSolver solver;
+        PPR_DEFER {
+            PPR_TEST_ASSERT(not solver.shutdown());
+        };
+        GpuParameters parameters{};
+        parameters.m_grid_width = 32u;
+        parameters.m_grid_height = 32u;
+        parameters.m_gravity_strength = 0.0f;
+        parameters.m_use_grid_volume_for_liquid = 0u;
+        PPR_TEST_ASSERT(not solver.initialize(
+            fixture.rhi_service->getDevice(), *fixture.queue, *fixture.shaders, std::filesystem::current_path(),
+            parameters));
+
+        matter::GpuParticle particle{};
+        particle.m_position_x = 12.0f;
+        particle.m_position_y = 9.0f;
+        particle.m_displacement_y = -0.75f;
+        particle.m_material = static_cast<float>(matter::ESourceMaterial::elastic);
+        const std::array original{particle};
+        const auto advance = [&]() {
+            PPR_TEST_ASSERT(not solver.submitResidentTick(solver.accounting().m_epoch, 1u, 2u));
+            PPR_TEST_ASSERT(not solver.drain());
+            const auto ready = solver.pollTick();
+            PPR_TEST_ASSERT(ready and *ready);
+            solver.publishTick();
+
+            return captureProduction(solver);
+        };
+
+        PPR_TEST_ASSERT(not solver.prepareReplacement(original, {}, solver.accounting().m_epoch));
+        solver.publishReplacement();
+        const auto free_fall = advance();
+        PPR_TEST_ASSERT(free_fall.m_particles.size() == 1u and free_fall.m_particles[0u].m_position_y < 8.5f);
+
+        Array<u32> masks(31u * 31u, 0u);
+        for (u32 y = 0u; y <= 8u; ++y) {
+            for (u32 x = 0u; x < 31u; ++x) {
+                masks[y * 31u + x] = y == 8u ? 3u : 15u;
+            }
+        }
+
+        const matter::TerrainView terrain{masks, 31u, 31u};
+        const auto packed = matter::packTerrain(terrain);
+        PPR_TEST_ASSERT(packed.has_value());
+        const u64 terrain_bytes = (packed->m_masks.size() + packed->m_boundary_tiles.size()) * sizeof(u32);
+        PPR_TEST_ASSERT(terrain_bytes != 0u);
+        PPR_TEST_ASSERT(not solver.prepareReplacement(original, {}, solver.accounting().m_epoch, terrain));
+        solver.publishReplacement();
+
+        const auto committed = solver.accounting();
+        PPR_TEST_ASSERT(not solver.prepareReplacement(original, {}, committed.m_epoch, terrain));
+        const auto copied_replacement = solver.accounting();
+        PPR_TEST_ASSERT(not solver.cancelPreparedReplacement());
+        PPR_TEST_ASSERT(solver.accounting().m_device_bytes == committed.m_device_bytes);
+
+        PPR_TEST_ASSERT(
+            not solver.prepareReplacement(original, {}, committed.m_epoch, {}, matter::ETerrainUpdate::preserve));
+        const auto shared_replacement = solver.accounting();
+        PPR_TEST_ASSERT(copied_replacement.m_device_bytes == shared_replacement.m_device_bytes + terrain_bytes);
+        PPR_TEST_ASSERT(copied_replacement.m_readback_capacity_bytes == shared_replacement.m_readback_capacity_bytes);
+        PPR_TEST_ASSERT(not solver.cancelPreparedReplacement());
+        PPR_TEST_ASSERT(solver.accounting().m_device_bytes == committed.m_device_bytes);
+
+        PPR_TEST_ASSERT(not solver.prepareAppend({}, committed.m_epoch, terrain));
+        const auto copied_append = solver.accounting();
+        PPR_TEST_ASSERT(not solver.cancelPreparedReplacement());
+        PPR_TEST_ASSERT(not solver.prepareAppend({}, committed.m_epoch, {}, matter::ETerrainUpdate::preserve));
+        const auto shared_append = solver.accounting();
+        PPR_TEST_ASSERT(copied_append.m_device_bytes == shared_append.m_device_bytes + terrain_bytes);
+        PPR_TEST_ASSERT(not solver.cancelPreparedReplacement());
+
+        PPR_TEST_ASSERT(
+            solver.prepareReplacement(original, {}, committed.m_epoch, terrain, matter::ETerrainUpdate::preserve) ==
+            std::errc::invalid_argument);
+        PPR_TEST_ASSERT(
+            solver.prepareAppend({}, committed.m_epoch, {{}, 0u, 0u, 0.5f, 0.0f}, matter::ETerrainUpdate::preserve) ==
+            std::errc::invalid_argument);
+        PPR_TEST_ASSERT(
+            solver.prepareAppend({}, committed.m_epoch, {}, static_cast<matter::ETerrainUpdate>(255u)) ==
+            std::errc::invalid_argument);
+        PPR_TEST_ASSERT(not solver.busy());
+        PPR_TEST_ASSERT(solver.accounting().m_epoch == committed.m_epoch);
+        PPR_TEST_ASSERT(solver.accounting().m_device_bytes == committed.m_device_bytes);
+
+        auto appended = particle;
+        appended.m_position_x = 22.0f;
+        const std::array suffix{appended};
+        PPR_TEST_ASSERT(not solver.prepareAppend(suffix, committed.m_epoch, {}, matter::ETerrainUpdate::preserve));
+        PPR_TEST_ASSERT(not solver.drain());
+        const auto prepared = solver.pollReplacement();
+        PPR_TEST_ASSERT(prepared and *prepared);
+        solver.publishReplacement();
+
+        const auto after_append = advance();
+        PPR_TEST_ASSERT(after_append.m_particles.size() == 2u);
+        for (const auto &row: after_append.m_particles) {
+            PPR_TEST_ASSERT(row.m_position_y >= 8.5f);
+        }
+
+        PPR_TEST_ASSERT(not solver.prepareReplacement(
+            original, {}, solver.accounting().m_epoch, {}, matter::ETerrainUpdate::preserve));
+        solver.publishReplacement();
+        PPR_TEST_ASSERT(solver.accounting().m_device_bytes == committed.m_device_bytes);
+
+        const auto after_replace = advance();
+        PPR_TEST_ASSERT(after_replace.m_particles.size() == 1u);
+        PPR_TEST_ASSERT(after_replace.m_particles[0u].m_position_y >= 8.5f);
+        PPR_TEST_ASSERT(
+            std::memcmp(&after_append.m_particles[0u], &after_replace.m_particles[0u], sizeof(matter::GpuParticle)) ==
+            0);
+    };
+
+    // ------------------------------------------------------------------
+    // checked source scatter failures
+    // ------------------------------------------------------------------
+
     PPR_UNIT_TEST (guards_reject_before_shared_signed_accumulation) {
         Fixture fixture;
         PPR_DEFER {
@@ -913,7 +1199,11 @@ namespace pP::tests {
             run.recurse(
                 {detail::MatterFork::actual_wgsl_stages_and_exact_semantic_restart,
                     detail::MatterFork::guards_reject_before_shared_signed_accumulation,
-                    detail::MatterFork::production_k2_stages_tick2_and_restored22_match_actual_wgsl});
+                    detail::MatterFork::production_k2_stages_tick2_and_restored22_match_actual_wgsl,
+                    detail::MatterFork::radial_force_reflection_and_codegen_preserve_scalar_layout_on_spirv_and_hlsl,
+                    detail::MatterFork::
+                        resident_radial_force_preserves_zero_path_pushes_pulls_and_rejects_invalid_inputs,
+                    detail::MatterFork::inventory_replacements_preserve_terrain_ownership_accounting_and_contact});
         };
 
         return group;

@@ -183,6 +183,20 @@ export namespace pP::matter {
     };
 
     // ------------------------------------------------------------------
+    // per-tick radial acceleration
+    // ------------------------------------------------------------------
+
+    /// Immutable solver-cell brush: positive acceleration pushes outward,
+    /// negative pulls inward. Zero acceleration disables it without arithmetic.
+    /// Radius and centre use cells; acceleration uses cells per second squared.
+    struct GpuRadialForce {
+        float m_center_x{};
+        float m_center_y{};
+        float m_radius{};
+        float m_acceleration{};
+    };
+
+    // ------------------------------------------------------------------
     // contour terrain and predicted-body extension protocol
     // ------------------------------------------------------------------
 
@@ -307,6 +321,13 @@ export namespace pP::matter {
     static_assert(PPR_OFFSETOF(GpuParameters, m_elastic_relaxation) == 32u);
     static_assert(PPR_OFFSETOF(GpuParameters, m_fixed_point_multiplier) == 40u);
     static_assert(PPR_OFFSETOF(GpuParameters, m_friction_angle) == 48u);
+
+    static_assert(std::is_standard_layout_v<GpuRadialForce> and std::is_trivially_copyable_v<GpuRadialForce>);
+    static_assert(sizeof(GpuRadialForce) == 16u and alignof(GpuRadialForce) == 4u);
+    static_assert(PPR_OFFSETOF(GpuRadialForce, m_center_x) == 0u);
+    static_assert(PPR_OFFSETOF(GpuRadialForce, m_center_y) == 4u);
+    static_assert(PPR_OFFSETOF(GpuRadialForce, m_radius) == 8u);
+    static_assert(PPR_OFFSETOF(GpuRadialForce, m_acceleration) == 12u);
 
     static_assert(std::is_standard_layout_v<GpuBodyBoundary> and std::is_trivially_copyable_v<GpuBodyBoundary>);
     static_assert(sizeof(GpuBodyBoundary) == 64u and alignof(GpuBodyBoundary) == 4u);

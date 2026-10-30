@@ -40,6 +40,8 @@ terrain, Box2D, edit and checkpoint adapters. Drawing never advances this solver
   drains before releasing either source reader or candidate. Terrain-only edits
   upload no numerical rows. Numerical CPU-upload and GPU-copy bytes are separate
   accounting fields. The host uses this transaction for inventory edits.
+  Inventory-only replacements explicitly preserve the committed terrain buffers
+  and environment constants, avoiding terrain reconstruction and upload.
 - `submitResidentTick` copies committed to working and runs compact GPU discovery,
   count/allocate/insert and destination initialization plus two indirect fused
   dispatches per substep. K2 is the only admitted count;
@@ -78,8 +80,11 @@ Assets are `assets/shaders/pbmpm/{solver,fork_core,types}.slang`; source attribu
 accepted adaptations and the exact stage mapping are in its README/license.
 All four source material branches, F/SVD/plasticity, static rotated boxes and
 circles, tiny-mass threshold, post-contact re-encoding, volume feedback and
-source integration/guardian safeguards are ported. Browser mouse/emitter/drain
-controls are outside the admitted runtime.
+source integration/guardian safeguards are ported. Game radial forces use a
+separate 16-byte scalar constant, captured by immutable iteration-1 roots. The
+signed acceleration has squared radial falloff and enters displacement through
+dt²; zero acceleration skips the added arithmetic. Browser control ownership
+is not imported into the solver.
 
 Terrain replacement derives one boundary-presence bit per 8-by-8 dual-cell tile,
 with 32 tiles per u32, alongside its validated packed masks. The table follows the same prepared,

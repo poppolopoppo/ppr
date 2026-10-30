@@ -9,6 +9,7 @@ import game.colony.driver;
 import game.colony.matter;
 import game.colony.buildings;
 import game.colony.digtool;
+import game.colony.tools;
 import game.colony.panel;
 import game.colony.worldgen_panel;
 import game.ui;
@@ -114,6 +115,11 @@ export namespace pP::game {
         colony::DigRect m_rect{};
     };
 
+    struct SessionParticleOrder {
+        u64 m_world{};
+        colony::ParticleToolCommand m_command{};
+    };
+
     struct SessionWorldAction {
         u64 m_job{};
         ui::EWorldAction m_action{};
@@ -121,8 +127,8 @@ export namespace pP::game {
 
     using SessionDelivery = std::variant<
         RenderFrameResult, GridWorldResult, SessionColonyIntent, colony::WorkshopIntent, SessionWorldAction,
-        ui::EUnsavedAction, SessionBuildOrder, SessionDigOrder>;
-    using SessionToolOrder = std::variant<SessionBuildOrder, SessionDigOrder>;
+        ui::EUnsavedAction, SessionBuildOrder, SessionDigOrder, SessionParticleOrder>;
+    using SessionToolOrder = std::variant<SessionBuildOrder, SessionDigOrder, SessionParticleOrder>;
 
     /// Stale displayed-world orders are expected absence. A busy live driver
     /// returns device_or_resource_busy so the host can retain the exact order.
@@ -130,6 +136,9 @@ export namespace pP::game {
         colony::ColonyDriver &driver, const SessionBuildOrder &order, u64 displayed_world);
     [[nodiscard]] Expected<bool> applySessionDigOrder(
         colony::ColonyDriver &driver, const SessionDigOrder &order, u64 displayed_world);
+
+    [[nodiscard]] Expected<bool> applySessionParticleOrder(
+        colony::ColonyDriver &driver, const SessionParticleOrder &order, u64 displayed_world);
 
     struct SessionServiceBatch {
         Array<SessionDelivery> m_deliveries{};

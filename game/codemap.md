@@ -163,3 +163,12 @@ Map size is startup policy (`--map-size` / `game.map_size`): 1024, 2048 or
 generation, prepared descriptors, grid/particle state and checkpoint formats;
 maximum-stride chunk identities remain stable. Smaller maps retain the same
 physical cell and actor scale.
+
+Simulation tools share the existing world-owned pointer gesture. Push and pull
+apply a held radial acceleration; spawn and destroy admit one owned particle
+inventory stroke per press. The tool context configures radius, acceleration,
+spawn count and catalog particle material. Startup defaults are available through
+`--tool-radius`, `--tool-strength`, `--spawn-count`, `--spawn-material` and
+`game.tool_radius_m`, `game.tool_acceleration_m_s2`, `game.tool_spawn_count`,
+`game.tool_spawn_material` in TOML/environment. UI edits are session values.
+Force is cleared on release, cancellation, focus loss and tool/world changes.
