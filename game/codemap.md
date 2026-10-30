@@ -26,7 +26,7 @@ coupling and step Box2D once; normal frames carry a shared GPU view without a
 CPU particle mirror or batch upload. Metadata prepares only at world/inventory
 admission. Checkpoint, preview, inspection and edit coverage request exact demand
 snapshots on existing workers, with simulation admission frozen while UI/render
-continues. Complete v5 payloads and atomic file saving remain unchanged.
+continues. Complete v6 payloads and atomic file saving remain unchanged.
 
 Preparation readiness separately matches an actual-present resident stamp for
 the acknowledged world/job/generation, publication, terrain revision and joint
@@ -99,7 +99,7 @@ Keep/Revert. Engine test targets never depend on these game modules.
 The game-owned world coordinator retains immutable requests, job-local cancellation and isolated candidate drivers. Independent worker admission is explicit; default WorldJob callers retain the original loading-presented gate. Cancel/failure before renderer activation admission preserves the old session; activation admission latches commit intent, and post-activation attachment/presentation failure is terminal while owners remain retained through real retirement. Only detached drivers may enter worker cleanup/capture. Normal startup loads the authored pack/profile/seed and initializes one actor. Independent render controls stage/activate owned terrain separately, and the modal remains through real presentation. No frame result or loading acknowledgment is fabricated. Integrated responsiveness remains unverified: cold command finalization occupies the sole device lane for about40s. Matter now uses retained asynchronous operations; the renderer retains its existing synchronous teardown policy. No timeout, resolution, schedule or backend workaround is adopted.
 
 
-`--worldgen-preview --worldgen-output=<directory>` exports material/biome/temperature/initial-matter P6 PPM overviews and a bounded JSON report through `colony/WorldGen.Export.cpp`. It is a headless authoring path; see `docs/worldgen-content.md` for resolution, orientation and baseline semantics. Mandatory current-state checkpoint envelope v5 is owned by `game.colony.checkpoint`, leaving raw sim snapshot v4 unchanged. Historical seeds never replace evolved columns; detached restored owners stay frozen until runtime attachment.
+`--worldgen-preview --worldgen-output=<directory>` exports material/biome/temperature/initial-matter P6 PPM overviews and a bounded JSON report through `colony/WorldGen.Export.cpp`. It is a headless authoring path; see `docs/worldgen-content.md` for resolution, orientation and baseline semantics. Mandatory current-state checkpoint envelope v6 is owned by `game.colony.checkpoint`, with dimensioned raw sim snapshot v5. Historical seeds never replace evolved columns; detached restored owners stay frozen until runtime attachment.
 
 `--worldgen-preview --worldgen-gpu-output=<directory>` explicitly enables a rendering-capable,
 UI-free frozen diagnostic host after generation. `colony/WorldGen.Capture.cpp`
@@ -157,3 +157,9 @@ owner is never updated through the generic path. The route relinquishes service
 immediately when old identity/pause/readiness restoration acknowledges. The
 existing checkpoint GPU restore leaf uses an admitted queued/ready resume across
 multiple host-style turns to exercise that same production routing predicate.
+
+Map size is startup policy (`--map-size` / `game.map_size`): 1024, 2048 or
+4096 fine cells per edge, default4096. Explicit per-world bounds travel through
+generation, prepared descriptors, grid/particle state and checkpoint formats;
+maximum-stride chunk identities remain stable. Smaller maps retain the same
+physical cell and actor scale.

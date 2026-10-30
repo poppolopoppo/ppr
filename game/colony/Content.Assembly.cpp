@@ -373,6 +373,13 @@ namespace pP::colony {
         numeric.value(parameters.m_reference_thickness_m);
         numeric.value(parameters.m_actor_half_width_m);
         numeric.value(parameters.m_actor_half_height_m);
+
+        // Preserve existing default-map identities; other dimensions are distinct
+        // numeric recipes and cannot share prepared-world or preview caches.
+        if (parameters.m_world_edge != sim::kWorldEdge) {
+            numeric.value(parameters.m_world_edge);
+        }
+
         result.m_numeric_fingerprint = numeric.hash();
 
         std::ranges::sort(result.m_textures, {}, [](const auto &texture) { return *texture.m_id; });

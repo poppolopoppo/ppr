@@ -244,6 +244,22 @@ namespace pP::game {
     }
 
     // ------------------------------------------------------------------
+    // map size validation
+    // ------------------------------------------------------------------
+
+    std::error_code MapSizeDomain::validate(const u32 &value) const noexcept {
+        if (value != 1024u and value != 2048u and value != 4096u) {
+            PPR_RETURN_ERROR_ON_FAIL(GameConfig, config::EConfigErrc::out_of_range);
+        }
+
+        return {};
+    }
+
+    std::string MapSizeDomain::describe() const {
+        return "1024, 2048 or 4096";
+    }
+
+    // ------------------------------------------------------------------
     // invocation option declarations
     // ------------------------------------------------------------------
 
@@ -298,6 +314,8 @@ namespace pP::game {
                 "game.worldgen_profile", "worldgen-profile", "Qualified World asset (local only for one pack)."));
         appendOption(
             schema.m_options, valueOption("game.worldgen_seed", "worldgen-seed", "Unsigned 64-bit world seed."));
+        appendOption(
+            schema.m_options, valueOption("game.map_size", "map-size", "Square map edge: 1024, 2048 or 4096 cells."));
         appendOption(
             schema.m_options,
             valueOption(

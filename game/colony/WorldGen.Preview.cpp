@@ -11,18 +11,22 @@ namespace pP::colony {
 
     PPR_DEFINE_LOG_CATEGORY(BiomeSamplePreview, info, none)
     namespace {
-        sim::GenerationCellBounds expand(const sim::GenerationCellBounds bounds, const u32 padding) noexcept {
+        sim::GenerationCellBounds expand(
+            const sim::GenerationCellBounds bounds, const u32 padding, const u32 world_edge) noexcept {
             return {
                 bounds.m_left > padding ? bounds.m_left - padding : 0u,
                 bounds.m_bottom > padding ? bounds.m_bottom - padding : 0u,
-                std::min(sim::kWorldEdge, bounds.m_right + padding), std::min(sim::kWorldEdge, bounds.m_top + padding)};
+                std::min(world_edge, bounds.m_right + padding), std::min(world_edge, bounds.m_top + padding)};
         }
-        sim::GenerationCellBounds align(const sim::GenerationCellBounds bounds, const u32 edge) noexcept {
+
+        sim::GenerationCellBounds align(
+            const sim::GenerationCellBounds bounds, const u32 edge, const u32 world_edge) noexcept {
             return {
                 bounds.m_left / edge * edge, bounds.m_bottom / edge * edge,
-                std::min(sim::kWorldEdge, (bounds.m_right + edge - 1u) / edge * edge),
-                std::min(sim::kWorldEdge, (bounds.m_top + edge - 1u) / edge * edge)};
+                std::min(world_edge, (bounds.m_right + edge - 1u) / edge * edge),
+                std::min(world_edge, (bounds.m_top + edge - 1u) / edge * edge)};
         }
+
         u64 geometryPayload(const sim::GenerationGeometry &geometry) noexcept {
             return geometry.m_instances.capacity() * sizeof(sim::GenerationInstance) +
                    geometry.m_segments.capacity() * sizeof(sim::GenerationSegment) +
@@ -228,6 +232,8 @@ namespace pP::colony {
     bool WorldgenPreviewWorld::matches(const ContentCatalog &catalog, const WorldgenPreviewSpec &spec) const noexcept {
         return m_profile == spec.m_profile and
                m_world.m_plan.seed() == spec.m_seed and
+               catalog.selectedRecipe() and
+               m_world.m_grid.edge() == catalog.selectedRecipe()->m_recipe.m_world_edge and
                catalog.contentFingerprint() == std::optional<u64>{m_content_fingerprint};
     }
 
@@ -301,8 +307,14 @@ namespace pP::colony {
         PPR_RETURN_UNEXPECTED_ON_FAIL(BiomeSamplePreview, context ? context->error() : std::error_code{});
         PPR_RETURN_UNEXPECTED_ON_FAIL(
             BiomeSamplePreview, not catalog ? std::make_error_code(std::errc::invalid_argument) : std::error_code{});
-        if (spec.m_origin.m_x > sim::kWorldEdge - kWorldgenPreviewEdge or
-            spec.m_origin.m_y > sim::kWorldEdge - kWorldgenPreviewEdge) {
+        const auto *const compiled = catalog->selectedRecipe();
+        if (compiled == nullptr) {
+            PPR_RETURN_UNEXPECTED_ON_FAIL(BiomeSamplePreview, std::errc::invalid_argument);
+        }
+
+        const u32 world_edge = compiled->m_recipe.m_world_edge;
+        if (spec.m_origin.m_x > world_edge - kWorldgenPreviewEdge or
+            spec.m_origin.m_y > world_edge - kWorldgenPreviewEdge) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(BiomeSamplePreview, std::errc::result_out_of_range);
         }
 
@@ -321,8 +333,8 @@ namespace pP::colony {
             auto layout = sim::restoreBiomeLayout(*plan, world->m_world.m_layout.sites());
             PPR_RETURN_UNEXPECTED_ON_FAIL(BiomeSamplePreview, layout);
 
-            const auto support = align(expand(visible, 1u), sim::kChunkEdge);
-            sim::ChunkGrid grid;
+            const auto support = align(expand(visible, 1u, world_edge), sim::kChunkEdge, world_edge);
+            sim::ChunkGrid grid{world_edge};
 
             for (u32 cy = support.m_bottom / sim::kChunkEdge; cy < support.m_top / sim::kChunkEdge; ++cy) {
                 for (u32 cx = support.m_left / sim::kChunkEdge; cx < support.m_right / sim::kChunkEdge; ++cx) {
@@ -346,7 +358,7 @@ namespace pP::colony {
 
             WorldgenPreviewResult result{
                 std::move(catalog), std::move(spec), std::move(*plan), std::move(*layout), {}, std::move(grid), visible,
-                support, {16u, 16u, sim::kWorldEdge - 16u, sim::kWorldEdge - 16u}, biome_index};
+                support, {16u, 16u, world_edge - 16u, world_edge - 16u}, biome_index};
             result.m_matter = std::move(*matter);
             result.m_known_world_cache_payload_bytes = world->m_known_retained_payload_bytes;
             result.m_exact_world = world;
@@ -400,8 +412,8 @@ namespace pP::colony {
         }
         formation_reach += 4u;
 
-        const auto domain = align(expand(visible, formation_reach), 16u);
-        const auto support = align(expand(domain, formation_reach + 1u), sim::kChunkEdge);
+        const auto domain = align(expand(visible, formation_reach, world_edge), 16u, world_edge);
+        const auto support = align(expand(domain, formation_reach + 1u, world_edge), sim::kChunkEdge, world_edge);
         const u32 chunks = (support.m_right - support.m_left) /
                            sim::kChunkEdge *
                            ((support.m_top - support.m_bottom) / sim::kChunkEdge);
@@ -409,7 +421,7 @@ namespace pP::colony {
             PPR_RETURN_UNEXPECTED_ON_FAIL(BiomeSamplePreview, std::errc::value_too_large);
         }
 
-        sim::ChunkGrid grid;
+        sim::ChunkGrid grid{world_edge};
         {
             auto raster = sim::compileGenerationRaster(*plan, *layout, *geometry, context);
             PPR_RETURN_UNEXPECTED_ON_FAIL(BiomeSamplePreview, raster);

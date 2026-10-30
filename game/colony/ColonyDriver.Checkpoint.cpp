@@ -66,7 +66,11 @@ namespace pP::colony {
             ColonyCheckpoint, not m_timestep and
                                       desc.m_tick_hz != 0u and
                                       desc.m_seed == world.descriptor().m_seed and
-                                      snapshot.m_seed == desc.m_seed
+                                      snapshot.m_seed == desc.m_seed and
+                                      desc.m_world_edge == world.grid().edge() and
+                                      world.descriptor().m_world_edge == world.grid().edge() and
+                                      snapshot.m_world_edge == world.grid().edge() and
+                                      matter.m_world_edge == world.grid().edge()
                                   ? std::error_code{}
                                   : std::make_error_code(std::errc::invalid_argument));
 

@@ -205,8 +205,8 @@ namespace pP::colony {
                     std::span<const sim::MatterParticle>{working.m_gas}}) {
                 for (const auto &record: records) {
                     const sim::GlobalCellPos position{
-                        std::min(static_cast<u32>(record.m_x_m / working.m_cell_metres), sim::kWorldEdge - 1u),
-                        std::min(static_cast<u32>(record.m_y_m / working.m_cell_metres), sim::kWorldEdge - 1u)};
+                        std::min(static_cast<u32>(record.m_x_m / working.m_cell_metres), working.m_world_edge - 1u),
+                        std::min(static_cast<u32>(record.m_y_m / working.m_cell_metres), working.m_world_edge - 1u)};
                     rows[sim::chunkIndexOf(sim::chunkOf(position))].push_back(record);
                 }
             }
@@ -225,7 +225,7 @@ namespace pP::colony {
             PPR_RETURN_ERROR_ON_FAIL(
                 ColonyEdits, candidate.m_moving_particles.restoreMoving(
                                  snapshot, preparedWorld()->generated().m_plan.recipe().m_materials,
-                                 working.m_cell_metres, working.m_thickness_metres));
+                                 working.m_cell_metres, working.m_thickness_metres, working.m_world_edge));
 
             candidate.m_matter = std::move(working);
         } else {

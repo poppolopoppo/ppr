@@ -67,7 +67,7 @@ export namespace pP::colony {
     /// Validates a footprint: in-world rect, edges in [1, kMaxFootprintEdge],
     /// known element, ladders non-solid.
     [[nodiscard]] std::error_code validateFootprint(
-        const Footprint &print, const ContentCatalog *catalog = nullptr) noexcept;
+        const Footprint &print, const ContentCatalog *catalog = nullptr, u32 world_edge = sim::kWorldEdge) noexcept;
 
     // Generated construction validates the whole metre-aligned footprint before
     // recording an errand; live errands reserve their complete footprint.

@@ -47,6 +47,32 @@ namespace pP::game::tests::detail::metric {
         PPR_TEST_ASSERT(not fineCellBoundaryMetres(sim::kWorldEdge + 1u).has_value());
     };
 
+    PPR_UNIT_TEST (selected_world_bounds_preserve_physical_cell_scale) {
+        for (const u32 edge: {1024u, 2048u, 4096u}) {
+            const double extent = static_cast<double>(edge) / kFineCellsPerMetre;
+            const auto centre = fineCellCentre({edge - 1u, edge - 1u}, edge);
+            PPR_TEST_ASSERT(centre.has_value());
+            PPR_TEST_ASSERT(centre->m_x == (static_cast<double>(edge) - 0.5) / kFineCellsPerMetre);
+
+            const auto last = metreToFineCell({std::nextafter(extent, 0.0), 0.0}, kFineCellsPerMetre, edge);
+            PPR_TEST_ASSERT(last.has_value() and last->m_x == edge - 1u);
+            PPR_TEST_ASSERT(not metreToFineCell({extent, 0.0}, kFineCellsPerMetre, edge));
+            PPR_TEST_ASSERT(not fineCellCentre({edge, 0u}, edge));
+            PPR_TEST_ASSERT(*fineCellBoundaryMetres(edge, edge) == extent);
+            PPR_TEST_ASSERT(not fineCellBoundaryMetres(edge + 1u, edge));
+
+            const u32 complete_tiles = edge / kFineCellsPerConstructionTile;
+            const auto last_tile = constructionFootprint({complete_tiles - 1u, complete_tiles - 1u}, {}, edge);
+            PPR_TEST_ASSERT(last_tile.has_value());
+            PPR_TEST_ASSERT(last_tile->m_end.m_x == complete_tiles * kFineCellsPerConstructionTile);
+            PPR_TEST_ASSERT(not constructionFootprint({complete_tiles, 0u}, {}, edge));
+            PPR_TEST_ASSERT(not constructionTileOf({edge - 1u, 0u}, edge));
+        }
+
+        PPR_TEST_ASSERT(not metreToFineCell({0.0, 0.0}, kFineCellsPerMetre, 1536u));
+        PPR_TEST_ASSERT(not constructionFootprint({0u, 0u}, {}, 1536u));
+    };
+
     PPR_UNIT_TEST (construction_is_global_and_crosses_chunks) {
         const auto footprint = constructionFootprint({42u, 42u});
         PPR_TEST_ASSERT(footprint.has_value());
@@ -131,6 +157,7 @@ namespace pP::game::tests {
     const UnitTest metric = UnitTest::Named("metric") / [](UnitTest::IRun &_) -> void {
         _.recurse(
             {detail::metric::centres_and_half_open_boundaries,
+                detail::metric::selected_world_bounds_preserve_physical_cell_scale,
                 detail::metric::construction_is_global_and_crosses_chunks,
                 detail::metric::construction_drag_snaps_and_clamps_from_the_anchor_tile,
                 detail::metric::discrete_dimensions_volume_and_metric_identity});

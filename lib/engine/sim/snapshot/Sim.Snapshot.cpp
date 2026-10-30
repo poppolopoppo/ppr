@@ -204,8 +204,14 @@ namespace pP::sim {
                 return make_error_code(errc::version_mismatch);
             }
 
+            if (not isSupportedWorldEdge(snapshot.m_world_edge)) {
+                PPR_RETURN_ERROR_ON_FAIL(SnapshotLog, errc::invalid_payload);
+            }
+
+            const u32 chunks_per_edge = snapshot.m_world_edge / kChunkEdge;
+
             // More deltas than chunks must repeat an index; bound the scan below.
-            if (snapshot.m_deltas.size() > kChunkCount) [[unlikely]] {
+            if (snapshot.m_deltas.size() > chunks_per_edge * chunks_per_edge) [[unlikely]] {
                 return make_error_code(errc::invalid_payload);
             }
 
@@ -217,6 +223,8 @@ namespace pP::sim {
                 const u64 end_y = static_cast<u64>(delta.m_y) + delta.m_height;
                 const u64 area = static_cast<u64>(delta.m_width) * delta.m_height;
                 if (delta.m_chunk >= kChunkCount or
+                    delta.m_chunk % kChunksPerEdge >= chunks_per_edge or
+                    delta.m_chunk / kChunksPerEdge >= chunks_per_edge or
                     delta.m_x >= kChunkEdge or
                     delta.m_y >= kChunkEdge or
                     delta.m_width == 0u or
@@ -258,6 +266,7 @@ namespace pP::sim {
         Snapshot snapshot{};
         snapshot.m_version = kSnapshotVersion;
         snapshot.m_seed = seed;
+        snapshot.m_world_edge = grid.edge();
 
         for (const ChunkPos chunk: grid.dirtyChunks()) {
             const std::optional<std::span<const Cell>> payload = grid.residentCells(chunk);
@@ -321,10 +330,15 @@ namespace pP::sim {
         const hal::ProfileScope scope{"Sim.Snapshot.CaptureFull"};
         Snapshot snapshot{};
         snapshot.m_seed = seed;
+        snapshot.m_world_edge = grid.edge();
         snapshot.m_deltas.reserve(grid.residentChunkCount());
         for (u32 index = 0u; index < kChunkCount; ++index) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(SnapshotLog, context ? context->error() : std::error_code{});
             const ChunkPos chunk{index % kChunksPerEdge, index / kChunksPerEdge};
+            if (not grid.contains(chunk)) {
+                continue;
+            }
+
             const auto cells = grid.residentCells(chunk);
             if (not cells) {
                 continue;
@@ -390,6 +404,10 @@ namespace pP::sim {
             return error;
         }
 
+        if (snapshot.m_world_edge != grid.edge()) {
+            PPR_RETURN_ERROR_ON_FAIL(SnapshotLog, errc::invalid_payload);
+        }
+
         // Validation above guarantees every cell below is in-world and finite, so
         // setCell cannot fail halfway through a delta.
         for (const ChunkDelta &delta: snapshot.m_deltas) {
@@ -419,6 +437,7 @@ namespace pP::sim {
         Array<u8> bytes{};
 
         putU32(bytes, snapshot.m_version);
+        putU32(bytes, snapshot.m_world_edge);
         putU64(bytes, snapshot.m_seed);
         putU32(bytes, safe_narrowing(snapshot.m_deltas.size()));
 
@@ -501,12 +520,20 @@ namespace pP::sim {
         snapshot.m_version = version;
 
         u32 delta_count{};
-        if (not reader.readU64(snapshot.m_seed) or not reader.readU32(delta_count)) {
+        if (not reader.readU32(snapshot.m_world_edge) or
+            not reader.readU64(snapshot.m_seed) or
+            not reader.readU32(delta_count)) {
             return std::unexpected{make_error_code(errc::truncated)};
         }
 
+        if (not isSupportedWorldEdge(snapshot.m_world_edge)) {
+            PPR_RETURN_UNEXPECTED_ON_FAIL(SnapshotLog, errc::invalid_payload);
+        }
+
+        const u32 chunks_per_edge = snapshot.m_world_edge / kChunkEdge;
+
         // Bound the reserve by what the remaining bytes could possibly describe.
-        if (delta_count > reader.remaining() / kMinimumDeltaBytes) {
+        if (delta_count > chunks_per_edge * chunks_per_edge or delta_count > reader.remaining() / kMinimumDeltaBytes) {
             return std::unexpected{make_error_code(errc::invalid_payload)};
         }
 
@@ -530,6 +557,8 @@ namespace pP::sim {
             const u64 end_y = static_cast<u64>(y) + height;
             const u64 area = static_cast<u64>(width) * height;
             if (chunk >= kChunkCount or
+                chunk % kChunksPerEdge >= chunks_per_edge or
+                chunk / kChunksPerEdge >= chunks_per_edge or
                 x >= kChunkEdge or
                 y >= kChunkEdge or
                 width == 0u or

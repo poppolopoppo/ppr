@@ -230,7 +230,7 @@ namespace pP::sim {
 
     Expected<BiomeLayout> restoreBiomeLayout(const GenerationPlan &plan, const std::span<const GenerationSite> sites) {
         const auto &recipe = plan.recipe();
-        const double extent = kWorldEdge * recipe.m_cell_size_m;
+        const double extent = recipe.m_world_edge * recipe.m_cell_size_m;
         PPR_RETURN_UNEXPECTED_ON_FAIL(
             WorldLayout, not sites.empty() and sites.size() <= kMaxGenerationSites
                              ? std::error_code{}
@@ -272,7 +272,7 @@ namespace pP::sim {
             PPR_RETURN_UNEXPECTED_ON_FAIL(WorldLayout, std::errc::invalid_argument);
         }
 
-        const double extent = kWorldEdge * plan.recipe().m_cell_size_m;
+        const double extent = plan.recipe().m_world_edge * plan.recipe().m_cell_size_m;
 
         BiomeLayout layout{extent};
         layout.append({0.5 * extent, 0.5 * extent, biome});
@@ -399,7 +399,7 @@ namespace pP::sim {
         PPR_RETURN_UNEXPECTED_ON_FAIL(WorldLayout, canceled(context));
         const auto &recipe = plan.recipe();
         const double cells_per_metre = 1.0 / recipe.m_cell_size_m;
-        const double extent = kWorldEdge / cells_per_metre;
+        const double extent = recipe.m_world_edge / cells_per_metre;
         const double boundary = recipe.m_boundary_fine / cells_per_metre;
         const auto &start_marker = recipe.m_features[recipe.m_start_feature].m_markers[recipe.m_start_marker];
         BiomeLayout layout{extent};
@@ -411,7 +411,9 @@ namespace pP::sim {
         Array<u32> active{0u};
         GenerationRandom random{generationStreamSeed(plan.seed(), 0x6d6163726f736974ull, 0u)};
 
-        while (not active.empty() and layout.m_sites.size() < recipe.m_max_sites) {
+        const u32 candidate_limit = recipe.m_site_candidate_limit != 0u ? recipe.m_site_candidate_limit
+                                                                        : recipe.m_max_sites;
+        while (not active.empty() and layout.m_sites.size() < candidate_limit) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(WorldLayout, canceled(context));
             const auto active_index = static_cast<u32>(random.bounded(active.size()));
             const GenerationSite parent = layout.m_sites[active[active_index]];
@@ -456,6 +458,58 @@ namespace pP::sim {
         PPR_RETURN_UNEXPECTED_ON_FAIL(
             WorldLayout,
             assignRequired(plan, layout.m_sites, context, active.capacity() * sizeof(u32), known_scratch_peak));
+
+        // Match against the larger bounded candidate pool before
+        // retaining the mandatory occurrences and a compact optional budget.
+        if (layout.m_sites.size() > recipe.m_max_sites) {
+            u32 mandatory_sites{};
+            for (const auto &site: layout.m_sites) {
+                if (site.m_biome != (std::numeric_limits<u32>::max)()) {
+                    ++mandatory_sites;
+                }
+            }
+
+            PPR_RETURN_UNEXPECTED_ON_FAIL(
+                WorldLayout, mandatory_sites <= recipe.m_max_sites
+                                 ? std::error_code{}
+                                 : make_error_code(EGenerationErrc::constraints_exhausted));
+
+            BiomeLayout retained{extent};
+            if (known_scratch_peak != nullptr) {
+                *known_scratch_peak = std::max(
+                    *known_scratch_peak,
+                    layout.retainedPayloadBytes() + retained.retainedPayloadBytes() + active.capacity() * sizeof(u32));
+            }
+
+            u32 optional_remaining = recipe.m_max_sites - mandatory_sites;
+            for (const auto &site: layout.m_sites) {
+                PPR_RETURN_UNEXPECTED_ON_FAIL(WorldLayout, canceled(context));
+                if (site.m_biome == (std::numeric_limits<u32>::max)()) {
+                    if (optional_remaining == 0u) {
+                        continue;
+                    }
+
+                    const bool has_weighted_biome = std::ranges::any_of(
+                        recipe.m_constraints, [&](const GenerationBiomeConstraint &constraint) {
+                            return constraint.m_weight > 0.0 and
+                                   eligible(constraint, site, layout.m_sites.front(), plan);
+                        });
+                    if (not has_weighted_biome) {
+                        continue;
+                    }
+
+                    --optional_remaining;
+                }
+
+                retained.append(site);
+            }
+
+            if (retained.m_sites.size() < recipe.m_min_sites) {
+                PPR_RETURN_UNEXPECTED_ON_FAIL(WorldLayout, EGenerationErrc::constraints_exhausted);
+            }
+
+            layout = std::move(retained);
+        }
 
         for (u32 s = 1u; s < layout.m_sites.size(); ++s) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(WorldLayout, canceled(context));

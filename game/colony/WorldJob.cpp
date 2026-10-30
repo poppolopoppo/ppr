@@ -58,6 +58,10 @@ namespace pP::colony {
             PPR_RETURN_ERROR_ON_FAIL(WorldJobs, std::errc::value_too_large);
         }
 
+        if (not sim::isSupportedWorldEdge(request.m_world_edge)) {
+            PPR_RETURN_ERROR_ON_FAIL(WorldJobs, std::errc::invalid_argument);
+        }
+
         m_diagnostic_text.clear();
         m_job = std::make_shared<State>();
         m_job->m_request = request;
@@ -231,7 +235,8 @@ namespace pP::colony {
                 case sim::EGenerationStage::layout: result.m_stage = EWorldJobStage::layout; break;
                 case sim::EGenerationStage::terrain:
                     result.m_stage = EWorldJobStage::terrain;
-                    result.m_total = sim::kChunkCount;
+                    result.m_total = (m_job->m_request.m_world_edge / sim::kChunkEdge) *
+                                     (m_job->m_request.m_world_edge / sim::kChunkEdge);
                     result.m_completed = m_job->m_completed.load(std::memory_order_relaxed);
                     break;
                 case sim::EGenerationStage::caves: result.m_stage = EWorldJobStage::caves; break;

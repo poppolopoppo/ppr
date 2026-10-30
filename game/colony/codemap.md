@@ -225,7 +225,7 @@ the committed revision manifest.
 
 
 `Checkpoint.cppm` / `Checkpoint.cpp` / `Checkpoint.Codec.cpp` /
-`Checkpoint.Validation.cpp` own mandatory current-state game envelope v5. It
+`Checkpoint.Validation.cpp` own mandatory current-state game envelope v6. It
 stores every scalar particle column (p/d/D/F/J/lambda/logJp/color/enabled), the
 fixed profile, physical ledger/gas/next ID, metric and durable publication/terrain
 epochs. Older envelopes fail with `protocol_not_supported`; decode never seeds
@@ -235,10 +235,10 @@ This does not retroactively identify earlier CPU-only ticks as PB-MPM. Restore
 rebinds only world identity, validates profile/units/material mapping and rebuilds
 cold Box2D state. Its continuation guarantee is restored-versus-restored, not live
 Box2D cache parity. WorldJob retains the exclusive frozen-owner capture protocol.
-Raw sim snapshot v4 and asset manifest v1 remain separate formats.
+Raw sim snapshot v5 and asset manifest v1 remain separate formats.
 
 
-`WorldGen.Export.cpp` streams bounded flat PPM overviews plus a machine-readable generation report from an exclusively owned validated generated world. `--worldgen-preview --worldgen-output=<directory>` invokes it offline; row orientation is +Y-up and 4x4 fine samples are averaged per pixel. It shares contour/fill-height clipping and authored material/biome colors. This is separate from GPU texture/contour acceptance.
+`WorldGen.Export.cpp` streams bounded flat PPM overviews plus a machine-readable generation report from an exclusively owned validated generated world. `--worldgen-preview --worldgen-output=<directory>` invokes it offline; row orientation is +Y-up and 1x1, 2x2 or 4x4 fine samples are averaged per pixel for 1024, 2048 or 4096 maps. It shares contour/fill-height clipping and authored material/biome colors. This is separate from GPU texture/contour acceptance.
 
 The seed-only generator and profile100 mode are retired. Sessions use authored
 `prepareWorld` and one-actor `initPrepared`; WorldJob requires an explicit preparation
@@ -261,7 +261,7 @@ Persistent matter is owned by Colony as `sim::MatterParticleState`. Generation s
 seed records once; checkpoint restoration uses saved records directly. Driver edit
 candidates operate on the same authored catalog while detached for CPU inspection.
 GPU-attached edits use the transactional emission/coverage policy above. Driver retains full current GPU fields/profile, durable epoch,
-stable physical records and gas while detached for worker capture. v5 capture
+stable physical records and gas while detached for worker capture. v6 capture
 never substitutes historical worldgen seeds for current state.
 Frame packets share translated changed particle chunks and complete material/normal
 and four-layer backdrop appearance; engine.app does not import simulation types.
@@ -276,7 +276,7 @@ remain intact. A separate final `erosion_passes` stage uses the prototype's
 unweighted eight-neighbor histogram including vacuum at 50% adoption, initially
 eight passes in shipped recipes. Generator version 8 conservatively rejects older identities at
 `validateWorldCheckpoint` before material-ID restoration, while retaining
-the mandatory v5 checkpoint envelope. See [worldgen authoring](../../docs/worldgen-content.md).
+the mandatory v6 checkpoint envelope. See [worldgen authoring](../../docs/worldgen-content.md).
 
 The presentation cache also captures the immutable open-surface profile once
 per world generation, evaluating the shared generation height helper at every
@@ -314,7 +314,14 @@ fixture composes the same journal. PPRI/1 layout, hashes, bounds and conditional
 comparison protocol are documented in fused-live-inputs-1/handoff.md. This is a
 temporary diagnostic sidecar, not a checkpoint or numerical backend.
 
-Checkpoint v5 decoding migrates the former liquid-relaxation value2 to the
+Checkpoint v6 decoding migrates the former liquid-relaxation value2 to the
 stable K2 default1 before strict profile validation. The wire layout and all
 carried particle fields are preserved; other unsupported settings still fail
 validation. Migration does not repair an already-exploded carried state.
+
+Runtime maps carry an explicit edge (1024/2048/4096) through `ChunkGrid`,
+`GenerationRecipe`, `WorldDescriptor` and `MatterState`. Grid directories,
+chunk IDs, search packing and the fixed surface-profile ABI retain maximum
+strides; active traversal, admission, solver/terrain dimensions and physical
+bounds use the owning world. Checkpoint6 validates descriptor, numeric recipe,
+raw snapshot5 and carried matter dimensions before restoring an owner.

@@ -1274,13 +1274,19 @@ namespace pP::sim::definition {
                 validation.reject(path, EConfigErrc::out_of_range, "Compile parameter is outside its numeric domain");
             }
         };
+        if (not isSupportedWorldEdge(parameters.m_world_edge)) {
+            validation.reject("world_edge", EConfigErrc::out_of_range, "World edge must be 1024, 2048 or 4096 cells");
+        }
         positive(parameters.m_cell_size_m, 1.0, "cell_size_m");
         if (parameters.m_cell_size_m > 0.0 and not std::isfinite(1.0 / parameters.m_cell_size_m)) {
             validation.reject("cell_size_m", EConfigErrc::out_of_range, "Cell scale is not representable");
         }
         positive(parameters.m_reference_thickness_m, 4096.0, "reference_thickness_m");
-        positive(parameters.m_actor_half_width_m, kWorldEdge * parameters.m_cell_size_m, "actor_half_width_m");
-        positive(parameters.m_actor_half_height_m, kWorldEdge * parameters.m_cell_size_m, "actor_half_height_m");
+        positive(
+            parameters.m_actor_half_width_m, parameters.m_world_edge * parameters.m_cell_size_m, "actor_half_width_m");
+        positive(
+            parameters.m_actor_half_height_m, parameters.m_world_edge * parameters.m_cell_size_m,
+            "actor_half_height_m");
         PPR_RETURN_UNEXPECTED_ON_FAIL(WorldDefinition, validation.m_first);
 
         // Compile the owned global catalogs before resolving the selected profile.
@@ -1322,6 +1328,7 @@ namespace pP::sim::definition {
             return std::ranges::find(markers, reference.m_key, &MarkerBinding::m_key)->m_index;
         };
 
+        recipe.m_world_edge = parameters.m_world_edge;
         recipe.m_cell_size_m = parameters.m_cell_size_m;
         recipe.m_reference_thickness_m = parameters.m_reference_thickness_m;
         recipe.m_actor_half_width_m = parameters.m_actor_half_width_m;
@@ -1371,6 +1378,72 @@ namespace pP::sim::definition {
                     material_id(resource.m_material), resource.m_max_distance_m});
         }
 
+        const auto scaledPopulation = [&](const u32 count) {
+            if (parameters.m_world_edge == kWorldEdge) {
+                return count;
+            }
+
+            const double scale = static_cast<double>(parameters.m_world_edge) / kWorldEdge;
+            return static_cast<u32>(std::ceil(count * scale * scale));
+        };
+
+        // Adapt world-scale layout to the selected extent. Physical cells,
+        // actors, authored features and required resources retain their sizes.
+        if (parameters.m_world_edge != kWorldEdge) {
+            const double scale = static_cast<double>(parameters.m_world_edge) / kWorldEdge;
+            // The fixed start consumes one slot; its authored requirement, when
+            // present, already accounts for that same occurrence.
+            u32 mandatory_sites = 1u;
+            for (auto &constraint: recipe.m_constraints) {
+                mandatory_sites += constraint.m_required_count;
+                if (constraint.m_biome == recipe.m_start_biome and constraint.m_required_count > 0u) {
+                    --mandatory_sites;
+                }
+
+                constraint.m_distance_min_m *= scale;
+                constraint.m_distance_max_m *= scale;
+            }
+
+            for (auto &biome: recipe.m_biomes) {
+                for (auto &deposit: biome.m_deposits) {
+                    deposit.m_blob_count = scaledPopulation(deposit.m_blob_count);
+                }
+            }
+
+            recipe.m_start_x_fine = static_cast<u32>(recipe.m_start_x_fine * scale);
+            recipe.m_start_y_fine = static_cast<u32>(recipe.m_start_y_fine * scale);
+            recipe.m_surface_elevation_m *= scale;
+            recipe.m_surface_amplitude_m *= scale;
+            recipe.m_boundary_warp_amplitude_m *= scale;
+            recipe.m_site_spacing_m *= scale;
+
+            if (recipe.m_start_depth_m) {
+                double depth = *recipe.m_start_depth_m * scale;
+                if (recipe.m_open_surface) {
+                    const auto &reservation = recipe.m_features[recipe.m_start_feature].m_bounds;
+                    const double minimum_depth = reservation.m_max_y * recipe.m_cell_size_m +
+                                                 2.0 * recipe.m_surface_amplitude_m +
+                                                 recipe.m_start_clearance_m;
+                    depth = std::max(depth, minimum_depth);
+                }
+
+                recipe.m_start_depth_m = depth;
+            }
+
+            if (mandatory_sites > recipe.m_max_sites) {
+                validation.reject(
+                    path + ".layout.max_sites", EConfigErrc::cross_field_invalid,
+                    "Authored site cap cannot hold the start and all required biome occurrences");
+                PPR_RETURN_UNEXPECTED_ON_FAIL(WorldDefinition, validation.m_first);
+            }
+
+            recipe.m_site_candidate_limit = recipe.m_max_sites;
+            const u32 optional_min = recipe.m_min_sites > mandatory_sites ? recipe.m_min_sites - mandatory_sites : 0u;
+            const u32 optional_max = recipe.m_max_sites - mandatory_sites;
+            recipe.m_min_sites = mandatory_sites + static_cast<u32>(std::ceil(optional_min * scale * scale));
+            recipe.m_max_sites = mandatory_sites + static_cast<u32>(std::ceil(optional_max * scale * scale));
+        }
+
         // Pass one fixes every enabled rule's final index before any rule-to-rule lookup.
         const auto rules = orderedRules(*profile, path, validation);
         for (const auto *entry: rules) {
@@ -1398,7 +1471,7 @@ namespace pP::sim::definition {
                         const auto &geometry = payload.m_geometry;
                         GenerationWorm worm;
                         worm.m_biome = biome_index(geometry.m_biome);
-                        worm.m_count = geometry.m_count;
+                        worm.m_count = scaledPopulation(geometry.m_count);
                         worm.m_carve = std::is_same_v<T, CarveWorm>;
                         worm.m_depth_min = geometry.m_depth.m_min;
                         worm.m_depth_max = geometry.m_depth.m_max;
@@ -1418,13 +1491,24 @@ namespace pP::sim::definition {
                         numeric = worm;
                     } else if constexpr (std::is_same_v<T, Connection>) {
                         numeric = GenerationConnection{
-                            payload.m_radius_m, payload.m_extra_links, payload.m_natural_anchors, payload.m_wells,
-                            payload.m_branches, payload.m_roughness_m};
+                            payload.m_radius_m, scaledPopulation(payload.m_extra_links),
+                            scaledPopulation(payload.m_natural_anchors), scaledPopulation(payload.m_wells),
+                            scaledPopulation(payload.m_branches), payload.m_roughness_m};
                     } else if constexpr (std::is_same_v<T, Feature>) {
-                        numeric = GenerationPlacement{
+                        GenerationPlacement placement{
                             feature_index(payload.m_feature), biome_index(payload.m_biome), payload.m_min_count,
                             payload.m_max_count, payload.m_attempts, payload.m_priority, payload.m_depth.m_min,
                             payload.m_depth.m_max, payload.m_spacing_m, payload.m_reflect};
+                        if (parameters.m_world_edge != kWorldEdge) {
+                            const double scale = static_cast<double>(parameters.m_world_edge) / kWorldEdge;
+                            placement.m_spacing_m *= scale;
+                            placement.m_max_count =
+                                placement.m_min_count +
+                                static_cast<u32>(
+                                    std::floor((placement.m_max_count - placement.m_min_count) * scale * scale));
+                        }
+
+                        numeric = placement;
                     } else if constexpr (std::is_same_v<T, MatterFill>) {
                         const auto binding = std::ranges::find(
                             result.m_bindings.m_rules, payload.m_placement.m_key, &RuleBinding::m_key);

@@ -18,9 +18,10 @@ namespace pP::colony {
     namespace {
         const auto invalid = std::make_error_code(std::errc::invalid_argument);
         const auto incompatible = std::make_error_code(std::errc::protocol_not_supported);
-        bool coordinate(const double value) noexcept {
-            return std::isfinite(value) and value >= 0.0 and value <= kWorldExtentMetres;
+        bool coordinate(const double value, const u32 world_edge) noexcept {
+            return std::isfinite(value) and value >= 0.0 and value <= world_edge * kFineCellMetres;
         }
+
         std::error_code validateBlobs(
             const sim::GenerationGeometry &geometry, const sim::GenerationRecipe &recipe,
             const IContext *const context) {
@@ -41,8 +42,8 @@ namespace pP::colony {
                     CheckpointValidation,
                     deposit.m_shape == sim::EGenerationDepositShape::blob and
                             blob.m_ordinal < deposit.m_blob_count and
-                            coordinate(blob.m_x_m) and
-                            coordinate(blob.m_y_m) and
+                            coordinate(blob.m_x_m, recipe.m_world_edge) and
+                            coordinate(blob.m_y_m, recipe.m_world_edge) and
                             std::isfinite(blob.m_radius_m) and
                             blob.m_radius_m >= deposit.m_radius_min_m and
                             blob.m_radius_m <= deposit.m_radius_max_m and
@@ -123,8 +124,8 @@ namespace pP::colony {
                                                   agent.m_key != 0u and
                                                   std::isfinite(agent.m_speed) and
                                                   agent.m_speed >= 0.0f and
-                                                  agent.m_spawn.m_x < sim::kWorldEdge and
-                                                  agent.m_spawn.m_y < sim::kWorldEdge and
+                                                  agent.m_spawn.m_x < checkpoint.m_descriptor.m_world_edge and
+                                                  agent.m_spawn.m_y < checkpoint.m_descriptor.m_world_edge and
                                                   std::isfinite(needs->m_o2) and
                                                   std::isfinite(needs->m_rest)
                                               ? std::error_code{}
@@ -179,6 +180,9 @@ namespace pP::colony {
     std::error_code validateWorldCheckpoint(
         const WorldCheckpoint &checkpoint, const ContentCatalog &catalog, const SharedContext &context) {
         const auto &descriptor = checkpoint.m_descriptor;
+        const u32 world_edge = descriptor.m_world_edge;
+        const auto inside = [world_edge](const double value) { return coordinate(value, world_edge); };
+
         PPR_RETURN_ERROR_ON_FAIL(CheckpointValidation, context ? context->error() : std::error_code{});
         PPR_RETURN_ERROR_ON_FAIL(CheckpointValidation, validateWorldMetric(descriptor.m_metric));
         PPR_RETURN_ERROR_ON_FAIL(
@@ -187,6 +191,9 @@ namespace pP::colony {
                                           asset::qualifyName(descriptor.m_profile, {}) and
                                           descriptor.m_pack_schema_version == asset::Manifest::schema_version and
                                           descriptor.m_generator_version == sim::kGeneratorAlgorithmVersion and
+                                          sim::isSupportedWorldEdge(world_edge) and
+                                          checkpoint.m_snapshot.m_world_edge == world_edge and
+                                          checkpoint.m_current_matter.m_world_edge == world_edge and
                                           catalog.contentFingerprint() and
                                           *catalog.contentFingerprint() == descriptor.m_content_fingerprint and
                                           catalog.findWorld(descriptor.m_profile)
@@ -222,11 +229,13 @@ namespace pP::colony {
         auto plan = compileWorldPlan(catalog, descriptor.m_profile, descriptor.m_seed);
         PPR_RETURN_ERROR_ON_FAIL(CheckpointValidation, plan);
         const auto &recipe = plan->recipe();
+        PPR_RETURN_ERROR_ON_FAIL(
+            CheckpointValidation, recipe.m_world_edge == world_edge ? std::error_code{} : incompatible);
         PPR_RETURN_ERROR_ON_FAIL(CheckpointValidation, validateRuntimeWorldParameters(recipe));
         PPR_RETURN_ERROR_ON_FAIL(
             CheckpointValidation, sim::validateMovingMatterParticles(
                                       checkpoint.m_particles, recipe.m_materials, recipe.m_cell_size_m, context,
-                                      descriptor.m_metric.m_reference_thickness_m));
+                                      descriptor.m_metric.m_reference_thickness_m, world_edge));
         PPR_RETURN_ERROR_ON_FAIL(
             CheckpointValidation, validateMatterState(
                                       checkpoint.m_current_matter, recipe.m_materials, recipe.m_cell_size_m,
@@ -257,9 +266,8 @@ namespace pP::colony {
         for (const auto &site: checkpoint.m_sites) {
             PPR_RETURN_ERROR_ON_FAIL(
                 CheckpointValidation,
-                coordinate(site.m_x_m) and coordinate(site.m_y_m) and site.m_biome < recipe.m_biomes.size()
-                    ? std::error_code{}
-                    : invalid);
+                inside(site.m_x_m) and inside(site.m_y_m) and site.m_biome < recipe.m_biomes.size() ? std::error_code{}
+                                                                                                    : invalid);
         }
         PPR_RETURN_ERROR_ON_FAIL(
             CheckpointValidation, checkpoint.m_geometry.m_instances.size() <= 1025u and
@@ -274,8 +282,8 @@ namespace pP::colony {
                         (instance.m_rule == sim::kGenerationStartRule or instance.m_rule < recipe.m_rules.size()) and
                         instance.m_origin_x >= 0 and
                         instance.m_origin_y >= 0 and
-                        instance.m_origin_x < static_cast<i32>(sim::kWorldEdge) and
-                        instance.m_origin_y < static_cast<i32>(sim::kWorldEdge) and
+                        instance.m_origin_x < static_cast<i32>(world_edge) and
+                        instance.m_origin_y < static_cast<i32>(world_edge) and
                         (not instance.m_reflected or recipe.m_features[instance.m_feature].m_allow_reflection)
                     ? std::error_code{}
                     : invalid);
@@ -296,13 +304,13 @@ namespace pP::colony {
         for (const auto &segment: checkpoint.m_geometry.m_segments) {
             PPR_RETURN_ERROR_ON_FAIL(
                 CheckpointValidation, segment.m_rule < recipe.m_rules.size() and
-                                              coordinate(segment.m_x0_m) and
-                                              coordinate(segment.m_y0_m) and
-                                              coordinate(segment.m_x1_m) and
-                                              coordinate(segment.m_y1_m) and
+                                              inside(segment.m_x0_m) and
+                                              inside(segment.m_y0_m) and
+                                              inside(segment.m_x1_m) and
+                                              inside(segment.m_y1_m) and
                                               std::isfinite(segment.m_radius_m) and
                                               segment.m_radius_m > 0.0 and
-                                              segment.m_radius_m <= kWorldExtentMetres
+                                              segment.m_radius_m <= world_edge * kFineCellMetres
                                           ? std::error_code{}
                                           : invalid);
         }
@@ -317,9 +325,9 @@ namespace pP::colony {
                     : invalid);
         }
         PPR_RETURN_ERROR_ON_FAIL(
-            CheckpointValidation, coordinate(checkpoint.m_start.m_spawn_x_m) and
-                                          coordinate(checkpoint.m_start.m_spawn_y_m) and
-                                          coordinate(checkpoint.m_start.m_floor_y_m) and
+            CheckpointValidation, inside(checkpoint.m_start.m_spawn_x_m) and
+                                          inside(checkpoint.m_start.m_spawn_y_m) and
+                                          inside(checkpoint.m_start.m_floor_y_m) and
                                           checkpoint.m_start.m_resource_fine_cells.size() == recipe.m_resources.size()
                                       ? std::error_code{}
                                       : invalid);
@@ -330,12 +338,12 @@ namespace pP::colony {
         PPR_RETURN_ERROR_ON_FAIL(CheckpointValidation, validateActors(checkpoint, registry));
         for (const auto &[entity, footprint]: registry.view<Footprint>()) {
             (void) entity;
-            PPR_RETURN_ERROR_ON_FAIL(CheckpointValidation, validateFootprint(footprint, &catalog));
+            PPR_RETURN_ERROR_ON_FAIL(CheckpointValidation, validateFootprint(footprint, &catalog, world_edge));
         }
 
         for (const auto &[entity, errand]: registry.view<BuildErrand>()) {
             (void) entity;
-            PPR_RETURN_ERROR_ON_FAIL(CheckpointValidation, validateFootprint(errand.m_print, &catalog));
+            PPR_RETURN_ERROR_ON_FAIL(CheckpointValidation, validateFootprint(errand.m_print, &catalog, world_edge));
             PPR_RETURN_ERROR_ON_FAIL(
                 CheckpointValidation, errand.m_total == errand.m_print.m_width * errand.m_print.m_height and
                                               errand.m_progress <= errand.m_total
@@ -393,7 +401,7 @@ namespace pP::colony {
                                               region.m_volume_m3 >= 0.0 and
                                               std::isfinite(region.m_mass_kg) and
                                               region.m_mass_kg >= 0.0 and
-                                              (not region.m_fill_height_m or coordinate(*region.m_fill_height_m)) and
+                                              (not region.m_fill_height_m or inside(*region.m_fill_height_m)) and
                                               region.m_spans.size() <= sim::kMaxInitialMatterSpans - spans.size()
                                           ? std::error_code{}
                                           : invalid);
@@ -416,7 +424,7 @@ namespace pP::colony {
             for (const auto span: region.m_spans) {
                 PPR_RETURN_ERROR_ON_FAIL(
                     CheckpointValidation,
-                    span.m_y < sim::kWorldEdge and span.m_begin_x < span.m_end_x and span.m_end_x <= sim::kWorldEdge
+                    span.m_y < world_edge and span.m_begin_x < span.m_end_x and span.m_end_x <= world_edge
                         ? std::error_code{}
                         : invalid);
                 spans.push_back(span);
@@ -463,22 +471,22 @@ namespace pP::colony {
         }
 
         PPR_RETURN_ERROR_ON_FAIL(
-            CheckpointValidation, checkpoint.m_report.m_grid_payload_bytes <=
-                                          static_cast<u64>(sim::kWorldEdge) * sim::kWorldEdge * sizeof(sim::Cell)
-                                      ? std::error_code{}
-                                      : invalid);
+            CheckpointValidation,
+            checkpoint.m_report.m_grid_payload_bytes <= static_cast<u64>(world_edge) * world_edge * sizeof(sim::Cell)
+                ? std::error_code{}
+                : invalid);
 
         for (const auto cells: checkpoint.m_start.m_resource_fine_cells) {
             PPR_RETURN_ERROR_ON_FAIL(
-                CheckpointValidation, cells <= sim::kWorldEdge * sim::kWorldEdge ? std::error_code{} : invalid);
+                CheckpointValidation, cells <= world_edge * world_edge ? std::error_code{} : invalid);
         }
 
         for (const auto &count: checkpoint.m_report.m_material_counts) {
             PPR_RETURN_ERROR_ON_FAIL(
-                CheckpointValidation, terrain_ids.test(count.m_material) and
-                                              count.m_cells <= static_cast<u64>(sim::kWorldEdge) * sim::kWorldEdge
-                                          ? std::error_code{}
-                                          : invalid);
+                CheckpointValidation,
+                terrain_ids.test(count.m_material) and count.m_cells <= static_cast<u64>(world_edge) * world_edge
+                    ? std::error_code{}
+                    : invalid);
         }
         return {};
     }

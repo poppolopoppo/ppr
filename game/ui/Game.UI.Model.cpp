@@ -35,7 +35,7 @@ namespace pP::game::ui {
             out.m_presence = colony::ECellPresence::unavailable;
 
             const auto &grid = driver.grid();
-            if (position.m_x >= sim::kWorldEdge or position.m_y >= sim::kWorldEdge) {
+            if (not grid.contains(position)) {
                 return;
             }
 
@@ -130,8 +130,8 @@ namespace pP::game::ui {
             }
 
             for (const auto &particle: *particles) {
-                const u32 x = std::min(static_cast<u32>(particle.m_x_m / recipe.m_cell_size_m), sim::kWorldEdge - 1u);
-                const u32 y = std::min(static_cast<u32>(particle.m_y_m / recipe.m_cell_size_m), sim::kWorldEdge - 1u);
+                const u32 x = std::min(static_cast<u32>(particle.m_x_m / recipe.m_cell_size_m), grid.edge() - 1u);
+                const u32 y = std::min(static_cast<u32>(particle.m_y_m / recipe.m_cell_size_m), grid.edge() - 1u);
                 if (x != position.m_x or y != position.m_y) {
                     continue;
                 }
@@ -163,6 +163,7 @@ namespace pP::game::ui {
         out.m_speed = driver.speed();
         out.m_paused = driver.paused();
         out.m_resident_chunks = driver.grid().residentChunkCount();
+        out.m_total_chunks = driver.grid().chunkCount();
         out.m_agents = driver.agentSummaries();
         out.m_has_hover = hover.has_value();
         out.m_has_inspected = inspected.has_value();

@@ -44,11 +44,12 @@ export namespace pP::colony {
         double m_cell_metres{};
         double m_thickness_metres{};
         matter::GpuParameters m_profile{};
+        u32 m_world_edge{sim::kWorldEdge};
     };
 
     [[nodiscard]] Expected<MatterState> makeMatterState(
         const sim::MatterParticleSnapshot &particles, double cell_metres, double thickness_metres, float gravity_y,
-        u64 world);
+        u64 world, u32 world_edge = sim::kWorldEdge);
     [[nodiscard]] Expected<sim::MatterParticleSnapshot> captureMovingMatter(
         const MatterState &state, std::span<const matter::GpuParticle> particles);
 
@@ -56,7 +57,8 @@ export namespace pP::colony {
         const MatterState &state, std::span<const sim::GenerationMaterial> materials, double cell_metres,
         double thickness_metres, float gravity_y);
     [[nodiscard]] std::error_code validateMatterProfile(
-        const matter::GpuParameters &profile, double cell_metres, double thickness_metres, float gravity_y);
+        const matter::GpuParameters &profile, double cell_metres, double thickness_metres, float gravity_y,
+        u32 world_edge = sim::kWorldEdge);
 
     /// Pure candidate preparation: no IDs, grid cells or carried fields publish.
     /// Expected absence means new contour coverage deferred this whole cohort.

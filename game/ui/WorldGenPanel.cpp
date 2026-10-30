@@ -1261,7 +1261,7 @@ namespace pP::colony {
                 return "Choose an existing sample biome.";
             }
 
-            constexpr int maximum_origin = static_cast<int>(sim::kWorldEdge - kWorldgenPreviewEdge);
+            const int maximum_origin = static_cast<int>(state.m_world_edge - kWorldgenPreviewEdge);
             if (state.m_origin[0u] < 0 or
                 state.m_origin[1u] < 0 or
                 state.m_origin[0u] > maximum_origin or
@@ -1601,7 +1601,7 @@ namespace pP::colony {
             ImGui::EndDisabled();
             changed = ImGui::InputScalar("Full 64-bit seed", ImGuiDataType_U64, &state.m_seed) or changed;
 
-            constexpr int maximum_origin = static_cast<int>(sim::kWorldEdge - kWorldgenPreviewEdge);
+            const int maximum_origin = static_cast<int>(state.m_world_edge - kWorldgenPreviewEdge);
             changed = ImGui::SliderInt(
                           "Origin X (fine cells)", &state.m_origin[0u], 0, maximum_origin, "%d",
                           ImGuiSliderFlags_AlwaysClamp) or

@@ -105,7 +105,7 @@ namespace pP::colony {
     // ------------------------------------------------------------------
 
     bool isWalkable(const sim::ChunkGrid &grid, const sim::GlobalCellPos pos) noexcept {
-        if (not sim::isInsideWorld(pos)) {
+        if (not grid.contains(pos)) {
             return false;
         }
         u16 element = kElementVacuum;
@@ -159,8 +159,8 @@ namespace pP::colony {
             if (req == nullptr or not registry.isAlive(pending)) {
                 return;
             }
-            const bool usable = sim::isInsideWorld(req->m_from) and
-                                sim::isInsideWorld(req->m_to) and
+            const bool usable = grid.contains(req->m_from) and
+                                grid.contains(req->m_to) and
                                 (req->m_caps & kPathCapsWalk) != 0u and
                                 (req->m_caps & ~kPathCapsWalk) == 0u;
             const bool endpoints_open = usable and isWalkable(grid, req->m_from) and isWalkable(grid, req->m_to);
@@ -208,8 +208,8 @@ namespace pP::colony {
                 const i32 next_y = static_cast<i32>(cell.m_y) + dy;
                 if (next_x < 0 or
                     next_y < 0 or
-                    static_cast<u32>(next_x) >= sim::kWorldEdge or
-                    static_cast<u32>(next_y) >= sim::kWorldEdge) {
+                    static_cast<u32>(next_x) >= grid.edge() or
+                    static_cast<u32>(next_y) >= grid.edge()) {
                     continue;
                 }
                 const u32 x = static_cast<u32>(next_x);

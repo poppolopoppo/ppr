@@ -1,5 +1,6 @@
 module;
 export module engine.sim:worldgen.definition;
+import :chunk_grid;
 import :worldgen.noise;
 import :worldgen.plan;
 import :element;
@@ -1270,6 +1271,7 @@ export namespace pP::sim::definition {
 
     struct GenerationCompileParameters {
         double m_cell_size_m{}, m_reference_thickness_m{}, m_actor_half_width_m{}, m_actor_half_height_m{};
+        u32 m_world_edge{kWorldEdge};
     };
 
     struct CompiledRecipe {

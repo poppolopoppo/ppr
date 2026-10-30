@@ -15,25 +15,27 @@ namespace pP::colony {
 
     Expected<MatterState> makeMatterState(
         const sim::MatterParticleSnapshot &snapshot, const double h, const double thickness, const float gravity_y,
-        const u64 world) {
+        const u64 world, const u32 world_edge) {
         if (not std::isfinite(h) or
             h <= 0.0 or
             not std::isfinite(thickness) or
             thickness <= 0.0 or
             not std::isfinite(gravity_y) or
-            world == 0u) {
+            world == 0u or
+            not sim::isSupportedWorldEdge(world_edge)) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(GameMatter, std::errc::invalid_argument);
         }
 
         MatterState result{};
+        result.m_world_edge = world_edge;
         result.m_cell_metres = h;
         result.m_thickness_metres = thickness;
         result.m_next_id = snapshot.m_next_id;
         result.m_identity.m_world = world;
-        result.m_profile.m_grid_width = kMatterGridEdge;
-        result.m_profile.m_grid_height = kMatterGridEdge;
+        result.m_profile.m_grid_width = world_edge + 7u;
+        result.m_profile.m_grid_height = world_edge + 7u;
         result.m_profile.m_gravity_strength = static_cast<float>(
-            static_cast<double>(std::abs(gravity_y)) / (kMatterGridEdge * h));
+            static_cast<double>(std::abs(gravity_y)) / ((world_edge + 7u) * h));
         const double volume_unit = h * h * thickness;
         const double mass_unit = 1000.0 * volume_unit;
         if (not std::isfinite(mass_unit) or
@@ -48,6 +50,15 @@ namespace pP::colony {
             }
 
             for (const auto &record: batch.records()) {
+                if (not std::isfinite(record.m_x_m) or
+                    not std::isfinite(record.m_y_m) or
+                    record.m_x_m < 0.0 or
+                    record.m_y_m < 0.0 or
+                    record.m_x_m > world_edge * h or
+                    record.m_y_m > world_edge * h) {
+                    PPR_RETURN_UNEXPECTED_ON_FAIL(GameMatter, std::errc::result_out_of_range);
+                }
+
                 if (record.m_phase == sim::EGenerationMatter::gas) {
                     result.m_gas.push_back(record);
                 } else if (record.m_phase == sim::EGenerationMatter::solid or
@@ -89,11 +100,11 @@ namespace pP::colony {
 
     Expected<sim::MatterParticleSnapshot> captureMovingMatter(
         const MatterState &state, const std::span<const matter::GpuParticle> particles) {
-        if (particles.size() != state.m_records.size()) {
+        if (not sim::isSupportedWorldEdge(state.m_world_edge) or particles.size() != state.m_records.size()) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(GameMatter, std::errc::invalid_argument);
         }
 
-        const double edge = sim::kWorldEdge * state.m_cell_metres;
+        const double edge = state.m_world_edge * state.m_cell_metres;
         std::array<Array<sim::MatterParticle>, sim::kChunkCount> chunks{};
         const auto append = [&](sim::MatterParticle record) -> std::error_code {
             if (not std::isfinite(record.m_x_m) or
@@ -108,8 +119,8 @@ namespace pP::colony {
             // Closed world endpoints belong to the final presentation chunk.
             // Only the bin changes; the physical coordinate is preserved.
             const sim::GlobalCellPos cell{
-                std::min(static_cast<u32>(record.m_x_m / state.m_cell_metres), sim::kWorldEdge - 1u),
-                std::min(static_cast<u32>(record.m_y_m / state.m_cell_metres), sim::kWorldEdge - 1u)};
+                std::min(static_cast<u32>(record.m_x_m / state.m_cell_metres), state.m_world_edge - 1u),
+                std::min(static_cast<u32>(record.m_y_m / state.m_cell_metres), state.m_world_edge - 1u)};
             chunks[sim::chunkIndexOf(sim::chunkOf(cell))].push_back(record);
             return {};
         };
@@ -146,7 +157,8 @@ namespace pP::colony {
     // ------------------------------------------------------------------
 
     std::error_code validateMatterProfile(
-        const matter::GpuParameters &profile, const double h, const double thickness, const float gravity_y) {
+        const matter::GpuParameters &profile, const double h, const double thickness, const float gravity_y,
+        const u32 world_edge) {
         const double mass_unit = 1000.0 * h * h * thickness;
         if (not std::isfinite(h) or
             h <= 0.0 or
@@ -155,16 +167,17 @@ namespace pP::colony {
             not std::isfinite(gravity_y) or
             not std::isfinite(mass_unit) or
             mass_unit <= 0.0 or
-            profile.m_particle_count > sim::kMaxMatterParticles) {
+            profile.m_particle_count > sim::kMaxMatterParticles or
+            not sim::isSupportedWorldEdge(world_edge)) {
             PPR_RETURN_ERROR_ON_FAIL(GameMatter, std::errc::invalid_argument);
         }
 
         matter::GpuParameters expected{};
-        expected.m_grid_width = kMatterGridEdge;
-        expected.m_grid_height = kMatterGridEdge;
+        expected.m_grid_width = world_edge + 7u;
+        expected.m_grid_height = world_edge + 7u;
         expected.m_particle_count = profile.m_particle_count;
         expected.m_gravity_strength = static_cast<float>(
-            static_cast<double>(std::abs(gravity_y)) / (kMatterGridEdge * h));
+            static_cast<double>(std::abs(gravity_y)) / ((world_edge + 7u) * h));
         if (not std::isfinite(expected.m_gravity_strength) or
             std::bit_cast<std::array<u32, 16u>>(profile) != std::bit_cast<std::array<u32, 16u>>(expected)) {
             PPR_RETURN_ERROR_ON_FAIL(GameMatter, std::errc::invalid_argument);
@@ -183,12 +196,13 @@ namespace pP::colony {
             PPR_RETURN_ERROR_ON_FAIL(GameMatter, std::errc::invalid_argument);
         }
 
-        PPR_RETURN_ERROR_ON_FAIL(GameMatter, validateMatterProfile(state.m_profile, h, thickness, gravity_y));
+        PPR_RETURN_ERROR_ON_FAIL(
+            GameMatter, validateMatterProfile(state.m_profile, h, thickness, gravity_y, state.m_world_edge));
 
         auto snapshot = captureMovingMatter(state, state.m_particles);
         PPR_RETURN_ERROR_ON_FAIL(GameMatter, snapshot);
         PPR_RETURN_ERROR_ON_FAIL(
-            GameMatter, sim::validateMovingMatterParticles(*snapshot, materials, h, {}, thickness));
+            GameMatter, sim::validateMovingMatterParticles(*snapshot, materials, h, {}, thickness, state.m_world_edge));
 
         const double volume_unit = h * h * thickness;
         const double mass_unit = 1000.0 * volume_unit;
@@ -217,8 +231,8 @@ namespace pP::colony {
                 not std::isfinite(record.m_y_m) or
                 record.m_x_m < 0.0 or
                 record.m_y_m < 0.0 or
-                record.m_x_m > sim::kWorldEdge * h or
-                record.m_y_m > sim::kWorldEdge * h or
+                record.m_x_m > state.m_world_edge * h or
+                record.m_y_m > state.m_world_edge * h or
                 static_cast<float>(record.m_x_m / h + static_cast<double>(kMatterOrigin)) != particle.m_position_x or
                 static_cast<float>(record.m_y_m / h + static_cast<double>(kMatterOrigin)) != particle.m_position_y or
                 (row != 0u and record.m_id <= state.m_records[row - 1u].m_id)) {
@@ -245,6 +259,7 @@ namespace pP::colony {
             source.m_cell_metres <= 0.0 or
             not std::isfinite(source.m_thickness_metres) or
             source.m_thickness_metres <= 0.0 or
+            source.m_world_edge != original.edge() or
             source.m_records.size() != source.m_particles.size() or
             source.m_records.size() + source.m_gas.size() > sim::kMaxMatterParticles) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(GameMatter, std::errc::invalid_argument);
@@ -258,8 +273,8 @@ namespace pP::colony {
                     not std::isfinite(record.m_y_m) or
                     record.m_x_m < 0.0 or
                     record.m_y_m < 0.0 or
-                    record.m_x_m > sim::kWorldEdge * source.m_cell_metres or
-                    record.m_y_m > sim::kWorldEdge * source.m_cell_metres) {
+                    record.m_x_m > source.m_world_edge * source.m_cell_metres or
+                    record.m_y_m > source.m_world_edge * source.m_cell_metres) {
                     PPR_RETURN_UNEXPECTED_ON_FAIL(GameMatter, std::errc::invalid_argument);
                 }
             }
@@ -280,7 +295,7 @@ namespace pP::colony {
         std::array<const sim::ChunkGrid::CapturedChunk *, sim::kChunkCount> overlays{};
         for (const auto &chunk: candidate) {
             const auto position = chunk.position();
-            if (not sim::isInsideChunkGrid(position)) {
+            if (not original.contains(position)) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(GameMatter, std::errc::invalid_argument);
             }
 
@@ -310,8 +325,8 @@ namespace pP::colony {
                 const i32 sx = ix + offsets[corner].first, sy = iy + offsets[corner].second;
                 if (sx < 0 or
                     sy < 0 or
-                    sx >= static_cast<i32>(sim::kWorldEdge) or
-                    sy >= static_cast<i32>(sim::kWorldEdge) or
+                    sx >= static_cast<i32>(original.edge()) or
+                    sy >= static_cast<i32>(original.edge()) or
                     solids.test(cell(static_cast<u32>(sx), static_cast<u32>(sy), edited).m_element))
                     mask |= 1u << corner;
             }
@@ -414,7 +429,7 @@ namespace pP::colony {
         }
 
         const auto solid = [&](const i32 x, const i32 y) {
-            if (x < 0 or y < 0 or x >= static_cast<i32>(sim::kWorldEdge) or y >= static_cast<i32>(sim::kWorldEdge)) {
+            if (x < 0 or y < 0 or x >= static_cast<i32>(grid.edge()) or y >= static_cast<i32>(grid.edge())) {
                 return true;
             }
 
@@ -424,14 +439,15 @@ namespace pP::colony {
                    solid_ids.test((*cells)[(uy % sim::kChunkEdge) * sim::kChunkEdge + ux % sim::kChunkEdge].m_element);
         };
 
-        Array<u32> masks(static_cast<std::size_t>(kMatterTerrainEdge) * kMatterTerrainEdge, 0u);
-        for (u32 y = 0u; y < kMatterTerrainEdge; ++y) {
-            for (u32 x = 0u; x < kMatterTerrainEdge; ++x) {
+        const u32 terrain_edge = grid.edge() + 1u;
+        Array<u32> masks(static_cast<std::size_t>(terrain_edge) * terrain_edge, 0u);
+        for (u32 y = 0u; y < terrain_edge; ++y) {
+            for (u32 x = 0u; x < terrain_edge; ++x) {
                 const i32 sx = static_cast<i32>(x) - 1, sy = static_cast<i32>(y) - 1;
-                masks[static_cast<std::size_t>(y) * kMatterTerrainEdge + x] = (solid(sx, sy) ? 1u : 0u) |
-                                                                              (solid(sx + 1, sy) ? 2u : 0u) |
-                                                                              (solid(sx + 1, sy + 1) ? 4u : 0u) |
-                                                                              (solid(sx, sy + 1) ? 8u : 0u);
+                masks[static_cast<std::size_t>(y) * terrain_edge + x] = (solid(sx, sy) ? 1u : 0u) |
+                                                                        (solid(sx + 1, sy) ? 2u : 0u) |
+                                                                        (solid(sx + 1, sy + 1) ? 4u : 0u) |
+                                                                        (solid(sx, sy + 1) ? 8u : 0u);
             }
         }
         return masks;
@@ -512,8 +528,8 @@ namespace pP::colony {
                                         std::isfinite(record.m_y_m) and
                                         record.m_x_m >= 0.0 and
                                         record.m_y_m >= 0.0 and
-                                        record.m_x_m <= sim::kWorldEdge * source.m_cell_metres and
-                                        record.m_y_m <= sim::kWorldEdge * source.m_cell_metres
+                                        record.m_x_m <= source.m_world_edge * source.m_cell_metres and
+                                        record.m_y_m <= source.m_world_edge * source.m_cell_metres
                                     ? std::error_code{}
                                     : std::make_error_code(std::errc::invalid_argument));
 
@@ -807,6 +823,13 @@ namespace pP::colony {
             PPR_RETURN_UNEXPECTED_ON_FAIL(GameMatter, std::errc::not_connected);
         }
 
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            GameMatter, sim::isSupportedWorldEdge(source.m_world_edge) and
+                                source.m_profile.m_grid_width == source.m_world_edge + 7u and
+                                source.m_profile.m_grid_height == source.m_world_edge + 7u
+                            ? std::error_code{}
+                            : std::make_error_code(std::errc::invalid_argument));
+
         const auto state = m_state;
         return enqueue([state, source, terrain = std::move(terrain)]() -> std::error_code {
             if (state->m_prepared or state->m_submitted or state->m_snapshot or state->m_append_prepared) {
@@ -821,7 +844,7 @@ namespace pP::colony {
 
             const auto prepared = candidate->prepareReplacement(
                 source.m_particles, {}, candidate->accounting().m_epoch,
-                {terrain, kMatterTerrainEdge, kMatterTerrainEdge, 2.5f, 2.5f});
+                {terrain, source.m_world_edge + 1u, source.m_world_edge + 1u, 2.5f, 2.5f});
             if (prepared) {
                 // Candidate never submitted; release on this same lane.
                 PPR_LOG_WARNING_ON_FAIL(GameMatter, candidate->shutdown());
@@ -1078,7 +1101,8 @@ namespace pP::colony {
         const MatterIdentity source, const MatterState &candidate, const u32 retained_count, Array<u32> terrain) {
         PPR_RETURN_UNEXPECTED_ON_FAIL(
             GameMatter,
-            candidate.m_records.size() == candidate.m_particles.size() and
+            sim::isSupportedWorldEdge(candidate.m_world_edge) and
+                    candidate.m_records.size() == candidate.m_particles.size() and
                     candidate.m_particles.size() <= sim::kMaxMatterParticles and
                     retained_count <= candidate.m_particles.size() and
                     source.m_publication != std::numeric_limits<u64>::max() and
@@ -1100,13 +1124,16 @@ namespace pP::colony {
         const auto state = m_state;
         const auto target = candidate.m_identity;
         const double cell = candidate.m_cell_metres;
+        const u32 terrain_edge = candidate.m_world_edge + 1u;
         return enqueue(
-            [state, source, target, retained_count, cell, appended = std::move(appended),
+            [state, source, target, retained_count, cell, terrain_edge, appended = std::move(appended),
                 metadata = std::move(metadata), terrain = std::move(terrain)]() -> std::error_code {
                 PPR_RETURN_ERROR_ON_FAIL(
                     GameMatter, state and
                                         state->m_active and
                                         state->m_identity == source and
+                                        state->m_active->profile().m_grid_width == terrain_edge + 6u and
+                                        state->m_active->profile().m_grid_height == terrain_edge + 6u and
                                         state->m_active->profile().m_particle_count == retained_count
                                     ? std::error_code{}
                                     : std::make_error_code(std::errc::invalid_argument));
@@ -1134,7 +1161,7 @@ namespace pP::colony {
                 PPR_RETURN_ERROR_ON_FAIL(
                     GameMatter, state->m_active->prepareAppend(
                                     appended, state->m_active->accounting().m_epoch,
-                                    {terrain, kMatterTerrainEdge, kMatterTerrainEdge, 2.5f, 2.5f}));
+                                    {terrain, terrain_edge, terrain_edge, 2.5f, 2.5f}));
                 return {};
             });
     }

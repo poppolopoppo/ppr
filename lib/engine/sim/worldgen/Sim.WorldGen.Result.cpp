@@ -61,8 +61,8 @@ namespace pP::sim {
                 terrain[material.m_id] = material.m_terrain ? 1u : 0u;
             }
 
-            Array<double> surfaces(recipe.m_open_surface ? kWorldEdge : 0u),
-                bedrock(recipe.m_open_surface ? kWorldEdge : 0u);
+            Array<double> surfaces(recipe.m_open_surface ? recipe.m_world_edge : 0u),
+                bedrock(recipe.m_open_surface ? recipe.m_world_edge : 0u);
 
             for (u32 x = 0u; x < surfaces.size(); ++x) {
                 const double xm = (x + 0.5) * recipe.m_cell_size_m;
@@ -80,8 +80,8 @@ namespace pP::sim {
             cells.integer(0x7070722e67726964ull, 8u);
             cells.integer(kGeneratorAlgorithmVersion, 4u);
 
-            for (u32 cy = 0u; cy < kChunksPerEdge; ++cy) {
-                for (u32 cx = 0u; cx < kChunksPerEdge; ++cx) {
+            for (u32 cy = 0u; cy < grid.chunksPerEdge(); ++cy) {
+                for (u32 cx = 0u; cx < grid.chunksPerEdge(); ++cx) {
                     PPR_RETURN_UNEXPECTED_ON_FAIL(WorldResult, canceled(execution));
                     const auto payload = grid.residentCells({cx, cy});
                     if (not payload) {
@@ -96,8 +96,9 @@ namespace pP::sim {
                         const bool basement = recipe.m_open_surface and ym <= bedrock[x];
                         const bool boundary = x < recipe.m_boundary_fine or
                                               y < recipe.m_boundary_fine or
-                                              x >= kWorldEdge - recipe.m_boundary_fine or
-                                              (not recipe.m_open_surface and y >= kWorldEdge - recipe.m_boundary_fine);
+                                              x >= recipe.m_world_edge - recipe.m_boundary_fine or
+                                              (not recipe.m_open_surface and
+                                                  y >= recipe.m_world_edge - recipe.m_boundary_fine);
                         if (terrain[cell.m_element] == 0u or
                             not std::isfinite(cell.m_temperature) or
                             (cell.m_element != 0u and cell.m_temperature <= 0.0f) or

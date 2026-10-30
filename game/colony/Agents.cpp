@@ -112,7 +112,7 @@ namespace pP::colony {
                 constexpr u32 kYStep = 4u;
                 for (u32 y = 0u; y < agent.m_spawn.m_y; y += kYStep) {
                     bool found = false;
-                    for (u32 x = 0u; x < sim::kWorldEdge; x += kXStep) {
+                    for (u32 x = 0u; x < grid.edge(); x += kXStep) {
                         if (isWalkable(grid, {x, y})) {
                             want.m_site = {x, y};
                             found = true;
@@ -231,18 +231,18 @@ namespace pP::colony {
             if (context) {
                 PPR_RETURN_ERROR_ON_FAIL(AgentPreparation, context->error());
             }
-            sim::GlobalCellPos spawn{sim::kWorldEdge, sim::kWorldEdge};
+            sim::GlobalCellPos spawn{grid.edge(), grid.edge()};
 
-            for (u32 attempt = 0u; attempt < 256u and spawn.m_x >= sim::kWorldEdge; ++attempt) {
-                const u32 x = static_cast<u32>(nextStream(stream) % (sim::kWorldEdge - 1u));
-                const u32 y = static_cast<u32>(nextStream(stream) % (sim::kWorldEdge - 2u));
-                for (u32 dy = 0u; dy < 64u and spawn.m_x >= sim::kWorldEdge; ++dy) {
+            for (u32 attempt = 0u; attempt < 256u and spawn.m_x >= grid.edge(); ++attempt) {
+                const u32 x = static_cast<u32>(nextStream(stream) % (grid.edge() - 1u));
+                const u32 y = static_cast<u32>(nextStream(stream) % (grid.edge() - 2u));
+                for (u32 dy = 0u; dy < 64u and spawn.m_x >= grid.edge(); ++dy) {
                     if (context) {
                         PPR_RETURN_ERROR_ON_FAIL(AgentPreparation, context->error());
                     }
                     for (u32 dx = 0u; dx < 64u; ++dx) {
-                        const u32 cx = (x + dx) % sim::kWorldEdge;
-                        const u32 cy = (y + dy) % (sim::kWorldEdge - 1u);
+                        const u32 cx = (x + dx) % grid.edge();
+                        const u32 cy = (y + dy) % (grid.edge() - 1u);
                         if (cellsOpen(grid, cx, cy)) {
                             spawn = {cx, cy};
                             break;
@@ -250,7 +250,7 @@ namespace pP::colony {
                     }
                 }
             }
-            if (spawn.m_x >= sim::kWorldEdge) {
+            if (spawn.m_x >= grid.edge()) {
                 return std::make_error_code(std::errc::state_not_recoverable);
             }
 
@@ -292,7 +292,7 @@ namespace pP::colony {
             }
 
             const auto position = metreToFineCell(
-                {static_cast<double>(pose->m_x), static_cast<double>(pose->m_y)}, cells_per_metre);
+                {static_cast<double>(pose->m_x), static_cast<double>(pose->m_y)}, cells_per_metre, grid.edge());
             if (not position) {
                 continue;
             }

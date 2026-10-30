@@ -21,7 +21,7 @@ export namespace pP::sim {
     /// Serialization contract of `save`/`load`. Bump on any byte-layout change;
     /// `load` fail-closes on any other value before touching the payload.
     /// v4 = rect-scoped deltas.
-    inline constexpr u32 kSnapshotVersion = 4u;
+    inline constexpr u32 kSnapshotVersion = 5u;
 
     enum class errc : int {
         ok = 0,
@@ -91,6 +91,7 @@ export namespace pP::sim {
 
     struct Snapshot {
         u32 m_version{kSnapshotVersion};
+        u32 m_world_edge{kWorldEdge};
         u64 m_seed{};
         Array<ChunkDelta> m_deltas{};
         Array<RngStream> m_streams{};

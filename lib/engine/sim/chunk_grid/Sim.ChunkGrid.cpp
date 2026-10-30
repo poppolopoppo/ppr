@@ -11,7 +11,21 @@ import engine.math;
 import std;
 
 namespace pP::sim {
-    ChunkGrid::ChunkGrid() {
+    PPR_DEFINE_LOG_CATEGORY(GridEdits, info, none)
+    using pP::make_error_code;
+
+    // ------------------------------------------------------------------
+    // world geometry and owned chunk state
+    // ------------------------------------------------------------------
+
+    ChunkGrid::ChunkGrid() : ChunkGrid(kWorldEdge) {
+    }
+
+    ChunkGrid::ChunkGrid(const u32 edge) : m_world_edge(edge) {
+        if (not isSupportedWorldEdge(edge)) {
+            PPR_THROW(GridEdits, std::system_error(std::make_error_code(std::errc::invalid_argument)));
+        }
+
         m_states.resize(kChunkCount);
         m_payloads.resize(kChunkCount);
     }
@@ -27,8 +41,25 @@ namespace pP::sim {
         return bytes;
     }
 
-    PPR_DEFINE_LOG_CATEGORY(GridEdits, info, none)
-    using pP::make_error_code;
+    u32 ChunkGrid::edge() const noexcept {
+        return m_world_edge;
+    }
+
+    u32 ChunkGrid::chunksPerEdge() const noexcept {
+        return m_world_edge / kChunkEdge;
+    }
+
+    u32 ChunkGrid::chunkCount() const noexcept {
+        return chunksPerEdge() * chunksPerEdge();
+    }
+
+    bool ChunkGrid::contains(const GlobalCellPos pos) const noexcept {
+        return pos.m_x < m_world_edge and pos.m_y < m_world_edge;
+    }
+
+    bool ChunkGrid::contains(const ChunkPos pos) const noexcept {
+        return pos.m_x < chunksPerEdge() and pos.m_y < chunksPerEdge();
+    }
 
     ChunkGrid::CapturedChunk::CapturedChunk(
         const ChunkPos pos, const ChunkState state, std::optional<Array<Cell>> payload)
@@ -67,23 +98,21 @@ namespace pP::sim {
 
     Expected<ChunkGrid::CapturedChunk> ChunkGrid::captureChunk(const ChunkPos pos) const {
         PPR_RETURN_UNEXPECTED_ON_FAIL(
-            GridEdits,
-            isInsideChunkGrid(pos) ? std::error_code{} : std::make_error_code(std::errc::result_out_of_range));
+            GridEdits, contains(pos) ? std::error_code{} : std::make_error_code(std::errc::result_out_of_range));
         const u32 index = chunkIndexOf(pos);
         return CapturedChunk{pos, m_states[index], m_payloads[index]};
     }
 
     void ChunkGrid::exchangeChunk(CapturedChunk &chunk) noexcept {
-        PPR_ASSERT(chunk.m_valid and isInsideChunkGrid(chunk.m_pos));
+        PPR_ASSERT(chunk.m_valid and contains(chunk.m_pos));
         const u32 index = chunkIndexOf(chunk.m_pos);
         std::swap(m_states[index], chunk.m_state);
         m_payloads[index].swap(chunk.m_payload);
     }
 
     std::error_code ChunkGrid::setCell(const GlobalCellPos pos, const Cell cell) {
-        if (not isInsideWorld(pos)) [[unlikely]] {
-            return make_error_code(std::errc::result_out_of_range);
-        }
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridEdits, contains(pos) ? std::error_code{} : std::make_error_code(std::errc::result_out_of_range));
 
         if (not isFinite<float>(cell.m_temperature)) [[unlikely]] {
             return make_error_code(std::errc::invalid_argument);
@@ -112,7 +141,7 @@ namespace pP::sim {
 
     std::error_code ChunkGrid::setCells(const ChunkPos pos, const std::span<const Cell> cells) {
         const hal::ProfileScope scope{"Sim.ChunkGrid.SetCells"};
-        PPR_ASSERT(isInsideChunkGrid(pos));
+        PPR_ASSERT(contains(pos));
 
         if (cells.size() != kCellsPerChunk) [[unlikely]] {
             return make_error_code(std::errc::invalid_argument);
@@ -139,7 +168,7 @@ namespace pP::sim {
 
     std::error_code ChunkGrid::setCells(const ChunkPos pos, Array<Cell> &&cells) {
         const hal::ProfileScope scope{"Sim.ChunkGrid.SetCells"};
-        PPR_ASSERT(isInsideChunkGrid(pos));
+        PPR_ASSERT(contains(pos));
 
         if (cells.size() != kCellsPerChunk) [[unlikely]] {
             return make_error_code(std::errc::invalid_argument);
@@ -163,9 +192,8 @@ namespace pP::sim {
     }
 
     Expected<Cell> ChunkGrid::getCell(const GlobalCellPos pos) const {
-        if (not isInsideWorld(pos)) [[unlikely]] {
-            return std::unexpected{make_error_code(std::errc::result_out_of_range)};
-        }
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            GridEdits, contains(pos) ? std::error_code{} : std::make_error_code(std::errc::result_out_of_range));
 
         const ChunkPos chunk = chunkOf(pos);
         const std::optional<Array<Cell>> &payload = m_payloads[chunkIndexOf(chunk)];
@@ -178,7 +206,7 @@ namespace pP::sim {
     }
 
     std::optional<std::span<const Cell>> ChunkGrid::residentCells(const ChunkPos pos) const noexcept {
-        PPR_ASSERT(isInsideChunkGrid(pos));
+        PPR_ASSERT(contains(pos));
 
         const std::optional<Array<Cell>> &payload = m_payloads[chunkIndexOf(pos)];
         if (not payload.has_value()) {
@@ -189,14 +217,14 @@ namespace pP::sim {
     }
 
     bool ChunkGrid::isResident(const ChunkPos pos) const noexcept {
-        PPR_ASSERT(isInsideChunkGrid(pos));
+        PPR_ASSERT(contains(pos));
 
         return m_payloads[chunkIndexOf(pos)].has_value();
     }
 
     void ChunkGrid::markDirty(const ChunkPos pos) {
         const hal::ProfileScope scope{"Sim.ChunkGrid.MarkDirty"};
-        PPR_ASSERT(isInsideChunkGrid(pos));
+        PPR_ASSERT(contains(pos));
 
         materialize(pos);
 
@@ -209,7 +237,7 @@ namespace pP::sim {
     }
 
     void ChunkGrid::clearDirty(const ChunkPos pos) noexcept {
-        PPR_ASSERT(isInsideChunkGrid(pos));
+        PPR_ASSERT(contains(pos));
 
         ChunkState &state = m_states[chunkIndexOf(pos)];
         state.m_dirty = false;
@@ -230,13 +258,13 @@ namespace pP::sim {
     }
 
     EChunkActivity ChunkGrid::activity(const ChunkPos pos) const noexcept {
-        PPR_ASSERT(isInsideChunkGrid(pos));
+        PPR_ASSERT(contains(pos));
 
         return m_states[chunkIndexOf(pos)].m_activity;
     }
 
     void ChunkGrid::setActivity(const ChunkPos pos, const EChunkActivity activity) noexcept {
-        PPR_ASSERT(isInsideChunkGrid(pos));
+        PPR_ASSERT(contains(pos));
 
         m_states[chunkIndexOf(pos)].m_activity = activity;
     }
@@ -260,7 +288,7 @@ namespace pP::sim {
     }
 
     std::optional<DirtyBounds> ChunkGrid::dirtyBounds(const ChunkPos pos) const noexcept {
-        PPR_ASSERT(isInsideChunkGrid(pos));
+        PPR_ASSERT(contains(pos));
 
         const ChunkState &state = m_states[chunkIndexOf(pos)];
         if (not state.m_dirty) {

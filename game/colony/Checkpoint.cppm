@@ -13,9 +13,9 @@ export namespace pP::colony {
     // world checkpoint
     // ------------------------------------------------------------------
 
-    // Version 5 requires complete current PB-MPM columns and durable identity.
-    // Older envelopes cannot reconstruct omitted carried fields; no migration.
-    inline constexpr u32 kWorldCheckpointVersion = 5u;
+    // Version 6 records the active map edge alongside complete PB-MPM columns.
+    // Earlier envelopes have different layouts and are rejected without migration.
+    inline constexpr u32 kWorldCheckpointVersion = 6u;
     inline constexpr u64 kMaxWorldCheckpointBytes = 256u * 1024u * 1024u;
 
     // ------------------------------------------------------------------

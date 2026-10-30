@@ -17,7 +17,9 @@ namespace pP::game::tests::detail::checkpoint {
         std::string m_namespace, m_world_key, m_manifest;
         std::shared_ptr<const ContentCatalog> m_catalog;
 
-        explicit inline Fixture(std::string name_space = "checkpoint", std::string world_key = "frontier")
+        explicit inline Fixture(
+            std::string name_space = "checkpoint", std::string world_key = "frontier",
+            const u32 world_edge = sim::kWorldEdge)
             : m_namespace{std::move(name_space)}, m_world_key{std::move(world_key)},
               m_manifest{"schema_version = 1\npack_id = '" + m_namespace + "'\n"} {
             static std::atomic<u32> ordinal{};
@@ -164,7 +166,7 @@ namespace pP::game::tests::detail::checkpoint {
             const auto id = resolveContentWorld(*definitions, m_namespace + ":" + m_world_key, diagnostics);
             PPR_TEST_ASSERT(id.has_value());
 
-            auto selected = selectWorldCatalog(definitions, *id, kWorldCompileParameters, diagnostics);
+            auto selected = selectWorldCatalog(definitions, *id, worldCompileParameters(world_edge), diagnostics);
             PPR_TEST_ASSERT(selected.has_value());
 
             m_catalog = std::make_shared<const ContentCatalog>(std::move(*selected));
@@ -250,6 +252,8 @@ namespace pP::game::tests::detail::checkpoint {
         WorldCheckpoint checkpoint;
         checkpoint.m_descriptor.m_profile = catalog.worlds().front().m_key;
         checkpoint.m_descriptor.m_seed = 42u;
+        PPR_TEST_ASSERT(catalog.selectedRecipe() != nullptr);
+        checkpoint.m_descriptor.m_world_edge = catalog.selectedRecipe()->m_recipe.m_world_edge;
         checkpoint.m_descriptor.m_content_fingerprint = *catalog.contentFingerprint();
         checkpoint.m_materials.push_back({0u, "vacuum"});
         for (const auto &material: catalog.materials()) {
@@ -269,19 +273,25 @@ namespace pP::game::tests::detail::checkpoint {
             const auto &deposits = plan->recipe().m_biomes[b].m_deposits;
             for (u32 d = 0u; d < deposits.size(); ++d) {
                 const auto &deposit = deposits[d];
-                if (deposit.m_shape == sim::EGenerationDepositShape::blob and deposit.m_blob_count >= 2u) {
+                if (deposit.m_shape == sim::EGenerationDepositShape::blob and deposit.m_blob_count != 0u) {
                     checkpoint.m_geometry.m_blobs.push_back(
                         {b, d, 0u, 12.3456789, 45.125, deposit.m_radius_min_m, deposit.m_stretch_min,
                             2.0 * std::numbers::pi * (deposit.m_orientation_min_degrees / 360.0), 100.0, 200.0});
-                    checkpoint.m_geometry.m_blobs.push_back(
-                        {b, d, 1u, 90.25, 75.5, deposit.m_radius_max_m, deposit.m_stretch_max,
-                            2.0 * std::numbers::pi * (deposit.m_orientation_max_degrees / 360.0), 500.0, 900.0});
+
+                    if (deposit.m_blob_count >= 2u) {
+                        checkpoint.m_geometry.m_blobs.push_back(
+                            {b, d, 1u, 90.25, 75.5, deposit.m_radius_max_m, deposit.m_stretch_max,
+                                2.0 * std::numbers::pi * (deposit.m_orientation_max_degrees / 360.0), 500.0, 900.0});
+                    }
+
                     break;
                 }
             }
         }
 
-        PPR_TEST_ASSERT(checkpoint.m_geometry.m_blobs.size() == 2u);
+        PPR_TEST_ASSERT(
+            checkpoint.m_geometry.m_blobs.size() ==
+            (checkpoint.m_descriptor.m_world_edge == sim::kWorldEdge ? 2u : 1u));
 
         checkpoint.m_start.m_resource_fine_cells.resize(plan->recipe().m_resources.size());
         checkpoint.m_start.m_spawn_x_m = 10.0;
@@ -291,7 +301,7 @@ namespace pP::game::tests::detail::checkpoint {
         checkpoint.m_tick = 19u;
         checkpoint.m_report.m_material_counts.push_back({0u, 100u});
 
-        sim::ChunkGrid grid;
+        sim::ChunkGrid grid{checkpoint.m_descriptor.m_world_edge};
         PPR_TEST_ASSERT(not grid.setCell({127u, 40u}, {catalog.findMaterial("basalt")->m_numeric_id, 321.0f}));
         grid.clearAllDirty();
         PPR_TEST_ASSERT(not grid.setCell({128u, 40u}, {catalog.findMaterial("sandstone")->m_numeric_id, 345.0f}));
@@ -332,7 +342,7 @@ namespace pP::game::tests::detail::checkpoint {
 
         auto current = makeMatterState(
             checkpoint.m_particles, kFineCellMetres, checkpoint.m_descriptor.m_metric.m_reference_thickness_m,
-            kMatterGravityY, 1u);
+            kMatterGravityY, 1u, checkpoint.m_descriptor.m_world_edge);
         PPR_TEST_ASSERT(current.has_value());
         current->m_identity.m_terrain_revision = 1u;
         checkpoint.m_current_matter = std::move(*current);

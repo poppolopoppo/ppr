@@ -83,11 +83,11 @@ namespace pP::colony {
     std::error_code ColonyTranslator::submit(const sim::ChunkGrid &grid, GridPass &pass) {
         const hal::ProfileScope scope_submit{"Colony.Submit"};
         Array<GridTileSubmission> tiles{};
-        tiles.reserve(sim::kChunkCount);
+        tiles.reserve(grid.chunkCount());
         {
             const hal::ProfileScope scope_gather{"Colony.Submit.Gather"};
-            for (u32 y = 0u; y < sim::kChunksPerEdge; ++y) {
-                for (u32 x = 0u; x < sim::kChunksPerEdge; ++x) {
+            for (u32 y = 0u; y < grid.chunksPerEdge(); ++y) {
+                for (u32 x = 0u; x < grid.chunksPerEdge(); ++x) {
                     const sim::ChunkPos pos{x, y};
                     if (not grid.isResident(pos)) {
                         continue;

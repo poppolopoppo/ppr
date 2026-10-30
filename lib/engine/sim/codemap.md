@@ -26,7 +26,7 @@ ordering, malformed membership/domains and owner-map rejection.
 ## Responsibility
 
 `engine.sim` owns deterministic, renderer-independent simulation state for the chunk world: the
-fixed cell grid, the fixed-timestep tick driver plus declared system order, the snapshot
+per-world square cell grid, the fixed-timestep tick driver plus declared system order, the snapshot
 (save/load) contract, and the ECS registry/views substrate. The game already integrates this state with rendering
 through owned simulation packets; the sim module itself has no renderer or script-engine dependency.
   `:footprint` adds plain ECS body vocabulary (`BodyState`/`BodyDefinition` live; `SolidFootprint`
@@ -41,6 +41,32 @@ detached terrain solids with their original material ID, and closed upper world
 endpoints assigned to the final presentation chunk without moving the particle.
 
 - Partitioned umbrella: `Sim.cppm` re-exports `:chunk_grid`, `:ecs`, `:footprint`, `:snapshot`, `:tick`, `:worldgen`, and `:particles` (snapshot before tick per Sim.cppm:5-10).
+World edge is explicit per `ChunkGrid`, `GenerationRecipe` and
+`GenerationCompileParameters`: supported edges are 1024, 2048 and 4096 cells,
+defaulting to 4096. Chunk size stays 128. Maximum constants and stride-32 chunk
+IDs remain stable addressing vocabulary; instance `contains`, `edge`,
+`chunksPerEdge` and `chunkCount` define active bounds. Generation traverses only
+active chunks. Authored world-scale layout adapts to the selected edge while
+physical cells, actors, features and required resources retain their sizes.
+Authored start depth scales as global placement on compact maps, with a lower
+bound that clears the unchanged starting reservation, worst surface variation
+and physical clearance. Canonical subsurface/biome validation still rejects
+infeasible profiles; bedrock and actor dimensions remain physical quantities.
+Global worm/blob populations and connection anchor/link/well/branch counts scale
+by selected area, rounding positive populations up; zero remains zero. Optional
+feature quotas scale down by area while every authored minimum remains required.
+Placement spacing scales with map edge, but physical lengths, radii, reservation
+footprints, noise frequencies and resource guarantees remain unchanged.
+Compact authored layouts retain mandatory occurrences plus area-scaled optional
+sites. An explicit bounded `m_site_candidate_limit` preserves the authored spatial
+candidate pool for requirement matching before retention; zero uses `m_max_sites`
+for existing numeric/default callers. Retention rebuilds bins before weighted
+optional assignment and preserves required labels.
+Snapshot version 5 stores world edge after version, rejects unsupported edges
+and inactive stable chunk IDs, and refuses cross-size application before mutation.
+Particle validation accepts an explicit edge; moving endpoints remain closed at
+the selected upper bound and map to its final active chunk.
+
 - `:chunk_grid` holds the geometry vocabulary (`kChunkEdge`=128, `kChunksPerEdge`=32,
   `kWorldEdge`=4096, `kChunkCount`=1024, `kCellsPerChunk`=16384), the `GlobalCellPos`/`ChunkPos`/
   `LocalCellPos` strong coordinate types with constexpr converters (`chunkOf`, `localOf`,
@@ -96,7 +122,7 @@ ullptr`) and `mask` (empty). Components are
    stable Kahn result (lowest id first), listing declared steps only. `addSystem` fail-closes with
    `invalid_argument` on unknown id/pending/empty fn/rebind (Sim.Tick.cpp:140-147, Sim.Tick.cppm:115-117).
    `runSystems` refuses an unbound declared step before invoking any system and executes bound steps in that order.
-- `:snapshot` holds `kSnapshotVersion` (=4), `sim::errc` (+ `error_category()`/`make_error_code()`
+- `:snapshot` holds `kSnapshotVersion` (=5), `sim::errc` (+ `error_category()`/`make_error_code()`
   and `std::is_error_code_enum` — same shape as `image::errc`), `RngStream`, `ChunkDelta`
   (rect-scoped run of `m_width * m_height` cells, row-major over the w x h rect at local
   (`m_x`, `m_y`)), `BodyRecord` (:63-80), `BodiesSection` (:82-90), `Snapshot`, and
@@ -115,7 +141,7 @@ ullptr`) and `mask` (empty). Components are
   (→ `truncated`), then malformed counts,
   out-of-range chunk indices, rect overflows, trailing bytes, duplicate chunk indices and non-finite temperatures
   (→ `invalid_payload`).
-  `save`/`load` are little-endian: `u32 version`, `u64 seed`, `u32 delta_count`, per delta
+  `save`/`load` are little-endian: `u32 version`, `u32 world_edge`, `u64 seed`, `u32 delta_count`, per delta
   `u32 chunk` + `u32 x` + `u32 y` + `u32 width` + `u32 height` + cells as `u16 element` + `u32` temperature bit pattern, then
     `u32 stream_count` and per stream `u32 system` + `u64 state`; v4 appends ECS version,
     slot count, per-slot generation/alive, free count + head-to-tail `u32` free indices,

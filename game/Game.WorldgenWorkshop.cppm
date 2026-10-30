@@ -34,7 +34,8 @@ export namespace pP::colony {
     public:
         // construction:
         explicit WorldgenWorkshop(
-            ParallelScheduler &pool, const ITimerClock &clock, ParallelScheduler *generation_pool = nullptr);
+            ParallelScheduler &pool, const ITimerClock &clock, ParallelScheduler *generation_pool = nullptr,
+            u32 world_edge = sim::kWorldEdge);
         ~WorldgenWorkshop() noexcept;
 
         // queries:
@@ -90,6 +91,7 @@ export namespace pP::colony {
         std::filesystem::path m_invalid_draft_root{};
         u64 m_invalid_draft_revision{};
         u64 m_next_request{1u}, m_latest_request{};
+        u32 m_world_edge{sim::kWorldEdge};
         EGridDiagnosticMode m_live_mode{};
         bool m_live_enabled{}, m_live_pending{}, m_validation_pending{}, m_closing{};
 

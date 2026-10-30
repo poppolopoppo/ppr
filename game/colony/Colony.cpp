@@ -62,6 +62,8 @@ namespace pP::colony {
             descriptor.m_content_fingerprint != world.catalog().contentFingerprint() or
             world.catalog().findWorld(descriptor.m_profile) == nullptr or
             descriptor.m_seed != world.generated().m_plan.seed() or
+            descriptor.m_world_edge != world.grid().edge() or
+            descriptor.m_world_edge != recipe.m_world_edge or
             recipe.m_cell_size_m != kFineCellMetres or
             recipe.m_reference_thickness_m != descriptor.m_metric.m_reference_thickness_m) {
             PPR_RETURN_ERROR_ON_FAIL(ColonyWorld, std::errc::invalid_argument);
@@ -72,15 +74,16 @@ namespace pP::colony {
             PPR_RETURN_ERROR_ON_FAIL(ColonyWorld, context ? context->error() : std::error_code{});
             PPR_RETURN_ERROR_ON_FAIL(
                 ColonyWorld, particles.restoreMoving(
-                                 *restored, recipe.m_materials, recipe.m_cell_size_m, recipe.m_reference_thickness_m));
+                                 *restored, recipe.m_materials, recipe.m_cell_size_m, recipe.m_reference_thickness_m,
+                                 recipe.m_world_edge));
         } else {
             const auto seeded = sim::seedMatterParticles(
                 world.generated().m_matter, world.generated().m_grid, recipe, context);
             PPR_RETURN_ERROR_ON_FAIL(ColonyWorld, seeded);
             PPR_RETURN_ERROR_ON_FAIL(
-                ColonyWorld,
-                particles.restore(
-                    *seeded, recipe.m_materials, recipe.m_cell_size_m, context, recipe.m_reference_thickness_m));
+                ColonyWorld, particles.restore(
+                                 *seeded, recipe.m_materials, recipe.m_cell_size_m, context,
+                                 recipe.m_reference_thickness_m, recipe.m_world_edge));
         }
 
         auto prepared = std::make_unique<PreparedWorld>(std::move(world));

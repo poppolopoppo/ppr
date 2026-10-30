@@ -57,24 +57,26 @@ export namespace pP::colony {
 
     [[nodiscard]] std::error_code validateWorldMetric(const WorldMetric &metric);
 
-    [[nodiscard]] Expected<MetrePoint> fineCellCentre(sim::GlobalCellPos position);
+    [[nodiscard]] Expected<MetrePoint> fineCellCentre(sim::GlobalCellPos position, u32 world_edge = sim::kWorldEdge);
 
     // The explicit one-cell scale is retained for legacy numeric fixtures.
     [[nodiscard]] Expected<sim::GlobalCellPos> metreToFineCell(
-        MetrePoint position, u32 cells_per_metre = kFineCellsPerMetre);
+        MetrePoint position, u32 cells_per_metre = kFineCellsPerMetre, u32 world_edge = sim::kWorldEdge);
 
-    [[nodiscard]] Expected<double> fineCellBoundaryMetres(u32 boundary);
+    [[nodiscard]] Expected<double> fineCellBoundaryMetres(u32 boundary, u32 world_edge = sim::kWorldEdge);
 
     // Exact discrete dimensions only; no rounding of authored geometry.
-    [[nodiscard]] Expected<u32> discreteFineCellLength(double metres);
+    [[nodiscard]] Expected<u32> discreteFineCellLength(double metres, u32 world_edge = sim::kWorldEdge);
 
-    [[nodiscard]] Expected<FineCellRect> constructionFootprint(ConstructionTile tile, TileExtent extent = {});
+    [[nodiscard]] Expected<FineCellRect> constructionFootprint(
+        ConstructionTile tile, TileExtent extent = {}, u32 world_edge = sim::kWorldEdge);
 
     // The incomplete final row/column cannot select a construction tile.
-    [[nodiscard]] Expected<ConstructionTile> constructionTileOf(sim::GlobalCellPos position);
+    [[nodiscard]] Expected<ConstructionTile> constructionTileOf(
+        sim::GlobalCellPos position, u32 world_edge = sim::kWorldEdge);
 
     // Inclusive cursor/anchor selection becomes complete globally aligned tiles;
     // the cursor side is clamped without moving the anchor tile.
     [[nodiscard]] Expected<FineCellRect> constructionDragFootprint(
-        sim::GlobalCellPos anchor, sim::GlobalCellPos cursor, u32 max_fine_edge);
+        sim::GlobalCellPos anchor, sim::GlobalCellPos cursor, u32 max_fine_edge, u32 world_edge = sim::kWorldEdge);
 }

@@ -20,6 +20,12 @@ export namespace pP::colony {
     inline constexpr sim::definition::GenerationCompileParameters kWorldCompileParameters{
         kFineCellMetres, kReferenceThicknessMetres, 0.4, 0.9};
 
+    [[nodiscard]] constexpr sim::definition::GenerationCompileParameters worldCompileParameters(const u32 world_edge) {
+        auto parameters = kWorldCompileParameters;
+        parameters.m_world_edge = world_edge;
+        return parameters;
+    }
+
     /// Runtime driver/physics use the canonical application metric and actor.
     /// Standalone numeric selection and previews retain their explicit parameters.
     [[nodiscard]] std::error_code validateRuntimeWorldParameters(const sim::GenerationRecipe &recipe);
@@ -29,12 +35,14 @@ export namespace pP::colony {
     // ------------------------------------------------------------------
 
     struct WorldDescriptor {
-        u32 m_pack_schema_version{asset::Manifest::schema_version};
-        u32 m_generator_version{sim::kGeneratorAlgorithmVersion};
         std::string m_profile{};
         u64 m_seed{};
         u64 m_content_fingerprint{};
         WorldMetric m_metric{};
+        u32 m_pack_schema_version{asset::Manifest::schema_version};
+        u32 m_generator_version{sim::kGeneratorAlgorithmVersion};
+        u32 m_world_edge{sim::kWorldEdge};
+
         [[nodiscard]] bool operator==(const WorldDescriptor &) const noexcept = default;
     };
 
@@ -77,10 +85,12 @@ export namespace pP::colony {
 
     [[nodiscard]] Expected<PreparedWorld> prepareWorld(
         const std::filesystem::path &root, std::string_view profile, u64 seed, const ITimerClock &clock,
-        config::Diagnostics &diagnostics, const sim::GenerationExecution &execution = {});
+        config::Diagnostics &diagnostics, const sim::GenerationExecution &execution = {},
+        u32 world_edge = sim::kWorldEdge);
     [[nodiscard]] Expected<PreparedWorld> prepareWorld(
         std::span<const std::filesystem::path> roots, std::string_view profile, u64 seed, const ITimerClock &clock,
-        config::Diagnostics &diagnostics, const sim::GenerationExecution &execution = {});
+        config::Diagnostics &diagnostics, const sim::GenerationExecution &execution = {},
+        u32 world_edge = sim::kWorldEdge);
     [[nodiscard]] Expected<PreparedWorld> prepareWorld(
         ContentCatalog catalog, std::string_view profile, u64 seed, const ITimerClock &clock,
         const sim::GenerationExecution &execution = {});

@@ -405,10 +405,10 @@ namespace pP::colony {
         }
 
         const sim::ChunkGrid &grid = driver.grid();
-        for (u32 y = 0u; y < sim::kChunksPerEdge; ++y) {
-            for (u32 x = 0u; x < sim::kChunksPerEdge; ++x) {
+        for (u32 y = 0u; y < grid.chunksPerEdge(); ++y) {
+            for (u32 x = 0u; x < grid.chunksPerEdge(); ++x) {
                 const sim::ChunkPos pos{x, y};
-                if (not grid.isResident(pos)) {
+                if (not grid.contains(pos) or not grid.isResident(pos)) {
                     continue;
                 }
                 packet.m_resident_chunks.push_back(pos);
@@ -466,8 +466,8 @@ namespace pP::colony {
         ParticlePresentationCache *const particles) {
         if (chunk_count == 0u or
             chunk_count > kInitialPresentationBatchChunks or
-            first_chunk >= sim::kChunkCount or
-            chunk_count > sim::kChunkCount - first_chunk) {
+            first_chunk >= driver.grid().chunkCount() or
+            chunk_count > driver.grid().chunkCount() - first_chunk) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(SimPresentation, std::errc::invalid_argument);
         }
         SimFramePacket packet{};
@@ -484,8 +484,8 @@ namespace pP::colony {
         const u32 end = first_chunk + chunk_count;
 
         for (u32 index = 0u; index < end; ++index) {
-            const sim::ChunkPos pos{index % sim::kChunksPerEdge, index / sim::kChunksPerEdge};
-            if (not grid.isResident(pos)) {
+            const sim::ChunkPos pos{index % grid.chunksPerEdge(), index / grid.chunksPerEdge()};
+            if (not grid.contains(pos) or not grid.isResident(pos)) {
                 continue;
             }
             packet.m_resident_chunks.push_back(pos);
@@ -529,7 +529,7 @@ namespace pP::colony {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(SimPresentation, context->error());
             }
             const sim::ChunkPos pos{index % sim::kChunksPerEdge, index / sim::kChunksPerEdge};
-            if (not grid.isResident(pos)) {
+            if (not grid.contains(pos) or not grid.isResident(pos)) {
                 continue;
             }
             const auto cells = grid.residentCells(pos);
@@ -585,6 +585,14 @@ namespace pP::colony {
     }
 
     Expected<GridStagedFrame> InitialPresentation::stage(const u64 frame_id, const ColonyDriver &driver) {
+        if (m_next_chunk == 0u and not m_frame) {
+            m_chunk_count = driver.grid().chunkCount();
+        }
+
+        if (m_chunk_count != driver.grid().chunkCount()) {
+            PPR_RETURN_UNEXPECTED_ON_FAIL(SimPresentation, std::errc::invalid_argument);
+        }
+
         GridStagedFrame stage{};
         SimFramePacket presentation{};
         PPR_RETURN_UNEXPECTED_ON_FAIL(SimPresentation, capturePresentation_(presentation, driver, &m_particle_cache));
@@ -603,12 +611,12 @@ namespace pP::colony {
         stage.m_particle_batches = presentation.m_particle_batches;
         stage.m_gpu_particles = presentation.m_gpu_particles;
 
-        if (m_frame or m_next_chunk == sim::kChunkCount) {
+        if (m_frame or m_next_chunk == m_chunk_count) {
             stage.m_tiles = m_visible;
             return stage;
         }
 
-        const u32 count = std::min(kInitialPresentationBatchChunks, sim::kChunkCount - m_next_chunk);
+        const u32 count = std::min(kInitialPresentationBatchChunks, m_chunk_count - m_next_chunk);
         auto packet = makeInitialPresentationBatch(frame_id, driver, m_next_chunk, count, &m_particle_cache);
         PPR_RETURN_UNEXPECTED_ON_FAIL(SimPresentation, packet);
         PPR_RETURN_UNEXPECTED_ON_FAIL(SimPresentation, buildGridStagedFrame(*packet, stage));
@@ -634,8 +642,8 @@ namespace pP::colony {
             return false;
         }
         m_visible = std::move(m_pending);
-        m_next_chunk = std::min(m_next_chunk + kInitialPresentationBatchChunks, sim::kChunkCount);
-        return m_next_chunk == sim::kChunkCount;
+        m_next_chunk = std::min(m_next_chunk + kInitialPresentationBatchChunks, m_chunk_count);
+        return m_next_chunk == m_chunk_count;
     }
 
     // ------------------------------------------------------------------

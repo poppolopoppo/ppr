@@ -74,6 +74,51 @@ namespace pP::game::tests::detail::compat {
         PPR_TEST_ASSERT(workshop->m_game.m_value.m_worldgen_seed == (std::numeric_limits<u64>::max)());
     };
 
+    PPR_UNIT_TEST (map_size_uses_one_numeric_domain_for_cli_and_toml) {
+        Diagnostics defaults;
+        const auto normal = resolveCli({}, defaults);
+        PPR_TEST_ASSERT(normal and normal->m_game.m_value.m_map_size == 4096u);
+        PPR_TEST_ASSERT(gameHelpText().find("map-size") != std::string::npos);
+
+        for (const u32 edge: {1024u, 2048u, 4096u}) {
+            const auto option = "--map-size=" + std::to_string(edge);
+            Diagnostics cli_diagnostics;
+            const auto cli = resolveCli({option.c_str()}, cli_diagnostics);
+            PPR_TEST_ASSERT(cli and cli->m_game.m_value.m_map_size == edge and not cli_diagnostics.hasErrors());
+
+            Diagnostics file_diagnostics;
+            const auto document = decode(
+                "[game]\nmap_size = " + std::to_string(edge) + "\n", "map-size.toml", file_diagnostics);
+            PPR_TEST_ASSERT(document.has_value());
+            const auto layer = toLayer(*document, "map-size.toml");
+            const auto resolved = resolveGameCli(CliResult{}, std::span<const Layer>{&layer, 1u}, file_diagnostics);
+            PPR_TEST_ASSERT(resolved and resolved->m_game.m_value.m_map_size == edge);
+            const auto *const origin = resolved->m_game.find("game.map_size");
+            PPR_TEST_ASSERT(origin != nullptr and origin->m_location == "map-size.toml:2");
+        }
+
+        Diagnostics canonical_diagnostics;
+        const auto canonical = resolveCli({"--game.map_size=2048"}, canonical_diagnostics);
+        PPR_TEST_ASSERT(canonical and canonical->m_game.m_value.m_map_size == 2048u);
+
+        for (const auto *const value: {"0", "128", "1536", "8192", "-1", "1024.5", "large"}) {
+            const auto option = std::string{"--map-size="} + value;
+            Diagnostics cli_diagnostics;
+            PPR_TEST_ASSERT(not resolveCli({option.c_str()}, cli_diagnostics));
+            PPR_TEST_ASSERT(cli_diagnostics.hasErrors());
+
+            Diagnostics file_diagnostics;
+            const auto document = decode(
+                std::string{"[game]\nmap_size = "} + value + "\n", "map-size.toml", file_diagnostics);
+            if (document) {
+                const auto layer = toLayer(*document, "map-size.toml");
+                PPR_TEST_ASSERT(not resolveGameCli(CliResult{}, std::span<const Layer>{&layer, 1u}, file_diagnostics));
+            }
+
+            PPR_TEST_ASSERT(file_diagnostics.hasErrors());
+        }
+    };
+
     PPR_UNIT_TEST (worldgen_validation_invocation) {
         Diagnostics diagnostics{};
         const auto command = resolveCli(
@@ -642,6 +687,7 @@ namespace pP::game::tests {
         _.recurse({
             detail::compat::selectors_pick_commands,
             detail::compat::worldgen_validation_invocation,
+            detail::compat::map_size_uses_one_numeric_domain_for_cli_and_toml,
             detail::compat::worldgen_pack_set_and_qualified_world_are_explicit_inputs,
             detail::compat::pack_set_roots_are_relative_owned_and_never_discovered,
             detail::compat::worldgen_preview_is_distinct_and_requires_explicit_output,

@@ -245,7 +245,7 @@ namespace pP::sim {
                                     std::max(1.0, deposit.m_stretch_max) *
                                     (1.0 + deposit.m_distortion) *
                                     1.2 >
-                                kWorldEdge * recipe.m_cell_size_m) {
+                                recipe.m_world_edge * recipe.m_cell_size_m) {
                             PPR_RETURN_ERROR_ON_FAIL(WorldPlan, std::errc::invalid_argument);
                         }
                         blob_count += deposit.m_blob_count;
@@ -291,7 +291,7 @@ namespace pP::sim {
                            feature.m_bounds, static_cast<i64>(operation.m_x) + operation.m_width - 1,
                            static_cast<i64>(operation.m_y) + operation.m_height - 1);
             }
-            if (not positive(operation.m_radius_m, kWorldEdge * recipe.m_cell_size_m)) {
+            if (not positive(operation.m_radius_m, recipe.m_world_edge * recipe.m_cell_size_m)) {
                 return false;
             }
             const double radius = operation.m_radius_m * (1.0 / recipe.m_cell_size_m);
@@ -306,12 +306,12 @@ namespace pP::sim {
                 const auto &bounds = feature.m_bounds;
                 if (bounds.m_min_x >= bounds.m_max_x or
                     bounds.m_min_y >= bounds.m_max_y or
-                    bounds.m_min_x < -static_cast<i32>(kWorldEdge) or
-                    bounds.m_min_y < -static_cast<i32>(kWorldEdge) or
-                    bounds.m_max_x > static_cast<i32>(kWorldEdge) or
-                    bounds.m_max_y > static_cast<i32>(kWorldEdge) or
-                    static_cast<i64>(bounds.m_max_x) - bounds.m_min_x > kWorldEdge or
-                    static_cast<i64>(bounds.m_max_y) - bounds.m_min_y > kWorldEdge or
+                    bounds.m_min_x < -static_cast<i32>(recipe.m_world_edge) or
+                    bounds.m_min_y < -static_cast<i32>(recipe.m_world_edge) or
+                    bounds.m_max_x > static_cast<i32>(recipe.m_world_edge) or
+                    bounds.m_max_y > static_cast<i32>(recipe.m_world_edge) or
+                    static_cast<i64>(bounds.m_max_x) - bounds.m_min_x > recipe.m_world_edge or
+                    static_cast<i64>(bounds.m_max_y) - bounds.m_min_y > recipe.m_world_edge or
                     feature.m_operations.empty() or
                     feature.m_operations.size() > 128u or
                     feature.m_markers.size() > 64u or
@@ -336,13 +336,15 @@ namespace pP::sim {
         }
 
         [[nodiscard]] std::error_code validateLayout(const GenerationRecipe &recipe) {
-            const double world_m = kWorldEdge * recipe.m_cell_size_m;
+            const double world_m = recipe.m_world_edge * recipe.m_cell_size_m;
             if (not terrain(recipe, recipe.m_boundary_material) or
                 recipe.m_boundary_fine == 0u or
-                recipe.m_boundary_fine >= kWorldEdge / 2u or
+                recipe.m_boundary_fine >= recipe.m_world_edge / 2u or
                 recipe.m_min_sites == 0u or
                 recipe.m_min_sites > recipe.m_max_sites or
                 recipe.m_max_sites > kMaxGenerationSites or
+                (recipe.m_site_candidate_limit != 0u and (recipe.m_site_candidate_limit < recipe.m_max_sites or
+                                                             recipe.m_site_candidate_limit > kMaxGenerationSites)) or
                 recipe.m_site_attempts == 0u or
                 recipe.m_site_attempts > 4096u or
                 not positive(recipe.m_site_spacing_m, world_m) or
@@ -353,7 +355,7 @@ namespace pP::sim {
                 PPR_RETURN_ERROR_ON_FAIL(WorldPlan, std::errc::invalid_argument);
             }
 
-            u64 required = 0u;
+            u64 required = 1u;
             for (std::size_t i = 0u; i < recipe.m_constraints.size(); ++i) {
                 const auto &constraint = recipe.m_constraints[i];
                 if (constraint.m_biome >= recipe.m_biomes.size() or
@@ -367,6 +369,9 @@ namespace pP::sim {
                     }
                 }
                 required += constraint.m_required_count;
+                if (constraint.m_biome == recipe.m_start_biome and constraint.m_required_count > 0u) {
+                    --required;
+                }
             }
 
             if (required > recipe.m_max_sites or not validWeights(recipe.m_constraints)) {
@@ -422,7 +427,7 @@ namespace pP::sim {
                                value.m_attempts > 0u and
                                value.m_attempts <= 4096u and
                                interval(value.m_depth_min, value.m_depth_max, 0.0, 1.0) and
-                               finiteRange(value.m_spacing_m, 0.0, kWorldEdge * recipe.m_cell_size_m) and
+                               finiteRange(value.m_spacing_m, 0.0, recipe.m_world_edge * recipe.m_cell_size_m) and
                                (not value.m_reflect or recipe.m_features[value.m_feature].m_allow_reflection);
                     } else {
                         if (rule.m_phase != EGenerationPhase::fill or value.m_placement_rule >= recipe.m_rules.size()) {
@@ -512,12 +517,12 @@ namespace pP::sim {
         [[nodiscard]] std::error_code validateStart(const GenerationRecipe &recipe) {
             if (not activeBiome(recipe, recipe.m_start_biome) or
                 recipe.m_start_feature >= recipe.m_features.size() or
-                recipe.m_start_x_fine >= kWorldEdge or
-                recipe.m_start_y_fine >= kWorldEdge or
-                not positive(recipe.m_start_clearance_m, kWorldEdge * recipe.m_cell_size_m) or
-                not positive(recipe.m_start_route_width_m, kWorldEdge * recipe.m_cell_size_m) or
-                not positive(recipe.m_actor_half_width_m, kWorldEdge * recipe.m_cell_size_m) or
-                not positive(recipe.m_actor_half_height_m, kWorldEdge * recipe.m_cell_size_m) or
+                recipe.m_start_x_fine >= recipe.m_world_edge or
+                recipe.m_start_y_fine >= recipe.m_world_edge or
+                not positive(recipe.m_start_clearance_m, recipe.m_world_edge * recipe.m_cell_size_m) or
+                not positive(recipe.m_start_route_width_m, recipe.m_world_edge * recipe.m_cell_size_m) or
+                not positive(recipe.m_actor_half_width_m, recipe.m_world_edge * recipe.m_cell_size_m) or
+                not positive(recipe.m_actor_half_height_m, recipe.m_world_edge * recipe.m_cell_size_m) or
                 recipe.m_start_route_width_m < 2.0 * recipe.m_actor_half_width_m or
                 recipe.m_start_clearance_m < 2.0 * recipe.m_actor_half_height_m) {
                 PPR_RETURN_ERROR_ON_FAIL(WorldPlan, std::errc::invalid_argument);
@@ -529,8 +534,10 @@ namespace pP::sim {
                 feature.m_markers[recipe.m_start_marker].m_role != EGenerationMarker::start or
                 static_cast<i64>(recipe.m_start_x_fine) + bounds.m_min_x < recipe.m_boundary_fine or
                 static_cast<i64>(recipe.m_start_y_fine) + bounds.m_min_y < recipe.m_boundary_fine or
-                static_cast<i64>(recipe.m_start_x_fine) + bounds.m_max_x > kWorldEdge - recipe.m_boundary_fine or
-                static_cast<i64>(recipe.m_start_y_fine) + bounds.m_max_y > kWorldEdge - recipe.m_boundary_fine) {
+                static_cast<i64>(recipe.m_start_x_fine) + bounds.m_max_x >
+                    recipe.m_world_edge - recipe.m_boundary_fine or
+                static_cast<i64>(recipe.m_start_y_fine) + bounds.m_max_y >
+                    recipe.m_world_edge - recipe.m_boundary_fine) {
                 PPR_RETURN_ERROR_ON_FAIL(WorldPlan, std::errc::invalid_argument);
             }
 
@@ -543,8 +550,8 @@ namespace pP::sim {
                     resource.m_marker >= feature.m_markers.size() or
                     feature.m_markers[resource.m_marker].m_role != EGenerationMarker::resource_anchor or
                     resource.m_minimum_fine_cells == 0u or
-                    resource.m_minimum_fine_cells > static_cast<u64>(kWorldEdge) * kWorldEdge or
-                    not positive(resource.m_max_distance_m, kWorldEdge * recipe.m_cell_size_m * 2.0)) {
+                    resource.m_minimum_fine_cells > static_cast<u64>(recipe.m_world_edge) * recipe.m_world_edge or
+                    not positive(resource.m_max_distance_m, recipe.m_world_edge * recipe.m_cell_size_m * 2.0)) {
                     PPR_RETURN_ERROR_ON_FAIL(WorldPlan, std::errc::invalid_argument);
                 }
                 for (std::size_t j = 0u; j < i; ++j) {
@@ -645,7 +652,7 @@ namespace pP::sim {
         return r.m_open_surface ? r.m_surface_elevation_m +
                                       r.m_surface_amplitude_m *
                                           static_cast<double>(plan.fields()[r.m_surface_field].sample(x_m, 0.0))
-                                : kWorldEdge * r.m_cell_size_m;
+                                : r.m_world_edge * r.m_cell_size_m;
     }
 
     double generationBedrockHeight(const GenerationPlan &plan, const double x_m) noexcept {
@@ -667,9 +674,9 @@ namespace pP::sim {
         const GenerationPlan &plan, const i64 min_x, const i64 min_y, const i64 max_x, const i64 max_y) noexcept {
         const auto &r = plan.recipe();
         if (min_x < r.m_boundary_fine or
-            max_x > kWorldEdge - r.m_boundary_fine or
+            max_x > r.m_world_edge - r.m_boundary_fine or
             min_y < r.m_boundary_fine or
-            max_y > kWorldEdge - r.m_boundary_fine) {
+            max_y > r.m_world_edge - r.m_boundary_fine) {
             return false;
         }
         if (not r.m_open_surface) {
@@ -761,6 +768,10 @@ namespace pP::sim {
 
     // Legacy content v2: deferred migration — retain the full numeric world safety boundary.
     std::error_code validateGenerationRecipe(const GenerationRecipe &recipe) {
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldPlan, isSupportedWorldEdge(recipe.m_world_edge) ? std::error_code{}
+                                                                 : std::make_error_code(std::errc::invalid_argument));
+
         PPR_RETURN_ERROR_ON_FAIL(WorldPlan, validateCounts(recipe));
         if (not positive(recipe.m_cell_size_m, 1.0) or
             not std::isfinite(1.0 / recipe.m_cell_size_m) or
@@ -773,7 +784,7 @@ namespace pP::sim {
         }
         if (recipe.m_open_surface) {
             const auto *const bedrock = material(recipe, recipe.m_bedrock_material);
-            const double extent = kWorldEdge * recipe.m_cell_size_m;
+            const double extent = recipe.m_world_edge * recipe.m_cell_size_m;
             if (recipe.m_surface_field >= recipe.m_fields.size() or
                 recipe.m_bedrock_field >= recipe.m_fields.size() or
                 bedrock == nullptr or
@@ -867,7 +878,7 @@ namespace pP::sim {
                 const double height = generationSurfaceHeight(
                                           plan, (resolved.m_start_x_fine + 0.5) * resolved.m_cell_size_m) -
                                       *resolved.m_start_depth_m;
-                if (height < 0.0 or height >= kWorldEdge * resolved.m_cell_size_m) {
+                if (height < 0.0 or height >= resolved.m_world_edge * resolved.m_cell_size_m) {
                     PPR_RETURN_UNEXPECTED_ON_FAIL(WorldPlan, std::errc::invalid_argument);
                 }
                 resolved.m_start_y_fine = static_cast<u32>(std::floor(height / resolved.m_cell_size_m));

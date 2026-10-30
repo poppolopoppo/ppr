@@ -937,7 +937,7 @@ namespace pP::colony {
                 }
 
                 if (beginLabelTable("##colony_counts", label_width)) {
-                    std::snprintf(value, sizeof(value), "%u / %u", colony.m_resident_chunks, sim::kChunkCount);
+                    std::snprintf(value, sizeof(value), "%u / %u", colony.m_resident_chunks, colony.m_total_chunks);
                     textRow("Chunks", value);
                     std::snprintf(value, sizeof(value), "%u visible", counts.m_visible_tiles);
                     textRow("Tiles", value);

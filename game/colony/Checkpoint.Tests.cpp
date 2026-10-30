@@ -822,18 +822,18 @@ namespace pP::game::tests::detail::checkpoint {
     // named pack envelope and qualified profile wire contract
     // ------------------------------------------------------------------
 
-    PPR_UNIT_TEST (envelope_five_manifest_one_and_raw_snapshot_four_have_distinct_headers) {
+    PPR_UNIT_TEST (envelope_six_manifest_one_and_raw_snapshot_five_have_distinct_headers) {
         Fixture fixture;
         const auto &catalog = *fixture.m_catalog;
         const auto checkpoint = editedCheckpoint(catalog);
-        PPR_TEST_ASSERT(kWorldCheckpointVersion == 5u and asset::Manifest::schema_version == 1u);
-        PPR_TEST_ASSERT(sim::kSnapshotVersion == 4u and checkpoint.m_descriptor.m_pack_schema_version == 1u);
+        PPR_TEST_ASSERT(kWorldCheckpointVersion == 6u and asset::Manifest::schema_version == 1u);
+        PPR_TEST_ASSERT(sim::kSnapshotVersion == 5u and checkpoint.m_descriptor.m_pack_schema_version == 1u);
 
         const auto encoded = encodeWorldCheckpoint(checkpoint, catalog);
         PPR_TEST_ASSERT(encoded.has_value());
 
         constexpr std::array<u8, 25u> header{
-            0x50u, 0x50u, 0x52u, 0x57u, 0x47u, 0x45u, 0x4eu, 0x31u, 0x05u, 0x00u, 0x00u, 0x00u, 0x01u, 0x01u, 0x00u,
+            0x50u, 0x50u, 0x52u, 0x57u, 0x47u, 0x45u, 0x4eu, 0x31u, 0x06u, 0x00u, 0x00u, 0x00u, 0x01u, 0x01u, 0x00u,
             0x00u, 0x00u, 0x08u, 0x00u, 0x00u, 0x00u, 0x13u, 0x00u, 0x00u, 0x00u};
         PPR_TEST_ASSERT(encoded->size() > header.size());
         PPR_TEST_ASSERT(std::ranges::equal(std::span{encoded->data(), header.size()}, header));
@@ -842,10 +842,10 @@ namespace pP::game::tests::detail::checkpoint {
 
         const auto raw = sim::save(checkpoint.m_snapshot);
         PPR_TEST_ASSERT(raw.has_value());
-        constexpr std::array<u8, 4u> raw_header{4u, 0u, 0u, 0u};
+        constexpr std::array<u8, 4u> raw_header{5u, 0u, 0u, 0u};
         PPR_TEST_ASSERT(std::ranges::equal(std::span{raw->data(), raw_header.size()}, raw_header));
 
-        for (const u32 old_version: {0u, 1u, 2u, 3u, 4u}) {
+        for (const u32 old_version: {0u, 1u, 2u, 3u, 4u, 5u}) {
             auto earlier = *encoded;
             earlier[8u] = static_cast<u8>(old_version);
             earlier.resize(12u);
@@ -861,6 +861,131 @@ namespace pP::game::tests::detail::checkpoint {
         wrong_magic.front() ^= 1u;
         const auto unknown = decodeWorldCheckpoint(wrong_magic, catalog);
         PPR_TEST_ASSERT(not unknown and unknown.error() == std::errc::protocol_not_supported);
+    };
+
+    PPR_UNIT_TEST (selected_world_checkpoint_preserves_extent_and_rejects_mismatched_owners) {
+        // This edited sparse fixture proves codec/restore coherence, not full authored generation.
+        Array<u64> fingerprints;
+        for (const u32 edge: {1024u, 2048u, 4096u}) {
+            Fixture fixture{"checkpoint_size", "frontier", edge};
+            const auto &catalog = *fixture.m_catalog;
+            const auto checkpoint = editedCheckpoint(catalog);
+            fingerprints.push_back(checkpoint.m_descriptor.m_content_fingerprint);
+            PPR_TEST_ASSERT(checkpoint.m_descriptor.m_world_edge == edge);
+            PPR_TEST_ASSERT(checkpoint.m_snapshot.m_world_edge == edge);
+            PPR_TEST_ASSERT(checkpoint.m_current_matter.m_world_edge == edge);
+            PPR_TEST_ASSERT(not validateWorldCheckpoint(checkpoint, catalog));
+            const auto encoded = encodeWorldCheckpoint(checkpoint, catalog);
+            PPR_TEST_ASSERT(encoded.has_value());
+            const auto decoded = decodeWorldCheckpoint(*encoded, catalog);
+            PPR_TEST_ASSERT(decoded and decoded->m_descriptor == checkpoint.m_descriptor);
+            PPR_TEST_ASSERT(decoded->m_snapshot == checkpoint.m_snapshot);
+            PPR_TEST_ASSERT(decoded->m_current_matter.m_world_edge == edge);
+            PPR_TEST_ASSERT(decoded->m_current_matter.m_profile.m_grid_width == edge + 7u);
+
+            auto restored = restoreWorldCheckpoint(fixture.m_catalog, *decoded, 101u);
+            PPR_TEST_ASSERT(restored.has_value());
+            PPR_DEFER {
+                std::ignore = (*restored)->shutdown();
+            };
+            PPR_TEST_ASSERT((*restored)->grid().edge() == edge);
+            PPR_TEST_ASSERT(
+                (*restored)->grid().getCell({127u, 40u})->m_element == catalog.findMaterial("basalt")->m_numeric_id);
+            PPR_TEST_ASSERT(not (*restored)->grid().getCell({edge, 0u}));
+            PPR_TEST_ASSERT((*restored)->matterState()->m_world_edge == edge);
+            PPR_TEST_ASSERT(not (*restored)->shutdown());
+
+            const u32 other_edge = edge == 1024u ? 2048u : 1024u;
+            auto bad = checkpoint;
+            bad.m_snapshot.m_world_edge = other_edge;
+            PPR_TEST_ASSERT(not encodeWorldCheckpoint(bad, catalog));
+            PPR_TEST_ASSERT(not restoreWorldCheckpoint(fixture.m_catalog, bad, 102u));
+            bad = checkpoint;
+            bad.m_current_matter.m_world_edge = other_edge;
+            PPR_TEST_ASSERT(not encodeWorldCheckpoint(bad, catalog));
+            bad = checkpoint;
+            bad.m_descriptor.m_world_edge = other_edge;
+            PPR_TEST_ASSERT(not encodeWorldCheckpoint(bad, catalog));
+            bad = checkpoint;
+            bad.m_descriptor.m_world_edge = 1536u;
+            PPR_TEST_ASSERT(not encodeWorldCheckpoint(bad, catalog));
+
+            // The descriptor edge follows the two u64 identities and metric block.
+            const std::size_t edge_offset =
+                25u + checkpoint.m_descriptor.m_profile.size() + 2u * sizeof(u64) + 2u * sizeof(u32) + sizeof(double);
+            for (u32 byte = 0u; byte < sizeof(u32); ++byte) {
+                PPR_TEST_ASSERT((*encoded)[edge_offset + byte] == static_cast<u8>(edge >> (byte * 8u)));
+            }
+
+            auto malformed = *encoded;
+            for (u32 byte = 0u; byte < sizeof(u32); ++byte) {
+                malformed[edge_offset + byte] = static_cast<u8>(1536u >> (byte * 8u));
+            }
+
+            PPR_TEST_ASSERT(not decodeWorldCheckpoint(malformed, catalog));
+            PPR_TEST_ASSERT(not validateWorldCheckpoint(checkpoint, catalog));
+        }
+
+        std::ranges::sort(fingerprints);
+        PPR_TEST_ASSERT(std::ranges::adjacent_find(fingerprints) == fingerprints.end());
+    };
+
+    PPR_UNIT_TEST (direct_restored_driver_rejects_matter_and_snapshot_extent_mismatch_before_publication) {
+        Fixture fixture{"checkpoint_direct", "frontier", 1024u};
+        const auto checkpoint = editedCheckpoint(*fixture.m_catalog);
+        const auto prepare = [&]() -> PreparedWorld {
+            auto plan = compileWorldPlan(
+                *fixture.m_catalog, checkpoint.m_descriptor.m_profile, checkpoint.m_descriptor.m_seed);
+            PPR_TEST_ASSERT(plan.has_value());
+            auto layout = sim::restoreBiomeLayout(*plan, checkpoint.m_sites);
+            PPR_TEST_ASSERT(layout.has_value());
+            sim::ChunkGrid grid{1024u};
+            PPR_TEST_ASSERT(not sim::apply(grid, checkpoint.m_snapshot));
+
+            sim::GeneratedWorld world{
+                std::move(*plan), std::move(*layout), checkpoint.m_geometry, std::move(grid), checkpoint.m_matter,
+                checkpoint.m_start, checkpoint.m_report};
+            auto prepared = restorePreparedWorld(fixture.m_catalog, checkpoint.m_descriptor, std::move(world));
+            PPR_TEST_ASSERT(prepared.has_value());
+            return std::move(*prepared);
+        };
+
+        auto larger_matter = makeMatterState(
+            checkpoint.m_particles, kFineCellMetres, kReferenceThicknessMetres, kMatterGravityY, 1u, 4096u);
+        PPR_TEST_ASSERT(larger_matter.has_value());
+        larger_matter->m_identity.m_terrain_revision = 1u;
+        PPR_TEST_ASSERT(not validateMatterState(
+            *larger_matter, fixture.m_catalog->selectedRecipe()->m_recipe.m_materials, kFineCellMetres,
+            kReferenceThicknessMetres, kMatterGravityY));
+
+        ColonyDriver driver;
+        PPR_DEFER {
+            std::ignore = driver.shutdown();
+        };
+
+        const ColonyDriverDesc description{
+            .m_seed = checkpoint.m_descriptor.m_seed,
+            .m_tick_hz = checkpoint.m_tick_hz,
+            .m_agent_count = 1u,
+            .m_world_generation = 201u,
+            .m_world_edge = 1024u};
+        const auto wrong_matter = driver.initRestored(
+            description, prepare(), checkpoint.m_snapshot, checkpoint.m_particles, *larger_matter, checkpoint.m_tick,
+            checkpoint.m_initial_matter_valid, checkpoint.m_controlled);
+        PPR_TEST_ASSERT(wrong_matter == std::errc::invalid_argument);
+        PPR_TEST_ASSERT(driver.preparedWorld() == nullptr and driver.matterState() == nullptr);
+        PPR_TEST_ASSERT(driver.contentCatalog() == nullptr);
+
+        auto larger_snapshot = checkpoint.m_snapshot;
+        larger_snapshot.m_world_edge = 2048u;
+        const auto wrong_snapshot = driver.initRestored(
+            description, prepare(), larger_snapshot, checkpoint.m_particles, checkpoint.m_current_matter,
+            checkpoint.m_tick, checkpoint.m_initial_matter_valid, checkpoint.m_controlled);
+        PPR_TEST_ASSERT(wrong_snapshot == std::errc::invalid_argument);
+        PPR_TEST_ASSERT(driver.preparedWorld() == nullptr and driver.matterState() == nullptr);
+        PPR_TEST_ASSERT(driver.contentCatalog() == nullptr);
+
+        PPR_TEST_ASSERT(not driver.shutdown());
     };
 
     PPR_UNIT_TEST (qualified_world_profiles_round_trip_at_the_authoritative_name_limit) {
@@ -1019,8 +1144,10 @@ namespace pP::game::tests {
                 v5_legacy_liquid_relaxation_migrates_without_resetting_carried_state,
                 malformed_identity_metric_counts_and_payload_are_rejected_before_restore,
                 checkpoint_blob_references_ranges_and_wire_counts_are_checked,
-                envelope_five_manifest_one_and_raw_snapshot_four_have_distinct_headers,
+                envelope_six_manifest_one_and_raw_snapshot_five_have_distinct_headers,
                 qualified_world_profiles_round_trip_at_the_authoritative_name_limit,
+                selected_world_checkpoint_preserves_extent_and_rejects_mismatched_owners,
+                direct_restored_driver_rejects_matter_and_snapshot_extent_mismatch_before_publication,
                 runtime_generation_and_restore_reject_each_noncanonical_compile_parameter,
                 numeric_restore_omits_images_and_render_restore_requires_matching_owner_and_generation});
     };

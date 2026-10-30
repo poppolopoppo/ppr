@@ -28,7 +28,7 @@ namespace pP::colony {
             return false;
         }
 
-        [[nodiscard]] std::error_code validateDigRect(const DigRect &rect) noexcept {
+        [[nodiscard]] std::error_code validateDigRect(const DigRect &rect, const u32 world_edge) noexcept {
             const bool bad_edge = rect.m_width == 0u or
                                   rect.m_height == 0u or
                                   rect.m_width > kMaxDigEdge or
@@ -44,7 +44,7 @@ namespace pP::colony {
 
             const u64 far_x = static_cast<u64>(rect.m_min.m_x) + rect.m_width;
             const u64 far_y = static_cast<u64>(rect.m_min.m_y) + rect.m_height;
-            if (far_x > sim::kWorldEdge or far_y > sim::kWorldEdge) {
+            if (far_x > world_edge or far_y > world_edge) {
                 return std::make_error_code(std::errc::invalid_argument);
             }
             return {};
@@ -62,7 +62,7 @@ namespace pP::colony {
     // ------------------------------------------------------------------
 
     Expected<DigResult> digCells(sim::ChunkGrid &grid, const DigRect &rect, const ContentCatalog *const catalog) {
-        PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyDig, validateDigRect(rect));
+        PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyDig, validateDigRect(rect, grid.edge()));
 
         Array<DigTarget> targets{};
         for (u32 row = 0u; row < rect.m_height; ++row) {

@@ -11,7 +11,6 @@ namespace pP::colony {
     PPR_DEFINE_LOG_CATEGORY(WorldExport, info, none)
     namespace {
         constexpr u32 kPreviewEdge = 1024u;
-        constexpr u32 kSamplesPerEdge = sim::kWorldEdge / kPreviewEdge;
         using Color = std::array<double, 3u>;
         Color rgb(const u32 rgba) noexcept {
             return {
@@ -51,12 +50,12 @@ namespace pP::colony {
             const ContentCatalog &catalog, const sim::GeneratedWorld &world, const WorldDescriptor &descriptor) {
             std::string result = std::format(
                 "{{\n\"schema_version\":1,\"profile\":\"{}\",\"seed_hex\":\"{:016x}\",\"content_fingerprint\":\"{:016x}\","
-                "\"generator_version\":{},\"cells_per_metre\":{},\"cells_per_tile\":{},\"reference_thickness_m\":{},"
+                "\"generator_version\":{},\"world_edge\":{},\"cells_per_metre\":{},\"cells_per_tile\":{},\"reference_thickness_m\":{},"
                 "\"terrain_checksum\":\"{:016x}\",\"output_checksum\":\"{:016x}\",\"grid_payload_bytes\":{},"
                 "\"preview_edge\":{},\"temperature_min_k\":200,\"temperature_max_k\":1000,\"initial_matter_is_unsimulated_baseline\":true,"
                 "\"site_count\":{},\"feature_count\":{},\"segment_count\":{},\"blob_count\":{},\"omitted_count\":{},\"worst_placement_attempts\":{},\n\"phase_seconds\":[",
                 descriptor.m_profile, descriptor.m_seed, descriptor.m_content_fingerprint,
-                descriptor.m_generator_version, descriptor.m_metric.m_cells_per_metre,
+                descriptor.m_generator_version, descriptor.m_world_edge, descriptor.m_metric.m_cells_per_metre,
                 descriptor.m_metric.m_cells_per_tile, descriptor.m_metric.m_reference_thickness_m,
                 world.m_report.m_terrain_checksum, world.m_report.m_output_checksum,
                 world.m_report.m_grid_payload_bytes, kPreviewEdge, world.m_layout.sites().size(),
@@ -136,8 +135,8 @@ namespace pP::colony {
         const u32 biome_index, const std::filesystem::path &directory, const IContext *const context) {
         if (bounds.m_left >= bounds.m_right or
             bounds.m_bottom >= bounds.m_top or
-            bounds.m_right > sim::kWorldEdge or
-            bounds.m_top > sim::kWorldEdge or
+            bounds.m_right > grid.edge() or
+            bounds.m_top > grid.edge() or
             biome_index >= catalog.biomes().size()) {
             PPR_RETURN_ERROR_ON_FAIL(WorldExport, std::errc::invalid_argument);
         }
@@ -207,6 +206,12 @@ namespace pP::colony {
         const std::filesystem::path &directory, const IContext *const context) {
         PPR_RETURN_ERROR_ON_FAIL(WorldExport, context ? context->error() : std::error_code{});
         PPR_RETURN_ERROR_ON_FAIL(WorldExport, validateWorldMetric(descriptor.m_metric));
+        const u32 world_edge = world.m_grid.edge();
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldExport, descriptor.m_world_edge == world_edge and world.m_plan.recipe().m_world_edge == world_edge
+                             ? std::error_code{}
+                             : std::make_error_code(std::errc::invalid_argument));
+        const u32 samples_per_edge = world_edge / kPreviewEdge;
         const auto machine_report = report(catalog, world, descriptor);
         PPR_RETURN_ERROR_ON_FAIL(
             WorldExport, machine_report.size() <= 1024u * 1024u ? std::error_code{}
@@ -229,7 +234,7 @@ namespace pP::colony {
         for (const auto &material: catalog.materials()) {
             material_colors[material.m_numeric_id] = rgb(material.m_color_rgba);
         }
-        Array<Color> matter_row(sim::kWorldEdge);
+        Array<Color> matter_row(world_edge);
         std::array<Array<Color>, 4u> rows;
         for (auto &row: rows) {
             row.resize(kPreviewEdge);
@@ -241,11 +246,11 @@ namespace pP::colony {
             for (auto &row: rows) {
                 std::ranges::fill(row, Color{});
             }
-            for (u32 dy = 0u; dy < kSamplesPerEdge; ++dy) {
-                const u32 y = sim::kWorldEdge - 1u - (image_y * kSamplesPerEdge + dy);
+            for (u32 dy = 0u; dy < samples_per_edge; ++dy) {
+                const u32 y = world_edge - 1u - (image_y * samples_per_edge + dy);
                 PPR_RETURN_ERROR_ON_FAIL(WorldExport, matterRow(catalog, world, y, matter_row));
-                for (u32 x = 0u; x < sim::kWorldEdge; ++x) {
-                    const u32 pixel = x / kSamplesPerEdge;
+                for (u32 x = 0u; x < world_edge; ++x) {
+                    const u32 pixel = x / samples_per_edge;
                     const auto cell = world.m_grid.getCell({x, y});
                     PPR_RETURN_ERROR_ON_FAIL(WorldExport, cell);
                     add(rows[0u][pixel], material_colors[cell->m_element]);
@@ -262,7 +267,7 @@ namespace pP::colony {
                 for (u32 x = 0u; x < kPreviewEdge; ++x) {
                     for (u32 channel = 0u; channel < 3u; ++channel) {
                         bytes[3u * x + channel] = static_cast<u8>(std::clamp(
-                            std::lround(rows[mode][x][channel] / (kSamplesPerEdge * kSamplesPerEdge)), 0l, 255l));
+                            std::lround(rows[mode][x][channel] / (samples_per_edge * samples_per_edge)), 0l, 255l));
                     }
                 }
                 files[mode].write(

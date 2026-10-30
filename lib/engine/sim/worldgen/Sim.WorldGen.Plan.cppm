@@ -1,5 +1,6 @@
 module;
 export module engine.sim:worldgen.plan;
+import :chunk_grid;
 import :worldgen.noise;
 import engine.core;
 import std;
@@ -234,6 +235,7 @@ export namespace pP::sim {
         Array<GenerationResource> m_resources{};
         double m_cell_size_m{}, m_reference_thickness_m{};
         u16 m_boundary_material{};
+        u32 m_world_edge{kWorldEdge};
         u32 m_boundary_fine{}, m_min_sites{}, m_max_sites{}, m_site_attempts{};
         double m_site_spacing_m{}, m_boundary_warp_amplitude_m{};
         u32 m_warp_x_field{}, m_warp_y_field{};
@@ -242,6 +244,8 @@ export namespace pP::sim {
         // Disabled in small legacy fixtures; authored worlds use an open surface.
         bool m_open_surface{};
         u32 m_surface_field{}, m_bedrock_field{};
+        // Zero uses m_max_sites; an explicit bounded pool supports compact-world matching.
+        u32 m_site_candidate_limit{};
         double m_surface_elevation_m{}, m_surface_amplitude_m{}, m_bedrock_thickness_m{}, m_bedrock_variation_m{};
         u16 m_bedrock_material{};
         std::optional<double> m_start_depth_m{};

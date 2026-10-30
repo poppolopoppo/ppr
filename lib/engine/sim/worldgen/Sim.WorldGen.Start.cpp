@@ -33,7 +33,7 @@ namespace pP::sim {
         }
 
         [[nodiscard]] u16 material(const ChunkGrid &grid, const i32 x, const i32 y) noexcept {
-            if (x < 0 or y < 0 or x >= static_cast<i32>(kWorldEdge) or y >= static_cast<i32>(kWorldEdge)) {
+            if (x < 0 or y < 0 or x >= static_cast<i32>(grid.edge()) or y >= static_cast<i32>(grid.edge())) {
                 return 65535u;
             }
             const auto ux = static_cast<u32>(x), uy = static_cast<u32>(y);
@@ -142,6 +142,10 @@ namespace pP::sim {
         u64 *const known_scratch_peak) {
         PPR_RETURN_UNEXPECTED_ON_FAIL(WorldStart, canceled(context));
         const auto &recipe = plan.recipe();
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            WorldStart,
+            grid.edge() == recipe.m_world_edge ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
+
         const auto &feature = recipe.m_features[recipe.m_start_feature];
         const GenerationBounds bounds{
             static_cast<i32>(recipe.m_start_x_fine) + feature.m_bounds.m_min_x,

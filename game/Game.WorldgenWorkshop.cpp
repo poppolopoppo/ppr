@@ -165,6 +165,7 @@ namespace pP::colony {
         WorldgenPreviewDisplay m_display{};
         std::shared_ptr<State> m_export{};
         ContentSourceEpochToken m_source_epoch{};
+        u32 m_world_edge{sim::kWorldEdge};
         EGridDiagnosticMode m_mode{};
         Kind m_kind{};
     };
@@ -195,6 +196,10 @@ namespace pP::colony {
         const sim::GenerationExecution &execution, config::Diagnostics &diagnostics) {
         const hal::ProfileScope scope{"Workshop.Start.Prepare"};
         const auto &snapshot = source.m_snapshot;
+        if (snapshot.m_parameters.m_world_edge != request.m_world_edge) {
+            PPR_RETURN_UNEXPECTED_ON_FAIL(Workshop, std::errc::invalid_argument);
+        }
+
         auto validated = validateContentDraft(snapshot, diagnostics, execution.m_context.get(), source.m_profile);
         PPR_RETURN_UNEXPECTED_ON_FAIL(Workshop, validated);
 
@@ -227,8 +232,9 @@ namespace pP::colony {
     // ------------------------------------------------------------------
 
     WorldgenWorkshop::WorldgenWorkshop(
-        ParallelScheduler &pool, const ITimerClock &clock, ParallelScheduler *const generation_pool)
-        : m_pool(pool), m_clock(clock), m_generation_pool(generation_pool) {
+        ParallelScheduler &pool, const ITimerClock &clock, ParallelScheduler *const generation_pool,
+        const u32 world_edge)
+        : m_pool(pool), m_clock(clock), m_generation_pool(generation_pool), m_world_edge(world_edge) {
     }
 
     WorldgenWorkshop::~WorldgenWorkshop() noexcept {
@@ -316,6 +322,7 @@ namespace pP::colony {
         request.m_path = request.m_roots.front();
         request.m_replaced_revision = m_session ? m_session->revision() : 0u;
         request.m_source_epoch = makeContentSourceEpoch();
+        request.m_world_edge = m_world_edge;
         return queue_(std::move(request));
     }
 
@@ -738,8 +745,8 @@ namespace pP::colony {
 
                     if (request.m_kind == Request::Kind::open) {
                         auto opened = ContentAuthoringSession::open(
-                            request.m_roots, state->m_diagnostics, state->m_context.get(), kWorldCompileParameters,
-                            request.m_source_epoch);
+                            request.m_roots, state->m_diagnostics, state->m_context.get(),
+                            worldCompileParameters(request.m_world_edge), request.m_source_epoch);
                         PPR_RETURN_ERROR_ON_FAIL(Workshop, opened);
                         state->m_opened = std::make_unique<ContentAuthoringSession>(std::move(*opened));
                     } else if (request.m_kind == Request::Kind::save) {

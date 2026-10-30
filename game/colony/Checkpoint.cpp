@@ -110,7 +110,7 @@ namespace pP::colony {
         auto layout = sim::restoreBiomeLayout(*plan, checkpoint.m_sites);
         PPR_RETURN_UNEXPECTED_ON_FAIL(WorldCheckpointLog, layout);
 
-        sim::ChunkGrid grid;
+        sim::ChunkGrid grid{checkpoint.m_descriptor.m_world_edge};
         PPR_RETURN_UNEXPECTED_ON_FAIL(WorldCheckpointLog, sim::apply(grid, checkpoint.m_snapshot));
 
         sim::GeneratedWorld world{
@@ -132,7 +132,8 @@ namespace pP::colony {
                                     {.m_seed = checkpoint.m_descriptor.m_seed,
                                         .m_tick_hz = checkpoint.m_tick_hz,
                                         .m_agent_count = 1u,
-                                        .m_world_generation = world_generation},
+                                        .m_world_generation = world_generation,
+                                        .m_world_edge = checkpoint.m_descriptor.m_world_edge},
                                     std::move(*prepared), checkpoint.m_snapshot, checkpoint.m_particles,
                                     std::move(checkpoint.m_current_matter), checkpoint.m_tick,
                                     checkpoint.m_initial_matter_valid, checkpoint.m_controlled, &execution));

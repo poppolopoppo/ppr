@@ -105,6 +105,61 @@ namespace pP::tests::detail::MatterAdapter {
         PPR_TEST_ASSERT(seeded.m_chunks[0u].records()[0u].m_id == 20u);
     };
 
+    PPR_UNIT_TEST (selected_map_edges_preserve_units_and_close_particle_bounds) {
+        std::fprintf(
+            stderr, "[map-runtime-layout] state=%zu/%zu driver_desc=%zu/%zu\n", sizeof(colony::MatterState),
+            alignof(colony::MatterState), sizeof(colony::ColonyDriverDesc), alignof(colony::ColonyDriverDesc));
+
+        for (const u32 edge: {1024u, 2048u, 4096u}) {
+            constexpr double cell_metres = 1.0 / 3.0;
+            auto state = colony::makeMatterState(records(), cell_metres, 1.0, colony::kMatterGravityY, 71u, edge);
+            PPR_TEST_ASSERT(state.has_value());
+            PPR_TEST_ASSERT(state->m_world_edge == edge);
+            PPR_TEST_ASSERT(state->m_profile.m_grid_width == edge + 7u and state->m_profile.m_grid_height == edge + 7u);
+            const double physical_gravity = static_cast<double>(state->m_profile.m_gravity_strength) *
+                                            (edge + 7u) *
+                                            cell_metres;
+            PPR_TEST_ASSERT(
+                std::abs(physical_gravity - std::abs(static_cast<double>(colony::kMatterGravityY))) < 0.00001);
+            PPR_TEST_ASSERT(
+                not colony::validateMatterProfile(state->m_profile, cell_metres, 1.0, colony::kMatterGravityY, edge));
+            const u32 different_edge = edge == 1024u ? 2048u : 1024u;
+            PPR_TEST_ASSERT(
+                colony::validateMatterProfile(
+                    state->m_profile, cell_metres, 1.0, colony::kMatterGravityY, different_edge) ==
+                std::errc::invalid_argument);
+
+            for (auto &particle: state->m_particles) {
+                particle.m_position_x = static_cast<float>(edge) + colony::kMatterOrigin;
+                particle.m_position_y = static_cast<float>(edge) + colony::kMatterOrigin;
+            }
+
+            const auto captured = colony::captureMovingMatter(*state, state->m_particles);
+            PPR_TEST_ASSERT(captured.has_value());
+            const sim::ChunkPos final_chunk{edge / sim::kChunkEdge - 1u, edge / sim::kChunkEdge - 1u};
+            const auto last = std::ranges::find(captured->m_chunks, final_chunk, &sim::MatterParticleBatch::m_position);
+            PPR_TEST_ASSERT(last != captured->m_chunks.end() and last->records().size() == 2u);
+            PPR_TEST_ASSERT(last->records()[0u].m_x_m == edge * cell_metres);
+
+            state->m_particles[0u].m_position_x += 0.125f;
+            const auto outside = colony::captureMovingMatter(*state, state->m_particles);
+            PPR_TEST_ASSERT(not outside and outside.error() == std::errc::result_out_of_range);
+
+            if (edge != sim::kWorldEdge) {
+                sim::ChunkGrid grid{edge};
+                PPR_TEST_ASSERT(not grid.setCell({edge - 1u, edge - 1u}, sim::Cell{.m_element = 2u}));
+                const std::array<u16, 1u> solids{2u};
+                const auto masks = colony::makeMatterTerrain(grid, solids);
+                PPR_TEST_ASSERT(masks and masks->size() == static_cast<std::size_t>(edge + 1u) * (edge + 1u));
+                PPR_TEST_ASSERT(masks->back() == 15u);
+                PPR_TEST_ASSERT((*masks)[20u * (edge + 1u) + 20u] == 0u);
+            }
+        }
+
+        const auto invalid = colony::makeMatterState({}, 1.0, 1.0, colony::kMatterGravityY, 71u, 1536u);
+        PPR_TEST_ASSERT(not invalid and invalid.error() == std::errc::invalid_argument);
+    };
+
     PPR_UNIT_TEST (moving_records_allow_overlap_detached_solids_and_exact_upper_endpoint) {
         const auto seeded = records();
         auto state = colony::makeMatterState(seeded, 0.5, 2.0, -9.8f, 71u);
@@ -488,6 +543,153 @@ namespace pP::tests::detail::MatterAdapter {
         runtime_closed = true;
     };
 
+    PPR_UNIT_TEST (selected_map_edges_run_resident_ticks_and_frozen_snapshots) {
+        auto shaders = IShaderService::get();
+        auto rhi_service = IRhiService::get();
+        colony::MatterRuntime runtime;
+        bool shaders_attempted = false, rhi_attempted = false, cleaned = false;
+        PPR_DEFER {
+            if (not cleaned) {
+                // Best-effort assertion-unwind cleanup must not throw another
+                // test assertion. Retain dependencies if GPU release is unknown.
+                auto request = runtime.beginShutdown();
+                bool stopped = false;
+                if (request) {
+                    auto completion = runtime.advance(*request);
+                    stopped = completion and
+                              completion->has_value() and
+                              not (**completion).m_execution.m_operation_error and
+                              not (**completion).m_execution.m_transport_error;
+                }
+
+                if (stopped) {
+                    const auto rhi_error = rhi_attempted ? rhi_service->shutdown() : std::error_code{};
+                    const auto shader_error = shaders_attempted ? shaders->shutdown() : std::error_code{};
+                    if (rhi_error or shader_error) {
+                        std::fprintf(
+                            stderr, "[map-runtime-cleanup] dependency teardown failed: rhi=%d shader=%d\n",
+                            rhi_error.value(), shader_error.value());
+                    }
+                } else {
+                    std::fprintf(stderr, "[map-runtime-cleanup] runtime release unknown; dependencies retained\n");
+                }
+            }
+        };
+
+        shaders_attempted = true;
+        PPR_TEST_ASSERT(not shaders->initialize());
+        rhi_service->setCoreValidation(true);
+        rhi_service->setGpuAssistedValidation(true);
+        rhi_attempted = true;
+        PPR_TEST_ASSERT(not rhi_service->initialize(kFixtureBackend, *shaders));
+
+        const auto success = [&](Expected<colony::MatterRequest> request) {
+            auto completion = completeInline(runtime, std::move(request));
+            PPR_TEST_ASSERT(not completion.m_execution.m_operation_error);
+            return completion;
+        };
+
+        std::ignore = success(
+            runtime.beginInitialize(nullptr, rhi_service->getDevice(), *shaders, std::filesystem::current_path()));
+        std::optional<float> first_displacement;
+
+        for (const u32 edge: {1024u, 2048u, 4096u}) {
+            constexpr double cell_metres = 1.0 / 3.0;
+            constexpr double volume = cell_metres * cell_metres;
+            Array<sim::MatterParticle> rows{
+                {1u, 32.5 * cell_metres, 32.5 * cell_metres, volume, 1000.0 * volume, 300.0, 1000.0, 2u,
+                    sim::EGenerationMatter::solid},
+                {2u, 40.5 * cell_metres, 32.5 * cell_metres, volume, 1000.0 * volume, 300.0, 1000.0, 2u,
+                    sim::EGenerationMatter::solid}};
+            sim::MatterParticleSnapshot seed{.m_next_id = 3u};
+            seed.m_chunks.push_back({{0u, 0u}, std::make_shared<const Array<sim::MatterParticle>>(std::move(rows))});
+            auto source = colony::makeMatterState(seed, cell_metres, 1.0, colony::kMatterGravityY, edge, edge);
+            PPR_TEST_ASSERT(source.has_value());
+            source->m_identity.m_terrain_revision = 1u;
+
+            sim::ChunkGrid grid{edge};
+            auto terrain = colony::makeMatterTerrain(grid, {});
+            PPR_TEST_ASSERT(terrain.has_value());
+            PPR_TEST_ASSERT(terrain->size() == static_cast<std::size_t>(edge + 1u) * (edge + 1u));
+            std::ignore = success(runtime.beginPrepareResidentWorld(*source, *terrain));
+            auto attached = success(runtime.beginPublishWorld(source->m_identity));
+            PPR_TEST_ASSERT(attached.m_view and attached.m_view->current());
+            PPR_TEST_ASSERT(attached.m_view->m_metadata->m_count == 2u);
+            PPR_TEST_ASSERT(attached.m_view->m_metadata->m_moving_count == 2u);
+
+            std::ignore = success(runtime.beginSubmitResident(source->m_identity, {}, 0u));
+            std::ignore = success(runtime.beginDrain());
+            auto collected = success(runtime.beginPoll(source->m_identity));
+            PPR_TEST_ASSERT(collected.m_readback.has_value());
+            PPR_TEST_ASSERT(collected.m_readback->m_particles.empty());
+            PPR_TEST_ASSERT(collected.m_readback->m_accounting.m_substeps == matter::kGameSubsteps);
+            PPR_TEST_ASSERT(collected.m_readback->m_accounting.m_last_readback_bytes == 24u);
+            PPR_TEST_ASSERT(collected.m_readback->m_accounting.m_last_particle_upload_bytes == 0u);
+
+            auto published = success(runtime.beginPublish(source->m_identity));
+            ++source->m_identity.m_publication;
+            PPR_TEST_ASSERT(published.m_view and published.m_view->current());
+            PPR_TEST_ASSERT(not attached.m_view->current());
+            PPR_TEST_ASSERT(published.m_view->m_publication == source->m_identity.m_publication);
+
+            std::ignore = success(runtime.beginSnapshot(source->m_identity));
+            std::ignore = success(runtime.beginDrain());
+            auto snapshot = success(runtime.beginPollSnapshot(source->m_identity));
+            PPR_TEST_ASSERT(snapshot.m_readback and snapshot.m_readback->m_source == source->m_identity);
+            PPR_TEST_ASSERT(snapshot.m_readback->m_particles.size() == 2u);
+            const auto &particle = snapshot.m_readback->m_particles.front();
+            PPR_TEST_ASSERT(std::isfinite(particle.m_displacement_y) and particle.m_displacement_y < 0.0f);
+            if (first_displacement) {
+                PPR_TEST_ASSERT(std::abs(particle.m_displacement_y - *first_displacement) < 0.000001f);
+            } else {
+                first_displacement = particle.m_displacement_y;
+            }
+
+            const auto physical = colony::captureMovingMatter(*source, snapshot.m_readback->m_particles);
+            PPR_TEST_ASSERT(physical.has_value());
+            PPR_TEST_ASSERT(physical->m_next_id == seed.m_next_id and physical->m_chunks.size() == 1u);
+            std::ignore = success(runtime.beginEndSnapshot(source->m_identity));
+
+            // Keep the accepted terrain and all physical records valid while
+            // isolating GPU-row admission at the selected solver's upper bound.
+            auto invalid_gpu_row = *source;
+            invalid_gpu_row.m_particles.front().m_position_x = static_cast<float>(edge) + 8.0f;
+            const auto rejected_gpu_row = completeInline(
+                runtime, runtime.beginPrepareResidentWorld(invalid_gpu_row, *terrain));
+            PPR_TEST_ASSERT(rejected_gpu_row.m_execution.m_operation_error == std::errc::invalid_argument);
+            PPR_TEST_ASSERT(published.m_view->current());
+
+            // A coherent record/row pair just beyond the physical map still
+            // fits the solver padding. Only the selected world bound rejects it.
+            auto invalid_physical_record = *source;
+            auto &outside_record = invalid_physical_record.m_records.front();
+            auto &outside_row = invalid_physical_record.m_particles.front();
+            outside_record.m_x_m = (static_cast<double>(edge) + 0.5) * cell_metres;
+            outside_row.m_position_x = static_cast<float>(
+                outside_record.m_x_m / cell_metres + static_cast<double>(colony::kMatterOrigin));
+            PPR_TEST_ASSERT(outside_row.m_position_x < static_cast<float>(source->m_profile.m_grid_width - 3u));
+            PPR_TEST_ASSERT(
+                outside_row.m_position_x ==
+                static_cast<float>(outside_record.m_x_m / cell_metres + static_cast<double>(colony::kMatterOrigin)));
+
+            const auto rejected_physical_record = completeInline(
+                runtime, runtime.beginPrepareResidentWorld(invalid_physical_record, std::move(*terrain)));
+            PPR_TEST_ASSERT(rejected_physical_record.m_execution.m_operation_error == std::errc::invalid_argument);
+            PPR_TEST_ASSERT(published.m_view->current());
+
+            std::fprintf(
+                stderr, "[map-resident] edge=%u grid=%u particles=%zu dy=%.9g epoch=%llu\n", edge,
+                source->m_profile.m_grid_width, snapshot.m_readback->m_particles.size(),
+                static_cast<double>(particle.m_displacement_y),
+                static_cast<unsigned long long>(snapshot.m_readback->m_accounting.m_epoch));
+        }
+
+        std::ignore = success(runtime.beginShutdown());
+        PPR_TEST_ASSERT(not rhi_service->shutdown());
+        PPR_TEST_ASSERT(not shaders->shutdown());
+        cleaned = true;
+    };
+
     PPR_UNIT_TEST (resident_completion_keeps_metadata_and_freezes_exact_demand_snapshot) {
         auto shaders = IShaderService::get();
         auto rhi_service = IRhiService::get();
@@ -855,6 +1057,7 @@ namespace pP::tests {
     const UnitTest matter_adapter = UnitTest::Named("matter_adapter") / [](UnitTest::IRun &_) {
         _.recurse({
             detail::MatterAdapter::source_units_defaults_materials_and_unsimulated_gas_preserve_inventory,
+            detail::MatterAdapter::selected_map_edges_preserve_units_and_close_particle_bounds,
             detail::MatterAdapter::moving_records_allow_overlap_detached_solids_and_exact_upper_endpoint,
             detail::MatterAdapter::moving_validation_preserves_static_cell_and_global_identity_guards,
             detail::MatterAdapter::terrain_halo_uses_shared_seam_masks_and_protected_exterior,
@@ -864,7 +1067,8 @@ namespace pP::tests {
 
     const UnitTest matter_runtime_gpu = UnitTest::Named("matter_runtime_gpu") / [](UnitTest::IRun &_) {
         _.recurse(
-            {detail::MatterAdapter::terminal_collection_rejection_discards_without_joint_publication,
+            {detail::MatterAdapter::selected_map_edges_run_resident_ticks_and_frozen_snapshots,
+                detail::MatterAdapter::terminal_collection_rejection_discards_without_joint_publication,
                 detail::MatterAdapter::actual_domain_pending_pause_finishes_only_admitted_slice,
                 detail::MatterAdapter::resident_completion_keeps_metadata_and_freezes_exact_demand_snapshot,
                 detail::MatterAdapter::dedicated_actual_domain_cold_reused_acknowledgment_and_completion_are_distinct});

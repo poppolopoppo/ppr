@@ -96,6 +96,7 @@ export namespace pP::colony {
         const asset::PackSet *m_document_index{};
 
         int m_origin[2]{1920, 1920};
+        u32 m_world_edge{sim::kWorldEdge};
         EGridDiagnosticMode m_mode{EGridDiagnosticMode::textured};
         EWorldgenPreviewMode m_preview_mode{EWorldgenPreviewMode::biome_sample};
         bool m_automatic_live{}, m_show_properties{}, m_show_diagnostics{}, m_selection_pending{};

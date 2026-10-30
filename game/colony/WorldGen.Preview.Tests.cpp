@@ -348,6 +348,70 @@ namespace pP::game::tests::detail::worldgen_preview {
         PPR_TEST_ASSERT(unequal_rows);
     }
 
+    PPR_UNIT_TEST (authored_layouts_preserve_required_biomes_at_selected_sizes) {
+        const auto root = hal::process::currentExecutablePath().parent_path() / "worldgen/default";
+        config::Diagnostics diagnostics;
+        auto loaded = loadContentCatalog(root, diagnostics);
+        PPR_TEST_ASSERT(loaded.has_value());
+        const auto definitions = std::make_shared<const ContentDescriptorCatalog>(std::move(*loaded));
+
+        for (const std::string_view profile: {"ppr_frontier:frontier", "ppr_frontier:hollows"}) {
+            const auto world_id = resolveContentWorld(*definitions, profile, diagnostics);
+            PPR_TEST_ASSERT(world_id.has_value());
+
+            for (const u32 edge: {4096u, 2048u, 1024u}) {
+                const auto catalog = selectWorldCatalog(
+                    definitions, *world_id, worldCompileParameters(edge), diagnostics);
+                PPR_TEST_ASSERT(catalog.has_value());
+
+                for (const u64 seed: {0ull, 1ull, 42ull, 0xffffffffffffffffull}) {
+                    const auto plan = compileWorldPlan(*catalog, profile, seed);
+                    PPR_TEST_ASSERT(plan.has_value());
+
+                    const auto layout = sim::compileBiomeLayout(*plan);
+                    if (not layout) {
+                        std::println(
+                            "LAYOUT-COVERAGE profile={} edge={} seed={} error={}", profile, edge, seed,
+                            layout.error().message());
+                    }
+                    PPR_TEST_ASSERT(layout.has_value());
+
+                    const auto repeated = sim::compileBiomeLayout(*plan);
+                    PPR_TEST_ASSERT(repeated and std::ranges::equal(layout->sites(), repeated->sites()));
+
+                    const auto &recipe = plan->recipe();
+                    PPR_TEST_ASSERT(
+                        layout->sites().size() >= recipe.m_min_sites and layout->sites().size() <= recipe.m_max_sites);
+                    const auto start = layout->sites().front();
+                    PPR_TEST_ASSERT(start.m_biome == recipe.m_start_biome);
+                    Array<u32> counts(recipe.m_biomes.size(), 0u);
+                    for (const auto &site: layout->sites()) {
+                        PPR_TEST_ASSERT(
+                            site.m_x_m >= 0.0 and
+                            site.m_y_m >= 0.0 and
+                            site.m_x_m < edge * recipe.m_cell_size_m and
+                            site.m_y_m < edge * recipe.m_cell_size_m);
+                        PPR_TEST_ASSERT(site.m_biome < counts.size());
+                        ++counts[site.m_biome];
+
+                        const auto constraint = std::ranges::find(
+                            recipe.m_constraints, site.m_biome, &sim::GenerationBiomeConstraint::m_biome);
+                        PPR_TEST_ASSERT(constraint != recipe.m_constraints.end());
+                        const double depth = sim::generationDepth(*plan, site.m_x_m, site.m_y_m);
+                        const double distance = std::hypot(site.m_x_m - start.m_x_m, site.m_y_m - start.m_y_m);
+                        PPR_TEST_ASSERT(depth >= constraint->m_depth_min and depth <= constraint->m_depth_max);
+                        PPR_TEST_ASSERT(
+                            distance >= constraint->m_distance_min_m and distance <= constraint->m_distance_max_m);
+                    }
+
+                    for (const auto &constraint: recipe.m_constraints) {
+                        PPR_TEST_ASSERT(counts[constraint.m_biome] >= constraint.m_required_count);
+                    }
+                }
+            }
+        }
+    };
+
     PPR_UNIT_TEST (bounded_samples_replay_and_export_the_exact_visible_draft) {
         const auto root = hal::process::currentExecutablePath().parent_path() / "worldgen/default";
         const std::filesystem::path roots[] = {root};
@@ -735,6 +799,7 @@ namespace pP::game::tests {
         _.recurse(
             {detail::worldgen_preview::bounded_samples_replay_and_export_the_exact_visible_draft,
                 detail::worldgen_preview::workshop_widgets_block_invalid_actions_and_focus_nested_property_errors,
+                detail::worldgen_preview::authored_layouts_preserve_required_biomes_at_selected_sizes,
                 detail::worldgen_preview::whole_world_crops_preserve_production_formations_seams_and_matter});
     };
 

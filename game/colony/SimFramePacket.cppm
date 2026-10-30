@@ -141,6 +141,7 @@ export namespace pP::colony {
         // cache:
         ParticlePresentationCache m_particle_cache{};
         u32 m_next_chunk{};
+        u32 m_chunk_count{sim::kChunkCount};
         bool m_reset_applied{};
         std::optional<u64> m_frame{};
         Array<GridTileSubmission> m_visible{};

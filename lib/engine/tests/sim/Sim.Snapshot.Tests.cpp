@@ -199,15 +199,50 @@ namespace pP::tests::detail {
             const Expected<Array<u8>> saved = save(snapshot);
             PPR_TEST_ASSERT(saved.has_value());
 
-            // Header (version + seed + delta count) + two rect delta headers
+            // Header (version + world edge + seed + delta count) + two rect delta headers
             // with single-cell runs + stream count + two streams.
-            PPR_TEST_ASSERT(saved.value().size() == 16u + 2u * (20u + 1u * 6u) + 4u + 2u * 12u + 32u);
+            PPR_TEST_ASSERT(saved.value().size() == 20u + 2u * (20u + 1u * 6u) + 4u + 2u * 12u + 32u);
 
             const Expected<Snapshot> loaded = load(std::span<const u8>{saved.value()});
             PPR_TEST_ASSERT(loaded.has_value());
             PPR_TEST_ASSERT(*loaded == snapshot);
             PPR_TEST_ASSERT(loaded->m_deltas.size() == 2u);
             PPR_TEST_ASSERT(loaded->m_streams == snapshot.m_streams);
+        };
+
+        PPR_UNIT_TEST (selected_world_extent_round_trips_and_rejects_cross_world_apply) {
+            for (const u32 edge: {1024u, 2048u, 4096u}) {
+                ChunkGrid source{edge};
+                const GlobalCellPos last{edge - 1u, edge - 1u};
+                PPR_TEST_ASSERT(not source.setCell(last, {17u, 293.0f}));
+                source.clearAllDirty();
+
+                auto captured = captureFull(source, 42u);
+                PPR_TEST_ASSERT(captured and captured->m_world_edge == edge and captured->m_deltas.size() == 1u);
+                const auto encoded = save(*captured);
+                PPR_TEST_ASSERT(encoded.has_value());
+                const auto decoded = load(*encoded);
+                PPR_TEST_ASSERT(decoded and *decoded == *captured);
+
+                ChunkGrid restored{edge};
+                PPR_TEST_ASSERT(not apply(restored, *decoded));
+                PPR_TEST_ASSERT(*restored.getCell(last) == (Cell{17u, 293.0f}));
+                ChunkGrid different{edge == 1024u ? 2048u : 1024u};
+                PPR_TEST_ASSERT(apply(different, *decoded) == make_error_code(errc::invalid_payload));
+                PPR_TEST_ASSERT(different.residentChunkCount() == 0u);
+            }
+
+            ChunkGrid small{1024u};
+            PPR_TEST_ASSERT(not small.setCell({1u, 1u}, {17u, 293.0f}));
+            Snapshot invalid = capture(small, 0u);
+            invalid.m_deltas[0u].m_chunk = chunkIndexOf({8u, 0u});
+            PPR_TEST_ASSERT(not save(invalid));
+            PPR_TEST_ASSERT(apply(small, invalid) == make_error_code(errc::invalid_payload));
+            PPR_TEST_ASSERT(*small.getCell({1u, 1u}) == (Cell{17u, 293.0f}));
+
+            invalid = capture(small, 0u);
+            invalid.m_world_edge = 1536u;
+            PPR_TEST_ASSERT(not save(invalid));
         };
 
         PPR_UNIT_TEST (byte_layout_is_stable) {
@@ -218,31 +253,32 @@ namespace pP::tests::detail {
 
             const std::span<const u8> bytes{saved.value()};
 
-            // u32 version, u64 seed, u32 delta count, then the rect delta header.
-            PPR_TEST_ASSERT(bytes.size() == 16u + 20u + 1u * 6u + 4u + 32u);
+            // u32 version, u32 world edge, u64 seed, u32 delta count, then the rect delta header.
+            PPR_TEST_ASSERT(bytes.size() == 20u + 20u + 1u * 6u + 4u + 32u);
             PPR_TEST_ASSERT(readU32(bytes, 0u) == kSnapshotVersion);
-            PPR_TEST_ASSERT(readU32(bytes, 0u) == 4u);
-            PPR_TEST_ASSERT(readU32(bytes, 12u) == 1u);
-            PPR_TEST_ASSERT(readU32(bytes, 16u) == chunkIndexOf(ChunkPos{}));
-            PPR_TEST_ASSERT(readU32(bytes, 20u) == 10u);
-            PPR_TEST_ASSERT(readU32(bytes, 24u) == 20u);
-            PPR_TEST_ASSERT(readU32(bytes, 28u) == 1u);
+            PPR_TEST_ASSERT(readU32(bytes, 0u) == 5u);
+            PPR_TEST_ASSERT(readU32(bytes, 4u) == kWorldEdge);
+            PPR_TEST_ASSERT(readU32(bytes, 16u) == 1u);
+            PPR_TEST_ASSERT(readU32(bytes, 20u) == chunkIndexOf(ChunkPos{}));
+            PPR_TEST_ASSERT(readU32(bytes, 24u) == 10u);
+            PPR_TEST_ASSERT(readU32(bytes, 28u) == 20u);
             PPR_TEST_ASSERT(readU32(bytes, 32u) == 1u);
-            const std::size_t ecs_offset = 16u + 20u + 1u * 6u + 4u;
+            PPR_TEST_ASSERT(readU32(bytes, 36u) == 1u);
+            const std::size_t ecs_offset = 20u + 20u + 1u * 6u + 4u;
             PPR_TEST_ASSERT(readU32(bytes, ecs_offset) == 1u);
             PPR_TEST_ASSERT(readU32(bytes, ecs_offset + 4u) == 0u);
             PPR_TEST_ASSERT(readU32(bytes, ecs_offset + 8u) == 0u);
             PPR_TEST_ASSERT(readU32(bytes, ecs_offset + 12u) == 0u);
 
-            // Seed 0x0123456789ABCDEF stored little-endian at [4, 12).
-            PPR_TEST_ASSERT(bytes[4] == 0xEFu);
-            PPR_TEST_ASSERT(bytes[5] == 0xCDu);
-            PPR_TEST_ASSERT(bytes[6] == 0xABu);
-            PPR_TEST_ASSERT(bytes[7] == 0x89u);
-            PPR_TEST_ASSERT(bytes[8] == 0x67u);
-            PPR_TEST_ASSERT(bytes[9] == 0x45u);
-            PPR_TEST_ASSERT(bytes[10] == 0x23u);
-            PPR_TEST_ASSERT(bytes[11] == 0x01u);
+            // Seed 0x0123456789ABCDEF stored little-endian at [8, 16).
+            PPR_TEST_ASSERT(bytes[8] == 0xEFu);
+            PPR_TEST_ASSERT(bytes[9] == 0xCDu);
+            PPR_TEST_ASSERT(bytes[10] == 0xABu);
+            PPR_TEST_ASSERT(bytes[11] == 0x89u);
+            PPR_TEST_ASSERT(bytes[12] == 0x67u);
+            PPR_TEST_ASSERT(bytes[13] == 0x45u);
+            PPR_TEST_ASSERT(bytes[14] == 0x23u);
+            PPR_TEST_ASSERT(bytes[15] == 0x01u);
         };
 
         PPR_UNIT_TEST (load_rejects_version_mismatch) {
@@ -302,20 +338,20 @@ namespace pP::tests::detail {
 
             // Absurd delta count must be rejected before it reserves.
             Array<u8> huge_count = saved.value();
-            huge_count[12] = 0xFFu;
-            huge_count[13] = 0xFFu;
-            huge_count[14] = 0xFFu;
-            huge_count[15] = 0xFFu;
+            huge_count[16] = 0xFFu;
+            huge_count[17] = 0xFFu;
+            huge_count[18] = 0xFFu;
+            huge_count[19] = 0xFFu;
             const Expected<Snapshot> too_many = load(std::span<const u8>{huge_count});
             PPR_TEST_ASSERT(not too_many.has_value());
             PPR_TEST_ASSERT(too_many.error() == make_error_code(errc::invalid_payload));
 
             // Chunk index beyond the grid.
             Array<u8> bad_chunk = saved.value();
-            bad_chunk[16] = 0x00u;
-            bad_chunk[17] = 0x04u;
-            bad_chunk[18] = 0x00u;
-            bad_chunk[19] = 0x00u;
+            bad_chunk[20] = 0x00u;
+            bad_chunk[21] = 0x04u;
+            bad_chunk[22] = 0x00u;
+            bad_chunk[23] = 0x00u;
             const Expected<Snapshot> out_of_range = load(std::span<const u8>{bad_chunk});
             PPR_TEST_ASSERT(not out_of_range.has_value());
             PPR_TEST_ASSERT(out_of_range.error() == make_error_code(errc::invalid_payload));
@@ -324,7 +360,7 @@ namespace pP::tests::detail {
             // the entire remainder (1 cell + 36 bytes of stream/ECS/body
             // trailers), so the stream-count read hits end-of-buffer.
             Array<u8> bad_count = saved.value();
-            bad_count[28] = 0x07u;
+            bad_count[32] = 0x07u;
             const Expected<Snapshot> short_run = load(std::span<const u8>{bad_count});
             PPR_TEST_ASSERT(not short_run.has_value());
             PPR_TEST_ASSERT(short_run.error() == make_error_code(errc::truncated));
@@ -333,14 +369,14 @@ namespace pP::tests::detail {
             // [127,129), which overflows the 128-cell edge. (x=127/width=1
             // is the valid edge and must load.)
             Array<u8> bad_rect = saved.value();
-            bad_rect[20] = 0x7Fu;
-            bad_rect[28] = 0x02u;
+            bad_rect[24] = 0x7Fu;
+            bad_rect[32] = 0x02u;
             const Expected<Snapshot> rect_overflow = load(std::span<const u8>{bad_rect});
             PPR_TEST_ASSERT(not rect_overflow.has_value());
             PPR_TEST_ASSERT(rect_overflow.error() == make_error_code(errc::invalid_payload));
 
             Array<u8> valid_edge = saved.value();
-            valid_edge[20] = 0x7Fu;
+            valid_edge[24] = 0x7Fu;
             const Expected<Snapshot> edge_ok = load(std::span<const u8>{valid_edge});
             PPR_TEST_ASSERT(edge_ok.has_value());
 
@@ -351,29 +387,29 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not extra.has_value());
             PPR_TEST_ASSERT(extra.error() == make_error_code(errc::invalid_payload));
 
-            // Temperature bits of the first cell sit at 16 (header) + 20 (rect
-            // delta header) + 2 (element) = 38; patched NaN fails the terminal gate.
+            // Temperature bits of the first cell sit at 20 (header) + 20 (rect
+            // delta header) + 2 (element) = 42; patched NaN fails the terminal gate.
             Array<u8> nan_bits = saved.value();
-            nan_bits[38] = 0x00u;
-            nan_bits[39] = 0x00u;
-            nan_bits[40] = 0xC0u;
-            nan_bits[41] = 0x7Fu;
+            nan_bits[42] = 0x00u;
+            nan_bits[43] = 0x00u;
+            nan_bits[44] = 0xC0u;
+            nan_bits[45] = 0x7Fu;
             const Expected<Snapshot> nan_temperature = load(std::span<const u8>{nan_bits});
             PPR_TEST_ASSERT(not nan_temperature.has_value());
             PPR_TEST_ASSERT(nan_temperature.error() == make_error_code(errc::invalid_payload));
 
             // Positive infinity (0x7F800000) is rejected like NaN.
             Array<u8> inf_bits = saved.value();
-            inf_bits[38] = 0x00u;
-            inf_bits[39] = 0x00u;
-            inf_bits[40] = 0x80u;
-            inf_bits[41] = 0x7Fu;
+            inf_bits[42] = 0x00u;
+            inf_bits[43] = 0x00u;
+            inf_bits[44] = 0x80u;
+            inf_bits[45] = 0x7Fu;
             const Expected<Snapshot> inf_temperature = load(std::span<const u8>{inf_bits});
             PPR_TEST_ASSERT(not inf_temperature.has_value());
             PPR_TEST_ASSERT(inf_temperature.error() == make_error_code(errc::invalid_payload));
 
             Array<u8> bad_ecs_version = saved.value();
-            const std::size_t ecs_offset = 16u + 20u + 1u * 6u + 4u;
+            const std::size_t ecs_offset = 20u + 20u + 1u * 6u + 4u;
             bad_ecs_version[ecs_offset] = 2u;
             const Expected<Snapshot> incompatible_ecs = load(std::span<const u8>{bad_ecs_version});
             PPR_TEST_ASSERT(not incompatible_ecs.has_value());
@@ -728,10 +764,10 @@ namespace pP::tests::detail {
 
             const Expected<Array<u8>> saved = save(snapshot);
             PPR_TEST_ASSERT(saved.has_value());
-            PPR_TEST_ASSERT(saved.value().size() == 16u + 20u + 6u + 4u + 32u);
-            PPR_TEST_ASSERT(readU32(std::span<const u8>{saved.value()}, 0u) == 4u);
-            PPR_TEST_ASSERT(readU32(std::span<const u8>{saved.value()}, 28u) == 1u);
+            PPR_TEST_ASSERT(saved.value().size() == 20u + 20u + 6u + 4u + 32u);
+            PPR_TEST_ASSERT(readU32(std::span<const u8>{saved.value()}, 0u) == 5u);
             PPR_TEST_ASSERT(readU32(std::span<const u8>{saved.value()}, 32u) == 1u);
+            PPR_TEST_ASSERT(readU32(std::span<const u8>{saved.value()}, 36u) == 1u);
 
             const Expected<Snapshot> loaded = load(std::span<const u8>{saved.value()});
             PPR_TEST_ASSERT(loaded.has_value());
@@ -774,6 +810,7 @@ namespace pP::tests {
             detail::SnapshotSuite::save_load_round_trip,
             detail::SnapshotSuite::save_load_round_trip_with_deltas_and_streams,
             detail::SnapshotSuite::byte_layout_is_stable,
+            detail::SnapshotSuite::selected_world_extent_round_trips_and_rejects_cross_world_apply,
             detail::SnapshotSuite::load_rejects_version_mismatch,
             detail::SnapshotSuite::save_and_apply_reject_version_mismatch,
             detail::SnapshotSuite::load_rejects_truncated_input,

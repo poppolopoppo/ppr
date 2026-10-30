@@ -47,13 +47,13 @@ export namespace pP::sim {
         const SharedContext &context = nullptr);
     [[nodiscard]] std::error_code validateMatterParticles(
         const MatterParticleSnapshot &snapshot, std::span<const GenerationMaterial> materials, double cell_size_m,
-        const SharedContext &context = nullptr, double reference_thickness_m = 1.0);
+        const SharedContext &context = nullptr, double reference_thickness_m = 1.0, u32 world_edge = kWorldEdge);
 
     /// Moving state permits overlapping cells, detached terrain solids and the
     /// closed upper world endpoint. Physical inventory and IDs remain checked.
     [[nodiscard]] std::error_code validateMovingMatterParticles(
         const MatterParticleSnapshot &snapshot, std::span<const GenerationMaterial> materials, double cell_size_m,
-        const SharedContext &context = nullptr, double reference_thickness_m = 1.0);
+        const SharedContext &context = nullptr, double reference_thickness_m = 1.0, u32 world_edge = kWorldEdge);
 
     // ------------------------------------------------------------------
     // particle state
@@ -63,15 +63,16 @@ export namespace pP::sim {
         std::array<std::shared_ptr<const Array<MatterParticle>>, kChunkCount> m_chunks{};
         u64 m_next_id{1u};
         u32 m_count{};
+        u32 m_world_edge{kWorldEdge};
 
     public:
         [[nodiscard]] std::error_code restore(
             const MatterParticleSnapshot &snapshot, std::span<const GenerationMaterial> materials, double cell_size_m,
-            const SharedContext &context = nullptr, double reference_thickness_m = 1.0);
+            const SharedContext &context = nullptr, double reference_thickness_m = 1.0, u32 world_edge = kWorldEdge);
         [[nodiscard]] MatterParticleSnapshot capture() const;
         [[nodiscard]] std::error_code restoreMoving(
             const MatterParticleSnapshot &snapshot, std::span<const GenerationMaterial> materials, double cell_size_m,
-            double reference_thickness_m);
+            double reference_thickness_m, u32 world_edge = kWorldEdge);
         [[nodiscard]] std::span<const MatterParticle> chunk(ChunkPos position) const noexcept;
         [[nodiscard]] u32 count() const noexcept;
         // The live grid is original; captured chunks contain the complete edit

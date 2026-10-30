@@ -14,14 +14,18 @@ export namespace pP::sim {
     /// Edge length of one chunk in cells. Square by construction.
     inline constexpr u32 kChunkEdge = 128u;
 
-    /// Number of chunks along one world axis.
+    /// Maximum chunk count along one world axis; also the stable chunk-ID stride.
     inline constexpr u32 kChunksPerEdge = 32u;
 
-    /// Edge length of the whole world in cells: kChunkEdge * kChunksPerEdge.
+    /// Maximum/default world edge in cells: kChunkEdge * kChunksPerEdge.
     inline constexpr u32 kWorldEdge = kChunkEdge * kChunksPerEdge;
 
-    /// Total chunk count: kChunksPerEdge * kChunksPerEdge.
+    /// Maximum chunk directory size: kChunksPerEdge * kChunksPerEdge.
     inline constexpr u32 kChunkCount = kChunksPerEdge * kChunksPerEdge;
+
+    [[nodiscard]] constexpr bool isSupportedWorldEdge(const u32 edge) noexcept {
+        return edge == 1024u or edge == 2048u or edge == kWorldEdge;
+    }
 
     /// Cell count of one chunk: kChunkEdge * kChunkEdge.
     inline constexpr u32 kCellsPerChunk = kChunkEdge * kChunkEdge;
@@ -124,7 +128,7 @@ export namespace pP::sim {
         [[nodiscard]] constexpr bool operator==(const DirtyBounds &) const noexcept = default;
     };
 
-    /// Fixed 4096x4096 cell world stored as 32x32 chunks of 128x128 cells.
+    /// Selected square world with 128x128 cell chunks and stable maximum-stride chunk IDs.
     /// Every chunk carries metadata (dirty flag + activity) from construction;
     /// cell payloads materialize on first write and are never evicted in phase 1,
     /// so residency is monotonic: dirty implies resident, and a non-resident chunk
@@ -142,9 +146,18 @@ export namespace pP::sim {
 
         Array<ChunkState> m_states{};
         Array<std::optional<Array<Cell>>> m_payloads{};
+        u32 m_world_edge{kWorldEdge};
 
     public:
         ChunkGrid();
+        explicit ChunkGrid(u32 edge);
+
+        [[nodiscard]] u32 edge() const noexcept;
+        [[nodiscard]] u32 chunksPerEdge() const noexcept;
+        [[nodiscard]] u32 chunkCount() const noexcept;
+        [[nodiscard]] bool contains(GlobalCellPos pos) const noexcept;
+        [[nodiscard]] bool contains(ChunkPos pos) const noexcept;
+
         /// Eager directories plus resident cell vector capacities. Excludes allocator overhead.
         /// Caller excludes concurrent chunk writes.
         [[nodiscard]] u64 retainedPayloadBytes() const noexcept;

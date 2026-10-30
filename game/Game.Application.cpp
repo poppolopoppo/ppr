@@ -54,7 +54,8 @@ namespace demo {
             PPR_RETURN_UNEXPECTED_ON_FAIL(Demo, source);
 
             return colony::validateContentDraft(
-                *source, colony::kWorldCompileParameters, content_diagnostics, nullptr, settings.m_worldgen_profile);
+                *source, colony::worldCompileParameters(settings.m_map_size), content_diagnostics, nullptr,
+                settings.m_worldgen_profile);
         }();
         if (not catalog) {
             std::cerr << "[worldgen] " << catalog.error().message() << '\n';
@@ -140,7 +141,11 @@ namespace demo {
                 prepared->presentation()->fingerprint());
             auto driver = std::make_unique<colony::ColonyDriver>();
             const auto init_error = driver->initPrepared(
-                {.m_seed = descriptor.m_seed, .m_agent_count = 1u, .m_world_generation = 1u}, std::move(*prepared));
+                {.m_seed = descriptor.m_seed,
+                    .m_agent_count = 1u,
+                    .m_world_generation = 1u,
+                    .m_world_edge = descriptor.m_world_edge},
+                std::move(*prepared));
             if (init_error) {
                 // Preserve initialization failure while attempting partial driver cleanup.
                 PPR_LOG_WARNING_ON_FAIL(Demo, driver->shutdown());
@@ -209,6 +214,7 @@ namespace demo {
         TimePoint m_observation_start{};
         std::optional<TimePoint> m_last_update_observed{}, m_last_presentation_observed{};
         u32 m_last_update_phase{};
+        u32 m_map_size{sim::kWorldEdge};
         TimeSpan m_last_update_work{};
         std::optional<TimePoint> m_first_loading_observed{}, m_first_world_observed{};
         TimeSpan m_max_control_work{};
@@ -690,7 +696,7 @@ namespace demo {
             // cells on opposite sides of one real chunk seam. Never edit the grid directly.
             for (u32 offset = 0u; offset < 4u; ++offset) {
                 const u32 seam = (start_x / sim::kChunkEdge + 1u + offset) * sim::kChunkEdge;
-                if (seam >= sim::kWorldEdge) {
+                if (seam >= m_driver->grid().edge()) {
                     break;
                 }
                 for (u32 depth = 1u; depth <= 256u and depth < floor_y; ++depth) {
@@ -926,7 +932,8 @@ namespace demo {
                           colony::ColonyDriverDesc{
                               .m_seed = seed,
                               .m_agent_count = 1u,
-                              .m_world_generation = m_driver ? m_driver->worldGeneration() + 1u : 1u},
+                              .m_world_generation = m_driver ? m_driver->worldGeneration() + 1u : 1u,
+                              .m_world_edge = m_map_size},
                           std::move(prepare)));
 
             m_workshop_game_particles.reset();
@@ -1327,7 +1334,8 @@ namespace demo {
                     auto &presentation = m_world_job->presentation();
 
                     if (const auto *const prepared = m_driver->preparedWorld(); prepared and m_pan_controller) {
-                        const float extent = static_cast<float>(colony::kWorldExtentMetres);
+                        const float extent = static_cast<float>(m_driver->grid().edge()) /
+                                             static_cast<float>(m_driver->cellsPerMetre());
                         PPR_RETURN_ERROR_ON_FAIL(
                             Demo, m_pan_controller->setWorldBounds(float2{0.0f, 0.0f}, float2{extent, extent}));
                         const auto &start = prepared->generated().m_start;
@@ -1480,7 +1488,7 @@ namespace demo {
                                                                      : std::string_view{},
                 .m_animation_seconds = open ? time::seconds(m_observation_clock->now() - TimePoint{}) : 0.0,
                 .m_staged_chunks = static_cast<u32>(m_candidate_next_chunk),
-                .m_total_chunks = sim::kChunkCount,
+                .m_total_chunks = (m_map_size / sim::kChunkEdge) * (m_map_size / sim::kChunkEdge),
                 .m_open = open,
                 .m_closing = closing,
                 .m_terminal = terminal,
@@ -1659,7 +1667,7 @@ namespace demo {
 
             if (m_driver->preparedWorld() and m_ui_state.m_tool == colony::EColonyTool::build_wall) {
                 const auto print = colony::constructionDragFootprint(
-                    *m_tool.m_footprint_anchor, *cell, colony::kMaxFootprintEdge);
+                    *m_tool.m_footprint_anchor, *cell, colony::kMaxFootprintEdge, m_driver->grid().edge());
                 if (not print) {
                     m_build_preview.m_reason = "incomplete construction tile at world edge";
                     return;
@@ -1835,8 +1843,9 @@ namespace demo {
         struct ScreenMap {
             CameraSnapshot m_snapshot{};
             float2 m_extent{zero_v}; // client px, == ImGui coords (see below)
-            bool m_valid{false};
             u32 m_cells_per_metre{1u};
+            u32 m_world_edge{sim::kWorldEdge};
+            bool m_valid{false};
 
             /// Continuous pick map, byte-identical to the old pickCell_
             /// body: client-local input normalizes in client space directly
@@ -1867,7 +1876,7 @@ namespace demo {
             }
 
             /// Cell pick: the continuous map above, then floor plus the
-            /// kWorldEdge clamp. Results are unchanged from the old body.
+            /// active map bounds.
             [[nodiscard]] std::optional<sim::GlobalCellPos> pickCell(const float2 cursor_client) const noexcept {
                 const std::optional<float2> world = pickContinuous(cursor_client);
                 if (not world.has_value()) {
@@ -1875,15 +1884,15 @@ namespace demo {
                 }
                 const bool inside_world = world->x >= 0.0f and
                                           world->y >= 0.0f and
-                                          world->x < static_cast<float>(sim::kWorldEdge) /
+                                          world->x < static_cast<float>(m_world_edge) /
                                                          static_cast<float>(m_cells_per_metre) and
-                                          world->y < static_cast<float>(sim::kWorldEdge) /
-                                                         static_cast<float>(m_cells_per_metre);
+                                          world->y <
+                                              static_cast<float>(m_world_edge) / static_cast<float>(m_cells_per_metre);
                 if (not inside_world) {
                     return std::nullopt;
                 }
                 const auto cell = colony::metreToFineCell(
-                    {static_cast<double>(world->x), static_cast<double>(world->y)}, m_cells_per_metre);
+                    {static_cast<double>(world->x), static_cast<double>(world->y)}, m_cells_per_metre, m_world_edge);
                 return cell ? std::optional{*cell} : std::nullopt;
             }
 
@@ -1938,6 +1947,7 @@ namespace demo {
                 return map;
             }
             map.m_snapshot = camera->getSnapshot();
+            map.m_world_edge = m_workshop_open ? m_map_size : (m_driver ? m_driver->grid().edge() : m_map_size);
             map.m_cells_per_metre = m_workshop_open ? colony::kFineCellsPerMetre
                                                     : (m_driver ? m_driver->cellsPerMetre() : 1u);
             map.m_extent = float2{static_cast<float>(extent.x), static_cast<float>(extent.y)};
@@ -3418,10 +3428,10 @@ namespace demo {
         [[nodiscard]] std::error_code drawPanel_(const std::span<const sim::ChunkPos> edits) {
             // Determine visible chunk tiles from the current camera snapshot.
             Array<GridTileSubmission> submissions{};
-            submissions.reserve(sim::kChunkCount);
             const sim::ChunkGrid &grid = m_driver->grid();
-            for (u32 y = 0u; y < sim::kChunksPerEdge; ++y) {
-                for (u32 x = 0u; x < sim::kChunksPerEdge; ++x) {
+            submissions.reserve(grid.chunkCount());
+            for (u32 y = 0u; y < grid.chunksPerEdge(); ++y) {
+                for (u32 x = 0u; x < grid.chunksPerEdge(); ++x) {
                     const sim::ChunkPos pos{x, y};
                     if (not grid.isResident(pos)) {
                         continue;
@@ -3556,7 +3566,7 @@ namespace demo {
                         .m_speed = m_driver->speed(),
                         // Read render-owned counts from completed lane results.
                         .m_submitted_chunks = renderDiagnostics().m_grid_staged_tiles,
-                        .m_total_chunks = colony::ColonyTranslator::totalChunks(),
+                        .m_total_chunks = grid.chunkCount(),
                         .m_staged_tiles = renderDiagnostics().m_grid_staged_tiles,
                         .m_cached_tiles = renderDiagnostics().m_grid_cached_tiles,
                         .m_last_edit_chunks = safe_narrowing(edits.size()),
@@ -3675,6 +3685,10 @@ namespace demo {
             m_workshop_ui.m_seed = settings.m_worldgen_seed;
             m_worldgen_profile = settings.m_worldgen_profile;
             m_requested_seed = settings.m_worldgen_seed;
+            m_map_size = settings.m_map_size;
+            m_workshop_ui.m_world_edge = m_map_size;
+            m_workshop_ui.m_origin[0] = static_cast<int>(m_map_size / 2u - 128u);
+            m_workshop_ui.m_origin[1] = static_cast<int>(m_map_size / 2u - 128u);
             return {};
         }
 
@@ -3897,9 +3911,8 @@ namespace demo {
 
         [[nodiscard]] std::error_code restoreWorkshopCamera_() {
             if (m_pan_controller) {
-                const float extent = m_driver->cellsPerMetre() == colony::kFineCellsPerMetre
-                                         ? static_cast<float>(colony::kWorldExtentMetres)
-                                         : static_cast<float>(sim::kWorldEdge);
+                const float extent = static_cast<float>(m_driver->grid().edge()) /
+                                     static_cast<float>(m_driver->cellsPerMetre());
                 PPR_RETURN_ERROR_ON_FAIL(
                     Demo, m_pan_controller->setWorldBounds(float2{0.0f, 0.0f}, float2{extent, extent}));
 
@@ -4930,7 +4943,8 @@ namespace demo {
                 [roots = m_worldgen_roots, profile = m_worldgen_profile, &clock](
                     const colony::ColonyDriverDesc &request, const sim::GenerationExecution &execution,
                     config::Diagnostics &diagnostics) -> Expected<std::unique_ptr<colony::ColonyDriver>> {
-                    auto prepared = colony::prepareWorld(roots, profile, request.m_seed, clock, diagnostics, execution);
+                    auto prepared = colony::prepareWorld(
+                        roots, profile, request.m_seed, clock, diagnostics, execution, request.m_world_edge);
                     PPR_RETURN_UNEXPECTED_ON_FAIL(Demo, prepared);
                     PPR_RETURN_UNEXPECTED_ON_FAIL(Demo, execution.m_context->error());
 
@@ -4954,7 +4968,7 @@ namespace demo {
             // Separate existing pools keep exact generation off its chunk workers;
             // the production raster falls back to serial execution on its own pool.
             m_workshop = std::make_unique<colony::WorldgenWorkshop>(
-                parallel::backgroundPool(), *m_observation_clock, &parallel::foregroundPool());
+                parallel::backgroundPool(), *m_observation_clock, &parallel::foregroundPool(), m_map_size);
             if (not m_workshop_startup) {
                 PPR_RETURN_ERROR_ON_FAIL(Demo, requestWorld_(m_requested_seed));
             }
@@ -4973,13 +4987,13 @@ namespace demo {
             // on-screen at every zoom; the extent feeds cursor-anchored zoom
             // and bounds. refreshControllerViewport_() in update() now
             // follows client-extent changes every frame (Slice 3 fix).
+            const float map_extent = static_cast<float>(static_cast<double>(m_map_size) * colony::kFineCellMetres);
             PPR_RETURN_ERROR_ON_FAIL(
-                Demo, camera_controller->setWorldBounds(
-                          float2{0.0f, 0.0f},
-                          float2{static_cast<float>(sim::kWorldEdge), static_cast<float>(sim::kWorldEdge)}));
+                Demo, camera_controller->setWorldBounds(float2{0.0f, 0.0f}, float2{map_extent, map_extent}));
             camera_controller->setViewportSize(
                 float2{static_cast<float>(initial_extent.x), static_cast<float>(initial_extent.y)});
-            camera_controller->translate(float3{2048.0f - half_width, 2048.0f - half_height, -0.5f}, true);
+            camera_controller->translate(
+                float3{map_extent * 0.5f - half_width, map_extent * 0.5f - half_height, -0.5f}, true);
             // Borrow the controller for selection and follow controls.
             m_pan_controller.reset(camera_controller.get());
             PPR_RETURN_ERROR_ON_FAIL(
@@ -5435,9 +5449,9 @@ namespace demo {
             if (m_show_grid) {
                 const float grid_scale = m_pan_controller ? m_pan_controller->getOrthoScale() : 0.5f;
                 const float grid_band = std::max(std::clamp(grid_scale * 1.5f, 0.25f, 0.75f) * 0.5f, 0.10f);
-                const float world_half = static_cast<float>(sim::kWorldEdge) * cell_metres * 0.5f;
+                const float world_half = static_cast<float>(m_driver->grid().edge()) * cell_metres * 0.5f;
                 const float stroke = grid_band * 0.5f;
-                for (u32 line = 0u; line <= sim::kChunksPerEdge; ++line) {
+                for (u32 line = 0u; line <= m_driver->grid().chunksPerEdge(); ++line) {
                     const float at = static_cast<float>(line * sim::kChunkEdge) * cell_metres;
 
                     // Horizontal (y = at) and vertical (x = at) lines, each

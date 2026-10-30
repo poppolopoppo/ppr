@@ -32,6 +32,12 @@ export namespace pP::game {
         config::EnumEntry<EGameCommand>{EGameCommand::worldgen_workshop, "worldgen-workshop"},
     }};
 
+    struct MapSizeDomain {
+        [[nodiscard]] std::error_code validate(const u32 &value) const noexcept;
+
+        [[nodiscard]] std::string describe() const;
+    };
+
     /// Game-owned invocation settings: command selection, profiling fixtures,
     /// bounded-run duration and the explicit config
     /// file path. Display pacing and RHI validation live in the engine.app
@@ -48,6 +54,7 @@ export namespace pP::game {
         std::optional<std::string> m_worldgen_gpu_output{};
         std::string m_worldgen_profile{"frontier"};
         u64 m_worldgen_seed{42u};
+        u32 m_map_size{4096u};
         EGameCommand m_command{EGameCommand::interactive};
         bool m_worldgen_report{}, m_worldgen_acceptance{};
 
@@ -97,6 +104,12 @@ export namespace pP::game {
                         "game.worldgen_profile", "World-generation profile key", "World generation",
                         EMutability::startup, ESource::all, false},
                     asset::QualifiedName::reference_domain),
+                field(
+                    &GameSettings::m_map_size,
+                    Metadata{
+                        "game.map_size", "Square map edge in fine cells: 1024, 2048 or 4096", "World generation",
+                        EMutability::startup, ESource::all, false},
+                    MapSizeDomain{}),
                 field(
                     &GameSettings::m_worldgen_seed,
                     Metadata{

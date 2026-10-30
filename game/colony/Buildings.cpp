@@ -107,8 +107,10 @@ namespace pP::colony {
     // footprint validation
     // ------------------------------------------------------------------
 
-    std::error_code validateFootprint(const Footprint &print, const ContentCatalog *const catalog) noexcept {
-        if (print.m_width == 0u or
+    std::error_code validateFootprint(
+        const Footprint &print, const ContentCatalog *const catalog, const u32 world_edge) noexcept {
+        if (not sim::isSupportedWorldEdge(world_edge) or
+            print.m_width == 0u or
             print.m_height == 0u or
             print.m_width > kMaxFootprintEdge or
             print.m_height > kMaxFootprintEdge) {
@@ -131,7 +133,7 @@ namespace pP::colony {
         }
         const u64 far_x = static_cast<u64>(print.m_min.m_x) + print.m_width;
         const u64 far_y = static_cast<u64>(print.m_min.m_y) + print.m_height;
-        if (far_x > sim::kWorldEdge or far_y > sim::kWorldEdge) {
+        if (far_x > world_edge or far_y > world_edge) {
             PPR_RETURN_ERROR_ON_FAIL(ColonyBuilding, std::errc::invalid_argument);
         }
         return {};
@@ -143,7 +145,7 @@ namespace pP::colony {
 
     std::error_code validateConstruction(
         const sim::ChunkGrid &grid, sim::Registry &registry, const Footprint &print, const ContentCatalog &catalog) {
-        PPR_RETURN_ERROR_ON_FAIL(ColonyBuilding, validateFootprint(print, &catalog));
+        PPR_RETURN_ERROR_ON_FAIL(ColonyBuilding, validateFootprint(print, &catalog, grid.edge()));
         if (print.m_min.m_x % 3u != 0u or
             print.m_min.m_y % 3u != 0u or
             print.m_width % 3u != 0u or
@@ -152,7 +154,7 @@ namespace pP::colony {
         }
 
         const auto bounds = constructionFootprint(
-            {print.m_min.m_x / 3u, print.m_min.m_y / 3u}, {print.m_width / 3u, print.m_height / 3u});
+            {print.m_min.m_x / 3u, print.m_min.m_y / 3u}, {print.m_width / 3u, print.m_height / 3u}, grid.edge());
         PPR_RETURN_ERROR_ON_FAIL(ColonyBuilding, bounds);
 
         for (u32 y = bounds->m_begin.m_y; y < bounds->m_end.m_y; ++y) {
@@ -201,7 +203,7 @@ namespace pP::colony {
                 PPR_RETURN_ERROR_ON_FAIL(ColonyBuilding, std::errc::invalid_argument);
             }
             if (errand.m_progress < errand.m_total) {
-                PPR_RETURN_ERROR_ON_FAIL(ColonyBuilding, validateFootprint(errand.m_print, catalog));
+                PPR_RETURN_ERROR_ON_FAIL(ColonyBuilding, validateFootprint(errand.m_print, catalog, grid.edge()));
                 if (catalog != nullptr) {
                     // Validate every remaining ID before this tick performs any writes.
                     for (u32 step = errand.m_progress; step < errand.m_total; ++step) {

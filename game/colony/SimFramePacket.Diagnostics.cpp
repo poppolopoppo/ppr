@@ -122,8 +122,8 @@ namespace pP::colony {
                 }
                 for (const auto &particle: batch.records()) {
                     const double cell = 1.0 / driver.cellsPerMetre();
-                    const u32 x = std::min(static_cast<u32>(particle.m_x_m / cell), sim::kWorldEdge - 1u);
-                    const u32 y = std::min(static_cast<u32>(particle.m_y_m / cell), sim::kWorldEdge - 1u);
+                    const u32 x = std::min(static_cast<u32>(particle.m_x_m / cell), driver.grid().edge() - 1u);
+                    const u32 y = std::min(static_cast<u32>(particle.m_y_m / cell), driver.grid().edge() - 1u);
                     const u32 local = (y % sim::kChunkEdge) * sim::kChunkEdge + x % sim::kChunkEdge;
                     chunks[chunk]->m_diagnostic_indices[local] = particle.m_material;
                 }

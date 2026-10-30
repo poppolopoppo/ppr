@@ -86,7 +86,8 @@ namespace pP::colony {
             recipe.m_cell_size_m == kWorldCompileParameters.m_cell_size_m and
                     recipe.m_reference_thickness_m == kWorldCompileParameters.m_reference_thickness_m and
                     recipe.m_actor_half_width_m == kWorldCompileParameters.m_actor_half_width_m and
-                    recipe.m_actor_half_height_m == kWorldCompileParameters.m_actor_half_height_m
+                    recipe.m_actor_half_height_m == kWorldCompileParameters.m_actor_half_height_m and
+                    sim::isSupportedWorldEdge(recipe.m_world_edge)
                 ? std::error_code{}
                 : std::make_error_code(std::errc::not_supported));
         return {};
@@ -94,14 +95,15 @@ namespace pP::colony {
 
     Expected<PreparedWorld> prepareWorld(
         const std::filesystem::path &root, const std::string_view profile, const u64 seed, const ITimerClock &clock,
-        config::Diagnostics &diagnostics, const sim::GenerationExecution &execution) {
+        config::Diagnostics &diagnostics, const sim::GenerationExecution &execution, const u32 world_edge) {
         const std::filesystem::path roots[] = {root};
-        return prepareWorld(roots, profile, seed, clock, diagnostics, execution);
+        return prepareWorld(roots, profile, seed, clock, diagnostics, execution, world_edge);
     }
 
     Expected<PreparedWorld> prepareWorld(
         const std::span<const std::filesystem::path> roots, const std::string_view profile, const u64 seed,
-        const ITimerClock &clock, config::Diagnostics &diagnostics, const sim::GenerationExecution &execution) {
+        const ITimerClock &clock, config::Diagnostics &diagnostics, const sim::GenerationExecution &execution,
+        const u32 world_edge) {
         auto catalog = loadContentCatalog(roots, diagnostics, execution.m_context.get());
         PPR_RETURN_UNEXPECTED_ON_FAIL(WorldPreparation, catalog);
 
@@ -109,7 +111,7 @@ namespace pP::colony {
         auto world = resolveContentWorld(*owner, profile, diagnostics);
         PPR_RETURN_UNEXPECTED_ON_FAIL(WorldPreparation, world);
 
-        auto selected = selectWorldCatalog(std::move(owner), *world, kWorldCompileParameters, diagnostics);
+        auto selected = selectWorldCatalog(std::move(owner), *world, worldCompileParameters(world_edge), diagnostics);
         PPR_RETURN_UNEXPECTED_ON_FAIL(WorldPreparation, selected);
 
         const auto qualified_profile = selected->worlds().front().m_key;
@@ -142,7 +144,10 @@ namespace pP::colony {
         PPR_RETURN_UNEXPECTED_ON_FAIL(WorldPreparation, world);
 
         const WorldDescriptor descriptor{
-            .m_profile = std::string{profile}, .m_seed = seed, .m_content_fingerprint = *catalog->contentFingerprint()};
+            .m_profile = std::string{profile},
+            .m_seed = seed,
+            .m_content_fingerprint = *catalog->contentFingerprint(),
+            .m_world_edge = world->m_grid.edge()};
         return PreparedWorldConstruction::make(std::move(catalog), descriptor, std::move(*world));
     }
 
@@ -169,7 +174,9 @@ namespace pP::colony {
                                       catalog->contentFingerprint() and
                                       *catalog->contentFingerprint() == descriptor.m_content_fingerprint and
                                       catalog->findWorld(descriptor.m_profile) and
-                                      world.m_plan.seed() == descriptor.m_seed
+                                      world.m_plan.seed() == descriptor.m_seed and
+                                      descriptor.m_world_edge == world.m_grid.edge() and
+                                      descriptor.m_world_edge == world.m_plan.recipe().m_world_edge
                                   ? std::error_code{}
                                   : std::make_error_code(std::errc::protocol_not_supported));
         return PreparedWorldConstruction::make(std::move(catalog), std::move(descriptor), std::move(world));

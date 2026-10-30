@@ -28,6 +28,41 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(kCellsPerChunk == kChunkEdge * kChunkEdge);
         };
 
+        PPR_UNIT_TEST (selected_world_extents_enforce_bounds_and_keep_chunk_ids) {
+            ChunkGrid small{1024u};
+            ChunkGrid large{4096u};
+            for (const u32 edge: {1024u, 2048u, 4096u}) {
+                ChunkGrid grid{edge};
+                const GlobalCellPos last{edge - 1u, edge - 1u};
+                PPR_TEST_ASSERT(grid.edge() == edge and grid.chunkCount() == (edge / kChunkEdge) * (edge / kChunkEdge));
+                PPR_TEST_ASSERT(grid.contains(last) and grid.contains(chunkOf(last)));
+                PPR_TEST_ASSERT(not grid.contains(GlobalCellPos{edge, 0u}));
+                PPR_TEST_ASSERT(not grid.contains(ChunkPos{edge / kChunkEdge, 0u}));
+
+                PPR_TEST_ASSERT(not grid.setCell(last, {7u, 300.0f}));
+                PPR_TEST_ASSERT(*grid.getCell(last) == (Cell{7u, 300.0f}));
+                PPR_TEST_ASSERT(grid.setCell({edge, 0u}, {}) == std::errc::result_out_of_range);
+                PPR_TEST_ASSERT(not grid.getCell({0u, edge}));
+                PPR_TEST_ASSERT(not grid.captureChunk({edge / kChunkEdge, 0u}));
+                PPR_TEST_ASSERT(grid.dirtyChunks().size() == 1u and grid.dirtyChunks()[0u] == chunkOf(last));
+            }
+
+            PPR_TEST_ASSERT(not small.setCell({1023u, 1023u}, {1u, 293.0f}));
+            PPR_TEST_ASSERT(not large.setCell({4095u, 4095u}, {2u, 293.0f}));
+            PPR_TEST_ASSERT(small.edge() == 1024u and large.edge() == 4096u);
+            PPR_TEST_ASSERT(chunkIndexOf({7u, 7u}) == 231u);
+            for (const u32 invalid: {0u, 128u, 1536u, 8192u}) {
+                bool rejected{};
+                try {
+                    ChunkGrid grid{invalid};
+                } catch (const std::system_error &error) {
+                    rejected = error.code() == std::errc::invalid_argument;
+                }
+
+                PPR_TEST_ASSERT(rejected);
+            }
+        };
+
         PPR_UNIT_TEST (coordinate_conversions) {
             constexpr GlobalCellPos corner{4095u, 4095u};
             constexpr GlobalCellPos origin{0u, 0u};
@@ -441,6 +476,7 @@ namespace pP::tests {
             detail::Grid::retained_payload_tracks_residency_without_counting_capture_owners,
             detail::Grid::world_geometry_constants,
             detail::Grid::coordinate_conversions,
+            detail::Grid::selected_world_extents_enforce_bounds_and_keep_chunk_ids,
             detail::Grid::write_then_read_cell,
             detail::Grid::absent_chunk_reads_default_cell,
             detail::Grid::resident_payload_is_a_full_chunk,

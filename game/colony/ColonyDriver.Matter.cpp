@@ -68,7 +68,8 @@ namespace pP::colony {
             PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyMatter, particles);
 
             auto state = makeMatterState(
-                *particles, 1.0 / cellsPerMetre(), referenceThicknessMetres(), kGravityY, worldGeneration());
+                *particles, 1.0 / cellsPerMetre(), referenceThicknessMetres(), kGravityY, worldGeneration(),
+                grid().edge());
             PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyMatter, state);
             state->m_identity.m_terrain_revision = 1u;
             m_matter = std::move(*state);
@@ -96,7 +97,7 @@ namespace pP::colony {
         auto completion = advanceMatterRequest(runtime, EMatterOperation::prepare, [&] {
             if (m_submission_observer) {
                 m_submission_observer->observeAdmission(
-                    *m_matter, *terrain, kMatterTerrainEdge, kMatterTerrainEdge, 2.5f, 2.5f, tickHz());
+                    *m_matter, *terrain, grid().edge() + 1u, grid().edge() + 1u, 2.5f, 2.5f, tickHz());
             }
 
             return runtime.beginPrepareResidentWorld(*m_matter, std::move(*terrain));
@@ -452,7 +453,7 @@ namespace pP::colony {
         PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyMatter, particles);
 
         auto initialized = makeMatterState(
-            *particles, 1.0 / cellsPerMetre(), referenceThicknessMetres(), kGravityY, worldGeneration());
+            *particles, 1.0 / cellsPerMetre(), referenceThicknessMetres(), kGravityY, worldGeneration(), grid().edge());
         PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyMatter, initialized);
         initialized->m_identity.m_terrain_revision = 1u;
         return initialized;
@@ -564,7 +565,8 @@ namespace pP::colony {
 
                         PPR_RETURN_UNEXPECTED_ON_FAIL(
                             ColonyMatter, work->m_particles.restoreMoving(
-                                              *particles, materials, source.m_cell_metres, source.m_thickness_metres));
+                                              *particles, materials, source.m_cell_metres, source.m_thickness_metres,
+                                              source.m_world_edge));
 
                         PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyMatter, context.error());
                         return std::move(*work);

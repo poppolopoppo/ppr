@@ -47,6 +47,7 @@ export namespace pP::colony {
         /// Explicit publication identity for isolated candidates. Zero derives
         /// the next identity when adopting a newly prepared owner.
         u64 m_world_generation{};
+        u32 m_world_edge{sim::kWorldEdge};
     };
 
     // ------------------------------------------------------------------

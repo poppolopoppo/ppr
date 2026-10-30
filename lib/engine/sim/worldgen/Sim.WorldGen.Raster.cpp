@@ -404,8 +404,8 @@ namespace pP::sim {
 
             if (x < recipe.m_boundary_fine or
                 y < recipe.m_boundary_fine or
-                x >= kWorldEdge - recipe.m_boundary_fine or
-                (not recipe.m_open_surface and y >= kWorldEdge - recipe.m_boundary_fine)) {
+                x >= recipe.m_world_edge - recipe.m_boundary_fine or
+                (not recipe.m_open_surface and y >= recipe.m_world_edge - recipe.m_boundary_fine)) {
                 return {recipe.m_boundary_material, temperature};
             }
 
@@ -578,15 +578,15 @@ namespace pP::sim {
 
     bool GenerationRaster::protectedCell(const u32 x, const u32 y) const noexcept {
         const auto &r = m_plan.recipe();
-        if (x >= kWorldEdge or y >= kWorldEdge) {
+        if (x >= r.m_world_edge or y >= r.m_world_edge) {
             return true;
         }
 
         const double xm = (x + 0.5) * r.m_cell_size_m, ym = (y + 0.5) * r.m_cell_size_m;
         if (x < r.m_boundary_fine or
             y < r.m_boundary_fine or
-            x >= kWorldEdge - r.m_boundary_fine or
-            (not r.m_open_surface and y >= kWorldEdge - r.m_boundary_fine) or
+            x >= r.m_world_edge - r.m_boundary_fine or
+            (not r.m_open_surface and y >= r.m_world_edge - r.m_boundary_fine) or
             (r.m_open_surface and
                 (ym <= generationBedrockHeight(m_plan, xm) or ym >= generationSurfaceHeight(m_plan, xm)))) {
             return true;
@@ -650,7 +650,8 @@ namespace pP::sim {
     }
 
     Expected<Array<Cell>> GenerationRaster::chunk(const ChunkPos position, const SharedContext &context) const {
-        if (position.m_x >= kChunksPerEdge or position.m_y >= kChunksPerEdge) {
+        if (position.m_x >= m_plan.recipe().m_world_edge / kChunkEdge or
+            position.m_y >= m_plan.recipe().m_world_edge / kChunkEdge) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(WorldRaster, std::errc::result_out_of_range);
         }
         PPR_RETURN_UNEXPECTED_ON_FAIL(WorldRaster, canceled(context));
@@ -676,7 +677,8 @@ namespace pP::sim {
         const u32 edge = kChunkEdge + 2u * padding;
         const auto global = [&](const u32 value, const u32 chunk) -> u32 {
             return static_cast<u32>(std::clamp(
-                static_cast<i64>(chunk * kChunkEdge + value) - padding, i64{0}, static_cast<i64>(kWorldEdge - 1u)));
+                static_cast<i64>(chunk * kChunkEdge + value) - padding, i64{0},
+                static_cast<i64>(recipe.m_world_edge - 1u)));
         };
 
         Array<RasterColumn, mem::ScratchPad> columns(edge);
@@ -781,8 +783,8 @@ namespace pP::sim {
                     bool protect = lining or
                                    gx < recipe.m_boundary_fine or
                                    gy < recipe.m_boundary_fine or
-                                   gx >= kWorldEdge - recipe.m_boundary_fine or
-                                   (not recipe.m_open_surface and gy >= kWorldEdge - recipe.m_boundary_fine) or
+                                   gx >= recipe.m_world_edge - recipe.m_boundary_fine or
+                                   (not recipe.m_open_surface and gy >= recipe.m_world_edge - recipe.m_boundary_fine) or
                                    (recipe.m_open_surface and
                                        ((gy + 0.5) * recipe.m_cell_size_m >= columns[x].m_surface or
                                            (gy + 0.5) * recipe.m_cell_size_m <= columns[x].m_bedrock));
@@ -1016,7 +1018,7 @@ namespace pP::sim {
             const bool parallel = scheduler != nullptr and not scheduler->isWorkerThread();
             Array<std::future<std::error_code>> pending;
             if (parallel) {
-                pending.reserve(kChunkCount);
+                pending.reserve(grid.chunkCount());
             }
 
             PPR_DEFER {
@@ -1065,6 +1067,10 @@ namespace pP::sim {
 
             try {
                 for (u32 chunk_index = 0u; chunk_index < kChunkCount; ++chunk_index) {
+                    if (not grid.contains(ChunkPos{chunk_index % kChunksPerEdge, chunk_index / kChunksPerEdge})) {
+                        continue;
+                    }
+
                     std::error_code err = canceled(execution.m_context);
                     if (not err) {
                         if (not parallel) {
@@ -1154,6 +1160,10 @@ namespace pP::sim {
         const GenerationPlan &plan, const GenerationGeometry &geometry, const ChunkGrid &grid,
         const SharedContext &context) {
         const auto &r = plan.recipe();
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldRaster,
+            grid.edge() == r.m_world_edge ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
+
         const auto invalid = make_error_code(EGenerationErrc::constraints_exhausted);
         std::map<std::pair<double, double>, u32> nodes;
         Array<u32> parents;
@@ -1213,8 +1223,8 @@ namespace pP::sim {
 
                 if (left < 0 or
                     bottom < 0 or
-                    right >= static_cast<i32>(kWorldEdge) or
-                    top >= static_cast<i32>(kWorldEdge)) {
+                    right >= static_cast<i32>(r.m_world_edge) or
+                    top >= static_cast<i32>(r.m_world_edge)) {
                     PPR_RETURN_ERROR_ON_FAIL(WorldRaster, invalid);
                 }
 
@@ -1275,11 +1285,11 @@ namespace pP::sim {
             };
 
             for (u32 ty = std::max(1u, candidates.m_bottom / 16u);
-                ty < std::min(kWorldEdge / 16u - 1u, candidates.m_top / 16u); ++ty) {
+                ty < std::min(r.m_world_edge / 16u - 1u, candidates.m_top / 16u); ++ty) {
                 PPR_RETURN_ERROR_ON_FAIL(WorldRaster, canceled(context));
 
                 for (u32 tx = std::max(1u, candidates.m_left / 16u);
-                    tx < std::min(kWorldEdge / 16u - 1u, candidates.m_right / 16u); ++tx) {
+                    tx < std::min(r.m_world_edge / 16u - 1u, candidates.m_right / 16u); ++tx) {
                     const u64 tile = static_cast<u64>(ty) * 256u + tx;
 
                     GenerationRandom random{generationStreamSeed(plan.seed(), 0x666f726d6174696full, tile)};
@@ -1326,7 +1336,7 @@ namespace pP::sim {
 
                     for (u32 step = 1u; valid and step <= length; ++step) {
                         const i32 gy = static_cast<i32>(*root_y) + direction * static_cast<i32>(step);
-                        if (gy <= 0 or gy >= static_cast<i32>(kWorldEdge) - 1) {
+                        if (gy <= 0 or gy >= static_cast<i32>(r.m_world_edge) - 1) {
                             valid = false;
                             break;
                         }
@@ -1410,8 +1420,13 @@ namespace pP::sim {
         const GenerationPlan &plan, const BiomeLayout &layout, const GenerationGeometry &geometry, ChunkGrid &grid,
         const SharedContext &context, u64 *const known_scratch_peak) {
         PPR_RETURN_ERROR_ON_FAIL(
+            WorldRaster, grid.edge() == plan.recipe().m_world_edge ? std::error_code{}
+                                                                   : std::make_error_code(std::errc::invalid_argument));
+
+        PPR_RETURN_ERROR_ON_FAIL(
             WorldRaster, applyFormations(
-                             plan, layout, geometry, grid, {16u, 16u, kWorldEdge - 16u, kWorldEdge - 16u}, context,
+                             plan, layout, geometry, grid,
+                             {16u, 16u, plan.recipe().m_world_edge - 16u, plan.recipe().m_world_edge - 16u}, context,
                              known_scratch_peak));
         PPR_RETURN_ERROR_ON_FAIL(WorldRaster, validateGenerationBackbone(plan, geometry, grid, context));
         return {};
@@ -1420,11 +1435,14 @@ namespace pP::sim {
     std::error_code finishGenerationTerrainRegion(
         const GenerationPlan &plan, const BiomeLayout &layout, const GenerationGeometry &geometry, ChunkGrid &grid,
         const GenerationCellBounds candidates, const SharedContext &context, u64 *const known_scratch_peak) {
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldRaster, grid.edge() == plan.recipe().m_world_edge ? std::error_code{}
+                                                                   : std::make_error_code(std::errc::invalid_argument));
         PPR_RETURN_ERROR_ON_FAIL(WorldRaster, canceled(context));
         if (candidates.m_left >= candidates.m_right or
             candidates.m_bottom >= candidates.m_top or
-            candidates.m_right > kWorldEdge or
-            candidates.m_top > kWorldEdge or
+            candidates.m_right > plan.recipe().m_world_edge or
+            candidates.m_top > plan.recipe().m_world_edge or
             candidates.m_left % 16u != 0u or
             candidates.m_bottom % 16u != 0u or
             candidates.m_right % 16u != 0u or
@@ -1441,8 +1459,8 @@ namespace pP::sim {
         reach += 4u;
         const u32 left = candidates.m_left > reach ? candidates.m_left - reach : 0u;
         const u32 bottom = candidates.m_bottom > reach ? candidates.m_bottom - reach : 0u;
-        const u32 right = std::min(kWorldEdge, candidates.m_right + reach);
-        const u32 top = std::min(kWorldEdge, candidates.m_top + reach);
+        const u32 right = std::min(plan.recipe().m_world_edge, candidates.m_right + reach);
+        const u32 top = std::min(plan.recipe().m_world_edge, candidates.m_top + reach);
         for (u32 cy = bottom / kChunkEdge; cy <= (top - 1u) / kChunkEdge; ++cy) {
             for (u32 cx = left / kChunkEdge; cx <= (right - 1u) / kChunkEdge; ++cx) {
                 if (not grid.residentCells({cx, cy})) {
@@ -1462,7 +1480,7 @@ namespace pP::sim {
         try {
             auto raster = compileGenerationRaster(plan, layout, geometry, execution.m_context);
             PPR_RETURN_UNEXPECTED_ON_FAIL(WorldRaster, raster);
-            ChunkGrid grid;
+            ChunkGrid grid{plan.recipe().m_world_edge};
             if (execution.m_stage != nullptr) {
                 execution.m_stage->store(EGenerationStage::terrain, std::memory_order_release);
             }
@@ -1501,7 +1519,7 @@ namespace pP::sim {
         u32 references = 0u;
         const auto &recipe = plan.recipe();
         const double scale = 1.0 / recipe.m_cell_size_m;
-        const double extent = kWorldEdge / scale;
+        const double extent = recipe.m_world_edge / scale;
         for (u32 s = 0u; s < geometry.m_segments.size(); ++s) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(WorldRaster, canceled(context));
 

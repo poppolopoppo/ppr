@@ -401,6 +401,7 @@ namespace pP::colony {
         writer.u32value(descriptor.m_metric.m_cells_per_metre);
         writer.u32value(descriptor.m_metric.m_cells_per_tile);
         writer.real(descriptor.m_metric.m_reference_thickness_m);
+        writer.u32value(descriptor.m_world_edge);
 
         writer.count(checkpoint.m_materials.size());
         for (const auto &material: checkpoint.m_materials) {
@@ -499,6 +500,7 @@ namespace pP::colony {
         descriptor.m_metric.m_cells_per_metre = reader.u32value();
         descriptor.m_metric.m_cells_per_tile = reader.u32value();
         descriptor.m_metric.m_reference_thickness_m = reader.real();
+        descriptor.m_world_edge = reader.u32value();
 
         checkpoint.m_materials.resize(reader.count(kMaxContentMaterials + 1u, 6u));
         for (auto &material: checkpoint.m_materials) {
@@ -520,6 +522,7 @@ namespace pP::colony {
         PPR_RETURN_UNEXPECTED_ON_FAIL(CheckpointCodec, decodeParticles(reader, checkpoint.m_particles, context.get()));
 
         auto &carried = checkpoint.m_current_matter;
+        carried.m_world_edge = descriptor.m_world_edge;
         carried.m_identity.m_world = reader.u64value();
         carried.m_identity.m_publication = reader.u64value();
         carried.m_identity.m_terrain_revision = reader.u64value();
@@ -548,9 +551,9 @@ namespace pP::colony {
         }
 
         PPR_RETURN_UNEXPECTED_ON_FAIL(
-            CheckpointCodec,
-            validateMatterProfile(
-                carried.m_profile, carried.m_cell_metres, carried.m_thickness_metres, kMatterGravityY));
+            CheckpointCodec, validateMatterProfile(
+                                 carried.m_profile, carried.m_cell_metres, carried.m_thickness_metres, kMatterGravityY,
+                                 descriptor.m_world_edge));
 
         carried.m_particles.resize(reader.count(sim::kMaxMatterParticles, 88u));
         for (auto &particle: carried.m_particles) {

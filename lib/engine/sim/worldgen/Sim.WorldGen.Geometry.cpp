@@ -23,6 +23,17 @@ namespace pP::sim {
             i64 m_left{}, m_bottom{}, m_right{}, m_top{};
         };
 
+        // First failing guard per proposal; an empty origin domain records a
+        // bounds rejection without attempting a random proposal.
+        struct PlacementRejections {
+            u32 m_attempts{}, m_depth{}, m_biome{}, m_subsurface_bounds{}, m_overlap{}, m_spacing{};
+        };
+
+        struct PlacementDiagnostics {
+            PlacementRejections m_random{}, m_completion{};
+            bool m_completion_exhaustive{}, m_completion_capped{};
+        };
+
         [[nodiscard]] Rect reservation(const GenerationRecipe &recipe, const GenerationInstance &instance) noexcept {
             const auto &bounds = recipe.m_features[instance.m_feature].m_bounds;
             return {
@@ -39,19 +50,27 @@ namespace pP::sim {
         }
 
         [[nodiscard]] bool fits(
-            const GenerationPlan &plan, const GenerationGeometry &geometry,
-            const GenerationInstance &candidate) noexcept {
+            const GenerationPlan &plan, const GenerationGeometry &geometry, const GenerationInstance &candidate,
+            PlacementRejections *const rejections) noexcept {
             const auto &recipe = plan.recipe();
             const Rect bounds = reservation(recipe, candidate);
             if (not generationSubsurfaceBounds(plan, bounds.m_left, bounds.m_bottom, bounds.m_right, bounds.m_top)) {
+                if (rejections != nullptr) {
+                    ++rejections->m_subsurface_bounds;
+                }
+
                 return false;
             }
 
             const i64 boundary = recipe.m_boundary_fine;
             if (bounds.m_left < boundary or
                 bounds.m_bottom < boundary or
-                bounds.m_right > kWorldEdge - boundary or
-                bounds.m_top > kWorldEdge - boundary) {
+                bounds.m_right > recipe.m_world_edge - boundary or
+                bounds.m_top > recipe.m_world_edge - boundary) {
+                if (rejections != nullptr) {
+                    ++rejections->m_subsurface_bounds;
+                }
+
                 return false;
             }
 
@@ -63,6 +82,10 @@ namespace pP::sim {
                     bounds.m_right > other.m_left and
                     bounds.m_bottom < other.m_top and
                     bounds.m_top > other.m_bottom) {
+                    if (rejections != nullptr) {
+                        ++rejections->m_overlap;
+                    }
+
                     return false;
                 }
                 const double dx = (centre_x - 0.5 * static_cast<double>(other.m_left + other.m_right)) /
@@ -70,49 +93,117 @@ namespace pP::sim {
                 const double dy = (centre_y - 0.5 * static_cast<double>(other.m_bottom + other.m_top)) /
                                   (1.0 / recipe.m_cell_size_m);
                 if (std::hypot(dx, dy) < std::max(spacing(recipe, candidate), spacing(recipe, instance))) {
+                    if (rejections != nullptr) {
+                        ++rejections->m_spacing;
+                    }
+
                     return false;
                 }
             }
             return true;
         }
 
+        [[nodiscard]] bool acceptsPlacement(
+            const GenerationPlan &plan, const BiomeLayout &layout, const GenerationGeometry &geometry,
+            const GenerationPlacement &placement, const GenerationInstance &candidate,
+            PlacementRejections *const rejections) noexcept {
+            const auto &recipe = plan.recipe();
+            const Rect rect = reservation(recipe, candidate);
+            const double x = 0.5 * static_cast<double>(rect.m_left + rect.m_right) / (1.0 / recipe.m_cell_size_m);
+            const double y = 0.5 * static_cast<double>(rect.m_bottom + rect.m_top) / (1.0 / recipe.m_cell_size_m);
+            const double depth = generationDepth(plan, x, y);
+            if (depth < placement.m_depth_min or depth > placement.m_depth_max) {
+                if (rejections != nullptr) {
+                    ++rejections->m_depth;
+                }
+
+                return false;
+            }
+
+            if (generationBiomeAt(plan, layout, x, y) != placement.m_biome) {
+                if (rejections != nullptr) {
+                    ++rejections->m_biome;
+                }
+
+                return false;
+            }
+
+            return fits(plan, geometry, candidate, rejections);
+        }
+
         [[nodiscard]] Expected<bool> place(
             const GenerationPlan &plan, const BiomeLayout &layout, GenerationGeometry &geometry, const u32 rule_index,
-            const u32 ordinal, const SharedContext &context) {
+            const u32 ordinal, const SharedContext &context, PlacementDiagnostics *const diagnostics,
+            u64 *const completion_remaining) {
+            PlacementRejections *const rejections = diagnostics ? &diagnostics->m_random : nullptr;
             const auto &recipe = plan.recipe();
             const auto &rule = recipe.m_rules[rule_index];
             const auto &placement = std::get<GenerationPlacement>(rule.m_parameters);
             const auto &bounds = recipe.m_features[placement.m_feature].m_bounds;
             const i64 min_x = static_cast<i64>(recipe.m_boundary_fine) - bounds.m_min_x;
             const i64 min_y = static_cast<i64>(recipe.m_boundary_fine) - bounds.m_min_y;
-            const i64 max_x = static_cast<i64>(kWorldEdge - recipe.m_boundary_fine) - bounds.m_max_x;
-            const i64 max_y = static_cast<i64>(kWorldEdge - recipe.m_boundary_fine) - bounds.m_max_y;
+            const i64 max_x = static_cast<i64>(recipe.m_world_edge - recipe.m_boundary_fine) - bounds.m_max_x;
+            const i64 max_y = static_cast<i64>(recipe.m_world_edge - recipe.m_boundary_fine) - bounds.m_max_y;
             if (min_x > max_x or min_y > max_y) {
+                if (rejections != nullptr) {
+                    ++rejections->m_subsurface_bounds;
+                }
+
                 return false;
             }
 
             GenerationRandom random{generationStreamSeed(plan.seed(), rule.m_key, ordinal)};
             for (u32 attempt = 0u; attempt < placement.m_attempts; ++attempt) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(WorldGeometry, canceled(context));
+
+                if (rejections != nullptr) {
+                    ++rejections->m_attempts;
+                }
+
                 geometry.m_worst_placement_attempts = std::max(geometry.m_worst_placement_attempts, attempt + 1u);
                 GenerationInstance candidate{
                     placement.m_feature, rule_index, ordinal,
                     static_cast<i32>(min_x + static_cast<i64>(random.bounded(static_cast<u64>(max_x - min_x + 1)))),
                     static_cast<i32>(min_y + static_cast<i64>(random.bounded(static_cast<u64>(max_y - min_y + 1)))),
                     placement.m_reflect and random.bounded(2u) != 0u};
-                const Rect rect = reservation(recipe, candidate);
-                const double x = 0.5 * static_cast<double>(rect.m_left + rect.m_right) / (1.0 / recipe.m_cell_size_m);
-                const double y = 0.5 * static_cast<double>(rect.m_bottom + rect.m_top) / (1.0 / recipe.m_cell_size_m);
-                const double depth = generationDepth(plan, x, y);
-                if (depth < placement.m_depth_min or
-                    depth > placement.m_depth_max or
-                    generationBiomeAt(plan, layout, x, y) != placement.m_biome or
-                    not fits(plan, geometry, candidate)) {
+                if (not acceptsPlacement(plan, layout, geometry, placement, candidate, rejections)) {
                     continue;
                 }
+
                 geometry.m_instances.push_back(candidate);
                 return true;
             }
+
+            if (recipe.m_world_edge == kWorldEdge or diagnostics == nullptr or completion_remaining == nullptr) {
+                return false;
+            }
+
+            // A placement's guards depend on its reservation rectangle, so
+            // reflection cannot change admissibility. Scan one allowed orientation.
+            for (i64 y = min_y; y <= max_y; ++y) {
+                PPR_RETURN_UNEXPECTED_ON_FAIL(WorldGeometry, canceled(context));
+
+                for (i64 x = min_x; x <= max_x; ++x) {
+                    if (*completion_remaining == 0u) {
+                        diagnostics->m_completion_capped = true;
+                        return false;
+                    }
+
+                    --*completion_remaining;
+                    ++diagnostics->m_completion.m_attempts;
+                    const GenerationInstance candidate{
+                        placement.m_feature, rule_index, ordinal, static_cast<i32>(x), static_cast<i32>(y), false};
+                    if (not acceptsPlacement(
+                            plan, layout, geometry, placement, candidate, &diagnostics->m_completion)) {
+                        continue;
+                    }
+
+                    geometry.m_instances.push_back(candidate);
+                    return true;
+                }
+            }
+
+            diagnostics->m_completion_exhaustive = true;
             return false;
         }
 
@@ -145,6 +236,10 @@ namespace pP::sim {
                        std::tie(recipe.m_rules[b].m_order, recipe.m_rules[b].m_key);
             });
 
+            // One shared completion allowance bounds all deterministic work in
+            // addition to the recipe's separately validated random proposal budget.
+            u64 completion_remaining = kMaxGenerationOriginAttempts;
+
             // Reserve every required instance before optional instances compete
             // for remaining space; priority orders conflicts within each pass.
             for (const bool required: {true, false}) {
@@ -153,12 +248,60 @@ namespace pP::sim {
                     const u32 begin = required ? 0u : placement.m_min_count;
                     const u32 end = required ? placement.m_min_count : placement.m_max_count;
                     for (u32 ordinal = begin; ordinal < end; ++ordinal) {
-                        auto result = place(plan, layout, geometry, r, ordinal, context);
+                        PlacementDiagnostics diagnostics{};
+                        auto result = place(
+                            plan, layout, geometry, r, ordinal, context, required ? &diagnostics : nullptr,
+                            required ? &completion_remaining : nullptr);
                         PPR_RETURN_ERROR_ON_FAIL(WorldGeometry, result);
                         if (*result) {
+                            if (diagnostics.m_completion.m_attempts != 0u) {
+                                PPR_LOG(
+                                    WorldGeometry, info, "required feature placement completed by lattice search",
+                                    {{"rule_index", r}, {"rule_key", recipe.m_rules[r].m_key},
+                                        {"world_edge", recipe.m_world_edge}, {"seed", plan.seed()},
+                                        {"ordinal", ordinal}, {"random_attempts", diagnostics.m_random.m_attempts},
+                                        {"completion_attempts", diagnostics.m_completion.m_attempts},
+                                        {"completion_budget", kMaxGenerationOriginAttempts},
+                                        {"completion_remaining", completion_remaining}});
+                            }
+
                             continue;
                         }
+
                         if (required) {
+                            const auto &bounds = recipe.m_features[placement.m_feature].m_bounds;
+                            PPR_LOG(
+                                WorldGeometry, error, "required feature placement exhausted",
+                                {{"rule_index", r}, {"rule_key", recipe.m_rules[r].m_key},
+                                    {"feature_index", placement.m_feature},
+                                    {"feature_key", recipe.m_features[placement.m_feature].m_key},
+                                    {"biome_index", placement.m_biome}, {"ordinal", ordinal},
+                                    {"world_edge", recipe.m_world_edge}, {"seed", plan.seed()},
+                                    {"bounds_min_x_m", bounds.m_min_x * recipe.m_cell_size_m},
+                                    {"bounds_min_y_m", bounds.m_min_y * recipe.m_cell_size_m},
+                                    {"bounds_max_x_m", bounds.m_max_x * recipe.m_cell_size_m},
+                                    {"bounds_max_y_m", bounds.m_max_y * recipe.m_cell_size_m},
+                                    {"accepted_instances", geometry.m_instances.size()},
+                                    {"attempt_limit", placement.m_attempts},
+                                    {"attempts", diagnostics.m_random.m_attempts},
+                                    {"rejected_depth", diagnostics.m_random.m_depth},
+                                    {"rejected_biome", diagnostics.m_random.m_biome},
+                                    {"rejected_subsurface_or_bounds", diagnostics.m_random.m_subsurface_bounds},
+                                    {"rejected_overlap", diagnostics.m_random.m_overlap},
+                                    {"rejected_spacing", diagnostics.m_random.m_spacing},
+                                    {"completion_enabled", recipe.m_world_edge < kWorldEdge},
+                                    {"completion_attempts", diagnostics.m_completion.m_attempts},
+                                    {"completion_rejected_depth", diagnostics.m_completion.m_depth},
+                                    {"completion_rejected_biome", diagnostics.m_completion.m_biome},
+                                    {"completion_rejected_subsurface_or_bounds",
+                                        diagnostics.m_completion.m_subsurface_bounds},
+                                    {"completion_rejected_overlap", diagnostics.m_completion.m_overlap},
+                                    {"completion_rejected_spacing", diagnostics.m_completion.m_spacing},
+                                    {"completion_budget", kMaxGenerationOriginAttempts},
+                                    {"completion_remaining", completion_remaining},
+                                    {"completion_exhaustive", diagnostics.m_completion_exhaustive},
+                                    {"completion_capped", diagnostics.m_completion_capped}});
+
                             PPR_RETURN_ERROR_ON_FAIL(
                                 WorldGeometry, make_error_code(EGenerationErrc::constraints_exhausted));
                         }
@@ -184,7 +327,7 @@ namespace pP::sim {
         [[nodiscard]] Expected<Array<BlobOriginRegion>> blobOriginRegions(
             const GenerationPlan &plan, const BiomeLayout &layout, const u32 biome, const SharedContext &context) {
             const auto &recipe = plan.recipe();
-            const double extent = kWorldEdge * recipe.m_cell_size_m;
+            const double extent = recipe.m_world_edge * recipe.m_cell_size_m;
             const double boundary = recipe.m_boundary_fine * recipe.m_cell_size_m;
             Array<BlobOriginRegion> regions;
             for (const auto &site: layout.sites()) {
@@ -215,7 +358,7 @@ namespace pP::sim {
             const GenerationPlan &plan, const BiomeLayout &layout, GenerationGeometry &geometry,
             const SharedContext &context, u64 *const known_scratch_peak) {
             const auto &recipe = plan.recipe();
-            const double extent = kWorldEdge * recipe.m_cell_size_m;
+            const double extent = recipe.m_world_edge * recipe.m_cell_size_m;
             const double boundary = recipe.m_boundary_fine * recipe.m_cell_size_m;
             for (u32 b = 0u; b < recipe.m_biomes.size(); ++b) {
                 if (layout.sampleBiome() ? b != *layout.sampleBiome()
@@ -310,7 +453,7 @@ namespace pP::sim {
         [[nodiscard]] std::error_code smoothWorm(
             const GenerationRecipe &recipe, const GenerationWorm &worm, const u32 rule, GenerationRandom &random,
             GenerationGeometry &geometry, double x, double y, const SharedContext &context) {
-            const double extent = kWorldEdge * recipe.m_cell_size_m;
+            const double extent = recipe.m_world_edge * recipe.m_cell_size_m;
             const double boundary = recipe.m_boundary_fine * recipe.m_cell_size_m;
             double remaining = worm.m_length_min_m + (worm.m_length_max_m - worm.m_length_min_m) * random.unit();
             const double initial_radius = worm.m_radius_min_m +
@@ -363,7 +506,7 @@ namespace pP::sim {
             constexpr std::array<std::array<double, 2u>, 8u> headings{
                 {{1.0, 0.0}, {diagonal, diagonal}, {0.0, 1.0}, {-diagonal, diagonal}, {-1.0, 0.0},
                     {-diagonal, -diagonal}, {0.0, -1.0}, {diagonal, -diagonal}}};
-            const double extent = kWorldEdge / (1.0 / recipe.m_cell_size_m);
+            const double extent = recipe.m_world_edge / (1.0 / recipe.m_cell_size_m);
             const double boundary = recipe.m_boundary_fine / (1.0 / recipe.m_cell_size_m);
             for (u32 r = 0u; r < recipe.m_rules.size(); ++r) {
                 const auto &rule = recipe.m_rules[r];
@@ -377,7 +520,8 @@ namespace pP::sim {
                 // One-metre maximum steps; the final step retains authored
                 // sub-metre lengths rather than rounding them onto the grid.
                 const double segment_count = std::ceil(worm->m_length_max_m);
-                if (segment_count * worm->m_count > kMaxGenerationSegments - static_cast<double>(geometry.m_segments.size())) {
+                if (segment_count * worm->m_count >
+                    kMaxGenerationSegments - static_cast<double>(geometry.m_segments.size())) {
                     PPR_RETURN_ERROR_ON_FAIL(WorldGeometry, make_error_code(EGenerationErrc::segment_limit));
                 }
                 for (u32 ordinal = 0u; ordinal < worm->m_count; ++ordinal) {
@@ -484,10 +628,10 @@ namespace pP::sim {
                 if (connection == nullptr) {
                     continue;
                 }
-                const double extent = kWorldEdge * recipe.m_cell_size_m;
+                const double extent = recipe.m_world_edge * recipe.m_cell_size_m;
                 const double clearance = connection->m_radius_m * 1.25 + std::numbers::sqrt2 * recipe.m_cell_size_m;
-                Array<double> surface(kWorldEdge), bedrock(kWorldEdge);
-                for (u32 x = 0u; x < kWorldEdge; ++x) {
+                Array<double> surface(recipe.m_world_edge), bedrock(recipe.m_world_edge);
+                for (u32 x = 0u; x < recipe.m_world_edge; ++x) {
                     surface[x] = generationSurfaceHeight(plan, (x + 0.5) * recipe.m_cell_size_m);
                     bedrock[x] = generationBedrockHeight(plan, (x + 0.5) * recipe.m_cell_size_m);
                 }

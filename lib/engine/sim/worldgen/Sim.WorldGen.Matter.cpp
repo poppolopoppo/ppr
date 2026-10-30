@@ -75,7 +75,7 @@ namespace pP::sim {
         }
 
         [[nodiscard]] bool solid(const ChunkGrid &grid, const i32 x, const i32 y) noexcept {
-            if (x < 0 or y < 0 or x >= static_cast<i32>(kWorldEdge) or y >= static_cast<i32>(kWorldEdge)) {
+            if (x < 0 or y < 0 or x >= static_cast<i32>(grid.edge()) or y >= static_cast<i32>(grid.edge())) {
                 return true;
             }
 
@@ -307,8 +307,7 @@ namespace pP::sim {
     Expected<double> generationEmptyArea(
         const ChunkGrid &grid, const GlobalCellPos cell, const double cell_size_m,
         const std::optional<double> fill_height_m) {
-        if (cell.m_x >= kWorldEdge or
-            cell.m_y >= kWorldEdge or
+        if (not grid.contains(cell) or
             not std::isfinite(cell_size_m) or
             cell_size_m <= 0.0 or
             not std::isfinite(cell_size_m * cell_size_m) or
@@ -316,7 +315,7 @@ namespace pP::sim {
             not std::isfinite(1.0 / cell_size_m) or
             (fill_height_m and (not std::isfinite(*fill_height_m) or
                                    *fill_height_m < 0.0 or
-                                   *fill_height_m > kWorldEdge * cell_size_m))) {
+                                   *fill_height_m > grid.edge() * cell_size_m))) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(WorldMatter, std::errc::invalid_argument);
         }
 
@@ -334,6 +333,10 @@ namespace pP::sim {
         PPR_RETURN_UNEXPECTED_ON_FAIL(WorldMatter, canceled(context));
         InitialMatter result;
         const auto &recipe = plan.recipe();
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            WorldMatter,
+            grid.edge() == recipe.m_world_edge ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
+
         Array<u64> assigned(kWorldEdge * kWorldEdge / 64u, 0ull);
         if (known_scratch_peak != nullptr) {
             *known_scratch_peak = std::max(*known_scratch_peak, assigned.capacity() * sizeof(u64));
@@ -367,7 +370,7 @@ namespace pP::sim {
                     const i64 bottom = static_cast<i64>(instance.m_origin_y) + local.m_min_y;
                     const i64 right = static_cast<i64>(instance.m_origin_x) + local.m_max_x;
                     const i64 top = static_cast<i64>(instance.m_origin_y) + local.m_max_y;
-                    if (left < 0 or bottom < 0 or right > kWorldEdge or top > kWorldEdge) {
+                    if (left < 0 or bottom < 0 or right > recipe.m_world_edge or top > recipe.m_world_edge) {
                         PPR_RETURN_UNEXPECTED_ON_FAIL(WorldMatter, std::errc::invalid_argument);
                     }
 

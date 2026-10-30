@@ -25,17 +25,20 @@ namespace pP::colony {
     // fine cells
     // ------------------------------------------------------------------
 
-    Expected<MetrePoint> fineCellCentre(const sim::GlobalCellPos position) {
-        if (not sim::isInsideWorld(position)) {
+    Expected<MetrePoint> fineCellCentre(const sim::GlobalCellPos position, const u32 world_edge) {
+        if (not sim::isSupportedWorldEdge(world_edge) or position.m_x >= world_edge or position.m_y >= world_edge) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyMetric, std::make_error_code(std::errc::result_out_of_range));
         }
+
         return MetrePoint{
             (static_cast<double>(position.m_x) + 0.5) / kFineCellsPerMetre,
             (static_cast<double>(position.m_y) + 0.5) / kFineCellsPerMetre};
     }
 
-    Expected<sim::GlobalCellPos> metreToFineCell(const MetrePoint position, const u32 cells_per_metre) {
-        if ((cells_per_metre != 1u and cells_per_metre != kFineCellsPerMetre) or
+    Expected<sim::GlobalCellPos> metreToFineCell(
+        const MetrePoint position, const u32 cells_per_metre, const u32 world_edge) {
+        if (not sim::isSupportedWorldEdge(world_edge) or
+            (cells_per_metre != 1u and cells_per_metre != kFineCellsPerMetre) or
             not std::isfinite(position.m_x) or
             not std::isfinite(position.m_y)) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyMetric, std::make_error_code(std::errc::invalid_argument));
@@ -43,8 +46,8 @@ namespace pP::colony {
 
         if (position.m_x < 0.0 or
             position.m_y < 0.0 or
-            position.m_x >= static_cast<double>(sim::kWorldEdge) / cells_per_metre or
-            position.m_y >= static_cast<double>(sim::kWorldEdge) / cells_per_metre) {
+            position.m_x >= static_cast<double>(world_edge) / cells_per_metre or
+            position.m_y >= static_cast<double>(world_edge) / cells_per_metre) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyMetric, std::make_error_code(std::errc::result_out_of_range));
         }
 
@@ -63,23 +66,29 @@ namespace pP::colony {
 
         const auto x = cell_axis(position.m_x);
         const auto y = cell_axis(position.m_y);
-        if (x >= sim::kWorldEdge or y >= sim::kWorldEdge) {
+        if (x >= world_edge or y >= world_edge) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyMetric, std::make_error_code(std::errc::result_out_of_range));
         }
+
         return sim::GlobalCellPos{x, y};
     }
 
-    Expected<double> fineCellBoundaryMetres(const u32 boundary) {
-        if (boundary > sim::kWorldEdge) {
+    Expected<double> fineCellBoundaryMetres(const u32 boundary, const u32 world_edge) {
+        if (not sim::isSupportedWorldEdge(world_edge) or boundary > world_edge) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyMetric, std::make_error_code(std::errc::result_out_of_range));
         }
+
         return static_cast<double>(boundary) / kFineCellsPerMetre;
     }
 
-    Expected<u32> discreteFineCellLength(const double metres) {
-        if (not std::isfinite(metres) or metres < 0.0 or metres > kWorldExtentMetres) {
+    Expected<u32> discreteFineCellLength(const double metres, const u32 world_edge) {
+        if (not sim::isSupportedWorldEdge(world_edge) or
+            not std::isfinite(metres) or
+            metres < 0.0 or
+            metres > static_cast<double>(world_edge) / kFineCellsPerMetre) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyMetric, std::make_error_code(std::errc::invalid_argument));
         }
+
         // Identify the nearest candidate, then require the exact exported
         // boundary. This does not round author input onto the lattice and also
         // avoids rejecting a canonical i/3 whose product rounds below i.
@@ -94,9 +103,11 @@ namespace pP::colony {
     // construction
     // ------------------------------------------------------------------
 
-    Expected<FineCellRect> constructionFootprint(const ConstructionTile tile, const TileExtent extent) {
-        constexpr u32 complete_tiles = sim::kWorldEdge / kFineCellsPerConstructionTile;
-        if (extent.m_width == 0u or
+    Expected<FineCellRect> constructionFootprint(
+        const ConstructionTile tile, const TileExtent extent, const u32 world_edge) {
+        const u32 complete_tiles = world_edge / kFineCellsPerConstructionTile;
+        if (not sim::isSupportedWorldEdge(world_edge) or
+            extent.m_width == 0u or
             extent.m_height == 0u or
             tile.m_x >= complete_tiles or
             tile.m_y >= complete_tiles or
@@ -104,6 +115,7 @@ namespace pP::colony {
             extent.m_height > complete_tiles - tile.m_y) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyMetric, std::make_error_code(std::errc::result_out_of_range));
         }
+
         return FineCellRect{
             {tile.m_x * kFineCellsPerConstructionTile, tile.m_y * kFineCellsPerConstructionTile},
             {(tile.m_x + extent.m_width) * kFineCellsPerConstructionTile,
@@ -111,18 +123,19 @@ namespace pP::colony {
     }
 
     Expected<FineCellRect> constructionDragFootprint(
-        const sim::GlobalCellPos anchor, const sim::GlobalCellPos cursor, const u32 max_fine_edge) {
-        if (max_fine_edge < kFineCellsPerConstructionTile) {
+        const sim::GlobalCellPos anchor, const sim::GlobalCellPos cursor, const u32 max_fine_edge,
+        const u32 world_edge) {
+        if (not sim::isSupportedWorldEdge(world_edge) or max_fine_edge < kFineCellsPerConstructionTile) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyMetric, std::errc::invalid_argument);
         }
 
-        const auto begin = constructionTileOf(anchor);
+        const auto begin = constructionTileOf(anchor, world_edge);
         PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyMetric, begin);
 
-        const auto end = constructionTileOf(cursor);
+        const auto end = constructionTileOf(cursor, world_edge);
         PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyMetric, end);
 
-        constexpr u32 complete_tiles = sim::kWorldEdge / kFineCellsPerConstructionTile;
+        const u32 complete_tiles = world_edge / kFineCellsPerConstructionTile;
         const i32 limit = static_cast<i32>(std::min(max_fine_edge / kFineCellsPerConstructionTile, complete_tiles));
         const auto clamp_axis = [limit](const u32 origin, const u32 target) {
             const i32 from = static_cast<i32>(origin);
@@ -135,18 +148,18 @@ namespace pP::colony {
         const u32 bottom = std::min(begin->m_y, y);
 
         return constructionFootprint(
-            {left, bottom}, {std::max(begin->m_x, x) - left + 1u, std::max(begin->m_y, y) - bottom + 1u});
+            {left, bottom}, {std::max(begin->m_x, x) - left + 1u, std::max(begin->m_y, y) - bottom + 1u}, world_edge);
     }
 
-    Expected<ConstructionTile> constructionTileOf(const sim::GlobalCellPos position) {
-        if (not sim::isInsideWorld(position)) {
+    Expected<ConstructionTile> constructionTileOf(const sim::GlobalCellPos position, const u32 world_edge) {
+        if (not sim::isSupportedWorldEdge(world_edge) or position.m_x >= world_edge or position.m_y >= world_edge) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyMetric, std::make_error_code(std::errc::result_out_of_range));
         }
 
         const ConstructionTile tile{
             position.m_x / kFineCellsPerConstructionTile, position.m_y / kFineCellsPerConstructionTile};
 
-        const auto footprint = constructionFootprint(tile);
+        const auto footprint = constructionFootprint(tile, {}, world_edge);
         PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyMetric, footprint);
         return tile;
     }

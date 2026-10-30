@@ -231,7 +231,8 @@ namespace pP::colony {
             return false;
         }
 
-        void agentNeighbourhood(sim::Registry &registry, Array<sim::ChunkPos> &out, const u32 cells_per_metre) {
+        void agentNeighbourhood(
+            sim::Registry &registry, Array<sim::ChunkPos> &out, const u32 cells_per_metre, const sim::ChunkGrid &grid) {
             for (const auto &[entity, agent]: registry.view<Agent>()) {
                 (void) agent;
                 const sim::BodyState *pose = registry.get<sim::BodyState>(entity);
@@ -239,12 +240,12 @@ namespace pP::colony {
                     continue;
                 }
                 const auto cell = metreToFineCell(
-                    {static_cast<double>(pose->m_x), static_cast<double>(pose->m_y)}, cells_per_metre);
+                    {static_cast<double>(pose->m_x), static_cast<double>(pose->m_y)}, cells_per_metre, grid.edge());
                 if (not cell) {
                     continue;
                 }
                 const sim::ChunkPos home{cell->m_x / sim::kChunkEdge, cell->m_y / sim::kChunkEdge};
-                if (not sim::isInsideChunkGrid(home)) {
+                if (not grid.contains(home)) {
                     continue;
                 }
 
@@ -254,8 +255,8 @@ namespace pP::colony {
                         const i32 ny = static_cast<i32>(home.m_y) + dy;
                         if (nx < 0 or
                             ny < 0 or
-                            static_cast<u32>(nx) >= sim::kChunksPerEdge or
-                            static_cast<u32>(ny) >= sim::kChunksPerEdge) {
+                            static_cast<u32>(nx) >= grid.chunksPerEdge() or
+                            static_cast<u32>(ny) >= grid.chunksPerEdge()) {
                             continue;
                         }
                         const sim::ChunkPos near{static_cast<u32>(nx), static_cast<u32>(ny)};
@@ -298,7 +299,11 @@ namespace pP::colony {
 
     std::error_code ColonyDriver::initPrepared(
         const ColonyDriverDesc &desc, PreparedWorld world, const sim::GenerationExecution *const execution) {
-        if (desc.m_tick_hz == 0u or desc.m_seed != world.descriptor().m_seed or desc.m_agent_count != 1u) {
+        if (desc.m_tick_hz == 0u or
+            desc.m_seed != world.descriptor().m_seed or
+            desc.m_agent_count != 1u or
+            desc.m_world_edge != world.generated().m_grid.edge() or
+            desc.m_world_edge != world.descriptor().m_world_edge) {
             PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, std::errc::invalid_argument);
         }
         const TimeSpan period = TimeSpan{std::chrono::seconds{1}} / desc.m_tick_hz;
@@ -389,8 +394,10 @@ namespace pP::colony {
             return false;
         }
 
+        // The fixed GPU profile retains its maximum column capacity; unused
+        // columns repeat the active edge without sampling another world region.
         for (u32 column = 0u; column < sim::kWorldEdge; ++column) {
-            const double x_m = (static_cast<double>(column) + 0.5) * recipe.m_cell_size_m;
+            const double x_m = (static_cast<double>(std::min(column, grid().edge() - 1u)) + 0.5) * recipe.m_cell_size_m;
             heights[column] = static_cast<float>(sim::generationSurfaceHeight(plan, x_m));
         }
         return true;
@@ -416,6 +423,10 @@ namespace pP::colony {
         PPR_RETURN_ERROR_ON_FAIL(
             ColonyPreparation,
             not m_matter_terminal ? std::error_code{} : std::make_error_code(std::errc::operation_not_permitted));
+
+        PPR_RETURN_ERROR_ON_FAIL(
+            ColonyPreparation,
+            desc.m_world_edge == grid().edge() ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
 
         m_timestep.emplace(period, kMaxSlices, sim::EOverrunPolicy::clamp);
         if (const std::error_code error = registerColonyComponents(m_registry)) [[unlikely]] {
@@ -891,7 +902,7 @@ namespace pP::colony {
             PPR_RETURN_UNEXPECTED_ON_FAIL(
                 ColonyPreparation, validateConstruction(m_colony.grid(), m_registry, resolved, prepared->catalog()));
         } else {
-            PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyPreparation, validateFootprint(resolved));
+            PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyPreparation, validateFootprint(resolved, nullptr, grid().edge()));
         }
 
         const auto entity = recordErrand(m_registry, resolved);
@@ -914,7 +925,7 @@ namespace pP::colony {
         const auto *const prepared = preparedWorld();
 
         PPR_RETURN_UNEXPECTED_ON_FAIL(
-            ColonyPreparation, validateFootprint(print, prepared ? &prepared->catalog() : nullptr));
+            ColonyPreparation, validateFootprint(print, prepared ? &prepared->catalog() : nullptr, grid().edge()));
 
         const auto entity = recordErrand(m_registry, print);
         if (not entity) {
@@ -934,7 +945,7 @@ namespace pP::colony {
         }
         const u64 far_x = static_cast<u64>(min.m_x) + width;
         const u64 far_y = static_cast<u64>(min.m_y) + height;
-        if (far_x > sim::kWorldEdge or far_y > sim::kWorldEdge) {
+        if (far_x > grid().edge() or far_y > grid().edge()) {
             return std::make_error_code(std::errc::invalid_argument);
         }
 
@@ -962,8 +973,8 @@ namespace pP::colony {
         if (not m_timestep) {
             return std::unexpected{std::make_error_code(std::errc::operation_not_permitted)};
         }
-        if (not sim::isInsideWorld(from) or
-            not sim::isInsideWorld(to) or
+        if (not grid().contains(from) or
+            not grid().contains(to) or
             (caps & kPathCapsWalk) == 0u or
             (caps & ~kPathCapsWalk) != 0u) {
             return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
@@ -1071,7 +1082,7 @@ namespace pP::colony {
                 continue;
             }
             const auto position = metreToFineCell(
-                {static_cast<double>(pose->m_x), static_cast<double>(pose->m_y)}, cellsPerMetre());
+                {static_cast<double>(pose->m_x), static_cast<double>(pose->m_y)}, cellsPerMetre(), grid().edge());
             if (not position) {
                 continue;
             }
@@ -1174,7 +1185,7 @@ namespace pP::colony {
 
         if (preparedWorld()) {
             m_colliders = physics::ChunkColliders{
-                {static_cast<float>(kFineCellMetres), 0.0f, 0.0f, sim::kWorldEdge, sim::kWorldEdge}};
+                {static_cast<float>(kFineCellMetres), 0.0f, 0.0f, grid().edge(), grid().edge()}};
         }
         constexpr physics::Scene::Desc desc{
             .m_gravity_x = 0.0f,
@@ -1220,7 +1231,8 @@ namespace pP::colony {
                 PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, context->error());
             }
             const auto &start = prepared->generated().m_start;
-            const auto cell = metreToFineCell({start.m_spawn_x_m, start.m_spawn_y_m});
+            const auto cell = metreToFineCell(
+                {start.m_spawn_x_m, start.m_spawn_y_m}, kFineCellsPerMetre, grid().edge());
             PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, cell);
             const auto entity = m_registry.create();
             const u64 key = (static_cast<u64>(entity.m_generation) << 32u) | entity.m_index;
@@ -1303,7 +1315,7 @@ namespace pP::colony {
         }
 
         Array<sim::ChunkPos> coverage{};
-        agentNeighbourhood(m_registry, coverage, cellsPerMetre());
+        agentNeighbourhood(m_registry, coverage, cellsPerMetre(), grid());
 
         return rebuildChunks(coverage, coverage, kSpawnColliderBudget, context);
     }
@@ -1391,7 +1403,7 @@ namespace pP::colony {
     }
 
     void ColonyDriver::collectColliderInterest(Array<sim::ChunkPos> &needed) {
-        agentNeighbourhood(m_registry, needed, cellsPerMetre());
+        agentNeighbourhood(m_registry, needed, cellsPerMetre(), grid());
     }
 
     void ColonyDriver::setMatterSubmissionObserverForTest(IMatterSubmissionObserverForTest *const observer) noexcept {
@@ -1404,7 +1416,7 @@ namespace pP::colony {
             return;
         }
         Array<sim::ChunkPos> needed{};
-        agentNeighbourhood(m_registry, needed, cellsPerMetre());
+        agentNeighbourhood(m_registry, needed, cellsPerMetre(), grid());
 
         if (not m_step_error) {
             m_step_stage = "colliders";
@@ -1500,6 +1512,10 @@ namespace pP::colony {
     // ------------------------------------------------------------------
 
     std::error_code ColonyDriver::copyColliderChunk(const sim::ChunkPos position, Array<u16> &occupancy) const {
+        PPR_RETURN_ERROR_ON_FAIL(
+            ColonyPreparation,
+            grid().contains(position) ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
+
         occupancy.assign(sim::kCellsPerChunk, u16{});
         const auto cells = grid().residentCells(position);
         if (not cells) {
@@ -1557,20 +1573,20 @@ namespace pP::colony {
         slot.fill(-1);
 
         for (const sim::ChunkPos pos: sorted_needed) {
-            if (not sim::isInsideChunkGrid(pos)) {
+            if (not grid().contains(pos)) {
                 return false;
             }
             need.set(sim::chunkIndexOf(pos));
         }
         for (const sim::ChunkPos pos: m_cached_needed) {
-            if (not sim::isInsideChunkGrid(pos)) {
+            if (not grid().contains(pos)) {
                 return false;
             }
             prev_need.set(sim::chunkIndexOf(pos));
         }
         for (std::size_t index = 0u; index < m_cached_listed.size(); ++index) {
             const sim::ChunkPos pos = m_cached_listed[index];
-            if (not sim::isInsideChunkGrid(pos)) {
+            if (not grid().contains(pos)) {
                 return false;
             }
             const u32 key = sim::chunkIndexOf(pos);
@@ -1581,7 +1597,7 @@ namespace pP::colony {
             kept.set(key);
         }
         for (const sim::ChunkPos pos: dirty) {
-            if (not sim::isInsideChunkGrid(pos)) {
+            if (not grid().contains(pos)) {
                 return false;
             }
             dirt.set(sim::chunkIndexOf(pos));
@@ -1593,15 +1609,15 @@ namespace pP::colony {
         // the exact set the full path computes (seed ∪ one 3x3 ring per seed
         // entry), and key-ascending iteration matches its sort order, so no
         // O(n^2) include scan and no sort are needed here.
-        const auto grow = [&grown](const sim::ChunkPos pos) {
+        const auto grow = [&grown, this](const sim::ChunkPos pos) {
             for (i32 dy = -1; dy <= 1; ++dy) {
                 for (i32 dx = -1; dx <= 1; ++dx) {
                     const i32 nx = static_cast<i32>(pos.m_x) + dx;
                     const i32 ny = static_cast<i32>(pos.m_y) + dy;
                     if (nx < 0 or
                         ny < 0 or
-                        static_cast<u32>(nx) >= sim::kChunksPerEdge or
-                        static_cast<u32>(ny) >= sim::kChunksPerEdge) {
+                        static_cast<u32>(nx) >= grid().chunksPerEdge() or
+                        static_cast<u32>(ny) >= grid().chunksPerEdge()) {
                         continue;
                     }
                     grown.set(sim::chunkIndexOf(sim::ChunkPos{static_cast<u32>(nx), static_cast<u32>(ny)}));
@@ -1615,7 +1631,7 @@ namespace pP::colony {
             grow(pos);
         }
         for (const sim::ChunkPos pos: m_collider_covered) {
-            if (not sim::isInsideChunkGrid(pos)) {
+            if (not grid().contains(pos)) {
                 return false;
             }
             grow(pos);
@@ -1811,8 +1827,8 @@ namespace pP::colony {
                         const i32 ny = static_cast<i32>(pos.m_y) + dy;
                         if (nx < 0 or
                             ny < 0 or
-                            static_cast<u32>(nx) >= sim::kChunksPerEdge or
-                            static_cast<u32>(ny) >= sim::kChunksPerEdge) {
+                            static_cast<u32>(nx) >= grid().chunksPerEdge() or
+                            static_cast<u32>(ny) >= grid().chunksPerEdge()) {
                             continue;
                         }
                         include(sim::ChunkPos{static_cast<u32>(nx), static_cast<u32>(ny)});
@@ -1943,6 +1959,11 @@ namespace pP::colony {
 
     std::error_code ColonyDriver::rebuildReplayColliders(const sim::Snapshot &snapshot) {
         PPR_RETURN_ERROR_ON_FAIL(
+            ColonyPreparation, snapshot.m_world_edge == grid().edge()
+                                   ? std::error_code{}
+                                   : std::make_error_code(std::errc::invalid_argument));
+
+        PPR_RETURN_ERROR_ON_FAIL(
             ColonyPreparation,
             not m_edit ? std::error_code{} : std::make_error_code(std::errc::device_or_resource_busy));
         clearToolState();
@@ -1956,7 +1977,7 @@ namespace pP::colony {
         }
 
         Array<sim::ChunkPos> needed{};
-        agentNeighbourhood(m_registry, needed, cellsPerMetre());
+        agentNeighbourhood(m_registry, needed, cellsPerMetre(), grid());
 
         // Listed below can add a 3x3 ring per entry; budget past it so the
         // call always completes fully (or reports) with no remainder.

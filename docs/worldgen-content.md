@@ -8,8 +8,8 @@ Definition validation does not map, hash, decode or generate mips for binary ima
 
 The pack manifest and asset descriptors use schema **1**. The separate standalone
 numeric-definition envelope remains schema **2**; the internal flattened content
-model is not a pack file format. The World checkpoint envelope is **4**, distinct
-from raw sim snapshot **4**. Old seven-document packs and earlier checkpoint
+model is not a pack file format. The World checkpoint envelope is **6**, distinct
+from raw sim snapshot **5**. Old seven-document packs and earlier checkpoint
 envelopes are rejected rather than adapted. Generator versions remain owned by
 the sim implementation. Historical acceptance below predates this migration.
 
@@ -420,13 +420,34 @@ result to an owned catalog and immutable reproduction descriptor; Colony can
 adopt the complete owner without regenerating. The production job builds and publishes this complete candidate. Full allocation/scratch accounting remains an acceptance measurement.
 
 
+## Map size
+
+`--map-size=1024`, `--map-size=2048` and `--map-size=4096` select the square
+map edge in fine cells; 4096 is the default. The same startup setting is
+`game.map_size` in TOML or `PPR_GAME__MAP_SIZE` in the environment. It applies
+to interactive New Games, Workshop previews and headless generation. Existing
+worlds retain their own dimensions; changing startup settings does not resize a
+checkpoint.
+
+The physical scale stays three cells per metre. Generation scales global site
+spacing, biome distance constraints, start coordinates and surface elevation to
+the selected extent. Optional site counts scale by area while preserving required
+biome occurrences. A bounded authored candidate pool supplies spatial coverage
+before retaining those required sites and the smaller optional budget. Start
+depth scales with the map, with physical headroom for the landing reservation,
+surface variation and clearance.
+Actor dimensions, authored feature footprints, bedrock, boundary
+thickness and guaranteed starting resources keep their physical meaning.
+Checkpoint envelope6 and raw snapshot5 carry the selected bounds and reject
+incompatible dimensions before applying state.
+
 ## Full world checkpoints
 
-The descriptor pipeline uses checkpoint envelope version 4 and rejects earlier
-envelopes. Raw sim snapshot version 4 is a separate format.
+The descriptor pipeline uses checkpoint envelope version 6 and rejects earlier
+envelopes. Raw sim snapshot version 5 is a separate format.
 
-`game.colony.checkpoint` wraps the unchanged low-level sim snapshot v4 in a
-version-4 game envelope (versioned `PPRWGEN1` magic). It stores the exact pack
+`game.colony.checkpoint` wraps the dimensioned low-level sim snapshot v5 in a
+version-6 game envelope (versioned `PPRWGEN1` magic). It stores the exact pack
 schema/generator
 version, profile, unsigned seed, content fingerprint and 3:1 metric, plus the
 sorted numeric-ID/material-key manifest (including reserved vacuum ID 0), biome
@@ -561,7 +582,7 @@ These figures exclude allocator metadata, simultaneous old/new reallocation
 buffers, opaque noise and task allocations, thread stacks, content catalogs,
 physics and GPU storage. They are neither total allocations nor process peak
 memory. Record process peaks separately. These observations do not affect
-persistent checksums and are deliberately absent from checkpoint v4; restored
+persistent checksums and are deliberately absent from checkpoint v6; restored
 checkpoints display allocation observations as unrecorded rather than zero cost.
 
 With `--worldgen-report`, admission observations also report attempted/skipped

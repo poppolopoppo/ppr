@@ -360,6 +360,7 @@ export namespace pP::colony {
         double m_simulated_ms{};
         u32 m_speed{};
         u32 m_resident_chunks{};
+        u32 m_total_chunks{sim::kChunkCount};
         bool m_paused{};
         bool m_has_hover{};
         bool m_has_inspected{};
