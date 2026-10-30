@@ -24,15 +24,19 @@ detection with these suppressions active.
 For a direct executable invocation with the same policy:
 
 ```sh
+ASAN_OPTIONS="${ASAN_OPTIONS:+${ASAN_OPTIONS}:}fast_unwind_on_malloc=0:malloc_context_size=20" \
 VK_LOADER_DISABLE_DYNAMIC_LIBRARY_UNLOADING=1 \
 LSAN_OPTIONS="${LSAN_OPTIONS:+${LSAN_OPTIONS}:}suppressions=$PWD/cmake/sanitizers/nvidia.lsan.supp" \
 out/build/clang-dev/lib/engine/tests/app/engine.tests.app \
   --run-test app/imgui_routing/detached_colors_decode_only_for_srgb_targets_before_interpolation
 ```
 
-Run a direct executable without these environment settings to inspect the
-unsuppressed baseline. Reassess the suppressions when updating the NVIDIA driver;
-new modules or new engine allocations are not covered by this policy.
+For an unsuppressed investigation, remove only the `suppressions` option from
+`LSAN_OPTIONS`, preserving any unrelated LSan options. Retain the slow allocation
+unwinder and `VK_LOADER_DISABLE_DYNAMIC_LIBRARY_UNLOADING=1` so the complete
+caller stack remains attributable. Reassess the suppressions when updating the
+NVIDIA driver; new modules or new engine allocations are not covered by this
+policy.
 
 ## GPU allocation stacks
 
@@ -54,7 +58,30 @@ The interactive game can produce the same DBus-truncated NVIDIA stacks. Its
 Debug run preset preserves inherited `ASAN_OPTIONS` and appends the same unwind
 settings. Direct launches need those settings alongside the loader and
 `LSAN_OPTIONS` values above. No DBus suppression is used; the existing
-NVIDIA-only suppression must match a retained driver caller.
+NVIDIA-only suppression must match a retained driver caller. The direct command
+above includes the unwinder options too; omitting them can turn a covered driver
+allocation into an unexplained DBus-only report.
+
+For an interactive run with arguments, start from the repository root and use
+the staged game directory for runtime assets:
+
+```sh
+ppr_source_dir="$PWD"
+(
+  cd out/build/clang-dev/game || exit
+  ASAN_OPTIONS="${ASAN_OPTIONS:+${ASAN_OPTIONS}:}fast_unwind_on_malloc=0:malloc_context_size=20" \
+  VK_LOADER_DISABLE_DYNAMIC_LIBRARY_UNLOADING=1 \
+  LSAN_OPTIONS="${LSAN_OPTIONS:+${LSAN_OPTIONS}:}suppressions=$ppr_source_dir/cmake/sanitizers/nvidia.lsan.supp" \
+  UBSAN_OPTIONS="${UBSAN_OPTIONS:+${UBSAN_OPTIONS}:}halt_on_error=1:print_stacktrace=1" \
+  ./app.game --auto-exit=180
+)
+```
+
+The follow-up interactive run with suppressions unset retained NVIDIA caller
+frames below `dbus_bus_register` and
+`dbus_connection_send_with_reply_and_block`. It confirms driver ownership of
+those reports; engine code must not call global DBus teardown for that borrowed
+third-party state. The existing NVIDIA-only policy remains unchanged.
 
 Native investigation separated expensive Slang allocation-stack unwinding from
 an unbounded GLFW X11 visibility wait. The local GLFW overlay fixes that wait;
