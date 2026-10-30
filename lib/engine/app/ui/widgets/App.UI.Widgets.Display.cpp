@@ -351,7 +351,9 @@ namespace pP::ui {
             ImVec2{io.DisplaySize.x, io.DisplaySize.y});
         ImGui::SetNextWindowBgAlpha(ui::theme::kFloatingPanelAlpha);
         ui::WindowTitleFont title_font{};
-        const bool visible = ImGui::Begin("Display", &open, ImGuiWindowFlags_NoCollapse);
+        const bool visible = ImGui::Begin(
+            "Display", &open,
+            ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
         title_font.close();
         const DisplayWindowScope window_scope{};
         if (not visible) {
