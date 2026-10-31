@@ -12,8 +12,8 @@ variation_k = 15.0
 [definition.composition.crossbeds]
 order = 10
 field = "dune_beds"
-bed_period_m = 34
-bed_warp_m = 5
+bed_period_m = 24
+bed_warp_m = 4
 bed_dip = 0.16
 
 [definition.composition.crossbeds.materials]
@@ -41,8 +41,8 @@ max = 0.3
 [definition.composition.buried]
 order = 20
 field = "dune_beds"
-bed_period_m = 68
-bed_warp_m = 9
+bed_period_m = 48
+bed_warp_m = 6
 bed_dip = -0.075
 
 [definition.composition.buried.materials]
@@ -77,7 +77,7 @@ material = "rust"
 host_material = "sandstone"
 core_coverage = 0.9
 fringe_coverage = 0.12
-sprinkle_probability = 0.001
+sprinkle_probability = 0.0012
 
 [definition.deposits.rust.depth]
 min = 0.0
@@ -88,12 +88,12 @@ min = -1.0
 max = 1.0
 
 [definition.deposits.rust.blob]
-count = 48
+count = 63
 distortion = 0.12
 
 [definition.deposits.rust.blob.radius]
-min_m = 1.5
-max_m = 4.0
+min_m = 1.2
+max_m = 3.2
 
 [definition.deposits.rust.blob.stretch]
 min = 3.0
@@ -111,7 +111,7 @@ material = "iron_ore"
 host_material = "sandstone"
 core_coverage = 0.97
 fringe_coverage = 0.06
-sprinkle_probability = 0.0005
+sprinkle_probability = 0.00060
 
 [definition.deposits.iron_ore.depth]
 min = 0.12
@@ -122,12 +122,12 @@ min = -1.0
 max = 1.0
 
 [definition.deposits.iron_ore.blob]
-count = 32
+count = 42
 distortion = 0.25
 
 [definition.deposits.iron_ore.blob.radius]
-min_m = 1.0
-max_m = 3.0
+min_m = 0.8
+max_m = 2.4
 
 [definition.deposits.iron_ore.blob.stretch]
 min = 1.0
@@ -139,7 +139,7 @@ max_degrees = 360.0
 
 [definition.pore]
 field = "pore_affinity"
-probability = 0.06
+probability = 0.066
 affinity_min = 0.16
 passes = 3
 
@@ -156,7 +156,7 @@ passes = 7
 adoption = 0.27
 
 [definition.sprinkle]
-probability = 0.045
+probability = 0.05175
 
 [definition.finish]
 passes = 3
@@ -167,7 +167,7 @@ passes = 8
 
 [definition.formation]
 material = "gypsum"
-probability = 0.045
+probability = 0.0540
 length_m = 2.3
 
 [definition.rind]

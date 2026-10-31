@@ -3,7 +3,7 @@ schema_version = 1
 [definition]
 algorithm = "open_simplex2"
 fractal = "fbm"
-frequency_per_metre = 0.01
+frequency_per_metre = 0.014
 octaves = 4
 lacunarity = 2.0
 gain = 0.5

@@ -12,8 +12,8 @@ variation_k = 18.0
 [definition.composition.upper]
 order = 10
 field = "lode_bedding"
-bed_period_m = 78
-bed_warp_m = 18
+bed_period_m = 55
+bed_warp_m = 13
 bed_dip = 0.14
 
 [definition.composition.upper.materials]
@@ -69,7 +69,7 @@ material = "basalt"
 host_material = "granite"
 core_coverage = 0.9
 fringe_coverage = 0.3
-sprinkle_probability = 0.0
+sprinkle_probability = 0.00
 
 [definition.deposits.secondary_host.depth]
 min = 0.0
@@ -80,12 +80,12 @@ min = -1.0
 max = 1.0
 
 [definition.deposits.secondary_host.blob]
-count = 36
+count = 47
 distortion = 0.38
 
 [definition.deposits.secondary_host.blob.radius]
-min_m = 9.0
-max_m = 25.0
+min_m = 7.2
+max_m = 20.0
 
 [definition.deposits.secondary_host.blob.stretch]
 min = 1.0
@@ -101,7 +101,7 @@ material = "iron_ore"
 host_material = "granite"
 core_coverage = 0.97
 fringe_coverage = 0.18
-sprinkle_probability = 0.004
+sprinkle_probability = 0.0048
 
 [definition.deposits.iron_ore.depth]
 min = 0.0
@@ -112,12 +112,12 @@ min = -1.0
 max = 1.0
 
 [definition.deposits.iron_ore.blob]
-count = 60
+count = 78
 distortion = 0.22
 
 [definition.deposits.iron_ore.blob.radius]
-min_m = 2.5
-max_m = 8.0
+min_m = 2.0
+max_m = 6.4
 
 [definition.deposits.iron_ore.blob.stretch]
 min = 1.8
@@ -133,7 +133,7 @@ material = "copper_ore"
 host_material = "granite"
 core_coverage = 0.9
 fringe_coverage = 0.12
-sprinkle_probability = 0.003
+sprinkle_probability = 0.0036
 
 [definition.deposits.copper_ore.depth]
 min = 0.0
@@ -144,12 +144,12 @@ min = -1.0
 max = 1.0
 
 [definition.deposits.copper_ore.blob]
-count = 44
+count = 58
 distortion = 0.22
 
 [definition.deposits.copper_ore.blob.radius]
-min_m = 2.0
-max_m = 6.0
+min_m = 1.6
+max_m = 4.8
 
 [definition.deposits.copper_ore.blob.stretch]
 min = 1.5
@@ -165,7 +165,7 @@ material = "copper"
 host_material = "granite"
 core_coverage = 0.8
 fringe_coverage = 0.05
-sprinkle_probability = 0.002
+sprinkle_probability = 0.0024
 
 [definition.deposits.copper.depth]
 min = 0.0
@@ -176,12 +176,12 @@ min = -1.0
 max = 1.0
 
 [definition.deposits.copper.blob]
-count = 28
+count = 37
 distortion = 0.22
 
 [definition.deposits.copper.blob.radius]
-min_m = 1.0
-max_m = 3.0
+min_m = 0.8
+max_m = 2.4
 
 [definition.deposits.copper.blob.stretch]
 min = 2.0
@@ -197,7 +197,7 @@ material = "iron"
 host_material = "granite"
 core_coverage = 0.85
 fringe_coverage = 0.07
-sprinkle_probability = 0.002
+sprinkle_probability = 0.0024
 
 [definition.deposits.iron.depth]
 min = 0.0
@@ -208,12 +208,12 @@ min = -1.0
 max = 1.0
 
 [definition.deposits.iron.blob]
-count = 32
+count = 42
 distortion = 0.22
 
 [definition.deposits.iron.blob.radius]
-min_m = 1.2
-max_m = 3.5
+min_m = 1.0
+max_m = 2.8
 
 [definition.deposits.iron.blob.stretch]
 min = 2.0
@@ -229,7 +229,7 @@ material = "aluminum"
 host_material = "granite"
 core_coverage = 0.8
 fringe_coverage = 0.08
-sprinkle_probability = 0.002
+sprinkle_probability = 0.0024
 
 [definition.deposits.aluminum.depth]
 min = 0.0
@@ -240,12 +240,12 @@ min = -1.0
 max = 1.0
 
 [definition.deposits.aluminum.blob]
-count = 24
+count = 32
 distortion = 0.22
 
 [definition.deposits.aluminum.blob.radius]
-min_m = 1.5
-max_m = 4.0
+min_m = 1.2
+max_m = 3.2
 
 [definition.deposits.aluminum.blob.stretch]
 min = 1.5
@@ -261,7 +261,7 @@ material = "wolframite"
 host_material = "granite"
 core_coverage = 0.93
 fringe_coverage = 0.1
-sprinkle_probability = 0.002
+sprinkle_probability = 0.0024
 
 [definition.deposits.wolframite.depth]
 min = 0.0
@@ -272,12 +272,12 @@ min = -1.0
 max = 1.0
 
 [definition.deposits.wolframite.blob]
-count = 20
+count = 26
 distortion = 0.22
 
 [definition.deposits.wolframite.blob.radius]
-min_m = 1.2
-max_m = 3.0
+min_m = 1.0
+max_m = 2.4
 
 [definition.deposits.wolframite.blob.stretch]
 min = 1.4
@@ -293,7 +293,7 @@ host_material = "gneiss"
 stage = "detail"
 core_coverage = 0.85
 fringe_coverage = 0.25
-sprinkle_probability = 0.002
+sprinkle_probability = 0.0024
 
 [definition.deposits.ruby.depth]
 min = 0.12
@@ -304,12 +304,12 @@ min = -1.0
 max = 1.0
 
 [definition.deposits.ruby.blob]
-count = 14
+count = 19
 distortion = 0.3
 
 [definition.deposits.ruby.blob.radius]
-min_m = 2.0
-max_m = 4.5
+min_m = 1.6
+max_m = 3.6
 
 [definition.deposits.ruby.blob.stretch]
 min = 1.0
@@ -327,7 +327,7 @@ host_material = "gneiss"
 stage = "detail"
 core_coverage = 0.85
 fringe_coverage = 0.25
-sprinkle_probability = 0.002
+sprinkle_probability = 0.0024
 
 [definition.deposits.emerald.depth]
 min = 0.12
@@ -338,12 +338,12 @@ min = -1.0
 max = 1.0
 
 [definition.deposits.emerald.blob]
-count = 16
+count = 21
 distortion = 0.3
 
 [definition.deposits.emerald.blob.radius]
-min_m = 2.0
-max_m = 5.0
+min_m = 1.6
+max_m = 4.0
 
 [definition.deposits.emerald.blob.stretch]
 min = 1.0
@@ -361,7 +361,7 @@ host_material = "granite"
 stage = "detail"
 core_coverage = 0.85
 fringe_coverage = 0.25
-sprinkle_probability = 0.002
+sprinkle_probability = 0.0024
 
 [definition.deposits.uranium_ore.depth]
 min = 0.12
@@ -372,12 +372,12 @@ min = -1.0
 max = 1.0
 
 [definition.deposits.uranium_ore.blob]
-count = 16
+count = 21
 distortion = 0.3
 
 [definition.deposits.uranium_ore.blob.radius]
-min_m = 2.5
-max_m = 5.5
+min_m = 2.0
+max_m = 4.4
 
 [definition.deposits.uranium_ore.blob.stretch]
 min = 1.0
@@ -395,7 +395,7 @@ material = "autunite"
 host_material = "granite"
 core_coverage = 0.9
 fringe_coverage = 0.3
-sprinkle_probability = 0.002
+sprinkle_probability = 0.0024
 
 [definition.deposits.autunite.depth]
 min = 0.2
@@ -406,12 +406,12 @@ min = -1.0
 max = 1.0
 
 [definition.deposits.autunite.blob]
-count = 14
+count = 19
 distortion = 0.35
 
 [definition.deposits.autunite.blob.radius]
-min_m = 1.5
-max_m = 3.5
+min_m = 1.2
+max_m = 2.8
 
 [definition.deposits.autunite.blob.stretch]
 min = 1.0
@@ -423,7 +423,7 @@ max_degrees = 360.0
 
 [definition.pore]
 field = "pore_affinity"
-probability = 0.05
+probability = 0.055
 affinity_min = 0.22
 passes = 3
 
@@ -440,7 +440,7 @@ passes = 9
 adoption = 0.26
 
 [definition.sprinkle]
-probability = 0.055
+probability = 0.06325
 
 [definition.finish]
 passes = 3
@@ -451,7 +451,7 @@ passes = 8
 
 [definition.formation]
 material = "clear_quartz"
-probability = 0.035
+probability = 0.0420
 length_m = 2.7
 
 [definition.rind]

@@ -12,8 +12,8 @@ variation_k = 8.0
 [definition.composition.cover]
 order = 10
 field = "hearth_bedding"
-bed_period_m = 48
-bed_warp_m = 7
+bed_period_m = 34
+bed_warp_m = 5
 bed_dip = 0.035
 
 [definition.composition.cover.materials]
@@ -41,8 +41,8 @@ max = 0.22
 [definition.composition.basin]
 order = 20
 field = "hearth_bedding"
-bed_period_m = 82
-bed_warp_m = 12
+bed_period_m = 57
+bed_warp_m = 8
 bed_dip = -0.02
 
 [definition.composition.basin.materials]
@@ -77,7 +77,7 @@ material = "dirt"
 host_material = "sandstone"
 core_coverage = 0.9
 fringe_coverage = 0.3
-sprinkle_probability = 0.0
+sprinkle_probability = 0.00
 
 [definition.deposits.secondary_host.depth]
 min = 0.0
@@ -88,12 +88,12 @@ min = -1.0
 max = 1.0
 
 [definition.deposits.secondary_host.blob]
-count = 48
+count = 63
 distortion = 0.38
 
 [definition.deposits.secondary_host.blob.radius]
-min_m = 5.0
-max_m = 13.0
+min_m = 4.0
+max_m = 10.4
 
 [definition.deposits.secondary_host.blob.stretch]
 min = 1.0
@@ -109,7 +109,7 @@ material = "clay"
 host_material = "sandstone"
 core_coverage = 0.95
 fringe_coverage = 0.22
-sprinkle_probability = 0.004
+sprinkle_probability = 0.0048
 
 [definition.deposits.clay.depth]
 min = 0.0
@@ -120,12 +120,12 @@ min = -1.0
 max = 1.0
 
 [definition.deposits.clay.blob]
-count = 60
+count = 78
 distortion = 0.22
 
 [definition.deposits.clay.blob.radius]
-min_m = 2.5
-max_m = 8.0
+min_m = 2.0
+max_m = 6.4
 
 [definition.deposits.clay.blob.stretch]
 min = 1.2
@@ -141,7 +141,7 @@ material = "copper_ore"
 host_material = "sandstone"
 core_coverage = 0.9
 fringe_coverage = 0.1
-sprinkle_probability = 0.003
+sprinkle_probability = 0.0036
 
 [definition.deposits.copper_ore.depth]
 min = 0.0
@@ -152,12 +152,12 @@ min = -1.0
 max = 1.0
 
 [definition.deposits.copper_ore.blob]
-count = 44
+count = 58
 distortion = 0.22
 
 [definition.deposits.copper_ore.blob.radius]
-min_m = 2.0
-max_m = 6.0
+min_m = 1.6
+max_m = 4.8
 
 [definition.deposits.copper_ore.blob.stretch]
 min = 1.3
@@ -173,7 +173,7 @@ material = "coal"
 host_material = "sandstone"
 core_coverage = 0.88
 fringe_coverage = 0.18
-sprinkle_probability = 0.003
+sprinkle_probability = 0.0036
 
 [definition.deposits.coal.depth]
 min = 0.0
@@ -184,12 +184,12 @@ min = -1.0
 max = 1.0
 
 [definition.deposits.coal.blob]
-count = 36
+count = 47
 distortion = 0.22
 
 [definition.deposits.coal.blob.radius]
-min_m = 3.0
-max_m = 9.0
+min_m = 2.4
+max_m = 7.2
 
 [definition.deposits.coal.blob.stretch]
 min = 1.4
@@ -205,7 +205,7 @@ material = "algae"
 host_material = "sandstone"
 core_coverage = 0.7
 fringe_coverage = 0.08
-sprinkle_probability = 0.002
+sprinkle_probability = 0.0024
 
 [definition.deposits.algae.depth]
 min = 0.0
@@ -216,12 +216,12 @@ min = -1.0
 max = 1.0
 
 [definition.deposits.algae.blob]
-count = 32
+count = 42
 distortion = 0.22
 
 [definition.deposits.algae.blob.radius]
-min_m = 2.0
-max_m = 5.0
+min_m = 1.6
+max_m = 4.0
 
 [definition.deposits.algae.blob.stretch]
 min = 1.0
@@ -237,7 +237,7 @@ host_material = "sandstone"
 stage = "detail"
 core_coverage = 0.85
 fringe_coverage = 0.25
-sprinkle_probability = 0.002
+sprinkle_probability = 0.0024
 
 [definition.deposits.azurite.depth]
 min = 0.12
@@ -248,12 +248,12 @@ min = -1.0
 max = 1.0
 
 [definition.deposits.azurite.blob]
-count = 14
+count = 19
 distortion = 0.3
 
 [definition.deposits.azurite.blob.radius]
-min_m = 2.5
-max_m = 5.5
+min_m = 2.0
+max_m = 4.4
 
 [definition.deposits.azurite.blob.stretch]
 min = 1.0
@@ -265,7 +265,7 @@ max_degrees = 360.0
 
 [definition.pore]
 field = "pore_affinity"
-probability = 0.055
+probability = 0.0605
 affinity_min = 0.08
 passes = 3
 
@@ -282,7 +282,7 @@ passes = 8
 adoption = 0.32
 
 [definition.sprinkle]
-probability = 0.08
+probability = 0.0920
 
 [definition.finish]
 passes = 3
@@ -293,7 +293,7 @@ passes = 8
 
 [definition.formation]
 material = "clay"
-probability = 0.045
+probability = 0.0540
 length_m = 2.0
 
 [definition.rind]

@@ -3,11 +3,11 @@ schema_version = 1
 [definition]
 algorithm = "cellular_value"
 fractal = "none"
-frequency_per_metre = 0.018
+frequency_per_metre = 0.0252
 octaves = 3
 lacunarity = 2.0
 gain = 0.5
-warp_amplitude_m = 28.0
+warp_amplitude_m = 31.7
 warp_frequency_per_metre = 0.022
 axis_scale_x = 1.15
 axis_scale_y = 0.85

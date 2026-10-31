@@ -41,8 +41,8 @@ max = 0.38
 [definition.composition.buried]
 order = 20
 field = "lode_bedding"
-bed_period_m = 74
-bed_warp_m = 30
+bed_period_m = 52
+bed_warp_m = 21
 bed_dip = 0.065
 
 [definition.composition.buried.materials]
@@ -77,7 +77,7 @@ material = "coal"
 host_material = "slime"
 core_coverage = 0.88
 fringe_coverage = 0.2
-sprinkle_probability = 0.002
+sprinkle_probability = 0.0024
 
 [definition.deposits.coal.depth]
 min = 0.0
@@ -88,12 +88,12 @@ min = -1.0
 max = 1.0
 
 [definition.deposits.coal.blob]
-count = 50
+count = 65
 distortion = 0.28
 
 [definition.deposits.coal.blob.radius]
-min_m = 2.0
-max_m = 5.0
+min_m = 1.6
+max_m = 4.0
 
 [definition.deposits.coal.blob.stretch]
 min = 2.0
@@ -111,7 +111,7 @@ material = "shale"
 host_material = "clay"
 core_coverage = 0.98
 fringe_coverage = 0.3
-sprinkle_probability = 0.001
+sprinkle_probability = 0.0012
 
 [definition.deposits.shale.depth]
 min = 0.15
@@ -122,12 +122,12 @@ min = -1.0
 max = 1.0
 
 [definition.deposits.shale.blob]
-count = 38
+count = 50
 distortion = 0.23
 
 [definition.deposits.shale.blob.radius]
-min_m = 3.0
-max_m = 7.0
+min_m = 2.4
+max_m = 5.6
 
 [definition.deposits.shale.blob.stretch]
 min = 1.5
@@ -139,7 +139,7 @@ max_degrees = 25.0
 
 [definition.pore]
 field = "pore_affinity"
-probability = 0.17
+probability = 0.187
 affinity_min = -0.12
 passes = 3
 
@@ -156,7 +156,7 @@ passes = 10
 adoption = 0.4
 
 [definition.sprinkle]
-probability = 0.1
+probability = 0.115
 
 [definition.finish]
 passes = 3
@@ -167,7 +167,7 @@ passes = 8
 
 [definition.formation]
 material = "slime"
-probability = 0.12
+probability = 0.144
 length_m = 3.2
 
 [definition.rind]

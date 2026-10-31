@@ -12,8 +12,8 @@ variation_k = 100.0
 [definition.composition.flows]
 order = 10
 field = "lava_flows"
-bed_period_m = 61
-bed_warp_m = 14
+bed_period_m = 43
+bed_warp_m = 10
 bed_dip = 0.07
 
 [definition.composition.flows.materials]
@@ -41,8 +41,8 @@ max = 0.9
 [definition.composition.basement]
 order = 20
 field = "lava_flows"
-bed_period_m = 102
-bed_warp_m = 24
+bed_period_m = 71
+bed_warp_m = 17
 bed_dip = -0.055
 
 [definition.composition.basement.materials]
@@ -77,7 +77,7 @@ material = "glass"
 host_material = "obsidian"
 core_coverage = 0.96
 fringe_coverage = 0.18
-sprinkle_probability = 0.0
+sprinkle_probability = 0.00
 
 [definition.deposits.glass.depth]
 min = 0.0
@@ -88,12 +88,12 @@ min = -1.0
 max = 1.0
 
 [definition.deposits.glass.blob]
-count = 36
+count = 47
 distortion = 0.2
 
 [definition.deposits.glass.blob.radius]
-min_m = 2.0
-max_m = 5.0
+min_m = 1.6
+max_m = 4.0
 
 [definition.deposits.glass.blob.stretch]
 min = 1.5
@@ -111,7 +111,7 @@ material = "iron"
 host_material = "basalt"
 core_coverage = 0.93
 fringe_coverage = 0.05
-sprinkle_probability = 0.0005
+sprinkle_probability = 0.00060
 
 [definition.deposits.iron.depth]
 min = 0.0
@@ -122,12 +122,12 @@ min = -1.0
 max = 1.0
 
 [definition.deposits.iron.blob]
-count = 30
+count = 39
 distortion = 0.3
 
 [definition.deposits.iron.blob.radius]
-min_m = 1.0
-max_m = 3.0
+min_m = 0.8
+max_m = 2.4
 
 [definition.deposits.iron.blob.stretch]
 min = 1.0
@@ -145,7 +145,7 @@ material = "obsidian"
 host_material = "basalt"
 core_coverage = 0.9
 fringe_coverage = 0.3
-sprinkle_probability = 0.0
+sprinkle_probability = 0.00
 
 [definition.deposits.dikes.depth]
 min = 0.12
@@ -156,12 +156,12 @@ min = -1.0
 max = 1.0
 
 [definition.deposits.dikes.blob]
-count = 24
+count = 32
 distortion = 0.35
 
 [definition.deposits.dikes.blob.radius]
-min_m = 2.0
-max_m = 4.5
+min_m = 1.6
+max_m = 3.6
 
 [definition.deposits.dikes.blob.stretch]
 min = 4
@@ -179,7 +179,7 @@ material = "fluorite"
 host_material = "obsidian"
 core_coverage = 0.9
 fringe_coverage = 0.3
-sprinkle_probability = 0.002
+sprinkle_probability = 0.0024
 
 [definition.deposits.fluorite.depth]
 min = 0.2
@@ -190,12 +190,12 @@ min = -1.0
 max = 1.0
 
 [definition.deposits.fluorite.blob]
-count = 14
+count = 19
 distortion = 0.35
 
 [definition.deposits.fluorite.blob.radius]
-min_m = 2.5
-max_m = 5.0
+min_m = 2.0
+max_m = 4.0
 
 [definition.deposits.fluorite.blob.stretch]
 min = 1
@@ -207,7 +207,7 @@ max_degrees = 360
 
 [definition.pore]
 field = "pore_affinity"
-probability = 0.095
+probability = 0.1045
 affinity_min = 0.06
 passes = 3
 
@@ -224,7 +224,7 @@ passes = 9
 adoption = 0.28
 
 [definition.sprinkle]
-probability = 0.045
+probability = 0.05175
 
 [definition.finish]
 passes = 3
@@ -235,7 +235,7 @@ passes = 8
 
 [definition.formation]
 material = "obsidian"
-probability = 0.075
+probability = 0.0900
 length_m = 3.8
 
 [definition.rind]

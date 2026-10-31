@@ -12,8 +12,8 @@ variation_k = 12.0
 [definition.composition.upper]
 order = 10
 field = "karst_bedding"
-bed_period_m = 42
-bed_warp_m = 9
+bed_period_m = 29
+bed_warp_m = 6
 bed_dip = -0.055
 
 [definition.composition.upper.materials]
@@ -41,8 +41,8 @@ max = 0.26
 [definition.composition.lower]
 order = 20
 field = "karst_bedding"
-bed_period_m = 66
-bed_warp_m = 15
+bed_period_m = 46
+bed_warp_m = 11
 bed_dip = 0.025
 
 [definition.composition.lower.materials]
@@ -77,7 +77,7 @@ material = "dolomite"
 host_material = "limestone"
 core_coverage = 0.9
 fringe_coverage = 0.3
-sprinkle_probability = 0.0
+sprinkle_probability = 0.00
 
 [definition.deposits.secondary_host.depth]
 min = 0.0
@@ -88,12 +88,12 @@ min = -1.0
 max = 1.0
 
 [definition.deposits.secondary_host.blob]
-count = 42
+count = 55
 distortion = 0.38
 
 [definition.deposits.secondary_host.blob.radius]
-min_m = 7.0
-max_m = 19.0
+min_m = 5.6
+max_m = 15.2
 
 [definition.deposits.secondary_host.blob.stretch]
 min = 1.0
@@ -109,7 +109,7 @@ material = "crystal"
 host_material = "limestone"
 core_coverage = 0.92
 fringe_coverage = 0.12
-sprinkle_probability = 0.003
+sprinkle_probability = 0.0036
 
 [definition.deposits.crystal.depth]
 min = 0.0
@@ -120,12 +120,12 @@ min = -1.0
 max = 1.0
 
 [definition.deposits.crystal.blob]
-count = 48
+count = 63
 distortion = 0.22
 
 [definition.deposits.crystal.blob.radius]
-min_m = 2.0
-max_m = 7.0
+min_m = 1.6
+max_m = 5.6
 
 [definition.deposits.crystal.blob.stretch]
 min = 1.0
@@ -141,7 +141,7 @@ material = "diamond"
 host_material = "limestone"
 core_coverage = 0.88
 fringe_coverage = 0.05
-sprinkle_probability = 0.001
+sprinkle_probability = 0.0012
 
 [definition.deposits.diamond.depth]
 min = 0.0
@@ -152,12 +152,12 @@ min = -1.0
 max = 1.0
 
 [definition.deposits.diamond.blob]
-count = 18
+count = 24
 distortion = 0.22
 
 [definition.deposits.diamond.blob.radius]
-min_m = 0.8
-max_m = 2.5
+min_m = 0.6
+max_m = 2.0
 
 [definition.deposits.diamond.blob.stretch]
 min = 1.0
@@ -167,7 +167,7 @@ max = 1.8
 
 [definition.pore]
 field = "pore_affinity"
-probability = 0.15
+probability = 0.165
 affinity_min = -0.08
 passes = 3
 
@@ -184,7 +184,7 @@ passes = 8
 adoption = 0.3
 
 [definition.sprinkle]
-probability = 0.085
+probability = 0.09775
 
 [definition.finish]
 passes = 3
@@ -195,7 +195,7 @@ passes = 8
 
 [definition.formation]
 material = "calcite"
-probability = 0.14
+probability = 0.168
 length_m = 5.5
 
 [definition.rind]
