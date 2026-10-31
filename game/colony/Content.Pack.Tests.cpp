@@ -19,6 +19,7 @@ import game.colony.digtool;
 import game.colony.buildings;
 import game.colony.agents;
 import game.colony.pathfinding;
+import game.colony.sim_packet;
 import game.application;
 import std;
 
@@ -720,6 +721,35 @@ namespace pP::game::tests::detail::pack {
             retained = present(catalog, diagnostics, asset::RequestGeneration{7u});
             PPR_TEST_ASSERT(retained->catalog() == catalog and retained->generation() == asset::RequestGeneration{7u});
             PPR_TEST_ASSERT(retained->textures().size() == 2u);
+
+            const auto *const sandstone = catalog->findMaterial("sandstone");
+            const auto *const water = catalog->findMaterial("water");
+            PPR_TEST_ASSERT(sandstone != nullptr and water != nullptr);
+            PPR_TEST_ASSERT(
+                sandstone->m_phase == EMaterialPhase::solid and
+                sandstone->m_representation == EMaterialRepresentation::terrain);
+            PPR_TEST_ASSERT(water->m_phase == EMaterialPhase::liquid);
+
+            const auto packet = captureCatalogPresentation(
+                *retained, kWorld, catalog->findMaterial("basalt")->m_numeric_id, 3u, 1.0);
+            PPR_TEST_ASSERT(packet.has_value());
+            GridStagedFrame stage{};
+            PPR_TEST_ASSERT(not buildGridStagedFrame(*packet, stage));
+
+            // Dug terrain retains the original element ID when it becomes
+            // particles, so its shading flag follows phase rather than storage.
+            const auto solid_visual = std::ranges::find(
+                stage.m_terrain_visuals, sandstone->m_numeric_id, &GridTerrainVisual::m_material_id);
+            const auto liquid_visual = std::ranges::find(
+                stage.m_terrain_visuals, water->m_numeric_id, &GridTerrainVisual::m_material_id);
+            PPR_TEST_ASSERT(solid_visual != stage.m_terrain_visuals.end());
+            PPR_TEST_ASSERT(liquid_visual != stage.m_terrain_visuals.end());
+            PPR_TEST_ASSERT(
+                (solid_visual->m_surface_flags & kGridSurfaceParticleSolid) != 0u and
+                (solid_visual->m_surface_flags & kGridSurfaceParticleLiquid) == 0u);
+            PPR_TEST_ASSERT(
+                (liquid_visual->m_surface_flags & kGridSurfaceParticleLiquid) != 0u and
+                (liquid_visual->m_surface_flags & kGridSurfaceParticleSolid) == 0u);
 
             for (const auto &texture: retained->textures()) {
                 PPR_TEST_ASSERT(texture.m_image.m_width == 4u and texture.m_image.m_height == 4u);

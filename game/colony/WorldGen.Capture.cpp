@@ -204,8 +204,10 @@ namespace pP::colony {
                     const auto snapshot = camera.getSnapshot();
                     const auto viewport = rhi::Viewport::fromSize(float(kCaptureEdge), float(kCaptureEdge));
                     const auto scissor = rhi::ScissorRect::fromSize(kCaptureEdge, kCaptureEdge);
-                    const auto prepare = [&](const PreRenderContext &context) {
-                        return m_pass.prepareBackground(context, snapshot, viewport, scissor);
+                    const auto prepare = [&](const PreRenderContext &context) -> std::error_code {
+                        PPR_RETURN_ERROR_ON_FAIL(
+                            WorldCapture, m_pass.prepareBackground(context, snapshot, viewport, scissor));
+                        return m_pass.prepareGpuParticles(context);
                     };
                     const auto draw = [&](const DrawContext &context) -> std::error_code {
                         PPR_RETURN_ERROR_ON_FAIL(WorldCapture, m_pass.renderBackground(context));
