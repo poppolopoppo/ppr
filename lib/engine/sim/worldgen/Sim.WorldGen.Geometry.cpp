@@ -372,6 +372,14 @@ namespace pP::sim {
                     })) {
                     continue;
                 }
+
+                // A biome without a layout site is simply absent from this
+                // world; omit its deposits instead of failing generation.
+                if (std::ranges::none_of(
+                        layout.sites(), [b](const GenerationSite &site) { return site.m_biome == b; })) {
+                    continue;
+                }
+
                 PPR_RETURN_ERROR_ON_FAIL(WorldGeometry, canceled(context));
                 const auto province_regions = blobOriginRegions(plan, layout, b, context);
                 PPR_RETURN_ERROR_ON_FAIL(WorldGeometry, province_regions);
@@ -517,6 +525,15 @@ namespace pP::sim {
                 if (layout.sampleBiome() and worm->m_biome != *layout.sampleBiome()) {
                     continue;
                 }
+
+                // A worm rule for a biome that received no site has nothing to
+                // carve; omit it rather than exhausting its origin search.
+                if (std::ranges::none_of(layout.sites(), [biome = worm->m_biome](const GenerationSite &site) {
+                        return site.m_biome == biome;
+                    })) {
+                    continue;
+                }
+
                 // One-metre maximum steps; the final step retains authored
                 // sub-metre lengths rather than rounding them onto the grid.
                 const double segment_count = std::ceil(worm->m_length_max_m);

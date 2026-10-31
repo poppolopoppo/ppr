@@ -2375,6 +2375,11 @@ thickness_fine = 1
             deposit.m_value.m_blob = definition::DepositBlob{17u, {1.0, 2.0}, {1.25, 2.0}, {30.0, 90.0}, 0.2};
             source.m_biomes.m_entries.front().m_value.m_deposits.m_entries.push_back(std::move(deposit));
 
+            auto &profile = source.m_worlds.m_entries.front().m_value;
+            profile.m_boundaries.m_warp_amplitude_m = 28.0;
+            source.m_biomes.m_entries.push_back({"remote", source.m_biomes.m_entries.front().m_value});
+            profile.m_biomes.m_entries.push_back({"remote", {{"remote"}, 2u, 1.0, {0.0, 1.0}, 70.0, 2048.0}});
+
             auto &connection_source = std::get<definition::Connection>(
                 source.m_worlds.m_entries.front().m_value.m_rules.m_entries[3u].m_value.m_payload);
             connection_source.m_extra_links = 0u;
@@ -2398,8 +2403,23 @@ thickness_fine = 1
                 PPR_TEST_ASSERT(recipe.m_start_y_fine == 3000u * edge / kWorldEdge);
 
                 const auto &placement = std::get<GenerationPlacement>(recipe.m_rules[4u].m_parameters);
-                PPR_TEST_ASSERT(placement.m_spacing_m == 10.0 * edge / kWorldEdge);
-                PPR_TEST_ASSERT(placement.m_min_count == 1u and placement.m_max_count == (edge == 4096u ? 2u : 1u));
+                PPR_TEST_ASSERT(placement.m_spacing_m == 10.0);
+                PPR_TEST_ASSERT(placement.m_min_count == (edge == 4096u ? 1u : 0u));
+                PPR_TEST_ASSERT(placement.m_max_count == (edge == 4096u ? 2u : 1u));
+
+                PPR_TEST_ASSERT(recipe.m_site_spacing_m == 100.0 and recipe.m_boundary_warp_amplitude_m == 28.0);
+                PPR_TEST_ASSERT(recipe.m_min_sites == (edge == 1024u ? 1u : (edge == 2048u ? 2u : 4u)));
+                PPR_TEST_ASSERT(recipe.m_max_sites == (edge == 1024u ? 1u : (edge == 2048u ? 4u : 16u)));
+                PPR_TEST_ASSERT(recipe.m_fields.front().m_noise.m_frequency_per_metre == 0.025);
+                for (const auto &constraint: recipe.m_constraints) {
+                    const bool start = constraint.m_biome == recipe.m_start_biome;
+                    const u32 expected_required = edge == 1024u
+                                                      ? 0u
+                                                      : (edge == 2048u ? (start ? 0u : 1u) : (start ? 1u : 2u));
+                    PPR_TEST_ASSERT(constraint.m_required_count == expected_required);
+                    PPR_TEST_ASSERT(constraint.m_distance_min_m == (start ? 0.0 : 70.0));
+                    PPR_TEST_ASSERT(constraint.m_distance_max_m == std::min(2048.0, 2.0 * edge / 3.0));
+                }
 
                 const auto &connection = std::get<GenerationConnection>(recipe.m_rules[3u].m_parameters);
                 PPR_TEST_ASSERT(
@@ -2444,6 +2464,127 @@ thickness_fine = 1
                 invalid_candidates.m_site_candidate_limit = candidate_limit;
                 PPR_TEST_ASSERT(not compileGenerationPlan(std::move(invalid_candidates), 42u));
             }
+        };
+
+        PPR_UNIT_TEST (density_profile_site_budgets_follow_authored_totals) {
+            const std::array<std::string_view, 11u> names{
+                "plain", "verdant", "mire", "dunes", "rime", "lode", "karst", "saltworks", "fumaroles", "petroleum",
+                "ember"};
+            const std::array<std::pair<double, double>, 11u> depths{
+                std::pair{0.0, 0.42}, {0.04, 0.45}, {0.18, 0.65}, {0.02, 0.46}, {0.02, 0.48}, {0.36, 0.78}, {0.2, 0.74},
+                {0.22, 0.72}, {0.56, 0.92}, {0.63, 0.94}, {0.82, 1.0}};
+            const std::array<double, 11u> distances{0.0, 70.0, 80.0, 90.0, 100.0, 90.0, 60.0, 80.0, 90.0, 100.0, 110.0};
+
+            // The numeric fixture carries the shipped layout populations and
+            // eligibility windows without depending on game-owned pack loading.
+            for (const bool hollows: {false, true}) {
+                auto source = recipeDefinition();
+                auto &profile = source.m_worlds.m_entries.front().m_value;
+                profile.m_layout = hollows ? definition::Layout{135u, 170u, 100u, 72.0}
+                                           : definition::Layout{120u, 150u, 100u, 80.0};
+                profile.m_biomes.m_entries.clear();
+                for (u32 i = 0u; i < names.size(); ++i) {
+                    if (i != 0u) {
+                        source.m_biomes.m_entries.push_back(
+                            {std::string{names[i]}, source.m_biomes.m_entries.front().m_value});
+                    }
+
+                    const bool broad = hollows and (i == 2u or i == 6u or i == 7u);
+                    const u32 required = hollows ? (broad ? 2u : 1u) : (i == 0u or i == 5u ? 2u : 1u);
+                    const double minimum_distance = hollows and i == 6u
+                                                        ? 50.0
+                                                        : (hollows and (i == 2u or i == 7u) ? 70.0 : distances[i]);
+                    profile.m_biomes.m_entries.push_back(
+                        {std::string{names[i]}, {{std::string{names[i]}}, required, 1.0,
+                                                    {broad ? 0.12 : depths[i].first, broad ? 0.82 : depths[i].second},
+                                                    minimum_distance, 2048.0}});
+                }
+
+                for (const u32 edge: {1024u, 2048u, 4096u}) {
+                    auto parameters = recipeParameters();
+                    parameters.m_world_edge = edge;
+                    config::Diagnostics diagnostics;
+                    const auto compiled = definition::compileRecipe(source, {"frontier"}, parameters, diagnostics);
+                    PPR_TEST_ASSERT(compiled and not diagnostics.hasErrors());
+
+                    const auto &recipe = compiled->m_recipe;
+                    const u32 expected_min = hollows ? (edge == 1024u ? 8u : (edge == 2048u ? 34u : 135u))
+                                                     : (edge == 1024u ? 8u : (edge == 2048u ? 30u : 120u));
+                    const u32 expected_max = hollows ? (edge == 1024u ? 11u : (edge == 2048u ? 43u : 170u))
+                                                     : (edge == 1024u ? 9u : (edge == 2048u ? 38u : 150u));
+                    PPR_TEST_ASSERT(recipe.m_min_sites == expected_min and recipe.m_max_sites == expected_max);
+                    PPR_TEST_ASSERT(recipe.m_site_spacing_m == (hollows ? 72.0 : 80.0));
+
+                    const u64 seed_count = edge == 1024u ? 8u : 1u;
+                    for (u64 seed = 0u; seed < seed_count; ++seed) {
+                        const auto plan = compileGenerationPlan(recipe, seed);
+                        PPR_TEST_ASSERT(plan.has_value());
+                        const auto layout = compileBiomeLayout(*plan);
+                        PPR_TEST_ASSERT(layout and layout->sites().size() == expected_max);
+                        PPR_TEST_ASSERT(layout->sites().front().m_biome == recipe.m_start_biome);
+                    }
+                }
+            }
+        };
+
+        PPR_UNIT_TEST (absent_biome_omits_geometry_but_present_empty_deposit_fails) {
+            auto recipe = numericRecipe();
+            recipe.m_world_edge = 1024u;
+            recipe.m_start_x_fine = 500u;
+            recipe.m_start_y_fine = 750u;
+            recipe.m_constraints.front().m_distance_max_m = 512.0;
+            auto absent = recipe.m_biomes.front();
+            absent.m_key = 204u;
+            absent.m_deposits.push_back(
+                {.m_key = 501u,
+                    .m_material = 17u,
+                    .m_host = 17u,
+                    .m_depth_min = 0.999,
+                    .m_depth_max = 1.0,
+                    .m_threshold_min = -1.0,
+                    .m_threshold_max = 1.0,
+                    .m_shape = EGenerationDepositShape::blob,
+                    .m_blob_count = 1u,
+                    .m_radius_min_m = 1.0,
+                    .m_radius_max_m = 2.0});
+            recipe.m_biomes.push_back(std::move(absent));
+            recipe.m_constraints.push_back({402u, 1u, 0u, 1.0, 0.0, 1.0, 0.0, 512.0});
+            recipe.m_rules = {
+                {.m_key = 601u,
+                    .m_phase = EGenerationPhase::carve,
+                    .m_parameters =
+                        GenerationWorm{
+                            .m_biome = 1u,
+                            .m_count = 1u,
+                            .m_depth_max = 1.0,
+                            .m_length_min_m = 10.0,
+                            .m_length_max_m = 10.0,
+                            .m_radius_min_m = 1.0,
+                            .m_radius_max_m = 1.0,
+                            .m_carve = true}},
+                {.m_key = 602u,
+                    .m_phase = EGenerationPhase::stamp,
+                    .m_parameters = GenerationPlacement{
+                        .m_biome = 1u, .m_max_count = 1u, .m_attempts = 1u, .m_depth_max = 1.0}}};
+            const auto plan = compileGenerationPlan(recipe, 42u);
+            PPR_TEST_ASSERT(plan.has_value());
+
+            const std::array absent_sites{GenerationSite{515.5 / 3.0, 760.5 / 3.0, 0u}};
+            const auto absent_layout = restoreBiomeLayout(*plan, absent_sites);
+            PPR_TEST_ASSERT(absent_layout.has_value());
+            const auto geometry = compileGenerationGeometry(*plan, *absent_layout);
+            PPR_TEST_ASSERT(geometry.has_value());
+            PPR_TEST_ASSERT(geometry->m_blobs.empty() and geometry->m_segments.empty());
+            PPR_TEST_ASSERT(geometry->m_instances.size() == 1u and geometry->m_omitted_instances == Array<u32>{1u});
+
+            // A site makes the biome present, but this deposit lies entirely
+            // below the physical border. That remains a hard error.
+            const std::array present_sites{absent_sites.front(), GenerationSite{100.0, 100.0, 1u}};
+            const auto present_layout = restoreBiomeLayout(*plan, present_sites);
+            PPR_TEST_ASSERT(present_layout.has_value());
+            const auto exhausted = compileGenerationGeometry(*plan, *present_layout);
+            PPR_TEST_ASSERT(
+                not exhausted and exhausted.error() == make_error_code(EGenerationErrc::constraints_exhausted));
         };
 
         PPR_UNIT_TEST (moving_particle_endpoints_follow_selected_world_extent) {
@@ -4572,6 +4713,8 @@ namespace pP::tests {
             detail::WorldGen::generation_random_has_fixed_full_width_streams,
             detail::WorldGen::numeric_plan_owns_recipe_and_isolates_field_streams,
             detail::WorldGen::selected_world_recipe_scales_layout_and_preserves_physical_contracts,
+            detail::WorldGen::density_profile_site_budgets_follow_authored_totals,
+            detail::WorldGen::absent_biome_omits_geometry_but_present_empty_deposit_fails,
             detail::WorldGen::small_world_raster_visits_only_selected_chunks_and_replays,
             detail::WorldGen::compact_required_geometry_completes_a_narrow_legal_origin_without_more_random_attempts,
             detail::WorldGen::moving_particle_endpoints_follow_selected_world_extent,

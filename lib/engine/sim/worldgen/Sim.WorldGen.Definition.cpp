@@ -1387,21 +1387,34 @@ namespace pP::sim::definition {
             return static_cast<u32>(std::ceil(count * scale * scale));
         };
 
-        // Adapt world-scale layout to the selected extent. Physical cells,
-        // actors, authored features and required resources retain their sizes.
+        const auto scaledCount = [&](const u32 count) {
+            if (parameters.m_world_edge == kWorldEdge) {
+                return count;
+            }
+
+            const double scale = static_cast<double>(parameters.m_world_edge) / kWorldEdge;
+            return static_cast<u32>(std::lround(static_cast<double>(count) * scale * scale));
+        };
+
+        // Physical layout dimensions keep their authored metre scale at every
+        // extent; populations follow area and the vertical frame follows edge length.
         if (parameters.m_world_edge != kWorldEdge) {
             const double scale = static_cast<double>(parameters.m_world_edge) / kWorldEdge;
+            const double distance_cap_m = 2.0 * parameters.m_world_edge * parameters.m_cell_size_m;
+
+            for (auto &constraint: recipe.m_constraints) {
+                constraint.m_required_count = scaledCount(constraint.m_required_count);
+                constraint.m_distance_max_m = std::min(constraint.m_distance_max_m, distance_cap_m);
+            }
+
             // The fixed start consumes one slot; its authored requirement, when
             // present, already accounts for that same occurrence.
             u32 mandatory_sites = 1u;
-            for (auto &constraint: recipe.m_constraints) {
+            for (const auto &constraint: recipe.m_constraints) {
                 mandatory_sites += constraint.m_required_count;
                 if (constraint.m_biome == recipe.m_start_biome and constraint.m_required_count > 0u) {
                     --mandatory_sites;
                 }
-
-                constraint.m_distance_min_m *= scale;
-                constraint.m_distance_max_m *= scale;
             }
 
             for (auto &biome: recipe.m_biomes) {
@@ -1414,8 +1427,6 @@ namespace pP::sim::definition {
             recipe.m_start_y_fine = static_cast<u32>(recipe.m_start_y_fine * scale);
             recipe.m_surface_elevation_m *= scale;
             recipe.m_surface_amplitude_m *= scale;
-            recipe.m_boundary_warp_amplitude_m *= scale;
-            recipe.m_site_spacing_m *= scale;
 
             if (recipe.m_start_depth_m) {
                 double depth = *recipe.m_start_depth_m * scale;
@@ -1437,11 +1448,9 @@ namespace pP::sim::definition {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(WorldDefinition, validation.m_first);
             }
 
+            recipe.m_min_sites = std::max(mandatory_sites, scaledCount(recipe.m_min_sites));
+            recipe.m_max_sites = std::max(recipe.m_min_sites, scaledCount(recipe.m_max_sites));
             recipe.m_site_candidate_limit = recipe.m_max_sites;
-            const u32 optional_min = recipe.m_min_sites > mandatory_sites ? recipe.m_min_sites - mandatory_sites : 0u;
-            const u32 optional_max = recipe.m_max_sites - mandatory_sites;
-            recipe.m_min_sites = mandatory_sites + static_cast<u32>(std::ceil(optional_min * scale * scale));
-            recipe.m_max_sites = mandatory_sites + static_cast<u32>(std::ceil(optional_max * scale * scale));
         }
 
         // Pass one fixes every enabled rule's final index before any rule-to-rule lookup.
@@ -1500,12 +1509,10 @@ namespace pP::sim::definition {
                             payload.m_max_count, payload.m_attempts, payload.m_priority, payload.m_depth.m_min,
                             payload.m_depth.m_max, payload.m_spacing_m, payload.m_reflect};
                         if (parameters.m_world_edge != kWorldEdge) {
-                            const double scale = static_cast<double>(parameters.m_world_edge) / kWorldEdge;
-                            placement.m_spacing_m *= scale;
-                            placement.m_max_count =
-                                placement.m_min_count +
-                                static_cast<u32>(
-                                    std::floor((placement.m_max_count - placement.m_min_count) * scale * scale));
+                            placement.m_min_count = scaledCount(placement.m_min_count);
+                            placement.m_max_count = payload.m_max_count == 0u
+                                                        ? 0u
+                                                        : std::max(1u, scaledCount(placement.m_max_count));
                         }
 
                         numeric = placement;

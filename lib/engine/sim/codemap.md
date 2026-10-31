@@ -46,22 +46,30 @@ World edge is explicit per `ChunkGrid`, `GenerationRecipe` and
 defaulting to 4096. Chunk size stays 128. Maximum constants and stride-32 chunk
 IDs remain stable addressing vocabulary; instance `contains`, `edge`,
 `chunksPerEdge` and `chunkCount` define active bounds. Generation traverses only
-active chunks. Authored world-scale layout adapts to the selected edge while
-physical cells, actors, features and required resources retain their sizes.
-Authored start depth scales as global placement on compact maps, with a lower
-bound that clears the unchanged starting reservation, worst surface variation
-and physical clearance. Canonical subsurface/biome validation still rejects
-infeasible profiles; bedrock and actor dimensions remain physical quantities.
+active chunks. Authored horizontal layout dimensions retain their physical metre scale at every
+extent: site spacing, boundary warp, biome distance minima and feature spacing
+stay fixed. Biome distance maxima clamp to twice the selected world width.
+Authored start coordinates, surface elevation/amplitude and start depth scale
+with edge length to remain in frame; start depth has a lower bound that clears
+the unchanged starting reservation, worst surface variation and physical
+clearance. Depth composition bands remain normalized, so their physical heights
+shrink on compact maps while bed periods and field frequencies stay fixed.
+Canonical subsurface/biome validation still rejects infeasible profiles;
+bedrock and actor dimensions remain physical quantities.
 Global worm/blob populations and connection anchor/link/well/branch counts scale
-by selected area, rounding positive populations up; zero remains zero. Optional
-feature quotas scale down by area while every authored minimum remains required.
-Placement spacing scales with map edge, but physical lengths, radii, reservation
-footprints, noise frequencies and resource guarantees remain unchanged.
-Compact authored layouts retain mandatory occurrences plus area-scaled optional
-sites. An explicit bounded `m_site_candidate_limit` preserves the authored spatial
-candidate pool for requirement matching before retention; zero uses `m_max_sites`
-for existing numeric/default callers. Retention rebuilds bins before weighted
-optional assignment and preserves required labels.
+by selected area, rounding positive populations up; zero remains zero. Required
+biome occurrences, feature minima/maxima and total site budgets scale by area
+with nearest-integer rounding. The start biome always consumes one site; site
+budgets are floored at the mandatory total, and an authored nonzero feature
+maximum retains a quota of at least one instance. Small maps can lack biomes:
+absent-biome deposits and worms are skipped, optional feature failures record
+omissions, and a present biome with an empty deposit region still fails.
+Layout candidates must be eligible for a biome before admission. An explicit
+bounded `m_site_candidate_limit` can preserve a larger spatial candidate pool
+for requirement matching before retention; zero uses `m_max_sites` for numeric
+callers. Lowered compact profiles use the scaled maximum as their candidate
+limit. Retention rebuilds bins and preserves required labels before weighted
+optional assignment.
 Snapshot version 5 stores world edge after version, rejects unsupported edges
 and inactive stable chunk IDs, and refuses cross-size application before mutation.
 Particle validation accepts an explicit edge; moving endpoints remain closed at

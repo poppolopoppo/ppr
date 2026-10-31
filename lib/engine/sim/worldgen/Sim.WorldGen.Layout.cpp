@@ -439,6 +439,18 @@ namespace pP::sim {
                     continue;
                 }
 
+                // Every site must be hostable by at least one biome, otherwise
+                // a small map could admit a site that no depth/distance window
+                // accepts and lose the whole layout to it.
+                const GenerationSite proposal{x, y, 0u};
+                const bool hostable = std::ranges::any_of(
+                    recipe.m_constraints, [&](const GenerationBiomeConstraint &constraint) {
+                        return eligible(constraint, proposal, layout.m_sites.front(), plan);
+                    });
+                if (not hostable) {
+                    continue;
+                }
+
                 active.push_back(static_cast<u32>(layout.m_sites.size()));
                 layout.append({x, y, (std::numeric_limits<u32>::max)()});
                 admitted = true;
