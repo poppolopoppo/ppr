@@ -176,6 +176,8 @@ namespace pP {
         PPR_RETURN_ERROR_ON_FAIL(GridPass, createVisibilityPrograms_(shader_service, device, content_dir));
         PPR_RETURN_ERROR_ON_FAIL(GridPass, createOpticalPrograms_(shader_service, device, content_dir));
         PPR_RETURN_ERROR_ON_FAIL(GridPass, createGpuParticlePrograms_(shader_service, device, content_dir));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, createFluidPrograms_(shader_service, device, content_dir));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, createSolidPrograms_(shader_service, device, content_dir));
 
         m_ready = true;
         initialization_complete = true;
@@ -351,25 +353,29 @@ namespace pP {
                 return std::isfinite(value) and value >= lo and value <= hi;
             };
             PPR_RETURN_ERROR_ON_FAIL(
-                GridPass,
-                in_range(visual.m_metallic, 0.0f, 1.0f) and
-                        in_range(visual.m_roughness, 0.0f, 1.0f) and
-                        in_range(visual.m_opacity, 0.0f, 1.0f) and
-                        in_range(visual.m_ior, 1.0f, 3.0f) and
-                        in_range(visual.m_normal_scale, 0.0f, 4.0f) and
-                        in_range(visual.m_refraction_depth_m, 0.0f, 1.0f) and
-                        in_range(visual.m_emissive_rgb[0], 0.0f, 1.0f) and
-                        in_range(visual.m_emissive_rgb[1], 0.0f, 1.0f) and
-                        in_range(visual.m_emissive_rgb[2], 0.0f, 1.0f) and
-                        std::isfinite(visual.m_emissive_strength) and
-                        visual.m_emissive_strength >= 0.0f and
-                        (visual.m_surface_flags & ~(kGridSurfaceOpticalBlend | kGridSurfaceTextureRepeat)) == 0u and
-                        (visual.m_normal_texture_index == 0xffffffffu or
-                            (visual.m_normal_texture_index < stage.m_terrain_images.size() and
-                                stage.m_terrain_images[visual.m_normal_texture_index].m_format ==
-                                    image::ENativeImageFormat::rgba8_linear))
-                    ? std::error_code{}
-                    : std::make_error_code(std::errc::invalid_argument));
+                GridPass, in_range(visual.m_metallic, 0.0f, 1.0f) and
+                                  in_range(visual.m_roughness, 0.0f, 1.0f) and
+                                  in_range(visual.m_opacity, 0.0f, 1.0f) and
+                                  in_range(visual.m_ior, 1.0f, 3.0f) and
+                                  in_range(visual.m_normal_scale, 0.0f, 4.0f) and
+                                  in_range(visual.m_refraction_depth_m, 0.0f, 1.0f) and
+                                  in_range(visual.m_emissive_rgb[0], 0.0f, 1.0f) and
+                                  in_range(visual.m_emissive_rgb[1], 0.0f, 1.0f) and
+                                  in_range(visual.m_emissive_rgb[2], 0.0f, 1.0f) and
+                                  std::isfinite(visual.m_emissive_strength) and
+                                  visual.m_emissive_strength >= 0.0f and
+                                  (visual.m_surface_flags & ~(kGridSurfaceOpticalBlend |
+                                                                kGridSurfaceTextureRepeat |
+                                                                kGridSurfaceParticleSolid |
+                                                                kGridSurfaceParticleLiquid)) == 0u and
+                                  (visual.m_surface_flags & (kGridSurfaceParticleSolid | kGridSurfaceParticleLiquid)) !=
+                                      (kGridSurfaceParticleSolid | kGridSurfaceParticleLiquid) and
+                                  (visual.m_normal_texture_index == 0xffffffffu or
+                                      (visual.m_normal_texture_index < stage.m_terrain_images.size() and
+                                          stage.m_terrain_images[visual.m_normal_texture_index].m_format ==
+                                              image::ENativeImageFormat::rgba8_linear))
+                              ? std::error_code{}
+                              : std::make_error_code(std::errc::invalid_argument));
             PPR_RETURN_ERROR_ON_FAIL(
                 GridPass, visual.m_material_id > 0u and
                                   visual.m_material_id < 0xffffu and
@@ -2758,6 +2764,10 @@ namespace pP {
         const PreRenderContext &context, const CameraSnapshot &camera, const rhi::Viewport &viewport,
         const rhi::ScissorRect &scissor) {
         m_background_ready = false;
+        m_background_camera = camera;
+        m_background_viewport = viewport;
+        m_background_scissor = scissor;
+
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass, m_ready ? std::error_code{} : std::make_error_code(std::errc::not_connected));
         reclaimCompleted_(context.m_completed_fence_value);
@@ -2952,6 +2962,12 @@ namespace pP {
         m_gpu_particle_program.setNull();
         m_particle_prepare_programs = {};
         m_world.m_gpu_particles.reset();
+        m_fluid_splat_pipelines = {};
+        m_fluid_filter_pipeline.setNull();
+        m_fluid_programs = {};
+        m_solid_splat_pipelines = {};
+        m_solid_programs = {};
+        m_particle_timing_queries.setNull();
         m_background_pipeline.reset();
         m_background_copy_pipeline.reset();
         m_background_key.reset();

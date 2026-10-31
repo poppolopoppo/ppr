@@ -1,3 +1,6 @@
+#include "grid_liquid_kernel.slang"
+#include "grid_solid_kernel.slang"
+
 // Continuous GPU circle presentation; no terrain bins or occupancy geometry.
 struct NumericalRow { float positionX, positionY; float carried[14]; };
 struct ReadonlyRow { float mass, volume, material, r, g, b; };
@@ -77,9 +80,10 @@ void scanLane(uint lane, uint value) {
 }
 
 bool visible(PresentationRow particle) {
-    // Texture support extends by2/62 beyond the disk radius for its transparent
-    // border; conservatively cull the complete camera-facing quad.
-    float radius=particle.radius*(64.0/62.0)*1.4142135623730951;
+    // Enclose every liquid billboard and world-XY solid support quad, including
+    // their corners. No phase can disappear before its silhouette leaves view.
+    float support = max(kLiquidSupport, kSolidSupport * kSolidApothemPerRadius);
+    float radius=particle.radius*support*1.4142135623730951;
     for (uint plane=0u;plane<6u;++plane) {
         float4 p=g_particle_prepare.planes[plane];
         if (dot(float4(particle.position,0,1),p)+radius*length(p.xyz)<0) return false;

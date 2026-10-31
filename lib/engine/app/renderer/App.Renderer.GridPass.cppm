@@ -61,6 +61,8 @@ export namespace pP {
     // bundle's source images; they are distinct from terrain material IDs.
     inline constexpr u32 kGridSurfaceOpticalBlend = 1u;
     inline constexpr u32 kGridSurfaceTextureRepeat = 2u;
+    inline constexpr u32 kGridSurfaceParticleSolid = 4u;
+    inline constexpr u32 kGridSurfaceParticleLiquid = 8u;
 
     struct alignas(16) GridTerrainVisual {
         u32 m_material_id{};
@@ -435,6 +437,12 @@ export namespace pP {
             return {particles.m_packed.get(), slot.m_args.get(), slot.m_ids.get()};
         }
 
+        // Diagnostic-only timestamp pairs: pack/cull, element splat, density
+        // splat, filter, composite, ordinary particles. The caller permits one
+        // instrumented frame in flight and resets/reads after its exact fence.
+        [[nodiscard]] std::error_code setParticleTimingQueriesForTest(
+            rhi::ComPtr<rhi::IQueryPool> queries, FenceCompletionValue completed);
+
         // Infallible teardown: clears staged submissions, tile cache, and
         // counters, then releases GPU objects; always returns success.
         [[nodiscard]] std::error_code shutdown();
@@ -635,9 +643,33 @@ export namespace pP {
             bool m_dirty{};
         };
 
+        // Each completed particle slot owns its screen-space fluid attachments
+        // and roots. Resize never replaces resources still read by another slot.
+        struct FluidSlot {
+            std::array<rhi::ComPtr<rhi::ITexture>, 4u> m_textures{};
+            std::array<rhi::ComPtr<rhi::ITextureView>, 4u> m_views{};
+            std::array<rhi::ComPtr<rhi::IShaderObject>, 4u> m_roots{};
+            rhi::ComPtr<rhi::IRenderPipeline> m_composite_pipeline{};
+            std::optional<RenderPipelineKey> m_composite_key{};
+            u32 m_width{}, m_height{};
+        };
+
+        // Solids retain their own occupancy and nearest-element attachments
+        // alongside liquids until both surfaces have been composited.
+        struct SolidSlot {
+            std::array<rhi::ComPtr<rhi::ITexture>, 3u> m_textures{};
+            std::array<rhi::ComPtr<rhi::ITextureView>, 3u> m_views{};
+            std::array<rhi::ComPtr<rhi::IShaderObject>, 3u> m_roots{};
+            rhi::ComPtr<rhi::IRenderPipeline> m_composite_pipeline{};
+            std::optional<RenderPipelineKey> m_composite_key{};
+            u32 m_width{}, m_height{};
+        };
+
         struct GpuParticleSlot {
             rhi::ComPtr<rhi::IBuffer> m_ids{}, m_args{};
             std::optional<GridParticleGpuView> m_reader{};
+            std::unique_ptr<FluidSlot> m_fluid{};
+            std::unique_ptr<SolidSlot> m_solid{};
         };
 
         struct GpuParticleStorage {
@@ -668,6 +700,16 @@ export namespace pP {
         [[nodiscard]] std::error_code createGpuParticlePrograms_(
             IShaderService &service, rhi::IDevice &device, const std::filesystem::path &content_dir);
         [[nodiscard]] std::error_code ensureParticleMask_(rhi::IDevice &device);
+        [[nodiscard]] std::error_code createFluidPrograms_(
+            IShaderService &service, rhi::IDevice &device, const std::filesystem::path &content_dir);
+        [[nodiscard]] std::error_code prepareFluidSurface_(const PreRenderContext &context);
+        [[nodiscard]] std::error_code renderFluidSurface_(const DrawContext &context, u32 slot);
+        [[nodiscard]] bool hasLiquidParticles_() const noexcept;
+        [[nodiscard]] std::error_code createSolidPrograms_(
+            IShaderService &service, rhi::IDevice &device, const std::filesystem::path &content_dir);
+        [[nodiscard]] std::error_code prepareSolidSurface_(const PreRenderContext &context);
+        [[nodiscard]] std::error_code renderSolidSurface_(const DrawContext &context, u32 slot);
+        [[nodiscard]] bool hasSolidParticles_() const noexcept;
         [[nodiscard]] std::error_code ensureGpuParticleStorage_(rhi::IDevice &device, u32 count);
         [[nodiscard]] std::error_code renderGpuParticles_(const DrawContext &context);
         void prepareChunkSlotMap_(bool retained_table);
@@ -746,6 +788,12 @@ export namespace pP {
         rhi::ComPtr<rhi::IShaderProgram> m_gpu_particle_program{};
         std::optional<RenderPipelineKey> m_gpu_particle_key{};
         std::optional<GridCachedPipeline> m_gpu_particle_pipeline{};
+        std::array<rhi::ComPtr<rhi::IShaderProgram>, 4u> m_fluid_programs{};
+        std::array<rhi::ComPtr<rhi::IRenderPipeline>, 2u> m_fluid_splat_pipelines{};
+        rhi::ComPtr<rhi::IComputePipeline> m_fluid_filter_pipeline{};
+        std::array<rhi::ComPtr<rhi::IShaderProgram>, 3u> m_solid_programs{};
+        std::array<rhi::ComPtr<rhi::IRenderPipeline>, 2u> m_solid_splat_pipelines{};
+        rhi::ComPtr<rhi::IQueryPool> m_particle_timing_queries{};
         bool m_visibility_prepared{false};
 
 

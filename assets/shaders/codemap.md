@@ -13,6 +13,14 @@ unresolved/incomplete paths through the existing transaction error buffer.
 Its terrain-local rounded-leg helper protects two FP32 operations on the pinned
 Slang compiler; source/core arithmetic and resource layouts are unchanged.
 
+Production Sand additionally retains a unilateral objective-volume affine impulse
+and uses terrain Coulomb friction0.5 at grid and swept endpoint contacts. The
+legacy volume flag gates the impulse for Sand as well as liquid. Sand gathers
+its separate contact displacement for both translation and APIC; liquids and
+other materials retain the base contact path. The extra shared tile is512 bytes
+per64-thread group, with no new device allocation or ABI. See the shader README
+for the fixed K2 gain, contact ordering and grid-scale density limitations.
+
 ## Responsibility
 
 Slang shader assets for application render passes. `mesh_bindless.slang` is the
@@ -30,13 +38,48 @@ barriers and drawing share one encoder and submission.
 
 ## Design
 
-`grid_particle_prepare.slang` is GridPass-owned resident-particle presentation,
-with reflected numerical64/metadata64/packed32/frame144 byte protocols. It
-requires an explicitly admitted D3D12 FP64 device for exact metric conversion.
-Stable ten-bit chunk radix partitions preserve metadata ID order without
-reordering solver storage; a bounded hierarchical scan produces ordered visible
-IDs and indirect arguments entirely on GPU. `grid_tiles.slang` shares one
-particle geometry helper between direct and indirect vertex entries.
+`grid_particle_prepare.slang` is GridPass-owned resident-particle presentation:
+numerical64/readonly24/metadata32/packed32/frame128 byte protocols. Packing uses
+the committed hot/cold row identity and physical metric; three stable visibility
+scan/compaction dispatches produce ordered IDs and indirect arguments without
+reordering solver storage. Conservative culling encloses both the liquid kernel
+and angular solid support, using `grid_liquid_kernel.slang` and
+`grid_solid_kernel.slang`. `grid_tiles.slang` shares the particle quad helper.
+
+Solid entries `vertexSolidSplat`, `fragmentSolidMaterial`,
+`fragmentSolidCoverage` and `fragmentSolidComposite` reconstruct world-XY
+octagonal grains. Equal-area apothem and a separate calibrated solid support
+retain angular silhouettes without changing physical inventory. Occupancy sums
+all solid elements; nearest normalized grain distance selects one material ID
+per field texel. Native composition bilinearly filters categorical coverage,
+shading each distinct neighboring material once and mixing premultiplied linear
+color. Empty labels are excluded and weights renormalized; the independent
+occupancy mask retains the silhouette. Uniform interiors shade once. Composition invokes the exact terrain
+`materialSurface` path with explicit world gradients, including authored normals
+and optical properties. There is no liquid smoothing/height-normal treatment in
+this lane. Solid and liquid fields remain separate until composition; both use
+coherent displaced-contour derivatives before varying rejection and defer
+terrain/material work until occupied pixels survive. Gases keep their sampled
+disk alpha and cold/palette RGB. Liquid entries `vertexFluidSplat`,
+`fragmentFluidMaterial`, `fragmentFluidThickness`, `vertexFluidComposite` and
+`fragmentFluidComposite` reconstruct a connected 2D optical surface. Closest
+normalized kernel distance selects one element; accumulation and filtering never
+mix distinct elements. Raw/filtered fields use R32Float to remain finite for
+up to 1M overlapping particles. `grid_fluid_filter.slang` owns `filterLiquid`, an
+8x8-thread shared-memory, element-guided 5x5 compute filter with a 16-byte frame.
+The composite reconstructs the bounded half-resolution field bilinearly, preserving
+immiscible boundaries, and evaluates world-plane intersections per fragment.
+A bounded optical height derived from density supplies rounded normals without
+another texture. Shared support, amplitude and isolevel preserve kernel mass and
+the isolated radius while filling deformed sampling gaps. Empty field pixels
+skip convolution after the group barrier; empty composite pixels skip field and
+terrain queries after coherent displaced-contour derivative preparation. Fresnel and reflection use the per-fragment camera ray;
+roughness controls a stylized sky/key response and nearby backdrop reflections.
+Authored depth drives stronger refraction, limited to twelve screen pixels;
+reflection has its own twenty-four-pixel bound. Terrain occlusion, material
+opacity/IOR/roughness/emissive and the optical backdrop remain shared contracts. Resource extents, costs and fence ownership
+are recorded in the renderer codemap. No solver state or CPU particle readback
+is required by presentation.
 
 - `mesh_bindless.slang` uses PPR's row-major, row-vector convention: transforms call
   `mul(vector, matrix)`, never `mul(matrix, vector)`. View-projection remains `view * projection`.

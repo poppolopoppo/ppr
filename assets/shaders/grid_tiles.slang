@@ -1,3 +1,6 @@
+#include "grid_liquid_kernel.slang"
+#include "grid_solid_kernel.slang"
+
 // Grid tile pass: flat tinted or per-cell quads, one instance per visible chunk-sized
 // tile. Row-major, row-vector convention: transforms call
 // mul(vector, matrix), never mul(matrix, vector). View-projection remains
@@ -94,6 +97,8 @@ struct TerrainVisual {
 };
 static const uint kSurfaceOpticalBlend = 1u;
 static const uint kSurfaceTextureRepeat = 2u;
+static const uint kSurfaceParticleSolid = 4u;
+static const uint kSurfaceParticleLiquid = 8u;
 StructuredBuffer<TerrainVisual> g_terrain_visuals;
 Texture2D<float4> g_boundary_noise;
 // Written before the surface pass; this is never the active color attachment.
@@ -901,36 +906,429 @@ ParticleVertexOutput vertexParticleIndirectMain(uint vertex:SV_VertexID,uint ins
     return particleVertex(vertex,g_particle_ids[instance]);
 }
 
+// ------------------------------------------------------------------
+// particle occlusion and element shading
+// ------------------------------------------------------------------
+
+struct ParticleTerrainFootprint {
+    float2 contour;
+    float2 pixel_x;
+    float2 pixel_y;
+    float width;
+};
+
+// Prepare all derivatives coherently, including the displaced contour, before
+// rejecting empty pixels. The expensive terrain stencil can then be deferred.
+ParticleTerrainFootprint particleTerrainFootprint(float2 fine_position, SamplerState.Handle g_sampler) {
+    float2 contour = fine_position;
+    float2 world_pixel_x = ddx(contour), world_pixel_y = ddy(contour);
+    if ((g_grid_frame.m_surface_mode & 3u) == 3u) {
+        contour += boundaryDisplacement(fine_position, world_pixel_x, world_pixel_y, g_sampler);
+    }
+
+    ParticleTerrainFootprint footprint;
+    footprint.contour = contour;
+    footprint.pixel_x = ddx(contour);
+    footprint.pixel_y = ddy(contour);
+    footprint.width = clamp(length(fwidth(contour)), 1.0e-6, 1.0);
+    return footprint;
+}
+
+float particleTerrainCoverage(ParticleTerrainFootprint footprint) {
+    float coverage = 0, outline = 0;
+    int2 sample = int2(floor(footprint.contour));
+    if ((g_grid_frame.m_surface_mode & 1u) != 0u) {
+        TerrainStencil stencil = terrainStencil(footprint.contour);
+        contourMaterial(footprint.contour, footprint.pixel_x, footprint.pixel_y, footprint.width,
+            stencil, coverage, sample, outline);
+    } else {
+        uint terrain = terrainSample(sample);
+        coverage = terrain != 0u && terrain != 0xffffu ? 1.0 : 0.0;
+    }
+    return coverage;
+}
+
 [shader("fragment")]
 float4 fragmentParticleMain(ParticleVertexOutput input,
     uniform StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
     uniform SamplerState.Handle g_sampler):SV_Target {
+    // Phase is constant over each primitive: both reconstructed surfaces are already drawn.
+    TerrainVisual visual = g_terrain_visuals[input.material];
+    if ((visual.m_surface_flags & (kSurfaceParticleLiquid | kSurfaceParticleSolid)) != 0u) discard;
+
+    ParticleTerrainFootprint footprint = particleTerrainFootprint(input.fine_position, g_sampler);
     // Actual alpha texture, with filtered mip levels. No analytic circle mask.
     float alpha=g_particle_mask.Sample(g_particle_mask_sampler,input.uv).a;
     if (alpha==0) discard;
 
-    float2 contour=input.fine_position;
-    float2 world_pixel_x=ddx(contour),world_pixel_y=ddy(contour);
-    if ((g_grid_frame.m_surface_mode&3u)==3u) {
-        contour+=boundaryDisplacement(input.fine_position,world_pixel_x,world_pixel_y,g_sampler);
-    }
+    float coverage = particleTerrainCoverage(footprint);
+    if (coverage == 1.0) discard;
 
-    float2 pixel_x=ddx(contour),pixel_y=ddy(contour);
-    float width=clamp(length(fwidth(contour)),1.0e-6,1.0);
-    float coverage=0,outline=0;
-    int2 sample=int2(floor(contour));
-    if ((g_grid_frame.m_surface_mode&1u)!=0u) {
-        TerrainStencil stencil=terrainStencil(contour);
-        contourMaterial(contour,pixel_x,pixel_y,width,stencil,coverage,sample,outline);
-    } else {
-        uint terrain=terrainSample(sample);
-        coverage=terrain!=0u && terrain!=0xffffu ? 1.0 : 0.0;
-    }
-    if (coverage==1.0) discard;
-
-    TerrainVisual visual=g_terrain_visuals[input.material];
     float materialAlpha=float(visual.m_color_rgba&255u)/255.0;
     // Straight-alpha RGB comes directly from Cold24 (gas uses its catalog RGB).
     // Blend once over the already drawn terrain/background, preserving overlap.
     return float4(input.color.rgb,alpha*input.color.a*materialAlpha*visual.m_opacity*(1.0-coverage));
+}
+
+// ------------------------------------------------------------------
+// two-dimensional screen-space liquid reconstruction
+// ------------------------------------------------------------------
+
+Texture2D<uint> g_fluid_material;
+Texture2D<float> g_fluid_surface;
+
+[shader("vertex")]
+ParticleVertexOutput vertexFluidSplat(uint vertex : SV_VertexID, uint instance : SV_InstanceID) {
+    ParticleVertexOutput output = particleVertex(vertex, g_particle_ids[instance]);
+    ParticleGpu particle = g_particles[g_particle_ids[instance]];
+    // The shared kernel calibration keeps the isolated silhouette at radius r.
+    float2 offset = (output.uv * 2.0 - 1.0) * (kLiquidSupport * particle.m_radius_m);
+    float3 right = normalize(mul(float4(1,0,0,0), g_grid_frame.m_inverse_view_projection).xyz);
+    float3 up = normalize(mul(float4(0,1,0,0), g_grid_frame.m_inverse_view_projection).xyz);
+    float3 world = float3(particle.m_position, 0.0) + right * offset.x + up * offset.y;
+    output.position = mul(float4(world, 1.0), g_grid_frame.m_view_projection);
+    output.fine_position = world.xy / g_grid_frame.m_cell_size_m;
+    return output;
+}
+
+float liquidKernel(ParticleVertexOutput input) {
+    if ((g_terrain_visuals[input.material].m_surface_flags & kSurfaceParticleLiquid) == 0u) discard;
+    float2 q = input.uv * 2.0 - 1.0;
+    float squared = dot(q, q);
+    if (squared >= 1.0) discard;
+    return kLiquidAmplitude * pow(1.0 - squared, 3.0);
+}
+
+struct LiquidMaterialOutput {
+    uint material : SV_Target;
+    float depth : SV_Depth;
+};
+
+[shader("fragment")]
+LiquidMaterialOutput fragmentFluidMaterial(ParticleVertexOutput input) {
+    liquidKernel(input);
+    LiquidMaterialOutput output;
+    output.material = input.material;
+    // This depth is local kernel distance, solely for selecting the closest
+    // element in the offscreen field. It never enters scene depth or physics.
+    float2 q = input.uv * 2.0 - 1.0;
+    output.depth = min(dot(q, q), 0.999999);
+    return output;
+}
+
+[shader("fragment")]
+float fragmentFluidThickness(ParticleVertexOutput input) : SV_Target {
+    float kernel = liquidKernel(input);
+    if (g_fluid_material.Load(int3(int2(input.position.xy), 0)) != input.material) discard;
+    // Optical fields of different elements never accumulate into one another.
+    return kernel;
+}
+
+[shader("vertex")]
+ParticleVertexOutput vertexFluidComposite(uint vertex : SV_VertexID) {
+    float2 uv = float2((vertex << 1u) & 2u, vertex & 2u);
+    float2 ndc = uv * float2(2.0, -2.0) + float2(-1.0, 1.0);
+    ParticleVertexOutput output = {};
+    output.position = float4(ndc, 0.0, 1.0);
+    output.fine_position = float2(0.0);
+    output.uv = uv;
+    return output;
+}
+
+float2 liquidFinePosition(float2 uv, out float3 view_direction) {
+    float2 ndc = uv * float2(2.0, -2.0) + float2(-1.0, 1.0);
+    float4 near_h = mul(float4(ndc, 0.0, 1.0), g_grid_frame.m_inverse_view_projection);
+    float4 far_h = mul(float4(ndc, 1.0, 1.0), g_grid_frame.m_inverse_view_projection);
+    float3 a = near_h.xyz / near_h.w, b = far_h.xyz / far_h.w;
+    float3 delta = b - a;
+    // The optical height faces the viewer on either side of the 2D plane.
+    // Its XY axes stay in world space; positive optical Z points toward camera.
+    float3 optical_view = float3(-delta.xy, abs(delta.z));
+    view_direction = dot(optical_view, optical_view) > 1.0e-12 ? normalize(optical_view) : float3(0.0, 0.0, 1.0);
+    float t = abs(delta.z) > 1.0e-8 ? -a.z / delta.z : 0.0;
+    return (a + t * delta).xy / g_grid_frame.m_cell_size_m;
+}
+
+float liquidField(int2 pixel, uint material, int2 extent) {
+    pixel = clamp(pixel, int2(0), extent - 1);
+    return g_fluid_material.Load(int3(pixel, 0)) == material
+        ? g_fluid_surface.Load(int3(pixel, 0)) : 0.0;
+}
+
+// Reconstruct the half-resolution field continuously in native rendering.
+// All four taps retain the selected element, including at immiscible interfaces.
+float liquidFieldBilinear(float2 coordinate, uint material, int2 extent) {
+    int2 base = int2(floor(coordinate));
+    float2 fraction = frac(coordinate);
+    float4 weights = float4((1.0-fraction.x)*(1.0-fraction.y), fraction.x*(1.0-fraction.y),
+        (1.0-fraction.x)*fraction.y, fraction.x*fraction.y);
+    uint4 labels = uint4(
+        g_fluid_material.Load(int3(clamp(base, int2(0), extent-1), 0)),
+        g_fluid_material.Load(int3(clamp(base+int2(1,0), int2(0), extent-1), 0)),
+        g_fluid_material.Load(int3(clamp(base+int2(0,1), int2(0), extent-1), 0)),
+        g_fluid_material.Load(int3(clamp(base+int2(1,1), int2(0), extent-1), 0)));
+    // Foreign liquids are an interface, not empty space. Renormalize their
+    // rejected weights to avoid opening a background slit between elements.
+    // True empty/background taps retain their weight for silhouette AA.
+    weights *= select((labels == material) | (labels == uint4(0u)), float4(1.0), float4(0.0));
+    float result = liquidField(base, material, extent) * weights.x +
+        liquidField(base+int2(1,0), material, extent) * weights.y +
+        liquidField(base+int2(0,1), material, extent) * weights.z +
+        liquidField(base+int2(1,1), material, extent) * weights.w;
+    return result / max(dot(weights, float4(1.0)), 1.0e-6);
+}
+
+// A bounded front-surface height gives the 2D field a rounded optical volume.
+// Density still owns coverage and opacity; height never alters simulation/depth.
+float liquidOpticalHeight(float density) {
+    const float level = kLiquidIsoLevel;
+    return sqrt(saturate(1.0 - level / max(density, level)));
+}
+
+float2 liquidScreenDisplacement(float2 world, float2 shift, float pixel_limit) {
+    float4 a = mul(float4(world, 0.0, 1.0), g_grid_frame.m_view_projection);
+    float4 b = mul(float4(world + shift, 0.0, 1.0), g_grid_frame.m_view_projection);
+    if (abs(a.w) <= 1.0e-6 || abs(b.w) <= 1.0e-6) return float2(0.0);
+
+    float2 offset = (b.xy / b.w - a.xy / a.w) * float2(0.5, -0.5) * g_grid_frame.m_viewport.zw;
+    return offset * min(1.0, pixel_limit / max(length(offset), 1.0e-6));
+}
+
+[shader("fragment")]
+float4 fragmentFluidComposite(ParticleVertexOutput input,
+    uniform StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
+    uniform SamplerState.Handle g_sampler) : SV_Target {
+    float3 view_direction;
+    float2 fine_position = liquidFinePosition(input.uv, view_direction);
+    uint width, height;
+    g_fluid_material.GetDimensions(width, height);
+    int2 extent = int2(width, height);
+    int2 pixel = clamp(int2(input.uv * float2(extent)), int2(0), extent - 1);
+    uint material = g_fluid_material.Load(int3(pixel, 0));
+    float2 world_dx = ddx(fine_position) * g_grid_frame.m_cell_size_m;
+    float2 world_dy = ddy(fine_position) * g_grid_frame.m_cell_size_m;
+    ParticleTerrainFootprint footprint = particleTerrainFootprint(fine_position, g_sampler);
+    if (material == 0u) discard;
+
+    float2 field_coordinate = input.uv * float2(extent) - 0.5;
+    float field = liquidFieldBilinear(field_coordinate, material, extent);
+    float4 neighbors = float4(
+        liquidFieldBilinear(field_coordinate + float2(1,0), material, extent),
+        liquidFieldBilinear(field_coordinate - float2(1,0), material, extent),
+        liquidFieldBilinear(field_coordinate + float2(0,1), material, extent),
+        liquidFieldBilinear(field_coordinate - float2(0,1), material, extent));
+    float2 gradient = float2(neighbors.x - neighbors.y, neighbors.z - neighbors.w) * 0.5;
+    float2 height_gradient = float2(
+        liquidOpticalHeight(neighbors.x) - liquidOpticalHeight(neighbors.y),
+        liquidOpticalHeight(neighbors.z) - liquidOpticalHeight(neighbors.w)) * 0.5;
+    // Half-resolution fields need a field-texel footprint rather than relying
+    // on derivatives of a nearest-loaded field at adjacent full-resolution pixels.
+    float edge_width = max(0.025, length(gradient));
+    float mask = smoothstep(kLiquidIsoLevel - edge_width * 0.5, kLiquidIsoLevel + edge_width * 0.5, field);
+    if (mask == 0.0) discard;
+
+    float coverage = particleTerrainCoverage(footprint);
+    if (coverage == 1.0) discard;
+
+    TerrainVisual visual = g_terrain_visuals[material];
+    float3 color = diagnosticTint(visual.m_color_rgba, 1.0).rgb;
+    float2 field_step = g_grid_frame.m_viewport.zw / float2(extent);
+    float determinant = world_dx.x * world_dy.y - world_dx.y * world_dy.x;
+    float2 screen_gradient = height_gradient / max(field_step, float2(1.0e-6));
+    float2 world_gradient = abs(determinant) > 1.0e-12
+        ? (screen_gradient.x * float2(world_dy.y, -world_dy.x) +
+           screen_gradient.y * float2(-world_dx.y, world_dx.x)) / determinant : float2(0.0);
+    float3 normal = normalize(float3(-world_gradient * g_grid_frame.m_cell_size_m * 1.5, 1.0));
+    float f0 = pow((visual.m_ior - 1.0) / max(visual.m_ior + 1.0, 1.0), 2.0);
+    float fresnel = visual.m_ior > 1.0 ? f0 + (1.0 - f0) * pow(1.0 - saturate(dot(normal, view_direction)), 5.0) : 0.0;
+    float roughness = saturate(visual.m_roughness);
+    float3 reflected = reflect(-view_direction, normal);
+    // The 2D scene has no cubemap. A broad sky response and soft key light
+    // provide a stable glossy volume, augmented by the existing optical backdrop.
+    float sky = saturate(0.5 + 0.5 * reflected.y * (1.0 - roughness * roughness));
+    float3 environment = lerp(float3(0.035, 0.05, 0.08), float3(0.65, 0.82, 1.0), sky);
+    float key = pow(saturate(dot(reflected, normalize(float3(-0.35, 0.55, 1.0)))),
+        lerp(160.0, 4.0, roughness * roughness));
+    float3 reflection = environment + float3(6.0, 5.8, 5.5) * key * (1.0 - roughness);
+    float authored_alpha = float(visual.m_color_rgba & 255u) / 255.0 * visual.m_opacity;
+    float opacity = (visual.m_surface_flags & kSurfaceOpticalBlend) != 0u
+        ? 1.0 - pow(max(1.0 - authored_alpha, 1.0e-6), max(field, 0.0)) : 1.0;
+
+    if (g_grid_frame.m_has_background != 0u) {
+        float2 world = fine_position * g_grid_frame.m_cell_size_m;
+        float2 shift = normal.xy / max(normal.z, 0.25) *
+            ((1.0 - 1.0 / max(visual.m_ior, 1.0)) * visual.m_refraction_depth_m);
+        float2 offset = liquidScreenDisplacement(world, shift, 12.0);
+        color = lerp(backdropColor(input.position.xy + offset, g_sampler), color, opacity);
+        opacity = 1.0;
+        if (fresnel > 0.0 && roughness < 1.0) {
+            // Reflection uses its own physical neighborhood, independent of
+            // refraction depth, so either optical contribution can be inspected.
+            float2 mirror = liquidScreenDisplacement(world, reflected.xy * g_grid_frame.m_cell_size_m * 2.0, 24.0);
+            float3 backdrop_reflection = backdropColor(input.position.xy + mirror, g_sampler);
+            reflection = lerp(environment, backdrop_reflection, 0.4 * (1.0 - roughness)) +
+                float3(6.0, 5.8, 5.5) * key * (1.0 - roughness);
+        }
+    }
+
+    // Combine reflected and transmitted premultiplied contributions, then
+    // normalize once for the existing straight-alpha scene blend.
+    float transmitted_alpha = opacity * (1.0 - fresnel);
+    float surface_alpha = transmitted_alpha + fresnel;
+    color = (color * transmitted_alpha + reflection * fresnel) / max(surface_alpha, 1.0e-6);
+    color += 1.0 - exp(-visual.m_emissive_rgb * min(visual.m_emissive_strength, 80.0));
+    return float4(color, mask * surface_alpha * (1.0 - coverage));
+}
+
+// ------------------------------------------------------------------
+// angular world-space solid occupancy and terrain-material composition
+// ------------------------------------------------------------------
+
+Texture2D<uint> g_solid_material;
+Texture2D<float> g_solid_coverage;
+
+[shader("vertex")]
+ParticleVertexOutput vertexSolidSplat(uint vertex : SV_VertexID, uint instance : SV_InstanceID) {
+    static const float2 corners[6] = {float2(-1,-1), float2(1,-1), float2(1,1),
+        float2(-1,-1), float2(1,1), float2(-1,1)};
+    ParticleGpu particle = g_particles[g_particle_ids[instance]];
+    float half_extent = particle.m_radius_m * kSolidApothemPerRadius * kSolidSupport;
+    // Fixed world-XY geometry: camera roll or perspective cannot turn grains
+    // in world space. The complete octagonal support fits inside this quad.
+    float2 world = particle.m_position + corners[vertex] * half_extent;
+    ParticleVertexOutput output;
+    output.position = mul(float4(world, 0.0, 1.0), g_grid_frame.m_view_projection);
+    output.fine_position = world / g_grid_frame.m_cell_size_m;
+    output.uv = corners[vertex] * 0.5 + 0.5;
+    output.material = particle.m_material_id;
+    output.color = particle.m_color;
+    return output;
+}
+
+float solidKernel(ParticleVertexOutput input, out float squared_distance) {
+    if ((g_terrain_visuals[input.material].m_surface_flags & kSurfaceParticleSolid) == 0u) discard;
+    float distance = solidOctagonDistance(input.uv * 2.0 - 1.0);
+    squared_distance = distance * distance;
+    if (squared_distance >= 1.0) discard;
+
+    float value = 1.0 - squared_distance;
+    return kSolidAmplitude * value * value * value;
+}
+
+struct SolidMaterialOutput {
+    uint material : SV_Target;
+    float depth : SV_Depth;
+};
+
+[shader("fragment")]
+SolidMaterialOutput fragmentSolidMaterial(ParticleVertexOutput input) {
+    float squared_distance;
+    solidKernel(input, squared_distance);
+    SolidMaterialOutput output;
+    output.material = input.material;
+    // Synthetic depth selects the nearest normalized grain, independently of
+    // occupancy. It is never a scene depth or a simulation collision surface.
+    output.depth = min(squared_distance, 0.999999);
+    return output;
+}
+
+[shader("fragment")]
+float fragmentSolidCoverage(ParticleVertexOutput input) : SV_Target {
+    float squared_distance;
+    // Every solid contributes, including grains of different elements. The
+    // selected material is not a gate on total occupancy in mixed rubble.
+    return solidKernel(input, squared_distance);
+}
+
+float solidCoverageBilinear(float2 coordinate, int2 extent) {
+    int2 base = int2(floor(coordinate));
+    float2 fraction = frac(coordinate);
+    float a = g_solid_coverage.Load(int3(clamp(base, int2(0), extent - 1), 0));
+    float b = g_solid_coverage.Load(int3(clamp(base + int2(1,0), int2(0), extent - 1), 0));
+    float c = g_solid_coverage.Load(int3(clamp(base + int2(0,1), int2(0), extent - 1), 0));
+    float d = g_solid_coverage.Load(int3(clamp(base + int2(1,1), int2(0), extent - 1), 0));
+    return lerp(lerp(a, b, fraction.x), lerp(c, d, fraction.x), fraction.y);
+}
+
+float4 solidMaterialSurface(uint4 materials, float2 fraction, float2 fine_position,
+    float2 dx, float2 dy, float2 screen,
+    StructuredBuffer<DescriptorHandle<Texture2D<float4>>> textures, SamplerState.Handle sampler) {
+    // IDs are categorical. Filter their coverage, never their numeric values.
+    // The common interior still shades its terrain material only once.
+    if (all(materials == materials.x)) {
+        if (materials.x == 0u) discard;
+        return materialSurface(materials.x, fine_position, dx, dy, screen,
+            float2(0.0), false, float3(0.0), textures, sampler);
+    }
+
+    float4 weights = float4(
+        (1.0 - fraction.x) * (1.0 - fraction.y), fraction.x * (1.0 - fraction.y),
+        (1.0 - fraction.x) * fraction.y, fraction.x * fraction.y);
+    float4 premultiplied = float4(0.0);
+    float valid_weight = 0.0;
+    for (uint index = 0u; index < 4u; ++index) {
+        uint material = materials[index];
+        if (material == 0u || weights[index] == 0.0) continue;
+
+        // Coalesce repeated labels before sampling albedo/normal textures.
+        for (uint other = index + 1u; other < 4u; ++other) {
+            if (materials[other] == material) {
+                weights[index] += weights[other];
+                weights[other] = 0.0;
+            }
+        }
+
+        float4 surface = materialSurface(material, fine_position, dx, dy, screen,
+            float2(0.0), false, float3(0.0), textures, sampler);
+        premultiplied += float4(surface.rgb * surface.a, surface.a) * weights[index];
+        valid_weight += weights[index];
+    }
+
+    // Empty taps do not become a third material or punch holes in occupancy.
+    // Mix linear premultiplied color, then restore the scene's straight alpha.
+    if (valid_weight == 0.0) discard;
+    premultiplied /= valid_weight;
+    return float4(premultiplied.rgb / max(premultiplied.a, 1.0e-6), premultiplied.a);
+}
+
+[shader("fragment")]
+float4 fragmentSolidComposite(ParticleVertexOutput input,
+    uniform StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
+    uniform SamplerState.Handle g_sampler) : SV_Target {
+    float3 ignored_view_direction;
+    float2 fine_position = liquidFinePosition(input.uv, ignored_view_direction);
+    float2 dx = clamp(ddx(fine_position) * g_grid_frame.m_cell_size_m, -2048.0, 2048.0);
+    float2 dy = clamp(ddy(fine_position) * g_grid_frame.m_cell_size_m, -2048.0, 2048.0);
+    ParticleTerrainFootprint footprint = particleTerrainFootprint(fine_position, g_sampler);
+
+    uint width, height;
+    g_solid_material.GetDimensions(width, height);
+    int2 extent = int2(width, height);
+    float2 coordinate = input.uv * float2(extent) - 0.5;
+    int2 base = int2(floor(coordinate));
+    uint4 materials = uint4(
+        g_solid_material.Load(int3(clamp(base, int2(0), extent - 1), 0)),
+        g_solid_material.Load(int3(clamp(base + int2(1,0), int2(0), extent - 1), 0)),
+        g_solid_material.Load(int3(clamp(base + int2(0,1), int2(0), extent - 1), 0)),
+        g_solid_material.Load(int3(clamp(base + int2(1,1), int2(0), extent - 1), 0)));
+    if (all(materials == 0u)) discard;
+
+    float field = solidCoverageBilinear(coordinate, extent);
+    float2 gradient = float2(
+        solidCoverageBilinear(coordinate + float2(1,0), extent) - solidCoverageBilinear(coordinate - float2(1,0), extent),
+        solidCoverageBilinear(coordinate + float2(0,1), extent) - solidCoverageBilinear(coordinate - float2(0,1), extent)) * 0.5;
+    // Only silhouette antialiasing uses the density gradient. There is no
+    // liquid-style filter, bulged height, or reconstructed optical normal.
+    float2 field_per_pixel = float2(extent) / max(g_grid_frame.m_viewport.zw, float2(1.0));
+    float edge_width = max(0.025, length(gradient * field_per_pixel));
+    float mask = smoothstep(kSolidIsoLevel - edge_width * 0.5, kSolidIsoLevel + edge_width * 0.5, field);
+    if (mask == 0.0) discard;
+
+    float terrain_coverage = particleTerrainCoverage(footprint);
+    if (terrain_coverage == 1.0) discard;
+
+    float4 surface = solidMaterialSurface(materials, frac(coordinate), fine_position, dx, dy,
+        input.position.xy, g_textures, g_sampler);
+    surface.a *= mask * (1.0 - terrain_coverage);
+    return surface;
 }

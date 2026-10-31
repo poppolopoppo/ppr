@@ -138,10 +138,11 @@ namespace pP::tests::detail {
             return *(*target).get();
         }
 
-        [[nodiscard]] Expected<rhi::ComPtr<rhi::ITexture>> makeRenderTarget_(rhi::IDevice &device, const u32 size) {
+        [[nodiscard]] Expected<rhi::ComPtr<rhi::ITexture>> makeRenderTarget_(
+            rhi::IDevice &device, const u32 size, const u32 height = 0u) {
             rhi::TextureDesc desc{};
             desc.type = rhi::TextureType::Texture2D;
-            desc.size = {size, size, 1u};
+            desc.size = {size, height != 0u ? height : size, 1u};
             desc.arrayLength = 1u;
             desc.mipCount = 1u;
             desc.format = rhi::Format::RGBA8Unorm;
@@ -1477,7 +1478,7 @@ namespace pP::tests::detail {
             return image;
         }
 
-        void saveGridQa_(const GatePixels &pixels, const std::string_view name) {
+        void saveGridQa_(const GatePixels &pixels, const std::string_view name, const u32 height = 0u) {
             const char *const directory = std::getenv("PPR_GRID_QA_DIR");
             if (directory == nullptr) {
                 return;
@@ -1485,7 +1486,7 @@ namespace pP::tests::detail {
             const std::filesystem::path root{directory};
             std::filesystem::create_directories(root);
             const mango::image::Surface surface{
-                int(pixels.m_size), int(pixels.m_size),
+                int(pixels.m_size), int(height != 0u ? height : pixels.m_size),
                 mango::image::Format(32, mango::image::Format::UNORM, mango::image::Format::RGBA, 8, 8, 8, 8),
                 pixels.m_row_pitch, pixels.m_bytes.data()};
             PPR_TEST_ASSERT(static_cast<bool>(surface.save((root / (std::string{name} + ".png")).string())));
@@ -3185,6 +3186,1436 @@ float4 fragmentPattern(VertexOutput input) : SV_Target {
         };
 
         // ------------------------------------------------------------------
+        // element-textured solids and reconstructed liquid surfaces
+        // ------------------------------------------------------------------
+
+        PPR_UNIT_TEST (grid_solid_particles_share_catalog_textures_and_metric_uvs) {
+            const auto rhi = SharedGpu::rhiService();
+            const auto shader = SharedGpu::shaderService();
+            Renderer *const renderer = SharedGpu::renderer();
+            PPR_TEST_ASSERT(rhi.isValid() and shader.isValid() and renderer != nullptr);
+            GridPass terrain_grid;
+            GridPass particle_grid;
+            PPR_TEST_ASSERT(not terrain_grid.initialize(*rhi, *shader, std::filesystem::current_path()));
+            PPR_TEST_ASSERT(not particle_grid.initialize(*rhi, *shader, std::filesystem::current_path()));
+            PPR_DEFER {
+                PPR_TEST_ASSERT(not renderer->waitOnHost());
+                PPR_TEST_ASSERT(not particle_grid.shutdown());
+                PPR_TEST_ASSERT(not terrain_grid.shutdown());
+            };
+
+            GridTerrainVisual visual{};
+            visual.m_material_id = 1u;
+            visual.m_color_rgba = 0xffffffffu;
+            visual.m_texture_index = 0u;
+            visual.m_texture_period_m = 1.0f;
+            visual.m_normal_texture_index = 5u;
+            visual.m_metallic = 0.2f;
+            visual.m_roughness = 0.4f;
+            visual.m_surface_flags = kGridSurfaceParticleSolid | kGridSurfaceTextureRepeat;
+            auto terrain = opticalGridFixture_(visual, 1u);
+            terrain.m_has_background = false;
+            terrain.m_cell_size_m = 1.0f / 3.0f;
+            auto second = visual;
+            second.m_material_id = 2u;
+            second.m_texture_index = 4u;
+            terrain.m_terrain_visuals.push_back(second);
+            auto particles = terrain;
+            std::ranges::fill(particles.m_uploads.front().m_cell_materials, 0u);
+
+            // One fine cell's physical volume at the selected 3-cells/metre
+            // scale is 1/9 m^3. The metre-wide view resolves its disk interior.
+            GatePixels first_element{};
+            for (const u32 material: {1u, 2u}) {
+                std::ranges::fill(terrain.m_uploads.front().m_cell_materials, static_cast<u16>(material));
+                PPR_TEST_ASSERT(not terrain_grid.applyStagedFrame(terrain));
+
+                auto records = std::make_shared<Array<GridParticleInstance>>();
+                records->push_back({1u, 21.5, 21.5, 1.0 / 9.0, 1.0, 300.0, material});
+                particles.m_particle_batches = {GridParticleBatch{0u, std::move(records)}};
+                PPR_TEST_ASSERT(not particle_grid.applyStagedFrame(particles));
+
+                for (const bool retro: {false, true}) {
+                    const auto reference = drawOpticalGrid_(
+                        terrain_grid, 21.0f, 21.0f, 1.0f, 128u, nullptr, nullptr, retro);
+                    const auto disk = drawOpticalGrid_(
+                        particle_grid, 21.0f, 21.0f, 1.0f, 128u, nullptr, nullptr, retro);
+
+                    // Interior samples have full disk coverage. The corresponding
+                    // terrain pixels consume the same element, physical UVs,
+                    // normal texture and local material response.
+                    for (const u32 y: {60u, 64u, 68u}) {
+                        for (const u32 x: {60u, 64u, 68u}) {
+                            PPR_TEST_ASSERT(texelDist_(gateTexel_(disk, x, y), gateTexel_(reference, x, y)) <= 4u);
+                        }
+                    }
+
+                    if (not retro) {
+                        saveGridQa_(
+                            disk, material == 1u ? "particle-solid-textured-element-1-native"
+                                                 : "particle-solid-textured-element-2-native");
+                        const auto moved = drawOpticalGrid_(particle_grid, 21.015625f, 21.0f, 1.0f);
+                        for (const u32 x: {60u, 64u, 68u}) {
+                            PPR_TEST_ASSERT(texelDist_(gateTexel_(moved, x - 2u, 64u), gateTexel_(disk, x, 64u)) <= 4u);
+                        }
+
+                        if (material == 1u) {
+                            PPR_TEST_ASSERT(texelDist_(gateTexel_(disk, 48u, 64u), gateTexel_(disk, 80u, 64u)) > 15u);
+                            first_element = disk;
+                        } else {
+                            PPR_TEST_ASSERT(changedOpticalPixels_(first_element, disk) > 0u);
+                        }
+                    }
+                }
+            }
+        };
+
+        PPR_UNIT_TEST (grid_surface_inventory_transitions_preserve_gas_visibility_and_single_blending) {
+            const auto rhi = SharedGpu::rhiService();
+            const auto shader = SharedGpu::shaderService();
+            Renderer *const renderer = SharedGpu::renderer();
+            PPR_TEST_ASSERT(rhi.isValid() and shader.isValid() and renderer != nullptr);
+            GridPass grid;
+            PPR_TEST_ASSERT(not grid.initialize(*rhi, *shader, std::filesystem::current_path()));
+            PPR_DEFER {
+                PPR_TEST_ASSERT(not renderer->waitOnHost());
+                PPR_TEST_ASSERT(not grid.shutdown());
+            };
+
+            GridTerrainVisual solid{};
+            solid.m_material_id = 1u;
+            solid.m_color_rgba = 0x0000ffffu;
+            solid.m_surface_flags = kGridSurfaceParticleSolid;
+            auto stage = opticalGridFixture_(solid, 0u);
+            stage.m_has_background = false;
+            stage.m_cell_size_m = 1.0f / 3.0f;
+            auto liquid = solid;
+            liquid.m_material_id = 2u;
+            liquid.m_surface_flags = kGridSurfaceParticleLiquid;
+            stage.m_terrain_visuals.push_back(liquid);
+            auto gas = solid;
+            gas.m_material_id = 3u;
+            gas.m_color_rgba = 0x00ff0080u;
+            gas.m_surface_flags = kGridSurfaceOpticalBlend;
+            stage.m_terrain_visuals.push_back(gas);
+            const auto capture = [&](const std::initializer_list<GridParticleInstance> particles) {
+                stage.m_particle_batches.clear();
+                if (particles.size() != 0u) {
+                    auto rows = std::make_shared<Array<GridParticleInstance>>(particles);
+                    stage.m_particle_batches.push_back({0u, std::move(rows)});
+                }
+
+                PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
+                return drawOpticalGrid_(grid, 21.0f, 21.0f, 2.0f);
+            };
+
+            const GridParticleInstance solid_row{1u, 21.4, 22.0, 1.0 / 9.0, 1.0, 300.0, 1u};
+            const GridParticleInstance liquid_row{2u, 21.8, 22.0, 1.0 / 9.0, 1.0, 300.0, 2u};
+            const GridParticleInstance gas_row{3u, 22.6, 22.0, 1.0 / 9.0, 1.0, 300.0, 3u};
+            const auto empty = capture({});
+            const auto reference = capture({gas_row});
+            const auto gas_pixel = gateTexel_(reference, 102u, 64u);
+            const auto clear_pixel = gateTexel_(empty, 102u, 64u);
+            PPR_TEST_ASSERT(gas_pixel[1] > clear_pixel[1] + 20u);
+
+            std::ignore = capture({solid_row, liquid_row});
+            const auto appended = capture({solid_row, liquid_row, gas_row});
+            PPR_TEST_ASSERT(texelDist_(gateTexel_(appended, 102u, 64u), gas_pixel) <= 2u);
+            auto replacement = gas_row;
+            replacement.m_id = 101u;
+            const auto replaced = capture({replacement});
+            PPR_TEST_ASSERT(texelDist_(gateTexel_(replaced, 102u, 64u), gas_pixel) <= 2u);
+
+            const auto removed = capture({solid_row, liquid_row});
+            PPR_TEST_ASSERT(texelDist_(gateTexel_(removed, 102u, 64u), clear_pixel) <= 2u);
+            const auto cleared = capture({});
+            PPR_TEST_ASSERT(texelDist_(gateTexel_(cleared, 102u, 64u), clear_pixel) <= 2u);
+            const auto returned = capture({replacement});
+            PPR_TEST_ASSERT(texelDist_(gateTexel_(returned, 102u, 64u), gas_pixel) <= 2u);
+        };
+
+        PPR_UNIT_TEST (grid_solid_envelope_closes_nominal_interstices_without_bridging_sparse_grains) {
+            const auto rhi = SharedGpu::rhiService();
+            const auto shader = SharedGpu::shaderService();
+            Renderer *const renderer = SharedGpu::renderer();
+            PPR_TEST_ASSERT(rhi.isValid() and shader.isValid() and renderer != nullptr);
+            GridTerrainVisual blue{};
+            blue.m_material_id = 1u;
+            blue.m_color_rgba = 0x0000ffffu;
+            blue.m_ior = 1.0f;
+            blue.m_surface_flags = kGridSurfaceParticleSolid;
+            auto stage = opticalGridFixture_(blue, 0u);
+            stage.m_has_background = false;
+            stage.m_cell_size_m = 1.0f / 3.0f;
+            auto red = blue;
+            red.m_material_id = 2u;
+            red.m_color_rgba = 0xff0000ffu;
+            stage.m_terrain_visuals.push_back(red);
+            auto rows = std::make_shared<Array<GridParticleInstance>>();
+            for (u32 y = 0u; y < 6u; ++y) {
+                for (u32 x = 0u; x < 6u; ++x) {
+                    rows->push_back(
+                        {u64(y * 6u + x + 1u), 21.0 + (double(x) + 0.5) / 3.0, 21.0 + (double(y) + 0.5) / 3.0,
+                            1.0 / 9.0, 1.0, 300.0, x < 3u ? 1u : 2u});
+                }
+            }
+
+            const double radius = std::sqrt((1.0 / 9.0) / std::numbers::pi);
+            rows->push_back({37u, 20.5, 20.5, 1.0 / 9.0, 1.0, 300.0, 1u});
+            rows->push_back({38u, 23.0, 20.5, 1.0 / 9.0, 1.0, 300.0, 1u});
+            rows->push_back({39u, 23.0 + 4.5 * radius, 20.5, 1.0 / 9.0, 1.0, 300.0, 2u});
+            rows->push_back({40u, 20.4, 23.4, 1.0 / 9.0, 1.0, 300.0, 1u});
+            rows->push_back({41u, 20.9, 23.9, 1.0 / 36.0, 0.25, 300.0, 2u});
+            const std::array<double, 4u> angles{0.0, std::numbers::pi / 8.0, std::numbers::pi / 4.0, std::atan(0.85)};
+            for (u32 direction = 0u; direction < angles.size(); ++direction) {
+                const double angle = angles[direction];
+                const double y = 20.5 + double(direction) * 1.5;
+                rows->push_back({u64(42u + direction * 2u), 24.8, y, 1.0 / 9.0, 1.0, 300.0, 1u});
+                rows->push_back(
+                    {u64(43u + direction * 2u), 24.8 + 3.5 * radius * std::cos(angle),
+                        y + 3.5 * radius * std::sin(angle), 1.0 / 9.0, 1.0, 300.0, 1u});
+            }
+
+            stage.m_particle_batches = {GridParticleBatch{0u, std::move(rows)}};
+            for (u32 policy = 0u; policy < 4u; ++policy) {
+                GridPass grid;
+                RetroPass picture;
+                PPR_TEST_ASSERT(not grid.initialize(*rhi, *shader, std::filesystem::current_path()));
+                PPR_TEST_ASSERT(not picture.initialize(*rhi, *shader, std::filesystem::current_path()));
+                PPR_DEFER {
+                    PPR_TEST_ASSERT(not renderer->waitOnHost());
+                    PPR_TEST_ASSERT(not picture.shutdown());
+                    PPR_TEST_ASSERT(not grid.shutdown());
+                };
+                PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
+                const bool temporal = policy == 1u;
+                const bool pixelized = policy == 2u;
+                const float roll = policy == 3u ? std::numbers::pi_v<float> * 0.25f : 0.0f;
+                const RetroSettings settings{
+                    .m_enabled = pixelized,
+                    .m_palette_enabled = false,
+                    .m_temporal_enabled = temporal,
+                    .m_pixel_scale = 4u};
+                GatePixels pixels{};
+                for (u32 frame = 0u; frame < (temporal ? 4u : 1u); ++frame) {
+                    pixels = drawOpticalGrid_(
+                        grid, 20.0f, 20.0f, 6.0f, 384u, nullptr, nullptr, false, 0u, roll, &settings, &picture);
+                }
+
+                PPR_TEST_ASSERT(picture.temporalActive() == temporal);
+                saveGridQa_(pixels, std::format("particle-solid-envelope-policy-{}", policy));
+                const auto sample = [&](const double x, const double y) {
+                    const double dx = x - 23.0;
+                    const double dy = y - 23.0;
+                    const double right = dx * std::cos(double(roll)) + dy * std::sin(double(roll));
+                    const double up = -dx * std::sin(double(roll)) + dy * std::cos(double(roll));
+                    return gateTexel_(pixels, u32((right + 3.0) * 64.0), u32((3.0 - up) * 64.0));
+                };
+                u32 holes = 0u;
+                for (u32 y = 1u; y < 6u; ++y) {
+                    for (u32 x = 1u; x < 6u; ++x) {
+                        const auto pixel = sample(21.0 + double(x) / 3.0, 21.0 + double(y) / 3.0);
+                        // A filtered red/blue interface can split full coverage
+                        // between channels; their sum preserves opaque energy.
+                        holes += u32(pixel[0]) + u32(pixel[2]) < 200u ? 1u : 0u;
+                    }
+                }
+
+                std::println("SOLID-ENVELOPE policy={} packed_samples=25 holes={}", policy, holes);
+                PPR_TEST_ASSERT(holes == 0u);
+                const auto left = sample(21.8, 22.0);
+                const auto right = sample(22.2, 22.0);
+                PPR_TEST_ASSERT(left[2] > left[0] + 80u and right[0] > right[2] + 80u);
+                // Sparse grains and the small/large diagonal pair retain real
+                // empty space. These samples are separated from dense material.
+                if (roll == 0.0f) {
+                    const auto clear = sample(25.8, 25.8);
+                    PPR_TEST_ASSERT(sample(20.5, 20.5)[2] > 150u);
+                    PPR_TEST_ASSERT(texelDist_(sample(23.0 + 2.25 * radius, 20.5), clear) <= 2u);
+                    const auto diagonal_gap = sample(20.7, 23.7);
+                    PPR_TEST_ASSERT(texelDist_(diagonal_gap, clear) <= 2u);
+                    for (u32 direction = 0u; direction < angles.size(); ++direction) {
+                        const double angle = angles[direction];
+                        const auto gap = sample(
+                            24.8 + 1.75 * radius * std::cos(angle),
+                            20.5 + double(direction) * 1.5 + 1.75 * radius * std::sin(angle));
+                        std::println(
+                            "SOLID-SPARSE-GAP policy={} separation_r=3.5 direction_degrees={} red={} blue={} clear_delta={}",
+                            policy, angle * 180.0 / std::numbers::pi, u32(gap[0]), u32(gap[2]), texelDist_(gap, clear));
+                        PPR_TEST_ASSERT(texelDist_(gap, clear) <= 2u);
+                    }
+                }
+            }
+        };
+
+        PPR_UNIT_TEST (grid_liquid_surface_connects_and_preserves_element_boundaries) {
+            const auto rhi = SharedGpu::rhiService();
+            const auto shader = SharedGpu::shaderService();
+            Renderer *const renderer = SharedGpu::renderer();
+            PPR_TEST_ASSERT(rhi.isValid() and shader.isValid() and renderer != nullptr);
+            GridPass grid;
+            PPR_TEST_ASSERT(not grid.initialize(*rhi, *shader, std::filesystem::current_path()));
+            PPR_DEFER {
+                PPR_TEST_ASSERT(not renderer->waitOnHost());
+                PPR_TEST_ASSERT(not grid.shutdown());
+            };
+
+            GridTerrainVisual blue{};
+            blue.m_material_id = 1u;
+            blue.m_color_rgba = 0x0000ffffu;
+            blue.m_surface_flags = kGridSurfaceParticleLiquid | kGridSurfaceOpticalBlend;
+            auto stage = opticalGridFixture_(blue, 0u);
+            stage.m_has_background = false;
+            stage.m_cell_size_m = 1.0f / 3.0f;
+            auto red = blue;
+            red.m_material_id = 2u;
+            red.m_color_rgba = 0xff0000ffu;
+            stage.m_terrain_visuals.push_back(red);
+            GridTerrainVisual wall{};
+            wall.m_material_id = 3u;
+            wall.m_color_rgba = 0x909090ffu;
+            wall.m_surface_flags = kGridSurfaceParticleSolid;
+            stage.m_terrain_visuals.push_back(wall);
+            PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
+            const auto background = drawOpticalGrid_(grid, 21.0f, 21.0f, 1.0f);
+            const auto retro_background = drawOpticalGrid_(grid, 21.0f, 21.0f, 1.0f, 128u, nullptr, nullptr, true);
+
+            const double radius = std::sqrt((1.0 / 9.0) / std::numbers::pi);
+            auto records = std::make_shared<Array<GridParticleInstance>>();
+            records->push_back({1u, 21.5 - 1.1 * radius, 21.5, 1.0 / 9.0, 1.0, 300.0, 1u});
+            records->push_back({2u, 21.5 + 1.1 * radius, 21.5, 1.0 / 9.0, 1.0, 300.0, 1u});
+            stage.m_particle_batches = {GridParticleBatch{0u, records}};
+            PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
+
+            const auto connected = drawOpticalGrid_(grid, 21.0f, 21.0f, 1.0f);
+            saveGridQa_(connected, "particle-liquid-connected-native");
+
+            // The midpoint lies outside both physical disks. A visible neck
+            // therefore proves reconstruction rather than independent sprites.
+            for (const u32 x: {63u, 64u, 65u}) {
+                PPR_TEST_ASSERT(gateTexel_(connected, x, 64u)[2] > gateTexel_(background, x, 64u)[2] + 30u);
+            }
+            PPR_TEST_ASSERT(gateTexel_(connected, 64u, 28u) == gateTexel_(background, 64u, 28u));
+            const auto retro = drawOpticalGrid_(grid, 21.0f, 21.0f, 1.0f, 128u, nullptr, nullptr, true);
+            saveGridQa_(retro, "particle-liquid-connected-retro4");
+
+            // Palette quantization may darken blue. Compare the same pixel
+            // against the empty scene under the identical picture policy.
+            PPR_TEST_ASSERT(texelDist_(gateTexel_(retro, 64u, 64u), gateTexel_(retro_background, 64u, 64u)) > 20u);
+
+            auto distinct = std::make_shared<Array<GridParticleInstance>>(*records);
+            (*distinct)[0u].m_position_x_m = 21.5 - 0.9 * radius;
+            (*distinct)[1u].m_position_x_m = 21.5 + 0.9 * radius;
+            (*distinct)[1u].m_material_id = 2u;
+            stage.m_particle_batches.front().m_particles = distinct;
+            PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
+
+            const auto separated = drawOpticalGrid_(grid, 21.0f, 21.0f, 1.0f);
+            const auto left = gateTexel_(separated, 42u, 64u);
+            const auto right = gateTexel_(separated, 86u, 64u);
+            PPR_TEST_ASSERT(left[2] > left[0] + 40u and right[0] > right[2] + 40u);
+
+            // These samples lie inside both physical disks at their interface.
+            // Foreign-material filtering must not open a background-coloured slit.
+            for (const u32 x: {62u, 63u, 64u, 65u}) {
+                PPR_TEST_ASSERT(texelDist_(gateTexel_(separated, x, 64u), gateTexel_(background, x, 64u)) > 30u);
+            }
+
+            saveGridQa_(separated, "particle-liquid-elements-native");
+
+            auto solid_records = std::make_shared<Array<GridParticleInstance>>();
+            solid_records->push_back({3u, 21.5, 21.5, 1.0 / 9.0, 1.0, 300.0, 3u});
+            stage.m_particle_batches.front().m_particles = solid_records;
+            PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
+
+            const auto solid_only = drawOpticalGrid_(grid, 21.0f, 21.0f, 1.0f);
+            auto mixed = std::make_shared<Array<GridParticleInstance>>(*distinct);
+            mixed->push_back(solid_records->front());
+            stage.m_particle_batches.front().m_particles = std::move(mixed);
+            PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
+
+            // A mobile opaque solid occupies the same layer as terrain. Liquid
+            // reconstruction beneath it must not paint over its textured face.
+            const auto mobile_occluded = drawOpticalGrid_(grid, 21.0f, 21.0f, 1.0f);
+            PPR_TEST_ASSERT(gateTexel_(mobile_occluded, 64u, 64u) == gateTexel_(solid_only, 64u, 64u));
+            saveGridQa_(mobile_occluded, "particle-liquid-mobile-solid-occlusion");
+
+            stage.m_particle_batches.front().m_particles = distinct;
+            PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
+
+            for (const u32 edge: {64u, 128u}) {
+                for (u32 frame = 0u; frame < 3u; ++frame) {
+                    std::ignore = drawOpticalGrid_(grid, 21.0f, 21.0f, 1.0f, edge);
+                }
+            }
+
+            stage.m_uploads.front().m_cell_materials[64u * 128u + 64u] = 3u;
+            stage.m_particle_batches.front().m_particles = std::make_shared<const Array<GridParticleInstance>>();
+            PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
+
+            const auto terrain = drawOpticalGrid_(grid, 21.0f, 21.0f, 1.0f);
+
+            stage.m_particle_batches.front().m_particles = distinct;
+            PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
+
+            const auto occluded = drawOpticalGrid_(grid, 21.0f, 21.0f, 1.0f);
+            PPR_TEST_ASSERT(gateTexel_(occluded, 64u, 64u) == gateTexel_(terrain, 64u, 64u));
+
+            stage.m_particle_batches.front().m_particles = std::make_shared<const Array<GridParticleInstance>>();
+            PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
+            for (u32 frame = 0u; frame < 3u; ++frame) {
+                const auto empty = drawOpticalGrid_(grid, 21.0f, 21.0f, 1.0f);
+                PPR_TEST_ASSERT(changedOpticalPixels_(terrain, empty) == 0u);
+            }
+
+            stage.m_uploads.front().m_cell_materials[64u * 128u + 64u] = 0u;
+            auto dense = std::make_shared<Array<GridParticleInstance>>();
+            dense->reserve(70000u);
+            for (u64 id = 1u; id <= 70000u; ++id) {
+                // The centre aligns with a half-resolution texel centre in the
+                // 64-pixel target, making every kernel contribute its full 1.
+                dense->push_back({id, 21.515625, 21.484375, 1.0 / 9.0, 1.0, 300.0, 1u});
+            }
+
+            stage.m_particle_batches.front().m_particles = std::move(dense);
+            PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
+
+            const auto dense_pixels = drawOpticalGrid_(grid, 21.0f, 21.0f, 1.0f, 64u);
+            const auto dense_centre = gateTexel_(dense_pixels, 32u, 32u);
+            // The admitted overlap exceeds FP16's finite range. Overflow must
+            // not turn the normalized blue surface into a black/NaN result.
+            PPR_TEST_ASSERT(dense_centre[2] > 150u and dense_centre[2] > dense_centre[0] + 80u);
+            saveGridQa_(dense_pixels, "particle-liquid-dense-overlap");
+        };
+
+        PPR_UNIT_TEST (grid_liquid_optics_and_viewport_cost) {
+            const auto rhi = SharedGpu::rhiService();
+            const auto shader = SharedGpu::shaderService();
+            Renderer *const renderer = SharedGpu::renderer();
+            PPR_TEST_ASSERT(rhi.isValid() and shader.isValid() and renderer != nullptr);
+            GridPass grid;
+            GridPass no_optics;
+            GridPass rough_control;
+            PPR_TEST_ASSERT(not grid.initialize(*rhi, *shader, std::filesystem::current_path()));
+            PPR_TEST_ASSERT(not no_optics.initialize(*rhi, *shader, std::filesystem::current_path()));
+            PPR_TEST_ASSERT(not rough_control.initialize(*rhi, *shader, std::filesystem::current_path()));
+            PPR_DEFER {
+                PPR_TEST_ASSERT(not renderer->waitOnHost());
+                PPR_TEST_ASSERT(not rough_control.shutdown());
+                PPR_TEST_ASSERT(not no_optics.shutdown());
+                PPR_TEST_ASSERT(not grid.shutdown());
+            };
+
+            // The shipped water material's authored optical appearance, against
+            // an owned patterned backdrop that exposes refracted displacement.
+            GridTerrainVisual water{};
+            water.m_material_id = 1u;
+            water.m_color_rgba = 0x3989c970u;
+            water.m_texture_period_m = 2.0f;
+            water.m_roughness = 0.12f;
+            water.m_ior = 1.333f;
+            water.m_normal_scale = 0.8f;
+            water.m_refraction_depth_m = 0.2f;
+            water.m_emissive_strength = 1.0f;
+            water.m_surface_flags = kGridSurfaceParticleLiquid | kGridSurfaceOpticalBlend;
+            auto stage = opticalGridFixture_(water, 0u);
+            stage.m_cell_size_m = 1.0f / 3.0f;
+            for (auto &layer: stage.m_background_layers) {
+                layer.m_repeat_period_m = 2.0f;
+            }
+
+            PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
+            const auto background = drawOpticalGrid_(grid, 19.5f, 20.0f, 4.0f, 512u);
+
+            auto records = std::make_shared<Array<GridParticleInstance>>();
+            constexpr u32 columns = 12u;
+            constexpr u32 rows = 6u;
+            records->reserve(columns * rows);
+            for (u32 y = 0u; y < rows; ++y) {
+                for (u32 x = 0u; x < columns; ++x) {
+                    records->push_back(
+                        {u64(y * columns + x + 1u), 20.4 + 0.2 * x, 20.8 + 0.2 * y, 1.0 / 9.0, 1.0, 300.0, 1u});
+                }
+            }
+
+            stage.m_particle_batches = {GridParticleBatch{0u, std::move(records)}};
+            PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
+
+            const auto optical = drawOpticalGrid_(grid, 19.5f, 20.0f, 4.0f, 512u);
+            saveGridQa_(optical, "particle-water-optical-native");
+            saveGridQa_(optical, "particle-water-glossy-native");
+            PPR_TEST_ASSERT(changedOpticalPixels_(background, optical) > 100u);
+            PPR_TEST_ASSERT(grid.observations().m_particle_instances == columns * rows);
+
+            auto unshifted = stage;
+            // Preserve Fresnel and highlight parameters; only backdrop
+            // displacement changes in this refraction control.
+            unshifted.m_terrain_visuals.front().m_refraction_depth_m = 0.0f;
+            PPR_TEST_ASSERT(not no_optics.applyStagedFrame(unshifted));
+
+            const auto flat = drawOpticalGrid_(no_optics, 19.5f, 20.0f, 4.0f, 512u);
+            saveGridQa_(flat, "particle-water-refraction-off-native");
+            PPR_TEST_ASSERT(changedOpticalPixels_(flat, optical) > 0u);
+
+            auto rough = stage;
+            rough.m_terrain_visuals.front().m_roughness = 1.0f;
+            PPR_TEST_ASSERT(not rough_control.applyStagedFrame(rough));
+
+            const auto matte = drawOpticalGrid_(rough_control, 19.5f, 20.0f, 4.0f, 512u);
+            saveGridQa_(matte, "particle-water-roughness-1-native");
+            PPR_TEST_ASSERT(changedOpticalPixels_(matte, optical) > 0u);
+
+            constexpr u32 warm_frames = 3u;
+            constexpr u32 sample_frames = 5u;
+            std::array<float, sample_frames> samples{};
+            for (u32 frame = 0u; frame < warm_frames + sample_frames; ++frame) {
+                std::ignore = drawOpticalGrid_(grid, 19.5f, 20.0f, 4.0f, 1920u, nullptr, nullptr, false, 1080u);
+                const auto submitted = renderer->lastSubmittedFenceValue();
+                const auto timing = renderer->lastGpuFrameTiming();
+                PPR_TEST_ASSERT(timing.has_value() and timing->m_submission == submitted);
+                PPR_TEST_ASSERT(std::isfinite(timing->m_milliseconds) and timing->m_milliseconds >= 0.0f);
+                if (frame >= warm_frames) {
+                    samples[frame - warm_frames] = timing->m_milliseconds;
+                }
+            }
+
+            std::ranges::sort(samples);
+            // ID, depth and two scalar fields use 16 bytes per half-resolution
+            // pixel. Three retained slots at this viewport total 23.73 MiB.
+            constexpr u64 field_bytes = 16ull * 960u * 540u * 3u;
+            std::println(
+                "LIQUID-COST particles={} viewport=1920x1080 target_edge=1920 warm_frames={} samples={} "
+                "field_bytes={} gpu_ms_min={} median={} max={}",
+                columns * rows, warm_frames, sample_frames, field_bytes, samples.front(), samples[sample_frames / 2u],
+                samples.back());
+        };
+
+        PPR_UNIT_TEST (grid_liquid_nominal_density_deformation_coverage) {
+            const auto rhi = SharedGpu::rhiService();
+            const auto shader = SharedGpu::shaderService();
+            Renderer *const renderer = SharedGpu::renderer();
+            PPR_TEST_ASSERT(rhi.isValid() and shader.isValid() and renderer != nullptr);
+            GridPass grid;
+            RetroPass picture;
+            PPR_TEST_ASSERT(not grid.initialize(*rhi, *shader, std::filesystem::current_path()));
+            PPR_TEST_ASSERT(not picture.initialize(*rhi, *shader, std::filesystem::current_path()));
+            PPR_DEFER {
+                PPR_TEST_ASSERT(not renderer->waitOnHost());
+                PPR_TEST_ASSERT(not picture.shutdown());
+                PPR_TEST_ASSERT(not grid.shutdown());
+            };
+
+            GridTerrainVisual blue{};
+            blue.m_material_id = 1u;
+            blue.m_color_rgba = 0x0000ffffu;
+            blue.m_surface_flags = kGridSurfaceParticleLiquid;
+            auto stage = opticalGridFixture_(blue, 0u);
+            stage.m_has_background = false;
+            stage.m_cell_size_m = 1.0f / 3.0f;
+
+            constexpr double spacing = 1.0 / 3.0;
+            constexpr double volume = spacing * spacing;
+            const double radius = std::sqrt(volume / std::numbers::pi);
+            constexpr double cavity_radius = 2.0;
+            constexpr double cavity_centre = 21.5;
+            constexpr double min_x = 13.5;
+            constexpr double min_y = 21.5 - 16.0 / 3.0;
+            constexpr double max_x = min_x + 48.0 / 3.0;
+            constexpr double max_y = min_y + 32.0 / 3.0;
+            const double cavity_cut_radius = cavity_radius + 3.0 * radius;
+            // The extra radius also excludes the discretized particle edge;
+            // bulk checks remain at least five radii from the cavity surface.
+            const double cavity_exclusion_radius = cavity_cut_radius + 6.0 * radius;
+            auto records = std::make_shared<Array<GridParticleInstance>>();
+            records->reserve(48u * 32u + 3u);
+            for (u32 y = 0u; y < 32u; ++y) {
+                for (u32 x = 0u; x < 48u; ++x) {
+                    // This procedural stressed counterexample is not a replay:
+                    // a frozen 2x2 block expands by only 0.25 spacing per axis.
+                    const double px = min_x + (double(x) + 0.5) * spacing + ((x & 1u) == 0u ? -0.25 : 0.25) * spacing;
+                    const double py = min_y + (double(y) + 0.5) * spacing + ((y & 1u) == 0u ? -0.25 : 0.25) * spacing;
+                    const double dx = px - cavity_centre;
+                    const double dy = py - cavity_centre;
+                    if (dx * dx + dy * dy < cavity_cut_radius * cavity_cut_radius) {
+                        continue;
+                    }
+
+                    records->push_back({u64(records->size() + 1u), px, py, volume, 1.0, 300.0, 1u});
+                }
+            }
+
+            // An isolated disk and a pair separated by 4.5 physical radii must
+            // retain empty space; filling bulk interstices cannot fill all gaps.
+            records->push_back({u64(records->size() + 1u), 12.5, 13.5, volume, 1.0, 300.0, 1u});
+            records->push_back({u64(records->size() + 1u), 15.5, 13.5, volume, 1.0, 300.0, 1u});
+            records->push_back({u64(records->size() + 1u), 15.5 + 4.5 * radius, 13.5, volume, 1.0, 300.0, 1u});
+            const u32 particle_count = safe_narrowing(records->size());
+            stage.m_particle_batches = {GridParticleBatch{0u, std::move(records)}};
+            PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
+
+            std::array<u32, 2u> holes{}, interior_samples{}, cavity_painted{}, cavity_samples{};
+            std::array<u32, 2u> isolated_blue{}, isolated_gap_blue{}, left_blue{}, right_blue{}, pair_gap_blue{};
+            std::array<u32, 2u> isolated_gap_delta{}, pair_gap_delta{};
+            const auto sample = [](const GatePixels &pixels, const double x, const double y) {
+                const u32 px = static_cast<u32>((x - 11.5) * 512.0 / 20.0);
+                const u32 py = static_cast<u32>((31.5 - y) * 512.0 / 20.0);
+                return gateTexel_(pixels, px, py);
+            };
+
+            for (const bool temporal: {false, true}) {
+                const u32 mode = temporal ? 1u : 0u;
+                const RetroSettings settings{
+                    .m_enabled = false,
+                    .m_palette_enabled = false,
+                    .m_temporal_enabled = temporal,
+                    .m_pixel_scale = 4u};
+                GatePixels pixels{};
+                for (u32 frame = 0u; frame < 4u; ++frame) {
+                    pixels = drawOpticalGrid_(
+                        grid, 11.5f, 11.5f, 20.0f, 512u, nullptr, nullptr, false, 0u, 0.0f, &settings, &picture);
+                    PPR_TEST_ASSERT(picture.temporalActive() == temporal);
+                }
+
+                saveGridQa_(
+                    pixels, temporal ? "particle-liquid-nominal-deformation-temporal"
+                                     : "particle-liquid-nominal-deformation-native");
+
+                const auto empty_color = gateTexel_(pixels, 0u, 0u);
+                for (u32 y = 0u; y < 512u; ++y) {
+                    for (u32 x = 0u; x < 512u; ++x) {
+                        const double px = 11.5 + (double(x) + 0.5) * 20.0 / 512.0;
+                        const double py = 31.5 - (double(y) + 0.5) * 20.0 / 512.0;
+                        const double dx = px - cavity_centre;
+                        const double dy = py - cavity_centre;
+                        const double distance_squared = dx * dx + dy * dy;
+                        const auto pixel = gateTexel_(pixels, x, y);
+                        if (distance_squared < 1.5 * 1.5) {
+                            ++cavity_samples[mode];
+                            cavity_painted[mode] += texelDist_(pixel, empty_color) > 2u ? 1u : 0u;
+                        }
+
+                        if (px <= min_x + 5.0 * radius or
+                            px >= max_x - 5.0 * radius or
+                            py <= min_y + 5.0 * radius or
+                            py >= max_y - 5.0 * radius or
+                            distance_squared <= cavity_exclusion_radius * cavity_exclusion_radius) {
+                            continue;
+                        }
+
+                        ++interior_samples[mode];
+                        holes[mode] += pixel[2] < 200u ? 1u : 0u;
+                    }
+                }
+
+                isolated_blue[mode] = sample(pixels, 12.5, 13.5)[2];
+                isolated_gap_blue[mode] = sample(pixels, 12.5 + 2.5 * radius, 13.5)[2];
+                isolated_gap_delta[mode] = texelDist_(sample(pixels, 12.5 + 2.5 * radius, 13.5), empty_color);
+                left_blue[mode] = sample(pixels, 15.5, 13.5)[2];
+                right_blue[mode] = sample(pixels, 15.5 + 4.5 * radius, 13.5)[2];
+                pair_gap_blue[mode] = sample(pixels, 15.5 + 2.25 * radius, 13.5)[2];
+                pair_gap_delta[mode] = texelDist_(sample(pixels, 15.5 + 2.25 * radius, 13.5), empty_color);
+
+                std::println(
+                    "LIQUID-COVERAGE fixture=frozen-outward-2x2-not-replay nominal_fill=1 spacing_m={} "
+                    "jitter_fraction=0.25 particles={} temporal={} blue_threshold=200 interior_samples={} "
+                    "holes={} cavity_radius_m={} cavity_checked_radius_m=1.5 cavity_exclusion_radius_m={} "
+                    "cavity_samples={} cavity_painted={} isolated_blue={} isolated_gap_blue={} "
+                    "isolated_gap_delta={} left_blue={} right_blue={} pair_gap_blue={} pair_gap_delta={}",
+                    spacing, particle_count, temporal, interior_samples[mode], holes[mode], cavity_radius,
+                    cavity_exclusion_radius, cavity_samples[mode], cavity_painted[mode], isolated_blue[mode],
+                    isolated_gap_blue[mode], isolated_gap_delta[mode], left_blue[mode], right_blue[mode],
+                    pair_gap_blue[mode], pair_gap_delta[mode]);
+            }
+
+            // Both modes emit their complete metrics and QA before a baseline
+            // failure, so this diagnostic never hides the second observation.
+            for (u32 mode = 0u; mode < 2u; ++mode) {
+                PPR_TEST_ASSERT(interior_samples[mode] > 0u and cavity_samples[mode] > 0u);
+                PPR_TEST_ASSERT(isolated_blue[mode] >= 200u and left_blue[mode] >= 200u and right_blue[mode] >= 200u);
+                PPR_TEST_ASSERT(isolated_gap_delta[mode] <= 2u and pair_gap_delta[mode] <= 2u);
+                PPR_TEST_ASSERT(cavity_painted[mode] == 0u);
+                PPR_TEST_ASSERT(holes[mode] == 0u);
+            }
+        };
+
+        PPR_UNIT_TEST (grid_liquid_full_resolution_temporal_cost) {
+            const auto rhi = SharedGpu::rhiService();
+            const auto shader = SharedGpu::shaderService();
+            Renderer *const renderer = SharedGpu::renderer();
+            PPR_TEST_ASSERT(rhi.isValid() and shader.isValid() and renderer != nullptr);
+            auto &device = rhi->getDevice();
+            const int2 native_extent{3445, 1837};
+            const auto target = makeRenderTarget_(device, 3445u, 1837u);
+            PPR_TEST_ASSERT(target.has_value());
+            GridPass grid;
+            RetroPass picture;
+            PPR_TEST_ASSERT(not grid.initialize(*rhi, *shader, std::filesystem::current_path()));
+            PPR_TEST_ASSERT(not picture.initialize(*rhi, *shader, std::filesystem::current_path()));
+            PPR_DEFER {
+                const auto submitted = renderer->lastSubmittedFenceValue();
+                if (submitted != kFenceValueNone) {
+                    PPR_TEST_ASSERT(not renderer->waitForFenceValue(submitted));
+                }
+
+                PPR_TEST_ASSERT(not renderer->retireCompletedFrames());
+                PPR_TEST_ASSERT(not picture.shutdown());
+                PPR_TEST_ASSERT(not grid.shutdown());
+            };
+
+            const char *const phase_setting = std::getenv("PPR_PARTICLE_PHASE_TIMINGS");
+            PPR_TEST_ASSERT(
+                phase_setting == nullptr or
+                std::string_view{phase_setting} == "0" or
+                std::string_view{phase_setting} == "1");
+            const bool instrumented = phase_setting != nullptr and std::string_view{phase_setting} == "1";
+            rhi::ComPtr<rhi::IQueryPool> phase_queries;
+            const double frequency = static_cast<double>(device.getInfo().timestampFrequency);
+            PPR_TEST_ASSERT(std::isfinite(frequency) and frequency > 0.0);
+            if (instrumented) {
+                rhi::QueryPoolDesc desc{};
+                desc.type = rhi::QueryType::Timestamp;
+                desc.count = 12u;
+                desc.label = "test-only particle phase attribution";
+                PPR_TEST_ASSERT(not make_error_code(device.createQueryPool(desc, phase_queries.writeRef())));
+
+                PPR_TEST_ASSERT(
+                    not grid.setParticleTimingQueriesForTest(phase_queries, renderer->completedFenceValue()));
+            }
+
+            const char *const workload_setting = std::getenv("PPR_PARTICLE_BENCHMARK_WORKLOAD");
+            const std::string_view workload = workload_setting != nullptr ? workload_setting : "liquid";
+            PPR_TEST_ASSERT(
+                workload == "liquid" or workload == "solid" or workload == "mixed" or workload == "solid_materials");
+            PPR_TEST_ASSERT(not instrumented or (workload != "solid" and workload != "solid_materials"));
+            const char *const gas_setting = std::getenv("PPR_PARTICLE_BENCHMARK_GAS");
+            const std::string_view gas_value = gas_setting != nullptr ? gas_setting : "0";
+            PPR_TEST_ASSERT(gas_value == "0" or gas_value == "1");
+            const bool gas_present = gas_value == "1";
+
+            const char *const ppc_setting = std::getenv("PPR_PARTICLE_BENCHMARK_SOLID_PPC");
+            const std::string_view ppc_value = ppc_setting != nullptr ? ppc_setting : "1";
+            PPR_TEST_ASSERT(ppc_value == "1" or ppc_value == "4");
+            const u32 solid_ppc = ppc_value == "4" ? 4u : 1u;
+            constexpr u32 physical_parent_cells = 96u * 48u;
+            const u32 solid_parent_cells = workload == "mixed" ? physical_parent_cells / 2u
+                                                               : (workload == "solid" or workload == "solid_materials"
+                                                                         ? physical_parent_cells
+                                                                         : 0u);
+            const u32 particle_count = physical_parent_cells + solid_parent_cells * (solid_ppc - 1u) + u32(gas_present);
+
+            GridTerrainVisual water{};
+            water.m_material_id = 1u;
+            water.m_color_rgba = 0x3989c970u;
+            water.m_roughness = 0.12f;
+            water.m_ior = 1.333f;
+            water.m_refraction_depth_m = 0.2f;
+            water.m_surface_flags = kGridSurfaceParticleLiquid | kGridSurfaceOpticalBlend;
+
+            GridTerrainVisual solid = water;
+            solid.m_material_id = 2u;
+            solid.m_color_rgba = 0xb39164ffu;
+            solid.m_ior = 1.0f;
+            solid.m_roughness = 0.8f;
+            solid.m_refraction_depth_m = 0.0f;
+            solid.m_texture_index = 0u;
+            solid.m_texture_period_m = 1.0f;
+            solid.m_surface_flags = kGridSurfaceParticleSolid | kGridSurfaceTextureRepeat;
+            if (workload == "solid" or workload == "solid_materials") {
+                water = solid;
+                water.m_material_id = 1u;
+            }
+
+            if (workload == "solid_materials") {
+                std::println(
+                    "PARTICLE-MATERIAL-WORKLOAD workload=solid_materials checker_block_grains=4 texture_index=0 matched_frozen_positions=true");
+            }
+
+            auto stage = opticalGridFixture_(water, 0u);
+            stage.m_has_catalog = true;
+            if (workload == "mixed" or workload == "solid_materials") {
+                if (workload == "solid_materials") {
+                    solid.m_color_rgba = 0x648fb3ffu;
+                }
+                stage.m_terrain_visuals.push_back(solid);
+            }
+            if (gas_present) {
+                GridTerrainVisual gas{};
+                gas.m_material_id = 3u;
+                gas.m_color_rgba = 0xffffff80u;
+                gas.m_surface_flags = kGridSurfaceOpticalBlend;
+                stage.m_terrain_visuals.push_back(gas);
+            }
+
+            stage.m_cell_size_m = 1.0f / 3.0f;
+            auto records = std::make_shared<Array<GridParticleInstance>>();
+            records->reserve(particle_count);
+            for (u32 y = 0u; y < 48u; ++y) {
+                for (u32 x = 0u; x < 96u; ++x) {
+                    const double px = 5.0 + (double(x) + 0.5 + ((x & 1u) == 0u ? -0.25 : 0.25)) / 3.0;
+                    const double py = 12.0 + (double(y) + 0.5 + ((y & 1u) == 0u ? -0.25 : 0.25)) / 3.0;
+                    const bool second_solid = workload == "solid_materials" and ((x / 4u + y / 4u) & 1u) != 0u;
+                    const u32 material = (workload == "mixed" and x >= 48u) or second_solid ? 2u : 1u;
+                    const bool solid_parent = workload == "solid" or
+                                              workload == "solid_materials" or
+                                              (workload == "mixed" and x >= 48u);
+                    const u32 samples_per_parent = solid_parent ? solid_ppc : 1u;
+                    for (u32 sample = 0u; sample < samples_per_parent; ++sample) {
+                        const double offset_x = samples_per_parent == 1u ? 0.0
+                                                                         : ((sample & 1u) != 0u ? 0.25 : -0.25) *
+                                                                               static_cast<double>(stage.m_cell_size_m);
+                        const double offset_y = samples_per_parent == 1u ? 0.0
+                                                                         : ((sample & 2u) != 0u ? 0.25 : -0.25) *
+                                                                               static_cast<double>(stage.m_cell_size_m);
+                        records->push_back(
+                            {static_cast<u64>(records->size()) + 1u, px + offset_x, py + offset_y,
+                                (1.0 / 9.0) / samples_per_parent, 1.0 / samples_per_parent, 300.0, material});
+                    }
+                }
+            }
+
+            if (gas_present) {
+                // Admitted inventory contains gas even when the 32m camera
+                // cannot see it; the wide view contains this one extra grain.
+                records->push_back({static_cast<u64>(records->size()) + 1u, 40.0, 40.0, 1.0 / 9.0, 1.0, 300.0, 3u});
+            }
+
+            PPR_TEST_ASSERT(records->size() == particle_count);
+
+            // This fixture's seed adapter packs every admitted row, including
+            // its optional gas row, into hot64/cold24 and metadata32 protocols.
+            // Report a row-byte model, not device allocation/residency totals.
+            std::println(
+                "PARTICLE-FULLRES-INVENTORY workload={} gas_present={} physical_parent_cells={} solid_parent_cells={} "
+                "solid_ppc={} actual_sample_count={} metadata_rows={} numerical_rows={} readonly_rows={} packed_rows={} "
+                "protocol_byte_model=true metadata_bytes={} numerical_bytes={} readonly_bytes={} packed_bytes={}",
+                workload, gas_present, physical_parent_cells, solid_parent_cells, solid_ppc, particle_count,
+                particle_count, particle_count, particle_count, particle_count,
+                u64(particle_count) * sizeof(GridParticleMetadataRow),
+                u64(particle_count) * kGridParticleNumericalStride, u64(particle_count) * kGridParticleReadonlyStride,
+                u64(particle_count) * 32u);
+
+            stage.m_particle_batches = {GridParticleBatch{0u, std::move(records)}};
+            PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
+
+            for (const float width_m: {32.0f, 128.0f}) {
+                const char *const occupancy = width_m == 32.0f ? "dense-pool" : "wide-sparse";
+                CameraModel model{};
+                model.m_camera_mode = ECameraProjection::orthographic;
+                model.m_ortho_scale = width_m / float(native_extent.x);
+                const float height_m = model.m_ortho_scale * float(native_extent.y);
+                // Preserve the existing 32m camera exactly. The wide view centres
+                // on the unchanged pool, exposing empty viewport work around it.
+                const float origin_x = width_m == 32.0f ? 5.0f : 21.0f - width_m * 0.5f;
+                const float origin_y = width_m == 32.0f ? 12.0f : 20.0f - height_m * 0.5f;
+                model.m_origin = float3{origin_x, origin_y, -0.5f};
+                Camera camera{ECameraProjection::orthographic};
+                camera.updateModel(TimeSpan{}, model, Viewport{PixelRect{0, 0, native_extent.x, native_extent.y}});
+                const float3 centre{origin_x + width_m * 0.5f, origin_y + height_m * 0.5f, -0.5f};
+                model.m_origin = centre - camera.getRight() * (width_m * 0.5f) - camera.getUp() * (height_m * 0.5f);
+                camera.updateModel(TimeSpan{}, model, Viewport{PixelRect{0, 0, native_extent.x, native_extent.y}});
+                auto snapshot = camera.getSnapshot();
+                snapshot.m_has_camera_cut = false;
+                PPR_TEST_ASSERT(not grid.update(TimeSpan{}, snapshot));
+                for (;;) {
+                    PPR_TEST_ASSERT(not renderer->retireCompletedFrames());
+
+                    const auto prepared = grid.tryPrepareCellUploads(device, renderer->completedFenceValue());
+                    PPR_TEST_ASSERT(prepared.has_value());
+                    if (*prepared) {
+                        break;
+                    }
+
+                    const auto submitted = renderer->lastSubmittedFenceValue();
+                    if (submitted != kFenceValueNone) {
+                        PPR_TEST_ASSERT(not renderer->waitForFenceValue(submitted));
+                    }
+                }
+
+                const std::array<RetroSettings, 3u> policies{
+                    RetroSettings{
+                        .m_enabled = false,
+                        .m_palette_enabled = false,
+                        .m_temporal_enabled = false,
+                        .m_pixel_scale = 8u},
+                    RetroSettings{
+                        .m_enabled = false,
+                        .m_palette_enabled = false,
+                        .m_temporal_enabled = true,
+                        .m_pixel_scale = 8u},
+                    RetroSettings{
+                        .m_enabled = true,
+                        .m_palette_enabled = false,
+                        .m_temporal_enabled = false,
+                        .m_pixel_scale = 8u}};
+                constexpr u32 warm_frames = 30u;
+                constexpr u32 sample_frames = 15u;
+                for (const auto &settings: policies) {
+                    const auto scene_extent = settings.m_enabled ? RetroPass::sceneExtent(native_extent, 8u)
+                                                                 : native_extent;
+                    const auto viewport = rhi::Viewport::fromSize(float(scene_extent.x), float(scene_extent.y));
+                    const auto scissor = rhi::ScissorRect::fromSize(u32(scene_extent.x), u32(scene_extent.y));
+                    const bool offscreen = settings.m_enabled or settings.m_temporal_enabled;
+                    std::array<float, sample_frames> samples{};
+                    std::array<double, sample_frames> cpu_samples{};
+                    const auto cpu_clock = std::chrono::steady_clock::now;
+                    for (u32 frame = 0u; frame < warm_frames + sample_frames; ++frame) {
+                        if (instrumented) {
+                            // The previous exact submit fence and retirement below
+                            // completed before this pool is reset for another frame.
+                            PPR_TEST_ASSERT(not make_error_code(phase_queries->reset(0u, 12u)));
+                        }
+
+                        const auto raster = picture.beginFrame(
+                            settings, snapshot, scene_extent, grid.worldGeneration());
+                        PPR_TEST_ASSERT(picture.temporalActive() == settings.m_temporal_enabled);
+                        PPR_TEST_ASSERT(not grid.update(TimeSpan{}, raster));
+
+                        const auto draw_content = [&](const DrawContext &context) -> std::error_code {
+                            PPR_RETURN_ERROR_ON_FAIL(GridMaterialGate, grid.renderBackground(context));
+                            PPR_RETURN_ERROR_ON_FAIL(GridMaterialGate, grid.render(context));
+                            return grid.renderParticles(context);
+                        };
+
+                        const auto prepare = [&](const PreRenderContext &context) -> std::error_code {
+                            PPR_RETURN_ERROR_ON_FAIL(
+                                GridMaterialGate, grid.prepareBackground(context, snapshot, viewport, scissor));
+                            PPR_RETURN_ERROR_ON_FAIL(GridMaterialGate, grid.prepareGpuParticles(context));
+                            if (offscreen) {
+                                return picture.prepareScene(
+                                    context, RetroPass::scenePipelineSignature(settings.m_temporal_enabled),
+                                    scene_extent, DrawCallback{draw_content});
+                            }
+
+                            return {};
+                        };
+
+                        const auto present = [&](const DrawContext &context) {
+                            return offscreen ? picture.render(context) : draw_content(context);
+                        };
+
+                        DrawSubmission submission{"nominal-density full-resolution liquid cost", present};
+                        if (not offscreen) {
+                            submission.m_viewport = viewport;
+                            submission.m_scissor = scissor;
+                        }
+
+                        // Target, camera, pool, picture history and pass resources
+                        // are retained. No CPU pixel readback occurs in this loop.
+                        const auto cpu_begin = cpu_clock();
+                        PPR_TEST_ASSERT(not renderer->renderToTexture(
+                            targetRef_(target), {submission}, {}, PreRenderCallback{prepare}));
+                        const auto cpu_end = cpu_clock();
+                        const double cpu_ms = std::chrono::duration<double, std::milli>(cpu_end - cpu_begin).count();
+                        PPR_TEST_ASSERT(std::isfinite(cpu_ms) and cpu_ms >= 0.0);
+                        const auto submitted = renderer->lastSubmittedFenceValue();
+                        grid.notifyFrameSubmitted(submitted);
+                        if (offscreen) {
+                            picture.notifyFrameSubmitted(submitted);
+                        }
+
+                        PPR_TEST_ASSERT(not renderer->waitForFenceValue(submitted));
+                        PPR_TEST_ASSERT(not renderer->retireCompletedFrames());
+                        PPR_TEST_ASSERT(renderer->completedFenceValue() >= submitted);
+                        const auto timing = renderer->lastGpuFrameTiming();
+                        PPR_TEST_ASSERT(timing.has_value() and timing->m_submission == submitted);
+                        PPR_TEST_ASSERT(std::isfinite(timing->m_milliseconds) and timing->m_milliseconds >= 0.0f);
+                        if (frame >= warm_frames) {
+                            samples[frame - warm_frames] = timing->m_milliseconds;
+                            cpu_samples[frame - warm_frames] = cpu_ms;
+                        }
+
+                        if (instrumented) {
+                            rhi::QueryResultState state{};
+                            PPR_TEST_ASSERT(not make_error_code(phase_queries->getResultState(0u, 12u, &state)));
+                            PPR_TEST_ASSERT(state == rhi::QueryResultState::Resolved);
+
+                            std::array<u64, 12u> ticks{};
+                            PPR_TEST_ASSERT(not make_error_code(phase_queries->getResult(0u, 12u, ticks.data())));
+
+                            std::array<double, 6u> phase_ms{};
+                            for (u32 phase = 0u; phase < phase_ms.size(); ++phase) {
+                                PPR_TEST_ASSERT(ticks[phase * 2u + 1u] >= ticks[phase * 2u]);
+                                phase_ms[phase] = double(ticks[phase * 2u + 1u] - ticks[phase * 2u]) *
+                                                  1000.0 /
+                                                  frequency;
+                            }
+
+                            std::println(
+                                "PARTICLE-PHASE workload={} gas_present={} particles={} physical_parent_cells={} actual_sample_count={} solid_ppc={} fov_width_m={} occupancy={} pixelized={} temporal={} frame={} measured={} submission={} "
+                                "pack_cull_ms={} element_ms={} density_ms={} filter_ms={} composite_ms={} ordinary_ms={}",
+                                workload, gas_present, particle_count, physical_parent_cells, particle_count, solid_ppc,
+                                width_m, occupancy, settings.m_enabled, settings.m_temporal_enabled, frame,
+                                frame >= warm_frames, submitted, phase_ms[0u], phase_ms[1u], phase_ms[2u], phase_ms[3u],
+                                phase_ms[4u], phase_ms[5u]);
+                        }
+                    }
+
+                    PPR_TEST_ASSERT(grid.observations().m_particle_instances == particle_count);
+
+                    const auto unsorted = samples;
+                    const auto cpu_unsorted = cpu_samples;
+                    std::ranges::sort(samples);
+                    std::ranges::sort(cpu_samples);
+
+                    // Synchronous encode+submit only: excludes the explicit GPU
+                    // fence wait/retirement below each submit, display and scanout.
+                    std::println(
+                        "PARTICLE-FULLRES-CPU catalog_contours=true workload={} gas_present={} particles={} physical_parent_cells={} actual_sample_count={} solid_ppc={} fov_width_m={} occupancy={} pixelized={} temporal={} "
+                        "warm_frames={} samples={} encode_submit_ms_min={} median={} max={} "
+                        "sample_ms=[{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}]",
+                        workload, gas_present, particle_count, physical_parent_cells, particle_count, solid_ppc,
+                        width_m, occupancy, settings.m_enabled, settings.m_temporal_enabled, warm_frames, sample_frames,
+                        cpu_samples.front(), cpu_samples[sample_frames / 2u], cpu_samples.back(), cpu_unsorted[0u],
+                        cpu_unsorted[1u], cpu_unsorted[2u], cpu_unsorted[3u], cpu_unsorted[4u], cpu_unsorted[5u],
+                        cpu_unsorted[6u], cpu_unsorted[7u], cpu_unsorted[8u], cpu_unsorted[9u], cpu_unsorted[10u],
+                        cpu_unsorted[11u], cpu_unsorted[12u], cpu_unsorted[13u], cpu_unsorted[14u]);
+
+                    std::println(
+                        "PARTICLE-FULLRES-COST catalog_contours=true workload={} gas_present={} fixture=frozen-outward-2x2-not-replay nominal_fill=1 particles={} physical_parent_cells={} actual_sample_count={} solid_ppc={} "
+                        "fov_width_m={} occupancy={} nominal_pool_fraction={} target=3445x1837 scene={}x{} "
+                        "pixelized={} palette=false temporal={} "
+                        "instrumented={} warm_frames={} samples={} gpu_frame_ms_min={} median={} max={} "
+                        "sample_ms=[{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}]",
+                        workload, gas_present, particle_count, physical_parent_cells, particle_count, solid_ppc,
+                        width_m, occupancy, 512.0 / (double(width_m) * double(height_m)), scene_extent.x,
+                        scene_extent.y, settings.m_enabled, settings.m_temporal_enabled, instrumented, warm_frames,
+                        sample_frames, samples.front(), samples[sample_frames / 2u], samples.back(), unsorted[0u],
+                        unsorted[1u], unsorted[2u], unsorted[3u], unsorted[4u], unsorted[5u], unsorted[6u],
+                        unsorted[7u], unsorted[8u], unsorted[9u], unsorted[10u], unsorted[11u], unsorted[12u],
+                        unsorted[13u], unsorted[14u]);
+                }
+            }
+        };
+
+        [[nodiscard]] GridPass::GridStagedFrame slantedSolidInterfaceFixture_() {
+            GridTerrainVisual blue{};
+            blue.m_material_id = 1u;
+            blue.m_color_rgba = 0x0000ffffu;
+            blue.m_ior = 1.0f;
+            blue.m_surface_flags = kGridSurfaceParticleSolid;
+            auto stage = opticalGridFixture_(blue, 0u);
+            stage.m_has_background = false;
+            stage.m_cell_size_m = 1.0f / 3.0f;
+            auto red = blue;
+            red.m_material_id = 2u;
+            red.m_color_rgba = 0xff0000ffu;
+            stage.m_terrain_visuals.push_back(red);
+            auto rows = std::make_shared<Array<GridParticleInstance>>();
+            for (u32 y = 0u; y < 9u; ++y) {
+                for (u32 x = 0u; x < 9u; ++x) {
+                    const double px = 21.5 + (double(x) + 0.5) / 3.0;
+                    const double py = 21.5 + (double(y) + 0.5) / 3.0;
+                    const u32 material = px < 23.0 + 0.37 * (py - 23.0) ? 1u : 2u;
+                    rows->push_back({u64(y * 9u + x + 1u), px, py, 1.0 / 9.0, 1.0, 300.0, material});
+                }
+            }
+
+            const double radius = std::sqrt((1.0 / 9.0) / std::numbers::pi);
+            rows->push_back({82u, 20.5, 20.5, 1.0 / 9.0, 1.0, 300.0, 1u});
+            rows->push_back({83u, 20.5 + 4.5 * radius, 20.5, 1.0 / 9.0, 1.0, 300.0, 1u});
+            stage.m_particle_batches = {GridParticleBatch{0u, std::move(rows)}};
+            return stage;
+        }
+
+        void checkSlantedSolidInterfacePixels_(
+            const GatePixels &pixels, const u32 offset_x, const u32 offset_y, const u32 extent_x, const u32 extent_y,
+            const double origin_x, const double origin_y, const double width_m, const bool temporal) {
+            const double metres_per_pixel = width_m / double(extent_x);
+            const double top = origin_y + double(extent_y) * metres_per_pixel;
+            const auto sample = [&](const double x, const double y) {
+                return gateTexel_(
+                    pixels, offset_x + u32((x - origin_x) / metres_per_pixel),
+                    offset_y + u32((top - y) / metres_per_pixel));
+            };
+            u32 intermediate = 0u, holes = 0u, pure_samples = 0u, impure_far = 0u, max_row_mixed = 0u;
+            u32 mixed_without_both_pure_neighbors = 0u;
+            for (u32 y = 0u; y < extent_y; ++y) {
+                const double py = top - (double(y) + 0.5) * metres_per_pixel;
+                if (py <= 21.9 or py >= 24.1) {
+                    continue;
+                }
+
+                u32 row_mixed = 0u;
+                for (u32 x = 0u; x < extent_x; ++x) {
+                    const double px = origin_x + (double(x) + 0.5) * metres_per_pixel;
+                    if (px <= 21.9 or px >= 24.1) {
+                        continue;
+                    }
+
+                    const auto pixel = gateTexel_(pixels, offset_x + x, offset_y + y);
+                    // Red/blue mixing preserves their combined contribution;
+                    // a valid half mix need not retain either pure channel peak.
+                    holes += u32(pixel[0]) + u32(pixel[2]) < 200u ? 1u : 0u;
+                    if (pixel[0] > 30u and pixel[2] > 30u) {
+                        ++row_mixed;
+                        bool pure_blue = false, pure_red = false;
+                        for (int dy = -6; dy <= 6; ++dy) {
+                            for (int dx = -6; dx <= 6; ++dx) {
+                                const int sx = int(x) + dx;
+                                const int sy = int(y) + dy;
+                                if (dx * dx + dy * dy > 36 or
+                                    sx < 0 or
+                                    sy < 0 or
+                                    sx >= int(extent_x) or
+                                    sy >= int(extent_y)) {
+                                    continue;
+                                }
+
+                                const auto neighbor = gateTexel_(pixels, offset_x + u32(sx), offset_y + u32(sy));
+                                pure_blue = pure_blue or (neighbor[2] >= 200u and neighbor[0] < 30u);
+                                pure_red = pure_red or (neighbor[0] >= 200u and neighbor[2] < 30u);
+                            }
+                        }
+
+                        mixed_without_both_pure_neighbors += pure_blue and pure_red ? 0u : 1u;
+                    }
+
+
+                    const double side = px - (23.0 + 0.37 * (py - 23.0));
+                    if (std::abs(side) > 0.5) {
+                        ++pure_samples;
+                        impure_far += side < 0.0 ? (pixel[2] < 200u or pixel[0] >= 30u ? 1u : 0u)
+                                                 : (pixel[0] < 200u or pixel[2] >= 30u ? 1u : 0u);
+                    }
+                }
+
+                intermediate += row_mixed;
+                max_row_mixed = std::max(max_row_mixed, row_mixed);
+            }
+
+            const double radius = std::sqrt((1.0 / 9.0) / std::numbers::pi);
+            const auto clear = sample(25.8, 25.8);
+            const u32 gap_delta = texelDist_(sample(20.5 + 2.25 * radius, 20.5), clear);
+            std::println(
+                "SOLID-INTERFACE temporal={} viewport={}x{} offset={},{} intermediate={} max_mixed_pixels_per_row={} holes={} pure_samples={} impure_far={} sparse_gap_delta={} pure_neighbor_radius_px=6 mixed_without_both_pure_neighbors={}",
+                temporal, extent_x, extent_y, offset_x, offset_y, intermediate, max_row_mixed, holes, pure_samples,
+                impure_far, gap_delta, mixed_without_both_pure_neighbors);
+            PPR_TEST_ASSERT(intermediate > 0u and pure_samples > 0u);
+            // A stair segment can be long along a horizontal row while its
+            // material band remains thin. Bound thickness in two dimensions:
+            // both pure sides must lie within a symmetric six-pixel radius,
+            // preserving the twelve-pixel diameter contract at any orientation.
+            PPR_TEST_ASSERT(mixed_without_both_pure_neighbors == 0u);
+            PPR_TEST_ASSERT(holes == 0u and impure_far == 0u);
+            PPR_TEST_ASSERT(sample(20.5, 20.5)[2] >= 200u and gap_delta <= 2u);
+        }
+
+        enum class EParticleFeatureFixture {
+            isolated,
+            slanted_interface,
+        };
+
+        void checkFivePixelParticleFeatures_(
+            const u32 phase_flag, const EParticleFeatureFixture fixture = EParticleFeatureFixture::isolated) {
+            const bool slanted_interface = fixture == EParticleFeatureFixture::slanted_interface;
+            const auto rhi = SharedGpu::rhiService();
+            const auto shader = SharedGpu::shaderService();
+            Renderer *const renderer = SharedGpu::renderer();
+            PPR_TEST_ASSERT(rhi.isValid() and shader.isValid() and renderer != nullptr);
+            auto &device = rhi->getDevice();
+            const auto target = makeRenderTarget_(device, 3445u, 1837u);
+            PPR_TEST_ASSERT(target.has_value());
+            GridPass grid;
+            RetroPass picture;
+            PPR_TEST_ASSERT(not grid.initialize(*rhi, *shader, std::filesystem::current_path()));
+            PPR_TEST_ASSERT(not picture.initialize(*rhi, *shader, std::filesystem::current_path()));
+            PPR_DEFER {
+                const auto submitted = renderer->lastSubmittedFenceValue();
+                if (submitted != kFenceValueNone) {
+                    PPR_TEST_ASSERT(not renderer->waitForFenceValue(submitted));
+                }
+
+                PPR_TEST_ASSERT(not renderer->retireCompletedFrames());
+                PPR_TEST_ASSERT(not picture.shutdown());
+                PPR_TEST_ASSERT(not grid.shutdown());
+            };
+
+            GridTerrainVisual blue{};
+            blue.m_material_id = 1u;
+            blue.m_color_rgba = 0x0000ffffu;
+            blue.m_surface_flags = phase_flag;
+            auto stage = opticalGridFixture_(blue, 0u);
+            stage.m_has_background = false;
+            stage.m_cell_size_m = 1.0f / 3.0f;
+            auto red = blue;
+            red.m_material_id = 2u;
+            red.m_color_rgba = 0xff0000ffu;
+            stage.m_terrain_visuals.push_back(red);
+            const double radius = std::sqrt((1.0 / 9.0) / std::numbers::pi);
+            auto records = std::make_shared<Array<GridParticleInstance>>();
+            records->push_back({1u, 8.0, 20.0, 1.0 / 9.0, 1.0, 300.0, 1u});
+            records->push_back({2u, 18.0, 20.0, 1.0 / 9.0, 1.0, 300.0, 1u});
+            records->push_back({3u, 18.0 + 4.5 * radius, 20.0, 1.0 / 9.0, 1.0, 300.0, 1u});
+            records->push_back({4u, 30.0, 20.0, 1.0 / 9.0, 1.0, 300.0, 1u});
+            records->push_back({5u, 30.0 + 1.8 * radius, 20.0, 1.0 / 9.0, 1.0, 300.0, 2u});
+            stage.m_particle_batches = {GridParticleBatch{0u, std::move(records)}};
+            if (slanted_interface) {
+                stage = slantedSolidInterfaceFixture_();
+            }
+
+            PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
+
+            const int2 scene_extent{3431, 1815};
+            const rhi::Viewport output_viewport{7.0f, 11.0f, 3431.0f, 1815.0f};
+            const rhi::ScissorRect output_scissor{7u, 11u, 3438u, 1826u};
+            constexpr float width_m = 128.0f;
+            const float height_m = width_m * float(scene_extent.y) / float(scene_extent.x);
+            const float origin_x = 21.5f - width_m * 0.5f;
+            const float origin_y = 20.0f - height_m * 0.5f;
+            CameraModel model{};
+            model.m_camera_mode = ECameraProjection::orthographic;
+            model.m_origin = float3{origin_x, origin_y, -0.5f};
+            model.m_ortho_scale = width_m / float(scene_extent.x);
+            Camera camera{ECameraProjection::orthographic};
+            camera.updateModel(TimeSpan{}, model, Viewport{PixelRect{int2{0, 0}, scene_extent}});
+            auto snapshot = camera.getSnapshot();
+            snapshot.m_has_camera_cut = false;
+            PPR_TEST_ASSERT(not grid.update(TimeSpan{}, snapshot));
+            for (;;) {
+                PPR_TEST_ASSERT(not renderer->retireCompletedFrames());
+
+                const auto prepared = grid.tryPrepareCellUploads(device, renderer->completedFenceValue());
+                PPR_TEST_ASSERT(prepared.has_value());
+                if (*prepared) {
+                    break;
+                }
+
+                const auto submitted = renderer->lastSubmittedFenceValue();
+                if (submitted != kFenceValueNone) {
+                    PPR_TEST_ASSERT(not renderer->waitForFenceValue(submitted));
+                }
+            }
+
+            const auto sample_x = [&](const double world_x) {
+                return 7u + static_cast<u32>((world_x - double(origin_x)) * double(scene_extent.x) / double(width_m));
+            };
+            const u32 sample_y = 11u + static_cast<u32>(
+                                           (double(origin_y) + double(height_m) - 20.0) *
+                                           double(scene_extent.y) /
+                                           double(height_m));
+            using Pixel = std::array<u8, 4u>;
+            std::array<Pixel, 2u> isolated{}, isolated_gap{}, pair_left{}, pair_right{}, pair_gap{};
+            std::array<Pixel, 2u> isolated_interior{}, isolated_exterior{};
+            std::array<Pixel, 2u> boundary_left{}, boundary_right{}, boundary_midpoint{}, empty{};
+            for (const bool temporal: {false, true}) {
+                const u32 mode = temporal ? 1u : 0u;
+                const RetroSettings settings{
+                    .m_enabled = false,
+                    .m_palette_enabled = false,
+                    .m_temporal_enabled = temporal,
+                    .m_pixel_scale = 8u};
+                const auto viewport = temporal ? rhi::Viewport::fromSize(3431.0f, 1815.0f) : output_viewport;
+                const auto scissor = temporal ? rhi::ScissorRect::fromSize(3431u, 1815u) : output_scissor;
+                for (u32 frame = 0u; frame < (temporal ? 4u : 1u); ++frame) {
+                    const auto raster = picture.beginFrame(settings, snapshot, scene_extent, grid.worldGeneration());
+                    PPR_TEST_ASSERT(picture.temporalActive() == temporal);
+                    PPR_TEST_ASSERT(not grid.update(TimeSpan{}, raster));
+
+                    const auto draw_content = [&](const DrawContext &context) -> std::error_code {
+                        PPR_RETURN_ERROR_ON_FAIL(GridMaterialGate, grid.renderBackground(context));
+                        PPR_RETURN_ERROR_ON_FAIL(GridMaterialGate, grid.render(context));
+                        return grid.renderParticles(context);
+                    };
+
+                    const auto prepare = [&](const PreRenderContext &context) -> std::error_code {
+                        PPR_RETURN_ERROR_ON_FAIL(
+                            GridMaterialGate, grid.prepareBackground(context, snapshot, viewport, scissor));
+                        PPR_RETURN_ERROR_ON_FAIL(GridMaterialGate, grid.prepareGpuParticles(context));
+                        if (temporal) {
+                            return picture.prepareScene(
+                                context, RetroPass::scenePipelineSignature(true), scene_extent,
+                                DrawCallback{draw_content});
+                        }
+
+                        return {};
+                    };
+
+                    const auto present = [&](const DrawContext &context) {
+                        return temporal ? picture.render(context) : draw_content(context);
+                    };
+
+                    DrawSubmission submission{"five-pixel liquid feature quality", present};
+                    submission.m_viewport = output_viewport;
+                    submission.m_scissor = output_scissor;
+                    PPR_TEST_ASSERT(not renderer->renderToTexture(
+                        targetRef_(target), {submission}, {}, PreRenderCallback{prepare}));
+                    const auto submitted = renderer->lastSubmittedFenceValue();
+                    grid.notifyFrameSubmitted(submitted);
+                    if (temporal) {
+                        picture.notifyFrameSubmitted(submitted);
+                    }
+
+                    PPR_TEST_ASSERT(not renderer->waitForFenceValue(submitted));
+                    PPR_TEST_ASSERT(not renderer->retireCompletedFrames());
+                }
+
+                // Only these two final captures read pixels back. Warmup frames
+                // retain the target/history and perform no CPU pixel readback.
+                const auto pixels = readback_(device, targetRef_(target), 3445u);
+                PPR_TEST_ASSERT(pixels.has_value());
+                if (fixture == EParticleFeatureFixture::isolated) {
+                    saveGridQa_(
+                        *pixels,
+                        std::format(
+                            "particle-{}-five-pixel-offset-{}",
+                            phase_flag == kGridSurfaceParticleSolid ? "solid" : "liquid",
+                            temporal ? "temporal" : "native"),
+                        1837u);
+                }
+                if (slanted_interface) {
+                    saveGridQa_(
+                        *pixels,
+                        temporal ? "particle-solid-slanted-interface-offset-temporal"
+                                 : "particle-solid-slanted-interface-offset-native",
+                        1837u);
+                    checkSlantedSolidInterfacePixels_(
+                        *pixels, 7u, 11u, u32(scene_extent.x), u32(scene_extent.y), double(origin_x), double(origin_y),
+                        double(width_m), temporal);
+                    continue;
+                }
+
+                empty[mode] = gateTexel_(*pixels, 20u, 20u);
+                isolated[mode] = gateTexel_(*pixels, sample_x(8.0), sample_y);
+                isolated_interior[mode] = gateTexel_(*pixels, sample_x(8.0 + 0.5 * radius), sample_y);
+                isolated_exterior[mode] = gateTexel_(*pixels, sample_x(8.0 + 1.8 * radius), sample_y);
+                isolated_gap[mode] = gateTexel_(*pixels, sample_x(8.0 + 2.5 * radius), sample_y);
+                pair_left[mode] = gateTexel_(*pixels, sample_x(18.0), sample_y);
+                pair_right[mode] = gateTexel_(*pixels, sample_x(18.0 + 4.5 * radius), sample_y);
+                pair_gap[mode] = gateTexel_(*pixels, sample_x(18.0 + 2.25 * radius), sample_y);
+                boundary_left[mode] = gateTexel_(*pixels, sample_x(30.0), sample_y);
+                boundary_right[mode] = gateTexel_(*pixels, sample_x(30.0 + 1.8 * radius), sample_y);
+                boundary_midpoint[mode] = gateTexel_(*pixels, sample_x(30.0 + 0.9 * radius), sample_y);
+                std::println(
+                    "PARTICLE-SMALL-FEATURE phase={} temporal={} target=3445x1837 viewport_origin=7,11 extent=3431x1815 "
+                    "fov_width_m=128 radius_m={} native_radius_px={} sample_y={} isolated_at_x={} isolated_blue={} "
+                    "interior_half_r_delta={} exterior_1_8r_delta={} isolated_gap_delta={} "
+                    "pair_left_blue={} pair_right_blue={} pair_gap_delta={} "
+                    "boundary_left_blue={} boundary_left_red={} boundary_right_red={} boundary_right_blue={} interface_delta={}",
+                    phase_flag == kGridSurfaceParticleSolid ? "solid" : "liquid", temporal, radius,
+                    radius * double(scene_extent.x) / double(width_m), sample_y, sample_x(8.0), u32(isolated[mode][2]),
+                    texelDist_(isolated_interior[mode], empty[mode]), texelDist_(isolated_exterior[mode], empty[mode]),
+                    texelDist_(isolated_gap[mode], empty[mode]), u32(pair_left[mode][2]), u32(pair_right[mode][2]),
+                    texelDist_(pair_gap[mode], empty[mode]), u32(boundary_left[mode][2]), u32(boundary_left[mode][0]),
+                    u32(boundary_right[mode][0]), u32(boundary_right[mode][2]),
+                    texelDist_(boundary_midpoint[mode], empty[mode]));
+            }
+
+            if (fixture != EParticleFeatureFixture::isolated) {
+                return;
+            }
+
+            // These finite-size drops have about five native pixels of radius;
+            // this does not promise preservation of arbitrary subtexel droplets.
+            for (u32 mode = 0u; mode < 2u; ++mode) {
+                PPR_TEST_ASSERT(
+                    isolated[mode][2] >= 200u and pair_left[mode][2] >= 200u and pair_right[mode][2] >= 200u);
+                PPR_TEST_ASSERT(texelDist_(isolated_interior[mode], empty[mode]) > 30u);
+                PPR_TEST_ASSERT(texelDist_(isolated_exterior[mode], empty[mode]) <= 2u);
+                PPR_TEST_ASSERT(texelDist_(isolated_gap[mode], empty[mode]) <= 2u);
+                PPR_TEST_ASSERT(texelDist_(pair_gap[mode], empty[mode]) <= 2u);
+                PPR_TEST_ASSERT(boundary_left[mode][2] >= 200u and boundary_left[mode][0] < 30u);
+                PPR_TEST_ASSERT(boundary_right[mode][0] >= 200u and boundary_right[mode][2] < 30u);
+                PPR_TEST_ASSERT(texelDist_(boundary_midpoint[mode], empty[mode]) > 30u);
+            }
+        }
+
+        PPR_UNIT_TEST (grid_liquid_five_pixel_features_survive_large_offset_viewport) {
+            checkFivePixelParticleFeatures_(kGridSurfaceParticleLiquid);
+        };
+
+        PPR_UNIT_TEST (grid_solid_five_pixel_features_survive_large_offset_viewport) {
+            checkFivePixelParticleFeatures_(kGridSurfaceParticleSolid);
+        };
+
+        PPR_UNIT_TEST (grid_solid_slanted_material_interface_reconstructs_narrow_color_band) {
+            const auto rhi = SharedGpu::rhiService();
+            const auto shader = SharedGpu::shaderService();
+            Renderer *const renderer = SharedGpu::renderer();
+            PPR_TEST_ASSERT(rhi.isValid() and shader.isValid() and renderer != nullptr);
+            for (const bool temporal: {false, true}) {
+                GridPass grid;
+                RetroPass picture;
+                PPR_TEST_ASSERT(not grid.initialize(*rhi, *shader, std::filesystem::current_path()));
+                PPR_TEST_ASSERT(not picture.initialize(*rhi, *shader, std::filesystem::current_path()));
+                PPR_DEFER {
+                    PPR_TEST_ASSERT(not renderer->waitOnHost());
+                    PPR_TEST_ASSERT(not picture.shutdown());
+                    PPR_TEST_ASSERT(not grid.shutdown());
+                };
+                PPR_TEST_ASSERT(not grid.applyStagedFrame(slantedSolidInterfaceFixture_()));
+                const RetroSettings settings{
+                    .m_enabled = false, .m_palette_enabled = false, .m_temporal_enabled = temporal};
+                GatePixels pixels{};
+                for (u32 frame = 0u; frame < (temporal ? 4u : 1u); ++frame) {
+                    pixels = drawOpticalGrid_(
+                        grid, 20.0f, 20.0f, 6.0f, 512u, nullptr, nullptr, false, 0u, 0.0f, &settings, &picture);
+                }
+
+                PPR_TEST_ASSERT(picture.temporalActive() == temporal);
+                saveGridQa_(
+                    pixels,
+                    temporal ? "particle-solid-slanted-interface-temporal" : "particle-solid-slanted-interface-native");
+                checkSlantedSolidInterfacePixels_(pixels, 0u, 0u, 512u, 512u, 20.0, 20.0, 6.0, temporal);
+            }
+
+            checkFivePixelParticleFeatures_(kGridSurfaceParticleSolid, EParticleFeatureFixture::slanted_interface);
+
+            const auto capture_alpha = [&](const GridPass::GridStagedFrame &stage) {
+                GridPass grid;
+                PPR_TEST_ASSERT(not grid.initialize(*rhi, *shader, std::filesystem::current_path()));
+                PPR_DEFER {
+                    PPR_TEST_ASSERT(not renderer->waitOnHost());
+                    PPR_TEST_ASSERT(not grid.shutdown());
+                };
+                PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
+                return drawOpticalGrid_(grid, 20.0f, 20.0f, 6.0f, 512u);
+            };
+
+            // No authored backdrop: compare final blending over the same clear
+            // color. A fully transparent material's RGB must have no influence.
+            auto partial = slantedSolidInterfaceFixture_();
+            partial.m_has_background = false;
+            partial.m_background_layers = {};
+            for (auto &visual: partial.m_terrain_visuals) {
+                visual.m_surface_flags |= kGridSurfaceOpticalBlend;
+                visual.m_opacity = 0.6f;
+                visual.m_color_rgba = 0xff0000ffu;
+            }
+
+            partial.m_terrain_visuals[1u].m_opacity = 0.0f;
+            auto contrasting = partial;
+            contrasting.m_terrain_visuals[1u].m_color_rgba = 0x0000ffffu;
+            const auto transparent_red = capture_alpha(partial);
+            const auto transparent_blue = capture_alpha(contrasting);
+            saveGridQa_(transparent_blue, "particle-solid-slanted-interface-transparent-blue");
+            PPR_TEST_ASSERT(changedOpticalPixels_(transparent_red, transparent_blue) == 0u);
+
+            // The right interior is fully transparent, while the left retains
+            // visible fractional opacity rather than becoming opaque or empty.
+            const auto clear = gateTexel_(transparent_blue, 495u, 17u);
+            const auto invisible = gateTexel_(transparent_blue, 341u, 256u);
+            const auto visible = gateTexel_(transparent_blue, 170u, 256u);
+            PPR_TEST_ASSERT(texelDist_(invisible, clear) <= 2u);
+            PPR_TEST_ASSERT(visible[0] > clear[0] + 20u and visible[0] < 240u);
+
+            // Equal fractional appearance under two IDs must match the same
+            // physical scene under one ID, including the internal seam. This
+            // catches applying opacity twice in the reconstructed material band.
+            partial.m_terrain_visuals[1u].m_opacity = 0.6f;
+            const auto two_ids = capture_alpha(partial);
+            auto one_id = partial;
+            auto unified = std::make_shared<Array<GridParticleInstance>>(*one_id.m_particle_batches[0u].m_particles);
+            for (auto &particle: *unified) {
+                particle.m_material_id = 1u;
+            }
+
+            one_id.m_particle_batches[0u].m_particles = std::move(unified);
+            const auto uniform = capture_alpha(one_id);
+            saveGridQa_(two_ids, "particle-solid-slanted-interface-fractional-opacity");
+            PPR_TEST_ASSERT(changedOpticalPixels_(two_ids, uniform) == 0u);
+        };
+
+        // ------------------------------------------------------------------
         // terrain visibility and retained world publication
         // ------------------------------------------------------------------
 
@@ -4007,6 +5438,16 @@ namespace pP::tests {
             detail::Gate::pre_render_preparation_orders_and_rejects_submission,
             detail::Gate::grid_compute_visibility_matches_reference_and_draws,
             detail::Gate::grid_resident_circle_mask_motion_overlap_occlusion_and_leases,
+            detail::Gate::grid_solid_particles_share_catalog_textures_and_metric_uvs,
+            detail::Gate::grid_surface_inventory_transitions_preserve_gas_visibility_and_single_blending,
+            detail::Gate::grid_solid_envelope_closes_nominal_interstices_without_bridging_sparse_grains,
+            detail::Gate::grid_liquid_surface_connects_and_preserves_element_boundaries,
+            detail::Gate::grid_liquid_optics_and_viewport_cost,
+            detail::Gate::grid_liquid_nominal_density_deformation_coverage,
+            detail::Gate::grid_liquid_full_resolution_temporal_cost,
+            detail::Gate::grid_liquid_five_pixel_features_survive_large_offset_viewport,
+            detail::Gate::grid_solid_five_pixel_features_survive_large_offset_viewport,
+            detail::Gate::grid_solid_slanted_material_interface_reconstructs_narrow_color_band,
             detail::Gate::grid_candidate_world_retains_active_until_matching_activation,
             detail::Gate::grid_optical_controls_and_four_layer_parallax,
             detail::Gate::picture_controls_preserve_independent_color_and_temporal_history,

@@ -31,6 +31,8 @@ are not Linux prerequisites or evidence of Linux validation.
 
 ## Design and historical material
 
+- [Closed PBMPM granular investigation: findings, restored baseline and evidence](pbmpm-granular-investigation.md)
+
 `plans/`, `clone/` and `physics/` contain designs and proposals, including partially implemented designs. Their imperatives, phase gates and proposed modules apply only to work that adopts that design. They do not establish current functionality or authorize expanding an unrelated task.
 
 `diagrams/` contains multiple architecture snapshots and proposed topologies. Check each gallery's source/report and scope; a diagram is not evidence that a lane, API, or phase ships. `.slim/deepwork/` and handoffs are historical session records, not current operational instructions. Recorded timing, green runs, tool registries and debugging observations apply to the captured revision/environment unless revalidated.

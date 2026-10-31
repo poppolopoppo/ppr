@@ -6,7 +6,7 @@ The original BSD-3-Clause notice is in `LICENSE.md`. Historical EA pins remain
 provenance, not alternative production backends.
 
 PPR uses liquid relaxation **1** with its admitted K2 schedule, rather than
-this fork's default of2. The equations remain unchanged. With default viscosity
+this fork's default of2. The liquid equations remain unchanged. With default viscosity
 0.01, the isolated isotropic pressure mode linearized about unit density has an
 amplifying eigenvalue about−2.402 at relaxation2; unit relaxation removes that
 mode. This is an explicit profile correction, not a scatter clamp or a change
@@ -86,7 +86,7 @@ local absolute total against the same cross-group sparse budget before merging
 the signed sum; a zero signed sum still consumes its nonzero absolute total.
 Global rejection skips that signed merge. Two256-word shared uint arrays retain
 the absolute totals and actual contributing-row witnesses, adding2048 bytes for
-4096 total shared bytes per64-thread group. First-error race ordering may change
+4096 shared bytes for the source/budget tiles per64-thread group, plus the512-byte Sand contact tile described below. First-error race ordering may change
 which contributing row is reported; the cause/node/field/valid-row contract stays.
 Nonfinite and scatter conversion/overflow errors reject the entire candidate.
 The four nonaccumulating post-contact NODE stores follow WGSL2026-10-21
@@ -96,6 +96,32 @@ conversion exception does not change scatter guards or feed INT_MIN into signed
 absolute-sum accounting.
 Old v5 semantic fields still load exactly; subsequent trajectories follow this
 replacement solver implementation.
+
+Sand has two explicit production adaptations, outside the frozen fork core.
+The objective reference-volume sample gathered before the source reciprocal/J
+blend supplies a unilateral density impulse after integration. With the legacy
+`useGridVolumeForLiquid` flag enabled and `referenceVolume > 1`, Sand retains
+`0.5 * 0.1 * max(referenceVolume - 1 - trace(D), 0)` on each diagonal of D.
+The next transfer applies this expansive affine motion; the current position,
+translation, F, J and plastic logJp are not rewritten. The dimensionless gain0.1
+is calibrated for the admitted eight-substep K2 profile, not a timestep-independent
+bulk modulus. Flag0 bypasses it. In particular, elastic det(F) after plastic
+projection is not a measure of total packing density. This grid-scale controller
+does not impose a hard pairwise minimum distance in underfilled regions.
+
+Sand terrain contact uses Coulomb coefficient0.5, distinct from the material's
+internal friction angle and the guardian's existing tangent damping. Grid nodes
+retain the original base displacement and a separate Sand candidate: terrain
+normal projection bounds the tangent reduction, then each candidate passes
+through the existing body and guardian order. Sand gathers both translation and
+APIC affine motion from its candidate; other materials retain the original path.
+Swept endpoint transport applies the same friction to each actual contact's
+retained tangent, while geometric recovery and rounding use the original
+unfrictioned projection. Recovery distance is never a friction impulse. Tangent
+motion without a closing normal projection is unchanged. A64-element float2
+shared tile adds512 bytes, bringing the fused group's shared storage to4608
+bytes; no dispatch, device buffer, semantic field, binding or ordinary readback
+is added. The fork conformance path and `fork_core.slang` remain unchanged.
 
 The game radial brush is another explicit engine adapter, enabled only under
 `PBMPM_ENGINE_ADAPTERS`. A separate16-byte constant supplies centre, radius and
@@ -121,8 +147,11 @@ DDA, then consumes admissible tangential remainder. Convex and concave vertices
 use their distinct local free-space cones. Physical samples remain points; the
 rendered sprite radius is not a collision radius.
 
-Boundary rounding uses at most three representable outward steps, not a fixed
-skin. Successful positions are certified against strict solid interior, including
+Boundary rounding preserves already-certified representable points exactly.
+Equal ULP steps at different coordinate magnitudes can otherwise turn a valid
+concave-corner contact into interior penetration. Uncertified rounding uses at
+most three representable outward steps, not a fixed skin. Successful positions
+are certified against strict solid interior, including
 after the guardian. Closed, zero-depth boundary contacts are allowed. Incomplete
 finite-domain entry reports flag 16 rather than inventing a domain collider.
 Ambiguous clipping, malformed feature topology, failed rounding certification,

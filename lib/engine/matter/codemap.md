@@ -107,7 +107,9 @@ weights/APIC offsets. `terrain_motion.slang` retains canonical segments for
 same-substep particle recovery and swept transport, with separate carried motion
 and unchanged constitutive updates. Its clipped supercover DDA and local directed
 vertex cones allow sliding without endpoint tunnelling. Recovery is not launch
-velocity. Rounding/position certification and a 32-contact work budget fail the
+velocity. Already-certified representable contact points are preserved exactly;
+only uncertified boundary rounding takes the bounded outward steps.
+Rounding/position certification and a 32-contact work budget fail the
 working transaction with flag 256; no new device resources or CPU/GPU ABI are
 introduced. The shader README documents resolution reasons and body ordering.
 

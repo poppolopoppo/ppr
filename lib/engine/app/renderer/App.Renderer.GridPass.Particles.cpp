@@ -127,6 +127,27 @@ namespace pP {
     }
 
     // ------------------------------------------------------------------
+    // completion-governed test timing queries
+    // ------------------------------------------------------------------
+
+    std::error_code GridPass::setParticleTimingQueriesForTest(
+        rhi::ComPtr<rhi::IQueryPool> queries, const FenceCompletionValue completed) {
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass,
+            not queries or (queries->getDesc().type == rhi::QueryType::Timestamp and queries->getDesc().count >= 12u)
+                ? std::error_code{}
+                : std::make_error_code(std::errc::invalid_argument));
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, slotFenceComplete(completed, m_last_submitted_value) and
+                              (not m_world.m_gpu_particles or not m_world.m_gpu_particles->m_slot_encoded)
+                          ? std::error_code{}
+                          : std::make_error_code(std::errc::device_or_resource_busy));
+
+        m_particle_timing_queries = std::move(queries);
+        return {};
+    }
+
+    // ------------------------------------------------------------------
     // one-time initial inventory upload into the sole GPU circle path
     // ------------------------------------------------------------------
 
@@ -558,6 +579,10 @@ namespace pP {
         frame.m_moving_count = metadata.m_moving_count;
         frame.m_block_count = blocks;
 
+        if (m_particle_timing_queries) {
+            context.m_encoder.writeTimestamp(m_particle_timing_queries, 0u);
+        }
+
         for (auto *const buffer:
             {storage.m_packed.get(), storage.m_ranks.get(), storage.m_counts.get(), storage.m_prefix.get(),
                 slot.m_ids.get(), slot.m_args.get()}) {
@@ -643,6 +668,13 @@ namespace pP {
         context.m_encoder.setBufferState(storage.m_packed, rhi::ResourceState::ShaderResource);
         context.m_encoder.setBufferState(slot.m_ids, rhi::ResourceState::ShaderResource);
         context.m_encoder.setBufferState(slot.m_args, rhi::ResourceState::IndirectArgument);
+        if (m_particle_timing_queries) {
+            context.m_encoder.writeTimestamp(m_particle_timing_queries, 1u);
+        }
+
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, prepareFluidSurface_(context));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, prepareSolidSurface_(context));
+
         storage.m_prepared = true;
         storage.m_slot_encoded = true;
         return {};
@@ -661,6 +693,30 @@ namespace pP {
 
         storage.m_prepared = false;
         const u32 particle_slot = storage.m_selected_slot;
+        // Both envelopes are prepared before drawing. Solids occlude liquid;
+        // the remaining disk pass contains only gases and legacy phase fixtures.
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, renderFluidSurface_(context, particle_slot));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, renderSolidSurface_(context, particle_slot));
+
+        // Match the disk fragment's phase rejection against this prepared source
+        // inventory. Unknown visuals retain the legacy lane conservatively.
+        const auto &materials = storage.m_slots[particle_slot].m_reader->m_metadata->m_materials;
+        const bool envelopes_only = std::ranges::all_of(materials, [&](const u32 material) {
+            const auto visual = std::ranges::find(
+                m_world.m_terrain_visuals, material, &GridTerrainVisual::m_material_id);
+            return visual != m_world.m_terrain_visuals.end() and
+                   (visual->m_surface_flags & (kGridSurfaceParticleSolid | kGridSurfaceParticleLiquid)) != 0u;
+        });
+
+        if (envelopes_only) {
+            if (m_particle_timing_queries) {
+                context.m_pass.writeTimestamp(m_particle_timing_queries, 10u);
+                context.m_pass.writeTimestamp(m_particle_timing_queries, 11u);
+            }
+
+            return {};
+        }
+
         const auto pipeline = opticalPipeline_(
             context.m_device, context.m_render_pipeline_key, m_gpu_particle_program, m_gpu_particle_key,
             m_gpu_particle_pipeline, true);
@@ -698,10 +754,18 @@ namespace pP {
                 .scissorRectCount = 1u,
                 .vertexBuffers = {},
                 .indexBuffer = {}});
+        if (m_particle_timing_queries) {
+            context.m_pass.writeTimestamp(m_particle_timing_queries, 10u);
+        }
+
         context.m_pass.bindPipeline((*pipeline)->m_pipeline, root);
         markPipelineUse_(**pipeline, particle_slot);
         context.m_pass.drawIndirect(1u, rhi::BufferOffsetPair{slot.m_args});
+        if (m_particle_timing_queries) {
+            context.m_pass.writeTimestamp(m_particle_timing_queries, 11u);
+        }
         ++m_draw_commands;
+
         return {};
     }
 }

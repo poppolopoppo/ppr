@@ -1,5 +1,6 @@
 module;
 
+#include "pP/Macros.h"
 #include "pP/UnitTest.h"
 #include <cstdio>
 #include <slang.h>
@@ -12,9 +13,12 @@ import engine.shader;
 import engine.rhi;
 import engine.matter;
 import engine.math;
+import engine.app;
+import engine.image;
 
 namespace pP::tests::detail::MatterGpu {
     using namespace pP::matter;
+    PPR_DEFINE_LOG_CATEGORY(MatterPoolRender, info, none)
 
     // ------------------------------------------------------------------
     // explicit native headless GPU fixture
@@ -29,11 +33,15 @@ namespace pP::tests::detail::MatterGpu {
         rhi::ComPtr<rhi::IComputePipeline> m_wave_compare_pipeline;
         rhi::ComPtr<rhi::IComputePipeline> m_codec_pipeline;
         rhi::ComPtr<rhi::IComputePipeline> m_bootstrap_pipeline;
+        rhi::ComPtr<rhi::IComputePipeline> m_transport_pipeline;
+        rhi::ComPtr<rhi::IComputePipeline> m_exterior_pipeline;
+        rhi::ComPtr<rhi::IComputePipeline> m_sand_contact_pipeline;
         GpuSolver m_solver;
 
         void initialize(
             const bool use_volume = true, const u32 grid_width = 32u, const u32 grid_height = 32u,
-            const bool validation = true, const ITimerClock *const observation_clock = nullptr) {
+            const bool validation = true, const ITimerClock *const observation_clock = nullptr,
+            const float gravity_strength = 2.5f) {
             PPR_TEST_ASSERT(not m_shaders->initialize());
             m_rhi->setCoreValidation(validation);
             m_rhi->setGpuAssistedValidation(validation);
@@ -53,6 +61,7 @@ namespace pP::tests::detail::MatterGpu {
             GpuParameters parameters{};
             parameters.m_grid_width = grid_width;
             parameters.m_grid_height = grid_height;
+            parameters.m_gravity_strength = gravity_strength;
             parameters.m_use_grid_volume_for_liquid = use_volume ? 1u : 0u;
             PPR_TEST_ASSERT(not m_solver.initialize(
                 m_rhi->getDevice(), *m_queue, *m_shaders, std::filesystem::current_path(), parameters,
@@ -64,6 +73,9 @@ namespace pP::tests::detail::MatterGpu {
             // A failed completion boundary must retain resources, so stop before
             // destroying their injected dependencies in that exceptional case.
             PPR_TEST_ASSERT(not solver_error);
+            m_sand_contact_pipeline.setNull();
+            m_exterior_pipeline.setNull();
+            m_transport_pipeline.setNull();
             m_bootstrap_pipeline.setNull();
             m_codec_pipeline.setNull();
             m_wave_compare_pipeline.setNull();
@@ -76,8 +88,8 @@ namespace pP::tests::detail::MatterGpu {
             PPR_TEST_ASSERT(not shader_error);
         }
 
-        void replace(const std::span<const GpuParticle> particles) {
-            PPR_TEST_ASSERT(not m_solver.prepareReplacement(particles, {}, m_solver.accounting().m_epoch));
+        void replace(const std::span<const GpuParticle> particles, const std::span<const GpuStaticShape> shapes = {}) {
+            PPR_TEST_ASSERT(not m_solver.prepareReplacement(particles, shapes, m_solver.accounting().m_epoch));
             m_solver.publishReplacement();
         }
 
@@ -276,16 +288,18 @@ namespace pP::tests::detail::MatterGpu {
         const i32 encoded_mass = 10'000'000, const float displacement_x = 0.0f,
         const std::optional<std::array<float, 2u>> contact_query = {},
         const std::span<const std::array<float, 2u>> wave_queries = {}, const std::span<const u32> wave_enabled = {},
-        const bool inspect_codec = false, const bool inspect_bootstrap = false, const bool inspect_transport = false) {
+        const bool inspect_codec = false, const bool inspect_bootstrap = false, const bool inspect_transport = false,
+        const bool inspect_exterior = false, const bool inspect_sand_contact = false) {
         auto &device = fixture.m_rhi->getDevice();
         const bool wave = not wave_queries.empty();
-        rhi::ComPtr<rhi::IComputePipeline> transport_pipeline;
-        auto &pipeline = inspect_transport   ? transport_pipeline
-                         : inspect_bootstrap ? fixture.m_bootstrap_pipeline
-                         : inspect_codec     ? fixture.m_codec_pipeline
-                         : wave              ? fixture.m_wave_compare_pipeline
-                         : contact_query     ? fixture.m_compare_pipeline
-                                             : fixture.m_contact_pipeline;
+        auto &pipeline = inspect_sand_contact ? fixture.m_sand_contact_pipeline
+                         : inspect_exterior   ? fixture.m_exterior_pipeline
+                         : inspect_transport  ? fixture.m_transport_pipeline
+                         : inspect_bootstrap  ? fixture.m_bootstrap_pipeline
+                         : inspect_codec      ? fixture.m_codec_pipeline
+                         : wave               ? fixture.m_wave_compare_pipeline
+                         : contact_query      ? fixture.m_compare_pipeline
+                                              : fixture.m_contact_pipeline;
         if (not pipeline) {
             shader::SharedModule module;
             PPR_TEST_ASSERT(not fixture.m_shaders->loadModuleFromFile(
@@ -293,12 +307,14 @@ namespace pP::tests::detail::MatterGpu {
                 module.writeRef()));
             shader::ComPtr<slang::IEntryPoint> entry;
             PPR_TEST_ASSERT(not make_error_code(module->findEntryPointByName(
-                inspect_transport   ? "inspectTerrainTransportBudget"
-                : inspect_bootstrap ? "compareBootstrapChecks"
-                : inspect_codec     ? "inspectCompactTerrain"
-                : wave              ? "compareWaveTerrainSearch"
-                : contact_query     ? "compareTerrainSearch"
-                                    : "inspectContact",
+                inspect_sand_contact ? "inspectSandGridContacts"
+                : inspect_exterior   ? "inspectTerrainExteriorEndpoint"
+                : inspect_transport  ? "inspectTerrainTransportBudget"
+                : inspect_bootstrap  ? "compareBootstrapChecks"
+                : inspect_codec      ? "inspectCompactTerrain"
+                : wave               ? "compareWaveTerrainSearch"
+                : contact_query      ? "compareTerrainSearch"
+                                     : "inspectContact",
                 entry.writeRef())));
 
             slang::IComponentType *entries[]{entry.get()};
@@ -1579,6 +1595,164 @@ namespace pP::tests::detail::MatterGpu {
     };
 
     // ------------------------------------------------------------------
+    // matched sand tick cost diagnostics
+    // ------------------------------------------------------------------
+
+    PPR_UNIT_TEST (sand_density_and_terrain_contact_instrumented_gpu_cost_diagnostic) {
+        const char *const setting = std::getenv("PPR_PBMPM_COST_DIAGNOSTIC");
+        const std::string_view enabled = setting != nullptr ? setting : "0";
+        PPR_TEST_ASSERT(enabled == "0" or enabled == "1");
+        if (enabled != "1") {
+            std::println("SAND-GPU-COST skipped: set PPR_PBMPM_COST_DIAGNOSTIC=1");
+            return;
+        }
+
+        const char *const mode = std::getenv("PPR_PBMPM_COST_INSTRUMENTED");
+        const std::string_view instrumentation = mode != nullptr ? mode : "1";
+        PPR_TEST_ASSERT(instrumentation == "0" or instrumentation == "1");
+        const bool instrumented = instrumentation == "1";
+        const auto &clock = ITimerClock::steady();
+        const ITimerClock *const observation_clock = instrumented ? &clock : nullptr;
+        const u32 query_count = instrumented ? 44u : 0u;
+        const std::string_view sample_metric = instrumented ? "gpu_ms" : "completed_tick_wall_ms";
+        const std::string_view summary_metric = instrumented ? "gpu" : "completed_tick_wall";
+        Fixture fixture;
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+        fixture.initialize(true, 128u, 128u, false, observation_clock, 0.0f);
+        constexpr u32 particle_count = 4096u;
+        const u32 warm_frames = instrumented ? 5u : 20u;
+        const u32 sample_frames = instrumented ? 15u : 30u;
+        static_assert(sizeof(GpuParticle) == 88u);
+        const double frequency = instrumented
+                                     ? static_cast<double>(fixture.m_rhi->getDevice().getInfo().timestampFrequency)
+                                     : 0.0;
+        PPR_TEST_ASSERT(not instrumented or (std::isfinite(frequency) and frequency > 0.0));
+        for (const bool terrain_scene: {false, true}) {
+            if (terrain_scene) {
+                GpuParameters profile = fixture.m_solver.profile();
+                profile.m_grid_width = 8192u;
+                profile.m_grid_height = 32u;
+                profile.m_particle_count = 0u;
+                profile.m_shape_count = 0u;
+                profile.m_gravity_strength = 9.81f / (32.0f / 3.0f);
+                PPR_TEST_ASSERT(not fixture.m_solver.shutdown());
+                PPR_TEST_ASSERT(not fixture.m_solver.initialize(
+                    fixture.m_rhi->getDevice(), *fixture.m_queue, *fixture.m_shaders, std::filesystem::current_path(),
+                    profile, observation_clock));
+            }
+
+            const std::string_view workload = terrain_scene ? "terrain_strip" : "compressed_patch";
+            const auto profile = fixture.m_solver.profile();
+            PPR_TEST_ASSERT(profile.m_delta_time == 1.0f / 480.0f and profile.m_use_grid_volume_for_liquid == 1u);
+            Array<GpuParticle> initial;
+            initial.reserve(particle_count);
+            for (u32 row = 0u; row < particle_count; ++row) {
+                auto particle = restParticle();
+                particle.m_position_x = terrain_scene ? 16.5f + float(row) : 32.0f + float(row % 64u) * 0.8f;
+                particle.m_position_y = terrain_scene ? 11.5f : 32.0f + float(row / 64u) * 0.8f;
+                particle.m_displacement_x = terrain_scene ? 0.01f : 0.0f;
+                particle.m_material = static_cast<float>(ESourceMaterial::sand);
+                particle.m_volume = 1.0f;
+                particle.m_mass = 2.0f;
+                particle.m_log_jp = 0.0f;
+                initial.push_back(particle);
+            }
+
+            const auto masks = terrain_scene ? rectangleMasks(8192u, 16u, 8u) : std::vector<u32>{};
+            const TerrainView terrain = terrain_scene ? TerrainView{masks, 8192u, 16u, 3.0f, 3.0f} : TerrainView{};
+            Array<double> samples(sample_frames, 0.0);
+            u64 previous_signal = 0u, previous_gpu = 0u, expected_bytes = 0u, expected_dispatches = 0u;
+            std::println(
+                "SAND-GPU-COST-PROFILE workload={} rows={} grid={}x{} dt_substep_s={} source_substeps=8 source_iterations=2 volume_channel={} gravity_strength={} terrain={} source_cell_m=0.3333333333333333 reference_thickness_m=1 cold_volume=1 cold_mass=2 logJp=0 validation=false warm={} samples={} instrumented={} internal_timestamp_queries={} timestamp_payload_bytes={} ordinary_status_bytes=24 frozen_replacement_outside_timed_tick=true particle_snapshots_in_sample_loop=false candidate_shared_delta_model_bytes=512",
+                workload, initial.size(), profile.m_grid_width, profile.m_grid_height, profile.m_delta_time,
+                profile.m_use_grid_volume_for_liquid, profile.m_gravity_strength, terrain_scene, warm_frames,
+                sample_frames, instrumented, query_count, query_count * sizeof(u64));
+            for (u32 frame = 0u; frame < warm_frames + sample_frames; ++frame) {
+                // Every timed batch starts with identical owned rows and terrain.
+                // Replacement allocation/upload completion precedes either timing boundary.
+                PPR_TEST_ASSERT(not fixture.m_solver.prepareReplacement(
+                    initial, {}, fixture.m_solver.accounting().m_epoch, terrain));
+                fixture.m_solver.publishReplacement();
+                const auto before = fixture.m_solver.accounting();
+                const u64 epoch = before.m_epoch;
+                const auto previous = fixture.m_solver.inspectTimingForTest();
+                PPR_TEST_ASSERT(previous.m_query_count == query_count and not previous.m_error);
+                if (not instrumented)
+                    PPR_TEST_ASSERT(previous.m_completed_samples == 0u);
+
+                // The no-query wall interval includes encoding/submission, the
+                // actual completion wait, compact status collection and publication.
+                // It excludes all replacement, profile and measurement bookkeeping.
+                const auto wall_begin = instrumented ? TimePoint{} : clock.now();
+                PPR_TEST_ASSERT(not fixture.m_solver.submitResidentTick(epoch, 8u, 2u));
+                if (instrumented)
+                    PPR_TEST_ASSERT(
+                        fixture.m_solver.inspectTimingForTest().m_completed_samples == previous.m_completed_samples);
+
+                PPR_TEST_ASSERT(not fixture.m_solver.drain());
+                const auto ready = fixture.m_solver.pollTick();
+                PPR_TEST_ASSERT(ready and *ready);
+                fixture.m_solver.publishTick();
+                const auto wall_end = instrumented ? TimePoint{} : clock.now();
+
+                const auto timing = fixture.m_solver.inspectTimingForTest();
+                PPR_TEST_ASSERT(not timing.m_error and timing.m_query_count == query_count);
+                if (instrumented) {
+                    PPR_TEST_ASSERT(timing.m_completed_samples == previous.m_completed_samples + 1u);
+                    PPR_TEST_ASSERT(timing.m_epoch == epoch and timing.m_signal > previous_signal);
+                    PPR_TEST_ASSERT(timing.m_first_gpu_timestamp >= previous_gpu);
+                    PPR_TEST_ASSERT(timing.m_last_gpu_timestamp > timing.m_first_gpu_timestamp);
+                    previous_signal = timing.m_signal;
+                    previous_gpu = timing.m_last_gpu_timestamp;
+                } else {
+                    PPR_TEST_ASSERT(
+                        timing.m_completed_samples == 0u and timing.m_epoch == 0u and timing.m_signal == 0u);
+                    PPR_TEST_ASSERT(timing.m_first_gpu_timestamp == 0u and timing.m_last_gpu_timestamp == 0u);
+                }
+
+                const double elapsed_ms = instrumented
+                                              ? double(timing.m_last_gpu_timestamp - timing.m_first_gpu_timestamp) *
+                                                    1000.0 /
+                                                    frequency
+                                              : time::seconds(wall_end - wall_begin) * 1000.0;
+                PPR_TEST_ASSERT(std::isfinite(elapsed_ms) and elapsed_ms > 0.0);
+
+                const auto after = fixture.m_solver.accounting();
+                PPR_TEST_ASSERT(after.m_epoch == epoch + 1u and after.m_particle_count == particle_count);
+                PPR_TEST_ASSERT(after.m_substeps == 8u and after.m_last_readback_bytes == 6u * sizeof(u32));
+                const u64 dispatches = after.m_dispatches - before.m_dispatches;
+                if (frame < warm_frames)
+                    continue;
+
+                const u32 sample = frame - warm_frames;
+                if (sample == 0u) {
+                    expected_bytes = after.m_device_bytes;
+                    expected_dispatches = dispatches;
+                }
+
+                PPR_TEST_ASSERT(after.m_device_bytes == expected_bytes and dispatches == expected_dispatches);
+                samples[sample] = elapsed_ms;
+                std::println(
+                    "SAND-GPU-COST-SAMPLE workload={} sample={} {}={} epoch={} diagnostic_signal={} device_bytes={} readback_capacity_bytes={} dispatches={} timestamp_first={} timestamp_last={} timestamp_frequency={}",
+                    workload, sample, sample_metric, elapsed_ms, epoch, timing.m_signal, after.m_device_bytes,
+                    after.m_readback_capacity_bytes, dispatches, timing.m_first_gpu_timestamp,
+                    timing.m_last_gpu_timestamp, frequency);
+            }
+
+            std::ranges::sort(samples);
+            const double median = sample_frames % 2u != 0u
+                                      ? samples[sample_frames / 2u]
+                                      : 0.5 * (samples[sample_frames / 2u - 1u] + samples[sample_frames / 2u]);
+            std::println(
+                "SAND-GPU-COST workload={} rows={} warm={} samples={} {}_min_ms={} {}_median_ms={} {}_max_ms={} device_bytes={} dispatches={} instrumented={} validation=false",
+                workload, particle_count, warm_frames, sample_frames, summary_metric, samples.front(), summary_metric,
+                median, summary_metric, samples.back(), expected_bytes, expected_dispatches, instrumented);
+        }
+    };
+
+    // ------------------------------------------------------------------
     // isolated liquid pressure recurrence diagnostic
     // ------------------------------------------------------------------
 
@@ -1659,6 +1833,544 @@ namespace pP::tests::detail::MatterGpu {
         }
     };
 
+    // ------------------------------------------------------------------
+    // opt-in sand reference-occupancy diagnostics
+    // ------------------------------------------------------------------
+
+    PPR_UNIT_TEST (sand_reference_occupancy_compression_and_floor_controls_diagnostic) {
+        const char *const setting = std::getenv("PPR_PBMPM_COMPRESSION_DIAGNOSTIC");
+        const std::string_view enabled = setting != nullptr ? setting : "0";
+        PPR_TEST_ASSERT(enabled == "0" or enabled == "1");
+        if (enabled != "1") {
+            std::println("SAND-COMPRESSION-CONTROLS skipped: set PPR_PBMPM_COMPRESSION_DIAGNOSTIC=1");
+            return;
+        }
+
+        Fixture fixture;
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+        fixture.initialize(true, 64u, 64u, true, nullptr, 0.0f);
+        PPR_TEST_ASSERT(fixture.m_solver.profile().m_use_grid_volume_for_liquid == 1u);
+        const double h = 1.0 / 3.0;
+        const double dt = static_cast<double>(fixture.m_solver.profile().m_delta_time);
+        PPR_TEST_ASSERT(fixture.m_solver.profile().m_delta_time == 1.0f / 480.0f);
+        // Explicit physical interpretation for this solver-only control:
+        // basalt density2000, reference volume h*h*thickness1, cold mass2.
+        const double physical_grain_mass = 2000.0 * h * h;
+        const auto observe = [&](const std::string_view scene, const float phase, const u32 substep,
+                                 const std::span<const GpuParticle> rows) {
+            std::map<std::pair<int, int>, double> node_volume;
+            Array<double> nearest(rows.size(), std::numeric_limits<double>::infinity());
+            Array<double> plastic_logs;
+            u64 pairs_quarter = 0u, pairs_half = 0u;
+            for (std::size_t i = 0u; i < rows.size(); ++i) {
+                for (std::size_t j = i + 1u; j < rows.size(); ++j) {
+                    const double distance = std::hypot(
+                        static_cast<double>(rows[i].m_position_x) - static_cast<double>(rows[j].m_position_x),
+                        static_cast<double>(rows[i].m_position_y) - static_cast<double>(rows[j].m_position_y));
+                    nearest[i] = std::min(nearest[i], distance);
+                    nearest[j] = std::min(nearest[j], distance);
+                    pairs_quarter += distance < 0.25 ? 1u : 0u;
+                    pairs_half += distance < 0.5 ? 1u : 0u;
+                }
+            }
+
+            double translational_ke = 0.0, apic_ke = 0.0;
+            double momentum_x = 0.0, momentum_y = 0.0, com_x = 0.0, com_y = 0.0;
+            double min_det = std::numeric_limits<double>::infinity(), max_det = -min_det;
+            u32 zero_plastic_logs = 0u, negative_trace_count = 0u;
+            double trace_min = std::numeric_limits<double>::infinity(), trace_max = -trace_min, trace_sum = 0.0;
+            for (const auto &particle: rows) {
+                for (const float value: std::bit_cast<std::array<float, 22u>>(particle)) {
+                    PPR_TEST_ASSERT(std::isfinite(value));
+                }
+
+                PPR_TEST_ASSERT(particle.m_volume == 1.0f and particle.m_mass == 2.0f);
+                PPR_TEST_ASSERT(particle.m_material == static_cast<float>(ESourceMaterial::sand));
+                const float down_x = std::floor(particle.m_position_x);
+                const float down_y = std::floor(particle.m_position_y);
+                const float offset_x = (particle.m_position_x - down_x) - 0.5f;
+                const float offset_y = (particle.m_position_y - down_y) - 0.5f;
+                const std::array<float, 3u> wx{
+                    0.5f * (0.5f - offset_x) * (0.5f - offset_x), 0.75f - offset_x * offset_x,
+                    0.5f * (0.5f + offset_x) * (0.5f + offset_x)};
+                const std::array<float, 3u> wy{
+                    0.5f * (0.5f - offset_y) * (0.5f - offset_y), 0.75f - offset_y * offset_y,
+                    0.5f * (0.5f + offset_y) * (0.5f + offset_y)};
+                for (u32 y = 0u; y < 3u; ++y) {
+                    for (u32 x = 0u; x < 3u; ++x) {
+                        node_volume[{int(down_x) - 1 + int(x), int(down_y) - 1 + int(y)}] +=
+                            static_cast<double>(particle.m_volume) * static_cast<double>(wx[x] * wy[y]);
+                    }
+                }
+
+                const double vx = static_cast<double>(particle.m_displacement_x) * h / dt;
+                const double vy = static_cast<double>(particle.m_displacement_y) * h / dt;
+                const double kinetic = 0.5 * physical_grain_mass * (vx * vx + vy * vy);
+                double affine_squared = 0.0;
+                for (const float component: std::bit_cast<std::array<float, 4u>>(particle.m_deformation_displacement)) {
+                    const double value = static_cast<double>(component);
+                    affine_squared += value * value;
+                }
+
+                const double trace = static_cast<double>(particle.m_deformation_displacement.m_c0x) +
+                                     static_cast<double>(particle.m_deformation_displacement.m_c1y);
+                trace_min = std::min(trace_min, trace);
+                trace_max = std::max(trace_max, trace);
+                trace_sum += trace;
+                negative_trace_count += trace < 0.0 ? 1u : 0u;
+                translational_ke += kinetic;
+                apic_ke += kinetic + 0.5 * physical_grain_mass * h * h / (dt * dt) * 0.25 * affine_squared;
+                momentum_x += physical_grain_mass * vx;
+                momentum_y += physical_grain_mass * vy;
+                com_x += (static_cast<double>(particle.m_position_x) - 3.0) * h;
+                com_y += (static_cast<double>(particle.m_position_y) - 3.0) * h;
+                plastic_logs.push_back(static_cast<double>(particle.m_log_jp));
+                zero_plastic_logs += particle.m_log_jp == 0.0f ? 1u : 0u;
+                const auto &f = particle.m_deformation_gradient;
+                const double determinant = static_cast<double>(f.m_c0x) * static_cast<double>(f.m_c1y) -
+                                           static_cast<double>(f.m_c1x) * static_cast<double>(f.m_c0y);
+                min_det = std::min(min_det, determinant);
+                max_det = std::max(max_det, determinant);
+            }
+
+            Array<double> occupancy, excess;
+            double excess_sum = 0.0, excess_squared_sum = 0.0;
+            for (const auto &[node, value]: node_volume) {
+                static_cast<void>(node);
+                occupancy.push_back(value);
+                const double positive_excess = std::max(value - 1.0, 0.0);
+                excess.push_back(positive_excess);
+                excess_sum += positive_excess;
+                excess_squared_sum += positive_excess * positive_excess;
+            }
+
+            std::ranges::sort(occupancy);
+            std::ranges::sort(excess);
+            std::ranges::sort(nearest);
+            std::ranges::sort(plastic_logs);
+            const auto p99 = static_cast<std::size_t>(std::ceil(0.99 * double(occupancy.size()))) - 1u;
+            const double count = double(rows.size());
+            if (scene == "isolated" or scene == "sparse_pair")
+                PPR_TEST_ASSERT(occupancy.back() <= 1.0);
+
+            std::println(
+                "SAND-COMPRESSION-CONTROL scene={} phase={} substep={} dt_s={} rows={} nodal_reference_V_max={} nodal_reference_V_p99={} positive_excess_max={} positive_excess_p99={} positive_excess_sum={} positive_excess_squared_sum={} nn_min_h={} nn_median_h={} pairs_lt_0_25h={} pairs_lt_0_5h={} translational_KE_J={} APIC_KE_J={} momentum_kg_m_s={},{} COM_m={},{} logJp_min={} logJp_median={} logJp_max={} logJp_exact_zero={} retainedD_trace_min={} retainedD_trace_mean={} retainedD_trace_max={} retainedD_trace_negative_fraction={} elastic_detF_min={} elastic_detF_max={} mass_kg={} cell_m={} cold_volume=1 cold_mass=2 CPU_reference_weights=true nodal_unit=source_cell_area_1 percentile=nearest_rank_over_stencil_nodes",
+                scene, phase, substep, dt, rows.size(), occupancy.back(), occupancy[p99], excess.back(), excess[p99],
+                excess_sum, excess_squared_sum, nearest.front(), nearest[(nearest.size() - 1u) / 2u], pairs_quarter,
+                pairs_half, translational_ke, apic_ke, momentum_x, momentum_y, com_x / count, com_y / count,
+                plastic_logs.front(), plastic_logs[(plastic_logs.size() - 1u) / 2u], plastic_logs.back(),
+                zero_plastic_logs, trace_min, trace_sum / count, trace_max, double(negative_trace_count) / count,
+                min_det, max_det, physical_grain_mass * count, h);
+        };
+        const auto run = [&](const std::string_view scene, const float phase, const Array<GpuParticle> &initial,
+                             const TerrainView terrain = {}) {
+            PPR_TEST_ASSERT(
+                not fixture.m_solver.prepareReplacement(initial, {}, fixture.m_solver.accounting().m_epoch, terrain));
+            fixture.m_solver.publishReplacement();
+            PPR_TEST_ASSERT(fixture.m_solver.profile().m_use_grid_volume_for_liquid == 1u);
+            std::println(
+                "SAND-COMPRESSION-SCENE scene={} phase={} gravity_strength={} volume_channel={} terrain={} source_floor_top=11.5 no_overlap_recovery=true",
+                scene, phase, fixture.m_solver.profile().m_gravity_strength,
+                fixture.m_solver.profile().m_use_grid_volume_for_liquid, not terrain.m_masks.empty());
+            observe(scene, phase, 0u, initial);
+            const u32 end_substep = scene == "compressed_4x4" ? 128u : 64u;
+            for (u32 substep = 1u; substep <= end_substep; ++substep) {
+                fixture.finishOneSubstep();
+                fixture.m_solver.publishTick();
+                if (substep != 1u and substep != 8u and substep != 64u and substep != 128u)
+                    continue;
+
+                const auto rows = fixture.snapshot();
+                PPR_TEST_ASSERT(rows.size() == initial.size());
+                observe(scene, phase, substep, rows);
+                if (scene == "isolated" or scene == "sparse_pair") {
+                    for (std::size_t row = 0u; row < rows.size(); ++row) {
+                        PPR_TEST_ASSERT(rows[row].m_position_x == initial[row].m_position_x);
+                        PPR_TEST_ASSERT(rows[row].m_position_y == initial[row].m_position_y);
+                        PPR_TEST_ASSERT(rows[row].m_displacement_x == 0.0f and rows[row].m_displacement_y == 0.0f);
+                    }
+                }
+            }
+        };
+
+        // Deliberately compressed counterexamples, not changed production seeds.
+        for (const float spacing: {0.75f, 1.0f}) {
+            for (const float phase: {0.0f, 0.25f, 0.5f}) {
+                Array<GpuParticle> particles;
+                for (u32 y = 0u; y < 4u; ++y) {
+                    for (u32 x = 0u; x < 4u; ++x) {
+                        auto particle = restParticle();
+                        particle.m_position_x = 28.0f + phase + float(x) * spacing;
+                        particle.m_position_y = 28.0f + phase + float(y) * spacing;
+                        particle.m_material = static_cast<float>(ESourceMaterial::sand);
+                        particle.m_mass = 2.0f;
+                        particle.m_log_jp = 0.0f;
+                        particles.push_back(particle);
+                    }
+                }
+
+                run(spacing == 0.75f ? "compressed_4x4" : "nominal_4x4", phase, particles);
+            }
+        }
+
+        Array<GpuParticle> isolated(1u, restParticle());
+        isolated[0u].m_position_x = 28.25f;
+        isolated[0u].m_position_y = 28.25f;
+        isolated[0u].m_material = static_cast<float>(ESourceMaterial::sand);
+        isolated[0u].m_mass = 2.0f;
+        isolated[0u].m_log_jp = 0.0f;
+        run("isolated", 0.25f, isolated);
+        auto sparse = isolated;
+        sparse.push_back(isolated[0u]);
+        sparse[1u].m_position_x += 3.0f;
+        run("sparse_pair", 0.25f, sparse);
+
+        const auto floor_masks = rectangleMasks(64u, 64u, 8u);
+        const TerrainView floor{floor_masks, 64u, 64u, 3.0f, 3.0f};
+        const auto make_strip = [&](const bool translating, const float height_h = 0.0f) {
+            Array<GpuParticle> strip;
+            for (u32 x = 0u; x < 16u; ++x) {
+                auto particle = isolated[0u];
+                particle.m_position_x = 24.5f + float(x);
+                particle.m_position_y = 11.5f + height_h;
+                particle.m_displacement_x = translating ? 0.01f : 0.0f;
+                strip.push_back(particle);
+            }
+
+            return strip;
+        };
+        run("zero_gravity_tangent_terrain_strip", 0.5f, make_strip(true), floor);
+
+        // Gravity supplies the actual normal impulse for terrain Coulomb tests;
+        // the strip begins on the certified surface, without overlap correction.
+        GpuParameters parameters = fixture.m_solver.profile();
+        parameters.m_particle_count = 0u;
+        parameters.m_shape_count = 0u;
+        parameters.m_gravity_strength = 9.81f / (64.0f / 3.0f);
+        PPR_TEST_ASSERT(not fixture.m_solver.shutdown());
+        PPR_TEST_ASSERT(not fixture.m_solver.initialize(
+            fixture.m_rhi->getDevice(), *fixture.m_queue, *fixture.m_shaders, std::filesystem::current_path(),
+            parameters));
+        for (const bool translating: {false, true}) {
+            run(translating ? "translating_gravity_terrain_strip" : "rest_gravity_terrain_strip", 0.5f,
+                make_strip(translating), floor);
+        }
+
+        // A supported grid stencil can suspend centres above the surface.
+        // Retain both hanging-layer heights as observations, without asserting
+        // an unmeasured settling or Coulomb threshold in this diagnostic.
+        for (const float height_h: {0.25f, 0.5f}) {
+            for (const bool translating: {false, true}) {
+                run(std::format("{}_gravity_terrain_strip_height_{}h", translating ? "translating" : "rest", height_h),
+                    0.5f, make_strip(translating, height_h), floor);
+            }
+        }
+    };
+
+    PPR_UNIT_TEST (sand_objective_volume_relaxes_compression_without_attraction_and_preserves_restart) {
+        Fixture fixture;
+        GpuSolver disabled;
+        PPR_DEFER {
+            PPR_TEST_ASSERT(not disabled.shutdown());
+            fixture.shutdown();
+        };
+        fixture.initialize(true, 64u, 64u, true, nullptr, 0.0f);
+        GpuParameters parameters = fixture.m_solver.profile();
+        parameters.m_use_grid_volume_for_liquid = 0u;
+        PPR_TEST_ASSERT(not disabled.initialize(
+            fixture.m_rhi->getDevice(), *fixture.m_queue, *fixture.m_shaders, std::filesystem::current_path(),
+            parameters));
+        const auto patch = [](const float spacing, const float phase) {
+            Array<GpuParticle> particles;
+            for (u32 y = 0u; y < 4u; ++y) {
+                for (u32 x = 0u; x < 4u; ++x) {
+                    auto particle = restParticle();
+                    particle.m_position_x = 28.0f + phase + float(x) * spacing;
+                    particle.m_position_y = 28.0f + phase + float(y) * spacing;
+                    particle.m_material = static_cast<float>(ESourceMaterial::sand);
+                    particle.m_mass = 2.0f;
+                    particle.m_log_jp = 0.0f;
+                    particles.push_back(particle);
+                }
+            }
+
+            return particles;
+        };
+        const auto capture = [](GpuSolver &solver) {
+            const u64 epoch = solver.accounting().m_epoch;
+            PPR_TEST_ASSERT(not solver.beginSnapshot(epoch));
+            PPR_TEST_ASSERT(not solver.drain());
+            auto result = solver.pollSnapshot();
+            PPR_TEST_ASSERT(result and result->has_value() and (**result).m_epoch == epoch);
+            return std::move((**result).m_particles);
+        };
+        const auto evolve = [&](GpuSolver &solver, const std::span<const GpuParticle> initial, const u32 steps) {
+            PPR_TEST_ASSERT(not solver.prepareReplacement(initial, {}, solver.accounting().m_epoch));
+            solver.publishReplacement();
+            for (u32 step = 0u; step < steps; ++step) {
+                PPR_TEST_ASSERT(not solver.submitResidentTick(solver.accounting().m_epoch, 1u, 2u));
+                PPR_TEST_ASSERT(not solver.drain());
+                const auto ready = solver.pollTick();
+                PPR_TEST_ASSERT(ready and *ready);
+                solver.publishTick();
+            }
+
+            auto rows = capture(solver);
+            PPR_TEST_ASSERT(rows.size() == initial.size());
+            for (std::size_t row = 0u; row < rows.size(); ++row) {
+                for (const float field: std::bit_cast<std::array<float, 22u>>(rows[row])) {
+                    PPR_TEST_ASSERT(std::isfinite(field));
+                }
+
+                PPR_TEST_ASSERT(
+                    rows[row].m_mass == initial[row].m_mass and rows[row].m_volume == initial[row].m_volume);
+                PPR_TEST_ASSERT(rows[row].m_material == initial[row].m_material);
+            }
+
+            return rows;
+        };
+        const auto excess = [](const std::span<const GpuParticle> particles) {
+            std::map<std::pair<int, int>, double> nodes;
+            for (const auto &particle: particles) {
+                const float down_x = std::floor(particle.m_position_x);
+                const float down_y = std::floor(particle.m_position_y);
+                const float ox = (particle.m_position_x - down_x) - 0.5f;
+                const float oy = (particle.m_position_y - down_y) - 0.5f;
+                const std::array<float, 3u> wx{
+                    0.5f * (0.5f - ox) * (0.5f - ox), 0.75f - ox * ox, 0.5f * (0.5f + ox) * (0.5f + ox)};
+                const std::array<float, 3u> wy{
+                    0.5f * (0.5f - oy) * (0.5f - oy), 0.75f - oy * oy, 0.5f * (0.5f + oy) * (0.5f + oy)};
+                for (u32 y = 0u; y < 3u; ++y) {
+                    for (u32 x = 0u; x < 3u; ++x) {
+                        nodes[{int(down_x) - 1 + int(x), int(down_y) - 1 + int(y)}] +=
+                            static_cast<double>(particle.m_volume) * static_cast<double>(wx[x] * wy[y]);
+                    }
+                }
+            }
+
+            double total = 0.0;
+            for (const auto &[node, volume]: nodes) {
+                static_cast<void>(node);
+                total += std::max(volume - 1.0, 0.0);
+            }
+
+            return total;
+        };
+        const auto same_physical_state = [](const std::span<const GpuParticle> first,
+                                             const std::span<const GpuParticle> second) {
+            PPR_TEST_ASSERT(first.size() == second.size());
+            for (std::size_t row = 0u; row < first.size(); ++row) {
+                const auto a = std::bit_cast<std::array<float, 22u>>(first[row]);
+                const auto b = std::bit_cast<std::array<float, 22u>>(second[row]);
+                // Position, translation, elastic F and retained affine D are the
+                // physical response. Sand's legacy carried liquid J may differ.
+                for (u32 field = 0u; field < 12u; ++field) {
+                    PPR_TEST_ASSERT(a[field] == b[field]);
+                }
+            }
+        };
+
+        const auto same_semantic_state = [](const std::span<const GpuParticle> first,
+                                             const std::span<const GpuParticle> second, const bool except_j) {
+            PPR_TEST_ASSERT(first.size() == second.size());
+            for (std::size_t row = 0u; row < first.size(); ++row) {
+                const auto a = std::bit_cast<std::array<float, 22u>>(first[row]);
+                const auto b = std::bit_cast<std::array<float, 22u>>(second[row]);
+                for (u32 field = 0u; field < a.size(); ++field) {
+                    if (except_j and field == 12u)
+                        continue;
+
+                    PPR_TEST_ASSERT(a[field] == b[field]);
+                }
+            }
+        };
+
+        for (const float phase: {0.0f, 0.25f, 0.5f}) {
+            const auto initial = patch(0.75f, phase);
+            const auto late = evolve(fixture.m_solver, initial, 128u);
+            std::println(
+                "SAND-DENSITY-REGRESSION phase={} initial_excess_sum={} late128_excess_sum={}", phase, excess(initial),
+                excess(late));
+            PPR_TEST_ASSERT(excess(initial) > 0.0 and excess(late) == 0.0);
+            const auto off = evolve(disabled, initial, 128u);
+            same_physical_state(initial, off);
+
+            const auto nominal = patch(1.0f, phase);
+            same_physical_state(nominal, evolve(fixture.m_solver, nominal, 64u));
+            const auto saved = evolve(fixture.m_solver, initial, 64u);
+            const auto restarted = evolve(fixture.m_solver, saved, 64u);
+            same_semantic_state(late, restarted, false);
+            for (const float carried_j: {0.1f, 4.0f}) {
+                auto alternative = initial;
+                for (auto &particle: alternative) {
+                    particle.m_liquid_density = carried_j;
+                }
+
+                same_semantic_state(late, evolve(fixture.m_solver, alternative, 128u), true);
+            }
+
+            // A consistent expansive velocity/affine field already separates
+            // this compressed block. The unilateral channel must add no impulse.
+            auto expanding = initial;
+            const float centre = 28.0f + phase + 1.125f;
+            for (auto &particle: expanding) {
+                particle.m_displacement_x = 0.75f * (particle.m_position_x - centre);
+                particle.m_displacement_y = 0.75f * (particle.m_position_y - centre);
+                particle.m_deformation_displacement = {0.75f, 0.0f, 0.0f, 0.75f};
+            }
+
+            same_physical_state(evolve(disabled, expanding, 1u), evolve(fixture.m_solver, expanding, 1u));
+        }
+
+        auto isolated = patch(1.0f, 0.25f);
+        isolated.resize(1u);
+        PPR_TEST_ASSERT(excess(isolated) == 0.0);
+        same_physical_state(isolated, evolve(fixture.m_solver, isolated, 64u));
+        auto sparse = isolated;
+        sparse.push_back(isolated[0u]);
+        sparse[1u].m_position_x += 3.0f;
+        PPR_TEST_ASSERT(excess(sparse) == 0.0);
+        same_physical_state(sparse, evolve(fixture.m_solver, sparse, 64u));
+    };
+
+    // ------------------------------------------------------------------
+    // sand terrain Coulomb response and unchanged base-material contacts
+    // ------------------------------------------------------------------
+
+    PPR_UNIT_TEST (sand_terrain_friction_is_dissipative_and_preserves_body_and_guardian_order) {
+        Fixture fixture;
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+        fixture.initialize(true, 32u, 32u, true, nullptr, 0.0f);
+        // The existing probe's explicit integer input has one unit of mass and
+        // 1e-7 displacement quantization. Eight units also cover normal arithmetic.
+        constexpr float tolerance = 8.0f / 10'000'000.0f;
+        const auto probe = [&](const std::string_view name, const TerrainView terrain, const float dx, const float dy,
+                               const std::span<const GpuBodyBoundary> bodies = {}) {
+            const auto result = contactProbe(
+                fixture, terrain, bodies, dy, {}, 10'000'000, dx, {}, {}, {}, false, false, false, false, true);
+            PPR_TEST_ASSERT(result.m_errors[0u] == 0u);
+            std::array<float, 12u> values;
+            for (u32 field = 0u; field < values.size(); ++field) {
+                values[field] = std::bit_cast<float>(result.m_contacts[field]);
+                PPR_TEST_ASSERT(std::isfinite(values[field]));
+            }
+
+            // Activating sand's separate velocity must leave the existing base
+            // result bit-identical, including liquid and unsupported inventory.
+            for (u32 field = 0u; field < 4u; ++field) {
+                PPR_TEST_ASSERT(result.m_contacts[field] == result.m_contacts[6u + field]);
+            }
+
+            PPR_TEST_ASSERT(result.m_contacts[0u] == result.m_contacts[10u]);
+            PPR_TEST_ASSERT(result.m_contacts[1u] == result.m_contacts[11u]);
+            std::println(
+                "SAND-TERRAIN-FRICTION case={} input={},{} base={},{} sand={},{} base_mass={} flags={}", name, dx, dy,
+                values[0u], values[1u], values[4u], values[5u], values[2u], result.m_errors[0u]);
+            return values;
+        };
+        const auto near = [&](const float actual, const float expected) {
+            PPR_TEST_ASSERT(std::abs(actual - expected) <= tolerance);
+        };
+        const auto dissipative = [&](const std::array<float, 12u> &values) {
+            const float base_energy = values[0u] * values[0u] + values[1u] * values[1u];
+            const float sand_energy = values[4u] * values[4u] + values[5u] * values[5u];
+            PPR_TEST_ASSERT(sand_energy <= base_energy + tolerance);
+            PPR_TEST_ASSERT(values[0u] * values[4u] + values[1u] * values[5u] >= -tolerance);
+        };
+
+        // At node centre(6.5,7.5), the authored horizontal contour is exactly
+        // y=7.5. The normal impulse is real inward motion, never recovery depth.
+        const auto flat_masks = rectangleMasks(8u, 4u, 2u);
+        const TerrainView flat{flat_masks, 8u, 4u, 3.5f, 5.0f};
+        const auto sliding = probe("flat_sliding", flat, 0.5f, -0.25f);
+        near(sliding[0u], 0.5f);
+        near(sliding[1u], 0.0f);
+        near(sliding[4u], 0.375f);
+        near(sliding[5u], 0.0f);
+        dissipative(sliding);
+        const auto stopping = probe("flat_stop_without_reversal", flat, 0.25f, -0.5f);
+        near(stopping[4u], 0.0f);
+        near(stopping[5u], 0.0f);
+        dissipative(stopping);
+        const auto reverse_direction = probe("flat_negative_tangent", flat, -0.5f, -0.25f);
+        near(reverse_direction[4u], -0.375f);
+        near(reverse_direction[5u], 0.0f);
+        dissipative(reverse_direction);
+        const auto tangent = probe("flat_tangent_without_normal_impulse", flat, 0.25f, 0.0f);
+        near(tangent[4u], 0.25f);
+        near(tangent[5u], 0.0f);
+        const auto resting = probe("flat_rest", flat, 0.0f, 0.0f);
+        near(resting[4u], 0.0f);
+        near(resting[5u], 0.0f);
+        const auto absent = probe("no_terrain", {}, 0.5f, -0.25f);
+        near(absent[4u], 0.5f);
+        near(absent[5u], -0.25f);
+
+        // Canonical mask1 has x+y=.5 as its exposed 45-degree face. Its
+        // translated midpoint is the same node centre as the flat case.
+        const std::array<u32, 1u> diagonal_mask{1u};
+        const TerrainView diagonal{diagonal_mask, 1u, 1u, 6.25f, 7.25f};
+        const auto slope = probe("diagonal_sliding", diagonal, 0.05f, -0.15f);
+        near(slope[0u], 0.1f);
+        near(slope[1u], -0.1f);
+        near(slope[4u], 0.075f);
+        near(slope[5u], -0.075f);
+        dissipative(slope);
+
+        // Preserve the source body's actual inside-query point semantics. The
+        // base endpoint6.5 lies inside its left half and becomes zero carry;
+        // the already-frictional sand endpoint6.375 is outside left face6.4.
+        // Applying friction after bodies would incorrectly erase sand's tangent.
+        GpuBodyBoundary body{};
+        body.m_shape.m_position_x = 6.6f;
+        body.m_shape.m_position_y = 7.0f;
+        body.m_shape.m_half_size_x = 0.2f;
+        body.m_shape.m_half_size_y = 1.0f;
+        body.m_com_x = 6.6f;
+        body.m_com_y = 7.0f;
+        const auto ordered = probe("flat_then_static_body", flat, 0.5f, -0.25f, {&body, 1u});
+        near(ordered[0u], 0.0f);
+        near(ordered[1u], 0.0f);
+        near(ordered[4u], 0.375f);
+        near(ordered[5u], 0.0f);
+
+        // Both diagonal endpoints lie in the body's left half, at different
+        // contact heights. The probe uses dt=.125, so omega=.8 gives omega*dt=.1.
+        // Each candidate must query its own rotational normal carry; reusing
+        // the base contact point would incorrectly give sand an x carry of .01.
+        GpuBodyBoundary rotating{};
+        rotating.m_shape.m_position_x = 6.11f;
+        rotating.m_shape.m_position_y = 7.0f;
+        rotating.m_shape.m_half_size_x = 0.05f;
+        rotating.m_shape.m_half_size_y = 1.0f;
+        rotating.m_com_x = 6.11f;
+        rotating.m_com_y = 7.0f;
+        rotating.m_angular_velocity = 0.8f;
+        const auto rotating_ordered = probe("diagonal_then_rotating_body", diagonal, 0.05f, -0.15f, {&rotating, 1u});
+        near(rotating_ordered[0u], 0.01f);
+        near(rotating_ordered[1u], -0.1f);
+        near(rotating_ordered[4u], 0.0075f);
+        near(rotating_ordered[5u], -0.075f);
+
+        // A wider floor keeps this large inward/tangential endpoint on real
+        // terrain before the guardian clips node6-3 below its padding4.
+        const auto wide_masks = rectangleMasks(32u, 4u, 2u);
+        const TerrainView wide{wide_masks, 32u, 4u, 0.0f, 5.0f};
+        const auto guarded = probe("terrain_then_guardian", wide, -3.0f, -0.25f);
+        near(guarded[0u], 0.0f);
+        near(guarded[1u], 0.0f);
+        near(guarded[4u], 0.0f);
+        near(guarded[5u], 0.0f);
+    };
+
+    // ------------------------------------------------------------------
+    // resident publication and render observations
+    // ------------------------------------------------------------------
+
     PPR_UNIT_TEST (initialized_rest_gravity_and_publication) {
         Fixture fixture;
         PPR_DEFER {
@@ -1690,6 +2402,335 @@ namespace pP::tests::detail::MatterGpu {
         PPR_TEST_ASSERT(candidate[0].m_displacement_x == 0.0f);
         PPR_TEST_ASSERT(candidate[0].m_displacement_y == gravity);
         PPR_TEST_ASSERT(fixture.m_solver.accounting().m_epoch == epoch + 1u);
+    };
+
+    // ------------------------------------------------------------------
+    // frozen production-solver liquid presentation
+    // ------------------------------------------------------------------
+
+    PPR_UNIT_TEST (evolved_liquid_pool_has_no_interior_render_holes) {
+        Fixture fixture;
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+        fixture.initialize(true, 64u, 64u, true, nullptr, 9.81f / (64.0f / 3.0f));
+
+        // Three solid boxes enclose x=[12,36], with the floor's upper face at
+        // y=12. Source coordinates and world coordinates both have +Y up.
+        const std::array<GpuStaticShape, 3u> walls{{
+            {.m_position_x = 24.0f, .m_position_y = 11.0f, .m_half_size_x = 13.0f, .m_half_size_y = 1.0f},
+            {.m_position_x = 11.0f, .m_position_y = 28.0f, .m_half_size_x = 1.0f, .m_half_size_y = 16.0f},
+            {.m_position_x = 37.0f, .m_position_y = 28.0f, .m_half_size_x = 1.0f, .m_half_size_y = 16.0f},
+        }};
+        // Match production seeding: one row per fine cell, source spacing and
+        // cold volume both 1 (physical spacing 1/3m, volume 1/9m3).
+        Array<GpuParticle> initial;
+        for (u32 y = 0u; y < 15u; ++y) {
+            for (u32 x = 0u; x < 24u; ++x) {
+                GpuParticle particle{};
+                particle.m_position_x = 12.0f + float(x) + 0.5f;
+                particle.m_position_y = 12.0f + float(y) + 0.5f;
+                particle.m_volume = particle.m_mass = 1.0f;
+                particle.m_material = static_cast<float>(ESourceMaterial::liquid);
+                initial.push_back(particle);
+            }
+        }
+
+        fixture.replace(initial, walls);
+        std::array<Array<GpuParticle>, 2u> frozen;
+        std::array<u64, 2u> epochs{};
+        for (u32 tick = 1u; tick <= 120u; ++tick) {
+            PPR_TEST_ASSERT(not fixture.m_solver.submitResidentTick(fixture.m_solver.accounting().m_epoch, 8u, 2u));
+            PPR_TEST_ASSERT(not fixture.m_solver.drain());
+            const auto ready = fixture.m_solver.pollTick();
+            PPR_TEST_ASSERT(ready and *ready);
+            fixture.m_solver.publishTick();
+            if (tick == 1u or tick == 120u) {
+                const u32 index = tick == 1u ? 0u : 1u;
+                epochs[index] = fixture.m_solver.accounting().m_epoch;
+                frozen[index] = fixture.snapshot();
+                PPR_TEST_ASSERT(frozen[index].size() == initial.size());
+            }
+        }
+
+        Renderer renderer;
+        PPR_TEST_ASSERT(not renderer.initialize(*fixture.m_rhi));
+        PPR_DEFER {
+            PPR_TEST_ASSERT(not renderer.shutdown());
+        };
+        auto &device = fixture.m_rhi->getDevice();
+        rhi::TextureDesc desc{};
+        desc.type = rhi::TextureType::Texture2D;
+        desc.size = {512u, 512u, 1u};
+        desc.format = rhi::Format::RGBA8Unorm;
+        desc.usage = static_cast<rhi::TextureUsage>(
+            static_cast<u32>(rhi::TextureUsage::RenderTarget) | static_cast<u32>(rhi::TextureUsage::CopySource));
+        desc.defaultState = rhi::ResourceState::RenderTarget;
+        rhi::ComPtr<rhi::ITexture> target;
+        PPR_TEST_ASSERT(not make_error_code(device.createTexture(desc, nullptr, target.writeRef())));
+        const auto viewport = rhi::Viewport::fromSize(512.0f, 512.0f);
+        const auto scissor = rhi::ScissorRect::fromSize(512u, 512u);
+        CameraModel model{};
+        model.m_camera_mode = ECameraProjection::orthographic;
+        model.m_ortho_scale = 12.0f / 512.0f;
+        model.m_origin = float3{2.0f, 2.0f, -0.5f};
+        Camera camera{ECameraProjection::orthographic};
+        camera.updateModel(TimeSpan{}, model, Viewport{PixelRect{0, 0, 512, 512}});
+        const float3 centre{8.0f, 8.0f, -0.5f};
+        model.m_origin = centre - camera.getRight() * 6.0f - camera.getUp() * 6.0f;
+        camera.updateModel(TimeSpan{}, model, Viewport{PixelRect{0, 0, 512, 512}});
+        auto snapshot = camera.getSnapshot();
+        snapshot.m_has_camera_cut = false;
+        const char *const qa = std::getenv("PPR_GRID_QA_DIR");
+        const char *const content_root = std::getenv("PPR_GRID_QA_CONTENT_ROOT");
+        const bool glossy_qa = qa != nullptr and *qa != '\0' and content_root != nullptr and *content_root != '\0';
+        Array<image::ImageAsset> backdrop;
+        if (glossy_qa) {
+            for (const char *const name: {"distant", "caverns", "formations", "backwall"}) {
+                const auto path = std::filesystem::path{content_root} /
+                                  "textures" /
+                                  std::format("background_frontier_{}.png", name);
+                const auto mapped = mem::SharedBuffer::mapFile(path);
+                PPR_TEST_ASSERT(mapped.has_value());
+                auto decoded = image::decodeToRgba8(
+                    mapped->getBufferData(), ".png", image::ImageDecodeDesc{}, image::EImageUsage::color);
+                PPR_TEST_ASSERT(decoded.has_value());
+                PPR_TEST_ASSERT(not image::generateMipChain(*decoded, image::MipGenDesc{}));
+                backdrop.push_back(std::move(*decoded));
+            }
+        }
+
+        std::array<u64, 4u> holes{};
+        std::array<u64, 4u> samples{};
+        std::array<u64, 4u> outside_painted{};
+        for (u32 state = 0u; state < 2u; ++state) {
+            u64 hash = 14695981039346656037ull;
+            double rms_motion_squared = 0.0;
+            for (const auto &particle: frozen[state]) {
+                for (const auto byte: std::as_bytes(std::span{&particle, 1u})) {
+                    hash = (hash ^ std::to_integer<u8>(byte)) * 1099511628211ull;
+                }
+
+                const double dx = static_cast<double>(particle.m_displacement_x);
+                const double dy = static_cast<double>(particle.m_displacement_y);
+                rms_motion_squared += dx * dx + dy * dy;
+            }
+
+            if (qa != nullptr and *qa != '\0') {
+                std::filesystem::create_directories(qa);
+                std::ofstream output{
+                    std::filesystem::path{qa} / std::format("solver-pool-epoch-{}.gpu-rows.bin", epochs[state]),
+                    std::ios::binary};
+                output.write(
+                    reinterpret_cast<const char *>(frozen[state].data()),
+                    std::streamsize(frozen[state].size() * sizeof(GpuParticle)));
+                PPR_TEST_ASSERT(output.good());
+            }
+
+            for (u32 variant = 0u; variant < (glossy_qa ? 2u : 1u); ++variant) {
+                const bool glossy = variant != 0u;
+                for (const bool temporal: {false, true}) {
+                    GridPass grid;
+                    RetroPass picture;
+                    PPR_TEST_ASSERT(
+                        not grid.initialize(*fixture.m_rhi, *fixture.m_shaders, std::filesystem::current_path()));
+                    PPR_TEST_ASSERT(
+                        not picture.initialize(*fixture.m_rhi, *fixture.m_shaders, std::filesystem::current_path()));
+                    PPR_DEFER {
+                        const auto submitted = renderer.lastSubmittedFenceValue();
+                        if (submitted != kFenceValueNone) {
+                            PPR_TEST_ASSERT(not renderer.waitForFenceValue(submitted));
+                        }
+
+                        PPR_TEST_ASSERT(not renderer.retireCompletedFrames());
+                        PPR_TEST_ASSERT(not picture.shutdown());
+                        PPR_TEST_ASSERT(not grid.shutdown());
+                    };
+
+                    GridPass::GridStagedFrame stage{};
+                    stage.m_cell_size_m = 1.0f / 3.0f;
+                    GridTerrainVisual water{};
+                    water.m_material_id = 1u;
+                    water.m_color_rgba = 0x0000ffffu;
+                    water.m_ior = 1.0f;
+                    water.m_surface_flags = kGridSurfaceParticleLiquid;
+                    if (glossy) {
+                        water.m_color_rgba = 0x3989c970u;
+                        water.m_roughness = 0.12f;
+                        water.m_ior = 1.333f;
+                        water.m_normal_scale = 0.8f;
+                        water.m_refraction_depth_m = 0.2f;
+                        water.m_emissive_strength = 1.0f;
+                        water.m_opacity = 1.0f;
+                        water.m_surface_flags = kGridSurfaceParticleLiquid | kGridSurfaceOpticalBlend;
+                        stage.m_has_background = true;
+                        stage.m_terrain_images = backdrop;
+                        constexpr std::array<float, 4u> periods{256.0f, 180.0f, 112.0f, 64.0f};
+                        constexpr std::array<float, 4u> parallax{0.08f, 0.22f, 0.45f, 0.7f};
+                        for (u32 layer = 0u; layer < 4u; ++layer) {
+                            stage.m_background_layers[layer] = GridBackgroundLayer{
+                                .m_texture_index = layer,
+                                .m_order = layer,
+                                .m_color_rgba = 0xffffffffu,
+                                .m_repeat_period_m = periods[layer],
+                                .m_parallax_factor = parallax[layer]};
+                        }
+                    }
+
+                    stage.m_terrain_visuals.push_back(water);
+                    stage.m_tiles.push_back(
+                        GridTileSubmission{.m_dirty_mask = 1u, .m_tile_range = {0, 0, 128, 128}, .m_chunk_id = 0u});
+                    GridPass::GridStagedUpload upload{};
+                    upload.m_payload.m_rect[2] = upload.m_payload.m_rect[3] = 128.0f;
+                    upload.m_cell_materials.assign(GridPass::kCellsPerChunk, 0u);
+                    stage.m_uploads.push_back(std::move(upload));
+                    auto rows = std::make_shared<Array<GridParticleInstance>>();
+                    for (u32 row = 0u; row < frozen[state].size(); ++row) {
+                        const auto &particle = frozen[state][row];
+                        // Match makeMatterState/captureMovingMatter: origin 3 cells,
+                        // h=1/3m, thickness=1m, no axis inversion or position edits.
+                        rows->push_back(
+                            {u64(row) + 1u, (double(particle.m_position_x) - 3.0) / 3.0,
+                                (double(particle.m_position_y) - 3.0) / 3.0, double(particle.m_volume) / 9.0,
+                                double(particle.m_mass) * 1000.0 / 9.0, 300.0, 1u});
+                    }
+
+                    stage.m_particle_batches = {GridParticleBatch{0u, std::move(rows)}};
+                    PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
+                    PPR_TEST_ASSERT(not grid.update(TimeSpan{}, snapshot));
+                    for (;;) {
+                        const auto prepared = grid.tryPrepareCellUploads(device, renderer.completedFenceValue());
+                        PPR_TEST_ASSERT(prepared.has_value());
+                        if (*prepared) {
+                            break;
+                        }
+
+                        const auto submitted = renderer.lastSubmittedFenceValue();
+                        if (submitted != kFenceValueNone) {
+                            PPR_TEST_ASSERT(not renderer.waitForFenceValue(submitted));
+                        }
+
+                        PPR_TEST_ASSERT(not renderer.retireCompletedFrames());
+                    }
+                    const RetroSettings settings{
+                        .m_enabled = false, .m_palette_enabled = false, .m_temporal_enabled = temporal};
+                    for (u32 frame = 0u; frame < (temporal ? 4u : 1u); ++frame) {
+                        const auto raster = picture.beginFrame(
+                            settings, snapshot, int2{512, 512}, grid.worldGeneration());
+                        PPR_TEST_ASSERT(picture.temporalActive() == temporal);
+                        PPR_TEST_ASSERT(not grid.update(TimeSpan{}, raster));
+                        const auto draw = [&](const DrawContext &context) -> std::error_code {
+                            PPR_RETURN_ERROR_ON_FAIL(MatterPoolRender, grid.renderBackground(context));
+                            PPR_RETURN_ERROR_ON_FAIL(MatterPoolRender, grid.render(context));
+                            return grid.renderParticles(context);
+                        };
+
+                        const auto prepare = [&](const PreRenderContext &context) -> std::error_code {
+                            PPR_RETURN_ERROR_ON_FAIL(
+                                MatterPoolRender, grid.prepareBackground(context, snapshot, viewport, scissor));
+                            PPR_RETURN_ERROR_ON_FAIL(MatterPoolRender, grid.prepareGpuParticles(context));
+                            if (temporal) {
+                                return picture.prepareScene(
+                                    context, RetroPass::scenePipelineSignature(true), int2{512, 512},
+                                    DrawCallback{draw});
+                            }
+
+                            return {};
+                        };
+
+                        const auto present = [&](const DrawContext &context) {
+                            return temporal ? picture.render(context) : draw(context);
+                        };
+                        DrawSubmission submission{"frozen actual solver pool", present};
+                        submission.m_viewport = viewport;
+                        submission.m_scissor = scissor;
+                        PPR_TEST_ASSERT(
+                            not renderer.renderToTexture(*target.get(), {submission}, {}, PreRenderCallback{prepare}));
+                        const auto submitted = renderer.lastSubmittedFenceValue();
+                        grid.notifyFrameSubmitted(submitted);
+                        if (temporal) {
+                            picture.notifyFrameSubmitted(submitted);
+                        }
+
+                        PPR_TEST_ASSERT(not renderer.waitForFenceValue(submitted));
+                        PPR_TEST_ASSERT(not renderer.retireCompletedFrames());
+                    }
+
+                    shader::ComPtr<ISlangBlob> pixels;
+                    rhi::SubresourceLayout layout{};
+                    PPR_TEST_ASSERT(
+                        not make_error_code(device.readTexture(target.get(), 0u, 0u, pixels.writeRef(), &layout)));
+                    const auto *const bytes = static_cast<const u8 *>(pixels->getBufferPointer());
+                    const u32 index = state * 2u + u32(temporal);
+                    std::ofstream ppm;
+                    if (qa != nullptr and *qa != '\0') {
+                        ppm.open(
+                            std::filesystem::path{qa} / std::format(
+                                                            "solver-pool-epoch-{}-{}{}.ppm", epochs[state],
+                                                            temporal ? "temporal" : "native", glossy ? "-glossy" : ""),
+                            std::ios::binary);
+                        ppm << "P6\n512 512\n255\n";
+                    }
+
+                    for (u32 y = 0u; y < 512u; ++y) {
+                        for (u32 x = 0u; x < 512u; ++x) {
+                            const auto *const pixel = bytes + y * layout.rowPitch + x * 4u;
+                            const double source_x = (2.0 + (double(x) + 0.5) * 12.0 / 512.0) * 3.0 + 3.0;
+                            const double source_y = (14.0 - (double(y) + 0.5) * 12.0 / 512.0) * 3.0 + 3.0;
+                            // Inventory is 360 source-cell areas in a 24-cell-wide
+                            // basin (15 cells deep). This deep ROI excludes walls by
+                            // >=5 source cells, floor by >=4, and free surface by >=7.
+                            if (not glossy and
+                                source_x > 17.0 and
+                                source_x < 31.0 and
+                                source_y > 16.0 and
+                                source_y < 20.0) {
+                                ++samples[index];
+                                holes[index] += pixel[2] < 200u ? 1u : 0u;
+                            }
+
+                            if (not glossy and
+                                source_x > 17.0 and
+                                source_x < 31.0 and
+                                source_y > 40.0 and
+                                source_y < 43.0) {
+                                outside_painted[index] += pixel[2] >= 200u ? 1u : 0u;
+                            }
+
+                            if (ppm.is_open()) {
+                                ppm.write(reinterpret_cast<const char *>(pixel), 3);
+                            }
+                        }
+                    }
+
+                    if (ppm.is_open()) {
+                        PPR_TEST_ASSERT(ppm.good());
+                    }
+
+                    if (glossy) {
+                        // Authored appearance is visual QA, never a false-color
+                        // coverage classification or an automatic aesthetic claim.
+                        std::println(
+                            "SOLVER-POOL-GLOSSY epoch={} hash={} temporal={} authored_water=true", epochs[state], hash,
+                            temporal);
+                        continue;
+                    }
+
+                    std::println(
+                        "SOLVER-POOL spacing_source=1 cold_volume=1 physical_spacing_m=1/3 physical_volume_m3=1/9 epoch={} tick={} rows={} hash={} rms_displacement_cells={} temporal={} roi_source=[17,31]x[16,20] samples={} holes={} outside_painted={}",
+                        epochs[state], state == 0u ? 1u : 120u, frozen[state].size(), hash,
+                        std::sqrt(rms_motion_squared / double(frozen[state].size())), temporal, samples[index],
+                        holes[index], outside_painted[index]);
+                }
+            }
+        }
+
+        // Emit all early/late native/temporal evidence even against old shaders.
+        for (u32 index = 0u; index < holes.size(); ++index) {
+            PPR_TEST_ASSERT(samples[index] > 0u);
+            PPR_TEST_ASSERT(outside_painted[index] == 0u);
+            PPR_TEST_ASSERT(holes[index] == 0u);
+        }
     };
 
     // ------------------------------------------------------------------
@@ -2538,6 +3579,126 @@ namespace pP::tests::detail::MatterGpu {
     // published terrain recovery and continuous point contact
     // ------------------------------------------------------------------
 
+    PPR_UNIT_TEST (terrain_rounded_v_endpoint_preserves_certified_contacts_and_resident_rest) {
+        Fixture fixture;
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+        fixture.initialize(false, 2055u, 2055u, true, nullptr, 0.0f);
+        const std::array<u32, 2u> masks{13u, 14u};
+        bool exterior_passed = true;
+        u32 certified_starts = 0u;
+        for (const auto origin: {std::array<float, 2u>{1023.0f, 7.5f}, std::array<float, 2u>{7.5f, 1023.0f}}) {
+            const TerrainView terrain{masks, 2u, 1u, origin[0u], origin[1u]};
+            for (const float fraction: {1.0f, std::nextafter(1.0f, 0.0f), 1.0f - 0x1p-17f}) {
+                const auto probe = contactProbe(
+                    fixture, terrain, {}, 0.0f, {}, 10'000'000, 0.0f, std::array<float, 2u>{fraction, 0.0f}, {}, {},
+                    false, false, false, true);
+                std::println(
+                    "TERRAIN-V-EXTERIOR origin={},{} fraction_bits={} before={},{} before_certified={} paired={} incoming={},{} after={},{} after_certified={} flags={} field={}",
+                    origin[0u], origin[1u], std::bit_cast<u32>(fraction), std::bit_cast<float>(probe.m_contacts[0u]),
+                    std::bit_cast<float>(probe.m_contacts[1u]), probe.m_contacts[2u], probe.m_contacts[3u],
+                    std::bit_cast<float>(probe.m_contacts[4u]), std::bit_cast<float>(probe.m_contacts[5u]),
+                    std::bit_cast<float>(probe.m_contacts[6u]), std::bit_cast<float>(probe.m_contacts[7u]),
+                    probe.m_contacts[8u], probe.m_errors[0u], probe.m_errors[3u]);
+                exterior_passed = exterior_passed and probe.m_errors[0u] == 0u and probe.m_contacts[8u] == 1u;
+                if (probe.m_contacts[2u] == 1u) {
+                    ++certified_starts;
+                    exterior_passed = exterior_passed and
+                                      probe.m_contacts[0u] == probe.m_contacts[6u] and
+                                      probe.m_contacts[1u] == probe.m_contacts[7u];
+                }
+            }
+        }
+
+        const TerrainView terrain{masks, 2u, 1u, 1023.0f, 7.5f};
+        bool transport_passed = true;
+        for (const auto motion:
+            {std::array<float, 2u>{0.0f, 0.0f}, std::array<float, 2u>{0.00015f, 0.00035f},
+                std::array<float, 2u>{-0.0002f, -0.0002f}, std::array<float, 2u>{0.0002f, -0.0002f}}) {
+            const auto probe = contactProbe(
+                fixture, terrain, {}, motion[1u], {}, 10'000'000, motion[0u],
+                std::array<float, 2u>{1023.99994f, 7.9999f}, {}, {}, false, false, true);
+            const float x = std::bit_cast<float>(probe.m_contacts[0u]);
+            const float y = std::bit_cast<float>(probe.m_contacts[1u]);
+            // The two canonical segments form y=8-|x-1024|. Compare exact
+            // published FP32 coordinates in double, without a collision skin.
+            const bool outside = std::isfinite(x) and
+                                 std::isfinite(y) and
+                                 double(y) + std::abs(double(x) - 1024.0) <= 8.0;
+            std::println(
+                "TERRAIN-V-TRANSPORT motion={},{} point={},{} carry={},{} first_hit={} full_flags={} final_flags={} field={} outside={}",
+                motion[0u], motion[1u], x, y, std::bit_cast<float>(probe.m_contacts[2u]),
+                std::bit_cast<float>(probe.m_contacts[3u]), probe.m_contacts[4u], probe.m_contacts[11u],
+                probe.m_errors[0u], probe.m_errors[3u], outside);
+            // The helper subsequently runs a separate one-contact-budget probe;
+            // contacts[11] is the ordinary full transport's prior error result.
+            transport_passed = transport_passed and probe.m_contacts[11u] == 0u and outside;
+        }
+
+        bool resident_passed = true;
+        for (const bool resting: {true, false}) {
+            GpuParticle initial = restParticle();
+            initial.m_material = static_cast<float>(ESourceMaterial::sand);
+            initial.m_position_x = resting ? 1024.0f : 1023.99994f;
+            initial.m_position_y = resting ? 8.0f : 7.9999f;
+            initial.m_displacement_x = resting ? 0.0f : 0.00015f;
+            initial.m_displacement_y = resting ? 0.0f : 0.00035f;
+            PPR_TEST_ASSERT(not fixture.m_solver.prepareReplacement(
+                {&initial, 1u}, {}, fixture.m_solver.accounting().m_epoch, terrain));
+            fixture.m_solver.publishReplacement();
+            for (u32 substep = 0u; substep < 8u; ++substep) {
+                const u64 epoch = fixture.m_solver.accounting().m_epoch;
+                PPR_TEST_ASSERT(not fixture.m_solver.submitResidentTick(epoch, 1u, 2u));
+                PPR_TEST_ASSERT(not fixture.m_solver.drain());
+                const auto ready = fixture.m_solver.pollTick();
+                if (not ready) {
+                    const auto failure = fixture.m_solver.failure();
+                    std::println(
+                        "TERRAIN-V-RESIDENT resting={} substep={} epoch={} flags={} field={} rejected=true", resting,
+                        substep, epoch, failure.m_flags, failure.m_field);
+                    PPR_TEST_ASSERT(not fixture.m_solver.discardTick());
+                    resident_passed = false;
+                    break;
+                }
+
+                PPR_TEST_ASSERT(*ready);
+                fixture.m_solver.publishTick();
+                const auto rows = fixture.snapshot();
+                PPR_TEST_ASSERT(rows.size() == 1u);
+                const auto &particle = rows[0u];
+                const bool outside = double(particle.m_position_y) + std::abs(double(particle.m_position_x) - 1024.0) <=
+                                     8.0;
+                std::println(
+                    "TERRAIN-V-RESIDENT resting={} substep={} epoch={} point={},{} carry={},{} outside={} F=[{},{},{},{}] D=[{},{},{},{}] log_jp={}",
+                    resting, substep, epoch, particle.m_position_x, particle.m_position_y, particle.m_displacement_x,
+                    particle.m_displacement_y, outside, particle.m_deformation_gradient.m_c0x,
+                    particle.m_deformation_gradient.m_c0y, particle.m_deformation_gradient.m_c1x,
+                    particle.m_deformation_gradient.m_c1y, particle.m_deformation_displacement.m_c0x,
+                    particle.m_deformation_displacement.m_c0y, particle.m_deformation_displacement.m_c1x,
+                    particle.m_deformation_displacement.m_c1y, particle.m_log_jp);
+                for (const float field: std::bit_cast<std::array<float, 22u>>(particle)) {
+                    PPR_TEST_ASSERT(std::isfinite(field));
+                }
+
+                resident_passed = resident_passed and outside;
+                PPR_TEST_ASSERT(particle.m_mass == initial.m_mass and particle.m_volume == initial.m_volume);
+                if (resting) {
+                    PPR_TEST_ASSERT(particle.m_displacement_x == 0.0f and particle.m_displacement_y == 0.0f);
+                    PPR_TEST_ASSERT(
+                        std::bit_cast<std::array<float, 4u>>(particle.m_deformation_gradient) ==
+                        std::bit_cast<std::array<float, 4u>>(initial.m_deformation_gradient));
+                    PPR_TEST_ASSERT(
+                        std::bit_cast<std::array<float, 4u>>(particle.m_deformation_displacement) ==
+                        std::bit_cast<std::array<float, 4u>>(initial.m_deformation_displacement));
+                }
+            }
+        }
+
+        PPR_TEST_ASSERT(certified_starts > 0u);
+        PPR_TEST_ASSERT(exterior_passed and transport_passed and resident_passed);
+    };
+
     PPR_UNIT_TEST (terrain_recovery_sweeps_and_rest_preserve_published_contact) {
         Fixture fixture;
         PPR_DEFER {
@@ -3292,9 +4453,14 @@ namespace pP::tests {
                 detail::MatterGpu::sparse_gpu_aprons_publish_unique_flat_keys_and_group_rows,
                 detail::MatterGpu::sparse_generations_poison_capacity_and_cross_group_budget_are_transactional,
                 detail::MatterGpu::opt_in_stage_timing_follows_completed_fence_and_epoch,
+                detail::MatterGpu::sand_density_and_terrain_contact_instrumented_gpu_cost_diagnostic,
                 detail::MatterGpu::deterministic_1024_sparse_dense_scene,
                 detail::MatterGpu::isolated_liquid_density_error_decays_without_affine_growth,
                 detail::MatterGpu::initialized_rest_gravity_and_publication,
+                detail::MatterGpu::sand_reference_occupancy_compression_and_floor_controls_diagnostic,
+                detail::MatterGpu::sand_objective_volume_relaxes_compression_without_attraction_and_preserves_restart,
+                detail::MatterGpu::sand_terrain_friction_is_dissipative_and_preserves_body_and_guardian_order,
+                detail::MatterGpu::evolved_liquid_pool_has_no_interior_render_holes,
                 detail::MatterGpu::all_materials_preserve_inventory_and_publish_finite_state_at_k2,
                 detail::MatterGpu::k2_only_rejects_other_counts_before_work,
                 detail::MatterGpu::guardian_blocks_normal_and_halves_tangent_analytically,
@@ -3308,6 +4474,7 @@ namespace pP::tests {
                 detail::MatterGpu::all_four_absolute_budgets_reject_without_publication,
                 detail::MatterGpu::strict_conversion_and_collection_retry_preserve_cause,
                 detail::MatterGpu::prepared_replacement_accounts_peak_and_freezes_admission,
+                detail::MatterGpu::terrain_rounded_v_endpoint_preserves_certified_contacts_and_resident_rest,
                 detail::MatterGpu::terrain_recovery_sweeps_and_rest_preserve_published_contact,
                 detail::MatterGpu::terrain_endpoint_response_and_complete_boundary_search,
                 detail::MatterGpu::wave_boundary_search_matches_serial_for_full_mixed_groups,

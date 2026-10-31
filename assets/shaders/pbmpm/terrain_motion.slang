@@ -118,6 +118,22 @@ float2 terrainConstrain(TerrainCone cone, float2 direction) {
     return best;
 }
 
+// Coulomb carry response to one normal projection. Geometry and recovery
+// distances never enter this calculation; scaling preserves the free cone.
+float2 terrainCarryFriction(float2 direction, float2 projected, float friction) {
+    if (friction == 0.0 || all(direction == projected)) return projected;
+
+    float magnitude = max(max(abs(direction.x), abs(direction.y)), max(abs(projected.x), abs(projected.y)));
+    if (magnitude == 0.0) return projected;
+
+    float2 scaled = projected / magnitude;
+    float tangent = length(scaled);
+    if (tangent == 0.0) return float2(0.0);
+
+    float normalRemoval = length(direction / magnitude - scaled);
+    return projected * max(0.0, 1.0 - friction * normalRemoval / tangent);
+}
+
 float terrainNextFloat(float value, float direction) {
     if (direction == 0.0) return value;
     if (value == 0.0) return asfloat(direction > 0.0 ? 1u : 0x80000001u);
@@ -190,13 +206,18 @@ void terrainValidatePosition(float2 point, uint row) {
 }
 
 float2 terrainExteriorPoint(TerrainFeature feature, TerrainCone cone, float2 preferred, uint row) {
+    // A closed boundary is already admissible. Equal ULP counts are not equal
+    // geometric steps: at a rounded concave vertex, nudging a valid point can
+    // cross the neighboring edge when the coordinate magnitudes differ.
+    if (terrainPositionCertified(feature.point)) return feature.point;
+
     float2 outward = -cone.incoming;
     if (cone.paired && cone.turn <= 0.0) outward -= cone.outgoing;
     else if (cone.paired && dot(cone.incoming, preferred) > 0.0 && dot(cone.outgoing, preferred) <= 0.0)
         outward = -cone.outgoing;
 
-    // One representable step, not a fixed collision skin. In particular, the
-    // recovery distance never becomes velocity or constitutive deformation.
+    // Repair uncertified rounding with representable steps, not a fixed skin.
+    // Recovery distance never becomes velocity or constitutive deformation.
     float2 point = feature.point;
     for (uint attempt = 0u; attempt < 3u; ++attempt) {
         point = float2(terrainNextFloat(point.x, outward.x), terrainNextFloat(point.y, outward.y));
@@ -423,7 +444,7 @@ float4 terrainRoundedLeg(float2 start, float2 delta) {
 }
 
 void terrainTransportLimited<let ContactLimit : uint>(
-    float2 oldPosition, float2 transport, inout float2 position, inout float2 carry, uint row) {
+    float2 oldPosition, float2 transport, inout float2 position, inout float2 carry, uint row, float friction) {
     if (g_environment.hasTerrain == 0u) return;
 
     // In particular, reject gravity/body overflow before a projection could
@@ -440,8 +461,9 @@ void terrainTransportLimited<let ContactLimit : uint>(
         TerrainFeature feature = terrainNearestFeature(overlap.point, row);
         TerrainCone cone = terrainFeatureCone(feature, row);
         transport = terrainConstrain(cone, transport);
-        carry = terrainConstrain(cone, carry);
-        start = terrainExteriorPoint(feature, cone, any(transport != float2(0.0)) ? transport : carry, row);
+        float2 projected = terrainConstrain(cone, carry);
+        start = terrainExteriorPoint(feature, cone, any(transport != float2(0.0)) ? transport : projected, row);
+        carry = terrainCarryFriction(carry, projected, friction);
     }
 
     // Each contact removes only motion entering the local solid cone. A
@@ -482,11 +504,22 @@ void terrainTransportLimited<let ContactLimit : uint>(
 
         TerrainCone cone = terrainFeatureCone(feature, row);
         transport = terrainConstrain(cone, (1.0 - time) * motion);
-        carry = terrainConstrain(cone, carry);
-        start = terrainExteriorPoint(feature, cone, any(transport != float2(0.0)) ? transport : carry, row);
+        float2 projected = terrainConstrain(cone, carry);
+        start = terrainExteriorPoint(feature, cone, any(transport != float2(0.0)) ? transport : projected, row);
+        carry = terrainCarryFriction(carry, projected, friction);
     }
 }
 
+void terrainTransportLimited<let ContactLimit : uint>(
+    float2 oldPosition, float2 transport, inout float2 position, inout float2 carry, uint row) {
+    terrainTransportLimited<ContactLimit>(oldPosition, transport, position, carry, row, 0.0);
+}
+
+void terrainTransport(float2 oldPosition, float2 transport, inout float2 position, inout float2 carry, uint row,
+    float friction) {
+    terrainTransportLimited<32u>(oldPosition, transport, position, carry, row, friction);
+}
+
 void terrainTransport(float2 oldPosition, float2 transport, inout float2 position, inout float2 carry, uint row) {
-    terrainTransportLimited<32u>(oldPosition, transport, position, carry, row);
+    terrainTransport(oldPosition, transport, position, carry, row, 0.0);
 }

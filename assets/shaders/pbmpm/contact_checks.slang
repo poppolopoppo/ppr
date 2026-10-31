@@ -96,6 +96,32 @@ void inspectContact() {
 }
 
 // ------------------------------------------------------------------
+// sand-specific terrain grid friction through the production contact operation
+// ------------------------------------------------------------------
+
+[shader("compute")]
+[numthreads(1,1,1)]
+void inspectSandGridContacts() {
+    uint address = (7u * 32u + 6u) * 4u;
+    int4 source = int4(g_gridSrc[address], g_gridSrc[address + 1u], g_gridSrc[address + 2u], g_gridSrc[address + 3u]);
+    float2 sand, unmodified;
+    float4 base = projectGridContacts<false, true>(int2(6,7), address / 4u, source, true, sand);
+    float4 reference = projectGridContacts<false, false>(int2(6,7), address / 4u, source, true, unmodified);
+    g_contact_result[0] = asint(base.x);
+    g_contact_result[1] = asint(base.y);
+    g_contact_result[2] = asint(base.z);
+    g_contact_result[3] = asint(base.w);
+    g_contact_result[4] = asint(sand.x);
+    g_contact_result[5] = asint(sand.y);
+    g_contact_result[6] = asint(reference.x);
+    g_contact_result[7] = asint(reference.y);
+    g_contact_result[8] = asint(reference.z);
+    g_contact_result[9] = asint(reference.w);
+    g_contact_result[10] = asint(unmodified.x);
+    g_contact_result[11] = asint(unmodified.y);
+}
+
+// ------------------------------------------------------------------
 // production terrain transport with a reduced contact budget
 // ------------------------------------------------------------------
 
@@ -136,6 +162,34 @@ void inspectTerrainTransportBudget(uniform float2 g_contact_query) {
     carry = motion;
     terrainTransportLimited<1u>(g_contact_query, motion, position, carry, 0u);
     g_contact_result[10] = asint(position.x);
+}
+
+// ------------------------------------------------------------------
+// rounded endpoint certification through production feature operations
+// ------------------------------------------------------------------
+
+[shader("compute")]
+[numthreads(1,1,1)]
+void inspectTerrainExteriorEndpoint(uniform float2 g_contact_query) {
+    TerrainFeature feature = {int2(0,0), 0u, g_contact_query.x, float2(0.0)};
+    float2 begin, edge;
+    terrainFeatureEdge(feature, begin, edge);
+    feature.point = begin + feature.fraction * edge;
+    TerrainCone cone = terrainFeatureCone(feature, 0u);
+    g_contact_result[0] = asint(feature.point.x);
+    g_contact_result[1] = asint(feature.point.y);
+    g_contact_result[2] = terrainPositionCertified(feature.point) ? 1 : 0;
+    g_contact_result[3] = cone.paired ? 1 : 0;
+    g_contact_result[4] = asint(cone.incoming.x);
+    g_contact_result[5] = asint(cone.incoming.y);
+
+    float2 result = terrainExteriorPoint(feature, cone, float2(0.0), 0u);
+    g_contact_result[6] = asint(result.x);
+    g_contact_result[7] = asint(result.y);
+    g_contact_result[8] = terrainPositionCertified(result) ? 1 : 0;
+    g_contact_result[9] = asint(cone.turn);
+    g_contact_result[10] = asint(feature.fraction);
+    g_contact_result[11] = int(g_errors[0]);
 }
 
 // Both paths use the production error helpers with a mixed full-group cohort.

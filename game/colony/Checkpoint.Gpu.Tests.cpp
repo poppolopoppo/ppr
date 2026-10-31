@@ -2,6 +2,7 @@ module;
 #include "pP/Macros.h"
 #include "pP/UnitTest.h"
 #include <cstdio>
+#include <slang.h>
 
 module game.tests;
 
@@ -1156,9 +1157,489 @@ namespace pP::game::tests::detail::checkpoint {
     // sustained actual dug-sand integration
     // ------------------------------------------------------------------
 
-    void exerciseDenseDigDiagnostic(const DigRect dig, const bool confined) {
+    void observeActualDugRendering(
+        const MatterState &state, ColonyDriver &driver, const WorldCheckpoint &checkpoint,
+        const ContentCatalog &catalog, const ContentPresentation &presentation, const u32 tick, const DigRect dig,
+        const bool long_diagnostic = false, const bool long_focus = false, const bool seed_reference = false) {
+        PPR_TEST_ASSERT(not seed_reference or long_diagnostic);
+        PPR_TEST_ASSERT(not long_focus or long_diagnostic);
+        // A restored driver has resident runtime without PreparedWorld-backed
+        // catalog/profile/metric accessors. Take those explicit owned inputs from
+        // its validated checkpoint and fixture catalog, preserving normal staging.
+        const auto &descriptor = checkpoint.m_descriptor;
+        const auto *const profile = catalog.findWorld(descriptor.m_profile);
+        PPR_TEST_ASSERT(profile != nullptr and catalog.contentFingerprint().has_value());
+        PPR_TEST_ASSERT(*catalog.contentFingerprint() == descriptor.m_content_fingerprint);
+        PPR_TEST_ASSERT(presentation.catalog().get() == &catalog);
+        PPR_TEST_ASSERT(presentation.generation() == asset::RequestGeneration{driver.worldGeneration()});
+        PPR_TEST_ASSERT(state.m_cell_metres == 1.0 / double(descriptor.m_metric.m_cells_per_metre));
+        PPR_TEST_ASSERT(state.m_thickness_metres == descriptor.m_metric.m_reference_thickness_m);
+        // Client-owned presentation job stamp; numerical/source epochs and
+        // metadata remain the runtime's unmodified committed values.
+        const GridWorldIdentity render_world{1u, driver.worldGeneration(), presentation.fingerprint()};
+        if (not seed_reference) {
+            driver.bindParticlePresentation(render_world);
+        }
+        auto packet = captureCatalogPresentation(
+            presentation, descriptor.m_profile, profile->m_default_wall_material_id,
+            descriptor.m_metric.m_cells_per_metre, descriptor.m_metric.m_reference_thickness_m);
+        PPR_TEST_ASSERT(packet.has_value());
+        packet->m_world_generation = driver.worldGeneration();
+        packet->m_seed = driver.seed();
+        packet->m_tick = driver.tickCount();
+        packet->m_frame_id = tick;
+        packet->m_full_refresh = true;
+        packet->m_initial_matter_valid = checkpoint.m_initial_matter_valid;
+        const char *const source_name = seed_reference ? "frozen_rows_seed_reference" : "resident_gpu";
+        if (seed_reference) {
+            const auto physical = captureMovingMatter(state, state.m_particles);
+            PPR_TEST_ASSERT(physical.has_value());
+            for (const auto &batch: physical->m_chunks) {
+                auto rows = std::make_shared<Array<GridParticleInstance>>();
+                for (const auto &record: batch.records()) {
+                    // Authored element IDs and physical properties come from
+                    // actual emitted metadata, never the solver's material class.
+                    rows->push_back(
+                        {record.m_id, record.m_x_m, record.m_y_m, record.m_volume_m3, record.m_mass_kg,
+                            record.m_temperature_k, record.m_material});
+                }
+
+                packet->m_particle_batches.push_back({sim::chunkIndexOf(batch.m_position), std::move(rows)});
+            }
+
+            packet->m_gpu_particles.reset();
+            std::println(
+                "DUG-REFERENCE-SOURCE source=frozen_rows_seed_reference endpoint={} rows={} driver_tick={} authored_material_first={} source_class_first={} physical_steps_after_dig=0",
+                tick, state.m_particles.size(), driver.tickCount(), state.m_records.front().m_material,
+                state.m_particles.front().m_material);
+        } else {
+            packet->m_gpu_particles = driver.particleView();
+            PPR_TEST_ASSERT(packet->m_gpu_particles and packet->m_gpu_particles->current());
+            const auto &view = *packet->m_gpu_particles;
+            std::println(
+                "ACTUAL-DUG-SOURCE tick={} state_rows={} metadata_count={} moving_count={} cell_m={} origin={} metadata_version={} device_epoch={} publication={} world_job={} world_generation={} catalog_fp={} render_fp={} view_fp={}",
+                tick, state.m_particles.size(), view.m_metadata->m_count, view.m_metadata->m_moving_count,
+                view.m_metadata->m_cell_metres, view.m_origin, view.m_metadata->m_version, view.m_device_epoch,
+                view.m_publication, view.m_world.m_job_id, view.m_world.m_world_generation,
+                descriptor.m_content_fingerprint, render_world.m_content_fingerprint,
+                view.m_world.m_content_fingerprint);
+            PPR_TEST_ASSERT(view.m_metadata->m_count == state.m_particles.size());
+            PPR_TEST_ASSERT(view.m_metadata->m_moving_count == state.m_particles.size());
+            std::println(
+                "ACTUAL-DUG-VIEW current={} metadata_rows={} layout={} stride={} readonly_stride={} hot_element={} hot_bytes={} cold_element={} cold_bytes={}",
+                view.current(), view.m_metadata->m_rows.get() != nullptr, view.m_layout, view.m_stride,
+                view.m_readonly_stride, view.m_numerical->getDesc().elementSize, view.m_numerical->getDesc().size,
+                view.m_readonly->getDesc().elementSize, view.m_readonly->getDesc().size);
+            PPR_TEST_ASSERT(view.m_world == render_world);
+            PPR_TEST_ASSERT(view.m_metadata->m_rows.get() != nullptr and view.m_origin == 3.0);
+            PPR_TEST_ASSERT(
+                view.m_layout == kGridParticleNumericalLayout and view.m_stride == kGridParticleNumericalStride);
+            PPR_TEST_ASSERT(view.m_readonly_stride == kGridParticleReadonlyStride);
+            PPR_TEST_ASSERT(view.m_metadata->m_cell_metres == state.m_cell_metres);
+            PPR_TEST_ASSERT(view.m_numerical->getDesc().elementSize == kGridParticleNumericalStride);
+            PPR_TEST_ASSERT(view.m_readonly->getDesc().elementSize == kGridParticleReadonlyStride);
+            PPR_TEST_ASSERT(
+                view.m_numerical->getDesc().size >=
+                std::max(1u, view.m_metadata->m_moving_count) * u64(kGridParticleNumericalStride));
+            PPR_TEST_ASSERT(
+                view.m_readonly->getDesc().size >=
+                std::max(1u, view.m_metadata->m_moving_count) * u64(kGridParticleReadonlyStride));
+        }
+
+        const auto &source_grid = driver.grid();
+        for (u32 index = 0u; index < source_grid.chunkCount(); ++index) {
+            const sim::ChunkPos pos{index % source_grid.chunksPerEdge(), index / source_grid.chunksPerEdge()};
+            if (not source_grid.contains(pos) or not source_grid.isResident(pos)) {
+                continue;
+            }
+
+            const auto cells = source_grid.residentCells(pos);
+            PPR_TEST_ASSERT(cells and cells->size() == sim::kCellsPerChunk);
+            packet->m_resident_chunks.push_back(pos);
+            SimChunkCells payload{.m_pos = pos};
+            payload.m_cells.assign(cells->begin(), cells->end());
+            packet->m_chunk_cells.push_back(std::move(payload));
+        }
+
+        GridStagedFrame captured;
+        PPR_TEST_ASSERT(not buildGridStagedFrame(*packet, captured));
+        PPR_TEST_ASSERT(captured.m_content_fingerprint == render_world.m_content_fingerprint);
+        if (not seed_reference) {
+            PPR_TEST_ASSERT(captured.m_gpu_particles->m_world.m_content_fingerprint == captured.m_content_fingerprint);
+        }
+        const auto rhi = IRhiService::get();
+        const auto shaders = IShaderService::get();
+        Renderer renderer;
+        PPR_TEST_ASSERT(not renderer.initialize(*rhi));
+        PPR_DEFER {
+            PPR_TEST_ASSERT(not renderer.shutdown());
+        };
+        auto &device = rhi->getDevice();
+        struct Point {
+            double x, y, radius;
+        };
+        Array<Point> points;
+        u64 hash = 14695981039346656037ull;
+        for (const auto &particle: state.m_particles) {
+            if (not long_diagnostic) {
+                PPR_TEST_ASSERT(particle.m_volume == 1.0f);
+            }
+
+            points.push_back(
+                {(double(particle.m_position_x) - 3.0) * state.m_cell_metres,
+                    (double(particle.m_position_y) - 3.0) * state.m_cell_metres,
+                    std::sqrt(
+                        double(particle.m_volume) * state.m_cell_metres * state.m_cell_metres / std::numbers::pi)});
+            for (const auto byte: std::as_bytes(std::span{&particle, 1u})) {
+                hash = (hash ^ std::to_integer<u8>(byte)) * 1099511628211ull;
+            }
+        }
+
+        // Derive close-contact interstices from the actual frozen positions.
+        // Four nearby convex corners (all turns >=25 degrees, sides <=1.25h)
+        // enclose the test point. Wide granular pores and free edges are excluded.
+        const double spacing = state.m_cell_metres;
+        const auto distance = [](const Point &a, const Point &b) { return std::hypot(a.x - b.x, a.y - b.y); };
+        Array<Point> interstices;
+        const double floor_top = double(dig.m_min.m_y - 4u) * spacing;
+        if (not long_diagnostic) {
+            for (const auto &a: points) {
+                for (const auto &b: points) {
+                    if (b.x - a.x < 0.5 * spacing or b.x - a.x > 1.4 * spacing or std::abs(b.y - a.y) > 0.4 * spacing) {
+                        continue;
+                    }
+
+                    for (const auto &d: points) {
+                        if (d.y - a.y < 0.5 * spacing or
+                            d.y - a.y > 1.4 * spacing or
+                            std::abs(d.x - a.x) > 0.4 * spacing) {
+                            continue;
+                        }
+
+                        const Point target{b.x + d.x - a.x, b.y + d.y - a.y, 0.0};
+                        const auto corner = std::ranges::min_element(
+                            points, {}, [&](const Point &p) { return distance(p, target); });
+                        if (corner == points.end() or distance(*corner, target) > 0.35 * spacing) {
+                            continue;
+                        }
+
+                        const std::array<Point, 4u> quad{a, b, *corner, d};
+                        bool enclosed = true;
+                        for (u32 i = 0u; i < 4u; ++i) {
+                            const auto &p = quad[i];
+                            const auto &q = quad[(i + 1u) % 4u];
+                            const auto &r = quad[(i + 2u) % 4u];
+                            const double first = distance(p, q);
+                            const double second = distance(q, r);
+                            const double cross = (q.x - p.x) * (r.y - q.y) - (q.y - p.y) * (r.x - q.x);
+                            enclosed = enclosed and
+                                       first >= 0.5 * spacing and
+                                       first <= 1.25 * spacing and
+                                       second >= 0.5 * spacing and
+                                       second <= 1.25 * spacing and
+                                       cross >= 0.4226182617 * first * second;
+                        }
+
+                        const Point centre{
+                            (a.x + b.x + corner->x + d.x) * 0.25, (a.y + b.y + corner->y + d.y) * 0.25, 0.0};
+                        if (enclosed and centre.y > floor_top + 2.0 * a.radius) {
+                            interstices.push_back(centre);
+                        }
+                    }
+                }
+            }
+        }
+
+        const char *const qa = std::getenv("PPR_GRID_QA_DIR");
+        if (qa != nullptr and *qa != '\0' and not long_focus and not seed_reference) {
+            std::filesystem::create_directories(qa);
+            std::ofstream raw{
+                std::filesystem::path{qa} / std::format("actual-dug-tick-{}-{}.gpu-rows.bin", tick, hash),
+                std::ios::binary};
+            raw.write(
+                reinterpret_cast<const char *>(state.m_particles.data()),
+                std::streamsize(state.m_particles.size() * sizeof(matter::GpuParticle)));
+            PPR_TEST_ASSERT(raw.good());
+        }
+
+        rhi::TextureDesc desc{};
+        desc.type = rhi::TextureType::Texture2D;
+        desc.size = {512u, 512u, 1u};
+        desc.format = rhi::Format::RGBA8Unorm;
+        desc.usage = static_cast<rhi::TextureUsage>(
+            static_cast<u32>(rhi::TextureUsage::RenderTarget) | static_cast<u32>(rhi::TextureUsage::CopySource));
+        desc.defaultState = rhi::ResourceState::RenderTarget;
+        rhi::ComPtr<rhi::ITexture> target;
+        PPR_TEST_ASSERT(not make_error_code(device.createTexture(desc, nullptr, target.writeRef())));
+        double origin_x = double(dig.m_min.m_x) * spacing - 4.0;
+        double origin_y = double(dig.m_min.m_y) * spacing - 5.0;
+        double width_m = 12.0;
+        if (long_diagnostic) {
+            double min_x = std::numeric_limits<double>::infinity(), min_y = min_x;
+            double max_x = -min_x, max_y = -min_x, max_radius = 0.0;
+            for (const auto &point: points) {
+                min_x = std::min(min_x, point.x);
+                min_y = std::min(min_y, point.y);
+                max_x = std::max(max_x, point.x);
+                max_y = std::max(max_y, point.y);
+                max_radius = std::max(max_radius, point.radius);
+            }
+
+            const double margin = std::max(2.0 * spacing, 2.0 * max_radius);
+            // Include the actual floor top while fitting every particle and a
+            // finite grain margin. Only this explicit diagnostic changes camera.
+            min_y = std::min(min_y, floor_top);
+            width_m = std::max(max_x - min_x, max_y - min_y) + 2.0 * margin;
+            origin_x = (min_x + max_x - width_m) * 0.5;
+            origin_y = (min_y + max_y - width_m) * 0.5;
+            u32 window_centres = 0u;
+            if (long_focus) {
+                Array<double> sorted_x;
+                sorted_x.reserve(points.size());
+                for (const auto &point: points) {
+                    sorted_x.push_back(point.x);
+                }
+
+                std::ranges::sort(sorted_x);
+                std::size_t right = 0u, best_left = 0u, best_right = 0u;
+                for (std::size_t left = 0u; left < sorted_x.size(); ++left) {
+                    while (right < sorted_x.size() and sorted_x[right] - sorted_x[left] <= 12.0) {
+                        ++right;
+                    }
+
+                    if (right - left > best_right - best_left) {
+                        best_left = left;
+                        best_right = right;
+                    }
+                }
+
+                width_m = 12.0;
+                origin_x = (sorted_x[best_left] + sorted_x[best_right - 1u]) * 0.5 - 6.0;
+                origin_y = floor_top - 2.0;
+                window_centres = static_cast<u32>(best_right - best_left);
+            }
+
+            u32 visible_centres = 0u;
+            for (const auto &point: points) {
+                visible_centres += point.x >= origin_x and
+                                           point.x <= origin_x + width_m and
+                                           point.y >= origin_y and
+                                           point.y <= origin_y + width_m
+                                       ? 1u
+                                       : 0u;
+            }
+
+            std::println(
+                "ACTUAL-DUG-DIAGNOSTIC-VIEW tick={} origin={},{} width_m={} grain_margin_m={} quad_coverage_oracle=not_run raw_rows={} focus={} visible_centres={} total_centres={} focus_window_centres={} source={}",
+                tick, origin_x, origin_y, width_m, long_focus ? 0.0 : margin, not long_focus and not seed_reference,
+                long_focus, visible_centres, points.size(), window_centres, source_name);
+        }
+        CameraModel model{};
+        model.m_camera_mode = ECameraProjection::orthographic;
+        model.m_ortho_scale = float(width_m) / 512.0f;
+        model.m_origin = float3{float(origin_x), float(origin_y), -0.5f};
+        Camera camera{ECameraProjection::orthographic};
+        camera.updateModel(TimeSpan{}, model, Viewport{PixelRect{0, 0, 512, 512}});
+        const float3 centre{float(origin_x + width_m * 0.5), float(origin_y + width_m * 0.5), -0.5f};
+        model.m_origin = centre - camera.getRight() * float(width_m * 0.5) - camera.getUp() * float(width_m * 0.5);
+        camera.updateModel(TimeSpan{}, model, Viewport{PixelRect{0, 0, 512, 512}});
+        auto snapshot = camera.getSnapshot();
+        snapshot.m_has_camera_cut = false;
+        const auto viewport = rhi::Viewport::fromSize(512.0f, 512.0f);
+        const auto scissor = rhi::ScissorRect::fromSize(512u, 512u);
+        std::array<u64, 2u> core_samples{}, core_holes{}, packed_holes{};
+        for (u32 appearance = 0u; appearance < (qa != nullptr and *qa != '\0' ? 2u : 1u); ++appearance) {
+            for (const bool temporal: {false, true}) {
+                GridPass grid;
+                RetroPass picture;
+                PPR_TEST_ASSERT(not grid.initialize(*rhi, *shaders, std::filesystem::current_path()));
+                PPR_TEST_ASSERT(not picture.initialize(*rhi, *shaders, std::filesystem::current_path()));
+                PPR_DEFER {
+                    const auto submitted = renderer.lastSubmittedFenceValue();
+                    if (submitted != kFenceValueNone) {
+                        PPR_TEST_ASSERT(not renderer.waitForFenceValue(submitted));
+                    }
+
+                    PPR_TEST_ASSERT(not renderer.retireCompletedFrames());
+                    PPR_TEST_ASSERT(not picture.shutdown());
+                    PPR_TEST_ASSERT(not grid.shutdown());
+                };
+                auto stage = captured;
+                if (appearance == 0u) {
+                    stage.m_has_background = false;
+                    stage.m_surface_profile.reset();
+                    for (auto &visual: stage.m_terrain_visuals) {
+                        visual.m_color_rgba = 0x0000ffffu;
+                        visual.m_texture_index = 0xffffffffu;
+                        visual.m_normal_texture_index = 0xffffffffu;
+                        visual.m_opacity = 1.0f;
+                        visual.m_ior = 1.0f;
+                        std::ranges::fill(visual.m_emissive_rgb, 0.0f);
+                        visual.m_emissive_strength = 0.0f;
+                    }
+                }
+
+                const auto observe = [&](const char *const phase, const bool admitted = true) {
+                    const auto observations = grid.observations();
+                    std::println(
+                        "ACTUAL-DUG-GRID tick={} authored={} temporal={} phase={} instances={} dispatches={} draws={} particle_bytes={} source={}",
+                        tick, appearance != 0u, temporal, phase, observations.m_particle_instances,
+                        observations.m_dispatch_commands, observations.m_draw_commands,
+                        observations.m_particle_buffer_bytes, source_name);
+                    if (admitted) {
+                        PPR_TEST_ASSERT(observations.m_particle_instances == state.m_particles.size());
+                    }
+                };
+
+                PPR_TEST_ASSERT(
+                    not grid.stageWorldCandidate(render_world.m_job_id, render_world.m_world_generation, stage, true));
+                observe("staged", not seed_reference);
+                for (;;) {
+                    const auto prepared = grid.advanceWorldCandidate(device, renderer.completedFenceValue());
+                    PPR_TEST_ASSERT(prepared.has_value());
+                    if (*prepared) {
+                        break;
+                    }
+
+                    const auto submitted = renderer.lastSubmittedFenceValue();
+                    if (submitted != kFenceValueNone) {
+                        PPR_TEST_ASSERT(not renderer.waitForFenceValue(submitted));
+                    }
+
+                    PPR_TEST_ASSERT(not renderer.retireCompletedFrames());
+                }
+
+                PPR_TEST_ASSERT(not grid.activateWorldCandidate(
+                    render_world.m_job_id, render_world.m_world_generation, render_world.m_content_fingerprint));
+                PPR_TEST_ASSERT(grid.activeWorldIdentity() == render_world);
+                // Mirror the normal editor's explicit per-frame GPU source bind.
+                if (not seed_reference) {
+                    PPR_TEST_ASSERT(not grid.applyGpuParticleView(*stage.m_gpu_particles));
+                }
+                observe("activated");
+
+                const RetroSettings settings{
+                    .m_enabled = false, .m_palette_enabled = false, .m_temporal_enabled = temporal};
+                for (u32 frame = 0u; frame < (temporal ? 4u : 1u); ++frame) {
+                    const auto raster = picture.beginFrame(settings, snapshot, int2{512, 512}, grid.worldGeneration());
+                    PPR_TEST_ASSERT(picture.temporalActive() == temporal);
+                    PPR_TEST_ASSERT(not grid.update(TimeSpan{}, raster));
+                    const auto draw = [&](const DrawContext &context) -> std::error_code {
+                        PPR_RETURN_ERROR_ON_FAIL(CheckpointTests, grid.renderBackground(context));
+                        PPR_RETURN_ERROR_ON_FAIL(CheckpointTests, grid.render(context));
+                        return grid.renderParticles(context);
+                    };
+
+                    const auto prepare = [&](const PreRenderContext &context) -> std::error_code {
+                        PPR_RETURN_ERROR_ON_FAIL(
+                            CheckpointTests, grid.prepareBackground(context, snapshot, viewport, scissor));
+                        PPR_RETURN_ERROR_ON_FAIL(CheckpointTests, grid.prepareGpuParticles(context));
+                        observe("prepared");
+                        return temporal ? picture.prepareScene(
+                                              context, RetroPass::scenePipelineSignature(true), int2{512, 512},
+                                              DrawCallback{draw})
+                                        : std::error_code{};
+                    };
+
+                    const auto present = [&](const DrawContext &context) {
+                        return temporal ? picture.render(context) : draw(context);
+                    };
+                    DrawSubmission submission{"actual dug solid frozen source", present};
+                    submission.m_viewport = viewport;
+                    submission.m_scissor = scissor;
+                    PPR_TEST_ASSERT(
+                        not renderer.renderToTexture(*target.get(), {submission}, {}, PreRenderCallback{prepare}));
+                    const auto submitted = renderer.lastSubmittedFenceValue();
+                    grid.notifyFrameSubmitted(submitted);
+                    if (temporal) {
+                        picture.notifyFrameSubmitted(submitted);
+                    }
+
+                    PPR_TEST_ASSERT(not renderer.waitForFenceValue(submitted));
+                    PPR_TEST_ASSERT(not renderer.retireCompletedFrames());
+                    observe("rendered");
+                }
+
+                shader::ComPtr<ISlangBlob> pixels;
+                rhi::SubresourceLayout layout{};
+                PPR_TEST_ASSERT(
+                    not make_error_code(device.readTexture(target.get(), 0u, 0u, pixels.writeRef(), &layout)));
+                const auto *const bytes = static_cast<const u8 *>(pixels->getBufferPointer());
+                const auto blueAt = [&](const Point &point) {
+                    const double x = (point.x - origin_x) * 512.0 / width_m;
+                    const double y = (origin_y + width_m - point.y) * 512.0 / width_m;
+                    PPR_TEST_ASSERT(x >= 0.0 and x < 512.0 and y >= 0.0 and y < 512.0);
+                    return bytes[u64(y) * layout.rowPitch + u64(x) * 4u + 2u];
+                };
+                if (appearance == 0u and not long_diagnostic) {
+                    for (const auto &point: points) {
+                        if (point.y <= floor_top + 2.0 * point.radius) {
+                            continue;
+                        }
+
+                        for (const Point offset:
+                            {Point{0.0, 0.0, 0.0}, Point{0.5, 0.0, 0.0}, Point{-0.5, 0.0, 0.0}, Point{0.0, 0.5, 0.0},
+                                Point{0.0, -0.5, 0.0}}) {
+                            ++core_samples[u32(temporal)];
+                            core_holes[u32(temporal)] += blueAt(
+                                                             {point.x + offset.x * point.radius,
+                                                                 point.y + offset.y * point.radius, 0.0}) < 150u
+                                                             ? 1u
+                                                             : 0u;
+                        }
+                    }
+
+                    for (const auto &point: interstices) {
+                        packed_holes[u32(temporal)] += blueAt(point) < 150u ? 1u : 0u;
+                    }
+                }
+
+                if (qa != nullptr and *qa != '\0') {
+                    std::ofstream ppm{
+                        std::filesystem::path{qa} / std::format(
+                                                        "{}-tick-{}-{}-{}{}.ppm",
+                                                        seed_reference ? "frozen-dug-reference" : "actual-dug", tick,
+                                                        appearance == 0u ? "coverage" : "authored",
+                                                        temporal ? "temporal" : "native", long_focus ? "-focus" : ""),
+                        std::ios::binary};
+                    ppm << "P6\n512 512\n255\n";
+                    for (u32 y = 0u; y < 512u; ++y) {
+                        for (u32 x = 0u; x < 512u; ++x) {
+                            ppm.write(reinterpret_cast<const char *>(bytes + y * layout.rowPitch + x * 4u), 3);
+                        }
+                    }
+
+                    PPR_TEST_ASSERT(ppm.good());
+                }
+
+                std::println(
+                    "ACTUAL-DUG tick={} hash={} rows={} authored={} temporal={} core_samples={} core_holes={} packed_samples={} packed_holes={} oracle={} max_side_h=1.25 diagnostic={} oracle_run={} focus={} source={}",
+                    tick, hash, points.size(), appearance != 0u, temporal, core_samples[u32(temporal)],
+                    core_holes[u32(temporal)], interstices.size(), packed_holes[u32(temporal)],
+                    long_diagnostic ? "not_run" : "convex-close-contact-quads-not-all-pores", long_diagnostic,
+                    not long_diagnostic, long_focus, source_name);
+            }
+        }
+
+        if (not long_diagnostic) {
+            for (u32 mode = 0u; mode < 2u; ++mode) {
+                PPR_TEST_ASSERT(core_samples[mode] > 0u and not interstices.empty());
+                PPR_TEST_ASSERT(core_holes[mode] == 0u and packed_holes[mode] == 0u);
+            }
+        }
+    }
+
+    void exerciseDenseDigDiagnostic(
+        const DigRect dig, const bool confined, const bool observe_rendering = false, const u32 end_tick = 120u,
+        const std::span<const u32> capture_checkpoints = {}, const bool long_diagnostic = false,
+        const std::filesystem::path &reference_directory = {}, const bool compression_diagnostic = false) {
         PPR_TEST_ASSERT(dig.m_width > 0u and dig.m_width <= 16u);
         PPR_TEST_ASSERT(dig.m_height > 0u and dig.m_height <= 16u);
+
+        PPR_TEST_ASSERT(end_tick > 0u and (not long_diagnostic or observe_rendering or compression_diagnostic));
+        for (const u32 checkpoint: capture_checkpoints) {
+            PPR_TEST_ASSERT(checkpoint > 0u and checkpoint <= end_tick);
+        }
 
         const u32 particle_count = dig.m_width * dig.m_height;
 
@@ -1194,7 +1675,10 @@ namespace pP::game::tests::detail::checkpoint {
             // The emitted block falls through four empty cell rows onto a
             // four-cell-thick floor, without containing side walls or a roof.
             for (u32 y = dig.m_min.m_y - 8u; y < dig.m_min.m_y - 4u; ++y) {
-                for (u32 x = dig.m_min.m_x - 8u; x < dig.m_min.m_x + dig.m_width + 8u; ++x)
+                const u32 floor_min_x = long_diagnostic ? 0u : dig.m_min.m_x - 8u;
+                const u32 floor_max_x = long_diagnostic ? checkpoint.m_descriptor.m_world_edge
+                                                        : dig.m_min.m_x + dig.m_width + 8u;
+                for (u32 x = floor_min_x; x < floor_max_x; ++x)
                     PPR_TEST_ASSERT(not terrain_grid.setCell({x, y}, {basalt->m_numeric_id, 300.0f}));
             }
 
@@ -1202,6 +1686,12 @@ namespace pP::game::tests::detail::checkpoint {
                 for (u32 x = dig.m_min.m_x; x < dig.m_min.m_x + dig.m_width; ++x)
                     PPR_TEST_ASSERT(not terrain_grid.setCell({x, y}, {basalt->m_numeric_id, 300.0f}));
             }
+        }
+
+        if (long_diagnostic) {
+            std::println(
+                "ACTUAL-DUG-LONG-FLOOR fine_x=[0,{}) fine_y=[{},{}) thickness_cells=4 sidewalls=false diagnostic_only=true",
+                checkpoint.m_descriptor.m_world_edge, dig.m_min.m_y - 8u, dig.m_min.m_y - 4u);
         }
 
         auto terrain_snapshot = sim::captureFull(terrain_grid, checkpoint.m_descriptor.m_seed);
@@ -1213,6 +1703,32 @@ namespace pP::game::tests::detail::checkpoint {
         GpuOwner owner;
         owner.initialize();
         owner.restore(fixture.m_catalog, checkpoint, 61u);
+        std::shared_ptr<const ContentPresentation> render_presentation;
+        if (observe_rendering) {
+            const char *const qa = std::getenv("PPR_GRID_QA_DIR");
+            const char *const content_root = std::getenv("PPR_GRID_QA_CONTENT_ROOT");
+            if (qa != nullptr and *qa != '\0' and content_root != nullptr and *content_root != '\0') {
+                // Keep the fixture's authored texture descriptor and material
+                // values. Prepare the shipped rock bytes through the normal
+                // owned presentation request so its fingerprint covers them.
+                const auto rock = mem::SharedBuffer::mapFile(
+                    std::filesystem::path{content_root} / "textures" / "basalt.png");
+                PPR_TEST_ASSERT(rock.has_value());
+                const auto bytes = rock->getBufferData();
+                fixture.write(
+                    "pixel.png", std::string_view{reinterpret_cast<const char *>(bytes.data()), bytes.size()});
+                config::Diagnostics diagnostics;
+                auto request = ContentPresentationRequest::start(
+                    fixture.m_catalog, asset::RequestGeneration{owner.m_driver->worldGeneration()},
+                    context::background(), diagnostics);
+                PPR_TEST_ASSERT(request.has_value());
+                auto prepared = request->finish(diagnostics);
+                PPR_TEST_ASSERT(prepared.has_value());
+                render_presentation = std::move(*prepared);
+            } else {
+                render_presentation = fixture.presentation(owner.m_driver->worldGeneration());
+            }
+        }
 
         auto &driver = *owner.m_driver;
         driver.setPaused(true);
@@ -1227,24 +1743,112 @@ namespace pP::game::tests::detail::checkpoint {
         PPR_TEST_ASSERT(emitted.m_particles.size() == particle_count and emitted.m_records.size() == particle_count);
         PPR_TEST_ASSERT(emitted.m_gas.empty() and emitted.m_next_id == 12u + particle_count);
 
+        if (not reference_directory.empty()) {
+            static_assert(sizeof(matter::GpuParticle) == 88u);
+            PPR_TEST_ASSERT(long_diagnostic and observe_rendering and particle_count == 256u);
+            PPR_TEST_ASSERT(std::filesystem::is_directory(reference_directory));
+            for (const u32 endpoint: {120u, 600u, 1800u}) {
+                std::filesystem::path source;
+                const auto prefix = std::format("actual-dug-tick-{}-", endpoint);
+                for (const auto &entry: std::filesystem::directory_iterator(reference_directory)) {
+                    const auto name = entry.path().filename().string();
+                    if (entry.is_regular_file() and name.starts_with(prefix) and name.ends_with(".gpu-rows.bin")) {
+                        PPR_TEST_ASSERT(source.empty());
+                        source = entry.path();
+                    }
+                }
+
+                PPR_TEST_ASSERT(not source.empty());
+                const auto mapped = mem::SharedBuffer::mapFile(source);
+                PPR_TEST_ASSERT(mapped.has_value());
+                const auto bytes = mapped->getBufferData();
+                PPR_TEST_ASSERT(bytes.size() == emitted.m_particles.size() * sizeof(matter::GpuParticle));
+                MatterState reference = emitted;
+                std::memcpy(reference.m_particles.data(), bytes.data(), bytes.size());
+                u64 hash = 14695981039346656037ull;
+                for (const auto byte: bytes) {
+                    hash = (hash ^ std::to_integer<u8>(byte)) * 1099511628211ull;
+                }
+
+                PPR_TEST_ASSERT(
+                    source.filename().string() == std::format("actual-dug-tick-{}-{}.gpu-rows.bin", endpoint, hash));
+                const auto physical = captureMovingMatter(reference, reference.m_particles);
+                PPR_TEST_ASSERT(physical.has_value());
+                reference.m_records.clear();
+                for (const auto &batch: physical->m_chunks) {
+                    reference.m_records.insert(
+                        reference.m_records.end(), batch.records().begin(), batch.records().end());
+                }
+
+                std::ranges::sort(reference.m_records, {}, &sim::MatterParticle::m_id);
+                PPR_TEST_ASSERT(reference.m_records.size() == emitted.m_records.size());
+                const double h = reference.m_cell_metres;
+                const double volume_unit = h * h * reference.m_thickness_metres;
+                for (std::size_t row = 0u; row < reference.m_records.size(); ++row) {
+                    const auto &record = reference.m_records[row];
+                    const auto &original = emitted.m_records[row];
+                    const auto &particle = reference.m_particles[row];
+                    PPR_TEST_ASSERT(record.m_id == original.m_id and record.m_material == original.m_material);
+                    PPR_TEST_ASSERT(
+                        record.m_volume_m3 == original.m_volume_m3 and record.m_mass_kg == original.m_mass_kg);
+                    PPR_TEST_ASSERT(
+                        record.m_temperature_k == original.m_temperature_k and record.m_phase == original.m_phase);
+                    PPR_TEST_ASSERT(
+                        std::bit_cast<u32>(static_cast<float>(record.m_x_m / h + 3.0)) ==
+                        std::bit_cast<u32>(particle.m_position_x));
+                    PPR_TEST_ASSERT(
+                        std::bit_cast<u32>(static_cast<float>(record.m_y_m / h + 3.0)) ==
+                        std::bit_cast<u32>(particle.m_position_y));
+                    PPR_TEST_ASSERT(
+                        std::bit_cast<u32>(static_cast<float>(record.m_volume_m3 / volume_unit)) ==
+                        std::bit_cast<u32>(particle.m_volume));
+                }
+
+                PPR_TEST_ASSERT(not validateMatterState(
+                    reference, driver.preparedWorld()->generated().m_plan.recipe().m_materials, h,
+                    reference.m_thickness_metres, kMatterGravityY));
+                std::println(
+                    "DUG-FROZEN-REFERENCE source=frozen_rows_seed_reference endpoint={} raw_hash={} bytes={} rows={} source_file={} abi=GpuParticle88_same_host renderer_only=true physical_steps_after_dig=0",
+                    endpoint, hash, bytes.size(), reference.m_particles.size(), source.string());
+                observeActualDugRendering(
+                    reference, driver, checkpoint, *fixture.m_catalog, *render_presentation, endpoint, dig, true, false,
+                    true);
+                observeActualDugRendering(
+                    reference, driver, checkpoint, *fixture.m_catalog, *render_presentation, endpoint, dig, true, true,
+                    true);
+            }
+
+            PPR_TEST_ASSERT(driver.tickCount() == checkpoint.m_tick and driver.digTotal() == particle_count);
+            return;
+        }
+
         std::fprintf(
             stderr,
-            "[dense-dug-sand-input] dig=(%u,%u,%u,%u) confined=%u rows=%u endpoints=120 "
+            "[dense-dug-sand-input] dig=(%u,%u,%u,%u) confined=%u rows=%u endpoints=%u "
             "source_substeps_per_tick=%u density=2000 h=%.17g thickness=%.17g; "
             "bounded dig reproducer, not full-world parity\n",
             static_cast<unsigned>(dig.m_min.m_x), static_cast<unsigned>(dig.m_min.m_y),
             static_cast<unsigned>(dig.m_width), static_cast<unsigned>(dig.m_height), static_cast<unsigned>(confined),
-            static_cast<unsigned>(particle_count), static_cast<unsigned>(matter::kGameSubsteps), emitted.m_cell_metres,
-            emitted.m_thickness_metres);
+            static_cast<unsigned>(particle_count), static_cast<unsigned>(end_tick),
+            static_cast<unsigned>(matter::kGameSubsteps), emitted.m_cell_metres, emitted.m_thickness_metres);
         std::fflush(stderr);
 
-        for (u32 tick = 1u; tick <= 120u; ++tick) {
-            std::fprintf(stderr, "[dense-dug-sand-begin] endpoint=%u\n", static_cast<unsigned>(tick));
-            std::fflush(stderr);
+        for (u32 tick = 1u; tick <= end_tick; ++tick) {
+            const bool capture_tick = capture_checkpoints.empty()
+                                          ? tick == 1u or tick == 120u
+                                          : std::ranges::find(capture_checkpoints, tick) != capture_checkpoints.end();
+            if (not long_diagnostic or capture_tick) {
+                std::fprintf(stderr, "[dense-dug-sand-begin] endpoint=%u\n", static_cast<unsigned>(tick));
+                std::fflush(stderr);
+            }
 
             owner.step();
             owner.drain();
             owner.update(TimeSpan{});
+            if (long_diagnostic and not capture_tick and tick != end_tick) {
+                continue;
+            }
+
             owner.captureCurrent();
 
             const auto &state = *driver.matterState();
@@ -1282,6 +1886,152 @@ namespace pP::game::tests::detail::checkpoint {
                 static_cast<double>(max_gradient));
             std::fflush(stderr);
 
+            if (long_diagnostic) {
+                const auto count = state.m_particles.size();
+                Array<double> nearest(count, std::numeric_limits<double>::infinity());
+                u64 pairs_quarter = 0u, pairs_half = 0u;
+                // Source positions count fine cells, so these distances are d/h.
+                for (std::size_t i = 0u; i < count; ++i) {
+                    const auto &first = state.m_particles[i];
+                    for (std::size_t j = i + 1u; j < count; ++j) {
+                        const auto &second = state.m_particles[j];
+                        const double distance_h = std::hypot(
+                            static_cast<double>(first.m_position_x) - static_cast<double>(second.m_position_x),
+                            static_cast<double>(first.m_position_y) - static_cast<double>(second.m_position_y));
+                        nearest[i] = std::min(nearest[i], distance_h);
+                        nearest[j] = std::min(nearest[j], distance_h);
+                        pairs_quarter += distance_h < 0.25 ? 1u : 0u;
+                        pairs_half += distance_h < 0.5 ? 1u : 0u;
+                    }
+                }
+
+                std::ranges::sort(nearest);
+                const auto percentile = [&](const double fraction) {
+                    const auto rank = static_cast<std::size_t>(std::ceil(fraction * static_cast<double>(count)));
+                    return nearest[rank - 1u];
+                };
+                double sum_speed_squared = 0.0, max_speed = 0.0, mass_kg = 0.0, solver_mass_sum = 0.0;
+                double sum_det = 0.0, min_det = std::numeric_limits<double>::infinity(), max_det = -min_det;
+                double sum_volume = 0.0, min_volume = std::numeric_limits<double>::infinity(), max_volume = 0.0;
+                const double volume_unit = state.m_cell_metres * state.m_cell_metres * state.m_thickness_metres;
+                for (const auto &record: state.m_records) {
+                    mass_kg += record.m_mass_kg;
+                }
+
+                for (const auto &particle: state.m_particles) {
+                    const double speed = std::hypot(
+                                             static_cast<double>(particle.m_displacement_x),
+                                             static_cast<double>(particle.m_displacement_y)) *
+                                         state.m_cell_metres /
+                                         static_cast<double>(state.m_profile.m_delta_time);
+                    sum_speed_squared += speed * speed;
+                    max_speed = std::max(max_speed, speed);
+                    solver_mass_sum += static_cast<double>(particle.m_mass);
+                    const auto &f = particle.m_deformation_gradient;
+                    const double determinant = static_cast<double>(f.m_c0x) * static_cast<double>(f.m_c1y) -
+                                               static_cast<double>(f.m_c1x) * static_cast<double>(f.m_c0y);
+                    sum_det += determinant;
+                    min_det = std::min(min_det, determinant);
+                    max_det = std::max(max_det, determinant);
+                    const double volume = static_cast<double>(particle.m_volume) * volume_unit;
+                    sum_volume += volume;
+                    min_volume = std::min(min_volume, volume);
+                    max_volume = std::max(max_volume, volume);
+                }
+
+                // Diagnostic reconstruction of reference nodal occupancy, using
+                // the source quadratic stencil (node centres are index+.5).
+                // This is cold reference volume, never elastic det(F) density.
+                std::map<std::pair<int, int>, double> node_volume;
+                Array<double> plastic_logs;
+                plastic_logs.reserve(count);
+                double translational_ke = 0.0, apic_ke = 0.0;
+                double momentum_x = 0.0, momentum_y = 0.0, com_x = 0.0, com_y = 0.0;
+                u32 zero_plastic_logs = 0u, negative_trace_count = 0u;
+                double trace_min = std::numeric_limits<double>::infinity(), trace_max = -trace_min, trace_sum = 0.0;
+                const double dt = static_cast<double>(state.m_profile.m_delta_time);
+                const double h = state.m_cell_metres;
+                for (std::size_t row = 0u; row < count; ++row) {
+                    const auto &particle = state.m_particles[row];
+                    const auto &record = state.m_records[row];
+                    const float down_x = std::floor(particle.m_position_x);
+                    const float down_y = std::floor(particle.m_position_y);
+                    const float offset_x = (particle.m_position_x - down_x) - 0.5f;
+                    const float offset_y = (particle.m_position_y - down_y) - 0.5f;
+                    const std::array<float, 3u> wx{
+                        0.5f * (0.5f - offset_x) * (0.5f - offset_x), 0.75f - offset_x * offset_x,
+                        0.5f * (0.5f + offset_x) * (0.5f + offset_x)};
+                    const std::array<float, 3u> wy{
+                        0.5f * (0.5f - offset_y) * (0.5f - offset_y), 0.75f - offset_y * offset_y,
+                        0.5f * (0.5f + offset_y) * (0.5f + offset_y)};
+                    for (u32 y = 0u; y < 3u; ++y) {
+                        for (u32 x = 0u; x < 3u; ++x) {
+                            node_volume[{int(down_x) - 1 + int(x), int(down_y) - 1 + int(y)}] +=
+                                static_cast<double>(particle.m_volume) * static_cast<double>(wx[x] * wy[y]);
+                        }
+                    }
+
+                    const double vx = static_cast<double>(particle.m_displacement_x) * h / dt;
+                    const double vy = static_cast<double>(particle.m_displacement_y) * h / dt;
+                    const double kinetic = 0.5 * record.m_mass_kg * (vx * vx + vy * vy);
+                    double affine_squared = 0.0;
+                    for (const float component:
+                        std::bit_cast<std::array<float, 4u>>(particle.m_deformation_displacement)) {
+                        const double value = static_cast<double>(component);
+                        affine_squared += value * value;
+                    }
+
+                    const double trace = static_cast<double>(particle.m_deformation_displacement.m_c0x) +
+                                         static_cast<double>(particle.m_deformation_displacement.m_c1y);
+                    trace_min = std::min(trace_min, trace);
+                    trace_max = std::max(trace_max, trace);
+                    trace_sum += trace;
+                    negative_trace_count += trace < 0.0 ? 1u : 0u;
+                    translational_ke += kinetic;
+                    apic_ke += kinetic + 0.5 * record.m_mass_kg * h * h / (dt * dt) * 0.25 * affine_squared;
+                    momentum_x += record.m_mass_kg * vx;
+                    momentum_y += record.m_mass_kg * vy;
+                    com_x += record.m_mass_kg * record.m_x_m;
+                    com_y += record.m_mass_kg * record.m_y_m;
+                    plastic_logs.push_back(static_cast<double>(particle.m_log_jp));
+                    zero_plastic_logs += particle.m_log_jp == 0.0f ? 1u : 0u;
+                }
+
+                Array<double> occupancy, excess;
+                double excess_sum = 0.0, excess_squared_sum = 0.0;
+                occupancy.reserve(node_volume.size());
+                excess.reserve(node_volume.size());
+                for (const auto &[node, value]: node_volume) {
+                    static_cast<void>(node);
+                    occupancy.push_back(value);
+                    const double positive_excess = std::max(value - 1.0, 0.0);
+                    excess.push_back(positive_excess);
+                    excess_sum += positive_excess;
+                    excess_squared_sum += positive_excess * positive_excess;
+                }
+
+                std::ranges::sort(occupancy);
+                std::ranges::sort(excess);
+                std::ranges::sort(plastic_logs);
+                const auto p99_index = static_cast<std::size_t>(std::ceil(0.99 * double(occupancy.size()))) - 1u;
+                const auto median_index = (plastic_logs.size() - 1u) / 2u;
+                std::println(
+                    "ACTUAL-DUG-COMPRESSION endpoint={} elapsed_since_dig_s={} dt_substep_s={} rows={} occupied_stencil_nodes={} nodal_reference_V_max={} nodal_reference_V_p99={} positive_excess_max={} positive_excess_p99={} positive_excess_sum={} positive_excess_squared_sum={} translational_KE_J={} APIC_KE_J={} momentum_kg_m_s={},{} COM_m={},{} logJp_min={} logJp_median={} logJp_max={} logJp_exact_zero={} retainedD_trace_min={} retainedD_trace_mean={} retainedD_trace_max={} retainedD_trace_negative_fraction={} nodal_unit=source_cell_area_1 percentile=nearest_rank_over_all_stencil_nodes detF_interpretation=elastic_only CPU_reference_weights=true",
+                    tick, double(tick) / 60.0, dt, count, occupancy.size(), occupancy.back(), occupancy[p99_index],
+                    excess.back(), excess[p99_index], excess_sum, excess_squared_sum, translational_ke, apic_ke,
+                    momentum_x, momentum_y, com_x / mass_kg, com_y / mass_kg, plastic_logs.front(),
+                    plastic_logs[median_index], plastic_logs.back(), zero_plastic_logs, trace_min,
+                    trace_sum / double(count), trace_max, double(negative_trace_count) / double(count));
+
+                std::println(
+                    "ACTUAL-DUG-LONG-STATS endpoint={} elapsed_since_dig_s={} substeps_per_tick=8 rows={} physical_mass_kg={} solver_mass_sum={} nn_min_h={} nn_p10_h={} nn_p50_h={} nn_p90_h={} nn_p99_h={} nn_max_h={} pairs_lt_0_25h={} pairs_lt_0_5h={} detF_min={} detF_mean={} detF_max={} reference_volume_m3_min={} reference_volume_m3_mean={} reference_volume_m3_max={} bbox_source_x=[{},{}] bbox_source_y=[{},{}] speed_max_m_s={} speed_rms_m_s={} percentile=nearest_rank quad_coverage_oracle=not_run detF_interpretation=elastic_only",
+                    tick, static_cast<double>(tick) / 60.0, count, mass_kg, solver_mass_sum, nearest.front(),
+                    percentile(0.1), percentile(0.5), percentile(0.9), percentile(0.99), nearest.back(), pairs_quarter,
+                    pairs_half, min_det, sum_det / static_cast<double>(count), max_det, min_volume,
+                    sum_volume / static_cast<double>(count), max_volume, min_x, max_x, min_y, max_y, max_speed,
+                    std::sqrt(sum_speed_squared / static_cast<double>(count)));
+            }
+
             const auto validity = validateMatterState(
                 state, driver.preparedWorld()->generated().m_plan.recipe().m_materials, kFineCellMetres,
                 checkpoint.m_descriptor.m_metric.m_reference_thickness_m, kMatterGravityY);
@@ -1291,6 +2041,37 @@ namespace pP::game::tests::detail::checkpoint {
             PPR_TEST_ASSERT(not validity);
             PPR_TEST_ASSERT(state.m_identity.m_publication == emitted.m_identity.m_publication + tick);
             PPR_TEST_ASSERT(state.m_identity.m_terrain_revision == emitted.m_identity.m_terrain_revision);
+            if (compression_diagnostic) {
+                const char *const qa = std::getenv("PPR_GRID_QA_DIR");
+                if (qa != nullptr and *qa != '\0') {
+                    std::filesystem::create_directories(qa);
+                    const auto bytes = std::as_bytes(
+                        std::span<const matter::GpuParticle>{state.m_particles.data(), state.m_particles.size()});
+                    u64 hash = 14695981039346656037ull;
+                    for (const auto byte: bytes) {
+                        hash = (hash ^ std::to_integer<u8>(byte)) * 1099511628211ull;
+                    }
+
+                    std::ofstream output{
+                        std::filesystem::path{qa} / std::format("actual-dug-tick-{}-{}.gpu-rows.bin", tick, hash),
+                        std::ios::binary};
+                    output.write(
+                        reinterpret_cast<const char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+                    output.close();
+                    PPR_TEST_ASSERT(not output.fail());
+                    std::println("ACTUAL-DUG-COMPRESSION-RAW endpoint={} hash={} bytes={}", tick, hash, bytes.size());
+                }
+            }
+
+            if (observe_rendering and capture_tick and (not compression_diagnostic or tick >= 120u)) {
+                observeActualDugRendering(
+                    state, driver, checkpoint, *fixture.m_catalog, *render_presentation, tick, dig, long_diagnostic);
+                if (long_diagnostic and
+                    (tick == 120u or tick == 600u or tick == 1800u or (compression_diagnostic and tick == 240u))) {
+                    observeActualDugRendering(
+                        state, driver, checkpoint, *fixture.m_catalog, *render_presentation, tick, dig, true, true);
+                }
+            }
         }
 
         PPR_TEST_ASSERT(driver.digTotal() == particle_count and driver.matterState()->m_next_id == emitted.m_next_id);
@@ -1495,6 +2276,55 @@ namespace pP::game::tests::detail::checkpoint {
 
     PPR_UNIT_TEST (dense_dug_sand_drop_preserves_valid_resident_state_for_120_ticks) {
         exerciseDenseDigDiagnostic({{3274u, 482u}, 16u, 16u}, false);
+    };
+
+    PPR_UNIT_TEST (actual_dug_solids_render_falling_and_late_pile_without_close_contact_holes) {
+        exerciseDenseDigDiagnostic({{120u, 40u}, 16u, 16u}, false, true);
+    };
+
+    PPR_UNIT_TEST (actual_dug_solids_long_settle_diagnostic) {
+        const char *const setting = std::getenv("PPR_LONG_SETTLE_DIAGNOSTIC");
+        const std::string_view enabled = setting != nullptr ? setting : "0";
+        PPR_TEST_ASSERT(enabled == "0" or enabled == "1");
+        if (enabled != "1") {
+            std::println(
+                "ACTUAL-DUG-LONG skipped: set PPR_LONG_SETTLE_DIAGNOSTIC=1 and PPR_GRID_QA_DIR for explicit diagnostic capture");
+            return;
+        }
+
+        const char *const qa = std::getenv("PPR_GRID_QA_DIR");
+        PPR_TEST_ASSERT(qa != nullptr and *qa != '\0');
+        constexpr std::array<u32, 5u> checkpoints{1u, 120u, 240u, 600u, 1800u};
+        exerciseDenseDigDiagnostic({{120u, 40u}, 16u, 16u}, false, true, 1800u, checkpoints, true);
+    };
+
+    PPR_UNIT_TEST (actual_dug_solids_short_compression_diagnostic) {
+        const char *const setting = std::getenv("PPR_PBMPM_COMPRESSION_DIAGNOSTIC");
+        const std::string_view enabled = setting != nullptr ? setting : "0";
+        PPR_TEST_ASSERT(enabled == "0" or enabled == "1");
+        if (enabled != "1") {
+            std::println("ACTUAL-DUG-COMPRESSION skipped: set PPR_PBMPM_COMPRESSION_DIAGNOSTIC=1");
+            return;
+        }
+
+        const char *const qa = std::getenv("PPR_GRID_QA_DIR");
+        const bool render = qa != nullptr and *qa != '\0';
+        constexpr std::array<u32, 4u> checkpoints{1u, 30u, 120u, 240u};
+        exerciseDenseDigDiagnostic({{120u, 40u}, 16u, 16u}, false, render, 240u, checkpoints, true, {}, true);
+    };
+
+    PPR_UNIT_TEST (render_frozen_actual_dug_solids_reference) {
+        const char *const reference = std::getenv("PPR_FROZEN_DUG_REFERENCE_DIR");
+        if (reference == nullptr or *reference == '\0') {
+            std::println(
+                "DUG-FROZEN-REFERENCE skipped: set PPR_FROZEN_DUG_REFERENCE_DIR and PPR_GRID_QA_DIR for explicit renderer-only capture");
+            return;
+        }
+
+        const char *const qa = std::getenv("PPR_GRID_QA_DIR");
+        PPR_TEST_ASSERT(qa != nullptr and *qa != '\0');
+        exerciseDenseDigDiagnostic(
+            {{120u, 40u}, 16u, 16u}, false, true, 1800u, {}, true, std::filesystem::path{reference});
     };
 
     PPR_UNIT_TEST (dug_sand_sustains_sixty_runtime_ticks_on_shared_terrain) {
@@ -1784,6 +2614,10 @@ namespace pP::game::tests {
             detail::checkpoint::frontier_seed_42_liquids_stay_stable_past_prior_explosion,
             detail::checkpoint::dense_dug_sand_cavity_preserves_valid_resident_state_for_120_ticks,
             detail::checkpoint::dense_dug_sand_drop_preserves_valid_resident_state_for_120_ticks,
+            detail::checkpoint::actual_dug_solids_render_falling_and_late_pile_without_close_contact_holes,
+            detail::checkpoint::actual_dug_solids_long_settle_diagnostic,
+            detail::checkpoint::actual_dug_solids_short_compression_diagnostic,
+            detail::checkpoint::render_frozen_actual_dug_solids_reference,
         });
     };
 

@@ -87,14 +87,71 @@ owners through the existing frame fence, including world retirement.
 
 `App.Renderer.GridPass.Particles.cpp` owns `grid_particle_prepare.slang`: one pack
 dispatch on source changes, then three stable frustum-compaction dispatches per
-frame and one GPU-counted indirect draw. Scratch is O(N), bounded by the global
-1M-particle capacity; numerical rows never reorder. Each row draws an independent
-continuous camera-facing quad. A pass-owned, once-generated mipmapped RGBA8 disk
-texture supplies sampled alpha; cold24 supplies moving-particle RGB. Radius in
-metres is `cell_size_m * sqrt(volume_cells / pi)`, where solver volume is physical
-volume divided by `cell_size_m^2 * reference_thickness_m`. Gas metadata carries
-physical position/radius and uses the material palette. Occlusion follows the
-terrain mode actually drawn. Straight alpha blending has depth writes disabled.
+frame. Scratch is O(N), bounded by the global 1M-particle capacity; numerical
+rows never reorder. The remaining indirect particle draw keeps sampled disk
+alpha for gases and explicit legacy phase fixtures. Reconstructed solids use
+their element's exact terrain `materialSurface` path: physical world UVs, albedo,
+normal map and optical properties. Gas retains cold24/palette RGB. Phase flags are derived for every
+material, including terrain elements that become particles after digging.
+Radius in metres remains `cell_size_m * sqrt(volume_cells / pi)`.
+
+`App.Renderer.GridPass.Fluids.cpp` owns the 2D screen-space liquid path. Two
+indirect quad splats select the closest element in R32Uint/D32Float and accumulate
+same-element coverage in R32Float. `grid_liquid_kernel.slang` shares three-radius
+support, amplitude 4/9 and its matching isocontour across splats, optical height
+and visibility. The cubic kernel preserves integrated mass and an isolated disk
+radius while covering deformed interparticle gaps.
+`grid_fluid_filter.slang` applies a bounded non-separable 5x5 material-guided
+compute filter using shared-memory tiles. A final fullscreen composite uses
+material-aware bilinear reconstruction and a bounded rounded front-height
+proxy derived from density. Camera-ray-aware Fresnel, roughness-controlled sky
+and soft-key reflections, nearby backdrop reflections, authored opacity/IOR and
+emissive properties give liquids a glossy volume in the 2D scene. Refraction
+uses the authored physical depth and rounded normal, capped at twelve pixels;
+reflected backdrop lookups have an independent twenty-four-pixel bound. The same
+terrain contour occlusion and optical backdrop remain authoritative. Foreign element taps are renormalized rather than
+treated as empty space, avoiding interface gaps. Per-fragment world-plane
+reconstruction supports perspective views as well as orthographic pan/roll/zoom.
+This is the classic screen-space method adapted to 2D, without neighbor-PCA
+anisotropic particle kernels.
+
+Each existing completion-selected particle slot owns its attachments and roots;
+resize replaces only that completed slot. Fields are half the scene viewport,
+limited to a 1280-pixel longest edge with preserved aspect ratio, and use
+16 bytes per field pixel including element,
+depth, raw and filtered fields. Three populated slots cost about 24 MiB at a
+1920x1080 scene, about 40 MiB at 3445x1837, and at most 75 MiB at the cap
+(excluding driver allocation overhead).
+32-bit accumulation remains finite for the admitted 1M overlapping unit kernels.
+Resources are allocated only for an inventory containing liquids and follow
+world retirement and source-reader fences. Occlusion follows the terrain mode
+actually drawn; final particle/composite draws have depth writes disabled.
+An optional test-only query pool records six GPU phase pairs; normal production
+frames encode no additional timing queries or readback. Tests serialize its
+reset/read/replacement against the exact submission completion fence.
+
+`App.Renderer.GridPass.Solids.cpp` owns a separate solid occupancy lane on the
+same completion-selected particle slots. World-XY octagonal footprints retain
+flat faces under camera movement and roll. `grid_solid_kernel.slang` calibrates
+apothem from the physical circle area and shares support/amplitude/isolevel with
+splat geometry, composition and conservative visibility. All solid elements
+contribute to one R32Float occupancy sum; an independent R32Uint/D32Float nearest
+grain selection supplies categorical element labels in mixed rubble. Native
+composition filters their bilinear coverage using each distinct label's shaded
+premultiplied color, preserving texture interiors and antialiasing interfaces.
+Empty labels are excluded without changing the independent occupancy mask.
+The solid composite uses coherent world/displaced-contour derivatives, the same
+terrain occlusion, and exact `materialSurface` shading. It has no liquid filter,
+rounded height or reconstructed optical normal. Draw order is liquid envelope,
+solid envelope, then remaining gas disks.
+
+Solid fields use the same aspect-preserving half-resolution/1280 longest-edge
+bound, with three attachments totaling 12 bytes per pixel per populated cohort.
+Three cohorts add about 30 MiB at 3445x1837, at most 56.25 MiB for a square capped
+field, excluding driver allocation overhead. Solid and liquid attachments are
+separate because both stay live until composition. Allocation/resize commits a
+complete replacement only after that exact particle slot's previous reader is
+complete; the enclosing particle source/retirement fences retain both lanes.
 
 Before a resident runtime view exists, owned preview/offline seeds use the same
 GPU pipeline after one upload per changed inventory. The chunk cache accelerates

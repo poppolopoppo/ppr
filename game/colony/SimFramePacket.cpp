@@ -65,6 +65,14 @@ namespace pP::colony {
                 visual.m_surface_flags =
                     (material.m_alpha_mode == EMaterialAlphaMode::blend ? kGridSurfaceOpticalBlend : 0u) |
                     (material.m_texture_sampling == EMaterialTextureSampling::repeat ? kGridSurfaceTextureRepeat : 0u);
+                // Terrain can become particles after digging while retaining its
+                // element ID. Presentation follows physical phase, not storage role.
+                if (material.m_phase == EMaterialPhase::solid) {
+                    visual.m_surface_flags |= kGridSurfaceParticleSolid;
+                } else if (material.m_phase == EMaterialPhase::liquid) {
+                    visual.m_surface_flags |= kGridSurfaceParticleLiquid;
+                }
+
                 if (material.m_albedo_texture) {
                     const auto textures = presentation.textures();
                     for (u32 index = 0u; index < textures.size(); ++index) {
