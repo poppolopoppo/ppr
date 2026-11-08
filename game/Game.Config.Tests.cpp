@@ -951,6 +951,58 @@ namespace pP::game::tests::detail::compat {
         }
     };
 
+    PPR_UNIT_TEST (world_light_and_post_settings_parse_and_validate) {
+        Diagnostics defaults_diagnostics;
+        const auto normal = resolveCli({}, defaults_diagnostics);
+        PPR_TEST_ASSERT(normal.has_value());
+        PPR_TEST_ASSERT(normal->m_world_light.m_value.m_enabled);
+        PPR_TEST_ASSERT(normal->m_world_light.m_value.m_samples_per_frame == 262144u);
+        PPR_TEST_ASSERT(normal->m_world_light.m_value.m_accumulation_samples == 8u);
+        PPR_TEST_ASSERT(normal->m_world_light.m_value.m_history_retention == 0.9f);
+        PPR_TEST_ASSERT(normal->m_world_light.m_value.m_level_count == 6u);
+        PPR_TEST_ASSERT(normal->m_world_light.m_value.m_sky_hour == -1);
+        PPR_TEST_ASSERT(not normal->m_post.m_value.m_auto_exposure);
+        PPR_TEST_ASSERT(normal->m_post.m_value.m_exposure_ev == 0.0f);
+        PPR_TEST_ASSERT(normal->m_post.m_value.m_adaptation_tau == 0.7f);
+        PPR_TEST_ASSERT(normal->m_post.m_value.m_ev_min == -4.0f and normal->m_post.m_value.m_ev_max == 4.0f);
+        PPR_TEST_ASSERT(not normal->m_post.m_value.m_bloom);
+        PPR_TEST_ASSERT(normal->m_post.m_value.m_bloom_intensity == 1.0f);
+        PPR_TEST_ASSERT(normal->m_post.m_value.m_bloom_threshold == 1.0f);
+        PPR_TEST_ASSERT(not normal->m_post.m_value.m_palette);
+
+        Diagnostics configured_diagnostics;
+        const auto configured = resolveCli(
+            {"--world-light-samples-per-frame=1048576", "--world-light-accumulation=16", "--post-auto-exposure",
+                "--post-exposure-ev=2.5", "--post-bloom-intensity=1.25", "--post-palette"},
+            configured_diagnostics);
+        PPR_TEST_ASSERT(configured.has_value());
+        PPR_TEST_ASSERT(configured->m_world_light.m_value.m_samples_per_frame == 1048576u);
+        PPR_TEST_ASSERT(configured->m_world_light.m_value.m_accumulation_samples == 16u);
+        PPR_TEST_ASSERT(configured->m_post.m_value.m_auto_exposure);
+        PPR_TEST_ASSERT(configured->m_post.m_value.m_exposure_ev == 2.5f);
+        PPR_TEST_ASSERT(configured->m_post.m_value.m_bloom_intensity == 1.25f);
+        PPR_TEST_ASSERT(configured->m_post.m_value.m_palette);
+
+        for (const auto *const invalid:
+            {"--world-light-samples-per-frame=65535", "--world-light-samples-per-frame=4194305",
+                "--world-light-accumulation=0", "--world-light-accumulation=65", "--world-light-retention=0.49",
+                "--world-light-levels=3", "--world-light-sky-hour=24", "--post-exposure-ev=-16.1",
+                "--post-adaptation-tau=0.09", "--post-ev-min=-8.1", "--post-ev-max=8.1", "--post-bloom-intensity=2.1",
+                "--post-bloom-threshold=16.1"}) {
+            Diagnostics rejected;
+            PPR_TEST_ASSERT(not resolveCli({invalid}, rejected));
+            PPR_TEST_ASSERT(rejected.hasErrors());
+        }
+
+        Diagnostics cross_diagnostics;
+        PPR_TEST_ASSERT(not resolveCli({"--post-ev-min=2", "--post-ev-max=-2"}, cross_diagnostics));
+        PPR_TEST_ASSERT(cross_diagnostics.hasErrors());
+
+        const std::string help = gameHelpText();
+        PPR_TEST_ASSERT(help.find("world-light-samples-per-frame") != std::string::npos);
+        PPR_TEST_ASSERT(help.find("post-palette") != std::string::npos);
+    };
+
     PPR_UNIT_TEST (retired_crash_harness_rejected) {
         Diagnostics diagnostics{};
         const auto result = resolveCli({"--diag-crash=abort"}, diagnostics);
@@ -989,6 +1041,7 @@ namespace pP::game::tests {
             detail::compat::help_suppresses_without_reading_config,
             detail::compat::mapped_config_files_preserve_owned_results_empty_input_and_errors,
             detail::compat::executable_boundary_rejects_unknown_options,
+            detail::compat::world_light_and_post_settings_parse_and_validate,
             detail::compat::retired_crash_harness_rejected,
         });
     };

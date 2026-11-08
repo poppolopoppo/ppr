@@ -148,6 +148,166 @@ namespace pP::game {
     } // namespace
 
     // ------------------------------------------------------------------
+    // world light and post display settings
+    // ------------------------------------------------------------------
+
+    namespace {
+        /// Builds a runtime layer from a plain settings struct: every member
+        /// becomes a typed runtime assignment under its canonical name. The two
+        /// display-settings schemas are bool/integer/float only, so no enum or
+        /// string conversion is needed.
+        template<typename Settings>
+        [[nodiscard]] config::Layer runtimeLayerFrom(const Settings &settings, const std::string origin) {
+            config::Layer layer{};
+            layer.m_source = config::ESource::runtime;
+            layer.m_origin = origin;
+            std::size_t order = 0u;
+            config::visit(settings, [&](const auto &member, const auto &value) {
+                using T = std::remove_cvref_t<decltype(value)>;
+                config::SourceValue source{};
+                if constexpr (std::is_same_v<T, bool>) {
+                    source = config::SourceValue::boolean(value);
+                } else if constexpr (std::is_floating_point_v<T>) {
+                    source = config::SourceValue::floating(static_cast<double>(value));
+                } else {
+                    static_assert(std::is_integral_v<T>);
+                    source = config::SourceValue::integer(static_cast<i64>(value));
+                }
+                layer.m_assignments.push_back(
+                    config::Assignment{std::string{member.m_metadata.m_name}, "panel", source, origin, order++});
+            });
+            return layer;
+        }
+    } // namespace
+
+    std::error_code PostDisplaySettings::validate(
+        const PostDisplaySettings &settings, config::Diagnostics &diagnostics) {
+        if (settings.m_ev_min <= settings.m_ev_max) {
+            return {};
+        }
+        const std::error_code error = config::make_error_code(config::EConfigErrc::cross_field_invalid);
+        diagnostics.add(
+            "post settings", "game.post.ev_min",
+            "The lower adaptation clamp must not exceed the upper clamp (game.post.ev_min <= game.post.ev_max)", error);
+        return error;
+    }
+
+    [[nodiscard]] Array<config::OptionDecl> worldLightPostCliOptions() {
+        Array<config::OptionDecl> options{};
+
+        const auto append = [&](const std::string_view canonical, const std::string_view description,
+                                const std::string_view alias, const bool is_switch) {
+            config::OptionDecl option{};
+            option.m_canonical = canonical;
+            option.m_description = description;
+            option.m_aliases.push_back(alias);
+            option.m_is_switch = is_switch;
+            options.push_back(std::move(option));
+        };
+
+        append(
+            "game.world_light.enabled", "Enable the camera-independent world light field.", "world-light-enabled",
+            true);
+        append(
+            "game.world_light.samples_per_frame", "Direction samples traced per frame (field budget).",
+            "world-light-samples-per-frame", false);
+        append(
+            "game.world_light.accumulation", "Per-direction samples before steady-state retention.",
+            "world-light-accumulation", false);
+        append(
+            "game.world_light.retention", "Steady-state per-interval history retention (0.5 to 1.0).",
+            "world-light-retention", false);
+        append("game.world_light.level_count", "Radiance cascade level count.", "world-light-levels", false);
+        append(
+            "game.world_light.sky_hour", "Field sky solar hour (-1 uses the black boundary sky).",
+            "world-light-sky-hour", false);
+
+        append(
+            "game.post.auto_exposure", "Adapt exposure from a scene luminance histogram.", "post-auto-exposure", true);
+        append("game.post.exposure_ev", "Manual exposure offset in EV.", "post-exposure-ev", false);
+        append("game.post.adaptation_tau", "Eye-adaptation time constant in seconds.", "post-adaptation-tau", false);
+        append("game.post.ev_min", "Lower adaptation clamp around manual exposure (EV).", "post-ev-min", false);
+        append("game.post.ev_max", "Upper adaptation clamp around manual exposure (EV).", "post-ev-max", false);
+        append("game.post.bloom", "Enable SPD bloom on the resolved HDR scene.", "post-bloom", true);
+        append("game.post.bloom_intensity", "Bloom contribution scale (0 to 2).", "post-bloom-intensity", false);
+        append("game.post.bloom_threshold", "Bloom bright-pass threshold (0 to 16).", "post-bloom-threshold", false);
+        append(
+            "game.post.palette", "Quantize scene colors to the 32-color palette with ordered dithering.",
+            "post-palette", true);
+
+        return options;
+    }
+
+    Expected<config::Document> buildLightingPostOverlayDocument(
+        const config::Document &existing, const WorldLightDisplaySettings &world_light,
+        const PostDisplaySettings &post) {
+        const auto strip_prefix = [](std::string_view key) {
+            return key.starts_with("game.world_light.") or key.starts_with("game.post.");
+        };
+
+        config::Document merged{};
+        for (const auto &entry: existing.m_entries) {
+            if (strip_prefix(entry.m_key)) {
+                continue;
+            }
+            merged.m_entries.push_back(entry);
+        }
+
+        const auto append_schema = [&](const auto &settings) -> std::error_code {
+            auto fresh = config::documentFrom(settings);
+            if (not fresh) {
+                return fresh.error();
+            }
+
+            Array<std::string> persistable{};
+            std::remove_cvref_t<decltype(settings)> probe{};
+            config::visit(probe, [&](const auto &member, const auto &) {
+                if (member.m_metadata.m_persistable) {
+                    persistable.push_back(std::string{member.m_metadata.m_name});
+                }
+            });
+
+            for (auto &entry: fresh->m_entries) {
+                bool keep = false;
+                for (const auto &name: persistable) {
+                    if (entry.m_key == name) {
+                        keep = true;
+                        break;
+                    }
+                }
+                if (not keep) {
+                    continue;
+                }
+                entry.m_location = "lighting-post-panel";
+                merged.m_entries.push_back(std::move(entry));
+            }
+            return {};
+        };
+
+        PPR_RETURN_UNEXPECTED_ON_FAIL(GameConfig, append_schema(world_light));
+        PPR_RETURN_UNEXPECTED_ON_FAIL(GameConfig, append_schema(post));
+        return merged;
+    }
+
+    Expected<config::Resolved<WorldLightDisplaySettings>> validateWorldLightDraft(
+        const config::Resolved<WorldLightDisplaySettings> &committed, const WorldLightDisplaySettings &draft,
+        config::Diagnostics &diagnostics) {
+        config::Resolved<WorldLightDisplaySettings> scratch = committed;
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            GameConfig, config::applyRuntime(scratch, runtimeLayerFrom(draft, "lighting-post-panel"), diagnostics));
+        return scratch;
+    }
+
+    Expected<config::Resolved<PostDisplaySettings>> validatePostDraft(
+        const config::Resolved<PostDisplaySettings> &committed, const PostDisplaySettings &draft,
+        config::Diagnostics &diagnostics) {
+        config::Resolved<PostDisplaySettings> scratch = committed;
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            GameConfig, config::applyRuntime(scratch, runtimeLayerFrom(draft, "lighting-post-panel"), diagnostics));
+        return scratch;
+    }
+
+    // ------------------------------------------------------------------
     // explicit world-generation pack selection
     // ------------------------------------------------------------------
 
@@ -445,6 +605,10 @@ namespace pP::game {
             schema.m_options.push_back(std::move(option));
         }
 
+        for (auto &option: worldLightPostCliOptions()) {
+            schema.m_options.push_back(std::move(option));
+        }
+
         return schema;
     }
 
@@ -485,6 +649,12 @@ namespace pP::game {
         if (auto valid = config::validateSchema<StartupSettings>(diagnostics); not valid) {
             return std::unexpected{valid.error()};
         }
+        if (auto valid = config::validateSchema<WorldLightDisplaySettings>(diagnostics); not valid) {
+            return std::unexpected{valid.error()};
+        }
+        if (auto valid = config::validateSchema<PostDisplaySettings>(diagnostics); not valid) {
+            return std::unexpected{valid.error()};
+        }
         return Expected<void>{};
     }
 
@@ -503,14 +673,22 @@ namespace pP::game {
         Array<config::Layer> game_layers{};
         Array<config::Layer> display_layers{};
         Array<config::Layer> startup_layers{};
+        Array<config::Layer> world_light_layers{};
+        Array<config::Layer> post_layers{};
         std::error_code first_error{};
 
         const auto partition = [&](const config::Layer &layer) {
             Array<config::Assignment> game_assigns{};
             Array<config::Assignment> display_assigns{};
             Array<config::Assignment> startup_assigns{};
+            Array<config::Assignment> world_light_assigns{};
+            Array<config::Assignment> post_assigns{};
             for (const auto &assignment: layer.m_assignments) {
-                if (assignment.m_name.starts_with("game.")) {
+                if (assignment.m_name.starts_with("game.world_light.")) {
+                    world_light_assigns.push_back(assignment);
+                } else if (assignment.m_name.starts_with("game.post.")) {
+                    post_assigns.push_back(assignment);
+                } else if (assignment.m_name.starts_with("game.")) {
                     game_assigns.push_back(assignment);
                 } else if (assignment.m_name.starts_with("display.")) {
                     display_assigns.push_back(assignment);
@@ -535,6 +713,8 @@ namespace pP::game {
             emit(game_layers, std::move(game_assigns));
             emit(display_layers, std::move(display_assigns));
             emit(startup_layers, std::move(startup_assigns));
+            emit(world_light_layers, std::move(world_light_assigns));
+            emit(post_layers, std::move(post_assigns));
         };
 
         for (const auto &layer: lowerLayers) {
@@ -566,6 +746,12 @@ namespace pP::game {
         auto startup = config::resolve<StartupSettings>(
             std::span<const config::Layer>{startup_layers.data(), startup_layers.size()}, diagnostics);
 
+        auto world_light = config::resolve<WorldLightDisplaySettings>(
+            std::span<const config::Layer>{world_light_layers.data(), world_light_layers.size()}, diagnostics);
+
+        auto post = config::resolve<PostDisplaySettings>(
+            std::span<const config::Layer>{post_layers.data(), post_layers.size()}, diagnostics);
+
         if (not game) {
             return std::unexpected{game.error()};
         }
@@ -574,6 +760,12 @@ namespace pP::game {
         }
         if (not startup) {
             return std::unexpected{startup.error()};
+        }
+        if (not world_light) {
+            return std::unexpected{world_light.error()};
+        }
+        if (not post) {
+            return std::unexpected{post.error()};
         }
 
         const auto &settings = game->m_value;
@@ -730,6 +922,8 @@ namespace pP::game {
         invocation.m_game = std::move(*game);
         invocation.m_display = std::move(*display);
         invocation.m_startup = std::move(*startup);
+        invocation.m_world_light = std::move(*world_light);
+        invocation.m_post = std::move(*post);
         invocation.m_cli = cli;
         invocation.m_config_paths = configPathsFrom(cli);
         invocation.m_profiling = profiling;
@@ -781,6 +975,9 @@ namespace pP::game {
         auto game_environment = config::collectEnvironment<GameSettings>(config::getenvLookup, diagnostics);
         auto display_environment = config::collectEnvironment<DisplaySettings>(config::getenvLookup, diagnostics);
         auto startup_environment = config::collectEnvironment<StartupSettings>(config::getenvLookup, diagnostics);
+        auto world_light_environment = config::collectEnvironment<WorldLightDisplaySettings>(
+            config::getenvLookup, diagnostics);
+        auto post_environment = config::collectEnvironment<PostDisplaySettings>(config::getenvLookup, diagnostics);
         for (auto &assignment: game_environment) {
             environment.push_back(std::move(assignment));
         }
@@ -788,6 +985,12 @@ namespace pP::game {
             environment.push_back(std::move(assignment));
         }
         for (auto &assignment: startup_environment) {
+            environment.push_back(std::move(assignment));
+        }
+        for (auto &assignment: world_light_environment) {
+            environment.push_back(std::move(assignment));
+        }
+        for (auto &assignment: post_environment) {
             environment.push_back(std::move(assignment));
         }
         if (not environment.empty()) {

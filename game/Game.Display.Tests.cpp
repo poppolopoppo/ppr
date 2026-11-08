@@ -520,6 +520,66 @@ namespace pP::game::tests::detail::display {
         PPR_TEST_ASSERT(bytes->find("environment") != std::string::npos);
     };
 
+    PPR_UNIT_TEST (lighting_post_overlay_round_trip_preserves_unrelated_and_palette_default) {
+        const std::string existing_text{
+            "[audio]\nvolume = 7\n\n[game.world_light]\nsamples_per_frame = 1048576\n\n[game.post]\nbloom = true\n"};
+        Diagnostics decode_diagnostics{};
+        auto existing = decode(existing_text, "existing", decode_diagnostics);
+        PPR_TEST_ASSERT(existing.has_value());
+
+        const game::WorldLightDisplaySettings world_light{};
+        const game::PostDisplaySettings post{};
+
+        auto merged = buildLightingPostOverlayDocument(*existing, world_light, post);
+        PPR_TEST_ASSERT(merged.has_value());
+
+        auto bytes = encodeDisplayOverlay(*merged);
+        PPR_TEST_ASSERT(bytes.has_value());
+        Diagnostics round_diagnostics{};
+        auto round = decode(*bytes, "round", round_diagnostics);
+        PPR_TEST_ASSERT(round.has_value());
+
+        bool audio_kept = false;
+        bool palette_default = false;
+        bool stale_samples_replaced = false;
+        for (const auto &entry: round->m_entries) {
+            if (entry.m_key == "audio.volume" and entry.m_value.m_kind == EFileKind::integer) {
+                audio_kept = entry.m_value.m_integer == 7;
+            }
+            if (entry.m_key == "game.post.palette" and entry.m_value.m_kind == EFileKind::boolean) {
+                palette_default = not entry.m_value.m_boolean;
+            }
+            if (entry.m_key == "game.world_light.samples_per_frame" and entry.m_value.m_kind == EFileKind::integer) {
+                stale_samples_replaced = entry.m_value.m_integer == 262144;
+            }
+        }
+        PPR_TEST_ASSERT(audio_kept);
+        PPR_TEST_ASSERT(palette_default);
+        PPR_TEST_ASSERT(stale_samples_replaced);
+
+        // Every game.world_light.* / game.post.* entry is a persistable schema
+        // property, and the display.* entries (from a prior display merge) are
+        // preserved untouched by this merge.
+        for (const auto &entry: round->m_entries) {
+            if (entry.m_key.starts_with("game.world_light.") or entry.m_key.starts_with("game.post.")) {
+                bool persistable = false;
+                game::WorldLightDisplaySettings world_probe{};
+                visit(world_probe, [&](const auto &member, const auto &) {
+                    if (member.m_metadata.m_name == entry.m_key and member.m_metadata.m_persistable) {
+                        persistable = true;
+                    }
+                });
+                game::PostDisplaySettings post_probe{};
+                visit(post_probe, [&](const auto &member, const auto &) {
+                    if (member.m_metadata.m_name == entry.m_key and member.m_metadata.m_persistable) {
+                        persistable = true;
+                    }
+                });
+                PPR_TEST_ASSERT(persistable);
+            }
+        }
+    };
+
     PPR_UNIT_TEST (missing_overlay_is_absence_not_error) {
         const std::filesystem::path missing = std::filesystem::temp_directory_path() /
                                               "ppr-display-overlay-missing.toml";
@@ -1106,6 +1166,7 @@ namespace pP::game::tests {
             detail::display::runtime_layer_cannot_touch_startup_properties,
             detail::display::overlay_merge_replaces_display_preserves_unrelated,
             detail::display::overlay_header_documents_override_order,
+            detail::display::lighting_post_overlay_round_trip_preserves_unrelated_and_palette_default,
             detail::display::missing_overlay_is_absence_not_error,
             detail::display::atomic_write_round_trips_and_clears_temp,
             detail::display::atomic_write_failure_preserves_destination_and_cleans_staging,

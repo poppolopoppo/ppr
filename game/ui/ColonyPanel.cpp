@@ -1550,6 +1550,13 @@ namespace pP::colony {
                 .m_retro =
                     {state.m_retro.m_enabled, state.m_retro.m_pixel_scale, state.m_retro.m_palette_enabled,
                         state.m_retro.m_temporal_enabled},
+                .m_lighting_post =
+                    {state.m_world_light.m_enabled, state.m_world_light.m_samples_per_frame,
+                        state.m_world_light.m_accumulation_samples, state.m_world_light.m_history_retention,
+                        state.m_world_light.m_level_count, state.m_world_light.m_sky_hour, state.m_post.m_auto_exposure,
+                        state.m_post.m_exposure_ev, state.m_post.m_adaptation_tau, state.m_post.m_ev_min,
+                        state.m_post.m_ev_max, state.m_post.m_bloom, state.m_post.m_bloom_intensity,
+                        state.m_post.m_bloom_threshold, state.m_post.m_palette},
                 .m_matches = game::displayDraftMatches(draft, snap.m_view.m_committed),
                 .m_availability = {availability.m_supported, availability.m_reason},
                 .m_trial_open = game::displayTrialUnresolved(session.m_confirm),
@@ -1596,6 +1603,9 @@ namespace pP::colony {
                     break;
                 case ui::EDisplayWidgetAction::close:
                     intent = ColonyIntent{.m_kind = EColonyIntent::toggle_display};
+                    break;
+                case ui::EDisplayWidgetAction::reset_lighting_post:
+                    intent = ColonyIntent{.m_kind = EColonyIntent::reset_lighting_post};
                     break;
             }
         }

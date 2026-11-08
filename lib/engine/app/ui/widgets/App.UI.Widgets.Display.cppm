@@ -76,6 +76,28 @@ export namespace pP::ui {
         bool &m_temporal_enabled;
     };
 
+    /// Borrowed live world-light and post fields; caller owns the values for
+    /// the session. The widget edits them immediately (like the retro fields)
+    /// and never folds them into the display draft or its transaction. Reset
+    /// emits a widget action the caller maps to restoring factory defaults.
+    struct LightingPostWidgetDraft {
+        bool &m_world_light_enabled;
+        u32 &m_samples_per_frame;
+        u32 &m_accumulation_samples;
+        float &m_history_retention;
+        u32 &m_level_count;
+        i32 &m_sky_hour;
+        bool &m_auto_exposure;
+        float &m_exposure_ev;
+        float &m_adaptation_tau;
+        float &m_ev_min;
+        float &m_ev_max;
+        bool &m_bloom;
+        float &m_bloom_intensity;
+        float &m_bloom_threshold;
+        bool &m_palette;
+    };
+
     struct DisplayWidgetAvailability {
         bool m_supported{};
         const char *m_reason{};
@@ -84,6 +106,7 @@ export namespace pP::ui {
     struct DisplayWidgetState {
         DisplayWidgetDraft m_draft;
         RetroWidgetDraft m_retro;
+        LightingPostWidgetDraft m_lighting_post;
         bool m_matches{};
         DisplayWidgetAvailability m_availability{};
         bool m_trial_open{};
@@ -101,7 +124,8 @@ export namespace pP::ui {
         close,
         keep,
         revert,
-        use_monitor_cap
+        use_monitor_cap,
+        reset_lighting_post
     };
     [[nodiscard]] std::optional<EDisplayWidgetAction> drawDisplayWidget(
         const DisplayWidgetSnapshot &snapshot, DisplayWidgetState state, bool &open);

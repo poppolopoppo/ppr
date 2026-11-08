@@ -12,6 +12,7 @@ import engine.asset;
 import game.colony.content;
 import game.colony.worldgen_panel;
 import game.colony.worldgen_preview;
+import game.config;
 import engine.sim;
 import game.ui;
 import game.ui.model;
@@ -1401,6 +1402,61 @@ descriptor = "earlier.toml"
         view.m_open = false;
         PPR_TEST_ASSERT(not ui::unsavedActionAvailable(view, ui::EUnsavedAction::cancel));
     };
+
+    PPR_UNIT_TEST (lighting_post_draft_validates_and_resets) {
+        using pP::config::Resolved;
+
+        const Resolved<game::WorldLightDisplaySettings> committed_world{};
+        const Resolved<game::PostDisplaySettings> committed_post{};
+
+        // Valid world-light draft: sliders produce accepted values.
+        game::WorldLightDisplaySettings world_draft{};
+        world_draft.m_samples_per_frame = 1048576u;
+        world_draft.m_accumulation_samples = 16u;
+        config::Diagnostics world_diagnostics{};
+        auto world = validateWorldLightDraft(committed_world, world_draft, world_diagnostics);
+        PPR_TEST_ASSERT(world.has_value());
+        PPR_TEST_ASSERT(world->m_value.m_samples_per_frame == 1048576u);
+        PPR_TEST_ASSERT(world->m_value.m_accumulation_samples == 16u);
+        PPR_TEST_ASSERT(not world_diagnostics.hasErrors());
+
+        // Valid post draft: toggles produce accepted values.
+        game::PostDisplaySettings post_draft{};
+        post_draft.m_palette = true;
+        post_draft.m_bloom = true;
+        post_draft.m_exposure_ev = 3.0f;
+        config::Diagnostics post_diagnostics{};
+        auto post = validatePostDraft(committed_post, post_draft, post_diagnostics);
+        PPR_TEST_ASSERT(post.has_value());
+        PPR_TEST_ASSERT(post->m_value.m_palette);
+        PPR_TEST_ASSERT(post->m_value.m_bloom);
+        PPR_TEST_ASSERT(post->m_value.m_exposure_ev == 3.0f);
+        PPR_TEST_ASSERT(not post_diagnostics.hasErrors());
+
+        // Reset restores factory defaults (palette and auto exposure off).
+        const game::WorldLightDisplaySettings world_defaults{};
+        PPR_TEST_ASSERT(world_defaults.m_enabled);
+        PPR_TEST_ASSERT(world_defaults.m_samples_per_frame == 262144u);
+        PPR_TEST_ASSERT(world_defaults.m_level_count == 6u and world_defaults.m_sky_hour == -1);
+        const game::PostDisplaySettings post_defaults{};
+        PPR_TEST_ASSERT(not post_defaults.m_palette);
+        PPR_TEST_ASSERT(not post_defaults.m_auto_exposure);
+        PPR_TEST_ASSERT(not post_defaults.m_bloom);
+
+        // Invalid drafts are rejected with diagnostics, never silently clamped.
+        game::WorldLightDisplaySettings invalid_world = world_draft;
+        invalid_world.m_samples_per_frame = 0u;
+        config::Diagnostics invalid_world_diagnostics{};
+        PPR_TEST_ASSERT(not validateWorldLightDraft(committed_world, invalid_world, invalid_world_diagnostics));
+        PPR_TEST_ASSERT(invalid_world_diagnostics.hasErrors());
+
+        game::PostDisplaySettings invalid_post = post_draft;
+        invalid_post.m_ev_min = 4.0f;
+        invalid_post.m_ev_max = -4.0f;
+        config::Diagnostics invalid_post_diagnostics{};
+        PPR_TEST_ASSERT(not validatePostDraft(committed_post, invalid_post, invalid_post_diagnostics));
+        PPR_TEST_ASSERT(invalid_post_diagnostics.hasErrors());
+    };
 }
 
 namespace pP::game::tests {
@@ -1425,6 +1481,7 @@ namespace pP::game::tests {
             detail::presentation::snapshot_distinguishes_absence_unresident_vacuum_and_material,
             detail::presentation::world_actions_close_during_activation_publication_and_shutdown,
             detail::presentation::unsaved_edits_allow_cancel_while_a_save_settles,
+            detail::presentation::lighting_post_draft_validates_and_resets,
         });
     };
 

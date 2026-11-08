@@ -80,6 +80,8 @@ export namespace pP {
         // Field mode: immutable world plan and palette carried once at begin.
         lighting::WorldLightPlan m_field_plan{};
         std::vector<lighting::WorldLightMaterial> m_field_materials{};
+        // Per-frame direction-sample budget for the cascade field update.
+        u32 m_field_budget{};
         EGridWorldCommand m_kind{EGridWorldCommand::begin};
         bool m_direct_window{}, m_single_bounce{}, m_temporal_cascades{}, m_temporal_skip_table{};
         bool m_field{};

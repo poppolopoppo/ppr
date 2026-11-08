@@ -311,6 +311,147 @@ export namespace pP::game {
         }
     };
 
+    // ------------------------------------------------------------------
+    // world light and post display settings
+    // ------------------------------------------------------------------
+
+    /// Runtime-tunable world-light-field settings. `m_enabled` gates field mode;
+    /// the remaining fields bound the per-frame budget, the per-direction
+    /// temporal accumulation, the cascade level count and the field sky hour.
+    /// Persisted under `game.world_light.*` and edited in the Display window's
+    /// "Lighting & Post" section; applied at field init/update.
+    struct WorldLightDisplaySettings {
+        bool m_enabled{true};
+        u32 m_samples_per_frame{262144u};
+        u32 m_accumulation_samples{8u};
+        float m_history_retention{0.9f};
+        u32 m_level_count{6u};
+        i32 m_sky_hour{-1};
+
+        [[nodiscard]] static constexpr auto describe() {
+            using namespace config;
+
+            return std::tuple{
+                field(
+                    &WorldLightDisplaySettings::m_enabled,
+                    Metadata{
+                        "game.world_light.enabled", "Enable the camera-independent world light field", "World lighting",
+                        EMutability::runtime, ESource::all, true},
+                    boolean_domain),
+                field(
+                    &WorldLightDisplaySettings::m_samples_per_frame,
+                    Metadata{
+                        "game.world_light.samples_per_frame", "Direction samples traced per frame (field budget)",
+                        "World lighting", EMutability::runtime, ESource::all, true},
+                    Range<u32>{65536u, 4194304u}),
+                field(
+                    &WorldLightDisplaySettings::m_accumulation_samples,
+                    Metadata{
+                        "game.world_light.accumulation", "Per-direction samples before steady-state retention",
+                        "World lighting", EMutability::runtime, ESource::all, true},
+                    Range<u32>{1u, 64u}),
+                field(
+                    &WorldLightDisplaySettings::m_history_retention,
+                    Metadata{
+                        "game.world_light.retention", "Steady-state per-interval history retention (0.5 to 1.0)",
+                        "World lighting", EMutability::runtime, ESource::all, true},
+                    Range<float>{0.5f, 1.0f}),
+                field(
+                    &WorldLightDisplaySettings::m_level_count,
+                    Metadata{
+                        "game.world_light.level_count", "Radiance cascade level count", "World lighting",
+                        EMutability::runtime, ESource::all, true},
+                    Range<u32>{4u, 8u}),
+                field(
+                    &WorldLightDisplaySettings::m_sky_hour,
+                    Metadata{
+                        "game.world_light.sky_hour", "Field sky solar hour (-1 uses the black boundary sky)",
+                        "World lighting", EMutability::runtime, ESource::all, true},
+                    Range<i32>{-1, 23}),
+            };
+        }
+    };
+
+    /// Runtime-tunable post-processing settings. Manual exposure, bloom and the
+    /// optional palette are applied to the RetroPass now; eye-adaptation
+    /// (auto exposure, tau, EV clamp) and bloom intensity/threshold are
+    /// persisted and displayed here and wired by Tasks 12/13.
+    struct PostDisplaySettings {
+        bool m_auto_exposure{false};
+        float m_exposure_ev{0.0f};
+        float m_adaptation_tau{0.7f};
+        float m_ev_min{-4.0f};
+        float m_ev_max{4.0f};
+        bool m_bloom{false};
+        float m_bloom_intensity{1.0f};
+        float m_bloom_threshold{1.0f};
+        bool m_palette{false};
+
+        [[nodiscard]] static std::error_code validate(
+            const PostDisplaySettings &settings, config::Diagnostics &diagnostics);
+
+        [[nodiscard]] static constexpr auto describe() {
+            using namespace config;
+
+            return std::tuple{
+                field(
+                    &PostDisplaySettings::m_auto_exposure,
+                    Metadata{
+                        "game.post.auto_exposure", "Adapt exposure from a scene luminance histogram", "Post",
+                        EMutability::runtime, ESource::all, true},
+                    boolean_domain),
+                field(
+                    &PostDisplaySettings::m_exposure_ev,
+                    Metadata{
+                        "game.post.exposure_ev", "Manual exposure offset in EV", "Post", EMutability::runtime,
+                        ESource::all, true},
+                    Range<float>{-16.0f, 16.0f}),
+                field(
+                    &PostDisplaySettings::m_adaptation_tau,
+                    Metadata{
+                        "game.post.adaptation_tau", "Eye-adaptation time constant in seconds", "Post",
+                        EMutability::runtime, ESource::all, true},
+                    Range<float>{0.1f, 5.0f}),
+                field(
+                    &PostDisplaySettings::m_ev_min,
+                    Metadata{
+                        "game.post.ev_min", "Lower adaptation clamp around manual exposure (EV)", "Post",
+                        EMutability::runtime, ESource::all, true},
+                    Range<float>{-8.0f, 8.0f}),
+                field(
+                    &PostDisplaySettings::m_ev_max,
+                    Metadata{
+                        "game.post.ev_max", "Upper adaptation clamp around manual exposure (EV)", "Post",
+                        EMutability::runtime, ESource::all, true},
+                    Range<float>{-8.0f, 8.0f}),
+                field(
+                    &PostDisplaySettings::m_bloom,
+                    Metadata{
+                        "game.post.bloom", "Enable SPD bloom on the resolved HDR scene", "Post", EMutability::runtime,
+                        ESource::all, true},
+                    boolean_domain),
+                field(
+                    &PostDisplaySettings::m_bloom_intensity,
+                    Metadata{
+                        "game.post.bloom_intensity", "Bloom contribution scale (0 to 2)", "Post", EMutability::runtime,
+                        ESource::all, true},
+                    Range<float>{0.0f, 2.0f}),
+                field(
+                    &PostDisplaySettings::m_bloom_threshold,
+                    Metadata{
+                        "game.post.bloom_threshold", "Bloom bright-pass threshold (0 to 16)", "Post",
+                        EMutability::runtime, ESource::all, true},
+                    Range<float>{0.0f, 16.0f}),
+                field(
+                    &PostDisplaySettings::m_palette,
+                    Metadata{
+                        "game.post.palette", "Quantize scene colors to the 32-color palette with ordered dithering",
+                        "Post", EMutability::runtime, ESource::all, true},
+                    boolean_domain),
+            };
+        }
+    };
+
     /// Fully resolved game invocation: typed settings per owning schema plus
     /// the parsed CLI (provenance for trigger detection) and whether the
     /// profiling-default layer was selected.
@@ -318,6 +459,8 @@ export namespace pP::game {
         config::Resolved<GameSettings> m_game{};
         config::Resolved<DisplaySettings> m_display{};
         config::Resolved<StartupSettings> m_startup{};
+        config::Resolved<WorldLightDisplaySettings> m_world_light{};
+        config::Resolved<PostDisplaySettings> m_post{};
         config::CliResult m_cli{};
         Array<std::string> m_config_paths{};
         bool m_profiling{false};
@@ -368,4 +511,29 @@ export namespace pP::game {
 
     /// Executable schema check for all three invocation schemas.
     [[nodiscard]] Expected<void> validateGameSchemas(config::Diagnostics &diagnostics);
+
+    /// CLI bindings for the world light and post display settings, composed
+    /// into gameCliSchema. Canonical names are the property names; the
+    /// kebab-case aliases are the legacy game spellings.
+    [[nodiscard]] Array<config::OptionDecl> worldLightPostCliOptions();
+
+    /// Merges acknowledged world-light and post settings into an existing
+    /// overlay document: every `game.world_light.*` and `game.post.*` entry is
+    /// replaced by the persistable properties only, while unrelated entries
+    /// (including `display.*`) keep their order and values. Hand-edited base
+    /// files are never touched by this path.
+    [[nodiscard]] Expected<config::Document> buildLightingPostOverlayDocument(
+        const config::Document &existing, const WorldLightDisplaySettings &world_light,
+        const PostDisplaySettings &post);
+
+    /// Panel-draft validation: apply the draft as one runtime layer over
+    /// committed state (schema rules, domain, range, cross-field only).
+    [[nodiscard]] Expected<config::Resolved<WorldLightDisplaySettings>> validateWorldLightDraft(
+        const config::Resolved<WorldLightDisplaySettings> &committed, const WorldLightDisplaySettings &draft,
+        config::Diagnostics &diagnostics);
+
+    /// Panel-draft validation for the post settings, same contract.
+    [[nodiscard]] Expected<config::Resolved<PostDisplaySettings>> validatePostDraft(
+        const config::Resolved<PostDisplaySettings> &committed, const PostDisplaySettings &draft,
+        config::Diagnostics &diagnostics);
 } // namespace pP::game

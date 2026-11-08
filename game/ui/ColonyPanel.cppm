@@ -8,6 +8,7 @@ import engine.core;
 import engine.sim;
 import game.colony.agents;
 import game.colony.tools;
+import game.config;
 import game.display;
 import std;
 
@@ -77,6 +78,7 @@ export namespace pP::colony {
         display_keep, // confirm the trial picture settings
         display_revert, // revert the trial to the pre-apply values, same path
         display_use_monitor_cap, // draft paced + cap from the reported monitor refresh
+        reset_lighting_post, // restore the world light and post settings to factory defaults
         select_preview, // m_arg = EGridDiagnosticMode; range lives in UI draft.
         open_workshop,
         quit, // same graceful host transition as the native close control
@@ -175,6 +177,13 @@ export namespace pP::colony {
         /// every rendered frame (never part of the display draft or its
         /// transaction, and never persisted).
         RetroSettings m_retro{.m_enabled = true, .m_palette_enabled = true, .m_pixel_scale = 3u};
+
+        /// Live world-light and post display settings, session-only: the host
+        /// applies the post settings to the retro state every frame and the
+        /// world-light settings at field init/update. Persisted by the Display
+        /// window's Save, never part of the display draft or its transaction.
+        game::WorldLightDisplaySettings m_world_light{};
+        game::PostDisplaySettings m_post{};
 
         /// Host reads this live draft when it snapshots a tool gesture.
         ToolSettings m_tools{};

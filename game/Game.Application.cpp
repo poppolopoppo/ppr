@@ -1782,6 +1782,8 @@ namespace demo {
                         {{"hour", m_requested_sky_hour}, {"tick", m_driver->tickCount()}, {"job", world.m_job_id},
                             {"world", world.m_world_generation}, {"content", world.m_content_fingerprint}});
                 }
+            } else if (m_field and m_ui_state.m_world_light.m_sky_hour >= 0) {
+                stage.m_temporal_sky_hour = m_ui_state.m_world_light.m_sky_hour;
             }
 
             const bool returning = m_workshop_finish_pending and
@@ -2201,9 +2203,13 @@ namespace demo {
 
                 if (m_field) {
                     const auto plan = lighting::planWorldLight(
-                        {.m_width = m_map_size, .m_height = m_map_size, .m_cell_metres = source.m_cell_size_m});
+                        {.m_width = m_map_size,
+                            .m_height = m_map_size,
+                            .m_cell_metres = source.m_cell_size_m,
+                            .m_level_count = m_ui_state.m_world_light.m_level_count});
                     PPR_RETURN_ERROR_ON_FAIL(Demo, plan);
                     command->m_field_plan = *plan;
+                    command->m_field_budget = m_ui_state.m_world_light.m_samples_per_frame;
                     command->m_field_materials = colony::buildWorldLightMaterials(
                         std::span<const GridTerrainVisual>{
                             source.m_terrain_visuals.data(), source.m_terrain_visuals.size()});
@@ -4169,6 +4175,11 @@ namespace demo {
 
                 case colony::EColonyIntent::display_use_monitor_cap: useMonitorCapAsDraft_(); break;
 
+                case colony::EColonyIntent::reset_lighting_post:
+                    m_ui_state.m_world_light = game::WorldLightDisplaySettings{};
+                    m_ui_state.m_post = game::PostDisplaySettings{};
+                    break;
+
                 default:
                     // Future intents get a handler here; never silent.
                     break;
@@ -4571,7 +4582,14 @@ namespace demo {
                     postDisplayNotice_(session.m_last_error, merged.error());
                     return;
                 }
-                auto bytes = game::encodeDisplayOverlay(*merged);
+                auto merged_lighting = game::buildLightingPostOverlayDocument(
+                    *merged, m_ui_state.m_world_light, m_ui_state.m_post);
+                if (not merged_lighting) {
+                    session.m_last_error = "Picture settings NOT saved: " + merged_lighting.error().message() + ".";
+                    postDisplayNotice_(session.m_last_error, merged_lighting.error());
+                    return;
+                }
+                auto bytes = game::encodeDisplayOverlay(*merged_lighting);
                 if (not bytes) {
                     session.m_last_error = "Picture settings NOT saved: " + bytes.error().message() + ".";
                     postDisplayNotice_(session.m_last_error, bytes.error());
@@ -5508,7 +5526,7 @@ namespace demo {
             m_direct_window = (m_temporal_cascades and not m_lighting_showcase) or
                               m_single_bounce or
                               settings.m_world_lighting == game::EWorldLighting::direct_window;
-            m_field = settings.m_world_lighting == game::EWorldLighting::field;
+            m_field = settings.m_world_lighting == game::EWorldLighting::field and m_ui_state.m_world_light.m_enabled;
             m_showcase_screen_contact = m_temporal_cascades or settings.m_lighting_showcase_screen_contact;
 
             if (settings.m_lighting_showcase_metrics) {
@@ -5557,6 +5575,14 @@ namespace demo {
                     .m_temporal_2x_enabled = m_single_bounce or m_temporal_cascades};
                 m_ui_state.m_instruction =
                     "Lighting reference scene: WASD walk, pan/zoom, service door and amber lamp switch; other edits and saving are unavailable.";
+            } else {
+                // Post display settings drive the retro picture on the ordinary
+                // (field/legacy) path: manual exposure, bloom and the optional
+                // palette. The showcase/direct-window reference scene above owns
+                // its own fixed values.
+                m_ui_state.m_retro.m_exposure_ev = m_ui_state.m_post.m_exposure_ev;
+                m_ui_state.m_retro.m_bloom_enabled = m_ui_state.m_post.m_bloom;
+                m_ui_state.m_retro.m_palette_enabled = m_ui_state.m_post.m_palette;
             }
             m_requested_seed = settings.m_worldgen_seed;
             m_ui_state.m_tools = {
@@ -5593,6 +5619,15 @@ namespace demo {
         /// once in main(); runtime edits never touch it.
         void noteDisplayStartup(const config::Resolved<DisplaySettings> &baseline) {
             m_display_baseline = baseline;
+        }
+
+        /// Startup world-light/post baseline: seeds the live session settings
+        /// (edited in the Display window's "Lighting & Post" section) from the
+        /// resolved invocation. Runtime edits never touch these seeds.
+        void noteLightingPostStartup(
+            const game::WorldLightDisplaySettings &world_light, const game::PostDisplaySettings &post) {
+            m_ui_state.m_world_light = world_light;
+            m_ui_state.m_post = post;
         }
 
         [[nodiscard]] colony::WorldgenPreviewSpec workshopSpec_() const {
@@ -6499,6 +6534,11 @@ namespace demo {
                 m_ui_state.m_retro.m_enabled = false;
                 m_ui_state.m_retro.m_bloom_enabled = m_single_bounce or m_temporal_cascades;
                 m_ui_state.m_retro.m_temporal_2x_enabled = m_single_bounce or m_temporal_cascades;
+            } else {
+                // Post display settings edit the live retro picture directly.
+                m_ui_state.m_retro.m_exposure_ev = m_ui_state.m_post.m_exposure_ev;
+                m_ui_state.m_retro.m_bloom_enabled = m_ui_state.m_post.m_bloom;
+                m_ui_state.m_retro.m_palette_enabled = m_ui_state.m_post.m_palette;
             }
             setRetroSettings(m_ui_state.m_retro);
             prepareGameplayQueryRequest_();
@@ -10573,6 +10613,7 @@ int runGame(const int argc, char *argv[]) try {
         return pP::colony::runColonySmoke(pP::colony::SmokeOptions{startup.m_gpu_validation}).value();
     }
     demo::TurboLarbin app("ppr", args);
+    app.noteLightingPostStartup(invocation->m_world_light.m_value, invocation->m_post.m_value);
     if (const auto error = app.setWorldgenSettings(settings, pP::ITimerClock::steady(), diagnostics)) {
         std::cerr << "[worldgen] " << error.message() << '\n' << diagnostics.format();
         return pP::config::kExitInvalidUsage;

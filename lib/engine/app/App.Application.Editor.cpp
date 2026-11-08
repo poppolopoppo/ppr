@@ -269,6 +269,7 @@ namespace pP {
         lighting::WorldLightSourceGpu m_source{};
         lighting::WorldLightField m_field{};
         lighting::WorldLightPlan m_plan{};
+        u32 m_budget{};
         bool m_initialized{};
         bool m_frame_logged{};
     };
@@ -3585,6 +3586,7 @@ namespace pP {
                         }
 
                         field.m_plan = command.m_field_plan;
+                        field.m_budget = command.m_field_budget;
                         field.m_initialized = true;
                     }
                 }
@@ -4459,7 +4461,8 @@ namespace pP {
                 PPR_RETURN_ERROR_ON_FAIL(
                     Editor, field.m_field.update(
                                 context.m_encoder, field.m_source, 1.0f / 60.0f,
-                                static_cast<u32>(field.m_plan.m_levels[0].m_sample_count)));
+                                field.m_budget != 0u ? field.m_budget
+                                                     : static_cast<u32>(field.m_plan.m_levels[0].m_sample_count)));
                 PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->setWorldLightField(field.m_field.view()));
 
                 out_result.m_lighting_source_revision = field.m_source.revision();

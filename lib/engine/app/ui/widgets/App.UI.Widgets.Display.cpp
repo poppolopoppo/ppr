@@ -71,7 +71,11 @@ namespace pP::ui {
             // Requested:
             "Cap", "Size", "Vsync", "Foreground CPU target", "Effective CPU target", "Unfocused slowing",
             // Device report:
-            "Picture device", "Change in flight", "Last problem", "Window", "Observed window", "Observed exclusive"};
+            "Picture device", "Change in flight", "Last problem", "Window", "Observed window", "Observed exclusive",
+            // Lighting & Post:
+            "World light field", "Samples per frame", "Accumulation", "Retention", "Level count", "Sky hour",
+            "Auto exposure", "Exposure EV", "Adaptation tau (s)", "EV clamp", "Bloom", "Bloom intensity",
+            "Bloom threshold", "Palette"};
 
         /// Shared label-column width: the widest label plus cell padding, so
         /// labels and values align across all Display tables.
@@ -693,6 +697,148 @@ namespace pP::ui {
         noteText(
             "Pixelization, palette mapping and temporal supersampling are independent; the UI stays native. "
             "Changes apply immediately and are not part of Apply or Save.");
+
+        // World light and post settings are live session controls like the
+        // retro fields above: the game applies the post fields to the retro
+        // pass every frame and the world-light fields at field init/update.
+        // The section never edits the display draft or joins Apply/Save.
+        ImGui::SeparatorText("Lighting & Post");
+        if (beginLabelTable("##display_lighting_post", label_width)) {
+            const LightingPostWidgetDraft &lp = state.m_lighting_post;
+
+            {
+                beginValueRow("World light field");
+                ImGui::Checkbox("##lighting_world_enabled", &lp.m_world_light_enabled);
+                ImGui::SetItemTooltip("Enable the camera-independent world light field.");
+            }
+
+            {
+                beginValueRow("Samples per frame");
+                int budget = static_cast<int>(std::clamp(lp.m_samples_per_frame, 65536u, 4194304u));
+                ImGui::SetNextItemWidth(-1.0f);
+                if (ImGui::SliderInt(
+                        "##lighting_samples", &budget, 65536, 4194304, "%d", ImGuiSliderFlags_Logarithmic)) {
+                    lp.m_samples_per_frame = static_cast<u32>(budget);
+                }
+                ImGui::SetItemTooltip("Direction samples traced per frame (field budget).");
+            }
+
+            {
+                beginValueRow("Accumulation");
+                int accumulation = static_cast<int>(std::clamp(lp.m_accumulation_samples, 1u, 64u));
+                ImGui::SetNextItemWidth(-1.0f);
+                if (ImGui::SliderInt("##lighting_accumulation", &accumulation, 1, 64)) {
+                    lp.m_accumulation_samples = static_cast<u32>(accumulation);
+                }
+                ImGui::SetItemTooltip("Per-direction samples before steady-state retention.");
+            }
+
+            {
+                beginValueRow("Retention");
+                ImGui::SetNextItemWidth(-1.0f);
+                if (ImGui::SliderFloat("##lighting_retention", &lp.m_history_retention, 0.5f, 1.0f, "%.2f")) {
+                    lp.m_history_retention = std::clamp(lp.m_history_retention, 0.5f, 1.0f);
+                }
+                ImGui::SetItemTooltip("Steady-state per-interval history retention (0.5 to 1.0).");
+            }
+
+            {
+                beginValueRow("Level count");
+                int levels = static_cast<int>(std::clamp(lp.m_level_count, 4u, 8u));
+                ImGui::SetNextItemWidth(-1.0f);
+                if (ImGui::SliderInt("##lighting_levels", &levels, 4, 8)) {
+                    lp.m_level_count = static_cast<u32>(levels);
+                }
+                ImGui::SetItemTooltip("Radiance cascade level count.");
+            }
+
+            {
+                beginValueRow("Sky hour");
+                int sky = static_cast<int>(std::clamp(lp.m_sky_hour, -1, 23));
+                ImGui::SetNextItemWidth(-1.0f);
+                if (ImGui::SliderInt("##lighting_sky_hour", &sky, -1, 23)) {
+                    lp.m_sky_hour = static_cast<i32>(sky);
+                }
+                ImGui::SetItemTooltip("Field sky solar hour (-1 uses the black boundary sky).");
+            }
+
+            {
+                beginValueRow("Auto exposure");
+                ImGui::Checkbox("##post_auto_exposure", &lp.m_auto_exposure);
+                ImGui::SetItemTooltip("Adapt exposure from a scene luminance histogram.");
+            }
+
+            {
+                beginValueRow("Exposure EV");
+                ImGui::SetNextItemWidth(-1.0f);
+                if (ImGui::SliderFloat("##post_exposure_ev", &lp.m_exposure_ev, -16.0f, 16.0f, "%.1f")) {
+                    lp.m_exposure_ev = std::clamp(lp.m_exposure_ev, -16.0f, 16.0f);
+                }
+                ImGui::SetItemTooltip("Manual exposure offset in EV.");
+            }
+
+            {
+                beginValueRow("Adaptation tau (s)");
+                ImGui::SetNextItemWidth(-1.0f);
+                if (ImGui::SliderFloat("##post_tau", &lp.m_adaptation_tau, 0.1f, 5.0f, "%.2f")) {
+                    lp.m_adaptation_tau = std::clamp(lp.m_adaptation_tau, 0.1f, 5.0f);
+                }
+                ImGui::SetItemTooltip("Eye-adaptation time constant in seconds.");
+            }
+
+            {
+                beginValueRow("EV clamp");
+                ImGui::SetNextItemWidth(-1.0f);
+                if (ImGui::SliderFloat("##post_ev_min", &lp.m_ev_min, -8.0f, 8.0f, "%.1f")) {
+                    lp.m_ev_min = std::clamp(lp.m_ev_min, -8.0f, 8.0f);
+                }
+                if (ImGui::SliderFloat("##post_ev_max", &lp.m_ev_max, -8.0f, 8.0f, "%.1f")) {
+                    lp.m_ev_max = std::clamp(lp.m_ev_max, -8.0f, 8.0f);
+                }
+                ImGui::SetItemTooltip("Lower/upper adaptation clamp around manual exposure (EV).");
+            }
+
+            {
+                beginValueRow("Bloom");
+                ImGui::Checkbox("##post_bloom", &lp.m_bloom);
+                ImGui::SetItemTooltip("Enable SPD bloom on the resolved HDR scene.");
+            }
+
+            {
+                beginValueRow("Bloom intensity");
+                ImGui::SetNextItemWidth(-1.0f);
+                if (ImGui::SliderFloat("##post_bloom_intensity", &lp.m_bloom_intensity, 0.0f, 2.0f, "%.2f")) {
+                    lp.m_bloom_intensity = std::clamp(lp.m_bloom_intensity, 0.0f, 2.0f);
+                }
+                ImGui::SetItemTooltip("Bloom contribution scale (0 to 2).");
+            }
+
+            {
+                beginValueRow("Bloom threshold");
+                ImGui::SetNextItemWidth(-1.0f);
+                if (ImGui::SliderFloat("##post_bloom_threshold", &lp.m_bloom_threshold, 0.0f, 16.0f, "%.2f")) {
+                    lp.m_bloom_threshold = std::clamp(lp.m_bloom_threshold, 0.0f, 16.0f);
+                }
+                ImGui::SetItemTooltip("Bloom bright-pass threshold (0 to 16).");
+            }
+
+            {
+                beginValueRow("Palette");
+                ImGui::Checkbox("##post_palette", &lp.m_palette);
+                ImGui::SetItemTooltip(
+                    "Quantize scene colors to the 32-color palette with ordered dithering (off by default).");
+            }
+
+            ImGui::EndTable();
+        }
+        {
+            if (ImGui::Button("Reset lighting & post")) {
+                intent = EDisplayWidgetAction::reset_lighting_post;
+            }
+            noteText(
+                "World light and post changes apply immediately and are not part of Apply or Save; Save still "
+                "persists the current values to the settings file.");
+        }
 
         ImGui::SeparatorText("Requested");
         if (beginLabelTable("##display_requested", label_width)) {
