@@ -5816,7 +5816,7 @@ namespace demo {
                            game::hasSessionWorldPresentation(
                                result, reservationEpoch_(),
                                {m_world_view.m_id, m_candidate_generation, m_candidate_fingerprint}, m_world_published,
-                               m_candidate_activated, expectedResidentPresentation_(), 0u)) {
+                               m_candidate_activated, expectedResidentPresentation_())) {
                     m_world_frame_presented = true;
                 }
             }

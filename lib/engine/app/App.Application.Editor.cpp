@@ -1200,16 +1200,6 @@ namespace pP {
         m_diagnostics.m_last_sweep_error = result.m_sweep_error;
         m_diagnostics.m_ui_font_version_applied = result.m_ui_font_version_applied;
         m_diagnostics.m_last_submit_value = result.m_submit_value;
-        m_diagnostics.m_lighting_pending = result.m_lighting_pending;
-        m_diagnostics.m_lighting_update_age = result.m_lighting_update_age;
-        m_diagnostics.m_lighting_error = result.m_lighting_error;
-        if (result.m_presented and result.m_lighting_camera) {
-            m_diagnostics.m_lighting_camera = result.m_lighting_camera;
-            m_diagnostics.m_lighting_extent = result.m_lighting_extent.value_or(int2{zero_v});
-            m_diagnostics.m_lighting_target_extent = result.m_lighting_target_extent.value_or(int2{zero_v});
-            m_diagnostics.m_lighting_world = result.m_lighting_world;
-            m_diagnostics.m_lighting_revision = result.m_lighting_revision;
-        }
     }
 
     void ApplicationEditor::stampSubmittedPasses_(const FenceCompletionValue previously_submitted) noexcept {
@@ -1303,13 +1293,7 @@ namespace pP {
         detached.m_frame_id = packet.m_frame_id;
         PPR_RETURN_ERROR_ON_FAIL(Editor, m_ui_service->buildDetachedUiFrame(detached));
 
-        const auto picture_admission = admitPictureFrame(
-            m_retro_settings, packet.m_framebuffer_size,
-            m_grid_stage.m_retain_content and
-                    m_grid_stage.m_update_actors_on_retained_terrain and
-                    m_diagnostics.m_lighting_camera
-                ? std::optional<int2>{m_diagnostics.m_lighting_extent}
-                : std::nullopt);
+        const auto picture_admission = admitPictureFrame(m_retro_settings, packet.m_framebuffer_size, std::nullopt);
         const std::error_code spatial_policy_error = picture_admission ? std::error_code{} : picture_admission.error();
         if (spatial_policy_error) {
             // This is the CLIENT boundary. Do not query mutable window state
@@ -1601,7 +1585,6 @@ namespace pP {
         out_result.m_presented_particles.reset();
         out_result.m_temporal_2x_submission.reset();
         out_result.m_particle_census.reset();
-        out_result.m_lighting_revision = 0u;
         out_result.m_surface_capture_sequence = 0u;
         m_scene_passes_encoded = false;
 
@@ -1926,11 +1909,7 @@ namespace pP {
                                     retro_viewport, retro_scissor));
                     PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->prepareGpuVisibility(context));
 
-                    PPR_RETURN_ERROR_ON_FAIL(
-                        Editor,
-                        m_grid_pass->prepareGpuParticles(
-                            context,
-                            capture and m_measure_world_radiance ? grid_stage.m_capture_particle_census_edge : 0u));
+                    PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->prepareGpuParticles(context));
                 }
 
                 return m_retro_pass->prepareScene(
@@ -1945,8 +1924,7 @@ namespace pP {
             PPR_RETURN_ERROR_ON_FAIL(Editor, prepare_background(context, scene_camera, grid_viewport, grid_scissor));
             PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->prepareGpuVisibility(context));
 
-            return m_grid_pass->prepareGpuParticles(
-                context, capture and m_measure_world_radiance ? grid_stage.m_capture_particle_census_edge : 0u);
+            return m_grid_pass->prepareGpuParticles(context);
         };
 
         DrawSubmission scene_submission{"scene", scene_draw};

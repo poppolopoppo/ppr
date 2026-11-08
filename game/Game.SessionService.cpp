@@ -15,22 +15,13 @@ namespace pP::game {
 
     bool hasSessionWorldPresentation(
         const RenderFrameResult &result, const u64 reservation_epoch, const GridWorldIdentity requested,
-        const bool published, const bool activated, const std::optional<GridParticlePresentationIdentity> resident,
-        const u64 lighting_revision) noexcept {
+        const bool published, const bool activated,
+        const std::optional<GridParticlePresentationIdentity> resident) noexcept {
         if (not published or not activated or requested.m_job_id == 0u or requested.m_world_generation == 0u) {
             return false;
         }
 
         if (resident and result.m_presented_particles != resident) {
-            return false;
-        }
-
-        if (lighting_revision != 0u and (result.m_lighting_revision != lighting_revision or
-                                            result.m_lighting_pending or
-                                            result.m_lighting_error or
-                                            result.m_sweep_error or
-                                            result.m_submit_possibly_executed or
-                                            result.m_submit_value == kFenceValueNone)) {
             return false;
         }
 

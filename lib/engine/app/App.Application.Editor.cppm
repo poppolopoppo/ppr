@@ -191,25 +191,9 @@ export namespace pP {
             // Submit fence value this frame rode (submission acceptance,
             // independent of present verdict).
             FenceCompletionValue m_last_submit_value{kFenceValueNone};
-            std::optional<CameraSnapshot> m_lighting_camera{};
-            // Native picture viewport and real presented surface may differ
-            // while a retained image is clipped/letterboxed across resize.
-            int2 m_lighting_extent{zero_v};
-            int2 m_lighting_target_extent{zero_v};
-            u64 m_lighting_world{};
-            u64 m_lighting_revision{};
-            TimeSpan m_lighting_update_age{};
-            std::error_code m_lighting_error{};
-            bool m_lighting_pending{};
         };
         void enableGridObservations(const bool enabled) noexcept {
             m_observe_grid = enabled;
-        }
-
-        // Startup-only, before the render lane starts. World-field timing is
-        // independent of CPU world-generation observations and surface capture.
-        void enableWorldRadianceMeasurements(const bool enabled) noexcept {
-            m_measure_world_radiance = enabled;
         }
 
         [[nodiscard]] RenderDiagnostics renderDiagnostics() const noexcept {
@@ -233,7 +217,6 @@ export namespace pP {
         u64 m_frame_capture_success_sequence{}; // Main-side completed clean result.
         u64 m_frame_capture_attempted_sequence{}; // Worker-side duplicate suppression.
         bool m_observe_grid{false};
-        bool m_measure_world_radiance{};
         bool m_frame_capture_requested{}; // Main-side request transport.
         bool m_frame_capture_eligible{true}; // Main-side current-frame UI readiness.
         bool m_frame_capture_armed{}; // Main-side once-per-owner admission.

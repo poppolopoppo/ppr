@@ -23,8 +23,7 @@ export namespace pP::game {
     /// Presentation proves visibility only; it never consumes staged edits.
     [[nodiscard]] bool hasSessionWorldPresentation(
         const RenderFrameResult &result, u64 reservation_epoch, GridWorldIdentity requested, bool published,
-        bool activated, std::optional<GridParticlePresentationIdentity> resident = std::nullopt,
-        u64 lighting_revision = 0u) noexcept;
+        bool activated, std::optional<GridParticlePresentationIdentity> resident = std::nullopt) noexcept;
 
     /// Selects the final game lease only while Workshop retains that same bundle.
     /// Current epoch/layout validation remains at the renderer's existing boundary.

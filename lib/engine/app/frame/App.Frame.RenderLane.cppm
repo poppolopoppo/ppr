@@ -173,21 +173,11 @@ export namespace pP {
         // Actual active bundle rendered by a successful surface presentation.
         // Independent of staging/edit acknowledgments; empty on every other fate.
         GridWorldIdentity m_presented_grid{};
-        // Actual displayed picture identity while an experimental world/view
-        // candidate is pending; neither input camera nor queue acceptance is proof.
-        std::optional<CameraSnapshot> m_lighting_camera{};
-        std::optional<int2> m_lighting_extent{};
-        u64 m_lighting_world{};
-        u64 m_lighting_revision{}; // actually consumed field, or retained picture's old revision
         // Field-mode diagnostics (no gating, no per-frame logs): the dense source
         // revision and the cascade field's completed round-robin cycle. The cycle
         // is set only when a field update ran this frame; both stay zero otherwise.
         u64 m_lighting_source_revision{};
         std::optional<u64> m_lighting_field_cycle{};
-        std::optional<int2> m_lighting_target_extent{};
-        TimeSpan m_lighting_update_age{};
-        std::error_code m_lighting_error{};
-        bool m_lighting_pending{};
 
         // Same actual-present proof for the selected jointly committed resident
         // state. CPU preparation frames and every non-present fate leave it empty.

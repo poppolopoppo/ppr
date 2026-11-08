@@ -381,11 +381,8 @@ namespace pP::tests::detail {
                     result.m_grid_ack_chunk_ids = request.m_grid_stage.m_ack_chunk_ids;
                     result.m_presented = true;
                     result.m_presented_grid = {37u, 20u, 103u};
-                    result.m_lighting_camera.emplace();
-                    result.m_lighting_camera->m_revision = request.m_packet->m_frame_id;
-                    result.m_lighting_camera->m_origin = float3{
-                        static_cast<float>(request.m_packet->m_frame_id), 2.0f, 3.0f};
-                    result.m_lighting_extent = int2{64, 32};
+                    result.m_lighting_source_revision = request.m_packet->m_frame_id;
+                    result.m_lighting_field_cycle = request.m_packet->m_frame_id;
                     outstanding.fetch_add(1u);
                     return {};
                 },
@@ -419,12 +416,9 @@ namespace pP::tests::detail {
                 PPR_TEST_ASSERT(results[index].m_presented_grid.m_world_generation == 20u);
                 PPR_TEST_ASSERT(results[index].m_presented_grid.m_content_fingerprint == 103u);
 
-                PPR_TEST_ASSERT(results[index].m_lighting_camera.has_value());
-                PPR_TEST_ASSERT(results[index].m_lighting_camera->m_revision == index + 1u);
-                PPR_TEST_ASSERT(results[index].m_lighting_camera->m_origin.x == static_cast<float>(index + 1u));
-                PPR_TEST_ASSERT(results[index].m_lighting_extent.has_value());
-                PPR_TEST_ASSERT((*results[index].m_lighting_extent).x == 64);
-                PPR_TEST_ASSERT((*results[index].m_lighting_extent).y == 32);
+                PPR_TEST_ASSERT(results[index].m_lighting_source_revision == index + 1u);
+                PPR_TEST_ASSERT(results[index].m_lighting_field_cycle.has_value());
+                PPR_TEST_ASSERT(*results[index].m_lighting_field_cycle == index + 1u);
             }
 
             PPR_TEST_ASSERT(results[2].m_surface_result and not results[2].m_surface_result->m_error);
@@ -434,16 +428,15 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not lane.drainResults(results) and results.empty());
             outstanding.store(0u);
 
-            // Repeated camera-bearing records exercise different payload offsets
-            // and wrap the page-backed result ring without per-record allocation.
+            // Repeated records carrying the field diagnostics exercise different
+            // payload offsets and wrap the page-backed result ring without
+            // per-record allocation.
             for (u64 frame_id = 3u; frame_id <= 130u; ++frame_id) {
                 PPR_TEST_ASSERT(not lane.submitFrame(makeRequest(frame_id)));
                 PPR_TEST_ASSERT(awaitResult(lane, frame_id, results));
-                PPR_TEST_ASSERT(results.size() == 1u and results[0u].m_lighting_camera.has_value());
-                PPR_TEST_ASSERT(results[0u].m_lighting_camera->m_revision == frame_id);
-                PPR_TEST_ASSERT(results[0u].m_lighting_camera->m_origin.x == static_cast<float>(frame_id));
-                PPR_TEST_ASSERT(results[0u].m_lighting_camera->m_origin.y == 2.0f);
-                PPR_TEST_ASSERT(results[0u].m_lighting_camera->m_origin.z == 3.0f);
+                PPR_TEST_ASSERT(results.size() == 1u and results[0u].m_lighting_source_revision == frame_id);
+                PPR_TEST_ASSERT(results[0u].m_lighting_field_cycle.has_value());
+                PPR_TEST_ASSERT(*results[0u].m_lighting_field_cycle == frame_id);
                 PPR_TEST_ASSERT(results[0u].m_grid_ack_chunk_ids.empty());
 
                 results.clear();

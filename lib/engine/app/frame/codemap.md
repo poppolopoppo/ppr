@@ -52,11 +52,11 @@ executor per frame, sweeps fence completion on the lane, and settles queued work
   publication, terrain revision and joint tick. CPU preparation, submission,
   staging consumption and GPU completion do not produce this resident proof.
   The fixed value travels on the existing result stream and owns no resources.
-- Camera-bearing `RenderFrameResult` records retain their natural SIMD alignment.
-  The lane reserves `sizeof(result) + alignof(result) - 1` bytes per raw-channel
-  payload and uses the same `std::align` address for placement, reads and destruction;
-  RawChannel itself continues to guarantee only u64-aligned payloads. Frame handles
-  and controls are checked against that unchanged transport alignment contract.
+- `RenderFrameResult` records retain their natural alignment. The lane reserves
+  `sizeof(result) + alignof(result) - 1` bytes per raw-channel payload and uses
+  the same `std::align` address for placement, reads and destruction; RawChannel
+  itself continues to guarantee only u64-aligned payloads. Frame handles and
+  controls are checked against that unchanged transport alignment contract.
 - Ownership != affinity: content owners keep their objects (editor-owned passes, client-owned ImGui context,
   game-owned snapshots/translator); the lane is only the fixed execution affinity.
 - Correlated owned operations share the existing synchronous handoff's single slot, rather than a new queue.
@@ -155,11 +155,13 @@ and an accepted matching fence, and cannot reset worker state from main. Ordinar
 capture remains one-shot unless the client explicitly rearms after success.
 
 
-Capture-only particle census enable/edge rides the existing Grid stage. Editor's
-local submit-fate guard finalizes exactly once after render/present on the normal
-path and on unwind otherwise; this stamps the selected reader before exact-fence
-mapping. Only a clean completed captured frame returns owned projected census rows
-in RenderFrameResult. A later proof/readback error preserves settled submit facts.
+The particle-census readback remains available to callers that pass a nonzero
+`census_world_edge` directly into `prepareGpuParticles`; the former capture-only
+staged edge is gone. Editor's local submit-fate guard finalizes exactly once
+after render/present on the normal path and on unwind otherwise; this stamps the
+selected reader before exact-fence mapping. Only a clean completed captured frame
+returns owned projected census rows in RenderFrameResult. A later proof/readback
+error preserves settled submit facts.
 
 
 A temporal staged frame may carry the application simulation's solar hour.

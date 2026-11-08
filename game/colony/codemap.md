@@ -324,8 +324,9 @@ scene brightness remain unimplemented; metadata tests/review are pending.
 
 ## Authored experimental lighting world
 
-`lightingSceneLabels` owns the unchanged closed/open capture topology and the
-interactive island recipe. Capture continues to bind its existing source IDs;
+`lightingSceneLabels` owns the fixed 64x36 source-label topology that
+`lightingShowcaseLabels` layers the interactive island recipe onto. It continues
+to bind its existing source IDs;
 `prepareLightingShowcase` selects the dedicated catalog profile with legitimate
 opaque amber-lamp, violet-sculpture and cyan-insert rows. These are authored solid
 sources, not qualified liquid transport. The normal 3-cells/metre simulation
@@ -350,8 +351,8 @@ content predicate without creating a GPU device.
 
 `lightingShowcaseLabels` overlays the interactive industrial bay on the existing
 8-role environment recipe, adding catalog-backed housing/tread/horizontal-pipe/
-vertical-pipe roles. `lightingSceneLabels` and headless closed/open topology are
-unchanged. `prepareLightingShowcase` resolves the four extra opaque iron-backed
+vertical-pipe roles. The underlying `lightingSceneLabels` topology is unchanged.
+`prepareLightingShowcase` resolves the four extra opaque iron-backed
 rows; Grid/source publication continues to copy the same actual native labels
 and selected visual rows. The crop remains64x36 with a vacuum ring and verified
 vacuum exterior in the normal1024-cell Sim grid.
@@ -391,7 +392,7 @@ presentation (or after explicit visibility abandonment during teardown).
 complete immutable Grid upload and captures its native optical source from those
 very same labels/palette/metric. Live committed cells stay unchanged until joint
 commit. Open/cancel/failure preserve the prior source; no global edit semantics,
-source strengths or old headless `lightingSceneLabels` geometry are changed.
+source strengths or the underlying `lightingSceneLabels` geometry are changed.
 The existing prepared-showcase CPU leaf checks real walking/blocking/closure
 overlap and closed-open-closed state. `game.tests.service_door_gpu` uses one
 existing GPU owner for submitted-tick quiescence, cancellation/internal-target

@@ -32,19 +32,14 @@ export namespace pP::game {
         config::EnumEntry<EGameCommand>{EGameCommand::worldgen_workshop, "worldgen-workshop"},
     }};
 
+    /// World lighting is collapsed to the camera-independent cascade field; the
+    /// legacy windowed/legacy modes are retired. The enum and its single-value
+    /// domain remain so `game.world_lighting` still resolves through the schema.
     enum class EWorldLighting : u8 {
-        legacy,
-        direct_window,
-        single_bounce_window,
-        temporal_cascades,
         field
     };
 
-    inline constexpr config::EnumDomain<EWorldLighting, 5u> world_lighting_domain{{
-        config::EnumEntry<EWorldLighting>{EWorldLighting::legacy, "legacy"},
-        config::EnumEntry<EWorldLighting>{EWorldLighting::direct_window, "direct-window"},
-        config::EnumEntry<EWorldLighting>{EWorldLighting::single_bounce_window, "single-bounce-window"},
-        config::EnumEntry<EWorldLighting>{EWorldLighting::temporal_cascades, "temporal-cascades"},
+    inline constexpr config::EnumDomain<EWorldLighting, 1u> world_lighting_domain{{
         config::EnumEntry<EWorldLighting>{EWorldLighting::field, "field"},
     }};
 
@@ -64,10 +59,6 @@ export namespace pP::game {
 
         std::optional<double> m_exit_after{};
         std::optional<std::string> m_config{};
-        std::optional<std::string> m_lighting_showcase_frame_capture{};
-        std::optional<std::string> m_lighting_showcase_door_check{};
-        std::optional<std::string> m_lighting_showcase_lamp_check{};
-        std::optional<std::string> m_direct_window_frame_capture{};
         std::optional<std::string> m_worldgen_root{};
         std::optional<std::string> m_worldgen_pack_set{};
         std::optional<std::string> m_worldgen_output{};
@@ -78,131 +69,21 @@ export namespace pP::game {
         u64 m_worldgen_seed{42u};
         u32 m_tool_spawn_count{64u};
         u32 m_map_size{2048u};
-        u32 m_rc_probe_spacing{4u}, m_rc_cascade_count{6u}, m_rc_base_directions{4u};
-        float m_rc_interval_scale{1.0f};
-        i32 m_rc_sky_hour{-1};
-        u32 m_rc_day_seconds{86400u};
         EGameCommand m_command{EGameCommand::interactive};
         EWorldLighting m_world_lighting{EWorldLighting::field};
         bool m_worldgen_report{}, m_worldgen_acceptance{};
-        bool m_lighting_showcase{}, m_lighting_showcase_qualified_fp64{}, m_lighting_showcase_metrics{};
-        bool m_lighting_showcase_screen_contact{}, m_rc_skip_table{true}, m_rc_distant_query_check{};
 
         [[nodiscard]] static constexpr auto describe() {
             using namespace config;
 
             return std::tuple{
                 field(
-                    &GameSettings::m_rc_distant_query_check,
-                    Metadata{
-                        "game.rc_distant_query_check", "Check offscreen gameplay lighting during Matter updates",
-                        "World lighting", EMutability::startup, ESource::all, false},
-                    boolean_domain),
-                field(
-                    &GameSettings::m_rc_skip_table,
-                    Metadata{
-                        "game.rc_skip_table", "Use R8UI temporal RC empty-block skips", "World lighting",
-                        EMutability::startup, ESource::all, false},
-                    boolean_domain),
-                field(
-                    &GameSettings::m_rc_probe_spacing,
-                    Metadata{
-                        "game.rc_probe_spacing", "Temporal RC probe spacing in native cells (power of two)",
-                        "World lighting", EMutability::startup, ESource::all, false},
-                    Range<u32>{2u, 64u}),
-                field(
-                    &GameSettings::m_rc_cascade_count,
-                    Metadata{
-                        "game.rc_cascade_count", "Temporal RC level count including refined field", "World lighting",
-                        EMutability::startup, ESource::all, false},
-                    Range<u32>{2u, 8u}),
-                field(
-                    &GameSettings::m_rc_base_directions,
-                    Metadata{
-                        "game.rc_base_directions", "Temporal RC base angular samples (4, 8, or 16)", "World lighting",
-                        EMutability::startup, ESource::all, false},
-                    Range<u32>{4u, 16u}),
-                field(
-                    &GameSettings::m_rc_sky_hour,
-                    Metadata{
-                        "game.rc_sky_hour", "Initial solar hour (-1 uses the source boundary)", "World lighting",
-                        EMutability::startup, ESource::all, false},
-                    Range<i32>{-1, 23}),
-                field(
-                    &GameSettings::m_rc_day_seconds,
-                    Metadata{
-                        "game.rc_day_seconds", "Simulation seconds per sky day", "World lighting", EMutability::startup,
-                        ESource::all, false},
-                    Range<u32>{24u, 86400u}),
-                field(
-                    &GameSettings::m_rc_interval_scale,
-                    Metadata{
-                        "game.rc_interval_scale", "Temporal RC interval length scale", "World lighting",
-                        EMutability::startup, ESource::all, false},
-                    Range<float>{0.25f, 16.0f}),
-                field(
                     &GameSettings::m_world_lighting,
                     Metadata{
                         "game.world_lighting",
-                        "World-light field (default) plus opt-in legacy windowed terrain lighting (direct/single/temporal) with BLACK boundary sky",
+                        "Camera-independent cascade world-light field (the sole supported world lighting)",
                         "World lighting", EMutability::startup, ESource::all, false},
                     world_lighting_domain),
-                field(
-                    &GameSettings::m_direct_window_frame_capture,
-                    Metadata{
-                        "game.direct_window_frame_capture",
-                        "Capture one completed actual generated-world direct-window frame as display-encoded PPM",
-                        "World lighting", EMutability::startup, ESource::cli, false},
-                    pack_path_domain),
-                field(
-                    &GameSettings::m_lighting_showcase_lamp_check,
-                    Metadata{
-                        "game.lighting_showcase_lamp_check",
-                        "Exercise the mounted amber lamp and capture on/off/on playable frames in an existing directory",
-                        "Lighting showcase", EMutability::startup, ESource::cli, false},
-                    pack_path_domain),
-                field(
-                    &GameSettings::m_lighting_showcase_door_check,
-                    Metadata{
-                        "game.lighting_showcase_door_check",
-                        "Exercise the real service door and capture closed/open playable frames in an existing directory",
-                        "Lighting showcase", EMutability::startup, ESource::cli, false},
-                    pack_path_domain),
-                field(
-                    &GameSettings::m_lighting_showcase_frame_capture,
-                    Metadata{
-                        "game.lighting_showcase_frame_capture",
-                        "Write one completed interactive showcase frame, including UI, as display-encoded PPM",
-                        "Lighting showcase", EMutability::startup, ESource::cli, false},
-                    pack_path_domain),
-                field(
-                    &GameSettings::m_lighting_showcase,
-                    Metadata{
-                        "game.lighting_showcase",
-                        "Play the bounded catalog-backed lighting showcase; terrain and source tools are disabled",
-                        "Lighting showcase", EMutability::startup, ESource::cli, false},
-                    boolean_domain),
-                field(
-                    &GameSettings::m_lighting_showcase_screen_contact,
-                    Metadata{
-                        "game.lighting_showcase_screen_contact",
-                        "Enable the bounded current-frame backwall screen-contact experiment", "Lighting showcase",
-                        EMutability::startup, ESource::cli, false},
-                    boolean_domain),
-                field(
-                    &GameSettings::m_lighting_showcase_metrics,
-                    Metadata{
-                        "game.lighting_showcase_metrics",
-                        "Measure producer and warm whole-frame GPU work without a surface capture; diagnostic only",
-                        "Lighting showcase", EMutability::startup, ESource::cli, false},
-                    boolean_domain),
-                field(
-                    &GameSettings::m_lighting_showcase_qualified_fp64,
-                    Metadata{
-                        "game.lighting_showcase_qualified_fp64",
-                        "Explicit current-session RTE64 assertion for the lighting showcase; default strict FP32",
-                        "Lighting showcase", EMutability::startup, ESource::cli, false},
-                    boolean_domain),
                 field(
                     &GameSettings::m_worldgen_acceptance,
                     Metadata{

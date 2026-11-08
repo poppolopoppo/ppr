@@ -1117,7 +1117,6 @@ export namespace pP {
         float m_reference_thickness_m{1.0f};
         Array<GridParticleBatch> m_particle_batches{};
         std::optional<GridParticleGpuView> m_gpu_particles{};
-        u32 m_capture_particle_census_edge{}; // Capture diagnostic only; zero disables.
         Array<GridTileSubmission> m_tiles{};
         Array<GridStagedUpload> m_uploads{};
         EGridDiagnosticMode m_diagnostic_mode{EGridDiagnosticMode::textured};

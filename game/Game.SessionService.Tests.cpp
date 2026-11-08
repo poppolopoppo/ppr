@@ -133,22 +133,6 @@ namespace pP::game::tests::detail {
         PPR_TEST_ASSERT(not hasSessionWorldPresentation(delivered, epoch, requested, false, true));
         PPR_TEST_ASSERT(not hasSessionWorldPresentation(delivered, epoch, requested, true, false));
 
-        // World IDs intentionally stay the same across mechanical edits. The
-        // actual consumed optical revision, not an echoed command/dirty list,
-        // distinguishes a held old picture from the newly committed door.
-        auto optical = delivered;
-        optical.m_lighting_revision = 19u;
-        optical.m_submit_value = 91u;
-        PPR_TEST_ASSERT(hasSessionWorldPresentation(optical, epoch, requested, true, true, std::nullopt, 19u));
-        PPR_TEST_ASSERT(not hasSessionWorldPresentation(optical, epoch, requested, true, true, std::nullopt, 20u));
-
-        optical.m_lighting_pending = true;
-        PPR_TEST_ASSERT(not hasSessionWorldPresentation(optical, epoch, requested, true, true, std::nullopt, 19u));
-
-        optical.m_lighting_pending = false;
-        optical.m_lighting_error = std::make_error_code(std::errc::io_error);
-        PPR_TEST_ASSERT(not hasSessionWorldPresentation(optical, epoch, requested, true, true, std::nullopt, 19u));
-
         // Visibility recognition must leave the independent edit manifest intact.
         PPR_TEST_ASSERT(not delivered.m_grid_stage_applied and not delivered.m_grid_staging_applied);
         PPR_TEST_ASSERT(delivered.m_grid_full_refresh and delivered.m_grid_reset_caches);
