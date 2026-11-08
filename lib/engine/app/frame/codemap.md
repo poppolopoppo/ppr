@@ -31,7 +31,7 @@ executor per frame, sweeps fence completion on the lane, and settles queued work
 - `RenderLane` — one fixed worker + `Channel`-free `RawChannel` triple (depths 2/4/8: frames/results/control).
   `RenderFrameResult::m_temporal_2x_submission` optionally carries a resource-free
   accepted-submit observation. Editor joins it after normal pass stamping to the
-  fresh scene's actual fence, MRT signature, extents and bound lighting publication.
+  fresh scene's actual fence, MRT signature and extents.
   Retained, stale and unmatched observations remain absent; this does not measure
   per-pixel history influence or add GPU ownership to the result stream.
   Forward `RenderFrameRequest`s carry `shared_ptr<const FramePacket>`, `DetachedUiDrawData`, owned `GridStagedFrame`/`TriangleStagedFrame`, and reservation epoch/frame identity with `drop_if_full` (full maps to

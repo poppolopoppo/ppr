@@ -676,12 +676,12 @@ with full nonzero Catmull-Rom support. Current reactive pixels use finite alpha
 current static metadata to recover. Moving parallax backgrounds reject history.
 Bloom and present consume final history; display-only policy never resets it.
 
-`RetroLightingPublication` copies actual bound-generation completion fence,
-bounce epoch and probe min/count alongside the existing matching cohort values.
-No extra lighting GPU owner is retained merely for identity. A joint ring walk
-excludes history and retained picture; accepted fresh scenes alone commit
-history/jitter. Retained display state cannot replace the history producer's
-identity/camera. Failures preserve accepted history and do not advance phase.
+No lighting publication identity is retained: history and the retained picture
+match only the world/job/content identity, camera and extents. No extra lighting
+GPU owner is retained merely for identity. A joint ring walk excludes history
+and retained picture; accepted fresh scenes alone commit history/jitter.
+Retained display state cannot replace the history producer's identity/camera.
+Failures preserve accepted history and do not advance phase.
 
 Grid/Triangle final native MRT variants select this exact signature, retaining
 old one-target programs and intermediate splat/cache passes. Target1 is a binary
@@ -689,8 +689,8 @@ positive geometric mask with independent MAX blending; the same selected
 material/sample/mask/discard evaluation drives color and reactive coverage.
 Static opaque terrain/background write0; actor triangles, optical terrain and
 all final matter/disks mark actual coverage even at zero color opacity. Editor
-routes native sampling for spatial OR temporal2x and supplies the actual bound
-publication value. No Renderer API/type or Game activation is introduced.
+routes native sampling for spatial OR temporal2x. No Renderer API/type or Game
+activation is introduced.
 
 At3840x2160, extra history payload is199,065,600 bytes across3slots and reactive
 MSAA payload is24,883,200. Including existing raw MSAA color/depth, Hable current

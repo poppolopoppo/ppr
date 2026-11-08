@@ -263,11 +263,9 @@ namespace pP {
 
     Expected<CameraSnapshot> RetroPass::beginFrame(
         const RetroSettings &settings, const CameraSnapshot &camera, const int2 extent, const u64 world_generation,
-        const u64 world_job, const u64 world_content, const TimeSpan request_elapsed, const TimeSpan frame_delta,
-        const u64 lighting_revision, const RetroLightingPublication lighting_publication) {
+        const u64 world_job, const u64 world_content, const TimeSpan request_elapsed, const TimeSpan frame_delta) {
         return beginFrame(
-            settings, camera, extent, extent, world_generation, world_job, world_content, request_elapsed, frame_delta,
-            lighting_revision, lighting_publication);
+            settings, camera, extent, extent, world_generation, world_job, world_content, request_elapsed, frame_delta);
     }
 
     std::error_code RetroPass::validateFrameSettings(
@@ -325,7 +323,7 @@ namespace pP {
     Expected<CameraSnapshot> RetroPass::beginFrame(
         const RetroSettings &settings, const CameraSnapshot &camera, const int2 extent, const int2 output_extent,
         const u64 world_generation, const u64 world_job, const u64 world_content, const TimeSpan request_elapsed,
-        const TimeSpan frame_delta, const u64 lighting_revision, const RetroLightingPublication lighting_publication) {
+        const TimeSpan frame_delta) {
         PPR_RETURN_UNEXPECTED_ON_FAIL(RetroPass, validateFrameSettings(settings, extent, output_extent));
         PPR_RETURN_UNEXPECTED_ON_FAIL(
             RetroPass, not settings.m_spatial_enabled or m_spatial_supported
@@ -363,8 +361,6 @@ namespace pP {
                                              previous.m_temporal_2x and
                                              not camera.m_has_camera_cut and
                                              identity == previous.m_picture_identity and
-                                             lighting_revision == previous.m_picture_lighting_revision and
-                                             lighting_publication == previous.m_picture_lighting_publication and
                                              camera.m_camera_mode == previous.m_picture_camera.m_camera_mode and
                                              extent.x == previous.m_extent.x and
                                              extent.y == previous.m_extent.y and
@@ -377,7 +373,6 @@ namespace pP {
             const bool protects_temporal2x = m_history_valid and m_scene_slots[m_history_slot].m_temporal_2x;
             if (not protects_temporal2x and (camera.m_has_camera_cut or
                                                 identity != m_content_identity or
-                                                lighting_revision != m_content_lighting_revision or
                                                 camera.m_camera_mode != m_camera.m_camera_mode or
                                                 extent.x != m_frame_extent.x or
                                                 extent.y != m_frame_extent.y or
@@ -400,8 +395,6 @@ namespace pP {
         m_frame_extent = extent;
         m_output_extent = output_extent;
         m_content_identity = identity;
-        m_content_lighting_revision = lighting_revision;
-        m_lighting_publication = lighting_publication;
         m_request_elapsed = request_elapsed;
         m_frame_delta = frame_delta;
         m_camera = camera;
@@ -612,7 +605,6 @@ namespace pP {
         m_temporal_2x_history_eligible = false;
         m_frame_phase = 0u;
         m_settings.m_temporal_2x_enabled = false;
-        m_lighting_publication = {};
         m_last_temporal_2x_submission.reset();
 
         m_bloom_roots = {};
@@ -965,14 +957,11 @@ namespace pP {
         m_settings = slot.m_picture_settings;
         m_camera = slot.m_picture_camera;
         m_content_identity = slot.m_picture_identity;
-        m_content_lighting_revision = slot.m_picture_lighting_revision;
-        m_lighting_publication = slot.m_picture_lighting_publication;
         m_request_elapsed = slot.m_picture_request_elapsed;
         m_frame_extent = slot.m_extent;
         m_output_extent = slot.m_output_extent;
         return RetroCompletedPicture{
-            slot.m_picture_camera, slot.m_picture_identity, slot.m_picture_request_elapsed, slot.m_output_extent,
-            slot.m_picture_lighting_revision, slot.m_picture_lighting_publication};
+            slot.m_picture_camera, slot.m_picture_identity, slot.m_picture_request_elapsed, slot.m_output_extent};
     }
 
     std::error_code RetroPass::prepareScene(
@@ -1192,8 +1181,6 @@ namespace pP {
         m_scene_recorded = true;
         slot.m_picture_camera = m_camera;
         slot.m_picture_identity = m_content_identity;
-        slot.m_picture_lighting_revision = m_content_lighting_revision;
-        slot.m_picture_lighting_publication = m_lighting_publication;
         slot.m_picture_request_elapsed = m_request_elapsed;
         slot.m_picture_settings = m_settings;
         prepared = true;
@@ -2243,7 +2230,6 @@ namespace pP {
             const auto &slot = m_scene_slots[m_scene_slot];
             if (slot.m_temporal_2x) {
                 RetroTemporal2xSubmission observation{};
-                observation.m_lighting_publication = slot.m_picture_lighting_publication;
                 observation.m_submission = submit_value;
                 observation.m_raster_extent = slot.m_extent;
                 observation.m_output_extent = slot.m_output_extent;

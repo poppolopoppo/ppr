@@ -41,22 +41,10 @@ export namespace pP {
         float m_ev_max{4.0f};
     };
 
-    // Actual immutable lighting publication used by this scene. The existing
-    // world/job/content/revision arguments identify its matching cohort.
-    struct RetroLightingPublication {
-        FenceCompletionValue m_completion{kFenceValueNone};
-        u64 m_bounce_epoch{};
-        std::array<i32, 2> m_probe_minimum{};
-        std::array<u32, 2> m_probe_counts{};
-
-        [[nodiscard]] bool operator==(const RetroLightingPublication &) const noexcept = default;
-    };
-
     // Accepted fresh temporal2x encoding, without resource ownership. A bound
     // history was CPU-eligible and its real SRV was bound; this does not measure
     // per-pixel history influence. No history fence means the read slot is absent.
     struct RetroTemporal2xSubmission {
-        RetroLightingPublication m_lighting_publication{};
         FenceCompletionValue m_submission{kFenceValueNone};
         FenceCompletionValue m_history_submission{kFenceValueNone};
         int2 m_raster_extent{zero_v};
@@ -74,8 +62,6 @@ export namespace pP {
         std::array<u64, 3> m_world_identity{}; // generation, job, content
         TimeSpan m_request_elapsed{};
         int2 m_output_extent{zero_v};
-        u64 m_lighting_revision{};
-        RetroLightingPublication m_lighting_publication{};
     };
 
     class RetroPass final {
@@ -141,12 +127,11 @@ export namespace pP {
         // distinct from request_elapsed (a cumulative request timestamp).
         [[nodiscard]] Expected<CameraSnapshot> beginFrame(
             const RetroSettings &settings, const CameraSnapshot &camera, int2 extent, u64 world_generation,
-            u64 world_job = 0u, u64 world_content = 0u, TimeSpan request_elapsed = {}, TimeSpan frame_delta = {},
-            u64 lighting_revision = 0u, RetroLightingPublication lighting_publication = {});
+            u64 world_job = 0u, u64 world_content = 0u, TimeSpan request_elapsed = {}, TimeSpan frame_delta = {});
         [[nodiscard]] Expected<CameraSnapshot> beginFrame(
             const RetroSettings &settings, const CameraSnapshot &camera, int2 raster_extent, int2 output_extent,
             u64 world_generation, u64 world_job = 0u, u64 world_content = 0u, TimeSpan request_elapsed = {},
-            TimeSpan frame_delta = {}, u64 lighting_revision = 0u, RetroLightingPublication lighting_publication = {});
+            TimeSpan frame_delta = {});
         [[nodiscard]] bool temporalActive() const noexcept {
             return m_settings.m_temporal_enabled;
         }
@@ -211,8 +196,6 @@ export namespace pP {
             rhi::ComPtr<rhi::IBuffer> m_target_ev{};
             CameraSnapshot m_picture_camera{};
             std::array<u64, 3> m_picture_identity{};
-            u64 m_picture_lighting_revision{};
-            RetroLightingPublication m_picture_lighting_publication{};
             FenceCompletionValue m_content_submit{kFenceValueNone};
             FenceCompletionValue m_last_use{kFenceValueNone};
             TimeSpan m_picture_request_elapsed{};
@@ -311,8 +294,6 @@ export namespace pP {
 
         std::array<SceneTarget, kFrameRingSlots> m_scene_slots{};
         std::array<u64, 3u> m_content_identity{};
-        u64 m_content_lighting_revision{};
-        RetroLightingPublication m_lighting_publication{};
         std::optional<RetroTemporal2xSubmission> m_last_temporal_2x_submission{};
         int2 m_frame_extent{zero_v};
         int2 m_output_extent{zero_v};

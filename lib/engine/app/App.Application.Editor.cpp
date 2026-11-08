@@ -1696,7 +1696,6 @@ namespace pP {
                                       : packet.m_framebuffer_size;
         CameraSnapshot raster_camera = packet.m_camera;
         CameraSnapshot scene_camera = packet.m_camera;
-        RetroLightingPublication frame_lighting_publication{};
 
         if (not particles_current) {
             out_result.m_dropped = true;
@@ -1753,8 +1752,7 @@ namespace pP {
                 const auto raster = m_retro_pass->beginFrame(
                     request.m_retro, scene_camera, retro_extent,
                     native_samples ? packet.m_framebuffer_size : retro_extent, identity.m_world_generation,
-                    identity.m_job_id, identity.m_content_fingerprint, TimeSpan{}, packet.m_delta_time, 0u,
-                    frame_lighting_publication);
+                    identity.m_job_id, identity.m_content_fingerprint, TimeSpan{}, packet.m_delta_time);
                 PPR_RETURN_ERROR_ON_FAIL(Editor, raster);
 
                 raster_camera = *raster;
@@ -1990,7 +1988,6 @@ namespace pP {
             const std::optional<RenderPipelineSignature> *m_scene_signature;
             const int2 *m_scene_extent;
             const int2 *m_output_extent;
-            const RetroLightingPublication *m_lighting_publication;
             bool m_temporal_2x;
             bool m_done{};
 
@@ -2040,8 +2037,7 @@ namespace pP {
                             observed->m_raster_extent.x == m_scene_extent->x and
                             observed->m_raster_extent.y == m_scene_extent->y and
                             observed->m_output_extent.x == m_output_extent->x and
-                            observed->m_output_extent.y == m_output_extent->y and
-                            observed->m_lighting_publication == *m_lighting_publication) {
+                            observed->m_output_extent.y == m_output_extent->y) {
                             m_out->m_temporal_2x_submission = *observed;
                         }
                     }
@@ -2062,8 +2058,7 @@ namespace pP {
         };
         SubmitFateFinalizer submit_fate_guard{
             this, &renderer, &out_result, previously_submitted, &frame_err, &captured_scene_signature,
-            &captured_scene_extent, &packet.m_framebuffer_size, &frame_lighting_publication,
-            request.m_retro.m_temporal_2x_enabled};
+            &captured_scene_extent, &packet.m_framebuffer_size, request.m_retro.m_temporal_2x_enabled};
 
         bool capture_image_acquired{};
         const u64 previous_capture_sequence = m_frame_capture_attempted_sequence;

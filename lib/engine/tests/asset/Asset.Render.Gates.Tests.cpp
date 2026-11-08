@@ -1605,10 +1605,10 @@ ReactiveOutput fragmentHdrReactive(Vertex input,uint sample:SV_SampleIndex) {
             const u32 edge = 128u, CameraSnapshot *const raster_out = nullptr,
             const RetroSettings *const rejected = nullptr, const bool draw_ui = false,
             const std::error_code expected_error = {}, const bool retain_only = false,
-            const bool reject_prepare = false, const TimeSpan request_elapsed = {}, const u64 lighting_revision = 0u,
+            const bool reject_prepare = false, const TimeSpan request_elapsed = {},
             const HdrPattern *const pattern = nullptr, HdrFixtureDrawState *const reused_draw = nullptr,
-            const RetroLightingPublication publication = {}, const CameraSnapshot *const camera_in = nullptr,
-            rhi::IShaderProgram *const overlay_program = nullptr, const bool reject_after_prepare = false) {
+            const CameraSnapshot *const camera_in = nullptr, rhi::IShaderProgram *const overlay_program = nullptr,
+            const bool reject_after_prepare = false) {
             const auto rhi = SharedGpu::rhiService();
             Renderer *const renderer = SharedGpu::renderer();
             PPR_TEST_ASSERT(rhi.isValid() and renderer != nullptr);
@@ -1633,7 +1633,6 @@ ReactiveOutput fragmentHdrReactive(Vertex input,uint sample:SV_SampleIndex) {
                     PPR_TEST_ASSERT(
                         after.m_output_extent.x == before.m_output_extent.x and
                         after.m_output_extent.y == before.m_output_extent.y);
-                    PPR_TEST_ASSERT(after.m_lighting_publication == before.m_lighting_publication);
                 }
             };
 
@@ -1665,7 +1664,6 @@ ReactiveOutput fragmentHdrReactive(Vertex input,uint sample:SV_SampleIndex) {
                 const auto completed = picture.restoreCompletedPicture(renderer->completedFenceValue());
                 PPR_TEST_ASSERT(completed and completed->m_world_identity[0] == 1u);
                 PPR_TEST_ASSERT(completed->m_request_elapsed == request_elapsed);
-                PPR_TEST_ASSERT(completed->m_lighting_revision == lighting_revision);
                 raster = completed->m_camera;
                 if (picture.spatialActive() or picture.temporal2xActive()) {
                     picture_extent = completed->m_output_extent;
@@ -1673,7 +1671,7 @@ ReactiveOutput fragmentHdrReactive(Vertex input,uint sample:SV_SampleIndex) {
             } else {
                 raster = picture.beginFrame(
                     settings, camera, int2{int(scene_edge), int(scene_edge)}, int2{int(edge), int(edge)}, 1u, 0u, 0u,
-                    request_elapsed, TimeSpan{}, lighting_revision, publication);
+                    request_elapsed, TimeSpan{});
             }
             PPR_TEST_ASSERT(raster.has_value());
             if (raster_out != nullptr) {
@@ -1909,7 +1907,7 @@ ReactiveOutput fragmentHdrReactive(Vertex input,uint sample:SV_SampleIndex) {
             const auto capture = [&](const RetroSettings &settings, const HdrPattern &pattern, const u32 edge = 128u,
                                      const rhi::Format format = rhi::Format::RGBA16Float, const bool ui = false) {
                 return captureHdr_(
-                    picture, program, format, settings, edge, nullptr, nullptr, ui, {}, false, false, {}, 0u, &pattern,
+                    picture, program, format, settings, edge, nullptr, nullptr, ui, {}, false, false, {}, &pattern,
                     &producer);
             };
 
@@ -1997,7 +1995,7 @@ ReactiveOutput fragmentHdrReactive(Vertex input,uint sample:SV_SampleIndex) {
             const HdrPattern impulse{{16.0f, 16.0f, 16.0f}, 2u};
             const auto original = captureHdr_(
                 picture, program, rhi::Format::RGBA16Float, settings, 128u, nullptr, nullptr, false, {}, false, false,
-                {}, 0u, &impulse, &producer);
+                {}, &impulse, &producer);
 
             for (const RetroSettings rejected:
                 {RetroSettings{.m_spatial_enabled = true, .m_bloom_enabled = true},
@@ -2036,7 +2034,7 @@ ReactiveOutput fragmentHdrReactive(Vertex input,uint sample:SV_SampleIndex) {
             const HdrPattern replacement{{2.0f, 2.0f, 2.0f}};
             const auto resized = captureHdr_(
                 picture, program, rhi::Format::RGBA16Float, settings, 10u, nullptr, nullptr, false, {}, false, false,
-                {}, 0u, &replacement, &producer);
+                {}, &replacement, &producer);
             const auto held = captureHdr_(
                 picture, program, rhi::Format::RGBA16Float, ignored, 10u, nullptr, nullptr, false, {}, true);
             checkHdrIdentity_(resized, held, 10u);
@@ -2069,13 +2067,12 @@ ReactiveOutput fragmentHdrReactive(Vertex input,uint sample:SV_SampleIndex) {
                 PPR_TEST_ASSERT(not current_control.shutdown());
             };
             HdrFixtureDrawState draw_state{};
-            RetroLightingPublication publication{};
             const auto capture = [&](RetroPass &owner, const HdrPattern &pattern,
                                      CameraSnapshot *const raster_out = nullptr, const u32 edge = 128u) {
                 const auto previous = owner.lastTemporal2xSubmission();
                 const auto pixels = captureHdr_(
                     owner, *program, rhi::Format::RGBA16Float, settings, edge, raster_out, nullptr, false, {}, false,
-                    false, {}, 0u, &pattern, &draw_state, publication, &camera, &overlay);
+                    false, {}, &pattern, &draw_state, &camera, &overlay);
 
                 const auto observation = owner.lastTemporal2xSubmission();
                 PPR_TEST_ASSERT(observation.has_value());
@@ -2087,7 +2084,6 @@ ReactiveOutput fragmentHdrReactive(Vertex input,uint sample:SV_SampleIndex) {
                     observation->m_raster_extent.y == int(edge / 2u));
                 PPR_TEST_ASSERT(
                     observation->m_output_extent.x == int(edge) and observation->m_output_extent.y == int(edge));
-                PPR_TEST_ASSERT(observation->m_lighting_publication == publication);
 
                 if (raster_out != nullptr) {
                     const auto expected_jitter = RetroPass::temporalJitter(observation->m_phase) * (4.0f / float(edge));
@@ -2190,8 +2186,8 @@ ReactiveOutput fragmentHdrReactive(Vertex input,uint sample:SV_SampleIndex) {
 
             std::ignore = captureHdr_(
                 picture, *program, rhi::Format::RGBA16Float, settings, 128u, &raster, nullptr, false,
-                std::make_error_code(std::errc::operation_canceled), false, false, {}, 0u, &initial, &draw_state,
-                publication, &camera, &overlay, true);
+                std::make_error_code(std::errc::operation_canceled), false, false, {}, &initial, &draw_state, &camera,
+                &overlay, true);
             assert_phase(raster, 1u);
             std::ignore = capture(picture, initial, &raster);
             assert_phase(raster, 1u);
@@ -2205,8 +2201,8 @@ ReactiveOutput fragmentHdrReactive(Vertex input,uint sample:SV_SampleIndex) {
             const RetroSettings spatial_switch{.m_spatial_enabled = true};
             std::ignore = captureHdr_(
                 picture, overlay, rhi::Format::RGBA16Float, spatial_switch, 128u, nullptr, nullptr, false,
-                std::make_error_code(std::errc::operation_canceled), false, false, {}, 0u, &initial, nullptr,
-                publication, &camera, &overlay, true);
+                std::make_error_code(std::errc::operation_canceled), false, false, {}, &initial, nullptr, &camera,
+                &overlay, true);
 
             const auto abandoned = picture.beginFrame(RetroSettings{}, camera, int2{128, 128}, 99u);
             PPR_TEST_ASSERT(abandoned.has_value());
@@ -2233,7 +2229,7 @@ ReactiveOutput fragmentHdrReactive(Vertex input,uint sample:SV_SampleIndex) {
             // A FRESH accepted different-mode scene does invalidate TSR history.
             std::ignore = captureHdr_(
                 picture, overlay, rhi::Format::RGBA16Float, spatial_switch, 128u, nullptr, nullptr, false, {}, false,
-                false, {}, 0u, &initial, nullptr, publication, &camera, &overlay);
+                false, {}, &initial, nullptr, &camera, &overlay);
 
             camera.m_has_camera_cut = true;
             const auto fresh_current = capture(current_control, current_after_switch);
@@ -2242,17 +2238,6 @@ ReactiveOutput fragmentHdrReactive(Vertex input,uint sample:SV_SampleIndex) {
             const auto reset_after_switch = capture(picture, after_switch, &raster);
             assert_phase(raster, 0u);
             checkHdrIdentity_(reset_after_switch, fresh_current, 128u);
-
-            publication.m_completion = renderer->lastSubmittedFenceValue();
-            publication.m_probe_counts = {64u, 64u};
-            std::ignore = capture(picture, initial, &raster);
-            assert_phase(raster, 0u);
-            publication.m_probe_minimum[0] = 32;
-            std::ignore = capture(picture, initial, &raster);
-            assert_phase(raster, 0u);
-            ++publication.m_bounce_epoch;
-            std::ignore = capture(picture, initial, &raster);
-            assert_phase(raster, 0u);
 
             settings.m_hdr_enabled = true;
             settings.m_bloom_enabled = true;
@@ -2268,10 +2253,10 @@ ReactiveOutput fragmentHdrReactive(Vertex input,uint sample:SV_SampleIndex) {
             const RetroSettings ignored{};
             const auto held = captureHdr_(
                 picture, *program, rhi::Format::RGBA16Float, ignored, 128u, nullptr, nullptr, false, {}, true, false,
-                {}, 0u, nullptr, nullptr, publication, nullptr, &overlay);
+                {}, nullptr, nullptr, nullptr, &overlay);
             const auto clipped = captureHdr_(
                 picture, *program, rhi::Format::RGBA16Float, ignored, 96u, nullptr, nullptr, false, {}, true, false, {},
-                0u, nullptr, nullptr, publication, nullptr, &overlay);
+                nullptr, nullptr, nullptr, &overlay);
             checkHdrIdentity_(retained, held, 128u);
             checkHdrIdentity_(retained, clipped, 96u);
             std::ignore = capture(picture, initial, &raster);
@@ -2279,7 +2264,7 @@ ReactiveOutput fragmentHdrReactive(Vertex input,uint sample:SV_SampleIndex) {
 
             const auto ui = captureHdr_(
                 picture, *program, rhi::Format::RGBA16Float, settings, 128u, &raster, nullptr, true, {}, false, false,
-                {}, 0u, &initial, &draw_state, publication, &camera, &overlay);
+                {}, &initial, &draw_state, &camera, &overlay);
             PPR_TEST_ASSERT(hdrChannel_(ui, 4u, 4u, 0u) == 0.125);
             PPR_TEST_ASSERT(hdrChannel_(ui, 4u, 4u, 1u) == 0.25);
             PPR_TEST_ASSERT(hdrChannel_(ui, 4u, 4u, 2u) == 0.5);
@@ -2452,9 +2437,8 @@ ReactiveOutput fragmentHdrReactive(Vertex input,uint sample:SV_SampleIndex) {
                 hdrChannel_(near_fallback, 64u, 64u, 0u), 1.0 / double(near_plane.m_depth), perspective_recovered);
 
             std::println(
-                "TEMPORAL2X layout settings={}/{} publication={}/{} pattern={}/{} draw-state={}/{} size/alignment",
-                sizeof(RetroSettings), alignof(RetroSettings), sizeof(RetroLightingPublication),
-                alignof(RetroLightingPublication), sizeof(HdrPattern), alignof(HdrPattern), sizeof(HdrFixtureDrawState),
+                "TEMPORAL2X layout settings={}/{} pattern={}/{} draw-state={}/{} size/alignment", sizeof(RetroSettings),
+                alignof(RetroSettings), sizeof(HdrPattern), alignof(HdrPattern), sizeof(HdrFixtureDrawState),
                 alignof(HdrFixtureDrawState));
             std::println(
                 "TEMPORAL2X texture payload at4K: history=199065600 reactive=24883200 bytes/3slots; overlap/driver overhead excluded");
@@ -2603,15 +2587,15 @@ ReactiveOutput fragmentHdrReactive(Vertex input,uint sample:SV_SampleIndex) {
             const TimeSpan original_request = std::chrono::milliseconds{10};
             const auto original = captureHdr_(
                 retained, *program, rhi::Format::RGBA16Float, current, 128u, nullptr, nullptr, false, {}, false, false,
-                original_request, 17u);
+                original_request);
             PPR_TEST_ASSERT(not retained.restoreCompletedPicture(kFenceValueNone));
 
             const auto repeated = captureHdr_(
                 retained, *program, rhi::Format::RGBA16Float, current, 128u, nullptr, nullptr, false, {}, true, false,
-                original_request, 17u);
+                original_request);
             const auto after_rejection = captureHdr_(
                 retained, *program, rhi::Format::RGBA16Float, current, 128u, nullptr, nullptr, false, {}, true, true,
-                original_request, 17u);
+                original_request);
             for (u32 tile = 0u; tile < 32u; ++tile) {
                 for (u32 channel = 0u; channel < 3u; ++channel) {
                     const u32 x = tile * 4u + 2u;
