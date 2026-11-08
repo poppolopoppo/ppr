@@ -1673,7 +1673,7 @@ ReactiveOutput fragmentHdrReactive(Vertex input,uint sample:SV_SampleIndex) {
             } else {
                 raster = picture.beginFrame(
                     settings, camera, int2{int(scene_edge), int(scene_edge)}, int2{int(edge), int(edge)}, 1u, 0u, 0u,
-                    request_elapsed, lighting_revision, publication);
+                    request_elapsed, TimeSpan{}, lighting_revision, publication);
             }
             PPR_TEST_ASSERT(raster.has_value());
             if (raster_out != nullptr) {

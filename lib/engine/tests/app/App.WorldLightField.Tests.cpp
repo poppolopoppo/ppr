@@ -2245,6 +2245,22 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(emitter_ev >= ev_min);
         };
 
+        PPR_UNIT_TEST (cpu_adaptation_alpha) {
+            // A 60 Hz frame blends a small fraction, never an instant snap.
+            const float slow = RetroPass::adaptationAlpha(std::chrono::milliseconds{16}, 0.7f);
+            PPR_TEST_ASSERT(slow > 0.0f and slow < 0.1f);
+
+            // A cumulative timestamp (e.g. an hour since startup) would drive the
+            // blend to ~1; the adaptation path must never treat request_elapsed as
+            // the frame delta, or this is what it would compute.
+            const float timestamp = RetroPass::adaptationAlpha(std::chrono::hours{1}, 0.7f);
+            PPR_TEST_ASSERT(timestamp > 0.99f);
+
+            // Zero delta and non-positive tau never adapt.
+            PPR_TEST_ASSERT(RetroPass::adaptationAlpha(TimeSpan{}, 0.7f) == 0.0f);
+            PPR_TEST_ASSERT(RetroPass::adaptationAlpha(std::chrono::milliseconds{16}, 0.0f) == 0.0f);
+        };
+
         // GPU smoke drives the real luminance_histogram.slang + auto_exposure.slang
         // compute entries against a synthetic uniform HDR scene, then reads the
         // adapted offset back once (no per-frame readback in production).
@@ -2368,7 +2384,8 @@ namespace pP::tests::detail {
                         desc.memoryType = rhi::MemoryType::DeviceLocal;
                         desc.usage = static_cast<rhi::BufferUsage>(
                             static_cast<u32>(rhi::BufferUsage::ShaderResource) |
-                            static_cast<u32>(rhi::BufferUsage::UnorderedAccess));
+                            static_cast<u32>(rhi::BufferUsage::UnorderedAccess) |
+                            static_cast<u32>(rhi::BufferUsage::CopySource));
                         desc.defaultState = rhi::ResourceState::UnorderedAccess;
                         desc.label = label;
                         PPR_TEST_ASSERT(not make_error_code(device.createBuffer(desc, nullptr, out.writeRef())));
@@ -2445,25 +2462,47 @@ namespace pP::tests::detail {
                     PPR_TEST_ASSERT(not m_fence.waitFor(value));
                 }
 
-                // Runs the histogram + adaptation chain once and returns the newly
-                // written adapted offset (fenced readback).
-                float adapt(const float alpha, const bool enabled) {
-                    struct alignas(16) HistogramParameters {
+                template<typename T>
+                std::vector<T> readBuffer(rhi::IBuffer *const source) {
+                    rhi::BufferDesc description{};
+                    description.size = source->getDesc().size;
+                    description.elementSize = 0u;
+                    description.memoryType = rhi::MemoryType::ReadBack;
+                    description.usage = rhi::BufferUsage::CopyDestination;
+                    description.defaultState = rhi::ResourceState::CopyDestination;
+                    description.label = "histogram adaptation readback";
+                    rhi::ComPtr<rhi::IBuffer> copy;
+                    PPR_TEST_ASSERT(
+                        not make_error_code(m_rhi->getDevice().createBuffer(description, nullptr, copy.writeRef())));
+
+                    rhi::ComPtr<rhi::ICommandEncoder> encoder;
+                    PPR_TEST_ASSERT(not make_error_code(m_queue->createCommandEncoder(encoder.writeRef())));
+                    encoder->setBufferState(source, rhi::ResourceState::CopySource);
+                    encoder->copyBuffer(copy, 0u, source, 0u, source->getDesc().size);
+                    encoder->setBufferState(source, rhi::ResourceState::UnorderedAccess);
+                    submit(*encoder);
+
+                    std::vector<T> result(source->getDesc().size / sizeof(T));
+                    void *mapped{};
+                    PPR_TEST_ASSERT(
+                        not make_error_code(m_rhi->getDevice().mapBuffer(copy, rhi::CpuAccessMode::Read, &mapped)));
+                    std::memcpy(result.data(), mapped, result.size() * sizeof(T));
+                    PPR_TEST_ASSERT(not make_error_code(m_rhi->getDevice().unmapBuffer(copy)));
+                    return result;
+                }
+
+                // Runs clear -> luminance downsample -> histogram build -> reduce
+                // and returns the reduced target EV via fenced buffer readback.
+                float reduceTarget() {
+                    struct HistogramParameters {
                         u32 m_source_extent[2];
                         u32 m_luminance_extent[2];
                         u32 m_reserved0;
                         u32 m_reserved1;
                     };
-                    struct alignas(16) AutoParameters {
-                        float m_alpha;
-                        float m_ev_min;
-                        float m_ev_max;
-                        u32 m_enabled;
-                    };
 
                     const u32 edge = 64u;
                     const HistogramParameters histogram{{edge, edge}, {edge, edge}, 0u, 0u};
-                    const AutoParameters automatic{alpha, -4.0f, 4.0f, enabled ? 1u : 0u};
 
                     rhi::ComPtr<rhi::ICommandEncoder> encoder;
                     PPR_TEST_ASSERT(not make_error_code(m_queue->createCommandEncoder(encoder.writeRef())));
@@ -2501,8 +2540,29 @@ namespace pP::tests::detail {
                     dispatch(2u, edge / 8u, edge / 8u); // buildHistogram
                     encoder->globalBarrier();
                     dispatch(3u, 1u, 1u); // reduceHistogram
-                    encoder->globalBarrier();
+                    submit(*encoder);
 
+                    const auto out = readBuffer<float>(m_target);
+                    PPR_TEST_ASSERT(out.size() == 1u);
+                    return out[0];
+                }
+
+                // Runs one adaptation frame (the histogram target must already be
+                // reduced) and returns the newly written adapted offset.
+                float adapt(const TimeSpan dt, const float tau, const bool enabled) {
+                    struct AutoParameters {
+                        float m_alpha;
+                        float m_ev_min;
+                        float m_ev_max;
+                        u32 m_enabled;
+                    };
+
+                    const AutoParameters automatic{RetroPass::adaptationAlpha(dt, tau), -4.0f, 4.0f, enabled ? 1u : 0u};
+
+                    rhi::ComPtr<rhi::ICommandEncoder> encoder;
+                    PPR_TEST_ASSERT(not make_error_code(m_queue->createCommandEncoder(encoder.writeRef())));
+
+                    const rhi::SubresourceRange range{.layer = 0u, .layerCount = 1u, .mip = 0u, .mipCount = 1u};
                     const u32 previous = m_exposure_index;
                     const u32 current = 1u - m_exposure_index;
                     m_exposure_index = current;
@@ -2565,8 +2625,11 @@ namespace pP::tests::detail {
             };
 
             PPR_UNIT_TEST (gpu_adaptation_smoke) {
+                constexpr float ev_min = -4.0f;
+                constexpr float ev_max = 4.0f;
+                const TimeSpan dt = std::chrono::milliseconds{16}; // ~60 Hz frame
                 const float tau = 0.7f;
-                const float alpha = 1.0f - std::exp(-(1.0f / 60.0f) / tau);
+                const float alpha = RetroPass::adaptationAlpha(dt, tau);
 
                 Fixture fixture;
                 fixture.initialize(0.18f);
@@ -2574,17 +2637,38 @@ namespace pP::tests::detail {
                     fixture.shutdown();
                 };
 
-                // Two adapted frames: finite, bounded change, within the clamp.
-                const float first = fixture.adapt(alpha, true);
-                const float second = fixture.adapt(alpha, true);
-                PPR_TEST_ASSERT(std::isfinite(first) and std::isfinite(second));
-                PPR_TEST_ASSERT(first >= -4.0f and first <= 4.0f);
-                PPR_TEST_ASSERT(second >= -4.0f and second <= 4.0f);
-                PPR_TEST_ASSERT(std::abs(second - first) < 1.0f);
+                // CPU oracle target for the uniform 0.18 scene (64x64 luminance).
+                // The GPU reduction writes the unclamped target EV; the final clamp
+                // happens in adaptExposure, so compare against the unclamped value.
+                std::vector<float> uniform(std::size_t(64u) * 64u, 0.18f);
+                std::array<u32, RetroPass::kHistogramBins> histogram{};
+                for (const float lum: uniform) {
+                    ++histogram[RetroPass::luminanceBin(RetroPass::log2Luminance(lum))];
+                }
+                const float cpu_target = RetroPass::averageLog2Luminance(histogram, static_cast<u32>(uniform.size())) -
+                                         std::log2(RetroPass::kMiddleGrayLuminance);
+
+                // GPU reduced target must match the CPU oracle (numeric, not just
+                // finiteness): a broken histogram/reduction fails here.
+                const float gpu_target = fixture.reduceTarget();
+                PPR_TEST_ASSERT(std::isfinite(gpu_target));
+                PPR_TEST_ASSERT(std::abs(gpu_target - cpu_target) < 0.05f);
+
+                // A 60 Hz frame adapts slowly toward the target: the first frame is
+                // target*alpha, not an instant snap to the target.
+                const float first = fixture.adapt(dt, tau, true);
+                PPR_TEST_ASSERT(std::isfinite(first));
+                PPR_TEST_ASSERT(std::abs(first - cpu_target * alpha) < 0.05f);
+                PPR_TEST_ASSERT(std::abs(first) < std::abs(cpu_target) * 0.5f);
+
+                // A second identical frame moves a little further, still bounded.
+                const float second = fixture.adapt(dt, tau, true);
+                PPR_TEST_ASSERT(std::isfinite(second) and second >= ev_min and second <= ev_max);
+                PPR_TEST_ASSERT(std::abs(second - first) < 0.05f);
 
                 // Fixed exposure (disabled) writes the zero offset deterministically.
-                const float fixed_a = fixture.adapt(alpha, false);
-                const float fixed_b = fixture.adapt(alpha, false);
+                const float fixed_a = fixture.adapt(dt, tau, false);
+                const float fixed_b = fixture.adapt(dt, tau, false);
                 PPR_TEST_ASSERT(fixed_a == 0.0f);
                 PPR_TEST_ASSERT(fixed_b == 0.0f);
             };
@@ -2592,7 +2676,7 @@ namespace pP::tests::detail {
 
         const UnitTest histogram_adaptation = UnitTest::Named("histogram_adaptation") /
                                               [](UnitTest::IRun &run) -> void {
-            run.recurse({cpu_histogram_math, Gpu::gpu_adaptation_smoke});
+            run.recurse({cpu_histogram_math, cpu_adaptation_alpha, Gpu::gpu_adaptation_smoke});
         };
     }
 }

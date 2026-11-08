@@ -104,6 +104,9 @@ export namespace pP {
         [[nodiscard]] static float histogramBinCenterLog2(u32 bin) noexcept;
         [[nodiscard]] static float averageLog2Luminance(std::span<const u32> histogram, u32 total_pixels) noexcept;
         [[nodiscard]] static float targetEv(float average_log2_lum, float ev_min, float ev_max) noexcept;
+        // Exponential-approach blend for a frame delta and time constant. A
+        // non-positive delta or tau yields zero (no adaptation), never a snap.
+        [[nodiscard]] static float adaptationAlpha(TimeSpan dt, float tau) noexcept;
         [[nodiscard]] static int2 sceneExtent(int2 native_extent, u32 pixel_scale) noexcept;
         [[nodiscard]] static RenderPipelineSignature scenePipelineSignature(bool temporal = false) noexcept;
         [[nodiscard]] static RenderPipelineSignature temporal2xScenePipelineSignature() noexcept;
@@ -120,14 +123,16 @@ export namespace pP {
         // Invalid exposure rejects before changing policy, history or resources.
         // HDR producers supply finite RGBA16F values; negative intermediates
         // remain linear until the display boundary. No texture scan is implied.
+        // frame_delta is the per-frame elapsed time driving eye adaptation; it is
+        // distinct from request_elapsed (a cumulative request timestamp).
         [[nodiscard]] Expected<CameraSnapshot> beginFrame(
             const RetroSettings &settings, const CameraSnapshot &camera, int2 extent, u64 world_generation,
-            u64 world_job = 0u, u64 world_content = 0u, TimeSpan request_elapsed = {}, u64 lighting_revision = 0u,
-            RetroLightingPublication lighting_publication = {});
+            u64 world_job = 0u, u64 world_content = 0u, TimeSpan request_elapsed = {}, TimeSpan frame_delta = {},
+            u64 lighting_revision = 0u, RetroLightingPublication lighting_publication = {});
         [[nodiscard]] Expected<CameraSnapshot> beginFrame(
             const RetroSettings &settings, const CameraSnapshot &camera, int2 raster_extent, int2 output_extent,
             u64 world_generation, u64 world_job = 0u, u64 world_content = 0u, TimeSpan request_elapsed = {},
-            u64 lighting_revision = 0u, RetroLightingPublication lighting_publication = {});
+            TimeSpan frame_delta = {}, u64 lighting_revision = 0u, RetroLightingPublication lighting_publication = {});
         [[nodiscard]] bool temporalActive() const noexcept {
             return m_settings.m_temporal_enabled;
         }
@@ -187,6 +192,8 @@ export namespace pP {
             rhi::ComPtr<rhi::ITextureView> m_luminance_view{};
             rhi::ComPtr<rhi::ITexture> m_exposure{};
             rhi::ComPtr<rhi::ITextureView> m_exposure_view{};
+            rhi::ComPtr<rhi::IBuffer> m_histogram{};
+            rhi::ComPtr<rhi::IBuffer> m_target_ev{};
             CameraSnapshot m_picture_camera{};
             std::array<u64, 3> m_picture_identity{};
             u64 m_picture_lighting_revision{};
@@ -237,6 +244,7 @@ export namespace pP {
         CameraSnapshot m_camera{};
         float4x4 m_previous_view_projection{identity_v};
         TimeSpan m_request_elapsed{};
+        TimeSpan m_frame_delta{};
 
         // CPU-side DawnBringer-32 palette (normalized sRGB bytes), copied into
         // the per-draw RetroParameters constant for the selected scene slot.
@@ -259,8 +267,6 @@ export namespace pP {
         rhi::ComPtr<rhi::IShaderProgram> m_auto_exposure_program{};
         rhi::ComPtr<rhi::IComputePipeline> m_auto_exposure_pipeline{};
         std::array<rhi::ComPtr<rhi::IShaderObject>, kFrameRingSlots> m_auto_exposure_roots{};
-        rhi::ComPtr<rhi::IBuffer> m_histogram_buffer{};
-        rhi::ComPtr<rhi::IBuffer> m_target_ev_buffer{};
         rhi::ComPtr<rhi::ITexture> m_empty_exposure{};
         rhi::ComPtr<rhi::ITextureView> m_empty_exposure_view{};
         // Injected service outlives this pass, including lazy first-use compilation.

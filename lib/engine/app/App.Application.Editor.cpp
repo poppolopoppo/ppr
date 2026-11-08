@@ -4226,7 +4226,7 @@ namespace pP {
                     request.m_retro, scene_camera, retro_extent,
                     native_samples ? packet.m_framebuffer_size : retro_extent, identity.m_world_generation,
                     identity.m_job_id, identity.m_content_fingerprint,
-                    lighting ? m_terrain_lighting->m_view_request_elapsed : TimeSpan{},
+                    lighting ? m_terrain_lighting->m_view_request_elapsed : TimeSpan{}, packet.m_delta_time,
                     bound_lighting ? bound_lighting->cohort().m_geometry_revision : 0u, publication);
                 PPR_RETURN_ERROR_ON_FAIL(Editor, raster);
 
