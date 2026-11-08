@@ -247,6 +247,31 @@ namespace pP::game::tests::detail::compat {
         }
     };
 
+    PPR_UNIT_TEST (field_world_lighting_parses_and_rejects_4096_map) {
+        Diagnostics small_diagnostics;
+        const auto small = resolveCli({"--world-lighting=field", "--map-size=1024"}, small_diagnostics);
+        PPR_TEST_ASSERT(small.has_value());
+        PPR_TEST_ASSERT(small->m_game.m_value.m_world_lighting == EWorldLighting::field);
+        PPR_TEST_ASSERT(small->m_game.m_value.m_map_size == 1024u);
+
+        Diagnostics medium_diagnostics;
+        const auto medium = resolveCli({"--world-lighting=field", "--map-size=2048"}, medium_diagnostics);
+        PPR_TEST_ASSERT(medium.has_value());
+        PPR_TEST_ASSERT(medium->m_game.m_value.m_world_lighting == EWorldLighting::field);
+
+        Diagnostics large_diagnostics;
+        const auto large = resolveCli({"--world-lighting=field", "--map-size=4096"}, large_diagnostics);
+        PPR_TEST_ASSERT(not large and large.error() == make_error_code(EConfigErrc::cross_field_invalid));
+
+        Diagnostics non_interactive_diagnostics;
+        const auto non_interactive = resolveCli({"--world-lighting=field", "--smoke"}, non_interactive_diagnostics);
+        PPR_TEST_ASSERT(not non_interactive.has_value());
+
+        Diagnostics help_diagnostics;
+        const auto help = gameHelpText();
+        PPR_TEST_ASSERT(help.find("field") != std::string::npos);
+    };
+
     PPR_UNIT_TEST (map_size_uses_one_numeric_domain_for_cli_and_toml) {
         Diagnostics defaults;
         const auto normal = resolveCli({}, defaults);
@@ -939,6 +964,7 @@ namespace pP::game::tests {
         _.recurse({
             detail::compat::selectors_pick_commands,
             detail::compat::lighting_showcase_is_explicit_interactive_and_never_auto_qualified,
+            detail::compat::field_world_lighting_parses_and_rejects_4096_map,
             detail::compat::simulation_tools_resolve_bounded_physical_settings,
             detail::compat::worldgen_validation_invocation,
             detail::compat::map_size_uses_one_numeric_domain_for_cli_and_toml,

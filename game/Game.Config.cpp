@@ -274,7 +274,7 @@ namespace pP::game {
             schema.m_options,
             valueOption(
                 "game.world_lighting", "world-lighting",
-                "Select legacy (default), temporal-cascades, direct-window, or single-bounce-window. The default boundary sky is black. Temporal cascades support the optional solar hour and editable lighting showcase."));
+                "Select legacy (default), temporal-cascades, direct-window, single-bounce-window, or field. The default boundary sky is BLACK. Temporal cascades support the optional solar hour and editable lighting showcase. Field is the camera-independent cascade field at 1024/2048 map sizes."));
 
         appendOption(
             schema.m_options,
@@ -599,7 +599,15 @@ namespace pP::game {
 
         const bool world_window = settings.m_world_lighting == EWorldLighting::temporal_cascades or
                                   settings.m_world_lighting == EWorldLighting::direct_window or
-                                  settings.m_world_lighting == EWorldLighting::single_bounce_window;
+                                  settings.m_world_lighting == EWorldLighting::single_bounce_window or
+                                  settings.m_world_lighting == EWorldLighting::field;
+
+        if (settings.m_world_lighting == EWorldLighting::field and settings.m_map_size == 4096u) {
+            const auto error = config::make_error_code(config::EConfigErrc::cross_field_invalid);
+            diagnostics.add(
+                "invocation", "game.map_size", "--world-lighting=field supports 1024 or 2048 map sizes", error);
+            PPR_RETURN_UNEXPECTED_ON_FAIL(GameConfig, error);
+        }
         if ((world_window and
                 (settings.m_command != EGameCommand::interactive or
                     (settings.m_lighting_showcase and settings.m_world_lighting != EWorldLighting::temporal_cascades) or

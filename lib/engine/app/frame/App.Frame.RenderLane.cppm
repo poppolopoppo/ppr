@@ -228,6 +228,11 @@ export namespace pP {
         std::optional<int2> m_lighting_extent{};
         u64 m_lighting_world{};
         u64 m_lighting_revision{}; // actually consumed field, or retained picture's old revision
+        // Field-mode diagnostics (no gating, no per-frame logs): the dense source
+        // revision and the cascade field's completed round-robin cycle. The cycle
+        // is set only when a field update ran this frame; both stay zero otherwise.
+        u64 m_lighting_source_revision{};
+        std::optional<u64> m_lighting_field_cycle{};
         std::optional<int2> m_lighting_target_extent{};
         // Only a freshly rendered complete field supplies this rectangle.
         // A retained picture never claims the newer in-progress coverage.

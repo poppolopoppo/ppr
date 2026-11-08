@@ -216,6 +216,55 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not source->applyUpdate({.m_overlay = {&emissive, 1u}, .m_revision = 3u}));
             PPR_TEST_ASSERT((source->occupancyWord(0u, 0u) & 1u) == 1u);
         };
+
+        PPR_UNIT_TEST (producer_stages_only_dirty_chunks_and_advances_revision) {
+            // An ordinary edit: three resident chunks, but only chunk 1 is dirty
+            // and uploaded. The producer must stage exactly that dirty set, never
+            // the whole resident world.
+            GridStagedFrame stage{};
+            stage.m_cell_size_m = 1.0f;
+            stage.m_full_refresh = false;
+            stage.m_temporal_sky_hour = 7;
+
+            stage.m_tiles.push_back(GridTileSubmission{.m_chunk_id = 0u});
+            stage.m_tiles.push_back(GridTileSubmission{.m_chunk_id = 1u});
+            stage.m_tiles.push_back(GridTileSubmission{.m_chunk_id = 2u});
+
+            GridStagedUpload upload{};
+            upload.m_chunk_id = 1u;
+            upload.m_cell_materials.assign(GridPass::kCellsPerChunk, 0u);
+            upload.m_cell_materials[0u] = 1u;
+            stage.m_uploads.push_back(std::move(upload));
+
+            auto particles = std::make_shared<Array<GridParticleInstance>>();
+            particles->push_back({u64{1}, 2.5, 2.5, 0.0, 1.0, 300.0, 3u});
+            particles->push_back({u64{2}, 6.5, 6.5, 0.0, 1.0, 300.0, 3u});
+            stage.m_particle_batches.push_back(GridParticleBatch{0u, particles});
+
+            const lighting::WorldLightSourceUpdateStorage storage = lighting::buildWorldLightSourceUpdate(
+                stage, 256u, 5u, 7);
+
+            PPR_TEST_ASSERT(storage.m_update.m_chunks.size() == 1u);
+            PPR_TEST_ASSERT(storage.m_update.m_chunks[0].m_chunk_id == 1u);
+            PPR_TEST_ASSERT(storage.m_update.m_chunks[0].m_cell_ids.size() == GridPass::kCellsPerChunk);
+            PPR_TEST_ASSERT(storage.m_update.m_chunks[0].m_cell_ids[0] == 1u);
+
+            PPR_TEST_ASSERT(storage.m_update.m_particles.size() == 2u);
+            PPR_TEST_ASSERT(storage.m_update.m_particles[0].m_cell == 2u * 256u + 2u);
+            PPR_TEST_ASSERT(storage.m_update.m_particles[1].m_cell == 6u * 256u + 6u);
+            PPR_TEST_ASSERT(storage.m_update.m_particles[0].m_material == 3u);
+
+            PPR_TEST_ASSERT(storage.m_update.m_revision == 5u);
+            PPR_TEST_ASSERT(storage.m_update.m_sky_hour == 7);
+
+            // The update advances a dense source's revision.
+            const auto plan = lighting::planWorldLight({.m_width = 256, .m_height = 256, .m_cell_metres = 1.0f});
+            PPR_TEST_ASSERT(plan.has_value());
+            auto source = lighting::WorldLightSource::create(*plan, {});
+            PPR_TEST_ASSERT(source.has_value());
+            PPR_TEST_ASSERT(not source->applyUpdate(storage.m_update));
+            PPR_TEST_ASSERT(source->revision() == 5u);
+        };
     }
 
     // ------------------------------------------------------------------
@@ -2041,6 +2090,7 @@ namespace pP::tests {
             detail::WorldLightFieldTests::source_applies_overlay_and_bumps_revision,
             detail::WorldLightFieldTests::source_derives_occupancy_word_for_traversal,
             detail::WorldLightFieldTests::source_overlay_occupies_and_clears_occupancy,
+            detail::WorldLightFieldTests::producer_stages_only_dirty_chunks_and_advances_revision,
             detail::WorldLightGpu::gpu_source_matter_overlay,
             detail::WorldLightGpu::gpu_source_over_capacity_update_preserves_state,
             detail::WorldLightGpu::gpu_source_second_update_replaces_pending_particles,

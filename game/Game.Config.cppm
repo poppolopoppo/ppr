@@ -38,14 +38,16 @@ export namespace pP::game {
         legacy,
         direct_window,
         single_bounce_window,
-        temporal_cascades
+        temporal_cascades,
+        field
     };
 
-    inline constexpr config::EnumDomain<EWorldLighting, 4u> world_lighting_domain{{
+    inline constexpr config::EnumDomain<EWorldLighting, 5u> world_lighting_domain{{
         config::EnumEntry<EWorldLighting>{EWorldLighting::legacy, "legacy"},
         config::EnumEntry<EWorldLighting>{EWorldLighting::direct_window, "direct-window"},
         config::EnumEntry<EWorldLighting>{EWorldLighting::single_bounce_window, "single-bounce-window"},
         config::EnumEntry<EWorldLighting>{EWorldLighting::temporal_cascades, "temporal-cascades"},
+        config::EnumEntry<EWorldLighting>{EWorldLighting::field, "field"},
     }};
 
     struct MapSizeDomain {
@@ -83,7 +85,7 @@ export namespace pP::game {
         i32 m_rc_sky_hour{-1};
         u32 m_rc_day_seconds{86400u};
         EGameCommand m_command{EGameCommand::interactive};
-        EWorldLighting m_world_lighting{EWorldLighting::temporal_cascades};
+        EWorldLighting m_world_lighting{EWorldLighting::legacy};
         bool m_worldgen_report{}, m_worldgen_acceptance{}, m_lighting_scene_qualified_fp64{};
         bool m_lighting_showcase{}, m_lighting_showcase_qualified_fp64{}, m_lighting_showcase_metrics{};
         bool m_lighting_showcase_screen_contact{}, m_rc_skip_table{true}, m_rc_distant_query_check{};
