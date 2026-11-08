@@ -227,11 +227,11 @@ namespace pP::tests::detail {
             stage.m_temporal_sky_hour = 7;
 
             stage.m_tiles.push_back(GridTileSubmission{.m_chunk_id = 0u});
+            stage.m_tiles.push_back(GridTileSubmission{.m_chunk_id = 32u});
             stage.m_tiles.push_back(GridTileSubmission{.m_chunk_id = 1u});
-            stage.m_tiles.push_back(GridTileSubmission{.m_chunk_id = 2u});
 
             GridStagedUpload upload{};
-            upload.m_chunk_id = 1u;
+            upload.m_chunk_id = 32u; // sim chunkIndexOf: pos {0,1} in the max 32-stride.
             upload.m_cell_materials.assign(GridPass::kCellsPerChunk, 0u);
             upload.m_cell_materials[0u] = 1u;
             stage.m_uploads.push_back(std::move(upload));
@@ -244,8 +244,10 @@ namespace pP::tests::detail {
             const lighting::WorldLightSourceUpdateStorage storage = lighting::buildWorldLightSourceUpdate(
                 stage, 256u, 5u, 7);
 
+            // The max-stride chunk id 32 ({0,1}) becomes the dense id 2 over the
+            // 256-edge world's two chunks per edge.
             PPR_TEST_ASSERT(storage.m_update.m_chunks.size() == 1u);
-            PPR_TEST_ASSERT(storage.m_update.m_chunks[0].m_chunk_id == 1u);
+            PPR_TEST_ASSERT(storage.m_update.m_chunks[0].m_chunk_id == 2u);
             PPR_TEST_ASSERT(storage.m_update.m_chunks[0].m_cell_ids.size() == GridPass::kCellsPerChunk);
             PPR_TEST_ASSERT(storage.m_update.m_chunks[0].m_cell_ids[0] == 1u);
 

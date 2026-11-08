@@ -342,4 +342,20 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
         TIMEOUT 300
         LABELS game worldgen cpu
     )
+
+    # Field-mode interactive run: a bounded, windowed smoke that proves the field
+    # routes end-to-end (world generation → field init → per-frame field update)
+    # and exits cleanly with no lighting error. Opt-in (gpu_validation + window):
+    # it needs a display. The run asserts exit 0, not leak-free teardown, so leak
+    # detection is disabled (the dbus/GLFW allocations are pre-existing system/
+    # driver globals, not the field path's).
+    ppr_add_test_entry(TARGET app.game
+        NAME field_run
+        ARGS "--world-lighting=field;--map-size=1024;--auto-exit=60"
+        TIMEOUT 180
+        RESOURCE_LOCK gpu window
+        LABELS game gpu_validation window
+    )
+    set_tests_properties("app.game.field_run" PROPERTIES ENVIRONMENT_MODIFICATION
+        "ASAN_OPTIONS=set:detect_leaks=0")
 endif()

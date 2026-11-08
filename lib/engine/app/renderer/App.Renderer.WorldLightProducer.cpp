@@ -25,6 +25,19 @@ namespace pP::lighting {
             }
             return static_cast<u32>(cell);
         }
+
+        // The staged chunk id rides the sim's chunkIndexOf domain: row-major over
+        // the maximum 4096-edge stride (kChunksPerEdge == 32), even for smaller
+        // worlds. The dense world light source addresses chunks over
+        // world_edge/128 per edge, so decode the max-stride id and re-encode.
+        [[nodiscard]] u32 denseChunkId_(const u32 stage_chunk_id, const u32 world_edge) noexcept {
+            constexpr u32 kChunkIdStride = 32u;
+            constexpr u32 kChunkEdge = 128u;
+            const u32 chunk_x = stage_chunk_id % kChunkIdStride;
+            const u32 chunk_y = stage_chunk_id / kChunkIdStride;
+            const u32 chunks_per_edge = world_edge / kChunkEdge;
+            return chunk_y * chunks_per_edge + chunk_x;
+        }
     } // namespace
 
     WorldLightSourceUpdateStorage buildWorldLightSourceUpdate(
@@ -40,7 +53,7 @@ namespace pP::lighting {
             storage.m_chunk_cell_ids.emplace_back(upload.m_cell_materials.begin(), upload.m_cell_materials.end());
             storage.m_chunks.push_back(
                 WorldLightChunkUpdate{
-                    .m_chunk_id = upload.m_chunk_id,
+                    .m_chunk_id = denseChunkId_(upload.m_chunk_id, world_edge),
                     .m_cell_ids = storage.m_chunk_cell_ids.back(),
                 });
         }
