@@ -38,6 +38,7 @@ target_sources(engine.app
         renderer/App.Renderer.Lighting.cppm
         renderer/App.Renderer.OpticalGeometry.cppm
         renderer/App.Renderer.WorldRadiance.cppm
+        renderer/App.Renderer.WorldLightTypes.cppm
         renderer/App.Renderer.LightingPass.cppm
         renderer/App.Renderer.RetroPass.cppm
         renderer/App.Renderer.TrianglePass.cppm

@@ -47,6 +47,7 @@ target_sources(engine.tests.app
         App.Lighting.Tests.cpp
         App.RadianceGpu.Tests.cpp
         App.WorldRadiance.Tests.cpp
+        App.WorldLightField.Tests.cpp
         App.Frame.Tests.cpp
         App.FrameFence.Tests.cpp
         App.RenderLane.Tests.cpp
@@ -550,5 +551,16 @@ if(PPR_TEST_WORLD_RADIANCE_CANDIDATE)
     unset(ppr_world_validation)
     unset(ppr_world_labels)
 endif()
+
+# World light field plan and (later) GPU cases. CPU plan cases take the gpu
+# lock today because the group will host device-backed field/source cases.
+ppr_add_test_entry(TARGET engine.tests.app
+    NAME world_light_field
+    FILTER "app/world_light_field"
+    LOOPS
+    RESOURCE_LOCK gpu
+    TIMEOUT 300
+    LABELS unit engine app
+)
 
 unset(ppr_world_candidate_filter)

@@ -29,6 +29,7 @@ export import :renderer.grid_pass;
 export import :renderer.lighting;
 export import :renderer.lighting_pass;
 export import :renderer.world_radiance;
+export import :renderer.world_light_types;
 export import :renderer.optical_geometry;
 export import :renderer.retro_pass;
 export import :renderer.triangle_pass;
