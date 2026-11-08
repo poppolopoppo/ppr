@@ -995,21 +995,23 @@ float4 materialSurface(uint material, float2 fine_position, float2 gradient_x,
             offset_pixels *= min(1.0, 8.0 / max(length(offset_pixels), 1.0e-6));
         }
     }
-    if (premultiplied && all(offset_pixels==0.0)) {
-        float4 surface=decorateSurface(float4(color,opacity),decoration);
-        return float4(surface.rgb*surface.a,surface.a);
-    }
-
+    // The refracted backdrop comes from the background copy (never the scene).
+    // Beer-Lambert absorption tints the transmitted light over the fixed optical
+    // thickness. This runs unconditionally, including the zero-offset and
+    // premultiplied paths, so a flat/IOR<=1 absorbing cell still tints.
     float3 background = reuse_background && all(offset_pixels == 0.0)
         ? unshifted_background : backdropColor(screen + offset_pixels, sampler);
-    // Beer-Lambert absorption over the fixed optical thickness. The refracted
-    // background copy is tinted by the material's per-channel extinction and
-    // never by the already-rendered scene colour.
     float3 sigma = float3(visual.m_sigma_r_per_m, visual.m_sigma_g_per_m, visual.m_sigma_b_per_m);
     if (any(sigma > 0.0)) {
         background *= exp(-sigma * visual.m_refraction_depth_m);
     }
-    return decorateSurface(float4(lerp(background, color, opacity), 1.0), decoration);
+
+    // Blend over the destination (particles already drawn) with the material
+    // opacity, never a full replace: the refracted backdrop folds into the
+    // transmitted (1-opacity) term while the destination keeps its particles.
+    float4 surface = decorateSurface(float4(lerp(background, color, opacity), opacity), decoration);
+    if (premultiplied) surface.rgb *= surface.a;
+    return surface;
 }
 
 // ------------------------------------------------------------------
