@@ -183,6 +183,33 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT((word & 1u) == 1u);
             PPR_TEST_ASSERT((word & 2u) == 2u);
         };
+
+        PPR_UNIT_TEST (source_overlay_occupies_and_clears_occupancy) {
+            const auto plan = lighting::planWorldLight({.m_width = 256, .m_height = 256, .m_cell_metres = 0.5f});
+            PPR_TEST_ASSERT(plan.has_value());
+            auto source = lighting::WorldLightSource::create(*plan, {});
+            PPR_TEST_ASSERT(source.has_value());
+
+            // A non-overlay vacuum cell stays clear.
+            PPR_TEST_ASSERT((source->occupancyWord(0u, 0u) & 1u) == 0u);
+
+            // An overlay-only cell (id 0) with coverage sets its block's occupancy bit.
+            const lighting::WorldLightOverlayCell covered{.m_cell = 0u, .m_coverage = 1.0f};
+            PPR_TEST_ASSERT(not source->applyUpdate({.m_overlay = {&covered, 1u}, .m_revision = 1u}));
+            PPR_TEST_ASSERT((source->occupancyWord(0u, 0u) & 1u) == 1u);
+            PPR_TEST_ASSERT(source->overlayCell(0u, 0u).m_coverage == 1.0f);
+
+            // A zeroed overlay row clears the overlay contribution.
+            const lighting::WorldLightOverlayCell cleared{.m_cell = 0u};
+            PPR_TEST_ASSERT(not source->applyUpdate({.m_overlay = {&cleared, 1u}, .m_revision = 2u}));
+            PPR_TEST_ASSERT((source->occupancyWord(0u, 0u) & 1u) == 0u);
+            PPR_TEST_ASSERT(source->overlayCell(0u, 0u).m_coverage == 0.0f);
+
+            // Surface emission alone (coverage 0) also occupies.
+            const lighting::WorldLightOverlayCell emissive{.m_cell = 0u, .m_emission = {5.0f, 0.0f, 0.0f}};
+            PPR_TEST_ASSERT(not source->applyUpdate({.m_overlay = {&emissive, 1u}, .m_revision = 3u}));
+            PPR_TEST_ASSERT((source->occupancyWord(0u, 0u) & 1u) == 1u);
+        };
     }
 }
 
@@ -200,6 +227,7 @@ namespace pP::tests {
             detail::WorldLightFieldTests::source_rejects_out_of_range_chunk,
             detail::WorldLightFieldTests::source_applies_overlay_and_bumps_revision,
             detail::WorldLightFieldTests::source_derives_occupancy_word_for_traversal,
+            detail::WorldLightFieldTests::source_overlay_occupies_and_clears_occupancy,
         });
     };
 

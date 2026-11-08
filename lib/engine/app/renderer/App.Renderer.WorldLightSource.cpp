@@ -67,6 +67,7 @@ namespace pP::lighting {
 
         bool changed = false;
         WorldLightDirtyRect dirty = m_dirty;
+        std::vector<u32> dirty_blocks;
 
         for (const WorldLightChunkUpdate &chunk: update.m_chunks) {
             const u32 chunk_x = chunk.m_chunk_id % chunks_x;
@@ -98,35 +99,14 @@ namespace pP::lighting {
                 static_cast<i32>(cell_x0), static_cast<i32>(cell_y0), static_cast<i32>(cell_x1),
                 static_cast<i32>(cell_y1));
 
-            // Patch occupancy only for the blocks this chunk touches.
+            // Collect the blocks this chunk touches for the occupancy recompute.
             const u32 block_x0 = cell_x0 / kOccupancyBlockEdge;
             const u32 block_y0 = cell_y0 / kOccupancyBlockEdge;
             const u32 block_x1 = (cell_x1 + kOccupancyBlockEdge - 1u) / kOccupancyBlockEdge;
             const u32 block_y1 = (cell_y1 + kOccupancyBlockEdge - 1u) / kOccupancyBlockEdge;
             for (u32 by = block_y0; by < block_y1; ++by) {
                 for (u32 bx = block_x0; bx < block_x1; ++bx) {
-                    const u32 cx0 = bx * kOccupancyBlockEdge;
-                    const u32 cy0 = by * kOccupancyBlockEdge;
-                    const u32 cx1 = std::min(cx0 + kOccupancyBlockEdge, width);
-                    const u32 cy1 = std::min(cy0 + kOccupancyBlockEdge, height);
-
-                    u32 occupied = 0u;
-                    for (u32 cy = cy0; cy < cy1 and occupied == 0u; ++cy) {
-                        for (u32 cx = cx0; cx < cx1; ++cx) {
-                            if (m_cell_ids[u64{cy} * width + cx] != 0u) {
-                                occupied = 1u;
-                                break;
-                            }
-                        }
-                    }
-
-                    u32 &word = m_occupancy[u64{by} * m_words_per_row + bx / 32u];
-                    const u32 mask = 1u << (bx % 32u);
-                    if (occupied != 0u) {
-                        word |= mask;
-                    } else {
-                        word &= ~mask;
-                    }
+                    dirty_blocks.push_back(by * m_blocks_x + bx);
                 }
             }
         }
@@ -145,6 +125,7 @@ namespace pP::lighting {
             const u32 x = cell.m_cell % width;
             const u32 y = cell.m_cell / width;
             dirty.include(static_cast<i32>(x), static_cast<i32>(y), static_cast<i32>(x) + 1, static_cast<i32>(y) + 1);
+            dirty_blocks.push_back((y / kOccupancyBlockEdge) * m_blocks_x + (x / kOccupancyBlockEdge));
         }
 
         if (update.m_sky != m_sky or update.m_sky_hour != m_sky_hour) {
@@ -157,6 +138,15 @@ namespace pP::lighting {
             return default_value_v;
         }
 
+        // Recompute occupancy for every touched block once, after ids and overlay
+        // are both applied, so overlay-only cells set their bit and zeroed rows
+        // clear their overlay contribution.
+        std::sort(dirty_blocks.begin(), dirty_blocks.end());
+        dirty_blocks.erase(std::unique(dirty_blocks.begin(), dirty_blocks.end()), dirty_blocks.end());
+        for (const u32 block: dirty_blocks) {
+            recomputeOccupancyBlock_(block % m_blocks_x, block / m_blocks_x);
+        }
+
         m_dirty = dirty;
         m_revision = update.m_revision;
         return default_value_v;
@@ -167,6 +157,13 @@ namespace pP::lighting {
             return 0u;
         }
         return m_cell_ids[u64{y} * m_plan.m_width + x];
+    }
+
+    WorldLightOverlayCell WorldLightSource::overlayCell(const u32 x, const u32 y) const noexcept {
+        if (x >= m_plan.m_width or y >= m_plan.m_height) {
+            return WorldLightOverlayCell{};
+        }
+        return m_overlay[u64{y} * m_plan.m_width + x];
     }
 
     u64 WorldLightSource::revision() const noexcept {
@@ -182,5 +179,46 @@ namespace pP::lighting {
             return 0u;
         }
         return m_occupancy[u64{block} * m_words_per_row + word];
+    }
+
+    void WorldLightSource::recomputeOccupancyBlock_(const u32 block_x, const u32 block_y) noexcept {
+        const u32 width = m_plan.m_width;
+        const u32 height = m_plan.m_height;
+        const u32 cx0 = block_x * kOccupancyBlockEdge;
+        const u32 cy0 = block_y * kOccupancyBlockEdge;
+        const u32 cx1 = std::min(cx0 + kOccupancyBlockEdge, width);
+        const u32 cy1 = std::min(cy0 + kOccupancyBlockEdge, height);
+
+        u32 occupied = 0u;
+        for (u32 cy = cy0; cy < cy1 and occupied == 0u; ++cy) {
+            for (u32 cx = cx0; cx < cx1; ++cx) {
+                const u64 index = u64{cy} * width + cx;
+                if (m_cell_ids[index] != 0u) {
+                    occupied = 1u;
+                    break;
+                }
+
+                const WorldLightOverlayCell &overlay = m_overlay[index];
+                const bool overlay_occupied = overlay.m_coverage > 0.0f or
+                                              overlay.m_sigma[0] > 0.0f or
+                                              overlay.m_sigma[1] > 0.0f or
+                                              overlay.m_sigma[2] > 0.0f or
+                                              overlay.m_emission[0] > 0.0f or
+                                              overlay.m_emission[1] > 0.0f or
+                                              overlay.m_emission[2] > 0.0f;
+                if (overlay_occupied) {
+                    occupied = 1u;
+                    break;
+                }
+            }
+        }
+
+        u32 &word = m_occupancy[u64{block_y} * m_words_per_row + block_x / 32u];
+        const u32 mask = 1u << (block_x % 32u);
+        if (occupied != 0u) {
+            word |= mask;
+        } else {
+            word &= ~mask;
+        }
     }
 } // namespace pP::lighting

@@ -86,9 +86,10 @@ export namespace pP::lighting {
     // global material palette, a dense Matter overlay indexed by cell, the last
     // committed revision, sky and a dirty rectangle. Occupancy is a single bitset
     // level with one bit per kOccupancyBlockEdge x kOccupancyBlockEdge block, set
-    // when the block contains any non-vacuum cell (id != 0); blocks are row-major
-    // over ceil(width/edge) x ceil(height/edge), packed into u32 words with
-    // ceil(blocks_per_row / 32) words per block row.
+    // when the block contains any occupied cell (id != 0, or overlay coverage,
+    // sigma or emission > 0); blocks are row-major over ceil(width/edge) x
+    // ceil(height/edge), packed into u32 words with ceil(blocks_per_row / 32)
+    // words per block row.
     class WorldLightSource {
     public:
         static constexpr u32 kOccupancyBlockEdge = 8u;
@@ -99,6 +100,7 @@ export namespace pP::lighting {
         [[nodiscard]] std::error_code applyUpdate(const WorldLightSourceUpdate &update);
 
         [[nodiscard]] u16 cellId(u32 x, u32 y) const noexcept;
+        [[nodiscard]] WorldLightOverlayCell overlayCell(u32 x, u32 y) const noexcept;
         [[nodiscard]] u64 revision() const noexcept;
         [[nodiscard]] WorldLightDirtyRect dirtyRect() const noexcept;
 
@@ -107,6 +109,8 @@ export namespace pP::lighting {
         [[nodiscard]] u32 occupancyWord(u32 block, u32 word) const noexcept;
 
     private:
+        void recomputeOccupancyBlock_(u32 block_x, u32 block_y) noexcept;
+
         WorldLightPlan m_plan{};
         u64 m_revision{};
         std::vector<WorldLightMaterial> m_materials{};
