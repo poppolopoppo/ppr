@@ -100,13 +100,16 @@ namespace pP {
         static_assert(PPR_OFFSETOF(BloomParameters, m_upsample_level) == 28u);
 
         // CPU mirrors of the histogram/adaptation Slang constant buffers.
-        struct LuminanceHistogramParameters {
+        // Slang's std140 uniform block rounds this 24-byte field extent up to a
+        // 16-byte multiple, so the CPU mirror carries the same trailing padding
+        // and matches the reflected uniform size exactly.
+        struct alignas(16) LuminanceHistogramParameters {
             u32 m_source_extent[2];
             u32 m_luminance_extent[2];
             u32 m_reserved0;
             u32 m_reserved1;
         };
-        static_assert(sizeof(LuminanceHistogramParameters) == 24u and alignof(LuminanceHistogramParameters) == 4u);
+        static_assert(sizeof(LuminanceHistogramParameters) == 32u and alignof(LuminanceHistogramParameters) == 16u);
         static_assert(PPR_OFFSETOF(LuminanceHistogramParameters, m_luminance_extent) == 8u);
         static_assert(PPR_OFFSETOF(LuminanceHistogramParameters, m_reserved0) == 16u);
         static_assert(PPR_OFFSETOF(LuminanceHistogramParameters, m_reserved1) == 20u);

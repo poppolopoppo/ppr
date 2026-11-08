@@ -244,17 +244,17 @@ export namespace pP::game {
         }
     };
 
-    /// Runtime-tunable post-processing settings. Manual exposure, bloom and the
-    /// optional palette are applied to the RetroPass now; eye-adaptation
-    /// (auto exposure, tau, EV clamp) and bloom intensity/threshold are
-    /// persisted and displayed here and wired by Tasks 12/13.
+    /// Runtime-tunable post-processing settings. Eye adaptation, bloom and the
+    /// optional palette are applied to the RetroPass through applyPostToRetro.
+    /// The defaults enable eye adaptation and bloom (the field picture's
+    /// intended look) and leave the palette quantization off.
     struct PostDisplaySettings {
-        bool m_auto_exposure{false};
+        bool m_auto_exposure{true};
         float m_exposure_ev{0.0f};
         float m_adaptation_tau{0.7f};
         float m_ev_min{-4.0f};
         float m_ev_max{4.0f};
-        bool m_bloom{false};
+        bool m_bloom{true};
         float m_bloom_intensity{0.125f};
         float m_bloom_threshold{1.0f};
         bool m_palette{false};
@@ -414,6 +414,15 @@ export namespace pP::game {
     /// adaptation and the palette; the retro palette is derived here, never
     /// edited by a second control.
     void applyPostToRetro(RetroSettings &retro, const PostDisplaySettings &post) noexcept;
+
+    /// Selects the field picture chain: scene-linear HDR reconstructed through
+    /// temporal2x at half resolution, with the legacy/palette picture and its
+    /// independent spatial/temporal supersampling disabled. Temporal2x already
+    /// performs spatial reconstruction, and RetroPass admission rejects spatial
+    /// and temporal2x together; the field path therefore enables temporal2x and
+    /// leaves m_spatial_enabled false. Post settings own bloom, eye adaptation
+    /// and the palette and are applied separately by applyPostToRetro.
+    void configureFieldRetro(RetroSettings &retro) noexcept;
 
     /// Effective field-mode gate: the startup world-lighting request AND the
     /// live enabled toggle, re-evaluated at world begin rather than cached.

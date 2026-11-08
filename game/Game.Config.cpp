@@ -327,6 +327,16 @@ namespace pP::game {
         retro.m_ev_max = post.m_ev_max;
     }
 
+    void configureFieldRetro(RetroSettings &retro) noexcept {
+        retro.m_enabled = false;
+        retro.m_temporal_enabled = false;
+        retro.m_hdr_enabled = true;
+        // Temporal2x resolves the half-resolution HDR raster itself; RetroPass
+        // admission treats spatial and temporal2x as mutually exclusive.
+        retro.m_spatial_enabled = false;
+        retro.m_temporal_2x_enabled = true;
+    }
+
     // ------------------------------------------------------------------
     // explicit world-generation pack selection
     // ------------------------------------------------------------------

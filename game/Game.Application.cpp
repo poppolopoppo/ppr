@@ -3812,8 +3812,12 @@ namespace demo {
             m_field_requested = settings.m_world_lighting == game::EWorldLighting::field;
 
             m_worldgen_profile = settings.m_worldgen_profile;
-            // Post display settings drive the retro picture on the field path:
-            // manual exposure, bloom and the optional palette.
+            // The field picture needs its HDR + temporal2x reconstruction chain;
+            // the post display settings then drive bloom, eye adaptation, manual
+            // exposure and the optional palette over it.
+            if (m_field_requested) {
+                game::configureFieldRetro(m_ui_state.m_retro);
+            }
             game::applyPostToRetro(m_ui_state.m_retro, m_ui_state.m_post);
             m_requested_seed = settings.m_worldgen_seed;
             m_ui_state.m_tools = {

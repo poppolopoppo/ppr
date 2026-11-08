@@ -7,6 +7,7 @@ module game.tests;
 import engine.app;
 import engine.core;
 import engine.asset;
+import engine.math;
 import game.config;
 
 import std;
@@ -745,11 +746,11 @@ namespace pP::game::tests::detail::compat {
         PPR_TEST_ASSERT(normal->m_world_light.m_value.m_history_retention == 0.9f);
         PPR_TEST_ASSERT(normal->m_world_light.m_value.m_level_count == 6u);
         PPR_TEST_ASSERT(normal->m_world_light.m_value.m_sky_hour == -1);
-        PPR_TEST_ASSERT(not normal->m_post.m_value.m_auto_exposure);
+        PPR_TEST_ASSERT(normal->m_post.m_value.m_auto_exposure);
         PPR_TEST_ASSERT(normal->m_post.m_value.m_exposure_ev == 0.0f);
         PPR_TEST_ASSERT(normal->m_post.m_value.m_adaptation_tau == 0.7f);
         PPR_TEST_ASSERT(normal->m_post.m_value.m_ev_min == -4.0f and normal->m_post.m_value.m_ev_max == 4.0f);
-        PPR_TEST_ASSERT(not normal->m_post.m_value.m_bloom);
+        PPR_TEST_ASSERT(normal->m_post.m_value.m_bloom);
         PPR_TEST_ASSERT(normal->m_post.m_value.m_bloom_intensity == 0.125f);
         PPR_TEST_ASSERT(normal->m_post.m_value.m_bloom_threshold == 1.0f);
         PPR_TEST_ASSERT(not normal->m_post.m_value.m_palette);
@@ -785,6 +786,32 @@ namespace pP::game::tests::detail::compat {
         const std::string help = gameHelpText();
         PPR_TEST_ASSERT(help.find("world-light-samples-per-frame") != std::string::npos);
         PPR_TEST_ASSERT(help.find("post-palette") != std::string::npos);
+    };
+
+    PPR_UNIT_TEST (field_retro_chain_passes_frame_admission) {
+        // Mirror the field session: the field chain first, post settings over it.
+        PostDisplaySettings post{};
+        RetroSettings field{};
+        configureFieldRetro(field);
+        applyPostToRetro(field, post);
+
+        PPR_TEST_ASSERT(post.m_auto_exposure and post.m_bloom and not post.m_palette);
+        PPR_TEST_ASSERT(not field.m_enabled and not field.m_temporal_enabled);
+        PPR_TEST_ASSERT(field.m_hdr_enabled);
+        PPR_TEST_ASSERT(field.m_temporal_2x_enabled and not field.m_spatial_enabled);
+        PPR_TEST_ASSERT(field.m_auto_exposure and field.m_bloom_enabled);
+        PPR_TEST_ASSERT(not field.m_palette_enabled);
+
+        // The field picture is admitted at the temporal2x half-resolution raster.
+        const std::error_code admitted = RetroPass::validateFrameSettings(field, int2{960, 540}, int2{1920, 1080});
+        PPR_TEST_ASSERT(not admitted);
+
+        // Temporal2x already reconstructs spatially; requesting both is rejected
+        // rather than silently choosing one path.
+        RetroSettings doubled = field;
+        doubled.m_spatial_enabled = true;
+        const std::error_code rejected = RetroPass::validateFrameSettings(doubled, int2{960, 540}, int2{1920, 1080});
+        PPR_TEST_ASSERT(rejected == std::errc::invalid_argument);
     };
 
     PPR_UNIT_TEST (invalid_post_draft_is_rejected_and_not_persisted) {
@@ -843,6 +870,7 @@ namespace pP::game::tests {
             detail::compat::mapped_config_files_preserve_owned_results_empty_input_and_errors,
             detail::compat::executable_boundary_rejects_unknown_options,
             detail::compat::world_light_and_post_settings_parse_and_validate,
+            detail::compat::field_retro_chain_passes_frame_admission,
             detail::compat::invalid_post_draft_is_rejected_and_not_persisted,
             detail::compat::retired_crash_harness_rejected,
         });
