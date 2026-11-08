@@ -538,9 +538,9 @@ export namespace pP::game {
         config::Diagnostics &diagnostics);
 
     /// Applies the live post display settings to the retro picture state. The
-    /// post settings are the sole source for manual exposure, bloom and the
-    /// palette; the retro palette is derived here, never edited by a second
-    /// control.
+    /// post settings are the sole source for manual exposure, bloom, eye
+    /// adaptation and the palette; the retro palette is derived here, never
+    /// edited by a second control.
     void applyPostToRetro(RetroSettings &retro, const PostDisplaySettings &post) noexcept;
 
     /// Effective field-mode gate: the startup world-lighting request AND the

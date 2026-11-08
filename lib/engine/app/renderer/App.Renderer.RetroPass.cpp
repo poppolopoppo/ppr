@@ -96,6 +96,29 @@ namespace pP {
         static_assert(PPR_OFFSETOF(BloomParameters, m_reserved0) == 20u);
         static_assert(PPR_OFFSETOF(BloomParameters, m_reserved1) == 24u);
         static_assert(PPR_OFFSETOF(BloomParameters, m_reserved2) == 28u);
+
+        // CPU mirrors of the histogram/adaptation Slang constant buffers.
+        struct LuminanceHistogramParameters {
+            u32 m_source_extent[2];
+            u32 m_luminance_extent[2];
+            u32 m_reserved0;
+            u32 m_reserved1;
+        };
+        static_assert(sizeof(LuminanceHistogramParameters) == 24u and alignof(LuminanceHistogramParameters) == 4u);
+        static_assert(PPR_OFFSETOF(LuminanceHistogramParameters, m_luminance_extent) == 8u);
+        static_assert(PPR_OFFSETOF(LuminanceHistogramParameters, m_reserved0) == 16u);
+        static_assert(PPR_OFFSETOF(LuminanceHistogramParameters, m_reserved1) == 20u);
+
+        struct alignas(16) AutoExposureParameters {
+            float m_adaptation_alpha;
+            float m_ev_min;
+            float m_ev_max;
+            u32 m_enabled;
+        };
+        static_assert(sizeof(AutoExposureParameters) == 16u and alignof(AutoExposureParameters) == 16u);
+        static_assert(PPR_OFFSETOF(AutoExposureParameters, m_ev_min) == 4u);
+        static_assert(PPR_OFFSETOF(AutoExposureParameters, m_ev_max) == 8u);
+        static_assert(PPR_OFFSETOF(AutoExposureParameters, m_enabled) == 12u);
     }
 
     namespace fs = std::filesystem;
@@ -138,6 +161,64 @@ namespace pP {
         return float2{(phase & 1u) != 0u ? 0.25f : -0.25f, (phase & 2u) != 0u ? 0.25f : -0.25f};
     }
 
+    // ------------------------------------------------------------------
+    // histogram eye-adaptation reduction (CPU oracle)
+    // ------------------------------------------------------------------
+
+    float RetroPass::luminance(const float r, const float g, const float b) noexcept {
+        return 0.2126f * r + 0.7152f * g + 0.0722f * b;
+    }
+
+    float RetroPass::log2Luminance(const float lum) noexcept {
+        // Clamp to the representable histogram floor before the logarithm so a
+        // black frame maps to the lowest bin instead of -inf/NaN.
+        return std::log2(std::max(lum, std::exp2(kLog2LuminanceMin)));
+    }
+
+    u32 RetroPass::luminanceBin(const float log2_lum) noexcept {
+        const float span = kLog2LuminanceMax - kLog2LuminanceMin;
+        const u32 bin = static_cast<u32>(
+            std::clamp((log2_lum - kLog2LuminanceMin) / span, 0.0f, 1.0f) * float(kHistogramBins));
+        return std::min(bin, kHistogramBins - 1u);
+    }
+
+    float RetroPass::histogramBinCenterLog2(const u32 bin) noexcept {
+        const float span = kLog2LuminanceMax - kLog2LuminanceMin;
+        return kLog2LuminanceMin + (float(bin) + 0.5f) * span / float(kHistogramBins);
+    }
+
+    float RetroPass::averageLog2Luminance(const std::span<const u32> histogram, const u32 total_pixels) noexcept {
+        if (total_pixels == 0u) {
+            return kLog2LuminanceMin;
+        }
+
+        const float low = float(total_pixels) * kHistogramLowPercentile;
+        const float high = float(total_pixels) * kHistogramHighPercentile;
+
+        float accumulated = 0.0f;
+        u32 accumulated_count = 0u;
+        u32 cumulative = 0u;
+        for (u32 bin = 0u; bin < histogram.size(); ++bin) {
+            const u32 bin_start = cumulative;
+            cumulative += histogram[bin];
+
+            const float lo = std::max(float(bin_start), low);
+            const float hi = std::min(float(cumulative), high);
+            if (lo < hi) {
+                const u32 count = static_cast<u32>(hi - lo);
+                accumulated += histogramBinCenterLog2(bin) * float(count);
+                accumulated_count += count;
+            }
+        }
+
+        return accumulated_count != 0u ? accumulated / float(accumulated_count) : kLog2LuminanceMin;
+    }
+
+    float RetroPass::targetEv(const float average_log2_lum, const float ev_min, const float ev_max) noexcept {
+        const float unclamped = average_log2_lum - std::log2(kMiddleGrayLuminance);
+        return std::clamp(unclamped, std::min(ev_min, ev_max), std::max(ev_min, ev_max));
+    }
+
     Expected<CameraSnapshot> RetroPass::beginFrame(
         const RetroSettings &settings, const CameraSnapshot &camera, const int2 extent, const u64 world_generation,
         const u64 world_job, const u64 world_content, const TimeSpan request_elapsed, const u64 lighting_revision,
@@ -168,6 +249,17 @@ namespace pP {
                                ? std::error_code{}
                                : std::make_error_code(std::errc::invalid_argument));
         }
+
+        PPR_RETURN_ERROR_ON_FAIL(
+            RetroPass, not settings.m_auto_exposure or (settings.m_hdr_enabled and
+                                                           settings.m_temporal_2x_enabled and
+                                                           std::isfinite(settings.m_adaptation_tau) and
+                                                           settings.m_adaptation_tau > 0.0f and
+                                                           std::isfinite(settings.m_ev_min) and
+                                                           std::isfinite(settings.m_ev_max) and
+                                                           settings.m_ev_min <= settings.m_ev_max)
+                           ? std::error_code{}
+                           : std::make_error_code(std::errc::invalid_argument));
 
         if (settings.m_spatial_enabled or settings.m_temporal_2x_enabled) {
             PPR_RETURN_ERROR_ON_FAIL(
@@ -431,6 +523,24 @@ namespace pP {
             PPR_RETURN_ERROR_ON_FAIL(RetroPass, device.createRootShaderObject(m_program.get(), root.writeRef()));
         }
 
+        // The present shader always samples g_exposure; the zero offset texture
+        // keeps the fixed-exposure path (auto-exposure off) a no-op and serves as
+        // the first frame's previous-exposure history for adaptation.
+        const float empty_exposure = 0.0f;
+        const rhi::SubresourceData initial{
+            .data = &empty_exposure, .rowPitch = sizeof(empty_exposure), .slicePitch = sizeof(empty_exposure)};
+        rhi::TextureDesc texture{};
+        texture.type = rhi::TextureType::Texture2D;
+        texture.size = {1u, 1u, 1u};
+        texture.arrayLength = 1u;
+        texture.mipCount = 1u;
+        texture.format = rhi::Format::R32Float;
+        texture.usage = rhi::TextureUsage::ShaderResource;
+        texture.defaultState = rhi::ResourceState::ShaderResource;
+        texture.label = "auto-exposure empty history";
+        PPR_RETURN_ERROR_ON_FAIL(RetroPass, device.createTexture(texture, &initial, m_empty_exposure.writeRef()));
+        PPR_RETURN_ERROR_ON_FAIL(RetroPass, m_empty_exposure->getDefaultView(m_empty_exposure_view.writeRef()));
+
         return default_value_v;
     }
 
@@ -467,6 +577,16 @@ namespace pP {
         m_bloom_supported = false;
         m_settings.m_bloom_enabled = false;
 
+        m_histogram_roots = {};
+        m_histogram_pipelines = {};
+        m_histogram_programs = {};
+        m_auto_exposure_roots = {};
+        m_auto_exposure_pipeline.setNull();
+        m_auto_exposure_program.setNull();
+        m_histogram_buffer.setNull();
+        m_target_ev_buffer.setNull();
+        m_settings.m_auto_exposure = false;
+
         m_spatial_roots = {};
         m_spatial_pipeline.setNull();
         m_spatial_program.setNull();
@@ -491,6 +611,8 @@ namespace pP {
         m_sampler.setNull();
         m_sampler_handle = {};
         m_program.setNull();
+        m_empty_exposure_view.setNull();
+        m_empty_exposure.setNull();
 
         m_scene_slots = {};
         m_scene_cursor = 0u;
@@ -645,6 +767,36 @@ namespace pP {
             }
         }
 
+        rhi::ComPtr<rhi::ITexture> luminance;
+        rhi::ComPtr<rhi::ITextureView> luminance_view;
+        rhi::ComPtr<rhi::ITexture> exposure;
+        rhi::ComPtr<rhi::ITextureView> exposure_view;
+        std::array<rhi::ComPtr<rhi::IShaderObject>, 4> histogram_roots{};
+        rhi::ComPtr<rhi::IShaderObject> auto_exposure_root;
+        if (m_settings.m_auto_exposure) {
+            auto luminance_desc = spatial_desc;
+            luminance_desc.size = {.width = kLuminanceExtent, .height = kLuminanceExtent, .depth = 1u};
+            luminance_desc.format = rhi::Format::R32Float;
+            luminance_desc.label = "luminance downsample";
+            PPR_RETURN_ERROR_ON_FAIL(RetroPass, device.createTexture(luminance_desc, nullptr, luminance.writeRef()));
+            PPR_RETURN_ERROR_ON_FAIL(RetroPass, luminance->getDefaultView(luminance_view.writeRef()));
+
+            auto exposure_desc = spatial_desc;
+            exposure_desc.size = {.width = 1u, .height = 1u, .depth = 1u};
+            exposure_desc.format = rhi::Format::R32Float;
+            exposure_desc.label = "adapted exposure offset";
+            PPR_RETURN_ERROR_ON_FAIL(RetroPass, device.createTexture(exposure_desc, nullptr, exposure.writeRef()));
+            PPR_RETURN_ERROR_ON_FAIL(RetroPass, exposure->getDefaultView(exposure_view.writeRef()));
+
+            for (u32 index = 0u; index < histogram_roots.size(); ++index) {
+                PPR_RETURN_ERROR_ON_FAIL(
+                    RetroPass,
+                    device.createRootShaderObject(m_histogram_programs[index], histogram_roots[index].writeRef()));
+            }
+            PPR_RETURN_ERROR_ON_FAIL(
+                RetroPass, device.createRootShaderObject(m_auto_exposure_program, auto_exposure_root.writeRef()));
+        }
+
         // The caller proved completion of this slot. Fresh roots detach old
         // bindings too; all acquisition succeeds before replacing its cohort.
         rhi::ComPtr<rhi::IShaderObject> present_root, spatial_root;
@@ -673,7 +825,14 @@ namespace pP {
         slot.m_bloom_enabled = m_settings.m_bloom_enabled;
         slot.m_bloom = std::move(bloom);
         slot.m_bloom_views = std::move(bloom_views);
+        slot.m_auto_exposure_enabled = m_settings.m_auto_exposure;
+        slot.m_luminance = std::move(luminance);
+        slot.m_luminance_view = std::move(luminance_view);
+        slot.m_exposure = std::move(exposure);
+        slot.m_exposure_view = std::move(exposure_view);
         m_bloom_roots[m_scene_cursor] = std::move(bloom_roots);
+        m_histogram_roots[m_scene_cursor] = std::move(histogram_roots);
+        m_auto_exposure_roots[m_scene_cursor] = std::move(auto_exposure_root);
         m_scene_roots[m_scene_cursor] = std::move(present_root);
         m_spatial_roots[m_scene_cursor] = std::move(spatial_root);
         // A completed legacy temporal root can retain the previous MSAA views.
@@ -788,6 +947,11 @@ namespace pP {
             PPR_RETURN_ERROR_ON_FAIL(RetroPass, ensureBloomPrograms_(context.m_device));
         }
 
+        if (m_settings.m_auto_exposure) {
+            PPR_RETURN_ERROR_ON_FAIL(RetroPass, ensureHistogramPrograms_(context.m_device));
+            PPR_RETURN_ERROR_ON_FAIL(RetroPass, ensureAutoExposureProgram_(context.m_device));
+        }
+
         std::array<FenceCompletionValue, kFrameRingSlots> values;
         for (u32 slot = 0u; slot < kFrameRingSlots; ++slot) {
             values[slot] = m_scene_slots[slot].m_last_use;
@@ -848,6 +1012,7 @@ namespace pP {
             slot.m_temporal_2x != m_settings.m_temporal_2x_enabled or
             slot.m_spatial_enabled != m_settings.m_spatial_enabled or
             slot.m_bloom_enabled != m_settings.m_bloom_enabled or
+            slot.m_auto_exposure_enabled != m_settings.m_auto_exposure or
             slot.m_output_extent.x != m_output_extent.x or
             slot.m_output_extent.y != m_output_extent.y) {
             PPR_RETURN_ERROR_ON_FAIL(RetroPass, createSceneTarget_(context.m_device, slot, extent));
@@ -934,6 +1099,10 @@ namespace pP {
 
         if (m_settings.m_temporal_2x_enabled) {
             PPR_RETURN_ERROR_ON_FAIL(RetroPass, resolveTemporal2x_(context, selected));
+        }
+
+        if (m_settings.m_auto_exposure) {
+            PPR_RETURN_ERROR_ON_FAIL(RetroPass, resolveAdaptation_(context, selected));
         }
 
         if (m_settings.m_bloom_enabled) {
@@ -1351,6 +1520,270 @@ namespace pP {
     }
 
     // ------------------------------------------------------------------
+    // histogram eye adaptation
+    // ------------------------------------------------------------------
+
+    std::error_code RetroPass::ensureHistogramPrograms_(rhi::IDevice &device) {
+        if (m_histogram_pipelines[0]) {
+            return {};
+        }
+
+        PPR_RETURN_ERROR_ON_FAIL(
+            RetroPass, m_shader_service.isValid() ? std::error_code{} : std::make_error_code(std::errc::not_connected));
+
+        shader::SharedModule module{};
+        PPR_RETURN_ERROR_ON_FAIL(
+            RetroPass, m_shader_service->loadModuleFromFile(
+                           m_content_dir / TEXT("shaders") / TEXT("luminance_histogram.slang"), "luminance_histogram",
+                           module.writeRef()));
+
+        auto *const layout = module->getLayout();
+        slang::TypeLayoutReflection *parameters = nullptr;
+        if (layout != nullptr) {
+            for (unsigned index = 0u; index < layout->getParameterCount(); ++index) {
+                auto *const parameter = layout->getParameterByIndex(index);
+                if (std::string_view{parameter->getName()} == "g_luminance") {
+                    parameters = parameter->getTypeLayout()->getElementTypeLayout();
+                    break;
+                }
+            }
+        }
+
+        PPR_RETURN_ERROR_ON_FAIL(
+            RetroPass, parameters != nullptr and parameters->getSize(SLANG_PARAMETER_CATEGORY_UNIFORM) ==
+                                                     sizeof(LuminanceHistogramParameters)
+                           ? std::error_code{}
+                           : std::make_error_code(std::errc::invalid_argument));
+        for (const auto &[name, offset]: std::array<std::pair<const char *, u32>, 4>{
+                 std::pair{"sourceExtent", 0u}, {"luminanceExtent", 8u}, {"reserved0", 16u}, {"reserved1", 20u}}) {
+            bool matched = false;
+            for (unsigned index = 0u; index < parameters->getFieldCount(); ++index) {
+                auto *const field = parameters->getFieldByIndex(index);
+                if (std::string_view{field->getName()} == name) {
+                    matched = field->getOffset(SLANG_PARAMETER_CATEGORY_UNIFORM) == offset;
+                    break;
+                }
+            }
+
+            PPR_RETURN_ERROR_ON_FAIL(
+                RetroPass, matched ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
+        }
+
+        std::array<rhi::ComPtr<rhi::IShaderProgram>, 4> programs{};
+        std::array<rhi::ComPtr<rhi::IComputePipeline>, 4> pipelines{};
+        const char *const names[] = {"clearHistogram", "computeLuminance", "buildHistogram", "reduceHistogram"};
+        for (u32 index = 0u; index < programs.size(); ++index) {
+            shader::ComPtr<slang::IEntryPoint> entry;
+            PPR_RETURN_ERROR_ON_FAIL(RetroPass, module->findEntryPointByName(names[index], entry.writeRef()));
+            slang::IComponentType *entries[] = {entry.get()};
+            rhi::ShaderProgramDesc description{};
+            description.linkingStyle = rhi::LinkingStyle::SingleProgram;
+            description.slangGlobalScope = module.get();
+            description.slangEntryPoints = entries;
+            description.slangEntryPointCount = 1u;
+            shader::Diagnose diagnostics;
+            PPR_RETURN_ERROR_ON_FAIL(
+                RetroPass, device.createShaderProgram(description, programs[index].writeRef(), diagnostics.writeRef()));
+
+            rhi::ComputePipelineDesc pipeline_desc{};
+            pipeline_desc.program = programs[index];
+            pipeline_desc.label = names[index];
+            PPR_RETURN_ERROR_ON_FAIL(
+                RetroPass, device.createComputePipeline(pipeline_desc, pipelines[index].writeRef()));
+        }
+
+        m_histogram_programs = std::move(programs);
+        m_histogram_pipelines = std::move(pipelines);
+
+        const auto device_buffer = [&](const u64 bytes, const char *const label,
+                                       rhi::ComPtr<rhi::IBuffer> &out) -> std::error_code {
+            rhi::BufferDesc description{};
+            description.size = bytes;
+            description.elementSize = sizeof(u32);
+            description.memoryType = rhi::MemoryType::DeviceLocal;
+            description.usage = static_cast<rhi::BufferUsage>(
+                static_cast<u32>(rhi::BufferUsage::ShaderResource) |
+                static_cast<u32>(rhi::BufferUsage::UnorderedAccess));
+            description.defaultState = rhi::ResourceState::UnorderedAccess;
+            description.label = label;
+            PPR_RETURN_ERROR_ON_FAIL(RetroPass, device.createBuffer(description, nullptr, out.writeRef()));
+            return {};
+        };
+
+        PPR_RETURN_ERROR_ON_FAIL(
+            RetroPass, device_buffer(kHistogramBins * sizeof(u32), "luminance histogram", m_histogram_buffer));
+        PPR_RETURN_ERROR_ON_FAIL(RetroPass, device_buffer(sizeof(float), "histogram target EV", m_target_ev_buffer));
+
+        return {};
+    }
+
+    std::error_code RetroPass::ensureAutoExposureProgram_(rhi::IDevice &device) {
+        if (m_auto_exposure_pipeline) {
+            return {};
+        }
+
+        PPR_RETURN_ERROR_ON_FAIL(
+            RetroPass, m_shader_service.isValid() ? std::error_code{} : std::make_error_code(std::errc::not_connected));
+
+        shader::SharedModule module{};
+        PPR_RETURN_ERROR_ON_FAIL(
+            RetroPass,
+            m_shader_service->loadModuleFromFile(
+                m_content_dir / TEXT("shaders") / TEXT("auto_exposure.slang"), "auto_exposure", module.writeRef()));
+
+        auto *const layout = module->getLayout();
+        slang::TypeLayoutReflection *parameters = nullptr;
+        if (layout != nullptr) {
+            for (unsigned index = 0u; index < layout->getParameterCount(); ++index) {
+                auto *const parameter = layout->getParameterByIndex(index);
+                if (std::string_view{parameter->getName()} == "g_auto_exposure") {
+                    parameters = parameter->getTypeLayout()->getElementTypeLayout();
+                    break;
+                }
+            }
+        }
+
+        PPR_RETURN_ERROR_ON_FAIL(
+            RetroPass, parameters != nullptr and
+                               parameters->getSize(SLANG_PARAMETER_CATEGORY_UNIFORM) == sizeof(AutoExposureParameters)
+                           ? std::error_code{}
+                           : std::make_error_code(std::errc::invalid_argument));
+        for (const auto &[name, offset]: std::array<std::pair<const char *, u32>, 4>{
+                 std::pair{"adaptationAlpha", 0u}, {"evMin", 4u}, {"evMax", 8u}, {"enabled", 12u}}) {
+            bool matched = false;
+            for (unsigned index = 0u; index < parameters->getFieldCount(); ++index) {
+                auto *const field = parameters->getFieldByIndex(index);
+                if (std::string_view{field->getName()} == name) {
+                    matched = field->getOffset(SLANG_PARAMETER_CATEGORY_UNIFORM) == offset;
+                    break;
+                }
+            }
+
+            PPR_RETURN_ERROR_ON_FAIL(
+                RetroPass, matched ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
+        }
+
+        shader::ComPtr<slang::IEntryPoint> entry;
+        PPR_RETURN_ERROR_ON_FAIL(RetroPass, module->findEntryPointByName("adaptExposure", entry.writeRef()));
+        slang::IComponentType *entries[] = {entry.get()};
+        rhi::ShaderProgramDesc description{};
+        description.linkingStyle = rhi::LinkingStyle::SingleProgram;
+        description.slangGlobalScope = module.get();
+        description.slangEntryPoints = entries;
+        description.slangEntryPointCount = 1u;
+        shader::Diagnose diagnostics;
+        PPR_RETURN_ERROR_ON_FAIL(
+            RetroPass,
+            device.createShaderProgram(description, m_auto_exposure_program.writeRef(), diagnostics.writeRef()));
+
+        rhi::ComputePipelineDesc pipeline_desc{};
+        pipeline_desc.program = m_auto_exposure_program;
+        pipeline_desc.label = "histogram eye-adaptation temporal state";
+        PPR_RETURN_ERROR_ON_FAIL(
+            RetroPass, device.createComputePipeline(pipeline_desc, m_auto_exposure_pipeline.writeRef()));
+
+        return {};
+    }
+
+    std::error_code RetroPass::resolveAdaptation_(const PreRenderContext &context, const u32 selected) {
+        const hal::ProfileScope scope{"App.Pass.Retro.Adaptation"};
+        auto &slot = m_scene_slots[selected];
+        const rhi::SubresourceRange range{.layer = 0u, .layerCount = 1u, .mip = 0u, .mipCount = 1u};
+
+        const LuminanceHistogramParameters histogram_parameters{
+            {safe_narrowing(slot.m_output_extent.x), safe_narrowing(slot.m_output_extent.y)},
+            {kLuminanceExtent, kLuminanceExtent},
+            0u,
+            0u,
+        };
+
+        // The resolved temporal2x scene is the histogram source.
+        const rhi::Binding source_scene(slot.m_history_view);
+        const rhi::Binding luminance_view(slot.m_luminance_view);
+        const auto histogram_range = [&](rhi::IBuffer *const buffer) {
+            return rhi::BufferRange{.offset = 0u, .size = buffer->getDesc().size};
+        };
+
+        const auto dispatch = [&](const u32 index, const u32 x, const u32 y, const u32 z) -> std::error_code {
+            auto *const pass = context.m_encoder.beginComputePass();
+            PPR_RETURN_ERROR_ON_FAIL(
+                RetroPass, pass != nullptr ? std::error_code{} : std::make_error_code(std::errc::io_error));
+            pass->bindPipeline(m_histogram_pipelines[index], m_histogram_roots[selected][index]);
+            pass->dispatchCompute(x, y, z);
+            pass->end();
+            return {};
+        };
+
+        // Shared constants and static bindings on every histogram root.
+        for (u32 index = 0u; index < m_histogram_roots[selected].size(); ++index) {
+            rhi::ShaderCursor cursor{m_histogram_roots[selected][index]};
+            rhi::ShaderCursor constants;
+            PPR_RETURN_ERROR_ON_FAIL(RetroPass, cursor["g_luminance"].getDereferenced(constants));
+            PPR_RETURN_ERROR_ON_FAIL(RetroPass, constants.setData(&histogram_parameters, sizeof(histogram_parameters)));
+            PPR_RETURN_ERROR_ON_FAIL(RetroPass, cursor["g_scene"].setBinding(source_scene));
+            PPR_RETURN_ERROR_ON_FAIL(RetroPass, cursor["g_luminance_image"].setBinding(luminance_view));
+            PPR_RETURN_ERROR_ON_FAIL(
+                RetroPass, cursor["g_histogram"].setBinding(
+                               rhi::Binding(m_histogram_buffer, histogram_range(m_histogram_buffer))));
+            PPR_RETURN_ERROR_ON_FAIL(
+                RetroPass, cursor["g_target_ev"].setBinding(
+                               rhi::Binding(m_target_ev_buffer, histogram_range(m_target_ev_buffer))));
+        }
+
+        context.m_encoder.setTextureState(slot.m_luminance, range, rhi::ResourceState::UnorderedAccess);
+        context.m_encoder.setBufferState(m_histogram_buffer, rhi::ResourceState::UnorderedAccess);
+        context.m_encoder.setBufferState(m_target_ev_buffer, rhi::ResourceState::UnorderedAccess);
+
+        PPR_RETURN_ERROR_ON_FAIL(RetroPass, dispatch(0u, 1u, 1u, 1u)); // clearHistogram
+        context.m_encoder.globalBarrier();
+        PPR_RETURN_ERROR_ON_FAIL(
+            RetroPass, dispatch(1u, kLuminanceExtent / 8u, kLuminanceExtent / 8u, 1u)); // computeLuminance
+        context.m_encoder.globalBarrier();
+        PPR_RETURN_ERROR_ON_FAIL(
+            RetroPass, dispatch(2u, kLuminanceExtent / 8u, kLuminanceExtent / 8u, 1u)); // buildHistogram
+        context.m_encoder.globalBarrier();
+        PPR_RETURN_ERROR_ON_FAIL(RetroPass, dispatch(3u, 1u, 1u, 1u)); // reduceHistogram
+        context.m_encoder.globalBarrier();
+
+        const float frame_delta = std::chrono::duration<float>(m_request_elapsed).count();
+        const float dt = frame_delta > 0.0f ? frame_delta : 1.0f / 60.0f;
+        const AutoExposureParameters auto_parameters{
+            .m_adaptation_alpha = 1.0f - std::exp(-dt / m_settings.m_adaptation_tau),
+            .m_ev_min = m_settings.m_ev_min,
+            .m_ev_max = m_settings.m_ev_max,
+            .m_enabled = 1u,
+        };
+
+        const auto &history_slot = m_scene_slots[m_history_slot];
+        const bool history_valid = m_history_valid and
+                                   history_slot.m_auto_exposure_enabled and
+                                   history_slot.m_exposure_view != nullptr;
+        const auto previous_exposure = history_valid ? history_slot.m_exposure_view : m_empty_exposure_view;
+
+        rhi::ShaderCursor cursor{m_auto_exposure_roots[selected]};
+        rhi::ShaderCursor constants;
+        PPR_RETURN_ERROR_ON_FAIL(RetroPass, cursor["g_auto_exposure"].getDereferenced(constants));
+        PPR_RETURN_ERROR_ON_FAIL(RetroPass, constants.setData(&auto_parameters, sizeof(auto_parameters)));
+        PPR_RETURN_ERROR_ON_FAIL(
+            RetroPass,
+            cursor["g_target_ev"].setBinding(rhi::Binding(m_target_ev_buffer, histogram_range(m_target_ev_buffer))));
+        PPR_RETURN_ERROR_ON_FAIL(RetroPass, cursor["g_previous_exposure"].setBinding(rhi::Binding(previous_exposure)));
+        PPR_RETURN_ERROR_ON_FAIL(RetroPass, cursor["g_exposure"].setBinding(rhi::Binding(slot.m_exposure_view)));
+
+        context.m_encoder.setTextureState(slot.m_exposure, range, rhi::ResourceState::UnorderedAccess);
+        auto *const pass = context.m_encoder.beginComputePass();
+        PPR_RETURN_ERROR_ON_FAIL(
+            RetroPass, pass != nullptr ? std::error_code{} : std::make_error_code(std::errc::io_error));
+        pass->bindPipeline(m_auto_exposure_pipeline, m_auto_exposure_roots[selected]);
+        pass->dispatchCompute(1u, 1u, 1u);
+        pass->end();
+
+        context.m_encoder.setTextureState(slot.m_exposure, range, rhi::ResourceState::ShaderResource);
+        context.m_encoder.setTextureState(slot.m_luminance, range, rhi::ResourceState::ShaderResource);
+        return {};
+    }
+
+    // ------------------------------------------------------------------
     // multisample temporal reconstruction
     // ------------------------------------------------------------------
 
@@ -1650,6 +2083,11 @@ namespace pP {
                                : slot.m_spatial_enabled ? slot.m_spatial_view
                                : slot.m_temporal        ? slot.m_history_view
                                                         : slot.m_color_view)));
+        // Fixed exposure samples the zero offset; adapted exposure samples the
+        // per-slot offset written by the current frame's resolveAdaptation_.
+        PPR_RETURN_ERROR_ON_FAIL(
+            RetroPass, cursor["g_exposure"].setBinding(
+                           rhi::Binding(slot.m_auto_exposure_enabled ? slot.m_exposure_view : m_empty_exposure_view)));
         PPR_RETURN_ERROR_ON_FAIL(RetroPass, cursor["g_sampler"].setDescriptorHandle(m_sampler_handle));
 
         context.m_pass.setRenderState({

@@ -2197,6 +2197,404 @@ namespace pP::tests::detail {
             fixture.shutdown();
         };
     }
+
+    // ------------------------------------------------------------------
+    // histogram eye adaptation
+    // ------------------------------------------------------------------
+
+    namespace HistogramAdaptation {
+        PPR_UNIT_TEST (cpu_histogram_math) {
+            constexpr float ev_min = -4.0f;
+            constexpr float ev_max = 4.0f;
+
+            // Black frame: every luminance is zero. The log2 clamp keeps the
+            // reduction finite and the target EV pins to the lower bound.
+            std::vector<float> black(4096u, 0.0f);
+            std::array<u32, RetroPass::kHistogramBins> black_hist{};
+            for (const float lum: black) {
+                ++black_hist[RetroPass::luminanceBin(RetroPass::log2Luminance(lum))];
+            }
+            const float black_avg = RetroPass::averageLog2Luminance(black_hist, static_cast<u32>(black.size()));
+            PPR_TEST_ASSERT(std::isfinite(black_avg));
+            PPR_TEST_ASSERT(RetroPass::targetEv(black_avg, ev_min, ev_max) == ev_min);
+
+            // Uniform 0.18 middle gray: target EV lands near zero.
+            std::vector<float> uniform(4096u, 0.18f);
+            std::array<u32, RetroPass::kHistogramBins> uniform_hist{};
+            for (const float lum: uniform) {
+                ++uniform_hist[RetroPass::luminanceBin(RetroPass::log2Luminance(lum))];
+            }
+            const float uniform_avg = RetroPass::averageLog2Luminance(uniform_hist, static_cast<u32>(uniform.size()));
+            const float uniform_ev = RetroPass::targetEv(uniform_avg, ev_min, ev_max);
+            PPR_TEST_ASSERT(std::isfinite(uniform_ev));
+            PPR_TEST_ASSERT(std::abs(uniform_ev) < 0.25f);
+
+            // Bright-emitter dominated: one emitter among a dark background. The
+            // percentile clip suppresses the emitter, so the target stays below
+            // the middle-gray target and within the clamp window.
+            std::vector<float> emitter(4096u, 0.01f);
+            emitter[0] = 1000.0f;
+            std::array<u32, RetroPass::kHistogramBins> emitter_hist{};
+            for (const float lum: emitter) {
+                ++emitter_hist[RetroPass::luminanceBin(RetroPass::log2Luminance(lum))];
+            }
+            const float emitter_avg = RetroPass::averageLog2Luminance(emitter_hist, static_cast<u32>(emitter.size()));
+            const float emitter_ev = RetroPass::targetEv(emitter_avg, ev_min, ev_max);
+            PPR_TEST_ASSERT(std::isfinite(emitter_ev));
+            PPR_TEST_ASSERT(emitter_ev < uniform_ev);
+            PPR_TEST_ASSERT(emitter_ev >= ev_min);
+        };
+
+        // GPU smoke drives the real luminance_histogram.slang + auto_exposure.slang
+        // compute entries against a synthetic uniform HDR scene, then reads the
+        // adapted offset back once (no per-frame readback in production).
+        namespace Gpu {
+            struct Fixture {
+                safe_ptr<IShaderService> m_shaders{IShaderService::get()};
+                safe_ptr<IRhiService> m_rhi{IRhiService::get()};
+                rhi::ComPtr<rhi::ICommandQueue> m_queue;
+                FrameFence m_fence;
+
+                rhi::ComPtr<rhi::ITexture> m_scene;
+                rhi::ComPtr<rhi::ITextureView> m_scene_view;
+                rhi::ComPtr<rhi::ITexture> m_luminance;
+                rhi::ComPtr<rhi::ITextureView> m_luminance_view;
+                rhi::ComPtr<rhi::IBuffer> m_histogram;
+                rhi::ComPtr<rhi::IBuffer> m_target;
+                std::array<rhi::ComPtr<rhi::ITexture>, 2> m_exposure;
+                std::array<rhi::ComPtr<rhi::ITextureView>, 2> m_exposure_view;
+                std::array<rhi::ComPtr<rhi::IShaderProgram>, 4> m_histogram_programs;
+                std::array<rhi::ComPtr<rhi::IComputePipeline>, 4> m_histogram_pipelines;
+                std::array<rhi::ComPtr<rhi::IShaderObject>, 4> m_histogram_roots;
+                rhi::ComPtr<rhi::IShaderProgram> m_auto_program;
+                rhi::ComPtr<rhi::IComputePipeline> m_auto_pipeline;
+                rhi::ComPtr<rhi::IShaderObject> m_auto_root;
+                u32 m_exposure_index{};
+
+                [[nodiscard]] static rhi::BufferRange range_(rhi::IBuffer *const buffer) noexcept {
+                    return {.offset = 0u, .size = buffer->getDesc().size};
+                }
+
+                void initialize(const float luminance) {
+                    PPR_TEST_ASSERT(not m_shaders->initialize());
+                    const auto setting = config::getenvLookup("PPR_TEST_GPU_VALIDATION");
+                    const bool validation = setting and *setting == "1";
+                    m_rhi->setCoreValidation(true);
+                    m_rhi->setGpuAssistedValidation(validation);
+#ifdef _WIN32
+                    constexpr auto backend = rhi::DeviceType::D3D12;
+#else
+                    constexpr auto backend = rhi::DeviceType::Vulkan;
+#endif
+                    PPR_TEST_ASSERT(not m_rhi->initialize(backend, *m_shaders));
+                    auto &device = m_rhi->getDevice();
+                    PPR_TEST_ASSERT(not make_error_code(device.getQueue(rhi::QueueType::Graphics, m_queue.writeRef())));
+                    PPR_TEST_ASSERT(not m_fence.initialize(device));
+
+                    // Synthetic RGBA32Float scene, uniform luminance, uploaded once.
+                    const u32 edge = 64u;
+                    std::vector<float> scene(std::size_t(edge) * edge * 4u);
+                    for (std::size_t pixel = 0u; pixel < std::size_t(edge) * edge; ++pixel) {
+                        scene[pixel * 4u + 0u] = luminance;
+                        scene[pixel * 4u + 1u] = luminance;
+                        scene[pixel * 4u + 2u] = luminance;
+                        scene[pixel * 4u + 3u] = 1.0f;
+                    }
+                    const rhi::SubresourceData initial{
+                        .data = scene.data(),
+                        .rowPitch = edge * sizeof(float) * 4u,
+                        .slicePitch = std::size_t(edge) * edge * sizeof(float) * 4u};
+                    rhi::TextureDesc scene_desc{};
+                    scene_desc.type = rhi::TextureType::Texture2D;
+                    scene_desc.size = {.width = edge, .height = edge, .depth = 1u};
+                    scene_desc.arrayLength = 1u;
+                    scene_desc.mipCount = 1u;
+                    scene_desc.format = rhi::Format::RGBA32Float;
+                    scene_desc.usage = rhi::TextureUsage::ShaderResource;
+                    scene_desc.defaultState = rhi::ResourceState::ShaderResource;
+                    scene_desc.label = "histogram synthetic scene";
+                    PPR_TEST_ASSERT(
+                        not make_error_code(device.createTexture(scene_desc, &initial, m_scene.writeRef())));
+                    PPR_TEST_ASSERT(not make_error_code(m_scene->getDefaultView(m_scene_view.writeRef())));
+
+                    const auto uav_texture = [&](const u32 width, const u32 height, const char *const label,
+                                                 rhi::ComPtr<rhi::ITexture> &out,
+                                                 rhi::ComPtr<rhi::ITextureView> &view) {
+                        rhi::TextureDesc desc{};
+                        desc.type = rhi::TextureType::Texture2D;
+                        desc.size = {.width = width, .height = height, .depth = 1u};
+                        desc.arrayLength = 1u;
+                        desc.mipCount = 1u;
+                        desc.format = rhi::Format::R32Float;
+                        desc.usage = static_cast<rhi::TextureUsage>(
+                            static_cast<u32>(rhi::TextureUsage::ShaderResource) |
+                            static_cast<u32>(rhi::TextureUsage::UnorderedAccess));
+                        desc.defaultState = rhi::ResourceState::UnorderedAccess;
+                        desc.label = label;
+                        PPR_TEST_ASSERT(not make_error_code(device.createTexture(desc, nullptr, out.writeRef())));
+                        PPR_TEST_ASSERT(not make_error_code(out->getDefaultView(view.writeRef())));
+                    };
+                    uav_texture(edge, edge, "histogram luminance", m_luminance, m_luminance_view);
+
+                    // Zero-initialized exposure so the first adaptation frame reads
+                    // a finite previous offset (0) rather than uninitialized memory.
+                    const float zero = 0.0f;
+                    const rhi::SubresourceData zero_initial{
+                        .data = &zero, .rowPitch = sizeof(float), .slicePitch = sizeof(float)};
+                    const auto exposure_texture = [&](const char *const label, rhi::ComPtr<rhi::ITexture> &out,
+                                                      rhi::ComPtr<rhi::ITextureView> &view) {
+                        rhi::TextureDesc desc{};
+                        desc.type = rhi::TextureType::Texture2D;
+                        desc.size = {.width = 1u, .height = 1u, .depth = 1u};
+                        desc.arrayLength = 1u;
+                        desc.mipCount = 1u;
+                        desc.format = rhi::Format::R32Float;
+                        desc.usage = static_cast<rhi::TextureUsage>(
+                            static_cast<u32>(rhi::TextureUsage::ShaderResource) |
+                            static_cast<u32>(rhi::TextureUsage::UnorderedAccess));
+                        desc.defaultState = rhi::ResourceState::UnorderedAccess;
+                        desc.label = label;
+                        PPR_TEST_ASSERT(not make_error_code(device.createTexture(desc, &zero_initial, out.writeRef())));
+                        PPR_TEST_ASSERT(not make_error_code(out->getDefaultView(view.writeRef())));
+                    };
+                    exposure_texture("adaptation exposure 0", m_exposure[0], m_exposure_view[0]);
+                    exposure_texture("adaptation exposure 1", m_exposure[1], m_exposure_view[1]);
+
+                    const auto device_buffer = [&](const u64 bytes, const char *const label,
+                                                   rhi::ComPtr<rhi::IBuffer> &out) {
+                        rhi::BufferDesc desc{};
+                        desc.size = bytes;
+                        desc.elementSize = sizeof(u32);
+                        desc.memoryType = rhi::MemoryType::DeviceLocal;
+                        desc.usage = static_cast<rhi::BufferUsage>(
+                            static_cast<u32>(rhi::BufferUsage::ShaderResource) |
+                            static_cast<u32>(rhi::BufferUsage::UnorderedAccess));
+                        desc.defaultState = rhi::ResourceState::UnorderedAccess;
+                        desc.label = label;
+                        PPR_TEST_ASSERT(not make_error_code(device.createBuffer(desc, nullptr, out.writeRef())));
+                    };
+                    device_buffer(RetroPass::kHistogramBins * sizeof(u32), "histogram bins", m_histogram);
+                    device_buffer(sizeof(float), "histogram target EV", m_target);
+
+                    shader::SharedModule histogram_module{};
+                    PPR_TEST_ASSERT(not m_shaders->loadModuleFromFile(
+                        std::filesystem::current_path() / "shaders" / "luminance_histogram.slang",
+                        "luminance_histogram", histogram_module.writeRef()));
+                    const char *const histogram_entries[] = {
+                        "clearHistogram", "computeLuminance", "buildHistogram", "reduceHistogram"};
+                    for (u32 index = 0u; index < 4u; ++index) {
+                        shader::ComPtr<slang::IEntryPoint> entry;
+                        PPR_TEST_ASSERT(not make_error_code(
+                            histogram_module->findEntryPointByName(histogram_entries[index], entry.writeRef())));
+                        slang::IComponentType *entries[] = {entry.get()};
+                        rhi::ShaderProgramDesc desc{};
+                        desc.linkingStyle = rhi::LinkingStyle::SingleProgram;
+                        desc.slangGlobalScope = histogram_module.get();
+                        desc.slangEntryPoints = entries;
+                        desc.slangEntryPointCount = 1u;
+                        shader::Diagnose diagnostics;
+                        PPR_TEST_ASSERT(not make_error_code(device.createShaderProgram(
+                            desc, m_histogram_programs[index].writeRef(), diagnostics.writeRef())));
+                        rhi::ComputePipelineDesc pipeline_desc{};
+                        pipeline_desc.program = m_histogram_programs[index];
+                        PPR_TEST_ASSERT(not make_error_code(
+                            device.createComputePipeline(pipeline_desc, m_histogram_pipelines[index].writeRef())));
+                        PPR_TEST_ASSERT(not make_error_code(device.createRootShaderObject(
+                            m_histogram_programs[index].get(), m_histogram_roots[index].writeRef())));
+                    }
+
+                    shader::SharedModule auto_module{};
+                    PPR_TEST_ASSERT(not m_shaders->loadModuleFromFile(
+                        std::filesystem::current_path() / "shaders" / "auto_exposure.slang", "auto_exposure",
+                        auto_module.writeRef()));
+                    shader::ComPtr<slang::IEntryPoint> auto_entry;
+                    PPR_TEST_ASSERT(
+                        not make_error_code(auto_module->findEntryPointByName("adaptExposure", auto_entry.writeRef())));
+                    slang::IComponentType *auto_entries[] = {auto_entry.get()};
+                    rhi::ShaderProgramDesc auto_desc{};
+                    auto_desc.linkingStyle = rhi::LinkingStyle::SingleProgram;
+                    auto_desc.slangGlobalScope = auto_module.get();
+                    auto_desc.slangEntryPoints = auto_entries;
+                    auto_desc.slangEntryPointCount = 1u;
+                    shader::Diagnose auto_diagnostics;
+                    PPR_TEST_ASSERT(not make_error_code(
+                        device.createShaderProgram(auto_desc, m_auto_program.writeRef(), auto_diagnostics.writeRef())));
+                    rhi::ComputePipelineDesc auto_pipeline_desc{};
+                    auto_pipeline_desc.program = m_auto_program;
+                    PPR_TEST_ASSERT(not make_error_code(
+                        device.createComputePipeline(auto_pipeline_desc, m_auto_pipeline.writeRef())));
+                    PPR_TEST_ASSERT(not make_error_code(
+                        device.createRootShaderObject(m_auto_program.get(), m_auto_root.writeRef())));
+                }
+
+                void submit(rhi::ICommandEncoder &encoder) {
+                    rhi::ComPtr<rhi::ICommandBuffer> commands;
+                    PPR_TEST_ASSERT(not make_error_code(encoder.finish(commands.writeRef())));
+                    rhi::ICommandBuffer *pointer = commands.get();
+                    rhi::IFence *fence = m_fence.fence();
+                    const auto value = m_fence.nextValue();
+                    const u64 raw = value;
+                    rhi::SubmitDesc description{};
+                    description.commandBuffers = &pointer;
+                    description.commandBufferCount = 1u;
+                    description.signalFences = &fence;
+                    description.signalFenceValues = &raw;
+                    description.signalFenceCount = 1u;
+                    PPR_TEST_ASSERT(not make_error_code(m_queue->submit(description)));
+                    m_fence.commitSubmitted(value);
+                    PPR_TEST_ASSERT(not m_fence.waitFor(value));
+                }
+
+                // Runs the histogram + adaptation chain once and returns the newly
+                // written adapted offset (fenced readback).
+                float adapt(const float alpha, const bool enabled) {
+                    struct alignas(16) HistogramParameters {
+                        u32 m_source_extent[2];
+                        u32 m_luminance_extent[2];
+                        u32 m_reserved0;
+                        u32 m_reserved1;
+                    };
+                    struct alignas(16) AutoParameters {
+                        float m_alpha;
+                        float m_ev_min;
+                        float m_ev_max;
+                        u32 m_enabled;
+                    };
+
+                    const u32 edge = 64u;
+                    const HistogramParameters histogram{{edge, edge}, {edge, edge}, 0u, 0u};
+                    const AutoParameters automatic{alpha, -4.0f, 4.0f, enabled ? 1u : 0u};
+
+                    rhi::ComPtr<rhi::ICommandEncoder> encoder;
+                    PPR_TEST_ASSERT(not make_error_code(m_queue->createCommandEncoder(encoder.writeRef())));
+
+                    const rhi::SubresourceRange range{.layer = 0u, .layerCount = 1u, .mip = 0u, .mipCount = 1u};
+                    for (u32 index = 0u; index < 4u; ++index) {
+                        rhi::ShaderCursor cursor{m_histogram_roots[index]}, constants{};
+                        PPR_TEST_ASSERT(not make_error_code(cursor["g_luminance"].getDereferenced(constants)));
+                        PPR_TEST_ASSERT(not make_error_code(constants.setData(&histogram, sizeof(histogram))));
+                        PPR_TEST_ASSERT(not make_error_code(cursor["g_scene"].setBinding(rhi::Binding(m_scene_view))));
+                        PPR_TEST_ASSERT(not make_error_code(
+                            cursor["g_luminance_image"].setBinding(rhi::Binding(m_luminance_view))));
+                        PPR_TEST_ASSERT(not make_error_code(
+                            cursor["g_histogram"].setBinding(rhi::Binding(m_histogram, range_(m_histogram)))));
+                        PPR_TEST_ASSERT(not make_error_code(
+                            cursor["g_target_ev"].setBinding(rhi::Binding(m_target, range_(m_target)))));
+                    }
+
+                    encoder->setTextureState(m_luminance, range, rhi::ResourceState::UnorderedAccess);
+                    encoder->setBufferState(m_histogram, rhi::ResourceState::UnorderedAccess);
+                    encoder->setBufferState(m_target, rhi::ResourceState::UnorderedAccess);
+
+                    const auto dispatch = [&](const u32 index, const u32 x, const u32 y) {
+                        auto *const pass = encoder->beginComputePass();
+                        PPR_TEST_ASSERT(pass != nullptr);
+                        pass->bindPipeline(m_histogram_pipelines[index], m_histogram_roots[index]);
+                        pass->dispatchCompute(x, y, 1u);
+                        pass->end();
+                    };
+
+                    dispatch(0u, 1u, 1u); // clearHistogram
+                    encoder->globalBarrier();
+                    dispatch(1u, edge / 8u, edge / 8u); // computeLuminance
+                    encoder->globalBarrier();
+                    dispatch(2u, edge / 8u, edge / 8u); // buildHistogram
+                    encoder->globalBarrier();
+                    dispatch(3u, 1u, 1u); // reduceHistogram
+                    encoder->globalBarrier();
+
+                    const u32 previous = m_exposure_index;
+                    const u32 current = 1u - m_exposure_index;
+                    m_exposure_index = current;
+
+                    rhi::ShaderCursor cursor{m_auto_root}, constants{};
+                    PPR_TEST_ASSERT(not make_error_code(cursor["g_auto_exposure"].getDereferenced(constants)));
+                    PPR_TEST_ASSERT(not make_error_code(constants.setData(&automatic, sizeof(automatic))));
+                    PPR_TEST_ASSERT(not make_error_code(
+                        cursor["g_target_ev"].setBinding(rhi::Binding(m_target, range_(m_target)))));
+                    PPR_TEST_ASSERT(not make_error_code(
+                        cursor["g_previous_exposure"].setBinding(rhi::Binding(m_exposure_view[previous]))));
+                    PPR_TEST_ASSERT(
+                        not make_error_code(cursor["g_exposure"].setBinding(rhi::Binding(m_exposure_view[current]))));
+
+                    encoder->setTextureState(m_exposure[current], range, rhi::ResourceState::UnorderedAccess);
+                    auto *const pass = encoder->beginComputePass();
+                    PPR_TEST_ASSERT(pass != nullptr);
+                    pass->bindPipeline(m_auto_pipeline, m_auto_root);
+                    pass->dispatchCompute(1u, 1u, 1u);
+                    pass->end();
+                    encoder->setTextureState(m_exposure[current], range, rhi::ResourceState::ShaderResource);
+
+                    submit(*encoder);
+
+                    shader::ComPtr<ISlangBlob> blob;
+                    rhi::SubresourceLayout layout{};
+                    PPR_TEST_ASSERT(not make_error_code(
+                        m_rhi->getDevice().readTexture(m_exposure[current], 0u, 0u, blob.writeRef(), &layout)));
+                    const auto *const source = static_cast<const std::byte *>(blob->getBufferPointer());
+                    float value{};
+                    std::memcpy(&value, source, sizeof(value));
+                    return value;
+                }
+
+                void shutdown() {
+                    if (m_queue and make_error_code(m_queue->waitOnHost()))
+                        hal::fatalExit("histogram-adaptation-test-quiescence-unknown");
+
+                    m_auto_root.setNull();
+                    m_auto_pipeline.setNull();
+                    m_auto_program.setNull();
+                    m_histogram_roots = {};
+                    m_histogram_pipelines = {};
+                    m_histogram_programs = {};
+                    m_target.setNull();
+                    m_histogram.setNull();
+                    m_exposure_view[0].setNull();
+                    m_exposure_view[1].setNull();
+                    m_exposure[0].setNull();
+                    m_exposure[1].setNull();
+                    m_luminance_view.setNull();
+                    m_luminance.setNull();
+                    m_scene_view.setNull();
+                    m_scene.setNull();
+                    PPR_TEST_ASSERT(not m_fence.shutdown());
+                    m_queue.setNull();
+                    PPR_TEST_ASSERT(not m_rhi->shutdown());
+                    PPR_TEST_ASSERT(not m_shaders->shutdown());
+                }
+            };
+
+            PPR_UNIT_TEST (gpu_adaptation_smoke) {
+                const float tau = 0.7f;
+                const float alpha = 1.0f - std::exp(-(1.0f / 60.0f) / tau);
+
+                Fixture fixture;
+                fixture.initialize(0.18f);
+                PPR_DEFER {
+                    fixture.shutdown();
+                };
+
+                // Two adapted frames: finite, bounded change, within the clamp.
+                const float first = fixture.adapt(alpha, true);
+                const float second = fixture.adapt(alpha, true);
+                PPR_TEST_ASSERT(std::isfinite(first) and std::isfinite(second));
+                PPR_TEST_ASSERT(first >= -4.0f and first <= 4.0f);
+                PPR_TEST_ASSERT(second >= -4.0f and second <= 4.0f);
+                PPR_TEST_ASSERT(std::abs(second - first) < 1.0f);
+
+                // Fixed exposure (disabled) writes the zero offset deterministically.
+                const float fixed_a = fixture.adapt(alpha, false);
+                const float fixed_b = fixture.adapt(alpha, false);
+                PPR_TEST_ASSERT(fixed_a == 0.0f);
+                PPR_TEST_ASSERT(fixed_b == 0.0f);
+            };
+        }
+
+        const UnitTest histogram_adaptation = UnitTest::Named("histogram_adaptation") /
+                                              [](UnitTest::IRun &run) -> void {
+            run.recurse({cpu_histogram_math, Gpu::gpu_adaptation_smoke});
+        };
+    }
 }
 
 namespace pP::tests {
@@ -2233,6 +2631,7 @@ namespace pP::tests {
             detail::WorldLightFieldGpu::grid_shading_uses_field,
             detail::WorldLightFieldGpu::translucent_clipped_by_terrain,
             detail::WorldLightFieldGpu::translucent_premultiplied_absorption,
+            detail::HistogramAdaptation::histogram_adaptation,
         });
     };
 

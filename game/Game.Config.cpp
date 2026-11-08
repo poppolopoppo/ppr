@@ -320,6 +320,10 @@ namespace pP::game {
         retro.m_exposure_ev = post.m_exposure_ev;
         retro.m_bloom_enabled = post.m_bloom;
         retro.m_palette_enabled = post.m_palette;
+        retro.m_auto_exposure = post.m_auto_exposure;
+        retro.m_adaptation_tau = post.m_adaptation_tau;
+        retro.m_ev_min = post.m_ev_min;
+        retro.m_ev_max = post.m_ev_max;
     }
 
     // ------------------------------------------------------------------

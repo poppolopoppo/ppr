@@ -31,6 +31,12 @@ export namespace pP {
         // Requires scene-linear HDR with spatial or temporal2x reconstruction.
         bool m_bloom_enabled{false};
         bool m_temporal_2x_enabled{false};
+        // Histogram eye adaptation: temporal2x-resolved HDR only. The adapted
+        // EV is an offset around m_exposure_ev, clamped to [m_ev_min, m_ev_max].
+        bool m_auto_exposure{false};
+        float m_adaptation_tau{0.7f};
+        float m_ev_min{-4.0f};
+        float m_ev_max{4.0f};
     };
 
     // Actual immutable lighting publication used by this scene. The existing
@@ -76,7 +82,28 @@ export namespace pP {
         static constexpr u32 kMaxPixelScale{8u};
         static constexpr u32 kPaletteSize{32u};
 
+        // Histogram eye-adaptation reduction constants, mirrored field-for-field
+        // by luminance_histogram.slang. The CPU functions below are the exact
+        // oracle the shader's log-bin/percentile reduction must match.
+        static constexpr u32 kHistogramBins{64u};
+        static constexpr u32 kLuminanceExtent{64u};
+        static constexpr float kLog2LuminanceMin{-8.0f};
+        static constexpr float kLog2LuminanceMax{8.0f};
+        static constexpr float kHistogramLowPercentile{0.10f};
+        static constexpr float kHistogramHighPercentile{0.90f};
+        static constexpr float kMiddleGrayLuminance{0.18f};
+
         [[nodiscard]] static u32 clampPixelScale(u32 scale) noexcept;
+
+        // CPU mirror of the histogram reduction (tested directly, and the GPU
+        // smoke oracle). log2Luminance clamps zero to the representable floor so
+        // a black frame stays finite; targetEv clamps to [ev_min, ev_max].
+        [[nodiscard]] static float luminance(float r, float g, float b) noexcept;
+        [[nodiscard]] static float log2Luminance(float lum) noexcept;
+        [[nodiscard]] static u32 luminanceBin(float log2_lum) noexcept;
+        [[nodiscard]] static float histogramBinCenterLog2(u32 bin) noexcept;
+        [[nodiscard]] static float averageLog2Luminance(std::span<const u32> histogram, u32 total_pixels) noexcept;
+        [[nodiscard]] static float targetEv(float average_log2_lum, float ev_min, float ev_max) noexcept;
         [[nodiscard]] static int2 sceneExtent(int2 native_extent, u32 pixel_scale) noexcept;
         [[nodiscard]] static RenderPipelineSignature scenePipelineSignature(bool temporal = false) noexcept;
         [[nodiscard]] static RenderPipelineSignature temporal2xScenePipelineSignature() noexcept;
@@ -156,6 +183,10 @@ export namespace pP {
             rhi::ComPtr<rhi::ITextureView> m_spatial_view{};
             std::array<rhi::ComPtr<rhi::ITexture>, 2> m_bloom{};
             std::array<rhi::ComPtr<rhi::ITextureView>, 2> m_bloom_views{};
+            rhi::ComPtr<rhi::ITexture> m_luminance{};
+            rhi::ComPtr<rhi::ITextureView> m_luminance_view{};
+            rhi::ComPtr<rhi::ITexture> m_exposure{};
+            rhi::ComPtr<rhi::ITextureView> m_exposure_view{};
             CameraSnapshot m_picture_camera{};
             std::array<u64, 3> m_picture_identity{};
             u64 m_picture_lighting_revision{};
@@ -170,6 +201,7 @@ export namespace pP {
             bool m_temporal_2x{};
             bool m_spatial_enabled{};
             bool m_bloom_enabled{};
+            bool m_auto_exposure_enabled{};
         };
 
         // ------------------------------------------------------------------
@@ -193,6 +225,9 @@ export namespace pP {
         [[nodiscard]] std::error_code resolveTemporal2x_(const PreRenderContext &context, u32 selected);
         [[nodiscard]] std::error_code ensureBloomPrograms_(rhi::IDevice &device);
         [[nodiscard]] std::error_code resolveBloom_(const PreRenderContext &context, u32 selected);
+        [[nodiscard]] std::error_code ensureHistogramPrograms_(rhi::IDevice &device);
+        [[nodiscard]] std::error_code ensureAutoExposureProgram_(rhi::IDevice &device);
+        [[nodiscard]] std::error_code resolveAdaptation_(const PreRenderContext &context, u32 selected);
 
 
         // ------------------------------------------------------------------
@@ -218,6 +253,16 @@ export namespace pP {
         std::array<rhi::ComPtr<rhi::IShaderProgram>, 2> m_bloom_programs{};
         std::array<rhi::ComPtr<rhi::IComputePipeline>, 2> m_bloom_pipelines{};
         std::array<std::array<rhi::ComPtr<rhi::IShaderObject>, 2>, kFrameRingSlots> m_bloom_roots{};
+        std::array<rhi::ComPtr<rhi::IShaderProgram>, 4> m_histogram_programs{};
+        std::array<rhi::ComPtr<rhi::IComputePipeline>, 4> m_histogram_pipelines{};
+        std::array<std::array<rhi::ComPtr<rhi::IShaderObject>, 4>, kFrameRingSlots> m_histogram_roots{};
+        rhi::ComPtr<rhi::IShaderProgram> m_auto_exposure_program{};
+        rhi::ComPtr<rhi::IComputePipeline> m_auto_exposure_pipeline{};
+        std::array<rhi::ComPtr<rhi::IShaderObject>, kFrameRingSlots> m_auto_exposure_roots{};
+        rhi::ComPtr<rhi::IBuffer> m_histogram_buffer{};
+        rhi::ComPtr<rhi::IBuffer> m_target_ev_buffer{};
+        rhi::ComPtr<rhi::ITexture> m_empty_exposure{};
+        rhi::ComPtr<rhi::ITextureView> m_empty_exposure_view{};
         // Injected service outlives this pass, including lazy first-use compilation.
         safe_ptr<IShaderService> m_shader_service{};
         std::filesystem::path m_content_dir{};

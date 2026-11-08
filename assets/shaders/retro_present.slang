@@ -24,6 +24,9 @@ ConstantBuffer<RetroParameters> g_retro;
 // independent of the bound sampler's filtering mode.
 Texture2D<float4> g_scene;
 Texture2D<float4> g_bloom;
+// 1x1 adapted-exposure offset around the manual exposure (EV). The fixed-exposure
+// path binds the zero offset, so the sampled multiplier stays a no-op.
+Texture2D<float4> g_exposure;
 struct RetroVertexOutput {
     float4 position : SV_Position;
     float2 uv : TEXCOORD0;
@@ -82,7 +85,10 @@ float4 fragmentRetroPresent(RetroVertexOutput input,
         source_linear += retroBloomBilinear(input.uv) * 0.125;
     }
     if (g_retro.m_hdr_enabled != 0u) {
-        source_linear = displayAgxPunchy(source_linear, g_retro.m_exposure_multiplier);
+        // Manual EV multiplied by the adapted offset; both are EV, so exponentiate
+        // the sum. AgX applies the combined exposure exactly once.
+        float exposure = g_retro.m_exposure_multiplier * exp2(g_exposure.Load(int3(0, 0, 0)).x);
+        source_linear = displayAgxPunchy(source_linear, exposure);
     }
     if (g_retro.m_palette_enabled == 0u) {
         return float4(g_retro.m_encode_srgb != 0u ? linearToSrgb(source_linear) : source_linear, 1.0);
