@@ -597,16 +597,17 @@ namespace pP::tests::detail {
             return static_cast<u16>(result);
         }
 
-        // Synthetic two-level hierarchy used by the composite/diffuse references.
-        // Level 0 radiance (px,py,d) = (0.25px, 0.25py, 0.25d), transmittance
-        // 0.75; level 1 adds 1.0 and uses transmittance 0.5; deeper levels stay
-        // zeroed so the composite reduces to L0 + T0*L1.
+        // Synthetic four-level hierarchy used by the composite/diffuse references
+        // (levels 4+ stay zeroed with transmittance 0, so the composite stops at
+        // level 3). Level l radiance (px,py,d) = (l + 0.25px, l + 0.25py, l + 0.25d)
+        // and transmittance 0.9 - 0.2*l, so every level contributes a distinct
+        // base and the transmittance chain spans the four finest levels.
         [[nodiscard]] std::vector<RadianceHalf> makeSyntheticField(const lighting::WorldLightPlan &plan) {
             std::vector<RadianceHalf> field(plan.m_radiance_samples, RadianceHalf{});
-            for (u32 level = 0u; level < 2u; ++level) {
+            for (u32 level = 0u; level < 4u; ++level) {
                 const auto &L = plan.m_levels[level];
-                const float base = level == 0u ? 0.0f : 1.0f;
-                const float transmittance = level == 0u ? 0.75f : 0.5f;
+                const float base = float(level);
+                const float transmittance = 0.9f - 0.2f * float(level);
                 for (u32 py = 0u; py < L.m_probes_y; ++py) {
                     for (u32 px = 0u; px < L.m_probes_x; ++px) {
                         for (u32 d = 0u; d < L.m_directions; ++d) {
@@ -624,11 +625,18 @@ namespace pP::tests::detail {
         }
 
         // CPU oracle of worldLightComposite: per-level bilinear over probes,
-        // angular bin from the direction, and the near-to-far transmittance
-        // composite. Decodes the same half bytes the GPU reads.
+        // angular bin from the direction (with the same boundary epsilon as the
+        // shader), and the near-to-far transmittance composite. Decodes the same
+        // half bytes the GPU reads.
         [[nodiscard]] std::array<float, 3> compositeReference(
             const lighting::WorldLightPlan &plan, const std::vector<RadianceHalf> &field, const float2 &position,
             const float2 &direction) {
+            // The field origin is world (0,0) in WorldLightField::initialize; keep
+            // the (position - origin) form the GPU uses so a non-zero origin stays
+            // correct.
+            constexpr float origin_x = 0.0f;
+            constexpr float origin_y = 0.0f;
+
             std::array<float, 3> result{0.0f, 0.0f, 0.0f};
             float throughput = 1.0f;
             for (u32 level = 0u; level < plan.m_level_count; ++level) {
@@ -636,8 +644,8 @@ namespace pP::tests::detail {
                 const float spacing = float(L.m_spacing_cells);
                 const float cell_metres = plan.m_cell_metres;
 
-                const float uvx = position.x / (cell_metres * spacing) - 0.5f;
-                const float uvy = position.y / (cell_metres * spacing) - 0.5f;
+                const float uvx = (position.x - origin_x) / (cell_metres * spacing) - 0.5f;
+                const float uvy = (position.y - origin_y) / (cell_metres * spacing) - 0.5f;
                 const int base_x = int(std::floor(uvx));
                 const int base_y = int(std::floor(uvy));
                 const float fx = uvx - float(base_x);
@@ -648,7 +656,8 @@ namespace pP::tests::detail {
                     angle += 6.28318530718f;
                 const u32 d = u32(
                     std::clamp(
-                        int(std::floor(angle * float(L.m_directions) / 6.28318530718f)), 0, int(L.m_directions) - 1));
+                        int(std::floor(angle * float(L.m_directions) / 6.28318530718f + 1e-3f)), 0,
+                        int(L.m_directions) - 1));
 
                 const auto probe = [&](const int px, const int py) -> std::pair<std::array<float, 3>, float> {
                     if (px < 0 or py < 0 or px >= int(L.m_probes_x) or py >= int(L.m_probes_y)) {
@@ -1166,6 +1175,54 @@ namespace pP::tests::detail {
 
             fixture.shutdown();
         };
+
+        PPR_UNIT_TEST (specular_vertical_reflection_and_roughness_finite) {
+            constexpr u32 width = 64u;
+            constexpr u32 height = 64u;
+
+            Fixture fixture;
+            fixture.initialize(width, height);
+            auto &field = fixture.m_field;
+
+            const auto plan = lighting::planWorldLight({.m_width = width, .m_height = height, .m_cell_metres = 0.5f});
+            PPR_TEST_ASSERT(plan.has_value());
+
+            const std::vector<RadianceHalf> synthetic = makeSyntheticField(*plan);
+            fixture.write(field.view().m_radiance, synthetic);
+
+            const float2 position{2.3f, 3.7f};
+
+            // A vertical (zero horizontal) reflection has no in-plane direction to
+            // sample: the specular term is finite and exactly zero, never NaN.
+            const std::array<float, 3> vertical = fixture.evaluate(
+                position, float2{0.0f, 0.0f}, float3{0.0f, 0.0f, 1.0f}, 0.0f,
+                lighting::WorldLightField::EvaluateMode::kSpecular);
+            for (u32 channel = 0u; channel < 3u; ++channel) {
+                PPR_TEST_ASSERT(std::isfinite(vertical[channel]));
+                PPR_TEST_ASSERT(vertical[channel] == 0.0f);
+            }
+
+            // Zero roughness returns the composite at the reflection direction.
+            const float2 reflection{1.0f, 0.0f};
+            const std::array<float, 3> sharp = fixture.evaluate(
+                position, reflection, float3{0.0f, 0.0f, 1.0f}, 0.0f,
+                lighting::WorldLightField::EvaluateMode::kSpecular);
+            const std::array<float, 3> sharp_ref = compositeReference(*plan, synthetic, position, reflection);
+            for (u32 channel = 0u; channel < 3u; ++channel) {
+                PPR_TEST_ASSERT(std::isfinite(sharp[channel]));
+                PPR_TEST_ASSERT(std::abs(sharp[channel] - sharp_ref[channel]) <= 1e-4f);
+            }
+
+            // Positive roughness widens the lobe but stays finite.
+            const std::array<float, 3> rough = fixture.evaluate(
+                position, reflection, float3{0.0f, 0.0f, 1.0f}, 0.5f,
+                lighting::WorldLightField::EvaluateMode::kSpecular);
+            for (u32 channel = 0u; channel < 3u; ++channel) {
+                PPR_TEST_ASSERT(std::isfinite(rough[channel]));
+            }
+
+            fixture.shutdown();
+        };
     }
 }
 
@@ -1196,6 +1253,7 @@ namespace pP::tests {
             detail::WorldLightFieldGpu::field_is_camera_independent,
             detail::WorldLightFieldGpu::composite_matches_cpu_reference,
             detail::WorldLightFieldGpu::diffuse_plus_z_isotropic_and_perturbed_finite,
+            detail::WorldLightFieldGpu::specular_vertical_reflection_and_roughness_finite,
         });
     };
 

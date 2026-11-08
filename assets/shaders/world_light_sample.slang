@@ -18,6 +18,11 @@
 static const float kWorldLightTau = 6.28318530718;
 static const uint kWorldLightDiffuseDirections = 8u;
 
+// Snaps an angular index that falls on (or within float error of) a bin
+// boundary to the upper bin, so a direction sampled via cos/sin -> atan2 maps to
+// the same bin on every level. Kept far below a bin's half-width in index space.
+static const float kWorldLightDirectionEpsilon = 1e-3;
+
 // ------------------------------------------------------------------
 // one probe, one direction
 // ------------------------------------------------------------------
@@ -48,13 +53,15 @@ bool worldLightProbe(WorldLightLevelGpu level, int2 probe, uint direction, out f
 
 // Maps a continuous 2D direction to its angular bin in [0, directions). The
 // stored direction d is centred at (d + 0.5) * tau / directions, matching the
-// trace's angular layout.
+// trace's angular layout. The epsilon makes the boundary deterministic: a
+// direction recovered from cos/sin that lands within float error of a bin edge
+// still maps to the same bin on every level instead of flickering between two.
 [ForceInline]
 uint worldLightDirectionIndex(float2 direction, uint directions) {
     float angle = atan2(direction.y, direction.x);
     if (angle < 0.0) angle += kWorldLightTau;
     float index = angle * float(directions) / kWorldLightTau;
-    return uint(clamp(floor(index), 0.0, float(directions) - 1.0));
+    return uint(clamp(floor(index + kWorldLightDirectionEpsilon), 0.0, float(directions) - 1.0));
 }
 
 // Bilinearly gathers one level's radiance and transmittance at a world-space
@@ -148,10 +155,18 @@ float3 worldLightDiffuse(float2 position, float3 normal) {
 
 // Reflection term plus a roughness lobe. A zero roughness returns the composite
 // at the reflection direction; increasing roughness blends toward a small
-// deterministic neighbour set spread around the reflection.
+// deterministic neighbour set spread around the reflection. A vertical (or zero)
+// reflection has no in-plane component, so there is no 2D direction to sample:
+// the specular term is zero rather than a NaN normalize.
 [ForceInline]
 float3 worldLightSpecular(float2 position, float3 reflection, float roughness) {
-    float2 r = normalize(float2(reflection.x, reflection.y));
+    float2 r = float2(reflection.x, reflection.y);
+    float rLength = length(r);
+    if (rLength <= 1e-6) {
+        return float3(0.0, 0.0, 0.0);
+    }
+    r /= rLength;
+
     float3 sharp = worldLightComposite(position, r);
 
     float lobe = clamp(roughness, 0.0, 1.0);
