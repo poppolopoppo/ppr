@@ -383,7 +383,7 @@ export namespace pP::game {
         float m_ev_min{-4.0f};
         float m_ev_max{4.0f};
         bool m_bloom{false};
-        float m_bloom_intensity{1.0f};
+        float m_bloom_intensity{0.125f};
         float m_bloom_threshold{1.0f};
         bool m_palette{false};
 

@@ -126,11 +126,13 @@ void downsampleBloom(uint3 gid : SV_GroupID, uint3 gtid : SV_GroupThreadID) {
     uint2 mip0 = g_bloom.mip0Extent;
     uint mipCount = g_bloom.mipCount;
 
-    // mip 1 = 16x16 per workgroup tile, a plain 2x2 box of mip 0.
+    // mip 1 = 16x16 per workgroup tile, a plain 2x2 box of mip 0. The mipCount
+    // guard keeps a single-mip chain (output <= 2x2) from aliasing mip 1 onto
+    // mip 0's view and halving the prefilter result.
     uint2 mip1Extent = max(uint2(1, 1), mip0 >> 1u);
     uint2 dst = gid.xy * 16u + t;
     float4 value = float4(0.0, 0.0, 0.0, 0.0);
-    if (all(dst < mip1Extent)) {
+    if (mipCount > 1u && all(dst < mip1Extent)) {
         uint2 src = dst * 2u;
         value = (loadMip0(src) + loadMip0(src + uint2(1, 0)) +
                  loadMip0(src + uint2(0, 1)) + loadMip0(src + uint2(1, 1))) *

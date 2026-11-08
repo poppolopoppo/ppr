@@ -966,7 +966,7 @@ namespace pP::game::tests::detail::compat {
         PPR_TEST_ASSERT(normal->m_post.m_value.m_adaptation_tau == 0.7f);
         PPR_TEST_ASSERT(normal->m_post.m_value.m_ev_min == -4.0f and normal->m_post.m_value.m_ev_max == 4.0f);
         PPR_TEST_ASSERT(not normal->m_post.m_value.m_bloom);
-        PPR_TEST_ASSERT(normal->m_post.m_value.m_bloom_intensity == 1.0f);
+        PPR_TEST_ASSERT(normal->m_post.m_value.m_bloom_intensity == 0.125f);
         PPR_TEST_ASSERT(normal->m_post.m_value.m_bloom_threshold == 1.0f);
         PPR_TEST_ASSERT(not normal->m_post.m_value.m_palette);
 

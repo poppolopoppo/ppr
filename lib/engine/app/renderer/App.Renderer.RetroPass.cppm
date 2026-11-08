@@ -30,7 +30,7 @@ export namespace pP {
         float m_exposure_ev{0.0f};
         // Requires scene-linear HDR with spatial or temporal2x reconstruction.
         bool m_bloom_enabled{false};
-        float m_bloom_intensity{1.0f};
+        float m_bloom_intensity{0.125f};
         float m_bloom_threshold{1.0f};
         bool m_temporal_2x_enabled{false};
         // Histogram eye adaptation: temporal2x-resolved HDR only. The adapted

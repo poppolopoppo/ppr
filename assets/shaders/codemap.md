@@ -770,21 +770,20 @@ then invokes the existing lookup/moment entries on its own bounded control
 buffers before256 secondary evaluations. This is a diagnostic moment control,
 not a production transport mode or acceptance of the rejected RC leakage gate.
 
-## Retro bloom
+## Retro bloom (SPD)
 
-`retro_bloom.slang` supplies `extractRetroBloom` and `blurRetroBloom` to the
-existing RetroPass. Both use a reflected 32-byte block: uint2 source extent at0,
-uint2 bloom extent at8, scene-unit threshold at16, and three zeroed scalar
-uint reserved words at20/24/28.
-Extraction averages only valid texels of each bounded4x4 output tile after
-nonnegative luminance extraction; the second entry accumulates the normalized
-[1,4,6,4,1] outer product in FP32 with clamped edges. Separate RGBA16F targets
-prevent read/write aliasing. `retro_present.slang` reuses the final reserved
-scalar of its unchanged544-byte block as the bloom flag and binds one additional
-2D SRV. Four explicit Loads plus bilerp preserve the existing point sampler;
-scene-unit glow is added at1/8 before exactly one exposure/AgX evaluation.
-Disabled draws bind their existing2D scene SRV without bloom loads. Existing
-whole-directory staging includes the new asset. Qualification is pending.
+`spd_bloom.slang` supplies three compute entries to RetroPass: `prefilterBloom`
+(a half-resolution soft-knee + Karis bright pass), `downsampleBloom` (one
+dispatch reducing mips 1..5 with a workgroup-local 2x2 box over a 32x32 mip0
+tile, per-level bloom weights folded into each mip write), and `upsampleBloom`
+(a per-level 3x3 tent accumulating each mip back into mip 0). All three share a
+reflected 32-byte `BloomParameters` block: uint2 source extent at0, uint2 mip0
+extent at8, exposed-unit threshold at16, soft knee at20, mip count at24, and the
+upsample source level at28. The prefilter also samples a 1x1 `g_exposure` offset
+and divides the threshold/soft knee back to scene units (`exp2(-adapted)`), so
+the bright pass is exposure-aware. A single RGBA16F texture holds the mip chain,
+bound as per-mip UAV views; `retro_present.slang` adds mip 0 once, scaled by
+`m_bloom_intensity` (default 0.125), before the single exposure/AgX evaluation.
 
 ## Temporal2x and final reactive MRT programs
 

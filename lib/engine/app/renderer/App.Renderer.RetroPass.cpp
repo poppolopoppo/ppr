@@ -1624,12 +1624,16 @@ namespace pP {
             return {};
         };
 
-        // Prefilter to mip 0, then the single-pass downsample for mips 1..5.
+        // Prefilter to mip 0, then the single-pass downsample for mips 1..5. A
+        // single-mip chain (output <= 2x2) has no coarser mips to build.
         PPR_RETURN_ERROR_ON_FAIL(
             RetroPass, dispatch(0u, (checked_cast<u32>(mip0.x) + 7u) / 8u, (checked_cast<u32>(mip0.y) + 7u) / 8u));
         context.m_encoder.globalBarrier();
-        PPR_RETURN_ERROR_ON_FAIL(
-            RetroPass, dispatch(1u, (checked_cast<u32>(mip0.x) + 31u) / 32u, (checked_cast<u32>(mip0.y) + 31u) / 32u));
+        if (mip_count > 1u) {
+            PPR_RETURN_ERROR_ON_FAIL(
+                RetroPass,
+                dispatch(1u, (checked_cast<u32>(mip0.x) + 31u) / 32u, (checked_cast<u32>(mip0.y) + 31u) / 32u));
+        }
 
         // Progressive tent upsample: accumulate mip K back into mip K-1, coarse to fine.
         for (u32 level = mip_count - 1u; level >= 1u; --level) {

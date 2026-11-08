@@ -1414,22 +1414,24 @@ zero-A identity, finite midpoint-K colour/medium bounds, sealed/around-corner/
 offscreen transport, zero faces and isolated corrupt/foreign rejection. The
 private missing-table-key branch is source-reviewed, not directly injected.
 
-## Opt-in scene-linear bloom
+## Opt-in scene-linear bloom (SPD)
 
 `RetroSettings::m_bloom_enabled` appends one default-off control and requires
-HDR plus current-frame spatial or temporal2x reconstruction. Validation rejects unsupported policy
-before frame mutation. `RetroPass` lazily creates two compute programs from
-`retro_bloom.slang`; each completed scene-ring slot transactionally owns two
-RGBA16F UAV/SRV images at ceil(output/4), with separate roots and the existing
-producer/reader fences. The 4x4 extraction precedes averaging, using luminance
-threshold exp2(-EV) in scene units. A normalized 5x5 binomial blur and four-load
-bilinear upsample add one eighth glow in FP32 before the existing single
-exposure/AgX call. Scene sampling, palette and native UI remain independent.
-At 3840x2160 the two images total 8,294,400 bytes per slot (24,883,200 across
-three slots), excluding allocation overhead and resize overlap. Retention keeps
-the matching bloom/settings and samples the old native picture UV when clipped
-or letterboxed. These additions are authored; runtime/compatibility/cost
-qualification must be reported from the corresponding validation evidence.
+HDR plus current-frame spatial or temporal2x reconstruction. Validation rejects
+unsupported policy before frame mutation. `RetroPass` lazily creates three
+compute programs from `spd_bloom.slang` (prefilter, single-pass downsample, tent
+upsample); each completed scene-ring slot transactionally owns one RGBA16F mip
+chain (mip 0 at ceil(output/2), five halvings, capped at six mips) plus per-mip
+UAV views, with the existing producer/reader fences. The prefilter applies an
+exposure-aware soft-knee threshold (the exposed-unit threshold divided by `exp2`
+of the manual + adapted EV) and the Karis firefly weight; the downsample folds a
+per-level bloom-size weight so a uniform frame stays bounded; the upsample
+accumulates each mip back, and `retro_present.slang` adds mip 0 once scaled by
+`m_bloom_intensity` (default 0.125) before the single exposure/AgX call. Scene
+sampling, palette and native UI remain independent. Retention keeps the matching
+bloom/settings and samples the old native picture UV when clipped or letterboxed.
+These additions are authored; runtime/compatibility/cost qualification must be
+reported from the corresponding validation evidence.
 
 ## Opt-in temporal2x and reactive scene attachments
 

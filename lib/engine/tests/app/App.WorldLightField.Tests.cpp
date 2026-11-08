@@ -2752,11 +2752,12 @@ namespace pP::tests::detail {
                     PPR_TEST_ASSERT(not m_fence.initialize(device));
 
                     const int2 mip0 = RetroPass::bloomMip0Extent(int2{int(edge), int(edge)});
+                    const u32 mip_count = RetroPass::bloomMipCount(mip0);
                     rhi::TextureDesc bloom_desc{};
                     bloom_desc.type = rhi::TextureType::Texture2D;
                     bloom_desc.size = {.width = u32(mip0.x), .height = u32(mip0.y), .depth = 1u};
                     bloom_desc.arrayLength = 1u;
-                    bloom_desc.mipCount = RetroPass::kMaxBloomMips;
+                    bloom_desc.mipCount = mip_count;
                     bloom_desc.format = rhi::Format::RGBA16Float;
                     bloom_desc.usage = static_cast<rhi::TextureUsage>(
                         static_cast<u32>(rhi::TextureUsage::ShaderResource) |
@@ -2765,7 +2766,7 @@ namespace pP::tests::detail {
                     bloom_desc.label = "spd bloom chain";
                     PPR_TEST_ASSERT(not make_error_code(device.createTexture(bloom_desc, nullptr, m_bloom.writeRef())));
                     PPR_TEST_ASSERT(not make_error_code(m_bloom->getDefaultView(m_bloom_view.writeRef())));
-                    for (u32 level = 0u; level < RetroPass::kMaxBloomMips; ++level) {
+                    for (u32 level = 0u; level < mip_count; ++level) {
                         rhi::TextureViewDesc view_desc{};
                         view_desc.subresourceRange = {.layer = 0u, .layerCount = 1u, .mip = level, .mipCount = 1u};
                         PPR_TEST_ASSERT(
@@ -2913,15 +2914,15 @@ namespace pP::tests::detail {
                         PPR_TEST_ASSERT(not make_error_code(cursor["g_bloom"].getDereferenced(constants)));
                         PPR_TEST_ASSERT(not make_error_code(constants.setData(&params, sizeof(params))));
                         for (u32 level = 0u; level < RetroPass::kMaxBloomMips; ++level) {
+                            const u32 view = std::min(level, mip_count - 1u);
                             PPR_TEST_ASSERT(not make_error_code(
-                                cursor[kMipNames[level]].setBinding(rhi::Binding(m_bloom_uav_views[level]))));
+                                cursor[kMipNames[level]].setBinding(rhi::Binding(m_bloom_uav_views[view]))));
                         }
                     }
                     rhi::ShaderCursor up_cursor{m_roots[2]}, up_constants{};
                     PPR_TEST_ASSERT(not make_error_code(up_cursor["g_bloom"].getDereferenced(up_constants)));
 
-                    const rhi::SubresourceRange chain{
-                        .layer = 0u, .layerCount = 1u, .mip = 0u, .mipCount = RetroPass::kMaxBloomMips};
+                    const rhi::SubresourceRange chain{.layer = 0u, .layerCount = 1u, .mip = 0u, .mipCount = mip_count};
                     encoder->setTextureState(m_bloom, chain, rhi::ResourceState::UnorderedAccess);
 
                     const auto dispatch = [&](const u32 program, const u32 x, const u32 y) {
@@ -2933,7 +2934,9 @@ namespace pP::tests::detail {
                     };
                     dispatch(0u, (u32(mip0.x) + 7u) / 8u, (u32(mip0.y) + 7u) / 8u);
                     encoder->globalBarrier();
-                    dispatch(1u, (u32(mip0.x) + 31u) / 32u, (u32(mip0.y) + 31u) / 32u);
+                    if (mip_count > 1u) {
+                        dispatch(1u, (u32(mip0.x) + 31u) / 32u, (u32(mip0.y) + 31u) / 32u);
+                    }
                     for (u32 level = mip_count - 1u; level >= 1u; --level) {
                         const int2 dst = RetroPass::bloomMipExtent(mip0, level - 1u);
                         params.m_upsample_level = level;
@@ -3091,12 +3094,38 @@ namespace pP::tests::detail {
                 PPR_TEST_ASSERT(peak > 0.5f);
                 PPR_TEST_ASSERT(peak < 4.0f);
             };
+
+            PPR_UNIT_TEST (gpu_bloom_single_mip_not_halved) {
+                constexpr u32 edge = 2u;
+
+                Fixture fixture;
+                fixture.initialize(edge);
+                PPR_DEFER {
+                    fixture.shutdown();
+                };
+
+                const int2 mip0 = RetroPass::bloomMip0Extent(int2{int(edge), int(edge)});
+                PPR_TEST_ASSERT(mip0.x == 1 and mip0.y == 1);
+                PPR_TEST_ASSERT(RetroPass::bloomMipCount(mip0) == 1u);
+
+                // A uniform bright picture through a single-mip chain must keep the
+                // prefilter intact: the (skipped) downsample must not alias mip 1
+                // onto mip 0 and halve it.
+                const auto bloomed = fixture.run(edge, 20.0f, 20.0f, 0.0f);
+                PPR_TEST_ASSERT(bloomed.size() == 1u);
+                const float peak = luminanceOf(bloomed[0]);
+                PPR_TEST_ASSERT(std::isfinite(peak));
+                // The prefilter of a uniform 20.0 picture is ~0.95 (Karis-damped);
+                // halving it would land near 0.47, so a value above 0.7 proves the
+                // single mip survives.
+                PPR_TEST_ASSERT(peak > 0.7f);
+            };
         }
 
         const UnitTest spd_bloom = UnitTest::Named("spd_bloom") / [](UnitTest::IRun &run) -> void {
             run.recurse(
                 {cpu_bloom_chain_layout, Gpu::gpu_bloom_smoke, Gpu::gpu_bloom_exposure_aware,
-                    Gpu::gpu_bloom_bounded_uniform});
+                    Gpu::gpu_bloom_bounded_uniform, Gpu::gpu_bloom_single_mip_not_halved});
         };
     }
 }
