@@ -6,6 +6,7 @@ module engine.tests.app;
 
 import engine.core;
 import engine.app;
+import engine.math;
 import engine.rhi;
 import engine.shader;
 import std;
@@ -526,6 +527,197 @@ namespace pP::tests::detail {
             return (value & 0x8000u) == 0u and exponent != 0x1fu and value != 0u;
         }
 
+        // IEEE-754 half<->float. The composite test uploads the same half bytes
+        // the GPU reads, so the CPU reference decodes them identically.
+        [[nodiscard]] float halfToFloat(const u16 value) noexcept {
+            const u32 sign = (value >> 15) & 1u;
+            const u32 exponent = (value >> 10) & 0x1fu;
+            const u32 mantissa = value & 0x3ffu;
+
+            u32 bits;
+            if (exponent == 0u) {
+                if (mantissa == 0u) {
+                    bits = sign << 31;
+                } else {
+                    u32 e = 127u - 15u + 1u;
+                    u32 m = mantissa;
+                    while ((m & 0x400u) == 0u) {
+                        m <<= 1;
+                        --e;
+                    }
+                    m &= 0x3ffu;
+                    bits = (sign << 31) | (e << 23) | (m << 13);
+                }
+            } else if (exponent == 0x1fu) {
+                bits = (sign << 31) | (0xffu << 23) | (mantissa << 13);
+            } else {
+                bits = (sign << 31) | ((exponent - 15u + 127u) << 23) | (mantissa << 13);
+            }
+            return std::bit_cast<float>(bits);
+        }
+
+        [[nodiscard]] u16 floatToHalf(const float value) noexcept {
+            const u32 bits = std::bit_cast<u32>(value);
+            const u32 sign = (bits >> 16) & 0x8000u;
+            const u32 exponent = (bits >> 23) & 0xffu;
+            const u32 mantissa = bits & 0x7fffffu;
+
+            if (exponent == 0xffu) {
+                return static_cast<u16>(sign | 0x7c00u | (mantissa == 0u ? 0u : 0x200u));
+            }
+
+            const i32 unbiased = static_cast<i32>(exponent) - 127 + 15;
+            if (unbiased >= 0x1f) {
+                return static_cast<u16>(sign | 0x7c00u);
+            }
+            if (unbiased <= 0) {
+                if (unbiased < -10) {
+                    return static_cast<u16>(sign);
+                }
+                const u32 m = mantissa | 0x800000u;
+                const i32 shift = 14 - unbiased;
+                u32 rounded = m >> shift;
+                const u32 remainder = m & ((1u << shift) - 1u);
+                const u32 halfway = 1u << (shift - 1);
+                if (remainder > halfway or (remainder == halfway and (rounded & 1u) != 0u)) {
+                    ++rounded;
+                }
+                return static_cast<u16>(sign | rounded);
+            }
+
+            u32 rounded = mantissa >> 13;
+            const u32 remainder = mantissa & 0x1fffu;
+            if (remainder > 0x1000u or (remainder == 0x1000u and (rounded & 1u) != 0u)) {
+                ++rounded;
+            }
+            u32 result = sign | (static_cast<u32>(unbiased) << 10) | rounded;
+            if (rounded == 0x400u) {
+                result = sign | ((static_cast<u32>(unbiased) + 1u) << 10);
+            }
+            return static_cast<u16>(result);
+        }
+
+        // Synthetic two-level hierarchy used by the composite/diffuse references.
+        // Level 0 radiance (px,py,d) = (0.25px, 0.25py, 0.25d), transmittance
+        // 0.75; level 1 adds 1.0 and uses transmittance 0.5; deeper levels stay
+        // zeroed so the composite reduces to L0 + T0*L1.
+        [[nodiscard]] std::vector<RadianceHalf> makeSyntheticField(const lighting::WorldLightPlan &plan) {
+            std::vector<RadianceHalf> field(plan.m_radiance_samples, RadianceHalf{});
+            for (u32 level = 0u; level < 2u; ++level) {
+                const auto &L = plan.m_levels[level];
+                const float base = level == 0u ? 0.0f : 1.0f;
+                const float transmittance = level == 0u ? 0.75f : 0.5f;
+                for (u32 py = 0u; py < L.m_probes_y; ++py) {
+                    for (u32 px = 0u; px < L.m_probes_x; ++px) {
+                        for (u32 d = 0u; d < L.m_directions; ++d) {
+                            const u64 sample = L.m_sample_offset + (u64{py} * L.m_probes_x + px) * L.m_directions + d;
+                            field[sample] = RadianceHalf{
+                                .m_r = floatToHalf(base + 0.25f * float(px)),
+                                .m_g = floatToHalf(base + 0.25f * float(py)),
+                                .m_b = floatToHalf(base + 0.25f * float(d)),
+                                .m_t = floatToHalf(transmittance)};
+                        }
+                    }
+                }
+            }
+            return field;
+        }
+
+        // CPU oracle of worldLightComposite: per-level bilinear over probes,
+        // angular bin from the direction, and the near-to-far transmittance
+        // composite. Decodes the same half bytes the GPU reads.
+        [[nodiscard]] std::array<float, 3> compositeReference(
+            const lighting::WorldLightPlan &plan, const std::vector<RadianceHalf> &field, const float2 &position,
+            const float2 &direction) {
+            std::array<float, 3> result{0.0f, 0.0f, 0.0f};
+            float throughput = 1.0f;
+            for (u32 level = 0u; level < plan.m_level_count; ++level) {
+                const auto &L = plan.m_levels[level];
+                const float spacing = float(L.m_spacing_cells);
+                const float cell_metres = plan.m_cell_metres;
+
+                const float uvx = position.x / (cell_metres * spacing) - 0.5f;
+                const float uvy = position.y / (cell_metres * spacing) - 0.5f;
+                const int base_x = int(std::floor(uvx));
+                const int base_y = int(std::floor(uvy));
+                const float fx = uvx - float(base_x);
+                const float fy = uvy - float(base_y);
+
+                float angle = std::atan2(direction.y, direction.x);
+                if (angle < 0.0f)
+                    angle += 6.28318530718f;
+                const u32 d = u32(
+                    std::clamp(
+                        int(std::floor(angle * float(L.m_directions) / 6.28318530718f)), 0, int(L.m_directions) - 1));
+
+                const auto probe = [&](const int px, const int py) -> std::pair<std::array<float, 3>, float> {
+                    if (px < 0 or py < 0 or px >= int(L.m_probes_x) or py >= int(L.m_probes_y)) {
+                        return {{0.0f, 0.0f, 0.0f}, 1.0f};
+                    }
+                    const u64 upx = static_cast<u64>(px);
+                    const u64 upy = static_cast<u64>(py);
+                    const u64 sample = L.m_sample_offset +
+                                       (upy * u64{L.m_probes_x} + upx) * u64{L.m_directions} +
+                                       u64{d};
+                    const RadianceHalf &s = field[sample];
+                    return {{halfToFloat(s.m_r), halfToFloat(s.m_g), halfToFloat(s.m_b)}, halfToFloat(s.m_t)};
+                };
+
+                const auto [r00, t00] = probe(base_x, base_y);
+                const auto [r10, t10] = probe(base_x + 1, base_y);
+                const auto [r01, t01] = probe(base_x, base_y + 1);
+                const auto [r11, t11] = probe(base_x + 1, base_y + 1);
+
+                const auto lerp3 = [](const std::array<float, 3> &a, const std::array<float, 3> &b, const float t) {
+                    return std::array<float, 3>{
+                        a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t};
+                };
+                const std::array<float, 3> r0 = lerp3(r00, r10, fx);
+                const std::array<float, 3> r1 = lerp3(r01, r11, fx);
+                const float t0 = t00 + (t10 - t00) * fx;
+                const float t1 = t01 + (t11 - t01) * fx;
+                const std::array<float, 3> radiance = lerp3(r0, r1, fy);
+                const float transmittance = t0 + (t1 - t0) * fy;
+
+                result[0] += throughput * radiance[0];
+                result[1] += throughput * radiance[1];
+                result[2] += throughput * radiance[2];
+                throughput *= transmittance;
+            }
+            return result;
+        }
+
+        // CPU oracle of worldLightDiffuse: the deterministic 8-direction set with
+        // cosine weights from the horizontal tilt; a flat (+Z) normal is isotropic.
+        [[nodiscard]] std::array<float, 3> diffuseReference(
+            const lighting::WorldLightPlan &plan, const std::vector<RadianceHalf> &field, const float2 &position,
+            const float3 &normal) {
+            const float tilt = std::sqrt(normal.x * normal.x + normal.y * normal.y);
+
+            std::array<float, 3> result{0.0f, 0.0f, 0.0f};
+            float weight_sum = 0.0f;
+            for (u32 i = 0u; i < 8u; ++i) {
+                const float angle = (2.0f * float(i) + 0.5f) * 6.28318530718f / 16.0f;
+                const float2 dir{std::cos(angle), std::sin(angle)};
+
+                float weight = 1.0f;
+                if (tilt > 1e-6f) {
+                    weight = std::max(dir.x * (normal.x / tilt) + dir.y * (normal.y / tilt), 0.0f);
+                }
+                const auto c = compositeReference(plan, field, position, dir);
+                result[0] += c[0] * weight;
+                result[1] += c[1] * weight;
+                result[2] += c[2] * weight;
+                weight_sum += weight;
+            }
+            if (weight_sum > 0.0f) {
+                result[0] /= weight_sum;
+                result[1] /= weight_sum;
+                result[2] /= weight_sum;
+            }
+            return result;
+        }
+
         struct Fixture {
             safe_ptr<IShaderService> m_shaders{IShaderService::get()};
             safe_ptr<IRhiService> m_rhi{IRhiService::get()};
@@ -606,6 +798,47 @@ namespace pP::tests::detail {
                 std::memcpy(result.data(), mapped, result.size() * sizeof(T));
                 PPR_TEST_ASSERT(not make_error_code(m_rhi->getDevice().unmapBuffer(copy)));
                 return result;
+            }
+
+            template<typename T>
+            void write(rhi::IBuffer *const destination, const std::vector<T> &data) {
+                const u64 bytes = data.size() * sizeof(T);
+                rhi::BufferDesc description{};
+                description.size = bytes;
+                description.elementSize = 0u;
+                description.memoryType = rhi::MemoryType::Upload;
+                description.usage = rhi::BufferUsage::CopySource;
+                description.defaultState = rhi::ResourceState::CopySource;
+                description.label = "WorldLightFieldGpu upload";
+                rhi::ComPtr<rhi::IBuffer> staging;
+                PPR_TEST_ASSERT(
+                    not make_error_code(m_rhi->getDevice().createBuffer(description, nullptr, staging.writeRef())));
+
+                void *mapped{};
+                PPR_TEST_ASSERT(not make_error_code(
+                    m_rhi->getDevice().mapBuffer(staging.get(), rhi::CpuAccessMode::Write, &mapped)));
+                std::memcpy(mapped, data.data(), bytes);
+                PPR_TEST_ASSERT(not make_error_code(m_rhi->getDevice().unmapBuffer(staging.get())));
+
+                rhi::ComPtr<rhi::ICommandEncoder> encoder;
+                PPR_TEST_ASSERT(not make_error_code(m_queue->createCommandEncoder(encoder.writeRef())));
+                encoder->setBufferState(destination, rhi::ResourceState::CopyDestination);
+                encoder->copyBuffer(destination, 0u, staging.get(), 0u, bytes);
+                encoder->setBufferState(destination, rhi::ResourceState::UnorderedAccess);
+                submit(*encoder);
+            }
+
+            std::array<float, 3> evaluate(
+                const float2 &position, const float2 &direction, const float3 &normal, const float roughness,
+                const lighting::WorldLightField::EvaluateMode mode) {
+                rhi::ComPtr<rhi::ICommandEncoder> encoder;
+                PPR_TEST_ASSERT(not make_error_code(m_queue->createCommandEncoder(encoder.writeRef())));
+                PPR_TEST_ASSERT(not m_field.evaluate(*encoder, position, direction, normal, roughness, mode));
+                submit(*encoder);
+
+                const auto out = read<float>(m_field.evaluateOutput());
+                PPR_TEST_ASSERT(out.size() == 3u);
+                return {out[0], out[1], out[2]};
             }
 
             void encodeSource() {
@@ -856,6 +1089,83 @@ namespace pP::tests::detail {
 
             PPR_TEST_ASSERT(run() == run());
         };
+
+        PPR_UNIT_TEST (composite_matches_cpu_reference) {
+            constexpr u32 width = 64u;
+            constexpr u32 height = 64u;
+
+            Fixture fixture;
+            fixture.initialize(width, height);
+            auto &field = fixture.m_field;
+
+            const auto plan = lighting::planWorldLight({.m_width = width, .m_height = height, .m_cell_metres = 0.5f});
+            PPR_TEST_ASSERT(plan.has_value());
+
+            // Upload the synthetic hierarchy into the current radiance buffer, then
+            // compare the GPU composite to the CPU oracle at a position between
+            // probes and a direction away from any angular bin boundary.
+            const std::vector<RadianceHalf> synthetic = makeSyntheticField(*plan);
+            fixture.write(field.view().m_radiance, synthetic);
+
+            const float2 position{2.3f, 3.7f};
+            const float2 direction{std::cos(1.0f), std::sin(1.0f)};
+
+            const std::array<float, 3> expected = compositeReference(*plan, synthetic, position, direction);
+            const std::array<float, 3> actual = fixture.evaluate(
+                position, direction, float3{0.0f, 0.0f, 1.0f}, 0.0f,
+                lighting::WorldLightField::EvaluateMode::kComposite);
+
+            for (u32 channel = 0u; channel < 3u; ++channel) {
+                PPR_TEST_ASSERT(std::isfinite(actual[channel]));
+                PPR_TEST_ASSERT(std::abs(actual[channel] - expected[channel]) <= 1e-4f);
+            }
+
+            fixture.shutdown();
+        };
+
+        PPR_UNIT_TEST (diffuse_plus_z_isotropic_and_perturbed_finite) {
+            constexpr u32 width = 64u;
+            constexpr u32 height = 64u;
+
+            Fixture fixture;
+            fixture.initialize(width, height);
+            auto &field = fixture.m_field;
+
+            const auto plan = lighting::planWorldLight({.m_width = width, .m_height = height, .m_cell_metres = 0.5f});
+            PPR_TEST_ASSERT(plan.has_value());
+
+            const std::vector<RadianceHalf> synthetic = makeSyntheticField(*plan);
+            fixture.write(field.view().m_radiance, synthetic);
+
+            const float2 position{2.3f, 3.7f};
+            const float2 direction{1.0f, 0.0f};
+
+            // +Z normal: the near-isotropic term (average of the direction set).
+            const std::array<float, 3> plus_z = fixture.evaluate(
+                position, direction, float3{0.0f, 0.0f, 1.0f}, 0.0f, lighting::WorldLightField::EvaluateMode::kDiffuse);
+            const std::array<float, 3> plus_z_ref = diffuseReference(
+                *plan, synthetic, position, float3{0.0f, 0.0f, 1.0f});
+            for (u32 channel = 0u; channel < 3u; ++channel) {
+                PPR_TEST_ASSERT(std::isfinite(plus_z[channel]));
+                PPR_TEST_ASSERT(std::abs(plus_z[channel] - plus_z_ref[channel]) <= 1e-4f);
+            }
+
+            // A tilted normal changes the result and never produces NaN.
+            const std::array<float, 3> perturbed = fixture.evaluate(
+                position, direction, float3{0.5f, -0.3f, 0.8f}, 0.0f,
+                lighting::WorldLightField::EvaluateMode::kDiffuse);
+            const std::array<float, 3> perturbed_ref = diffuseReference(
+                *plan, synthetic, position, float3{0.5f, -0.3f, 0.8f});
+            bool changed = false;
+            for (u32 channel = 0u; channel < 3u; ++channel) {
+                PPR_TEST_ASSERT(std::isfinite(perturbed[channel]));
+                PPR_TEST_ASSERT(std::abs(perturbed[channel] - perturbed_ref[channel]) <= 1e-4f);
+                changed = changed or std::abs(perturbed[channel] - plus_z[channel]) > 1e-4f;
+            }
+            PPR_TEST_ASSERT(changed);
+
+            fixture.shutdown();
+        };
     }
 }
 
@@ -884,6 +1194,8 @@ namespace pP::tests {
             detail::WorldLightFieldGpu::field_update_respects_budget_boundary,
             detail::WorldLightFieldGpu::field_dense_dda_hits_diagonal_emitter,
             detail::WorldLightFieldGpu::field_is_camera_independent,
+            detail::WorldLightFieldGpu::composite_matches_cpu_reference,
+            detail::WorldLightFieldGpu::diffuse_plus_z_isotropic_and_perturbed_finite,
         });
     };
 

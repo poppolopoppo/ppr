@@ -9,6 +9,7 @@ import :renderer.world_light_source_gpu;
 import :renderer.world_light_types;
 
 import engine.core;
+import engine.math;
 import engine.rhi;
 import engine.shader;
 import std;
@@ -57,6 +58,18 @@ namespace pP::lighting {
         };
         static_assert(sizeof(WorldLightFieldProbeUpdate) == 20u and alignof(WorldLightFieldProbeUpdate) == 4u);
 
+        // CPU mirror of the Slang WorldLightEvaluateParams (all-scalar layout to
+        // match Slang ConstantBuffer packing; see the field constants note).
+        struct WorldLightEvaluateParams {
+            float m_position_x{}, m_position_y{};
+            float m_direction_x{}, m_direction_y{};
+            float m_normal_x{}, m_normal_y{}, m_normal_z{};
+            float m_roughness{};
+            u32 m_mode{};
+            u32 m_pad0{}, m_pad1{}, m_pad2{};
+        };
+        static_assert(sizeof(WorldLightEvaluateParams) == 48u and alignof(WorldLightEvaluateParams) == 4u);
+
         std::error_code require_(const bool valid, const std::errc error = std::errc::invalid_argument) noexcept {
             return valid ? std::error_code{} : std::make_error_code(error);
         }
@@ -84,6 +97,11 @@ namespace pP::lighting {
         rhi::ComPtr<rhi::IComputePipeline> m_update_pipeline, m_probe_update_pipeline, m_reset_pipeline;
         rhi::ComPtr<rhi::IShaderObject> m_update_root, m_probe_update_root, m_reset_root;
 
+        rhi::ComPtr<rhi::IShaderProgram> m_evaluate_program;
+        rhi::ComPtr<rhi::IComputePipeline> m_evaluate_pipeline;
+        rhi::ComPtr<rhi::IShaderObject> m_evaluate_root;
+        rhi::ComPtr<rhi::IBuffer> m_evaluate_output;
+
         std::array<rhi::ComPtr<rhi::IBuffer>, 2> m_radiance;
         rhi::ComPtr<rhi::IBuffer> m_state;
 
@@ -91,6 +109,7 @@ namespace pP::lighting {
         WorldLightFieldDispatch m_dispatch{};
         WorldLightFieldReset m_reset{};
         WorldLightFieldProbeUpdate m_probe_update{};
+        WorldLightEvaluateParams m_evaluate_params{};
 
         bool m_ready{};
     };
@@ -183,6 +202,9 @@ namespace pP::lighting {
             build_program("updateWorldLightFieldProbe", state.m_probe_update_program, state.m_probe_update_pipeline));
         PPR_RETURN_ERROR_ON_FAIL(
             WorldLightField, build_program("resetWorldLightField", state.m_reset_program, state.m_reset_pipeline));
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldLightField,
+            build_program("evaluateWorldLightField", state.m_evaluate_program, state.m_evaluate_pipeline));
 
         // Double-buffered radiance (8 B/sample) and per-direction counts (u32,
         // widened from the plan's u8 estimate so each thread owns one word).
@@ -220,6 +242,10 @@ namespace pP::lighting {
         PPR_RETURN_ERROR_ON_FAIL(
             WorldLightField,
             device_buffer(state_bytes, sizeof(u32), zero_state.data(), "world light field state", state.m_state));
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldLightField, device_buffer(
+                                 3u * sizeof(float), sizeof(float), nullptr, "world light field evaluate output",
+                                 state.m_evaluate_output));
 
         // Create the three roots. Bindings change each update (ping-pong and the
         // borrowed source buffers), so they are set in update().
@@ -232,6 +258,20 @@ namespace pP::lighting {
         PPR_RETURN_ERROR_ON_FAIL(
             WorldLightField,
             state.m_device->createRootShaderObject(state.m_reset_program.get(), state.m_reset_root.writeRef()));
+
+        // Evaluate root: the field constants and the output buffer are static; the
+        // params and the current radiance buffer are (re)bound in evaluate().
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldLightField,
+            state.m_device->createRootShaderObject(state.m_evaluate_program.get(), state.m_evaluate_root.writeRef()));
+        {
+            rhi::ShaderCursor cursor{state.m_evaluate_root.get()}, constants{};
+            PPR_RETURN_ERROR_ON_FAIL(WorldLightField, cursor["g_world_light_field"].getDereferenced(constants));
+            PPR_RETURN_ERROR_ON_FAIL(WorldLightField, constants.setData(&state.m_constants, sizeof(state.m_constants)));
+        }
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldLightField, rhi::ShaderCursor{state.m_evaluate_root.get()}["g_world_light_evaluate_out"].setBinding(
+                                 rhi::Binding(state.m_evaluate_output.get(), range_(state.m_evaluate_output.get()))));
 
         state.m_ready = true;
         PPR_LOG(
@@ -492,6 +532,51 @@ namespace pP::lighting {
         return m_state->m_state.get();
     }
 
+    std::error_code WorldLightField::evaluate(
+        rhi::ICommandEncoder &encoder, const float2 &position, const float2 &direction, const float3 &normal,
+        const float roughness, const EvaluateMode mode) {
+        State &state = *m_state;
+        PPR_RETURN_ERROR_ON_FAIL(WorldLightField, require_(state.m_ready, std::errc::not_connected));
+
+        state.m_evaluate_params.m_position_x = position.x;
+        state.m_evaluate_params.m_position_y = position.y;
+        state.m_evaluate_params.m_direction_x = direction.x;
+        state.m_evaluate_params.m_direction_y = direction.y;
+        state.m_evaluate_params.m_normal_x = normal.x;
+        state.m_evaluate_params.m_normal_y = normal.y;
+        state.m_evaluate_params.m_normal_z = normal.z;
+        state.m_evaluate_params.m_roughness = roughness;
+        state.m_evaluate_params.m_mode = static_cast<u32>(mode);
+
+        // Rebind the params and the current radiance buffer; the field constants
+        // and the output buffer were bound once in initialize().
+        {
+            rhi::ShaderCursor cursor{state.m_evaluate_root.get()}, params{};
+            PPR_RETURN_ERROR_ON_FAIL(WorldLightField, cursor["g_world_light_evaluate"].getDereferenced(params));
+            PPR_RETURN_ERROR_ON_FAIL(
+                WorldLightField, params.setData(&state.m_evaluate_params, sizeof(state.m_evaluate_params)));
+        }
+        const u32 current = state.m_current;
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldLightField,
+            rhi::ShaderCursor{state.m_evaluate_root.get()}["g_world_light_radiance_cur"].setBinding(
+                rhi::Binding(state.m_radiance[current].get(), range_(state.m_radiance[current].get()))));
+
+        encoder.setBufferState(state.m_radiance[current].get(), rhi::ResourceState::UnorderedAccess);
+        encoder.setBufferState(state.m_evaluate_output.get(), rhi::ResourceState::UnorderedAccess);
+
+        auto *const pass = encoder.beginComputePass();
+        PPR_RETURN_ERROR_ON_FAIL(WorldLightField, require_(pass != nullptr, std::errc::io_error));
+        pass->bindPipeline(state.m_evaluate_pipeline.get(), state.m_evaluate_root.get());
+        pass->dispatchCompute(1u, 1u, 1u);
+        pass->end();
+        return default_value_v;
+    }
+
+    rhi::IBuffer *WorldLightField::evaluateOutput() const noexcept {
+        return m_state->m_evaluate_output.get();
+    }
+
     u64 WorldLightField::cursor() const noexcept {
         return m_state->m_cursor;
     }
@@ -508,6 +593,10 @@ namespace pP::lighting {
         state.m_update_program.setNull();
         state.m_probe_update_program.setNull();
         state.m_reset_program.setNull();
+        state.m_evaluate_root.setNull();
+        state.m_evaluate_pipeline.setNull();
+        state.m_evaluate_program.setNull();
+        state.m_evaluate_output.setNull();
         state.m_radiance[0].setNull();
         state.m_radiance[1].setNull();
         state.m_state.setNull();

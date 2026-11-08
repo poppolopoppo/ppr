@@ -4,6 +4,7 @@ export module engine.app:renderer.world_light_field;
 import :renderer.world_light_types;
 
 import engine.core;
+import engine.math;
 import engine.rhi;
 import engine.shader;
 import std;
@@ -85,6 +86,27 @@ export namespace pP::lighting {
         // Per-direction sample count buffer (one u32 per direction sample), for
         // explicit fenced test readback only; never read back per frame.
         [[nodiscard]] rhi::IBuffer *state() const noexcept;
+
+        // Selects which sampler the evaluate() test entry runs. Composite uses
+        // the supplied direction; diffuse uses the normal; specular uses the
+        // direction as a 2D reflection with the supplied roughness.
+        enum class EvaluateMode : u32 {
+            kComposite = 0u,
+            kDiffuse = 1u,
+            kSpecular = 2u,
+        };
+
+        // Records a one-thread sampler evaluation on the caller's encoder: the
+        // composite/diffuse/specular of the current field at the supplied
+        // position/direction/normal, written to evaluateOutput() (RGB, three
+        // floats). Test-only; there is no production readback path.
+        [[nodiscard]] std::error_code evaluate(
+            rhi::ICommandEncoder &encoder, const float2 &position, const float2 &direction, const float3 &normal,
+            float roughness, EvaluateMode mode);
+
+        // Small output buffer (3 floats) holding the last evaluate() result, for
+        // explicit fenced test readback only.
+        [[nodiscard]] rhi::IBuffer *evaluateOutput() const noexcept;
 
         // Complete round-robin passes over the whole field, and the current
         // cursor position within one pass (both for diagnostics/tests only).

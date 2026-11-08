@@ -8,6 +8,7 @@
 // radiance buffer. Task 7 supplies the previous-hierarchy composite; for Task 6
 // the hit-shading feedback hook returns zero (direct emission only).
 #include "world_light_field.slang"
+#include "world_light_sample.slang"
 
 static const float kTau = 6.28318530718;
 
@@ -237,6 +238,44 @@ void updateWorldLightFieldProbe(uint3 id : SV_DispatchThreadID) {
     for (uint d = 0u; d < L.directions; ++d) {
         accumulateSample(level, probe, d);
     }
+}
+
+// ------------------------------------------------------------------
+// composite evaluate (test seam)
+// ------------------------------------------------------------------
+
+// One-shot sampler evaluation for a supplied position/direction/normal. The mode
+// selects composite (0), diffuse (1) or specular (2); the RGB result is written
+// to g_world_light_evaluate_out. Test-only readback path.
+struct WorldLightEvaluateParams {
+    float positionX, positionY;
+    float directionX, directionY;
+    float normalX, normalY, normalZ;
+    float roughness;
+    uint mode;
+    uint pad0, pad1, pad2;
+};
+
+ConstantBuffer<WorldLightEvaluateParams> g_world_light_evaluate;
+RWStructuredBuffer<float> g_world_light_evaluate_out;
+
+[numthreads(1, 1, 1)]
+void evaluateWorldLightField(uint3 id : SV_DispatchThreadID) {
+    float2 position = float2(g_world_light_evaluate.positionX, g_world_light_evaluate.positionY);
+    float2 direction = float2(g_world_light_evaluate.directionX, g_world_light_evaluate.directionY);
+    float3 normal = float3(g_world_light_evaluate.normalX, g_world_light_evaluate.normalY, g_world_light_evaluate.normalZ);
+
+    float3 result;
+    if (g_world_light_evaluate.mode == 0u) {
+        result = worldLightComposite(position, direction);
+    } else if (g_world_light_evaluate.mode == 1u) {
+        result = worldLightDiffuse(position, normal);
+    } else {
+        result = worldLightSpecular(position, float3(direction, 0.0), g_world_light_evaluate.roughness);
+    }
+    g_world_light_evaluate_out[0] = result.x;
+    g_world_light_evaluate_out[1] = result.y;
+    g_world_light_evaluate_out[2] = result.z;
 }
 
 // ------------------------------------------------------------------
