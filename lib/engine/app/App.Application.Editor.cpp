@@ -4465,9 +4465,11 @@ namespace pP {
                 out_result.m_lighting_source_revision = field.m_source.revision();
                 out_result.m_lighting_field_cycle = field.m_field.cycle();
 
-                // Once per run: prove a field frame actually encoded and bound
-                // (the bounded run test greps for this). Not per-frame.
-                if (not field.m_frame_logged) {
+                // Once per run, on the first frame where a source revision
+                // actually landed (revision > 0): prove a dirty-chunk update was
+                // applied and encoded, not just an empty first field frame. The
+                // bounded run test greps for this. Not per-frame.
+                if (not field.m_frame_logged and out_result.m_lighting_source_revision > 0u) {
                     PPR_LOG(
                         Editor, info, "world light field frame",
                         {{"revision", out_result.m_lighting_source_revision},
