@@ -27,8 +27,6 @@ export import :renderer.frame_fence;
 export import :renderer.gpu_caches;
 export import :renderer.grid_pass;
 export import :renderer.lighting;
-export import :renderer.lighting_pass;
-export import :renderer.world_radiance;
 export import :renderer.world_light_types;
 export import :renderer.world_light_source;
 export import :renderer.world_light_source_gpu;

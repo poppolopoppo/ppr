@@ -137,16 +137,6 @@ fixed-size counter/resource values return with frame results and are mirrored
 only after the normal epoch check. No callback or borrowed pass pointer crosses
 back to main for observations. Disabled requests do not sample the pass.
 
-Experimental bounded lighting world commands additionally own an optional camera
-snapshot and input extent for candidate-view preparation. Frame results report
-the actually displayed lighting camera, extent, world identity, age and error.
-These are owned client/owner-lane values; Renderer boundary types remain camera
-free. A held picture reports its old displayed identity and does not acknowledge
-new terrain or particle consumption.
-
-Lighting candidate commands carry their explicit application elapsed request time.
-Completed view and retained-picture identity preserve that timestamp. Intermediate
-coherent completion does not clear the latest-camera pending flag or reset age.
 
 ## One-shot final-frame diagnostic
 
@@ -156,11 +146,6 @@ A capture stays armed across known pre-acquire backpressure/outdated-surface out
 
 Game also supplies a main-side per-frame semantic eligibility flag (Editor default true for other callers). Only `armed && eligible` is snapshotted into the existing capture request bit; an armed request waiting through backpressure cannot capture a later ineligible UI packet. Lighting capture separately requires the existing live-actor retained-stage marker, so queued frozen/loading stages remain excluded. No Renderer camera/UI state or additional frame protocol field is introduced.
 
-Mechanical-door controls carry a separate outer `m_lighting_revision` through
-GridWorldCommand/Result; the request sequence and full cohort must also match.
-Frame requests snapshot the client's committed optical revision, while frame
-results report the field actually consumed or the retained picture's old revision.
-No camera/simulation types enter Renderer orchestration.
 
 Final-surface capture now transports a monotonic request/attempt sequence. Main
 owns requested/success identities and worker owns its last attempted identity.
@@ -169,25 +154,6 @@ retains the same identity. Explicit rearm requires clean presented owned pixels
 and an accepted matching fence, and cannot reset worker state from main. Ordinary
 capture remains one-shot unless the client explicitly rearms after success.
 
-## Direct-window request coverage
-
-The existing owned Grid world command selects direct-window preparation and may
-carry explicit offscreen gameplay receiver rectangles. Main-owned additional
-demands are copied into each normal render request; none is silently omitted.
-The completed result can report its actual freshly consumed receiver rectangle.
-Retained-picture results do not claim newer candidate coverage. Natural payload
-alignment and the existing result adapter remain unchanged.
-
-A direct-window page is admitted only from a real nonobsolete render request,
-once per frame identity. Independent control polling observes fences/validates
-rows without submitting the next page. Whole-window publication, cancellation,
-unknown fate and all source/geometry identities keep the existing owner lane and
-reliable command/result channels; no page queue or Renderer scene owner is added.
-
-`GridWorldCommand` carries the copied single-bounce selection beside its existing
-direct-window flag; it adds no ownership or camera boundary. Game sets both for
-the explicit mode, and Editor owns all staged producer work and immutable field
-selection. Renderer and presentation acknowledgments retain their existing roles.
 
 Capture-only particle census enable/edge rides the existing Grid stage. Editor's
 local submit-fate guard finalizes exactly once after render/present on the normal
@@ -195,26 +161,6 @@ path and on unwind otherwise; this stamps the selected reader before exact-fence
 mapping. Only a clean completed captured frame returns owned projected census rows
 in RenderFrameResult. A later proof/readback error preserves settled submit facts.
 
-
-`RenderFrameResult::m_lighting_matter` is a resource-free
-`WorldMatterLightingReceipt`: the incorporated physical/source identity, actual
-comparison identity/count summary, projection and combined-field completion
-fences, and explicit request/ready elapsed values. Its carried statistics include
-the actual per-channel emission maxima and the aggregate cell bound accepted by
-`admitWorldRadianceEmission`; this is not whole-scene HDR safety. The receipt's
-aggregate bound is also checked against the live exposure at receipt construction;
-this remains not whole-scene HDR safety. It is stamped only for a fresh
-actual present of that bound immutable field. Provisional/queued/pending-age
-values do not turn retained pictures into new epoch proof. The existing
-`m_presented_particles` remains the separate newer live-draw identity. No new
-request camera, GPU lease or timing service crosses this boundary.
-
-
-Temporal gameplay queries carry the resident job/world/content identity, geometry
-revision, sequence, world-space centre and bounded native edge. The request stays
-active across dropped packets until the matching CPU-owned field arrives or the
-world cancels it. A receipt identifies the producing GPU fence and transport
-version. Legacy terrain-trace requests keep their one-shot behavior.
 
 A temporal staged frame may carry the application simulation's solar hour.
 A completed render result reports the hour of the immutable field actually

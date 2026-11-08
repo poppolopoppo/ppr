@@ -123,7 +123,7 @@ export namespace pP::colony {
     /// Converts resident cells directly to owned u16 uploads, with no full sim
     /// snapshot or live-session borrow crossing into the rendering lane.
     [[nodiscard]] Expected<GridStagedFrame> captureWorldPresentation(
-        const ColonyDriver &driver, const IContext *context = nullptr, bool capture_direct_world = false);
+        const ColonyDriver &driver, const IContext *context = nullptr);
 
     /// Same catalog/crop capture from the Driver-owned prepared mechanical edit.
     /// The never-reused outer revision identifies its exact candidate chunks.

@@ -96,44 +96,6 @@ application/device, policy/registration/deadline change or measured speedup is
 introduced by this source refactor. The identical ordinary/GPUAV leaf remains
 the measurement scope.
 
-The same leaf additionally owns one `WorldRadiancePass` on the existing shared
-Renderer/device. Its one-page direct receiver window covers a real declared
-absorbing rectangle and matching uploaded cells, with explicit vacuum exterior
-and incoming sky. The existing patterned layers form a lit contrasting backwall;
-no material art asset is changed. All four raw RGBA16F samples are inspected before
-resolve for zero-opacity/zero-alpha identity, zero-emission identity, authored
-colour-alpha times opacity, and positive-X refracted ramp contrast. Zero-extinction
-absorbing controls keep canonical volume emission zero while testing additive
-surface emission once at alpha zero and finite bright emission at tiny alpha.
-One additional capture overlaps two distinct zero-alpha emitting disks on the
-empty terrain side. Each of the four full-mask interior samples must equal the
-actual backwall plus their finite authored emission sum, while preserving
-destination alpha. This qualifies the controlled accumulation witness; universal
-HDR particle-stack admission remains unqualified.
-The same producer also creates two fields on one source/cohort for an explicit
-native presentation-domain rejection. A zero-extinction emitter with S=50000
-binds under the narrower declared field ceiling of 1024, while binding the 65504
-field returns `argument_out_of_domain`. Before any draw leases the valid field,
-its test/producer owners are released; its weak lifetime witness must survive
-the rejected replacement. A subsequent raw4 capture verifies the retained valid
-binding still produces finite authored emission. This is a single-surface domain
-control, with no universal accumulation clamp or aggregate HDR admission claim.
-Liquid, solid-envelope and gas controls each preserve the two covered terrain
-samples while changing each empty-side sample. A translated solid is observed
-at its new world position under the same wall/sky field.
-
-The old-reader control prepares its replacement candidate and field before
-submitting the observed old frame. A scoped non-owning after-submit callback
-activates the replacement and changes native spatial policy to legacy 4x before
-the existing wait/readback. It checks the old generation remains owned while its
-submission has not yet been observed complete, compares every old raw sample
-exactly, then distinguishes the new sky generation and spatial/legacy sample
-programs. This does not claim the GPU was physically stalled. Per-capture and
-producer guards require actual completion before releasing submitted resources,
-including callback-failure paths. These additions retain the same leaf,
-registration and deadline; ordinary and Core+GPUAV execution and their durations
-remain pending for this source snapshot.
-
 Each leaf now owns a disjoint ordinary/validation pair: `spatial_grid_gpu`,
 `spatial_retro_gpu`, `spatial_background_gpu` and `spatial_grading_gpu`, with
 matching `_validation` entries. The previous two aggregate registrations are

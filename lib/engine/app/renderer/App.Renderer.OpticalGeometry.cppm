@@ -55,55 +55,6 @@ export namespace pP::lighting {
         OpticalBoundary m_boundary{OpticalBoundary::unavailable};
     };
 
-    // ------------------------------------------------------------------
-    // owned boundary receivers and visual continuation candidates
-    // ------------------------------------------------------------------
-
-    // Physical contact uses the owned dual-cell/curve key. The separate rounded
-    // visual centre/direction are used ONLY for the FP32 continuation policy.
-    struct TerrainReceiverFeature {
-        i32 m_base_x{}, m_base_y{};
-        u32 m_curve{}, m_component{};
-        float m_visual_x{}, m_visual_y{};
-
-        // Historical wire-slot name retained for existing layout/diagnostic
-        // consumers: [0]/[1] now encode normalized visual-outward X/Y as FP32
-        // bits (offsets24/28). Never physical contact, transport or gameplay.
-        u32 m_reserved[2]{};
-    };
-
-    struct TerrainReceiverCellRange {
-        u32 m_offset{}, m_count{};
-    };
-
-    struct TerrainReceiverComponentRange {
-        u32 m_component{}, m_offset{}, m_count{}, m_corner_mask{};
-    };
-
-    class TerrainReceiverSet {
-    public:
-        // Initial complete scene: <=4096 samples, vacuum ring/halo, and common
-        // nonzero-label source RGB per dual cell. Exposes every un-clipped outer
-        // arc/straight midpoint; uncertain promoted midpoint precision is an
-        // explicit domain failure. General differing-source curves remain pending.
-        [[nodiscard]] static std::expected<TerrainReceiverSet, std::error_code> capture(
-            std::shared_ptr<const OpticalTerrainSnapshot> geometry);
-
-        [[nodiscard]] const std::shared_ptr<const OpticalTerrainSnapshot> &geometry() const noexcept;
-        [[nodiscard]] std::span<const TerrainReceiverFeature> features() const noexcept;
-        [[nodiscard]] std::span<const TerrainReceiverCellRange> cells() const noexcept;
-        [[nodiscard]] std::span<const TerrainReceiverComponentRange> components() const noexcept;
-        [[nodiscard]] std::span<const u32> candidates() const noexcept;
-        [[nodiscard]] std::expected<std::array<double, 2>, std::error_code> point(u32 feature) const;
-
-    private:
-        std::shared_ptr<const OpticalTerrainSnapshot> m_geometry{};
-        std::vector<TerrainReceiverFeature> m_features{};
-        std::vector<TerrainReceiverCellRange> m_cells{};
-        std::vector<TerrainReceiverComponentRange> m_components{};
-        std::vector<u32> m_candidates{};
-    };
-
     struct OpticalTerrainTrace {
         RadianceInterval m_interval{};
         std::optional<double> m_hit_m{};
@@ -126,12 +77,6 @@ export namespace pP::lighting {
 
     [[nodiscard]] std::expected<OpticalTerrainTrace, std::error_code> traceOpticalTerrainParametricReference(
         const OpticalTerrainSnapshot &snapshot, const OpticalTerrainParametricRay &ray);
-
-    // Owned midpoint witness: excludes only its algebraically known zero
-    // contact. The first positive interval still tests the complete occupied
-    // region; inward connectors emit immediately and later hits remain active.
-    [[nodiscard]] std::expected<OpticalTerrainTrace, std::error_code> traceTerrainReceiverConnectorReference(
-        const TerrainReceiverSet &receivers, u32 feature, std::array<double, 2> end_cells);
 
     // Segment start+t*(end-start), t in [0,1]. Only equal finite endpoints
     // denote identity; a collapsed/nonfinite direction is an explicit error.

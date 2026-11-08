@@ -258,67 +258,6 @@ the older validate-plus-CPU-output form remains compatible. See
 [authoring and diagnostics](../../docs/worldgen-content.md) for current commands,
 checkpoint semantics and retained/scratch memory accounting limits.
 
-`LightingScene.Capture.cpp` is a second implementation unit of the existing
-`game.colony.smoke` diagnostic module. `captureLightingScene` accepts an owned
-prepared `ContentPresentation`, profile and output directory, and constructs a
-64x36 opaque/vacuum reference scene through the real GridPass/RC receiver/RetroPass
-path. It is explicitly handcrafted, with no full-world generation or simulation
-driver. The copied catalog image/material identity stays owned throughout both
-closed/open captures; each geometry owner/revision matches its resident Grid
-publication and completed receiver generation. A scene-only amber lamp is derived
-from captured magma appearance under an explicit opaque policy, with vacuum
-separation from the unchanged authored sediment/ore rows. The one-cell-thick
-wall has a 1x8-cell aperture; 1x1-portal and phase holdouts
-remain separate physical gates. Teardown proves GPU
-completion before releasing consumer passes, producer buffers and device services.
-The output manifest describes measured door response and the limited front-diffuse
-contract; it is not full-world, media, normal/specular or performance acceptance.
-
-The lighting capture now authors an amber#FFCA75 scene-only source with exact
-piecewise sRGB decode and linear red S=2.5, retaining the captured magma texture
-without changing its shipped descriptor. Background layer RGB receives scene-only
-linear multipliers(.05,.11,.25), re-encoded into the existing row tint; alpha,
-textures and parallax remain captured. Palette/camera/EV3 are fixed across the
-continuation comparison. Each closed/open RC field is computed once; the original
-`door-closed.ppm`/`door-open.ppm` are nearest controls and companion
-`*-interpolated.ppm` pictures opt into the visual experiment on that same completed
-generation. The manifest records candidate count distribution/storage and existing
-capture profiling scope. An optional scene-owned eight-slot RHI timestamp pool
-measures each1080pMSAA4 Grid terrain draw after background and before post, read
-only after its accepted fence; absent timestamp support is explicitly unmeasured,
-while query errors propagate. One observation per picture is not a performance
-distribution or4K60 qualification. The interpolation comparison remains unrun.
-
-The same explicit lighting capture also emits `environment-reference.ppm` after
-the diagnostic closed/open controls and their door-response check. This separate
-64x36 recipe retains the vacuum ring, metric, camera/EV3 and actual immutable
-optical/RC/Grid/spatial/HDR path. Thin pale sandstone banks, ochre sand shelves,
-orange regolith seams and dark ore pockets frame a shaft and Grid-authored opaque
-platform/pipe/tank silhouettes. The companion picture uses nearest continuation;
-it does not activate the interpolation experiment by default.
-
-Three scene-owned opaque emitters provide transported amber, violet and cyan.
-Amber retains the existing captured magma texture and authored amber source;
-violet sculpture and cyan tank insert retain captured crystal/water textures,
-normal maps and authored emission products under distinct scene-only IDs, explicit
-opaque optics and vacuum isolation. The latter is not qualified water or media,
-and the former does not establish crystal transmission. Shipped descriptors and
-their absorbing/particle semantics are unchanged. All silhouettes receive actual
-RC lighting; the separate fixed-light TrianglePass is not used. A fifth timestamp
-pair shares the same fenced scene owner. Material/source definitions and layout
-are recorded in the existing manifest. Normal relief, specular, bloom and complete
-representative-environment visual acceptance remain pending execution and later
-work; the two-room physical control is preserved.
-
-`captureLightingScene` accepts an appended default-false `qualified_fp64` caller
-assertion. The typed CLI-only `--lighting-scene-qualified-fp64` forwards it through
-the game invocation boundary; only explicit true selects the existing qualified
-FP64 refinement policy and asserts current-session RTE64 evidence. No hidden
-environment/driver whitelist enables it. Scene ownership, per-state admission,
-status rejection and accepted-fence lifecycle remain unchanged. The manifest
-records the chosen policy and immutable completed-generation precision counters;
-missing statistics are stated as absent rather than synthesized. The flag does
-not itself establish hardware or physical qualification.
 
 Persistent matter is owned by Colony as `sim::MatterParticleState`. Generation spans
 seed records once; checkpoint restoration uses saved records directly. Driver edit
@@ -397,11 +336,8 @@ The authored factory reports counts/checksum from its owned grid, restores a
 structurally valid biome layout and uses empty procedural geometry/matter. Its
 actor start is checked against actual canonical contour support and occupied
 triangles. It does not claim procedural landing/resource guarantees or weaken
-normal generation validation. SimFramePacket captures one immutable native `WorldRadianceSource` from the
-same selected visual rows and complete staged labels for the explicit showcase.
-It uses the actual binary32 Grid metric promoted to double, not a second optical
-catalog; outside-crop uploaded cells must remain vacuum. Subsequent static showcase packets retain terrain while updating real
-actor triangles; mutation remains disabled at the game boundary.
+normal generation validation. Subsequent static showcase packets retain terrain
+while updating real actor triangles; mutation remains disabled at the game boundary.
 
 Static showcase capture filters its Grid visual inventory to actual used IDs
 before candidate staging, preserving full projected row values and texture
@@ -409,19 +345,6 @@ indices. Unused blended catalog rows do not enter this opaque-only scene. Normal
 world presentation continues to carry the full selected catalog. The real Driver
 capture test applies that owned stage to Grid and checks its existing spatial
 content predicate without creating a GPU device.
-
-
-The explicit showcase world-job header transfers that native source to Editor's
-straight256 small-scene reference producer. Interactive startup no longer selects
-FP64/exact-view transport. Legacy headless `--lighting-scene` and its precision
-operator contract are unchanged. Initial walking, pan/zoom, mapped foreground,
-backwall and native UI reuse normal Driver/Editor/Renderer ownership. The ordinary
-UI says "Lighting reference scene"; numerical backend/quality/performance context
-belongs to diagnostics. Terrain/source mutation and saves remain explicitly
-unavailable until the next coherent Driver optical-transaction checkpoint.
-The native reference passed the fixed coarse15%/1% holdout, not scalable RC or the
-full fine-image/performance goal. Actual startup/window validation is pending.
-
 
 ## Interactive service-bay island
 
@@ -500,31 +423,6 @@ Matter target reuse and stale outer ACK rejection on its same runtime/device,
 then commits OFF and ON while retaining real current-view proofs. Actual field
 and final-picture matching remain the private interactive lamp-check witness.
 
-## Complete direct-window terrain capture
-
-WorldJob's default-false direct-source request is immutable worker input.
-`captureWorldPresentation` optionally copies the complete exclusively owned
-stable grid at its actual edge, using every resident/quiescent payload and exact
-candidate overlay. Missing ChunkGrid payloads are known empty; visibility/dirty
-lists never establish optical absence. Packed native IDs, actual selected terrain
-optics, metric and black-sky boundary produce the same immutable source attached
-to the complete staged Grid candidate. All used models are reported before
-source admission; unknown models/numerical domain failures remain explicit.
-The existing64x36 showcase/source transaction projection is unchanged.
-
-The source receipt reports the actual resident set, source dimensions/used IDs,
-per-material optics and initial particle counts/emission maxima. Particle seeds/
-views and simulation stay on their existing paths; they are not omitted, folded
-into terrain transport or claimed as optical sources. Aggregate particle-emission
-HDR safety remains UNQUALIFIED, independently of the terrain/per-surface bound.
-
-For native world-source capture, both used-ID loops in `SimFramePacket.cpp`
-project the same selected visual's coarse diffuse albedo through the existing
-Grid material boundary. The copied scalar RGB joins canonical sigma/j/S in the
-compact immutable material palette, independent of native cell count. Image
-backing remains owned through synchronous projection; no renderer lookup, new
-material/texture, expanded cell payload or authored optics mutation is used.
-
 ## Diagnostic physical ledger
 
 Measured MatterRuntime admissions retain a sorted immutable stable-ID/original-ID/
@@ -559,9 +457,3 @@ pre-Matter source is provisional: known world/content association is retained,
 and actual job/Matter terrain identity is bound later at the Editor staging
 boundary without cloning/reuploading static arrays.
 
-The explicit lighting showcase service-bay transaction also relocates the amber lamp
-between native slots x30..31 and x37..38 at y16..17. Candidate cells, immutable
-optical labels and committed typed position share the exact activation revision.
-The panel exposes a pending-disabled Move lamp action with destination label;
-the existing lamp-check route captures ON/OFF/ON, forward movement and reverse
-movement with matching-present timing receipts.

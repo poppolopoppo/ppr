@@ -22,16 +22,14 @@ export namespace pP::game {
         validate_worldgen,
         worldgen_preview,
         worldgen_workshop,
-        lighting_scene,
     };
 
-    inline constexpr config::EnumDomain<EGameCommand, 6u> game_command_domain{{
+    inline constexpr config::EnumDomain<EGameCommand, 5u> game_command_domain{{
         config::EnumEntry<EGameCommand>{EGameCommand::interactive, "interactive"},
         config::EnumEntry<EGameCommand>{EGameCommand::smoke, "smoke"},
         config::EnumEntry<EGameCommand>{EGameCommand::validate_worldgen, "validate-worldgen"},
         config::EnumEntry<EGameCommand>{EGameCommand::worldgen_preview, "worldgen-preview"},
         config::EnumEntry<EGameCommand>{EGameCommand::worldgen_workshop, "worldgen-workshop"},
-        config::EnumEntry<EGameCommand>{EGameCommand::lighting_scene, "lighting-scene"},
     }};
 
     enum class EWorldLighting : u8 {
@@ -86,7 +84,7 @@ export namespace pP::game {
         u32 m_rc_day_seconds{86400u};
         EGameCommand m_command{EGameCommand::interactive};
         EWorldLighting m_world_lighting{EWorldLighting::field};
-        bool m_worldgen_report{}, m_worldgen_acceptance{}, m_lighting_scene_qualified_fp64{};
+        bool m_worldgen_report{}, m_worldgen_acceptance{};
         bool m_lighting_showcase{}, m_lighting_showcase_qualified_fp64{}, m_lighting_showcase_metrics{};
         bool m_lighting_showcase_screen_contact{}, m_rc_skip_table{true}, m_rc_distant_query_check{};
 
@@ -204,13 +202,6 @@ export namespace pP::game {
                         "game.lighting_showcase_qualified_fp64",
                         "Explicit current-session RTE64 assertion for the lighting showcase; default strict FP32",
                         "Lighting showcase", EMutability::startup, ESource::cli, false},
-                    boolean_domain),
-                field(
-                    &GameSettings::m_lighting_scene_qualified_fp64,
-                    Metadata{
-                        "game.lighting_scene_qualified_fp64",
-                        "Assert RTE64 qualification for this Vulkan device session and use experimental FP64 refinement in --lighting-scene",
-                        "Lighting capture", EMutability::startup, ESource::cli, false},
                     boolean_domain),
                 field(
                     &GameSettings::m_worldgen_acceptance,

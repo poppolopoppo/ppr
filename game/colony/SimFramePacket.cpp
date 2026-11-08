@@ -561,8 +561,7 @@ namespace pP::colony {
     }
 
     Expected<GridStagedFrame> captureWorldPresentation_(
-        const ColonyDriver &driver, const IContext *const context, const u64 door_revision,
-        [[maybe_unused]] const bool capture_direct_world = false) {
+        const ColonyDriver &driver, const IContext *const context, const u64 door_revision) {
         if (door_revision != 0u) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(
                 SimPresentation, driver.serviceDoorPublication() and
@@ -642,9 +641,8 @@ namespace pP::colony {
         return stage;
     }
 
-    Expected<GridStagedFrame> captureWorldPresentation(
-        const ColonyDriver &driver, const IContext *const context, const bool capture_direct_world) {
-        auto stage = captureWorldPresentation_(driver, context, 0u, capture_direct_world);
+    Expected<GridStagedFrame> captureWorldPresentation(const ColonyDriver &driver, const IContext *const context) {
+        auto stage = captureWorldPresentation_(driver, context, 0u);
         PPR_RETURN_UNEXPECTED_ON_FAIL(SimPresentation, stage);
         return std::move(*stage);
     }

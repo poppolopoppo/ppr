@@ -113,10 +113,6 @@ endif()
 # the UI service reads its pinned font set from the staged `fonts` tree.
 ppr_stage_assets(engine.tests.app shaders fonts)
 
-# Experimental group exclusion is unconditional, including when its CTest option is OFF.
-# Direct per-leaf filters remain available without exposing GPU setup to CPU shards.
-set(ppr_world_candidate_filter "app/world_radiance_gpu")
-
 # Keep the measured source-kernel/extension group within its existing ceiling.
 # Transfer, contact, pool and dam continuations own exact leaves, excluded from that group.
 # Pinned-fork conformance uses its own exact group, leaving old workloads/deadlines intact.
@@ -124,7 +120,6 @@ set(ppr_world_candidate_filter "app/world_radiance_gpu")
 ppr_add_test_entry(TARGET engine.tests.app
     NAME matter_fork_gpu
     FILTER "app/matter_fork"
-    EXCLUDE "${ppr_world_candidate_filter}"
     LOOPS
     RESOURCE_LOCK gpu
     TIMEOUT 300
@@ -136,7 +131,7 @@ set(ppr_matter_resident_filter "app/matter_gpu/resident_status_and_frozen_snapsh
 ppr_add_test_entry(TARGET engine.tests.app
     NAME matter_gpu
     FILTER "app/matter_gpu"
-    EXCLUDE "${ppr_matter_resident_filter},${ppr_world_candidate_filter}"
+    EXCLUDE "${ppr_matter_resident_filter}"
     LOOPS
     RESOURCE_LOCK gpu
     TIMEOUT 300
@@ -146,7 +141,6 @@ ppr_add_test_entry(TARGET engine.tests.app
 ppr_add_test_entry(TARGET engine.tests.app
     NAME matter_resident_gpu
     FILTER "${ppr_matter_resident_filter}"
-    EXCLUDE "${ppr_world_candidate_filter}"
     LOOPS
     RESOURCE_LOCK gpu
     TIMEOUT 300
@@ -160,7 +154,6 @@ unset(ppr_matter_resident_filter)
 ppr_add_test_entry(TARGET engine.tests.app
     NAME matter_adapter
     FILTER "app/matter_adapter"
-    EXCLUDE "${ppr_world_candidate_filter}"
     LOOPS
     TIMEOUT 120
     LABELS unit engine app cpu
@@ -169,7 +162,7 @@ ppr_add_test_entry(TARGET engine.tests.app
 ppr_add_test_entry(TARGET engine.tests.app
     NAME matter_runtime_gpu
     FILTER "app/matter_runtime_gpu"
-    EXCLUDE "app/matter_runtime_gpu/dedicated_actual_domain_cold_reused_acknowledgment_and_completion_are_distinct,app/matter_runtime_gpu/resident_completion_keeps_metadata_and_freezes_exact_demand_snapshot,${ppr_world_candidate_filter}"
+    EXCLUDE "app/matter_runtime_gpu/dedicated_actual_domain_cold_reused_acknowledgment_and_completion_are_distinct,app/matter_runtime_gpu/resident_completion_keeps_metadata_and_freezes_exact_demand_snapshot"
     LOOPS
     RESOURCE_LOCK gpu
     TIMEOUT 180
@@ -179,7 +172,6 @@ ppr_add_test_entry(TARGET engine.tests.app
 ppr_add_test_entry(TARGET engine.tests.app
     NAME matter_dedicated_gpu
     FILTER "app/matter_runtime_gpu/dedicated_actual_domain_cold_reused_acknowledgment_and_completion_are_distinct"
-    EXCLUDE "${ppr_world_candidate_filter}"
     LOOPS
     RESOURCE_LOCK gpu
     TIMEOUT 180
@@ -220,7 +212,6 @@ ppr_add_test_entry(TARGET engine.tests.app
 ppr_add_test_entry(TARGET engine.tests.app
     NAME death_lifecycle
     FILTER "app/run_gate/unknown_completion_fail_stops_process,app/run_gate/unknown_completion_diag_fail_still_fail_stops,app/run_gate/unknown_completion_message_throw_still_fail_stops,app/run_gate/saturated_run_preserves_time_and_input,app/run_gate/terminal_probe_runs_zero_client_work,app/run_gate/busy_collection_failure_latches_first,app/run_gate/focus_loss_gain_ordered_across_busy,app/run_gate/first_error_precedence_clock_over_terminal,app/run_gate/removal_confirmed_preserves_first_error,app/run_gate/sim_catch_up_preserves_skipped_time,app/run_gate/unknown_completion_child_fatal,app/run_gate/monitor_change_and_revert_report_operational_errors"
-    EXCLUDE "${ppr_world_candidate_filter}"
     LOOPS
     RESOURCE_LOCK gpu
     TIMEOUT 600
@@ -233,7 +224,6 @@ ppr_add_test_entry(TARGET engine.tests.app
 ppr_add_test_entry(TARGET engine.tests.app
     NAME slow_gates
     FILTER "app/run_gate/two_runs_reestablish_quiescence_independently,app/run_gate/healthy_teardown_releases_in_order,app/run_gate/healthy_teardown_survives_diagnostic_failure,app/run_gate/lane_gate_blocks_third_until_retirement,app/run_gate/lane_gate_paused_worker_blocks_third,app/run_gate/rejected_frame_does_not_inherit_previous_submit_fate,app/run_gate/lane_gate_timeout_overlapping_gate_entry_serialized,app/run_gate/throwing_native_pump_and_wait_shutdown_retains_first_error,app/run_gate/shutdown_drops_queued_frames_before_backend_quarantine,app/run_gate/admission_observations_report_skips_with_explicit_time,app/run_gate/paced_credit_retries_preserve_elapsed_deadline"
-    EXCLUDE "${ppr_world_candidate_filter}"
     LOOPS
     RESOURCE_LOCK gpu
     TIMEOUT 600
@@ -245,7 +235,6 @@ ppr_add_test_entry(TARGET engine.tests.app
 ppr_add_test_entry(TARGET engine.tests.app
     NAME display_window
     FILTER "app/run_gate/display_window_"
-    EXCLUDE "${ppr_world_candidate_filter}"
     LOOPS
     RESOURCE_LOCK gpu window
     TIMEOUT 600
@@ -257,7 +246,6 @@ ppr_add_test_entry(TARGET engine.tests.app
 ppr_add_test_entry(TARGET engine.tests.app
     NAME functional_gpu
     FILTER "app/grid_pass,app/pixel_readback"
-    EXCLUDE "${ppr_world_candidate_filter}"
     LOOPS
     RESOURCE_LOCK gpu
     TIMEOUT 600
@@ -269,7 +257,6 @@ ppr_add_test_entry(TARGET engine.tests.app
 ppr_add_test_entry(TARGET engine.tests.app
     NAME functional_cpu
     FILTER "app/devices,app/player/,app/dispatch,app/snapshot,app/player_graph,app/viewport,app/render_view,app/lighting,app/camera,app/display,app/sim_packet,app/quaternion,app/input_listener,app/filtered_analog,app/imgui_dpi,app/performance_widget,app/zerov_probe"
-    EXCLUDE "${ppr_world_candidate_filter}"
     LOOPS
     TIMEOUT 600
     LABELS unit engine app
@@ -280,7 +267,6 @@ ppr_add_test_entry(TARGET engine.tests.app
 ppr_add_test_entry(TARGET engine.tests.app
     NAME frame_stages
     FILTER "app/frame_stages"
-    EXCLUDE "${ppr_world_candidate_filter}"
     LOOPS
     RUN_SERIAL
     TIMEOUT 120
@@ -292,7 +278,6 @@ ppr_add_test_entry(TARGET engine.tests.app
 ppr_add_test_entry(TARGET engine.tests.app
     NAME frame_fence
     FILTER "app/frame_fence"
-    EXCLUDE "${ppr_world_candidate_filter}"
     LOOPS
     RESOURCE_LOCK gpu
     TIMEOUT 600
@@ -304,7 +289,6 @@ ppr_add_test_entry(TARGET engine.tests.app
 ppr_add_test_entry(TARGET engine.tests.app
     NAME services_gpu
     FILTER "app/shader,app/renderer_triangle_reinit_ok,app/renderer_off_thread_fails_closed,app/imgui_live_shutdown_idempotent,app/imgui_live_same_object_reinit"
-    EXCLUDE "${ppr_world_candidate_filter}"
     LOOPS
     RESOURCE_LOCK gpu
     TIMEOUT 300
@@ -316,7 +300,6 @@ ppr_add_test_entry(TARGET engine.tests.app
 ppr_add_test_entry(TARGET engine.tests.app
     NAME services_window
     FILTER "app/window_input,app/imgui_routing,app/player_service"
-    EXCLUDE "${ppr_world_candidate_filter}"
     LOOPS
     RESOURCE_LOCK gpu window
     TIMEOUT 300
@@ -328,7 +311,6 @@ ppr_add_test_entry(TARGET engine.tests.app
 ppr_add_test_entry(TARGET engine.tests.app
     NAME services_cpu
     FILTER "app/render_lane,app/app_init_rollback_on_window_create_failure,app/app_init_rollback_on_input_connect_failure,app/app_teardown_double_shutdown_no_refire,app/app_teardown_reports_subsystem_failure_but_completes,app/app_preserves_pre_registered_graphics_services,app/app_empty_request_exit_signals_exit_without_error,app/app_error_request_exit_latches_cause,app/app_empty_request_exit_run_returns_success,app/app_error_request_exit_run_reports_cause,app/app_headless_lifecycle_is_idempotent,app/app_run_shutdowns_after_nonstandard_hook_exception"
-    EXCLUDE "${ppr_world_candidate_filter}"
     LOOPS
     TIMEOUT 300
     LABELS unit engine app
@@ -342,7 +324,6 @@ ppr_add_test_entry(TARGET engine.tests.app
 ppr_add_test_entry(TARGET engine.tests.app
     NAME gpu_validation
     FILTER "app/frame_fence"
-    EXCLUDE "${ppr_world_candidate_filter}"
     LOOPS
     RESOURCE_LOCK gpu
     TIMEOUT 300
@@ -364,4 +345,3 @@ ppr_add_test_entry(TARGET engine.tests.app
     LABELS unit engine app
 )
 
-unset(ppr_world_candidate_filter)

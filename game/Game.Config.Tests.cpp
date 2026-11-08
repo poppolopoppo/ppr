@@ -489,62 +489,6 @@ namespace pP::game::tests::detail::compat {
         PPR_TEST_ASSERT(gameHelpText().find("worldgen-preview") != std::string::npos);
     };
 
-    PPR_UNIT_TEST (lighting_scene_is_explicit_bounded_gpu_capture) {
-        Diagnostics diagnostics{};
-        const auto capture = resolveCli(
-            {"--lighting-scene", "--worldgen-gpu-output=lighting", "--worldgen-profile=hollows"}, diagnostics);
-        PPR_TEST_ASSERT(capture and capture->m_game.m_value.m_command == EGameCommand::lighting_scene);
-        PPR_TEST_ASSERT(capture->m_game.m_value.m_worldgen_gpu_output == "lighting");
-        PPR_TEST_ASSERT(capture->m_game.m_value.m_worldgen_profile == "hollows");
-        PPR_TEST_ASSERT(not capture->m_game.m_value.m_lighting_scene_qualified_fp64);
-
-        Diagnostics ordinary_diagnostics{};
-        const auto ordinary = resolveCli({"--smoke"}, ordinary_diagnostics);
-        PPR_TEST_ASSERT(ordinary and not ordinary->m_game.m_value.m_lighting_scene_qualified_fp64);
-
-        Diagnostics qualified_diagnostics{};
-        const auto qualified = resolveCli(
-            {"--lighting-scene", "--worldgen-gpu-output=lighting", "--lighting-scene-qualified-fp64=true"},
-            qualified_diagnostics);
-        PPR_TEST_ASSERT(qualified and qualified->m_game.m_value.m_lighting_scene_qualified_fp64);
-
-        Diagnostics strict_diagnostics{};
-        const auto strict = resolveCli(
-            {"--lighting-scene", "--worldgen-gpu-output=lighting", "--lighting-scene-qualified-fp64=false"},
-            strict_diagnostics);
-        PPR_TEST_ASSERT(strict and not strict->m_game.m_value.m_lighting_scene_qualified_fp64);
-
-        for (const auto options:
-            {std::initializer_list<const char *>{"--lighting-scene"}, {"--lighting-scene", "--worldgen-output=flat"},
-                {"--lighting-scene", "--worldgen-gpu-output=lighting", "--worldgen-output=flat"}}) {
-            Diagnostics invalid{};
-            const auto rejected = resolveCli(options, invalid);
-            PPR_TEST_ASSERT(not rejected and rejected.error() == make_error_code(EConfigErrc::cross_field_invalid));
-        }
-
-        for (const auto options:
-            {std::initializer_list<const char *>{"--lighting-scene-qualified-fp64"},
-                {"--lighting-scene-qualified-fp64=false"}, {"--smoke", "--lighting-scene-qualified-fp64"},
-                {"--smoke", "--lighting-scene-qualified-fp64=false"},
-                {"--validate-worldgen", "--lighting-scene-qualified-fp64"},
-                {"--worldgen-preview", "--worldgen-gpu-output=lighting", "--lighting-scene-qualified-fp64"}}) {
-            Diagnostics invalid{};
-            const auto rejected = resolveCli(options, invalid);
-            PPR_TEST_ASSERT(not rejected and rejected.error() == make_error_code(EConfigErrc::cross_field_invalid));
-        }
-
-        Diagnostics conflict{};
-        const auto conflicting = resolveCli(
-            {"--lighting-scene", "--worldgen-preview", "--worldgen-gpu-output=lighting"}, conflict);
-        PPR_TEST_ASSERT(not conflicting and conflicting.error() == make_error_code(EConfigErrc::conflicting_command));
-
-        Diagnostics explicit_value{};
-        PPR_TEST_ASSERT(not resolveCli({"--lighting-scene=smoke"}, explicit_value));
-
-        PPR_TEST_ASSERT(gameHelpText().find("handcrafted bounded lighting/reference scene") != std::string::npos);
-        PPR_TEST_ASSERT(gameHelpText().find("lighting-scene-qualified-fp64") != std::string::npos);
-    };
-
     PPR_UNIT_TEST (retired_workload_commands_rejected) {
         for (const char *option:
             {"--load100", "--time-trials", "--game.command=load100", "--game.command=time-trials"}) {
@@ -1068,7 +1012,6 @@ namespace pP::game::tests {
             detail::compat::worldgen_pack_set_and_qualified_world_are_explicit_inputs,
             detail::compat::pack_set_roots_are_relative_owned_and_never_discovered,
             detail::compat::worldgen_preview_is_distinct_and_requires_explicit_output,
-            detail::compat::lighting_scene_is_explicit_bounded_gpu_capture,
             detail::compat::worldgen_acceptance_is_explicit_and_interactive_only,
             detail::compat::retired_workload_commands_rejected,
             detail::compat::repeated_same_selector_is_idempotent,

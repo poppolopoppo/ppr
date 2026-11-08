@@ -76,7 +76,6 @@ namespace pP::game {
                 {"validate-worldgen", "validate-worldgen"},
                 {"worldgen-preview", "worldgen-preview"},
                 {"worldgen-workshop", "worldgen-workshop"},
-                {"lighting-scene", "lighting-scene"},
             };
             Array<std::string> seen{};
 
@@ -518,11 +517,6 @@ namespace pP::game {
                                   "Generate diagnostic exports without gameplay; requires an output directory."));
         appendOption(
             schema.m_options,
-            selectorOption(
-                "lighting-scene", "lighting-scene",
-                "Capture a handcrafted bounded lighting/reference scene, not generated world output; requires --worldgen-gpu-output."));
-        appendOption(
-            schema.m_options,
             switchOption(
                 "game.lighting_showcase", "lighting-showcase",
                 "Play the bounded static lighting showcase using the normal game and editor; editing is disabled."));
@@ -565,11 +559,6 @@ namespace pP::game {
         appendOption(
             schema.m_options,
             switchOption(
-                "game.lighting_scene_qualified_fp64", "lighting-scene-qualified-fp64",
-                "With --lighting-scene only: assert RTE64 qualification for the current Vulkan device session and select experimental FP64 refinement; default strict FP32."));
-        appendOption(
-            schema.m_options,
-            switchOption(
                 "game.worldgen_acceptance", "worldgen-acceptance",
                 "Exercise camera, seam edit, previews and two New Games; report and exit, fail if incomplete."));
         appendOption(
@@ -583,9 +572,9 @@ namespace pP::game {
                                   "game.worldgen_report", "worldgen-report",
                                   "Print bounded interactive cadence and publication observations at shutdown."));
         appendOption(
-            schema.m_options, valueOption(
-                                  "game.worldgen_gpu_output", "worldgen-gpu-output",
-                                  "GPU capture directory for --worldgen-preview or --lighting-scene."));
+            schema.m_options,
+            valueOption(
+                "game.worldgen_gpu_output", "worldgen-gpu-output", "GPU capture directory for --worldgen-preview."));
         appendOption(
             schema.m_options, valueOption(
                                   "game.worldgen_output", "worldgen-output",
@@ -846,25 +835,12 @@ namespace pP::game {
         if ((settings.m_command == EGameCommand::worldgen_preview and
                 not settings.m_worldgen_output and
                 not settings.m_worldgen_gpu_output) or
-            (settings.m_command == EGameCommand::lighting_scene and
-                (not settings.m_worldgen_gpu_output or settings.m_worldgen_output)) or
             (settings.m_command != EGameCommand::worldgen_preview and
-                settings.m_command != EGameCommand::lighting_scene and
                 settings.m_worldgen_gpu_output)) {
             const auto error = config::make_error_code(config::EConfigErrc::cross_field_invalid);
             diagnostics.add(
                 "invocation", "game.command",
-                "--worldgen-preview requires an output; --lighting-scene requires --worldgen-gpu-output and rejects --worldgen-output; GPU capture requires one of these selectors",
-                error);
-            PPR_RETURN_UNEXPECTED_ON_FAIL(GameConfig, error);
-        }
-
-        if (cliHas(cli, "game.lighting_scene_qualified_fp64") and settings.m_command != EGameCommand::lighting_scene) {
-            const auto error = config::make_error_code(config::EConfigErrc::cross_field_invalid);
-            diagnostics.add(
-                "invocation", "game.lighting_scene_qualified_fp64",
-                "--lighting-scene-qualified-fp64 requires --lighting-scene and explicit current-session RTE64 qualification",
-                error);
+                "--worldgen-preview requires an output; GPU capture requires one of these selectors", error);
             PPR_RETURN_UNEXPECTED_ON_FAIL(GameConfig, error);
         }
 
