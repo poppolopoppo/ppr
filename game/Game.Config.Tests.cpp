@@ -1003,6 +1003,25 @@ namespace pP::game::tests::detail::compat {
         PPR_TEST_ASSERT(help.find("post-palette") != std::string::npos);
     };
 
+    PPR_UNIT_TEST (invalid_post_draft_is_rejected_and_not_persisted) {
+        PostDisplaySettings invalid{};
+        invalid.m_ev_min = 4.0f;
+        invalid.m_ev_max = -4.0f;
+
+        // The draft validator rejects the cross-field violation with diagnostics.
+        config::Resolved<PostDisplaySettings> committed{};
+        Diagnostics diagnostics{};
+        const auto rejected = validatePostDraft(committed, invalid, diagnostics);
+        PPR_TEST_ASSERT(not rejected.has_value());
+        PPR_TEST_ASSERT(diagnostics.hasErrors());
+
+        // The persist boundary refuses the invalid draft, so it never reaches the
+        // overlay and never fails the next launch's resolution.
+        const auto persisted = buildLightingPostOverlayDocument(
+            config::Document{}, WorldLightDisplaySettings{}, invalid);
+        PPR_TEST_ASSERT(not persisted.has_value());
+    };
+
     PPR_UNIT_TEST (retired_crash_harness_rejected) {
         Diagnostics diagnostics{};
         const auto result = resolveCli({"--diag-crash=abort"}, diagnostics);
@@ -1042,6 +1061,7 @@ namespace pP::game::tests {
             detail::compat::mapped_config_files_preserve_owned_results_empty_input_and_errors,
             detail::compat::executable_boundary_rejects_unknown_options,
             detail::compat::world_light_and_post_settings_parse_and_validate,
+            detail::compat::invalid_post_draft_is_rejected_and_not_persisted,
             detail::compat::retired_crash_harness_rejected,
         });
     };

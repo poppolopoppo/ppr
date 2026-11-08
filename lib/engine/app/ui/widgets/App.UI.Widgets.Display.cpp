@@ -67,7 +67,7 @@ namespace pP::ui {
             // Window:
             "Mode", "Monitor", "Width", "Height", "Resolution", "Refresh",
             // Rendering:
-            "Pixelization", "Pixel scale", "Palette mapping", "Temporal supersampling",
+            "Pixelization", "Pixel scale", "Temporal supersampling",
             // Requested:
             "Cap", "Size", "Vsync", "Foreground CPU target", "Effective CPU target", "Unfocused slowing",
             // Device report:
@@ -680,12 +680,6 @@ namespace pP::ui {
             }
 
             {
-                beginValueRow("Palette mapping");
-                ImGui::Checkbox("##retro_palette", &state.m_retro.m_palette_enabled);
-                ImGui::SetItemTooltip("Quantize scene colors to the 32-color palette with ordered dithering.");
-            }
-
-            {
                 beginValueRow("Temporal supersampling");
                 ImGui::Checkbox("##temporal_supersampling", &state.m_retro.m_temporal_enabled);
                 ImGui::SetItemTooltip(
@@ -695,13 +689,13 @@ namespace pP::ui {
             ImGui::EndTable();
         }
         noteText(
-            "Pixelization, palette mapping and temporal supersampling are independent; the UI stays native. "
-            "Changes apply immediately and are not part of Apply or Save.");
+            "Pixelization and temporal supersampling are independent; the UI stays native. "
+            "Changes apply immediately and are not part of Apply or Save. Palette mapping lives in Lighting & Post.");
 
-        // World light and post settings are live session controls like the
-        // retro fields above: the game applies the post fields to the retro
-        // pass every frame and the world-light fields at field init/update.
-        // The section never edits the display draft or joins Apply/Save.
+        // Post settings are live session controls (applied to the retro pass
+        // every frame); world light settings are begin-time (applied at the next
+        // world's field init/update). Neither edits the display draft or joins
+        // Apply/Save.
         ImGui::SeparatorText("Lighting & Post");
         if (beginLabelTable("##display_lighting_post", label_width)) {
             const LightingPostWidgetDraft &lp = state.m_lighting_post;
@@ -836,8 +830,9 @@ namespace pP::ui {
                 intent = EDisplayWidgetAction::reset_lighting_post;
             }
             noteText(
-                "World light and post changes apply immediately and are not part of Apply or Save; Save still "
-                "persists the current values to the settings file.");
+                "Post changes apply immediately. World light changes (field, samples, accumulation, retention, "
+                "levels, sky hour) take effect on the next world. Neither joins Apply; Save persists the current "
+                "values.");
         }
 
         ImGui::SeparatorText("Requested");

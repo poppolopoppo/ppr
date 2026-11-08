@@ -174,7 +174,7 @@ namespace pP::game {
                     source = config::SourceValue::integer(static_cast<i64>(value));
                 }
                 layer.m_assignments.push_back(
-                    config::Assignment{std::string{member.m_metadata.m_name}, "panel", source, origin, order++});
+                    config::Assignment{std::string{member.m_metadata.m_name}, "", source, origin, order++});
             });
             return layer;
         }
@@ -241,6 +241,15 @@ namespace pP::game {
     Expected<config::Document> buildLightingPostOverlayDocument(
         const config::Document &existing, const WorldLightDisplaySettings &world_light,
         const PostDisplaySettings &post) {
+        // Reject an invalid draft (e.g. ev_min > ev_max) before it reaches the
+        // overlay, so a bad panel value never persists and fails the next launch.
+        config::Diagnostics validation_diagnostics{};
+        config::Resolved<WorldLightDisplaySettings> world_committed{};
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            GameConfig, validateWorldLightDraft(world_committed, world_light, validation_diagnostics));
+        config::Resolved<PostDisplaySettings> post_committed{};
+        PPR_RETURN_UNEXPECTED_ON_FAIL(GameConfig, validatePostDraft(post_committed, post, validation_diagnostics));
+
         const auto strip_prefix = [](std::string_view key) {
             return key.starts_with("game.world_light.") or key.starts_with("game.post.");
         };
@@ -305,6 +314,12 @@ namespace pP::game {
         PPR_RETURN_UNEXPECTED_ON_FAIL(
             GameConfig, config::applyRuntime(scratch, runtimeLayerFrom(draft, "lighting-post-panel"), diagnostics));
         return scratch;
+    }
+
+    void applyPostToRetro(RetroSettings &retro, const PostDisplaySettings &post) noexcept {
+        retro.m_exposure_ev = post.m_exposure_ev;
+        retro.m_bloom_enabled = post.m_bloom;
+        retro.m_palette_enabled = post.m_palette;
     }
 
     // ------------------------------------------------------------------

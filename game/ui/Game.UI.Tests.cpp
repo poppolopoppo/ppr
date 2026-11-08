@@ -1457,6 +1457,33 @@ descriptor = "earlier.toml"
         PPR_TEST_ASSERT(not validatePostDraft(committed_post, invalid_post, invalid_post_diagnostics));
         PPR_TEST_ASSERT(invalid_post_diagnostics.hasErrors());
     };
+
+    PPR_UNIT_TEST (post_palette_is_the_sole_control_and_reaches_retro) {
+        // The post settings are the single source for the retro palette/exposure/
+        // bloom; applyPostToRetro is the only channel, so there is no second
+        // (shadowed) palette control editing RetroSettings directly.
+        colony::ColonyUiState state{};
+        state.m_post.m_palette = true;
+        state.m_post.m_exposure_ev = 3.0f;
+        state.m_post.m_bloom = true;
+
+        game::applyPostToRetro(state.m_retro, state.m_post);
+
+        PPR_TEST_ASSERT(state.m_retro.m_palette_enabled);
+        PPR_TEST_ASSERT(state.m_retro.m_exposure_ev == 3.0f);
+        PPR_TEST_ASSERT(state.m_retro.m_bloom_enabled);
+
+        state.m_post.m_palette = false;
+        game::applyPostToRetro(state.m_retro, state.m_post);
+        PPR_TEST_ASSERT(not state.m_retro.m_palette_enabled);
+    };
+
+    PPR_UNIT_TEST (world_light_enabled_gates_field_mode) {
+        PPR_TEST_ASSERT(game::worldLightFieldActive(true, true));
+        PPR_TEST_ASSERT(not game::worldLightFieldActive(true, false)); // live toggle disables the field
+        PPR_TEST_ASSERT(not game::worldLightFieldActive(false, true)); // not a field world
+        PPR_TEST_ASSERT(not game::worldLightFieldActive(false, false));
+    };
 }
 
 namespace pP::game::tests {
@@ -1482,6 +1509,8 @@ namespace pP::game::tests {
             detail::presentation::world_actions_close_during_activation_publication_and_shutdown,
             detail::presentation::unsaved_edits_allow_cancel_while_a_save_settles,
             detail::presentation::lighting_post_draft_validates_and_resets,
+            detail::presentation::post_palette_is_the_sole_control_and_reaches_retro,
+            detail::presentation::world_light_enabled_gates_field_mode,
         });
     };
 

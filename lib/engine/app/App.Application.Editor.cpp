@@ -4462,9 +4462,13 @@ namespace pP {
                     grid_stage, field.m_plan.m_width, field.m_source.revision() + 1u, sky_hour);
                 PPR_RETURN_ERROR_ON_FAIL(Editor, field.m_source.applyUpdate(storage.m_update));
                 PPR_RETURN_ERROR_ON_FAIL(Editor, field.m_source.encode(context.m_encoder));
+                // The injected frame delta drives the retention EMA; use the real
+                // packet delta (falling back to the 60 Hz nominal on a zero delta).
+                const float frame_delta = std::chrono::duration<float>(packet.m_delta_time).count();
+                const float field_dt = frame_delta > 0.0f ? frame_delta : 1.0f / 60.0f;
                 PPR_RETURN_ERROR_ON_FAIL(
                     Editor, field.m_field.update(
-                                context.m_encoder, field.m_source, 1.0f / 60.0f,
+                                context.m_encoder, field.m_source, field_dt,
                                 field.m_budget != 0u ? field.m_budget
                                                      : static_cast<u32>(field.m_plan.m_levels[0].m_sample_count),
                                 field.m_accumulation_samples, field.m_history_retention));

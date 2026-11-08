@@ -536,4 +536,16 @@ export namespace pP::game {
     [[nodiscard]] Expected<config::Resolved<PostDisplaySettings>> validatePostDraft(
         const config::Resolved<PostDisplaySettings> &committed, const PostDisplaySettings &draft,
         config::Diagnostics &diagnostics);
+
+    /// Applies the live post display settings to the retro picture state. The
+    /// post settings are the sole source for manual exposure, bloom and the
+    /// palette; the retro palette is derived here, never edited by a second
+    /// control.
+    void applyPostToRetro(RetroSettings &retro, const PostDisplaySettings &post) noexcept;
+
+    /// Effective field-mode gate: the startup world-lighting request AND the
+    /// live enabled toggle, re-evaluated at world begin rather than cached.
+    [[nodiscard]] constexpr bool worldLightFieldActive(bool requested, bool enabled) noexcept {
+        return requested and enabled;
+    }
 } // namespace pP::game

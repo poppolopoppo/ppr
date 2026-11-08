@@ -975,7 +975,10 @@ namespace demo {
         bool m_lighting_showcase{};
         bool m_direct_window{}, m_single_bounce{}, m_temporal_cascades{}, m_temporal_skip_table{},
             m_rc_distant_query_check{};
-        bool m_field{};
+        // Startup field-mode request (--world-lighting=field). The live enabled
+        // toggle is re-read at world begin through worldLightFieldActive, never
+        // cached into a boolean that the panel cannot update.
+        bool m_field_requested{};
         bool m_showcase_screen_contact{};
         std::shared_ptr<const GridWorldCommand> m_world_command{};
         std::optional<GridWorldResult> m_world_result{};
@@ -1782,7 +1785,8 @@ namespace demo {
                         {{"hour", m_requested_sky_hour}, {"tick", m_driver->tickCount()}, {"job", world.m_job_id},
                             {"world", world.m_world_generation}, {"content", world.m_content_fingerprint}});
                 }
-            } else if (m_field and m_ui_state.m_world_light.m_sky_hour >= 0) {
+            } else if (game::worldLightFieldActive(m_field_requested, m_ui_state.m_world_light.m_enabled) and
+                       m_ui_state.m_world_light.m_sky_hour >= 0) {
                 stage.m_temporal_sky_hour = m_ui_state.m_world_light.m_sky_hour;
             }
 
@@ -2140,7 +2144,7 @@ namespace demo {
             command.m_temporal_cascades = m_temporal_cascades and command.m_kind == EGridWorldCommand::begin;
             command.m_temporal_settings = m_temporal_settings;
             command.m_temporal_skip_table = m_temporal_skip_table;
-            command.m_field = m_field;
+            command.m_field = game::worldLightFieldActive(m_field_requested, m_ui_state.m_world_light.m_enabled);
         }
 
         [[nodiscard]] std::error_code queueWorldCommand_(const EGridWorldCommand kind) {
@@ -2201,7 +2205,7 @@ namespace demo {
                     command->m_final_batch = source.m_uploads.empty();
                 }
 
-                if (m_field) {
+                if (game::worldLightFieldActive(m_field_requested, m_ui_state.m_world_light.m_enabled)) {
                     const auto plan = lighting::planWorldLight(
                         {.m_width = m_map_size,
                             .m_height = m_map_size,
@@ -5528,7 +5532,7 @@ namespace demo {
             m_direct_window = (m_temporal_cascades and not m_lighting_showcase) or
                               m_single_bounce or
                               settings.m_world_lighting == game::EWorldLighting::direct_window;
-            m_field = settings.m_world_lighting == game::EWorldLighting::field and m_ui_state.m_world_light.m_enabled;
+            m_field_requested = settings.m_world_lighting == game::EWorldLighting::field;
             m_showcase_screen_contact = m_temporal_cascades or settings.m_lighting_showcase_screen_contact;
 
             if (settings.m_lighting_showcase_metrics) {
@@ -5582,9 +5586,7 @@ namespace demo {
                 // (field/legacy) path: manual exposure, bloom and the optional
                 // palette. The showcase/direct-window reference scene above owns
                 // its own fixed values.
-                m_ui_state.m_retro.m_exposure_ev = m_ui_state.m_post.m_exposure_ev;
-                m_ui_state.m_retro.m_bloom_enabled = m_ui_state.m_post.m_bloom;
-                m_ui_state.m_retro.m_palette_enabled = m_ui_state.m_post.m_palette;
+                game::applyPostToRetro(m_ui_state.m_retro, m_ui_state.m_post);
             }
             m_requested_seed = settings.m_worldgen_seed;
             m_ui_state.m_tools = {
@@ -6538,9 +6540,7 @@ namespace demo {
                 m_ui_state.m_retro.m_temporal_2x_enabled = m_single_bounce or m_temporal_cascades;
             } else {
                 // Post display settings edit the live retro picture directly.
-                m_ui_state.m_retro.m_exposure_ev = m_ui_state.m_post.m_exposure_ev;
-                m_ui_state.m_retro.m_bloom_enabled = m_ui_state.m_post.m_bloom;
-                m_ui_state.m_retro.m_palette_enabled = m_ui_state.m_post.m_palette;
+                game::applyPostToRetro(m_ui_state.m_retro, m_ui_state.m_post);
             }
             setRetroSettings(m_ui_state.m_retro);
             prepareGameplayQueryRequest_();

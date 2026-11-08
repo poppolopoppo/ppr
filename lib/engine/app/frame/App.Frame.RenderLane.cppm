@@ -81,10 +81,11 @@ export namespace pP {
         lighting::WorldLightPlan m_field_plan{};
         std::vector<lighting::WorldLightMaterial> m_field_materials{};
         // Per-frame direction-sample budget, accumulation cap, and steady-state
-        // retention for the cascade field update.
+        // retention for the cascade field update (defaults match the settings
+        // schema so an unset command still yields the shipped behavior).
         u32 m_field_budget{};
-        u32 m_field_accumulation_samples{};
-        float m_field_history_retention{};
+        u32 m_field_accumulation_samples{8u};
+        float m_field_history_retention{0.9f};
         EGridWorldCommand m_kind{EGridWorldCommand::begin};
         bool m_direct_window{}, m_single_bounce{}, m_temporal_cascades{}, m_temporal_skip_table{};
         bool m_field{};
