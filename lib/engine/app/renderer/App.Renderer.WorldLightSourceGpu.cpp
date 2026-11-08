@@ -35,9 +35,10 @@ namespace pP::lighting {
         static_assert(PPR_OFFSETOF(WorldLightMatterParticle, m_fill) == 4u);
         static_assert(PPR_OFFSETOF(WorldLightMatterParticle, m_material) == 8u);
 
-        static_assert(sizeof(WorldLightMaterial) == 40u and alignof(WorldLightMaterial) == 4u);
+        static_assert(sizeof(WorldLightMaterial) == 52u and alignof(WorldLightMaterial) == 4u);
         static_assert(PPR_OFFSETOF(WorldLightMaterial, m_sigma) == 16u);
         static_assert(PPR_OFFSETOF(WorldLightMaterial, m_emission) == 28u);
+        static_assert(PPR_OFFSETOF(WorldLightMaterial, m_albedo) == 40u);
 
         static_assert(sizeof(WorldLightSourceConstants) == 32u and alignof(WorldLightSourceConstants) == 4u);
         static_assert(PPR_OFFSETOF(WorldLightSourceConstants, m_has_overlay) == 20u);
@@ -384,7 +385,7 @@ namespace pP::lighting {
         }
 
         bool changed = false;
-        WorldLightDirtyRect dirty = state.m_dirty;
+        WorldLightDirtyRect dirty;
         std::vector<u32> pending_chunks;
 
         for (const WorldLightChunkUpdate &chunk: update.m_chunks) {

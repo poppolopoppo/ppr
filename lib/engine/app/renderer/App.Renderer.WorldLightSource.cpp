@@ -66,7 +66,7 @@ namespace pP::lighting {
         }
 
         bool changed = false;
-        WorldLightDirtyRect dirty = m_dirty;
+        WorldLightDirtyRect dirty;
         std::vector<u32> dirty_blocks;
 
         for (const WorldLightChunkUpdate &chunk: update.m_chunks) {

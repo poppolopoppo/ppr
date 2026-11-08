@@ -5,8 +5,9 @@
 // for the dirty-first reprocess. Each traces the level's own interval through
 // the dense source (cell ids + material palette + overlay) with a cell-by-cell
 // DDA, accumulates the sample into the running mean, and writes the current
-// radiance buffer. Task 7 supplies the previous-hierarchy composite; for Task 6
-// the hit-shading feedback hook returns zero (direct emission only).
+// radiance buffer. An opaque hit adds one bounce of the previously completed
+// field weighted by the hit material's albedo, so the field accumulates primary
+// transport plus a single material-weighted bounce (no recursive ray tree).
 #include "world_light_field.slang"
 #include "world_light_sample.slang"
 
@@ -41,13 +42,13 @@ float hash01(uint a, uint b) {
 // feedback
 // ------------------------------------------------------------------
 
-// Zero-feedback hook: Task 7 reads the previous hierarchy composite here so a
-// hit adds the material response of the previously completed field. For Task 6
-// the field accumulates primary transport only.
-[ForceInline]
-float3 worldLightFeedback(float2 position, float2 direction) {
-    return float3(0.0, 0.0, 0.0);
-}
+// One previous completed-field bounce at an opaque hit, added inline in the
+// trace: feedback = material.albedo * worldLightDiffusePrev(hitPosition, normal).
+// The face normal comes from the DDA step that entered the hit cell (see the
+// trace loop), so the diffuse term samples the hemisphere the ray crossed. An
+// overlay-only opaque surface (no material) has zero albedo and contributes no
+// bounce. There is no recursive ray tree or face bake: exactly one previous
+// field read per opaque hit.
 
 // ------------------------------------------------------------------
 // level-interval trace (cell-by-cell DDA)
@@ -91,6 +92,7 @@ void traceWorldLightInterval(
     float tDeltaY = (direction.y == 0.0) ? 1e30 : cellMetres / abs(direction.y);
 
     float t = 0.0;
+    float3 entryNormal = float3(0.0, 0.0, 1.0); // +Z for the ray-start cell.
     uint maxSteps = uint(width + height) + 4u;
     for (uint i = 0u; i < maxSteps && t < intervalLength && transmittance > 0.0; ++i) {
         float tNext = min(min(tMaxX, tMaxY), intervalLength);
@@ -104,12 +106,14 @@ void traceWorldLightInterval(
             float coverage = asfloat(g_world_light_overlay[base + kOverlayCoverage]);
             float3 sigma = float3(0.0, 0.0, 0.0);
             float3 emission = float3(0.0, 0.0, 0.0);
+            float3 albedo = float3(0.0, 0.0, 0.0);
             bool opaque = coverage >= 0.5;
 
             if (id != 0u) {
                 WorldLightMaterial material = g_world_light_materials[id - 1u];
                 sigma = float3(material.sigma[0], material.sigma[1], material.sigma[2]);
                 emission = float3(material.emission[0], material.emission[1], material.emission[2]);
+                albedo = float3(material.albedo[0], material.albedo[1], material.albedo[2]);
                 opaque = opaque || material.kind == 1u;
             }
 
@@ -125,7 +129,8 @@ void traceWorldLightInterval(
             float2 p = origin + direction * (nearM + t + 0.5 * seg);
 
             if (opaque) {
-                radiance += transmittance * (emission + worldLightFeedback(p, direction));
+                float3 feedback = albedo * worldLightDiffusePrev(p, entryNormal);
+                radiance += transmittance * (emission + feedback);
                 transmittance = 0.0;
                 break;
             }
@@ -142,10 +147,12 @@ void traceWorldLightInterval(
             t = tMaxX;
             tMaxX += tDeltaX;
             cx += stepX;
+            entryNormal = float3(-float(stepX), 0.0, 0.0);
         } else {
             t = tMaxY;
             tMaxY += tDeltaY;
             cy += stepY;
+            entryNormal = float3(0.0, -float(stepY), 0.0);
         }
     }
 }

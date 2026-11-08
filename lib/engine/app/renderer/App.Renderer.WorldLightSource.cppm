@@ -20,6 +20,7 @@ export namespace pP::lighting {
         std::array<float, 3> m_source{};
         std::array<float, 3> m_sigma{};
         std::array<float, 3> m_emission{};
+        std::array<float, 3> m_albedo{};
     };
 
     // One committed dirty 128x128 chunk: a row-major chunk id and the 128*128
@@ -63,7 +64,13 @@ export namespace pP::lighting {
     // ------------------------------------------------------------------
 
     // Half-open integer cell rectangle [m_min, m_max) in native cell units,
-    // unioned across the changed chunks and overlay cells of an edit.
+    // unioned across the changed chunks and overlay cells of one edit. It is
+    // per-update, not cumulative: applyUpdate starts from an empty rect and
+    // reports only the current edit's changed region, so a later edit to one
+    // region never re-invalidates probes touched by an earlier edit. The field
+    // consumes at most one update per frame (it resets/reprocesses the dirty
+    // rect only on a revision change), so an edit already consumed by the field
+    // keeps its accumulated history.
     struct WorldLightDirtyRect {
         i32 m_min_x{}, m_min_y{}, m_max_x{}, m_max_y{};
 

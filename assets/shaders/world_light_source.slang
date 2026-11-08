@@ -16,12 +16,15 @@ struct WorldLightSourceConstants {
     uint pad0, pad1;
 };
 
-// Global palette material, indexed by material id (0 = vacuum).
+// Global palette material, indexed by material id (0 = vacuum). m_albedo is the
+// visual diffuse albedo used for the one-bounce previous-field feedback at
+// opaque hits; it is zero for vacuum and overlay-only (particle) surfaces.
 struct WorldLightMaterial {
     uint kind;
     float source[3];
     float sigma[3];
     float emission[3];
+    float albedo[3];
 };
 
 // Per-chunk upload dispatch: the chunk coordinates this upload writes into the

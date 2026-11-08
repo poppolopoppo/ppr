@@ -136,6 +136,30 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(source->dirtyRect().m_max_y == dirty.m_max_y);
         };
 
+        PPR_UNIT_TEST (source_dirty_rect_is_per_update_not_cumulative) {
+            const auto plan = lighting::planWorldLight({.m_width = 256, .m_height = 256, .m_cell_metres = 0.5f});
+            PPR_TEST_ASSERT(plan.has_value());
+            auto source = lighting::WorldLightSource::create(*plan, {});
+            PPR_TEST_ASSERT(source.has_value());
+
+            std::vector<u16> chunk_a(128u * 128u, 0u);
+            chunk_a[0] = 1u;
+            std::vector<u16> chunk_b(128u * 128u, 0u);
+            chunk_b[0] = 1u;
+
+            // Edit chunk 0 (cells [0,128)^2), then chunk 1 (cells [128,256) x [0,128)).
+            const lighting::WorldLightChunkUpdate edit_a{.m_chunk_id = 0u, .m_cell_ids = chunk_a};
+            PPR_TEST_ASSERT(not source->applyUpdate({.m_chunks = {&edit_a, 1u}, .m_revision = 1u}));
+            PPR_TEST_ASSERT(source->dirtyRect().m_min_x == 0 and source->dirtyRect().m_max_x == 128);
+
+            const lighting::WorldLightChunkUpdate edit_b{.m_chunk_id = 1u, .m_cell_ids = chunk_b};
+            PPR_TEST_ASSERT(not source->applyUpdate({.m_chunks = {&edit_b, 1u}, .m_revision = 2u}));
+
+            // The second edit replaces the first's dirty rect instead of unioning it.
+            PPR_TEST_ASSERT(source->dirtyRect().m_min_x == 128 and source->dirtyRect().m_min_y == 0);
+            PPR_TEST_ASSERT(source->dirtyRect().m_max_x == 256 and source->dirtyRect().m_max_y == 128);
+        };
+
         PPR_UNIT_TEST (source_rejects_out_of_range_chunk) {
             const auto plan = lighting::planWorldLight({.m_width = 256, .m_height = 256, .m_cell_metres = 0.5f});
             PPR_TEST_ASSERT(plan.has_value());
@@ -439,20 +463,22 @@ namespace pP::tests::detail {
             }
 
             PPR_TEST_ASSERT(source.revision() == 3u);
-            PPR_TEST_ASSERT(source.dirtyRect().m_min_x == 0 and source.dirtyRect().m_min_y == 0);
-            PPR_TEST_ASSERT(source.dirtyRect().m_max_x == 128 and source.dirtyRect().m_max_y == 128);
+            // The dirty rect is per-update: the particle edit (cells (4,4) and
+            // (5,5)) replaces the earlier chunk-0 edit's rect, not unioned with it.
+            PPR_TEST_ASSERT(source.dirtyRect().m_min_x == 4 and source.dirtyRect().m_min_y == 4);
+            PPR_TEST_ASSERT(source.dirtyRect().m_max_x == 6 and source.dirtyRect().m_max_y == 6);
 
             // A failed update (out-of-range chunk) is rejected without mutation.
             const lighting::WorldLightChunkUpdate bad_chunk{.m_chunk_id = 4u, .m_cell_ids = chunk};
             PPR_TEST_ASSERT(
                 source.applyUpdate({.m_chunks = {&bad_chunk, 1u}, .m_revision = 9u}) == std::errc::result_out_of_range);
             PPR_TEST_ASSERT(source.revision() == 3u);
-            PPR_TEST_ASSERT(source.dirtyRect().m_max_x == 128);
+            PPR_TEST_ASSERT(source.dirtyRect().m_max_x == 6);
 
             // An empty update preserves revision and the previous GPU bytes.
             PPR_TEST_ASSERT(not source.applyUpdate({}));
             PPR_TEST_ASSERT(source.revision() == 3u);
-            PPR_TEST_ASSERT(source.dirtyRect().m_max_x == 128);
+            PPR_TEST_ASSERT(source.dirtyRect().m_max_x == 6);
 
             const auto occupancy_after = fixture.read<u32>(source.occupancy());
             PPR_TEST_ASSERT(occupancy_after == occupancy);
@@ -790,7 +816,8 @@ namespace pP::tests::detail {
             GridPass m_grid{};
             bool m_grid_ready{};
 
-            void initialize(const u32 width, const u32 height) {
+            void initialize(
+                const u32 width, const u32 height, const std::span<const lighting::WorldLightMaterial> materials) {
                 PPR_TEST_ASSERT(not m_shaders->initialize());
                 const auto setting = config::getenvLookup("PPR_TEST_GPU_VALIDATION");
                 const bool validation = setting and *setting == "1";
@@ -809,11 +836,15 @@ namespace pP::tests::detail {
                 const auto plan = lighting::planWorldLight(
                     {.m_width = width, .m_height = height, .m_cell_metres = 0.5f});
                 PPR_TEST_ASSERT(plan.has_value());
-                // One opaque emissive material (palette index 0 -> cell id 1).
-                const lighting::WorldLightMaterial materials[] = {{.m_kind = 1u, .m_emission = {1.0f, 1.0f, 1.0f}}};
                 PPR_TEST_ASSERT(
                     not m_source.initialize(*m_rhi, *m_shaders, *plan, materials, std::filesystem::current_path()));
                 PPR_TEST_ASSERT(not m_field.initialize(*m_rhi, *m_shaders, *plan, std::filesystem::current_path()));
+            }
+
+            void initialize(const u32 width, const u32 height) {
+                // One opaque emissive material (palette index 0 -> cell id 1).
+                const lighting::WorldLightMaterial materials[] = {{.m_kind = 1u, .m_emission = {1.0f, 1.0f, 1.0f}}};
+                initialize(width, height, materials);
             }
 
             void submit(rhi::ICommandEncoder &encoder) {
@@ -1132,6 +1163,112 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(after[below_sample] == below_before);
 
             fixture.shutdown();
+        };
+
+        PPR_UNIT_TEST (field_dirty_rect_is_per_update_a_keeps_b_resets) {
+            constexpr u32 width = 256u;
+            constexpr u32 height = 256u;
+
+            Fixture fixture;
+            fixture.initialize(width, height);
+            auto &source = fixture.m_source;
+            auto &field = fixture.m_field;
+
+            const auto plan = lighting::planWorldLight({.m_width = width, .m_height = height, .m_cell_metres = 0.5f});
+            PPR_TEST_ASSERT(plan.has_value());
+            const u32 budget = static_cast<u32>(plan->m_levels[0].m_sample_count);
+
+            // Level 0 probe A sits in chunk 0 (cells [0,128)^2), probe B in chunk 1
+            // (cells [128,256) x [0,128)); both read direction 0. The flat sample
+            // index is (py * probesX + px) * directions + direction.
+            const u64 sample_a = (10u * 128u + 10u) * 4u + 0u;
+            const u64 sample_b = (10u * 128u + 80u) * 4u + 0u;
+
+            // Warm the vacuum field so every level-0 probe accumulates history.
+            fixture.runUpdates(16u, budget);
+
+            // Edit region A (chunk 0), consume it, then re-accumulate probe A with
+            // three cursor updates (level 4, level 5, then level 0 wraps to touch A).
+            std::vector<u16> chunk_a(128u * 128u, 0u);
+            chunk_a[0] = 1u;
+            const lighting::WorldLightChunkUpdate edit_a{.m_chunk_id = 0u, .m_cell_ids = chunk_a};
+            PPR_TEST_ASSERT(not source.applyUpdate({.m_chunks = {&edit_a, 1u}, .m_revision = 1u}));
+            fixture.encodeSource();
+            fixture.updateField(budget);
+
+            fixture.updateField(budget);
+            fixture.updateField(budget);
+            fixture.updateField(budget);
+
+            const auto before_b = fixture.read<u32>(field.state());
+            const u32 a_before_b = before_b[sample_a];
+            PPR_TEST_ASSERT(a_before_b > 1u);
+
+            // Edit region B (chunk 1) on top of the same committed source.
+            std::vector<u16> chunk_b(128u * 128u, 0u);
+            chunk_b[0] = 1u;
+            const lighting::WorldLightChunkUpdate edit_b{.m_chunk_id = 1u, .m_cell_ids = chunk_b};
+            PPR_TEST_ASSERT(not source.applyUpdate({.m_chunks = {&edit_b, 1u}, .m_revision = 2u}));
+            fixture.encodeSource();
+            fixture.updateField(budget);
+
+            const auto after_b = fixture.read<u32>(field.state());
+            // Probe B is reset and reprocessed by its own edit.
+            PPR_TEST_ASSERT(after_b[sample_b] == 1u);
+            // Probe A keeps its accumulated history: B's edit must not reset it.
+            PPR_TEST_ASSERT(after_b[sample_a] == a_before_b);
+
+            fixture.shutdown();
+        };
+
+        PPR_UNIT_TEST (field_feedback_bounces_off_reflective_wall) {
+            constexpr u32 width = 256u;
+            constexpr u32 height = 256u;
+
+            const auto plan = lighting::planWorldLight({.m_width = width, .m_height = height, .m_cell_metres = 0.5f});
+            PPR_TEST_ASSERT(plan.has_value());
+            const u32 budget = static_cast<u32>(plan->m_levels[0].m_sample_count);
+
+            // Probe (3,3) direction 0 (up-right) hits the wall at cell (8,8); the
+            // emitter at (4,4) is down-left of the wall and far from the probe's
+            // jittered start, so the probe never sees the emitter directly and its
+            // direction-0 radiance is pure one-bounce feedback.
+            const u64 sample = (3u * 128u + 3u) * 4u + 0u;
+            const u64 word = sample * 4u;
+
+            const auto run = [&](const float wall_albedo) -> std::vector<u16> {
+                Fixture fixture;
+                const lighting::WorldLightMaterial materials[] = {
+                    {.m_kind = 1u, .m_albedo = {wall_albedo, wall_albedo, wall_albedo}}, // wall (cell id 1)
+                    {.m_kind = 1u, .m_emission = {1.0f, 1.0f, 1.0f}}}; // emitter (cell id 2)
+                fixture.initialize(width, height, materials);
+                auto &source = fixture.m_source;
+                auto &field = fixture.m_field;
+
+                std::vector<u16> chunk(128u * 128u, 0u);
+                chunk[8u * 128u + 8u] = 1u; // wall at (8,8)
+                chunk[4u * 128u + 4u] = 2u; // emitter at (4,4)
+                const lighting::WorldLightChunkUpdate update{.m_chunk_id = 0u, .m_cell_ids = chunk};
+                PPR_TEST_ASSERT(not source.applyUpdate({.m_chunks = {&update, 1u}, .m_revision = 1u}));
+                fixture.encodeSource();
+
+                fixture.runUpdates(16u, budget);
+                const std::vector<u16> radiance = fixture.read<u16>(field.view().m_radiance);
+                fixture.shutdown();
+                return radiance;
+            };
+
+            const std::vector<u16> bounced = run(1.0f);
+            const std::vector<u16> zeroed = run(0.0f);
+
+            bool bounced_nonzero = false;
+            bool zeroed_zero = true;
+            for (u32 channel = 0u; channel < 3u; ++channel) {
+                bounced_nonzero = bounced_nonzero or bounced[word + channel] != 0u;
+                zeroed_zero = zeroed_zero and zeroed[word + channel] == 0u;
+            }
+            PPR_TEST_ASSERT(bounced_nonzero);
+            PPR_TEST_ASSERT(zeroed_zero);
         };
 
         PPR_UNIT_TEST (field_update_respects_budget_boundary) {
@@ -3135,6 +3272,7 @@ namespace pP::tests {
             detail::WorldLightFieldTests::plan_rejects_zero_dimensions_nonfinite_cell_size_and_excess_levels,
             detail::WorldLightFieldTests::source_applies_dirty_chunks_and_preserves_other_cells,
             detail::WorldLightFieldTests::source_empty_update_keeps_revision_and_dirty_rect,
+            detail::WorldLightFieldTests::source_dirty_rect_is_per_update_not_cumulative,
             detail::WorldLightFieldTests::source_rejects_out_of_range_chunk,
             detail::WorldLightFieldTests::source_applies_overlay_and_bumps_revision,
             detail::WorldLightFieldTests::source_derives_occupancy_word_for_traversal,
@@ -3147,9 +3285,11 @@ namespace pP::tests {
             detail::WorldLightFieldGpu::field_single_emitter_converges,
             detail::WorldLightFieldGpu::field_accumulation_caps_count_and_retention_holds_history,
             detail::WorldLightFieldGpu::field_dirty_update_reprocesses_in_same_frame,
+            detail::WorldLightFieldGpu::field_dirty_rect_is_per_update_a_keeps_b_resets,
             detail::WorldLightFieldGpu::field_reset_bounds_rect_tail,
             detail::WorldLightFieldGpu::field_update_respects_budget_boundary,
             detail::WorldLightFieldGpu::field_dense_dda_hits_diagonal_emitter,
+            detail::WorldLightFieldGpu::field_feedback_bounces_off_reflective_wall,
             detail::WorldLightFieldGpu::field_is_camera_independent,
             detail::WorldLightFieldGpu::field_routing_applies_dirty_chunk_and_binds_view,
             detail::WorldLightFieldGpu::composite_matches_cpu_reference,

@@ -849,8 +849,8 @@ namespace pP::colony {
         return {};
     }
 
-    std::vector<lighting::WorldLightMaterial> buildWorldLightMaterials(
-        const std::span<const GridTerrainVisual> visuals) {
+    Expected<std::vector<lighting::WorldLightMaterial>> buildWorldLightMaterials(
+        const std::span<const GridTerrainVisual> visuals, const std::span<const image::ImageAsset> images) {
         // Palette indexed by cell id - 1 (id 0 = vacuum); sparse material ids
         // leave gap entries as the default vacuum material.
         u32 max_id = 0u;
@@ -871,6 +871,13 @@ namespace pP::colony {
 
             lighting::WorldLightMaterial &material = materials[visual.m_material_id - 1u];
             material.m_kind = optics->m_kind == lighting::OpticalKind::opaque ? 1u : 2u;
+
+            const auto albedo = gridMaterialDiffuseAlbedo(visual, images);
+            PPR_RETURN_UNEXPECTED_ON_FAIL(SimPresentation, albedo);
+            for (u32 channel = 0u; channel < 3u; ++channel) {
+                material.m_albedo[channel] = (*albedo)[channel];
+            }
+
             for (u32 channel = 0u; channel < 3u; ++channel) {
                 if (optics->m_kind == lighting::OpticalKind::opaque) {
                     material.m_emission[channel] = static_cast<float>(optics->m_surface_emission[channel]);

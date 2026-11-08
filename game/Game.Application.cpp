@@ -1150,9 +1150,13 @@ namespace demo {
                     command->m_field_budget = m_ui_state.m_world_light.m_samples_per_frame;
                     command->m_field_accumulation_samples = m_ui_state.m_world_light.m_accumulation_samples;
                     command->m_field_history_retention = m_ui_state.m_world_light.m_history_retention;
-                    command->m_field_materials = colony::buildWorldLightMaterials(
+                    auto field_materials = colony::buildWorldLightMaterials(
                         std::span<const GridTerrainVisual>{
-                            source.m_terrain_visuals.data(), source.m_terrain_visuals.size()});
+                            source.m_terrain_visuals.data(), source.m_terrain_visuals.size()},
+                        std::span<const image::ImageAsset>{
+                            source.m_terrain_images.data(), source.m_terrain_images.size()});
+                    PPR_RETURN_ERROR_ON_FAIL(Demo, field_materials);
+                    command->m_field_materials = std::move(*field_materials);
                 }
             } else if (kind == EGridWorldCommand::append) {
                 auto &source = m_workshop_stage ? *m_workshop_stage : m_world_job->presentation();
