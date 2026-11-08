@@ -32,6 +32,7 @@ export import :renderer.world_radiance;
 export import :renderer.world_light_types;
 export import :renderer.world_light_source;
 export import :renderer.world_light_source_gpu;
+export import :renderer.world_light_field;
 export import :renderer.optical_geometry;
 export import :renderer.retro_pass;
 export import :renderer.triangle_pass;

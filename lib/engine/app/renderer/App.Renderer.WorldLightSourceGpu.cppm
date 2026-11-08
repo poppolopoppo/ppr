@@ -57,6 +57,8 @@ export namespace pP::lighting {
         [[nodiscard]] rhi::IBuffer *cellIds() const noexcept;
         [[nodiscard]] rhi::IBuffer *overlay() const noexcept;
         [[nodiscard]] rhi::IBuffer *occupancy() const noexcept;
+        // Immutable palette on the device, indexed by cell id - 1 (id 0 = vacuum).
+        [[nodiscard]] rhi::IBuffer *materialsGpu() const noexcept;
 
         // CPU mirrors: the global palette and the committed edit state.
         [[nodiscard]] std::span<const WorldLightMaterial> materials() const noexcept;

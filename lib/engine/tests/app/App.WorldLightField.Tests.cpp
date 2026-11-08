@@ -509,6 +509,260 @@ namespace pP::tests::detail {
             fixture.shutdown();
         };
     }
+
+    // ------------------------------------------------------------------
+    // temporal cascade field fixtures
+    // ------------------------------------------------------------------
+
+    namespace WorldLightFieldGpu {
+        // 8-byte radiance sample: RGB (half) + scalar transmittance (half).
+        struct RadianceHalf {
+            u16 m_r{}, m_g{}, m_b{}, m_t{};
+        };
+        static_assert(sizeof(RadianceHalf) == 8u);
+
+        [[nodiscard]] bool halfIsFinitePositive(const u16 value) noexcept {
+            const u32 exponent = (value >> 10) & 0x1fu;
+            return (value & 0x8000u) == 0u and exponent != 0x1fu and value != 0u;
+        }
+
+        struct Fixture {
+            safe_ptr<IShaderService> m_shaders{IShaderService::get()};
+            safe_ptr<IRhiService> m_rhi{IRhiService::get()};
+            rhi::ComPtr<rhi::ICommandQueue> m_queue;
+            FrameFence m_fence;
+            lighting::WorldLightSourceGpu m_source;
+            lighting::WorldLightField m_field;
+
+            void initialize(const u32 width, const u32 height) {
+                PPR_TEST_ASSERT(not m_shaders->initialize());
+                const auto setting = config::getenvLookup("PPR_TEST_GPU_VALIDATION");
+                const bool validation = setting and *setting == "1";
+                m_rhi->setCoreValidation(true);
+                m_rhi->setGpuAssistedValidation(validation);
+#ifdef _WIN32
+                constexpr auto backend = rhi::DeviceType::D3D12;
+#else
+                constexpr auto backend = rhi::DeviceType::Vulkan;
+#endif
+                PPR_TEST_ASSERT(not m_rhi->initialize(backend, *m_shaders));
+                auto &device = m_rhi->getDevice();
+                PPR_TEST_ASSERT(not make_error_code(device.getQueue(rhi::QueueType::Graphics, m_queue.writeRef())));
+                PPR_TEST_ASSERT(not m_fence.initialize(device));
+
+                const auto plan = lighting::planWorldLight(
+                    {.m_width = width, .m_height = height, .m_cell_metres = 0.5f});
+                PPR_TEST_ASSERT(plan.has_value());
+                // One opaque emissive material (palette index 0 -> cell id 1).
+                const lighting::WorldLightMaterial materials[] = {{.m_kind = 1u, .m_emission = {1.0f, 1.0f, 1.0f}}};
+                PPR_TEST_ASSERT(
+                    not m_source.initialize(*m_rhi, *m_shaders, *plan, materials, std::filesystem::current_path()));
+                PPR_TEST_ASSERT(not m_field.initialize(*m_rhi, *m_shaders, *plan, std::filesystem::current_path()));
+            }
+
+            void submit(rhi::ICommandEncoder &encoder) {
+                rhi::ComPtr<rhi::ICommandBuffer> commands;
+                PPR_TEST_ASSERT(not make_error_code(encoder.finish(commands.writeRef())));
+
+                rhi::ICommandBuffer *pointer = commands.get();
+                rhi::IFence *fence = m_fence.fence();
+                const auto value = m_fence.nextValue();
+                const u64 raw = value;
+                rhi::SubmitDesc description{};
+                description.commandBuffers = &pointer;
+                description.commandBufferCount = 1u;
+                description.signalFences = &fence;
+                description.signalFenceValues = &raw;
+                description.signalFenceCount = 1u;
+                PPR_TEST_ASSERT(not make_error_code(m_queue->submit(description)));
+                m_fence.commitSubmitted(value);
+                PPR_TEST_ASSERT(not m_fence.waitFor(value));
+            }
+
+            template<typename T>
+            std::vector<T> read(rhi::IBuffer *const source) {
+                rhi::BufferDesc description{};
+                description.size = source->getDesc().size;
+                description.elementSize = 0u;
+                description.memoryType = rhi::MemoryType::ReadBack;
+                description.usage = rhi::BufferUsage::CopyDestination;
+                description.defaultState = rhi::ResourceState::CopyDestination;
+                description.label = "WorldLightFieldGpu readback";
+                rhi::ComPtr<rhi::IBuffer> copy;
+                PPR_TEST_ASSERT(
+                    not make_error_code(m_rhi->getDevice().createBuffer(description, nullptr, copy.writeRef())));
+
+                rhi::ComPtr<rhi::ICommandEncoder> encoder;
+                PPR_TEST_ASSERT(not make_error_code(m_queue->createCommandEncoder(encoder.writeRef())));
+                encoder->setBufferState(source, rhi::ResourceState::CopySource);
+                encoder->copyBuffer(copy, 0u, source, 0u, source->getDesc().size);
+                encoder->setBufferState(source, rhi::ResourceState::UnorderedAccess);
+                submit(*encoder);
+
+                std::vector<T> result(source->getDesc().size / sizeof(T));
+                void *mapped{};
+                PPR_TEST_ASSERT(
+                    not make_error_code(m_rhi->getDevice().mapBuffer(copy, rhi::CpuAccessMode::Read, &mapped)));
+                std::memcpy(result.data(), mapped, result.size() * sizeof(T));
+                PPR_TEST_ASSERT(not make_error_code(m_rhi->getDevice().unmapBuffer(copy)));
+                return result;
+            }
+
+            void encodeSource() {
+                rhi::ComPtr<rhi::ICommandEncoder> encoder;
+                PPR_TEST_ASSERT(not make_error_code(m_queue->createCommandEncoder(encoder.writeRef())));
+                PPR_TEST_ASSERT(not m_source.encode(*encoder));
+                submit(*encoder);
+            }
+
+            void updateField(const u32 budget) {
+                rhi::ComPtr<rhi::ICommandEncoder> encoder;
+                PPR_TEST_ASSERT(not make_error_code(m_queue->createCommandEncoder(encoder.writeRef())));
+                PPR_TEST_ASSERT(not m_field.update(*encoder, m_source, 1.0f / 60.0f, budget));
+                submit(*encoder);
+            }
+
+            void runUpdates(const u32 count, const u32 budget) {
+                for (u32 index = 0u; index < count; ++index) {
+                    updateField(budget);
+                }
+            }
+
+            void shutdown() {
+                if (m_queue and make_error_code(m_queue->waitOnHost()))
+                    hal::fatalExit("world-light-field-test-quiescence-unknown");
+
+                PPR_TEST_ASSERT(not m_field.shutdown());
+                PPR_TEST_ASSERT(not m_source.shutdown());
+                PPR_TEST_ASSERT(not m_fence.shutdown());
+                m_queue.setNull();
+                PPR_TEST_ASSERT(not m_rhi->shutdown());
+                PPR_TEST_ASSERT(not m_shaders->shutdown());
+            }
+        };
+
+        PPR_UNIT_TEST (field_single_emitter_converges) {
+            constexpr u32 width = 256u;
+            constexpr u32 height = 256u;
+
+            Fixture fixture;
+            fixture.initialize(width, height);
+            auto &source = fixture.m_source;
+            auto &field = fixture.m_field;
+
+            const auto plan = lighting::planWorldLight({.m_width = width, .m_height = height, .m_cell_metres = 0.5f});
+            PPR_TEST_ASSERT(plan.has_value());
+            const u32 budget = static_cast<u32>(plan->m_levels[0].m_sample_count); // one full level
+
+            // One opaque emissive cell at (0,0) via chunk 0.
+            std::vector<u16> chunk(128u * 128u, 0u);
+            chunk[0] = 1u;
+            const lighting::WorldLightChunkUpdate update{.m_chunk_id = 0u, .m_cell_ids = chunk};
+            PPR_TEST_ASSERT(not source.applyUpdate({.m_chunks = {&update, 1u}, .m_revision = 1u}));
+            fixture.encodeSource();
+
+            // Level 0, probe (0,0), direction 2 (down-left) points at cell (0,0).
+            const u64 nearby_sample = 2u;
+            const u64 nearby_word = nearby_sample * 4u;
+
+            fixture.runUpdates(8u, budget);
+            const auto count8 = fixture.read<u32>(field.state());
+            const u32 nearby_count_8 = count8[nearby_sample];
+
+            fixture.runUpdates(8u, budget);
+            const auto count16 = fixture.read<u32>(field.state());
+            const auto radiance = fixture.read<u16>(field.view().m_radiance);
+            const u32 nearby_count_16 = count16[nearby_sample];
+
+            // Monotonic per-direction sample count, and finite positive radiance.
+            PPR_TEST_ASSERT(nearby_count_16 >= nearby_count_8);
+            PPR_TEST_ASSERT(nearby_count_16 > 0u);
+            PPR_TEST_ASSERT(halfIsFinitePositive(radiance[nearby_word + 0u]));
+            PPR_TEST_ASSERT(halfIsFinitePositive(radiance[nearby_word + 1u]));
+            PPR_TEST_ASSERT(halfIsFinitePositive(radiance[nearby_word + 2u]));
+
+            // The cursor advanced and wrapped within the field after 16 updates.
+            PPR_TEST_ASSERT(field.cycle() >= 1u);
+            PPR_TEST_ASSERT(field.cursor() < plan->m_radiance_samples);
+
+            fixture.shutdown();
+        };
+
+        PPR_UNIT_TEST (field_dirty_reset_clears_only_intersecting_probes) {
+            constexpr u32 width = 256u;
+            constexpr u32 height = 256u;
+
+            Fixture fixture;
+            fixture.initialize(width, height);
+            auto &source = fixture.m_source;
+            auto &field = fixture.m_field;
+
+            const auto plan = lighting::planWorldLight({.m_width = width, .m_height = height, .m_cell_metres = 0.5f});
+            PPR_TEST_ASSERT(plan.has_value());
+            const u32 budget = static_cast<u32>(plan->m_levels[0].m_sample_count);
+
+            // Level 0 probe (0,0) direction 2 is near the emitter (reset on dirty);
+            // probe (100,100) direction 0 is distant (keeps history).
+            const u64 nearby_sample = 2u;
+            const u64 distant_sample = (100u * 128u + 100u) * 4u + 0u;
+
+            std::vector<u16> chunk(128u * 128u, 0u);
+            chunk[0] = 1u;
+            const lighting::WorldLightChunkUpdate update{.m_chunk_id = 0u, .m_cell_ids = chunk};
+            PPR_TEST_ASSERT(not source.applyUpdate({.m_chunks = {&update, 1u}, .m_revision = 1u}));
+            fixture.encodeSource();
+
+            fixture.runUpdates(16u, budget);
+            const auto before = fixture.read<u32>(field.state());
+            PPR_TEST_ASSERT(before[nearby_sample] > 0u);
+            PPR_TEST_ASSERT(before[distant_sample] > 0u);
+
+            // Turn the emitter off: cell (0,0) back to vacuum, bumping the revision.
+            std::vector<u16> empty_chunk(128u * 128u, 0u);
+            const lighting::WorldLightChunkUpdate off{.m_chunk_id = 0u, .m_cell_ids = empty_chunk};
+            PPR_TEST_ASSERT(not source.applyUpdate({.m_chunks = {&off, 1u}, .m_revision = 2u}));
+            fixture.encodeSource();
+
+            // One field update resets the intersecting probe only.
+            fixture.updateField(budget);
+            const auto after = fixture.read<u32>(field.state());
+
+            PPR_TEST_ASSERT(after[nearby_sample] == 0u);
+            PPR_TEST_ASSERT(after[distant_sample] == before[distant_sample]);
+
+            fixture.shutdown();
+        };
+
+        PPR_UNIT_TEST (field_is_camera_independent) {
+            constexpr u32 width = 256u;
+            constexpr u32 height = 256u;
+
+            // The update() interface has no camera input; two identical field
+            // sequences produce identical bytes.
+            const auto run = [&]() -> std::vector<u16> {
+                Fixture fixture;
+                fixture.initialize(width, height);
+
+                const auto plan = lighting::planWorldLight(
+                    {.m_width = width, .m_height = height, .m_cell_metres = 0.5f});
+                PPR_TEST_ASSERT(plan.has_value());
+                const u32 budget = static_cast<u32>(plan->m_levels[0].m_sample_count);
+
+                std::vector<u16> chunk(128u * 128u, 0u);
+                chunk[0] = 1u;
+                const lighting::WorldLightChunkUpdate update{.m_chunk_id = 0u, .m_cell_ids = chunk};
+                PPR_TEST_ASSERT(not fixture.m_source.applyUpdate({.m_chunks = {&update, 1u}, .m_revision = 1u}));
+                fixture.encodeSource();
+                fixture.runUpdates(16u, budget);
+
+                const auto bytes = fixture.read<u16>(fixture.m_field.view().m_radiance);
+                fixture.shutdown();
+                return bytes;
+            };
+
+            PPR_TEST_ASSERT(run() == run());
+        };
+    }
 }
 
 namespace pP::tests {
@@ -530,6 +784,9 @@ namespace pP::tests {
             detail::WorldLightGpu::gpu_source_over_capacity_update_preserves_state,
             detail::WorldLightGpu::gpu_source_second_update_replaces_pending_particles,
             detail::WorldLightGpu::gpu_source_multiword_occupancy,
+            detail::WorldLightFieldGpu::field_single_emitter_converges,
+            detail::WorldLightFieldGpu::field_dirty_reset_clears_only_intersecting_probes,
+            detail::WorldLightFieldGpu::field_is_camera_independent,
         });
     };
 

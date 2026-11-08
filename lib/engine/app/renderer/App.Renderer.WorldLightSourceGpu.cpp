@@ -563,6 +563,10 @@ namespace pP::lighting {
         return m_state->m_occupancy_gpu.get();
     }
 
+    rhi::IBuffer *WorldLightSourceGpu::materialsGpu() const noexcept {
+        return m_state->m_materials_gpu.get();
+    }
+
     std::span<const WorldLightMaterial> WorldLightSourceGpu::materials() const noexcept {
         return m_state->m_materials;
     }
