@@ -248,7 +248,7 @@ namespace pP::game::tests::detail::compat {
         }
     };
 
-    PPR_UNIT_TEST (field_world_lighting_parses_and_rejects_4096_map) {
+    PPR_UNIT_TEST (field_world_lighting_parses_and_accepts_4096_benchmark) {
         Diagnostics small_diagnostics;
         const auto small = resolveCli({"--world-lighting=field", "--map-size=1024"}, small_diagnostics);
         PPR_TEST_ASSERT(small.has_value());
@@ -260,9 +260,32 @@ namespace pP::game::tests::detail::compat {
         PPR_TEST_ASSERT(medium.has_value());
         PPR_TEST_ASSERT(medium->m_game.m_value.m_world_lighting == EWorldLighting::field);
 
+        // 4096 is an aspirational benchmark size, not a rejected one.
         Diagnostics large_diagnostics;
         const auto large = resolveCli({"--world-lighting=field", "--map-size=4096"}, large_diagnostics);
-        PPR_TEST_ASSERT(not large and large.error() == make_error_code(EConfigErrc::cross_field_invalid));
+        PPR_TEST_ASSERT(large.has_value());
+        PPR_TEST_ASSERT(large->m_game.m_value.m_world_lighting == EWorldLighting::field);
+        PPR_TEST_ASSERT(large->m_game.m_value.m_map_size == 4096u);
+
+        // A bare 4096 request resolves on the field default; an explicit
+        // legacy override still resolves at 4096.
+        Diagnostics bare_diagnostics;
+        const auto bare = resolveCli({"--map-size=4096"}, bare_diagnostics);
+        PPR_TEST_ASSERT(bare.has_value());
+        PPR_TEST_ASSERT(bare->m_game.m_value.m_world_lighting == EWorldLighting::field);
+        PPR_TEST_ASSERT(bare->m_game.m_value.m_map_size == 4096u);
+
+        Diagnostics legacy_diagnostics;
+        const auto legacy = resolveCli({"--map-size=4096", "--world-lighting=legacy"}, legacy_diagnostics);
+        PPR_TEST_ASSERT(legacy.has_value());
+        PPR_TEST_ASSERT(legacy->m_game.m_value.m_world_lighting == EWorldLighting::legacy);
+
+        // Explicit field with the editable showcase resolves and selects field.
+        Diagnostics showcase_diagnostics;
+        const auto showcase = resolveCli({"--world-lighting=field", "--lighting-showcase"}, showcase_diagnostics);
+        PPR_TEST_ASSERT(showcase.has_value());
+        PPR_TEST_ASSERT(showcase->m_game.m_value.m_world_lighting == EWorldLighting::field);
+        PPR_TEST_ASSERT(showcase->m_game.m_value.m_lighting_showcase);
 
         Diagnostics non_interactive_diagnostics;
         const auto non_interactive = resolveCli({"--world-lighting=field", "--smoke"}, non_interactive_diagnostics);
@@ -281,19 +304,15 @@ namespace pP::game::tests::detail::compat {
         PPR_TEST_ASSERT(normal and normal->m_game.m_value.m_map_size == 2048u);
         PPR_TEST_ASSERT(gameHelpText().find("map-size") != std::string::npos);
 
-        // Field is the default and supports 1024/2048 but rejects 4096, so
-        // select legacy for all three edges to isolate the map-size domain
-        // check from the field cross-field constraint.
         for (const u32 edge: {1024u, 2048u, 4096u}) {
             const auto option = "--map-size=" + std::to_string(edge);
             Diagnostics cli_diagnostics;
-            const auto cli = resolveCli({option.c_str(), "--world-lighting=legacy"}, cli_diagnostics);
+            const auto cli = resolveCli({option.c_str()}, cli_diagnostics);
             PPR_TEST_ASSERT(cli and cli->m_game.m_value.m_map_size == edge and not cli_diagnostics.hasErrors());
 
             Diagnostics file_diagnostics;
             const auto document = decode(
-                "[game]\nmap_size = " + std::to_string(edge) + "\nworld_lighting='legacy'\n", "map-size.toml",
-                file_diagnostics);
+                "[game]\nmap_size = " + std::to_string(edge) + "\n", "map-size.toml", file_diagnostics);
             PPR_TEST_ASSERT(document.has_value());
             const auto layer = toLayer(*document, "map-size.toml");
             const auto resolved = resolveGameCli(CliResult{}, std::span<const Layer>{&layer, 1u}, file_diagnostics);
@@ -1042,7 +1061,7 @@ namespace pP::game::tests {
         _.recurse({
             detail::compat::selectors_pick_commands,
             detail::compat::lighting_showcase_is_explicit_interactive_and_never_auto_qualified,
-            detail::compat::field_world_lighting_parses_and_rejects_4096_map,
+            detail::compat::field_world_lighting_parses_and_accepts_4096_benchmark,
             detail::compat::simulation_tools_resolve_bounded_physical_settings,
             detail::compat::worldgen_validation_invocation,
             detail::compat::map_size_uses_one_numeric_domain_for_cli_and_toml,

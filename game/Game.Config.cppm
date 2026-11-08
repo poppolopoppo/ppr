@@ -146,7 +146,7 @@ export namespace pP::game {
                     &GameSettings::m_world_lighting,
                     Metadata{
                         "game.world_lighting",
-                        "Opt-in direct-window or single-bounce-window terrain lighting with BLACK boundary sky; static terrain tools, no scattering or particle optical sources",
+                        "World-light field (default) plus opt-in legacy windowed terrain lighting (direct/single/temporal) with BLACK boundary sky",
                         "World lighting", EMutability::startup, ESource::all, false},
                     world_lighting_domain),
                 field(
