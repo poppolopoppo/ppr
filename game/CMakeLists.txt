@@ -54,7 +54,6 @@ target_sources(app.game
         ui/ColonyPanel.cpp
         colony/ColonySmoke.cpp
         colony/WorldGen.Capture.cpp
-        colony/LightingScene.Capture.cpp
         colony/ColonyTranslator.cpp
         colony/Content.cpp
         colony/Content.Pack.cpp

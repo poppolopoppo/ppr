@@ -1564,9 +1564,7 @@ namespace pP::tests::detail {
 
             const auto render = [&](const lighting::WorldLightFieldView view) {
                 PPR_TEST_ASSERT(not grid.setWorldLightField(view));
-                PPR_TEST_ASSERT(not grid.update(
-                    TimeSpan{}, snapshot, false, GridPass::ReceiverContinuation::nearest,
-                    GridPass::ReceiverResponse::flat, GridPass::BackgroundResponse::unlit));
+                PPR_TEST_ASSERT(not grid.update(TimeSpan{}, snapshot, false));
 
                 rhi::ComPtr<rhi::ICommandEncoder> encoder;
                 PPR_TEST_ASSERT(not make_error_code(fixture.m_queue->createCommandEncoder(encoder.writeRef())));
@@ -1826,9 +1824,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(candidate_ready);
             PPR_TEST_ASSERT(not grid.activateWorldCandidate(7u, 11u, 17u));
 
-            PPR_TEST_ASSERT(not grid.update(
-                TimeSpan{}, snapshot, false, GridPass::ReceiverContinuation::nearest, GridPass::ReceiverResponse::flat,
-                GridPass::BackgroundResponse::unlit));
+            PPR_TEST_ASSERT(not grid.update(TimeSpan{}, snapshot, false));
 
             rhi::TextureDesc target_desc{};
             target_desc.type = rhi::TextureType::Texture2D;
@@ -2076,9 +2072,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not grid.activateWorldCandidate(7u, 11u, 19u));
 
             // Spatial MSAA selects the premultiplied fragment path.
-            PPR_TEST_ASSERT(not grid.update(
-                TimeSpan{}, snapshot, true, GridPass::ReceiverContinuation::nearest, GridPass::ReceiverResponse::flat,
-                GridPass::BackgroundResponse::unlit));
+            PPR_TEST_ASSERT(not grid.update(TimeSpan{}, snapshot, true));
 
             std::array<rhi::ComPtr<rhi::ITexture>, 2u> targets;
             std::array<rhi::ComPtr<rhi::ITextureView>, 2u> target_views;

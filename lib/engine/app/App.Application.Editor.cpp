@@ -1778,10 +1778,7 @@ namespace pP {
             }
 
             PPR_RETURN_ERROR_ON_FAIL(Editor, m_triangle_pass->update(packet.m_delta_time, raster_camera));
-            PPR_RETURN_ERROR_ON_FAIL(
-                Editor, m_grid_pass->update(
-                            packet.m_delta_time, raster_camera, native_samples, GridPass::ReceiverContinuation::nearest,
-                            GridPass::ReceiverResponse::flat, GridPass::BackgroundResponse::unlit));
+            PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->update(packet.m_delta_time, raster_camera, native_samples));
         }
         const bool offscreen = request.m_retro.m_enabled or
                                request.m_retro.m_palette_enabled or

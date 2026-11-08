@@ -29,16 +29,6 @@ export namespace pP::colony {
     [[nodiscard]] std::error_code captureWorldGpuCloseups(
         std::unique_ptr<ColonyDriver> driver, double spawn_x_m, double floor_y_m, std::string identity,
         const std::filesystem::path &directory);
-
-    /// Handcrafted bounded reference scene through real RC receivers, GridPass
-    /// and spatial/HDR display. Uses the selected catalog's prepared appearance;
-    /// does not generate or admit a full simulation world. Blocking diagnostic.
-    /// Failure may leave partial diagnostic files for inspection.
-    /// qualified_fp64 is an explicit caller assertion of current-device/session
-    /// RTE64 qualification, not discovery; false preserves strict FP32.
-    [[nodiscard]] std::error_code captureLightingScene(
-        std::shared_ptr<const ContentPresentation> presentation, std::string profile,
-        const std::filesystem::path &directory, bool qualified_fp64 = false);
 }
 
 // ------------------------------------------------------------------

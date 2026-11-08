@@ -29,8 +29,6 @@ namespace pP::tests {
 
     const UnitTest &lightingTests() noexcept;
 
-    const UnitTest &radiance_gpuTests() noexcept;
-    const UnitTest &world_radiance_gpuTests() noexcept;
     const UnitTest &world_light_fieldTests() noexcept;
 
     const UnitTest &pixel_readbackTests() noexcept;
@@ -122,8 +120,6 @@ namespace pP::tests {
             render_viewTests(),
             grid_passTests(),
             lightingTests(),
-            radiance_gpuTests(),
-            world_radiance_gpuTests(),
             world_light_fieldTests(),
             pixel_readbackTests(),
             renderer_triangle_reinit_okTests(),

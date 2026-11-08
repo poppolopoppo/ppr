@@ -183,83 +183,6 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not rejected_missing and rejected_missing.error() == std::errc::invalid_argument);
         };
 
-        // ------------------------------------------------------------------
-        // native reference source attachment and same-ID projection
-        // ------------------------------------------------------------------
-
-        PPR_UNIT_TEST (native_reference_attachment_rejects_unchecked_crop_palette_and_policy) {
-            GridTerrainVisual visual{};
-            visual.m_material_id = 17u;
-            visual.m_transport_model = kGridTransportOpaqueV1;
-            visual.m_emissive_rgb[0] = 1.0f;
-            visual.m_emissive_strength = 2.0f;
-            const auto optics = gridMaterialOpticalCell(visual);
-            PPR_TEST_ASSERT(optics.has_value());
-            const lighting::OpticalCell vacuum{{}, {}, {}, lighting::OpticalKind::vacuum};
-            const std::array<u16, 9> labels{0, 0, 0, 0, 17, 0, 0, 0, 0};
-            const std::array<lighting::WorldRadianceMaterial, 2> palette{{{vacuum, 0u}, {*optics, 17u}}};
-            const lighting::OpticalCell unavailable{{}, {}, {}, lighting::OpticalKind::unavailable};
-            const std::array<lighting::WorldRadianceMaterial, 1> particle_palette{{{unavailable, 18u}}};
-            const auto source = lighting::WorldRadianceSource::capture(
-                {labels, palette, {}, 1.0, 3u, 3u, lighting::OpticalBoundary::vacuum, {}, {}, particle_palette});
-            PPR_TEST_ASSERT(source.has_value());
-            PPR_TEST_ASSERT(not (*source)->validateMaterialProjection(17u, *optics));
-
-            PPR_TEST_ASSERT(not (*source)->validateMaterialProjection(18u, unavailable));
-            PPR_TEST_ASSERT((*source)->validateMaterialProjection(17u, unavailable) == std::errc::invalid_argument);
-            PPR_TEST_ASSERT((*source)->validateMaterialProjection(18u, *optics) == std::errc::invalid_argument);
-
-            auto wrong_optics = *optics;
-            wrong_optics.m_surface_emission[0] = 1.0;
-            PPR_TEST_ASSERT((*source)->validateMaterialProjection(17u, wrong_optics) == std::errc::invalid_argument);
-
-            GridPass::GridStagedFrame stage{};
-            stage.m_has_catalog = stage.m_full_refresh = stage.m_reset_caches = true;
-            stage.m_boundary_material_id = 0u;
-            stage.m_content_fingerprint = 13u;
-            stage.m_world_radiance_source = *source;
-            stage.m_world_radiance_revision = 1u;
-            stage.m_terrain_visuals.push_back(visual);
-            stage.m_tiles.push_back({.m_dirty_mask = 1u, .m_tile_range = {0, 0, 128, 128}, .m_chunk_id = 0u});
-            GridPass::GridStagedUpload upload{};
-            upload.m_payload.m_rect[2] = upload.m_payload.m_rect[3] = 128.0f;
-            upload.m_cell_materials.resize(GridPass::kCellsPerChunk, 0u);
-            upload.m_cell_materials[129u] = 17u;
-            stage.m_uploads.push_back(std::move(upload));
-            GridPass pass;
-            PPR_TEST_ASSERT(pass.applyStagedFrame(stage) == std::errc::invalid_argument);
-
-            GridTerrainVisual unavailable_visual{};
-            unavailable_visual.m_material_id = 18u;
-            stage.m_terrain_visuals.push_back(unavailable_visual);
-            PPR_TEST_ASSERT(not pass.applyStagedFrame(stage));
-            const u32 retained = pass.cachedTileCount();
-
-            auto missing_reset = stage;
-            missing_reset.m_reset_caches = false;
-            PPR_TEST_ASSERT(pass.applyStagedFrame(missing_reset) == std::errc::function_not_supported);
-
-            auto wrong_palette = stage;
-            wrong_palette.m_terrain_visuals[0].m_emissive_strength = 1.0f;
-            PPR_TEST_ASSERT(pass.applyStagedFrame(wrong_palette) == std::errc::invalid_argument);
-
-            auto outside_source = stage;
-            outside_source.m_uploads[0].m_cell_materials[100u] = 17u;
-            PPR_TEST_ASSERT(pass.applyStagedFrame(outside_source) == std::errc::invalid_argument);
-
-            auto wrong_revision = stage;
-            wrong_revision.m_world_radiance_revision = 0u;
-            PPR_TEST_ASSERT(pass.applyStagedFrame(wrong_revision) == std::errc::function_not_supported);
-
-            auto unrelated_policy = stage;
-            unrelated_policy.m_world_radiance_source.reset();
-            unrelated_policy.m_world_radiance_revision = 0u;
-            unrelated_policy.m_uploads.clear();
-            unrelated_policy.m_cell_size_m = 1.0f / 3.0f;
-            unrelated_policy.m_boundary_material_id = 1u;
-            PPR_TEST_ASSERT(pass.applyStagedFrame(unrelated_policy) == std::errc::function_not_supported);
-            PPR_TEST_ASSERT(pass.cachedTileCount() == retained);
-        };
 
         PPR_UNIT_TEST (grid_plan_converts_fine_bounds_to_metres) {
             const CameraSnapshot snapshot = orthoSnapshot800x600();
@@ -1014,7 +937,6 @@ namespace pP::tests {
         _.recurse({
             detail::GridTiles::grid_tile_payload_layout_matches_the_shader,
             detail::GridTiles::grid_material_optics_preserve_unavailable_and_source_function_units,
-            detail::GridTiles::native_reference_attachment_rejects_unchecked_crop_palette_and_policy,
             detail::GridTiles::grid_plan_converts_fine_bounds_to_metres,
             detail::GridTiles::grid_plan_culls_offscreen_tiles,
             detail::GridTiles::grid_dirty_upload_serves_quiescent_from_cache,

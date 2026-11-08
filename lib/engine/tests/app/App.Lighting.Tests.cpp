@@ -367,93 +367,6 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(validateTerrainReceiverAngular(rows, 1u) == std::errc::result_out_of_range);
         };
 
-        PPR_UNIT_TEST (grid_optical_attachment_checks_same_uploads_palette_metric_and_vacuum_boundary) {
-            std::array<u16, 49> labels{};
-            labels[24u] = 17u;
-            const std::array<OpticalTerrainMaterial, 2> materials{
-                OpticalTerrainMaterial{vacuum_(), 0u, 0.0f}, {surface_({}), 17u, 0.6f}};
-            const auto captured = OpticalTerrainSnapshot::capture(
-                {labels, materials, {}, 1.0, 7u, 7u, 0u, OpticalBoundary::vacuum});
-            PPR_TEST_ASSERT(captured.has_value());
-            GridStagedFrame stage{};
-            stage.m_has_catalog = stage.m_full_refresh = stage.m_reset_caches = true;
-            stage.m_boundary_material_id = 0u;
-            stage.m_optical_geometry = std::make_shared<const OpticalTerrainSnapshot>(*captured);
-            stage.m_optical_revision = 1u;
-            GridTerrainVisual visual{};
-            visual.m_material_id = 17u;
-            visual.m_roundness = 0.6f;
-            visual.m_transport_model = kGridTransportOpaqueV1;
-            stage.m_terrain_visuals.push_back(visual);
-            stage.m_tiles.push_back({.m_dirty_mask = 1u, .m_tile_range = {0, 0, 128, 128}, .m_chunk_id = 0u});
-            GridStagedUpload upload{};
-            upload.m_payload.m_rect[2] = upload.m_payload.m_rect[3] = 128.0f;
-            upload.m_cell_materials.resize(GridPass::kCellsPerChunk, 0u);
-            upload.m_cell_materials[3u * 128u + 3u] = 17u;
-            stage.m_uploads.push_back(std::move(upload));
-            GridPass pass{};
-            PPR_TEST_ASSERT(not pass.applyStagedFrame(stage));
-            PPR_TEST_ASSERT(pass.uploadCount() == 1u);
-
-            const CameraSnapshot camera{};
-            PPR_TEST_ASSERT(not pass.update(TimeSpan{}, camera));
-            PPR_TEST_ASSERT(
-                pass.update(
-                    TimeSpan{}, camera, false, GridPass::ReceiverContinuation::nearest,
-                    GridPass::ReceiverResponse::mapped_diffuse) == std::errc::invalid_argument);
-            PPR_TEST_ASSERT(
-                pass.update(
-                    TimeSpan{}, camera, false, GridPass::ReceiverContinuation::nearest,
-                    static_cast<GridPass::ReceiverResponse>(7u)) == std::errc::invalid_argument);
-
-            PPR_TEST_ASSERT(
-                pass.update(TimeSpan{}, camera, false, static_cast<GridPass::ReceiverContinuation>(7u)) ==
-                std::errc::invalid_argument);
-            PPR_TEST_ASSERT(pass.uploadCount() == 1u and pass.cachedTileCount() == 1u);
-
-            auto bad = stage;
-            bad.m_uploads[0].m_cell_materials[3u * 128u + 3u] = 0u;
-            PPR_TEST_ASSERT(pass.applyStagedFrame(bad) == std::errc::invalid_argument);
-
-            bad = stage;
-            bad.m_terrain_visuals[0].m_roundness = 0.55f;
-            PPR_TEST_ASSERT(pass.applyStagedFrame(bad) == std::errc::invalid_argument);
-
-            bad = stage;
-            bad.m_cell_size_m = 1.0f / 3.0f;
-            PPR_TEST_ASSERT(pass.applyStagedFrame(bad) == std::errc::function_not_supported);
-
-            bad = stage;
-            bad.m_optical_geometry.reset();
-            PPR_TEST_ASSERT(pass.applyStagedFrame(bad) == std::errc::invalid_argument);
-
-            bad.m_optical_revision = 0u;
-            PPR_TEST_ASSERT(pass.applyStagedFrame(bad) == std::errc::invalid_argument);
-            PPR_TEST_ASSERT(pass.uploadCount() == 1u);
-
-            bad = stage;
-            bad.m_reset_caches = false;
-            PPR_TEST_ASSERT(pass.applyStagedFrame(bad) == std::errc::function_not_supported);
-
-            // No uploads may reuse the checked owner with changed contour,
-            // exterior, or metric policy; rejection preserves its cached cohort.
-            bad = stage;
-            bad.m_optical_geometry.reset();
-            bad.m_optical_revision = 0u;
-            bad.m_reset_caches = false;
-            bad.m_uploads.clear();
-            bad.m_tiles.clear();
-            bad.m_boundary_material_id = 17u;
-            PPR_TEST_ASSERT(pass.applyStagedFrame(bad) == std::errc::function_not_supported);
-
-            bad.m_has_catalog = false;
-            PPR_TEST_ASSERT(pass.applyStagedFrame(bad) == std::errc::function_not_supported);
-
-            bad.m_has_catalog = true;
-            bad.m_cell_size_m = 1.0f / 3.0f;
-            PPR_TEST_ASSERT(pass.applyStagedFrame(bad) == std::errc::function_not_supported);
-            PPR_TEST_ASSERT(pass.uploadCount() == 1u and pass.cachedTileCount() == 1u);
-        };
 
         // ------------------------------------------------------------------
         // optical interval and transport contracts
@@ -1730,7 +1643,6 @@ namespace pP::tests {
         _.recurse({
             detail::LightingTests::contour_roundness_mean_is_explicit_binary32_rte,
             detail::LightingTests::terrain_receivers_keep_physical_witnesses_and_conservative_component_candidates,
-            detail::LightingTests::grid_optical_attachment_checks_same_uploads_palette_metric_and_vacuum_boundary,
             detail::LightingTests::angular_receiver_publication_rejects_invalid_shape_status_and_radiance,
             detail::LightingTests::background_view_completion_requires_every_expected_sample,
             detail::LightingTests::ordered_intervals_preserve_rgb_transmission_and_identity,

@@ -4,8 +4,6 @@ export module engine.app:renderer.grid_pass;
 
 import :renderer.types;
 import :renderer.lighting;
-import :renderer.lighting_pass;
-import :renderer.world_radiance;
 import :renderer.world_light_field;
 import :renderer.frame_fence;
 import :renderer.gpu_caches;
@@ -306,9 +304,7 @@ export namespace pP {
         u64 m_particle_instances{};
         u64 m_particle_buffer_bytes{};
         u64 m_background_target_bytes{};
-        u64 m_screen_contact_bytes{};
         u32 m_background_targets{};
-        u32 m_screen_contact_masks{};
         u32 m_particle_root_bindings{};
         u64 m_texture_decoded_bytes{};
     };
@@ -401,33 +397,8 @@ export namespace pP {
         [[nodiscard]] std::error_code initialize(
             IRhiService &rhi_service, IShaderService &shader_service, const std::filesystem::path &content_dir);
 
-        // Visual continuation of completed receiver lighting across solid cut faces.
-        enum class ReceiverContinuation : u32 {
-            nearest,
-            interpolated_experiment
-        };
-
-        enum class BackgroundResponse : u32 {
-            unlit,
-            lit_backwall,
-            // Debug-only128x256 centre-density near-visibility pilot. Native
-            // opaque/vacuum field required; foreground and world solver unchanged.
-            screen_contact_pilot,
-            screen_contact
-        };
-
-        enum class ReceiverResponse : u32 {
-            flat,
-            mapped_diffuse
-        };
-
-        // Explicit owned-frame sampling policy. Legacy temporal also uses x4,
-        // so the attachment signature alone never selects this variant.
-        [[nodiscard]] std::error_code update(
-            TimeSpan dt, const CameraSnapshot &camera_view, bool spatial_msaa = false,
-            ReceiverContinuation receiver_continuation = ReceiverContinuation::nearest,
-            ReceiverResponse receiver_response = ReceiverResponse::flat,
-            BackgroundResponse background_response = BackgroundResponse::unlit);
+        // Explicit owned-frame sampling policy.
+        [[nodiscard]] std::error_code update(TimeSpan dt, const CameraSnapshot &camera_view, bool spatial_msaa = false);
         [[nodiscard]] std::error_code validateSpatialContent() const noexcept;
 
         // CPU reference draw path: plan (cull) -> resolve payloads (cache hit, or
@@ -460,31 +431,11 @@ export namespace pP {
         // particle/fluid pass so transparent cells composite over them.
         [[nodiscard]] std::error_code renderTranslucent(const DrawContext &context);
 
-        // Offscreen timing consumes five timestamps and leaves visible draws ready.
-        static constexpr u32 kMaterialTimingBands = 16u;
-        static constexpr u64 kMaterialTimingReserve = 16ull * 1024u * 1024u;
-        [[nodiscard]] static bool supportsMaterialTiming(u32 width, u32 height) noexcept;
-        [[nodiscard]] std::error_code measureTerrainMaterial(
-            const PreRenderContext &context, u32 width, u32 height, u32 band, rhi::IQueryPool &queries,
-            u32 first_query);
-
         // Test readback after the caller proves completion. Borrowed current-slot
         // buffers remain owned by this pass; production never reads them on CPU.
         [[nodiscard]] std::pair<rhi::IBuffer *, rhi::IBuffer *> visibilityBuffersForTest() const noexcept {
             const VisibilitySlot &slot = m_visibility_slots[m_tile_ring_cursor];
             return {slot.m_args.get(), slot.m_ids.get()};
-        }
-
-        // Borrowed diagnostics, valid only while the pass lives and after the
-        // caller's submission fence completes. No production CPU field readback.
-        [[nodiscard]] std::pair<rhi::ITexture *, rhi::IBuffer *> screenContactForTest() const noexcept {
-            const auto &slot = m_background_slots[m_background_cursor];
-            return {slot.m_screen_mask.get(), slot.m_screen_incident.get()};
-        }
-
-        [[nodiscard]] std::array<u32, 4u> screenContactRectForTest() const noexcept {
-            const auto &p = m_background_slots[m_background_cursor].m_screen_parameters;
-            return {p.m_left, p.m_top, p.m_count_x, p.m_count_y};
         }
 
         [[nodiscard]] std::array<rhi::IBuffer *, 3u> particleBuffersForTest() const noexcept {
@@ -571,19 +522,6 @@ export namespace pP {
             return m_world.m_world_generation;
         }
 
-        // Accept only a completed immutable receiver generation whose geometry
-        // attachment is the actual resident atlas/table publication. Ring roots
-        // retain strong leases until their accepted draw completion retires.
-        [[nodiscard]] std::error_code setTerrainReceiverLighting(
-            std::shared_ptr<const lighting::TerrainReceiverGpuGeneration> generation);
-        [[nodiscard]] std::error_code setTerrainBackgroundLighting(
-            std::shared_ptr<const lighting::TerrainBackgroundGpuView> view);
-
-        // Small-scene reference only: same checked native source and actual
-        // resident mapping, never a camera-specific screen-light buffer.
-        [[nodiscard]] std::error_code setWorldRadianceLighting(
-            std::shared_ptr<const lighting::WorldRadianceGeneration> generation);
-
         // Borrowed temporal world light field view (Task 8): the current radiance
         // buffer and CPU constants are bound each frame for the opaque terrain
         // path. The field owner outlives every view; pass an empty view to clear.
@@ -659,20 +597,7 @@ export namespace pP {
 
         [[nodiscard]] static std::error_code validateSubmission_(const GridTileSubmission &submission) noexcept;
 
-        [[nodiscard]] bool worldRadianceSourceCompatible_(const lighting::WorldRadianceSource &source) const noexcept;
-
-        [[nodiscard]] static std::error_code validateOpticalAttachment_(
-            const GridStagedFrame &stage, bool &diffuse_compatible);
         struct GridCachedPipeline;
-        [[nodiscard]] std::error_code bindReceiverLighting_(
-            rhi::IDevice &device, rhi::ShaderCursor &cursor, bool retained_table, GridCachedPipeline *pipeline,
-            u32 owner_slot);
-        [[nodiscard]] std::error_code bindWorldRadiance_(
-            rhi::IDevice &device, rhi::ShaderCursor &cursor, GridCachedPipeline *pipeline, u32 slot, bool background,
-            std::shared_ptr<const lighting::WorldRadianceGeneration> *background_lease = nullptr);
-        [[nodiscard]] std::error_code bindBackgroundLighting_(
-            rhi::IDevice &device, rhi::ShaderCursor &cursor, GridCachedPipeline &pipeline, u32 slot,
-            const CameraSnapshot &camera, int2 extent);
         [[nodiscard]] std::error_code bindWorldLightField_(rhi::ShaderCursor &cursor);
 
 
@@ -715,12 +640,6 @@ export namespace pP {
             // m_deferred_releases instead of dropping it mid-flight.
             std::array<rhi::ComPtr<rhi::IShaderObject>, kTileRingSize> m_slot_roots{};
             std::array<rhi::ShaderCursor, kTileRingSize> m_slot_frame_cursors{};
-            std::array<std::vector<std::shared_ptr<const lighting::TerrainReceiverGpuGeneration>>, kTileRingSize>
-                m_slot_receiver_leases{};
-            std::array<std::vector<std::shared_ptr<const lighting::TerrainBackgroundGpuView>>, kTileRingSize>
-                m_slot_background_leases{};
-            std::array<std::vector<std::shared_ptr<const lighting::WorldRadianceGeneration>>, kTileRingSize>
-                m_slot_world_leases{};
             std::array<std::vector<rhi::ComPtr<rhi::ITextureView>>, kTileRingSize> m_slot_backdrop_owners{};
             std::array<rhi::IBuffer *, kTileRingSize> m_slot_atlases{};
             std::array<FenceCompletionValue, kTileRingSize> m_slot_last_use{};
@@ -804,39 +723,13 @@ export namespace pP {
             bool m_pending_pack{}, m_prepared{}, m_slot_encoded{};
         };
 
-        struct ScreenContactParameters {
-            u32 m_width{}, m_height{}, m_left{}, m_top{};
-            u32 m_count_x{}, m_count_y{}, m_enabled{}, m_stride{};
-        };
-        static_assert(sizeof(ScreenContactParameters) == 32u and alignof(ScreenContactParameters) == 4u);
-        static_assert(PPR_OFFSETOF(ScreenContactParameters, m_count_x) == 16u);
-        static_assert(
-            std::is_standard_layout_v<ScreenContactParameters> and
-            std::is_trivially_copyable_v<ScreenContactParameters>);
-        static_assert(PPR_OFFSETOF(ScreenContactParameters, m_enabled) == 24u);
-        static_assert(PPR_OFFSETOF(ScreenContactParameters, m_stride) == 28u);
-
         struct BackgroundSlot {
-            std::shared_ptr<const lighting::TerrainBackgroundGpuView> m_lighting{};
-            std::shared_ptr<const lighting::WorldRadianceGeneration> m_world_lighting{};
             rhi::ComPtr<rhi::ITexture> m_texture{};
             rhi::ComPtr<rhi::ITextureView> m_view{};
-            rhi::ComPtr<rhi::ITexture> m_screen_mask{};
-            rhi::ComPtr<rhi::ITextureView> m_screen_mask_view{};
-            rhi::ComPtr<rhi::IBuffer> m_screen_incident{};
-            rhi::ComPtr<rhi::IShaderObject> m_screen_root{};
-            std::shared_ptr<const lighting::WorldRadianceGeneration> m_screen_lighting{};
             FenceCompletionValue m_last_use{kFenceValueNone};
-            ScreenContactParameters m_screen_parameters{};
             u32 m_width{};
             u32 m_height{};
-            bool m_screen_encoded{};
         };
-
-        [[nodiscard]] std::error_code ensureScreenContactPrograms_(rhi::IDevice &device);
-        [[nodiscard]] std::error_code prepareScreenContact_(
-            const PreRenderContext &context, const CameraSnapshot &camera, u32 selected, u32 width, u32 height);
-        [[nodiscard]] std::error_code bindScreenContact_(rhi::ShaderCursor &cursor, u32 selected);
 
         [[nodiscard]] std::error_code validateParticles_(const GridStagedFrame &stage) const;
         void stageParticles_(const GridStagedFrame &stage);
@@ -1098,22 +991,10 @@ export namespace pP {
         // state. Candidate preparation can exchange this value on the owner
         // lane without moving pass programs, completion rings or the camera.
         struct WorldResources {
-            std::shared_ptr<const lighting::OpticalTerrainSnapshot> m_optical_staged{}, m_optical_mapped{},
-                m_optical_resident{};
-            std::shared_ptr<const lighting::WorldRadianceSource> m_radiance_staged{}, m_radiance_mapped{},
-                m_radiance_resident{};
-            std::shared_ptr<const lighting::WorldRadianceGeneration> m_world_lighting{};
-            u64 m_radiance_staged_revision{}, m_radiance_mapped_revision{}, m_radiance_resident_revision{};
-            std::shared_ptr<const lighting::TerrainReceiverGpuGeneration> m_receiver_lighting{};
-            std::shared_ptr<const lighting::TerrainBackgroundGpuView> m_background_lighting{};
-            u64 m_optical_staged_revision{}, m_optical_mapped_revision{}, m_optical_resident_revision{};
             std::unique_ptr<GpuParticleStorage> m_gpu_particles{};
             std::shared_ptr<std::atomic<u64>> m_initial_particle_epoch{};
             u64 m_particle_seed_version{};
             bool m_particle_seeds_dirty{};
-            // Derived material compatibility travels with each existing source
-            // mapping; the source/cohort and completed GPU mapping stay authority.
-            bool m_radiance_staged_diffuse{}, m_radiance_mapped_diffuse{}, m_radiance_resident_diffuse{};
             bool m_has_background{};
             std::array<GridBackgroundLayer, 4u> m_background_layers{};
             std::shared_ptr<const GridSurfaceProfile> m_surface_profile{};
@@ -1191,22 +1072,8 @@ export namespace pP {
         std::optional<RenderPipelineKey> m_background_spatial_key{};
         std::optional<GridCachedPipeline> m_background_spatial_pipeline{};
 
-        rhi::ComPtr<rhi::IShaderProgram> m_screen_mask_program{}, m_screen_refine_program{};
-        rhi::ComPtr<rhi::IComputePipeline> m_screen_refine_pipeline{};
-        std::optional<RenderPipelineKey> m_screen_mask_key{};
-        std::optional<GridCachedPipeline> m_screen_mask_pipeline{};
-        std::optional<RenderPipelineKey> m_material_cost_key{};
-        std::optional<GridCachedPipeline> m_material_cost_pipeline{};
-        std::array<rhi::ComPtr<rhi::ITexture>, kTileRingSize> m_material_cost_targets{};
-        std::array<rhi::ComPtr<rhi::ITextureView>, kTileRingSize> m_material_cost_views{};
-
-        std::array<u32, 6u> m_screen_logged_region{};
-
         u64 m_particle_uploads{};
         u64 m_particle_uploaded_bytes{};
-        ReceiverContinuation m_receiver_continuation{ReceiverContinuation::nearest};
-        ReceiverResponse m_receiver_response{ReceiverResponse::flat};
-        BackgroundResponse m_background_response{BackgroundResponse::unlit};
         bool m_cached_spatial_msaa{};
         bool m_spatial_msaa{};
         bool m_spatial_supported{};
@@ -1235,30 +1102,12 @@ export namespace pP {
         // Static terrain can retain its checked cohort while the ordinary game
         // actor overlay advances; frozen-session callers keep the default false.
         bool m_update_actors_on_retained_terrain{};
-        // Per-frame default-off presentation experiment; never source/world state.
-        bool m_screen_contact_pilot{};
         // A game-clock update for the requested terminal sky on the render lane.
         std::optional<i32> m_temporal_sky_hour{};
-        lighting::TerrainPrecisionSelection m_lighting_precision{};
         float m_cell_size_m{1.0f};
         bool m_has_catalog{false};
         u32 m_boundary_material_id{1u};
         u64 m_content_fingerprint{};
-
-        // Complete bounded attachment, checked against these same uploads and
-        // selected visual rows before publication; requires a full cache reset
-        // so no unchecked neighboring slot survives into its lookup mapping.
-        std::shared_ptr<const lighting::OpticalTerrainSnapshot> m_optical_geometry{};
-        u64 m_optical_revision{};
-
-        // Optional owned CPU producer request. Grid validates the same geometry;
-        // ApplicationEditor owns computation, completion and GPU publication.
-        std::shared_ptr<const lighting::TerrainReceiverSet> m_lighting_receivers{};
-
-        // Mutually exclusive native transport attachment. Same complete reset,
-        // selected palette, actual uploads and resident publication contract.
-        std::shared_ptr<const lighting::WorldRadianceSource> m_world_radiance_source{};
-        u64 m_world_radiance_revision{};
 
         Array<GridTerrainVisual> m_terrain_visuals{};
         Array<image::ImageAsset> m_terrain_images{};

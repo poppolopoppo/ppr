@@ -1,6 +1,4 @@
 #include "grid_background_world.slang"
-#include "grid_world_radiance.slang"
-#include "grid_screen_contact_types.slang"
 
 // Same 304-byte per-slot frame mirror as GridPass::GridFrame. Row vectors,
 // +Y-up world coordinates and [0,1] depth; no backend-specific transform.
@@ -35,9 +33,6 @@ struct SurfaceProfile {
 };
 ConstantBuffer<SurfaceProfile> g_surface_profile;
 Texture2D<float4> g_backdrop;
-struct BackgroundLightingParameters { uint enabled, width, height, reserved; };
-ConstantBuffer<BackgroundLightingParameters> g_background_lighting;
-StructuredBuffer<float4> g_background_incident;
 struct BackgroundVertexOutput {
     float4 position : SV_Position;
     float2 uv : TEXCOORD0;
@@ -107,23 +102,15 @@ float4 sampleBackground(DescriptorHandle<Texture2D<float4>> texture, SamplerStat
 float4 shadeBackground(BackgroundVertexOutput input, uint lightingSample,
     StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
     SamplerState.Handle g_sampler) {
-    float2 world;
-    if (g_grid_world_radiance.enabled!=0u) {
-        // Host admission establishes this same finite orthographic +Z domain.
-        // Never manufacture a near-plane receiving point for an invalid ray.
-        if (!backgroundReceivingPointAt(input.uv,g_grid_frame.m_inverse_view_projection,world)) discard;
-    } else world=backgroundWorldAt(input.uv,g_grid_frame.m_inverse_view_projection);
+    float2 world = backgroundWorldAt(input.uv, g_grid_frame.m_inverse_view_projection);
     float2 dx = ddx(world), dy = ddy(world);
-    float2 nativePoint=world/g_grid_frame.m_cell_size_m;
-    if (g_grid_world_radiance.enabled!=0u && !gridWorldInside(nativePoint)) return float4(0);
-    if (g_grid_frame.m_has_surface != 0u && g_grid_world_radiance.enabled==0u) {
+    if (g_grid_frame.m_has_surface != 0u) {
         // Columns match the exact seeded height sampled by the terrain raster.
         // Edge clamping keeps backdrop reads bounded when the camera sees outside
         // the finite world. This same target supplies optical refraction below.
         uint column = uint(clamp(floor(world.x / g_grid_frame.m_cell_size_m), 0.0, 4095.0));
         float surface_y = g_surface_profile.m_heights_m[column / 4u][column % 4u];
         if (world.y >= surface_y) {
-            if (g_background_lighting.enabled != 0u) return float4(0.0, 0.0, 0.0, 1.0);
             float altitude = saturate((world.y - surface_y) / 180.0);
             float3 horizon = float3(0.52, 0.70, 0.82);
             float3 zenith = float3(0.12, 0.30, 0.52);
@@ -140,19 +127,6 @@ float4 shadeBackground(BackgroundVertexOutput input, uint lightingSample,
         float4 tint = linearTint(layer.m_color_rgba);
         float alpha = index == 0u ? 1.0 : saturate(texel.a * tint.a);
         result = lerp(result, texel.rgb * tint.rgb, alpha);
-    }
-    if (g_grid_world_radiance.enabled!=0u) {
-        float3 incident;
-        if (g_screen_contact.stride!=0u) {
-            incident=max(gridWorldAt(nativePoint,float3(0,0,1))+gridScreenCorrection(uint2(input.position.xy)),float3(0));
-        } else if (!gridScreenIncident(uint2(input.position.xy),incident)) {
-            incident=gridWorldAt(nativePoint,float3(0,0,1));
-        }
-        result*=incident;
-    } else if (g_background_lighting.enabled != 0u) {
-        uint2 pixel = uint2(input.position.xy);
-        uint record = (pixel.y * g_background_lighting.width + pixel.x) * 5u + lightingSample;
-        result *= g_background_incident[record].rgb;
     }
     return float4(result, 1.0);
 }
