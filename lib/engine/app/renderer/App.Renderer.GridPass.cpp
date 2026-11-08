@@ -3719,7 +3719,7 @@ namespace pP {
         };
         static_assert(sizeof(WorldLightSwitch) == 16u and alignof(WorldLightSwitch) == 4u);
 
-        const bool enabled = m_world_light_view.m_radiance != nullptr;
+        const bool enabled = m_world_light_view.m_radiance != nullptr and m_world_light_view.m_constants != nullptr;
 
         WorldLightSwitch sw{};
         sw.m_enabled = enabled ? 1u : 0u;

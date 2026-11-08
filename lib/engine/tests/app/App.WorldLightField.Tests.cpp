@@ -1251,6 +1251,9 @@ namespace pP::tests::detail {
             auto &field = fixture.m_field;
             auto &device = fixture.m_rhi->getDevice();
 
+            // Field cell metres match the staged chunk's cell_size_m (GridPass
+            // admits only 1.0 or 1/3) so the world-space position conversion
+            // aligns with the cascade field's cell grid.
             const auto plan = lighting::planWorldLight({.m_width = width, .m_height = height, .m_cell_metres = 1.0f});
             PPR_TEST_ASSERT(plan.has_value());
 
@@ -1294,6 +1297,14 @@ namespace pP::tests::detail {
             tilted.m_normal_texture_index = 1u;
             stage.m_terrain_visuals.push_back(tilted);
 
+            // A translucent optical-blend material must keep its own alpha/blend
+            // path even while the field is enabled (never the opaque field body).
+            GridTerrainVisual translucent = flat;
+            translucent.m_material_id = 3u;
+            translucent.m_surface_flags = kGridSurfaceOpticalBlend;
+            translucent.m_opacity = 0.5f;
+            stage.m_terrain_visuals.push_back(translucent);
+
             // White albedo (image 0) and a +X-tilted normal map (image 1):
             // RGBA8 (0.75, 0.5, 1.0, 1.0) decodes to (0.5, 0, 1) -> +X tilt.
             const auto image = [](const std::array<std::byte, 4u> bytes) {
@@ -1320,13 +1331,20 @@ namespace pP::tests::detail {
                 stage.m_background_layers[layer].m_order = layer;
             }
 
-            // One chunk with two cells: material 1 at (2,2), material 2 at (6,2).
+            // One chunk with three regions: material 1 at (2,2), material 2 at
+            // (6,2), and the translucent material 3 filling the 4x4 cell block
+            // x in [2,6), y in [4,8) so its interior alpha dominates the AA rim.
             stage.m_tiles.push_back({.m_dirty_mask = 1u, .m_tile_range = {0, 0, 128, 128}, .m_chunk_id = 0u});
             GridStagedUpload upload{};
             upload.m_payload.m_rect[2] = upload.m_payload.m_rect[3] = 128.0f;
             upload.m_cell_materials.assign(GridPass::kCellsPerChunk, 0u);
             upload.m_cell_materials[2u * 128u + 2u] = 1u;
             upload.m_cell_materials[2u * 128u + 6u] = 2u;
+            for (u32 y = 4u; y < 8u; ++y) {
+                for (u32 x = 2u; x < 6u; ++x) {
+                    upload.m_cell_materials[y * 128u + x] = 3u;
+                }
+            }
             stage.m_uploads.push_back(std::move(upload));
 
             PPR_TEST_ASSERT(not grid.stageWorldCandidate(7u, 11u, stage));
@@ -1497,6 +1515,14 @@ namespace pP::tests::detail {
 
             // Lit differs from unlit.
             PPR_TEST_ASSERT(lit_colours != unlit_colours);
+
+            // The translucent optical-blend block keeps its own alpha/blend path:
+            // its interior coverage alpha is exactly the authored opacity (0.5),
+            // so a large pixel count lands in a tight band around 0.5, never the
+            // opaque field branch's forced 1.0 (the AA rim contributes far less).
+            const auto translucent_pixels = std::ranges::count_if(
+                lit, [](const std::array<float, 4u> &pixel) { return pixel[3] > 0.45f and pixel[3] < 0.55f; });
+            PPR_TEST_ASSERT(translucent_pixels > 1000);
 
             // Release the test-owned target before the RHI teardown.
             target_view.setNull();

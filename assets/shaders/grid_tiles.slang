@@ -1008,6 +1008,8 @@ float4 materialSurface(uint material, float2 fine_position, float2 gradient_x,
 float4 shadeWorldLightSurface(
     uint material, float2 fine_position, float2 gradient_x, float2 gradient_y, float2 decoration,
     StructuredBuffer<DescriptorHandle<Texture2D<float4>>> textures, SamplerState.Handle sampler) {
+    // Deliberate re-lookup of the visual row, mirroring materialSurface; the
+    // caller already resolved the selected material but keeps this body self-contained.
     TerrainVisual visual = g_terrain_visuals[min(material, 65535u)];
     float4 tint = diagnosticTint(visual.m_color_rgba, 1.0);
     float period = visual.m_texture_period_m;
@@ -1199,7 +1201,7 @@ float4 shadeGridReactive(
         reactive_coverage = 1;
 
     float4 surface;
-    if (g_world_light.enabled != 0u) {
+    if (g_world_light.enabled != 0u && (visual.m_surface_flags & kSurfaceOpticalBlend) == 0u) {
         surface = shadeWorldLightSurface(
             material, input.fine_position, gradient_x, gradient_y, decoration, g_textures, g_sampler);
     } else if (g_grid_world_radiance.enabled!=0u && g_grid_world_radiance.spacing>1u &&
