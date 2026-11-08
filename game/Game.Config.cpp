@@ -810,10 +810,11 @@ namespace pP::game {
             PPR_RETURN_UNEXPECTED_ON_FAIL(GameConfig, error);
         }
 
+        // Field is the default and is valid for non-interactive commands; only
+        // the legacy windowed modes (direct/single/temporal) are interactive-only.
         const bool world_window = settings.m_world_lighting == EWorldLighting::temporal_cascades or
                                   settings.m_world_lighting == EWorldLighting::direct_window or
-                                  settings.m_world_lighting == EWorldLighting::single_bounce_window or
-                                  settings.m_world_lighting == EWorldLighting::field;
+                                  settings.m_world_lighting == EWorldLighting::single_bounce_window;
 
         if (settings.m_world_lighting == EWorldLighting::field and settings.m_map_size == 4096u) {
             const auto error = config::make_error_code(config::EConfigErrc::cross_field_invalid);

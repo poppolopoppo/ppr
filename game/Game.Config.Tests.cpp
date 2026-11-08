@@ -59,6 +59,7 @@ namespace pP::game::tests::detail::compat {
         auto smoke = resolveCli({"--smoke"}, smoke_diagnostics);
         PPR_TEST_ASSERT(smoke.has_value());
         PPR_TEST_ASSERT(smoke->m_game.m_value.m_command == EGameCommand::smoke);
+        PPR_TEST_ASSERT(smoke->m_game.m_value.m_world_lighting == EWorldLighting::field);
 
         Diagnostics default_diagnostics{};
         auto interactive = resolveCli({}, default_diagnostics);
@@ -83,7 +84,7 @@ namespace pP::game::tests::detail::compat {
             not ordinary->m_game.m_value.m_lighting_showcase_qualified_fp64 and
             not ordinary->m_game.m_value.m_lighting_showcase_metrics);
 
-        PPR_TEST_ASSERT(ordinary->m_game.m_value.m_world_lighting == EWorldLighting::legacy);
+        PPR_TEST_ASSERT(ordinary->m_game.m_value.m_world_lighting == EWorldLighting::field);
         PPR_TEST_ASSERT(not ordinary->m_game.m_value.m_direct_window_frame_capture);
 
         Diagnostics direct_diagnostics;
@@ -265,7 +266,9 @@ namespace pP::game::tests::detail::compat {
 
         Diagnostics non_interactive_diagnostics;
         const auto non_interactive = resolveCli({"--world-lighting=field", "--smoke"}, non_interactive_diagnostics);
-        PPR_TEST_ASSERT(not non_interactive.has_value());
+        PPR_TEST_ASSERT(non_interactive.has_value());
+        PPR_TEST_ASSERT(non_interactive->m_game.m_value.m_command == EGameCommand::smoke);
+        PPR_TEST_ASSERT(non_interactive->m_game.m_value.m_world_lighting == EWorldLighting::field);
 
         Diagnostics help_diagnostics;
         const auto help = gameHelpText();
@@ -278,15 +281,19 @@ namespace pP::game::tests::detail::compat {
         PPR_TEST_ASSERT(normal and normal->m_game.m_value.m_map_size == 2048u);
         PPR_TEST_ASSERT(gameHelpText().find("map-size") != std::string::npos);
 
+        // Field is the default and supports 1024/2048 but rejects 4096, so
+        // select legacy for all three edges to isolate the map-size domain
+        // check from the field cross-field constraint.
         for (const u32 edge: {1024u, 2048u, 4096u}) {
             const auto option = "--map-size=" + std::to_string(edge);
             Diagnostics cli_diagnostics;
-            const auto cli = resolveCli({option.c_str()}, cli_diagnostics);
+            const auto cli = resolveCli({option.c_str(), "--world-lighting=legacy"}, cli_diagnostics);
             PPR_TEST_ASSERT(cli and cli->m_game.m_value.m_map_size == edge and not cli_diagnostics.hasErrors());
 
             Diagnostics file_diagnostics;
             const auto document = decode(
-                "[game]\nmap_size = " + std::to_string(edge) + "\n", "map-size.toml", file_diagnostics);
+                "[game]\nmap_size = " + std::to_string(edge) + "\nworld_lighting='legacy'\n", "map-size.toml",
+                file_diagnostics);
             PPR_TEST_ASSERT(document.has_value());
             const auto layer = toLayer(*document, "map-size.toml");
             const auto resolved = resolveGameCli(CliResult{}, std::span<const Layer>{&layer, 1u}, file_diagnostics);

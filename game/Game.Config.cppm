@@ -85,7 +85,7 @@ export namespace pP::game {
         i32 m_rc_sky_hour{-1};
         u32 m_rc_day_seconds{86400u};
         EGameCommand m_command{EGameCommand::interactive};
-        EWorldLighting m_world_lighting{EWorldLighting::legacy};
+        EWorldLighting m_world_lighting{EWorldLighting::field};
         bool m_worldgen_report{}, m_worldgen_acceptance{}, m_lighting_scene_qualified_fp64{};
         bool m_lighting_showcase{}, m_lighting_showcase_qualified_fp64{}, m_lighting_showcase_metrics{};
         bool m_lighting_showcase_screen_contact{}, m_rc_skip_table{true}, m_rc_distant_query_check{};
