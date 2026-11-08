@@ -1,10 +1,13 @@
 module;
 #include "pP/UnitTest.h"
+#include <cstring>
 
 module engine.tests.app;
 
 import engine.core;
 import engine.app;
+import engine.rhi;
+import engine.shader;
 import std;
 
 namespace pP::tests::detail {
@@ -211,6 +214,186 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT((source->occupancyWord(0u, 0u) & 1u) == 1u);
         };
     }
+
+    // ------------------------------------------------------------------
+    // dense world light source GPU mirror fixtures
+    // ------------------------------------------------------------------
+
+    namespace WorldLightGpu {
+        // Matches the device-side GpuOverlayRow: per-cell coverage plus per-unit
+        // sigma/emission, 28 bytes.
+        struct OverlayRow {
+            float coverage{};
+            float sigma[3]{};
+            float emission[3]{};
+        };
+        static_assert(sizeof(OverlayRow) == 28u and alignof(OverlayRow) == 4u);
+
+        struct Fixture {
+            safe_ptr<IShaderService> m_shaders{IShaderService::get()};
+            safe_ptr<IRhiService> m_rhi{IRhiService::get()};
+            rhi::ComPtr<rhi::ICommandQueue> m_queue;
+            FrameFence m_fence;
+            lighting::WorldLightSourceGpu m_source;
+
+            void initialize(const u32 width, const u32 height) {
+                PPR_TEST_ASSERT(not m_shaders->initialize());
+                const auto setting = config::getenvLookup("PPR_TEST_GPU_VALIDATION");
+                const bool validation = setting and *setting == "1";
+                m_rhi->setCoreValidation(true);
+                m_rhi->setGpuAssistedValidation(validation);
+#ifdef _WIN32
+                constexpr auto backend = rhi::DeviceType::D3D12;
+#else
+                constexpr auto backend = rhi::DeviceType::Vulkan;
+#endif
+                PPR_TEST_ASSERT(not m_rhi->initialize(backend, *m_shaders));
+                auto &device = m_rhi->getDevice();
+                PPR_TEST_ASSERT(not make_error_code(device.getQueue(rhi::QueueType::Graphics, m_queue.writeRef())));
+                PPR_TEST_ASSERT(not m_fence.initialize(device));
+
+                const auto plan = lighting::planWorldLight(
+                    {.m_width = width, .m_height = height, .m_cell_metres = 0.5f});
+                PPR_TEST_ASSERT(plan.has_value());
+                const lighting::WorldLightMaterial materials[] = {{.m_kind = 1u}};
+                PPR_TEST_ASSERT(
+                    not m_source.initialize(*m_rhi, *m_shaders, *plan, materials, std::filesystem::current_path()));
+            }
+
+            void submit(rhi::ICommandEncoder &encoder) {
+                rhi::ComPtr<rhi::ICommandBuffer> commands;
+                PPR_TEST_ASSERT(not make_error_code(encoder.finish(commands.writeRef())));
+
+                rhi::ICommandBuffer *pointer = commands.get();
+                rhi::IFence *fence = m_fence.fence();
+                const auto value = m_fence.nextValue();
+                const u64 raw = value;
+                rhi::SubmitDesc description{};
+                description.commandBuffers = &pointer;
+                description.commandBufferCount = 1u;
+                description.signalFences = &fence;
+                description.signalFenceValues = &raw;
+                description.signalFenceCount = 1u;
+                PPR_TEST_ASSERT(not make_error_code(m_queue->submit(description)));
+                m_fence.commitSubmitted(value);
+                PPR_TEST_ASSERT(not m_fence.waitFor(value));
+            }
+
+            template<typename T>
+            std::vector<T> read(rhi::IBuffer *const source) {
+                rhi::BufferDesc description{};
+                description.size = source->getDesc().size;
+                description.elementSize = 0u;
+                description.memoryType = rhi::MemoryType::ReadBack;
+                description.usage = rhi::BufferUsage::CopyDestination;
+                description.defaultState = rhi::ResourceState::CopyDestination;
+                description.label = "WorldLightGpu readback";
+                rhi::ComPtr<rhi::IBuffer> copy;
+                PPR_TEST_ASSERT(
+                    not make_error_code(m_rhi->getDevice().createBuffer(description, nullptr, copy.writeRef())));
+
+                rhi::ComPtr<rhi::ICommandEncoder> encoder;
+                PPR_TEST_ASSERT(not make_error_code(m_queue->createCommandEncoder(encoder.writeRef())));
+                encoder->setBufferState(source, rhi::ResourceState::CopySource);
+                encoder->copyBuffer(copy, 0u, source, 0u, source->getDesc().size);
+                encoder->setBufferState(source, rhi::ResourceState::ShaderResource);
+                submit(*encoder);
+
+                std::vector<T> result(source->getDesc().size / sizeof(T));
+                void *mapped{};
+                PPR_TEST_ASSERT(
+                    not make_error_code(m_rhi->getDevice().mapBuffer(copy, rhi::CpuAccessMode::Read, &mapped)));
+                std::memcpy(result.data(), mapped, result.size() * sizeof(T));
+                PPR_TEST_ASSERT(not make_error_code(m_rhi->getDevice().unmapBuffer(copy)));
+                return result;
+            }
+
+            void shutdown() {
+                if (m_queue and make_error_code(m_queue->waitOnHost()))
+                    hal::fatalExit("world-light-test-quiescence-unknown");
+
+                PPR_TEST_ASSERT(not m_source.shutdown());
+                PPR_TEST_ASSERT(not m_fence.shutdown());
+                m_queue.setNull();
+                PPR_TEST_ASSERT(not m_rhi->shutdown());
+                PPR_TEST_ASSERT(not m_shaders->shutdown());
+            }
+        };
+
+        PPR_UNIT_TEST (gpu_source_matter_overlay) {
+            constexpr u32 width = 256u;
+            constexpr u32 height = 256u;
+
+            Fixture fixture;
+            fixture.initialize(width, height);
+            auto &source = fixture.m_source;
+
+            // CPU oracle for the exact ids/overlay/occupancy semantics.
+            const auto plan = lighting::planWorldLight({.m_width = width, .m_height = height, .m_cell_metres = 0.5f});
+            PPR_TEST_ASSERT(plan.has_value());
+            auto oracle = lighting::WorldLightSource::create(*plan, {});
+            PPR_TEST_ASSERT(oracle.has_value());
+
+            // Upload chunk 0 with id 1 at cell (0,0).
+            std::vector<u16> chunk(128u * 128u, 0u);
+            chunk[0] = 1u;
+            const lighting::WorldLightChunkUpdate chunk_update{.m_chunk_id = 0u, .m_cell_ids = chunk};
+            PPR_TEST_ASSERT(not source.applyUpdate({.m_chunks = {&chunk_update, 1u}, .m_revision = 2u}));
+            PPR_TEST_ASSERT(not oracle->applyUpdate({.m_chunks = {&chunk_update, 1u}, .m_revision = 2u}));
+
+            // One opaque particle at cell (4,4) with coverage 1.
+            const lighting::WorldLightOverlayCell particle{.m_cell = 4u * width + 4u, .m_coverage = 1.0f};
+            PPR_TEST_ASSERT(not source.applyUpdate({.m_overlay = {&particle, 1u}, .m_revision = 3u}));
+            PPR_TEST_ASSERT(not oracle->applyUpdate({.m_overlay = {&particle, 1u}, .m_revision = 3u}));
+
+            {
+                rhi::ComPtr<rhi::ICommandEncoder> encoder;
+                PPR_TEST_ASSERT(not make_error_code(fixture.m_queue->createCommandEncoder(encoder.writeRef())));
+                PPR_TEST_ASSERT(not source.encode(*encoder));
+                fixture.submit(*encoder);
+            }
+
+            // Cell ids: id 1 at (0,0), vacuum elsewhere.
+            const auto ids = fixture.read<u32>(source.cellIds());
+            PPR_TEST_ASSERT(ids.size() == u64{width} * height);
+            PPR_TEST_ASSERT(ids[0] == 1u);
+            PPR_TEST_ASSERT(ids[1] == 0u);
+
+            // Overlay: coverage 1 at (4,4).
+            const auto overlay = fixture.read<OverlayRow>(source.overlay());
+            PPR_TEST_ASSERT(overlay[4u * width + 4u].coverage == 1.0f);
+            PPR_TEST_ASSERT(overlay[0].coverage == 0.0f);
+
+            // Occupancy: both (0,0) and (4,4) live in block (0,0); match the CPU oracle.
+            const auto occupancy = fixture.read<u32>(source.occupancy());
+            PPR_TEST_ASSERT(occupancy.size() == 32u);
+            PPR_TEST_ASSERT((occupancy[0] & 1u) == 1u);
+            for (u32 block = 0u; block < occupancy.size(); ++block) {
+                PPR_TEST_ASSERT(occupancy[block] == oracle->occupancyWord(block, 0u));
+            }
+
+            PPR_TEST_ASSERT(source.revision() == 3u);
+            PPR_TEST_ASSERT(source.dirtyRect().m_min_x == 0 and source.dirtyRect().m_min_y == 0);
+            PPR_TEST_ASSERT(source.dirtyRect().m_max_x == 128 and source.dirtyRect().m_max_y == 128);
+
+            // A failed update (out-of-range chunk) is rejected without mutation.
+            const lighting::WorldLightChunkUpdate bad_chunk{.m_chunk_id = 4u, .m_cell_ids = chunk};
+            PPR_TEST_ASSERT(
+                source.applyUpdate({.m_chunks = {&bad_chunk, 1u}, .m_revision = 9u}) == std::errc::result_out_of_range);
+            PPR_TEST_ASSERT(source.revision() == 3u);
+            PPR_TEST_ASSERT(source.dirtyRect().m_max_x == 128);
+
+            // An empty update preserves revision and the previous GPU bytes.
+            PPR_TEST_ASSERT(not source.applyUpdate({}));
+            PPR_TEST_ASSERT(source.revision() == 3u);
+            PPR_TEST_ASSERT(source.dirtyRect().m_max_x == 128);
+
+            const auto occupancy_after = fixture.read<u32>(source.occupancy());
+            PPR_TEST_ASSERT(occupancy_after == occupancy);
+
+            fixture.shutdown();
+        };
+    }
 }
 
 namespace pP::tests {
@@ -228,6 +411,7 @@ namespace pP::tests {
             detail::WorldLightFieldTests::source_applies_overlay_and_bumps_revision,
             detail::WorldLightFieldTests::source_derives_occupancy_word_for_traversal,
             detail::WorldLightFieldTests::source_overlay_occupies_and_clears_occupancy,
+            detail::WorldLightGpu::gpu_source_matter_overlay,
         });
     };
 

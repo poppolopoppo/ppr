@@ -40,6 +40,7 @@ target_sources(engine.app
         renderer/App.Renderer.WorldRadiance.cppm
         renderer/App.Renderer.WorldLightTypes.cppm
         renderer/App.Renderer.WorldLightSource.cppm
+        renderer/App.Renderer.WorldLightSourceGpu.cppm
         renderer/App.Renderer.LightingPass.cppm
         renderer/App.Renderer.RetroPass.cppm
         renderer/App.Renderer.TrianglePass.cppm
@@ -102,6 +103,7 @@ target_sources(engine.app
         renderer/App.Renderer.OpticalGeometry.cpp
         renderer/App.Renderer.WorldRadiance.cpp
         renderer/App.Renderer.WorldLightSource.cpp
+        renderer/App.Renderer.WorldLightSourceGpu.cpp
         renderer/App.Renderer.LightingPass.cpp
         renderer/App.Renderer.RetroPass.cpp
         renderer/App.Renderer.TrianglePass.cpp
