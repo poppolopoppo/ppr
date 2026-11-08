@@ -580,6 +580,10 @@ namespace pP::lighting {
         return m_state->m_dirty;
     }
 
+    std::array<float, 3> WorldLightSourceGpu::sky() const noexcept {
+        return m_state->m_sky;
+    }
+
     std::error_code WorldLightSourceGpu::shutdown() {
         State &state = *m_state;
         if (state.m_mapped and state.m_device != nullptr) {

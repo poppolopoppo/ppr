@@ -38,6 +38,34 @@ namespace pP::lighting {
             const u32 chunks_per_edge = world_edge / kChunkEdge;
             return chunk_y * chunks_per_edge + chunk_x;
         }
+
+        // Simple finite hour->sky ramp (no analytic sun). A negative hour disables
+        // the sky (black terminal contribution). Solar hours [0, 24) map through a
+        // day arc: a dim blue night, a warm tone near sunrise/sunset and a bright
+        // blue day. Every channel stays finite for every admitted hour.
+        [[nodiscard]] std::array<float, 3> skyColour_(const i32 hour) noexcept {
+            if (hour < 0) {
+                return {0.0f, 0.0f, 0.0f};
+            }
+
+            // Normalize into [0, 24) so out-of-range hours wrap instead of driving
+            // a non-finite solar elevation.
+            const float h = std::fmod(std::fmod(static_cast<float>(hour), 24.0f) + 24.0f, 24.0f);
+
+            // Solar elevation proxy: +1 at noon, -1 at midnight.
+            const float elevation = std::cos((h - 12.0f) * 6.28318530718f / 24.0f);
+            const float day = std::clamp(elevation * 1.25f, 0.0f, 1.0f);
+
+            // Warm horizon term peaked at sunrise (6) and sunset (18).
+            const float horizon = std::exp(-0.5f * std::pow((h - 6.0f) / 2.5f, 2.0f)) +
+                                  std::exp(-0.5f * std::pow((h - 18.0f) / 2.5f, 2.0f));
+
+            return {
+                0.02f + 0.35f * day + 0.35f * horizon,
+                0.03f + 0.55f * day + 0.10f * horizon,
+                0.06f + 0.90f * day + 0.05f * horizon,
+            };
+        }
     } // namespace
 
     WorldLightSourceUpdateStorage buildWorldLightSourceUpdate(
@@ -87,6 +115,7 @@ namespace pP::lighting {
             .m_particles = storage.m_particles,
             .m_revision = revision,
             .m_sky_hour = sky_hour,
+            .m_sky = skyColour_(sky_hour),
         };
         return storage;
     }

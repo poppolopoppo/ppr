@@ -41,6 +41,10 @@ export namespace pP::lighting {
         float m_history_retention{};
         float m_frame_delta{};
         std::array<WorldLightLevelGpu, kWorldLightMaxLevels> m_levels{};
+
+        // Terminal sky radiance (linear RGB), refreshed from the source each
+        // update. Zero (or a negative source hour) means no terminal contribution.
+        float m_sky_r{}, m_sky_g{}, m_sky_b{};
     };
 
     // ------------------------------------------------------------------

@@ -32,7 +32,7 @@ namespace pP::lighting {
         static_assert(PPR_OFFSETOF(WorldLightLevelGpu, m_sample_offset) == 12u);
         static_assert(PPR_OFFSETOF(WorldLightLevelGpu, m_near_m) == 24u);
 
-        static_assert(sizeof(WorldLightFieldConstants) == 304u and alignof(WorldLightFieldConstants) == 4u);
+        static_assert(sizeof(WorldLightFieldConstants) == 316u and alignof(WorldLightFieldConstants) == 4u);
         static_assert(PPR_OFFSETOF(WorldLightFieldConstants, m_level_count) == 16u);
         static_assert(PPR_OFFSETOF(WorldLightFieldConstants, m_budget) == 32u);
         static_assert(PPR_OFFSETOF(WorldLightFieldConstants, m_accumulation_samples) == 36u);
@@ -86,6 +86,7 @@ namespace pP::lighting {
         WorldLightPlan m_plan{};
         u64 m_total_samples{};
         u64 m_last_revision{};
+        std::array<float, 3> m_last_sky{};
         u64 m_cursor{};
         u64 m_cycle{};
         u32 m_current{}; // ping-pong index of the accumulated radiance buffer
@@ -301,6 +302,11 @@ namespace pP::lighting {
         state.m_constants.m_history_retention = std::clamp(history_retention, 0.0f, 1.0f);
         state.m_constants.m_frame_delta = dt;
 
+        const std::array<float, 3> sky = source.sky();
+        state.m_constants.m_sky_r = sky[0];
+        state.m_constants.m_sky_g = sky[1];
+        state.m_constants.m_sky_b = sky[2];
+
         const u32 read_index = state.m_current;
         const u32 write_index = 1u - state.m_current;
 
@@ -494,7 +500,33 @@ namespace pP::lighting {
                 }
                 encoder.globalBarrier();
             }
+
+            // A sky change dirties only the coarsest cascade level: an escaped
+            // ray's terminal contribution changes there, and the lower levels must
+            // keep their history. Reset and reprocess the full coarsest probe grid,
+            // bounded by the same remaining budget.
+            if (sky != state.m_last_sky) {
+                const WorldLightLevel &coarsest = state.m_plan.m_levels[state.m_plan.m_level_count - 1u];
+                PPR_RETURN_ERROR_ON_FAIL(
+                    WorldLightField,
+                    dispatch_reset(state.m_plan.m_level_count - 1u, 0u, 0u, coarsest.m_probes_x, coarsest.m_probes_y));
+                encoder.globalBarrier();
+
+                const u64 sky_samples = u64{coarsest.m_probes_x} * coarsest.m_probes_y * coarsest.m_directions;
+                const u32 sky_probe_count = static_cast<u32>(
+                    std::min<u64>(sky_samples, remaining) / coarsest.m_directions);
+                if (sky_probe_count != 0u) {
+                    PPR_RETURN_ERROR_ON_FAIL(
+                        WorldLightField,
+                        dispatch_probe_update(
+                            state.m_plan.m_level_count - 1u, 0u, 0u, coarsest.m_probes_x, sky_probe_count));
+                    remaining -= u64{sky_probe_count} * coarsest.m_directions;
+                }
+                encoder.globalBarrier();
+            }
+
             state.m_last_revision = source.revision();
+            state.m_last_sky = sky;
         }
 
         // Round-robin cursor over the flat sample space with the remaining budget.

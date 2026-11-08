@@ -37,6 +37,9 @@ struct WorldLightFieldConstants {
     float historyRetention;
     float frameDelta;
     WorldLightLevelGpu levels[kWorldLightMaxLevels];
+
+    // Terminal sky radiance (linear RGB). Zero means no terminal contribution.
+    float skyR, skyG, skyB;
 };
 
 // Cursor update dispatch: which level, the within-level sample index of thread

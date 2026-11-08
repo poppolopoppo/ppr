@@ -291,6 +291,28 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not source->applyUpdate(storage.m_update));
             PPR_TEST_ASSERT(source->revision() == 5u);
         };
+
+        PPR_UNIT_TEST (producer_derives_sky_from_hour) {
+            const auto build = [](const i32 hour) {
+                GridStagedFrame stage{};
+                stage.m_cell_size_m = 1.0f;
+                return lighting::buildWorldLightSourceUpdate(stage, 256u, 1u, hour);
+            };
+
+            // A negative hour disables the sky: the terminal contribution is black.
+            const auto disabled = build(-1);
+            PPR_TEST_ASSERT(disabled.m_update.m_sky == std::array<float, 3>{0.0f, 0.0f, 0.0f});
+
+            // Solar hours produce a finite ramp, brighter at midday than midnight.
+            const auto night = build(0);
+            const auto noon = build(12);
+            for (u32 channel = 0u; channel < 3u; ++channel) {
+                PPR_TEST_ASSERT(std::isfinite(night.m_update.m_sky[channel]));
+                PPR_TEST_ASSERT(std::isfinite(noon.m_update.m_sky[channel]));
+                PPR_TEST_ASSERT(night.m_update.m_sky[channel] > 0.0f);
+                PPR_TEST_ASSERT(noon.m_update.m_sky[channel] > night.m_update.m_sky[channel]);
+            }
+        };
     }
 
     // ------------------------------------------------------------------
@@ -1221,6 +1243,60 @@ namespace pP::tests::detail {
             fixture.shutdown();
         };
 
+        PPR_UNIT_TEST (field_sky_only_edit_resets_only_coarsest) {
+            constexpr u32 width = 256u;
+            constexpr u32 height = 256u;
+
+            Fixture fixture;
+            fixture.initialize(width, height);
+            auto &source = fixture.m_source;
+            auto &field = fixture.m_field;
+
+            const auto plan = lighting::planWorldLight({.m_width = width, .m_height = height, .m_cell_metres = 0.5f});
+            PPR_TEST_ASSERT(plan.has_value());
+            const u32 budget = static_cast<u32>(plan->m_levels[0].m_sample_count);
+
+            // The coarsest level probe (0,0) direction 0, and a fine level-0 probe.
+            const auto &coarsest = plan->m_levels[plan->m_level_count - 1u];
+            const u64 coarse_sample = coarsest.m_sample_offset;
+            const u64 coarse_word = coarse_sample * 4u;
+            const u64 fine_sample = 0u; // level 0 probe (0,0) direction 0
+
+            // Warm the vacuum field with the default black sky: no emitters and no
+            // sky, so every radiance sample stays exactly zero while counts advance.
+            fixture.runUpdates(16u, budget);
+            const auto before = fixture.read<u32>(field.state());
+            PPR_TEST_ASSERT(before[fine_sample] > 0u);
+            const auto black_radiance = fixture.read<u16>(field.view().m_radiance);
+            PPR_TEST_ASSERT(black_radiance[coarse_word + 0u] == 0u);
+            PPR_TEST_ASSERT(black_radiance[coarse_word + 1u] == 0u);
+            PPR_TEST_ASSERT(black_radiance[coarse_word + 2u] == 0u);
+
+            // A sky-only edit: no chunks or particles, only the sky colour changes,
+            // bumping the revision with an empty dirty rect.
+            lighting::WorldLightSourceUpdate sky_update{};
+            sky_update.m_sky = {1.0f, 1.0f, 1.0f};
+            sky_update.m_sky_hour = 12;
+            sky_update.m_revision = 1u;
+            PPR_TEST_ASSERT(not source.applyUpdate(sky_update));
+
+            // One field update resets and reprocesses only the coarsest level.
+            fixture.updateField(budget);
+            const auto after_count = fixture.read<u32>(field.state());
+            const auto after_radiance = fixture.read<u16>(field.view().m_radiance);
+
+            // The coarsest probe is reset (count 1) and now carries finite sky.
+            PPR_TEST_ASSERT(after_count[coarse_sample] == 1u);
+            PPR_TEST_ASSERT(halfIsFinitePositive(after_radiance[coarse_word + 0u]));
+            PPR_TEST_ASSERT(halfIsFinitePositive(after_radiance[coarse_word + 1u]));
+            PPR_TEST_ASSERT(halfIsFinitePositive(after_radiance[coarse_word + 2u]));
+
+            // The finer level keeps its history: a sky edit must not reset the field.
+            PPR_TEST_ASSERT(after_count[fine_sample] == before[fine_sample]);
+
+            fixture.shutdown();
+        };
+
         PPR_UNIT_TEST (field_feedback_bounces_off_reflective_wall) {
             constexpr u32 width = 256u;
             constexpr u32 height = 256u;
@@ -1832,6 +1908,25 @@ namespace pP::tests::detail {
             const auto translucent_pixels = std::ranges::count_if(
                 lit, [](const std::array<float, 4u> &pixel) { return pixel[3] > 0.45f and pixel[3] < 0.55f; });
             PPR_TEST_ASSERT(translucent_pixels > 1000);
+
+            // The translucent block now shades through the field: its alpha band is
+            // unchanged between lit and unlit, but its colour changes with the
+            // field's diffuse/specular response (legacy fixed-light vs field-lit).
+            const auto translucent_mean = [&](const std::vector<std::array<float, 4u>> &pixels) {
+                float sum = 0.0f;
+                u32 count = 0u;
+                for (const auto &pixel: pixels) {
+                    if (pixel[3] > 0.45f and pixel[3] < 0.55f) {
+                        sum += (pixel[0] + pixel[1] + pixel[2]) / 3.0f;
+                        ++count;
+                    }
+                }
+                PPR_TEST_ASSERT(count > 1000u);
+                return sum / float(count);
+            };
+            const float lit_translucent_mean = translucent_mean(lit);
+            const float unlit_translucent_mean = translucent_mean(unlit);
+            PPR_TEST_ASSERT(std::abs(lit_translucent_mean - unlit_translucent_mean) > 0.5f);
 
             // Release the test-owned target before the RHI teardown.
             target_view.setNull();
@@ -3278,6 +3373,7 @@ namespace pP::tests {
             detail::WorldLightFieldTests::source_derives_occupancy_word_for_traversal,
             detail::WorldLightFieldTests::source_overlay_occupies_and_clears_occupancy,
             detail::WorldLightFieldTests::producer_stages_only_dirty_chunks_and_advances_revision,
+            detail::WorldLightFieldTests::producer_derives_sky_from_hour,
             detail::WorldLightGpu::gpu_source_matter_overlay,
             detail::WorldLightGpu::gpu_source_over_capacity_update_preserves_state,
             detail::WorldLightGpu::gpu_source_second_update_replaces_pending_particles,
@@ -3286,6 +3382,7 @@ namespace pP::tests {
             detail::WorldLightFieldGpu::field_accumulation_caps_count_and_retention_holds_history,
             detail::WorldLightFieldGpu::field_dirty_update_reprocesses_in_same_frame,
             detail::WorldLightFieldGpu::field_dirty_rect_is_per_update_a_keeps_b_resets,
+            detail::WorldLightFieldGpu::field_sky_only_edit_resets_only_coarsest,
             detail::WorldLightFieldGpu::field_reset_bounds_rect_tail,
             detail::WorldLightFieldGpu::field_update_respects_budget_boundary,
             detail::WorldLightFieldGpu::field_dense_dda_hits_diagonal_emitter,

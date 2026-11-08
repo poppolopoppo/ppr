@@ -65,6 +65,11 @@ export namespace pP::lighting {
         [[nodiscard]] u64 revision() const noexcept;
         [[nodiscard]] WorldLightDirtyRect dirtyRect() const noexcept;
 
+        // The committed terminal sky colour (linear RGB); zero means no sky. A
+        // change is observable alongside a revision bump so the field can reset
+        // only the coarsest cascade level.
+        [[nodiscard]] std::array<float, 3> sky() const noexcept;
+
         [[nodiscard]] std::error_code shutdown();
 
     private:

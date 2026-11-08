@@ -188,6 +188,14 @@ void accumulateSample(uint level, uint probe, uint direction) {
     float transmittance;
     traceWorldLightInterval(origin, dir, L.nearM, L.farM, radiance, transmittance);
 
+    // Terminal sky: only the coarsest level's interval reaches the world reach,
+    // so only its rays can escape the world. Add the sky radiance weighted by the
+    // remaining transmittance there; lower levels stop at their own interval bound
+    // and must not duplicate the sky. A black sky (skyR=skyG=skyB=0) adds nothing.
+    if (level + 1u == g_world_light_field.levelCount && transmittance > 0.0) {
+        radiance += transmittance * float3(g_world_light_field.skyR, g_world_light_field.skyG, g_world_light_field.skyB);
+    }
+
     WorldLightRadiance previous = g_world_light_radiance_prev[sample];
     float3 previousRadiance = float3(previous.radianceR, previous.radianceG, previous.radianceB);
     float previousTransmittance = float(previous.transmittance);
