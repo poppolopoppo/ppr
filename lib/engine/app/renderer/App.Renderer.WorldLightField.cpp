@@ -427,6 +427,7 @@ namespace pP::lighting {
                         dispatch_reset(
                             level, rect->m_x0, rect->m_y0, rect->m_x1 - rect->m_x0, rect->m_y1 - rect->m_y0));
                 }
+                encoder.globalBarrier();
 
                 for (u32 level = 0u; level < state.m_plan.m_level_count and remaining != 0u; ++level) {
                     const auto rect = probe_rect(state.m_plan.m_levels[level], dirty);
@@ -445,6 +446,7 @@ namespace pP::lighting {
                         WorldLightField, dispatch_probe_update(level, rect->m_x0, rect->m_y0, rect_width, probe_count));
                     remaining -= u64{probe_count} * info.m_directions;
                 }
+                encoder.globalBarrier();
             }
             state.m_last_revision = source.revision();
         }
