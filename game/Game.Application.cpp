@@ -5505,8 +5505,7 @@ namespace demo {
             if (settings.m_lighting_showcase_metrics or
                 settings.m_lighting_showcase_door_check or
                 settings.m_lighting_showcase_lamp_check or
-                settings.m_lighting_showcase_screen_contact or
-                m_direct_window) {
+                settings.m_lighting_showcase_screen_contact) {
                 enableWorldRadianceMeasurements(true);
             }
 

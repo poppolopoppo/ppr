@@ -40,6 +40,27 @@ namespace pP {
             const double clamped = std::min(seconds, 0.25);
             return std::chrono::duration_cast<TimeSpan>(std::chrono::duration<double>(clamped));
         }
+
+        // Ortho-scale ceiling when world bounds and a valid viewport pin the
+        // visible rect inside the world: viewport * scale must fit the bounds
+        // in both axes, so the ceiling is the tightest axis ratio. Absent
+        // bounds or a degenerate viewport, the unbounded [0.001, 1000] ceiling
+        // applies. The floor preserves the scale invariant for tiny worlds.
+        [[nodiscard]] float maxOrthoScaleForWorld_(
+            const float2 &bounds_min, const float2 &bounds_max, const float2 &viewport,
+            const bool has_bounds) noexcept {
+            const bool valid_viewport = viewport.x > 0.0f and
+                                        viewport.y > 0.0f and
+                                        std::isfinite(viewport.x) and
+                                        std::isfinite(viewport.y);
+            if (not has_bounds or not valid_viewport) {
+                return 1000.0f;
+            }
+
+            const float world_width = bounds_max.x - bounds_min.x;
+            const float world_height = bounds_max.y - bounds_min.y;
+            return std::clamp(std::min(world_width / viewport.x, world_height / viewport.y), 0.001f, 1000.0f);
+        }
     } // namespace
 
     // ------------------------------------------------------------------
@@ -430,7 +451,11 @@ namespace pP {
         if (not std::isfinite(scale) or scale < 0.001f or scale > 1000.0f) [[unlikely]] {
             return std::make_error_code(std::errc::invalid_argument);
         }
-        m_ortho_scale = scale;
+
+        const float2 bounds_min = m_world_bounds.has_value() ? m_world_bounds->m_min : float2{zero_v};
+        const float2 bounds_max = m_world_bounds.has_value() ? m_world_bounds->m_max : float2{zero_v};
+        m_ortho_scale = std::min(
+            scale, maxOrthoScaleForWorld_(bounds_min, bounds_max, m_viewport_size, m_world_bounds.has_value()));
         m_zoom_impulse = 0.0f;
         return default_value_v;
     }
@@ -492,7 +517,11 @@ namespace pP {
         const float raw_delta = std::clamp(m_zoom_impulse, -100.0f, 100.0f);
         m_zoom_impulse = 0.0f;
 
-        const float new_scale = std::clamp(m_ortho_scale * std::exp(-0.1f * raw_delta), 0.001f, 1000.0f);
+        const float2 bounds_min = m_world_bounds.has_value() ? m_world_bounds->m_min : float2{zero_v};
+        const float2 bounds_max = m_world_bounds.has_value() ? m_world_bounds->m_max : float2{zero_v};
+        const float max_scale = maxOrthoScaleForWorld_(
+            bounds_min, bounds_max, m_viewport_size, m_world_bounds.has_value());
+        const float new_scale = std::clamp(m_ortho_scale * std::exp(-0.1f * raw_delta), 0.001f, max_scale);
         if (new_scale == m_ortho_scale) {
             return;
         }

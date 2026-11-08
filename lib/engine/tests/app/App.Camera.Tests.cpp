@@ -1101,6 +1101,19 @@ namespace pP::tests::detail {
         PPR_TEST_ASSERT(model.m_ortho_scale == 0.25f);
     };
 
+    // A world-bounded camera never zooms the visible rect past the world:
+    // the scale ceiling is the tightest axis ratio, so an over-large request
+    // clamps instead of failing or escaping the bounds.
+    PPR_UNIT_TEST (ortho_scale_cannot_exceed_world_extent) {
+        PanCameraController camera;
+        PPR_TEST_ASSERT(not camera.setWorldBounds(float2{0, 0}, float2{128, 128}));
+        camera.setViewportSize(float2{1920, 1080});
+        PPR_TEST_ASSERT(not camera.setOrthoScale(1000.0f));
+        const float max_scale = 128.0f / 1920.0f;
+        PPR_TEST_ASSERT(camera.getOrthoScale() <= max_scale);
+        PPR_TEST_ASSERT(camera.getOrthoScale() >= 0.001f);
+    };
+
     PPR_UNIT_TEST (pan_camera_wheel_zoom_anchors_cursor_and_never_moves_depth) {
         PanCameraController controller;
         PPR_TEST_ASSERT(not controller.setOrthoScale(0.25f));
@@ -1396,6 +1409,9 @@ namespace pP::tests::detail {
         PPR_TEST_ASSERT(free.x > 150.0f);
     };
 
+    // The ortho scale clamps so the visible rect cannot exceed the world: an
+    // over-large request fits the world instead, and focusOn still centres the
+    // snapshot (the eye lands at the world minimum, not past it).
     PPR_UNIT_TEST (pan_camera_native_crop_centres_the_actual_snapshot) {
         constexpr float cell_metres = 1.0f / 3.0f;
         const float2 minimum{0.0f, 0.0f};
@@ -1408,6 +1424,9 @@ namespace pP::tests::detail {
         PPR_TEST_ASSERT(not controller.setWorldBounds(minimum, maximum));
         controller.setViewportSize(float2{float(extent.x), float(extent.y)});
         PPR_TEST_ASSERT(not controller.setOrthoScale(14.0f / float(extent.y)));
+        const float max_scale = std::min(
+            (maximum.x - minimum.x) / float(extent.x), (maximum.y - minimum.y) / float(extent.y));
+        PPR_TEST_ASSERT(controller.getOrthoScale() <= max_scale);
         controller.translate(float3{0.0f, 0.0f, -0.5f}, true);
         controller.focusOn(centre);
 
@@ -1417,7 +1436,7 @@ namespace pP::tests::detail {
         const float4 clip = float4{float3{centre.x, centre.y, 0.0f}, 1.0f} * snapshot.m_view_projection;
         PPR_TEST_ASSERT(std::abs(clip.w - 1.0f) < kEps);
         PPR_TEST_ASSERT(std::abs(clip.x / clip.w) < kEps and std::abs(clip.y / clip.w) < kEps);
-        PPR_TEST_ASSERT(snapshot.m_origin.x < minimum.x and snapshot.m_origin.y < minimum.y);
+        PPR_TEST_ASSERT(snapshot.m_origin.x <= minimum.x + kEps and snapshot.m_origin.y <= minimum.y + kEps);
     };
 
     // Clamp wins over anchoring: eye at the wall stays walled while the
@@ -1738,6 +1757,7 @@ namespace pP::tests {
             detail::pan_camera_key_directions,
             detail::pan_camera_parallel_plane,
             detail::pan_camera_ortho_scale_validates_explicit_bounds,
+            detail::ortho_scale_cannot_exceed_world_extent,
             detail::pan_camera_wheel_zoom_anchors_cursor_and_never_moves_depth,
             detail::pan_camera_grab_pan_direction_sign,
             detail::pan_camera_grab_matches_scale,

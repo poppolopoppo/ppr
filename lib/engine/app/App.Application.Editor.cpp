@@ -174,7 +174,11 @@ namespace pP {
                    error == std::errc::result_out_of_range or
                    error == std::errc::no_buffer_space or
                    error == std::errc::value_too_large or
-                   error == std::errc::not_supported;
+                   error == std::errc::not_supported or
+                   error == std::errc::function_not_supported or
+                   error == std::errc::invalid_argument or
+                   error == std::errc::device_or_resource_busy or
+                   error == std::errc::timed_out;
         }
 
 
@@ -1968,6 +1972,7 @@ namespace pP {
             const auto window = lighting::planWorldRadianceReceiverWindow(
                 *command.m_stage.m_world_radiance_source, *command.m_lighting_camera,
                 command.m_lighting_receiver_demands);
+            state.m_retainable_failure = not window and retainableTerrainViewError_(window.error());
             PPR_RETURN_ERROR_ON_FAIL(Editor, window);
 
             const bool discovery_measurement = surfaceReadbackEnabled() and m_measure_world_radiance and m_observe_grid;
@@ -2001,6 +2006,7 @@ namespace pP {
             const auto desired = lighting::planWorldRadianceReceiverWindow(
                 *command.m_stage.m_world_radiance_source, *command.m_lighting_camera,
                 command.m_lighting_receiver_demands);
+            state.m_retainable_failure = not desired and retainableTerrainViewError_(desired.error());
             PPR_RETURN_ERROR_ON_FAIL(Editor, desired);
             settings.m_receiver_window = desired->m_counts[0] > 0u and desired->m_counts[1] > 0u
                                              ? *desired
@@ -2052,12 +2058,14 @@ namespace pP {
                             ? std::error_code{}
                             : std::make_error_code(std::errc::state_not_recoverable));
 
-            PPR_LOG(
-                Editor, info, "Direct-window ALL-PAGES admission stress rejected",
-                {{"receivers", complete->m_expected_rows}, {"queries_bound", complete->m_query_upper_bound},
-                    {"field_bytes", complete->m_refined_bytes}, {"peak_bytes", complete->m_peak_bytes},
-                    {"resource_ceiling", stress.m_max_resource_bytes}, {"full_world_budget_qualified", false},
-                    {"GPU_stress", "not executed; complete set failed admission"}});
+            if (m_measure_world_radiance) {
+                PPR_LOG(
+                    Editor, info, "Direct-window ALL-PAGES admission stress rejected",
+                    {{"receivers", complete->m_expected_rows}, {"queries_bound", complete->m_query_upper_bound},
+                        {"field_bytes", complete->m_refined_bytes}, {"peak_bytes", complete->m_peak_bytes},
+                        {"resource_ceiling", stress.m_max_resource_bytes}, {"full_world_budget_qualified", false},
+                        {"GPU_stress", "not executed; complete set failed admission"}});
+            }
         }
 
         observeTerrainPublicationPhase_(
@@ -2081,19 +2089,21 @@ namespace pP {
 
         observeTerrainPublicationPhase_(m_measure_world_radiance, "field.cpu-prepare.end", cohort, command.m_sequence);
 
-        PPR_LOG(
-            Editor, info, "World radiance field admitted",
-            {{"queries", demand->m_query_upper_bound}, {"rows", demand->m_expected_rows},
-                {"peak_bytes", demand->m_peak_bytes}, {"field_bytes", demand->m_refined_bytes},
-                {"transport", static_cast<u32>(settings.m_transport)}, {"direct_window", command.m_direct_window},
-                {"temporal_levels", command.m_temporal_cascades ? settings.m_temporal.m_cascade_count : 0u},
-                {"temporal_spacing", command.m_temporal_cascades ? settings.m_temporal.m_refined_spacing : 0u},
-                {"r8_skip_table", settings.m_temporal_skip_table},
-                {"receiver_min_x", settings.m_receiver_window.m_minimum[0]},
-                {"receiver_min_y", settings.m_receiver_window.m_minimum[1]},
-                {"receiver_count_x", settings.m_receiver_window.m_counts[0]},
-                {"receiver_count_y", settings.m_receiver_window.m_counts[1]},
-                {"pages_pending", state.m_pass.pendingBatches()}});
+        if (m_measure_world_radiance) {
+            PPR_LOG(
+                Editor, info, "World radiance field admitted",
+                {{"queries", demand->m_query_upper_bound}, {"rows", demand->m_expected_rows},
+                    {"peak_bytes", demand->m_peak_bytes}, {"field_bytes", demand->m_refined_bytes},
+                    {"transport", static_cast<u32>(settings.m_transport)}, {"direct_window", command.m_direct_window},
+                    {"temporal_levels", command.m_temporal_cascades ? settings.m_temporal.m_cascade_count : 0u},
+                    {"temporal_spacing", command.m_temporal_cascades ? settings.m_temporal.m_refined_spacing : 0u},
+                    {"r8_skip_table", settings.m_temporal_skip_table},
+                    {"receiver_min_x", settings.m_receiver_window.m_minimum[0]},
+                    {"receiver_min_y", settings.m_receiver_window.m_minimum[1]},
+                    {"receiver_count_x", settings.m_receiver_window.m_counts[0]},
+                    {"receiver_count_y", settings.m_receiver_window.m_counts[1]},
+                    {"pages_pending", state.m_pass.pendingBatches()}});
+        }
 
         if (not state.m_source or
             state.m_source->cohort().m_world_generation != cohort.m_world_generation or
@@ -3329,13 +3339,15 @@ namespace pP {
                 state.m_loading = state.m_window_update = true;
                 state.m_submission_pending = false;
                 state.m_stage = TerrainLightingState::Stage::field;
-                PPR_LOG(
-                    Editor, info, "Direct-window receiver demand admitted",
-                    {{"frame_schedule", "one page per actual render request"}, {"minimum_x", desired->m_minimum[0]},
-                        {"minimum_y", desired->m_minimum[1]}, {"count_x", desired->m_counts[0]},
-                        {"count_y", desired->m_counts[1]}, {"pages", state.m_pass.pendingBatches()},
-                        {"peak_bytes", admitted->m_peak_bytes}, {"queries_bound", admitted->m_query_upper_bound},
-                        {"restoring_retained_source_donor", restore_donor}});
+                if (m_measure_world_radiance) {
+                    PPR_LOG(
+                        Editor, info, "Direct-window receiver demand admitted",
+                        {{"frame_schedule", "one page per actual render request"}, {"minimum_x", desired->m_minimum[0]},
+                            {"minimum_y", desired->m_minimum[1]}, {"count_x", desired->m_counts[0]},
+                            {"count_y", desired->m_counts[1]}, {"pages", state.m_pass.pendingBatches()},
+                            {"peak_bytes", admitted->m_peak_bytes}, {"queries_bound", admitted->m_query_upper_bound},
+                            {"restoring_retained_source_donor", restore_donor}});
+                }
                 return false;
             }
 
