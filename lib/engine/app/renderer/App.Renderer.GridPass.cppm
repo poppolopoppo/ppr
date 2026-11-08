@@ -454,6 +454,12 @@ export namespace pP {
         [[nodiscard]] std::error_code prepareGpuVisibility(const PreRenderContext &context);
         [[nodiscard]] std::error_code renderGpuIndirect(const DrawContext &context);
 
+        // Translucent terrain second pass (Task 9). Draws the same chunk quad
+        // geometry as renderGpuIndirect but discards opaque cells and uses a
+        // depth-test / no-depth-write blended pipeline, ordered after the
+        // particle/fluid pass so transparent cells composite over them.
+        [[nodiscard]] std::error_code renderTranslucent(const DrawContext &context);
+
         // Offscreen timing consumes five timestamps and leaves visible draws ready.
         static constexpr u32 kMaterialTimingBands = 16u;
         static constexpr u64 kMaterialTimingReserve = 16ull * 1024u * 1024u;
@@ -864,10 +870,18 @@ export namespace pP {
 
         [[nodiscard]] std::error_code encodeTerrainIndirect_(
             const DrawContext &context, GridCachedPipeline &pipeline, rhi::IQueryPool *queries = nullptr,
-            u32 first_query = 0u);
+            u32 first_query = 0u, u32 pass = 0u);
 
         [[nodiscard]] Expected<GridCachedPipeline *> pipelineFor_(
             rhi::IDevice &device, const RenderPipelineSignature &signature);
+
+        // Translucent terrain pipeline: same program/geometry as pipelineFor_ but
+        // depth-test with no depth write (the opaque pass already wrote depth).
+        [[nodiscard]] Expected<GridCachedPipeline *> translucentPipelineFor_(
+            rhi::IDevice &device, const RenderPipelineSignature &signature);
+
+        // Binds the terrain pass selector into a shader cursor.
+        [[nodiscard]] std::error_code bindGridPass_(rhi::ShaderCursor &cursor, u32 pass);
 
         // Reclaims deferred pipelines/roots at or below `completed`.
         void reclaimCompleted_(FenceCompletionValue completed) noexcept;
@@ -986,6 +1000,8 @@ export namespace pP {
         u64 m_resident_table_upload_count{};
         std::optional<RenderPipelineKey> m_render_pipeline_key;
         std::optional<GridCachedPipeline> m_cached_pipeline;
+        std::optional<RenderPipelineKey> m_translucent_pipeline_key;
+        std::optional<GridCachedPipeline> m_translucent_pipeline;
 
         // The payload ring: kTileRingSize upload buffers at GridTilePayload
         // (32 B) stride, each created and mapped ONCE and kept mapped for its

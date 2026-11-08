@@ -4293,6 +4293,8 @@ namespace pP {
                         m_terrain_lighting->m_screen_queries, kScreenTimingStride * *screen_timing_slot + 7u);
                     screen_timing_mask |= 8u;
                 }
+
+                PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->renderTranslucent(context));
             }
 
             const CpuObservationScope cpu_draw{clock, cpu.m_triangle_draw};

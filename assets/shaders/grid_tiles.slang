@@ -101,6 +101,15 @@ struct WorldLightSwitch {
     uint pad0, pad1, pad2;
 };
 ConstantBuffer<WorldLightSwitch> g_world_light;
+// Terrain pass selector: 0 draws every material in one pass (the legacy
+// reference lanes), 1 discards optical-blend (translucent) cells for the
+// depth-writing opaque pass, 2 discards opaque cells for the blended
+// translucent pass. The same 128x128 chunk quad geometry is drawn twice.
+struct GridPassSwitch {
+    uint pass;
+    uint pad0, pad1, pad2;
+};
+ConstantBuffer<GridPassSwitch> g_grid_pass;
 Texture2D<float4> g_boundary_noise;
 // Written before the surface pass; this is never the active color attachment.
 Texture2D<float4> g_backdrop;
@@ -993,6 +1002,13 @@ float4 materialSurface(uint material, float2 fine_position, float2 gradient_x,
 
     float3 background = reuse_background && all(offset_pixels == 0.0)
         ? unshifted_background : backdropColor(screen + offset_pixels, sampler);
+    // Beer-Lambert absorption over the fixed optical thickness. The refracted
+    // background copy is tinted by the material's per-channel extinction and
+    // never by the already-rendered scene colour.
+    float3 sigma = float3(visual.m_sigma_r_per_m, visual.m_sigma_g_per_m, visual.m_sigma_b_per_m);
+    if (any(sigma > 0.0)) {
+        background *= exp(-sigma * visual.m_refraction_depth_m);
+    }
     return decorateSurface(float4(lerp(background, color, opacity), 1.0), decoration);
 }
 
@@ -1196,6 +1212,13 @@ float4 shadeGridReactive(
     if (visual.m_material_id != material) {
         discard;
     }
+    // Terrain pass selection: the opaque pass skips optical-blend (translucent)
+    // cells and the translucent pass skips opaque cells. Both draw the same
+    // chunk quad; the pipeline depth states separate their ordering.
+    const bool optical = (visual.m_surface_flags & kSurfaceOpticalBlend) != 0u;
+    if ((g_grid_pass.pass == 1u && optical) || (g_grid_pass.pass == 2u && !optical)) {
+        discard;
+    }
     // Classify the ACTUAL selected contour before optical opacity/emission.
     if ((visual.m_surface_flags & kSurfaceOpticalBlend) != 0u || coverage != 1.0 || reactive_matter)
         reactive_coverage = 1;
@@ -1353,18 +1376,33 @@ ParticleTerrainFootprint particleTerrainFootprint(float2 fine_position, SamplerS
     return footprint;
 }
 
-float particleTerrainCoverage(ParticleTerrainFootprint footprint, bool point_sample=false) {
-    float coverage = 0, outline = 0;
-    int2 sample = int2(floor(footprint.contour));
+// The native cell at `cell` is opaque terrain: present, non-transparent, and
+// not on the optical-blend (translucent) path. Returns the material id for an
+// opaque cell and zero for vacuum, transparent or translucent cells.
+uint nativeOpaqueMaterial(int2 cell) {
+    uint material = terrainSample(cell);
+    if (material == 0u || material == 0xffffu) return 0u;
+    TerrainVisual visual = g_terrain_visuals[min(material, 65535u)];
+    if (visual.m_material_id != material) return 0u;
+    return (visual.m_surface_flags & kSurfaceOpticalBlend) == 0u ? material : 0u;
+}
+
+// Opaque-terrain coverage for the particle/fluid hard-clip contract. Translucent
+// cells contribute zero so a particle blends under water/glass rather than
+// fading on an occupied (but transparent) native cell; antialiasing survives
+// only on the opaque geometric boundary.
+float particleOpaqueCoverage(ParticleTerrainFootprint footprint, bool point_sample=false) {
+    int2 cell = int2(floor(footprint.contour));
     if ((g_grid_frame.m_surface_mode & 1u) != 0u) {
         TerrainStencil stencil = terrainStencil(footprint.contour);
-        contourMaterial(footprint.contour, footprint.pixel_x, footprint.pixel_y, footprint.width,
-            stencil, coverage, sample, outline,point_sample);
-    } else {
-        uint terrain = terrainSample(sample);
-        coverage = terrain != 0u && terrain != 0xffffu ? 1.0 : 0.0;
+        uint materials[4];
+        for (uint corner = 0u; corner < 4u; ++corner) {
+            materials[corner] = nativeOpaqueMaterial(stencil.base + int2(g_contour_points[corner]));
+        }
+        float2 point = footprint.contour - (float2(stencil.base) + 0.5);
+        return point_sample ? occupiedPoint(materials, point) : occupiedCoverage(materials, point, footprint.width);
     }
-    return coverage;
+    return nativeOpaqueMaterial(cell) != 0u ? 1.0 : 0.0;
 }
 
 float4 shadeParticleReactive(ParticleVertexOutput input,
@@ -1380,7 +1418,7 @@ float4 shadeParticleReactive(ParticleVertexOutput input,
     float alpha=g_particle_mask.Sample(g_particle_mask_sampler,input.uv).a;
     if (alpha==0) discard;
 
-    float coverage = particleTerrainCoverage(footprint,point_sample);
+    float coverage = particleOpaqueCoverage(footprint,point_sample);
     if (coverage == 1.0) discard;
 
     // Geometric support survives independently of material alpha and source.
@@ -1604,7 +1642,7 @@ float4 shadeFluidCompositeReactive(ParticleVertexOutput input,
     float mask = smoothstep(kLiquidIsoLevel - edge_width * 0.5, kLiquidIsoLevel + edge_width * 0.5, field);
     if (mask == 0.0) discard;
 
-    float coverage = particleTerrainCoverage(footprint,point_sample);
+    float coverage = particleOpaqueCoverage(footprint,point_sample);
     if (coverage == 1.0) discard;
 
     // Geometric support survives independently of material alpha and source.
@@ -1873,7 +1911,7 @@ float4 shadeSolidCompositeReactive(ParticleVertexOutput input,
     float mask = smoothstep(kSolidIsoLevel - edge_width * 0.5, kSolidIsoLevel + edge_width * 0.5, field);
     if (mask == 0.0) discard;
 
-    float terrain_coverage = particleTerrainCoverage(footprint,point_sample);
+    float terrain_coverage = particleOpaqueCoverage(footprint,point_sample);
     if (terrain_coverage == 1.0) discard;
 
     // Geometric support survives independently of material alpha and source.

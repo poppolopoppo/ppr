@@ -1424,6 +1424,7 @@ namespace pP::tests::detail {
                         device, *pass, key, viewport, scissor, int2{int(target_edge), int(target_edge)},
                         fixture.m_fence.completed(), {}};
                     PPR_TEST_ASSERT(not grid.renderGpuIndirect(draw));
+                    PPR_TEST_ASSERT(not grid.renderTranslucent(draw));
                 }
 
                 rhi::ComPtr<rhi::ICommandBuffer> commands;
@@ -1530,6 +1531,271 @@ namespace pP::tests::detail {
 
             fixture.shutdown();
         };
+
+        PPR_UNIT_TEST (translucent_clipped_by_terrain) {
+            constexpr u32 width = 64u;
+            constexpr u32 height = 64u;
+
+            Fixture fixture;
+            fixture.initialize(width, height);
+            auto &device = fixture.m_rhi->getDevice();
+            fixture.initializeGrid();
+            auto &grid = fixture.m_grid;
+
+            // Orthographic camera viewing the [0,8)^2 cell region (16 px/cell).
+            constexpr u32 target_edge = 128u;
+            Camera camera{ECameraProjection::orthographic};
+            CameraModel model{};
+            model.m_camera_mode = ECameraProjection::orthographic;
+            model.m_origin = float3{0.0f, 0.0f, -0.5f};
+            model.m_ortho_scale = 1.0f / 16.0f;
+            camera.updateModel(
+                TimeSpan{}, model,
+                Viewport{PixelRect{int2{0, 0}, int2{int(target_edge), int(target_edge)}}, ViewportLayout{}});
+            const auto snapshot = camera.getSnapshot();
+
+            const auto image = [](const std::array<std::byte, 4u> bytes) {
+                mem::UniqueBuffer storage = mem::UniqueBuffer::allocate(bytes.size());
+                PPR_TEST_ASSERT(not storage.materialize());
+                const auto writable = storage.getMutableData();
+                PPR_TEST_ASSERT(writable.has_value());
+                std::ranges::copy(bytes, writable->begin());
+                mem::SharedBuffer frozen;
+                PPR_TEST_ASSERT(not storage.moveToShared(&frozen));
+                image::ImageAsset result{};
+                result.m_width = result.m_height = 1u;
+                result.m_storage = frozen;
+                result.m_subresources.push_back({frozen.subspan(0u, 4u), 4u, 4u});
+                return result;
+            };
+
+            // Opaque blue cells, green gas particles, and two translucent red
+            // cells (one absorbing, one flat) over a uniform white backdrop.
+            GridStagedFrame stage{};
+            stage.m_full_refresh = stage.m_reset_caches = stage.m_has_catalog = stage.m_has_background = true;
+            stage.m_cell_size_m = 1.0f;
+            stage.m_boundary_material_id = 1u;
+            stage.m_content_fingerprint = 17u;
+
+            GridTerrainVisual opaque{};
+            opaque.m_material_id = 1u;
+            opaque.m_color_rgba = 0x0000ffffu; // blue
+            opaque.m_texture_index = 0u;
+            opaque.m_transport_model = kGridTransportOpaqueV1;
+            opaque.m_ior = 1.0f;
+            opaque.m_roughness = 1.0f;
+            stage.m_terrain_visuals.push_back(opaque);
+
+            GridTerrainVisual gas = opaque;
+            gas.m_material_id = 2u;
+            gas.m_color_rgba = 0x00ff00ffu; // green
+            stage.m_terrain_visuals.push_back(gas);
+
+            GridTerrainVisual absorbing = opaque;
+            absorbing.m_material_id = 3u;
+            absorbing.m_color_rgba = 0xff0000ffu; // red
+            absorbing.m_surface_flags = kGridSurfaceOpticalBlend;
+            absorbing.m_transport_model = kGridTransportAbsorbingV1;
+            absorbing.m_sigma_per_m[0] = 3.0f;
+            absorbing.m_normal_texture_index = 1u;
+            absorbing.m_opacity = 0.5f;
+            absorbing.m_ior = 1.5f;
+            absorbing.m_refraction_depth_m = 0.2f;
+            stage.m_terrain_visuals.push_back(absorbing);
+
+            GridTerrainVisual flat = absorbing;
+            flat.m_material_id = 4u;
+            flat.m_ior = 1.0f;
+            flat.m_sigma_per_m[0] = 0.0f;
+            stage.m_terrain_visuals.push_back(flat);
+
+            stage.m_terrain_images.push_back(image({std::byte{255}, std::byte{255}, std::byte{255}, std::byte{255}}));
+            stage.m_terrain_images.push_back(image({std::byte{191}, std::byte{128}, std::byte{255}, std::byte{255}}));
+
+            for (u32 layer = 0u; layer < 4u; ++layer) {
+                stage.m_background_layers[layer].m_texture_index = 0u;
+                stage.m_background_layers[layer].m_order = layer;
+                stage.m_background_layers[layer].m_color_rgba = 0xffffffffu;
+            }
+
+            stage.m_tiles.push_back({.m_dirty_mask = 1u, .m_tile_range = {0, 0, 128, 128}, .m_chunk_id = 0u});
+            GridStagedUpload upload{};
+            upload.m_payload.m_rect[2] = upload.m_payload.m_rect[3] = 128.0f;
+            upload.m_cell_materials.assign(GridPass::kCellsPerChunk, 0u);
+            upload.m_cell_materials[2u * 128u + 2u] = 1u; // opaque + clipped particle
+            upload.m_cell_materials[4u * 128u + 2u] = 1u; // opaque control
+            upload.m_cell_materials[2u * 128u + 6u] = 3u; // absorbing translucent
+            upload.m_cell_materials[4u * 128u + 6u] = 4u; // flat translucent
+            stage.m_uploads.push_back(std::move(upload));
+
+            // Two green gas particles: one over the opaque cell (discarded), one
+            // over vacuum (blends). Radius 0.3 m with the reference 1 m thickness.
+            const double volume = 0.3 * 0.3 * std::numbers::pi;
+            auto particles = std::make_shared<Array<GridParticleInstance>>();
+            particles->push_back({u64{1}, 2.5, 2.5, volume, 1.0, 300.0, 2u});
+            particles->push_back({u64{2}, 6.5, 6.5, volume, 1.0, 300.0, 2u});
+            stage.m_particle_batches.push_back(GridParticleBatch{0u, particles});
+
+            PPR_TEST_ASSERT(not grid.stageWorldCandidate(7u, 11u, stage));
+            bool candidate_ready = false;
+            for (u32 advance = 0u; advance < 8u; ++advance) {
+                const auto ready = grid.advanceWorldCandidate(device, fixture.m_fence.completed());
+                PPR_TEST_ASSERT(ready.has_value());
+                if (*ready) {
+                    candidate_ready = true;
+                    break;
+                }
+            }
+            PPR_TEST_ASSERT(candidate_ready);
+            PPR_TEST_ASSERT(not grid.activateWorldCandidate(7u, 11u, 17u));
+
+            PPR_TEST_ASSERT(not grid.update(
+                TimeSpan{}, snapshot, false, GridPass::ReceiverContinuation::nearest, GridPass::ReceiverResponse::flat,
+                GridPass::BackgroundResponse::unlit));
+
+            rhi::TextureDesc target_desc{};
+            target_desc.type = rhi::TextureType::Texture2D;
+            target_desc.size = {.width = target_edge, .height = target_edge, .depth = 1u};
+            target_desc.format = rhi::Format::RGBA32Float;
+            target_desc.memoryType = rhi::MemoryType::DeviceLocal;
+            target_desc.usage = static_cast<rhi::TextureUsage>(
+                static_cast<u32>(rhi::TextureUsage::RenderTarget) | static_cast<u32>(rhi::TextureUsage::CopySource));
+            target_desc.defaultState = rhi::ResourceState::RenderTarget;
+            rhi::ComPtr<rhi::ITexture> target;
+            rhi::ComPtr<rhi::ITextureView> target_view;
+            PPR_TEST_ASSERT(not make_error_code(device.createTexture(target_desc, nullptr, target.writeRef())));
+            PPR_TEST_ASSERT(not make_error_code(target->getDefaultView(target_view.writeRef())));
+
+            const auto viewport = rhi::Viewport::fromSize(float(target_edge), float(target_edge));
+            const auto scissor = rhi::ScissorRect::fromSize(target_edge, target_edge);
+
+            const auto render = [&](const bool with_particles) {
+                rhi::ComPtr<rhi::ICommandEncoder> encoder;
+                PPR_TEST_ASSERT(not make_error_code(fixture.m_queue->createCommandEncoder(encoder.writeRef())));
+                const PreRenderContext pre{device, *encoder, fixture.m_fence.completed(), {}};
+                PPR_TEST_ASSERT(not grid.prepareBackground(pre, snapshot, viewport, scissor));
+                PPR_TEST_ASSERT(not grid.prepareGpuVisibility(pre));
+                if (with_particles) {
+                    PPR_TEST_ASSERT(not grid.prepareGpuParticles(pre));
+                }
+
+                encoder->setTextureState(
+                    target, rhi::SubresourceRange{.layer = 0u, .layerCount = 1u, .mip = 0u, .mipCount = 1u},
+                    rhi::ResourceState::RenderTarget);
+                rhi::RenderPassColorAttachment attachment{};
+                attachment.view = target_view;
+                attachment.clearValue[0] = attachment.clearValue[1] = attachment.clearValue[2] =
+                    attachment.clearValue[3] = 0.0f;
+                rhi::RenderPassDesc pass_desc{};
+                pass_desc.colorAttachments = &attachment;
+                pass_desc.colorAttachmentCount = 1u;
+                auto *const pass = encoder->beginRenderPass(pass_desc);
+                PPR_TEST_ASSERT(pass != nullptr);
+                {
+                    PPR_DEFER {
+                        pass->end();
+                    };
+                    RenderPipelineSignature signature{};
+                    signature.m_color_formats[0] = rhi::Format::RGBA32Float;
+                    signature.m_color_format_count = 1u;
+                    const DrawContext draw{
+                        device, *pass, RenderPipelineKey{signature}, viewport, scissor,
+                        int2{int(target_edge), int(target_edge)}, fixture.m_fence.completed(), {}};
+                    PPR_TEST_ASSERT(not grid.renderBackground(draw));
+                    PPR_TEST_ASSERT(not grid.renderGpuIndirect(draw));
+                    if (with_particles) {
+                        PPR_TEST_ASSERT(not grid.renderParticles(draw));
+                    }
+                    PPR_TEST_ASSERT(not grid.renderTranslucent(draw));
+                }
+
+                rhi::ComPtr<rhi::ICommandBuffer> commands;
+                PPR_TEST_ASSERT(not make_error_code(encoder->finish(commands.writeRef())));
+                rhi::ICommandBuffer *pointer = commands.get();
+                rhi::IFence *signal = fixture.m_fence.fence();
+                const auto value = fixture.m_fence.nextValue();
+                const u64 raw_value = value;
+                rhi::SubmitDesc submit{};
+                submit.commandBuffers = &pointer;
+                submit.commandBufferCount = 1u;
+                submit.signalFences = &signal;
+                submit.signalFenceValues = &raw_value;
+                submit.signalFenceCount = 1u;
+                PPR_TEST_ASSERT(not make_error_code(fixture.m_queue->submit(submit)));
+                fixture.m_fence.commitSubmitted(value);
+                grid.notifyFrameSubmitted(value);
+                PPR_TEST_ASSERT(not fixture.m_fence.waitFor(value));
+            };
+
+            const auto readback = [&]() {
+                shader::ComPtr<ISlangBlob> blob;
+                rhi::SubresourceLayout layout{};
+                PPR_TEST_ASSERT(not make_error_code(device.readTexture(target, 0u, 0u, blob.writeRef(), &layout)));
+                const auto *const source = static_cast<const std::byte *>(blob->getBufferPointer());
+                std::vector<std::array<float, 4u>> pixels(std::size_t(target_edge) * target_edge);
+                for (u32 y = 0u; y < target_edge; ++y) {
+                    for (u32 x = 0u; x < target_edge; ++x) {
+                        std::array<float, 4u> value{};
+                        std::memcpy(value.data(), source + y * layout.rowPitch + x * sizeof(value), sizeof(value));
+                        pixels[y * target_edge + x] = value;
+                    }
+                }
+                return pixels;
+            };
+
+            // Sample the centre of a cell (16 px/cell, world y = 0 at the bottom).
+            const auto cell_centre = [](const int cx, const int cy) {
+                return std::pair{8 + cx * 16, 8 + (7 - cy) * 16};
+            };
+
+            render(true);
+            const auto with_particles = readback();
+            render(false);
+            const auto without_particles = readback();
+
+            const auto [opaque_x, opaque_y] = cell_centre(2, 2);
+            const auto [vacuum_x, vacuum_y] = cell_centre(6, 6);
+            const auto [absorb_x, absorb_y] = cell_centre(6, 2);
+            const auto [flat_x, flat_y] = cell_centre(6, 4);
+
+            const auto at = [&](const std::vector<std::array<float, 4u>> &pixels, const int x, const int y) {
+                return pixels[static_cast<std::size_t>(y) * target_edge + static_cast<std::size_t>(x)];
+            };
+
+            // Particle over opaque terrain is discarded: the opaque cell is
+            // identical whether or not the particle pass runs, and stays
+            // blue-dominant (the green particle never survives over it).
+            const auto opaque_with = at(with_particles, opaque_x, opaque_y);
+            const auto opaque_without = at(without_particles, opaque_x, opaque_y);
+            PPR_TEST_ASSERT(std::abs(opaque_with[0] - opaque_without[0]) < 1e-3f);
+            PPR_TEST_ASSERT(std::abs(opaque_with[1] - opaque_without[1]) < 1e-3f);
+            PPR_TEST_ASSERT(std::abs(opaque_with[2] - opaque_without[2]) < 1e-3f);
+            PPR_TEST_ASSERT(opaque_with[2] > opaque_with[1]);
+
+            // Particle over vacuum blends: the green channel rises and dominates
+            // the previously empty cell.
+            const auto vacuum_with = at(with_particles, vacuum_x, vacuum_y);
+            const auto vacuum_without = at(without_particles, vacuum_x, vacuum_y);
+            const float vacuum_delta = std::max(
+                {std::abs(vacuum_with[0] - vacuum_without[0]), std::abs(vacuum_with[1] - vacuum_without[1]),
+                    std::abs(vacuum_with[2] - vacuum_without[2])});
+            PPR_TEST_ASSERT(vacuum_delta > 0.05f);
+            PPR_TEST_ASSERT(vacuum_with[1] > vacuum_with[0] and vacuum_with[1] > vacuum_with[2]);
+
+            // The absorbing translucent cell differs from a flat alpha blend of
+            // the same albedo/opacity over the uniform backdrop: the red channel
+            // is reduced by Beer-Lambert extinction while green/blue stay equal.
+            const auto absorb = at(with_particles, absorb_x, absorb_y);
+            const auto flat_px = at(with_particles, flat_x, flat_y);
+            PPR_TEST_ASSERT(std::abs(absorb[0] - flat_px[0]) > 0.05f);
+            PPR_TEST_ASSERT(std::abs(absorb[1] - flat_px[1]) < 0.05f);
+            PPR_TEST_ASSERT(std::abs(absorb[2] - flat_px[2]) < 0.05f);
+
+            target_view.setNull();
+            target.setNull();
+
+            fixture.shutdown();
+        };
     }
 }
 
@@ -1562,6 +1828,7 @@ namespace pP::tests {
             detail::WorldLightFieldGpu::diffuse_plus_z_isotropic_and_perturbed_finite,
             detail::WorldLightFieldGpu::specular_vertical_reflection_and_roughness_finite,
             detail::WorldLightFieldGpu::grid_shading_uses_field,
+            detail::WorldLightFieldGpu::translucent_clipped_by_terrain,
         });
     };
 

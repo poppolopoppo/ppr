@@ -2648,6 +2648,119 @@ namespace pP {
         return &m_cached_pipeline.value();
     }
 
+    Expected<GridPass::GridCachedPipeline *> GridPass::translucentPipelineFor_(
+        rhi::IDevice &device, const RenderPipelineSignature &signature) {
+        if (m_shader_program == nullptr) [[unlikely]] {
+            return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
+        }
+
+        const auto formats = signature.colorFormats();
+        const bool reactive = formats.size() == 2u and
+                              formats[0] == rhi::Format::RGBA16Float and
+                              formats[1] == rhi::Format::R8Unorm and
+                              signature.m_sample_count == SampleCount::x4 and
+                              signature.m_depth_stencil_format == rhi::Format::D32Float and
+                              m_spatial_msaa;
+        if (formats.size() != 1u and not reactive) {
+            PPR_LOG(
+                GridPass, error, "unsupported translucent render pipeline signature",
+                {
+                    {"color_format_count", signature.colorFormats().size()},
+                    {"has_depth_stencil", signature.m_depth_stencil_format.has_value()},
+                    {"sample_count", static_cast<u32>(signature.m_sample_count)},
+                });
+            return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
+        }
+
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            GridPass, not reactive or device.hasFeature("independent-blend-enabled")
+                          ? std::error_code{}
+                          : std::make_error_code(std::errc::not_supported));
+
+        if (m_spatial_msaa) {
+            PPR_RETURN_UNEXPECTED_ON_FAIL(GridPass, validateSpatialContent());
+            PPR_RETURN_UNEXPECTED_ON_FAIL(
+                GridPass, signature.m_sample_count == SampleCount::x4
+                              ? std::error_code{}
+                              : std::make_error_code(std::errc::invalid_argument));
+            PPR_RETURN_UNEXPECTED_ON_FAIL(GridPass, ensureSpatialPrograms_(device));
+            if (reactive) {
+                PPR_RETURN_UNEXPECTED_ON_FAIL(GridPass, ensureSpatialPrograms_(device, true));
+            }
+        }
+
+        if (not m_translucent_pipeline_key.has_value() or
+            static_cast<const RenderPipelineSignature &>(m_translucent_pipeline_key.value()) != signature or
+            m_cached_spatial_msaa != m_spatial_msaa) {
+            PPR_LOG(GridPass, debug, "translucent pipeline cache cleared on signature change");
+            if (m_translucent_pipeline.has_value()) {
+                GridCachedPipeline retired = std::move(*m_translucent_pipeline);
+                m_translucent_pipeline.reset();
+                const FenceCompletionValue last_use = m_last_submitted_value;
+                m_deferred_releases.defer(last_use, [held = std::move(retired)]() mutable {
+                    held.m_pipeline.setNull();
+                    for (rhi::ComPtr<rhi::IShaderObject> &root: held.m_slot_roots) {
+                        root.setNull();
+                    }
+                });
+            }
+            m_translucent_pipeline_key.reset();
+        }
+
+        if (m_translucent_pipeline.has_value()) {
+            PPR_RETURN_UNEXPECTED_ON_FAIL(GridPass, ensurePipelineRoots_(device, *m_translucent_pipeline));
+            return &m_translucent_pipeline.value();
+        }
+
+        std::array<rhi::ColorTargetDesc, 2u> targets{};
+        auto &color_target = targets[0];
+        color_target.format = signature.colorFormats().front();
+        color_target.enableBlend = true;
+        color_target.color.srcFactor = m_spatial_msaa ? rhi::BlendFactor::One : rhi::BlendFactor::SrcAlpha;
+        color_target.color.dstFactor = rhi::BlendFactor::InvSrcAlpha;
+        color_target.color.op = rhi::BlendOp::Add;
+        color_target.alpha.srcFactor = rhi::BlendFactor::One;
+        color_target.alpha.dstFactor = rhi::BlendFactor::InvSrcAlpha;
+        color_target.alpha.op = rhi::BlendOp::Add;
+
+        if (reactive) {
+            auto &mask = targets[1];
+            mask.format = rhi::Format::R8Unorm;
+            mask.enableBlend = true;
+            mask.color = {rhi::BlendFactor::One, rhi::BlendFactor::One, rhi::BlendOp::Max};
+            mask.alpha = mask.color;
+            mask.writeMask = rhi::RenderTargetWriteMask::Red;
+        }
+
+        rhi::RenderPipelineDesc pipeline_desc{};
+        pipeline_desc.program = reactive         ? m_reactive_shader_program.get()
+                                : m_spatial_msaa ? m_spatial_shader_program.get()
+                                                 : m_shader_program.get();
+        pipeline_desc.inputLayout = nullptr;
+        pipeline_desc.primitiveTopology = rhi::PrimitiveTopology::TriangleList;
+        pipeline_desc.targets = targets.data();
+        pipeline_desc.targetCount = reactive ? 2u : 1u;
+        pipeline_desc.multisample.sampleCount = static_cast<u32>(signature.m_sample_count);
+        pipeline_desc.depthStencil.format = signature.m_depth_stencil_format.value_or(rhi::Format::Undefined);
+        // Translucent cells test the opaque pass's depth but never write it, so
+        // they composite over particles without reordering the 2D depth layer.
+        pipeline_desc.depthStencil.depthTestEnable = signature.m_depth_stencil_format.has_value();
+        pipeline_desc.depthStencil.depthWriteEnable = false;
+        pipeline_desc.depthStencil.depthFunc = rhi::ComparisonFunc::LessEqual;
+        pipeline_desc.rasterizer.cullMode = rhi::CullMode::None;
+        pipeline_desc.label = "grid translucent tiles pipeline";
+
+        rhi::ComPtr<rhi::IRenderPipeline> pipeline{};
+        PPR_RETURN_UNEXPECTED_ON_FAIL(GridPass, device.createRenderPipeline(pipeline_desc, pipeline.writeRef()));
+
+        m_translucent_pipeline_key.emplace(signature);
+        m_translucent_pipeline.emplace();
+        m_translucent_pipeline->m_pipeline = std::move(pipeline);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(GridPass, ensurePipelineRoots_(device, *m_translucent_pipeline));
+
+        return &m_translucent_pipeline.value();
+    }
+
     std::error_code GridPass::ensurePipelineRoots_(rhi::IDevice &device, GridCachedPipeline &pipeline) {
         for (u32 slot = 0u; slot < kTileRingSize; ++slot) {
             if (pipeline.m_slot_roots[slot]) {
@@ -2876,6 +2989,8 @@ namespace pP {
         m_last_used_slot = 0u;
         m_cached_pipeline.reset();
         m_render_pipeline_key.reset();
+        m_translucent_pipeline.reset();
+        m_translucent_pipeline_key.reset();
         m_world.m_terrain_palette.setNull();
         if (m_world.m_texture_inventory and m_world.m_texture_inventory->m_cache) {
             PPR_RETAIN_ERROR_ON_FAIL(GridPass, first_err, m_world.m_texture_inventory->m_cache->shutdown());
@@ -2942,6 +3057,8 @@ namespace pP {
         m_last_used_slot = 0u;
         m_cached_pipeline.reset();
         m_render_pipeline_key.reset();
+        m_translucent_pipeline.reset();
+        m_translucent_pipeline_key.reset();
         m_world.m_terrain_palette.setNull();
         if (m_world.m_texture_inventory) {
             // Device removal and root release are proven; the active world is
@@ -3516,6 +3633,7 @@ namespace pP {
         PPR_RETURN_ERROR_ON_FAIL(GridPass, bindMaterialBuffers_(device, cursor, retained_table));
         PPR_RETURN_ERROR_ON_FAIL(GridPass, bindReceiverLighting_(device, cursor, retained_table, pipeline, slot));
         PPR_RETURN_ERROR_ON_FAIL(GridPass, bindWorldLightField_(cursor));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, bindGridPass_(cursor, 0u));
 
         if (pipeline) {
             auto &owners = pipeline->m_slot_backdrop_owners[slot];
@@ -3739,6 +3857,23 @@ namespace pP {
         return {};
     }
 
+    std::error_code GridPass::bindGridPass_(rhi::ShaderCursor &cursor, const u32 pass) {
+        // CPU mirror of the Slang GridPassSwitch: scalar padding keeps the
+        // ConstantBuffer layout identical to the four-u32 shader struct.
+        struct GridPassSwitch {
+            u32 m_pass{};
+            u32 m_pad0{}, m_pad1{}, m_pad2{};
+        };
+        static_assert(sizeof(GridPassSwitch) == 16u and alignof(GridPassSwitch) == 4u);
+
+        GridPassSwitch sw{};
+        sw.m_pass = pass;
+        rhi::ShaderCursor constants{};
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, cursor["g_grid_pass"].getDereferenced(constants));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, constants.setData(&sw, sizeof(sw)));
+        return {};
+    }
+
     void GridPass::prepareChunkSlotMap_(const bool retained_table) {
         if (not retained_table or not m_chunk_slot_uploaded[m_tile_ring_cursor]) {
             std::array<u32, kGridTileCacheCapacity> slots;
@@ -3913,14 +4048,31 @@ namespace pP {
         m_visibility_prepared = false;
         const auto cached = pipelineFor_(context.m_device, context.m_render_pipeline_key);
         PPR_RETURN_ERROR_ON_FAIL(GridPass, cached ? std::error_code{} : cached.error());
-        PPR_RETURN_ERROR_ON_FAIL(GridPass, encodeTerrainIndirect_(context, **cached));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, encodeTerrainIndirect_(context, **cached, nullptr, 0u, 1u));
+        ++m_draw_commands;
+        return {};
+    }
+
+    std::error_code GridPass::renderTranslucent(const DrawContext &context) {
+        m_surface_retained_table = true;
+        // No optical-blend (translucent) material means the second pass draws
+        // nothing; skip it entirely so flat-tint and opaque-only worlds keep a
+        // single terrain draw.
+        if (std::ranges::none_of(m_world.m_terrain_visuals, [](const GridTerrainVisual &visual) {
+                return (visual.m_surface_flags & kGridSurfaceOpticalBlend) != 0u;
+            })) {
+            return {};
+        }
+        const auto cached = translucentPipelineFor_(context.m_device, context.m_render_pipeline_key);
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, cached ? std::error_code{} : cached.error());
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, encodeTerrainIndirect_(context, **cached, nullptr, 0u, 2u));
         ++m_draw_commands;
         return {};
     }
 
     std::error_code GridPass::encodeTerrainIndirect_(
-        const DrawContext &context, GridCachedPipeline &pipeline, rhi::IQueryPool *const queries,
-        const u32 first_query) {
+        const DrawContext &context, GridCachedPipeline &pipeline, rhi::IQueryPool *const queries, const u32 first_query,
+        const u32 pass) {
         rhi::IShaderObject *const root = pipeline.m_slot_roots[m_tile_ring_cursor].get();
         rhi::ShaderCursor cursor{root};
         GridFrame frame{};
@@ -3948,6 +4100,7 @@ namespace pP {
             GridPass, cursor["g_cell_materials"].setBinding(rhi::Binding(cells, makeFullRange(cells))));
         pipeline.m_slot_atlases[m_tile_ring_cursor] = cells == m_world.m_cell_atlas.get() ? cells : nullptr;
         PPR_RETURN_ERROR_ON_FAIL(GridPass, bindSurfaceBuffers_(context.m_device, cursor, true, &pipeline));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, bindGridPass_(cursor, pass));
 
         rhi::RenderState raster{
             .viewports = {context.m_viewport},
@@ -4808,6 +4961,7 @@ namespace pP {
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass, bindWorldRadiance_(context.m_device, mask_cursor, *pipeline, selected, true));
         PPR_RETURN_ERROR_ON_FAIL(GridPass, bindWorldLightField_(mask_cursor));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, bindGridPass_(mask_cursor, 0u));
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass, mask_cursor["g_cell_materials"].setBinding(
                           rhi::Binding(m_world.m_cell_atlas, makeFullRange(m_world.m_cell_atlas))));
