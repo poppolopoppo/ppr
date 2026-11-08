@@ -60,6 +60,7 @@ StructuredBuffer<uint> g_cell_materials;
 #include "grid_world_radiance.slang"
 #include "grid_background_world.slang"
 #include "grid_screen_contact_types.slang"
+#include "world_light_sample.slang"
 StructuredBuffer<uint> g_chunk_slots;
 // CPU GridTerrainVisual: 96 bytes. Scalar mean components occupy offsets 20/24/28.
 // Texture index here is
@@ -92,6 +93,14 @@ static const uint kSurfaceTextureRepeat = 2u;
 static const uint kSurfaceParticleSolid = 4u;
 static const uint kSurfaceParticleLiquid = 8u;
 StructuredBuffer<TerrainVisual> g_terrain_visuals;
+// Switch selecting the temporal world light field material path (Task 8). Zero
+// keeps the native receiver/world-radiance path; nonzero routes opaque terrain
+// shading through shadeWorldLightSurface.
+struct WorldLightSwitch {
+    uint enabled;
+    uint pad0, pad1, pad2;
+};
+ConstantBuffer<WorldLightSwitch> g_world_light;
 Texture2D<float4> g_boundary_noise;
 // Written before the surface pass; this is never the active color attachment.
 Texture2D<float4> g_backdrop;
@@ -987,6 +996,92 @@ float4 materialSurface(uint material, float2 fine_position, float2 gradient_x,
     return decorateSurface(float4(lerp(background, color, opacity), 1.0), decoration);
 }
 
+// ------------------------------------------------------------------
+// opaque terrain shading from the temporal world light field
+// ------------------------------------------------------------------
+
+// The world light field material path keeps the same cell atlas -> TerrainVisual
+// -> albedo/normal-map sampling, but the incident light is the cascade field's
+// diffuse and specular terms rather than the native receiver/world-radiance
+// coefficients. Linear self-emission is added exactly once; opaque shading has
+// no cut-face incident and no backdrop read.
+float4 shadeWorldLightSurface(
+    uint material, float2 fine_position, float2 gradient_x, float2 gradient_y, float2 decoration,
+    StructuredBuffer<DescriptorHandle<Texture2D<float4>>> textures, SamplerState.Handle sampler) {
+    TerrainVisual visual = g_terrain_visuals[min(material, 65535u)];
+    float4 tint = diagnosticTint(visual.m_color_rgba, 1.0);
+    float period = visual.m_texture_period_m;
+    float2 world = fine_position * g_grid_frame.m_cell_size_m;
+    float2 uv = world / period;
+
+    bool repeat_texture = (visual.m_surface_flags & kSurfaceTextureRepeat) != 0u;
+    TexturePatches patches;
+    if (repeat_texture) {
+        patches.uv0 = frac(uv);
+        patches.uv1 = patches.uv0;
+        patches.uv2 = patches.uv0;
+        patches.weights = float3(1.0, 0.0, 0.0);
+    } else {
+        patches = texturePatches(uv);
+    }
+    // Derivatives belong to the continuous world UV, before lattice/hash/fract.
+    float2 uv_gradient_x = gradient_x / period;
+    float2 uv_gradient_y = gradient_y / period;
+    float4 a0 = nonuniform(textures[visual.m_texture_index]).SampleGrad(sampler, patches.uv0, uv_gradient_x, uv_gradient_y);
+    float4 a1 = float4(0.0), a2 = float4(0.0);
+    if (!repeat_texture) {
+        a1 = nonuniform(textures[visual.m_texture_index]).SampleGrad(sampler, patches.uv1, uv_gradient_x, uv_gradient_y);
+        a2 = nonuniform(textures[visual.m_texture_index]).SampleGrad(sampler, patches.uv2, uv_gradient_x, uv_gradient_y);
+    }
+    float3 weights = patches.weights;
+    float4 albedo = a0 * weights.x + a1 * weights.y + a2 * weights.z;
+    float3 mean = float3(visual.m_filtered_mean_r, visual.m_filtered_mean_g, visual.m_filtered_mean_b);
+    if (!repeat_texture) {
+        albedo.rgb = saturate(mean + (albedo.rgb - mean) * rsqrt(dot(weights, weights)));
+    }
+
+    float3 normal = float3(0.0, 0.0, 1.0);
+    if (visual.m_normal_texture_index != 0xffffffffu) {
+        float3 n0 = decodePatchNormal(nonuniform(textures[visual.m_normal_texture_index]).SampleGrad(
+            sampler, patches.uv0, uv_gradient_x, uv_gradient_y).xyz);
+        float3 n1 = float3(0.0), n2 = float3(0.0);
+        if (!repeat_texture) {
+            n1 = decodePatchNormal(nonuniform(textures[visual.m_normal_texture_index]).SampleGrad(
+                sampler, patches.uv1, uv_gradient_x, uv_gradient_y).xyz);
+            n2 = decodePatchNormal(nonuniform(textures[visual.m_normal_texture_index]).SampleGrad(
+                sampler, patches.uv2, uv_gradient_x, uv_gradient_y).xyz);
+        }
+        float3 decoded = n0 * weights.x + n1 * weights.y + n2 * weights.z;
+        decoded.xy *= visual.m_normal_scale;
+        if (all(isfinite(decoded)) && decoded.z > 0.0 && dot(decoded, decoded) > 1.0e-8) {
+            normal = normalize(decoded);
+        }
+    }
+
+    // Rim treatment darkens reflectance exactly like the native world lobes.
+    float3 reflectance = lerp(tint.rgb * albedo.rgb, float3(0.025), saturate(decoration.x));
+    float3 source = visual.m_emissive_rgb * visual.m_emissive_strength;
+
+    float metallic = saturate(visual.m_metallic);
+    float roughness = saturate(visual.m_roughness);
+    float ior = max(visual.m_ior, 1.0);
+
+    float3 diffuse = worldLightDiffuse(world, normal);
+    // View V=(0,0,1) reflected around the mapped normal; a flat normal has no
+    // in-plane reflection so worldLightSpecular returns zero rather than NaN.
+    float3 reflection = 2.0 * normal.z * normal - float3(0.0, 0.0, 1.0);
+    float3 specular = worldLightSpecular(world, reflection, roughness);
+
+    float ratio = (ior - 1.0) / (ior + 1.0);
+    float3 f0 = lerp(float3(ratio * ratio), reflectance, metallic);
+    float grazing = 1.0 - saturate(normal.z);
+    float grazing2 = grazing * grazing;
+    float3 fresnel = f0 + (1.0 - f0) * (grazing2 * grazing2 * grazing);
+
+    float3 result = (1.0 - metallic) * (1.0 - fresnel) * reflectance * diffuse + fresnel * specular + source;
+    return float4(result, 1.0);
+}
+
 float4 shadeGridReactive(
     GridVertexOutput input,
     StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
@@ -1104,7 +1199,10 @@ float4 shadeGridReactive(
         reactive_coverage = 1;
 
     float4 surface;
-    if (g_grid_world_radiance.enabled!=0u && g_grid_world_radiance.spacing>1u &&
+    if (g_world_light.enabled != 0u) {
+        surface = shadeWorldLightSurface(
+            material, input.fine_position, gradient_x, gradient_y, decoration, g_textures, g_sampler);
+    } else if (g_grid_world_radiance.enabled!=0u && g_grid_world_radiance.spacing>1u &&
         (input.flags&1u)!=0u && (g_grid_frame.m_surface_mode&1u)!=0u &&
         (visual.m_surface_flags&kSurfaceOpticalBlend)==0u && stencilHasNoExposedFace(stencil)) {
         surface=float4(visual.m_emissive_rgb*visual.m_emissive_strength,1);

@@ -6,6 +6,7 @@ import :renderer.types;
 import :renderer.lighting;
 import :renderer.lighting_pass;
 import :renderer.world_radiance;
+import :renderer.world_light_field;
 import :renderer.frame_fence;
 import :renderer.gpu_caches;
 import :scene.camera;
@@ -577,6 +578,11 @@ export namespace pP {
         [[nodiscard]] std::error_code setWorldRadianceLighting(
             std::shared_ptr<const lighting::WorldRadianceGeneration> generation);
 
+        // Borrowed temporal world light field view (Task 8): the current radiance
+        // buffer and CPU constants are bound each frame for the opaque terrain
+        // path. The field owner outlives every view; pass an empty view to clear.
+        [[nodiscard]] std::error_code setWorldLightField(const lighting::WorldLightFieldView &view);
+
         [[nodiscard]] GridWorldIdentity activeWorldIdentity() const noexcept {
             return {m_world.m_job_id, m_world.m_world_generation, m_world.m_content_fingerprint};
         }
@@ -661,6 +667,7 @@ export namespace pP {
         [[nodiscard]] std::error_code bindBackgroundLighting_(
             rhi::IDevice &device, rhi::ShaderCursor &cursor, GridCachedPipeline &pipeline, u32 slot,
             const CameraSnapshot &camera, int2 extent);
+        [[nodiscard]] std::error_code bindWorldLightField_(rhi::ShaderCursor &cursor);
 
 
         // ------------------------------------------------------------------
@@ -948,6 +955,8 @@ export namespace pP {
 
         rhi::ComPtr<rhi::IBuffer> m_contour_points{};
         rhi::ComPtr<rhi::IBuffer> m_contour_cases{};
+        // Dummy UAV for the world light field radiance binding when no field is set.
+        rhi::ComPtr<rhi::IBuffer> m_world_light_dummy{};
         std::array<rhi::ComPtr<rhi::IBuffer>, kTileRingSize> m_chunk_slot_buffers{};
         std::array<void *, kTileRingSize> m_chunk_slot_mapped{};
         std::array<bool, kTileRingSize> m_chunk_slot_uploaded{};
@@ -1146,6 +1155,7 @@ export namespace pP {
             Array<GridTileSubmission> m_submitted_tiles{};
         };
         WorldResources m_world{};
+        lighting::WorldLightFieldView m_world_light_view{};
         std::unique_ptr<WorldResources> m_candidate_world{};
         std::unique_ptr<WorldResources> m_retiring_world{};
 

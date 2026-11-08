@@ -915,6 +915,13 @@ namespace pP {
         return {};
     }
 
+    std::error_code GridPass::setWorldLightField(const lighting::WorldLightFieldView &view) {
+        // Borrowed view; the field owner outlives every view. An empty view
+        // (null radiance) clears the binding and restores the existing path.
+        m_world_light_view = view;
+        return {};
+    }
+
     std::error_code GridPass::setTerrainReceiverLighting(
         std::shared_ptr<const lighting::TerrainReceiverGpuGeneration> generation) {
         if (not generation) {
@@ -2893,6 +2900,7 @@ namespace pP {
         m_world.m_cell_dummy.setNull();
         m_contour_points.setNull();
         m_contour_cases.setNull();
+        m_world_light_dummy.setNull();
         m_chunk_slot_buffers = {};
         m_chunk_slot_mapped = {};
         m_chunk_slot_uploaded.fill(false);
@@ -2967,6 +2975,7 @@ namespace pP {
         m_world.m_cell_dummy.setNull();
         m_contour_points.setNull();
         m_contour_cases.setNull();
+        m_world_light_dummy.setNull();
         m_chunk_slot_buffers = {};
         m_chunk_slot_mapped = {};
         m_chunk_slot_uploaded.fill(false);
@@ -3234,6 +3243,21 @@ namespace pP {
         m_contour_cases = std::move(cases);
         m_chunk_slot_buffers = std::move(maps);
         m_chunk_slot_mapped = mapped;
+
+        // Dummy UAV for the world light field radiance binding when no field is
+        // set. Matches the field radiance buffer's element stride and UAV state.
+        if (not m_world_light_dummy) {
+            rhi::BufferDesc dummy{};
+            dummy.size = 8u;
+            dummy.elementSize = 8u;
+            dummy.memoryType = rhi::MemoryType::DeviceLocal;
+            dummy.usage = static_cast<rhi::BufferUsage>(
+                static_cast<u32>(rhi::BufferUsage::ShaderResource) |
+                static_cast<u32>(rhi::BufferUsage::UnorderedAccess));
+            dummy.defaultState = rhi::ResourceState::UnorderedAccess;
+            dummy.label = "grid world light dummy";
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, device.createBuffer(dummy, nullptr, m_world_light_dummy.writeRef()));
+        }
         return {};
     }
 
@@ -3491,6 +3515,7 @@ namespace pP {
 
         PPR_RETURN_ERROR_ON_FAIL(GridPass, bindMaterialBuffers_(device, cursor, retained_table));
         PPR_RETURN_ERROR_ON_FAIL(GridPass, bindReceiverLighting_(device, cursor, retained_table, pipeline, slot));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, bindWorldLightField_(cursor));
 
         if (pipeline) {
             auto &owners = pipeline->m_slot_backdrop_owners[slot];
@@ -3681,6 +3706,35 @@ namespace pP {
                 leases.push_back(generation);
             }
         }
+
+        return {};
+    }
+
+    std::error_code GridPass::bindWorldLightField_(rhi::ShaderCursor &cursor) {
+        // CPU mirror of the Slang WorldLightSwitch: scalar padding keeps the
+        // ConstantBuffer layout identical to the four-u32 shader struct.
+        struct WorldLightSwitch {
+            u32 m_enabled{};
+            u32 m_pad0{}, m_pad1{}, m_pad2{};
+        };
+        static_assert(sizeof(WorldLightSwitch) == 16u and alignof(WorldLightSwitch) == 4u);
+
+        const bool enabled = m_world_light_view.m_radiance != nullptr;
+
+        WorldLightSwitch sw{};
+        sw.m_enabled = enabled ? 1u : 0u;
+        rhi::ShaderCursor constants{};
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, cursor["g_world_light"].getDereferenced(constants));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, constants.setData(&sw, sizeof(sw)));
+
+        static const lighting::WorldLightFieldConstants kZeroConstants{};
+        const auto *const field_constants = enabled ? m_world_light_view.m_constants : &kZeroConstants;
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, cursor["g_world_light_field"].getDereferenced(constants));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, constants.setData(field_constants, sizeof(*field_constants)));
+
+        rhi::IBuffer *const radiance = enabled ? m_world_light_view.m_radiance : m_world_light_dummy.get();
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, cursor["g_world_light_radiance_cur"].setBinding(rhi::Binding(radiance, makeFullRange(radiance))));
 
         return {};
     }
@@ -4753,6 +4807,7 @@ namespace pP {
         PPR_RETURN_ERROR_ON_FAIL(GridPass, bindMaterialBuffers_(context.m_device, mask_cursor, true));
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass, bindWorldRadiance_(context.m_device, mask_cursor, *pipeline, selected, true));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, bindWorldLightField_(mask_cursor));
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass, mask_cursor["g_cell_materials"].setBinding(
                           rhi::Binding(m_world.m_cell_atlas, makeFullRange(m_world.m_cell_atlas))));

@@ -1,11 +1,13 @@
 module;
 #include "pP/UnitTest.h"
 #include <cstring>
+#include <slang.h>
 
 module engine.tests.app;
 
 import engine.core;
 import engine.app;
+import engine.image;
 import engine.math;
 import engine.rhi;
 import engine.shader;
@@ -734,6 +736,8 @@ namespace pP::tests::detail {
             FrameFence m_fence;
             lighting::WorldLightSourceGpu m_source;
             lighting::WorldLightField m_field;
+            GridPass m_grid{};
+            bool m_grid_ready{};
 
             void initialize(const u32 width, const u32 height) {
                 PPR_TEST_ASSERT(not m_shaders->initialize());
@@ -870,7 +874,21 @@ namespace pP::tests::detail {
                 }
             }
 
+            // Lazy GridPass for the shading test; the field-only tests never pay
+            // for the raster pipeline.
+            void initializeGrid() {
+                if (m_grid_ready) {
+                    return;
+                }
+                PPR_TEST_ASSERT(not m_grid.initialize(*m_rhi, *m_shaders, std::filesystem::current_path()));
+                m_grid_ready = true;
+            }
+
             void shutdown() {
+                if (m_grid_ready) {
+                    PPR_TEST_ASSERT(not m_grid.shutdown());
+                    m_grid_ready = false;
+                }
                 if (m_queue and make_error_code(m_queue->waitOnHost()))
                     hal::fatalExit("world-light-field-test-quiescence-unknown");
 
@@ -1223,6 +1241,269 @@ namespace pP::tests::detail {
 
             fixture.shutdown();
         };
+
+        PPR_UNIT_TEST (grid_shading_uses_field) {
+            constexpr u32 width = 64u;
+            constexpr u32 height = 64u;
+
+            Fixture fixture;
+            fixture.initialize(width, height);
+            auto &field = fixture.m_field;
+            auto &device = fixture.m_rhi->getDevice();
+
+            const auto plan = lighting::planWorldLight({.m_width = width, .m_height = height, .m_cell_metres = 1.0f});
+            PPR_TEST_ASSERT(plan.has_value());
+
+            // Uniform field: every radiance sample carries the same white radiance
+            // and unit transmittance, so the diffuse term is isotropic and the
+            // specular term equals the field value for any in-plane reflection.
+            std::vector<RadianceHalf> uniform(plan->m_radiance_samples, RadianceHalf{});
+            for (auto &sample: uniform) {
+                sample = RadianceHalf{
+                    .m_r = floatToHalf(10.0f),
+                    .m_g = floatToHalf(10.0f),
+                    .m_b = floatToHalf(10.0f),
+                    .m_t = floatToHalf(1.0f)};
+            }
+            fixture.write(field.view().m_radiance, uniform);
+
+            fixture.initializeGrid();
+            auto &grid = fixture.m_grid;
+
+            // Two materials: id 1 is flat, id 2 has a +X-tilted normal map. Both
+            // share white albedo, zero emission, unit roughness and IOR=3 so the
+            // field's specular term separates them.
+            GridStagedFrame stage{};
+            stage.m_full_refresh = stage.m_reset_caches = stage.m_has_catalog = true;
+            stage.m_cell_size_m = 1.0f;
+            stage.m_boundary_material_id = 1u;
+            stage.m_content_fingerprint = 13u;
+
+            GridTerrainVisual flat{};
+            flat.m_material_id = 1u;
+            flat.m_color_rgba = 0xffffffffu;
+            flat.m_texture_index = 0u;
+            flat.m_transport_model = kGridTransportOpaqueV1;
+            flat.m_metallic = 0.0f;
+            flat.m_roughness = 0.0f;
+            flat.m_ior = 3.0f;
+            stage.m_terrain_visuals.push_back(flat);
+
+            GridTerrainVisual tilted = flat;
+            tilted.m_material_id = 2u;
+            tilted.m_normal_texture_index = 1u;
+            stage.m_terrain_visuals.push_back(tilted);
+
+            // White albedo (image 0) and a +X-tilted normal map (image 1):
+            // RGBA8 (0.75, 0.5, 1.0, 1.0) decodes to (0.5, 0, 1) -> +X tilt.
+            const auto image = [](const std::array<std::byte, 4u> bytes) {
+                mem::UniqueBuffer storage = mem::UniqueBuffer::allocate(bytes.size());
+                PPR_TEST_ASSERT(not storage.materialize());
+                const auto writable = storage.getMutableData();
+                PPR_TEST_ASSERT(writable.has_value());
+                std::ranges::copy(bytes, writable->begin());
+
+                mem::SharedBuffer frozen;
+                PPR_TEST_ASSERT(not storage.moveToShared(&frozen));
+
+                image::ImageAsset result{};
+                result.m_width = result.m_height = 1u;
+                result.m_storage = frozen;
+                result.m_subresources.push_back({frozen.subspan(0u, 4u), 4u, 4u});
+                return result;
+            };
+            stage.m_terrain_images.push_back(image({std::byte{255}, std::byte{255}, std::byte{255}, std::byte{255}}));
+            stage.m_terrain_images.push_back(image({std::byte{191}, std::byte{128}, std::byte{255}, std::byte{255}}));
+
+            for (u32 layer = 0u; layer < 4u; ++layer) {
+                stage.m_background_layers[layer].m_texture_index = 0u;
+                stage.m_background_layers[layer].m_order = layer;
+            }
+
+            // One chunk with two cells: material 1 at (2,2), material 2 at (6,2).
+            stage.m_tiles.push_back({.m_dirty_mask = 1u, .m_tile_range = {0, 0, 128, 128}, .m_chunk_id = 0u});
+            GridStagedUpload upload{};
+            upload.m_payload.m_rect[2] = upload.m_payload.m_rect[3] = 128.0f;
+            upload.m_cell_materials.assign(GridPass::kCellsPerChunk, 0u);
+            upload.m_cell_materials[2u * 128u + 2u] = 1u;
+            upload.m_cell_materials[2u * 128u + 6u] = 2u;
+            stage.m_uploads.push_back(std::move(upload));
+
+            PPR_TEST_ASSERT(not grid.stageWorldCandidate(7u, 11u, stage));
+            bool candidate_ready = false;
+            for (u32 advance = 0u; advance < 8u; ++advance) {
+                const auto ready = grid.advanceWorldCandidate(device, fixture.m_fence.completed());
+                PPR_TEST_ASSERT(ready.has_value());
+                if (*ready) {
+                    candidate_ready = true;
+                    break;
+                }
+            }
+            PPR_TEST_ASSERT(candidate_ready);
+            PPR_TEST_ASSERT(not grid.activateWorldCandidate(7u, 11u, 13u));
+
+            // Orthographic camera viewing the 8x8-cell region around the two cells.
+            constexpr u32 target_edge = 128u;
+            Camera camera{ECameraProjection::orthographic};
+            CameraModel model{};
+            model.m_camera_mode = ECameraProjection::orthographic;
+            model.m_origin = float3{0.0f, 0.0f, -0.5f};
+            model.m_ortho_scale = 1.0f / 16.0f;
+            camera.updateModel(
+                TimeSpan{}, model,
+                Viewport{PixelRect{int2{0, 0}, int2{int(target_edge), int(target_edge)}}, ViewportLayout{}});
+            const auto snapshot = camera.getSnapshot();
+
+            // HDR render target.
+            rhi::TextureDesc target_desc{};
+            target_desc.type = rhi::TextureType::Texture2D;
+            target_desc.size = {.width = target_edge, .height = target_edge, .depth = 1u};
+            target_desc.format = rhi::Format::RGBA32Float;
+            target_desc.memoryType = rhi::MemoryType::DeviceLocal;
+            target_desc.usage = static_cast<rhi::TextureUsage>(
+                static_cast<u32>(rhi::TextureUsage::RenderTarget) | static_cast<u32>(rhi::TextureUsage::CopySource));
+            target_desc.defaultState = rhi::ResourceState::RenderTarget;
+            rhi::ComPtr<rhi::ITexture> target;
+            rhi::ComPtr<rhi::ITextureView> target_view;
+            PPR_TEST_ASSERT(not make_error_code(device.createTexture(target_desc, nullptr, target.writeRef())));
+            PPR_TEST_ASSERT(not make_error_code(target->getDefaultView(target_view.writeRef())));
+
+            const auto viewport = rhi::Viewport::fromSize(float(target_edge), float(target_edge));
+            const auto scissor = rhi::ScissorRect::fromSize(target_edge, target_edge);
+
+            const auto render = [&](const lighting::WorldLightFieldView view) {
+                PPR_TEST_ASSERT(not grid.setWorldLightField(view));
+                PPR_TEST_ASSERT(not grid.update(
+                    TimeSpan{}, snapshot, false, GridPass::ReceiverContinuation::nearest,
+                    GridPass::ReceiverResponse::flat, GridPass::BackgroundResponse::unlit));
+
+                rhi::ComPtr<rhi::ICommandEncoder> encoder;
+                PPR_TEST_ASSERT(not make_error_code(fixture.m_queue->createCommandEncoder(encoder.writeRef())));
+                const PreRenderContext pre{device, *encoder, fixture.m_fence.completed(), {}};
+                PPR_TEST_ASSERT(not grid.prepareGpuVisibility(pre));
+
+                encoder->setTextureState(
+                    target, rhi::SubresourceRange{.layer = 0u, .layerCount = 1u, .mip = 0u, .mipCount = 1u},
+                    rhi::ResourceState::RenderTarget);
+                rhi::RenderPassColorAttachment attachment{};
+                attachment.view = target_view;
+                attachment.clearValue[0] = attachment.clearValue[1] = attachment.clearValue[2] =
+                    attachment.clearValue[3] = 0.0f;
+                rhi::RenderPassDesc pass_desc{};
+                pass_desc.colorAttachments = &attachment;
+                pass_desc.colorAttachmentCount = 1u;
+                auto *const pass = encoder->beginRenderPass(pass_desc);
+                PPR_TEST_ASSERT(pass != nullptr);
+                {
+                    PPR_DEFER {
+                        pass->end();
+                    };
+                    RenderPipelineSignature signature{};
+                    signature.m_color_formats[0] = rhi::Format::RGBA32Float;
+                    signature.m_color_format_count = 1u;
+                    const RenderPipelineKey key{signature};
+                    const DrawContext draw{
+                        device, *pass, key, viewport, scissor, int2{int(target_edge), int(target_edge)},
+                        fixture.m_fence.completed(), {}};
+                    PPR_TEST_ASSERT(not grid.renderGpuIndirect(draw));
+                }
+
+                rhi::ComPtr<rhi::ICommandBuffer> commands;
+                PPR_TEST_ASSERT(not make_error_code(encoder->finish(commands.writeRef())));
+                rhi::ICommandBuffer *pointer = commands.get();
+                rhi::IFence *signal = fixture.m_fence.fence();
+                const auto value = fixture.m_fence.nextValue();
+                const u64 raw_value = value;
+                rhi::SubmitDesc submit{};
+                submit.commandBuffers = &pointer;
+                submit.commandBufferCount = 1u;
+                submit.signalFences = &signal;
+                submit.signalFenceValues = &raw_value;
+                submit.signalFenceCount = 1u;
+                PPR_TEST_ASSERT(not make_error_code(fixture.m_queue->submit(submit)));
+                fixture.m_fence.commitSubmitted(value);
+                grid.notifyFrameSubmitted(value);
+                PPR_TEST_ASSERT(not fixture.m_fence.waitFor(value));
+            };
+
+            const auto readback = [&]() {
+                shader::ComPtr<ISlangBlob> blob;
+                rhi::SubresourceLayout layout{};
+                PPR_TEST_ASSERT(not make_error_code(device.readTexture(target, 0u, 0u, blob.writeRef(), &layout)));
+                const auto *const source = static_cast<const std::byte *>(blob->getBufferPointer());
+
+                std::vector<std::array<float, 4u>> pixels(std::size_t(target_edge) * target_edge);
+                for (u32 y = 0u; y < target_edge; ++y) {
+                    for (u32 x = 0u; x < target_edge; ++x) {
+                        std::array<float, 4u> value{};
+                        std::memcpy(value.data(), source + y * layout.rowPitch + x * sizeof(value), sizeof(value));
+                        pixels[y * target_edge + x] = value;
+                    }
+                }
+                return pixels;
+            };
+
+            // Lit pass, then read the indirect draw arguments (one quad per
+            // 128² chunk) and the HDR colour.
+            render(field.view());
+            {
+                const auto [args_buffer, ids_buffer] = grid.visibilityBuffersForTest();
+                PPR_TEST_ASSERT(args_buffer != nullptr and ids_buffer != nullptr);
+                rhi::IndirectDrawArguments args{};
+                PPR_TEST_ASSERT(not make_error_code(device.readBuffer(args_buffer, 0u, sizeof(args), &args)));
+                PPR_TEST_ASSERT(args.vertexCountPerInstance == GridPass::kGridTileVertexCount);
+                PPR_TEST_ASSERT(args.instanceCount == 1u);
+                PPR_TEST_ASSERT(args.startVertexLocation == 0u and args.startInstanceLocation == 0u);
+            }
+            const auto lit = readback();
+
+            // Unlit pass: an empty view selects the existing path.
+            render({});
+            const auto unlit = readback();
+
+            // Collect the distinct non-zero colours (with a small tolerance for
+            // any per-pixel interpolation noise), proving finiteness.
+            const auto collect = [](const std::vector<std::array<float, 4u>> &pixels) {
+                std::vector<std::array<float, 3u>> colours;
+                for (const auto &pixel: pixels) {
+                    PPR_TEST_ASSERT(std::isfinite(pixel[0]) and std::isfinite(pixel[1]) and std::isfinite(pixel[2]));
+                    if (pixel[0] == 0.0f and pixel[1] == 0.0f and pixel[2] == 0.0f) {
+                        continue;
+                    }
+                    const std::array<float, 3u> colour{pixel[0], pixel[1], pixel[2]};
+                    bool seen = false;
+                    for (const auto &other: colours) {
+                        if (std::abs(colour[0] - other[0]) < 1e-3f and
+                            std::abs(colour[1] - other[1]) < 1e-3f and
+                            std::abs(colour[2] - other[2]) < 1e-3f) {
+                            seen = true;
+                            break;
+                        }
+                    }
+                    if (not seen) {
+                        colours.push_back(colour);
+                    }
+                }
+                return colours;
+            };
+
+            const auto lit_colours = collect(lit);
+            const auto unlit_colours = collect(unlit);
+
+            // The lit field is finite, non-zero, and the two cells (flat vs
+            // normal-mapped) shade differently.
+            PPR_TEST_ASSERT(not lit_colours.empty());
+            PPR_TEST_ASSERT(lit_colours.size() >= 2u);
+
+            // Lit differs from unlit.
+            PPR_TEST_ASSERT(lit_colours != unlit_colours);
+
+            // Release the test-owned target before the RHI teardown.
+            target_view.setNull();
+            target.setNull();
+
+            fixture.shutdown();
+        };
     }
 }
 
@@ -1254,6 +1535,7 @@ namespace pP::tests {
             detail::WorldLightFieldGpu::composite_matches_cpu_reference,
             detail::WorldLightFieldGpu::diffuse_plus_z_isotropic_and_perturbed_finite,
             detail::WorldLightFieldGpu::specular_vertical_reflection_and_roughness_finite,
+            detail::WorldLightFieldGpu::grid_shading_uses_field,
         });
     };
 
