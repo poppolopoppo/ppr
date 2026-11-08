@@ -255,7 +255,8 @@ namespace pP::tests::detail {
                 const auto plan = lighting::planWorldLight(
                     {.m_width = width, .m_height = height, .m_cell_metres = 0.5f});
                 PPR_TEST_ASSERT(plan.has_value());
-                const lighting::WorldLightMaterial materials[] = {{.m_kind = 1u}};
+                const lighting::WorldLightMaterial materials[] = {
+                    {.m_kind = 1u}, {.m_kind = 2u, .m_sigma = {5.0f, 0.0f, 0.0f}, .m_emission = {0.0f, 0.0f, 0.0f}}};
                 PPR_TEST_ASSERT(
                     not m_source.initialize(*m_rhi, *m_shaders, *plan, materials, std::filesystem::current_path()));
             }
@@ -341,10 +342,18 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not source.applyUpdate({.m_chunks = {&chunk_update, 1u}, .m_revision = 2u}));
             PPR_TEST_ASSERT(not oracle->applyUpdate({.m_chunks = {&chunk_update, 1u}, .m_revision = 2u}));
 
-            // One opaque particle at cell (4,4) with coverage 1.
-            const lighting::WorldLightOverlayCell particle{.m_cell = 4u * width + 4u, .m_coverage = 1.0f};
-            PPR_TEST_ASSERT(not source.applyUpdate({.m_overlay = {&particle, 1u}, .m_revision = 3u}));
-            PPR_TEST_ASSERT(not oracle->applyUpdate({.m_overlay = {&particle, 1u}, .m_revision = 3u}));
+            // One opaque particle (palette material 0, kind 1) at cell (4,4), and
+            // one participating particle (palette material 1, kind 2) at cell (5,5).
+            const lighting::WorldLightMatterParticle particle{
+                .m_cell = 4u * width + 4u, .m_fill = 1.0f, .m_material = 0u};
+            const lighting::WorldLightMatterParticle emitter{
+                .m_cell = 5u * width + 5u, .m_fill = 1.0f, .m_material = 1u};
+            const lighting::WorldLightMatterParticle particles[] = {particle, emitter};
+            PPR_TEST_ASSERT(not source.applyUpdate({.m_particles = particles, .m_revision = 3u}));
+            const lighting::WorldLightOverlayCell oracle_cells[] = {
+                {.m_cell = 4u * width + 4u, .m_coverage = 1.0f},
+                {.m_cell = 5u * width + 5u, .m_sigma = {5.0f, 0.0f, 0.0f}}};
+            PPR_TEST_ASSERT(not oracle->applyUpdate({.m_overlay = oracle_cells, .m_revision = 3u}));
 
             {
                 rhi::ComPtr<rhi::ICommandEncoder> encoder;
@@ -353,16 +362,19 @@ namespace pP::tests::detail {
                 fixture.submit(*encoder);
             }
 
-            // Cell ids: id 1 at (0,0), vacuum elsewhere.
+            // Cell ids: id 1 at (0,0); untouched cells (far from the chunk) stay vacuum.
             const auto ids = fixture.read<u32>(source.cellIds());
             PPR_TEST_ASSERT(ids.size() == u64{width} * height);
             PPR_TEST_ASSERT(ids[0] == 1u);
             PPR_TEST_ASSERT(ids[1] == 0u);
+            PPR_TEST_ASSERT(ids[200u * width + 200u] == 0u);
 
-            // Overlay: coverage 1 at (4,4).
+            // Overlay: coverage 1 at (4,4), sigma 5 at (5,5); untouched cells empty.
             const auto overlay = fixture.read<OverlayRow>(source.overlay());
             PPR_TEST_ASSERT(overlay[4u * width + 4u].coverage == 1.0f);
+            PPR_TEST_ASSERT(overlay[5u * width + 5u].sigma[0] == 5.0f);
             PPR_TEST_ASSERT(overlay[0].coverage == 0.0f);
+            PPR_TEST_ASSERT(overlay[200u * width + 200u].coverage == 0.0f);
 
             // Occupancy: both (0,0) and (4,4) live in block (0,0); match the CPU oracle.
             const auto occupancy = fixture.read<u32>(source.occupancy());
@@ -393,6 +405,109 @@ namespace pP::tests::detail {
 
             fixture.shutdown();
         };
+
+        PPR_UNIT_TEST (gpu_source_over_capacity_update_preserves_state) {
+            constexpr u32 width = 256u;
+            constexpr u32 height = 256u;
+
+            Fixture fixture;
+            fixture.initialize(width, height);
+            auto &source = fixture.m_source;
+
+            std::vector<u16> chunk(128u * 128u, 0u);
+            chunk[0] = 1u;
+            const lighting::WorldLightChunkUpdate chunk_update{.m_chunk_id = 0u, .m_cell_ids = chunk};
+            PPR_TEST_ASSERT(not source.applyUpdate({.m_chunks = {&chunk_update, 1u}, .m_revision = 2u}));
+
+            const lighting::WorldLightDirtyRect dirty = source.dirtyRect();
+
+            // More particles than cells is rejected before any mutation.
+            std::vector<lighting::WorldLightMatterParticle> particles(u64{width} * height + 1u);
+            PPR_TEST_ASSERT(
+                source.applyUpdate({.m_particles = particles, .m_revision = 9u}) == std::errc::value_too_large);
+
+            PPR_TEST_ASSERT(source.revision() == 2u);
+            PPR_TEST_ASSERT(source.dirtyRect().m_min_x == dirty.m_min_x);
+            PPR_TEST_ASSERT(source.dirtyRect().m_min_y == dirty.m_min_y);
+            PPR_TEST_ASSERT(source.dirtyRect().m_max_x == dirty.m_max_x);
+            PPR_TEST_ASSERT(source.dirtyRect().m_max_y == dirty.m_max_y);
+
+            fixture.shutdown();
+        };
+
+        PPR_UNIT_TEST (gpu_source_second_update_replaces_pending_particles) {
+            constexpr u32 width = 256u;
+            constexpr u32 height = 256u;
+
+            Fixture fixture;
+            fixture.initialize(width, height);
+            auto &source = fixture.m_source;
+
+            // Two updates touch the same cell before one encode: the committed
+            // particle set of the second replaces the first, so the cell holds
+            // fill 0.5, not an accumulated 1.5.
+            const lighting::WorldLightMatterParticle first{.m_cell = 4u * width + 4u, .m_fill = 1.0f, .m_material = 0u};
+            PPR_TEST_ASSERT(not source.applyUpdate({.m_particles = {&first, 1u}, .m_revision = 2u}));
+
+            const lighting::WorldLightMatterParticle second{
+                .m_cell = 4u * width + 4u, .m_fill = 0.5f, .m_material = 0u};
+            PPR_TEST_ASSERT(not source.applyUpdate({.m_particles = {&second, 1u}, .m_revision = 3u}));
+
+            {
+                rhi::ComPtr<rhi::ICommandEncoder> encoder;
+                PPR_TEST_ASSERT(not make_error_code(fixture.m_queue->createCommandEncoder(encoder.writeRef())));
+                PPR_TEST_ASSERT(not source.encode(*encoder));
+                fixture.submit(*encoder);
+            }
+
+            const auto overlay = fixture.read<OverlayRow>(source.overlay());
+            PPR_TEST_ASSERT(overlay[4u * width + 4u].coverage == 0.5f);
+            PPR_TEST_ASSERT(source.revision() == 3u);
+
+            fixture.shutdown();
+        };
+
+        PPR_UNIT_TEST (gpu_source_multiword_occupancy) {
+            constexpr u32 width = 512u;
+            constexpr u32 height = 64u;
+
+            Fixture fixture;
+            fixture.initialize(width, height);
+            auto &source = fixture.m_source;
+
+            const auto plan = lighting::planWorldLight({.m_width = width, .m_height = height, .m_cell_metres = 0.5f});
+            PPR_TEST_ASSERT(plan.has_value());
+            auto oracle = lighting::WorldLightSource::create(*plan, {});
+            PPR_TEST_ASSERT(oracle.has_value());
+
+            // Chunk 2 (chunk_x=2) with id 1 at local (0,0) -> global cell (256,0),
+            // block (32,0): the first bit of the second occupancy word.
+            std::vector<u16> chunk(128u * 128u, 0u);
+            chunk[0] = 1u;
+            const lighting::WorldLightChunkUpdate chunk_update{.m_chunk_id = 2u, .m_cell_ids = chunk};
+            PPR_TEST_ASSERT(not source.applyUpdate({.m_chunks = {&chunk_update, 1u}, .m_revision = 1u}));
+            PPR_TEST_ASSERT(not oracle->applyUpdate({.m_chunks = {&chunk_update, 1u}, .m_revision = 1u}));
+
+            {
+                rhi::ComPtr<rhi::ICommandEncoder> encoder;
+                PPR_TEST_ASSERT(not make_error_code(fixture.m_queue->createCommandEncoder(encoder.writeRef())));
+                PPR_TEST_ASSERT(not source.encode(*encoder));
+                fixture.submit(*encoder);
+            }
+
+            // 512x64 -> 64x8 blocks, words_per_row = 2, so 16 occupancy words.
+            const auto occupancy = fixture.read<u32>(source.occupancy());
+            PPR_TEST_ASSERT(occupancy.size() == 16u);
+            PPR_TEST_ASSERT(occupancy[0] == 0u);
+            PPR_TEST_ASSERT((occupancy[1] & 1u) == 1u);
+            for (u32 block = 0u; block < 8u; ++block) {
+                for (u32 word = 0u; word < 2u; ++word) {
+                    PPR_TEST_ASSERT(occupancy[block * 2u + word] == oracle->occupancyWord(block, word));
+                }
+            }
+
+            fixture.shutdown();
+        };
     }
 }
 
@@ -412,6 +527,9 @@ namespace pP::tests {
             detail::WorldLightFieldTests::source_derives_occupancy_word_for_traversal,
             detail::WorldLightFieldTests::source_overlay_occupies_and_clears_occupancy,
             detail::WorldLightGpu::gpu_source_matter_overlay,
+            detail::WorldLightGpu::gpu_source_over_capacity_update_preserves_state,
+            detail::WorldLightGpu::gpu_source_second_update_replaces_pending_particles,
+            detail::WorldLightGpu::gpu_source_multiword_occupancy,
         });
     };
 

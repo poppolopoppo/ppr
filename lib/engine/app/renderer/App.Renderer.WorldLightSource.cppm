@@ -37,11 +37,22 @@ export namespace pP::lighting {
         std::array<float, 3> m_emission{};
     };
 
-    // A committed world/overlay/sky edit. m_revision is the producer's source
-    // revision; the source adopts it only when the edit changes something.
+    // One raw Matter particle for the dense GPU scatter: an absolute native cell,
+    // a fill fraction and a global palette material id. The GPU scatters these
+    // directly (no host sort/unique), accumulating coverage and fill-weighted
+    // sigma/emission into the dense overlay.
+    struct WorldLightMatterParticle {
+        u32 m_cell{};
+        float m_fill{};
+        u32 m_material{};
+    };
+
+    // A committed world/overlay/particle/sky edit. m_revision is the producer's
+    // source revision; the source adopts it only when the edit changes something.
     struct WorldLightSourceUpdate {
         std::span<const WorldLightChunkUpdate> m_chunks{};
         std::span<const WorldLightOverlayCell> m_overlay{};
+        std::span<const WorldLightMatterParticle> m_particles{};
         u64 m_revision{};
         i32 m_sky_hour{-1};
         std::array<float, 3> m_sky{};

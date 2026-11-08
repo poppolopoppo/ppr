@@ -26,27 +26,18 @@ namespace pP::lighting {
         inline constexpr u64 kChunkCellCount = u64{kChunkEdge} * kChunkEdge;
         inline constexpr u32 kOccupancyBlockEdge = 8u;
         inline constexpr u32 kNumthreads = 64u;
-        inline constexpr u32 kMaxOverlayRecords = 65536u;
+        inline constexpr u32 kOverlayStride = 7u;
 
-        // Dense overlay row as stored on the device: per-cell coverage plus
-        // per-unit sigma/emission. No redundant cell index; the row's offset in
-        // the buffer is the cell index.
-        struct GpuOverlayRow {
-            float m_coverage{};
-            std::array<float, 3> m_sigma{};
-            std::array<float, 3> m_emission{};
-        };
-        static_assert(sizeof(GpuOverlayRow) == 28u and alignof(GpuOverlayRow) == 4u);
-        static_assert(std::is_standard_layout_v<GpuOverlayRow> and std::is_trivially_copyable_v<GpuOverlayRow>);
-
-        // The CPU WorldLightOverlayCell already matches the Slang particle record
-        // field-for-field (32 bytes); re-verify rather than re-declare.
-        static_assert(sizeof(WorldLightOverlayCell) == 32u and alignof(WorldLightOverlayCell) == 4u);
+        static_assert(sizeof(WorldLightMatterParticle) == 12u and alignof(WorldLightMatterParticle) == 4u);
         static_assert(
-            std::is_standard_layout_v<WorldLightOverlayCell> and std::is_trivially_copyable_v<WorldLightOverlayCell>);
-        static_assert(PPR_OFFSETOF(WorldLightOverlayCell, m_coverage) == 4u);
-        static_assert(PPR_OFFSETOF(WorldLightOverlayCell, m_sigma) == 8u);
-        static_assert(PPR_OFFSETOF(WorldLightOverlayCell, m_emission) == 20u);
+            std::is_standard_layout_v<WorldLightMatterParticle> and
+            std::is_trivially_copyable_v<WorldLightMatterParticle>);
+        static_assert(PPR_OFFSETOF(WorldLightMatterParticle, m_fill) == 4u);
+        static_assert(PPR_OFFSETOF(WorldLightMatterParticle, m_material) == 8u);
+
+        static_assert(sizeof(WorldLightMaterial) == 40u and alignof(WorldLightMaterial) == 4u);
+        static_assert(PPR_OFFSETOF(WorldLightMaterial, m_sigma) == 16u);
+        static_assert(PPR_OFFSETOF(WorldLightMaterial, m_emission) == 28u);
 
         static_assert(sizeof(WorldLightSourceConstants) == 32u and alignof(WorldLightSourceConstants) == 4u);
         static_assert(PPR_OFFSETOF(WorldLightSourceConstants, m_has_overlay) == 20u);
@@ -68,12 +59,11 @@ namespace pP::lighting {
     }
 
     struct WorldLightSourceGpu::State {
-        // CPU mirror: dense ids, overlay and the committed edit state.
+        // CPU mirror: dense ids and the committed edit state.
         WorldLightPlan m_plan{};
         u64 m_revision{};
         std::vector<WorldLightMaterial> m_materials{};
         std::vector<u16> m_cell_ids{};
-        std::vector<WorldLightOverlayCell> m_overlay{};
         WorldLightDirtyRect m_dirty{};
         std::array<float, 3> m_sky{};
         i32 m_sky_hour{-1};
@@ -94,12 +84,13 @@ namespace pP::lighting {
 
         // Device buffers.
         rhi::ComPtr<rhi::IBuffer> m_ids_gpu; // DeviceLocal, one u32 per cell.
-        rhi::ComPtr<rhi::IBuffer> m_overlay_gpu; // DeviceLocal, dense GpuOverlayRow.
+        rhi::ComPtr<rhi::IBuffer> m_overlay_gpu; // DeviceLocal, 7 u32 per cell.
         rhi::ComPtr<rhi::IBuffer> m_occupancy_gpu; // DeviceLocal, occupancy u32 words.
-        rhi::ComPtr<rhi::IBuffer> m_particles_gpu; // Upload, staged WorldLightOverlayCell records.
+        rhi::ComPtr<rhi::IBuffer> m_materials_gpu; // DeviceLocal, palette WorldLightMaterial rows.
+        rhi::ComPtr<rhi::IBuffer> m_particles_gpu; // Upload, staged WorldLightMatterParticle records.
         rhi::ComPtr<rhi::IBuffer> m_chunk_staging; // Upload, one chunk's widened u32 ids.
 
-        WorldLightOverlayCell *m_particles_mapped{};
+        WorldLightMatterParticle *m_particles_mapped{};
         u32 *m_chunk_staging_mapped{};
         bool m_mapped{};
 
@@ -108,7 +99,7 @@ namespace pP::lighting {
 
         // Staged work for the next encode.
         std::vector<u32> m_pending_chunks{};
-        std::vector<WorldLightOverlayCell> m_pending_particles{};
+        std::vector<WorldLightMatterParticle> m_pending_particles{};
         bool m_pending{};
         bool m_ready{};
     };
@@ -136,7 +127,6 @@ namespace pP::lighting {
         state.m_plan = plan;
         state.m_materials.assign(materials.begin(), materials.end());
         state.m_cell_ids.assign(cell_count, 0u);
-        state.m_overlay.assign(cell_count, WorldLightOverlayCell{});
 
         state.m_blocks_x = (plan.m_width + kOccupancyBlockEdge - 1u) / kOccupancyBlockEdge;
         state.m_blocks_y = (plan.m_height + kOccupancyBlockEdge - 1u) / kOccupancyBlockEdge;
@@ -204,15 +194,20 @@ namespace pP::lighting {
                                      state.m_matter_module.get(), "finishWorldLightMatter", state.m_finalize_program,
                                      state.m_finalize_pipeline));
 
-        // Device buffers.
+        // Device buffers (ids and overlay start zeroed so the occupancy pass never
+        // reads unwritten cells; the first matter scatter establishes the overlay).
         const u64 ids_bytes = cell_count * sizeof(u32);
-        const u64 overlay_bytes = cell_count * sizeof(GpuOverlayRow);
+        const u64 overlay_bytes = cell_count * kOverlayStride * sizeof(u32);
         const u64 occupancy_bytes = u64{state.m_blocks_y} * state.m_words_per_row * sizeof(u32);
-        const u64 particles_bytes = u64{kMaxOverlayRecords} * sizeof(WorldLightOverlayCell);
+        const u64 particles_bytes = cell_count * sizeof(WorldLightMatterParticle);
         const u64 chunk_staging_bytes = kChunkCellCount * sizeof(u32);
+        const u64 materials_bytes = u64{std::max<u64>(1u, state.m_materials.size())} * sizeof(WorldLightMaterial);
 
-        const auto device_buffer = [&](const u64 bytes, const u32 stride, const char *const label,
-                                       rhi::ComPtr<rhi::IBuffer> &out) -> std::error_code {
+        const std::vector<u32> zero_ids(cell_count, 0u);
+        const std::vector<u32> zero_overlay(cell_count * kOverlayStride, 0u);
+
+        const auto device_buffer = [&](const u64 bytes, const u32 stride, const void *const initial,
+                                       const char *const label, rhi::ComPtr<rhi::IBuffer> &out) -> std::error_code {
             rhi::BufferDesc description{};
             description.size = bytes;
             description.elementSize = stride;
@@ -224,18 +219,33 @@ namespace pP::lighting {
             description.defaultState = rhi::ResourceState::UnorderedAccess;
             description.label = label;
             PPR_RETURN_ERROR_ON_FAIL(
-                WorldLightSourceGpu, state.m_device->createBuffer(description, nullptr, out.writeRef()));
+                WorldLightSourceGpu, state.m_device->createBuffer(description, initial, out.writeRef()));
             return {};
         };
 
         PPR_RETURN_ERROR_ON_FAIL(
-            WorldLightSourceGpu, device_buffer(ids_bytes, sizeof(u32), "world light cell ids", state.m_ids_gpu));
+            WorldLightSourceGpu,
+            device_buffer(ids_bytes, sizeof(u32), zero_ids.data(), "world light cell ids", state.m_ids_gpu));
         PPR_RETURN_ERROR_ON_FAIL(
             WorldLightSourceGpu,
-            device_buffer(overlay_bytes, sizeof(GpuOverlayRow), "world light overlay", state.m_overlay_gpu));
+            device_buffer(overlay_bytes, sizeof(u32), zero_overlay.data(), "world light overlay", state.m_overlay_gpu));
         PPR_RETURN_ERROR_ON_FAIL(
             WorldLightSourceGpu,
-            device_buffer(occupancy_bytes, sizeof(u32), "world light occupancy", state.m_occupancy_gpu));
+            device_buffer(occupancy_bytes, sizeof(u32), nullptr, "world light occupancy", state.m_occupancy_gpu));
+
+        {
+            // Immutable palette: ShaderResource only, uploaded once.
+            rhi::BufferDesc description{};
+            description.size = materials_bytes;
+            description.elementSize = sizeof(WorldLightMaterial);
+            description.memoryType = rhi::MemoryType::DeviceLocal;
+            description.usage = rhi::BufferUsage::ShaderResource;
+            description.defaultState = rhi::ResourceState::ShaderResource;
+            description.label = "world light materials";
+            PPR_RETURN_ERROR_ON_FAIL(
+                WorldLightSourceGpu,
+                state.m_device->createBuffer(description, state.m_materials.data(), state.m_materials_gpu.writeRef()));
+        }
 
         const auto upload_buffer = [&](const u64 bytes, const u32 stride, const char *const label,
                                        rhi::ComPtr<rhi::IBuffer> &out) -> std::error_code {
@@ -252,9 +262,9 @@ namespace pP::lighting {
         };
 
         PPR_RETURN_ERROR_ON_FAIL(
-            WorldLightSourceGpu,
-            upload_buffer(
-                particles_bytes, sizeof(WorldLightOverlayCell), "world light matter particles", state.m_particles_gpu));
+            WorldLightSourceGpu, upload_buffer(
+                                     particles_bytes, sizeof(WorldLightMatterParticle), "world light matter particles",
+                                     state.m_particles_gpu));
         PPR_RETURN_ERROR_ON_FAIL(
             WorldLightSourceGpu,
             upload_buffer(chunk_staging_bytes, sizeof(u32), "world light chunk staging", state.m_chunk_staging));
@@ -316,7 +326,7 @@ namespace pP::lighting {
             WorldLightSourceGpu,
             bind_buffer(state.m_occupancy_root.get(), "g_world_light_occupancy", state.m_occupancy_gpu.get()));
 
-        // Matter roots: constants + particles + overlay.
+        // Matter roots: constants + particles + materials + overlay.
         const auto bind_matter_root = [&](rhi::IShaderProgram *const program,
                                           rhi::ComPtr<rhi::IShaderObject> &root) -> std::error_code {
             PPR_RETURN_ERROR_ON_FAIL(
@@ -324,6 +334,8 @@ namespace pP::lighting {
             PPR_RETURN_ERROR_ON_FAIL(WorldLightSourceGpu, bind_constants(root.get()));
             PPR_RETURN_ERROR_ON_FAIL(
                 WorldLightSourceGpu, bind_buffer(root.get(), "g_world_light_particles", state.m_particles_gpu.get()));
+            PPR_RETURN_ERROR_ON_FAIL(
+                WorldLightSourceGpu, bind_buffer(root.get(), "g_world_light_materials", state.m_materials_gpu.get()));
             PPR_RETURN_ERROR_ON_FAIL(
                 WorldLightSourceGpu, bind_buffer(root.get(), "g_world_light_overlay", state.m_overlay_gpu.get()));
             return {};
@@ -352,21 +364,28 @@ namespace pP::lighting {
         const u32 chunks_x = (width + kChunkEdge - 1u) / kChunkEdge;
         const u32 chunks_y = (height + kChunkEdge - 1u) / kChunkEdge;
         const u64 chunk_count = u64{chunks_x} * chunks_y;
+        const u64 cell_count = u64{width} * height;
 
         // Validate the whole edit before mutating anything so a rejected update
-        // retains the previous ids, overlay, revision, dirty rect and GPU bytes.
+        // retains the previous ids, revision, dirty rect, pending work and GPU bytes.
         for (const WorldLightChunkUpdate &chunk: update.m_chunks) {
             PPR_RETURN_ERROR_ON_FAIL(
                 WorldLightSourceGpu, require_(chunk.m_chunk_id < chunk_count, std::errc::result_out_of_range));
             PPR_RETURN_ERROR_ON_FAIL(WorldLightSourceGpu, require_(chunk.m_cell_ids.size() == kChunkCellCount));
         }
-        for (const WorldLightOverlayCell &cell: update.m_overlay) {
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldLightSourceGpu, require_(update.m_particles.size() <= cell_count, std::errc::value_too_large));
+        for (const WorldLightMatterParticle &particle: update.m_particles) {
             PPR_RETURN_ERROR_ON_FAIL(
-                WorldLightSourceGpu, require_(cell.m_cell < state.m_cell_ids.size(), std::errc::result_out_of_range));
+                WorldLightSourceGpu, require_(particle.m_cell < cell_count, std::errc::result_out_of_range));
+            PPR_RETURN_ERROR_ON_FAIL(
+                WorldLightSourceGpu,
+                require_(particle.m_material < state.m_materials.size(), std::errc::result_out_of_range));
         }
 
         bool changed = false;
         WorldLightDirtyRect dirty = state.m_dirty;
+        std::vector<u32> pending_chunks;
 
         for (const WorldLightChunkUpdate &chunk: update.m_chunks) {
             const u32 chunk_x = chunk.m_chunk_id % chunks_x;
@@ -397,23 +416,13 @@ namespace pP::lighting {
             dirty.include(
                 static_cast<i32>(cell_x0), static_cast<i32>(cell_y0), static_cast<i32>(cell_x1),
                 static_cast<i32>(cell_y1));
-
-            state.m_pending_chunks.push_back(chunk.m_chunk_id);
+            pending_chunks.push_back(chunk.m_chunk_id);
         }
 
-        for (const WorldLightOverlayCell &cell: update.m_overlay) {
-            WorldLightOverlayCell &slot = state.m_overlay[cell.m_cell];
-            const bool same = slot.m_coverage == cell.m_coverage and
-                              slot.m_sigma == cell.m_sigma and
-                              slot.m_emission == cell.m_emission;
-            if (same) {
-                continue;
-            }
-
-            slot = cell;
+        for (const WorldLightMatterParticle &particle: update.m_particles) {
             changed = true;
-            const u32 x = cell.m_cell % width;
-            const u32 y = cell.m_cell / width;
+            const u32 x = particle.m_cell % width;
+            const u32 y = particle.m_cell / width;
             dirty.include(static_cast<i32>(x), static_cast<i32>(y), static_cast<i32>(x) + 1, static_cast<i32>(y) + 1);
         }
 
@@ -430,22 +439,9 @@ namespace pP::lighting {
         state.m_dirty = dirty;
         state.m_revision = update.m_revision;
 
-        // Coalesce the touched overlay cells to their final (last-wins) values
-        // from the CPU mirror, so the GPU scatter writes each cell exactly once.
-        std::vector<u32> touched;
-        touched.reserve(update.m_overlay.size());
-        for (const WorldLightOverlayCell &cell: update.m_overlay) {
-            touched.push_back(cell.m_cell);
-        }
-        std::sort(touched.begin(), touched.end());
-        touched.erase(std::unique(touched.begin(), touched.end()), touched.end());
-
-        for (const u32 cell: touched) {
-            state.m_pending_particles.push_back(state.m_overlay[cell]);
-        }
-        PPR_RETURN_ERROR_ON_FAIL(
-            WorldLightSourceGpu,
-            require_(state.m_pending_particles.size() <= kMaxOverlayRecords, std::errc::value_too_large));
+        // The committed particle set replaces the pending set; chunks append.
+        state.m_pending_chunks.insert(state.m_pending_chunks.end(), pending_chunks.begin(), pending_chunks.end());
+        state.m_pending_particles.assign(update.m_particles.begin(), update.m_particles.end());
 
         state.m_pending = true;
         return default_value_v;
@@ -461,7 +457,7 @@ namespace pP::lighting {
         const u32 width = state.m_plan.m_width;
         const u32 chunks_x = (width + kChunkEdge - 1u) / kChunkEdge;
 
-        // Host-side staging of the widened chunk ids and overlay records.
+        // Host-side staging of the widened chunk ids and raw particles.
         for (const u32 chunk_id: state.m_pending_chunks) {
             const u32 chunk_x = chunk_id % chunks_x;
             const u32 chunk_y = chunk_id / chunks_x;
@@ -478,7 +474,6 @@ namespace pP::lighting {
                 }
             }
 
-            // Upload this chunk into the dense ids buffer.
             state.m_upload_constants.m_chunk_x = chunk_x;
             state.m_upload_constants.m_chunk_y = chunk_y;
             rhi::ShaderCursor cursor{state.m_upload_root.get()}, upload{};
@@ -496,7 +491,6 @@ namespace pP::lighting {
             encoder.globalBarrier();
         }
 
-        // Stage the coalesced overlay records into the mapped particle buffer.
         for (u32 index = 0u; index < state.m_pending_particles.size(); ++index) {
             state.m_particles_mapped[index] = state.m_pending_particles[index];
         }
@@ -515,7 +509,7 @@ namespace pP::lighting {
 
         const u32 particle_count = static_cast<u32>(state.m_pending_particles.size());
 
-        // Matter projection: clear -> scatter -> finalize over the staged records.
+        // Matter projection: clear -> scatter -> finalize over the staged particles.
         if (particle_count != 0u) {
             PPR_RETURN_ERROR_ON_FAIL(WorldLightSourceGpu, set_constants(state.m_clear_root.get()));
             PPR_RETURN_ERROR_ON_FAIL(WorldLightSourceGpu, set_constants(state.m_scatter_root.get()));
@@ -523,6 +517,7 @@ namespace pP::lighting {
 
             encoder.setBufferState(state.m_overlay_gpu.get(), rhi::ResourceState::UnorderedAccess);
             encoder.setBufferState(state.m_particles_gpu.get(), rhi::ResourceState::ShaderResource);
+            encoder.setBufferState(state.m_materials_gpu.get(), rhi::ResourceState::ShaderResource);
 
             const u32 groups = (particle_count + kNumthreads - 1u) / kNumthreads;
             for (const auto &[pipeline, root]:
@@ -613,6 +608,7 @@ namespace pP::lighting {
         state.m_ids_gpu.setNull();
         state.m_overlay_gpu.setNull();
         state.m_occupancy_gpu.setNull();
+        state.m_materials_gpu.setNull();
         state.m_particles_gpu.setNull();
         state.m_chunk_staging.setNull();
         state.m_source_module = {};

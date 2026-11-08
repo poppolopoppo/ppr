@@ -2,9 +2,10 @@
 // dense world light source: native-cell ids, dense overlay, occupancy
 // ------------------------------------------------------------------
 // Shared scalar ABI for the world light source and its Matter overlay. Cell
-// ids are one u32 per native cell (0 = vacuum); the overlay is dense and
-// carries per-cell coverage plus per-unit sigma/emission. Occupancy is one
-// bitset level with one bit per 8x8 block, packed into u32 words with
+// ids are one u32 per native cell (0 = vacuum). The dense overlay stores seven
+// u32 words per cell (coverage, sigma[3], emission[3], each holding float bits)
+// so the scatter can atomically accumulate float terms. Occupancy is one bitset
+// level with one bit per 8x8 block, packed into u32 words with
 // ceil(blocks_per_row / 32) words per block row.
 #ifndef PPR_WORLD_LIGHT_SOURCE_SLANG
 #define PPR_WORLD_LIGHT_SOURCE_SLANG
@@ -15,8 +16,10 @@ struct WorldLightSourceConstants {
     uint pad0, pad1;
 };
 
-struct WorldLightOverlayRow {
-    float coverage;
+// Global palette material, indexed by material id (0 = vacuum).
+struct WorldLightMaterial {
+    uint kind;
+    float source[3];
     float sigma[3];
     float emission[3];
 };
@@ -28,11 +31,21 @@ struct WorldLightChunkUpload {
     uint pad0, pad1;
 };
 
+// Dense overlay word offsets within a cell's 7-word row.
+static const uint kOverlayCoverage = 0u;
+static const uint kOverlaySigma0 = 1u;
+static const uint kOverlaySigma1 = 2u;
+static const uint kOverlaySigma2 = 3u;
+static const uint kOverlayEmission0 = 4u;
+static const uint kOverlayEmission1 = 5u;
+static const uint kOverlayEmission2 = 6u;
+static const uint kOverlayStride = 7u;
+
 ConstantBuffer<WorldLightSourceConstants> g_world_light_source;
 ConstantBuffer<WorldLightChunkUpload> g_world_light_chunk_upload;
 StructuredBuffer<uint> g_world_light_chunk;
 RWStructuredBuffer<uint> g_world_light_ids;
-RWStructuredBuffer<WorldLightOverlayRow> g_world_light_overlay;
+RWStructuredBuffer<uint> g_world_light_overlay;
 RWStructuredBuffer<uint> g_world_light_occupancy;
 
 // Copies one staged 128x128 chunk (widened u32 ids) into the dense ids buffer,
@@ -91,10 +104,14 @@ void buildWorldLightOccupancy(uint3 id : SV_DispatchThreadID) {
                     break;
                 }
 
-                WorldLightOverlayRow row = g_world_light_overlay[index];
-                if (row.coverage > 0.0f ||
-                    row.sigma[0] > 0.0f || row.sigma[1] > 0.0f || row.sigma[2] > 0.0f ||
-                    row.emission[0] > 0.0f || row.emission[1] > 0.0f || row.emission[2] > 0.0f) {
+                uint base = index * kOverlayStride;
+                if (asfloat(g_world_light_overlay[base + kOverlayCoverage]) > 0.0f ||
+                    asfloat(g_world_light_overlay[base + kOverlaySigma0]) > 0.0f ||
+                    asfloat(g_world_light_overlay[base + kOverlaySigma1]) > 0.0f ||
+                    asfloat(g_world_light_overlay[base + kOverlaySigma2]) > 0.0f ||
+                    asfloat(g_world_light_overlay[base + kOverlayEmission0]) > 0.0f ||
+                    asfloat(g_world_light_overlay[base + kOverlayEmission1]) > 0.0f ||
+                    asfloat(g_world_light_overlay[base + kOverlayEmission2]) > 0.0f) {
                     occupied = 1u;
                     break;
                 }
