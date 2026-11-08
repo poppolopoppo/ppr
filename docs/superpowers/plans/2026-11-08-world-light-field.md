@@ -98,7 +98,9 @@ git commit -m "lighting: stabilize camera bounds and diagnostics"
 
 ---
 
-### Task 2: Delete the Dormant Legacy Radiance Engine
+### Task 2: Delete the Dormant Legacy Radiance Engine (deferred to Task 14)
+
+> **Execution ruling (2026-11-08):** Deferred. `App.Renderer.LightingPass.cppm` owns live shared types (`TerrainReceiverCohort`, `TerrainReceiverResult`, `TerrainReceiverGpuGeneration`) used by `WorldRadiancePass`/GridPass, and `OpticalGeometry` is used by live GridPass and the retained CPU oracle tests. Deleting them here would break the path being migrated from. The legacy pass/shaders/tests are deleted in Task 14 together with the old world-radiance path, after the new field is default. No code change in this task.
 
 **Files:**
 - Delete: `lib/engine/app/renderer/App.Renderer.LightingPass.cppm`
@@ -668,6 +670,9 @@ git commit -m "lighting: add SPD bloom"
 
 **Files:**
 - Delete: `lib/engine/app/renderer/App.Renderer.WorldRadiance.cppm/.cpp`
+- Delete: `lib/engine/app/renderer/App.Renderer.LightingPass.cppm/.cpp`, `App.Renderer.OpticalGeometry.cppm/.cpp` (after removing GridPass's dormant receiver API and relocating/removing `TerrainReceiverCohort`/`TerrainReceiverResult`/`TerrainReceiverGpuGeneration`)
+- Delete: `lib/engine/tests/app/App.RadianceGpu.Tests.cpp` (move `backgroundReceivers_` first; kept by Task 2 deferral)
+- Delete: legacy shaders `radiance_cascades.slang`, `radiance_cascades_refined.slang`, `radiance_terrain.slang`, `terrain_query_shared.slang`, `terrain_precision32.slang`, `terrain_precision64.slang`, `terrain_precision_refinement.slang`
 - Delete: `assets/shaders/world_radiance.slang`, `world_radiance_types.slang`, `terrain_receiver_types.slang`, `grid_world_radiance.slang`, `world_matter_project.slang`, `world_matter_types.slang`, `grid_screen_contact_types.slang`
 - Delete: `lib/engine/tests/app/App.WorldRadiance.Tests.cpp`
 - Modify: `lib/engine/app/CMakeLists.txt`, `lib/engine/app/App.cppm`, `lib/engine/tests/app/CMakeLists.txt`, `App.Tests.cpp`
