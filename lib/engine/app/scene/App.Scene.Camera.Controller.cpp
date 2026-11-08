@@ -500,6 +500,14 @@ namespace pP {
             m_follow_target.reset();
             applyAnchoredZoom_();
         }
+
+        // A viewport resize can leave a previously valid scale now exceeding
+        // the world: re-clamp to the current viewport/bounds ceiling each update.
+        const float2 bounds_min = m_world_bounds.has_value() ? m_world_bounds->m_min : float2{zero_v};
+        const float2 bounds_max = m_world_bounds.has_value() ? m_world_bounds->m_max : float2{zero_v};
+        m_ortho_scale = std::min(
+            m_ortho_scale, maxOrthoScaleForWorld_(bounds_min, bounds_max, m_viewport_size, m_world_bounds.has_value()));
+
         BasicCameraController::updateCameraModel(clampFrameDt_(dt), model);
         model.m_ortho_scale = m_ortho_scale;
     }

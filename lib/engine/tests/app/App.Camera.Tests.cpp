@@ -1114,6 +1114,22 @@ namespace pP::tests::detail {
         PPR_TEST_ASSERT(camera.getOrthoScale() >= 0.001f);
     };
 
+    // A viewport resize can make a previously valid scale exceed the world:
+    // the next update re-clamps so viewport * scale stays within the bounds.
+    PPR_UNIT_TEST (ortho_scale_reclamps_after_viewport_growth) {
+        PanCameraController camera;
+        PPR_TEST_ASSERT(not camera.setWorldBounds(float2{0, 0}, float2{128, 128}));
+        camera.setViewportSize(float2{640, 360});
+        PPR_TEST_ASSERT(not camera.setOrthoScale(0.2f));
+        camera.setViewportSize(float2{1920, 1080});
+
+        CameraModel model{};
+        camera.updateCameraModel(std::chrono::milliseconds{16}, model);
+        const float max_scale = 128.0f / 1920.0f;
+        PPR_TEST_ASSERT(camera.getOrthoScale() <= max_scale);
+        PPR_TEST_ASSERT(camera.getOrthoScale() >= 0.001f);
+    };
+
     PPR_UNIT_TEST (pan_camera_wheel_zoom_anchors_cursor_and_never_moves_depth) {
         PanCameraController controller;
         PPR_TEST_ASSERT(not controller.setOrthoScale(0.25f));
@@ -1362,9 +1378,9 @@ namespace pP::tests::detail {
         PPR_TEST_ASSERT(ten_s == clamp_250);
     };
 
-    // Bounds clamp the eye rect; a larger viewport centers the world;
-    // unset bounds preserve unbounded motion.
-    // Hoisted: single fixture reused for all 3 cases (was 3 fixtures).
+    // Bounds clamp the eye rect; a viewport larger than the world re-clamps
+    // the scale to fit instead of centering; unset bounds preserve unbounded
+    // motion. Hoisted: single fixture reused for all 3 cases (was 3 fixtures).
     PPR_UNIT_TEST (pan_camera_world_bounds_clamp_and_centering) {
         PanCameraController ctrl;
         ctrl.setPositionInertia(100000.0f);
@@ -1400,10 +1416,11 @@ namespace pP::tests::detail {
         // 100px viewport at 1x: eye.x in [0, 200-100] pins at 100.
         const float3 clamped = holdD(true, float2{100.0f, 100.0f}, float2{0.0f, 0.0f}, float2{200.0f, 200.0f});
         PPR_TEST_ASSERT(std::abs(clamped.x - 100.0f) < 1e-3f);
-        // 800px viewport over a 200-wide world: eye.x centers at 100-400.
+        // 800px viewport over a 200-wide world: the scale re-clamps to 0.25 so
+        // the visible width fits exactly and the eye pins at the world minimum.
         const float3 centered = holdD(true, float2{800.0f, 600.0f}, float2{0.0f, 0.0f}, float2{200.0f, 200.0f});
-        PPR_TEST_ASSERT(std::abs(centered.x + 300.0f) < 1e-3f);
-        PPR_TEST_ASSERT(std::abs(centered.y + 200.0f) < 1e-3f);
+        PPR_TEST_ASSERT(std::abs(centered.x) < 1e-3f);
+        PPR_TEST_ASSERT(std::abs(centered.y) < 1e-3f);
         // Unbounded: the same input runs free.
         const float3 free = holdD(false, float2{100.0f, 100.0f}, float2{0.0f, 0.0f}, float2{200.0f, 200.0f});
         PPR_TEST_ASSERT(free.x > 150.0f);
@@ -1758,6 +1775,7 @@ namespace pP::tests {
             detail::pan_camera_parallel_plane,
             detail::pan_camera_ortho_scale_validates_explicit_bounds,
             detail::ortho_scale_cannot_exceed_world_extent,
+            detail::ortho_scale_reclamps_after_viewport_growth,
             detail::pan_camera_wheel_zoom_anchors_cursor_and_never_moves_depth,
             detail::pan_camera_grab_pan_direction_sign,
             detail::pan_camera_grab_matches_scale,
