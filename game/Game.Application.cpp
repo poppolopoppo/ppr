@@ -5067,8 +5067,7 @@ namespace demo {
                 result.m_sequence == m_world_command->m_sequence and
                 result.m_job_id == m_world_command->m_job_id and
                 result.m_world_generation == m_candidate_generation and
-                result.m_content_fingerprint == m_world_command->m_content_fingerprint and
-                result.m_lighting_revision == m_world_command->m_lighting_revision) {
+                result.m_content_fingerprint == m_world_command->m_content_fingerprint) {
                 if (m_worldgen_report) {
                     ++m_world_commands_observed;
                 }

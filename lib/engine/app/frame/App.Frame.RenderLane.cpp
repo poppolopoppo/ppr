@@ -8,8 +8,6 @@ module engine.app;
 
 import :frame.packet;
 import :frame.render_lane;
-import :renderer.lighting_pass;
-import :renderer.world_radiance;
 
 import engine.core;
 import std;
@@ -69,60 +67,6 @@ namespace pP {
                 return std::make_error_code(std::errc::state_not_recoverable);
             }
         }
-    }
-
-    // ------------------------------------------------------------------
-    // frame-bound gameplay query resolution
-    // ------------------------------------------------------------------
-
-    WorldRadianceGameplayQueryReceipt resolveWorldRadianceGameplayQuery(
-        const WorldRadianceGameplayQueryRequest &request,
-        const std::shared_ptr<const lighting::WorldRadianceSource> &bound_source,
-        const std::optional<lighting::TerrainReceiverCohort> bound_cohort) {
-        WorldRadianceGameplayQueryReceipt receipt{};
-        receipt.m_sequence = request.m_sequence;
-        if (bound_cohort) {
-            receipt.m_world = bound_cohort->m_world_generation;
-            receipt.m_revision = bound_cohort->m_geometry_revision;
-        }
-
-        if (request.m_sequence == 0u) {
-            receipt.m_error = std::make_error_code(std::errc::invalid_argument);
-            return receipt;
-        }
-
-        if (request.m_edge == 0u) {
-            receipt.m_error = std::make_error_code(std::errc::argument_out_of_domain);
-            return receipt;
-        }
-
-        if (not bound_source or not bound_cohort) {
-            receipt.m_error = std::make_error_code(std::errc::not_connected);
-            return receipt;
-        }
-
-        if (request.m_world != bound_cohort->m_world_generation or
-            request.m_revision != bound_cohort->m_geometry_revision) {
-            // Never answer a stale request with a different revision.
-            receipt.m_error = std::make_error_code(std::errc::operation_canceled);
-            return receipt;
-        }
-
-        const auto settings = lighting::WorldRadianceGameplayQuery::windowForWorldPoint(
-            *bound_source, request.m_center_m, request.m_edge);
-        if (not settings) {
-            receipt.m_error = settings.error();
-            return receipt;
-        }
-
-        auto captured = lighting::WorldRadianceGameplayQuery::capture(*bound_source, *settings);
-        if (not captured) {
-            receipt.m_error = captured.error();
-            return receipt;
-        }
-
-        receipt.m_query = std::make_shared<const lighting::WorldRadianceGameplayQuery>(std::move(*captured));
-        return receipt;
     }
 
     // ------------------------------------------------------------------
@@ -1259,7 +1203,6 @@ namespace pP {
                 result.m_job_id = request.m_job_id;
                 result.m_world_generation = request.m_world_generation;
                 result.m_content_fingerprint = request.m_content_fingerprint;
-                result.m_lighting_revision = request.m_lighting_revision;
                 if (m_stop_initiated.load(std::memory_order_acquire) or
                     m_surface_admission_closed.load(std::memory_order_acquire)) {
                     result.m_error = std::make_error_code(std::errc::operation_canceled);
@@ -1290,7 +1233,6 @@ namespace pP {
                 result.m_job_id = request.m_job_id;
                 result.m_world_generation = request.m_world_generation;
                 result.m_content_fingerprint = request.m_content_fingerprint;
-                result.m_lighting_revision = request.m_lighting_revision;
                 postResult_(std::move(completion));
                 wakeMain_();
                 if (not m_stop_initiated.load(std::memory_order_acquire)) {

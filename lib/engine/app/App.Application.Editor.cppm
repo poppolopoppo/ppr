@@ -113,22 +113,6 @@ export namespace pP {
             m_frame_capture_eligible = eligible;
         }
 
-        // Client's committed optical revision. Pending newer fields cannot be
-        // drawn by an older queued packet before joint simulation commit.
-        void setExpectedLightingRevision(const u64 revision) noexcept {
-            m_expected_lighting_revision = revision;
-        }
-
-        /// Main-owned offscreen gameplay demands, copied into each render request.
-        /// They extend the visible receiver rectangle; none may be dropped.
-        void setWorldRadianceReceiverDemands(std::span<const lighting::WorldRadianceReceiverWindow> demands);
-
-        /// Main-owned on-demand gameplay query request, copied into each render
-        /// request. The Game never supplies or retains a WorldRadianceSource.
-        void setWorldRadianceGameplayQuery(std::optional<WorldRadianceGameplayQueryRequest> request) noexcept {
-            m_gameplay_query = std::move(request);
-        }
-
         // ReSharper disable once CppOverrideWithDifferentVisibility
         [[nodiscard]] safe_ptr<const Application> getApplication() const noexcept override {
             return this;
@@ -158,31 +142,7 @@ export namespace pP {
         void onLaneFrameConsumed_(const RenderFrameResult &result) override;
 
     private:
-        struct TerrainLightingState;
         struct FieldLightingState;
-
-        [[nodiscard]] std::error_code beginTerrainLighting_(const GridWorldCommand &command);
-        [[nodiscard]] Expected<bool> advanceTerrainLighting_();
-        [[nodiscard]] std::error_code submitTerrainLighting_(
-            bool discovery = false, u64 actual_frame = 0u, bool bounce = false, bool matter = false,
-            std::optional<TimeSpan> elapsed = {});
-        [[nodiscard]] Expected<bool> cancelTerrainDiscovery_();
-        [[nodiscard]] Expected<bool> updateTerrainBounce_(
-            TimeSpan elapsed, lighting::WorldRadianceReceiverWindow window, u64 actual_frame);
-        [[nodiscard]] Expected<bool> updateTerrainDiscovery_(
-            const CameraSnapshot &camera, TimeSpan elapsed, lighting::WorldRadianceReceiverWindow window,
-            u64 actual_frame);
-        [[nodiscard]] Expected<bool> updateTerrainMatter_(
-            const std::optional<GridParticleGpuView> &view, const CameraSnapshot &camera, int2 extent, TimeSpan elapsed,
-            std::span<const lighting::WorldRadianceReceiverWindow> demands, u64 actual_frame);
-
-        [[nodiscard]] Expected<bool> updateTerrainLightingView_(
-            const CameraSnapshot &camera, int2 extent, TimeSpan elapsed,
-            std::span<const lighting::WorldRadianceReceiverWindow> demands, u64 actual_frame);
-        [[nodiscard]] std::error_code releaseTerrainLighting_(GpuQuiescence quiescence);
-
-        [[nodiscard]] std::error_code observeScreenLighting_();
-        void observeTerrainLighting_();
 
         void onMainWindowFocused_(const Window &window, bool focused);
 
@@ -269,10 +229,6 @@ export namespace pP {
         }
 
     private:
-        std::vector<lighting::WorldRadianceReceiverWindow> m_lighting_receiver_demands{};
-        std::optional<WorldRadianceGameplayQueryRequest> m_gameplay_query{};
-        u64 m_expected_lighting_revision{};
-
         u64 m_frame_capture_sequence{}; // Main-side monotonically reserved identity.
         u64 m_frame_capture_success_sequence{}; // Main-side completed clean result.
         u64 m_frame_capture_attempted_sequence{}; // Worker-side duplicate suppression.
@@ -323,7 +279,6 @@ export namespace pP {
         std::unique_ptr<TrianglePass> m_triangle_pass{};
         std::unique_ptr<GridPass> m_grid_pass{};
         std::unique_ptr<RetroPass> m_retro_pass{};
-        std::unique_ptr<TerrainLightingState> m_terrain_lighting{};
         std::unique_ptr<FieldLightingState> m_field_lighting{};
         bool m_scene_passes_encoded{};
         RetroSettings m_retro_settings{};

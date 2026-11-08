@@ -6,10 +6,8 @@ import :frame.packet;
 import :renderer;
 import :renderer.frame_fence;
 import :renderer.grid_pass;
-import :renderer.lighting_pass;
 import :renderer.retro_pass;
 import :renderer.triangle_pass;
-import :renderer.world_radiance;
 import :renderer.world_light_source;
 import :renderer.world_light_types;
 import :ui.imgui;
@@ -66,17 +64,10 @@ export namespace pP {
 
     struct GridWorldCommand {
         GridPass::GridStagedFrame m_stage{};
-        std::vector<lighting::WorldRadianceReceiverWindow> m_lighting_receiver_demands{};
         u64 m_sequence{};
         u64 m_job_id{};
         u64 m_world_generation{};
         u64 m_content_fingerprint{};
-        u64 m_lighting_revision{}; // outer optical attempt, never an internal Matter target
-        TimeSpan m_lighting_request_elapsed{};
-        std::optional<CameraSnapshot> m_lighting_camera{};
-        // Picture's native viewport; target is the real presented surface.
-        int2 m_lighting_extent{zero_v};
-        lighting::WorldRadianceTemporalSettings m_temporal_settings{};
         // Field mode: immutable world plan and palette carried once at begin.
         lighting::WorldLightPlan m_field_plan{};
         std::vector<lighting::WorldLightMaterial> m_field_materials{};
@@ -87,7 +78,6 @@ export namespace pP {
         u32 m_field_accumulation_samples{8u};
         float m_field_history_retention{0.9f};
         EGridWorldCommand m_kind{EGridWorldCommand::begin};
-        bool m_direct_window{}, m_single_bounce{}, m_temporal_cascades{}, m_temporal_skip_table{};
         bool m_field{};
         bool m_final_batch{false};
     };
@@ -97,7 +87,6 @@ export namespace pP {
         u64 m_job_id{};
         u64 m_world_generation{};
         u64 m_content_fingerprint{};
-        u64 m_lighting_revision{};
         std::error_code m_error{};
         EGridWorldCommand m_kind{EGridWorldCommand::begin};
         bool m_applied{false};
@@ -105,41 +94,6 @@ export namespace pP {
     };
 
     using GridWorldExecutor = std23::move_only_function<void(const GridWorldCommand &, GridWorldResult &)>;
-
-    // ------------------------------------------------------------------
-    // frame-bound gameplay illumination query transport
-    // ------------------------------------------------------------------
-
-    // Value-only request: the Game never holds a WorldRadianceSource. The lane
-    // resolves the exact source already bound for the frame and returns an
-    // owned CPU query or an error on the matching result.
-    struct WorldRadianceGameplayQueryRequest {
-        u64 m_sequence{}; // nonzero when requested
-        std::array<double, 2> m_center_m{}; // world XZ metres
-        u32 m_edge{0}; // requested cells per edge, 1..256
-        u64 m_world{}; // expected cohort world generation
-        u64 m_revision{}; // expected geometry revision
-        std::optional<GridWorldIdentity>
-            m_field_world{}; // Persistent temporal field request for this exact resident world.
-    };
-
-    struct WorldRadianceGameplayQueryReceipt {
-        u64 m_sequence{};
-        u64 m_world{};
-        u64 m_revision{};
-        std::shared_ptr<const lighting::WorldRadianceGameplayQuery> m_query{};
-        std::error_code m_error{};
-        std::shared_ptr<const lighting::WorldRadianceGameplayField> m_field{};
-    };
-
-    // Resolves one frame-bound query from the exact immutable source the lane
-    // already bound for this frame. The receipt never retains the source. A
-    // zero sequence is rejected defensively; the lane only calls this for a
-    // requested nonzero sequence.
-    [[nodiscard]] WorldRadianceGameplayQueryReceipt resolveWorldRadianceGameplayQuery(
-        const WorldRadianceGameplayQueryRequest &request,
-        const std::shared_ptr<const lighting::WorldRadianceSource> &bound_source,
-        std::optional<lighting::TerrainReceiverCohort> bound_cohort);
 
     struct RenderFrameRequest {
         bool m_observe_grid{false};
@@ -158,10 +112,7 @@ export namespace pP {
         // exactly one record (see Application::onLaneFrameConsumed_).
         u64 m_reservation_epoch{0u};
         u64 m_reservation_frame_id{0u};
-        u64 m_expected_lighting_revision{}; // 0 preserves callers without a revision contract
-        std::vector<lighting::WorldRadianceReceiverWindow> m_lighting_receiver_demands{};
         u64 m_surface_capture_sequence{}; // Snapshot of the main-side diagnostic request.
-        std::optional<WorldRadianceGameplayQueryRequest> m_gameplay_query{};
     };
 
     struct RenderSurfaceRequest {
@@ -194,16 +145,6 @@ export namespace pP {
     // frame result values and incorporated optical source receipts
     // ------------------------------------------------------------------
 
-    // Value-only incorporation proof, distinct from a newer live draw view.
-    struct WorldMatterLightingReceipt {
-        lighting::WorldRadianceMatterIdentity m_identity{};
-        std::optional<lighting::WorldRadianceMatterIdentity> m_compared_identity{};
-        lighting::WorldRadianceMatterStatistics m_statistics{};
-        FenceCompletionValue m_source_completion{kFenceValueNone}, m_field_completion{kFenceValueNone};
-        // First delivered source-request observation, not an inferred Driver edit/commit time.
-        TimeSpan m_request_elapsed{}, m_projection_ready_elapsed{}, m_field_ready_elapsed{};
-    };
-
     // Per-frame completion posted back to main: submission acceptance is
     // independent of present (a submitted value travels with the fence
     // until completion; a dropped frame carries m_dropped and no value).
@@ -220,8 +161,6 @@ export namespace pP {
         // Exact accepted fresh temporal2x submit, joined on the owner lane.
         // Value-only history binding evidence, not per-pixel history influence.
         std::optional<RetroTemporal2xSubmission> m_temporal_2x_submission{};
-        std::optional<WorldMatterLightingReceipt> m_lighting_matter{};
-        TimeSpan m_matter_pending_age{};
 
         // Distinct control completion on the existing reliable result stream.
         // When set, this record has NO frame/reservation/staging settlement.
@@ -246,17 +185,10 @@ export namespace pP {
         u64 m_lighting_source_revision{};
         std::optional<u64> m_lighting_field_cycle{};
         std::optional<int2> m_lighting_target_extent{};
-        // Only a freshly rendered complete field supplies this rectangle.
-        // A retained picture never claims the newer in-progress coverage.
-        std::optional<lighting::WorldRadianceReceiverWindow> m_lighting_receiver_window{};
-        std::optional<WorldRadianceGameplayQueryReceipt> m_gameplay_query{};
         TimeSpan m_lighting_update_age{};
         std::error_code m_lighting_error{};
         bool m_lighting_pending{};
 
-        // Provisional/unproved until this result has a fresh incorporated receipt.
-        i32 m_lighting_sky_hour{-1};
-        bool m_lighting_provisional{}, m_matter_queued{};
         // Same actual-present proof for the selected jointly committed resident
         // state. CPU preparation frames and every non-present fate leave it empty.
         std::optional<GridParticlePresentationIdentity> m_presented_particles{};
