@@ -269,7 +269,6 @@ namespace pP {
         lighting::WorldLightSourceGpu m_source{};
         lighting::WorldLightField m_field{};
         lighting::WorldLightPlan m_plan{};
-        u64 m_revision{};
         bool m_initialized{};
     };
 
@@ -3564,14 +3563,26 @@ namespace pP {
                     }
                     auto &field = *m_field_lighting;
                     if (not field.m_initialized) {
-                        PPR_RETURN_ERROR_ON_FAIL(
-                            Editor, field.m_source.initialize(
-                                        *m_lane_rhi_service, *m_lane_shader_service, command.m_field_plan,
-                                        command.m_field_materials, getContentDir().path()));
-                        PPR_RETURN_ERROR_ON_FAIL(
-                            Editor, field.m_field.initialize(
-                                        *m_lane_rhi_service, *m_lane_shader_service, command.m_field_plan,
-                                        getContentDir().path()));
+                        const auto source_error = field.m_source.initialize(
+                            *m_lane_rhi_service, *m_lane_shader_service, command.m_field_plan,
+                            command.m_field_materials, getContentDir().path());
+                        if (source_error) {
+                            m_grid_pass->cancelWorldCandidate(command.m_job_id);
+                            PPR_RETURN_ERROR_ON_FAIL(Editor, source_error);
+                        }
+
+                        const auto field_error = field.m_field.initialize(
+                            *m_lane_rhi_service, *m_lane_shader_service, command.m_field_plan, getContentDir().path());
+                        if (field_error) {
+                            // Partial initialization: release the source that
+                            // already initialized so a retry or teardown never
+                            // leaks its GPU resources.
+                            std::error_code cleanup{};
+                            PPR_RETAIN_ERROR_ON_FAIL(Editor, cleanup, field.m_source.shutdown());
+                            m_grid_pass->cancelWorldCandidate(command.m_job_id);
+                            PPR_RETURN_ERROR_ON_FAIL(Editor, field_error);
+                        }
+
                         field.m_plan = command.m_field_plan;
                         field.m_initialized = true;
                     }
@@ -4436,13 +4447,12 @@ namespace pP {
             if (m_field_lighting and m_field_lighting->m_initialized) {
                 auto &field = *m_field_lighting;
                 const i32 sky_hour = grid_stage.m_temporal_sky_hour.value_or(-1);
-                const bool dirty = not grid_stage.m_uploads.empty() or not grid_stage.m_particle_batches.empty();
-                if (dirty) {
-                    ++field.m_revision;
-                }
 
+                // The source revision is authoritative: it adopts the candidate
+                // only when the update actually changes something, so a clean
+                // frame (or an empty particle batch) leaves it unchanged.
                 auto storage = lighting::buildWorldLightSourceUpdate(
-                    grid_stage, field.m_plan.m_width, field.m_revision, sky_hour);
+                    grid_stage, field.m_plan.m_width, field.m_source.revision() + 1u, sky_hour);
                 PPR_RETURN_ERROR_ON_FAIL(Editor, field.m_source.applyUpdate(storage.m_update));
                 PPR_RETURN_ERROR_ON_FAIL(Editor, field.m_source.encode(context.m_encoder));
                 PPR_RETURN_ERROR_ON_FAIL(

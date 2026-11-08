@@ -1211,6 +1211,12 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(view.m_previous_radiance != nullptr);
             PPR_TEST_ASSERT(view.m_constants != nullptr);
 
+            // The producer-built view binds to GridPass (the render-lane binding
+            // step), and an empty view clears it back to the existing path.
+            fixture.initializeGrid();
+            PPR_TEST_ASSERT(not fixture.m_grid.setWorldLightField(view));
+            PPR_TEST_ASSERT(not fixture.m_grid.setWorldLightField({}));
+
             // The cursor/cycle diagnostics remain readable as the field warms.
             fixture.updateField(budget);
             PPR_TEST_ASSERT(field.cursor() < plan->m_radiance_samples);
