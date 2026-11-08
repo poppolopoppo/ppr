@@ -15,6 +15,7 @@ import game.colony.worldgen_preview;
 import engine.sim;
 import game.ui;
 import game.ui.model;
+import game.application;
 import game.colony.driver;
 import game.colony.agents;
 import game.colony.panel;
@@ -73,6 +74,54 @@ namespace pP::game::tests::detail::presentation {
     // ------------------------------------------------------------------
     // display confirmation lifetime
     // ------------------------------------------------------------------
+
+    PPR_UNIT_TEST (world_progress_close_frame_is_not_playable_capture_eligible) {
+        ImGuiContext *const context = ImGui::CreateContext();
+        PPR_DEFER {
+            ImGui::DestroyContext(context);
+        };
+
+        ImGui::SetCurrentContext(context);
+        ImGuiIO &io = ImGui::GetIO();
+        io.IniFilename = nullptr;
+        io.DisplaySize = ImVec2{1280.0f, 720.0f};
+        io.DeltaTime = 1.0f / 60.0f;
+        io.Fonts->AddFontDefault();
+        unsigned char *pixels{};
+        int width{}, height{};
+        io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+
+        ui::WorldProgressView view{.m_open = true};
+        const SessionWorldFacts facts{{17u, 7u, 101u}, true, true, true, true, false};
+        bool popup_open{};
+
+        const auto frame = [&] {
+            ImGui::NewFrame();
+            const auto drawn = ui::drawWorldProgress(view);
+            popup_open = ImGui::IsPopupOpen("Generating terrain");
+            ImGui::Render();
+            return drawn;
+        };
+
+        const auto opened = frame();
+        PPR_TEST_ASSERT(opened.m_popup_began and opened.m_action == ui::EWorldAction::none);
+        PPR_TEST_ASSERT(not canCapturePlayableSessionFrame(facts, view.m_open, opened.m_popup_began));
+
+        // Let the actual popup's automatic initial sizing settle while it is
+        // still logically open, then observe its real close-frame geometry.
+        PPR_TEST_ASSERT(frame().m_popup_began);
+
+        view.m_open = false;
+        const auto closed = frame();
+        PPR_TEST_ASSERT(closed.m_popup_began and closed.m_action == ui::EWorldAction::none);
+        PPR_TEST_ASSERT(not popup_open);
+        PPR_TEST_ASSERT(ImGui::GetDrawData()->TotalVtxCount > 0);
+        PPR_TEST_ASSERT(not canCapturePlayableSessionFrame(facts, view.m_open, closed.m_popup_began));
+
+        const auto absent = frame();
+        PPR_TEST_ASSERT(not absent.m_popup_began and absent.m_action == ui::EWorldAction::none);
+        PPR_TEST_ASSERT(canCapturePlayableSessionFrame(facts, view.m_open, absent.m_popup_began));
+    };
 
     PPR_UNIT_TEST (resolved_display_trial_releases_modal_when_parent_is_closed) {
         ImGuiContext *const context = ImGui::CreateContext();
@@ -372,7 +421,7 @@ namespace pP::game::tests::detail::presentation {
         io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
 
         colony::ColonyPresentation snapshot{.m_speed = 1u};
-        const colony::ColonyUiView view{.m_colony = &snapshot};
+        colony::ColonyUiView view{.m_colony = &snapshot};
         colony::ColonyUiState state{};
         const auto frame = [&]() {
             ImGui::NewFrame();
@@ -465,6 +514,29 @@ namespace pP::game::tests::detail::presentation {
         PPR_TEST_ASSERT(wall.m_intent and wall.m_intent->m_kind == colony::EColonyIntent::select_tool);
         PPR_TEST_ASSERT(wall.m_intent->m_arg == static_cast<u32>(colony::EColonyTool::build_wall));
         PPR_TEST_ASSERT(not frame().m_intent);
+
+        // The showcase switch returns the same typed intent in both committed
+        // states. Pending and ordinary-world presentations cannot invoke it.
+        view.m_service_door_available = true;
+        std::ignore = frame();
+        const auto switched_off = click(itemCenter(topbar, topbar->GetID("Switch amber lamp off")));
+        PPR_TEST_ASSERT(
+            switched_off.m_intent and switched_off.m_intent->m_kind == colony::EColonyIntent::toggle_service_lamp);
+
+        view.m_service_lamp_enabled = false;
+        std::ignore = frame();
+        const auto lamp_position = itemCenter(topbar, topbar->GetID("Switch amber lamp on"));
+        const auto switched_on = click(lamp_position);
+        PPR_TEST_ASSERT(
+            switched_on.m_intent and switched_on.m_intent->m_kind == colony::EColonyIntent::toggle_service_lamp);
+
+        view.m_service_door_pending = true;
+        PPR_TEST_ASSERT(not click(lamp_position).m_intent);
+
+        view.m_service_door_pending = false;
+        view.m_service_door_available = false;
+        std::ignore = frame();
+        PPR_TEST_ASSERT(not click(lamp_position).m_intent);
     };
 
     // ------------------------------------------------------------------
@@ -1339,6 +1411,7 @@ namespace pP::game::tests {
     const UnitTest presentation_suite = UnitTest::Named("ui") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::presentation::utility_windows_fit_normal_narrow_and_degenerate_viewports,
+            detail::presentation::world_progress_close_frame_is_not_playable_capture_eligible,
             detail::presentation::colony_chrome_preserves_a_world_region_at_normal_and_narrow_sizes,
             detail::presentation::colony_and_performance_visibility_are_independent,
             detail::presentation::inspector_is_a_passive_pointer_readout_only_in_inspect_mode,

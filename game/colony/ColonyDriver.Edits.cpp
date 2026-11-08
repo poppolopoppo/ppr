@@ -34,6 +34,438 @@ namespace pP::colony {
     }
 
     // ------------------------------------------------------------------
+    // bounded service-bay publication
+    // ------------------------------------------------------------------
+
+    Expected<bool> ColonyDriver::prepareServiceDoorSnapshot() {
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            ColonyEdits, preparedWorld() and
+                                 preparedWorld()->lightingShowcase() and
+                                 not m_service_door and
+                                 not m_edit and
+                                 not m_pending_particle_tool and
+                                 not m_matter_terminal
+                             ? std::error_code{}
+                             : std::make_error_code(std::errc::operation_not_permitted));
+
+        m_door_quiescing = true;
+        clearPlayerCommand();
+
+        if (not m_door_backlog) {
+            // Only the submitted slice has execution authority. Completing it
+            // must not run cached elapsed-time slices as update(0) would do.
+            if (m_matter_pending) {
+                const auto finished = finishMatterPhysics();
+                PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyEdits, finished);
+                if (not *finished) {
+                    return false;
+                }
+
+                PPR_ASSERT(m_held_slices != 0u);
+                --m_held_slices;
+                ++m_tick_count;
+                m_resume_edit_tick = false;
+                if (m_pending_single_steps != 0u) {
+                    --m_pending_single_steps;
+                }
+
+                refreshAgents();
+            }
+
+            m_door_backlog = std::array{std::exchange(m_held_slices, 0u), std::exchange(m_pending_single_steps, 0u)};
+        }
+
+        const auto captured = advanceMatterSnapshot();
+        PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyEdits, captured);
+        return *captured;
+    }
+
+    std::error_code ColonyDriver::releaseServiceDoorSnapshot() {
+        PPR_RETURN_ERROR_ON_FAIL(
+            ColonyEdits, not m_service_door and
+                                 m_door_quiescing and
+                                 m_door_backlog and
+                                 m_snapshot_phase == ESnapshotPhase::idle and
+                                 not m_matter_request and
+                                 not m_matter_pending
+                             ? std::error_code{}
+                             : std::make_error_code(std::errc::operation_not_permitted));
+
+        PPR_ASSERT(m_held_slices == 0u and m_pending_single_steps == 0u);
+        m_held_slices = (*m_door_backlog)[0u];
+        m_pending_single_steps = (*m_door_backlog)[1u];
+        m_door_backlog.reset();
+        m_door_quiescing = false;
+        return {};
+    }
+
+    Expected<u64> ColonyDriver::requestServiceDoor(const bool closed, const u64 expected_revision) {
+        return requestServiceBay_(EServiceBayTarget::door, closed, expected_revision);
+    }
+
+    Expected<u64> ColonyDriver::requestServiceLamp(const bool enabled, const u64 expected_revision) {
+        return requestServiceBay_(EServiceBayTarget::amber_lamp, enabled, expected_revision);
+    }
+
+    Expected<u64> ColonyDriver::requestServiceLampPosition(
+        const EServiceLampPosition position, const u64 expected_revision) {
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            ColonyEdits, position == EServiceLampPosition::original or position == EServiceLampPosition::alternate
+                             ? std::error_code{}
+                             : std::make_error_code(std::errc::invalid_argument));
+
+        return requestServiceBay_(
+            EServiceBayTarget::amber_lamp_position, position == EServiceLampPosition::alternate, expected_revision);
+    }
+
+    Expected<u64> ColonyDriver::requestServiceBay_(
+        const EServiceBayTarget target, const bool value, const u64 expected_revision) {
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            ColonyEdits,
+            preparedWorld() and preparedWorld()->lightingShowcase() and m_timestep and not m_matter_terminal
+                ? std::error_code{}
+                : std::make_error_code(std::errc::operation_not_permitted));
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            ColonyEdits, not m_service_door and
+                                 not m_edit and
+                                 not m_pending_particle_tool and
+                                 m_pending_digs.empty() and
+                                 captureReady() and
+                                 not m_matter_request and
+                                 not m_matter_pending
+                             ? std::error_code{}
+                             : std::make_error_code(std::errc::device_or_resource_busy));
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            ColonyEdits, expected_revision == m_lighting_revision and
+                                 value != (target == EServiceBayTarget::door ? m_service_door_closed
+                                              : target == EServiceBayTarget::amber_lamp
+                                                  ? m_service_lamp_enabled
+                                                  : m_service_lamp_position == EServiceLampPosition::alternate)
+                             ? std::error_code{}
+                             : std::make_error_code(std::errc::operation_not_permitted));
+
+        const auto *const material = contentCatalog()->findMaterial("showcase_housing");
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            ColonyEdits, material and material->m_representation == EMaterialRepresentation::terrain
+                             ? std::error_code{}
+                             : std::make_error_code(std::errc::invalid_argument));
+
+        const float cell = 1.0f / static_cast<float>(cellsPerMetre());
+        const bool moving = target == EServiceBayTarget::amber_lamp_position;
+        const u32 destination_x = value ? 37u : 30u;
+        if ((target == EServiceBayTarget::door and value) or moving) {
+            for (const auto &[entity, pose]: m_registry.view<sim::BodyState>()) {
+                const auto *const body = m_registry.get<sim::BodyDefinition>(entity);
+                if (not body) {
+                    continue;
+                }
+
+                const bool overlap = pose.m_x + body->m_half_width > float(moving ? destination_x : 36u) * cell and
+                                     pose.m_x - body->m_half_width < float(moving ? destination_x + 2u : 37u) * cell and
+                                     pose.m_y + body->m_half_height > float(moving ? 16u : 7u) * cell and
+                                     pose.m_y - body->m_half_height < float(moving ? 18u : 14u) * cell;
+                PPR_RETURN_UNEXPECTED_ON_FAIL(
+                    ColonyEdits,
+                    not overlap ? std::error_code{} : std::make_error_code(std::errc::device_or_resource_busy));
+            }
+        }
+
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            ColonyEdits, m_door_revision_highwater != std::numeric_limits<u64>::max()
+                             ? std::error_code{}
+                             : std::make_error_code(std::errc::value_too_large));
+
+        const hal::ProfileScope scope{"Colony.ServiceDoor.Prepare"};
+        ServiceDoorPublication binding{};
+        binding.m_revision = ++m_door_revision_highwater;
+        binding.m_target = target;
+        binding.m_closed = target == EServiceBayTarget::door ? value : m_service_door_closed;
+        binding.m_lamp_enabled = target == EServiceBayTarget::amber_lamp ? value : m_service_lamp_enabled;
+        binding.m_lamp_position = moving ? (value ? EServiceLampPosition::alternate : EServiceLampPosition::original)
+                                         : m_service_lamp_position;
+
+        EditCandidate candidate{};
+        auto chunk = grid().captureChunk({0u, 0u});
+        PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyEdits, chunk);
+
+        grid().exchangeChunk(*chunk);
+        bool restore = true;
+        PPR_DEFER {
+            if (restore) {
+                grid().exchangeChunk(*chunk);
+            }
+        };
+
+        if (target == EServiceBayTarget::door) {
+            for (u32 y = 7u; y <= 13u; ++y) {
+                const auto original = grid().getCell({36u, y});
+                PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyEdits, original);
+                PPR_RETURN_UNEXPECTED_ON_FAIL(
+                    ColonyEdits, original->m_element == (m_service_door_closed ? material->m_numeric_id : 0u)
+                                     ? std::error_code{}
+                                     : std::make_error_code(std::errc::state_not_recoverable));
+                PPR_RETURN_UNEXPECTED_ON_FAIL(
+                    ColonyEdits,
+                    grid().setCell({36u, y}, {value ? material->m_numeric_id : u16{0u}, original->m_temperature}));
+            }
+        } else {
+            // Both switching and relocation require the dedicated row to
+            // represent exactly the four cells at the committed slot.
+            const auto *const lamp = contentCatalog()->findMaterial("showcase_amber_lamp");
+            PPR_RETURN_UNEXPECTED_ON_FAIL(
+                ColonyEdits, lamp and lamp->m_representation == EMaterialRepresentation::terrain
+                                 ? std::error_code{}
+                                 : std::make_error_code(std::errc::invalid_argument));
+
+            const auto cells = grid().residentCells({0u, 0u});
+            PPR_RETURN_UNEXPECTED_ON_FAIL(
+                ColonyEdits, grid().residentChunkCount() == 1u and cells and cells->size() == sim::kCellsPerChunk
+                                 ? std::error_code{}
+                                 : std::make_error_code(std::errc::not_supported));
+
+            const u32 source_x = m_service_lamp_position == EServiceLampPosition::original ? 30u : 37u;
+            u32 count{};
+            for (u32 y = 0u; y < sim::kChunkEdge; ++y) {
+                for (u32 x = 0u; x < sim::kChunkEdge; ++x) {
+                    if ((*cells)[y * sim::kChunkEdge + x].m_element != lamp->m_numeric_id) {
+                        continue;
+                    }
+
+                    PPR_RETURN_UNEXPECTED_ON_FAIL(
+                        ColonyEdits, x >= source_x and x < source_x + 2u and y >= 16u and y <= 17u
+                                         ? std::error_code{}
+                                         : std::make_error_code(std::errc::not_supported));
+
+                    ++count;
+                }
+            }
+
+            PPR_RETURN_UNEXPECTED_ON_FAIL(
+                ColonyEdits, count == 4u ? std::error_code{} : std::make_error_code(std::errc::not_supported));
+        }
+
+        if (moving) {
+            const u32 source_x = m_service_lamp_position == EServiceLampPosition::original ? 30u : 37u;
+            for (u32 y = 16u; y <= 17u; ++y) {
+                for (u32 dx = 0u; dx < 2u; ++dx) {
+                    const auto source = grid().getCell({source_x + dx, y});
+                    const auto destination = grid().getCell({destination_x + dx, y});
+                    PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyEdits, source);
+                    PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyEdits, destination);
+                    PPR_RETURN_UNEXPECTED_ON_FAIL(
+                        ColonyEdits, destination->m_element == 0u
+                                         ? std::error_code{}
+                                         : std::make_error_code(std::errc::device_or_resource_busy));
+
+                    PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyEdits, grid().setCell({source_x + dx, y}, *destination));
+                    PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyEdits, grid().setCell({destination_x + dx, y}, *source));
+                }
+            }
+        }
+
+        grid().exchangeChunk(*chunk);
+        restore = false;
+        candidate.m_chunks.push_back(std::move(*chunk));
+        candidate.m_touched.push_back({0u, 0u});
+
+        u64 chunk_revision = 1u;
+        for (const auto &row: m_present_revision_history) {
+            if (row.m_pos == sim::ChunkPos{0u, 0u}) {
+                PPR_RETURN_UNEXPECTED_ON_FAIL(
+                    ColonyEdits, row.m_revision != std::numeric_limits<u64>::max()
+                                     ? std::error_code{}
+                                     : std::make_error_code(std::errc::value_too_large));
+                chunk_revision = row.m_revision + 1u;
+                break;
+            }
+        }
+
+        candidate.m_manifest.push_back({{0u, 0u}, chunk_revision});
+        if (m_matter_runtime) {
+            // Supported bay changes belong to the opaque/vacuum showcase.
+            // The lamp retains the same conservative chunk/collider cohort;
+            // these edits create no particles and discard no moving inventory.
+            PPR_RETURN_UNEXPECTED_ON_FAIL(
+                ColonyEdits, m_matter and
+                                     m_cpu_particles_current and
+                                     m_matter->m_records.empty() and
+                                     m_matter->m_gas.empty() and
+                                     m_matter->m_profile.m_particle_count == 0u
+                                 ? std::error_code{}
+                                 : std::make_error_code(std::errc::not_supported));
+
+            const auto source = m_matter->m_identity;
+            PPR_RETURN_UNEXPECTED_ON_FAIL(
+                ColonyEdits, source.m_publication != std::numeric_limits<u64>::max() and
+                                     source.m_terrain_revision != std::numeric_limits<u64>::max()
+                                 ? std::error_code{}
+                                 : std::make_error_code(std::errc::value_too_large));
+
+            candidate.m_matter = *m_matter;
+            ++candidate.m_matter->m_identity.m_publication;
+            ++candidate.m_matter->m_identity.m_terrain_revision;
+            binding.m_matter = std::array{source, candidate.m_matter->m_identity};
+        }
+
+        if (not m_door_backlog) {
+            m_door_backlog = std::array{std::exchange(m_held_slices, 0u), std::exchange(m_pending_single_steps, 0u)};
+        }
+        m_door_quiescing = true;
+
+        m_edit.emplace(std::move(candidate));
+        m_service_door.emplace(std::move(binding));
+        clearPlayerCommand();
+        invalidateColliderCache();
+        return m_service_door->m_revision;
+    }
+
+    Expected<bool> ColonyDriver::advanceServiceDoor(const u64 revision) {
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            ColonyEdits, m_service_door and
+                                 m_service_door->m_revision == revision and
+                                 not m_service_door->m_cancelling and
+                                 not m_service_door->m_activation_sent and
+                                 m_edit
+                             ? std::error_code{}
+                             : std::make_error_code(std::errc::operation_not_permitted));
+
+        PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyEdits, prepareEditColliders());
+        return editReadyForPresentation();
+    }
+
+    std::error_code ColonyDriver::markServiceDoorActivationSent(const u64 revision) {
+        PPR_RETURN_ERROR_ON_FAIL(
+            ColonyEdits, m_service_door and
+                                 m_service_door->m_revision == revision and
+                                 not m_service_door->m_cancelling and
+                                 not m_service_door->m_activation_sent and
+                                 editReadyForPresentation()
+                             ? std::error_code{}
+                             : std::make_error_code(std::errc::operation_not_permitted));
+
+        m_service_door->m_activation_sent = true;
+        return {};
+    }
+
+    std::error_code ColonyDriver::acknowledgeServiceDoorActivation(const u64 revision, const bool applied) {
+        PPR_RETURN_ERROR_ON_FAIL(
+            ColonyEdits, m_service_door and
+                                 m_service_door->m_revision == revision and
+                                 m_service_door->m_activation_sent and
+                                 not m_service_door->m_activated
+                             ? std::error_code{}
+                             : std::make_error_code(std::errc::operation_not_permitted));
+
+        m_service_door->m_activation_sent = applied;
+        m_service_door->m_activated = applied;
+        return {};
+    }
+
+    Expected<bool> ColonyDriver::commitServiceDoor(const u64 revision) {
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            ColonyEdits, m_service_door and m_service_door->m_revision == revision and m_service_door->m_activated
+                             ? std::error_code{}
+                             : std::make_error_code(std::errc::operation_not_permitted));
+        if (m_service_door->m_committed) {
+            return true;
+        }
+
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            ColonyEdits, m_edit and (not m_service_door->m_matter or
+                                        (m_matter and
+                                            m_edit->m_matter and
+                                            m_matter->m_identity == (*m_service_door->m_matter)[0u] and
+                                            m_edit->m_matter->m_identity == (*m_service_door->m_matter)[1u]))
+                             ? std::error_code{}
+                             : std::make_error_code(std::errc::state_not_recoverable));
+
+        PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyEdits, settleEdit_(m_edit->m_manifest, revision));
+        return m_service_door->m_committed;
+    }
+
+    Expected<bool> ColonyDriver::cancelServiceDoor(const u64 revision) {
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            ColonyEdits, m_service_door and
+                                 m_service_door->m_revision == revision and
+                                 not m_service_door->m_activation_sent and
+                                 not m_service_door->m_activated
+                             ? std::error_code{}
+                             : std::make_error_code(std::errc::operation_not_permitted));
+
+        auto &binding = *m_service_door;
+        binding.m_cancelling = true;
+
+        if (m_matter_request and m_matter_operation != EMatterOperation::edit_cancel) {
+            // Never reuse an internal target until the old operation actually
+            // settled, even if the outer attempt is already logically canceled.
+            auto completed = m_matter_runtime->advance(*m_matter_request);
+            PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyEdits, completed);
+            if (not *completed) {
+                return false;
+            }
+
+            PPR_RETAIN_ERROR_ON_FAIL(
+                ColonyEdits, binding.m_cancel_error,
+                (**completed).m_execution.m_ran ? (**completed).m_execution.m_operation_error
+                                                : std::make_error_code(std::errc::operation_canceled));
+            PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyEdits, (**completed).m_execution.m_transport_error);
+            m_matter_request.reset();
+            m_matter_operation = EMatterOperation::idle;
+        }
+
+        if (m_matter_runtime and not binding.m_matter_cancelled) {
+            auto completed = advanceMatterRequest(
+                *m_matter_runtime, EMatterOperation::edit_cancel, [&] { return m_matter_runtime->beginDiscard(); });
+            PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyEdits, completed);
+            if (not *completed) {
+                return false;
+            }
+
+            PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyEdits, (**completed).m_execution.m_operation_error);
+            PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyEdits, (**completed).m_execution.m_transport_error);
+            binding.m_matter_cancelled = true;
+        }
+
+        if (m_edit->m_colliders_started) {
+            PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyEdits, m_colliders.cancelCohort(m_scene));
+            m_edit->m_colliders_started = false;
+        }
+
+        const auto error = binding.m_cancel_error;
+        m_edit.reset();
+        m_service_door.reset();
+        invalidateColliderCache();
+        PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyEdits, releaseServiceDoorSnapshot());
+        PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyEdits, error);
+        return true;
+    }
+
+    std::error_code ColonyDriver::finishServiceDoor(const u64 revision) {
+        PPR_RETURN_ERROR_ON_FAIL(
+            ColonyEdits, m_service_door and
+                                 m_service_door->m_revision == revision and
+                                 m_service_door->m_committed and
+                                 m_lighting_revision == revision
+                             ? std::error_code{}
+                             : std::make_error_code(std::errc::operation_not_permitted));
+
+        m_service_door.reset();
+        clearPlayerCommand();
+        PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, releaseServiceDoorSnapshot());
+        return {};
+    }
+
+    void ColonyDriver::commitDoorBinding_() noexcept {
+        if (m_service_door) {
+            m_service_door_closed = m_service_door->m_closed;
+            m_service_lamp_enabled = m_service_door->m_lamp_enabled;
+            m_service_lamp_position = m_service_door->m_lamp_position;
+            m_lighting_revision = m_service_door->m_revision;
+            m_service_door->m_committed = true;
+        }
+    }
+
+    // ------------------------------------------------------------------
     // physical tool admission
     // ------------------------------------------------------------------
 
@@ -583,7 +1015,7 @@ namespace pP::colony {
                     m_edit->m_matter_copied = true;
                 }
 
-                return settleEdit(m_edit->m_manifest);
+                return m_service_door ? std::error_code{} : settleEdit(m_edit->m_manifest);
             }
 
             auto completion = advanceMatterRequest(
@@ -644,6 +1076,16 @@ namespace pP::colony {
     // ------------------------------------------------------------------
 
     std::error_code ColonyDriver::settleEdit(const std::span<const DirtyChunk> manifest) {
+        PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, settleEdit_(manifest, 0u));
+        return {};
+    }
+
+    std::error_code ColonyDriver::settleEdit_(const std::span<const DirtyChunk> manifest, const u64 door_revision) {
+        PPR_RETURN_ERROR_ON_FAIL(
+            ColonyEdits,
+            not m_service_door or (m_service_door->m_revision == door_revision and m_service_door->m_activated)
+                ? std::error_code{}
+                : std::make_error_code(std::errc::operation_not_permitted));
         if (not editReadyForPresentation()) {
             return {};
         }
@@ -724,6 +1166,7 @@ namespace pP::colony {
                 hal::fatalExit("matter-terrain-postcommit-wake-failure");
 
             m_dig_stats.m_last_chunks = std::move(m_edit->m_touched);
+            commitDoorBinding_();
             m_edit.reset();
             PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, (**completion).m_execution.m_transport_error);
             return {};
@@ -749,6 +1192,7 @@ namespace pP::colony {
 
         const auto wake_error = wakeBodiesNearEdit(m_edit->m_touched);
         // The transaction is committed even if the postcommit physics wake fails.
+        commitDoorBinding_();
         m_edit.reset();
         PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, wake_error);
         return {};

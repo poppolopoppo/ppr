@@ -1,0 +1,15 @@
+schema_version = 1
+
+[definition]
+order = 21
+
+[definition.payload]
+tag = "matter_fill"
+
+[definition.payload.matter_fill]
+marker = "anchor"
+material = "sand"
+temperature_k = 315.0
+bulk_density_kg_m3 = 1600.0
+fill_height_m = 4.333333333333333
+placement = "landmark_dune_bed"

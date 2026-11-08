@@ -23,7 +23,8 @@ export namespace pP::game {
     /// Presentation proves visibility only; it never consumes staged edits.
     [[nodiscard]] bool hasSessionWorldPresentation(
         const RenderFrameResult &result, u64 reservation_epoch, GridWorldIdentity requested, bool published,
-        bool activated, std::optional<GridParticlePresentationIdentity> resident = std::nullopt) noexcept;
+        bool activated, std::optional<GridParticlePresentationIdentity> resident = std::nullopt,
+        u64 lighting_revision = 0u) noexcept;
 
     /// Selects the final game lease only while Workshop retains that same bundle.
     /// Current epoch/layout validation remains at the renderer's existing boundary.
@@ -39,6 +40,13 @@ export namespace pP::game {
         GridWorldIdentity m_world{};
         bool m_published{}, m_activated{}, m_presented{}, m_ready{}, m_paused{};
     };
+
+    /// Caller has completed the actual playable panel for this frame. A loaded
+    /// field/publication alone is insufficient while the first-present ACK or
+    /// progress/workshop/closing transition still owns the UI, or its popup
+    /// began drawing before being closed in this same frame.
+    [[nodiscard]] bool canCapturePlayableSessionFrame(
+        const SessionWorldFacts &facts, bool progress_open, bool progress_popup_began) noexcept;
 
     enum class ESessionWorldPhase : u8 {
         idle,

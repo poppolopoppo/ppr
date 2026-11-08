@@ -24,7 +24,50 @@ export namespace pP {
         bool m_enabled{false};
         bool m_palette_enabled{false};
         bool m_temporal_enabled{false};
+        bool m_hdr_enabled{false};
+        bool m_spatial_enabled{false};
         u32 m_pixel_scale{3u};
+        float m_exposure_ev{0.0f};
+        // Requires scene-linear HDR with spatial or temporal2x reconstruction.
+        bool m_bloom_enabled{false};
+        bool m_temporal_2x_enabled{false};
+    };
+
+    // Actual immutable lighting publication used by this scene. The existing
+    // world/job/content/revision arguments identify its matching cohort.
+    struct RetroLightingPublication {
+        FenceCompletionValue m_completion{kFenceValueNone};
+        u64 m_bounce_epoch{};
+        std::array<i32, 2> m_probe_minimum{};
+        std::array<u32, 2> m_probe_counts{};
+
+        [[nodiscard]] bool operator==(const RetroLightingPublication &) const noexcept = default;
+    };
+
+    // Accepted fresh temporal2x encoding, without resource ownership. A bound
+    // history was CPU-eligible and its real SRV was bound; this does not measure
+    // per-pixel history influence. No history fence means the read slot is absent.
+    struct RetroTemporal2xSubmission {
+        RetroLightingPublication m_lighting_publication{};
+        FenceCompletionValue m_submission{kFenceValueNone};
+        FenceCompletionValue m_history_submission{kFenceValueNone};
+        int2 m_raster_extent{zero_v};
+        int2 m_output_extent{zero_v};
+        u32 m_phase{};
+        u32 m_history_write_slot{};
+        u32 m_history_read_slot{};
+        bool m_history_bound{};
+    };
+
+    /// Identity of the pass-owned completed picture. No GPU views escape the
+    /// owner; retention protects its slot and every repeated draw adds a reader fence.
+    struct RetroCompletedPicture {
+        CameraSnapshot m_camera{};
+        std::array<u64, 3> m_world_identity{}; // generation, job, content
+        TimeSpan m_request_elapsed{};
+        int2 m_output_extent{zero_v};
+        u64 m_lighting_revision{};
+        RetroLightingPublication m_lighting_publication{};
     };
 
     class RetroPass final {
@@ -36,16 +79,43 @@ export namespace pP {
         [[nodiscard]] static u32 clampPixelScale(u32 scale) noexcept;
         [[nodiscard]] static int2 sceneExtent(int2 native_extent, u32 pixel_scale) noexcept;
         [[nodiscard]] static RenderPipelineSignature scenePipelineSignature(bool temporal = false) noexcept;
+        [[nodiscard]] static RenderPipelineSignature temporal2xScenePipelineSignature() noexcept;
         [[nodiscard]] static float2 temporalJitter(u32 phase) noexcept;
+
+        // Pure preflight; spatial requires positive even output and an exact 2x
+        // raster mapping. Bloom requires HDR plus spatial or temporal2x. Other
+        // palette/HDR policies remain independent of sample reconstruction.
+        [[nodiscard]] static std::error_code validateFrameSettings(
+            const RetroSettings &settings, int2 raster_extent, int2 output_extent) noexcept;
 
         // Called once per admitted frame on the render owner. Only accepted
         // submissions advance history and the four-phase sample pattern.
-        [[nodiscard]] CameraSnapshot beginFrame(
+        // Invalid exposure rejects before changing policy, history or resources.
+        // HDR producers supply finite RGBA16F values; negative intermediates
+        // remain linear until the display boundary. No texture scan is implied.
+        [[nodiscard]] Expected<CameraSnapshot> beginFrame(
             const RetroSettings &settings, const CameraSnapshot &camera, int2 extent, u64 world_generation,
-            u64 world_job = 0u, u64 world_content = 0u);
+            u64 world_job = 0u, u64 world_content = 0u, TimeSpan request_elapsed = {}, u64 lighting_revision = 0u,
+            RetroLightingPublication lighting_publication = {});
+        [[nodiscard]] Expected<CameraSnapshot> beginFrame(
+            const RetroSettings &settings, const CameraSnapshot &camera, int2 raster_extent, int2 output_extent,
+            u64 world_generation, u64 world_job = 0u, u64 world_content = 0u, TimeSpan request_elapsed = {},
+            u64 lighting_revision = 0u, RetroLightingPublication lighting_publication = {});
         [[nodiscard]] bool temporalActive() const noexcept {
             return m_settings.m_temporal_enabled;
         }
+
+        [[nodiscard]] bool spatialActive() const noexcept {
+            return m_settings.m_spatial_enabled;
+        }
+
+        [[nodiscard]] bool temporal2xActive() const noexcept {
+            return m_settings.m_temporal_2x_enabled;
+        }
+
+        // Historical receipt: consumers join its fence to their accepted fresh
+        // submission. Retained draws and rejected attempts leave it unchanged.
+        [[nodiscard]] std::optional<RetroTemporal2xSubmission> lastTemporal2xSubmission() const noexcept;
 
         [[nodiscard]] std::error_code initialize(
             IRhiService &rhi_service, IShaderService &shader_service, const std::filesystem::path &content_dir);
@@ -55,6 +125,11 @@ export namespace pP {
         [[nodiscard]] std::error_code prepareScene(
             const PreRenderContext &context, const RenderPipelineSignature &scene_signature, int2 extent,
             DrawCallback encode_scene);
+
+        /// Opt-in current-frame (non-temporal) picture retention for asynchronous
+        /// scene preparation. Legacy callers keep the original three-slot policy.
+        [[nodiscard]] std::error_code enableCompletedPictureRetention();
+        [[nodiscard]] std::optional<RetroCompletedPicture> restoreCompletedPicture(FenceCompletionValue completed);
 
         [[nodiscard]] std::error_code render(const DrawContext &context);
         void notifyFrameSubmitted(FenceCompletionValue submit_value) noexcept;
@@ -73,11 +148,28 @@ export namespace pP {
             rhi::ComPtr<rhi::ITextureView> m_color_view{};
             rhi::ComPtr<rhi::ITexture> m_depth{};
             rhi::ComPtr<rhi::ITextureView> m_depth_view{};
+            rhi::ComPtr<rhi::ITexture> m_reactive{};
+            rhi::ComPtr<rhi::ITextureView> m_reactive_view{};
             rhi::ComPtr<rhi::ITexture> m_history{};
             rhi::ComPtr<rhi::ITextureView> m_history_view{};
+            rhi::ComPtr<rhi::ITexture> m_spatial{};
+            rhi::ComPtr<rhi::ITextureView> m_spatial_view{};
+            std::array<rhi::ComPtr<rhi::ITexture>, 2> m_bloom{};
+            std::array<rhi::ComPtr<rhi::ITextureView>, 2> m_bloom_views{};
+            CameraSnapshot m_picture_camera{};
+            std::array<u64, 3> m_picture_identity{};
+            u64 m_picture_lighting_revision{};
+            RetroLightingPublication m_picture_lighting_publication{};
+            FenceCompletionValue m_content_submit{kFenceValueNone};
             FenceCompletionValue m_last_use{kFenceValueNone};
+            TimeSpan m_picture_request_elapsed{};
             int2 m_extent{zero_v};
+            int2 m_output_extent{zero_v};
+            RetroSettings m_picture_settings{};
             bool m_temporal{};
+            bool m_temporal_2x{};
+            bool m_spatial_enabled{};
+            bool m_bloom_enabled{};
         };
 
         // ------------------------------------------------------------------
@@ -95,6 +187,12 @@ export namespace pP {
         [[nodiscard]] std::error_code createTemporalProgram_(
             IShaderService &shader_service, rhi::IDevice &device, const std::filesystem::path &content_dir);
         [[nodiscard]] std::error_code resolveTemporal_(const PreRenderContext &context, u32 selected);
+        [[nodiscard]] std::error_code ensureSpatialProgram_(rhi::IDevice &device);
+        [[nodiscard]] std::error_code resolveSpatial_(const PreRenderContext &context, u32 selected);
+        [[nodiscard]] std::error_code ensureTemporal2xProgram_(rhi::IDevice &device);
+        [[nodiscard]] std::error_code resolveTemporal2x_(const PreRenderContext &context, u32 selected);
+        [[nodiscard]] std::error_code ensureBloomPrograms_(rhi::IDevice &device);
+        [[nodiscard]] std::error_code resolveBloom_(const PreRenderContext &context, u32 selected);
 
 
         // ------------------------------------------------------------------
@@ -103,6 +201,7 @@ export namespace pP {
 
         CameraSnapshot m_camera{};
         float4x4 m_previous_view_projection{identity_v};
+        TimeSpan m_request_elapsed{};
 
         // CPU-side DawnBringer-32 palette (normalized sRGB bytes), copied into
         // the per-draw RetroParameters constant for the selected scene slot.
@@ -110,6 +209,18 @@ export namespace pP {
 
         rhi::ComPtr<rhi::IShaderProgram> m_program{};
         rhi::ComPtr<rhi::IShaderProgram> m_temporal_program{};
+        rhi::ComPtr<rhi::IShaderProgram> m_spatial_program{};
+        rhi::ComPtr<rhi::IComputePipeline> m_spatial_pipeline{};
+        std::array<rhi::ComPtr<rhi::IShaderObject>, kFrameRingSlots> m_spatial_roots{};
+        rhi::ComPtr<rhi::IShaderProgram> m_temporal_2x_program{};
+        rhi::ComPtr<rhi::IComputePipeline> m_temporal_2x_pipeline{};
+        std::array<rhi::ComPtr<rhi::IShaderObject>, kFrameRingSlots> m_temporal_2x_roots{};
+        std::array<rhi::ComPtr<rhi::IShaderProgram>, 2> m_bloom_programs{};
+        std::array<rhi::ComPtr<rhi::IComputePipeline>, 2> m_bloom_pipelines{};
+        std::array<std::array<rhi::ComPtr<rhi::IShaderObject>, 2>, kFrameRingSlots> m_bloom_roots{};
+        // Injected service outlives this pass, including lazy first-use compilation.
+        safe_ptr<IShaderService> m_shader_service{};
+        std::filesystem::path m_content_dir{};
         rhi::ComPtr<rhi::ITexture> m_empty_history{};
         rhi::ComPtr<rhi::ITextureView> m_empty_history_view{};
         rhi::ComPtr<rhi::IRenderPipeline> m_temporal_pipeline{};
@@ -134,17 +245,32 @@ export namespace pP {
 
         std::array<SceneTarget, kFrameRingSlots> m_scene_slots{};
         std::array<u64, 3u> m_content_identity{};
+        u64 m_content_lighting_revision{};
+        RetroLightingPublication m_lighting_publication{};
+        std::optional<RetroTemporal2xSubmission> m_last_temporal_2x_submission{};
         int2 m_frame_extent{zero_v};
+        int2 m_output_extent{zero_v};
 
         RetroSettings m_settings{.m_palette_enabled = true};
         u32 m_scene_cursor{0u};
         u32 m_scene_slot{0u};
         u32 m_history_slot{};
         u32 m_phase{};
+        u32 m_frame_phase{};
         bool m_history_valid{};
         bool m_temporal_supported{};
+        bool m_spatial_supported{};
+        bool m_bloom_supported{};
+        bool m_temporal_2x_supported{};
         bool m_warned_unsupported{};
         bool m_history_used{};
+        bool m_temporal_2x_history_eligible{};
+
+        u32 m_completed_picture_slot{};
+        u32 m_sampled_slot{};
+        bool m_retain_completed_picture{};
+        bool m_completed_picture_valid{};
+        bool m_scene_sampled{};
 
         bool m_scene_ready{false};
         bool m_scene_recorded{false};

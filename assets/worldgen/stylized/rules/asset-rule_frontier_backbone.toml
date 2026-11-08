@@ -1,0 +1,15 @@
+schema_version = 1
+
+[definition]
+order = 95
+
+[definition.payload]
+tag = "connection"
+
+[definition.payload.connection]
+radius_m = 2.2
+extra_links = 6
+natural_anchors = 28
+wells = 3
+branches = 8
+roughness_m = 4.5

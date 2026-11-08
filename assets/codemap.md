@@ -27,4 +27,43 @@ Runtime asset root for the demo. Shader sources that `engine.shader` compiles at
 - `meshes/` — static GLB/gltf fixtures, including 16 staged Kenney colony assets under `meshes/kenney_colony/`.
 - `fonts/` — pinned UI font binaries and license notices (see `fonts/PROVENANCE.md`; no binaries committed yet).
 
-`worldgen/default/pack.toml` is the schema-1 `ppr_frontier` manifest. It explicitly indexes 513 descriptors: 63 Elements, 63 Materials, 44 Fields, eleven Biomes, 26 Features, 168 world-owned Rules, two Backgrounds, two Worlds and 134 Textures. Texture descriptors reference the existing 126 material albedo/normal PNGs and eight background PNGs. `game/CMakeLists.txt` stages this tree on every explicit game/test build, including data-only edits/deletions; CPU `--validate-worldgen` validates deployed definitions without preparing texture payloads.
+`worldgen/default/pack.toml` is the schema-1 `ppr_frontier` named descriptor
+manifest for elements, materials, fields, biomes, features, rules, backgrounds,
+worlds and textures. Texture descriptors own their bitmap references;
+`game/CMakeLists.txt` stages this tree on every explicit game/test build,
+including data-only edits/deletions. CPU `--validate-worldgen` validates deployed
+definitions without preparing texture payloads.
+
+The explicit playable `lighting_showcase` selects its own muted stone backwall
+stack and four generated textures, reusing the current procedural generation
+facility. Frontier/hollows are unchanged. Background radiance still comes from
+the native world field, with no unlit fill; the separately labelled cut-face
+presentation experiment is confined to the native foreground shader. See pack
+`PROVENANCE.md` for generator command and matched-capture controls.
+
+
+The showcase service bay adds four repeat-sampled manufactured materials and
+eight generator-owned128x128 albedo/normal PNGs. Housing/rivets, raised tread and
+oriented pipe/union relief use neutral pigment and matching analytic height;
+there is no baked lighting. They are actual Grid terrain/collision labels and
+consume the existing world field, not fixed-lit mesh decoration. See pack
+`PROVENANCE.md` for the exact limited generator command and source boundaries.
+
+The two pipe normal maps use physical world slopes for radius=half the texture
+period, with the existing full height field and 128² sample phase preserved.
+Only those two keys use `(size/2)*(.5/.30)` central-difference scaling; other
+materials retain their existing factor. The accepted incremental correction
+preserves pipe albedos, descriptors, geometry and optical/source data. Its
+silhouette cusp is not a smooth-normal seam; full environment/art/performance
+acceptance remains separate. See [pipe normal provenance](worldgen/default/PROVENANCE.md#physical-pipe-normal-correction).
+
+The shared ordinary-world landing paints a four-cell ceiling-mounted amber
+source at local native x44..45/y31..32, directly below the unchanged masonry
+ceiling y33..35. Frontier and Hollows reference the existing pack material
+`showcase_amber_lamp` as numeric ID64, matching the showcase palette; there is no
+new pack entry, material, texture or emission setting. The source is actual
+opaque Grid terrain, so its colliders and immutable optical capture share the
+same authored cells. The spawn/resource markers, floor, room walls, reservation
+and existing background stacks remain unchanged. Black-sky native lighting must
+illuminate the receiving backwall through the open lower/side source faces;
+visual acceptance and the full-world resource/performance gates remain separate.

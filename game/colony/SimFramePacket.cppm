@@ -123,7 +123,13 @@ export namespace pP::colony {
     /// Converts resident cells directly to owned u16 uploads, with no full sim
     /// snapshot or live-session borrow crossing into the rendering lane.
     [[nodiscard]] Expected<GridStagedFrame> captureWorldPresentation(
-        const ColonyDriver &driver, const IContext *context = nullptr);
+        const ColonyDriver &driver, const IContext *context = nullptr, bool capture_direct_world = false);
+
+    /// Same catalog/crop capture from the Driver-owned prepared mechanical edit.
+    /// The never-reused outer revision identifies its exact candidate chunks.
+    [[nodiscard]] Expected<GridStagedFrame> captureServiceDoorPresentation(
+        const ColonyDriver &driver, u64 revision, const IContext *context = nullptr);
+
     /// Shared catalog appearance conversion for complete worlds and sparse samples.
     [[nodiscard]] Expected<SimFramePacket> captureCatalogPresentation(
         const ContentPresentation &presentation, std::string_view profile, u32 boundary_material, u32 cells_per_metre,

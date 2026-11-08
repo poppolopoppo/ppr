@@ -1,0 +1,15 @@
+schema_version = 1
+
+[definition]
+order = 39
+
+[definition.payload]
+tag = "matter_fill"
+
+[definition.payload.matter_fill]
+marker = "anchor"
+material = "crude_oil"
+temperature_k = 370.0
+bulk_density_kg_m3 = 850.0
+fill_height_m = 5.666666666666667
+placement = "landmark_oil_reservoir"

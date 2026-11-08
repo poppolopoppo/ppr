@@ -45,6 +45,21 @@ export namespace pP {
         static_assert(
             sizeof(FrameConstants) == 288, "FrameConstants must match the HLSL layout (4 * float4x4 + 2 * float4)");
 
+        // Descriptor-backed constant-buffer data: scalar fields, natural u32
+        // alignment, and an explicit 16-byte shader upload size.
+        struct DrawConstants {
+            u32 m_payload_base{};
+            u32 m_reserved0{};
+            u32 m_reserved1{};
+            u32 m_reserved2{};
+        };
+
+        static_assert(sizeof(DrawConstants) == 16u and alignof(DrawConstants) == alignof(u32));
+        static_assert(PPR_OFFSETOF(DrawConstants, m_payload_base) == 0u);
+        static_assert(PPR_OFFSETOF(DrawConstants, m_reserved0) == 4u);
+        static_assert(PPR_OFFSETOF(DrawConstants, m_reserved1) == 8u);
+        static_assert(PPR_OFFSETOF(DrawConstants, m_reserved2) == 12u);
+
         struct SubmittedInstance {
             TriangleBagHandle m_bag{};
             MaterialHandle m_material{};
@@ -65,8 +80,8 @@ export namespace pP {
         // bag/material handles) with the handles resolved to draw scalars
         // (vb_offset/ib_start/index_count/base_vertex) + the resolved material
         // slot. Lives in a StructuredBuffer<g_payloads>; the vertex entry
-        // indexes it at g_payload_base + SV_InstanceID, where g_payload_base
-        // is bound per draw group.
+        // indexes it at g_draw.m_payload_base + SV_InstanceID, where g_draw
+        // is descriptor-backed and bound per draw group.
         // Plain-float-array POD (P1 vertex verdict): mango float4x4 carries
         // user-provided copy/dtor and can never be trivially copyable, so the
         // model rides float[16] with a component copy at the staging boundary.
@@ -176,6 +191,11 @@ export namespace pP {
             IRhiService &rhi_service, IShaderService &shader_service, const std::filesystem::path &content_dir);
 
         [[nodiscard]] std::error_code update(TimeSpan dt, const CameraSnapshot &camera_view);
+
+        // Prepare only currently admitted material variants at the actual scene
+        // signature. Does not require instances, upload payloads or submit work;
+        // successful preparation does not advance any frame/fence state.
+        [[nodiscard]] std::error_code prepare(rhi::IDevice &device, const RenderPipelineSignature &signature);
 
         // The one draw path: resolve → plan → upload payloads → one
         // drawInstanced per group. Failure is fail-closed but NOT an atomic
@@ -289,7 +309,7 @@ export namespace pP {
         // frame binds and writes only its selected slot's root, so per-frame
         // constants never mutate an object an in-flight submission still
         // references. encodeGroup_ writes only what varies: geometry, the
-        // payload ring slot, g_payload_base, and FrameConstants.
+        // payload ring slot, DrawConstants, and FrameConstants.
         struct CachedVariantPipeline {
             rhi::ComPtr<rhi::IRenderPipeline> m_pipeline{};
             std::array<rhi::ComPtr<rhi::IShaderObject>, kPayloadRingSize> m_slot_roots{};
@@ -297,7 +317,10 @@ export namespace pP {
             // resolved once so the per-frame path skips the field lookup and
             // sub-object walk.
             std::array<rhi::ShaderCursor, kPayloadRingSize> m_slot_frame_cursors{};
+            std::array<rhi::ShaderCursor, kPayloadRingSize> m_slot_draw_cursors{};
         };
+
+        [[nodiscard]] std::error_code ensureReactiveProgram_(rhi::IDevice &device);
 
         [[nodiscard]] Expected<CachedVariantPipeline *> pipelineFor_(
             rhi::IDevice &device, const RenderPipelineSignature &signature, TrianglePipelineVariant variant);
@@ -355,11 +378,13 @@ export namespace pP {
         // pass-owned GPU resources
         // ------------------------------------------------------------------
 
-        // The one render program: mesh_bindless's payload-indexed vertex entry
-        // plus the fragment entry. The pipeline-variant cache is keyed on the
+        // Ordinary and optional native MRT programs share the session-owned
+        // module handle (not owning; shader service outlives this pass).
+        // The pipeline-variant cache is keyed on the
         // render pipeline signature, so a signature change drops every variant
         // (pipelines and their persistent root objects alike).
-        rhi::ComPtr<rhi::IShaderProgram> m_shader_program{};
+        shader::SharedModule m_shader_module{};
+        rhi::ComPtr<rhi::IShaderProgram> m_shader_program{}, m_reactive_shader_program{};
         std::optional<RenderPipelineKey> m_render_pipeline_key;
         FlatMap<TrianglePipelineVariant, CachedVariantPipeline> m_variant_pipelines{};
 

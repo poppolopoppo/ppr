@@ -468,6 +468,7 @@ namespace pP::colony {
         PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, detachMatter());
         m_matter.reset();
         m_particle_view.reset();
+        m_particle_ledger.reset();
         m_snapshot_workers = nullptr;
         m_snapshot_ready.reset();
         m_capture_awake.clear();
@@ -483,6 +484,13 @@ namespace pP::colony {
         m_pending_single_steps = 0u;
         shutdownPhysics();
         m_edit.reset();
+        m_service_door.reset();
+        m_door_backlog.reset();
+        m_door_quiescing = false;
+        m_door_revision_highwater = m_lighting_revision = 1u;
+        m_service_door_closed = false;
+        m_service_lamp_position = EServiceLampPosition::original;
+        m_service_lamp_enabled = true;
         m_require_edit_publication = false;
         m_registry.clear();
         m_finder = Pathfinder{};
@@ -510,6 +518,12 @@ namespace pP::colony {
         PPR_RETURN_ERROR_ON_FAIL(
             ColonyPreparation,
             not m_matter_terminal ? std::error_code{} : std::make_error_code(std::errc::operation_not_permitted));
+
+        if (m_door_quiescing) {
+            // Door coordination services its prepared candidate explicitly. No
+            // simulation slice/input may cross activation, commit or present wait.
+            return {};
+        }
 
         if (m_snapshot_phase != ESnapshotPhase::idle) {
             const auto ready = advanceMatterSnapshot();
@@ -647,6 +661,10 @@ namespace pP::colony {
     }
 
     std::error_code ColonyDriver::stepOne() {
+        PPR_RETURN_ERROR_ON_FAIL(
+            ColonyPreparation,
+            not m_door_quiescing ? std::error_code{} : std::make_error_code(std::errc::device_or_resource_busy));
+
         if (m_matter and m_matter_runtime == nullptr) {
             PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, std::errc::operation_not_permitted);
         }

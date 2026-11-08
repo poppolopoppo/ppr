@@ -797,12 +797,41 @@ mip_policy = "unsupported"
         PPR_TEST_ASSERT(assembled.has_value());
 
         const auto *const definition = &assembled->m_definition;
-        PPR_TEST_ASSERT(definition->m_materials.m_entries.size() == 63u);
+        PPR_TEST_ASSERT(definition->m_materials.m_entries.size() == 64u);
         PPR_TEST_ASSERT(definition->m_fields.m_entries.size() == 44u);
         PPR_TEST_ASSERT(definition->m_biomes.m_entries.size() == 11u);
         PPR_TEST_ASSERT(definition->m_features.m_entries.size() == 26u);
 
-        const auto baseline = sim::definition::compileRecipe(*definition, {"frontier"}, kParameters, diagnostics);
+        // Preserve the original lexical IDs while appending the optical lamp.
+        // Build expected IDs independently from the shipped explicit palette.
+        const auto lexical = sim::definition::compileRecipe(*definition, {"frontier"}, kParameters, diagnostics);
+        PPR_TEST_ASSERT(lexical.has_value());
+
+        auto expected_bindings = lexical->m_bindings;
+        u16 next_material_id = 1u;
+        u32 lamp_count{};
+
+        for (auto &binding: expected_bindings.m_materials) {
+            if (binding.m_key == "showcase_amber_lamp") {
+                binding.m_id = 64u;
+                ++lamp_count;
+                continue;
+            }
+
+            binding.m_id = next_material_id++;
+        }
+
+        PPR_TEST_ASSERT(lamp_count == 1u and next_material_id == 64u);
+        std::ranges::sort(expected_bindings.m_materials, {}, &sim::definition::MaterialBinding::m_id);
+
+        // Compiler-produced rules/markers are not authored binding inputs.
+        expected_bindings.m_rules.clear();
+        for (auto &feature: expected_bindings.m_features) {
+            feature.m_markers.clear();
+        }
+
+        const auto baseline = sim::definition::compileRecipe(
+            *definition, {"frontier"}, kParameters, expected_bindings, diagnostics);
         PPR_TEST_ASSERT(baseline.has_value());
 
         const auto same_binding = [](const auto &left, const auto &right) {
@@ -812,7 +841,12 @@ mip_policy = "unsupported"
                 return left.m_key == right.m_key and left.m_index == right.m_index;
             }
         };
+
         const auto &declared = assembled->m_compiled.m_bindings;
+        const auto lamp_binding = std::ranges::find(
+            declared.m_materials, "showcase_amber_lamp", &sim::definition::MaterialBinding::m_key);
+        PPR_TEST_ASSERT(lamp_binding != declared.m_materials.end() and lamp_binding->m_id == 64u);
+
         PPR_TEST_ASSERT(std::ranges::equal(baseline->m_bindings.m_materials, declared.m_materials, same_binding));
         PPR_TEST_ASSERT(std::ranges::equal(baseline->m_bindings.m_fields, declared.m_fields, same_binding));
         PPR_TEST_ASSERT(std::ranges::equal(baseline->m_bindings.m_biomes, declared.m_biomes, same_binding));

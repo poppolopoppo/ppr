@@ -64,11 +64,14 @@ namespace pP::tests::detail::MatterAdapter {
 
     PPR_UNIT_TEST (source_units_defaults_materials_and_unsimulated_gas_preserve_inventory) {
         std::fprintf(
-            stderr, "[matter-layout] identity=%zu/%zu state=%zu/%zu readback=%zu/%zu runtime=%zu/%zu driver=%zu/%zu\n",
+            stderr,
+            "[matter-layout] identity=%zu/%zu state=%zu/%zu readback=%zu/%zu runtime=%zu/%zu driver=%zu/%zu ledgerrow=%zu/%zu censuscell=%zu/%zu\n",
             sizeof(colony::MatterIdentity), alignof(colony::MatterIdentity), sizeof(colony::MatterState),
             alignof(colony::MatterState), sizeof(colony::MatterReadback), alignof(colony::MatterReadback),
             sizeof(colony::MatterRuntime), alignof(colony::MatterRuntime), sizeof(colony::ColonyDriver),
-            alignof(colony::ColonyDriver));
+            alignof(colony::ColonyDriver), sizeof(colony::MatterPhysicalLedgerRow),
+            alignof(colony::MatterPhysicalLedgerRow), sizeof(colony::MatterCensusCell),
+            alignof(colony::MatterCensusCell));
 
         const auto seeded = records();
         const auto result = colony::makeMatterState(seeded, 0.5, 2.0, -9.8f, 71u);
@@ -103,6 +106,78 @@ namespace pP::tests::detail::MatterAdapter {
         PPR_TEST_ASSERT(captured->m_chunks.size() == 1u and captured->m_chunks[0u].records().size() == 3u);
         PPR_TEST_ASSERT(captured->m_chunks[0u].records()[2u] == state.m_gas[0u]);
         PPR_TEST_ASSERT(seeded.m_chunks[0u].records()[0u].m_id == 20u);
+
+        // Authoritative double volumes are independent of display radii/Cold24.
+        const std::shared_ptr<const GridParticleMetadataResource> metadata =
+            std::make_shared<GridParticleMetadataResource>();
+        auto ledger = std::make_shared<colony::MatterPhysicalLedger>();
+        ledger->m_rows = {{10u, 0.125, 1u}, {20u, 0.25, 1u}, {30u, 0.5, 3u}};
+        ledger->m_metadata_owner = metadata;
+        const GridParticlePresentationIdentity identity{{7u, 71u, 9u}, 3u, 1u, 4u};
+        GridParticleCensus projection{};
+        projection.m_metadata_owner = metadata;
+        projection.m_identity = identity;
+        projection.m_device_epoch = 6u;
+        projection.m_submission = FenceCompletionValue{8u};
+        projection.m_world_edge = 4096u;
+        projection.m_rows = {{10u, 0u, 1u, 0u, 2u, 3u}, {20u, 0u, 1u, 0u, 2u, 3u}, {30u, 0u, 3u, 0u, 2u, 3u}};
+        const auto aggregate = colony::aggregateMatterCensus(*ledger, projection, metadata, identity, 6u, 4096u);
+        PPR_TEST_ASSERT(aggregate.has_value());
+        PPR_TEST_ASSERT(aggregate->m_particle_count == 3u and aggregate->m_cells.size() == 2u);
+        PPR_TEST_ASSERT(aggregate->m_total_volume_m3 == 0.875);
+        PPR_TEST_ASSERT(aggregate->m_cells[0u].m_volume_m3 == 0.375 and aggregate->m_cells[0u].m_count == 2u);
+        PPR_TEST_ASSERT(aggregate->m_cells[1u].m_volume_m3 == 0.5 and aggregate->m_cells[1u].m_material == 3u);
+
+        const auto rejects = [&](const GridParticleCensus &rows, const GridParticlePresentationIdentity &cohort,
+                                 const u64 epoch) {
+            const auto denied = colony::aggregateMatterCensus(*ledger, rows, metadata, cohort, epoch, 4096u);
+            PPR_TEST_ASSERT(not denied and denied.error() == std::errc::invalid_argument);
+        };
+
+        auto rejected = projection;
+        rejected.m_rows[1u].m_id_low = 10u;
+        rejects(rejected, identity, 6u);
+
+        rejected = projection;
+        rejected.m_rows.pop_back();
+        rejects(rejected, identity, 6u);
+
+        rejected = projection;
+        rejected.m_rows[1u].m_material = 2u;
+        rejects(rejected, identity, 6u);
+
+        auto stale = identity;
+        ++stale.m_publication;
+        rejects(projection, stale, 6u);
+        rejects(projection, identity, 7u);
+        rejected = projection;
+        rejected.m_submission = kFenceValueNone;
+        rejects(rejected, identity, 6u);
+
+        // Identical numeric identity/IDs/materials cannot substitute another
+        // metadata owner's different authoritative physical volume.
+        const std::shared_ptr<const GridParticleMetadataResource> next_metadata =
+            std::make_shared<GridParticleMetadataResource>();
+        auto next_ledger = std::make_shared<colony::MatterPhysicalLedger>(*ledger);
+        next_ledger->m_metadata_owner = next_metadata;
+        next_ledger->m_rows[0u].m_volume_m3 = 0.25;
+        const auto wrong_ledger = colony::aggregateMatterCensus(
+            *next_ledger, projection, metadata, identity, 6u, 4096u);
+        PPR_TEST_ASSERT(not wrong_ledger and wrong_ledger.error() == std::errc::invalid_argument);
+
+        const auto wrong_projection = colony::aggregateMatterCensus(
+            *next_ledger, projection, next_metadata, identity, 6u, 4096u);
+        PPR_TEST_ASSERT(not wrong_projection and wrong_projection.error() == std::errc::invalid_argument);
+
+        auto next_projection = projection;
+        next_projection.m_metadata_owner = next_metadata;
+        const auto next = colony::aggregateMatterCensus(
+            *next_ledger, next_projection, next_metadata, identity, 6u, 4096u);
+        PPR_TEST_ASSERT(next.has_value() and next->m_total_volume_m3 == 1.0);
+
+        // A later publication cannot mutate the completed owned census.
+        ledger = std::move(next_ledger);
+        PPR_TEST_ASSERT(aggregate->m_total_volume_m3 == 0.875 and aggregate->m_cells[0u].m_count == 2u);
     };
 
     PPR_UNIT_TEST (selected_map_edges_preserve_units_and_close_particle_bounds) {

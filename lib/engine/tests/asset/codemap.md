@@ -2,7 +2,7 @@
 
 ## Responsibility
 
-`engine.tests.asset` is the executable behind the `engine.tests.asset.cpu`, `engine.tests.asset.gpu`, and `engine.tests.asset.gpu_validation` CTest entries. It covers CPU image/mesh processing, resilience and logging, plus shared GPU render/cache tests and private-app quarantine/lifecycle tests. Current group registration lives in `Asset.Tests.cpp`; avoid copying leaf counts into navigation docs.
+`engine.tests.asset` is the executable behind the `engine.tests.asset.*` CTest entries. It covers CPU image/mesh processing, resilience and logging, plus shared GPU render/cache tests and private-app quarantine/lifecycle tests. Current group registration lives in `Asset.Tests.cpp`; avoid copying leaf counts into navigation docs.
 
 ## Registration and fixture lifetime
 
@@ -14,9 +14,9 @@ The root first runs CPU image, mesh, resilience and observe groups. The `asset/r
 
 ## Running
 
-The CPU and GPU entries use `--loop ${PPR_TEST_LOOPS}`, default 1, and TIMEOUT 450. `engine.tests.asset.cpu` runs `asset` with `--skip-test asset/render`; `engine.tests.asset.gpu` runs `asset/render` under `RESOURCE_LOCK gpu`. ASan does not select three loops automatically. Configure `PPR_TEST_LOOPS=3` for stress and restore 1 afterward.
+All entries use `--loop ${PPR_TEST_LOOPS}`, default 1. `engine.tests.asset.cpu` runs `asset` with `--skip-test asset/render` and TIMEOUT 450. `engine.tests.asset.gpu` runs `asset/render` under `RESOURCE_LOCK gpu` with its existing TIMEOUT 450, excluding the resident-circle leaf owned by `resident_particles_gpu` and the two slow solid gates. `solid_interface_gpu` and `solid_envelope_gpu` own those exact slanted-interface and solid-envelope leaves under the same GPU lock and ordinary policy, each with TIMEOUT 300. Together the three ordinary GPU entries preserve the previous ordinary render leaf union without overlap. ASan does not select three loops automatically. Configure `PPR_TEST_LOOPS=3` for stress and restore 1 afterward.
 
-Run both routine entries with `ctest --test-dir out/build/<preset> -L engine.tests.asset --output-on-failure -LE gpu_validation`. The opt-in `engine.tests.asset.gpu_validation` entry sets `PPR_TEST_GPU_VALIDATION=1` and runs the representative grid visibility gate with the RHI debug layers; run it separately with `-L gpu_validation`. For focused groups, invoke the executable with the shared runner's `--run-test`/`--skip-test` filters matching current group paths; run from its staged executable directory. GPU groups require the documented platform/GPU environment.
+Run the routine entries with `ctest --test-dir out/build/<preset> -R '^engine[.]tests[.]asset[.]' --output-on-failure -LE gpu_validation`. The opt-in `gpu_validation`, `resident_particles_gpu`, `picture_hdr_gpu_validation` and `picture_spatial_gpu_validation` entries set `PPR_TEST_GPU_VALIDATION=1` and claim `RESOURCE_LOCK gpu` with TIMEOUT 300. They cover the representative grid visibility gate, resident-circle gate, both HDR policy/encoding gates and both indexed spatial resolve gates respectively; run them separately with the same target regex and `-L gpu_validation`. For focused groups, invoke the executable with the shared runner's `--run-test`/`--skip-test` filters matching current group paths; run from its staged executable directory. GPU groups require the documented platform/GPU environment.
 
 See [root test policy](../../../../codemap.md#test-infrastructure) for machine exclusivity, required asset gates and loop selection.
 
@@ -34,3 +34,180 @@ Grid reference/readback fixtures prepare bounded cell cohorts with
 `tryPrepareCellUploads`, refreshing renderer fence completion before retries.
 They retain content/pixel and candidate-retirement assertions; the removed
 queue-idle convenience API is not a separate reference publication path.
+
+The `picture_hdr_*` gate leaves draw controlled finite patch/ramp inputs through
+the real RetroPass. Independent frozen double scalar values from the pinned
+Filament approximation cover manual exposure, negative intermediates, saturated
+HDR colours and FP16 output. Separate sRGB/UNorm readbacks exercise exactly one
+encoding and independent palette treatment; rejected snapshots preserve a
+prepared frame/history, and a later native-resolution draw stays outside AgX.
+This fixture does not scan arbitrary producer textures or qualify Hable TSR,
+bloom, ordinary-world lighting or the RTX 2080 frame budget.
+
+The `spatial_msaa4_*` gate leaves first recover native sample indices using
+rasterized threshold rectangles and per-index multisample loads. They exercise
+the standalone `spatial_msaa4.slang` current-frame 2x resolve against a double
+geometric grid oracle, independent constant/affine moment constraints, borders,
+signed HDR and permuted indices. Normal shader-directory staging includes the
+new asset. The frozen MIT source and deliberate lower-bucket correction are
+documented in `third_party/HableMSAA/README.md`. This is sampling/filter
+qualification; RetroPass integration, runtime pattern admission, actual contour
+sample colours, temporal history and 1080p-to-4K cost remain unqualified.
+
+The threshold leaf additionally exercises the authored Slang-RHI MSAA capability
+and scoped allocation-query recipe included by `SlangRHI.cmake`. It
+checks consistent feature enum/count visibility, exact 4x sampled RGBA16F/D32
+and single-sample storage queries, descriptor rejection before Vulkan queries,
+unsupported extents and normalized mip rules. The recipe is now included;
+its configure/include-path and execution gates must pass before claiming runtime
+admission. See `third_party/SlangRHI/README.md` for the bounded descriptor scope.
+
+## Actual spatial integration qualification
+
+The existing `render_accepts_msaa_sample_counts` leaf additionally renders the
+production Triangle program with distinct payload groups into RGBA16F/D32F MSAA4,
+then verifies resolved half-float colours and descriptor-backed per-group draw constants. The spatial Retro lifecycle leaf also
+renders terrain with no background, proving its private scene pass and indirect
+Grid draw establish viewport/scissor state independently of a backdrop. Run both
+affected leaves under explicit Core validation and inspect the log for VUIDs;
+older RGBA8 or compute-only checks do not qualify these paths.
+
+Four separate leaves cover actual GridPass per-index samples (centre outside
+with a covered sample, mixed materials, authored roundness, normals/emission and
+chunk seams), real RetroPass output against the independent grid reference,
+policy rejection after preparation, three-slot reuse/resize, legacy-x4 switching,
+isolated submit quarantine, background sample alignment, optical/matter admission,
+and spatial reconstruction before frozen AgX grading/native UI. They reuse the
+two primitive sampling/filter fixtures without changing their selected scope.
+Unsupported devices exercise explicit opt-in rejection and print that the GPU
+route was not admitted; a pass there is not sample-frequency execution evidence.
+
+The existing `spatial_grid_samples_preserve_contours_materials_normals_and_emission`
+leaf owns one fixture-local `SpatialPrograms` family across its six original
+opaque captures and the native optical/matter controls: two sample modules,
+three sample programs and raster/dump/resolve pipelines are initialized once.
+Each capture still creates fresh targets, roots and uniforms, uses the same Grid
+candidate replacement and keeps every original pixel assertion. Other
+`captureSpatial_` callers retain a private family through the original-signature
+wrapper. Accepted or ambiguous submits retain the existing fatal-on-unknown
+completion guard before per-capture resource release; the borrowed family
+outlives that proof and the enclosing Grid teardown. No global cache, extra
+application/device, policy/registration/deadline change or measured speedup is
+introduced by this source refactor. The identical ordinary/GPUAV leaf remains
+the measurement scope.
+
+The same leaf additionally owns one `WorldRadiancePass` on the existing shared
+Renderer/device. Its one-page direct receiver window covers a real declared
+absorbing rectangle and matching uploaded cells, with explicit vacuum exterior
+and incoming sky. The existing patterned layers form a lit contrasting backwall;
+no material art asset is changed. All four raw RGBA16F samples are inspected before
+resolve for zero-opacity/zero-alpha identity, zero-emission identity, authored
+colour-alpha times opacity, and positive-X refracted ramp contrast. Zero-extinction
+absorbing controls keep canonical volume emission zero while testing additive
+surface emission once at alpha zero and finite bright emission at tiny alpha.
+One additional capture overlaps two distinct zero-alpha emitting disks on the
+empty terrain side. Each of the four full-mask interior samples must equal the
+actual backwall plus their finite authored emission sum, while preserving
+destination alpha. This qualifies the controlled accumulation witness; universal
+HDR particle-stack admission remains unqualified.
+The same producer also creates two fields on one source/cohort for an explicit
+native presentation-domain rejection. A zero-extinction emitter with S=50000
+binds under the narrower declared field ceiling of 1024, while binding the 65504
+field returns `argument_out_of_domain`. Before any draw leases the valid field,
+its test/producer owners are released; its weak lifetime witness must survive
+the rejected replacement. A subsequent raw4 capture verifies the retained valid
+binding still produces finite authored emission. This is a single-surface domain
+control, with no universal accumulation clamp or aggregate HDR admission claim.
+Liquid, solid-envelope and gas controls each preserve the two covered terrain
+samples while changing each empty-side sample. A translated solid is observed
+at its new world position under the same wall/sky field.
+
+The old-reader control prepares its replacement candidate and field before
+submitting the observed old frame. A scoped non-owning after-submit callback
+activates the replacement and changes native spatial policy to legacy 4x before
+the existing wait/readback. It checks the old generation remains owned while its
+submission has not yet been observed complete, compares every old raw sample
+exactly, then distinguishes the new sky generation and spatial/legacy sample
+programs. This does not claim the GPU was physically stalled. Per-capture and
+producer guards require actual completion before releasing submitted resources,
+including callback-failure paths. These additions retain the same leaf,
+registration and deadline; ordinary and Core+GPUAV execution and their durations
+remain pending for this source snapshot.
+
+Each leaf now owns a disjoint ordinary/validation pair: `spatial_grid_gpu`,
+`spatial_retro_gpu`, `spatial_background_gpu` and `spatial_grading_gpu`, with
+matching `_validation` entries. The previous two aggregate registrations are
+removed. All four exact filter tokens and their ordinary residual `gpu` union
+exclusion are unchanged; the two cheap `picture_spatial_gpu_validation` leaves
+remain separate. Every new entry retains loops, GPU lock, native 300-second
+deadline and Linux ASan unwind environment modifications; all four validation
+entries explicitly set `PPR_TEST_GPU_VALIDATION=1`.
+
+This partition follows measured execution: the ordinary aggregate passed in
+276 seconds, while Core+GPUAV reached its 300-second aggregate timeout after
+three completed leaves. The remaining focused Retro leaf passed in 135.8 seconds;
+the observed validation leaf sum is about 391 seconds. Individual case passes
+do not make the aggregate timeout a pass. The per-behaviour partition preserves
+coverage without increasing a deadline. Configure/selection metadata audits and
+execution of these new registrations remain pending.
+The fixtures provision six GridPass owners and three RetroPass owners plus one
+small grading owner; raw material controls reuse one GridPass's candidate/program
+lifecycle rather than initializing its full family for every case. The retained
+per-entry deadline still requires execution evidence for the new registrations.
+
+The existing HDR rejected-policy leaf also exercises opt-in completed-picture
+retention using actual Retro draws and readback: no picture before a completed
+write, identical held pixels across repeated reads and rejected preparation, and
+replacement only by a subsequent accepted completed picture. Temporal-history
+mode rejects retention. It reuses the existing ordinary/validation HDR entries;
+no duplicate registration or extra application fixture is added.
+
+The existing spatial Retro lifecycle leaf additionally retains its actual
+MSAA4/Hable Grid image across larger/smaller actual targets, compares every
+visible pixel exactly, checks untouched clear pixels, and stamps/waits reader
+fences. A newly completed smaller scene then replaces it normally. It reuses the
+same owners and ordinary/validation registration rather than adding a device host.
+
+The private `asset/render/quarantine/editor_scene_flow` reuses its existing Editor/RHI owner for opt-in final-surface readback after real Retro and detached native UI, checks a known UI pixel plus completion/owned-byte lifetime, suppresses repeated attempts, and checks rejected/no-image capture plus capability persistence through existing surface transactions. These source assertions require execution on a supported surface; they are not a new GPU fixture.
+
+That Editor leaf additionally chooses an even non-64-multiple framebuffer width to require nonempty 256-byte copy-row padding, validates meaningful UI pixels and zero CPU padding/tail, and uses the existing delayed-retirement seam with real offscreen submissions to prove an armed capture survives busy credits before succeeding once. Stale surface rejection checks the explicit no-acquisition outcome before retrying with a current identity.
+
+## Bounded bloom acceptance
+
+The existing `picture_hdr_punchy_matches_frozen_reference_and_single_encoding`
+and `picture_hdr_rejected_policy_preserves_prepared_frame_and_history` leaves
+reuse their real RetroPass/device/program fixture for default-off bloom. Their
+constant/compact-patch controls share a producer pipeline/root across captures.
+They cover off/disabled-again byte identity, zero/subthreshold response,
+normalized constant response, tiny/odd quarter extents, sparse independently
+weighted impulse predictions and symmetry/falloff, EV ordering,65504 at EV16,
+single encoding, native UI, policy rejection and retained crop/letterbox/resize.
+The existing HDR GPU-validation registration selects those same two leaves;
+there is no additional test application, registered shard or CPU display renderer.
+Authored controls require execution evidence before they are described as passed.
+
+## Temporal2x focused controls
+
+The existing HDR punchy leaf also drives an actual world-anchored quad through
+the returned jittered projection and sample-frequency fixture program. Analytic
+affine centers distinguish four2x outputs. A same-phase always-reactive control
+provides current-only observations; changing in-box signal proves static and
+adjacent-static history use, dynamic exact-current rejection and vacated-pixel
+recovery. Further controls cover a negative history lobe, actual publication/
+window/bounce changes, failed submission/preflight, retained clipping/phase,
+resize, display policy and moving-background rejection.
+
+The existing spatial Grid leaf reuses its immutable program/device family and
+MSAA dump kernel with another root for raw R8 reactive samples. Established
+static contours/background, zero/tiny-alpha optical emission, overlapping disks
+and all three matter phase probes now assert binary coverage separately from
+color. One reused TrianglePass/bag adds actual covered, outside, depth-rejected
+and alpha-mask-discard probes through the same capture/dump helper. Existing
+HDR/spatial GPU-validation selectors include these controls. Authored changes
+require runtime evidence; descriptor payload arithmetic is not a VRAM/timing pass.
+
+The render/draws group also covers resident material traversal and triangle
+readiness without submitted instances: live-value/lifecycle/callback errors,
+empty and repeated preparation, unsupported signatures, stable fence slots, and
+unchanged subsequent rendered pixels. These leaves use the shared GPU fixture
+and remain in the ordinary GPU shard.

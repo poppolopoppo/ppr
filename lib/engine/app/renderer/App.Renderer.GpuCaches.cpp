@@ -912,6 +912,21 @@ namespace pP {
         return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
     }
 
+    std::error_code BindlessMaterialCache::visitMaterials(
+        const std23::function_ref<std::error_code(const GpuMaterial &)> visitor) const {
+        PPR_RETURN_ERROR_ON_FAIL(
+            GpuCaches, m_initialized ? std::error_code{} : std::make_error_code(std::errc::not_connected));
+        PPR_RETURN_ERROR_ON_FAIL(
+            GpuCaches, m_residency != CacheResidency::device_lost ? std::error_code{}
+                                                                  : std::make_error_code(std::errc::no_such_device));
+
+        for (const MaterialEntry &entry: m_entries) {
+            PPR_RETURN_ERROR_ON_FAIL(GpuCaches, visitor(entry.m_gpu));
+        }
+
+        return {};
+    }
+
     rhi::IBuffer *BindlessMaterialCache::materialBuffer() const noexcept {
         if (m_residency == CacheResidency::device_lost) [[unlikely]] {
             return nullptr;

@@ -1,0 +1,14 @@
+schema_version = 1
+
+[definition]
+order = 45
+
+[definition.payload]
+tag = "matter_fill"
+
+[definition.payload.matter_fill]
+marker = "anchor"
+material = "steam"
+temperature_k = 1100.0
+bulk_density_kg_m3 = 0.6
+placement = "landmark_ember_fracture"

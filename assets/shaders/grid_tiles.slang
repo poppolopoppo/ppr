@@ -4,8 +4,8 @@
 // Grid tile pass: flat tinted or per-cell quads, one instance per visible chunk-sized
 // tile. Row-major, row-vector convention: transforms call
 // mul(vector, matrix), never mul(matrix, vector). View-projection remains
-// view * projection with [0,1] depth, no transpose, no Y flip. No dynamic lighting,
-// world-space catalog texturing, no GI inputs of any kind. Catalog sessions use the shared
+// view * projection with [0,1] depth, no transpose, no Y flip. Optional immutable
+// world radiance and catalog texturing remain content-owned explicit inputs. Catalog sessions use the shared
 // rounded quadratic-Bezier contour surface; explicit legacy fixtures keep square cells.
 struct BackgroundLayer {
     uint m_texture_index;
@@ -56,22 +56,12 @@ StructuredBuffer<uint> g_visible_ids;
 // high halfword = odd cell. Only read when payload flag bit 0 is set.
 StructuredBuffer<uint> g_cell_materials;
 // Uploaded verbatim from engine.math; no separate shader case table.
-struct ContourTriangle {
-    uint m_a;
-    uint m_b;
-    uint m_c;
-    uint m_solid_corners;
-};
-struct ContourCase {
-    uint m_segment_count;
-    uint m_triangle_count;
-    uint2 m_segments[2];
-    ContourTriangle m_triangles[3];
-};
-StructuredBuffer<float2> g_contour_points;
-StructuredBuffer<ContourCase> g_contour_cases;
+#include "grid_contour_math.slang"
+#include "grid_world_radiance.slang"
+#include "grid_background_world.slang"
+#include "grid_screen_contact_types.slang"
 StructuredBuffer<uint> g_chunk_slots;
-// CPU GridTerrainVisual: 80 bytes. Scalar mean components occupy offsets 20/24/28.
+// CPU GridTerrainVisual: 96 bytes. Scalar mean components occupy offsets 20/24/28.
 // Texture index here is
 // the resident descriptor slot, resolved from the catalog's source index.
 struct TerrainVisual {
@@ -94,6 +84,8 @@ struct TerrainVisual {
     float m_normal_scale;
     float m_refraction_depth_m;
     uint m_surface_flags;
+    uint m_transport_model;
+    float m_sigma_r_per_m, m_sigma_g_per_m, m_sigma_b_per_m;
 };
 static const uint kSurfaceOpticalBlend = 1u;
 static const uint kSurfaceTextureRepeat = 2u;
@@ -134,6 +126,11 @@ float4 diagnosticTint(uint rgba, float coverage) {
         (rgba >> 8u) & 255u, rgba & 255u) / 255.0;
     tint.rgb = select(tint.rgb <= 0.04045, tint.rgb / 12.92,
         pow((tint.rgb + 0.055) / 1.055, float3(2.4)));
+
+    // The normalized RGB endpoint is exactly1. Shader pow approximation can
+    // otherwise exceed it and violate the admitted material reflectance domain.
+    tint.rgb = select(uint3((rgba >> 24u) & 255u, (rgba >> 16u) & 255u, (rgba >> 8u) & 255u) == 255u,
+        float3(1.0), tint.rgb);
     return float4(tint.rgb, tint.a * coverage);
 }
 
@@ -214,17 +211,200 @@ uint terrainSample(int2 sample) {
     return ((index & 1u) != 0u) ? (packed >> 16u) : (packed & 0xffffu);
 }
 
-float contourCross(float2 a, float2 b) {
-    return a.x * b.y - a.y * b.x;
+// ------------------------------------------------------------------
+// native-face reference incident sampling, distinct from surface emission
+// ------------------------------------------------------------------
+
+bool gridWorldRimProbe(uint material,float2 position,out WorldCoefficients value) {
+    WorldCoefficients empty={};
+    value=empty;
+    if (!gridWorldInside(position)) return false;
+
+    int2 origin=int2(g_grid_world_radiance.originX,g_grid_world_radiance.originY);
+    int2 extent=int2(g_grid_world_radiance.width,g_grid_world_radiance.height);
+    int2 base=int2(floor(position-0.5));
+    float best=3.402823466e38;uint bestKey=0xffffffffu;int2 selected=0;
+    const int2 steps[4]={int2(-1,0),int2(1,0),int2(0,-1),int2(0,1)};
+    for (uint corner=0u;corner<4u;++corner) {
+        int2 cell=base+int2(corner&1u,(corner>>1u)&1u);
+        int2 local=cell-origin;
+        if (any(local<0) || any(local>=extent) || terrainSample(cell)!=material) continue;
+
+        for (uint face=0u;face<4u;++face) {
+            int2 neighbor=local+steps[face];
+            if (any(neighbor<0) || any(neighbor>=extent) || terrainSample(origin+neighbor)!=0u) continue;
+
+            float2 midpoint=float2(cell)+0.5+0.5*float2(steps[face]);
+            float2 delta=position-midpoint;float score=dot(delta,delta);
+            uint key=(uint(local.y)*g_grid_world_radiance.width+uint(local.x))*4u+face;
+            if (score<best || (score==best && key<bestKey)) {
+                best=score;bestKey=key;selected=neighbor;
+            }
+        }
+    }
+
+    // Deep opaque regions legitimately receive zero incident radiance. This
+    // is not an unlit texture fallback; the caller adds its own S exactly once.
+    if (bestKey==0xffffffffu) return false;
+
+    value=g_grid_world_radiance.spacing>1u
+        ? gridWorldSample(float2(origin+selected)+0.5) : gridWorldProbe(selected);
+    return true;
 }
 
-// Inverse of the per-axis quadratic map. Zero roundness keeps straight
-// midpoint cuts; one reproduces the original rounded Bezier boundary.
-float2 contourWarp(float2 point, float roundness) {
-    float2 lower = min(point, 1.0 - point);
-    float scale = 1.0 + roundness;
-    float2 mapped = 2.0 * lower / (scale + sqrt(max(scale * scale - 8.0 * roundness * lower, 0.0)));
-    return select(point <= 0.5, mapped, 1.0 - mapped);
+float3 gridWorldRim(uint material,float2 position,float3 normal) {
+    WorldCoefficients value;
+    if (!gridWorldRimProbe(material,position,value)) return float3(0);
+
+    uint status;
+    float3 incident=worldDiffuseResponse(value,normal,status);
+    if (status!=0u || !worldFinite3(incident)) return float3(1,0,1);
+    return max(incident,float3(0));
+}
+
+// ------------------------------------------------------------------
+// completed receiver field and visual-only cut-face continuation
+// ------------------------------------------------------------------
+
+struct GridReceiverParameters {
+    uint enabled, width, height, features;
+    int minX, minY;
+    uint components, candidates;
+    uint response, directionOffset, directionCount, reserved;
+};
+ConstantBuffer<GridReceiverParameters> g_grid_receivers;
+StructuredBuffer<TerrainReceiverFeature> g_lighting_features;
+StructuredBuffer<TerrainReceiverResult> g_lighting_results;
+StructuredBuffer<TerrainReceiverCellRange> g_lighting_cells;
+StructuredBuffer<TerrainReceiverComponentRange> g_lighting_components;
+StructuredBuffer<uint> g_lighting_candidates;
+StructuredBuffer<TerrainReceiverAngular> g_lighting_angular;
+StructuredBuffer<TerrainReceiverDirection> g_lighting_directions;
+
+float3 gridReceiverDirectional(uint key, float3 normal) {
+    float3 value = 0.0;
+    for (uint bin = 0u; bin < 16u; ++bin) {
+        TerrainReceiverAngular row = g_lighting_angular[key * 16u + bin];
+        TerrainReceiverDirection direction = g_lighting_directions[g_grid_receivers.directionOffset + bin];
+        value += terrainReceiverDiffuseLift(normal, float2(direction.x, direction.y)) *
+            float3(row.radianceR, row.radianceG, row.radianceB);
+    }
+    return value * (1.0 / 16.0);
+}
+
+float3 gridReceiverMean(uint material, float2 contourPosition, float3 normal) {
+    float2 position = contourPosition - float2(g_grid_receivers.minX, g_grid_receivers.minY);
+    if (any(position < 0.5) || position.x >= float(g_grid_receivers.width) - 0.5 ||
+        position.y >= float(g_grid_receivers.height) - 0.5) return 0.0;
+    int2 base = int2(floor(position - 0.5));
+    uint cell = uint(base.y) * (g_grid_receivers.width - 1u) + uint(base.x);
+    TerrainReceiverCellRange regions = g_lighting_cells[cell];
+    uint cornerMask = 0;
+    for (uint corner = 0; corner < 4; ++corner) {
+        int2 sample = base + int2(g_grid_receivers.minX, g_grid_receivers.minY) + int2(g_contour_points[corner]);
+        if (terrainSample(sample) == material) cornerMask |= 1u << corner;
+    }
+
+    uint winner = 0xffffffffu;
+    float best = asfloat(0x7f800000u);
+    for (uint region = 0; region < regions.count; ++region) {
+        TerrainReceiverComponentRange range = g_lighting_components[regions.offset + region];
+        // Same-label diagonal occupied saddles are connected. Thus a selected
+        // render material identifies at most one occupied component in this cell.
+        if ((range.cornerMask & cornerMask) == 0) continue;
+        for (uint index = 0; index < range.count; ++index) {
+            uint key = g_lighting_candidates[range.offset + index];
+            float score = terrainReceiverVisualScore(position, g_lighting_features[key]);
+            if (score < best || (score == best && key < winner)) { best = score; winner = key; }
+        }
+    }
+
+    // No exposed receiver in this solid component means self-emission only.
+    if (winner == 0xffffffffu) return 0.0;
+    TerrainReceiverResult result = g_lighting_results[winner];
+    bool mapped = g_grid_receivers.response == 1u && !all(normal == float3(0.0, 0.0, 1.0));
+    if (g_grid_receivers.enabled != 2u || best == 0.0) {
+        // Exact receiver centres retain their original mean. Coincident centres
+        // use the same lowest feature key; no universal continuity is claimed there.
+        if (mapped) return gridReceiverDirectional(winner, normal);
+        return float3(result.meanR, result.meanG, result.meanB);
+    }
+
+    // The deterministic nearest site anchors the boundary side. Compact support
+    // blends only outward-facing neighbours of that same solid component;
+    // a medial-line discontinuity is intentional when incident sides differ.
+    TerrainReceiverFeature anchor = g_lighting_features[winner];
+    precise float radius = sqrt(best) + 0.5;
+    precise float radiusSquared = radius * radius;
+    precise float supportScale = radiusSquared - best;
+    float3 weighted = 0.0;
+    float3 angular[16];
+    if (mapped) {
+        for (uint bin = 0u; bin < 16u; ++bin) angular[bin] = 0.0;
+    }
+
+    float total = 0.0;
+    for (uint region = 0; region < regions.count; ++region) {
+        TerrainReceiverComponentRange range = g_lighting_components[regions.offset + region];
+        if ((range.cornerMask & cornerMask) == 0) continue;
+
+        for (uint index = 0; index < range.count; ++index) {
+            uint key = g_lighting_candidates[range.offset + index];
+            TerrainReceiverFeature feature = g_lighting_features[key];
+            if (!terrainReceiverVisualSameFacing(feature, anchor)) continue;
+
+            float score = terrainReceiverVisualScore(position, feature);
+            if (!(score < radiusSquared)) continue;
+
+            precise float inverseDistance = best / score;
+            precise float taper = (radiusSquared - score) / supportScale;
+            precise float weight = (inverseDistance * inverseDistance) * (taper * taper);
+            TerrainReceiverResult value = g_lighting_results[key];
+            if (mapped) {
+                for (uint bin = 0u; bin < 16u; ++bin) {
+                    TerrainReceiverAngular row = g_lighting_angular[key * 16u + bin];
+                    angular[bin] += weight * float3(row.radianceR, row.radianceG, row.radianceB);
+                }
+            } else weighted += weight * float3(value.meanR, value.meanG, value.meanB);
+
+            total += weight;
+        }
+    }
+
+    // The nearest site has weight1, proving a positive normalization denominator.
+    if (!mapped) return weighted / total;
+
+    float3 incident = 0.0;
+    for (uint bin = 0u; bin < 16u; ++bin) {
+        TerrainReceiverDirection direction = g_lighting_directions[g_grid_receivers.directionOffset + bin];
+        incident += terrainReceiverDiffuseLift(normal, float2(direction.x, direction.y)) * (angular[bin] / total);
+    }
+    return incident * (1.0 / 16.0);
+}
+
+// Isolated linear-light observation of the ACTUAL lookup, without material
+// emission, albedo, exposure or display encoding. Never called by draw entries.
+struct GridReceiverProbeInput {
+    float x, y; uint material, reserved;
+    float normalX, normalY, normalZ; uint operation;
+};
+struct GridReceiverProbeParameters { uint count, reserved0, reserved1, reserved2; };
+ConstantBuffer<GridReceiverProbeParameters> g_grid_receiver_probe_params;
+StructuredBuffer<GridReceiverProbeInput> g_grid_receiver_probe_inputs;
+RWStructuredBuffer<float4> g_grid_receiver_probe_outputs;
+
+[shader("compute")]
+[numthreads(64, 1, 1)]
+void qualifyGridReceiverContinuation(uint3 id : SV_DispatchThreadID) {
+    if (id.x >= g_grid_receiver_probe_params.count) return;
+
+    GridReceiverProbeInput input = g_grid_receiver_probe_inputs[id.x];
+    float3 normal = float3(input.normalX, input.normalY, input.normalZ);
+    if (input.operation == 1u) {
+        g_grid_receiver_probe_outputs[id.x] = float4(terrainReceiverDiffuseLift(normal, float2(input.x, input.y)), 0.0, 0.0, 0.0);
+    } else {
+        g_grid_receiver_probe_outputs[id.x] = float4(gridReceiverMean(input.material, float2(input.x, input.y), normal), 0.0);
+    }
 }
 
 float materialRoundness(uint material) {
@@ -245,7 +425,7 @@ bool sharedSolidRoundness(uint materials[4], out float roundness) {
         second = label;
     }
     if (second == 0u) { return false; }
-    roundness = 0.5 * (materialRoundness(first) + materialRoundness(second));
+    roundness = contourMeanRoundness(materialRoundness(first), materialRoundness(second));
     return true;
 }
 
@@ -299,120 +479,8 @@ float2 boundaryDisplacement(float2 position, float2 pixel_x, float2 pixel_y, Sam
     return displacement * shared_envelope * fade;
 }
 
-float roundedSegmentDistance(float2 point, uint2 segment, float roundness, out float2 nearest, out float2 normal) {
-    float2 a = g_contour_points[segment.x];
-    float2 b = g_contour_points[segment.y];
-    float2 delta = b - a;
-    float t = saturate(dot(point - a, delta) / dot(delta, delta));
-    nearest = a + t * delta;
-    normal = float2(-delta.y, delta.x);
-    if (roundness != 0.0 && delta.x != 0.0 && delta.y != 0.0) {
-        float2 control = lerp((a + b) * 0.5, float2(0.5), roundness);
-        float2 acceleration = 2.0 * (a - 2.0 * control + b);
-        float best = min(dot(point - a, point - a), dot(point - b, point - b));
-        float best_t = dot(point - a, point - a) < dot(point - b, point - b) ? 0.0 : 1.0;
-        // Bounded closest-point solves from both ends and the middle avoid
-        // selecting a local maximum on the inside of a convex arc.
-        for (uint seed = 0u; seed < 3u; ++seed) {
-            t = 0.5 * float(seed);
-            for (uint iteration = 0u; iteration < 6u; ++iteration) {
-                float2 curve = lerp(lerp(a, control, t), lerp(control, b, t), t);
-                float2 tangent = 2.0 * lerp(control - a, b - control, t);
-                float numerator = dot(curve - point, tangent);
-                float denominator = dot(tangent, tangent) + dot(curve - point, acceleration);
-                if (abs(denominator) > 1.0e-8) {
-                    t = saturate(t - clamp(numerator / denominator, -0.25, 0.25));
-                }
-            }
-            float2 curve = lerp(lerp(a, control, t), lerp(control, b, t), t);
-            float distance = dot(point - curve, point - curve);
-            if (distance < best) { best = distance; best_t = t; }
-        }
-        nearest = lerp(lerp(a, control, best_t), lerp(control, b, best_t), best_t);
-        float2 tangent = lerp(control - a, b - control, best_t);
-        normal = float2(-tangent.y, tangent.x);
-    }
-    normal /= max(length(normal), 1.0e-6);
-    return length(point - nearest);
-}
-
 float contourPixelSize(float2 normal, float2 pixel_x, float2 pixel_y) {
     return max(length(float2(dot(normal, pixel_x), dot(normal, pixel_y))), 1.0e-6);
-}
-
-bool contourContains(uint mask, float2 point) {
-    ContourCase shape = g_contour_cases[mask];
-    for (uint index = 0u; index < shape.m_triangle_count; ++index) {
-        ContourTriangle triangle = shape.m_triangles[index];
-        float2 a = g_contour_points[triangle.m_a];
-        float2 b = g_contour_points[triangle.m_b];
-        float2 c = g_contour_points[triangle.m_c];
-        if (contourCross(b - a, point - a) >= 0.0 &&
-            contourCross(c - b, point - b) >= 0.0 &&
-            contourCross(a - c, point - c) >= 0.0) {
-            return true;
-        }
-    }
-    return false;
-}
-
-// Label shapes provide continuous scores; their maximum partitions the entire
-// occupied region, including gaps between independently rounded label shapes.
-uint materialMask(uint materials[4], uint corner) {
-    uint mask = 0u;
-    for (uint other = 0u; other < 4u; ++other) {
-        if (materials[other] == materials[corner]) { mask |= 1u << other; }
-    }
-    return mask;
-}
-
-// A saddle cannot connect both opposing materials in the plane. The lower
-// solid ID wins that tie; a repeated solid always connects across empty corners.
-// Use the opposite case's boundary and complement only for that saddle label.
-bool connectedSaddle(uint materials[4], uint corner, uint mask) {
-    if (mask != 5u && mask != 10u) { return false; }
-    uint other = materials[(corner + 1u) & 3u];
-    uint opposite = materials[(corner + 3u) & 3u];
-    return other != opposite || other == 0u || other == 0xffffu || materials[corner] < other;
-}
-
-// Signed scores preserve the existing rounded label contours while making
-// their bisectors shared interfaces, even outside every individual region.
-float contourScore(float2 point, uint mask, float roundness, bool connected, out float2 gradient) {
-    ContourCase shape = g_contour_cases[mask];
-    float distance = 1.0e30;
-    float2 closest = point;
-    float2 closest_normal = float2(0.0);
-    for (uint edge = 0u; edge < shape.m_segment_count; ++edge) {
-        float2 nearest, normal;
-        float candidate = roundedSegmentDistance(point, shape.m_segments[edge], roundness, nearest, normal);
-        if (candidate < distance) {
-            distance = candidate;
-            closest = nearest;
-            closest_normal = normal;
-        }
-    }
-    bool inside = contourContains(mask, contourWarp(point, roundness)) != connected;
-    if (distance > 1.0e-6) {
-        gradient = (inside ? 1.0 : -1.0) * (point - closest) / distance;
-    } else {
-        bool normal_inside = contourContains(mask, contourWarp(closest + 1.0e-4 * closest_normal, roundness)) != connected;
-        gradient = normal_inside ? closest_normal : -closest_normal;
-    }
-    return inside ? distance : -distance;
-}
-
-uint occupiedMask(uint materials[4]) {
-    uint mask = 0u;
-    for (uint corner = 0u; corner < 4u; ++corner) {
-        if (materials[corner] != 0u && materials[corner] != 0xffffu) { mask |= 1u << corner; }
-    }
-    return mask;
-}
-
-bool occupiedSaddleConnected(uint materials[4], uint mask) {
-    return (mask == 5u && materials[0] == materials[2]) ||
-        (mask == 10u && materials[1] == materials[3]);
 }
 
 // A contour endpoint crosses one dual-cell edge. Only the solid on that edge
@@ -425,7 +493,7 @@ float outerEndpointRoundness(uint materials[4], float2 endpoint) {
 }
 
 float outerSegmentRoundness(uint materials[4], uint2 segment) {
-    return 0.5 * (outerEndpointRoundness(materials, g_contour_points[segment.x]) +
+    return contourMeanRoundness(outerEndpointRoundness(materials, g_contour_points[segment.x]),
         outerEndpointRoundness(materials, g_contour_points[segment.y]));
 }
 
@@ -453,6 +521,33 @@ float occupiedCoverage(uint materials[4], float2 point, float width) {
     return saturate(coverage);
 }
 
+// Point occupancy for the selected MSAA sample. Keep the same authored contour
+// and saddle topology; smooth AA ramps are not geometry and must not be summed
+// or multiplied into alpha after hardware sample coverage has been selected.
+float occupiedPoint(uint materials[4], float2 point) {
+    uint mask = occupiedMask(materials);
+    if (mask == 0u) { return 0.0; }
+    if (mask == 15u) { return 1.0; }
+    bool connected = occupiedSaddleConnected(materials, mask);
+    uint shape_mask = connected ? 15u ^ mask : mask;
+    ContourCase shape = g_contour_cases[shape_mask];
+
+    if ((mask == 5u || mask == 10u) && !connected) {
+        for (uint corner = 0u; corner < 4u; ++corner) {
+            if ((mask & (1u << corner)) == 0u) { continue; }
+            float2 gradient;
+            if (contourScore(point, 1u << corner, materialRoundness(materials[corner]), false, gradient) >= 0.0) {
+                return 1.0;
+            }
+        }
+        return 0.0;
+    }
+
+    float2 gradient;
+    float roundness = outerSegmentRoundness(materials, shape.m_segments[0]);
+    return contourScore(point, shape_mask, roundness, connected, gradient) >= 0.0 ? 1.0 : 0.0;
+}
+
 struct TerrainStencil {
     int2 base;
     uint labels[16];
@@ -475,8 +570,15 @@ uint stencilSample(TerrainStencil stencil, int2 offset) {
     return stencil.labels[(offset.y + 1) * 4 + offset.x + 1];
 }
 
+// gridWorldRimProbe tests the four central cells and their face neighbors.
+bool stencilHasNoExposedFace(TerrainStencil stencil) {
+    return all(uint4(stencil.labels[1],stencil.labels[2],stencil.labels[4],stencil.labels[7])!=0u) &&
+        all(uint4(stencil.labels[5],stencil.labels[6],stencil.labels[9],stencil.labels[10])!=0u) &&
+        all(uint4(stencil.labels[8],stencil.labels[11],stencil.labels[13],stencil.labels[14])!=0u);
+}
+
 uint contourMaterial(float2 position, float2 pixel_x, float2 pixel_y, float width, TerrainStencil stencil,
-    out float coverage, out int2 winner, out float internal_outline) {
+    out float coverage, out int2 winner, out float internal_outline, bool point_sample = false) {
     winner = int2(4096);
     internal_outline = 0.0;
     int2 base = stencil.base;
@@ -499,7 +601,7 @@ uint contourMaterial(float2 position, float2 pixel_x, float2 pixel_y, float widt
         winner = base + int2(point.x > 0.5 ? 1 : 0, point.y > 0.5 ? 1 : 0);
         return label;
     }
-    coverage = occupiedCoverage(materials, point, width);
+    coverage = point_sample ? occupiedPoint(materials, point) : occupiedCoverage(materials, point, width);
     float interface_roundness;
     bool shared_interface = sharedSolidRoundness(materials, interface_roundness);
     uint visited = 0u;
@@ -694,11 +796,18 @@ float4 decorateSurface(float4 surface, float2 decoration) {
     return float4(color, alpha);
 }
 
-// Optical opacity and geometric coverage are separate. The returned RGB is
-// already composed with the immutable backdrop; callers blend coverage once.
+// Bounded native-reference presentation experiment. An isolated staged literal0
+// variant is the matched backwall-only control; this is never transport energy.
+static const float kNativeCutFaceIncident = 0.04;
+// Temporary isolated staged-literal A/B control; no runtime policy or field change.
+static const bool kNativeMaterialResponse = true;
+
+// Optical opacity and geometric coverage are separate. Legacy displaced reads
+// may precompose the backdrop; native zero-offset RGB stays premultiplied so
+// actual destination samples supply transmission. Callers blend coverage once.
 float4 materialSurface(uint material, float2 fine_position, float2 gradient_x,
     float2 gradient_y, float2 screen, float2 decoration, bool reuse_background, float3 unshifted_background,
-    StructuredBuffer<DescriptorHandle<Texture2D<float4>>> textures, SamplerState.Handle sampler) {
+    StructuredBuffer<DescriptorHandle<Texture2D<float4>>> textures, SamplerState.Handle sampler, float2 receiver_position, bool moving_surface=false, bool premultiplied=false) {
     TerrainVisual visual = g_terrain_visuals[min(material, 65535u)];
     float4 tint = diagnosticTint(visual.m_color_rgba, 1.0);
     float period = visual.m_texture_period_m;
@@ -733,8 +842,11 @@ float4 materialSurface(uint material, float2 fine_position, float2 gradient_x,
     if (!repeat_texture) {
         albedo.rgb = saturate(mean + (albedo.rgb - mean) * rsqrt(dot(weights, weights)));
     }
+
     float3 normal = float3(0.0, 0.0, 1.0);
-    if (visual.m_normal_texture_index != 0xffffffffu) {
+    if (((g_grid_receivers.enabled == 0u && g_grid_world_radiance.enabled == 0u) || g_grid_receivers.response == 1u ||
+        (g_grid_world_radiance.enabled != 0u && (g_grid_world_radiance.response == 1u || kNativeCutFaceIncident > 0.0))) &&
+        visual.m_normal_texture_index != 0xffffffffu) {
         float3 n0 = decodePatchNormal(nonuniform(textures[visual.m_normal_texture_index]).SampleGrad(
             sampler, patches.uv0, uv_gradient_x, uv_gradient_y).xyz);
         float3 n1 = float3(0.0), n2 = float3(0.0);
@@ -750,6 +862,91 @@ float4 materialSurface(uint material, float2 fine_position, float2 gradient_x,
             normal = normalize(decoded);
         }
     }
+
+    if (g_grid_receivers.enabled != 0u || g_grid_world_radiance.enabled != 0u) {
+        // Rim treatment changes reflectance. Both native world lobes obey the
+        // existing flat/mapped response; the local key keeps its mapped normal.
+        float3 reflectance = lerp(tint.rgb * albedo.rgb, float3(0.025), saturate(decoration.x));
+        float3 source = visual.m_emissive_rgb * visual.m_emissive_strength;
+
+        if (g_grid_world_radiance.enabled != 0u) {
+            // The offscreen timing draw samples the ordinary terrain materials
+            // and coverage. Omit incident light and displaced backdrop reads.
+            if (g_grid_world_radiance.materialControl != 0u) {
+                float a = (visual.m_surface_flags & kSurfaceOpticalBlend) != 0u ?
+                    saturate(tint.a * albedo.a * visual.m_opacity) : 1.0;
+                return float4(reflectance * a + source, a);
+            }
+            bool optical_blend=(visual.m_surface_flags & kSurfaceOpticalBlend)!=0u;
+            float3 responseNormal=g_grid_world_radiance.response==1u ? normal:float3(0,0,1);
+            if (optical_blend || moving_surface) {
+                WorldCoefficients local=gridWorldSample(receiver_position);
+                uint status;
+                float3 reflected=kNativeMaterialResponse
+                    ? worldMaterialResponse(local,responseNormal,reflectance,
+                        visual.m_metallic,visual.m_roughness,visual.m_ior,status)
+                    : reflectance*max(worldDiffuseResponse(local,responseNormal,status),float3(0));
+                if (status!=0u || !worldFinite3(reflected)) return float4(1,0,1,1);
+
+                float opacity=optical_blend ? saturate(tint.a*albedo.a*visual.m_opacity):1.0;
+                float2 offset=0;
+                if (optical_blend && visual.m_ior>1 && visual.m_refraction_depth_m>0 && any(normal.xy!=0)) {
+                    float2 shift=normal.xy/max(normal.z,0.25)*
+                        ((1-1/visual.m_ior)*visual.m_refraction_depth_m);
+                    float4 a=mul(float4(world,0,1),g_grid_frame.m_view_projection);
+                    float4 b=mul(float4(world+shift,0,1),g_grid_frame.m_view_projection);
+                    if (abs(a.w)>1e-6 && abs(b.w)>1e-6) {
+                        offset=(b.xy/b.w-a.xy/a.w)*float2(0.5,-0.5)*g_grid_frame.m_viewport.zw;
+                        offset*=min(1.0,8.0/max(length(offset),1e-6));
+                    }
+                }
+
+                // With no displacement, native ONE/(1-a) blending
+                // preserves the ACTUAL destination sample, including alpha0.
+                // Only a displaced read uses the declared filtered backdrop.
+                float3 color=reflected;
+                float alpha=opacity;
+                if (g_grid_frame.m_has_background!=0u && any(offset!=0)) {
+                    color=lerp(backdropColor(screen+offset,sampler),color,opacity);
+                    alpha=1;
+                }
+                // Native final optical programs use ONE/(1-a). Self emission
+                // is additive once even at a=0, without S/a or half overflow.
+                return premultiplied ? float4(color*alpha+source,alpha)
+                    : float4(color+source,alpha);
+            }
+
+            WorldCoefficients probe;
+            bool exposed=gridWorldRimProbe(material,receiver_position,probe);
+            // The temporal production field is the sole incident-light source.
+            float cutFaceIncident=g_grid_world_radiance.spacing>1u ? 0:kNativeCutFaceIncident;
+
+            if (!kNativeMaterialResponse) {
+                uint status;
+                float3 meanL=exposed ? max(worldDiffuseResponse(probe,responseNormal,status),float3(0)):float3(0);
+
+                meanL+=cutFaceIncident*max(dot(normal,normalize(float3(-0.4,0.5,1))),0);
+                return float4(reflectance*meanL+source,1);
+            }
+
+            float3 reflected=0;
+            if (exposed) {
+                uint status;
+                reflected=worldMaterialResponse(probe,responseNormal,reflectance,
+                    visual.m_metallic,visual.m_roughness,visual.m_ior,status);
+                if (status!=0u || !worldFinite3(reflected)) return float4(1,0,1,1);
+            }
+
+            // No exposed neighbor means physically zero world reflection, not
+            // an unlit texture fallback. Diagnostic key light and S remain once.
+            return float4(reflected+worldCutFaceResponse(reflectance,normal,cutFaceIncident,source),1);
+        }
+
+        // Original contour-receiver diffuse path remains unchanged.
+        float3 meanL=gridReceiverMean(material,receiver_position,normal);
+        return float4(reflectance * meanL + source, 1.0);
+    }
+
     float3 color = tint.rgb * albedo.rgb;
     // Fixed local relief response uses PBR parameters without a world light/GI
     // dependency. Roughness widens the facing lobe; metallic colors its F0.
@@ -762,7 +959,11 @@ float4 materialSurface(uint material, float2 fine_position, float2 gradient_x,
     color += 1.0 - exp(-visual.m_emissive_rgb * min(visual.m_emissive_strength, 80.0));
     bool optical_blend = (visual.m_surface_flags & kSurfaceOpticalBlend) != 0u;
     float opacity = !optical_blend ? 1.0 : saturate(tint.a * albedo.a * visual.m_opacity);
-    if (g_grid_frame.m_has_background == 0u) { return decorateSurface(float4(color, opacity), decoration); }
+    if (g_grid_frame.m_has_background == 0u) {
+        float4 surface=decorateSurface(float4(color,opacity),decoration);
+        if (premultiplied) surface.rgb*=surface.a;
+        return surface;
+    }
     if (opacity >= 1.0) { return decorateSurface(float4(color, 1.0), decoration); }
     float2 offset_pixels = float2(0.0);
     if (optical_blend && visual.m_ior > 1.0 && visual.m_refraction_depth_m > 0.0 && any(normal.xy != 0.0)) {
@@ -776,16 +977,21 @@ float4 materialSurface(uint material, float2 fine_position, float2 gradient_x,
             offset_pixels *= min(1.0, 8.0 / max(length(offset_pixels), 1.0e-6));
         }
     }
+    if (premultiplied && all(offset_pixels==0.0)) {
+        float4 surface=decorateSurface(float4(color,opacity),decoration);
+        return float4(surface.rgb*surface.a,surface.a);
+    }
+
     float3 background = reuse_background && all(offset_pixels == 0.0)
         ? unshifted_background : backdropColor(screen + offset_pixels, sampler);
     return decorateSurface(float4(lerp(background, color, opacity), 1.0), decoration);
 }
 
-[shader("fragment")]
-float4 fragmentGridMain(
+float4 shadeGridReactive(
     GridVertexOutput input,
-    uniform StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
-    uniform SamplerState.Handle g_sampler) : SV_Target {
+    StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
+    SamplerState.Handle g_sampler, bool point_sample, out float reactive_coverage, bool material_only = false) {
+    reactive_coverage = 0;
     float2 world_pixel_x = ddx(input.fine_position);
     float2 world_pixel_y = ddy(input.fine_position);
     float2 contour_position = input.fine_position;
@@ -806,6 +1012,7 @@ float4 fragmentGridMain(
     float coverage = 1.0;
     float internal_outline = 0.0;
     uint diagnostic_mode = g_grid_frame.m_surface_mode >> 2u;
+    if (diagnostic_mode != 0u) reactive_coverage = 1;
     int2 sample = int2(floor(input.fine_position));
     TerrainStencil stencil = {};
     if (diagnostic_mode == 2u) {
@@ -816,7 +1023,8 @@ float4 fragmentGridMain(
     if ((input.flags & 1u) != 0u) {
         if ((g_grid_frame.m_surface_mode & 1u) != 0u) {
             stencil = terrainStencil(contour_position);
-            material = contourMaterial(contour_position, pixel_x, pixel_y, width, stencil, coverage, sample, internal_outline);
+            material = contourMaterial(contour_position, pixel_x, pixel_y, width, stencil, coverage, sample, internal_outline,
+                point_sample);
         } else {
         // Rasterized quad edges may land exactly at 128 after interpolation;
         // clamp them into the final cell rather than reading the next chunk.
@@ -829,6 +1037,11 @@ float4 fragmentGridMain(
         }
         }
     }
+
+    // The pilot's centre mask uses this actual displaced material selector,
+    // before texturing/lighting. It does not infer occupancy from scene depth.
+    if (material_only) return float4(coverage>0.0 && material<0xffffu ? float(material):0.0,0,0,0);
+
     float4 matter = float4(0.0);
     if (diagnostic_mode == 4u) {
         uint index = diagnosticIndex(int2(floor(input.fine_position)));
@@ -843,22 +1056,41 @@ float4 fragmentGridMain(
     if (diagnostic_mode == 1u || diagnostic_mode == 3u) {
         if (coverage == 0.0 || material == 0u || material >= 0xffffu) { discard; }
         uint index = diagnostic_mode == 1u ? material : diagnosticIndex(sample);
-        return diagnosticTint(g_diagnostic_colors[index].m_color_rgba, coverage);
+        float4 diagnostic=diagnosticTint(g_diagnostic_colors[index].m_color_rgba,coverage);
+        if (point_sample) diagnostic.rgb*=diagnostic.a;
+        return diagnostic;
     }
-    float2 decoration = (input.flags & 1u) != 0u && (g_grid_frame.m_surface_mode & 1u) != 0u ?
+    // Lit empty samples cannot consume either decoration component: the exterior
+    // shadow is suppressed below, and no terrain surface receives an outline.
+    // Keep the original search for every visible contour and for legacy shading.
+    bool consumes_decoration = (g_grid_receivers.enabled == 0u && g_grid_world_radiance.enabled == 0u) ||
+        (coverage > 0.0 && material != 0u && material < 0xffffu);
+    float2 decoration = consumes_decoration && (input.flags & 1u) != 0u && (g_grid_frame.m_surface_mode & 1u) != 0u ?
         contourDecoration(contour_position, pixel_x, pixel_y, material, coverage < 1.0, stencil) : float2(0.0);
     decoration.x = max(decoration.x, internal_outline);
+
+    // Preserve contributor provenance before static decoration shares this accumulator.
+    bool reactive_matter = matter.a > 0.0;
+
     // Shadow lives entirely on the non-solid side. Its coverage complements the
     // terrain AA and composites over matter before the final background blend.
-    float shadow = 0.45 * decoration.y;
+    // Receiver lighting supplies the wall/door shadows. The legacy decorative
+    // outside shadow must not inject a fixed gray term into an unlit scene.
+    float shadow = g_grid_receivers.enabled != 0u || g_grid_world_radiance.enabled != 0u ? 0.0 : 0.45 * decoration.y;
     matter = compositeMatter(float4(float3(0.015), shadow * (1.0 - coverage)),
         float4(matter.rgb, matter.a * (1.0 - shadow)));
     if (coverage == 0.0 || material == 0u || material >= 0xffffu) {
-        if (matter.a > 0.0) { return matter; }
+        if (matter.a > 0.0) {
+            if (reactive_matter) reactive_coverage = 1;
+            if (point_sample) matter.rgb*=matter.a;
+            return matter;
+        }
         discard;
     }
     if ((g_grid_frame.m_surface_mode & 2u) == 0u) {
-        return compositeMatter(float4(decorateTerrain(gridTint(material), decoration), coverage), matter);
+        float4 flat=compositeMatter(float4(decorateTerrain(gridTint(material),decoration),coverage),matter);
+        if (point_sample) flat.rgb*=flat.a;
+        return flat;
     }
     if (material == 0u || material >= 0xffffu) {
         discard;
@@ -867,9 +1099,78 @@ float4 fragmentGridMain(
     if (visual.m_material_id != material) {
         discard;
     }
-    float4 surface = materialSurface(material, input.fine_position, gradient_x, gradient_y,
-        input.position.xy, decoration, false, float3(0.0), g_textures, g_sampler);
+    // Classify the ACTUAL selected contour before optical opacity/emission.
+    if ((visual.m_surface_flags & kSurfaceOpticalBlend) != 0u || coverage != 1.0 || reactive_matter)
+        reactive_coverage = 1;
+
+    float4 surface;
+    if (g_grid_world_radiance.enabled!=0u && g_grid_world_radiance.spacing>1u &&
+        (input.flags&1u)!=0u && (g_grid_frame.m_surface_mode&1u)!=0u &&
+        (visual.m_surface_flags&kSurfaceOpticalBlend)==0u && stencilHasNoExposedFace(stencil)) {
+        surface=float4(visual.m_emissive_rgb*visual.m_emissive_strength,1);
+    } else {
+        surface=materialSurface(material,input.fine_position,gradient_x,gradient_y,
+            input.position.xy,decoration,false,float3(0),g_textures,g_sampler,contour_position,false,point_sample);
+    }
+    if (point_sample) {
+        float alpha=surface.a*coverage;
+        return float4(surface.rgb*coverage+matter.rgb*matter.a*(1-alpha),alpha+matter.a*(1-alpha));
+    }
     return compositeMatter(float4(surface.rgb, surface.a * coverage), matter);
+}
+
+float4 shadeGrid(GridVertexOutput input,
+    StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
+    SamplerState.Handle g_sampler, bool point_sample, bool material_only = false) {
+    float unused_reactive;
+    return shadeGridReactive(input,g_textures,g_sampler,point_sample,unused_reactive,material_only);
+}
+
+struct GridReactiveOutput {
+    float4 color : SV_Target0;
+    float reactive : SV_Target1;
+};
+
+[shader("fragment")]
+float4 fragmentGridMain(GridVertexOutput input,
+    uniform StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
+    uniform SamplerState.Handle g_sampler) : SV_Target {
+    return shadeGrid(input, g_textures, g_sampler, false);
+}
+
+// This separate entry is selected by owned spatial policy, never sample count
+// alone (legacy temporal also renders 4x). SampleId forces per-sample invocation;
+// explicit interpolation evaluates the actual plane, including perspective.
+[shader("fragment")]
+float4 fragmentGridSpatial(GridVertexOutput input, uint sample_index : SV_SampleIndex,
+    uniform StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
+    uniform SamplerState.Handle g_sampler) : SV_Target {
+    float2 fine = EvaluateAttributeAtSample(input.fine_position, sample_index);
+    float2 local = EvaluateAttributeAtSample(input.local_cell, sample_index);
+    static const float2 positions[4] = {
+        float2(0.375, 0.125), float2(0.875, 0.375), float2(0.125, 0.625), float2(0.625, 0.875)};
+
+    input.fine_position = fine;
+    input.local_cell = local;
+    input.position.xy = floor(input.position.xy) + positions[sample_index];
+    return shadeGrid(input, g_textures, g_sampler, true);
+}
+
+[shader("fragment")]
+GridReactiveOutput fragmentGridReactive(GridVertexOutput input, uint sample_index : SV_SampleIndex,
+    uniform StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
+    uniform SamplerState.Handle g_sampler) {
+    float2 fine = EvaluateAttributeAtSample(input.fine_position, sample_index);
+    float2 local = EvaluateAttributeAtSample(input.local_cell, sample_index);
+    static const float2 positions[4] = {
+        float2(0.375, 0.125), float2(0.875, 0.375), float2(0.125, 0.625), float2(0.625, 0.875)};
+
+    input.fine_position = fine;
+    input.local_cell = local;
+    input.position.xy = floor(input.position.xy) + positions[sample_index];
+    GridReactiveOutput output;
+    output.color=shadeGridReactive(input,g_textures,g_sampler,true,output.reactive);
+    return output;
 }
 
 struct ParticleVertexOutput {
@@ -907,6 +1208,24 @@ ParticleVertexOutput vertexParticleIndirectMain(uint vertex:SV_VertexID,uint ins
 }
 
 // ------------------------------------------------------------------
+// actual native reference consumer qualification
+// ------------------------------------------------------------------
+
+// Qualification uses the ACTUAL native incident/crop consumers, with the same
+// typed buffers and cell IDs as draw roots. No transport/source reconstruction.
+[shader("compute")]
+[numthreads(64,1,1)]
+void qualifyGridWorldRadiance(uint3 id:SV_DispatchThreadID) {
+    if (id.x>=g_grid_receiver_probe_params.count) return;
+    GridReceiverProbeInput input=g_grid_receiver_probe_inputs[id.x];
+    float3 normal=float3(input.normalX,input.normalY,input.normalZ);
+    float3 incident=input.operation==2u ? gridWorldRim(input.material,float2(input.x,input.y),normal)
+        : gridWorldAt(float2(input.x,input.y),normal);
+    float enclosed=input.operation==2u && stencilHasNoExposedFace(terrainStencil(float2(input.x,input.y))) ? 1.0:0.0;
+    g_grid_receiver_probe_outputs[id.x]=float4(incident,enclosed);
+}
+
+// ------------------------------------------------------------------
 // particle occlusion and element shading
 // ------------------------------------------------------------------
 
@@ -934,13 +1253,13 @@ ParticleTerrainFootprint particleTerrainFootprint(float2 fine_position, SamplerS
     return footprint;
 }
 
-float particleTerrainCoverage(ParticleTerrainFootprint footprint) {
+float particleTerrainCoverage(ParticleTerrainFootprint footprint, bool point_sample=false) {
     float coverage = 0, outline = 0;
     int2 sample = int2(floor(footprint.contour));
     if ((g_grid_frame.m_surface_mode & 1u) != 0u) {
         TerrainStencil stencil = terrainStencil(footprint.contour);
         contourMaterial(footprint.contour, footprint.pixel_x, footprint.pixel_y, footprint.width,
-            stencil, coverage, sample, outline);
+            stencil, coverage, sample, outline,point_sample);
     } else {
         uint terrain = terrainSample(sample);
         coverage = terrain != 0u && terrain != 0xffffu ? 1.0 : 0.0;
@@ -948,10 +1267,10 @@ float particleTerrainCoverage(ParticleTerrainFootprint footprint) {
     return coverage;
 }
 
-[shader("fragment")]
-float4 fragmentParticleMain(ParticleVertexOutput input,
-    uniform StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
-    uniform SamplerState.Handle g_sampler):SV_Target {
+float4 shadeParticleReactive(ParticleVertexOutput input,
+    StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
+    SamplerState.Handle g_sampler,bool point_sample,out float geometric_support) {
+    geometric_support=0;
     // Phase is constant over each primitive: both reconstructed surfaces are already drawn.
     TerrainVisual visual = g_terrain_visuals[input.material];
     if ((visual.m_surface_flags & (kSurfaceParticleLiquid | kSurfaceParticleSolid)) != 0u) discard;
@@ -961,13 +1280,71 @@ float4 fragmentParticleMain(ParticleVertexOutput input,
     float alpha=g_particle_mask.Sample(g_particle_mask_sampler,input.uv).a;
     if (alpha==0) discard;
 
-    float coverage = particleTerrainCoverage(footprint);
+    float coverage = particleTerrainCoverage(footprint,point_sample);
     if (coverage == 1.0) discard;
+
+    // Geometric support survives independently of material alpha and source.
+    geometric_support=1;
 
     float materialAlpha=float(visual.m_color_rgba&255u)/255.0;
     // Straight-alpha RGB comes directly from Cold24 (gas uses its catalog RGB).
     // Blend once over the already drawn terrain/background, preserving overlap.
-    return float4(input.color.rgb,alpha*input.color.a*materialAlpha*visual.m_opacity*(1.0-coverage));
+    float opacity=alpha*input.color.a*materialAlpha*visual.m_opacity*(1.0-coverage);
+    float3 color=input.color.rgb;
+    if (point_sample && g_grid_world_radiance.enabled!=0u) {
+        color*=gridWorldAt(input.fine_position,float3(0,0,1));
+        float3 source=visual.m_emissive_rgb*visual.m_emissive_strength;
+        return float4(color*opacity+source*alpha*(1.0-coverage),opacity);
+    }
+    return float4(point_sample?color*opacity:color,opacity);
+}
+
+float4 shadeParticle(ParticleVertexOutput input,
+    StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
+    SamplerState.Handle g_sampler,bool point_sample) {
+    float unused_reactive;
+    return shadeParticleReactive(input,g_textures,g_sampler,point_sample,unused_reactive);
+}
+
+[shader("fragment")]
+float4 fragmentParticleMain(ParticleVertexOutput input,
+    uniform StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
+    uniform SamplerState.Handle g_sampler):SV_Target {
+    return shadeParticle(input,g_textures,g_sampler,false);
+}
+
+[shader("fragment")]
+float4 fragmentParticleSpatial(ParticleVertexOutput input,uint index:SV_SampleIndex,
+    uniform StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
+    uniform SamplerState.Handle g_sampler):SV_Target {
+    // Evaluate the entry's actual varyings before mutating either member.
+    float2 fine = EvaluateAttributeAtSample(input.fine_position, index);
+    float2 uv = EvaluateAttributeAtSample(input.uv, index);
+    static const float2 positions[4] = {
+        float2(0.375, 0.125), float2(0.875, 0.375), float2(0.125, 0.625), float2(0.625, 0.875)};
+
+    input.fine_position = fine;
+    input.uv = uv;
+    input.position.xy = floor(input.position.xy) + positions[index];
+    return shadeParticle(input,g_textures,g_sampler,true);
+}
+
+[shader("fragment")]
+GridReactiveOutput fragmentParticleReactive(ParticleVertexOutput input,uint index:SV_SampleIndex,
+    uniform StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
+    uniform SamplerState.Handle g_sampler){
+    // Evaluate the entry's actual varyings before mutating either member.
+    float2 fine = EvaluateAttributeAtSample(input.fine_position, index);
+    float2 uv = EvaluateAttributeAtSample(input.uv, index);
+    static const float2 positions[4] = {
+        float2(0.375, 0.125), float2(0.875, 0.375), float2(0.125, 0.625), float2(0.625, 0.875)};
+
+    input.fine_position = fine;
+    input.uv = uv;
+    input.position.xy = floor(input.position.xy) + positions[index];
+    GridReactiveOutput output;
+    output.color=shadeParticleReactive(input,g_textures,g_sampler,true,output.reactive);
+    return output;
 }
 
 // ------------------------------------------------------------------
@@ -1094,10 +1471,10 @@ float2 liquidScreenDisplacement(float2 world, float2 shift, float pixel_limit) {
     return offset * min(1.0, pixel_limit / max(length(offset), 1.0e-6));
 }
 
-[shader("fragment")]
-float4 fragmentFluidComposite(ParticleVertexOutput input,
-    uniform StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
-    uniform SamplerState.Handle g_sampler) : SV_Target {
+float4 shadeFluidCompositeReactive(ParticleVertexOutput input,
+    StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
+    SamplerState.Handle g_sampler,bool point_sample,out float geometric_support) {
+    geometric_support=0;
     float3 view_direction;
     float2 fine_position = liquidFinePosition(input.uv, view_direction);
     uint width, height;
@@ -1127,8 +1504,11 @@ float4 fragmentFluidComposite(ParticleVertexOutput input,
     float mask = smoothstep(kLiquidIsoLevel - edge_width * 0.5, kLiquidIsoLevel + edge_width * 0.5, field);
     if (mask == 0.0) discard;
 
-    float coverage = particleTerrainCoverage(footprint);
+    float coverage = particleTerrainCoverage(footprint,point_sample);
     if (coverage == 1.0) discard;
+
+    // Geometric support survives independently of material alpha and source.
+    geometric_support=1;
 
     TerrainVisual visual = g_terrain_visuals[material];
     float3 color = diagnosticTint(visual.m_color_rgba, 1.0).rgb;
@@ -1154,13 +1534,37 @@ float4 fragmentFluidComposite(ParticleVertexOutput input,
     float opacity = (visual.m_surface_flags & kSurfaceOpticalBlend) != 0u
         ? 1.0 - pow(max(1.0 - authored_alpha, 1.0e-6), max(field, 0.0)) : 1.0;
 
+    if (point_sample && g_grid_world_radiance.enabled!=0u) {
+        uint status;
+        float3 responseNormal=g_grid_world_radiance.response==1u?normal:float3(0,0,1);
+        float3 response=worldMaterialResponse(gridWorldSample(fine_position),responseNormal,color,
+            visual.m_metallic,roughness,visual.m_ior,status);
+        if (status!=0u || !worldFinite3(response)) return float4(1,0,1,1);
+
+        float a=opacity*(1-fresnel)+fresnel;
+        float3 premultiplied=response*a;
+        float2 shift=normal.xy/max(normal.z,.25)*
+            ((1-1/max(visual.m_ior,1.0))*visual.m_refraction_depth_m);
+        float2 offset=liquidScreenDisplacement(fine_position*g_grid_frame.m_cell_size_m,shift,12.0);
+        if (g_grid_frame.m_has_background!=0u && any(offset!=0)) {
+            premultiplied+=backdropColor(input.position.xy+offset,g_sampler)*(1-a);
+            a=1;
+        }
+
+        float geometric=mask*(1-coverage);
+        return float4((premultiplied+visual.m_emissive_rgb*visual.m_emissive_strength)*geometric,a*geometric);
+    }
+
     if (g_grid_frame.m_has_background != 0u) {
         float2 world = fine_position * g_grid_frame.m_cell_size_m;
         float2 shift = normal.xy / max(normal.z, 0.25) *
             ((1.0 - 1.0 / max(visual.m_ior, 1.0)) * visual.m_refraction_depth_m);
         float2 offset = liquidScreenDisplacement(world, shift, 12.0);
-        color = lerp(backdropColor(input.position.xy + offset, g_sampler), color, opacity);
-        opacity = 1.0;
+        if (!point_sample || any(offset!=0)) {
+            color = lerp(backdropColor(input.position.xy + offset, g_sampler), color, opacity);
+            opacity = 1.0;
+        }
+
         if (fresnel > 0.0 && roughness < 1.0) {
             // Reflection uses its own physical neighborhood, independent of
             // refraction depth, so either optical contribution can be inspected.
@@ -1177,7 +1581,52 @@ float4 fragmentFluidComposite(ParticleVertexOutput input,
     float surface_alpha = transmitted_alpha + fresnel;
     color = (color * transmitted_alpha + reflection * fresnel) / max(surface_alpha, 1.0e-6);
     color += 1.0 - exp(-visual.m_emissive_rgb * min(visual.m_emissive_strength, 80.0));
-    return float4(color, mask * surface_alpha * (1.0 - coverage));
+    float final_alpha=mask*surface_alpha*(1.0-coverage);
+    return float4(point_sample?color*final_alpha:color,final_alpha);
+}
+
+float4 shadeFluidComposite(ParticleVertexOutput input,
+    StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
+    SamplerState.Handle g_sampler,bool point_sample) {
+    float unused_reactive;
+    return shadeFluidCompositeReactive(input,g_textures,g_sampler,point_sample,unused_reactive);
+}
+
+[shader("fragment")]
+float4 fragmentFluidComposite(ParticleVertexOutput input,
+    uniform StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
+    uniform SamplerState.Handle g_sampler):SV_Target {
+    return shadeFluidComposite(input,g_textures,g_sampler,false);
+}
+
+[shader("fragment")]
+float4 fragmentFluidSpatial(ParticleVertexOutput input,uint index:SV_SampleIndex,
+    uniform StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
+    uniform SamplerState.Handle g_sampler):SV_Target {
+    // Fullscreen composites reconstruct world position from this sample UV.
+    float2 uv = EvaluateAttributeAtSample(input.uv, index);
+    static const float2 positions[4] = {
+        float2(0.375, 0.125), float2(0.875, 0.375), float2(0.125, 0.625), float2(0.625, 0.875)};
+
+    input.uv = uv;
+    input.position.xy = floor(input.position.xy) + positions[index];
+    return shadeFluidComposite(input,g_textures,g_sampler,true);
+}
+
+[shader("fragment")]
+GridReactiveOutput fragmentFluidReactive(ParticleVertexOutput input,uint index:SV_SampleIndex,
+    uniform StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
+    uniform SamplerState.Handle g_sampler){
+    // Fullscreen composites reconstruct world position from this sample UV.
+    float2 uv = EvaluateAttributeAtSample(input.uv, index);
+    static const float2 positions[4] = {
+        float2(0.375, 0.125), float2(0.875, 0.375), float2(0.125, 0.625), float2(0.625, 0.875)};
+
+    input.uv = uv;
+    input.position.xy = floor(input.position.xy) + positions[index];
+    GridReactiveOutput output;
+    output.color=shadeFluidCompositeReactive(input,g_textures,g_sampler,true,output.reactive);
+    return output;
 }
 
 // ------------------------------------------------------------------
@@ -1252,13 +1701,13 @@ float solidCoverageBilinear(float2 coordinate, int2 extent) {
 
 float4 solidMaterialSurface(uint4 materials, float2 fraction, float2 fine_position,
     float2 dx, float2 dy, float2 screen,
-    StructuredBuffer<DescriptorHandle<Texture2D<float4>>> textures, SamplerState.Handle sampler) {
+    StructuredBuffer<DescriptorHandle<Texture2D<float4>>> textures, SamplerState.Handle sampler,bool point_sample) {
     // IDs are categorical. Filter their coverage, never their numeric values.
     // The common interior still shades its terrain material only once.
     if (all(materials == materials.x)) {
         if (materials.x == 0u) discard;
         return materialSurface(materials.x, fine_position, dx, dy, screen,
-            float2(0.0), false, float3(0.0), textures, sampler);
+            float2(0.0), false, float3(0.0), textures, sampler, fine_position, true,point_sample);
     }
 
     float4 weights = float4(
@@ -1279,8 +1728,8 @@ float4 solidMaterialSurface(uint4 materials, float2 fraction, float2 fine_positi
         }
 
         float4 surface = materialSurface(material, fine_position, dx, dy, screen,
-            float2(0.0), false, float3(0.0), textures, sampler);
-        premultiplied += float4(surface.rgb * surface.a, surface.a) * weights[index];
+            float2(0.0), false, float3(0.0), textures, sampler, fine_position, true,point_sample);
+        premultiplied += float4(point_sample?surface.rgb:surface.rgb*surface.a,surface.a)*weights[index];
         valid_weight += weights[index];
     }
 
@@ -1288,13 +1737,13 @@ float4 solidMaterialSurface(uint4 materials, float2 fraction, float2 fine_positi
     // Mix linear premultiplied color, then restore the scene's straight alpha.
     if (valid_weight == 0.0) discard;
     premultiplied /= valid_weight;
-    return float4(premultiplied.rgb / max(premultiplied.a, 1.0e-6), premultiplied.a);
+    return point_sample?premultiplied:float4(premultiplied.rgb/max(premultiplied.a,1.0e-6),premultiplied.a);
 }
 
-[shader("fragment")]
-float4 fragmentSolidComposite(ParticleVertexOutput input,
-    uniform StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
-    uniform SamplerState.Handle g_sampler) : SV_Target {
+float4 shadeSolidCompositeReactive(ParticleVertexOutput input,
+    StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
+    SamplerState.Handle g_sampler,bool point_sample,out float geometric_support) {
+    geometric_support=0;
     float3 ignored_view_direction;
     float2 fine_position = liquidFinePosition(input.uv, ignored_view_direction);
     float2 dx = clamp(ddx(fine_position) * g_grid_frame.m_cell_size_m, -2048.0, 2048.0);
@@ -1324,11 +1773,382 @@ float4 fragmentSolidComposite(ParticleVertexOutput input,
     float mask = smoothstep(kSolidIsoLevel - edge_width * 0.5, kSolidIsoLevel + edge_width * 0.5, field);
     if (mask == 0.0) discard;
 
-    float terrain_coverage = particleTerrainCoverage(footprint);
+    float terrain_coverage = particleTerrainCoverage(footprint,point_sample);
     if (terrain_coverage == 1.0) discard;
 
+    // Geometric support survives independently of material alpha and source.
+    geometric_support=1;
+
     float4 surface = solidMaterialSurface(materials, frac(coordinate), fine_position, dx, dy,
-        input.position.xy, g_textures, g_sampler);
-    surface.a *= mask * (1.0 - terrain_coverage);
+        input.position.xy, g_textures, g_sampler,point_sample);
+    float geometric=mask*(1.0-terrain_coverage);
+    if (point_sample) surface.rgb*=geometric;
+    surface.a*=geometric;
     return surface;
+}
+
+float4 shadeSolidComposite(ParticleVertexOutput input,
+    StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
+    SamplerState.Handle g_sampler,bool point_sample) {
+    float unused_reactive;
+    return shadeSolidCompositeReactive(input,g_textures,g_sampler,point_sample,unused_reactive);
+}
+
+[shader("fragment")]
+float4 fragmentSolidComposite(ParticleVertexOutput input,
+    uniform StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
+    uniform SamplerState.Handle g_sampler):SV_Target {
+    return shadeSolidComposite(input,g_textures,g_sampler,false);
+}
+
+[shader("fragment")]
+float4 fragmentSolidSpatial(ParticleVertexOutput input,uint index:SV_SampleIndex,
+    uniform StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
+    uniform SamplerState.Handle g_sampler):SV_Target {
+    // Fullscreen composites reconstruct world position from this sample UV.
+    float2 uv = EvaluateAttributeAtSample(input.uv, index);
+    static const float2 positions[4] = {
+        float2(0.375, 0.125), float2(0.875, 0.375), float2(0.125, 0.625), float2(0.625, 0.875)};
+
+    input.uv = uv;
+    input.position.xy = floor(input.position.xy) + positions[index];
+    return shadeSolidComposite(input,g_textures,g_sampler,true);
+}
+
+[shader("fragment")]
+GridReactiveOutput fragmentSolidReactive(ParticleVertexOutput input,uint index:SV_SampleIndex,
+    uniform StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
+    uniform SamplerState.Handle g_sampler){
+    // Fullscreen composites reconstruct world position from this sample UV.
+    float2 uv = EvaluateAttributeAtSample(input.uv, index);
+    static const float2 positions[4] = {
+        float2(0.375, 0.125), float2(0.875, 0.375), float2(0.125, 0.625), float2(0.625, 0.875)};
+
+    input.uv = uv;
+    input.position.xy = floor(input.position.xy) + positions[index];
+    GridReactiveOutput output;
+    output.color=shadeSolidCompositeReactive(input,g_textures,g_sampler,true,output.reactive);
+    return output;
+}
+
+// ------------------------------------------------------------------
+// isolated qualification probe for the actual material palette ABI
+// ------------------------------------------------------------------
+
+struct MaterialOpticsProbeParameters {
+    uint count, reserved0, reserved1, reserved2;
+};
+struct MaterialOpticsProbe {
+    uint model;
+    float sigmaR, sigmaG, sigmaB;
+    float sourceR, sourceG, sourceB;
+    uint status;
+    float volumeR, volumeG, volumeB;
+    uint reserved;
+};
+ConstantBuffer<MaterialOpticsProbeParameters> g_material_optics_probe_params;
+RWStructuredBuffer<MaterialOpticsProbe> g_material_optics_probe;
+
+[shader("compute")]
+[numthreads(64,1,1)]
+void qualifyMaterialOptics(uint3 thread : SV_DispatchThreadID)
+{
+    if (thread.x >= g_material_optics_probe_params.count)
+        return;
+
+    TerrainVisual visual = g_terrain_visuals[thread.x];
+    float3 sigma = float3(visual.m_sigma_r_per_m, visual.m_sigma_g_per_m, visual.m_sigma_b_per_m);
+    float3 source = visual.m_emissive_rgb * visual.m_emissive_strength;
+    float3 volume = sigma * source;
+    uint model = visual.m_transport_model;
+    uint status = (model == 0x101u || model == 0x102u || model == 0x103u) ? 0 : 1;
+    if (!all(isfinite(visual.m_emissive_rgb)) || any(visual.m_emissive_rgb < 0.0) || any(visual.m_emissive_rgb > 1.0) ||
+        !isfinite(visual.m_emissive_strength) || visual.m_emissive_strength < 0.0 ||
+        !all(isfinite(sigma)) || any(sigma < 0.0) || !all(isfinite(source)) || any(source < 0.0) ||
+        !all(isfinite(volume)) || any(volume < 0.0) ||
+        any((visual.m_emissive_rgb > 0.0) && (visual.m_emissive_strength > 0.0) && (source == 0.0)) ||
+        any((sigma > 0.0) && (source > 0.0) && (volume == 0.0)) ||
+        (model != 0x103u && any(sigma != 0.0)) || (model == 0x101u && any(source != 0.0)))
+        status |= 2;
+
+    MaterialOpticsProbe result = {model, sigma.x, sigma.y, sigma.z, source.x, source.y, source.z,
+        status, volume.x, volume.y, volume.z, 0};
+    g_material_optics_probe[thread.x] = result;
+}
+
+// ------------------------------------------------------------------
+// isolated bit contract for the actual raster roundness call paths
+// ------------------------------------------------------------------
+
+struct ContourRoundnessProbeParameters {
+    uint count, reserved0, reserved1, reserved2;
+};
+ConstantBuffer<ContourRoundnessProbeParameters> g_contour_roundness_probe_params;
+StructuredBuffer<uint2> g_contour_roundness_pairs;
+RWStructuredBuffer<uint4> g_contour_roundness_probe;
+
+// Bind the ordinary 304-byte GridFrame with surface_mode mask2 (numeric value2)
+// set, the real 96-byte terrain palette, and the shared points/cases. Distinct
+// nonzero pair IDs may carry equal roundness values. No production draw binds
+// these probe resources or invokes this entry.
+[shader("compute")]
+[numthreads(64,1,1)]
+void qualifyRasterContourRoundness(uint3 thread : SV_DispatchThreadID) {
+    if (thread.x >= g_contour_roundness_probe_params.count) { return; }
+
+    uint2 pair = g_contour_roundness_pairs[thread.x];
+    uint shared_materials[4] = {pair.x, pair.y, pair.x, pair.y};
+    float shared;
+    bool has_shared = sharedSolidRoundness(shared_materials, shared);
+
+    uint outer_materials[4] = {pair.x, pair.y, pair.y, 0u};
+    float outer = outerSegmentRoundness(outer_materials, g_contour_cases[7u].m_segments[0]);
+    g_contour_roundness_probe[thread.x] = uint4(asuint(outer), asuint(shared), has_shared ? 1u : 0u, 0u);
+}
+
+// ------------------------------------------------------------------
+// bounded centre-density backwall near-segment experiment
+// ------------------------------------------------------------------
+
+Texture2D<uint> g_screen_material;
+RWStructuredBuffer<GridScreenContactResult> g_screen_output;
+
+[shader("vertex")]
+GridVertexOutput vertexScreenContactMask(uint vertex:SV_VertexID) {
+    float2 uv=float2((vertex<<1u)&2u,vertex&2u);
+    float2 world;
+    backgroundReceivingPointAt(uv,g_grid_frame.m_inverse_view_projection,world);
+    GridVertexOutput result=(GridVertexOutput)0;
+    result.position=float4(uv*float2(2,-2)+float2(-1,1),0,1);
+    result.fine_position=world/g_grid_frame.m_cell_size_m;
+    result.flags=1u;
+    return result;
+}
+
+[shader("fragment")]
+uint fragmentScreenContactMask(GridVertexOutput input,
+    uniform StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
+    uniform SamplerState.Handle g_sampler):SV_Target {
+    return uint(shadeGrid(input,g_textures,g_sampler,true,true).x);
+}
+
+float2 screenContactPixelAt(float2 nativePoint) {
+    float4 clip=mul(float4(nativePoint*g_grid_frame.m_cell_size_m,0,1),g_grid_frame.m_view_projection);
+    return (clip.xy/clip.w*float2(0.5,-0.5)+0.5)*float2(g_screen_contact.width,g_screen_contact.height);
+}
+
+// One current-frame material sample per physical pixel, shared by a block.
+// The two eligibility words and centre connections prevent interpolation
+// across a thin wall. Ray deltas are signed until final display composition.
+groupshared uint contactLabels[64];
+groupshared uint contactEligible[2],contactNeighbours,contactStatus;
+groupshared float3 contactDelta[16];
+
+bool contactBlockPath(int2 from,int2 to) {
+    int2 p=from;
+    if (contactLabels[p.y*8+p.x]!=0u) return false;
+    while (p.x!=to.x) {
+        p.x+=p.x<to.x?1:-1;
+        if (contactLabels[p.y*8+p.x]!=0u) return false;
+    }
+    while (p.y!=to.y) {
+        p.y+=p.y<to.y?1:-1;
+        if (contactLabels[p.y*8+p.x]!=0u) return false;
+    }
+    return true;
+}
+
+bool contactRasterPath(int2 from,int2 to) {
+    int2 p=from;
+    while (p.x!=to.x) {
+        p.x+=p.x<to.x?1:-1;
+        if (g_screen_material.Load(int3(p,0))!=0u) return false;
+    }
+    while (p.y!=to.y) {
+        p.y+=p.y<to.y?1:-1;
+        if (g_screen_material.Load(int3(p,0))!=0u) return false;
+    }
+    return true;
+}
+
+float3 contactRayDelta(uint bin,uint2 centre,float2 q,out uint status) {
+    status=0u;
+    float angle=(float(bin)+0.5)*(2*WORLD_PI/16);
+    float2 direction=float2(cos(angle),sin(angle));
+    float2 start=float2(centre)+0.5;
+    float2 delta=screenContactPixelAt(q+2*direction)-start;
+    // Traverse contiguous raster cells. At high zoom the step budget may end
+    // before the two-cell radius. Unobserved distance retains the world bin.
+    int2 tap=int2(centre);
+    int2 advance=int2(sign(delta));
+    float2 intervals=1.0/max(abs(delta),float2(1e-20));
+    float2 crossing=0.5*intervals;
+    float previous=0;
+    float entry=0;
+    for (uint step=0u;step<16u;++step) {
+        previous=entry;
+        entry=min(crossing.x,crossing.y);
+        if (entry>1) break;
+        if (crossing.x<=entry) { tap.x+=advance.x; crossing.x+=intervals.x; }
+        if (crossing.y<=entry) { tap.y+=advance.y; crossing.y+=intervals.y; }
+        if (any(tap<0) || any(tap>=int2(g_screen_contact.width,g_screen_contact.height))) break;
+        uint id=g_screen_material.Load(int3(tap,0));
+        if (id==0u) continue;
+        if (id>=0xffffu) break;
+        TerrainVisual surface=g_terrain_visuals[id];
+        if (surface.m_material_id!=id || surface.m_transport_model!=0x102u) break;
+
+        // Estimate the outward contour normal from occupied adjacent pixels.
+        // Transform the screen-space gradient as a covector to the native plane.
+        int2 hi=int2(g_screen_contact.width,g_screen_contact.height)-1;
+        float2 gradient=float2(
+            float(g_screen_material.Load(int3(max(int2(0),tap-int2(1,0)),0))==id)-
+            float(g_screen_material.Load(int3(min(hi,tap+int2(1,0)),0))==id),
+            float(g_screen_material.Load(int3(max(int2(0),tap-int2(0,1)),0))==id)-
+            float(g_screen_material.Load(int3(min(hi,tap+int2(0,1)),0))==id));
+        float2 normal=float2(dot(gradient,screenContactPixelAt(q+float2(1,0))-start),
+            dot(gradient,screenContactPixelAt(q+float2(0,1))-start));
+        if (dot(normal,-direction)<=0) normal=-direction;
+        else normal=normalize(normal);
+
+        float2 incidentPoint=q+direction*(previous+entry);
+        if (!gridWorldInside(incidentPoint)) break;
+        uint reflectStatus,worldStatus;
+        float3 diffuse=max(worldDiffuseResponse(gridWorldSample(incidentPoint),float3(normal,0),reflectStatus),float3(0));
+        float3 mean=float3(surface.m_filtered_mean_r,surface.m_filtered_mean_g,surface.m_filtered_mean_b);
+        float3 albedo=diagnosticTint(surface.m_color_rgba,1).rgb*mean*(1-surface.m_metallic);
+        float3 outgoing=surface.m_emissive_rgb*surface.m_emissive_strength+albedo*diffuse;
+        float3 old=gridWorldDirectionalAt(q,angle,worldStatus);
+        status=reflectStatus|worldStatus;
+        return (outgoing-old)/16;
+    }
+    // Offscreen, unsupported optics or no observed hit: retain this world bin.
+    return 0;
+}
+
+void refineViewportContact(uint index,uint lane) {
+    uint stride=g_screen_contact.stride;
+    uint2 block=uint2(index%g_screen_contact.countX,index/g_screen_contact.countX);
+    uint2 first=block*stride,centre=screenBlockCentre(block);
+    uint2 local=uint2(lane%8u,lane/8u),pixel=first+local;
+    bool active=all(local<stride) && all(pixel<uint2(g_screen_contact.width,g_screen_contact.height));
+    contactLabels[lane]=active?g_screen_material.Load(int3(pixel,0)):0xffffu;
+    if (lane==0u) {
+        contactEligible[0]=0u;contactEligible[1]=0u;
+        contactNeighbours=0u;contactStatus=0u;
+    }
+    GroupMemoryBarrierWithGroupSync();
+
+    int2 localCentre=int2(centre-first);
+    bool open=contactLabels[localCentre.y*8+localCentre.x]==0u;
+    if (active && open && contactBlockPath(localCentre,int2(local)))
+        InterlockedOr(contactEligible[lane/32u],1u<<(lane%32u));
+    if (lane<9u && open) {
+        int2 neighbour=int2(block)+int2(int(lane%3u)-1,int(lane/3u)-1);
+        if (all(neighbour>=0) && all(neighbour<int2(g_screen_contact.countX,g_screen_contact.countY)) &&
+            contactRasterPath(int2(centre),int2(screenBlockCentre(uint2(neighbour)))))
+            InterlockedOr(contactNeighbours,1u<<lane);
+    }
+    if (lane<16u) {
+        float2 world=0;
+        bool valid=backgroundReceivingPointAt((float2(centre)+0.5)/float2(g_screen_contact.width,g_screen_contact.height),
+            g_grid_frame.m_inverse_view_projection,world);
+        float2 q=world/g_grid_frame.m_cell_size_m;
+        uint status=0u;
+        float3 adjustment=0;
+        if (open && valid && gridWorldInside(q)) adjustment=contactRayDelta(lane,centre,q,status);
+        if (!worldFinite3(adjustment) || !valid) status|=WORLD_INVALID;
+        if (status!=0u) InterlockedOr(contactStatus,status);
+        contactDelta[lane]=adjustment;
+    }
+    GroupMemoryBarrierWithGroupSync();
+
+    if (lane==0u) {
+        float3 correction=0;
+        for (uint bin=0u;bin<16u;++bin) correction+=contactDelta[bin];
+        if (contactStatus!=0u) correction=float3(64,0,64);
+        GridScreenContactResult low={correction.r,correction.g,correction.b,contactEligible[0]};
+        GridScreenContactResult high={float(contactNeighbours),float(contactStatus),0,contactEligible[1]};
+        g_screen_output[2u*index]=low;
+        g_screen_output[2u*index+1u]=high;
+    }
+}
+
+[shader("compute")]
+[numthreads(64,1,1)]
+void refineScreenContact(uint3 tid:SV_DispatchThreadID,uint3 group:SV_GroupID,uint lane:SV_GroupIndex) {
+    if (g_screen_contact.stride!=0u) {
+        refineViewportContact(group.x,lane);
+        return;
+    }
+    uint count=g_screen_contact.countX*g_screen_contact.countY;
+    if (tid.x>=count) return;
+
+    uint2 pixel=uint2(tid.x%g_screen_contact.countX+g_screen_contact.left,
+        tid.x/g_screen_contact.countX+g_screen_contact.top);
+    float2 world=0;
+    uint status=backgroundReceivingPointAt((float2(pixel)+0.5)/float2(g_screen_contact.width,g_screen_contact.height),
+        g_grid_frame.m_inverse_view_projection,world) ? 0u:WORLD_INVALID;
+    float2 q=world/g_grid_frame.m_cell_size_m;
+    float3 mean=0;
+    // Published rows satisfy8H+2S<=65504, H=sum(abs(CH)). Each directional
+    // endpoint is bounded by H; each hit by S. Positive spatial/angular weights
+    // make this front-only result <=max(H,S), without a coefficient/source clamp.
+    // Only vacuum receiver centres inside the declared fixed-world ROI are
+    // refined. Covered/ROI-rounding pixels keep the exact world-only control.
+    if (g_screen_material.Load(int3(pixel,0))!=0u || any(q<float2(34,7)) || any(q>=float2(38,15))) {
+        mean=gridWorldAt(q,float3(0,0,1));
+    } else {
+        for (uint bin=0u;bin<16u;++bin) {
+            float angle=(float(bin)+0.5)*(2*WORLD_PI/16);
+            float2 direction=float2(cos(angle),sin(angle));
+            float2 endpoint=q+2*direction;
+            float2 startPixel=float2(pixel)+0.5;
+            float2 pixelDelta=screenContactPixelAt(endpoint)-startPixel;
+            float exitFraction=1.0;
+            for (uint axis=0u;axis<2u;++axis) {
+                float edge=pixelDelta[axis]>0 ? float(axis==0u?g_screen_contact.width:g_screen_contact.height):0.0;
+                if (pixelDelta[axis]!=0) exitFraction=min(exitFraction,(edge-startPixel[axis])/pixelDelta[axis]);
+            }
+
+            exitFraction=clamp(exitFraction,0.0,1.0);
+            bool hit=false;
+            float3 radiance=0;
+            // Eight fixed taps over2nativecells: explicitly sampled visibility,
+            // not an exact fine-contour intersection or a replacement world ray.
+            for (uint step=1u;step<=8u;++step) {
+                float fraction=float(step)/8;
+                if (fraction>exitFraction) break;
+
+                int2 tap=int2(floor(startPixel+pixelDelta*fraction));
+                if (any(tap<0) || tap.x>=int(g_screen_contact.width) || tap.y>=int(g_screen_contact.height)) break;
+
+                uint material=g_screen_material.Load(int3(tap,0));
+                if (material==0u) continue;
+
+                if (material>=0xffffu) { status|=WORLD_INVALID; hit=true; break; }
+
+                TerrainVisual visual=g_terrain_visuals[material];
+                if (visual.m_material_id!=material || visual.m_transport_model!=0x102u) status|=WORLD_INVALID;
+                radiance=visual.m_emissive_rgb*visual.m_emissive_strength;
+                hit=true;
+                break;
+            }
+
+            if (!hit) {
+                uint farStatus;
+                radiance=gridWorldDirectionalAt(q+2*direction*exitFraction,angle,farStatus);
+                status|=farStatus;
+            }
+
+            // Front-normal K16 is1. Preserve signed samples through the sum.
+            mean+=radiance*(1.0/16.0);
+        }
+    }
+
+    if (!worldFinite3(mean)) status|=WORLD_INVALID;
+
+    GridScreenContactResult result;
+    result.r=mean.r;result.g=mean.g;result.b=mean.b;result.status=status;
+    g_screen_output[tid.x]=result;
 }

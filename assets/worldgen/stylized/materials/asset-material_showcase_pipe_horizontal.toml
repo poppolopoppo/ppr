@@ -1,0 +1,30 @@
+schema_version = 1
+element = "element_iron"
+representation = "terrain"
+diggable = true
+
+[appearance]
+display_name = "Service-bay horizontal pipe"
+color_rgba = "FFFFFFFF"
+albedo_texture = "bay_pipe_h_albedo"
+normal_texture = "bay_pipe_h_normal"
+texture_period_m = 0.3333333333333333
+texture_sampling = "repeat"
+roundness = 0.5
+metallic = 1.0
+roughness = 0.4
+emissive_r = 0.0
+emissive_g = 0.0
+emissive_b = 0.0
+emissive_strength = 1.0
+alpha_mode = "opaque"
+ior = 1.5
+normal_scale = 1.0
+refraction_depth_m = 0.0
+
+[appearance.transport]
+contract_version = 1
+model = "opaque"
+sigma_r_per_m = 0.0
+sigma_g_per_m = 0.0
+sigma_b_per_m = 0.0

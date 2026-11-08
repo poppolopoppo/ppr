@@ -3,6 +3,10 @@ module engine.tests.app;
 import engine.core;
 
 namespace pP::tests {
+    // ------------------------------------------------------------------
+    // suite accessors
+    // ------------------------------------------------------------------
+
     const UnitTest &devicesTests() noexcept;
 
     const UnitTest &playerTests() noexcept;
@@ -22,6 +26,11 @@ namespace pP::tests {
     const UnitTest &render_viewTests() noexcept;
 
     const UnitTest &grid_passTests() noexcept;
+
+    const UnitTest &lightingTests() noexcept;
+
+    const UnitTest &radiance_gpuTests() noexcept;
+    const UnitTest &world_radiance_gpuTests() noexcept;
 
     const UnitTest &pixel_readbackTests() noexcept;
 
@@ -93,6 +102,10 @@ namespace pP::tests {
 
     const UnitTest &matter_runtime_gpuTests() noexcept;
 
+    // ------------------------------------------------------------------
+    // application suite
+    // ------------------------------------------------------------------
+
     // Defined here rather than as an inline constexpr umbrella in App.Tests.cppm:
     // same MSVC C1001 shape as engine.tests.core. Same test set and order as before.
     extern const UnitTest app = UnitTest::Named("app") / [](UnitTest::IRun &_) -> void {
@@ -107,6 +120,9 @@ namespace pP::tests {
             viewportTests(),
             render_viewTests(),
             grid_passTests(),
+            lightingTests(),
+            radiance_gpuTests(),
+            world_radiance_gpuTests(),
             pixel_readbackTests(),
             renderer_triangle_reinit_okTests(),
             renderer_off_thread_fails_closedTests(),

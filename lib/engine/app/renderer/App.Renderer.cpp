@@ -305,7 +305,8 @@ namespace pP {
     // renderer lifecycle and submission
     // ------------------------------------------------------------------
 
-    Renderer::Renderer(const SurfaceSettings initial_settings) : m_initial_vsync(initial_settings.m_vsync) {
+    Renderer::Renderer(const SurfaceSettings initial_settings)
+        : m_initial_vsync(initial_settings.m_vsync), m_surface_readback_enabled(initial_settings.m_readback_enabled) {
     }
 
     std::error_code Renderer::initialize(IRhiService &rhi_service) {
@@ -331,7 +332,9 @@ namespace pP {
         // disable rendering. No GPU wait is introduced to obtain a sample.
         m_gpu_timestamp_frequency = static_cast<double>(device.getInfo().timestampFrequency);
         m_gpu_query_fences = {};
+        m_gpu_query_surface_frames = {};
         m_last_gpu_timing.reset();
+        m_last_surface_gpu_timing.reset();
         if (m_gpu_timestamp_frequency > 0.0) {
             rhi::QueryPoolDesc queries{};
             queries.type = rhi::QueryType::Timestamp;
@@ -410,6 +413,7 @@ namespace pP {
         sweepCompleted_();
         std::ignore = m_deferred.drainAll();
         m_unretired_submits.clear();
+        m_surface_readback = {}; // Only below the idle/removal proof guards.
         // The reset here happens AFTER GPU quiescence was proven or loss was
         // confirmed, so the frontier resets to "no proven retirement" for a
         // fresh start — never to an invented value.
@@ -441,7 +445,9 @@ namespace pP {
         m_surfaces.clear();
         m_gpu_queries.setNull();
         m_gpu_query_fences = {};
+        m_gpu_query_surface_frames = {};
         m_last_gpu_timing.reset();
+        m_last_surface_gpu_timing.reset();
         m_gpu_timing_enabled = false;
         m_graphics_queue.setNull();
         m_rhi_service.reset();
@@ -466,6 +472,7 @@ namespace pP {
         // on the GPU.
         std::ignore = m_deferred.drainAll();
         m_unretired_submits.clear();
+        m_surface_readback = {}; // This path requires positively confirmed removal.
         m_retirement_frontier = kFenceValueNone;
         m_last_submit_settlement = FrameSettlement::kRejected;
         m_credits.reset();
@@ -484,7 +491,9 @@ namespace pP {
         m_surfaces.clear();
         m_gpu_queries.setNull();
         m_gpu_query_fences = {};
+        m_gpu_query_surface_frames = {};
         m_last_gpu_timing.reset();
+        m_last_surface_gpu_timing.reset();
         m_gpu_timing_enabled = false;
         m_graphics_queue.setNull();
     }
@@ -516,7 +525,11 @@ namespace pP {
         return m_last_gpu_timing;
     }
 
-    std::optional<u32> Renderer::beginGpuTiming_(rhi::ICommandEncoder &encoder) noexcept {
+    std::optional<GpuFrameTiming> Renderer::lastSurfaceGpuFrameTiming() const noexcept {
+        return m_last_surface_gpu_timing;
+    }
+
+    std::optional<u32> Renderer::beginGpuTiming_(rhi::ICommandEncoder &encoder, const bool surface_frame) noexcept {
         if (not m_gpu_timing_enabled) {
             return {};
         }
@@ -530,8 +543,10 @@ namespace pP {
                 PPR_LOG_WARNING_ON_FAIL(Renderer, error);
                 m_gpu_timing_enabled = false;
                 m_last_gpu_timing.reset();
+                m_last_surface_gpu_timing.reset();
                 return {};
             }
+            m_gpu_query_surface_frames[slot] = surface_frame;
             encoder.writeTimestamp(m_gpu_queries, slot * 2u);
             return slot;
         }
@@ -562,13 +577,20 @@ namespace pP {
                 PPR_LOG_WARNING_ON_FAIL(Renderer, error);
                 m_gpu_timing_enabled = false;
                 m_last_gpu_timing.reset();
+                m_last_surface_gpu_timing.reset();
                 return;
             }
-            if (ticks[1] >= ticks[0] and (not m_last_gpu_timing or fence > m_last_gpu_timing->m_submission)) {
+            if (ticks[1] >= ticks[0]) {
                 const double milliseconds = static_cast<double>(ticks[1] - ticks[0]) *
                                             1000.0 /
                                             m_gpu_timestamp_frequency;
-                m_last_gpu_timing = GpuFrameTiming{fence, static_cast<float>(milliseconds)};
+                const GpuFrameTiming timing{fence, static_cast<float>(milliseconds), m_gpu_query_surface_frames[slot]};
+                if (not m_last_gpu_timing or fence > m_last_gpu_timing->m_submission)
+                    m_last_gpu_timing = timing;
+
+                if (timing.m_surface_frame and
+                    (not m_last_surface_gpu_timing or fence > m_last_surface_gpu_timing->m_submission))
+                    m_last_surface_gpu_timing = timing;
             }
             m_gpu_query_fences[slot] = kFenceValueNone;
         }
@@ -871,7 +893,7 @@ namespace pP {
         rhi::ComPtr<rhi::ICommandEncoder> encoder;
         PPR_RETURN_ERROR_ON_FAIL(Renderer, m_graphics_queue->createCommandEncoder(encoder.writeRef()));
 
-        const auto timing_slot = beginGpuTiming_(*encoder);
+        const auto timing_slot = beginGpuTiming_(*encoder, false);
         const FenceCompletionValue completed = m_frame_fence.completed();
         const auto wait_for_fence = [this](const FenceCompletionValue value) -> std::error_code {
             return m_frame_fence.waitFor(value);
@@ -930,6 +952,139 @@ namespace pP {
     // ------------------------------------------------------------------
     // window surface lifecycle and presentation
     // ------------------------------------------------------------------
+
+    std::error_code Renderer::prepareSurfaceReadback_(rhi::ITexture &image) {
+        PPR_RETURN_ERROR_ON_FAIL(
+            Renderer, not m_surface_readback.m_buffer ? std::error_code{}
+                                                      : std::make_error_code(std::errc::device_or_resource_busy));
+
+        const auto &description = image.getDesc();
+        const bool format = description.format == rhi::Format::RGBA8Unorm or
+                            description.format == rhi::Format::RGBA8UnormSrgb or
+                            description.format == rhi::Format::BGRA8Unorm or
+                            description.format == rhi::Format::BGRA8UnormSrgb;
+        PPR_RETURN_ERROR_ON_FAIL(
+            Renderer,
+            format and
+                    description.sampleCount == 1u and
+                    (static_cast<u32>(description.usage) & static_cast<u32>(rhi::TextureUsage::CopySource)) != 0u
+                ? std::error_code{}
+                : std::make_error_code(std::errc::not_supported));
+
+        // A portable diagnostic copy layout, not the image's opaque native
+        // storage layout. Power-of-two alignment makes the maximum a common
+        // multiple; RGBA/BGRA8 additionally requires whole four-byte texels.
+        std::size_t required_alignment{};
+        PPR_RETURN_ERROR_ON_FAIL(
+            Renderer, m_rhi_service->getDevice().getTextureRowAlignment(description.format, &required_alignment));
+        PPR_RETURN_ERROR_ON_FAIL(
+            Renderer, std::has_single_bit(required_alignment) ? std::error_code{}
+                                                              : std::make_error_code(std::errc::not_supported));
+        const auto row_alignment = std::max(std::size_t{256u}, required_alignment);
+        PPR_RETURN_ERROR_ON_FAIL(
+            Renderer, row_alignment % required_alignment == 0u and row_alignment % 4u == 0u
+                          ? std::error_code{}
+                          : std::make_error_code(std::errc::not_supported));
+
+        rhi::SubresourceLayout layout{};
+        PPR_RETURN_ERROR_ON_FAIL(Renderer, image.getSubresourceLayout(0u, row_alignment, &layout));
+        PPR_RETURN_ERROR_ON_FAIL(
+            Renderer, layout.size.width > 0u and
+                              layout.size.height > 0u and
+                              layout.size.depth == 1u and
+                              layout.size.width <= static_cast<u32>((std::numeric_limits<int>::max)()) and
+                              layout.size.height <= static_cast<u32>((std::numeric_limits<int>::max)()) and
+                              layout.colPitch == 4u and
+                              layout.blockWidth == 1u and
+                              layout.blockHeight == 1u and
+                              layout.rowCount == layout.size.height and
+                              layout.rowPitch % row_alignment == 0u and
+                              layout.rowPitch >= u64{layout.size.width} * 4u and
+                              layout.rowPitch <= (std::numeric_limits<u64>::max)() / layout.size.height and
+                              layout.sizeInBytes >= layout.rowPitch * layout.size.height and
+                              layout.sizeInBytes <= (std::numeric_limits<std::size_t>::max)() and
+                              layout.sizeInBytes <= m_rhi_service->getDevice().getInfo().limits.maxBufferSize
+                          ? std::error_code{}
+                          : std::make_error_code(std::errc::value_too_large));
+
+        rhi::BufferDesc buffer{};
+        buffer.size = layout.sizeInBytes;
+        buffer.usage = rhi::BufferUsage::CopyDestination;
+        buffer.defaultState = rhi::ResourceState::CopyDestination;
+        buffer.memoryType = rhi::MemoryType::ReadBack;
+        buffer.label = "one-shot final interactive frame readback";
+        rhi::ComPtr<rhi::IBuffer> candidate;
+        PPR_RETURN_ERROR_ON_FAIL(
+            Renderer, m_rhi_service->getDevice().createBuffer(buffer, nullptr, candidate.writeRef()));
+
+        m_surface_readback.m_buffer = std::move(candidate);
+        m_surface_readback.m_layout = layout;
+        m_surface_readback.m_format = description.format;
+        m_surface_readback.m_fate = ReadbackFate::unsubmitted;
+        return {};
+    }
+
+    Expected<std::shared_ptr<const SurfaceFramePixels>> Renderer::completeSurfaceReadback_() {
+        const hal::ProfileScope scope{"App.Renderer.SurfaceReadback"};
+        auto &stage = m_surface_readback;
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            Renderer, stage.m_buffer and stage.m_fate == ReadbackFate::accepted and stage.m_fence != kFenceValueNone
+                          ? std::error_code{}
+                          : std::make_error_code(std::errc::operation_not_permitted));
+
+        {
+            const hal::ProfileScope wait_scope{"App.Renderer.SurfaceReadback.Wait", hal::profile_blocking_category};
+            PPR_RETURN_UNEXPECTED_ON_FAIL(Renderer, waitForFenceValue(stage.m_fence));
+        }
+
+        auto pixels = std::make_shared<SurfaceFramePixels>();
+        pixels->m_bytes.resize(static_cast<std::size_t>(stage.m_layout.sizeInBytes), std::byte{});
+        pixels->m_row_pitch = stage.m_layout.rowPitch;
+        pixels->m_extent = int2{
+            static_cast<int>(stage.m_layout.size.width), static_cast<int>(stage.m_layout.size.height)};
+        pixels->m_format = stage.m_format;
+        pixels->m_submission = stage.m_fence;
+
+        const u64 rows = stage.m_layout.size.height;
+        const u64 row_bytes = u64{stage.m_layout.size.width} * 4u;
+        const u64 pitch = stage.m_layout.rowPitch;
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            Renderer, rows > 0u and
+                              row_bytes > 0u and
+                              row_bytes <= pitch and
+                              pitch <= (std::numeric_limits<u64>::max)() / rows and
+                              pitch * rows <= stage.m_buffer->getDesc().size and
+                              pitch * rows <= pixels->m_bytes.size()
+                          ? std::error_code{}
+                          : std::make_error_code(std::errc::value_too_large));
+
+        void *mapped{};
+        auto &device = m_rhi_service->getDevice();
+        PPR_RETURN_UNEXPECTED_ON_FAIL(Renderer, device.mapBuffer(stage.m_buffer, rhi::CpuAccessMode::Read, &mapped));
+        std::error_code error = mapped != nullptr ? std::error_code{} : std::make_error_code(std::errc::io_error);
+        if (mapped != nullptr) {
+            // Copy meaningful pixels only. GPU row padding is unspecified;
+            // value-initialized CPU row padding and any layout tail stay zero.
+            const auto *source = static_cast<const std::byte *>(mapped);
+            for (u64 row = 0u; row < rows; ++row) {
+                const auto offset = static_cast<std::size_t>(row * pitch);
+                std::memcpy(pixels->m_bytes.data() + offset, source + offset, static_cast<std::size_t>(row_bytes));
+            }
+        }
+
+        PPR_RETAIN_ERROR_ON_FAIL(Renderer, error, device.unmapBuffer(stage.m_buffer));
+        PPR_RETURN_UNEXPECTED_ON_FAIL(Renderer, error);
+
+        PPR_LOG(
+            Renderer, info, "Final surface readback completed",
+            {{"width", pixels->m_extent.x}, {"height", pixels->m_extent.y},
+                {"format", rhi::getFormatInfo(pixels->m_format).name}, {"row_pitch", pixels->m_row_pitch},
+                {"fence", u64{pixels->m_submission}}, {"gpu_bytes", stage.m_layout.sizeInBytes},
+                {"cpu_bytes", pixels->m_bytes.size()}});
+
+        m_surface_readback = {}; // The actual fence is complete and unmap succeeded.
+        return std::shared_ptr<const SurfaceFramePixels>{std::move(pixels)};
+    }
 
     // Surface-hoisted pipeline-signature resolution, one call per pass in
     // phase 1. A signature is a function of the surface shape ONLY — (color
@@ -1014,16 +1169,25 @@ namespace pP {
 
     std::error_code Renderer::renderAndPresent(
         const SurfaceWindowSnapshot &window, const std::span<const SurfaceRenderPass> passes,
-        const SurfaceIdentity identity, bool *const presented) {
-        return renderAndPresentImpl_(window, passes, identity, presented);
+        const SurfaceIdentity identity, bool *const presented,
+        std::shared_ptr<const SurfaceFramePixels> *const readback, bool *const image_acquired) {
+        return renderAndPresentImpl_(window, passes, identity, presented, readback, image_acquired);
     }
 
     std::error_code Renderer::renderAndPresentImpl_(
         const SurfaceWindowSnapshot &window, const std::span<const SurfaceRenderPass> passes,
-        const SurfaceIdentity identity, bool *const presented) {
+        const SurfaceIdentity identity, bool *const presented,
+        std::shared_ptr<const SurfaceFramePixels> *const readback, bool *const image_acquired) {
         if (presented != nullptr) {
             *presented = false;
         }
+        if (readback != nullptr) {
+            readback->reset();
+        }
+        if (image_acquired != nullptr) {
+            *image_acquired = false;
+        }
+
         const hal::ProfileScope scope{"App.Renderer.Present"};
         // Pre-guard rejections (F1 stale fate): definitely unsubmitted, no
         // credit taken — stamp kRejected so THIS invocation never inherits
@@ -1035,6 +1199,13 @@ namespace pP {
         if (m_rhi_service.isValid() and not onRenderThread_()) [[unlikely]] {
             return std::make_error_code(std::errc::operation_not_permitted);
         }
+        if (readback != nullptr) {
+            if (not m_surface_readback_enabled) {
+                m_last_submit_settlement = FrameSettlement::kRejected;
+                PPR_RETURN_ERROR_ON_FAIL(Renderer, std::make_error_code(std::errc::operation_not_permitted));
+            }
+        }
+
         if (not m_graphics_queue or not m_rhi_service.isValid()) [[unlikely]] {
             m_last_submit_settlement = FrameSettlement::kRejected;
             return std::make_error_code(std::errc::not_connected);
@@ -1138,6 +1309,9 @@ namespace pP {
 
             PPR_RETURN_ERROR_ON_FAIL(Renderer, acquire_error);
         }
+        if (image_acquired != nullptr) {
+            *image_acquired = true;
+        }
 
         // Acquired-image settlement guard, armed IMMEDIATELY post-acquire:
         // every failure below (error code or exception from allocations
@@ -1171,6 +1345,14 @@ namespace pP {
             }
         };
         AcquiredImageGuard acquired_guard{record->m_surface.get()};
+
+        // Inner encoders/commands are destroyed before this guard. Rejected
+        // copies may then release; unknown/accepted work keeps its fixed owner.
+        PPR_DEFER {
+            if (readback != nullptr and m_surface_readback.m_fate == ReadbackFate::unsubmitted) {
+                m_surface_readback = {};
+            }
+        };
 
         // From here the acquired image owns a backend obligation:
         // acquire ⇒ present unconditionally. Every failure below records
@@ -1286,7 +1468,7 @@ namespace pP {
                 PPR_RETAIN_ERROR_ON_FAIL(
                     Renderer, first_err, m_graphics_queue->createCommandEncoder(encoder.writeRef()));
 
-                const auto timing_slot = not first_err ? beginGpuTiming_(*encoder) : std::nullopt;
+                const auto timing_slot = not first_err ? beginGpuTiming_(*encoder, true) : std::nullopt;
                 for (const BuiltSurfacePass &built: built_passes) {
                     if (first_err) {
                         break;
@@ -1294,6 +1476,19 @@ namespace pP {
                     first_err = encodeRenderPass_(
                         *encoder, description, built.m_desc, built.m_signature, built.m_extent, built.m_draws,
                         m_rhi_service->getDevice(), completed, wait_for_fence, built.m_prepare);
+                }
+
+                if (not first_err and readback != nullptr) {
+                    first_err = prepareSurfaceReadback_(*image);
+                    if (not first_err) {
+                        const auto &stage = m_surface_readback;
+                        encoder->copyTextureToBuffer(
+                            stage.m_buffer, 0u, stage.m_layout.sizeInBytes, stage.m_layout.rowPitch, image, 0u, 0u,
+                            {0, 0, 0}, stage.m_layout.size);
+                        encoder->setTextureState(
+                            image, {.layer = 0u, .layerCount = 1u, .mip = 0u, .mipCount = 1u},
+                            rhi::ResourceState::Present);
+                    }
                 }
 
                 if (not first_err) {
@@ -1311,6 +1506,23 @@ namespace pP {
                         // the accepted submission GPU-pending until
                         // completion (or the device-loss teardown path) —
                         // never recycled early.
+                        const auto before_capture_submit = readback != nullptr ? m_frame_fence.lastSubmitted()
+                                                                               : kFenceValueNone;
+                        // Mark BEFORE a possibly executing call. The fence
+                        // frontier detects acceptance even if that call throws.
+                        if (readback != nullptr) {
+                            m_surface_readback.m_fate = ReadbackFate::unknown;
+                            settlement = FrameSettlement::kSubmitFailed;
+                        }
+                        PPR_DEFER {
+                            if (readback != nullptr and m_frame_fence.lastSubmitted() > before_capture_submit) {
+                                submitted_value = m_frame_fence.lastSubmitted();
+                                settlement = FrameSettlement::kSubmitted;
+                                m_surface_readback.m_fence = submitted_value;
+                                m_surface_readback.m_fate = ReadbackFate::accepted;
+                            }
+                        };
+
                         const Expected<FenceCompletionValue> submitted = submitAndSignal_(command_buffer.get());
                         if (submitted) {
                             submitted_value = *submitted;
@@ -1339,6 +1551,9 @@ namespace pP {
                 // Submission is still accepted, but this image was not presented.
                 // Release our image before the existing fenced reconfiguration path.
                 image.setNull();
+                if (readback != nullptr and not first_err) {
+                    first_err = std::make_error_code(std::errc::resource_unavailable_try_again);
+                }
                 PPR_RETAIN_ERROR_ON_FAIL(Renderer, first_err, resizeWindowSurface_(*record, window.m_framebuffer_size));
                 return first_err;
             }
@@ -1347,6 +1562,15 @@ namespace pP {
         }
         if (presented != nullptr) {
             *presented = not first_err and settlement == FrameSettlement::kSubmitted;
+        }
+
+        // Present is settled FIRST. Every failed wait/map/copy/unmap returns
+        // no CPU success image; the fixed slot still owns accepted GPU data.
+        if (readback != nullptr and not first_err and settlement == FrameSettlement::kSubmitted) {
+            const auto pixels = completeSurfaceReadback_();
+            PPR_RETURN_ERROR_ON_FAIL(Renderer, pixels);
+
+            *readback = *pixels;
         }
         return first_err;
     }
@@ -1431,6 +1655,12 @@ namespace pP {
         config.format = m_preferred_surface_format;
         config.desiredImageCount = m_desired_image_count;
         config.vsync = vsync;
+        if (m_surface_readback_enabled) {
+            config.usage = static_cast<rhi::TextureUsage>(
+                static_cast<u32>(rhi::TextureUsage::Present) |
+                static_cast<u32>(rhi::TextureUsage::RenderTarget) |
+                static_cast<u32>(rhi::TextureUsage::CopySource));
+        }
         return config;
     }
 
@@ -1508,6 +1738,24 @@ namespace pP {
         }
 
         const rhi::SurfaceConfig surface_config = buildSurfaceConfig_(new_extent, vsync);
+        if (m_surface_readback_enabled) {
+            const auto &info = record.m_surface->getInfo();
+            const auto format = surface_config.format == rhi::Format::Undefined ? info.preferredFormat
+                                                                                : surface_config.format;
+            PPR_RETURN_ERROR_ON_FAIL(
+                Renderer, format == rhi::Format::RGBA8Unorm or
+                                  format == rhi::Format::RGBA8UnormSrgb or
+                                  format == rhi::Format::BGRA8Unorm or
+                                  format == rhi::Format::BGRA8UnormSrgb
+                              ? std::error_code{}
+                              : std::make_error_code(std::errc::not_supported));
+
+            const auto supported = static_cast<u32>(info.supportedUsage);
+            PPR_RETURN_ERROR_ON_FAIL(
+                Renderer, (supported & static_cast<u32>(surface_config.usage)) == static_cast<u32>(surface_config.usage)
+                              ? std::error_code{}
+                              : std::make_error_code(std::errc::not_supported));
+        }
 
         rhi::ComPtr<rhi::ITexture> depth_texture;
         rhi::ComPtr<rhi::ITextureView> depth_view;

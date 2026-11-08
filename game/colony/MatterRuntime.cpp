@@ -153,6 +153,98 @@ namespace pP::colony {
     }
 
     // ------------------------------------------------------------------
+    // diagnostic physical inventory joined to an exact committed GPU reader
+    // ------------------------------------------------------------------
+
+    Expected<MatterCensus> aggregateMatterCensus(
+        const MatterPhysicalLedger &ledger, const GridParticleCensus &projected,
+        const std::shared_ptr<const GridParticleMetadataResource> &metadata,
+        const GridParticlePresentationIdentity &expected, const u64 device_epoch, const u32 world_edge) {
+        const auto ledger_owner = ledger.m_metadata_owner.lock();
+        const auto projected_owner = projected.m_metadata_owner.lock();
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            GameMatter, metadata and ledger_owner == metadata and projected_owner == metadata
+                            ? std::error_code{}
+                            : std::make_error_code(std::errc::invalid_argument));
+
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            GameMatter, projected.m_identity == expected and
+                                projected.m_device_epoch == device_epoch and
+                                projected.m_submission != kFenceValueNone and
+                                projected.m_world_edge == world_edge and
+                                world_edge != 0u and
+                                world_edge <= 4096u and
+                                projected.m_rows.size() == ledger.m_rows.size()
+                            ? std::error_code{}
+                            : std::make_error_code(std::errc::invalid_argument));
+
+        MatterCensus result{};
+        result.m_cells.reserve(ledger.m_rows.size());
+        u64 prior_id{};
+        for (std::size_t index = 0u; index < ledger.m_rows.size(); ++index) {
+            const auto &physical = ledger.m_rows[index];
+            const auto &row = projected.m_rows[index];
+            const u64 id = (u64{row.m_id_high} << 32u) | row.m_id_low;
+            constexpr u32 known = kGridParticleCensusInvalid |
+                                  kGridParticleCensusOutside |
+                                  kGridParticleCensusInactive |
+                                  kGridParticleCensusVacuum;
+            PPR_RETURN_UNEXPECTED_ON_FAIL(
+                GameMatter,
+                physical.m_id > prior_id and
+                        id == physical.m_id and
+                        row.m_material == physical.m_material and
+                        std::isfinite(physical.m_volume_m3) and
+                        physical.m_volume_m3 > 0.0 and
+                        (row.m_status & ~known) == 0u and
+                        (((row.m_status & kGridParticleCensusOutside) == 0u and
+                             row.m_cell_x < world_edge and
+                             row.m_cell_y < world_edge) or
+                            (row.m_cell_x == 0xffff'ffffu and
+                                row.m_cell_y == 0xffff'ffffu and
+                                (row.m_status & (kGridParticleCensusInvalid | kGridParticleCensusOutside)) != 0u))
+                    ? std::error_code{}
+                    : std::make_error_code(std::errc::invalid_argument));
+            prior_id = id;
+
+            result.m_cells.push_back(
+                {physical.m_volume_m3, 1u, row.m_cell_x, row.m_cell_y, row.m_material, row.m_status});
+            result.m_total_volume_m3 += physical.m_volume_m3;
+            ++result.m_particle_count;
+            PPR_RETURN_UNEXPECTED_ON_FAIL(
+                GameMatter, std::isfinite(result.m_total_volume_m3)
+                                ? std::error_code{}
+                                : std::make_error_code(std::errc::result_out_of_range));
+        }
+
+        // One owned vector is both grouping workspace and output; no hidden
+        // tree/hash allocation or mutable physical state participates.
+        const auto key = [](const MatterCensusCell &cell) {
+            return std::tuple{cell.m_cell_x, cell.m_cell_y, cell.m_material, cell.m_status};
+        };
+
+        std::ranges::sort(result.m_cells, {}, key);
+
+        std::size_t groups{};
+        for (const auto cell: result.m_cells) {
+            if (groups != 0u and key(result.m_cells[groups - 1u]) == key(cell)) {
+                auto &prior = result.m_cells[groups - 1u];
+                prior.m_volume_m3 += cell.m_volume_m3;
+                prior.m_count += cell.m_count;
+                PPR_RETURN_UNEXPECTED_ON_FAIL(
+                    GameMatter, std::isfinite(prior.m_volume_m3)
+                                    ? std::error_code{}
+                                    : std::make_error_code(std::errc::result_out_of_range));
+            } else {
+                result.m_cells[groups++] = cell;
+            }
+        }
+
+        result.m_cells.resize(groups);
+        return result;
+    }
+
+    // ------------------------------------------------------------------
     // carried-state admission
     // ------------------------------------------------------------------
 
@@ -428,18 +520,31 @@ namespace pP::colony {
             solid_ids.set(id);
         }
 
+        const u32 world_edge = grid.edge();
+        const u32 chunks_per_edge = grid.chunksPerEdge();
+        Array<std::span<const sim::Cell>> chunks(static_cast<std::size_t>(chunks_per_edge) * chunks_per_edge);
+        for (u32 y = 0u; y < chunks_per_edge; ++y) {
+            for (u32 x = 0u; x < chunks_per_edge; ++x) {
+                const auto cells = grid.residentCells({x, y});
+                if (cells) {
+                    chunks[static_cast<std::size_t>(y) * chunks_per_edge + x] = *cells;
+                }
+            }
+        }
+
         const auto solid = [&](const i32 x, const i32 y) {
-            if (x < 0 or y < 0 or x >= static_cast<i32>(grid.edge()) or y >= static_cast<i32>(grid.edge())) {
+            if (x < 0 or y < 0 or x >= static_cast<i32>(world_edge) or y >= static_cast<i32>(world_edge)) {
                 return true;
             }
 
             const auto ux = static_cast<u32>(x), uy = static_cast<u32>(y);
-            const auto cells = grid.residentCells({ux / sim::kChunkEdge, uy / sim::kChunkEdge});
-            return cells and
-                   solid_ids.test((*cells)[(uy % sim::kChunkEdge) * sim::kChunkEdge + ux % sim::kChunkEdge].m_element);
+            const auto cells =
+                chunks[static_cast<std::size_t>(uy / sim::kChunkEdge) * chunks_per_edge + ux / sim::kChunkEdge];
+            return not cells.empty() and
+                   solid_ids.test(cells[(uy % sim::kChunkEdge) * sim::kChunkEdge + ux % sim::kChunkEdge].m_element);
         };
 
-        const u32 terrain_edge = grid.edge() + 1u;
+        const u32 terrain_edge = world_edge + 1u;
         Array<u32> masks(static_cast<std::size_t>(terrain_edge) * terrain_edge, 0u);
         for (u32 y = 0u; y < terrain_edge; ++y) {
             for (u32 x = 0u; x < terrain_edge; ++x) {
@@ -501,7 +606,8 @@ namespace pP::colony {
     // ------------------------------------------------------------------
 
     namespace {
-        Expected<Array<GridParticleMetadataRow>> presentationMetadata(const MatterState &source) {
+        Expected<Array<GridParticleMetadataRow>> presentationMetadata(
+            const MatterState &source, std::shared_ptr<MatterPhysicalLedger> *const physical = nullptr) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(
                 GameMatter, source.m_records.size() == source.m_profile.m_particle_count and
                                     source.m_records.size() + source.m_gas.size() <= sim::kMaxMatterParticles and
@@ -513,6 +619,11 @@ namespace pP::colony {
                 GameMatter, std::isfinite(thickness) and thickness > 0.0
                                 ? std::error_code{}
                                 : std::make_error_code(std::errc::invalid_argument));
+
+            const auto ledger = physical ? std::make_shared<MatterPhysicalLedger>() : nullptr;
+            if (ledger) {
+                ledger->m_rows.reserve(source.m_records.size() + source.m_gas.size());
+            }
 
             Array<GridParticleMetadataRow> rows;
             rows.reserve(source.m_records.size() + source.m_gas.size());
@@ -533,11 +644,25 @@ namespace pP::colony {
                                     ? std::error_code{}
                                     : std::make_error_code(std::errc::invalid_argument));
 
+                if (ledger) {
+                    ledger->m_rows.push_back({record.m_id, record.m_volume_m3, record.m_material});
+                }
+
+                const double physical_fill = record.m_volume_m3 /
+                                             (source.m_cell_metres * source.m_cell_metres * source.m_thickness_metres);
+                const float fill = static_cast<float>(physical_fill);
+                PPR_RETURN_ERROR_ON_FAIL(
+                    GameMatter,
+                    std::isfinite(physical_fill) and physical_fill > 0.0 and std::isnormal(fill) and fill > 0.0f
+                        ? std::error_code{}
+                        : std::make_error_code(std::errc::argument_out_of_domain));
+
                 GridParticleMetadataRow row{};
                 row.m_id_low = static_cast<u32>(record.m_id);
                 row.m_id_high = static_cast<u32>(record.m_id >> 32u);
                 row.m_source_row = source_row;
                 row.m_material = record.m_material;
+                row.m_physical_fill_bits = std::bit_cast<u32>(fill);
                 row.m_gas_x = static_cast<float>(record.m_x_m);
                 row.m_gas_y = static_cast<float>(record.m_y_m);
                 row.m_radius = static_cast<float>(std::sqrt(record.m_volume_m3 / thickness / std::numbers::pi));
@@ -557,6 +682,11 @@ namespace pP::colony {
                 return left.m_id_high < right.m_id_high or
                        (left.m_id_high == right.m_id_high and left.m_id_low < right.m_id_low);
             });
+            if (ledger) {
+                std::ranges::sort(ledger->m_rows, {}, &MatterPhysicalLedgerRow::m_id);
+                *physical = ledger;
+            }
+
             return rows;
         }
     }
@@ -569,6 +699,7 @@ namespace pP::colony {
         std::unique_ptr<matter::GpuSolver> m_active{};
         std::unique_ptr<matter::GpuSolver> m_prepared{};
         std::shared_ptr<const GridParticleMetadataResource> m_active_metadata{}, m_prepared_metadata{};
+        std::shared_ptr<const MatterPhysicalLedger> m_active_ledger{}, m_prepared_ledger{};
         std::filesystem::path m_content_root{};
         rhi::IDevice *m_device{};
         rhi::ComPtr<rhi::ICommandQueue> m_queue{};
@@ -587,6 +718,7 @@ namespace pP::colony {
         std::unique_ptr<RenderLaneOperation> m_operation{};
         std::shared_ptr<std::optional<MatterReadback>> m_readback{};
         std::optional<GridParticleGpuView> m_view{};
+        std::shared_ptr<const MatterPhysicalLedger> m_physical_ledger{};
         std::optional<RenderLaneOperationTicket> m_ticket{};
         matter::GpuAccounting m_accounting{};
         matter::GpuFailure m_failure{};
@@ -666,6 +798,7 @@ namespace pP::colony {
                         selected.m_terrain_revision = state->m_identity.m_terrain_revision;
                         selected.m_world.m_world_generation = state->m_identity.m_world;
                         result->m_view = std::move(selected);
+                        result->m_physical_ledger = state->m_active_ledger;
                     }
                 }
 
@@ -735,6 +868,7 @@ namespace pP::colony {
             m_last_accounting = m_pending->m_accounting;
             m_last_failure = m_pending->m_failure;
             result.m_view = std::move(m_pending->m_view);
+            result.m_physical_ledger = std::move(m_pending->m_physical_ledger);
             if (m_pending->m_readback) {
                 result.m_readback = std::move(*m_pending->m_readback);
             }
@@ -853,15 +987,21 @@ namespace pP::colony {
 
             candidate->publishReplacement();
 
-            auto rows = presentationMetadata(source);
+            std::shared_ptr<MatterPhysicalLedger> ledger;
+            auto rows = presentationMetadata(source, state->m_observation_clock ? &ledger : nullptr);
             PPR_RETURN_ERROR_ON_FAIL(GameMatter, rows);
             auto prepared_metadata = prepareGridParticleMetadata(
                 *state->m_device, *rows, source.m_profile.m_particle_count, source.m_cell_metres,
                 source.m_identity.m_terrain_revision);
             PPR_RETURN_ERROR_ON_FAIL(GameMatter, prepared_metadata);
 
+            if (ledger) {
+                ledger->m_metadata_owner = *prepared_metadata;
+            }
+
             state->m_prepared = std::move(candidate);
             state->m_prepared_metadata = std::move(*prepared_metadata);
+            state->m_prepared_ledger = std::move(ledger);
             state->m_prepared_identity = source.m_identity;
             return {};
         });
@@ -884,6 +1024,7 @@ namespace pP::colony {
 
             state->m_active = std::move(state->m_prepared);
             state->m_active_metadata = std::move(state->m_prepared_metadata);
+            state->m_active_ledger = std::move(state->m_prepared_ledger);
             state->m_identity = identity;
             return {};
         });
@@ -905,6 +1046,7 @@ namespace pP::colony {
 
             if (state) {
                 state->m_prepared_metadata.reset();
+                state->m_prepared_ledger.reset();
             }
             return {};
         });
@@ -1007,6 +1149,7 @@ namespace pP::colony {
                     state->m_append_prepared = false;
                     state->m_append_ready = false;
                     state->m_prepared_metadata.reset();
+                    state->m_prepared_ledger.reset();
                 }
 
                 if (state and state->m_active and state->m_submitted) {
@@ -1131,9 +1274,10 @@ namespace pP::colony {
         Array<matter::GpuParticle> uploaded(
             candidate.m_particles.begin() + (replace ? 0u : retained_count), candidate.m_particles.end());
         Array<GridParticleMetadataRow> metadata;
+        std::shared_ptr<MatterPhysicalLedger> ledger;
         const bool refresh_metadata = not terrain_edit or not uploaded.empty();
         if (refresh_metadata) {
-            auto prepared = presentationMetadata(candidate);
+            auto prepared = presentationMetadata(candidate, m_state->m_observation_clock ? &ledger : nullptr);
             PPR_RETURN_UNEXPECTED_ON_FAIL(GameMatter, prepared);
             metadata = std::move(*prepared);
         }
@@ -1147,7 +1291,7 @@ namespace pP::colony {
         return enqueue(
             [state, source, target, retained_count, cell, terrain_edge, profile, moving_count, replace, terrain_edit,
                 refresh_metadata, uploaded = std::move(uploaded), metadata = std::move(metadata),
-                terrain = std::move(terrain)]() -> std::error_code {
+                ledger = std::move(ledger), terrain = std::move(terrain)]() -> std::error_code {
                 PPR_RETURN_ERROR_ON_FAIL(
                     GameMatter, state and
                                         state->m_active and
@@ -1179,12 +1323,16 @@ namespace pP::colony {
                         *state->m_device, metadata, moving_count, cell, target.m_terrain_revision);
                     PPR_RETURN_ERROR_ON_FAIL(GameMatter, resource);
                     prepared_metadata = std::move(*resource);
+                    if (ledger) {
+                        ledger->m_metadata_owner = prepared_metadata;
+                    }
                 }
 
                 state->m_append_prepared = true;
                 state->m_append_ready = false;
                 state->m_prepared_identity = target;
                 state->m_prepared_metadata = std::move(prepared_metadata);
+                state->m_prepared_ledger = refresh_metadata ? ledger : state->m_active_ledger;
                 const matter::TerrainView view =
                     terrain_edit ? matter::TerrainView{terrain, terrain_edge, terrain_edge, 2.5f, 2.5f}
                                  : matter::TerrainView{};
@@ -1240,6 +1388,7 @@ namespace pP::colony {
             state->m_active->publishReplacement();
             state->m_identity = target;
             state->m_active_metadata = std::move(state->m_prepared_metadata);
+            state->m_active_ledger = std::move(state->m_prepared_ledger);
             state->m_append_prepared = false;
             state->m_append_ready = false;
             return {};
@@ -1268,7 +1417,9 @@ namespace pP::colony {
                 state->m_prepared.reset();
                 state->m_active.reset();
                 state->m_prepared_metadata.reset();
+                state->m_prepared_ledger.reset();
                 state->m_active_metadata.reset();
+                state->m_active_ledger.reset();
                 state->m_queue.setNull();
                 return {};
             },

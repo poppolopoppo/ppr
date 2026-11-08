@@ -4,17 +4,24 @@ representation = "particle"
 
 [appearance]
 display_name = "Water"
-color_rgba = "3989C970"
+color_rgba = "36D4E570"
 albedo_texture = "texture_color_textures_water_png"
 normal_texture = "texture_normal_textures_water_normal_png"
 texture_period_m = 2.0
 metallic = 0.0
 roughness = 0.12
-emissive_r = 0.0
-emissive_g = 0.0
-emissive_b = 0.0
-emissive_strength = 1.0
+emissive_r = 0.02
+emissive_g = 0.38
+emissive_b = 0.45
+emissive_strength = 0.35
 alpha_mode = "blend"
 ior = 1.333
 normal_scale = 0.8
 refraction_depth_m = 0.2
+
+[appearance.transport]
+contract_version = 1
+model = "absorbing"
+sigma_r_per_m = 1.5
+sigma_g_per_m = 0.12
+sigma_b_per_m = 0.06

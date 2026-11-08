@@ -60,6 +60,8 @@ export namespace pP {
 
     struct SurfaceSettings {
         bool m_vsync{true};
+        // Startup-only capability, consumed by Renderer construction.
+        bool m_readback_enabled{false};
         // Absent means retain the lane's current geometry (vsync-only edit).
         std::optional<int2> m_extent{};
     };
@@ -77,6 +79,19 @@ export namespace pP {
         // carrying this delayed observation back to the client.
         FenceCompletionValue m_submission{};
         float m_milliseconds{};
+        // Surface command buffer includes its preparation/draws, not standalone producer submits.
+        bool m_surface_frame{};
+    };
+
+    // Owned final surface bytes, after every content/UI pass. Already encoded
+    // for the display format: callers must not apply exposure or gamma again.
+    // The portable copy pitch is retained; every CPU padding/tail byte is zero.
+    struct SurfaceFramePixels {
+        std::vector<std::byte> m_bytes{};
+        u64 m_row_pitch{};
+        FenceCompletionValue m_submission{kFenceValueNone};
+        int2 m_extent{zero_v};
+        rhi::Format m_format{rhi::Format::Undefined};
     };
 
     class Renderer final {
@@ -135,10 +150,15 @@ export namespace pP {
 
         // Lane overload: identical semantics from a snapshot (no live
         // Window read). Temporary pass descriptors stay synchronous to the
-        // encode, as on every other path.
+        // encode, as on every other path. Optional readback is startup-capability
+        // gated and blocking: same-submit copy, then clean present, then actual
+        // fence completion and CPU copy. Every failure leaves the output empty.
+        // image_acquired is a separate fact, including failures: false proves
+        // no acquired-image obligation or copy began during this invocation.
         [[nodiscard]] std::error_code renderAndPresent(
             const SurfaceWindowSnapshot &window, std::span<const SurfaceRenderPass> passes, SurfaceIdentity identity,
-            bool *presented = nullptr);
+            bool *presented = nullptr, std::shared_ptr<const SurfaceFramePixels> *readback = nullptr,
+            bool *image_acquired = nullptr);
 
         [[nodiscard]] std::error_code waitOnHost();
 
@@ -230,6 +250,7 @@ export namespace pP {
         [[nodiscard]] FenceCompletionValue completedFenceValue() const noexcept;
         [[nodiscard]] u32 outstandingFrameCount() const noexcept;
         [[nodiscard]] std::optional<GpuFrameTiming> lastGpuFrameTiming() const noexcept;
+        [[nodiscard]] std::optional<GpuFrameTiming> lastSurfaceGpuFrameTiming() const noexcept;
 
 
         // Current surface generation for a window handle, or
@@ -370,7 +391,28 @@ export namespace pP {
 
         [[nodiscard]] std::error_code renderAndPresentImpl_(
             const SurfaceWindowSnapshot &window, std::span<const SurfaceRenderPass> passes, SurfaceIdentity identity,
-            bool *presented = nullptr);
+            bool *presented = nullptr, std::shared_ptr<const SurfaceFramePixels> *readback = nullptr,
+            bool *image_acquired = nullptr);
+
+        [[nodiscard]] std::error_code prepareSurfaceReadback_(rhi::ITexture &image);
+        [[nodiscard]] Expected<std::shared_ptr<const SurfaceFramePixels>> completeSurfaceReadback_();
+
+        enum class ReadbackFate : u8 {
+            unsubmitted,
+            unknown,
+            accepted
+        };
+
+        struct SurfaceReadbackStage {
+            rhi::ComPtr<rhi::IBuffer> m_buffer{};
+            rhi::SubresourceLayout m_layout{};
+            FenceCompletionValue m_fence{kFenceValueNone};
+            rhi::Format m_format{rhi::Format::Undefined};
+            ReadbackFate m_fate{ReadbackFate::unsubmitted};
+        };
+
+        // Installed before submission; UNKNOWN shutdown retains this owner.
+        SurfaceReadbackStage m_surface_readback{};
 
         [[nodiscard]] std::error_code destroyWindowSurface_(WindowHandle window_handle);
 
@@ -379,17 +421,19 @@ export namespace pP {
         const rhi::Format m_preferred_surface_format{rhi::Format::Undefined};
         const u32 m_desired_image_count{3u};
         const bool m_initial_vsync;
+        const bool m_surface_readback_enabled;
         FlatMap<WindowHandle, SurfaceRecord> m_surfaces{};
         // Surface-generation epoch: every create/resize/unconfigure mints a
         // fresh nonzero generation from this counter. Never reused, never
         // reset except by process restart.
         SurfaceGeneration m_surface_epoch{kSurfaceGenerationNone};
-        [[nodiscard]] std::optional<u32> beginGpuTiming_(rhi::ICommandEncoder &encoder) noexcept;
+        [[nodiscard]] std::optional<u32> beginGpuTiming_(rhi::ICommandEncoder &encoder, bool surface_frame) noexcept;
         void collectGpuTimings_(FenceCompletionValue completed) noexcept;
         rhi::ComPtr<rhi::IQueryPool> m_gpu_queries{};
         std::array<FenceCompletionValue, 2u> m_gpu_query_fences{};
-        std::optional<GpuFrameTiming> m_last_gpu_timing{};
+        std::optional<GpuFrameTiming> m_last_gpu_timing{}, m_last_surface_gpu_timing{};
         double m_gpu_timestamp_frequency{};
+        std::array<bool, 2u> m_gpu_query_surface_frames{};
         bool m_gpu_timing_enabled{};
         rhi::ComPtr<rhi::ICommandQueue> m_graphics_queue{};
         // The one app-owned monotonic fence: one signalled value per frame

@@ -2,8 +2,9 @@
 
 ## Responsibility
 
-Compiler-specific CMake configuration for MSVC, clang-cl, Clang, and GCC. Applies toolchain flags, warning
+Compiler-specific CMake configuration for MSVC, clang-cl, and Clang. Applies toolchain flags, warning
 sets, debug-info policy, sanitizer hooks, and the C++20-module synth-target consistency rules for the engine.
+GCC is rejected at configure time: it rejects `-stdlib=libc++` and cannot build the module targets.
 
 ## Design
 
@@ -37,13 +38,15 @@ sets, debug-info policy, sanitizer hooks, and the C++20-module synth-target cons
   `$LLVM_DIR`, and `clang --print-resource-dir` hints first, then well-known versioned/multiarch fallbacks
   (`llvm-22`/`llvm-20`, `x86_64-linux-gnu`, `llvm/lib`); `CMAKE_CXX_STDLIB_MODULES_JSON` is set only when the
   file exists, otherwise left unset for CMake default lookup;
-  **clang-cl** follows the MSVC-compatible branch when CMake sets `MSVC`; the dispatcher checks `MSVC` before compiler ID. **GCC** (`GCC.cmake`)
-  extends Clang warnings — presets stay hidden: **no C++ modules support**.
+  **clang-cl** follows the MSVC-compatible branch when CMake sets `MSVC`; the dispatcher checks `MSVC` before compiler ID.
+- **GCC** is not supported and `GCC.cmake` was removed: `Compilers.cmake` fails configure for
+  `CMAKE_CXX_COMPILER_ID=GNU` with the supported alternatives. The hidden `gcc-*` presets therefore fail fast
+  instead of producing a confusing include error.
 
 ## Flow
 
 1. `Compilers.cmake` dispatches on `MSVC`, then `CMAKE_CXX_COMPILER_ID` (`.*Clang` when the MSVC branch did not match,
-  `GNU`), and includes the matching `compiler/*.cmake` file.
+  `GNU` → fatal), and includes the matching `compiler/*.cmake` file.
 2. Global genex `add_compile_options` apply per-compiler/config flags to every target including synth targets.
 3. `setup_ppr_project()` layers `cxx_std_23` / `CXX_MODULE_STD ON` / warning sets / link edges per target.
 
@@ -65,5 +68,4 @@ sets, debug-info policy, sanitizer hooks, and the C++20-module synth-target cons
   opt-in `/arch:AVX2` (`PPR_ENABLE_AVX2`),
   `/Zc:__cplusplus`, `PPR_PROJECT_WARNINGS_CXX`, ASAN/`/WX` tails.
 - `Clang.cmake` — `-stdlib=libc++`, warning family, `-Werror` gate.
-- `GCC.cmake` — Clang base + GCC-specific warnings (modules unsupported).
 - `cmake/Compilers.cmake` — dispatcher + `setup_ppr_project()`.

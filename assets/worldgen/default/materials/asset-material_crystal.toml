@@ -5,18 +5,25 @@ diggable = true
 
 [appearance]
 display_name = "Amethyst"
-color_rgba = "B69BE88A"
+color_rgba = "9251E58A"
 albedo_texture = "texture_color_textures_crystal_png"
 normal_texture = "texture_normal_textures_crystal_normal_png"
 texture_period_m = 1.0
 roundness = 0.25
 metallic = 0.0
 roughness = 0.12
-emissive_r = 0.0
-emissive_g = 0.0
-emissive_b = 0.0
-emissive_strength = 1.0
+emissive_r = 0.30
+emissive_g = 0.07
+emissive_b = 0.65
+emissive_strength = 0.6
 alpha_mode = "blend"
 ior = 1.54
 normal_scale = 0.65
 refraction_depth_m = 0.25
+
+[appearance.transport]
+contract_version = 1
+model = "absorbing"
+sigma_r_per_m = 0.9
+sigma_g_per_m = 1.8
+sigma_b_per_m = 0.35

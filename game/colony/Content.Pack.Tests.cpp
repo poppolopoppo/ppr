@@ -708,6 +708,68 @@ namespace pP::game::tests::detail::pack {
         PPR_TEST_ASSERT(different_images->fingerprint() != baseline_images->fingerprint());
     };
 
+    // ------------------------------------------------------------------
+    // same-ID optics projection without numeric world identity changes
+    // ------------------------------------------------------------------
+
+    PPR_UNIT_TEST (material_transport_changes_only_presentation_and_captures_selected_ids) {
+        Fixture fixture;
+        useSmallIdentityImages(fixture);
+        config::Diagnostics diagnostics;
+        auto original = fixture.load(diagnostics);
+        PPR_TEST_ASSERT(original.has_value());
+        const auto numeric = original->contentFingerprint();
+        const auto presentation = original->presentationDescriptorFingerprint();
+        PPR_TEST_ASSERT(not original->findMaterial("water")->m_transport);
+
+        const auto bytes = fixture.read("water.toml");
+        const std::string transport = "\n[appearance.transport]\ncontract_version=1\nmodel='absorbing'\n"
+                                      "sigma_r_per_m=0.5\nsigma_g_per_m=1.0\nsigma_b_per_m=0.0\n";
+        fixture.write("water.toml", bytes + transport);
+        auto changed = fixture.load(diagnostics);
+        PPR_TEST_ASSERT(changed.has_value() and changed->contentFingerprint() == numeric);
+        PPR_TEST_ASSERT(changed->presentationDescriptorFingerprint() != presentation);
+        const auto *const water = changed->findMaterial("water");
+        PPR_TEST_ASSERT(
+            water != nullptr and
+            water->m_transport and
+            water->m_transport->m_model == EMaterialOpticalModel::absorbing);
+
+        const u16 water_id = water->m_numeric_id;
+        auto owner = std::make_shared<const ContentCatalog>(std::move(*changed));
+        const auto prepared = present(owner, diagnostics);
+        const auto packet = captureCatalogPresentation(
+            *prepared, kWorld, owner->findMaterial("basalt")->m_numeric_id, 3u, 1.0);
+        PPR_TEST_ASSERT(packet.has_value());
+        const auto visual = std::ranges::find(packet->m_terrain_visuals, water_id, &GridTerrainVisual::m_material_id);
+        PPR_TEST_ASSERT(
+            visual != packet->m_terrain_visuals.end() and visual->m_transport_model == kGridTransportAbsorbingV1);
+        PPR_TEST_ASSERT(visual->m_sigma_per_m[0] == 0.5f and visual->m_sigma_per_m[1] == 1.0f);
+        const auto strict = gridMaterialOpticalCell(*visual);
+        PPR_TEST_ASSERT(strict.has_value() and strict->m_kind == lighting::OpticalKind::absorbing);
+        const auto legacy = std::ranges::find(
+            packet->m_terrain_visuals, owner->findMaterial("basalt")->m_numeric_id, &GridTerrainVisual::m_material_id);
+        PPR_TEST_ASSERT(
+            legacy != packet->m_terrain_visuals.end() and legacy->m_transport_model == kGridTransportUnavailable);
+        const auto unavailable = gridMaterialOpticalCell(*legacy);
+        PPR_TEST_ASSERT(not unavailable and unavailable.error() == std::errc::no_message);
+
+        auto adjusted_transport = transport;
+        const auto coefficient = adjusted_transport.find("sigma_r_per_m=0.5");
+        PPR_TEST_ASSERT(coefficient != std::string::npos);
+        adjusted_transport.replace(coefficient, std::string_view{"sigma_r_per_m=0.5"}.size(), "sigma_r_per_m=0.75");
+        fixture.write("water.toml", bytes + adjusted_transport);
+        const auto adjusted = fixture.load(diagnostics);
+        PPR_TEST_ASSERT(adjusted.has_value() and adjusted->contentFingerprint() == numeric);
+        PPR_TEST_ASSERT(adjusted->presentationDescriptorFingerprint() != owner->presentationDescriptorFingerprint());
+
+        // Import cross-field validation rejects a declared but incoherent model.
+        fixture.write(
+            "water.toml", bytes + "\n[appearance.transport]\ncontract_version=1\nmodel='opaque'\nsigma_r_per_m=0.5\n");
+        config::Diagnostics errors;
+        PPR_TEST_ASSERT(not fixture.load(errors) and errors.hasErrors());
+    };
+
     PPR_UNIT_TEST (explicit_presentation_owns_distinct_usages_and_survives_source_removal) {
         config::Diagnostics diagnostics;
         std::shared_ptr<const ContentPresentation> retained;
@@ -1953,6 +2015,7 @@ namespace pP::game::tests {
             detail::pack::prepared_world_rejects_invalid_inputs_and_cancellation_before_generation,
             detail::pack::numeric_streams_ignore_manifest_order_comments_and_unused_assets,
             detail::pack::identity_separates_numeric_appearance_descriptor_and_binary_changes,
+            detail::pack::material_transport_changes_only_presentation_and_captures_selected_ids,
             detail::pack::explicit_presentation_owns_distinct_usages_and_survives_source_removal,
             detail::pack::definition_edits_recompose_current_presentation_with_unchanged_owned_images,
             detail::pack::texture_setting_edit_prepares_one_image_while_null_epoch_disables_reuse,

@@ -80,6 +80,10 @@ export namespace pP::colony {
         select_preview, // m_arg = EGridDiagnosticMode; range lives in UI draft.
         open_workshop,
         quit, // same graceful host transition as the native close control
+        toggle_service_door,
+        cancel_service_door,
+        toggle_service_lamp,
+        move_service_lamp,
     };
 
     /// One typed intent; trivially copyable so keyboard callbacks, buttons,
@@ -397,6 +401,12 @@ export namespace pP::colony {
         std::optional<u64> m_selected_agent{};
         std::optional<u64> m_hovered_agent{};
         bool m_following{};
+        bool m_service_door_available{};
+        bool m_service_door_closed{};
+        bool m_service_lamp_enabled{true};
+        bool m_service_lamp_alternate{};
+        bool m_service_door_pending{};
+        bool m_service_door_cancelable{};
         std::span<const AgentNeedsRow> m_agent_needs{};
         /// Screen anchor for a pinned Inspector cell, projected by the caller
         /// from the live camera. Absent when nothing is pinned or the pinned

@@ -30,11 +30,21 @@ endif()
 # Linux hosts: this vcpkg version defaults to a compiler-aware triplet
 # (e.g. x64-linux-clang) that it does not actually provide. Clang presets
 # select the x64-linux-libcxx overlay triplet (libc++, matching
-# cmake/compiler/Clang.cmake) via their own cache variables; pin plain
-# x64-linux only as the fallback for presets without one (e.g. hidden GCC).
-# Darwin/Windows keep their own defaults.
+# cmake/compiler/Clang.cmake) via their own cache variables. A configuration
+# whose compiler CompilerSelection.cmake defaulted gets the same libc++ triplet;
+# other Linux configurations keep plain x64-linux. Darwin/Windows keep their
+# own defaults.
 if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux" AND NOT DEFINED VCPKG_TARGET_TRIPLET)
-    set(VCPKG_TARGET_TRIPLET "x64-linux" CACHE STRING "Vcpkg target triplet (ex. x86-windows)")
+    if(PPR_DEFAULTED_CLANG)
+        # The defaulted toolchain goes through Clang.cmake's -stdlib=libc++, so
+        # C++ ports must match the libc++ ABI the Clang presets already use.
+        set(VCPKG_TARGET_TRIPLET "x64-linux-libcxx" CACHE STRING "Vcpkg target triplet (ex. x86-windows)")
+        if(NOT DEFINED VCPKG_OVERLAY_TRIPLETS)
+            set(VCPKG_OVERLAY_TRIPLETS "${CMAKE_CURRENT_LIST_DIR}/triplets" CACHE STRING "Vcpkg overlay triplets")
+        endif()
+    else()
+        set(VCPKG_TARGET_TRIPLET "x64-linux" CACHE STRING "Vcpkg target triplet (ex. x86-windows)")
+    endif()
 endif()
 
 # If VCPKG is being used, read the triplet and configure runtime

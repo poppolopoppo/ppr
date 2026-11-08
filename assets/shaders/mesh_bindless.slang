@@ -40,6 +40,15 @@ struct FrameConstants {
     float4 m_viewport_size;
 };
 
+// Descriptor-backed per-draw data. Four scalar words keep the CB ABI explicit;
+// only the payload base participates in the instance index.
+struct DrawConstants {
+    uint m_payload_base;
+    uint m_reserved0;
+    uint m_reserved1;
+    uint m_reserved2;
+};
+
 // CPU mirror: 96 B. Field order, widths, signedness, and the m_pad that rounds
 // the element to a 16 B multiple are asserted on the CPU side.
 // Payload indices: C++ groups by (variant, bucket, vb_offset, ib_start, count,
@@ -60,9 +69,9 @@ struct InstancePayload {
 // Global scope carries NO ordinary data: a ConstantBuffer nested beside $Globals
 // ordinary data is misbound (D3D12SerializeRootSignature then reports the
 // generated globalParams b0 overlapping g_frame b1), which fails program
-// creation. Per-draw ordinary values must therefore arrive as entry-point
-// `uniform` parameters, as g_payload_base does below.
+// creation. Per-draw values therefore use descriptor-backed constant buffers.
 ConstantBuffer<FrameConstants> g_frame;
+ConstantBuffer<DrawConstants> g_draw;
 StructuredBuffer<BagVertex> g_vertices;
 StructuredBuffer<uint> g_indices;
 // One slot per pack call, never content-deduped; material slot 0 is a real
@@ -99,12 +108,9 @@ struct BindlessVertexOutput {
     nointerpolation uint material : MATERIAL;
 };
 
-// g_payload_base is an entry-point `uniform` (not a global) because global-scope
-// ordinary data makes D3D12SerializeRootSignature fail with an overlapping
-// globalParams/g_frame CBV. C++ binds it by the same flat
-// cursor["g_payload_base"].setData(&base, sizeof(base)) used for the former
-// g_model/g_push entry-point uniforms; it is plain data, so it needs no
-// getDereferenced (unlike g_frame).
+// g_draw is descriptor-backed like g_frame; neither contributes root ordinary
+// data. Keeping the vertex entry free of ordinary parameters also leaves only
+// the fragment entry's descriptor handles in Vulkan push constants.
 //
 // SV_InstanceID is draw-local on D3D12, SPIR-V, and Metal alike: the CPU's
 // startInstanceLocation never reaches the shader, so a bare SV_InstanceID would
@@ -115,9 +121,8 @@ struct BindlessVertexOutput {
 [shader("vertex")]
 BindlessVertexOutput vertexIndirectMain(
     uint sv_vertex_id : SV_VertexID,
-    uint sv_instance_id : SV_InstanceID,
-    uniform uint g_payload_base) {
-    InstancePayload payload = g_payloads[g_payload_base + sv_instance_id];
+    uint sv_instance_id : SV_InstanceID) {
+    InstancePayload payload = g_payloads[g_draw.m_payload_base + sv_instance_id];
     int bag_index = int(g_indices[payload.m_ib_start + sv_vertex_id])
         + int(payload.m_vb_offset)
         + payload.m_base_vertex;
@@ -139,17 +144,15 @@ BindlessVertexOutput vertexIndirectMain(
     return output;
 }
 
-// The texture heap and shared sampler ride FRAGMENT entry-point params, for the
-// same reason g_payload_base is a vertex entry-point param: global scope stays
-// free of ordinary data. Heap element indices carry nonuniform() because they
-// are DescriptorHandles; the material read does not, and the reasons differ.
-[shader("fragment")]
-float4 fragmentMain(
+// The texture heap and shared sampler ride FRAGMENT entry-point params, keeping
+// global scope free of ordinary data. Heap element indices carry nonuniform()
+// because they are DescriptorHandles; the material read does not.
+float4 shadeMesh(
     BindlessVertexOutput input,
     // Texture slots ARE content-deduped and refcounted, so one heap slot can
     // serve many loads; heap slot 0 is the reserved white fallback.
-    uniform StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
-    uniform SamplerState.Handle g_sampler) : SV_Target {
+    StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
+    SamplerState.Handle g_sampler) {
     // Plain index on purpose. The heap element reads below need nonuniform()
     // because they are DescriptorHandles; that annotation does not extend to a
     // classic SRV, and the matching NonUniformResourceIndex does not exist in
@@ -194,4 +197,38 @@ float4 fragmentMain(
         + specular * (1.0 - roughness) * 0.25
         + emissive;
     return float4(lit, albedo.a);
+}
+
+
+[shader("fragment")]
+float4 fragmentMain(BindlessVertexOutput input,
+    uniform StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
+    uniform SamplerState.Handle g_sampler) : SV_Target {
+    return shadeMesh(input,g_textures,g_sampler);
+}
+
+struct MeshReactiveOutput {
+    float4 color : SV_Target0;
+    float reactive : SV_Target1;
+};
+
+[shader("fragment")]
+MeshReactiveOutput fragmentReactive(BindlessVertexOutput input,uint sample_index : SV_SampleIndex,
+    uniform StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
+    uniform SamplerState.Handle g_sampler) {
+    // Evaluate the entry's varyings BEFORE assignment; alpha-mask discard and
+    // ordinary depth/culling still determine which actual samples contribute.
+    float3 world=EvaluateAttributeAtSample(input.world,sample_index);
+    float2 uv=EvaluateAttributeAtSample(input.uv,sample_index);
+    float3 normal=EvaluateAttributeAtSample(input.normal,sample_index);
+    float4 tangent=EvaluateAttributeAtSample(input.tangent,sample_index);
+    input.world=world;
+    input.uv=uv;
+    input.normal=normal;
+    input.tangent=tangent;
+
+    MeshReactiveOutput output;
+    output.color=shadeMesh(input,g_textures,g_sampler);
+    output.reactive=1; // Local conservative mesh/actor coverage, not opacity.
+    return output;
 }

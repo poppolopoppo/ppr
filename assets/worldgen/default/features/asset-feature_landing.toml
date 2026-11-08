@@ -76,6 +76,26 @@ tag = "rectangle"
 width_fine = 9
 height_fine = 6
 
+# Four opaque source cells attach to the existing ceiling at y33.
+# Below and either side remain carved room; the spawn route stays clear.
+[definition.operations.op_04]
+order = 50
+x_fine = 44
+y_fine = 31
+
+[definition.operations.op_04.action]
+tag = "paint"
+
+[definition.operations.op_04.action.paint]
+material = "showcase_amber_lamp"
+
+[definition.operations.op_04.action.paint.shape]
+tag = "rectangle"
+
+[definition.operations.op_04.action.paint.shape.rectangle]
+width_fine = 2
+height_fine = 2
+
 [definition.markers]
 
 [definition.markers.spawn]

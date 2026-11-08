@@ -69,11 +69,33 @@ namespace pP {
             float m_source_extent[2];
             float m_dither_strength;
             u32 m_palette_enabled;
+            float m_exposure_multiplier;
+            u32 m_hdr_enabled;
+            u32 m_encode_srgb;
+            u32 m_bloom_enabled;
         };
-        static_assert(sizeof(RetroParameters) == 528u);
+        static_assert(sizeof(RetroParameters) == 544u);
         static_assert(alignof(RetroParameters) == 16u);
         static_assert(PPR_OFFSETOF(RetroParameters, m_source_extent) == 512u);
+        static_assert(PPR_OFFSETOF(RetroParameters, m_exposure_multiplier) == 528u);
+        static_assert(PPR_OFFSETOF(RetroParameters, m_encode_srgb) == 536u);
         static_assert(PPR_OFFSETOF(RetroParameters, m_dither_strength) == 520u);
+        static_assert(PPR_OFFSETOF(RetroParameters, m_bloom_enabled) == 540u);
+
+        struct alignas(16) BloomParameters {
+            u32 m_source_extent[2];
+            u32 m_bloom_extent[2];
+            float m_threshold;
+            u32 m_reserved0;
+            u32 m_reserved1;
+            u32 m_reserved2;
+        };
+        static_assert(sizeof(BloomParameters) == 32u and alignof(BloomParameters) == 16u);
+        static_assert(PPR_OFFSETOF(BloomParameters, m_bloom_extent) == 8u);
+        static_assert(PPR_OFFSETOF(BloomParameters, m_threshold) == 16u);
+        static_assert(PPR_OFFSETOF(BloomParameters, m_reserved0) == 20u);
+        static_assert(PPR_OFFSETOF(BloomParameters, m_reserved1) == 24u);
+        static_assert(PPR_OFFSETOF(BloomParameters, m_reserved2) == 28u);
     }
 
     namespace fs = std::filesystem;
@@ -104,14 +126,88 @@ namespace pP {
         return signature;
     }
 
+    RenderPipelineSignature RetroPass::temporal2xScenePipelineSignature() noexcept {
+        auto signature = scenePipelineSignature(true);
+        signature.m_color_formats[1] = rhi::Format::R8Unorm;
+        signature.m_color_format_count = 2u;
+        return signature;
+    }
+
     float2 RetroPass::temporalJitter(const u32 phase) noexcept {
         // Filmic Worlds' half-pixel 2x2 cycle, centered about zero.
         return float2{(phase & 1u) != 0u ? 0.25f : -0.25f, (phase & 2u) != 0u ? 0.25f : -0.25f};
     }
 
-    CameraSnapshot RetroPass::beginFrame(
+    Expected<CameraSnapshot> RetroPass::beginFrame(
         const RetroSettings &settings, const CameraSnapshot &camera, const int2 extent, const u64 world_generation,
-        const u64 world_job, const u64 world_content) {
+        const u64 world_job, const u64 world_content, const TimeSpan request_elapsed, const u64 lighting_revision,
+        const RetroLightingPublication lighting_publication) {
+        return beginFrame(
+            settings, camera, extent, extent, world_generation, world_job, world_content, request_elapsed,
+            lighting_revision, lighting_publication);
+    }
+
+    std::error_code RetroPass::validateFrameSettings(
+        const RetroSettings &settings, const int2 raster_extent, const int2 output_extent) noexcept {
+        PPR_RETURN_ERROR_ON_FAIL(
+            RetroPass, std::isfinite(settings.m_exposure_ev) and
+                               settings.m_exposure_ev >= -16.0f and
+                               settings.m_exposure_ev <= 16.0f
+                           ? std::error_code{}
+                           : std::make_error_code(std::errc::invalid_argument));
+
+        PPR_RETURN_ERROR_ON_FAIL(
+            RetroPass, not settings.m_bloom_enabled or (settings.m_hdr_enabled and (settings.m_spatial_enabled or
+                                                                                       settings.m_temporal_2x_enabled))
+                           ? std::error_code{}
+                           : std::make_error_code(std::errc::invalid_argument));
+
+        if (settings.m_temporal_2x_enabled) {
+            PPR_RETURN_ERROR_ON_FAIL(
+                RetroPass, not settings.m_temporal_enabled and not settings.m_spatial_enabled
+                               ? std::error_code{}
+                               : std::make_error_code(std::errc::invalid_argument));
+        }
+
+        if (settings.m_spatial_enabled or settings.m_temporal_2x_enabled) {
+            PPR_RETURN_ERROR_ON_FAIL(
+                RetroPass, not settings.m_enabled and
+                                   not settings.m_temporal_enabled and
+                                   raster_extent.x > 0 and
+                                   raster_extent.y > 0 and
+                                   output_extent.x > 0 and
+                                   output_extent.y > 0 and
+                                   output_extent.x % 2 == 0 and
+                                   output_extent.y % 2 == 0 and
+                                   raster_extent.x == output_extent.x / 2 and
+                                   raster_extent.y == output_extent.y / 2
+                               ? std::error_code{}
+                               : std::make_error_code(std::errc::invalid_argument));
+        }
+
+        return {};
+    }
+
+    Expected<CameraSnapshot> RetroPass::beginFrame(
+        const RetroSettings &settings, const CameraSnapshot &camera, const int2 extent, const int2 output_extent,
+        const u64 world_generation, const u64 world_job, const u64 world_content, const TimeSpan request_elapsed,
+        const u64 lighting_revision, const RetroLightingPublication lighting_publication) {
+        PPR_RETURN_UNEXPECTED_ON_FAIL(RetroPass, validateFrameSettings(settings, extent, output_extent));
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            RetroPass, not settings.m_spatial_enabled or m_spatial_supported
+                           ? std::error_code{}
+                           : std::make_error_code(std::errc::not_supported));
+
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            RetroPass, not settings.m_bloom_enabled or m_bloom_supported
+                           ? std::error_code{}
+                           : std::make_error_code(std::errc::not_supported));
+
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            RetroPass, not settings.m_temporal_2x_enabled or m_temporal_2x_supported
+                           ? std::error_code{}
+                           : std::make_error_code(std::errc::not_supported));
+
         RetroSettings effective = settings;
         effective.m_temporal_enabled = settings.m_temporal_enabled and
                                        m_temporal_supported and
@@ -125,29 +221,61 @@ namespace pP {
         }
 
         const std::array<u64, 3u> identity{world_generation, world_job, world_content};
-        if (camera.m_has_camera_cut or
-            identity != m_content_identity or
-            camera.m_camera_mode != m_camera.m_camera_mode or
-            extent.x != m_frame_extent.x or
-            extent.y != m_frame_extent.y or
-            effective.m_enabled != m_settings.m_enabled or
-            effective.m_pixel_scale != m_settings.m_pixel_scale or
-            effective.m_palette_enabled != m_settings.m_palette_enabled or
-            effective.m_temporal_enabled != m_settings.m_temporal_enabled) {
-            m_history_valid = false;
-            m_phase = 0u;
+        if (effective.m_temporal_2x_enabled) {
+            // Retained presentation restores display state, not the identity or
+            // camera of the latest accepted history producer.
+            const auto &previous = m_scene_slots[m_history_slot];
+            m_temporal_2x_history_eligible = m_history_valid and
+                                             previous.m_temporal_2x and
+                                             not camera.m_has_camera_cut and
+                                             identity == previous.m_picture_identity and
+                                             lighting_revision == previous.m_picture_lighting_revision and
+                                             lighting_publication == previous.m_picture_lighting_publication and
+                                             camera.m_camera_mode == previous.m_picture_camera.m_camera_mode and
+                                             extent.x == previous.m_extent.x and
+                                             extent.y == previous.m_extent.y and
+                                             output_extent.x == previous.m_output_extent.x and
+                                             output_extent.y == previous.m_output_extent.y;
+            m_frame_phase = m_temporal_2x_history_eligible ? m_phase : 0u;
+        } else {
+            // A proposed mode switch cannot invalidate or release accepted TSR
+            // history. The protected slot survives until a fresh submit commits.
+            const bool protects_temporal2x = m_history_valid and m_scene_slots[m_history_slot].m_temporal_2x;
+            if (not protects_temporal2x and (camera.m_has_camera_cut or
+                                                identity != m_content_identity or
+                                                lighting_revision != m_content_lighting_revision or
+                                                camera.m_camera_mode != m_camera.m_camera_mode or
+                                                extent.x != m_frame_extent.x or
+                                                extent.y != m_frame_extent.y or
+                                                output_extent.x != m_output_extent.x or
+                                                output_extent.y != m_output_extent.y or
+                                                effective.m_enabled != m_settings.m_enabled or
+                                                effective.m_pixel_scale != m_settings.m_pixel_scale or
+                                                effective.m_palette_enabled != m_settings.m_palette_enabled or
+                                                effective.m_temporal_enabled != m_settings.m_temporal_enabled or
+                                                effective.m_spatial_enabled != m_settings.m_spatial_enabled or
+                                                m_settings.m_temporal_2x_enabled)) {
+                m_history_valid = false;
+                m_phase = 0u;
+            }
+
+            m_frame_phase = protects_temporal2x ? 0u : m_phase;
         }
 
         m_settings = effective;
         m_frame_extent = extent;
+        m_output_extent = output_extent;
         m_content_identity = identity;
+        m_content_lighting_revision = lighting_revision;
+        m_lighting_publication = lighting_publication;
+        m_request_elapsed = request_elapsed;
         m_camera = camera;
         m_scene_recorded = false;
         m_history_used = false;
 
         CameraSnapshot raster = camera;
-        if (effective.m_temporal_enabled) {
-            const float2 jitter = temporalJitter(m_phase) * 2.0f / float2{float(extent.x), float(extent.y)};
+        if (effective.m_temporal_enabled or effective.m_temporal_2x_enabled) {
+            const float2 jitter = temporalJitter(m_frame_phase) * 2.0f / float2{float(extent.x), float(extent.y)};
             raster.m_projection = camera.m_projection * makeJitterMatrix(jitter);
             raster.m_view_projection = camera.m_view_projection * makeJitterMatrix(jitter);
             raster.m_invert_projection = inverse(raster.m_projection);
@@ -208,10 +336,33 @@ namespace pP {
             const u32 required = static_cast<u32>(rhi::FormatSupport::Multisampling) |
                                  static_cast<u32>(rhi::FormatSupport::ShaderLoad);
             m_temporal_supported = m_temporal_supported and (static_cast<u32>(support) & required) == required;
+            if (format == rhi::Format::RGBA16Float) {
+                const u32 bloom_required = static_cast<u32>(rhi::FormatSupport::ShaderLoad) |
+                                           static_cast<u32>(rhi::FormatSupport::ShaderUavStore);
+                m_bloom_supported = (static_cast<u32>(support) & bloom_required) == bloom_required;
+            }
         }
         if (m_temporal_supported) {
             PPR_RETURN_ERROR_ON_FAIL(RetroPass, createTemporalProgram_(shader_service, device, content_dir));
         }
+
+        // Spatial has no fallback. Program creation stays lazy so an unused
+        // opt-in cannot fail ordinary initialization on another backend.
+        m_spatial_supported = device.hasFeature("standard-sample-locations-4") and
+                              device.hasFeature("sample-rate-shading");
+        rhi::FormatSupport reactive_support{};
+        PPR_RETURN_ERROR_ON_FAIL(RetroPass, device.getFormatSupport(rhi::Format::R8Unorm, &reactive_support));
+        const u32 reactive_required = static_cast<u32>(rhi::FormatSupport::Multisampling) |
+                                      static_cast<u32>(rhi::FormatSupport::RenderTarget) |
+                                      static_cast<u32>(rhi::FormatSupport::Blendable) |
+                                      static_cast<u32>(rhi::FormatSupport::ShaderLoad);
+        m_temporal_2x_supported = m_spatial_supported and
+                                  m_temporal_supported and
+                                  m_bloom_supported and
+                                  device.hasFeature("independent-blend-enabled") and
+                                  (static_cast<u32>(reactive_support) & reactive_required) == reactive_required;
+        m_shader_service = safe_ptr{&shader_service};
+        m_content_dir = content_dir;
 
         m_ready = true;
         initialization_complete = true;
@@ -227,6 +378,34 @@ namespace pP {
             RetroPass,
             shader_service.loadModuleFromFile(
                 content_dir / TEXT("shaders") / TEXT("retro_present.slang"), "retro_present", retro_shader.writeRef()));
+
+        auto *const layout = retro_shader->getLayout();
+        PPR_RETURN_ERROR_ON_FAIL(
+            RetroPass, layout != nullptr ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
+        slang::TypeLayoutReflection *constants = nullptr;
+        for (unsigned index = 0u; index < layout->getParameterCount(); ++index) {
+            auto *const parameter = layout->getParameterByIndex(index);
+            if (std::string_view{parameter->getName()} == "g_retro") {
+                constants = parameter->getTypeLayout()->getElementTypeLayout();
+                break;
+            }
+        }
+
+        PPR_RETURN_ERROR_ON_FAIL(
+            RetroPass, constants != nullptr and
+                               constants->getSize() == sizeof(RetroParameters) and
+                               constants->getFieldCount() == 8u
+                           ? std::error_code{}
+                           : std::make_error_code(std::errc::invalid_argument));
+        PPR_RETURN_ERROR_ON_FAIL(
+            RetroPass,
+            constants->getFieldByIndex(1u)->getOffset() == PPR_OFFSETOF(RetroParameters, m_source_extent) and
+                    constants->getFieldByIndex(4u)->getOffset() ==
+                        PPR_OFFSETOF(RetroParameters, m_exposure_multiplier) and
+                    constants->getFieldByIndex(6u)->getOffset() == PPR_OFFSETOF(RetroParameters, m_encode_srgb) and
+                    constants->getFieldByIndex(7u)->getOffset() == PPR_OFFSETOF(RetroParameters, m_bloom_enabled)
+                ? std::error_code{}
+                : std::make_error_code(std::errc::invalid_argument));
 
         shader::ComPtr<slang::IEntryPoint> vertex_ep;
         PPR_RETURN_ERROR_ON_FAIL(
@@ -272,6 +451,30 @@ namespace pP {
         std::ignore = m_deferred_releases.drainAll();
         m_last_submitted_value = kFenceValueNone;
 
+        m_temporal_2x_roots = {};
+        m_temporal_2x_pipeline.setNull();
+        m_temporal_2x_program.setNull();
+        m_temporal_2x_supported = false;
+        m_temporal_2x_history_eligible = false;
+        m_frame_phase = 0u;
+        m_settings.m_temporal_2x_enabled = false;
+        m_lighting_publication = {};
+        m_last_temporal_2x_submission.reset();
+
+        m_bloom_roots = {};
+        m_bloom_pipelines = {};
+        m_bloom_programs = {};
+        m_bloom_supported = false;
+        m_settings.m_bloom_enabled = false;
+
+        m_spatial_roots = {};
+        m_spatial_pipeline.setNull();
+        m_spatial_program.setNull();
+        m_shader_service = nullptr;
+        m_content_dir.clear();
+        m_spatial_supported = false;
+        m_settings.m_spatial_enabled = false;
+
         m_temporal_roots = {};
         m_temporal_pipeline.setNull();
         m_temporal_program.setNull();
@@ -292,6 +495,9 @@ namespace pP {
         m_scene_slots = {};
         m_scene_cursor = 0u;
         m_scene_slot = 0u;
+        m_retain_completed_picture = false;
+        m_completed_picture_valid = false;
+        m_scene_sampled = false;
         m_scene_ready = false;
         m_scene_recorded = false;
         m_ready = false;
@@ -306,8 +512,11 @@ namespace pP {
         const u32 height = safe_narrowing(extent.y);
 
         rhi::TextureDesc color_desc{};
-        color_desc.type = m_settings.m_temporal_enabled ? rhi::TextureType::Texture2DMS : rhi::TextureType::Texture2D;
-        color_desc.sampleCount = m_settings.m_temporal_enabled ? 4u : 1u;
+        const bool multisampled = m_settings.m_temporal_enabled or
+                                  m_settings.m_spatial_enabled or
+                                  m_settings.m_temporal_2x_enabled;
+        color_desc.type = multisampled ? rhi::TextureType::Texture2DMS : rhi::TextureType::Texture2D;
+        color_desc.sampleCount = multisampled ? 4u : 1u;
         color_desc.size = {.width = width, .height = height, .depth = 1u};
         color_desc.arrayLength = 1u;
         color_desc.mipCount = 1u;
@@ -318,11 +527,6 @@ namespace pP {
         color_desc.defaultState = rhi::ResourceState::ShaderResource;
         color_desc.label = "retro scene color";
 
-        rhi::ComPtr<rhi::ITexture> color;
-        rhi::ComPtr<rhi::ITextureView> color_view;
-        PPR_RETURN_ERROR_ON_FAIL(RetroPass, device.createTexture(color_desc, nullptr, color.writeRef()));
-        PPR_RETURN_ERROR_ON_FAIL(RetroPass, color->getDefaultView(color_view.writeRef()));
-
         rhi::TextureDesc depth_desc{};
         depth_desc.type = color_desc.type;
         depth_desc.sampleCount = color_desc.sampleCount;
@@ -331,12 +535,74 @@ namespace pP {
         depth_desc.mipCount = 1u;
         depth_desc.format = rhi::Format::D32Float;
         depth_desc.memoryType = rhi::MemoryType::DeviceLocal;
-        depth_desc.usage = m_settings.m_temporal_enabled ? static_cast<rhi::TextureUsage>(
-                                                               static_cast<u32>(rhi::TextureUsage::DepthStencil) |
-                                                               static_cast<u32>(rhi::TextureUsage::ShaderResource))
-                                                         : rhi::TextureUsage::DepthStencil;
+        depth_desc.usage = multisampled ? static_cast<rhi::TextureUsage>(
+                                              static_cast<u32>(rhi::TextureUsage::DepthStencil) |
+                                              static_cast<u32>(rhi::TextureUsage::ShaderResource))
+                                        : rhi::TextureUsage::DepthStencil;
         depth_desc.defaultState = rhi::ResourceState::DepthWrite;
         depth_desc.label = "retro scene depth";
+
+        auto spatial_desc = color_desc;
+        spatial_desc.type = rhi::TextureType::Texture2D;
+        spatial_desc.sampleCount = 1u;
+        spatial_desc.size = {.width = width, .height = height, .depth = 1u};
+        spatial_desc.usage = static_cast<rhi::TextureUsage>(
+            static_cast<u32>(rhi::TextureUsage::ShaderResource) | static_cast<u32>(rhi::TextureUsage::UnorderedAccess));
+        spatial_desc.label = "spatial linear HDR output";
+        if (m_settings.m_spatial_enabled or m_settings.m_temporal_2x_enabled) {
+            spatial_desc.size.width = safe_narrowing(m_output_extent.x);
+            spatial_desc.size.height = safe_narrowing(m_output_extent.y);
+
+            // The pinned Vulkan guard checks these exact committed descriptor
+            // roles before creating any image. No initial data or placed heap.
+            for (const auto &descriptor: {color_desc, depth_desc, spatial_desc}) {
+                std::size_t size{}, alignment{};
+                PPR_RETURN_ERROR_ON_FAIL(RetroPass, device.getTextureAllocationInfo(descriptor, &size, &alignment));
+                PPR_RETURN_ERROR_ON_FAIL(
+                    RetroPass, size > 0u and alignment > 0u ? std::error_code{}
+                                                            : std::make_error_code(std::errc::invalid_argument));
+            }
+        }
+
+        auto bloom_desc = spatial_desc;
+        bloom_desc.size.width = (spatial_desc.size.width + 3u) / 4u;
+        bloom_desc.size.height = (spatial_desc.size.height + 3u) / 4u;
+        bloom_desc.label = "quarter-output scene-linear bloom";
+        if (m_settings.m_bloom_enabled) {
+            std::size_t size{}, alignment{};
+            PPR_RETURN_ERROR_ON_FAIL(RetroPass, device.getTextureAllocationInfo(bloom_desc, &size, &alignment));
+            PPR_RETURN_ERROR_ON_FAIL(
+                RetroPass,
+                size > 0u and alignment > 0u ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
+        }
+
+        auto reactive_desc = color_desc;
+        reactive_desc.format = rhi::Format::R8Unorm;
+        reactive_desc.label = "temporal2x reactive sample coverage";
+        if (m_settings.m_temporal_2x_enabled) {
+            for (const auto &descriptor: {reactive_desc, spatial_desc}) {
+                std::size_t size{}, alignment{};
+                PPR_RETURN_ERROR_ON_FAIL(RetroPass, device.getTextureAllocationInfo(descriptor, &size, &alignment));
+                PPR_RETURN_ERROR_ON_FAIL(
+                    RetroPass, size > 0u and alignment > 0u ? std::error_code{}
+                                                            : std::make_error_code(std::errc::invalid_argument));
+            }
+        }
+
+        rhi::ComPtr<rhi::ITexture> reactive;
+        rhi::ComPtr<rhi::ITextureView> reactive_view;
+        rhi::ComPtr<rhi::IShaderObject> temporal_2x_root;
+        if (m_settings.m_temporal_2x_enabled) {
+            PPR_RETURN_ERROR_ON_FAIL(RetroPass, device.createTexture(reactive_desc, nullptr, reactive.writeRef()));
+            PPR_RETURN_ERROR_ON_FAIL(RetroPass, reactive->getDefaultView(reactive_view.writeRef()));
+            PPR_RETURN_ERROR_ON_FAIL(
+                RetroPass, device.createRootShaderObject(m_temporal_2x_program, temporal_2x_root.writeRef()));
+        }
+
+        rhi::ComPtr<rhi::ITexture> color;
+        rhi::ComPtr<rhi::ITextureView> color_view;
+        PPR_RETURN_ERROR_ON_FAIL(RetroPass, device.createTexture(color_desc, nullptr, color.writeRef()));
+        PPR_RETURN_ERROR_ON_FAIL(RetroPass, color->getDefaultView(color_view.writeRef()));
 
         rhi::ComPtr<rhi::ITexture> depth;
         rhi::ComPtr<rhi::ITextureView> depth_view;
@@ -353,22 +619,141 @@ namespace pP {
             PPR_RETURN_ERROR_ON_FAIL(RetroPass, history->getDefaultView(history_view.writeRef()));
         }
 
+        if (m_settings.m_temporal_2x_enabled) {
+            auto history_desc = spatial_desc;
+            history_desc.label = "temporal2x scene-linear output history";
+            PPR_RETURN_ERROR_ON_FAIL(RetroPass, device.createTexture(history_desc, nullptr, history.writeRef()));
+            PPR_RETURN_ERROR_ON_FAIL(RetroPass, history->getDefaultView(history_view.writeRef()));
+        }
+
+        rhi::ComPtr<rhi::ITexture> spatial;
+        rhi::ComPtr<rhi::ITextureView> spatial_view;
+        if (m_settings.m_spatial_enabled or m_settings.m_temporal_2x_enabled) {
+            PPR_RETURN_ERROR_ON_FAIL(RetroPass, device.createTexture(spatial_desc, nullptr, spatial.writeRef()));
+            PPR_RETURN_ERROR_ON_FAIL(RetroPass, spatial->getDefaultView(spatial_view.writeRef()));
+        }
+
+        std::array<rhi::ComPtr<rhi::ITexture>, 2> bloom{};
+        std::array<rhi::ComPtr<rhi::ITextureView>, 2> bloom_views{};
+        std::array<rhi::ComPtr<rhi::IShaderObject>, 2> bloom_roots{};
+        if (m_settings.m_bloom_enabled) {
+            for (u32 index = 0u; index < bloom.size(); ++index) {
+                PPR_RETURN_ERROR_ON_FAIL(RetroPass, device.createTexture(bloom_desc, nullptr, bloom[index].writeRef()));
+                PPR_RETURN_ERROR_ON_FAIL(RetroPass, bloom[index]->getDefaultView(bloom_views[index].writeRef()));
+                PPR_RETURN_ERROR_ON_FAIL(
+                    RetroPass, device.createRootShaderObject(m_bloom_programs[index], bloom_roots[index].writeRef()));
+            }
+        }
+
+        // The caller proved completion of this slot. Fresh roots detach old
+        // bindings too; all acquisition succeeds before replacing its cohort.
+        rhi::ComPtr<rhi::IShaderObject> present_root, spatial_root;
+        PPR_RETURN_ERROR_ON_FAIL(RetroPass, device.createRootShaderObject(m_program, present_root.writeRef()));
+        if (m_settings.m_spatial_enabled or m_settings.m_temporal_2x_enabled) {
+            PPR_RETURN_ERROR_ON_FAIL(
+                RetroPass, device.createRootShaderObject(m_spatial_program, spatial_root.writeRef()));
+        }
+
         slot.m_history = std::move(history);
         slot.m_history_view = std::move(history_view);
         slot.m_temporal = m_settings.m_temporal_enabled;
+        slot.m_temporal_2x = m_settings.m_temporal_2x_enabled;
+        slot.m_reactive = std::move(reactive);
+        slot.m_reactive_view = std::move(reactive_view);
+        m_temporal_2x_roots[m_scene_cursor] = std::move(temporal_2x_root);
         slot.m_color = std::move(color);
         slot.m_color_view = std::move(color_view);
         slot.m_depth = std::move(depth);
         slot.m_depth_view = std::move(depth_view);
         slot.m_extent = extent;
+        slot.m_output_extent = m_output_extent;
+        slot.m_spatial_enabled = m_settings.m_spatial_enabled;
+        slot.m_spatial = std::move(spatial);
+        slot.m_spatial_view = std::move(spatial_view);
+        slot.m_bloom_enabled = m_settings.m_bloom_enabled;
+        slot.m_bloom = std::move(bloom);
+        slot.m_bloom_views = std::move(bloom_views);
+        m_bloom_roots[m_scene_cursor] = std::move(bloom_roots);
+        m_scene_roots[m_scene_cursor] = std::move(present_root);
+        m_spatial_roots[m_scene_cursor] = std::move(spatial_root);
+        // A completed legacy temporal root can retain the previous MSAA views.
+        if (not m_settings.m_temporal_enabled) {
+            m_temporal_roots[m_scene_cursor].setNull();
+        }
 
         return default_value_v;
+    }
+
+    std::error_code RetroPass::enableCompletedPictureRetention() {
+        PPR_RETURN_ERROR_ON_FAIL(
+            RetroPass, m_ready ? std::error_code{} : std::make_error_code(std::errc::not_connected));
+        PPR_RETURN_ERROR_ON_FAIL(
+            RetroPass,
+            not m_settings.m_temporal_enabled ? std::error_code{} : std::make_error_code(std::errc::not_supported));
+        m_retain_completed_picture = true;
+        return {};
+    }
+
+    std::optional<RetroCompletedPicture> RetroPass::restoreCompletedPicture(const FenceCompletionValue completed) {
+        if (not m_retain_completed_picture) {
+            return std::nullopt;
+        }
+
+        // An abandoned scene may have prepared/rendered CPU state but no
+        // accepted write. A UI-only submission must never publish that state.
+        m_scene_ready = false;
+        m_scene_recorded = false;
+        m_scene_sampled = false;
+        m_history_used = false;
+
+        for (u32 index = 0u; index < kFrameRingSlots; ++index) {
+            const auto value = m_scene_slots[index].m_content_submit;
+            if (value != kFenceValueNone and
+                slotFenceComplete(completed, value) and
+                (not m_completed_picture_valid or value > m_scene_slots[m_completed_picture_slot].m_content_submit)) {
+                m_completed_picture_slot = index;
+                m_completed_picture_valid = true;
+            }
+        }
+
+        if (not m_completed_picture_valid) {
+            return std::nullopt;
+        }
+
+        const auto &slot = m_scene_slots[m_completed_picture_slot];
+        m_scene_slot = m_completed_picture_slot;
+        m_scene_ready = true;
+        m_scene_recorded = false;
+        m_history_used = false;
+        m_settings = slot.m_picture_settings;
+        m_camera = slot.m_picture_camera;
+        m_content_identity = slot.m_picture_identity;
+        m_content_lighting_revision = slot.m_picture_lighting_revision;
+        m_lighting_publication = slot.m_picture_lighting_publication;
+        m_request_elapsed = slot.m_picture_request_elapsed;
+        m_frame_extent = slot.m_extent;
+        m_output_extent = slot.m_output_extent;
+        return RetroCompletedPicture{
+            slot.m_picture_camera, slot.m_picture_identity, slot.m_picture_request_elapsed, slot.m_output_extent,
+            slot.m_picture_lighting_revision, slot.m_picture_lighting_publication};
     }
 
     std::error_code RetroPass::prepareScene(
         const PreRenderContext &context, const RenderPipelineSignature &scene_signature, const int2 extent,
         const DrawCallback encode_scene) {
         const hal::ProfileScope scope{"App.Pass.Retro.Scene"};
+
+        const bool previous_ready = m_scene_ready;
+        const u32 previous_slot = m_scene_slot;
+        const bool previous_recorded = m_scene_recorded;
+        bool prepared{};
+        PPR_DEFER {
+            if (m_retain_completed_picture and not prepared) {
+                m_scene_ready = previous_ready;
+                m_scene_slot = previous_slot;
+                m_scene_recorded = previous_recorded;
+            }
+        };
 
         m_scene_ready = false;
         PPR_RETURN_ERROR_ON_FAIL(
@@ -378,9 +763,30 @@ namespace pP {
             extent.x > 0 and extent.y > 0 ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
 
         PPR_RETURN_ERROR_ON_FAIL(
-            RetroPass, scene_signature == scenePipelineSignature(m_settings.m_temporal_enabled)
+            RetroPass, scene_signature == (m_settings.m_temporal_2x_enabled
+                                                  ? temporal2xScenePipelineSignature()
+                                                  : scenePipelineSignature(
+                                                        m_settings.m_temporal_enabled or m_settings.m_spatial_enabled))
                            ? std::error_code{}
                            : std::make_error_code(std::errc::invalid_argument));
+
+        PPR_RETURN_ERROR_ON_FAIL(
+            RetroPass, not m_retain_completed_picture or not m_settings.m_temporal_enabled
+                           ? std::error_code{}
+                           : std::make_error_code(std::errc::not_supported));
+
+        if (m_settings.m_spatial_enabled or m_settings.m_temporal_2x_enabled) {
+            PPR_RETURN_ERROR_ON_FAIL(RetroPass, validateFrameSettings(m_settings, extent, m_output_extent));
+            PPR_RETURN_ERROR_ON_FAIL(RetroPass, ensureSpatialProgram_(context.m_device));
+        }
+
+        if (m_settings.m_temporal_2x_enabled) {
+            PPR_RETURN_ERROR_ON_FAIL(RetroPass, ensureTemporal2xProgram_(context.m_device));
+        }
+
+        if (m_settings.m_bloom_enabled) {
+            PPR_RETURN_ERROR_ON_FAIL(RetroPass, ensureBloomPrograms_(context.m_device));
+        }
 
         std::array<FenceCompletionValue, kFrameRingSlots> values;
         for (u32 slot = 0u; slot < kFrameRingSlots; ++slot) {
@@ -388,10 +794,38 @@ namespace pP {
         }
 
         u32 selected = selectRingSlot(context.m_completed_fence_value, values, m_scene_cursor);
-        // History is a sampled input, never the target of the same resolve.
-        if (m_history_valid and selected == m_history_slot) {
+        if (m_retain_completed_picture) {
+            // Promote completed writes without restoring old display settings.
+            for (u32 index = 0u; index < kFrameRingSlots; ++index) {
+                const auto value = m_scene_slots[index].m_content_submit;
+                if (value != kFenceValueNone and
+                    slotFenceComplete(context.m_completed_fence_value, value) and
+                    (not m_completed_picture_valid or
+                        value > m_scene_slots[m_completed_picture_slot].m_content_submit)) {
+                    m_completed_picture_slot = index;
+                    m_completed_picture_valid = true;
+                }
+            }
+
+            if (m_completed_picture_valid and selected == m_completed_picture_slot) {
+                selected = (selected + 1u) % kFrameRingSlots;
+            }
+        }
+
+        // Exclude both protected owners in the same ring walk: sequential
+        // skips can wrap back onto the completed picture.
+        for (u32 attempt = 0u; attempt < kFrameRingSlots; ++attempt) {
+            const bool protected_picture = m_retain_completed_picture and
+                                           m_completed_picture_valid and
+                                           selected == m_completed_picture_slot;
+            const bool protected_history = m_history_valid and selected == m_history_slot;
+            if (not protected_picture and not protected_history) {
+                break;
+            }
+
             selected = (selected + 1u) % kFrameRingSlots;
         }
+
         FenceCompletionValue effective_completed = context.m_completed_fence_value;
         if (not slotFenceComplete(context.m_completed_fence_value, values[selected])) {
             PPR_RETURN_ERROR_ON_FAIL(
@@ -410,8 +844,19 @@ namespace pP {
         if (not slot.m_color or
             slot.m_extent.x != extent.x or
             slot.m_extent.y != extent.y or
-            slot.m_temporal != m_settings.m_temporal_enabled) {
+            slot.m_temporal != m_settings.m_temporal_enabled or
+            slot.m_temporal_2x != m_settings.m_temporal_2x_enabled or
+            slot.m_spatial_enabled != m_settings.m_spatial_enabled or
+            slot.m_bloom_enabled != m_settings.m_bloom_enabled or
+            slot.m_output_extent.x != m_output_extent.x or
+            slot.m_output_extent.y != m_output_extent.y) {
             PPR_RETURN_ERROR_ON_FAIL(RetroPass, createSceneTarget_(context.m_device, slot, extent));
+        }
+
+        if (m_settings.m_temporal_enabled and not m_temporal_roots[selected]) {
+            PPR_RETURN_ERROR_ON_FAIL(
+                RetroPass,
+                context.m_device.createRootShaderObject(m_temporal_program, m_temporal_roots[selected].writeRef()));
         }
 
         const rhi::SubresourceRange target_range{
@@ -420,19 +865,23 @@ namespace pP {
             .mip = 0u,
             .mipCount = 1u,
         };
+        slot.m_content_submit = kFenceValueNone;
         context.m_encoder.setTextureState(slot.m_color, target_range, rhi::ResourceState::RenderTarget);
         context.m_encoder.setTextureState(slot.m_depth, target_range, rhi::ResourceState::DepthWrite);
+        if (m_settings.m_temporal_2x_enabled) {
+            context.m_encoder.setTextureState(slot.m_reactive, target_range, rhi::ResourceState::RenderTarget);
+        }
 
-        const rhi::RenderPassColorAttachment color_attachment{
-            .view = slot.m_color_view,
-            .clearValue = {0.1f, 0.1f, 0.2f, 1.0f},
+        const std::array<rhi::RenderPassColorAttachment, 2> color_attachments{
+            rhi::RenderPassColorAttachment{.view = slot.m_color_view, .clearValue = {0.1f, 0.1f, 0.2f, 1.0f}},
+            rhi::RenderPassColorAttachment{.view = slot.m_reactive_view, .clearValue = {0.0f, 0.0f, 0.0f, 0.0f}},
         };
         rhi::RenderPassDepthStencilAttachment depth_attachment{};
         depth_attachment.view = slot.m_depth_view;
         depth_attachment.depthClearValue = 1.0f;
         rhi::RenderPassDesc pass_desc{};
-        pass_desc.colorAttachments = &color_attachment;
-        pass_desc.colorAttachmentCount = 1u;
+        pass_desc.colorAttachments = color_attachments.data();
+        pass_desc.colorAttachmentCount = m_settings.m_temporal_2x_enabled ? 2u : 1u;
         pass_desc.depthStencilAttachment = &depth_attachment;
         rhi::IRenderPassEncoder *const pass = context.m_encoder.beginRenderPass(pass_desc);
         PPR_RETURN_ERROR_ON_FAIL(
@@ -463,19 +912,442 @@ namespace pP {
                 .m_completed_fence_value = effective_completed,
                 .m_wait_for_fence = std::move(scene_wait),
             };
+
+            pass->setRenderState({
+                .viewports = {scene_context.m_viewport},
+                .viewportCount = 1u,
+                .scissorRects = {scene_context.m_scissor},
+                .scissorRectCount = 1u,
+                .vertexBuffers = {},
+                .indexBuffer = {},
+            });
             PPR_RETURN_ERROR_ON_FAIL(RetroPass, encode_scene(scene_context));
         }
 
         context.m_encoder.setTextureState(slot.m_color, target_range, rhi::ResourceState::ShaderResource);
 
-        if (m_settings.m_temporal_enabled) {
+        if (m_settings.m_spatial_enabled or m_settings.m_temporal_2x_enabled) {
+            PPR_RETURN_ERROR_ON_FAIL(RetroPass, resolveSpatial_(context, selected));
+        } else if (m_settings.m_temporal_enabled) {
             PPR_RETURN_ERROR_ON_FAIL(RetroPass, resolveTemporal_(context, selected));
+        }
+
+        if (m_settings.m_temporal_2x_enabled) {
+            PPR_RETURN_ERROR_ON_FAIL(RetroPass, resolveTemporal2x_(context, selected));
+        }
+
+        if (m_settings.m_bloom_enabled) {
+            PPR_RETURN_ERROR_ON_FAIL(RetroPass, resolveBloom_(context, selected));
         }
 
         m_scene_ready = true;
         m_scene_slot = selected;
         m_scene_recorded = true;
+        slot.m_picture_camera = m_camera;
+        slot.m_picture_identity = m_content_identity;
+        slot.m_picture_lighting_revision = m_content_lighting_revision;
+        slot.m_picture_lighting_publication = m_lighting_publication;
+        slot.m_picture_request_elapsed = m_request_elapsed;
+        slot.m_picture_settings = m_settings;
+        prepared = true;
         return default_value_v;
+    }
+
+    // ------------------------------------------------------------------
+    // current-frame spatial reconstruction
+    // ------------------------------------------------------------------
+
+    std::error_code RetroPass::ensureSpatialProgram_(rhi::IDevice &device) {
+        if (m_spatial_pipeline) {
+            return {};
+        }
+
+        PPR_RETURN_ERROR_ON_FAIL(
+            RetroPass, m_shader_service.isValid() ? std::error_code{} : std::make_error_code(std::errc::not_connected));
+
+        shader::SharedModule module{};
+        PPR_RETURN_ERROR_ON_FAIL(
+            RetroPass,
+            m_shader_service->loadModuleFromFile(
+                m_content_dir / TEXT("shaders") / TEXT("spatial_msaa4.slang"), "spatial_msaa4", module.writeRef()));
+
+        auto *const layout = module->getLayout();
+        slang::TypeLayoutReflection *parameters = nullptr;
+        if (layout != nullptr) {
+            for (unsigned index = 0u; index < layout->getParameterCount(); ++index) {
+                auto *const parameter = layout->getParameterByIndex(index);
+                if (std::string_view{parameter->getName()} == "g_spatial") {
+                    parameters = parameter->getTypeLayout()->getElementTypeLayout();
+                    break;
+                }
+            }
+        }
+
+        PPR_RETURN_ERROR_ON_FAIL(
+            RetroPass, parameters != nullptr and parameters->getSize(SLANG_PARAMETER_CATEGORY_UNIFORM) == 32u
+                           ? std::error_code{}
+                           : std::make_error_code(std::errc::invalid_argument));
+        for (const auto &[name, offset]: std::array<std::pair<const char *, u32>, 3>{
+                 std::pair{"source_extent", 0u}, {"output_extent", 8u}, {"sample_indices", 16u}}) {
+            bool matched = false;
+            for (unsigned index = 0u; index < parameters->getFieldCount(); ++index) {
+                auto *const field = parameters->getFieldByIndex(index);
+                if (std::string_view{field->getName()} == name) {
+                    matched = field->getOffset(SLANG_PARAMETER_CATEGORY_UNIFORM) == offset;
+                    break;
+                }
+            }
+
+            PPR_RETURN_ERROR_ON_FAIL(
+                RetroPass, matched ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
+        }
+
+        shader::ComPtr<slang::IEntryPoint> entry;
+        PPR_RETURN_ERROR_ON_FAIL(RetroPass, module->findEntryPointByName("resolveSpatialMsaa4", entry.writeRef()));
+        slang::IComponentType *entries[] = {entry.get()};
+        rhi::ShaderProgramDesc description{};
+        description.linkingStyle = rhi::LinkingStyle::SingleProgram;
+        description.slangGlobalScope = module.get();
+        description.slangEntryPoints = entries;
+        description.slangEntryPointCount = 1u;
+        shader::Diagnose diagnostics;
+        rhi::ComPtr<rhi::IShaderProgram> program;
+        PPR_RETURN_ERROR_ON_FAIL(
+            RetroPass, device.createShaderProgram(description, program.writeRef(), diagnostics.writeRef()));
+
+        rhi::ComputePipelineDesc pipeline_desc{};
+        pipeline_desc.program = program;
+        pipeline_desc.label = "Hable current-frame spatial reconstruction";
+        rhi::ComPtr<rhi::IComputePipeline> pipeline;
+        PPR_RETURN_ERROR_ON_FAIL(RetroPass, device.createComputePipeline(pipeline_desc, pipeline.writeRef()));
+        std::array<rhi::ComPtr<rhi::IShaderObject>, kFrameRingSlots> roots{};
+        for (auto &root: roots) {
+            PPR_RETURN_ERROR_ON_FAIL(RetroPass, device.createRootShaderObject(program, root.writeRef()));
+        }
+
+        m_spatial_program = std::move(program);
+        m_spatial_pipeline = std::move(pipeline);
+        m_spatial_roots = std::move(roots);
+        return {};
+    }
+
+    std::error_code RetroPass::resolveSpatial_(const PreRenderContext &context, const u32 selected) {
+        const hal::ProfileScope scope{"App.Pass.Spatial.Resolve"};
+        struct alignas(16) Parameters {
+            u32 m_source[2];
+            u32 m_output[2];
+            u32 m_samples[4];
+        };
+        static_assert(sizeof(Parameters) == 32u);
+        static_assert(alignof(Parameters) == 16u);
+        static_assert(PPR_OFFSETOF(Parameters, m_output) == 8u);
+        static_assert(PPR_OFFSETOF(Parameters, m_samples) == 16u);
+
+        auto &slot = m_scene_slots[selected];
+        const Parameters parameters{
+            {safe_narrowing(slot.m_extent.x), safe_narrowing(slot.m_extent.y)},
+            {safe_narrowing(slot.m_output_extent.x), safe_narrowing(slot.m_output_extent.y)},
+            // Vulkan's admitted standard indexed table matches this canonical order.
+            {0u, 1u, 2u, 3u},
+        };
+        rhi::ShaderCursor cursor{m_spatial_roots[selected]};
+        rhi::ShaderCursor constants;
+        PPR_RETURN_ERROR_ON_FAIL(RetroPass, cursor["g_spatial"].getDereferenced(constants));
+        PPR_RETURN_ERROR_ON_FAIL(RetroPass, constants.setData(&parameters, sizeof(parameters)));
+        PPR_RETURN_ERROR_ON_FAIL(RetroPass, cursor["g_source"].setBinding(rhi::Binding(slot.m_color_view)));
+        PPR_RETURN_ERROR_ON_FAIL(RetroPass, cursor["g_output"].setBinding(rhi::Binding(slot.m_spatial_view)));
+
+        const rhi::SubresourceRange range{.layer = 0u, .layerCount = 1u, .mip = 0u, .mipCount = 1u};
+        context.m_encoder.setTextureState(slot.m_spatial, range, rhi::ResourceState::UnorderedAccess);
+        auto *const pass = context.m_encoder.beginComputePass();
+        PPR_RETURN_ERROR_ON_FAIL(
+            RetroPass, pass != nullptr ? std::error_code{} : std::make_error_code(std::errc::io_error));
+        pass->bindPipeline(m_spatial_pipeline, m_spatial_roots[selected]);
+        pass->dispatchCompute((parameters.m_source[0] + 7u) / 8u, (parameters.m_source[1] + 7u) / 8u, 1u);
+        pass->end();
+
+        context.m_encoder.setTextureState(slot.m_spatial, range, rhi::ResourceState::ShaderResource);
+        return {};
+    }
+
+    // ------------------------------------------------------------------
+    // output-resolution temporal reconstruction with reactive support
+    // ------------------------------------------------------------------
+
+    std::error_code RetroPass::ensureTemporal2xProgram_(rhi::IDevice &device) {
+        if (m_temporal_2x_pipeline) {
+            return {};
+        }
+
+        PPR_RETURN_ERROR_ON_FAIL(
+            RetroPass, m_shader_service.isValid() ? std::error_code{} : std::make_error_code(std::errc::not_connected));
+
+        shader::SharedModule module{};
+        PPR_RETURN_ERROR_ON_FAIL(
+            RetroPass,
+            m_shader_service->loadModuleFromFile(
+                m_content_dir / TEXT("shaders") / TEXT("temporal_2x.slang"), "temporal_2x", module.writeRef()));
+
+        slang::TypeLayoutReflection *parameters = nullptr;
+        auto *const layout = module->getLayout();
+        if (layout != nullptr) {
+            for (unsigned index = 0u; index < layout->getParameterCount(); ++index) {
+                auto *const parameter = layout->getParameterByIndex(index);
+                if (std::string_view{parameter->getName()} == "g_tsr") {
+                    parameters = parameter->getTypeLayout()->getElementTypeLayout();
+                    break;
+                }
+            }
+        }
+
+        PPR_RETURN_ERROR_ON_FAIL(
+            RetroPass, parameters != nullptr and parameters->getSize(SLANG_PARAMETER_CATEGORY_UNIFORM) == 192u
+                           ? std::error_code{}
+                           : std::make_error_code(std::errc::invalid_argument));
+
+        for (const auto &[name, offset]: std::array<std::pair<const char *, u32>, 10>{
+                 std::pair{"inverse_view_projection", 0u}, {"previous_view_projection", 64u}, {"sample_offsets", 128u},
+                 {"raster_extent", 144u}, {"output_extent", 152u}, {"sample_indices", 160u}, {"flags", 176u},
+                 {"reserved0", 180u}, {"reserved1", 184u}, {"reserved2", 188u}}) {
+            bool matched = false;
+            for (unsigned index = 0u; index < parameters->getFieldCount(); ++index) {
+                auto *const field = parameters->getFieldByIndex(index);
+                if (std::string_view{field->getName()} == name) {
+                    matched = field->getOffset(SLANG_PARAMETER_CATEGORY_UNIFORM) == offset;
+                    break;
+                }
+            }
+
+            PPR_RETURN_ERROR_ON_FAIL(
+                RetroPass, matched ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
+        }
+
+        shader::ComPtr<slang::IEntryPoint> entry;
+        PPR_RETURN_ERROR_ON_FAIL(RetroPass, module->findEntryPointByName("resolveTemporal2x", entry.writeRef()));
+        slang::IComponentType *entries[] = {entry.get()};
+        rhi::ShaderProgramDesc description{};
+        description.linkingStyle = rhi::LinkingStyle::SingleProgram;
+        description.slangGlobalScope = module.get();
+        description.slangEntryPoints = entries;
+        description.slangEntryPointCount = 1u;
+        shader::Diagnose diagnostics;
+        rhi::ComPtr<rhi::IShaderProgram> program;
+        PPR_RETURN_ERROR_ON_FAIL(
+            RetroPass, device.createShaderProgram(description, program.writeRef(), diagnostics.writeRef()));
+
+        rhi::ComputePipelineDesc pipeline_desc{};
+        pipeline_desc.program = program;
+        pipeline_desc.label = "temporal2x scene-linear reconstruction";
+        rhi::ComPtr<rhi::IComputePipeline> pipeline;
+        PPR_RETURN_ERROR_ON_FAIL(RetroPass, device.createComputePipeline(pipeline_desc, pipeline.writeRef()));
+
+        m_temporal_2x_program = std::move(program);
+        m_temporal_2x_pipeline = std::move(pipeline);
+        return {};
+    }
+
+    std::error_code RetroPass::resolveTemporal2x_(const PreRenderContext &context, const u32 selected) {
+        const hal::ProfileScope scope{"App.Pass.Temporal2x.Resolve"};
+        struct alignas(16) Parameters {
+            float4x4 m_inverse_view_projection{identity_v};
+            float4x4 m_previous_view_projection{identity_v};
+            float m_sample_offsets[4]{};
+            u32 m_raster_extent[2]{};
+            u32 m_output_extent[2]{};
+            u32 m_sample_indices[4]{0u, 1u, 2u, 3u};
+            u32 m_flags{};
+            u32 m_reserved0{}, m_reserved1{}, m_reserved2{};
+        };
+        static_assert(sizeof(Parameters) == 192u and alignof(Parameters) == 16u);
+        static_assert(PPR_OFFSETOF(Parameters, m_sample_offsets) == 128u);
+        static_assert(PPR_OFFSETOF(Parameters, m_raster_extent) == 144u);
+        static_assert(PPR_OFFSETOF(Parameters, m_output_extent) == 152u);
+        static_assert(PPR_OFFSETOF(Parameters, m_sample_indices) == 160u);
+        static_assert(PPR_OFFSETOF(Parameters, m_flags) == 176u);
+        static_assert(PPR_OFFSETOF(Parameters, m_reserved0) == 180u);
+        static_assert(PPR_OFFSETOF(Parameters, m_reserved1) == 184u);
+        static_assert(PPR_OFFSETOF(Parameters, m_reserved2) == 188u);
+
+        auto &slot = m_scene_slots[selected];
+        const auto &history = m_scene_slots[m_history_slot];
+        const bool history_valid = m_temporal_2x_history_eligible;
+        Parameters parameters{};
+        parameters.m_inverse_view_projection = m_camera.m_invert_view_projection;
+        parameters.m_previous_view_projection = history_valid ? history.m_picture_camera.m_view_projection
+                                                              : m_camera.m_view_projection;
+        const auto current_jitter = temporalJitter(m_frame_phase);
+        const auto previous_jitter = temporalJitter((m_frame_phase + 3u) % 4u);
+        parameters.m_sample_offsets[0] = -current_jitter.x / float(slot.m_extent.x);
+        parameters.m_sample_offsets[1] = current_jitter.y / float(slot.m_extent.y);
+        parameters.m_sample_offsets[2] = -previous_jitter.x / float(slot.m_extent.x);
+        parameters.m_sample_offsets[3] = previous_jitter.y / float(slot.m_extent.y);
+        parameters.m_raster_extent[0] = safe_narrowing(slot.m_extent.x);
+        parameters.m_raster_extent[1] = safe_narrowing(slot.m_extent.y);
+        parameters.m_output_extent[0] = safe_narrowing(slot.m_output_extent.x);
+        parameters.m_output_extent[1] = safe_narrowing(slot.m_output_extent.y);
+        parameters.m_flags = history_valid ? 1u : 0u;
+        if (m_camera.m_camera_mode == ECameraProjection::perspective) {
+            parameters.m_flags |= 2u;
+        }
+
+        bool stationary = true;
+        for (u32 row = 0u; row < 4u; ++row) {
+            for (u32 column = 0u; column < 4u; ++column) {
+                stationary = stationary and m_camera.m_view_projection[row][column] ==
+                                                parameters.m_previous_view_projection[row][column];
+            }
+        }
+
+        if (stationary) {
+            parameters.m_flags |= 4u;
+        }
+
+        rhi::ShaderCursor cursor{m_temporal_2x_roots[selected]};
+        rhi::ShaderCursor constants;
+        PPR_RETURN_ERROR_ON_FAIL(RetroPass, cursor["g_tsr"].getDereferenced(constants));
+        PPR_RETURN_ERROR_ON_FAIL(RetroPass, constants.setData(&parameters, sizeof(parameters)));
+        PPR_RETURN_ERROR_ON_FAIL(RetroPass, cursor["g_current"].setBinding(rhi::Binding(slot.m_spatial_view)));
+        PPR_RETURN_ERROR_ON_FAIL(RetroPass, cursor["g_raw"].setBinding(rhi::Binding(slot.m_color_view)));
+        PPR_RETURN_ERROR_ON_FAIL(RetroPass, cursor["g_depth"].setBinding(rhi::Binding(slot.m_depth_view)));
+        PPR_RETURN_ERROR_ON_FAIL(RetroPass, cursor["g_reactive"].setBinding(rhi::Binding(slot.m_reactive_view)));
+        PPR_RETURN_ERROR_ON_FAIL(
+            RetroPass, cursor["g_history"].setBinding(
+                           rhi::Binding(history_valid ? history.m_history_view : m_empty_history_view)));
+        PPR_RETURN_ERROR_ON_FAIL(RetroPass, cursor["g_output"].setBinding(rhi::Binding(slot.m_history_view)));
+
+        const rhi::SubresourceRange range{.layer = 0u, .layerCount = 1u, .mip = 0u, .mipCount = 1u};
+        context.m_encoder.setTextureState(slot.m_depth, range, rhi::ResourceState::ShaderResource);
+        context.m_encoder.setTextureState(slot.m_reactive, range, rhi::ResourceState::ShaderResource);
+        context.m_encoder.setTextureState(slot.m_history, range, rhi::ResourceState::UnorderedAccess);
+        auto *const pass = context.m_encoder.beginComputePass();
+        PPR_RETURN_ERROR_ON_FAIL(
+            RetroPass, pass != nullptr ? std::error_code{} : std::make_error_code(std::errc::io_error));
+        pass->bindPipeline(m_temporal_2x_pipeline, m_temporal_2x_roots[selected]);
+        pass->dispatchCompute((parameters.m_output_extent[0] + 7u) / 8u, (parameters.m_output_extent[1] + 7u) / 8u, 1u);
+        pass->end();
+
+        context.m_encoder.setTextureState(slot.m_history, range, rhi::ResourceState::ShaderResource);
+        m_history_used = history_valid;
+        return {};
+    }
+
+    // ------------------------------------------------------------------
+    // exposure-relative scene-linear bloom
+    // ------------------------------------------------------------------
+
+    std::error_code RetroPass::ensureBloomPrograms_(rhi::IDevice &device) {
+        if (m_bloom_pipelines[0]) {
+            return {};
+        }
+
+        PPR_RETURN_ERROR_ON_FAIL(
+            RetroPass, m_shader_service.isValid() ? std::error_code{} : std::make_error_code(std::errc::not_connected));
+
+        shader::SharedModule module{};
+        PPR_RETURN_ERROR_ON_FAIL(
+            RetroPass,
+            m_shader_service->loadModuleFromFile(
+                m_content_dir / TEXT("shaders") / TEXT("retro_bloom.slang"), "retro_bloom", module.writeRef()));
+
+        auto *const layout = module->getLayout();
+        slang::TypeLayoutReflection *parameters = nullptr;
+        if (layout != nullptr) {
+            for (unsigned index = 0u; index < layout->getParameterCount(); ++index) {
+                auto *const parameter = layout->getParameterByIndex(index);
+                if (std::string_view{parameter->getName()} == "g_bloom_parameters") {
+                    parameters = parameter->getTypeLayout()->getElementTypeLayout();
+                    break;
+                }
+            }
+        }
+
+        PPR_RETURN_ERROR_ON_FAIL(
+            RetroPass,
+            parameters != nullptr and parameters->getSize(SLANG_PARAMETER_CATEGORY_UNIFORM) == sizeof(BloomParameters)
+                ? std::error_code{}
+                : std::make_error_code(std::errc::invalid_argument));
+        for (const auto &[name, offset]: std::array<std::pair<const char *, u32>, 6>{
+                 std::pair{"source_extent", 0u}, {"bloom_extent", 8u}, {"threshold", 16u}, {"reserved0", 20u},
+                 {"reserved1", 24u}, {"reserved2", 28u}}) {
+            bool matched = false;
+            for (unsigned index = 0u; index < parameters->getFieldCount(); ++index) {
+                auto *const field = parameters->getFieldByIndex(index);
+                if (std::string_view{field->getName()} == name) {
+                    matched = field->getOffset(SLANG_PARAMETER_CATEGORY_UNIFORM) == offset;
+                    break;
+                }
+            }
+
+            PPR_RETURN_ERROR_ON_FAIL(
+                RetroPass, matched ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
+        }
+
+        std::array<rhi::ComPtr<rhi::IShaderProgram>, 2> programs{};
+        std::array<rhi::ComPtr<rhi::IComputePipeline>, 2> pipelines{};
+        const char *const names[] = {"extractRetroBloom", "blurRetroBloom"};
+        for (u32 index = 0u; index < programs.size(); ++index) {
+            shader::ComPtr<slang::IEntryPoint> entry;
+            PPR_RETURN_ERROR_ON_FAIL(RetroPass, module->findEntryPointByName(names[index], entry.writeRef()));
+            slang::IComponentType *entries[] = {entry.get()};
+            rhi::ShaderProgramDesc description{};
+            description.linkingStyle = rhi::LinkingStyle::SingleProgram;
+            description.slangGlobalScope = module.get();
+            description.slangEntryPoints = entries;
+            description.slangEntryPointCount = 1u;
+            shader::Diagnose diagnostics;
+            PPR_RETURN_ERROR_ON_FAIL(
+                RetroPass, device.createShaderProgram(description, programs[index].writeRef(), diagnostics.writeRef()));
+
+            rhi::ComputePipelineDesc pipeline_desc{};
+            pipeline_desc.program = programs[index];
+            pipeline_desc.label = names[index];
+            PPR_RETURN_ERROR_ON_FAIL(
+                RetroPass, device.createComputePipeline(pipeline_desc, pipelines[index].writeRef()));
+        }
+
+        m_bloom_programs = std::move(programs);
+        m_bloom_pipelines = std::move(pipelines);
+        return {};
+    }
+
+    std::error_code RetroPass::resolveBloom_(const PreRenderContext &context, const u32 selected) {
+        const hal::ProfileScope scope{"App.Pass.Retro.Bloom"};
+        auto &slot = m_scene_slots[selected];
+        const BloomParameters parameters{
+            {safe_narrowing(slot.m_output_extent.x), safe_narrowing(slot.m_output_extent.y)},
+            {(checked_cast<u32>(slot.m_output_extent.x) + 3u) / 4u,
+                (checked_cast<u32>(slot.m_output_extent.y) + 3u) / 4u},
+            std::exp2(-m_settings.m_exposure_ev),
+            0u,
+            0u,
+            0u,
+        };
+        const rhi::SubresourceRange range{.layer = 0u, .layerCount = 1u, .mip = 0u, .mipCount = 1u};
+        for (u32 index = 0u; index < m_bloom_pipelines.size(); ++index) {
+            rhi::ShaderCursor cursor{m_bloom_roots[selected][index]};
+            rhi::ShaderCursor constants;
+            PPR_RETURN_ERROR_ON_FAIL(RetroPass, cursor["g_bloom_parameters"].getDereferenced(constants));
+            PPR_RETURN_ERROR_ON_FAIL(RetroPass, constants.setData(&parameters, sizeof(parameters)));
+            PPR_RETURN_ERROR_ON_FAIL(
+                RetroPass, cursor["g_source"].setBinding(
+                               rhi::Binding(
+                                   index == 0u ? (slot.m_temporal_2x ? slot.m_history_view : slot.m_spatial_view)
+                                               : slot.m_bloom_views[0])));
+            PPR_RETURN_ERROR_ON_FAIL(RetroPass, cursor["g_output"].setBinding(rhi::Binding(slot.m_bloom_views[index])));
+
+            context.m_encoder.setTextureState(slot.m_bloom[index], range, rhi::ResourceState::UnorderedAccess);
+            auto *const pass = context.m_encoder.beginComputePass();
+            PPR_RETURN_ERROR_ON_FAIL(
+                RetroPass, pass != nullptr ? std::error_code{} : std::make_error_code(std::errc::io_error));
+            pass->bindPipeline(m_bloom_pipelines[index], m_bloom_roots[selected][index]);
+            pass->dispatchCompute(
+                (parameters.m_bloom_extent[0] + 7u) / 8u, (parameters.m_bloom_extent[1] + 7u) / 8u, 1u);
+            pass->end();
+
+            context.m_encoder.setTextureState(slot.m_bloom[index], range, rhi::ResourceState::ShaderResource);
+        }
+
+        return {};
     }
 
     // ------------------------------------------------------------------
@@ -550,12 +1422,13 @@ namespace pP {
         static_assert(PPR_OFFSETOF(TemporalParameters, m_flags) == 152u);
 
         auto &slot = m_scene_slots[selected];
-        const auto &history = m_history_valid ? m_scene_slots[m_history_slot] : slot;
+        const bool history_valid = m_history_valid and not m_scene_slots[m_history_slot].m_temporal_2x;
+        const auto &history = history_valid ? m_scene_slots[m_history_slot] : slot;
         TemporalParameters parameters{};
         parameters.m_inverse_view_projection = m_camera.m_invert_view_projection;
         parameters.m_previous_view_projection = m_previous_view_projection;
-        const float2 current_jitter = temporalJitter(m_phase);
-        const float2 previous_jitter = temporalJitter((m_phase + 3u) % 4u);
+        const float2 current_jitter = temporalJitter(m_frame_phase);
+        const float2 previous_jitter = temporalJitter((m_frame_phase + 3u) % 4u);
         parameters.m_sample_offsets[0] = -current_jitter.x / float(slot.m_extent.x);
         parameters.m_sample_offsets[1] = current_jitter.y / float(slot.m_extent.y);
         parameters.m_sample_offsets[2] = -previous_jitter.x / float(slot.m_extent.x);
@@ -563,7 +1436,7 @@ namespace pP {
 
         parameters.m_extent[0] = float(slot.m_extent.x);
         parameters.m_extent[1] = float(slot.m_extent.y);
-        parameters.m_flags = m_history_valid ? 1u : 0u;
+        parameters.m_flags = history_valid ? 1u : 0u;
         if (m_camera.m_camera_mode == ECameraProjection::perspective) {
             parameters.m_flags |= 2u;
         }
@@ -585,7 +1458,7 @@ namespace pP {
         context.m_encoder.setTextureState(slot.m_depth, range, rhi::ResourceState::ShaderResource);
         // Bind a different, initialized texture on first frame too. The shader
         // returns before reading it, avoiding a read/write resource alias.
-        const auto history_view = m_history_valid ? history.m_history_view : m_empty_history_view;
+        const auto history_view = history_valid ? history.m_history_view : m_empty_history_view;
         context.m_encoder.setTextureState(slot.m_history, range, rhi::ResourceState::RenderTarget);
 
         auto *const root = m_temporal_roots[selected].get();
@@ -619,7 +1492,7 @@ namespace pP {
         pass->end();
 
         context.m_encoder.setTextureState(slot.m_history, range, rhi::ResourceState::ShaderResource);
-        m_history_used = m_history_valid;
+        m_history_used = history_valid;
         return {};
     }
 
@@ -678,9 +1551,61 @@ namespace pP {
             surface_signature.colorFormats().size() == 1u and not surface_signature.m_depth_stencil_format.has_value()
                 ? std::error_code{}
                 : std::make_error_code(std::errc::invalid_argument));
-        PPR_RETURN_ERROR_ON_FAIL(RetroPass, ensurePipeline_(context.m_device, surface_signature));
+
+        // Only the opt-in HDR path owns this SDR display encoding contract.
+        // Float targets retain linear values for numerical fixture readback.
+        bool encode_srgb = false;
+        if (m_settings.m_hdr_enabled) {
+            const rhi::Format format = surface_signature.colorFormats().front();
+            const bool linear_target = format == rhi::Format::RGBA16Float;
+            const bool srgb_target = format == rhi::Format::RGBA8UnormSrgb or format == rhi::Format::BGRA8UnormSrgb;
+            encode_srgb = format == rhi::Format::RGBA8Unorm or format == rhi::Format::BGRA8Unorm;
+            PPR_RETURN_ERROR_ON_FAIL(
+                RetroPass, linear_target or srgb_target or encode_srgb
+                               ? std::error_code{}
+                               : std::make_error_code(std::errc::not_supported));
+        }
 
         const SceneTarget &slot = m_scene_slots[m_scene_slot];
+        if (slot.m_spatial_enabled or slot.m_temporal_2x) {
+            const bool retained = m_retain_completed_picture and not m_scene_recorded;
+            const bool native_target = context.m_target_extent.x == slot.m_output_extent.x and
+                                       context.m_target_extent.y == slot.m_output_extent.y;
+            const bool retained_clip =
+                retained and
+                context.m_target_extent.x > 0 and
+                context.m_target_extent.y > 0 and
+                context.m_scissor.minX == 0u and
+                context.m_scissor.minY == 0u and
+                context.m_scissor.maxX ==
+                    static_cast<u32>(std::min(context.m_target_extent.x, slot.m_output_extent.x)) and
+                context.m_scissor.maxY == static_cast<u32>(std::min(context.m_target_extent.y, slot.m_output_extent.y));
+
+            // Retention uses the old native-pixel viewport at the real new
+            // target. Its intersection scissor clips, never rescales, UVs.
+            PPR_RETURN_ERROR_ON_FAIL(
+                RetroPass, (retained ? retained_clip : native_target) and
+                                   context.m_viewport.originX == 0.0f and
+                                   context.m_viewport.originY == 0.0f and
+                                   context.m_viewport.extentX == float(slot.m_output_extent.x) and
+                                   context.m_viewport.extentY == float(slot.m_output_extent.y)
+                               ? std::error_code{}
+                               : std::make_error_code(std::errc::invalid_argument));
+        }
+
+        PPR_RETURN_ERROR_ON_FAIL(RetroPass, ensurePipeline_(context.m_device, surface_signature));
+
+        // A retained picture can be sampled on successive UI frames without
+        // prepareScene selecting a new slot. Its root remains slot-owned, so
+        // finish the previous reader before changing that root's constants.
+        if (m_retain_completed_picture and
+            not m_scene_recorded and
+            not slotFenceComplete(context.m_completed_fence_value, slot.m_last_use)) {
+            PPR_RETURN_ERROR_ON_FAIL(
+                RetroPass, context.m_wait_for_fence ? context.m_wait_for_fence(slot.m_last_use)
+                                                    : std::make_error_code(std::errc::operation_would_block));
+        }
+
         RetroParameters parameters{};
         for (u32 index = 0u; index < kPaletteSize; ++index) {
             parameters.m_palette[index][0] = m_palette[index].x;
@@ -688,10 +1613,16 @@ namespace pP {
             parameters.m_palette[index][2] = m_palette[index].z;
             parameters.m_palette[index][3] = m_palette[index].w;
         }
-        parameters.m_source_extent[0] = static_cast<float>(slot.m_extent.x);
-        parameters.m_source_extent[1] = static_cast<float>(slot.m_extent.y);
+
+        const int2 source_extent = slot.m_spatial_enabled or slot.m_temporal_2x ? slot.m_output_extent : slot.m_extent;
+        parameters.m_source_extent[0] = static_cast<float>(source_extent.x);
+        parameters.m_source_extent[1] = static_cast<float>(source_extent.y);
         parameters.m_dither_strength = kDitherStrength;
         parameters.m_palette_enabled = m_settings.m_palette_enabled ? 1u : 0u;
+        parameters.m_exposure_multiplier = std::exp2(m_settings.m_exposure_ev);
+        parameters.m_hdr_enabled = m_settings.m_hdr_enabled ? 1u : 0u;
+        parameters.m_encode_srgb = encode_srgb ? 1u : 0u;
+        parameters.m_bloom_enabled = slot.m_bloom_enabled ? 1u : 0u;
 
         rhi::IShaderObject *const root = m_scene_roots[m_scene_slot].get();
         rhi::ShaderCursor cursor{root};
@@ -702,8 +1633,23 @@ namespace pP {
         PPR_RETURN_ERROR_ON_FAIL(RetroPass, retro_field.getDereferenced(retro_cursor));
         PPR_RETURN_ERROR_ON_FAIL(RetroPass, retro_cursor.setData(&parameters, sizeof(parameters)));
         PPR_RETURN_ERROR_ON_FAIL(
-            RetroPass,
-            cursor["g_scene"].setBinding(rhi::Binding(slot.m_temporal ? slot.m_history_view : slot.m_color_view)));
+            RetroPass, cursor["g_scene"].setBinding(
+                           rhi::Binding(
+                               slot.m_temporal_2x       ? slot.m_history_view
+                               : slot.m_spatial_enabled ? slot.m_spatial_view
+                               : slot.m_temporal        ? slot.m_history_view
+                                                        : slot.m_color_view)));
+
+        // The disabled branch borrows its already-bound 2D scene view; no
+        // fallback image is allocated and the shader performs no bloom loads.
+        PPR_RETURN_ERROR_ON_FAIL(
+            RetroPass, cursor["g_bloom"].setBinding(
+                           rhi::Binding(
+                               slot.m_bloom_enabled     ? slot.m_bloom_views[1]
+                               : slot.m_temporal_2x     ? slot.m_history_view
+                               : slot.m_spatial_enabled ? slot.m_spatial_view
+                               : slot.m_temporal        ? slot.m_history_view
+                                                        : slot.m_color_view)));
         PPR_RETURN_ERROR_ON_FAIL(RetroPass, cursor["g_sampler"].setDescriptorHandle(m_sampler_handle));
 
         context.m_pass.setRenderState({
@@ -716,6 +1662,8 @@ namespace pP {
         });
         context.m_pass.bindPipeline(m_pipeline, root);
         context.m_pass.draw({.vertexCount = 3u});
+        m_scene_sampled = true;
+        m_sampled_slot = m_scene_slot;
 
         // The source target is consumed by this single draw; a later frame
         // prepares it again before it is sampled.
@@ -727,9 +1675,37 @@ namespace pP {
     // frame settlement
     // ------------------------------------------------------------------
 
+    std::optional<RetroTemporal2xSubmission> RetroPass::lastTemporal2xSubmission() const noexcept {
+        return m_last_temporal_2x_submission;
+    }
+
     void RetroPass::notifyFrameSubmitted(const FenceCompletionValue submit_value) noexcept {
         m_last_submitted_value = submit_value;
+        if (m_scene_sampled) {
+            m_scene_slots[m_sampled_slot].m_last_use = submit_value;
+            m_scene_sampled = false;
+        }
+
         if (m_scene_recorded) {
+            const auto &slot = m_scene_slots[m_scene_slot];
+            if (slot.m_temporal_2x) {
+                RetroTemporal2xSubmission observation{};
+                observation.m_lighting_publication = slot.m_picture_lighting_publication;
+                observation.m_submission = submit_value;
+                observation.m_raster_extent = slot.m_extent;
+                observation.m_output_extent = slot.m_output_extent;
+                observation.m_phase = m_frame_phase;
+                observation.m_history_write_slot = m_scene_slot;
+                observation.m_history_bound = m_history_used;
+                if (m_history_used) {
+                    observation.m_history_submission = m_scene_slots[m_history_slot].m_content_submit;
+                    observation.m_history_read_slot = m_history_slot;
+                }
+
+                m_last_temporal_2x_submission = observation;
+            }
+
+            m_scene_slots[m_scene_slot].m_content_submit = submit_value;
             // The frame that rendered into the slot is (or is about to be)
             // submitted under this value: the slot is reusable only once the
             // fence passes it.
@@ -739,9 +1715,13 @@ namespace pP {
                 m_scene_slots[m_history_slot].m_last_use = submit_value;
             }
             m_history_slot = m_scene_slot;
-            m_history_valid = m_settings.m_temporal_enabled;
+            m_history_valid = m_settings.m_temporal_enabled or m_settings.m_temporal_2x_enabled;
             m_previous_view_projection = m_camera.m_view_projection;
-            m_phase = (m_phase + 1u) % 4u;
+            if (m_settings.m_temporal_2x_enabled or not m_settings.m_spatial_enabled) {
+                m_phase = (m_frame_phase + 1u) % 4u;
+            } else {
+                m_phase = 0u;
+            }
             m_scene_recorded = false;
         }
     }

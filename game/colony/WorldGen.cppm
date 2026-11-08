@@ -53,10 +53,12 @@ export namespace pP::colony {
         std::shared_ptr<const ContentPresentation> m_presentation;
         WorldDescriptor m_descriptor;
         sim::GeneratedWorld m_world;
+        bool m_lighting_showcase{};
 
         // construction:
         PreparedWorld(
-            std::shared_ptr<const ContentCatalog> catalog, WorldDescriptor descriptor, sim::GeneratedWorld world);
+            std::shared_ptr<const ContentCatalog> catalog, WorldDescriptor descriptor, sim::GeneratedWorld world,
+            bool lighting_showcase);
 
         // factories:
         friend class PreparedWorldConstruction;
@@ -76,6 +78,7 @@ export namespace pP::colony {
         [[nodiscard]] const std::shared_ptr<const ContentPresentation> &presentation() const noexcept;
         [[nodiscard]] const WorldDescriptor &descriptor() const noexcept;
         [[nodiscard]] const sim::GeneratedWorld &generated() const noexcept;
+        [[nodiscard]] bool lightingShowcase() const noexcept;
 
         // exclusive preparation:
         [[nodiscard]] std::error_code attachPresentation(
@@ -97,6 +100,32 @@ export namespace pP::colony {
     [[nodiscard]] Expected<PreparedWorld> prepareWorld(
         std::shared_ptr<const ContentCatalog> catalog, std::string_view profile, u64 seed, const ITimerClock &clock,
         const sim::GenerationExecution &execution = {});
+
+    // ------------------------------------------------------------------
+    // shared bounded lighting scene recipe
+    // ------------------------------------------------------------------
+
+    inline constexpr u32 kLightingSceneWidth = 64u, kLightingSceneHeight = 36u;
+
+    /// Palette order is sediment/sand/regolith/iron/copper/lamp[/violet/cyan].
+    /// Capture supplies its existing proxy IDs; gameplay supplies catalog IDs.
+    [[nodiscard]] Expected<std::vector<u16>> lightingSceneLabels(
+        std::span<const u16> material_ids, bool door_open, bool environment);
+
+    /// Interactive service bay only. The first eight roles are the unchanged
+    /// environment recipe; housing/tread/horizontal-pipe/vertical-pipe follow.
+    /// Every obstruction is an actual native cell consumed by Driver and Grid.
+    [[nodiscard]] Expected<std::vector<u16>> lightingShowcaseLabels(std::span<const u16> material_ids);
+
+    /// Authored start admission uses the canonical contour table, not the
+    /// procedural landing prefab/resource guarantees. Initial showcase only.
+    [[nodiscard]] Expected<sim::GenerationStart> validateLightingShowcaseStart(
+        const sim::ChunkGrid &grid, u64 *known_scratch_peak = nullptr);
+
+    [[nodiscard]] Expected<PreparedWorld> prepareLightingShowcase(
+        std::span<const std::filesystem::path> roots, u64 seed, const ITimerClock &clock,
+        config::Diagnostics &diagnostics, const sim::GenerationExecution &execution = {},
+        u32 world_edge = sim::kWorldEdge);
 
     /// Checkpoint assembly seam: metadata/grid were fully validated by the game
     /// envelope decoder; this verifies compatible descriptor/compiled-plan identity.

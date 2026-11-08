@@ -30,6 +30,7 @@ namespace pP::colony {
         Capture m_capture{};
         Prepare m_prepare{};
         bool m_is_capture{}; // Immutable after admission; cleanup may release the callback concurrently.
+        bool m_capture_direct_world{};
     };
 
     WorldJob::WorldJob(ParallelScheduler &chunks, Prepare prepare)
@@ -50,7 +51,8 @@ namespace pP::colony {
     // request
     // ------------------------------------------------------------------
 
-    std::error_code WorldJob::request(const ColonyDriverDesc request, Prepare prepare) {
+    std::error_code WorldJob::request(
+        const ColonyDriverDesc request, Prepare prepare, const bool capture_direct_world) {
         if (busy()) {
             PPR_RETURN_ERROR_ON_FAIL(WorldJobs, std::errc::device_or_resource_busy);
         }
@@ -66,6 +68,7 @@ namespace pP::colony {
         m_job = std::make_shared<State>();
         m_job->m_request = request;
         m_job->m_prepare = std::move(prepare);
+        m_job->m_capture_direct_world = capture_direct_world;
         std::tie(m_job->m_context, m_job->m_cancel) = context::withCancelClause(context::background());
         m_view = WorldJobView{.m_id = m_next_id++, .m_state = EWorldJobState::queued};
         m_cancelled = false;
@@ -352,7 +355,8 @@ namespace pP::colony {
                     }
                     PPR_RETURN_ERROR_ON_FAIL(WorldJobs, candidate);
                     state->m_candidate = std::move(*candidate);
-                    auto presentation = captureWorldPresentation(*state->m_candidate, execution.m_context.get());
+                    auto presentation = captureWorldPresentation(
+                        *state->m_candidate, execution.m_context.get(), state->m_capture_direct_world);
                     PPR_RETURN_ERROR_ON_FAIL(WorldJobs, presentation);
                     state->m_presentation = std::make_unique<GridStagedFrame>(std::move(*presentation));
                     return {};

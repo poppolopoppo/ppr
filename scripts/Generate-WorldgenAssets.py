@@ -21,6 +21,10 @@ ROOT = Path(__file__).resolve().parents[1] / "assets/worldgen/default"
 # Procedural art families are keyed by semantic material name, independently of
 # compileDefinition's runtime material bindings.
 MATERIAL_FAMILIES = {
+    'showcase_housing': 'industrial',
+    'showcase_tread': 'industrial',
+    'showcase_pipe_horizontal': 'industrial',
+    'showcase_pipe_vertical': 'industrial',
     'algae': 'organic',
     'aluminum': 'metal',
     'anhydrite': 'massive',
@@ -181,6 +185,119 @@ def byte(v): return max(0,min(255,round(v*255)))
 GEOLOGICAL_FAMILIES={"carbonate","chalk","bladed","massive","clastic","folded",
                      "vesicular","pisolitic","gem","cubic","botryoidal",
                      "mineralized","platy","pyroclastic"}
+
+SCULPTED_MATERIALS={"sandstone","sand","regolith","iron_ore","copper_ore","crystal","water"}
+
+
+def pebble_layout(scale,seed):
+    """Seeded local ellipses, bounded to the surrounding 3 x 3 lattice cells."""
+    result=[]
+    for y in range(scale):
+        for x in range(scale):
+            angle=math.tau*hash01(x,y,seed+3)
+            radius=.48+.28*hash01(x,y,seed+4)
+            result.append((.08+.84*hash01(x,y,seed),.08+.84*hash01(x,y,seed+1),
+                           radius,radius*(.64+.35*hash01(x,y,seed+5)),
+                           math.cos(angle),math.sin(angle),.74+.26*hash01(x,y,seed+6),
+                           hash01(x,y,seed+7)))
+    return result
+
+
+def pebble_sample(u,v,scale,layout):
+    """Continuous rounded relief and pigment over matrix between pebble rims.
+
+    Finite elliptical footprints leave curved contact cavities instead of a
+    nearest-cell polygon partition. Pigment blends across overlapping grains.
+    """
+    x=u*scale; y=v*scale
+    ix=math.floor(x); iy=math.floor(y)
+    relief=coverage=weight=pigment=0.
+    for dy in (-1,0,1):
+        for dx in (-1,0,1):
+            cx=ix+dx; cy=iy+dy
+            px,py,rx,ry,cs,sn,amplitude,variation=layout[(cy%scale)*scale+cx%scale]
+            lx=x-cx-px; ly=y-cy-py
+            q=((lx*cs+ly*sn)/rx)**2+((-lx*sn+ly*cs)/ry)**2
+            if q>=1: continue
+
+            interior=1-q
+            footprint=interior*interior*(3-2*interior)
+            relief=max(relief,amplitude*interior**1.25)
+            coverage=max(coverage,footprint)
+            weight+=footprint
+            pigment+=footprint*variation
+
+    blended=.5+coverage*(pigment/weight-.5) if weight>0 else .5
+    return relief,coverage,blended
+
+
+def sculpted_pebbles(seed,key):
+    scales=(19,31,43) if key=="sand" else (7,17,18) if key in ("iron_ore","copper_ore") else (8,19,37)
+    return [(scale,pebble_layout(scale,seed+101+index*31)) for index,scale in enumerate(scales)]
+
+
+def sculpted_sample(u,v,seed,key,pebble_layers=None):
+    """Rounded sediment, dark ore and crystal relief without baked illumination.
+
+    Color follows mineral/grain identity, never a light direction. The shared
+    periodic height field supplies the matching tangent-space normal map.
+    """
+    broad=noise(u,v,4,seed)
+    grain=noise(u,v,64,seed+2)
+    wu=u+.045*(noise(u,v,3,seed+41)-.5)
+    wv=v+.045*(noise(u,v,3,seed+47)-.5)
+
+    if key in ("sandstone","sand","regolith","iron_ore","copper_ore"):
+        if pebble_layers is None:
+            pebble_layers=sculpted_pebbles(seed,key)
+        coarse,medium,fine=[pebble_sample(wu,wv,scale,layout) for scale,layout in pebble_layers]
+
+        if key=="sandstone":
+            bedding=noise(wu,wv,3,seed+8,17)
+            h=.22+.38*coarse[0]+.085*medium[0]+.035*fine[0]+.025*grain
+            # Pale sediment grains sit in a slightly darker ochre binder;
+            # this material distribution is independent of illumination.
+            pigment=.67+.18*coarse[1]+.10*(coarse[2]-.5)+.065*medium[1]+.03*bedding
+            return h,(pigment,pigment*(.97+.03*bedding),pigment*(.90+.08*bedding))
+
+        if key=="regolith":
+            # The raised continuous clay matrix partly fuses the coarse clods;
+            # smaller grains and tiny pits keep their skin granular.
+            pit=max(0.,noise(wu,wv,37,seed+11)-.69)
+            h=.29+.31*coarse[0]+.11*medium[0]+.04*fine[0]+.025*grain-.07*pit
+            pigment=.68+.15*coarse[1]+.09*(coarse[2]-.5)+.055*medium[1]+.025*grain
+            return h,(pigment,pigment*(.88+.09*broad),pigment*(.76+.12*broad))
+
+        if key=="sand":
+            h=.24+.25*coarse[0]+.13*medium[0]+.065*fine[0]+.025*grain
+            pigment=.72+.13*coarse[1]+.08*(coarse[2]-.5)+.07*medium[1]+.035*fine[1]
+            return h,(pigment,pigment*.98,pigment*(.91+.05*broad))
+
+        pocket=max(0.,min(1.,(noise(wu,wv,3,seed+13)-.58)*10))
+        nodule=fine[1]*pocket
+        h=.21+.40*coarse[0]+.10*medium[0]+.11*fine[0]*pocket+.02*grain
+        # Pigmented coal-dark host and sparse cool mineral inclusions. The
+        # catalog has no per-texel metalness channel; these are diffuse colors.
+        host=.24+.09*coarse[1]+.10*(coarse[2]-.5)+.03*broad+.025*medium[1]
+        rock=(host*.92,host*.97,host)
+        inclusion=.65+.18*fine[2]
+        cool=(.76,.89,1.) if key=="iron_ore" else (.70,.94,.98)
+        return h,tuple(a*(1-nodule)+inclusion*b*nodule for a,b in zip(rock,cool))
+
+    if key=="crystal":
+        _,gap,plane=cells(wu,wv,6,seed+5)
+        cleavage=math.exp(-gap*52)
+        inclusion=max(0.,noise(wu,wv,19,seed+8)-.62)
+        h=.20+.65*plane+.055*broad-.12*cleavage-.06*inclusion
+        pigment=.57+.36*plane+.06*broad-.09*cleavage
+        return h,(pigment*(.87+.12*plane),pigment*(.67+.21*plane),pigment)
+
+    # Water keeps broad, low-relief crossed ripples rather than mineral grain.
+    ripple=noise(wu,wv,4,seed+3,13)
+    crossing=noise(wu,wv,11,seed+4,3)
+    h=.39+.15*ripple+.08*crossing+.055*broad
+    pigment=.78+.13*ripple+.07*crossing
+    return h,(pigment*.77,pigment*.97,pigment)
 
 
 def mineral_plates(seed,kind):
@@ -348,6 +465,48 @@ def geological_sample(u,v,family,seed,key,plates=()):
     return h,tuple(shade*c for c in color)
 
 
+# Pipe radius is half a texture period; retain the existing normalized cap height.
+PIPE_TUBE_HEIGHT_AMPLITUDE = .30
+PIPE_RADIUS_TO_PERIOD = .5
+
+
+def industrial_sample(u,v,key):
+    """Manufactured pigment and analytic relief, never baked illumination.
+
+    Coordinates are world XY and repeat without patch rotation. Pipe orientation
+    swaps height coordinates; the normal is then derived from that actual field.
+    Neutral albedo is authored in linear light and encoded once for the sRGB PNG.
+    """
+    def stripe(t,centre,width):
+        distance=abs((t-centre+.5)%1-.5)
+        return max(0.,1-distance/width)
+
+    scratch=.5+.5*math.sin(math.tau*(53*u+2*math.sin(math.tau*v)))
+    if key=="showcase_housing":
+        seam=max(stripe(u,0.,.025),stripe(v,0.,.025))
+        rivet=max(max(0.,1-(((u-x+.5)%1-.5)**2+((v-y+.5)%1-.5)**2)/(.045**2))
+                  for x in (.10,.90) for y in (.10,.90))
+        h=.45-.12*seam+.16*rivet+.005*scratch
+        linear=.36-.035*seam+.018*rivet+.006*(scratch-.5)
+    elif key=="showcase_tread":
+        # Raised intersecting bars form real normal-map relief. Their pigment
+        # difference is neutral wear, independent of a light direction.
+        bar=max(stripe(u+v,0.,.10),stripe(u-v,0.,.10))
+        h=.32+.23*bar+.004*scratch
+        linear=.32+.055*bar+.006*(scratch-.5)
+    else:
+        along,across=(u,v) if key=="showcase_pipe_horizontal" else (v,u)
+        scratch=.5+.5*math.sin(math.tau*(53*across+2*math.sin(math.tau*along)))
+        tube=math.sqrt(max(0.,1-(2*across-1)**2))
+        union=max(stripe(along,.08,.07),stripe(along,.92,.07))
+        h=.28+PIPE_TUBE_HEIGHT_AMPLITUDE*tube+.11*union+.003*scratch
+        linear=.40+.025*union+.005*(scratch-.5)
+
+    color=(linear*.96,linear,linear*1.035)
+    encoded=tuple(12.92*c if c<=.0031308 else 1.055*c**(1/2.4)-.055 for c in color)
+    return h,encoded
+
+
 def texture(key,family,overwrite=False):
     albedo_path=ROOT/f"textures/{key}.png"
     normal_path=ROOT/f"textures/{key}_normal.png"
@@ -357,8 +516,23 @@ def texture(key,family,overwrite=False):
     size=128; seed=int.from_bytes(hashlib.sha256(key.encode()).digest()[:4],"little")
     geological=family in GEOLOGICAL_FAMILIES
     plates=mineral_plates(seed,family) if family in ("cubic","platy") else ()
-    samples=[geological_sample(x/size,y/size,family,seed,key,plates) for y in range(size) for x in range(size)] if geological else []
-    heights=[sample[0] for sample in samples] if geological else [height(x/size,y/size,family,seed,key) for y in range(size) for x in range(size)]
+    if family=="industrial":
+        samples=[industrial_sample(x/size,y/size,key) for y in range(size) for x in range(size)]
+    elif key in SCULPTED_MATERIALS:
+        pebbles=sculpted_pebbles(seed,key) if key in ("sandstone","sand","regolith","iron_ore","copper_ore") else None
+        samples=[sculpted_sample(x/size,y/size,seed,key,pebbles) for y in range(size) for x in range(size)]
+    elif geological:
+        samples=[geological_sample(x/size,y/size,family,seed,key,plates) for y in range(size) for x in range(size)]
+    else:
+        samples=[]
+    heights=[sample[0] for sample in samples] if samples else [height(x/size,y/size,family,seed,key) for y in range(size) for x in range(size)]
+
+    normal_difference_scale=5
+    if key in ("showcase_pipe_horizontal","showcase_pipe_vertical"):
+        # Two-texel central difference -> world slope for radius=period/2.
+        # Scale the complete unchanged height field, including collars/scratches.
+        normal_difference_scale=(size/2)*(PIPE_RADIUS_TO_PERIOD/PIPE_TUBE_HEIGHT_AMPLITUDE)
+
     albedo=bytearray(); normals=bytearray()
     for y in range(size):
         for x in range(size):
@@ -366,10 +540,10 @@ def texture(key,family,overwrite=False):
             # Whitening preserves authored material tints without double-tinting.
             shade=max(.34,min(1.0,.55+.50*h))
             if family=="ore": shade=min(1.,shade+.14*(h>.70))
-            rgb=samples[y*size+x][1] if geological else (shade,shade,shade)
+            rgb=samples[y*size+x][1] if samples else (shade,shade,shade)
             albedo.extend((*map(byte,rgb),255))
-            dx=(heights[y*size+(x+1)%size]-heights[y*size+(x-1)%size])*5
-            dy=(heights[((y+1)%size)*size+x]-heights[((y-1)%size)*size+x])*5
+            dx=(heights[y*size+(x+1)%size]-heights[y*size+(x-1)%size])*normal_difference_scale
+            dy=(heights[((y+1)%size)*size+x]-heights[((y-1)%size)*size+x])*normal_difference_scale
             length=math.sqrt(dx*dx+dy*dy+1)
             normals.extend((byte(.5-.5*dx/length),byte(.5-.5*dy/length),byte(.5+.5/length),255))
     # A missing partner must not replace an existing hand-authored map.
@@ -380,7 +554,7 @@ def texture(key,family,overwrite=False):
 
 def background_texture(profile,layer,order):
     size=512; out=bytearray(); seed=710+order*19+(100 if profile=="hollows" else 0)
-    palette=((.20,.24,.31),(.14,.19,.23),(.30,.38,.40),(.42,.45,.42)) if profile=="frontier" else ((.24,.20,.32),(.17,.14,.24),(.38,.29,.42),(.48,.39,.47))
+    palette=((.16,.18,.21),(.13,.15,.17),(.22,.24,.25),(.26,.27,.26)) if profile=="frontier" else ((.18,.17,.22),(.14,.13,.18),(.24,.22,.27),(.28,.25,.29))
     color=palette[order]
     for y in range(size):
         v=y/size
@@ -392,13 +566,27 @@ def background_texture(profile,layer,order):
             bands=noise(wu,wv,3,seed+4,21)
             outline=noise(wu,wv,7,seed+5,3)
             rib=noise(wu,wv,3,seed+6,16)
-            if order==0: alpha=1.; shade=.30+.70*bands+.22*n
+            # Broad stepped strata read as separate rock shelves at distance;
+            # fine mottling stays subdued behind the foreground materials.
+            terrace=math.floor((.76*bands+.24*n)*7)/7
+            shade=.45+.43*terrace+.08*n
+            if order==0: alpha=1.
             elif order==1:
                 bank=noise(wu,wv,4,seed+7)
-                alpha=.80 if bank>.48 else 0.; shade=.48+.35*n+.20*bands
-            elif order==2: alpha=.62 if n>.58 or rib<.20+.08*outline else 0.; shade=.48+.42*bands+.25*n
-            else: alpha=.45 if bands>.73 or n>.75 else 0.; shade=.55+.40*n
-            out.extend((byte(color[0]*shade),byte(color[1]*shade),byte(color[2]*shade),byte(alpha)))
+                alpha=.80 if bank>.48 else 0.
+            elif order==2: alpha=.62 if n>.58 or rib<.20+.08*outline else 0.
+            else: alpha=.45 if bands>.73 or n>.75 else 0.
+
+            if profile=="lighting_showcase":
+                # Receiving stone ALBEDO, centred near0.18 in linear light.
+                # Strata/cool variation is restrained, with no baked darkness
+                # or source glow. The normal world field supplies illumination.
+                linear=.18*(.90+.14*terrace+.06*n)
+                stone=(linear*.94,linear,linear*1.05)
+                encoded=tuple(12.92*c if c<=.0031308 else 1.055*c**(1/2.4)-.055 for c in stone)
+                out.extend((byte(encoded[0]),byte(encoded[1]),byte(encoded[2]),byte(alpha)))
+            else:
+                out.extend((byte(color[0]*shade),byte(color[1]*shade),byte(color[2]*shade),byte(alpha)))
     png(ROOT/f"textures/background_{profile}_{layer}.png",size,out,True)
 
 
@@ -406,6 +594,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--material", action="append", default=[], metavar="KEY",
                         help="Limit texture generation to this semantic material key; repeat as needed")
+    parser.add_argument("--background", action="append", default=[], choices=("frontier","hollows","lighting_showcase"),
+                        help="Select only this background profile; combine with --material or repeat as needed")
     parser.add_argument("--overwrite-textures", action="store_true",
                         help="Explicitly regenerate selected texture maps, including existing maps")
     args = parser.parse_args()
@@ -448,6 +638,8 @@ def main():
     (ROOT / "textures").mkdir(parents=True, exist_ok=True)
     generated = 0
     for key in sorted(known):
+        if args.background and not args.material:
+            continue
         if args.material and key not in args.material:
             continue
         for visual in materials[key]:
@@ -456,9 +648,11 @@ def main():
             if albedo["source"] != f"textures/{key}.png" or normal["source"] != f"textures/{key}_normal.png":
                 parser.error(f"{key}: procedural generation requires its shipped texture source paths")
         generated += texture(key, MATERIAL_FAMILIES[key], args.overwrite_textures)
-    if not args.material:
+    if args.background or not args.material:
         for world in worlds:
             profile = world["semantic_key"]
+            if args.background and profile not in args.background:
+                continue
             stack = resolve(world["appearance"]["background_stack"], "colony.background")["definition"]
             for layer, visual in stack["layers"].items():
                 source = resolve(visual["texture"], "image.texture")["source"]

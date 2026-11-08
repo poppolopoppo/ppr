@@ -59,6 +59,27 @@ namespace pP::colony {
                     visual.m_emissive_rgb[c] = static_cast<float>(material.m_emissive_rgb[c]);
                 }
                 visual.m_emissive_strength = static_cast<float>(material.m_emissive_strength);
+                if (material.m_transport) {
+                    const auto &transport = *material.m_transport;
+                    PPR_RETURN_ERROR_ON_FAIL(
+                        SimPresentation, transport.m_contract_version == kMaterialTransportContractVersion and
+                                                 (transport.m_model == EMaterialOpticalModel::vacuum or
+                                                     transport.m_model == EMaterialOpticalModel::opaque or
+                                                     transport.m_model == EMaterialOpticalModel::absorbing)
+                                             ? std::error_code{}
+                                             : std::make_error_code(std::errc::invalid_argument));
+
+                    visual.m_transport_model = transport.m_model == EMaterialOpticalModel::vacuum
+                                                   ? kGridTransportVacuumV1
+                                               : transport.m_model == EMaterialOpticalModel::opaque
+                                                   ? kGridTransportOpaqueV1
+                                                   : kGridTransportAbsorbingV1;
+                    visual.m_sigma_per_m[0] = static_cast<float>(transport.m_sigma_r_per_m);
+                    visual.m_sigma_per_m[1] = static_cast<float>(transport.m_sigma_g_per_m);
+                    visual.m_sigma_per_m[2] = static_cast<float>(transport.m_sigma_b_per_m);
+                }
+
+                PPR_RETURN_ERROR_ON_FAIL(SimPresentation, validateGridMaterialOptics(visual));
                 visual.m_ior = static_cast<float>(material.m_ior);
                 visual.m_normal_scale = static_cast<float>(material.m_normal_scale);
                 visual.m_refraction_depth_m = static_cast<float>(material.m_refraction_depth_m);
@@ -168,6 +189,23 @@ namespace pP::colony {
                                      packet, *world->presentation(), driver.profileKey(), driver.boundaryMaterial(),
                                      driver.cellsPerMetre(), driver.referenceThicknessMetres()));
 
+            if (world->lightingShowcase()) {
+                const auto *const lamp = catalog->findMaterial("showcase_amber_lamp");
+                PPR_RETURN_ERROR_ON_FAIL(
+                    SimPresentation, lamp ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
+
+                const auto visual = std::ranges::find(
+                    packet.m_terrain_visuals, u32(lamp->m_numeric_id), &GridTerrainVisual::m_material_id);
+                PPR_RETURN_ERROR_ON_FAIL(
+                    SimPresentation, visual != packet.m_terrain_visuals.end()
+                                         ? std::error_code{}
+                                         : std::make_error_code(std::errc::invalid_argument));
+
+                visual->m_emissive_strength = driver.serviceLampEnabled()
+                                                  ? static_cast<float>(lamp->m_emissive_strength)
+                                                  : 0.0f;
+            }
+
             ParticlePresentationCache temporary;
             auto &cache = particle_cache ? *particle_cache : temporary;
             packet.m_gpu_particles = driver.particleView();
@@ -215,6 +253,8 @@ namespace pP::colony {
 
             for (std::size_t index = 0u; index < packet.m_terrain_visuals.size(); ++index) {
                 const auto &visual = packet.m_terrain_visuals[index];
+                PPR_RETURN_ERROR_ON_FAIL(SimPresentation, validateGridMaterialOptics(visual));
+
                 PPR_RETURN_ERROR_ON_FAIL(
                     SimPresentation, visual.m_material_id > 0u and
                                              visual.m_material_id < 0xffffu and
@@ -520,12 +560,25 @@ namespace pP::colony {
         return packet;
     }
 
-    Expected<GridStagedFrame> captureWorldPresentation(const ColonyDriver &driver, const IContext *const context) {
+    Expected<GridStagedFrame> captureWorldPresentation_(
+        const ColonyDriver &driver, const IContext *const context, const u64 door_revision,
+        const bool capture_direct_world = false) {
+        if (door_revision != 0u) {
+            PPR_RETURN_UNEXPECTED_ON_FAIL(
+                SimPresentation, driver.serviceDoorPublication() and
+                                         driver.serviceDoorPublication()->m_revision == door_revision and
+                                         driver.editReadyForPresentation()
+                                     ? std::error_code{}
+                                     : std::make_error_code(std::errc::operation_not_permitted));
+        }
+
         SimFramePacket presentation{};
         PPR_RETURN_UNEXPECTED_ON_FAIL(SimPresentation, capturePresentation_(presentation, driver));
         PPR_RETURN_UNEXPECTED_ON_FAIL(SimPresentation, validatePresentation_(presentation));
 
-        const auto dirty = driver.presentEditsCapture();
+        const auto dirty = door_revision != 0u ? driver.editManifest() : driver.presentEditsCapture();
+        const auto candidate = door_revision != 0u ? driver.editChunks()
+                                                   : std::span<const sim::ChunkGrid::CapturedChunk>{};
         const auto &grid = driver.grid();
 
         GridStagedFrame stage{};
@@ -540,7 +593,10 @@ namespace pP::colony {
             if (not grid.contains(pos) or not grid.isResident(pos)) {
                 continue;
             }
-            const auto cells = grid.residentCells(pos);
+
+            const auto overlay = std::ranges::find_if(
+                candidate, [pos](const auto &chunk) { return chunk.position() == pos; });
+            const auto cells = overlay != candidate.end() ? overlay->residentCells() : grid.residentCells(pos);
             PPR_RETURN_UNEXPECTED_ON_FAIL(
                 SimPresentation, cells and cells->size() == sim::kCellsPerChunk
                                      ? std::error_code{}
@@ -581,7 +637,284 @@ namespace pP::colony {
         stage.m_surface_profile = presentation.m_surface_profile;
         stage.m_particle_batches = presentation.m_particle_batches;
         stage.m_gpu_particles = presentation.m_gpu_particles;
+
+        // Original material IDs survive terrain-label filtering. Own only the
+        // canonical scalar projections; image storage is retained by the stage
+        // during this one-time projection, never consulted during a solve.
+        std::vector<lighting::WorldRadianceMaterial> particle_materials;
+        const auto project_particle_materials = [&]() -> std::error_code {
+            for (const auto &visual: stage.m_terrain_visuals) {
+                if (visual.m_material_id == 0u)
+                    continue;
+
+                const auto optics = gridMaterialOpticalCell(visual);
+                if (not optics and optics.error() == std::errc::no_message) {
+                    // Unavailable is preserved, not substituted. Projection
+                    // rejects an active participating row using this ID.
+                    lighting::OpticalCell unavailable{};
+                    unavailable.m_kind = lighting::OpticalKind::unavailable;
+                    particle_materials.push_back({unavailable, visual.m_material_id});
+                    continue;
+                }
+
+                PPR_RETURN_ERROR_ON_FAIL(SimPresentation, optics);
+                const auto albedo = gridMaterialDiffuseAlbedo(visual, stage.m_terrain_images);
+                PPR_RETURN_ERROR_ON_FAIL(SimPresentation, albedo);
+                particle_materials.push_back({*optics, visual.m_material_id, *albedo});
+            }
+
+            return {};
+        };
+
+        // Job identity and the real Matter terrain counter are bound only after
+        // actual preparation. This provisional source cannot enable projection.
+        const GridWorldIdentity provisional_world{0u, driver.worldGeneration(), stage.m_content_fingerprint};
+        const auto *const prepared = driver.preparedWorld();
+        if (prepared and prepared->lightingShowcase()) {
+            PPR_RETURN_UNEXPECTED_ON_FAIL(
+                SimPresentation, stage.m_uploads.size() == 1u and
+                                         stage.m_uploads.front().m_chunk_id == 0u and
+                                         stage.m_uploads.front().m_cell_materials.size() == sim::kCellsPerChunk
+                                     ? std::error_code{}
+                                     : std::make_error_code(std::errc::not_supported));
+
+            std::vector<u16> labels(kLightingSceneWidth * kLightingSceneHeight);
+            std::set<u16> used{0u};
+            for (u32 y = 0u; y < kLightingSceneHeight; ++y) {
+                for (u32 x = 0u; x < kLightingSceneWidth; ++x) {
+                    const u16 id = stage.m_uploads.front().m_cell_materials[y * sim::kChunkEdge + x];
+                    labels[y * kLightingSceneWidth + x] = id;
+                    used.insert(id);
+                }
+            }
+
+            // This dedicated row belongs only to the four mounted lamp cells.
+            // Copying its source-state projection preserves catalog ownership,
+            // all surface properties and the sealed ordered texture inventory.
+            const auto *const lamp = driver.contentCatalog()->findMaterial("showcase_amber_lamp");
+            PPR_RETURN_UNEXPECTED_ON_FAIL(
+                SimPresentation, lamp ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
+
+            const auto lamp_position = door_revision != 0u ? driver.serviceDoorPublication()->m_lamp_position
+                                                           : driver.serviceLampPosition();
+            const u32 lamp_x = lamp_position == ColonyDriver::EServiceLampPosition::original ? 30u : 37u;
+            u32 lamp_count{};
+            for (u32 y = 0u; y < sim::kChunkEdge; ++y) {
+                for (u32 x = 0u; x < sim::kChunkEdge; ++x) {
+                    if (stage.m_uploads.front().m_cell_materials[y * sim::kChunkEdge + x] != lamp->m_numeric_id) {
+                        continue;
+                    }
+
+                    PPR_RETURN_UNEXPECTED_ON_FAIL(
+                        SimPresentation, x >= lamp_x and x < lamp_x + 2u and y >= 16u and y <= 17u
+                                             ? std::error_code{}
+                                             : std::make_error_code(std::errc::not_supported));
+
+                    ++lamp_count;
+                }
+            }
+
+            PPR_RETURN_UNEXPECTED_ON_FAIL(
+                SimPresentation, lamp_count == 4u ? std::error_code{} : std::make_error_code(std::errc::not_supported));
+
+            const bool lamp_enabled = door_revision != 0u ? driver.serviceDoorPublication()->m_lamp_enabled
+                                                          : driver.serviceLampEnabled();
+            const auto lamp_visual = std::ranges::find(
+                stage.m_terrain_visuals, u32(lamp->m_numeric_id), &GridTerrainVisual::m_material_id);
+            PPR_RETURN_UNEXPECTED_ON_FAIL(
+                SimPresentation, lamp_visual != stage.m_terrain_visuals.end()
+                                     ? std::error_code{}
+                                     : std::make_error_code(std::errc::invalid_argument));
+
+            lamp_visual->m_emissive_strength = lamp_enabled ? static_cast<float>(lamp->m_emissive_strength) : 0.0f;
+
+            // This static island admits only its actual terrain inventory.
+            // Keep IDs and texture indices intact; unused translucent catalog
+            // rows must not enter the opaque spatial pipeline's world state.
+            std::erase_if(stage.m_terrain_visuals, [&](const GridTerrainVisual &visual) {
+                return not used.contains(static_cast<u16>(visual.m_material_id));
+            });
+
+            // The showcase intentionally retains only this static inventory;
+            // its particle palette must describe that same selected catalog.
+            PPR_RETURN_UNEXPECTED_ON_FAIL(SimPresentation, project_particle_materials());
+
+            std::vector<lighting::WorldRadianceMaterial> materials;
+            lighting::OpticalCell vacuum{};
+            vacuum.m_kind = lighting::OpticalKind::vacuum;
+            materials.push_back({vacuum, 0u});
+            for (const auto id: used) {
+                if (id == 0u) {
+                    continue;
+                }
+
+                const auto visual = std::ranges::find(
+                    stage.m_terrain_visuals, u32(id), &GridTerrainVisual::m_material_id);
+                PPR_RETURN_UNEXPECTED_ON_FAIL(
+                    SimPresentation, visual != stage.m_terrain_visuals.end()
+                                         ? std::error_code{}
+                                         : std::make_error_code(std::errc::invalid_argument));
+                const auto optical = gridMaterialOpticalCell(*visual);
+                PPR_RETURN_UNEXPECTED_ON_FAIL(SimPresentation, optical);
+                const auto albedo = gridMaterialDiffuseAlbedo(*visual, stage.m_terrain_images);
+                PPR_RETURN_UNEXPECTED_ON_FAIL(SimPresentation, albedo);
+                materials.push_back({*optical, id, *albedo});
+            }
+
+            const auto source = lighting::WorldRadianceSource::capture(
+                {labels, materials, {}, double(stage.m_cell_size_m), kLightingSceneWidth, kLightingSceneHeight,
+                    lighting::OpticalBoundary::vacuum, {}, {}, particle_materials, provisional_world, 0u});
+            PPR_RETURN_UNEXPECTED_ON_FAIL(SimPresentation, source);
+            stage.m_world_radiance_source = *source;
+            stage.m_world_radiance_revision = door_revision != 0u ? door_revision : driver.lightingRevision();
+            stage.m_boundary_material_id = 0u;
+            stage.m_reset_caches = stage.m_full_refresh = true;
+        }
+
+        if (capture_direct_world and not stage.m_world_radiance_source) {
+            PPR_RETURN_UNEXPECTED_ON_FAIL(SimPresentation, project_particle_materials());
+
+            // This is the complete exclusively owned grid, not its visible or
+            // dirty subset. ChunkGrid retains quiescent payloads as resident;
+            // an absent payload is authoritatively Cell{} (vacuum).
+            const u32 edge = grid.edge();
+            std::vector<u16> labels(u64{edge} * edge, 0u);
+            std::set<u16> used{0u};
+            for (const auto &upload: stage.m_uploads) {
+                const u32 chunk_x = upload.m_chunk_id % sim::kChunksPerEdge;
+                const u32 chunk_y = upload.m_chunk_id / sim::kChunksPerEdge;
+                for (u32 y = 0u; y < sim::kChunkEdge; ++y) {
+                    if (context != nullptr) {
+                        PPR_RETURN_UNEXPECTED_ON_FAIL(SimPresentation, context->error());
+                    }
+
+                    for (u32 x = 0u; x < sim::kChunkEdge; ++x) {
+                        const u16 id = upload.m_cell_materials[y * sim::kChunkEdge + x];
+                        labels[u64{chunk_y * sim::kChunkEdge + y} * edge + chunk_x * sim::kChunkEdge + x] = id;
+                        used.insert(id);
+                    }
+                }
+            }
+
+            std::vector<lighting::WorldRadianceMaterial> materials;
+            lighting::OpticalCell vacuum{};
+            vacuum.m_kind = lighting::OpticalKind::vacuum;
+            materials.push_back({vacuum, 0u});
+            for (const u16 id: used) {
+                if (id == 0u)
+                    continue;
+
+                const auto visual = std::ranges::find(
+                    stage.m_terrain_visuals, u32{id}, &GridTerrainVisual::m_material_id);
+                PPR_RETURN_UNEXPECTED_ON_FAIL(
+                    SimPresentation, visual != stage.m_terrain_visuals.end()
+                                         ? std::error_code{}
+                                         : std::make_error_code(std::errc::invalid_argument));
+
+                PPR_LOG(
+                    SimPresentation, info, "Direct-window used terrain optical model",
+                    {{"world", driver.worldGeneration()}, {"id", id}, {"model", visual->m_transport_model},
+                        {"sigma_r", visual->m_sigma_per_m[0]}, {"sigma_g", visual->m_sigma_per_m[1]},
+                        {"sigma_b", visual->m_sigma_per_m[2]}, {"emission_strength", visual->m_emissive_strength}});
+            }
+
+            for (const u16 id: used) {
+                if (id == 0u) {
+                    continue;
+                }
+
+                const auto visual = std::ranges::find(
+                    stage.m_terrain_visuals, u32{id}, &GridTerrainVisual::m_material_id);
+                PPR_RETURN_UNEXPECTED_ON_FAIL(
+                    SimPresentation, visual != stage.m_terrain_visuals.end()
+                                         ? std::error_code{}
+                                         : std::make_error_code(std::errc::invalid_argument));
+
+                const auto optics = gridMaterialOpticalCell(*visual);
+                PPR_RETURN_UNEXPECTED_ON_FAIL(SimPresentation, optics);
+                const auto albedo = gridMaterialDiffuseAlbedo(*visual, stage.m_terrain_images);
+                PPR_RETURN_UNEXPECTED_ON_FAIL(SimPresentation, albedo);
+                materials.push_back({*optics, id, *albedo});
+            }
+
+            const auto source = lighting::WorldRadianceSource::capture(
+                {labels, materials, {}, double(stage.m_cell_size_m), edge, edge, lighting::OpticalBoundary::vacuum, {},
+                    {}, particle_materials, provisional_world, 0u});
+            PPR_RETURN_UNEXPECTED_ON_FAIL(SimPresentation, source);
+
+            stage.m_world_radiance_source = *source;
+            stage.m_world_radiance_revision = driver.lightingRevision();
+            stage.m_boundary_material_id = 0u;
+            stage.m_reset_caches = true;
+
+            std::map<u32, u64> particle_counts;
+            for (const auto &batch: stage.m_particle_batches) {
+                if (not batch.m_particles)
+                    continue;
+
+                for (const auto &particle: *batch.m_particles)
+                    ++particle_counts[particle.m_material_id];
+            }
+
+            for (const auto &[id, count]: particle_counts) {
+                const auto visual = std::ranges::find(stage.m_terrain_visuals, id, &GridTerrainVisual::m_material_id);
+                PPR_RETURN_UNEXPECTED_ON_FAIL(
+                    SimPresentation, visual != stage.m_terrain_visuals.end()
+                                         ? std::error_code{}
+                                         : std::make_error_code(std::errc::invalid_argument));
+
+                PPR_LOG(
+                    SimPresentation, info, "Direct-window initial particle census",
+                    {{"world", driver.worldGeneration()}, {"material", id}, {"count", count},
+                        {"emission_r", visual->m_emissive_rgb[0] * visual->m_emissive_strength},
+                        {"emission_g", visual->m_emissive_rgb[1] * visual->m_emissive_strength},
+                        {"emission_b", visual->m_emissive_rgb[2] * visual->m_emissive_strength},
+                        {"aggregate_particle_HDR_safety", "UNQUALIFIED"},
+                        {"optical_field_contribution", "unsupported; presentation retained"}});
+            }
+
+            PPR_LOG(
+                SimPresentation, info, "Direct-window complete terrain source",
+                {{"world", driver.worldGeneration()}, {"revision", stage.m_world_radiance_revision}, {"width", edge},
+                    {"height", edge}, {"resident_chunks", stage.m_uploads.size()}, {"cells", labels.size()},
+                    {"used_ids", used.size()}, {"boundary_sky", "black"},
+                    {"component",
+                        "static terrain homogeneous absorption/emission; no particle optical sources or scattering"}});
+        }
+
         return stage;
+    }
+
+    Expected<GridStagedFrame> captureWorldPresentation(
+        const ColonyDriver &driver, const IContext *const context, const bool capture_direct_world) {
+        auto stage = captureWorldPresentation_(driver, context, 0u, capture_direct_world);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(SimPresentation, stage);
+        return std::move(*stage);
+    }
+
+    Expected<GridStagedFrame> captureServiceDoorPresentation(
+        const ColonyDriver &driver, const u64 revision, const IContext *const context) {
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            SimPresentation, revision != 0u ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
+
+        auto stage = captureWorldPresentation_(driver, context, revision);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(SimPresentation, stage);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            SimPresentation,
+            driver.particleCount() == 0u and
+                    stage->m_particle_batches.empty() and
+                    (not driver.matterState() or (driver.matterState()->m_records.empty() and
+                                                     driver.matterState()->m_gas.empty() and
+                                                     driver.matterState()->m_profile.m_particle_count == 0u))
+                ? std::error_code{}
+                : std::make_error_code(std::errc::not_supported));
+
+        // The candidate header is never a committed particle presentation. Its
+        // admitted empty inventory satisfies the existing native attachment
+        // domain; Driver retains the old lease until joint commit, and the first
+        // committed frame binds the real new view through submitSessionGridStage_.
+        stage->m_gpu_particles.reset();
+        return std::move(*stage);
     }
 
     // ------------------------------------------------------------------

@@ -72,6 +72,37 @@ export namespace pP::colony {
         std::span<const physics::BodyBoundarySnapshot> bodies, double cell_metres,
         const matter::GpuParameters &profile);
 
+    // Immutable physical inventory: positions come only from the selected GPU
+    // reader; volume is never reconstructed from a display radius or Cold24.
+    struct MatterPhysicalLedgerRow {
+        u64 m_id{};
+        double m_volume_m3{};
+        u32 m_material{};
+    };
+
+    struct MatterPhysicalLedger {
+        Array<MatterPhysicalLedgerRow> m_rows{};
+        // Identity only: selected presentation/capture owns the actual resource.
+        std::weak_ptr<const GridParticleMetadataResource> m_metadata_owner{};
+    };
+
+    struct MatterCensusCell {
+        double m_volume_m3{};
+        u64 m_count{};
+        u32 m_cell_x{}, m_cell_y{}, m_material{}, m_status{};
+    };
+
+    struct MatterCensus {
+        std::vector<MatterCensusCell> m_cells{};
+        double m_total_volume_m3{};
+        u64 m_particle_count{};
+    };
+
+    [[nodiscard]] Expected<MatterCensus> aggregateMatterCensus(
+        const MatterPhysicalLedger &ledger, const GridParticleCensus &projected,
+        const std::shared_ptr<const GridParticleMetadataResource> &metadata,
+        const GridParticlePresentationIdentity &expected, u64 device_epoch, u32 world_edge);
+
     // ------------------------------------------------------------------
     // lane-affine device owner
     // ------------------------------------------------------------------
@@ -93,6 +124,7 @@ export namespace pP::colony {
     struct MatterCompletion {
         std::optional<MatterReadback> m_readback{};
         std::optional<GridParticleGpuView> m_view{};
+        std::shared_ptr<const MatterPhysicalLedger> m_physical_ledger{};
         RenderLaneOperationCompletion m_execution{};
     };
 

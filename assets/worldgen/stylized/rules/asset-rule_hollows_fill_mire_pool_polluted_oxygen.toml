@@ -1,0 +1,14 @@
+schema_version = 1
+
+[definition]
+order = 17
+
+[definition.payload]
+tag = "matter_fill"
+
+[definition.payload.matter_fill]
+marker = "anchor"
+material = "polluted_oxygen"
+temperature_k = 305.0
+bulk_density_kg_m3 = 1.3
+placement = "landmark_mire_pool"

@@ -83,6 +83,22 @@ descriptor = "textures/asset-texture_color_textures_background_hollows_distant_p
 kind = "image.texture"
 descriptor = "textures/asset-texture_color_textures_background_hollows_formations_png.toml"
 
+[assets.texture_color_textures_background_lighting_showcase_backwall_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_background_lighting_showcase_backwall_png.toml"
+
+[assets.texture_color_textures_background_lighting_showcase_caverns_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_background_lighting_showcase_caverns_png.toml"
+
+[assets.texture_color_textures_background_lighting_showcase_distant_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_background_lighting_showcase_distant_png.toml"
+
+[assets.texture_color_textures_background_lighting_showcase_formations_png]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_background_lighting_showcase_formations_png.toml"
+
 [assets.texture_color_textures_basalt_png]
 kind = "image.texture"
 descriptor = "textures/asset-texture_color_textures_basalt_png.toml"
@@ -2047,6 +2063,10 @@ descriptor = "backgrounds/asset-background_frontier.toml"
 kind = "colony.background"
 descriptor = "backgrounds/asset-background_hollows.toml"
 
+[assets.background_lighting_showcase]
+kind = "colony.background"
+descriptor = "backgrounds/asset-background_lighting_showcase.toml"
+
 [assets.frontier]
 kind = "sim.world"
 descriptor = "worlds/asset-frontier.toml"
@@ -2054,3 +2074,67 @@ descriptor = "worlds/asset-frontier.toml"
 [assets.hollows]
 kind = "sim.world"
 descriptor = "worlds/asset-hollows.toml"
+
+[assets.showcase_amber_lamp]
+kind = "sim.material"
+descriptor = "materials/asset-material_showcase_amber_lamp.toml"
+
+[assets.showcase_violet_sculpture]
+kind = "sim.material"
+descriptor = "materials/asset-material_showcase_violet_sculpture.toml"
+
+[assets.showcase_cyan_insert]
+kind = "sim.material"
+descriptor = "materials/asset-material_showcase_cyan_insert.toml"
+
+[assets.lighting_showcase]
+kind = "sim.world"
+descriptor = "worlds/asset-lighting_showcase.toml"
+
+[assets.showcase_housing]
+kind = "sim.material"
+descriptor = "materials/asset-material_showcase_housing.toml"
+
+[assets.bay_housing_albedo]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_showcase_housing_png.toml"
+
+[assets.bay_housing_normal]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_showcase_housing_normal_png.toml"
+
+[assets.showcase_tread]
+kind = "sim.material"
+descriptor = "materials/asset-material_showcase_tread.toml"
+
+[assets.bay_tread_albedo]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_showcase_tread_png.toml"
+
+[assets.bay_tread_normal]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_showcase_tread_normal_png.toml"
+
+[assets.showcase_pipe_horizontal]
+kind = "sim.material"
+descriptor = "materials/asset-material_showcase_pipe_horizontal.toml"
+
+[assets.bay_pipe_h_albedo]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_showcase_pipe_horizontal_png.toml"
+
+[assets.bay_pipe_h_normal]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_showcase_pipe_horizontal_normal_png.toml"
+
+[assets.showcase_pipe_vertical]
+kind = "sim.material"
+descriptor = "materials/asset-material_showcase_pipe_vertical.toml"
+
+[assets.bay_pipe_v_albedo]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_showcase_pipe_vertical_png.toml"
+
+[assets.bay_pipe_v_normal]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_showcase_pipe_vertical_normal_png.toml"

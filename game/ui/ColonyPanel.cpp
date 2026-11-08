@@ -483,8 +483,10 @@ namespace pP::colony {
         /// as its keyboard shortcut (parity by construction). Returns the
         /// bar height for the side-panel layout.
         float drawTopBar_(
-            const ColonyPresentation &colony, const std::span<const ColonyShortcut> shortcuts,
+            const ColonyUiView &view, const std::span<const ColonyShortcut> shortcuts,
             std::optional<ColonyIntent> &intent) {
+            const auto &colony = *view.m_colony;
+
             const ImGuiIO &io = ImGui::GetIO();
             ImGui::SetNextWindowPos(ImVec2{0.0f, 0.0f}, ImGuiCond_Always);
             ImGui::SetNextWindowSize(ImVec2{io.DisplaySize.x, 0.0f}, ImGuiCond_Always);
@@ -533,6 +535,41 @@ namespace pP::colony {
                 static_cast<unsigned long long>(colony.m_agents.size()));
             flow.place(plainWidth(status));
             ImGui::TextUnformatted(status);
+
+            if (view.m_service_door_available) {
+                const char *const label = view.m_service_door_closed ? "Open service door" : "Close service door";
+                flow.place(framedWidth(label));
+                ImGui::BeginDisabled(view.m_service_door_pending);
+                if (ImGui::Button(label)) {
+                    intent = ColonyIntent{.m_kind = EColonyIntent::toggle_service_door};
+                }
+                ImGui::EndDisabled();
+
+                const char *const lamp_label = view.m_service_lamp_enabled ? "Switch amber lamp off"
+                                                                           : "Switch amber lamp on";
+                flow.place(framedWidth(lamp_label));
+                ImGui::BeginDisabled(view.m_service_door_pending);
+                if (ImGui::Button(lamp_label)) {
+                    intent = ColonyIntent{.m_kind = EColonyIntent::toggle_service_lamp};
+                }
+                ImGui::EndDisabled();
+
+                const char *const move_label = view.m_service_lamp_alternate ? "Move lamp to original slot"
+                                                                             : "Move lamp to alternate slot";
+                flow.place(framedWidth(move_label));
+                ImGui::BeginDisabled(view.m_service_door_pending);
+                if (ImGui::Button(move_label)) {
+                    intent = ColonyIntent{.m_kind = EColonyIntent::move_service_lamp};
+                }
+                ImGui::EndDisabled();
+
+                if (view.m_service_door_cancelable) {
+                    flow.place(framedWidth("Cancel bay change"));
+                    if (ImGui::Button("Cancel bay change")) {
+                        intent = ColonyIntent{.m_kind = EColonyIntent::cancel_service_door};
+                    }
+                }
+            }
 
             const auto management = [&](const std::string_view label, const EColonyIntent kind) {
                 flow.place(framedWidth(label.data()));
@@ -1576,7 +1613,7 @@ namespace pP::colony {
         const hal::ProfileScope scope{"Game.UI.Draw"};
         PPR_ASSERT(view.m_colony != nullptr);
         const ColonyPresentation &colony = *view.m_colony;
-        const float bar_height = drawTopBar_(colony, shortcuts, intent);
+        const float bar_height = drawTopBar_(view, shortcuts, intent);
         const float rail_width = drawToolRail_(shortcuts, state, intent, bar_height);
         drawColonySummary_(colony, view, shortcuts, state, intent, bar_height, rail_width);
         drawPerformanceWindow_(view, state, bar_height);

@@ -1396,6 +1396,30 @@ namespace pP::tests::detail {
         PPR_TEST_ASSERT(free.x > 150.0f);
     };
 
+    PPR_UNIT_TEST (pan_camera_native_crop_centres_the_actual_snapshot) {
+        constexpr float cell_metres = 1.0f / 3.0f;
+        const float2 minimum{0.0f, 0.0f};
+        const float2 maximum{64.0f * cell_metres, 36.0f * cell_metres};
+        const float2 centre = (minimum + maximum) * 0.5f;
+        const int2 extent{3840, 2160};
+
+        PanCameraController controller;
+        controller.setParallelPlane(float3{0.0f, 0.0f, -1.0f}, math::axis_y, true);
+        PPR_TEST_ASSERT(not controller.setWorldBounds(minimum, maximum));
+        controller.setViewportSize(float2{float(extent.x), float(extent.y)});
+        PPR_TEST_ASSERT(not controller.setOrthoScale(14.0f / float(extent.y)));
+        controller.translate(float3{0.0f, 0.0f, -0.5f}, true);
+        controller.focusOn(centre);
+
+        Camera camera{ECameraProjection::orthographic};
+        camera.updateModel(std::chrono::milliseconds{16}, controller, testViewport(extent));
+        const auto &snapshot = camera.getSnapshot();
+        const float4 clip = float4{float3{centre.x, centre.y, 0.0f}, 1.0f} * snapshot.m_view_projection;
+        PPR_TEST_ASSERT(std::abs(clip.w - 1.0f) < kEps);
+        PPR_TEST_ASSERT(std::abs(clip.x / clip.w) < kEps and std::abs(clip.y / clip.w) < kEps);
+        PPR_TEST_ASSERT(snapshot.m_origin.x < minimum.x and snapshot.m_origin.y < minimum.y);
+    };
+
     // Clamp wins over anchoring: eye at the wall stays walled while the
     // scale still applies; the unbounded twin shows the anchor pull.
     // Hoisted: single fixture reused for both cases (was 2 fixtures).
@@ -1721,6 +1745,7 @@ namespace pP::tests {
             detail::pan_camera_keyboard_speed_law,
             detail::pan_camera_dt_partition_invariant_and_clamped,
             detail::pan_camera_world_bounds_clamp_and_centering,
+            detail::pan_camera_native_crop_centres_the_actual_snapshot,
             detail::pan_camera_zoom_clamp_wins_over_anchor,
             detail::pan_camera_scale_clamp_and_invalid_viewport_noop,
             detail::pan_camera_focus_teleport,

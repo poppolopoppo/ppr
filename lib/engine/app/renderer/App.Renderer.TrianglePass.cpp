@@ -162,6 +162,37 @@ namespace pP {
             };
         }
 
+        [[nodiscard]] std::error_code checkRenderSignature_(
+            rhi::IDevice &device, const RenderPipelineSignature &signature) {
+            // Validate before any pipeline-cache mutation, including when no
+            // admitted materials need a pipeline yet.
+            const auto formats = signature.colorFormats();
+            const bool reactive = formats.size() == 2u and
+                                  formats[0] == rhi::Format::RGBA16Float and
+                                  formats[1] == rhi::Format::R8Unorm and
+                                  signature.m_sample_count == SampleCount::x4 and
+                                  signature.m_depth_stencil_format == rhi::Format::D32Float;
+            if (formats.size() != 1u and not reactive) {
+                PPR_LOG(
+                    TrianglePass, error, "unsupported render pipeline signature",
+                    {
+                        {"color_format_count", signature.colorFormats().size()},
+                        {"has_depth_stencil", signature.m_depth_stencil_format.has_value()},
+                        {"sample_count", static_cast<u32>(signature.m_sample_count)},
+                    });
+                PPR_RETURN_ERROR_ON_FAIL(TrianglePass, std::make_error_code(std::errc::invalid_argument));
+            }
+
+            if (reactive) {
+                PPR_RETURN_ERROR_ON_FAIL(
+                    TrianglePass, device.hasFeature("independent-blend-enabled")
+                                      ? std::error_code{}
+                                      : std::make_error_code(std::errc::not_supported));
+            }
+
+            return {};
+        }
+
         [[nodiscard]] TrianglePipelineVariant variantFor_(const GpuMaterial &gpu) noexcept {
             const u32 alpha_bits = gpu.m_flags.m_bits & kGpuMaterialAlphaModeMask;
 
@@ -218,6 +249,8 @@ namespace pP {
                     m_variant_pipelines.clear();
                     m_render_pipeline_key.reset();
                     m_shader_program.setNull();
+                    m_reactive_shader_program.setNull();
+                    m_shader_module = {};
                 }
                 if (invariant_state_started) {
                     m_fallback_view.setNull();
@@ -618,6 +651,38 @@ namespace pP {
     // here as well as at pack time, so a material that slipped through can
     // never reach a pipeline. A signature change invalidates every cached
     // variant, because the cached pipelines were built for the old signature.
+    std::error_code TrianglePass::ensureReactiveProgram_(rhi::IDevice &device) {
+        if (m_reactive_shader_program)
+            return {};
+
+        PPR_RETURN_ERROR_ON_FAIL(
+            TrianglePass, m_shader_module and
+                                  device.hasFeature("standard-sample-locations-4") and
+                                  device.hasFeature("sample-rate-shading")
+                              ? std::error_code{}
+                              : std::make_error_code(std::errc::not_supported));
+
+        shader::ComPtr<slang::IEntryPoint> vertex, fragment;
+        PPR_RETURN_ERROR_ON_FAIL(
+            TrianglePass, m_shader_module->findEntryPointByName("vertexIndirectMain", vertex.writeRef()));
+        PPR_RETURN_ERROR_ON_FAIL(
+            TrianglePass, m_shader_module->findEntryPointByName("fragmentReactive", fragment.writeRef()));
+
+        slang::IComponentType *entries[]{vertex.get(), fragment.get()};
+        rhi::ShaderProgramDesc description{};
+        description.linkingStyle = rhi::LinkingStyle::SingleProgram;
+        description.slangGlobalScope = m_shader_module.get();
+        description.slangEntryPoints = entries;
+        description.slangEntryPointCount = 2u;
+        shader::Diagnose diagnostics;
+        rhi::ComPtr<rhi::IShaderProgram> program;
+        PPR_RETURN_ERROR_ON_FAIL(
+            TrianglePass, device.createShaderProgram(description, program.writeRef(), diagnostics.writeRef()));
+
+        m_reactive_shader_program = std::move(program);
+        return {};
+    }
+
     Expected<TrianglePass::CachedVariantPipeline *> TrianglePass::pipelineFor_(
         rhi::IDevice &device, const RenderPipelineSignature &signature, const TrianglePipelineVariant variant) {
         if (m_shader_program == nullptr) [[unlikely]] {
@@ -633,19 +698,11 @@ namespace pP {
             return std::unexpected{err};
         }
 
-        // Shape validation runs BEFORE the cache is touched: an unsupported
-        // signature must never drop the pipelines built for the last good one.
-        // The sample count is a SampleCount by construction — all four
-        // enumerators are accepted — so only the color shape is checked.
-        if (signature.colorFormats().size() != 1u) {
-            PPR_LOG(
-                TrianglePass, error, "unsupported render pipeline signature",
-                {
-                    {"color_format_count", signature.colorFormats().size()},
-                    {"has_depth_stencil", signature.m_depth_stencil_format.has_value()},
-                    {"sample_count", static_cast<u32>(signature.m_sample_count)},
-                });
-            return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
+        PPR_RETURN_UNEXPECTED_ON_FAIL(TrianglePass, checkRenderSignature_(device, signature));
+        const auto formats = signature.colorFormats();
+        const bool reactive = formats.size() == 2u;
+        if (reactive) {
+            PPR_RETURN_UNEXPECTED_ON_FAIL(TrianglePass, ensureReactiveProgram_(device));
         }
 
         if (not m_render_pipeline_key.has_value() or
@@ -669,16 +726,26 @@ namespace pP {
             return &found->second;
         }
 
-        rhi::ColorTargetDesc color_target{};
+        std::array<rhi::ColorTargetDesc, 2u> targets{};
+        auto &color_target = targets[0];
         color_target.format = signature.colorFormats().front();
         color_target.enableBlend = false;
 
+        if (reactive) {
+            auto &mask = targets[1];
+            mask.format = rhi::Format::R8Unorm;
+            mask.enableBlend = true;
+            mask.color = {rhi::BlendFactor::One, rhi::BlendFactor::One, rhi::BlendOp::Max};
+            mask.alpha = mask.color;
+            mask.writeMask = rhi::RenderTargetWriteMask::Red;
+        }
+
         rhi::RenderPipelineDesc pipeline_desc{};
-        pipeline_desc.program = m_shader_program.get();
+        pipeline_desc.program = reactive ? m_reactive_shader_program.get() : m_shader_program.get();
         pipeline_desc.inputLayout = nullptr;
         pipeline_desc.primitiveTopology = rhi::PrimitiveTopology::TriangleList;
-        pipeline_desc.targets = &color_target;
-        pipeline_desc.targetCount = 1u;
+        pipeline_desc.targets = targets.data();
+        pipeline_desc.targetCount = reactive ? 2u : 1u;
         pipeline_desc.multisample.sampleCount = static_cast<u32>(signature.m_sample_count);
         pipeline_desc.depthStencil.format = signature.m_depth_stencil_format.value_or(rhi::Format::Undefined);
         // Slang RHI's RenderState only carries vertex/scissor state. Depth
@@ -701,6 +768,7 @@ namespace pP {
         // build; a frame touches only its selected slot's root.
         std::array<rhi::ComPtr<rhi::IShaderObject>, kPayloadRingSize> slot_roots{};
         std::array<rhi::ShaderCursor, kPayloadRingSize> slot_frame_cursors{};
+        std::array<rhi::ShaderCursor, kPayloadRingSize> slot_draw_cursors{};
         rhi::IBuffer *const material_buffer = m_material_cache.materialBuffer();
         rhi::IBuffer *const texture_buffer = m_texture_cache.descriptorBuffer();
         if (material_buffer == nullptr or texture_buffer == nullptr) [[unlikely]] {
@@ -711,9 +779,9 @@ namespace pP {
             // material and texture containers are created once per cache
             // lifetime (never re-created, their slots rewritten in place),
             // the sampler handle is stable after initialize, and each slot's
-            // g_frame ConstantBuffer sub-object is fixed at creation.
+            // g_frame/g_draw ConstantBuffer sub-objects are fixed at creation.
             // Everything that varies — g_vertices/g_indices per group,
-            // g_payloads per ring slot, g_payload_base per draw — stays in
+            // g_payloads per ring slot, g_draw data per draw — stays in
             // encodeGroup_.
             rhi::ComPtr<rhi::IShaderObject> root_object{};
             PPR_RETURN_UNEXPECTED_ON_FAIL(
@@ -724,10 +792,12 @@ namespace pP {
             const rhi::ShaderCursor texture_cursor = invariant_cursor["g_textures"];
             const rhi::ShaderCursor sampler_cursor = invariant_cursor["g_sampler"];
             const rhi::ShaderCursor frame_field = invariant_cursor["g_frame"];
+            const rhi::ShaderCursor draw_field = invariant_cursor["g_draw"];
             if (not material_cursor.isValid() or
                 not texture_cursor.isValid() or
                 not sampler_cursor.isValid() or
-                not frame_field.isValid()) [[unlikely]] {
+                not frame_field.isValid() or
+                not draw_field.isValid()) [[unlikely]] {
                 // A missing field means the pass and the shader disagree; fail
                 // closed rather than write through a null cursor.
                 return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
@@ -741,11 +811,15 @@ namespace pP {
             PPR_RETURN_UNEXPECTED_ON_FAIL(TrianglePass, sampler_cursor.setDescriptorHandle(m_sampler_handle));
 
             // Dereferenced ONCE here: the per-frame path then only writes
-            // FrameConstants through the cached cursor.
+            // FrameConstants/DrawConstants through the cached cursors.
             rhi::ShaderCursor frame_cursor{};
             PPR_RETURN_UNEXPECTED_ON_FAIL(TrianglePass, frame_field.getDereferenced(frame_cursor));
 
+            rhi::ShaderCursor draw_cursor{};
+            PPR_RETURN_UNEXPECTED_ON_FAIL(TrianglePass, draw_field.getDereferenced(draw_cursor));
+
             slot_frame_cursors[slot] = frame_cursor;
+            slot_draw_cursors[slot] = draw_cursor;
             slot_roots[slot] = std::move(root_object);
         }
 
@@ -756,9 +830,51 @@ namespace pP {
                          .m_pipeline = std::move(pipeline),
                          .m_slot_roots = std::move(slot_roots),
                          .m_slot_frame_cursors = std::move(slot_frame_cursors),
+                         .m_slot_draw_cursors = std::move(slot_draw_cursors),
                      });
 
         return &cached_variant_it->second;
+    }
+
+    // ------------------------------------------------------------------
+    // admitted material readiness
+    // ------------------------------------------------------------------
+
+    std::error_code TrianglePass::prepare(rhi::IDevice &device, const RenderPipelineSignature &signature) {
+        const hal::ProfileScope scope{"App.Pass.Triangle.Prepare"};
+        PPR_RETURN_ERROR_ON_FAIL(
+            TrianglePass, m_caches_ready ? std::error_code{} : std::make_error_code(std::errc::not_connected));
+        PPR_RETURN_ERROR_ON_FAIL(TrianglePass, checkRenderSignature_(device, signature));
+
+        // The supported domain is opaque/mask crossed with one/two-sided.
+        // Collect only resident variants, with fixed stack storage and no
+        // persistent registry. Validate the full collection before mutation.
+        std::array<TrianglePipelineVariant, 4u> variants{};
+        u32 variant_count = 0u;
+        const auto collect = [&](const GpuMaterial &material) -> std::error_code {
+            const TrianglePipelineVariant variant = variantFor_(material);
+            PPR_RETURN_ERROR_ON_FAIL(TrianglePass, checkPipelineVariant(variant));
+
+            const std::span<const TrianglePipelineVariant> admitted{variants.data(), variant_count};
+            if (std::ranges::find(admitted, variant) != admitted.end()) {
+                return {};
+            }
+
+            PPR_RETURN_ERROR_ON_FAIL(
+                TrianglePass, variant_count < variants.size() ? std::error_code{}
+                                                              : std::make_error_code(std::errc::invalid_argument));
+            variants[variant_count++] = variant;
+            return {};
+        };
+
+        PPR_RETURN_ERROR_ON_FAIL(TrianglePass, m_material_cache.visitMaterials(collect));
+
+        for (const TrianglePipelineVariant variant: std::span{variants.data(), variant_count}) {
+            const Expected<CachedVariantPipeline *> cached = pipelineFor_(device, signature, variant);
+            PPR_RETURN_ERROR_ON_FAIL(TrianglePass, cached.has_value() ? std::error_code{} : cached.error());
+        }
+
+        return {};
     }
 
     // ------------------------------------------------------------------
@@ -1119,7 +1235,9 @@ namespace pP {
         rhi::IRenderPipeline *const pipeline = (*cached)->m_pipeline.get();
         rhi::IShaderObject *const root_object = (*cached)->m_slot_roots[m_payload_ring_cursor].get();
         rhi::ShaderCursor &frame_cursor = (*cached)->m_slot_frame_cursors[m_payload_ring_cursor];
-        if (pipeline == nullptr or root_object == nullptr or not frame_cursor.isValid()) [[unlikely]] {
+        rhi::ShaderCursor &draw_cursor = (*cached)->m_slot_draw_cursors[m_payload_ring_cursor];
+        if (pipeline == nullptr or root_object == nullptr or not frame_cursor.isValid() or not draw_cursor.isValid())
+            [[unlikely]] {
             return make_error_code(std::errc::invalid_argument);
         }
 
@@ -1136,12 +1254,11 @@ namespace pP {
 
         // SV_InstanceID is draw-local on D3D12, SPIR-V, and Metal alike, so the
         // startInstanceLocation never reaches the shader. The group's payload
-        // base rides the vertex entry's uniform param instead and the draw
+        // base rides descriptor-backed g_draw instead and the draw
         // starts at instance 0; binding both would double-count the offset for
         // any non-zero base.
-        const u32 payload_base = group.m_first_payload;
-        PPR_RETURN_ERROR_ON_FAIL(
-            TrianglePass, shader_cursor["g_payload_base"].setData(&payload_base, sizeof(payload_base)));
+        const DrawConstants draw{.m_payload_base = group.m_first_payload};
+        PPR_RETURN_ERROR_ON_FAIL(TrianglePass, draw_cursor.setData(&draw, sizeof(draw)));
 
         // Full-buffer ranges via makeFullRange (never bare Binding()).
         // g_materials/g_textures/g_sampler ride the persistent root object
@@ -1283,6 +1400,8 @@ namespace pP {
         m_caches_ready = false;
 
         m_shader_program.setNull();
+        m_reactive_shader_program.setNull();
+        m_shader_module = {};
         releaseDirectPayloads_(nullptr);
         m_fallback_view.setNull();
         m_fallback_texture.setNull();
@@ -1363,6 +1482,38 @@ namespace pP {
                               content_dir / TEXT("shaders") / TEXT("mesh_bindless.slang"), "mesh_bindless",
                               triangle_shader.writeRef()));
 
+        auto *const layout = triangle_shader->getLayout();
+        slang::TypeLayoutReflection *draw_layout{};
+        for (unsigned index = 0u; layout != nullptr and index < layout->getParameterCount(); ++index) {
+            auto *const parameter = layout->getParameterByIndex(index);
+            if (std::string_view{parameter->getName()} == "g_draw") {
+                draw_layout = parameter->getTypeLayout()->getElementTypeLayout();
+                break;
+            }
+        }
+
+        PPR_RETURN_ERROR_ON_FAIL(
+            TrianglePass, draw_layout != nullptr and
+                                  draw_layout->getSize(SLANG_PARAMETER_CATEGORY_UNIFORM) == sizeof(DrawConstants) and
+                                  draw_layout->getFieldCount() == 4u
+                              ? std::error_code{}
+                              : std::make_error_code(std::errc::invalid_argument));
+
+        constexpr std::array<std::string_view, 4> draw_fields{
+            "m_payload_base", "m_reserved0", "m_reserved1", "m_reserved2"};
+        for (unsigned index = 0u; index < draw_fields.size(); ++index) {
+            auto *const field = draw_layout->getFieldByIndex(index);
+            auto *const type = field->getTypeLayout();
+            PPR_RETURN_ERROR_ON_FAIL(
+                TrianglePass, std::string_view{field->getName()} == draw_fields[index] and
+                                      field->getOffset(SLANG_PARAMETER_CATEGORY_UNIFORM) == index * sizeof(u32) and
+                                      type->getKind() == slang::TypeReflection::Kind::Scalar and
+                                      type->getScalarType() == slang::TypeReflection::UInt32 and
+                                      type->getSize(SLANG_PARAMETER_CATEGORY_UNIFORM) == sizeof(u32)
+                                  ? std::error_code{}
+                                  : std::make_error_code(std::errc::invalid_argument));
+        }
+
         shader::ComPtr<slang::IEntryPoint> vertex_ep;
         PPR_RETURN_ERROR_ON_FAIL(
             TrianglePass, triangle_shader->findEntryPointByName("vertexIndirectMain", vertex_ep.writeRef()));
@@ -1372,9 +1523,8 @@ namespace pP {
             TrianglePass, triangle_shader->findEntryPointByName("fragmentMain", fragment_ep.writeRef()));
 
         // One program: the payload-indexed vertex entry reads
-        // g_payloads[g_payload_base + SV_InstanceID]. The group's payload base
-        // arrives as that entry's `uniform uint g_payload_base` parameter, bound
-        // per draw via shader_cursor["g_payload_base"].setData(...), and never
+        // g_payloads[g_draw.m_payload_base + SV_InstanceID]. The group's payload
+        // base arrives through a descriptor-backed ConstantBuffer, never
         // through the draw arguments.
         slang::IComponentType *entry_points[] = {vertex_ep.get(), fragment_ep.get()};
 
@@ -1389,6 +1539,7 @@ namespace pP {
             TrianglePass,
             device.createShaderProgram(program_desc, m_shader_program.writeRef(), diagnostics.writeRef()));
 
+        m_shader_module = std::move(triangle_shader);
         return default_value_v;
     }
 

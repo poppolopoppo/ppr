@@ -244,36 +244,23 @@ namespace pP {
             GridPass, solid_ptr ? std::error_code{} : std::make_error_code(std::errc::operation_not_permitted));
         auto &solid = *solid_ptr;
         const auto &signature = static_cast<const RenderPipelineSignature &>(context.m_render_pipeline_key);
-        if (not solid.m_composite_key or
-            static_cast<const RenderPipelineSignature &>(*solid.m_composite_key) !=
-                static_cast<const RenderPipelineSignature &>(context.m_render_pipeline_key)) {
+        if (m_spatial_msaa) {
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, ensureSpatialPrograms_(context.m_device));
             PPR_RETURN_ERROR_ON_FAIL(
-                GridPass, signature.colorFormats().size() == 1u ? std::error_code{}
-                                                                : std::make_error_code(std::errc::invalid_argument));
-            rhi::ColorTargetDesc color{};
-            color.format = signature.colorFormats().front();
-            color.enableBlend = true;
-            color.color.srcFactor = rhi::BlendFactor::SrcAlpha;
-            color.color.dstFactor = rhi::BlendFactor::InvSrcAlpha;
-            color.alpha.srcFactor = rhi::BlendFactor::One;
-            color.alpha.dstFactor = rhi::BlendFactor::InvSrcAlpha;
-            rhi::RenderPipelineDesc desc{};
-            desc.program = m_solid_programs[2u];
-            desc.primitiveTopology = rhi::PrimitiveTopology::TriangleList;
-            desc.targets = &color;
-            desc.targetCount = 1u;
-            desc.multisample.sampleCount = static_cast<u32>(signature.m_sample_count);
-            desc.depthStencil.format = signature.m_depth_stencil_format.value_or(rhi::Format::Undefined);
-            desc.depthStencil.depthWriteEnable = false;
-            desc.rasterizer.cullMode = rhi::CullMode::None;
-            desc.label = "2D angular solid material composite";
-            rhi::ComPtr<rhi::IRenderPipeline> pipeline;
-            PPR_RETURN_ERROR_ON_FAIL(GridPass, context.m_device.createRenderPipeline(desc, pipeline.writeRef()));
-            solid.m_composite_pipeline = std::move(pipeline);
-            solid.m_composite_key.emplace(context.m_render_pipeline_key);
+                GridPass, signature.m_sample_count == SampleCount::x4
+                              ? std::error_code{}
+                              : std::make_error_code(std::errc::invalid_argument));
         }
 
-        rhi::ShaderCursor cursor{solid.m_roots[2u]};
+        // This completed particle slot owns the final root family and its
+        // field/backdrop leases. Geometry/reconstruction roots remain separate.
+        const auto pipeline = opticalPipeline_(
+            context.m_device, signature, m_spatial_msaa ? m_solid_spatial_program.get() : m_solid_programs[2u].get(),
+            solid.m_composite_key, solid.m_composite_pipeline, true, m_spatial_msaa);
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, pipeline);
+
+        auto *const root = (*pipeline)->m_slot_roots[slot_index].get();
+        rhi::ShaderCursor cursor{root};
         rhi::ShaderCursor frame;
         PPR_RETURN_ERROR_ON_FAIL(GridPass, cursor["g_grid_frame"].getDereferenced(frame));
         PPR_RETURN_ERROR_ON_FAIL(GridPass, uploadFrameConstants_(frame));
@@ -284,7 +271,9 @@ namespace pP {
             context.m_viewport.originX, context.m_viewport.originY, context.m_viewport.extentX,
             context.m_viewport.extentY};
         PPR_RETURN_ERROR_ON_FAIL(GridPass, frame["m_viewport"].setData(viewport, sizeof(viewport)));
-        PPR_RETURN_ERROR_ON_FAIL(GridPass, bindSurfaceBuffers_(context.m_device, cursor, m_surface_retained_table));
+
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, bindSurfaceBuffers_(context.m_device, cursor, m_surface_retained_table, *pipeline, slot_index));
         const bool has_cells = m_surface_retained_table ? m_world.m_visibility_has_cells
                                                         : m_world.m_cell_atlas != nullptr;
         auto *const cells = has_cells ? m_world.m_cell_atlas.get() : m_world.m_cell_dummy.get();
@@ -303,7 +292,7 @@ namespace pP {
                 .vertexBuffers = {},
                 .indexBuffer = {}});
 
-        context.m_pass.bindPipeline(solid.m_composite_pipeline, solid.m_roots[2u]);
+        context.m_pass.bindPipeline((*pipeline)->m_pipeline, root);
         context.m_pass.draw({.vertexCount = 3u});
         ++m_draw_commands;
         return {};

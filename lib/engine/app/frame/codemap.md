@@ -29,6 +29,11 @@ executor per frame, sweeps fence completion on the lane, and settles queued work
   post-capture producer mutation cannot alter render preparation. `render()` consumes the staged packet single-use
   (fail closed when absent) and submits it (worker) or executes it (inline reference) the same frame.
 - `RenderLane` — one fixed worker + `Channel`-free `RawChannel` triple (depths 2/4/8: frames/results/control).
+  `RenderFrameResult::m_temporal_2x_submission` optionally carries a resource-free
+  accepted-submit observation. Editor joins it after normal pass stamping to the
+  fresh scene's actual fence, MRT signature, extents and bound lighting publication.
+  Retained, stale and unmatched observations remain absent; this does not measure
+  per-pixel history influence or add GPU ownership to the result stream.
   Forward `RenderFrameRequest`s carry `shared_ptr<const FramePacket>`, `DetachedUiDrawData`, owned `GridStagedFrame`/`TriangleStagedFrame`, and reservation epoch/frame identity with `drop_if_full` (full maps to
   capacity-busy: drop the frame, never fail the app); results carry submit value/error/drop/font-ack/surface
   generation; control carries wake/exit/config (exit additionally latches an atomic, so a full queue never blocks
@@ -47,6 +52,11 @@ executor per frame, sweeps fence completion on the lane, and settles queued work
   publication, terrain revision and joint tick. CPU preparation, submission,
   staging consumption and GPU completion do not produce this resident proof.
   The fixed value travels on the existing result stream and owns no resources.
+- Camera-bearing `RenderFrameResult` records retain their natural SIMD alignment.
+  The lane reserves `sizeof(result) + alignof(result) - 1` bytes per raw-channel
+  payload and uses the same `std::align` address for placement, reads and destruction;
+  RawChannel itself continues to guarantee only u64-aligned payloads. Frame handles
+  and controls are checked against that unchanged transport alignment contract.
 - Ownership != affinity: content owners keep their objects (editor-owned passes, client-owned ImGui context,
   game-owned snapshots/translator); the lane is only the fixed execution affinity.
 - Correlated owned operations share the existing synchronous handoff's single slot, rather than a new queue.
@@ -126,3 +136,87 @@ Opt-in grid observation requests carry a boolean into the owner-lane executor;
 fixed-size counter/resource values return with frame results and are mirrored
 only after the normal epoch check. No callback or borrowed pass pointer crosses
 back to main for observations. Disabled requests do not sample the pass.
+
+Experimental bounded lighting world commands additionally own an optional camera
+snapshot and input extent for candidate-view preparation. Frame results report
+the actually displayed lighting camera, extent, world identity, age and error.
+These are owned client/owner-lane values; Renderer boundary types remain camera
+free. A held picture reports its old displayed identity and does not acknowledge
+new terrain or particle consumption.
+
+Lighting candidate commands carry their explicit application elapsed request time.
+Completed view and retained-picture identity preserve that timestamp. Intermediate
+coherent completion does not clear the latest-camera pending flag or reset age.
+
+## One-shot final-frame diagnostic
+
+The existing frame request carries an opt-in capture flag. Editor suppresses queued duplicate attempts and excludes loading/held lighting pictures; its result carries immutable shared CPU `SurfaceFramePixels`, attempt/error, and the existing actual frame/cohort/displayed-camera metadata. No texture/view crosses the lane. The result channel continues to use its existing alignment-aware payload adapter; CPU bytes may outlive Renderer teardown.
+
+A capture stays armed across known pre-acquire backpressure/outdated-surface outcomes only when Renderer reports no image acquisition, rejected settlement and no fence advance. The first acquired or otherwise hard-failed attempt consumes the one-shot; it never retries an accepted/unknown submit or post-acquire failure from an error code alone.
+
+Game also supplies a main-side per-frame semantic eligibility flag (Editor default true for other callers). Only `armed && eligible` is snapshotted into the existing capture request bit; an armed request waiting through backpressure cannot capture a later ineligible UI packet. Lighting capture separately requires the existing live-actor retained-stage marker, so queued frozen/loading stages remain excluded. No Renderer camera/UI state or additional frame protocol field is introduced.
+
+Mechanical-door controls carry a separate outer `m_lighting_revision` through
+GridWorldCommand/Result; the request sequence and full cohort must also match.
+Frame requests snapshot the client's committed optical revision, while frame
+results report the field actually consumed or the retained picture's old revision.
+No camera/simulation types enter Renderer orchestration.
+
+Final-surface capture now transports a monotonic request/attempt sequence. Main
+owns requested/success identities and worker owns its last attempted identity.
+Only the matching actual attempt settles a request; a proven pre-acquire transient
+retains the same identity. Explicit rearm requires clean presented owned pixels
+and an accepted matching fence, and cannot reset worker state from main. Ordinary
+capture remains one-shot unless the client explicitly rearms after success.
+
+## Direct-window request coverage
+
+The existing owned Grid world command selects direct-window preparation and may
+carry explicit offscreen gameplay receiver rectangles. Main-owned additional
+demands are copied into each normal render request; none is silently omitted.
+The completed result can report its actual freshly consumed receiver rectangle.
+Retained-picture results do not claim newer candidate coverage. Natural payload
+alignment and the existing result adapter remain unchanged.
+
+A direct-window page is admitted only from a real nonobsolete render request,
+once per frame identity. Independent control polling observes fences/validates
+rows without submitting the next page. Whole-window publication, cancellation,
+unknown fate and all source/geometry identities keep the existing owner lane and
+reliable command/result channels; no page queue or Renderer scene owner is added.
+
+`GridWorldCommand` carries the copied single-bounce selection beside its existing
+direct-window flag; it adds no ownership or camera boundary. Game sets both for
+the explicit mode, and Editor owns all staged producer work and immutable field
+selection. Renderer and presentation acknowledgments retain their existing roles.
+
+Capture-only particle census enable/edge rides the existing Grid stage. Editor's
+local submit-fate guard finalizes exactly once after render/present on the normal
+path and on unwind otherwise; this stamps the selected reader before exact-fence
+mapping. Only a clean completed captured frame returns owned projected census rows
+in RenderFrameResult. A later proof/readback error preserves settled submit facts.
+
+
+`RenderFrameResult::m_lighting_matter` is a resource-free
+`WorldMatterLightingReceipt`: the incorporated physical/source identity, actual
+comparison identity/count summary, projection and combined-field completion
+fences, and explicit request/ready elapsed values. Its carried statistics include
+the actual per-channel emission maxima and the aggregate cell bound accepted by
+`admitWorldRadianceEmission`; this is not whole-scene HDR safety. The receipt's
+aggregate bound is also checked against the live exposure at receipt construction;
+this remains not whole-scene HDR safety. It is stamped only for a fresh
+actual present of that bound immutable field. Provisional/queued/pending-age
+values do not turn retained pictures into new epoch proof. The existing
+`m_presented_particles` remains the separate newer live-draw identity. No new
+request camera, GPU lease or timing service crosses this boundary.
+
+
+Temporal gameplay queries carry the resident job/world/content identity, geometry
+revision, sequence, world-space centre and bounded native edge. The request stays
+active across dropped packets until the matching CPU-owned field arrives or the
+world cancels it. A receipt identifies the producing GPU fence and transport
+version. Legacy terrain-trace requests keep their one-shot behavior.
+
+A temporal staged frame may carry the application simulation's solar hour.
+A completed render result reports the hour of the immutable field actually
+presented. A field from an earlier requested hour stays provisional for
+gameplay until the requested generation is certified.

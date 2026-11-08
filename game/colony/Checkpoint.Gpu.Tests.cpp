@@ -308,7 +308,9 @@ namespace pP::game::tests::detail::checkpoint {
         void admitPrepared(PreparedWorld prepared, const sim::GenerationExecution &execution) {
             m_catalog = prepared.catalogOwner();
             m_driver = std::make_unique<ColonyDriver>();
-            PPR_TEST_ASSERT(not m_driver->initPrepared({.m_seed = 0x2aull}, std::move(prepared), &execution));
+            const auto edge = prepared.grid().edge();
+            PPR_TEST_ASSERT(
+                not m_driver->initPrepared({.m_seed = 0x2aull, .m_world_edge = edge}, std::move(prepared), &execution));
 
             for (;;) {
                 const auto ready = m_driver->advancePrepareMatter(m_runtime);
@@ -485,6 +487,255 @@ namespace pP::game::tests::detail::checkpoint {
     // ------------------------------------------------------------------
     // attached GPU edit and cold restore continuation
     // ------------------------------------------------------------------
+
+    PPR_UNIT_TEST (service_door_cancel_reused_matter_target_rejects_stale_outer_activation) {
+        const std::array roots{hal::process::currentExecutablePath().parent_path() / "worldgen/default"};
+        config::Diagnostics diagnostics;
+        ParallelScheduler workers{"Service door snapshot", 1u, 4u * static_cast<std::size_t>(hal::page_granularity)};
+        const sim::GenerationExecution execution{.m_scheduler = &workers};
+        auto world = prepareLightingShowcase(roots, 42u, ITimerClock::steady(), diagnostics, execution, 1024u);
+        PPR_TEST_ASSERT(world.has_value());
+
+        GpuOwner owner;
+        owner.initialize();
+        owner.admitPrepared(std::move(*world), execution);
+        auto &driver = *owner.m_driver;
+        const auto before_tick = driver.tickCount();
+        PPR_TEST_ASSERT(not driver.update(TimeSpan{std::chrono::seconds{1}} / 60u * 5u));
+        PPR_TEST_ASSERT(driver.physicsPending());
+
+        for (;;) {
+            const auto ready = driver.prepareServiceDoorSnapshot();
+            PPR_TEST_ASSERT(ready.has_value());
+            if (*ready) {
+                break;
+            }
+
+            std::this_thread::yield();
+        }
+
+        PPR_TEST_ASSERT(driver.tickCount() == before_tick + 1u);
+        const auto source = driver.matterState()->m_identity;
+        const auto old_view = driver.particleView();
+        PPR_TEST_ASSERT(old_view and old_view->current());
+
+        const auto prepare = [&](const bool lamp = false, const bool enabled = false) {
+            for (;;) {
+                const auto ready = driver.prepareServiceDoorSnapshot();
+                PPR_TEST_ASSERT(ready.has_value());
+                if (*ready) {
+                    break;
+                }
+
+                std::this_thread::yield();
+            }
+
+            PPR_TEST_ASSERT(driver.tickCount() == before_tick + 1u);
+            const auto revision = lamp ? driver.requestServiceLamp(enabled, driver.lightingRevision())
+                                       : driver.requestServiceDoor(true, driver.lightingRevision());
+            PPR_TEST_ASSERT(revision.has_value());
+            for (;;) {
+                const auto ready = driver.advanceServiceDoor(*revision);
+                PPR_TEST_ASSERT(ready.has_value());
+                if (*ready) {
+                    break;
+                }
+
+                std::this_thread::yield();
+            }
+
+            return *revision;
+        };
+
+        const auto attempt_a = prepare();
+        const auto binding_a = *driver.serviceDoorPublication();
+        PPR_TEST_ASSERT(binding_a.m_matter and (*binding_a.m_matter)[0u] == source);
+        PPR_TEST_ASSERT((*binding_a.m_matter)[1u].m_publication == source.m_publication + 1u);
+        PPR_TEST_ASSERT((*binding_a.m_matter)[1u].m_terrain_revision == source.m_terrain_revision + 1u);
+        PPR_TEST_ASSERT(driver.matterState()->m_identity == source and old_view->current());
+
+        for (;;) {
+            const auto canceled = driver.cancelServiceDoor(attempt_a);
+            PPR_TEST_ASSERT(canceled.has_value());
+            if (*canceled) {
+                break;
+            }
+
+            std::this_thread::yield();
+        }
+
+        PPR_TEST_ASSERT(driver.matterState()->m_identity == source and old_view->current());
+        PPR_TEST_ASSERT(driver.grid().getCell({36u, 7u})->m_element == 0u);
+
+        const auto attempt_b = prepare();
+        const auto binding_b = *driver.serviceDoorPublication();
+        PPR_TEST_ASSERT(attempt_b > attempt_a and binding_b.m_matter == binding_a.m_matter);
+        PPR_TEST_ASSERT(driver.acknowledgeServiceDoorActivation(attempt_a, true) == std::errc::operation_not_permitted);
+        PPR_TEST_ASSERT(
+            driver.serviceDoorPublication()->m_revision == attempt_b and
+            not driver.serviceDoorPublication()->m_activated);
+        PPR_TEST_ASSERT(driver.matterState()->m_identity == source and old_view->current());
+
+        Array<ColonyDriver::DirtyChunk> manifest{driver.editManifest().begin(), driver.editManifest().end()};
+        PPR_TEST_ASSERT(not driver.markServiceDoorActivationSent(attempt_b));
+        const auto cannot_cancel = driver.cancelServiceDoor(attempt_b);
+        PPR_TEST_ASSERT(not cannot_cancel and cannot_cancel.error() == std::errc::operation_not_permitted);
+        PPR_TEST_ASSERT(not driver.acknowledgeServiceDoorActivation(attempt_b, true));
+
+        for (;;) {
+            const auto committed = driver.commitServiceDoor(attempt_b);
+            PPR_TEST_ASSERT(committed.has_value());
+            if (*committed) {
+                break;
+            }
+
+            std::this_thread::yield();
+        }
+
+        PPR_TEST_ASSERT(driver.matterState()->m_identity == (*binding_b.m_matter)[1u]);
+        PPR_TEST_ASSERT(driver.lightingRevision() == attempt_b and driver.serviceDoorClosed());
+        PPR_TEST_ASSERT(not old_view->current() and driver.particleView()->current());
+        PPR_TEST_ASSERT(driver.particleView()->m_publication == (*binding_b.m_matter)[1u].m_publication);
+        PPR_TEST_ASSERT(driver.particleView()->m_terrain_revision == (*binding_b.m_matter)[1u].m_terrain_revision);
+        PPR_TEST_ASSERT(
+            driver.grid().getCell({36u, 7u})->m_element ==
+            driver.contentCatalog()->findMaterial("showcase_housing")->m_numeric_id);
+        driver.ackPresentChunks(manifest);
+        PPR_TEST_ASSERT(not driver.finishServiceDoor(attempt_b));
+
+        // Same runtime/device/driver: canceled lamp A cannot authorize B even
+        // when Matter reuses its internal strict source+1 target.
+        const auto lamp_source = driver.matterState()->m_identity;
+        const auto lamp_old_view = driver.particleView();
+        const auto lamp_cell = *driver.grid().getCell({30u, 16u});
+        const auto lamp_a = prepare(true);
+        const auto lamp_binding_a = *driver.serviceDoorPublication();
+        PPR_TEST_ASSERT(
+            driver.serviceLampEnabled() and lamp_binding_a.m_target == ColonyDriver::EServiceBayTarget::amber_lamp);
+
+        for (;;) {
+            const auto canceled = driver.cancelServiceDoor(lamp_a);
+            PPR_TEST_ASSERT(canceled.has_value());
+            if (*canceled) {
+                break;
+            }
+
+            std::this_thread::yield();
+        }
+
+        PPR_TEST_ASSERT(driver.serviceLampEnabled() and driver.matterState()->m_identity == lamp_source);
+        PPR_TEST_ASSERT(lamp_old_view->current());
+
+        const auto lamp_b = prepare(true);
+        const auto lamp_binding_b = *driver.serviceDoorPublication();
+        PPR_TEST_ASSERT(lamp_b > lamp_a and lamp_binding_b.m_matter == lamp_binding_a.m_matter);
+        PPR_TEST_ASSERT(driver.acknowledgeServiceDoorActivation(lamp_a, true) == std::errc::operation_not_permitted);
+        PPR_TEST_ASSERT(
+            driver.serviceDoorPublication()->m_revision == lamp_b and not driver.serviceDoorPublication()->m_activated);
+
+        const auto commit_lamp = [&](const u64 revision, const bool enabled) {
+            const auto expected_matter = *driver.serviceDoorPublication()->m_matter;
+            Array<ColonyDriver::DirtyChunk> dirty{driver.editManifest().begin(), driver.editManifest().end()};
+            PPR_TEST_ASSERT(driver.settleEdit(dirty) == std::errc::operation_not_permitted);
+            PPR_TEST_ASSERT(not driver.markServiceDoorActivationSent(revision));
+            PPR_TEST_ASSERT(not driver.acknowledgeServiceDoorActivation(revision, true));
+
+            for (;;) {
+                const auto committed = driver.commitServiceDoor(revision);
+                PPR_TEST_ASSERT(committed.has_value());
+                if (*committed) {
+                    break;
+                }
+
+                std::this_thread::yield();
+            }
+
+            PPR_TEST_ASSERT(driver.matterState()->m_identity == expected_matter[1u]);
+            PPR_TEST_ASSERT(driver.lightingRevision() == revision and driver.serviceLampEnabled() == enabled);
+            PPR_TEST_ASSERT(driver.serviceDoorClosed() and driver.particleView()->current());
+
+            const auto current_cell = *driver.grid().getCell({30u, 16u});
+            PPR_TEST_ASSERT(
+                current_cell.m_element == lamp_cell.m_element and
+                current_cell.m_temperature == lamp_cell.m_temperature);
+
+            driver.ackPresentChunks(dirty);
+            PPR_TEST_ASSERT(not driver.finishServiceDoor(revision));
+        };
+
+        commit_lamp(lamp_b, false);
+        PPR_TEST_ASSERT(not lamp_old_view->current());
+
+        const auto lamp_on = prepare(true, true);
+
+        commit_lamp(lamp_on, true);
+
+        // The same attached transaction binds position to the exact outer ACK.
+        using LampPosition = ColonyDriver::EServiceLampPosition;
+        const auto prepare_move = [&] {
+            for (;;) {
+                const auto ready = driver.prepareServiceDoorSnapshot();
+                PPR_TEST_ASSERT(ready.has_value());
+                if (*ready) {
+                    break;
+                }
+
+                std::this_thread::yield();
+            }
+
+            const auto revision = driver.requestServiceLampPosition(LampPosition::alternate, driver.lightingRevision());
+            PPR_TEST_ASSERT(revision.has_value());
+            for (;;) {
+                const auto ready = driver.advanceServiceDoor(*revision);
+                PPR_TEST_ASSERT(ready.has_value());
+                if (*ready) {
+                    break;
+                }
+
+                std::this_thread::yield();
+            }
+
+            return *revision;
+        };
+
+        const auto move_a = prepare_move();
+        const auto move_binding_a = *driver.serviceDoorPublication();
+        for (;;) {
+            const auto canceled = driver.cancelServiceDoor(move_a);
+            PPR_TEST_ASSERT(canceled.has_value());
+            if (*canceled) {
+                break;
+            }
+
+            std::this_thread::yield();
+        }
+
+        PPR_TEST_ASSERT(driver.serviceLampPosition() == LampPosition::original);
+        const auto move_b = prepare_move();
+        PPR_TEST_ASSERT(move_b > move_a and driver.serviceDoorPublication()->m_matter == move_binding_a.m_matter);
+        PPR_TEST_ASSERT(driver.acknowledgeServiceDoorActivation(move_a, true) == std::errc::operation_not_permitted);
+        PPR_TEST_ASSERT(driver.serviceLampPosition() == LampPosition::original);
+        Array<ColonyDriver::DirtyChunk> move_dirty{driver.editManifest().begin(), driver.editManifest().end()};
+        PPR_TEST_ASSERT(not driver.markServiceDoorActivationSent(move_b));
+        PPR_TEST_ASSERT(not driver.acknowledgeServiceDoorActivation(move_b, true));
+        for (;;) {
+            const auto committed = driver.commitServiceDoor(move_b);
+            PPR_TEST_ASSERT(committed.has_value());
+            if (*committed) {
+                break;
+            }
+
+            std::this_thread::yield();
+        }
+
+        PPR_TEST_ASSERT(driver.serviceLampPosition() == LampPosition::alternate and driver.serviceLampEnabled());
+        PPR_TEST_ASSERT(driver.grid().getCell({30u, 16u})->m_element == 0u);
+        const auto relocated_cell = driver.grid().getCell({37u, 16u});
+        PPR_TEST_ASSERT(relocated_cell and relocated_cell->m_element == lamp_cell.m_element);
+        PPR_TEST_ASSERT(relocated_cell->m_temperature == lamp_cell.m_temperature);
+        driver.ackPresentChunks(move_dirty);
+        PPR_TEST_ASSERT(not driver.finishServiceDoor(move_b));
+    };
 
     PPR_UNIT_TEST (paused_particle_tools_preserve_prefix_ids_and_terrain_then_destroy_to_zero) {
         Fixture fixture{"tool_inventory", "frontier", 1024u};
@@ -1522,8 +1773,9 @@ namespace pP::game::tests::detail::checkpoint {
                     .m_enabled = false, .m_palette_enabled = false, .m_temporal_enabled = temporal};
                 for (u32 frame = 0u; frame < (temporal ? 4u : 1u); ++frame) {
                     const auto raster = picture.beginFrame(settings, snapshot, int2{512, 512}, grid.worldGeneration());
+                    PPR_TEST_ASSERT(raster.has_value());
                     PPR_TEST_ASSERT(picture.temporalActive() == temporal);
-                    PPR_TEST_ASSERT(not grid.update(TimeSpan{}, raster));
+                    PPR_TEST_ASSERT(not grid.update(TimeSpan{}, *raster));
                     const auto draw = [&](const DrawContext &context) -> std::error_code {
                         PPR_RETURN_ERROR_ON_FAIL(CheckpointTests, grid.renderBackground(context));
                         PPR_RETURN_ERROR_ON_FAIL(CheckpointTests, grid.render(context));
@@ -2605,6 +2857,7 @@ namespace pP::game::tests::detail::checkpoint {
 namespace pP::game::tests {
     const UnitTest checkpoint_gpu = UnitTest::Named("checkpoint_gpu") / [](UnitTest::IRun &_) {
         _.recurse({
+            detail::checkpoint::service_door_cancel_reused_matter_target_rejects_stale_outer_activation,
             detail::checkpoint::paused_particle_tools_preserve_prefix_ids_and_terrain_then_destroy_to_zero,
             detail::checkpoint::attached_dig_preparation_retry_publishes_inventory_once_without_render_ack,
             detail::checkpoint::coverage_deferral_keeps_cohort_then_evolution_allows_a_later_tick_retry,

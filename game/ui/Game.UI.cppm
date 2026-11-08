@@ -47,7 +47,14 @@ export namespace pP::game::ui {
         bool m_candidate_ready{};
     };
 
-    [[nodiscard]] EWorldAction drawWorldProgress(const WorldProgressView &view);
+    struct WorldProgressDraw final {
+        EWorldAction m_action{};
+        // BeginPopupModal may emit title/background geometry even when this
+        // draw immediately closes the logically dismissed progress popup.
+        bool m_popup_began{};
+    };
+
+    [[nodiscard]] WorldProgressDraw drawWorldProgress(const WorldProgressView &view);
 
     [[nodiscard]] bool worldActionAvailable(const WorldProgressView &view, EWorldAction action) noexcept;
 

@@ -1,10 +1,360 @@
 # World-space lighting and post-processing implementation plan
 
-Status: proposed for review, revised 13 October 2026. Prepared with GPT-6 Astra and
-reviewed against current repository sources. Updated with the user's selected
-MSAA temporal reconstruction method and a single-solver RC implementation scope.
-No lighting implementation or builds have started. Names for new components
-below are proposals, not existing APIs.
+## V22 reassessment, 2 November 2026
+
+Newly available `docs/oni_v22.slang` justifies evaluating a different division of
+responsibility: native simulation-cell world transport, directional refined world
+probes, and rendering/screen-space treatment of fine visible geometry. The
+[concrete simplification proposal](hrc-v22-simplification-proposal.md) records
+active-code findings, the bounded border reproduction, resource estimates,
+unmodified targets and a small playable experiment. It is a proposed revision,
+not a v22 quality/performance pass. The current 69.45% aperture error is evidence
+about the existing algorithm, not v22.
+
+Further exact-contour implementation is held for this reassessment. The unbuilt
+playable draft, minimal compile fix and old diagnostic paths are preserved under
+`out/diagnostics/environment-lighting-20261102/receiver-scene/playable-phase2/reassessment-hold/`.
+No broad rewrite or new GPU transport implementation was performed during the
+reassessment.
+
+## Current delivery priority, 2 November 2026
+
+The full reference-driven environment, world-space RC and complete temporal
+reconstruction/post-processing goal remains active and incomplete. Qualification
+supports visible delivery; bounded diagnostic passes alone do not complete it.
+
+The newly activated delivery goal prioritizes a representative playable scene
+and visible results. A clean production capture now exists, but its sparse
+composition and unlit backdrop do not meet the artistic reference. The user's
+next explicit requirement is a lit cavern backwall that visibly receives door
+and terrain shadows. Implement that receiving surface through the same RC field
+first, then integrate the shared recipe into TurboLarbin's existing simulation,
+camera, edit and render-worker paths. Do not create a second toy viewer. Temporal
+reconstruction and bloom remain later stages; keep their full requirements.
+
+The accepted background direction is optional C0 mean output in the same
+immutable generation, followed by exact-view compute reconstruction with short
+visibility connectors composed before interpolation. Both direct MSAA background
+and cached backdrop consume a validated view, in linear space before exposure.
+Collect aggregate status after its fence; reject unresolved candidates. Capture
+may wait; interactive publication must retain the previous coherent view with
+live UI rather than combine an old screen-space light texture with a new camera.
+The finite receiving plane is the C0 convex hull; its outer half-cell ring is
+declared far void, not an unlit wall or a query-failure fallback. No ambient term,
+naive cross-wall bilinear replacement, or silent numerical fallback is accepted.
+
+The corrected background implementation built successfully for `app.game`,
+`engine.tests.app` and `engine.tests.asset`, with independent source review and
+formatted author review passed. All 26 CPU lighting leaves passed. The first
+physical background GPU leaf timed out at 300.49 seconds without an assertion
+result or visible phase; it remains unqualified. Validation and compatibility
+follow-ups were held. One independent production capture reached native
+`cascadeTerrainTop` pipeline creation, then lost its monitoring session. Its
+processes later disappeared without a retained application exit status or image.
+That capture's outcome is unknown; it supplies no physical or rendering pass.
+Actual translated/zoomed reconstruction and a dedicated high-resolution
+shadow-edge displacement check remain outstanding.
+
+The normal TurboLarbin playable handoff is approved for the first static-scene,
+actor and camera checkpoint. Candidate preparation must preserve the last
+completed world image beneath live native UI if active Grid replacement cannot
+be atomic. Picking uses the displayed camera/revision; obsolete view requests
+are coalesced. Native pipelines initialize during loading. Game-owned content,
+Driver edit authority and coherent consumption acknowledgments remain required.
+Door/lamp transactions follow the first checkpoint; unsupported edits must stay
+explicitly disabled until their optical admission is implemented. Source-only
+integration may proceed while the capture runs; its staged shaders, runtime pack
+and frozen executable must remain unchanged.
+
+The user's subsequent validation-time request takes immediate priority over
+playable integration. Follow the existing asset/frame-fence shared-application
+patterns to keep one live RadianceCascadePass across the strict receiver oracle
+and background holdout, retaining distinct scenarios, unchanged assertions and
+both final post-shutdown lease checks. Ordinary and GPUAV remain separate; private
+failure/quarantine and operator-qualified precision cases remain isolated. A
+merged filter without a shared pass would still recreate native pipelines.
+Expose existing preparation logs and separate cold setup from warm scenario
+results. Use a bounded durable runner that retains actual exit/timeout status.
+The first cold creation cost is not removed by batching.
+
+The three-file shared-fixture change now passes independent source review,
+formatted author review and the app-test build. The ordinary strict batch uses
+a verified transient user service with a 3000-second CTest bound
+and a 3030-second outer bound. Success, failure and timeout/child cleanup were
+verified with harmless runner probes. CTest explicitly selects GPU validation
+off for ordinary and on for its separate validation entry. Both original named
+scenarios and their numerical assertions remain; both lease families are checked
+after successful final shutdown. Failed/incomplete scenarios retain leases through
+quiescence proof and do not emit a lease-pass marker. The first ordinary run
+ended with CTest exit 8 after 467.80 seconds. Its strict receiver oracle passed
+in 375.74 seconds. Common top, merge and receiver pipelines were each created
+once, taking about 7.44, 161.09 and 200.58 seconds at the host API boundary.
+The background case reused that producer, then failed on Grid material-optics
+admission of its fixture RGB. Its physical and final post-shutdown lease
+assertions remain incomplete. The local fixture fix expresses the same S=(2,1,.5)
+as legal RGB=(1,.5,.25) times strength 2, with exact optical projection asserted.
+This demonstrates reuse and interpretable failure evidence, not a paired runtime
+speedup or complete batch pass.
+
+The corrected ordinary batch subsequently reached the physical gate in 61.35
+seconds: receiver oracle passed in 32.03 seconds; constant/closed/open background
+checks and the blocked-side limit passed, but physical brightness failed. One
+isolated diagnostic localized the result: reference sum 0.27734375, rendered sum
+0.18673718, relative L1 error 69.45%, signed bias -32.67%, blocked sum zero. CPU
+and GPU C0 agree within 2.5e-10 per probe; GPU C0 and the rendered/albedo result
+agree within 1.03e-5. This is a failure of the current RC sampling/merge
+approximation on the fixed aperture, not demonstrated screen-mapping error.
+The 15% gate stays unchanged. Approve only one CPU comparison: actual terminal
+128-direction straight-ray control and a same-angle/same-radius candidate that
+keeps near levels at the receiver position through the eight-cell boundary,
+then reconnects to unchanged C4. Measure query/read counts. No GPU port or global
+dense near-field storage is approved by that experiment.
+
+That CPU-only comparison completed once in 7.16 seconds. Straight128 failed at
+15.49296% relative L1; the same-q near-eight candidate worsened to 74.0537%
+versus baseline 69.4542%. Closed leakage remained zero. Its 24 points required
+14,976 connector/positive-interval queries and 12,288 coarse reads. Reject the
+candidate; no GPU port, radius sweep or threshold change is approved. The
+diagnostic registration is restored OFF. Resume the explicit experimental
+playable showcase and a reliable lit/unlit capture to satisfy the user's visible
+priority, while preserving this quality failure as an unmet acceptance gate.
+This is not normal product activation or lighting qualification.
+
+The subsequent durable headless capture completed successfully in about 1444
+seconds with current binary `b6bc1bdc`, its current 38-file shader closure and an
+isolated exact 649-file earlier asset pack. All eleven 3840x2160 PPMs are complete;
+PNG conversions preserve their RGB bytes. Khronos Core validation was active at
+instance/device and reported no VUID/validation error. This is not the old
+`f7d183bb` shader snapshot or an interactive run. Lit/unlit pairs now exist under
+`receiver-scene/production-environment-capture-playable/output/`, but the lit
+backwall remains visually too dark and patchy for the reference direction.
+
+Single observed exact-view GPU reconstruction times were 421--528 ms, with
+165,888,944 view bytes, 10,368,000 completed samples, 445,500 far-void samples,
+39,690,000 attempted and completed connector queries and zero unresolved/bound/invalid-value
+counts per view. Desktop GPU contention was present. These observations are far
+above the 4 ms lighting target; no steady-frame or 60 FPS qualification follows.
+Native merge/receiver pipeline creation also took about 523/536 seconds. Keep
+pipeline setup, world solve, view reconstruction and raster timing distinct.
+The view's attempted/qualified fields count connector evaluations/completions;
+they do not measure FP64 refinement attempts. Its current shader increments
+global counters per connector, including identity fast paths.
+
+### Actual experimental image evidence
+
+The first closed/open game-scene pair succeeded at 3840x2160 through actual
+RadiancePass -> GridPass -> 1080p MSAA4 reconstruction -> EV3/AgX, with Vulkan
+Core validation active. All 434 closed and 420 open receiver records are valid.
+The closed optical input bytes match the original captured dataset; the ten
+previously failing receiver indices now succeed. This proves contributing query
+refinement occurred, not that exactly ten queries retried. The unchanged receiver
+oracle also passed (218.13 s). The first game capture took 475.48 s, including
+cold pipeline creation, and is not a frame-performance measurement.
+
+These experiments used isolated runtime copies with the frozen shared-query FP64
+prototype overlaid. The independently reviewed production v2 implementation is
+now applied to the shader and LightingPass sources, with all nine live file
+hashes verified. The combined Dev C++ build and formatting checks pass, and the
+nine staged shaders match their sources. The existing strict production receiver
+oracle timed out at its registered 300-second deadline (300.60 s), without an
+assertion or shader/compiler diagnostic; its phase and cause remain unknown.
+Production public-admission checks passed ordinary/Core+GPUAV in 5.20/8.48 s.
+The explicitly qualified production source observer passed its 36 rows and
+helper-settlement counts 5/2/3/1 in 32.00/38.11 s ordinary/Core+GPUAV. Its linked
+SPIR-V validates with Float64/RTE64 and the inspected precision controls. These
+are source/helper results, not complete-query generation-counter qualification.
+The separate complete refined receiver run timed out at 600.61 s. Initialization
+and CPU C1 reference phases completed; preparation began but did not finish.
+All four actual linked terrain modules exported and passed Vulkan 1.2 SPIR-V
+validation with the inspected precision controls, but receiver results and
+generation statistics were never reached. No retry or receiver GPUAV run was
+made; qualification registration was restored OFF. Preparation-phase diagnosis
+remains open, and this does not repair the strict 300-second timeout.
+The new production capture completed; its first readback exposed a missing
+CopySource texture usage flag. After the one-hunk target fix, the identical
+five-image capture completed in 88 s with Core validation enabled and no VUID,
+validation error or warning. Closed/open generations each had 30 qualified
+refinement attempts out of 30; the environment had 42/42, with zero unresolved
+queries or bound errors. Receiver record counts were 434/420/638 respectively.
+All five old/new pixel rasters and the corresponding optical inputs, cascade
+outputs and receiver records are byte-identical; the old run remains Core-invalid.
+Validated 4K PNGs are in `receiver-scene/production-environment-capture-fixed/`.
+They use nearest/flat response, not mapped normals. Single observed Grid terrain
+GPU times were 4.95/4.91/5.81 ms, including terrain work rather than an isolated
+lighting solve. They establish no full-world or 4K/60 qualification. The complete
+independent production C1/Bezier comparison remains unmet.
+Source/load-path, binary and input provenance for the earlier prototype images is retained under
+`out/diagnostics/environment-lighting-20261102/receiver-scene/noinline-query-isolated/`.
+All publication barriers remain intact; no invalid lighting output was rendered.
+
+Pixel inspection identified a red source cast, an over-bright gray backdrop and
+nearest-receiver lighting facets. The next palette-only capture changes the
+scene-owned lamp to sRGB #FFCA75 with linear S=(2.5,1.4765471,0.44472104), and
+multiplies decoded background tints by (.05,.11,.25). Shipped magma, geometry,
+textures, camera and EV3 remain unchanged. This second closed/open pair passed
+in 21.18 s; all receiver red values match the first pair bit-for-bit, and the
+right-floor red response remains 0 closed / 0.00639953245409 open. The warm/cool
+palette is clearer, while lighting facets and missing relief remain visible.
+The comparable PNGs and exact-pixel PPM conversion records are in
+`out/diagnostics/environment-lighting-20261102/receiver-scene/amber-navy-data/`.
+
+### Next visible tranche and numerical policy
+
+Implement an opt-in cut-face continuation experiment in the existing GridPass,
+keeping nearest selection as the control. Transported receiver values,
+self-emission, component boundaries and geometric coverage remain unchanged.
+For squared distances s_i, m=min(s_i), R=sqrt(m)+0.5, use positive weights
+`(m/s_i)^2 * ((R^2-s_i)/(R^2-m))^2` within s_i<R^2, then normalize. An exact
+receiver centre returns its original value; conflicting coincident samples need
+an explicit deterministic rule. Conservatively extend the existing CPU candidate
+pruning for the declared FP32 support, without truncation.
+
+This is not yet a leakage-safe production rule: same-component receivers may
+lie on opposite sides of a wall. Test constant/anchor preservation, continuity,
+one-cell partitions and narrow doorways using rendered linear lighting before
+post-processing, plus shadow-edge movement. Preserve the <=1% blocked-side gate.
+If side mixing fails, return a boundary-side neighbourhood decision; do not tune
+the radius repeatedly against one scene or measure receiver values alone. Record
+candidate counts/storage/preparation and actual GridPass GPU cost. Capture nearest
+and interpolated variants from the same palette and completed lighting generation.
+The first unrestricted experiment passed CPU candidate completeness (70.03 s)
+and the GPU kernel check (3.11 s), but failed the independent physical gate:
+16.15% mean blocked-side leakage versus the 1% limit, with zero for nearest
+controls. Preserve this failure. The accepted next restriction anchors the blend
+to the nearest receiver's outward midpoint-contour normal and includes only
+same-component candidates with positive normal dot product. Retain the radius,
+weights, masks, portal cases and thresholds; test the restricted candidate before
+any visual or physical admission.
+The restricted candidate passed the CPU suite (69.41 s), GPU kernel (3.22 s)
+and unchanged physical gate (4.29 s). Both nearest and restricted interpolation
+measured zero blocked-side mean/max leakage in all three fixed wall/portal masks.
+The edge probes reported no crossing, so these runs do not measure shadow-edge
+displacement or establish general physical or full-world quality. Frozen-build
+provenance and raw results are under
+`receiver-scene/combined-production-boundary/focused-tests/` in the diagnostic root.
+Directional normal relief follows readable continuation; rough specular, bloom,
+selected temporal reconstruction and richer environment composition remain needed.
+
+For the next normal-relief tranche, retain the producer's existing 16 angular
+directions with four spatial connectors each. These are 64 queries, not 64
+distinct directions. Store the 16 spatially composed RGB bins separately
+(16-byte records, 256 bytes/receiver), preserving the old 64-term mean order and
+exact front-normal branch. Account for GPU/readback/CPU validation storage and
+overlapping immutable generations before allocation. Reuse facing-continuation
+weights, matched material normal-map sampling and camera-independent directions.
+Keep a default-flat control and an explicit mapped-diffuse qualification mode.
+With unit XY direction `d`, `A=dot(n.xy,d)` and `B=n.z>=0`, the normalized
+elevation coefficient is `K=B+(pi/2)*A` for A>=0, and
+`K=B+A*atan2(B,-A)` otherwise. Handle B=0 explicitly. In the negative-A
+cancellation region `x=B/(-A)<=0.25`, use a bounded positive-factor
+`x-atan(x)` series with an explicit remainder; avoid an unbounded B/(-A)
+division elsewhere. Hardware qualification covers the actual shader atan.
+K already includes twice the elevation integral: the normalized diffuse result
+is `sum(K_i*L_i)/16`, not `(1/pi)*sum(K_i*L_i*delta_phi)`. Equivalently,
+`E/pi=(1/(2*pi))*integral(K*L, phi)`. This preserves K=1 and the old angular mean
+for the exact front normal without an extra factor of two.
+The analytic hemisphere lift has an initial absolute coefficient-error target
+of 1e-5 against independent elevation quadrature; finite 16-direction constant
+fields target absolute error <=0.01 against continuous `(1+n.z)/2` for unit
+radiance. These are local qualification targets, not replacements for the
+accepted physical, resource or frame-performance gates. Measure the actual
+shader helper, preserve separate self-emission, and do not add transport rays.
+The bounded CPU-double calibration over 128 normals and the 16 uploaded
+directions measured maximum coefficient error 1.094e-7 against independent
+elevation quadrature, convergence delta 2.001e-7, and finite-direction constant
+field error 0.003920. Exact front response was 1.0. These results support the
+reference targets only; FP32/GPU precision, publication, rendering and cost are
+unqualified. Artifacts are under `receiver-scene/normal-lift-reference/`.
+The implemented mapped helper/lookup subsequently passed ordinary (4.40 s) and
+Core+GPUAV (4.87 s) runs over 128 normals and 16 directions, including distinct
+within-bin phases. Observed maximum coefficient error was 1.29514e-7 and
+constant-field error 0.00644211, within the unchanged 1e-5/0.01 targets.
+Flat/front bit preservation and weighted/facing lookup checks also passed.
+This qualifies the observed helper/lookup corpus, not complete angular producer
+publication, authored normal-map images, full-world storage or rendering cost.
+Evidence is under `receiver-scene/mapped-diffuse/`.
+The existing Grid/MSAA graphics compatibility leaf also passed ordinary
+(89.51 s) and Core+GPUAV (158.76 s) runs with the new bindings. The rebuilt
+kernel and unchanged physical masks passed again (3.20/4.45 s), with zero
+blocked-side leakage; shadow-edge movement remains unmeasured. These test
+durations include setup and do not establish frame cost. A separate verbose
+600-second receiver diagnostic now exposes the existing preparation info logs
+by temporarily lowering only the test logger threshold. It timed out at
+600.72 s: top creation returned after approximately 428.4 s at the
+createComputePipeline API boundary, then merge creation began and did not return
+before the deadline. Dispatch, receiver results and generation statistics were
+not reached. The ordinary run had no Khronos validation/GPUAV activation.
+Qualification registration was restored OFF; the failure remains unmet.
+
+### Bounded next artistic observation
+
+The visible diagnostic has localized the wait after geometry, planning and
+admission, at the first lazy `cascadeTerrainTop` pipeline creation. If it again
+times out there without a compiler, module, device or numerical error, perform
+one distinct, unchanged experimental Game capture with an 1,800-second wall-clock
+watchdog on the verified device/session. This is not a raised CTest deadline:
+retain the failed 300/600-second gates as unmet. The retained prototype measured
+9.2 seconds of receiver code generation and 448.7 seconds of native creation;
+three pipelines can precede the first actual dispatch.
+
+Use the reviewed explicit qualification flag, immutable source/shader/scene
+identities, existing status/fence/publication guards and per-generation real
+retry statistics. Preserve completed pictures as they become available. The
+current representative recipe is nearest/flat; do not describe it as a mapped
+normal image. Inspect it against the references, then address its largest
+visible defect and capture mapped response. A completed independent C1/Bezier
+comparison, including angular bins when selected, remains required before
+general producer admission. If this capture also exhausts its budget in an
+identified native creation call, consider one artifact-local FP32 complete-query
+noinline boundary experiment with retained call/precision controls, output
+equivalence and separate code-generation/native timings. Broader Slang
+optimization changes remain unselected.
+
+The next visual deliverable is a separate game-owned 64x36 environment recipe
+through the existing capture pipeline, preserving the two-room physical control.
+Use thin pale/ochre banks, orange seams, dark ore pockets, a central shaft and
+Grid-authored industrial platforms/pipes/tanks. Scene-owned opaque amber, violet
+and cyan emitters may establish the composition with actual RC transport; they
+do not qualify water, transparent crystal, refraction or participating media.
+Keep shipped absorbing/blended material definitions unchanged. Existing mesh
+props require RC lighting integration before their fixed local lighting can be
+used in this scene. This deliverable must show visible progress against the
+references, with matching exposure/framing and valid receiver generations.
+
+The FP64 refinement policy is hardware-qualified to RTX 2080 / NVIDIA 615.78.08 /
+Slang 2026.17.1 / Slang-RHI a78e208 and the recorded shader build. Its engineering
+error envelopes are not universal Vulkan binary64 guarantees. The actual helper
+corpus passed exact containment for 8,187 binary operations and 2,046 square roots;
+seven tagged boundary/risk cases remain explicit arithmetic rejections. Actual
+RTE64, NoContraction and absence of Int64/relaxed math were inspected; denormal
+preservation is not supported. See `fp64-capability/arithmetic-corpus/` and the
+[Vulkan precision rules](https://docs.vulkan.org/spec/latest/appendices/spirvenv.html#precision-and-operation-of-spir-v-instructions).
+
+Product admission still requires qualification of the shared FP32/FP64 production integration,
+one eligible complete-query retry with counters and unresolved failure handling,
+consistent top/merge/receiver/physical-ray coverage, lifetime/resource accounting,
+physical holdouts, full-world updates/media/bounces/gameplay integration and all
+accepted memory, latency, 4K/60 and platform gates. The first images and their
+palette improvement do not waive any of these requirements.
+
+Status: accepted for staged implementation, 1 November 2026. Target hardware:
+local NVIDIA RTX 2080 with 8 GiB VRAM; target presentation is 60 fps with VSync.
+Output is 3840x2160 (4K), initially reconstructed from a 1920x1080 4x-MSAA
+linear-HDR scene using the selected 2x-per-axis method. UI stays native.
+Provisional user-approved full-world gates are 4 GiB peak lighting storage,
+including overlapping generations, at most 4 ms of GPU lighting work per frame,
+and at most one second of update age during normal-speed play. Initial physical
+quality gates are at most 15% mean brightness error and 1% blocked-side leakage,
+while retaining one-cell walls/doors and testing shadow boundaries before
+post-processing. These are targets to qualify, not measured admission. The full
+device capacity is not a lighting budget. The first implementation is
+the CPU optical reference, immutable vacuum hierarchy/scalar DDA and allocation
+estimator below. Bounded synthetic FP32 GPU trace/RC implementation equivalence
+has passed source review and Vulkan core/GPU-assisted validation on this host.
+The GPU vacuum hierarchy passed its bounded Vulkan execution gates; independent
+RGB half storage passed its bounded Debug/Release gates. The authored material
+optical bridge passed independent source review and focused Debug/Release gates. Production
+world transport, physical RC quality and visual/display integration remain open.
 
 ## Intended result
 
@@ -20,8 +370,10 @@ illumination for AI, growth and visibility; delayed updates are acceptable.
 Probe positions and transport resolution stay fixed in world space through
 camera motion and zoom. Display filtering handles changing pixel footprints.
 
-Implement **accelerated world-space Radiance Cascades (RC)**, reusing the
-hierarchical visibility/jump-table design from v22. HRC is outside this
+Implement **accelerated world-space Radiance Cascades (RC)**. The historical v22
+visibility/jump-table direction informs acceleration; its missing source is not
+claimed as a verified port. The initial implementation uses an independently
+authored aligned vacuum hierarchy. HRC is outside this
 implementation scope: no HRC prototype, runtime backend or comparison project.
 The choice follows the existing acceleration work and the predominantly opaque
 world; it is an engineering recommendation, not measured proof of performance.
@@ -231,8 +583,434 @@ diffuse feedback normalization for the chosen planar angular measure instead of
 blindly copying a 3D `1/pi` factor. Separate diffuse reflectance from metallic
 response and keep the feedback energy bounded.
 
+### Milestone 1 numeric boundary
+
+`engine.app:renderer.lighting` supplies a small-domain, cell-constant CPU
+reference. This is a reference fixture model, not the final marching-squares
+terrain or reconstructed matter geometry. It introduces no material catalog or
+simulation dependency. `OpticalKind` explicitly selects vacuum, opaque or
+absorbing; unavailable input errors even if no ray would touch that cell.
+All unused optical fields must be zero. Texture alpha, visual opacity and
+antialiased contour coverage do not determine transmission.
+
+Coordinates are world-anchored metres with an explicit origin and cell size.
+Directions are normalized by the reference; finite near/far distances are metres.
+Parallel-axis ownership is half-open `[minimum,maximum)`; corner-only touches
+have zero length. Starting inside opaque material evaluates its source at the
+interval start. Zero-length intervals are the identity. Exterior must explicitly
+be vacuum or black opaque; unavailable boundary policy errors. A black opaque
+exterior stops a ray before entry or after exit, while a vacuum exterior preserves
+throughput. Neither policy models incoming environmental light.
+
+RGB intervals compose near before far. Homogeneous source density `j` integrates
+as `j * (1-exp(-sigma*d))/sigma`, using `expm1` for small optical depths, and
+`j*d` at zero extinction. Opaque surface emission is added once before stopping.
+This does not implement reflection, diffuse feedback or multiple scattering.
+The reference intersects every cell analytically and sorts all positive-length
+segments; it has no iteration cap or silently incomplete success. Invalid or
+nonfinite inputs/results return errors. Every adjacent world-grid plane must remain
+strictly ordered in the chosen double metric; large translations that collapse an
+interior cell are rejected before tracing or hierarchy capture. This check uses
+the same plane calculation as transport, not only the grid's two endpoints.
+Allocation failure stays fatal at the application reporting boundary. This deliberately slow CPU path is a correctness
+oracle only, with no production speed claim.
+
+Remaining production work includes mapping the existing terrain/matter geometry
+and authored materials to explicit extinction/source inputs and revision identity,
+contour coverage shared by reference/RC, angular quadrature and diffuse-feedback
+normalization. Those are required before claiming the material integration portion
+of milestone 1 or the whole milestone is complete.
+
+### Stage 3 qualification sequence
+
+`RadianceCascadePass` first qualifies scalar FP32 GPU cell DDA against the CPU
+optical oracle on synthetic bounded fields. It owns its shader, compute pipeline,
+root and cell/ray/result/readback buffers, records through `PreRenderContext` and
+leaves queue submission/fence ownership with the host. Admission counts candidate
+plus previous live buffers and explicit reserve before GPU allocation. Completed
+fences gate readback/reuse; encoded unsubmitted work needs explicit abandonment,
+and ambiguous submission retains resources until proven idle or confirmed removal.
+The owner now also evaluates the selected FP32 RC schedule on complete small
+fixtures, using two fixed parity scratch buffers and readback of one explicit C0
+tile plus the selected C1 probe0/bin0 diagnostic. It does not retain published C1,
+allocate gameplay scalar/history resources or participate in game frames.
+
+World-origin subtraction uses CPU double; uploaded origins are local fine cells,
+with explicit metres/cell and source/extinction per metre. Unrepresentable/nonfinite
+float values, collapsed positive intervals and unrepresentable integer grid planes
+are rejected before allocation. The GPU result carries explicit failure status;
+no incomplete interval is accepted. Scalar buffers use 40/24/32-byte cell/ray/result
+strides with 32-byte constants, verified with layout assertions and active-backend
+reflection. A small-depth polynomial evaluates the source integral stably where
+`1-exp(-depth)` would lose precision; FP32 equivalence is tested against double.
+
+For bounded fixtures the accepted numerical equivalence tolerance is
+`1e-5 + 1e-4*abs(reference)` per L/T channel, with finite nonnegative radiance,
+transmission in [0,1], and no shader failure status. Expected values consume exactly
+the quantized upload field. This tests implementation equivalence, not physical
+RC quality; absolute-world quantization and angular/geometry error remain separate.
+Vulkan execution on this Linux host does not establish D3D12 execution support.
+
+The same-schedule CPU/GPU RC comparison fixes bin centers at
+`theta=2*pi*(j+0.5)/D_i`. Children 2j and 2j+1 have equal weight 1/2. Every stored
+lower bin starts at `p_lower+r_i*d_parent`; a connector ends at
+`p_upper+r_(i+1)*d_child`. The lower start MUST NOT vary with the child direction,
+otherwise the stored interval origin would disagree with its next consumer.
+For each child, trace all four bent connectors, compose each with its matching
+upper interval, then apply each bilinear weight once. Only then average the two
+children. Upper lookup surrounds the original lower probe position. Top bins
+trace their own center direction to the actual boundary with the guard extension.
+Equal-bin scalar illumination is mean radiance; diffuse/PBR normalization and
+feedback remain additional work. No 16-byte storage is admitted before FP32
+correctness; physical RC error also requires independent high-angular direct-ray
+and analytic fixtures and cannot be waived by passing same-schedule comparisons.
+
+The complete-fixture GPU RC qualification API has an explicit 4096-cell support
+cap and requires the full fixture to fit its declared C0 tile. A larger domain,
+incomplete tile or redundant cascade count returns unsupported scope before
+allocation. This bounds the diagnostic C0 array to 1 MiB at its 32-byte FP32
+record stride, with readback/direction/source/previous buffers counted separately.
+This is a qualification API limit, not a product world-size, quality or memory
+budget. It must be replaced by real bounded C0 scheduling before full-world
+integration. Dispatch uses checked two-dimensional group packing and validates
+all derived index/group ranges against device limits before GPU allocation.
+
+The test-only CPU same-schedule evaluator retains tiny fixture levels for
+comparison; it is neither a production fallback nor another GI architecture.
+Numerical fixtures include one-cell axes, the common parent near origin at C1+,
+constant-emission angular normalization and fixed-parity admission. A separate
+1024-angle direct-ray room diagnostic reports physical scalar error and requires
+zero light across a closed opaque separator. Passing implementation equivalence
+does not establish general hard-shadow/aperture/phase acceptance. Half storage, feedback, production optical/matter mapping and publication remain
+under qualification or unimplemented. The GPU hierarchy passed the bounded gates
+recorded below; packed storage awaits its own gates.
+
+### Completed FP32 baseline and GPU hierarchy evidence
+
+Stages 3a/3b passed independent source review, including the FP32 crossing-event
+rejection and source grouping corrections. The registered
+`engine.tests.app.radiance_gpu_validation` entry passed on the RTX2080/Linux host
+with the system-installed Khronos layer and both Normal Core Check and
+GPU-Assisted Validation enabled. The loader recorded the layer in both instance
+and device chains, without workspace overrides; the final unchanged-binary run
+took 9.20 s. Evidence is retained in
+`out/diagnostics/environment-lighting-20261101/radiance-gpu-validation-system-layer.log`
+and its status file, with `review-fix-binaries.sha256` and
+`review-fix-touched-source-hashes.sha256` identifying the pre-hierarchy baseline.
+Earlier runs without actual layer availability do not establish that gate.
+Focused asset validation passed; the broad `engine.tests.asset.gpu` shard timed
+out after 450.14 s and is recorded in `3a-asset-gpu.log`, not counted as a pass.
+This host evidence does not establish Windows/D3D12 execution.
+
+The independent 1024-angle physical diagnostic gave blocked direct/RC radiance
+0/0, open direct 2.5625 and RC 2.935546875: absolute error 0.373046875, about
+14.6% relative error. That remains under qualification; numerical GPU/CPU
+schedule equivalence is not permission to waive physical shadow/angular error.
+
+The GPU hierarchy stage retains FP32 intervals and the existing pass/API.
+Each immutable source snapshot owns one flattened `uint` flag buffer and a
+16-byte scalar level table `{width,height,offset,blockShift}`. Level dimensions
+are `ceil(W/2^l)` by `ceil(H/2^l)`, through 1x1. Level zero classifies only explicit
+vacuum. Each later flag is true only when all four children exist and are proven
+vacuum; padding, unavailable data, opaque cells and absorbing cells cannot skip.
+GPU dispatches write disjoint level ranges with a global barrier between them;
+no LDS or in-place reduction is used. Build roots bind only the RW flag view,
+traversal roots only its SRV, followed by an explicit UAV-to-SRV transition before
+trace/cascade work. All flattened node counts, offsets and two-dimensional
+64-thread dispatch ranges are checked before allocation.
+
+Tracing selects the largest proven vacuum block containing the ray-forward cell
+and advances to its exact positive forward slab exit, clipped to the interval.
+Opaque emission-before-stop, metre absorption/source integration, exterior and
+nonprogress/error semantics remain unchanged. Every encoding rebuilds from the
+captured GPU optical rows; caller mutations require explicit reprepare. Tests
+compare direct rays with the independent oracle/CPU hierarchy, RC with the existing
+test-only schedule, and captured input versus rebuilt edited input. Segment
+observations count selected blocks/cells, not GPU time or a measured speedup.
+
+Admission includes candidate and previous flags/metadata plus the unchanged
+source, scratch, diagnostics and explicit reserve. The hierarchy costs
+`4*sum(w_l*h_l) + 16*levelCount` bytes: 64x64 uses 21,844 flag bytes plus 112 table
+bytes; 4096x1 uses 32,764 plus 208 bytes. These are the actual u32 tree costs, not
+a v22 bitmask/jump-table estimate. The general numeric estimator keeps other
+storage explicit; the pass adds these known resources to its admission and
+largest-resource checks. The 4096-cell complete-fixture cap remains, with no
+full-world, streamed C0, runtime publication, 16-byte storage or speed claim.
+
+The hierarchy build and all five radiance leaves passed on this host. The routine
+functional GPU entry took 10.82 s; the registered system Khronos core/GPU-assisted
+validation entry took 12.43 s with no validation errors. The 64x64 vacuum fixture
+observed one axis block span versus 64 plain-cell spans and 21,844+112 bytes of
+flags/table. These are work/storage observations, not GPU timing improvements.
+Evidence lives alongside the baseline in `hierarchy-build.log`,
+`hierarchy-functional-gpu.log`, `hierarchy-radiance-gpu-validation.log`,
+`hierarchy-source-hashes.sha256` and `hierarchy-final-hashes.sha256`. Unchanged CPU
+optical/estimator evidence was reused. Independent review of the combined
+hierarchy and packed-storage delta follows the coherent packed batch.
+
+### Independent RGB half storage qualification batch
+
+`GpuIntervalStorage::fp32` remains the explicit default diagnostic baseline;
+`rgb16f` selects storage for the same trace/RC schedule and FP32 arithmetic.
+There is no automatic fallback, alternative solver, shared exponent or scalar
+transmission. Each 16-byte record contains four scalar uint words:
+`{Lr|Lg<<16, Lb|Tr<<16, Tg|Tb<<16, status}`. Each channel is an independent IEEE
+binary16 value. Trace, connector composition, bilinear weighting and angular
+averaging stay FP32; only stored outputs are packed, and upper records expand
+before use. Identity L=0/T=1 and opaque T=0 remain exact endpoints.
+
+Source quantization remains as declared above. Storage now uses a narrow explicit
+binary16 RTE codec built from uint/FP32 bit operations at packing boundaries,
+rather than relying on an unspecified native conversion rounding mode. Normal
+rounding retains 10 fraction bits with an even-tie decision; guarded subnormal
+shifts are bounded to [14,24], including carry into minimum normal. Normal carries,
+exact zero/one endpoints and subnormal normalization are explicit. Host and shader
+decoding preserve sign, infinity and NaN payload information for domain/finite
+validation. Physical trace/merge arithmetic and the independent test oracle are
+unchanged. Codec instruction/time overhead is unmeasured; there is no speed claim.
+
+The initial native-intrinsic diagnostic observed values consistent with truncation
+for both normal/subnormal ties and non-ties: FP32 0x33c00000 became half 0x0001
+rather than RTE 0x0002, 0x3f803000 became 0x3c01 rather than 0x3c02, and
+0x38d1b717 became 0x068d rather than 0x068e. Exact runtime RHI SPIR-V was not
+captured, so this is observed output, not an attribution to hardware or compiler.
+The preserved `packed-aggregate-single-leaf.log` and associated source/binary
+hashes record the failing baseline. The accepted correction keeps the desired
+RTE contract instead of changing its oracle to the observed native behavior.
+
+Accepted direct round-trip error is at most one half ULP, with RTE subnormal
+rounding bounded by 2^-25. Qualification compares exact packed bits and decoded
+values against an independent arithmetic reference, covering both tie directions,
+normal mantissa carry, the subnormal/normal boundary, 65504 radiance and weak
+independent secondary channels. The deterministic codec passed the bounded
+execution gates recorded below.
+Positive underflow is measured storage error, not an inferred optical opacity or
+cutoff. Nonfinite or out-of-domain values, and radiance beyond finite half range
+65504, set failed per-record status; completion returns an error. Values are never
+clamped or silently replaced with FP32. Upper status propagates through every
+dependency.
+
+Status occupies the fourth interval word on all levels. Local connector-span
+counts, excluding ancestor traversal, occupy only one separate bounded uint plane
+for C0 plus the selected C1 diagnostic; upper levels allocate no general count
+arrays. Direct traces use rayCount count words. Readback appends this plane to
+the packed intervals, so it is 20 bytes per returned record, not a hidden FP32
+readback. Host reporting expands decoded values after the completion gate. Qualification
+snapshots also retain the existing raw packed words for exact bit-validation and
+mismatch diagnosis; this adds no GPU storage or readback bytes.
+Reflection verifies 16-byte field offsets/stride and the device buffer descriptor
+is checked against the selected storage stride.
+
+Admission uses actual 16-byte even/odd parity capacities plus
+`4*(C0records+1)` GPU diagnostic bytes and `20*(C0records+1)` readback bytes,
+with unchanged optical/direction/hierarchy buffers, candidate+previous lifetime
+and explicit caller reserve/largest-resource ceilings. Direct traces count
+16-byte output, 4-byte diagnostics and 20-byte readback per ray. Single-cell
+buffer-only admission is 124 bytes, or 248 during replacement, including optical,
+ray and hierarchy buffers; these fixture checks do not define a product budget.
+The general estimator remains format-size driven. Neither the 4096-cell complete
+fixture guard nor its current C0 allocation claims full-world scheduling.
+
+Matched FP32/packed tests report maximum L/T error separately from the 14.6%
+physical RC diagnostic. A test-only same-schedule reference quantizes every
+stored level independently; weak media, multiple levels, bright saturated/weak
+RGB sources, near-opaque runs and transmission before a bright far source expose
+accumulated storage error. One adjacent half quantum plus the established FP32
+arithmetic tolerance accommodates rounding ties in implementation comparisons;
+that tolerance is not a blanket physical-quality threshold. The native-intrinsic batch failed the RTE contract; the deterministic codec
+correction passed source review, Debug ordinary and actual system Khronos/GPUAV
+execution, and a Release build with 15 focused CPU and eight GPU checks. Evidence
+is retained in `rte-source-hashes.sha256`, the `rte-*-binary.sha256` snapshots and
+`rte-*-status.txt` files under the existing diagnostics directory. The first
+native-intrinsic failures and aggregate probe remain preserved. This qualifies
+the bounded format implementation, not physical RC quality or world scheduling. Game/display integration and whole-world
+physical/angular acceptance remain separate work.
+
+### Authored material optical bridge
+
+The current metadata batch uses the existing selected material catalog and
+presentation capture. `MaterialAppearance` optionally declares
+`[appearance.transport]` with required `contract_version=1` and explicit
+`model='vacuum'|'opaque'|'absorbing'`. RGB `sigma_r_per_m`, `sigma_g_per_m` and
+`sigma_b_per_m` default to zero and are extinction per world metre. Absence stays
+unavailable. Alpha, IOR, texture coverage and physical phase never select a model
+at runtime. Existing visual-only fixtures with unavailable optics remain valid;
+strict optical conversion rejects unavailable rather than substituting vacuum.
+
+The source function S is the existing linear emissive RGB multiplied by existing
+strength. Opaque emits S once before stopping and has zero sigma. Absorbing uses
+j=sigma*S, so a segment contributes S*(1-exp(-sigma*d)) per channel. Vacuum has
+zero sigma and source. There is no scattering or transport refraction. The
+numerical `OpticalCell` oracle retains its more general zero-sigma positive-j
+volume-emitter case; authored materials intentionally have the narrower source
+function model. Shared game validation covers descriptor imports and typed
+projection, checks original and quantized float ABI products before narrowing or
+multiplication, and rejects positive underflow, overflow and incoherent unused
+quantities.
+
+The same selected material ID carries this metadata through `MaterialDefinition`
+and `captureCatalogPresentation_` into the existing `GridTerrainVisual` palette.
+The append-only ABI is 96 bytes: versioned model uint at 80, scalar sigma at 84/88/92,
+with all previous offsets unchanged. Tags are 0 unavailable, 0x101 vacuum_v1,
+0x102 opaque_v1 and 0x103 absorbing_v1. The particle palette carrier mirror also
+uses 96 bytes. Actual program reflection, upload elementSize/size checks and the
+isolated grid-shader compute probe qualify the same layout and S/j mapping; no
+production draw pipeline invokes the probe. Raw material metadata is not another
+transport catalog. Presentation fingerprints include this version and optical
+appearance; numeric recipe/worldgen/simulation fingerprints remain unchanged.
+
+A dense 65536-row palette increases from 5 MiB to 6 MiB per owner, +1 MiB. Existing
+active/candidate/retiring lifetime overlap and GPU completion govern both owners;
+two overlapping palettes account for 12 MiB. This does not define a new standalone
+budget or admit full-world lighting allocation.
+
+All 63 shipped material TOMLs explicitly author the following artistic starting
+policies, with existing source factors unchanged. These coefficients are not
+measured optical properties or final brightness; scene inspection after actual
+light-field integration must guide later tuning.
+
+| Material | Model | RGB sigma per metre |
+|---|---|---|
+| clear_quartz | absorbing | .04,.03,.02 |
+| glass | absorbing | .03,.02,.015 |
+| diamond | absorbing | .02,.02,.02 |
+| ice | absorbing | .10,.04,.02 |
+| polluted_ice | absorbing | .9,.35,.8 |
+| crystal | absorbing | .9,1.8,.35 |
+| water | absorbing |1.5,.12,.06 |
+| brine | absorbing | .35,.12,.08 |
+| polluted_water | absorbing |1.8,.6,1.2 |
+| crude_oil | absorbing |4,6,9 |
+| steam | absorbing | .06,.06,.06 |
+| polluted_oxygen | absorbing | .035,.015,.04 |
+| chlorine | absorbing | .08,.025,.10 |
+| oxygen, hydrogen, natural_gas, carbon_dioxide | vacuum |0,0,0 |
+| Remaining 46 named solids/materials, including magma | opaque |0,0,0 |
+
+Magma is opaque despite visual blend and keeps its amber source; crystal and
+water retain their violet/cyan source factors. The current batch adds no terrain
+contour reconstruction, matter optical density/geometry, publication/invalidation
+scheduler, scene GI activation, gameplay illumination or postprocess integration.
+The metadata bridge passed independent boundary review, Debug/Release builds of
+the game and app/asset/game test targets, 73 Content/Pack leaves, focused
+grid/lighting checks, nine radiance GPU checks, two existing terrain/particle
+raster leaves, and both shipped world-profile validators. Debug additionally
+passed the 33-leaf functional GPU shard and the nine-leaf opt-in radiance entry
+with the system Khronos Core and GPU Assisted validation active. Release GPU
+checks used ordinary execution, not GPU Assisted validation. Final source and
+binary identities and commands/statuses are retained under
+`out/diagnostics/environment-lighting-20261101/material-final-*` and
+`material-release-*`. The earlier broad asset GPU shard's 450-second timeout
+remains recorded; these focused results do not establish a full asset-suite pass.
+
+### Rendered terrain geometry qualification (in progress)
+
+The next bounded qualification step preserves the renderer's noise-free quadratic
+outer curves and same-label saddle connectivity. The shared math case/point
+tables supply topology; material roundness supplies the quadratic control point.
+The straight, disconnected saddle geometry used by physics/matter is not silently
+substituted for these rendered contours. Visual boundary noise, AA width,
+decoration and texture alpha remain outside transport.
+
+An owning numeric snapshot copies same-ID `OpticalCell` rows, roundness and
+centre labels. The initial API supports opaque/vacuum fixtures only; absorbing
+or unavailable selected material inputs explicitly fail. Opaque termination
+needs no internal material-interface integration: source selection at the hit
+uses the existing deterministic rendered point-label rule, including four-label
+junctions. The world exterior is explicit vacuum or black opaque, separately
+from the halo corner labels that shape in-world edge contours. The CPU oracle
+enumerates analytic ray/quadratic events; GPU traversal uses the same geometry
+with explicit failure for uncertifiable numeric intersections. This is not yet
+validated, full-world source reconstruction or scene activation.
+
+Conservative FP32 intersection certificates require controlled arithmetic order.
+The pinned Slang v2026.17.1 predates the per-variable `precise` SPIR-V fix in
+[upstream PR 12208](https://github.com/shader-slang/slang/pull/12208).
+The accepted remedy compiles only the new terrain programs with the existing
+component-level precise option and gives that already-linked component to RHI.
+It does not change global shader defaults or old cell-constant programs.
+Qualification must inspect the same linked component's SPIR-V and separately
+execute it. Native division/square-root accuracy and denormal behavior must be
+covered by the certificates; a rounded tangent or collapsed positive span must
+report numeric ambiguity instead of becoming a successful miss.
+
+The source implementation is now authored and awaiting the serialized execution
+and review gates. `renderer.optical_geometry` owns the copied numeric fixture
+snapshot and analytic-double Bezier-event oracle; `RadianceCascadePass` adds
+`prepareTerrainTrace` and `prepareTerrainCascades` using its existing submission,
+fence, quarantine and readback protocol. The qualification cap remains 4096
+centre samples, with no two-label cap: each dual cell naturally has at most four
+opaque source candidates. Label zero must have an explicitly supplied vacuum
+row; missing IDs and the reserved 65535 sentinel fail capture. Absorbing and
+unavailable rows return `not_supported`. There is no game activation or material
+catalog duplication.
+
+Dual origins are `(i+.5,j+.5)` with a one-sample halo, then clipped to the declared
+world box. Halo material labels shape the half-cell in-world edge. Traced
+exterior is independently declared vacuum or **black** opaque; halo emission
+never becomes incoming environment light. Noise, AA/alpha and decorations do
+not alter this macro contract. Numerical tangent/collinear uncertainty returns
+`argument_out_of_domain`; an analytically isolated zero-length contact does not
+create an opaque path interval. The CPU oracle also rejects near-degenerate
+rounded discriminants/root collapse through explicit floating-error budgets;
+its use of double is not a claim of exact real arithmetic.
+
+GPU occupancy uses the equivalent corner conic
+`F=x+y-.5-.25*r+r*(x-y)^2`, reflected for the other corners, and the existing
+saddle union/complement topology. The CPU event solver remains independently
+parameterized by Bezier arcs. Conservative whole-span field bounds precede the
+complete root path; only proved uniform spans avoid root solving. Ambiguous
+root signs/order, interval edges, DDA ownership or positive spans return named
+shader status 32 (`numeric_ambiguity`), propagated through RC and surfaced as
+`argument_out_of_domain`. No epsilon repair, root merging or silent cap is used.
+The scalar dual-cell traversal has a width+height+2 bound; exhaustion is an
+error. Terrain currently uses no vacuum hierarchy rather than incorrectly
+reusing cell-box vacuum flags for rounded dual occupancy.
+
+Only the new Vulkan terrain entry programs are linked with component-level
+`FloatingPointMode=PRECISE`. Other backends explicitly return `not_supported`
+for this qualification API; the existing cell/packed paths retain their prior
+compile mode. The exact pinned v2026.17.1 release is commit ca6e0a657 (11 September
+2026), before PR 12208's 23 September merge. Its
+[pinned emitter](https://raw.githubusercontent.com/shader-slang/slang/v2026.17.1/source/slang/slang-emit-spirv.cpp)
+consults only the effective floating-point mode for `NoContraction`, confirming
+that a local `precise` qualifier alone is insufficient. RHI's zero-entry-count
+already-linked-component path retains that same component. Explicit
+`writeTerrainSpirvForQualification` writes its exact three entry binaries for
+inspection; the GPU test invokes it only when
+`PPR_TEST_TERRAIN_SPIRV_DIRECTORY` names a diagnostic directory. Emitted IR and
+actual execution remain separate gates.
+
+The local normal-FP32 certificates enclose correctly rounded add/multiply,
+reject subnormal/FTZ-zero and nonfinite arithmetic, and conservatively expand
+normal-domain division by eight adjacent representations to cover Vulkan's
+[2.5 ULP requirement and binade asymmetry](https://docs.vulkan.org/spec/latest/appendices/spirvenv.html).
+Square roots use bounded positive-float squared bracketing, without assuming
+native sqrt rounding. Near-degenerate input roundness that could flush an
+average into a straight arc is rejected before GPU allocation. These safeguards
+may reject otherwise useful queries; their frequency and GPU cost must be
+measured before production admission. No speed or full-world availability claim
+follows from this bounded implementation.
+
+Additional terrain buffers are 8 bytes per captured sample plus 64 bytes of contour
+points and 1152 bytes of cases, on top of the existing 40-byte numeric source rows.
+The 32-byte terrain constants use the existing immutable root/driver reserve
+policy. Admission counts the actual selected buffers and previous live batch,
+per-resource ceilings, parity capacities and bounded diagnostics/readback.
+No packed terrain storage is selected. Focused tests cover analytic rounded hits,
+all 16 masks at roundness 0/.5/1, repeated/distinct saddles, four-label source
+selection, a one-cell wall/door across a global seam, immutable edits, explicit
+black exterior and near-tangent/collinear ambiguity. Terrain RC is compared to
+the same selected schedule independently from the physical angular-quality
+reference. Finite 8→16 angular tuning remains the next batch, after geometry
+execution/review; the prior 14.6% physical diagnostic is still unaccepted.
+
 ### Accelerated DDA contract
 
+The historical `docs/oni_v22.slang` source is absent from this checkout on
+1 November 2026. The reference locations above record prior analysis, not a
+source port verified during this implementation. Obtain that exact source before
+claiming reuse, or independently implement and validate the documented hierarchy.
 Treat v22's hierarchy as a useful prototype, not a drop-in transport primitive.
 The table describes safe exits from aligned blocks, not an isotropic distance
 field. Prove forward progress for negative/axis-aligned rays, exact boundaries,
@@ -258,6 +1036,32 @@ resume it; keep the previous valid lighting output until completion. An optional
 early-out on small remaining throughput requires an explicit error threshold.
 Validate the accelerated result against plain cell DDA before vectorizing rays.
 
+The initial CPU `OpticalHierarchy` captures an owning immutable optical snapshot.
+A cell is skippable only when explicitly vacuum; an aligned parent is skippable
+only when all four children exist in-domain and are skippable. Opaque, absorbing,
+volume-emitting and unavailable data are never classified as vacuum. Edits require
+explicit recapture; old owners remain valid snapshots and cannot silently observe
+mutated caller storage. This is independently authored; it does not port the
+unavailable v22 file and does not yet implement an incremental GPU jump table.
+
+`traceOpticalAccelerated` uses scalar hierarchical DDA. At each cursor it binary
+searches monotonic grid-plane crossing events to select ray-forward cell ownership,
+including negative rays and corner ties, then exits the largest containing aligned
+vacuum block or integrates one nonvacuum cell. The initial locator costs
+`O(log extent)` per axis per visited segment; no timing improvement is claimed.
+Every positive segment ends at a new X/Y plane or the interval end, so at most
+`width+height` segments suffice. Nonprogress or a violated bound returns an error,
+never a partial successful interval. No epsilon, 128-step cap or throughput cutoff
+is used. Aggregate capture/trace profiling scopes and visited-segment/vacuum-block
+observations are available without per-cell instrumentation.
+
+CPU parity fixtures exercise translated metre grids, non-power-of-two bounds,
+positive/negative/axis/near-axis directions, boundary/corner ties, subintervals,
+explicit exterior policies, immutable rebuild after emitter insertion/removal,
+and a 513-cell absorbing/emitting corridor with independent analytic expectation.
+These establish the declared cell-constant CPU model only; GPU traversal, contour
+and matter geometry, optical edit propagation and RC qualification remain open.
+
 Rebuild affected hierarchy ancestors and jump-table dependencies after optical
 edits. Prove the dirty region; local terrain changes can alter skip classifications
 outside the edited cell. Time the acceleration rebuild as part of the solver.
@@ -275,6 +1079,46 @@ Include interval extensions, padding, retained reconstruction inputs, feedback,
 candidate/published generations, readback rings, terrain assets, multisampled
 HDR attachments, motion/validity inputs and output-resolution temporal histories.
 Check both total live memory and individual resource limits on supported devices.
+
+The initial numeric estimator fixes probe phase to `p_i(k)=0.5+2^i*k` in fine
+cells and chooses upper bilinear probes around the original lower probe position,
+not the ray endpoint. Recursive floor/ceil parent support for C0's in-domain
+centers is `k=0..ceil((extent-1)/2^i)`. The nominal upper maximum uses `floor`
+instead: there is no low guard and at most one high guard per axis. Even coarser
+levels therefore keep two probes when required rather than stretch or clamp their
+lookup. This derives support for C0 probe queries only; occlusion-aware final
+surface reconstruction and connector angular mapping remain qualification work.
+The estimator requires the selected nominal outer radius to cover the world
+diagonal. This is insufficient for padded upper probes outside the world: for
+4096², a top guard at `(8192.5,8192.5)` is farther than 8192 cells from the origin.
+The top interval therefore traces from nominal near to actual world exit for every
+padded probe/direction, including explicitly defined outside transport. The result
+reports a separate conservative terminal far bound derived from the maximum axis
+distances between padded-probe corners and world corners. It uses their exact
+integer L1 sum rounded up, which bounds Euclidean distance on every supported
+host without floating-point underestimation. The 4096² bound is 16385 cells;
+individual rays stop at their actual exit. Nominal intervals, cascade count and
+storage are unchanged. This extension adds trace work and requires angular/error
+requalification; it is not assumed free or quality-neutral.
+
+Every cascade reports nominal/padded probes, guard counts, directions, interval
+bounds, logical records, resident records and storage bytes. The selected solve streams a C0 tile and logically keeps adjacent cascades while
+solving coarse to fine. Actual allocation reserves maximum even-level and
+maximum odd-level capacities separately; admission uses their sum, not only
+theoretical maximum adjacent live bytes. Published/fence-retired C1 fields are
+counted separately. Optical/scalar outputs count all caller-declared live generations.
+The sum of all levels per generation is reported separately as a diagnostic,
+not confused with the selected streaming peak. This is an integer accounting
+model, not an implemented GPU allocation schedule or proof of aliasing safety.
+
+Callers must supply record sizes, explicit lighting/total admission budget,
+individual resource ceiling, all other simultaneously live bytes and the largest
+individual resource among that reserve. That reserve includes feedback,
+hierarchies, directional visual outputs, terrain, MSAA/display history, readback,
+alignment and driver headroom as applicable. A missing reserve is not proof that
+those resources are free. Checked arithmetic rejects overflow and insufficient
+reach. Budget/resource failures retain the computed demand and return an explicit
+admission error before any GPU allocation; zero budget admits nothing.
 
 | Example 4096² output alone | Bytes before overhead |
 |---|---:|
@@ -340,6 +1184,34 @@ growth, each ideal level instead holds `8N` intervals: 2 GiB per level at
 layouts before allocating. The bilinear fix requires extra connectors, but their
 four weighted contributions can be reduced within a dispatch/tile rather than
 stored as four permanent copies of each merged interval.
+
+Read-only padded-layout preflight on 1 November 2026 gives the following demand
+for 4096², 16-byte intervals and an illustrative 16² streamed C0 tile. The tile
+size is not an admitted production choice. Counts use the estimator's recursive
+floor/ceil support and fixed even/odd capacities; the alternative schedules are
+arithmetic projections, not implemented GPU configurations.
+
+| Base directions / angular and range growth | Cascades | Candidate parity scratch, MiB | One retained C1, MiB | Combined, GiB |
+|---|---:|---:|---:|---:|
+| 8 / doubling |14|1538.001|1025.000|2.503|
+| 16 / doubling |14|3076.001|2050.000|5.006|
+| 8 / fourfold |8|4290.500|2050.000|6.192|
+| 16 / fourfold |8|8581.000|4100.001|12.384|
+
+These exclude optical/source snapshots, hierarchy, scalar outputs, feedback,
+directional tiles, readback, retirement beyond the one retained C1, and reserves.
+The current qualification optical row alone would cost 640 MiB per full-world
+snapshot at 40 bytes/cell; production snapshot representation remains undecided.
+The current u32 vacuum pyramid would cost about 85.33 MiB per snapshot. Fourfold
+angular growth offsets the fourfold reduction in ideal probe count per level;
+padding makes coarse levels larger, rather than cheap. No layout is admitted
+against the GPU's physical 8 GiB capacity by these calculations.
+
+The selected 1080p MSAA4 scene color/depth with 4K RGBA16F histories would require
+at least 474.609 MiB for RetroPass's three slots, before motion/identity inputs,
+TSR intermediate outputs, bloom, swapchain, UI or driver reserve. Its current
+scene-resolution histories instead occupy 332.227 MiB with the same scene
+attachments; this preflight does not claim the selected TSR is implemented.
 
 These are illustrative layouts, not a selected directional format or a complete
 RC allocation estimate. Cascades can require multiple GiB. Reusing scratch
@@ -552,7 +1424,8 @@ Maintain a game-owned compact full-map cache, updated from bounded changed-chunk
 readbacks. No blocking immediate map or per-frame whole-map transfer. Busy rings
 retain/coalesce pending revisions; they do not mark undelivered values complete.
 Reject stale results. Sim can consume plain numeric values without depending on
-GPU/app types. Agree on acceptable age before full gameplay acceptance.
+GPU/app types. Qualify the adopted one-second age target at normal speed before
+full gameplay acceptance; fast-forward behavior needs separate measurement.
 
 Rendering needs directional data beyond this scalar cache. Preserve a reference
 directional representation before evaluating compact signed bases. RGB9E5 cannot
@@ -637,6 +1510,14 @@ already solves these cases:
 
 ### Runtime order and delivery stages
 
+Extend the existing `RetroPass` resource owner for selected spatial/temporal
+reconstruction, exposure, bloom and AgX. Preserve its fence-safe attachment/history
+lifetime, independent palette toggle and native UI composition. Do not create a
+parallel GridPass display owner. Current native-extent averaging is not the selected
+2x-per-axis TSR; a 4K target needs the explicit 1920x1080-to-3840x2160 sample mapping,
+coverage/identity/motion contracts and quality gates before claiming integration.
+
+
 Use multisampled linear-HDR world composition, custom MSAA temporal reconstruction
 to output resolution, exposure, HDR bloom, validated AgX Punchy mapping, exactly
 one display encoding, then UI. Keep temporal history in a defined linear-HDR
@@ -720,16 +1601,287 @@ worlds. Agree on product thresholds before acceptance; do not borrow benchmark
 numbers from external demonstrations as PPR promises.
 
 Follow repository shader/module/build/validation skills during implementation:
-serialized builds in the prescribed persistent Windows toolchain shell, affected
-tests each milestone, the full twelve-entry matrix for cross-cutting rendering,
+host-specific serialized builds following `build-system`, affected
+tests each milestone, the current registered matrix required by `validation` for cross-cutting rendering,
 required repeated lifecycle/concurrency runs, formatting/semantic-style gates,
 available inspections and independent review. Recheck current skill instructions
-at execution time. This documentation-only delivery needs factual/link review,
-not executable builds.
+at execution time. Executable milestones require their affected build/test gates; historical documentation review does not establish implementation validation.
 
-Outstanding decisions are target GPU memory/time budgets, accepted gameplay
-update age, GPU-less behavior, and any product relaxation needed if full-domain
-transport is unaffordable. MSAA temporal reconstruction is the selected AA method;
+The provisional lighting memory/time, normal-speed update-age and physical-error
+gates above were explicitly accepted by the user. GPU-less behavior and any
+product relaxation needed if full-domain transport cannot meet those gates remain
+open. MSAA temporal reconstruction is the selected AA method;
 bloom and exposure extensions remain staged assumptions.
 These decisions do not block the small-domain oracle or material-interface work;
 they do block claims that the full product scope is accepted.
+
+### Delivery guidance, 1 November 2026
+
+At the user's request, Astra reviewed the next delivery steps. The coordinator
+adopts this sequence: finish the bounded terrain RC gate, decide exterior contour
+receivers and the explicit cut-face lighting approximation, then demonstrate a
+bounded real-material scene through GridPass before expanding qualification
+infrastructure. Include sediment, ore, an emissive boundary, a one-cell wall and
+an opening/closing doorway. Unsupported media remain explicit; this milestone
+does not admit ordinary full-world lighting.
+
+Close the generic cell transport path's FTZ/underflow safety holes alongside this
+work. Narrow numerical-domain rejection is an interim qualification policy;
+production media require an explicit discarded-radiance error bound, including
+bright continuation. Scene-level error thresholds do not establish that bound.
+
+Evaluate compact material labels with the existing optical palette before
+allocating dense production snapshots. Count overlapping generations and
+publication resources. Separate compilation/loading latency from warm GPU work:
+lazy pipeline creation has passed source review, but does not establish the
+4 ms frame or one-second publication gates. Controlled HDR display fixtures can
+progress independently; display grading must not conceal transport failures.
+
+The lazy-family Dev build, cell-only readiness leaf and terrain trace-only
+readiness leaf passed. The first terrain cascade schedule leaf failed at result
+readback (`actual.has_value()`, `App.RadianceGpu.Tests.cpp:1198`); it did not time
+out. Diagnosis is pending. Preserve
+`out/diagnostics/environment-lighting-20261101/geometry/lazy-terrain-cascade-readiness.log`;
+this result does not qualify terrain RC or the registered GPU shards.
+
+The single instrumented repeat exposed existing diagnostic fields: row 8,
+status 32 (`numeric_ambiguity`), zero local connector spans; the returned error
+was `argument_out_of_domain`. Pipeline preparation/submission/fence completion
+passed. Instrumentation was removed and the clean source hash restored; the
+retained diagnostic binary is identified separately from current source.
+
+For the independent manual-exposure/display batch, the coordinator selects
+[Filament's scalar AgxToneMapper Punchy](https://github.com/google/filament/blob/fd9ec7ff9510df148011c5326bcb50d4bfb811ca/filament/src/ToneMapper.cpp)
+at commit `fd9ec7ff9510df148011c5326bcb50d4bfb811ca` as an attributable AgX
+approximation. This is not an exact v22 or OCIO-equivalence claim. Its linear
+Rec.2020 contract requires explicit conversion from/to PPR linear sRGB.
+Extend the owned `RetroSettings` snapshot, default off, with manual exposure
+in the finite range [-16,+16] EV. Reject invalid settings before mutation;
+keep history unexposed and apply exactly one display encoding for the actual
+attachment format. Preserve upstream notices/license. Qualify the real pass
+with independently generated upstream goldens and encoding/exposure invariants
+before enabling this treatment in a game scene. This batch does not qualify
+Hable reconstruction, bloom or full-world integration.
+
+The exact-origin ownership correction passed independent shader source review;
+its ordinary terrain trace leaf subsequently passed 87 cases, including mirrored
+half-plane, zero-axis and translated/metric regressions. The combined Dev build
+passed `engine.app`, `engine.tests.app`, `engine.tests.asset`, `game.tests` and
+`app.game` after a routine HDR fixture API correction. HDR source review found no
+functional blocker; its required test paragraph corrections were applied.
+The ambiguity leaf also passed. The unchanged terrain cascade equivalence leaf
+still failed at interval readback after 184.24 seconds; its numeric row fields
+were not retained by the runner. Preserve `final-terrain-cascade.log`; no
+successful cascade qualification is claimed. Test wall time includes shader
+compilation and is not evidence for the 4 ms GPU budget.
+
+The independent HDR CPU rejection, frozen-reference/encoding, rejected-policy
+history and existing temporal/palette leaves passed. Both new HDR leaves also
+passed with the system Khronos Core layer inserted at instance and device
+creation. Those asset opt-in runs did not request GPU-assisted validation: the
+entrypoint left the opt-in settings at RHI defaults. The earlier description of
+that binary as ASan-off is unproven without retained compiler-command or symbol
+evidence. The asset test entrypoint was subsequently corrected to set both
+options explicitly from the opt-in. Both HDR leaves passed again; their native
+`VALIDATION-SETTINGS` messages confirm GPU-assisted and Core validation enabled,
+with the system Khronos layer inserted for both instance and device creation.
+Preserve `hdr-picture-punchy-gpuav-fixed.log` and
+`hdr-picture-rejected-policy-gpuav-fixed.log`. Windows/D3D12, the full registered
+matrix and 4K cost/integration remain unverified; these bounded display checks
+do not qualify terrain transport, TSR or bloom.
+
+### Parametric terrain RC refinement
+
+The coordinator adopts a single canonical internal parametric RC convention,
+following independent design review. A cascade ray means `p + lambda*d_raw`,
+where `d_raw` is the uploaded FP32 direction interpreted exactly and interval
+limits are lambda values in fine cells. Its parent near-origin and each
+connector target mean the same symbolic expression `E = p + nearCells*d_raw`.
+Do not independently round an endpoint and reconstruct a different normalized
+ray. Boundary connectors use `q + t*(E-q)`, with `t` in [0,1]. Public physical
+metre ray queries retain their existing normalization contract through a wrapper.
+
+This is a deliberate numerical schedule refinement, not bit-for-bit equivalence
+with the earlier metre-based RC implementation. Compute medium length as
+`deltaLambda*length(d_raw)*cellMetres`, or `deltaT*length(E-q)*cellMetres` for
+connectors. Certify finite/underflow behavior and terminal boundary reach under
+this convention. The small radial variation from quantized direction length
+must pass the existing physical holdouts; parent support, angular weights,
+connector-before-weight composition and quality gates remain unchanged. The
+independent Bezier oracle must consume this declared schedule without sharing
+the GPU intersection implementation.
+
+Boundary receivers retain a validated same-cohort curve witness and symbolic
+midpoint for arbitrary authored roundness; no artwork rounding or exact-float
+material subset is adopted. Only the witnessed zero contact is algebraically
+excluded. Occupancy, later positive roots and source ownership must be certified
+for the complete occupied region. Inward bent connectors retain immediate
+opaque source/T=0 semantics, without omitted or renormalized dependencies.
+Only proven identical endpoints yield identity transport. Implementation and
+qualification of this refinement remain pending.
+
+The immediate generic-cell FTZ safety batch deliberately narrows its qualifier
+domain: raw FP32 subnormals and unpreservable positive intermediates return
+visible errors. Existing sigma .25/32 long-corridor queries remain unchanged but
+must now assert that domain failure in both storage modes; sigma 2^-12 success
+and half-error comparisons remain. This closes silent loss and does not qualify
+production media. A bounded discarded-radiance policy is still required before
+ordinary water/absorbing-world admission.
+
+### Current source and validation follow-ups, 2 November 2026 (Europe/Paris)
+
+Independent review of the parametric source found two issues before execution:
+the GPU source query discarded its hit enclosure, and the new CPU reference
+could return an infinite physical hit distance from finite lambda inputs.
+Both fixes are implemented and targeted source review is closed. The GPU keeps
+the full earliest-hit enclosure and makes its source certificate explicit;
+the CPU guards physical-distance overflow and positive-distance collapse.
+The immediate source certificate permits only proved common-source, singleton-point
+or certified straight-partition decisions; uncertain differing sources remain
+numeric ambiguity. This is an intermediate qualifier, not complete curved
+multi-material source support. General source certification remains required
+before ordinary-world/emitter admission; existing fixtures and source rules
+must not be changed to manufacture success.
+
+The registered `engine.tests.app.functional_cpu` entry passed all 220 leaves in
+79.10 seconds, including all 19 lighting leaves. The unchanged terrain cascade
+entry still failed after 127.22 seconds: row 28, status 32 (`numeric_ambiguity`),
+12 segments, with `argument_out_of_domain` at readback. The tested app binary is
+`cb0ea334dfbbb6e130d5dd73253c41059d7407787f28bc83f217b5b335c813ed`;
+retain `parametric-terrain/validation-summary.json` and its linked source,
+staged-shader and execution artifacts under
+`out/diagnostics/environment-lighting-20261101/`. The approved high-bit status
+diagnosis subsequently localized inherited ORDER ambiguity to the root-versus-span
+guard in a local connector of C1 record 57. Earlier failure evidence remains
+applicable history. No ordinary-world admission follows from the CPU pass.
+
+The bounded stable-quadratic correction passed targeted independent source
+review and the unchanged registered terrain cascade fixture: 122.57 seconds for
+the leaf, 124.61 seconds for CTest, process exit 0. It replaces cancellation-prone
+quadratic numerators with ordered `q/a, c/q` enclosures using the existing
+outward-rounded primitives and unchanged domain, separation and event guards.
+An FP32-input reconstruction demonstrates a root near 0.373295 safely inside
+its cell span; its former enclosure crossed both endpoints. This reconstruction
+supports the remedy without claiming runtime coefficient capture or a unique
+connector observation. The tested binary is
+`ac72ffab551ec9755981a1799c130330555ef9c675db21b8f763d7b9a743ef0e`;
+retain `parametric-terrain/stable-q/final-provenance.sha256`, the proof/replay
+artifacts and `cascade-run.log`. The registered ordinary trace subsequently
+passed 89 cases (86.18 seconds), and the ambiguity/collinear leaf passed
+(14.89 seconds). All three exact linked-component exports pass SPIR-V validation;
+every direct FP add/subtract/multiply/divide result carries `NoContraction`,
+with no `RelaxedPrecision` or `FPFastMathMode` decorations. Retain
+`stable-q/ir-analysis.txt` for commands, hashes and inspection scope.
+The registered cascade Core/GPUAV follow-up timed out at its unchanged
+300-second deadline without a result. Both validation modes were confirmed
+active. A late process snapshot showed CPU activity, which does not identify
+the responsible subsystem. Retain `stable-q/cascade-gpuav-run.log` and its
+process snapshot. The one approved follow-up with the existing diagnostic
+enabled passed all assertions/readbacks with Core and GPU-assisted validation
+active: leaf 294.35 seconds, CTest 296.92 seconds, process exit 0. Preserve
+`stable-q/cascade-gpuav-diagnostic/summary.txt` and its raw evidence. Producer
+timestamps bound 289.04 seconds between the rejected budget probe and first
+post-submit fence probe, spanning valid preparation, lazy pipeline creation,
+encoding, command-buffer finish and queue submission. They do not isolate an
+individual call or measure GPU execution. The earlier timeout remains retained
+and the successful run has little margin under the unchanged 300-second cap.
+Shader compile time is included in these wall times; no warm GPU budget is
+established.
+
+Following the next requested Astra guidance, proceed to the bounded lit GridPass
+scene while closing GPUAV qualification in parallel. Use exterior witnessed
+receivers and the declared within-component cut-face continuation. The first
+visible diffuse stage fixes the front normal to `(0,0,1)`: under the proposed
+uniform-elevation lift its kernel is exactly one half, so reflected color is
+albedo times angular mean incoming radiance, plus separate self-emission.
+Normal-map lighting and rough specular remain required subsequent work; no
+general-normal kernel is admitted by this first stage. Mixed-roundness geometry
+uses a declared canonical binary32 RTE mean of authored endpoint values.
+Current linked SPIR-V does not select a rounding mode, and `PRECISE` alone
+does not establish that contract. Implement one shared integer-bit construction
+for raster and terrain shader coefficients and construct/promote that same
+coefficient on CPU before independent Bezier intersection. Keep authored
+endpoints unchanged and retain explicit numerical-domain failures. Exact-bit
+cross-path qualification remains pending; a matching-looking FP expression
+does not establish shared geometry.
+One follow-up GPUAV run enables the existing producer diagnostic at the unchanged
+300-second cap; it is an observation run, not a waived validation gate.
+
+The current `clang-dev` qualification uses effective ASan and UBSan enabled:
+developer mode sets both in normal CMake scope despite an ASan-OFF cache entry,
+and generated compile commands contain both sanitizers. Cache values alone do
+not establish effective policy. The explicit Core/GPUAV activation messages
+retained for the HDR leaves remain valid independently of this correction.
+
+The first Hable prerequisite is a standalone signed linear-HDR spatial kernel
+and raster sampling/filter fixtures, not RetroPass activation. It uses the
+later article's continuous diamond helper and deliberately corrects the
+downloaded source's repeated lower output taps to four distinct grid points.
+The retained MIT source, SHA-256, coordinate derivation and independent
+constant/affine invariants are in `third_party/HableMSAA/README.md`. The native
+threshold probe gives finite coordinate brackets and an index mapping for
+tested pixels; it is not proof of an exact/global sample pattern. Runtime
+admission, real contour sample coverage, temporal history and 4K cost remain
+open. The four source-review paragraph findings and two routine fixture API
+compile errors were fixed; targeted review is closed. Both ordinary spatial
+leaves and the registered spatial Core/GPUAV entry passed on the RTX 2080.
+Evidence is under `hable/compile-fix/`, asset binary
+`28dd386d343f887468477a8b7addfb120d9158f4f6a38ba0d6fbcfe0bc52475f`.
+The independent native property read additionally reports
+`standardSampleLocations=true` and device-wide 4x color/depth sample support;
+retain `hable/hardware/rtx2080-properties.json`. Runtime engine admission and
+format-specific checks are still required before RetroPass activation.
+
+The Vulkan admission recipe's first configure failed closed on source identity:
+its original hashes came from a clean older CPM checkout, not the selected
+`a78e208be303df9f934a52e5557665b9b3538cb9` pin. No overlay was generated by
+that failed configure. The corrected recipe checks the actual pin's public
+header, Vulkan device implementation and unchanged shared native image builder
+against these normalized LF SHA-256 hashes, respectively:
+`31bd6ad07b48543a1026b2abab5ba582781d691cfdf9394b3a6a2013e47a69eb`,
+`274541a3e60b84913c24358401a9a09d718946b382ad98c1e47f8a34093a457d`,
+and `10797bb78d5444f804982e5e7c9f0d92befc28190c19dc6bfa1dc826b3cb6a9d`.
+Its bounded allocation guard requires a null heap and zero heap offset, and
+queries the exact normalized native builder fields for committed creation
+without initial data; placed resources remain outside this scope. The correction
+passed targeted source review; corrected configure passed twice (1.8/1.7 seconds)
+with twelve idempotent overlay files, eleven upstream-identical sibling headers,
+no original public include root, overlay system includes for the patched unit
+and 182 project entries, and a clean unchanged CPM checkout. The corrected
+app and asset builds completed after routine public-result-type correction.
+The registered spatial Core/GPUAV entry subsequently passed both leaves and
+process teardown in 7.01 seconds, including the focused allocation admission
+checks; native messages confirm both validation modes. Preserve
+`rhi-msaa-integration/spatial_gpu_validation.log`. Earlier standalone launches
+had incorrect working-directory/runtime-environment setup and are not clean
+ordinary post-recipe gates. No new sanitizer suppression was introduced.
+Project engine/test compile and link commands enable ASan and UBSan; the external
+patched Slang-RHI translation unit is unsanitized.
+Retain
+`rhi-msaa-integration/configure-first.log` and the source-identity evidence in
+that directory; provenance is in `third_party/SlangRHI/README.md`. This changes
+neither the dependency version nor ordinary-game spatial activation. D3D12
+standard-quality coherence remains required follow-up work.
+
+The next default-off spatial integration is in progress: an independently
+queried sample-rate-shading capability, actual sample-frequency opaque terrain
+and background, then RetroPass's fenced 2x reconstruction before grading and
+native UI. Standard sample locations alone do not establish sample-rate-shading
+admission. Initial strict policy rejects legacy temporal/pixelization combinations,
+odd, nonpositive or nonexact 2x extents and unsupported particle/translucent/refraction content;
+the conservative opaque-only visual inventory is an initial milestone restriction,
+not full-world admission. Actual GridPass per-index readback and real RetroPass
+reference/lifecycle checks remain required. Newly authored spatial code is
+unreviewed and unqualified; its presence does not establish activation or TSR.
+
+Measured isolated radiance leaf costs could not fit the previous registered
+GPU aggregate deadlines. Registration now uses six disjoint radiance shards
+under each ordinary/GPUAV policy, preserving all twelve leaves, GPU locks,
+loop settings and 300-second per-shard deadlines. Grid/pixel coverage remains
+separate. Two measured slow asset leaves have their own 300-second ordinary
+shards; the residual asset scope retains 450 seconds and its timing is still
+unverified. Dedicated HDR and spatial GPUAV entries select their respective
+two leaves. Configure and metadata audits passed with fifty entries and
+selector lengths at most 304 characters; this proves registration, not suite
+execution. Independent registration source review passed. Evidence:
+`registration-preflight-final/registration-audit.json`.

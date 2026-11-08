@@ -8,6 +8,17 @@ notices are preserved so redistributable builds have their required notices
 in-tree instead of depending on build-tree artifacts (`out/`, `_deps/`,
 `vcpkg_installed/`) that are intentionally outside the repository.
 
+The attributed [Filament AgX scalar approximation](FilamentAgX/README.md) is a
+source-only display adaptation pinned to `fd9ec7ff9510df148011c5326bcb50d4bfb811ca`.
+It adds no Filament engine/library dependency; its Apache-2.0 notice, exact
+license and independent frozen fixture reference are retained in that entry.
+
+The [Hable MSAA spatial prerequisite](HableMSAA/README.md) retains the original
+MIT-licensed spatial source, its SHA-256 and the derivation of the adaptation's
+deliberately corrected lower output buckets. It introduces no engine dependency.
+The standalone shader is exercised by sampling/filter fixtures; runtime sample
+pattern admission and RetroPass integration remain separate work.
+
 Sources of dependency versions:
 
 - **vcpkg manifest** (`vcpkg.json`): `builtin-baseline`

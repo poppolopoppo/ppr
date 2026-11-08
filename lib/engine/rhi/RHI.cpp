@@ -382,6 +382,9 @@ namespace pP {
                 desc.deviceType = device_type;
                 desc.slang.slangGlobalSession = shader_service.getGlobalSession();
 
+                // TEMPORARY: attribute cold scene pipeline creation to compiler and native phases.
+                desc.enableCompilationReports = true;
+
                 // PPR does not launch CUDA kernels from graphics command buffers.
                 // VK_NVX_binary_import fails device creation on some NVIDIA drivers.
                 desc.enableCUDALaunchFromGfx = false;

@@ -76,6 +76,7 @@ namespace pP::game {
                 {"validate-worldgen", "validate-worldgen"},
                 {"worldgen-preview", "worldgen-preview"},
                 {"worldgen-workshop", "worldgen-workshop"},
+                {"lighting-scene", "lighting-scene"},
             };
             Array<std::string> seen{};
 
@@ -271,6 +272,55 @@ namespace pP::game {
 
         appendOption(
             schema.m_options,
+            valueOption(
+                "game.world_lighting", "world-lighting",
+                "Select legacy (default), temporal-cascades, direct-window, or single-bounce-window. The default boundary sky is black. Temporal cascades support the optional solar hour and editable lighting showcase."));
+
+        appendOption(
+            schema.m_options,
+            switchOption(
+                "game.rc_distant_query_check", "world-rc-distant-query-check",
+                "Measure a distant gameplay window for 1800 simulation ticks, then drain its final update and exit."));
+
+        appendOption(
+            schema.m_options,
+            switchOption(
+                "game.rc_skip_table", "world-rc-skip-table",
+                "Use the R8UI skip table for temporal RC (default). Set false to trace with the vacuum hierarchy."));
+
+        appendOption(
+            schema.m_options, valueOption(
+                                  "game.rc_probe_spacing", "world-rc-spacing",
+                                  "Temporal RC probe spacing: 2, 4, 8, 16, 32, or 64 native cells."));
+        appendOption(
+            schema.m_options, valueOption(
+                                  "game.rc_cascade_count", "world-rc-levels",
+                                  "Temporal RC level count, including refined field: 2 through 8."));
+        appendOption(
+            schema.m_options,
+            valueOption(
+                "game.rc_base_directions", "world-rc-directions", "Temporal RC base direction count: 4, 8, or 16."));
+        appendOption(
+            schema.m_options,
+            valueOption("game.rc_interval_scale", "world-rc-interval-scale", "Temporal RC ray interval multiplier."));
+
+        appendOption(
+            schema.m_options, valueOption(
+                                  "game.rc_sky_hour", "world-rc-sky-hour",
+                                  "Enable a rotating terminal sky, starting at solar hour 0 through 23."));
+        appendOption(
+            schema.m_options, valueOption(
+                                  "game.rc_day_seconds", "world-rc-day-seconds",
+                                  "Simulation seconds in one 24-hour sky cycle (default 86400)."));
+
+        auto direct_capture = valueOption(
+            "game.direct_window_frame_capture", "direct-window-frame-capture",
+            "Capture one completed frame from an interactive generated world using direct-window, single-bounce-window or temporal-cascades, including UI.");
+        direct_capture.m_preserve_empty_value = true;
+        appendOption(schema.m_options, std::move(direct_capture));
+
+        appendOption(
+            schema.m_options,
             selectorOption(
                 "worldgen-workshop", "worldgen-workshop",
                 "Open Worldgen Workshop without generating a complete world; open an explicit authored pack root."));
@@ -285,6 +335,57 @@ namespace pP::game {
             schema.m_options, selectorOption(
                                   "worldgen-preview", "worldgen-preview",
                                   "Generate diagnostic exports without gameplay; requires an output directory."));
+        appendOption(
+            schema.m_options,
+            selectorOption(
+                "lighting-scene", "lighting-scene",
+                "Capture a handcrafted bounded lighting/reference scene, not generated world output; requires --worldgen-gpu-output."));
+        appendOption(
+            schema.m_options,
+            switchOption(
+                "game.lighting_showcase", "lighting-showcase",
+                "Play the bounded static lighting showcase using the normal game and editor; editing is disabled."));
+
+        appendOption(
+            schema.m_options,
+            switchOption(
+                "game.lighting_showcase_screen_contact", "lighting-showcase-screen-contact",
+                "With --lighting-showcase: enable the bounded backwall-only near-visibility pilot; foreground/world transport unchanged."));
+
+        auto door_check = valueOption(
+            "game.lighting_showcase_door_check", "lighting-showcase-door-check",
+            "With --lighting-showcase: check the real door transaction, capture closed/open frames in an existing directory, then exit.");
+        door_check.m_preserve_empty_value = true;
+        appendOption(schema.m_options, std::move(door_check));
+
+        auto lamp_check = valueOption(
+            "game.lighting_showcase_lamp_check", "lighting-showcase-lamp-check",
+            "With --lighting-showcase: switch the mounted amber lamp on/off/on, capture matching frames in an existing directory, then exit.");
+        lamp_check.m_preserve_empty_value = true;
+        appendOption(schema.m_options, std::move(lamp_check));
+
+        auto frame_capture = valueOption(
+            "game.lighting_showcase_frame_capture", "lighting-showcase-frame-capture",
+            "With --lighting-showcase: copy one completed actual surface frame to path.ppm, including native UI.");
+        frame_capture.m_preserve_empty_value = true; // Reject an empty path rather than silently reset the request.
+        appendOption(schema.m_options, std::move(frame_capture));
+
+        appendOption(
+            schema.m_options,
+            switchOption(
+                "game.lighting_showcase_metrics", "lighting-showcase-metrics",
+                "With --lighting-showcase: measure producer and 256 warm whole-frame GPU samples; rejects surface capture. Diagnostic, not a product-budget qualification."));
+
+        appendOption(
+            schema.m_options,
+            switchOption(
+                "game.lighting_showcase_qualified_fp64", "lighting-showcase-qualified-fp64",
+                "With --lighting-showcase: explicitly assert current-session RTE64 qualification; no automatic promotion."));
+        appendOption(
+            schema.m_options,
+            switchOption(
+                "game.lighting_scene_qualified_fp64", "lighting-scene-qualified-fp64",
+                "With --lighting-scene only: assert RTE64 qualification for the current Vulkan device session and select experimental FP64 refinement; default strict FP32."));
         appendOption(
             schema.m_options,
             switchOption(
@@ -303,7 +404,7 @@ namespace pP::game {
         appendOption(
             schema.m_options, valueOption(
                                   "game.worldgen_gpu_output", "worldgen-gpu-output",
-                                  "Explicit GPU closeup capture with --worldgen-preview."));
+                                  "GPU capture directory for --worldgen-preview or --lighting-scene."));
         appendOption(
             schema.m_options, valueOption(
                                   "game.worldgen_output", "worldgen-output",
@@ -477,6 +578,47 @@ namespace pP::game {
 
         const auto &settings = game->m_value;
         PPR_RETURN_UNEXPECTED_ON_FAIL(
+            GameConfig,
+            std::has_single_bit(settings.m_rc_probe_spacing) and std::has_single_bit(settings.m_rc_base_directions)
+                ? std::error_code{}
+                : std::make_error_code(std::errc::invalid_argument));
+        if (settings.m_rc_sky_hour >= 0 and settings.m_world_lighting != EWorldLighting::temporal_cascades) {
+            const auto error = config::make_error_code(config::EConfigErrc::cross_field_invalid);
+            diagnostics.add("invocation", "game.rc_sky_hour", "The rotating sky requires temporal cascades", error);
+            PPR_RETURN_UNEXPECTED_ON_FAIL(GameConfig, error);
+        }
+
+        if (settings.m_rc_distant_query_check and
+            (settings.m_world_lighting != EWorldLighting::temporal_cascades or settings.m_lighting_showcase)) {
+            const auto error = config::make_error_code(config::EConfigErrc::cross_field_invalid);
+            diagnostics.add(
+                "invocation", "game.rc_distant_query_check",
+                "--world-rc-distant-query-check requires a generated temporal-cascades world", error);
+            PPR_RETURN_UNEXPECTED_ON_FAIL(GameConfig, error);
+        }
+
+        const bool world_window = settings.m_world_lighting == EWorldLighting::temporal_cascades or
+                                  settings.m_world_lighting == EWorldLighting::direct_window or
+                                  settings.m_world_lighting == EWorldLighting::single_bounce_window;
+        if ((world_window and
+                (settings.m_command != EGameCommand::interactive or
+                    (settings.m_lighting_showcase and settings.m_world_lighting != EWorldLighting::temporal_cascades) or
+                    settings.m_worldgen_acceptance)) or
+            (settings.m_direct_window_frame_capture and (not world_window or
+                                                            settings.m_lighting_showcase or
+                                                            settings.m_lighting_showcase_frame_capture or
+                                                            settings.m_lighting_showcase_door_check or
+                                                            settings.m_lighting_showcase_lamp_check or
+                                                            settings.m_lighting_showcase_metrics))) {
+            const auto error = config::make_error_code(config::EConfigErrc::cross_field_invalid);
+            diagnostics.add(
+                "invocation", "game.world_lighting",
+                "World lighting requires interactive startup. The editable showcase supports temporal-cascades. Use --direct-window-frame-capture only with a generated world.",
+                error);
+            PPR_RETURN_UNEXPECTED_ON_FAIL(GameConfig, error);
+        }
+
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
             GameConfig, settings.m_worldgen_root and settings.m_worldgen_pack_set
                             ? asset::reject(
                                   diagnostics, "invocation", "game.worldgen_pack_set",
@@ -486,11 +628,85 @@ namespace pP::game {
         if ((settings.m_command == EGameCommand::worldgen_preview and
                 not settings.m_worldgen_output and
                 not settings.m_worldgen_gpu_output) or
-            (settings.m_command != EGameCommand::worldgen_preview and settings.m_worldgen_gpu_output)) {
+            (settings.m_command == EGameCommand::lighting_scene and
+                (not settings.m_worldgen_gpu_output or settings.m_worldgen_output)) or
+            (settings.m_command != EGameCommand::worldgen_preview and
+                settings.m_command != EGameCommand::lighting_scene and
+                settings.m_worldgen_gpu_output)) {
             const auto error = config::make_error_code(config::EConfigErrc::cross_field_invalid);
             diagnostics.add(
                 "invocation", "game.command",
-                "--worldgen-preview requires --worldgen-output or --worldgen-gpu-output; GPU capture requires the preview selector",
+                "--worldgen-preview requires an output; --lighting-scene requires --worldgen-gpu-output and rejects --worldgen-output; GPU capture requires one of these selectors",
+                error);
+            PPR_RETURN_UNEXPECTED_ON_FAIL(GameConfig, error);
+        }
+
+        if (cliHas(cli, "game.lighting_scene_qualified_fp64") and settings.m_command != EGameCommand::lighting_scene) {
+            const auto error = config::make_error_code(config::EConfigErrc::cross_field_invalid);
+            diagnostics.add(
+                "invocation", "game.lighting_scene_qualified_fp64",
+                "--lighting-scene-qualified-fp64 requires --lighting-scene and explicit current-session RTE64 qualification",
+                error);
+            PPR_RETURN_UNEXPECTED_ON_FAIL(GameConfig, error);
+        }
+
+        if ((settings.m_lighting_showcase and
+                (settings.m_command != EGameCommand::interactive or settings.m_worldgen_acceptance)) or
+            (cliHas(cli, "game.lighting_showcase_qualified_fp64") and not settings.m_lighting_showcase)) {
+            const auto error = config::make_error_code(config::EConfigErrc::cross_field_invalid);
+            diagnostics.add(
+                "invocation", "game.lighting_showcase",
+                "Experimental lighting showcase requires normal interactive startup; qualification flag requires --lighting-showcase. Physical quality/performance remain unqualified.",
+                error);
+            PPR_RETURN_UNEXPECTED_ON_FAIL(GameConfig, error);
+        }
+
+        if (cliHas(cli, "game.lighting_showcase_screen_contact") and not settings.m_lighting_showcase) {
+            const auto error = config::make_error_code(config::EConfigErrc::cross_field_invalid);
+            diagnostics.add(
+                "invocation", "game.lighting_showcase_screen_contact",
+                "--lighting-showcase-screen-contact requires --lighting-showcase", error);
+            PPR_RETURN_UNEXPECTED_ON_FAIL(GameConfig, error);
+        }
+
+        if (settings.m_lighting_showcase_door_check and (not settings.m_lighting_showcase or
+                                                            settings.m_lighting_showcase_frame_capture or
+                                                            settings.m_lighting_showcase_metrics or
+                                                            settings.m_lighting_showcase_lamp_check)) {
+            const auto error = config::make_error_code(config::EConfigErrc::cross_field_invalid);
+            diagnostics.add(
+                "invocation", "game.lighting_showcase_door_check",
+                "--lighting-showcase-door-check requires --lighting-showcase and excludes lamp-check/one-shot capture/metrics",
+                error);
+            PPR_RETURN_UNEXPECTED_ON_FAIL(GameConfig, error);
+        }
+
+        if (settings.m_lighting_showcase_lamp_check and (not settings.m_lighting_showcase or
+                                                            settings.m_lighting_showcase_frame_capture or
+                                                            settings.m_lighting_showcase_door_check or
+                                                            settings.m_lighting_showcase_metrics)) {
+            const auto error = config::make_error_code(config::EConfigErrc::cross_field_invalid);
+            diagnostics.add(
+                "invocation", "game.lighting_showcase_lamp_check",
+                "--lighting-showcase-lamp-check requires --lighting-showcase and excludes door-check/one-shot capture/metrics",
+                error);
+            PPR_RETURN_UNEXPECTED_ON_FAIL(GameConfig, error);
+        }
+
+        if (settings.m_lighting_showcase_frame_capture and not settings.m_lighting_showcase) {
+            const auto error = config::make_error_code(config::EConfigErrc::cross_field_invalid);
+            diagnostics.add(
+                "invocation", "game.lighting_showcase_frame_capture",
+                "--lighting-showcase-frame-capture requires --lighting-showcase", error);
+            PPR_RETURN_UNEXPECTED_ON_FAIL(GameConfig, error);
+        }
+
+        if ((cliHas(cli, "game.lighting_showcase_metrics") and not settings.m_lighting_showcase) or
+            (settings.m_lighting_showcase_metrics and settings.m_lighting_showcase_frame_capture)) {
+            const auto error = config::make_error_code(config::EConfigErrc::cross_field_invalid);
+            diagnostics.add(
+                "invocation", "game.lighting_showcase_metrics",
+                "--lighting-showcase-metrics requires --lighting-showcase and cannot be combined with --lighting-showcase-frame-capture",
                 error);
             PPR_RETURN_UNEXPECTED_ON_FAIL(GameConfig, error);
         }

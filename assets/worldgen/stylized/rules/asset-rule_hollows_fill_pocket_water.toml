@@ -1,0 +1,15 @@
+schema_version = 1
+
+[definition]
+order = 10
+
+[definition.payload]
+tag = "matter_fill"
+
+[definition.payload.matter_fill]
+marker = "anchor"
+material = "water"
+temperature_k = 293.0
+bulk_density_kg_m3 = 1000.0
+fill_height_m = 4.333333333333333
+placement = "cisterns"

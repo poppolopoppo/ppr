@@ -61,7 +61,7 @@ namespace pP::game::ui {
         return false;
     }
 
-    EWorldAction drawWorldProgress(const WorldProgressView &view) {
+    WorldProgressDraw drawWorldProgress(const WorldProgressView &view) {
         if (not view.m_open) {
             pP::ui::WindowTitleFont title_font{};
             const bool visible = ImGui::BeginPopupModal("Generating terrain", nullptr, ImGuiWindowFlags_NoResize);
@@ -71,7 +71,7 @@ namespace pP::game::ui {
                 ImGui::EndPopup();
             }
 
-            return EWorldAction::none;
+            return {.m_popup_began = visible};
         }
 
         ImGui::OpenPopup("Generating terrain");
@@ -81,7 +81,7 @@ namespace pP::game::ui {
         const bool visible = ImGui::BeginPopupModal("Generating terrain", nullptr, ImGuiWindowFlags_NoResize);
         title_font.close();
         if (not visible) {
-            return EWorldAction::none;
+            return {};
         }
 
         const char *label = "Queued";
@@ -169,7 +169,7 @@ namespace pP::game::ui {
         }
 
         ImGui::EndPopup();
-        return action;
+        return {.m_action = action, .m_popup_began = true};
     }
 
     // ------------------------------------------------------------------

@@ -1,0 +1,21 @@
+schema_version = 1
+
+[definition]
+order = 70
+
+[definition.payload]
+tag = "feature"
+
+[definition.payload.feature]
+feature = "hearth_promenade"
+biome = "hearth"
+spacing_m = 45.0
+min_count = 1
+max_count = 5
+attempts = 4096
+priority = 50
+reflect = true
+
+[definition.payload.feature.depth]
+min = 0.0
+max = 1.0

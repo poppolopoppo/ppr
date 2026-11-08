@@ -242,6 +242,149 @@ namespace pP::tests::detail {
         // tests
         // ------------------------------------------------------------------
 
+        PPR_UNIT_TEST (resident_material_visit_preserves_values_and_lifetime) {
+            const auto rhi = SharedGpu::rhiService();
+            PPR_TEST_ASSERT(rhi.isValid());
+            const auto shader = SharedGpu::shaderService();
+            PPR_TEST_ASSERT(shader.isValid());
+
+            TrianglePass pass{};
+            u32 visits = 0u;
+            const auto count = [&](const GpuMaterial &) -> std::error_code {
+                ++visits;
+                return {};
+            };
+            const BindlessMaterialCache &cache = pass.materialCache();
+            PPR_TEST_ASSERT(cache.visitMaterials(count) == std::make_error_code(std::errc::not_connected));
+            PPR_TEST_ASSERT(visits == 0u);
+
+            PPR_TEST_ASSERT(not pass.initialize(*rhi, *shader, std::filesystem::current_path()));
+            PPR_DEFER {
+                PPR_TEST_ASSERT(not pass.shutdown());
+            };
+            PPR_TEST_ASSERT(not cache.visitMaterials(count));
+            PPR_TEST_ASSERT(visits == 0u);
+
+            const Expected<MaterialHandle> released = drawsColorMaterial_(pass, float4{1.0f, 0.0f, 0.0f, 1.0f});
+            PPR_TEST_ASSERT(released.has_value());
+            const Expected<MaterialHandle> live = drawsColorMaterial_(pass, float4{0.0f, 1.0f, 0.0f, 1.0f});
+            PPR_TEST_ASSERT(live.has_value());
+            PPR_TEST_ASSERT(not pass.materialCache().release(*released));
+            PPR_TEST_ASSERT(cache.materialUsed() == 2u);
+            PPR_TEST_ASSERT(cache.entryCount() == 1u);
+
+            const auto inspect = [&](const GpuMaterial &material) -> std::error_code {
+                ++visits;
+                PPR_TEST_ASSERT(material.m_base_color[0] == 0.0f);
+                PPR_TEST_ASSERT(material.m_base_color[1] == 1.0f);
+                return {};
+            };
+            PPR_TEST_ASSERT(not cache.visitMaterials(inspect));
+            PPR_TEST_ASSERT(visits == 1u);
+            PPR_TEST_ASSERT(cache.material(*live).has_value());
+
+            const std::error_code callback_error = std::make_error_code(std::errc::operation_canceled);
+            const auto reject = [&](const GpuMaterial &) -> std::error_code {
+                ++visits;
+                return callback_error;
+            };
+            PPR_TEST_ASSERT(cache.visitMaterials(reject) == callback_error);
+            PPR_TEST_ASSERT(visits == 2u);
+            PPR_TEST_ASSERT(not cache.visitMaterials(inspect));
+            PPR_TEST_ASSERT(visits == 3u);
+
+            PPR_TEST_ASSERT(not pass.notifyDeviceLost());
+            PPR_TEST_ASSERT(cache.visitMaterials(count) == std::make_error_code(std::errc::no_such_device));
+            PPR_TEST_ASSERT(visits == 3u);
+            PPR_TEST_ASSERT(not pass.shutdown());
+            PPR_TEST_ASSERT(cache.visitMaterials(count) == std::make_error_code(std::errc::not_connected));
+            PPR_TEST_ASSERT(visits == 3u);
+        };
+
+        PPR_UNIT_TEST (prepare_admitted_materials_without_instances_preserves_rendering) {
+            const auto rhi = SharedGpu::rhiService();
+            PPR_TEST_ASSERT(rhi.isValid());
+            const auto shader = SharedGpu::shaderService();
+            PPR_TEST_ASSERT(shader.isValid());
+            rhi::IDevice &device = rhi->getDevice();
+            RenderPipelineSignature signature{};
+            signature.m_color_formats[0] = rhi::Format::RGBA8Unorm;
+            signature.m_color_format_count = 1u;
+
+            TrianglePass pass{};
+            PPR_TEST_ASSERT(pass.prepare(device, signature) == std::make_error_code(std::errc::not_connected));
+            PPR_TEST_ASSERT(not pass.initialize(*rhi, *shader, std::filesystem::current_path()));
+            PPR_DEFER {
+                PPR_TEST_ASSERT(not pass.shutdown());
+            };
+            const auto slot_values = pass.slotCompletionValues();
+            const u64 growth_waits = pass.growthWaitCount();
+            PPR_TEST_ASSERT(not pass.prepare(device, signature));
+
+            RenderPipelineSignature unsupported = signature;
+            unsupported.m_color_format_count = 0u;
+            {
+                LogRedirect::CaptureGuard capture{};
+                PPR_TEST_ASSERT(pass.prepare(device, unsupported) == std::make_error_code(std::errc::invalid_argument));
+            }
+
+            const Expected<MaterialHandle> material = drawsColorMaterial_(pass, float4{0.0f, 1.0f, 0.0f, 1.0f});
+            PPR_TEST_ASSERT(material.has_value());
+            mesh::MaterialAsset masked{};
+            masked.m_alpha_mode = mesh::EAlphaMode::mask;
+            masked.m_is_two_sided = true;
+            const TextureHandle none[4]{};
+            const Expected<MaterialHandle> second_variant = pass.packMaterial(masked, none);
+            PPR_TEST_ASSERT(second_variant.has_value());
+            const Expected<MaterialHandle> duplicate = drawsColorMaterial_(pass, float4{1.0f, 0.0f, 0.0f, 1.0f});
+            PPR_TEST_ASSERT(duplicate.has_value());
+
+            PPR_TEST_ASSERT(not pass.prepare(device, signature));
+            PPR_TEST_ASSERT(not pass.prepare(device, signature));
+            PPR_TEST_ASSERT(pass.slotCompletionValues() == slot_values);
+            PPR_TEST_ASSERT(pass.growthWaitCount() == growth_waits);
+            PPR_TEST_ASSERT(pass.materialCache().entryCount() == 3u);
+            {
+                LogRedirect::CaptureGuard capture{};
+                PPR_TEST_ASSERT(pass.prepare(device, unsupported) == std::make_error_code(std::errc::invalid_argument));
+            }
+
+            const Array<mesh::StaticMeshVertex> quad = drawsQuad_(0.4f);
+            const Array<u32> indices = drawsQuadIndices_();
+            const Expected<TriangleBagHandle> bag = pass.uploadMesh(quad, indices);
+            PPR_TEST_ASSERT(bag.has_value());
+            PPR_TEST_ASSERT(not pass.submitInstance(*bag, *material, float4x4::identity()));
+            PPR_TEST_ASSERT(not pass.update(
+                TimeSpan{}, drawsCamera_(float3{0.0f, 0.0f, 3.0f}, float3{0.0f, 0.0f, 0.0f}, float2{256.0f, 256.0f})));
+
+            Renderer *const renderer = SharedGpu::renderer();
+            PPR_TEST_ASSERT(renderer != nullptr);
+            rhi::ComPtr<rhi::ITexture> target{};
+            PPR_TEST_ASSERT(not drawsTarget_(device, "prepared triangle", target));
+            PPR_TEST_ASSERT(not renderer->renderToTexture(*target, {DrawSubmission{pass}}, ColorAttachmentOps{}));
+            PPR_TEST_ASSERT(not renderer->waitOnHost());
+            const Expected<DrawsPixels> before = drawsReadback_(device, *target);
+            PPR_TEST_ASSERT(before.has_value());
+            const auto centre = drawsWindow_(*before, 128u, 128u, 4u);
+            PPR_TEST_ASSERT(centre[1] > centre[0] + 20u);
+            PPR_TEST_ASSERT(centre[1] > centre[2] + 20u);
+
+            const auto submitted_slots = pass.slotCompletionValues();
+            PPR_TEST_ASSERT(not pass.prepare(device, signature));
+            PPR_TEST_ASSERT(pass.slotCompletionValues() == submitted_slots);
+            PPR_TEST_ASSERT(not renderer->renderToTexture(*target, {DrawSubmission{pass}}, ColorAttachmentOps{}));
+            PPR_TEST_ASSERT(not renderer->waitOnHost());
+            const Expected<DrawsPixels> after = drawsReadback_(device, *target);
+            PPR_TEST_ASSERT(after.has_value());
+            PPR_TEST_ASSERT(after->m_bytes.size() == before->m_bytes.size());
+            PPR_TEST_ASSERT(std::ranges::equal(after->m_bytes, before->m_bytes));
+
+            PPR_TEST_ASSERT(not pass.notifyDeviceLost());
+            PPR_TEST_ASSERT(pass.prepare(device, signature) == std::make_error_code(std::errc::not_connected));
+            PPR_TEST_ASSERT(not pass.shutdown());
+            PPR_TEST_ASSERT(pass.prepare(device, signature) == std::make_error_code(std::errc::not_connected));
+        };
+
         // The g_payload_base regression. Three instances are submitted in the
         // order red, green, red, which plans as two groups: group 0 (red quad)
         // owns payloads 0-1 and group 1 (green quad) owns payload 2. Group 1
@@ -790,6 +933,8 @@ namespace pP::tests {
 
     const UnitTest draws = UnitTest::Named("draws") / [](UnitTest::IRun &_) -> void {
         _.recurse({
+            detail::Draws::resident_material_visit_preserves_values_and_lifetime,
+            detail::Draws::prepare_admitted_materials_without_instances_preserves_rendering,
             detail::Draws::group_binds_its_own_payload_base,
             detail::Draws::instanced_draw_differentiates_instances,
             detail::Draws::empty_scene_draws_and_shutdown_is_idempotent,

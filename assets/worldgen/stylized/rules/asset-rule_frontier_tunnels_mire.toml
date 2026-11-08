@@ -1,0 +1,26 @@
+schema_version = 1
+
+[definition]
+order = 32
+
+[definition.payload]
+tag = "carve_worm"
+
+[definition.payload.carve_worm]
+
+[definition.payload.carve_worm.geometry]
+biome = "mire"
+count = 14
+length_min_m = 12.0
+length_max_m = 55.0
+radius_min_m = 1.6
+radius_max_m = 3.8
+turn_probability = 0.26
+turn_smoothing = 0.65
+radius_variation = 0.5
+chamber_probability = 0.055
+chamber_scale = 2.4
+
+[definition.payload.carve_worm.geometry.depth]
+min = 0.0
+max = 1.0

@@ -74,6 +74,179 @@ namespace pP::game::tests::detail::compat {
         PPR_TEST_ASSERT(workshop->m_game.m_value.m_worldgen_seed == (std::numeric_limits<u64>::max)());
     };
 
+    PPR_UNIT_TEST (lighting_showcase_is_explicit_interactive_and_never_auto_qualified) {
+        Diagnostics ordinary_diagnostics;
+        const auto ordinary = resolveCli({}, ordinary_diagnostics);
+        PPR_TEST_ASSERT(
+            ordinary and
+            not ordinary->m_game.m_value.m_lighting_showcase and
+            not ordinary->m_game.m_value.m_lighting_showcase_qualified_fp64 and
+            not ordinary->m_game.m_value.m_lighting_showcase_metrics);
+
+        PPR_TEST_ASSERT(ordinary->m_game.m_value.m_world_lighting == EWorldLighting::legacy);
+        PPR_TEST_ASSERT(not ordinary->m_game.m_value.m_direct_window_frame_capture);
+
+        Diagnostics direct_diagnostics;
+        const auto direct = resolveCli(
+            {"--world-lighting=direct-window", "--worldgen-profile=hollows", "--map-size=4096",
+                "--direct-window-frame-capture=world.ppm"},
+            direct_diagnostics);
+        PPR_TEST_ASSERT(direct.has_value());
+        PPR_TEST_ASSERT(direct->m_game.m_value.m_world_lighting == EWorldLighting::direct_window);
+        PPR_TEST_ASSERT(direct->m_game.m_value.m_worldgen_profile == "hollows");
+        PPR_TEST_ASSERT(direct->m_game.m_value.m_map_size == 4096u);
+        PPR_TEST_ASSERT(direct->m_game.m_value.m_direct_window_frame_capture == "world.ppm");
+        PPR_TEST_ASSERT(not direct->m_game.m_value.m_lighting_showcase);
+        PPR_TEST_ASSERT(gameHelpText().find("BLACK") != std::string::npos);
+        PPR_TEST_ASSERT(gameHelpText().find("direct-window-frame-capture") != std::string::npos);
+
+        Diagnostics bounce_diagnostics;
+        const auto bounce = resolveCli(
+            {"--world-lighting=single-bounce-window", "--worldgen-profile=frontier", "--map-size=4096",
+                "--direct-window-frame-capture=bounce.ppm"},
+            bounce_diagnostics);
+        PPR_TEST_ASSERT(bounce.has_value());
+        PPR_TEST_ASSERT(bounce->m_game.m_value.m_world_lighting == EWorldLighting::single_bounce_window);
+        PPR_TEST_ASSERT(bounce->m_game.m_value.m_direct_window_frame_capture == "bounce.ppm");
+
+        Diagnostics temporal_diagnostics;
+        const auto editable = resolveCli(
+            {"--world-lighting=temporal-cascades", "--lighting-showcase", "--lighting-showcase-lamp-check=lamp"},
+            temporal_diagnostics);
+        PPR_TEST_ASSERT(editable and editable->m_game.m_value.m_lighting_showcase);
+        PPR_TEST_ASSERT(editable->m_game.m_value.m_world_lighting == EWorldLighting::temporal_cascades);
+        PPR_TEST_ASSERT(editable->m_game.m_value.m_rc_skip_table);
+
+        Diagnostics hierarchy_diagnostics;
+        const auto hierarchy = resolveCli(
+            {"--world-lighting=temporal-cascades", "--world-rc-skip-table=false"}, hierarchy_diagnostics);
+        PPR_TEST_ASSERT(hierarchy and not hierarchy->m_game.m_value.m_rc_skip_table);
+
+
+        Diagnostics file_diagnostics;
+        const auto document = decode("[game]\nworld_lighting='direct-window'\n", "lighting.toml", file_diagnostics);
+        PPR_TEST_ASSERT(document.has_value());
+        const auto layer = toLayer(*document, "lighting.toml");
+        const auto from_file = resolveGameCli(CliResult{}, std::span<const Layer>{&layer, 1u}, file_diagnostics);
+        PPR_TEST_ASSERT(from_file.has_value());
+        PPR_TEST_ASSERT(from_file->m_game.m_value.m_world_lighting == EWorldLighting::direct_window);
+        const auto *const origin = from_file->m_game.find("game.world_lighting");
+        PPR_TEST_ASSERT(origin != nullptr and origin->m_location == "lighting.toml:2");
+
+        for (const auto invalid:
+            {std::initializer_list<const char *>{"--world-lighting=automatic"},
+                {"--direct-window-frame-capture=world.ppm"},
+                {"--world-lighting=direct-window", "--direct-window-frame-capture="},
+                {"--world-lighting=direct-window", "--lighting-showcase"},
+                {"--world-lighting=direct-window", "--worldgen-acceptance"},
+                {"--world-lighting=direct-window", "--smoke"},
+                {"--world-lighting=direct-window", "--worldgen-workshop"},
+                {"--world-lighting=direct-window", "--lighting-showcase-door-check=door"},
+                {"--world-lighting=direct-window", "--lighting-showcase-lamp-check=lamp"},
+                {"--world-lighting=direct-window", "--lighting-showcase-frame-capture=old.ppm"},
+                {"--world-lighting=direct-window", "--lighting-showcase-metrics"},
+                {"--world-lighting=single-bounce-window", "--lighting-showcase"},
+                {"--world-lighting=single-bounce-window", "--worldgen-acceptance"},
+                {"--world-lighting=single-bounce-window", "--smoke"},
+                {"--world-lighting=single-bounce-window", "--worldgen-workshop"},
+                {"--world-lighting=single-bounce-window", "--lighting-showcase-door-check=door"},
+                {"--world-lighting=single-bounce-window", "--lighting-showcase-lamp-check=lamp"},
+                {"--world-lighting=single-bounce-window", "--direct-window-frame-capture="}}) {
+            Diagnostics invalid_diagnostics;
+            PPR_TEST_ASSERT(not resolveCli(invalid, invalid_diagnostics));
+            PPR_TEST_ASSERT(invalid_diagnostics.hasErrors());
+        }
+
+        Diagnostics strict_diagnostics;
+        const auto strict = resolveCli({"--lighting-showcase"}, strict_diagnostics);
+        PPR_TEST_ASSERT(
+            strict and
+            strict->m_game.m_value.m_command == EGameCommand::interactive and
+            strict->m_game.m_value.m_lighting_showcase and
+            not strict->m_game.m_value.m_lighting_showcase_qualified_fp64);
+
+        Diagnostics capture_diagnostics;
+        const auto capture = resolveCli(
+            {"--lighting-showcase", "--lighting-showcase-frame-capture=frame.ppm"}, capture_diagnostics);
+        PPR_TEST_ASSERT(capture and capture->m_game.m_value.m_lighting_showcase_frame_capture == "frame.ppm");
+        PPR_TEST_ASSERT(gameHelpText().find("lighting-showcase-frame-capture") != std::string::npos);
+
+        Diagnostics door_diagnostics;
+        const auto door = resolveCli(
+            {"--lighting-showcase", "--lighting-showcase-door-check=door-output"}, door_diagnostics);
+        PPR_TEST_ASSERT(door and door->m_game.m_value.m_lighting_showcase_door_check == "door-output");
+        PPR_TEST_ASSERT(gameHelpText().find("lighting-showcase-door-check") != std::string::npos);
+
+        Diagnostics lamp_diagnostics;
+        const auto lamp = resolveCli(
+            {"--lighting-showcase", "--lighting-showcase-lamp-check=lamp-output"}, lamp_diagnostics);
+        PPR_TEST_ASSERT(lamp and lamp->m_game.m_value.m_lighting_showcase_lamp_check == "lamp-output");
+        PPR_TEST_ASSERT(gameHelpText().find("lighting-showcase-lamp-check") != std::string::npos);
+
+        Diagnostics empty_lamp_diagnostics;
+        const auto empty_lamp = resolveCli(
+            {"--lighting-showcase", "--lighting-showcase-lamp-check="}, empty_lamp_diagnostics);
+        PPR_TEST_ASSERT(not empty_lamp and empty_lamp.error() == make_error_code(EConfigErrc::out_of_range));
+
+        Diagnostics empty_door_diagnostics;
+        const auto empty_door = resolveCli(
+            {"--lighting-showcase", "--lighting-showcase-door-check="}, empty_door_diagnostics);
+        PPR_TEST_ASSERT(not empty_door and empty_door.error() == make_error_code(EConfigErrc::out_of_range));
+
+        Diagnostics empty_capture_diagnostics;
+        const auto empty_capture = resolveCli(
+            {"--lighting-showcase", "--lighting-showcase-frame-capture="}, empty_capture_diagnostics);
+        PPR_TEST_ASSERT(not empty_capture and empty_capture.error() == make_error_code(EConfigErrc::out_of_range));
+
+        Diagnostics qualified_diagnostics;
+        const auto qualified = resolveCli(
+            {"--lighting-showcase", "--lighting-showcase-qualified-fp64"}, qualified_diagnostics);
+        PPR_TEST_ASSERT(qualified and qualified->m_game.m_value.m_lighting_showcase_qualified_fp64);
+
+        Diagnostics screen_diagnostics;
+        const auto screen = resolveCli(
+            {"--lighting-showcase", "--lighting-showcase-screen-contact"}, screen_diagnostics);
+        PPR_TEST_ASSERT(screen and screen->m_game.m_value.m_lighting_showcase_screen_contact);
+        PPR_TEST_ASSERT(not strict->m_game.m_value.m_lighting_showcase_screen_contact);
+        PPR_TEST_ASSERT(gameHelpText().find("lighting-showcase-screen-contact") != std::string::npos);
+
+        Diagnostics metrics_diagnostics;
+        const auto metrics = resolveCli({"--lighting-showcase", "--lighting-showcase-metrics"}, metrics_diagnostics);
+        PPR_TEST_ASSERT(metrics and metrics->m_game.m_value.m_lighting_showcase_metrics);
+        PPR_TEST_ASSERT(not metrics->m_game.m_value.m_worldgen_report);
+        PPR_TEST_ASSERT(not metrics->m_game.m_value.m_lighting_showcase_frame_capture);
+        PPR_TEST_ASSERT(gameHelpText().find("lighting-showcase-metrics") != std::string::npos);
+
+        Diagnostics disabled_metrics_diagnostics;
+        const auto disabled_metrics = resolveCli(
+            {"--lighting-showcase", "--lighting-showcase-metrics=false", "--lighting-showcase-frame-capture=frame.ppm"},
+            disabled_metrics_diagnostics);
+        PPR_TEST_ASSERT(disabled_metrics and not disabled_metrics->m_game.m_value.m_lighting_showcase_metrics);
+
+        for (const auto &invalid:
+            {std::initializer_list<const char *>{"--lighting-showcase-screen-contact"},
+                {"--lighting-showcase-screen-contact=false"}, {"--lighting-showcase-qualified-fp64"},
+                {"--lighting-showcase-frame-capture=frame.ppm"}, {"--lighting-showcase-door-check=door-output"},
+                {"--lighting-showcase-lamp-check=lamp-output"},
+                {"--lighting-showcase", "--lighting-showcase-lamp-check=lamp-output", "--lighting-showcase-metrics"},
+                {"--lighting-showcase", "--lighting-showcase-lamp-check=lamp-output",
+                    "--lighting-showcase-door-check=door-output"},
+                {"--lighting-showcase", "--lighting-showcase-lamp-check=lamp-output",
+                    "--lighting-showcase-frame-capture=frame.ppm"},
+                {"--lighting-showcase", "--lighting-showcase-door-check=door-output", "--lighting-showcase-metrics"},
+                {"--lighting-showcase", "--lighting-showcase-door-check=door-output",
+                    "--lighting-showcase-frame-capture=frame.ppm"},
+                {"--lighting-showcase-qualified-fp64=false"}, {"--lighting-showcase", "--smoke"},
+                {"--lighting-showcase", "--worldgen-workshop"}, {"--lighting-showcase", "--worldgen-acceptance"},
+                {"--lighting-showcase-metrics"}, {"--lighting-showcase-metrics=false"},
+                {"--lighting-showcase", "--lighting-showcase-metrics",
+                    "--lighting-showcase-frame-capture=frame.ppm"}}) {
+            Diagnostics diagnostics;
+            const auto rejected = resolveCli(invalid, diagnostics);
+            PPR_TEST_ASSERT(not rejected and rejected.error() == make_error_code(EConfigErrc::cross_field_invalid));
+        }
+    };
+
     PPR_UNIT_TEST (map_size_uses_one_numeric_domain_for_cli_and_toml) {
         Diagnostics defaults;
         const auto normal = resolveCli({}, defaults);
@@ -263,6 +436,62 @@ namespace pP::game::tests::detail::compat {
         Diagnostics explicit_value{};
         PPR_TEST_ASSERT(not resolveCli({"--worldgen-preview=smoke"}, explicit_value));
         PPR_TEST_ASSERT(gameHelpText().find("worldgen-preview") != std::string::npos);
+    };
+
+    PPR_UNIT_TEST (lighting_scene_is_explicit_bounded_gpu_capture) {
+        Diagnostics diagnostics{};
+        const auto capture = resolveCli(
+            {"--lighting-scene", "--worldgen-gpu-output=lighting", "--worldgen-profile=hollows"}, diagnostics);
+        PPR_TEST_ASSERT(capture and capture->m_game.m_value.m_command == EGameCommand::lighting_scene);
+        PPR_TEST_ASSERT(capture->m_game.m_value.m_worldgen_gpu_output == "lighting");
+        PPR_TEST_ASSERT(capture->m_game.m_value.m_worldgen_profile == "hollows");
+        PPR_TEST_ASSERT(not capture->m_game.m_value.m_lighting_scene_qualified_fp64);
+
+        Diagnostics ordinary_diagnostics{};
+        const auto ordinary = resolveCli({"--smoke"}, ordinary_diagnostics);
+        PPR_TEST_ASSERT(ordinary and not ordinary->m_game.m_value.m_lighting_scene_qualified_fp64);
+
+        Diagnostics qualified_diagnostics{};
+        const auto qualified = resolveCli(
+            {"--lighting-scene", "--worldgen-gpu-output=lighting", "--lighting-scene-qualified-fp64=true"},
+            qualified_diagnostics);
+        PPR_TEST_ASSERT(qualified and qualified->m_game.m_value.m_lighting_scene_qualified_fp64);
+
+        Diagnostics strict_diagnostics{};
+        const auto strict = resolveCli(
+            {"--lighting-scene", "--worldgen-gpu-output=lighting", "--lighting-scene-qualified-fp64=false"},
+            strict_diagnostics);
+        PPR_TEST_ASSERT(strict and not strict->m_game.m_value.m_lighting_scene_qualified_fp64);
+
+        for (const auto options:
+            {std::initializer_list<const char *>{"--lighting-scene"}, {"--lighting-scene", "--worldgen-output=flat"},
+                {"--lighting-scene", "--worldgen-gpu-output=lighting", "--worldgen-output=flat"}}) {
+            Diagnostics invalid{};
+            const auto rejected = resolveCli(options, invalid);
+            PPR_TEST_ASSERT(not rejected and rejected.error() == make_error_code(EConfigErrc::cross_field_invalid));
+        }
+
+        for (const auto options:
+            {std::initializer_list<const char *>{"--lighting-scene-qualified-fp64"},
+                {"--lighting-scene-qualified-fp64=false"}, {"--smoke", "--lighting-scene-qualified-fp64"},
+                {"--smoke", "--lighting-scene-qualified-fp64=false"},
+                {"--validate-worldgen", "--lighting-scene-qualified-fp64"},
+                {"--worldgen-preview", "--worldgen-gpu-output=lighting", "--lighting-scene-qualified-fp64"}}) {
+            Diagnostics invalid{};
+            const auto rejected = resolveCli(options, invalid);
+            PPR_TEST_ASSERT(not rejected and rejected.error() == make_error_code(EConfigErrc::cross_field_invalid));
+        }
+
+        Diagnostics conflict{};
+        const auto conflicting = resolveCli(
+            {"--lighting-scene", "--worldgen-preview", "--worldgen-gpu-output=lighting"}, conflict);
+        PPR_TEST_ASSERT(not conflicting and conflicting.error() == make_error_code(EConfigErrc::conflicting_command));
+
+        Diagnostics explicit_value{};
+        PPR_TEST_ASSERT(not resolveCli({"--lighting-scene=smoke"}, explicit_value));
+
+        PPR_TEST_ASSERT(gameHelpText().find("handcrafted bounded lighting/reference scene") != std::string::npos);
+        PPR_TEST_ASSERT(gameHelpText().find("lighting-scene-qualified-fp64") != std::string::npos);
     };
 
     PPR_UNIT_TEST (retired_workload_commands_rejected) {
@@ -709,12 +938,14 @@ namespace pP::game::tests {
     const UnitTest game_config = UnitTest::Named("game_config") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::compat::selectors_pick_commands,
+            detail::compat::lighting_showcase_is_explicit_interactive_and_never_auto_qualified,
             detail::compat::simulation_tools_resolve_bounded_physical_settings,
             detail::compat::worldgen_validation_invocation,
             detail::compat::map_size_uses_one_numeric_domain_for_cli_and_toml,
             detail::compat::worldgen_pack_set_and_qualified_world_are_explicit_inputs,
             detail::compat::pack_set_roots_are_relative_owned_and_never_discovered,
             detail::compat::worldgen_preview_is_distinct_and_requires_explicit_output,
+            detail::compat::lighting_scene_is_explicit_bounded_gpu_capture,
             detail::compat::worldgen_acceptance_is_explicit_and_interactive_only,
             detail::compat::retired_workload_commands_rejected,
             detail::compat::repeated_same_selector_is_idempotent,

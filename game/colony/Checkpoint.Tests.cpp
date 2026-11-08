@@ -38,6 +38,85 @@ namespace pP::game::tests::detail::checkpoint {
     // checkpoint restore, frozen capture and edit publication
     // ------------------------------------------------------------------
 
+    PPR_UNIT_TEST (terrain_masks_match_independent_scatter_for_residency_materials_seams_and_borders) {
+        constexpr u32 edge = 1024u;
+        constexpr u32 terrain_edge = edge + 1u;
+        constexpr u32 absent = 65536u;
+        constexpr std::array<u16, 4u> palette{0u, 1u, 32768u, 65535u};
+        sim::ChunkGrid grid{edge};
+        Array<u32> labels(static_cast<std::size_t>(edge) * edge, absent);
+
+        const auto put = [&](const u32 x, const u32 y, const u16 material) {
+            const sim::ChunkPos chunk = sim::chunkOf({x, y});
+            if (not grid.isResident(chunk)) {
+                for (u32 row = chunk.m_y * sim::kChunkEdge; row < (chunk.m_y + 1u) * sim::kChunkEdge; ++row) {
+                    for (u32 column = chunk.m_x * sim::kChunkEdge; column < (chunk.m_x + 1u) * sim::kChunkEdge;
+                        ++column) {
+                        labels[static_cast<std::size_t>(row) * edge + column] = 0u;
+                    }
+                }
+            }
+
+            PPR_TEST_ASSERT(not grid.setCell({x, y}, {material, 300.0f}));
+            labels[static_cast<std::size_t>(y) * edge + x] = material;
+        };
+
+        // Four distinct IDs occupy each contour corner, including a four-chunk
+        // intersection. The distant row distinguishes compact and maximum stride.
+        for (const auto [x, y]: std::array<std::pair<u32, u32>, 3u>{{{20u, 20u}, {127u, 127u}, {383u, 639u}}}) {
+            put(x, y, palette[0u]);
+            put(x + 1u, y, palette[1u]);
+            put(x + 1u, y + 1u, palette[2u]);
+            put(x, y + 1u, palette[3u]);
+        }
+
+        put(0u, 0u, palette[1u]);
+        put(edge - 1u, 0u, palette[2u]);
+        put(0u, edge - 1u, palette[3u]);
+        put(edge - 1u, edge - 1u, palette[0u]);
+        const u32 resident_count = grid.residentChunkCount();
+
+        for (u32 membership = 0u; membership < 16u; ++membership) {
+            Array<u16> materials;
+            for (u32 index = 0u; index < palette.size(); ++index) {
+                if ((membership & (1u << index)) != 0u) {
+                    materials.push_back(palette[index]);
+                }
+            }
+
+            Array<u32> expected(static_cast<std::size_t>(terrain_edge) * terrain_edge, 0u);
+            for (u32 coordinate = 0u; coordinate < terrain_edge; ++coordinate) {
+                expected[coordinate] |= 3u;
+                expected[static_cast<std::size_t>(edge) * terrain_edge + coordinate] |= 12u;
+                expected[static_cast<std::size_t>(coordinate) * terrain_edge] |= 9u;
+                expected[static_cast<std::size_t>(coordinate) * terrain_edge + edge] |= 6u;
+            }
+
+            // Scatter each known occupied cell to its four neighboring vertices;
+            // absent chunks never become material zero through a default Cell.
+            for (u32 y = 0u; y < edge; ++y) {
+                for (u32 x = 0u; x < edge; ++x) {
+                    const u32 label = labels[static_cast<std::size_t>(y) * edge + x];
+                    if (label == absent or std::ranges::find(materials, label) == materials.end()) {
+                        continue;
+                    }
+
+                    const std::size_t vertex = static_cast<std::size_t>(y) * terrain_edge + x;
+                    expected[vertex] |= 4u;
+                    expected[vertex + 1u] |= 8u;
+                    expected[vertex + terrain_edge] |= 2u;
+                    expected[vertex + terrain_edge + 1u] |= 1u;
+                }
+            }
+
+            const auto actual = makeMatterTerrain(grid, materials);
+            PPR_TEST_ASSERT(actual.has_value());
+            PPR_TEST_ASSERT(actual->size() == expected.size());
+            PPR_TEST_ASSERT(std::ranges::equal(*actual, expected));
+            PPR_TEST_ASSERT(grid.residentChunkCount() == resident_count);
+        }
+    };
+
     PPR_UNIT_TEST (dig_candidate_preserves_carried_columns_and_emits_original_seam_inventory_once) {
         Fixture fixture;
         const auto *const oxygen = fixture.m_catalog->findMaterial("oxygen");
@@ -449,7 +528,10 @@ namespace pP::game::tests::detail::checkpoint {
             const u32 expected = (material.m_alpha_mode == EMaterialAlphaMode::blend ? kGridSurfaceOpticalBlend : 0u) |
                                  (material.m_texture_sampling == EMaterialTextureSampling::repeat
                                          ? kGridSurfaceTextureRepeat
-                                         : 0u);
+                                         : 0u) |
+                                 (material.m_phase == EMaterialPhase::solid       ? kGridSurfaceParticleSolid
+                                     : material.m_phase == EMaterialPhase::liquid ? kGridSurfaceParticleLiquid
+                                                                                  : 0u);
             PPR_TEST_ASSERT(found->m_surface_flags == expected);
         }
 
@@ -1110,7 +1192,8 @@ namespace pP::game::tests {
         using namespace detail::checkpoint;
 
         _.recurse(
-            {generator_seven_checkpoint_is_incompatible_before_material_id_restore,
+            {terrain_masks_match_independent_scatter_for_residency_materials_seams_and_borders,
+                generator_seven_checkpoint_is_incompatible_before_material_id_restore,
                 diagnostic_export_rejects_cancellation_and_unwritable_directory,
                 ui_model_preserves_authored_metadata_and_nearest_agent_for_unresident_cells,
                 round_trip_restores_edited_cells_actor_identity_and_frozen_full_capture,

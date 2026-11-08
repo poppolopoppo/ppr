@@ -210,8 +210,31 @@ namespace pP::matter {
     std::error_code SparseGridStorage::initialize(
         rhi::IDevice &device, IShaderService &shaders, const std::filesystem::path &root, const u32 admitted_rows,
         const u32 width, const u32 height) {
+        return initialize_(device, shaders, root, admitted_rows, width, height, nullptr);
+    }
+
+    std::error_code SparseGridStorage::initialize_(
+        rhi::IDevice &device, IShaderService &shaders, const std::filesystem::path &root, const u32 admitted_rows,
+        const u32 width, const u32 height, const SparseGridStorage *const donor) {
         PPR_RETURN_ERROR_ON_FAIL(
             MatterGpu, not m_state ? std::error_code{} : std::make_error_code(std::errc::already_connected));
+
+        if (donor) {
+            PPR_RETURN_ERROR_ON_FAIL(
+                MatterGpu, donor->m_state and donor->m_state->m_device == &device
+                               ? std::error_code{}
+                               : std::make_error_code(std::errc::invalid_argument));
+
+            PPR_RETURN_ERROR_ON_FAIL(
+                MatterGpu, std::ranges::all_of(
+                               donor->m_state->m_kernels,
+                               [](const SparseKernel &kernel) {
+                                   return kernel.m_program != nullptr and kernel.m_pipeline != nullptr;
+                               })
+                               ? std::error_code{}
+                               : std::make_error_code(std::errc::state_not_recoverable));
+        }
+
         const auto capacity = sparseCapacity(admitted_rows, width, height, device.getInfo().limits);
         PPR_RETURN_ERROR_ON_FAIL(MatterGpu, capacity);
 
@@ -221,6 +244,7 @@ namespace pP::matter {
         state->m_buckets = capacity->m_buckets;
         state->m_pages = capacity->m_pages;
         state->m_groups = capacity->m_groups;
+
         auto &buffers = state->m_buffers;
         PPR_RETURN_ERROR_ON_FAIL(
             MatterGpu, sparseBuffer(device, capacity->m_bucket_keys, 8u, "PBMPM bucket index", buffers.m_bucket_index));
@@ -241,6 +265,7 @@ namespace pP::matter {
         PPR_RETURN_ERROR_ON_FAIL(
             MatterGpu, sparseBuffer(device, 12u, 4u, "PBMPM sparse arguments", buffers.m_arguments, true));
         PPR_RETURN_ERROR_ON_FAIL(MatterGpu, sparseBuffer(device, 6u, 4u, "PBMPM sparse first error", buffers.m_errors));
+
         for (u32 index = 0u; index < 2u; ++index) {
             PPR_RETURN_ERROR_ON_FAIL(
                 MatterGpu,
@@ -251,26 +276,37 @@ namespace pP::matter {
                                buffers.m_payload[index]));
         }
 
-        shader::SharedModule module;
-        PPR_RETURN_ERROR_ON_FAIL(
-            MatterGpu, shaders.loadModuleFromFile(
-                           root / "shaders/pbmpm/sparse_grid.slang", "pbmpm_sparse_grid", module.writeRef()));
-        for (u32 index = 0u; index < kSparseEntries.size(); ++index) {
-            shader::ComPtr<slang::IEntryPoint> entry;
-            PPR_RETURN_ERROR_ON_FAIL(MatterGpu, module->findEntryPointByName(kSparseEntries[index], entry.writeRef()));
-            slang::IComponentType *entries[]{entry.get()};
-            rhi::ShaderProgramDesc desc{};
-            desc.linkingStyle = rhi::LinkingStyle::SingleProgram;
-            desc.slangGlobalScope = module.get();
-            desc.slangEntryPoints = entries;
-            desc.slangEntryPointCount = 1u;
-            shader::Diagnose diagnostics;
-            auto &kernel = state->m_kernels[index];
+        if (donor) {
+            // Strong pairs survive publication or cancellation of either generation.
+            // Roots, buffers, generations and encoding state are never copied.
+            state->m_kernels = donor->m_state->m_kernels;
+        } else {
+            shader::SharedModule module;
             PPR_RETURN_ERROR_ON_FAIL(
-                MatterGpu, device.createShaderProgram(desc, kernel.m_program.writeRef(), diagnostics.writeRef()));
-            rhi::ComputePipelineDesc pipeline{};
-            pipeline.program = kernel.m_program;
-            PPR_RETURN_ERROR_ON_FAIL(MatterGpu, device.createComputePipeline(pipeline, kernel.m_pipeline.writeRef()));
+                MatterGpu, shaders.loadModuleFromFile(
+                               root / "shaders/pbmpm/sparse_grid.slang", "pbmpm_sparse_grid", module.writeRef()));
+
+            for (u32 index = 0u; index < kSparseEntries.size(); ++index) {
+                shader::ComPtr<slang::IEntryPoint> entry;
+                PPR_RETURN_ERROR_ON_FAIL(
+                    MatterGpu, module->findEntryPointByName(kSparseEntries[index], entry.writeRef()));
+
+                slang::IComponentType *entries[]{entry.get()};
+                rhi::ShaderProgramDesc desc{};
+                desc.linkingStyle = rhi::LinkingStyle::SingleProgram;
+                desc.slangGlobalScope = module.get();
+                desc.slangEntryPoints = entries;
+                desc.slangEntryPointCount = 1u;
+                shader::Diagnose diagnostics;
+                auto &kernel = state->m_kernels[index];
+                PPR_RETURN_ERROR_ON_FAIL(
+                    MatterGpu, device.createShaderProgram(desc, kernel.m_program.writeRef(), diagnostics.writeRef()));
+
+                rhi::ComputePipelineDesc pipeline{};
+                pipeline.program = kernel.m_program;
+                PPR_RETURN_ERROR_ON_FAIL(
+                    MatterGpu, device.createComputePipeline(pipeline, kernel.m_pipeline.writeRef()));
+            }
         }
 
         m_state = std::move(state);

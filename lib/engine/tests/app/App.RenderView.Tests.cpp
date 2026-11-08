@@ -180,6 +180,11 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(sizeof(TrianglePass::FrameConstants) == 288u);
             PPR_TEST_ASSERT(PPR_OFFSETOF(TrianglePass::FrameConstants, m_view_projection) == 128u);
             PPR_TEST_ASSERT(PPR_OFFSETOF(TrianglePass::FrameConstants, m_camera_position) == 256u);
+
+            PPR_TEST_ASSERT(sizeof(TrianglePass::DrawConstants) == 16u);
+            PPR_TEST_ASSERT(alignof(TrianglePass::DrawConstants) == alignof(u32));
+            PPR_TEST_ASSERT(PPR_OFFSETOF(TrianglePass::DrawConstants, m_payload_base) == 0u);
+            PPR_TEST_ASSERT(PPR_OFFSETOF(TrianglePass::DrawConstants, m_reserved2) == 12u);
         };
 
         PPR_UNIT_TEST (draw_plan_contract) {

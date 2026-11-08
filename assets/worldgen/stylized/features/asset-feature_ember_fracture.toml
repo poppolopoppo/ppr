@@ -1,0 +1,109 @@
+schema_version = 1
+
+[definition]
+allow_horizontal_reflection = true
+
+[definition.operations]
+
+[definition.operations.op_00]
+order = 10
+x_fine = 1
+y_fine = 1
+
+[definition.operations.op_00.action]
+tag = "paint"
+
+[definition.operations.op_00.action.paint]
+material = "basalt"
+
+[definition.operations.op_00.action.paint.shape]
+tag = "ellipse"
+
+[definition.operations.op_00.action.paint.shape.ellipse]
+width_fine = 58
+height_fine = 88
+
+[definition.operations.op_01]
+order = 20
+x_fine = 12
+y_fine = 8
+
+[definition.operations.op_01.action]
+tag = "carve"
+
+[definition.operations.op_01.action.carve]
+
+[definition.operations.op_01.action.carve.shape]
+tag = "ellipse"
+
+[definition.operations.op_01.action.carve.shape.ellipse]
+width_fine = 31
+height_fine = 62
+
+[definition.operations.op_02]
+order = 30
+x_fine = 25
+y_fine = 31
+
+[definition.operations.op_02.action]
+tag = "carve"
+
+[definition.operations.op_02.action.carve]
+
+[definition.operations.op_02.action.carve.shape]
+tag = "ellipse"
+
+[definition.operations.op_02.action.carve.shape.ellipse]
+width_fine = 26
+height_fine = 48
+
+[definition.operations.op_03]
+order = 40
+x_fine = 7
+y_fine = 48
+
+[definition.operations.op_03.action]
+tag = "carve"
+
+[definition.operations.op_03.action.carve]
+
+[definition.operations.op_03.action.carve.shape]
+tag = "ellipse"
+
+[definition.operations.op_03.action.carve.shape.ellipse]
+width_fine = 26
+height_fine = 33
+
+[definition.operations.op_04]
+order = 50
+x_fine = 12
+y_fine = 3
+
+[definition.operations.op_04.action]
+tag = "paint"
+
+[definition.operations.op_04.action.paint]
+material = "iron"
+
+[definition.operations.op_04.action.paint.shape]
+tag = "ellipse"
+
+[definition.operations.op_04.action.paint.shape.ellipse]
+width_fine = 20
+height_fine = 4
+
+[definition.markers]
+
+[definition.markers.anchor]
+role = "sealed_pocket"
+x_fine = 30
+y_fine = 45
+
+[definition.reservation]
+min_x_fine = 0
+min_y_fine = 0
+max_x_fine = 60
+max_y_fine = 90
+
+[appearance]
+display_name = "Ember fracture"

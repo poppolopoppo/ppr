@@ -54,6 +54,7 @@ target_sources(app.game
         ui/ColonyPanel.cpp
         colony/ColonySmoke.cpp
         colony/WorldGen.Capture.cpp
+        colony/LightingScene.Capture.cpp
         colony/ColonyTranslator.cpp
         colony/Content.cpp
         colony/Content.Pack.cpp
@@ -250,6 +251,14 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
     ppr_add_test_entry(TARGET game.tests
         NAME particle_tools_gpu
         FILTER "game/checkpoint_gpu/paused_particle_tools_preserve_prefix_ids_and_terrain_then_destroy_to_zero"
+        LOOPS
+        RESOURCE_LOCK gpu
+        TIMEOUT 180
+        LABELS unit game gpu_validation
+    )
+    ppr_add_test_entry(TARGET game.tests
+        NAME service_door_gpu
+        FILTER "game/checkpoint_gpu/service_door_cancel_reused_matter_target_rejects_stale_outer_activation"
         LOOPS
         RESOURCE_LOCK gpu
         TIMEOUT 180

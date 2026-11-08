@@ -1,4 +1,10 @@
-// Same 528-byte per-slot constant as RetroPass::RetroParameters in
+#include "display_agx.slang"
+
+// ------------------------------------------------------------------
+// picture parameters and fullscreen sampling
+// ------------------------------------------------------------------
+
+// Same 544-byte per-slot constant as RetroPass::RetroParameters in
 // App.Renderer.RetroPass.cpp: 32 sRGB palette entries, the low-resolution
 // source extent, and the dither scale. Row-major float4 palette stride keeps
 // the constant-buffer layout free of packing rules.
@@ -7,12 +13,17 @@ struct RetroParameters {
     float2 m_source_extent;
     float m_dither_strength;
     uint m_palette_enabled;
+    float m_exposure_multiplier;
+    uint m_hdr_enabled;
+    uint m_encode_srgb;
+    uint m_bloom_enabled;
 };
 ConstantBuffer<RetroParameters> g_retro;
 // The low-resolution scene resolve. Pixel-center fractional taps plus an
 // explicit clamp make the read exactly one source pixel per output pixel,
 // independent of the bound sampler's filtering mode.
 Texture2D<float4> g_scene;
+Texture2D<float4> g_bloom;
 struct RetroVertexOutput {
     float4 position : SV_Position;
     float2 uv : TEXCOORD0;
@@ -37,6 +48,28 @@ float3 srgbToLinear(float3 srgb_color) {
         pow((srgb_color + 0.055) / 1.055, float3(2.4)));
 }
 
+// ------------------------------------------------------------------
+// scene-linear bloom upsample at the native picture UV
+// ------------------------------------------------------------------
+
+float3 retroBloomBilinear(float2 uv) {
+    uint width, height;
+    g_bloom.GetDimensions(width, height);
+    float2 pixel = clamp(uv, 0.0, 1.0) * float2(width, height) - 0.5;
+    int2 base = int2(floor(pixel));
+    float2 blend = frac(pixel);
+    int2 last = int2(width, height) - 1;
+    float3 a = g_bloom.Load(int3(clamp(base, int2(0), last), 0)).rgb;
+    float3 b = g_bloom.Load(int3(clamp(base + int2(1, 0), int2(0), last), 0)).rgb;
+    float3 c = g_bloom.Load(int3(clamp(base + int2(0, 1), int2(0), last), 0)).rgb;
+    float3 d = g_bloom.Load(int3(clamp(base + int2(1, 1), int2(0), last), 0)).rgb;
+    return lerp(lerp(a, b, blend.x), lerp(c, d, blend.x), blend.y);
+}
+
+// ------------------------------------------------------------------
+// independent display treatment and encoding
+// ------------------------------------------------------------------
+
 [shader("fragment")]
 float4 fragmentRetroPresent(RetroVertexOutput input,
     uniform SamplerState.Handle g_sampler) : SV_Target {
@@ -44,8 +77,15 @@ float4 fragmentRetroPresent(RetroVertexOutput input,
     float2 source_pixel = floor(clamp(input.uv, 0.0, 1.0) * extent);
     float2 source_uv = clamp((source_pixel + 0.5) / extent, 0.0, 1.0);
     float3 source_linear = g_scene.SampleLevel(g_sampler, source_uv, 0.0).rgb;
+    if (g_retro.m_bloom_enabled != 0u) {
+        // Keep the combination in FP32, then expose exactly once inside AgX.
+        source_linear += retroBloomBilinear(input.uv) * 0.125;
+    }
+    if (g_retro.m_hdr_enabled != 0u) {
+        source_linear = displayAgxPunchy(source_linear, g_retro.m_exposure_multiplier);
+    }
     if (g_retro.m_palette_enabled == 0u) {
-        return float4(source_linear, 1.0);
+        return float4(g_retro.m_encode_srgb != 0u ? linearToSrgb(source_linear) : source_linear, 1.0);
     }
 
     float3 source_srgb = linearToSrgb(max(source_linear, 0.0));
@@ -71,6 +111,8 @@ float4 fragmentRetroPresent(RetroVertexOutput input,
             best = candidate;
         }
     }
-    // The palette is stored in sRGB; the surface target expects linear values.
-    return float4(srgbToLinear(best), 1.0);
+    // Convert the authored palette back to linear display values. An sRGB
+    // attachment encodes these in hardware; an opt-in UNorm target encodes here.
+    float3 display_linear = srgbToLinear(best);
+    return float4(g_retro.m_encode_srgb != 0u ? linearToSrgb(display_linear) : display_linear, 1.0);
 }

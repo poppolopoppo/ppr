@@ -81,7 +81,44 @@ export namespace pP::colony {
             u64 m_revision{};
         };
 
+        enum class EServiceLampPosition : u8 {
+            original,
+            alternate
+        };
+
+        enum class EServiceBayTarget : u8 {
+            door,
+            amber_lamp,
+            amber_lamp_position
+        };
+
+        /// Outer optical/request revision is never reused, including cancellation.
+        /// Matter's strict source+1 target is a separate internal counter: this
+        /// binding survives until every operation of the attempt is settled.
+        /// Natural host layout only; no GPU/channel byte ABI is imposed.
+        /// One publication owner serves the explicitly supported bay changes.
+        struct ServiceDoorPublication {
+            std::optional<std::array<MatterIdentity, 2u>> m_matter{}; // exact source, target
+            u64 m_revision{};
+            std::error_code m_cancel_error{};
+            EServiceBayTarget m_target{EServiceBayTarget::door};
+            EServiceLampPosition m_lamp_position{EServiceLampPosition::original};
+            bool m_closed{}, m_lamp_enabled{true};
+            bool m_activation_sent{}, m_activated{}, m_committed{}, m_cancelling{}, m_matter_cancelled{};
+        };
+
     private:
+        std::optional<ServiceDoorPublication> m_service_door{};
+        u64 m_door_revision_highwater{1u};
+        u64 m_lighting_revision{1u};
+        std::optional<std::array<u32, 2u>> m_door_backlog{}; // held slices, queued single steps
+        bool m_service_door_closed{};
+        EServiceLampPosition m_service_lamp_position{EServiceLampPosition::original};
+        bool m_service_lamp_enabled{true};
+        bool m_door_quiescing{};
+
+        [[nodiscard]] Expected<u64> requestServiceBay_(EServiceBayTarget target, bool value, u64 expected_revision);
+
         struct PendingDig {
             sim::GlobalCellPos m_min{};
             u32 m_width{};
@@ -202,6 +239,7 @@ export namespace pP::colony {
             snapshot_poll,
             snapshot_end,
             edit_publish,
+            edit_cancel,
             terminal_discard
         };
 
@@ -224,6 +262,7 @@ export namespace pP::colony {
 
         std::optional<MatterState> m_matter{};
         std::optional<GridParticleGpuView> m_particle_view{};
+        std::shared_ptr<const MatterPhysicalLedger> m_particle_ledger{};
         std::shared_ptr<DemandSnapshot> m_snapshot_work{};
         std::future<Expected<DemandSnapshot>> m_snapshot_task{};
         std::optional<DemandSnapshot> m_snapshot_ready{};
@@ -263,6 +302,9 @@ export namespace pP::colony {
         [[nodiscard]] std::error_code prepareEdit(bool advance_build);
         [[nodiscard]] std::error_code prepareParticleTool();
         [[nodiscard]] std::error_code prepareEditColliders();
+
+        [[nodiscard]] std::error_code settleEdit_(std::span<const DirtyChunk> manifest, u64 door_revision);
+        void commitDoorBinding_() noexcept;
         [[nodiscard]] std::error_code runHeldTicks();
 
 
@@ -337,6 +379,7 @@ export namespace pP::colony {
         [[nodiscard]] bool admitsElapsed() const noexcept;
         [[nodiscard]] const MatterState *matterState() const noexcept;
         [[nodiscard]] std::optional<GridParticleGpuView> particleView() const noexcept;
+        [[nodiscard]] std::shared_ptr<const MatterPhysicalLedger> particlePhysicalLedger() const noexcept;
         /// Game adapter binds the acknowledged presentation bundle to the
         /// existing value view; numerical ownership and epoch do not change.
         void bindParticlePresentation(GridWorldIdentity world) noexcept;
@@ -392,6 +435,39 @@ export namespace pP::colony {
         [[nodiscard]] std::span<const DirtyChunk> editManifest() const noexcept;
         /// Matching complete manifest commits a jointly prepared candidate.
         [[nodiscard]] std::error_code settleEdit(std::span<const DirtyChunk> manifest);
+
+        // bounded service-bay publication (door wrappers preserve their existing semantics):
+        [[nodiscard]] Expected<bool> prepareServiceDoorSnapshot();
+        [[nodiscard]] std::error_code releaseServiceDoorSnapshot();
+        [[nodiscard]] Expected<u64> requestServiceDoor(bool closed, u64 expected_revision);
+        [[nodiscard]] Expected<u64> requestServiceLamp(bool enabled, u64 expected_revision);
+        [[nodiscard]] Expected<u64> requestServiceLampPosition(EServiceLampPosition position, u64 expected_revision);
+        [[nodiscard]] Expected<bool> advanceServiceDoor(u64 revision);
+        [[nodiscard]] std::error_code markServiceDoorActivationSent(u64 revision);
+        [[nodiscard]] std::error_code acknowledgeServiceDoorActivation(u64 revision, bool applied);
+        [[nodiscard]] Expected<bool> commitServiceDoor(u64 revision);
+        [[nodiscard]] Expected<bool> cancelServiceDoor(u64 revision);
+        [[nodiscard]] std::error_code finishServiceDoor(u64 revision);
+
+        [[nodiscard]] const std::optional<ServiceDoorPublication> &serviceDoorPublication() const noexcept {
+            return m_service_door;
+        }
+
+        [[nodiscard]] u64 lightingRevision() const noexcept {
+            return m_lighting_revision;
+        }
+
+        [[nodiscard]] bool serviceDoorClosed() const noexcept {
+            return m_service_door_closed;
+        }
+
+        [[nodiscard]] EServiceLampPosition serviceLampPosition() const noexcept {
+            return m_service_lamp_position;
+        }
+
+        [[nodiscard]] bool serviceLampEnabled() const noexcept {
+            return m_service_lamp_enabled;
+        }
 
         [[nodiscard]] std::error_code shutdown();
 

@@ -35,6 +35,10 @@ target_sources(engine.app
         renderer/App.Renderer.FrameFence.cppm
         renderer/App.Renderer.GpuCaches.cppm
         renderer/App.Renderer.GridPass.cppm
+        renderer/App.Renderer.Lighting.cppm
+        renderer/App.Renderer.OpticalGeometry.cppm
+        renderer/App.Renderer.WorldRadiance.cppm
+        renderer/App.Renderer.LightingPass.cppm
         renderer/App.Renderer.RetroPass.cppm
         renderer/App.Renderer.TrianglePass.cppm
         renderer/App.Renderer.Types.cppm
@@ -92,6 +96,10 @@ target_sources(engine.app
         renderer/App.Renderer.GridPass.Particles.cpp
         renderer/App.Renderer.GridPass.Fluids.cpp
         renderer/App.Renderer.GridPass.Solids.cpp
+        renderer/App.Renderer.Lighting.cpp
+        renderer/App.Renderer.OpticalGeometry.cpp
+        renderer/App.Renderer.WorldRadiance.cpp
+        renderer/App.Renderer.LightingPass.cpp
         renderer/App.Renderer.RetroPass.cpp
         renderer/App.Renderer.TrianglePass.cpp
 

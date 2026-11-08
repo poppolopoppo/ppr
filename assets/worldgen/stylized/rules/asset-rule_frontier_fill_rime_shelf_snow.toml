@@ -1,0 +1,15 @@
+schema_version = 1
+
+[definition]
+order = 23
+
+[definition.payload]
+tag = "matter_fill"
+
+[definition.payload.matter_fill]
+marker = "anchor"
+material = "snow"
+temperature_k = 248.0
+bulk_density_kg_m3 = 300.0
+fill_height_m = 3.6666666666666665
+placement = "landmark_rime_shelf"

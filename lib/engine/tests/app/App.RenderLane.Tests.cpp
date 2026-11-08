@@ -381,6 +381,11 @@ namespace pP::tests::detail {
                     result.m_grid_ack_chunk_ids = request.m_grid_stage.m_ack_chunk_ids;
                     result.m_presented = true;
                     result.m_presented_grid = {37u, 20u, 103u};
+                    result.m_lighting_camera.emplace();
+                    result.m_lighting_camera->m_revision = request.m_packet->m_frame_id;
+                    result.m_lighting_camera->m_origin = float3{
+                        static_cast<float>(request.m_packet->m_frame_id), 2.0f, 3.0f};
+                    result.m_lighting_extent = int2{64, 32};
                     outstanding.fetch_add(1u);
                     return {};
                 },
@@ -413,6 +418,13 @@ namespace pP::tests::detail {
                 PPR_TEST_ASSERT(results[index].m_presented_grid.m_job_id == 37u);
                 PPR_TEST_ASSERT(results[index].m_presented_grid.m_world_generation == 20u);
                 PPR_TEST_ASSERT(results[index].m_presented_grid.m_content_fingerprint == 103u);
+
+                PPR_TEST_ASSERT(results[index].m_lighting_camera.has_value());
+                PPR_TEST_ASSERT(results[index].m_lighting_camera->m_revision == index + 1u);
+                PPR_TEST_ASSERT(results[index].m_lighting_camera->m_origin.x == static_cast<float>(index + 1u));
+                PPR_TEST_ASSERT(results[index].m_lighting_extent.has_value());
+                PPR_TEST_ASSERT((*results[index].m_lighting_extent).x == 64);
+                PPR_TEST_ASSERT((*results[index].m_lighting_extent).y == 32);
             }
 
             PPR_TEST_ASSERT(results[2].m_surface_result and not results[2].m_surface_result->m_error);
@@ -421,6 +433,27 @@ namespace pP::tests::detail {
             results.clear();
             PPR_TEST_ASSERT(not lane.drainResults(results) and results.empty());
             outstanding.store(0u);
+
+            // Repeated camera-bearing records exercise different payload offsets
+            // and wrap the page-backed result ring without per-record allocation.
+            for (u64 frame_id = 3u; frame_id <= 130u; ++frame_id) {
+                PPR_TEST_ASSERT(not lane.submitFrame(makeRequest(frame_id)));
+                PPR_TEST_ASSERT(awaitResult(lane, frame_id, results));
+                PPR_TEST_ASSERT(results.size() == 1u and results[0u].m_lighting_camera.has_value());
+                PPR_TEST_ASSERT(results[0u].m_lighting_camera->m_revision == frame_id);
+                PPR_TEST_ASSERT(results[0u].m_lighting_camera->m_origin.x == static_cast<float>(frame_id));
+                PPR_TEST_ASSERT(results[0u].m_lighting_camera->m_origin.y == 2.0f);
+                PPR_TEST_ASSERT(results[0u].m_lighting_camera->m_origin.z == 3.0f);
+                PPR_TEST_ASSERT(results[0u].m_grid_ack_chunk_ids.empty());
+
+                results.clear();
+                outstanding.store(0u);
+            }
+
+            lane.requestStop();
+            PPR_TEST_ASSERT(not lane.join());
+            PPR_TEST_ASSERT(executed.load() == 130u and lane.submittedCount() == 130u);
+            PPR_TEST_ASSERT(not lane.drainResults(results) and results.empty());
         };
 
         PPR_UNIT_TEST (surface_pending_shutdown_cancels_ack_and_rejects_new_requests) {
@@ -2017,6 +2050,201 @@ namespace pP::tests::detail {
                 PPR_TEST_ASSERT(drained.error() == RawChannel::error_empty);
             }
         };
+
+        // ------------------------------------------------------------------
+        // frame-bound gameplay illumination query transport
+        // ------------------------------------------------------------------
+
+        [[nodiscard]] std::shared_ptr<const lighting::WorldRadianceSource> gameplaySource_(
+            const lighting::OpticalRgb sky = {}) {
+            const std::array<u16, 16> labels{};
+            lighting::OpticalCell vacuum{};
+            vacuum.m_kind = lighting::OpticalKind::vacuum;
+            const std::array<lighting::WorldRadianceMaterial, 1> materials{
+                lighting::WorldRadianceMaterial{vacuum, 0u, {}}};
+            auto source = lighting::WorldRadianceSource::capture(
+                {labels, materials, {}, 1.0, 4u, 4u, lighting::OpticalBoundary::vacuum, sky, {}});
+            PPR_TEST_ASSERT(source.has_value());
+            return source ? *source : nullptr;
+        }
+
+        [[nodiscard]] lighting::TerrainReceiverCohort gameplayCohort_() noexcept {
+            return {.m_job_id = 3u, .m_world_generation = 7u, .m_content_fingerprint = 11u, .m_geometry_revision = 5u};
+        }
+
+        PPR_UNIT_TEST (gameplay_query_absent_request_yields_no_receipt) {
+            // No request is the ordinary path: both transport slots stay empty,
+            // so a frame without a query changes no existing behavior.
+            RenderFrameRequest request{};
+            RenderFrameResult result{};
+            PPR_TEST_ASSERT(not request.m_gameplay_query.has_value());
+            PPR_TEST_ASSERT(not result.m_gameplay_query.has_value());
+
+            // A zero sequence is the defensive "not requested" sentinel even
+            // if an optional slips through; it never captures a query.
+            const auto source = gameplaySource_();
+            PPR_TEST_ASSERT(source != nullptr);
+            if (source == nullptr) {
+                return;
+            }
+            const auto receipt = resolveWorldRadianceGameplayQuery(
+                WorldRadianceGameplayQueryRequest{
+                    .m_sequence = 0u, .m_center_m = {1.5, 1.5}, .m_edge = 2u, .m_world = 7u, .m_revision = 5u},
+                source, gameplayCohort_());
+            PPR_TEST_ASSERT(receipt.m_sequence == 0u);
+            PPR_TEST_ASSERT(receipt.m_error == std::errc::invalid_argument);
+            PPR_TEST_ASSERT(receipt.m_query == nullptr);
+        };
+
+        PPR_UNIT_TEST (gameplay_query_matching_request_returns_value_owned_query) {
+            const lighting::OpticalRgb sky{2.0, 4.0, 8.0};
+            auto source = gameplaySource_(sky);
+            PPR_TEST_ASSERT(source != nullptr);
+            if (source == nullptr) {
+                return;
+            }
+
+            const auto receipt = resolveWorldRadianceGameplayQuery(
+                WorldRadianceGameplayQueryRequest{
+                    .m_sequence = 9u, .m_center_m = {1.5, 1.5}, .m_edge = 2u, .m_world = 7u, .m_revision = 5u},
+                source, gameplayCohort_());
+
+            PPR_TEST_ASSERT(receipt.m_sequence == 9u);
+            PPR_TEST_ASSERT(receipt.m_world == 7u and receipt.m_revision == 5u);
+            PPR_TEST_ASSERT(not receipt.m_error);
+            PPR_TEST_ASSERT(receipt.m_query != nullptr);
+            PPR_TEST_ASSERT(receipt.m_query->width() == 2u and receipt.m_query->height() == 2u);
+            PPR_TEST_ASSERT(receipt.m_query->cellMetres() == 1.0);
+            PPR_TEST_ASSERT((receipt.m_query->minimumMetres() == std::array<double, 2>{0.0, 0.0}));
+
+            // The returned query is value-owned: it stays valid after the
+            // lane-side source binding is released.
+            const auto query = receipt.m_query;
+            source.reset();
+            const auto traced = query->trace({{1.5, 1.5}, {1.0, 0.0}, 0.0, 2.0});
+            PPR_TEST_ASSERT(traced.has_value());
+            for (std::size_t channel = 0u; channel < 3u; ++channel) {
+                PPR_TEST_ASSERT(traced->m_radiance[channel] == sky[channel]);
+            }
+        };
+
+        PPR_UNIT_TEST (gameplay_query_rejects_stale_or_unbound_requests) {
+            const auto source = gameplaySource_();
+            PPR_TEST_ASSERT(source != nullptr);
+            if (source == nullptr) {
+                return;
+            }
+
+            const auto mismatched_world = resolveWorldRadianceGameplayQuery(
+                WorldRadianceGameplayQueryRequest{
+                    .m_sequence = 1u, .m_center_m = {1.5, 1.5}, .m_edge = 2u, .m_world = 8u, .m_revision = 5u},
+                source, gameplayCohort_());
+            PPR_TEST_ASSERT(mismatched_world.m_error == std::errc::operation_canceled);
+            PPR_TEST_ASSERT(mismatched_world.m_query == nullptr);
+
+            const auto mismatched_revision = resolveWorldRadianceGameplayQuery(
+                WorldRadianceGameplayQueryRequest{
+                    .m_sequence = 1u, .m_center_m = {1.5, 1.5}, .m_edge = 2u, .m_world = 7u, .m_revision = 4u},
+                source, gameplayCohort_());
+            PPR_TEST_ASSERT(mismatched_revision.m_error == std::errc::operation_canceled);
+            PPR_TEST_ASSERT(mismatched_revision.m_query == nullptr);
+
+            // A stale request still echoes the frame-bound cohort so the Game
+            // can discard it unambiguously rather than treating it as fresh.
+            PPR_TEST_ASSERT(mismatched_revision.m_world == 7u and mismatched_revision.m_revision == 5u);
+
+            const auto absent_source = resolveWorldRadianceGameplayQuery(
+                WorldRadianceGameplayQueryRequest{
+                    .m_sequence = 1u, .m_center_m = {1.5, 1.5}, .m_edge = 2u, .m_world = 7u, .m_revision = 5u},
+                nullptr, gameplayCohort_());
+            PPR_TEST_ASSERT(absent_source.m_error == std::errc::not_connected);
+            PPR_TEST_ASSERT(absent_source.m_query == nullptr);
+
+            const auto absent_cohort = resolveWorldRadianceGameplayQuery(
+                WorldRadianceGameplayQueryRequest{
+                    .m_sequence = 1u, .m_center_m = {1.5, 1.5}, .m_edge = 2u, .m_world = 7u, .m_revision = 5u},
+                source, std::nullopt);
+            PPR_TEST_ASSERT(absent_cohort.m_error == std::errc::not_connected);
+            PPR_TEST_ASSERT(absent_cohort.m_query == nullptr);
+
+            const auto zero_edge = resolveWorldRadianceGameplayQuery(
+                WorldRadianceGameplayQueryRequest{
+                    .m_sequence = 1u, .m_center_m = {1.5, 1.5}, .m_edge = 0u, .m_world = 7u, .m_revision = 5u},
+                source, gameplayCohort_());
+            PPR_TEST_ASSERT(zero_edge.m_error == std::errc::argument_out_of_domain);
+            PPR_TEST_ASSERT(zero_edge.m_query == nullptr);
+        };
+
+        PPR_UNIT_TEST (gameplay_query_request_transports_and_yields_exactly_one_receipt) {
+            RenderLane lane{};
+            const auto source = gameplaySource_();
+            PPR_TEST_ASSERT(source != nullptr);
+            if (source == nullptr) {
+                return;
+            }
+            std::counting_semaphore<> wakes{0};
+            PPR_TEST_ASSERT(not lane.start(
+                RenderLaneOperation{[]() -> std::error_code { return default_value_v; }},
+                RenderFrameExecutor{[&](const RenderFrameRequest &request, RenderFrameResult &result) {
+                    result.m_submit_value = kFenceValueNone;
+                    if (request.m_gameplay_query and request.m_gameplay_query->m_sequence != 0u) {
+                        result.m_gameplay_query = resolveWorldRadianceGameplayQuery(
+                            *request.m_gameplay_query, source, gameplayCohort_());
+                    }
+                    return default_value_v;
+                }},
+                RenderLaneSweep{[](u32 &out_outstanding) -> std::error_code {
+                    out_outstanding = 0u;
+                    return default_value_v;
+                }},
+                RenderLaneWake{[&]() noexcept { wakes.release(); }}));
+            PPR_DEFER {
+                lane.requestStop();
+                std::ignore = lane.join();
+            };
+
+            PPR_TEST_ASSERT(not lane.submitFrame(makeRequest(31u)));
+            RenderFrameRequest requested = makeRequest(32u);
+            requested.m_gameplay_query = WorldRadianceGameplayQueryRequest{
+                .m_sequence = 12u, .m_center_m = {1.5, 1.5}, .m_edge = 2u, .m_world = 7u, .m_revision = 5u};
+            PPR_TEST_ASSERT(not lane.submitFrame(std::move(requested)));
+
+            Array<RenderFrameResult> scratch{};
+            std::optional<RenderFrameResult> absent_result{};
+            std::optional<RenderFrameResult> present_result{};
+            for (u32 attempt = 0u; attempt < 1000u and (not absent_result or not present_result); ++attempt) {
+                scratch.clear();
+                std::ignore = lane.drainResults(scratch);
+                for (RenderFrameResult &result: scratch) {
+                    if (result.m_frame_id == 31u) {
+                        absent_result = std::move(result);
+                    } else if (result.m_frame_id == 32u) {
+                        present_result = std::move(result);
+                    }
+                }
+                if (not absent_result or not present_result) {
+                    std::ignore = wakes.try_acquire_for(std::chrono::milliseconds{30});
+                }
+            }
+
+            PPR_TEST_ASSERT(absent_result.has_value());
+            PPR_TEST_ASSERT(present_result.has_value());
+            if (not absent_result or not present_result) {
+                return;
+            }
+
+            // No request -> no receipt; unchanged ordinary behavior.
+            PPR_TEST_ASSERT(not absent_result->m_gameplay_query.has_value());
+
+            // Exactly one receipt for the requested result, echoing the
+            // request sequence and carrying the value-owned query.
+            PPR_TEST_ASSERT(present_result->m_gameplay_query.has_value());
+            const auto &receipt = *present_result->m_gameplay_query;
+            PPR_TEST_ASSERT(receipt.m_sequence == 12u);
+            PPR_TEST_ASSERT(receipt.m_world == 7u and receipt.m_revision == 5u);
+            PPR_TEST_ASSERT(not receipt.m_error);
+            PPR_TEST_ASSERT(receipt.m_query != nullptr);
+        };
     }
 }
 
@@ -2057,6 +2285,10 @@ namespace pP::tests {
             detail::RenderLaneGate::third_construction_waits_for_lane_retirement,
             detail::RenderLaneGate::channel_control_independent_of_frame_capacity,
             detail::RenderLaneGate::channel_outcomes_stay_distinguishable,
+            detail::RenderLaneGate::gameplay_query_absent_request_yields_no_receipt,
+            detail::RenderLaneGate::gameplay_query_matching_request_returns_value_owned_query,
+            detail::RenderLaneGate::gameplay_query_rejects_stale_or_unbound_requests,
+            detail::RenderLaneGate::gameplay_query_request_transports_and_yields_exactly_one_receipt,
         });
     };
 

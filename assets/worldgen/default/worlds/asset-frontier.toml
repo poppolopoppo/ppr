@@ -428,6 +428,10 @@ id = 62
 asset = "material_wolframite"
 id = 63
 
+[palette.materials.showcase_amber_lamp]
+asset = "showcase_amber_lamp"
+id = 64
+
 [palette.fields]
 
 [palette.fields.bedrock_height]

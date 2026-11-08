@@ -334,6 +334,9 @@ namespace pP::colony {
                                            "Expected a valid local or qualified Texture asset name"));
                 }
             }
+            PPR_RETURN_UNEXPECTED_ON_FAIL(
+                ColonyContent, validateMaterialTransport(visual, location(document, root), root, diagnostics));
+
             catalog.m_materials.push_back(
                 {binding.m_key, binding.m_id, visual.m_display_name, static_cast<EMaterialPhase>(numeric.m_matter),
                     numeric.m_terrain ? EMaterialRepresentation::terrain : EMaterialRepresentation::particle, *tint,
@@ -343,7 +346,7 @@ namespace pP::colony {
                     {visual.m_emissive_r, visual.m_emissive_g, visual.m_emissive_b}, visual.m_emissive_strength,
                     visual.m_alpha_mode, visual.m_ior, visual.m_normal_texture, visual.m_normal_scale,
                     visual.m_refraction_depth_m, std::string{location(document, root + ".normal_texture")},
-                    visual.m_texture_sampling});
+                    visual.m_transport, visual.m_texture_sampling});
         }
         for (const auto &binding: bindings.m_fields) {
             catalog.m_fields.push_back({binding.m_key, fields[binding.m_index].m_noise});

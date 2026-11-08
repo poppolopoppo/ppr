@@ -50,6 +50,8 @@ export namespace pP::matter {
     // ------------------------------------------------------------------
 
     struct SparseGridState;
+    class GpuSolver;
+
     enum class SparseEncodingDisposition : u8 {
         executed,
         not_submitted
@@ -60,6 +62,13 @@ export namespace pP::matter {
     /// No submission, CPU active-set enumeration, or committed publication occurs.
     class SparseGridStorage {
         std::unique_ptr<SparseGridState> m_state;
+
+        // Solver-only immutable program reuse; all mutable storage stays local.
+        friend class GpuSolver;
+
+        [[nodiscard]] std::error_code initialize_(
+            rhi::IDevice &device, IShaderService &shaders, const std::filesystem::path &content_root,
+            u32 admitted_row_capacity, u32 width, u32 height, const SparseGridStorage *donor);
 
     public:
         SparseGridStorage();

@@ -1,4 +1,5 @@
 module;
+#include "pP/Macros.h"
 export module engine.app:renderer.types;
 
 import :renderer.frame_fence;
@@ -14,6 +15,80 @@ export namespace pP {
     // ------------------------------------------------------------------
 
     class Renderer;
+
+    // ------------------------------------------------------------------
+    // immutable world and committed particle input identity
+    // ------------------------------------------------------------------
+
+    // Value identity of an activated world bundle. Zero job/generation means
+    // no activated world; the owner lane is the only reader of bundle state.
+    struct GridWorldIdentity {
+        u64 m_job_id{};
+        u64 m_world_generation{};
+        u64 m_content_fingerprint{};
+
+        [[nodiscard]] bool operator==(const GridWorldIdentity &) const noexcept = default;
+    };
+
+    inline constexpr u32 kGridParticleNumericalLayout = 4u;
+    inline constexpr u32 kGridParticleNumericalStride = 64u;
+    inline constexpr u32 kGridParticleReadonlyStride = 24u;
+    inline constexpr u32 kGridParticleCapacity = 1024u * 1024u;
+
+    // Stable row/ID mapping and gas-only physical inputs. Moving radius is
+    // cell_metres*sqrt(Cold24.volume/pi); gas radius is sqrt(volume/thickness/pi).
+    struct GridParticleMetadataRow {
+        u32 m_id_low{}, m_id_high{}, m_source_row{0xffff'ffffu}, m_material{};
+        float m_gas_x{}, m_gas_y{}, m_radius{};
+        // Zero explicitly means unavailable for legacy presentation-only input.
+        // Otherwise binary32 V/(cell_metres^2*reference_thickness), before gas radius.
+        u32 m_physical_fill_bits{};
+    };
+
+    static_assert(sizeof(GridParticleMetadataRow) == 32u and alignof(GridParticleMetadataRow) == 4u);
+    static_assert(PPR_OFFSETOF(GridParticleMetadataRow, m_gas_x) == 16u);
+    static_assert(PPR_OFFSETOF(GridParticleMetadataRow, m_radius) == 24u);
+    static_assert(PPR_OFFSETOF(GridParticleMetadataRow, m_physical_fill_bits) == 28u);
+
+    struct GridParticleMetadataResource {
+        rhi::ComPtr<rhi::IBuffer> m_rows{};
+        Array<u32> m_materials{};
+        u64 m_version{};
+        double m_cell_metres{};
+        u32 m_count{}, m_moving_count{};
+    };
+
+    struct GridParticlePresentationIdentity {
+        GridWorldIdentity m_world{};
+        u64 m_publication{}, m_terrain_revision{}, m_joint_tick{};
+
+        [[nodiscard]] bool operator==(const GridParticlePresentationIdentity &) const noexcept = default;
+    };
+
+    struct GridParticleGpuView {
+        rhi::ComPtr<rhi::IBuffer> m_numerical{};
+        rhi::ComPtr<rhi::IBuffer> m_readonly{};
+        std::shared_ptr<const GridParticleMetadataResource> m_metadata{};
+        std::shared_ptr<const std::atomic<u64>> m_live_epoch{};
+        GridWorldIdentity m_world{};
+        u64 m_device_epoch{}, m_publication{}, m_terrain_revision{}, m_joint_tick{};
+        double m_origin{3.0};
+        u32 m_layout{kGridParticleNumericalLayout};
+        u32 m_stride{kGridParticleNumericalStride};
+        u32 m_readonly_stride{kGridParticleReadonlyStride};
+
+        [[nodiscard]] bool current() const noexcept {
+            return m_numerical and
+                   m_readonly and
+                   m_layout == kGridParticleNumericalLayout and
+                   m_stride == kGridParticleNumericalStride and
+                   m_readonly_stride == kGridParticleReadonlyStride and
+                   m_numerical->getDesc().elementSize == kGridParticleNumericalStride and
+                   m_readonly->getDesc().elementSize == kGridParticleReadonlyStride and
+                   m_live_epoch and
+                   m_live_epoch->load(std::memory_order_acquire) == m_device_epoch;
+        }
+    };
 
     // ------------------------------------------------------------------
     // sample counts

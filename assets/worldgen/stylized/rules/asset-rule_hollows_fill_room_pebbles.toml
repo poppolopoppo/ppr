@@ -1,0 +1,15 @@
+schema_version = 1
+
+[definition]
+order = 27
+
+[definition.payload]
+tag = "matter_fill"
+
+[definition.payload.matter_fill]
+marker = "anchor"
+material = "pebbles"
+temperature_k = 318.0
+bulk_density_kg_m3 = 1700.0
+fill_height_m = 3.3333333333333335
+placement = "landmark_room"

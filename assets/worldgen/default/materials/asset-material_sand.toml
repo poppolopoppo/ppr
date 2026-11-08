@@ -4,7 +4,7 @@ representation = "particle"
 
 [appearance]
 display_name = "Sand"
-color_rgba = "D8BA78FF"
+color_rgba = "E4C486FF"
 albedo_texture = "texture_color_textures_sand_png"
 normal_texture = "texture_normal_textures_sand_normal_png"
 texture_period_m = 2.0
@@ -18,3 +18,10 @@ alpha_mode = "opaque"
 ior = 1.5
 normal_scale = 0.8
 refraction_depth_m = 0.0
+
+[appearance.transport]
+contract_version = 1
+model = "opaque"
+sigma_r_per_m = 0.0
+sigma_g_per_m = 0.0
+sigma_b_per_m = 0.0

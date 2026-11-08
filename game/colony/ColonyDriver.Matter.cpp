@@ -32,6 +32,10 @@ namespace pP::colony {
         if (*result) {
             m_matter_request.reset();
             m_matter_operation = EMatterOperation::idle;
+            if ((**result).m_view) {
+                m_particle_ledger = (**result).m_physical_ledger;
+            }
+
             if (not (**result).m_execution.m_ran) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyMatter, std::errc::operation_canceled);
             }
@@ -205,6 +209,33 @@ namespace pP::colony {
             refreshAgents();
         }
 
+        if (m_service_door) {
+            if (m_service_door->m_activated) {
+                // A confirmed graphics ACK already authorizes exactly this
+                // candidate. Detachment may abandon visibility, not joint state.
+                const u64 revision = m_service_door->m_revision;
+                const auto committed = commitServiceDoor(revision);
+                PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyMatter, committed);
+                if (not *committed) {
+                    return false;
+                }
+
+                PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyMatter, finishServiceDoor(revision));
+            } else {
+                // Unknown graphics activation must be resolved by its owner.
+                PPR_RETURN_UNEXPECTED_ON_FAIL(
+                    ColonyMatter, not m_service_door->m_activation_sent
+                                      ? std::error_code{}
+                                      : std::make_error_code(std::errc::operation_in_progress));
+
+                auto canceled = cancelServiceDoor(m_service_door->m_revision);
+                PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyMatter, canceled);
+                if (not *canceled) {
+                    return false;
+                }
+            }
+        }
+
         if (m_edit and m_matter_runtime) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyMatter, prepareEditColliders());
             if (m_edit) {
@@ -335,6 +366,7 @@ namespace pP::colony {
         m_matter_publication.reset();
         m_matter_bodies.clear();
         m_particle_view.reset();
+        m_particle_ledger.reset();
         m_snapshot_ready.reset();
         m_snapshot_work.reset();
         m_snapshot_phase = ESnapshotPhase::idle;
@@ -427,6 +459,10 @@ namespace pP::colony {
 
     std::optional<GridParticleGpuView> ColonyDriver::particleView() const noexcept {
         return m_particle_view;
+    }
+
+    std::shared_ptr<const MatterPhysicalLedger> ColonyDriver::particlePhysicalLedger() const noexcept {
+        return m_particle_view ? m_particle_ledger : nullptr;
     }
 
     void ColonyDriver::bindParticlePresentation(const GridWorldIdentity world) noexcept {

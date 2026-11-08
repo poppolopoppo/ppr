@@ -1,0 +1,127 @@
+schema_version = 1
+
+[definition]
+allow_horizontal_reflection = true
+
+[definition.operations]
+
+[definition.operations.op_00]
+order = 10
+x_fine = 1
+y_fine = 1
+
+[definition.operations.op_00.action]
+tag = "paint"
+
+[definition.operations.op_00.action.paint]
+material = "limestone"
+
+[definition.operations.op_00.action.paint.shape]
+tag = "ellipse"
+
+[definition.operations.op_00.action.paint.shape.ellipse]
+width_fine = 70
+height_fine = 64
+
+[definition.operations.op_01]
+order = 20
+x_fine = 3
+y_fine = 4
+
+[definition.operations.op_01.action]
+tag = "paint"
+
+[definition.operations.op_01.action.paint]
+material = "crystal"
+
+[definition.operations.op_01.action.paint.shape]
+tag = "ellipse"
+
+[definition.operations.op_01.action.paint.shape.ellipse]
+width_fine = 65
+height_fine = 58
+
+[definition.operations.op_02]
+order = 30
+x_fine = 8
+y_fine = 7
+
+[definition.operations.op_02.action]
+tag = "paint"
+
+[definition.operations.op_02.action.paint]
+material = "diamond"
+
+[definition.operations.op_02.action.paint.shape]
+tag = "ellipse"
+
+[definition.operations.op_02.action.paint.shape.ellipse]
+width_fine = 55
+height_fine = 50
+
+[definition.operations.op_03]
+order = 40
+x_fine = 12
+y_fine = 12
+
+[definition.operations.op_03.action]
+tag = "carve"
+
+[definition.operations.op_03.action.carve]
+
+[definition.operations.op_03.action.carve.shape]
+tag = "ellipse"
+
+[definition.operations.op_03.action.carve.shape.ellipse]
+width_fine = 44
+height_fine = 42
+
+[definition.operations.op_04]
+order = 50
+x_fine = 30
+y_fine = 22
+
+[definition.operations.op_04.action]
+tag = "carve"
+
+[definition.operations.op_04.action.carve]
+
+[definition.operations.op_04.action.carve.shape]
+tag = "ellipse"
+
+[definition.operations.op_04.action.carve.shape.ellipse]
+width_fine = 30
+height_fine = 32
+
+[definition.operations.op_05]
+order = 60
+x_fine = 8
+y_fine = 27
+
+[definition.operations.op_05.action]
+tag = "carve"
+
+[definition.operations.op_05.action.carve]
+
+[definition.operations.op_05.action.carve.shape]
+tag = "ellipse"
+
+[definition.operations.op_05.action.carve.shape.ellipse]
+width_fine = 29
+height_fine = 27
+
+[definition.markers]
+
+[definition.markers.anchor]
+role = "sealed_pocket"
+x_fine = 36
+y_fine = 33
+
+[definition.reservation]
+min_x_fine = 0
+min_y_fine = 0
+max_x_fine = 72
+max_y_fine = 66
+
+[appearance]
+display_name = "Crystal geode"

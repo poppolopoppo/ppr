@@ -1,0 +1,3 @@
+interface:
+  display_name: "Procedural PBR"
+  short_description: "Author and verify seeded Blender PBR texture maps"

@@ -44,13 +44,14 @@ namespace pP {
             float m_planes[6][4]{};
             float m_cell_metres{}, m_origin{};
             u32 m_count{}, m_moving_count{};
-            u32 m_block_count{}, m_padding[3]{};
+            u32 m_block_count{}, m_census_world_edge{}, m_padding[2]{};
         };
 
         static_assert(sizeof(ParticlePrepareFrame) == 128u and alignof(ParticlePrepareFrame) == 16u);
         static_assert(PPR_OFFSETOF(ParticlePrepareFrame, m_cell_metres) == 96u);
         static_assert(PPR_OFFSETOF(ParticlePrepareFrame, m_count) == 104u);
         static_assert(PPR_OFFSETOF(ParticlePrepareFrame, m_block_count) == 112u);
+        static_assert(PPR_OFFSETOF(ParticlePrepareFrame, m_census_world_edge) == 116u);
     }
 
     Expected<std::shared_ptr<const GridParticleMetadataResource>> prepareGridParticleMetadata(
@@ -75,7 +76,9 @@ namespace pP {
                 GridPass, id > prior_id and
                                   row.m_material > 0u and
                                   row.m_material < 0xffffu and
-                                  row.m_reserved == 0u and
+                                  (row.m_physical_fill_bits == 0u or
+                                      (std::isnormal(std::bit_cast<float>(row.m_physical_fill_bits)) and
+                                          std::bit_cast<float>(row.m_physical_fill_bits) > 0.0f)) and
                                   std::isfinite(row.m_radius) and
                                   row.m_radius > 0.0f
                               ? std::error_code{}
@@ -282,6 +285,23 @@ namespace pP {
         auto *const readonly = field("g_readonly");
         auto *const packed = field("g_packed");
         auto *const frame = field("g_particle_prepare");
+        auto *const palette = field("g_particle_palette");
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, palette != nullptr and
+                              palette->getSize(SLANG_PARAMETER_CATEGORY_UNIFORM) == sizeof(GridTerrainVisual) and
+                              palette->getFieldCount() == 3u
+                          ? std::error_code{}
+                          : std::make_error_code(std::errc::invalid_argument));
+        const std::array<const char *, 3> palette_fields{"material", "rgba", "carried"};
+        for (unsigned index = 0u; index < palette_fields.size(); ++index) {
+            auto *const member = palette->getFieldByIndex(index);
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass, std::string_view{member->getName()} == palette_fields[index] and
+                                  member->getOffset(SLANG_PARAMETER_CATEGORY_UNIFORM) == u64{index} * 4u
+                              ? std::error_code{}
+                              : std::make_error_code(std::errc::invalid_argument));
+        }
+
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass,
             numerical and
@@ -526,7 +546,12 @@ namespace pP {
     // GPU circle packing and stable visible row IDs
     // ------------------------------------------------------------------
 
-    std::error_code GridPass::prepareGpuParticles(const PreRenderContext &context) {
+    std::error_code GridPass::prepareGpuParticles(const PreRenderContext &context, const u32 census_world_edge) {
+        if (m_spatial_msaa) {
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, validateSpatialContent());
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, ensureSpatialPrograms_(context.m_device));
+        }
+
         PPR_RETURN_ERROR_ON_FAIL(GridPass, admitParticleSeeds_(context.m_device));
         if (not m_world.m_gpu_particles) {
             return {};
@@ -567,6 +592,14 @@ namespace pP {
         const auto &metadata = *view.m_metadata;
         const u32 blocks = std::max(1u, (count + 255u) / 256u);
 
+        // Capture resources belong to this completion-selected reader slot.
+        // A rejected frame keeps them here; unknown submission uses the existing
+        // renderer quarantine and pass teardown proof, never a stack-owned lease.
+        if (slot.m_census) {
+            slot.m_census->m_encoded = false;
+            slot.m_census->m_submission = kFenceValueNone;
+        }
+
         ParticlePrepareFrame frame{};
         for (u32 plane = 0u; plane < 6u; ++plane) {
             std::memcpy(
@@ -578,6 +611,117 @@ namespace pP {
         frame.m_count = count;
         frame.m_moving_count = metadata.m_moving_count;
         frame.m_block_count = blocks;
+
+        if (census_world_edge != 0u) {
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass,
+                census_world_edge <= 4096u ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
+
+            if (not m_particle_census_program.m_program) {
+                shader::SharedModule module;
+                PPR_RETURN_ERROR_ON_FAIL(
+                    GridPass, m_shader_service->loadModuleFromFile(
+                                  m_content_dir / "shaders" / "grid_particle_prepare.slang", "grid_particle_prepare",
+                                  module.writeRef()));
+
+                shader::ComPtr<slang::IEntryPoint> entry;
+                PPR_RETURN_ERROR_ON_FAIL(
+                    GridPass, module->findEntryPointByName("projectParticleCensus", entry.writeRef()));
+
+                slang::IComponentType *entries[]{entry.get()};
+                rhi::ShaderProgramDesc description{};
+                description.linkingStyle = rhi::LinkingStyle::SingleProgram;
+                description.slangGlobalScope = module.get();
+                description.slangEntryPoints = entries;
+                description.slangEntryPointCount = 1u;
+                GpuParticleProgram candidate;
+                shader::Diagnose diagnostics;
+                PPR_RETURN_ERROR_ON_FAIL(
+                    GridPass, context.m_device.createShaderProgram(
+                                  description, candidate.m_program.writeRef(), diagnostics.writeRef()));
+
+                rhi::ComputePipelineDesc pipeline{};
+                pipeline.program = candidate.m_program;
+                PPR_RETURN_ERROR_ON_FAIL(
+                    GridPass, context.m_device.createComputePipeline(pipeline, candidate.m_pipeline.writeRef()));
+
+                m_particle_census_program = std::move(candidate);
+            }
+
+            const u64 bytes = std::max<u64>(1u, count) * sizeof(GridParticleCensusRow);
+            if (not slot.m_census or slot.m_census->m_projected->getDesc().size < bytes) {
+                auto candidate = std::make_unique<ParticleCensusStorage>();
+                PPR_RETURN_ERROR_ON_FAIL(
+                    GridPass,
+                    particleBuffer(
+                        context.m_device, bytes, sizeof(GridParticleCensusRow), nullptr, candidate->m_projected));
+
+                rhi::BufferDesc readback{};
+                readback.size = bytes;
+                readback.elementSize = sizeof(GridParticleCensusRow);
+                readback.memoryType = rhi::MemoryType::ReadBack;
+                readback.usage = rhi::BufferUsage::CopyDestination;
+                readback.defaultState = rhi::ResourceState::CopyDestination;
+                readback.label = "Grid capture-only particle census readback";
+                PPR_RETURN_ERROR_ON_FAIL(
+                    GridPass, context.m_device.createBuffer(readback, nullptr, candidate->m_readback.writeRef()));
+
+                PPR_RETURN_ERROR_ON_FAIL(
+                    GridPass, context.m_device.createRootShaderObject(
+                                  m_particle_census_program.m_program, candidate->m_root.writeRef()));
+
+                candidate->m_device = &context.m_device;
+                slot.m_census = std::move(candidate);
+            }
+
+            auto &census = *slot.m_census;
+            census.m_identity = {view.m_world, view.m_publication, view.m_terrain_revision, view.m_joint_tick};
+            census.m_device_epoch = view.m_device_epoch;
+            census.m_count = count;
+            census.m_world_edge = census_world_edge;
+            frame.m_census_world_edge = census_world_edge;
+            rhi::ShaderCursor cursor{census.m_root.get()};
+            rhi::ShaderCursor constants;
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, cursor["g_particle_prepare"].getDereferenced(constants));
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, constants.setData(&frame, sizeof(frame)));
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass,
+                cursor["g_numerical"].setBinding(rhi::Binding(view.m_numerical, particleRange(view.m_numerical))));
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass,
+                cursor["g_metadata"].setBinding(rhi::Binding(metadata.m_rows, particleRange(metadata.m_rows))));
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass, cursor["g_particle_palette"].setBinding(
+                              rhi::Binding(m_world.m_terrain_palette, particleRange(m_world.m_terrain_palette))));
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass, cursor["g_particle_census"].setBinding(
+                              rhi::Binding(census.m_projected, particleRange(census.m_projected))));
+
+            context.m_encoder.setBufferState(view.m_numerical, rhi::ResourceState::ShaderResource);
+            context.m_encoder.setBufferState(metadata.m_rows, rhi::ResourceState::ShaderResource);
+            context.m_encoder.setBufferState(m_world.m_terrain_palette, rhi::ResourceState::ShaderResource);
+            context.m_encoder.setBufferState(census.m_projected, rhi::ResourceState::UnorderedAccess);
+            if (count != 0u) {
+                auto *const pass = context.m_encoder.beginComputePass();
+                PPR_RETURN_ERROR_ON_FAIL(
+                    GridPass, pass != nullptr ? std::error_code{} : std::make_error_code(std::errc::io_error));
+
+                pass->bindPipeline(m_particle_census_program.m_pipeline, census.m_root);
+                pass->dispatchCompute(blocks, 1u, 1u);
+                pass->end();
+
+                ++m_dispatch_commands;
+
+                context.m_encoder.globalBarrier();
+                context.m_encoder.setBufferState(census.m_projected, rhi::ResourceState::CopySource);
+                context.m_encoder.setBufferState(census.m_readback, rhi::ResourceState::CopyDestination);
+                context.m_encoder.copyBuffer(
+                    census.m_readback, 0u, census.m_projected, 0u, u64{count} * sizeof(GridParticleCensusRow));
+            }
+
+            census.m_encoded = true;
+            storage.m_slot_encoded = true;
+        }
 
         if (m_particle_timing_queries) {
             context.m_encoder.writeTimestamp(m_particle_timing_queries, 0u);
@@ -680,6 +824,66 @@ namespace pP {
         return {};
     }
 
+    Expected<GridParticleCensus> GridPass::readParticleCensus(
+        const FenceCompletionValue completed, const FenceCompletionValue capture_submission) {
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            GridPass, capture_submission != kFenceValueNone and
+                              slotFenceComplete(completed, capture_submission) and
+                              m_world.m_gpu_particles
+                          ? std::error_code{}
+                          : std::make_error_code(std::errc::invalid_argument));
+
+        const auto &storage = *m_world.m_gpu_particles;
+        const auto &slot = storage.m_slots[storage.m_selected_slot];
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            GridPass, slot.m_reader and slot.m_census and slot.m_census->m_encoded and slot.m_census->m_device
+                          ? std::error_code{}
+                          : std::make_error_code(std::errc::state_not_recoverable));
+
+        const auto &census = *slot.m_census;
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            GridPass, census.m_submission == capture_submission ? std::error_code{}
+                                                                : std::make_error_code(std::errc::invalid_argument));
+
+        const auto &view = *slot.m_reader;
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            GridPass, census.m_identity ==
+                                  GridParticlePresentationIdentity{
+                                      view.m_world, view.m_publication, view.m_terrain_revision, view.m_joint_tick} and
+                              census.m_device_epoch == view.m_device_epoch and
+                              census.m_count == view.m_metadata->m_count
+                          ? std::error_code{}
+                          : std::make_error_code(std::errc::state_not_recoverable));
+
+        rhi::IDevice &device = *census.m_device;
+        GridParticleCensus result{};
+        result.m_metadata_owner = view.m_metadata;
+        result.m_identity = census.m_identity;
+        result.m_device_epoch = census.m_device_epoch;
+        result.m_submission = capture_submission;
+        result.m_world_edge = census.m_world_edge;
+
+        // Include every live diagnostic slot, not only this captured vector.
+        for (const auto &owned: storage.m_slots) {
+            if (owned.m_census) {
+                result.m_device_bytes += owned.m_census->m_projected->getDesc().size;
+                result.m_readback_bytes += owned.m_census->m_readback->getDesc().size;
+            }
+        }
+
+        result.m_rows.resize(census.m_count);
+        result.m_cpu_bytes = result.m_rows.capacity() * sizeof(GridParticleCensusRow);
+        if (not result.m_rows.empty()) {
+            void *mapped{};
+            PPR_RETURN_UNEXPECTED_ON_FAIL(
+                GridPass, device.mapBuffer(census.m_readback, rhi::CpuAccessMode::Read, &mapped));
+            std::memcpy(result.m_rows.data(), mapped, result.m_rows.size() * sizeof(GridParticleCensusRow));
+            PPR_RETURN_UNEXPECTED_ON_FAIL(GridPass, device.unmapBuffer(census.m_readback));
+        }
+
+        return result;
+    }
+
     std::error_code GridPass::renderGpuParticles_(const DrawContext &context) {
         context.m_pass.pushDebugGroup("Particles.Draw", {});
         PPR_DEFER {
@@ -718,8 +922,9 @@ namespace pP {
         }
 
         const auto pipeline = opticalPipeline_(
-            context.m_device, context.m_render_pipeline_key, m_gpu_particle_program, m_gpu_particle_key,
-            m_gpu_particle_pipeline, true);
+            context.m_device, context.m_render_pipeline_key,
+            m_spatial_msaa ? m_gpu_particle_spatial_program.get() : m_gpu_particle_program.get(), m_gpu_particle_key,
+            m_gpu_particle_pipeline, true, m_spatial_msaa);
         PPR_RETURN_ERROR_ON_FAIL(GridPass, pipeline);
 
         auto *const root = (*pipeline)->m_slot_roots[particle_slot].get();
@@ -730,7 +935,9 @@ namespace pP {
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass, (*pipeline)->m_slot_frame_cursors[particle_slot]["m_inverse_view_projection"].setData(
                           &m_camera_view.m_invert_view_projection, sizeof(m_camera_view.m_invert_view_projection)));
-        PPR_RETURN_ERROR_ON_FAIL(GridPass, bindSurfaceBuffers_(context.m_device, cursor, m_surface_retained_table));
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass,
+            bindSurfaceBuffers_(context.m_device, cursor, m_surface_retained_table, *pipeline, particle_slot));
         PPR_RETURN_ERROR_ON_FAIL(GridPass, ensureParticleMask_(context.m_device));
         PPR_RETURN_ERROR_ON_FAIL(GridPass, cursor["g_particle_mask"].setBinding(rhi::Binding(m_particle_mask_view)));
         PPR_RETURN_ERROR_ON_FAIL(

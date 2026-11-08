@@ -1229,7 +1229,11 @@ namespace pP::tests::detail::MatterGpu {
         PPR_DEFER {
             fixture.shutdown();
         };
-        fixture.initialize(false);
+
+        const auto validation_setting = config::getenvLookup("PPR_TEST_GPU_VALIDATION");
+        const bool validation = not validation_setting or *validation_setting == "1";
+        fixture.initialize(false, 32u, 32u, validation);
+
         {
             SparseHarness harness{fixture, 4u};
             {
@@ -2617,8 +2621,9 @@ namespace pP::tests::detail::MatterGpu {
                     for (u32 frame = 0u; frame < (temporal ? 4u : 1u); ++frame) {
                         const auto raster = picture.beginFrame(
                             settings, snapshot, int2{512, 512}, grid.worldGeneration());
+                        PPR_TEST_ASSERT(raster.has_value());
                         PPR_TEST_ASSERT(picture.temporalActive() == temporal);
-                        PPR_TEST_ASSERT(not grid.update(TimeSpan{}, raster));
+                        PPR_TEST_ASSERT(not grid.update(TimeSpan{}, *raster));
                         const auto draw = [&](const DrawContext &context) -> std::error_code {
                             PPR_RETURN_ERROR_ON_FAIL(MatterPoolRender, grid.renderBackground(context));
                             PPR_RETURN_ERROR_ON_FAIL(MatterPoolRender, grid.render(context));
@@ -2885,7 +2890,22 @@ namespace pP::tests::detail::MatterGpu {
         PPR_DEFER {
             fixture.shutdown();
         };
-        fixture.initialize(false);
+
+        const auto validation_setting = config::getenvLookup("PPR_TEST_GPU_VALIDATION");
+        const bool validation = not validation_setting or *validation_setting == "1";
+        fixture.initialize(false, 32u, 32u, validation);
+
+        // Published zero-row storage is a warm donor, not another bootstrap.
+        // Replacement must still allocate distinct mutable row/sparse storage.
+        const auto initial_empty = fixture.m_solver.committedView();
+        PPR_TEST_ASSERT(initial_empty and initial_empty->m_count == 0u);
+
+        fixture.replace({});
+        const auto replaced_empty = fixture.m_solver.committedView();
+        PPR_TEST_ASSERT(replaced_empty and replaced_empty->m_count == 0u);
+        PPR_TEST_ASSERT(replaced_empty->m_hot != initial_empty->m_hot);
+        PPR_TEST_ASSERT(replaced_empty->m_cold != initial_empty->m_cold);
+
         auto seed = restParticle();
         seed.m_color_b = 0.375f;
         seed.m_lambda = 0.125f;
@@ -2904,6 +2924,9 @@ namespace pP::tests::detail::MatterGpu {
         const auto before = fixture.m_solver.pollSnapshot();
         PPR_TEST_ASSERT(before and before->has_value());
         const auto original = (**before).m_particles[0u];
+
+        const auto old_reader = fixture.m_solver.committedView();
+        PPR_TEST_ASSERT(old_reader and old_reader->m_epoch == epoch);
 
         auto appended = restParticle();
         appended.m_position_x = 15.5f;
@@ -2925,6 +2948,11 @@ namespace pP::tests::detail::MatterGpu {
         PPR_TEST_ASSERT(fixture.m_solver.accounting().m_epoch == epoch);
         PPR_TEST_ASSERT(fixture.m_solver.profile().m_particle_count == 1u);
 
+        const auto after_cancel = fixture.m_solver.committedView();
+        PPR_TEST_ASSERT(after_cancel and after_cancel->m_hot == old_reader->m_hot);
+        PPR_TEST_ASSERT(after_cancel->m_cold == old_reader->m_cold);
+        PPR_TEST_ASSERT(old_reader->m_live_epoch->load() == old_reader->m_epoch);
+
         PPR_TEST_ASSERT(not fixture.m_solver.prepareAppend({&appended, 1u}, epoch, {}));
         PPR_TEST_ASSERT(not fixture.m_solver.drain());
         const auto prepared = fixture.m_solver.pollReplacement();
@@ -2933,6 +2961,12 @@ namespace pP::tests::detail::MatterGpu {
 
         fixture.m_solver.publishReplacement();
         PPR_TEST_ASSERT(fixture.m_solver.profile().m_particle_count == 2u);
+
+        const auto appended_reader = fixture.m_solver.committedView();
+        PPR_TEST_ASSERT(appended_reader and appended_reader->m_hot != old_reader->m_hot);
+        PPR_TEST_ASSERT(appended_reader->m_cold != old_reader->m_cold);
+        PPR_TEST_ASSERT(old_reader->m_live_epoch->load() != old_reader->m_epoch);
+
         PPR_TEST_ASSERT(not fixture.m_solver.beginSnapshot(epoch + 1u));
         PPR_TEST_ASSERT(not fixture.m_solver.drain());
         const auto captured = fixture.m_solver.pollSnapshot();
@@ -2967,6 +3001,32 @@ namespace pP::tests::detail::MatterGpu {
         PPR_TEST_ASSERT(fixture.m_solver.accounting().m_epoch == epoch + 2u);
         PPR_TEST_ASSERT(fixture.m_solver.accounting().m_particle_count == 2u);
         PPR_TEST_ASSERT(fixture.m_solver.accounting().m_last_particle_upload_bytes == 0u);
+
+        // Full nonempty replacement uses the same immutable pairs after its
+        // donor owner is retired, while retaining independent mutable buffers.
+        const auto replacement_rows = fixture.snapshot();
+        const auto previous_generation = fixture.m_solver.committedView();
+        PPR_TEST_ASSERT(previous_generation.has_value());
+
+        fixture.replace(replacement_rows);
+        const auto replacement_view = fixture.m_solver.committedView();
+        PPR_TEST_ASSERT(replacement_view and replacement_view->m_hot != previous_generation->m_hot);
+        PPR_TEST_ASSERT(replacement_view->m_cold != previous_generation->m_cold);
+
+        const auto replacement_snapshot = fixture.snapshot();
+        PPR_TEST_ASSERT(replacement_snapshot.size() == replacement_rows.size());
+        PPR_TEST_ASSERT(
+            std::memcmp(
+                replacement_snapshot.data(), replacement_rows.data(), replacement_rows.size() * sizeof(GpuParticle)) ==
+            0);
+
+        PPR_TEST_ASSERT(not fixture.m_solver.submitResidentTick(epoch + 3u, 1u, 2u));
+        PPR_TEST_ASSERT(not fixture.m_solver.drain());
+        const auto replacement_tick = fixture.m_solver.pollTick();
+        PPR_TEST_ASSERT(replacement_tick and *replacement_tick);
+
+        fixture.m_solver.publishTick();
+        PPR_TEST_ASSERT(fixture.m_solver.accounting().m_epoch == epoch + 4u);
     };
 
     PPR_UNIT_TEST (publication_validation_checks_every_scalar_and_matches_upload_admission) {

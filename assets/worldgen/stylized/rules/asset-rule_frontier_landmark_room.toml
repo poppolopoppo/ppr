@@ -1,0 +1,21 @@
+schema_version = 1
+
+[definition]
+order = 20
+
+[definition.payload]
+tag = "feature"
+
+[definition.payload.feature]
+feature = "room"
+biome = "lode"
+spacing_m = 35.0
+min_count = 1
+max_count = 3
+attempts = 4096
+priority = 90
+reflect = true
+
+[definition.payload.feature.depth]
+min = 0.0
+max = 1.0

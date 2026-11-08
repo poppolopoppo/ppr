@@ -6,6 +6,7 @@ module engine.tests.app;
 
 import engine.core;
 import engine.app;
+import engine.image;
 import engine.math;
 import engine.rhi;
 import std;
@@ -56,13 +57,15 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(PPR_OFFSETOF(GridPass::GridFrame, m_layers) == 176u);
             PPR_TEST_ASSERT(sizeof(GridSurfaceHeights) == 16384u);
             PPR_TEST_ASSERT(sizeof(GridBackgroundLayer) == 32u);
-            PPR_TEST_ASSERT(sizeof(GridTerrainVisual) == 80u);
+            PPR_TEST_ASSERT(sizeof(GridTerrainVisual) == 96u);
             PPR_TEST_ASSERT(PPR_OFFSETOF(GridTerrainVisual, m_filtered_mean_rgb) == 20u);
             PPR_TEST_ASSERT(sizeof(GridTerrainVisual::m_filtered_mean_rgb) == 12u);
             PPR_TEST_ASSERT(PPR_OFFSETOF(GridTerrainVisual, m_normal_texture_index) == 32u);
             PPR_TEST_ASSERT(PPR_OFFSETOF(GridTerrainVisual, m_metallic) == 36u);
             PPR_TEST_ASSERT(PPR_OFFSETOF(GridTerrainVisual, m_emissive_rgb) == 48u);
             PPR_TEST_ASSERT(PPR_OFFSETOF(GridTerrainVisual, m_surface_flags) == 76u);
+            PPR_TEST_ASSERT(PPR_OFFSETOF(GridTerrainVisual, m_transport_model) == 80u);
+            PPR_TEST_ASSERT(PPR_OFFSETOF(GridTerrainVisual, m_sigma_per_m) == 84u);
             PPR_TEST_ASSERT(sizeof(math::ContourPoint) == 8u);
             PPR_TEST_ASSERT(sizeof(math::ContourTriangle) == 16u);
             PPR_TEST_ASSERT(sizeof(math::ContourCase) == 72u);
@@ -79,11 +82,185 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(GridPass::kCellWordsPerChunk == 8192u);
         };
 
-        // Ortho 800x600 at the identity pose sees world x in [0, 800] and y
-        // in [0, 600]: tile A sits inside, tile B is far off-screen, tile C
-        // touches the x = 800 edge (visible per the boundary rule), and tile
-        // D starts one cell past it (culled). The plan preserves submission
-        // order over the visible set.
+        // ------------------------------------------------------------------
+        // versioned material optics and source-function conversion
+        // ------------------------------------------------------------------
+
+        PPR_UNIT_TEST (grid_material_optics_preserve_unavailable_and_source_function_units) {
+            GridTerrainVisual visual{};
+            visual.m_emissive_rgb[0] = 0.5f;
+            visual.m_emissive_rgb[1] = 0.25f;
+            visual.m_emissive_rgb[2] = 0.125f;
+            visual.m_emissive_strength = 4.0f;
+            PPR_TEST_ASSERT(not validateGridMaterialOptics(visual));
+            const auto unavailable = gridMaterialOpticalCell(visual);
+            PPR_TEST_ASSERT(not unavailable and unavailable.error() == std::errc::no_message);
+
+            visual.m_transport_model = kGridTransportOpaqueV1;
+            visual.m_surface_flags = kGridSurfaceOpticalBlend;
+            visual.m_opacity = 0.25f;
+            auto opaque = gridMaterialOpticalCell(visual);
+            PPR_TEST_ASSERT(opaque.has_value() and opaque->m_kind == lighting::OpticalKind::opaque);
+            PPR_TEST_ASSERT(opaque->m_surface_emission == (lighting::OpticalRgb{2.0, 1.0, 0.5}));
+
+            visual.m_transport_model = kGridTransportAbsorbingV1;
+            visual.m_sigma_per_m[0] = 0.5f;
+            visual.m_sigma_per_m[1] = 1.0f;
+            auto medium = gridMaterialOpticalCell(visual);
+            PPR_TEST_ASSERT(medium.has_value() and medium->m_kind == lighting::OpticalKind::absorbing);
+            PPR_TEST_ASSERT(medium->m_volume_emission == (lighting::OpticalRgb{1.0, 1.0, 0.0}));
+            const std::array<lighting::OpticalCell, 1> cells{*medium};
+            const lighting::OpticalGridView grid{cells, {}, 2.0, 1u, 1u, lighting::OpticalBoundary::vacuum};
+            const lighting::OpticalRay ray{{0.0, 1.0}, {1.0, 0.0}, 0.0, 2.0};
+            const auto interval = lighting::traceOpticalReference(grid, ray);
+            PPR_TEST_ASSERT(interval.has_value());
+            PPR_TEST_ASSERT(std::abs(interval->m_radiance[0] - 2.0 * (1.0 - std::exp(-1.0))) < 1e-12);
+            PPR_TEST_ASSERT(std::abs(interval->m_radiance[1] - (1.0 - std::exp(-2.0))) < 1e-12);
+            PPR_TEST_ASSERT(interval->m_radiance[2] == 0.0 and interval->m_transmittance[2] == 1.0);
+
+            visual.m_transport_model = kGridTransportVacuumV1;
+            PPR_TEST_ASSERT(validateGridMaterialOptics(visual) == std::errc::invalid_argument);
+            std::ranges::fill(visual.m_sigma_per_m, 0.0f);
+            visual.m_emissive_strength = 0.0f;
+            const auto vacuum = gridMaterialOpticalCell(visual);
+            PPR_TEST_ASSERT(vacuum.has_value() and vacuum->m_kind == lighting::OpticalKind::vacuum);
+
+            visual.m_transport_model = 0x201u;
+            PPR_TEST_ASSERT(validateGridMaterialOptics(visual) == std::errc::invalid_argument);
+            visual.m_transport_model = kGridTransportAbsorbingV1;
+            visual.m_sigma_per_m[0] = (std::numeric_limits<float>::max)();
+            visual.m_emissive_strength = (std::numeric_limits<float>::max)();
+            PPR_TEST_ASSERT(validateGridMaterialOptics(visual) == std::errc::invalid_argument);
+
+            // The image subsystem admits BOTH full chains through1x1 and
+            // truncated chains through4x4. The coarse material mean consumes
+            // the last actual level without imposing the truncated policy.
+            image::ImageAsset base{};
+            base.m_width = base.m_height = 8u;
+            auto storage = mem::UniqueBuffer::allocate(8u * 8u * 4u);
+            PPR_TEST_ASSERT(not storage.materialize());
+
+            {
+                const auto pixels = storage.getMutableData();
+                PPR_TEST_ASSERT(pixels.has_value());
+
+                for (std::size_t offset = 0u; offset < pixels->size(); offset += 4u) {
+                    (*pixels)[offset] = std::byte{255};
+                    (*pixels)[offset + 1u] = std::byte{128};
+                    (*pixels)[offset + 2u] = std::byte{0};
+                    (*pixels)[offset + 3u] = std::byte{255};
+                }
+            }
+
+            PPR_TEST_ASSERT(not storage.moveToShared(&base.m_storage));
+            base.m_subresources.push_back({.m_view = base.m_storage, .m_row_pitch = 32u, .m_slice_pitch = 256u});
+
+            auto full = base;
+            PPR_TEST_ASSERT(not image::generateMipChain(full, {.m_full_chain = true}));
+            PPR_TEST_ASSERT(full.m_mip_count == 4u and full.m_subresources.size() == 4u);
+
+            const auto full_mean = gridFilteredAlbedoMean(full);
+            PPR_TEST_ASSERT(full_mean.has_value());
+            PPR_TEST_ASSERT((*full_mean)[0] == 1.0f and (*full_mean)[2] == 0.0f);
+            PPR_TEST_ASSERT(std::abs((*full_mean)[1] - 128.0f / 255.0f) <= 1e-6f);
+
+            auto truncated = base;
+            PPR_TEST_ASSERT(not image::generateMipChain(truncated, {}));
+            PPR_TEST_ASSERT(truncated.m_mip_count == 2u and truncated.m_subresources.size() == 2u);
+
+            const auto truncated_mean = gridFilteredAlbedoMean(truncated);
+            PPR_TEST_ASSERT(truncated_mean.has_value() and *truncated_mean == *full_mean);
+
+            auto overlong = full;
+            ++overlong.m_mip_count;
+            overlong.m_subresources.push_back(overlong.m_subresources.back());
+            const auto rejected_overlong = gridFilteredAlbedoMean(overlong);
+            PPR_TEST_ASSERT(not rejected_overlong and rejected_overlong.error() == std::errc::invalid_argument);
+
+            auto missing_level = full;
+            missing_level.m_subresources.pop_back();
+            const auto rejected_missing = gridFilteredAlbedoMean(missing_level);
+            PPR_TEST_ASSERT(not rejected_missing and rejected_missing.error() == std::errc::invalid_argument);
+        };
+
+        // ------------------------------------------------------------------
+        // native reference source attachment and same-ID projection
+        // ------------------------------------------------------------------
+
+        PPR_UNIT_TEST (native_reference_attachment_rejects_unchecked_crop_palette_and_policy) {
+            GridTerrainVisual visual{};
+            visual.m_material_id = 17u;
+            visual.m_transport_model = kGridTransportOpaqueV1;
+            visual.m_emissive_rgb[0] = 1.0f;
+            visual.m_emissive_strength = 2.0f;
+            const auto optics = gridMaterialOpticalCell(visual);
+            PPR_TEST_ASSERT(optics.has_value());
+            const lighting::OpticalCell vacuum{{}, {}, {}, lighting::OpticalKind::vacuum};
+            const std::array<u16, 9> labels{0, 0, 0, 0, 17, 0, 0, 0, 0};
+            const std::array<lighting::WorldRadianceMaterial, 2> palette{{{vacuum, 0u}, {*optics, 17u}}};
+            const lighting::OpticalCell unavailable{{}, {}, {}, lighting::OpticalKind::unavailable};
+            const std::array<lighting::WorldRadianceMaterial, 1> particle_palette{{{unavailable, 18u}}};
+            const auto source = lighting::WorldRadianceSource::capture(
+                {labels, palette, {}, 1.0, 3u, 3u, lighting::OpticalBoundary::vacuum, {}, {}, particle_palette});
+            PPR_TEST_ASSERT(source.has_value());
+            PPR_TEST_ASSERT(not (*source)->validateMaterialProjection(17u, *optics));
+
+            PPR_TEST_ASSERT(not (*source)->validateMaterialProjection(18u, unavailable));
+            PPR_TEST_ASSERT((*source)->validateMaterialProjection(17u, unavailable) == std::errc::invalid_argument);
+            PPR_TEST_ASSERT((*source)->validateMaterialProjection(18u, *optics) == std::errc::invalid_argument);
+
+            auto wrong_optics = *optics;
+            wrong_optics.m_surface_emission[0] = 1.0;
+            PPR_TEST_ASSERT((*source)->validateMaterialProjection(17u, wrong_optics) == std::errc::invalid_argument);
+
+            GridPass::GridStagedFrame stage{};
+            stage.m_has_catalog = stage.m_full_refresh = stage.m_reset_caches = true;
+            stage.m_boundary_material_id = 0u;
+            stage.m_content_fingerprint = 13u;
+            stage.m_world_radiance_source = *source;
+            stage.m_world_radiance_revision = 1u;
+            stage.m_terrain_visuals.push_back(visual);
+            stage.m_tiles.push_back({.m_dirty_mask = 1u, .m_tile_range = {0, 0, 128, 128}, .m_chunk_id = 0u});
+            GridPass::GridStagedUpload upload{};
+            upload.m_payload.m_rect[2] = upload.m_payload.m_rect[3] = 128.0f;
+            upload.m_cell_materials.resize(GridPass::kCellsPerChunk, 0u);
+            upload.m_cell_materials[129u] = 17u;
+            stage.m_uploads.push_back(std::move(upload));
+            GridPass pass;
+            PPR_TEST_ASSERT(pass.applyStagedFrame(stage) == std::errc::invalid_argument);
+
+            GridTerrainVisual unavailable_visual{};
+            unavailable_visual.m_material_id = 18u;
+            stage.m_terrain_visuals.push_back(unavailable_visual);
+            PPR_TEST_ASSERT(not pass.applyStagedFrame(stage));
+            const u32 retained = pass.cachedTileCount();
+
+            auto missing_reset = stage;
+            missing_reset.m_reset_caches = false;
+            PPR_TEST_ASSERT(pass.applyStagedFrame(missing_reset) == std::errc::function_not_supported);
+
+            auto wrong_palette = stage;
+            wrong_palette.m_terrain_visuals[0].m_emissive_strength = 1.0f;
+            PPR_TEST_ASSERT(pass.applyStagedFrame(wrong_palette) == std::errc::invalid_argument);
+
+            auto outside_source = stage;
+            outside_source.m_uploads[0].m_cell_materials[100u] = 17u;
+            PPR_TEST_ASSERT(pass.applyStagedFrame(outside_source) == std::errc::invalid_argument);
+
+            auto wrong_revision = stage;
+            wrong_revision.m_world_radiance_revision = 0u;
+            PPR_TEST_ASSERT(pass.applyStagedFrame(wrong_revision) == std::errc::function_not_supported);
+
+            auto unrelated_policy = stage;
+            unrelated_policy.m_world_radiance_source.reset();
+            unrelated_policy.m_world_radiance_revision = 0u;
+            unrelated_policy.m_uploads.clear();
+            unrelated_policy.m_cell_size_m = 1.0f / 3.0f;
+            unrelated_policy.m_boundary_material_id = 1u;
+            PPR_TEST_ASSERT(pass.applyStagedFrame(unrelated_policy) == std::errc::function_not_supported);
+            PPR_TEST_ASSERT(pass.cachedTileCount() == retained);
+        };
+
         PPR_UNIT_TEST (grid_plan_converts_fine_bounds_to_metres) {
             const CameraSnapshot snapshot = orthoSnapshot800x600();
             const GridTileSubmission tiles[] = {
@@ -107,6 +284,11 @@ namespace pP::tests::detail {
             }
         };
 
+        // Ortho 800x600 at the identity pose sees world x in [0, 800] and y
+        // in [0, 600]: tile A sits inside, tile B is far off-screen, tile C
+        // touches the x = 800 edge (visible per the boundary rule), and tile
+        // D starts one cell past it (culled). The plan preserves submission
+        // order over the visible set.
         PPR_UNIT_TEST (grid_plan_culls_offscreen_tiles) {
             const CameraSnapshot snapshot = orthoSnapshot800x600();
 
@@ -699,6 +881,8 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not defaults.m_enabled);
             PPR_TEST_ASSERT(not defaults.m_palette_enabled);
             PPR_TEST_ASSERT(not defaults.m_temporal_enabled);
+            PPR_TEST_ASSERT(not defaults.m_spatial_enabled);
+            PPR_TEST_ASSERT(not defaults.m_hdr_enabled and defaults.m_exposure_ev == 0.0f);
             PPR_TEST_ASSERT(defaults.m_pixel_scale == 3u);
 
             const RetroSettings configured{.m_enabled = true, .m_pixel_scale = 4u};
@@ -737,7 +921,8 @@ namespace pP::tests::detail {
                         .m_palette_enabled = palette,
                         .m_temporal_enabled = true,
                         .m_pixel_scale = 4u};
-                    const CameraSnapshot raster = pass.beginFrame(requested, camera, int2{800, 600}, 1u);
+                    const auto raster = pass.beginFrame(requested, camera, int2{800, 600}, 1u);
+                    PPR_TEST_ASSERT(raster.has_value());
                     PPR_TEST_ASSERT(not pass.temporalActive());
                     PPR_TEST_ASSERT(requested.m_enabled == pixelized);
                     PPR_TEST_ASSERT(requested.m_palette_enabled == palette);
@@ -747,18 +932,68 @@ namespace pP::tests::detail {
                     for (u32 row = 0u; row < 4u; ++row) {
                         for (u32 column = 0u; column < 4u; ++column) {
                             PPR_TEST_ASSERT(
-                                raster.m_view_projection[row][column] == camera.m_view_projection[row][column]);
+                                raster->m_view_projection[row][column] == camera.m_view_projection[row][column]);
                             PPR_TEST_ASSERT(
-                                raster.m_invert_view_projection[row][column] ==
+                                raster->m_invert_view_projection[row][column] ==
                                 camera.m_invert_view_projection[row][column]);
                         }
                     }
                 }
             }
 
-            const CameraSnapshot disabled = pass.beginFrame(RetroSettings{}, camera, int2{800, 600}, 1u);
+            const auto disabled = pass.beginFrame(RetroSettings{}, camera, int2{800, 600}, 1u);
+            PPR_TEST_ASSERT(disabled.has_value());
             PPR_TEST_ASSERT(not pass.temporalActive());
-            PPR_TEST_ASSERT(disabled.m_revision == camera.m_revision);
+            PPR_TEST_ASSERT(disabled->m_revision == camera.m_revision);
+            PPR_TEST_ASSERT(not pass.shutdown());
+        };
+
+        PPR_UNIT_TEST (retro_rejects_invalid_hdr_exposure_before_first_frame) {
+            RetroPass pass;
+            const CameraSnapshot camera = GridTiles::orthoSnapshot800x600();
+            for (const float invalid:
+                {-16.01f, 16.01f, std::numeric_limits<float>::infinity(), -std::numeric_limits<float>::infinity(),
+                    std::numeric_limits<float>::quiet_NaN()}) {
+                const auto rejected = pass.beginFrame(
+                    RetroSettings{.m_hdr_enabled = true, .m_exposure_ev = invalid}, camera, int2{800, 600}, 1u);
+                PPR_TEST_ASSERT(not rejected and rejected.error() == std::errc::invalid_argument);
+                PPR_TEST_ASSERT(not pass.temporalActive());
+            }
+
+            for (const float endpoint: {-16.0f, 0.0f, 16.0f}) {
+                const auto accepted = pass.beginFrame(
+                    RetroSettings{.m_hdr_enabled = true, .m_exposure_ev = endpoint}, camera, int2{800, 600}, 1u);
+                PPR_TEST_ASSERT(accepted.has_value());
+                PPR_TEST_ASSERT(accepted->m_revision == camera.m_revision);
+            }
+
+            RetroSettings spatial{.m_spatial_enabled = true};
+            PPR_TEST_ASSERT(not RetroPass::validateFrameSettings(spatial, int2{1920, 1080}, int2{3840, 2160}));
+            for (const int2 &invalid:
+                {int2{0, 2160}, int2{3840, 0}, int2{-2, 2160}, int2{3839, 2160}, int2{3840, 2159}, int2{3838, 2160}}) {
+                PPR_TEST_ASSERT(
+                    RetroPass::validateFrameSettings(spatial, int2{1920, 1080}, invalid) ==
+                    std::errc::invalid_argument);
+            }
+
+            for (const bool temporal: {false, true}) {
+                auto invalid = spatial;
+                invalid.m_enabled = not temporal;
+                invalid.m_temporal_enabled = temporal;
+                PPR_TEST_ASSERT(
+                    RetroPass::validateFrameSettings(invalid, int2{1920, 1080}, int2{3840, 2160}) ==
+                    std::errc::invalid_argument);
+            }
+
+            spatial.m_palette_enabled = true;
+            spatial.m_hdr_enabled = true;
+            PPR_TEST_ASSERT(not RetroPass::validateFrameSettings(spatial, int2{1920, 1080}, int2{3840, 2160}));
+            const auto old_overload = pass.beginFrame(spatial, camera, int2{1920, 1080}, 1u);
+            PPR_TEST_ASSERT(not old_overload and old_overload.error() == std::errc::invalid_argument);
+            const auto unsupported = pass.beginFrame(spatial, camera, int2{1920, 1080}, int2{3840, 2160}, 1u);
+            PPR_TEST_ASSERT(not unsupported and unsupported.error() == std::errc::not_supported);
+            PPR_TEST_ASSERT(not pass.spatialActive());
+
             PPR_TEST_ASSERT(not pass.shutdown());
         };
 
@@ -778,6 +1013,8 @@ namespace pP::tests {
     const UnitTest grid_pass = UnitTest::Named("grid_pass") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::GridTiles::grid_tile_payload_layout_matches_the_shader,
+            detail::GridTiles::grid_material_optics_preserve_unavailable_and_source_function_units,
+            detail::GridTiles::native_reference_attachment_rejects_unchecked_crop_palette_and_policy,
             detail::GridTiles::grid_plan_converts_fine_bounds_to_metres,
             detail::GridTiles::grid_plan_culls_offscreen_tiles,
             detail::GridTiles::grid_dirty_upload_serves_quiescent_from_cache,
@@ -796,6 +1033,7 @@ namespace pP::tests {
             detail::Retro::retro_settings_default_to_disabled_engine_policy,
             detail::Retro::temporal_jitter_visits_a_centered_half_pixel_cycle,
             detail::Retro::uninitialized_temporal_fallback_preserves_camera_and_requested_settings,
+            detail::Retro::retro_rejects_invalid_hdr_exposure_before_first_frame,
             detail::Retro::retro_teardown_is_idempotent_before_initialize,
         });
     };

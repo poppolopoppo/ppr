@@ -21,53 +21,68 @@ namespace pP::colony {
     // ------------------------------------------------------------------
 
     PPR_DEFINE_LOG_CATEGORY(WorldCapture, info, none)
+
+    // ------------------------------------------------------------------
+    // exact-byte bounded RGBA8 diagnostic readback
+    // ------------------------------------------------------------------
+
+    std::error_code writeCaptureReadback(
+        rhi::IDevice &device, rhi::ITexture &target, const std::filesystem::path &path) {
+        const auto &description = target.getDesc();
+        const u32 width = description.size.width, height = description.size.height;
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldCapture, description.type == rhi::TextureType::Texture2D and
+                                  description.format == rhi::Format::RGBA8Unorm and
+                                  description.sampleCount == 1u and
+                                  width > 0u and
+                                  width <= 4096u and
+                                  height > 0u and
+                                  height <= 4096u
+                              ? std::error_code{}
+                              : std::make_error_code(std::errc::not_supported));
+
+        shader::ComPtr<ISlangBlob> blob{};
+        rhi::SubresourceLayout layout{};
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldCapture, make_error_code(device.readTexture(&target, 0u, 0u, blob.writeRef(), &layout)));
+        const std::size_t row_bytes = std::size_t{width} * 4u;
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldCapture, blob and
+                                  blob->getBufferPointer() != nullptr and
+                                  layout.rowPitch >= row_bytes and
+                                  blob->getBufferSize() >= (height - 1u) * layout.rowPitch + row_bytes
+                              ? std::error_code{}
+                              : std::make_error_code(std::errc::protocol_error));
+
+        std::ofstream file{path, std::ios::binary | std::ios::trunc};
+        PPR_RETURN_ERROR_ON_FAIL(WorldCapture, file ? std::error_code{} : std::make_error_code(std::errc::io_error));
+        file << "P6\n" << width << ' ' << height << "\n255\n";
+        const auto *const data = static_cast<const u8 *>(blob->getBufferPointer());
+        Array<char> row(std::size_t{width} * 3u);
+
+        for (u32 y = 0u; y < height; ++y) {
+            for (u32 x = 0u; x < width; ++x) {
+                for (u32 channel = 0u; channel < 3u; ++channel) {
+                    row[x * 3u + channel] = static_cast<char>(data[y * layout.rowPitch + x * 4u + channel]);
+                }
+            }
+
+            file.write(row.data(), checked_cast<std::streamsize>(row.size()));
+            PPR_RETURN_ERROR_ON_FAIL(
+                WorldCapture, file ? std::error_code{} : std::make_error_code(std::errc::io_error));
+        }
+
+        file.close();
+        PPR_RETURN_ERROR_ON_FAIL(WorldCapture, file ? std::error_code{} : std::make_error_code(std::errc::io_error));
+        return {};
+    }
+
     namespace {
         constexpr u32 kCaptureEdge = 512u;
         struct CaptureView {
             std::string_view m_name;
             float m_x{}, m_y{}, m_width{};
         };
-
-        // ------------------------------------------------------------------
-        // readback
-        // ------------------------------------------------------------------
-
-        [[nodiscard]] std::error_code writeReadback(
-            rhi::IDevice &device, rhi::ITexture &target, const std::filesystem::path &path) {
-            shader::ComPtr<ISlangBlob> blob{};
-            rhi::SubresourceLayout layout{};
-            PPR_RETURN_ERROR_ON_FAIL(
-                WorldCapture, make_error_code(device.readTexture(&target, 0u, 0u, blob.writeRef(), &layout)));
-            const std::size_t row_bytes = kCaptureEdge * 4u;
-            if (not blob or
-                layout.rowPitch < row_bytes or
-                blob->getBufferSize() < (kCaptureEdge - 1u) * layout.rowPitch + row_bytes) {
-                PPR_RETURN_ERROR_ON_FAIL(WorldCapture, std::errc::protocol_error);
-            }
-
-            std::ofstream file{path, std::ios::binary | std::ios::trunc};
-            PPR_RETURN_ERROR_ON_FAIL(
-                WorldCapture, file ? std::error_code{} : std::make_error_code(std::errc::io_error));
-            file << "P6\n" << kCaptureEdge << ' ' << kCaptureEdge << "\n255\n";
-            const auto *const data = static_cast<const u8 *>(blob->getBufferPointer());
-            std::array<char, kCaptureEdge * 3u> row{};
-
-            for (u32 y = 0u; y < kCaptureEdge; ++y) {
-                for (u32 x = 0u; x < kCaptureEdge; ++x) {
-                    for (u32 c = 0u; c < 3u; ++c) {
-                        row[x * 3u + c] = static_cast<char>(data[y * layout.rowPitch + x * 4u + c]);
-                    }
-                }
-                file.write(row.data(), row.size());
-                PPR_RETURN_ERROR_ON_FAIL(
-                    WorldCapture, file ? std::error_code{} : std::make_error_code(std::errc::io_error));
-            }
-
-            file.close();
-            PPR_RETURN_ERROR_ON_FAIL(
-                WorldCapture, file ? std::error_code{} : std::make_error_code(std::errc::io_error));
-            return {};
-        }
 
         // ------------------------------------------------------------------
         // capture application
@@ -227,7 +242,7 @@ namespace pP::colony {
                     const auto gpu_timing = renderer.lastGpuFrameTiming();
                     PPR_RETURN_ERROR_ON_FAIL(
                         WorldCapture,
-                        writeReadback(device, *m_target, m_directory / (std::string{view.m_name} + ".ppm")));
+                        writeCaptureReadback(device, *m_target, m_directory / (std::string{view.m_name} + ".ppm")));
                     manifest << std::format(
                         "{} center_m=({}, {}) width_m={} pixels={}\n", view.m_name, view.m_x, view.m_y, view.m_width,
                         kCaptureEdge);

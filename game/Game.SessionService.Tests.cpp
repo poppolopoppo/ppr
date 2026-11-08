@@ -85,6 +85,30 @@ namespace pP::game::tests::detail {
         PPR_TEST_ASSERT(selected->m_live_epoch->load(std::memory_order_acquire) == 24u);
     };
 
+    PPR_UNIT_TEST (playable_capture_waits_for_first_present_ack_and_closed_progress) {
+        constexpr GridWorldIdentity world{17u, 7u, 101u};
+        constexpr u64 epoch = 23u;
+        SessionWorldFacts facts{world, true, true, false, true, false};
+        PPR_TEST_ASSERT(not canCapturePlayableSessionFrame(facts, false, false));
+
+        RenderFrameResult first{};
+        first.m_reservation_epoch = epoch;
+        first.m_presented_grid = world;
+        first.m_presented = true;
+        facts.m_presented = hasSessionWorldPresentation(first, epoch, world, facts.m_published, facts.m_activated);
+        PPR_TEST_ASSERT(facts.m_presented);
+        PPR_TEST_ASSERT(not canCapturePlayableSessionFrame(facts, true, false));
+
+        // The same first-present facts qualify only after the owner actually
+        // dismisses progress and successfully builds the playable panel.
+        PPR_TEST_ASSERT(canCapturePlayableSessionFrame(facts, false, false));
+
+        auto stale = first;
+        --stale.m_presented_grid.m_world_generation;
+        facts.m_presented = hasSessionWorldPresentation(stale, epoch, world, facts.m_published, facts.m_activated);
+        PPR_TEST_ASSERT(not canCapturePlayableSessionFrame(facts, false, false));
+    };
+
     PPR_UNIT_TEST (retained_presentation_matches_current_activation_without_consuming_staging) {
         constexpr GridWorldIdentity requested{17u, 7u, 101u};
         constexpr u64 epoch = 23u;
@@ -108,6 +132,22 @@ namespace pP::game::tests::detail {
         PPR_TEST_ASSERT(hasSessionWorldPresentation(delivered, epoch, requested, true, true));
         PPR_TEST_ASSERT(not hasSessionWorldPresentation(delivered, epoch, requested, false, true));
         PPR_TEST_ASSERT(not hasSessionWorldPresentation(delivered, epoch, requested, true, false));
+
+        // World IDs intentionally stay the same across mechanical edits. The
+        // actual consumed optical revision, not an echoed command/dirty list,
+        // distinguishes a held old picture from the newly committed door.
+        auto optical = delivered;
+        optical.m_lighting_revision = 19u;
+        optical.m_submit_value = 91u;
+        PPR_TEST_ASSERT(hasSessionWorldPresentation(optical, epoch, requested, true, true, std::nullopt, 19u));
+        PPR_TEST_ASSERT(not hasSessionWorldPresentation(optical, epoch, requested, true, true, std::nullopt, 20u));
+
+        optical.m_lighting_pending = true;
+        PPR_TEST_ASSERT(not hasSessionWorldPresentation(optical, epoch, requested, true, true, std::nullopt, 19u));
+
+        optical.m_lighting_pending = false;
+        optical.m_lighting_error = std::make_error_code(std::errc::io_error);
+        PPR_TEST_ASSERT(not hasSessionWorldPresentation(optical, epoch, requested, true, true, std::nullopt, 19u));
 
         // Visibility recognition must leave the independent edit manifest intact.
         PPR_TEST_ASSERT(not delivered.m_grid_stage_applied and not delivered.m_grid_staging_applied);
@@ -735,6 +775,7 @@ namespace pP::game::tests {
     const UnitTest session_service = UnitTest::Named("session_service") / [](UnitTest::IRun &_) {
         _.recurse({
             detail::retained_workshop_selection_follows_bundle_authority,
+            detail::playable_capture_waits_for_first_present_ack_and_closed_progress,
             detail::retained_presentation_matches_current_activation_without_consuming_staging,
             detail::world_transition_admission_freezes_selection_and_cancellation_cannot_roll_back,
             detail::pending_owner_extracts_acknowledgments_and_close_without_mutation_overtaking,

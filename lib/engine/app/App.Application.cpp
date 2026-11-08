@@ -234,6 +234,13 @@ namespace pP {
     // display settings
     // ------------------------------------------------------------------
 
+    std::error_code Application::enableSurfaceReadbackAtStartup() {
+        PPR_RETURN_ERROR_ON_FAIL(
+            App, not m_renderer ? std::error_code{} : std::make_error_code(std::errc::operation_not_permitted));
+        m_surface_readback_enabled = true;
+        return {};
+    }
+
     void Application::setDisplaySettings(const DisplaySettings &settings) {
         // Startup policy only; window intent is validated against native
         // capabilities during editor initialization. Runtime uses ack-only requests.
@@ -1894,7 +1901,8 @@ namespace pP {
 
             m_services.insert_or_assign(rhi_service);
 
-            auto renderer = std::make_unique<Renderer>(SurfaceSettings{.m_vsync = m_presentation_vsync});
+            auto renderer = std::make_unique<Renderer>(
+                SurfaceSettings{.m_vsync = m_presentation_vsync, .m_readback_enabled = m_surface_readback_enabled});
             // Committed startup presentation settings cross the ownership
             // boundary by value. Later edits use the acknowledged transaction.
             if (m_render_lane_enabled and not m_domain.m_is_headless) {

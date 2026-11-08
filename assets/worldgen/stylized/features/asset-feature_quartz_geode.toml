@@ -1,0 +1,127 @@
+schema_version = 1
+
+[definition]
+allow_horizontal_reflection = true
+
+[definition.operations]
+
+[definition.operations.op_00]
+order = 10
+x_fine = 1
+y_fine = 1
+
+[definition.operations.op_00.action]
+tag = "paint"
+
+[definition.operations.op_00.action.paint]
+material = "granite"
+
+[definition.operations.op_00.action.paint.shape]
+tag = "ellipse"
+
+[definition.operations.op_00.action.paint.shape.ellipse]
+width_fine = 58
+height_fine = 52
+
+[definition.operations.op_01]
+order = 20
+x_fine = 3
+y_fine = 4
+
+[definition.operations.op_01.action]
+tag = "paint"
+
+[definition.operations.op_01.action.paint]
+material = "clear_quartz"
+
+[definition.operations.op_01.action.paint.shape]
+tag = "ellipse"
+
+[definition.operations.op_01.action.paint.shape.ellipse]
+width_fine = 53
+height_fine = 46
+
+[definition.operations.op_02]
+order = 30
+x_fine = 8
+y_fine = 7
+
+[definition.operations.op_02.action]
+tag = "paint"
+
+[definition.operations.op_02.action.paint]
+material = "glass"
+
+[definition.operations.op_02.action.paint.shape]
+tag = "ellipse"
+
+[definition.operations.op_02.action.paint.shape.ellipse]
+width_fine = 43
+height_fine = 38
+
+[definition.operations.op_03]
+order = 40
+x_fine = 9
+y_fine = 10
+
+[definition.operations.op_03.action]
+tag = "carve"
+
+[definition.operations.op_03.action.carve]
+
+[definition.operations.op_03.action.carve.shape]
+tag = "ellipse"
+
+[definition.operations.op_03.action.carve.shape.ellipse]
+width_fine = 40
+height_fine = 34
+
+[definition.operations.op_04]
+order = 50
+x_fine = 23
+y_fine = 5
+
+[definition.operations.op_04.action]
+tag = "carve"
+
+[definition.operations.op_04.action.carve]
+
+[definition.operations.op_04.action.carve.shape]
+tag = "ellipse"
+
+[definition.operations.op_04.action.carve.shape.ellipse]
+width_fine = 26
+height_fine = 24
+
+[definition.operations.op_05]
+order = 60
+x_fine = 5
+y_fine = 23
+
+[definition.operations.op_05.action]
+tag = "carve"
+
+[definition.operations.op_05.action.carve]
+
+[definition.operations.op_05.action.carve.shape]
+tag = "ellipse"
+
+[definition.operations.op_05.action.carve.shape.ellipse]
+width_fine = 29
+height_fine = 21
+
+[definition.markers]
+
+[definition.markers.anchor]
+role = "sealed_pocket"
+x_fine = 30
+y_fine = 27
+
+[definition.reservation]
+min_x_fine = 0
+min_y_fine = 0
+max_x_fine = 60
+max_y_fine = 54
+
+[appearance]
+display_name = "Quartz geode"

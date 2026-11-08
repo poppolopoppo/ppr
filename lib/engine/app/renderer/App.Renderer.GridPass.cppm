@@ -3,6 +3,9 @@ module;
 export module engine.app:renderer.grid_pass;
 
 import :renderer.types;
+import :renderer.lighting;
+import :renderer.lighting_pass;
+import :renderer.world_radiance;
 import :renderer.frame_fence;
 import :renderer.gpu_caches;
 import :scene.camera;
@@ -25,7 +28,7 @@ export namespace pP {
     // mutable Camera while drawing); viewport and scissor travel per-draw on
     // DrawSubmission; row-major row-vector LH +Z-forward +Y-up, [0,1] depth,
     // mul(float4,matrix), view*projection, no backend transpose/Y-flip.
-    // NO GI inputs of any kind.
+    // Content-owned immutable lighting leases are optional explicit inputs.
     //
     // Tiles reuse the single 32x32-chunk x 128x128-cell geometry as
     // CHUNK-SIZED tiles (kTilesPerChunk == 1): one tile per chunk, never a
@@ -37,16 +40,6 @@ export namespace pP {
     // Graph note: game/colony (which owns the engine.sim link) translates
     // grid state into these plain structs; engine.app gains NO engine.sim
     // dependency and no sim type crosses this boundary.
-
-    // Value identity of an activated world bundle. Zero job/generation means
-    // no activated world; the owner lane is the only reader of bundle state.
-    struct GridWorldIdentity {
-        u64 m_job_id{};
-        u64 m_world_generation{};
-        u64 m_content_fingerprint{};
-
-        [[nodiscard]] bool operator==(const GridWorldIdentity &) const noexcept = default;
-    };
 
     // Tile rect in world-cell units. Signed so camera-centred test layouts
     // stay representable; production submissions always land in [0, edge).
@@ -63,6 +56,12 @@ export namespace pP {
     inline constexpr u32 kGridSurfaceTextureRepeat = 2u;
     inline constexpr u32 kGridSurfaceParticleSolid = 4u;
     inline constexpr u32 kGridSurfaceParticleLiquid = 8u;
+
+    // Tagged version1 authored transport, independent of visual alpha/IOR/phase.
+    inline constexpr u32 kGridTransportUnavailable = 0u;
+    inline constexpr u32 kGridTransportVacuumV1 = 0x101u;
+    inline constexpr u32 kGridTransportOpaqueV1 = 0x102u;
+    inline constexpr u32 kGridTransportAbsorbingV1 = 0x103u;
 
     struct alignas(16) GridTerrainVisual {
         u32 m_material_id{};
@@ -82,8 +81,13 @@ export namespace pP {
         float m_normal_scale{1.0f};
         float m_refraction_depth_m{};
         u32 m_surface_flags{};
+        u32 m_transport_model{kGridTransportUnavailable};
+        float m_sigma_per_m[3]{};
     };
-    static_assert(sizeof(GridTerrainVisual) == 80u);
+    static_assert(sizeof(GridTerrainVisual) == 96u);
+    static_assert(std::is_standard_layout_v<GridTerrainVisual> and std::is_trivially_copyable_v<GridTerrainVisual>);
+    static_assert(PPR_OFFSETOF(GridTerrainVisual, m_transport_model) == 80u);
+    static_assert(PPR_OFFSETOF(GridTerrainVisual, m_sigma_per_m) == 84u);
     static_assert(PPR_OFFSETOF(GridTerrainVisual, m_normal_texture_index) == 32u);
     static_assert(PPR_OFFSETOF(GridTerrainVisual, m_metallic) == 36u);
     static_assert(PPR_OFFSETOF(GridTerrainVisual, m_roughness) == 40u);
@@ -97,6 +101,22 @@ export namespace pP {
     static_assert(PPR_OFFSETOF(GridTerrainVisual, m_roundness) == 16u);
     static_assert(PPR_OFFSETOF(GridTerrainVisual, m_filtered_mean_rgb) == 20u);
     static_assert(alignof(GridTerrainVisual) == 16u);
+
+    // Visual-only unavailable rows remain admissible with zero sigma. Strict
+    // optical conversion rejects unavailable; no missing material becomes vacuum.
+    [[nodiscard]] std::error_code validateGridMaterialOptics(const GridTerrainVisual &visual);
+    [[nodiscard]] std::expected<lighting::OpticalCell, std::error_code> gridMaterialOpticalCell(
+        const GridTerrainVisual &visual);
+
+    // ------------------------------------------------------------------
+    // coarse material projection shared with immutable world sources
+    // ------------------------------------------------------------------
+
+    // One canonical coarsest admitted linear-image mean for rendering and
+    // immutable world-source material projection; no texture data is retained.
+    [[nodiscard]] Expected<std::array<float, 3u>> gridFilteredAlbedoMean(const image::ImageAsset &source);
+    [[nodiscard]] Expected<std::array<float, 3u>> gridMaterialDiffuseAlbedo(
+        const GridTerrainVisual &visual, std::span<const image::ImageAsset> images);
 
     struct alignas(16) GridBackgroundLayer {
         u32 m_texture_index{0xffffffffu};
@@ -140,65 +160,40 @@ export namespace pP {
     // versioned resident-particle presentation input
     // ------------------------------------------------------------------
 
-    inline constexpr u32 kGridParticleNumericalLayout = 4u;
-    inline constexpr u32 kGridParticleNumericalStride = 64u;
-    inline constexpr u32 kGridParticleReadonlyStride = 24u;
-    inline constexpr u32 kGridParticleCapacity = 1024u * 1024u;
-
-    // Stable row/ID mapping and gas-only physical inputs. Moving radius is
-    // cell_metres*sqrt(Cold24.volume/pi); gas radius is sqrt(volume/thickness/pi).
-    struct GridParticleMetadataRow {
-        u32 m_id_low{}, m_id_high{}, m_source_row{0xffff'ffffu}, m_material{};
-        float m_gas_x{}, m_gas_y{}, m_radius{};
-        u32 m_reserved{};
-    };
-
-    static_assert(sizeof(GridParticleMetadataRow) == 32u and alignof(GridParticleMetadataRow) == 4u);
-    static_assert(PPR_OFFSETOF(GridParticleMetadataRow, m_gas_x) == 16u);
-    static_assert(PPR_OFFSETOF(GridParticleMetadataRow, m_radius) == 24u);
-
-    struct GridParticleMetadataResource {
-        rhi::ComPtr<rhi::IBuffer> m_rows{};
-        Array<u32> m_materials{};
-        u64 m_version{};
-        double m_cell_metres{};
-        u32 m_count{}, m_moving_count{};
-    };
-
     [[nodiscard]] Expected<std::shared_ptr<const GridParticleMetadataResource>> prepareGridParticleMetadata(
         rhi::IDevice &device, std::span<const GridParticleMetadataRow> rows, u32 moving_count, double cell_metres,
         u64 version);
 
-    struct GridParticlePresentationIdentity {
-        GridWorldIdentity m_world{};
-        u64 m_publication{}, m_terrain_revision{}, m_joint_tick{};
+    // ------------------------------------------------------------------
+    // capture-only committed particle projection
+    // ------------------------------------------------------------------
 
-        [[nodiscard]] bool operator==(const GridParticlePresentationIdentity &) const noexcept = default;
+    // Capture-only all-row projection. Zero means a valid half-open native
+    // cell; flags preserve invalid/outside/inactive/vacuum rows without culling.
+    enum EGridParticleCensusStatus : u32 {
+        kGridParticleCensusInvalid = 1u,
+        kGridParticleCensusOutside = 2u,
+        kGridParticleCensusInactive = 4u,
+        kGridParticleCensusVacuum = 8u,
     };
 
-    struct GridParticleGpuView {
-        rhi::ComPtr<rhi::IBuffer> m_numerical{};
-        rhi::ComPtr<rhi::IBuffer> m_readonly{};
-        std::shared_ptr<const GridParticleMetadataResource> m_metadata{};
-        std::shared_ptr<const std::atomic<u64>> m_live_epoch{};
-        GridWorldIdentity m_world{};
-        u64 m_device_epoch{}, m_publication{}, m_terrain_revision{}, m_joint_tick{};
-        double m_origin{3.0};
-        u32 m_layout{kGridParticleNumericalLayout};
-        u32 m_stride{kGridParticleNumericalStride};
-        u32 m_readonly_stride{kGridParticleReadonlyStride};
+    struct GridParticleCensusRow {
+        u32 m_id_low{}, m_id_high{}, m_material{}, m_status{};
+        u32 m_cell_x{0xffff'ffffu}, m_cell_y{0xffff'ffffu};
+    };
+    static_assert(sizeof(GridParticleCensusRow) == 24u and alignof(GridParticleCensusRow) == 4u);
+    static_assert(
+        std::is_standard_layout_v<GridParticleCensusRow> and std::is_trivially_copyable_v<GridParticleCensusRow>);
+    static_assert(PPR_OFFSETOF(GridParticleCensusRow, m_cell_x) == 16u);
 
-        [[nodiscard]] bool current() const noexcept {
-            return m_numerical and
-                   m_readonly and
-                   m_layout == kGridParticleNumericalLayout and
-                   m_stride == kGridParticleNumericalStride and
-                   m_readonly_stride == kGridParticleReadonlyStride and
-                   m_numerical->getDesc().elementSize == kGridParticleNumericalStride and
-                   m_readonly->getDesc().elementSize == kGridParticleReadonlyStride and
-                   m_live_epoch and
-                   m_live_epoch->load(std::memory_order_acquire) == m_device_epoch;
-        }
+    struct GridParticleCensus {
+        std::vector<GridParticleCensusRow> m_rows{};
+        // Weak identity; the selected view/capture owns the metadata resource.
+        std::weak_ptr<const GridParticleMetadataResource> m_metadata_owner{};
+        GridParticlePresentationIdentity m_identity{};
+        FenceCompletionValue m_submission{kFenceValueNone};
+        u64 m_device_epoch{}, m_device_bytes{}, m_readback_bytes{}, m_cpu_bytes{};
+        u32 m_world_edge{};
     };
 
     enum class EGridDiagnosticMode : u32 {
@@ -297,13 +292,22 @@ export namespace pP {
         u64 m_retired_chunk_blocks{};
         u64 m_texture_entries{};
         u64 m_texture_slots{};
+        u64 m_texture_inventory_comparisons{};
+        u64 m_texture_inventory_reuses{};
+        // Successful new cache entries and their source mip bytes; excludes
+        // dedup hits, descriptors, palettes and driver allocation overhead.
+        u64 m_texture_uploads{};
+        u64 m_texture_uploaded_bytes{};
+        u64 m_candidate_advances{};
         u32 m_retained_atlases{};
         u64 m_particle_uploads{};
         u64 m_particle_uploaded_bytes{};
         u64 m_particle_instances{};
         u64 m_particle_buffer_bytes{};
         u64 m_background_target_bytes{};
+        u64 m_screen_contact_bytes{};
         u32 m_background_targets{};
+        u32 m_screen_contact_masks{};
         u32 m_particle_root_bindings{};
         u64 m_texture_decoded_bytes{};
     };
@@ -383,7 +387,9 @@ export namespace pP {
         [[nodiscard]] bool gpuParticleFrameCurrent(const std::optional<GridParticleGpuView> &view) const noexcept;
         [[nodiscard]] std::optional<GridParticlePresentationIdentity> activeParticlePresentation() const noexcept;
         [[nodiscard]] std::error_code applyGpuParticleView(const GridParticleGpuView &view);
-        [[nodiscard]] std::error_code prepareGpuParticles(const PreRenderContext &context);
+        [[nodiscard]] std::error_code prepareGpuParticles(const PreRenderContext &context, u32 census_world_edge = 0u);
+        [[nodiscard]] Expected<GridParticleCensus> readParticleCensus(
+            FenceCompletionValue completed, FenceCompletionValue capture_submission);
 
         // Pure CPU planner: keeps the submissions whose tile boxes (expanded
         // by kGridCullEpsilon) intersect the snapshot frustum. Renders
@@ -394,7 +400,34 @@ export namespace pP {
         [[nodiscard]] std::error_code initialize(
             IRhiService &rhi_service, IShaderService &shader_service, const std::filesystem::path &content_dir);
 
-        [[nodiscard]] std::error_code update(TimeSpan dt, const CameraSnapshot &camera_view);
+        // Visual continuation of completed receiver lighting across solid cut faces.
+        enum class ReceiverContinuation : u32 {
+            nearest,
+            interpolated_experiment
+        };
+
+        enum class BackgroundResponse : u32 {
+            unlit,
+            lit_backwall,
+            // Debug-only128x256 centre-density near-visibility pilot. Native
+            // opaque/vacuum field required; foreground and world solver unchanged.
+            screen_contact_pilot,
+            screen_contact
+        };
+
+        enum class ReceiverResponse : u32 {
+            flat,
+            mapped_diffuse
+        };
+
+        // Explicit owned-frame sampling policy. Legacy temporal also uses x4,
+        // so the attachment signature alone never selects this variant.
+        [[nodiscard]] std::error_code update(
+            TimeSpan dt, const CameraSnapshot &camera_view, bool spatial_msaa = false,
+            ReceiverContinuation receiver_continuation = ReceiverContinuation::nearest,
+            ReceiverResponse receiver_response = ReceiverResponse::flat,
+            BackgroundResponse background_response = BackgroundResponse::unlit);
+        [[nodiscard]] std::error_code validateSpatialContent() const noexcept;
 
         // CPU reference draw path: plan (cull) -> resolve payloads (cache hit, or
         // stage cold from the submission) -> upload tile ring -> one
@@ -420,11 +453,31 @@ export namespace pP {
         [[nodiscard]] std::error_code prepareGpuVisibility(const PreRenderContext &context);
         [[nodiscard]] std::error_code renderGpuIndirect(const DrawContext &context);
 
+        // Offscreen timing consumes five timestamps and leaves visible draws ready.
+        static constexpr u32 kMaterialTimingBands = 16u;
+        static constexpr u64 kMaterialTimingReserve = 16ull * 1024u * 1024u;
+        [[nodiscard]] static bool supportsMaterialTiming(u32 width, u32 height) noexcept;
+        [[nodiscard]] std::error_code measureTerrainMaterial(
+            const PreRenderContext &context, u32 width, u32 height, u32 band, rhi::IQueryPool &queries,
+            u32 first_query);
+
         // Test readback after the caller proves completion. Borrowed current-slot
         // buffers remain owned by this pass; production never reads them on CPU.
         [[nodiscard]] std::pair<rhi::IBuffer *, rhi::IBuffer *> visibilityBuffersForTest() const noexcept {
             const VisibilitySlot &slot = m_visibility_slots[m_tile_ring_cursor];
             return {slot.m_args.get(), slot.m_ids.get()};
+        }
+
+        // Borrowed diagnostics, valid only while the pass lives and after the
+        // caller's submission fence completes. No production CPU field readback.
+        [[nodiscard]] std::pair<rhi::ITexture *, rhi::IBuffer *> screenContactForTest() const noexcept {
+            const auto &slot = m_background_slots[m_background_cursor];
+            return {slot.m_screen_mask.get(), slot.m_screen_incident.get()};
+        }
+
+        [[nodiscard]] std::array<u32, 4u> screenContactRectForTest() const noexcept {
+            const auto &p = m_background_slots[m_background_cursor].m_screen_parameters;
+            return {p.m_left, p.m_top, p.m_count_x, p.m_count_y};
         }
 
         [[nodiscard]] std::array<rhi::IBuffer *, 3u> particleBuffersForTest() const noexcept {
@@ -511,6 +564,19 @@ export namespace pP {
             return m_world.m_world_generation;
         }
 
+        // Accept only a completed immutable receiver generation whose geometry
+        // attachment is the actual resident atlas/table publication. Ring roots
+        // retain strong leases until their accepted draw completion retires.
+        [[nodiscard]] std::error_code setTerrainReceiverLighting(
+            std::shared_ptr<const lighting::TerrainReceiverGpuGeneration> generation);
+        [[nodiscard]] std::error_code setTerrainBackgroundLighting(
+            std::shared_ptr<const lighting::TerrainBackgroundGpuView> view);
+
+        // Small-scene reference only: same checked native source and actual
+        // resident mapping, never a camera-specific screen-light buffer.
+        [[nodiscard]] std::error_code setWorldRadianceLighting(
+            std::shared_ptr<const lighting::WorldRadianceGeneration> generation);
+
         [[nodiscard]] GridWorldIdentity activeWorldIdentity() const noexcept {
             return {m_world.m_job_id, m_world.m_world_generation, m_world.m_content_fingerprint};
         }
@@ -581,6 +647,22 @@ export namespace pP {
 
         [[nodiscard]] static std::error_code validateSubmission_(const GridTileSubmission &submission) noexcept;
 
+        [[nodiscard]] bool worldRadianceSourceCompatible_(const lighting::WorldRadianceSource &source) const noexcept;
+
+        [[nodiscard]] static std::error_code validateOpticalAttachment_(
+            const GridStagedFrame &stage, bool &diffuse_compatible);
+        struct GridCachedPipeline;
+        [[nodiscard]] std::error_code bindReceiverLighting_(
+            rhi::IDevice &device, rhi::ShaderCursor &cursor, bool retained_table, GridCachedPipeline *pipeline,
+            u32 owner_slot);
+        [[nodiscard]] std::error_code bindWorldRadiance_(
+            rhi::IDevice &device, rhi::ShaderCursor &cursor, GridCachedPipeline *pipeline, u32 slot, bool background,
+            std::shared_ptr<const lighting::WorldRadianceGeneration> *background_lease = nullptr);
+        [[nodiscard]] std::error_code bindBackgroundLighting_(
+            rhi::IDevice &device, rhi::ShaderCursor &cursor, GridCachedPipeline &pipeline, u32 slot,
+            const CameraSnapshot &camera, int2 extent);
+
+
         // ------------------------------------------------------------------
         // resolve, upload, and encode
         // ------------------------------------------------------------------
@@ -598,7 +680,11 @@ export namespace pP {
             IShaderService &shader_service, rhi::IDevice &device, const std::filesystem::path &content_dir);
         std::error_code ensureVisibilityBuffers_(rhi::IDevice &device);
         std::error_code ensureSurfaceBuffers_(rhi::IDevice &device);
-        std::error_code bindSurfaceBuffers_(rhi::IDevice &device, rhi::ShaderCursor &cursor, bool retained_table);
+        [[nodiscard]] std::error_code bindMaterialBuffers_(
+            rhi::IDevice &device, rhi::ShaderCursor &cursor, bool retained_table);
+        std::error_code bindSurfaceBuffers_(
+            rhi::IDevice &device, rhi::ShaderCursor &cursor, bool retained_table,
+            GridCachedPipeline *pipeline = nullptr, std::optional<u32> owner_slot = {});
         [[nodiscard]] Expected<bool> prepareTerrainVisuals_(rhi::IDevice &device, u32 image_budget);
         [[nodiscard]] std::error_code ensureTerrainSampler_(rhi::IDevice &device);
         [[nodiscard]] std::error_code stageDiagnostic_(const GridStagedFrame &stage);
@@ -616,6 +702,13 @@ export namespace pP {
             // m_deferred_releases instead of dropping it mid-flight.
             std::array<rhi::ComPtr<rhi::IShaderObject>, kTileRingSize> m_slot_roots{};
             std::array<rhi::ShaderCursor, kTileRingSize> m_slot_frame_cursors{};
+            std::array<std::vector<std::shared_ptr<const lighting::TerrainReceiverGpuGeneration>>, kTileRingSize>
+                m_slot_receiver_leases{};
+            std::array<std::vector<std::shared_ptr<const lighting::TerrainBackgroundGpuView>>, kTileRingSize>
+                m_slot_background_leases{};
+            std::array<std::vector<std::shared_ptr<const lighting::WorldRadianceGeneration>>, kTileRingSize>
+                m_slot_world_leases{};
+            std::array<std::vector<rhi::ComPtr<rhi::ITextureView>>, kTileRingSize> m_slot_backdrop_owners{};
             std::array<rhi::IBuffer *, kTileRingSize> m_slot_atlases{};
             std::array<FenceCompletionValue, kTileRingSize> m_slot_last_use{};
             std::array<u64, kTileRingSize> m_slot_world_generation{};
@@ -648,8 +741,8 @@ export namespace pP {
         struct FluidSlot {
             std::array<rhi::ComPtr<rhi::ITexture>, 4u> m_textures{};
             std::array<rhi::ComPtr<rhi::ITextureView>, 4u> m_views{};
-            std::array<rhi::ComPtr<rhi::IShaderObject>, 4u> m_roots{};
-            rhi::ComPtr<rhi::IRenderPipeline> m_composite_pipeline{};
+            std::array<rhi::ComPtr<rhi::IShaderObject>, 3u> m_roots{};
+            std::optional<GridCachedPipeline> m_composite_pipeline{};
             std::optional<RenderPipelineKey> m_composite_key{};
             u32 m_width{}, m_height{};
         };
@@ -659,10 +752,21 @@ export namespace pP {
         struct SolidSlot {
             std::array<rhi::ComPtr<rhi::ITexture>, 3u> m_textures{};
             std::array<rhi::ComPtr<rhi::ITextureView>, 3u> m_views{};
-            std::array<rhi::ComPtr<rhi::IShaderObject>, 3u> m_roots{};
-            rhi::ComPtr<rhi::IRenderPipeline> m_composite_pipeline{};
+            std::array<rhi::ComPtr<rhi::IShaderObject>, 2u> m_roots{};
+            std::optional<GridCachedPipeline> m_composite_pipeline{};
             std::optional<RenderPipelineKey> m_composite_key{};
             u32 m_width{}, m_height{};
+        };
+
+        struct ParticleCensusStorage {
+            rhi::ComPtr<rhi::IBuffer> m_projected{}, m_readback{};
+            rhi::ComPtr<rhi::IShaderObject> m_root{};
+            rhi::IDevice *m_device{}; // Actual allocator; device outlives pass slots.
+            GridParticlePresentationIdentity m_identity{};
+            FenceCompletionValue m_submission{kFenceValueNone};
+            u64 m_device_epoch{};
+            u32 m_count{}, m_world_edge{};
+            bool m_encoded{};
         };
 
         struct GpuParticleSlot {
@@ -670,6 +774,7 @@ export namespace pP {
             std::optional<GridParticleGpuView> m_reader{};
             std::unique_ptr<FluidSlot> m_fluid{};
             std::unique_ptr<SolidSlot> m_solid{};
+            std::unique_ptr<ParticleCensusStorage> m_census{};
         };
 
         struct GpuParticleStorage {
@@ -686,13 +791,40 @@ export namespace pP {
             bool m_pending_pack{}, m_prepared{}, m_slot_encoded{};
         };
 
+        struct ScreenContactParameters {
+            u32 m_width{}, m_height{}, m_left{}, m_top{};
+            u32 m_count_x{}, m_count_y{}, m_enabled{}, m_stride{};
+        };
+        static_assert(sizeof(ScreenContactParameters) == 32u and alignof(ScreenContactParameters) == 4u);
+        static_assert(PPR_OFFSETOF(ScreenContactParameters, m_count_x) == 16u);
+        static_assert(
+            std::is_standard_layout_v<ScreenContactParameters> and
+            std::is_trivially_copyable_v<ScreenContactParameters>);
+        static_assert(PPR_OFFSETOF(ScreenContactParameters, m_enabled) == 24u);
+        static_assert(PPR_OFFSETOF(ScreenContactParameters, m_stride) == 28u);
+
         struct BackgroundSlot {
+            std::shared_ptr<const lighting::TerrainBackgroundGpuView> m_lighting{};
+            std::shared_ptr<const lighting::WorldRadianceGeneration> m_world_lighting{};
             rhi::ComPtr<rhi::ITexture> m_texture{};
             rhi::ComPtr<rhi::ITextureView> m_view{};
+            rhi::ComPtr<rhi::ITexture> m_screen_mask{};
+            rhi::ComPtr<rhi::ITextureView> m_screen_mask_view{};
+            rhi::ComPtr<rhi::IBuffer> m_screen_incident{};
+            rhi::ComPtr<rhi::IShaderObject> m_screen_root{};
+            std::shared_ptr<const lighting::WorldRadianceGeneration> m_screen_lighting{};
+            FenceCompletionValue m_last_use{kFenceValueNone};
+            ScreenContactParameters m_screen_parameters{};
             u32 m_width{};
             u32 m_height{};
-            FenceCompletionValue m_last_use{kFenceValueNone};
+            bool m_screen_encoded{};
         };
+
+        [[nodiscard]] std::error_code ensureScreenContactPrograms_(rhi::IDevice &device);
+        [[nodiscard]] std::error_code prepareScreenContact_(
+            const PreRenderContext &context, const CameraSnapshot &camera, u32 selected, u32 width, u32 height);
+        [[nodiscard]] std::error_code bindScreenContact_(rhi::ShaderCursor &cursor, u32 selected);
+
         [[nodiscard]] std::error_code validateParticles_(const GridStagedFrame &stage) const;
         void stageParticles_(const GridStagedFrame &stage);
         void markPipelineUse_(GridCachedPipeline &pipeline, u32 slot) noexcept;
@@ -717,9 +849,15 @@ export namespace pP {
             IShaderService &service, rhi::IDevice &device, const std::filesystem::path &content_dir);
         [[nodiscard]] Expected<GridCachedPipeline *> opticalPipeline_(
             rhi::IDevice &device, const RenderPipelineSignature &signature, rhi::IShaderProgram *program,
-            std::optional<RenderPipelineKey> &key, std::optional<GridCachedPipeline> &cache, bool blend);
+            std::optional<RenderPipelineKey> &key, std::optional<GridCachedPipeline> &cache, bool blend,
+            bool premultiplied = false);
         void fillOpticalFrame_(GridFrame &frame) const noexcept;
         void clearOpticalResources_() noexcept;
+        [[nodiscard]] std::error_code ensureSpatialPrograms_(rhi::IDevice &device, bool reactive = false);
+
+        [[nodiscard]] std::error_code encodeTerrainIndirect_(
+            const DrawContext &context, GridCachedPipeline &pipeline, rhi::IQueryPool *queries = nullptr,
+            u32 first_query = 0u);
 
         [[nodiscard]] Expected<GridCachedPipeline *> pipelineFor_(
             rhi::IDevice &device, const RenderPipelineSignature &signature);
@@ -768,6 +906,14 @@ export namespace pP {
         // the tint fragment entry. A signature change drops the cached
         // pipeline (and its persistent root object) alike.
         rhi::ComPtr<rhi::IShaderProgram> m_shader_program{};
+        rhi::ComPtr<rhi::IShaderProgram> m_spatial_shader_program{};
+
+        // Optional native MRT variants share the same fenced roots and caches.
+        rhi::ComPtr<rhi::IShaderProgram> m_reactive_shader_program{}, m_reactive_background_program{};
+        rhi::ComPtr<rhi::IShaderProgram> m_reactive_particle_program{}, m_reactive_fluid_program{},
+            m_reactive_solid_program{};
+        safe_ptr<IShaderService> m_shader_service{};
+        std::filesystem::path m_content_dir{};
         struct VisibilityProgram {
             rhi::ComPtr<rhi::IShaderProgram> m_program{};
             rhi::ComPtr<rhi::IComputePipeline> m_pipeline{};
@@ -785,7 +931,10 @@ export namespace pP {
             rhi::ComPtr<rhi::IComputePipeline> m_pipeline{};
         };
         std::array<GpuParticleProgram, 4u> m_particle_prepare_programs{};
+        GpuParticleProgram m_particle_census_program{};
         rhi::ComPtr<rhi::IShaderProgram> m_gpu_particle_program{};
+        rhi::ComPtr<rhi::IShaderProgram> m_gpu_particle_spatial_program{};
+        rhi::ComPtr<rhi::IShaderProgram> m_fluid_spatial_program{}, m_solid_spatial_program{};
         std::optional<RenderPipelineKey> m_gpu_particle_key{};
         std::optional<GridCachedPipeline> m_gpu_particle_pipeline{};
         std::array<rhi::ComPtr<rhi::IShaderProgram>, 4u> m_fluid_programs{};
@@ -819,6 +968,11 @@ export namespace pP {
         u64 m_dispatch_commands{};
         u64 m_retirement_steps{};
         u64 m_retired_chunk_blocks{};
+        u64 m_texture_inventory_comparisons{};
+        u64 m_texture_inventory_reuses{};
+        u64 m_texture_uploads{};
+        u64 m_texture_uploaded_bytes{};
+        u64 m_candidate_advances{};
         u64 m_resident_table_build_count{};
         u64 m_resident_table_upload_count{};
         std::optional<RenderPipelineKey> m_render_pipeline_key;
@@ -892,14 +1046,49 @@ export namespace pP {
         mutable u64 m_cache_hit_count = 0u;
 
 
-        // One world owns its terrain cache, atlas mappings and retained draw
+        // ------------------------------------------------------------------
+        // sealed ordered terrain texture inventory
+        // ------------------------------------------------------------------
+
+        // Private while uploading; shared only after sealing. The cache owns
+        // descriptor storage and pinned GPU images, and these handles/slots
+        // are meaningful only with that cache. No slots are added after seal.
+        struct TerrainTextureInventory {
+            Array<image::ImageAsset> m_images{};
+            Array<u32> m_slots{};
+            Array<TextureHandle> m_handles{};
+            std::unique_ptr<BindlessTextureCache> m_cache{};
+            rhi::IDevice *m_device{}; // Identity only; device outlives every world.
+
+            u32 m_cursor{};
+            bool m_sealed{};
+            bool m_reuse_checked{};
+        };
+
+        // ------------------------------------------------------------------
+        // independently published world resources
+        // ------------------------------------------------------------------
+
+        // One world owns its palette, atlas mappings and retained draw
         // state. Candidate preparation can exchange this value on the owner
         // lane without moving pass programs, completion rings or the camera.
         struct WorldResources {
+            std::shared_ptr<const lighting::OpticalTerrainSnapshot> m_optical_staged{}, m_optical_mapped{},
+                m_optical_resident{};
+            std::shared_ptr<const lighting::WorldRadianceSource> m_radiance_staged{}, m_radiance_mapped{},
+                m_radiance_resident{};
+            std::shared_ptr<const lighting::WorldRadianceGeneration> m_world_lighting{};
+            u64 m_radiance_staged_revision{}, m_radiance_mapped_revision{}, m_radiance_resident_revision{};
+            std::shared_ptr<const lighting::TerrainReceiverGpuGeneration> m_receiver_lighting{};
+            std::shared_ptr<const lighting::TerrainBackgroundGpuView> m_background_lighting{};
+            u64 m_optical_staged_revision{}, m_optical_mapped_revision{}, m_optical_resident_revision{};
             std::unique_ptr<GpuParticleStorage> m_gpu_particles{};
             std::shared_ptr<std::atomic<u64>> m_initial_particle_epoch{};
             u64 m_particle_seed_version{};
             bool m_particle_seeds_dirty{};
+            // Derived material compatibility travels with each existing source
+            // mapping; the source/cohort and completed GPU mapping stay authority.
+            bool m_radiance_staged_diffuse{}, m_radiance_mapped_diffuse{}, m_radiance_resident_diffuse{};
             bool m_has_background{};
             std::array<GridBackgroundLayer, 4u> m_background_layers{};
             std::shared_ptr<const GridSurfaceProfile> m_surface_profile{};
@@ -919,11 +1108,8 @@ export namespace pP {
             bool m_upload_submission_pending{false};
             bool m_visuals_set{false};
             Array<GridTerrainVisual> m_terrain_visuals{};
-            Array<image::ImageAsset> m_terrain_images{};
-            std::unique_ptr<BindlessTextureCache> m_texture_cache{};
-            Array<u32> m_texture_slots{};
-            Array<TextureHandle> m_texture_handles{};
-            u32 m_image_cursor{};
+            std::shared_ptr<TerrainTextureInventory> m_texture_inventory{};
+
             u32 m_retirement_diagnostic_cursor{};
             u32 m_retirement_particle_cursor{};
             bool m_retirement_roots_detached{};
@@ -973,10 +1159,31 @@ export namespace pP {
         CameraSnapshot m_background_camera{};
         rhi::ComPtr<rhi::IShaderProgram> m_background_program{};
         rhi::ComPtr<rhi::IShaderProgram> m_background_copy_program{};
+        rhi::ComPtr<rhi::IShaderProgram> m_background_spatial_program{};
         std::optional<RenderPipelineKey> m_background_key{}, m_background_copy_key{};
         std::optional<GridCachedPipeline> m_background_pipeline{}, m_background_copy_pipeline{};
+        std::optional<RenderPipelineKey> m_background_spatial_key{};
+        std::optional<GridCachedPipeline> m_background_spatial_pipeline{};
+
+        rhi::ComPtr<rhi::IShaderProgram> m_screen_mask_program{}, m_screen_refine_program{};
+        rhi::ComPtr<rhi::IComputePipeline> m_screen_refine_pipeline{};
+        std::optional<RenderPipelineKey> m_screen_mask_key{};
+        std::optional<GridCachedPipeline> m_screen_mask_pipeline{};
+        std::optional<RenderPipelineKey> m_material_cost_key{};
+        std::optional<GridCachedPipeline> m_material_cost_pipeline{};
+        std::array<rhi::ComPtr<rhi::ITexture>, kTileRingSize> m_material_cost_targets{};
+        std::array<rhi::ComPtr<rhi::ITextureView>, kTileRingSize> m_material_cost_views{};
+
+        std::array<u32, 6u> m_screen_logged_region{};
+
         u64 m_particle_uploads{};
         u64 m_particle_uploaded_bytes{};
+        ReceiverContinuation m_receiver_continuation{ReceiverContinuation::nearest};
+        ReceiverResponse m_receiver_response{ReceiverResponse::flat};
+        BackgroundResponse m_background_response{BackgroundResponse::unlit};
+        bool m_cached_spatial_msaa{};
+        bool m_spatial_msaa{};
+        bool m_spatial_supported{};
         bool m_ready = false;
     };
 
@@ -999,10 +1206,34 @@ export namespace pP {
     struct GridStagedFrame {
         // Render the retained grid and actors while the client session is frozen.
         bool m_retain_content{false};
+        // Static terrain can retain its checked cohort while the ordinary game
+        // actor overlay advances; frozen-session callers keep the default false.
+        bool m_update_actors_on_retained_terrain{};
+        // Per-frame default-off presentation experiment; never source/world state.
+        bool m_screen_contact_pilot{};
+        // A game-clock update for the requested terminal sky on the render lane.
+        std::optional<i32> m_temporal_sky_hour{};
+        lighting::TerrainPrecisionSelection m_lighting_precision{};
         float m_cell_size_m{1.0f};
         bool m_has_catalog{false};
         u32 m_boundary_material_id{1u};
         u64 m_content_fingerprint{};
+
+        // Complete bounded attachment, checked against these same uploads and
+        // selected visual rows before publication; requires a full cache reset
+        // so no unchecked neighboring slot survives into its lookup mapping.
+        std::shared_ptr<const lighting::OpticalTerrainSnapshot> m_optical_geometry{};
+        u64 m_optical_revision{};
+
+        // Optional owned CPU producer request. Grid validates the same geometry;
+        // ApplicationEditor owns computation, completion and GPU publication.
+        std::shared_ptr<const lighting::TerrainReceiverSet> m_lighting_receivers{};
+
+        // Mutually exclusive native transport attachment. Same complete reset,
+        // selected palette, actual uploads and resident publication contract.
+        std::shared_ptr<const lighting::WorldRadianceSource> m_world_radiance_source{};
+        u64 m_world_radiance_revision{};
+
         Array<GridTerrainVisual> m_terrain_visuals{};
         Array<image::ImageAsset> m_terrain_images{};
         bool m_has_background{false};
@@ -1011,6 +1242,7 @@ export namespace pP {
         float m_reference_thickness_m{1.0f};
         Array<GridParticleBatch> m_particle_batches{};
         std::optional<GridParticleGpuView> m_gpu_particles{};
+        u32 m_capture_particle_census_edge{}; // Capture diagnostic only; zero disables.
         Array<GridTileSubmission> m_tiles{};
         Array<GridStagedUpload> m_uploads{};
         EGridDiagnosticMode m_diagnostic_mode{EGridDiagnosticMode::textured};

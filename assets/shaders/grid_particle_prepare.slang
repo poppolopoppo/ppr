@@ -2,25 +2,22 @@
 #include "grid_solid_kernel.slang"
 
 // Continuous GPU circle presentation; no terrain bins or occupancy geometry.
-struct NumericalRow { float positionX, positionY; float carried[14]; };
+#include "grid_particle_native.slang"
 struct ReadonlyRow { float mass, volume, material, r, g, b; };
-struct MetadataRow {
-    uint idLow, idHigh, sourceRow, material;
-    float gasX, gasY, radius;
-    uint reserved;
-};
 struct PresentationRow {
     float2 position;
     float radius;
     uint material;
     float4 color;
 };
-struct MaterialColor { uint material, rgba; uint carried[18]; };
+// Same 96-byte GridTerrainVisual palette; circle packing consumes only ID/tint.
+// Retained carrier words preserve the full authored transport append stride.
+struct MaterialColor { uint material, rgba; uint carried[22]; };
 struct PrepareFrame {
     float4 planes[6];
     float cellMetres, origin;
     uint count, movingCount;
-    uint blockCount, padding0, padding1, padding2;
+    uint blockCount, censusWorldEdge, padding1, padding2;
 };
 ConstantBuffer<PrepareFrame> g_particle_prepare;
 StructuredBuffer<NumericalRow> g_numerical;
@@ -61,6 +58,42 @@ void packParticles(uint3 id:SV_DispatchThreadID) {
     }
 
     g_packed[id.x]=particle;
+}
+
+// ------------------------------------------------------------------
+// capture-only committed native-cell census, before any visual compaction
+// ------------------------------------------------------------------
+struct CensusRow {
+    uint idLow, idHigh, material, status;
+    uint cellX, cellY;
+};
+RWStructuredBuffer<CensusRow> g_particle_census;
+
+[shader("compute")]
+[numthreads(256,1,1)]
+void projectParticleCensus(uint3 id:SV_DispatchThreadID) {
+    if (id.x >= g_particle_prepare.count) return;
+
+    MetadataRow metadata = g_metadata[id.x];
+    CensusRow row;
+    row.idLow = metadata.idLow;
+    row.idHigh = metadata.idHigh;
+    row.material = metadata.material;
+    // Existing palette word20 is the explicitly authored transport tag. This
+    // reports declared vacuum, never infers optics from solver class/opacity.
+    row.status = metadata.material == 0u || g_particle_palette[metadata.material].carried[18] == 0x101u ? 8u : 0u;
+    row.cellX = row.cellY = 0xffffffffu;
+    bool moving=metadata.sourceRow!=0xffffffffu;
+    bool sourceValid=!moving || metadata.sourceRow<g_particle_prepare.movingCount;
+    NumericalRow hot=(NumericalRow)0;
+    if (moving && sourceValid) hot=g_numerical[metadata.sourceRow];
+
+    ParticleNativeCell cell=particleNativeCell(metadata,float2(hot.positionX,hot.positionY),hot.carried[13],
+        sourceValid,g_particle_prepare.cellMetres,g_particle_prepare.origin,float2(0),
+        uint2(g_particle_prepare.censusWorldEdge));
+    row.status|=cell.status;row.cellX=cell.x;row.cellY=cell.y;
+
+    g_particle_census[id.x] = row;
 }
 
 // ------------------------------------------------------------------

@@ -18,6 +18,12 @@ Sets up C++23 modules, compiler toolchains, sanitizers, and external dependency 
   test/launch policy and narrowly scoped driver exclusions are documented in
   [sanitizers](sanitizers/README.md).
 
+- **`CompilerSelection.cmake`** (included before `VCPkg.cmake` and `project()`): PPR requires Clang on Linux
+  (`-stdlib=libc++`, C++23 modules, `import std`, libc++-ABI ports). When no compiler is selected — e.g. an IDE
+  profile that inherits the system toolchain — it defaults `CMAKE_CXX_COMPILER`/`CMAKE_C_COMPILER` to
+  `clang++`/`clang` and marks `PPR_DEFAULTED_CLANG` for the triplet choice below. An explicit GCC selection is
+  not overridden; `Compilers.cmake` fails configure with the supported alternatives.
+
 - **Root `CMakeLists.txt`**: C++23 (`CMAKE_CXX_STANDARD 23`, `SCAN_FOR_MODULES ON`,
   `EXPORT_COMPILE_COMMANDS ON`), project `PPR`; version-gated `CMAKE_EXPERIMENTAL_CXX_IMPORT_STD` UUIDs
   (4.2/4.3/4.4+) + `EXPORT_BUILD_DATABASE` before `project()`; `CMAKE_CXX_STANDARD_INCLUDE_DIRECTORIES`
@@ -72,9 +78,9 @@ Sets up C++23 modules, compiler toolchains, sanitizers, and external dependency 
   cannot track BMI content. Pairs with `/Z7` embedded debug info (no shared-PDB contention); live `/ZI` never caches.
 - **`VCPkg.cmake`** (included before `project()`): optional vcpkg — sets `CMAKE_TOOLCHAIN_FILE` from `VCPKG_ROOT`
   only when no toolchain is preset, otherwise CPM fetches from source. On Linux hosts pins `VCPKG_TARGET_TRIPLET`
-  to `x64-linux` unless the user already selected one (this vcpkg version defaults to an unprovided
-  compiler-aware `x64-linux-clang`; plain `x64-linux` covers the compiler-agnostic C deps `clang-dev` needs;
-  Darwin/Windows keep their own defaults). Derives `CMAKE_MSVC_RUNTIME_LIBRARY` from
+  unless the user already selected one: `x64-linux-libcxx` through the repository overlay when
+  `CompilerSelection.cmake` defaulted Clang, otherwise `x64-linux` (this vcpkg version defaults to an unprovided
+  compiler-aware `x64-linux-clang`; Darwin/Windows keep their own defaults). Derives `CMAKE_MSVC_RUNTIME_LIBRARY` from
   the triplet (`-static` → `/MT`, else DLL `/MDd`) and fails configure under `PPR_EDIT_AND_CONTINUE` on a `-static`
   triplet or non-DLL runtime (EnC requires `/MDd`; `/MT` breaks with `LNK2038`). Appends vcpkg config trees to
   `CMAKE_PREFIX_PATH` and prefers Config packages (`CMAKE_FIND_PACKAGE_PREFER_CONFIG ON`).
@@ -93,7 +99,7 @@ Sets up C++23 modules, compiler toolchains, sanitizers, and external dependency 
 ## Flow
 
 1. `cmake --preset <name>` (single-config Ninja) → toolchain file (vcpkg when rooted) + `CMAKE_BUILD_TYPE`.
-2. `Compilers.cmake` dispatches on `MSVC` / `CMAKE_CXX_COMPILER_ID` to `compiler/MSVC|Clang|GCC`;
+2. `Compilers.cmake` dispatches on `MSVC` / `CMAKE_CXX_COMPILER_ID` to `compiler/MSVC|Clang` and rejects `GNU`;
   `Sanitizers.cmake` applies per-target sanitizer flags via `enable_sanitizers()`; `Cache.cmake` arms the
   ccache/sccache launcher (module targets opt out).
 3. `Dependencies.cmake` + `cmake/external/*` fetch CPM packages / resolve vcpkg manifests.
@@ -102,7 +108,7 @@ Sets up C++23 modules, compiler toolchains, sanitizers, and external dependency 
 
 ## Integration
 
-- Root `CMakeLists.txt` includes: `PreventInSourceBuilds`, conditional `MSVCToolchain`, `VCPkg`, `HAL`, `Compilers`, `RuntimeDlls`,
+- Root `CMakeLists.txt` includes: `PreventInSourceBuilds`, conditional `MSVCToolchain`, `CompilerSelection`, `VCPkg`, `HAL`, `Compilers`, `RuntimeDlls`,
   `Assets`, `Tests`, `Sanitizers`, `StaticAnalyzers`, `Cache`, and `Dependencies`.
 - Compiler specifics: see [compiler/codemap.md](compiler/codemap.md); third-party wiring:
   see [external/codemap.md](external/codemap.md).
@@ -116,7 +122,8 @@ Sets up C++23 modules, compiler toolchains, sanitizers, and external dependency 
   `clang-cl-dev/rel`, `msvc-live`, `clang-dev/rel`, hidden `windows-default/windows-msvc-toolchain/unix-like-default`, hidden `gcc-dev/rel`).
 - `vcpkg.json` — vcpkg manifest mode configuration.
 - `cmake/MSVCToolchain.cmake` — native MSVC pre-project guard and vcpkg VS path normalization.
-- `cmake/Compilers.cmake` — dispatcher + `setup_ppr_project`.
+- `cmake/CompilerSelection.cmake` — Linux default to Clang when no compiler is selected.
+- `cmake/Compilers.cmake` — dispatcher + `setup_ppr_project`; rejects GCC.
 - `cmake/RuntimeDlls.cmake` — executable-only Windows runtime-DLL staging helper.
 - `cmake/Tests.cmake` — `ppr_add_test_entry()` test-entry naming and shared-property helper.
 - `cmake/Cache.cmake` — `ENABLE_CACHE`, ccache/sccache launcher, `ppr_disable_compiler_cache()`.

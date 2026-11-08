@@ -405,6 +405,74 @@ weight = 1.0
         PPR_TEST_ASSERT(catalog->findMaterial("unknown") == nullptr);
     };
 
+    // ------------------------------------------------------------------
+    // optional explicit material transport authoring
+    // ------------------------------------------------------------------
+
+    PPR_UNIT_TEST (material_transport_schema_rejects_invalid_modes_coefficients_and_products) {
+        const std::string base = "display_name='Optic'\ncolor_rgba='ffffffff'\nemissive_r=0.5\nemissive_strength=4.0\n";
+        config::Diagnostics diagnostics;
+        const auto legacy = asset::importDescriptor<MaterialAppearance>({"appearance.toml", base}, diagnostics);
+        PPR_TEST_ASSERT(legacy.has_value() and not legacy->m_value.m_transport);
+
+        const std::string transport = "[transport]\ncontract_version=1\nmodel='absorbing'\nsigma_r_per_m=0.5\n";
+        const auto valid = asset::importDescriptor<MaterialAppearance>(
+            {"appearance.toml", base + transport}, diagnostics);
+        PPR_TEST_ASSERT(valid.has_value() and valid->m_value.m_transport.has_value());
+        PPR_TEST_ASSERT(not validateMaterialTransport(valid->m_value, "appearance.toml", "appearance", diagnostics));
+
+        for (const auto &suffix:
+            {"[transport]\nmodel='absorbing'\n", "[transport]\ncontract_version=2\nmodel='absorbing'\n",
+                "[transport]\ncontract_version=1\nmodel='inferred'\n", "[transport]\ncontract_version=1\n",
+                "[transport]\ncontract_version=1\nmodel='absorbing'\nsigma_r_per_m=-1.0\n",
+                "[transport]\ncontract_version=1\nmodel='absorbing'\nsigma_r_per_m=inf\n"}) {
+            config::Diagnostics errors;
+            PPR_TEST_ASSERT(
+                not asset::importDescriptor<MaterialAppearance>({"appearance.toml", base + suffix}, errors));
+            PPR_TEST_ASSERT(errors.hasErrors());
+        }
+
+        for (const auto &suffix:
+            {"[transport]\ncontract_version=1\nmodel='vacuum'\n",
+                "[transport]\ncontract_version=1\nmodel='opaque'\nsigma_r_per_m=0.5\n",
+                "[transport]\ncontract_version=1\nmodel='absorbing'\nsigma_r_per_m=1e-100\n",
+                "[transport]\ncontract_version=1\nmodel='absorbing'\nsigma_r_per_m=3.4028234663852886e38\n"}) {
+            config::Diagnostics errors;
+            const auto parsed = asset::importDescriptor<MaterialAppearance>({"appearance.toml", base + suffix}, errors);
+            PPR_TEST_ASSERT(parsed.has_value());
+            const auto error = validateMaterialTransport(parsed->m_value, "appearance.toml", "appearance", errors);
+            PPR_TEST_ASSERT(
+                error == config::make_error_code(config::EConfigErrc::cross_field_invalid) and errors.hasErrors());
+        }
+
+        auto typed = valid->m_value;
+        typed.m_emissive_r = 1e-100;
+        config::Diagnostics underflow;
+        const auto error = validateMaterialTransport(typed, "typed", "appearance", underflow);
+        PPR_TEST_ASSERT(
+            error == config::make_error_code(config::EConfigErrc::cross_field_invalid) and underflow.hasErrors());
+
+        auto source = fixtureSource();
+        config::Diagnostics parsed_errors;
+        const auto catalog = decodeCatalog(source, parsed_errors);
+        PPR_TEST_ASSERT(catalog.has_value());
+        auto definition = catalog->definition();
+        const auto appearance = std::ranges::find(
+            definition.m_appearance.m_materials.m_entries, std::string{"sandstone"},
+            &config::KeyedEntry<MaterialAppearance>::m_key);
+        PPR_TEST_ASSERT(appearance != definition.m_appearance.m_materials.m_entries.end());
+        appearance->m_value.m_transport = *valid->m_value.m_transport;
+        appearance->m_value.m_transport->m_sigma_r_per_m = static_cast<double>((std::numeric_limits<float>::max)());
+        appearance->m_value.m_emissive_r = 1.0;
+        appearance->m_value.m_emissive_strength = 2.0;
+        config::Diagnostics typed_errors;
+        const auto rejected = projectContentCatalog(std::move(definition), config::Document{}, typed_errors);
+        PPR_TEST_ASSERT(not rejected and typed_errors.hasErrors());
+        PPR_TEST_ASSERT(std::ranges::any_of(typed_errors.entries(), [](const auto &entry) {
+            return entry.m_property.find("transport") != std::string::npos;
+        }));
+    };
+
     PPR_UNIT_TEST (canonical_material_identity) {
         auto source = fixtureSource();
         config::Diagnostics diagnostics;
@@ -834,6 +902,7 @@ namespace pP::game::tests {
                 detail::content::decoded_fragment_requires_explicit_world_completion_to_compile,
                 detail::content::named_manifest_schema_and_background_validation,
                 detail::content::owned_materials_use_derived_ids_and_preserve_appearance,
+                detail::content::material_transport_schema_rejects_invalid_modes_coefficients_and_products,
                 detail::content::canonical_material_identity, detail::content::required_values_are_not_cpp_defaults,
                 detail::content::invalid_materials_fail_with_authored_key,
                 detail::content::texture_paths_cannot_escape_pack,

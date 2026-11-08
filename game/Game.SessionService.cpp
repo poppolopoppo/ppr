@@ -15,13 +15,22 @@ namespace pP::game {
 
     bool hasSessionWorldPresentation(
         const RenderFrameResult &result, const u64 reservation_epoch, const GridWorldIdentity requested,
-        const bool published, const bool activated,
-        const std::optional<GridParticlePresentationIdentity> resident) noexcept {
+        const bool published, const bool activated, const std::optional<GridParticlePresentationIdentity> resident,
+        const u64 lighting_revision) noexcept {
         if (not published or not activated or requested.m_job_id == 0u or requested.m_world_generation == 0u) {
             return false;
         }
 
         if (resident and result.m_presented_particles != resident) {
+            return false;
+        }
+
+        if (lighting_revision != 0u and (result.m_lighting_revision != lighting_revision or
+                                            result.m_lighting_pending or
+                                            result.m_lighting_error or
+                                            result.m_sweep_error or
+                                            result.m_submit_possibly_executed or
+                                            result.m_submit_value == kFenceValueNone)) {
             return false;
         }
 
@@ -55,6 +64,18 @@ namespace pP::game {
     // ------------------------------------------------------------------
     // main-owner world transition
     // ------------------------------------------------------------------
+
+    bool canCapturePlayableSessionFrame(
+        const SessionWorldFacts &facts, const bool progress_open, const bool progress_popup_began) noexcept {
+        return not progress_open and
+               not progress_popup_began and
+               facts.m_world.m_job_id != 0u and
+               facts.m_world.m_world_generation != 0u and
+               facts.m_published and
+               facts.m_activated and
+               facts.m_presented and
+               facts.m_ready;
+    }
 
     bool canSelectSessionWorldView(const SessionWorldTransition &transition) noexcept {
         return transition.m_phase != ESessionWorldPhase::activating and

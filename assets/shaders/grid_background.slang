@@ -1,3 +1,7 @@
+#include "grid_background_world.slang"
+#include "grid_world_radiance.slang"
+#include "grid_screen_contact_types.slang"
+
 // Same 304-byte per-slot frame mirror as GridPass::GridFrame. Row vectors,
 // +Y-up world coordinates and [0,1] depth; no backend-specific transform.
 struct BackgroundLayer {
@@ -31,6 +35,9 @@ struct SurfaceProfile {
 };
 ConstantBuffer<SurfaceProfile> g_surface_profile;
 Texture2D<float4> g_backdrop;
+struct BackgroundLightingParameters { uint enabled, width, height, reserved; };
+ConstantBuffer<BackgroundLightingParameters> g_background_lighting;
+StructuredBuffer<float4> g_background_incident;
 struct BackgroundVertexOutput {
     float4 position : SV_Position;
     float2 uv : TEXCOORD0;
@@ -97,26 +104,26 @@ float4 sampleBackground(DescriptorHandle<Texture2D<float4>> texture, SamplerStat
     return lerp(cubic, filtered, smoothstep(0.75, 1.0, footprint));
 }
 
-[shader("fragment")]
-float4 fragmentBackgroundMain(BackgroundVertexOutput input,
-    uniform StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
-    uniform SamplerState.Handle g_sampler) : SV_Target {
-    float2 ndc = input.uv * float2(2.0, -2.0) + float2(-1.0, 1.0);
-    float4 a = mul(float4(ndc, 0.0, 1.0), g_grid_frame.m_inverse_view_projection);
-    float4 b = mul(float4(ndc, 1.0, 1.0), g_grid_frame.m_inverse_view_projection);
-    float3 near_point = a.xyz / a.w;
-    float3 far_point = b.xyz / b.w;
-    float3 direction = far_point - near_point;
-    float t = abs(direction.z) > 1.0e-8 ? -near_point.z / direction.z : 0.0;
-    float2 world = (near_point + direction * t).xy;
+float4 shadeBackground(BackgroundVertexOutput input, uint lightingSample,
+    StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
+    SamplerState.Handle g_sampler) {
+    float2 world;
+    if (g_grid_world_radiance.enabled!=0u) {
+        // Host admission establishes this same finite orthographic +Z domain.
+        // Never manufacture a near-plane receiving point for an invalid ray.
+        if (!backgroundReceivingPointAt(input.uv,g_grid_frame.m_inverse_view_projection,world)) discard;
+    } else world=backgroundWorldAt(input.uv,g_grid_frame.m_inverse_view_projection);
     float2 dx = ddx(world), dy = ddy(world);
-    if (g_grid_frame.m_has_surface != 0u) {
+    float2 nativePoint=world/g_grid_frame.m_cell_size_m;
+    if (g_grid_world_radiance.enabled!=0u && !gridWorldInside(nativePoint)) return float4(0);
+    if (g_grid_frame.m_has_surface != 0u && g_grid_world_radiance.enabled==0u) {
         // Columns match the exact seeded height sampled by the terrain raster.
         // Edge clamping keeps backdrop reads bounded when the camera sees outside
         // the finite world. This same target supplies optical refraction below.
         uint column = uint(clamp(floor(world.x / g_grid_frame.m_cell_size_m), 0.0, 4095.0));
         float surface_y = g_surface_profile.m_heights_m[column / 4u][column % 4u];
         if (world.y >= surface_y) {
+            if (g_background_lighting.enabled != 0u) return float4(0.0, 0.0, 0.0, 1.0);
             float altitude = saturate((world.y - surface_y) / 180.0);
             float3 horizon = float3(0.52, 0.70, 0.82);
             float3 zenith = float3(0.12, 0.30, 0.52);
@@ -134,7 +141,53 @@ float4 fragmentBackgroundMain(BackgroundVertexOutput input,
         float alpha = index == 0u ? 1.0 : saturate(texel.a * tint.a);
         result = lerp(result, texel.rgb * tint.rgb, alpha);
     }
+    if (g_grid_world_radiance.enabled!=0u) {
+        float3 incident;
+        if (g_screen_contact.stride!=0u) {
+            incident=max(gridWorldAt(nativePoint,float3(0,0,1))+gridScreenCorrection(uint2(input.position.xy)),float3(0));
+        } else if (!gridScreenIncident(uint2(input.position.xy),incident)) {
+            incident=gridWorldAt(nativePoint,float3(0,0,1));
+        }
+        result*=incident;
+    } else if (g_background_lighting.enabled != 0u) {
+        uint2 pixel = uint2(input.position.xy);
+        uint record = (pixel.y * g_background_lighting.width + pixel.x) * 5u + lightingSample;
+        result *= g_background_incident[record].rgb;
+    }
     return float4(result, 1.0);
+}
+
+[shader("fragment")]
+float4 fragmentBackgroundMain(BackgroundVertexOutput input,
+    uniform StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
+    uniform SamplerState.Handle g_sampler) : SV_Target {
+    return shadeBackground(input, 0u, g_textures, g_sampler);
+}
+
+// Direct scene composition at the admitted native sample locations. The cached
+// single-sample optical backdrop remains the legacy/refraction path only.
+[shader("fragment")]
+float4 fragmentBackgroundSpatial(BackgroundVertexOutput input, uint sample_index : SV_SampleIndex,
+    uniform StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
+    uniform SamplerState.Handle g_sampler) : SV_Target {
+    input.uv = EvaluateAttributeAtSample(input.uv, sample_index);
+    return shadeBackground(input, sample_index + 1u, g_textures, g_sampler);
+}
+
+struct BackgroundReactiveOutput {
+    float4 color : SV_Target0;
+    float reactive : SV_Target1;
+};
+
+[shader("fragment")]
+BackgroundReactiveOutput fragmentBackgroundReactive(BackgroundVertexOutput input, uint sample_index : SV_SampleIndex,
+    uniform StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
+    uniform SamplerState.Handle g_sampler) {
+    input.uv = EvaluateAttributeAtSample(input.uv, sample_index);
+    BackgroundReactiveOutput output;
+    output.color=shadeBackground(input,sample_index+1u,g_textures,g_sampler);
+    output.reactive=0;
+    return output;
 }
 
 [shader("fragment")]
@@ -142,5 +195,5 @@ float4 fragmentBackgroundCopy(BackgroundVertexOutput input,
     uniform SamplerState.Handle g_sampler) : SV_Target {
     float2 extent = max(g_grid_frame.m_viewport.zw, float2(1.0));
     float2 uv = clamp(input.uv, 0.5 / extent, 1.0 - 0.5 / extent);
-    return float4(g_backdrop.SampleLevel(g_sampler, uv, 0.0).rgb, 1.0);
+    return g_backdrop.SampleLevel(g_sampler, uv, 0.0);
 }

@@ -5,8 +5,13 @@ module game.tests;
 import engine.core;
 import engine.sim;
 import engine.asset;
+import engine.app;
 import game.colony.worldgen;
+import game.colony.metric;
 import game.colony.content;
+import game.colony.driver;
+import game.colony.agents;
+import game.colony.sim_packet;
 import game.colony.worldgen_preview;
 import game.colony.worldgen_panel;
 import imgui;
@@ -19,6 +24,601 @@ namespace pP::game::tests::detail::worldgen_preview {
     // ------------------------------------------------------------------
 
     using namespace colony;
+
+    PPR_UNIT_TEST (lighting_showcase_has_catalog_backed_cells_and_canonical_actor_clearance) {
+        const auto root = hal::process::currentExecutablePath().parent_path() / "worldgen/default";
+        const std::array<std::filesystem::path, 1> roots{root};
+        config::Diagnostics diagnostics;
+        auto world = prepareLightingShowcase(roots, 42u, ITimerClock::steady(), diagnostics, {}, 1024u);
+        PPR_TEST_ASSERT(world.has_value() and world->lightingShowcase());
+        PPR_TEST_ASSERT(world->grid().edge() == 1024u and world->grid().residentChunkCount() == 1u);
+        PPR_TEST_ASSERT(
+            world->generated().m_matter.m_regions.empty() and world->generated().m_geometry.m_instances.empty());
+        PPR_TEST_ASSERT(world->generated().m_plan.recipe().m_cell_size_m == kFineCellMetres);
+
+        constexpr std::array<std::string_view, 12> keys{
+            "sandstone", "sandstone", "clay", "iron_ore", "copper_ore", "showcase_amber_lamp",
+            "showcase_violet_sculpture", "showcase_cyan_insert", "showcase_housing", "showcase_tread",
+            "showcase_pipe_horizontal", "showcase_pipe_vertical"};
+        std::array<u16, 12> ids{};
+        for (u32 index = 0u; index < keys.size(); ++index) {
+            const auto *const row = world->catalog().findMaterial(keys[index]);
+            PPR_TEST_ASSERT(row != nullptr and row->m_representation == EMaterialRepresentation::terrain);
+            ids[index] = row->m_numeric_id;
+
+            if (index >= 8u) {
+                PPR_TEST_ASSERT(row->m_numeric_id == 67u + index - 8u);
+                PPR_TEST_ASSERT(row->m_texture_sampling == EMaterialTextureSampling::repeat);
+                PPR_TEST_ASSERT(row->m_transport and row->m_transport->m_model == EMaterialOpticalModel::opaque);
+
+                for (const double channel: row->m_emissive_rgb) {
+                    PPR_TEST_ASSERT(channel == 0.0);
+                }
+            }
+        }
+
+        PPR_TEST_ASSERT(world->catalog().findMaterial(keys[5u])->m_emissive_strength == 2.5);
+        PPR_TEST_ASSERT(world->catalog().findMaterial(keys[7u])->m_emissive_strength == 0.35);
+
+        auto unique_ids = ids;
+        std::ranges::sort(unique_ids);
+        const auto duplicate_tail = std::ranges::unique(unique_ids);
+        const auto expected_inventory = static_cast<std::size_t>(duplicate_tail.begin() - unique_ids.begin());
+
+        const auto labels = lightingShowcaseLabels(ids);
+        PPR_TEST_ASSERT(labels and labels->size() == kLightingSceneWidth * kLightingSceneHeight);
+        for (u32 y = 0u; y < kLightingSceneHeight; ++y) {
+            for (u32 x = 0u; x < kLightingSceneWidth; ++x) {
+                const auto cell = world->grid().getCell({x, y});
+                PPR_TEST_ASSERT(cell and cell->m_element == (*labels)[y * kLightingSceneWidth + x]);
+                if (x == 0u or y == 0u or x + 1u == kLightingSceneWidth or y + 1u == kLightingSceneHeight) {
+                    PPR_TEST_ASSERT(cell->m_element == 0u);
+                }
+            }
+        }
+
+        const auto exterior = world->grid().getCell({500u, 500u});
+        PPR_TEST_ASSERT(exterior and exterior->m_element == 0u);
+
+        // Only amber moves five native rows down beneath the ledge. Its four
+        // cells retain their source value; cyan/violet keep every original label.
+        const auto baseline = lightingSceneLabels(std::span<const u16>{ids.data(), 8u}, false, true);
+        PPR_TEST_ASSERT(baseline.has_value());
+        for (u32 index = 0u; index < baseline->size(); ++index) {
+            if ((*baseline)[index] == ids[5u]) {
+                PPR_TEST_ASSERT((*labels)[index] == 0u);
+                PPR_TEST_ASSERT((*labels)[index - 5u * kLightingSceneWidth] == ids[5u]);
+            } else if ((*baseline)[index] == ids[6u] or (*baseline)[index] == ids[7u]) {
+                PPR_TEST_ASSERT((*labels)[index] == (*baseline)[index]);
+            }
+        }
+
+        const auto at = [&](const u32 x, const u32 y) { return (*labels)[y * kLightingSceneWidth + x]; };
+
+        PPR_TEST_ASSERT(std::ranges::count(*labels, ids[5u]) == 4);
+        PPR_TEST_ASSERT(at(30u, 18u) == ids[8u] and at(31u, 18u) == ids[8u]);
+        PPR_TEST_ASSERT(at(30u, 15u) == 0u and at(31u, 15u) == 0u);
+        PPR_TEST_ASSERT(at(29u, 16u) == 0u and at(29u, 17u) == 0u);
+        PPR_TEST_ASSERT(at(32u, 16u) == 0u and at(32u, 17u) == 0u);
+        PPR_TEST_ASSERT(at(29u, 21u) == 0u and at(30u, 23u) == 0u);
+        PPR_TEST_ASSERT(at(46u, 7u) == ids[8u] and at(43u, 12u) == ids[8u]);
+        PPR_TEST_ASSERT(at(44u, 6u) == ids[8u] and at(51u, 6u) == ids[8u]);
+        PPR_TEST_ASSERT(at(47u, 13u) == 0u and at(47u, 14u) == 0u and at(47u, 15u) == 0u);
+        PPR_TEST_ASSERT(at(51u, 10u) == 0u and at(52u, 10u) == 0u and at(53u, 10u) == 0u);
+        PPR_TEST_ASSERT(at(36u, 23u) == ids[10u] and at(39u, 20u) == ids[11u]);
+
+        for (u32 y = 14u; y <= 17u; ++y) {
+            PPR_TEST_ASSERT(at(36u, y) == ids[8u]);
+        }
+
+        PPR_TEST_ASSERT(at(26u, 5u) == ids[8u] and at(38u, 5u) == ids[8u]);
+        PPR_TEST_ASSERT(at(8u, 10u) == ids[3u] and at(12u, 14u) == 0u);
+
+        for (u32 x = 18u; x <= 41u; ++x) {
+            PPR_TEST_ASSERT(at(x, 6u) == ids[9u]);
+            for (u32 y = 7u; y <= 13u; ++y) {
+                PPR_TEST_ASSERT(at(x, y) == 0u);
+            }
+        }
+
+        u64 counted{};
+        for (const auto &row: world->generated().m_report.m_material_counts) {
+            counted += row.m_cells;
+        }
+
+        PPR_TEST_ASSERT(counted == 1024ull * 1024u);
+        PPR_TEST_ASSERT(
+            world->generated().m_report.m_grid_payload_bytes == u64(sim::kCellsPerChunk) * sizeof(sim::Cell));
+
+        const auto start = validateLightingShowcaseStart(world->grid());
+        PPR_TEST_ASSERT(
+            start and
+            start->m_spawn_x_m == world->generated().m_start.m_spawn_x_m and
+            start->m_spawn_y_m == start->m_floor_y_m + kWorldCompileParameters.m_actor_half_height_m);
+
+        // A real occupied canonical triangle in the actor body rejects the
+        // authored start; no procedural landing guarantee or epsilon is used.
+        const auto original = world->grid().getCell({19u, 9u});
+        PPR_TEST_ASSERT(original.has_value());
+        PPR_TEST_ASSERT(not world->grid().setCell({19u, 9u}, {ids[0], 293.15f}));
+        const auto blocked = validateLightingShowcaseStart(world->grid());
+        PPR_TEST_ASSERT(not blocked and blocked.error() == sim::make_error_code(sim::EGenerationErrc::start_invalid));
+
+        PPR_TEST_ASSERT(not world->grid().setCell({19u, 9u}, *original));
+
+        const auto missing = lightingSceneLabels(std::span<const u16>{ids.data(), 7u}, false, true);
+        PPR_TEST_ASSERT(not missing and missing.error() == std::errc::invalid_argument);
+
+        const auto incomplete_bay = lightingShowcaseLabels(std::span<const u16>{ids.data(), 11u});
+        PPR_TEST_ASSERT(not incomplete_bay and incomplete_bay.error() == std::errc::invalid_argument);
+
+        auto request = ContentPresentationRequest::start(
+            world->catalogOwner(), asset::RequestGeneration{1u}, context::background(), diagnostics);
+        PPR_TEST_ASSERT(request.has_value());
+        const auto images = request->finish(diagnostics);
+        PPR_TEST_ASSERT(images.has_value());
+        PPR_TEST_ASSERT(not world->attachPresentation(*images, asset::RequestGeneration{1u}));
+
+        ColonyDriver driver;
+        PPR_DEFER {
+            PPR_TEST_ASSERT(not driver.shutdown());
+        };
+
+        PPR_TEST_ASSERT(not driver.initPrepared(
+            {.m_seed = 42u, .m_agent_count = 1u, .m_world_generation = 1u, .m_world_edge = 1024u}, std::move(*world)));
+        const auto stage = captureWorldPresentation(driver);
+        PPR_TEST_ASSERT(
+            stage.has_value() and
+            stage->m_world_radiance_source and
+            not stage->m_lighting_receivers and
+            stage->m_reset_caches);
+        PPR_TEST_ASSERT(stage->m_terrain_visuals.size() == expected_inventory);
+        PPR_TEST_ASSERT(
+            stage->m_world_radiance_source->width() == kLightingSceneWidth and
+            stage->m_world_radiance_source->height() == kLightingSceneHeight and
+            stage->m_world_radiance_revision == 1u and
+            not stage->m_optical_geometry);
+        PPR_TEST_ASSERT(stage->m_world_radiance_source->cellMetres() == double(stage->m_cell_size_m));
+
+        const auto catalog_rows = captureCatalogPresentation(
+            *driver.preparedWorld()->presentation(), driver.profileKey(), driver.boundaryMaterial(),
+            driver.cellsPerMetre(), driver.referenceThicknessMetres());
+        PPR_TEST_ASSERT(catalog_rows.has_value());
+        PPR_TEST_ASSERT(std::ranges::any_of(catalog_rows->m_terrain_visuals, [](const GridTerrainVisual &visual) {
+            return (visual.m_surface_flags & kGridSurfaceOpticalBlend) != 0u;
+        }));
+
+        for (const auto &visual: stage->m_terrain_visuals) {
+            PPR_TEST_ASSERT(std::ranges::find(ids, visual.m_material_id) != ids.end());
+            const auto source = std::ranges::find(
+                catalog_rows->m_terrain_visuals, visual.m_material_id, &GridTerrainVisual::m_material_id);
+            PPR_TEST_ASSERT(source != catalog_rows->m_terrain_visuals.end());
+            PPR_TEST_ASSERT(
+                visual.m_texture_index == source->m_texture_index and
+                visual.m_normal_texture_index == source->m_normal_texture_index and
+                visual.m_color_rgba == source->m_color_rgba and
+                visual.m_roundness == source->m_roundness and
+                visual.m_transport_model == source->m_transport_model and
+                visual.m_emissive_strength == source->m_emissive_strength);
+            for (u32 channel = 0u; channel < 3u; ++channel) {
+                PPR_TEST_ASSERT(
+                    visual.m_emissive_rgb[channel] == source->m_emissive_rgb[channel] and
+                    visual.m_sigma_per_m[channel] == source->m_sigma_per_m[channel]);
+            }
+        }
+
+        GridPass spatial;
+        PPR_DEFER {
+            PPR_TEST_ASSERT(not spatial.shutdown());
+        };
+
+        PPR_TEST_ASSERT(not spatial.applyStagedFrame(*stage));
+        PPR_TEST_ASSERT(not spatial.validateSpatialContent());
+
+        // Use the actual prepared Driver/Scene and its canonical chunk colliders,
+        // with the same full-size actor and normal PlayerCommand as the game.
+        std::optional<sim::Entity> actor;
+        for (const auto &[entity, agent]: driver.registry().view<Agent>()) {
+            (void) agent;
+            PPR_TEST_ASSERT(not actor);
+            actor = entity;
+        }
+
+        PPR_TEST_ASSERT(actor.has_value());
+        PPR_TEST_ASSERT(not driver.assignControl(actor));
+        const auto *const body = driver.registry().get<sim::BodyDefinition>(*actor);
+        PPR_TEST_ASSERT(body and body->m_half_width == 0.4f and body->m_half_height == 0.9f);
+        PPR_TEST_ASSERT(driver.chainCount({0u, 0u}) > 0u);
+
+        const auto tick = TimeSpan{std::chrono::seconds{1}} / 60u;
+        const auto *const pose = driver.registry().get<sim::BodyState>(*actor);
+        PPR_TEST_ASSERT(pose != nullptr);
+        const float initial_x = pose->m_x;
+        const float initial_y = pose->m_y;
+
+        // One real Driver/Scene owns all states. Graphics ACKs are explicit
+        // boundary inputs here; actual field/picture matching is covered by the
+        // render fixture and the interactive acceptance sequence.
+        const auto prepare_door = [&](const bool closed) {
+            const auto revision = driver.requestServiceDoor(closed, driver.lightingRevision());
+            PPR_TEST_ASSERT(revision.has_value());
+            bool ready{};
+            for (u32 attempt = 0u; attempt < 1024u and not ready; ++attempt) {
+                const auto advanced = driver.advanceServiceDoor(*revision);
+                PPR_TEST_ASSERT(advanced.has_value());
+                ready = *advanced;
+            }
+
+            PPR_TEST_ASSERT(ready);
+            return *revision;
+        };
+
+        const auto commit_door = [&](const u64 revision) {
+            Array<ColonyDriver::DirtyChunk> manifest{driver.editManifest().begin(), driver.editManifest().end()};
+            PPR_TEST_ASSERT(driver.settleEdit(manifest) == std::errc::operation_not_permitted);
+            PPR_TEST_ASSERT(not driver.markServiceDoorActivationSent(revision));
+            PPR_TEST_ASSERT(not driver.acknowledgeServiceDoorActivation(revision, true));
+            const auto committed = driver.commitServiceDoor(revision);
+            PPR_TEST_ASSERT(committed and *committed and driver.lightingRevision() == revision);
+
+            const auto frozen_tick = driver.tickCount();
+            PPR_TEST_ASSERT(not driver.update(tick));
+            PPR_TEST_ASSERT(driver.tickCount() == frozen_tick and driver.serviceDoorPublication());
+
+            driver.ackPresentChunks(manifest);
+            PPR_TEST_ASSERT(not driver.finishServiceDoor(revision));
+        };
+
+        const auto stale_request = driver.requestServiceDoor(true, driver.lightingRevision() + 1u);
+        PPR_TEST_ASSERT(not stale_request and stale_request.error() == std::errc::operation_not_permitted);
+        PPR_TEST_ASSERT(not driver.serviceDoorPublication() and driver.grid().getCell({36u, 7u})->m_element == 0u);
+
+        const auto canceled_revision = prepare_door(true);
+        const auto candidate_stage = captureServiceDoorPresentation(driver, canceled_revision);
+        PPR_TEST_ASSERT(candidate_stage and candidate_stage->m_world_radiance_revision == canceled_revision);
+        PPR_TEST_ASSERT(not candidate_stage->m_gpu_particles and candidate_stage->m_particle_batches.empty());
+        PPR_TEST_ASSERT(candidate_stage->m_uploads[0u].m_cell_materials[7u * sim::kChunkEdge + 36u] == ids[8u]);
+        PPR_TEST_ASSERT(driver.grid().getCell({36u, 7u})->m_element == 0u);
+
+        const auto canceled = driver.cancelServiceDoor(canceled_revision);
+        PPR_TEST_ASSERT(canceled and *canceled and driver.lightingRevision() == 1u);
+        PPR_TEST_ASSERT(not driver.serviceDoorPublication() and not driver.editPending());
+
+        const auto closed_revision = prepare_door(true);
+        PPR_TEST_ASSERT(closed_revision > canceled_revision);
+        const auto stale_capture = captureServiceDoorPresentation(driver, canceled_revision);
+        PPR_TEST_ASSERT(not stale_capture and stale_capture.error() == std::errc::operation_not_permitted);
+        PPR_TEST_ASSERT(
+            driver.acknowledgeServiceDoorActivation(canceled_revision, true) == std::errc::operation_not_permitted);
+        PPR_TEST_ASSERT(
+            driver.serviceDoorPublication()->m_revision == closed_revision and not driver.serviceDoorClosed());
+
+        commit_door(closed_revision);
+        PPR_TEST_ASSERT(driver.serviceDoorClosed() and driver.grid().getCell({36u, 7u})->m_element == ids[8u]);
+        PPR_TEST_ASSERT(not driver.setPlayerCommand({1, 0}));
+
+        for (u32 step = 0u; step < 600u; ++step) {
+            PPR_TEST_ASSERT(not driver.update(tick));
+        }
+
+        const float door_contact = 36.0f / static_cast<float>(driver.cellsPerMetre()) - body->m_half_width;
+        PPR_TEST_ASSERT(pose->m_x >= door_contact - 0.05f and pose->m_x <= door_contact + 0.05f);
+
+        driver.clearPlayerCommand();
+        const auto open_revision = prepare_door(false);
+        commit_door(open_revision);
+        PPR_TEST_ASSERT(not driver.serviceDoorClosed() and driver.grid().getCell({36u, 7u})->m_element == 0u);
+        bool rejected_actor_overlap{};
+
+        PPR_TEST_ASSERT(not driver.setPlayerCommand({1, 0}));
+
+        for (u32 step = 0u; step < 600u and pose->m_x < 38.5f / 3.0f; ++step) {
+            PPR_TEST_ASSERT(not driver.update(tick));
+            if (not rejected_actor_overlap and
+                pose->m_x + body->m_half_width > 36.0f / 3.0f and
+                pose->m_x - body->m_half_width < 37.0f / 3.0f) {
+                const auto rejected = driver.requestServiceDoor(true, driver.lightingRevision());
+                PPR_TEST_ASSERT(not rejected and rejected.error() == std::errc::device_or_resource_busy);
+                PPR_TEST_ASSERT(not driver.serviceDoorPublication() and driver.lightingRevision() == open_revision);
+                rejected_actor_overlap = true;
+            }
+
+            PPR_TEST_ASSERT(std::isfinite(pose->m_x) and std::isfinite(pose->m_y));
+            PPR_TEST_ASSERT(std::abs(pose->m_y - initial_y) < 0.2f);
+        }
+
+        PPR_TEST_ASSERT(rejected_actor_overlap);
+        PPR_TEST_ASSERT(pose->m_x >= 38.5f / 3.0f and pose->m_x > initial_x + 5.0f);
+
+        // Continuing toward the visibly occupied tank must not pass through its
+        // left shell. No teleported actor, synthetic blocker or jump is used.
+        for (u32 step = 0u; step < 240u; ++step) {
+            PPR_TEST_ASSERT(not driver.update(tick));
+        }
+
+        // The straight canonical left face is at native x43. Require actual
+        // approach to that face using the real box half-width, not merely any
+        // blocked position beyond the earlier route milestone. The 5 cm allowance
+        // covers contour contact/solver skin and is far below one native cell
+        // (33 cm), or the >1 m gap from that milestone to this contact position.
+        const float tank_face_x = 43.0f / static_cast<float>(driver.cellsPerMetre());
+        const float contact_x = tank_face_x - body->m_half_width;
+        constexpr float contact_margin = 0.05f;
+        PPR_TEST_ASSERT(pose->m_x >= contact_x - contact_margin and pose->m_x <= contact_x + contact_margin);
+        PPR_TEST_ASSERT(pose->m_y > 1.0f and std::isfinite(pose->m_y));
+
+        // Keep the same rightward input active after reaching the shell. A
+        // premature snag cannot satisfy the approach bound; penetrating or
+        // drifting through the actual tank cannot satisfy these stable samples.
+        const float reached_x = pose->m_x;
+        PPR_TEST_ASSERT(not driver.setPlayerCommand({1, 0}));
+
+        for (u32 step = 0u; step < 12u; ++step) {
+            PPR_TEST_ASSERT(not driver.update(tick));
+            PPR_TEST_ASSERT(pose->m_x >= contact_x - contact_margin and pose->m_x <= contact_x + contact_margin);
+            PPR_TEST_ASSERT(std::abs(pose->m_x - reached_x) <= contact_margin);
+        }
+
+        driver.clearPlayerCommand();
+        const auto reclosed_revision = prepare_door(true);
+        commit_door(reclosed_revision);
+        PPR_TEST_ASSERT(driver.serviceDoorClosed() and reclosed_revision > open_revision);
+
+        // The mounted lamp changes only its source-state projection. All real
+        // cells/colliders, other source rows and shared image owners survive.
+        const auto lamp_before = captureWorldPresentation(driver);
+        PPR_TEST_ASSERT(lamp_before and driver.serviceLampEnabled());
+        const auto lamp_collider_count = driver.chainCount({0u, 0u});
+
+        const auto prepare_lamp = [&](const bool enabled) {
+            const auto revision = driver.requestServiceLamp(enabled, driver.lightingRevision());
+            PPR_TEST_ASSERT(revision.has_value());
+
+            bool ready{};
+            for (u32 attempt = 0u; attempt < 1024u and not ready; ++attempt) {
+                const auto advanced = driver.advanceServiceDoor(*revision);
+                PPR_TEST_ASSERT(advanced.has_value());
+                ready = *advanced;
+            }
+
+            PPR_TEST_ASSERT(
+                ready and driver.serviceDoorPublication()->m_target == ColonyDriver::EServiceBayTarget::amber_lamp);
+            return *revision;
+        };
+
+        const auto check_lamp_stage = [&](const GridStagedFrame &actual, const bool enabled) {
+            PPR_TEST_ASSERT(actual.m_terrain_visuals.size() == lamp_before->m_terrain_visuals.size());
+            PPR_TEST_ASSERT(actual.m_terrain_images.size() == lamp_before->m_terrain_images.size());
+            PPR_TEST_ASSERT(actual.m_uploads.size() == lamp_before->m_uploads.size());
+
+            for (u32 index = 0u; index < actual.m_uploads.size(); ++index) {
+                PPR_TEST_ASSERT(
+                    std::ranges::equal(
+                        actual.m_uploads[index].m_cell_materials, lamp_before->m_uploads[index].m_cell_materials));
+            }
+
+            for (u32 index = 0u; index < actual.m_terrain_visuals.size(); ++index) {
+                auto expected = lamp_before->m_terrain_visuals[index];
+                if (expected.m_material_id == ids[5u]) {
+                    expected.m_emissive_strength = enabled ? 2.5f : 0.0f;
+                }
+
+                // GridTerrainVisual is the existing all-scalar GPU protocol;
+                // this compares every property, including cyan/violet source S.
+                PPR_TEST_ASSERT(std::memcmp(&actual.m_terrain_visuals[index], &expected, sizeof(expected)) == 0);
+
+                const auto optical = gridMaterialOpticalCell(actual.m_terrain_visuals[index]);
+                PPR_TEST_ASSERT(optical.has_value());
+                PPR_TEST_ASSERT(
+                    not actual.m_world_radiance_source->validateMaterialProjection(expected.m_material_id, *optical));
+            }
+
+            for (u32 index = 0u; index < actual.m_terrain_images.size(); ++index) {
+                const auto &a = actual.m_terrain_images[index];
+                const auto &b = lamp_before->m_terrain_images[index];
+                PPR_TEST_ASSERT(a.m_storage == b.m_storage and a.m_width == b.m_width and a.m_height == b.m_height);
+                PPR_TEST_ASSERT(a.m_format == b.m_format and a.m_mip_count == b.m_mip_count);
+                PPR_TEST_ASSERT(a.m_subresources.size() == b.m_subresources.size());
+
+                for (u32 mip = 0u; mip < a.m_subresources.size(); ++mip) {
+                    const auto &x = a.m_subresources[mip];
+                    const auto &y = b.m_subresources[mip];
+                    PPR_TEST_ASSERT(
+                        x.m_view == y.m_view and x.m_row_pitch == y.m_row_pitch and x.m_slice_pitch == y.m_slice_pitch);
+                }
+            }
+
+            PPR_TEST_ASSERT(
+                std::ranges::equal(
+                    actual.m_world_radiance_source->materialIds(),
+                    lamp_before->m_world_radiance_source->materialIds()));
+        };
+
+        const auto canceled_lamp = prepare_lamp(false);
+        const auto off_candidate = captureServiceDoorPresentation(driver, canceled_lamp);
+        PPR_TEST_ASSERT(off_candidate.has_value());
+        check_lamp_stage(*off_candidate, false);
+        PPR_TEST_ASSERT(driver.serviceLampEnabled());
+
+        const auto canceled_lamp_result = driver.cancelServiceDoor(canceled_lamp);
+        PPR_TEST_ASSERT(canceled_lamp_result and *canceled_lamp_result and driver.serviceLampEnabled());
+        PPR_TEST_ASSERT(driver.lightingRevision() == reclosed_revision);
+
+        const auto off_revision = prepare_lamp(false);
+        PPR_TEST_ASSERT(off_revision > canceled_lamp);
+        PPR_TEST_ASSERT(
+            driver.acknowledgeServiceDoorActivation(canceled_lamp, true) == std::errc::operation_not_permitted);
+
+        commit_door(off_revision);
+        PPR_TEST_ASSERT(not driver.serviceLampEnabled() and driver.serviceDoorClosed());
+        PPR_TEST_ASSERT(driver.chainCount({0u, 0u}) == lamp_collider_count);
+
+        const auto off_committed = captureWorldPresentation(driver);
+        PPR_TEST_ASSERT(off_committed.has_value());
+        check_lamp_stage(*off_committed, false);
+
+        const auto on_revision = prepare_lamp(true);
+
+        commit_door(on_revision);
+
+        const auto on_committed = captureWorldPresentation(driver);
+        PPR_TEST_ASSERT(on_committed and driver.serviceLampEnabled() and driver.serviceDoorClosed());
+        PPR_TEST_ASSERT(driver.chainCount({0u, 0u}) == lamp_collider_count);
+        check_lamp_stage(*on_committed, true);
+        PPR_TEST_ASSERT(driver.contentCatalog()->findMaterial(keys[5u])->m_emissive_strength == 2.5);
+
+        // Relocation swaps complete native cells within the same publication.
+        // Unequal temperatures make a material-only copy observably incorrect.
+        using LampPosition = ColonyDriver::EServiceLampPosition;
+        PPR_TEST_ASSERT(driver.serviceLampPosition() == LampPosition::original);
+        std::array<sim::Cell, 4u> lamp_cells{};
+        std::array<sim::Cell, 4u> vacuum_cells{};
+        for (u32 index = 0u; index < 4u; ++index) {
+            const u32 y = 16u + index / 2u;
+            const u32 dx = index % 2u;
+            lamp_cells[index] = {ids[5u], 310.0f + float(index)};
+            vacuum_cells[index] = {0u, 270.0f + float(index)};
+            PPR_TEST_ASSERT(not driver.grid().setCell({30u + dx, y}, lamp_cells[index]));
+            PPR_TEST_ASSERT(not driver.grid().setCell({37u + dx, y}, vacuum_cells[index]));
+        }
+
+        const auto reject_move = [&](const LampPosition position, const u64 revision, const std::errc error) {
+            const auto rejected = driver.requestServiceLampPosition(position, revision);
+            PPR_TEST_ASSERT(not rejected and rejected.error() == error);
+        };
+
+        reject_move(static_cast<LampPosition>(255u), driver.lightingRevision(), std::errc::invalid_argument);
+        reject_move(LampPosition::original, driver.lightingRevision(), std::errc::operation_not_permitted);
+        reject_move(LampPosition::alternate, driver.lightingRevision() + 1u, std::errc::operation_not_permitted);
+
+        const auto prepare_move = [&](const LampPosition position) {
+            const auto revision = driver.requestServiceLampPosition(position, driver.lightingRevision());
+            PPR_TEST_ASSERT(revision.has_value());
+
+            bool ready{};
+            for (u32 attempt = 0u; attempt < 1024u and not ready; ++attempt) {
+                const auto advanced = driver.advanceServiceDoor(*revision);
+                PPR_TEST_ASSERT(advanced.has_value());
+                ready = *advanced;
+            }
+
+            PPR_TEST_ASSERT(ready);
+            PPR_TEST_ASSERT(
+                driver.serviceDoorPublication()->m_target == ColonyDriver::EServiceBayTarget::amber_lamp_position);
+            return *revision;
+        };
+
+        const auto check_move_cells = [&](const bool alternate) {
+            for (u32 index = 0u; index < 4u; ++index) {
+                const u32 y = 16u + index / 2u;
+                const u32 dx = index % 2u;
+                const auto left = driver.grid().getCell({30u + dx, y});
+                const auto right = driver.grid().getCell({37u + dx, y});
+                const auto &expected_left = alternate ? vacuum_cells[index] : lamp_cells[index];
+                const auto &expected_right = alternate ? lamp_cells[index] : vacuum_cells[index];
+                PPR_TEST_ASSERT(left and right);
+                PPR_TEST_ASSERT(
+                    left->m_element == expected_left.m_element and left->m_temperature == expected_left.m_temperature);
+                PPR_TEST_ASSERT(
+                    right->m_element == expected_right.m_element and
+                    right->m_temperature == expected_right.m_temperature);
+            }
+        };
+
+        const auto canceled_move = prepare_move(LampPosition::alternate);
+        const auto moved_candidate = captureServiceDoorPresentation(driver, canceled_move);
+        PPR_TEST_ASSERT(moved_candidate and moved_candidate->m_world_radiance_revision == canceled_move);
+        const auto candidate_labels = moved_candidate->m_world_radiance_source->materialIds();
+        for (u32 y = 16u; y <= 17u; ++y) {
+            for (u32 dx = 0u; dx < 2u; ++dx) {
+                PPR_TEST_ASSERT(candidate_labels[y * kLightingSceneWidth + 30u + dx] == 0u);
+                PPR_TEST_ASSERT(candidate_labels[y * kLightingSceneWidth + 37u + dx] == ids[5u]);
+                PPR_TEST_ASSERT(moved_candidate->m_uploads[0u].m_cell_materials[y * sim::kChunkEdge + 30u + dx] == 0u);
+                PPR_TEST_ASSERT(
+                    moved_candidate->m_uploads[0u].m_cell_materials[y * sim::kChunkEdge + 37u + dx] == ids[5u]);
+            }
+        }
+
+        PPR_TEST_ASSERT(std::ranges::count(candidate_labels, ids[5u]) == 4);
+        check_move_cells(false);
+        PPR_TEST_ASSERT(driver.serviceLampPosition() == LampPosition::original);
+        reject_move(LampPosition::alternate, driver.lightingRevision(), std::errc::device_or_resource_busy);
+        const auto move_canceled = driver.cancelServiceDoor(canceled_move);
+        PPR_TEST_ASSERT(move_canceled and *move_canceled);
+        check_move_cells(false);
+
+        const auto forward_move = prepare_move(LampPosition::alternate);
+        PPR_TEST_ASSERT(forward_move > canceled_move);
+        PPR_TEST_ASSERT(
+            driver.acknowledgeServiceDoorActivation(canceled_move, true) == std::errc::operation_not_permitted);
+        const auto premature_commit = driver.commitServiceDoor(forward_move);
+        PPR_TEST_ASSERT(not premature_commit and premature_commit.error() == std::errc::operation_not_permitted);
+        check_move_cells(false);
+
+        commit_door(forward_move);
+        PPR_TEST_ASSERT(driver.serviceLampPosition() == LampPosition::alternate and driver.serviceLampEnabled());
+        check_move_cells(true);
+        const auto relocated_stage = captureWorldPresentation(driver);
+        PPR_TEST_ASSERT(relocated_stage and relocated_stage->m_world_radiance_revision == forward_move);
+        PPR_TEST_ASSERT(std::ranges::equal(relocated_stage->m_world_radiance_source->materialIds(), candidate_labels));
+
+        const auto alternate_off = prepare_lamp(false);
+        commit_door(alternate_off);
+        const auto alternate_off_stage = captureWorldPresentation(driver);
+        PPR_TEST_ASSERT(alternate_off_stage.has_value());
+        const auto alternate_off_visual = std::ranges::find(
+            alternate_off_stage->m_terrain_visuals, u32(ids[5u]), &GridTerrainVisual::m_material_id);
+        PPR_TEST_ASSERT(
+            alternate_off_visual != alternate_off_stage->m_terrain_visuals.end() and
+            alternate_off_visual->m_emissive_strength == 0.0f);
+
+        const auto intervening_door = prepare_door(false);
+        commit_door(intervening_door);
+        PPR_TEST_ASSERT(driver.serviceLampPosition() == LampPosition::alternate and not driver.serviceLampEnabled());
+
+        const auto reverse_move = prepare_move(LampPosition::original);
+        commit_door(reverse_move);
+        PPR_TEST_ASSERT(driver.serviceLampPosition() == LampPosition::original and not driver.serviceLampEnabled());
+        check_move_cells(false);
+        const auto restored_on = prepare_lamp(true);
+        commit_door(restored_on);
+        PPR_TEST_ASSERT(driver.serviceLampEnabled());
+
+        // Destination occupancy rejects before exposing any candidate.
+        PPR_TEST_ASSERT(not driver.grid().setCell({37u, 16u}, {ids[8u], 280.0f}));
+        const auto occupied_move = driver.requestServiceLampPosition(
+            LampPosition::alternate, driver.lightingRevision());
+        PPR_TEST_ASSERT(not occupied_move and occupied_move.error() == std::errc::device_or_resource_busy);
+        PPR_TEST_ASSERT(not driver.serviceDoorPublication() and driver.serviceLampPosition() == LampPosition::original);
+        PPR_TEST_ASSERT(not driver.grid().setCell({37u, 16u}, vacuum_cells[0u]));
+
+        auto *const mutable_pose = driver.registry().get<sim::BodyState>(*actor);
+        const auto saved_pose = *mutable_pose;
+        mutable_pose->m_x = 37.5f / static_cast<float>(driver.cellsPerMetre());
+        mutable_pose->m_y = 16.5f / static_cast<float>(driver.cellsPerMetre());
+        const auto overlap_move = driver.requestServiceLampPosition(LampPosition::alternate, driver.lightingRevision());
+        PPR_TEST_ASSERT(not overlap_move and overlap_move.error() == std::errc::device_or_resource_busy);
+        PPR_TEST_ASSERT(not driver.serviceDoorPublication() and driver.serviceLampPosition() == LampPosition::original);
+        *mutable_pose = saved_pose;
+
+        // The dedicated-row admission must reject a fifth lamp occurrence;
+        // failed preparation leaves the committed source state/revision alone.
+        const auto extra = driver.grid().getCell({40u, 20u});
+        PPR_TEST_ASSERT(extra.has_value());
+        PPR_TEST_ASSERT(not driver.grid().setCell({40u, 20u}, {ids[5u], extra->m_temperature}));
+        const auto duplicate_move = driver.requestServiceLampPosition(
+            LampPosition::alternate, driver.lightingRevision());
+        PPR_TEST_ASSERT(not duplicate_move and duplicate_move.error() == std::errc::not_supported);
+
+        const auto rejected_lamp = driver.requestServiceLamp(false, driver.lightingRevision());
+        PPR_TEST_ASSERT(not rejected_lamp and rejected_lamp.error() == std::errc::not_supported);
+        PPR_TEST_ASSERT(
+            not driver.serviceDoorPublication() and
+            driver.serviceLampEnabled() and
+            driver.lightingRevision() == restored_on);
+        PPR_TEST_ASSERT(not driver.grid().setCell({40u, 20u}, *extra));
+    };
+
     PPR_UNIT_TEST (workshop_widgets_block_invalid_actions_and_focus_nested_property_errors) {
         auto *const previous = ImGui::GetCurrentContext();
         auto *const context = ImGui::CreateContext();
@@ -797,7 +1397,8 @@ namespace pP::game::tests::detail::worldgen_preview {
 namespace pP::game::tests {
     const UnitTest worldgen_preview = UnitTest::Named("worldgen_preview") / [](UnitTest::IRun &_) -> void {
         _.recurse(
-            {detail::worldgen_preview::bounded_samples_replay_and_export_the_exact_visible_draft,
+            {detail::worldgen_preview::lighting_showcase_has_catalog_backed_cells_and_canonical_actor_clearance,
+                detail::worldgen_preview::bounded_samples_replay_and_export_the_exact_visible_draft,
                 detail::worldgen_preview::workshop_widgets_block_invalid_actions_and_focus_nested_property_errors,
                 detail::worldgen_preview::authored_layouts_preserve_required_biomes_at_selected_sizes,
                 detail::worldgen_preview::whole_world_crops_preserve_production_formations_seams_and_matter});

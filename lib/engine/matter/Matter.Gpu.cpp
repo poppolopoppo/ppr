@@ -770,10 +770,66 @@ namespace pP::matter {
         replacement.m_particle_count = old_count + static_cast<u32>(particles.size());
         replacement.m_hot_bytes = std::max<u64>(1u, replacement.m_particle_count) * sizeof(ParticleWrite);
         replacement.m_cold_bytes = std::max<u64>(1u, replacement.m_particle_count) * sizeof(ParticleReadonly);
+
+        // Only initialize's wholly default owner is cold. A published empty
+        // generation has dummy row buffers and a complete sparse program donor.
+        const ParticleStorage &current = state.m_particles;
+        const GpuEnvironment &environment = current.m_environment;
+        const bool bootstrap = not current.m_sparse.m_state and
+                               not current.m_committed_hot and
+                               not current.m_committed_cold and
+                               not current.m_working_hot and
+                               not current.m_working_cold and
+                               not current.m_shapes and
+                               not current.m_readback and
+                               not current.m_terrain_masks and
+                               not current.m_terrain_boundary_tiles and
+                               current.m_hot_bytes == 0u and
+                               current.m_cold_bytes == 0u and
+                               current.m_particle_count == 0u and
+                               current.m_shape_count == 0u and
+                               environment.m_terrain_width == 0u and
+                               environment.m_terrain_height == 0u and
+                               environment.m_body_count == 0u and
+                               environment.m_body_base == 0u and
+                               environment.m_terrain_origin_x == 0.0f and
+                               environment.m_terrain_origin_y == 0.0f and
+                               environment.m_has_terrain == 0u and
+                               environment.m_reserved == 0u;
         PPR_RETURN_ERROR_ON_FAIL(
-            MatterGpu, replacement.m_sparse.initialize(
-                           *state.m_device, *state.m_shaders, state.m_content_root, replacement.m_particle_count,
-                           state.m_profile.m_grid_width, state.m_profile.m_grid_height));
+            MatterGpu, bootstrap or (current.m_sparse.m_state and
+                                        current.m_committed_hot and
+                                        current.m_committed_cold and
+                                        current.m_working_hot and
+                                        current.m_working_cold and
+                                        current.m_shapes and
+                                        current.m_readback and
+                                        current.m_particle_count == state.m_profile.m_particle_count and
+                                        current.m_sparse.canAdmit(current.m_particle_count))
+                           ? std::error_code{}
+                           : std::make_error_code(std::errc::state_not_recoverable));
+
+        const ITimerClock *const preparation_clock = state.m_timing ? state.m_timing->m_clock : nullptr;
+        const TimePoint sparse_begin = preparation_clock ? preparation_clock->now() : TimePoint{};
+        const auto sparse_error = replacement.m_sparse.initialize_(
+            *state.m_device, *state.m_shaders, state.m_content_root, replacement.m_particle_count,
+            state.m_profile.m_grid_width, state.m_profile.m_grid_height, bootstrap ? nullptr : &current.m_sparse);
+        const TimePoint sparse_end = preparation_clock ? preparation_clock->now() : TimePoint{};
+
+        PPR_LOG(
+            MatterGpu, emphasis, "Sparse preparation CPU including allocations",
+            {{"source_epoch", expected_epoch}, {"requested_rows", replacement.m_particle_count},
+                {"mode", bootstrap ? "cold_build" : "reuse"}, {"completed", not sparse_error},
+                {"created_pairs", sparse_error ? -1
+                                  : bootstrap  ? 7
+                                               : 0},
+                {"reused_pairs", sparse_error ? -1
+                                 : bootstrap  ? 0
+                                              : 7},
+                {"cpu_measured", preparation_clock != nullptr},
+                {"cpu_ms", preparation_clock ? time::seconds(sparse_end - sparse_begin) * 1000.0 : -1.0},
+                {"error", sparse_error.message()}});
+        PPR_RETURN_ERROR_ON_FAIL(MatterGpu, sparse_error);
 
         replacement.m_shape_count = static_cast<u32>(shapes.size());
         if (preserve_terrain) {

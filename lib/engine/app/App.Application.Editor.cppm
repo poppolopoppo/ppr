@@ -17,6 +17,7 @@ import engine.core;
 import engine.image;
 import engine.mesh;
 import engine.rhi;
+import engine.shader;
 import std;
 
 export namespace pP {
@@ -70,6 +71,10 @@ export namespace pP {
 
         [[nodiscard]] std::error_code unloadScene();
 
+        // Main-side one-shot request. Loading/held pictures are never captured;
+        // the worker latches the first eligible attempt, including failure.
+        [[nodiscard]] std::error_code requestFrameCapture();
+
         [[nodiscard]] TrianglePass &getTrianglePass() noexcept {
             return *m_triangle_pass;
         }
@@ -82,12 +87,48 @@ export namespace pP {
         // and no frame drain; the next submit picks the stored settings up.
         void setRetroSettings(const RetroSettings &settings) noexcept;
 
+        // Returns true only for a retained-only odd spatial target. The old
+        // picture extent is a completed-image proof supplied by the caller;
+        // the owner lane rechecks the actual pass before drawing it.
+        [[nodiscard]] static Expected<bool> admitPictureFrame(
+            const RetroSettings &settings, int2 target_extent, std::optional<int2> retained_extent = {});
+
         // Post-initialize only. Rebuilds the camera input mapping before
         // releasing the previous controller; the editor keeps camera ownership.
         [[nodiscard]] std::error_code replaceMainCameraController(
             std::unique_ptr<ICameraController> controller, ECameraProjection projection);
 
     protected:
+        // Explicit diagnostic sequence extension. Only a clean, completed owned
+        // pixel result can rearm; ordinary requestFrameCapture remains one-shot.
+        [[nodiscard]] std::error_code rearmFrameCapture();
+        [[nodiscard]] u64 currentFrameCaptureSequence() const noexcept {
+            return m_frame_capture_sequence;
+        }
+
+        // Main-side semantic eligibility for the frame being built. The armed
+        // one-shot remains pending while false; only the existing request bit
+        // crosses the lane. Other Editor callers retain their default true.
+        void setFrameCaptureEligible(const bool eligible) noexcept {
+            m_frame_capture_eligible = eligible;
+        }
+
+        // Client's committed optical revision. Pending newer fields cannot be
+        // drawn by an older queued packet before joint simulation commit.
+        void setExpectedLightingRevision(const u64 revision) noexcept {
+            m_expected_lighting_revision = revision;
+        }
+
+        /// Main-owned offscreen gameplay demands, copied into each render request.
+        /// They extend the visible receiver rectangle; none may be dropped.
+        void setWorldRadianceReceiverDemands(std::span<const lighting::WorldRadianceReceiverWindow> demands);
+
+        /// Main-owned on-demand gameplay query request, copied into each render
+        /// request. The Game never supplies or retains a WorldRadianceSource.
+        void setWorldRadianceGameplayQuery(std::optional<WorldRadianceGameplayQueryRequest> request) noexcept {
+            m_gameplay_query = std::move(request);
+        }
+
         // ReSharper disable once CppOverrideWithDifferentVisibility
         [[nodiscard]] safe_ptr<const Application> getApplication() const noexcept override {
             return this;
@@ -117,6 +158,31 @@ export namespace pP {
         void onLaneFrameConsumed_(const RenderFrameResult &result) override;
 
     private:
+        struct TerrainLightingState;
+
+        [[nodiscard]] std::error_code beginTerrainLighting_(const GridWorldCommand &command);
+        [[nodiscard]] Expected<bool> advanceTerrainLighting_();
+        [[nodiscard]] std::error_code submitTerrainLighting_(
+            bool discovery = false, u64 actual_frame = 0u, bool bounce = false, bool matter = false,
+            std::optional<TimeSpan> elapsed = {});
+        [[nodiscard]] Expected<bool> cancelTerrainDiscovery_();
+        [[nodiscard]] Expected<bool> updateTerrainBounce_(
+            TimeSpan elapsed, lighting::WorldRadianceReceiverWindow window, u64 actual_frame);
+        [[nodiscard]] Expected<bool> updateTerrainDiscovery_(
+            const CameraSnapshot &camera, TimeSpan elapsed, lighting::WorldRadianceReceiverWindow window,
+            u64 actual_frame);
+        [[nodiscard]] Expected<bool> updateTerrainMatter_(
+            const std::optional<GridParticleGpuView> &view, const CameraSnapshot &camera, int2 extent, TimeSpan elapsed,
+            std::span<const lighting::WorldRadianceReceiverWindow> demands, u64 actual_frame);
+
+        [[nodiscard]] Expected<bool> updateTerrainLightingView_(
+            const CameraSnapshot &camera, int2 extent, TimeSpan elapsed,
+            std::span<const lighting::WorldRadianceReceiverWindow> demands, u64 actual_frame);
+        [[nodiscard]] std::error_code releaseTerrainLighting_(GpuQuiescence quiescence);
+
+        [[nodiscard]] std::error_code observeScreenLighting_();
+        void observeTerrainLighting_();
+
         void onMainWindowFocused_(const Window &window, bool focused);
 
         // Phase 3 focus policy: preserves raw focus loss; the legacy
@@ -164,10 +230,27 @@ export namespace pP {
             // Submit fence value this frame rode (submission acceptance,
             // independent of present verdict).
             FenceCompletionValue m_last_submit_value{kFenceValueNone};
+            std::optional<CameraSnapshot> m_lighting_camera{};
+            // Native picture viewport and real presented surface may differ
+            // while a retained image is clipped/letterboxed across resize.
+            int2 m_lighting_extent{zero_v};
+            int2 m_lighting_target_extent{zero_v};
+            u64 m_lighting_world{};
+            u64 m_lighting_revision{};
+            TimeSpan m_lighting_update_age{};
+            std::error_code m_lighting_error{};
+            bool m_lighting_pending{};
         };
         void enableGridObservations(const bool enabled) noexcept {
             m_observe_grid = enabled;
         }
+
+        // Startup-only, before the render lane starts. World-field timing is
+        // independent of CPU world-generation observations and surface capture.
+        void enableWorldRadianceMeasurements(const bool enabled) noexcept {
+            m_measure_world_radiance = enabled;
+        }
+
         [[nodiscard]] RenderDiagnostics renderDiagnostics() const noexcept {
             return m_diagnostics;
         }
@@ -185,8 +268,21 @@ export namespace pP {
         }
 
     private:
+        std::vector<lighting::WorldRadianceReceiverWindow> m_lighting_receiver_demands{};
+        std::optional<WorldRadianceGameplayQueryRequest> m_gameplay_query{};
+        u64 m_expected_lighting_revision{};
+
+        u64 m_frame_capture_sequence{}; // Main-side monotonically reserved identity.
+        u64 m_frame_capture_success_sequence{}; // Main-side completed clean result.
+        u64 m_frame_capture_attempted_sequence{}; // Worker-side duplicate suppression.
         bool m_observe_grid{false};
+        bool m_measure_world_radiance{};
+        bool m_frame_capture_requested{}; // Main-side request transport.
+        bool m_frame_capture_eligible{true}; // Main-side current-frame UI readiness.
+        bool m_frame_capture_armed{}; // Main-side once-per-owner admission.
+
         [[nodiscard]] std::error_code executeGridWorld_(const GridWorldCommand &command, GridWorldResult &result);
+
         RenderDiagnostics m_diagnostics{};
 
     private:
@@ -209,6 +305,7 @@ export namespace pP {
         // Startup-boundary service captures for the lane executor (resolved
         // once at initialize, never mid-frame on the worker).
         safe_ptr<IRhiService> m_lane_rhi_service{};
+        safe_ptr<IShaderService> m_lane_shader_service{};
         u64 m_lane_dropped_frames{0u};
 
         std::optional<mesh::SceneAsset> m_scene{};
@@ -225,6 +322,8 @@ export namespace pP {
         std::unique_ptr<TrianglePass> m_triangle_pass{};
         std::unique_ptr<GridPass> m_grid_pass{};
         std::unique_ptr<RetroPass> m_retro_pass{};
+        std::unique_ptr<TerrainLightingState> m_terrain_lighting{};
+        bool m_scene_passes_encoded{};
         RetroSettings m_retro_settings{};
 
         // Background-drag actuator @ detector priority; registrar == owner.

@@ -4,7 +4,11 @@ if(MSVC)
 elseif(CMAKE_CXX_COMPILER_ID MATCHES ".*Clang")
   include(compiler/Clang)
 elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-  include(compiler/GCC)
+  message(FATAL_ERROR "PPR requires Clang: GCC cannot build this project's C++23 module "
+          "targets and rejects the -stdlib=libc++ flags applied by cmake/compiler/Clang.cmake. "
+          "Configure with the clang-dev preset, or pass "
+          "-DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ "
+          "(current compiler: '${CMAKE_CXX_COMPILER}').")
 else()
   message(AUTHOR_WARNING "Unknown set as CXX compiler: '${CMAKE_CXX_COMPILER_ID}'")
 endif()

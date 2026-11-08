@@ -31,6 +31,104 @@ namespace pP::colony {
         return result;
     }
 
+    std::error_code validateMaterialTransport(
+        const MaterialAppearance &appearance, const std::string_view source, const std::string_view appearance_path,
+        config::Diagnostics &diagnostics) {
+        if (not appearance.m_transport) {
+            return {};
+        }
+
+        const auto &transport = *appearance.m_transport;
+        const std::string path = std::string{appearance_path} + ".transport";
+        PPR_RETURN_ERROR_ON_FAIL(
+            ContentAssembly,
+            transport.m_contract_version == kMaterialTransportContractVersion and
+                    (transport.m_model == EMaterialOpticalModel::vacuum or
+                        transport.m_model == EMaterialOpticalModel::opaque or
+                        transport.m_model == EMaterialOpticalModel::absorbing)
+                ? std::error_code{}
+                : asset::reject(
+                      diagnostics, source, path, "Expected explicit version1 vacuum, opaque or absorbing transport"));
+
+        const auto fits = [](const double value) {
+            return std::isfinite(value) and
+                   value >= 0.0 and
+                   value <= static_cast<double>((std::numeric_limits<float>::max)());
+        };
+
+        const std::array<double, 3> sigma{
+            transport.m_sigma_r_per_m, transport.m_sigma_g_per_m, transport.m_sigma_b_per_m};
+        const std::array<double, 3> rgb{appearance.m_emissive_r, appearance.m_emissive_g, appearance.m_emissive_b};
+        PPR_RETURN_ERROR_ON_FAIL(
+            ContentAssembly,
+            fits(appearance.m_emissive_strength)
+                ? std::error_code{}
+                : asset::reject(
+                      diagnostics, source, path, "Source strength does not fit the finite nonnegative float ABI"));
+        const float strength = static_cast<float>(appearance.m_emissive_strength);
+        PPR_RETURN_ERROR_ON_FAIL(
+            ContentAssembly,
+            appearance.m_emissive_strength == 0.0 or strength > 0.0f
+                ? std::error_code{}
+                : asset::reject(diagnostics, source, path, "Positive source strength underflows the float ABI"));
+
+        for (std::size_t channel = 0u; channel < 3u; ++channel) {
+            PPR_RETURN_ERROR_ON_FAIL(
+                ContentAssembly,
+                fits(sigma[channel]) and fits(rgb[channel]) and rgb[channel] <= 1.0
+                    ? std::error_code{}
+                    : asset::reject(
+                          diagnostics, source, path, "Sigma and source RGB must fit the finite nonnegative float ABI"));
+            const float coefficient = static_cast<float>(sigma[channel]);
+            const float color = static_cast<float>(rgb[channel]);
+            PPR_RETURN_ERROR_ON_FAIL(
+                ContentAssembly,
+                (sigma[channel] == 0.0 or coefficient > 0.0f) and (rgb[channel] == 0.0 or color > 0.0f)
+                    ? std::error_code{}
+                    : asset::reject(diagnostics, source, path, "Positive sigma/source RGB underflows the float ABI"));
+
+            const double source_function = rgb[channel] * appearance.m_emissive_strength;
+            const double abi_source = static_cast<double>(color) * static_cast<double>(strength);
+            PPR_RETURN_ERROR_ON_FAIL(
+                ContentAssembly,
+                fits(source_function) and fits(abi_source)
+                    ? std::error_code{}
+                    : asset::reject(diagnostics, source, path, "Source function overflows the float ABI"));
+            const float encoded_source = color * strength;
+            PPR_RETURN_ERROR_ON_FAIL(
+                ContentAssembly,
+                source_function == 0.0 or encoded_source > 0.0f
+                    ? std::error_code{}
+                    : asset::reject(diagnostics, source, path, "Positive source function underflows the float ABI"));
+
+            const double volume_source = sigma[channel] * source_function;
+            const double abi_volume = static_cast<double>(coefficient) * static_cast<double>(encoded_source);
+            PPR_RETURN_ERROR_ON_FAIL(
+                ContentAssembly,
+                fits(volume_source) and fits(abi_volume)
+                    ? std::error_code{}
+                    : asset::reject(diagnostics, source, path, "Sigma*source overflows the float ABI"));
+            const float encoded_volume = coefficient * encoded_source;
+            PPR_RETURN_ERROR_ON_FAIL(
+                ContentAssembly,
+                volume_source == 0.0 or encoded_volume > 0.0f
+                    ? std::error_code{}
+                    : asset::reject(diagnostics, source, path, "Positive sigma*source underflows the float ABI"));
+
+            const bool vacuum = transport.m_model == EMaterialOpticalModel::vacuum;
+            const bool absorbing = transport.m_model == EMaterialOpticalModel::absorbing;
+            PPR_RETURN_ERROR_ON_FAIL(
+                ContentAssembly,
+                (absorbing or sigma[channel] == 0.0) and (not vacuum or source_function == 0.0)
+                    ? std::error_code{}
+                    : asset::reject(
+                          diagnostics, source, path,
+                          "Opaque/vacuum transport requires zero sigma; vacuum requires zero source function"));
+        }
+
+        return {};
+    }
+
     // ------------------------------------------------------------------
     // typed binding lookup and source provenance
     // ------------------------------------------------------------------
@@ -124,6 +222,8 @@ namespace pP::colony {
                                          "Textured materials require a world-space period"));
             }
 
+            PPR_RETURN_ERROR_ON_FAIL(
+                ContentAssembly, validateMaterialTransport(appearance, source, "appearance", diagnostics));
             return {};
         }
     }
@@ -386,6 +486,7 @@ namespace pP::colony {
 
         sim::definition::SemanticFingerprint presentation{result.m_definition};
         presentation.string("ppr.worldgen.presentation-descriptors.v1");
+        presentation.integer(kMaterialTransportContractVersion);
         presentation.value(result.m_definition.m_appearance);
         for (const auto &texture: result.m_textures) {
             presentation.integer(*texture.m_id);

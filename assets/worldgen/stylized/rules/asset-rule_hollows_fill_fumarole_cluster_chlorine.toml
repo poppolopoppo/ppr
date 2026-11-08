@@ -1,0 +1,14 @@
+schema_version = 1
+
+[definition]
+order = 38
+
+[definition.payload]
+tag = "matter_fill"
+
+[definition.payload.matter_fill]
+marker = "anchor"
+material = "chlorine"
+temperature_k = 365.0
+bulk_density_kg_m3 = 3.2
+placement = "landmark_fumarole_cluster"

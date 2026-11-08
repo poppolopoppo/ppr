@@ -18,3 +18,10 @@ alpha_mode = "blend"
 ior = 1.00077
 normal_scale = 0.0
 refraction_depth_m = 0.0
+
+[appearance.transport]
+contract_version = 1
+model = "absorbing"
+sigma_r_per_m = 0.08
+sigma_g_per_m = 0.025
+sigma_b_per_m = 0.1

@@ -32,6 +32,60 @@ export namespace pP::colony {
         repeat
     };
 
+    namespace appearance_schema {
+        constexpr config::Metadata metadata(const std::string_view name) {
+            return {name, "Content appearance", "Appearance", config::EMutability::startup, config::ESource::file};
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // optional authored optical transport contract
+    // ------------------------------------------------------------------
+
+    inline constexpr u32 kMaterialTransportContractVersion = 1u;
+
+    enum class EMaterialOpticalModel : u8 {
+        unavailable,
+        vacuum,
+        opaque,
+        absorbing
+    };
+
+    struct MaterialTransport {
+        double m_sigma_r_per_m{}, m_sigma_g_per_m{}, m_sigma_b_per_m{};
+        u32 m_contract_version{kMaterialTransportContractVersion};
+        EMaterialOpticalModel m_model{EMaterialOpticalModel::unavailable};
+
+        static constexpr auto describe() {
+            using namespace config;
+            using appearance_schema::metadata;
+            return std::tuple{
+                field(
+                    &MaterialTransport::m_contract_version, metadata("contract_version"),
+                    Range{kMaterialTransportContractVersion, kMaterialTransportContractVersion}, EPresence::required),
+                field(
+                    &MaterialTransport::m_model, metadata("model"),
+                    EnumDomain<EMaterialOpticalModel, 3>{
+                        {EnumEntry{EMaterialOpticalModel::vacuum, "vacuum"},
+                            EnumEntry{EMaterialOpticalModel::opaque, "opaque"},
+                            EnumEntry{EMaterialOpticalModel::absorbing, "absorbing"}}},
+                    EPresence::required),
+                field(
+                    &MaterialTransport::m_sigma_r_per_m, metadata("sigma_r_per_m"),
+                    FloatDomain{0.0, static_cast<double>((std::numeric_limits<float>::max)())}),
+                field(
+                    &MaterialTransport::m_sigma_g_per_m, metadata("sigma_g_per_m"),
+                    FloatDomain{0.0, static_cast<double>((std::numeric_limits<float>::max)())}),
+                field(
+                    &MaterialTransport::m_sigma_b_per_m, metadata("sigma_b_per_m"),
+                    FloatDomain{0.0, static_cast<double>((std::numeric_limits<float>::max)())})};
+        }
+    };
+
+    // ------------------------------------------------------------------
+    // selected material presentation
+    // ------------------------------------------------------------------
+
     struct MaterialDefinition {
         std::string m_key{};
         u16 m_numeric_id{0};
@@ -55,6 +109,7 @@ export namespace pP::colony {
         std::optional<std::string> m_normal_texture{};
         double m_normal_scale{1.0}, m_refraction_depth_m{};
         std::string m_normal_source_location{};
+        std::optional<MaterialTransport> m_transport{};
         EMaterialTextureSampling m_texture_sampling{EMaterialTextureSampling::stochastic};
     };
 
@@ -414,9 +469,6 @@ export namespace pP::colony {
     };
 
     namespace appearance_schema {
-        constexpr config::Metadata metadata(const std::string_view name) {
-            return {name, "Content appearance", "Appearance", config::EMutability::startup, config::ESource::file};
-        }
         template<typename Owner, typename T>
         constexpr auto collection(T Owner::*member, const std::string_view name, const std::size_t maximum) {
             auto result = config::collection(member, metadata(name), {0u, maximum});
@@ -433,6 +485,7 @@ export namespace pP::colony {
         double m_metallic{}, m_roughness{1.0};
         double m_emissive_r{}, m_emissive_g{}, m_emissive_b{}, m_emissive_strength{1.0};
         double m_ior{1.5}, m_normal_scale{1.0}, m_refraction_depth_m{};
+        std::optional<MaterialTransport> m_transport{};
         EMaterialAlphaMode m_alpha_mode{EMaterialAlphaMode::opaque};
         EMaterialTextureSampling m_texture_sampling{EMaterialTextureSampling::stochastic};
         static constexpr auto describe() {
@@ -460,6 +513,7 @@ export namespace pP::colony {
                 field(
                     &MaterialAppearance::m_roundness, metadata("roundness"), FloatDomain{0.0, 1.0},
                     EPresence::optional),
+                group(&MaterialAppearance::m_transport, metadata("transport"), EPresence::optional),
                 field(&MaterialAppearance::m_metallic, metadata("metallic"), FloatDomain{0.0, 1.0}),
                 field(&MaterialAppearance::m_roughness, metadata("roughness"), FloatDomain{0.0, 1.0}),
                 field(&MaterialAppearance::m_emissive_r, metadata("emissive_r"), FloatDomain{0.0, 1.0}),
@@ -483,6 +537,12 @@ export namespace pP::colony {
                             EnumEntry{EMaterialTextureSampling::repeat, "repeat"}}})};
         }
     };
+
+    // Cross-field validation shared by descriptor import and typed projection.
+    // Absence remains unavailable; S is existing linear emissive RGB*strength.
+    [[nodiscard]] std::error_code validateMaterialTransport(
+        const MaterialAppearance &appearance, std::string_view source, std::string_view appearance_path,
+        config::Diagnostics &diagnostics);
 
     struct BiomeAppearance {
         std::string m_display_name{}, m_preview_color_rgba{};

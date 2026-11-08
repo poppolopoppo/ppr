@@ -42,6 +42,11 @@ if(PPR_REQUIRE_MSVC_TOOLCHAIN)
     include(cmake/MSVCToolchain.cmake)
 endif()
 
+# Select the supported default toolchain before the vcpkg toolchain is included,
+# so a configuration without an explicit compiler (e.g. an IDE profile) still
+# gets Clang and the matching libc++ triplet.
+include(cmake/CompilerSelection.cmake)
+
 include(cmake/VCPkg.cmake)
 
 project(

@@ -226,6 +226,13 @@ export namespace pP {
             };
         }
 
+        // Startup-only diagnostic capability. Runtime surface transactions preserve
+        // this choice; enabling after Renderer construction is rejected.
+        [[nodiscard]] std::error_code enableSurfaceReadbackAtStartup();
+        [[nodiscard]] bool surfaceReadbackEnabled() const noexcept {
+            return m_surface_readback_enabled;
+        }
+
         [[nodiscard]] std::error_code run();
 
         // Dedicated render lane posture. Enabled by default for windowed
@@ -523,6 +530,7 @@ export namespace pP {
         // applies the §4.2 overlay on top.
         DisplayController m_display_controller{};
         bool m_presentation_vsync{true};
+        bool m_surface_readback_enabled{};
 
         // P2 dedicated render lane (Application-owned coordinator state).
         // When running, it owns Renderer affinity: init/shutdown, sweeps,

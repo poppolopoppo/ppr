@@ -70,6 +70,26 @@ module bindings for third-party libraries consumed by the engine.
   alignment-safe scalar coefficient packing; the original SIMD path is retained.
 - `PatchSlangRhiSurface.cmake` — hash-checked private Vulkan surface source copy,
   preserving outdated-swapchain status for renderer recovery without mutating CPM.
+- `PatchSlangRhiMsaa.cmake` — enabled recipe awaiting validation: hash-checked complete
+  public-header overlay and Vulkan device copy for standard indexed 4x sample
+  admission and scoped pre-creation sampled-attachment/storage allocation queries.
+  The appended `independent-blend-enabled` capability is positive evidence only
+  for a self-created Vulkan device whose exact enabled base-feature structure
+  has `independentBlend`; imported devices and other backends do not advertise it.
+  Native reactive MRT producers and temporal2x admission require this evidence
+  before changing their program/pipeline state; legacy one-target paths do not.
+  Its Vulkan-only command overlay also fixes dynamic-rendering color resolves:
+  the single `resolveView` transition uses `RenderTarget`, matching the existing
+  `COLOR_ATTACHMENT_OPTIMAL` resolve layout/stage/access. Explicit resolve/transfer
+  state mappings and D3D are unchanged. The clean pinned command source is
+  normalized/hash-checked (`bcc7fbd2…740a24`), its one anchor and one target source
+  registration are required, and CPM sources remain untouched. An already/partly
+  patched source fails the clean-input guard. Reconfigure regenerates from the
+  clean pin via `configure_file(COPYONLY)`; identical generated output preserves
+  its timestamp, and the recipe's global include guard prevents duplicate apply
+  within one configure. Native configure/Core/resolve execution is still required.
+  See `third_party/SlangRHI/README.md` for exact scope and pending integration.
 - `GLFW.cmake` / `Mango.cmake` / `rapidhash.cmake` / `STB.cmake` — per-dependency fetch/link settings.
 - `vcpkg.json` — manifest (fmt, zlib, libdeflate, zstd, lcms, glfw, …).
 `FastNoiseLite.cmake` pins Auburn/FastNoiseLite v1.1.1 at immutable commit `7ccfbc16eb1c932568f177d63a9ba51d89bbe516` via CPM. Its SYSTEM interface include target `ppr.fast_noise_lite` is a PRIVATE dependency of `engine.sim`. The upstream header is included only by `Sim.WorldGen.Noise.cpp`. License notices and provenance are retained in `third_party/FastNoiseLite/`.
+

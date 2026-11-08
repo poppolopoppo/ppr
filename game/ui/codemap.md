@@ -91,3 +91,29 @@ and a 12 px Pixelify binding for the compact Inspector read-out, with Font
 Awesome merged into body only. Reacquire face pointers each draw.
 Font/backend ownership and deferred dynamic-texture work are recorded
 in the [visual refinement plan](../../docs/plans/imgui-ricing-plan.md).
+
+`drawWorldProgress` returns the typed action and whether `BeginPopupModal`
+actually began this frame, including the logically closed branch that calls
+`CloseCurrentPopup` and balances `EndPopup`. The game observes that draw fact
+locally for final-frame capture eligibility; closing progress does not erase
+already emitted title/background geometry from the current UI packet.
+
+The showcase top bar's service-door controls emit `toggle_service_door` and
+`cancel_service_door`; the UI never changes cells/colliders or lighting directly.
+Read-only view flags expose committed closed state, pending ownership and whether
+activation is still reversible. Other tools retain their existing admission.
+
+The same showcase ribbon now emits `toggle_service_lamp` for the mounted amber
+lamp. Its label follows committed Driver state; both door/lamp buttons are
+disabled during the shared publication, with the same cancel intent labeled
+"Cancel bay change". UI never mutates catalog emission, cells, colliders or field
+resources. Other profiles retain their existing ribbon behavior. The existing
+CPU native-menu interaction leaf exercises both lamp labels, pending inhibition
+and an ordinary-world view on the same ImGui context.
+
+The explicit lighting showcase service-bay transaction also relocates the amber lamp
+between native slots x30..31 and x37..38 at y16..17. Candidate cells, immutable
+optical labels and committed typed position share the exact activation revision.
+The panel exposes a pending-disabled Move lamp action with destination label;
+the existing lamp-check route captures ON/OFF/ON, forward movement and reverse
+movement with matching-present timing receipts.

@@ -200,6 +200,8 @@ namespace pP::colony {
 
             auto physical = sim::asset::composeMaterial(value, element->m_descriptor.m_value, diagnostics, source);
             PPR_RETURN_ERROR_ON_FAIL(ContentDescriptors, physical);
+            PPR_RETURN_ERROR_ON_FAIL(
+                ContentDescriptors, validateMaterialTransport(value.m_appearance, source, "appearance", diagnostics));
 
             if (value.m_appearance.m_albedo_texture) {
                 PPR_RETURN_ERROR_ON_FAIL(

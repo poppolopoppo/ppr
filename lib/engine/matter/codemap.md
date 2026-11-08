@@ -42,6 +42,20 @@ terrain, Box2D, edit and checkpoint adapters. Drawing never advances this solver
   accounting fields. The host uses this transaction for inventory edits.
   Inventory-only replacements explicitly preserve the committed terrain buffers
   and environment constants, avoiding terrain reconstruction and upload.
+- Replacement sparse storage privately borrows the current solver generation
+  only while copying its seven owning program/pipeline `ComPtr` pairs. The
+  same-device complete donor is mandatory after the wholly default bootstrap;
+  published empty generations are warm. Every candidate still allocates fresh
+  sparse buffers and encoding state, and roots remain dispatch-local. Standalone
+  `SparseGridStorage::initialize` remains cold. No cache/family or extra lifetime
+  owner is introduced; cancel/drain/unknown-fate rules are unchanged. One sparse
+  preparation record reports cold-created/reused pairs and source epoch/rows;
+  CPU preparation including allocations is measured only when the existing
+  observation clock was injected (bootstrap is count-only). These are not GPU
+  timings or an end-to-end latency claim. The existing resident-append leaf
+  covers empty/nonempty replacement, cancellation, old readers and execution
+  after donor retirement; private malformed/foreign-device donor injection
+  remains source-reviewed rather than exercised through a new test seam.
 - `submitResidentTick` copies committed to working and runs compact GPU discovery,
   count/allocate/insert and destination initialization plus two indirect fused
   dispatches per substep. K2 is the only admitted count;

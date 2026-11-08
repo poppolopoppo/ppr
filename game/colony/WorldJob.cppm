@@ -37,7 +37,8 @@ export namespace pP::colony {
 
         /// An override owns one request's immutable authored inputs through worker retirement.
         /// Empty keeps the application's default preparation policy.
-        [[nodiscard]] std::error_code request(ColonyDriverDesc request, Prepare prepare = {});
+        [[nodiscard]] std::error_code request(
+            ColonyDriverDesc request, Prepare prepare = {}, bool capture_direct_world = false);
         /// Caller freezes at a completed tick. update() takes an exact demand
         /// snapshot and detaches on main before scheduling the capture worker.
         /// Transfers ownership only on success. Until takeCaptured(), all live

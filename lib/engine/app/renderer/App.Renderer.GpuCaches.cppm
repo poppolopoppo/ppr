@@ -452,6 +452,14 @@ export namespace pP {
         // §6 encode: resolved GpuMaterial for slot/texture + variant lookup.
         [[nodiscard]] Expected<GpuMaterial> material(MaterialHandle handle) const noexcept;
 
+        // Borrow live material values for the duration of each callback. Like
+        // material(handle), reading requires external exclusion of mutation;
+        // the callback must not mutate this cache or retain borrowed values.
+        // Uninitialized/lost caches fail before invoking the visitor. The first
+        // callback failure stops traversal and preserves all resident ownership.
+        [[nodiscard]] std::error_code visitMaterials(
+            std23::function_ref<std::error_code(const GpuMaterial &)> visitor) const;
+
         [[nodiscard]] rhi::IBuffer *materialBuffer() const noexcept;
 
         // High-water slot count, not a live count: slots are bump-allocated and
