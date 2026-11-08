@@ -38,17 +38,24 @@ namespace pP::lighting {
 
         // Per-dispatch CPU mirrors of the Slang constant buffers.
         struct WorldLightFieldDispatch {
-            u32 m_level{}, m_sample_begin{};
-            u32 m_pad0{}, m_pad1{};
+            u32 m_level{}, m_sample_begin{}, m_sample_count{};
+            u32 m_pad0{};
         };
         static_assert(sizeof(WorldLightFieldDispatch) == 16u and alignof(WorldLightFieldDispatch) == 4u);
 
         struct WorldLightFieldReset {
             u32 m_level{};
             u32 m_probe_x0{}, m_probe_y0{};
-            u32 m_rect_width{};
+            u32 m_rect_width{}, m_rect_height{};
         };
-        static_assert(sizeof(WorldLightFieldReset) == 16u and alignof(WorldLightFieldReset) == 4u);
+        static_assert(sizeof(WorldLightFieldReset) == 20u and alignof(WorldLightFieldReset) == 4u);
+
+        struct WorldLightFieldProbeUpdate {
+            u32 m_level{};
+            u32 m_probe_x0{}, m_probe_y0{};
+            u32 m_rect_width{}, m_probe_count{};
+        };
+        static_assert(sizeof(WorldLightFieldProbeUpdate) == 20u and alignof(WorldLightFieldProbeUpdate) == 4u);
 
         std::error_code require_(const bool valid, const std::errc error = std::errc::invalid_argument) noexcept {
             return valid ? std::error_code{} : std::make_error_code(error);
@@ -73,9 +80,9 @@ namespace pP::lighting {
         std::filesystem::path m_content_dir;
 
         shader::SharedModule m_module;
-        rhi::ComPtr<rhi::IShaderProgram> m_update_program, m_reset_program;
-        rhi::ComPtr<rhi::IComputePipeline> m_update_pipeline, m_reset_pipeline;
-        rhi::ComPtr<rhi::IShaderObject> m_update_root, m_reset_root;
+        rhi::ComPtr<rhi::IShaderProgram> m_update_program, m_probe_update_program, m_reset_program;
+        rhi::ComPtr<rhi::IComputePipeline> m_update_pipeline, m_probe_update_pipeline, m_reset_pipeline;
+        rhi::ComPtr<rhi::IShaderObject> m_update_root, m_probe_update_root, m_reset_root;
 
         std::array<rhi::ComPtr<rhi::IBuffer>, 2> m_radiance;
         rhi::ComPtr<rhi::IBuffer> m_state;
@@ -83,6 +90,7 @@ namespace pP::lighting {
         WorldLightFieldConstants m_constants{};
         WorldLightFieldDispatch m_dispatch{};
         WorldLightFieldReset m_reset{};
+        WorldLightFieldProbeUpdate m_probe_update{};
 
         bool m_ready{};
     };
@@ -138,7 +146,7 @@ namespace pP::lighting {
             probe_offset += u64{input.m_probes_x} * input.m_probes_y;
         }
 
-        // Load the field module and build the update/reset programs and pipelines.
+        // Load the field module and build the three compute programs/pipelines.
         PPR_RETURN_ERROR_ON_FAIL(
             WorldLightField, shaders.loadModuleFromFile(
                                  content_dir / TEXT("shaders") / TEXT("world_light_trace.slang"), "world_light_trace",
@@ -170,6 +178,9 @@ namespace pP::lighting {
 
         PPR_RETURN_ERROR_ON_FAIL(
             WorldLightField, build_program("updateWorldLightField", state.m_update_program, state.m_update_pipeline));
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldLightField,
+            build_program("updateWorldLightFieldProbe", state.m_probe_update_program, state.m_probe_update_pipeline));
         PPR_RETURN_ERROR_ON_FAIL(
             WorldLightField, build_program("resetWorldLightField", state.m_reset_program, state.m_reset_pipeline));
 
@@ -210,11 +221,14 @@ namespace pP::lighting {
             WorldLightField,
             device_buffer(state_bytes, sizeof(u32), zero_state.data(), "world light field state", state.m_state));
 
-        // Create the two roots. Bindings change each update (ping-pong and the
+        // Create the three roots. Bindings change each update (ping-pong and the
         // borrowed source buffers), so they are set in update().
         PPR_RETURN_ERROR_ON_FAIL(
             WorldLightField,
             state.m_device->createRootShaderObject(state.m_update_program.get(), state.m_update_root.writeRef()));
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldLightField, state.m_device->createRootShaderObject(
+                                 state.m_probe_update_program.get(), state.m_probe_update_root.writeRef()));
         PPR_RETURN_ERROR_ON_FAIL(
             WorldLightField,
             state.m_device->createRootShaderObject(state.m_reset_program.get(), state.m_reset_root.writeRef()));
@@ -245,7 +259,7 @@ namespace pP::lighting {
         const u32 write_index = 1u - state.m_current;
 
         // Bind the shared constants, the ping-pong radiance buffers, the state
-        // buffer and the borrowed dense source buffers on both roots.
+        // buffer and the borrowed dense source buffers on all three roots.
         const auto bind_root = [&](rhi::IShaderObject *const root) -> std::error_code {
             rhi::ShaderCursor cursor{root}, constants{};
             PPR_RETURN_ERROR_ON_FAIL(WorldLightField, cursor["g_world_light_field"].getDereferenced(constants));
@@ -270,22 +284,19 @@ namespace pP::lighting {
                 WorldLightField,
                 cursor["g_world_light_overlay"].setBinding(rhi::Binding(source.overlay(), range_(source.overlay()))));
             PPR_RETURN_ERROR_ON_FAIL(
-                WorldLightField, cursor["g_world_light_occupancy"].setBinding(
-                                     rhi::Binding(source.occupancy(), range_(source.occupancy()))));
-            PPR_RETURN_ERROR_ON_FAIL(
                 WorldLightField, cursor["g_world_light_materials"].setBinding(
                                      rhi::Binding(source.materialsGpu(), range_(source.materialsGpu()))));
             return {};
         };
 
         PPR_RETURN_ERROR_ON_FAIL(WorldLightField, bind_root(state.m_update_root.get()));
+        PPR_RETURN_ERROR_ON_FAIL(WorldLightField, bind_root(state.m_probe_update_root.get()));
         PPR_RETURN_ERROR_ON_FAIL(WorldLightField, bind_root(state.m_reset_root.get()));
 
-        // Borrowed source buffers (ids/overlay/occupancy are RW; materials is SR),
-        // and the field's own ping-pong radiance/state buffers written this frame.
+        // Borrowed source buffers (ids/overlay are RW; materials is SR), and the
+        // field's own ping-pong radiance/state buffers written this frame.
         encoder.setBufferState(source.cellIds(), rhi::ResourceState::UnorderedAccess);
         encoder.setBufferState(source.overlay(), rhi::ResourceState::UnorderedAccess);
-        encoder.setBufferState(source.occupancy(), rhi::ResourceState::UnorderedAccess);
         encoder.setBufferState(source.materialsGpu(), rhi::ResourceState::ShaderResource);
         encoder.setBufferState(state.m_radiance[read_index].get(), rhi::ResourceState::UnorderedAccess);
         encoder.setBufferState(state.m_radiance[write_index].get(), rhi::ResourceState::UnorderedAccess);
@@ -303,9 +314,24 @@ namespace pP::lighting {
         encoder.setBufferState(state.m_radiance[write_index].get(), rhi::ResourceState::UnorderedAccess);
         encoder.globalBarrier();
 
-        // Round-robin cursor over the flat sample space, split per level.
-        const u64 start = state.m_cursor;
-        const u64 end = start + u64{budget};
+        // Per-level probe rectangle of the source dirty rect in probe grid units.
+        struct ProbeRect {
+            u32 m_x0{}, m_y0{}, m_x1{}, m_y1{};
+        };
+        const auto probe_rect = [&](const WorldLightLevel &info,
+                                    const WorldLightDirtyRect &dirty) -> std::optional<ProbeRect> {
+            const u32 spacing = info.m_spacing_cells;
+            const u32 px0 = static_cast<u32>(std::max(0, dirty.m_min_x)) / spacing;
+            const u32 py0 = static_cast<u32>(std::max(0, dirty.m_min_y)) / spacing;
+            const u32 px1 = std::min(
+                info.m_probes_x, (static_cast<u32>(std::max(0, dirty.m_max_x)) + spacing - 1u) / spacing);
+            const u32 py1 = std::min(
+                info.m_probes_y, (static_cast<u32>(std::max(0, dirty.m_max_y)) + spacing - 1u) / spacing);
+            if (px0 >= px1 or py0 >= py1) {
+                return std::nullopt;
+            }
+            return ProbeRect{px0, py0, px1, py1};
+        };
 
         const auto dispatch_update = [&](const u32 level, const u64 local_begin,
                                          const u64 local_count) -> std::error_code {
@@ -314,6 +340,7 @@ namespace pP::lighting {
             }
             state.m_dispatch.m_level = level;
             state.m_dispatch.m_sample_begin = static_cast<u32>(local_begin);
+            state.m_dispatch.m_sample_count = static_cast<u32>(local_count);
 
             rhi::ShaderCursor cursor{state.m_update_root.get()}, dispatch{};
             PPR_RETURN_ERROR_ON_FAIL(WorldLightField, cursor["g_world_light_dispatch"].getDereferenced(dispatch));
@@ -341,59 +368,103 @@ namespace pP::lighting {
             return {};
         };
 
-        if (end <= total) {
-            PPR_RETURN_ERROR_ON_FAIL(WorldLightField, dispatch_cursor(start, end));
-        } else {
-            PPR_RETURN_ERROR_ON_FAIL(WorldLightField, dispatch_cursor(start, total));
-            PPR_RETURN_ERROR_ON_FAIL(WorldLightField, dispatch_cursor(0u, end - total));
-        }
-        encoder.globalBarrier();
+        const auto dispatch_reset = [&](const u32 level, const u32 px0, const u32 py0, const u32 rect_width,
+                                        const u32 rect_height) -> std::error_code {
+            state.m_reset.m_level = level;
+            state.m_reset.m_probe_x0 = px0;
+            state.m_reset.m_probe_y0 = py0;
+            state.m_reset.m_rect_width = rect_width;
+            state.m_reset.m_rect_height = rect_height;
 
-        // Dirty reset: a source revision change resets only the intersecting
-        // probes (both buffers and the count). It runs after the cursor so the
-        // reset is the last thing to touch those probes this frame; the cursor
-        // re-accumulates them over the following updates.
+            rhi::ShaderCursor cursor{state.m_reset_root.get()}, reset{};
+            PPR_RETURN_ERROR_ON_FAIL(WorldLightField, cursor["g_world_light_reset"].getDereferenced(reset));
+            PPR_RETURN_ERROR_ON_FAIL(WorldLightField, reset.setData(&state.m_reset, sizeof(state.m_reset)));
+
+            auto *const pass = encoder.beginComputePass();
+            PPR_RETURN_ERROR_ON_FAIL(WorldLightField, require_(pass != nullptr, std::errc::io_error));
+            pass->bindPipeline(state.m_reset_pipeline.get(), state.m_reset_root.get());
+            pass->dispatchCompute(
+                static_cast<u32>((u64{rect_width} * rect_height + kNumthreads - 1u) / kNumthreads), 1u, 1u);
+            pass->end();
+            return {};
+        };
+
+        const auto dispatch_probe_update = [&](const u32 level, const u32 px0, const u32 py0, const u32 rect_width,
+                                               const u32 probe_count) -> std::error_code {
+            state.m_probe_update.m_level = level;
+            state.m_probe_update.m_probe_x0 = px0;
+            state.m_probe_update.m_probe_y0 = py0;
+            state.m_probe_update.m_rect_width = rect_width;
+            state.m_probe_update.m_probe_count = probe_count;
+
+            rhi::ShaderCursor cursor{state.m_probe_update_root.get()}, update{};
+            PPR_RETURN_ERROR_ON_FAIL(WorldLightField, cursor["g_world_light_probe_update"].getDereferenced(update));
+            PPR_RETURN_ERROR_ON_FAIL(
+                WorldLightField, update.setData(&state.m_probe_update, sizeof(state.m_probe_update)));
+
+            auto *const pass = encoder.beginComputePass();
+            PPR_RETURN_ERROR_ON_FAIL(WorldLightField, require_(pass != nullptr, std::errc::io_error));
+            pass->bindPipeline(state.m_probe_update_pipeline.get(), state.m_probe_update_root.get());
+            pass->dispatchCompute(static_cast<u32>((u64{probe_count} + kNumthreads - 1u) / kNumthreads), 1u, 1u);
+            pass->end();
+            return {};
+        };
+
+        // Dirty reset, then dirty-first reprocess, then the round-robin cursor
+        // with whatever budget remains. The reset runs before the reprocess so an
+        // edit is visible in the same frame, not deferred to the next cursor wrap.
+        u64 remaining = budget;
         if (source.revision() != state.m_last_revision) {
             const WorldLightDirtyRect dirty = source.dirtyRect();
             if (not dirty.empty()) {
                 for (u32 level = 0u; level < state.m_plan.m_level_count; ++level) {
-                    const WorldLightLevel &level_info = state.m_plan.m_levels[level];
-                    const u32 spacing = level_info.m_spacing_cells;
-                    const u32 px0 = static_cast<u32>(std::max(0, dirty.m_min_x)) / spacing;
-                    const u32 py0 = static_cast<u32>(std::max(0, dirty.m_min_y)) / spacing;
-                    const u32 px1 = std::min(
-                        level_info.m_probes_x, (static_cast<u32>(std::max(0, dirty.m_max_x)) + spacing - 1u) / spacing);
-                    const u32 py1 = std::min(
-                        level_info.m_probes_y, (static_cast<u32>(std::max(0, dirty.m_max_y)) + spacing - 1u) / spacing);
-                    if (px0 >= px1 or py0 >= py1) {
+                    const auto rect = probe_rect(state.m_plan.m_levels[level], dirty);
+                    if (not rect) {
                         continue;
                     }
+                    PPR_RETURN_ERROR_ON_FAIL(
+                        WorldLightField,
+                        dispatch_reset(
+                            level, rect->m_x0, rect->m_y0, rect->m_x1 - rect->m_x0, rect->m_y1 - rect->m_y0));
+                }
 
-                    const u32 rect_width = px1 - px0;
-                    const u32 rect_count = rect_width * (py1 - py0);
-
-                    state.m_reset.m_level = level;
-                    state.m_reset.m_probe_x0 = px0;
-                    state.m_reset.m_probe_y0 = py0;
-                    state.m_reset.m_rect_width = rect_width;
-
-                    rhi::ShaderCursor cursor{state.m_reset_root.get()}, reset{};
-                    PPR_RETURN_ERROR_ON_FAIL(WorldLightField, cursor["g_world_light_reset"].getDereferenced(reset));
-                    PPR_RETURN_ERROR_ON_FAIL(WorldLightField, reset.setData(&state.m_reset, sizeof(state.m_reset)));
-
-                    auto *const pass = encoder.beginComputePass();
-                    PPR_RETURN_ERROR_ON_FAIL(WorldLightField, require_(pass != nullptr, std::errc::io_error));
-                    pass->bindPipeline(state.m_reset_pipeline.get(), state.m_reset_root.get());
-                    pass->dispatchCompute((rect_count + kNumthreads - 1u) / kNumthreads, 1u, 1u);
-                    pass->end();
-                    encoder.globalBarrier();
+                for (u32 level = 0u; level < state.m_plan.m_level_count and remaining != 0u; ++level) {
+                    const auto rect = probe_rect(state.m_plan.m_levels[level], dirty);
+                    if (not rect) {
+                        continue;
+                    }
+                    const WorldLightLevel &info = state.m_plan.m_levels[level];
+                    const u32 rect_width = rect->m_x1 - rect->m_x0;
+                    const u64 dirty_samples = u64{rect_width} * (rect->m_y1 - rect->m_y0) * info.m_directions;
+                    const u32 probe_count = static_cast<u32>(
+                        std::min<u64>(dirty_samples, remaining) / info.m_directions);
+                    if (probe_count == 0u) {
+                        break;
+                    }
+                    PPR_RETURN_ERROR_ON_FAIL(
+                        WorldLightField, dispatch_probe_update(level, rect->m_x0, rect->m_y0, rect_width, probe_count));
+                    remaining -= u64{probe_count} * info.m_directions;
                 }
             }
             state.m_last_revision = source.revision();
         }
 
-        // Advance the cursor and cycle.
-        const u64 advanced = start + u64{budget};
+        // Round-robin cursor over the flat sample space with the remaining budget.
+        const u64 cursor_consumed = remaining;
+        if (remaining != 0u) {
+            const u64 start = state.m_cursor;
+            const u64 end = start + remaining;
+            if (end <= total) {
+                PPR_RETURN_ERROR_ON_FAIL(WorldLightField, dispatch_cursor(start, end));
+            } else {
+                PPR_RETURN_ERROR_ON_FAIL(WorldLightField, dispatch_cursor(start, total));
+                PPR_RETURN_ERROR_ON_FAIL(WorldLightField, dispatch_cursor(0u, end - total));
+            }
+        }
+        encoder.globalBarrier();
+
+        // Advance the cursor and cycle by the cursor (non-dirty) work only.
+        const u64 advanced = state.m_cursor + cursor_consumed;
         state.m_cycle += advanced / total;
         state.m_cursor = advanced % total;
 
@@ -427,10 +498,13 @@ namespace pP::lighting {
         State &state = *m_state;
 
         state.m_update_root.setNull();
+        state.m_probe_update_root.setNull();
         state.m_reset_root.setNull();
         state.m_update_pipeline.setNull();
+        state.m_probe_update_pipeline.setNull();
         state.m_reset_pipeline.setNull();
         state.m_update_program.setNull();
+        state.m_probe_update_program.setNull();
         state.m_reset_program.setNull();
         state.m_radiance[0].setNull();
         state.m_radiance[1].setNull();

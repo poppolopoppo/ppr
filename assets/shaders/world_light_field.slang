@@ -37,20 +37,30 @@ struct WorldLightFieldConstants {
     WorldLightLevelGpu levels[kWorldLightMaxLevels];
 };
 
-// Per-dispatch update constants: which level, and the within-level sample
-// index this dispatch's thread 0 owns.
+// Cursor update dispatch: which level, the within-level sample index of thread
+// 0, and how many samples this dispatch owns (bounds the tail).
 struct WorldLightFieldDispatch {
     uint level;
     uint sampleBegin;
-    uint pad0, pad1;
+    uint sampleCount;
+    uint pad0;
 };
 
-// Per-dispatch reset constants: which level, the dirty probe-rectangle origin
-// and width. One thread resets one probe's directions.
+// Dirty reset dispatch: which level and the dirty probe rectangle (half-open
+// [probeX0, probeX0+rectWidth) x [probeY0, probeY0+rectHeight)).
 struct WorldLightFieldReset {
     uint level;
     uint probeX0, probeY0;
+    uint rectWidth, rectHeight;
+};
+
+// Dirty update dispatch: which level, the dirty probe rectangle origin/width,
+// and how many probes (in row-major order) this dispatch reprocesses.
+struct WorldLightFieldProbeUpdate {
+    uint level;
+    uint probeX0, probeY0;
     uint rectWidth;
+    uint probeCount;
 };
 
 // 8-byte radiance sample: RGB (half) + scalar transmittance (half).
@@ -62,6 +72,7 @@ struct WorldLightRadiance {
 ConstantBuffer<WorldLightFieldConstants> g_world_light_field;
 ConstantBuffer<WorldLightFieldDispatch> g_world_light_dispatch;
 ConstantBuffer<WorldLightFieldReset> g_world_light_reset;
+ConstantBuffer<WorldLightFieldProbeUpdate> g_world_light_probe_update;
 
 StructuredBuffer<WorldLightMaterial> g_world_light_materials;
 

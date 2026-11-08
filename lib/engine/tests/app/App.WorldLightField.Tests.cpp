@@ -688,7 +688,7 @@ namespace pP::tests::detail {
             fixture.shutdown();
         };
 
-        PPR_UNIT_TEST (field_dirty_reset_clears_only_intersecting_probes) {
+        PPR_UNIT_TEST (field_dirty_update_reprocesses_in_same_frame) {
             constexpr u32 width = 256u;
             constexpr u32 height = 256u;
 
@@ -701,34 +701,128 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(plan.has_value());
             const u32 budget = static_cast<u32>(plan->m_levels[0].m_sample_count);
 
-            // Level 0 probe (0,0) direction 2 is near the emitter (reset on dirty);
-            // probe (100,100) direction 0 is distant (keeps history).
+            // Level 0 probe (0,0) direction 2 is near the emitter; probe (100,100)
+            // direction 0 is distant (outside the dirty chunk).
             const u64 nearby_sample = 2u;
+            const u64 nearby_word = nearby_sample * 4u;
             const u64 distant_sample = (100u * 128u + 100u) * 4u + 0u;
 
+            // Warm the whole field with 16 vacuum updates.
+            fixture.runUpdates(16u, budget);
+            const auto before = fixture.read<u32>(field.state());
+            const u32 distant_before = before[distant_sample];
+            PPR_TEST_ASSERT(distant_before > 0u);
+
+            // Turn the emitter on at cell (0,0), bumping the revision.
             std::vector<u16> chunk(128u * 128u, 0u);
             chunk[0] = 1u;
+            const lighting::WorldLightChunkUpdate on{.m_chunk_id = 0u, .m_cell_ids = chunk};
+            PPR_TEST_ASSERT(not source.applyUpdate({.m_chunks = {&on, 1u}, .m_revision = 1u}));
+            fixture.encodeSource();
+
+            // One field update resets and immediately reprocesses the dirty probe,
+            // so the edit is visible in the same frame.
+            fixture.updateField(budget);
+            const auto after_count = fixture.read<u32>(field.state());
+            const auto after_radiance = fixture.read<u16>(field.view().m_radiance);
+
+            PPR_TEST_ASSERT(after_count[nearby_sample] == 1u);
+            PPR_TEST_ASSERT(halfIsFinitePositive(after_radiance[nearby_word + 0u]));
+            PPR_TEST_ASSERT(after_count[distant_sample] == distant_before);
+
+            fixture.shutdown();
+        };
+
+        PPR_UNIT_TEST (field_reset_bounds_rect_tail) {
+            constexpr u32 width = 256u;
+            constexpr u32 height = 256u;
+
+            Fixture fixture;
+            fixture.initialize(width, height);
+            auto &source = fixture.m_source;
+            auto &field = fixture.m_field;
+
+            const auto plan = lighting::planWorldLight({.m_width = width, .m_height = height, .m_cell_metres = 0.5f});
+            PPR_TEST_ASSERT(plan.has_value());
+            const u32 budget = static_cast<u32>(plan->m_levels[0].m_sample_count);
+
+            // Level 0 probe (5,6) direction 0 sits one row below the dirty probe
+            // (5,5) and must keep its history.
+            const u64 below_sample = (6u * 128u + 5u) * 4u + 0u;
+
+            fixture.runUpdates(16u, budget);
+            const auto before = fixture.read<u32>(field.state());
+            const u32 below_before = before[below_sample];
+            PPR_TEST_ASSERT(below_before > 0u);
+
+            // A single-cell edit: a particle at cell (10,10) dirties a 1x1 probe
+            // rect whose count (1) is not a multiple of the 64-thread group.
+            const lighting::WorldLightMatterParticle particle{
+                .m_cell = 10u * width + 10u, .m_fill = 1.0f, .m_material = 0u};
+            PPR_TEST_ASSERT(not source.applyUpdate({.m_particles = {&particle, 1u}, .m_revision = 1u}));
+            fixture.encodeSource();
+
+            fixture.updateField(budget);
+            const auto after = fixture.read<u32>(field.state());
+
+            // The reset tail must not clear the probe just outside the rect.
+            PPR_TEST_ASSERT(after[below_sample] == below_before);
+
+            fixture.shutdown();
+        };
+
+        PPR_UNIT_TEST (field_update_respects_budget_boundary) {
+            constexpr u32 width = 256u;
+            constexpr u32 height = 256u;
+
+            Fixture fixture;
+            fixture.initialize(width, height);
+            auto &field = fixture.m_field;
+
+            // A budget that is not a multiple of the 64-thread group size.
+            const u32 budget = 100u;
+            fixture.updateField(budget);
+            const auto count = fixture.read<u32>(field.state());
+
+            // Only the first `budget` samples are traced; the tail group must not
+            // leak past the slice.
+            PPR_TEST_ASSERT(count[99u] == 1u);
+            PPR_TEST_ASSERT(count[100u] == 0u);
+            PPR_TEST_ASSERT(count[127u] == 0u);
+
+            fixture.shutdown();
+        };
+
+        PPR_UNIT_TEST (field_dense_dda_hits_diagonal_emitter) {
+            constexpr u32 width = 256u;
+            constexpr u32 height = 256u;
+
+            Fixture fixture;
+            fixture.initialize(width, height);
+            auto &source = fixture.m_source;
+            auto &field = fixture.m_field;
+
+            const auto plan = lighting::planWorldLight({.m_width = width, .m_height = height, .m_cell_metres = 0.5f});
+            PPR_TEST_ASSERT(plan.has_value());
+            const u32 budget = static_cast<u32>(plan->m_levels[0].m_sample_count);
+
+            // Level 0 probe (3,3) direction 0 (up-right) passes diagonally through
+            // block (0,0) and hits the single opaque cell (8,8) in block (1,1).
+            const u64 sample = (3u * 128u + 3u) * 4u + 0u;
+            const u64 word = sample * 4u;
+
+            std::vector<u16> chunk(128u * 128u, 0u);
+            chunk[8u * 128u + 8u] = 1u;
             const lighting::WorldLightChunkUpdate update{.m_chunk_id = 0u, .m_cell_ids = chunk};
             PPR_TEST_ASSERT(not source.applyUpdate({.m_chunks = {&update, 1u}, .m_revision = 1u}));
             fixture.encodeSource();
 
-            fixture.runUpdates(16u, budget);
-            const auto before = fixture.read<u32>(field.state());
-            PPR_TEST_ASSERT(before[nearby_sample] > 0u);
-            PPR_TEST_ASSERT(before[distant_sample] > 0u);
+            fixture.runUpdates(8u, budget);
+            const auto radiance = fixture.read<u16>(field.view().m_radiance);
 
-            // Turn the emitter off: cell (0,0) back to vacuum, bumping the revision.
-            std::vector<u16> empty_chunk(128u * 128u, 0u);
-            const lighting::WorldLightChunkUpdate off{.m_chunk_id = 0u, .m_cell_ids = empty_chunk};
-            PPR_TEST_ASSERT(not source.applyUpdate({.m_chunks = {&off, 1u}, .m_revision = 2u}));
-            fixture.encodeSource();
-
-            // One field update resets the intersecting probe only.
-            fixture.updateField(budget);
-            const auto after = fixture.read<u32>(field.state());
-
-            PPR_TEST_ASSERT(after[nearby_sample] == 0u);
-            PPR_TEST_ASSERT(after[distant_sample] == before[distant_sample]);
+            PPR_TEST_ASSERT(halfIsFinitePositive(radiance[word + 0u]));
+            PPR_TEST_ASSERT(halfIsFinitePositive(radiance[word + 1u]));
+            PPR_TEST_ASSERT(halfIsFinitePositive(radiance[word + 2u]));
 
             fixture.shutdown();
         };
@@ -785,7 +879,10 @@ namespace pP::tests {
             detail::WorldLightGpu::gpu_source_second_update_replaces_pending_particles,
             detail::WorldLightGpu::gpu_source_multiword_occupancy,
             detail::WorldLightFieldGpu::field_single_emitter_converges,
-            detail::WorldLightFieldGpu::field_dirty_reset_clears_only_intersecting_probes,
+            detail::WorldLightFieldGpu::field_dirty_update_reprocesses_in_same_frame,
+            detail::WorldLightFieldGpu::field_reset_bounds_rect_tail,
+            detail::WorldLightFieldGpu::field_update_respects_budget_boundary,
+            detail::WorldLightFieldGpu::field_dense_dda_hits_diagonal_emitter,
             detail::WorldLightFieldGpu::field_is_camera_independent,
         });
     };
