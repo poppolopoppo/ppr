@@ -85,6 +85,104 @@ namespace pP::tests::detail {
             reject({.m_width = 1024u, .m_height = 1024u, .m_cell_metres = 0.5f, .m_level_count = 9u});
             reject({.m_width = 1024u, .m_height = 1024u, .m_cell_metres = 0.5f, .m_level_count = 255u});
         };
+
+        // ------------------------------------------------------------------
+        // dense world source fixtures
+        // ------------------------------------------------------------------
+
+        PPR_UNIT_TEST (source_applies_dirty_chunks_and_preserves_other_cells) {
+            const auto plan = lighting::planWorldLight({.m_width = 256, .m_height = 256, .m_cell_metres = 0.5f});
+            PPR_TEST_ASSERT(plan.has_value());
+            const lighting::WorldLightMaterial materials[] = {{.m_kind = 1u}};
+            auto source = lighting::WorldLightSource::create(*plan, materials);
+            PPR_TEST_ASSERT(source.has_value());
+
+            std::vector<u16> chunk(128u * 128u, 0u);
+            chunk[0] = 1u;
+            const lighting::WorldLightChunkUpdate update{.m_chunk_id = 0u, .m_cell_ids = chunk};
+            PPR_TEST_ASSERT(not source->applyUpdate({.m_chunks = {&update, 1u}, .m_revision = 2u}));
+            PPR_TEST_ASSERT(source->cellId(0u, 0u) == 1u);
+            PPR_TEST_ASSERT(source->cellId(129u, 0u) == 0u);
+            PPR_TEST_ASSERT(source->revision() == 2u);
+            PPR_TEST_ASSERT(source->dirtyRect().m_min_x == 0 and source->dirtyRect().m_max_x == 128);
+        };
+
+        PPR_UNIT_TEST (source_empty_update_keeps_revision_and_dirty_rect) {
+            const auto plan = lighting::planWorldLight({.m_width = 256, .m_height = 256, .m_cell_metres = 0.5f});
+            PPR_TEST_ASSERT(plan.has_value());
+            auto source = lighting::WorldLightSource::create(*plan, {});
+            PPR_TEST_ASSERT(source.has_value());
+
+            std::vector<u16> chunk(128u * 128u, 0u);
+            chunk[0] = 1u;
+            const lighting::WorldLightChunkUpdate update{.m_chunk_id = 0u, .m_cell_ids = chunk};
+            PPR_TEST_ASSERT(not source->applyUpdate({.m_chunks = {&update, 1u}, .m_revision = 5u}));
+            PPR_TEST_ASSERT(source->revision() == 5u);
+
+            const lighting::WorldLightDirtyRect dirty = source->dirtyRect();
+            PPR_TEST_ASSERT(not dirty.empty());
+
+            PPR_TEST_ASSERT(not source->applyUpdate({}));
+            PPR_TEST_ASSERT(source->revision() == 5u);
+            PPR_TEST_ASSERT(source->dirtyRect().m_min_x == dirty.m_min_x);
+            PPR_TEST_ASSERT(source->dirtyRect().m_min_y == dirty.m_min_y);
+            PPR_TEST_ASSERT(source->dirtyRect().m_max_x == dirty.m_max_x);
+            PPR_TEST_ASSERT(source->dirtyRect().m_max_y == dirty.m_max_y);
+        };
+
+        PPR_UNIT_TEST (source_rejects_out_of_range_chunk) {
+            const auto plan = lighting::planWorldLight({.m_width = 256, .m_height = 256, .m_cell_metres = 0.5f});
+            PPR_TEST_ASSERT(plan.has_value());
+            auto source = lighting::WorldLightSource::create(*plan, {});
+            PPR_TEST_ASSERT(source.has_value());
+
+            std::vector<u16> chunk(128u * 128u, 0u);
+            // 256x256 is a 2x2 chunk grid, so ids 0..3 are valid; id 4 is not.
+            const lighting::WorldLightChunkUpdate update{.m_chunk_id = 4u, .m_cell_ids = chunk};
+            PPR_TEST_ASSERT(
+                source->applyUpdate({.m_chunks = {&update, 1u}, .m_revision = 2u}) == std::errc::result_out_of_range);
+            PPR_TEST_ASSERT(source->revision() == 0u);
+
+            std::vector<u16> short_chunk(5u, 0u);
+            const lighting::WorldLightChunkUpdate undersized{.m_chunk_id = 0u, .m_cell_ids = short_chunk};
+            PPR_TEST_ASSERT(
+                source->applyUpdate({.m_chunks = {&undersized, 1u}, .m_revision = 2u}) == std::errc::invalid_argument);
+        };
+
+        PPR_UNIT_TEST (source_applies_overlay_and_bumps_revision) {
+            const auto plan = lighting::planWorldLight({.m_width = 256, .m_height = 256, .m_cell_metres = 0.5f});
+            PPR_TEST_ASSERT(plan.has_value());
+            auto source = lighting::WorldLightSource::create(*plan, {});
+            PPR_TEST_ASSERT(source.has_value());
+
+            const lighting::WorldLightOverlayCell overlay{.m_cell = 3u, .m_coverage = 1.0f};
+            PPR_TEST_ASSERT(not source->applyUpdate({.m_overlay = {&overlay, 1u}, .m_revision = 3u}));
+            PPR_TEST_ASSERT(source->revision() == 3u);
+
+            // A cell past the world is rejected without mutating the source.
+            const lighting::WorldLightOverlayCell outside{.m_cell = 256u * 256u, .m_coverage = 1.0f};
+            PPR_TEST_ASSERT(
+                source->applyUpdate({.m_overlay = {&outside, 1u}, .m_revision = 4u}) == std::errc::result_out_of_range);
+            PPR_TEST_ASSERT(source->revision() == 3u);
+        };
+
+        PPR_UNIT_TEST (source_derives_occupancy_word_for_traversal) {
+            const auto plan = lighting::planWorldLight({.m_width = 256, .m_height = 256, .m_cell_metres = 0.5f});
+            PPR_TEST_ASSERT(plan.has_value());
+            auto source = lighting::WorldLightSource::create(*plan, {});
+            PPR_TEST_ASSERT(source.has_value());
+            PPR_TEST_ASSERT(source->occupancyWord(0u, 0u) == 0u);
+
+            std::vector<u16> chunk(128u * 128u, 0u);
+            chunk[0] = 1u; // cell (0,0) -> block (0,0) -> bit 0
+            chunk[8u] = 1u; // cell (8,0) -> block (1,0) -> bit 1
+            const lighting::WorldLightChunkUpdate update{.m_chunk_id = 0u, .m_cell_ids = chunk};
+            PPR_TEST_ASSERT(not source->applyUpdate({.m_chunks = {&update, 1u}, .m_revision = 1u}));
+
+            const u32 word = source->occupancyWord(0u, 0u);
+            PPR_TEST_ASSERT((word & 1u) == 1u);
+            PPR_TEST_ASSERT((word & 2u) == 2u);
+        };
     }
 }
 
@@ -97,6 +195,11 @@ namespace pP::tests {
         _.recurse({
             detail::WorldLightFieldTests::plan_1024_and_2048_use_spacing_two_and_equal_level_samples,
             detail::WorldLightFieldTests::plan_rejects_zero_dimensions_nonfinite_cell_size_and_excess_levels,
+            detail::WorldLightFieldTests::source_applies_dirty_chunks_and_preserves_other_cells,
+            detail::WorldLightFieldTests::source_empty_update_keeps_revision_and_dirty_rect,
+            detail::WorldLightFieldTests::source_rejects_out_of_range_chunk,
+            detail::WorldLightFieldTests::source_applies_overlay_and_bumps_revision,
+            detail::WorldLightFieldTests::source_derives_occupancy_word_for_traversal,
         });
     };
 
