@@ -11,6 +11,10 @@
 // intensity setting. All targets are RGBA16F.
 
 static const uint kBloomMaxMips = 6u;
+// Per-level bloom weights (UE4-style "bloom size" curve). Each mip's contribution
+// is attenuated by its weight before the tent upsample, so a uniform bright frame
+// sums to ~2x the prefilter instead of accumulating ~6x. The finer mips dominate.
+static const float kBloomLevelWeights[6] = {1.0, 0.5, 0.25, 0.15, 0.1, 0.05};
 
 // Same 32-byte constant as RetroPass::BloomParameters in
 // App.Renderer.RetroPass.cpp. Plain uint2/float fields keep the constant-buffer
@@ -18,8 +22,8 @@ static const uint kBloomMaxMips = 6u;
 struct BloomParameters {
     uint2 sourceExtent; // resolved HDR scene extent (full resolution)
     uint2 mip0Extent;   // half-resolution prefilter extent (the chain base)
-    float threshold;    // scene-unit soft-knee threshold
-    float softKnee;     // scene-unit soft-knee half width (> 0)
+    float threshold;    // exposed-unit soft-knee threshold (manual EV folded in)
+    float softKnee;     // exposed-unit soft-knee half width (> 0)
     uint mipCount;      // total mips including mip 0 (<= kBloomMaxMips)
     uint upsampleLevel; // for upsampleBloom: source mip level being upsampled
 };
@@ -29,6 +33,9 @@ ConstantBuffer<BloomParameters> g_bloom;
 // views. Compute passes read and write through UAV views only, so no dispatch
 // aliases an SRV and a UAV of the same subresource.
 Texture2D<float4> g_scene;
+// 1x1 adapted-exposure offset (EV). The prefilter divides the exposed-unit
+// threshold back to scene units so the bright pass is exposure-aware.
+Texture2D<float4> g_exposure;
 RWTexture2D<float4> g_bloom_mip0;
 RWTexture2D<float4> g_bloom_mip1;
 RWTexture2D<float4> g_bloom_mip2;
@@ -53,14 +60,15 @@ float luminanceOf(float3 color) {
 // Energy-conserving soft-knee bright pass (Call of Duty: Advanced Warfare). A
 // luminance at or below the threshold contributes nothing, then a smooth
 // quadratic ramp spans [threshold, threshold + 2*softKnee] before the linear
-// tail. Black input stays exactly black.
-float3 bloomThreshold(float3 color) {
+// tail. Black input stays exactly black. The threshold/soft knee are in scene
+// units (already divided by the total exposure).
+float3 bloomThreshold(float3 color, float threshold, float softKnee) {
     float luma = luminanceOf(color);
-    float brightness = max(luma - g_bloom.threshold, 0.0);
-    if (brightness < 2.0 * g_bloom.softKnee) {
-        brightness = brightness * brightness / (4.0 * g_bloom.softKnee + 1e-4);
+    float brightness = max(luma - threshold, 0.0);
+    if (brightness < 2.0 * softKnee) {
+        brightness = brightness * brightness / (4.0 * softKnee + 1e-4);
     } else {
-        brightness = brightness - g_bloom.softKnee;
+        brightness = brightness - softKnee;
     }
 
     float scale = brightness / max(luma, 1e-4);
@@ -88,6 +96,13 @@ void prefilterBloom(uint3 id : SV_DispatchThreadID) {
         return;
     }
 
+    // Divide the exposed-unit threshold/soft knee back to scene units using the
+    // adapted exposure offset; a fixed-exposure path binds the zero offset.
+    float adapted = g_exposure.Load(int3(0, 0, 0)).x;
+    float exposure_scale = exp2(-adapted);
+    float threshold = g_bloom.threshold * exposure_scale;
+    float soft_knee = g_bloom.softKnee * exposure_scale;
+
     uint2 lo = id.xy * 2u;
     uint2 hi = min(lo + 1u, g_bloom.sourceExtent - 1u);
     float3 a = g_scene.Load(int3(lo.x, lo.y, 0)).rgb;
@@ -96,7 +111,7 @@ void prefilterBloom(uint3 id : SV_DispatchThreadID) {
     float3 d = g_scene.Load(int3(hi.x, hi.y, 0)).rgb;
     float3 average = (a + b + c + d) * 0.25;
 
-    float3 bright = bloomThreshold(average);
+    float3 bright = bloomThreshold(average, threshold, soft_knee);
     bright *= karisWeight(bright);
     g_bloom_mip0[id.xy] = float4(bright, 1.0);
 }
@@ -120,7 +135,7 @@ void downsampleBloom(uint3 gid : SV_GroupID, uint3 gtid : SV_GroupThreadID) {
         value = (loadMip0(src) + loadMip0(src + uint2(1, 0)) +
                  loadMip0(src + uint2(0, 1)) + loadMip0(src + uint2(1, 1))) *
                 0.25;
-        g_bloom_mip1[dst] = value;
+        g_bloom_mip1[dst] = value * kBloomLevelWeights[1];
     }
     g_shared_a[t.y][t.x] = value;
     GroupMemoryBarrierWithGroupSync();
@@ -132,7 +147,7 @@ void downsampleBloom(uint3 gid : SV_GroupID, uint3 gtid : SV_GroupThreadID) {
                          0.25;
         uint2 out = gid.xy * 8u + t;
         if (all(out < (mip0 >> 2u))) {
-            g_bloom_mip2[out] = reduced;
+            g_bloom_mip2[out] = reduced * kBloomLevelWeights[2];
         }
         g_shared_b[t.y][t.x] = reduced;
     }
@@ -145,7 +160,7 @@ void downsampleBloom(uint3 gid : SV_GroupID, uint3 gtid : SV_GroupThreadID) {
                          0.25;
         uint2 out = gid.xy * 4u + t;
         if (all(out < (mip0 >> 3u))) {
-            g_bloom_mip3[out] = reduced;
+            g_bloom_mip3[out] = reduced * kBloomLevelWeights[3];
         }
         g_shared_a[t.y][t.x] = reduced;
     }
@@ -158,7 +173,7 @@ void downsampleBloom(uint3 gid : SV_GroupID, uint3 gtid : SV_GroupThreadID) {
                          0.25;
         uint2 out = gid.xy * 2u + t;
         if (all(out < (mip0 >> 4u))) {
-            g_bloom_mip4[out] = reduced;
+            g_bloom_mip4[out] = reduced * kBloomLevelWeights[4];
         }
         g_shared_b[t.y][t.x] = reduced;
     }
@@ -169,7 +184,7 @@ void downsampleBloom(uint3 gid : SV_GroupID, uint3 gtid : SV_GroupThreadID) {
         float4 reduced = (g_shared_b[0][0] + g_shared_b[0][1u] + g_shared_b[1u][0] + g_shared_b[1u][1u]) * 0.25;
         uint2 out = gid.xy;
         if (all(out < (mip0 >> 5u))) {
-            g_bloom_mip5[out] = reduced;
+            g_bloom_mip5[out] = reduced * kBloomLevelWeights[5];
         }
     }
 }

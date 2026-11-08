@@ -1567,14 +1567,17 @@ namespace pP {
         parameters.m_source_extent[1] = safe_narrowing(slot.m_output_extent.y);
         parameters.m_mip0_extent[0] = safe_narrowing(mip0.x);
         parameters.m_mip0_extent[1] = safe_narrowing(mip0.y);
-        parameters.m_threshold = m_settings.m_bloom_threshold;
-        parameters.m_soft_knee = kBloomSoftKnee;
+        parameters.m_threshold = m_settings.m_bloom_threshold * std::exp2(-m_settings.m_exposure_ev);
+        parameters.m_soft_knee = kBloomSoftKnee * std::exp2(-m_settings.m_exposure_ev);
         parameters.m_mip_count = mip_count;
         parameters.m_upsample_level = 0u;
 
         static constexpr std::array<const char *, kMaxBloomMips> kBloomMipNames{
             "g_bloom_mip0", "g_bloom_mip1", "g_bloom_mip2", "g_bloom_mip3", "g_bloom_mip4", "g_bloom_mip5"};
         const rhi::Binding source_scene(slot.m_temporal_2x ? slot.m_history_view : slot.m_spatial_view);
+        // Fixed exposure binds the zero offset; adapted exposure binds the
+        // current frame's per-slot offset written by resolveAdaptation_.
+        const rhi::Binding exposure(slot.m_auto_exposure_enabled ? slot.m_exposure_view : m_empty_exposure_view);
 
         // Prefilter constants and bindings: the resolved scene in, mip 0 out.
         {
@@ -1583,6 +1586,7 @@ namespace pP {
             PPR_RETURN_ERROR_ON_FAIL(RetroPass, cursor["g_bloom"].getDereferenced(constants));
             PPR_RETURN_ERROR_ON_FAIL(RetroPass, constants.setData(&parameters, sizeof(parameters)));
             PPR_RETURN_ERROR_ON_FAIL(RetroPass, cursor["g_scene"].setBinding(source_scene));
+            PPR_RETURN_ERROR_ON_FAIL(RetroPass, cursor["g_exposure"].setBinding(exposure));
             PPR_RETURN_ERROR_ON_FAIL(
                 RetroPass, cursor["g_bloom_mip0"].setBinding(rhi::Binding(slot.m_bloom_uav_views[0])));
         }

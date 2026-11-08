@@ -2820,7 +2820,10 @@ namespace pP::tests::detail {
                 // Uploads a synthetic scene (uniform background plus one bright
                 // block), runs the full prefilter/downsample/upsample chain, and
                 // returns the accumulated mip 0 decoded to linear float RGB.
-                std::vector<std::array<float, 3>> run(const u32 edge, const float background, const float block_value) {
+                // adapted_ev is the 1x1 exposure offset the prefilter samples
+                // (0 = fixed exposure).
+                std::vector<std::array<float, 3>> run(
+                    const u32 edge, const float background, const float block_value, const float adapted_ev = 0.0f) {
                     const int2 mip0 = RetroPass::bloomMip0Extent(int2{int(edge), int(edge)});
                     const u32 mip_count = RetroPass::bloomMipCount(mip0);
                     const u32 block_edge = edge / 16u;
@@ -2860,6 +2863,25 @@ namespace pP::tests::detail {
                         not make_error_code(device.createTexture(scene_desc, &initial, scene_tex.writeRef())));
                     PPR_TEST_ASSERT(not make_error_code(scene_tex->getDefaultView(scene_view.writeRef())));
 
+                    // 1x1 adapted-exposure offset sampled by the prefilter.
+                    const float adapted_value = adapted_ev;
+                    const rhi::SubresourceData exposure_initial{
+                        .data = &adapted_value, .rowPitch = sizeof(float), .slicePitch = sizeof(float)};
+                    rhi::TextureDesc exposure_desc{};
+                    exposure_desc.type = rhi::TextureType::Texture2D;
+                    exposure_desc.size = {.width = 1u, .height = 1u, .depth = 1u};
+                    exposure_desc.arrayLength = 1u;
+                    exposure_desc.mipCount = 1u;
+                    exposure_desc.format = rhi::Format::R32Float;
+                    exposure_desc.usage = rhi::TextureUsage::ShaderResource;
+                    exposure_desc.defaultState = rhi::ResourceState::ShaderResource;
+                    exposure_desc.label = "spd bloom exposure offset";
+                    rhi::ComPtr<rhi::ITexture> exposure_tex;
+                    rhi::ComPtr<rhi::ITextureView> exposure_view;
+                    PPR_TEST_ASSERT(not make_error_code(
+                        device.createTexture(exposure_desc, &exposure_initial, exposure_tex.writeRef())));
+                    PPR_TEST_ASSERT(not make_error_code(exposure_tex->getDefaultView(exposure_view.writeRef())));
+
                     BloomParams params{};
                     params.m_source[0] = edge;
                     params.m_source[1] = edge;
@@ -2881,6 +2903,8 @@ namespace pP::tests::detail {
                         PPR_TEST_ASSERT(not make_error_code(cursor["g_bloom"].getDereferenced(constants)));
                         PPR_TEST_ASSERT(not make_error_code(constants.setData(&params, sizeof(params))));
                         PPR_TEST_ASSERT(not make_error_code(cursor["g_scene"].setBinding(rhi::Binding(scene_view))));
+                        PPR_TEST_ASSERT(
+                            not make_error_code(cursor["g_exposure"].setBinding(rhi::Binding(exposure_view))));
                         PPR_TEST_ASSERT(
                             not make_error_code(cursor["g_bloom_mip0"].setBinding(rhi::Binding(m_bloom_uav_views[0]))));
                     }
@@ -2944,6 +2968,8 @@ namespace pP::tests::detail {
 
                     scene_view.setNull();
                     scene_tex.setNull();
+                    exposure_view.setNull();
+                    exposure_tex.setNull();
                     encoder.setNull();
                     return result;
                 }
@@ -3015,10 +3041,62 @@ namespace pP::tests::detail {
                     PPR_TEST_ASSERT(std::abs(pixel[2]) < 1e-6f);
                 }
             };
+
+            PPR_UNIT_TEST (gpu_bloom_exposure_aware) {
+                constexpr u32 edge = 128u;
+
+                Fixture fixture;
+                fixture.initialize(edge);
+                PPR_DEFER {
+                    fixture.shutdown();
+                };
+
+                // A uniform 0.5 picture is below the exposed threshold (1.0), so a
+                // fixed exposure emits no bloom...
+                const auto fixed = fixture.run(edge, 0.5f, 0.5f, 0.0f);
+                for (const auto &pixel: fixed) {
+                    PPR_TEST_ASSERT(std::abs(pixel[0]) < 1e-6f);
+                    PPR_TEST_ASSERT(std::abs(pixel[1]) < 1e-6f);
+                    PPR_TEST_ASSERT(std::abs(pixel[2]) < 1e-6f);
+                }
+
+                // ...but a +2 EV adapted offset divides the scene-unit threshold to
+                // 0.25, so the identical picture now blooms.
+                const auto exposed = fixture.run(edge, 0.5f, 0.5f, 2.0f);
+                float peak = 0.0f;
+                for (const auto &pixel: exposed) {
+                    peak = std::max(peak, luminanceOf(pixel));
+                }
+                PPR_TEST_ASSERT(peak > 1e-3f);
+            };
+
+            PPR_UNIT_TEST (gpu_bloom_bounded_uniform) {
+                constexpr u32 edge = 128u;
+
+                Fixture fixture;
+                fixture.initialize(edge);
+                PPR_DEFER {
+                    fixture.shutdown();
+                };
+
+                // A uniform bright picture must produce a bounded, non-zero bloom:
+                // the per-level weights keep the peak far below the unweighted ~6x
+                // accumulation (the prefilter of a uniform 20.0 picture is ~0.95).
+                const auto bloomed = fixture.run(edge, 20.0f, 20.0f, 0.0f);
+                float peak = 0.0f;
+                for (const auto &pixel: bloomed) {
+                    peak = std::max(peak, luminanceOf(pixel));
+                    PPR_TEST_ASSERT(std::isfinite(pixel[0]) and std::isfinite(pixel[1]) and std::isfinite(pixel[2]));
+                }
+                PPR_TEST_ASSERT(peak > 0.5f);
+                PPR_TEST_ASSERT(peak < 4.0f);
+            };
         }
 
         const UnitTest spd_bloom = UnitTest::Named("spd_bloom") / [](UnitTest::IRun &run) -> void {
-            run.recurse({cpu_bloom_chain_layout, Gpu::gpu_bloom_smoke});
+            run.recurse(
+                {cpu_bloom_chain_layout, Gpu::gpu_bloom_smoke, Gpu::gpu_bloom_exposure_aware,
+                    Gpu::gpu_bloom_bounded_uniform});
         };
     }
 }
