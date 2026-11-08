@@ -975,6 +975,7 @@ namespace demo {
         bool m_lighting_showcase{};
         bool m_direct_window{}, m_single_bounce{}, m_temporal_cascades{}, m_temporal_skip_table{},
             m_rc_distant_query_check{};
+        bool m_field{};
         bool m_showcase_screen_contact{};
         std::shared_ptr<const GridWorldCommand> m_world_command{};
         std::optional<GridWorldResult> m_world_result{};
@@ -2137,6 +2138,7 @@ namespace demo {
             command.m_temporal_cascades = m_temporal_cascades and command.m_kind == EGridWorldCommand::begin;
             command.m_temporal_settings = m_temporal_settings;
             command.m_temporal_skip_table = m_temporal_skip_table;
+            command.m_field = m_field;
         }
 
         [[nodiscard]] std::error_code queueWorldCommand_(const EGridWorldCommand kind) {
@@ -2195,6 +2197,16 @@ namespace demo {
                     command->m_final_batch = true;
                 } else {
                     command->m_final_batch = source.m_uploads.empty();
+                }
+
+                if (m_field) {
+                    const auto plan = lighting::planWorldLight(
+                        {.m_width = m_map_size, .m_height = m_map_size, .m_cell_metres = source.m_cell_size_m});
+                    PPR_RETURN_ERROR_ON_FAIL(Demo, plan);
+                    command->m_field_plan = *plan;
+                    command->m_field_materials = colony::buildWorldLightMaterials(
+                        std::span<const GridTerrainVisual>{
+                            source.m_terrain_visuals.data(), source.m_terrain_visuals.size()});
                 }
             } else if (kind == EGridWorldCommand::append) {
                 auto &source = m_workshop_stage ? *m_workshop_stage : m_world_job->presentation();
@@ -5496,6 +5508,7 @@ namespace demo {
             m_direct_window = (m_temporal_cascades and not m_lighting_showcase) or
                               m_single_bounce or
                               settings.m_world_lighting == game::EWorldLighting::direct_window;
+            m_field = settings.m_world_lighting == game::EWorldLighting::field;
             m_showcase_screen_contact = m_temporal_cascades or settings.m_lighting_showcase_screen_contact;
 
             if (settings.m_lighting_showcase_metrics) {

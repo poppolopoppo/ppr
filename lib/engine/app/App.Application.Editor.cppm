@@ -159,6 +159,7 @@ export namespace pP {
 
     private:
         struct TerrainLightingState;
+        struct FieldLightingState;
 
         [[nodiscard]] std::error_code beginTerrainLighting_(const GridWorldCommand &command);
         [[nodiscard]] Expected<bool> advanceTerrainLighting_();
@@ -323,6 +324,7 @@ export namespace pP {
         std::unique_ptr<GridPass> m_grid_pass{};
         std::unique_ptr<RetroPass> m_retro_pass{};
         std::unique_ptr<TerrainLightingState> m_terrain_lighting{};
+        std::unique_ptr<FieldLightingState> m_field_lighting{};
         bool m_scene_passes_encoded{};
         RetroSettings m_retro_settings{};
 

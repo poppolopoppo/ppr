@@ -46,21 +46,25 @@ namespace pP::lighting {
         }
 
         // Committed particle instances scatter into the dense overlay at their
-        // native cell. The fill is a per-cell presence (1.0); palette remapping is
-        // the owning catalog's concern, so the material id travels verbatim.
+        // native cell. The cell id is 1-based (0 = vacuum); the Matter particle
+        // palette id is 0-based (index into the dense palette), so the game
+        // material id shifts down by one. Vacuum particles contribute nothing.
         storage.m_particles.reserve(stage.m_particle_batches.size() * 4u);
         for (const GridParticleBatch &batch: stage.m_particle_batches) {
             if (not batch.m_particles) {
                 continue;
             }
             for (const GridParticleInstance &particle: *batch.m_particles) {
+                if (particle.m_material_id == 0u) {
+                    continue;
+                }
                 const u32 x = clampCell_(particle.m_position_x_m, double{stage.m_cell_size_m}, world_edge);
                 const u32 y = clampCell_(particle.m_position_y_m, double{stage.m_cell_size_m}, world_edge);
                 storage.m_particles.push_back(
                     WorldLightMatterParticle{
                         .m_cell = y * world_edge + x,
                         .m_fill = 1.0f,
-                        .m_material = particle.m_material_id,
+                        .m_material = particle.m_material_id - 1u,
                     });
             }
         }

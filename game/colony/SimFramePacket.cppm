@@ -172,4 +172,10 @@ export namespace pP::colony {
     // payload the stage is cleared and the error returned fail-closed; the
     // client sets up a full-refresh + reset-caches retry.
     [[nodiscard]] std::error_code buildGridStagedFrame(const SimFramePacket &packet, GridStagedFrame &stage);
+
+    // Builds the dense world light source palette for field mode. Indexed by
+    // cell id - 1 (id 0 = vacuum); sparse material ids leave gap entries as
+    // the default vacuum material. Unavailable/vacuum visuals are skipped.
+    [[nodiscard]] std::vector<lighting::WorldLightMaterial> buildWorldLightMaterials(
+        std::span<const GridTerrainVisual> visuals);
 }

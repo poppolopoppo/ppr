@@ -10,6 +10,8 @@ import :renderer.lighting_pass;
 import :renderer.retro_pass;
 import :renderer.triangle_pass;
 import :renderer.world_radiance;
+import :renderer.world_light_source;
+import :renderer.world_light_types;
 import :ui.imgui;
 import :window.handle;
 
@@ -75,8 +77,12 @@ export namespace pP {
         // Picture's native viewport; target is the real presented surface.
         int2 m_lighting_extent{zero_v};
         lighting::WorldRadianceTemporalSettings m_temporal_settings{};
+        // Field mode: immutable world plan and palette carried once at begin.
+        lighting::WorldLightPlan m_field_plan{};
+        std::vector<lighting::WorldLightMaterial> m_field_materials{};
         EGridWorldCommand m_kind{EGridWorldCommand::begin};
         bool m_direct_window{}, m_single_bounce{}, m_temporal_cascades{}, m_temporal_skip_table{};
+        bool m_field{};
         bool m_final_batch{false};
     };
 

@@ -1093,5 +1093,39 @@ namespace pP::colony {
         }
         return {};
     }
+
+    std::vector<lighting::WorldLightMaterial> buildWorldLightMaterials(
+        const std::span<const GridTerrainVisual> visuals) {
+        // Palette indexed by cell id - 1 (id 0 = vacuum); sparse material ids
+        // leave gap entries as the default vacuum material.
+        u32 max_id = 0u;
+        for (const GridTerrainVisual &visual: visuals) {
+            max_id = std::max(max_id, visual.m_material_id);
+        }
+
+        std::vector<lighting::WorldLightMaterial> materials(max_id);
+        for (const GridTerrainVisual &visual: visuals) {
+            if (visual.m_material_id == 0u) {
+                continue;
+            }
+
+            const auto optics = gridMaterialOpticalCell(visual);
+            if (not optics or optics->m_kind == lighting::OpticalKind::vacuum) {
+                continue; // Unavailable or vacuum keeps the default vacuum entry.
+            }
+
+            lighting::WorldLightMaterial &material = materials[visual.m_material_id - 1u];
+            material.m_kind = optics->m_kind == lighting::OpticalKind::opaque ? 1u : 2u;
+            for (u32 channel = 0u; channel < 3u; ++channel) {
+                if (optics->m_kind == lighting::OpticalKind::opaque) {
+                    material.m_emission[channel] = static_cast<float>(optics->m_surface_emission[channel]);
+                } else {
+                    material.m_sigma[channel] = static_cast<float>(optics->m_extinction[channel]);
+                    material.m_emission[channel] = static_cast<float>(optics->m_volume_emission[channel]);
+                }
+            }
+        }
+        return materials;
+    }
 }
 

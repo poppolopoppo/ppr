@@ -252,7 +252,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(storage.m_update.m_particles.size() == 2u);
             PPR_TEST_ASSERT(storage.m_update.m_particles[0].m_cell == 2u * 256u + 2u);
             PPR_TEST_ASSERT(storage.m_update.m_particles[1].m_cell == 6u * 256u + 6u);
-            PPR_TEST_ASSERT(storage.m_update.m_particles[0].m_material == 3u);
+            PPR_TEST_ASSERT(storage.m_update.m_particles[0].m_material == 2u);
 
             PPR_TEST_ASSERT(storage.m_update.m_revision == 5u);
             PPR_TEST_ASSERT(storage.m_update.m_sky_hour == 7);
@@ -1164,6 +1164,70 @@ namespace pP::tests::detail {
             };
 
             PPR_TEST_ASSERT(run() == run());
+        };
+
+        PPR_UNIT_TEST (field_routing_applies_dirty_chunk_and_binds_view) {
+            constexpr u32 width = 256u;
+            constexpr u32 height = 256u;
+
+            Fixture fixture;
+            fixture.initialize(width, height);
+            auto &source = fixture.m_source;
+            auto &field = fixture.m_field;
+
+            const auto plan = lighting::planWorldLight({.m_width = width, .m_height = height, .m_cell_metres = 1.0f});
+            PPR_TEST_ASSERT(plan.has_value());
+            const u32 budget = static_cast<u32>(plan->m_levels[0].m_sample_count);
+
+            // Committed stage: one dirty chunk (opaque emissive at cell (0,0))
+            // plus one committed particle (palette index 0, the opaque emissive
+            // material), exactly what the field-mode render lane consumes.
+            GridStagedFrame stage{};
+            stage.m_cell_size_m = 1.0f;
+            stage.m_temporal_sky_hour = 7;
+            GridStagedUpload upload{};
+            upload.m_chunk_id = 0u;
+            upload.m_cell_materials.assign(GridPass::kCellsPerChunk, 0u);
+            upload.m_cell_materials[0u] = 1u;
+            stage.m_uploads.push_back(std::move(upload));
+            auto particles = std::make_shared<Array<GridParticleInstance>>();
+            particles->push_back({u64{1}, 2.5, 2.5, 0.0, 1.0, 300.0, 1u});
+            stage.m_particle_batches.push_back(GridParticleBatch{0u, particles});
+
+            // The producer maps the dirty chunk and the particle, then the source
+            // adopts the revision (1).
+            const auto storage = lighting::buildWorldLightSourceUpdate(stage, width, 1u, 7);
+            PPR_TEST_ASSERT(storage.m_update.m_chunks.size() == 1u);
+            PPR_TEST_ASSERT(storage.m_update.m_particles.size() == 1u);
+            PPR_TEST_ASSERT(not source.applyUpdate(storage.m_update));
+            PPR_TEST_ASSERT(source.revision() == 1u);
+
+            // Encode the source upload and one field update, then read the fresh
+            // ping-ponged view that the lane would bind to GridPass.
+            fixture.encodeSource();
+            fixture.updateField(budget);
+            const auto view = field.view();
+            PPR_TEST_ASSERT(view.m_radiance != nullptr);
+            PPR_TEST_ASSERT(view.m_previous_radiance != nullptr);
+            PPR_TEST_ASSERT(view.m_constants != nullptr);
+
+            // The cursor/cycle diagnostics remain readable as the field warms.
+            fixture.updateField(budget);
+            PPR_TEST_ASSERT(field.cursor() < plan->m_radiance_samples);
+
+            // A second dirty edit advances the source revision again.
+            stage.m_uploads.clear();
+            stage.m_particle_batches.clear();
+            GridStagedUpload second{};
+            second.m_chunk_id = 0u;
+            second.m_cell_materials.assign(GridPass::kCellsPerChunk, 0u);
+            second.m_cell_materials[1u] = 1u;
+            stage.m_uploads.push_back(std::move(second));
+            const auto second_storage = lighting::buildWorldLightSourceUpdate(stage, width, 2u, 7);
+            PPR_TEST_ASSERT(not source.applyUpdate(second_storage.m_update));
+            PPR_TEST_ASSERT(source.revision() == 2u);
+
+            fixture.shutdown();
         };
 
         PPR_UNIT_TEST (composite_matches_cpu_reference) {
@@ -2101,6 +2165,7 @@ namespace pP::tests {
             detail::WorldLightFieldGpu::field_update_respects_budget_boundary,
             detail::WorldLightFieldGpu::field_dense_dda_hits_diagonal_emitter,
             detail::WorldLightFieldGpu::field_is_camera_independent,
+            detail::WorldLightFieldGpu::field_routing_applies_dirty_chunk_and_binds_view,
             detail::WorldLightFieldGpu::composite_matches_cpu_reference,
             detail::WorldLightFieldGpu::diffuse_plus_z_isotropic_and_perturbed_finite,
             detail::WorldLightFieldGpu::specular_vertical_reflection_and_roughness_finite,

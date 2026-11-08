@@ -261,6 +261,18 @@ namespace pP {
         std::optional<lighting::WorldRadianceTimingStatus> m_reported_timing_status{};
     };
 
+    // ------------------------------------------------------------------
+    // editor-owned world light field (field mode)
+    // ------------------------------------------------------------------
+
+    struct ApplicationEditor::FieldLightingState {
+        lighting::WorldLightSourceGpu m_source{};
+        lighting::WorldLightField m_field{};
+        lighting::WorldLightPlan m_plan{};
+        u64 m_revision{};
+        bool m_initialized{};
+    };
+
     // UI frontend/GPU split handoffs (defined in App.UI.ImGui.cpp with
     // external linkage): the Editor runs Detached + Context halves on main
     // and the GPU half on the owner lane. Forward-declared here so this
@@ -894,6 +906,11 @@ namespace pP {
                             Editor, lane_err,
                             releaseTerrainLighting_(
                                 device_loss_confirmed ? GpuQuiescence::kRemovalConfirmed : GpuQuiescence::kIdleProven));
+                        if (m_field_lighting and m_field_lighting->m_initialized) {
+                            PPR_RETAIN_ERROR_ON_FAIL(Editor, lane_err, m_field_lighting->m_field.shutdown());
+                            PPR_RETAIN_ERROR_ON_FAIL(Editor, lane_err, m_field_lighting->m_source.shutdown());
+                            m_field_lighting.reset();
+                        }
                         // Triangle shutdown runs on main below, before the
                         // resets and the base shutdown's renderer/RHI release.
                         return lane_err;
@@ -3537,6 +3554,29 @@ namespace pP {
                     }
                 }
 
+                if (command.m_field) {
+                    // Field mode owns no receiver windows, matter identity,
+                    // bounce or discovery: the begin command only initializes
+                    // the dense source and the cascade field, then the ordinary
+                    // per-frame dirty stage drives the update.
+                    if (not m_field_lighting) {
+                        m_field_lighting = std::make_unique<FieldLightingState>();
+                    }
+                    auto &field = *m_field_lighting;
+                    if (not field.m_initialized) {
+                        PPR_RETURN_ERROR_ON_FAIL(
+                            Editor, field.m_source.initialize(
+                                        *m_lane_rhi_service, *m_lane_shader_service, command.m_field_plan,
+                                        command.m_field_materials, getContentDir().path()));
+                        PPR_RETURN_ERROR_ON_FAIL(
+                            Editor, field.m_field.initialize(
+                                        *m_lane_rhi_service, *m_lane_shader_service, command.m_field_plan,
+                                        getContentDir().path()));
+                        field.m_plan = command.m_field_plan;
+                        field.m_initialized = true;
+                    }
+                }
+
                 result.m_applied = true;
                 return {};
             case EGridWorldCommand::append:
@@ -4387,6 +4427,32 @@ namespace pP {
         const auto scene_prepare = [&](const PreRenderContext &context) -> std::error_code {
             if (retain_picture) {
                 return {}; // UI and the retained texture need no new scene encode.
+            }
+
+            // Field mode: apply the committed dirty stage, encode the dense
+            // source upload and the cascade field update, then rebind the fresh
+            // (ping-ponged) field view before the scene samples it. No receiver
+            // windows, matter identity, bounce, discovery or deadline planning.
+            if (m_field_lighting and m_field_lighting->m_initialized) {
+                auto &field = *m_field_lighting;
+                const i32 sky_hour = grid_stage.m_temporal_sky_hour.value_or(-1);
+                const bool dirty = not grid_stage.m_uploads.empty() or not grid_stage.m_particle_batches.empty();
+                if (dirty) {
+                    ++field.m_revision;
+                }
+
+                auto storage = lighting::buildWorldLightSourceUpdate(
+                    grid_stage, field.m_plan.m_width, field.m_revision, sky_hour);
+                PPR_RETURN_ERROR_ON_FAIL(Editor, field.m_source.applyUpdate(storage.m_update));
+                PPR_RETURN_ERROR_ON_FAIL(Editor, field.m_source.encode(context.m_encoder));
+                PPR_RETURN_ERROR_ON_FAIL(
+                    Editor, field.m_field.update(
+                                context.m_encoder, field.m_source, 1.0f / 60.0f,
+                                static_cast<u32>(field.m_plan.m_levels[0].m_sample_count)));
+                PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->setWorldLightField(field.m_field.view()));
+
+                out_result.m_lighting_source_revision = field.m_source.revision();
+                out_result.m_lighting_field_cycle = field.m_field.cycle();
             }
 
             encoded_screen_work = lighting and m_terrain_lighting->m_temporal_cascades;
