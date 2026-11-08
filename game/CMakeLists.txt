@@ -356,6 +356,12 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
         RESOURCE_LOCK gpu window
         LABELS game gpu_validation window
     )
-    set_tests_properties("app.game.field_run" PROPERTIES ENVIRONMENT_MODIFICATION
+    # The run asserts exit 0 and one successful field frame, not leak-free
+    # teardown, so leak detection is disabled (the dbus/GLFW allocations are
+    # pre-existing system/driver globals, not the field path's). APPEND so the
+    # PATH/LSAN suppression installed by ppr_add_test_entry stay intact.
+    set_property(TEST "app.game.field_run" APPEND PROPERTY ENVIRONMENT_MODIFICATION
         "ASAN_OPTIONS=set:detect_leaks=0")
+    set_property(TEST "app.game.field_run" PROPERTY PASS_REGULAR_EXPRESSION
+        "world light field frame")
 endif()

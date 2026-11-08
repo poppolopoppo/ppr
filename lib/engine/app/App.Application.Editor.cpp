@@ -270,6 +270,7 @@ namespace pP {
         lighting::WorldLightField m_field{};
         lighting::WorldLightPlan m_plan{};
         bool m_initialized{};
+        bool m_frame_logged{};
     };
 
     // UI frontend/GPU split handoffs (defined in App.UI.ImGui.cpp with
@@ -4463,6 +4464,16 @@ namespace pP {
 
                 out_result.m_lighting_source_revision = field.m_source.revision();
                 out_result.m_lighting_field_cycle = field.m_field.cycle();
+
+                // Once per run: prove a field frame actually encoded and bound
+                // (the bounded run test greps for this). Not per-frame.
+                if (not field.m_frame_logged) {
+                    PPR_LOG(
+                        Editor, info, "world light field frame",
+                        {{"revision", out_result.m_lighting_source_revision},
+                            {"cycle", out_result.m_lighting_field_cycle.value_or(0u)}, {"frame", packet.m_frame_id}});
+                    field.m_frame_logged = true;
+                }
             }
 
             encoded_screen_work = lighting and m_terrain_lighting->m_temporal_cascades;
