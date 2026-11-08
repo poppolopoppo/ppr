@@ -319,6 +319,8 @@ namespace pP::game {
     void applyPostToRetro(RetroSettings &retro, const PostDisplaySettings &post) noexcept {
         retro.m_exposure_ev = post.m_exposure_ev;
         retro.m_bloom_enabled = post.m_bloom;
+        retro.m_bloom_intensity = post.m_bloom_intensity;
+        retro.m_bloom_threshold = post.m_bloom_threshold;
         retro.m_palette_enabled = post.m_palette;
         retro.m_auto_exposure = post.m_auto_exposure;
         retro.m_adaptation_tau = post.m_adaptation_tau;

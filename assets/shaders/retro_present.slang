@@ -17,6 +17,7 @@ struct RetroParameters {
     uint m_hdr_enabled;
     uint m_encode_srgb;
     uint m_bloom_enabled;
+    float m_bloom_intensity;
 };
 ConstantBuffer<RetroParameters> g_retro;
 // The low-resolution scene resolve. Pixel-center fractional taps plus an
@@ -82,7 +83,7 @@ float4 fragmentRetroPresent(RetroVertexOutput input,
     float3 source_linear = g_scene.SampleLevel(g_sampler, source_uv, 0.0).rgb;
     if (g_retro.m_bloom_enabled != 0u) {
         // Keep the combination in FP32, then expose exactly once inside AgX.
-        source_linear += retroBloomBilinear(input.uv) * 0.125;
+        source_linear += retroBloomBilinear(input.uv) * g_retro.m_bloom_intensity;
     }
     if (g_retro.m_hdr_enabled != 0u) {
         // Manual EV multiplied by the adapted offset; both are EV, so exponentiate

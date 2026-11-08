@@ -30,6 +30,8 @@ export namespace pP {
         float m_exposure_ev{0.0f};
         // Requires scene-linear HDR with spatial or temporal2x reconstruction.
         bool m_bloom_enabled{false};
+        float m_bloom_intensity{1.0f};
+        float m_bloom_threshold{1.0f};
         bool m_temporal_2x_enabled{false};
         // Histogram eye adaptation: temporal2x-resolved HDR only. The adapted
         // EV is an offset around m_exposure_ev, clamped to [m_ev_min, m_ev_max].
@@ -93,6 +95,12 @@ export namespace pP {
         static constexpr float kHistogramHighPercentile{0.90f};
         static constexpr float kMiddleGrayLuminance{0.18f};
 
+        // SPD-bloom chain geometry. The prefilter writes a half-resolution mip 0
+        // and one dispatch downsamples mips 1..5, so the chain is capped at six
+        // mips (matching the prototype's default; a deeper 1x1 tail is skipped).
+        static constexpr u32 kMaxBloomMips{6u};
+        static constexpr float kBloomSoftKnee{0.5f};
+
         [[nodiscard]] static u32 clampPixelScale(u32 scale) noexcept;
 
         // CPU mirror of the histogram reduction (tested directly, and the GPU
@@ -108,6 +116,12 @@ export namespace pP {
         // non-positive delta or tau yields zero (no adaptation), never a snap.
         [[nodiscard]] static float adaptationAlpha(TimeSpan dt, float tau) noexcept;
         [[nodiscard]] static int2 sceneExtent(int2 native_extent, u32 pixel_scale) noexcept;
+        // Bloom chain geometry: half-resolution mip 0, floor-halved mips, capped
+        // at kMaxBloomMips. bloomChainBytes sums the RGBA16F bytes (8/texel).
+        [[nodiscard]] static int2 bloomMip0Extent(int2 output_extent) noexcept;
+        [[nodiscard]] static int2 bloomMipExtent(int2 mip0_extent, u32 level) noexcept;
+        [[nodiscard]] static u32 bloomMipCount(int2 mip0_extent) noexcept;
+        [[nodiscard]] static u64 bloomChainBytes(int2 mip0_extent) noexcept;
         [[nodiscard]] static RenderPipelineSignature scenePipelineSignature(bool temporal = false) noexcept;
         [[nodiscard]] static RenderPipelineSignature temporal2xScenePipelineSignature() noexcept;
         [[nodiscard]] static float2 temporalJitter(u32 phase) noexcept;
@@ -186,8 +200,9 @@ export namespace pP {
             rhi::ComPtr<rhi::ITextureView> m_history_view{};
             rhi::ComPtr<rhi::ITexture> m_spatial{};
             rhi::ComPtr<rhi::ITextureView> m_spatial_view{};
-            std::array<rhi::ComPtr<rhi::ITexture>, 2> m_bloom{};
-            std::array<rhi::ComPtr<rhi::ITextureView>, 2> m_bloom_views{};
+            rhi::ComPtr<rhi::ITexture> m_bloom{};
+            rhi::ComPtr<rhi::ITextureView> m_bloom_view{};
+            std::array<rhi::ComPtr<rhi::ITextureView>, kMaxBloomMips> m_bloom_uav_views{};
             rhi::ComPtr<rhi::ITexture> m_luminance{};
             rhi::ComPtr<rhi::ITextureView> m_luminance_view{};
             rhi::ComPtr<rhi::ITexture> m_exposure{};
@@ -258,9 +273,9 @@ export namespace pP {
         rhi::ComPtr<rhi::IShaderProgram> m_temporal_2x_program{};
         rhi::ComPtr<rhi::IComputePipeline> m_temporal_2x_pipeline{};
         std::array<rhi::ComPtr<rhi::IShaderObject>, kFrameRingSlots> m_temporal_2x_roots{};
-        std::array<rhi::ComPtr<rhi::IShaderProgram>, 2> m_bloom_programs{};
-        std::array<rhi::ComPtr<rhi::IComputePipeline>, 2> m_bloom_pipelines{};
-        std::array<std::array<rhi::ComPtr<rhi::IShaderObject>, 2>, kFrameRingSlots> m_bloom_roots{};
+        std::array<rhi::ComPtr<rhi::IShaderProgram>, 3> m_bloom_programs{};
+        std::array<rhi::ComPtr<rhi::IComputePipeline>, 3> m_bloom_pipelines{};
+        std::array<std::array<rhi::ComPtr<rhi::IShaderObject>, 3>, kFrameRingSlots> m_bloom_roots{};
         std::array<rhi::ComPtr<rhi::IShaderProgram>, 4> m_histogram_programs{};
         std::array<rhi::ComPtr<rhi::IComputePipeline>, 4> m_histogram_pipelines{};
         std::array<std::array<rhi::ComPtr<rhi::IShaderObject>, 4>, kFrameRingSlots> m_histogram_roots{};

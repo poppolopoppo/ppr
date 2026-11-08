@@ -2679,6 +2679,348 @@ namespace pP::tests::detail {
             run.recurse({cpu_histogram_math, cpu_adaptation_alpha, Gpu::gpu_adaptation_smoke});
         };
     }
+
+    // ------------------------------------------------------------------
+    // SPD-style bloom
+    // ------------------------------------------------------------------
+
+    namespace SpdBloom {
+        PPR_UNIT_TEST (cpu_bloom_chain_layout) {
+            // A 1080p picture: half-res mip 0, six mips, floor-halved extents.
+            const int2 mip0 = RetroPass::bloomMip0Extent(int2{1920, 1080});
+            PPR_TEST_ASSERT(mip0.x == 960 and mip0.y == 540);
+            PPR_TEST_ASSERT(RetroPass::bloomMipCount(mip0) == 6u);
+            PPR_TEST_ASSERT(RetroPass::bloomMipExtent(mip0, 0u).x == 960);
+            PPR_TEST_ASSERT(RetroPass::bloomMipExtent(mip0, 1u).x == 480);
+            PPR_TEST_ASSERT(RetroPass::bloomMipExtent(mip0, 5u).x == 30);
+            PPR_TEST_ASSERT(RetroPass::bloomMipExtent(mip0, 5u).y == 16);
+
+            // Cumulative RGBA16F bytes (8 per texel) over the six-mip chain.
+            const u64 expected = (960ull * 540 + 480ull * 270 + 240ull * 135 + 120ull * 67 + 60ull * 33 + 30ull * 16) *
+                                 8u;
+            PPR_TEST_ASSERT(RetroPass::bloomChainBytes(mip0) == expected);
+
+            // Odd extents stay floor-halved and clamped at one texel.
+            const int2 odd = RetroPass::bloomMip0Extent(int2{101, 51});
+            PPR_TEST_ASSERT(odd.x == 51 and odd.y == 26);
+            PPR_TEST_ASSERT(RetroPass::bloomMipExtent(odd, 0u).y == 26);
+            PPR_TEST_ASSERT(RetroPass::bloomMipExtent(odd, 5u).x == 1);
+            PPR_TEST_ASSERT(RetroPass::bloomMipExtent(odd, 31u).y == 1);
+
+            // A tiny chain stays a single mip (still capped at six, never zero).
+            PPR_TEST_ASSERT(RetroPass::bloomMipCount(int2{1, 1}) == 1u);
+        };
+
+        namespace Gpu {
+            struct BloomParams {
+                u32 m_source[2];
+                u32 m_mip0[2];
+                float m_threshold;
+                float m_soft_knee;
+                u32 m_mip_count;
+                u32 m_upsample_level;
+            };
+            static_assert(sizeof(BloomParams) == 32u);
+
+            struct Fixture {
+                safe_ptr<IShaderService> m_shaders{IShaderService::get()};
+                safe_ptr<IRhiService> m_rhi{IRhiService::get()};
+                rhi::ComPtr<rhi::ICommandQueue> m_queue;
+                FrameFence m_fence;
+
+                rhi::ComPtr<rhi::ITexture> m_bloom;
+                rhi::ComPtr<rhi::ITextureView> m_bloom_view;
+                std::array<rhi::ComPtr<rhi::ITextureView>, RetroPass::kMaxBloomMips> m_bloom_uav_views{};
+                std::array<rhi::ComPtr<rhi::IShaderProgram>, 3> m_programs{};
+                std::array<rhi::ComPtr<rhi::IComputePipeline>, 3> m_pipelines{};
+                std::array<rhi::ComPtr<rhi::IShaderObject>, 3> m_roots{};
+
+                void initialize(const u32 edge) {
+                    PPR_TEST_ASSERT(not m_shaders->initialize());
+                    const auto setting = config::getenvLookup("PPR_TEST_GPU_VALIDATION");
+                    const bool validation = setting and *setting == "1";
+                    m_rhi->setCoreValidation(true);
+                    m_rhi->setGpuAssistedValidation(validation);
+#ifdef _WIN32
+                    constexpr auto backend = rhi::DeviceType::D3D12;
+#else
+                    constexpr auto backend = rhi::DeviceType::Vulkan;
+#endif
+                    PPR_TEST_ASSERT(not m_rhi->initialize(backend, *m_shaders));
+                    auto &device = m_rhi->getDevice();
+                    PPR_TEST_ASSERT(not make_error_code(device.getQueue(rhi::QueueType::Graphics, m_queue.writeRef())));
+                    PPR_TEST_ASSERT(not m_fence.initialize(device));
+
+                    const int2 mip0 = RetroPass::bloomMip0Extent(int2{int(edge), int(edge)});
+                    rhi::TextureDesc bloom_desc{};
+                    bloom_desc.type = rhi::TextureType::Texture2D;
+                    bloom_desc.size = {.width = u32(mip0.x), .height = u32(mip0.y), .depth = 1u};
+                    bloom_desc.arrayLength = 1u;
+                    bloom_desc.mipCount = RetroPass::kMaxBloomMips;
+                    bloom_desc.format = rhi::Format::RGBA16Float;
+                    bloom_desc.usage = static_cast<rhi::TextureUsage>(
+                        static_cast<u32>(rhi::TextureUsage::ShaderResource) |
+                        static_cast<u32>(rhi::TextureUsage::UnorderedAccess));
+                    bloom_desc.defaultState = rhi::ResourceState::UnorderedAccess;
+                    bloom_desc.label = "spd bloom chain";
+                    PPR_TEST_ASSERT(not make_error_code(device.createTexture(bloom_desc, nullptr, m_bloom.writeRef())));
+                    PPR_TEST_ASSERT(not make_error_code(m_bloom->getDefaultView(m_bloom_view.writeRef())));
+                    for (u32 level = 0u; level < RetroPass::kMaxBloomMips; ++level) {
+                        rhi::TextureViewDesc view_desc{};
+                        view_desc.subresourceRange = {.layer = 0u, .layerCount = 1u, .mip = level, .mipCount = 1u};
+                        PPR_TEST_ASSERT(
+                            not make_error_code(m_bloom->createView(view_desc, m_bloom_uav_views[level].writeRef())));
+                    }
+
+                    shader::SharedModule module{};
+                    PPR_TEST_ASSERT(not m_shaders->loadModuleFromFile(
+                        std::filesystem::current_path() / "shaders" / "spd_bloom.slang", "spd_bloom",
+                        module.writeRef()));
+                    const char *const entries[] = {"prefilterBloom", "downsampleBloom", "upsampleBloom"};
+                    for (u32 index = 0u; index < 3u; ++index) {
+                        shader::ComPtr<slang::IEntryPoint> entry;
+                        PPR_TEST_ASSERT(
+                            not make_error_code(module->findEntryPointByName(entries[index], entry.writeRef())));
+                        slang::IComponentType *component_entries[] = {entry.get()};
+                        rhi::ShaderProgramDesc desc{};
+                        desc.linkingStyle = rhi::LinkingStyle::SingleProgram;
+                        desc.slangGlobalScope = module.get();
+                        desc.slangEntryPoints = component_entries;
+                        desc.slangEntryPointCount = 1u;
+                        shader::Diagnose diagnostics;
+                        PPR_TEST_ASSERT(not make_error_code(
+                            device.createShaderProgram(desc, m_programs[index].writeRef(), diagnostics.writeRef())));
+                        rhi::ComputePipelineDesc pipeline_desc{};
+                        pipeline_desc.program = m_programs[index];
+                        PPR_TEST_ASSERT(not make_error_code(
+                            device.createComputePipeline(pipeline_desc, m_pipelines[index].writeRef())));
+                        PPR_TEST_ASSERT(not make_error_code(
+                            device.createRootShaderObject(m_programs[index].get(), m_roots[index].writeRef())));
+                    }
+                }
+
+                void submit(rhi::ICommandEncoder &encoder) {
+                    rhi::ComPtr<rhi::ICommandBuffer> commands;
+                    PPR_TEST_ASSERT(not make_error_code(encoder.finish(commands.writeRef())));
+                    rhi::ICommandBuffer *pointer = commands.get();
+                    rhi::IFence *fence = m_fence.fence();
+                    const auto value = m_fence.nextValue();
+                    const u64 raw = value;
+                    rhi::SubmitDesc description{};
+                    description.commandBuffers = &pointer;
+                    description.commandBufferCount = 1u;
+                    description.signalFences = &fence;
+                    description.signalFenceValues = &raw;
+                    description.signalFenceCount = 1u;
+                    PPR_TEST_ASSERT(not make_error_code(m_queue->submit(description)));
+                    m_fence.commitSubmitted(value);
+                    PPR_TEST_ASSERT(not m_fence.waitFor(value));
+                }
+
+                // Uploads a synthetic scene (uniform background plus one bright
+                // block), runs the full prefilter/downsample/upsample chain, and
+                // returns the accumulated mip 0 decoded to linear float RGB.
+                std::vector<std::array<float, 3>> run(const u32 edge, const float background, const float block_value) {
+                    const int2 mip0 = RetroPass::bloomMip0Extent(int2{int(edge), int(edge)});
+                    const u32 mip_count = RetroPass::bloomMipCount(mip0);
+                    const u32 block_edge = edge / 16u;
+                    const u32 block_origin = (edge - block_edge) / 2u;
+
+                    std::vector<float> scene(std::size_t(edge) * edge * 4u);
+                    for (u32 y = 0u; y < edge; ++y) {
+                        for (u32 x = 0u; x < edge; ++x) {
+                            const bool in_block = x >= block_origin and
+                                                  x < block_origin + block_edge and
+                                                  y >= block_origin and
+                                                  y < block_origin + block_edge;
+                            const float value = in_block ? block_value : background;
+                            scene[(std::size_t(y) * edge + x) * 4u + 0u] = value;
+                            scene[(std::size_t(y) * edge + x) * 4u + 1u] = value;
+                            scene[(std::size_t(y) * edge + x) * 4u + 2u] = value;
+                            scene[(std::size_t(y) * edge + x) * 4u + 3u] = 1.0f;
+                        }
+                    }
+                    const rhi::SubresourceData initial{
+                        .data = scene.data(),
+                        .rowPitch = edge * sizeof(float) * 4u,
+                        .slicePitch = std::size_t(edge) * edge * sizeof(float) * 4u};
+                    rhi::TextureDesc scene_desc{};
+                    scene_desc.type = rhi::TextureType::Texture2D;
+                    scene_desc.size = {.width = edge, .height = edge, .depth = 1u};
+                    scene_desc.arrayLength = 1u;
+                    scene_desc.mipCount = 1u;
+                    scene_desc.format = rhi::Format::RGBA32Float;
+                    scene_desc.usage = rhi::TextureUsage::ShaderResource;
+                    scene_desc.defaultState = rhi::ResourceState::ShaderResource;
+                    scene_desc.label = "spd bloom synthetic scene";
+                    rhi::ComPtr<rhi::ITexture> scene_tex;
+                    rhi::ComPtr<rhi::ITextureView> scene_view;
+                    auto &device = m_rhi->getDevice();
+                    PPR_TEST_ASSERT(
+                        not make_error_code(device.createTexture(scene_desc, &initial, scene_tex.writeRef())));
+                    PPR_TEST_ASSERT(not make_error_code(scene_tex->getDefaultView(scene_view.writeRef())));
+
+                    BloomParams params{};
+                    params.m_source[0] = edge;
+                    params.m_source[1] = edge;
+                    params.m_mip0[0] = u32(mip0.x);
+                    params.m_mip0[1] = u32(mip0.y);
+                    params.m_threshold = 1.0f;
+                    params.m_soft_knee = RetroPass::kBloomSoftKnee;
+                    params.m_mip_count = mip_count;
+                    params.m_upsample_level = 0u;
+
+                    static constexpr std::array<const char *, RetroPass::kMaxBloomMips> kMipNames{
+                        "g_bloom_mip0", "g_bloom_mip1", "g_bloom_mip2", "g_bloom_mip3", "g_bloom_mip4", "g_bloom_mip5"};
+
+                    rhi::ComPtr<rhi::ICommandEncoder> encoder;
+                    PPR_TEST_ASSERT(not make_error_code(m_queue->createCommandEncoder(encoder.writeRef())));
+
+                    {
+                        rhi::ShaderCursor cursor{m_roots[0]}, constants{};
+                        PPR_TEST_ASSERT(not make_error_code(cursor["g_bloom"].getDereferenced(constants)));
+                        PPR_TEST_ASSERT(not make_error_code(constants.setData(&params, sizeof(params))));
+                        PPR_TEST_ASSERT(not make_error_code(cursor["g_scene"].setBinding(rhi::Binding(scene_view))));
+                        PPR_TEST_ASSERT(
+                            not make_error_code(cursor["g_bloom_mip0"].setBinding(rhi::Binding(m_bloom_uav_views[0]))));
+                    }
+                    {
+                        rhi::ShaderCursor cursor{m_roots[1]}, constants{};
+                        PPR_TEST_ASSERT(not make_error_code(cursor["g_bloom"].getDereferenced(constants)));
+                        PPR_TEST_ASSERT(not make_error_code(constants.setData(&params, sizeof(params))));
+                        for (u32 level = 0u; level < RetroPass::kMaxBloomMips; ++level) {
+                            PPR_TEST_ASSERT(not make_error_code(
+                                cursor[kMipNames[level]].setBinding(rhi::Binding(m_bloom_uav_views[level]))));
+                        }
+                    }
+                    rhi::ShaderCursor up_cursor{m_roots[2]}, up_constants{};
+                    PPR_TEST_ASSERT(not make_error_code(up_cursor["g_bloom"].getDereferenced(up_constants)));
+
+                    const rhi::SubresourceRange chain{
+                        .layer = 0u, .layerCount = 1u, .mip = 0u, .mipCount = RetroPass::kMaxBloomMips};
+                    encoder->setTextureState(m_bloom, chain, rhi::ResourceState::UnorderedAccess);
+
+                    const auto dispatch = [&](const u32 program, const u32 x, const u32 y) {
+                        auto *const pass = encoder->beginComputePass();
+                        PPR_TEST_ASSERT(pass != nullptr);
+                        pass->bindPipeline(m_pipelines[program], m_roots[program]);
+                        pass->dispatchCompute(x, y, 1u);
+                        pass->end();
+                    };
+                    dispatch(0u, (u32(mip0.x) + 7u) / 8u, (u32(mip0.y) + 7u) / 8u);
+                    encoder->globalBarrier();
+                    dispatch(1u, (u32(mip0.x) + 31u) / 32u, (u32(mip0.y) + 31u) / 32u);
+                    for (u32 level = mip_count - 1u; level >= 1u; --level) {
+                        const int2 dst = RetroPass::bloomMipExtent(mip0, level - 1u);
+                        params.m_upsample_level = level;
+                        PPR_TEST_ASSERT(not make_error_code(up_constants.setData(&params, sizeof(params))));
+                        PPR_TEST_ASSERT(not make_error_code(
+                            up_cursor["g_up_src"].setBinding(rhi::Binding(m_bloom_uav_views[level]))));
+                        PPR_TEST_ASSERT(not make_error_code(
+                            up_cursor["g_up_dst"].setBinding(rhi::Binding(m_bloom_uav_views[level - 1u]))));
+                        encoder->globalBarrier();
+                        dispatch(2u, (u32(dst.x) + 7u) / 8u, (u32(dst.y) + 7u) / 8u);
+                    }
+
+                    encoder->setTextureState(m_bloom, chain, rhi::ResourceState::ShaderResource);
+                    submit(*encoder);
+
+                    shader::ComPtr<ISlangBlob> blob;
+                    rhi::SubresourceLayout layout{};
+                    PPR_TEST_ASSERT(not make_error_code(device.readTexture(m_bloom, 0u, 0u, blob.writeRef(), &layout)));
+                    const auto *const bytes = static_cast<const std::byte *>(blob->getBufferPointer());
+
+                    std::vector<std::array<float, 3>> result(std::size_t(mip0.x) * std::size_t(mip0.y));
+                    for (u32 y = 0u; y < u32(mip0.y); ++y) {
+                        for (u32 x = 0u; x < u32(mip0.x); ++x) {
+                            const std::byte *const pixel = bytes + y * layout.rowPitch + x * 8u;
+                            std::array<u16, 4> halves{};
+                            std::memcpy(halves.data(), pixel, sizeof(halves));
+                            result[std::size_t(y) * std::size_t(mip0.x) + x] = {
+                                WorldLightFieldGpu::halfToFloat(halves[0]), WorldLightFieldGpu::halfToFloat(halves[1]),
+                                WorldLightFieldGpu::halfToFloat(halves[2])};
+                        }
+                    }
+
+                    scene_view.setNull();
+                    scene_tex.setNull();
+                    encoder.setNull();
+                    return result;
+                }
+
+                void shutdown() {
+                    if (m_queue and make_error_code(m_queue->waitOnHost()))
+                        hal::fatalExit("spd-bloom-test-quiescence-unknown");
+
+                    m_roots = {};
+                    m_pipelines = {};
+                    m_programs = {};
+                    m_bloom_uav_views = {};
+                    m_bloom_view.setNull();
+                    m_bloom.setNull();
+                    PPR_TEST_ASSERT(not m_fence.shutdown());
+                    m_queue.setNull();
+                    PPR_TEST_ASSERT(not m_rhi->shutdown());
+                    PPR_TEST_ASSERT(not m_shaders->shutdown());
+                }
+            };
+
+            [[nodiscard]] float luminanceOf(const std::array<float, 3> &pixel) noexcept {
+                return 0.2126f * pixel[0] + 0.7152f * pixel[1] + 0.0722f * pixel[2];
+            }
+
+            PPR_UNIT_TEST (gpu_bloom_smoke) {
+                constexpr u32 edge = 128u;
+
+                Fixture fixture;
+                fixture.initialize(edge);
+                PPR_DEFER {
+                    fixture.shutdown();
+                };
+
+                const int2 mip0 = RetroPass::bloomMip0Extent(int2{int(edge), int(edge)});
+                const auto at = [&](const std::vector<std::array<float, 3>> &result, const u32 x, const u32 y) {
+                    return luminanceOf(result[std::size_t(y) * u32(mip0.x) + x]);
+                };
+
+                const auto bright = fixture.run(edge, 0.05f, 20.0f);
+                PPR_TEST_ASSERT(bright.size() == std::size_t(mip0.x) * std::size_t(mip0.y));
+
+                // Finite everywhere, and the bright block leaves a non-zero trail.
+                bool all_finite = true;
+                for (const auto &pixel: bright) {
+                    all_finite = all_finite and
+                                 std::isfinite(pixel[0]) and
+                                 std::isfinite(pixel[1]) and
+                                 std::isfinite(pixel[2]);
+                }
+                PPR_TEST_ASSERT(all_finite);
+
+                // The block is 16 scene texels centred at edge/2, so in mip 0 it
+                // spans (edge/4-2 .. edge/4+1); its centre is clearly lit, the
+                // texel just outside is lit ("around the block"), and a texel
+                // seven away is still lit — far beyond the two-texel reach of a
+                // single 5x5 binomial blur, which a wider multi-mip chain reaches.
+                const u32 block_centre = edge / 4u;
+                PPR_TEST_ASSERT(at(bright, block_centre, block_centre) > 0.01f);
+                PPR_TEST_ASSERT(at(bright, block_centre + 2u, block_centre) > 1e-3f);
+                PPR_TEST_ASSERT(at(bright, block_centre + 8u, block_centre) > 1e-4f);
+                PPR_TEST_ASSERT(at(bright, block_centre, block_centre) > at(bright, block_centre + 8u, block_centre));
+
+                // A black picture stays black: the soft-knee bright pass emits zero.
+                const auto black = fixture.run(edge, 0.0f, 0.0f);
+                for (const auto &pixel: black) {
+                    PPR_TEST_ASSERT(std::abs(pixel[0]) < 1e-6f);
+                    PPR_TEST_ASSERT(std::abs(pixel[1]) < 1e-6f);
+                    PPR_TEST_ASSERT(std::abs(pixel[2]) < 1e-6f);
+                }
+            };
+        }
+
+        const UnitTest spd_bloom = UnitTest::Named("spd_bloom") / [](UnitTest::IRun &run) -> void {
+            run.recurse({cpu_bloom_chain_layout, Gpu::gpu_bloom_smoke});
+        };
+    }
 }
 
 namespace pP::tests {
@@ -2716,6 +3058,7 @@ namespace pP::tests {
             detail::WorldLightFieldGpu::translucent_clipped_by_terrain,
             detail::WorldLightFieldGpu::translucent_premultiplied_absorption,
             detail::HistogramAdaptation::histogram_adaptation,
+            detail::SpdBloom::spd_bloom,
         });
     };
 

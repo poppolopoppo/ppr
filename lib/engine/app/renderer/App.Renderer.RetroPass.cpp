@@ -73,29 +73,31 @@ namespace pP {
             u32 m_hdr_enabled;
             u32 m_encode_srgb;
             u32 m_bloom_enabled;
+            float m_bloom_intensity;
         };
-        static_assert(sizeof(RetroParameters) == 544u);
+        static_assert(sizeof(RetroParameters) == 560u);
         static_assert(alignof(RetroParameters) == 16u);
         static_assert(PPR_OFFSETOF(RetroParameters, m_source_extent) == 512u);
         static_assert(PPR_OFFSETOF(RetroParameters, m_exposure_multiplier) == 528u);
         static_assert(PPR_OFFSETOF(RetroParameters, m_encode_srgb) == 536u);
         static_assert(PPR_OFFSETOF(RetroParameters, m_dither_strength) == 520u);
         static_assert(PPR_OFFSETOF(RetroParameters, m_bloom_enabled) == 540u);
+        static_assert(PPR_OFFSETOF(RetroParameters, m_bloom_intensity) == 544u);
 
         struct alignas(16) BloomParameters {
             u32 m_source_extent[2];
-            u32 m_bloom_extent[2];
+            u32 m_mip0_extent[2];
             float m_threshold;
-            u32 m_reserved0;
-            u32 m_reserved1;
-            u32 m_reserved2;
+            float m_soft_knee;
+            u32 m_mip_count;
+            u32 m_upsample_level;
         };
         static_assert(sizeof(BloomParameters) == 32u and alignof(BloomParameters) == 16u);
-        static_assert(PPR_OFFSETOF(BloomParameters, m_bloom_extent) == 8u);
+        static_assert(PPR_OFFSETOF(BloomParameters, m_mip0_extent) == 8u);
         static_assert(PPR_OFFSETOF(BloomParameters, m_threshold) == 16u);
-        static_assert(PPR_OFFSETOF(BloomParameters, m_reserved0) == 20u);
-        static_assert(PPR_OFFSETOF(BloomParameters, m_reserved1) == 24u);
-        static_assert(PPR_OFFSETOF(BloomParameters, m_reserved2) == 28u);
+        static_assert(PPR_OFFSETOF(BloomParameters, m_soft_knee) == 20u);
+        static_assert(PPR_OFFSETOF(BloomParameters, m_mip_count) == 24u);
+        static_assert(PPR_OFFSETOF(BloomParameters, m_upsample_level) == 28u);
 
         // CPU mirrors of the histogram/adaptation Slang constant buffers.
         struct LuminanceHistogramParameters {
@@ -227,6 +229,36 @@ namespace pP {
         }
 
         return 1.0f - std::exp(-std::chrono::duration<float>(dt).count() / tau);
+    }
+
+    // ------------------------------------------------------------------
+    // bloom chain geometry (CPU oracle)
+    // ------------------------------------------------------------------
+
+    int2 RetroPass::bloomMip0Extent(const int2 output_extent) noexcept {
+        const auto axis = [](const i32 extent) { return std::max<i32>(1, (extent + 1) / 2); };
+        return int2{axis(output_extent.x), axis(output_extent.y)};
+    }
+
+    int2 RetroPass::bloomMipExtent(const int2 mip0_extent, const u32 level) noexcept {
+        const auto axis = [level](const i32 extent) { return std::max<i32>(1, extent >> std::min(level, 31u)); };
+        return int2{axis(mip0_extent.x), axis(mip0_extent.y)};
+    }
+
+    u32 RetroPass::bloomMipCount(const int2 mip0_extent) noexcept {
+        const u32 largest = static_cast<u32>(std::max(mip0_extent.x, mip0_extent.y));
+        const u32 full = largest > 0u ? static_cast<u32>(std::bit_width(largest)) : 1u;
+        return std::min(full, kMaxBloomMips);
+    }
+
+    u64 RetroPass::bloomChainBytes(const int2 mip0_extent) noexcept {
+        const u32 count = bloomMipCount(mip0_extent);
+        u64 bytes = 0u;
+        for (u32 level = 0u; level < count; ++level) {
+            const int2 extent = bloomMipExtent(mip0_extent, level);
+            bytes += static_cast<u64>(extent.x) * static_cast<u64>(extent.y) * 8u;
+        }
+        return bytes;
     }
 
     Expected<CameraSnapshot> RetroPass::beginFrame(
@@ -497,7 +529,7 @@ namespace pP {
         PPR_RETURN_ERROR_ON_FAIL(
             RetroPass, constants != nullptr and
                                constants->getSize() == sizeof(RetroParameters) and
-                               constants->getFieldCount() == 8u
+                               constants->getFieldCount() == 9u
                            ? std::error_code{}
                            : std::make_error_code(std::errc::invalid_argument));
         PPR_RETURN_ERROR_ON_FAIL(
@@ -506,7 +538,8 @@ namespace pP {
                     constants->getFieldByIndex(4u)->getOffset() ==
                         PPR_OFFSETOF(RetroParameters, m_exposure_multiplier) and
                     constants->getFieldByIndex(6u)->getOffset() == PPR_OFFSETOF(RetroParameters, m_encode_srgb) and
-                    constants->getFieldByIndex(7u)->getOffset() == PPR_OFFSETOF(RetroParameters, m_bloom_enabled)
+                    constants->getFieldByIndex(7u)->getOffset() == PPR_OFFSETOF(RetroParameters, m_bloom_enabled) and
+                    constants->getFieldByIndex(8u)->getOffset() == PPR_OFFSETOF(RetroParameters, m_bloom_intensity)
                 ? std::error_code{}
                 : std::make_error_code(std::errc::invalid_argument));
 
@@ -695,10 +728,15 @@ namespace pP {
             }
         }
 
+        const int2 bloom_mip0 = bloomMip0Extent(m_output_extent);
+        const u32 bloom_mip_count = bloomMipCount(bloom_mip0);
         auto bloom_desc = spatial_desc;
-        bloom_desc.size.width = (spatial_desc.size.width + 3u) / 4u;
-        bloom_desc.size.height = (spatial_desc.size.height + 3u) / 4u;
-        bloom_desc.label = "quarter-output scene-linear bloom";
+        bloom_desc.size = {.width = safe_narrowing(bloom_mip0.x), .height = safe_narrowing(bloom_mip0.y), .depth = 1u};
+        // The chain depth tracks the logical full chain (down to 1x1, capped at
+        // six); Vulkan rejects a mipCount beyond floor(log2(extent)) + 1, so a
+        // tiny extent must not force the full six mips.
+        bloom_desc.mipCount = bloom_mip_count;
+        bloom_desc.label = "scene-linear SPD bloom chain";
         if (m_settings.m_bloom_enabled) {
             std::size_t size{}, alignment{};
             PPR_RETURN_ERROR_ON_FAIL(RetroPass, device.getTextureAllocationInfo(bloom_desc, &size, &alignment));
@@ -764,13 +802,19 @@ namespace pP {
             PPR_RETURN_ERROR_ON_FAIL(RetroPass, spatial->getDefaultView(spatial_view.writeRef()));
         }
 
-        std::array<rhi::ComPtr<rhi::ITexture>, 2> bloom{};
-        std::array<rhi::ComPtr<rhi::ITextureView>, 2> bloom_views{};
-        std::array<rhi::ComPtr<rhi::IShaderObject>, 2> bloom_roots{};
+        rhi::ComPtr<rhi::ITexture> bloom;
+        rhi::ComPtr<rhi::ITextureView> bloom_view;
+        std::array<rhi::ComPtr<rhi::ITextureView>, kMaxBloomMips> bloom_uav_views{};
+        std::array<rhi::ComPtr<rhi::IShaderObject>, 3> bloom_roots{};
         if (m_settings.m_bloom_enabled) {
-            for (u32 index = 0u; index < bloom.size(); ++index) {
-                PPR_RETURN_ERROR_ON_FAIL(RetroPass, device.createTexture(bloom_desc, nullptr, bloom[index].writeRef()));
-                PPR_RETURN_ERROR_ON_FAIL(RetroPass, bloom[index]->getDefaultView(bloom_views[index].writeRef()));
+            PPR_RETURN_ERROR_ON_FAIL(RetroPass, device.createTexture(bloom_desc, nullptr, bloom.writeRef()));
+            PPR_RETURN_ERROR_ON_FAIL(RetroPass, bloom->getDefaultView(bloom_view.writeRef()));
+            for (u32 level = 0u; level < bloom_mip_count; ++level) {
+                rhi::TextureViewDesc view_desc{};
+                view_desc.subresourceRange = {.layer = 0u, .layerCount = 1u, .mip = level, .mipCount = 1u};
+                PPR_RETURN_ERROR_ON_FAIL(RetroPass, bloom->createView(view_desc, bloom_uav_views[level].writeRef()));
+            }
+            for (u32 index = 0u; index < bloom_roots.size(); ++index) {
                 PPR_RETURN_ERROR_ON_FAIL(
                     RetroPass, device.createRootShaderObject(m_bloom_programs[index], bloom_roots[index].writeRef()));
             }
@@ -855,7 +899,8 @@ namespace pP {
         slot.m_spatial_view = std::move(spatial_view);
         slot.m_bloom_enabled = m_settings.m_bloom_enabled;
         slot.m_bloom = std::move(bloom);
-        slot.m_bloom_views = std::move(bloom_views);
+        slot.m_bloom_view = std::move(bloom_view);
+        slot.m_bloom_uav_views = std::move(bloom_uav_views);
         slot.m_auto_exposure_enabled = m_settings.m_auto_exposure;
         slot.m_luminance = std::move(luminance);
         slot.m_luminance_view = std::move(luminance_view);
@@ -1447,16 +1492,15 @@ namespace pP {
 
         shader::SharedModule module{};
         PPR_RETURN_ERROR_ON_FAIL(
-            RetroPass,
-            m_shader_service->loadModuleFromFile(
-                m_content_dir / TEXT("shaders") / TEXT("retro_bloom.slang"), "retro_bloom", module.writeRef()));
+            RetroPass, m_shader_service->loadModuleFromFile(
+                           m_content_dir / TEXT("shaders") / TEXT("spd_bloom.slang"), "spd_bloom", module.writeRef()));
 
         auto *const layout = module->getLayout();
         slang::TypeLayoutReflection *parameters = nullptr;
         if (layout != nullptr) {
             for (unsigned index = 0u; index < layout->getParameterCount(); ++index) {
                 auto *const parameter = layout->getParameterByIndex(index);
-                if (std::string_view{parameter->getName()} == "g_bloom_parameters") {
+                if (std::string_view{parameter->getName()} == "g_bloom") {
                     parameters = parameter->getTypeLayout()->getElementTypeLayout();
                     break;
                 }
@@ -1469,8 +1513,8 @@ namespace pP {
                 ? std::error_code{}
                 : std::make_error_code(std::errc::invalid_argument));
         for (const auto &[name, offset]: std::array<std::pair<const char *, u32>, 6>{
-                 std::pair{"source_extent", 0u}, {"bloom_extent", 8u}, {"threshold", 16u}, {"reserved0", 20u},
-                 {"reserved1", 24u}, {"reserved2", 28u}}) {
+                 std::pair{"sourceExtent", 0u}, {"mip0Extent", 8u}, {"threshold", 16u}, {"softKnee", 20u},
+                 {"mipCount", 24u}, {"upsampleLevel", 28u}}) {
             bool matched = false;
             for (unsigned index = 0u; index < parameters->getFieldCount(); ++index) {
                 auto *const field = parameters->getFieldByIndex(index);
@@ -1484,9 +1528,9 @@ namespace pP {
                 RetroPass, matched ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
         }
 
-        std::array<rhi::ComPtr<rhi::IShaderProgram>, 2> programs{};
-        std::array<rhi::ComPtr<rhi::IComputePipeline>, 2> pipelines{};
-        const char *const names[] = {"extractRetroBloom", "blurRetroBloom"};
+        std::array<rhi::ComPtr<rhi::IShaderProgram>, 3> programs{};
+        std::array<rhi::ComPtr<rhi::IComputePipeline>, 3> pipelines{};
+        const char *const names[] = {"prefilterBloom", "downsampleBloom", "upsampleBloom"};
         for (u32 index = 0u; index < programs.size(); ++index) {
             shader::ComPtr<slang::IEntryPoint> entry;
             PPR_RETURN_ERROR_ON_FAIL(RetroPass, module->findEntryPointByName(names[index], entry.writeRef()));
@@ -1515,40 +1559,91 @@ namespace pP {
     std::error_code RetroPass::resolveBloom_(const PreRenderContext &context, const u32 selected) {
         const hal::ProfileScope scope{"App.Pass.Retro.Bloom"};
         auto &slot = m_scene_slots[selected];
-        const BloomParameters parameters{
-            {safe_narrowing(slot.m_output_extent.x), safe_narrowing(slot.m_output_extent.y)},
-            {(checked_cast<u32>(slot.m_output_extent.x) + 3u) / 4u,
-                (checked_cast<u32>(slot.m_output_extent.y) + 3u) / 4u},
-            std::exp2(-m_settings.m_exposure_ev),
-            0u,
-            0u,
-            0u,
-        };
-        const rhi::SubresourceRange range{.layer = 0u, .layerCount = 1u, .mip = 0u, .mipCount = 1u};
-        for (u32 index = 0u; index < m_bloom_pipelines.size(); ++index) {
-            rhi::ShaderCursor cursor{m_bloom_roots[selected][index]};
-            rhi::ShaderCursor constants;
-            PPR_RETURN_ERROR_ON_FAIL(RetroPass, cursor["g_bloom_parameters"].getDereferenced(constants));
-            PPR_RETURN_ERROR_ON_FAIL(RetroPass, constants.setData(&parameters, sizeof(parameters)));
-            PPR_RETURN_ERROR_ON_FAIL(
-                RetroPass, cursor["g_source"].setBinding(
-                               rhi::Binding(
-                                   index == 0u ? (slot.m_temporal_2x ? slot.m_history_view : slot.m_spatial_view)
-                                               : slot.m_bloom_views[0])));
-            PPR_RETURN_ERROR_ON_FAIL(RetroPass, cursor["g_output"].setBinding(rhi::Binding(slot.m_bloom_views[index])));
 
-            context.m_encoder.setTextureState(slot.m_bloom[index], range, rhi::ResourceState::UnorderedAccess);
+        const int2 mip0 = bloomMip0Extent(slot.m_output_extent);
+        const u32 mip_count = bloomMipCount(mip0);
+        BloomParameters parameters{};
+        parameters.m_source_extent[0] = safe_narrowing(slot.m_output_extent.x);
+        parameters.m_source_extent[1] = safe_narrowing(slot.m_output_extent.y);
+        parameters.m_mip0_extent[0] = safe_narrowing(mip0.x);
+        parameters.m_mip0_extent[1] = safe_narrowing(mip0.y);
+        parameters.m_threshold = m_settings.m_bloom_threshold;
+        parameters.m_soft_knee = kBloomSoftKnee;
+        parameters.m_mip_count = mip_count;
+        parameters.m_upsample_level = 0u;
+
+        static constexpr std::array<const char *, kMaxBloomMips> kBloomMipNames{
+            "g_bloom_mip0", "g_bloom_mip1", "g_bloom_mip2", "g_bloom_mip3", "g_bloom_mip4", "g_bloom_mip5"};
+        const rhi::Binding source_scene(slot.m_temporal_2x ? slot.m_history_view : slot.m_spatial_view);
+
+        // Prefilter constants and bindings: the resolved scene in, mip 0 out.
+        {
+            rhi::ShaderCursor cursor{m_bloom_roots[selected][0]};
+            rhi::ShaderCursor constants;
+            PPR_RETURN_ERROR_ON_FAIL(RetroPass, cursor["g_bloom"].getDereferenced(constants));
+            PPR_RETURN_ERROR_ON_FAIL(RetroPass, constants.setData(&parameters, sizeof(parameters)));
+            PPR_RETURN_ERROR_ON_FAIL(RetroPass, cursor["g_scene"].setBinding(source_scene));
+            PPR_RETURN_ERROR_ON_FAIL(
+                RetroPass, cursor["g_bloom_mip0"].setBinding(rhi::Binding(slot.m_bloom_uav_views[0])));
+        }
+
+        // Downsample constants and the full per-mip UAV set. Mips beyond the
+        // logical chain depth are never accessed by the shader (their guards are
+        // false), so they alias the last valid view to keep every binding valid.
+        {
+            rhi::ShaderCursor cursor{m_bloom_roots[selected][1]};
+            rhi::ShaderCursor constants;
+            PPR_RETURN_ERROR_ON_FAIL(RetroPass, cursor["g_bloom"].getDereferenced(constants));
+            PPR_RETURN_ERROR_ON_FAIL(RetroPass, constants.setData(&parameters, sizeof(parameters)));
+            for (u32 level = 0u; level < kMaxBloomMips; ++level) {
+                const u32 view = std::min(level, mip_count - 1u);
+                PPR_RETURN_ERROR_ON_FAIL(
+                    RetroPass, cursor[kBloomMipNames[level]].setBinding(rhi::Binding(slot.m_bloom_uav_views[view])));
+            }
+        }
+
+        // Upsample constants; its source/destination views are rebound per level.
+        rhi::ShaderCursor upsample_cursor{m_bloom_roots[selected][2]};
+        rhi::ShaderCursor upsample_constants;
+        PPR_RETURN_ERROR_ON_FAIL(RetroPass, upsample_cursor["g_bloom"].getDereferenced(upsample_constants));
+
+        const rhi::SubresourceRange chain_range{.layer = 0u, .layerCount = 1u, .mip = 0u, .mipCount = mip_count};
+        context.m_encoder.setTextureState(slot.m_bloom, chain_range, rhi::ResourceState::UnorderedAccess);
+
+        const auto dispatch = [&](const u32 program, const u32 x, const u32 y) -> std::error_code {
             auto *const pass = context.m_encoder.beginComputePass();
             PPR_RETURN_ERROR_ON_FAIL(
                 RetroPass, pass != nullptr ? std::error_code{} : std::make_error_code(std::errc::io_error));
-            pass->bindPipeline(m_bloom_pipelines[index], m_bloom_roots[selected][index]);
-            pass->dispatchCompute(
-                (parameters.m_bloom_extent[0] + 7u) / 8u, (parameters.m_bloom_extent[1] + 7u) / 8u, 1u);
+            pass->bindPipeline(m_bloom_pipelines[program], m_bloom_roots[selected][program]);
+            pass->dispatchCompute(x, y, 1u);
             pass->end();
+            return {};
+        };
 
-            context.m_encoder.setTextureState(slot.m_bloom[index], range, rhi::ResourceState::ShaderResource);
+        // Prefilter to mip 0, then the single-pass downsample for mips 1..5.
+        PPR_RETURN_ERROR_ON_FAIL(
+            RetroPass, dispatch(0u, (checked_cast<u32>(mip0.x) + 7u) / 8u, (checked_cast<u32>(mip0.y) + 7u) / 8u));
+        context.m_encoder.globalBarrier();
+        PPR_RETURN_ERROR_ON_FAIL(
+            RetroPass, dispatch(1u, (checked_cast<u32>(mip0.x) + 31u) / 32u, (checked_cast<u32>(mip0.y) + 31u) / 32u));
+
+        // Progressive tent upsample: accumulate mip K back into mip K-1, coarse to fine.
+        for (u32 level = mip_count - 1u; level >= 1u; --level) {
+            const int2 dst_extent = bloomMipExtent(mip0, level - 1u);
+            parameters.m_upsample_level = level;
+            PPR_RETURN_ERROR_ON_FAIL(RetroPass, upsample_constants.setData(&parameters, sizeof(parameters)));
+            PPR_RETURN_ERROR_ON_FAIL(
+                RetroPass, upsample_cursor["g_up_src"].setBinding(rhi::Binding(slot.m_bloom_uav_views[level])));
+            PPR_RETURN_ERROR_ON_FAIL(
+                RetroPass, upsample_cursor["g_up_dst"].setBinding(rhi::Binding(slot.m_bloom_uav_views[level - 1u])));
+
+            context.m_encoder.globalBarrier();
+            PPR_RETURN_ERROR_ON_FAIL(
+                RetroPass,
+                dispatch(2u, (checked_cast<u32>(dst_extent.x) + 7u) / 8u, (checked_cast<u32>(dst_extent.y) + 7u) / 8u));
         }
 
+        context.m_encoder.setTextureState(slot.m_bloom, chain_range, rhi::ResourceState::ShaderResource);
         return {};
     }
 
@@ -2067,6 +2162,7 @@ namespace pP {
         parameters.m_hdr_enabled = m_settings.m_hdr_enabled ? 1u : 0u;
         parameters.m_encode_srgb = encode_srgb ? 1u : 0u;
         parameters.m_bloom_enabled = slot.m_bloom_enabled ? 1u : 0u;
+        parameters.m_bloom_intensity = m_settings.m_bloom_intensity;
 
         rhi::IShaderObject *const root = m_scene_roots[m_scene_slot].get();
         rhi::ShaderCursor cursor{root};
@@ -2089,7 +2185,7 @@ namespace pP {
         PPR_RETURN_ERROR_ON_FAIL(
             RetroPass, cursor["g_bloom"].setBinding(
                            rhi::Binding(
-                               slot.m_bloom_enabled     ? slot.m_bloom_views[1]
+                               slot.m_bloom_enabled     ? slot.m_bloom_view
                                : slot.m_temporal_2x     ? slot.m_history_view
                                : slot.m_spatial_enabled ? slot.m_spatial_view
                                : slot.m_temporal        ? slot.m_history_view
