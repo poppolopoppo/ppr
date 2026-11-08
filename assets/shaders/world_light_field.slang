@@ -33,7 +33,9 @@ struct WorldLightFieldConstants {
     uint sourceRevision;
     uint frame;
     uint budget;
-    uint pad0, pad1, pad2;
+    uint accumulationSamples;
+    float historyRetention;
+    float frameDelta;
     WorldLightLevelGpu levels[kWorldLightMaxLevels];
 };
 

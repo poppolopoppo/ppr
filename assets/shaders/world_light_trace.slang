@@ -186,8 +186,20 @@ void accumulateSample(uint level, uint probe, uint direction) {
     float previousTransmittance = float(previous.transmittance);
 
     uint count = g_world_light_state[sample];
-    uint newCount = min(count + 1u, 255u);
-    float blend = 1.0 / float(newCount);
+    uint newCount = count < g_world_light_field.accumulationSamples ? count + 1u
+                                                                    : g_world_light_field.accumulationSamples;
+
+    // Running mean while accumulating toward the cap; a per-60Hz retention EMA
+    // afterward, scaled by the injected frame delta so a longer frame decays the
+    // history proportionally more. Both weights stay in [0,1], so the result is
+    // a convex combination of finite samples and never leaves the [0,..] range.
+    float blend;
+    if (count < g_world_light_field.accumulationSamples) {
+        blend = 1.0 / float(newCount);
+    } else {
+        float perFrameRetention = pow(g_world_light_field.historyRetention, g_world_light_field.frameDelta * 60.0);
+        blend = 1.0 - perFrameRetention;
+    }
 
     float3 newRadiance = previousRadiance + (radiance - previousRadiance) * blend;
     float newTransmittance = previousTransmittance + (transmittance - previousTransmittance) * blend;

@@ -270,6 +270,8 @@ namespace pP {
         lighting::WorldLightField m_field{};
         lighting::WorldLightPlan m_plan{};
         u32 m_budget{};
+        u32 m_accumulation_samples{8u};
+        float m_history_retention{0.9f};
         bool m_initialized{};
         bool m_frame_logged{};
     };
@@ -3587,6 +3589,8 @@ namespace pP {
 
                         field.m_plan = command.m_field_plan;
                         field.m_budget = command.m_field_budget;
+                        field.m_accumulation_samples = command.m_field_accumulation_samples;
+                        field.m_history_retention = command.m_field_history_retention;
                         field.m_initialized = true;
                     }
                 }
@@ -4462,7 +4466,8 @@ namespace pP {
                     Editor, field.m_field.update(
                                 context.m_encoder, field.m_source, 1.0f / 60.0f,
                                 field.m_budget != 0u ? field.m_budget
-                                                     : static_cast<u32>(field.m_plan.m_levels[0].m_sample_count)));
+                                                     : static_cast<u32>(field.m_plan.m_levels[0].m_sample_count),
+                                field.m_accumulation_samples, field.m_history_retention));
                 PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->setWorldLightField(field.m_field.view()));
 
                 out_result.m_lighting_source_revision = field.m_source.revision();

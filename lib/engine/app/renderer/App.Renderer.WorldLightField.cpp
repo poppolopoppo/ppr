@@ -35,6 +35,9 @@ namespace pP::lighting {
         static_assert(sizeof(WorldLightFieldConstants) == 304u and alignof(WorldLightFieldConstants) == 4u);
         static_assert(PPR_OFFSETOF(WorldLightFieldConstants, m_level_count) == 16u);
         static_assert(PPR_OFFSETOF(WorldLightFieldConstants, m_budget) == 32u);
+        static_assert(PPR_OFFSETOF(WorldLightFieldConstants, m_accumulation_samples) == 36u);
+        static_assert(PPR_OFFSETOF(WorldLightFieldConstants, m_history_retention) == 40u);
+        static_assert(PPR_OFFSETOF(WorldLightFieldConstants, m_frame_delta) == 44u);
         static_assert(PPR_OFFSETOF(WorldLightFieldConstants, m_levels) == 48u);
 
         // Per-dispatch CPU mirrors of the Slang constant buffers.
@@ -282,10 +285,10 @@ namespace pP::lighting {
     }
 
     std::error_code WorldLightField::update(
-        rhi::ICommandEncoder &encoder, const WorldLightSourceGpu &source, const float dt, const u32 sample_budget) {
+        rhi::ICommandEncoder &encoder, const WorldLightSourceGpu &source, const float dt, const u32 sample_budget,
+        const u32 accumulation_samples, const float history_retention) {
         State &state = *m_state;
         PPR_RETURN_ERROR_ON_FAIL(WorldLightField, require_(state.m_ready, std::errc::not_connected));
-        (void) dt; // Reserved for the Task 11 retention EMA; Task 6 uses a plain running mean.
 
         const u64 total = state.m_total_samples;
         const u32 budget = static_cast<u32>(std::min<u64>(sample_budget, total));
@@ -294,6 +297,9 @@ namespace pP::lighting {
         state.m_constants.m_frame = state.m_frame;
         state.m_constants.m_budget = budget;
         state.m_constants.m_source_revision = static_cast<u32>(source.revision());
+        state.m_constants.m_accumulation_samples = std::max(1u, accumulation_samples);
+        state.m_constants.m_history_retention = std::clamp(history_retention, 0.0f, 1.0f);
+        state.m_constants.m_frame_delta = dt;
 
         const u32 read_index = state.m_current;
         const u32 write_index = 1u - state.m_current;

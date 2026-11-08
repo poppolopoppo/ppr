@@ -912,10 +912,12 @@ namespace pP::tests::detail {
                 submit(*encoder);
             }
 
-            void updateField(const u32 budget) {
+            void updateField(
+                const u32 budget, const u32 accumulation_samples = 8u, const float history_retention = 0.9f) {
                 rhi::ComPtr<rhi::ICommandEncoder> encoder;
                 PPR_TEST_ASSERT(not make_error_code(m_queue->createCommandEncoder(encoder.writeRef())));
-                PPR_TEST_ASSERT(not m_field.update(*encoder, m_source, 1.0f / 60.0f, budget));
+                PPR_TEST_ASSERT(not m_field.update(
+                    *encoder, m_source, 1.0f / 60.0f, budget, accumulation_samples, history_retention));
                 submit(*encoder);
             }
 
@@ -995,6 +997,56 @@ namespace pP::tests::detail {
             // The cursor advanced and wrapped within the field after 16 updates.
             PPR_TEST_ASSERT(field.cycle() >= 1u);
             PPR_TEST_ASSERT(field.cursor() < plan->m_radiance_samples);
+
+            fixture.shutdown();
+        };
+
+        PPR_UNIT_TEST (field_accumulation_caps_count_and_retention_holds_history) {
+            constexpr u32 width = 256u;
+            constexpr u32 height = 256u;
+
+            Fixture fixture;
+            fixture.initialize(width, height);
+            auto &source = fixture.m_source;
+            auto &field = fixture.m_field;
+
+            const auto plan = lighting::planWorldLight({.m_width = width, .m_height = height, .m_cell_metres = 0.5f});
+            PPR_TEST_ASSERT(plan.has_value());
+            // A budget covering the whole field makes every update re-trace the
+            // nearby sample, so it reaches the accumulation cap and stays there.
+            const u32 budget = static_cast<u32>(plan->m_radiance_samples);
+
+            // One opaque emissive cell at (0,0); level-0 probe (0,0) direction 2 is near it.
+            std::vector<u16> chunk(128u * 128u, 0u);
+            chunk[0] = 1u;
+            const lighting::WorldLightChunkUpdate update{.m_chunk_id = 0u, .m_cell_ids = chunk};
+            PPR_TEST_ASSERT(not source.applyUpdate({.m_chunks = {&update, 1u}, .m_revision = 1u}));
+            fixture.encodeSource();
+
+            const u64 nearby_sample = 2u;
+            const u64 nearby_word = nearby_sample * 4u;
+
+            // accumulation = 2, retention = 0.5: the per-direction count caps at 2,
+            // not 3 or 4, so the third sample uses the retention blend (not 1/3).
+            for (u32 index = 0u; index < 4u; ++index) {
+                fixture.updateField(budget, 2u, 0.5f);
+            }
+            const auto count = fixture.read<u32>(field.state());
+            PPR_TEST_ASSERT(count[nearby_sample] == 2u);
+
+            const auto radiance = fixture.read<u16>(field.view().m_radiance);
+            PPR_TEST_ASSERT(halfIsFinitePositive(radiance[nearby_word + 0u]));
+            PPR_TEST_ASSERT(halfIsFinitePositive(radiance[nearby_word + 1u]));
+            PPR_TEST_ASSERT(halfIsFinitePositive(radiance[nearby_word + 2u]));
+
+            // retention = 1.0: the steady-state EMA weight is zero, so one more
+            // update leaves the radiance byte-identical (a plain running mean
+            // would blend the new sample in and change it).
+            fixture.updateField(budget, 2u, 1.0f);
+            const auto count_held = fixture.read<u32>(field.state());
+            PPR_TEST_ASSERT(count_held[nearby_sample] == 2u);
+            const auto radiance_held = fixture.read<u16>(field.view().m_radiance);
+            PPR_TEST_ASSERT(radiance_held == radiance);
 
             fixture.shutdown();
         };
@@ -2168,6 +2220,7 @@ namespace pP::tests {
             detail::WorldLightGpu::gpu_source_second_update_replaces_pending_particles,
             detail::WorldLightGpu::gpu_source_multiword_occupancy,
             detail::WorldLightFieldGpu::field_single_emitter_converges,
+            detail::WorldLightFieldGpu::field_accumulation_caps_count_and_retention_holds_history,
             detail::WorldLightFieldGpu::field_dirty_update_reprocesses_in_same_frame,
             detail::WorldLightFieldGpu::field_reset_bounds_rect_tail,
             detail::WorldLightFieldGpu::field_update_respects_budget_boundary,

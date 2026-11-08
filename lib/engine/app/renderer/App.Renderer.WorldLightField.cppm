@@ -26,8 +26,9 @@ export namespace pP::lighting {
 
     // Field constants, matched field-for-field by the Slang
     // WorldLightFieldConstants. m_origin is the world-space corner of native cell
-    // (0,0). Scalar pad fields keep the C++ layout identical to Slang's
-    // ConstantBuffer<...> (array padding would otherwise widen pad[3]).
+    // (0,0). The scalar accumulation/retention/delta fields keep the C++ layout
+    // identical to Slang's ConstantBuffer<...> (array padding would otherwise
+    // widen the tail pad).
     struct WorldLightFieldConstants {
         float m_origin_x{}, m_origin_y{};
         u32 m_width{}, m_height{};
@@ -36,7 +37,9 @@ export namespace pP::lighting {
         u32 m_source_revision{};
         u32 m_frame{};
         u32 m_budget{};
-        u32 m_pad0{}, m_pad1{}, m_pad2{};
+        u32 m_accumulation_samples{};
+        float m_history_retention{};
+        float m_frame_delta{};
         std::array<WorldLightLevelGpu, kWorldLightMaxLevels> m_levels{};
     };
 
@@ -76,10 +79,13 @@ export namespace pP::lighting {
 
         // Records the field update on the caller's encoder. sample_budget bounds
         // the number of direction samples traced this frame; over-budget work
-        // simply lengthens the cycle. dt is the injected frame time (reserved for
-        // the Task 11 retention EMA; Task 6 accumulates a plain running mean).
+        // simply lengthens the cycle. dt is the injected frame time in seconds,
+        // accumulation_samples the per-direction running-mean cap, and
+        // history_retention the steady-state per-60Hz retention (0..1). The
+        // shader uses dt and history_retention to derive the per-frame EMA blend.
         [[nodiscard]] std::error_code update(
-            rhi::ICommandEncoder &encoder, const class WorldLightSourceGpu &source, float dt, u32 sample_budget);
+            rhi::ICommandEncoder &encoder, const class WorldLightSourceGpu &source, float dt, u32 sample_budget,
+            u32 accumulation_samples, float history_retention);
 
         [[nodiscard]] WorldLightFieldView view() const noexcept;
 
