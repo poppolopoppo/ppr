@@ -54,7 +54,7 @@ namespace pP::tests::detail {
 
                 // Intervals start at zero, chain end-to-end and reach the world
                 // diagonal bound; narrowed floats stay finite.
-                const float far_bound = 2.0f * float(edge + edge) * 0.5f;
+                const float far_bound = std::sqrt(2.0f) * float(edge) * 0.5f;
                 PPR_TEST_ASSERT(plan->m_levels[0].m_interval_near_m == 0.0f);
                 for (u32 index = 0; index < plan->m_level_count; ++index) {
                     const auto &level = plan->m_levels[index];
@@ -1351,6 +1351,9 @@ namespace pP::tests::detail {
             constexpr u32 width = 256u;
             constexpr u32 height = 256u;
 
+            const auto plan = lighting::planWorldLight({.m_width = width, .m_height = height, .m_cell_metres = 0.5f});
+            PPR_TEST_ASSERT(plan.has_value());
+
             Fixture fixture;
             fixture.initialize(width, height);
             auto &field = fixture.m_field;
@@ -1360,11 +1363,27 @@ namespace pP::tests::detail {
             fixture.updateField(budget);
             const auto count = fixture.read<u32>(field.state());
 
-            // Only the first `budget` samples are traced; the tail group must not
-            // leak past the slice.
-            PPR_TEST_ASSERT(count[99u] == 1u);
-            PPR_TEST_ASSERT(count[100u] == 0u);
-            PPR_TEST_ASSERT(count[127u] == 0u);
+            // The budget is split across the cascade levels, so each level traces
+            // a prefix of its own sample range. No dispatch tail may leak past its
+            // slice and the total traced count must equal the budget exactly.
+            u64 traced = 0u;
+            for (u32 level = 0u; level < plan->m_level_count; ++level) {
+                const lighting::WorldLightLevel &info = plan->m_levels[level];
+                const u64 begin = info.m_sample_offset;
+                bool seen_untraced = false;
+                for (u64 sample = begin; sample < begin + info.m_sample_count; ++sample) {
+                    const u32 value = count[sample];
+                    PPR_TEST_ASSERT(value <= 1u);
+                    traced += value;
+
+                    if (value == 0u) {
+                        seen_untraced = true;
+                    } else {
+                        PPR_TEST_ASSERT(not seen_untraced);
+                    }
+                }
+            }
+            PPR_TEST_ASSERT(traced == budget);
 
             fixture.shutdown();
         };

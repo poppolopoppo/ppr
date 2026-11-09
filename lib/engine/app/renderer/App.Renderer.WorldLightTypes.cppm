@@ -85,8 +85,13 @@ export namespace pP::lighting {
                                          ? settings.m_interval_scale
                                          : kDefaultIntervalScale;
 
-        const double far_bound_m = 2.0 *
-                                   (static_cast<double>(settings.m_width) + static_cast<double>(settings.m_height)) *
+        // The field only needs to cover the world's own extent: no cell exists
+        // beyond the diagonal, and the trace clips rays to the world bounds, so a
+        // longer reach would spend its budget on empty space. The previous
+        // 2*(width+height) bound was ~2.8x the diagonal for a square world.
+        const double far_bound_m = std::sqrt(
+                                       static_cast<double>(settings.m_width) * settings.m_width +
+                                       static_cast<double>(settings.m_height) * settings.m_height) *
                                    static_cast<double>(settings.m_cell_metres);
 
         // far_0 = far_bound_m / interval_scale^(level_count - 1), so the last

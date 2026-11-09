@@ -198,7 +198,7 @@ export namespace pP::game {
         u32 m_accumulation_samples{8u};
         float m_history_retention{0.9f};
         u32 m_level_count{6u};
-        i32 m_sky_hour{-1};
+        i32 m_sky_hour{12};
 
         [[nodiscard]] static constexpr auto describe() {
             using namespace config;
@@ -237,8 +237,9 @@ export namespace pP::game {
                 field(
                     &WorldLightDisplaySettings::m_sky_hour,
                     Metadata{
-                        "game.world_light.sky_hour", "Field sky solar hour (-1 uses the black boundary sky)",
-                        "World lighting", EMutability::runtime, ESource::all, true},
+                        "game.world_light.sky_hour",
+                        "Field sky solar hour (-1 uses the black boundary sky; 12 is noon)", "World lighting",
+                        EMutability::runtime, ESource::all, true},
                     Range<i32>{-1, 23}),
             };
         }

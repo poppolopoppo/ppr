@@ -3160,6 +3160,7 @@ namespace pP {
             GridPass,
             m_visibility_prepared ? std::error_code{} : std::make_error_code(std::errc::operation_not_permitted));
         m_visibility_prepared = false;
+
         const auto cached = pipelineFor_(context.m_device, context.m_render_pipeline_key);
         PPR_RETURN_ERROR_ON_FAIL(GridPass, cached ? std::error_code{} : cached.error());
         PPR_RETURN_ERROR_ON_FAIL(GridPass, encodeTerrainIndirect_(context, **cached, nullptr, 0u, 1u));
@@ -3177,6 +3178,7 @@ namespace pP {
             })) {
             return {};
         }
+
         const auto cached = translucentPipelineFor_(context.m_device, context.m_render_pipeline_key);
         PPR_RETURN_ERROR_ON_FAIL(GridPass, cached ? std::error_code{} : cached.error());
         PPR_RETURN_ERROR_ON_FAIL(GridPass, encodeTerrainIndirect_(context, **cached, nullptr, 0u, 2u));

@@ -455,6 +455,11 @@ namespace pP::lighting {
             return default_value_v;
         }
 
+        encoder.pushDebugGroup("WorldLight.SourceUpload", rhi::MarkerColor{.r = 0.9f, .g = 0.8f, .b = 0.2f});
+        PPR_DEFER {
+            encoder.popDebugGroup();
+        };
+
         const u32 width = state.m_plan.m_width;
         const u32 chunks_x = (width + kChunkEdge - 1u) / kChunkEdge;
 

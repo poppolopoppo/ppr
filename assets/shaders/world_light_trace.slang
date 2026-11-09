@@ -71,8 +71,43 @@ void traceWorldLightInterval(
     float originX = g_world_light_field.originX;
     float originY = g_world_light_field.originY;
 
-    float2 start = origin + direction * nearM;
-    float intervalLength = farM - nearM;
+    float2 base = origin + direction * nearM;
+    float2 worldMin = float2(originX, originY);
+    float2 worldMax = worldMin + float2(width, height) * cellMetres;
+
+    // Clip the traced segment to the world bounds before walking cells. Outside
+    // the world nothing emits or attenuates, so stepping those cells only wastes
+    // work; the coarse levels start thousands of cells away and would otherwise
+    // walk the whole interval through empty space on every sample. The slab test
+    // keeps the terminal-sky transmittance semantics: out-of-world segments were
+    // already neutral, so clipping them changes no radiance.
+    float tEnter = 0.0;
+    float tExit = farM - nearM;
+    if (direction.x != 0.0) {
+        float inv = 1.0 / direction.x;
+        float a = (worldMin.x - base.x) * inv;
+        float b = (worldMax.x - base.x) * inv;
+        tEnter = max(tEnter, min(a, b));
+        tExit = min(tExit, max(a, b));
+    } else if (base.x < worldMin.x || base.x > worldMax.x) {
+        return;
+    }
+    if (direction.y != 0.0) {
+        float inv = 1.0 / direction.y;
+        float a = (worldMin.y - base.y) * inv;
+        float b = (worldMax.y - base.y) * inv;
+        tEnter = max(tEnter, min(a, b));
+        tExit = min(tExit, max(a, b));
+    } else if (base.y < worldMin.y || base.y > worldMax.y) {
+        return;
+    }
+    if (tExit <= tEnter) {
+        return;
+    }
+
+    float2 start = base + direction * tEnter;
+    float baseT = nearM + tEnter;
+    float intervalLength = tExit - tEnter;
 
     float cellX = (start.x - originX) / cellMetres;
     float cellY = (start.y - originY) / cellMetres;
@@ -93,12 +128,20 @@ void traceWorldLightInterval(
 
     float t = 0.0;
     float3 entryNormal = float3(0.0, 0.0, 1.0); // +Z for the ray-start cell.
+    // A probe records the radiance ARRIVING at it, never the cell it sits in.
+    // The finest level starts the ray inside the probe's own cell; treating that
+    // cell as an opaque hit made every solid probe self-occlude, zero its
+    // transmittance and therefore zero the whole cascade composite. Skip the
+    // origin cell so a surface probe sees the light crossing into it from the
+    // neighbouring air, which is what lights the terrain and bleeds around dug
+    // borders.
+    const bool skipOriginCell = nearM <= 0.0 && tEnter <= 0.0;
     uint maxSteps = uint(width + height) + 4u;
     for (uint i = 0u; i < maxSteps && t < intervalLength && transmittance > 0.0; ++i) {
         float tNext = min(min(tMaxX, tMaxY), intervalLength);
         float seg = tNext - t;
 
-        if (cx >= 0 && cy >= 0 && cx < int(width) && cy < int(height)) {
+        if ((i != 0u || !skipOriginCell) && cx >= 0 && cy >= 0 && cx < int(width) && cy < int(height)) {
             uint cell = uint(cy) * uint(width) + uint(cx);
             uint id = g_world_light_ids[cell];
             uint base = cell * kOverlayStride;
@@ -126,7 +169,7 @@ void traceWorldLightInterval(
                 asfloat(g_world_light_overlay[base + kOverlayEmission1]),
                 asfloat(g_world_light_overlay[base + kOverlayEmission2]));
 
-            float2 p = origin + direction * (nearM + t + 0.5 * seg);
+            float2 p = origin + direction * (baseT + t + 0.5 * seg);
 
             if (opaque) {
                 float3 feedback = albedo * worldLightDiffusePrev(p, entryNormal);

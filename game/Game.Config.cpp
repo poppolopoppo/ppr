@@ -218,7 +218,7 @@ namespace pP::game {
             "world-light-retention", false);
         append("game.world_light.level_count", "Radiance cascade level count.", "world-light-levels", false);
         append(
-            "game.world_light.sky_hour", "Field sky solar hour (-1 uses the black boundary sky).",
+            "game.world_light.sky_hour", "Field sky solar hour (-1 uses the black boundary sky; 12 is noon).",
             "world-light-sky-hour", false);
 
         append(

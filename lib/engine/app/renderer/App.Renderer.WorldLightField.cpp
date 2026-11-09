@@ -87,7 +87,11 @@ namespace pP::lighting {
         u64 m_total_samples{};
         u64 m_last_revision{};
         std::array<float, 3> m_last_sky{};
-        u64 m_cursor{};
+        // One round-robin cursor per cascade level. A single flat cursor spent a
+        // whole frame's budget inside one level, so frames alternated between
+        // cheap fine-level and expensive coarse-level work; per-level cursors
+        // give every level the same refresh rate and a steady per-frame cost.
+        std::array<u64, kWorldLightMaxLevels> m_level_cursor{};
         u64 m_cycle{};
         u32 m_current{}; // ping-pong index of the accumulated radiance buffer
         u32 m_frame{};
@@ -291,6 +295,11 @@ namespace pP::lighting {
         State &state = *m_state;
         PPR_RETURN_ERROR_ON_FAIL(WorldLightField, require_(state.m_ready, std::errc::not_connected));
 
+        encoder.pushDebugGroup("WorldLight.FieldUpdate", rhi::MarkerColor{.r = 0.9f, .g = 0.6f, .b = 0.1f});
+        PPR_DEFER {
+            encoder.popDebugGroup();
+        };
+
         const u64 total = state.m_total_samples;
         const u32 budget = static_cast<u32>(std::min<u64>(sample_budget, total));
 
@@ -357,6 +366,7 @@ namespace pP::lighting {
         // Copy the previous field into the current buffer so the round-robin
         // update only overwrites the traced range and the current buffer stays a
         // complete field after the swap.
+        encoder.pushDebugGroup("WorldLight.FieldCopy", rhi::MarkerColor{.r = 0.8f, .g = 0.2f, .b = 0.2f});
         encoder.setBufferState(state.m_radiance[read_index].get(), rhi::ResourceState::CopySource);
         encoder.setBufferState(state.m_radiance[write_index].get(), rhi::ResourceState::CopyDestination);
         encoder.copyBuffer(
@@ -365,6 +375,7 @@ namespace pP::lighting {
         encoder.setBufferState(state.m_radiance[read_index].get(), rhi::ResourceState::UnorderedAccess);
         encoder.setBufferState(state.m_radiance[write_index].get(), rhi::ResourceState::UnorderedAccess);
         encoder.globalBarrier();
+        encoder.popDebugGroup();
 
         // Per-level probe rectangle of the source dirty rect in probe grid units.
         struct ProbeRect {
@@ -403,20 +414,6 @@ namespace pP::lighting {
             pass->bindPipeline(state.m_update_pipeline.get(), state.m_update_root.get());
             pass->dispatchCompute(static_cast<u32>((local_count + kNumthreads - 1u) / kNumthreads), 1u, 1u);
             pass->end();
-            return {};
-        };
-
-        const auto dispatch_cursor = [&](const u64 range_lo, const u64 range_hi) -> std::error_code {
-            for (u32 level = 0u; level < state.m_plan.m_level_count; ++level) {
-                const WorldLightLevel &level_info = state.m_plan.m_levels[level];
-                const u64 lo = level_info.m_sample_offset;
-                const u64 hi = lo + level_info.m_sample_count;
-                const u64 a = std::max(lo, range_lo);
-                const u64 b = std::min(hi, range_hi);
-                if (a < b) {
-                    PPR_RETURN_ERROR_ON_FAIL(WorldLightField, dispatch_update(level, a - lo, b - a));
-                }
-            }
             return {};
         };
 
@@ -465,8 +462,16 @@ namespace pP::lighting {
         // Dirty reset, then dirty-first reprocess, then the round-robin cursor
         // with whatever budget remains. The reset runs before the reprocess so an
         // edit is visible in the same frame, not deferred to the next cursor wrap.
+        encoder.pushDebugGroup("WorldLight.FieldTrace", rhi::MarkerColor{.r = 0.9f, .g = 0.6f, .b = 0.1f});
+        PPR_DEFER {
+            encoder.popDebugGroup();
+        };
         u64 remaining = budget;
         if (source.revision() != state.m_last_revision) {
+            encoder.pushDebugGroup("WorldLight.FieldDirty", rhi::MarkerColor{.r = 0.9f, .g = 0.2f, .b = 0.9f});
+            PPR_DEFER {
+                encoder.popDebugGroup();
+            };
             const WorldLightDirtyRect dirty = source.dirtyRect();
             if (not dirty.empty()) {
                 for (u32 level = 0u; level < state.m_plan.m_level_count; ++level) {
@@ -529,24 +534,40 @@ namespace pP::lighting {
             state.m_last_sky = sky;
         }
 
-        // Round-robin cursor over the flat sample space with the remaining budget.
-        const u64 cursor_consumed = remaining;
-        if (remaining != 0u) {
-            const u64 start = state.m_cursor;
-            const u64 end = start + remaining;
-            if (end <= total) {
-                PPR_RETURN_ERROR_ON_FAIL(WorldLightField, dispatch_cursor(start, end));
-            } else {
-                PPR_RETURN_ERROR_ON_FAIL(WorldLightField, dispatch_cursor(start, total));
-                PPR_RETURN_ERROR_ON_FAIL(WorldLightField, dispatch_cursor(0u, end - total));
+        // Round-robin refresh with the remaining budget, split evenly across the
+        // cascade levels. Every level stores the same sample count, so an even
+        // split refreshes all scales at the same rate and keeps the per-frame
+        // cost steady instead of alternating cheap fine-level and expensive
+        // coarse-level frames.
+        const u64 level_count = std::max<u64>(1u, state.m_plan.m_level_count);
+        const u64 level_share = remaining / level_count;
+        const u64 level_remainder = remaining % level_count;
+        for (u32 level = 0u; level < state.m_plan.m_level_count and remaining != 0u; ++level) {
+            const WorldLightLevel &info = state.m_plan.m_levels[level];
+            const u64 quota = std::min(
+                {level_share + (u64{level} < level_remainder ? 1u : 0u), remaining, info.m_sample_count});
+            if (quota == 0u) {
+                continue;
+            }
+
+            const u64 start = state.m_level_cursor[level];
+            const u64 end = start + quota;
+            PPR_RETURN_ERROR_ON_FAIL(
+                WorldLightField, dispatch_update(level, start, std::min(quota, info.m_sample_count - start)));
+            if (end > info.m_sample_count) {
+                PPR_RETURN_ERROR_ON_FAIL(WorldLightField, dispatch_update(level, 0u, end - info.m_sample_count));
+            }
+
+            state.m_level_cursor[level] = end % info.m_sample_count;
+            remaining -= quota;
+
+            // One cycle is one complete pass over the finest level, matching the
+            // previous single-cursor meaning used for reporting and tests.
+            if (level == 0u and end >= info.m_sample_count) {
+                ++state.m_cycle;
             }
         }
         encoder.globalBarrier();
-
-        // Advance the cursor and cycle by the cursor (non-dirty) work only.
-        const u64 advanced = state.m_cursor + cursor_consumed;
-        state.m_cycle += advanced / total;
-        state.m_cursor = advanced % total;
 
         state.m_current = write_index;
         return default_value_v;
@@ -616,7 +637,9 @@ namespace pP::lighting {
     }
 
     u64 WorldLightField::cursor() const noexcept {
-        return m_state->m_cursor;
+        // The finest level's round-robin position; every level advances at the
+        // same rate, so this is representative of refresh progress.
+        return m_state->m_level_cursor[0];
     }
 
     std::error_code WorldLightField::shutdown() {

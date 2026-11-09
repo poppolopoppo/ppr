@@ -1438,7 +1438,7 @@ descriptor = "earlier.toml"
         const game::WorldLightDisplaySettings world_defaults{};
         PPR_TEST_ASSERT(world_defaults.m_enabled);
         PPR_TEST_ASSERT(world_defaults.m_samples_per_frame == 262144u);
-        PPR_TEST_ASSERT(world_defaults.m_level_count == 6u and world_defaults.m_sky_hour == -1);
+        PPR_TEST_ASSERT(world_defaults.m_level_count == 6u and world_defaults.m_sky_hour == 12);
         const game::PostDisplaySettings post_defaults{};
         PPR_TEST_ASSERT(not post_defaults.m_palette);
         PPR_TEST_ASSERT(post_defaults.m_auto_exposure);
