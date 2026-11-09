@@ -190,10 +190,11 @@ The atlas currently stores `emission + albedo * previous_atlas`, a self-referent
 
 - [ ] **Step 1: Make the bounce test honest again.** Demote the directly-seeded `field_feedback_bounces_off_reflective_wall` to a wiring test named `atlas_seed_drives_trace_bounce` with a comment saying it seeds the atlas, and add an end-to-end `wall_reflects_lamp_through_atlas` that drives a real atlas encode from a lamp.
 - [ ] **Step 2: Add the dug-border contract to the air-probe test.** A cell just outside a one-cell opening in a walled room has `diffuse > 0` and finite; deep interior rock and a sealed-cavity centre stay exactly zero; and a cell with `E > 0, rho > 0` satisfies `composite ≈ E + rho * L_i` where `L_i` is read back from `atlas.cells()` directly (RGB9E5 tolerance).
-- [ ] **Step 3: Run the three tests red.**
-- [ ] **Step 4: Implement the producer.** Bind the merged previous field and constants, compute `L_i` at the cell centre, store incident only, keep the vacuum fast path, delete the emission term.
-- [ ] **Step 5: Run the tests green; measure** the atlas pass and `FieldUpdate`. The atlas pass must stay well under the field update.
-- [ ] **Step 6: Commit** `lighting: feed the atlas from the merged field`.
+- [ ] **Step 3: Pin the shipped GPU fold.** Add `gpu_fold_matches_cpu_merge_with_partial_transmittance`: seed the previous buffer with a non-trivial per-level hierarchy (anisotropic radiance plus partial transmittance), run one update with retention 0 and accumulation 1 over a vacuum probe, and assert the read-back level 0 against the CPU fold. Task 4's tests cover the CPU fold formula and the single-level sampler but never execute `worldLightParentSampleFrom` + the `accumulateSample` fold, so a doubled sky, a wrong transmittance product or a wrong direction remap could currently pass.
+- [ ] **Step 4: Run the four tests red.**
+- [ ] **Step 5: Implement the producer.** Bind the merged previous field and constants, compute `L_i` at the cell centre, store incident only, keep the vacuum fast path, delete the emission term.
+- [ ] **Step 6: Run the tests green; measure** the atlas pass and `FieldUpdate`. The atlas pass must stay well under the field update.
+- [ ] **Step 7: Commit** `lighting: feed the atlas from the merged field`.
 
 ---
 
@@ -205,6 +206,8 @@ The atlas currently stores `emission + albedo * previous_atlas`, a self-referent
 - Test: `App.WorldLightField.Tests.cpp`
 
 **Gate:** implement only if Task 4's field update is still > 6 ms at 1024², or the atlas working set still misses the L2 budget. Otherwise skip and record why in `baseline.md`.
+
+- **Skipped 2026-11-09:** the field update is 1.95 ms against the 6 ms gate. The L2/working-set lever is Task 9's LDS staging; CH would shrink only level 0 (~12% of bytes) and would not touch the coarse levels that dominate the working set.
 
 **Interfaces:**
 - Produces: `CircularHarmonics<4>` (7 `float3` coefficients, oni `Packing::Radiance9`) per level-0 probe; `worldLightDiffuse` becomes `Σ A_m · coeff_m` (oni `diffuseIrradiance`).
