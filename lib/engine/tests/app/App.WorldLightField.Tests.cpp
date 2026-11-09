@@ -1499,6 +1499,145 @@ namespace pP::tests::detail {
             fixture.shutdown();
         };
 
+        PPR_UNIT_TEST (field_air_probes_see_emitter_sky_and_sealed_cavity) {
+            constexpr u32 width = 256u;
+            constexpr u32 height = 256u;
+            constexpr u32 chunk_edge = 128u;
+
+            // Palette: id 1 is an opaque emissive lamp, id 2 opaque rock.
+            const lighting::WorldLightMaterial materials[] = {
+                {.m_kind = 1u, .m_emission = {1.0f, 1.0f, 1.0f}},
+                {.m_kind = 1u},
+            };
+
+            Fixture fixture;
+            fixture.initialize(width, height, materials);
+            auto &source = fixture.m_source;
+
+            const auto plan = lighting::planWorldLight({.m_width = width, .m_height = height, .m_cell_metres = 0.5f});
+            PPR_TEST_ASSERT(plan.has_value());
+            const u32 budget = static_cast<u32>(plan->m_levels[0].m_sample_count);
+
+            // A walled room [70,90]^2 with an emissive lamp column at x=80, y=79..81.
+            // Cell (81,80) is air inside the room next to the lamp; cell (70,80) is
+            // the room's left wall next to that air.
+            std::vector<u16> room(chunk_edge * chunk_edge, 0u);
+            for (u32 y = 70u; y <= 90u; ++y) {
+                for (u32 x = 70u; x <= 90u; ++x) {
+                    if (x == 70u or x == 90u or y == 70u or y == 90u) {
+                        room[y * chunk_edge + x] = 2u;
+                    }
+                }
+            }
+            for (u32 y = 79u; y <= 81u; ++y) {
+                room[y * chunk_edge + 80u] = 1u;
+            }
+
+            // A sealed rock shell [150,156]x[100,106] with vacuum at its centre
+            // (153,103): no line of sight to the sky or to the lamp. Lives in
+            // chunk 1 (x >= 128, y < 128).
+            std::vector<u16> cavity(chunk_edge * chunk_edge, 0u);
+            for (u32 y = 100u; y <= 106u; ++y) {
+                for (u32 x = 150u; x <= 156u; ++x) {
+                    if (x == 150u or x == 156u or y == 100u or y == 106u) {
+                        cavity[y * chunk_edge + (x - chunk_edge)] = 2u;
+                    }
+                }
+            }
+
+            const lighting::WorldLightChunkUpdate updates[] = {
+                {.m_chunk_id = 0u, .m_cell_ids = room}, {.m_chunk_id = 1u, .m_cell_ids = cavity}};
+            PPR_TEST_ASSERT(not source.applyUpdate(
+                {.m_chunks = updates, .m_revision = 1u, .m_sky_hour = 12, .m_sky = {0.25f, 0.5f, 1.0f}}));
+            fixture.encodeSource();
+
+            // One full round-robin pass per update: six updates cover every level.
+            fixture.runUpdates(18u, budget);
+
+            const auto centre = [](const u32 x, const u32 y) {
+                return float2{(static_cast<float>(x) + 0.5f) * 0.5f, (static_cast<float>(y) + 0.5f) * 0.5f};
+            };
+            const auto sample = [&](const float2 position, const float2 direction) {
+                struct Sampled {
+                    std::array<float, 3> m_composite{};
+                    std::array<float, 3> m_diffuse{};
+                    std::array<float, 3> m_specular{};
+                };
+                return Sampled{
+                    .m_composite = fixture.evaluate(
+                        position, direction, float3{0.0f, 0.0f, 1.0f}, 0.3f,
+                        lighting::WorldLightField::EvaluateMode::kComposite),
+                    .m_diffuse = fixture.evaluate(
+                        position, direction, float3{0.0f, 0.0f, 1.0f}, 0.3f,
+                        lighting::WorldLightField::EvaluateMode::kDiffuse),
+                    .m_specular = fixture.evaluate(
+                        position, direction, float3{0.0f, 0.0f, 1.0f}, 0.3f,
+                        lighting::WorldLightField::EvaluateMode::kSpecular)};
+            };
+            const auto finite_nonnegative = [](const std::array<float, 3> &value) {
+                for (const float channel: value) {
+                    if (not std::isfinite(channel) or channel < 0.0f) {
+                        return false;
+                    }
+                }
+                return true;
+            };
+
+            // 1. The emissive lamp cell itself: finite, and a solid probe reads the
+            // light crossing in from the neighbouring air.
+            const auto lamp = sample(centre(80u, 80u), float2{1.0f, 0.0f});
+            PPR_TEST_ASSERT(finite_nonnegative(lamp.m_composite));
+            PPR_TEST_ASSERT(finite_nonnegative(lamp.m_diffuse));
+            PPR_TEST_ASSERT(finite_nonnegative(lamp.m_specular));
+
+            // 2. Air next to the lamp, looking at it: probes exist in vacuum, so the
+            // emitter is visible here. This is the cell type gameplay light lives in.
+            const auto next_to_lamp = sample(centre(81u, 80u), float2{-1.0f, 0.0f});
+            PPR_TEST_ASSERT(finite_nonnegative(next_to_lamp.m_composite));
+            PPR_TEST_ASSERT(next_to_lamp.m_composite[0] > 0.5f);
+            PPR_TEST_ASSERT(next_to_lamp.m_composite[1] > 0.5f);
+            PPR_TEST_ASSERT(next_to_lamp.m_composite[2] > 0.5f);
+
+            // 3. Air in the open, far from the lamp, open to the sky: the terminal
+            // sky path lights it, and a flat normal's diffuse average equals the
+            // composite because the sky is isotropic.
+            const auto open_sky = sample(centre(200u, 200u), float2{1.0f, 0.0f});
+            PPR_TEST_ASSERT(finite_nonnegative(open_sky.m_composite));
+            PPR_TEST_ASSERT(open_sky.m_composite[0] > 0.05f);
+            PPR_TEST_ASSERT(open_sky.m_composite[1] > 0.05f);
+            PPR_TEST_ASSERT(open_sky.m_composite[2] > 0.05f);
+            for (u32 channel = 0u; channel < 3u; ++channel) {
+                PPR_TEST_ASSERT(
+                    std::fabs(open_sky.m_diffuse[channel] - open_sky.m_composite[channel]) <=
+                    0.25f * open_sky.m_composite[channel] + 0.02f);
+            }
+
+            // 4. A vacuum cell inside the sealed rock shell: no emitter and no sky
+            // line of sight, so it stays black.
+            const auto sealed = sample(centre(153u, 103u), float2{1.0f, 0.0f});
+            PPR_TEST_ASSERT(sealed.m_composite == std::array<float, 3>{0.0f, 0.0f, 0.0f});
+            PPR_TEST_ASSERT(sealed.m_diffuse == std::array<float, 3>{0.0f, 0.0f, 0.0f});
+
+            // 5. A solid wall cell next to the room: the probe skips its own cell and
+            // sees the radiance crossing in from the neighbouring air (the lamp).
+            const auto solid_next_to_air = sample(centre(70u, 80u), float2{1.0f, 0.0f});
+            PPR_TEST_ASSERT(finite_nonnegative(solid_next_to_air.m_composite));
+            // The wall is one cell thick, so the bilinear gather blends the lit air
+            // probe inside the room with the unlit probe outside it; the result is a
+            // minority but non-zero share of the neighbouring air's radiance.
+            PPR_TEST_ASSERT(solid_next_to_air.m_composite[0] > 0.0f);
+
+            // 6. Well outside the world bounds: every probe of every level is out of
+            // range, so the sampler returns zero radiance and the terminal sky path
+            // invents nothing.
+            const auto outside = sample(float2{-100.0f, -100.0f}, float2{1.0f, 0.0f});
+            PPR_TEST_ASSERT(outside.m_composite == std::array<float, 3>{0.0f, 0.0f, 0.0f});
+            PPR_TEST_ASSERT(outside.m_diffuse == std::array<float, 3>{0.0f, 0.0f, 0.0f});
+            PPR_TEST_ASSERT(outside.m_specular == std::array<float, 3>{0.0f, 0.0f, 0.0f});
+
+            fixture.shutdown();
+        };
+
         PPR_UNIT_TEST (field_is_camera_independent) {
             constexpr u32 width = 256u;
             constexpr u32 height = 256u;
@@ -3483,6 +3622,7 @@ namespace pP::tests {
             detail::WorldLightFieldGpu::field_reset_bounds_rect_tail,
             detail::WorldLightFieldGpu::field_update_respects_budget_boundary,
             detail::WorldLightFieldGpu::field_dense_dda_hits_diagonal_emitter,
+            detail::WorldLightFieldGpu::field_air_probes_see_emitter_sky_and_sealed_cavity,
             detail::WorldLightFieldGpu::field_feedback_bounces_off_reflective_wall,
             detail::WorldLightFieldGpu::field_is_camera_independent,
             detail::WorldLightFieldGpu::field_routing_applies_dirty_chunk_and_binds_view,
