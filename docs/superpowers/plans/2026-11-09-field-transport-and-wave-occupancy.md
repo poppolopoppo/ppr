@@ -29,7 +29,7 @@ Validated by the user. These supersede the corresponding parts of the 2026-11-07
 - One 128² chunk quad per chunk; never per-cell geometry.
 - Camera-independent field; no reprojection, no camera-dependent reset.
 - 60 Hz target. Field update budget: **≤ 6 ms at 1024² and 2048²**. If over, lengthen the refresh cycle; never coarsen spacing or drop dirty work.
-- Register budgets from Task 1: **field CS ≤ 48 regs/thread (≥ 42 warps/SM)**, **terrain PS ≤ 40 regs/thread (≥ 51 warps/SM)**. Stretch target 32 regs (64 warps).
+- Register budgets from Task 1: **terrain PS ≤ 40 regs/thread (≥ 51 warps/SM)**; **field CS ≤ 48 regs/thread with 128-thread blocks (≥ 42 warps/SM)**. At `[numthreads(64,1,1)]` the 16-blocks/SM limit caps the field at 32 warps regardless of registers, so threadgroup shape and register budget are one budget. Stretch target 32 regs (64 warps).
 - Frame must not regress: no task may raise steady-state frame time; measure, do not assume.
 - No `-ffast-math`, `-ffp-contract=fast`, or FTZ in shader math that affects simulation or lighting determinism.
 - Every task ends with build + focused tests + a measurement delta + a commit.
@@ -64,6 +64,28 @@ Validated by the user. These supersede the corresponding parts of the 2026-11-07
 git add .superpowers/sdd/2026-11-09-field-transport/baseline.md
 git commit -m "docs: record world light field baseline and occupancy budgets"
 ```
+
+---
+
+### Task 1b: Simplify the world-light debug view
+
+The visual mode is correctly sized; two pieces are not. Removal is approved by the user.
+
+**Files:**
+- Modify: `lib/engine/app/App.Application.Editor.cpp` (delete `findLitSamplePosition_`, `evaluateWorldLightProbe_`, the unconditional firing block, and the probe state fields)
+- Modify: `game/Game.Config.cppm` (drop the `irradiance` arm of the debug enum)
+- Modify: `assets/shaders/grid_tiles.slang` (drop the `2u` arm; read `g_world_light_field.levels[0].spacing` instead of the hardcoded `2.0`; re-derive the false-colour scale)
+- Modify: `lib/engine/tests/app/App.WorldLightField.Tests.cpp` (move the numeric evidence into the existing fenced readback test; drop assertions for the removed enum value)
+- Test: `lib/engine/tests/app/App.WorldLightField.Tests.cpp`
+
+**Interfaces:**
+- Produces: `EWorldLightDebugView { off, probes }` only, with no runtime readback; the debug path costs nothing when `off`. The numeric evidence lives in the test harness's fenced readback, not in the application.
+
+- [ ] **Step 1: Write the failing tests** `probe_sample_at_lamp_is_non_zero` (fenced readback via `fixture.read`/`submit`/`FrameFence`; assert the lamp composite is non-zero and finite) and `debug_view_has_only_off_and_probes` (config enum).
+- [ ] **Step 2: Run them to verify they fail.**
+- [ ] **Step 3: Delete the runtime readback machinery and the `irradiance` arm**; move the numeric assertion into the test; fix the `kChunkEdge` ceil/floor duplication if it is still present in the removed code.
+- [ ] **Step 4: Run the focused tests**; confirm the application issues no per-frame GPU stalls with the debug view `off` (grep the run log; frame time unchanged).
+- [ ] **Step 5: Commit** `lighting: simplify the world light debug view`.
 
 ---
 
@@ -193,6 +215,8 @@ git commit -m "docs: record world light field baseline and occupancy budgets"
 - Consumes: Task 7's measurement and Task 1's budget.
 - Produces: terrain PS at ≤ 40 regs/thread (≥ 51 warps/SM), or the per-pixel variant enabled if Task 7 shows it is strictly better.
 
+**Gate:** Tasks 3 and 4 landed; the inlined six-level gather is gone from `worldLightDiffuse`. Starting this while shading still composites six levels measures the wrong shader.
+
 - [ ] **Step 1: Add the failing acceptance check** — record `SHI_REGISTERS` and the register-limited stall in `baseline.md` and assert the budget in the task report (a measurement gate, not a unit test).
 - [ ] **Step 2: Reduce live ranges.** Order computation so gradients, decoration and albedo die before the lighting term; use `half` for colour-only intermediates; hoist wave-uniform constants; avoid `float4` temporaries that span the whole body.
 - [ ] **Step 3: Re-capture** and compare against Task 1: registers/thread, warps/SM, reg-limited stall, `Grid.Terrain` ms, and pixel parity on the Task 6 screenshots.
@@ -200,37 +224,43 @@ git commit -m "docs: record world light field baseline and occupancy budgets"
 
 ---
 
-### Task 9: Field compute — LDS staging of the dense source
+### Task 9: Field compute — read-only buffers, 128-thread blocks, LDS staging
 
-**Files:**
-- Modify: `assets/shaders/world_light_trace.slang`, `lib/engine/app/renderer/App.Renderer.WorldLightField.cpp` (dispatch/threadgroup shape only if needed)
-- Test: `App.WorldLightField.Tests.cpp` (numerical equivalence)
-
-**Interfaces:**
-- Consumes: `g_world_light_ids`, `g_world_light_overlay`.
-- Produces: `groupshared` tile of the ids/overlay covering the threadgroup's probe footprint; the DDA reads LDS with a global fallback while the tile is built.
-
-- [ ] **Step 1: Write the failing test** `lds_staged_trace_matches_global_trace` — same probe/direction set, identical radiance within half-precision tolerance.
-- [ ] **Step 2: Run it to verify it fails.**
-- [ ] **Step 3: Implement the staging** (cooperative load + `GroupMemoryBarrierWithGroupSync`, oni's block-coherent access pattern) and keep the global path behind a compile-time switch for A/B.
-- [ ] **Step 4: Run tests; measure** L1TEX throughput, L2 hit rate, latency, `FieldUpdate` ms, registers/thread, warps/SM.
-- [ ] **Step 5: Commit** `lighting: stage the dense source in shared memory`.
-
----
-
-### Task 10: Field compute — wave intrinsics and uniform control flow
+A tile covers a ray only when `tile >= probe span + 2 * far`, which only level 0 satisfies; levels >= 2 never do. Stage level 0 only.
 
 **Files:**
 - Modify: `assets/shaders/world_light_trace.slang`
-- Modify: `lib/engine/app/renderer/App.Renderer.WorldLightField.cpp` (refuse to start the fast path if subgroup support is missing)
+- Modify: `lib/engine/app/renderer/App.Renderer.WorldLightField.cpp` (`kNumthreads`, dispatch count, buffer states)
+- Test: `lib/engine/tests/app/App.WorldLightField.Tests.cpp`
 
 **Interfaces:**
-- Produces: `[WaveSize(32)]` on the update entry; `WaveActiveAny` uniform exhausted/out-of-world exit; `WaveReadLaneAt`/`WaveActiveAllEqual` fast path when every lane in the wave is in the same cell (level ≥ 1 coherence); `WaveActiveBallot` to skip a whole wave when no lane needs a trace.
-- Consumes: device subgroup properties; add a startup check that `supportedStages` includes `compute` and `supportedOperations` includes `ballot`/`shuffle` before selecting the fast path.
+- Consumes: `g_world_light_ids`, `g_world_light_overlay`.
+- Produces: `[numthreads(128,1,1)]` with the dispatch count halved; ids/overlay bound as read-only `StructuredBuffer` (`ld.global.nc`); a `groupshared` tile of one packed `u32` per cell (`id | opaque << 16 | hasOverlay << 17`), `110x110` at 1024² (~48.4 KB), replacing the two per-step global reads, with a global fallback outside the tile.
 
-- [ ] **Step 1: Write the failing test** `wave_fast_path_disabled_without_subgroup_support` (capability gate) and `wave_uniform_exit_preserves_per_lane_results` (compare against the scalar path on a divergent probe set).
+- [ ] **Step 1: Read-only binding first.** Declare ids/overlay as read-only `StructuredBuffer` in the trace and bind them `ShaderResource`. Write the failing test `read_only_source_trace_matches_rw_source`, make it pass, and measure.
+- [ ] **Step 2: Write the failing test** `lds_staged_trace_matches_global_trace` — same probe/direction set, identical radiance within half-precision tolerance.
+- [ ] **Step 3: Implement the level-0 tile**: cooperative strided load, one `GroupMemoryBarrierWithGroupSync()`, global fallback on tile exit; keep the global path behind a compile-time switch for A/B.
+- [ ] **Step 4: Raise the threadgroup to 128** and halve the dispatch count; verify the block limit no longer caps occupancy.
+- [ ] **Step 5: Run tests; measure** `l1tex__data_pipe_lsu_wavefronts_mem_lg`, L2 hit rate, `FieldUpdate` ms, registers/thread, warps/SM.
+- [ ] **Step 6: Commit** `lighting: stage the dense source in shared memory`.
+
+---
+
+### Task 10: Field compute — the two wave intrinsics that pay
+
+Only two are worth it for independent-direction rays. `[WaveSize(32)]` is a no-op on the Vulkan/SPIR-V path (Turing is fixed at 32) and must not be added. The wave-intrinsic precedent in this repo is `terrainContactWave` (`pbmpm/environment.slang`), not `quadSwap*`.
+
+**Files:**
+- Modify: `assets/shaders/world_light_trace.slang`
+- Modify: `lib/engine/app/renderer/App.Renderer.WorldLightField.cpp` (capability probe; no subgroup-properties plumbing exists yet)
+
+**Interfaces:**
+- Produces: `WaveActiveBallot` whole-wave skip when no lane in the wave needs a trace; `WaveActiveAllEqual` + `WaveReadLaneAt` same-cell hoist for level >= 1 where neighbouring probes share the DDA cell. Skips wave-cooperative DDA, `WavePrefixSum` and `WaveMatch` (wrong shape for independent directions).
+- Consumes: a capability check built on `IRhiService::hasFeature` (there is no existing `VkPhysicalDeviceSubgroupProperties` plumbing); the scalar path stays when the check fails.
+
+- [ ] **Step 1: Write the failing tests** `wave_fast_path_disabled_without_subgroup_support` and `wave_uniform_hoist_preserves_per_lane_results` (compare against the scalar path on a deliberately divergent probe set).
 - [ ] **Step 2: Run them to verify they fail.**
-- [ ] **Step 3: Implement the wave paths** with the scalar path retained behind the capability gate; never apply a uniform early-out when `WaveActiveAllEqual` is false.
+- [ ] **Step 3: Implement both paths** behind the capability gate; never take a uniform hoist when `WaveActiveAllEqual` is false.
 - [ ] **Step 4: Run tests; measure** `FieldUpdate` ms, warps/SM, `Unallocated Warps`, `SM Issue Active`, L2 hit.
 - [ ] **Step 5: Commit** `lighting: add wave-coherent field trace paths`.
 
