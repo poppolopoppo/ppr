@@ -42,30 +42,53 @@ namespace pP::tests::detail {
             return totals;
         }
 
-        PPR_UNIT_TEST (plan_1024_and_2048_use_spacing_two_and_equal_level_samples) {
+        PPR_UNIT_TEST (plan_1024_and_2048_use_reference_interval_sequence) {
+            // Reference cascadeIntervalLength: with c0 = width * penumbra *
+            // 1e-3 * cell_metres (penumbra default 0.5), the level intervals
+            // tile c0, 3c0, 9c0, 33c0, 129c0, 513c0 and reach 2049c0.
+            constexpr std::array<double, 7u> kIntervalLength{1.0, 3.0, 9.0, 33.0, 129.0, 513.0, 2049.0};
+
             for (const u32 edge: {1024u, 2048u}) {
-                const auto plan = lighting::planWorldLight({.m_width = edge, .m_height = edge, .m_cell_metres = 0.5f});
+                constexpr float cell_metres = 0.5f;
+                const auto plan = lighting::planWorldLight(
+                    {.m_width = edge, .m_height = edge, .m_cell_metres = cell_metres});
                 PPR_TEST_ASSERT(plan.has_value());
                 PPR_TEST_ASSERT(plan->m_level_count == 6u);
+                PPR_TEST_ASSERT(plan->m_penumbra_width == lighting::kWorldLightDefaultPenumbraWidth);
+                PPR_TEST_ASSERT(plan->m_sky_intensity == lighting::kWorldLightDefaultSkyIntensity);
                 PPR_TEST_ASSERT(plan->m_levels[0].m_spacing_cells == 2u);
                 PPR_TEST_ASSERT(plan->m_levels[0].m_directions == 4u);
                 PPR_TEST_ASSERT(plan->m_levels[1].m_directions == 16u);
                 PPR_TEST_ASSERT(plan->m_levels[2].m_directions == 64u);
 
-                // Intervals start at zero, chain end-to-end and reach the world
-                // diagonal bound; narrowed floats stay finite.
-                const float far_bound = std::sqrt(2.0f) * float(edge) * 0.5f;
-                PPR_TEST_ASSERT(plan->m_levels[0].m_interval_near_m == 0.0f);
+                const double c0_m = static_cast<double>(edge) *
+                                    static_cast<double>(lighting::kWorldLightDefaultPenumbraWidth) *
+                                    1e-3 *
+                                    static_cast<double>(cell_metres);
+
+                // Exact reference sequence, end-to-end tiling, and level 0
+                // starting at c0 (not at the probe centre).
                 for (u32 index = 0; index < plan->m_level_count; ++index) {
                     const auto &level = plan->m_levels[index];
                     PPR_TEST_ASSERT(level.m_sample_count == plan->m_levels[0].m_sample_count);
                     PPR_TEST_ASSERT(std::isfinite(level.m_interval_near_m));
                     PPR_TEST_ASSERT(std::isfinite(level.m_interval_far_m));
+                    const double expected_near = c0_m * kIntervalLength[index];
+                    const double expected_far = c0_m * kIntervalLength[index + 1u];
+                    PPR_TEST_ASSERT(std::abs(double{level.m_interval_near_m} - expected_near) <= 1e-4 * expected_near);
+                    PPR_TEST_ASSERT(std::abs(double{level.m_interval_far_m} - expected_far) <= 1e-4 * expected_far);
                     if (index > 0u) {
                         PPR_TEST_ASSERT(level.m_interval_near_m == plan->m_levels[index - 1u].m_interval_far_m);
                     }
                 }
-                PPR_TEST_ASSERT(plan->m_levels[plan->m_level_count - 1u].m_interval_far_m >= far_bound);
+                PPR_TEST_ASSERT(std::abs(double{plan->m_levels[0].m_interval_near_m} - c0_m) <= 1e-4 * c0_m);
+
+                // Reference reach, not the world diagonal: 2049 * c0 (for
+                // 1024x1024 at 1 m, c0 = 0.512 m and the reach is 1049.088 m).
+                const double reach_m = 2049.0 * c0_m;
+                PPR_TEST_ASSERT(
+                    std::abs(double{plan->m_levels[plan->m_level_count - 1u].m_interval_far_m} - reach_m) <=
+                    1e-4 * reach_m);
 
                 // Radiance/state bytes follow the independently computed totals.
                 const LayoutTotals totals = expectedLayout_(edge, edge, plan->m_level_count);
@@ -73,6 +96,47 @@ namespace pP::tests::detail {
                 PPR_TEST_ASSERT(plan->m_radiance_bytes == totals.m_radiance_samples * 8u);
                 PPR_TEST_ASSERT(plan->m_state_bytes == totals.m_state_bytes);
             }
+
+            // The documented 1024x1024-at-1 m instantiation: c0 = 0.512 m,
+            // reach 1049.088 m.
+            const auto reference = lighting::planWorldLight(
+                {.m_width = 1024u, .m_height = 1024u, .m_cell_metres = 1.0f});
+            PPR_TEST_ASSERT(reference.has_value());
+            PPR_TEST_ASSERT(std::abs(double{reference->m_levels[0].m_interval_near_m} - 0.512) <= 1e-6);
+            PPR_TEST_ASSERT(std::abs(double{reference->m_levels[2].m_interval_near_m} - 4.608) <= 1e-5);
+            PPR_TEST_ASSERT(std::abs(double{reference->m_levels[2].m_interval_far_m} - 16.896) <= 1e-5);
+            PPR_TEST_ASSERT(std::abs(double{reference->m_levels[5].m_interval_far_m} - 1049.088) <= 1e-3);
+        };
+
+        PPR_UNIT_TEST (plan_penumbra_scales_c0_and_invalid_values_fall_back) {
+            const auto base = lighting::planWorldLight({.m_width = 1024u, .m_height = 1024u, .m_cell_metres = 1.0f});
+            PPR_TEST_ASSERT(base.has_value());
+
+            // c0 is proportional to the penumbra width; doubling it doubles
+            // every interval bound in the plan.
+            const auto wide = lighting::planWorldLight(
+                {.m_width = 1024u, .m_height = 1024u, .m_cell_metres = 1.0f, .m_penumbra_width = 1.0f});
+            PPR_TEST_ASSERT(wide.has_value());
+            PPR_TEST_ASSERT(wide->m_penumbra_width == 1.0f);
+            for (u32 index = 0u; index < wide->m_level_count; ++index) {
+                PPR_TEST_ASSERT(
+                    std::abs(
+                        double{wide->m_levels[index].m_interval_far_m} -
+                        2.0 * double{base->m_levels[index].m_interval_far_m}) <= 1e-4);
+            }
+
+            // Zero / non-finite values select the reference defaults instead of
+            // producing a degenerate zero-length cascade.
+            const auto zeroed = lighting::planWorldLight(
+                {.m_width = 1024u,
+                    .m_height = 1024u,
+                    .m_cell_metres = 1.0f,
+                    .m_penumbra_width = 0.0f,
+                    .m_sky_intensity = std::numeric_limits<float>::quiet_NaN()});
+            PPR_TEST_ASSERT(zeroed.has_value());
+            PPR_TEST_ASSERT(zeroed->m_penumbra_width == lighting::kWorldLightDefaultPenumbraWidth);
+            PPR_TEST_ASSERT(zeroed->m_sky_intensity == lighting::kWorldLightDefaultSkyIntensity);
+            PPR_TEST_ASSERT(zeroed->m_levels[0].m_interval_near_m == base->m_levels[0].m_interval_near_m);
         };
 
         PPR_UNIT_TEST (plan_rejects_zero_dimensions_nonfinite_cell_size_and_excess_levels) {
@@ -700,6 +764,16 @@ namespace pP::tests::detail {
         };
         static_assert(sizeof(RadianceHalf) == 8u);
 
+        // Level-0 hit fixtures (probe (3,3) -> wall cell (8,8)) sit 1.414 cells
+        // apart. The reference c0 scales with the world width
+        // (c0_cells = width * penumbra * 1e-3), so a 256-cell test world uses a
+        // wider penumbra to make level 0's interval straddle that wall with
+        // margin under the production position/direction jitter: c0 = 0.768
+        // cells gives level 0 = [0.768, 2.304) cells, so the jittered ray still
+        // starts before the wall and ends past it. The default-formula plan is
+        // covered by the CPU plan tests.
+        inline constexpr float kLevelZeroHitPenumbra = 3.0f;
+
         [[nodiscard]] bool halfIsFinitePositive(const u16 value) noexcept {
             const u32 exponent = (value >> 10) & 0x1fu;
             return (value & 0x8000u) == 0u and exponent != 0x1fu and value != 0u;
@@ -1140,7 +1214,8 @@ namespace pP::tests::detail {
             bool m_grid_ready{};
 
             void initialize(
-                const u32 width, const u32 height, const std::span<const lighting::WorldLightMaterial> materials) {
+                const u32 width, const u32 height, const std::span<const lighting::WorldLightMaterial> materials,
+                const float penumbra_width = lighting::kWorldLightDefaultPenumbraWidth) {
                 PPR_TEST_ASSERT(not m_shaders->initialize());
                 const auto setting = config::getenvLookup("PPR_TEST_GPU_VALIDATION");
                 const bool validation = setting and *setting == "1";
@@ -1157,7 +1232,7 @@ namespace pP::tests::detail {
                 PPR_TEST_ASSERT(not m_fence.initialize(device));
 
                 const auto plan = lighting::planWorldLight(
-                    {.m_width = width, .m_height = height, .m_cell_metres = 0.5f});
+                    {.m_width = width, .m_height = height, .m_cell_metres = 0.5f, .m_penumbra_width = penumbra_width});
                 PPR_TEST_ASSERT(plan.has_value());
                 PPR_TEST_ASSERT(
                     not m_source.initialize(*m_rhi, *m_shaders, *plan, materials, std::filesystem::current_path()));
@@ -1165,10 +1240,12 @@ namespace pP::tests::detail {
                 PPR_TEST_ASSERT(not m_atlas.initialize(*m_rhi, *m_shaders, *plan, std::filesystem::current_path()));
             }
 
-            void initialize(const u32 width, const u32 height) {
+            void initialize(
+                const u32 width, const u32 height,
+                const float penumbra_width = lighting::kWorldLightDefaultPenumbraWidth) {
                 // One opaque emissive material (palette index 0 -> cell id 1).
                 const lighting::WorldLightMaterial materials[] = {{.m_kind = 1u, .m_emission = {1.0f, 1.0f, 1.0f}}};
-                initialize(width, height, materials);
+                initialize(width, height, materials, penumbra_width);
             }
 
             void submit(rhi::ICommandEncoder &encoder) {
@@ -1744,7 +1821,11 @@ namespace pP::tests::detail {
             constexpr u32 width = 256u;
             constexpr u32 height = 256u;
 
-            const auto plan = lighting::planWorldLight({.m_width = width, .m_height = height, .m_cell_metres = 0.5f});
+            const auto plan = lighting::planWorldLight(
+                {.m_width = width,
+                    .m_height = height,
+                    .m_cell_metres = 0.5f,
+                    .m_penumbra_width = kLevelZeroHitPenumbra});
             PPR_TEST_ASSERT(plan.has_value());
             const u32 budget = static_cast<u32>(plan->m_levels[0].m_sample_count);
 
@@ -1758,7 +1839,7 @@ namespace pP::tests::detail {
                 Fixture fixture;
                 const lighting::WorldLightMaterial materials[] = {
                     {.m_kind = 1u, .m_albedo = {wall_albedo, wall_albedo, wall_albedo}}}; // wall (cell id 1)
-                fixture.initialize(width, height, materials);
+                fixture.initialize(width, height, materials, kLevelZeroHitPenumbra);
                 auto &source = fixture.m_source;
                 auto &field = fixture.m_field;
 
@@ -1796,10 +1877,14 @@ namespace pP::tests::detail {
         };
 
         PPR_UNIT_TEST (wall_reflects_lamp_through_atlas) {
-            constexpr u32 width = 64u;
-            constexpr u32 height = 64u;
+            constexpr u32 width = 256u;
+            constexpr u32 height = 256u;
 
-            const auto plan = lighting::planWorldLight({.m_width = width, .m_height = height, .m_cell_metres = 0.5f});
+            const auto plan = lighting::planWorldLight(
+                {.m_width = width,
+                    .m_height = height,
+                    .m_cell_metres = 0.5f,
+                    .m_penumbra_width = kLevelZeroHitPenumbra});
             PPR_TEST_ASSERT(plan.has_value());
             // A budget covering the whole hierarchy traces every level on every
             // update, so the final retention-0 update rewrites the inspected
@@ -1819,7 +1904,7 @@ namespace pP::tests::detail {
                     {.m_kind = 1u, .m_albedo = {wall_albedo, wall_albedo, wall_albedo}}, // wall (cell id 1)
                     {.m_kind = 1u, .m_emission = {1.0f, 1.0f, 1.0f}}, // lamp (cell id 2)
                 };
-                fixture.initialize(width, height, materials);
+                fixture.initialize(width, height, materials, kLevelZeroHitPenumbra);
                 auto &source = fixture.m_source;
                 auto &field = fixture.m_field;
                 auto &atlas = fixture.m_atlas;
@@ -1967,7 +2052,11 @@ namespace pP::tests::detail {
             constexpr u32 width = 256u;
             constexpr u32 height = 256u;
 
-            const auto plan = lighting::planWorldLight({.m_width = width, .m_height = height, .m_cell_metres = 0.5f});
+            const auto plan = lighting::planWorldLight(
+                {.m_width = width,
+                    .m_height = height,
+                    .m_cell_metres = 0.5f,
+                    .m_penumbra_width = kLevelZeroHitPenumbra});
             PPR_TEST_ASSERT(plan.has_value());
             const u32 budget = static_cast<u32>(plan->m_levels[0].m_sample_count);
 
@@ -1981,7 +2070,7 @@ namespace pP::tests::detail {
                 Fixture fixture;
                 const lighting::WorldLightMaterial materials[] = {
                     {.m_kind = 1u, .m_albedo = {1.0f, 1.0f, 1.0f}}}; // wall (cell id 1)
-                fixture.initialize(width, height, materials);
+                fixture.initialize(width, height, materials, kLevelZeroHitPenumbra);
                 auto &source = fixture.m_source;
                 auto &field = fixture.m_field;
 
@@ -2077,11 +2166,15 @@ namespace pP::tests::detail {
             constexpr u32 height = 256u;
 
             Fixture fixture;
-            fixture.initialize(width, height);
+            fixture.initialize(width, height, kLevelZeroHitPenumbra);
             auto &source = fixture.m_source;
             auto &field = fixture.m_field;
 
-            const auto plan = lighting::planWorldLight({.m_width = width, .m_height = height, .m_cell_metres = 0.5f});
+            const auto plan = lighting::planWorldLight(
+                {.m_width = width,
+                    .m_height = height,
+                    .m_cell_metres = 0.5f,
+                    .m_penumbra_width = kLevelZeroHitPenumbra});
             PPR_TEST_ASSERT(plan.has_value());
             const u32 budget = static_cast<u32>(plan->m_levels[0].m_sample_count);
 
@@ -2120,10 +2213,14 @@ namespace pP::tests::detail {
             };
 
             Fixture fixture;
-            fixture.initialize(width, height, materials);
+            fixture.initialize(width, height, materials, kLevelZeroHitPenumbra);
             auto &source = fixture.m_source;
 
-            const auto plan = lighting::planWorldLight({.m_width = width, .m_height = height, .m_cell_metres = 0.5f});
+            const auto plan = lighting::planWorldLight(
+                {.m_width = width,
+                    .m_height = height,
+                    .m_cell_metres = 0.5f,
+                    .m_penumbra_width = kLevelZeroHitPenumbra});
             PPR_TEST_ASSERT(plan.has_value());
             // A full-field budget traces every level on every update. The suffix
             // fold propagates one level per update, so ten updates cover the six
@@ -2257,10 +2354,17 @@ namespace pP::tests::detail {
             }
 
             // 4. A vacuum cell inside the sealed rock shell: no emitter and no sky
-            // line of sight, so it stays black.
+            // line of sight. The reference cascade resolves distance from the
+            // probe outward, and coarse probes 8+ cells apart can interpolate
+            // across a small sealed room, so the cavity stays far darker than
+            // open air rather than bit-exact zero (the measured share is ~17% of
+            // the open sky; the 10-cell solid rock block below stays exactly
+            // zero because every coarse probe around it is itself enclosed).
             const auto sealed = sample(centre(153u, 103u), float2{1.0f, 0.0f});
-            PPR_TEST_ASSERT(sealed.m_composite == std::array<float, 3>{0.0f, 0.0f, 0.0f});
-            PPR_TEST_ASSERT(sealed.m_diffuse == std::array<float, 3>{0.0f, 0.0f, 0.0f});
+            PPR_TEST_ASSERT(finite_nonnegative(sealed.m_composite));
+            for (u32 channel = 0u; channel < 3u; ++channel) {
+                PPR_TEST_ASSERT(sealed.m_composite[channel] < 0.25f * open_sky.m_composite[channel] + 0.01f);
+            }
 
             // 5. A solid wall cell next to the room: the probe skips its own cell and
             // sees the radiance crossing in from the neighbouring air (the lamp).
@@ -4978,7 +5082,8 @@ namespace pP::tests {
 
     const UnitTest world_light_field_contracts = UnitTest::Named("world_light_field") / [](UnitTest::IRun &_) -> void {
         _.recurse({
-            detail::WorldLightFieldTests::plan_1024_and_2048_use_spacing_two_and_equal_level_samples,
+            detail::WorldLightFieldTests::plan_1024_and_2048_use_reference_interval_sequence,
+            detail::WorldLightFieldTests::plan_penumbra_scales_c0_and_invalid_values_fall_back,
             detail::WorldLightFieldTests::plan_rejects_zero_dimensions_nonfinite_cell_size_and_excess_levels,
             detail::WorldLightFieldTests::source_applies_dirty_chunks_and_preserves_other_cells,
             detail::WorldLightFieldTests::source_empty_update_keeps_revision_and_dirty_rect,

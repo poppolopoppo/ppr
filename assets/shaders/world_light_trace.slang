@@ -130,13 +130,16 @@ void traceWorldLightInterval(
     float t = 0.0;
 
     // A probe records the radiance ARRIVING at it, never the cell it sits in.
-    // The finest level starts the ray inside the probe's own cell; treating that
-    // cell as an opaque hit made every solid probe self-occlude, zero its
-    // transmittance and therefore zero the whole cascade composite. Skip the
-    // origin cell so a surface probe sees the light crossing into it from the
-    // neighbouring air, which is what lights the terrain and bleeds around dug
-    // borders.
-    const bool skipOriginCell = nearM <= 0.0 && tEnter <= 0.0;
+    // Treating the probe's own cell as an opaque hit made every solid probe
+    // self-occlude, zero its transmittance and therefore zero the whole cascade
+    // composite. Intervals no longer start at the probe centre (level 0 begins
+    // at c0), so the rule is stated on the cell index rather than the distance:
+    // if the FIRST visited cell is the cell containing the origin, skip it. A
+    // surface probe then sees the light crossing into it from the neighbouring
+    // air, which is what lights the terrain and bleeds around dug borders.
+    const int originCx = int(floor((origin.x - originX) / cellMetres));
+    const int originCy = int(floor((origin.y - originY) / cellMetres));
+    const bool skipOriginCell = cx == originCx && cy == originCy;
     uint maxSteps = uint(width + height) + 4u;
     for (uint i = 0u; i < maxSteps && t < intervalLength && transmittance > 0.0; ++i) {
         float tNext = min(min(tMaxX, tMaxY), intervalLength);
