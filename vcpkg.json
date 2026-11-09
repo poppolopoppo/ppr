@@ -2,7 +2,7 @@
   "name": "ppr",
   "version-string": "0.1.0",
   "description": "C++ Video Game with Slang, GLFW, and C++20 Modules",
-  "builtin-baseline": "544a4c5c297e60e4ac4a5a1810df66748d908869",
+  "builtin-baseline": "9eec002df1cd109f8f104cd966a763daf9751489",
   "dependencies": [
     "fmt",
     "zlib",
@@ -14,7 +14,10 @@
     "glfw3",
     "box2d",
     "vulkan-headers",
-    { "name": "winpixevent", "platform": "windows" }
+    {
+      "name": "winpixevent",
+      "platform": "windows"
+    }
   ],
   "features": {
     "imgui-freetype": {
@@ -31,7 +34,3 @@
     }
   ]
 }
-
-
-
-
