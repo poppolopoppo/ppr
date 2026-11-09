@@ -141,8 +141,8 @@ The visual mode is correctly sized; two pieces are not. Removal is approved by t
 - Test: `lib/engine/tests/app/App.WorldLightField.Tests.cpp`
 
 **Interfaces:**
-- Consumes: `WorldLightRadianceAtlas::cells()`.
-- Produces: `float3 worldLightAtlasRadiance(float2 world)` in `world_light_sample.slang` — one `StructuredBuffer<u32>` load plus RGB9E5 unpack.
+- Consumes: `WorldLightRadianceAtlas::cells()`, on three preconditions: the atlas `encode()` is recorded earlier in the same command buffer; the buffer is transitioned with `encoder.setBufferState(atlas.cells(), rhi::ResourceState::ShaderResource)`; and the RGB9E5 decode comes from the shared shader include the atlas also uses, never a local re-declaration.
+- Produces: `float3 worldLightAtlasRadiance(float2 world)` in `world_light_sample.slang` — one `StructuredBuffer<u32>` load plus the shared decode.
 
 - [ ] **Step 1: Write the failing test** `field_bounce_reads_atlas_not_previous_field`: two runs with identical sources but different previous-field contents must produce the same bounce term when the atlas is fixed; and a reflective-wall case must remain non-zero (reuse `field_feedback_bounces_off_reflective_wall`).
 - [ ] **Step 2: Run it to verify it fails.**
