@@ -70,6 +70,10 @@ export namespace pP::lighting {
         // only the coarsest cascade level.
         [[nodiscard]] std::array<float, 3> sky() const noexcept;
 
+        // The committed sky solar hour driving the angular sky phase. A negative
+        // hour disables the sky (a zero terminal contribution).
+        [[nodiscard]] i32 skyHour() const noexcept;
+
         [[nodiscard]] std::error_code shutdown();
 
     private:

@@ -42,9 +42,10 @@ export namespace pP::lighting {
         float m_frame_delta{};
         std::array<WorldLightLevelGpu, kWorldLightMaxLevels> m_levels{};
 
-        // Terminal sky radiance (linear RGB), refreshed from the source each
-        // update. Zero (or a negative source hour) means no terminal contribution.
-        float m_sky_r{}, m_sky_g{}, m_sky_b{};
+        // Angular sky at the coarsest level: the source sky hour (negative
+        // disables the sky) and the reference sky-intensity scale.
+        float m_sky_hour{};
+        float m_sky_intensity{};
     };
 
     // ------------------------------------------------------------------

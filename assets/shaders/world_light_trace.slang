@@ -6,10 +6,12 @@
 // the dense source (cell ids + material palette + overlay) with a cell-by-cell
 // DDA, folds in its parent level's already-merged suffix (L = L_near + T_near *
 // L_far), accumulates the sample into the running mean, and writes the current
-// radiance buffer. Level 0 therefore holds the fully merged field. An opaque hit
-// adds one bounce of the per-cell radiance atlas weighted by the hit material's
-// albedo, so the field accumulates primary transport plus a single
-// material-weighted bounce (no recursive ray tree).
+// radiance buffer. Level 0 therefore holds the fully merged field. The coarsest
+// level has no parent: it merges each bin with the reference angular sky
+// integral over the four next-level directions it covers. An opaque hit adds one
+// bounce of the per-cell radiance atlas weighted by the hit material's albedo, so
+// the field accumulates primary transport plus a single material-weighted bounce
+// (no recursive ray tree).
 #include "world_light_field.slang"
 #include "world_light_sample.slang"
 
@@ -203,6 +205,64 @@ void traceWorldLightInterval(
 }
 
 // ------------------------------------------------------------------
+// reference angular sky integral
+// ------------------------------------------------------------------
+
+// Analytic sky radiance over an angular interval, from "Analytic Direct
+// Illumination" (Mathis, shadertoy NttSW7), exactly the reference constants:
+// a blue sky dome plus a sharp sun lobe.
+static const float3 kWorldLightSkyColor = float3(0.2, 0.5, 1.0);
+static const float3 kWorldLightSunColor = float3(1.0, 0.5, 0.1) * 20.0;
+static const float kWorldLightSunAngle = 5.0;
+static const float kWorldLightSunSharpness = 64.0;
+
+[ForceInline]
+float3 radianceIntegrateSky_(float2 angle) {
+    float a1 = angle.y;
+    float a0 = angle.x;
+    float sunSqrt = sqrt(kWorldLightSunSharpness);
+    float3 result = kWorldLightSkyColor * (a1 - a0 - 0.5 * (cos(a1) - cos(a0)));
+    result += kWorldLightSunColor *
+              (atan(sunSqrt * (kWorldLightSunAngle - a0)) - atan(sunSqrt * (kWorldLightSunAngle - a1))) / sunSqrt;
+    return result / 6.0;
+}
+
+// Integrates over [angle.x, angle.y); an interval crossing 2*pi is split at the
+// boundary (the reference's wrap branch).
+[ForceInline]
+float3 radianceIntegrateSky(float2 angle) {
+    if (angle.y < kTau) {
+        return radianceIntegrateSky_(angle);
+    }
+    return radianceIntegrateSky_(float2(angle.x, kTau)) + radianceIntegrateSky_(float2(0.0, angle.y - kTau));
+}
+
+// One coarse-bin sub-interval of the sky, normalized by its angular width so a
+// whole-circle average of the bins is skyIntensity * the mean sky radiance. The
+// phase comes from the solar hour; a negative hour disables the sky entirely.
+[ForceInline]
+float3 angularSkyRadiance(uint parentNumDirs, uint parentPhi, float skyHour, float skyIntensity) {
+    if (skyHour < 0.0) {
+        return float3(0.0, 0.0, 0.0);
+    }
+
+    float phase = fract(skyHour / 24.0);
+    float lo = 1.0 - (float(parentPhi) + 0.5) / float(parentNumDirs);
+    float hi = 1.0 - (float(parentPhi) + 1.5) / float(parentNumDirs);
+
+    lo = fract(lo + phase) * kTau;
+    hi = fract(hi + phase) * kTau;
+
+    float a0 = min(lo, hi);
+    float a1 = max(lo, hi);
+    // The reference divides by the bin width directly. Guard the measure-zero
+    // wrap case where both endpoints land on the same value instead of emitting
+    // an infinity into the cascade.
+    float norm = kTau * skyIntensity / max(a1 - a0, 1.0e-6);
+    return radianceIntegrateSky(float2(a0, a1)) * norm;
+}
+
+// ------------------------------------------------------------------
 // accumulation
 // ------------------------------------------------------------------
 
@@ -210,7 +270,10 @@ void traceWorldLightInterval(
 // mean, writing the current radiance buffer and the sample count. The stored
 // value is this level's own interval folded with its parent's stored suffix
 // (worldLightParentSampleFrom), so every level holds the composite from its own
-// interval to the world reach and level 0 holds the fully merged field.
+// interval to the world reach and level 0 holds the fully merged field. The
+// coarsest level has no parent: it merges each of its direction bins with the
+// reference's angular sky integral over the four parent bins that the next
+// (virtual) cascade would cover.
 [ForceInline]
 void accumulateSample(uint level, uint probe, uint direction) {
     WorldLightLevelGpu L = g_world_light_field.levels[level];
@@ -221,11 +284,7 @@ void accumulateSample(uint level, uint probe, uint direction) {
     uint probeLinear = L.probeOffset + probe;
     uint frame = g_world_light_field.frame;
 
-    float jitterAngle = (hash01(probeLinear, frame) - 0.5) * kSampleJitter;
     float2 jitterPos = (float2(hash01(probeLinear + 1u, frame), hash01(probeLinear + 2u, frame)) - 0.5) * kSampleJitter;
-
-    float angle = (float(direction) + 0.5 + jitterAngle) * kTau / float(L.directions);
-    float2 dir = float2(cos(angle), sin(angle));
 
     float spacing = float(L.spacing);
     float2 cellCenter = float2(float(px) + 0.5, float(py) + 0.5) * spacing + jitterPos * spacing;
@@ -234,14 +293,37 @@ void accumulateSample(uint level, uint probe, uint direction) {
 
     float3 radiance;
     float transmittance;
-    traceWorldLightInterval(origin, dir, L.nearM, L.farM, radiance, transmittance);
 
-    // Terminal sky: only the coarsest level's interval reaches the world reach,
-    // so only its rays can escape the world. Add the sky radiance weighted by the
-    // remaining transmittance there; lower levels stop at their own interval bound
-    // and must not duplicate the sky. A black sky (skyR=skyG=skyB=0) adds nothing.
-    if (level + 1u == g_world_light_field.levelCount && transmittance > 0.0) {
-        radiance += transmittance * float3(g_world_light_field.skyR, g_world_light_field.skyG, g_world_light_field.skyB);
+    if (level + 1u == g_world_light_field.levelCount) {
+        // Reference radianceCascadeComputeLast: average the four next-level
+        // directions that this coarse bin covers, each traced over this level's
+        // interval and merged with the sky over that sub-bin's angular span.
+        const uint ratio = 4u;
+        const uint parentNumDirs = L.directions * ratio;
+        float3 radianceSum = float3(0.0, 0.0, 0.0);
+        float transmittanceSum = 0.0;
+        for (uint q = 0u; q < ratio; ++q) {
+            uint parentPhi = direction * ratio + q;
+            float subAngle = (float(parentPhi) + 0.5) * kTau / float(parentNumDirs);
+            float2 subDir = float2(cos(subAngle), sin(subAngle));
+
+            float3 nearRadiance;
+            float nearTransmittance;
+            traceWorldLightInterval(origin, subDir, L.nearM, L.farM, nearRadiance, nearTransmittance);
+
+            float3 sky = angularSkyRadiance(
+                parentNumDirs, parentPhi, g_world_light_field.skyHour, g_world_light_field.skyIntensity);
+            radianceSum += nearRadiance + nearTransmittance * sky;
+            transmittanceSum += nearTransmittance;
+        }
+        radiance = radianceSum / float(ratio);
+        transmittance = transmittanceSum / float(ratio);
+    } else {
+        float jitterAngle = (hash01(probeLinear, frame) - 0.5) * kSampleJitter;
+        float angle = (float(direction) + 0.5 + jitterAngle) * kTau / float(L.directions);
+        float2 dir = float2(cos(angle), sin(angle));
+
+        traceWorldLightInterval(origin, dir, L.nearM, L.farM, radiance, transmittance);
     }
 
     // Fold the parent's already-merged suffix into this interval so the stored

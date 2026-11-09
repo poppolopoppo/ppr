@@ -1812,6 +1812,85 @@ namespace pP::tests::detail {
             fixture.shutdown();
         };
 
+        PPR_UNIT_TEST (field_angular_sky_varies_by_bin_and_honours_hour) {
+            constexpr u32 width = 256u;
+            constexpr u32 height = 256u;
+
+            Fixture fixture;
+            fixture.initialize(width, height);
+            auto &source = fixture.m_source;
+            auto &field = fixture.m_field;
+
+            const auto plan = lighting::planWorldLight({.m_width = width, .m_height = height, .m_cell_metres = 0.5f});
+            PPR_TEST_ASSERT(plan.has_value());
+            const u32 budget = static_cast<u32>(plan->m_radiance_samples);
+            const lighting::WorldLightLevel &coarsest = plan->m_levels[plan->m_level_count - 1u];
+
+            // Vacuum world, sky on at noon. Retention 0 makes every stored value
+            // the fresh trace, so after a few full-field updates the coarsest
+            // samples are exactly the per-bin angular sky integral.
+            lighting::WorldLightSourceUpdate sky_update{};
+            sky_update.m_sky = {1.0f, 1.0f, 1.0f};
+            sky_update.m_sky_hour = 12;
+            sky_update.m_revision = 1u;
+            PPR_TEST_ASSERT(not source.applyUpdate(sky_update));
+            fixture.encodeSource();
+            for (u32 index = 0u; index < 8u; ++index) {
+                fixture.updateField(budget, 1u, 0.0f);
+            }
+
+            const std::vector<u16> radiance = fixture.read<u16>(field.view().m_radiance);
+            const u64 base = coarsest.m_sample_offset;
+            std::vector<float> luminance;
+            luminance.reserve(coarsest.m_directions);
+            for (u32 direction = 0u; direction < coarsest.m_directions; ++direction) {
+                const u64 word = (base + direction) * 4u;
+                float r = 0.0f;
+                float g = 0.0f;
+                float b = 0.0f;
+                for (u32 channel = 0u; channel < 3u; ++channel) {
+                    PPR_TEST_ASSERT(halfIsFinitePositive(radiance[word + channel]));
+                    const float value = halfToFloat(radiance[word + channel]);
+                    if (channel == 0u) {
+                        r = value;
+                    } else if (channel == 1u) {
+                        g = value;
+                    } else {
+                        b = value;
+                    }
+                }
+                luminance.push_back(0.2126f * r + 0.7152f * g + 0.0722f * b);
+            }
+
+            // Different bins differ: the analytic integral is a blue dome plus a
+            // sharp sun lobe, so the brightest bin is many times the median.
+            std::vector<float> sorted = luminance;
+            std::nth_element(sorted.begin(), sorted.begin() + sorted.size() / 2u, sorted.end());
+            const float median = sorted[sorted.size() / 2u];
+            const float peak = *std::max_element(luminance.begin(), luminance.end());
+            PPR_TEST_ASSERT(median > 0.0f);
+            PPR_TEST_ASSERT(peak > 4.0f * median);
+
+            // The sky is gated by the solar hour: a negative hour stores exactly
+            // zero at the coarsest level (the finer levels keep their history).
+            lighting::WorldLightSourceUpdate night{};
+            night.m_sky_hour = -1;
+            night.m_revision = 2u;
+            PPR_TEST_ASSERT(not source.applyUpdate(night));
+            fixture.encodeSource();
+            fixture.updateField(budget, 1u, 0.0f);
+
+            const std::vector<u16> dark = fixture.read<u16>(field.view().m_radiance);
+            for (u32 direction = 0u; direction < coarsest.m_directions; ++direction) {
+                const u64 word = (base + direction) * 4u;
+                PPR_TEST_ASSERT(dark[word + 0u] == 0u);
+                PPR_TEST_ASSERT(dark[word + 1u] == 0u);
+                PPR_TEST_ASSERT(dark[word + 2u] == 0u);
+            }
+
+            fixture.shutdown();
+        };
+
         // Wiring test: this seeds the atlas buffer directly instead of running
         // an atlas encode, so it proves only that the trace's opaque-hit bounce
         // is `albedo * atlas` and that a zero-albedo wall contributes nothing.
@@ -2339,18 +2418,18 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(next_to_lamp.m_composite[1] > 0.5f);
             PPR_TEST_ASSERT(next_to_lamp.m_composite[2] > 0.5f);
 
-            // 3. Air in the open, far from the lamp, open to the sky: the terminal
-            // sky path lights it, and a flat normal's diffuse average equals the
-            // composite because the sky is isotropic.
+            // 3. Air in the open, far from the lamp, open to the sky: the angular
+            // sky path lights it. The sky is directional (a blue dome plus a sun
+            // lobe), so the flat-normal diffuse average is not equal to one
+            // arbitrary composite direction; both must be finite and positive.
             const auto open_sky = sample(centre(200u, 200u), float2{1.0f, 0.0f});
             PPR_TEST_ASSERT(finite_nonnegative(open_sky.m_composite));
             PPR_TEST_ASSERT(open_sky.m_composite[0] > 0.05f);
             PPR_TEST_ASSERT(open_sky.m_composite[1] > 0.05f);
             PPR_TEST_ASSERT(open_sky.m_composite[2] > 0.05f);
-            for (u32 channel = 0u; channel < 3u; ++channel) {
-                PPR_TEST_ASSERT(
-                    std::fabs(open_sky.m_diffuse[channel] - open_sky.m_composite[channel]) <=
-                    0.25f * open_sky.m_composite[channel] + 0.02f);
+            PPR_TEST_ASSERT(finite_nonnegative(open_sky.m_diffuse));
+            for (const float channel: open_sky.m_diffuse) {
+                PPR_TEST_ASSERT(channel > 0.01f);
             }
 
             // 4. A vacuum cell inside the sealed rock shell: no emitter and no sky
@@ -5104,6 +5183,7 @@ namespace pP::tests {
             detail::WorldLightFieldGpu::field_dirty_update_reprocesses_in_same_frame,
             detail::WorldLightFieldGpu::field_dirty_rect_is_per_update_a_keeps_b_resets,
             detail::WorldLightFieldGpu::field_sky_only_edit_resets_only_coarsest,
+            detail::WorldLightFieldGpu::field_angular_sky_varies_by_bin_and_honours_hour,
             detail::WorldLightFieldGpu::field_reset_bounds_rect_tail,
             detail::WorldLightFieldGpu::field_update_respects_budget_boundary,
             detail::WorldLightFieldGpu::field_dense_dda_hits_diagonal_emitter,

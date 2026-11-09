@@ -32,13 +32,15 @@ namespace pP::lighting {
         static_assert(PPR_OFFSETOF(WorldLightLevelGpu, m_sample_offset) == 12u);
         static_assert(PPR_OFFSETOF(WorldLightLevelGpu, m_near_m) == 24u);
 
-        static_assert(sizeof(WorldLightFieldConstants) == 316u and alignof(WorldLightFieldConstants) == 4u);
+        static_assert(sizeof(WorldLightFieldConstants) == 312u and alignof(WorldLightFieldConstants) == 4u);
         static_assert(PPR_OFFSETOF(WorldLightFieldConstants, m_level_count) == 16u);
         static_assert(PPR_OFFSETOF(WorldLightFieldConstants, m_budget) == 32u);
         static_assert(PPR_OFFSETOF(WorldLightFieldConstants, m_accumulation_samples) == 36u);
         static_assert(PPR_OFFSETOF(WorldLightFieldConstants, m_history_retention) == 40u);
         static_assert(PPR_OFFSETOF(WorldLightFieldConstants, m_frame_delta) == 44u);
         static_assert(PPR_OFFSETOF(WorldLightFieldConstants, m_levels) == 48u);
+        static_assert(PPR_OFFSETOF(WorldLightFieldConstants, m_sky_hour) == 304u);
+        static_assert(PPR_OFFSETOF(WorldLightFieldConstants, m_sky_intensity) == 308u);
 
         // Per-dispatch CPU mirrors of the Slang constant buffers.
         struct WorldLightFieldDispatch {
@@ -86,7 +88,8 @@ namespace pP::lighting {
         WorldLightPlan m_plan{};
         u64 m_total_samples{};
         u64 m_last_revision{};
-        std::array<float, 3> m_last_sky{};
+        i32 m_last_sky_hour{};
+        float m_last_sky_intensity{};
         // One round-robin cursor per cascade level. A single flat cursor spent a
         // whole frame's budget inside one level, so frames alternated between
         // cheap fine-level and expensive coarse-level work; per-level cursors
@@ -144,6 +147,10 @@ namespace pP::lighting {
         state.m_total_samples = plan.m_radiance_samples;
         state.m_current = 0u;
         state.m_frame = 0u;
+        // The source starts with the sky disabled (-1 hour); seed the change
+        // detector with that state so the first update is not a spurious reset.
+        state.m_last_sky_hour = -1;
+        state.m_last_sky_intensity = plan.m_sky_intensity;
 
         // Fill the field constants and per-level GPU mirrors.
         state.m_constants.m_origin_x = 0.0f;
@@ -311,10 +318,8 @@ namespace pP::lighting {
         state.m_constants.m_history_retention = std::clamp(history_retention, 0.0f, 1.0f);
         state.m_constants.m_frame_delta = dt;
 
-        const std::array<float, 3> sky = source.sky();
-        state.m_constants.m_sky_r = sky[0];
-        state.m_constants.m_sky_g = sky[1];
-        state.m_constants.m_sky_b = sky[2];
+        state.m_constants.m_sky_hour = static_cast<float>(source.skyHour());
+        state.m_constants.m_sky_intensity = state.m_plan.m_sky_intensity;
 
         const u32 read_index = state.m_current;
         const u32 write_index = 1u - state.m_current;
@@ -515,7 +520,9 @@ namespace pP::lighting {
             // ray's terminal contribution changes there, and the lower levels must
             // keep their history. Reset and reprocess the full coarsest probe grid,
             // bounded by the same remaining budget.
-            if (sky != state.m_last_sky) {
+            const i32 sky_hour = source.skyHour();
+            const float sky_intensity = state.m_plan.m_sky_intensity;
+            if (sky_hour != state.m_last_sky_hour or sky_intensity != state.m_last_sky_intensity) {
                 const WorldLightLevel &coarsest = state.m_plan.m_levels[state.m_plan.m_level_count - 1u];
                 PPR_RETURN_ERROR_ON_FAIL(
                     WorldLightField,
@@ -536,7 +543,8 @@ namespace pP::lighting {
             }
 
             state.m_last_revision = source.revision();
-            state.m_last_sky = sky;
+            state.m_last_sky_hour = sky_hour;
+            state.m_last_sky_intensity = sky_intensity;
         }
 
         // Round-robin refresh with the remaining budget, split evenly across the

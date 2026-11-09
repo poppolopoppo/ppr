@@ -40,8 +40,9 @@ struct WorldLightFieldConstants {
     float frameDelta;
     WorldLightLevelGpu levels[kWorldLightMaxLevels];
 
-    // Terminal sky radiance (linear RGB). Zero means no terminal contribution.
-    float skyR, skyG, skyB;
+    // Angular sky at the coarsest level: solar hour (negative disables it) and
+    // the reference sky-intensity scale.
+    float skyHour, skyIntensity;
 };
 
 // Cursor update dispatch: which level, the within-level sample index of thread

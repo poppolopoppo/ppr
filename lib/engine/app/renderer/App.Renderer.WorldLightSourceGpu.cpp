@@ -649,6 +649,10 @@ namespace pP::lighting {
         return m_state->m_sky;
     }
 
+    i32 WorldLightSourceGpu::skyHour() const noexcept {
+        return m_state->m_sky_hour;
+    }
+
     std::error_code WorldLightSourceGpu::shutdown() {
         State &state = *m_state;
         if (state.m_mapped and state.m_device != nullptr) {
