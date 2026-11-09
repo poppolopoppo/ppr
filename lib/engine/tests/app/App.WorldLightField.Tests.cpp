@@ -905,6 +905,18 @@ namespace pP::tests::detail {
             return result;
         }
 
+        // Independent RGB9E5 decoder for the atlas readback pins. The encoding
+        // is 9-bit mantissas with a shared 5-bit exponent biased by 15
+        // (value = mantissa * 2^(exponent - 24)); reimplemented here so a drift
+        // in the shader's packing fails the test instead of agreeing with it.
+        float3 unpackRadianceRGB9E5_(const u32 packed) {
+            const u32 exponent = (packed >> 27u) & 0x1fu;
+            const float scale = std::ldexp(1.0f, static_cast<int>(exponent) - 24);
+            return float3{
+                float(packed & 0x1ffu) * scale, float((packed >> 9u) & 0x1ffu) * scale,
+                float((packed >> 18u) & 0x1ffu) * scale};
+        }
+
         struct Fixture {
             safe_ptr<IShaderService> m_shaders{IShaderService::get()};
             safe_ptr<IRhiService> m_rhi{IRhiService::get()};
@@ -912,6 +924,7 @@ namespace pP::tests::detail {
             FrameFence m_fence;
             lighting::WorldLightSourceGpu m_source;
             lighting::WorldLightField m_field;
+            lighting::WorldLightRadianceAtlas m_atlas;
             GridPass m_grid{};
             bool m_grid_ready{};
 
@@ -938,6 +951,7 @@ namespace pP::tests::detail {
                 PPR_TEST_ASSERT(
                     not m_source.initialize(*m_rhi, *m_shaders, *plan, materials, std::filesystem::current_path()));
                 PPR_TEST_ASSERT(not m_field.initialize(*m_rhi, *m_shaders, *plan, std::filesystem::current_path()));
+                PPR_TEST_ASSERT(not m_atlas.initialize(*m_rhi, *m_shaders, *plan, std::filesystem::current_path()));
             }
 
             void initialize(const u32 width, const u32 height) {
@@ -1042,6 +1056,13 @@ namespace pP::tests::detail {
                 submit(*encoder);
             }
 
+            void encodeAtlas() {
+                rhi::ComPtr<rhi::ICommandEncoder> encoder;
+                PPR_TEST_ASSERT(not make_error_code(m_queue->createCommandEncoder(encoder.writeRef())));
+                PPR_TEST_ASSERT(not m_atlas.encode(*encoder, m_source));
+                submit(*encoder);
+            }
+
             void updateField(
                 const u32 budget, const u32 accumulation_samples = 8u, const float history_retention = 0.9f) {
                 rhi::ComPtr<rhi::ICommandEncoder> encoder;
@@ -1075,6 +1096,7 @@ namespace pP::tests::detail {
                 if (m_queue and make_error_code(m_queue->waitOnHost()))
                     hal::fatalExit("world-light-field-test-quiescence-unknown");
 
+                PPR_TEST_ASSERT(not m_atlas.shutdown());
                 PPR_TEST_ASSERT(not m_field.shutdown());
                 PPR_TEST_ASSERT(not m_source.shutdown());
                 PPR_TEST_ASSERT(not m_fence.shutdown());
@@ -1082,6 +1104,74 @@ namespace pP::tests::detail {
                 PPR_TEST_ASSERT(not m_rhi->shutdown());
                 PPR_TEST_ASSERT(not m_shaders->shutdown());
             }
+        };
+
+        // ------------------------------------------------------------------
+        // per-cell radiance atlas
+        // ------------------------------------------------------------------
+
+        PPR_UNIT_TEST (atlas_seeds_emissive_cells_and_retains_history) {
+            constexpr u32 width = 64u;
+            constexpr u32 height = 64u;
+
+            Fixture fixture;
+            fixture.initialize(width, height);
+            auto &source = fixture.m_source;
+            auto &atlas = fixture.m_atlas;
+
+            // One opaque emissive cell at (0,0); every other cell is vacuum.
+            std::vector<u16> chunk(128u * 128u, 0u);
+            chunk[0] = 1u;
+            const lighting::WorldLightChunkUpdate update{.m_chunk_id = 0u, .m_cell_ids = chunk};
+            PPR_TEST_ASSERT(not source.applyUpdate({.m_chunks = {&update, 1u}, .m_revision = 1u}));
+            fixture.encodeSource();
+
+            // Half of the previous value survives each 60 Hz encode, so the first
+            // pass writes 0.5 * emission and the second 0.75 * emission rather
+            // than snapping straight to the new sample.
+            atlas.setTemporalRetention(0.5f);
+            fixture.encodeAtlas();
+            const auto first = fixture.read<u32>(atlas.cells());
+            PPR_TEST_ASSERT(first.size() == u64{width} * height);
+
+            const float3 firstValue = unpackRadianceRGB9E5_(first[0]);
+            PPR_TEST_ASSERT(first[0] != 0u);
+            PPR_TEST_ASSERT(firstValue.x > 0.0f and firstValue.x < 1.0f);
+            PPR_TEST_ASSERT(std::abs(firstValue.x - 0.5f) < 0.01f);
+            PPR_TEST_ASSERT(std::abs(firstValue.y - 0.5f) < 0.01f);
+            PPR_TEST_ASSERT(std::abs(firstValue.z - 0.5f) < 0.01f);
+
+            // Neighbouring air stays exactly zero on the seeded frame.
+            PPR_TEST_ASSERT(first[1] == 0u);
+            PPR_TEST_ASSERT(first[u64{width}] == 0u);
+
+            fixture.encodeAtlas();
+            const auto second = fixture.read<u32>(atlas.cells());
+            const float3 secondValue = unpackRadianceRGB9E5_(second[0]);
+            PPR_TEST_ASSERT(secondValue.x > firstValue.x);
+            PPR_TEST_ASSERT(secondValue.x < 1.0f);
+            PPR_TEST_ASSERT(std::abs(secondValue.x - 0.75f) < 0.01f);
+
+            fixture.shutdown();
+        };
+
+        PPR_UNIT_TEST (atlas_vacuum_source_is_all_zero) {
+            constexpr u32 width = 64u;
+            constexpr u32 height = 64u;
+
+            // A source with no committed content leaves the dense ids and
+            // overlay zeroed, so the atlas must be exactly zero everywhere.
+            Fixture fixture;
+            fixture.initialize(width, height);
+            fixture.m_atlas.setTemporalRetention(0.5f);
+            fixture.encodeAtlas();
+
+            const auto cells = fixture.read<u32>(fixture.m_atlas.cells());
+            PPR_TEST_ASSERT(cells.size() == u64{width} * height);
+            PPR_TEST_ASSERT(
+                std::all_of(cells.begin(), cells.end(), [](const u32 word) noexcept { return word == 0u; }));
+
+            fixture.shutdown();
         };
 
         PPR_UNIT_TEST (field_single_emitter_converges) {
@@ -3626,6 +3716,8 @@ namespace pP::tests {
             detail::WorldLightFieldGpu::field_feedback_bounces_off_reflective_wall,
             detail::WorldLightFieldGpu::field_is_camera_independent,
             detail::WorldLightFieldGpu::field_routing_applies_dirty_chunk_and_binds_view,
+            detail::WorldLightFieldGpu::atlas_seeds_emissive_cells_and_retains_history,
+            detail::WorldLightFieldGpu::atlas_vacuum_source_is_all_zero,
             detail::WorldLightFieldGpu::composite_matches_cpu_reference,
             detail::WorldLightFieldGpu::diffuse_plus_z_isotropic_and_perturbed_finite,
             detail::WorldLightFieldGpu::specular_vertical_reflection_and_roughness_finite,
