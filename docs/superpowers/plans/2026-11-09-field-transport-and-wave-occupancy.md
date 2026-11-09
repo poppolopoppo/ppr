@@ -172,6 +172,31 @@ The visual mode is correctly sized; two pieces are not. Removal is approved by t
 
 ---
 
+### Task 3b: Atlas input — per-cell incident radiance from the merged field
+
+The atlas currently stores `emission + albedo * previous_atlas`, a self-referential quantity: it double-counts emission (the trace also adds emission inline), its fixed point diverges as albedo approaches 1, and it is exactly zero for every non-emissive cell, so no light is ever carried laterally and Task 6's legibility term would be dead.
+
+**Files:**
+- Modify: `assets/shaders/world_light_radiance_atlas.slang`
+- Modify: `lib/engine/app/renderer/App.Renderer.WorldLightRadianceAtlas.cpp` (bind the merged previous field and field constants)
+- Modify: `lib/engine/tests/app/App.WorldLightField.Tests.cpp`
+- Test: same
+
+**Interfaces:**
+- Produces: `atlas[cell] = pack(lerp(L_i(cellCentre), previous, retentionWeight))` where `L_i = worldLightDiffuseFrom(mergedPrevField, cellCentre, +Z)`; the vacuum fast path is preserved. **The atlas stores incident radiance only — never emission.** Both consumers are already written for this: the trace adds `emission + albedo * atlas` and Task 6 adds `kAtlasAmbient * albedo * atlas`.
+- Consumes: the merged field produced by Task 4; `g_world_light_radiance_prev` must hold a complete merged field.
+
+**Gate:** Task 4 landed. Gathering the pre-merge six-level field per cell is ~192 loads x ~1M cells (~20 ms) and would destroy the Task 3 win; the merged field reduces it to a handful of loads per cell.
+
+- [ ] **Step 1: Make the bounce test honest again.** Demote the directly-seeded `field_feedback_bounces_off_reflective_wall` to a wiring test named `atlas_seed_drives_trace_bounce` with a comment saying it seeds the atlas, and add an end-to-end `wall_reflects_lamp_through_atlas` that drives a real atlas encode from a lamp.
+- [ ] **Step 2: Add the dug-border contract to the air-probe test.** A cell just outside a one-cell opening in a walled room has `diffuse > 0` and finite; deep interior rock and a sealed-cavity centre stay exactly zero; and a cell with `E > 0, rho > 0` satisfies `composite ≈ E + rho * L_i` where `L_i` is read back from `atlas.cells()` directly (RGB9E5 tolerance).
+- [ ] **Step 3: Run the three tests red.**
+- [ ] **Step 4: Implement the producer.** Bind the merged previous field and constants, compute `L_i` at the cell centre, store incident only, keep the vacuum fast path, delete the emission term.
+- [ ] **Step 5: Run the tests green; measure** the atlas pass and `FieldUpdate`. The atlas pass must stay well under the field update.
+- [ ] **Step 6: Commit** `lighting: feed the atlas from the merged field`.
+
+---
+
 ### Task 5: Circular-harmonics fine level (conditional)
 
 **Files:**
@@ -200,8 +225,10 @@ The visual mode is correctly sized; two pieces are not. Removal is approved by t
 - Test: config default + a GPU shading test if the harness supports it
 
 **Interfaces:**
-- Consumes: `worldLightAtlasRadiance`.
+- Consumes: `worldLightAtlasRadiance` (incident radiance, per Task 3b).
 - Produces: `+ kAtlasAmbient · albedo · atlasRadiance` in the response, with the existing self-emission added exactly once.
+
+**Gate:** Task 3b landed. Before it, the atlas carries no incident light and this term is dead.
 
 - [ ] **Step 1: Write the failing test** `world_light_atlas_ambient_defaults_to_visible_borders` (config default) and, where the harness allows, a shading assertion that a cell adjacent to lit air is brighter than a deep interior cell.
 - [ ] **Step 2: Run it to verify it fails.**
