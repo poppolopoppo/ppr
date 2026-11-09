@@ -27,6 +27,57 @@ struct WorldLightMaterial {
     float albedo[3];
 };
 
+// ------------------------------------------------------------------
+// packed radiance codec (RGB9E5)
+// ------------------------------------------------------------------
+
+// One packed u32 in E5B9G9R9_UFLOAT: 9-bit mantissas (bits 0-8 R, 9-17 G,
+// 18-26 B) plus a shared 5-bit exponent biased by 15 (bits 27-31), so
+// value = mantissa * 2^(exponent - 24). Shared by the atlas writer and every
+// reader of the packed radiance so the format cannot drift between them.
+static const float kRadianceRGB9E5Max = 65408.0; // (2^16 - 2^7)
+
+// NaN (it fails every comparison), infinities and negatives map to zero; finite
+// values above the format's largest representable value clamp to it. Finite
+// in-range input is returned unchanged.
+[ForceInline]
+float sanitizeRadianceComponent(float value) {
+    if (!(value > 0.0) || !(value <= 3.402823466e38)) { // FLT_MAX excludes +inf only
+        return 0.0;
+    }
+    return min(value, kRadianceRGB9E5Max);
+}
+
+[ForceInline]
+uint packRadianceRGB9E5(float3 radiance) {
+    float3 value = float3(
+        sanitizeRadianceComponent(radiance.x),
+        sanitizeRadianceComponent(radiance.y),
+        sanitizeRadianceComponent(radiance.z));
+    float peak = max(value.x, max(value.y, value.z));
+    if (peak <= 0.0) {
+        return 0u;
+    }
+
+    int exponent = min(max(int(floor(log2(peak))) + 16, 1), 31); // floor(log2) + 1 + bias 15
+    float scale = exp2(float(24 - exponent));
+
+    uint r = uint(clamp(floor(value.x * scale + 0.5), 0.0, 511.0));
+    uint g = uint(clamp(floor(value.y * scale + 0.5), 0.0, 511.0));
+    uint b = uint(clamp(floor(value.z * scale + 0.5), 0.0, 511.0));
+    if ((r | g | b) == 0u) {
+        return 0u;
+    }
+    return (uint(exponent) << 27u) | (b << 18u) | (g << 9u) | r;
+}
+
+[ForceInline]
+float3 unpackRadianceRGB9E5(uint packed) {
+    uint exponent = (packed >> 27u) & 0x1fu;
+    float scale = exp2(float(exponent) - 24.0);
+    return float3(float(packed & 0x1ffu), float((packed >> 9u) & 0x1ffu), float((packed >> 18u) & 0x1ffu)) * scale;
+}
+
 // Per-chunk upload dispatch: the chunk coordinates this upload writes into the
 // dense ids buffer, and the staging-slice base index this upload reads from.
 struct WorldLightChunkUpload {

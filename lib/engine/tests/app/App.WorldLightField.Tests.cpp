@@ -1114,8 +1114,12 @@ namespace pP::tests::detail {
             constexpr u32 width = 64u;
             constexpr u32 height = 64u;
 
+            // A deliberately non-uniform emitter so an R/B mantissa swap cannot
+            // pass a symmetric white pin.
+            const lighting::WorldLightMaterial materials[] = {{.m_kind = 1u, .m_emission = {0.7f, 0.3f, 0.2f}}};
+
             Fixture fixture;
-            fixture.initialize(width, height);
+            fixture.initialize(width, height, materials);
             auto &source = fixture.m_source;
             auto &atlas = fixture.m_atlas;
 
@@ -1136,10 +1140,10 @@ namespace pP::tests::detail {
 
             const float3 firstValue = unpackRadianceRGB9E5_(first[0]);
             PPR_TEST_ASSERT(first[0] != 0u);
-            PPR_TEST_ASSERT(firstValue.x > 0.0f and firstValue.x < 1.0f);
-            PPR_TEST_ASSERT(std::abs(firstValue.x - 0.5f) < 0.01f);
-            PPR_TEST_ASSERT(std::abs(firstValue.y - 0.5f) < 0.01f);
-            PPR_TEST_ASSERT(std::abs(firstValue.z - 0.5f) < 0.01f);
+            PPR_TEST_ASSERT(firstValue.x > firstValue.y and firstValue.y > firstValue.z);
+            PPR_TEST_ASSERT(std::abs(firstValue.x - 0.35f) < 0.01f);
+            PPR_TEST_ASSERT(std::abs(firstValue.y - 0.15f) < 0.01f);
+            PPR_TEST_ASSERT(std::abs(firstValue.z - 0.10f) < 0.01f);
 
             // Neighbouring air stays exactly zero on the seeded frame.
             PPR_TEST_ASSERT(first[1] == 0u);
@@ -1149,8 +1153,10 @@ namespace pP::tests::detail {
             const auto second = fixture.read<u32>(atlas.cells());
             const float3 secondValue = unpackRadianceRGB9E5_(second[0]);
             PPR_TEST_ASSERT(secondValue.x > firstValue.x);
-            PPR_TEST_ASSERT(secondValue.x < 1.0f);
-            PPR_TEST_ASSERT(std::abs(secondValue.x - 0.75f) < 0.01f);
+            PPR_TEST_ASSERT(secondValue.x < 0.7f);
+            PPR_TEST_ASSERT(std::abs(secondValue.x - 0.525f) < 0.01f);
+            PPR_TEST_ASSERT(std::abs(secondValue.y - 0.225f) < 0.01f);
+            PPR_TEST_ASSERT(std::abs(secondValue.z - 0.15f) < 0.01f);
 
             fixture.shutdown();
         };
@@ -1163,13 +1169,37 @@ namespace pP::tests::detail {
             // overlay zeroed, so the atlas must be exactly zero everywhere.
             Fixture fixture;
             fixture.initialize(width, height);
-            fixture.m_atlas.setTemporalRetention(0.5f);
+            auto &source = fixture.m_source;
+            auto &atlas = fixture.m_atlas;
+            atlas.setTemporalRetention(0.5f);
             fixture.encodeAtlas();
 
-            const auto cells = fixture.read<u32>(fixture.m_atlas.cells());
+            const auto cells = fixture.read<u32>(atlas.cells());
             PPR_TEST_ASSERT(cells.size() == u64{width} * height);
             PPR_TEST_ASSERT(
                 std::all_of(cells.begin(), cells.end(), [](const u32 word) noexcept { return word == 0u; }));
+
+            // Seed one emissive cell, then clear it back to vacuum. The cell must
+            // be written as exactly zero on the next encode: an EMA that kept its
+            // history would leave 0.5 * previous (non-zero) behind.
+            std::vector<u16> chunk(128u * 128u, 0u);
+            chunk[0] = 1u;
+            const lighting::WorldLightChunkUpdate seed{.m_chunk_id = 0u, .m_cell_ids = chunk};
+            PPR_TEST_ASSERT(not source.applyUpdate({.m_chunks = {&seed, 1u}, .m_revision = 1u}));
+            fixture.encodeSource();
+            fixture.encodeAtlas();
+            PPR_TEST_ASSERT(fixture.read<u32>(atlas.cells())[0] != 0u);
+
+            chunk[0] = 0u;
+            const lighting::WorldLightChunkUpdate clear{.m_chunk_id = 0u, .m_cell_ids = chunk};
+            PPR_TEST_ASSERT(not source.applyUpdate({.m_chunks = {&clear, 1u}, .m_revision = 2u}));
+            fixture.encodeSource();
+            fixture.encodeAtlas();
+
+            const auto cleared = fixture.read<u32>(atlas.cells());
+            PPR_TEST_ASSERT(cleared[0] == 0u);
+            PPR_TEST_ASSERT(
+                std::all_of(cleared.begin(), cleared.end(), [](const u32 word) noexcept { return word == 0u; }));
 
             fixture.shutdown();
         };

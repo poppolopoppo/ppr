@@ -23,40 +23,6 @@ RWStructuredBuffer<uint> g_world_light_atlas;
 StructuredBuffer<WorldLightMaterial> g_world_light_materials;
 
 // ------------------------------------------------------------------
-// RGB9E5 packing
-// ------------------------------------------------------------------
-
-// Bit 0-8 R, 9-17 G, 18-26 B mantissas, 27-31 the shared exponent biased by
-// 15: value = mantissa * 2^(exponent - 24). The shader set has no shared
-// RGB9E5 helper, so the standard encoding lives beside its only writer.
-[ForceInline]
-uint packRadianceRGB9E5(float3 radiance) {
-    float3 value = max(radiance, float3(0.0, 0.0, 0.0));
-    float peak = max(value.x, max(value.y, value.z));
-    if (peak <= 0.0) {
-        return 0u;
-    }
-
-    int exponent = min(max(int(floor(log2(peak))) + 16, 1), 31); // floor(log2) + 1 + bias 15
-    float scale = exp2(float(24 - exponent));
-
-    uint r = uint(clamp(floor(value.x * scale + 0.5), 0.0, 511.0));
-    uint g = uint(clamp(floor(value.y * scale + 0.5), 0.0, 511.0));
-    uint b = uint(clamp(floor(value.z * scale + 0.5), 0.0, 511.0));
-    if ((r | g | b) == 0u) {
-        return 0u;
-    }
-    return (uint(exponent) << 27u) | (b << 18u) | (g << 9u) | r;
-}
-
-[ForceInline]
-float3 unpackRadianceRGB9E5(uint packed) {
-    uint exponent = (packed >> 27u) & 0x1fu;
-    float scale = exp2(float(exponent) - 24.0);
-    return float3(float(packed & 0x1ffu), float((packed >> 9u) & 0x1ffu), float((packed >> 18u) & 0x1ffu)) * scale;
-}
-
-// ------------------------------------------------------------------
 // per-cell update
 // ------------------------------------------------------------------
 
@@ -64,7 +30,9 @@ float3 unpackRadianceRGB9E5(uint packed) {
 // term; the material albedo multiplies the previous atlas value for a single
 // bounce. Vacuum cells (id 0 with no overlay coverage or emission) are written
 // as exactly zero and keep no history, so air never accumulates radiance and a
-// cell that becomes vacuum clears in one pass.
+// cell that becomes vacuum clears in one pass. An extinction-only overlay
+// (coverage > 0, emission 0) is deliberately not vacuum: that matches the
+// source's occupancy oracle, so it decays history instead of clearing at once.
 [shader("compute")]
 [numthreads(64, 1, 1)]
 void updateWorldLightRadianceAtlas(uint3 id : SV_DispatchThreadID) {
