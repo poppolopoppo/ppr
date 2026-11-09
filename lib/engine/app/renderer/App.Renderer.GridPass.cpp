@@ -2965,8 +2965,8 @@ namespace pP {
     std::error_code GridPass::bindWorldLightField_(rhi::ShaderCursor &cursor) {
         // CPU mirror of the Slang WorldLightSwitch: scalar padding keeps the
         // ConstantBuffer layout identical to the four-u32 shader struct.
-        // m_debug_view is the field debug selector (0 = off, 1 = probes,
-        // 2 = irradiance); m_pad0/m_pad1 remain reserved.
+        // m_debug_view is the field debug selector (0 = off, 1 = probes);
+        // m_pad0/m_pad1 remain reserved.
         struct WorldLightSwitch {
             u32 m_enabled{};
             u32 m_debug_view{};

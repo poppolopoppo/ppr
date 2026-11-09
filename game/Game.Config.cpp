@@ -223,8 +223,7 @@ namespace pP::game {
         append(
             "game.world_light.sky_hour", "Field sky solar hour (-1 uses the black boundary sky; 12 is noon).",
             "world-light-sky-hour", false);
-        append(
-            "game.world_light.debug_view", "Field debug view: off, probes or irradiance.", "world-light-debug", false);
+        append("game.world_light.debug_view", "Field debug view: off or probes.", "world-light-debug", false);
 
         append(
             "game.post.auto_exposure", "Adapt exposure from a scene luminance histogram.", "post-auto-exposure", true);

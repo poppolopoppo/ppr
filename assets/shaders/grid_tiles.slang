@@ -94,8 +94,8 @@ StructuredBuffer<TerrainVisual> g_terrain_visuals;
 // keeps the native receiver/world-radiance path; nonzero routes opaque terrain
 // shading through shadeWorldLightSurface. debugView selects the raw field debug
 // output mirrored from the CPU WorldLightSwitch: 0 = off (normal material
-// response), 1 = probes (diffuse false colour + level-0 probe lattice),
-// 2 = irradiance (diffuse false colour only). Unknown values fall back to off.
+// response), 1 = probes (diffuse false colour + level-0 probe lattice). Unknown
+// values fall back to off.
 struct WorldLightSwitch {
     uint enabled;
     uint debugView;
@@ -728,13 +728,15 @@ float4 materialSurface(uint material, float2 fine_position, float2 gradient_x,
 // world light field debug view
 // ------------------------------------------------------------------
 
-// False-colour ramp for the raw pre-albedo field result. Cascade radiance
-// spans many decades (shadows are near zero, a sunlit surface is order 1), so
-// this applies a fixed log2(1 + 32 * luminance) response over [0,1] and maps it
-// through black -> blue -> green -> yellow -> white, then gamma-encodes once.
-// The scale is a display aid only and never feeds the material path.
-static const float kWorldLightDebugScale = 32.0;
-static const float kWorldLightDebugLuminanceSpan = 5.04; // log2(1 + 32)
+// False-colour ramp for the raw pre-albedo field result, fed the field's
+// diffuse term. Calibrated against the validated real-game probe samples at the
+// committed source (diffuse luminance ~0.577 for a lit surface, composite range
+// ~0.25-2.5): the lit-surface value lands at the ramp midpoint (green) and the
+// top of the validated composite range is the white point, so lit terrain and
+// lamps stay distinguishable instead of clipping. Log2 keeps the dark end
+// resolved. The scale is a display aid only and never feeds the material path.
+static const float kWorldLightDebugScale = 4.0;
+static const float kWorldLightDebugLuminanceSpan = 3.46; // log2(1 + 4 * 2.5)
 
 float3 worldLightDebugRamp(float3 radiance) {
     float3 scaled = max(radiance, float3(0.0)) * kWorldLightDebugScale;
@@ -757,10 +759,11 @@ float3 worldLightDebugRamp(float3 radiance) {
 // Level-0 probe lattice overlay. Probe centres sit at (p + 0.5) * spacing in
 // cell units, so a fragment lies on a lattice line when its fractional probe
 // coordinate is within roughly one pixel of 0.5. Draws the row/column lines
-// through every level-0 probe centre (spacing 2 cells).
+// through every level-0 probe centre, deriving the spacing from the field's own
+// level-0 probe spacing rather than duplicating the plan's 2-cell default.
 float worldLightDebugLattice(float2 world) {
     float2 origin = float2(g_world_light_field.originX, g_world_light_field.originY);
-    float spacing_m = g_world_light_field.cellMetres * 2.0;
+    float spacing_m = g_world_light_field.cellMetres * float(g_world_light_field.levels[0].spacing);
     if (spacing_m <= 0.0) {
         return 0.0;
     }
@@ -774,13 +777,11 @@ float worldLightDebugLattice(float2 world) {
 
 // Raw field false colour; the material response, albedo and normal-map path are
 // bypassed deliberately so the picture shows what the field actually holds.
-// Probe mode additionally overlays the level-0 lattice in red.
-float3 worldLightDebugColour(float2 world, uint mode) {
+// Probe mode overlays the level-0 lattice in red.
+float3 worldLightDebugColour(float2 world) {
     float3 diffuse = worldLightDiffuse(world, float3(0.0, 0.0, 1.0));
     float3 colour = worldLightDebugRamp(diffuse);
-    if (mode == 1u) {
-        colour = lerp(colour, float3(0.95, 0.1, 0.05), worldLightDebugLattice(world) * 0.45);
-    }
+    colour = lerp(colour, float3(0.95, 0.1, 0.05), worldLightDebugLattice(world) * 0.45);
     return colour;
 }
 
@@ -817,12 +818,13 @@ float3 shadeWorldLightResponse(TerrainVisual visual, float2 world, float3 normal
 float4 shadeWorldLightSurface(
     uint material, float2 fine_position, float2 gradient_x, float2 gradient_y, float2 decoration,
     StructuredBuffer<DescriptorHandle<Texture2D<float4>>> textures, SamplerState.Handle sampler) {
-    // Debug views deliberately bypass the atlas/normal-map/material response and
-    // emit the raw field false colour. Unknown selectors fall through to the
-    // normal material path instead of rendering black.
-    if (g_world_light.debugView == 1u || g_world_light.debugView == 2u) {
+    // The probe debug view deliberately bypasses the atlas/normal-map/material
+    // response and emits the raw field false colour. Every other selector
+    // (including an unimplemented mode) falls through to the normal material
+    // path instead of rendering black.
+    if (g_world_light.debugView == 1u) {
         float2 debug_world = fine_position * g_grid_frame.m_cell_size_m;
-        return float4(worldLightDebugColour(debug_world, g_world_light.debugView), 1.0);
+        return float4(worldLightDebugColour(debug_world), 1.0);
     }
 
     // Deliberate re-lookup of the visual row, mirroring materialSurface; the

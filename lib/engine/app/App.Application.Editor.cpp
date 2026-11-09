@@ -85,13 +85,6 @@ namespace pP {
         u32 m_accumulation_samples{8u};
         float m_history_retention{0.9f};
         u32 m_debug_view{};
-        // One-shot numeric evidence: a lit sample cell and its world-space centre,
-        // plus the once-per-run log gate. Not per-frame work.
-        float2 m_probe_position{};
-        u64 m_probe_scanned_revision{};
-        u64 m_probe_cycle_at_find{};
-        bool m_probe_candidate{};
-        bool m_probe_logged{};
         bool m_initialized{};
         bool m_frame_logged{};
     };
@@ -107,153 +100,6 @@ namespace pP {
 
     // ReSharper disable once CppUseInternalLinkage
     PPR_DEFINE_LOG_CATEGORY(Editor, debug, none)
-
-    // ------------------------------------------------------------------
-    // world light field probe evidence
-    // ------------------------------------------------------------------
-
-    namespace {
-        [[nodiscard]] bool hasEmission_(const lighting::WorldLightMaterial &material) noexcept {
-            return material.m_emission[0] > 0.0f or material.m_emission[1] > 0.0f or material.m_emission[2] > 0.0f;
-        }
-
-        // Chooses a cell that should be lit from the committed dense source: an
-        // emissive Matter particle's own (otherwise empty) cell, or an empty
-        // cardinal neighbour of an emissive solid cell so the sample reads the
-        // incident field rather than the material's self-emission. Returns the
-        // cell centre in world metres, or nothing when the update has no emitter.
-        [[nodiscard]] std::optional<float2> findLitSamplePosition_(
-            const lighting::WorldLightSourceUpdateStorage &storage,
-            const std::span<const lighting::WorldLightMaterial> materials, const u32 world_edge,
-            const float cell_metres) noexcept {
-            if (world_edge == 0u or cell_metres <= 0.0f) {
-                return std::nullopt;
-            }
-
-            const auto centre = [cell_metres](const u32 x, const u32 y) {
-                return float2{
-                    (static_cast<float>(x) + 0.5f) * cell_metres, (static_cast<float>(y) + 0.5f) * cell_metres};
-            };
-
-            for (const lighting::WorldLightMatterParticle &particle: storage.m_particles) {
-                if (particle.m_material < materials.size() and hasEmission_(materials[particle.m_material])) {
-                    return centre(particle.m_cell % world_edge, particle.m_cell / world_edge);
-                }
-            }
-
-            constexpr u32 kChunkEdge = 128u;
-            constexpr u32 kChunkCells = kChunkEdge * kChunkEdge;
-            const u32 chunks_per_edge = world_edge / kChunkEdge;
-            if (chunks_per_edge == 0u) {
-                return std::nullopt;
-            }
-
-            constexpr std::array<std::array<i32, 2>, 4> kNeighbours{{{1, 0}, {-1, 0}, {0, 1}, {0, -1}}};
-            for (const lighting::WorldLightChunkUpdate &chunk: storage.m_chunks) {
-                if (chunk.m_cell_ids.size() != kChunkCells) {
-                    continue;
-                }
-
-                const u32 chunk_x = chunk.m_chunk_id % chunks_per_edge;
-                const u32 chunk_y = chunk.m_chunk_id / chunks_per_edge;
-                for (u32 index = 0u; index < kChunkCells; ++index) {
-                    const u16 id = chunk.m_cell_ids[index];
-                    if (id == 0u or (u32{id} - 1u) >= materials.size() or not hasEmission_(materials[u32{id} - 1u])) {
-                        continue;
-                    }
-
-                    const u32 local_x = index % kChunkEdge;
-                    const u32 local_y = index / kChunkEdge;
-                    for (const auto &offset: kNeighbours) {
-                        const i32 nx = static_cast<i32>(local_x) + offset[0];
-                        const i32 ny = static_cast<i32>(local_y) + offset[1];
-                        if (nx < 0 or
-                            ny < 0 or
-                            nx >= static_cast<i32>(kChunkEdge) or
-                            ny >= static_cast<i32>(kChunkEdge)) {
-                            continue;
-                        }
-                        if (chunk.m_cell_ids[static_cast<u32>(ny) * kChunkEdge + static_cast<u32>(nx)] != 0u) {
-                            continue;
-                        }
-
-                        return centre(
-                            chunk_x * kChunkEdge + static_cast<u32>(nx), chunk_y * kChunkEdge + static_cast<u32>(ny));
-                    }
-
-                    return centre(chunk_x * kChunkEdge + local_x, chunk_y * kChunkEdge + local_y);
-                }
-            }
-            return std::nullopt;
-        }
-
-        // Records one evaluate() dispatch on its own command buffer, submits it
-        // behind the frame's queued work on the graphics queue, waits, and reads
-        // the three-float result. Explicitly a one-shot diagnostic round trip,
-        // never a per-frame path.
-        [[nodiscard]] Expected<std::array<float, 3>> evaluateWorldLightProbe_(
-            lighting::WorldLightField &field, rhi::IDevice &device, rhi::ICommandQueue &queue, const float2 &position,
-            const float2 &direction, const float3 &normal, const float roughness,
-            const lighting::WorldLightField::EvaluateMode mode) {
-            rhi::ComPtr<rhi::ICommandEncoder> encoder;
-            PPR_RETURN_UNEXPECTED_ON_FAIL(Editor, make_error_code(queue.createCommandEncoder(encoder.writeRef())));
-            PPR_RETURN_UNEXPECTED_ON_FAIL(
-                Editor, field.evaluate(*encoder, position, direction, normal, roughness, mode));
-            rhi::ComPtr<rhi::ICommandBuffer> commands;
-            PPR_RETURN_UNEXPECTED_ON_FAIL(Editor, make_error_code(encoder->finish(commands.writeRef())));
-
-            rhi::ICommandBuffer *command = commands.get();
-            rhi::SubmitDesc submit{};
-            submit.commandBuffers = &command;
-            submit.commandBufferCount = 1u;
-            PPR_RETURN_UNEXPECTED_ON_FAIL(Editor, make_error_code(queue.submit(submit)));
-            {
-                const hal::ProfileScope wait_scope{
-                    "App.Editor.WorldLightProbeEvaluateWait", hal::profile_blocking_category};
-                PPR_RETURN_UNEXPECTED_ON_FAIL(Editor, make_error_code(queue.waitOnHost()));
-            }
-
-            rhi::IBuffer *const output = field.evaluateOutput();
-            rhi::BufferDesc description{};
-            description.size = output->getDesc().size;
-            description.elementSize = 0u;
-            description.memoryType = rhi::MemoryType::ReadBack;
-            description.usage = rhi::BufferUsage::CopyDestination;
-            description.defaultState = rhi::ResourceState::CopyDestination;
-            description.label = "WorldLightProbeSample";
-            rhi::ComPtr<rhi::IBuffer> readback;
-            PPR_RETURN_UNEXPECTED_ON_FAIL(
-                Editor, make_error_code(device.createBuffer(description, nullptr, readback.writeRef())));
-
-            rhi::ComPtr<rhi::ICommandEncoder> copy_encoder;
-            PPR_RETURN_UNEXPECTED_ON_FAIL(Editor, make_error_code(queue.createCommandEncoder(copy_encoder.writeRef())));
-            copy_encoder->setBufferState(output, rhi::ResourceState::CopySource);
-            copy_encoder->copyBuffer(readback.get(), 0u, output, 0u, description.size);
-            copy_encoder->setBufferState(output, rhi::ResourceState::UnorderedAccess);
-            rhi::ComPtr<rhi::ICommandBuffer> copy_commands;
-            PPR_RETURN_UNEXPECTED_ON_FAIL(Editor, make_error_code(copy_encoder->finish(copy_commands.writeRef())));
-
-            rhi::ICommandBuffer *copy_command = copy_commands.get();
-            rhi::SubmitDesc copy_submit{};
-            copy_submit.commandBuffers = &copy_command;
-            copy_submit.commandBufferCount = 1u;
-            PPR_RETURN_UNEXPECTED_ON_FAIL(Editor, make_error_code(queue.submit(copy_submit)));
-            {
-                const hal::ProfileScope wait_scope{
-                    "App.Editor.WorldLightProbeCopyWait", hal::profile_blocking_category};
-                PPR_RETURN_UNEXPECTED_ON_FAIL(Editor, make_error_code(queue.waitOnHost()));
-            }
-
-            void *mapped{};
-            PPR_RETURN_UNEXPECTED_ON_FAIL(
-                Editor, make_error_code(device.mapBuffer(readback.get(), rhi::CpuAccessMode::Read, &mapped)));
-            std::array<float, 3> result{};
-            std::memcpy(result.data(), mapped, sizeof(result));
-            PPR_RETURN_UNEXPECTED_ON_FAIL(Editor, make_error_code(device.unmapBuffer(readback.get())));
-            return result;
-        }
-    } // namespace
-
 
     // ------------------------------------------------------------------
     // application editor
@@ -2029,35 +1875,6 @@ namespace pP {
                 PPR_RETURN_ERROR_ON_FAIL(Editor, field.m_source.applyUpdate(storage.m_update));
                 PPR_RETURN_ERROR_ON_FAIL(Editor, field.m_source.encode(context.m_encoder));
 
-                // One-shot numeric evidence target: scan each newly adopted
-                // source revision for an emitter, then wait for one complete
-                // field pass before sampling. Once a candidate exists (or a full
-                // pass found none and the world centre is used) this stops.
-                if (not field.m_probe_candidate) {
-                    const u64 revision = field.m_source.revision();
-                    if (revision != field.m_probe_scanned_revision) {
-                        field.m_probe_scanned_revision = revision;
-                        if (const auto position = findLitSamplePosition_(
-                                storage, field.m_source.materials(), field.m_plan.m_width,
-                                field.m_plan.m_cell_metres)) {
-                            field.m_probe_position = *position;
-                            field.m_probe_cycle_at_find = field.m_field.cycle();
-                            field.m_probe_candidate = true;
-                        }
-                    }
-                    if (not field.m_probe_candidate and field.m_field.cycle() >= 32u) {
-                        // No emitter surfaced after the initial world revisions;
-                        // fall back to the world centre so the run still reports a
-                        // numeric sample. 32 passes is ample for the initial
-                        // chunk/particle upload to have been scanned.
-                        field.m_probe_position = float2{
-                            0.5f * static_cast<float>(field.m_plan.m_width) * field.m_plan.m_cell_metres,
-                            0.5f * static_cast<float>(field.m_plan.m_height) * field.m_plan.m_cell_metres};
-                        field.m_probe_cycle_at_find = field.m_field.cycle();
-                        field.m_probe_candidate = true;
-                    }
-                }
-
                 // The injected frame delta drives the retention EMA; use the real
                 // packet delta (falling back to the 60 Hz nominal on a zero delta).
                 const float frame_delta = std::chrono::duration<float>(packet.m_delta_time).count();
@@ -2317,62 +2134,6 @@ namespace pP {
             return default_value_v;
         }
         PPR_RETURN_ERROR_ON_FAIL(Editor, frame_err);
-
-        // One-shot numeric field evidence (never per-frame): after the field has
-        // completed a full round-robin pass, read composite/diffuse/specular at
-        // the dense-source lit cell with the existing evaluate() seam. The
-        // independent evaluate submit is queued behind this frame's accepted
-        // submit on the same graphics queue, so waitOnHost makes it valid.
-        if (m_field_lighting and
-            m_field_lighting->m_initialized and
-            not m_field_lighting->m_probe_logged and
-            m_field_lighting->m_probe_candidate and
-            m_field_lighting->m_field.cycle() > m_field_lighting->m_probe_cycle_at_find and
-            out_result.m_submit_value != kFenceValueNone) {
-            auto &field = *m_field_lighting;
-            rhi::ComPtr<rhi::ICommandQueue> sample_queue;
-            const std::error_code queue_error = make_error_code(
-                rhi_service->getDevice().getQueue(rhi::QueueType::Graphics, sample_queue.writeRef()));
-            if (queue_error) {
-                // Best-effort diagnostics: never fail an already-submitted frame
-                // because the one-shot evidence readback could not start.
-                PPR_LOG(
-                    Editor, warning, "world light probe sample failed",
-                    {{"position_x", field.m_probe_position.x}, {"position_y", field.m_probe_position.y},
-                        {"error", queue_error.message()}});
-                field.m_probe_logged = true;
-            } else {
-                const float2 direction{1.0f, 0.0f};
-                const float3 normal{0.0f, 0.0f, 1.0f};
-                constexpr float kProbeRoughness = 0.3f;
-                const auto composite = evaluateWorldLightProbe_(
-                    field.m_field, rhi_service->getDevice(), *sample_queue, field.m_probe_position, direction, normal,
-                    kProbeRoughness, lighting::WorldLightField::EvaluateMode::kComposite);
-                const auto diffuse = evaluateWorldLightProbe_(
-                    field.m_field, rhi_service->getDevice(), *sample_queue, field.m_probe_position, direction, normal,
-                    kProbeRoughness, lighting::WorldLightField::EvaluateMode::kDiffuse);
-                const auto specular = evaluateWorldLightProbe_(
-                    field.m_field, rhi_service->getDevice(), *sample_queue, field.m_probe_position, direction, normal,
-                    kProbeRoughness, lighting::WorldLightField::EvaluateMode::kSpecular);
-                if (composite and diffuse and specular) {
-                    PPR_LOG(
-                        Editor, info, "world light probe sample",
-                        {{"position_x", field.m_probe_position.x}, {"position_y", field.m_probe_position.y},
-                            {"composite_r", (*composite)[0]}, {"composite_g", (*composite)[1]},
-                            {"composite_b", (*composite)[2]}, {"diffuse_r", (*diffuse)[0]},
-                            {"diffuse_g", (*diffuse)[1]}, {"diffuse_b", (*diffuse)[2]}, {"specular_r", (*specular)[0]},
-                            {"specular_g", (*specular)[1]}, {"specular_b", (*specular)[2]}});
-                } else {
-                    const std::error_code sample_error = composite ? (diffuse ? specular.error() : diffuse.error())
-                                                                   : composite.error();
-                    PPR_LOG(
-                        Editor, warning, "world light probe sample failed",
-                        {{"position_x", field.m_probe_position.x}, {"position_y", field.m_probe_position.y},
-                            {"error", sample_error.message()}});
-                }
-                field.m_probe_logged = true;
-            }
-        }
 
         if (out_result.m_presented) {
             out_result.m_presented_grid = m_grid_pass->activeWorldIdentity();

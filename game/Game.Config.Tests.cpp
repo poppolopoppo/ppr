@@ -774,8 +774,9 @@ namespace pP::game::tests::detail::compat {
             {"--world-light-samples-per-frame=65535", "--world-light-samples-per-frame=4194305",
                 "--world-light-accumulation=0", "--world-light-accumulation=65", "--world-light-retention=0.49",
                 "--world-light-levels=3", "--world-light-sky-hour=24", "--world-light-debug=bogus",
-                "--post-exposure-ev=-16.1", "--post-adaptation-tau=0.09", "--post-ev-min=-8.1", "--post-ev-max=8.1",
-                "--post-bloom-intensity=2.1", "--post-bloom-threshold=16.1"}) {
+                "--world-light-debug=irradiance", "--post-exposure-ev=-16.1", "--post-adaptation-tau=0.09",
+                "--post-ev-min=-8.1", "--post-ev-max=8.1", "--post-bloom-intensity=2.1",
+                "--post-bloom-threshold=16.1"}) {
             Diagnostics rejected;
             PPR_TEST_ASSERT(not resolveCli({invalid}, rejected));
             PPR_TEST_ASSERT(rejected.hasErrors());
@@ -789,16 +790,40 @@ namespace pP::game::tests::detail::compat {
         // never an ordinal) and survives into the resolved settings.
         config::Resolved<WorldLightDisplaySettings> committed_world{};
         WorldLightDisplaySettings debug_draft{};
-        debug_draft.m_debug_view = EWorldLightDebugView::irradiance;
+        debug_draft.m_debug_view = EWorldLightDebugView::probes;
         Diagnostics debug_diagnostics;
         const auto debug_round_trip = validateWorldLightDraft(committed_world, debug_draft, debug_diagnostics);
         PPR_TEST_ASSERT(debug_round_trip.has_value());
-        PPR_TEST_ASSERT(debug_round_trip->m_value.m_debug_view == EWorldLightDebugView::irradiance);
+        PPR_TEST_ASSERT(debug_round_trip->m_value.m_debug_view == EWorldLightDebugView::probes);
 
         const std::string help = gameHelpText();
         PPR_TEST_ASSERT(help.find("world-light-samples-per-frame") != std::string::npos);
         PPR_TEST_ASSERT(help.find("world-light-debug") != std::string::npos);
         PPR_TEST_ASSERT(help.find("post-palette") != std::string::npos);
+    };
+
+    PPR_UNIT_TEST (debug_view_has_only_off_and_probes) {
+        // The removed `irradiance` arm must not be advertised, parsed or
+        // validated: an unimplemented mode falls back to `off` in the shader, so
+        // the schema exposes only the two implemented selectors.
+        PPR_TEST_ASSERT(world_light_debug_domain.m_entries.size() == 2u);
+        PPR_TEST_ASSERT(world_light_debug_domain.m_entries[0].m_value == EWorldLightDebugView::off);
+        PPR_TEST_ASSERT(world_light_debug_domain.m_entries[0].m_name == "off");
+        PPR_TEST_ASSERT(world_light_debug_domain.m_entries[1].m_value == EWorldLightDebugView::probes);
+        PPR_TEST_ASSERT(world_light_debug_domain.m_entries[1].m_name == "probes");
+
+        EWorldLightDebugView parsed{};
+        PPR_TEST_ASSERT(world_light_debug_domain.describe() == "one of off, probes");
+        PPR_TEST_ASSERT(
+            world_light_debug_domain.parse("irradiance", parsed) == make_error_code(EConfigErrc::unknown_enum_value));
+        PPR_TEST_ASSERT(
+            world_light_debug_domain.parse("2", parsed) == make_error_code(EConfigErrc::unknown_enum_value));
+        PPR_TEST_ASSERT(world_light_debug_domain.parse("probes", parsed) == std::error_code{});
+        PPR_TEST_ASSERT(parsed == EWorldLightDebugView::probes);
+
+        Diagnostics diagnostics;
+        PPR_TEST_ASSERT(not resolveCli({"--world-light-debug=irradiance"}, diagnostics));
+        PPR_TEST_ASSERT(diagnostics.hasErrors());
     };
 
     PPR_UNIT_TEST (field_retro_chain_passes_frame_admission) {
@@ -883,6 +908,7 @@ namespace pP::game::tests {
             detail::compat::mapped_config_files_preserve_owned_results_empty_input_and_errors,
             detail::compat::executable_boundary_rejects_unknown_options,
             detail::compat::world_light_and_post_settings_parse_and_validate,
+            detail::compat::debug_view_has_only_off_and_probes,
             detail::compat::field_retro_chain_passes_frame_admission,
             detail::compat::invalid_post_draft_is_rejected_and_not_persisted,
             detail::compat::retired_crash_harness_rejected,

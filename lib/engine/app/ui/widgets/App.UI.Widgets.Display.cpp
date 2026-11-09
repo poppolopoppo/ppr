@@ -758,10 +758,10 @@ namespace pP::ui {
 
             {
                 beginValueRow("Debug view");
-                int debug_view = static_cast<int>(std::min(lp.m_world_light_debug_view, 2u));
-                const char *const items[] = {"Off", "Probes", "Irradiance"};
+                int debug_view = static_cast<int>(std::min(lp.m_world_light_debug_view, 1u));
+                const char *const items[] = {"Off", "Probes"};
                 ImGui::SetNextItemWidth(-1.0f);
-                if (ImGui::Combo("##lighting_debug_view", &debug_view, items, 3)) {
+                if (ImGui::Combo("##lighting_debug_view", &debug_view, items, 2)) {
                     lp.m_world_light_debug_view = static_cast<u32>(debug_view);
                 }
                 ImGui::SetItemTooltip("Raw field false-colour view; off renders the normal material response.");

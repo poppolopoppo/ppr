@@ -525,8 +525,8 @@ export namespace pP {
         // Borrowed temporal world light field view (Task 8): the current radiance
         // buffer and CPU constants are bound each frame for the opaque terrain
         // path. The field owner outlives every view; pass an empty view to clear.
-        // debug_view selects the shader debug output (0 = off, 1 = probes,
-        // 2 = irradiance) and only feeds the terrain WorldLightSwitch mirror.
+        // debug_view selects the shader debug output (0 = off, 1 = probes) and
+        // only feeds the terrain WorldLightSwitch mirror.
         [[nodiscard]] std::error_code setWorldLightField(
             const lighting::WorldLightFieldView &view, u32 debug_view = 0u);
 

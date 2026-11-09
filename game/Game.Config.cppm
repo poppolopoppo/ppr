@@ -45,17 +45,15 @@ export namespace pP::game {
 
     /// World-light-field debug view. `off` keeps the normal material response;
     /// `probes` false-colours the raw diffuse field and overlays the level-0
-    /// probe lattice; `irradiance` false-colours the raw diffuse field only.
+    /// probe lattice. An unknown mode falls back to `off`.
     enum class EWorldLightDebugView : u8 {
         off,
         probes,
-        irradiance,
     };
 
-    inline constexpr config::EnumDomain<EWorldLightDebugView, 3u> world_light_debug_domain{{
+    inline constexpr config::EnumDomain<EWorldLightDebugView, 2u> world_light_debug_domain{{
         config::EnumEntry<EWorldLightDebugView>{EWorldLightDebugView::off, "off"},
         config::EnumEntry<EWorldLightDebugView>{EWorldLightDebugView::probes, "probes"},
-        config::EnumEntry<EWorldLightDebugView>{EWorldLightDebugView::irradiance, "irradiance"},
     }};
 
     struct MapSizeDomain {
@@ -267,9 +265,8 @@ export namespace pP::game {
                 field(
                     &WorldLightDisplaySettings::m_debug_view,
                     Metadata{
-                        "game.world_light.debug_view",
-                        "Field debug view (off, probes, irradiance); bypasses the material response", "World lighting",
-                        EMutability::runtime, ESource::all, true},
+                        "game.world_light.debug_view", "Field debug view (off, probes); bypasses the material response",
+                        "World lighting", EMutability::runtime, ESource::all, true},
                     world_light_debug_domain),
             };
         }
