@@ -33,6 +33,8 @@ namespace pP::tests {
 
     const UnitTest &pixel_readbackTests() noexcept;
 
+    const UnitTest &surface_pixels_round_trip_through_pngTests() noexcept;
+
     const UnitTest &renderer_triangle_reinit_okTests() noexcept;
 
     const UnitTest &renderer_off_thread_fails_closedTests() noexcept;
@@ -122,6 +124,7 @@ namespace pP::tests {
             lightingTests(),
             world_light_fieldTests(),
             pixel_readbackTests(),
+            surface_pixels_round_trip_through_pngTests(),
             renderer_triangle_reinit_okTests(),
             renderer_off_thread_fails_closedTests(),
             imgui_live_shutdown_idempotentTests(),

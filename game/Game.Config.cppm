@@ -74,6 +74,7 @@ export namespace pP::game {
 
         std::optional<double> m_exit_after{};
         std::optional<std::string> m_config{};
+        std::optional<std::string> m_capture_frame{};
         std::optional<std::string> m_worldgen_root{};
         std::optional<std::string> m_worldgen_pack_set{};
         std::optional<std::string> m_worldgen_output{};
@@ -193,6 +194,12 @@ export namespace pP::game {
                     Metadata{
                         "game.config", "Explicit base configuration file (TOML)", "Config", EMutability::startup,
                         ESource::cli, false},
+                    PathDomain{1024u, false}),
+                field(
+                    &GameSettings::m_capture_frame,
+                    Metadata{
+                        "game.capture_frame", "Write the final interactive frame to this PNG path", "Capture",
+                        EMutability::startup, ESource::cli, false},
                     PathDomain{1024u, false}),
             };
         }

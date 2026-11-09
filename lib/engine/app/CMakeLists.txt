@@ -1,5 +1,9 @@
 add_library(engine.app)
 
+# PNG IDAT payloads use zlib's deflate wrapper directly (the same vendored
+# dependency Mango's image codecs already build against).
+find_package(ZLIB REQUIRED)
+
 target_sources(engine.app
         PUBLIC
         FILE_SET CXX_MODULES FILES
@@ -9,6 +13,7 @@ target_sources(engine.app
         App.Application.Editor.cppm
         App.Display.cppm
         App.Display.Settings.cppm
+        App.Image.Png.cppm
         App.Startup.Settings.cppm
 
         frame/App.Frame.Packet.cppm
@@ -69,6 +74,7 @@ target_sources(engine.app
         App.Application.Editor.cpp
         App.Display.cpp
         App.Display.Settings.cpp
+        App.Image.Png.cpp
         App.Startup.Settings.cpp
         App.TemplateInstantiations.cpp
 
@@ -122,7 +128,7 @@ target_sources(engine.app
 
 setup_ppr_project(engine.app
         INTERNAL_PUBLIC_DEPS engine.core engine.math engine.shader engine.rhi engine.image engine.mesh
-        EXTERNAL_SYSTEM_PRIVATE_DEPS glfw mango
+        EXTERNAL_SYSTEM_PRIVATE_DEPS glfw mango ZLIB::ZLIB
         EXTERNAL_SYSTEM_PUBLIC_DEPS imgui.base
 )
 

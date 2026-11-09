@@ -6,6 +6,7 @@ export import :application;
 export import :application_editor;
 export import :display;
 export import :display.settings;
+export import :image.png;
 
 export import :frame.packet;
 export import :frame.render_lane;

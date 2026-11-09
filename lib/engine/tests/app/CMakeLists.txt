@@ -256,7 +256,7 @@ ppr_add_test_entry(TARGET engine.tests.app
 # loop-1; higher budget. No device or window state, so no lock.
 ppr_add_test_entry(TARGET engine.tests.app
     NAME functional_cpu
-    FILTER "app/devices,app/player/,app/dispatch,app/snapshot,app/player_graph,app/viewport,app/render_view,app/lighting,app/camera,app/display,app/sim_packet,app/quaternion,app/input_listener,app/filtered_analog,app/imgui_dpi,app/performance_widget,app/zerov_probe"
+    FILTER "app/devices,app/player/,app/dispatch,app/snapshot,app/player_graph,app/viewport,app/render_view,app/lighting,app/camera,app/display,app/sim_packet,app/quaternion,app/input_listener,app/filtered_analog,app/imgui_dpi,app/performance_widget,app/zerov_probe,app/surface_pixels_round_trip_through_png"
     LOOPS
     TIMEOUT 600
     LABELS unit engine app

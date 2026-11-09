@@ -537,6 +537,10 @@ namespace pP::game {
         schema.m_options.back().m_aliases.push_back("exit-after");
         appendOption(
             schema.m_options, valueOption("game.config", "config", "Explicit base configuration file (TOML)."));
+        appendOption(
+            schema.m_options, valueOption(
+                                  "game.capture_frame", "capture-frame",
+                                  "Write the final interactive frame to a PNG file before exiting."));
 
         for (auto &option: displayCliOptions()) {
             schema.m_options.push_back(std::move(option));

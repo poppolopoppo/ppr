@@ -44,46 +44,6 @@ namespace demo {
     PPR_DEFINE_LOG_CATEGORY(Demo, info, none)
 
     // ------------------------------------------------------------------
-    // interactive final-frame capture file policy
-    // ------------------------------------------------------------------
-
-    [[nodiscard]] std::error_code writeSurfacePpm_(
-        const std::filesystem::path &path, const SurfaceFramePixels &pixels) {
-        const bool rgba = pixels.m_format == rhi::Format::RGBA8Unorm or pixels.m_format == rhi::Format::RGBA8UnormSrgb;
-        const bool bgra = pixels.m_format == rhi::Format::BGRA8Unorm or pixels.m_format == rhi::Format::BGRA8UnormSrgb;
-        PPR_RETURN_ERROR_ON_FAIL(
-            Demo, (rgba or bgra) and
-                          pixels.m_extent.x > 0 and
-                          pixels.m_extent.y > 0 and
-                          pixels.m_submission != kFenceValueNone and
-                          pixels.m_row_pitch >= static_cast<u64>(pixels.m_extent.x) * 4u and
-                          pixels.m_row_pitch <= pixels.m_bytes.size() / static_cast<u64>(pixels.m_extent.y)
-                      ? std::error_code{}
-                      : std::make_error_code(std::errc::invalid_argument));
-
-        std::ofstream stream{path, std::ios::binary | std::ios::trunc};
-        PPR_RETURN_ERROR_ON_FAIL(Demo, stream ? std::error_code{} : std::make_error_code(std::errc::io_error));
-        stream << "P6\n" << pixels.m_extent.x << ' ' << pixels.m_extent.y << "\n255\n";
-        std::vector<char> rgb(static_cast<std::size_t>(pixels.m_extent.x) * 3u);
-        for (int y = 0; y < pixels.m_extent.y; ++y) {
-            const auto *const row = pixels.m_bytes.data() + static_cast<std::size_t>(y) * pixels.m_row_pitch;
-            for (int x = 0; x < pixels.m_extent.x; ++x) {
-                const auto *const source = row + static_cast<std::size_t>(x) * 4u;
-                const auto offset = static_cast<std::size_t>(x) * 3u;
-                rgb[offset] = static_cast<char>(source[bgra ? 2u : 0u]);
-                rgb[offset + 1u] = static_cast<char>(source[1u]);
-                rgb[offset + 2u] = static_cast<char>(source[bgra ? 0u : 2u]);
-            }
-
-            stream.write(rgb.data(), static_cast<std::streamsize>(rgb.size()));
-        }
-
-        stream.close();
-        PPR_RETURN_ERROR_ON_FAIL(Demo, stream ? std::error_code{} : std::make_error_code(std::errc::io_error));
-        return {};
-    }
-
-    // ------------------------------------------------------------------
     // headless worldgen validation
     // ------------------------------------------------------------------
 
@@ -508,6 +468,16 @@ namespace demo {
         // gracefully after S wall-clock seconds from the first update();
         // the start stamps lazily to avoid pre-initialize issues.
         std::optional<TimeDuration> m_auto_exit_seconds{};
+        // One-shot final-frame capture (`--capture-frame`). The path being set
+        // enables surface readback at startup; the first graceful exit request
+        // arms exactly one capture, then the completed frame writes it and
+        // finally requests the real exit.
+        std::optional<std::filesystem::path> m_capture_frame_path{};
+        u64 m_capture_frame_sequence{};
+        bool m_capture_frame_armed{};
+        bool m_capture_exit_pending{};
+        std::atomic<bool> m_capture_frame_complete{};
+        mutable std::atomic<bool> m_capture_deferred{};
         // Borrowed from the editor; released before editor shutdown.
         safe_ptr<PanCameraController> m_pan_controller{};
         // Tool gesture ownership (interaction contract items 2+5). Press
@@ -3844,6 +3814,16 @@ namespace demo {
             m_auto_exit_seconds = seconds;
         }
 
+        /// One-shot final-frame PNG destination. Enables the startup surface
+        /// readback capability, so it must run before initialize()/run(). The
+        /// first graceful exit captures one presented frame to this path before
+        /// the process actually exits; an unset path leaves the run unchanged.
+        [[nodiscard]] std::error_code setCaptureFramePath(std::filesystem::path path) {
+            PPR_RETURN_ERROR_ON_FAIL(Demo, enableSurfaceReadbackAtStartup());
+            m_capture_frame_path = std::move(path);
+            return {};
+        }
+
         /// Focus-throttle opt-out: forwards to Application so profiling and
         /// bounded runs keep full frame rate when the window loses focus.
         void setNoFocusThrottle(const bool enabled) noexcept {
@@ -5085,6 +5065,13 @@ namespace demo {
         }
 
         [[nodiscard]] bool deferGracefulExit_() const noexcept override {
+            // A pending capture owns the next update: defer the exit so one
+            // more interactive frame can be presented and written, then the
+            // settled capture requests the real exit.
+            if (m_capture_frame_path and not m_capture_frame_complete.load(std::memory_order_acquire)) {
+                m_capture_deferred.store(true, std::memory_order_release);
+                return true;
+            }
             if (not m_defer_close.load(std::memory_order_acquire)) {
                 return false;
             }
@@ -5763,7 +5750,65 @@ namespace demo {
         // actual frame settlement
         // ------------------------------------------------------------------
 
+        /// Arms the one-shot capture request exactly once. The base request
+        /// owns the pending bit and the sequence; this side only remembers the
+        /// sequence it must settle.
+        [[nodiscard]] std::error_code armCaptureFrame_() {
+            if (m_capture_frame_armed) {
+                return {};
+            }
+
+            PPR_RETURN_ERROR_ON_FAIL(Demo, requestFrameCapture());
+            m_capture_frame_sequence = currentFrameCaptureSequence();
+            m_capture_frame_armed = true;
+            return {};
+        }
+
+        /// Writes the captured frame and finishes a deferred exit. Runs on
+        /// main; the result is the session-delivered copy of the lane frame.
+        void settleCaptureFrame_(const RenderFrameResult &result) {
+            if (not m_capture_frame_path or
+                m_capture_frame_complete.load(std::memory_order_acquire) or
+                not m_capture_frame_armed or
+                not result.m_surface_capture_attempted or
+                result.m_surface_capture_sequence != m_capture_frame_sequence) {
+                return;
+            }
+
+            m_capture_frame_complete.store(true, std::memory_order_release);
+
+            std::error_code capture_error = result.m_surface_capture_error;
+            if (not capture_error and
+                (not result.m_presented or result.m_dropped or result.m_error or not result.m_surface_pixels)) {
+                capture_error = std::make_error_code(std::errc::state_not_recoverable);
+            }
+            if (not capture_error) {
+                capture_error = writeSurfacePng(*result.m_surface_pixels, *m_capture_frame_path);
+            }
+
+            if (capture_error) {
+                PPR_LOG(
+                    Demo, error, "final frame capture failed",
+                    {{"frame", result.m_frame_id}, {"error", capture_error.message()}});
+            } else {
+                PPR_LOG(
+                    Demo, info, "final frame captured",
+                    {{"path", m_capture_frame_path->string()}, {"frame", result.m_frame_id},
+                        {"width", result.m_surface_pixels->m_extent.x}, {"height", result.m_surface_pixels->m_extent.y},
+                        {"format", rhi::getFormatInfo(result.m_surface_pixels->m_format).name}});
+            }
+
+            if (std::exchange(m_capture_exit_pending, false)) {
+                if (capture_error) {
+                    requestExit(capture_error);
+                } else {
+                    requestExit();
+                }
+            }
+        }
+
         void settleGameFrame_(const RenderFrameResult &result) {
+            settleCaptureFrame_(result);
             if (result.m_gpu_timing) {
                 m_performance_widget.observeGpu(result.m_gpu_timing->m_submission, result.m_gpu_timing->m_milliseconds);
             }
@@ -6023,6 +6068,15 @@ namespace demo {
         }
 
         [[nodiscard]] std::error_code update(const TimeSpan dt) override {
+            // A deferred graceful exit means one final frame must capture.
+            // Arm the existing one-shot request here on main; the settlement
+            // writes the file and completes the exit.
+            if (m_capture_deferred.exchange(false, std::memory_order_acq_rel) and
+                not m_capture_frame_complete.load(std::memory_order_acquire)) {
+                PPR_RETURN_ERROR_ON_FAIL(Demo, armCaptureFrame_());
+                m_capture_exit_pending = true;
+            }
+
             const auto observation_begin = m_observation_clock->now();
             const auto observation_phase = observationPhase_();
             observeUpdateStart_(observation_begin, observation_phase);
@@ -6482,6 +6536,12 @@ int runGame(const int argc, char *argv[]) try {
     }
     if (settings.m_exit_after.has_value()) {
         app.setAutoExitSeconds(pP::TimeDuration{*settings.m_exit_after});
+    }
+    if (settings.m_capture_frame.has_value()) {
+        if (const auto error = app.setCaptureFramePath(*settings.m_capture_frame)) {
+            std::cerr << "[capture] " << error.message() << '\n';
+            return pP::config::kExitInvalidUsage;
+        }
     }
     app.setDisplaySettings(display);
     // Startup picture baseline for "Back to startup": the lower-precedence
