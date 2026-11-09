@@ -4,10 +4,12 @@
 // One thread per (probe, direction) for the cursor, and one thread per probe
 // for the dirty-first reprocess. Each traces the level's own interval through
 // the dense source (cell ids + material palette + overlay) with a cell-by-cell
-// DDA, accumulates the sample into the running mean, and writes the current
-// radiance buffer. An opaque hit adds one bounce of the per-cell radiance atlas
-// weighted by the hit material's albedo, so the field accumulates primary
-// transport plus a single material-weighted bounce (no recursive ray tree).
+// DDA, folds in its parent level's already-merged suffix (L = L_near + T_near *
+// L_far), accumulates the sample into the running mean, and writes the current
+// radiance buffer. Level 0 therefore holds the fully merged field. An opaque hit
+// adds one bounce of the per-cell radiance atlas weighted by the hit material's
+// albedo, so the field accumulates primary transport plus a single
+// material-weighted bounce (no recursive ray tree).
 #include "world_light_field.slang"
 #include "world_light_sample.slang"
 
@@ -202,7 +204,10 @@ void traceWorldLightInterval(
 // ------------------------------------------------------------------
 
 // Traces and accumulates one direction sample of one probe into the running
-// mean, writing the current radiance buffer and the sample count.
+// mean, writing the current radiance buffer and the sample count. The stored
+// value is this level's own interval folded with its parent's stored suffix
+// (worldLightParentSampleFrom), so every level holds the composite from its own
+// interval to the world reach and level 0 holds the fully merged field.
 [ForceInline]
 void accumulateSample(uint level, uint probe, uint direction) {
     WorldLightLevelGpu L = g_world_light_field.levels[level];
@@ -234,6 +239,24 @@ void accumulateSample(uint level, uint probe, uint direction) {
     // and must not duplicate the sky. A black sky (skyR=skyG=skyB=0) adds nothing.
     if (level + 1u == g_world_light_field.levelCount && transmittance > 0.0) {
         radiance += transmittance * float3(g_world_light_field.skyR, g_world_light_field.skyG, g_world_light_field.skyB);
+    }
+
+    // Fold the parent's already-merged suffix into this interval so the stored
+    // sample is the composite from here to the world reach. The parent is read
+    // from the previous buffer: tracing may visit levels in any order, and the
+    // previous frame's complete parent suffix is race-free and temporally
+    // consistent. Level 0 therefore ends up fully merged and shading reads it
+    // alone. The sky is already inside the parent suffix, so it is not re-added.
+    // A fully attenuated own interval makes the fold a no-op (L = L_near and
+    // T = 0), so the parent reads are skipped for an opaque hit.
+    if (transmittance > 0.0 && level + 1u < g_world_light_field.levelCount) {
+        float3 parentRadiance;
+        float parentTransmittance;
+        worldLightParentSampleFrom(
+            g_world_light_radiance_prev, L, g_world_light_field.levels[level + 1u], origin, direction, parentRadiance,
+            parentTransmittance);
+        radiance += transmittance * parentRadiance;
+        transmittance *= parentTransmittance;
     }
 
     WorldLightRadiance previous = g_world_light_radiance_prev[sample];

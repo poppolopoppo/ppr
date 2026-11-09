@@ -775,9 +775,10 @@ float worldLightDebugLattice(float2 world) {
     return saturate(1.0 - min(to_centre.x, to_centre.y) / half_width);
 }
 
-// Raw field false colour; the material response, albedo and normal-map path are
-// bypassed deliberately so the picture shows what the field actually holds.
-// Probe mode overlays the level-0 lattice in red.
+// Raw merged-field false colour; the material response, albedo and normal-map
+// path are bypassed deliberately so the picture shows what the field actually
+// holds (worldLightDiffuse reads the fully merged level 0). Probe mode overlays
+// the level-0 lattice in red.
 float3 worldLightDebugColour(float2 world) {
     float3 diffuse = worldLightDiffuse(world, float3(0.0, 0.0, 1.0));
     float3 colour = worldLightDebugRamp(diffuse);

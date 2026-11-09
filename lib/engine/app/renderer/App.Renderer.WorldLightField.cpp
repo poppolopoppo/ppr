@@ -543,7 +543,9 @@ namespace pP::lighting {
         // cascade levels. Every level stores the same sample count, so an even
         // split refreshes all scales at the same rate and keeps the per-frame
         // cost steady instead of alternating cheap fine-level and expensive
-        // coarse-level frames.
+        // coarse-level frames. The trace folds each traced sample into its parent
+        // level's suffix, so this loop also performs the coarse-to-fine collapse:
+        // level 0 is left holding the fully merged field that view() publishes.
         const u64 level_count = std::max<u64>(1u, state.m_plan.m_level_count);
         const u64 level_share = remaining / level_count;
         const u64 level_remainder = remaining % level_count;

@@ -3,10 +3,12 @@
 // ------------------------------------------------------------------
 // Shared scalar ABI for the temporal world light field. One cascade hierarchy:
 // level 0 = 2-cell spacing / 4 directions; level l = 2^(l+1) spacing /
-// 4^(l+1) directions. Each level stores radiance for its own interval. A
-// radiance sample is 8 bytes: RGB radiance plus a scalar transmittance, stored
-// as four 16-bit halves. Per-direction sample counts are one u32 per sample
-// (saturating at 255). The two radiance buffers ping-pong (previous/current).
+// 4^(l+1) directions. Each level stores its own interval composited with every
+// farther interval (the trace folds the parent suffix in at trace time), so
+// level 0 holds the fully merged field and shading reads it alone. A radiance
+// sample is 8 bytes: RGB radiance plus a scalar transmittance, stored as four
+// 16-bit halves. Per-direction sample counts are one u32 per sample (saturating
+// at 255). The two radiance buffers ping-pong (previous/current).
 #ifndef PPR_WORLD_LIGHT_FIELD_SLANG
 #define PPR_WORLD_LIGHT_FIELD_SLANG
 

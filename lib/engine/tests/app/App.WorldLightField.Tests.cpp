@@ -777,23 +777,31 @@ namespace pP::tests::detail {
 
         // Synthetic four-level hierarchy used by the composite/diffuse references
         // (levels 4+ stay zeroed with transmittance 0, so the composite stops at
-        // level 3). Level l radiance (px,py,d) = (l + 0.25px, l + 0.25py, l + 0.25d)
-        // and transmittance 0.9 - 0.2*l, so every level contributes a distinct
-        // base and the transmittance chain spans the four finest levels.
+        // level 3). Each level carries an affine spatial ramp, a per-level base
+        // and a blue angular term that is constant across the sub-bins belonging
+        // to one level-0 bin; transmittance is 0.9 - 0.2*l. An affine field is
+        // reproduced exactly by bilinear interpolation and summed exactly by the
+        // fold, and the bin-invariant blue term survives the coarse angular
+        // average, so the merged level 0 equals the per-level composite.
         [[nodiscard]] std::vector<RadianceHalf> makeSyntheticField(const lighting::WorldLightPlan &plan) {
             std::vector<RadianceHalf> field(plan.m_radiance_samples, RadianceHalf{});
             for (u32 level = 0u; level < 4u; ++level) {
                 const auto &L = plan.m_levels[level];
                 const float base = float(level);
                 const float transmittance = 0.9f - 0.2f * float(level);
+                const u32 coarse_bin_shift = 2u * level;
                 for (u32 py = 0u; py < L.m_probes_y; ++py) {
                     for (u32 px = 0u; px < L.m_probes_x; ++px) {
+                        // Probe centre in cell units, identical across levels at a
+                        // given world position.
+                        const float x = (float(px) + 0.5f) * float(L.m_spacing_cells);
+                        const float y = (float(py) + 0.5f) * float(L.m_spacing_cells);
                         for (u32 d = 0u; d < L.m_directions; ++d) {
                             const u64 sample = L.m_sample_offset + (u64{py} * L.m_probes_x + px) * L.m_directions + d;
                             field[sample] = RadianceHalf{
-                                .m_r = floatToHalf(base + 0.25f * float(px)),
-                                .m_g = floatToHalf(base + 0.25f * float(py)),
-                                .m_b = floatToHalf(base + 0.25f * float(d)),
+                                .m_r = floatToHalf(base + 0.05f * x),
+                                .m_g = floatToHalf(base + 0.037f * y),
+                                .m_b = floatToHalf(base + 0.25f * float(d >> coarse_bin_shift)),
                                 .m_t = floatToHalf(transmittance)};
                         }
                     }
@@ -874,10 +882,190 @@ namespace pP::tests::detail {
             return result;
         }
 
-        // CPU oracle of worldLightDiffuse: the deterministic 8-direction set with
-        // cosine weights from the horizontal tilt; a flat (+Z) normal is isotropic.
-        [[nodiscard]] std::array<float, 3> diffuseReference(
-            const lighting::WorldLightPlan &plan, const std::vector<RadianceHalf> &field, const float2 &position,
+        // ------------------------------------------------------------------
+        // merged-field oracle
+        // ------------------------------------------------------------------
+
+        // CPU mirror of the trace's coarse-to-fine fold. A level's stored suffix
+        // is its own interval composited with the parent suffix sampled at the
+        // level's probe centre: bilinear over the parent probes and averaged over
+        // the four parent angular bins that span the finer bin. Level 0 is the
+        // fully merged field.
+        struct MergeOracle {
+            struct ProbeValue {
+                std::array<float, 3> m_radiance{};
+                float m_transmittance{1.0f};
+            };
+
+            [[nodiscard]] ProbeValue corner(const u32 level, const int px, const int py, const u32 direction) {
+                const auto &L = m_plan.m_levels[level];
+                if (px < 0 or py < 0 or px >= int(L.m_probes_x) or py >= int(L.m_probes_y)) {
+                    return {};
+                }
+
+                const std::array<u32, 4> key{level, static_cast<u32>(px), static_cast<u32>(py), direction};
+                if (const auto found = m_memo.find(key); found != m_memo.end()) {
+                    return found->second;
+                }
+
+                const u64 sample = L.m_sample_offset +
+                                   (u64{static_cast<u32>(py)} * L.m_probes_x + static_cast<u32>(px)) * L.m_directions +
+                                   direction;
+                const RadianceHalf &stored = m_raw[sample];
+                ProbeValue value{
+                    .m_radiance = {halfToFloat(stored.m_r), halfToFloat(stored.m_g), halfToFloat(stored.m_b)},
+                    .m_transmittance = halfToFloat(stored.m_t)};
+
+                if (level + 1u < m_plan.m_level_count) {
+                    const float spacing = float(L.m_spacing_cells);
+                    const float2 centre{
+                        (float(px) + 0.5f) * spacing * m_plan.m_cell_metres,
+                        (float(py) + 0.5f) * spacing * m_plan.m_cell_metres};
+                    const ProbeValue far = parent(level, centre, direction);
+                    for (u32 channel = 0u; channel < 3u; ++channel) {
+                        value.m_radiance[channel] += value.m_transmittance * far.m_radiance[channel];
+                    }
+                    value.m_transmittance *= far.m_transmittance;
+                }
+
+                m_memo.emplace(key, value);
+                return value;
+            }
+
+            [[nodiscard]] ProbeValue bilinear(const u32 level, const float2 &position, const u32 direction) {
+                const auto &L = m_plan.m_levels[level];
+                const float spacing = float(L.m_spacing_cells);
+                const float uvx = position.x / (m_plan.m_cell_metres * spacing) - 0.5f;
+                const float uvy = position.y / (m_plan.m_cell_metres * spacing) - 0.5f;
+                const int base_x = int(std::floor(uvx));
+                const int base_y = int(std::floor(uvy));
+                const float fx = uvx - float(base_x);
+                const float fy = uvy - float(base_y);
+
+                const ProbeValue r00 = corner(level, base_x, base_y, direction);
+                const ProbeValue r10 = corner(level, base_x + 1, base_y, direction);
+                const ProbeValue r01 = corner(level, base_x, base_y + 1, direction);
+                const ProbeValue r11 = corner(level, base_x + 1, base_y + 1, direction);
+
+                const auto lerp3 = [](const std::array<float, 3> &a, const std::array<float, 3> &b, const float t) {
+                    return std::array<float, 3>{
+                        a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t};
+                };
+
+                ProbeValue result{};
+                result.m_radiance = lerp3(
+                    lerp3(r00.m_radiance, r10.m_radiance, fx), lerp3(r01.m_radiance, r11.m_radiance, fx), fy);
+                const float t0 = r00.m_transmittance + (r10.m_transmittance - r00.m_transmittance) * fx;
+                const float t1 = r01.m_transmittance + (r11.m_transmittance - r01.m_transmittance) * fx;
+                result.m_transmittance = t0 + (t1 - t0) * fy;
+                return result;
+            }
+
+            [[nodiscard]] ProbeValue parent(const u32 level, const float2 &position, const u32 direction) {
+                const u32 child_directions = std::max(m_plan.m_levels[level].m_directions, 1u);
+                const u32 ratio = std::max(m_plan.m_levels[level + 1u].m_directions / child_directions, 1u);
+
+                ProbeValue sum{};
+                sum.m_transmittance = 0.0f;
+                for (u32 index = 0u; index < ratio; ++index) {
+                    const ProbeValue sampled = bilinear(level + 1u, position, direction * ratio + index);
+                    for (u32 channel = 0u; channel < 3u; ++channel) {
+                        sum.m_radiance[channel] += sampled.m_radiance[channel];
+                    }
+                    sum.m_transmittance += sampled.m_transmittance;
+                }
+
+                const float inverse = 1.0f / float(ratio);
+                for (u32 channel = 0u; channel < 3u; ++channel) {
+                    sum.m_radiance[channel] *= inverse;
+                }
+                sum.m_transmittance *= inverse;
+                return sum;
+            }
+
+            const lighting::WorldLightPlan &m_plan;
+            const std::vector<RadianceHalf> &m_raw;
+            std::map<std::array<u32, 4>, ProbeValue> m_memo;
+        };
+
+        // Folds the synthetic per-level hierarchy into level 0 with the same
+        // formula the trace uses; the coarser levels keep their raw values so a
+        // sampler that still loops would composite the merged level twice.
+        [[nodiscard]] std::vector<RadianceHalf> mergeReferenceField(
+            const lighting::WorldLightPlan &plan, const std::vector<RadianceHalf> &raw) {
+            std::vector<RadianceHalf> merged = raw;
+            MergeOracle oracle{.m_plan = plan, .m_raw = raw, .m_memo = {}};
+
+            const auto &L = plan.m_levels[0];
+            for (u32 py = 0u; py < L.m_probes_y; ++py) {
+                for (u32 px = 0u; px < L.m_probes_x; ++px) {
+                    for (u32 d = 0u; d < L.m_directions; ++d) {
+                        const MergeOracle::ProbeValue value = oracle.corner(0u, int(px), int(py), d);
+                        const u64 sample = (u64{py} * L.m_probes_x + px) * L.m_directions + d;
+                        merged[sample] = RadianceHalf{
+                            .m_r = floatToHalf(value.m_radiance[0]),
+                            .m_g = floatToHalf(value.m_radiance[1]),
+                            .m_b = floatToHalf(value.m_radiance[2]),
+                            .m_t = floatToHalf(value.m_transmittance)};
+                    }
+                }
+            }
+            return merged;
+        }
+
+        // CPU oracle of the merged-field composite: bilinear over level 0 only
+        // (the level already holds every farther interval).
+        [[nodiscard]] std::array<float, 3> mergedCompositeReference(
+            const lighting::WorldLightPlan &plan, const std::vector<RadianceHalf> &merged, const float2 &position,
+            const float2 &direction) {
+            constexpr float origin_x = 0.0f;
+            constexpr float origin_y = 0.0f;
+
+            const auto &L = plan.m_levels[0];
+            const float spacing = float(L.m_spacing_cells);
+            const float uvx = (position.x - origin_x) / (plan.m_cell_metres * spacing) - 0.5f;
+            const float uvy = (position.y - origin_y) / (plan.m_cell_metres * spacing) - 0.5f;
+            const int base_x = int(std::floor(uvx));
+            const int base_y = int(std::floor(uvy));
+            const float fx = uvx - float(base_x);
+            const float fy = uvy - float(base_y);
+
+            float angle = std::atan2(direction.y, direction.x);
+            if (angle < 0.0f)
+                angle += 6.28318530718f;
+            const u32 d = u32(
+                std::clamp(
+                    int(std::floor(angle * float(L.m_directions) / 6.28318530718f + 1e-3f)), 0,
+                    int(L.m_directions) - 1));
+
+            const auto probe = [&](const int px, const int py) -> std::pair<std::array<float, 3>, float> {
+                if (px < 0 or py < 0 or px >= int(L.m_probes_x) or py >= int(L.m_probes_y)) {
+                    return {{0.0f, 0.0f, 0.0f}, 1.0f};
+                }
+                const u64 sample = (u64{static_cast<u32>(py)} * L.m_probes_x + static_cast<u32>(px)) * L.m_directions +
+                                   d;
+                const RadianceHalf &s = merged[sample];
+                return {{halfToFloat(s.m_r), halfToFloat(s.m_g), halfToFloat(s.m_b)}, halfToFloat(s.m_t)};
+            };
+
+            const auto [r00, t00] = probe(base_x, base_y);
+            const auto [r10, t10] = probe(base_x + 1, base_y);
+            const auto [r01, t01] = probe(base_x, base_y + 1);
+            const auto [r11, t11] = probe(base_x + 1, base_y + 1);
+
+            const auto lerp3 = [](const std::array<float, 3> &a, const std::array<float, 3> &b, const float t) {
+                return std::array<float, 3>{
+                    a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t};
+            };
+            const std::array<float, 3> r0 = lerp3(r00, r10, fx);
+            const std::array<float, 3> r1 = lerp3(r01, r11, fx);
+            return lerp3(r0, r1, fy);
+        }
+
+        // CPU oracle of worldLightDiffuse over the merged field: the deterministic
+        // 8-direction set with cosine weights from the horizontal tilt.
+        [[nodiscard]] std::array<float, 3> mergedDiffuseReference(
+            const lighting::WorldLightPlan &plan, const std::vector<RadianceHalf> &merged, const float2 &position,
             const float3 &normal) {
             const float tilt = std::sqrt(normal.x * normal.x + normal.y * normal.y);
 
@@ -891,7 +1079,7 @@ namespace pP::tests::detail {
                 if (tilt > 1e-6f) {
                     weight = std::max(dir.x * (normal.x / tilt) + dir.y * (normal.y / tilt), 0.0f);
                 }
-                const auto c = compositeReference(plan, field, position, dir);
+                const auto c = mergedCompositeReference(plan, merged, position, dir);
                 result[0] += c[0] * weight;
                 result[1] += c[1] * weight;
                 result[2] += c[2] * weight;
@@ -1526,25 +1714,22 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(plan.has_value());
             const u32 budget = static_cast<u32>(plan->m_levels[0].m_sample_count);
 
-            // Probe (3,3) direction 0 (up-right) hits the wall at cell (8,8); the
-            // emitter at (4,4) is down-left of the wall and far from the probe's
-            // jittered start, so the probe never sees the emitter directly and its
-            // direction-0 radiance is pure one-bounce feedback from the hit cell.
+            // Probe (3,3) direction 0 (up-right) hits the wall at cell (8,8), so
+            // its direction-0 radiance is pure one-bounce feedback from the hit
+            // cell (no emitter is present; the seeded atlas is the only source).
             const u64 sample = (3u * 128u + 3u) * 4u + 0u;
             const u64 word = sample * 4u;
 
             const auto run = [&](const float wall_albedo) -> std::vector<u16> {
                 Fixture fixture;
                 const lighting::WorldLightMaterial materials[] = {
-                    {.m_kind = 1u, .m_albedo = {wall_albedo, wall_albedo, wall_albedo}}, // wall (cell id 1)
-                    {.m_kind = 1u, .m_emission = {1.0f, 1.0f, 1.0f}}}; // emitter (cell id 2)
+                    {.m_kind = 1u, .m_albedo = {wall_albedo, wall_albedo, wall_albedo}}}; // wall (cell id 1)
                 fixture.initialize(width, height, materials);
                 auto &source = fixture.m_source;
                 auto &field = fixture.m_field;
 
                 std::vector<u16> chunk(128u * 128u, 0u);
                 chunk[8u * 128u + 8u] = 1u; // wall at (8,8)
-                chunk[4u * 128u + 4u] = 2u; // emitter at (4,4)
                 const lighting::WorldLightChunkUpdate update{.m_chunk_id = 0u, .m_cell_ids = chunk};
                 PPR_TEST_ASSERT(not source.applyUpdate({.m_chunks = {&update, 1u}, .m_revision = 1u}));
                 fixture.encodeSource();
@@ -1593,34 +1778,34 @@ namespace pP::tests::detail {
             const auto run = [&](const u16 previous_bits) -> std::vector<u16> {
                 Fixture fixture;
                 const lighting::WorldLightMaterial materials[] = {
-                    {.m_kind = 1u, .m_albedo = {1.0f, 1.0f, 1.0f}}, // wall (cell id 1)
-                    {.m_kind = 1u, .m_emission = {1.0f, 1.0f, 1.0f}}}; // emitter (cell id 2)
+                    {.m_kind = 1u, .m_albedo = {1.0f, 1.0f, 1.0f}}}; // wall (cell id 1)
                 fixture.initialize(width, height, materials);
                 auto &source = fixture.m_source;
                 auto &field = fixture.m_field;
 
                 std::vector<u16> chunk(128u * 128u, 0u);
                 chunk[8u * 128u + 8u] = 1u; // wall at (8,8)
-                chunk[4u * 128u + 4u] = 2u; // emitter at (4,4)
                 const lighting::WorldLightChunkUpdate update{.m_chunk_id = 0u, .m_cell_ids = chunk};
                 PPR_TEST_ASSERT(not source.applyUpdate({.m_chunks = {&update, 1u}, .m_revision = 1u}));
                 fixture.encodeSource();
 
-                // Fixed atlas: seed the hit cell with unit radiance; the emitter
-                // never reaches it without an atlas pass, so the bounce can only
-                // come from this seed.
+                // Fixed atlas: seed the hit cell with unit radiance, so the bounce
+                // can only come from this seed.
                 std::vector<u32> cells(u64{width} * height, 0u);
                 const float3 unit_radiance{1.0f, 1.0f, 1.0f};
                 cells[8u * width + 8u] = packRadianceRGB9E5_(unit_radiance);
                 fixture.write<u32>(fixture.m_atlas.cells(), cells);
 
                 // Warm once to consume the dirty revision and saturate the sample
-                // count at one, then overwrite the previous field that the next
-                // update reads (the current buffer). Retention 0 makes the final
-                // sample the trace result only, so nothing but the hit-time bounce
-                // can see the injected history.
+                // count at one, then overwrite the finest level of the previous
+                // field that the next update reads. The coarser levels stay zero
+                // (transmittance 0), so the parent fold adds nothing and retention
+                // 0 makes the final level-0 sample the trace result only: nothing
+                // but the hit-time bounce can see the injected history.
                 fixture.updateField(budget, 1u, 0.0f);
-                std::vector<u16> previous(field.view().m_radiance->getDesc().size / sizeof(u16), previous_bits);
+                std::vector<u16> previous(field.view().m_radiance->getDesc().size / sizeof(u16), 0u);
+                const u64 finest_words = plan->m_levels[0].m_sample_count * 4u;
+                std::fill_n(previous.begin(), static_cast<std::ptrdiff_t>(finest_words), previous_bits);
                 fixture.write<u16>(field.view().m_radiance, previous);
                 fixture.updateField(budget, 1u, 0.0f);
 
@@ -1629,7 +1814,7 @@ namespace pP::tests::detail {
                 return radiance;
             };
 
-            // Half 0.0 versus half 4.0 in every previous-field word: an
+            // Half 0.0 versus half 4.0 in every previous finest-level word: an
             // implementation that still gathers the previous field cannot return
             // the same bounce, while an atlas read never touches that buffer.
             const std::vector<u16> neutral = run(0x0000u);
@@ -1736,7 +1921,10 @@ namespace pP::tests::detail {
 
             const auto plan = lighting::planWorldLight({.m_width = width, .m_height = height, .m_cell_metres = 0.5f});
             PPR_TEST_ASSERT(plan.has_value());
-            const u32 budget = static_cast<u32>(plan->m_levels[0].m_sample_count);
+            // A full-field budget traces every level on every update. The suffix
+            // fold propagates one level per update, so ten updates cover the six
+            // levels with margin for the temporal accumulation.
+            const u32 budget = static_cast<u32>(plan->m_radiance_samples);
 
             // A walled room [70,90]^2 with an emissive lamp column at x=80, y=79..81.
             // Cell (81,80) is air inside the room next to the lamp; cell (70,80) is
@@ -1771,8 +1959,12 @@ namespace pP::tests::detail {
                 {.m_chunks = updates, .m_revision = 1u, .m_sky_hour = 12, .m_sky = {0.25f, 0.5f, 1.0f}}));
             fixture.encodeSource();
 
-            // One full round-robin pass per update: six updates cover every level.
-            fixture.runUpdates(18u, budget);
+            // Ten full-field updates carry the terminal sky down all six levels;
+            // retention 0 makes each stored value the fresh fold so the chain
+            // propagates one level per update instead of decaying through the EMA.
+            for (u32 index = 0u; index < 10u; ++index) {
+                fixture.updateField(budget, 1u, 0.0f);
+            }
 
             const auto centre = [](const u32 x, const u32 y) {
                 return float2{(static_cast<float>(x) + 0.5f) * 0.5f, (static_cast<float>(y) + 0.5f) * 0.5f};
@@ -1958,7 +2150,11 @@ namespace pP::tests::detail {
             fixture.shutdown();
         };
 
-        PPR_UNIT_TEST (composite_matches_cpu_reference) {
+        // ------------------------------------------------------------------
+        // merged field
+        // ------------------------------------------------------------------
+
+        PPR_UNIT_TEST (merged_field_matches_per_level_composite_within_tolerance) {
             constexpr u32 width = 64u;
             constexpr u32 height = 64u;
 
@@ -1969,24 +2165,108 @@ namespace pP::tests::detail {
             const auto plan = lighting::planWorldLight({.m_width = width, .m_height = height, .m_cell_metres = 0.5f});
             PPR_TEST_ASSERT(plan.has_value());
 
-            // Upload the synthetic hierarchy into the current radiance buffer, then
-            // compare the GPU composite to the CPU oracle at a position between
-            // probes and a direction away from any angular bin boundary.
-            const std::vector<RadianceHalf> synthetic = makeSyntheticField(*plan);
-            fixture.write(field.view().m_radiance, synthetic);
+            // Upload the same synthetic hierarchy twice: `raw` is the pre-merge
+            // field the per-level oracle composites, and `merged` overwrites only
+            // level 0 with the fold result while the coarser levels keep their raw
+            // values. A sampler that still loops over the levels would composite
+            // the merged level 0 again and miss the oracle.
+            const std::vector<RadianceHalf> raw = makeSyntheticField(*plan);
+            const std::vector<RadianceHalf> merged = mergeReferenceField(*plan, raw);
+            fixture.write(field.view().m_radiance, merged);
 
-            const float2 position{2.3f, 3.7f};
-            const float2 direction{std::cos(1.0f), std::sin(1.0f)};
+            struct Sample {
+                float2 m_position;
+                float2 m_direction;
+            };
+            // Positions sit inside the coarsest level's interior (its bilinear
+            // gather has both probes in range), so the comparison isolates the
+            // fold from the deliberate out-of-world edge fade.
+            const Sample samples[] = {
+                {float2{12.3f, 10.7f}, float2{std::cos(1.0f), std::sin(1.0f)}},
+                {float2{8.5f, 14.2f}, float2{std::cos(2.6f), std::sin(2.6f)}},
+                {float2{15.75f, 6.25f}, float2{1.0f, 0.0f}},
+                {float2{6.5f, 16.0f}, float2{std::cos(4.1f), std::sin(4.1f)}},
+            };
 
-            const std::array<float, 3> expected = compositeReference(*plan, synthetic, position, direction);
-            const std::array<float, 3> actual = fixture.evaluate(
-                position, direction, float3{0.0f, 0.0f, 1.0f}, 0.0f,
-                lighting::WorldLightField::EvaluateMode::kComposite);
+            for (const Sample &sample: samples) {
+                const std::array<float, 3> expected = compositeReference(
+                    *plan, raw, sample.m_position, sample.m_direction);
+                const std::array<float, 3> actual = fixture.evaluate(
+                    sample.m_position, sample.m_direction, float3{0.0f, 0.0f, 1.0f}, 0.0f,
+                    lighting::WorldLightField::EvaluateMode::kComposite);
 
-            for (u32 channel = 0u; channel < 3u; ++channel) {
-                PPR_TEST_ASSERT(std::isfinite(actual[channel]));
-                PPR_TEST_ASSERT(std::abs(actual[channel] - expected[channel]) <= 1e-4f);
+                for (u32 channel = 0u; channel < 3u; ++channel) {
+                    PPR_TEST_ASSERT(std::isfinite(actual[channel]));
+                    const float tolerance = 0.02f + 0.005f * std::abs(expected[channel]);
+                    PPR_TEST_ASSERT(std::abs(actual[channel] - expected[channel]) <= tolerance);
+                }
             }
+
+            fixture.shutdown();
+        };
+
+        PPR_UNIT_TEST (merged_field_preserves_terminal_sky_at_world_edge) {
+            constexpr u32 width = 256u;
+            constexpr u32 height = 256u;
+
+            Fixture fixture;
+            fixture.initialize(width, height);
+            auto &source = fixture.m_source;
+            auto &field = fixture.m_field;
+
+            const auto plan = lighting::planWorldLight({.m_width = width, .m_height = height, .m_cell_metres = 0.5f});
+            PPR_TEST_ASSERT(plan.has_value());
+
+            // A white sky over a vacuum world: every level's interval is empty with
+            // unit transmittance, so once the fold has propagated the terminal sky
+            // through the hierarchy the merged level 0 carries the sky at the world
+            // boundary and reads it fully away from the out-of-world fade.
+            lighting::WorldLightSourceUpdate sky_update{};
+            sky_update.m_sky = {1.0f, 1.0f, 1.0f};
+            sky_update.m_sky_hour = 12;
+            sky_update.m_revision = 1u;
+            PPR_TEST_ASSERT(not source.applyUpdate(sky_update));
+            fixture.encodeSource();
+
+            // One update traces every level; the suffix propagates one level per
+            // update, and retention 0 makes each stored value the fresh fold.
+            const u32 budget = static_cast<u32>(plan->m_radiance_samples);
+            for (u32 index = 0u; index < 8u; ++index) {
+                fixture.updateField(budget, 1u, 0.0f);
+            }
+
+            // The last level-0 probe before the +X boundary: the fold must carry
+            // the terminal sky to the edge (not leave the merged level at zero).
+            // The deliberate out-of-world fade attenuates the boundary probes, so
+            // this only requires a clearly non-zero share.
+            const auto &L = plan->m_levels[0];
+            const u32 px = L.m_probes_x - 1u;
+            const u32 py = L.m_probes_y / 2u;
+            const u64 sample = (u64{py} * L.m_probes_x + px) * L.m_directions;
+            const u64 word = sample * 4u;
+
+            const std::vector<u16> radiance = fixture.read<u16>(field.view().m_radiance);
+            for (u32 channel = 0u; channel < 3u; ++channel) {
+                const float value = halfToFloat(radiance[word + channel]);
+                PPR_TEST_ASSERT(std::isfinite(value));
+                PPR_TEST_ASSERT(value > 0.05f);
+            }
+
+            // A well-interior point folds the sky through every level without the
+            // edge fade, so the merged composite reads the terminal sky.
+            const std::array<float, 3> interior = fixture.evaluate(
+                float2{60.0f, 60.0f}, float2{1.0f, 0.0f}, float3{0.0f, 0.0f, 1.0f}, 0.0f,
+                lighting::WorldLightField::EvaluateMode::kComposite);
+            for (u32 channel = 0u; channel < 3u; ++channel) {
+                PPR_TEST_ASSERT(std::isfinite(interior[channel]));
+                PPR_TEST_ASSERT(interior[channel] > 0.9f);
+            }
+
+            // Nothing outside the world may invent radiance.
+            const std::array<float, 3> outside = fixture.evaluate(
+                float2{-100.0f, -100.0f}, float2{1.0f, 0.0f}, float3{0.0f, 0.0f, 1.0f}, 0.0f,
+                lighting::WorldLightField::EvaluateMode::kComposite);
+            PPR_TEST_ASSERT(outside == std::array<float, 3>{0.0f, 0.0f, 0.0f});
 
             fixture.shutdown();
         };
@@ -2002,8 +2282,9 @@ namespace pP::tests::detail {
             const auto plan = lighting::planWorldLight({.m_width = width, .m_height = height, .m_cell_metres = 0.5f});
             PPR_TEST_ASSERT(plan.has_value());
 
-            const std::vector<RadianceHalf> synthetic = makeSyntheticField(*plan);
-            fixture.write(field.view().m_radiance, synthetic);
+            const std::vector<RadianceHalf> raw = makeSyntheticField(*plan);
+            const std::vector<RadianceHalf> merged = mergeReferenceField(*plan, raw);
+            fixture.write(field.view().m_radiance, merged);
 
             const float2 position{2.3f, 3.7f};
             const float2 direction{1.0f, 0.0f};
@@ -2011,8 +2292,8 @@ namespace pP::tests::detail {
             // +Z normal: the near-isotropic term (average of the direction set).
             const std::array<float, 3> plus_z = fixture.evaluate(
                 position, direction, float3{0.0f, 0.0f, 1.0f}, 0.0f, lighting::WorldLightField::EvaluateMode::kDiffuse);
-            const std::array<float, 3> plus_z_ref = diffuseReference(
-                *plan, synthetic, position, float3{0.0f, 0.0f, 1.0f});
+            const std::array<float, 3> plus_z_ref = mergedDiffuseReference(
+                *plan, merged, position, float3{0.0f, 0.0f, 1.0f});
             for (u32 channel = 0u; channel < 3u; ++channel) {
                 PPR_TEST_ASSERT(std::isfinite(plus_z[channel]));
                 PPR_TEST_ASSERT(std::abs(plus_z[channel] - plus_z_ref[channel]) <= 1e-4f);
@@ -2022,8 +2303,8 @@ namespace pP::tests::detail {
             const std::array<float, 3> perturbed = fixture.evaluate(
                 position, direction, float3{0.5f, -0.3f, 0.8f}, 0.0f,
                 lighting::WorldLightField::EvaluateMode::kDiffuse);
-            const std::array<float, 3> perturbed_ref = diffuseReference(
-                *plan, synthetic, position, float3{0.5f, -0.3f, 0.8f});
+            const std::array<float, 3> perturbed_ref = mergedDiffuseReference(
+                *plan, merged, position, float3{0.5f, -0.3f, 0.8f});
             bool changed = false;
             for (u32 channel = 0u; channel < 3u; ++channel) {
                 PPR_TEST_ASSERT(std::isfinite(perturbed[channel]));
@@ -2046,8 +2327,9 @@ namespace pP::tests::detail {
             const auto plan = lighting::planWorldLight({.m_width = width, .m_height = height, .m_cell_metres = 0.5f});
             PPR_TEST_ASSERT(plan.has_value());
 
-            const std::vector<RadianceHalf> synthetic = makeSyntheticField(*plan);
-            fixture.write(field.view().m_radiance, synthetic);
+            const std::vector<RadianceHalf> raw = makeSyntheticField(*plan);
+            const std::vector<RadianceHalf> merged = mergeReferenceField(*plan, raw);
+            fixture.write(field.view().m_radiance, merged);
 
             const float2 position{2.3f, 3.7f};
 
@@ -2061,12 +2343,12 @@ namespace pP::tests::detail {
                 PPR_TEST_ASSERT(vertical[channel] == 0.0f);
             }
 
-            // Zero roughness returns the composite at the reflection direction.
+            // Zero roughness returns the merged composite at the reflection direction.
             const float2 reflection{1.0f, 0.0f};
             const std::array<float, 3> sharp = fixture.evaluate(
                 position, reflection, float3{0.0f, 0.0f, 1.0f}, 0.0f,
                 lighting::WorldLightField::EvaluateMode::kSpecular);
-            const std::array<float, 3> sharp_ref = compositeReference(*plan, synthetic, position, reflection);
+            const std::array<float, 3> sharp_ref = mergedCompositeReference(*plan, merged, position, reflection);
             for (u32 channel = 0u; channel < 3u; ++channel) {
                 PPR_TEST_ASSERT(std::isfinite(sharp[channel]));
                 PPR_TEST_ASSERT(std::abs(sharp[channel] - sharp_ref[channel]) <= 1e-4f);
@@ -3849,7 +4131,8 @@ namespace pP::tests {
             detail::WorldLightFieldGpu::field_routing_applies_dirty_chunk_and_binds_view,
             detail::WorldLightFieldGpu::atlas_seeds_emissive_cells_and_retains_history,
             detail::WorldLightFieldGpu::atlas_vacuum_source_is_all_zero,
-            detail::WorldLightFieldGpu::composite_matches_cpu_reference,
+            detail::WorldLightFieldGpu::merged_field_matches_per_level_composite_within_tolerance,
+            detail::WorldLightFieldGpu::merged_field_preserves_terminal_sky_at_world_edge,
             detail::WorldLightFieldGpu::diffuse_plus_z_isotropic_and_perturbed_finite,
             detail::WorldLightFieldGpu::specular_vertical_reflection_and_roughness_finite,
             detail::WorldLightFieldGpu::grid_shading_uses_field,

@@ -51,9 +51,13 @@ export namespace pP::lighting {
     // field view
     // ------------------------------------------------------------------
 
-    // Immutable view of the current field for consumers (Task 8/10): the current
-    // and previous radiance buffers (8 B/sample) and the CPU constants mirror.
-    // Borrowed pointers; the field owner outlives every view.
+    // Immutable view of the current field for consumers (Task 8/10). m_radiance
+    // is the merged field: update() folds every cascade level into level 0 at
+    // trace time, so level 0 holds the near-to-far composite and shading samples
+    // it alone (the remaining level regions stay exposed through m_constants for
+    // debug views and tests but must not be re-composited). m_previous_radiance
+    // is the previous frame's merged field, kept for feedback parity tests and
+    // the atlas producer. Borrowed pointers; the field owner outlives every view.
     struct WorldLightFieldView {
         rhi::IBuffer *m_radiance{};
         rhi::IBuffer *m_previous_radiance{};
@@ -67,9 +71,12 @@ export namespace pP::lighting {
     // Owns the double-buffered cascade radiance field, per-direction sample
     // counts, and the round-robin work cursor. update() traces one bounded range
     // of direction samples per level through the dense source and accumulates
-    // them into the running per-direction mean; a source revision change resets
-    // only the intersecting probes (both buffers) before the cursor reprocesses
-    // them. There is no readback, publication, or camera input.
+    // them into the running per-direction mean; each traced sample folds in its
+    // parent level's already-merged suffix, so level 0 ends up as the fully merged
+    // near-to-far field while the coarser levels keep their own suffixes. A source
+    // revision change resets only the intersecting probes (both buffers) before
+    // the cursor reprocesses them. There is no readback, publication, or camera
+    // input.
     class WorldLightField {
     public:
         WorldLightField();
@@ -87,6 +94,8 @@ export namespace pP::lighting {
         // accumulation_samples the per-direction running-mean cap, and
         // history_retention the steady-state per-60Hz retention (0..1). The
         // shader uses dt and history_retention to derive the per-frame EMA blend.
+        // Every traced sample is folded into its parent level's suffix, so the
+        // update leaves level 0 as the merged field the view publishes.
         // The atlas holds one packed RGB9E5 radiance word per native cell; its
         // encode() must already be recorded earlier in the same command buffer,
         // and this update transitions it to a shader resource before the trace

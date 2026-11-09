@@ -2,14 +2,16 @@
 // cascade world light field: composite sampling and material response
 // ------------------------------------------------------------------
 // Shading-side sampler for the temporal cascade field, shared by the field's
-// evaluate entry (Task 7) and the terrain fragment shading (Task 8). The field
-// stores one interval of directional radiance per level; worldLightComposite
-// bilinearly gathers each level at a world-space position, maps the continuous
-// direction to that level's angular bin, and composites near-to-far with the
-// scalar transmittance, L = L0 + T0*(L1 + T1*(...)). worldLightDiffuse and
-// worldLightSpecular reduce the composite to a cosine-weighted diffuse term and
-// a reflection term with a roughness lobe. No physical quantity is clamped here;
-// the shading body clamps only its final output.
+// evaluate entry (Task 7) and the terrain fragment shading (Task 8). Each level
+// stores its own interval already composited with every farther interval
+// (world_light_trace.slang folds the parent suffix in at trace time), so level 0
+// holds the fully merged field. worldLightComposite therefore bilinearly gathers
+// level 0 only at a world-space position and maps the continuous direction to
+// level 0's angular bin; no per-level loop runs at shading time.
+// worldLightDiffuse and worldLightSpecular reduce that merged field to a
+// cosine-weighted diffuse term and a reflection term with a roughness lobe. No
+// physical quantity is clamped here; the shading body clamps only its final
+// output.
 #ifndef PPR_WORLD_LIGHT_SAMPLE_SLANG
 #define PPR_WORLD_LIGHT_SAMPLE_SLANG
 
@@ -72,12 +74,13 @@ uint worldLightDirectionIndex(float2 direction, uint directions) {
 }
 
 // Bilinearly gathers one level's radiance and transmittance at a world-space
-// position for the given direction. Probe centres sit at integer probe
+// position for the given direction bin. Probe centres sit at integer probe
 // coordinates ((px + 0.5) * spacing in cells), so subtracting a half probe maps
-// them to the bilinear lattice.
+// them to the bilinear lattice. A caller that already resolved the bin (the
+// trace's parent fold) uses the index form directly.
 [ForceInline]
-void worldLightLevelSampleFrom(
-    RWStructuredBuffer<WorldLightRadiance> radianceBuffer, WorldLightLevelGpu level, float2 position, float2 direction,
+void worldLightLevelSampleIndexFrom(
+    RWStructuredBuffer<WorldLightRadiance> radianceBuffer, WorldLightLevelGpu level, float2 position, uint directionIndex,
     out float3 radianceOut, out float transmittance) {
     float2 origin = float2(g_world_light_field.originX, g_world_light_field.originY);
     float spacing = float(level.spacing);
@@ -87,8 +90,6 @@ void worldLightLevelSampleFrom(
     float2 baseF = floor(uv);
     float2 frac = uv - baseF;
     int2 base = int2(baseF);
-
-    uint directionIndex = worldLightDirectionIndex(direction, level.directions);
 
     float3 r00, r10, r01, r11;
     float t00, t10, t01, t11;
@@ -107,6 +108,15 @@ void worldLightLevelSampleFrom(
 }
 
 [ForceInline]
+void worldLightLevelSampleFrom(
+    RWStructuredBuffer<WorldLightRadiance> radianceBuffer, WorldLightLevelGpu level, float2 position, float2 direction,
+    out float3 radianceOut, out float transmittance) {
+    worldLightLevelSampleIndexFrom(
+        radianceBuffer, level, position, worldLightDirectionIndex(direction, level.directions), radianceOut,
+        transmittance);
+}
+
+[ForceInline]
 void worldLightLevelSample(
     WorldLightLevelGpu level, float2 position, float2 direction, out float3 radiance, out float transmittance) {
     worldLightLevelSampleFrom(g_world_light_radiance_cur, level, position, direction, radiance, transmittance);
@@ -116,24 +126,44 @@ void worldLightLevelSample(
 // composite and material terms
 // ------------------------------------------------------------------
 
-// Near-to-far transmittance composite of the whole hierarchy at one position
-// and direction: L = L0 + T0*(L1 + T1*(...)). Each level carries its own
-// interval radiance and attenuates everything beyond it.
+// Samples one level's suffix at a finer level's probe centre for a given finer
+// direction: the parent's angular bins are four times finer, so the four bins
+// that span the finer bin are averaged, and the parent probes are bilinearly
+// gathered at that world position. This is the fold the trace applies after
+// tracing a level's own interval: L = L_near + T_near * L_far and
+// T = T_near * T_far with the parent's suffix as L_far/T_far.
+[ForceInline]
+void worldLightParentSampleFrom(
+    RWStructuredBuffer<WorldLightRadiance> radianceBuffer, WorldLightLevelGpu childLevel,
+    WorldLightLevelGpu parentLevel, float2 position, uint childDirection, out float3 radiance,
+    out float transmittance) {
+    uint ratio = max(parentLevel.directions / max(childLevel.directions, 1u), 1u);
+
+    float3 sumRadiance = float3(0.0, 0.0, 0.0);
+    float sumTransmittance = 0.0;
+    for (uint index = 0u; index < ratio; ++index) {
+        float3 r;
+        float t;
+        worldLightLevelSampleIndexFrom(
+            radianceBuffer, parentLevel, position, childDirection * ratio + index, r, t);
+        sumRadiance += r;
+        sumTransmittance += t;
+    }
+
+    float inverse = 1.0 / float(ratio);
+    radiance = sumRadiance * inverse;
+    transmittance = sumTransmittance * inverse;
+}
+
+// The merged field at one position and direction. Level 0 already holds every
+// level's interval folded near-to-far, so this is a single-level gather: reading
+// the remaining levels here would composite already-merged data twice.
 [ForceInline]
 float3 worldLightCompositeFrom(RWStructuredBuffer<WorldLightRadiance> radianceBuffer, float2 position, float2 direction) {
-    float3 result = float3(0.0, 0.0, 0.0);
-    float throughput = 1.0;
-
-    uint levelCount = g_world_light_field.levelCount;
-    for (uint level = 0u; level < levelCount; ++level) {
-        float3 radiance;
-        float transmittance;
-        worldLightLevelSampleFrom(radianceBuffer, g_world_light_field.levels[level], position, direction, radiance, transmittance);
-
-        result += throughput * radiance;
-        throughput *= transmittance;
-    }
-    return result;
+    float3 radiance;
+    float transmittance;
+    worldLightLevelSampleFrom(radianceBuffer, g_world_light_field.levels[0], position, direction, radiance, transmittance);
+    return radiance;
 }
 
 [ForceInline]
