@@ -526,9 +526,13 @@ export namespace pP {
         // buffer and CPU constants are bound each frame for the opaque terrain
         // path. The field owner outlives every view; pass an empty view to clear.
         // debug_view selects the shader debug output (0 = off, 1 = probes) and
-        // only feeds the terrain WorldLightSwitch mirror.
+        // only feeds the terrain WorldLightSwitch mirror. `atlas` is the
+        // per-cell incident radiance buffer the terrain ambient term samples
+        // (borrowed, already reachable through this same world-light binding);
+        // atlas_ambient is clamped to the documented shader bound before upload.
         [[nodiscard]] std::error_code setWorldLightField(
-            const lighting::WorldLightFieldView &view, u32 debug_view = 0u);
+            const lighting::WorldLightFieldView &view, u32 debug_view = 0u, rhi::IBuffer *atlas = nullptr,
+            float atlas_ambient = 0.0f);
 
         [[nodiscard]] GridWorldIdentity activeWorldIdentity() const noexcept {
             return {m_world.m_job_id, m_world.m_world_generation, m_world.m_content_fingerprint};
@@ -1057,6 +1061,8 @@ export namespace pP {
         WorldResources m_world{};
         lighting::WorldLightFieldView m_world_light_view{};
         u32 m_world_light_debug_view{};
+        rhi::IBuffer *m_world_light_atlas{};
+        float m_world_light_atlas_ambient{};
         std::unique_ptr<WorldResources> m_candidate_world{};
         std::unique_ptr<WorldResources> m_retiring_world{};
 

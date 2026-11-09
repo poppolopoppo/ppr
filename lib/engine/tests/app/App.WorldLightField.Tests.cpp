@@ -3047,6 +3047,234 @@ namespace pP::tests::detail {
             fixture.shutdown();
         };
 
+        PPR_UNIT_TEST (atlas_ambient_lights_terrain_borders) {
+            constexpr u32 width = 64u;
+            constexpr u32 height = 64u;
+
+            Fixture fixture;
+            fixture.initialize(width, height);
+            auto &device = fixture.m_rhi->getDevice();
+            auto &field = fixture.m_field;
+            auto &atlas = fixture.m_atlas;
+
+            // Zero merged field: diffuse and specular are exactly zero, so the
+            // only light in the render is the atlas ambient term under test.
+            const u64 radiance_samples = field.view().m_radiance->getDesc().size / sizeof(RadianceHalf);
+            std::vector<RadianceHalf> zero(radiance_samples, RadianceHalf{});
+            fixture.write(field.view().m_radiance, zero);
+
+            // Incident radiance of 1.0 over the whole border grid cell (2,2) and
+            // zero under the deep interior cell (6,6). The fixture initializes
+            // the field at 0.5 m cells while GridPass uses 1 m cells, so a 1 m
+            // grid cell spans a 2x2 block of atlas cells: world [2,3) is the
+            // atlas block [4,5]x[4,5], and the interior cell [6,7) is the
+            // [12,13]x[12,13] block left at zero.
+            constexpr u32 kBorderAtlasCell = 4u;
+            std::vector<u32> cells(u64{width} * height, 0u);
+            for (u32 y = kBorderAtlasCell; y <= kBorderAtlasCell + 1u; ++y) {
+                for (u32 x = kBorderAtlasCell; x <= kBorderAtlasCell + 1u; ++x) {
+                    cells[y * width + x] = packRadianceRGB9E5_(float3{1.0f, 1.0f, 1.0f});
+                }
+            }
+            fixture.write<u32>(atlas.cells(), cells);
+
+            fixture.initializeGrid();
+            auto &grid = fixture.m_grid;
+
+            // Orthographic camera viewing the [0,8)^2 cell region (16 px/cell),
+            // the same framing as grid_shading_uses_field.
+            constexpr u32 target_edge = 128u;
+            Camera camera{ECameraProjection::orthographic};
+            CameraModel model{};
+            model.m_camera_mode = ECameraProjection::orthographic;
+            model.m_origin = float3{0.0f, 0.0f, -0.5f};
+            model.m_ortho_scale = 1.0f / 16.0f;
+            camera.updateModel(
+                TimeSpan{}, model,
+                Viewport{PixelRect{int2{0, 0}, int2{int(target_edge), int(target_edge)}}, ViewportLayout{}});
+            const auto snapshot = camera.getSnapshot();
+
+            const auto image = [](const std::array<std::byte, 4u> bytes) {
+                mem::UniqueBuffer storage = mem::UniqueBuffer::allocate(bytes.size());
+                PPR_TEST_ASSERT(not storage.materialize());
+                const auto writable = storage.getMutableData();
+                PPR_TEST_ASSERT(writable.has_value());
+                std::ranges::copy(bytes, writable->begin());
+                mem::SharedBuffer frozen;
+                PPR_TEST_ASSERT(not storage.moveToShared(&frozen));
+                image::ImageAsset result{};
+                result.m_width = result.m_height = 1u;
+                result.m_storage = frozen;
+                result.m_subresources.push_back({frozen.subspan(0u, 4u), 4u, 4u});
+                return result;
+            };
+
+            GridStagedFrame stage{};
+            stage.m_full_refresh = stage.m_reset_caches = stage.m_has_catalog = true;
+            stage.m_cell_size_m = 1.0f;
+            stage.m_boundary_material_id = 1u;
+            stage.m_content_fingerprint = 23u;
+
+            GridTerrainVisual opaque{};
+            opaque.m_material_id = 1u;
+            opaque.m_color_rgba = 0xffffffffu;
+            opaque.m_texture_index = 0u;
+            opaque.m_transport_model = kGridTransportOpaqueV1;
+            opaque.m_metallic = 0.0f;
+            opaque.m_roughness = 1.0f;
+            opaque.m_ior = 1.0f;
+            stage.m_terrain_visuals.push_back(opaque);
+            stage.m_terrain_images.push_back(image({std::byte{255}, std::byte{255}, std::byte{255}, std::byte{255}}));
+
+            stage.m_tiles.push_back({.m_dirty_mask = 1u, .m_tile_range = {0, 0, 128, 128}, .m_chunk_id = 0u});
+            GridStagedUpload upload{};
+            upload.m_payload.m_rect[2] = upload.m_payload.m_rect[3] = 128.0f;
+            upload.m_cell_materials.assign(GridPass::kCellsPerChunk, 0u);
+            upload.m_cell_materials[2u * 128u + 2u] = 1u;
+            upload.m_cell_materials[6u * 128u + 6u] = 1u;
+            stage.m_uploads.push_back(std::move(upload));
+
+            PPR_TEST_ASSERT(not grid.stageWorldCandidate(9u, 19u, stage));
+            bool candidate_ready = false;
+            for (u32 advance = 0u; advance < 8u; ++advance) {
+                const auto ready = grid.advanceWorldCandidate(device, fixture.m_fence.completed());
+                PPR_TEST_ASSERT(ready.has_value());
+                if (*ready) {
+                    candidate_ready = true;
+                    break;
+                }
+            }
+            PPR_TEST_ASSERT(candidate_ready);
+            PPR_TEST_ASSERT(not grid.activateWorldCandidate(9u, 19u, 23u));
+            PPR_TEST_ASSERT(not grid.update(TimeSpan{}, snapshot, false));
+
+            rhi::TextureDesc target_desc{};
+            target_desc.type = rhi::TextureType::Texture2D;
+            target_desc.size = {.width = target_edge, .height = target_edge, .depth = 1u};
+            target_desc.format = rhi::Format::RGBA32Float;
+            target_desc.memoryType = rhi::MemoryType::DeviceLocal;
+            target_desc.usage = static_cast<rhi::TextureUsage>(
+                static_cast<u32>(rhi::TextureUsage::RenderTarget) | static_cast<u32>(rhi::TextureUsage::CopySource));
+            target_desc.defaultState = rhi::ResourceState::RenderTarget;
+            rhi::ComPtr<rhi::ITexture> target;
+            rhi::ComPtr<rhi::ITextureView> target_view;
+            PPR_TEST_ASSERT(not make_error_code(device.createTexture(target_desc, nullptr, target.writeRef())));
+            PPR_TEST_ASSERT(not make_error_code(target->getDefaultView(target_view.writeRef())));
+
+            const auto viewport = rhi::Viewport::fromSize(float(target_edge), float(target_edge));
+            const auto scissor = rhi::ScissorRect::fromSize(target_edge, target_edge);
+
+            // The border cell reads incident radiance from the atlas; the deep
+            // interior cell has none. Both cells share the same white material, so
+            // only the term can separate them.
+            const auto render = [&](const float atlas_ambient) {
+                PPR_TEST_ASSERT(not grid.setWorldLightField(field.view(), 0u, atlas.cells(), atlas_ambient));
+                PPR_TEST_ASSERT(not grid.update(TimeSpan{}, snapshot, false));
+
+                rhi::ComPtr<rhi::ICommandEncoder> encoder;
+                PPR_TEST_ASSERT(not make_error_code(fixture.m_queue->createCommandEncoder(encoder.writeRef())));
+                const PreRenderContext pre{device, *encoder, fixture.m_fence.completed(), {}};
+                PPR_TEST_ASSERT(not grid.prepareGpuVisibility(pre));
+
+                encoder->setTextureState(
+                    target, rhi::SubresourceRange{.layer = 0u, .layerCount = 1u, .mip = 0u, .mipCount = 1u},
+                    rhi::ResourceState::RenderTarget);
+                rhi::RenderPassColorAttachment attachment{};
+                attachment.view = target_view;
+                attachment.clearValue[0] = attachment.clearValue[1] = attachment.clearValue[2] =
+                    attachment.clearValue[3] = 0.0f;
+                rhi::RenderPassDesc pass_desc{};
+                pass_desc.colorAttachments = &attachment;
+                pass_desc.colorAttachmentCount = 1u;
+                auto *const pass = encoder->beginRenderPass(pass_desc);
+                PPR_TEST_ASSERT(pass != nullptr);
+                {
+                    PPR_DEFER {
+                        pass->end();
+                    };
+                    RenderPipelineSignature signature{};
+                    signature.m_color_formats[0] = rhi::Format::RGBA32Float;
+                    signature.m_color_format_count = 1u;
+                    const DrawContext draw{
+                        device, *pass, RenderPipelineKey{signature}, viewport, scissor,
+                        int2{int(target_edge), int(target_edge)}, fixture.m_fence.completed(), {}};
+                    PPR_TEST_ASSERT(not grid.renderGpuIndirect(draw));
+                }
+
+                rhi::ComPtr<rhi::ICommandBuffer> commands;
+                PPR_TEST_ASSERT(not make_error_code(encoder->finish(commands.writeRef())));
+                rhi::ICommandBuffer *pointer = commands.get();
+                rhi::IFence *signal = fixture.m_fence.fence();
+                const auto value = fixture.m_fence.nextValue();
+                const u64 raw_value = value;
+                rhi::SubmitDesc submit{};
+                submit.commandBuffers = &pointer;
+                submit.commandBufferCount = 1u;
+                submit.signalFences = &signal;
+                submit.signalFenceValues = &raw_value;
+                submit.signalFenceCount = 1u;
+                PPR_TEST_ASSERT(not make_error_code(fixture.m_queue->submit(submit)));
+                fixture.m_fence.commitSubmitted(value);
+                grid.notifyFrameSubmitted(value);
+                PPR_TEST_ASSERT(not fixture.m_fence.waitFor(value));
+            };
+
+            const auto readback = [&]() {
+                shader::ComPtr<ISlangBlob> blob;
+                rhi::SubresourceLayout layout{};
+                PPR_TEST_ASSERT(not make_error_code(device.readTexture(target, 0u, 0u, blob.writeRef(), &layout)));
+                const auto *const source = static_cast<const std::byte *>(blob->getBufferPointer());
+
+                std::vector<std::array<float, 4u>> pixels(std::size_t(target_edge) * target_edge);
+                for (u32 y = 0u; y < target_edge; ++y) {
+                    for (u32 x = 0u; x < target_edge; ++x) {
+                        std::array<float, 4u> value{};
+                        std::memcpy(value.data(), source + y * layout.rowPitch + x * sizeof(value), sizeof(value));
+                        pixels[y * target_edge + x] = value;
+                    }
+                }
+                return pixels;
+            };
+
+            // 16 px/cell, world y = 0 at the bottom (same mapping as the
+            // translucent tests above).
+            const auto cell_centre = [](const int cx, const int cy) {
+                return std::pair{8 + cx * 16, 8 + (7 - cy) * 16};
+            };
+            const auto luminance_at = [&](const std::vector<std::array<float, 4u>> &pixels, const int cx,
+                                          const int cy) {
+                const auto [x, y] = cell_centre(cx, cy);
+                const auto &pixel = pixels[static_cast<std::size_t>(y) * target_edge + static_cast<std::size_t>(x)];
+                PPR_TEST_ASSERT(std::isfinite(pixel[0]) and std::isfinite(pixel[1]) and std::isfinite(pixel[2]));
+                return 0.2126f * pixel[0] + 0.7152f * pixel[1] + 0.0722f * pixel[2];
+            };
+
+            constexpr float kAtlasAmbient = 0.3f;
+            render(kAtlasAmbient);
+            const auto lit = readback();
+            const float border_lit = luminance_at(lit, 2, 2);
+            const float interior_lit = luminance_at(lit, 6, 6);
+
+            render(0.0f);
+            const auto unlit = readback();
+            const float border_unlit = luminance_at(unlit, 2, 2);
+
+            // The atlas carries 1.0 under the border cell and 0.0 under the deep
+            // interior; with white albedo the term is ambient * 1.0. The deep
+            // interior must stay black (no spread) and the border must be clearly
+            // lit, not flooded.
+            PPR_TEST_ASSERT(border_lit > 0.2f);
+            PPR_TEST_ASSERT(border_lit < 0.4f);
+            PPR_TEST_ASSERT(interior_lit < 1.0e-5f);
+            // Disabling the knob returns the border to the unlit baseline, so the
+            // term really comes from the atlas ambient rather than another path.
+            PPR_TEST_ASSERT(border_unlit < 1.0e-5f);
+
+            target_view.setNull();
+            target.setNull();
+            fixture.shutdown();
+        };
+
         PPR_UNIT_TEST (translucent_clipped_by_terrain) {
             constexpr u32 width = 64u;
             constexpr u32 height = 64u;
@@ -4514,6 +4742,7 @@ namespace pP::tests {
             detail::WorldLightFieldGpu::diffuse_plus_z_isotropic_and_perturbed_finite,
             detail::WorldLightFieldGpu::specular_vertical_reflection_and_roughness_finite,
             detail::WorldLightFieldGpu::grid_shading_uses_field,
+            detail::WorldLightFieldGpu::atlas_ambient_lights_terrain_borders,
             detail::WorldLightFieldGpu::translucent_clipped_by_terrain,
             detail::WorldLightFieldGpu::translucent_premultiplied_absorption,
             detail::HistogramAdaptation::histogram_adaptation,

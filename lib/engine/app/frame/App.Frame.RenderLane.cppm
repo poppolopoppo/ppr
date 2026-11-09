@@ -77,6 +77,9 @@ export namespace pP {
         u32 m_field_budget{};
         u32 m_field_accumulation_samples{8u};
         float m_field_history_retention{0.9f};
+        // Terrain atlas ambient strength (0 to 0.35), mirrored into the terrain
+        // WorldLightSwitch constant buffer next to the field debug selector.
+        float m_field_atlas_ambient{0.3f};
         // Field debug view selector (0 = off, 1 = probes), mirrored into the
         // terrain WorldLightSwitch constant buffer.
         u32 m_field_debug_view{};

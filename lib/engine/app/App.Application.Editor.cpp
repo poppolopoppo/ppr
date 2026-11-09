@@ -86,6 +86,7 @@ namespace pP {
         u32 m_budget{};
         u32 m_accumulation_samples{8u};
         float m_history_retention{0.9f};
+        float m_atlas_ambient{0.3f};
         u32 m_debug_view{};
         bool m_initialized{};
         bool m_frame_logged{};
@@ -1556,6 +1557,7 @@ namespace pP {
                         field.m_accumulation_samples = command.m_field_accumulation_samples;
                         field.m_history_retention = command.m_field_history_retention;
                         field.m_atlas.setTemporalRetention(field.m_history_retention);
+                        field.m_atlas_ambient = command.m_field_atlas_ambient;
                         field.m_debug_view = command.m_field_debug_view;
                         field.m_initialized = true;
                     }
@@ -1912,7 +1914,9 @@ namespace pP {
                                                      : static_cast<u32>(field.m_plan.m_levels[0].m_sample_count),
                                 field.m_accumulation_samples, field.m_history_retention));
                 PPR_RETURN_ERROR_ON_FAIL(
-                    Editor, m_grid_pass->setWorldLightField(field.m_field.view(), field.m_debug_view));
+                    Editor,
+                    m_grid_pass->setWorldLightField(
+                        field.m_field.view(), field.m_debug_view, field.m_atlas.cells(), field.m_atlas_ambient));
 
                 out_result.m_lighting_source_revision = field.m_source.revision();
                 out_result.m_lighting_field_cycle = field.m_field.cycle();

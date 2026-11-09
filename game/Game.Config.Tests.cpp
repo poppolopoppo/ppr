@@ -802,6 +802,37 @@ namespace pP::game::tests::detail::compat {
         PPR_TEST_ASSERT(help.find("post-palette") != std::string::npos);
     };
 
+    PPR_UNIT_TEST (world_light_atlas_ambient_defaults_to_visible_borders) {
+        // The atlas ambient term is the only terrain path that lights interior
+        // cells from the incident radiance of their neighbours. The validated
+        // incident range is ~0.25-2.5; with the shipped material albedos a
+        // strength in 0.2-0.35 lifts a lit border cell by roughly a third of the
+        // diffuse term while leaving a deep interior cell dark, so the default
+        // must sit inside that window and stay above zero.
+        const WorldLightDisplaySettings defaults{};
+        PPR_TEST_ASSERT(defaults.m_atlas_ambient > 0.0f);
+        PPR_TEST_ASSERT(defaults.m_atlas_ambient >= 0.2f and defaults.m_atlas_ambient <= 0.35f);
+
+        Diagnostics defaults_diagnostics;
+        const auto resolved = resolveCli({}, defaults_diagnostics);
+        PPR_TEST_ASSERT(resolved.has_value());
+        PPR_TEST_ASSERT(resolved->m_world_light.m_value.m_atlas_ambient == defaults.m_atlas_ambient);
+
+        Diagnostics tuned_diagnostics;
+        const auto tuned = resolveCli({"--world-light-atlas-ambient=0.35"}, tuned_diagnostics);
+        PPR_TEST_ASSERT(tuned.has_value());
+        PPR_TEST_ASSERT(tuned->m_world_light.m_value.m_atlas_ambient == 0.35f);
+
+        // The bound is a real schema limit, not a clamp applied later: a value
+        // that would push terrain albedo * strength toward the feedback loop's
+        // gain of one is rejected outright.
+        for (const char *const invalid: {"--world-light-atlas-ambient=-0.01", "--world-light-atlas-ambient=0.351"}) {
+            Diagnostics rejected;
+            PPR_TEST_ASSERT(not resolveCli({invalid}, rejected));
+            PPR_TEST_ASSERT(rejected.hasErrors());
+        }
+    };
+
     PPR_UNIT_TEST (debug_view_has_only_off_and_probes) {
         // The removed `irradiance` arm must not be advertised, parsed or
         // validated: an unimplemented mode falls back to `off` in the shader, so

@@ -209,9 +209,10 @@ export namespace pP::game {
 
     /// Runtime-tunable world-light-field settings. `m_enabled` gates field mode;
     /// the remaining fields bound the per-frame budget, the per-direction
-    /// temporal accumulation, the cascade level count, the field sky hour and
-    /// the debug view. Persisted under `game.world_light.*` and edited in the
-    /// Display window's "Lighting & Post" section; applied at field init/update.
+    /// temporal accumulation, the cascade level count, the field sky hour, the
+    /// terrain atlas ambient strength and the debug view. Persisted under
+    /// `game.world_light.*` and edited in the Display window's "Lighting & Post"
+    /// section; applied at field init/update.
     struct WorldLightDisplaySettings {
         bool m_enabled{true};
         EWorldLightDebugView m_debug_view{EWorldLightDebugView::off};
@@ -220,6 +221,11 @@ export namespace pP::game {
         float m_history_retention{0.9f};
         u32 m_level_count{6u};
         i32 m_sky_hour{12};
+        // Scale of the incident-radiance atlas term on terrain
+        // (ambient * albedo * atlasRadiance). Kept below one so ambient * albedo
+        // cannot approach the atlas feedback loop's closed-loop gain; 0.3 makes
+        // a dug border read against rock without flooding a deep interior cell.
+        float m_atlas_ambient{0.3f};
 
         [[nodiscard]] static constexpr auto describe() {
             using namespace config;
@@ -262,6 +268,13 @@ export namespace pP::game {
                         "Field sky solar hour (-1 uses the black boundary sky; 12 is noon)", "World lighting",
                         EMutability::runtime, ESource::all, true},
                     Range<i32>{-1, 23}),
+                field(
+                    &WorldLightDisplaySettings::m_atlas_ambient,
+                    Metadata{
+                        "game.world_light.atlas_ambient",
+                        "Terrain ambient from the incident radiance atlas (0 to 0.35)", "World lighting",
+                        EMutability::runtime, ESource::all, true},
+                    Range<float>{0.0f, 0.35f}),
                 field(
                     &WorldLightDisplaySettings::m_debug_view,
                     Metadata{

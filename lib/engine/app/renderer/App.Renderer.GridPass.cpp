@@ -460,11 +460,17 @@ namespace pP {
     }
 
 
-    std::error_code GridPass::setWorldLightField(const lighting::WorldLightFieldView &view, const u32 debug_view) {
+    std::error_code GridPass::setWorldLightField(
+        const lighting::WorldLightFieldView &view, const u32 debug_view, rhi::IBuffer *const atlas,
+        const float atlas_ambient) {
         // Borrowed view; the field owner outlives every view. An empty view
         // (null radiance) clears the binding and restores the existing path.
         m_world_light_view = view;
         m_world_light_debug_view = debug_view;
+        m_world_light_atlas = view.m_radiance != nullptr ? atlas : nullptr;
+        // kWorldLightAtlasAmbientLimit in grid_tiles.slang: ambient * albedo must
+        // stay well below one, so the shader and this mirror share the same bound.
+        m_world_light_atlas_ambient = m_world_light_atlas != nullptr ? std::clamp(atlas_ambient, 0.0f, 0.35f) : 0.0f;
         return {};
     }
 
@@ -2966,11 +2972,13 @@ namespace pP {
         // CPU mirror of the Slang WorldLightSwitch: scalar padding keeps the
         // ConstantBuffer layout identical to the four-u32 shader struct.
         // m_debug_view is the field debug selector (0 = off, 1 = probes);
-        // m_pad0/m_pad1 remain reserved.
+        // m_atlas_ambient is the terrain incident-radiance scale (already
+        // bounded by setWorldLightField) and m_pad1 stays reserved.
         struct WorldLightSwitch {
             u32 m_enabled{};
             u32 m_debug_view{};
-            u32 m_pad0{}, m_pad1{};
+            float m_atlas_ambient{};
+            u32 m_pad1{};
         };
         static_assert(sizeof(WorldLightSwitch) == 16u and alignof(WorldLightSwitch) == 4u);
 
@@ -2979,6 +2987,7 @@ namespace pP {
         WorldLightSwitch sw{};
         sw.m_enabled = enabled ? 1u : 0u;
         sw.m_debug_view = enabled ? m_world_light_debug_view : 0u;
+        sw.m_atlas_ambient = enabled ? m_world_light_atlas_ambient : 0.0f;
         rhi::ShaderCursor constants{};
         PPR_RETURN_ERROR_ON_FAIL(GridPass, cursor["g_world_light"].getDereferenced(constants));
         PPR_RETURN_ERROR_ON_FAIL(GridPass, constants.setData(&sw, sizeof(sw)));
@@ -2991,6 +3000,15 @@ namespace pP {
         rhi::IBuffer *const radiance = enabled ? m_world_light_view.m_radiance : m_world_light_dummy.get();
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass, cursor["g_world_light_radiance_cur"].setBinding(rhi::Binding(radiance, makeFullRange(radiance))));
+
+        // One packed RGB9E5 word per native cell. The same world-light root
+        // already carried this slot for the trace; the terrain samples it here
+        // for the atlas ambient term. When no field is set, the 8-byte dummy
+        // keeps the root complete and the ambient scale is zero.
+        rhi::IBuffer *const atlas = enabled and m_world_light_atlas != nullptr ? m_world_light_atlas
+                                                                               : m_world_light_dummy.get();
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, cursor["g_world_light_atlas"].setBinding(rhi::Binding(atlas, makeFullRange(atlas))));
 
         return {};
     }
@@ -3088,6 +3106,15 @@ namespace pP {
             GridPass, m_world.m_submitted_tiles.size() <= kGridTileCacheCapacity
                           ? std::error_code{}
                           : std::make_error_code(std::errc::no_buffer_space));
+
+        // The atlas producer leaves its packed incident-radiance buffer in
+        // UnorderedAccess; the terrain samples it read-only (one shader slot
+        // already on the world-light root, no extra binding group). Transition
+        // once before any terrain encode, after the atlas and field updates.
+        if (m_world_light_atlas != nullptr) {
+            context.m_encoder.setBufferState(m_world_light_atlas, rhi::ResourceState::ShaderResource);
+        }
+
         reclaimCompleted_(context.m_completed_fence_value);
         if (m_world.m_resident_table_stale and not m_world.m_cell_publication_deferred) {
             PPR_RETURN_ERROR_ON_FAIL(GridPass, rebuildResidentTable_());

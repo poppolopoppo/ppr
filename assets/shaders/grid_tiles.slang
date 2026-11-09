@@ -95,11 +95,13 @@ StructuredBuffer<TerrainVisual> g_terrain_visuals;
 // shading through shadeWorldLightSurface. debugView selects the raw field debug
 // output mirrored from the CPU WorldLightSwitch: 0 = off (normal material
 // response), 1 = probes (diffuse false colour + level-0 probe lattice). Unknown
-// values fall back to off.
+// values fall back to off. atlasAmbient is the bounded terrain ambient scale
+// for the per-cell radiance atlas (see shadeWorldLightResponse).
 struct WorldLightSwitch {
     uint enabled;
     uint debugView;
-    uint pad0, pad1;
+    float atlasAmbient;
+    uint pad1;
 };
 ConstantBuffer<WorldLightSwitch> g_world_light;
 // Terrain pass selector: 0 draws every material in one pass (the legacy
@@ -786,6 +788,11 @@ float3 worldLightDebugColour(float2 world) {
     return colour;
 }
 
+// Upper bound of the terrain atlas ambient scale, mirrored by
+// WorldLightSwitch::m_atlas_ambient on the CPU. Kept at 0.35 so
+// atlasAmbient * reflectance stays well below 1 even for unit albedo.
+static const float kWorldLightAtlasAmbientLimit = 0.35;
+
 // Shared field material response: field-sampled diffuse and specular plus linear
 // self-emission, for an already-resolved visual and surface reflectance. The
 // opaque and translucent field paths share this body so they cannot diverge.
@@ -802,13 +809,29 @@ float3 shadeWorldLightResponse(TerrainVisual visual, float2 world, float3 normal
     float3 reflection = 2.0 * normal.z * normal - float3(0.0, 0.0, 1.0);
     float3 specular = worldLightSpecular(world, reflection, roughness);
 
+    // Terrain legibility from the per-cell radiance atlas: one load of the
+    // cell's incident radiance (the previous merged field sampled at its centre)
+    // lifts rock that opens onto lit air, so a dug border reads instead of
+    // going black. This does not re-gather the cascade and the atlas is already
+    // EMA-smoothed, so borders warm over a few frames rather than snapping.
+    //
+    // Loop stability: the atlas feeds the field and the field feeds the atlas,
+    // and this factor rides on top of that loop. `atlasAmbient * reflectance`
+    // must stay well below 1 so terrain cannot inject a near-unit gain back
+    // into the chain; the shader clamps the config value to 0.35, which bounds
+    // the product even for unit albedo (the atlas itself is ceilinged at 16.0).
+    // The term is display lighting only and never feeds the field or atlas.
+    float atlasAmbient = clamp(g_world_light.atlasAmbient, 0.0, kWorldLightAtlasAmbientLimit);
+    float3 atlas = atlasAmbient > 0.0 ? worldLightAtlasRadiance(world) : float3(0.0, 0.0, 0.0);
+
     float ratio = (ior - 1.0) / (ior + 1.0);
     float3 f0 = lerp(float3(ratio * ratio), reflectance, metallic);
     float grazing = 1.0 - saturate(normal.z);
     float grazing2 = grazing * grazing;
     float3 fresnel = f0 + (1.0 - f0) * (grazing2 * grazing2 * grazing);
 
-    return (1.0 - metallic) * (1.0 - fresnel) * reflectance * diffuse + fresnel * specular + source;
+    return (1.0 - metallic) * (1.0 - fresnel) * reflectance * diffuse + fresnel * specular + source +
+        atlasAmbient * reflectance * atlas;
 }
 
 // The world light field material path keeps the same cell atlas -> TerrainVisual
