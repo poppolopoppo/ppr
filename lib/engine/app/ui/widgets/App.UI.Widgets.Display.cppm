@@ -86,6 +86,7 @@ export namespace pP::ui {
         float &m_history_retention;
         u32 &m_level_count;
         i32 &m_sky_hour;
+        u32 &m_world_light_debug_view;
         bool &m_auto_exposure;
         float &m_exposure_ev;
         float &m_adaptation_tau;

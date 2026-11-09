@@ -460,10 +460,11 @@ namespace pP {
     }
 
 
-    std::error_code GridPass::setWorldLightField(const lighting::WorldLightFieldView &view) {
+    std::error_code GridPass::setWorldLightField(const lighting::WorldLightFieldView &view, const u32 debug_view) {
         // Borrowed view; the field owner outlives every view. An empty view
         // (null radiance) clears the binding and restores the existing path.
         m_world_light_view = view;
+        m_world_light_debug_view = debug_view;
         return {};
     }
 
@@ -2964,9 +2965,12 @@ namespace pP {
     std::error_code GridPass::bindWorldLightField_(rhi::ShaderCursor &cursor) {
         // CPU mirror of the Slang WorldLightSwitch: scalar padding keeps the
         // ConstantBuffer layout identical to the four-u32 shader struct.
+        // m_debug_view is the field debug selector (0 = off, 1 = probes,
+        // 2 = irradiance); m_pad0/m_pad1 remain reserved.
         struct WorldLightSwitch {
             u32 m_enabled{};
-            u32 m_pad0{}, m_pad1{}, m_pad2{};
+            u32 m_debug_view{};
+            u32 m_pad0{}, m_pad1{};
         };
         static_assert(sizeof(WorldLightSwitch) == 16u and alignof(WorldLightSwitch) == 4u);
 
@@ -2974,6 +2978,7 @@ namespace pP {
 
         WorldLightSwitch sw{};
         sw.m_enabled = enabled ? 1u : 0u;
+        sw.m_debug_view = enabled ? m_world_light_debug_view : 0u;
         rhi::ShaderCursor constants{};
         PPR_RETURN_ERROR_ON_FAIL(GridPass, cursor["g_world_light"].getDereferenced(constants));
         PPR_RETURN_ERROR_ON_FAIL(GridPass, constants.setData(&sw, sizeof(sw)));

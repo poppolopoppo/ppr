@@ -168,6 +168,9 @@ namespace pP::game {
                     source = config::SourceValue::boolean(value);
                 } else if constexpr (std::is_floating_point_v<T>) {
                     source = config::SourceValue::floating(static_cast<double>(value));
+                } else if constexpr (std::is_same_v<T, EWorldLightDebugView>) {
+                    // Enum sources are named, never ordinals (see EnumDomain).
+                    source = config::SourceValue::text(std::string{world_light_debug_domain.nameOf(value)});
                 } else {
                     static_assert(std::is_integral_v<T>);
                     source = config::SourceValue::integer(static_cast<i64>(value));
@@ -220,6 +223,8 @@ namespace pP::game {
         append(
             "game.world_light.sky_hour", "Field sky solar hour (-1 uses the black boundary sky; 12 is noon).",
             "world-light-sky-hour", false);
+        append(
+            "game.world_light.debug_view", "Field debug view: off, probes or irradiance.", "world-light-debug", false);
 
         append(
             "game.post.auto_exposure", "Adapt exposure from a scene luminance histogram.", "post-auto-exposure", true);

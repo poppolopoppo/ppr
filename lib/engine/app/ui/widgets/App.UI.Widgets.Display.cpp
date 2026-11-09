@@ -757,6 +757,17 @@ namespace pP::ui {
             }
 
             {
+                beginValueRow("Debug view");
+                int debug_view = static_cast<int>(std::min(lp.m_world_light_debug_view, 2u));
+                const char *const items[] = {"Off", "Probes", "Irradiance"};
+                ImGui::SetNextItemWidth(-1.0f);
+                if (ImGui::Combo("##lighting_debug_view", &debug_view, items, 3)) {
+                    lp.m_world_light_debug_view = static_cast<u32>(debug_view);
+                }
+                ImGui::SetItemTooltip("Raw field false-colour view; off renders the normal material response.");
+            }
+
+            {
                 beginValueRow("Auto exposure");
                 ImGui::Checkbox("##post_auto_exposure", &lp.m_auto_exposure);
                 ImGui::SetItemTooltip("Adapt exposure from a scene luminance histogram.");

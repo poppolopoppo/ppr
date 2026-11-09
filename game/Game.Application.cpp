@@ -1150,6 +1150,7 @@ namespace demo {
                     command->m_field_budget = m_ui_state.m_world_light.m_samples_per_frame;
                     command->m_field_accumulation_samples = m_ui_state.m_world_light.m_accumulation_samples;
                     command->m_field_history_retention = m_ui_state.m_world_light.m_history_retention;
+                    command->m_field_debug_view = static_cast<u32>(m_ui_state.m_world_light.m_debug_view);
                     auto field_materials = colony::buildWorldLightMaterials(
                         std::span<const GridTerrainVisual>{
                             source.m_terrain_visuals.data(), source.m_terrain_visuals.size()},

@@ -1543,6 +1543,7 @@ namespace pP::colony {
 
             const auto availability = game::displaySwitchingAvailability(snap.m_capabilities);
             auto &draft = session.m_draft;
+            u32 world_light_debug_view = static_cast<u32>(state.m_world_light.m_debug_view);
             const ui::DisplayWidgetState widget{
                 .m_draft =
                     {draft.m_pacing, draft.m_cap_hz, draft.m_paced_vsync, draft.m_throttle_unfocused,
@@ -1551,10 +1552,10 @@ namespace pP::colony {
                 .m_lighting_post =
                     {state.m_world_light.m_enabled, state.m_world_light.m_samples_per_frame,
                         state.m_world_light.m_accumulation_samples, state.m_world_light.m_history_retention,
-                        state.m_world_light.m_level_count, state.m_world_light.m_sky_hour, state.m_post.m_auto_exposure,
-                        state.m_post.m_exposure_ev, state.m_post.m_adaptation_tau, state.m_post.m_ev_min,
-                        state.m_post.m_ev_max, state.m_post.m_bloom, state.m_post.m_bloom_intensity,
-                        state.m_post.m_bloom_threshold, state.m_post.m_palette},
+                        state.m_world_light.m_level_count, state.m_world_light.m_sky_hour, world_light_debug_view,
+                        state.m_post.m_auto_exposure, state.m_post.m_exposure_ev, state.m_post.m_adaptation_tau,
+                        state.m_post.m_ev_min, state.m_post.m_ev_max, state.m_post.m_bloom,
+                        state.m_post.m_bloom_intensity, state.m_post.m_bloom_threshold, state.m_post.m_palette},
                 .m_matches = game::displayDraftMatches(draft, snap.m_view.m_committed),
                 .m_availability = {availability.m_supported, availability.m_reason},
                 .m_trial_open = game::displayTrialUnresolved(session.m_confirm),
@@ -1567,6 +1568,7 @@ namespace pP::colony {
             const bool was_open = state.m_display_open;
             auto action = state.m_display_open ? ui::drawDisplayWidget(snap, widget, state.m_display_open)
                                                : std::optional<ui::EDisplayWidgetAction>{};
+            state.m_world_light.m_debug_view = static_cast<game::EWorldLightDebugView>(world_light_debug_view);
             if (was_open and not state.m_display_open and action == ui::EDisplayWidgetAction::close) {
                 session.m_synced = false;
                 action.reset();

@@ -92,10 +92,14 @@ static const uint kSurfaceParticleLiquid = 8u;
 StructuredBuffer<TerrainVisual> g_terrain_visuals;
 // Switch selecting the temporal world light field material path (Task 8). Zero
 // keeps the native receiver/world-radiance path; nonzero routes opaque terrain
-// shading through shadeWorldLightSurface.
+// shading through shadeWorldLightSurface. debugView selects the raw field debug
+// output mirrored from the CPU WorldLightSwitch: 0 = off (normal material
+// response), 1 = probes (diffuse false colour + level-0 probe lattice),
+// 2 = irradiance (diffuse false colour only). Unknown values fall back to off.
 struct WorldLightSwitch {
     uint enabled;
-    uint pad0, pad1, pad2;
+    uint debugView;
+    uint pad0, pad1;
 };
 ConstantBuffer<WorldLightSwitch> g_world_light;
 // Terrain pass selector: 0 draws every material in one pass (the legacy
@@ -720,6 +724,66 @@ float4 materialSurface(uint material, float2 fine_position, float2 gradient_x,
 // opaque terrain shading from the temporal world light field
 // ------------------------------------------------------------------
 
+// ------------------------------------------------------------------
+// world light field debug view
+// ------------------------------------------------------------------
+
+// False-colour ramp for the raw pre-albedo field result. Cascade radiance
+// spans many decades (shadows are near zero, a sunlit surface is order 1), so
+// this applies a fixed log2(1 + 32 * luminance) response over [0,1] and maps it
+// through black -> blue -> green -> yellow -> white, then gamma-encodes once.
+// The scale is a display aid only and never feeds the material path.
+static const float kWorldLightDebugScale = 32.0;
+static const float kWorldLightDebugLuminanceSpan = 5.04; // log2(1 + 32)
+
+float3 worldLightDebugRamp(float3 radiance) {
+    float3 scaled = max(radiance, float3(0.0)) * kWorldLightDebugScale;
+    float luminance = dot(scaled, float3(0.2126, 0.7152, 0.0722));
+    float t = saturate(log2(1.0 + luminance) / kWorldLightDebugLuminanceSpan);
+
+    float3 colour;
+    if (t < 0.25) {
+        colour = lerp(float3(0.0, 0.0, 0.0), float3(0.0, 0.0, 1.0), t * 4.0);
+    } else if (t < 0.5) {
+        colour = lerp(float3(0.0, 0.0, 1.0), float3(0.0, 1.0, 0.0), (t - 0.25) * 4.0);
+    } else if (t < 0.75) {
+        colour = lerp(float3(0.0, 1.0, 0.0), float3(1.0, 1.0, 0.0), (t - 0.5) * 4.0);
+    } else {
+        colour = lerp(float3(1.0, 1.0, 0.0), float3(1.0, 1.0, 1.0), (t - 0.75) * 4.0);
+    }
+    return pow(colour, float3(1.0 / 2.2));
+}
+
+// Level-0 probe lattice overlay. Probe centres sit at (p + 0.5) * spacing in
+// cell units, so a fragment lies on a lattice line when its fractional probe
+// coordinate is within roughly one pixel of 0.5. Draws the row/column lines
+// through every level-0 probe centre (spacing 2 cells).
+float worldLightDebugLattice(float2 world) {
+    float2 origin = float2(g_world_light_field.originX, g_world_light_field.originY);
+    float spacing_m = g_world_light_field.cellMetres * 2.0;
+    if (spacing_m <= 0.0) {
+        return 0.0;
+    }
+
+    float2 probe = (world - origin) / spacing_m;
+    float2 to_centre = abs(frac(probe) - 0.5) * spacing_m;
+    float pixel_m = max(fwidth(world.x), fwidth(world.y));
+    float half_width = max(pixel_m * 0.35, spacing_m * 0.005);
+    return saturate(1.0 - min(to_centre.x, to_centre.y) / half_width);
+}
+
+// Raw field false colour; the material response, albedo and normal-map path are
+// bypassed deliberately so the picture shows what the field actually holds.
+// Probe mode additionally overlays the level-0 lattice in red.
+float3 worldLightDebugColour(float2 world, uint mode) {
+    float3 diffuse = worldLightDiffuse(world, float3(0.0, 0.0, 1.0));
+    float3 colour = worldLightDebugRamp(diffuse);
+    if (mode == 1u) {
+        colour = lerp(colour, float3(0.95, 0.1, 0.05), worldLightDebugLattice(world) * 0.45);
+    }
+    return colour;
+}
+
 // Shared field material response: field-sampled diffuse and specular plus linear
 // self-emission, for an already-resolved visual and surface reflectance. The
 // opaque and translucent field paths share this body so they cannot diverge.
@@ -753,6 +817,14 @@ float3 shadeWorldLightResponse(TerrainVisual visual, float2 world, float3 normal
 float4 shadeWorldLightSurface(
     uint material, float2 fine_position, float2 gradient_x, float2 gradient_y, float2 decoration,
     StructuredBuffer<DescriptorHandle<Texture2D<float4>>> textures, SamplerState.Handle sampler) {
+    // Debug views deliberately bypass the atlas/normal-map/material response and
+    // emit the raw field false colour. Unknown selectors fall through to the
+    // normal material path instead of rendering black.
+    if (g_world_light.debugView == 1u || g_world_light.debugView == 2u) {
+        float2 debug_world = fine_position * g_grid_frame.m_cell_size_m;
+        return float4(worldLightDebugColour(debug_world, g_world_light.debugView), 1.0);
+    }
+
     // Deliberate re-lookup of the visual row, mirroring materialSurface; the
     // caller already resolved the selected material but keeps this body self-contained.
     TerrainVisual visual = g_terrain_visuals[min(material, 65535u)];

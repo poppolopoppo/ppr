@@ -43,6 +43,21 @@ export namespace pP::game {
         config::EnumEntry<EWorldLighting>{EWorldLighting::field, "field"},
     }};
 
+    /// World-light-field debug view. `off` keeps the normal material response;
+    /// `probes` false-colours the raw diffuse field and overlays the level-0
+    /// probe lattice; `irradiance` false-colours the raw diffuse field only.
+    enum class EWorldLightDebugView : u8 {
+        off,
+        probes,
+        irradiance,
+    };
+
+    inline constexpr config::EnumDomain<EWorldLightDebugView, 3u> world_light_debug_domain{{
+        config::EnumEntry<EWorldLightDebugView>{EWorldLightDebugView::off, "off"},
+        config::EnumEntry<EWorldLightDebugView>{EWorldLightDebugView::probes, "probes"},
+        config::EnumEntry<EWorldLightDebugView>{EWorldLightDebugView::irradiance, "irradiance"},
+    }};
+
     struct MapSizeDomain {
         [[nodiscard]] std::error_code validate(const u32 &value) const noexcept;
 
@@ -189,11 +204,12 @@ export namespace pP::game {
 
     /// Runtime-tunable world-light-field settings. `m_enabled` gates field mode;
     /// the remaining fields bound the per-frame budget, the per-direction
-    /// temporal accumulation, the cascade level count and the field sky hour.
-    /// Persisted under `game.world_light.*` and edited in the Display window's
-    /// "Lighting & Post" section; applied at field init/update.
+    /// temporal accumulation, the cascade level count, the field sky hour and
+    /// the debug view. Persisted under `game.world_light.*` and edited in the
+    /// Display window's "Lighting & Post" section; applied at field init/update.
     struct WorldLightDisplaySettings {
         bool m_enabled{true};
+        EWorldLightDebugView m_debug_view{EWorldLightDebugView::off};
         u32 m_samples_per_frame{262144u};
         u32 m_accumulation_samples{8u};
         float m_history_retention{0.9f};
@@ -241,6 +257,13 @@ export namespace pP::game {
                         "Field sky solar hour (-1 uses the black boundary sky; 12 is noon)", "World lighting",
                         EMutability::runtime, ESource::all, true},
                     Range<i32>{-1, 23}),
+                field(
+                    &WorldLightDisplaySettings::m_debug_view,
+                    Metadata{
+                        "game.world_light.debug_view",
+                        "Field debug view (off, probes, irradiance); bypasses the material response", "World lighting",
+                        EMutability::runtime, ESource::all, true},
+                    world_light_debug_domain),
             };
         }
     };

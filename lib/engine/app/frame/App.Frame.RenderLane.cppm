@@ -77,6 +77,9 @@ export namespace pP {
         u32 m_field_budget{};
         u32 m_field_accumulation_samples{8u};
         float m_field_history_retention{0.9f};
+        // Field debug view selector (0 = off, 1 = probes, 2 = irradiance),
+        // mirrored into the terrain WorldLightSwitch constant buffer.
+        u32 m_field_debug_view{};
         EGridWorldCommand m_kind{EGridWorldCommand::begin};
         bool m_field{};
         bool m_final_batch{false};
