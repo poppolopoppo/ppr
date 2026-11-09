@@ -2427,6 +2427,10 @@ namespace pP {
         m_contour_points.setNull();
         m_contour_cases.setNull();
         m_world_light_dummy.setNull();
+        // Borrowed view/atlas: owned by the editor's FieldLightingState, which shuts down after GridPass.
+        m_world_light_view = {};
+        m_world_light_atlas = nullptr;
+        m_world_light_atlas_ambient = 0.0f;
         m_chunk_slot_buffers = {};
         m_chunk_slot_mapped = {};
         m_chunk_slot_uploaded.fill(false);

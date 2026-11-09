@@ -3047,10 +3047,285 @@ namespace pP::tests::detail {
             fixture.shutdown();
         };
 
-        PPR_UNIT_TEST (atlas_ambient_lights_terrain_borders) {
+        PPR_UNIT_TEST (atlas_producer_ambient_lights_terrain_borders) {
             constexpr u32 width = 64u;
             constexpr u32 height = 64u;
 
+            // Producer-coupled coverage: the field is seeded with a real spatial
+            // radiance pattern, the shipped atlas dispatch gathers it at each
+            // native cell, and only then does terrain shading read the atlas.
+            // This is the data-level gate the hand-filled consumer test cannot
+            // provide.
+            Fixture fixture;
+            const lighting::WorldLightMaterial materials[] = {
+                {.m_kind = 1u, .m_albedo = {0.6f, 0.6f, 0.6f}}}; // rock (cell id 1)
+            fixture.initialize(width, height, materials);
+            auto &device = fixture.m_rhi->getDevice();
+            auto &source = fixture.m_source;
+            auto &field = fixture.m_field;
+            auto &atlas = fixture.m_atlas;
+
+            const auto plan = lighting::planWorldLight({.m_width = width, .m_height = height, .m_cell_metres = 0.5f});
+            PPR_TEST_ASSERT(plan.has_value());
+            const lighting::WorldLightLevel &level0 = plan->m_levels[0];
+
+            // Non-vacuum source cells under the border terrain cell (2,2) and the
+            // deep interior cell (6,6). The atlas producer only computes
+            // non-vacuum cells; the interior block is computed from a zero field
+            // so its stored value must still come out exactly zero.
+            std::vector<u16> chunk(128u * 128u, 0u);
+            for (u32 y = 4u; y <= 5u; ++y) {
+                for (u32 x = 4u; x <= 5u; ++x) {
+                    chunk[y * 128u + x] = 1u;
+                }
+            }
+            for (u32 y = 12u; y <= 13u; ++y) {
+                for (u32 x = 12u; x <= 13u; ++x) {
+                    chunk[y * 128u + x] = 1u;
+                }
+            }
+            const lighting::WorldLightChunkUpdate update{.m_chunk_id = 0u, .m_cell_ids = chunk};
+            PPR_TEST_ASSERT(not source.applyUpdate({.m_chunks = {&update, 1u}, .m_revision = 1u}));
+            fixture.encodeSource();
+
+            // Seed the merged field, not the atlas: probe centres on level 0 sit
+            // at (p + 0.5) * spacing * cellMetres. Probes 1..3 cover world
+            // [1,4]^2, which is the border terrain cell's neighbourhood; probes
+            // near the interior cell (world ~6.5) stay zero.
+            const u64 radiance_samples = field.view().m_radiance->getDesc().size / sizeof(RadianceHalf);
+            std::vector<RadianceHalf> seeded(radiance_samples, RadianceHalf{});
+            for (u32 py = 1u; py <= 3u; ++py) {
+                for (u32 px = 1u; px <= 3u; ++px) {
+                    const u64 probe = u64{py} * level0.m_probes_x + px;
+                    for (u32 direction = 0u; direction < level0.m_directions; ++direction) {
+                        seeded[level0.m_sample_offset + probe * level0.m_directions + direction] = RadianceHalf{
+                            .m_r = floatToHalf(1.0f),
+                            .m_g = floatToHalf(1.0f),
+                            .m_b = floatToHalf(1.0f),
+                            .m_t = floatToHalf(1.0f)};
+                    }
+                }
+            }
+            fixture.write(field.view().m_radiance, seeded);
+
+            // The real producer over the seeded field. EMA retained at 0.5; eight
+            // encodes settle the border value to ~1 - 0.5^8 while the interior
+            // gathers exact zero throughout.
+            atlas.setTemporalRetention(0.5f);
+            for (u32 index = 0u; index < 8u; ++index) {
+                fixture.encodeAtlas();
+            }
+
+            const auto cells = fixture.read<u32>(atlas.cells());
+            const auto luminance = [](const float3 &value) {
+                return 0.2126f * value.x + 0.7152f * value.y + 0.0722f * value.z;
+            };
+            const float atlas_border = luminance(unpackRadianceRGB9E5_(cells[5u * width + 5u]));
+            const float atlas_interior = luminance(unpackRadianceRGB9E5_(cells[13u * width + 13u]));
+            PPR_TEST_ASSERT(atlas_border > 0.5f);
+            PPR_TEST_ASSERT(atlas_interior < 1.0e-4f);
+
+            // Zero the merged field again so the render isolates the producer's
+            // atlas: terrain diffuse/specular contribute exactly nothing.
+            std::vector<RadianceHalf> zero(radiance_samples, RadianceHalf{});
+            fixture.write(field.view().m_radiance, zero);
+
+            fixture.initializeGrid();
+            auto &grid = fixture.m_grid;
+
+            // Orthographic camera viewing the [0,8)^2 cell region (16 px/cell).
+            constexpr u32 target_edge = 128u;
+            Camera camera{ECameraProjection::orthographic};
+            CameraModel model{};
+            model.m_camera_mode = ECameraProjection::orthographic;
+            model.m_origin = float3{0.0f, 0.0f, -0.5f};
+            model.m_ortho_scale = 1.0f / 16.0f;
+            camera.updateModel(
+                TimeSpan{}, model,
+                Viewport{PixelRect{int2{0, 0}, int2{int(target_edge), int(target_edge)}}, ViewportLayout{}});
+            const auto snapshot = camera.getSnapshot();
+
+            const auto image = [](const std::array<std::byte, 4u> bytes) {
+                mem::UniqueBuffer storage = mem::UniqueBuffer::allocate(bytes.size());
+                PPR_TEST_ASSERT(not storage.materialize());
+                const auto writable = storage.getMutableData();
+                PPR_TEST_ASSERT(writable.has_value());
+                std::ranges::copy(bytes, writable->begin());
+                mem::SharedBuffer frozen;
+                PPR_TEST_ASSERT(not storage.moveToShared(&frozen));
+                image::ImageAsset result{};
+                result.m_width = result.m_height = 1u;
+                result.m_storage = frozen;
+                result.m_subresources.push_back({frozen.subspan(0u, 4u), 4u, 4u});
+                return result;
+            };
+
+            GridStagedFrame stage{};
+            stage.m_full_refresh = stage.m_reset_caches = stage.m_has_catalog = true;
+            stage.m_cell_size_m = 1.0f;
+            stage.m_boundary_material_id = 1u;
+            stage.m_content_fingerprint = 29u;
+
+            GridTerrainVisual opaque{};
+            opaque.m_material_id = 1u;
+            opaque.m_color_rgba = 0xffffffffu;
+            opaque.m_texture_index = 0u;
+            opaque.m_transport_model = kGridTransportOpaqueV1;
+            opaque.m_metallic = 0.0f;
+            opaque.m_roughness = 1.0f;
+            opaque.m_ior = 1.0f;
+            stage.m_terrain_visuals.push_back(opaque);
+            stage.m_terrain_images.push_back(image({std::byte{255}, std::byte{255}, std::byte{255}, std::byte{255}}));
+
+            stage.m_tiles.push_back({.m_dirty_mask = 1u, .m_tile_range = {0, 0, 128, 128}, .m_chunk_id = 0u});
+            GridStagedUpload upload{};
+            upload.m_payload.m_rect[2] = upload.m_payload.m_rect[3] = 128.0f;
+            upload.m_cell_materials.assign(GridPass::kCellsPerChunk, 0u);
+            upload.m_cell_materials[2u * 128u + 2u] = 1u;
+            upload.m_cell_materials[6u * 128u + 6u] = 1u;
+            stage.m_uploads.push_back(std::move(upload));
+
+            PPR_TEST_ASSERT(not grid.stageWorldCandidate(11u, 23u, stage));
+            bool candidate_ready = false;
+            for (u32 advance = 0u; advance < 8u; ++advance) {
+                const auto ready = grid.advanceWorldCandidate(device, fixture.m_fence.completed());
+                PPR_TEST_ASSERT(ready.has_value());
+                if (*ready) {
+                    candidate_ready = true;
+                    break;
+                }
+            }
+            PPR_TEST_ASSERT(candidate_ready);
+            PPR_TEST_ASSERT(not grid.activateWorldCandidate(11u, 23u, 29u));
+            PPR_TEST_ASSERT(not grid.update(TimeSpan{}, snapshot, false));
+
+            rhi::TextureDesc target_desc{};
+            target_desc.type = rhi::TextureType::Texture2D;
+            target_desc.size = {.width = target_edge, .height = target_edge, .depth = 1u};
+            target_desc.format = rhi::Format::RGBA32Float;
+            target_desc.memoryType = rhi::MemoryType::DeviceLocal;
+            target_desc.usage = static_cast<rhi::TextureUsage>(
+                static_cast<u32>(rhi::TextureUsage::RenderTarget) | static_cast<u32>(rhi::TextureUsage::CopySource));
+            target_desc.defaultState = rhi::ResourceState::RenderTarget;
+            rhi::ComPtr<rhi::ITexture> target;
+            rhi::ComPtr<rhi::ITextureView> target_view;
+            PPR_TEST_ASSERT(not make_error_code(device.createTexture(target_desc, nullptr, target.writeRef())));
+            PPR_TEST_ASSERT(not make_error_code(target->getDefaultView(target_view.writeRef())));
+
+            const auto viewport = rhi::Viewport::fromSize(float(target_edge), float(target_edge));
+            const auto scissor = rhi::ScissorRect::fromSize(target_edge, target_edge);
+
+            const auto render = [&](const float atlas_ambient) {
+                PPR_TEST_ASSERT(not grid.setWorldLightField(field.view(), 0u, atlas.cells(), atlas_ambient));
+                PPR_TEST_ASSERT(not grid.update(TimeSpan{}, snapshot, false));
+
+                rhi::ComPtr<rhi::ICommandEncoder> encoder;
+                PPR_TEST_ASSERT(not make_error_code(fixture.m_queue->createCommandEncoder(encoder.writeRef())));
+                const PreRenderContext pre{device, *encoder, fixture.m_fence.completed(), {}};
+                PPR_TEST_ASSERT(not grid.prepareGpuVisibility(pre));
+
+                encoder->setTextureState(
+                    target, rhi::SubresourceRange{.layer = 0u, .layerCount = 1u, .mip = 0u, .mipCount = 1u},
+                    rhi::ResourceState::RenderTarget);
+                rhi::RenderPassColorAttachment attachment{};
+                attachment.view = target_view;
+                attachment.clearValue[0] = attachment.clearValue[1] = attachment.clearValue[2] =
+                    attachment.clearValue[3] = 0.0f;
+                rhi::RenderPassDesc pass_desc{};
+                pass_desc.colorAttachments = &attachment;
+                pass_desc.colorAttachmentCount = 1u;
+                auto *const pass = encoder->beginRenderPass(pass_desc);
+                PPR_TEST_ASSERT(pass != nullptr);
+                {
+                    PPR_DEFER {
+                        pass->end();
+                    };
+                    RenderPipelineSignature signature{};
+                    signature.m_color_formats[0] = rhi::Format::RGBA32Float;
+                    signature.m_color_format_count = 1u;
+                    const DrawContext draw{
+                        device, *pass, RenderPipelineKey{signature}, viewport, scissor,
+                        int2{int(target_edge), int(target_edge)}, fixture.m_fence.completed(), {}};
+                    PPR_TEST_ASSERT(not grid.renderGpuIndirect(draw));
+                }
+
+                rhi::ComPtr<rhi::ICommandBuffer> commands;
+                PPR_TEST_ASSERT(not make_error_code(encoder->finish(commands.writeRef())));
+                rhi::ICommandBuffer *pointer = commands.get();
+                rhi::IFence *signal = fixture.m_fence.fence();
+                const auto value = fixture.m_fence.nextValue();
+                const u64 raw_value = value;
+                rhi::SubmitDesc submit{};
+                submit.commandBuffers = &pointer;
+                submit.commandBufferCount = 1u;
+                submit.signalFences = &signal;
+                submit.signalFenceValues = &raw_value;
+                submit.signalFenceCount = 1u;
+                PPR_TEST_ASSERT(not make_error_code(fixture.m_queue->submit(submit)));
+                fixture.m_fence.commitSubmitted(value);
+                grid.notifyFrameSubmitted(value);
+                PPR_TEST_ASSERT(not fixture.m_fence.waitFor(value));
+            };
+
+            const auto readback = [&]() {
+                shader::ComPtr<ISlangBlob> blob;
+                rhi::SubresourceLayout layout{};
+                PPR_TEST_ASSERT(not make_error_code(device.readTexture(target, 0u, 0u, blob.writeRef(), &layout)));
+                const auto *const source_bytes = static_cast<const std::byte *>(blob->getBufferPointer());
+
+                std::vector<std::array<float, 4u>> pixels(std::size_t(target_edge) * target_edge);
+                for (u32 y = 0u; y < target_edge; ++y) {
+                    for (u32 x = 0u; x < target_edge; ++x) {
+                        std::array<float, 4u> value{};
+                        std::memcpy(
+                            value.data(), source_bytes + y * layout.rowPitch + x * sizeof(value), sizeof(value));
+                        pixels[y * target_edge + x] = value;
+                    }
+                }
+                return pixels;
+            };
+
+            const auto cell_centre = [](const int cx, const int cy) {
+                return std::pair{8 + cx * 16, 8 + (7 - cy) * 16};
+            };
+            const auto luminance_at = [&](const std::vector<std::array<float, 4u>> &pixels, const int cx,
+                                          const int cy) {
+                const auto [x, y] = cell_centre(cx, cy);
+                const auto &pixel = pixels[static_cast<std::size_t>(y) * target_edge + static_cast<std::size_t>(x)];
+                PPR_TEST_ASSERT(std::isfinite(pixel[0]) and std::isfinite(pixel[1]) and std::isfinite(pixel[2]));
+                return 0.2126f * pixel[0] + 0.7152f * pixel[1] + 0.0722f * pixel[2];
+            };
+
+            constexpr float kAtlasAmbient = 0.3f;
+            render(kAtlasAmbient);
+            const auto lit = readback();
+            const float border_lit = luminance_at(lit, 2, 2);
+            const float interior_lit = luminance_at(lit, 6, 6);
+
+            render(0.0f);
+            const auto unlit = readback();
+            const float border_unlit = luminance_at(unlit, 2, 2);
+
+            // The producer-gathered border value must reach the terrain and be
+            // clearly above the producer-gathered (zero) interior value. The
+            // knob-off render returns both to black.
+            PPR_TEST_ASSERT(border_lit > 0.15f);
+            PPR_TEST_ASSERT(interior_lit < 1.0e-5f);
+            PPR_TEST_ASSERT(border_unlit < 1.0e-5f);
+
+            target_view.setNull();
+            target.setNull();
+            fixture.shutdown();
+        };
+
+        PPR_UNIT_TEST (atlas_ambient_consumer_wiring_lights_terrain_borders) {
+            constexpr u32 width = 64u;
+            constexpr u32 height = 64u;
+
+            // Consumer-wiring coverage only: the atlas is hand-filled so this
+            // isolates the CPU switch -> constant upload -> shader term -> pixel
+            // path. The producer-coupled test below starts from a seeded field
+            // and runs the real atlas dispatch instead.
             Fixture fixture;
             fixture.initialize(width, height);
             auto &device = fixture.m_rhi->getDevice();
@@ -4742,7 +5017,8 @@ namespace pP::tests {
             detail::WorldLightFieldGpu::diffuse_plus_z_isotropic_and_perturbed_finite,
             detail::WorldLightFieldGpu::specular_vertical_reflection_and_roughness_finite,
             detail::WorldLightFieldGpu::grid_shading_uses_field,
-            detail::WorldLightFieldGpu::atlas_ambient_lights_terrain_borders,
+            detail::WorldLightFieldGpu::atlas_producer_ambient_lights_terrain_borders,
+            detail::WorldLightFieldGpu::atlas_ambient_consumer_wiring_lights_terrain_borders,
             detail::WorldLightFieldGpu::translucent_clipped_by_terrain,
             detail::WorldLightFieldGpu::translucent_premultiplied_absorption,
             detail::HistogramAdaptation::histogram_adaptation,
