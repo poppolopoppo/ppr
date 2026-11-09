@@ -28,10 +28,10 @@ struct WorldLightMaterial {
 };
 
 // Per-chunk upload dispatch: the chunk coordinates this upload writes into the
-// dense ids buffer.
+// dense ids buffer, and the staging-slice base index this upload reads from.
 struct WorldLightChunkUpload {
     uint chunkX, chunkY;
-    uint pad0, pad1;
+    uint chunkBase, pad1;
 };
 
 // Dense overlay word offsets within a cell's 7-word row.
@@ -51,8 +51,9 @@ RWStructuredBuffer<uint> g_world_light_ids;
 RWStructuredBuffer<uint> g_world_light_overlay;
 RWStructuredBuffer<uint> g_world_light_occupancy;
 
-// Copies one staged 128x128 chunk (widened u32 ids) into the dense ids buffer,
-// dropping out-of-world cells at the right/bottom edges.
+// Copies one staged 128x128 chunk (widened u32 ids) from its own staging slice
+// into the dense ids buffer, dropping out-of-world cells at the right/bottom
+// edges.
 [shader("compute")]
 [numthreads(64, 1, 1)]
 void uploadWorldLightChunk(uint3 id : SV_DispatchThreadID) {
@@ -69,7 +70,7 @@ void uploadWorldLightChunk(uint3 id : SV_DispatchThreadID) {
     uint height = g_world_light_source.height;
     if (gx >= width || gy >= height) return;
 
-    g_world_light_ids[gy * width + gx] = g_world_light_chunk[local];
+    g_world_light_ids[gy * width + gx] = g_world_light_chunk[g_world_light_chunk_upload.chunkBase + local];
 }
 
 // Rebuilds the complete occupancy bitset from the dense ids and overlay. One

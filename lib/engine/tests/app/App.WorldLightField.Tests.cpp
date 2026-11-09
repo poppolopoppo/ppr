@@ -610,6 +610,83 @@ namespace pP::tests::detail {
 
             fixture.shutdown();
         };
+
+        PPR_UNIT_TEST (gpu_source_multi_chunk_update_keeps_each_chunk_rows) {
+            constexpr u32 width = 512u;
+            constexpr u32 height = 256u;
+            constexpr u32 chunk_edge = 128u;
+            constexpr u32 cells_per_chunk = chunk_edge * chunk_edge;
+
+            Fixture fixture;
+            fixture.initialize(width, height);
+            auto &source = fixture.m_source;
+
+            // Fill one chunk so the next update can empty it: a chunk only enters
+            // the pending set when its stored ids actually change.
+            constexpr u32 emptied_chunk = 4u; // chunk row 1, column 0
+            std::vector<u16> filled(cells_per_chunk, 1u);
+            const lighting::WorldLightChunkUpdate fill{.m_chunk_id = emptied_chunk, .m_cell_ids = filled};
+            PPR_TEST_ASSERT(not source.applyUpdate({.m_chunks = {&fill, 1u}, .m_revision = 1u}));
+            {
+                rhi::ComPtr<rhi::ICommandEncoder> encoder;
+                PPR_TEST_ASSERT(not make_error_code(fixture.m_queue->createCommandEncoder(encoder.writeRef())));
+                PPR_TEST_ASSERT(not source.encode(*encoder));
+                fixture.submit(*encoder);
+            }
+
+            // One update stages five chunks in a single command buffer: the emptied
+            // chunk (all zero, first) plus four chunks with distinct markers in
+            // their first two rows and columns. A single staging slice would hand
+            // every chunk the last chunk's rows, and the emptied chunk would read
+            // another chunk's markers instead of staying vacuum.
+            std::array<std::vector<u16>, 4u> cell_ids{};
+            std::vector<lighting::WorldLightChunkUpdate> updates{};
+            updates.reserve(5u);
+            std::vector<u16> emptied(cells_per_chunk, 0u);
+            updates.push_back({.m_chunk_id = emptied_chunk, .m_cell_ids = emptied});
+            for (u32 chunk = 0u; chunk < cell_ids.size(); ++chunk) {
+                cell_ids[chunk].assign(cells_per_chunk, 0u);
+                cell_ids[chunk][0u] = static_cast<u16>(1u + chunk);
+                cell_ids[chunk][1u] = static_cast<u16>(5u + chunk);
+                cell_ids[chunk][chunk_edge] = static_cast<u16>(9u + chunk);
+                updates.push_back({.m_chunk_id = chunk, .m_cell_ids = cell_ids[chunk]});
+            }
+
+            PPR_TEST_ASSERT(not source.applyUpdate({.m_chunks = updates, .m_revision = 2u}));
+            {
+                rhi::ComPtr<rhi::ICommandEncoder> encoder;
+                PPR_TEST_ASSERT(not make_error_code(fixture.m_queue->createCommandEncoder(encoder.writeRef())));
+                PPR_TEST_ASSERT(not source.encode(*encoder));
+                fixture.submit(*encoder);
+            }
+
+            const auto ids = fixture.read<u32>(source.cellIds());
+            PPR_TEST_ASSERT(ids.size() == u64{width} * height);
+
+            // The emptied chunk is entirely vacuum: any non-zero id here means
+            // another chunk's staged rows leaked into its slice.
+            const u32 emptied_x0 = (emptied_chunk % (width / chunk_edge)) * chunk_edge;
+            const u32 emptied_y0 = (emptied_chunk / (width / chunk_edge)) * chunk_edge;
+            for (u32 y = 0u; y < chunk_edge; ++y) {
+                for (u32 x = 0u; x < chunk_edge; ++x) {
+                    PPR_TEST_ASSERT(ids[u64{emptied_y0 + y} * width + emptied_x0 + x] == 0u);
+                }
+            }
+
+            for (u32 chunk = 0u; chunk < cell_ids.size(); ++chunk) {
+                const u32 x = chunk * chunk_edge;
+                PPR_TEST_ASSERT(ids[x] == 1u + chunk);
+                PPR_TEST_ASSERT(ids[x + 1u] == 5u + chunk);
+                PPR_TEST_ASSERT(ids[u64{width} + x] == 9u + chunk);
+
+                // Cells beyond the markers stay vacuum: no chunk inherits another
+                // chunk's slice rows.
+                PPR_TEST_ASSERT(ids[x + 2u] == 0u);
+                PPR_TEST_ASSERT(ids[u64{2u} * width + x] == 0u);
+            }
+
+            fixture.shutdown();
+        };
     }
 
     // ------------------------------------------------------------------
@@ -3397,6 +3474,7 @@ namespace pP::tests {
             detail::WorldLightGpu::gpu_source_over_capacity_update_preserves_state,
             detail::WorldLightGpu::gpu_source_second_update_replaces_pending_particles,
             detail::WorldLightGpu::gpu_source_multiword_occupancy,
+            detail::WorldLightGpu::gpu_source_multi_chunk_update_keeps_each_chunk_rows,
             detail::WorldLightFieldGpu::field_single_emitter_converges,
             detail::WorldLightFieldGpu::field_accumulation_caps_count_and_retention_holds_history,
             detail::WorldLightFieldGpu::field_dirty_update_reprocesses_in_same_frame,

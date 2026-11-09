@@ -73,6 +73,11 @@ export namespace pP::lighting {
         [[nodiscard]] std::error_code shutdown();
 
     private:
+        // Grows the persistent host-mapped chunk staging buffer so it holds
+        // chunk_count 128x128 slices: every pending chunk upload in one encoded
+        // command buffer must read its own slice.
+        [[nodiscard]] std::error_code ensureChunkStaging(u32 chunk_count);
+
         struct State;
         std::unique_ptr<State> m_state;
     };

@@ -24,6 +24,7 @@ namespace pP::lighting {
     namespace {
         inline constexpr u32 kChunkEdge = 128u;
         inline constexpr u64 kChunkCellCount = u64{kChunkEdge} * kChunkEdge;
+        inline constexpr u64 kChunkStageBytes = kChunkCellCount * sizeof(u32);
         inline constexpr u32 kOccupancyBlockEdge = 8u;
         inline constexpr u32 kNumthreads = 64u;
         inline constexpr u32 kOverlayStride = 7u;
@@ -44,9 +45,10 @@ namespace pP::lighting {
         static_assert(PPR_OFFSETOF(WorldLightSourceConstants, m_has_overlay) == 20u);
 
         // Per-chunk upload dispatch constants, matching the Slang layout.
+        // m_chunk_base is the first staged cell of this chunk's own slice.
         struct GpuChunkUpload {
             u32 m_chunk_x{}, m_chunk_y{};
-            u32 m_pad0{}, m_pad1{};
+            u32 m_chunk_base{}, m_pad1{};
         };
         static_assert(sizeof(GpuChunkUpload) == 16u and alignof(GpuChunkUpload) == 4u);
 
@@ -56,6 +58,20 @@ namespace pP::lighting {
 
         rhi::BufferRange range_(rhi::IBuffer *const buffer) noexcept {
             return {.offset = 0u, .size = buffer->getDesc().size};
+        }
+
+        std::error_code createUploadBuffer_(
+            rhi::IDevice &device, const u64 bytes, const u32 element_size, const char *const label,
+            rhi::ComPtr<rhi::IBuffer> &out) {
+            rhi::BufferDesc description{};
+            description.size = bytes;
+            description.elementSize = element_size;
+            description.memoryType = rhi::MemoryType::Upload;
+            description.usage = rhi::BufferUsage::ShaderResource;
+            description.defaultState = rhi::ResourceState::ShaderResource;
+            description.label = label;
+            PPR_RETURN_ERROR_ON_FAIL(WorldLightSourceGpu, device.createBuffer(description, nullptr, out.writeRef()));
+            return {};
         }
     }
 
@@ -89,7 +105,8 @@ namespace pP::lighting {
         rhi::ComPtr<rhi::IBuffer> m_occupancy_gpu; // DeviceLocal, occupancy u32 words.
         rhi::ComPtr<rhi::IBuffer> m_materials_gpu; // DeviceLocal, palette WorldLightMaterial rows.
         rhi::ComPtr<rhi::IBuffer> m_particles_gpu; // Upload, staged WorldLightMatterParticle records.
-        rhi::ComPtr<rhi::IBuffer> m_chunk_staging; // Upload, one chunk's widened u32 ids.
+        rhi::ComPtr<rhi::IBuffer> m_chunk_staging; // Upload, one 128x128 slice per pending chunk.
+        u32 m_chunk_slots{}; // Slice capacity of m_chunk_staging.
 
         WorldLightMatterParticle *m_particles_mapped{};
         u32 *m_chunk_staging_mapped{};
@@ -201,7 +218,6 @@ namespace pP::lighting {
         const u64 overlay_bytes = cell_count * kOverlayStride * sizeof(u32);
         const u64 occupancy_bytes = u64{state.m_blocks_y} * state.m_words_per_row * sizeof(u32);
         const u64 particles_bytes = cell_count * sizeof(WorldLightMatterParticle);
-        const u64 chunk_staging_bytes = kChunkCellCount * sizeof(u32);
         const u64 materials_bytes = u64{std::max<u64>(1u, state.m_materials.size())} * sizeof(WorldLightMaterial);
 
         const std::vector<u32> zero_ids(cell_count, 0u);
@@ -250,16 +266,7 @@ namespace pP::lighting {
 
         const auto upload_buffer = [&](const u64 bytes, const u32 stride, const char *const label,
                                        rhi::ComPtr<rhi::IBuffer> &out) -> std::error_code {
-            rhi::BufferDesc description{};
-            description.size = bytes;
-            description.elementSize = stride;
-            description.memoryType = rhi::MemoryType::Upload;
-            description.usage = rhi::BufferUsage::ShaderResource;
-            description.defaultState = rhi::ResourceState::ShaderResource;
-            description.label = label;
-            PPR_RETURN_ERROR_ON_FAIL(
-                WorldLightSourceGpu, state.m_device->createBuffer(description, nullptr, out.writeRef()));
-            return {};
+            return createUploadBuffer_(*state.m_device, bytes, stride, label, out);
         };
 
         PPR_RETURN_ERROR_ON_FAIL(
@@ -268,7 +275,8 @@ namespace pP::lighting {
                                      state.m_particles_gpu));
         PPR_RETURN_ERROR_ON_FAIL(
             WorldLightSourceGpu,
-            upload_buffer(chunk_staging_bytes, sizeof(u32), "world light chunk staging", state.m_chunk_staging));
+            upload_buffer(kChunkStageBytes, sizeof(u32), "world light chunk staging", state.m_chunk_staging));
+        state.m_chunk_slots = 1u;
 
         PPR_RETURN_ERROR_ON_FAIL(
             WorldLightSourceGpu, make_error_code(state.m_device->mapBuffer(
@@ -448,6 +456,49 @@ namespace pP::lighting {
         return default_value_v;
     }
 
+    std::error_code WorldLightSourceGpu::ensureChunkStaging(const u32 chunk_count) {
+        State &state = *m_state;
+        if (chunk_count <= state.m_chunk_slots) {
+            return default_value_v;
+        }
+
+        // Geometric growth; the pending set is bounded by the plan's chunk count,
+        // so this reallocates only a few times over a session.
+        const u64 grown = std::max<u64>(chunk_count, u64{state.m_chunk_slots} * 2u);
+
+        rhi::ComPtr<rhi::IBuffer> staging;
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldLightSourceGpu,
+            createUploadBuffer_(
+                *state.m_device, grown * kChunkStageBytes, sizeof(u32), "world light chunk staging", staging));
+
+        void *mapped{};
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldLightSourceGpu,
+            make_error_code(state.m_device->mapBuffer(staging.get(), rhi::CpuAccessMode::Write, &mapped)));
+
+        // Rebind the upload root before retiring the previous buffer: that binding
+        // is the only remaining reference to it.
+        {
+            rhi::ShaderCursor cursor{state.m_upload_root.get()};
+            const std::error_code bound = make_error_code(
+                cursor["g_world_light_chunk"].setBinding(rhi::Binding(staging.get(), range_(staging.get()))));
+            if (bound) {
+                std::ignore = state.m_device->unmapBuffer(staging.get());
+                return bound;
+            }
+        }
+
+        if (state.m_chunk_staging != nullptr) {
+            std::ignore = state.m_device->unmapBuffer(state.m_chunk_staging.get());
+        }
+
+        state.m_chunk_staging = std::move(staging);
+        state.m_chunk_staging_mapped = static_cast<u32 *>(mapped);
+        state.m_chunk_slots = static_cast<u32>(grown);
+        return default_value_v;
+    }
+
     std::error_code WorldLightSourceGpu::encode(rhi::ICommandEncoder &encoder) {
         State &state = *m_state;
         PPR_RETURN_ERROR_ON_FAIL(WorldLightSourceGpu, require_(state.m_ready, std::errc::not_connected));
@@ -463,8 +514,15 @@ namespace pP::lighting {
         const u32 width = state.m_plan.m_width;
         const u32 chunks_x = (width + kChunkEdge - 1u) / kChunkEdge;
 
+        // Every pending chunk is dispatched from this one command buffer, so each
+        // needs its own persistent staging slice: a shared slice would be
+        // overwritten on the host before the GPU reads the earlier chunks.
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldLightSourceGpu, ensureChunkStaging(static_cast<u32>(state.m_pending_chunks.size())));
+
         // Host-side staging of the widened chunk ids and raw particles.
-        for (const u32 chunk_id: state.m_pending_chunks) {
+        for (u32 index = 0u; index < state.m_pending_chunks.size(); ++index) {
+            const u32 chunk_id = state.m_pending_chunks[index];
             const u32 chunk_x = chunk_id % chunks_x;
             const u32 chunk_y = chunk_id / chunks_x;
             const u32 cell_x0 = chunk_x * kChunkEdge;
@@ -472,16 +530,18 @@ namespace pP::lighting {
             const u32 cell_x1 = std::min(cell_x0 + kChunkEdge, width);
             const u32 cell_y1 = std::min(cell_y0 + kChunkEdge, state.m_plan.m_height);
 
+            u32 *const staging = state.m_chunk_staging_mapped + u64{index} * kChunkCellCount;
             for (u32 y = cell_y0; y < cell_y1; ++y) {
                 const u64 row = u64{y} * width;
                 const u64 stage_row = u64{y - cell_y0} * kChunkEdge;
                 for (u32 x = cell_x0; x < cell_x1; ++x) {
-                    state.m_chunk_staging_mapped[stage_row + (x - cell_x0)] = state.m_cell_ids[row + x];
+                    staging[stage_row + (x - cell_x0)] = state.m_cell_ids[row + x];
                 }
             }
 
             state.m_upload_constants.m_chunk_x = chunk_x;
             state.m_upload_constants.m_chunk_y = chunk_y;
+            state.m_upload_constants.m_chunk_base = static_cast<u32>(u64{index} * kChunkCellCount);
             rhi::ShaderCursor cursor{state.m_upload_root.get()}, upload{};
             PPR_RETURN_ERROR_ON_FAIL(WorldLightSourceGpu, cursor["g_world_light_chunk_upload"].getDereferenced(upload));
             PPR_RETURN_ERROR_ON_FAIL(
@@ -602,6 +662,7 @@ namespace pP::lighting {
 
         state.m_particles_mapped = nullptr;
         state.m_chunk_staging_mapped = nullptr;
+        state.m_chunk_slots = 0u;
         state.m_mapped = false;
 
         state.m_upload_root.setNull();
