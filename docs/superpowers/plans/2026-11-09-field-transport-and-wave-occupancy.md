@@ -1,0 +1,250 @@
+# Field Transport and Wave Occupancy Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Cut the world-light field's GPU cost and make the terrain legible by replacing the per-evaluation 192-load cascade gather with a per-cell radiance atlas plus update-time coarse→fine collapse, then raise wave occupancy on Turing with LDS staging, wave intrinsics and VGPR reduction.
+
+**Architecture:** A new `WorldLightRadianceAtlas` owns one radiance value per native cell (written by a direct-lighting compute pass with a temporal EMA) — this is the oni_v22 `map.radiance` / `mapRadianceSample` shape. The cascade trace stops gathering the previous field at every opaque hit and instead samples that one atlas value; coarse levels are collapsed into the finer ones **at update time** (`Cascade::computeLevelAndMergeParent`) so shading reads the finest level only. The terrain fragment shader then samples one level instead of six, and reads the atlas for the irradiance that lights dug borders. Occupancy is treated as a first-class budget: the field compute and terrain pixel shaders get explicit registers-per-thread targets on SM 7.5, met with shared-memory staging, wave-uniform control flow and reduced live ranges.
+
+**Tech Stack:** C++23/C++20 modules, Slang (→ SPIR-V, Vulkan via Slang-RHI), engine RHI/Shader services, CMake presets, PPR unit-test framework, Nsight Graphics GPU Trace, Nsight Systems GPU Metrics, perf.
+
+**Spec:** `docs/superpowers/specs/2026-11-07-world-light-field-design.md` (extends it; the accepted deltas are recorded under "Accepted design delta" below).
+
+## Accepted design delta (2026-11-09)
+
+Validated by the user. These supersede the corresponding parts of the 2026-11-07 design.
+
+- **One gather, not six.** Shading and the field's own bounce read a single finest-level value. Coarse cascade levels are merged into the finer level during `update()`, never composited per fragment.
+- **Per-cell radiance atlas.** One radiance sample per native cell, written by a dedicated direct-lighting pass with temporal EMA. It is both the cascade's surface radiance source and the terrain's legibility term.
+- **Bounded legibility.** Interior terrain must be readable around dug borders; the atlas provides it. This is an authored look change and is accepted.
+- **Turing occupancy is a budget, not an afterthought.** SM 7.5: 64 warps/SM, 65,536 32-bit registers/SM, 64 KB unified L1/shared (48 KB default per block, 64 KB opt-in), 16 blocks/SM, fixed subgroup size 32. Occupancy from registers is `warps = min(64, floor(65536 / (regs_per_thread * 32)))`.
+- **SGPR/VGPR note.** SGPR/VGPR are AMD terms. On NVIDIA the analogue is uniform registers plus the uniform datapath, which is compiler-scheduled and cannot be pinned from SPIR-V. We steer it by keeping values wave-uniform, reading per-wave constants from constant buffers, and eliminating per-lane recomputation; we verify with `SHI_REGISTERS` and the register-limited stall counters.
+- **Wave intrinsics are allowed** via Slang `WaveActive*` / `WavePrefix*` / `WaveReadLaneAt` / `WaveMatch` (SPIR-V `GroupNonUniform*`). Precedent in this codebase: `quadSwapX/Y/Diagonal` already lower to SPIR-V quad-group ops.
+- **CPU descriptor work is out of scope.** GPU is 99.2 % active; it is deferred until a GPU-side change makes CPU the limiter.
+
+## Global Constraints
+
+- Map sizes: 1024² baseline, 2048² maximum, 4096² benchmark only, never a delivery gate.
+- Level 0 spacing stays 2 native cells. Do not silently coarsen it.
+- One 128² chunk quad per chunk; never per-cell geometry.
+- Camera-independent field; no reprojection, no camera-dependent reset.
+- 60 Hz target. Field update budget: **≤ 6 ms at 1024² and 2048²**. If over, lengthen the refresh cycle; never coarsen spacing or drop dirty work.
+- Register budgets from Task 1: **field CS ≤ 48 regs/thread (≥ 42 warps/SM)**, **terrain PS ≤ 40 regs/thread (≥ 51 warps/SM)**. Stretch target 32 regs (64 warps).
+- Frame must not regress: no task may raise steady-state frame time; measure, do not assume.
+- No `-ffast-math`, `-ffp-contract=fast`, or FTZ in shader math that affects simulation or lighting determinism.
+- Every task ends with build + focused tests + a measurement delta + a commit.
+- The probe-alignment verdict from the in-flight debug-view lane is a hard prerequisite for Task 1; if it finds a producer bug, fix it before any transport change.
+
+## Review Focus
+
+- A dug border must be visibly lit within one refresh cycle, and must not bleed light through solid rock into unrelated tunnels.
+- The atlas EMA must stay finite and non-negative for dark, high-albedo and coloured-bounce scenes; no per-frame readback.
+- Collapsing coarse→fine must not double-count sky or drop the terminal sky contribution at the world edge.
+- Register/occupancy budgets must be met on the LDS/wave-intrinsic paths without changing visual output beyond the accepted legibility bleed.
+- Wave-uniform early-outs must never be applied when lane results differ (divergence correctness), and subgroup ops must be gated on device support.
+
+---
+
+### Task 1: Baseline gate — probe correctness and occupancy budget
+
+**Files:**
+- Read: `lib/engine/app/renderer/App.Renderer.WorldLightField.cpp` (`evaluate()`, `view()`), `assets/shaders/world_light_sample.slang`
+- Test: `lib/engine/tests/app/App.WorldLightField.Tests.cpp`
+- Record: `.superpowers/sdd/2026-11-09-field-transport/baseline.md` (create)
+
+**Interfaces:**
+- Produces: the numbers every later task is judged against — registers/thread and warps/SM per shader, per-pass ms, and the numeric probe scan.
+
+- [ ] **Step 1: Record the numeric probe scan.** Using the debug-view lane's `evaluate()` scan (17 points across the lamp, plus per-level 0..5 values), write the table into `baseline.md`. If the scan shows a displaced peak or flat zero, stop and fix the producer before continuing.
+- [ ] **Step 2: Record per-pass GPU time** for `WorldLight.FieldUpdate`, `Grid.Terrain`, `Grid.Translucent`, `Particles.Draw`, `PBMPM.Tick` from a fresh Nsight Graphics capture at 1024² steady state.
+- [ ] **Step 3: Record registers/thread and warps/SM** for the field compute and terrain pixel shaders from a Graphics Capture with `Collect Shader Pipelines` (`SHI_REGISTERS`), plus `PS/CS Warp Can't Launch – Register Limited` and `Unallocated Warps in Active SMs` from Nsight Systems GPU Metrics. State which shader misses which budget.
+- [ ] **Step 4: Commit the baseline doc.**
+
+```bash
+git add .superpowers/sdd/2026-11-09-field-transport/baseline.md
+git commit -m "docs: record world light field baseline and occupancy budgets"
+```
+
+---
+
+### Task 2: Per-cell radiance atlas
+
+**Files:**
+- Create: `lib/engine/app/renderer/App.Renderer.WorldLightRadianceAtlas.cppm`, `.cpp`
+- Modify: `lib/engine/app/renderer/App.Renderer.WorldLightTypes.cppm` (plan/settings if the atlas needs a resolution)
+- Create: `assets/shaders/world_light_radiance_atlas.slang`
+- Test: `lib/engine/tests/app/App.WorldLightField.Tests.cpp`
+
+**Interfaces:**
+- Produces: `class WorldLightRadianceAtlas` with `initialize(IRhiService&, IShaderService&, const WorldLightPlan&, const path&)`, `std::error_code encode(ICommandEncoder&, const WorldLightSourceGpu&)`, `rhi::IBuffer *cells() const`, `void setTemporalRetention(float)`; storage is one packed RGB9E5 `u32` per native cell, row-major `width × height` (oni `alias PackedRadiance = RGB9E5`).
+
+- [ ] **Step 1: Write the failing test** `atlas_seeds_emissive_cells_and_retains_history`: seed a 64×64 source with one emissive cell, run `encode()` twice with retention 0.5, read back `cells()`; assert the emissive cell is non-zero after the first pass and that the value decays toward the new sample rather than snapping.
+- [ ] **Step 2: Run it to verify it fails** (`ctest -R "^engine.tests.app.world_light_field$"`), expected failure: atlas not found / zero.
+- [ ] **Step 3: Implement the atlas and its compute shader.** One thread per cell; radiance = material emission + albedo × previous atlas value (one bounce, oni `mapDirectLighting`); temporal EMA `mix(new, prev, exp(-k·dt))`; pack with the existing `RGB9E5` helpers from `grid_liquid_kernel`/`world_light_field.slang` (reuse, do not duplicate).
+- [ ] **Step 4: Run the test to verify it passes.**
+- [ ] **Step 5: Commit** `lighting: add per-cell radiance atlas`.
+
+---
+
+### Task 3: Trace samples the atlas at the opaque hit
+
+**Files:**
+- Modify: `assets/shaders/world_light_trace.slang` (opaque hit branch, ~line 132)
+- Modify: `assets/shaders/world_light_sample.slang` (remove `worldLightDiffusePrev` from the trace path; keep it if a test still uses it)
+- Modify: `lib/engine/app/renderer/App.Renderer.WorldLightField.cpp` (bind the atlas on the update root)
+- Test: `lib/engine/tests/app/App.WorldLightField.Tests.cpp`
+
+**Interfaces:**
+- Consumes: `WorldLightRadianceAtlas::cells()`.
+- Produces: `float3 worldLightAtlasRadiance(float2 world)` in `world_light_sample.slang` — one `StructuredBuffer<u32>` load plus RGB9E5 unpack.
+
+- [ ] **Step 1: Write the failing test** `field_bounce_reads_atlas_not_previous_field`: two runs with identical sources but different previous-field contents must produce the same bounce term when the atlas is fixed; and a reflective-wall case must remain non-zero (reuse `field_feedback_bounces_off_reflective_wall`).
+- [ ] **Step 2: Run it to verify it fails.**
+- [ ] **Step 3: Replace the hit-time gather.** `radiance += transmittance * (emission + albedo * worldLightAtlasRadiance(p))`. Delete the per-hit 8×6×4 gather from the trace.
+- [ ] **Step 4: Run the focused tests; then measure** `WorldLight.FieldUpdate` against the Task 1 baseline. Expected: a material drop; if it does not drop, stop and report rather than layering more changes.
+- [ ] **Step 5: Commit** `lighting: trace bounce from the radiance atlas`.
+
+---
+
+### Task 4: Collapse coarse→fine at update time
+
+**Files:**
+- Modify: `lib/engine/app/renderer/App.Renderer.WorldLightField.cpp` (`update()`, `view()`)
+- Modify: `assets/shaders/world_light_trace.slang` (`computeLevelAndMergeParent` equivalent)
+- Modify: `assets/shaders/world_light_sample.slang` (`worldLightDiffuse`/`worldLightSpecular` read one level)
+- Test: existing field tests + a new one
+
+**Interfaces:**
+- Consumes: per-level radiance buffers (unchanged layout).
+- Produces: `WorldLightFieldView` guarantees `m_radiance` holds the **finest, fully merged** field; `m_previous_radiance` remains for feedback parity tests; the level array is still exposed for debug views.
+
+- [ ] **Step 1: Write the failing test** `merged_field_preserves_terminal_sky_at_world_edge` and `merged_field_matches_per_level_composite_within_tolerance`: compare a CPU oracle composite of all levels against the merged finest level at several positions.
+- [ ] **Step 2: Run them to verify they fail.**
+- [ ] **Step 3: Implement merge-at-update.** After tracing level `l`, merge it into `l-1` with `L = L_near + T_near·L_far` (oni `cascadeMergeInterval`), coarse→fine, once per update; shade from level 0.
+- [ ] **Step 4: Run the field tests; measure** `FieldUpdate` and `Grid.Terrain` against baseline.
+- [ ] **Step 5: Commit** `lighting: collapse cascade levels at update time`.
+
+---
+
+### Task 5: Circular-harmonics fine level (conditional)
+
+**Files:**
+- Modify: `assets/shaders/world_light_field.slang`, `world_light_trace.slang`, `world_light_sample.slang`
+- Modify: `lib/engine/app/renderer/App.Renderer.WorldLightField.cppm` (sample layout/bytes)
+- Test: `App.WorldLightField.Tests.cpp`
+
+**Gate:** implement only if Task 4's field update is still > 6 ms at 1024², or the atlas working set still misses the L2 budget. Otherwise skip and record why in `baseline.md`.
+
+**Interfaces:**
+- Produces: `CircularHarmonics<4>` (7 `float3` coefficients, oni `Packing::Radiance9`) per level-0 probe; `worldLightDiffuse` becomes `Σ A_m · coeff_m` (oni `diffuseIrradiance`).
+
+- [ ] **Step 1: Write the failing test** `ch_evaluation_matches_directional_composite_for_smooth_fields` (compare against the Task 1 numeric scan within tolerance).
+- [ ] **Step 2: Run it to verify it fails.**
+- [ ] **Step 3: Implement projection at trace time and evaluation at sample time**, RGB9E5-packed as in `Packing::packRadiance9`.
+- [ ] **Step 4: Run tests; measure** field update, L2 hit rate, and radiance bytes.
+- [ ] **Step 5: Commit** `lighting: store the fine cascade in circular harmonics`.
+
+---
+
+### Task 6: Terrain legibility from the atlas
+
+**Files:**
+- Modify: `assets/shaders/grid_tiles.slang` (`shadeWorldLightResponse` / `shadeWorldLightSurface`)
+- Modify: `game/Game.Config.cppm` (bounded bleed strength, default matches the accepted look)
+- Test: config default + a GPU shading test if the harness supports it
+
+**Interfaces:**
+- Consumes: `worldLightAtlasRadiance`.
+- Produces: `+ kAtlasAmbient · albedo · atlasRadiance` in the response, with the existing self-emission added exactly once.
+
+- [ ] **Step 1: Write the failing test** `world_light_atlas_ambient_defaults_to_visible_borders` (config default) and, where the harness allows, a shading assertion that a cell adjacent to lit air is brighter than a deep interior cell.
+- [ ] **Step 2: Run it to verify it fails.**
+- [ ] **Step 3: Implement the ambient term** and the config knob; keep the diffuse/specular terms unchanged.
+- [ ] **Step 4: Run tests; capture** a controlled screenshot set (dark emitter, daylight, dug border) and confirm borders are readable without flooding rock.
+- [ ] **Step 5: Commit** `lighting: light terrain borders from the radiance atlas`.
+
+---
+
+### Task 7: Correct per-pixel terrain A/B
+
+**Files:**
+- Modify: `assets/shaders/grid_tiles.slang` (add a per-pixel counterpart of `fragmentGridReactive`)
+- Modify: `lib/engine/app/renderer/App.Renderer.GridPass.cpp:3422` and the program selection at `:2034`
+- Test: `lib/engine/tests/app/App.GridPass.Tests.cpp`
+
+**Interfaces:**
+- Produces: `fragmentGridReactivePixel` — identical outputs to `fragmentGridReactive`, no `SV_SampleIndex`, sampled per pixel while the target stays 4× MSAA.
+
+- [ ] **Step 1: Write the failing test** `grid_reactive_pixel_variant_shares_the_reactive_outputs`.
+- [ ] **Step 2: Run it to verify it fails.**
+- [ ] **Step 3: Implement the variant** and select it behind a temporary switch.
+- [ ] **Step 4: Measure both variants** with Nsight Graphics (`Grid.Terrain` ms, `PS Warp Can't Launch – Register Limited`, warps/SM, instructions). Normalize against `WorldLight.FieldUpdate` to cancel machine drift. Record the result in `baseline.md`.
+- [ ] **Step 5: Commit** `renderer: add per-pixel reactive terrain variant for measurement` (keep the switch defaulted to the current path until Task 8 decides).
+
+---
+
+### Task 8: Terrain pixel-shader register budget (≤ 40 regs)
+
+**Files:**
+- Modify: `assets/shaders/grid_tiles.slang`, `assets/shaders/world_light_sample.slang`
+- Test: Task 7's variant test + screenshot parity
+
+**Interfaces:**
+- Consumes: Task 7's measurement and Task 1's budget.
+- Produces: terrain PS at ≤ 40 regs/thread (≥ 51 warps/SM), or the per-pixel variant enabled if Task 7 shows it is strictly better.
+
+- [ ] **Step 1: Add the failing acceptance check** — record `SHI_REGISTERS` and the register-limited stall in `baseline.md` and assert the budget in the task report (a measurement gate, not a unit test).
+- [ ] **Step 2: Reduce live ranges.** Order computation so gradients, decoration and albedo die before the lighting term; use `half` for colour-only intermediates; hoist wave-uniform constants; avoid `float4` temporaries that span the whole body.
+- [ ] **Step 3: Re-capture** and compare against Task 1: registers/thread, warps/SM, reg-limited stall, `Grid.Terrain` ms, and pixel parity on the Task 6 screenshots.
+- [ ] **Step 4: Commit** `renderer: reduce terrain pixel shader register pressure`.
+
+---
+
+### Task 9: Field compute — LDS staging of the dense source
+
+**Files:**
+- Modify: `assets/shaders/world_light_trace.slang`, `lib/engine/app/renderer/App.Renderer.WorldLightField.cpp` (dispatch/threadgroup shape only if needed)
+- Test: `App.WorldLightField.Tests.cpp` (numerical equivalence)
+
+**Interfaces:**
+- Consumes: `g_world_light_ids`, `g_world_light_overlay`.
+- Produces: `groupshared` tile of the ids/overlay covering the threadgroup's probe footprint; the DDA reads LDS with a global fallback while the tile is built.
+
+- [ ] **Step 1: Write the failing test** `lds_staged_trace_matches_global_trace` — same probe/direction set, identical radiance within half-precision tolerance.
+- [ ] **Step 2: Run it to verify it fails.**
+- [ ] **Step 3: Implement the staging** (cooperative load + `GroupMemoryBarrierWithGroupSync`, oni's block-coherent access pattern) and keep the global path behind a compile-time switch for A/B.
+- [ ] **Step 4: Run tests; measure** L1TEX throughput, L2 hit rate, latency, `FieldUpdate` ms, registers/thread, warps/SM.
+- [ ] **Step 5: Commit** `lighting: stage the dense source in shared memory`.
+
+---
+
+### Task 10: Field compute — wave intrinsics and uniform control flow
+
+**Files:**
+- Modify: `assets/shaders/world_light_trace.slang`
+- Modify: `lib/engine/app/renderer/App.Renderer.WorldLightField.cpp` (refuse to start the fast path if subgroup support is missing)
+
+**Interfaces:**
+- Produces: `[WaveSize(32)]` on the update entry; `WaveActiveAny` uniform exhausted/out-of-world exit; `WaveReadLaneAt`/`WaveActiveAllEqual` fast path when every lane in the wave is in the same cell (level ≥ 1 coherence); `WaveActiveBallot` to skip a whole wave when no lane needs a trace.
+- Consumes: device subgroup properties; add a startup check that `supportedStages` includes `compute` and `supportedOperations` includes `ballot`/`shuffle` before selecting the fast path.
+
+- [ ] **Step 1: Write the failing test** `wave_fast_path_disabled_without_subgroup_support` (capability gate) and `wave_uniform_exit_preserves_per_lane_results` (compare against the scalar path on a divergent probe set).
+- [ ] **Step 2: Run them to verify they fail.**
+- [ ] **Step 3: Implement the wave paths** with the scalar path retained behind the capability gate; never apply a uniform early-out when `WaveActiveAllEqual` is false.
+- [ ] **Step 4: Run tests; measure** `FieldUpdate` ms, warps/SM, `Unallocated Warps`, `SM Issue Active`, L2 hit.
+- [ ] **Step 5: Commit** `lighting: add wave-coherent field trace paths`.
+
+---
+
+### Task 11: Close-out
+
+**Files:**
+- Modify: `.superpowers/sdd/2026-11-09-field-transport/baseline.md` (final numbers)
+- Modify: `docs/superpowers/specs/2026-11-07-world-light-field-design.md` (record the accepted delta)
+- Delete: any superseded gather/merge paths left behind
+
+- [ ] **Step 1: Full validation.** Build `engine.tests.app game.tests app.game`; run `app.game.field_run`, `engine.tests.app.world_light_field`, `game.tests`, and the format/semantic-style gates.
+- [ ] **Step 2: Budget check** at 1024² and 2048²: field update ≤ 6 ms, frame time not regressed, registers/thread within budget, no `+222 %`-style surprises.
+- [ ] **Step 3: Controlled captures** (dark emitter, daylight, dug border, translucent/refraction) attached to the report.
+- [ ] **Step 4: Delete dead code** — the per-hit gather, any level-compositing loop in shading, and the measurement-only switches.
+- [ ] **Step 5: Commit** `lighting: close out field transport and occupancy work`.
