@@ -56,8 +56,10 @@ export namespace pP::lighting {
     // trace time, so level 0 holds the near-to-far composite and shading samples
     // it alone (the remaining level regions stay exposed through m_constants for
     // debug views and tests but must not be re-composited). m_previous_radiance
-    // is the previous frame's merged field, kept for feedback parity tests and
-    // the atlas producer. Borrowed pointers; the field owner outlives every view.
+    // is the other ping-pong buffer, kept for feedback parity tests. The atlas
+    // producer reads m_radiance: the atlas is encoded before the field update, so
+    // at that point m_radiance is the previous frame's merged field. Borrowed
+    // pointers; the field owner outlives every view.
     struct WorldLightFieldView {
         rhi::IBuffer *m_radiance{};
         rhi::IBuffer *m_previous_radiance{};

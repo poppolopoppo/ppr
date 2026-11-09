@@ -1270,7 +1270,7 @@ namespace pP::tests::detail {
             void encodeAtlas() {
                 rhi::ComPtr<rhi::ICommandEncoder> encoder;
                 PPR_TEST_ASSERT(not make_error_code(m_queue->createCommandEncoder(encoder.writeRef())));
-                PPR_TEST_ASSERT(not m_atlas.encode(*encoder, m_source));
+                PPR_TEST_ASSERT(not m_atlas.encode(*encoder, m_source, m_field.view()));
                 submit(*encoder);
             }
 
@@ -1322,48 +1322,64 @@ namespace pP::tests::detail {
         // per-cell radiance atlas
         // ------------------------------------------------------------------
 
-        PPR_UNIT_TEST (atlas_seeds_emissive_cells_and_retains_history) {
+        PPR_UNIT_TEST (atlas_seeds_incident_radiance_and_retains_history) {
             constexpr u32 width = 64u;
             constexpr u32 height = 64u;
 
-            // A deliberately non-uniform emitter so an R/B mantissa swap cannot
-            // pass a symmetric white pin.
-            const lighting::WorldLightMaterial materials[] = {{.m_kind = 1u, .m_emission = {0.7f, 0.3f, 0.2f}}};
-
             Fixture fixture;
-            fixture.initialize(width, height, materials);
+            fixture.initialize(width, height);
             auto &source = fixture.m_source;
+            auto &field = fixture.m_field;
             auto &atlas = fixture.m_atlas;
 
-            // One opaque emissive cell at (0,0); every other cell is vacuum.
+            // One non-vacuum cell away from the world corner at (5,5) (the atlas
+            // gather is exact only where all four bilinear probes are in range);
+            // every other cell is vacuum and hits the producer's exact-zero path.
+            constexpr u64 inspected = u64{5u} * width + 5u;
             std::vector<u16> chunk(128u * 128u, 0u);
-            chunk[0] = 1u;
+            chunk[5u * 128u + 5u] = 1u;
             const lighting::WorldLightChunkUpdate update{.m_chunk_id = 0u, .m_cell_ids = chunk};
             PPR_TEST_ASSERT(not source.applyUpdate({.m_chunks = {&update, 1u}, .m_revision = 1u}));
             fixture.encodeSource();
 
+            // The producer stores incident radiance from the merged field, never
+            // material emission. A deliberately non-uniform value is uploaded to
+            // every radiance sample of every level, so the level-0 +Z diffuse
+            // gather at any cell centre returns exactly this radiance: an R/B
+            // mantissa swap cannot pass a symmetric white pin.
+            const auto plan = lighting::planWorldLight({.m_width = width, .m_height = height, .m_cell_metres = 0.5f});
+            PPR_TEST_ASSERT(plan.has_value());
+            const std::vector<RadianceHalf> uniform(
+                plan->m_radiance_samples, RadianceHalf{
+                                              .m_r = floatToHalf(0.7f),
+                                              .m_g = floatToHalf(0.3f),
+                                              .m_b = floatToHalf(0.2f),
+                                              .m_t = floatToHalf(1.0f)});
+            fixture.write(field.view().m_radiance, uniform);
+
             // Half of the previous value survives each 60 Hz encode, so the first
-            // pass writes 0.5 * emission and the second 0.75 * emission rather
+            // pass writes 0.5 * incident radiance and the second 0.75 * it rather
             // than snapping straight to the new sample.
             atlas.setTemporalRetention(0.5f);
             fixture.encodeAtlas();
             const auto first = fixture.read<u32>(atlas.cells());
             PPR_TEST_ASSERT(first.size() == u64{width} * height);
 
-            const float3 firstValue = unpackRadianceRGB9E5_(first[0]);
-            PPR_TEST_ASSERT(first[0] != 0u);
+            const float3 firstValue = unpackRadianceRGB9E5_(first[inspected]);
+            PPR_TEST_ASSERT(first[inspected] != 0u);
             PPR_TEST_ASSERT(firstValue.x > firstValue.y and firstValue.y > firstValue.z);
             PPR_TEST_ASSERT(std::abs(firstValue.x - 0.35f) < 0.01f);
             PPR_TEST_ASSERT(std::abs(firstValue.y - 0.15f) < 0.01f);
             PPR_TEST_ASSERT(std::abs(firstValue.z - 0.10f) < 0.01f);
 
-            // Neighbouring air stays exactly zero on the seeded frame.
-            PPR_TEST_ASSERT(first[1] == 0u);
-            PPR_TEST_ASSERT(first[u64{width}] == 0u);
+            // Neighbouring air stays exactly zero even though the uploaded field
+            // is lit everywhere: the vacuum fast path owns those cells.
+            PPR_TEST_ASSERT(first[inspected + 1u] == 0u);
+            PPR_TEST_ASSERT(first[inspected + width] == 0u);
 
             fixture.encodeAtlas();
             const auto second = fixture.read<u32>(atlas.cells());
-            const float3 secondValue = unpackRadianceRGB9E5_(second[0]);
+            const float3 secondValue = unpackRadianceRGB9E5_(second[inspected]);
             PPR_TEST_ASSERT(secondValue.x > firstValue.x);
             PPR_TEST_ASSERT(secondValue.x < 0.7f);
             PPR_TEST_ASSERT(std::abs(secondValue.x - 0.525f) < 0.01f);
@@ -1382,6 +1398,7 @@ namespace pP::tests::detail {
             Fixture fixture;
             fixture.initialize(width, height);
             auto &source = fixture.m_source;
+            auto &field = fixture.m_field;
             auto &atlas = fixture.m_atlas;
             atlas.setTemporalRetention(0.5f);
             fixture.encodeAtlas();
@@ -1391,25 +1408,37 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(
                 std::all_of(cells.begin(), cells.end(), [](const u32 word) noexcept { return word == 0u; }));
 
-            // Seed one emissive cell, then clear it back to vacuum. The cell must
-            // be written as exactly zero on the next encode: an EMA that kept its
-            // history would leave 0.5 * previous (non-zero) behind.
+            // Seed one non-vacuum cell over a uniformly lit field, so the cell
+            // stores incident radiance, then clear it back to vacuum. The cell
+            // must be written as exactly zero on the next encode: an EMA that
+            // kept its history would leave 0.5 * previous (non-zero) behind.
             std::vector<u16> chunk(128u * 128u, 0u);
-            chunk[0] = 1u;
+            chunk[5u * 128u + 5u] = 1u;
             const lighting::WorldLightChunkUpdate seed{.m_chunk_id = 0u, .m_cell_ids = chunk};
             PPR_TEST_ASSERT(not source.applyUpdate({.m_chunks = {&seed, 1u}, .m_revision = 1u}));
             fixture.encodeSource();
-            fixture.encodeAtlas();
-            PPR_TEST_ASSERT(fixture.read<u32>(atlas.cells())[0] != 0u);
 
-            chunk[0] = 0u;
+            const auto plan = lighting::planWorldLight({.m_width = width, .m_height = height, .m_cell_metres = 0.5f});
+            PPR_TEST_ASSERT(plan.has_value());
+            const std::vector<RadianceHalf> uniform(
+                plan->m_radiance_samples, RadianceHalf{
+                                              .m_r = floatToHalf(0.4f),
+                                              .m_g = floatToHalf(0.2f),
+                                              .m_b = floatToHalf(0.1f),
+                                              .m_t = floatToHalf(1.0f)});
+            fixture.write(field.view().m_radiance, uniform);
+
+            fixture.encodeAtlas();
+            PPR_TEST_ASSERT(fixture.read<u32>(atlas.cells())[u64{5u} * width + 5u] != 0u);
+
+            chunk[5u * 128u + 5u] = 0u;
             const lighting::WorldLightChunkUpdate clear{.m_chunk_id = 0u, .m_cell_ids = chunk};
             PPR_TEST_ASSERT(not source.applyUpdate({.m_chunks = {&clear, 1u}, .m_revision = 2u}));
             fixture.encodeSource();
             fixture.encodeAtlas();
 
             const auto cleared = fixture.read<u32>(atlas.cells());
-            PPR_TEST_ASSERT(cleared[0] == 0u);
+            PPR_TEST_ASSERT(cleared[u64{5u} * width + 5u] == 0u);
             PPR_TEST_ASSERT(
                 std::all_of(cleared.begin(), cleared.end(), [](const u32 word) noexcept { return word == 0u; }));
 
@@ -1706,7 +1735,12 @@ namespace pP::tests::detail {
             fixture.shutdown();
         };
 
-        PPR_UNIT_TEST (field_feedback_bounces_off_reflective_wall) {
+        // Wiring test: this seeds the atlas buffer directly instead of running
+        // an atlas encode, so it proves only that the trace's opaque-hit bounce
+        // is `albedo * atlas` and that a zero-albedo wall contributes nothing.
+        // The end-to-end producer -> trace path is covered by
+        // wall_reflects_lamp_through_atlas below.
+        PPR_UNIT_TEST (atlas_seed_drives_trace_bounce) {
             constexpr u32 width = 256u;
             constexpr u32 height = 256u;
 
@@ -1759,6 +1793,86 @@ namespace pP::tests::detail {
             }
             PPR_TEST_ASSERT(bounced_nonzero);
             PPR_TEST_ASSERT(zeroed_zero);
+        };
+
+        PPR_UNIT_TEST (wall_reflects_lamp_through_atlas) {
+            constexpr u32 width = 64u;
+            constexpr u32 height = 64u;
+
+            const auto plan = lighting::planWorldLight({.m_width = width, .m_height = height, .m_cell_metres = 0.5f});
+            PPR_TEST_ASSERT(plan.has_value());
+            // A budget covering the whole hierarchy traces every level on every
+            // update, so the final retention-0 update rewrites the inspected
+            // level-0 sample from the current atlas.
+            const u32 budget = static_cast<u32>(plan->m_radiance_samples);
+
+            // Probe (3,3) direction 0 hits the wall at cell (8,8); the lamps
+            // around (9..10, 8..9) sit behind it, so the probe's only light is
+            // the wall albedo times the atlas value the producer gathered there.
+            const u64 sample = (u64{3u} * plan->m_levels[0].m_probes_x + 3u) * plan->m_levels[0].m_directions;
+            const u64 word = sample * 4u;
+            const auto wall_cell = u64{8u} * width + 8u;
+
+            const auto run = [&](const float wall_albedo) -> std::pair<std::vector<u16>, u32> {
+                Fixture fixture;
+                const lighting::WorldLightMaterial materials[] = {
+                    {.m_kind = 1u, .m_albedo = {wall_albedo, wall_albedo, wall_albedo}}, // wall (cell id 1)
+                    {.m_kind = 1u, .m_emission = {1.0f, 1.0f, 1.0f}}, // lamp (cell id 2)
+                };
+                fixture.initialize(width, height, materials);
+                auto &source = fixture.m_source;
+                auto &field = fixture.m_field;
+                auto &atlas = fixture.m_atlas;
+
+                std::vector<u16> chunk(128u * 128u, 0u);
+                chunk[8u * 128u + 8u] = 1u; // wall at (8,8)
+                for (u32 y = 8u; y <= 9u; ++y) {
+                    for (u32 x = 9u; x <= 10u; ++x) {
+                        chunk[y * 128u + x] = 2u; // lamps at (9..10, 8..9)
+                    }
+                }
+                const lighting::WorldLightChunkUpdate update{.m_chunk_id = 0u, .m_cell_ids = chunk};
+                PPR_TEST_ASSERT(not source.applyUpdate({.m_chunks = {&update, 1u}, .m_revision = 1u}));
+                fixture.encodeSource();
+
+                // Let the real trace light the merged field around the wall, then
+                // run the real atlas producer over that field. No buffer is
+                // written by the test: both values come from the shipped paths.
+                atlas.setTemporalRetention(0.5f);
+                for (u32 index = 0u; index < 8u; ++index) {
+                    fixture.updateField(budget, 1u, 0.5f);
+                }
+                fixture.encodeAtlas();
+
+                // Retention 0 makes the inspected sample the fresh trace of the
+                // atlas the producer just wrote.
+                fixture.updateField(budget, 1u, 0.0f);
+
+                const std::vector<u16> radiance = fixture.read<u16>(field.view().m_radiance);
+                const u32 atlas_word = fixture.read<u32>(atlas.cells())[wall_cell];
+                fixture.shutdown();
+                return {radiance, atlas_word};
+            };
+
+            const auto [bounced, bounced_atlas] = run(1.0f);
+            const auto [zeroed, zeroed_atlas] = run(0.0f);
+
+            // The lamp reaches the wall's incident gather: both runs store a
+            // non-zero atlas value at the hit cell, independent of the albedo.
+            PPR_TEST_ASSERT(bounced_atlas != 0u);
+            PPR_TEST_ASSERT(zeroed_atlas != 0u);
+
+            // A reflective wall returns the atlas value to the probe; a black wall
+            // returns exactly nothing even though its atlas value is lit.
+            const float3 incident = unpackRadianceRGB9E5_(bounced_atlas);
+            const std::array<float, 3> channels{incident.x, incident.y, incident.z};
+            for (u32 channel = 0u; channel < 3u; ++channel) {
+                const float value = halfToFloat(bounced[word + channel]);
+                PPR_TEST_ASSERT(std::isfinite(value));
+                PPR_TEST_ASSERT(value > 0.001f);
+                PPR_TEST_ASSERT(std::abs(value - channels[channel]) <= 0.005f);
+                PPR_TEST_ASSERT(zeroed[word + channel] == 0u);
+            }
         };
 
         PPR_UNIT_TEST (field_bounce_reads_atlas_not_previous_field) {
@@ -1909,10 +2023,12 @@ namespace pP::tests::detail {
             constexpr u32 height = 256u;
             constexpr u32 chunk_edge = 128u;
 
-            // Palette: id 1 is an opaque emissive lamp, id 2 opaque rock.
+            // Palette: id 1 is an opaque emissive lamp, id 2 opaque rock, id 3 an
+            // opaque cell with both emission and albedo for the atlas contract.
             const lighting::WorldLightMaterial materials[] = {
                 {.m_kind = 1u, .m_emission = {1.0f, 1.0f, 1.0f}},
                 {.m_kind = 1u},
+                {.m_kind = 1u, .m_emission = {0.1f, 0.2f, 0.3f}, .m_albedo = {0.5f, 0.5f, 0.5f}},
             };
 
             Fixture fixture;
@@ -1926,13 +2042,16 @@ namespace pP::tests::detail {
             // levels with margin for the temporal accumulation.
             const u32 budget = static_cast<u32>(plan->m_radiance_samples);
 
-            // A walled room [70,90]^2 with an emissive lamp column at x=80, y=79..81.
-            // Cell (81,80) is air inside the room next to the lamp; cell (70,80) is
-            // the room's left wall next to that air.
+            // A walled room [70,90]^2 with an emissive lamp column at x=80, y=79..81
+            // and a one-cell opening at (90,79). Cell (81,80) is air inside the
+            // room next to the lamp; cell (70,80) is the room's left wall next to
+            // that air. Three lamp cells inside the room sit on the diagonal that
+            // continues the opening, so light escaping the hole reaches the air
+            // just outside it. Cell (91,79) is that outside air.
             std::vector<u16> room(chunk_edge * chunk_edge, 0u);
             for (u32 y = 70u; y <= 90u; ++y) {
                 for (u32 x = 70u; x <= 90u; ++x) {
-                    if (x == 70u or x == 90u or y == 70u or y == 90u) {
+                    if ((x == 70u or x == 90u or y == 70u or y == 90u) and not (x == 90u and y == 79u)) {
                         room[y * chunk_edge + x] = 2u;
                     }
                 }
@@ -1940,6 +2059,25 @@ namespace pP::tests::detail {
             for (u32 y = 79u; y <= 81u; ++y) {
                 room[y * chunk_edge + 80u] = 1u;
             }
+            for (u32 step = 0u; step < 3u; ++step) {
+                room[(80u + step) * chunk_edge + (88u - step)] = 1u;
+            }
+
+            // A deep rock block [40,50]^2 far from every light. Cell (45,45) is its
+            // interior: every probe around it is surrounded by inert rock, so its
+            // diffuse must stay exactly zero.
+            for (u32 y = 40u; y < 50u; ++y) {
+                for (u32 x = 40u; x < 50u; ++x) {
+                    room[y * chunk_edge + x] = 2u;
+                }
+            }
+
+            // An emissive cell with albedo (8,8) next to two lamps at (9,8) and
+            // (10,8). Probe (3,3) direction 0 hits only that wall cell, so its
+            // stored value is exactly emission + albedo * atlas(8,8).
+            room[8u * chunk_edge + 8u] = 3u;
+            room[8u * chunk_edge + 9u] = 1u;
+            room[8u * chunk_edge + 10u] = 1u;
 
             // A sealed rock shell [150,156]x[100,106] with vacuum at its centre
             // (153,103): no line of sight to the sky or to the lamp. Lives in
@@ -1958,13 +2096,6 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not source.applyUpdate(
                 {.m_chunks = updates, .m_revision = 1u, .m_sky_hour = 12, .m_sky = {0.25f, 0.5f, 1.0f}}));
             fixture.encodeSource();
-
-            // Ten full-field updates carry the terminal sky down all six levels;
-            // retention 0 makes each stored value the fresh fold so the chain
-            // propagates one level per update instead of decaying through the EMA.
-            for (u32 index = 0u; index < 10u; ++index) {
-                fixture.updateField(budget, 1u, 0.0f);
-            }
 
             const auto centre = [](const u32 x, const u32 y) {
                 return float2{(static_cast<float>(x) + 0.5f) * 0.5f, (static_cast<float>(y) + 0.5f) * 0.5f};
@@ -1994,6 +2125,19 @@ namespace pP::tests::detail {
                 }
                 return true;
             };
+
+            // Ten full-field updates carry the terminal sky down all six levels;
+            // retention 0 makes each stored value the fresh fold so the chain
+            // propagates one level per update instead of decaying through the EMA.
+            for (u32 index = 0u; index < 10u; ++index) {
+                fixture.updateField(budget, 1u, 0.0f);
+            }
+
+            // The producer gathers incident radiance from the settled merged
+            // field; one retention-0 update then makes the inspected probe sample
+            // the fresh trace of the atlas the producer just wrote.
+            fixture.encodeAtlas();
+            fixture.updateField(budget, 1u, 0.0f);
 
             // 1. The emissive lamp cell itself: finite, and a solid probe reads the
             // light crossing in from the neighbouring air.
@@ -2047,7 +2191,67 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(outside.m_diffuse == std::array<float, 3>{0.0f, 0.0f, 0.0f});
             PPR_TEST_ASSERT(outside.m_specular == std::array<float, 3>{0.0f, 0.0f, 0.0f});
 
+            // 7. Deep interior rock stays exactly zero: every probe around it is
+            // sealed by inert rock, so neither emitter, sky nor opening reaches it.
+            const auto deep_rock = sample(centre(45u, 45u), float2{1.0f, 0.0f});
+            PPR_TEST_ASSERT(deep_rock.m_composite == std::array<float, 3>{0.0f, 0.0f, 0.0f});
+            PPR_TEST_ASSERT(deep_rock.m_diffuse == std::array<float, 3>{0.0f, 0.0f, 0.0f});
+
+            // 8. An opaque cell with both emission E and albedo rho obeys the
+            // trace's hit expression: composite = E + rho * L_i, with L_i read
+            // straight from the atlas the producer wrote. Probe (3,3) direction 0
+            // is the centre of its angular bin, so the evaluate seam returns that
+            // stored level-0 sample without interpolation error.
+            const float3 atlas_incident = unpackRadianceRGB9E5_(
+                fixture.read<u32>(fixture.m_atlas.cells())[u64{8u} * width + 8u]);
+            const std::array<float, 3> atlas_channels{atlas_incident.x, atlas_incident.y, atlas_incident.z};
+            const std::array<float, 3> wall_emission{0.1f, 0.2f, 0.3f};
+            constexpr float wall_albedo = 0.5f;
+            constexpr float bin_angle = 0.5f * 6.28318530718f / 4.0f;
+            const auto wall_hit = sample(float2{3.5f, 3.5f}, float2{std::cos(bin_angle), std::sin(bin_angle)});
+            for (u32 channel = 0u; channel < 3u; ++channel) {
+                const float expected = wall_emission[channel] + wall_albedo * atlas_channels[channel];
+                const float tolerance = 0.01f + 0.02f * std::abs(expected);
+                PPR_TEST_ASSERT(std::isfinite(wall_hit.m_composite[channel]));
+                PPR_TEST_ASSERT(std::abs(wall_hit.m_composite[channel] - expected) <= tolerance);
+            }
+
+            // 9. Dug-border contract under a black sky: the room's lamps are then
+            // the only light in the world, so a diffuse response just outside the
+            // one-cell opening can only be light that escaped through it. The same
+            // room geometry is reused after the sky-lit fixture is released (the
+            // RHI service admits one device at a time).
             fixture.shutdown();
+
+            Fixture dark;
+            dark.initialize(width, height, materials);
+            const lighting::WorldLightChunkUpdate dark_update{.m_chunk_id = 0u, .m_cell_ids = room};
+            PPR_TEST_ASSERT(not dark.m_source.applyUpdate({.m_chunks = {&dark_update, 1u}, .m_revision = 1u}));
+            dark.encodeSource();
+
+            // A diagonal sample crosses a one-cell hole only on part of the
+            // jitter, so the retention EMA accumulates the passes into a stable
+            // value instead of a frame-parity coin flip.
+            dark.m_atlas.setTemporalRetention(0.5f);
+            for (u32 index = 0u; index < 16u; ++index) {
+                dark.updateField(budget, 1u, 0.5f);
+            }
+
+            const auto evaluate_dark = [&](const u32 x, const u32 y) {
+                return dark.evaluate(
+                    centre(x, y), float2{-1.0f, 0.0f}, float3{0.0f, 0.0f, 1.0f}, 0.3f,
+                    lighting::WorldLightField::EvaluateMode::kDiffuse);
+            };
+            const std::array<float, 3> source_sky = dark.m_source.sky();
+            PPR_TEST_ASSERT(source_sky == std::array<float, 3>{0.0f, 0.0f, 0.0f});
+
+            const std::array<float, 3> outside_opening = evaluate_dark(91u, 79u);
+            PPR_TEST_ASSERT(finite_nonnegative(outside_opening));
+            PPR_TEST_ASSERT(outside_opening[0] > 0.0f);
+            PPR_TEST_ASSERT(outside_opening[1] > 0.0f);
+            PPR_TEST_ASSERT(outside_opening[2] > 0.0f);
+
+            dark.shutdown();
         };
 
         PPR_UNIT_TEST (field_is_camera_independent) {
@@ -2199,6 +2403,89 @@ namespace pP::tests::detail {
                     PPR_TEST_ASSERT(std::isfinite(actual[channel]));
                     const float tolerance = 0.02f + 0.005f * std::abs(expected[channel]);
                     PPR_TEST_ASSERT(std::abs(actual[channel] - expected[channel]) <= tolerance);
+                }
+            }
+
+            fixture.shutdown();
+        };
+
+        PPR_UNIT_TEST (gpu_fold_matches_cpu_merge_with_partial_transmittance) {
+            constexpr u32 width = 64u;
+            constexpr u32 height = 64u;
+
+            Fixture fixture;
+            fixture.initialize(width, height);
+            auto &field = fixture.m_field;
+
+            const auto plan = lighting::planWorldLight({.m_width = width, .m_height = height, .m_cell_metres = 0.5f});
+            PPR_TEST_ASSERT(plan.has_value());
+
+            // Seed a non-trivial per-level hierarchy: radiance is anisotropic
+            // (varies by level and direction) and transmittance is partial. The
+            // seed is spatially uniform, so the parent's bilinear gather returns
+            // the same value at any jittered probe offset and the fold can be
+            // checked exactly. A wrong direction remap, a dropped bin average, a
+            // summed instead of averaged transpose, or a doubled parent term
+            // changes the result.
+            std::vector<RadianceHalf> seed(plan->m_radiance_samples, RadianceHalf{});
+            for (u32 level = 0u; level < plan->m_level_count; ++level) {
+                const lighting::WorldLightLevel &info = plan->m_levels[level];
+                const u64 probe_count = u64{info.m_probes_x} * info.m_probes_y;
+                for (u64 probe = 0u; probe < probe_count; ++probe) {
+                    for (u32 direction = 0u; direction < info.m_directions; ++direction) {
+                        const u64 sample = info.m_sample_offset + probe * info.m_directions + direction;
+                        seed[sample] = RadianceHalf{
+                            .m_r = floatToHalf(0.05f * float(level + 1u) + 0.02f * float(direction)),
+                            .m_g = floatToHalf(0.10f * float(level + 1u) + 0.01f * float(direction)),
+                            .m_b = floatToHalf(0.20f + 0.005f * float(level * 7u + direction)),
+                            .m_t = floatToHalf(0.5f + 0.08f * float(level) + 0.02f * float(direction % 5u))};
+                    }
+                }
+            }
+            fixture.write(field.view().m_radiance, seed);
+
+            // One update over the vacuum world: each level-0 sample traces an
+            // empty interval (L=0, T=1) and folds the seeded parent suffix in
+            // through worldLightParentSampleFrom. Retention 0 and accumulation 1
+            // make the stored value the fresh fold, no EMA.
+            fixture.updateField(static_cast<u32>(plan->m_radiance_samples), 1u, 0.0f);
+
+            const std::vector<u16> radiance = fixture.read<u16>(field.view().m_radiance);
+            const lighting::WorldLightLevel &finest = plan->m_levels[0];
+            const lighting::WorldLightLevel &parent = plan->m_levels[1];
+            const u32 ratio = parent.m_directions / finest.m_directions;
+            PPR_TEST_ASSERT(ratio == 4u);
+
+            for (u32 py = 1u; py + 1u < finest.m_probes_y; ++py) {
+                for (u32 px = 1u; px + 1u < finest.m_probes_x; ++px) {
+                    for (u32 direction = 0u; direction < finest.m_directions; ++direction) {
+                        // CPU fold: average the parent angular bins that span this
+                        // finer bin at the level-0 probe's parent-space position.
+                        std::array<float, 3> expected{0.0f, 0.0f, 0.0f};
+                        float expected_transmittance = 0.0f;
+                        for (u32 index = 0u; index < ratio; ++index) {
+                            const u64 parent_sample = parent.m_sample_offset + u64{direction * ratio + index};
+                            expected[0] += halfToFloat(seed[parent_sample].m_r);
+                            expected[1] += halfToFloat(seed[parent_sample].m_g);
+                            expected[2] += halfToFloat(seed[parent_sample].m_b);
+                            expected_transmittance += halfToFloat(seed[parent_sample].m_t);
+                        }
+                        for (u32 channel = 0u; channel < 3u; ++channel) {
+                            expected[channel] /= float(ratio);
+                        }
+                        expected_transmittance /= float(ratio);
+                        PPR_TEST_ASSERT(expected_transmittance > 0.4f and expected_transmittance < 1.0f);
+
+                        const u64 sample = (u64{py} * finest.m_probes_x + px) * finest.m_directions + direction;
+                        const u64 word = sample * 4u;
+                        for (u32 channel = 0u; channel < 3u; ++channel) {
+                            const float actual = halfToFloat(radiance[word + channel]);
+                            PPR_TEST_ASSERT(std::isfinite(actual));
+                            PPR_TEST_ASSERT(std::abs(actual - expected[channel]) <= 0.01f);
+                        }
+                        const float actual_transmittance = halfToFloat(radiance[word + 3u]);
+                        PPR_TEST_ASSERT(std::abs(actual_transmittance - expected_transmittance) <= 0.01f);
+                    }
                 }
             }
 
@@ -4125,13 +4412,15 @@ namespace pP::tests {
             detail::WorldLightFieldGpu::field_update_respects_budget_boundary,
             detail::WorldLightFieldGpu::field_dense_dda_hits_diagonal_emitter,
             detail::WorldLightFieldGpu::field_air_probes_see_emitter_sky_and_sealed_cavity,
-            detail::WorldLightFieldGpu::field_feedback_bounces_off_reflective_wall,
+            detail::WorldLightFieldGpu::atlas_seed_drives_trace_bounce,
+            detail::WorldLightFieldGpu::wall_reflects_lamp_through_atlas,
             detail::WorldLightFieldGpu::field_bounce_reads_atlas_not_previous_field,
             detail::WorldLightFieldGpu::field_is_camera_independent,
             detail::WorldLightFieldGpu::field_routing_applies_dirty_chunk_and_binds_view,
-            detail::WorldLightFieldGpu::atlas_seeds_emissive_cells_and_retains_history,
+            detail::WorldLightFieldGpu::atlas_seeds_incident_radiance_and_retains_history,
             detail::WorldLightFieldGpu::atlas_vacuum_source_is_all_zero,
             detail::WorldLightFieldGpu::merged_field_matches_per_level_composite_within_tolerance,
+            detail::WorldLightFieldGpu::gpu_fold_matches_cpu_merge_with_partial_transmittance,
             detail::WorldLightFieldGpu::merged_field_preserves_terminal_sky_at_world_edge,
             detail::WorldLightFieldGpu::diffuse_plus_z_isotropic_and_perturbed_finite,
             detail::WorldLightFieldGpu::specular_vertical_reflection_and_roughness_finite,

@@ -1894,8 +1894,12 @@ namespace pP {
                 PPR_RETURN_ERROR_ON_FAIL(Editor, field.m_source.encode(context.m_encoder));
 
                 // The atlas pass must be recorded before the field update: the
-                // trace's opaque-hit bounce reads the atlas this frame writes.
-                PPR_RETURN_ERROR_ON_FAIL(Editor, field.m_atlas.encode(context.m_encoder, field.m_source));
+                // trace's opaque-hit bounce reads the atlas this frame writes, and
+                // the atlas gathers incident radiance from the merged field that
+                // the previous frame's update left in view().m_radiance (the atlas
+                // runs before this frame's update ping-pongs it).
+                PPR_RETURN_ERROR_ON_FAIL(
+                    Editor, field.m_atlas.encode(context.m_encoder, field.m_source, field.m_field.view()));
 
                 // The injected frame delta drives the retention EMA; use the real
                 // packet delta (falling back to the 60 Hz nominal on a zero delta).

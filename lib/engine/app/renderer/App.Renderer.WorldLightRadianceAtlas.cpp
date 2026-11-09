@@ -4,6 +4,7 @@ module;
 
 module engine.app;
 
+import :renderer.world_light_field;
 import :renderer.world_light_radiance_atlas;
 import :renderer.world_light_source_gpu;
 import :renderer.world_light_types;
@@ -150,9 +151,12 @@ namespace pP::lighting {
         return default_value_v;
     }
 
-    std::error_code WorldLightRadianceAtlas::encode(rhi::ICommandEncoder &encoder, const WorldLightSourceGpu &source) {
+    std::error_code WorldLightRadianceAtlas::encode(
+        rhi::ICommandEncoder &encoder, const WorldLightSourceGpu &source, const WorldLightFieldView &field) {
         State &state = *m_state;
         PPR_RETURN_ERROR_ON_FAIL(WorldLightRadianceAtlas, require_(state.m_ready, std::errc::not_connected));
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldLightRadianceAtlas, require_(field.m_radiance != nullptr and field.m_constants != nullptr));
 
         encoder.pushDebugGroup("WorldLight.RadianceAtlas", rhi::MarkerColor{.r = 0.9f, .g = 0.5f, .b = 0.9f});
         PPR_DEFER {
@@ -160,11 +164,18 @@ namespace pP::lighting {
         };
 
         {
-            rhi::ShaderCursor cursor{state.m_root.get()}, constants{};
+            rhi::ShaderCursor cursor{state.m_root.get()}, constants{}, field_constants{};
             PPR_RETURN_ERROR_ON_FAIL(
                 WorldLightRadianceAtlas, cursor["g_world_light_atlas_constants"].getDereferenced(constants));
             PPR_RETURN_ERROR_ON_FAIL(
                 WorldLightRadianceAtlas, constants.setData(&state.m_constants, sizeof(state.m_constants)));
+
+            // The gather maps cell centres through the field's own origin and
+            // cell size, so the atlas and the field must share one snapshot.
+            PPR_RETURN_ERROR_ON_FAIL(
+                WorldLightRadianceAtlas, cursor["g_world_light_field"].getDereferenced(field_constants));
+            PPR_RETURN_ERROR_ON_FAIL(
+                WorldLightRadianceAtlas, field_constants.setData(field.m_constants, sizeof(WorldLightFieldConstants)));
         }
 
         const auto bind = [&](const char *const name, rhi::IBuffer *const buffer) -> std::error_code {
@@ -175,15 +186,17 @@ namespace pP::lighting {
         };
         PPR_RETURN_ERROR_ON_FAIL(WorldLightRadianceAtlas, bind("g_world_light_ids", source.cellIds()));
         PPR_RETURN_ERROR_ON_FAIL(WorldLightRadianceAtlas, bind("g_world_light_overlay", source.overlay()));
-        PPR_RETURN_ERROR_ON_FAIL(WorldLightRadianceAtlas, bind("g_world_light_materials", source.materialsGpu()));
         PPR_RETURN_ERROR_ON_FAIL(WorldLightRadianceAtlas, bind("g_world_light_atlas", state.m_cells.get()));
+        PPR_RETURN_ERROR_ON_FAIL(WorldLightRadianceAtlas, bind("g_world_light_radiance_prev", field.m_radiance));
 
         // The dense source ids/overlay are read through the same RW bindings the
-        // field uses; the immutable palette is a shader resource.
+        // field uses; the merged previous field is only read, so it moves to a
+        // shader-resource state before the gather (the field update later takes
+        // it back for the ping-pong copy).
         encoder.setBufferState(source.cellIds(), rhi::ResourceState::UnorderedAccess);
         encoder.setBufferState(source.overlay(), rhi::ResourceState::UnorderedAccess);
-        encoder.setBufferState(source.materialsGpu(), rhi::ResourceState::ShaderResource);
         encoder.setBufferState(state.m_cells.get(), rhi::ResourceState::UnorderedAccess);
+        encoder.setBufferState(field.m_radiance, rhi::ResourceState::ShaderResource);
 
         const u32 cell_count = state.m_width * state.m_height;
         const u32 groups = (cell_count + kNumthreads - 1u) / kNumthreads;

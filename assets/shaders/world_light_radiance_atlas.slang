@@ -1,16 +1,25 @@
 // ------------------------------------------------------------------
-// per-cell radiance atlas: packed RGB9E5 emit + one-bounce temporal EMA
+// per-cell incident radiance atlas: packed RGB9E5 + one-level gather + EMA
 // ------------------------------------------------------------------
 // One packed u32 per native cell. The value is RGB9E5 (9-bit mantissas, shared
-// 5-bit exponent) so a whole cell costs four bytes. Each dispatch rewrites
-// every cell in place: new = material emission + overlay emission + albedo *
-// previous atlas value (one bounce), then mix(new, previous,
-// exp(-temporalRate * frameDelta)). One thread owns one cell, so reading the
-// previous value and writing the new one needs no ping-pong buffer.
+// 5-bit exponent) so a whole cell costs four bytes. The atlas stores the
+// incident radiance L_i arriving at the cell centre from the previous frame's
+// fully merged field -- never the cell's own emission or albedo. Consumers add
+// their own emission exactly once and multiply L_i by their albedo (the trace's
+// opaque-hit bounce and the terrain ambient term), so the value can never feed
+// back on itself and a non-emissive cell still carries the light around it.
+//
+// Each dispatch rewrites every cell in place: new = mix(L_i, previous,
+// exp(-temporalRate * frameDelta)), the temporal EMA that keeps a settled value
+// stable without a ping-pong buffer (one thread owns one cell).
 #ifndef PPR_WORLD_LIGHT_RADIANCE_ATLAS_SLANG
 #define PPR_WORLD_LIGHT_RADIANCE_ATLAS_SLANG
 
-#include "world_light_source.slang"
+// The producer owns the read/write atlas binding below; suppress the shared
+// sampler's read-only declaration. The sample module also provides
+// worldLightDiffuseFrom, the single-level gather both consumers use.
+#define PPR_WORLD_LIGHT_NO_ATLAS_SAMPLER
+#include "world_light_sample.slang"
 
 struct WorldLightRadianceAtlasConstants {
     uint width, height;
@@ -20,19 +29,19 @@ struct WorldLightRadianceAtlasConstants {
 
 ConstantBuffer<WorldLightRadianceAtlasConstants> g_world_light_atlas_constants;
 RWStructuredBuffer<uint> g_world_light_atlas;
-StructuredBuffer<WorldLightMaterial> g_world_light_materials;
 
 // ------------------------------------------------------------------
 // per-cell update
 // ------------------------------------------------------------------
 
-// One thread per native cell. Material and overlay emission are the direct
-// term; the material albedo multiplies the previous atlas value for a single
-// bounce. Vacuum cells (id 0 with no overlay coverage or emission) are written
-// as exactly zero and keep no history, so air never accumulates radiance and a
-// cell that becomes vacuum clears in one pass. An extinction-only overlay
-// (coverage > 0, emission 0) is deliberately not vacuum: that matches the
-// source's occupancy oracle, so it decays history instead of clearing at once.
+// One thread per native cell. Incident radiance is the +Z diffuse response of
+// the merged field at the cell centre: level 0 already holds every level's
+// interval, so this is one gather per cell instead of one per ray hit. Vacuum
+// cells (id 0 with no overlay coverage or emission) are written as exactly zero
+// and keep no history, so air never accumulates radiance and a cell that
+// becomes vacuum clears in one pass. An extinction-only overlay (coverage > 0,
+// emission 0) is deliberately not vacuum: that matches the source's occupancy
+// oracle, so it decays history instead of clearing at once.
 [shader("compute")]
 [numthreads(64, 1, 1)]
 void updateWorldLightRadianceAtlas(uint3 id : SV_DispatchThreadID) {
@@ -44,30 +53,29 @@ void updateWorldLightRadianceAtlas(uint3 id : SV_DispatchThreadID) {
     uint cellId = g_world_light_ids[cell];
     uint base = cell * kOverlayStride;
 
-    float3 emission = float3(0.0, 0.0, 0.0);
-    float3 albedo = float3(0.0, 0.0, 0.0);
-    if (cellId != 0u) {
-        WorldLightMaterial material = g_world_light_materials[cellId - 1u];
-        emission = float3(material.emission[0], material.emission[1], material.emission[2]);
-        albedo = float3(material.albedo[0], material.albedo[1], material.albedo[2]);
-    }
-
     float coverage = asfloat(g_world_light_overlay[base + kOverlayCoverage]);
-    emission += float3(
+    float3 overlayEmission = float3(
         asfloat(g_world_light_overlay[base + kOverlayEmission0]),
         asfloat(g_world_light_overlay[base + kOverlayEmission1]),
         asfloat(g_world_light_overlay[base + kOverlayEmission2]));
 
-    if (cellId == 0u && coverage <= 0.0 && emission.x == 0.0 && emission.y == 0.0 && emission.z == 0.0) {
+    if (cellId == 0u && coverage <= 0.0 && overlayEmission.x == 0.0 && overlayEmission.y == 0.0 &&
+        overlayEmission.z == 0.0) {
         g_world_light_atlas[cell] = 0u;
         return;
     }
 
+    uint px = cell % width;
+    uint py = cell / width;
+    float2 origin = float2(g_world_light_field.originX, g_world_light_field.originY);
+    float2 centre = origin + (float2(float(px), float(py)) + 0.5) * g_world_light_field.cellMetres;
+
+    float3 incident = worldLightDiffuseFrom(g_world_light_radiance_prev, centre, float3(0.0, 0.0, 1.0));
+
     float3 previous = unpackRadianceRGB9E5(g_world_light_atlas[cell]);
-    float3 sample = emission + albedo * previous;
     float previousWeight =
         exp(-g_world_light_atlas_constants.temporalRate * g_world_light_atlas_constants.frameDelta);
-    g_world_light_atlas[cell] = packRadianceRGB9E5(lerp(sample, previous, previousWeight));
+    g_world_light_atlas[cell] = packRadianceRGB9E5(lerp(incident, previous, previousWeight));
 }
 
 #endif

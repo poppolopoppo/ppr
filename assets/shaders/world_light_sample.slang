@@ -211,6 +211,9 @@ float3 worldLightDiffuse(float2 position, float3 normal) {
 // per-cell radiance atlas
 // ------------------------------------------------------------------
 
+// The atlas producer includes this file for the gather helpers but owns the
+// read/write atlas binding, so it suppresses this read-only view.
+#ifndef PPR_WORLD_LIGHT_NO_ATLAS_SAMPLER
 // One packed RGB9E5 word per native cell, row-major. The atlas pass writes it
 // earlier in the same frame; the trace samples it at an opaque hit so the
 // one-bounce term costs one load instead of a cascade-direction gather.
@@ -231,6 +234,7 @@ float3 worldLightAtlasRadiance(float2 world) {
     uint index = uint(cell.y) * g_world_light_field.width + uint(cell.x);
     return unpackRadianceRGB9E5(g_world_light_atlas[index]);
 }
+#endif
 
 // ------------------------------------------------------------------
 // material response
