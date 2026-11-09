@@ -31,8 +31,7 @@ static const float kWorldLightDirectionEpsilon = 1e-3;
 // unpacking the RGB radiance and scalar transmittance halves. Returns false (and
 // zero radiance / unit transmittance) for probes outside the level's grid, so
 // sampling at the world edge fades the out-of-world contribution instead of
-// wrapping. The buffer is a parameter so the same gather serves both the current
-// field (shading) and the previous completed field (one-bounce feedback).
+// wrapping. The buffer is a parameter so the same gather serves every consumer.
 [ForceInline]
 bool worldLightProbeFrom(
     RWStructuredBuffer<WorldLightRadiance> radianceBuffer, WorldLightLevelGpu level, int2 probe, uint direction,
@@ -53,14 +52,6 @@ bool worldLightProbeFrom(
 [ForceInline]
 bool worldLightProbe(WorldLightLevelGpu level, int2 probe, uint direction, out float3 radiance, out float transmittance) {
     return worldLightProbeFrom(g_world_light_radiance_cur, level, probe, direction, radiance, transmittance);
-}
-
-// Previous completed-field read for the one-bounce feedback path: never touches
-// the in-flight current buffer, so an opaque hit during the update reads the
-// prior frame instead of looping its own sample.
-[ForceInline]
-bool worldLightProbePrev(WorldLightLevelGpu level, int2 probe, uint direction, out float3 radiance, out float transmittance) {
-    return worldLightProbeFrom(g_world_light_radiance_prev, level, probe, direction, radiance, transmittance);
 }
 
 // ------------------------------------------------------------------
@@ -121,12 +112,6 @@ void worldLightLevelSample(
     worldLightLevelSampleFrom(g_world_light_radiance_cur, level, position, direction, radiance, transmittance);
 }
 
-[ForceInline]
-void worldLightLevelSamplePrev(
-    WorldLightLevelGpu level, float2 position, float2 direction, out float3 radiance, out float transmittance) {
-    worldLightLevelSampleFrom(g_world_light_radiance_prev, level, position, direction, radiance, transmittance);
-}
-
 // ------------------------------------------------------------------
 // composite and material terms
 // ------------------------------------------------------------------
@@ -154,13 +139,6 @@ float3 worldLightCompositeFrom(RWStructuredBuffer<WorldLightRadiance> radianceBu
 [ForceInline]
 float3 worldLightComposite(float2 position, float2 direction) {
     return worldLightCompositeFrom(g_world_light_radiance_cur, position, direction);
-}
-
-// Previous completed-field composite for the one-bounce feedback path (reads
-// g_world_light_radiance_prev, never the in-flight current buffer).
-[ForceInline]
-float3 worldLightCompositePrev(float2 position, float2 direction) {
-    return worldLightCompositeFrom(g_world_light_radiance_prev, position, direction);
 }
 
 // Cosine-weighted diffuse over a deterministic 8-direction set. A flat (+Z)
@@ -199,14 +177,34 @@ float3 worldLightDiffuse(float2 position, float3 normal) {
     return worldLightDiffuseFrom(g_world_light_radiance_cur, position, normal);
 }
 
-// Previous completed-field cosine-weighted diffuse: the one-bounce response an
-// opaque hit adds, reading the prior frame's completed field. Finite because it
-// is a cosine-weighted average of the same finite composite the shading path
-// uses; it never samples the in-flight current buffer.
+// ------------------------------------------------------------------
+// per-cell radiance atlas
+// ------------------------------------------------------------------
+
+// One packed RGB9E5 word per native cell, row-major. The atlas pass writes it
+// earlier in the same frame; the trace samples it at an opaque hit so the
+// one-bounce term costs one load instead of a cascade-direction gather.
+StructuredBuffer<uint> g_world_light_atlas;
+
+// Radiance the atlas holds for the native cell containing `world`: one load
+// plus the shared RGB9E5 decode. Out-of-world positions contribute nothing.
 [ForceInline]
-float3 worldLightDiffusePrev(float2 position, float3 normal) {
-    return worldLightDiffuseFrom(g_world_light_radiance_prev, position, normal);
+float3 worldLightAtlasRadiance(float2 world) {
+    float2 origin = float2(g_world_light_field.originX, g_world_light_field.originY);
+    float2 cellF = floor((world - origin) / g_world_light_field.cellMetres);
+    int2 cell = int2(cellF);
+    if (cell.x < 0 || cell.y < 0 || cell.x >= int(g_world_light_field.width) ||
+        cell.y >= int(g_world_light_field.height)) {
+        return float3(0.0, 0.0, 0.0);
+    }
+
+    uint index = uint(cell.y) * g_world_light_field.width + uint(cell.x);
+    return unpackRadianceRGB9E5(g_world_light_atlas[index]);
 }
+
+// ------------------------------------------------------------------
+// material response
+// ------------------------------------------------------------------
 
 // Reflection term plus a roughness lobe. A zero roughness returns the composite
 // at the reflection direction; increasing roughness blends toward a small

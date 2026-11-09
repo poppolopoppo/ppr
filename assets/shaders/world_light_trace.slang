@@ -5,8 +5,8 @@
 // for the dirty-first reprocess. Each traces the level's own interval through
 // the dense source (cell ids + material palette + overlay) with a cell-by-cell
 // DDA, accumulates the sample into the running mean, and writes the current
-// radiance buffer. An opaque hit adds one bounce of the previously completed
-// field weighted by the hit material's albedo, so the field accumulates primary
+// radiance buffer. An opaque hit adds one bounce of the per-cell radiance atlas
+// weighted by the hit material's albedo, so the field accumulates primary
 // transport plus a single material-weighted bounce (no recursive ray tree).
 #include "world_light_field.slang"
 #include "world_light_sample.slang"
@@ -42,13 +42,12 @@ float hash01(uint a, uint b) {
 // feedback
 // ------------------------------------------------------------------
 
-// One previous completed-field bounce at an opaque hit, added inline in the
-// trace: feedback = material.albedo * worldLightDiffusePrev(hitPosition, normal).
-// The face normal comes from the DDA step that entered the hit cell (see the
-// trace loop), so the diffuse term samples the hemisphere the ray crossed. An
-// overlay-only opaque surface (no material) has zero albedo and contributes no
-// bounce. There is no recursive ray tree or face bake: exactly one previous
-// field read per opaque hit.
+// One atlas sample at an opaque hit, added inline in the trace:
+// feedback = material.albedo * worldLightAtlasRadiance(hitPosition). The atlas
+// holds the packed per-cell radiance for this frame, so the bounce costs one
+// load and no longer gathers the cascade directions. An overlay-only opaque
+// surface (no material) has zero albedo and contributes no bounce. There is no
+// recursive ray tree or face bake: exactly one atlas read per opaque hit.
 
 // ------------------------------------------------------------------
 // level-interval trace (cell-by-cell DDA)
@@ -127,7 +126,7 @@ void traceWorldLightInterval(
     float tDeltaY = (direction.y == 0.0) ? 1e30 : cellMetres / abs(direction.y);
 
     float t = 0.0;
-    float3 entryNormal = float3(0.0, 0.0, 1.0); // +Z for the ray-start cell.
+
     // A probe records the radiance ARRIVING at it, never the cell it sits in.
     // The finest level starts the ray inside the probe's own cell; treating that
     // cell as an opaque hit made every solid probe self-occlude, zero its
@@ -172,7 +171,7 @@ void traceWorldLightInterval(
             float2 p = origin + direction * (baseT + t + 0.5 * seg);
 
             if (opaque) {
-                float3 feedback = albedo * worldLightDiffusePrev(p, entryNormal);
+                float3 feedback = albedo * worldLightAtlasRadiance(p);
                 radiance += transmittance * (emission + feedback);
                 transmittance = 0.0;
                 break;
@@ -190,12 +189,10 @@ void traceWorldLightInterval(
             t = tMaxX;
             tMaxX += tDeltaX;
             cx += stepX;
-            entryNormal = float3(-float(stepX), 0.0, 0.0);
         } else {
             t = tMaxY;
             tMaxY += tDeltaY;
             cy += stepY;
-            entryNormal = float3(0.0, -float(stepY), 0.0);
         }
     }
 }

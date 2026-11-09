@@ -290,8 +290,8 @@ namespace pP::lighting {
     }
 
     std::error_code WorldLightField::update(
-        rhi::ICommandEncoder &encoder, const WorldLightSourceGpu &source, const float dt, const u32 sample_budget,
-        const u32 accumulation_samples, const float history_retention) {
+        rhi::ICommandEncoder &encoder, const WorldLightSourceGpu &source, rhi::IBuffer &atlas, const float dt,
+        const u32 sample_budget, const u32 accumulation_samples, const float history_retention) {
         State &state = *m_state;
         PPR_RETURN_ERROR_ON_FAIL(WorldLightField, require_(state.m_ready, std::errc::not_connected));
 
@@ -347,6 +347,8 @@ namespace pP::lighting {
             PPR_RETURN_ERROR_ON_FAIL(
                 WorldLightField, cursor["g_world_light_materials"].setBinding(
                                      rhi::Binding(source.materialsGpu(), range_(source.materialsGpu()))));
+            PPR_RETURN_ERROR_ON_FAIL(
+                WorldLightField, cursor["g_world_light_atlas"].setBinding(rhi::Binding(&atlas, range_(&atlas))));
             return {};
         };
 
@@ -354,11 +356,14 @@ namespace pP::lighting {
         PPR_RETURN_ERROR_ON_FAIL(WorldLightField, bind_root(state.m_probe_update_root.get()));
         PPR_RETURN_ERROR_ON_FAIL(WorldLightField, bind_root(state.m_reset_root.get()));
 
-        // Borrowed source buffers (ids/overlay are RW; materials is SR), and the
-        // field's own ping-pong radiance/state buffers written this frame.
+        // Borrowed source buffers (ids/overlay are RW; materials is SR), the
+        // packed radiance atlas (written by its own pass earlier in the command
+        // buffer, read here), and the field's own ping-pong radiance/state
+        // buffers written this frame.
         encoder.setBufferState(source.cellIds(), rhi::ResourceState::UnorderedAccess);
         encoder.setBufferState(source.overlay(), rhi::ResourceState::UnorderedAccess);
         encoder.setBufferState(source.materialsGpu(), rhi::ResourceState::ShaderResource);
+        encoder.setBufferState(&atlas, rhi::ResourceState::ShaderResource);
         encoder.setBufferState(state.m_radiance[read_index].get(), rhi::ResourceState::UnorderedAccess);
         encoder.setBufferState(state.m_radiance[write_index].get(), rhi::ResourceState::UnorderedAccess);
         encoder.setBufferState(state.m_state.get(), rhi::ResourceState::UnorderedAccess);

@@ -87,9 +87,13 @@ export namespace pP::lighting {
         // accumulation_samples the per-direction running-mean cap, and
         // history_retention the steady-state per-60Hz retention (0..1). The
         // shader uses dt and history_retention to derive the per-frame EMA blend.
+        // The atlas holds one packed RGB9E5 radiance word per native cell; its
+        // encode() must already be recorded earlier in the same command buffer,
+        // and this update transitions it to a shader resource before the trace
+        // samples it at each opaque hit.
         [[nodiscard]] std::error_code update(
-            rhi::ICommandEncoder &encoder, const class WorldLightSourceGpu &source, float dt, u32 sample_budget,
-            u32 accumulation_samples, float history_retention);
+            rhi::ICommandEncoder &encoder, const class WorldLightSourceGpu &source, rhi::IBuffer &atlas, float dt,
+            u32 sample_budget, u32 accumulation_samples, float history_retention);
 
         [[nodiscard]] WorldLightFieldView view() const noexcept;
 

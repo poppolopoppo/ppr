@@ -21,6 +21,7 @@ import :renderer.retro_pass;
 import :renderer.frame_fence;
 import :renderer.triangle_pass;
 import :renderer.types;
+import :renderer.world_light_radiance_atlas;
 import :scene.camera.controller;
 import :service.input;
 import :service.ui;
@@ -80,6 +81,7 @@ namespace pP {
     struct ApplicationEditor::FieldLightingState {
         lighting::WorldLightSourceGpu m_source{};
         lighting::WorldLightField m_field{};
+        lighting::WorldLightRadianceAtlas m_atlas{};
         lighting::WorldLightPlan m_plan{};
         u32 m_budget{};
         u32 m_accumulation_samples{8u};
@@ -698,6 +700,7 @@ namespace pP {
                             PPR_RETAIN_ERROR_ON_FAIL(Editor, lane_err, m_retro_pass->shutdown());
                         }
                         if (m_field_lighting and m_field_lighting->m_initialized) {
+                            PPR_RETAIN_ERROR_ON_FAIL(Editor, lane_err, m_field_lighting->m_atlas.shutdown());
                             PPR_RETAIN_ERROR_ON_FAIL(Editor, lane_err, m_field_lighting->m_field.shutdown());
                             PPR_RETAIN_ERROR_ON_FAIL(Editor, lane_err, m_field_lighting->m_source.shutdown());
                             m_field_lighting.reset();
@@ -1536,10 +1539,23 @@ namespace pP {
                             PPR_RETURN_ERROR_ON_FAIL(Editor, field_error);
                         }
 
+                        const auto atlas_error = field.m_atlas.initialize(
+                            *m_lane_rhi_service, *m_lane_shader_service, command.m_field_plan, getContentDir().path());
+                        if (atlas_error) {
+                            // Partial initialization: release the field and source
+                            // that already initialized, in reverse order.
+                            std::error_code cleanup{};
+                            PPR_RETAIN_ERROR_ON_FAIL(Editor, cleanup, field.m_field.shutdown());
+                            PPR_RETAIN_ERROR_ON_FAIL(Editor, cleanup, field.m_source.shutdown());
+                            m_grid_pass->cancelWorldCandidate(command.m_job_id);
+                            PPR_RETURN_ERROR_ON_FAIL(Editor, atlas_error);
+                        }
+
                         field.m_plan = command.m_field_plan;
                         field.m_budget = command.m_field_budget;
                         field.m_accumulation_samples = command.m_field_accumulation_samples;
                         field.m_history_retention = command.m_field_history_retention;
+                        field.m_atlas.setTemporalRetention(field.m_history_retention);
                         field.m_debug_view = command.m_field_debug_view;
                         field.m_initialized = true;
                     }
@@ -1860,9 +1876,11 @@ namespace pP {
 
         const auto scene_prepare = [&](const PreRenderContext &context) -> std::error_code {
             // Field mode: apply the committed dirty stage, encode the dense
-            // source upload and the cascade field update, then rebind the fresh
-            // (ping-ponged) field view before the scene samples it. No receiver
-            // windows, matter identity, bounce, discovery or deadline planning.
+            // source upload and the radiance atlas, then the cascade field update
+            // that samples that atlas at every opaque hit, and finally rebind the
+            // fresh (ping-ponged) field view before the scene samples it. No
+            // receiver windows, matter identity, bounce, discovery or deadline
+            // planning.
             if (m_field_lighting and m_field_lighting->m_initialized) {
                 auto &field = *m_field_lighting;
                 const i32 sky_hour = grid_stage.m_temporal_sky_hour.value_or(-1);
@@ -1875,13 +1893,17 @@ namespace pP {
                 PPR_RETURN_ERROR_ON_FAIL(Editor, field.m_source.applyUpdate(storage.m_update));
                 PPR_RETURN_ERROR_ON_FAIL(Editor, field.m_source.encode(context.m_encoder));
 
+                // The atlas pass must be recorded before the field update: the
+                // trace's opaque-hit bounce reads the atlas this frame writes.
+                PPR_RETURN_ERROR_ON_FAIL(Editor, field.m_atlas.encode(context.m_encoder, field.m_source));
+
                 // The injected frame delta drives the retention EMA; use the real
                 // packet delta (falling back to the 60 Hz nominal on a zero delta).
                 const float frame_delta = std::chrono::duration<float>(packet.m_delta_time).count();
                 const float field_dt = frame_delta > 0.0f ? frame_delta : 1.0f / 60.0f;
                 PPR_RETURN_ERROR_ON_FAIL(
                     Editor, field.m_field.update(
-                                context.m_encoder, field.m_source, field_dt,
+                                context.m_encoder, field.m_source, *field.m_atlas.cells(), field_dt,
                                 field.m_budget != 0u ? field.m_budget
                                                      : static_cast<u32>(field.m_plan.m_levels[0].m_sample_count),
                                 field.m_accumulation_samples, field.m_history_retention));

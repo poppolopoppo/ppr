@@ -917,6 +917,29 @@ namespace pP::tests::detail {
                 float((packed >> 18u) & 0x1ffu) * scale};
         }
 
+        // Independent RGB9E5 encoder for seeding the atlas from a test. Finite
+        // positive input only; mirrors the shared format so the seed round-trips
+        // through the shader's decode.
+        u32 packRadianceRGB9E5_(const float3 radiance) {
+            const float peak = std::max(radiance.x, std::max(radiance.y, radiance.z));
+            if (not (peak > 0.0f)) {
+                return 0u;
+            }
+
+            const int exponent = std::clamp(static_cast<int>(std::floor(std::log2(peak))) + 16, 1, 31);
+            const float scale = std::ldexp(1.0f, 24 - exponent);
+            const auto channel = [scale](const float value) noexcept {
+                const float scaled = std::floor(value * scale + 0.5f);
+                return u32(std::clamp(scaled, 0.0f, 511.0f));
+            };
+
+            const u32 packed = (u32(exponent) << 27u) |
+                               (channel(radiance.z) << 18u) |
+                               (channel(radiance.y) << 9u) |
+                               channel(radiance.x);
+            return packed;
+        }
+
         struct Fixture {
             safe_ptr<IShaderService> m_shaders{IShaderService::get()};
             safe_ptr<IRhiService> m_rhi{IRhiService::get()};
@@ -1068,7 +1091,8 @@ namespace pP::tests::detail {
                 rhi::ComPtr<rhi::ICommandEncoder> encoder;
                 PPR_TEST_ASSERT(not make_error_code(m_queue->createCommandEncoder(encoder.writeRef())));
                 PPR_TEST_ASSERT(not m_field.update(
-                    *encoder, m_source, 1.0f / 60.0f, budget, accumulation_samples, history_retention));
+                    *encoder, m_source, *m_atlas.cells(), 1.0f / 60.0f, budget, accumulation_samples,
+                    history_retention));
                 submit(*encoder);
             }
 
@@ -1505,7 +1529,7 @@ namespace pP::tests::detail {
             // Probe (3,3) direction 0 (up-right) hits the wall at cell (8,8); the
             // emitter at (4,4) is down-left of the wall and far from the probe's
             // jittered start, so the probe never sees the emitter directly and its
-            // direction-0 radiance is pure one-bounce feedback.
+            // direction-0 radiance is pure one-bounce feedback from the hit cell.
             const u64 sample = (3u * 128u + 3u) * 4u + 0u;
             const u64 word = sample * 4u;
 
@@ -1525,6 +1549,14 @@ namespace pP::tests::detail {
                 PPR_TEST_ASSERT(not source.applyUpdate({.m_chunks = {&update, 1u}, .m_revision = 1u}));
                 fixture.encodeSource();
 
+                // The trace reads the hit cell's atlas value, so seed that cell
+                // with unit radiance instead of driving an atlas pass. The wall
+                // albedo alone then decides whether the bounce contributes.
+                std::vector<u32> cells(u64{width} * height, 0u);
+                const float3 unit_radiance{1.0f, 1.0f, 1.0f};
+                cells[8u * width + 8u] = packRadianceRGB9E5_(unit_radiance);
+                fixture.write<u32>(fixture.m_atlas.cells(), cells);
+
                 fixture.runUpdates(16u, budget);
                 const std::vector<u16> radiance = fixture.read<u16>(field.view().m_radiance);
                 fixture.shutdown();
@@ -1542,6 +1574,74 @@ namespace pP::tests::detail {
             }
             PPR_TEST_ASSERT(bounced_nonzero);
             PPR_TEST_ASSERT(zeroed_zero);
+        };
+
+        PPR_UNIT_TEST (field_bounce_reads_atlas_not_previous_field) {
+            constexpr u32 width = 256u;
+            constexpr u32 height = 256u;
+
+            const auto plan = lighting::planWorldLight({.m_width = width, .m_height = height, .m_cell_metres = 0.5f});
+            PPR_TEST_ASSERT(plan.has_value());
+            const u32 budget = static_cast<u32>(plan->m_levels[0].m_sample_count);
+
+            // Probe (3,3) direction 0 hits the reflective wall at cell (8,8), so
+            // the bounce term is the wall albedo times the atlas value seeded for
+            // that cell. The two runs differ only in the previous field's content.
+            const u64 sample = (3u * 128u + 3u) * 4u + 0u;
+            const u64 word = sample * 4u;
+
+            const auto run = [&](const u16 previous_bits) -> std::vector<u16> {
+                Fixture fixture;
+                const lighting::WorldLightMaterial materials[] = {
+                    {.m_kind = 1u, .m_albedo = {1.0f, 1.0f, 1.0f}}, // wall (cell id 1)
+                    {.m_kind = 1u, .m_emission = {1.0f, 1.0f, 1.0f}}}; // emitter (cell id 2)
+                fixture.initialize(width, height, materials);
+                auto &source = fixture.m_source;
+                auto &field = fixture.m_field;
+
+                std::vector<u16> chunk(128u * 128u, 0u);
+                chunk[8u * 128u + 8u] = 1u; // wall at (8,8)
+                chunk[4u * 128u + 4u] = 2u; // emitter at (4,4)
+                const lighting::WorldLightChunkUpdate update{.m_chunk_id = 0u, .m_cell_ids = chunk};
+                PPR_TEST_ASSERT(not source.applyUpdate({.m_chunks = {&update, 1u}, .m_revision = 1u}));
+                fixture.encodeSource();
+
+                // Fixed atlas: seed the hit cell with unit radiance; the emitter
+                // never reaches it without an atlas pass, so the bounce can only
+                // come from this seed.
+                std::vector<u32> cells(u64{width} * height, 0u);
+                const float3 unit_radiance{1.0f, 1.0f, 1.0f};
+                cells[8u * width + 8u] = packRadianceRGB9E5_(unit_radiance);
+                fixture.write<u32>(fixture.m_atlas.cells(), cells);
+
+                // Warm once to consume the dirty revision and saturate the sample
+                // count at one, then overwrite the previous field that the next
+                // update reads (the current buffer). Retention 0 makes the final
+                // sample the trace result only, so nothing but the hit-time bounce
+                // can see the injected history.
+                fixture.updateField(budget, 1u, 0.0f);
+                std::vector<u16> previous(field.view().m_radiance->getDesc().size / sizeof(u16), previous_bits);
+                fixture.write<u16>(field.view().m_radiance, previous);
+                fixture.updateField(budget, 1u, 0.0f);
+
+                const std::vector<u16> radiance = fixture.read<u16>(field.view().m_radiance);
+                fixture.shutdown();
+                return radiance;
+            };
+
+            // Half 0.0 versus half 4.0 in every previous-field word: an
+            // implementation that still gathers the previous field cannot return
+            // the same bounce, while an atlas read never touches that buffer.
+            const std::vector<u16> neutral = run(0x0000u);
+            const std::vector<u16> poisoned = run(0x4400u);
+
+            for (u32 channel = 0u; channel < 3u; ++channel) {
+                const float atlas_bounce = halfToFloat(neutral[word + channel]);
+                const float poisoned_bounce = halfToFloat(poisoned[word + channel]);
+
+                PPR_TEST_ASSERT(atlas_bounce > 0.5f);
+                PPR_TEST_ASSERT(std::abs(atlas_bounce - poisoned_bounce) < 1e-3f);
+            }
         };
 
         PPR_UNIT_TEST (field_update_respects_budget_boundary) {
@@ -3744,6 +3844,7 @@ namespace pP::tests {
             detail::WorldLightFieldGpu::field_dense_dda_hits_diagonal_emitter,
             detail::WorldLightFieldGpu::field_air_probes_see_emitter_sky_and_sealed_cavity,
             detail::WorldLightFieldGpu::field_feedback_bounces_off_reflective_wall,
+            detail::WorldLightFieldGpu::field_bounce_reads_atlas_not_previous_field,
             detail::WorldLightFieldGpu::field_is_camera_independent,
             detail::WorldLightFieldGpu::field_routing_applies_dirty_chunk_and_binds_view,
             detail::WorldLightFieldGpu::atlas_seeds_emissive_cells_and_retains_history,
