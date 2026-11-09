@@ -33,6 +33,7 @@ Validated by the user. These supersede the corresponding parts of the 2026-11-07
 - Frame must not regress: no task may raise steady-state frame time; measure, do not assume.
 - No `-ffast-math`, `-ffp-contract=fast`, or FTZ in shader math that affects simulation or lighting determinism.
 - Every task ends with build + focused tests + a measurement delta + a commit.
+- Visual evidence comes from the engine capture path (Task 1a). Do not drive the OS window with external screenshot tools; that approach produced no reliable evidence and cost more time than it saved.
 - The probe-alignment verdict from the in-flight debug-view lane is a hard prerequisite for Task 1; if it finds a producer bug, fix it before any transport change.
 
 ## Review Focus
@@ -64,6 +65,29 @@ Validated by the user. These supersede the corresponding parts of the 2026-11-07
 git add .superpowers/sdd/2026-11-09-field-transport/baseline.md
 git commit -m "docs: record world light field baseline and occupancy budgets"
 ```
+
+---
+
+### Task 1a: Engine-native frame capture to PNG
+
+Every visual gate in this plan — and the staging fix's own evidence — needs a frame image, and agents keep burning time driving the OS window with external screenshot tools. Capture must live in the engine.
+
+**Files:**
+- Modify: `lib/engine/app/App.Application.Editor.cpp` (the surface capture request already exists as `m_capture_final_frame` / `m_surface_capture_sequence`)
+- Modify: `lib/engine/app/renderer/App.Renderer.cpp` (`prepareSurfaceReadback_` / `completeSurfaceReadback_` already produce `SurfaceFramePixels`)
+- Modify: `game/Game.Config.cppm`, `game/Game.Config.cpp` (a one-shot `--capture-frame <path>` setting)
+- Test: the existing surface-readback/frame tests in `lib/engine/tests/app/`
+
+**Interfaces:**
+- Produces: `std::error_code writeSurfacePng(const SurfaceFramePixels &, const std::filesystem::path &)`; a one-shot trigger that captures the next completed interactive frame to that path and logs it once. Zero cost when unset.
+- Consumes: `Renderer::prepareSurfaceReadback_` / `completeSurfaceReadback_`, `SurfaceFramePixels` (RGBA/BGRA8).
+
+- [ ] **Step 1: Write the failing test** `surface_pixels_round_trip_through_png`: build a small known `SurfaceFramePixels` pattern, write it, decode it back with the existing image service, assert pixel equality.
+- [ ] **Step 2: Run it to verify it fails.**
+- [ ] **Step 3: Implement the writer.** Reuse an existing encoder from the image service if one exists; otherwise check `vcpkg` for libpng/zlib and prefer a minimal deflate PNG writer over a new dependency.
+- [ ] **Step 4: Wire the one-shot trigger** to the existing capture request; write the file and log its path exactly once.
+- [ ] **Step 5: Validate**: run `app.game --map-size=1024 --auto-exit=30 --capture-frame /tmp/opencode/frame.png`, assert the file exists, decodes, and has the surface dimensions; assert no frame-time change when the flag is unset.
+- [ ] **Step 6: Commit** `app: capture the presented frame to a PNG`.
 
 ---
 
