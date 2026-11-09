@@ -30,31 +30,52 @@ warps, 64 warps/SM, 65,536 32-bit registers/SM), driver 615.78.08. Nsight Graphi
 
 ## Probe correctness (validated)
 
-The numeric probe scan was validated by the preceding GI lane on this build; the
-values below are copied from that validation and were not re-derived here. The
-real-game sample was reproduced live during this baseline run
-(`game-probe.log`, position `(181.16667, 244.83334)`):
+The scan below is the staging-fix lane's validated result on this build (commit
+`4615ea9` plus the air-probe test in `6f046b8`); the values are copied from that
+report and were not re-derived here. It is a **six-site synthetic-world scan**
+(the out-of-world site is sampled twice: deep outside and near the edge) **plus
+one real-game sample**, each evaluated through `evaluate()` as composite / diffuse
+/ specular in linear RGB:
 
-| probe | R | G | B |
-|---|---:|---:|---:|
-| composite | 2.500 | 1.4756 | 0.4446 |
-| diffuse | 0.8943 | 0.5258 | 0.1574 |
-| specular | 2.2163 | 1.3069 | 0.3931 |
+| site | cell type | position (m) | composite | diffuse | specular |
+|---|---|---|---|---|---|
+| lamp | emissive solid | (40.25, 40.25) | 0.446/0.549/0.754 | 0.403/0.462/0.580 | 0.418/0.515/0.711 |
+| air next to lamp | vacuum | (40.75, 40.25) | 0.529/0.544/0.572 | 0.346/0.407/0.528 | 0.525/0.540/0.568 |
+| open room | vacuum, sky | (100.25, 100.25) | 0.250/0.500/1.000 | 0.241/0.481/0.963 | 0.250/0.500/1.000 |
+| sealed cavity | vacuum in shell | (76.75, 51.75) | 0/0/0 | 0/0/0 | 0/0/0 |
+| solid next to air | rock wall | (35.25, 40.25) | 0.050/0.050/0.050 | 0.056/0.105/0.205 | 0.054/0.054/0.054 |
+| outside world | out of world | (-100, -100) | 0/0/0 | 0/0/0 | 0/0/0 |
+| outside world (near) | out of world | (-4, -4) | 0.035/0.070/0.141 | 0.035/0.070/0.141 | 0.035/0.070/0.141 |
 
-Synthetic GPU world (from the same validation):
+Real-game air cell adjacent to the emissive solid: cell `(362, 490)`, position
+`(181.17, 244.83) m`, composite 2.500/1.476/0.445, diffuse 0.894/0.526/0.157,
+specular 2.216/1.307/0.393. The same sample was reproduced live during the
+baseline run (`game-probe.log`, position `(181.16667, 244.83334)`) and matches at
+the printed precision.
 
-- lamp: adjacent air has composite > 0.5 on all channels;
-- open room: sky diffuse ≈ 0.963 × composite;
-- sealed cavity: composite exactly 0;
-- solid-adjacent air: non-zero;
-- out-of-world: exactly 0;
-- near-outside: the reported `sky × 9/64` bilinear leak at the world edge;
-- the earlier `diffuse == 0` reading was a bad scan; `evaluate()` mode dispatch
-  is correct.
+What the scan establishes:
 
-There is no per-level output API, so no per-level 0..5 table is recorded; adding
-one is out of scope for this plan. The brief's "17 points across the lamp" scan
-is superseded by this validated set.
+- the lamp's emissive solid is non-zero on every channel, and the adjacent vacuum
+  cell's composite exceeds 0.5 on all channels;
+- the open room is sky-dominated, with diffuse ≈ 0.963 × composite;
+- the sealed cavity and the out-of-world sample are exactly zero;
+- the solid sample next to air is non-zero and finite;
+- the earlier `diffuse == 0` reading was a bad scan; `evaluate()` mode dispatch is
+  correct.
+
+**Per-level (0..5) output does not exist.** `evaluate()` returns one
+composite/diffuse/specular triple per call over the whole six-level cascade, so the
+plan's original requirement for per-level values is not satisfiable without an API
+change. The six-level composite is pinned against the CPU oracle by
+`composite_matches_cpu_reference` (`lib/engine/tests/app/App.WorldLightField.Tests.cpp`),
+which compares the GPU `kComposite` result with `compositeReference` over a
+synthetic field within 1e-4 per channel. That test, not a per-level readback, is
+the numerical contract.
+
+**Non-asserted observation.** The near-outside sample at `(-4, -4)`, inside the
+bilinear footprint of the world edge, returns a non-zero `sky × 9/64` leak. It is
+recorded for later tasks as an observation, not a gate: it is the current bilinear
+edge contract, not a producer fault.
 
 **Verdict: producer is correct on `4615ea9`+; no displaced peak and no flat
 zero. The baseline may proceed.**
@@ -89,13 +110,23 @@ Notes on the table:
 - `Grid.Terrain` and `Grid.Translucent` have **no GPU marker in HEAD**. The
   strings exist nowhere in the current source or in this repository's history;
   the earlier analysis came from a build carrying extra uncommitted markers.
-  They cannot be reported as named passes from this baseline.
-- The unmarked remainder is frame time minus the top-level marked ranges:
-  **mean 6.414, median 6.430, p95 7.471 ms/frame**. It contains the terrain and
-  translucent grid draws, the UI pass (0.014 ms measured), post/present gaps and
-  trace jitter. For scale, the same 1024² command shape on the earlier
-  instrumented build measured `Grid.Terrain` 4.081 ms and `Grid.Translucent`
-  1.440 ms, which is consistent with this remainder.
+  They cannot be reported as named passes from this baseline. Task 7 restores the
+  pass-level `Grid.Terrain` marker (and its translucent equivalent).
+- The unmarked remainder is computed **per frame**, not by subtracting window
+  means: `remainder[f] = frame_time[f] − Σ(top-level marker ms in frame f)`, over
+  the 101 frames at indices 5..105 (the first five are dropped as warm-up, and
+  every later frame that has both a frame-time row and hardware regimes rows is
+  kept). That gives **mean 6.414, median 6.430, p95 7.471 ms/frame**. Subtracting
+  the published pass means from the 100-frame steady frame-time mean instead gives
+  `19.069 − (10.529 + 0.824 + 1.185 + 0.140) = 6.391 ms`; the 0.023 ms (0.4 %)
+  difference is window mismatch — the field, particle and prepare rows exist on
+  105 of 106 frames, `PBMPM.Tick` is amortised over all 106 frames but runs on
+  only 51, and the frame-time mean uses indices 5..104. Use the per-frame figure
+  for attribution and the mean difference only as an arithmetic check.
+- The remainder contains the terrain and translucent grid draws, the UI pass
+  (0.014 ms measured), post/present gaps and trace jitter. For scale, the same
+  1024² command shape on the earlier instrumented build measured `Grid.Terrain`
+  4.081 ms and `Grid.Translucent` 1.440 ms, which is consistent with it.
 - `Particles.Prepare`'s `D3DPERF_EVENTS.xls` row is corrupt in this export (a
   leaked range reports a 510 ms mean); the hardware-timed 0.140 ms above is the
   usable value.
@@ -142,10 +173,16 @@ Reading:
 
 - The GPU is **99 % active**: this is a GPU-bound frame, and the baseline is not
   measuring a partially idle device.
-- **Terrain pixel shading is register limited.** Whenever the PS dominates, warp
-  launch fails on register allocation 81 % of the time (median 94 %), while L1
-  and VRAM are far from saturated. That is the signature the plan's ≤40
-  registers/thread terrain budget exists to remove.
+- **Frame-wide PS warp launch is register limited; terrain cannot yet be named as
+  the cause.** Whenever the PS dominates, warp launch fails on register allocation
+  81 % of the time (median 94 %), while L1 and VRAM are far from saturated. That is
+  consistent with terrain shading being the dominant PS work — a full-screen
+  heavy fragment shader against small particle, UI and background draws — but the
+  counter is context-wide,
+  `Grid.Terrain` has no marker in this build, and no per-pass attribution exists.
+  The attribution becomes measurable only after Task 7 restores the pass-level
+  marker. The ≤ 40 registers/thread terrain budget is the hypothesis this evidence
+  supports, not a measurement.
 - **Field compute is not register limited.** `CS Warp Can't Launch - Register
   Limited` is ~1 % with a p95 of 8 %, even though roughly half the warp slots in
   active SMs stay unallocated. The field's occupancy limit is its launch shape:
@@ -187,14 +224,14 @@ the register-limited stall counters above.
 | budget | target | measured | verdict |
 |---|---|---|---|
 | `WorldLight.FieldUpdate` at 1024² | ≤ 6 ms | **10.529 ms mean, 10.488 median, 13.375 p95** | **over by 4.53 ms at mean (75 %) and 7.38 ms at p95** |
-| terrain PS registers | ≤ 40 regs (≥ 51 warps/SM) | not measurable; register-limited 81 % of PS-dominant time | unverified, counter evidence points to over budget |
+| terrain PS registers | ≤ 40 regs (≥ 51 warps/SM) | not measurable; frame-wide PS register-limited stalls 81 % of PS-dominant time | unverified; consistent with, but not attributed to, an over-budget terrain PS |
 | field CS registers | ≤ 48 regs with 128-thread blocks | not measurable; CS register-limited ~1 % | unverified, registers are not the observed limit |
 | frame time | no regression | 19.07 ms traced / 14.9 ms untraced at 1024² | baseline recorded |
 
 `WorldLight.FieldUpdate` is the only pass over its stated budget. It is 97 %
 `FieldTrace`, so the gap is in the cascade trace, not in the copy or the source
 upload. The terrain budgets cannot be separated from the unmarked 6.4 ms
-remainder until grid markers exist again.
+remainder until Task 7 restores the grid markers.
 
 ## Evidence and reproduction
 
@@ -228,9 +265,10 @@ nsys profile --trace=vulkan,vulkan-annotations --vulkan-gpu-workload=individual 
 
 ## Gaps carried into later tasks
 
-1. **No grid markers.** `Grid.Terrain`/`Grid.Translucent` must be restored (or
-   the terrain cost otherwise attributed) before the terrain register/occupancy
-   budget can be judged. This task was not allowed to edit source.
+1. **No grid markers.** `Grid.Terrain`/`Grid.Translucent` must be restored before
+   the terrain register/occupancy budget can be judged; Task 7 owns that marker
+   work. This task was not allowed to edit source, and no terrain number is
+   fabricated in its absence.
 2. **No register counts.** A GUI GPU Trace with the Real-Time Shader Profiler is
    required to fill the `≤ 40` / `≤ 48` register targets.
 3. **Trace overhead.** Every later measurement must use the command shape above,
