@@ -34,7 +34,17 @@ GCC is rejected at configure time: it rejects `-stdlib=libc++` and cannot build 
 - **Clang** (`Clang.cmake`): `-stdlib=libc++`, `-Wall/-Wextra` family, `-Werror` under `PPR_WARNINGS_AS_ERRORS`;
   `-Wno-reserved-module-identifier` so the synthesized `std`/`std.compat` BMI precompiles (which inherit these
   PRIVATE options) succeed under `-Werror` — project code never declares a module named `std`, so no project
-  diagnostic changes. Scope is BMI precompiles only; project code never declares `module std`. Version-agnostic `libc++.modules.json` probe (no pinned LLVM major): `llvm-config --libdir`,
+  diagnostic changes. Scope is BMI precompiles only; project code never declares `module std`.
+- **Optimized-build debug info** (`Clang.cmake`, `PPR_DEBUG_INFO`, default ON): every non-Debug config gets
+  `-g2 -gz=zlib` (+ `-fdebug-info-for-profiling` when the compiler accepts it) and an invariant frame chain
+  (`-fno-omit-frame-pointer`, plus x86-only `-mno-omit-leaf-frame-pointer`), each flag as its own
+  Release-genexed `add_compile_options` element so module synth targets match. CMake's Release default is
+  `-O3 -DNDEBUG` with no `-g` and Clang omits the frame pointer at -O1+, which left optimized images with
+  `.symtab` only and made `nsys --backtrace=fp` (its default) collect no call stacks at all. `-g`/`-gz` are
+  codegen-neutral; the frame-pointer pair is the ~0-2% cost that makes fp unwinding possible. `PPR_DEBUG_INFO=OFF`
+  restores the previous minimal optimized image. `clang-rel-profile` inherits `clang-rel` (same codegen, its own
+  tree, `PPR_LOGGING_LEVEL=EMPHASIS`) for CPU-sampling sessions.
+  Version-agnostic `libc++.modules.json` probe (no pinned LLVM major): `llvm-config --libdir`,
   `$LLVM_DIR`, and `clang --print-resource-dir` hints first, then well-known versioned/multiarch fallbacks
   (`llvm-22`/`llvm-20`, `x86_64-linux-gnu`, `llvm/lib`); `CMAKE_CXX_STDLIB_MODULES_JSON` is set only when the
   file exists, otherwise left unset for CMake default lookup;
@@ -67,5 +77,7 @@ GCC is rejected at configure time: it rejects `-stdlib=libc++` and cannot build 
   `/DEBUG`, `/PDBSTRIPPED`), `/EHsc`, `/utf-8`, `/bigobj`, `/O2` + `/Ob2` + `/GL` + `/Gw` + `/Zc:checkGwOdr`,
   opt-in `/arch:AVX2` (`PPR_ENABLE_AVX2`),
   `/Zc:__cplusplus`, `PPR_PROJECT_WARNINGS_CXX`, ASAN/`/WX` tails.
-- `Clang.cmake` — `-stdlib=libc++`, warning family, `-Werror` gate.
+- `Clang.cmake` — `-stdlib=libc++`, warning family, `-Werror` gate, `PPR_DEBUG_INFO` (`-g2 -gz=zlib`,
+  `-fdebug-info-for-profiling`, `-fno-omit-frame-pointer` + x86 `-mno-omit-leaf-frame-pointer` on non-Debug
+  configs).
 - `cmake/Compilers.cmake` — dispatcher + `setup_ppr_project()`.

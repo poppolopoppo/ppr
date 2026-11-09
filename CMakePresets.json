@@ -260,6 +260,16 @@
         "PPR_ENABLE_DEVELOPER_MODE": "OFF",
         "PPR_WARNINGS_AS_ERRORS": "ON"
       }
+    },
+    {
+      "name": "clang-rel-profile",
+      "displayName": "Clang Profile (Release + CPU-sampling debug info)",
+      "description": "Same code generation as clang-rel plus DWARF (PPR_DEBUG_INFO: -g2 -gz=zlib) and a retained frame chain, in its own tree so CPU samplers unwind and symbolize app.game without rebuilding the clang-rel correctness gate. EMPHASIS logging keeps capture-time log traffic down.",
+      "inherits": "clang-rel",
+      "cacheVariables": {
+        "PPR_DEBUG_INFO": "ON",
+        "PPR_LOGGING_LEVEL": "EMPHASIS"
+      }
     }
   ],
   "buildPresets": [
@@ -341,6 +351,13 @@
       "displayName": "Clang Release Build",
       "description": "Build the clang-rel tree.",
       "configurePreset": "clang-rel"
+    },
+    {
+      "name": "clang-rel-profile",
+      "inherits": "unix-like-build",
+      "displayName": "Clang Profile Build",
+      "description": "Build the CPU-sampling clang-rel-profile tree (DWARF + frame pointers). Add --target to narrow the build.",
+      "configurePreset": "clang-rel-profile"
     },
     {
       "name": "run-game-msvc-dev",

@@ -49,7 +49,8 @@ Sets up C++23 modules, compiler toolchains, sanitizers, and external dependency 
   `CMakePresets.json:117-127`), `clang-cl-dev`/`clang-cl-rel`, `msvc-live` (Debug + `/ZI` Edit & Continue with the live link set
   `/DEBUG:FULL` + `/INCREMENTAL` + `/OPT:NOREF,NOICF` + `/LTCG:OFF` + `/PDBTMCACHE`, all
   `PPR_EDIT_AND_CONTINUE`-scoped; no sanitizers/ccache, `PPR_RELEASE_PERF_FLAGS OFF`, `PPR_EDIT_AND_CONTINUE ON`), `clang-dev`/`clang-rel`,
-  hidden `gcc-dev`/`gcc-rel` (**no modules**). `buildPresets` mirror every supported configure preset,
+  `clang-rel-profile` (inherits `clang-rel`: identical code generation plus `PPR_DEBUG_INFO` DWARF/frame pointers,
+  its own tree, `PPR_LOGGING_LEVEL=EMPHASIS`), hidden `gcc-dev`/`gcc-rel` (**no modules**). `buildPresets` mirror every supported configure preset,
   with `run-game-<preset>` entries targeting the `run-app-game` custom target; `testPresets` split the
   routine suite (label `gpu_validation` excluded, `-j4`) from `<preset>-gpu` (that label only, serial).
   Hidden `windows-build`/`unix-like-build` and `windows-test`/`unix-like-test` bases gate the new presets

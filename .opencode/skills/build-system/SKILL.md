@@ -160,7 +160,9 @@ build target, not a test executable.
 - The default generator is single-config Ninja. This avoids the documented
   CMake 4.4 multi-config synthetic-target generator-expression issue.
 - Supported working presets are `msvc-dev`, `msvc-live`, `msvc-rel`,
-  `msvc-profile`, `clang-cl-dev`, `clang-cl-rel`, `clang-dev`, and `clang-rel`. GCC may meet a
+  `msvc-profile`, `clang-cl-dev`, `clang-cl-rel`, `clang-dev`, `clang-rel`, and
+  `clang-rel-profile` (`clang-rel` codegen + `PPR_DEBUG_INFO` DWARF/frame
+  pointers in its own tree, for CPU-sampling sessions). GCC may meet a
   C++23 language prerequisite, but the hidden `gcc-dev` and `gcc-rel` presets
   do not support this project's module builds and are not validation candidates.
 - For a local edit batch, default to the affected target/dependent closure in
