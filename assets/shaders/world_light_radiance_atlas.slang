@@ -6,14 +6,27 @@
 // incident radiance L_i arriving at the cell centre from the previous frame's
 // fully merged field -- never the cell's own emission or albedo. Consumers add
 // their own emission exactly once and multiply L_i by their albedo (the trace's
-// opaque-hit bounce and the terrain ambient term), so the value can never feed
-// back on itself and a non-emissive cell still carries the light around it.
+// opaque-hit bounce and the terrain ambient term), so the producer adds no
+// emission or albedo term and the value never feeds back directly; a
+// non-emissive cell still carries the light around it. Indirect feedback through
+// the field is bounded by kAtlasRadianceCeiling below.
 //
 // Each dispatch rewrites every cell in place: new = mix(L_i, previous,
 // exp(-temporalRate * frameDelta)), the temporal EMA that keeps a settled value
 // stable without a ping-pong buffer (one thread owns one cell).
 #ifndef PPR_WORLD_LIGHT_RADIANCE_ATLAS_SLANG
 #define PPR_WORLD_LIGHT_RADIANCE_ATLAS_SLANG
+
+// Documented bound on the stored atlas value, applied after the EMA. The atlas
+// feeds the field and the field feeds the atlas: the closed-loop pole is
+// w + (1-w)*G with G = albedo_avg * transmittance_avg * gather_avg <= 1. At
+// G = 1 that pole is exactly 1 regardless of the retention weight w, so the
+// fixed point is P/(1-G) and retention only slows the transient. That cannot
+// produce NaN/inf/negative (every step is a convex combination of finite
+// values), but it can saturate the RGB9E5 range and blow out. This is a bound,
+// not a tuning knob: the validated peak is 2.5, so normal operation never
+// reaches it.
+static const float kAtlasRadianceCeiling = 16.0;
 
 // The producer owns the read/write atlas binding below; suppress the shared
 // sampler's read-only declaration. The sample module also provides
@@ -75,7 +88,8 @@ void updateWorldLightRadianceAtlas(uint3 id : SV_DispatchThreadID) {
     float3 previous = unpackRadianceRGB9E5(g_world_light_atlas[cell]);
     float previousWeight =
         exp(-g_world_light_atlas_constants.temporalRate * g_world_light_atlas_constants.frameDelta);
-    g_world_light_atlas[cell] = packRadianceRGB9E5(lerp(incident, previous, previousWeight));
+    float3 stored = min(lerp(incident, previous, previousWeight), kAtlasRadianceCeiling);
+    g_world_light_atlas[cell] = packRadianceRGB9E5(stored);
 }
 
 #endif

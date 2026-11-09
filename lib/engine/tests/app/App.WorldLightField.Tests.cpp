@@ -1875,6 +1875,94 @@ namespace pP::tests::detail {
             }
         };
 
+        PPR_UNIT_TEST (atlas_feedback_loop_stays_finite_and_bounded) {
+            constexpr u32 width = 64u;
+            constexpr u32 height = 64u;
+            // Keep in step with kAtlasRadianceCeiling in
+            // world_light_radiance_atlas.slang; a small tolerance covers the
+            // RGB9E5 round-trip at the clamp.
+            constexpr float ceiling = 16.0f;
+
+            const auto plan = lighting::planWorldLight({.m_width = width, .m_height = height, .m_cell_metres = 0.5f});
+            PPR_TEST_ASSERT(plan.has_value());
+            const u32 budget = static_cast<u32>(plan->m_radiance_samples);
+
+            // A fully enclosed room with near-unity albedo walls and an emitter
+            // inside: the atlas -> field -> atlas loop gain
+            // G = albedo_avg * transmittance_avg * gather_avg is close to 1, so
+            // the closed-loop pole w + (1-w)*G is close to 1 and the fixed point
+            // P/(1-G) is large. The documented ceiling is what keeps the stored
+            // value and the field finite; without it this geometry saturates the
+            // format and blows out.
+            const lighting::WorldLightMaterial materials[] = {
+                {.m_kind = 1u, .m_albedo = {0.99f, 0.99f, 0.99f}}, // sealed walls (id 1)
+                {.m_kind = 1u, .m_emission = {1.0f, 1.0f, 1.0f}}, // emitter (id 2)
+            };
+
+            Fixture fixture;
+            fixture.initialize(width, height, materials);
+            auto &source = fixture.m_source;
+            auto &field = fixture.m_field;
+            auto &atlas = fixture.m_atlas;
+
+            std::vector<u16> chunk(128u * 128u, 0u);
+            for (u32 y = 16u; y <= 30u; ++y) {
+                for (u32 x = 16u; x <= 30u; ++x) {
+                    if (x == 16u or x == 30u or y == 16u or y == 30u) {
+                        chunk[y * 128u + x] = 1u;
+                    }
+                }
+            }
+            chunk[23u * 128u + 23u] = 2u;
+            const lighting::WorldLightChunkUpdate update{.m_chunk_id = 0u, .m_cell_ids = chunk};
+            PPR_TEST_ASSERT(not source.applyUpdate({.m_chunks = {&update, 1u}, .m_revision = 1u}));
+            fixture.encodeSource();
+
+            // Closed loop, one atlas encode then one field update per iteration,
+            // with a mid-range retention so the EMA settles over ~32 updates.
+            atlas.setTemporalRetention(0.5f);
+            for (u32 index = 0u; index < 32u; ++index) {
+                fixture.encodeAtlas();
+                fixture.updateField(budget, 1u, 0.5f);
+            }
+
+            const auto cells = fixture.read<u32>(atlas.cells());
+            PPR_TEST_ASSERT(cells.size() == u64{width} * height);
+            bool saw_nonzero = false;
+            for (const u32 word: cells) {
+                const float3 value = unpackRadianceRGB9E5_(word);
+                PPR_TEST_ASSERT(std::isfinite(value.x) and std::isfinite(value.y) and std::isfinite(value.z));
+                PPR_TEST_ASSERT(value.x <= ceiling * 1.05f);
+                PPR_TEST_ASSERT(value.y <= ceiling * 1.05f);
+                PPR_TEST_ASSERT(value.z <= ceiling * 1.05f);
+                saw_nonzero = saw_nonzero or word != 0u;
+            }
+            PPR_TEST_ASSERT(saw_nonzero);
+
+            // The guard is also live on its own, not only reachable through the
+            // loop: seed the atlas above the ceiling and one encode must clamp the
+            // stored value back to the bound while keeping it finite and positive.
+            std::vector<u32> hot(cells.size(), 0u);
+            hot[23u * width + 23u] = packRadianceRGB9E5_(float3{1000.0f, 500.0f, 250.0f});
+            fixture.write<u32>(atlas.cells(), hot);
+            fixture.encodeAtlas();
+            const float3 clamped = unpackRadianceRGB9E5_(fixture.read<u32>(atlas.cells())[23u * width + 23u]);
+            PPR_TEST_ASSERT(std::isfinite(clamped.x) and std::isfinite(clamped.y) and std::isfinite(clamped.z));
+            PPR_TEST_ASSERT(clamped.x <= ceiling * 1.05f);
+            PPR_TEST_ASSERT(clamped.y <= ceiling * 1.05f);
+            PPR_TEST_ASSERT(clamped.z <= ceiling * 1.05f);
+            PPR_TEST_ASSERT(clamped.x > 1.0f);
+
+            // The field reads the bounded atlas, so its half-precision samples
+            // must stay finite (no half inf/NaN) even at the loop's fixed point.
+            const auto radiance = fixture.read<u16>(field.view().m_radiance);
+            const auto half_is_finite = [](const u16 value) noexcept { return ((value >> 10) & 0x1fu) != 0x1fu; };
+            PPR_TEST_ASSERT(
+                std::all_of(radiance.begin(), radiance.end(), [&](const u16 value) { return half_is_finite(value); }));
+
+            fixture.shutdown();
+        };
+
         PPR_UNIT_TEST (field_bounce_reads_atlas_not_previous_field) {
             constexpr u32 width = 256u;
             constexpr u32 height = 256u;
@@ -4414,6 +4502,7 @@ namespace pP::tests {
             detail::WorldLightFieldGpu::field_air_probes_see_emitter_sky_and_sealed_cavity,
             detail::WorldLightFieldGpu::atlas_seed_drives_trace_bounce,
             detail::WorldLightFieldGpu::wall_reflects_lamp_through_atlas,
+            detail::WorldLightFieldGpu::atlas_feedback_loop_stays_finite_and_bounded,
             detail::WorldLightFieldGpu::field_bounce_reads_atlas_not_previous_field,
             detail::WorldLightFieldGpu::field_is_camera_independent,
             detail::WorldLightFieldGpu::field_routing_applies_dirty_chunk_and_binds_view,

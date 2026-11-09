@@ -190,13 +190,15 @@ namespace pP::lighting {
         PPR_RETURN_ERROR_ON_FAIL(WorldLightRadianceAtlas, bind("g_world_light_radiance_prev", field.m_radiance));
 
         // The dense source ids/overlay are read through the same RW bindings the
-        // field uses; the merged previous field is only read, so it moves to a
-        // shader-resource state before the gather (the field update later takes
-        // it back for the ping-pong copy).
+        // field uses; the merged previous field is read-only here but is declared
+        // RWStructuredBuffer in world_light_field.slang, so it is bound and
+        // transitioned as UnorderedAccess to match that declaration (the same
+        // pattern the field update uses for its read-only ids/overlay). A true
+        // read-only binding is Task 9's scope.
         encoder.setBufferState(source.cellIds(), rhi::ResourceState::UnorderedAccess);
         encoder.setBufferState(source.overlay(), rhi::ResourceState::UnorderedAccess);
         encoder.setBufferState(state.m_cells.get(), rhi::ResourceState::UnorderedAccess);
-        encoder.setBufferState(field.m_radiance, rhi::ResourceState::ShaderResource);
+        encoder.setBufferState(field.m_radiance, rhi::ResourceState::UnorderedAccess);
 
         const u32 cell_count = state.m_width * state.m_height;
         const u32 groups = (cell_count + kNumthreads - 1u) / kNumthreads;
