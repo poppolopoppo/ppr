@@ -51,18 +51,18 @@ Validated by the user. These supersede the corresponding parts of the 2026-11-07
 **Files:**
 - Read: `lib/engine/app/renderer/App.Renderer.WorldLightField.cpp` (`evaluate()`, `view()`), `assets/shaders/world_light_sample.slang`
 - Test: `lib/engine/tests/app/App.WorldLightField.Tests.cpp`
-- Record: `.superpowers/sdd/2026-11-09-field-transport/baseline.md` (create)
+- Record: `docs/superpowers/plans/2026-11-09-field-transport-baseline.md` (tracked; commit it)
 
 **Interfaces:**
 - Produces: the numbers every later task is judged against — registers/thread and warps/SM per shader, per-pass ms, and the numeric probe scan.
 
-- [ ] **Step 1: Record the numeric probe scan.** Using the debug-view lane's `evaluate()` scan (17 points across the lamp, plus per-level 0..5 values), write the table into `baseline.md`. If the scan shows a displaced peak or flat zero, stop and fix the producer before continuing.
+- [ ] **Step 1: Record the numeric probe scan.** The tree's `evaluate()` seam returns one composite/diffuse/specular triple per call and has **no per-level output**, so the scan is a set of positions sampled one at a time. Record the validated sites (lamp, adjacent air, open room, sealed cavity, solid adjacent to air, out-of-world) with all three terms each, plus the real-game air-cell sample. If any site shows a displaced peak or flat zero, stop and fix the producer before continuing.
 - [ ] **Step 2: Record per-pass GPU time** for `WorldLight.FieldUpdate`, `Grid.Terrain`, `Grid.Translucent`, `Particles.Draw`, `PBMPM.Tick` from a fresh Nsight Graphics capture at 1024² steady state.
 - [ ] **Step 3: Record registers/thread and warps/SM** for the field compute and terrain pixel shaders from a Graphics Capture with `Collect Shader Pipelines` (`SHI_REGISTERS`), plus `PS/CS Warp Can't Launch – Register Limited` and `Unallocated Warps in Active SMs` from Nsight Systems GPU Metrics. State which shader misses which budget.
 - [ ] **Step 4: Commit the baseline doc.**
 
 ```bash
-git add .superpowers/sdd/2026-11-09-field-transport/baseline.md
+git add docs/superpowers/plans/2026-11-09-field-transport-baseline.md
 git commit -m "docs: record world light field baseline and occupancy budgets"
 ```
 
@@ -184,7 +184,7 @@ The visual mode is correctly sized; two pieces are not. Removal is approved by t
 **Interfaces:**
 - Produces: `CircularHarmonics<4>` (7 `float3` coefficients, oni `Packing::Radiance9`) per level-0 probe; `worldLightDiffuse` becomes `Σ A_m · coeff_m` (oni `diffuseIrradiance`).
 
-- [ ] **Step 1: Write the failing test** `ch_evaluation_matches_directional_composite_for_smooth_fields` (compare against the Task 1 numeric scan within tolerance).
+- [ ] **Step 1: Write the failing test** `ch_evaluation_matches_directional_composite_for_smooth_fields` (compare against the Task 1b asserted site set within tolerance).
 - [ ] **Step 2: Run it to verify it fails.**
 - [ ] **Step 3: Implement projection at trace time and evaluation at sample time**, RGB9E5-packed as in `Packing::packRadiance9`.
 - [ ] **Step 4: Run tests; measure** field update, L2 hit rate, and radiance bytes.
@@ -221,11 +221,12 @@ The visual mode is correctly sized; two pieces are not. Removal is approved by t
 **Interfaces:**
 - Produces: `fragmentGridReactivePixel` — identical outputs to `fragmentGridReactive`, no `SV_SampleIndex`, sampled per pixel while the target stays 4× MSAA.
 
-- [ ] **Step 1: Write the failing test** `grid_reactive_pixel_variant_shares_the_reactive_outputs`.
-- [ ] **Step 2: Run it to verify it fails.**
-- [ ] **Step 3: Implement the variant** and select it behind a temporary switch.
-- [ ] **Step 4: Measure both variants** with Nsight Graphics (`Grid.Terrain` ms, `PS Warp Can't Launch – Register Limited`, warps/SM, instructions). Normalize against `WorldLight.FieldUpdate` to cancel machine drift. Record the result in `baseline.md`.
-- [ ] **Step 5: Commit** `renderer: add per-pixel reactive terrain variant for measurement` (keep the switch defaulted to the current path until Task 8 decides).
+- [ ] **Step 1: Restore a pass-level terrain GPU marker.** Add `pushDebugGroup("Grid.Terrain", ...)` + a deferred `popDebugGroup()` in `GridPass::renderGpuIndirect`, and the equivalent for `Grid.Translucent`. Pass-level markers must **not** be mixed with the encoder-level field markers (`WorldLight.FieldUpdate`/`FieldTrace`/`FieldCopy`) in the same command buffer: that combination previously corrupted the compute span boundaries in the captured trace. Verify the marker appears in `D3DPERF_EVENTS.xls` and that the field spans remain sane.
+- [ ] **Step 2: Write the failing test** `grid_reactive_pixel_variant_shares_the_reactive_outputs`.
+- [ ] **Step 3: Run it to verify it fails.**
+- [ ] **Step 4: Implement the variant** and select it behind a temporary switch.
+- [ ] **Step 5: Measure both variants** with Nsight Graphics (`Grid.Terrain` ms, register-limited PS stall, warps/SM, instructions). Normalize against a pass unchanged by this work to cancel machine drift. Record the result in the baseline doc.
+- [ ] **Step 6: Commit** `renderer: add per-pixel reactive terrain variant for measurement` (keep the switch defaulted to the current path until Task 8 decides).
 
 ---
 
@@ -293,7 +294,7 @@ Only two are worth it for independent-direction rays. `[WaveSize(32)]` is a no-o
 ### Task 11: Close-out
 
 **Files:**
-- Modify: `.superpowers/sdd/2026-11-09-field-transport/baseline.md` (final numbers)
+- Modify: `docs/superpowers/plans/2026-11-09-field-transport-baseline.md` (final numbers)
 - Modify: `docs/superpowers/specs/2026-11-07-world-light-field-design.md` (record the accepted delta)
 - Delete: any superseded gather/merge paths left behind
 
