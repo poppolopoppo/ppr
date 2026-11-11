@@ -15,10 +15,32 @@
 #ifndef PPR_WORLD_LIGHT_SAMPLE_SLANG
 #define PPR_WORLD_LIGHT_SAMPLE_SLANG
 
-#include "world_light_field.slang"
+#include "world_light_interval.slang"
 
 static const float kWorldLightTau = 6.28318530718;
 static const uint kWorldLightDiffuseDirections = 8u;
+
+// Reference global Halton-8 cell-space jitter. The same offset applies to every
+// probe and every level for a frame and is added directly in native cell units
+// (never multiplied by probe spacing).
+[ForceInline]
+float radicalInverse_(uint index, uint base) {
+    float result = 0.0;
+    float inverse = 1.0 / float(base);
+    float fraction = inverse;
+    while (index != 0u) {
+        result += float(index % base) * fraction;
+        index /= base;
+        fraction *= inverse;
+    }
+    return result;
+}
+
+[ForceInline]
+float2 worldLightCellJitter(uint frame) {
+    uint index = frame % 8u;
+    return float2(radicalInverse_(index, 2u), radicalInverse_(index, 3u)) - 0.5;
+}
 
 // Snaps an angular index that falls on (or within float error of) a bin
 // boundary to the upper bin, so a direction sampled via cos/sin -> atan2 maps to
@@ -126,33 +148,89 @@ void worldLightLevelSample(
 // composite and material terms
 // ------------------------------------------------------------------
 
-// Samples one level's suffix at a finer level's probe centre for a given finer
-// direction: the parent's angular bins are four times finer, so the four bins
-// that span the finer bin are averaged, and the parent probes are bilinearly
-// gathered at that world position. This is the fold the trace applies after
-// tracing a level's own interval: L = L_near + T_near * L_far and
-// T = T_near * T_far with the parent's suffix as L_far/T_far.
+// Reference per-parent-corner connector fold. For the child sample direction,
+// the parent probe lattice around `position` contributes four corners with
+// bilinear weights. Each corner owns one connector ray:
+//   start = childPosition + childDir * child.nearM
+//   end   = parentCornerCentre + childDir * child.farM (== parent.nearM)
+// The connector is traced once through the shared DDA; the four direct parent
+// angular bins that span the child bin are averaged at that corner, then merged
+// as L = L_near + T_near * L_far, T = T_near * T_far. Connector radiance and
+// transmittance are weighted by the bilinear corner weight and summed. This
+// hoists the prototype's four-corner linearity into four rays per stored sample
+// (16 parent bin loads). Parent data must be the current post-barrier level.
 [ForceInline]
 void worldLightParentSampleFrom(
     RWStructuredBuffer<WorldLightRadiance> radianceBuffer, WorldLightLevelGpu childLevel,
-    WorldLightLevelGpu parentLevel, float2 position, uint childDirection, out float3 radiance,
-    out float transmittance) {
+    WorldLightLevelGpu parentLevel, float2 position, float2 cellJitter, float2 childDir, uint childDirection,
+    out float3 radiance, out float transmittance) {
     uint ratio = max(parentLevel.directions / max(childLevel.directions, 1u), 1u);
+    float2 origin = float2(g_world_light_field.originX, g_world_light_field.originY);
+    float parentStep = g_world_light_field.cellMetres * float(parentLevel.spacing);
+
+    float2 u = (position - origin) / parentStep;
+    float2 uv = u - 0.5;
+    float2 baseF = floor(uv);
+    float2 frac = uv - baseF;
+    int2 base = int2(baseF);
 
     float3 sumRadiance = float3(0.0, 0.0, 0.0);
     float sumTransmittance = 0.0;
-    for (uint index = 0u; index < ratio; ++index) {
-        float3 r;
-        float t;
-        worldLightLevelSampleIndexFrom(
-            radianceBuffer, parentLevel, position, childDirection * ratio + index, r, t);
-        sumRadiance += r;
-        sumTransmittance += t;
+    float2 start = position + childDir * childLevel.nearM;
+
+    [unroll]
+    for (uint corner = 0u; corner < 4u; ++corner) {
+        int2 probe = base + int2(int(corner & 1u), int(corner >> 1u));
+        float cornerX = (corner & 1u) != 0u ? frac.x : 1.0 - frac.x;
+        float cornerY = (corner & 2u) != 0u ? frac.y : 1.0 - frac.y;
+        float weight = cornerX * cornerY;
+        if (weight <= 0.0) {
+            continue;
+        }
+
+        // The parent corner is a jittered lattice position; the same global
+        // cell-space jitter offsets this endpoint, while childDir offsets both
+        // connector endpoints.
+        float2 end = origin + ((float2(probe) + 0.5) * float(parentLevel.spacing) + cellJitter) *
+                                  g_world_light_field.cellMetres +
+                     childDir * childLevel.farM;
+        float2 delta = end - start;
+        float lengthM = length(delta);
+
+        float3 nearRadiance = float3(0.0, 0.0, 0.0);
+        float nearTransmittance = 1.0;
+        if (lengthM > 1.0e-6) {
+            traceWorldLightInterval(
+                start, delta / lengthM, 0.0, lengthM, nearRadiance, nearTransmittance);
+        }
+
+        float3 farRadiance = float3(0.0, 0.0, 0.0);
+        float farTransmittance = 1.0;
+        if (nearTransmittance > 0.0) {
+            float3 radianceSum = float3(0.0, 0.0, 0.0);
+            float transmittanceSum = 0.0;
+            [unroll]
+            for (uint index = 0u; index < ratio; ++index) {
+                float3 r;
+                float t;
+                worldLightProbeFrom(
+                    radianceBuffer, parentLevel, probe, childDirection * ratio + index, r, t);
+                radianceSum += r;
+                transmittanceSum += t;
+            }
+            float inverse = 1.0 / float(ratio);
+            farRadiance = radianceSum * inverse;
+            farTransmittance = transmittanceSum * inverse;
+        }
+
+        float3 connectorRadiance = nearRadiance + nearTransmittance * farRadiance;
+        float connectorTransmittance = nearTransmittance * farTransmittance;
+        sumRadiance += connectorRadiance * weight;
+        sumTransmittance += connectorTransmittance * weight;
     }
 
-    float inverse = 1.0 / float(ratio);
-    radiance = sumRadiance * inverse;
-    transmittance = sumTransmittance * inverse;
+    radiance = sumRadiance;
+    transmittance = sumTransmittance;
 }
 
 // The merged field at one position and direction. Level 0 already holds every
@@ -205,6 +283,40 @@ float3 worldLightDiffuseFrom(RWStructuredBuffer<WorldLightRadiance> radianceBuff
 [ForceInline]
 float3 worldLightDiffuse(float2 position, float3 normal) {
     return worldLightDiffuseFrom(g_world_light_radiance_cur, position, normal);
+}
+
+// Reference cascadeIrradiance(...false): gather the already-merged level-0
+// radiance for every level-0 direction, weight it by the reference half-lambert
+// / normal-z term, and average. There is no near trace here: the prototype's
+// cascadeIrradiance false path treats the stored level-0 bins as the complete
+// incident field. The returned irradiance is the per-direction mean times tau
+// (the reference's `radiance * M_TAU`). worldLightDiffuseFrom stays a plain
+// directional average for the atlas producer and the debug ramp.
+[ForceInline]
+float3 worldLightIrradianceFrom(
+    RWStructuredBuffer<WorldLightRadiance> radianceBuffer, float2 position, float3 normal) {
+    WorldLightLevelGpu level = g_world_light_field.levels[0];
+    uint numDirs = max(level.directions, 1u);
+
+    float3 sum = float3(0.0, 0.0, 0.0);
+    for (uint phi = 0u; phi < numDirs; ++phi) {
+        float angle = (float(phi) + 0.5) * kWorldLightTau / float(numDirs);
+        float2 dir = float2(cos(angle), sin(angle));
+
+        float3 radiance;
+        float transmittance;
+        worldLightLevelSampleIndexFrom(radianceBuffer, level, position, phi, radiance, transmittance);
+
+        float nDotL = max(dot(normal.xy, dir) * 0.5 + 0.5, normal.z);
+        sum += radiance * nDotL;
+    }
+
+    return sum / float(numDirs) * kWorldLightTau;
+}
+
+[ForceInline]
+float3 worldLightIrradiance(float2 position, float3 normal) {
+    return worldLightIrradianceFrom(g_world_light_radiance_cur, position, normal);
 }
 
 // ------------------------------------------------------------------

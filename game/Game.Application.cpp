@@ -1118,8 +1118,6 @@ namespace demo {
                     PPR_RETURN_ERROR_ON_FAIL(Demo, plan);
                     command->m_field_plan = *plan;
                     command->m_field_budget = m_ui_state.m_world_light.m_samples_per_frame;
-                    command->m_field_accumulation_samples = m_ui_state.m_world_light.m_accumulation_samples;
-                    command->m_field_history_retention = m_ui_state.m_world_light.m_history_retention;
                     command->m_field_atlas_ambient = m_ui_state.m_world_light.m_atlas_ambient;
                     command->m_field_debug_view = static_cast<u32>(m_ui_state.m_world_light.m_debug_view);
                     auto field_materials = colony::buildWorldLightMaterials(
@@ -1391,7 +1389,8 @@ namespace demo {
                     // A successful request starts a fresh session. Display settings
                     // belong to the application; gameplay tools and inspection do not.
                     m_tool.m_dig_armed = false;
-                    m_ui_state.m_tool = colony::EColonyTool::inspect;
+                    m_ui_state.m_tool = colony::EColonyTool::none;
+                    m_ui_state.m_colony_open = false;
                     m_ui_state.m_pinned.reset();
                     m_ui_state.m_build_menu_open = false;
                     m_ui_state.m_notice = {};
@@ -2192,7 +2191,7 @@ namespace demo {
                     .m_key = InputKey::f3,
                     .m_description = "ColonyPerformance",
                     .m_label = "F3",
-                    .m_tip = "Show or hide Performance independently of Colony"},
+                    .m_tip = "Show or hide Performance independently of the tool panel"},
             }};
 
             for (std::size_t index = 0u; index < bindings.size(); ++index) {
@@ -2351,15 +2350,16 @@ namespace demo {
                     break;
 
                 case colony::EColonyIntent::select_tool:
-                    if (intent.m_arg <= static_cast<u32>(colony::EColonyTool::destroy)) {
+                    // `none` is a valid dismissal target, not a tool action.
+                    if (intent.m_arg <= static_cast<u32>(colony::EColonyTool::none)) {
                         selectTool_(static_cast<colony::EColonyTool>(intent.m_arg));
                     }
                     break;
 
                 case colony::EColonyIntent::toggle_dig:
-                    // Same gesture as G: arm dig, or stow back to Inspect.
+                    // Same gesture as G: arm dig, or stow to the no-tool state.
                     selectTool_(
-                        m_ui_state.m_tool == colony::EColonyTool::dig ? colony::EColonyTool::inspect
+                        m_ui_state.m_tool == colony::EColonyTool::dig ? colony::EColonyTool::none
                                                                       : colony::EColonyTool::dig);
                     break;
 
@@ -2414,8 +2414,11 @@ namespace demo {
                     m_ui_state.m_performance_open = not m_ui_state.m_performance_open;
                     break;
 
-                case colony::EColonyIntent::toggle_colony:
-                    m_ui_state.m_colony_open = not m_ui_state.m_colony_open;
+                case colony::EColonyIntent::open_colony_management:
+                    // The management view belongs to Inspect; the menu action
+                    // selects that tool instead of showing a tool-less panel.
+                    selectTool_(colony::EColonyTool::inspect);
+                    m_ui_state.m_colony_open = true;
                     break;
 
                 case colony::EColonyIntent::quit: m_close_requested.store(true, std::memory_order_release); break;
@@ -3063,14 +3066,19 @@ namespace demo {
 
         /// Tool selection keeps the dig invariant (armed == tool == dig).
         /// Build/demolish arm the footprint gesture the release commits.
-        /// Switching tools cancels any held transient gesture; the accepted
-        /// dig queue stays queued per the lifetime policy above.
+        /// The Colony management view belongs to Inspect, so any other tool
+        /// (or no tool) closes it. Switching tools cancels any held transient
+        /// gesture; the accepted dig queue stays queued per the lifetime policy.
         void selectTool_(const colony::EColonyTool tool) noexcept {
             if (tool == m_ui_state.m_tool) {
                 return;
             }
 
             m_ui_state.m_tool = tool;
+            if (tool != colony::EColonyTool::inspect) {
+                m_ui_state.m_colony_open = false;
+            }
+
             m_tool.m_dig_armed = tool == colony::EColonyTool::dig;
             if (m_tool.m_held) {
                 cancelToolGesture_();
@@ -3094,6 +3102,7 @@ namespace demo {
                 case colony::EColonyTool::demolish:
                     setStatus_("Demolish: press and drag a rect, release to order.");
                     break;
+                case colony::EColonyTool::none: setStatus_("Select a tool from the rail."); break;
                 case colony::EColonyTool::inspect:
                 default: setStatus_("Inspect: click a cell to pin it in the Inspector."); break;
             }
@@ -3101,34 +3110,46 @@ namespace demo {
 
         /// Esc chain - one honest action per press: stop follow first
         /// (hands the camera back before touching tools or selection),
-        /// then a held world gesture, a non-inspect tool, the cell pin,
-        /// the agent selection, Help, and otherwise no transient state.
+        /// then a held world gesture, an active non-Inspect tool, the cell
+        /// pin, the agent selection, Help, the Inspect tool, and otherwise
+        /// no transient state.
         void cancelIntent_() noexcept {
             if (m_pan_controller and m_pan_controller->getFollowTarget().has_value()) {
                 stopFollow_();
                 return;
             }
+
             const bool holding_world = m_tool.m_held and m_tool.m_owner == EToolGestureOwner::world;
             if (holding_world) {
                 cancelToolGesture_();
                 return;
             }
-            if (m_ui_state.m_tool != colony::EColonyTool::inspect) {
-                selectTool_(colony::EColonyTool::inspect);
+
+            if (m_ui_state.m_tool != colony::EColonyTool::none and m_ui_state.m_tool != colony::EColonyTool::inspect) {
+                selectTool_(colony::EColonyTool::none);
                 return;
             }
+
             if (m_ui_state.m_pinned.has_value()) {
                 m_ui_state.m_pinned.reset();
                 return;
             }
+
             if (m_selected_agent.has_value()) {
                 clearAgentSelection_();
                 return;
             }
+
             if (m_ui_state.m_help_open) {
                 m_ui_state.m_help_open = false;
                 return;
             }
+
+            if (m_ui_state.m_tool == colony::EColonyTool::inspect) {
+                selectTool_(colony::EColonyTool::none);
+                return;
+            }
+
             cancelToolGesture_();
         }
 
@@ -3491,9 +3512,11 @@ namespace demo {
         /// Per-frame UI observation: the bounded notice countdown plus
         /// honest inter-frame timing (dt between update() calls) for the
         /// Performance section - never GPU time, labelled as such there.
+        /// A notice keeps its remaining time while the tool panel is hidden,
+        /// so it is still available (and dismissible) when the panel opens.
         void observeFrame_(const TimeSpan dt) noexcept {
             const float seconds = std::chrono::duration<float>(dt).count();
-            if (m_ui_state.m_notice.m_seconds_left > 0.0f) {
+            if (colony::colonyContextPanelVisible(m_ui_state) and m_ui_state.m_notice.m_seconds_left > 0.0f) {
                 m_ui_state.m_notice.m_seconds_left -= seconds;
                 if (m_ui_state.m_notice.m_seconds_left < 0.0f) {
                     m_ui_state.m_notice.m_seconds_left = 0.0f;

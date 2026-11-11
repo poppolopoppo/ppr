@@ -1,0 +1,37 @@
+@startuml
+!theme toy
+title One interactive frame: main thread, render lane, GPU
+
+participant "Main thread\nApplication / ApplicationEditor" as main #6CB4EE
+participant "Render lane\nRenderLane" as lane #77DD77
+participant "GPU + Renderer\nqueue · fence · swapchain" as gpu #FFB347
+
+main -> main : admitClientFrame_\npacer deadline + free frame credit
+main -> main : update(dt)\ninput · camera · makeFramePacket
+main -> main : stage grid/triangle payloads\nupdate ImGui frontend
+main -> main : render()\nconsume packet · detach UI
+
+main -> lane : submitFrame(RenderFrameRequest)\ndrop_if_full
+note right of main
+  Full transport = dropped frame.
+  Edits stay dirty and are re-staged;
+  no edit acknowledgement.
+end note
+
+lane -> lane : runLane_ select() wake\nhandleFrameEvent_
+lane -> lane : executeRenderWork_\nvalidate surface · apply staging\nprepare uploads · update passes
+lane -> gpu : renderAndPresent\nacquire image
+lane -> gpu : encode scene + UI passes\nfence-wait hook per draw
+lane -> gpu : submit command buffer\nsignal fence value V
+lane -> gpu : present()
+gpu --> lane : fence V observed complete\n(async, on lane sweep)
+lane -> lane : retireCompletedFrames\nrelease renderer credit
+lane -> main : post RenderFrameResult\nV · presented · staging · observations
+main -> main : pumpRenderCompletions_\nonLaneFrameConsumed_
+main -> main : ack edits · mirror generation\nrelease reservation when frontier >= V
+
+note over main, lane
+  CPU staging application and edit acknowledgement
+  are not GPU completion. Only fence V is.
+end note
+@enduml

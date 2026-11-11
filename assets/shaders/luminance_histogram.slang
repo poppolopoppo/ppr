@@ -125,5 +125,7 @@ void reduceHistogram(uint3 id : SV_DispatchThreadID) {
     }
 
     float average = accumulatedCount != 0u ? accumulated / float(accumulatedCount) : kLog2Min;
-    g_target_ev[0] = average - log2(kMiddleGray);
+    // The target is applied as exp2(target) to scene radiance: middle gray maps
+    // to zero, dark scenes get positive EV, and bright scenes get negative EV.
+    g_target_ev[0] = log2(kMiddleGray) - average;
 }

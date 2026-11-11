@@ -1,0 +1,35 @@
+@startuml
+!theme toy
+title Frame reservation and GPU credit lifecycle
+
+state "Local\ncredit charged on main" as local #6CB4EE
+state "Queued\naccepted by lane transport" as queued #77DD77
+state "Submitted\nfence value V accepted" as submitted #FFB347
+state "Quarantined\nsubmit possibly executed" as quarantined #FF6961
+state "Released\ncredit returned" as released #B0B0B0
+
+[*] --> local : admitClientFrame_
+local --> queued : submitFrame accepted
+local --> released : dropped or pre-submit error
+queued --> submitted : result carries submit value V
+queued --> released : lane drop, cancel,\nor never-applied result
+submitted --> released : CPU settled and\nretirement frontier >= V
+submitted --> quarantined : submit fate unknown
+quarantined --> [*] : teardown only
+released --> [*]
+
+note right of submitted
+  Two independent milestones:
+  CPU settlement (result drained)
+  and GPU completion (fence V).
+  The credit returns only when
+  both hold.
+end note
+
+note bottom of local
+  Two ledgers bound work at 2:
+  Application reservations on main
+  and Renderer credits on the lane.
+  kMaxOutstandingFrames = 2
+end note
+@enduml

@@ -1,0 +1,329 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Frame execution: main thread, render lane, GPU — PPR onboarding diagrams</title>
+<style>
+  :root {
+    --bg: #0e1116;
+    --panel: #161b22;
+    --panel-2: #1c2230;
+    --text: #e6e9ef;
+    --muted: #9aa6b8;
+    --line: #2b3444;
+    --accent: #6cb4ee;
+    --main: #6cb4ee;
+    --lane: #77dd77;
+    --infra: #ffb347;
+    --shared: #cf9fff;
+    --data: #fdfd96;
+    --legacy: #b0b0b0;
+    --error: #ff6961;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 1100px; margin: 0 auto; padding: 40px 24px 80px; }
+  h1, h2, h3 { line-height: 1.25; }
+  h1 { font-size: 2rem; margin: 0 0 8px; }
+  h2 { font-size: 1.35rem; margin: 0 0 6px; }
+  h3 { font-size: 1rem; margin: 18px 0 6px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+  p { margin: 0 0 12px; }
+  a { color: var(--accent); }
+  code { background: var(--panel-2); padding: .1em .35em; border-radius: 4px; font-size: .9em; }
+  .lead { color: var(--muted); max-width: 70ch; }
+  .callout {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-left: 4px solid var(--accent);
+    border-radius: 8px;
+    padding: 16px 18px;
+    margin: 24px 0;
+  }
+  .legend { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 12px 0 0; padding: 0; list-style: none; }
+  .legend li { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: .92rem; }
+  .swatch { width: 14px; height: 14px; border-radius: 3px; border: 1px solid #0006; display: inline-block; }
+  .diagram {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 22px;
+    margin: 28px 0;
+  }
+  .meta { color: var(--muted); font-size: .93rem; }
+  .meta strong { color: var(--text); font-weight: 600; }
+  figure { margin: 18px 0 0; }
+  figure img {
+    display: block;
+    width: 100%;
+    height: auto;
+    background: #ddd;
+    border-radius: 6px;
+  }
+  figcaption { color: var(--muted); font-size: .9rem; margin-top: 8px; }
+  ul.evidence { margin: 6px 0 0; padding-left: 20px; color: var(--muted); font-size: .93rem; }
+  ul.evidence li { margin-bottom: 4px; }
+  .checks { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  .badge { font-size: .8rem; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+  .badge.ok { border-color: #2f6b3c; color: #9be3a8; background: #12281a; }
+  .links { margin-top: 12px; font-size: .93rem; }
+  .links a { margin-right: 16px; }
+  footer { margin-top: 40px; color: var(--muted); font-size: .9rem; border-top: 1px solid var(--line); padding-top: 20px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Frame execution: main thread, render lane, GPU</h1>
+  <p class="lead">
+    Onboarding diagrams for developers extending the PPR engine. They answer one question:
+    which thread or device executes each part of a frame, and where the hand-offs and
+    completion proofs live.
+  </p>
+
+  <div class="callout">
+    <strong>Three facts that explain most of the architecture</strong>
+    <p>
+      1. An interactive application does not render on the main thread. <code>Application::run()</code>
+      admits a frame, runs client update, and hands an owned request to <code>RenderLane</code>.
+    </p>
+    <p>
+      2. The lane owns the <code>Renderer</code> and pass GPU state. It applies staged payloads,
+      updates passes from the packet camera, encodes, submits, and presents.
+    </p>
+    <p>
+      3. A frame result is not GPU completion. GPU completion is the monotonic fence value
+      signalled by the submit; a reservation is released only when CPU settlement and the
+      retirement frontier agree.
+    </p>
+    <ul class="legend">
+      <li><span class="swatch" style="background:#6cb4ee"></span>main thread</li>
+      <li><span class="swatch" style="background:#77dd77"></span>render lane / processing</li>
+      <li><span class="swatch" style="background:#ffb347"></span>platform / GPU execution</li>
+      <li><span class="swatch" style="background:#cf9fff"></span>lane-owned GPU objects</li>
+      <li><span class="swatch" style="background:#fdfd96"></span>bounded transport</li>
+      <li><span class="swatch" style="background:#b0b0b0"></span>released / optional</li>
+      <li><span class="swatch" style="background:#ff6961"></span>failure / quarantine</li>
+    </ul>
+  </div>
+
+  <section class="diagram">
+    <h2>01 — Thread and GPU responsibility map</h2>
+    <p class="meta"><strong>Question:</strong> which component belongs to the main thread, the render lane, or the GPU backend?</p>
+    <figure>
+      <img src="01-thread-gpu-responsibility.svg" alt="Component diagram: main thread owns run loop, editor update and render submission; the render lane owns frame execution, passes and the renderer; the GPU executes submitted command buffers.">
+      <figcaption>Use this as the map for the remaining views. Headless applications run the lane path inline on main.</figcaption>
+    </figure>
+    <h3>Evidence</h3>
+    <ul class="evidence">
+      <li><code>game/main.cpp:3-4</code> → <code>runGame</code> entry point.</li>
+      <li><code>lib/engine/app/App.Application.cpp:91-93</code> — main thread is named <code>Application</code>; <code>:1908-1928</code> chooses lane vs inline rendering.</li>
+      <li><code>lib/engine/app/frame/App.Frame.RenderLane.cpp:174-203</code> — worker thread named <code>RenderLane</code>; <code>:100-108</code> transport depths.</li>
+      <li><code>lib/engine/app/renderer/App.Renderer.cpp:1199-1201</code> — renderer operations fail closed off the owner thread.</li>
+    </ul>
+    <div class="checks">
+      <span class="badge ok">SVG structure: valid</span>
+      <span class="badge ok">Visual: inspected</span>
+    </div>
+    <p class="links"><a href="01-thread-gpu-responsibility.puml">PlantUML source</a><a href="01-thread-gpu-responsibility.svg">SVG</a></p>
+  </section>
+
+  <section class="diagram">
+    <h2>02 — One interactive frame end to end</h2>
+    <p class="meta"><strong>Question:</strong> in what order do main, the lane, and the GPU act within one frame?</p>
+    <figure>
+      <img src="02-interactive-frame-sequence.svg" alt="Sequence diagram: main admits a frame, updates client state, submits a render request; the lane executes it, submits and presents; the GPU signals a fence that the lane later retires; results return to main.">
+      <figcaption>The packet is single-use. A full transport drops the frame and leaves edits dirty for a later frame.</figcaption>
+    </figure>
+    <h3>Evidence</h3>
+    <ul class="evidence">
+      <li><code>lib/engine/app/App.Application.cpp:695-846</code> — admission, update, render stages of the main loop.</li>
+      <li><code>lib/engine/app/App.Application.Editor.cpp:1465-1542</code> — camera update, packet capture, packet consumption; <code>:1784</code> lane submission.</li>
+      <li><code>lib/engine/app/frame/App.Frame.RenderLane.cpp:303-341</code> — <code>submitFrame</code>; <code>:1059-1160</code> — executor and per-frame sweep.</li>
+      <li><code>lib/engine/app/renderer/App.Renderer.cpp:1177-1576</code> — surface control, acquire, encode, submit, present.</li>
+      <li><code>lib/engine/app/App.Application.cpp:1142-1296</code> — result drain and reservation settlement.</li>
+    </ul>
+    <div class="checks">
+      <span class="badge ok">SVG structure: valid</span>
+      <span class="badge ok">Visual: inspected</span>
+    </div>
+    <p class="links"><a href="02-interactive-frame-sequence.puml">PlantUML source</a><a href="02-interactive-frame-sequence.svg">SVG</a></p>
+  </section>
+
+  <section class="diagram">
+    <h2>03 — Main-thread frame loop and skips</h2>
+    <p class="meta"><strong>Question:</strong> what does the main thread do on an admitted frame, a capacity-busy frame, and an exit?</p>
+    <figure>
+      <img src="03-main-loop-admission-activity.svg" alt="Activity diagram: initialize, loop while exit is not requested, admit a frame, either skip because of backpressure or run update and render, then finish with quiescence proof and shutdown.">
+      <figcaption>A skipped frame collects native events and carries its elapsed time; device time does not advance with a partial update.</figcaption>
+    </figure>
+    <h3>Evidence</h3>
+    <ul class="evidence">
+      <li><code>lib/engine/app/App.Application.cpp:695-957</code> — loop body, skip branch, exit latch, <code>finishRun_</code>.</li>
+      <li><code>lib/engine/app/App.Application.cpp:975-1032</code> — <code>admitClientFrame_</code> (clock, credit probe).</li>
+      <li><code>lib/engine/app/App.Application.cpp:753-820</code> — capacity-busy path.</li>
+      <li><code>lib/engine/app/App.Application.cpp:1817-1843</code> — <code>finishRun_</code> ordering.</li>
+    </ul>
+    <div class="checks">
+      <span class="badge ok">SVG structure: valid</span>
+      <span class="badge ok">Visual: inspected</span>
+    </div>
+    <p class="links"><a href="03-main-loop-admission-activity.puml">PlantUML source</a><a href="03-main-loop-admission-activity.svg">SVG</a></p>
+  </section>
+
+  <section class="diagram">
+    <h2>04 — Reservation, fence, and credit lifecycle</h2>
+    <p class="meta"><strong>Question:</strong> when is a frame credit returned, and which states can a frame never leave?</p>
+    <figure>
+      <img src="04-frame-credit-fence-lifecycle.svg" alt="State diagram: Local, Queued, Submitted, Quarantined and Released states, with release requiring both CPU settlement and the GPU retirement frontier.">
+      <figcaption>Quarantine is reserved for an ambiguous submit: the credit is held and admission stops instead of guessing.</figcaption>
+    </figure>
+    <h3>Evidence</h3>
+    <ul class="evidence">
+      <li><code>lib/engine/app/App.Application.cppm:598-615</code> — <code>FrameReservation</code> states.</li>
+      <li><code>lib/engine/app/App.Application.cpp:1230-1296</code> — settlement and release rules; <code>:1308-1322</code> — frontier reconcile.</li>
+      <li><code>lib/engine/app/renderer/App.Renderer.FrameFence.cppm:25-50</code> — two-credit bound and ring depth; <code>:139-156</code> — ledger.</li>
+      <li><code>lib/engine/app/renderer/App.Renderer.cpp:701-732</code> — one fence value per accepted submit.</li>
+    </ul>
+    <div class="checks">
+      <span class="badge ok">SVG structure: valid</span>
+      <span class="badge ok">Visual: inspected</span>
+    </div>
+    <p class="links"><a href="04-frame-credit-fence-lifecycle.puml">PlantUML source</a><a href="04-frame-credit-fence-lifecycle.svg">SVG</a></p>
+  </section>
+
+  <section class="diagram">
+    <h2>05 — What the render lane does with one frame</h2>
+    <p class="meta"><strong>Question:</strong> which checks, staging steps, and submission phases happen on the lane?</p>
+    <figure>
+      <img src="05-render-lane-work-activity.svg" alt="Activity diagram of executeRenderWork_: validate, reject zero-size or stale frames, apply staged payloads, update passes, build passes, render and present, finalize submit fate, post result.">
+      <figcaption>Zero-size, obsolete-generation, and stale-particle outcomes are explicit non-rendering successes or drops, not errors.</figcaption>
+    </figure>
+    <h3>Evidence</h3>
+    <ul class="evidence">
+      <li><code>lib/engine/app/App.Application.Editor.cpp:2005-2609</code> — <code>executeRenderWork_</code>.</li>
+      <li><code>lib/engine/app/App.Application.Editor.cpp:2086-2109</code> — non-rendering and obsolete-surface outcomes.</li>
+      <li><code>lib/engine/app/App.Application.Editor.cpp:2134-2186</code> — staged application and pass updates.</li>
+      <li><code>lib/engine/app/App.Application.Editor.cpp:2420-2572</code> — pass list, <code>renderAndPresent</code>, submit-fate finalizer.</li>
+      <li><code>lib/engine/app/renderer/App.Renderer.cpp:1403-1565</code> — two-phase build/encode, fenced submit, unconditional present.</li>
+    </ul>
+    <div class="checks">
+      <span class="badge ok">SVG structure: valid</span>
+      <span class="badge ok">Visual: inspected</span>
+    </div>
+    <p class="links"><a href="05-render-lane-work-activity.puml">PlantUML source</a><a href="05-render-lane-work-activity.svg">SVG</a></p>
+  </section>
+
+  <section class="diagram">
+    <h2>06 — Startup, quiescence, and teardown</h2>
+    <p class="meta"><strong>Question:</strong> in what order do main and the lane start up and shut down?</p>
+    <figure>
+      <img src="06-startup-shutdown-sequence.svg" alt="Sequence diagram: main initializes platform and RHI, starts the lane, lane initializes the renderer; teardown proves quiescence, shuts the renderer down on the lane, joins the lane, then releases RHI and platform.">
+      <figcaption>An UNKNOWN GPU completion is a fail-stop, not a normal release: GPU objects are retained for process exit.</figcaption>
+    </figure>
+    <h3>Evidence</h3>
+    <ul class="evidence">
+      <li><code>lib/engine/app/App.Application.cpp:1845-1933</code> — initialization order; <code>:1445-1535</code> — lane startup and renderer init on the lane.</li>
+      <li><code>lib/engine/app/App.Application.cpp:1817-1843</code> — quiescence before shutdown.</li>
+      <li><code>lib/engine/app/App.Application.cpp:1935-2073</code> — renderer shutdown on lane, stop/join, service teardown.</li>
+      <li><code>lib/engine/app/App.Application.cpp:1537-1600</code> — <code>stopRenderLane_</code>.</li>
+      <li><code>lib/engine/app/renderer/App.Renderer.cpp:789-796</code> — <code>waitOnHost</code>.</li>
+    </ul>
+    <div class="checks">
+      <span class="badge ok">SVG structure: valid</span>
+      <span class="badge ok">Visual: inspected</span>
+    </div>
+    <p class="links"><a href="06-startup-shutdown-sequence.puml">PlantUML source</a><a href="06-startup-shutdown-sequence.svg">SVG</a></p>
+  </section>
+
+  <section class="diagram">
+    <h2>07 — GPU frame timing events</h2>
+    <p class="meta"><strong>Question:</strong> which GPU events measure a frame, and how does a finished sample reach the client?</p>
+    <figure>
+      <img src="07-gpu-frame-timing-events.svg" alt="Sequence diagram: the render lane opens a two-timestamp query pair around frame encoding, binds the pair to the submission fence value, collects the resolved GPU duration on a later sweep, and delivers GpuFrameTiming to the main thread.">
+      <figcaption>Collection is nonblocking and fenced: a slot is reused only after its pair is resolved and its fence value proves the submission completed.</figcaption>
+    </figure>
+    <h3>Evidence</h3>
+    <ul class="evidence">
+      <li><code>lib/engine/app/renderer/App.Renderer.cpp:331-346</code> — telemetry is best effort; a zero timestamp frequency or a failed pool leaves rendering enabled.</li>
+      <li><code>lib/engine/app/renderer/App.Renderer.cpp:532-554</code> — <code>beginGpuTiming_</code>: free-slot scan, query reset, frame-start timestamp, and <code>nullopt</code> when both pairs are pending.</li>
+      <li><code>lib/engine/app/renderer/App.Renderer.cpp:896-923</code>, <code>:1471-1531</code> — start/end timestamps bracket pass encoding; the slot binds the accepted submit value; producer submits use <code>surface_frame = false</code>, surface frames <code>true</code>.</li>
+      <li><code>lib/engine/app/renderer/App.Renderer.cpp:556-597</code> — <code>collectGpuTimings_</code>: fence gate, nonblocking <code>getResultState</code>/<code>getResult</code>, tick-to-millisecond conversion, newer-value cache update, slot release.</li>
+      <li><code>lib/engine/app/renderer/App.Renderer.cppm:77-84</code> — <code>GpuFrameTiming</code>; <code>:430-437</code> — two-slot pool, fences, frequency, surface flags.</li>
+      <li><code>lib/engine/app/App.Application.Editor.cpp:2028-2033</code> — the result carries <code>lastGpuFrameTiming()</code>; <code>game/Game.Application.cpp:5836-5837</code> — the client observes it.</li>
+    </ul>
+    <div class="checks">
+      <span class="badge ok">SVG structure: valid</span>
+      <span class="badge ok">Visual: inspected</span>
+    </div>
+    <p class="links"><a href="07-gpu-frame-timing-events.puml">PlantUML source</a><a href="07-gpu-frame-timing-events.svg">SVG</a></p>
+  </section>
+
+  <section class="diagram">
+    <h2>08 — GPU pass order within one frame</h2>
+    <p class="meta"><strong>Question:</strong> which compute and render passes does the GPU execute for one frame, and in what order?</p>
+    <figure>
+      <img src="08-gpu-pass-order.svg" alt="Activity diagram listing the GPU passes of one frame in submission order: world-light compute, grid backdrop, visibility compute, particle compute and offscreen liquid/solid passes, the scene render pass, optional retro resolves, the UI render pass, then submit and present.">
+      <figcaption>Rows are pass boundaries, except the rows between the scene-pass begin and end, which are its draw order. One pass can contain several dispatches. Orange is compute, purple is render, grey is the offscreen-retro branch or the submit/present boundary.</figcaption>
+    </figure>
+    <h3>Evidence</h3>
+    <ul class="evidence">
+      <li><code>lib/engine/app/App.Application.Editor.cpp:2281-2416</code> — frame preparation order: world-light source, atlas and update, then <code>prepareBackground</code>, <code>prepareGpuVisibility</code>, <code>prepareGpuParticles</code>; the offscreen branch ends in <code>RetroPass::prepareScene</code>.</li>
+      <li><code>lib/engine/app/App.Application.Editor.cpp:2225-2246</code> — scene draw order: background, terrain opaque, particles, terrain translucent, triangles.</li>
+      <li><code>lib/engine/app/App.Application.Editor.cpp:2420-2441</code> — surface pass list: scene, then detached UI.</li>
+      <li><code>lib/engine/app/renderer/App.Renderer.cpp:229-239</code> — a pass's <code>prepare</code> callback records its compute/offscreen work before <code>beginRenderPass</code>; <code>:1466-1530</code> — one encoder and one submit per frame.</li>
+      <li><code>lib/engine/app/renderer/App.Renderer.GridPass.cpp:3673-3830</code> — backdrop render pass; <code>:3124-3218</code> — two visibility compute phases; <code>:3220-3250</code> — opaque and translucent terrain draws.</li>
+      <li><code>lib/engine/app/renderer/App.Renderer.GridPass.Particles.cpp:549-825</code> — pack, cull, prefix, compact, then liquid and solid surface preparation; <code>:887-977</code> — <code>Particles.Draw</code> composites.</li>
+      <li><code>lib/engine/app/renderer/App.Renderer.GridPass.Fluids.cpp:127-303</code>, <code>Solids.cpp:96-229</code> — liquid/solid offscreen render passes and the liquid filter compute.</li>
+      <li><code>lib/engine/app/renderer/App.Renderer.RetroPass.cpp:972-1193</code> — offscreen scene pass and resolve order; <code>:1273-1895</code> — spatial, temporal2x, bloom and auto-exposure passes; <code>:2075</code> — surface composite.</li>
+    </ul>
+    <div class="checks">
+      <span class="badge ok">SVG structure: valid</span>
+      <span class="badge ok">Visual: inspected</span>
+    </div>
+    <p class="links"><a href="08-gpu-pass-order.puml">PlantUML source</a><a href="08-gpu-pass-order.svg">SVG</a></p>
+  </section>
+
+  <div class="callout">
+    <h3>Scope and assumptions</h3>
+    <p>
+      These views describe the interactive desktop path with the render lane enabled, one main window,
+      and the normal steady-state frame. The inline path is shown only as a note; captures, world-command
+      transactions, display transactions, and device-loss recovery are out of scope unless they explain a
+      hand-off. Multi-surface capability is not depicted. Diagram 07 covers the renderer's frame-level
+      timestamp pair; pass-owned timestamp pools (world light field, grid particle/fluid phases) are separate
+      instrumentation and do not feed <code>GpuFrameTiming</code>. Diagram 08 follows the interactive
+      desktop frame; passes that depend on content or settings are annotated in place, and capture-only
+      work is omitted. Diagrams 01-07 describe the interactive desktop path; the inline (headless) path
+      runs the same lane work on main.
+    </p>
+    <p>
+      Content is verified against the cited source at the current revision. No runtime capture, build, or
+      test was performed for this documentation-only change, so timing behavior and visual acceptance in a
+      running build remain unverified here.
+    </p>
+    <h3>Verification</h3>
+    <p>
+      Every diagram was exported to SVG through public Kroki (<code>https://kroki.io</code>, PlantUML
+      <code>1.2026.9</code>), checked for HTTP 200, <code>image/svg+xml</code>, and a well-formed SVG root,
+      then rasterized and visually inspected for clipping, overlap, contrast, and flow. The
+      <code>verification-planning</code> skill was unavailable in this environment; this explicit plan
+      replaced it.
+    </p>
+    <p>
+      Rendering backend: public Kroki. The diagram sources left this machine; they contain only engine
+      class names, file paths, and line citations.
+    </p>
+  </div>
+
+  <footer>
+    Generated for PPR onboarding. Sources are the authority: <code>lib/engine/app/codemap.md</code>,
+    <code>lib/engine/app/frame/codemap.md</code>, and <code>lib/engine/app/renderer/codemap.md</code>.
+  </footer>
+</main>
+</body>
+</html>

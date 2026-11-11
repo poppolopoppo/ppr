@@ -1,0 +1,35 @@
+@startuml
+!theme toy
+title Startup and teardown across main thread and render lane
+
+participant "Main thread" as main #6CB4EE
+participant "Render lane" as lane #77DD77
+participant "RHI · GPU · platform" as gpu #FFB347
+
+== startup ==
+main -> main : Application::run()\nresetGpuTeardownEpoch_()
+main -> gpu : platform · shader · RHI initialize
+main -> lane : startRenderLane_\ncreate lane + transports
+lane -> gpu : Renderer::initialize(rhi)\nowner thread = lane
+lane --> main : init acknowledgement
+main -> main : editor initialize\nwindow · passes · ImGui frontend
+lane -> lane : runLane_ loop\nselect(frames, control)
+
+== steady state ==
+main -> lane : frame requests
+lane -> gpu : submit · present
+main -> main : pumpRenderCompletions_
+
+== teardown ==
+main -> main : finishRun_ then prepareGpuTeardown_\npump results · prove quiescence
+alt quiescence proven
+  main -> lane : renderer.shutdown()\nas owned lane operation
+  lane -> gpu : waitOnHost\nrelease surfaces · queue · fence
+  lane --> main : completion ticket acknowledged
+else UNKNOWN completion
+  main -> main : fail-stop process\nretain GPU objects
+end
+main -> lane : requestStop + join\nqueued requests settle as dropped
+main -> main : renderer.reset()\nreservation ledger reset
+main -> gpu : RHI · shader · platform shutdown
+@enduml

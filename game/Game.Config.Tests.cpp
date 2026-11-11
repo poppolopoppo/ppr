@@ -742,8 +742,6 @@ namespace pP::game::tests::detail::compat {
         PPR_TEST_ASSERT(normal.has_value());
         PPR_TEST_ASSERT(normal->m_world_light.m_value.m_enabled);
         PPR_TEST_ASSERT(normal->m_world_light.m_value.m_samples_per_frame == 262144u);
-        PPR_TEST_ASSERT(normal->m_world_light.m_value.m_accumulation_samples == 8u);
-        PPR_TEST_ASSERT(normal->m_world_light.m_value.m_history_retention == 0.9f);
         PPR_TEST_ASSERT(normal->m_world_light.m_value.m_level_count == 6u);
         PPR_TEST_ASSERT(normal->m_world_light.m_value.m_sky_hour == 12);
         PPR_TEST_ASSERT(normal->m_world_light.m_value.m_debug_view == EWorldLightDebugView::off);
@@ -758,12 +756,11 @@ namespace pP::game::tests::detail::compat {
 
         Diagnostics configured_diagnostics;
         const auto configured = resolveCli(
-            {"--world-light-samples-per-frame=1048576", "--world-light-accumulation=16", "--world-light-debug=probes",
-                "--post-auto-exposure", "--post-exposure-ev=2.5", "--post-bloom-intensity=1.25", "--post-palette"},
+            {"--world-light-samples-per-frame=1048576", "--world-light-debug=probes", "--post-auto-exposure",
+                "--post-exposure-ev=2.5", "--post-bloom-intensity=1.25", "--post-palette"},
             configured_diagnostics);
         PPR_TEST_ASSERT(configured.has_value());
         PPR_TEST_ASSERT(configured->m_world_light.m_value.m_samples_per_frame == 1048576u);
-        PPR_TEST_ASSERT(configured->m_world_light.m_value.m_accumulation_samples == 16u);
         PPR_TEST_ASSERT(configured->m_world_light.m_value.m_debug_view == EWorldLightDebugView::probes);
         PPR_TEST_ASSERT(configured->m_post.m_value.m_auto_exposure);
         PPR_TEST_ASSERT(configured->m_post.m_value.m_exposure_ev == 2.5f);
@@ -772,7 +769,6 @@ namespace pP::game::tests::detail::compat {
 
         for (const auto *const invalid:
             {"--world-light-samples-per-frame=65535", "--world-light-samples-per-frame=4194305",
-                "--world-light-accumulation=0", "--world-light-accumulation=65", "--world-light-retention=0.49",
                 "--world-light-levels=3", "--world-light-sky-hour=24", "--world-light-debug=bogus",
                 "--world-light-debug=irradiance", "--post-exposure-ev=-16.1", "--post-adaptation-tau=0.09",
                 "--post-ev-min=-8.1", "--post-ev-max=8.1", "--post-bloom-intensity=2.1",

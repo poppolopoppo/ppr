@@ -1,0 +1,53 @@
+@startuml
+!theme toy
+title Frame execution: thread and GPU responsibilities
+
+actor "User input" as input #FFB347
+component "Platform + window service\nIPlatform / IWindowService" as platform #FFB347
+
+package "Main thread" {
+  component "Application::run()\nloop · admission · completion pump" as app #6CB4EE
+  component "ApplicationEditor::update()\ninput · camera · FramePacket · staging" as update #6CB4EE
+  component "ApplicationEditor::render()\nbuild RenderFrameRequest" as render #6CB4EE
+  component "pumpRenderCompletions_()\nresult drain · edit acks · reservations" as pump #6CB4EE
+}
+
+package "Render lane thread" {
+  component "RenderLane::runLane_()\nselect(frames, control) · sweep" as lane #77DD77
+  component "executeRenderWork_()\nstage · update passes · encode · present" as exec #77DD77
+}
+
+package "GPU / backend" {
+  component "Renderer + passes\nsurface · encoder · queue · fence" as renderer #CF9FFF
+  component "Command buffer execution\nrender passes · copy · present" as gpu #FFB347
+}
+
+rectangle "RawChannel transports\nframes 2 · results 4 · control 8" as channels #FDFD96
+
+input --> platform : events
+platform --> app : pumped on main
+app --> update
+update --> render
+render --> channels : submitFrame
+channels --> lane
+lane --> exec
+exec --> renderer
+renderer --> gpu : submit + signal fence
+gpu ..> renderer : fence value completes
+channels ..> pump : RenderFrameResult
+pump --> app : credit + edit settlement
+
+note bottom of renderer
+  Renderer and pass GPU state are lane-owned.
+  Headless or explicitly disabled lanes
+  run the same path inline on main.
+end note
+
+legend
+<font color="#6CB4EE">■</font> main thread
+<font color="#77DD77">■</font> render lane thread
+<font color="#FFB347">■</font> platform / GPU execution
+<font color="#CF9FFF">■</font> lane-owned GPU objects
+<font color="#FDFD96">■</font> bounded transport
+endlegend
+@enduml

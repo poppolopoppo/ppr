@@ -2,6 +2,9 @@ module;
 
 #include "pP/Macros.h"
 
+#include <mango/core/half.hpp>
+#include <slang.h>
+
 module engine.app;
 
 import :application_editor;
@@ -83,13 +86,20 @@ namespace pP {
         lighting::WorldLightField m_field{};
         lighting::WorldLightRadianceAtlas m_atlas{};
         lighting::WorldLightPlan m_plan{};
+        // Capture-only, four-timestamp field-update query. The pool is owned
+        // with the field so a failed/possibly-executed submission cannot
+        // release it before completion; shutdown releases it only after
+        // proven quiescence or confirmed device loss.
+        rhi::ComPtr<rhi::IQueryPool> m_capture_queries{};
+        FenceCompletionValue m_capture_query_fence{kFenceValueNone};
         u32 m_budget{};
-        u32 m_accumulation_samples{8u};
-        float m_history_retention{0.9f};
         float m_atlas_ambient{0.3f};
         u32 m_debug_view{};
+        TimeSpan m_last_update_elapsed{};
+        bool m_has_update_timestamp{};
         bool m_initialized{};
         bool m_frame_logged{};
+        bool m_capture_query_recorded{};
     };
 
     // UI frontend/GPU split handoffs (defined in App.UI.ImGui.cpp with
@@ -103,6 +113,371 @@ namespace pP {
 
     // ReSharper disable once CppUseInternalLinkage
     PPR_DEFINE_LOG_CATEGORY(Editor, debug, none)
+
+    // ------------------------------------------------------------------
+    // capture-only world light field diagnostics
+    // ------------------------------------------------------------------
+
+    // 8-byte radiance sample, matched field-for-field by the Slang
+    // WorldLightRadiance in world_light_field.slang.
+    struct CapturedRadianceSample {
+        u16 m_r{}, m_g{}, m_b{}, m_t{};
+    };
+    static_assert(sizeof(CapturedRadianceSample) == 8u);
+
+    // Mango's portable half conversion (the implementation engine.math is
+    // built on); this toolchain has no std::float16_t, and hand-rolled bit
+    // math would be a second, divergent numeric interpretation.
+    [[nodiscard]] float decodeCapturedHalf(const u16 bits) noexcept {
+        return static_cast<float>(mango::Half{bits});
+    }
+
+    // One-shot observation of the field the presented capture sampled. The
+    // caller must reach this only after the surface readback fenced the frame
+    // that encoded the field update: the readback wait proves the shared
+    // encoder's field writes completed, so these reads are not speculative
+    // polling. Never wire this into per-frame rendering; it exists to explain
+    // a captured image, not to drive shading, and it does not establish that
+    // the lighting is correct.
+    [[nodiscard]] std::error_code logCapturedWorldLightField(
+        rhi::IDevice &device, const lighting::WorldLightField &field, const lighting::WorldLightSourceGpu &source,
+        const lighting::WorldLightPlan &plan) {
+        const lighting::WorldLightFieldView view = field.view();
+        const lighting::WorldLightFieldConstants *const constants = view.m_constants;
+        rhi::IBuffer *const radiance = view.m_radiance;
+        rhi::IBuffer *const counts = field.state();
+        PPR_RETURN_ERROR_ON_FAIL(
+            Editor, constants != nullptr and radiance != nullptr and counts != nullptr
+                        ? std::error_code{}
+                        : std::make_error_code(std::errc::not_connected));
+
+        // view() and its constants are the field the scene sampled this frame:
+        // update() publishes both before the draw. A mismatch means this is not
+        // the captured field, so report the readback as failed instead of
+        // logging plausible-looking bytes from another state.
+        const u32 level_count = constants->m_level_count;
+        PPR_RETURN_ERROR_ON_FAIL(
+            Editor, level_count != 0u and
+                            level_count == plan.m_level_count and
+                            level_count <= lighting::kWorldLightMaxLevels and
+                            constants->m_width == plan.m_width and
+                            constants->m_height == plan.m_height and
+                            constants->m_source_revision == static_cast<u32>(source.revision())
+                        ? std::error_code{}
+                        : std::make_error_code(std::errc::state_not_recoverable));
+
+        const u64 radiance_bytes = radiance->getDesc().size;
+        const u64 count_bytes = counts->getDesc().size;
+        PPR_RETURN_ERROR_ON_FAIL(
+            Editor, radiance_bytes >= plan.m_radiance_bytes and count_bytes / sizeof(u32) >= plan.m_radiance_samples
+                        ? std::error_code{}
+                        : std::make_error_code(std::errc::value_too_large));
+
+        PPR_LOG(
+            Editor, info, "captured world light field",
+            {{"capture_sequence", capture_sequence}, {"frame", capture_frame_id},
+                {"source_revision", source.revision()}, {"source_revision_low", constants->m_source_revision},
+                {"field_frame", constants->m_frame}, {"field_cycle", field.cycle()}, {"field_gpu_ms", field_gpu_ms},
+                {"field_copy_ms", field_copy_ms}, {"field_dirty_ms", field_dirty_ms},
+                {"field_ordinary_ms", field_ordinary_ms}, {"field_gpu_scope", "copy_dirty_ordinary"},
+                {"field_width", plan.m_width}, {"field_height", plan.m_height}, {"field_levels", level_count},
+                {"cell_metres", plan.m_cell_metres}, {"radiance_samples", plan.m_radiance_samples},
+                {"frame_delta", constants->m_frame_delta}, {"budget", constants->m_budget},
+                {"sky_hour", source.skyHour()}, {"sky_intensity", constants->m_sky_intensity}});
+
+        // Camera metadata is a separate bounded record so no single capture
+        // diagnostic approaches the logger's per-record limit.
+        PPR_LOG(
+            Editor, info, "captured world light field camera",
+            {{"capture_sequence", capture_sequence}, {"frame", capture_frame_id}, {"scene_width", scene_extent.x},
+                {"scene_height", scene_extent.y}, {"surface_width", surface_extent.x},
+                {"surface_height", surface_extent.y}, {"camera_viewport", camera.m_viewport_size},
+                {"camera_aspect", camera.m_aspect_ratio}, {"camera_revision", camera.m_revision},
+                {"camera_origin", camera.m_origin}, {"camera_forward", camera.m_forward},
+                {"view_projection_row0", camera.m_view_projection[0]},
+                {"view_projection_row1", camera.m_view_projection[1]},
+                {"view_projection_row2", camera.m_view_projection[2]},
+                {"view_projection_row3", camera.m_view_projection[3]}});
+
+        // The dense source ids are the actual cells the field traced. The
+        // palette is the source's CPU mirror, so only the ids need a GPU
+        // readback; no second palette read or per-cell overlay interpretation
+        // is introduced. Selection is row-major with a strict comparison, so
+        // equal luminance keeps the first cell.
+        struct CaptureEmitter {
+            bool m_found{};
+            u32 m_x{}, m_y{}, m_material_id{};
+            float3 m_emission{0.0f};
+            float m_luminance{};
+            u64 m_count{};
+        };
+
+        rhi::IBuffer *const source_ids = source.cellIds();
+        PPR_RETURN_ERROR_ON_FAIL(
+            Editor, source_ids != nullptr ? std::error_code{} : std::make_error_code(std::errc::not_connected));
+        const std::span<const lighting::WorldLightMaterial> palette = source.materials();
+        const u64 cell_count = static_cast<u64>(plan.m_width) * static_cast<u64>(plan.m_height);
+        PPR_RETURN_ERROR_ON_FAIL(
+            Editor, plan.m_width != 0u and
+                            plan.m_height != 0u and
+                            cell_count / plan.m_width == plan.m_height and
+                            cell_count <= std::numeric_limits<u64>::max() / sizeof(u32) and
+                            source_ids->getDesc().size >= cell_count * sizeof(u32)
+                        ? std::error_code{}
+                        : std::make_error_code(std::errc::value_too_large));
+
+        const u64 ids_bytes = cell_count * sizeof(u32);
+        rhi::ComPtr<ISlangBlob> ids_blob{};
+        PPR_RETURN_ERROR_ON_FAIL(Editor, device.readBuffer(source_ids, 0u, ids_bytes, ids_blob.writeRef()));
+        PPR_RETURN_ERROR_ON_FAIL(
+            Editor, ids_blob.get() != nullptr and
+                            ids_blob->getBufferPointer() != nullptr and
+                            ids_blob->getBufferSize() == ids_bytes
+                        ? std::error_code{}
+                        : std::make_error_code(std::errc::io_error));
+        const auto *const id_bytes = static_cast<const std::byte *>(ids_blob->getBufferPointer());
+
+        CaptureEmitter emitter{};
+        for (u32 y = 0u; y < plan.m_height; ++y) {
+            for (u32 x = 0u; x < plan.m_width; ++x) {
+                u32 material_id{};
+                const u64 cell = static_cast<u64>(y) * plan.m_width + x;
+                std::memcpy(&material_id, id_bytes + cell * sizeof(u32), sizeof(material_id));
+                if (material_id == 0u) {
+                    continue;
+                }
+
+                PPR_RETURN_ERROR_ON_FAIL(
+                    Editor, static_cast<u64>(material_id) <= palette.size()
+                                ? std::error_code{}
+                                : std::make_error_code(std::errc::state_not_recoverable));
+                const lighting::WorldLightMaterial &material = palette[material_id - 1u];
+                if (material.m_kind != 1u) {
+                    continue;
+                }
+
+                const float luminance = RetroPass::luminance(
+                    material.m_emission[0], material.m_emission[1], material.m_emission[2]);
+                if (not (luminance > 0.0f)) {
+                    continue;
+                }
+
+                ++emitter.m_count;
+                if (emitter.m_found and luminance <= emitter.m_luminance) {
+                    continue;
+                }
+
+                emitter.m_found = true;
+                emitter.m_x = x;
+                emitter.m_y = y;
+                emitter.m_material_id = material_id;
+                emitter.m_emission = float3{material.m_emission[0], material.m_emission[1], material.m_emission[2]};
+                emitter.m_luminance = luminance;
+            }
+        }
+
+        PPR_LOG(
+            Editor, info, "captured world light field emitter",
+            {{"capture_sequence", capture_sequence}, {"frame", capture_frame_id},
+                {"source_revision", source.revision()}, {"source_revision_low", constants->m_source_revision},
+                {"emitter_found", emitter.m_found}, {"emitter_count", emitter.m_count}, {"cell_x", emitter.m_x},
+                {"cell_y", emitter.m_y}, {"material_id", emitter.m_material_id}, {"emission", emitter.m_emission},
+                {"emission_luminance", emitter.m_luminance},
+                {"sky", float3{source_sky[0], source_sky[1], source_sky[2]}}, {"sky_hour", source.skyHour()}});
+
+        struct CrossOffset {
+            i32 m_x, m_y;
+        };
+        constexpr std::array<CrossOffset, 9u> cross_offsets{
+            {{0, 0}, {0, -2}, {0, -8}, {0, -16}, {0, -32}, {-8, 0}, {8, 0}, {-16, -32}, {16, -32}}};
+        if (not emitter.m_found) {
+            PPR_LOG(
+                Editor, info, "captured field probe cross skipped",
+                {{"capture_sequence", capture_sequence}, {"frame", capture_frame_id},
+                    {"source_revision", source.revision()}, {"emitter_count", emitter.m_count},
+                    {"reason", "no_emitter"}});
+        }
+
+        // Read one level at a time so the transient CPU copy stays bounded by
+        // the largest level, not by the whole double-buffered field.
+        for (u32 level = 0u; level < level_count; ++level) {
+            const lighting::WorldLightLevel &info = plan.m_levels[level];
+            const u64 sample_offset = info.m_sample_offset;
+            const u64 sample_count = info.m_sample_count;
+            PPR_RETURN_ERROR_ON_FAIL(
+                Editor, sample_offset <= radiance_bytes / sizeof(CapturedRadianceSample) and
+                                sample_count <= radiance_bytes / sizeof(CapturedRadianceSample) - sample_offset and
+                                sample_offset <= count_bytes / sizeof(u32) and
+                                sample_count <= count_bytes / sizeof(u32) - sample_offset
+                            ? std::error_code{}
+                            : std::make_error_code(std::errc::value_too_large));
+
+            const u64 level_radiance_bytes = sample_count * sizeof(CapturedRadianceSample);
+            rhi::ComPtr<ISlangBlob> radiance_blob{};
+            PPR_RETURN_ERROR_ON_FAIL(
+                Editor, device.readBuffer(
+                            radiance, sample_offset * sizeof(CapturedRadianceSample), level_radiance_bytes,
+                            radiance_blob.writeRef()));
+            PPR_RETURN_ERROR_ON_FAIL(
+                Editor, radiance_blob.get() != nullptr and
+                                radiance_blob->getBufferPointer() != nullptr and
+                                radiance_blob->getBufferSize() == level_radiance_bytes
+                            ? std::error_code{}
+                            : std::make_error_code(std::errc::io_error));
+
+            const u64 level_count_bytes = sample_count * sizeof(u32);
+            rhi::ComPtr<ISlangBlob> count_blob{};
+            PPR_RETURN_ERROR_ON_FAIL(
+                Editor,
+                device.readBuffer(counts, sample_offset * sizeof(u32), level_count_bytes, count_blob.writeRef()));
+            PPR_RETURN_ERROR_ON_FAIL(
+                Editor, count_blob.get() != nullptr and
+                                count_blob->getBufferPointer() != nullptr and
+                                count_blob->getBufferSize() == level_count_bytes
+                            ? std::error_code{}
+                            : std::make_error_code(std::errc::io_error));
+
+            const auto *const sample_bytes = static_cast<const std::byte *>(radiance_blob->getBufferPointer());
+            const auto *const count_bytes_ptr = static_cast<const std::byte *>(count_blob->getBufferPointer());
+
+            float maximum_rgb = 0.0f;
+
+            for (u64 index = 0u; index < sample_count; ++index) {
+                u32 sample_count_value{};
+                CapturedRadianceSample sample{};
+                std::memcpy(&sample_count_value, count_bytes_ptr + index * sizeof(u32), sizeof(sample_count_value));
+                std::memcpy(&sample, sample_bytes + index * sizeof(CapturedRadianceSample), sizeof(sample));
+
+                const float red = decodeCapturedHalf(sample.m_r);
+                const float green = decodeCapturedHalf(sample.m_g);
+                const float blue = decodeCapturedHalf(sample.m_b);
+
+                const bool finite_rgb = std::isfinite(red) and std::isfinite(green) and std::isfinite(blue);
+
+                if (finite_rgb) {
+                    maximum_rgb = std::max({maximum_rgb, red, green, blue});
+                }
+            }
+
+            PPR_LOG(
+                Editor, info, "captured world light field level",
+                {{"capture_sequence", capture_sequence}, {"frame", capture_frame_id},
+                    {"source_revision", source.revision()}, {"field_frame", constants->m_frame},
+                    {"field_cycle", field.cycle()}, {"level", level}, {"directions", info.m_directions},
+                    {"probes_x", info.m_probes_x}, {"probes_y", info.m_probes_y}, {"direction_samples", sample_count},
+                    {"zero_count_samples", zero_samples}, {"nonzero_rgb_samples", nonzero_rgb_samples},
+                    {"nonfinite_samples", nonfinite_samples}, {"maximum_finite_rgb", maximum_rgb}});
+
+            if (level != 0u or not emitter.m_found) {
+                continue;
+            }
+
+            // Fixed cross around the strongest emitter. The probe is the
+            // nearest nominal L0 center; the trace adds per-frame jitter inside
+            // the probe cell, so this is a probe position, not a claim about a
+            // shaded surface. Requested cells outside the world are reported as
+            // absent rather than clamped. The L0 radiance/count blobs above are
+            // reused; no additional GPU read occurs here.
+            PPR_RETURN_ERROR_ON_FAIL(
+                Editor, info.m_spacing_cells != 0u and info.m_directions != 0u
+                            ? std::error_code{}
+                            : std::make_error_code(std::errc::state_not_recoverable));
+
+            for (const CrossOffset &offset: cross_offsets) {
+                const i64 requested_x = static_cast<i64>(emitter.m_x) + offset.m_x;
+                const i64 requested_y = static_cast<i64>(emitter.m_y) + offset.m_y;
+                if (requested_x < 0 or
+                    requested_y < 0 or
+                    requested_x >= static_cast<i64>(plan.m_width) or
+                    requested_y >= static_cast<i64>(plan.m_height)) {
+                    PPR_LOG(
+                        Editor, info, "captured field probe cross skipped",
+                        {{"capture_sequence", capture_sequence}, {"frame", capture_frame_id},
+                            {"source_revision", source.revision()}, {"emitter_x", emitter.m_x},
+                            {"emitter_y", emitter.m_y}, {"offset_x", offset.m_x}, {"offset_y", offset.m_y},
+                            {"requested_x", requested_x}, {"requested_y", requested_y}, {"present", false},
+                            {"reason", "out_of_world"}});
+                    continue;
+                }
+
+                const u32 native_x = static_cast<u32>(requested_x);
+                const u32 native_y = static_cast<u32>(requested_y);
+                u32 requested_material_id{};
+                const u64 requested_cell = static_cast<u64>(native_y) * plan.m_width + native_x;
+                std::memcpy(
+                    &requested_material_id, id_bytes + requested_cell * sizeof(u32), sizeof(requested_material_id));
+
+                const double probe_coordinate_x = (static_cast<double>(native_x) + 0.5) /
+                                                      static_cast<double>(info.m_spacing_cells) -
+                                                  0.5;
+                const double probe_coordinate_y = (static_cast<double>(native_y) + 0.5) /
+                                                      static_cast<double>(info.m_spacing_cells) -
+                                                  0.5;
+                const i64 probe_x = static_cast<i64>(std::llround(probe_coordinate_x));
+                const i64 probe_y = static_cast<i64>(std::llround(probe_coordinate_y));
+                if (probe_x < 0 or
+                    probe_y < 0 or
+                    probe_x >= static_cast<i64>(info.m_probes_x) or
+                    probe_y >= static_cast<i64>(info.m_probes_y)) {
+                    PPR_LOG(
+                        Editor, info, "captured field probe cross skipped",
+                        {{"capture_sequence", capture_sequence}, {"frame", capture_frame_id},
+                            {"source_revision", source.revision()}, {"emitter_x", emitter.m_x},
+                            {"emitter_y", emitter.m_y}, {"offset_x", offset.m_x}, {"offset_y", offset.m_y},
+                            {"requested_x", native_x}, {"requested_y", native_y},
+                            {"material_id", requested_material_id}, {"probe_x", probe_x}, {"probe_y", probe_y},
+                            {"present", false}, {"reason", "no_probe"}});
+                    continue;
+                }
+
+                const u64 probe = static_cast<u64>(probe_y) * info.m_probes_x + static_cast<u64>(probe_x);
+                const u64 sample_begin = probe * info.m_directions;
+                PPR_RETURN_ERROR_ON_FAIL(
+                    Editor, sample_begin <= sample_count and info.m_directions <= sample_count - sample_begin
+                                ? std::error_code{}
+                                : std::make_error_code(std::errc::state_not_recoverable));
+
+                std::array<float, 3u> radiance_sum{};
+                u32 count_minimum = std::numeric_limits<u32>::max();
+                u32 count_maximum = 0u;
+                for (u32 direction = 0u; direction < info.m_directions; ++direction) {
+                    const u64 index = sample_begin + direction;
+                    u32 sample_count_value{};
+                    CapturedRadianceSample sample{};
+                    std::memcpy(&sample_count_value, count_bytes_ptr + index * sizeof(u32), sizeof(sample_count_value));
+                    std::memcpy(&sample, sample_bytes + index * sizeof(CapturedRadianceSample), sizeof(sample));
+
+                    radiance_sum[0] += decodeCapturedHalf(sample.m_r);
+                    radiance_sum[1] += decodeCapturedHalf(sample.m_g);
+                    radiance_sum[2] += decodeCapturedHalf(sample.m_b);
+                    count_minimum = std::min(count_minimum, sample_count_value);
+                    count_maximum = std::max(count_maximum, sample_count_value);
+                }
+
+                const float inverse_directions = 1.0f / static_cast<float>(info.m_directions);
+                const float3 mean_rgb{
+                    radiance_sum[0] * inverse_directions,
+                    radiance_sum[1] * inverse_directions,
+                    radiance_sum[2] * inverse_directions,
+                };
+                PPR_LOG(
+                    Editor, info, "captured field probe cross",
+                    {{"capture_sequence", capture_sequence}, {"frame", capture_frame_id},
+                        {"source_revision", source.revision()}, {"emitter_x", emitter.m_x}, {"emitter_y", emitter.m_y},
+                        {"offset_x", offset.m_x}, {"offset_y", offset.m_y}, {"requested_x", native_x},
+                        {"requested_y", native_y}, {"material_id", requested_material_id},
+                        {"probe_x", static_cast<u32>(probe_x)}, {"probe_y", static_cast<u32>(probe_y)},
+                        {"probe_native_x",
+                            (static_cast<float>(probe_x) + 0.5f) * static_cast<float>(info.m_spacing_cells)},
+                        {"probe_native_y",
+                            (static_cast<float>(probe_y) + 0.5f) * static_cast<float>(info.m_spacing_cells)},
+                        {"directions", info.m_directions}, {"mean_rgb", mean_rgb}, {"count_min", count_minimum},
+                        {"count_max", count_maximum}, {"present", true}});
+            }
+        }
+
+        return {};
+    }
 
     // ------------------------------------------------------------------
     // application editor
@@ -704,6 +1079,9 @@ namespace pP {
                             PPR_RETAIN_ERROR_ON_FAIL(Editor, lane_err, m_field_lighting->m_atlas.shutdown());
                             PPR_RETAIN_ERROR_ON_FAIL(Editor, lane_err, m_field_lighting->m_field.shutdown());
                             PPR_RETAIN_ERROR_ON_FAIL(Editor, lane_err, m_field_lighting->m_source.shutdown());
+                            // Proven idle/confirmed loss only: no frame can still
+                            // write this capture timing query set.
+                            m_field_lighting->m_capture_queries.setNull();
                             m_field_lighting.reset();
                         }
                         // Triangle shutdown runs on main below, before the
@@ -815,6 +1193,13 @@ namespace pP {
             // above likewise precedes release of unconsumed main-side stages.
             m_grid_stage = GridPass::GridStagedFrame{};
             m_triangle_stage = TrianglePass::TriangleStagedFrame{};
+            // Inline field state outlives this function; release its capture
+            // timing pool now that quiescence/confirmed loss is proven.
+            if (m_field_lighting) {
+                m_field_lighting->m_capture_queries.setNull();
+                m_field_lighting->m_capture_query_recorded = false;
+                m_field_lighting->m_capture_query_fence = kFenceValueNone;
+            }
         }
 
         if (device_loss_confirmed and not lane_releases_done and not renderLaneOwnsRenderer_()) {
@@ -1554,11 +1939,11 @@ namespace pP {
 
                         field.m_plan = command.m_field_plan;
                         field.m_budget = command.m_field_budget;
-                        field.m_accumulation_samples = command.m_field_accumulation_samples;
-                        field.m_history_retention = command.m_field_history_retention;
-                        field.m_atlas.setTemporalRetention(field.m_history_retention);
+                        field.m_atlas.setTemporalRetention(0.9f);
                         field.m_atlas_ambient = command.m_field_atlas_ambient;
                         field.m_debug_view = command.m_field_debug_view;
+                        field.m_last_update_elapsed = TimeSpan{};
+                        field.m_has_update_timestamp = false;
                         field.m_initialized = true;
                     }
                 }
@@ -1876,6 +2261,7 @@ namespace pP {
             return m_grid_pass->prepareBackground(context, camera, viewport, scissor);
         };
 
+        bool capture_timing_recorded = false;
         const auto scene_prepare = [&](const PreRenderContext &context) -> std::error_code {
             // Field mode: apply the committed dirty stage, encode the dense
             // source upload and the radiance atlas, then the cascade field update
@@ -1903,16 +2289,68 @@ namespace pP {
                 PPR_RETURN_ERROR_ON_FAIL(
                     Editor, field.m_atlas.encode(context.m_encoder, field.m_source, field.m_field.view()));
 
-                // The injected frame delta drives the retention EMA; use the real
-                // packet delta (falling back to the 60 Hz nominal on a zero delta).
-                const float frame_delta = std::chrono::duration<float>(packet.m_delta_time).count();
-                const float field_dt = frame_delta > 0.0f ? frame_delta : 1.0f / 60.0f;
+                // The actual field-update interval comes from the packet's total
+                // elapsed time. The first update after init, or an invalid/reset
+                // timestamp, uses dt 0; no implicit clock or nominal 1/60 value.
+                float field_dt = 0.0f;
+                if (field.m_has_update_timestamp) {
+                    const float delta =
+                        std::chrono::duration<float>(packet.m_total_elapsed - field.m_last_update_elapsed).count();
+                    field_dt = std::isfinite(delta) and delta >= 0.0f ? delta : 0.0f;
+                }
+
+                // Capture-only GPU timing for update() alone. Four timestamps
+                // bracket field entry, copy+barrier, the entire dirty block and
+                // the ordinary trace+barrier, excluding source encode and atlas.
+                const bool field_timing = capture;
+                if (field_timing) {
+                    if (not field.m_capture_queries) {
+                        // Same support gate as Renderer GPU timing: no pool
+                        // and no timestamp writes without a usable frequency.
+                        const double frequency = static_cast<double>(context.m_device.getInfo().timestampFrequency);
+                        PPR_RETURN_ERROR_ON_FAIL(
+                            Editor, std::isfinite(frequency) and frequency > 0.0
+                                        ? std::error_code{}
+                                        : std::make_error_code(std::errc::not_supported));
+
+                        rhi::QueryPoolDesc queries{};
+                        queries.type = rhi::QueryType::Timestamp;
+                        queries.count = 4u;
+                        queries.label = "capture world light field update";
+                        PPR_RETURN_ERROR_ON_FAIL(
+                            Editor, context.m_device.createQueryPool(queries, field.m_capture_queries.writeRef()));
+                    } else if (field.m_capture_query_recorded) {
+                        // An unknown submit has no fence that can prove its
+                        // timestamp writes finished; only teardown may release
+                        // that pool. A known fence must be complete before the
+                        // four slots can be reset for another capture.
+                        PPR_RETURN_ERROR_ON_FAIL(
+                            Editor, field.m_capture_query_fence != kFenceValueNone
+                                        ? std::error_code{}
+                                        : std::make_error_code(std::errc::state_not_recoverable));
+                        const bool previous_complete = renderer.completedFenceValue() >= field.m_capture_query_fence;
+                        PPR_RETURN_ERROR_ON_FAIL(
+                            Editor, previous_complete ? std::error_code{}
+                                                      : std::make_error_code(std::errc::device_or_resource_busy));
+                        field.m_capture_query_recorded = false;
+                        field.m_capture_query_fence = kFenceValueNone;
+                    }
+
+                    PPR_RETURN_ERROR_ON_FAIL(Editor, field.m_capture_queries->reset(0u, 4u));
+                    field.m_capture_query_recorded = true;
+                    field.m_capture_query_fence = kFenceValueNone;
+                    capture_timing_recorded = true;
+                }
+
                 PPR_RETURN_ERROR_ON_FAIL(
                     Editor, field.m_field.update(
                                 context.m_encoder, field.m_source, *field.m_atlas.cells(), field_dt,
                                 field.m_budget != 0u ? field.m_budget
                                                      : static_cast<u32>(field.m_plan.m_levels[0].m_sample_count),
-                                field.m_accumulation_samples, field.m_history_retention));
+                                field_timing ? field.m_capture_queries.get() : nullptr));
+                field.m_last_update_elapsed = packet.m_total_elapsed;
+                field.m_has_update_timestamp = true;
+
                 PPR_RETURN_ERROR_ON_FAIL(
                     Editor,
                     m_grid_pass->setWorldLightField(
@@ -2117,6 +2555,20 @@ namespace pP {
         // its capture-only readback is mapped. Early exits still use the guard.
         submit_fate_guard.finalize();
 
+        // Bind a recorded capture-timing query set to the submission that owns
+        // it. A known accepted value gates later reuse on fence completion; a
+        // definitely-unsubmitted command buffer wrote nothing and can be
+        // forgotten; an unknown submit keeps the set recorded (no fence) so
+        // no later capture can reset it before teardown.
+        if (capture_timing_recorded and m_field_lighting and m_field_lighting->m_capture_query_recorded) {
+            if (out_result.m_submit_value != kFenceValueNone) {
+                m_field_lighting->m_capture_query_fence = out_result.m_submit_value;
+            } else if (not out_result.m_submit_possibly_executed) {
+                m_field_lighting->m_capture_query_recorded = false;
+                m_field_lighting->m_capture_query_fence = kFenceValueNone;
+            }
+        }
+
         if (capture) {
             const bool pre_acquire_transient = not capture_image_acquired and
                                                not out_result.m_presented and
@@ -2138,6 +2590,75 @@ namespace pP {
                     out_result.m_surface_capture_error = std::make_error_code(std::errc::io_error);
                 }
             }
+        }
+
+        // Capture-only field observation. The surface readback above waited on
+        // this frame's fence, and the field update was encoded into the same
+        // command buffer before the readback copy, so that wait also proves the
+        // field buffers finished. Match the readback fence to this frame's
+        // accepted submit before trusting that proof. Reading the buffers now is
+        // bounded owner-lane observation; it must never become per-frame polling.
+        if (capture and
+            not frame_err and
+            out_result.m_presented and
+            out_result.m_surface_pixels and
+            m_field_lighting and
+            m_field_lighting->m_initialized) {
+            // This capture's field diagnostics are part of capture success:
+            // any failure below leaves this set even though the frame itself
+            // presented. Clear it only after timing and buffer observation
+            // both succeed.
+            out_result.m_surface_capture_error = std::make_error_code(std::errc::state_not_recoverable);
+
+            const bool completed = out_result.m_surface_pixels->m_submission != kFenceValueNone and
+                                   out_result.m_surface_pixels->m_submission == out_result.m_submit_value and
+                                   renderer.completedFenceValue() >= out_result.m_surface_pixels->m_submission;
+            PPR_RETURN_ERROR_ON_FAIL(
+                Editor, completed ? std::error_code{} : std::make_error_code(std::errc::state_not_recoverable));
+
+            // Record the immutable policy this capture actually requested, so
+            // any palette/tone interpretation is tied to the matching settings.
+            PPR_LOG(
+                Editor, info, "captured retro settings",
+                {{"capture_sequence", request.m_surface_capture_sequence}, {"frame", packet.m_frame_id},
+                    {"enabled", request.m_retro.m_enabled}, {"pixel_scale", request.m_retro.m_pixel_scale},
+                    {"palette_enabled", request.m_retro.m_palette_enabled},
+                    {"hdr_enabled", request.m_retro.m_hdr_enabled}, {"exposure_ev", request.m_retro.m_exposure_ev},
+                    {"auto_exposure", request.m_retro.m_auto_exposure}, {"ev_min", request.m_retro.m_ev_min},
+                    {"ev_max", request.m_retro.m_ev_max}, {"temporal_enabled", request.m_retro.m_temporal_enabled},
+                    {"temporal_2x_enabled", request.m_retro.m_temporal_2x_enabled},
+                    {"spatial_enabled", request.m_retro.m_spatial_enabled},
+                    {"bloom_enabled", request.m_retro.m_bloom_enabled},
+                    {"bloom_intensity", request.m_retro.m_bloom_intensity}});
+
+            auto &field = *m_field_lighting;
+            PPR_RETURN_ERROR_ON_FAIL(
+                Editor, field.m_capture_queries.get() != nullptr and field.m_capture_query_recorded
+                            ? std::error_code{}
+                            : std::make_error_code(std::errc::state_not_recoverable));
+
+            // The frame fence above covers the same command buffer that owns
+            // these four writes, so this host read does not introduce a new
+            // wait or a frame-total measurement.
+            std::array<u64, 4u> ticks{};
+            PPR_RETURN_ERROR_ON_FAIL(Editor, field.m_capture_queries->getResult(0u, 4u, ticks.data()));
+            PPR_RETURN_ERROR_ON_FAIL(
+                Editor, ticks[1] >= ticks[0] and ticks[2] >= ticks[1] and ticks[3] >= ticks[2]
+                            ? std::error_code{}
+                            : std::make_error_code(std::errc::state_not_recoverable));
+
+            const double frequency = static_cast<double>(rhi_service->getDevice().getInfo().timestampFrequency);
+            PPR_RETURN_ERROR_ON_FAIL(
+                Editor, std::isfinite(frequency) and frequency > 0.0 ? std::error_code{}
+                                                                     : std::make_error_code(std::errc::not_supported));
+
+            field.m_capture_query_recorded = false;
+            field.m_capture_query_fence = kFenceValueNone;
+
+            PPR_RETURN_ERROR_ON_FAIL(
+                Editor, logCapturedWorldLightField(
+                            rhi_service->getDevice(), field.m_field, field.m_source, field.m_plan));
+            out_result.m_surface_capture_error = {};
         }
 
         // Surface lane-observable outcome: the accepted SUBMIT value

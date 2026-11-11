@@ -1,0 +1,73 @@
+@startuml
+!theme toy
+title GPU passes in one frame: submission order on the graphics queue
+
+start
+:WorldLight.SourceUpload\n1 dispatch per pending chunk,\nthen matter clear/scatter/finalize,\nthen occupancy rebuild; <<#FFB347>>
+:WorldLight.RadianceAtlas\ncompute gather; <<#FFB347>>
+:WorldLight.FieldUpdate\nfield copy · dirty cascades · ordinary cascades; <<#FFB347>>
+note right
+  All three need initialized field lighting.
+  SourceUpload also needs a pending source update.
+end note
+
+:Grid.Backdrop render pass\noffscreen RGBA16F · fullscreen background; <<#CF9FFF>>
+note right
+  Skipped without a world background,
+  and when MSAA draws the background directly.
+end note
+
+:Grid.Visibility phase 0\nreset indirect args · 1 workgroup; <<#FFB347>>
+:Grid.Visibility phase 1\nfrustum cull · N workgroups; <<#FFB347>>
+note right : global barrier after each phase
+
+:Particles.Pack; <<#FFB347>>
+:Particles.Cull; <<#FFB347>>
+:Particles.CullPrefix · 1 workgroup; <<#FFB347>>
+:Particles.CullCompact; <<#FFB347>>
+:Liquids.Elements render pass\noffscreen; <<#CF9FFF>>
+:Liquids.Thickness render pass\noffscreen; <<#CF9FFF>>
+:Liquids.Filter compute; <<#FFB347>>
+:Solids.Elements render pass\noffscreen; <<#CF9FFF>>
+:Solids.Coverage render pass\noffscreen; <<#CF9FFF>>
+note right
+  The particle chain needs GPU particles.
+  Pack also needs changed source, terrain or metadata.
+  Liquid and solid passes need the matching material.
+end note
+
+:scene render pass begins\ntarget: surface (native)\nor retro scene target (offscreen); <<#CF9FFF>>
+:background fullscreen draw; <<#CF9FFF>>
+:terrain opaque indirect draw; <<#CF9FFF>>
+:Particles.Draw\nLiquids.Composite · Solids.Composite · particle disk; <<#CF9FFF>>
+:terrain translucent indirect draw\noptical-blend material only; <<#CF9FFF>>
+:TrianglePass draws; <<#CF9FFF>>
+:scene render pass ends; <<#CF9FFF>>
+
+if (offscreen presentation?) then (yes)
+  :Spatial resolve compute\nspatial or temporal2x; <<#B0B0B0>>
+  :Temporal resolve render pass\ntemporal, not spatial or 2x; <<#B0B0B0>>
+  :Temporal2x resolve compute\nwhen enabled; <<#B0B0B0>>
+  :Auto exposure\nhistogram then exposure compute\nwhen enabled; <<#B0B0B0>>
+  :Bloom compute\nwhen enabled; <<#B0B0B0>>
+  :RetroPass::render\nfullscreen composite in the surface scene pass; <<#CF9FFF>>
+else (no)
+endif
+
+:UI render pass\nsurface · LoadOp::Load; <<#CF9FFF>>
+:ui.detached draws; <<#CF9FFF>>
+:submit command buffer → fence V; <<#B0B0B0>>
+:queue present; <<#B0B0B0>>
+
+stop
+
+legend right
+  orange = compute pass · purple = render pass
+  grey = offscreen branch or submit/present boundary
+  Rows are pass boundaries; rows between the scene pass begin/end are its draws.
+  A pass may contain several dispatches.
+  Offscreen is requested by retro, palette, HDR, temporal or native samples;
+  the native path skips that branch.
+  One graphics queue: encode order is execution order.
+endlegend
+@enduml

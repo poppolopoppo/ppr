@@ -36,7 +36,9 @@ export namespace pP::colony {
 
     /// Tools the player can select; `EColonyIntent::select_tool` carries one
     /// in `ColonyIntent::m_arg`. A toggle is not a selection, so the dig
-    /// arm/stow gesture has its own intent (see `toggle_dig` below).
+    /// arm/stow gesture has its own intent (see `toggle_dig` below). `none`
+    /// is the startup and dismissed state: no tool is active and the tool
+    /// context panel stays hidden.
     enum class EColonyTool : u8 {
         inspect,
         dig,
@@ -46,6 +48,7 @@ export namespace pP::colony {
         pull,
         spawn,
         destroy,
+        none,
     };
 
     /// The single intent vocabulary for the colony UI. Every toolbar button,
@@ -66,7 +69,7 @@ export namespace pP::colony {
         focus_selection, // jump to the selection and follow it (no argument)
         find_next, // F: select the next colonist in stable-key order
         toggle_performance, // F3: toggle only the independent Performance window
-        toggle_colony, // independent Colony/context window
+        open_colony_management, // select Inspect and show its Colony management view
         help, // F1: toggle the help window
         open_build_menu, // B: opens the menu; never places by itself
         toggle_pin, // pin or unpin the inspected cell (world click or Esc today)
@@ -110,9 +113,11 @@ export namespace pP::colony {
     /// How long a posted notice stays in the tool context (seconds).
     inline constexpr float kNoticeSeconds = 6.0f;
 
-    /// Bounded, short-lived, dismissible status notice. Keeps the
-    /// originating error code for the muted suffix; never routes through the
-    /// per-frame frame-message channel (which is cleared every frame).
+    /// Bounded, short-lived, dismissible status notice. Its countdown runs
+    /// only while the tool context panel is open, so a notice raised with no
+    /// tool selected is retained for the next open. Keeps the originating
+    /// error code for the muted suffix; never routes through the per-frame
+    /// frame-message channel (which is cleared every frame).
     struct ColonyNotice final {
         std::string m_text{};
         std::error_code m_error{};
@@ -195,8 +200,12 @@ export namespace pP::colony {
         float m_temperature_max_k{400.0f};
 
         // tool and independent window visibility:
-        EColonyTool m_tool{EColonyTool::inspect};
-        bool m_colony_open{true};
+        /// No tool is selected at startup or after New Game. Selecting a tool
+        /// is the only thing that brings the Colony/Tool context panel on
+        /// screen; dismissing it returns here. `m_colony_open` is the slower
+        /// management view of the Inspect tool, not an independent window.
+        EColonyTool m_tool{EColonyTool::none};
+        bool m_colony_open{false};
         bool m_performance_open{false};
         bool m_display_open{false};
         bool m_build_menu_open{false};
@@ -440,6 +449,12 @@ export namespace pP::colony {
     // ------------------------------------------------------------------
     // panel api
     // ------------------------------------------------------------------
+
+    /// The left Colony/Tool context panel exists only while a tool is
+    /// selected. Inspect shows its cursor read-out unless the Colony
+    /// management view is open; every other tool owns its context panel.
+    /// Notices are never a visibility input.
+    [[nodiscard]] bool colonyContextPanelVisible(const ColonyUiState &state) noexcept;
 
     /// Draws a simulation/management ribbon, left supported-tool rail, a
     /// pointer-following or pinned-cell Inspect read-out and compact left

@@ -79,9 +79,14 @@ The current design follows the warm Site Office palette and standard ImGui
 controls. Only the full-width ribbon reserves an entire edge; finite native
 windows use existing capture and background-gesture routing. The former right
 inspector and colony bottom strip are removed; their supported controls/feedback
-live in the left context. Hiding Colony preserves active-tool/error feedback in that
-same compact surface. F3 toggles Performance independently. Native close and
-Menu Quit use the host-owned dirty transition and asynchronous drain path.
+live in the left context. A selected tool is the only thing that makes the
+Colony/Tool context panel visible; rail deselect, the window close control or Esc
+returns to no tool. Inspect uses its cursor read-out, and Menu > Colony selects
+Inspect with the management view. Notices are stored and rendered when that
+panel is open but never make it visible. Hiding the panel preserves active-tool
+and notice feedback for the next open. F3 toggles Performance independently.
+Native close and Menu Quit use the host-owned dirty transition and asynchronous
+drain path.
 The Performance window embeds the existing engine timing plots through a
 synchronous const borrow of the host-owned widget; there is no separate graph
 overlay over the colony/tool context. Sampling continues while hidden.

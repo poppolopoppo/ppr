@@ -1,0 +1,45 @@
+@startuml
+!theme plain
+title Oni frame dependencies - complete draft for review
+start
+:Main thread captures owned frame inputs\nworld identity, committed state, camera, settings;
+:Render lane validates admission and source lifetime\nrejected / minimized work does not advance history;
+partition "Stage A - scene submission" {
+:Consume coherent terrain and particle publication\nresolve material ID16 + FP16 Kelvin per native cell;
+:Rebuild full-domain visibility / jump acceleration;
+:Prepare one RGB9E5 source per opaque native cell\nauthored + thermal emission + previous CH DC diffuse feedback\nempty / receive-only source cells are zero;
+:Update coarse cascades L5 -> L1\none probe per 2x2 group, all directions\nhits read cached source; no BRDF or CH queries;
+note right
+  One persistent interval store per level.
+  Barrier before dependent child reads.
+  Unselected probes retain their old data.
+end note
+:Reconstruct every fine probe\nread current geometry + updated/retained cascades\nhits read cached source; CH only for own-probe EMA\noverwrite own CH record in place;
+note right
+  One field of 32-byte CH records.
+  Source CH reads finish before fine writes.
+  No history copy or raw-CH intermediate.
+  Direction identity must match traced data.
+end note
+:Draw scene using updated CH and packed material/temperature grid\n4x MSAA at reduced raster extent\nalpha-blend CH-mean-lit gas before resolve;
+}
+:Confirmed A acceptance commits lighting phase, CH validity\nand active-presentation-time baseline;
+partition "Stage B - reconstruction and post submission" {
+:Hable temporal reconstruction\nread previous screen history, write next unexposed HDR\nS = ceil(R/2), B = 2*S, only R is valid;
+:PostProcessPass: exposure / bloom / AgX\nconsume valid R only, produce display-linear R output;
+}
+:Confirmed B acceptance commits screen-history role, phase, camera\nand exposure state / timing;
+partition "Stage C - presentation submission" {
+:Nearest enlargement by fixed P, right/bottom crop to W\ndiagnostic inspection overlay, then native UI;
+:Present actual surface and report presentation outcome;
+}
+note right
+  All stages use the same ordered queue.
+  Definite rejection commits nothing for that stage.
+  Earlier accepted stages are never rolled back.
+  Ambiguous submit quarantines resources and stops admission.
+  No host wait between stages is implied.
+end note
+:Completion fences govern retirement and numeric-status inspection\nasync numeric failure stops new dependent work;
+stop
+@enduml

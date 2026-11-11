@@ -208,19 +208,16 @@ export namespace pP::game {
     // ------------------------------------------------------------------
 
     /// Runtime-tunable world-light-field settings. `m_enabled` gates field mode;
-    /// the remaining fields bound the per-frame budget, the per-direction
-    /// temporal accumulation, the cascade level count, the field sky hour, the
-    /// terrain atlas ambient strength and the debug view. Persisted under
-    /// `game.world_light.*` and edited in the Display window's "Lighting & Post"
-    /// section; applied at field init/update.
+    /// the remaining fields bound the per-frame budget, the cascade level count,
+    /// the field sky hour, the terrain atlas ambient strength and the debug view.
+    /// Persisted under `game.world_light.*` and edited in the Display window's
+    /// "Lighting & Post" section; applied at field init/update.
     struct WorldLightDisplaySettings {
         bool m_enabled{true};
         EWorldLightDebugView m_debug_view{EWorldLightDebugView::off};
         u32 m_samples_per_frame{262144u};
-        u32 m_accumulation_samples{8u};
-        float m_history_retention{0.9f};
         u32 m_level_count{6u};
-        i32 m_sky_hour{12};
+        i32 m_sky_hour{-1};
         // Scale of the incident-radiance atlas term on terrain
         // (ambient * albedo * atlasRadiance). Kept below one so ambient * albedo
         // cannot approach the atlas feedback loop's closed-loop gain; 0.3 makes
@@ -243,18 +240,6 @@ export namespace pP::game {
                         "game.world_light.samples_per_frame", "Direction samples traced per frame (field budget)",
                         "World lighting", EMutability::runtime, ESource::all, true},
                     Range<u32>{65536u, 4194304u}),
-                field(
-                    &WorldLightDisplaySettings::m_accumulation_samples,
-                    Metadata{
-                        "game.world_light.accumulation", "Per-direction samples before steady-state retention",
-                        "World lighting", EMutability::runtime, ESource::all, true},
-                    Range<u32>{1u, 64u}),
-                field(
-                    &WorldLightDisplaySettings::m_history_retention,
-                    Metadata{
-                        "game.world_light.retention", "Steady-state per-interval history retention (0.5 to 1.0)",
-                        "World lighting", EMutability::runtime, ESource::all, true},
-                    Range<float>{0.5f, 1.0f}),
                 field(
                     &WorldLightDisplaySettings::m_level_count,
                     Metadata{

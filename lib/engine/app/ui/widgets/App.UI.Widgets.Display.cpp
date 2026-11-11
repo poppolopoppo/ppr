@@ -718,25 +718,6 @@ namespace pP::ui {
             }
 
             {
-                beginValueRow("Accumulation");
-                int accumulation = static_cast<int>(std::clamp(lp.m_accumulation_samples, 1u, 64u));
-                ImGui::SetNextItemWidth(-1.0f);
-                if (ImGui::SliderInt("##lighting_accumulation", &accumulation, 1, 64)) {
-                    lp.m_accumulation_samples = static_cast<u32>(accumulation);
-                }
-                ImGui::SetItemTooltip("Per-direction samples before steady-state retention.");
-            }
-
-            {
-                beginValueRow("Retention");
-                ImGui::SetNextItemWidth(-1.0f);
-                if (ImGui::SliderFloat("##lighting_retention", &lp.m_history_retention, 0.5f, 1.0f, "%.2f")) {
-                    lp.m_history_retention = std::clamp(lp.m_history_retention, 0.5f, 1.0f);
-                }
-                ImGui::SetItemTooltip("Steady-state per-interval history retention (0.5 to 1.0).");
-            }
-
-            {
                 beginValueRow("Level count");
                 int levels = static_cast<int>(std::clamp(lp.m_level_count, 4u, 8u));
                 ImGui::SetNextItemWidth(-1.0f);
@@ -841,9 +822,8 @@ namespace pP::ui {
                 intent = EDisplayWidgetAction::reset_lighting_post;
             }
             noteText(
-                "Post changes apply immediately. World light changes (field, samples, accumulation, retention, "
-                "levels, sky hour) take effect on the next world. Neither joins Apply; Save persists the current "
-                "values.");
+                "Post changes apply immediately. World light changes (field, samples, levels, sky hour) take effect on "
+                "the next world. Neither joins Apply; Save persists the current values.");
         }
 
         ImGui::SeparatorText("Requested");

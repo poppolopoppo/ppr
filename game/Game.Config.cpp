@@ -213,12 +213,6 @@ namespace pP::game {
         append(
             "game.world_light.samples_per_frame", "Direction samples traced per frame (field budget).",
             "world-light-samples-per-frame", false);
-        append(
-            "game.world_light.accumulation", "Per-direction samples before steady-state retention.",
-            "world-light-accumulation", false);
-        append(
-            "game.world_light.retention", "Steady-state per-interval history retention (0.5 to 1.0).",
-            "world-light-retention", false);
         append("game.world_light.level_count", "Radiance cascade level count.", "world-light-levels", false);
         append(
             "game.world_light.sky_hour", "Field sky solar hour (-1 uses the black boundary sky; 12 is noon).",

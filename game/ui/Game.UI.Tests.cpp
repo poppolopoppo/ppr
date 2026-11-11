@@ -177,6 +177,11 @@ namespace pP::game::tests::detail::presentation {
         colony::ColonyPresentation snapshot{.m_speed = 1u};
         const colony::ColonyUiView view{.m_colony = &snapshot};
         colony::ColonyUiState state{};
+        // This leaf covers the panel's own layout and scroll behavior, so it
+        // opens the Inspect management view explicitly; default-hiding is
+        // covered by the visibility leaf below.
+        state.m_tool = colony::EColonyTool::inspect;
+        state.m_colony_open = true;
         Array<colony::AgentSummary> crowded(64u);
         for (std::size_t index = 0u; index < crowded.size(); ++index) {
             crowded[index].m_key = index + 1u;
@@ -280,6 +285,8 @@ namespace pP::game::tests::detail::presentation {
             return result;
         };
 
+        PPR_TEST_ASSERT(state.m_tool == colony::EColonyTool::none and not state.m_colony_open);
+
         std::ignore = frame();
         std::ignore = frame();
 
@@ -288,6 +295,33 @@ namespace pP::game::tests::detail::presentation {
             return window != nullptr and window->Active;
         };
 
+        // Startup has no tool and therefore no Colony/Tool context panel.
+        PPR_TEST_ASSERT(not active("Colony###colony_summary") and not active("Tool context###colony_summary"));
+        PPR_TEST_ASSERT(not active("Performance"));
+
+        // No tool wins over both a requested management view and a waiting
+        // notice: neither may bring the panel back.
+        state.m_colony_open = true;
+        state.m_notice.m_text = "queued notice";
+        state.m_notice.m_seconds_left = colony::kNoticeSeconds;
+        PPR_TEST_ASSERT(not colony::colonyContextPanelVisible(state));
+        std::ignore = frame();
+        std::ignore = frame();
+        PPR_TEST_ASSERT(not active("Colony###colony_summary") and not active("Tool context###colony_summary"));
+        PPR_TEST_ASSERT(state.m_notice.visible());
+
+        // Inspect alone uses its cursor read-out; the management view is the
+        // explicit Menu > Colony destination.
+        state.m_colony_open = false;
+        state.m_tool = colony::EColonyTool::inspect;
+        PPR_TEST_ASSERT(not colony::colonyContextPanelVisible(state));
+        std::ignore = frame();
+        PPR_TEST_ASSERT(not active("Colony###colony_summary") and not active("Tool context###colony_summary"));
+
+        state.m_colony_open = true;
+        PPR_TEST_ASSERT(colony::colonyContextPanelVisible(state));
+        std::ignore = frame();
+        std::ignore = frame();
         PPR_TEST_ASSERT(active("Colony###colony_summary") and not active("Performance"));
 
         state.m_performance_open = true;
@@ -310,9 +344,15 @@ namespace pP::game::tests::detail::presentation {
         PPR_TEST_ASSERT(not active("Colony###colony_summary") and active("Performance"));
 
         state.m_tool = colony::EColonyTool::dig;
+        PPR_TEST_ASSERT(colony::colonyContextPanelVisible(state));
         std::ignore = frame();
         PPR_TEST_ASSERT(active("Tool context###colony_summary") and active("Performance"));
-        PPR_TEST_ASSERT(not state.m_colony_open);
+
+        // Dismissing the tool hides its context panel again.
+        state.m_tool = colony::EColonyTool::none;
+        PPR_TEST_ASSERT(not colony::colonyContextPanelVisible(state));
+        std::ignore = frame();
+        PPR_TEST_ASSERT(not active("Tool context###colony_summary") and active("Performance"));
 
         state.m_tool = colony::EColonyTool::inspect;
         state.m_colony_open = true;
@@ -477,7 +517,7 @@ namespace pP::game::tests::detail::presentation {
         for (const auto item:
             {std::pair{"Display", colony::EColonyIntent::toggle_display},
                 std::pair{"Performance", colony::EColonyIntent::toggle_performance},
-                std::pair{"Colony", colony::EColonyIntent::toggle_colony},
+                std::pair{"Colony", colony::EColonyIntent::open_colony_management},
                 std::pair{"Quit", colony::EColonyIntent::quit}}) {
             if (not state.m_popup_visible_last_frame) {
                 std::ignore = click(itemCenter(topbar, topbar->GetID("Menu")));
@@ -753,10 +793,16 @@ namespace pP::game::tests::detail::presentation {
             const auto result = click(item_center(rail, rail->GetID(label.c_str())));
             PPR_TEST_ASSERT(result.m_intent and result.m_intent->m_kind == colony::EColonyIntent::select_tool);
             PPR_TEST_ASSERT(result.m_intent->m_arg == static_cast<u32>(tool));
-            PPR_TEST_ASSERT(state.m_tool == colony::EColonyTool::inspect);
+            PPR_TEST_ASSERT(state.m_tool == colony::EColonyTool::none);
         }
 
+        // Pressing the already-selected tool emits the no-tool target.
         state.m_tool = colony::EColonyTool::push;
+        std::ignore = frame();
+        const auto deselect = click(item_center(
+            rail, rail->GetID(std::format("###tool{}", static_cast<u32>(colony::EColonyTool::push)).c_str())));
+        PPR_TEST_ASSERT(deselect.m_intent and deselect.m_intent->m_kind == colony::EColonyIntent::select_tool);
+        PPR_TEST_ASSERT(deselect.m_intent->m_arg == static_cast<u32>(colony::EColonyTool::none));
         std::ignore = frame();
         std::ignore = frame();
         auto *const panel = ImGui::FindWindowByName("Tool context###colony_summary");
@@ -1412,12 +1458,10 @@ descriptor = "earlier.toml"
         // Valid world-light draft: sliders produce accepted values.
         game::WorldLightDisplaySettings world_draft{};
         world_draft.m_samples_per_frame = 1048576u;
-        world_draft.m_accumulation_samples = 16u;
         config::Diagnostics world_diagnostics{};
         auto world = validateWorldLightDraft(committed_world, world_draft, world_diagnostics);
         PPR_TEST_ASSERT(world.has_value());
         PPR_TEST_ASSERT(world->m_value.m_samples_per_frame == 1048576u);
-        PPR_TEST_ASSERT(world->m_value.m_accumulation_samples == 16u);
         PPR_TEST_ASSERT(not world_diagnostics.hasErrors());
 
         // Valid post draft: toggles produce accepted values.

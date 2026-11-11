@@ -23,6 +23,7 @@ are not Linux prerequisites or evidence of Linux validation.
 - [Engine dependency map](../lib/engine/codemap.md)
 - [Application lifecycle/ownership](../lib/engine/app/codemap.md)
 - [Render worker and payload boundary](../lib/engine/app/frame/codemap.md)
+- [Frame execution across main thread, render lane and GPU (onboarding diagrams)](diagrams/frame-execution/index.html)
 - [Simulation](../lib/engine/sim/codemap.md) and [physics](../lib/engine/physics/codemap.md)
 - [Game integration](../game/codemap.md)
 - [World-generation content authoring, checkpoints and diagnostics](worldgen-content.md)

@@ -22,17 +22,14 @@ export namespace pP::lighting {
     // level_count requests the default six levels. penumbra_width is the
     // reference cascade interval scale (cell-space c0 = width * penumbra *
     // 1e-3); sky_intensity scales the angular sky integral at the coarsest
-    // level. samples_per_frame, accumulation_samples and history_retention are
-    // runtime field settings the plan carries but does not use to derive the
-    // layout.
+    // level. samples_per_frame is a runtime field setting; the plan does not use
+    // it to derive the layout.
     struct WorldLightSettings {
         u32 m_width{};
         u32 m_height{};
         float m_cell_metres{};
         u32 m_level_count{};
         u32 m_samples_per_frame{};
-        u32 m_accumulation_samples{};
-        float m_history_retention{};
         float m_penumbra_width{kWorldLightDefaultPenumbraWidth};
         float m_sky_intensity{kWorldLightDefaultSkyIntensity};
     };
@@ -116,10 +113,10 @@ export namespace pP::lighting {
         }
 
         // intervalLength(l) = c0 * (4^l / 2 + 1) for l >= 1, and c0 for l = 0.
-        // The +1 of level 0 is the in-place near interval the shading trace
-        // covers; every higher level doubles the angular resolution while its
-        // interval length grows by four (the squared angular count), so the
-        // cascade tiles the distance axis without overlap.
+        // The +1 of level 0 is its finest stored interval; every higher level
+        // doubles the angular resolution while its interval length grows by four
+        // (the squared angular count), so the cascade tiles the distance axis
+        // without overlap.
         const auto interval_length_m = [&](const u32 cascade) noexcept {
             const u64 scale = cascade == 0u ? 0u : (u64{1} << (2u * cascade - 1u));
             return c0_m * static_cast<double>(scale + 1u);
@@ -185,16 +182,8 @@ export namespace pP::lighting {
         }
         plan.m_radiance_bytes = radiance_bytes;
 
-        const u64 count_bytes = sample_offset * u64{sizeof(u8)};
-        const u64 phase_bytes = total_probes * u64{sizeof(u32)};
-        if (phase_bytes / u64{sizeof(u32)} != total_probes) {
-            return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
-        }
-        const u64 state_bytes = count_bytes + phase_bytes;
-        if (state_bytes < count_bytes) {
-            return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
-        }
-        plan.m_state_bytes = state_bytes;
+        const u64 count_bytes = sample_offset * u64{sizeof(u32)};
+        plan.m_state_bytes = count_bytes;
 
         return plan;
     }

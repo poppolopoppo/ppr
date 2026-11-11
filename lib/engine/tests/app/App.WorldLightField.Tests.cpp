@@ -24,7 +24,6 @@ namespace pP::tests::detail {
         // offsets, accumulation or byte formulas fails this pin.
         struct LayoutTotals {
             u64 m_radiance_samples{};
-            u64 m_total_probes{};
             u64 m_state_bytes{};
         };
 
@@ -35,10 +34,9 @@ namespace pP::tests::detail {
                 const u32 directions = 4u << (2u * level);
                 const u64 probes_x = (u64{width} + spacing - 1u) / spacing;
                 const u64 probes_y = (u64{height} + spacing - 1u) / spacing;
-                totals.m_total_probes += probes_x * probes_y;
                 totals.m_radiance_samples += probes_x * probes_y * u64{directions};
             }
-            totals.m_state_bytes = totals.m_radiance_samples * sizeof(u8) + totals.m_total_probes * sizeof(u32);
+            totals.m_state_bytes = totals.m_radiance_samples * sizeof(u32);
             return totals;
         }
 
@@ -758,6 +756,83 @@ namespace pP::tests::detail {
     // ------------------------------------------------------------------
 
     namespace WorldLightFieldGpu {
+        // ------------------------------------------------------------------
+        // field constant-buffer layout
+        // ------------------------------------------------------------------
+
+        PPR_UNIT_TEST (world_light_field_constants_reflection_layout) {
+            auto const shaders = IShaderService::get();
+            PPR_TEST_ASSERT(not shaders->initialize());
+            {
+                shader::SharedModule module;
+                PPR_TEST_ASSERT(not shaders->loadModuleFromFile(
+                    std::filesystem::current_path() / "shaders" / "world_light_trace.slang", "world_light_trace",
+                    module.writeRef()));
+                shader::ComPtr<slang::IEntryPoint> entry;
+                PPR_TEST_ASSERT(
+                    not make_error_code(module->findEntryPointByName("updateWorldLightField", entry.writeRef())));
+
+                slang::IComponentType *components[]{module.get(), entry.get()};
+                shader::ComPtr<slang::IComponentType> composite;
+                PPR_TEST_ASSERT(not make_error_code(
+                    module->getSession()->createCompositeComponentType(components, 2u, composite.writeRef())));
+                shader::ComPtr<slang::IComponentType> linked;
+                PPR_TEST_ASSERT(not make_error_code(composite->link(linked.writeRef())));
+
+                auto *const layout = linked->getLayout();
+                PPR_TEST_ASSERT(layout != nullptr);
+                bool found = false;
+                for (unsigned index = 0u; index < layout->getParameterCount(); ++index) {
+                    auto *const parameter = layout->getParameterByIndex(index);
+                    if (parameter == nullptr or std::string_view(parameter->getName()) != "g_world_light_field") {
+                        continue;
+                    }
+                    found = true;
+                    PPR_TEST_ASSERT(parameter->getType()->getKind() == slang::TypeReflection::Kind::ConstantBuffer);
+                    auto *const element = parameter->getTypeLayout()->getElementTypeLayout();
+                    PPR_TEST_ASSERT(element != nullptr);
+                    const u64 reflected_size = element->getSize();
+
+                    bool found_levels = false;
+                    bool found_sky_hour = false;
+                    bool found_sky_intensity = false;
+                    u64 levels_offset = 0u;
+                    u64 sky_hour_offset = 0u;
+                    u64 sky_intensity_offset = 0u;
+                    for (unsigned field = 0u; field < element->getFieldCount(); ++field) {
+                        auto *const field_layout = element->getFieldByIndex(field);
+                        const std::string_view name = field_layout->getName();
+                        if (name == "levels") {
+                            found_levels = true;
+                            levels_offset = field_layout->getOffset();
+                        } else if (name == "skyHour") {
+                            found_sky_hour = true;
+                            sky_hour_offset = field_layout->getOffset();
+                        } else if (name == "skyIntensity") {
+                            found_sky_intensity = true;
+                            sky_intensity_offset = field_layout->getOffset();
+                        }
+                    }
+
+                    PPR_TEST_ASSERT(found_levels);
+                    PPR_TEST_ASSERT(found_sky_hour);
+                    PPR_TEST_ASSERT(found_sky_intensity);
+                    // Backend constant-buffer tails may round from 312 to 320
+                    // bytes; every real field offset is identical. The reflected
+                    // extent must cover the CPU struct and the final scalar.
+                    PPR_TEST_ASSERT(reflected_size >= sizeof(lighting::WorldLightFieldConstants));
+                    PPR_TEST_ASSERT(levels_offset == PPR_OFFSETOF(lighting::WorldLightFieldConstants, m_levels));
+                    PPR_TEST_ASSERT(sky_hour_offset == PPR_OFFSETOF(lighting::WorldLightFieldConstants, m_sky_hour));
+                    PPR_TEST_ASSERT(
+                        sky_intensity_offset == PPR_OFFSETOF(lighting::WorldLightFieldConstants, m_sky_intensity));
+                    PPR_TEST_ASSERT(reflected_size >= sky_intensity_offset + sizeof(float));
+                    break;
+                }
+                PPR_TEST_ASSERT(found);
+            }
+            PPR_TEST_ASSERT(not shaders->shutdown());
+        };
+
         // 8-byte radiance sample: RGB (half) + scalar transmittance (half).
         struct RadianceHalf {
             u16 m_r{}, m_g{}, m_b{}, m_t{};
@@ -806,6 +881,19 @@ namespace pP::tests::detail {
                 bits = (sign << 31) | ((exponent - 15u + 127u) << 23) | (mantissa << 13);
             }
             return std::bit_cast<float>(bits);
+        }
+
+        [[nodiscard]] double radicalInverseReference_(const u32 index, const u32 base) noexcept {
+            double result = 0.0;
+            const double inverse = 1.0 / static_cast<double>(base);
+            double fraction = inverse;
+            u32 remaining = index;
+            while (remaining != 0u) {
+                result += static_cast<double>(remaining % base) * fraction;
+                remaining /= base;
+                fraction *= inverse;
+            }
+            return result;
         }
 
         [[nodiscard]] u16 floatToHalf(const float value) noexcept {
@@ -1215,7 +1303,7 @@ namespace pP::tests::detail {
 
             void initialize(
                 const u32 width, const u32 height, const std::span<const lighting::WorldLightMaterial> materials,
-                const float penumbra_width = lighting::kWorldLightDefaultPenumbraWidth) {
+                const float penumbra_width = lighting::kWorldLightDefaultPenumbraWidth, const u32 level_count = 0u) {
                 PPR_TEST_ASSERT(not m_shaders->initialize());
                 const auto setting = config::getenvLookup("PPR_TEST_GPU_VALIDATION");
                 const bool validation = setting and *setting == "1";
@@ -1232,7 +1320,11 @@ namespace pP::tests::detail {
                 PPR_TEST_ASSERT(not m_fence.initialize(device));
 
                 const auto plan = lighting::planWorldLight(
-                    {.m_width = width, .m_height = height, .m_cell_metres = 0.5f, .m_penumbra_width = penumbra_width});
+                    {.m_width = width,
+                        .m_height = height,
+                        .m_cell_metres = 0.5f,
+                        .m_level_count = level_count,
+                        .m_penumbra_width = penumbra_width});
                 PPR_TEST_ASSERT(plan.has_value());
                 PPR_TEST_ASSERT(
                     not m_source.initialize(*m_rhi, *m_shaders, *plan, materials, std::filesystem::current_path()));
@@ -1242,10 +1334,10 @@ namespace pP::tests::detail {
 
             void initialize(
                 const u32 width, const u32 height,
-                const float penumbra_width = lighting::kWorldLightDefaultPenumbraWidth) {
+                const float penumbra_width = lighting::kWorldLightDefaultPenumbraWidth, const u32 level_count = 0u) {
                 // One opaque emissive material (palette index 0 -> cell id 1).
                 const lighting::WorldLightMaterial materials[] = {{.m_kind = 1u, .m_emission = {1.0f, 1.0f, 1.0f}}};
-                initialize(width, height, materials, penumbra_width);
+                initialize(width, height, materials, penumbra_width, level_count);
             }
 
             void submit(rhi::ICommandEncoder &encoder) {
@@ -1351,13 +1443,10 @@ namespace pP::tests::detail {
                 submit(*encoder);
             }
 
-            void updateField(
-                const u32 budget, const u32 accumulation_samples = 8u, const float history_retention = 0.9f) {
+            void updateField(const u32 budget, const float dt = 1.0f / 60.0f) {
                 rhi::ComPtr<rhi::ICommandEncoder> encoder;
                 PPR_TEST_ASSERT(not make_error_code(m_queue->createCommandEncoder(encoder.writeRef())));
-                PPR_TEST_ASSERT(not m_field.update(
-                    *encoder, m_source, *m_atlas.cells(), 1.0f / 60.0f, budget, accumulation_samples,
-                    history_retention));
+                PPR_TEST_ASSERT(not m_field.update(*encoder, m_source, *m_atlas.cells(), dt, budget));
                 submit(*encoder);
             }
 
@@ -1533,7 +1622,9 @@ namespace pP::tests::detail {
 
             const auto plan = lighting::planWorldLight({.m_width = width, .m_height = height, .m_cell_metres = 0.5f});
             PPR_TEST_ASSERT(plan.has_value());
-            const u32 budget = static_cast<u32>(plan->m_levels[0].m_sample_count); // one full level
+            // One stored direction sample costs four rays; a full level-0 pass is
+            // therefore four times the level-0 sample count.
+            const u32 budget = static_cast<u32>(4u * plan->m_levels[0].m_sample_count);
 
             // One opaque emissive cell at (0,0) via chunk 0.
             std::vector<u16> chunk(128u * 128u, 0u);
@@ -1569,54 +1660,513 @@ namespace pP::tests::detail {
             fixture.shutdown();
         };
 
-        PPR_UNIT_TEST (field_accumulation_caps_count_and_retention_holds_history) {
-            constexpr u32 width = 256u;
-            constexpr u32 height = 256u;
+        PPR_UNIT_TEST (field_coarsest_steady_state_overwrites_history) {
+            constexpr u32 width = 64u;
+            constexpr u32 height = 64u;
+            constexpr u32 level_count = 2u;
+
+            Fixture fixture;
+            fixture.initialize(width, height, lighting::kWorldLightDefaultPenumbraWidth, level_count);
+            auto &field = fixture.m_field;
+
+            const auto plan = lighting::planWorldLight(
+                {.m_width = width, .m_height = height, .m_cell_metres = 0.5f, .m_level_count = level_count});
+            PPR_TEST_ASSERT(plan.has_value());
+            PPR_TEST_ASSERT(plan->m_level_count == level_count);
+
+            // Publish the vacuum source and cursor state without tracing.
+            fixture.updateField(0u);
+
+            // Seed only the coarser level with a strong old value and saturated
+            // counts. No source/sky revision follows, so no reset can mask the
+            // steady-state accumulation policy.
+            const lighting::WorldLightLevel &coarsest = plan->m_levels[level_count - 1u];
+            std::vector<RadianceHalf> seed(
+                field.view().m_radiance->getDesc().size / sizeof(RadianceHalf), RadianceHalf{});
+            for (u32 py = 0u; py < coarsest.m_probes_y; ++py) {
+                for (u32 px = 0u; px < coarsest.m_probes_x; ++px) {
+                    for (u32 direction = 0u; direction < coarsest.m_directions; ++direction) {
+                        const u64 sample = coarsest.m_sample_offset +
+                                           (u64{py} * coarsest.m_probes_x + px) * coarsest.m_directions +
+                                           direction;
+                        seed[sample] = RadianceHalf{
+                            .m_r = floatToHalf(4.0f),
+                            .m_g = floatToHalf(4.0f),
+                            .m_b = floatToHalf(4.0f),
+                            .m_t = floatToHalf(1.0f)};
+                    }
+                }
+            }
+            fixture.write(field.view().m_radiance, seed);
+
+            constexpr u32 accumulation_samples = 8u;
+            std::vector<u32> counts(plan->m_radiance_samples, 0u);
+            for (u64 sample = coarsest.m_sample_offset; sample < coarsest.m_sample_offset + coarsest.m_sample_count;
+                ++sample) {
+                counts[sample] = accumulation_samples;
+            }
+            fixture.write<u32>(field.state(), counts);
+
+            // Full weighted update (four rays per stored sample), steady-state
+            // retention. Prototype 9712-9770 overwrites coarse traced results;
+            // only level 0 has a separate temporal EMA. The raw coarsest result
+            // must therefore be the fresh vacuum/sky-off zero, not blended 3.6.
+            const u32 budget = static_cast<u32>(4u * plan->m_radiance_samples);
+            fixture.updateField(budget);
+
+            const std::vector<u16> radiance = fixture.read<u16>(field.view().m_radiance);
+            const u64 coarse_word = coarsest.m_sample_offset * 4u;
+            for (u32 channel = 0u; channel < 3u; ++channel) {
+                PPR_TEST_ASSERT(radiance[coarse_word + channel] == 0u);
+            }
+
+            fixture.shutdown();
+        };
+
+        PPR_UNIT_TEST (field_l0_mature_exponential_uses_actual_dt) {
+            constexpr u32 width = 64u;
+            constexpr u32 height = 64u;
+            constexpr u32 level_count = 2u;
+            constexpr float dt = 1.0f / 20.0f;
+
+            Fixture fixture;
+            fixture.initialize(width, height, lighting::kWorldLightDefaultPenumbraWidth, level_count);
+            auto &field = fixture.m_field;
+
+            const auto plan = lighting::planWorldLight(
+                {.m_width = width, .m_height = height, .m_cell_metres = 0.5f, .m_level_count = level_count});
+            PPR_TEST_ASSERT(plan.has_value());
+            const lighting::WorldLightLevel &finest = plan->m_levels[0];
+
+            // Publish source/state, then seed mature-looking L0 history. Counts
+            // remain zero: the accepted policy must not use a count running mean;
+            // it applies the fixed mature exponential for the actual frame dt.
+            fixture.updateField(0u);
+            std::vector<RadianceHalf> seed(
+                field.view().m_radiance->getDesc().size / sizeof(RadianceHalf), RadianceHalf{});
+            for (u64 probe = 0u; probe < u64{finest.m_probes_x} * finest.m_probes_y; ++probe) {
+                for (u32 direction = 0u; direction < finest.m_directions; ++direction) {
+                    const u64 sample = finest.m_sample_offset + probe * finest.m_directions + direction;
+                    seed[sample] = RadianceHalf{
+                        .m_r = floatToHalf(4.0f),
+                        .m_g = floatToHalf(4.0f),
+                        .m_b = floatToHalf(4.0f),
+                        .m_t = floatToHalf(1.0f)};
+                }
+            }
+            fixture.write(field.view().m_radiance, seed);
+
+            // Mature means count >= current cap. A zero count is the dirty/fresh
+            // sentinel on accepted D1 and must immediately replace, not blend.
+            constexpr u32 accumulation_samples = 8u;
+            std::vector<u32> counts(plan->m_radiance_samples, 0u);
+            for (u64 sample = finest.m_sample_offset; sample < finest.m_sample_offset + finest.m_sample_count;
+                ++sample) {
+                counts[sample] = accumulation_samples;
+            }
+            fixture.write<u32>(field.state(), counts);
+
+            // No source/sky revision follows, so no dirty path can overwrite the
+            // seeded L0 history before the mature blend is evaluated.
+            const u32 budget = static_cast<u32>(4u * plan->m_radiance_samples);
+            fixture.updateField(budget, dt);
+
+            const std::vector<u16> radiance = fixture.read<u16>(field.view().m_radiance);
+            const float expected = 4.0f * std::exp(-4.0f * dt);
+            const u64 word = finest.m_sample_offset * 4u;
+            for (u32 channel = 0u; channel < 3u; ++channel) {
+                const float actual = halfToFloat(radiance[word + channel]);
+                PPR_TEST_ASSERT(std::isfinite(actual));
+                PPR_TEST_ASSERT(std::abs(actual - expected) <= 0.02f);
+            }
+
+            fixture.shutdown();
+        };
+
+        PPR_UNIT_TEST (field_ordinary_selection_disperses_l0_probes) {
+            constexpr u32 width = 128u;
+            constexpr u32 height = 64u;
 
             Fixture fixture;
             fixture.initialize(width, height);
-            auto &source = fixture.m_source;
             auto &field = fixture.m_field;
-
             const auto plan = lighting::planWorldLight({.m_width = width, .m_height = height, .m_cell_metres = 0.5f});
             PPR_TEST_ASSERT(plan.has_value());
-            // A budget covering the whole field makes every update re-trace the
-            // nearby sample, so it reaches the accumulation cap and stays there.
-            const u32 budget = static_cast<u32>(plan->m_radiance_samples);
+            const lighting::WorldLightLevel &finest = plan->m_levels[0];
 
-            // One opaque emissive cell at (0,0); level-0 probe (0,0) direction 2 is near it.
+            fixture.updateField(0u);
+            // One sample per visited packed 2x2 group. 128 L0 samples at four
+            // directions per probe is 128 visited groups, not four samples per
+            // group in the same frame.
+            constexpr u32 l0_direction_quota = 128u;
+            const u32 budget = static_cast<u32>(4u * plan->m_level_count * l0_direction_quota);
+            fixture.updateField(budget);
+
+            const std::vector<u32> counts = fixture.read<u32>(field.state());
+            u32 selected_count = 0u;
+            u32 min_row = finest.m_probes_y;
+            u32 max_row = 0u;
+            u32 min_column = finest.m_probes_x;
+            u32 max_column = 0u;
+            std::array<u32, 4u> quadrant_selected{};
+            for (u32 sample_index = 0u; sample_index < finest.m_sample_count; ++sample_index) {
+                const u64 sample = finest.m_sample_offset + sample_index;
+                if (counts[sample] == 0u) {
+                    continue;
+                }
+
+                ++selected_count;
+                const u32 probe = sample_index / finest.m_directions;
+                const u32 px = probe % finest.m_probes_x;
+                const u32 py = probe / finest.m_probes_x;
+                min_row = std::min(min_row, py);
+                max_row = std::max(max_row, py);
+                min_column = std::min(min_column, px);
+                max_column = std::max(max_column, px);
+                const u32 quadrant = (py >= finest.m_probes_y / 2u ? 2u : 0u) +
+                                     (px >= finest.m_probes_x / 2u ? 1u : 0u);
+                ++quadrant_selected[quadrant];
+            }
+
+            // Broad global coverage, not a uniform lattice: the exact L0 quota
+            // must be visited, every spatial quadrant must receive work and the
+            // selected span must cover at least half of each grid axis.
+            PPR_TEST_ASSERT(selected_count == l0_direction_quota);
+            for (u32 quadrant = 0u; quadrant < 4u; ++quadrant) {
+                PPR_TEST_ASSERT(quadrant_selected[quadrant] > 0u);
+            }
+            PPR_TEST_ASSERT(max_row - min_row >= finest.m_probes_y / 2u);
+            PPR_TEST_ASSERT(max_column - min_column >= finest.m_probes_x / 2u);
+
+            fixture.shutdown();
+        };
+
+        PPR_UNIT_TEST (field_ordinary_selection_completes_phase_sweeps) {
+            constexpr u32 width = 64u;
+            constexpr u32 height = 32u;
+
+            Fixture fixture;
+            fixture.initialize(width, height);
+            auto &field = fixture.m_field;
+            const auto plan = lighting::planWorldLight({.m_width = width, .m_height = height, .m_cell_metres = 0.5f});
+            PPR_TEST_ASSERT(plan.has_value());
+            const lighting::WorldLightLevel &finest = plan->m_levels[0];
+
+            fixture.updateField(0u);
+            constexpr u32 l0_direction_quota = 48u;
+            const u32 budget = static_cast<u32>(4u * plan->m_level_count * l0_direction_quota);
+            // One stored sample is written per visited packed 2x2 group, so the
+            // per-frame group visits equal the L0 stored-sample quota.
+            const u64 groups_per_frame = l0_direction_quota;
+            const u64 groups = finest.m_sample_count / 4u;
+            PPR_TEST_ASSERT(finest.m_sample_count % 4u == 0u);
+            const u64 frames_three_sweeps = (3u * groups + groups_per_frame - 1u) / groups_per_frame;
+            const u64 frames_four_sweeps = (4u * groups + groups_per_frame - 1u) / groups_per_frame;
+
+            for (u64 frame = 0u; frame < frames_three_sweeps; ++frame) {
+                fixture.updateField(budget);
+            }
+
+            const auto selected_samples = [&](const std::vector<u32> &counts) {
+                std::vector<bool> selected(finest.m_sample_count, false);
+                for (u32 sample_index = 0u; sample_index < finest.m_sample_count; ++sample_index) {
+                    selected[sample_index] = counts[finest.m_sample_offset + sample_index] != 0u;
+                }
+                return selected;
+            };
+
+            const std::vector<bool> after_three = selected_samples(fixture.read<u32>(field.state()));
+            // A group sweep is one of four phases; the public cycle advances only
+            // after the complete four-phase sample pass.
+            PPR_TEST_ASSERT(field.cycle() == 0u);
+            std::array<u32, 4u> covered_quadrant{};
+            std::array<u32, 4u> uncovered_quadrant{};
+            for (u32 sample_index = 0u; sample_index < finest.m_sample_count; ++sample_index) {
+                const u32 probe = sample_index / finest.m_directions;
+                const u32 px = probe % finest.m_probes_x;
+                const u32 py = probe / finest.m_probes_x;
+                const u32 quadrant = (py >= finest.m_probes_y / 2u ? 2u : 0u) +
+                                     (px >= finest.m_probes_x / 2u ? 1u : 0u);
+                if (after_three[sample_index]) {
+                    ++covered_quadrant[quadrant];
+                } else {
+                    ++uncovered_quadrant[quadrant];
+                }
+            }
+            for (u32 quadrant = 0u; quadrant < 4u; ++quadrant) {
+                PPR_TEST_ASSERT(covered_quadrant[quadrant] > 0u);
+                PPR_TEST_ASSERT(uncovered_quadrant[quadrant] > 0u);
+            }
+
+            for (u64 frame = frames_three_sweeps; frame < frames_four_sweeps; ++frame) {
+                fixture.updateField(budget);
+            }
+            const std::vector<bool> after_four = selected_samples(fixture.read<u32>(field.state()));
+            PPR_TEST_ASSERT(field.cycle() >= 1u);
+            PPR_TEST_ASSERT(
+                std::all_of(after_four.begin(), after_four.end(), [](const bool selected) { return selected; }));
+
+            fixture.shutdown();
+        };
+
+        PPR_UNIT_TEST (field_origin_cell_emissive_is_visible) {
+            constexpr u32 width = 64u;
+            constexpr u32 height = 64u;
+            constexpr u32 level_count = 2u;
+
+            const lighting::WorldLightMaterial materials[] = {{.m_kind = 1u, .m_emission = {1.0f, 1.0f, 1.0f}}};
+            Fixture fixture;
+            fixture.initialize(width, height, materials, lighting::kWorldLightDefaultPenumbraWidth, level_count);
+            auto &source = fixture.m_source;
+            auto &field = fixture.m_field;
+            const auto plan = lighting::planWorldLight(
+                {.m_width = width, .m_height = height, .m_cell_metres = 0.5f, .m_level_count = level_count});
+            PPR_TEST_ASSERT(plan.has_value());
+            const lighting::WorldLightLevel &level0 = plan->m_levels[0];
+
+            // After updateField(0), the next traced frame is frame 2 with known
+            // Halton jitter (-0.25, +1/6) native cells. Level-0 probe (4,4) centre
+            // is native (9,9), so the jittered child position and the offset start
+            // remain inside native cell (8,9). One emissive source cell there must
+            // be visible from the sample's own surrounding cell.
             std::vector<u16> chunk(128u * 128u, 0u);
-            chunk[0] = 1u;
+            chunk[9u * 128u + 8u] = 1u;
             const lighting::WorldLightChunkUpdate update{.m_chunk_id = 0u, .m_cell_ids = chunk};
             PPR_TEST_ASSERT(not source.applyUpdate({.m_chunks = {&update, 1u}, .m_revision = 1u}));
             fixture.encodeSource();
+            fixture.updateField(0u);
 
-            const u64 nearby_sample = 2u;
-            const u64 nearby_word = nearby_sample * 4u;
-
-            // accumulation = 2, retention = 0.5: the per-direction count caps at 2,
-            // not 3 or 4, so the third sample uses the retention blend (not 1/3).
-            for (u32 index = 0u; index < 4u; ++index) {
-                fixture.updateField(budget, 2u, 0.5f);
+            const u32 budget = static_cast<u32>(4u * plan->m_radiance_samples);
+            fixture.updateField(budget);
+            const std::vector<u16> radiance = fixture.read<u16>(field.view().m_radiance);
+            for (u32 direction = 0u; direction < level0.m_directions; ++direction) {
+                const u64 sample = level0.m_sample_offset +
+                                   (u64{4u} * level0.m_probes_x + 4u) * level0.m_directions +
+                                   direction;
+                const u64 word = sample * 4u;
+                PPR_TEST_ASSERT(halfToFloat(radiance[word + 0u]) > 0.5f);
+                PPR_TEST_ASSERT(halfToFloat(radiance[word + 1u]) > 0.5f);
+                PPR_TEST_ASSERT(halfToFloat(radiance[word + 2u]) > 0.5f);
             }
-            const auto count = fixture.read<u32>(field.state());
-            PPR_TEST_ASSERT(count[nearby_sample] == 2u);
-
-            const auto radiance = fixture.read<u16>(field.view().m_radiance);
-            PPR_TEST_ASSERT(halfIsFinitePositive(radiance[nearby_word + 0u]));
-            PPR_TEST_ASSERT(halfIsFinitePositive(radiance[nearby_word + 1u]));
-            PPR_TEST_ASSERT(halfIsFinitePositive(radiance[nearby_word + 2u]));
-
-            // retention = 1.0: the steady-state EMA weight is zero, so one more
-            // update leaves the radiance byte-identical (a plain running mean
-            // would blend the new sample in and change it).
-            fixture.updateField(budget, 2u, 1.0f);
-            const auto count_held = fixture.read<u32>(field.state());
-            PPR_TEST_ASSERT(count_held[nearby_sample] == 2u);
-            const auto radiance_held = fixture.read<u16>(field.view().m_radiance);
-            PPR_TEST_ASSERT(radiance_held == radiance);
 
             fixture.shutdown();
+        };
+
+        PPR_UNIT_TEST (field_origin_cell_opaque_blocks_incident) {
+            constexpr u32 width = 64u;
+            constexpr u32 height = 64u;
+            constexpr u32 level_count = 2u;
+
+            const lighting::WorldLightMaterial materials[] = {{.m_kind = 1u}};
+            Fixture fixture;
+            fixture.initialize(width, height, materials, lighting::kWorldLightDefaultPenumbraWidth, level_count);
+            auto &source = fixture.m_source;
+            auto &field = fixture.m_field;
+            const auto plan = lighting::planWorldLight(
+                {.m_width = width, .m_height = height, .m_cell_metres = 0.5f, .m_level_count = level_count});
+            PPR_TEST_ASSERT(plan.has_value());
+            const lighting::WorldLightLevel &level0 = plan->m_levels[0];
+
+            // Same deterministic frame-2 geometry: the child position and offset
+            // start are inside opaque native cell (8,9). That own opaque cell must
+            // block the parent/sky incident path.
+            std::vector<u16> chunk(128u * 128u, 0u);
+            chunk[9u * 128u + 8u] = 1u;
+            const lighting::WorldLightChunkUpdate update{.m_chunk_id = 0u, .m_cell_ids = chunk};
+            PPR_TEST_ASSERT(not source.applyUpdate(
+                {.m_chunks = {&update, 1u}, .m_revision = 1u, .m_sky_hour = 12, .m_sky = {1.0f, 1.0f, 1.0f}}));
+            fixture.encodeSource();
+            fixture.updateField(0u);
+
+            const u32 budget = static_cast<u32>(4u * plan->m_radiance_samples);
+            fixture.updateField(budget);
+            const std::vector<u16> radiance = fixture.read<u16>(field.view().m_radiance);
+            for (u32 direction = 0u; direction < level0.m_directions; ++direction) {
+                const u64 sample = level0.m_sample_offset +
+                                   (u64{4u} * level0.m_probes_x + 4u) * level0.m_directions +
+                                   direction;
+                const u64 word = sample * 4u;
+                PPR_TEST_ASSERT(radiance[word + 0u] == 0u);
+                PPR_TEST_ASSERT(radiance[word + 1u] == 0u);
+                PPR_TEST_ASSERT(radiance[word + 2u] == 0u);
+            }
+
+            fixture.shutdown();
+        };
+
+        PPR_UNIT_TEST (field_occupancy_mask_dense_equivalence) {
+            constexpr u32 width = 64u;
+            constexpr u32 height = 64u;
+            constexpr u32 level_count = 6u;
+
+            const lighting::WorldLightMaterial materials[] = {
+                {.m_kind = 1u, .m_emission = {0.5f, 0.8f, 1.0f}},
+                {.m_kind = 1u, .m_albedo = {0.4f, 0.5f, 0.6f}},
+                {.m_kind = 2u, .m_sigma = {1.0f, 2.0f, 3.0f}},
+            };
+
+            std::vector<u16> chunk(128u * 128u, 0u);
+            chunk[0u] = 1u;
+            chunk[8u * 128u + 8u] = 1u;
+            chunk[63u * 128u + 63u] = 1u;
+            for (u32 x = 7u; x <= 9u; ++x) {
+                chunk[20u * 128u + x] = 2u;
+            }
+            for (u32 y = 7u; y <= 9u; ++y) {
+                chunk[y * 128u + 16u] = 3u;
+            }
+            chunk[8u * 128u + 0u] = 2u;
+            chunk[0u * 128u + 8u] = 2u;
+            const lighting::WorldLightMatterParticle overlay{
+                .m_cell = 4u * width + 4u, .m_fill = 1.0f, .m_material = 0u};
+
+            const auto run = [&](const bool conservative_all_ones) -> std::vector<u16> {
+                Fixture fixture;
+                fixture.initialize(width, height, materials, lighting::kWorldLightDefaultPenumbraWidth, level_count);
+                auto &source = fixture.m_source;
+                auto &field = fixture.m_field;
+                const auto plan = lighting::planWorldLight(
+                    {.m_width = width, .m_height = height, .m_cell_metres = 0.5f, .m_level_count = level_count});
+                PPR_TEST_ASSERT(plan.has_value());
+
+                const lighting::WorldLightChunkUpdate update{.m_chunk_id = 0u, .m_cell_ids = chunk};
+                PPR_TEST_ASSERT(not source.applyUpdate(
+                    {.m_chunks = {&update, 1u},
+                        .m_particles = {&overlay, 1u},
+                        .m_revision = 1u,
+                        .m_sky_hour = 12,
+                        .m_sky = {1.0f, 1.0f, 1.0f}}));
+                fixture.encodeSource();
+                if (not conservative_all_ones) {
+                    const auto occupancy = fixture.read<u32>(source.occupancy());
+                    PPR_TEST_ASSERT(std::ranges::any_of(occupancy, [](const u32 word) noexcept { return word != 0u; }));
+                    const auto overlay_rows = fixture.read<WorldLightGpu::OverlayRow>(source.overlay());
+                    PPR_TEST_ASSERT(overlay_rows[4u * width + 4u].coverage > 0.5f);
+                }
+                fixture.updateField(0u);
+
+                // Identical fresh transport state for both arms.
+                fixture.write<u32>(field.state(), std::vector<u32>(plan->m_radiance_samples, 0u));
+                fixture.write<u16>(
+                    field.view().m_radiance,
+                    std::vector<u16>(field.view().m_radiance->getDesc().size / sizeof(u16), 0u));
+                if (conservative_all_ones) {
+                    const u64 words = source.occupancy()->getDesc().size / sizeof(u32);
+                    fixture.write<u32>(source.occupancy(), std::vector<u32>(words, 0xffffffffu));
+                }
+
+                const u32 budget = static_cast<u32>(4u * plan->m_radiance_samples);
+                fixture.updateField(budget);
+                const std::vector<u16> radiance = fixture.read<u16>(field.view().m_radiance);
+                fixture.shutdown();
+                return radiance;
+            };
+
+            const std::vector<u16> actual_mask = run(false);
+            const std::vector<u16> all_ones_mask = run(true);
+            PPR_TEST_ASSERT(actual_mask.size() == all_ones_mask.size());
+            for (std::size_t word = 0u; word < actual_mask.size(); word += 4u) {
+                for (u32 channel = 0u; channel < 3u; ++channel) {
+                    const float dense = halfToFloat(all_ones_mask[word + channel]);
+                    const float bounded = halfToFloat(actual_mask[word + channel]);
+                    PPR_TEST_ASSERT(std::isfinite(dense));
+                    PPR_TEST_ASSERT(std::isfinite(bounded));
+                    if (all_ones_mask[word + channel] == 0u) {
+                        PPR_TEST_ASSERT(actual_mask[word + channel] == 0u);
+                    } else {
+                        PPR_TEST_ASSERT(std::abs(bounded - dense) <= 2.0e-3f);
+                    }
+                }
+
+                const float dense_transmittance = halfToFloat(all_ones_mask[word + 3u]);
+                const float bounded_transmittance = halfToFloat(actual_mask[word + 3u]);
+                PPR_TEST_ASSERT(std::isfinite(dense_transmittance));
+                PPR_TEST_ASSERT(std::isfinite(bounded_transmittance));
+                if (all_ones_mask[word + 3u] == 0u or all_ones_mask[word + 3u] == 0x3c00u) {
+                    PPR_TEST_ASSERT(actual_mask[word + 3u] == all_ones_mask[word + 3u]);
+                } else {
+                    PPR_TEST_ASSERT(std::abs(bounded_transmittance - dense_transmittance) <= 2.0e-3f);
+                }
+            }
+        };
+
+        PPR_UNIT_TEST (field_occupancy_mask_overlay_equivalence) {
+            constexpr u32 width = 64u;
+            constexpr u32 height = 64u;
+            constexpr u32 level_count = 6u;
+
+            const lighting::WorldLightMaterial materials[] = {
+                {.m_kind = 1u, .m_emission = {0.2f, 0.4f, 0.7f}},
+                {.m_kind = 2u, .m_sigma = {2.0f, 1.0f, 0.5f}},
+            };
+            const lighting::WorldLightMatterParticle overlays[] = {
+                {.m_cell = 4u * width + 4u, .m_fill = 1.0f, .m_material = 0u},
+                {.m_cell = 12u * width + 12u, .m_fill = 1.0f, .m_material = 1u},
+            };
+
+            const auto run = [&](const bool conservative_all_ones) -> std::vector<u16> {
+                Fixture fixture;
+                fixture.initialize(width, height, materials, lighting::kWorldLightDefaultPenumbraWidth, level_count);
+                auto &source = fixture.m_source;
+                auto &field = fixture.m_field;
+                const auto plan = lighting::planWorldLight(
+                    {.m_width = width, .m_height = height, .m_cell_metres = 0.5f, .m_level_count = level_count});
+                PPR_TEST_ASSERT(plan.has_value());
+
+                PPR_TEST_ASSERT(not source.applyUpdate(
+                    {.m_particles = overlays, .m_revision = 1u, .m_sky_hour = 12, .m_sky = {0.8f, 0.9f, 1.0f}}));
+                fixture.encodeSource();
+                if (not conservative_all_ones) {
+                    const auto occupancy = fixture.read<u32>(source.occupancy());
+                    PPR_TEST_ASSERT(std::ranges::any_of(occupancy, [](const u32 word) noexcept { return word != 0u; }));
+                    const auto overlay_rows = fixture.read<WorldLightGpu::OverlayRow>(source.overlay());
+                    PPR_TEST_ASSERT(overlay_rows[4u * width + 4u].coverage > 0.5f);
+                    PPR_TEST_ASSERT(overlay_rows[12u * width + 12u].sigma[0] > 0.0f);
+                }
+                fixture.updateField(0u);
+
+                fixture.write<u32>(field.state(), std::vector<u32>(plan->m_radiance_samples, 0u));
+                fixture.write<u16>(
+                    field.view().m_radiance,
+                    std::vector<u16>(field.view().m_radiance->getDesc().size / sizeof(u16), 0u));
+                if (conservative_all_ones) {
+                    const u64 words = source.occupancy()->getDesc().size / sizeof(u32);
+                    fixture.write<u32>(source.occupancy(), std::vector<u32>(words, 0xffffffffu));
+                }
+
+                const u32 budget = static_cast<u32>(4u * plan->m_radiance_samples);
+                fixture.updateField(budget);
+                const std::vector<u16> radiance = fixture.read<u16>(field.view().m_radiance);
+                fixture.shutdown();
+                return radiance;
+            };
+
+            const std::vector<u16> actual_mask = run(false);
+            const std::vector<u16> all_ones_mask = run(true);
+            PPR_TEST_ASSERT(actual_mask.size() == all_ones_mask.size());
+            for (std::size_t word = 0u; word < actual_mask.size(); word += 4u) {
+                for (u32 channel = 0u; channel < 3u; ++channel) {
+                    const float dense = halfToFloat(all_ones_mask[word + channel]);
+                    const float bounded = halfToFloat(actual_mask[word + channel]);
+                    PPR_TEST_ASSERT(std::isfinite(dense));
+                    PPR_TEST_ASSERT(std::isfinite(bounded));
+                    if (all_ones_mask[word + channel] == 0u) {
+                        PPR_TEST_ASSERT(actual_mask[word + channel] == 0u);
+                    } else {
+                        PPR_TEST_ASSERT(std::abs(bounded - dense) <= 2.0e-3f);
+                    }
+                }
+
+                const float dense_transmittance = halfToFloat(all_ones_mask[word + 3u]);
+                const float bounded_transmittance = halfToFloat(actual_mask[word + 3u]);
+                PPR_TEST_ASSERT(std::isfinite(dense_transmittance));
+                PPR_TEST_ASSERT(std::isfinite(bounded_transmittance));
+                if (all_ones_mask[word + 3u] == 0u or all_ones_mask[word + 3u] == 0x3c00u) {
+                    PPR_TEST_ASSERT(actual_mask[word + 3u] == all_ones_mask[word + 3u]);
+                } else {
+                    PPR_TEST_ASSERT(std::abs(bounded_transmittance - dense_transmittance) <= 2.0e-3f);
+                }
+            }
         };
 
         PPR_UNIT_TEST (field_dirty_update_reprocesses_in_same_frame) {
@@ -1630,7 +2180,9 @@ namespace pP::tests::detail {
 
             const auto plan = lighting::planWorldLight({.m_width = width, .m_height = height, .m_cell_metres = 0.5f});
             PPR_TEST_ASSERT(plan.has_value());
-            const u32 budget = static_cast<u32>(plan->m_levels[0].m_sample_count);
+            // One stored sample costs four rays, so a full level-0 warm cycle is
+            // four times the level-0 sample count.
+            const u32 budget = static_cast<u32>(4u * plan->m_levels[0].m_sample_count);
 
             // Level 0 probe (0,0) direction 2 is near the emitter; probe (100,100)
             // direction 0 is distant (outside the dirty chunk).
@@ -1657,9 +2209,12 @@ namespace pP::tests::detail {
             const auto after_count = fixture.read<u32>(field.state());
             const auto after_radiance = fixture.read<u16>(field.view().m_radiance);
 
-            PPR_TEST_ASSERT(after_count[nearby_sample] == 1u);
+            PPR_TEST_ASSERT(after_count[nearby_sample] > 0u);
             PPR_TEST_ASSERT(halfIsFinitePositive(after_radiance[nearby_word + 0u]));
-            PPR_TEST_ASSERT(after_count[distant_sample] == distant_before);
+            // The reserved ordinary share may refresh another region in the same
+            // frame; outside dirty history must never be cleared, but it may gain
+            // a legitimate extra trace.
+            PPR_TEST_ASSERT(after_count[distant_sample] >= distant_before);
 
             fixture.shutdown();
         };
@@ -1675,7 +2230,7 @@ namespace pP::tests::detail {
 
             const auto plan = lighting::planWorldLight({.m_width = width, .m_height = height, .m_cell_metres = 0.5f});
             PPR_TEST_ASSERT(plan.has_value());
-            const u32 budget = static_cast<u32>(plan->m_levels[0].m_sample_count);
+            const u32 budget = static_cast<u32>(4u * plan->m_levels[0].m_sample_count);
 
             // Level 0 probe (5,6) direction 0 sits one row below the dirty probe
             // (5,5) and must keep its history.
@@ -1687,7 +2242,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(below_before > 0u);
 
             // A single-cell edit: a particle at cell (10,10) dirties a 1x1 probe
-            // rect whose count (1) is not a multiple of the 64-thread group.
+            // rect whose count (1) is not a multiple of the 128-thread group.
             const lighting::WorldLightMatterParticle particle{
                 .m_cell = 10u * width + 10u, .m_fill = 1.0f, .m_material = 0u};
             PPR_TEST_ASSERT(not source.applyUpdate({.m_particles = {&particle, 1u}, .m_revision = 1u}));
@@ -1713,19 +2268,22 @@ namespace pP::tests::detail {
 
             const auto plan = lighting::planWorldLight({.m_width = width, .m_height = height, .m_cell_metres = 0.5f});
             PPR_TEST_ASSERT(plan.has_value());
-            const u32 budget = static_cast<u32>(plan->m_levels[0].m_sample_count);
+            const u32 budget = static_cast<u32>(4u * plan->m_levels[0].m_sample_count);
 
             // Level 0 probe A sits in chunk 0 (cells [0,128)^2), probe B in chunk 1
             // (cells [128,256) x [0,128)); both read direction 0. The flat sample
-            // index is (py * probesX + px) * directions + direction.
-            const u64 sample_a = (10u * 128u + 10u) * 4u + 0u;
-            const u64 sample_b = (10u * 128u + 80u) * 4u + 0u;
+            // index is (py * probesX + px) * directions + direction. Probe A is
+            // inside the dirty repair prefix so edit A itself starts its history.
+            const u64 sample_a = (1u * 128u + 10u) * 4u + 0u;
+            const u64 sample_b = (1u * 128u + 80u) * 4u + 0u;
 
             // Warm the vacuum field so every level-0 probe accumulates history.
             fixture.runUpdates(16u, budget);
 
-            // Edit region A (chunk 0), consume it, then re-accumulate probe A with
-            // three cursor updates (level 4, level 5, then level 0 wraps to touch A).
+            // Edit region A (chunk 0), consume it, then run one complete ordinary
+            // level-0 pass so A accumulates two samples. Every stored sample costs
+            // four rays, so the per-level quota is budget / (4 * levelCount);
+            // ceil(levelSampleCount / quota) updates cover every level-0 sample once.
             std::vector<u16> chunk_a(128u * 128u, 0u);
             chunk_a[0] = 1u;
             const lighting::WorldLightChunkUpdate edit_a{.m_chunk_id = 0u, .m_cell_ids = chunk_a};
@@ -1733,9 +2291,13 @@ namespace pP::tests::detail {
             fixture.encodeSource();
             fixture.updateField(budget);
 
-            fixture.updateField(budget);
-            fixture.updateField(budget);
-            fixture.updateField(budget);
+            const u64 cycle_quota = u64{budget} / (4u * u64{plan->m_level_count});
+            PPR_TEST_ASSERT(cycle_quota > 0u);
+            const u32 cycle_updates = static_cast<u32>(
+                (plan->m_levels[0].m_sample_count + cycle_quota - 1u) / cycle_quota);
+            for (u32 index = 0u; index < cycle_updates; ++index) {
+                fixture.updateField(budget);
+            }
 
             const auto before_b = fixture.read<u32>(field.state());
             const u32 a_before_b = before_b[sample_a];
@@ -1751,9 +2313,10 @@ namespace pP::tests::detail {
 
             const auto after_b = fixture.read<u32>(field.state());
             // Probe B is reset and reprocessed by its own edit.
-            PPR_TEST_ASSERT(after_b[sample_b] == 1u);
-            // Probe A keeps its accumulated history: B's edit must not reset it.
-            PPR_TEST_ASSERT(after_b[sample_a] == a_before_b);
+            PPR_TEST_ASSERT(after_b[sample_b] > 0u);
+            // Probe A keeps its accumulated history: B's edit must not reset it,
+            // and ordinary work in B's frame may only add to it.
+            PPR_TEST_ASSERT(after_b[sample_a] >= a_before_b);
 
             fixture.shutdown();
         };
@@ -1769,7 +2332,7 @@ namespace pP::tests::detail {
 
             const auto plan = lighting::planWorldLight({.m_width = width, .m_height = height, .m_cell_metres = 0.5f});
             PPR_TEST_ASSERT(plan.has_value());
-            const u32 budget = static_cast<u32>(plan->m_levels[0].m_sample_count);
+            const u32 budget = static_cast<u32>(4u * plan->m_levels[0].m_sample_count);
 
             // The coarsest level probe (0,0) direction 0, and a fine level-0 probe.
             const auto &coarsest = plan->m_levels[plan->m_level_count - 1u];
@@ -1801,13 +2364,242 @@ namespace pP::tests::detail {
             const auto after_radiance = fixture.read<u16>(field.view().m_radiance);
 
             // The coarsest probe is reset (count 1) and now carries finite sky.
-            PPR_TEST_ASSERT(after_count[coarse_sample] == 1u);
+            PPR_TEST_ASSERT(after_count[coarse_sample] > 0u);
             PPR_TEST_ASSERT(halfIsFinitePositive(after_radiance[coarse_word + 0u]));
             PPR_TEST_ASSERT(halfIsFinitePositive(after_radiance[coarse_word + 1u]));
             PPR_TEST_ASSERT(halfIsFinitePositive(after_radiance[coarse_word + 2u]));
 
-            // The finer level keeps its history: a sky edit must not reset the field.
-            PPR_TEST_ASSERT(after_count[fine_sample] == before[fine_sample]);
+            // The finer level keeps its accumulated history: ordinary service may
+            // add a diagnostic visit, but the sky edit must not reset it.
+            PPR_TEST_ASSERT(after_count[fine_sample] >= before[fine_sample]);
+
+            fixture.shutdown();
+        };
+
+        // ------------------------------------------------------------------
+        // budgeted invalidation recovery
+        // ------------------------------------------------------------------
+
+        PPR_UNIT_TEST (field_sky_edit_preserves_unrepaired_coarse_radiance) {
+            constexpr u32 width = 128u;
+            constexpr u32 height = 128u;
+            constexpr u32 level_count = 3u;
+            // The coarsest level has 16x16 probes of 64 directions (16384
+            // direction samples). Each coarsest direction sample charges four
+            // sub-rays, and the dirty phase may use at most half the budget, so
+            // this update repairs only its first two probes.
+            constexpr u32 repair_budget = 1024u;
+
+            Fixture fixture;
+            fixture.initialize(width, height, lighting::kWorldLightDefaultPenumbraWidth, level_count);
+            auto &source = fixture.m_source;
+            auto &field = fixture.m_field;
+
+            const auto plan = lighting::planWorldLight(
+                {.m_width = width, .m_height = height, .m_cell_metres = 0.5f, .m_level_count = level_count});
+            PPR_TEST_ASSERT(plan.has_value());
+            PPR_TEST_ASSERT(plan->m_level_count == level_count);
+
+            const lighting::WorldLightLevel &coarsest = plan->m_levels[plan->m_level_count - 1u];
+            const u64 tail_probe = u64{coarsest.m_probes_y - 1u} * coarsest.m_probes_x + (coarsest.m_probes_x - 1u);
+            const u64 tail_sample = coarsest.m_sample_offset + tail_probe * coarsest.m_directions;
+            const u64 tail_word = tail_sample * 4u;
+
+            // Warm the vacuum sky field fully: every coarsest probe stores a
+            // non-zero daytime sky value.
+            lighting::WorldLightSourceUpdate daylight{};
+            daylight.m_sky = {1.0f, 1.0f, 1.0f};
+            daylight.m_sky_hour = 12;
+            daylight.m_revision = 1u;
+            PPR_TEST_ASSERT(not source.applyUpdate(daylight));
+            fixture.encodeSource();
+            for (u32 index = 0u; index < 8u; ++index) {
+                fixture.updateField(static_cast<u32>(plan->m_radiance_samples));
+            }
+
+            const std::vector<u16> before = fixture.read<u16>(field.view().m_radiance);
+            bool tail_was_lit = false;
+            for (u32 channel = 0u; channel < 3u; ++channel) {
+                tail_was_lit = tail_was_lit or halfIsFinitePositive(before[tail_word + channel]);
+            }
+            PPR_TEST_ASSERT(tail_was_lit);
+
+            // Disable the sky: a sky-only revision leaves the source dirty rect
+            // empty, so only the coarsest level is invalidated. The budget repairs
+            // a prefix and cannot replace the far tail in the same frame.
+            lighting::WorldLightSourceUpdate night{};
+            night.m_sky_hour = -1;
+            night.m_revision = 2u;
+            PPR_TEST_ASSERT(not source.applyUpdate(night));
+            fixture.encodeSource();
+            fixture.updateField(repair_budget);
+
+            const std::vector<u16> after = fixture.read<u16>(field.view().m_radiance);
+
+            // Some coarse sample outside the tail was rebuilt this frame.
+            bool rebuilt = false;
+            for (u64 sample = coarsest.m_sample_offset; sample < coarsest.m_sample_offset + coarsest.m_sample_count;
+                ++sample) {
+                if (sample == tail_sample) {
+                    continue;
+                }
+                const u64 word = sample * 4u;
+                rebuilt = rebuilt or
+                          after[word + 0u] != before[word + 0u] or
+                          after[word + 1u] != before[word + 1u] or
+                          after[word + 2u] != before[word + 2u];
+            }
+            PPR_TEST_ASSERT(rebuilt);
+
+            // The unreachable far tail keeps its published value instead of being
+            // blanked. Radiance and transmittance are both part of the display
+            // sample, so the whole word must stay bit-identical.
+            for (u32 word = 0u; word < 4u; ++word) {
+                PPR_TEST_ASSERT(after[tail_word + word] == before[tail_word + word]);
+            }
+
+            fixture.shutdown();
+        };
+
+        PPR_UNIT_TEST (field_dirty_overlap_keeps_rebuilt_sample) {
+            constexpr u32 width = 128u;
+            constexpr u32 height = 128u;
+            constexpr u32 level_count = 3u;
+            // Sky-only dirty work repairs two coarsest probes; the reserved
+            // ordinary share starts at cursor zero on this first traced frame and
+            // revisits the same prefix, creating the dirty/ordinary overlap.
+            constexpr u32 budget = 1024u;
+            constexpr u16 sentinel = 0x4400u; // half 4.0
+
+            Fixture fixture;
+            fixture.initialize(width, height, lighting::kWorldLightDefaultPenumbraWidth, level_count);
+            auto &source = fixture.m_source;
+            auto &field = fixture.m_field;
+
+            const auto plan = lighting::planWorldLight(
+                {.m_width = width, .m_height = height, .m_cell_metres = 0.5f, .m_level_count = level_count});
+            PPR_TEST_ASSERT(plan.has_value());
+            PPR_TEST_ASSERT(plan->m_level_count == level_count);
+
+            const lighting::WorldLightLevel &coarsest = plan->m_levels[plan->m_level_count - 1u];
+            const u64 rebuilt_sample = coarsest.m_sample_offset;
+            const u64 rebuilt_word = rebuilt_sample * 4u;
+            const u64 tail_probe = u64{coarsest.m_probes_y - 1u} * coarsest.m_probes_x + (coarsest.m_probes_x - 1u);
+            const u64 tail_sample = coarsest.m_sample_offset + tail_probe * coarsest.m_directions;
+            const u64 tail_word = tail_sample * 4u;
+
+            // Commit a daytime sky without tracing: a zero-budget update only
+            // records the sky revision, leaving the per-sample cursors at zero.
+            lighting::WorldLightSourceUpdate daylight{};
+            daylight.m_sky = {1.0f, 1.0f, 1.0f};
+            daylight.m_sky_hour = 12;
+            daylight.m_revision = 1u;
+            PPR_TEST_ASSERT(not source.applyUpdate(daylight));
+            fixture.encodeSource();
+            fixture.updateField(0u);
+
+            // Seed a published sentinel and positive diagnostic counts. The
+            // dirty/ordinary same-frame overlap must use the rebuilt current
+            // history, not stale previous-frame sentinel history.
+            const u64 radiance_words = field.view().m_radiance->getDesc().size / sizeof(u16);
+            fixture.write<u16>(field.view().m_radiance, std::vector<u16>(radiance_words, sentinel));
+            fixture.write<u32>(field.state(), std::vector<u32>(plan->m_radiance_samples, 1u));
+
+            // Sky off: the dirty repair rebuilds the overlapped coarse sample as
+            // exact vacuum zero. The ordinary overlap must not resurrect the
+            // sentinel from stale previous-frame history.
+            lighting::WorldLightSourceUpdate night{};
+            night.m_sky_hour = -1;
+            night.m_revision = 2u;
+            PPR_TEST_ASSERT(not source.applyUpdate(night));
+            fixture.encodeSource();
+            fixture.updateField(budget);
+
+            const std::vector<u16> after = fixture.read<u16>(field.view().m_radiance);
+            for (u32 channel = 0u; channel < 3u; ++channel) {
+                PPR_TEST_ASSERT(after[rebuilt_word + channel] == 0u);
+            }
+            PPR_TEST_ASSERT(std::abs(halfToFloat(after[rebuilt_word + 3u]) - 1.0f) <= 1e-3f);
+
+            // The unrepaired far tail is outside both the repair prefix and the
+            // ordinary range: its published sentinel must remain visible.
+            for (u32 word = 0u; word < 4u; ++word) {
+                PPR_TEST_ASSERT(after[tail_word + word] == sentinel);
+            }
+
+            fixture.shutdown();
+        };
+
+        PPR_UNIT_TEST (field_repeated_revisions_refresh_all_level_tails) {
+            constexpr u32 width = 128u;
+            constexpr u32 height = 128u;
+            constexpr u32 level_count = 3u;
+            // Every stored direction sample costs four rays, and the reserved
+            // ordinary half leaves each level 64 direction samples per update:
+            // 16 level-0 probes, 4 level-1 probes and 1 level-2 probe. A full
+            // stored-sample pass therefore needs 256 updates. Derive the bound from
+            // the reserved-half guarantee and the 4-ray cost.
+            constexpr u32 update_budget = 1536u;
+
+            // Both palette entries are opaque and non-emissive: the fixed cell
+            // below alternates between them so every revision changes the source
+            // without adding light. The 128-cell world is one chunk, so each
+            // chunk update dirties the whole world at every level.
+            const lighting::WorldLightMaterial materials[] = {
+                {.m_kind = 1u, .m_albedo = {0.2f, 0.2f, 0.2f}}, {.m_kind = 1u, .m_albedo = {0.6f, 0.6f, 0.6f}}};
+
+            Fixture fixture;
+            fixture.initialize(width, height, materials, lighting::kWorldLightDefaultPenumbraWidth, level_count);
+            auto &source = fixture.m_source;
+            auto &field = fixture.m_field;
+
+            const auto plan = lighting::planWorldLight(
+                {.m_width = width, .m_height = height, .m_cell_metres = 0.5f, .m_level_count = level_count});
+            PPR_TEST_ASSERT(plan.has_value());
+            PPR_TEST_ASSERT(plan->m_level_count == level_count);
+
+            // Half the budget is reserved for ordinary service, and the nominal
+            // per-level quota is budget / (4 * levelCount): each level needs
+            // 2 * (4 * levelCount) * levelSampleCount / budget updates for a full
+            // stored-sample pass. Add two updates of margin for rotations/rounding.
+            const u64 level_samples = plan->m_levels[0].m_sample_count;
+            const u32 max_updates =
+                static_cast<u32>((2u * (4u * level_count) * level_samples + update_budget - 1u) / update_budget) + 2u;
+
+            std::vector<bool> refreshed(plan->m_level_count, false);
+            std::vector<u16> chunk(u64{width} * height, 0u);
+
+            for (u32 iteration = 0u; iteration < max_updates; ++iteration) {
+                std::fill(chunk.begin(), chunk.end(), 0u);
+                chunk[0] = (iteration % 2u == 0u) ? 1u : 2u;
+                const lighting::WorldLightChunkUpdate update{.m_chunk_id = 0u, .m_cell_ids = chunk};
+                PPR_TEST_ASSERT(not source.applyUpdate({.m_chunks = {&update, 1u}, .m_revision = iteration + 1u}));
+                fixture.encodeSource();
+                fixture.updateField(update_budget);
+
+                // Read after every revision: a later full-region invalidation may
+                // reset the tail again before the next read, so "eventually" is
+                // the sample ever being traced during the bounded sequence.
+                const std::vector<u32> counts = fixture.read<u32>(field.state());
+                bool all_refreshed = true;
+                for (u32 level = 0u; level < plan->m_level_count; ++level) {
+                    const lighting::WorldLightLevel &info = plan->m_levels[level];
+                    const u64 tail_probe = u64{info.m_probes_y - 1u} * info.m_probes_x + (info.m_probes_x - 1u);
+                    const u64 tail_sample = info.m_sample_offset + tail_probe * info.m_directions;
+                    refreshed[level] = refreshed[level] or counts[tail_sample] != 0u;
+                    all_refreshed = all_refreshed and refreshed[level];
+                }
+                if (all_refreshed) {
+                    break;
+                }
+            }
+
+            // Repeated full-region invalidation must not strand any level on its
+            // initial prefix: the far tail of every level has to receive trace
+            // work within the bounded update sequence.
+            for (u32 level = 0u; level < plan->m_level_count; ++level) {
+                PPR_TEST_ASSERT(refreshed[level]);
+            }
 
             fixture.shutdown();
         };
@@ -1836,7 +2628,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not source.applyUpdate(sky_update));
             fixture.encodeSource();
             for (u32 index = 0u; index < 8u; ++index) {
-                fixture.updateField(budget, 1u, 0.0f);
+                fixture.updateField(budget);
             }
 
             const std::vector<u16> radiance = fixture.read<u16>(field.view().m_radiance);
@@ -1871,14 +2663,19 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(median > 0.0f);
             PPR_TEST_ASSERT(peak > 4.0f * median);
 
-            // The sky is gated by the solar hour: a negative hour stores exactly
-            // zero at the coarsest level (the finer levels keep their history).
+            // The sky is gated by the solar hour: a negative hour eventually
+            // replaces every coarsest sample with exactly zero. Counts are the
+            // invalidation backlog, so published daylight radiance stays until
+            // the bounded dirty/ordinary work reaches each sample; five full-budget
+            // updates cover the coarsest level at four rays per stored sample.
             lighting::WorldLightSourceUpdate night{};
             night.m_sky_hour = -1;
             night.m_revision = 2u;
             PPR_TEST_ASSERT(not source.applyUpdate(night));
             fixture.encodeSource();
-            fixture.updateField(budget, 1u, 0.0f);
+            for (u32 index = 0u; index < 5u; ++index) {
+                fixture.updateField(budget);
+            }
 
             const std::vector<u16> dark = fixture.read<u16>(field.view().m_radiance);
             for (u32 direction = 0u; direction < coarsest.m_directions; ++direction) {
@@ -1887,6 +2684,127 @@ namespace pP::tests::detail {
                 PPR_TEST_ASSERT(dark[word + 1u] == 0u);
                 PPR_TEST_ASSERT(dark[word + 2u] == 0u);
             }
+
+            fixture.shutdown();
+        };
+
+        PPR_UNIT_TEST (field_emitter_spreads_off_axis) {
+            constexpr u32 width = 256u;
+            constexpr u32 height = 256u;
+
+            Fixture fixture;
+            fixture.initialize(width, height);
+            auto &source = fixture.m_source;
+
+            const auto plan = lighting::planWorldLight({.m_width = width, .m_height = height, .m_cell_metres = 0.5f});
+            PPR_TEST_ASSERT(plan.has_value());
+            const u32 budget = static_cast<u32>(plan->m_radiance_samples);
+
+            // One opaque emissive cell at (128,128): the 2x2 chunk grid puts it
+            // at local (0,0) of chunk 3.
+            std::vector<u16> chunk(128u * 128u, 0u);
+            chunk[0] = 1u;
+            const lighting::WorldLightChunkUpdate update{.m_chunk_id = 3u, .m_cell_ids = chunk};
+            PPR_TEST_ASSERT(not source.applyUpdate({.m_chunks = {&update, 1u}, .m_revision = 1u}));
+            fixture.encodeSource();
+
+            // Full-field budget and retention 0 propagate the parent suffix
+            // through all six levels within the warm-up.
+            for (u32 index = 0u; index < 10u; ++index) {
+                fixture.updateField(budget);
+            }
+
+            const auto centre = [](const i32 x, const i32 y) {
+                return float2{(static_cast<float>(x) + 0.5f) * 0.5f, (static_cast<float>(y) + 0.5f) * 0.5f};
+            };
+            // A ring of wall positions ~9 cells from the emitter: the 45-degree
+            // corners and the 67.5/112.5-degree in-between directions are all
+            // off the level-0 axes. A cascade that resolves the emitter only at
+            // the four level-0 directions lights just the axis probes.
+            const std::array<int2, 8> ring{
+                int2{137, 128}, int2{134, 134}, int2{128, 137}, int2{122, 134}, int2{119, 128}, int2{122, 122},
+                int2{128, 119}, int2{134, 122}};
+
+            const float3 normal{0.0f, 0.0f, 1.0f};
+            u32 lit = 0u;
+            float mean = 0.0f;
+            for (const int2 &cell: ring) {
+                const float2 position = centre(cell.x, cell.y);
+                const auto diffuse = fixture.evaluate(
+                    position, float2{0.0f, 1.0f}, normal, 0.0f, lighting::WorldLightField::EvaluateMode::kDiffuse);
+                for (const float channel: diffuse) {
+                    PPR_TEST_ASSERT(std::isfinite(channel));
+                    PPR_TEST_ASSERT(channel >= 0.0f);
+                }
+                const float luminance = 0.2126f * diffuse[0] + 0.7152f * diffuse[1] + 0.0722f * diffuse[2];
+                if (luminance > 0.0f) {
+                    ++lit;
+                }
+                mean += luminance;
+            }
+            mean /= float(ring.size());
+
+            // Light is present in every direction around the lamp, not only on
+            // the four level-0 axes.
+            PPR_TEST_ASSERT(lit == ring.size());
+            PPR_TEST_ASSERT(mean > 0.002f);
+
+            fixture.shutdown();
+        };
+
+        PPR_UNIT_TEST (terrain_irradiance_spreads_off_axis) {
+            constexpr u32 width = 256u;
+            constexpr u32 height = 256u;
+
+            Fixture fixture;
+            fixture.initialize(width, height);
+            auto &source = fixture.m_source;
+
+            const auto plan = lighting::planWorldLight({.m_width = width, .m_height = height, .m_cell_metres = 0.5f});
+            PPR_TEST_ASSERT(plan.has_value());
+            const u32 budget = static_cast<u32>(plan->m_radiance_samples);
+
+            std::vector<u16> chunk(128u * 128u, 0u);
+            chunk[0] = 1u;
+            const lighting::WorldLightChunkUpdate update{.m_chunk_id = 3u, .m_cell_ids = chunk};
+            PPR_TEST_ASSERT(not source.applyUpdate({.m_chunks = {&update, 1u}, .m_revision = 1u}));
+            fixture.encodeSource();
+            for (u32 index = 0u; index < 10u; ++index) {
+                fixture.updateField(budget);
+            }
+
+            const auto centre = [](const i32 x, const i32 y) {
+                return float2{(static_cast<float>(x) + 0.5f) * 0.5f, (static_cast<float>(y) + 0.5f) * 0.5f};
+            };
+            const std::array<int2, 8> ring{
+                int2{137, 128}, int2{134, 134}, int2{128, 137}, int2{122, 134}, int2{119, 128}, int2{122, 122},
+                int2{128, 119}, int2{134, 122}};
+
+            // The terrain material response now runs the reference irradiance:
+            // the level-0 bin gather weighted by the half-lambert term, with no
+            // in-place near trace. Every wall position around the lamp must
+            // receive light.
+            const float3 normal{0.0f, 0.0f, 1.0f};
+            u32 lit = 0u;
+            float mean = 0.0f;
+            for (const int2 &cell: ring) {
+                const float2 position = centre(cell.x, cell.y);
+                const auto irradiance = fixture.evaluate(
+                    position, float2{0.0f, 1.0f}, normal, 0.0f, lighting::WorldLightField::EvaluateMode::kIrradiance);
+                for (const float channel: irradiance) {
+                    PPR_TEST_ASSERT(std::isfinite(channel));
+                    PPR_TEST_ASSERT(channel >= 0.0f);
+                }
+                const float luminance = 0.2126f * irradiance[0] + 0.7152f * irradiance[1] + 0.0722f * irradiance[2];
+                if (luminance > 0.0f) {
+                    ++lit;
+                }
+                mean += luminance;
+            }
+            mean /= float(ring.size());
+
+            PPR_TEST_ASSERT(lit == ring.size());
+            PPR_TEST_ASSERT(mean > 0.01f);
 
             fixture.shutdown();
         };
@@ -1906,7 +2824,7 @@ namespace pP::tests::detail {
                     .m_cell_metres = 0.5f,
                     .m_penumbra_width = kLevelZeroHitPenumbra});
             PPR_TEST_ASSERT(plan.has_value());
-            const u32 budget = static_cast<u32>(plan->m_levels[0].m_sample_count);
+            const u32 budget = static_cast<u32>(4u * plan->m_levels[0].m_sample_count);
 
             // Probe (3,3) direction 0 (up-right) hits the wall at cell (8,8), so
             // its direction-0 radiance is pure one-bounce feedback from the hit
@@ -1965,10 +2883,10 @@ namespace pP::tests::detail {
                     .m_cell_metres = 0.5f,
                     .m_penumbra_width = kLevelZeroHitPenumbra});
             PPR_TEST_ASSERT(plan.has_value());
-            // A budget covering the whole hierarchy traces every level on every
-            // update, so the final retention-0 update rewrites the inspected
-            // level-0 sample from the current atlas.
-            const u32 budget = static_cast<u32>(plan->m_radiance_samples);
+            // Full weighted transport budget: four rays per stored sample. A
+            // fresh-count final update retraces every level, so the inspected
+            // sample carries the current atlas rather than mature L0 history.
+            const u32 budget = static_cast<u32>(4u * plan->m_radiance_samples);
 
             // Probe (3,3) direction 0 hits the wall at cell (8,8); the lamps
             // around (9..10, 8..9) sit behind it, so the probe's only light is
@@ -1977,7 +2895,7 @@ namespace pP::tests::detail {
             const u64 word = sample * 4u;
             const auto wall_cell = u64{8u} * width + 8u;
 
-            const auto run = [&](const float wall_albedo) -> std::pair<std::vector<u16>, u32> {
+            const auto run = [&](const float wall_albedo, const bool keep_atlas) -> std::pair<std::vector<u16>, u32> {
                 Fixture fixture;
                 const lighting::WorldLightMaterial materials[] = {
                     {.m_kind = 1u, .m_albedo = {wall_albedo, wall_albedo, wall_albedo}}, // wall (cell id 1)
@@ -2004,13 +2922,24 @@ namespace pP::tests::detail {
                 // written by the test: both values come from the shipped paths.
                 atlas.setTemporalRetention(0.5f);
                 for (u32 index = 0u; index < 8u; ++index) {
-                    fixture.updateField(budget, 1u, 0.5f);
+                    fixture.updateField(budget);
                 }
                 fixture.encodeAtlas();
+                if (not keep_atlas) {
+                    const std::vector<u32> dark_atlas(u64{width} * height, 0u);
+                    fixture.write<u32>(atlas.cells(), dark_atlas);
+                }
 
-                // Retention 0 makes the inspected sample the fresh trace of the
-                // atlas the producer just wrote.
-                fixture.updateField(budget, 1u, 0.0f);
+                // The final update starts from zero counts but preserved
+                // published radiance, isolating fresh transport from mature L0
+                // history. All counts are cleared so interpolated neighbours and
+                // coarse parent bins cannot contribute stale history.
+                for (u32 index = 0u; index < 4u; ++index) {
+                    if (index + 1u == 4u) {
+                        fixture.write<u32>(field.state(), std::vector<u32>(plan->m_radiance_samples, 0u));
+                    }
+                    fixture.updateField(budget);
+                }
 
                 const std::vector<u16> radiance = fixture.read<u16>(field.view().m_radiance);
                 const u32 atlas_word = fixture.read<u32>(atlas.cells())[wall_cell];
@@ -2018,24 +2947,45 @@ namespace pP::tests::detail {
                 return {radiance, atlas_word};
             };
 
-            const auto [bounced, bounced_atlas] = run(1.0f);
-            const auto [zeroed, zeroed_atlas] = run(0.0f);
+            const auto [bounced, bounced_atlas] = run(1.0f, true);
+            const auto [black, black_atlas] = run(0.0f, true);
+            const auto [black_atlas_off, black_atlas_off_word] = run(0.0f, false);
+            (void) black_atlas_off_word;
 
-            // The lamp reaches the wall's incident gather: both runs store a
-            // non-zero atlas value at the hit cell, independent of the albedo.
+            // The lamp reaches the wall's incident gather: all active-atlas runs
+            // store a non-zero atlas value at the hit cell, independent of albedo.
             PPR_TEST_ASSERT(bounced_atlas != 0u);
-            PPR_TEST_ASSERT(zeroed_atlas != 0u);
+            PPR_TEST_ASSERT(black_atlas != 0u);
 
-            // A reflective wall returns the atlas value to the probe; a black wall
-            // returns exactly nothing even though its atlas value is lit.
+            // Paired reflectance control: same geometry, schedule and atlas, only
+            // wall albedo changes. The black wall is also run with the atlas input
+            // cleared to prove its sample does not consume the atlas at all.
             const float3 incident = unpackRadianceRGB9E5_(bounced_atlas);
             const std::array<float, 3> channels{incident.x, incident.y, incident.z};
+            std::array<float, 3> reflected{};
+            float reflected_sum = 0.0f;
+            float atlas_sum = 0.0f;
             for (u32 channel = 0u; channel < 3u; ++channel) {
-                const float value = halfToFloat(bounced[word + channel]);
-                PPR_TEST_ASSERT(std::isfinite(value));
-                PPR_TEST_ASSERT(value > 0.001f);
-                PPR_TEST_ASSERT(std::abs(value - channels[channel]) <= 0.005f);
-                PPR_TEST_ASSERT(zeroed[word + channel] == 0u);
+                const float bounced_value = halfToFloat(bounced[word + channel]);
+                const float black_value = halfToFloat(black[word + channel]);
+                const float black_atlas_off_value = halfToFloat(black_atlas_off[word + channel]);
+
+                PPR_TEST_ASSERT(std::isfinite(bounced_value));
+                PPR_TEST_ASSERT(std::isfinite(black_value));
+                PPR_TEST_ASSERT(std::abs(black_value - black_atlas_off_value) <= 1.0e-3f);
+
+                reflected[channel] = bounced_value - black_value;
+                PPR_TEST_ASSERT(reflected[channel] > 1.0e-3f);
+                PPR_TEST_ASSERT(reflected[channel] <= channels[channel] + 5.0e-3f);
+                reflected_sum += reflected[channel];
+                atlas_sum += channels[channel];
+            }
+
+            PPR_TEST_ASSERT(reflected_sum > 0.0f and atlas_sum > 0.0f);
+            for (u32 channel = 0u; channel < 3u; ++channel) {
+                const float reflected_share = reflected[channel] / reflected_sum;
+                const float atlas_share = channels[channel] / atlas_sum;
+                PPR_TEST_ASSERT(std::abs(reflected_share - atlas_share) <= 0.02f);
             }
         };
 
@@ -2087,7 +3037,7 @@ namespace pP::tests::detail {
             atlas.setTemporalRetention(0.5f);
             for (u32 index = 0u; index < 32u; ++index) {
                 fixture.encodeAtlas();
-                fixture.updateField(budget, 1u, 0.5f);
+                fixture.updateField(budget);
             }
 
             const auto cells = fixture.read<u32>(atlas.cells());
@@ -2137,7 +3087,9 @@ namespace pP::tests::detail {
                     .m_cell_metres = 0.5f,
                     .m_penumbra_width = kLevelZeroHitPenumbra});
             PPR_TEST_ASSERT(plan.has_value());
-            const u32 budget = static_cast<u32>(plan->m_levels[0].m_sample_count);
+            // Full weighted transport budget: four rays per stored sample. A
+            // fresh-count final update retraces the hierarchy after the poison.
+            const u32 budget = static_cast<u32>(4u * plan->m_radiance_samples);
 
             // Probe (3,3) direction 0 hits the reflective wall at cell (8,8), so
             // the bounce term is the wall albedo times the atlas value seeded for
@@ -2145,7 +3097,7 @@ namespace pP::tests::detail {
             const u64 sample = (3u * 128u + 3u) * 4u + 0u;
             const u64 word = sample * 4u;
 
-            const auto run = [&](const u16 previous_bits) -> std::vector<u16> {
+            const auto run = [&](const u16 previous_bits, const float atlas_radiance) -> std::vector<u16> {
                 Fixture fixture;
                 const lighting::WorldLightMaterial materials[] = {
                     {.m_kind = 1u, .m_albedo = {1.0f, 1.0f, 1.0f}}}; // wall (cell id 1)
@@ -2159,25 +3111,31 @@ namespace pP::tests::detail {
                 PPR_TEST_ASSERT(not source.applyUpdate({.m_chunks = {&update, 1u}, .m_revision = 1u}));
                 fixture.encodeSource();
 
-                // Fixed atlas: seed the hit cell with unit radiance, so the bounce
-                // can only come from this seed.
+                // Fixed atlas: seed the hit cell with the requested radiance, so
+                // the bounce can only come from this seed. The zero-atlas control
+                // changes only the atlas input; geometry, material opacity/albedo
+                // and schedule stay identical.
                 std::vector<u32> cells(u64{width} * height, 0u);
-                const float3 unit_radiance{1.0f, 1.0f, 1.0f};
-                cells[8u * width + 8u] = packRadianceRGB9E5_(unit_radiance);
+                const float3 seed_radiance{atlas_radiance, atlas_radiance, atlas_radiance};
+                cells[8u * width + 8u] = packRadianceRGB9E5_(seed_radiance);
                 fixture.write<u32>(fixture.m_atlas.cells(), cells);
 
-                // Warm once to consume the dirty revision and saturate the sample
-                // count at one, then overwrite the finest level of the previous
-                // field that the next update reads. The coarser levels stay zero
-                // (transmittance 0), so the parent fold adds nothing and retention
-                // 0 makes the final level-0 sample the trace result only: nothing
-                // but the hit-time bounce can see the injected history.
-                fixture.updateField(budget, 1u, 0.0f);
+                // Warm once to consume the dirty revision, then overwrite the
+                // finest level of the previous field that the history path reads.
+                // The final update clears counts while preserving published
+                // radiance, so only the hit-time atlas read can contribute the
+                // fresh transport result.
+                fixture.updateField(budget);
                 std::vector<u16> previous(field.view().m_radiance->getDesc().size / sizeof(u16), 0u);
                 const u64 finest_words = plan->m_levels[0].m_sample_count * 4u;
                 std::fill_n(previous.begin(), static_cast<std::ptrdiff_t>(finest_words), previous_bits);
                 fixture.write<u16>(field.view().m_radiance, previous);
-                fixture.updateField(budget, 1u, 0.0f);
+                for (u32 index = 0u; index < 12u; ++index) {
+                    if (index + 1u == 12u) {
+                        fixture.write<u32>(field.state(), std::vector<u32>(plan->m_radiance_samples, 0u));
+                    }
+                    fixture.updateField(budget);
+                }
 
                 const std::vector<u16> radiance = fixture.read<u16>(field.view().m_radiance);
                 fixture.shutdown();
@@ -2186,16 +3144,20 @@ namespace pP::tests::detail {
 
             // Half 0.0 versus half 4.0 in every previous finest-level word: an
             // implementation that still gathers the previous field cannot return
-            // the same bounce, while an atlas read never touches that buffer.
-            const std::vector<u16> neutral = run(0x0000u);
-            const std::vector<u16> poisoned = run(0x4400u);
+            // the same bounce. The zero-atlas control changes only the atlas input,
+            // proving the positive contribution is atlas-derived rather than a
+            // full-corner-coverage expectation.
+            const std::vector<u16> neutral = run(0x0000u, 1.0f);
+            const std::vector<u16> poisoned = run(0x4400u, 1.0f);
+            const std::vector<u16> atlas_off = run(0x0000u, 0.0f);
 
             for (u32 channel = 0u; channel < 3u; ++channel) {
                 const float atlas_bounce = halfToFloat(neutral[word + channel]);
                 const float poisoned_bounce = halfToFloat(poisoned[word + channel]);
+                const float off_bounce = halfToFloat(atlas_off[word + channel]);
 
-                PPR_TEST_ASSERT(atlas_bounce > 0.5f);
                 PPR_TEST_ASSERT(std::abs(atlas_bounce - poisoned_bounce) < 1e-3f);
+                PPR_TEST_ASSERT(atlas_bounce - off_bounce > 1e-3f);
             }
         };
 
@@ -2210,32 +3172,30 @@ namespace pP::tests::detail {
             fixture.initialize(width, height);
             auto &field = fixture.m_field;
 
-            // A budget that is not a multiple of the 64-thread group size.
+            // A budget that is not a multiple of the 128-thread group size.
             const u32 budget = 100u;
             fixture.updateField(budget);
             const auto count = fixture.read<u32>(field.state());
 
-            // The budget is split across the cascade levels, so each level traces
-            // a prefix of its own sample range. No dispatch tail may leak past its
-            // slice and the total traced count must equal the budget exactly.
+            // The weighted ray budget is split across levels and selects packed
+            // 2x2 groups; every visited group writes one stored direction sample.
+            // Each sample costs four rays, so four times the observed counts must
+            // equal the budget. Selection is spatially distributed, not a prefix.
             u64 traced = 0u;
+            u64 weighted = 0u;
             for (u32 level = 0u; level < plan->m_level_count; ++level) {
                 const lighting::WorldLightLevel &info = plan->m_levels[level];
+                constexpr u64 cost = 4u;
                 const u64 begin = info.m_sample_offset;
-                bool seen_untraced = false;
                 for (u64 sample = begin; sample < begin + info.m_sample_count; ++sample) {
                     const u32 value = count[sample];
                     PPR_TEST_ASSERT(value <= 1u);
                     traced += value;
-
-                    if (value == 0u) {
-                        seen_untraced = true;
-                    } else {
-                        PPR_TEST_ASSERT(not seen_untraced);
-                    }
+                    weighted += u64{value} * cost;
                 }
             }
-            PPR_TEST_ASSERT(traced == budget);
+            PPR_TEST_ASSERT(traced > 0u);
+            PPR_TEST_ASSERT(weighted == budget);
 
             fixture.shutdown();
         };
@@ -2255,7 +3215,7 @@ namespace pP::tests::detail {
                     .m_cell_metres = 0.5f,
                     .m_penumbra_width = kLevelZeroHitPenumbra});
             PPR_TEST_ASSERT(plan.has_value());
-            const u32 budget = static_cast<u32>(plan->m_levels[0].m_sample_count);
+            const u32 budget = static_cast<u32>(4u * plan->m_levels[0].m_sample_count);
 
             // Level 0 probe (3,3) direction 0 (up-right) passes diagonally through
             // block (0,0) and hits the single opaque cell (8,8) in block (1,1).
@@ -2301,10 +3261,10 @@ namespace pP::tests::detail {
                     .m_cell_metres = 0.5f,
                     .m_penumbra_width = kLevelZeroHitPenumbra});
             PPR_TEST_ASSERT(plan.has_value());
-            // A full-field budget traces every level on every update. The suffix
-            // fold propagates one level per update, so ten updates cover the six
-            // levels with margin for the temporal accumulation.
-            const u32 budget = static_cast<u32>(plan->m_radiance_samples);
+            // Full weighted transport budget: four rays per stored sample. The
+            // final fresh-count update retraces every level; the preceding warm
+            // updates settle the atlas and parent hierarchy.
+            const u32 budget = static_cast<u32>(4u * plan->m_radiance_samples);
 
             // A walled room [70,90]^2 with an emissive lamp column at x=80, y=79..81
             // and a one-cell opening at (90,79). Cell (81,80) is air inside the
@@ -2390,18 +3350,23 @@ namespace pP::tests::detail {
                 return true;
             };
 
-            // Ten full-field updates carry the terminal sky down all six levels;
-            // retention 0 makes each stored value the fresh fold so the chain
-            // propagates one level per update instead of decaying through the EMA.
+            // Ten full weighted updates settle the hierarchy before the final
+            // fresh transport pass.
             for (u32 index = 0u; index < 10u; ++index) {
-                fixture.updateField(budget, 1u, 0.0f);
+                fixture.updateField(budget);
             }
 
             // The producer gathers incident radiance from the settled merged
-            // field; one retention-0 update then makes the inspected probe sample
-            // the fresh trace of the atlas the producer just wrote.
+            // field. The final update starts from zero counts while preserving
+            // published radiance, retracing every inspected probe from the atlas
+            // the producer just wrote.
             fixture.encodeAtlas();
-            fixture.updateField(budget, 1u, 0.0f);
+            for (u32 index = 0u; index < 4u; ++index) {
+                if (index + 1u == 4u) {
+                    fixture.write<u32>(fixture.m_field.state(), std::vector<u32>(plan->m_radiance_samples, 0u));
+                }
+                fixture.updateField(budget);
+            }
 
             // 1. The emissive lamp cell itself: finite, and a solid probe reads the
             // light crossing in from the neighbouring air.
@@ -2411,12 +3376,11 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(finite_nonnegative(lamp.m_specular));
 
             // 2. Air next to the lamp, looking at it: probes exist in vacuum, so the
-            // emitter is visible here. This is the cell type gameplay light lives in.
+            // emitter is visible here. The absolute value also contains sky and
+            // indirect transport, so the positive emitter contribution is pinned
+            // later by a lamp-off control with identical geometry and schedule.
             const auto next_to_lamp = sample(centre(81u, 80u), float2{-1.0f, 0.0f});
             PPR_TEST_ASSERT(finite_nonnegative(next_to_lamp.m_composite));
-            PPR_TEST_ASSERT(next_to_lamp.m_composite[0] > 0.5f);
-            PPR_TEST_ASSERT(next_to_lamp.m_composite[1] > 0.5f);
-            PPR_TEST_ASSERT(next_to_lamp.m_composite[2] > 0.5f);
 
             // 3. Air in the open, far from the lamp, open to the sky: the angular
             // sky path lights it. The sky is directional (a blue dome plus a sun
@@ -2468,24 +3432,21 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(deep_rock.m_composite == std::array<float, 3>{0.0f, 0.0f, 0.0f});
             PPR_TEST_ASSERT(deep_rock.m_diffuse == std::array<float, 3>{0.0f, 0.0f, 0.0f});
 
-            // 8. An opaque cell with both emission E and albedo rho obeys the
-            // trace's hit expression: composite = E + rho * L_i, with L_i read
-            // straight from the atlas the producer wrote. Probe (3,3) direction 0
-            // is the centre of its angular bin, so the evaluate seam returns that
-            // stored level-0 sample without interpolation error.
+            // 8. Opaque wall response is pinned by a paired albedo control below:
+            // the connector fold covers only part of the parent corners, so the
+            // absolute composite is not equal to emission + albedo * one atlas
+            // texel. Keep only finiteness here; the unlit/albedo control fixture
+            // isolates the wall's reflected atlas contribution.
             const float3 atlas_incident = unpackRadianceRGB9E5_(
                 fixture.read<u32>(fixture.m_atlas.cells())[u64{8u} * width + 8u]);
             const std::array<float, 3> atlas_channels{atlas_incident.x, atlas_incident.y, atlas_incident.z};
-            const std::array<float, 3> wall_emission{0.1f, 0.2f, 0.3f};
             constexpr float wall_albedo = 0.5f;
             constexpr float bin_angle = 0.5f * 6.28318530718f / 4.0f;
             const auto wall_hit = sample(float2{3.5f, 3.5f}, float2{std::cos(bin_angle), std::sin(bin_angle)});
-            for (u32 channel = 0u; channel < 3u; ++channel) {
-                const float expected = wall_emission[channel] + wall_albedo * atlas_channels[channel];
-                const float tolerance = 0.01f + 0.02f * std::abs(expected);
-                PPR_TEST_ASSERT(std::isfinite(wall_hit.m_composite[channel]));
-                PPR_TEST_ASSERT(std::abs(wall_hit.m_composite[channel] - expected) <= tolerance);
+            for (const float channel: wall_hit.m_composite) {
+                PPR_TEST_ASSERT(std::isfinite(channel));
             }
+            PPR_TEST_ASSERT(atlas_channels[0] + atlas_channels[1] + atlas_channels[2] > 0.0f);
 
             // 9. Dug-border contract under a black sky: the room's lamps are then
             // the only light in the world, so a diffuse response just outside the
@@ -2493,6 +3454,92 @@ namespace pP::tests::detail {
             // room geometry is reused after the sky-lit fixture is released (the
             // RHI service admits one device at a time).
             fixture.shutdown();
+
+            // Paired lamp-off control: identical geometry, opacity, sky and update
+            // schedule; only the lamp material's emission is removed. The positive
+            // difference at the air probe is the emitter contribution.
+            {
+                const lighting::WorldLightMaterial unlit_materials[] = {
+                    {.m_kind = 1u},
+                    {.m_kind = 1u},
+                    {.m_kind = 1u, .m_emission = {0.1f, 0.2f, 0.3f}, .m_albedo = {0.5f, 0.5f, 0.5f}},
+                };
+                Fixture unlit;
+                unlit.initialize(width, height, unlit_materials, kLevelZeroHitPenumbra);
+                PPR_TEST_ASSERT(not unlit.m_source.applyUpdate(
+                    {.m_chunks = updates, .m_revision = 1u, .m_sky_hour = 12, .m_sky = {0.25f, 0.5f, 1.0f}}));
+                unlit.encodeSource();
+                for (u32 index = 0u; index < 10u; ++index) {
+                    unlit.updateField(budget);
+                }
+                unlit.encodeAtlas();
+                for (u32 index = 0u; index < 4u; ++index) {
+                    if (index + 1u == 4u) {
+                        unlit.write<u32>(unlit.m_field.state(), std::vector<u32>(plan->m_radiance_samples, 0u));
+                    }
+                    unlit.updateField(budget);
+                }
+
+                const auto unlit_probe = unlit.evaluate(
+                    centre(81u, 80u), float2{-1.0f, 0.0f}, float3{0.0f, 0.0f, 1.0f}, 0.3f,
+                    lighting::WorldLightField::EvaluateMode::kComposite);
+                for (u32 channel = 0u; channel < 3u; ++channel) {
+                    PPR_TEST_ASSERT(std::isfinite(unlit_probe[channel]));
+                    PPR_TEST_ASSERT(next_to_lamp.m_composite[channel] - unlit_probe[channel] > 1.0e-3f);
+                }
+                unlit.shutdown();
+            }
+
+            // Paired wall-albedo control: identical lamps (same emission),
+            // geometry, sky and schedule; only the wall material's reflectance is
+            // removed. This isolates the wall's atlas-dependent response without
+            // also removing lamp direct radiance.
+            {
+                const lighting::WorldLightMaterial wall_control_materials[] = {
+                    {.m_kind = 1u, .m_emission = {1.0f, 1.0f, 1.0f}},
+                    {.m_kind = 1u},
+                    {.m_kind = 1u, .m_emission = {0.1f, 0.2f, 0.3f}, .m_albedo = {0.0f, 0.0f, 0.0f}},
+                };
+                Fixture wall_control_fixture;
+                wall_control_fixture.initialize(width, height, wall_control_materials, kLevelZeroHitPenumbra);
+                PPR_TEST_ASSERT(not wall_control_fixture.m_source.applyUpdate(
+                    {.m_chunks = updates, .m_revision = 1u, .m_sky_hour = 12, .m_sky = {0.25f, 0.5f, 1.0f}}));
+                wall_control_fixture.encodeSource();
+                for (u32 index = 0u; index < 10u; ++index) {
+                    wall_control_fixture.updateField(budget);
+                }
+                wall_control_fixture.encodeAtlas();
+                for (u32 index = 0u; index < 4u; ++index) {
+                    if (index + 1u == 4u) {
+                        wall_control_fixture.write<u32>(
+                            wall_control_fixture.m_field.state(), std::vector<u32>(plan->m_radiance_samples, 0u));
+                    }
+                    wall_control_fixture.updateField(budget);
+                }
+
+                const auto wall_control = wall_control_fixture.evaluate(
+                    float2{3.5f, 3.5f}, float2{std::cos(bin_angle), std::sin(bin_angle)}, float3{0.0f, 0.0f, 1.0f},
+                    0.3f, lighting::WorldLightField::EvaluateMode::kComposite);
+                wall_control_fixture.shutdown();
+
+                std::array<float, 3> wall_reflected{};
+                float wall_reflected_sum = 0.0f;
+                float wall_atlas_sum = 0.0f;
+                for (u32 channel = 0u; channel < 3u; ++channel) {
+                    wall_reflected[channel] = wall_hit.m_composite[channel] - wall_control[channel];
+                    PPR_TEST_ASSERT(std::isfinite(wall_control[channel]));
+                    PPR_TEST_ASSERT(wall_reflected[channel] > 1.0e-3f);
+                    PPR_TEST_ASSERT(wall_reflected[channel] <= wall_albedo * atlas_channels[channel] + 5.0e-3f);
+                    wall_reflected_sum += wall_reflected[channel];
+                    wall_atlas_sum += atlas_channels[channel];
+                }
+                PPR_TEST_ASSERT(wall_reflected_sum > 0.0f and wall_atlas_sum > 0.0f);
+                for (u32 channel = 0u; channel < 3u; ++channel) {
+                    const float reflected_share = wall_reflected[channel] / wall_reflected_sum;
+                    const float atlas_share = atlas_channels[channel] / wall_atlas_sum;
+                    PPR_TEST_ASSERT(std::abs(reflected_share - atlas_share) <= 0.02f);
+                }
+            }
 
             Fixture dark;
             dark.initialize(width, height, materials);
@@ -2505,7 +3552,7 @@ namespace pP::tests::detail {
             // value instead of a frame-parity coin flip.
             dark.m_atlas.setTemporalRetention(0.5f);
             for (u32 index = 0u; index < 16u; ++index) {
-                dark.updateField(budget, 1u, 0.5f);
+                dark.updateField(budget);
             }
 
             const auto evaluate_dark = [&](const u32 x, const u32 y) {
@@ -2538,7 +3585,7 @@ namespace pP::tests::detail {
                 const auto plan = lighting::planWorldLight(
                     {.m_width = width, .m_height = height, .m_cell_metres = 0.5f});
                 PPR_TEST_ASSERT(plan.has_value());
-                const u32 budget = static_cast<u32>(plan->m_levels[0].m_sample_count);
+                const u32 budget = static_cast<u32>(4u * plan->m_levels[0].m_sample_count);
 
                 std::vector<u16> chunk(128u * 128u, 0u);
                 chunk[0] = 1u;
@@ -2566,7 +3613,7 @@ namespace pP::tests::detail {
 
             const auto plan = lighting::planWorldLight({.m_width = width, .m_height = height, .m_cell_metres = 1.0f});
             PPR_TEST_ASSERT(plan.has_value());
-            const u32 budget = static_cast<u32>(plan->m_levels[0].m_sample_count);
+            const u32 budget = static_cast<u32>(4u * plan->m_levels[0].m_sample_count);
 
             // Committed stage: one dirty chunk (opaque emissive at cell (0,0))
             // plus one committed particle (palette index 0, the opaque emissive
@@ -2680,86 +3727,1088 @@ namespace pP::tests::detail {
             fixture.shutdown();
         };
 
-        PPR_UNIT_TEST (gpu_fold_matches_cpu_merge_with_partial_transmittance) {
+        PPR_UNIT_TEST (gpu_fold_matches_cpu_merge_from_current_parent) {
             constexpr u32 width = 64u;
             constexpr u32 height = 64u;
+            // Two levels keep the coarsest grid larger than 1x1 so interior
+            // level-0 probes have full parent bilinear support; a 64²/6-level
+            // plan has a single coarsest probe and the edge taps fade it.
+            constexpr u32 level_count = 2u;
 
             Fixture fixture;
-            fixture.initialize(width, height);
+            fixture.initialize(width, height, lighting::kWorldLightDefaultPenumbraWidth, level_count);
+            auto &source = fixture.m_source;
             auto &field = fixture.m_field;
 
-            const auto plan = lighting::planWorldLight({.m_width = width, .m_height = height, .m_cell_metres = 0.5f});
+            const auto plan = lighting::planWorldLight(
+                {.m_width = width, .m_height = height, .m_cell_metres = 0.5f, .m_level_count = level_count});
             PPR_TEST_ASSERT(plan.has_value());
+            PPR_TEST_ASSERT(plan->m_level_count == level_count);
 
-            // Seed a non-trivial per-level hierarchy: radiance is anisotropic
-            // (varies by level and direction) and transmittance is partial. The
-            // seed is spatially uniform, so the parent's bilinear gather returns
-            // the same value at any jittered probe offset and the fold can be
-            // checked exactly. A wrong direction remap, a dropped bin average, a
-            // summed instead of averaged transpose, or a doubled parent term
-            // changes the result.
-            std::vector<RadianceHalf> seed(plan->m_radiance_samples, RadianceHalf{});
+            u64 weighted_total = 0u;
             for (u32 level = 0u; level < plan->m_level_count; ++level) {
-                const lighting::WorldLightLevel &info = plan->m_levels[level];
-                const u64 probe_count = u64{info.m_probes_x} * info.m_probes_y;
-                for (u64 probe = 0u; probe < probe_count; ++probe) {
-                    for (u32 direction = 0u; direction < info.m_directions; ++direction) {
-                        const u64 sample = info.m_sample_offset + probe * info.m_directions + direction;
-                        seed[sample] = RadianceHalf{
-                            .m_r = floatToHalf(0.05f * float(level + 1u) + 0.02f * float(direction)),
-                            .m_g = floatToHalf(0.10f * float(level + 1u) + 0.01f * float(direction)),
-                            .m_b = floatToHalf(0.20f + 0.005f * float(level * 7u + direction)),
-                            .m_t = floatToHalf(0.5f + 0.08f * float(level) + 0.02f * float(direction % 5u))};
-                    }
+                weighted_total += plan->m_levels[level].m_sample_count * 4u;
+            }
+            const u32 budget = static_cast<u32>(weighted_total);
+
+            // Vacuum world with sky on. The first update consumes the sky
+            // revision and leaves a complete coarsest sky level; the second full
+            // weighted update traces every level once coarse-to-fine, so each
+            // finer value folds the parent written earlier in the same frame.
+            lighting::WorldLightSourceUpdate sky_update{};
+            sky_update.m_sky = {1.0f, 1.0f, 1.0f};
+            sky_update.m_sky_hour = 12;
+            sky_update.m_revision = 1u;
+            PPR_TEST_ASSERT(not source.applyUpdate(sky_update));
+            fixture.encodeSource();
+            fixture.updateField(budget);
+            fixture.updateField(budget);
+
+            // Use the final coarsest level as the parent oracle and fold it down
+            // with the CPU mirror of worldLightParentSampleFrom. This checks the
+            // direction remap, bin average and current-parent ordering without
+            // relying on a seeded pre-frame hierarchy.
+            const std::vector<u16> radiance = fixture.read<u16>(field.view().m_radiance);
+            const lighting::WorldLightLevel &coarsest = plan->m_levels[plan->m_level_count - 1u];
+            std::vector<std::array<float, 3>> values(coarsest.m_directions);
+            for (u32 direction = 0u; direction < coarsest.m_directions; ++direction) {
+                const u64 word = (coarsest.m_sample_offset + direction) * 4u;
+                for (u32 channel = 0u; channel < 3u; ++channel) {
+                    values[direction][channel] = halfToFloat(radiance[word + channel]);
                 }
             }
-            fixture.write(field.view().m_radiance, seed);
 
-            // One update over the vacuum world: each level-0 sample traces an
-            // empty interval (L=0, T=1) and folds the seeded parent suffix in
-            // through worldLightParentSampleFrom. Retention 0 and accumulation 1
-            // make the stored value the fresh fold, no EMA.
-            fixture.updateField(static_cast<u32>(plan->m_radiance_samples), 1u, 0.0f);
+            for (u32 level = plan->m_level_count - 1u; level > 0u; --level) {
+                const lighting::WorldLightLevel &parent = plan->m_levels[level];
+                const lighting::WorldLightLevel &child = plan->m_levels[level - 1u];
+                const u32 ratio = parent.m_directions / child.m_directions;
+                PPR_TEST_ASSERT(ratio == 4u);
 
-            const std::vector<u16> radiance = fixture.read<u16>(field.view().m_radiance);
+                std::vector<std::array<float, 3>> folded(child.m_directions);
+                for (u32 direction = 0u; direction < child.m_directions; ++direction) {
+                    for (u32 channel = 0u; channel < 3u; ++channel) {
+                        float sum = 0.0f;
+                        for (u32 index = 0u; index < ratio; ++index) {
+                            sum += values[direction * ratio + index][channel];
+                        }
+                        folded[direction][channel] = halfToFloat(floatToHalf(sum / float(ratio)));
+                    }
+                }
+                values = std::move(folded);
+            }
+
             const lighting::WorldLightLevel &finest = plan->m_levels[0];
-            const lighting::WorldLightLevel &parent = plan->m_levels[1];
-            const u32 ratio = parent.m_directions / finest.m_directions;
-            PPR_TEST_ASSERT(ratio == 4u);
-
             for (u32 py = 1u; py + 1u < finest.m_probes_y; ++py) {
                 for (u32 px = 1u; px + 1u < finest.m_probes_x; ++px) {
                     for (u32 direction = 0u; direction < finest.m_directions; ++direction) {
-                        // CPU fold: average the parent angular bins that span this
-                        // finer bin at the level-0 probe's parent-space position.
-                        std::array<float, 3> expected{0.0f, 0.0f, 0.0f};
-                        float expected_transmittance = 0.0f;
-                        for (u32 index = 0u; index < ratio; ++index) {
-                            const u64 parent_sample = parent.m_sample_offset + u64{direction * ratio + index};
-                            expected[0] += halfToFloat(seed[parent_sample].m_r);
-                            expected[1] += halfToFloat(seed[parent_sample].m_g);
-                            expected[2] += halfToFloat(seed[parent_sample].m_b);
-                            expected_transmittance += halfToFloat(seed[parent_sample].m_t);
-                        }
-                        for (u32 channel = 0u; channel < 3u; ++channel) {
-                            expected[channel] /= float(ratio);
-                        }
-                        expected_transmittance /= float(ratio);
-                        PPR_TEST_ASSERT(expected_transmittance > 0.4f and expected_transmittance < 1.0f);
-
                         const u64 sample = (u64{py} * finest.m_probes_x + px) * finest.m_directions + direction;
                         const u64 word = sample * 4u;
                         for (u32 channel = 0u; channel < 3u; ++channel) {
                             const float actual = halfToFloat(radiance[word + channel]);
                             PPR_TEST_ASSERT(std::isfinite(actual));
-                            PPR_TEST_ASSERT(std::abs(actual - expected[channel]) <= 0.01f);
+                            PPR_TEST_ASSERT(std::abs(actual - values[direction][channel]) <= 0.01f);
                         }
-                        const float actual_transmittance = halfToFloat(radiance[word + 3u]);
-                        PPR_TEST_ASSERT(std::abs(actual_transmittance - expected_transmittance) <= 0.01f);
+                        PPR_TEST_ASSERT(std::abs(halfToFloat(radiance[word + 3u]) - 1.0f) <= 0.01f);
                     }
                 }
             }
 
+            fixture.shutdown();
+        };
+
+        PPR_UNIT_TEST (parent_visibility_connector_honours_opaque_occluder) {
+            constexpr u32 width = 64u;
+            constexpr u32 height = 64u;
+            constexpr u32 level_count = 2u;
+            constexpr float cell_metres = 0.5f;
+            constexpr float penumbra_width = (1024.0f / static_cast<float>(width)) *
+                                             lighting::kWorldLightDefaultPenumbraWidth;
+
+            // One black opaque material (cell id 1, palette index 0).
+            const lighting::WorldLightMaterial materials[] = {{.m_kind = 1u}};
+
+            Fixture fixture;
+            fixture.initialize(width, height, materials, penumbra_width, level_count);
+            auto &source = fixture.m_source;
+            auto &field = fixture.m_field;
+
+            const auto plan = lighting::planWorldLight(
+                {.m_width = width,
+                    .m_height = height,
+                    .m_cell_metres = cell_metres,
+                    .m_level_count = level_count,
+                    .m_penumbra_width = penumbra_width});
+            PPR_TEST_ASSERT(plan.has_value());
+            PPR_TEST_ASSERT(plan->m_level_count == level_count);
+            PPR_TEST_ASSERT(std::abs(plan->m_levels[0].m_interval_near_m / cell_metres - 0.512f) <= 1.0e-5f);
+            PPR_TEST_ASSERT(
+                std::abs(plan->m_levels[0].m_interval_far_m - plan->m_levels[1].m_interval_near_m) <= 1.0e-6f);
+
+            const lighting::WorldLightLevel &parent = plan->m_levels[1];
+            std::vector<RadianceHalf> seed(plan->m_radiance_samples, RadianceHalf{});
+            for (u32 py = 0u; py < parent.m_probes_y; ++py) {
+                for (u32 px = 0u; px < parent.m_probes_x; ++px) {
+                    for (u32 direction = 0u; direction < parent.m_directions; ++direction) {
+                        const u64 sample = parent.m_sample_offset +
+                                           (u64{py} * parent.m_probes_x + px) * parent.m_directions +
+                                           direction;
+                        seed[sample] = RadianceHalf{
+                            .m_r = floatToHalf(1.0f),
+                            .m_g = floatToHalf(1.0f),
+                            .m_b = floatToHalf(1.0f),
+                            .m_t = floatToHalf(0.5f)};
+                    }
+                }
+            }
+
+            // Publish the vacuum source, then seed the parent bins directly.
+            fixture.updateField(0u);
+            fixture.write(field.view().m_radiance, seed);
+
+            // Child probe centre at native (31,31): the level-1 bilinear corners
+            // are the probe centres at native (30,30), (34,30), (30,34), (34,34)
+            // with weights 0.75/0.25 per axis.
+            const float2 position{31.0f * cell_metres, 31.0f * cell_metres};
+            const float2 direction{1.0f, 1.0f};
+            const float3 normal{0.0f, 0.0f, 1.0f};
+            const auto vacuum = fixture.evaluate(
+                position, direction, normal, 0.0f, lighting::WorldLightField::EvaluateMode::kParentVisibility);
+            for (const float channel: vacuum) {
+                PPR_TEST_ASSERT(std::abs(channel - 1.0f) <= 1.0e-4f);
+            }
+
+            // An actual opaque source cell at native (34,31) intersects the
+            // lower-right connector's offset segment but not its centre-to-centre
+            // line. This distinguishes the reference connector from the old
+            // gather-only helper.
+            std::vector<u16> chunk(128u * 128u, 0u);
+            chunk[31u * 128u + 34u] = 1u;
+            const lighting::WorldLightChunkUpdate update{.m_chunk_id = 0u, .m_cell_ids = chunk};
+            PPR_TEST_ASSERT(not source.applyUpdate({.m_chunks = {&update, 1u}, .m_revision = 1u}));
+            fixture.encodeSource();
+            fixture.updateField(0u);
+            fixture.write(field.view().m_radiance, seed);
+
+            // Independent optical oracle for the reference offset connectors:
+            // start = child position + childDir * child.nearM, end = parent
+            // corner + childDir * child.farM (== parent.nearM). This is the
+            // prototype's per-parent-corner connector, not centre-to-centre.
+            std::vector<lighting::OpticalCell> cells(u64{width} * height);
+            for (lighting::OpticalCell &cell: cells) {
+                cell.m_kind = lighting::OpticalKind::vacuum;
+            }
+            cells[31u * width + 34u].m_kind = lighting::OpticalKind::opaque;
+            const lighting::OpticalGridView grid{
+                std::span<const lighting::OpticalCell>(cells), {0.0, 0.0}, static_cast<double>(cell_metres), width,
+                height, lighting::OpticalBoundary::vacuum};
+
+            const u32 reference_frame = fixture.m_field.view().m_constants->m_frame;
+            const double jitter_x = radicalInverseReference_(reference_frame % 8u, 2u) - 0.5;
+            const double jitter_y = radicalInverseReference_(reference_frame % 8u, 3u) - 0.5;
+            const double jitter_m_x = jitter_x * double{cell_metres};
+            const double jitter_m_y = jitter_y * double{cell_metres};
+            const double child_position_x = double{position.x} + jitter_m_x;
+            const double child_position_y = double{position.y} + jitter_m_y;
+            const double child_near = double{plan->m_levels[0].m_interval_near_m};
+            const double child_far = double{plan->m_levels[0].m_interval_far_m};
+            const double dir_x = 1.0 / std::sqrt(2.0);
+            const double dir_y = dir_x;
+            const double parent_step = static_cast<double>(cell_metres) * static_cast<double>(parent.m_spacing_cells);
+            const double uv_x = child_position_x / parent_step - 0.5;
+            const double uv_y = child_position_y / parent_step - 0.5;
+            const double base_x = std::floor(uv_x);
+            const double base_y = std::floor(uv_y);
+            const double frac_x = uv_x - base_x;
+            const double frac_y = uv_y - base_y;
+
+            float expected = 0.0f;
+            float offset_transmittance = 1.0f;
+            float centre_transmittance = 1.0f;
+            for (u32 corner = 0u; corner < 4u; ++corner) {
+                const double corner_x = (base_x + static_cast<double>(corner & 1u) + 0.5) * parent_step + jitter_m_x;
+                const double corner_y = (base_y + static_cast<double>(corner >> 1u) + 0.5) * parent_step + jitter_m_y;
+                const double weight = ((corner & 1u) != 0u ? frac_x : 1.0 - frac_x) *
+                                      ((corner & 2u) != 0u ? frac_y : 1.0 - frac_y);
+                if (weight <= 0.0) {
+                    continue;
+                }
+
+                const double start_x = child_position_x + dir_x * child_near;
+                const double start_y = child_position_y + dir_y * child_near;
+                const double end_x = corner_x + dir_x * child_far;
+                const double end_y = corner_y + dir_y * child_far;
+                const double dx = end_x - start_x;
+                const double dy = end_y - start_y;
+                const double length = std::sqrt(dx * dx + dy * dy);
+                const lighting::OpticalRay offset_ray{{start_x, start_y}, {dx / length, dy / length}, 0.0, length};
+                const auto offset = lighting::traceOpticalReference(grid, offset_ray);
+                PPR_TEST_ASSERT(offset.has_value());
+                const double connector = offset->m_radiance[0] + offset->m_transmittance[0] * 1.0;
+                expected += static_cast<float>(weight * connector);
+
+                if (corner_x > corner_y) {
+                    offset_transmittance = static_cast<float>(offset->m_transmittance[0]);
+                    const double centre_x = (base_x + static_cast<double>(corner & 1u) + 0.5) * parent_step;
+                    const double centre_y = (base_y + static_cast<double>(corner >> 1u) + 0.5) * parent_step;
+                    const double cdx = centre_x - double{position.x};
+                    const double cdy = centre_y - double{position.y};
+                    const double clength = std::sqrt(cdx * cdx + cdy * cdy);
+                    const lighting::OpticalRay centre_ray{
+                        {double{position.x}, double{position.y}}, {cdx / clength, cdy / clength}, 0.0, clength};
+                    const auto centre = lighting::traceOpticalReference(grid, centre_ray);
+                    PPR_TEST_ASSERT(centre.has_value());
+                    centre_transmittance = static_cast<float>(centre->m_transmittance[0]);
+                }
+            }
+
+            PPR_TEST_ASSERT(expected > 0.0f and expected < 1.0f);
+            PPR_TEST_ASSERT(offset_transmittance < 0.5f);
+            PPR_TEST_ASSERT(centre_transmittance > 0.99f);
+            PPR_TEST_ASSERT(centre_transmittance - offset_transmittance > 0.5f);
+
+            const auto blocked = fixture.evaluate(
+                position, direction, normal, 0.0f, lighting::WorldLightField::EvaluateMode::kParentVisibility);
+            for (const float channel: blocked) {
+                PPR_TEST_ASSERT(std::isfinite(channel));
+                PPR_TEST_ASSERT(std::abs(channel - expected) <= 2.0e-3f);
+            }
+            PPR_TEST_ASSERT(blocked[0] < vacuum[0] - 0.01f);
+
+            fixture.shutdown();
+        };
+
+        PPR_UNIT_TEST (parent_visibility_connector_keeps_partial_transmittance) {
+            constexpr u32 width = 64u;
+            constexpr u32 height = 64u;
+            constexpr u32 level_count = 2u;
+            constexpr u32 optical_edge = 64u;
+            constexpr float cell_metres = 0.5f;
+            constexpr double extinction_per_m = 2.0;
+            constexpr float penumbra_width = (1024.0f / static_cast<float>(width)) *
+                                             lighting::kWorldLightDefaultPenumbraWidth;
+
+            // One achromatic absorbing material (cell id 1, palette index 0).
+            const lighting::WorldLightMaterial materials[] = {{.m_kind = 2u, .m_sigma = {2.0f, 2.0f, 2.0f}}};
+
+            Fixture fixture;
+            fixture.initialize(width, height, materials, penumbra_width, level_count);
+            auto &source = fixture.m_source;
+            auto &field = fixture.m_field;
+
+            const auto plan = lighting::planWorldLight(
+                {.m_width = width,
+                    .m_height = height,
+                    .m_cell_metres = cell_metres,
+                    .m_level_count = level_count,
+                    .m_penumbra_width = penumbra_width});
+            PPR_TEST_ASSERT(plan.has_value());
+            PPR_TEST_ASSERT(plan->m_level_count == level_count);
+            PPR_TEST_ASSERT(std::abs(plan->m_levels[0].m_interval_near_m / cell_metres - 0.512f) <= 1.0e-5f);
+            PPR_TEST_ASSERT(
+                std::abs(plan->m_levels[0].m_interval_far_m - plan->m_levels[1].m_interval_near_m) <= 1.0e-6f);
+
+            const lighting::WorldLightLevel &parent = plan->m_levels[1];
+            std::vector<RadianceHalf> seed(plan->m_radiance_samples, RadianceHalf{});
+            for (u32 py = 0u; py < parent.m_probes_y; ++py) {
+                for (u32 px = 0u; px < parent.m_probes_x; ++px) {
+                    for (u32 direction = 0u; direction < parent.m_directions; ++direction) {
+                        const u64 sample = parent.m_sample_offset +
+                                           (u64{py} * parent.m_probes_x + px) * parent.m_directions +
+                                           direction;
+                        seed[sample] = RadianceHalf{
+                            .m_r = floatToHalf(1.0f),
+                            .m_g = floatToHalf(1.0f),
+                            .m_b = floatToHalf(1.0f),
+                            .m_t = floatToHalf(0.5f)};
+                    }
+                }
+            }
+
+            fixture.updateField(0u);
+            fixture.write(field.view().m_radiance, seed);
+
+            // The same lower-right offset connector crosses this absorbing cell.
+            std::vector<u16> chunk(128u * 128u, 0u);
+            chunk[31u * 128u + 34u] = 1u;
+            const lighting::WorldLightChunkUpdate update{.m_chunk_id = 0u, .m_cell_ids = chunk};
+            PPR_TEST_ASSERT(not source.applyUpdate({.m_chunks = {&update, 1u}, .m_revision = 1u}));
+            fixture.encodeSource();
+            fixture.updateField(0u);
+            fixture.write(field.view().m_radiance, seed);
+
+            const float2 position{31.0f * cell_metres, 31.0f * cell_metres};
+            const float2 direction{1.0f, 1.0f};
+            const auto actual = fixture.evaluate(
+                position, direction, float3{0.0f, 0.0f, 1.0f}, 0.0f,
+                lighting::WorldLightField::EvaluateMode::kParentVisibility);
+
+            // Independent optical-grid oracle for the reference offset
+            // connectors: start = child position + childDir * child.nearM, end =
+            // parent corner + childDir * child.farM (== parent.nearM).
+            std::vector<lighting::OpticalCell> cells(u64{optical_edge} * optical_edge);
+            for (lighting::OpticalCell &cell: cells) {
+                cell.m_kind = lighting::OpticalKind::vacuum;
+            }
+            lighting::OpticalCell &absorber = cells[31u * optical_edge + 34u];
+            absorber.m_kind = lighting::OpticalKind::absorbing;
+            absorber.m_extinction = lighting::OpticalRgb{extinction_per_m, extinction_per_m, extinction_per_m};
+            const lighting::OpticalGridView grid{
+                std::span<const lighting::OpticalCell>(cells), {0.0, 0.0}, static_cast<double>(cell_metres),
+                optical_edge, optical_edge, lighting::OpticalBoundary::vacuum};
+
+            const u32 reference_frame = fixture.m_field.view().m_constants->m_frame;
+            const double jitter_x = radicalInverseReference_(reference_frame % 8u, 2u) - 0.5;
+            const double jitter_y = radicalInverseReference_(reference_frame % 8u, 3u) - 0.5;
+            const double jitter_m_x = jitter_x * double{cell_metres};
+            const double jitter_m_y = jitter_y * double{cell_metres};
+            const double child_position_x = double{position.x} + jitter_m_x;
+            const double child_position_y = double{position.y} + jitter_m_y;
+            const double child_near = double{plan->m_levels[0].m_interval_near_m};
+            const double child_far = double{plan->m_levels[0].m_interval_far_m};
+            const double dir_x = 1.0 / std::sqrt(2.0);
+            const double dir_y = dir_x;
+            const double parent_step = static_cast<double>(cell_metres) * static_cast<double>(parent.m_spacing_cells);
+            const double uv_x = child_position_x / parent_step - 0.5;
+            const double uv_y = child_position_y / parent_step - 0.5;
+            const double base_x = std::floor(uv_x);
+            const double base_y = std::floor(uv_y);
+            const double frac_x = uv_x - base_x;
+            const double frac_y = uv_y - base_y;
+
+            float expected = 0.0f;
+            float centre_expected = 0.0f;
+            float offset_transmittance = 1.0f;
+            float centre_transmittance = 1.0f;
+            for (u32 corner = 0u; corner < 4u; ++corner) {
+                const double corner_x = (base_x + static_cast<double>(corner & 1u) + 0.5) * parent_step + jitter_m_x;
+                const double corner_y = (base_y + static_cast<double>(corner >> 1u) + 0.5) * parent_step + jitter_m_y;
+                const double weight = ((corner & 1u) != 0u ? frac_x : 1.0 - frac_x) *
+                                      ((corner & 2u) != 0u ? frac_y : 1.0 - frac_y);
+                if (weight <= 0.0) {
+                    continue;
+                }
+
+                const double start_x = child_position_x + dir_x * child_near;
+                const double start_y = child_position_y + dir_y * child_near;
+                const double end_x = corner_x + dir_x * child_far;
+                const double end_y = corner_y + dir_y * child_far;
+                const double dx = end_x - start_x;
+                const double dy = end_y - start_y;
+                const double length = std::sqrt(dx * dx + dy * dy);
+                const lighting::OpticalRay offset_ray{{start_x, start_y}, {dx / length, dy / length}, 0.0, length};
+                const auto offset = lighting::traceOpticalReference(grid, offset_ray);
+                PPR_TEST_ASSERT(offset.has_value());
+                const double offset_connector = offset->m_radiance[0] + offset->m_transmittance[0] * 1.0;
+                expected += static_cast<float>(weight * offset_connector);
+
+                const double centre_x = (base_x + static_cast<double>(corner & 1u) + 0.5) * parent_step;
+                const double centre_y = (base_y + static_cast<double>(corner >> 1u) + 0.5) * parent_step;
+                const double cdx = centre_x - double{position.x};
+                const double cdy = centre_y - double{position.y};
+                const double clength = std::sqrt(cdx * cdx + cdy * cdy);
+                const lighting::OpticalRay centre_ray{
+                    {double{position.x}, double{position.y}}, {cdx / clength, cdy / clength}, 0.0, clength};
+                const auto centre = lighting::traceOpticalReference(grid, centre_ray);
+                PPR_TEST_ASSERT(centre.has_value());
+                const double centre_connector = centre->m_radiance[0] + centre->m_transmittance[0] * 1.0;
+                centre_expected += static_cast<float>(weight * centre_connector);
+
+                if (corner_x > corner_y) {
+                    offset_transmittance = static_cast<float>(offset->m_transmittance[0]);
+                    centre_transmittance = static_cast<float>(centre->m_transmittance[0]);
+                }
+            }
+
+            PPR_TEST_ASSERT(offset_transmittance > 0.0f and offset_transmittance < 1.0f);
+            PPR_TEST_ASSERT(centre_transmittance > 0.99f);
+            PPR_TEST_ASSERT(expected > 0.0f and expected < 1.0f);
+            PPR_TEST_ASSERT(std::abs(expected - centre_expected) > 0.01f);
+            PPR_TEST_ASSERT(centre_expected > 0.99f);
+            for (const float channel: actual) {
+                PPR_TEST_ASSERT(std::isfinite(channel));
+                PPR_TEST_ASSERT(std::abs(channel - expected) <= 2.0e-3f);
+            }
+
+            fixture.shutdown();
+        };
+
+        PPR_UNIT_TEST (connector_offset_start_keeps_adjacent_emitter) {
+            constexpr u32 width = 64u;
+            constexpr u32 height = 64u;
+            constexpr u32 level_count = 2u;
+            constexpr float cell_metres = 0.5f;
+            // Width * penumbra = 64 * 32e-3 = 2.048 native cells of level-0
+            // nearM. Along 45 degrees the offset start is ~1.45 cells from the
+            // child position, crossing from child cell 31 into cell 32.
+            constexpr float penumbra_width = 32.0f;
+
+            const lighting::WorldLightMaterial materials[] = {{.m_kind = 1u, .m_emission = {1.0f, 1.0f, 1.0f}}};
+
+            Fixture fixture;
+            fixture.initialize(width, height, materials, penumbra_width, level_count);
+            auto &source = fixture.m_source;
+
+            const auto plan = lighting::planWorldLight(
+                {.m_width = width,
+                    .m_height = height,
+                    .m_cell_metres = cell_metres,
+                    .m_level_count = level_count,
+                    .m_penumbra_width = penumbra_width});
+            PPR_TEST_ASSERT(plan.has_value());
+            PPR_TEST_ASSERT(plan->m_levels[0].m_interval_near_m / cell_metres > 1.0f);
+
+            // The child cell 31 is vacuum; the offset-start cell 32 is a real
+            // opaque emitter. The connector must visit cell 32 rather than skip it
+            // as if it were the child's own cell.
+            std::vector<u16> chunk(128u * 128u, 0u);
+            chunk[32u * 128u + 32u] = 1u;
+            const lighting::WorldLightChunkUpdate update{.m_chunk_id = 0u, .m_cell_ids = chunk};
+            PPR_TEST_ASSERT(not source.applyUpdate({.m_chunks = {&update, 1u}, .m_revision = 1u}));
+            fixture.encodeSource();
+            fixture.updateField(0u);
+
+            const float2 position{31.0f * cell_metres, 31.0f * cell_metres};
+            const auto actual = fixture.evaluate(
+                position, float2{1.0f, 1.0f}, float3{0.0f, 0.0f, 1.0f}, 0.0f,
+                lighting::WorldLightField::EvaluateMode::kParentVisibility);
+
+            // All four connectors start inside the emitter cell, so each returns
+            // the emission once before its transmittance reaches zero.
+            for (const float channel: actual) {
+                PPR_TEST_ASSERT(std::isfinite(channel));
+                PPR_TEST_ASSERT(std::abs(channel - 1.0f) <= 2.0e-3f);
+            }
+
+            fixture.shutdown();
+        };
+
+        PPR_UNIT_TEST (terrain_uniform_field_response_normalizes_to_input) {
+            constexpr u32 width = 64u;
+            constexpr u32 height = 64u;
+            constexpr u32 target_edge = 128u;
+            constexpr float input_radiance = 0.1f;
+
+            Fixture fixture;
+            fixture.initialize(width, height);
+            auto &device = fixture.m_rhi->getDevice();
+            auto &field = fixture.m_field;
+            auto &atlas = fixture.m_atlas;
+
+            // Publish the vacuum source, then seed a uniform merged field. With a
+            // flat +Z normal, IOR 1, non-metallic white reflectance, zero emission
+            // and zero atlas ambient, the production material response should be
+            // the field irradiance normalized back to the input radiance.
+            fixture.updateField(0u);
+            std::vector<RadianceHalf> field_seed(
+                field.view().m_radiance->getDesc().size / sizeof(RadianceHalf), RadianceHalf{});
+            for (RadianceHalf &sample: field_seed) {
+                sample = RadianceHalf{
+                    .m_r = floatToHalf(input_radiance),
+                    .m_g = floatToHalf(input_radiance),
+                    .m_b = floatToHalf(input_radiance),
+                    .m_t = floatToHalf(1.0f)};
+            }
+            fixture.write(field.view().m_radiance, field_seed);
+
+            fixture.initializeGrid();
+            auto &grid = fixture.m_grid;
+
+            Camera camera{ECameraProjection::orthographic};
+            CameraModel model{};
+            model.m_camera_mode = ECameraProjection::orthographic;
+            model.m_origin = float3{0.0f, 0.0f, -0.5f};
+            model.m_ortho_scale = 1.0f / 16.0f;
+            camera.updateModel(
+                TimeSpan{}, model,
+                Viewport{PixelRect{int2{0, 0}, int2{int(target_edge), int(target_edge)}}, ViewportLayout{}});
+            const auto snapshot = camera.getSnapshot();
+
+            const auto image = [](const std::array<std::byte, 4u> bytes) {
+                mem::UniqueBuffer storage = mem::UniqueBuffer::allocate(bytes.size());
+                PPR_TEST_ASSERT(not storage.materialize());
+                const auto writable = storage.getMutableData();
+                PPR_TEST_ASSERT(writable.has_value());
+                std::ranges::copy(bytes, writable->begin());
+                mem::SharedBuffer frozen;
+                PPR_TEST_ASSERT(not storage.moveToShared(&frozen));
+                image::ImageAsset result{};
+                result.m_width = result.m_height = 1u;
+                result.m_storage = frozen;
+                result.m_subresources.push_back({frozen.subspan(0u, 4u), 4u, 4u});
+                return result;
+            };
+
+            GridStagedFrame stage{};
+            stage.m_full_refresh = stage.m_reset_caches = stage.m_has_catalog = true;
+            stage.m_cell_size_m = 1.0f;
+            stage.m_boundary_material_id = 1u;
+            stage.m_content_fingerprint = 31u;
+
+            GridTerrainVisual flat{};
+            flat.m_material_id = 1u;
+            flat.m_color_rgba = 0xffffffffu;
+            flat.m_texture_index = 0u;
+            flat.m_transport_model = kGridTransportOpaqueV1;
+            flat.m_metallic = 0.0f;
+            flat.m_roughness = 0.0f;
+            flat.m_ior = 1.0f;
+            stage.m_terrain_visuals.push_back(flat);
+            stage.m_terrain_images.push_back(image({std::byte{255}, std::byte{255}, std::byte{255}, std::byte{255}}));
+
+            stage.m_tiles.push_back({.m_dirty_mask = 1u, .m_tile_range = {0, 0, 128, 128}, .m_chunk_id = 0u});
+            GridStagedUpload upload{};
+            upload.m_payload.m_rect[2] = upload.m_payload.m_rect[3] = 128.0f;
+            upload.m_cell_materials.assign(GridPass::kCellsPerChunk, 0u);
+            upload.m_cell_materials[2u * 128u + 2u] = 1u;
+            stage.m_uploads.push_back(std::move(upload));
+
+            PPR_TEST_ASSERT(not grid.stageWorldCandidate(37u, 41u, stage));
+            bool candidate_ready = false;
+            for (u32 advance = 0u; advance < 8u; ++advance) {
+                const auto ready = grid.advanceWorldCandidate(device, fixture.m_fence.completed());
+                PPR_TEST_ASSERT(ready.has_value());
+                if (*ready) {
+                    candidate_ready = true;
+                    break;
+                }
+            }
+            PPR_TEST_ASSERT(candidate_ready);
+            PPR_TEST_ASSERT(not grid.activateWorldCandidate(37u, 41u, 31u));
+            PPR_TEST_ASSERT(not grid.setWorldLightField(field.view(), 0u, atlas.cells(), 0.0f));
+            PPR_TEST_ASSERT(not grid.update(TimeSpan{}, snapshot, false));
+
+            rhi::TextureDesc target_desc{};
+            target_desc.type = rhi::TextureType::Texture2D;
+            target_desc.size = {.width = target_edge, .height = target_edge, .depth = 1u};
+            target_desc.format = rhi::Format::RGBA32Float;
+            target_desc.memoryType = rhi::MemoryType::DeviceLocal;
+            target_desc.usage = static_cast<rhi::TextureUsage>(
+                static_cast<u32>(rhi::TextureUsage::RenderTarget) | static_cast<u32>(rhi::TextureUsage::CopySource));
+            target_desc.defaultState = rhi::ResourceState::RenderTarget;
+            rhi::ComPtr<rhi::ITexture> target;
+            rhi::ComPtr<rhi::ITextureView> target_view;
+            PPR_TEST_ASSERT(not make_error_code(device.createTexture(target_desc, nullptr, target.writeRef())));
+            PPR_TEST_ASSERT(not make_error_code(target->getDefaultView(target_view.writeRef())));
+
+            const auto viewport = rhi::Viewport::fromSize(float(target_edge), float(target_edge));
+            const auto scissor = rhi::ScissorRect::fromSize(target_edge, target_edge);
+
+            {
+                rhi::ComPtr<rhi::ICommandEncoder> encoder;
+                PPR_TEST_ASSERT(not make_error_code(fixture.m_queue->createCommandEncoder(encoder.writeRef())));
+                const PreRenderContext pre{device, *encoder, fixture.m_fence.completed(), {}};
+                PPR_TEST_ASSERT(not grid.prepareGpuVisibility(pre));
+
+                encoder->setTextureState(
+                    target, rhi::SubresourceRange{.layer = 0u, .layerCount = 1u, .mip = 0u, .mipCount = 1u},
+                    rhi::ResourceState::RenderTarget);
+                rhi::RenderPassColorAttachment attachment{};
+                attachment.view = target_view;
+                attachment.clearValue[0] = attachment.clearValue[1] = attachment.clearValue[2] =
+                    attachment.clearValue[3] = 0.0f;
+                rhi::RenderPassDesc pass_desc{};
+                pass_desc.colorAttachments = &attachment;
+                pass_desc.colorAttachmentCount = 1u;
+                auto *const pass = encoder->beginRenderPass(pass_desc);
+                PPR_TEST_ASSERT(pass != nullptr);
+                {
+                    PPR_DEFER {
+                        pass->end();
+                    };
+                    RenderPipelineSignature signature{};
+                    signature.m_color_formats[0] = rhi::Format::RGBA32Float;
+                    signature.m_color_format_count = 1u;
+                    const DrawContext draw{
+                        device, *pass, RenderPipelineKey{signature}, viewport, scissor,
+                        int2{int(target_edge), int(target_edge)}, fixture.m_fence.completed(), {}};
+                    PPR_TEST_ASSERT(not grid.renderGpuIndirect(draw));
+                }
+
+                rhi::ComPtr<rhi::ICommandBuffer> commands;
+                PPR_TEST_ASSERT(not make_error_code(encoder->finish(commands.writeRef())));
+                rhi::ICommandBuffer *pointer = commands.get();
+                rhi::IFence *signal = fixture.m_fence.fence();
+                const auto value = fixture.m_fence.nextValue();
+                const u64 raw_value = value;
+                rhi::SubmitDesc submit{};
+                submit.commandBuffers = &pointer;
+                submit.commandBufferCount = 1u;
+                submit.signalFences = &signal;
+                submit.signalFenceValues = &raw_value;
+                submit.signalFenceCount = 1u;
+                PPR_TEST_ASSERT(not make_error_code(fixture.m_queue->submit(submit)));
+                fixture.m_fence.commitSubmitted(value);
+                grid.notifyFrameSubmitted(value);
+                PPR_TEST_ASSERT(not fixture.m_fence.waitFor(value));
+            }
+
+            shader::ComPtr<ISlangBlob> blob;
+            rhi::SubresourceLayout layout{};
+            PPR_TEST_ASSERT(not make_error_code(device.readTexture(target, 0u, 0u, blob.writeRef(), &layout)));
+            const auto *const pixels = static_cast<const std::byte *>(blob->getBufferPointer());
+            std::array<float, 4u> pixel{};
+            const u32 pixel_x = 8u + 2u * 16u;
+            const u32 pixel_y = 8u + (7u - 2u) * 16u;
+            std::memcpy(pixel.data(), pixels + pixel_y * layout.rowPitch + pixel_x * sizeof(pixel), sizeof(pixel));
+
+            // The target is linear RGBA32Float, so no sRGB encode participates:
+            // the normalized production response must read back the input value.
+            for (u32 channel = 0u; channel < 3u; ++channel) {
+                PPR_TEST_ASSERT(std::isfinite(pixel[channel]));
+                PPR_TEST_ASSERT(std::abs(pixel[channel] - input_radiance) <= 5.0e-3f);
+            }
+
+            blob.setNull();
+            target_view.setNull();
+            target.setNull();
+            fixture.shutdown();
+        };
+
+        PPR_UNIT_TEST (terrain_opaque_receiver_consumes_incident_field) {
+            constexpr u32 width = 64u;
+            constexpr u32 height = 64u;
+            constexpr u32 target_edge = 128u;
+            constexpr float input_radiance = 0.1f;
+
+            // Match the production 1024² default near interval on this smaller
+            // fixture: interval length is proportional to width * penumbra, so
+            // scale the default penumbra by 1024 / width. The plan accepts this
+            // finite positive penumbra; level-0 nearM becomes the reference 1024²
+            // value (0.256 m at the fixture's 0.5 m cells), exceeding the distance
+            // from a receiver-cell centre to its boundary (0.25 m).
+            constexpr float penumbra_width = (1024.0f / static_cast<float>(width)) *
+                                             lighting::kWorldLightDefaultPenumbraWidth;
+
+            // The world-light source carries the same real opaque, non-emissive
+            // receiver that the rendered terrain cell represents. A surface
+            // sample must consume the incident field, not self-occlude.
+            const lighting::WorldLightMaterial materials[] = {{.m_kind = 1u}};
+
+            Fixture fixture;
+            fixture.initialize(width, height, materials, penumbra_width);
+            auto &device = fixture.m_rhi->getDevice();
+            auto &source = fixture.m_source;
+            auto &field = fixture.m_field;
+            auto &atlas = fixture.m_atlas;
+
+            const auto plan = lighting::planWorldLight(
+                {.m_width = width, .m_height = height, .m_cell_metres = 0.5f, .m_penumbra_width = penumbra_width});
+            PPR_TEST_ASSERT(plan.has_value());
+            const auto reference = lighting::planWorldLight(
+                {.m_width = 1024u, .m_height = 1024u, .m_cell_metres = 0.5f});
+            PPR_TEST_ASSERT(reference.has_value());
+            constexpr float native_cell_metres = 0.5f;
+            PPR_TEST_ASSERT(
+                std::abs(plan->m_levels[0].m_interval_near_m - reference->m_levels[0].m_interval_near_m) <= 1.0e-6f);
+            PPR_TEST_ASSERT(plan->m_levels[0].m_interval_near_m > 0.5f * native_cell_metres);
+
+            // A dense 3x3 GridPass-cell region around the rendered receiver,
+            // expressed in the field's 0.5 m native cells. The tested 1 m cell is
+            // native [4,6) x [4,6); the region is native [2,8) x [2,8), so short
+            // near rays cross into another opaque cell before nearM for the
+            // directions that leave the receiver cell, while the rendered cell
+            // remains exactly the same receiver.
+            std::vector<u16> receiver(128u * 128u, 0u);
+            for (u32 y = 2u; y < 8u; ++y) {
+                for (u32 x = 2u; x < 8u; ++x) {
+                    receiver[y * 128u + x] = 1u;
+                }
+            }
+            const lighting::WorldLightChunkUpdate receiver_update{.m_chunk_id = 0u, .m_cell_ids = receiver};
+            PPR_TEST_ASSERT(not source.applyUpdate({.m_chunks = {&receiver_update, 1u}, .m_revision = 1u}));
+            fixture.encodeSource();
+
+            // Publish the opaque source, then seed the incident merged field.
+            fixture.updateField(0u);
+            std::vector<RadianceHalf> field_seed(
+                field.view().m_radiance->getDesc().size / sizeof(RadianceHalf), RadianceHalf{});
+            for (RadianceHalf &sample: field_seed) {
+                sample = RadianceHalf{
+                    .m_r = floatToHalf(input_radiance),
+                    .m_g = floatToHalf(input_radiance),
+                    .m_b = floatToHalf(input_radiance),
+                    .m_t = floatToHalf(1.0f)};
+            }
+            fixture.write(field.view().m_radiance, field_seed);
+
+            fixture.initializeGrid();
+            auto &grid = fixture.m_grid;
+
+            Camera camera{ECameraProjection::orthographic};
+            CameraModel model{};
+            model.m_camera_mode = ECameraProjection::orthographic;
+            model.m_origin = float3{0.0f, 0.0f, -0.5f};
+            model.m_ortho_scale = 1.0f / 16.0f;
+            camera.updateModel(
+                TimeSpan{}, model,
+                Viewport{PixelRect{int2{0, 0}, int2{int(target_edge), int(target_edge)}}, ViewportLayout{}});
+            const auto snapshot = camera.getSnapshot();
+
+            const auto image = [](const std::array<std::byte, 4u> bytes) {
+                mem::UniqueBuffer storage = mem::UniqueBuffer::allocate(bytes.size());
+                PPR_TEST_ASSERT(not storage.materialize());
+                const auto writable = storage.getMutableData();
+                PPR_TEST_ASSERT(writable.has_value());
+                std::ranges::copy(bytes, writable->begin());
+                mem::SharedBuffer frozen;
+                PPR_TEST_ASSERT(not storage.moveToShared(&frozen));
+                image::ImageAsset result{};
+                result.m_width = result.m_height = 1u;
+                result.m_storage = frozen;
+                result.m_subresources.push_back({frozen.subspan(0u, 4u), 4u, 4u});
+                return result;
+            };
+
+            GridStagedFrame stage{};
+            stage.m_full_refresh = stage.m_reset_caches = stage.m_has_catalog = true;
+            stage.m_cell_size_m = 1.0f;
+            stage.m_boundary_material_id = 1u;
+            stage.m_content_fingerprint = 43u;
+
+            GridTerrainVisual flat{};
+            flat.m_material_id = 1u;
+            flat.m_color_rgba = 0xffffffffu;
+            flat.m_texture_index = 0u;
+            flat.m_transport_model = kGridTransportOpaqueV1;
+            flat.m_metallic = 0.0f;
+            flat.m_roughness = 0.0f;
+            flat.m_ior = 1.0f;
+            stage.m_terrain_visuals.push_back(flat);
+            stage.m_terrain_images.push_back(image({std::byte{255}, std::byte{255}, std::byte{255}, std::byte{255}}));
+
+            stage.m_tiles.push_back({.m_dirty_mask = 1u, .m_tile_range = {0, 0, 128, 128}, .m_chunk_id = 0u});
+            GridStagedUpload upload{};
+            upload.m_payload.m_rect[2] = upload.m_payload.m_rect[3] = 128.0f;
+            upload.m_cell_materials.assign(GridPass::kCellsPerChunk, 0u);
+            upload.m_cell_materials[2u * 128u + 2u] = 1u;
+            stage.m_uploads.push_back(std::move(upload));
+
+            PPR_TEST_ASSERT(not grid.stageWorldCandidate(43u, 47u, stage));
+            bool candidate_ready = false;
+            for (u32 advance = 0u; advance < 8u; ++advance) {
+                const auto ready = grid.advanceWorldCandidate(device, fixture.m_fence.completed());
+                PPR_TEST_ASSERT(ready.has_value());
+                if (*ready) {
+                    candidate_ready = true;
+                    break;
+                }
+            }
+            PPR_TEST_ASSERT(candidate_ready);
+            PPR_TEST_ASSERT(not grid.activateWorldCandidate(43u, 47u, 43u));
+            PPR_TEST_ASSERT(not grid.setWorldLightField(field.view(), 0u, atlas.cells(), 0.0f));
+            PPR_TEST_ASSERT(not grid.update(TimeSpan{}, snapshot, false));
+
+            rhi::TextureDesc target_desc{};
+            target_desc.type = rhi::TextureType::Texture2D;
+            target_desc.size = {.width = target_edge, .height = target_edge, .depth = 1u};
+            target_desc.format = rhi::Format::RGBA32Float;
+            target_desc.memoryType = rhi::MemoryType::DeviceLocal;
+            target_desc.usage = static_cast<rhi::TextureUsage>(
+                static_cast<u32>(rhi::TextureUsage::RenderTarget) | static_cast<u32>(rhi::TextureUsage::CopySource));
+            target_desc.defaultState = rhi::ResourceState::RenderTarget;
+            rhi::ComPtr<rhi::ITexture> target;
+            rhi::ComPtr<rhi::ITextureView> target_view;
+            PPR_TEST_ASSERT(not make_error_code(device.createTexture(target_desc, nullptr, target.writeRef())));
+            PPR_TEST_ASSERT(not make_error_code(target->getDefaultView(target_view.writeRef())));
+
+            const auto viewport = rhi::Viewport::fromSize(float(target_edge), float(target_edge));
+            const auto scissor = rhi::ScissorRect::fromSize(target_edge, target_edge);
+
+            {
+                rhi::ComPtr<rhi::ICommandEncoder> encoder;
+                PPR_TEST_ASSERT(not make_error_code(fixture.m_queue->createCommandEncoder(encoder.writeRef())));
+                const PreRenderContext pre{device, *encoder, fixture.m_fence.completed(), {}};
+                PPR_TEST_ASSERT(not grid.prepareGpuVisibility(pre));
+
+                encoder->setTextureState(
+                    target, rhi::SubresourceRange{.layer = 0u, .layerCount = 1u, .mip = 0u, .mipCount = 1u},
+                    rhi::ResourceState::RenderTarget);
+                rhi::RenderPassColorAttachment attachment{};
+                attachment.view = target_view;
+                attachment.clearValue[0] = attachment.clearValue[1] = attachment.clearValue[2] =
+                    attachment.clearValue[3] = 0.0f;
+                rhi::RenderPassDesc pass_desc{};
+                pass_desc.colorAttachments = &attachment;
+                pass_desc.colorAttachmentCount = 1u;
+                auto *const pass = encoder->beginRenderPass(pass_desc);
+                PPR_TEST_ASSERT(pass != nullptr);
+                {
+                    PPR_DEFER {
+                        pass->end();
+                    };
+                    RenderPipelineSignature signature{};
+                    signature.m_color_formats[0] = rhi::Format::RGBA32Float;
+                    signature.m_color_format_count = 1u;
+                    const DrawContext draw{
+                        device, *pass, RenderPipelineKey{signature}, viewport, scissor,
+                        int2{int(target_edge), int(target_edge)}, fixture.m_fence.completed(), {}};
+                    PPR_TEST_ASSERT(not grid.renderGpuIndirect(draw));
+                }
+
+                rhi::ComPtr<rhi::ICommandBuffer> commands;
+                PPR_TEST_ASSERT(not make_error_code(encoder->finish(commands.writeRef())));
+                rhi::ICommandBuffer *pointer = commands.get();
+                rhi::IFence *signal = fixture.m_fence.fence();
+                const auto value = fixture.m_fence.nextValue();
+                const u64 raw_value = value;
+                rhi::SubmitDesc submit{};
+                submit.commandBuffers = &pointer;
+                submit.commandBufferCount = 1u;
+                submit.signalFences = &signal;
+                submit.signalFenceValues = &raw_value;
+                submit.signalFenceCount = 1u;
+                PPR_TEST_ASSERT(not make_error_code(fixture.m_queue->submit(submit)));
+                fixture.m_fence.commitSubmitted(value);
+                grid.notifyFrameSubmitted(value);
+                PPR_TEST_ASSERT(not fixture.m_fence.waitFor(value));
+            }
+
+            shader::ComPtr<ISlangBlob> blob;
+            rhi::SubresourceLayout layout{};
+            PPR_TEST_ASSERT(not make_error_code(device.readTexture(target, 0u, 0u, blob.writeRef(), &layout)));
+            const auto *const pixels = static_cast<const std::byte *>(blob->getBufferPointer());
+            std::array<float, 4u> pixel{};
+            const u32 pixel_x = 8u + 2u * 16u;
+            const u32 pixel_y = 8u + (7u - 2u) * 16u;
+            std::memcpy(pixel.data(), pixels + pixel_y * layout.rowPitch + pixel_x * sizeof(pixel), sizeof(pixel));
+
+            // Linear RGBA32Float target: the receiver must consume the same
+            // normalized incident field as the vacuum-source uniform test.
+            for (u32 channel = 0u; channel < 3u; ++channel) {
+                PPR_TEST_ASSERT(std::isfinite(pixel[channel]));
+                PPR_TEST_ASSERT(std::abs(pixel[channel] - input_radiance) <= 5.0e-3f);
+            }
+
+            blob.setNull();
+            target_view.setNull();
+            target.setNull();
+            fixture.shutdown();
+        };
+
+        PPR_UNIT_TEST (world_light_field_rectangular_nonuniform_render) {
+            constexpr u32 field_width = 128u;
+            constexpr u32 field_height = 64u;
+            constexpr u32 target_edge = 128u;
+            constexpr float render_cell_metres = 1.0f;
+
+            // 128x64 native cells at 0.5 m is a valid rectangular plan. The
+            // analytic pattern is affine in probe coordinates plus a direction
+            // term, so bilinear interpolation has an independent closed form and
+            // row/axis/index swaps change the rendered value.
+            Fixture fixture;
+            fixture.initialize(field_width, field_height);
+            auto &device = fixture.m_rhi->getDevice();
+            auto &field = fixture.m_field;
+            auto &atlas = fixture.m_atlas;
+
+            const auto plan = lighting::planWorldLight(
+                {.m_width = field_width, .m_height = field_height, .m_cell_metres = 0.5f});
+            PPR_TEST_ASSERT(plan.has_value());
+            const lighting::WorldLightLevel &level0 = plan->m_levels[0];
+            PPR_TEST_ASSERT(level0.m_probes_x > 2u and level0.m_probes_y > 2u);
+            PPR_TEST_ASSERT(level0.m_directions == 4u);
+
+            fixture.updateField(0u);
+            std::vector<RadianceHalf> field_seed(
+                field.view().m_radiance->getDesc().size / sizeof(RadianceHalf), RadianceHalf{});
+            for (u32 py = 0u; py < level0.m_probes_y; ++py) {
+                for (u32 px = 0u; px < level0.m_probes_x; ++px) {
+                    for (u32 direction = 0u; direction < level0.m_directions; ++direction) {
+                        const u64 sample = level0.m_sample_offset +
+                                           (u64{py} * level0.m_probes_x + px) * level0.m_directions +
+                                           direction;
+                        const float r = 0.05f +
+                                        0.1f * static_cast<float>(px) / static_cast<float>(level0.m_probes_x - 1u);
+                        const float g = 0.05f +
+                                        0.1f * static_cast<float>(py) / static_cast<float>(level0.m_probes_y - 1u);
+                        const float b = 0.05f + 0.01f * static_cast<float>(direction);
+                        field_seed[sample] = RadianceHalf{
+                            .m_r = floatToHalf(r),
+                            .m_g = floatToHalf(g),
+                            .m_b = floatToHalf(b),
+                            .m_t = floatToHalf(1.0f)};
+                    }
+                }
+            }
+            fixture.write(field.view().m_radiance, field_seed);
+
+            fixture.initializeGrid();
+            auto &grid = fixture.m_grid;
+
+            Camera camera{ECameraProjection::orthographic};
+            CameraModel model{};
+            model.m_camera_mode = ECameraProjection::orthographic;
+            model.m_origin = float3{0.0f, 0.0f, -0.5f};
+            model.m_ortho_scale = 1.0f / 16.0f;
+            camera.updateModel(
+                TimeSpan{}, model,
+                Viewport{PixelRect{int2{0, 0}, int2{int(target_edge), int(target_edge)}}, ViewportLayout{}});
+            const auto snapshot = camera.getSnapshot();
+
+            const auto image = [](const std::array<std::byte, 4u> bytes) {
+                mem::UniqueBuffer storage = mem::UniqueBuffer::allocate(bytes.size());
+                PPR_TEST_ASSERT(not storage.materialize());
+                const auto writable = storage.getMutableData();
+                PPR_TEST_ASSERT(writable.has_value());
+                std::ranges::copy(bytes, writable->begin());
+                mem::SharedBuffer frozen;
+                PPR_TEST_ASSERT(not storage.moveToShared(&frozen));
+                image::ImageAsset result{};
+                result.m_width = result.m_height = 1u;
+                result.m_storage = frozen;
+                result.m_subresources.push_back({frozen.subspan(0u, 4u), 4u, 4u});
+                return result;
+            };
+
+            GridStagedFrame stage{};
+            stage.m_full_refresh = stage.m_reset_caches = stage.m_has_catalog = true;
+            stage.m_cell_size_m = render_cell_metres;
+            stage.m_boundary_material_id = 1u;
+            stage.m_content_fingerprint = 59u;
+
+            GridTerrainVisual flat{};
+            flat.m_material_id = 1u;
+            flat.m_color_rgba = 0xffffffffu;
+            flat.m_texture_index = 0u;
+            flat.m_transport_model = kGridTransportOpaqueV1;
+            flat.m_metallic = 0.0f;
+            flat.m_roughness = 0.0f;
+            flat.m_ior = 1.0f;
+            stage.m_terrain_visuals.push_back(flat);
+            stage.m_terrain_images.push_back(image({std::byte{255}, std::byte{255}, std::byte{255}, std::byte{255}}));
+
+            stage.m_tiles.push_back({.m_dirty_mask = 1u, .m_tile_range = {0, 0, 128, 128}, .m_chunk_id = 0u});
+            GridStagedUpload upload{};
+            upload.m_payload.m_rect[2] = upload.m_payload.m_rect[3] = 128.0f;
+            upload.m_cell_materials.assign(GridPass::kCellsPerChunk, 1u);
+            stage.m_uploads.push_back(std::move(upload));
+
+            PPR_TEST_ASSERT(not grid.stageWorldCandidate(59u, 61u, stage));
+            bool candidate_ready = false;
+            for (u32 advance = 0u; advance < 8u; ++advance) {
+                const auto ready = grid.advanceWorldCandidate(device, fixture.m_fence.completed());
+                PPR_TEST_ASSERT(ready.has_value());
+                if (*ready) {
+                    candidate_ready = true;
+                    break;
+                }
+            }
+            PPR_TEST_ASSERT(candidate_ready);
+            PPR_TEST_ASSERT(not grid.activateWorldCandidate(59u, 61u, 59u));
+            PPR_TEST_ASSERT(not grid.setWorldLightField(field.view(), 0u, atlas.cells(), 0.0f));
+            PPR_TEST_ASSERT(not grid.update(TimeSpan{}, snapshot, false));
+
+            rhi::TextureDesc target_desc{};
+            target_desc.type = rhi::TextureType::Texture2D;
+            target_desc.size = {.width = target_edge, .height = target_edge, .depth = 1u};
+            target_desc.format = rhi::Format::RGBA32Float;
+            target_desc.memoryType = rhi::MemoryType::DeviceLocal;
+            target_desc.usage = static_cast<rhi::TextureUsage>(
+                static_cast<u32>(rhi::TextureUsage::RenderTarget) | static_cast<u32>(rhi::TextureUsage::CopySource));
+            target_desc.defaultState = rhi::ResourceState::RenderTarget;
+            rhi::ComPtr<rhi::ITexture> target;
+            rhi::ComPtr<rhi::ITextureView> target_view;
+            PPR_TEST_ASSERT(not make_error_code(device.createTexture(target_desc, nullptr, target.writeRef())));
+            PPR_TEST_ASSERT(not make_error_code(target->getDefaultView(target_view.writeRef())));
+
+            const auto viewport = rhi::Viewport::fromSize(float(target_edge), float(target_edge));
+            const auto scissor = rhi::ScissorRect::fromSize(target_edge, target_edge);
+
+            {
+                rhi::ComPtr<rhi::ICommandEncoder> encoder;
+                PPR_TEST_ASSERT(not make_error_code(fixture.m_queue->createCommandEncoder(encoder.writeRef())));
+                const PreRenderContext pre{device, *encoder, fixture.m_fence.completed(), {}};
+                PPR_TEST_ASSERT(not grid.prepareGpuVisibility(pre));
+
+                encoder->setTextureState(
+                    target, rhi::SubresourceRange{.layer = 0u, .layerCount = 1u, .mip = 0u, .mipCount = 1u},
+                    rhi::ResourceState::RenderTarget);
+                rhi::RenderPassColorAttachment attachment{};
+                attachment.view = target_view;
+                attachment.clearValue[0] = attachment.clearValue[1] = attachment.clearValue[2] =
+                    attachment.clearValue[3] = 0.0f;
+                rhi::RenderPassDesc pass_desc{};
+                pass_desc.colorAttachments = &attachment;
+                pass_desc.colorAttachmentCount = 1u;
+                auto *const pass = encoder->beginRenderPass(pass_desc);
+                PPR_TEST_ASSERT(pass != nullptr);
+                {
+                    PPR_DEFER {
+                        pass->end();
+                    };
+                    RenderPipelineSignature signature{};
+                    signature.m_color_formats[0] = rhi::Format::RGBA32Float;
+                    signature.m_color_format_count = 1u;
+                    const DrawContext draw{
+                        device, *pass, RenderPipelineKey{signature}, viewport, scissor,
+                        int2{int(target_edge), int(target_edge)}, fixture.m_fence.completed(), {}};
+                    PPR_TEST_ASSERT(not grid.renderGpuIndirect(draw));
+                }
+
+                rhi::ComPtr<rhi::ICommandBuffer> commands;
+                PPR_TEST_ASSERT(not make_error_code(encoder->finish(commands.writeRef())));
+                rhi::ICommandBuffer *pointer = commands.get();
+                rhi::IFence *signal = fixture.m_fence.fence();
+                const auto value = fixture.m_fence.nextValue();
+                const u64 raw_value = value;
+                rhi::SubmitDesc submit{};
+                submit.commandBuffers = &pointer;
+                submit.commandBufferCount = 1u;
+                submit.signalFences = &signal;
+                submit.signalFenceValues = &raw_value;
+                submit.signalFenceCount = 1u;
+                PPR_TEST_ASSERT(not make_error_code(fixture.m_queue->submit(submit)));
+                fixture.m_fence.commitSubmitted(value);
+                grid.notifyFrameSubmitted(value);
+                PPR_TEST_ASSERT(not fixture.m_fence.waitFor(value));
+            }
+
+            shader::ComPtr<ISlangBlob> blob;
+            rhi::SubresourceLayout layout{};
+            PPR_TEST_ASSERT(not make_error_code(device.readTexture(target, 0u, 0u, blob.writeRef(), &layout)));
+            const auto *const pixels = static_cast<const std::byte *>(blob->getBufferPointer());
+            const auto pixel_at = [&](const u32 x, const u32 y) {
+                std::array<float, 4u> pixel{};
+                std::memcpy(pixel.data(), pixels + y * layout.rowPitch + x * sizeof(pixel), sizeof(pixel));
+                return pixel;
+            };
+
+            const float probe_spacing_m = plan->m_cell_metres * float(level0.m_spacing_cells);
+            const auto expected_at = [&](const float world_x, const float world_y) {
+                const float probe_x = world_x / probe_spacing_m - 0.5f;
+                const float probe_y = world_y / probe_spacing_m - 0.5f;
+                const float r = 0.05f + 0.1f * probe_x / float(level0.m_probes_x - 1u);
+                const float g = 0.05f + 0.1f * probe_y / float(level0.m_probes_y - 1u);
+                const std::array<float, 3> result{r, g, 0.065f};
+                return result;
+            };
+
+            struct Sample {
+                float m_x{};
+                float m_y{};
+            };
+            const std::array<Sample, 6u> samples{{
+                {1.5f, 1.5f},
+                {2.0f, 1.5f},
+                {2.5f, 1.5f},
+                {1.5f, 2.5f},
+                {2.5f, 2.5f},
+                {3.5f, 4.5f},
+            }};
+            for (const Sample &sample: samples) {
+                const u32 pixel_x = static_cast<u32>(sample.m_x / render_cell_metres * 16.0f);
+                const u32 pixel_y = target_edge - static_cast<u32>(sample.m_y / render_cell_metres * 16.0f);
+                const std::array<float, 4u> pixel = pixel_at(pixel_x, pixel_y);
+                const std::array<float, 3> expected = expected_at(sample.m_x, sample.m_y);
+                for (u32 channel = 0u; channel < 3u; ++channel) {
+                    PPR_TEST_ASSERT(std::isfinite(pixel[channel]));
+                    PPR_TEST_ASSERT(std::abs(pixel[channel] - expected[channel]) <= 2.0e-3f);
+                }
+            }
+
+            blob.setNull();
+            target_view.setNull();
+            target.setNull();
             fixture.shutdown();
         };
 
@@ -2786,11 +4835,13 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not source.applyUpdate(sky_update));
             fixture.encodeSource();
 
-            // One update traces every level; the suffix propagates one level per
-            // update, and retention 0 makes each stored value the fresh fold.
-            const u32 budget = static_cast<u32>(plan->m_radiance_samples);
+            // A full weighted pass (four rays per stored sample) traces every
+            // level with raw coarse-to-fine results in the first update; the
+            // remaining updates keep the same vacuum terminal sky under the
+            // global temporal jitter.
+            const u32 budget = static_cast<u32>(4u * plan->m_radiance_samples);
             for (u32 index = 0u; index < 8u; ++index) {
-                fixture.updateField(budget, 1u, 0.0f);
+                fixture.updateField(budget);
             }
 
             // The last level-0 probe before the +X boundary: the fold must carry
@@ -2949,6 +5000,10 @@ namespace pP::tests::detail {
                     .m_b = floatToHalf(10.0f),
                     .m_t = floatToHalf(1.0f)};
             }
+            // Publish the source buffers the grid field view binds (a zero-budget
+            // update only flips the ping-pong and records them), then seed the
+            // merged field the render should sample.
+            fixture.updateField(0u);
             fixture.write(field.view().m_radiance, uniform);
 
             fixture.initializeGrid();
@@ -3289,6 +5344,9 @@ namespace pP::tests::detail {
                     }
                 }
             }
+            // Publish the source buffers for the grid field view before seeding
+            // the merged field the render samples.
+            fixture.updateField(0u);
             fixture.write(field.view().m_radiance, seeded);
 
             // The real producer over the seeded field. EMA retained at 0.5; eight
@@ -3519,6 +5577,7 @@ namespace pP::tests::detail {
             // only light in the render is the atlas ambient term under test.
             const u64 radiance_samples = field.view().m_radiance->getDesc().size / sizeof(RadianceHalf);
             std::vector<RadianceHalf> zero(radiance_samples, RadianceHalf{});
+            fixture.updateField(0u);
             fixture.write(field.view().m_radiance, zero);
 
             // Incident radiance of 1.0 over the whole border grid cell (2,2) and
@@ -4232,7 +6291,8 @@ namespace pP::tests::detail {
             constexpr float ev_max = 4.0f;
 
             // Black frame: every luminance is zero. The log2 clamp keeps the
-            // reduction finite and the target EV pins to the lower bound.
+            // reduction finite; the target EV pins to the upper bound because a
+            // dark scene needs positive exposure.
             std::vector<float> black(4096u, 0.0f);
             std::array<u32, RetroPass::kHistogramBins> black_hist{};
             for (const float lum: black) {
@@ -4240,7 +6300,7 @@ namespace pP::tests::detail {
             }
             const float black_avg = RetroPass::averageLog2Luminance(black_hist, static_cast<u32>(black.size()));
             PPR_TEST_ASSERT(std::isfinite(black_avg));
-            PPR_TEST_ASSERT(RetroPass::targetEv(black_avg, ev_min, ev_max) == ev_min);
+            PPR_TEST_ASSERT(RetroPass::targetEv(black_avg, ev_min, ev_max) == ev_max);
 
             // Uniform 0.18 middle gray: target EV lands near zero.
             std::vector<float> uniform(4096u, 0.18f);
@@ -4254,8 +6314,8 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(std::abs(uniform_ev) < 0.25f);
 
             // Bright-emitter dominated: one emitter among a dark background. The
-            // percentile clip suppresses the emitter, so the target stays below
-            // the middle-gray target and within the clamp window.
+            // percentile clip suppresses the emitter, leaving the dark background
+            // to drive a positive target EV, clamped at the upper bound.
             std::vector<float> emitter(4096u, 0.01f);
             emitter[0] = 1000.0f;
             std::array<u32, RetroPass::kHistogramBins> emitter_hist{};
@@ -4265,8 +6325,8 @@ namespace pP::tests::detail {
             const float emitter_avg = RetroPass::averageLog2Luminance(emitter_hist, static_cast<u32>(emitter.size()));
             const float emitter_ev = RetroPass::targetEv(emitter_avg, ev_min, ev_max);
             PPR_TEST_ASSERT(std::isfinite(emitter_ev));
-            PPR_TEST_ASSERT(emitter_ev < uniform_ev);
-            PPR_TEST_ASSERT(emitter_ev >= ev_min);
+            PPR_TEST_ASSERT(emitter_ev > uniform_ev);
+            PPR_TEST_ASSERT(emitter_ev <= ev_max);
         };
 
         PPR_UNIT_TEST (cpu_adaptation_alpha) {
@@ -4669,13 +6729,16 @@ namespace pP::tests::detail {
                 for (const float lum: uniform) {
                     ++histogram[RetroPass::luminanceBin(RetroPass::log2Luminance(lum))];
                 }
-                const float cpu_target = RetroPass::averageLog2Luminance(histogram, static_cast<u32>(uniform.size())) -
-                                         std::log2(RetroPass::kMiddleGrayLuminance);
+                const float cpu_target = std::log2(RetroPass::kMiddleGrayLuminance) -
+                                         RetroPass::averageLog2Luminance(histogram, static_cast<u32>(uniform.size()));
 
                 // GPU reduced target must match the CPU oracle (numeric, not just
-                // finiteness): a broken histogram/reduction fails here.
+                // finiteness): a broken histogram/reduction fails here. The
+                // independent .18-scene contract is that the offset is near zero
+                // without consulting the CPU target.
                 const float gpu_target = fixture.reduceTarget();
                 PPR_TEST_ASSERT(std::isfinite(gpu_target));
+                PPR_TEST_ASSERT(std::abs(gpu_target) < 0.25f);
                 PPR_TEST_ASSERT(std::abs(gpu_target - cpu_target) < 0.05f);
 
                 // A 60 Hz frame adapts slowly toward the target: the first frame is
@@ -4696,11 +6759,32 @@ namespace pP::tests::detail {
                 PPR_TEST_ASSERT(fixed_a == 0.0f);
                 PPR_TEST_ASSERT(fixed_b == 0.0f);
             };
+
+            // Independent GPU contract in actual scene-radiance units: a dark
+            // uniform scene must produce a positive target EV and therefore a
+            // brighter output after the present-side exp2 multiply. This does not
+            // consult the CPU target formula.
+            PPR_UNIT_TEST (gpu_dark_scene_target_ev_raises_exposure) {
+                constexpr float dark_luminance = 0.018f;
+
+                Fixture fixture;
+                fixture.initialize(dark_luminance);
+                PPR_DEFER {
+                    fixture.shutdown();
+                };
+
+                const float gpu_target = fixture.reduceTarget();
+                PPR_TEST_ASSERT(std::isfinite(gpu_target));
+                PPR_TEST_ASSERT(gpu_target > 0.0f);
+                PPR_TEST_ASSERT(dark_luminance * std::exp2(gpu_target) > dark_luminance);
+            };
         }
 
         const UnitTest histogram_adaptation = UnitTest::Named("histogram_adaptation") /
                                               [](UnitTest::IRun &run) -> void {
-            run.recurse({cpu_histogram_math, cpu_adaptation_alpha, Gpu::gpu_adaptation_smoke});
+            run.recurse(
+                {cpu_histogram_math, cpu_adaptation_alpha, Gpu::gpu_adaptation_smoke,
+                    Gpu::gpu_dark_scene_target_ev_raises_exposure});
         };
     }
 
@@ -5178,12 +7262,25 @@ namespace pP::tests {
             detail::WorldLightGpu::gpu_source_second_update_replaces_pending_particles,
             detail::WorldLightGpu::gpu_source_multiword_occupancy,
             detail::WorldLightGpu::gpu_source_multi_chunk_update_keeps_each_chunk_rows,
+            detail::WorldLightFieldGpu::world_light_field_constants_reflection_layout,
             detail::WorldLightFieldGpu::field_single_emitter_converges,
-            detail::WorldLightFieldGpu::field_accumulation_caps_count_and_retention_holds_history,
+            detail::WorldLightFieldGpu::field_coarsest_steady_state_overwrites_history,
+            detail::WorldLightFieldGpu::field_l0_mature_exponential_uses_actual_dt,
+            detail::WorldLightFieldGpu::field_ordinary_selection_disperses_l0_probes,
+            detail::WorldLightFieldGpu::field_ordinary_selection_completes_phase_sweeps,
+            detail::WorldLightFieldGpu::field_origin_cell_emissive_is_visible,
+            detail::WorldLightFieldGpu::field_origin_cell_opaque_blocks_incident,
+            detail::WorldLightFieldGpu::field_occupancy_mask_dense_equivalence,
+            detail::WorldLightFieldGpu::field_occupancy_mask_overlay_equivalence,
             detail::WorldLightFieldGpu::field_dirty_update_reprocesses_in_same_frame,
             detail::WorldLightFieldGpu::field_dirty_rect_is_per_update_a_keeps_b_resets,
             detail::WorldLightFieldGpu::field_sky_only_edit_resets_only_coarsest,
+            detail::WorldLightFieldGpu::field_sky_edit_preserves_unrepaired_coarse_radiance,
+            detail::WorldLightFieldGpu::field_dirty_overlap_keeps_rebuilt_sample,
+            detail::WorldLightFieldGpu::field_repeated_revisions_refresh_all_level_tails,
             detail::WorldLightFieldGpu::field_angular_sky_varies_by_bin_and_honours_hour,
+            detail::WorldLightFieldGpu::field_emitter_spreads_off_axis,
+            detail::WorldLightFieldGpu::terrain_irradiance_spreads_off_axis,
             detail::WorldLightFieldGpu::field_reset_bounds_rect_tail,
             detail::WorldLightFieldGpu::field_update_respects_budget_boundary,
             detail::WorldLightFieldGpu::field_dense_dda_hits_diagonal_emitter,
@@ -5197,7 +7294,13 @@ namespace pP::tests {
             detail::WorldLightFieldGpu::atlas_seeds_incident_radiance_and_retains_history,
             detail::WorldLightFieldGpu::atlas_vacuum_source_is_all_zero,
             detail::WorldLightFieldGpu::merged_field_matches_per_level_composite_within_tolerance,
-            detail::WorldLightFieldGpu::gpu_fold_matches_cpu_merge_with_partial_transmittance,
+            detail::WorldLightFieldGpu::gpu_fold_matches_cpu_merge_from_current_parent,
+            detail::WorldLightFieldGpu::parent_visibility_connector_honours_opaque_occluder,
+            detail::WorldLightFieldGpu::parent_visibility_connector_keeps_partial_transmittance,
+            detail::WorldLightFieldGpu::connector_offset_start_keeps_adjacent_emitter,
+            detail::WorldLightFieldGpu::terrain_uniform_field_response_normalizes_to_input,
+            detail::WorldLightFieldGpu::terrain_opaque_receiver_consumes_incident_field,
+            detail::WorldLightFieldGpu::world_light_field_rectangular_nonuniform_render,
             detail::WorldLightFieldGpu::merged_field_preserves_terminal_sky_at_world_edge,
             detail::WorldLightFieldGpu::diffuse_plus_z_isotropic_and_perturbed_finite,
             detail::WorldLightFieldGpu::specular_vertical_reflection_and_roughness_finite,

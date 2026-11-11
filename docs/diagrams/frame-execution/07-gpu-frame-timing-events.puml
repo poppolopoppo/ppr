@@ -1,0 +1,61 @@
+@startuml
+!theme toy
+title GPU frame timing events: two timestamp pairs to GpuFrameTiming
+
+participant "Main thread\nApplication" as main #6CB4EE
+participant "Render lane\nRenderer" as lane #77DD77
+participant "Command stream\nencoder → graphics queue" as gpu #FFB347
+participant "App frame fence\nmonotonic value V" as fence #CF9FFF
+
+== record one frame's timestamp pair ==
+lane -> lane : beginGpuTiming_(encoder, surface_frame)\nscan 2 slots for kFenceValueNone
+alt timing disabled (frequency 0 or query pool failed)
+  lane --> lane : nullopt — no events this frame
+else free slot found
+  lane -> gpu : reset queries [slot*2, slot*2+1]
+  lane -> gpu : writeTimestamp(slot*2) — frame start
+  lane -> gpu : encode pass(es) + optional readback
+  lane -> gpu : writeTimestamp(slot*2+1) — frame end
+else both slots still bound to a fence
+  lane --> lane : nullopt — telemetry omitted,\nadmission never stalls
+end
+
+== bind the pair to the submission's fence value ==
+lane -> gpu : finish() → command buffer
+lane -> fence : submitAndSignal_() commits value V
+fence --> lane : V
+lane -> lane : m_gpu_query_fences[slot] = V\n(only after an accepted submit)
+
+== the GPU executes the recorded events ==
+gpu -> gpu : frame start timestamp,\npass work, frame end timestamp
+fence -> fence : signal V when this submission completes
+
+== collect after completion, without a host wait ==
+lane -> fence : sweepCompleted_ / pollCompleted()
+fence --> lane : completed value (may still be < V)
+lane -> gpu : getResultState(slot*2, 2)
+alt fence reached and state == Resolved
+  lane -> gpu : getResult(ticks[0..1])
+  lane -> lane : ms = (t1 - t0) * 1000 / timestampFrequency
+  lane -> lane : GpuFrameTiming{V, ms, surface_frame}\nkeep only a newer V per cache
+  lane -> lane : m_gpu_query_fences[slot] = kFenceValueNone
+else fence pending or state not Resolved
+  note right of lane
+    Slot stays bound.
+    Retry on a later sweep.
+  end note
+end
+
+== deliver the sample to the client ==
+lane -> main : RenderFrameResult.m_gpu_timing\nfrom lastGpuFrameTiming()
+main -> main : PerformanceWidget.observeGpu(V, ms)
+
+note over lane, gpu
+  Best effort: a 4-query pool serves 2 in-flight pairs.
+  A reset or result error disables timing for the renderer
+  and clears both cached samples.
+  lastGpuFrameTiming covers every submit;
+  lastSurfaceGpuFrameTiming only surface command buffers.
+end note
+
+@enduml

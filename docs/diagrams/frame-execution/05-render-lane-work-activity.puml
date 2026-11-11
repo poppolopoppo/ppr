@@ -1,0 +1,45 @@
+@startuml
+!theme toy
+title executeRenderWork_() — one frame on the render lane
+
+start
+:validate request\nRetro pass present · lane RHI service valid;
+if (zero-size or minimized frame?) then (yes)
+  :non-rendering success\nno uploads · no present · no ack;
+  stop
+endif
+if (surface generation obsolete?) then (yes)
+  :drop packet\nedits stay dirty, re-staged later;
+  stop
+endif
+if (particle view stale?) then (yes)
+  :drop frame;
+  stop
+endif
+
+:apply staged grid frame;
+:apply staged triangle frame;
+:apply GPU particle view;
+:tryPrepareCellUploads(device, completedFenceValue);
+
+if (offscreen or retro enabled?) then (yes)
+  :RetroPass::beginFrame\nvalidate settings · raster camera;
+endif
+:TrianglePass::update(dt, packet camera);
+:GridPass::update(dt, packet camera);
+
+:build SurfaceRenderPass list\nscene pass + pre-render callback\n+ detached UI pass;
+:Renderer::renderAndPresent\nsurface control · acquire image;
+
+if (encode and submit succeeded?) then (yes)
+  :submit command buffer\nsignal fence value V;
+else (no)
+  :skip encode/submit;
+endif
+:present acquired image\nacquire implies present, always;
+
+:finalize submit fate\naccepted · rejected · possibly executed;
+:stamp passes · write RenderFrameResult\npresented · V · staging · observations;
+:post result to main;
+stop
+@enduml

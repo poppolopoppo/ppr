@@ -1,14 +1,18 @@
 // ------------------------------------------------------------------
 // cascade world light field: level-interval trace and temporal update
 // ------------------------------------------------------------------
-// One thread per (probe, direction) for the cursor, and one thread per probe
-// for the dirty-first reprocess. Each traces the level's own interval through
+// One thread per (probe, direction) for both the cursor and dirty-first
+// reprocess. Non-coarsest samples trace four per-parent-corner connectors through
 // the dense source (cell ids + material palette + overlay) with a cell-by-cell
-// DDA, folds in its parent level's already-merged suffix (L = L_near + T_near *
-// L_far), accumulates the sample into the running mean, and writes the current
-// radiance buffer. Level 0 therefore holds the fully merged field. The coarsest
-// level has no parent: it merges each bin with the reference angular sky
-// integral over the four next-level directions it covers. An opaque hit adds one
+// DDA, merge each connector with its parent bin suffix
+// (L = L_near + T_near * L_far), accumulate the weighted corner result into the
+// running mean, and write the current radiance buffer. Level 0 therefore holds
+// the fully merged field. Levels are scheduled coarsest-to-finest with a barrier
+// between them, so the parent bins are read from the current write buffer; the
+// same buffer also supplies the same-sample temporal-history input after the
+// frame's published copy and any dirty repair. The coarsest level has no parent:
+// it merges each bin with the reference angular sky integral over the four
+// next-level directions it covers. An opaque hit adds one
 // bounce of the per-cell radiance atlas weighted by the hit material's albedo, so
 // the field accumulates primary transport plus a single material-weighted bounce
 // (no recursive ray tree).
@@ -16,11 +20,6 @@
 #include "world_light_sample.slang"
 
 static const float kTau = 6.28318530718;
-
-// Fraction of the angular bin / probe footprint each sample is jittered by
-// (temporal supersampling). Kept deliberately small for Task 6 so a single-cell
-// emitter is reliably hit; the range is a tunable quality parameter.
-static const float kSampleJitter = 0.2;
 
 // ------------------------------------------------------------------
 // deterministic low-discrepancy jitter
@@ -36,12 +35,6 @@ uint hash32(uint x) {
     return x;
 }
 
-// Deterministic [0,1) from two integer inputs (probe index, frame).
-[ForceInline]
-float hash01(uint a, uint b) {
-    return float(hash32(a ^ (b * 0x9e3779b1u))) / float(0xffffffffu);
-}
-
 // ------------------------------------------------------------------
 // feedback
 // ------------------------------------------------------------------
@@ -53,156 +46,6 @@ float hash01(uint a, uint b) {
 // surface (no material) has zero albedo and contributes no bounce. There is no
 // recursive ray tree or face bake: exactly one atlas read per opaque hit.
 
-// ------------------------------------------------------------------
-// level-interval trace (cell-by-cell DDA)
-// ------------------------------------------------------------------
-
-// Traces [nearM, farM) from origin along direction through the dense source
-// with an Amanatides-Woo cell DDA, visiting every cell the ray crosses exactly
-// once. Opaque cells (material kind 1, or overlay coverage >= 0.5) stop the ray
-// and emit; participating cells attenuate transmittance and emit volume
-// radiance. Out-of-world segments contribute nothing.
-[ForceInline]
-void traceWorldLightInterval(
-    float2 origin, float2 direction, float nearM, float farM, out float3 radiance, out float transmittance) {
-    radiance = float3(0.0, 0.0, 0.0);
-    transmittance = 1.0;
-
-    float width = float(g_world_light_field.width);
-    float height = float(g_world_light_field.height);
-    float cellMetres = g_world_light_field.cellMetres;
-    float originX = g_world_light_field.originX;
-    float originY = g_world_light_field.originY;
-
-    float2 base = origin + direction * nearM;
-    float2 worldMin = float2(originX, originY);
-    float2 worldMax = worldMin + float2(width, height) * cellMetres;
-
-    // Clip the traced segment to the world bounds before walking cells. Outside
-    // the world nothing emits or attenuates, so stepping those cells only wastes
-    // work; the coarse levels start thousands of cells away and would otherwise
-    // walk the whole interval through empty space on every sample. The slab test
-    // keeps the terminal-sky transmittance semantics: out-of-world segments were
-    // already neutral, so clipping them changes no radiance.
-    float tEnter = 0.0;
-    float tExit = farM - nearM;
-    if (direction.x != 0.0) {
-        float inv = 1.0 / direction.x;
-        float a = (worldMin.x - base.x) * inv;
-        float b = (worldMax.x - base.x) * inv;
-        tEnter = max(tEnter, min(a, b));
-        tExit = min(tExit, max(a, b));
-    } else if (base.x < worldMin.x || base.x > worldMax.x) {
-        return;
-    }
-    if (direction.y != 0.0) {
-        float inv = 1.0 / direction.y;
-        float a = (worldMin.y - base.y) * inv;
-        float b = (worldMax.y - base.y) * inv;
-        tEnter = max(tEnter, min(a, b));
-        tExit = min(tExit, max(a, b));
-    } else if (base.y < worldMin.y || base.y > worldMax.y) {
-        return;
-    }
-    if (tExit <= tEnter) {
-        return;
-    }
-
-    float2 start = base + direction * tEnter;
-    float baseT = nearM + tEnter;
-    float intervalLength = tExit - tEnter;
-
-    float cellX = (start.x - originX) / cellMetres;
-    float cellY = (start.y - originY) / cellMetres;
-    int cx = int(floor(cellX));
-    int cy = int(floor(cellY));
-
-    int stepX = direction.x >= 0.0 ? 1 : -1;
-    int stepY = direction.y >= 0.0 ? 1 : -1;
-
-    float tMaxX = (direction.x == 0.0)
-                      ? 1e30
-                      : ((stepX > 0 ? float(cx + 1) : float(cx)) - cellX) * cellMetres / direction.x;
-    float tMaxY = (direction.y == 0.0)
-                      ? 1e30
-                      : ((stepY > 0 ? float(cy + 1) : float(cy)) - cellY) * cellMetres / direction.y;
-    float tDeltaX = (direction.x == 0.0) ? 1e30 : cellMetres / abs(direction.x);
-    float tDeltaY = (direction.y == 0.0) ? 1e30 : cellMetres / abs(direction.y);
-
-    float t = 0.0;
-
-    // A probe records the radiance ARRIVING at it, never the cell it sits in.
-    // Treating the probe's own cell as an opaque hit made every solid probe
-    // self-occlude, zero its transmittance and therefore zero the whole cascade
-    // composite. Intervals no longer start at the probe centre (level 0 begins
-    // at c0), so the rule is stated on the cell index rather than the distance:
-    // if the FIRST visited cell is the cell containing the origin, skip it. A
-    // surface probe then sees the light crossing into it from the neighbouring
-    // air, which is what lights the terrain and bleeds around dug borders.
-    const int originCx = int(floor((origin.x - originX) / cellMetres));
-    const int originCy = int(floor((origin.y - originY) / cellMetres));
-    const bool skipOriginCell = cx == originCx && cy == originCy;
-    uint maxSteps = uint(width + height) + 4u;
-    for (uint i = 0u; i < maxSteps && t < intervalLength && transmittance > 0.0; ++i) {
-        float tNext = min(min(tMaxX, tMaxY), intervalLength);
-        float seg = tNext - t;
-
-        if ((i != 0u || !skipOriginCell) && cx >= 0 && cy >= 0 && cx < int(width) && cy < int(height)) {
-            uint cell = uint(cy) * uint(width) + uint(cx);
-            uint id = g_world_light_ids[cell];
-            uint base = cell * kOverlayStride;
-
-            float coverage = asfloat(g_world_light_overlay[base + kOverlayCoverage]);
-            float3 sigma = float3(0.0, 0.0, 0.0);
-            float3 emission = float3(0.0, 0.0, 0.0);
-            float3 albedo = float3(0.0, 0.0, 0.0);
-            bool opaque = coverage >= 0.5;
-
-            if (id != 0u) {
-                WorldLightMaterial material = g_world_light_materials[id - 1u];
-                sigma = float3(material.sigma[0], material.sigma[1], material.sigma[2]);
-                emission = float3(material.emission[0], material.emission[1], material.emission[2]);
-                albedo = float3(material.albedo[0], material.albedo[1], material.albedo[2]);
-                opaque = opaque || material.kind == 1u;
-            }
-
-            sigma += float3(
-                asfloat(g_world_light_overlay[base + kOverlaySigma0]),
-                asfloat(g_world_light_overlay[base + kOverlaySigma1]),
-                asfloat(g_world_light_overlay[base + kOverlaySigma2]));
-            emission += float3(
-                asfloat(g_world_light_overlay[base + kOverlayEmission0]),
-                asfloat(g_world_light_overlay[base + kOverlayEmission1]),
-                asfloat(g_world_light_overlay[base + kOverlayEmission2]));
-
-            float2 p = origin + direction * (baseT + t + 0.5 * seg);
-
-            if (opaque) {
-                float3 feedback = albedo * worldLightAtlasRadiance(p);
-                radiance += transmittance * (emission + feedback);
-                transmittance = 0.0;
-                break;
-            }
-
-            float extinction = dot(sigma, float3(1.0, 1.0, 1.0)) / 3.0;
-            if (extinction > 0.0) {
-                float transmit = exp(-extinction * seg);
-                radiance += transmittance * emission * ((1.0 - transmit) / max(extinction, 1e-5));
-                transmittance *= transmit;
-            }
-        }
-
-        if (tMaxX < tMaxY) {
-            t = tMaxX;
-            tMaxX += tDeltaX;
-            cx += stepX;
-        } else {
-            t = tMaxY;
-            tMaxY += tDeltaY;
-            cy += stepY;
-        }
-    }
-}
 
 // ------------------------------------------------------------------
 // reference angular sky integral
@@ -267,8 +110,8 @@ float3 angularSkyRadiance(uint parentNumDirs, uint parentPhi, float skyHour, flo
 // ------------------------------------------------------------------
 
 // Traces and accumulates one direction sample of one probe into the running
-// mean, writing the current radiance buffer and the sample count. The stored
-// value is this level's own interval folded with its parent's stored suffix
+// mean, writing the current radiance buffer and the sample count. Non-coarsest
+// levels store the weighted per-parent-corner connector fold
 // (worldLightParentSampleFrom), so every level holds the composite from its own
 // interval to the world reach and level 0 holds the fully merged field. The
 // coarsest level has no parent: it merges each of its direction bins with the
@@ -284,10 +127,9 @@ void accumulateSample(uint level, uint probe, uint direction) {
     uint probeLinear = L.probeOffset + probe;
     uint frame = g_world_light_field.frame;
 
-    float2 jitterPos = (float2(hash01(probeLinear + 1u, frame), hash01(probeLinear + 2u, frame)) - 0.5) * kSampleJitter;
-
+    float2 cellJitter = worldLightCellJitter(frame);
     float spacing = float(L.spacing);
-    float2 cellCenter = float2(float(px) + 0.5, float(py) + 0.5) * spacing + jitterPos * spacing;
+    float2 cellCenter = float2(float(px) + 0.5, float(py) + 0.5) * spacing + cellJitter;
     float2 origin = float2(g_world_light_field.originX, g_world_light_field.originY) +
                     cellCenter * g_world_light_field.cellMetres;
 
@@ -319,49 +161,40 @@ void accumulateSample(uint level, uint probe, uint direction) {
         radiance = radianceSum / float(ratio);
         transmittance = transmittanceSum / float(ratio);
     } else {
-        float jitterAngle = (hash01(probeLinear, frame) - 0.5) * kSampleJitter;
-        float angle = (float(direction) + 0.5 + jitterAngle) * kTau / float(L.directions);
+        float angle = (float(direction) + 0.5) * kTau / float(L.directions);
         float2 dir = float2(cos(angle), sin(angle));
 
-        traceWorldLightInterval(origin, dir, L.nearM, L.farM, radiance, transmittance);
-    }
-
-    // Fold the parent's already-merged suffix into this interval so the stored
-    // sample is the composite from here to the world reach. The parent is read
-    // from the previous buffer: tracing may visit levels in any order, and the
-    // previous frame's complete parent suffix is race-free and temporally
-    // consistent. Level 0 therefore ends up fully merged and shading reads it
-    // alone. The sky is already inside the parent suffix, so it is not re-added.
-    // A fully attenuated own interval makes the fold a no-op (L = L_near and
-    // T = 0), so the parent reads are skipped for an opaque hit.
-    if (transmittance > 0.0 && level + 1u < g_world_light_field.levelCount) {
-        float3 parentRadiance;
-        float parentTransmittance;
+        // One global cell-space jitter drives the child position and every parent
+        // corner endpoint. No angular jitter remains. Levels are scheduled
+        // coarsest-to-fine with a barrier between them, so the helper reads the
+        // current, already-written parent suffix. The four per-corner connector
+        // rays replace both the old own-interval trace and the separate
+        // parent-suffix fold; there is no second interval trace.
         worldLightParentSampleFrom(
-            g_world_light_radiance_prev, L, g_world_light_field.levels[level + 1u], origin, direction, parentRadiance,
-            parentTransmittance);
-        radiance += transmittance * parentRadiance;
-        transmittance *= parentTransmittance;
+            g_world_light_radiance_cur, L, g_world_light_field.levels[level + 1u], origin, cellJitter, dir,
+            direction, radiance, transmittance);
     }
 
-    WorldLightRadiance previous = g_world_light_radiance_prev[sample];
+    // Temporal history for this same sample comes from the current write buffer,
+    // which started as the published copy and may already hold this frame's dirty
+    // repair. A dispatch owns each sample exclusively, and the dirty/ordinary
+    // passes are separated by a global barrier, so a repeated trace sees the
+    // freshly rebuilt value instead of resurrecting stale previous-frame history.
+    WorldLightRadiance previous = g_world_light_radiance_cur[sample];
     float3 previousRadiance = float3(previous.radianceR, previous.radianceG, previous.radianceB);
     float previousTransmittance = float(previous.transmittance);
 
     uint count = g_world_light_state[sample];
-    uint newCount = count < g_world_light_field.accumulationSamples ? count + 1u
-                                                                    : g_world_light_field.accumulationSamples;
+    uint newCount = count == 0xffffffffu ? count : count + 1u;
 
-    // Running mean while accumulating toward the cap; a per-60Hz retention EMA
-    // afterward, scaled by the injected frame delta so a longer frame decays the
-    // history proportionally more. Both weights stay in [0,1], so the result is
-    // a convex combination of finite samples and never leaves the [0,..] range.
-    float blend;
-    if (count < g_world_light_field.accumulationSamples) {
-        blend = 1.0 / float(newCount);
-    } else {
-        float perFrameRetention = pow(g_world_light_field.historyRetention, g_world_light_field.frameDelta * 60.0);
-        blend = 1.0 - perFrameRetention;
+    // Count is diagnostic metadata only. Coarse levels overwrite raw traced
+    // results. Level 0 alone applies the mature exp(-4*dt) EMA when it already
+    // has history; count zero is the dirty/fresh sentinel and replaces
+    // immediately.
+    float blend = 1.0;
+    if (level == 0u && count > 0u) {
+        const float retention = exp(-4.0 * g_world_light_field.frameDelta);
+        blend = 1.0 - retention;
     }
 
     float3 newRadiance = previousRadiance + (radiance - previousRadiance) * blend;
@@ -378,19 +211,72 @@ void accumulateSample(uint level, uint probe, uint direction) {
 }
 
 // ------------------------------------------------------------------
-// cursor update entry
+// ordinary packed-group selector
 // ------------------------------------------------------------------
 
-[numthreads(64, 1, 1)]
+[ForceInline]
+uint nextPow2_(uint value) {
+    uint result = 1u;
+    while (result < value) {
+        result <<= 1u;
+    }
+    return result;
+}
+
+[ForceInline]
+uint log2Exact_(uint value) {
+    uint bits = 0u;
+    uint remaining = value;
+    while (remaining > 1u) {
+        remaining >>= 1u;
+        ++bits;
+    }
+    return bits;
+}
+
+[ForceInline]
+uint reverseBits_(uint value, uint bits) {
+    uint result = 0u;
+    for (uint i = 0u; i < bits; ++i) {
+        result = (result << 1u) | (value & 1u);
+        value >>= 1u;
+    }
+    return result;
+}
+
+[numthreads(128, 1, 1)]
 void updateWorldLightField(uint3 id : SV_DispatchThreadID) {
-    if (id.x >= g_world_light_dispatch.sampleCount) return;
+    if (id.x >= g_world_light_dispatch.groupCount) return;
 
     uint level = g_world_light_dispatch.level;
     WorldLightLevelGpu L = g_world_light_field.levels[level];
-    uint local = g_world_light_dispatch.sampleBegin + id.x;
-    uint probe = local / L.directions;
-    uint direction = local % L.directions;
+    uint probeSize = 2u << level;
+    uint groupWidth = L.probesX * probeSize / 2u;
+    uint groupHeight = L.probesY * probeSize / 2u;
+    uint padX = nextPow2_(max(groupWidth, 1u));
+    uint padY = nextPow2_(max(groupHeight, 1u));
 
+    uint ordinal = g_world_light_dispatch.groupBegin + id.x;
+    uint bitsX = log2Exact_(padX);
+    uint bitsY = log2Exact_(padY);
+    uint reversed = reverseBits_(ordinal, bitsX + bitsY);
+    uint groupX = reversed % padX;
+    uint groupY = reversed / padX;
+
+    uint group = groupY * padX + groupX;
+    // The exact reference hash is not available in this seam; the accepted
+    // scheduling adaptation uses the established project hash32 for the offset.
+    uint off = (hash32(group) + g_world_light_dispatch.phase) & 3u;
+    uint pixelX = groupX * 2u + (off & 1u);
+    uint pixelY = groupY * 2u + (off >> 1u);
+    uint probeX = pixelX / probeSize;
+    uint probeY = pixelY / probeSize;
+    if (probeX >= L.probesX || probeY >= L.probesY) return;
+
+    uint phiX = pixelX % probeSize;
+    uint phiY = pixelY % probeSize;
+    uint direction = phiY * probeSize + phiX;
+    uint probe = probeY * L.probesX + probeX;
     accumulateSample(level, probe, direction);
 }
 
@@ -398,21 +284,25 @@ void updateWorldLightField(uint3 id : SV_DispatchThreadID) {
 // dirty-first update entry
 // ------------------------------------------------------------------
 
-[numthreads(64, 1, 1)]
+[numthreads(128, 1, 1)]
 void updateWorldLightFieldProbe(uint3 id : SV_DispatchThreadID) {
-    if (id.x >= g_world_light_probe_update.probeCount) return;
+    if (id.x >= g_world_light_probe_update.sampleCount) return;
 
     uint level = g_world_light_probe_update.level;
     WorldLightLevelGpu L = g_world_light_field.levels[level];
     uint rectWidth = g_world_light_probe_update.rectWidth;
-    uint px = g_world_light_probe_update.probeX0 + (id.x % rectWidth);
-    uint py = g_world_light_probe_update.probeY0 + (id.x / rectWidth);
+    if (rectWidth == 0u) return;
+
+    // One thread per direction sample. Probe order is row-major inside the dirty
+    // rectangle, matching the CPU's rect-linear sample count and cost accounting.
+    uint probeLinear = id.x / L.directions;
+    uint direction = id.x % L.directions;
+    uint px = g_world_light_probe_update.probeX0 + (probeLinear % rectWidth);
+    uint py = g_world_light_probe_update.probeY0 + (probeLinear / rectWidth);
     if (px >= L.probesX || py >= L.probesY) return;
 
     uint probe = py * L.probesX + px;
-    for (uint d = 0u; d < L.directions; ++d) {
-        accumulateSample(level, probe, d);
-    }
+    accumulateSample(level, probe, direction);
 }
 
 // ------------------------------------------------------------------
@@ -420,8 +310,9 @@ void updateWorldLightFieldProbe(uint3 id : SV_DispatchThreadID) {
 // ------------------------------------------------------------------
 
 // One-shot sampler evaluation for a supplied position/direction/normal. The mode
-// selects composite (0), diffuse (1) or specular (2); the RGB result is written
-// to g_world_light_evaluate_out. Test-only readback path.
+// selects composite (0), diffuse (1), specular (2), irradiance (3) or the
+// level-0/level-1 parent connector helper (4); the RGB result is written to
+// g_world_light_evaluate_out. Test-only readback path.
 struct WorldLightEvaluateParams {
     float positionX, positionY;
     float directionX, directionY;
@@ -445,6 +336,20 @@ void evaluateWorldLightField(uint3 id : SV_DispatchThreadID) {
         result = worldLightComposite(position, direction);
     } else if (g_world_light_evaluate.mode == 1u) {
         result = worldLightDiffuse(position, normal);
+    } else if (g_world_light_evaluate.mode == 3u) {
+        result = worldLightIrradiance(position, normal);
+    } else if (g_world_light_evaluate.mode == 4u) {
+        uint childDirections = max(g_world_light_field.levels[0].directions, 1u);
+        uint childDirection = worldLightDirectionIndex(direction, childDirections);
+        float childAngle = (float(childDirection) + 0.5) * kTau / float(childDirections);
+        float2 childDir = float2(cos(childAngle), sin(childAngle));
+        float2 cellJitter = worldLightCellJitter(g_world_light_field.frame);
+        float2 jitteredPosition =
+            position + cellJitter * g_world_light_field.cellMetres;
+        float parentTransmittance;
+        worldLightParentSampleFrom(
+            g_world_light_radiance_cur, g_world_light_field.levels[0], g_world_light_field.levels[1],
+            jitteredPosition, cellJitter, childDir, childDirection, result, parentTransmittance);
     } else {
         result = worldLightSpecular(position, float3(direction, 0.0), g_world_light_evaluate.roughness);
     }
@@ -457,23 +362,27 @@ void evaluateWorldLightField(uint3 id : SV_DispatchThreadID) {
 // dirty reset entry
 // ------------------------------------------------------------------
 
-[numthreads(64, 1, 1)]
+[numthreads(128, 1, 1)]
 void resetWorldLightField(uint3 id : SV_DispatchThreadID) {
     uint rectWidth = g_world_light_reset.rectWidth;
     uint rectHeight = g_world_light_reset.rectHeight;
-    if (id.x >= rectWidth * rectHeight) return;
+    if (rectWidth == 0u || rectHeight == 0u) return;
 
     uint level = g_world_light_reset.level;
     WorldLightLevelGpu L = g_world_light_field.levels[level];
-    uint px = g_world_light_reset.probeX0 + (id.x % rectWidth);
-    uint py = g_world_light_reset.probeY0 + (id.x / rectWidth);
+    uint sampleCount = rectWidth * rectHeight * L.directions;
+    if (id.x >= sampleCount) return;
+
+    // One thread per direction sample clears counts only. Never clearing the
+    // radiance buffers is what keeps the last published value visible until the
+    // invalidation backlog reaches this sample again.
+    uint probeLinear = id.x / L.directions;
+    uint direction = id.x % L.directions;
+    uint px = g_world_light_reset.probeX0 + (probeLinear % rectWidth);
+    uint py = g_world_light_reset.probeY0 + (probeLinear / rectWidth);
     if (px >= L.probesX || py >= L.probesY) return;
 
     uint probe = py * L.probesX + px;
-    uint sample = L.sampleOffset + probe * L.directions;
-    for (uint d = 0u; d < L.directions; ++d) {
-        g_world_light_state[sample + d] = 0u;
-        g_world_light_radiance_prev[sample + d] = (WorldLightRadiance)0;
-        g_world_light_radiance_cur[sample + d] = (WorldLightRadiance)0;
-    }
+    uint sample = L.sampleOffset + probe * L.directions + direction;
+    g_world_light_state[sample] = 0u;
 }

@@ -82,8 +82,6 @@ export namespace pP::ui {
     struct LightingPostWidgetDraft {
         bool &m_world_light_enabled;
         u32 &m_samples_per_frame;
-        u32 &m_accumulation_samples;
-        float &m_history_retention;
         u32 &m_level_count;
         i32 &m_sky_hour;
         u32 &m_world_light_debug_view;

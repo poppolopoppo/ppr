@@ -3,12 +3,15 @@
 // ------------------------------------------------------------------
 // Shared scalar ABI for the temporal world light field. One cascade hierarchy:
 // level 0 = 2-cell spacing / 4 directions; level l = 2^(l+1) spacing /
-// 4^(l+1) directions. Each level stores its own interval composited with every
-// farther interval (the trace folds the parent suffix in at trace time), so
-// level 0 holds the fully merged field and shading reads it alone. A radiance
-// sample is 8 bytes: RGB radiance plus a scalar transmittance, stored as four
-// 16-bit halves. Per-direction sample counts are one u32 per sample (saturating
-// at 255). The two radiance buffers ping-pong (previous/current).
+// 4^(l+1) directions. Non-coarsest levels store the per-parent-corner connector
+// fold; level 0 holds the fully merged field and shading reads it alone. A
+// radiance sample is 8 bytes: RGB radiance plus a scalar transmittance, stored as
+// four 16-bit halves. Per-direction counts are one u32 per sample, incremented
+// saturating as diagnostic visit metadata (never a mean weight); a zero count is
+// the dirty/fresh sentinel and the persistent invalidation backlog, so a reset
+// clears counts only and the last published radiance/transmittance remains
+// visible until that sample is traced again. The two radiance buffers
+// ping-pong (previous/current).
 #ifndef PPR_WORLD_LIGHT_FIELD_SLANG
 #define PPR_WORLD_LIGHT_FIELD_SLANG
 
@@ -35,9 +38,8 @@ struct WorldLightFieldConstants {
     uint sourceRevision;
     uint frame;
     uint budget;
-    uint accumulationSamples;
-    float historyRetention;
     float frameDelta;
+    uint pad0, pad1;
     WorldLightLevelGpu levels[kWorldLightMaxLevels];
 
     // Angular sky at the coarsest level: solar hour (negative disables it) and
@@ -45,17 +47,21 @@ struct WorldLightFieldConstants {
     float skyHour, skyIntensity;
 };
 
-// Cursor update dispatch: which level, the within-level sample index of thread
-// 0, and how many samples this dispatch owns (bounds the tail).
+// Ordinary group dispatch: which level, the raw padded-domain group cursor
+// begin/count, and the persistent four-sweep phase. Each visited 2x2 packed
+// group writes one stored direction sample; padding groups are charged but
+// write nothing.
 struct WorldLightFieldDispatch {
     uint level;
-    uint sampleBegin;
-    uint sampleCount;
-    uint pad0;
+    uint groupBegin;
+    uint groupCount;
+    uint phase;
 };
 
 // Dirty reset dispatch: which level and the dirty probe rectangle (half-open
-// [probeX0, probeX0+rectWidth) x [probeY0, probeY0+rectHeight)).
+// [probeX0, probeX0+rectWidth) x [probeY0, probeY0+rectHeight)). One thread per
+// direction sample in row-major probe order clears counts only; published
+// radiance stays until the sample is traced again.
 struct WorldLightFieldReset {
     uint level;
     uint probeX0, probeY0;
@@ -63,12 +69,13 @@ struct WorldLightFieldReset {
 };
 
 // Dirty update dispatch: which level, the dirty probe rectangle origin/width,
-// and how many probes (in row-major order) this dispatch reprocesses.
+// and how many direction samples (in row-major probe/direction order) this
+// dispatch reprocesses. One thread owns one direction sample.
 struct WorldLightFieldProbeUpdate {
     uint level;
     uint probeX0, probeY0;
     uint rectWidth;
-    uint probeCount;
+    uint sampleCount;
 };
 
 // 8-byte radiance sample: RGB (half) + scalar transmittance (half).

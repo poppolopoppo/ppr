@@ -220,9 +220,11 @@ namespace pP {
     }
 
     float RetroPass::targetEv(const float average_log2_lum, const float ev_min, const float ev_max) noexcept {
-        // The GPU reduction writes the unclamped target; the final clamp happens
-        // in adaptExposure. This mirrors that final clamp for the CPU oracle.
-        const float unclamped = average_log2_lum - std::log2(kMiddleGrayLuminance);
+        // The target is applied as a radiance multiplier: scene * exp2(target).
+        // Reverse the luminance ratio so middle gray maps to zero, darker scenes
+        // get positive EV, and brighter scenes get negative EV. The GPU reduction
+        // writes the unclamped target; the final clamp happens in adaptExposure.
+        const float unclamped = std::log2(kMiddleGrayLuminance) - average_log2_lum;
         return std::clamp(unclamped, std::min(ev_min, ev_max), std::max(ev_min, ev_max));
     }
 
@@ -312,8 +314,8 @@ namespace pP {
                                    raster_extent.y > 0 and
                                    output_extent.x > 0 and
                                    output_extent.y > 0 and
-                                   output_extent.x % 2 == 0 and
-                                   output_extent.y % 2 == 0 and
+                                   // output_extent.x % 2 == 0 and
+                                   // output_extent.y % 2 == 0 and
                                    raster_extent.x == output_extent.x / 2 and
                                    raster_extent.y == output_extent.y / 2
                                ? std::error_code{}

@@ -2986,7 +2986,11 @@ namespace pP {
         };
         static_assert(sizeof(WorldLightSwitch) == 16u and alignof(WorldLightSwitch) == 4u);
 
-        const bool enabled = m_world_light_view.m_radiance != nullptr and m_world_light_view.m_constants != nullptr;
+        const bool enabled = m_world_light_view.m_radiance != nullptr and
+                             m_world_light_view.m_constants != nullptr and
+                             m_world_light_view.m_cell_ids != nullptr and
+                             m_world_light_view.m_overlay != nullptr and
+                             m_world_light_view.m_materials != nullptr;
 
         WorldLightSwitch sw{};
         sw.m_enabled = enabled ? 1u : 0u;
@@ -3013,6 +3017,21 @@ namespace pP {
                                                                                : m_world_light_dummy.get();
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass, cursor["g_world_light_atlas"].setBinding(rhi::Binding(atlas, makeFullRange(atlas))));
+
+        // Dense source for the terrain's in-place near trace (read-only). The
+        // same read-only descriptors the field trace uses; the write-side UAV
+        // declarations in the source ABI stay unbound because the fragment
+        // program never references them. When no field is set the dummy keeps
+        // the root complete and the irradiance path is not taken.
+        rhi::IBuffer *const cell_ids = enabled ? m_world_light_view.m_cell_ids : m_world_light_dummy.get();
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, cursor["g_world_light_dense_ids"].setBinding(rhi::Binding(cell_ids, makeFullRange(cell_ids))));
+        rhi::IBuffer *const overlay = enabled ? m_world_light_view.m_overlay : m_world_light_dummy.get();
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, cursor["g_world_light_dense_overlay"].setBinding(rhi::Binding(overlay, makeFullRange(overlay))));
+        rhi::IBuffer *const materials = enabled ? m_world_light_view.m_materials : m_world_light_dummy.get();
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, cursor["g_world_light_materials"].setBinding(rhi::Binding(materials, makeFullRange(materials))));
 
         return {};
     }
@@ -3114,9 +3133,17 @@ namespace pP {
         // The atlas producer leaves its packed incident-radiance buffer in
         // UnorderedAccess; the terrain samples it read-only (one shader slot
         // already on the world-light root, no extra binding group). Transition
-        // once before any terrain encode, after the atlas and field updates.
+        // once before any terrain encode, after the atlas and field updates. The
+        // field update already leaves the dense source in ShaderResource for the
+        // in-place near trace; re-assert it so a frame that skipped the update
+        // still binds the right state.
         if (m_world_light_atlas != nullptr) {
             context.m_encoder.setBufferState(m_world_light_atlas, rhi::ResourceState::ShaderResource);
+        }
+        if (m_world_light_view.m_cell_ids != nullptr) {
+            context.m_encoder.setBufferState(m_world_light_view.m_cell_ids, rhi::ResourceState::ShaderResource);
+            context.m_encoder.setBufferState(m_world_light_view.m_overlay, rhi::ResourceState::ShaderResource);
+            context.m_encoder.setBufferState(m_world_light_view.m_materials, rhi::ResourceState::ShaderResource);
         }
 
         reclaimCompleted_(context.m_completed_fence_value);

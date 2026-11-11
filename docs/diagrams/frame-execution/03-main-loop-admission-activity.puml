@@ -1,0 +1,38 @@
+@startuml
+!theme toy
+title Application::run() — main-thread frame loop
+
+start
+:resetGpuTeardownEpoch_();
+:initialize()\nplatform · shader · RHI · renderer;
+if (initialize failed?) then (yes)
+  :finishRun_(init_err)\nquiescence · shutdown · log flush;
+  stop
+endif
+
+while (exit not requested?) is (yes)
+  :admitClientFrame_\nserviceControls_ · advanceClock_ · credit probe;
+  if (clock error or latched exit?) then (yes)
+    :break out of loop\n(latch first error if any);
+  else (no)
+    if (capacity-busy skip?) then (yes)
+      :carry dt to next admitted frame;
+      :platform waitNativeEvents;
+      :pumpRenderCompletions_\nretire inline frames · reconcile;
+    else (no)
+      :update(dt + carried dt)\ninput · camera · FramePacket · staging;
+      if (update ok?) then (yes)
+        :render()\nsubmit to lane, or execute inline;
+      endif
+      :settle inline reservation\nonly when no lane owns renderer;
+      if (first error?) then (yes)
+        :requestExit(first error);
+      endif
+    endif
+    :++frame index;
+  endif
+endwhile
+
+:finishRun_(loop error)\nprove quiescence · shutdown · log flush;
+stop
+@enduml

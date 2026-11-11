@@ -33,7 +33,7 @@ the acknowledged world/job/generation, publication, terrain revision and joint
 tick. CPU preparation, queue acceptance and GPU completion do not release it.
 The initial expected publication is held stable while the modal is open.
 
-Controls and panel intents are declared in `Game.Application.cpp` and `ui/ColonyPanel.*`: pause/step/speed/regenerate, inspect/dig/build/demolish, agent selection/follow, grid/edit overlays, help, independently visible Colony/Performance, Display and Menu Quit. Regeneration is confirmed and deferred to an update boundary; Quit and native close share the host's dirty-draft/cancellation/drain path.
+Controls and panel intents are declared in `Game.Application.cpp` and `ui/ColonyPanel.*`: pause/step/speed/regenerate, inspect/dig/build/demolish, agent selection/follow, grid/edit overlays, help, tool-driven Colony management/tool context, independently visible Performance, Display and Menu Quit. Regeneration is confirmed and deferred to an update boundary; Quit and native close share the host's dirty-draft/cancellation/drain path.
 
 When the session has a controlled actor, WASD supplies held fixed-tick commands
 ahead of camera input. Opposing directions cancel. Focus loss, UI keyboard capture,

@@ -782,9 +782,21 @@ float worldLightDebugLattice(float2 world) {
 // holds (worldLightDiffuse reads the fully merged level 0). Probe mode overlays
 // the level-0 lattice in red.
 float3 worldLightDebugColour(float2 world) {
-    float3 diffuse = worldLightDiffuse(world, float3(0.0, 0.0, 1.0));
-    float3 colour = worldLightDebugRamp(diffuse);
-    colour = lerp(colour, float3(0.95, 0.1, 0.05), worldLightDebugLattice(world) * 0.45);
+    float3 colour = float3(0);
+    if (g_world_light.debugView == 1u) {
+        float3 diffuse = worldLightDiffuse(world, float3(0.0, 0.0, 1.0));
+        colour = worldLightDebugRamp(diffuse);
+        colour = lerp(colour, float3(0.95, 0.1, 0.05), worldLightDebugLattice(world) * 0.45);
+    }
+    if (g_world_light.debugView == 2u || true) {
+        float2 origin = float2(g_world_light_field.originX, g_world_light_field.originY);
+        float spacing_m = g_world_light_field.cellMetres * float(g_world_light_field.levels[0].spacing);
+        float2 probe = (world - origin) / spacing_m;
+        float2 to_centre = frac(probe) - 0.5;
+        float3 sample_dir = normalize(float3(to_centre, 1));
+        sample_dir = float3(0,0,1);
+        colour = worldLightDiffuse(world, sample_dir);
+    }
     return colour;
 }
 
@@ -803,7 +815,16 @@ float3 shadeWorldLightResponse(TerrainVisual visual, float2 world, float3 normal
     float roughness = saturate(visual.m_roughness);
     float ior = max(visual.m_ior, 1.0);
 
-    float3 diffuse = worldLightDiffuse(world, normal);
+    // Reference material response: the 2D terrain chain applies albedo directly
+    // to the cascade irradiance (prototype.wgpu:9183-9186, kd = 1.0). The
+    // reference lightingIndirect path normalizes its irradiance integral by TAU
+    // at the final consumer; this is the final-response /TAU, not the feedback
+    // path. The cascade's worldLightIrradianceFrom returns the level-0 gather
+    // scaled by TAU, so dividing here restores the prototype's final response.
+    // The irradiance reads the stored level-0 bins only; the prototype's
+    // cascadeIrradiance false path has no in-place near trace.
+    float3 diffuse = worldLightIrradianceFrom(g_world_light_radiance_cur, world, normal) * reflectance /
+                     kWorldLightTau;
     // View V=(0,0,1) reflected around the mapped normal; a flat normal has no
     // in-plane reflection so worldLightSpecular returns zero rather than NaN.
     float3 reflection = 2.0 * normal.z * normal - float3(0.0, 0.0, 1.0);
@@ -830,7 +851,7 @@ float3 shadeWorldLightResponse(TerrainVisual visual, float2 world, float3 normal
     float grazing2 = grazing * grazing;
     float3 fresnel = f0 + (1.0 - f0) * (grazing2 * grazing2 * grazing);
 
-    return (1.0 - metallic) * (1.0 - fresnel) * reflectance * diffuse + fresnel * specular + source +
+    return (1.0 - metallic) * (1.0 - fresnel) * diffuse + fresnel * specular + source +
         atlasAmbient * reflectance * atlas;
 }
 
@@ -846,7 +867,7 @@ float4 shadeWorldLightSurface(
     // response and emits the raw field false colour. Every other selector
     // (including an unimplemented mode) falls through to the normal material
     // path instead of rendering black.
-    if (g_world_light.debugView == 1u) {
+    if (g_world_light.debugView != 0u || true) {
         float2 debug_world = fine_position * g_grid_frame.m_cell_size_m;
         return float4(worldLightDebugColour(debug_world), 1.0);
     }
@@ -1055,14 +1076,14 @@ float4 shadeGridReactive(
         uint packed = g_cell_materials[input.cell_word_base + index / 2u];
         material = ((index & 1u) != 0u) ? (packed >> 16u) : (packed & 0xffffu);
         if (material == 0xffffu || material == 0u) {
-            discard;
+             //discard;
         }
         }
     }
 
     // The pilot's centre mask uses this actual displaced material selector,
     // before texturing/lighting. It does not infer occupancy from scene depth.
-    if (material_only) return float4(coverage>0.0 && material<0xffffu ? float(material):0.0,0,0,0);
+    //if (material_only) return float4(coverage>0.0 && material<0xffffu ? float(material):0.0,0,0,0);
 
     float4 matter = float4(0.0);
     if (diagnostic_mode == 4u) {
@@ -1103,7 +1124,7 @@ float4 shadeGridReactive(
             if (point_sample) matter.rgb*=matter.a;
             return matter;
         }
-        discard;
+        //discard;
     }
     if ((g_grid_frame.m_surface_mode & 2u) == 0u) {
         float4 flat=compositeMatter(float4(decorateTerrain(gridTint(material),decoration),coverage),matter);
@@ -1111,18 +1132,18 @@ float4 shadeGridReactive(
         return flat;
     }
     if (material == 0u || material >= 0xffffu) {
-        discard;
+        //discard;
     }
     TerrainVisual visual = g_terrain_visuals[min(material, 65535u)];
     if (visual.m_material_id != material) {
-        discard;
+        //discard;
     }
     // Terrain pass selection: the opaque pass skips optical-blend (translucent)
     // cells and the translucent pass skips opaque cells. Both draw the same
     // chunk quad; the pipeline depth states separate their ordering.
     const bool optical = (visual.m_surface_flags & kSurfaceOpticalBlend) != 0u;
     if ((g_grid_pass.pass == 1u && optical) || (g_grid_pass.pass == 2u && !optical)) {
-        discard;
+        //discard;
     }
     // Classify the ACTUAL selected contour before optical opacity/emission.
     if ((visual.m_surface_flags & kSurfaceOpticalBlend) != 0u || coverage != 1.0 || reactive_matter)
@@ -1146,6 +1167,7 @@ float4 shadeGridReactive(
         float alpha=surface.a*coverage;
         return float4(surface.rgb*coverage+matter.rgb*matter.a*(1-alpha),alpha+matter.a*(1-alpha));
     }
+    return surface;
     return compositeMatter(float4(surface.rgb, surface.a * coverage), matter);
 }
 
@@ -1200,6 +1222,8 @@ GridReactiveOutput fragmentGridReactive(GridVertexOutput input, uint sample_inde
     input.position.xy = floor(input.position.xy) + positions[sample_index];
     GridReactiveOutput output;
     output.color=shadeGridReactive(input,g_textures,g_sampler,true,output.reactive);
+    float2 debug_world = fine * g_grid_frame.m_cell_size_m;
+    output.color = float4(worldLightDebugColour(debug_world), 1.0);
     return output;
 }
 
@@ -1792,7 +1816,8 @@ float4 shadeSolidComposite(ParticleVertexOutput input,
     StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
     SamplerState.Handle g_sampler,bool point_sample) {
     float unused_reactive;
-    return shadeSolidCompositeReactive(input,g_textures,g_sampler,point_sample,unused_reactive);
+    float4 result = shadeSolidCompositeReactive(input,g_textures,g_sampler,point_sample,unused_reactive);
+    return result;
 }
 
 [shader("fragment")]

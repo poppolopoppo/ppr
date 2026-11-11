@@ -327,6 +327,7 @@ namespace pP::colony {
                 case EColonyTool::pull: return "Pull";
                 case EColonyTool::spawn: return "Spawn";
                 case EColonyTool::destroy: return "Destroy";
+                case EColonyTool::none: return "No tool";
                 default: return "Inspect";
             }
         }
@@ -387,8 +388,8 @@ namespace pP::colony {
         /// Inspect owns no section here: its live read-out is the cursor
         /// Inspector, which also carries the idle instruction, so a strip here
         /// would only duplicate it. Notices stay because they are interactive
-        /// (the Dismiss button) and must surface even when the Inspector is
-        /// hidden or the read-out is passive.
+        /// (the Dismiss button); they are retained while the tool panel is
+        /// hidden and rendered only when it is visible.
         void drawToolFeedback_(
             const ColonyPresentation &colony, const ColonyUiView &view, ColonyUiState &state,
             std::optional<ColonyIntent> &intent) {
@@ -410,7 +411,7 @@ namespace pP::colony {
                 return;
             }
 
-            if (state.m_tool == EColonyTool::inspect) {
+            if (state.m_tool == EColonyTool::inspect or state.m_tool == EColonyTool::none) {
                 return;
             }
 
@@ -606,7 +607,7 @@ namespace pP::colony {
                 ImGui::TextDisabled("Seed %llu", static_cast<unsigned long long>(colony.m_seed));
                 ImGui::Separator();
                 for (const auto item:
-                    {std::pair{"Colony", EColonyIntent::toggle_colony},
+                    {std::pair{"Colony", EColonyIntent::open_colony_management},
                         std::pair{"Display", EColonyIntent::toggle_display},
                         std::pair{"Performance", EColonyIntent::toggle_performance},
                         std::pair{"Worldgen Workshop", EColonyIntent::open_workshop},
@@ -1167,13 +1168,19 @@ namespace pP::colony {
         // independent information windows and supported tool rail
         // ------------------------------------------------------------------
 
+        /// The Colony/Tool context window exists only while a tool is selected.
+        /// Inspect without the management view is represented by its cursor
+        /// read-out instead. Notices are rendered here when it is open but
+        /// never make it visible. Closing it also clears the selected tool, so
+        /// the close control, rail deselect and Esc all return to no tool.
         void drawColonySummary_(
             const ColonyPresentation &colony, const ColonyUiView &view, const std::span<const ColonyShortcut> shortcuts,
             ColonyUiState &state, std::optional<ColonyIntent> &intent, const float top, const float rail) {
-            if (not state.m_colony_open and state.m_tool == EColonyTool::inspect and not state.m_notice.visible()) {
+            if (not colonyContextPanelVisible(state)) {
                 return;
             }
 
+            const bool management = state.m_tool == EColonyTool::inspect and state.m_colony_open;
             const auto &io = ImGui::GetIO();
             const float fs = ImGui::GetFontSize();
             const float width = std::min(fs * 22.0f, std::max(fs * 8.0f, io.DisplaySize.x - rail - fs));
@@ -1185,22 +1192,28 @@ namespace pP::colony {
             const auto flags = ImGuiWindowFlags_NoFocusOnAppearing |
                                ImGuiWindowFlags_NoCollapse |
                                ImGuiWindowFlags_NoDocking;
-            const char *const title = state.m_colony_open ? "Colony###colony_summary" : "Tool context###colony_summary";
+            const char *const title = management ? "Colony###colony_summary" : "Tool context###colony_summary";
             ImGui::SetNextWindowBgAlpha(ui::theme::kFloatingPanelAlpha);
             // The title bar is the panel's one header: push the heading face
             // for Begin only, so the body draws on the current face.
             ui::WindowTitleFont title_font{};
-            const bool visible = ImGui::Begin(title, state.m_colony_open ? &state.m_colony_open : nullptr, flags);
+            bool panel_open = true;
+            const bool visible = ImGui::Begin(title, &panel_open, flags);
             title_font.close();
             if (visible) {
                 drawToolFeedback_(colony, view, state, intent);
-                if (state.m_colony_open) {
+                if (management) {
                     drawColonySection_(colony, view, shortcuts, state, intent);
                     drawWorldGeneration_(colony, state, intent);
                 }
             }
 
             ImGui::End();
+            if (not panel_open) {
+                state.m_colony_open = false;
+                intent = ColonyIntent{
+                    .m_arg = static_cast<u32>(EColonyTool::none), .m_kind = EColonyIntent::select_tool};
+            }
         }
 
         /// Cursor Inspector: a tiny dark tooltip that follows the pointer while
@@ -1395,7 +1408,12 @@ namespace pP::colony {
                 }
 
                 if (pressed) {
-                    intent = ColonyIntent{.m_arg = argument, .m_kind = kind};
+                    // Pressing the active tool again deselects it, hiding its
+                    // context panel. Dig stows through its own toggle intent.
+                    const u32 selected_argument = kind == EColonyIntent::select_tool and selected
+                                                      ? static_cast<u32>(EColonyTool::none)
+                                                      : argument;
+                    intent = ColonyIntent{.m_arg = selected_argument, .m_kind = kind};
                 }
             }
 
@@ -1551,7 +1569,6 @@ namespace pP::colony {
                 .m_retro = {state.m_retro.m_enabled, state.m_retro.m_pixel_scale, state.m_retro.m_temporal_enabled},
                 .m_lighting_post =
                     {state.m_world_light.m_enabled, state.m_world_light.m_samples_per_frame,
-                        state.m_world_light.m_accumulation_samples, state.m_world_light.m_history_retention,
                         state.m_world_light.m_level_count, state.m_world_light.m_sky_hour, world_light_debug_view,
                         state.m_post.m_auto_exposure, state.m_post.m_exposure_ev, state.m_post.m_adaptation_tau,
                         state.m_post.m_ev_min, state.m_post.m_ev_max, state.m_post.m_bloom,
@@ -1610,6 +1627,18 @@ namespace pP::colony {
             }
         }
     } // namespace
+
+    // ------------------------------------------------------------------
+    // panel visibility
+    // ------------------------------------------------------------------
+
+    bool colonyContextPanelVisible(const ColonyUiState &state) noexcept {
+        if (state.m_tool == EColonyTool::none) {
+            return false;
+        }
+
+        return state.m_tool != EColonyTool::inspect or state.m_colony_open;
+    }
 
     // ------------------------------------------------------------------
     // colony ui

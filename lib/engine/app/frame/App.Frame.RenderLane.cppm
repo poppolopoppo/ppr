@@ -71,12 +71,10 @@ export namespace pP {
         // Field mode: immutable world plan and palette carried once at begin.
         lighting::WorldLightPlan m_field_plan{};
         std::vector<lighting::WorldLightMaterial> m_field_materials{};
-        // Per-frame direction-sample budget, accumulation cap, and steady-state
-        // retention for the cascade field update (defaults match the settings
-        // schema so an unset command still yields the shipped behavior).
+        // Per-frame direction-sample budget for the cascade field update
+        // (defaults match the settings schema so an unset command still yields
+        // the shipped behavior).
         u32 m_field_budget{};
-        u32 m_field_accumulation_samples{8u};
-        float m_field_history_retention{0.9f};
         // Terrain atlas ambient strength (0 to 0.35), mirrored into the terrain
         // WorldLightSwitch constant buffer next to the field debug selector.
         float m_field_atlas_ambient{0.3f};

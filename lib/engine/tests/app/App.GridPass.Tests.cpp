@@ -815,6 +815,32 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(configured.m_pixel_scale == 4u);
         };
 
+        // Auto-exposure applies its target EV as a radiance multiplier
+        // (scene * exp2(targetEv)). The contract is that the target maps the
+        // average scene luminance to middle gray: a dark frame must raise
+        // exposure, a bright frame must lower it, and middle gray is neutral.
+        PPR_UNIT_TEST (retro_auto_exposure_target_ev_maps_scene_luminance_to_middle_gray) {
+            constexpr float middle_gray = 0.18f;
+            constexpr float ev_min = -10.0f;
+            constexpr float ev_max = 10.0f;
+
+            const float dark = 0.018f;
+            const float neutral = 0.18f;
+            const float bright = 1.8f;
+
+            const float dark_ev = RetroPass::targetEv(RetroPass::log2Luminance(dark), ev_min, ev_max);
+            const float neutral_ev = RetroPass::targetEv(RetroPass::log2Luminance(neutral), ev_min, ev_max);
+            const float bright_ev = RetroPass::targetEv(RetroPass::log2Luminance(bright), ev_min, ev_max);
+
+            PPR_TEST_ASSERT(dark_ev > 0.0f);
+            PPR_TEST_ASSERT(std::abs(neutral_ev) <= 1e-6f);
+            PPR_TEST_ASSERT(bright_ev < 0.0f);
+
+            PPR_TEST_ASSERT(std::abs(dark * std::exp2(dark_ev) - middle_gray) <= 1e-4f);
+            PPR_TEST_ASSERT(std::abs(neutral * std::exp2(neutral_ev) - middle_gray) <= 1e-4f);
+            PPR_TEST_ASSERT(std::abs(bright * std::exp2(bright_ev) - middle_gray) <= 1e-4f);
+        };
+
         PPR_UNIT_TEST (temporal_jitter_visits_a_centered_half_pixel_cycle) {
             float2 sum{zero_v};
             for (u32 phase = 0u; phase < 4u; ++phase) {
@@ -953,6 +979,7 @@ namespace pP::tests {
             detail::Retro::retro_scene_extent_divides_both_axes_and_floors_at_one,
             detail::Retro::retro_scene_signature_is_linear_hdr_with_depth,
             detail::Retro::retro_settings_default_to_disabled_engine_policy,
+            detail::Retro::retro_auto_exposure_target_ev_maps_scene_luminance_to_middle_gray,
             detail::Retro::temporal_jitter_visits_a_centered_half_pixel_cycle,
             detail::Retro::uninitialized_temporal_fallback_preserves_camera_and_requested_settings,
             detail::Retro::retro_rejects_invalid_hdr_exposure_before_first_frame,
