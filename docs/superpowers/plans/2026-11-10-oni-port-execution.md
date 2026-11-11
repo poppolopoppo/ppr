@@ -42,7 +42,8 @@ Windows/D3D12 is unavailable on this host and remains an unmet gate unless run.
 | 6 | complete (commits `ef7276e3`, `02047b7d`, `98136a0e`, `323c6761`; reviews clean; 2 deferred minors) |
 | 7 | complete (commit `59cd4c34`; Linux/Vulkan verified; D3D12 pending) |
 | 8 | complete (commit `62621c92`; independent review approved; D3D12 pending) |
-| 9–19 | pending |
+| 9 | complete (commits `d5f95024`, `563c73a8`; reviews clean; Task 10 handoffs recorded) |
+| 10–19 | pending |
 
 ## Task 0 — evidence
 
@@ -969,5 +970,40 @@ and operational acceptance. No Task 4 work has begun.
   - Add a tracer fixture with a receive-only transparent cell in the path and a
     negative interior-grid exact-boundary case; current coverage is indirect.
   - Remove the unused `lighting::visibilityBit` helper or use it in the test.
+- **Known gates:** pre-existing `gpu_grid_surface` optical leaf (Task 11);
+  Windows/D3D12 unmeasured.
+
+## Task 9 — cached source and L5–L1 transport complete
+
+- Commits: `d5f95024` (transport), `563c73a8` (seam evidence, source buffer
+  contracts, status coverage/YAGNI cleanup).
+- Review: initial review found three Important issues (seam evidence compared
+  the wrong index space; source palette/thermal buffers only null-checked; dead
+  exported schedule geometry) plus status/borrow/cleanup gaps. Fix round
+  addressed them; scoped re-review found all findings addressed with no new
+  Critical/Important breakage.
+- Delivered: exact four-frame quarter-probe schedule with uint64 borrow-safe
+  frame identity and counter-exhaustion admission rejection; 40 MiB L1–L5
+  uint2 interval store with exact atlas addressing, zero L/T cold start and no
+  raw L0; L5 four-terminal-sub-sector actual-map-exit tracing with sky closure
+  T=0; lower-level clamped four-parent merging with no new parent rays; one
+  4 MiB ordered RGB9E5 source from palette/thermal/prior DC with exact Y0
+  normalization and pure-metal/transparent/gas/cold-start rules; source→L5→L1
+  barriers/status; detailed tracer with owning invocation and nonfinite
+  failure. Real GPU tests cover schedule/borrow, source, terminal seam/narrow
+  integral, storage/atlas/retention, status range/invalid/containment and
+  teardown.
+- **Task 10 handoffs:**
+  - Task 9 binds the pass-owned zero fine-CH placeholder and proves only the
+    pre-update source contract; Task 10 owns the single in-place 512²×32 CH
+    field, reconstruction/EMA, and the source-reads-finish-before-fine-writes
+    dependency.
+  - `lastTraceFrame` remains the planned host schedule interface.
+  - The source containment assertion currently reads a cell that starts zero;
+    Task 10 should prime it or otherwise make containment discriminating.
+  - Production still supplies the default black sky hour until later renderer
+    wiring.
+- **Deferred minors:** test robustness (optional dereference/span checks);
+  report pre-fix evidence block remains alongside the follow-up.
 - **Known gates:** pre-existing `gpu_grid_surface` optical leaf (Task 11);
   Windows/D3D12 unmeasured.
