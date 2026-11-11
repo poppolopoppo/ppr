@@ -3629,9 +3629,9 @@ namespace pP {
         frame.m_camera_world_x = m_camera_view.m_origin.x;
         frame.m_camera_world_y = m_camera_view.m_origin.y;
         frame.m_camera_world_z = m_camera_view.m_origin.z;
-        frame.m_surface_to_camera_x = -m_camera_view.m_forward.x;
-        frame.m_surface_to_camera_y = -m_camera_view.m_forward.y;
-        frame.m_surface_to_camera_z = -m_camera_view.m_forward.z;
+        frame.m_camera_forward_x = m_camera_view.m_forward.x;
+        frame.m_camera_forward_y = m_camera_view.m_forward.y;
+        frame.m_camera_forward_z = m_camera_view.m_forward.z;
         frame.m_camera_ortho = m_camera_view.m_camera_mode == ECameraProjection::orthographic ? 1u : 0u;
         frame.m_has_resolved_cells = (m_test_resolved and m_test_fine_ch) or
                                              (m_world.m_lighting and
@@ -3695,9 +3695,9 @@ namespace pP {
         frame.m_camera_world_x = m_camera_view.m_origin.x;
         frame.m_camera_world_y = m_camera_view.m_origin.y;
         frame.m_camera_world_z = m_camera_view.m_origin.z;
-        frame.m_surface_to_camera_x = -m_camera_view.m_forward.x;
-        frame.m_surface_to_camera_y = -m_camera_view.m_forward.y;
-        frame.m_surface_to_camera_z = -m_camera_view.m_forward.z;
+        frame.m_camera_forward_x = m_camera_view.m_forward.x;
+        frame.m_camera_forward_y = m_camera_view.m_forward.y;
+        frame.m_camera_forward_z = m_camera_view.m_forward.z;
         frame.m_camera_ortho = m_camera_view.m_camera_mode == ECameraProjection::orthographic ? 1u : 0u;
         frame.m_has_resolved_cells = (m_test_resolved and m_test_fine_ch) or
                                              (m_world.m_lighting and

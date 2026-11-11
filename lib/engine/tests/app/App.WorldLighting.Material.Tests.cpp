@@ -156,6 +156,62 @@ namespace pP::tests::detail::WorldLightingMaterial {
     // ------------------------------------------------------------------
     // device fixture
     // ------------------------------------------------------------------
+    // Independent CPU evaluation of the approved circular filters and visible
+    // response, used only by the end-to-end frame-path assertions.
+    [[nodiscard]] Double3 diffuseCpu(const lighting::CH &ch, const Double3 normal) noexcept {
+        const Double3 mean{
+            static_cast<double>(ch.m_coefficients[0].x) * kInvSqrtTwoPi,
+            static_cast<double>(ch.m_coefficients[0].y) * kInvSqrtTwoPi,
+            static_cast<double>(ch.m_coefficients[0].z) * kInvSqrtTwoPi};
+        const double length_xy = std::sqrt(normal.x * normal.x + normal.y * normal.y);
+        if (length_xy == 0.0) {
+            return {kPi * mean.x, kPi * mean.y, kPi * mean.z};
+        }
+
+        const double theta = std::atan2(normal.y, normal.x);
+        Double3 sum{};
+        for (u32 order = 1u; order <= 4u; ++order) {
+            const auto &cosine = ch.m_coefficients[2u * order - 1u];
+            const auto &sine = ch.m_coefficients[2u * order];
+            const double c = std::cos(static_cast<double>(order) * theta);
+            const double s = std::sin(static_cast<double>(order) * theta);
+            const double weight = 1.0 / (1.0 + static_cast<double>(order * order));
+            sum.x += (static_cast<double>(cosine.x) * c + static_cast<double>(sine.x) * s) * kInvSqrtPi * weight;
+            sum.y += (static_cast<double>(cosine.y) * c + static_cast<double>(sine.y) * s) * kInvSqrtPi * weight;
+            sum.z += (static_cast<double>(cosine.z) * c + static_cast<double>(sine.z) * s) * kInvSqrtPi * weight;
+        }
+
+        return {
+            kPi * (std::max) (0.0, mean.x + length_xy * sum.x), kPi * (std::max) (0.0, mean.y + length_xy * sum.y),
+            kPi * (std::max) (0.0, mean.z + length_xy * sum.z)};
+    }
+
+    [[nodiscard]] Double3 specularCpu(
+        const lighting::CH &ch, const Double3 reflection, const double roughness) noexcept {
+        const Double3 mean{
+            static_cast<double>(ch.m_coefficients[0].x) * kInvSqrtTwoPi,
+            static_cast<double>(ch.m_coefficients[0].y) * kInvSqrtTwoPi,
+            static_cast<double>(ch.m_coefficients[0].z) * kInvSqrtTwoPi};
+        const double length_xy = std::sqrt(reflection.x * reflection.x + reflection.y * reflection.y);
+        if (length_xy == 0.0)
+            return mean;
+
+        const double theta = std::atan2(reflection.y, reflection.x);
+        Double3 sum{};
+        for (u32 order = 1u; order <= 4u; ++order) {
+            const auto &cosine = ch.m_coefficients[2u * order - 1u];
+            const auto &sine = ch.m_coefficients[2u * order];
+            const double c = std::cos(static_cast<double>(order) * theta);
+            const double s = std::sin(static_cast<double>(order) * theta);
+            const double weight = std::pow(length_xy, static_cast<double>(order)) *
+                                  std::exp(-5.0 * static_cast<double>(order * order) * roughness * roughness);
+            sum.x += (static_cast<double>(cosine.x) * c + static_cast<double>(sine.x) * s) * kInvSqrtPi * weight;
+            sum.y += (static_cast<double>(cosine.y) * c + static_cast<double>(sine.y) * s) * kInvSqrtPi * weight;
+            sum.z += (static_cast<double>(cosine.z) * c + static_cast<double>(sine.z) * s) * kInvSqrtPi * weight;
+        }
+
+        return {(std::max) (0.0, mean.x + sum.x), (std::max) (0.0, mean.y + sum.y), (std::max) (0.0, mean.z + sum.z)};
+    }
 
     struct Fixture {
         safe_ptr<IShaderService> m_shaders{IShaderService::get()};
@@ -257,6 +313,30 @@ namespace pP::tests::detail::WorldLightingMaterial {
         const auto *const words = reinterpret_cast<const u16 *>(
             readback.m_bytes.data() + static_cast<std::size_t>(y) * readback.m_row_pitch + x * 4u);
         return {halfToFloat(words[0]), halfToFloat(words[1])};
+    }
+
+    [[nodiscard]] std::array<double, 2u> sampleLutCpu(
+        const TextureReadback &readback, const double n_dot_v, const double roughness) {
+        const double x = std::clamp(n_dot_v, 0.0, 1.0) * static_cast<double>(kWidth) - 0.5;
+        const double y = std::clamp(roughness, 0.0, 1.0) * static_cast<double>(kHeight) - 0.5;
+        const int x0 = static_cast<int>(std::floor(x));
+        const int y0 = static_cast<int>(std::floor(y));
+        const double fx = x - std::floor(x);
+        const double fy = y - std::floor(y);
+        const auto at = [&](const int ix, const int iy) {
+            const u32 cx = static_cast<u32>(std::clamp(ix, 0, static_cast<int>(kWidth) - 1));
+            const u32 cy = static_cast<u32>(std::clamp(iy, 0, static_cast<int>(kHeight) - 1));
+            const auto value = lutTexel(readback, cx, cy);
+            return std::array<double, 2u>{static_cast<double>(value[0]), static_cast<double>(value[1])};
+        };
+
+        const auto a = at(x0, y0);
+        const auto b = at(x0 + 1, y0);
+        const auto c = at(x0, y0 + 1);
+        const auto d = at(x0 + 1, y0 + 1);
+        return {
+            (a[0] * (1.0 - fx) + b[0] * fx) * (1.0 - fy) + (c[0] * (1.0 - fx) + d[0] * fx) * fy,
+            (a[1] * (1.0 - fx) + b[1] * fx) * (1.0 - fy) + (c[1] * (1.0 - fx) + d[1] * fx) * fy};
     }
 
     // ------------------------------------------------------------------
@@ -1385,6 +1465,188 @@ namespace pP::tests::detail::WorldLightingMaterial {
             grid.observations().m_particle_instances, grid.observations().m_draw_commands);
     };
 
+    PPR_UNIT_TEST (categorical_view_vector_matches_the_literal_grid_frame_path) {
+        Fixture fixture{};
+        fixture.initialize();
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+
+        Renderer renderer{};
+        PPR_TEST_ASSERT(not renderer.initialize(*fixture.m_rhi));
+        GridPass grid{};
+        PPR_TEST_ASSERT(not grid.initialize(*fixture.m_rhi, *fixture.m_shaders, std::filesystem::current_path()));
+        PPR_DEFER {
+            PPR_TEST_ASSERT(not renderer.waitOnHost());
+            PPR_TEST_ASSERT(not grid.shutdown());
+            PPR_TEST_ASSERT(not renderer.shutdown());
+        };
+
+        GridTerrainVisual visual{};
+        visual.m_material_id = 1u;
+        visual.m_color_rgba = 0xffffffffu;
+        visual.m_ior = 1.5f;
+        visual.m_roughness = 0.5f;
+        visual.m_metallic = 0.0f;
+        visual.m_opacity = 1.0f;
+        GridStagedFrame stage{};
+        stage.m_world_edge = WorldLightingPass::kWorldEdge;
+        stage.m_cell_size_m = 1.0f;
+        stage.m_terrain_visuals = {visual};
+        stage.m_tiles.push_back(
+            GridTileSubmission{.m_dirty_mask = 1u, .m_tile_range = {0, 0, 128, 128}, .m_chunk_id = 0u});
+        PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
+
+        Array<u32> resolved(static_cast<std::size_t>(WorldLightingPass::kCellCount), 1u);
+        auto resolved_buffer = makeBuffer(
+            fixture.device(), resolved.size() * sizeof(u32), sizeof(u32), resolved.data());
+        const auto make_ch = [&](const lighting::CH &ch) {
+            Array<lighting::PackedCH> records(lighting::kFineCHRecordCount);
+            const auto packed = lighting::packCH(ch);
+            PPR_TEST_ASSERT(packed.has_value());
+            for (auto &record: records)
+                record = *packed;
+            return makeBuffer(
+                fixture.device(), records.size() * sizeof(lighting::PackedCH), sizeof(lighting::PackedCH),
+                records.data());
+        };
+
+        rhi::TextureDesc target_description{};
+        target_description.type = rhi::TextureType::Texture2D;
+        target_description.size = {.width = 1u, .height = 1u, .depth = 1u};
+        target_description.arrayLength = 1u;
+        target_description.mipCount = 1u;
+        target_description.format = rhi::Format::RGBA16Float;
+        target_description.memoryType = rhi::MemoryType::DeviceLocal;
+        target_description.usage = static_cast<rhi::TextureUsage>(
+            static_cast<u32>(rhi::TextureUsage::RenderTarget) | static_cast<u32>(rhi::TextureUsage::CopySource));
+        target_description.defaultState = rhi::ResourceState::RenderTarget;
+        rhi::ComPtr<rhi::ITexture> target{};
+        PPR_TEST_ASSERT(
+            not make_error_code(fixture.device().createTexture(target_description, nullptr, target.writeRef())));
+        const auto viewport = rhi::Viewport::fromSize(1.0f, 1.0f);
+        const auto scissor = rhi::ScissorRect::fromSize(1u, 1u);
+
+        const auto render_pixel = [&](const CameraSnapshot &snapshot, const lighting::CH &ch) {
+            PPR_TEST_ASSERT(not grid.setLightingBuffersForTest(resolved_buffer, make_ch(ch)));
+            PPR_TEST_ASSERT(not grid.update(TimeSpan{}, snapshot, false));
+            const auto draw = [&](const DrawContext &context) -> std::error_code { return grid.render(context); };
+            DrawSubmission submission{"categorical view", DrawCallback{draw}};
+            submission.m_viewport = viewport;
+            submission.m_scissor = scissor;
+            PPR_TEST_ASSERT(not renderer.renderToTexture(*target, {submission}));
+            grid.notifyFrameSubmitted(renderer.lastSubmittedFenceValue());
+            PPR_TEST_ASSERT(not renderer.waitOnHost());
+            const auto readback = readTexture(fixture.device(), *target);
+            const auto *const words = reinterpret_cast<const u16 *>(readback.m_bytes.data());
+            std::array<double, 4u> result{};
+            for (u32 channel = 0u; channel < 4u; ++channel)
+                result[channel] = static_cast<double>(halfToFloat(words[channel]));
+            return result;
+        };
+
+        // --------------------------------------------------------------
+        // orthographic default camera: V = -forward, flat normal NoV = 1e-5
+        // --------------------------------------------------------------
+        CameraModel ortho_model{};
+        ortho_model.m_camera_mode = ECameraProjection::orthographic;
+        ortho_model.m_origin = float3{0.0f, 0.0f, -0.5f};
+        ortho_model.m_ortho_scale = 1.0f;
+        Camera ortho_camera{ECameraProjection::orthographic};
+        ortho_camera.updateModel(TimeSpan{}, ortho_model, Viewport{PixelRect{0, 0, 1, 1}});
+        const auto ortho_snapshot = ortho_camera.getSnapshot();
+        const double ortho_n_dot_v = std::max(static_cast<double>(ortho_snapshot.m_forward.z) * -1.0, 1.0e-5);
+        const lighting::CH ortho_ch = uniformCH(float3{0.5f, 0.5f, 0.5f});
+        const auto ortho_pixel = render_pixel(ortho_snapshot, ortho_ch);
+        const auto lut = readTexture(fixture.device(), *grid.brdfLutForTest());
+        const auto literal_pair = sampleLutCpu(lut, ortho_n_dot_v, 0.5);
+        const double f0 = 0.04;
+        const double fresnel = f0 + (std::max(1.0 - 0.5, f0) - f0) * std::pow(1.0 - ortho_n_dot_v, 5.0);
+        const double energy = 1.0 + f0 * (1.0 / std::max(literal_pair[1], 1.0e-5) - 1.0);
+        const double k_s = std::max(0.0, (literal_pair[0] * (1.0 - f0) + literal_pair[1] * f0) * energy);
+        const double literal_channels = (1.0 - fresnel) * 0.5 + k_s * 0.5;
+        const auto wrong_pair = sampleLutCpu(lut, 1.0, 0.5);
+        const double wrong_fresnel = f0;
+        const double wrong_energy = 1.0 + f0 * (1.0 / std::max(wrong_pair[1], 1.0e-5) - 1.0);
+        const double wrong_k_s = std::max(0.0, (wrong_pair[0] * (1.0 - f0) + wrong_pair[1] * f0) * wrong_energy);
+        const double wrong_channels = (1.0 - wrong_fresnel) * 0.5 + wrong_k_s * 0.5;
+        for (u32 channel = 0u; channel < 3u; ++channel) {
+            PPR_TEST_ASSERT(std::abs(ortho_pixel[channel] - literal_channels) <= 0.03);
+        }
+        PPR_TEST_ASSERT(std::abs(literal_channels - wrong_channels) > 0.1);
+        std::println(
+            "WORLD_LIGHTING_MATERIAL ortho_end_to_end pixel=({:.4f},{:.4f},{:.4f}) literal={:.4f} wrong={:.4f} "
+            "NoV={:.6f} diffuse={:.4f}",
+            ortho_pixel[0], ortho_pixel[1], ortho_pixel[2], literal_channels, wrong_channels, ortho_n_dot_v,
+            (1.0 - fresnel) * 0.5);
+
+        // --------------------------------------------------------------
+        // perspective tilted camera: centre ray hits (0.5,0.5,0); literal
+        // eye=origin must be distinguished from the old origin+forward eye.
+        // --------------------------------------------------------------
+        CameraModel perspective_model{};
+        perspective_model.m_camera_mode = ECameraProjection::perspective;
+        perspective_model.m_origin = float3{0.0f, 0.0f, 0.5f};
+        perspective_model.m_basis = Quaternion::rotate(math::axis_z, normalize(float3{1.0f, 1.0f, -1.0f}));
+        Camera perspective_camera{ECameraProjection::perspective};
+        perspective_camera.updateModel(TimeSpan{}, perspective_model, Viewport{PixelRect{0, 0, 1, 1}});
+        const auto perspective_snapshot = perspective_camera.getSnapshot();
+        const double t = -static_cast<double>(perspective_snapshot.m_origin.z) /
+                         static_cast<double>(perspective_snapshot.m_forward.z);
+        const Double3 sample{
+            static_cast<double>(perspective_snapshot.m_origin.x) +
+                static_cast<double>(perspective_snapshot.m_forward.x) * t,
+            static_cast<double>(perspective_snapshot.m_origin.y) +
+                static_cast<double>(perspective_snapshot.m_forward.y) * t,
+            0.0};
+        const Double3 literal_view = normalized(
+            {static_cast<double>(perspective_snapshot.m_origin.x) - sample.x,
+                static_cast<double>(perspective_snapshot.m_origin.y) - sample.y,
+                static_cast<double>(perspective_snapshot.m_origin.z) - sample.z},
+            {0.0, 0.0, 1.0});
+        const Double3 wrong_eye{
+            static_cast<double>(perspective_snapshot.m_origin.x) +
+                static_cast<double>(perspective_snapshot.m_forward.x),
+            static_cast<double>(perspective_snapshot.m_origin.y) +
+                static_cast<double>(perspective_snapshot.m_forward.y),
+            static_cast<double>(perspective_snapshot.m_origin.z) +
+                static_cast<double>(perspective_snapshot.m_forward.z)};
+        const Double3 wrong_view = normalized(
+            {wrong_eye.x - sample.x, wrong_eye.y - sample.y, wrong_eye.z - sample.z}, {0.0, 0.0, 1.0});
+        const lighting::CH perspective_ch = directionalCH(float3{0.5f, 0.5f, 0.5f}, float3{0.5f, 0.5f, 0.5f});
+        const auto perspective_pixel = render_pixel(perspective_snapshot, perspective_ch);
+
+        const auto evaluate = [&](const Double3 view) {
+            const double n_dot_v = std::max(view.z, 1.0e-5);
+            const auto pair = sampleLutCpu(lut, n_dot_v, 0.5);
+            const double fresnel_value = f0 +
+                                         (std::max(1.0 - 0.5, f0) - f0) * std::pow(1.0 - std::min(n_dot_v, 1.0), 5.0);
+            const double energy_value = 1.0 + f0 * (1.0 / std::max(pair[1], 1.0e-5) - 1.0);
+            const double specular_weight = std::max(0.0, (pair[0] * (1.0 - f0) + pair[1] * f0) * energy_value);
+            const Double3 reflection = normalized({-view.x, -view.y, -view.z + 2.0 * n_dot_v}, {0.0, 0.0, 1.0});
+            const Double3 diffuse = diffuseCpu(perspective_ch, {0.0, 0.0, 1.0});
+            const Double3 specular = specularCpu(perspective_ch, reflection, 0.5);
+            return Double3{
+                (1.0 - fresnel_value) / kPi * diffuse.x + specular_weight * specular.x,
+                (1.0 - fresnel_value) / kPi * diffuse.y + specular_weight * specular.y,
+                (1.0 - fresnel_value) / kPi * diffuse.z + specular_weight * specular.z};
+        };
+        const Double3 literal_response = evaluate(literal_view);
+        const Double3 wrong_response = evaluate(wrong_view);
+        const std::array<double, 3u> literal_values{literal_response.x, literal_response.y, literal_response.z};
+        for (u32 channel = 0u; channel < 3u; ++channel) {
+            PPR_TEST_ASSERT(std::abs(perspective_pixel[channel] - literal_values[channel]) <= 0.03);
+        }
+        const double literal_luma = literal_response.x + literal_response.y + literal_response.z;
+        const double wrong_luma = wrong_response.x + wrong_response.y + wrong_response.z;
+        PPR_TEST_ASSERT(std::abs(literal_luma - wrong_luma) > 0.01);
+        std::println(
+            "WORLD_LIGHTING_MATERIAL perspective_end_to_end pixel=({:.4f},{:.4f},{:.4f}) literal=({:.4f},{:.4f},"
+            "{:.4f}) wrong=({:.4f},{:.4f},{:.4f})",
+            perspective_pixel[0], perspective_pixel[1], perspective_pixel[2], literal_response.x, literal_response.y,
+            literal_response.z, wrong_response.x, wrong_response.y, wrong_response.z);
+    };
+
     PPR_UNIT_TEST (grid_frame_reflection_matches_the_cpu_contract) {
         Fixture fixture{};
         fixture.initialize();
@@ -1420,7 +1682,7 @@ namespace pP::tests::detail::WorldLightingMaterial {
         PPR_TEST_ASSERT(frame->getSize(SLANG_PARAMETER_CATEGORY_UNIFORM) == sizeof(GridPass::GridFrame));
         for (const auto &[name, offset]: std::array<std::pair<const char *, u32>, 8u>{
                  std::pair{"m_camera_world_x", 304u}, {"m_camera_world_y", 308u}, {"m_camera_world_z", 312u},
-                 {"m_surface_to_camera_x", 316u}, {"m_surface_to_camera_y", 320u}, {"m_surface_to_camera_z", 324u},
+                 {"m_camera_forward_x", 316u}, {"m_camera_forward_y", 320u}, {"m_camera_forward_z", 324u},
                  {"m_camera_ortho", 328u}, {"m_has_resolved_cells", 332u}}) {
             bool matched = false;
             for (unsigned index = 0u; index < frame->getFieldCount(); ++index) {
@@ -1609,6 +1871,7 @@ namespace pP::tests {
                 detail::WorldLightingMaterial::brdf_lut_sampling_clamps_at_both_edges,
                 detail::WorldLightingMaterial::black_environment_and_no_emission_is_black,
                 detail::WorldLightingMaterial::perspective_and_orthographic_view_vectors_match_the_eye_contract,
+                detail::WorldLightingMaterial::categorical_view_vector_matches_the_literal_grid_frame_path,
                 detail::WorldLightingMaterial::categorical_base_color_normal_bombing_and_period_contracts,
                 detail::WorldLightingMaterial::doubling_environment_doubles_reflected_hdr,
                 detail::WorldLightingMaterial::metallic_and_roughness_endpoints_change_visible_response,

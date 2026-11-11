@@ -1043,9 +1043,10 @@ and operational acceptance. No Task 4 work has begun.
 
 ## Task 11 — sample-rate categorical PBR, shared BRDF LUT and lit gas complete
 
-- Commits: `58a21d8a` `fix: correct categorical view vector and retire legacy
-  surface tests`, on top of `e5e073e5` `feat: shade categorical cells with
-  directional PBR and lit gas`.
+- Commits: `fix: make categorical view vector consistent and remove dead surface
+  fixtures` (re-review follow-up), `58a21d8a` `fix: correct categorical view
+  vector and retire legacy surface tests`, on top of `e5e073e5`
+  `feat: shade categorical cells with directional PBR and lit gas`.
 - Review: six Important findings addressed: engine-correct orthographic
   (`V=-forward`) and perspective (`V=normalize(origin-sample)`) view vectors with
   dedicated NoV/Fresnel probes; the categorical branch moved above the retired
@@ -1056,6 +1057,17 @@ and operational acceptance. No Task 4 work has begun.
   remove shader range repair, remove the unused clear seam, use
   `hasPublishedCells()` for normal branching, keep one source/thermal binding
   owner, and release the one-shot BRDF generation program/pipeline.
+- Re-review: the orthographic host/shader double negation was removed by naming
+  the frame field `m_camera_forward_*` (eye→scene, written as `+forward`) and
+  returning `-camera_forward` once in `planeSurfaceToCamera`; an end-to-end
+  `GridFrame`→`grid_tiles` gate now renders both orthographic and tilted
+  perspective cameras against literal CPU expectations. The default orthographic
+  flat-normal camera has `NoV=1e-5` and diffuse term `0.25` for CH mean `0.5`
+  (old +forward would give `0.494`); the literal spec V is implemented and the
+  visual decision is left to Task 19 owner acceptance (no normal/camera flip).
+  The orphaned slanted/five-pixel fixtures were deleted; asset/app leaf counts
+  and the adapted categorical `gpu_grid_surface` name were corrected in the
+  codemap and report.
 - Delivered: exact §4 circular `diffuseIrradiance`/`specularRadiance`; approved
   visible material formula with `kD/kS`, energy compensation, one
   authored+thermal term and no key/ambient floor or specular cap; one immutable

@@ -32,9 +32,9 @@ struct GridFrame {
     float m_camera_world_x;
     float m_camera_world_y;
     float m_camera_world_z;
-    float m_surface_to_camera_x;
-    float m_surface_to_camera_y;
-    float m_surface_to_camera_z;
+    float m_camera_forward_x;
+    float m_camera_forward_y;
+    float m_camera_forward_z;
     uint m_camera_ortho;
     uint m_has_resolved_cells;
 };
@@ -667,8 +667,8 @@ float3 surfaceToCamera(float2 fine_position) {
     float3 camera_origin = float3(
         g_grid_frame.m_camera_world_x, g_grid_frame.m_camera_world_y, g_grid_frame.m_camera_world_z);
     float3 camera_forward = float3(
-        g_grid_frame.m_surface_to_camera_x, g_grid_frame.m_surface_to_camera_y,
-        g_grid_frame.m_surface_to_camera_z);
+        g_grid_frame.m_camera_forward_x, g_grid_frame.m_camera_forward_y,
+        g_grid_frame.m_camera_forward_z);
     return planeSurfaceToCamera(
         fine_position, g_grid_frame.m_cell_size_m, camera_origin, camera_forward,
         g_grid_frame.m_camera_ortho != 0u);

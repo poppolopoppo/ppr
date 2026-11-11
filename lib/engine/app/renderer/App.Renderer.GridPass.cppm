@@ -373,9 +373,9 @@ export namespace pP {
             float m_camera_world_x{};
             float m_camera_world_y{};
             float m_camera_world_z{};
-            float m_surface_to_camera_x{};
-            float m_surface_to_camera_y{};
-            float m_surface_to_camera_z{};
+            float m_camera_forward_x{};
+            float m_camera_forward_y{};
+            float m_camera_forward_z{};
             u32 m_camera_ortho{};
             u32 m_has_resolved_cells{};
         };
@@ -389,7 +389,7 @@ export namespace pP {
         static_assert(PPR_OFFSETOF(GridFrame, m_layers) == 176u);
         static_assert(PPR_OFFSETOF(GridFrame, m_has_surface) == 172u);
         static_assert(PPR_OFFSETOF(GridFrame, m_camera_world_x) == 304u);
-        static_assert(PPR_OFFSETOF(GridFrame, m_surface_to_camera_x) == 316u);
+        static_assert(PPR_OFFSETOF(GridFrame, m_camera_forward_x) == 316u);
         static_assert(PPR_OFFSETOF(GridFrame, m_camera_ortho) == 328u);
         static_assert(PPR_OFFSETOF(GridFrame, m_has_resolved_cells) == 332u);
 

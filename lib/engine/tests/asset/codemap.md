@@ -78,9 +78,11 @@ by responsibility (`gpu_caches`, `gpu_picture`, `gpu_grid_particles`,
 lock and the same 450 s deadline. Nothing was moved into a longer deadline and
 no leaf was dropped to make a shard fit.
 
-The surface shard now covers only the retained categorical boundary leaf. Task 11
-removed the retired smooth solid/liquid reconstruction and its catalog-texture,
-large-offset, nominal-density, liquid-surface, liquid-optics and separate
+The surface shard now covers only `grid_categorical_resolved_boundary_and_translucency`:
+it publishes resolved cells and a uniform CH field, then asserts the opaque and
+transparent categorical pixels and their boundary. Task 11 removed the retired
+smooth solid/liquid reconstruction and its catalog-texture, large-offset,
+nominal-density, liquid-surface, liquid-optics and separate
 solid-envelope/interface leaves together with their shader families and the
 `gpu_grid_liquid`/`solid_interface_gpu`/`solid_envelope_gpu` entries. The
 replacement material evidence lives in `app/world_lighting_material/`; gas
@@ -94,8 +96,9 @@ pays its pipeline creation (about 18 s). Leaves therefore keep one pass where a
 control only changes the staged catalog: the catalog change travels through the
 supported world-candidate replacement, and frames whose pixels are discarded use
 `drawOpticalGridOnly_`, which keeps the real encode, wait and retirement but
-skips the host readback. `grid_translucent_solid_borders_and_internal_boundaries`
-and the retained picture leaves follow that pattern.
+skips the host readback.
+`grid_categorical_resolved_boundary_and_translucency` and the retained picture
+leaves follow that pattern.
 
 Three leaves were pure timing/policy sampling with no unique correctness
 contract and are retired here: `grid_material_shading_cost_samples` (four

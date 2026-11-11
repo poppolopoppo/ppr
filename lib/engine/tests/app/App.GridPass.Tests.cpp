@@ -56,7 +56,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(PPR_OFFSETOF(GridPass::GridFrame, m_has_surface) == 172u);
             PPR_TEST_ASSERT(PPR_OFFSETOF(GridPass::GridFrame, m_layers) == 176u);
             PPR_TEST_ASSERT(PPR_OFFSETOF(GridPass::GridFrame, m_camera_world_x) == 304u);
-            PPR_TEST_ASSERT(PPR_OFFSETOF(GridPass::GridFrame, m_surface_to_camera_x) == 316u);
+            PPR_TEST_ASSERT(PPR_OFFSETOF(GridPass::GridFrame, m_camera_forward_x) == 316u);
             PPR_TEST_ASSERT(PPR_OFFSETOF(GridPass::GridFrame, m_camera_ortho) == 328u);
             PPR_TEST_ASSERT(PPR_OFFSETOF(GridPass::GridFrame, m_has_resolved_cells) == 332u);
             PPR_TEST_ASSERT(sizeof(GridSurfaceHeights) == 16384u);
