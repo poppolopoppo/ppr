@@ -753,3 +753,11 @@ stable across the acceptance and ordinary runs.
 
 The cleaned application and the evidence above are ready for the owner's visual
 and operational acceptance. No Task 4 work has begun.
+
+### Owner acceptance recorded
+
+- **2026-11-11:** owner explicitly accepted the cleaned application with "yes"
+  after reviewing the Task 3 evidence and images. The mandatory cleanup gate is
+  passed. Task 4 may begin.
+- Acceptance covers the intermediate cleanup application, not the final lighting
+  visuals or the remaining Task 11/Task 19 red gates.
