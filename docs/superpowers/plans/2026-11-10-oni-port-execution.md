@@ -41,7 +41,8 @@ Windows/D3D12 is unavailable on this host and remains an unmet gate unless run.
 | 5 | complete (commit `2b94778`; independent review approved; D3D12 pending) |
 | 6 | complete (commits `ef7276e3`, `02047b7d`, `98136a0e`, `323c6761`; reviews clean; 2 deferred minors) |
 | 7 | complete (commit `59cd4c34`; Linux/Vulkan verified; D3D12 pending) |
-| 8–19 | pending |
+| 8 | complete (commit `62621c92`; independent review approved; D3D12 pending) |
+| 9–19 | pending |
 
 ## Task 0 — evidence
 
@@ -941,3 +942,32 @@ and operational acceptance. No Task 4 work has begun.
     wires production.
 - **Known gates:** pre-existing `gpu_grid_surface` optical leaf (Task 11);
   Windows/D3D12 and GPU-validation execution unmeasured on this host.
+
+## Task 8 — visibility, jump table and tracer complete
+
+- Commit `62621c92` `feat: add full-domain jump acceleration and segment tracing`.
+- Independent review: approved; no Critical/Important findings. YAGNI accepted
+  the per-attempt-slot acceleration storage (3.49 MiB/world, creation-only poison)
+  and the detailed tracer entry justified by hit-cell/status evidence.
+- Verified: one 21,504-record/172,032-byte uint2 visibility buffer (offsets
+  0/16384/20480, pitches 128/64/32); exactly two dispatches with 160-byte shared
+  storage, separate level-1 masks, unconditional barriers, no global clear/
+  atomics; buildJump priority 0/1/2/4/8/16/32 with R8_UINT; all masks bits
+  (including 31/32/63) checked against exact native footprints; SAT maximality
+  for all 1,048,576 cells and all seven jump sizes; accelerated-vs-native DDA
+  boundary matrix; poison/reuse/queued-submission rebuild; real GPU readbacks;
+  dispatch dimensions, stride, R8 format and allocations recorded; SPIR-V
+  structure independently confirmed.
+- **Task 9/10 handoffs:**
+  - Use the detailed tracer form with the owning invocation index for numeric
+    status; the two-argument wrapper currently forwards record 0 and is a
+    diagnostics footgun. Keep the detailed form for production or document the
+    wrapper as diagnostic-free.
+  - The finite `kTraceFar` sentinel can turn a pathological overflowing face
+    parameter into a clear rather than a numeric failure; close this when the
+    tracer gains its production callers.
+  - Add a tracer fixture with a receive-only transparent cell in the path and a
+    negative interior-grid exact-boundary case; current coverage is indirect.
+  - Remove the unused `lighting::visibilityBit` helper or use it in the test.
+- **Known gates:** pre-existing `gpu_grid_surface` optical leaf (Task 11);
+  Windows/D3D12 unmeasured.
