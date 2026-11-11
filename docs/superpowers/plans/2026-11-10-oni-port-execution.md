@@ -40,7 +40,8 @@ Windows/D3D12 is unavailable on this host and remains an unmet gate unless run.
 | 4 | complete (commit `317d9e8`; independent review approved; D3D12 pending) |
 | 5 | complete (commit `2b94778`; independent review approved; D3D12 pending) |
 | 6 | complete (commits `ef7276e3`, `02047b7d`, `98136a0e`, `323c6761`; reviews clean; 2 deferred minors) |
-| 7–19 | pending |
+| 7 | complete (commit `59cd4c34`; Linux/Vulkan verified; D3D12 pending) |
+| 8–19 | pending |
 
 ## Task 0 — evidence
 
@@ -860,3 +861,51 @@ and operational acceptance. No Task 4 work has begun.
   - One ASan-internal abort in `matter_resident_gpu` did not reproduce; it is
     unrelated by code surface and lacks a captured stack. Preserve as a flake
     until reproduced.
+
+## Task 7 — deterministic categorical cells and asynchronous numeric status complete
+
+- Commit: `59cd4c34` (`feat: resolve categorical world cells with deterministic GPU winners`).
+- Delivered: `engine.app:renderer.world_lighting_pass` (`WorldLightingFrame`,
+  `WorldLightingPass`, `NumericStatusRecord`) owned by
+  `GridPass::WorldResources`; `assets/shaders/world_lighting_projection.slang`
+  entries `clearWinners`/`reduceKeys`/`reduceRows`/`resolveCells` over the fixed
+  1024-square domain with one shared native-cell coordinate/key helper;
+  `assets/shaders/numeric_status.slang` 32-byte record; two 4 MiB row-major
+  uint32 scratch grids plus a 4 MiB resolved-cell grid; 32-bit atomic-min class/
+  distance key reduction and metadata-rank tie reduction from the same immutable
+  committed hot64/origin input; full-domain cell resolve (terrain word, selected
+  `packCell` metadata word, or zero); pass-owned 3-slot, 4-record status ring with
+  mapped completion-fenced readback, ticket settlement, error propagation and
+  teardown inspection.
+- Tests: `app/world_lighting_projection/` (12 leaves) — terrain precedence,
+  opaque-over-receive-only, near-over-far, exact distance ties with reordered
+  numerical source rows (full-grid equality), gas/inactive exclusion, exact
+  maximum endpoint vs outside/NaN rejection, 0/1/dense overlap with next-frame
+  clearing, invalid/range minima separation and propagation, slot reuse/
+  discard/consumption rules, shutdown pending-error reporting, reflected shader
+  ABI, and a GridPass ownership/bind integration case.
+- Verified on this host: `engine.tests.app` build; `ctest -R
+  world_lighting_projection` (routine 8.6 s, GPU-validation twin 8.8 s, Vulkan/
+  RTX 2080) both pass; `python scripts/format_cpp.py` check and
+  `check_semantic_style.py --files` report only advisory findings (no
+  A-STRANDED/B-OP/C-LEADING); `git diff --check` clean.
+- **Known gates:** Windows/D3D12 execution unmeasured. Production stage
+  orchestration (which calls `prepareWorldLighting`/`finalizeWorldLighting` in a
+  real frame and fans settlement into `notifyWorldLightingSubmitted`/
+  `collectWorldLightingCompleted`) belongs to the Task 8/14 transport and
+  settlement stages; Task 7 proves the owner, contract and device behavior
+  through the GridPass integration test. The status copy currently encodes at
+  the projection stage end (immediately after `resolveCells`) inside the same
+  submission; Task 13's command-tail seam will host the same copy when the
+  three-submission split lands.
+- **Deferred minors:**
+  - `WorldLightingPass::initialize` resolves `IRhiService` for device creation,
+    matching `PostProcessPass`; the declared signature remains
+    `(IShaderService &, const std::filesystem::path &)`.
+  - Shader programs/pipelines compile once per world bundle (first prepare),
+    so a world replacement recompiles the four small projection entries. Later
+    transport stages will extend the same per-world initialization; review
+    whether a GridPass-level immutable program set is warranted then.
+  - `inspectAttempt_` fails closed (`state_not_recoverable`) and keeps the slot
+    when a submitted attempt never encoded its status copy; the only reachable
+    path is a caller that submits without `finalize`.
