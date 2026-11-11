@@ -38,7 +38,8 @@ Windows/D3D12 is unavailable on this host and remains an unmet gate unless run.
 | 2a | complete (app GPU cost correction: commits `ab37c5ba`, `3c3b9963`; independent review of `ab37c5ba` returned 5 Important + minors, all fixed; records below) |
 | 3 | complete — owner accepted the cleaned application on 2026-11-11 |
 | 4 | complete (commit `317d9e8`; independent review approved; D3D12 pending) |
-| 5–19 | pending |
+| 5 | complete (commit `2b94778`; independent review approved; D3D12 pending) |
+| 6–19 | pending |
 
 ## Task 0 — evidence
 
@@ -789,3 +790,30 @@ and operational acceptance. No Task 4 work has begun.
   duplicated test-local half decoder. None affects the evidence.
 - **Unavailable gate:** Windows/D3D12 build, shader/pipeline execution,
   validation layers and sample order are unmeasured and reported pending.
+
+## Task 5 — packed codecs and thermal data complete
+
+- Commit `2b94778` `feat: define packed world-lighting records and calibrated thermal lookup`.
+- Independent review: approved; no Critical/Important findings. YAGNI pass
+  (shared codec/schema layer, include-only Slang mirrors, no speculative loader
+  or runtime alternative).
+- Verified: exact FP16/RGB9E5/signed-CH codecs and `packCell`; `makeSourceMaterial`
+  mapping/validation; `lastTraceFrame`; CIE CSV SHA-256 and CC BY-SA attribution;
+  reproducible 2,048-row/32,768-byte thermal table; `Y(6500)=1`; every finite
+  nonnegative FP16 Kelvin through the real GPU table with max relative error
+  `0.000261936` (bound 0.001); RGB9E5 error reported separately; GPU reflection,
+  compute pipeline and CPU/GPU decoded agreement.
+- **Task 6 handoffs:**
+  - `makeSourceMaterial` takes `texture_mean`; the missing-albedo white default
+    and the roughness/opacity/eta/texture-scale visible-scalar admission belong
+    to the Task 6 publication adapter. Test and document them there.
+  - `packCell` is the shared material16+half Kelvin encoding for metadata and
+    resolved cells; Task 6 renames the metadata word and updates the Task 4 C++
+    mirror/static assertions.
+  - The derived thermal table is a CC BY-SA 4.0 derivative; retain the
+    share-alike/derived-work statement with the vendored/generated data (final
+    documentation audit can complete it).
+- **Deferred minors:** README column-sum claim vs tested values; hardcode one
+  full interval/CH word in a future codec test to pin the intra-word byte map;
+  redundant `isfinite` check in `packInterval`. None affects delivered behavior.
+- **Unavailable gate:** Windows/D3D12 unmeasured.
