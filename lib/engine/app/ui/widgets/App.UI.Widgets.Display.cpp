@@ -73,8 +73,7 @@ namespace pP::ui {
             // Device report:
             "Picture device", "Change in flight", "Last problem", "Window", "Observed window", "Observed exclusive",
             // Lighting & Post:
-            "World light field", "Samples per frame", "Accumulation", "Retention", "Level count", "Sky hour",
-            "Auto exposure", "Exposure EV", "Adaptation tau (s)", "EV clamp", "Bloom", "Bloom intensity",
+            "Sky hour", "Auto exposure", "Exposure EV", "Adaptation tau (s)", "EV clamp", "Bloom", "Bloom intensity",
             "Bloom threshold", "Palette"};
 
         /// Shared label-column width: the widest label plus cell padding, so

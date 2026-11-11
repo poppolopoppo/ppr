@@ -103,14 +103,12 @@ export namespace pP {
     [[nodiscard]] std::error_code validateGridMaterialOptics(const GridTerrainVisual &visual);
 
     // ------------------------------------------------------------------
-    // coarse material projection shared with immutable world sources
+    // coarse material projection
     // ------------------------------------------------------------------
 
-    // One canonical coarsest admitted linear-image mean for rendering and
-    // immutable world-source material projection; no texture data is retained.
+    // One canonical coarsest admitted linear-image mean; no texture data is
+    // retained.
     [[nodiscard]] Expected<std::array<float, 3u>> gridFilteredAlbedoMean(const image::ImageAsset &source);
-    [[nodiscard]] Expected<std::array<float, 3u>> gridMaterialDiffuseAlbedo(
-        const GridTerrainVisual &visual, std::span<const image::ImageAsset> images);
 
     struct alignas(16) GridBackgroundLayer {
         u32 m_texture_index{0xffffffffu};

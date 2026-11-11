@@ -202,43 +202,6 @@ namespace pP {
         return filteredAlbedoMean_(source);
     }
 
-    Expected<std::array<float, 3u>> gridMaterialDiffuseAlbedo(
-        const GridTerrainVisual &visual, const std::span<const image::ImageAsset> images) {
-        PPR_RETURN_UNEXPECTED_ON_FAIL(
-            GridPass, std::isfinite(visual.m_metallic) and visual.m_metallic >= 0.0f and visual.m_metallic <= 1.0f
-                          ? std::error_code{}
-                          : std::make_error_code(std::errc::argument_out_of_domain));
-
-        std::array<float, 3u> mean{1.0f, 1.0f, 1.0f};
-        if (visual.m_texture_index != 0xffffffffu) {
-            PPR_RETURN_UNEXPECTED_ON_FAIL(
-                GridPass, visual.m_texture_index < images.size() ? std::error_code{}
-                                                                 : std::make_error_code(std::errc::invalid_argument));
-
-            const auto filtered = gridFilteredAlbedoMean(images[visual.m_texture_index]);
-            PPR_RETURN_UNEXPECTED_ON_FAIL(GridPass, filtered);
-            mean = *filtered;
-        }
-
-        // Same byte order and normalized endpoints as diagnosticTint. The
-        // absent texture is white, matching the existing solid-colour catalog.
-        std::array<float, 3u> result{};
-        for (u32 channel = 0u; channel < 3u; ++channel) {
-            const u32 byte = (visual.m_color_rgba >> (24u - 8u * channel)) & 255u;
-            const double encoded = double(byte) / 255.0;
-            const double linear = byte == 255u        ? 1.0
-                                  : encoded <= .04045 ? encoded / 12.92
-                                                      : std::pow((encoded + .055) / 1.055, 2.4);
-            result[channel] = static_cast<float>(linear) * mean[channel] * (1.0f - visual.m_metallic);
-            PPR_RETURN_UNEXPECTED_ON_FAIL(
-                GridPass, std::isfinite(result[channel]) and result[channel] >= 0.0f and result[channel] <= 1.0f
-                              ? std::error_code{}
-                              : std::make_error_code(std::errc::argument_out_of_domain));
-        }
-
-        return result;
-    }
-
     namespace fs = std::filesystem;
 
     // ------------------------------------------------------------------

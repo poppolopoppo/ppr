@@ -539,10 +539,11 @@ reconstruction and scene lighting activation remain separate work. The prior det
 passed Debug ordinary/real GPUAV and focused Release CPU/GPU gates.
 
 
-The former `renderer.optical_geometry` partition (analytic Bezier terrain oracle
-and parametric optical traversal) was removed with the superseded
-world-lighting integration. `canonicalTerrainRoundnessMean` remains in the
-retained contour/material path.
+The former `renderer.optical_geometry` partition (analytic Bezier terrain oracle,
+`canonicalTerrainRoundnessMean` and parametric optical traversal) was removed
+with the superseded world-lighting integration. No C++ symbol from that
+partition remains; the retained contour roundness construction is the shared
+Slang code in `grid_contour_math.slang`.
 
 
 ## Opt-in opaque spatial integration
@@ -590,20 +591,11 @@ fixtures are authored in the asset suite; source and execution qualification are
 pending. Prior standalone-kernel passes do not establish this integration or
 ordinary-world admission, and no 4K/60 performance claim is made.
 
-Canonical rendered roundness now means binary32 RTE of the exact two-endpoint
-mean, independently of device rounding mode. `canonicalTerrainRoundnessMean`
-validates finite nonnegative [0,1] endpoints, retains their authored float bits,
-normalizes signed-zero results and constructs the coefficient with uint-only
-rounding. OpticalGeometry promotes that declared coefficient to double for its
-independent Bezier geometry/source queries; it no longer models a different
-unrounded double mean for mixed materials. Subnormal encoding remains distinct
-from normal-domain GPU transport admission. The shared Slang construction lives
-in grid_contour_math and serves the actual raster/terrain consumers; the
-isolated active-path coefficient probe checks 96/8/8/16-byte input/output strides
-and the 16-byte count constant. A dedicated GPU-locked ordinary/Core+GPUAV shard
-owns the new leaf, without compiling unrelated radiance pipelines just to test
-this coefficient. Existing physical ray queries, source ownership semantics,
-intersection certificates and numeric tolerances are unchanged.
+The retained contour roundness construction lives in
+`assets/shaders/grid_contour_math.slang` and serves the raster/terrain consumers.
+GridPass validates finite nonnegative [0,1] roundness rows before staging; the
+deleted optical oracle supplied no retained C++ coefficient, ray-query or
+intersection path.
 
 
 ## Opt-in final surface readback
