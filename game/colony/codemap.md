@@ -91,7 +91,7 @@ paired production performance remain separate executable acceptance gates.
 | `game.colony` | `Colony.cppm/.cpp` | RAII grid ownership and generation lifecycle |
 | `game.colony.world_progress` | `WorldProgress.cppm` | Shared world-work state/stage/read-only progress vocabulary, independent of the application host |
 | `game.application:world_job` | `WorldJob.cppm/.cpp` | Asynchronous candidate preparation, cancellation, pointer publication and retirement; optional owned per-request Prepare overrides reuse the default worker/context/cleanup pipeline |
-| `game.colony.worldgen` | `WorldGen.cppm/.cpp`, `WorldGen.Plan.cpp` | Authored numeric-plan preparation |
+| `game.colony.worldgen` | `WorldGen.cppm/.cpp`, `WorldGen.Plan.cpp`, `WorldGen.LightingLab.cpp` | Authored numeric-plan preparation, fixed Lighting Lab recipe, rendered-extent admission |
 | `game.colony.worldgen_preview` | `WorldGen.Preview.cppm/.cpp`, `WorldGen.Preview.Export.cpp` | Bounded biome samples and exact crops of cached production worlds, canonical initial particles, diagnostic/source export |
 | `game.colony.worldgen_panel` | `../ui/WorldGenPanel.cppm/.cpp` | Merged authoring workspace, embedded stable-key browser, all-document property controls and preview/Start/Return/Quit intents; no I/O or renderer mutation |
 | `game.colony.content` | `Content.cppm/.cpp`, `Content.Source.cpp`, `Content.Descriptors.cpp`, `Content.Assembly.cpp`, `Content.Presentation.cpp` | Owned multi-pack sources and definition-only importing; all-World descriptor catalog; direct selected-World numeric projection; separately prepared presentation through the shared asset request. `decodeWorldGenDefinition` handles the separate version-2 definition envelope. |
@@ -250,6 +250,16 @@ Focused ECS/body fixtures can populate additional component actors without chang
 production initialization. Numeric recipe generation tests remain in engine.tests.sim.
 Smoke labels CPU adoption/component checks separately from its offscreen raster proof;
 resident numerical continuation is covered by the GPU checkpoint/runtime gates.
+
+`WorldGen.LightingLab.cpp` owns the fixed `lighting_lab` recipe and the
+1024 rendered-extent admission used by the application boundary. The recipe
+authors ordinary grid cells and `InitialMatter` sub-cell columns from catalog
+semantic keys, clears procedural geometry, and supplies the normal actor start;
+`buildLightingLabWorld` reuses the compiled plan without rasterizing content the
+recipe would discard. Profile selection, presentation, tools, colliders,
+solver and checkpoint paths are unchanged. `WorldGen.LightingLab.Tests.cpp`
+exercises exact room/aperture/swatch coordinates, material authoring, basin/gas
+seeds, determinism, checkpoint state and unsupported rendered bounds.
 
 `WorldGen.Capture.cpp` belongs to `game.colony.smoke` and provides the explicit
 frozen GPU diagnostic host; `game.colony.smoke` remains the separate smoke path.

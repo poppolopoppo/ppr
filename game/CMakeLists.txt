@@ -70,6 +70,7 @@ target_sources(app.game
         colony/SimFramePacket.Diagnostics.cpp
         colony/WorldGen.cpp
         colony/WorldGen.Plan.cpp
+        colony/WorldGen.LightingLab.cpp
         colony/WorldGen.Export.cpp
         colony/WorldGen.Preview.cpp
         colony/WorldGen.Preview.Export.cpp
@@ -209,10 +210,12 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
             colony/WorldGen.cpp
             colony/Colony.AuthoredFixture.Tests.h
             colony/WorldGen.Plan.cpp
+            colony/WorldGen.LightingLab.cpp
             colony/WorldGen.Export.cpp
             colony/WorldGen.Preview.cpp
             colony/WorldGen.Preview.Export.cpp
             colony/WorldGen.Preview.Tests.cpp
+            colony/WorldGen.LightingLab.Tests.cpp
             ui/WorldGenPanel.cpp
             colony/SimFramePacket.cpp
             colony/SimFramePacket.Diagnostics.cpp
@@ -239,9 +242,20 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
     # loop. The two worldgen preview replay/crop leaves dominate that budget
     # and own a separate entry; the remaining preview widget leaf stays here.
     ppr_add_test_entry(TARGET game.tests
-        EXCLUDE "game/worldgen_preview/bounded_samples_replay_and_export_the_exact_visible_draft,game/worldgen_preview/whole_world_crops_preserve_production_formations_seams_and_matter,game/checkpoint_gpu"
+        EXCLUDE "game/worldgen_preview/bounded_samples_replay_and_export_the_exact_visible_draft,game/worldgen_preview/whole_world_crops_preserve_production_formations_seams_and_matter,game/checkpoint_gpu,game/lighting_lab/"
         LOOPS
         TIMEOUT 600
+        LABELS unit game cpu
+    )
+
+    # The authored Lighting Lab prepares several production 1024 worlds from
+    # the shipped pack; keep its heavier leaves in their own bounded entry.
+    ppr_add_test_entry(TARGET game.tests
+        NAME lighting_lab
+        FILTER "game/lighting_lab/"
+        LOOPS
+        PROCESSORS 2
+        TIMEOUT 300
         LABELS unit game cpu
     )
 

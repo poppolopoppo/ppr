@@ -43,7 +43,7 @@ export namespace pP::asset {
     // ------------------------------------------------------------------
 
     inline constexpr std::size_t kMaxDescriptorBytes = 1024u * 1024u;
-    inline constexpr std::size_t kMaxManifestBytes = 64u * 1024u;
+    inline constexpr std::size_t kMaxManifestBytes = 96u * 1024u;
 
     [[nodiscard]] constexpr config::Metadata metadata(const std::string_view name) {
         return {name, "Asset descriptor", "Assets", config::EMutability::startup, config::ESource::file};

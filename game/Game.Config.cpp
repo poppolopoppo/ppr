@@ -420,7 +420,7 @@ namespace pP::game {
     }
 
     std::string MapSizeDomain::describe() const {
-        return "1024, 2048 or 4096";
+        return "1024 for rendered games; 2048 or 4096 for authoring";
     }
 
     // ------------------------------------------------------------------
@@ -479,7 +479,9 @@ namespace pP::game {
         appendOption(
             schema.m_options, valueOption("game.worldgen_seed", "worldgen-seed", "Unsigned 64-bit world seed."));
         appendOption(
-            schema.m_options, valueOption("game.map_size", "map-size", "Square map edge: 1024, 2048 or 4096 cells."));
+            schema.m_options,
+            valueOption(
+                "game.map_size", "map-size", "Square map edge: 1024 for rendered games; 2048/4096 for authoring."));
         appendOption(
             schema.m_options, valueOption("game.tool_radius_m", "tool-radius", "Simulation brush radius in metres."));
         appendOption(

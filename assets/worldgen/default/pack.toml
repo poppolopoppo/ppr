@@ -2138,3 +2138,59 @@ descriptor = "textures/asset-texture_color_textures_showcase_pipe_vertical_png.t
 [assets.bay_pipe_v_normal]
 kind = "image.texture"
 descriptor = "textures/asset-texture_normal_textures_showcase_pipe_vertical_normal_png.toml"
+
+[assets.lab_wall]
+kind = "sim.material"
+descriptor = "materials/asset-material_lab_wall.toml"
+
+[assets.lab_red]
+kind = "sim.material"
+descriptor = "materials/asset-material_lab_red.toml"
+
+[assets.lab_green]
+kind = "sim.material"
+descriptor = "materials/asset-material_lab_green.toml"
+
+[assets.lab_emitter]
+kind = "sim.material"
+descriptor = "materials/asset-material_lab_emitter.toml"
+
+[assets.lab_glass]
+kind = "sim.material"
+descriptor = "materials/asset-material_lab_glass.toml"
+
+[assets.lab_hot_metal]
+kind = "sim.material"
+descriptor = "materials/asset-material_lab_hot_metal.toml"
+
+[assets.lab_pbr_0]
+kind = "sim.material"
+descriptor = "materials/asset-material_lab_pbr_0.toml"
+
+[assets.lab_pbr_1]
+kind = "sim.material"
+descriptor = "materials/asset-material_lab_pbr_1.toml"
+
+[assets.lab_pbr_2]
+kind = "sim.material"
+descriptor = "materials/asset-material_lab_pbr_2.toml"
+
+[assets.lab_pbr_3]
+kind = "sim.material"
+descriptor = "materials/asset-material_lab_pbr_3.toml"
+
+[assets.lab_magma]
+kind = "sim.material"
+descriptor = "materials/asset-material_lab_magma.toml"
+
+[assets.lighting_lab]
+kind = "sim.world"
+descriptor = "worlds/asset-lighting_lab.toml"
+
+[assets.lab_white]
+kind = "image.texture"
+descriptor = "textures/asset-texture_color_textures_lab_white_png.toml"
+
+[assets.lab_flat_normal]
+kind = "image.texture"
+descriptor = "textures/asset-texture_normal_textures_lab_flat_normal_png.toml"

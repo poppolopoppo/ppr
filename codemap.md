@@ -130,7 +130,7 @@ Routine CTest excludes the opt-in GPU validation entries with `-LE gpu_validatio
 - `lib/engine/tests/core/`: memory, containers, concurrency, I/O, configuration, services and other foundation behavior.
 - `lib/engine/tests/sim/`: chunks, fixed timestep, snapshots, ECS, world generation and physics; physics links privately. GPU matter tests live in the app tier (`matter_gpuTests()`).
 - [asset tests](lib/engine/tests/asset/codemap.md): CPU image/mesh processing and GPU caches/render integration.
-- `game/CMakeLists.txt`: the `game.tests` entry, the split `game.tests.worldgen_preview` heavy-leaf entry, and the two `app.game.worldgen_*` profile validations, covering invocation and game display model/persistence without an upward engine-test dependency.
+- `game/CMakeLists.txt`: the `game.tests` entry, the split `game.tests.worldgen_preview` heavy-leaf entry, the bounded `game.tests.lighting_lab` entry, and the two `app.game.worldgen_*` profile validations, covering invocation and game display model/persistence without an upward engine-test dependency.
 - `lib/engine/tests/shared/`: shared invocation/run harness. `--run-test` selects a subtree and `--skip-test` excludes one; tests use `PPR_TEST_ASSERT`, not engine assumptions/assertions.
 
 Suite interfaces export declaration-only `extern const UnitTest` roots; implementations assemble private groups through `Tests()` accessors. Use `unit-test-updater` for test changes and owning CMake files for current file/group inventories rather than old counts.

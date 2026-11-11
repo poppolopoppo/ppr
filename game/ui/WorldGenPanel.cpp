@@ -7,6 +7,7 @@ import engine.asset;
 import engine.image;
 import std;
 import game.ui;
+import game.colony.metric;
 
 namespace pP::colony {
     // ------------------------------------------------------------------
@@ -1409,6 +1410,8 @@ namespace pP::colony {
                                             : not view.m_source               ? "Load a pack first."
                                             : view.m_busy                     ? "Wait for validation and current work."
                                             : load_path_pending ? "Load the selected source before starting."
+                                            : state.m_world_edge != kRenderedWorldEdge
+                                                ? "Rendered games use 1024-square maps."
                                             : not view.m_can_start_game
                                                 ? "Select a world and validate the current draft before starting."
                                                 : "";
@@ -1419,12 +1422,13 @@ namespace pP::colony {
             if (view.m_has_game) {
                 continue_row("New game###workshop_new_game");
                 const char *const new_game_reason =
-                    view.m_closing or view.m_starting ? "Wait for the current transition."
-                    : not view.m_source               ? "Load a pack first."
-                    : view.m_busy                     ? "Wait for validation and current work."
-                    : load_path_pending               ? "Load the selected source before starting."
-                    : not view.m_can_start_game       ? "Select a world and validate the current draft before starting."
-                                                      : "";
+                    view.m_closing or view.m_starting          ? "Wait for the current transition."
+                    : not view.m_source                        ? "Load a pack first."
+                    : view.m_busy                              ? "Wait for validation and current work."
+                    : load_path_pending                        ? "Load the selected source before starting."
+                    : state.m_world_edge != kRenderedWorldEdge ? "Rendered games use 1024-square maps."
+                    : not view.m_can_start_game ? "Select a world and validate the current draft before starting."
+                                                : "";
                 actionButton(
                     "New game###workshop_new_game", new_game_reason, EWorkshopIntent::start_game, intents, true);
             }
@@ -1587,7 +1591,7 @@ namespace pP::colony {
                 "The cyan outline marks the counted and exported interior. Extra rendered cells provide contour support.");
 
             constexpr std::array<u32, 3u> world_edges{1024u, 2048u, 4096u};
-            constexpr const char *world_sizes[]{"1024", "2048", "4096"};
+            constexpr const char *world_sizes[]{"1024", "2048 (preview only)", "4096 (preview only)"};
             int world_size = state.m_world_edge == 1024u ? 0 : state.m_world_edge == 2048u ? 1 : 2;
             bool changed{};
             ImGui::BeginDisabled(
@@ -1601,6 +1605,8 @@ namespace pP::colony {
             }
 
             ImGui::EndDisabled();
+            ImGui::SameLine();
+            ui::helpMarker("Rendered games use 1024-square maps; 2048 and 4096 remain authoring previews.");
             changed = keyCombo(
                           "World profile", state.m_profile.data(), state.m_profile.size(), state.m_record_keys[4u]) or
                       changed;

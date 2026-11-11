@@ -35,7 +35,7 @@ The required synchronous `DescriptorReader` supports edited owned bytes through
 that same path: a missing record is an error, never a fallback to disk. Callback
 views do not escape importing. Source locations and typed values remain owned.
 
-Per-file limits are 64 KiB per manifest and 1 MiB per descriptor. The combined
+Per-file limits are 96 KiB per manifest and 1 MiB per descriptor. The combined
 retained-text limit is `7 * asset::kMaxDescriptorBytes + asset::kMaxManifestBytes`
 across all mounted manifests/descriptors. This is a logical source cap, not a
 process-peak or history-memory bound. Canonical containment, physical file aliases
@@ -423,16 +423,19 @@ adopt the complete owner without regenerating. The production job builds and pub
 ## Map size
 
 `--map-size=1024`, `--map-size=2048` and `--map-size=4096` select the square
-map edge in fine cells; 2048 is the default. The same startup setting is
-`game.map_size` in TOML or `PPR_GAME__MAP_SIZE` in the environment. It applies
-to interactive New Games, Workshop previews and headless generation. Existing
+map edge in fine cells. The interactive application admits only 1024-square
+rendered worlds and defaults to 1024; 2048/4096 remain authoring and preview
+extents for headless generation and Workshop previews. The same startup setting
+is `game.map_size` in TOML or `PPR_GAME__MAP_SIZE` in the environment. Existing
 worlds retain their own dimensions; changing startup settings does not resize a
-checkpoint.
+checkpoint. A rendered checkpoint with an unsupported edge is rejected by the
+same admission check before candidate GPU preparation.
 
 The Workshop's Map size combo offers the same three sizes, initialized from the
-startup setting (2048 by default). Changing it clamps the preview crop and
-revalidates the current draft for that extent. Both preview modes and Start New
-Game use the selected dimensions. New Game from that authored session keeps its
+startup setting (1024 by default). Its 2048/4096 labels are marked preview-only,
+and Start New Game is withheld for those extents. Changing the size clamps the
+preview crop and revalidates the current draft for that extent. Both preview
+modes use the selected dimensions. New Game from that authored session keeps its
 captured size; Return to Game preserves the retained world's original extent.
 
 The physical scale stays three cells per metre. Generation scales global site
@@ -446,6 +449,18 @@ Actor dimensions, authored feature footprints, bedrock, boundary
 thickness and guaranteed starting resources keep their physical meaning.
 Checkpoint envelope6 and raw snapshot5 carry the selected bounds and reject
 incompatible dimensions before applying state.
+
+## Lighting Lab
+
+`lighting_lab` is one fixed 1024-square authored profile loaded through the
+ordinary pack/profile path:
+`app.game --worldgen-profile=lighting_lab --map-size=1024 --worldgen-seed=42`.
+Its rooms, apertures, emitters, colored walls, chunk-seam barriers, thermal/PBR
+swatches and particle basins are ordinary grid cells and initial matter defined
+by catalog semantic keys; normal tools, colliders, solver, checkpoint and
+presentation apply. The recipe is deterministic apart from the recorded seed
+identity. The initial published frame uses the map-centred 1056-cell overview;
+region closeups remain ordinary camera zoom/pan operations.
 
 ## Full world checkpoints
 

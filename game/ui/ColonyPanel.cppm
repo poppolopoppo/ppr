@@ -8,6 +8,7 @@ import engine.core;
 import engine.sim;
 import game.colony.agents;
 import game.colony.tools;
+import game.colony.metric;
 import game.config;
 import game.display;
 import std;

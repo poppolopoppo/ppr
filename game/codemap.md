@@ -85,7 +85,7 @@ See [colony/codemap.md](colony/codemap.md) for the `game.colony.*` modules. Sim 
 `CMakeLists.txt` registers the colony modules including `game.colony.matter`, plus `game.config`, `game.display`, `game.application` and its `:world_job`, `:worldgen_workshop`, `:session_service` partitions, and thin `main.cpp`. `app.game` links core/app/math/shader/rhi/sim publicly and physics/matter privately. `Game.SessionService.Tests.cpp` exercises the actual production inbox through a real render-lane wait pump and stale tool delivery; it is registered in `game.tests`. Every explicit executable build stages shaders, textures and meshes when present through the independent `app.game.assets` prerequisite. Asset edits, additions and missing deployment files do not require relinking; files removed from source are pruned from deployment.
 
 The game build registers `game.tests`, the split `game.tests.worldgen_preview`
-entry, three independently locked GPU lifecycle entries
+entry, the bounded `game.tests.lighting_lab` entry, three independently locked GPU lifecycle entries
 (`game.tests.matter_edit_gpu`, `matter_coverage_gpu`, `matter_restore_gpu`), and
 the `app.game.worldgen_frontier`/`worldgen_hollows` profile validations unless tests
 are explicitly disabled. The CPU entry excludes `game/checkpoint_gpu` and the two
@@ -117,6 +117,19 @@ measurement limits. `--worldgen-report` mirrors render-owner observations throug
 frame results; neither option reads worker-owned pass state from main.
 
 The world-work modal displays one stage-local progress bar: measured raster/staged chunk counts when available, otherwise an explicitly indeterminate animation driven by the injected application clock. It does not infer overall completion or number preview/cleanup states as generation steps.
+
+## Authored Lighting Lab
+
+The `lighting_lab` world record is one fixed 1024-square recipe owned by
+`colony/WorldGen.LightingLab.cpp`. `prepareWorld` builds its ordinary
+`sim::ChunkGrid`, catalog-keyed material blocks, initial matter columns and
+actor start without procedural rasterization, then constructs the normal
+`PreparedWorld`. All room geometry, emitters, seams, thermal/PBR swatches,
+basins and gas use normal simulation/presentation; no renderer branch
+recognizes the lab. Its first published frame applies the ordinary
+map-centred 1056-cell overview camera. `game.tests.lighting_lab` covers the
+exact recipe, deterministic content, particle seeds, checkpoint state and
+1024 rendered admission.
 
 ## Joint world transition
 
@@ -161,10 +174,13 @@ existing checkpoint GPU restore leaf uses an admitted queued/ready resume across
 multiple host-style turns to exercise that same production routing predicate.
 
 The startup map size (`--map-size` / `game.map_size`) is 1024, 2048 or
-4096 fine cells per edge, default 2048. Explicit per-world bounds travel through
-generation, prepared descriptors, grid/particle state and checkpoint formats;
-maximum-stride chunk identities remain stable. Smaller maps retain the same
-physical cell and actor scale.
+4096 fine cells per edge. Interactive rendered games admit only 1024-square
+worlds and default to 1024; 2048/4096 remain authoring/preview extents with the
+general engine simulation APIs. Unsupported rendered candidate and checkpoint
+bounds are rejected before candidate GPU preparation. Explicit per-world bounds
+travel through generation, prepared descriptors, grid/particle state and
+checkpoint formats; maximum-stride chunk identities remain stable. Smaller maps
+retain the same physical cell and actor scale.
 
 The Workshop Map size combo owns a session choice initialized from startup.
 Changes invalidate compiled validation and previews while preserving authored

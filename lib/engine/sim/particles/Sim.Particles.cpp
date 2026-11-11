@@ -82,6 +82,11 @@ namespace pP::sim {
         u64 count{};
         std::array<u32, kChunkCount> counts{};
         for (const auto &region: matter.m_regions) {
+            PPR_RETURN_UNEXPECTED_ON_FAIL(
+                MatterParticles, region.m_subdivision >= 1u and region.m_subdivision <= 2u
+                                     ? std::error_code{}
+                                     : std::make_error_code(std::errc::invalid_argument));
+
             for (const auto span: region.m_spans) {
                 if (span.m_y >= grid.edge() or span.m_begin_x >= span.m_end_x or span.m_end_x > grid.edge()) {
                     PPR_RETURN_UNEXPECTED_ON_FAIL(MatterParticles, std::errc::invalid_argument);
@@ -89,11 +94,13 @@ namespace pP::sim {
 
                 for (u32 x = span.m_begin_x; x < span.m_end_x;) {
                     const u32 end = std::min(span.m_end_x, (x / kChunkEdge + 1u) * kChunkEdge);
-                    counts[chunkIndexOf(chunkOf({x, span.m_y}))] += end - x;
+                    counts[chunkIndexOf(chunkOf({x, span.m_y}))] += (end - x) *
+                                                                    region.m_subdivision *
+                                                                    region.m_subdivision;
                     x = end;
                 }
 
-                count += span.m_end_x - span.m_begin_x;
+                count += static_cast<u64>(span.m_end_x - span.m_begin_x) * region.m_subdivision * region.m_subdivision;
                 if (count > kMaxMatterParticles) {
                     PPR_RETURN_UNEXPECTED_ON_FAIL(MatterParticles, std::errc::value_too_large);
                 }
@@ -117,23 +124,35 @@ namespace pP::sim {
 
             double volume{};
             MatterParticle *last = nullptr;
+            const u32 subdivision = region.m_subdivision;
+            const double sub_cell = 1.0 / static_cast<double>(subdivision);
+            const double particle_volume_scale = static_cast<double>(subdivision) * static_cast<double>(subdivision);
             for (const auto span: region.m_spans) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(MatterParticles, canceled(context));
                 for (u32 x = span.m_begin_x; x < span.m_end_x; ++x) {
                     auto area = generationEmptyArea(grid, {x, span.m_y}, recipe.m_cell_size_m);
                     PPR_RETURN_UNEXPECTED_ON_FAIL(MatterParticles, area);
-                    const double particle_volume = *area * recipe.m_reference_thickness_m;
+                    const double cell_volume = *area * recipe.m_reference_thickness_m;
+                    const double particle_volume = cell_volume / particle_volume_scale;
                     if (not positive(particle_volume)) {
                         PPR_RETURN_UNEXPECTED_ON_FAIL(MatterParticles, std::errc::invalid_argument);
                     }
 
                     auto &chunk = chunks[chunkIndexOf(chunkOf({x, span.m_y}))];
-                    chunk.push_back(
-                        {result.m_next_id++, (x + 0.5) * recipe.m_cell_size_m, (span.m_y + 0.5) * recipe.m_cell_size_m,
-                            particle_volume, particle_volume * region.m_bulk_density_kg_m3, region.m_temperature_k,
-                            region.m_bulk_density_kg_m3, region.m_material, definition->m_matter});
-                    last = &chunk.back();
-                    volume += particle_volume;
+                    for (u32 b = 0u; b < subdivision; ++b) {
+                        for (u32 a = 0u; a < subdivision; ++a) {
+                            const double sub_x = static_cast<double>(x) + (static_cast<double>(a) + 0.5) * sub_cell;
+                            const double sub_y = static_cast<double>(span.m_y) +
+                                                 (static_cast<double>(b) + 0.5) * sub_cell;
+                            chunk.push_back(
+                                {result.m_next_id++, sub_x * recipe.m_cell_size_m, sub_y * recipe.m_cell_size_m,
+                                    particle_volume, particle_volume * region.m_bulk_density_kg_m3,
+                                    region.m_temperature_k, region.m_bulk_density_kg_m3, region.m_material,
+                                    definition->m_matter});
+                            last = &chunk.back();
+                            volume += particle_volume;
+                        }
+                    }
                 }
             }
 
@@ -162,10 +181,15 @@ namespace pP::sim {
             }
         }
 
+        const bool subdivided = std::ranges::any_of(
+            matter.m_regions, [](const InitialMatterRegion &region) { return region.m_subdivision != 1u; });
         PPR_RETURN_UNEXPECTED_ON_FAIL(
-            MatterParticles, validateMatterParticles(
-                                 result, recipe.m_materials, recipe.m_cell_size_m, context,
-                                 recipe.m_reference_thickness_m, recipe.m_world_edge));
+            MatterParticles, subdivided ? validateMovingMatterParticles(
+                                              result, recipe.m_materials, recipe.m_cell_size_m, context,
+                                              recipe.m_reference_thickness_m, recipe.m_world_edge)
+                                        : validateMatterParticles(
+                                              result, recipe.m_materials, recipe.m_cell_size_m, context,
+                                              recipe.m_reference_thickness_m, recipe.m_world_edge));
         return result;
     }
     // ------------------------------------------------------------------

@@ -205,8 +205,11 @@ ullptr`) and `mask` (empty). Components are
 
 - `:particles` owns bounded immutable chunk batches of persistent static matter
   records, canonical seed allocation, identity/physical validation and local
-  point-occupancy terrain-edit candidates. It depends only on core/math/numeric
-  worldgen; renderer payloads and checkpoint envelopes stay in game.
+  point-occupancy terrain-edit candidates. Regions may author a 1- or 2-cell-edge
+  subdivision; the ordinary builder emits the row-major cell/sub-cell column and
+  admits it through overlapping moving-particle validation. It depends only on
+  core/math/numeric worldgen; renderer payloads and checkpoint envelopes stay in
+  game.
 
 ## Flow
 

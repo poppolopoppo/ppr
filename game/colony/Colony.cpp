@@ -77,13 +77,28 @@ namespace pP::colony {
                                  *restored, recipe.m_materials, recipe.m_cell_size_m, recipe.m_reference_thickness_m,
                                  recipe.m_world_edge));
         } else {
-            const auto seeded = sim::seedMatterParticles(
-                world.generated().m_matter, world.generated().m_grid, recipe, context);
+            const auto &matter = world.generated().m_matter;
+            const auto seeded = sim::seedMatterParticles(matter, world.generated().m_grid, recipe, context);
             PPR_RETURN_ERROR_ON_FAIL(ColonyWorld, seeded);
-            PPR_RETURN_ERROR_ON_FAIL(
-                ColonyWorld, particles.restore(
-                                 *seeded, recipe.m_materials, recipe.m_cell_size_m, context,
-                                 recipe.m_reference_thickness_m, recipe.m_world_edge));
+
+            // Sub-cell initial layouts place several particles in one native
+            // cell. Their admitted starting state is movable particle inventory,
+            // so it uses the same overlapping-cell contract as a restored
+            // current state; one-particle-per-cell generation keeps the
+            // stricter unique-cell validation.
+            const bool subdivided = std::ranges::any_of(
+                matter.m_regions, [](const sim::InitialMatterRegion &region) { return region.m_subdivision != 1u; });
+            if (subdivided) {
+                PPR_RETURN_ERROR_ON_FAIL(
+                    ColonyWorld, particles.restoreMoving(
+                                     *seeded, recipe.m_materials, recipe.m_cell_size_m, recipe.m_reference_thickness_m,
+                                     recipe.m_world_edge));
+            } else {
+                PPR_RETURN_ERROR_ON_FAIL(
+                    ColonyWorld, particles.restore(
+                                     *seeded, recipe.m_materials, recipe.m_cell_size_m, context,
+                                     recipe.m_reference_thickness_m, recipe.m_world_edge));
+            }
         }
 
         auto prepared = std::make_unique<PreparedWorld>(std::move(world));

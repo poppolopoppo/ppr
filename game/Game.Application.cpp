@@ -911,6 +911,40 @@ namespace demo {
             };
         }
 
+        /// Initial authored-lab overview: map center with a 1056-cell vertical
+        /// span and horizontal span following the real framebuffer aspect.
+        /// Ordinary camera bounds retain the union of the world and overview.
+        [[nodiscard]] std::error_code frameRenderedOverview_() {
+            const safe_ptr<const WindowViewport> viewport = getMainViewport();
+            if (not m_pan_controller or not m_driver or not viewport) {
+                return {};
+            }
+
+            const int2 extent = viewport->getViewport().getClientRect().m_extent;
+            if (extent.x <= 0 or extent.y <= 0) {
+                return {};
+            }
+
+            const float map_extent = static_cast<float>(m_driver->grid().edge()) /
+                                     static_cast<float>(m_driver->cellsPerMetre());
+            const float vertical_span = colony::kLightingLabOverviewVerticalSpanCells *
+                                        static_cast<float>(colony::kFineCellMetres);
+            const float ortho_scale = vertical_span / static_cast<float>(extent.y);
+            const float half_width = static_cast<float>(extent.x) * ortho_scale * 0.5f;
+            const float half_height = static_cast<float>(extent.y) * ortho_scale * 0.5f;
+            const float centre = colony::kLightingLabOverviewCentreCell * static_cast<float>(colony::kFineCellMetres);
+            m_pan_controller->setViewportSize(float2{static_cast<float>(extent.x), static_cast<float>(extent.y)});
+            PPR_RETURN_ERROR_ON_FAIL(Demo, m_pan_controller->setOrthoScale(ortho_scale));
+            PPR_RETURN_ERROR_ON_FAIL(
+                Demo,
+                m_pan_controller->setWorldBounds(
+                    float2{std::min(0.0f, centre - half_width), std::min(0.0f, centre - half_height)},
+                    float2{std::max(map_extent, centre + half_width), std::max(map_extent, centre + half_height)}));
+            m_pan_controller->translate(float3{centre - half_width, centre - half_height, -0.5f}, true);
+            m_pan_controller->resetInputState();
+            return {};
+        }
+
         [[nodiscard]] std::error_code requestWorld_(
             const u64 seed, colony::WorldJob::Prepare prepare = {}, std::optional<u32> world_edge = {}) {
             PPR_RETURN_ERROR_ON_FAIL(
@@ -926,6 +960,7 @@ namespace demo {
             PPR_RETURN_ERROR_ON_FAIL(
                 Demo, sim::isSupportedWorldEdge(selected_edge) ? std::error_code{}
                                                                : std::make_error_code(std::errc::invalid_argument));
+            PPR_RETURN_ERROR_ON_FAIL(Demo, colony::validateRenderedWorldEdge(selected_edge));
             PPR_RETURN_ERROR_ON_FAIL(
                 Demo, m_world_job->request(
                           colony::ColonyDriverDesc{
@@ -1326,15 +1361,19 @@ namespace demo {
                     auto &presentation = m_world_job->presentation();
 
                     if (const auto *const prepared = m_driver->preparedWorld(); prepared and m_pan_controller) {
-                        const float extent = static_cast<float>(m_driver->grid().edge()) /
-                                             static_cast<float>(m_driver->cellsPerMetre());
-                        PPR_RETURN_ERROR_ON_FAIL(
-                            Demo, m_pan_controller->setWorldBounds(float2{0.0f, 0.0f}, float2{extent, extent}));
+                        if (colony::isLightingLabProfile(prepared->descriptor().m_profile)) {
+                            PPR_RETURN_ERROR_ON_FAIL(Demo, frameRenderedOverview_());
+                        } else {
+                            const float extent = static_cast<float>(m_driver->grid().edge()) /
+                                                 static_cast<float>(m_driver->cellsPerMetre());
+                            PPR_RETURN_ERROR_ON_FAIL(
+                                Demo, m_pan_controller->setWorldBounds(float2{0.0f, 0.0f}, float2{extent, extent}));
 
-                        const auto &start = prepared->generated().m_start;
-                        m_pan_controller->focusOn(
-                            float2{static_cast<float>(start.m_spawn_x_m), static_cast<float>(start.m_spawn_y_m)});
-                        m_pan_controller->resetInputState();
+                            const auto &start = prepared->generated().m_start;
+                            m_pan_controller->focusOn(
+                                float2{static_cast<float>(start.m_spawn_x_m), static_cast<float>(start.m_spawn_y_m)});
+                            m_pan_controller->resetInputState();
+                        }
                     }
 
                     PPR_LOG(
@@ -3786,6 +3825,9 @@ namespace demo {
             PPR_RETURN_ERROR_ON_FAIL(Demo, colony::validateToolSettings(m_ui_state.m_tools));
 
             m_map_size = settings.m_map_size;
+            if (settings.m_command == game::EGameCommand::interactive) {
+                PPR_RETURN_ERROR_ON_FAIL(Demo, colony::validateRenderedWorldEdge(m_map_size));
+            }
             m_workshop_ui.m_world_edge = m_map_size;
             m_workshop_ui.m_origin[0] = static_cast<int>(m_map_size / 2u - 128u);
             m_workshop_ui.m_origin[1] = static_cast<int>(m_map_size / 2u - 128u);
@@ -4621,6 +4663,7 @@ namespace demo {
                     .m_has_game = m_driver != nullptr or m_workshop_capturing,
                     .m_starting = m_workshop_game_phase != WorkshopGamePhase::none,
                     .m_can_start_game = session and
+                                        m_workshop_ui.m_world_edge == colony::kRenderedWorldEdge and
                                         not m_workshop_capturing and
                                         not m_workshop->busy() and
                                         session->validatedCatalog() and
@@ -5146,26 +5189,36 @@ namespace demo {
             }
 
             auto camera_controller = std::make_unique<PanCameraController>();
-            constexpr float ortho_scale = 0.5f;
-            PPR_RETURN_ERROR_ON_FAIL(Demo, camera_controller->setOrthoScale(ortho_scale));
-            camera_controller->setParallelPlane(float3{0.0f, 0.0f, -1.0f}, math::axis_y, true);
             const PixelRect &client = getMainViewport()->getViewport().getClientRect();
             const int2 initial_extent{std::max(client.m_extent.x, 1), std::max(client.m_extent.y, 1)};
+            const float map_extent = static_cast<float>(static_cast<double>(m_map_size) * colony::kFineCellMetres);
+            // Rendered 1024 worlds open on the authored overview: the map
+            // centre with a 1056-cell vertical span. Horizontal span follows
+            // the real framebuffer aspect; ortho scale is metres per pixel.
+            const bool rendered_overview = m_map_size == colony::kRenderedWorldEdge;
+            const float vertical_span = rendered_overview ? colony::kLightingLabOverviewVerticalSpanCells *
+                                                                static_cast<float>(colony::kFineCellMetres)
+                                                          : static_cast<float>(initial_extent.y) * 0.5f;
+            const float ortho_scale = vertical_span / static_cast<float>(initial_extent.y);
+            PPR_RETURN_ERROR_ON_FAIL(Demo, camera_controller->setOrthoScale(ortho_scale));
+            camera_controller->setParallelPlane(float3{0.0f, 0.0f, -1.0f}, math::axis_y, true);
+            camera_controller->setViewportSize(
+                float2{static_cast<float>(initial_extent.x), static_cast<float>(initial_extent.y)});
+
             // Ortho projects [0, width] x [0, height], not a centered interval.
             // Put the temperate world center in the middle of the visible pixel extent.
             const float half_width = static_cast<float>(initial_extent.x) * ortho_scale * 0.5f;
             const float half_height = static_cast<float>(initial_extent.y) * ortho_scale * 0.5f;
-            // Slice 2 fixed-plane camera: world bounds keep the colony
-            // on-screen at every zoom; the extent feeds cursor-anchored zoom
-            // and bounds. refreshControllerViewport_() in update() now
-            // follows client-extent changes every frame (Slice 3 fix).
-            const float map_extent = static_cast<float>(static_cast<double>(m_map_size) * colony::kFineCellMetres);
-            PPR_RETURN_ERROR_ON_FAIL(
-                Demo, camera_controller->setWorldBounds(float2{0.0f, 0.0f}, float2{map_extent, map_extent}));
-            camera_controller->setViewportSize(
-                float2{static_cast<float>(initial_extent.x), static_cast<float>(initial_extent.y)});
-            camera_controller->translate(
-                float3{map_extent * 0.5f - half_width, map_extent * 0.5f - half_height, -0.5f}, true);
+            const float centre = rendered_overview ? colony::kLightingLabOverviewCentreCell *
+                                                         static_cast<float>(colony::kFineCellMetres)
+                                                   : map_extent * 0.5f;
+            // A wider-than-world overview must remain reachable through the
+            // ordinary camera bounds; other extents keep the world rect.
+            const float2 bounds_min{std::min(0.0f, centre - half_width), std::min(0.0f, centre - half_height)};
+            const float2 bounds_max{
+                std::max(map_extent, centre + half_width), std::max(map_extent, centre + half_height)};
+            PPR_RETURN_ERROR_ON_FAIL(Demo, camera_controller->setWorldBounds(bounds_min, bounds_max));
+            camera_controller->translate(float3{centre - half_width, centre - half_height, -0.5f}, true);
             // Borrow the controller for selection and follow controls.
             m_pan_controller.reset(camera_controller.get());
             PPR_RETURN_ERROR_ON_FAIL(

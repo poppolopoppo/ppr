@@ -1007,9 +1007,10 @@ biome = "{}"
             PPR_TEST_ASSERT(not context->OpenPopupStack.empty());
             auto *const popup = context->OpenPopupStack.back().Window;
             PPR_TEST_ASSERT(popup != nullptr and popup->Active);
-            const auto label = std::to_string(edge);
             const int choice_index = edge == 1024u ? 0 : edge == 2048u ? 1 : 2;
-            const ImGuiID row_id = ImHashStr(label.c_str(), 0u, popup->GetID(choice_index));
+            const auto label = std::array<const char *, 3u>{
+                "1024", "2048 (preview only)", "4096 (preview only)"}[static_cast<std::size_t>(choice_index)];
+            const ImGuiID row_id = ImHashStr(label, 0u, popup->GetID(choice_index));
             const auto selected = click(item_center(popup, row_id));
             PPR_TEST_ASSERT(fixture.m_state.m_world_edge == edge);
             PPR_TEST_ASSERT(std::ranges::count_if(selected, [](const auto &intent) {
@@ -1214,6 +1215,7 @@ biome = "{}"
         io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
 
         WorkspaceFixture fixture{false};
+        fixture.m_state.m_world_edge = 1024u;
         std::ignore = fixture.frame();
         std::ignore = fixture.frame();
         const auto selected = fixture.m_state.m_selected_asset;

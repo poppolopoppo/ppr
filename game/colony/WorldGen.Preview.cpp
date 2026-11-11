@@ -108,7 +108,8 @@ namespace pP::colony {
                     .m_temperature_k = source.m_temperature_k,
                     .m_bulk_density_kg_m3 = source.m_bulk_density_kg_m3,
                     .m_fill_height_m = source.m_fill_height_m,
-                    .m_spans = {}};
+                    .m_spans = {},
+                    .m_subdivision = source.m_subdivision};
                 for (const auto span: clipped) {
                     PPR_RETURN_UNEXPECTED_ON_FAIL(BiomeSamplePreview, context ? context->error() : std::error_code{});
                     const u32 begin = span.m_begin_x, end = span.m_end_x;
@@ -253,8 +254,10 @@ namespace pP::colony {
         auto plan = compileWorldPlan(catalog, spec.m_profile, spec.m_seed);
         PPR_RETURN_UNEXPECTED_ON_FAIL(BiomeSamplePreview, plan);
 
-        auto world = sim::generateWorld(
-            std::move(*plan), clock, {.m_scheduler = generation_pool, .m_context = context});
+        auto world = isLightingLabProfile(spec.m_profile)
+                         ? buildLightingLabWorld(std::move(*plan), catalog)
+                         : sim::generateWorld(
+                               std::move(*plan), clock, {.m_scheduler = generation_pool, .m_context = context});
         PPR_RETURN_UNEXPECTED_ON_FAIL(BiomeSamplePreview, world);
 
         auto particles = sim::seedMatterParticles(world->m_matter, world->m_grid, world->m_plan.recipe(), context);

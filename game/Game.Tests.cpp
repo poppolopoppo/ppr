@@ -25,6 +25,7 @@ namespace pP::game::tests {
     const UnitTest &gameCheckpointTests() noexcept;
     const UnitTest &gameCheckpointGpuTests() noexcept;
     const UnitTest &gameWorldgenPreviewTests() noexcept;
+    const UnitTest &gameLightingLabTests() noexcept;
     const UnitTest &gameAssetBrowserTests() noexcept;
     const UnitTest &gameUiTests() noexcept;
 
@@ -50,6 +51,7 @@ namespace pP::game::tests {
             gameCheckpointTests(),
             gameCheckpointGpuTests(),
             gameWorldgenPreviewTests(),
+            gameLightingLabTests(),
             gameAssetBrowserTests(),
             gameUiTests(),
         });

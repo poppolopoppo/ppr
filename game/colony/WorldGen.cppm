@@ -102,6 +102,31 @@ export namespace pP::colony {
         const sim::GenerationExecution &execution = {});
 
     // ------------------------------------------------------------------
+    // rendered world admission and the authored Lighting Lab
+    // ------------------------------------------------------------------
+
+    /// The lab is one fixed 1024-square authored recipe. Initial overview
+    /// framing uses these cell constants as ordinary client camera values.
+    inline constexpr u32 kLightingLabEdge = 1024u;
+    inline constexpr float kLightingLabOverviewCentreCell = 512.0f;
+    inline constexpr float kLightingLabOverviewVerticalSpanCells = 1056.0f;
+
+    /// True for the local name of the authored lab profile (qualified or not).
+    [[nodiscard]] bool isLightingLabProfile(std::string_view profile) noexcept;
+    [[nodiscard]] std::error_code validateRenderedWorldEdge(u32 world_edge) noexcept;
+
+    /// Fills the ordinary grid, initial matter and start of the fixed Lighting
+    /// Lab recipe. Catalog semantic keys supply every numeric material ID and
+    /// physical property; the recipe authors no GPU rows and no palette.
+    [[nodiscard]] std::error_code populateLightingLab(sim::GeneratedWorld &world, const ContentCatalog &catalog);
+
+    /// Builds the fixed lab candidate from a compiled plan without procedural
+    /// rasterization or matter that the recipe would discard. The layout still
+    /// carries the ordinary start site and the recipe owns every cell/seed.
+    [[nodiscard]] Expected<sim::GeneratedWorld> buildLightingLabWorld(
+        sim::GenerationPlan plan, const ContentCatalog &catalog);
+
+    // ------------------------------------------------------------------
     // shared bounded lighting scene recipe
     // ------------------------------------------------------------------
 

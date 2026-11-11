@@ -27,6 +27,12 @@ export namespace pP::sim {
         double m_temperature_k{}, m_bulk_density_kg_m3{}, m_volume_m3{}, m_mass_kg{};
         std::optional<double> m_fill_height_m{}; // Global horizontal boundary.
         Array<InitialMatterSpan> m_spans;
+        /// Generation-only seed layout: one to two particles per cell edge,
+        /// row-major over cell then sub-cell. The ordinary seed builder emits
+        /// subdivision^2 particles per cell with equal volume. Current particle
+        /// columns remain the durable restored state; this hint is not a
+        /// checkpoint field.
+        u32 m_subdivision{1u};
     };
 
     struct InitialMatter {

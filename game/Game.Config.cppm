@@ -58,7 +58,7 @@ export namespace pP::game {
         double m_tool_radius_m{2.0}, m_tool_acceleration_m_s2{100.0};
         u64 m_worldgen_seed{42u};
         u32 m_tool_spawn_count{64u};
-        u32 m_map_size{2048u};
+        u32 m_map_size{1024u};
         EGameCommand m_command{EGameCommand::interactive};
         bool m_worldgen_report{}, m_worldgen_acceptance{};
 
@@ -135,8 +135,9 @@ export namespace pP::game {
                 field(
                     &GameSettings::m_map_size,
                     Metadata{
-                        "game.map_size", "Square map edge in fine cells: 1024, 2048 or 4096", "World generation",
-                        EMutability::startup, ESource::all, false},
+                        "game.map_size",
+                        "Square map edge in fine cells: rendered games use 1024; 2048 and 4096 remain authoring extents",
+                        "World generation", EMutability::startup, ESource::all, false},
                     MapSizeDomain{}),
                 field(
                     &GameSettings::m_worldgen_seed,

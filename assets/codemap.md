@@ -51,6 +51,13 @@ there is no baked lighting. They are actual Grid terrain/collision labels and
 consume the existing world field, not fixed-lit mesh decoration. See pack
 `PROVENANCE.md` for the exact limited generator command and source boundaries.
 
+The authored `lighting_lab` world record adds eleven ordinary material records
+(wall/red/green/emitter/glass/hot-metal/PBR0..3/magma), a white unit albedo and
+flat-normal texture pair, and the fixed-room world palette. All are normal pack
+assets with catalog-assigned numeric IDs; there is no second lighting palette
+or renderer-only content branch. The pack manifest remains the single shipped
+list, now within its 96 KiB manifest bound.
+
 The two pipe normal maps use physical world slopes for radius=half the texture
 period, with the existing full height field and 128² sample phase preserved.
 Only those two keys use `(size/2)*(.5/.30)` central-difference scaling; other

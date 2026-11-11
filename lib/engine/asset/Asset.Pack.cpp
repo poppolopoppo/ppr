@@ -203,7 +203,7 @@ namespace pP::asset {
             if (source.m_manifest.m_bytes.size() > kMaxManifestBytes) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(
                     Asset, reject(
-                               diagnostics, source.m_manifest.m_path.string(), "", "Manifest exceeds 64 KiB",
+                               diagnostics, source.m_manifest.m_path.string(), "", "Manifest exceeds its byte limit",
                                config::EConfigErrc::out_of_range));
             }
 

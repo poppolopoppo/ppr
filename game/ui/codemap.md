@@ -55,10 +55,11 @@ viewports reduce button size so every tool remains reachable; selecting tools
 or expanding their context leaves the rail geometry unchanged.
 
 The Workshop preview settings include a 1024/2048/4096 Map size combo, defaulting
-to the startup selection (2048 normally). Shrinking the map clamps the crop
-origin. The control is disabled during owned work or publication; accepted
-changes revalidate preview and new-game compilation without resizing a retained
-game.
+to the startup selection (1024 normally). The labels mark 2048/4096 as
+preview-only and the workspace states that rendered games use 1024-square maps;
+Start is withheld for a larger extent. Shrinking the map clamps the crop origin.
+The control is disabled during owned work or publication; accepted changes
+revalidate preview and new-game compilation without resizing a retained game.
 
 ## Lifetime and cost
 

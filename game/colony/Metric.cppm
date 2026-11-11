@@ -19,6 +19,10 @@ export namespace pP::colony {
     inline constexpr double kNominalFineCellVolumeM3 = kFineCellMetres * kFineCellMetres * kReferenceThicknessMetres;
     inline constexpr double kWorldExtentMetres = static_cast<double>(sim::kWorldEdge) / kFineCellsPerMetre;
 
+    /// Interactive rendered worlds admit this square edge. Other engine
+    /// simulation extents remain available to authoring and sim APIs.
+    inline constexpr u32 kRenderedWorldEdge = 1024u;
+
     // ------------------------------------------------------------------
     // types
     // ------------------------------------------------------------------

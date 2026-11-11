@@ -148,7 +148,8 @@ namespace pP::colony {
         PPR_RETURN_UNEXPECTED_ON_FAIL(WorldPreparation, plan);
         PPR_RETURN_UNEXPECTED_ON_FAIL(WorldPreparation, validateRuntimeWorldParameters(plan->recipe()));
 
-        auto world = sim::generateWorld(std::move(*plan), clock, execution);
+        auto world = isLightingLabProfile(profile) ? buildLightingLabWorld(std::move(*plan), *catalog)
+                                                   : sim::generateWorld(std::move(*plan), clock, execution);
         PPR_RETURN_UNEXPECTED_ON_FAIL(WorldPreparation, world);
 
         const WorldDescriptor descriptor{

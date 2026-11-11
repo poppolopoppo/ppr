@@ -953,11 +953,13 @@ float4 shadeGridReactive(
     }
 
     // ------------------------------------------------------------------
-    // explicit legacy flat/contour fallback and diagnostics
+    // retained diagnostic and test-fixture path
     // ------------------------------------------------------------------
-    // Temporary path for worlds without published resolved cells and for the
-    // diagnostic overlays. Task 14/15 owns removing it once all rendered worlds
-    // publish the categorical field.
+    // Rendered 1024 worlds publish resolved cells and take the categorical
+    // path above. This contour path remains only for the diagnostic overlays
+    // (replaced by retained inspection views in Task 16) and explicit
+    // test-fixture grids with no lighting publication. A frame without an
+    // admitted catalog draws no terrain and never reaches these tiles.
     float2 contour_position = input.fine_position;
     if ((g_grid_frame.m_surface_mode & 3u) == 3u) {
         contour_position += boundaryDisplacement(input.fine_position, world_pixel_x, world_pixel_y, g_sampler);

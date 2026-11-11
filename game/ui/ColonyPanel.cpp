@@ -803,6 +803,8 @@ namespace pP::colony {
             if (beginLabelTable("##worldgen_identity", label_width)) {
                 textRow("Pack", pack);
                 textRow("Profile", descriptor.m_profile);
+                std::snprintf(value, sizeof(value), "%u x %u fine cells", kRenderedWorldEdge, kRenderedWorldEdge);
+                textRow("Rendered scope", value);
                 std::snprintf(value, sizeof(value), "%016llx", static_cast<unsigned long long>(descriptor.m_seed));
                 textRow("Seed", value);
                 std::snprintf(value, sizeof(value), "%u", descriptor.m_generator_version);
