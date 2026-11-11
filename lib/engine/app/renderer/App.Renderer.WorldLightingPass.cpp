@@ -466,6 +466,8 @@ namespace pP {
         auto &resources = *m_resources;
         auto &attempt = resources.m_status[resources.m_attempt_slot];
         attempt.m_inputs = inputs;
+        resources.m_bound_source_materials = inputs.m_source_materials;
+        resources.m_bound_thermal_lut = inputs.m_thermal_lut;
         attempt.m_active_elapsed = frame.m_active_elapsed;
         resources.m_world = inputs.m_particles.current() ? inputs.m_particles.m_world : GridWorldIdentity{};
 
@@ -684,15 +686,30 @@ namespace pP {
 
     std::error_code WorldLightingPass::bind(rhi::ShaderCursor &cursor) const {
         PPR_RETURN_ERROR_ON_FAIL(
-            WorldLightingPass, m_resources and m_resources->m_resolved
+            WorldLightingPass, m_resources and m_resources->m_resolved and m_resources->m_fine_ch
                                    ? std::error_code{}
                                    : std::make_error_code(std::errc::not_connected));
 
         const auto &resources = *m_resources;
         const auto &attempt = resources.m_status[resources.m_attempt_slot];
         PPR_RETURN_ERROR_ON_FAIL(
+            WorldLightingPass, resources.m_bound_source_materials and resources.m_bound_thermal_lut
+                                   ? std::error_code{}
+                                   : std::make_error_code(std::errc::not_connected));
+        PPR_RETURN_ERROR_ON_FAIL(
             WorldLightingPass, cursor["g_resolved_cells"].setBinding(
                                    rhi::Binding(resources.m_resolved, projectionRange(resources.m_resolved))));
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldLightingPass,
+            cursor["g_fine_ch"].setBinding(rhi::Binding(resources.m_fine_ch, projectionRange(resources.m_fine_ch))));
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldLightingPass,
+            cursor["g_source_materials"].setBinding(
+                rhi::Binding(resources.m_bound_source_materials, projectionRange(resources.m_bound_source_materials))));
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldLightingPass,
+            cursor["g_thermal_lut"].setBinding(
+                rhi::Binding(resources.m_bound_thermal_lut, projectionRange(resources.m_bound_thermal_lut))));
         PPR_RETURN_ERROR_ON_FAIL(
             WorldLightingPass,
             cursor["g_numeric_status"].setBinding(rhi::Binding(attempt.m_status, projectionRange(attempt.m_status))));

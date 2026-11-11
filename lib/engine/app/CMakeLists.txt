@@ -99,8 +99,6 @@ target_sources(engine.app
         renderer/App.Renderer.GpuCaches.cpp
         renderer/App.Renderer.GridPass.cpp
         renderer/App.Renderer.GridPass.Particles.cpp
-        renderer/App.Renderer.GridPass.Fluids.cpp
-        renderer/App.Renderer.GridPass.Solids.cpp
         renderer/App.Renderer.PostProcessPass.cpp
         renderer/App.Renderer.Presentation.cpp
         renderer/App.Renderer.TrianglePass.cpp

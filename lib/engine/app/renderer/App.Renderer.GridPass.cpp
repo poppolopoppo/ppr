@@ -348,9 +348,8 @@ namespace pP {
         PPR_RETURN_ERROR_ON_FAIL(GridPass, createVisibilityPrograms_(shader_service, device, content_dir));
         PPR_RETURN_ERROR_ON_FAIL(GridPass, createOpticalPrograms_(shader_service, device, content_dir));
         PPR_RETURN_ERROR_ON_FAIL(GridPass, createGpuParticlePrograms_(shader_service, device, content_dir));
-        PPR_RETURN_ERROR_ON_FAIL(GridPass, createFluidPrograms_(shader_service, device, content_dir));
-        PPR_RETURN_ERROR_ON_FAIL(GridPass, createSolidPrograms_(shader_service, device, content_dir));
         PPR_RETURN_ERROR_ON_FAIL(GridPass, createThermalLut_(device, content_dir));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, createBrdfLut_(rhi_service, shader_service, content_dir));
 
         m_shader_service = safe_ptr{&shader_service};
         m_content_dir = content_dir;
@@ -1149,6 +1148,97 @@ namespace pP {
         desc.defaultState = rhi::ResourceState::ShaderResource;
         desc.label = "generated thermal lookup";
         return make_error_code(device.createBuffer(desc, bytes.data(), m_thermal_lut.writeRef()));
+    }
+
+    std::error_code GridPass::createBrdfLut_(
+        IRhiService &rhi_service, IShaderService &shader_service, const std::filesystem::path &content_dir) {
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, m_brdf_lut == nullptr ? std::error_code{} : std::make_error_code(std::errc::already_connected));
+        rhi::IDevice &device = rhi_service.getDevice();
+
+        shader::SharedModule module{};
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, shader_service.loadModuleFromFile(
+                          content_dir / TEXT("shaders") / TEXT("material_brdf_lut.slang"), "material_brdf_lut",
+                          module.writeRef()));
+        shader::ComPtr<slang::IEntryPoint> entry;
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, module->findEntryPointByName("integrateBrdfLut", entry.writeRef()));
+        slang::IComponentType *entries[]{entry.get()};
+        rhi::ShaderProgramDesc program_desc{};
+        program_desc.linkingStyle = rhi::LinkingStyle::SingleProgram;
+        program_desc.slangGlobalScope = module.get();
+        program_desc.slangEntryPoints = entries;
+        program_desc.slangEntryPointCount = 1u;
+        shader::ComPtr<rhi::IShaderProgram> program;
+        shader::Diagnose diagnostics;
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, device.createShaderProgram(program_desc, program.writeRef(), diagnostics.writeRef()));
+        rhi::ComPtr<rhi::IComputePipeline> pipeline;
+        rhi::ComputePipelineDesc pipeline_desc{};
+        pipeline_desc.program = program.get();
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, device.createComputePipeline(pipeline_desc, pipeline.writeRef()));
+
+        rhi::TextureDesc texture_desc{};
+        texture_desc.type = rhi::TextureType::Texture2D;
+        texture_desc.size = {.width = lighting::kBrdfLutWidth, .height = lighting::kBrdfLutHeight, .depth = 1u};
+        texture_desc.arrayLength = 1u;
+        texture_desc.mipCount = 1u;
+        texture_desc.format = rhi::Format::RG16Float;
+        texture_desc.memoryType = rhi::MemoryType::DeviceLocal;
+        texture_desc.usage = static_cast<rhi::TextureUsage>(
+            static_cast<u32>(rhi::TextureUsage::ShaderResource) | static_cast<u32>(rhi::TextureUsage::UnorderedAccess));
+        texture_desc.defaultState = rhi::ResourceState::UnorderedAccess;
+        texture_desc.label = "immutable BRDF integration table";
+        rhi::ComPtr<rhi::ITexture> texture;
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, device.createTexture(texture_desc, nullptr, texture.writeRef()));
+        rhi::ComPtr<rhi::ITextureView> view;
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, texture->getDefaultView(view.writeRef()));
+
+        rhi::SamplerDesc sampler_desc{};
+        sampler_desc.minFilter = rhi::TextureFilteringMode::Linear;
+        sampler_desc.magFilter = rhi::TextureFilteringMode::Linear;
+        sampler_desc.mipFilter = rhi::TextureFilteringMode::Linear;
+        sampler_desc.addressU = rhi::TextureAddressingMode::ClampToEdge;
+        sampler_desc.addressV = rhi::TextureAddressingMode::ClampToEdge;
+        sampler_desc.addressW = rhi::TextureAddressingMode::ClampToEdge;
+        sampler_desc.maxAnisotropy = 1u;
+        rhi::ComPtr<rhi::ISampler> sampler;
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, device.createSampler(sampler_desc, sampler.writeRef()));
+
+        rhi::ComPtr<rhi::ICommandQueue> queue;
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, make_error_code(device.getQueue(rhi::QueueType::Graphics, queue.writeRef())));
+        rhi::ComPtr<rhi::ICommandEncoder> encoder;
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, make_error_code(queue->createCommandEncoder(encoder.writeRef())));
+        encoder->setTextureState(texture, rhi::ResourceState::UnorderedAccess);
+
+        rhi::ComPtr<rhi::IShaderObject> root;
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, device.createRootShaderObject(program, root.writeRef()));
+        rhi::ShaderCursor cursor{root.get()};
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, cursor["g_brdf_lut"].setBinding(rhi::Binding(view)));
+        {
+            auto *const pass = encoder->beginComputePass();
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass, pass != nullptr ? std::error_code{} : std::make_error_code(std::errc::io_error));
+            PPR_DEFER {
+                pass->end();
+            };
+            pass->bindPipeline(pipeline, root);
+            pass->dispatchCompute(lighting::kBrdfLutWidth / 8u, lighting::kBrdfLutHeight / 8u, 1u);
+        }
+
+        encoder->setTextureState(texture, rhi::ResourceState::ShaderResource);
+        rhi::ComPtr<rhi::ICommandBuffer> commands;
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, make_error_code(encoder->finish(commands.writeRef())));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, make_error_code(queue->submit(commands)));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, make_error_code(queue->waitOnHost()));
+
+        m_brdf_lut_program = std::move(program);
+        m_brdf_lut_pipeline = std::move(pipeline);
+        m_brdf_lut = std::move(texture);
+        m_brdf_lut_view = std::move(view);
+        m_brdf_sampler = std::move(sampler);
+        return {};
     }
 
     std::error_code GridPass::ensureTerrainCells_(rhi::IDevice &device, const u32 edge, const bool recreate) {
@@ -2888,6 +2978,23 @@ namespace pP {
         m_contour_cases = std::move(cases);
         m_chunk_slot_buffers = std::move(maps);
         m_chunk_slot_mapped = mapped;
+
+        // Zero-valued resolved-cell/CH fallback. The shader never reads it while
+        // m_has_resolved_cells is clear; it keeps every static binding valid for
+        // worlds whose lighting owner has not published an attempt yet.
+        if (not m_lighting_fallback) {
+            rhi::BufferDesc fallback{};
+            fallback.size = sizeof(u32) * 16u;
+            fallback.elementSize = sizeof(u32);
+            fallback.memoryType = rhi::MemoryType::Upload;
+            fallback.usage = rhi::BufferUsage::ShaderResource;
+            fallback.defaultState = rhi::ResourceState::ShaderResource;
+            fallback.label = "grid lighting binding fallback";
+            const std::array<u32, 16u> zeros{};
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass, make_error_code(device.createBuffer(fallback, zeros.data(), m_lighting_fallback.writeRef())));
+        }
+
         return {};
     }
 
@@ -3161,6 +3268,25 @@ namespace pP {
         return {};
     }
 
+    std::error_code GridPass::setLightingBuffersForTest(
+        rhi::ComPtr<rhi::IBuffer> resolved, rhi::ComPtr<rhi::IBuffer> fine_ch) {
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, resolved and
+                              fine_ch and
+                              resolved->getDesc().elementSize == sizeof(u32) and
+                              fine_ch->getDesc().elementSize == sizeof(lighting::PackedCH)
+                          ? std::error_code{}
+                          : std::make_error_code(std::errc::invalid_argument));
+        m_test_resolved = std::move(resolved);
+        m_test_fine_ch = std::move(fine_ch);
+        return {};
+    }
+
+    void GridPass::clearLightingBuffersForTest() noexcept {
+        m_test_resolved.setNull();
+        m_test_fine_ch.setNull();
+    }
+
     void GridPass::notifyWorldLightingSubmitted(const FenceCompletionValue value) noexcept {
         if (m_world.m_lighting) {
             m_world.m_lighting->notifySubmitted(value);
@@ -3207,6 +3333,30 @@ namespace pP {
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass, cursor["g_terrain_visuals"].setBinding(
                           rhi::Binding(m_world.m_terrain_palette, makeFullRange(m_world.m_terrain_palette))));
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, cursor["g_source_materials"].setBinding(
+                          rhi::Binding(m_world.m_source_materials, makeFullRange(m_world.m_source_materials))));
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, cursor["g_thermal_lut"].setBinding(rhi::Binding(m_thermal_lut, makeFullRange(m_thermal_lut))));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, cursor["g_brdf_lut"].setBinding(rhi::Binding(m_brdf_lut_view)));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, cursor["g_brdf_sampler"].setBinding(rhi::Binding(m_brdf_sampler)));
+
+        if (m_test_resolved and m_test_fine_ch) {
+            auto *const resolved = m_test_resolved.get();
+            auto *const fine_ch = m_test_fine_ch.get();
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass, cursor["g_resolved_cells"].setBinding(rhi::Binding(resolved, makeFullRange(resolved))));
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass, cursor["g_fine_ch"].setBinding(rhi::Binding(fine_ch, makeFullRange(fine_ch))));
+        } else if (m_world.m_lighting and m_world.m_lighting->resolvedCellsForTest() != nullptr) {
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, bindWorldLighting(cursor));
+        } else {
+            auto *const fallback = m_lighting_fallback.get();
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass, cursor["g_resolved_cells"].setBinding(rhi::Binding(fallback, makeFullRange(fallback))));
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass, cursor["g_fine_ch"].setBinding(rhi::Binding(fallback, makeFullRange(fallback))));
+        }
 
         rhi::IBuffer *const descriptors = m_world.m_texture_inventory->m_cache->descriptorBuffer();
         PPR_RETURN_ERROR_ON_FAIL(
@@ -3476,6 +3626,19 @@ namespace pP {
                                     : static_cast<u32>(m_world.m_diagnostic_mode) << 2u;
         frame.m_boundary_material_id = m_world.m_resident_boundary_material_id;
         frame.m_cell_size_m = m_world.m_resident_cell_size_m;
+        frame.m_camera_world_x = m_camera_view.m_origin.x + m_camera_view.m_forward.x;
+        frame.m_camera_world_y = m_camera_view.m_origin.y + m_camera_view.m_forward.y;
+        frame.m_camera_world_z = m_camera_view.m_origin.z + m_camera_view.m_forward.z;
+        frame.m_surface_to_camera_x = m_camera_view.m_forward.x;
+        frame.m_surface_to_camera_y = m_camera_view.m_forward.y;
+        frame.m_surface_to_camera_z = m_camera_view.m_forward.z;
+        frame.m_camera_ortho = m_camera_view.m_camera_mode == ECameraProjection::orthographic ? 1u : 0u;
+        frame.m_has_resolved_cells = (m_test_resolved and m_test_fine_ch) or
+                                             (m_world.m_lighting and
+                                                 m_world.m_lighting->resolvedCellsForTest() != nullptr and
+                                                 m_world.m_world_edge == WorldLightingPass::kWorldEdge)
+                                         ? 1u
+                                         : 0u;
         fillOpticalFrame_(frame);
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass, pipeline.m_slot_frame_cursors[m_tile_ring_cursor].setData(&frame, sizeof(frame)));
@@ -3529,6 +3692,19 @@ namespace pP {
                                     ? 0u
                                     : static_cast<u32>(m_world.m_diagnostic_mode) << 2u;
         frame.m_boundary_material_id = m_world.m_boundary_material_id;
+        frame.m_camera_world_x = m_camera_view.m_origin.x + m_camera_view.m_forward.x;
+        frame.m_camera_world_y = m_camera_view.m_origin.y + m_camera_view.m_forward.y;
+        frame.m_camera_world_z = m_camera_view.m_origin.z + m_camera_view.m_forward.z;
+        frame.m_surface_to_camera_x = m_camera_view.m_forward.x;
+        frame.m_surface_to_camera_y = m_camera_view.m_forward.y;
+        frame.m_surface_to_camera_z = m_camera_view.m_forward.z;
+        frame.m_camera_ortho = m_camera_view.m_camera_mode == ECameraProjection::orthographic ? 1u : 0u;
+        frame.m_has_resolved_cells = (m_test_resolved and m_test_fine_ch) or
+                                             (m_world.m_lighting and
+                                                 m_world.m_lighting->resolvedCellsForTest() != nullptr and
+                                                 m_world.m_world_edge == WorldLightingPass::kWorldEdge)
+                                         ? 1u
+                                         : 0u;
         fillOpticalFrame_(frame);
 
         PPR_RETURN_ERROR_ON_FAIL(GridPass, frame_cursor.setData(&frame, sizeof(GridFrame)));
@@ -3654,9 +3830,7 @@ namespace pP {
         auto &terrain_program = reactive ? m_reactive_shader_program : m_spatial_shader_program;
         auto &background_program = reactive ? m_reactive_background_program : m_background_spatial_program;
         auto &particle_program = reactive ? m_reactive_particle_program : m_gpu_particle_spatial_program;
-        auto &fluid_program = reactive ? m_reactive_fluid_program : m_fluid_spatial_program;
-        auto &solid_program = reactive ? m_reactive_solid_program : m_solid_spatial_program;
-        if (terrain_program and background_program and particle_program and fluid_program and solid_program) {
+        if (terrain_program and background_program and particle_program) {
             return {};
         }
 
@@ -3689,7 +3863,7 @@ namespace pP {
             return {};
         };
 
-        rhi::ComPtr<rhi::IShaderProgram> terrain, background, particles, liquid, solid;
+        rhi::ComPtr<rhi::IShaderProgram> terrain, background, particles;
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass, create(
                           "grid_tiles.slang", "grid_tiles", "vertexGridMain",
@@ -3703,18 +3877,8 @@ namespace pP {
             GridPass, create(
                           "grid_tiles.slang", "grid_tiles", "vertexParticleIndirectMain",
                           reactive ? "fragmentParticleReactive" : "fragmentParticleSpatial", particles));
-        PPR_RETURN_ERROR_ON_FAIL(
-            GridPass, create(
-                          "grid_tiles.slang", "grid_tiles", "vertexFluidComposite",
-                          reactive ? "fragmentFluidReactive" : "fragmentFluidSpatial", liquid));
-        PPR_RETURN_ERROR_ON_FAIL(
-            GridPass, create(
-                          "grid_tiles.slang", "grid_tiles", "vertexFluidComposite",
-                          reactive ? "fragmentSolidReactive" : "fragmentSolidSpatial", solid));
 
         particle_program = std::move(particles);
-        fluid_program = std::move(liquid);
-        solid_program = std::move(solid);
         terrain_program = std::move(terrain);
         background_program = std::move(background);
         return {};
@@ -3790,10 +3954,6 @@ namespace pP {
                 selected_program = m_reactive_background_program.get();
             else if (program == m_gpu_particle_spatial_program.get())
                 selected_program = m_reactive_particle_program.get();
-            else if (program == m_fluid_spatial_program.get())
-                selected_program = m_reactive_fluid_program.get();
-            else if (program == m_solid_spatial_program.get())
-                selected_program = m_reactive_solid_program.get();
             else
                 PPR_RETURN_UNEXPECTED_ON_FAIL(GridPass, std::make_error_code(std::errc::invalid_argument));
         }
@@ -3845,20 +4005,12 @@ namespace pP {
             if (pipeline_error) {
                 const char *const program_name = selected_program == m_reactive_particle_program.get()
                                                      ? "vertexParticleIndirectMain/fragmentParticleReactive"
-                                                 : selected_program == m_reactive_fluid_program.get()
-                                                     ? "vertexFluidComposite/fragmentFluidReactive"
-                                                 : selected_program == m_reactive_solid_program.get()
-                                                     ? "vertexFluidComposite/fragmentSolidReactive"
                                                  : selected_program == m_reactive_background_program.get()
                                                      ? "vertexBackgroundMain/fragmentBackgroundReactive"
                                                  : program == m_gpu_particle_spatial_program.get()
                                                      ? "vertexParticleIndirectMain/fragmentParticleSpatial"
                                                  : program == m_gpu_particle_program.get()
                                                      ? "vertexParticleIndirectMain/fragmentParticleMain"
-                                                 : program == m_fluid_spatial_program.get()
-                                                     ? "vertexFluidComposite/fragmentFluidSpatial"
-                                                 : program == m_solid_spatial_program.get()
-                                                     ? "vertexFluidComposite/fragmentSolidSpatial"
                                                      : "other optical program";
                 const auto message = std::format(
                     "Grid optical pipeline creation failed result={} category={} cause={} program={} "
@@ -4157,8 +4309,6 @@ namespace pP {
         m_reactive_shader_program.setNull();
         m_reactive_background_program.setNull();
         m_reactive_particle_program.setNull();
-        m_reactive_fluid_program.setNull();
-        m_reactive_solid_program.setNull();
         m_shader_service = nullptr;
         m_content_dir.clear();
         m_device = nullptr;
@@ -4169,16 +4319,9 @@ namespace pP {
         m_gpu_particle_key.reset();
         m_gpu_particle_program.setNull();
         m_gpu_particle_spatial_program.setNull();
-        m_fluid_spatial_program.setNull();
-        m_solid_spatial_program.setNull();
         m_particle_prepare_programs = {};
         m_world.m_gpu_particles.reset();
         m_particle_census_program = {};
-        m_fluid_splat_pipelines = {};
-        m_fluid_filter_pipeline.setNull();
-        m_fluid_programs = {};
-        m_solid_splat_pipelines = {};
-        m_solid_programs = {};
         m_particle_timing_queries.setNull();
         m_background_pipeline.reset();
         m_background_copy_pipeline.reset();
@@ -4196,6 +4339,14 @@ namespace pP {
         m_particle_mask_view.setNull();
         m_particle_mask.setNull();
         m_thermal_lut.setNull();
+        m_brdf_lut_program.setNull();
+        m_brdf_lut_pipeline.setNull();
+        m_brdf_lut_view.setNull();
+        m_brdf_lut.setNull();
+        m_brdf_sampler.setNull();
+        m_lighting_fallback.setNull();
+        m_test_resolved.setNull();
+        m_test_fine_ch.setNull();
         m_world.m_source_materials.setNull();
         m_world.m_terrain_cells.setNull();
         m_world.m_terrain_staging.setNull();

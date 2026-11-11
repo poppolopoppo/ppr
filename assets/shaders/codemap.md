@@ -125,44 +125,21 @@ exposes the real fit/EMA helpers, the retained L1 schedule identity and
 numerical64/readonly24/metadata32/packed32/frame128 byte protocols. Packing uses
 the committed hot/cold row identity and physical metric; three stable visibility
 scan/compaction dispatches produce ordered IDs and indirect arguments without
-reordering solver storage. Conservative culling encloses both the liquid kernel
-and angular solid support, using `grid_liquid_kernel.slang` and
-`grid_solid_kernel.slang`. `grid_tiles.slang` shares the particle quad helper.
+reordering solver storage. `grid_tiles.slang` shares the particle quad helper.
+The only remaining particle draw is the sampled disk for gases and explicit
+legacy phase fixtures; Task 11 retired the smooth solid/liquid splat, filter and
+composite entries together with `grid_liquid_kernel.slang`,
+`grid_solid_kernel.slang` and `grid_fluid_filter.slang`. Solids and liquids are
+shaded through the world-lighting resolved-cell terrain path instead.
 
-Solid entries `vertexSolidSplat`, `fragmentSolidMaterial`,
-`fragmentSolidCoverage` and `fragmentSolidComposite` reconstruct world-XY
-octagonal grains. Equal-area apothem and a separate calibrated solid support
-retain angular silhouettes without changing physical inventory. Occupancy sums
-all solid elements; nearest normalized grain distance selects one material ID
-per field texel. Native composition bilinearly filters categorical coverage,
-shading each distinct neighboring material once and mixing premultiplied linear
-color. Empty labels are excluded and weights renormalized; the independent
-occupancy mask retains the silhouette. Uniform interiors shade once. Composition invokes the exact terrain
-`materialSurface` path with explicit world gradients, including authored normals
-and optical properties. There is no liquid smoothing/height-normal treatment in
-this lane. Solid and liquid fields remain separate until composition; both use
-coherent displaced-contour derivatives before varying rejection and defer
-terrain/material work until occupied pixels survive. Gases keep their sampled
-disk alpha and cold/palette RGB. Liquid entries `vertexFluidSplat`,
-`fragmentFluidMaterial`, `fragmentFluidThickness`, `vertexFluidComposite` and
-`fragmentFluidComposite` reconstruct a connected 2D optical surface. Closest
-normalized kernel distance selects one element; accumulation and filtering never
-mix distinct elements. Raw/filtered fields use R32Float to remain finite for
-up to 1M overlapping particles. `grid_fluid_filter.slang` owns `filterLiquid`, an
-8x8-thread shared-memory, element-guided 5x5 compute filter with a 16-byte frame.
-The composite reconstructs the bounded half-resolution field bilinearly, preserving
-immiscible boundaries, and evaluates world-plane intersections per fragment.
-A bounded optical height derived from density supplies rounded normals without
-another texture. Shared support, amplitude and isolevel preserve kernel mass and
-the isolated radius while filling deformed sampling gaps. Empty field pixels
-skip convolution after the group barrier; empty composite pixels skip field and
-terrain queries after coherent displaced-contour derivative preparation. Fresnel and reflection use the per-fragment camera ray;
-roughness controls a stylized sky/key response and nearby backdrop reflections.
-Authored depth drives stronger refraction, limited to twelve screen pixels;
-reflection has its own twenty-four-pixel bound. Terrain occlusion, material
-opacity/IOR/roughness/emissive and the optical backdrop remain shared contracts. Resource extents, costs and fence ownership
-are recorded in the renderer codemap. No solver state or CPU particle readback
-is required by presentation.
+`world_lighting_material.slang` is the include-only visible response:
+`diffuseIrradiance(CH, float3)` and `specularRadiance(CH, float3, float)` implement
+the approved circular filters, with continuous zero-XY pole limits, and
+`visibleMaterialResponse` composes kD/kS, the sampled BRDF pair, authored and
+thermal emission. `material_brdf_lut.slang` owns the one-time 64x128 RG16F
+isotropic VNDF/Smith integration entry (`integrateBrdfLut`, 1,024 samples/texel,
+alpha=max(r,0.001)) and the bilinear/clamp pair description. GridPass retains the
+resulting immutable texture.
 
 - `mesh_bindless.slang` uses PPR's row-major, row-vector convention: transforms call
   `mul(vector, matrix)`, never `mul(matrix, vector)`. View-projection remains `view * projection`.
@@ -199,11 +176,16 @@ is required by presentation.
   IDs, and reference indirect draws use their instance offsets. Removing the
   former always-zero tile-base parameter avoids a second entry-point push-constant
   range on Vulkan alongside the fragment sampler handle.
-- `grid_tiles.slang` per-cell lane: when payload flag bit 0 is set, the fragment resolves the cell
-  through packed `StructuredBuffer<uint> g_cell_materials` (8192 words per chunk, halfword per cell,
-  `0xFFFF` discards); otherwise the payload material is used. Catalog terrain
-  resolves bindless textures and metre-period UVs; diagnostic modes use an owned
-  palette. The low-three-bit tint remains only for explicit legacy fixtures.
+- `grid_tiles.slang` categorical lane: with published resolved cells, each raster sample
+  reconstructs its own world-plane position and selects exactly one native packed
+  cell (`material` in bits 0-15, FP16 Kelvin in 16-31). Empty samples discard, so
+  MSAA internal boundaries receive real per-sample coverage instead of one
+  pixel-centre ID. The material path samples linear texture RGB times linear tint,
+  authored normal/metallic/roughness/IOR, `diffuseIrradiance`/`specularRadiance`,
+  the shared BRDF pair and one authored+thermal term. Continuous world-UV
+  gradients are captured before cell selection. The older packed chunk-cell lane
+  remains only for explicit legacy/flat fixtures: it resolves the same single
+  packed material per fragment and its low-three-bit tint remains legacy-only.
 - Catalog coverage follows the occupied-vs-empty marching-square contour, with
   material-specific quadratic Bezier arcs for diagonal cuts. Roundness 0 uses
   the straight chord; 1 places the control point at the dual-cell centre.
@@ -290,6 +272,8 @@ bloom and metering cohorts are reused only through accepted-submit fences.
 
 - `mesh_bindless.slang` - the live bindless static-mesh vertex/fragment program.
 - `grid_tiles.slang` - the live debug-grid tile vertex/fragment program (`vertexGridMain` + `fragmentGridMain`).
+- `world_lighting_material.slang` - include-only visible CH diffuse/specular filters and material response.
+- `material_brdf_lut.slang` - one-time 64x128 RG16F isotropic VNDF/Smith integration entry and sampling helper.
 - `world_lighting_source.slang` - cached-source preparation over the full native-cell domain.
 - `world_lighting_cascade.slang` - scheduled coarse cascade transport (`updateTerminal`, `updateCascade`).
 - `world_lighting_schedule.slang` - include-only four-frame probe schedule, probe geometry, directions and interval atlas.

@@ -1,8 +1,6 @@
-#include "grid_liquid_kernel.slang"
-#include "grid_solid_kernel.slang"
+#include "grid_particle_native.slang"
 
 // Continuous GPU circle presentation; no terrain bins or occupancy geometry.
-#include "grid_particle_native.slang"
 struct ReadonlyRow { float mass, volume, material, r, g, b; };
 struct PresentationRow {
     float2 position;
@@ -114,10 +112,9 @@ void scanLane(uint lane, uint value) {
 }
 
 bool visible(PresentationRow particle) {
-    // Enclose every liquid billboard and world-XY solid support quad, including
-    // their corners. No phase can disappear before its silhouette leaves view.
-    float support = max(kLiquidSupport, kSolidSupport * kSolidApothemPerRadius);
-    float radius=particle.radius*support*1.4142135623730951;
+    // Enclose the disk billboard quad corners; retired solid/liquid envelopes are
+    // no longer drawn, so their wider support cannot hide a live gas disk.
+    float radius=particle.radius*1.5;
     for (uint plane=0u;plane<6u;++plane) {
         float4 p=g_particle_prepare.planes[plane];
         if (dot(float4(particle.position,0,1),p)+radius*length(p.xyz)<0) return false;

@@ -249,6 +249,19 @@ export namespace pP::lighting {
     static_assert(kThermalLutBytes == 32768u);
 
     // ------------------------------------------------------------------
+    // immutable isotropic BRDF integration table shape
+    // ------------------------------------------------------------------
+    // One RG16F texel pair per (NoV, roughness) with 64 x 128 centres and
+    // 1,024 golden-ratio/radical-inverse samples per texel. 32 KiB total.
+    inline constexpr u32 kBrdfLutWidth = 64u;
+    inline constexpr u32 kBrdfLutHeight = 128u;
+    inline constexpr u32 kBrdfLutChannels = 2u;
+    inline constexpr u32 kBrdfLutTexelBytes = kBrdfLutChannels * sizeof(u16);
+    inline constexpr u32 kBrdfLutBytes = kBrdfLutWidth * kBrdfLutHeight * kBrdfLutTexelBytes;
+    inline constexpr u32 kBrdfLutSampleCount = 1024u;
+    static_assert(kBrdfLutBytes == 32768u);
+
+    // ------------------------------------------------------------------
     // immutable per-world lighting publication inputs
     // ------------------------------------------------------------------
 

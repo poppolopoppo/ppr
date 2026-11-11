@@ -116,31 +116,12 @@ ppr_add_test_entry(TARGET engine.tests.asset
 )
 
 string(JOIN "," ppr_asset_gpu_grid_surface_filter
-    "asset/render/gates/grid_optical_controls_and_four_layer_parallax"
     "asset/render/gates/grid_translucent_solid_borders_and_internal_boundaries"
-    "asset/render/gates/grid_solid_particles_share_catalog_textures_and_metric_uvs"
-    "asset/render/gates/grid_solid_five_pixel_features_survive_large_offset_viewport"
 )
 
 ppr_add_test_entry(TARGET engine.tests.asset
     NAME gpu_grid_surface
     FILTER "${ppr_asset_gpu_grid_surface_filter}"
-    LOOPS
-    RESOURCE_LOCK gpu
-    TIMEOUT 450
-    LABELS unit engine asset gpu
-)
-
-string(JOIN "," ppr_asset_gpu_grid_liquid_filter
-    "asset/render/gates/grid_liquid_surface_connects_and_preserves_element_boundaries"
-    "asset/render/gates/grid_liquid_optics_and_viewport_appearance"
-    "asset/render/gates/grid_liquid_nominal_density_deformation_coverage"
-    "asset/render/gates/grid_liquid_five_pixel_features_survive_large_offset_viewport"
-)
-
-ppr_add_test_entry(TARGET engine.tests.asset
-    NAME gpu_grid_liquid
-    FILTER "${ppr_asset_gpu_grid_liquid_filter}"
     LOOPS
     RESOURCE_LOCK gpu
     TIMEOUT 450
@@ -179,39 +160,12 @@ ppr_add_test_entry(TARGET engine.tests.asset
 unset(ppr_asset_gpu_picture_filter)
 unset(ppr_asset_gpu_grid_particles_filter)
 unset(ppr_asset_gpu_grid_surface_filter)
-unset(ppr_asset_gpu_grid_liquid_filter)
 unset(ppr_asset_gpu_misc_filter)
 
-set(ppr_asset_solid_interface_filter "asset/render/gates/grid_solid_slanted_material_interface_reconstructs_narrow_color_band")
-set(ppr_asset_solid_envelope_filter "asset/render/gates/grid_solid_envelope_closes_nominal_interstices_without_bridging_sparse_grains")
 string(JOIN "," ppr_asset_spatial_integration_filter
     "asset/render/gates/spatial_grid_samples_preserve_contours_materials_normals_and_emission"
     "asset/render/gates/spatial_hdr_grading_and_native_ui_follow_reconstruction"
 )
-
-# The two slow solid gates keep their own 300-second entries; the routine
-# shards above no longer exclude leaves from a broad aggregate. Ordinary leaf
-# measurements were 249.02 s and 148.06 s respectively.
-ppr_add_test_entry(TARGET engine.tests.asset
-    NAME solid_interface_gpu
-    FILTER "${ppr_asset_solid_interface_filter}"
-    LOOPS
-    RESOURCE_LOCK gpu
-    TIMEOUT 300
-    LABELS unit engine asset gpu
-)
-
-ppr_add_test_entry(TARGET engine.tests.asset
-    NAME solid_envelope_gpu
-    FILTER "${ppr_asset_solid_envelope_filter}"
-    LOOPS
-    RESOURCE_LOCK gpu
-    TIMEOUT 300
-    LABELS unit engine asset gpu
-)
-
-unset(ppr_asset_solid_interface_filter)
-unset(ppr_asset_solid_envelope_filter)
 
 # Actual GridPass samples and independent post grading are distinct from the
 # two inexpensive kernel/admission prerequisite leaves.
@@ -263,8 +217,7 @@ set_tests_properties(engine.tests.asset.resident_particles_gpu PROPERTIES
 )
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND PPR_ENABLE_SANITIZER_ADDRESS)
     # Retain the NVIDIA caller below DBus frames for the existing driver-only suppressions.
-    foreach(ppr_asset_gpu_shard IN ITEMS gpu_caches gpu_picture gpu_grid_particles gpu_grid_surface gpu_grid_liquid gpu_misc
-            solid_interface_gpu solid_envelope_gpu
+    foreach(ppr_asset_gpu_shard IN ITEMS gpu_caches gpu_picture gpu_grid_particles gpu_grid_surface gpu_misc
             spatial_grid_gpu spatial_grid_gpu_validation
             spatial_grading_gpu spatial_grading_gpu_validation)
         set_property(TEST engine.tests.asset.${ppr_asset_gpu_shard} APPEND PROPERTY ENVIRONMENT_MODIFICATION

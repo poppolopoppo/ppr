@@ -64,6 +64,7 @@ target_sources(engine.tests.app
         App.WorldLighting.Trace.Tests.cpp
         App.WorldLighting.Cascade.Tests.cpp
         App.WorldLighting.Fine.Tests.cpp
+        App.WorldLighting.Material.Tests.cpp
 
         ${CMAKE_SOURCE_DIR}/game/colony/Colony.cpp
         ${CMAKE_SOURCE_DIR}/game/colony/WorldGen.cpp
@@ -558,6 +559,31 @@ ppr_add_test_entry(TARGET engine.tests.app
 )
 
 set_tests_properties(engine.tests.app.world_lighting_fine_gpu_validation PROPERTIES
+    ENVIRONMENT "PPR_TEST_GPU_VALIDATION=1"
+)
+
+# Visible categorical material response, the immutable BRDF integration table
+# and the CH angular-mean gas path. Leaves execute the real probe/BRDF shader
+# programs and read back device tables, so both entries claim the gpu lock.
+ppr_add_test_entry(TARGET engine.tests.app
+    NAME world_lighting_material
+    FILTER "app/world_lighting_material/"
+    LOOPS
+    RESOURCE_LOCK gpu
+    TIMEOUT 420
+    LABELS unit engine app
+)
+
+ppr_add_test_entry(TARGET engine.tests.app
+    NAME world_lighting_material_gpu_validation
+    FILTER "app/world_lighting_material/"
+    LOOPS
+    RESOURCE_LOCK gpu
+    TIMEOUT 600
+    LABELS unit engine app gpu_validation
+)
+
+set_tests_properties(engine.tests.app.world_lighting_material_gpu_validation PROPERTIES
     ENVIRONMENT "PPR_TEST_GPU_VALIDATION=1"
 )
 

@@ -14,7 +14,7 @@ The root first runs CPU image, mesh, resilience and observe groups. The `asset/r
 
 ## Running
 
-All entries use `--loop ${PPR_TEST_LOOPS}`, default 1. `engine.tests.asset.cpu` runs `asset` with `--skip-test asset/render` and TIMEOUT 450. Routine GPU correctness runs as six responsibility shards under `RESOURCE_LOCK gpu` and TIMEOUT 450: `gpu_caches` (the `caches` and `sharedmesh` groups), `gpu_picture` (picture controls, both HDR leaves, both MSAA4 spatial leaves, background magnification and both temporal motion-quality leaves), `gpu_grid_particles` (particle support/resources, candidate activation, compute visibility, stochastic world UVs/mips and surface inventory), `gpu_grid_surface` (optical controls/parallax, translucent boundaries, catalog-texture particles and solid large-offset features), `gpu_grid_liquid` (liquid surface composition, liquid optics appearance, nominal-density coverage and liquid large-offset features), and `gpu_misc` (renderer/pipeline/MSAA/attachment contracts, GPU timestamps, pre-render ordering, plus the `draws` and `quarantine` groups). Each shard is an explicit leaf or group token list in `CMakeLists.txt` rather than a broad suffix match, so the union is auditable. `solid_interface_gpu` and `solid_envelope_gpu` keep their exact slanted-interface and solid-envelope leaves with TIMEOUT 300. Together these entries cover every `asset/render` leaf exactly once; only the opt-in `*_gpu_validation` entries re-select leaves. ASan does not select three loops automatically. Configure `PPR_TEST_LOOPS=3` for stress and restore 1 afterward.
+All entries use `--loop ${PPR_TEST_LOOPS}`, default 1. `engine.tests.asset.cpu` runs `asset` with `--skip-test asset/render` and TIMEOUT 450. Routine GPU correctness runs as five responsibility shards under `RESOURCE_LOCK gpu` and TIMEOUT 450: `gpu_caches` (the `caches` and `sharedmesh` groups), `gpu_picture` (picture controls, both HDR leaves, both MSAA4 spatial leaves, background magnification and both temporal motion-quality leaves), `gpu_grid_particles` (particle support/resources, candidate activation, compute visibility, stochastic world UVs/mips and surface inventory), `gpu_grid_surface` (the retained translucent boundary leaf), and `gpu_misc` (renderer/pipeline/MSAA/attachment contracts, GPU timestamps, pre-render ordering, plus the `draws` and `quarantine` groups). Each shard is an explicit leaf or group token list in `CMakeLists.txt` rather than a broad suffix match, so the union is auditable. Task 11 retired the smooth solid/liquid catalog-texture, large-offset, nominal-density, liquid-surface, liquid-optics, solid-envelope and solid-interface leaves with their shaders and entries; replacement material evidence lives in `app/world_lighting_material/`. Together these entries cover every remaining `asset/render` leaf exactly once; only the opt-in `*_gpu_validation` entries re-select leaves. ASan does not select three loops automatically. Configure `PPR_TEST_LOOPS=3` for stress and restore 1 afterward.
 
 Run the routine entries with `ctest --test-dir out/build/<preset> -R '^engine[.]tests[.]asset[.]' --output-on-failure -LE gpu_validation`. The opt-in `gpu_validation`, `resident_particles_gpu`, `picture_hdr_gpu_validation` and `picture_spatial_gpu_validation` entries set `PPR_TEST_GPU_VALIDATION=1` and claim `RESOURCE_LOCK gpu` with TIMEOUT 300. They cover the representative grid visibility gate, resident-circle gate, both HDR policy/encoding gates and both indexed spatial resolve gates respectively; run them separately with the same target regex and `-L gpu_validation`. For focused groups, invoke the executable with the shared runner's `--run-test`/`--skip-test` filters matching current group paths; run from its staged executable directory. GPU groups require the documented platform/GPU environment.
 
@@ -74,20 +74,18 @@ The former single `engine.tests.asset.gpu` aggregate selected all of
 correctness leaves together with measurement loops, so the deadline was reached
 before later correctness leaves ran at all. Routine correctness is now sharded
 by responsibility (`gpu_caches`, `gpu_picture`, `gpu_grid_particles`,
-`gpu_grid_surface`, `gpu_grid_liquid`, `gpu_misc`), each with an explicit token
-list, the same GPU lock and the same 450 s deadline. Nothing was moved into a
-longer deadline and no leaf was dropped to make a shard fit.
+`gpu_grid_surface`, `gpu_misc`), each with an explicit token list, the same GPU
+lock and the same 450 s deadline. Nothing was moved into a longer deadline and
+no leaf was dropped to make a shard fit.
 
-The surface split is measured, not nominal: with all eight optical/surface
-leaves in one shard, the completed leaves alone summed to about 471 s, so the
-liquid-appearance leaves were separated into `gpu_grid_liquid`. Post-optimization
-leaf times on the Linux RTX 2080 ASan host are roughly 31 s (optical controls,
-which currently fails its inherited refraction assertion), 31 s (translucent
-boundaries), 44 s (catalog-texture particles), 56 s (solid large-offset
-features), 60 s (liquid surface), 50 s (liquid optics appearance), 43 s
-(nominal-density coverage) and 45 s (liquid large-offset features). Shards are
-sized from those sums; a shard that outgrows 450 s is split again by
-responsibility rather than given more time.
+The surface shard now covers only the retained categorical boundary leaf. Task 11
+removed the retired smooth solid/liquid reconstruction and its catalog-texture,
+large-offset, nominal-density, liquid-surface, liquid-optics and separate
+solid-envelope/interface leaves together with their shader families and the
+`gpu_grid_liquid`/`solid_interface_gpu`/`solid_envelope_gpu` entries. The
+replacement material evidence lives in `app/world_lighting_material/`; gas
+visibility and blending remain covered by `gpu_grid_particles` and the resident
+circle validation entry.
 
 Pass lifetime is the dominant repeated cost: each `GridPass`/`PostProcessPass`
 initialization compiles and creates its full program/pipeline family (about
@@ -96,11 +94,8 @@ pays its pipeline creation (about 18 s). Leaves therefore keep one pass where a
 control only changes the staged catalog: the catalog change travels through the
 supported world-candidate replacement, and frames whose pixels are discarded use
 `drawOpticalGridOnly_`, which keeps the real encode, wait and retirement but
-skips the host readback. `grid_liquid_optics_and_viewport_appearance`,
-`grid_solid_particles_share_catalog_textures_and_metric_uvs` and
-`grid_solid_slanted_material_interface_reconstructs_narrow_color_band` follow
-that pattern, and `picture_hdr_punchy...` reuses its EV0/EV1 captures instead of
-re-rendering them.
+skips the host readback. `grid_translucent_solid_borders_and_internal_boundaries`
+and the retained picture leaves follow that pattern.
 
 Three leaves were pure timing/policy sampling with no unique correctness
 contract and are retired here: `grid_material_shading_cost_samples` (four
@@ -110,9 +105,8 @@ material workloads × eight frames at 1024²), `picture_temporal_cost_samples`
 Retro policies). Task 18 owns replacement performance evidence through the real
 application profiler. Their surviving observation assertions remain elsewhere:
 `m_background_targets == 3` and particle-instance counts are asserted by
-`grid_particle_support_and_resource_repeat`, and instance/count assertions also
-appear in `grid_liquid_optics_and_viewport_appearance` and
-`grid_liquid_nominal_density_deformation_coverage`.
+`grid_particle_support_and_resource_repeat` and the resident circle validation
+entry.
 
 `temporal_layered_background_pan_uses_stable_spatial_fallback` and
 `temporal_camera_pan_preserves_pattern_contrast_and_phase` encoded the contrast,
@@ -126,12 +120,11 @@ and its `PPR_PARTICLE_*` environment hooks without a test caller. They are
 test-support production code; their removal/adaptation is deferred to Task 18,
 which owns profiling replacement, and is not part of this test-only correction.
 
-`grid_liquid_optics_and_viewport_cost` was not a benchmark-only leaf: it holds
-real water-optics appearance checks. Only its eight-frame 1920×1080 timing loop,
-sample sorting and `LIQUID-COST` report were removed, and the leaf is renamed
-`grid_liquid_optics_and_viewport_appearance`. The background-change,
-refraction-off, roughness and particle-instance assertions are unchanged and it
-runs inside `gpu_grid_liquid`.
+`grid_liquid_optics_and_viewport_cost` and the retired solid/liquid appearance
+leaves are removed with the categorical replacement. The surviving gas and
+boundary leaves keep their background-change, roughness-off, instance-count and
+pixel assertions; Task 11's `app/world_lighting_material/` suite owns the
+replacement PBR, BRDF-table and transparent-composition evidence.
 
 ## Actual spatial integration qualification
 

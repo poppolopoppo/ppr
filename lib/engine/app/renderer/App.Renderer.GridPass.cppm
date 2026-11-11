@@ -370,9 +370,17 @@ export namespace pP {
             u32 m_has_background{};
             u32 m_has_surface{};
             std::array<GridBackgroundLayer, 4u> m_layers{};
+            float m_camera_world_x{};
+            float m_camera_world_y{};
+            float m_camera_world_z{};
+            float m_surface_to_camera_x{};
+            float m_surface_to_camera_y{};
+            float m_surface_to_camera_z{};
+            u32 m_camera_ortho{};
+            u32 m_has_resolved_cells{};
         };
 
-        static_assert(sizeof(GridFrame) == 304u);
+        static_assert(sizeof(GridFrame) == 336u);
         static_assert(alignof(GridFrame) == 16u);
         // Mango matrices have non-trivial copy/destruction; their established
         // row-major wire representation is pinned by these size/offset checks.
@@ -380,6 +388,10 @@ export namespace pP {
         static_assert(PPR_OFFSETOF(GridFrame, m_viewport) == 144u);
         static_assert(PPR_OFFSETOF(GridFrame, m_layers) == 176u);
         static_assert(PPR_OFFSETOF(GridFrame, m_has_surface) == 172u);
+        static_assert(PPR_OFFSETOF(GridFrame, m_camera_world_x) == 304u);
+        static_assert(PPR_OFFSETOF(GridFrame, m_surface_to_camera_x) == 316u);
+        static_assert(PPR_OFFSETOF(GridFrame, m_camera_ortho) == 328u);
+        static_assert(PPR_OFFSETOF(GridFrame, m_has_resolved_cells) == 332u);
 
         [[nodiscard]] std::error_code prepareBackground(
             const PreRenderContext &context, const CameraSnapshot &camera, const rhi::Viewport &viewport,
@@ -472,6 +484,21 @@ export namespace pP {
             const VisibilitySlot &slot = m_visibility_slots[m_tile_ring_cursor];
             return {slot.m_args.get(), slot.m_ids.get()};
         }
+
+        // The one device-lifetime immutable BRDF integration table. Readers keep
+        // their strong references through the frame fence; teardown releases it
+        // after renderer completion and before RHI shutdown.
+        [[nodiscard]] rhi::ITexture *brdfLutForTest() const noexcept {
+            return m_brdf_lut.get();
+        }
+
+        // Tests-only: binds externally prepared categorical state (resolved
+        // cells + decoded fine CH) to the real material/gas program without
+        // driving the full cascade transport. The pass retains strong owners
+        // until shutdown/device loss. Production never calls these.
+        [[nodiscard]] std::error_code setLightingBuffersForTest(
+            rhi::ComPtr<rhi::IBuffer> resolved, rhi::ComPtr<rhi::IBuffer> fine_ch);
+        void clearLightingBuffersForTest() noexcept;
 
         // Test-only ownership observations for the terrain staging lifetime.
         [[nodiscard]] rhi::IBuffer *terrainStagingForTest() const noexcept {
@@ -712,28 +739,9 @@ export namespace pP {
             bool m_dirty{};
         };
 
-        // Each completed particle slot owns its screen-space fluid attachments
-        // and roots. Resize never replaces resources still read by another slot.
-        struct FluidSlot {
-            std::array<rhi::ComPtr<rhi::ITexture>, 4u> m_textures{};
-            std::array<rhi::ComPtr<rhi::ITextureView>, 4u> m_views{};
-            std::array<rhi::ComPtr<rhi::IShaderObject>, 3u> m_roots{};
-            std::optional<GridCachedPipeline> m_composite_pipeline{};
-            std::optional<RenderPipelineKey> m_composite_key{};
-            u32 m_width{}, m_height{};
-        };
-
-        // Solids retain their own occupancy and nearest-element attachments
-        // alongside liquids until both surfaces have been composited.
-        struct SolidSlot {
-            std::array<rhi::ComPtr<rhi::ITexture>, 3u> m_textures{};
-            std::array<rhi::ComPtr<rhi::ITextureView>, 3u> m_views{};
-            std::array<rhi::ComPtr<rhi::IShaderObject>, 2u> m_roots{};
-            std::optional<GridCachedPipeline> m_composite_pipeline{};
-            std::optional<RenderPipelineKey> m_composite_key{};
-            u32 m_width{}, m_height{};
-        };
-
+        // Each completed particle slot owns its completion-selected compaction
+        // buffers and optional capture storage; gas disks share the one packed
+        // source and draw resources.
         struct ParticleCensusStorage {
             rhi::ComPtr<rhi::IBuffer> m_projected{}, m_readback{};
             rhi::ComPtr<rhi::IShaderObject> m_root{};
@@ -748,8 +756,6 @@ export namespace pP {
         struct GpuParticleSlot {
             rhi::ComPtr<rhi::IBuffer> m_ids{}, m_args{};
             std::optional<GridParticleGpuView> m_reader{};
-            std::unique_ptr<FluidSlot> m_fluid{};
-            std::unique_ptr<SolidSlot> m_solid{};
             std::unique_ptr<ParticleCensusStorage> m_census{};
         };
 
@@ -782,16 +788,6 @@ export namespace pP {
         [[nodiscard]] std::error_code createGpuParticlePrograms_(
             IShaderService &service, rhi::IDevice &device, const std::filesystem::path &content_dir);
         [[nodiscard]] std::error_code ensureParticleMask_(rhi::IDevice &device);
-        [[nodiscard]] std::error_code createFluidPrograms_(
-            IShaderService &service, rhi::IDevice &device, const std::filesystem::path &content_dir);
-        [[nodiscard]] std::error_code prepareFluidSurface_(const PreRenderContext &context);
-        [[nodiscard]] std::error_code renderFluidSurface_(const DrawContext &context, u32 slot);
-        [[nodiscard]] bool hasLiquidParticles_() const noexcept;
-        [[nodiscard]] std::error_code createSolidPrograms_(
-            IShaderService &service, rhi::IDevice &device, const std::filesystem::path &content_dir);
-        [[nodiscard]] std::error_code prepareSolidSurface_(const PreRenderContext &context);
-        [[nodiscard]] std::error_code renderSolidSurface_(const DrawContext &context, u32 slot);
-        [[nodiscard]] bool hasSolidParticles_() const noexcept;
         [[nodiscard]] std::error_code ensureGpuParticleStorage_(rhi::IDevice &device, u32 count);
         [[nodiscard]] std::error_code renderGpuParticles_(const DrawContext &context);
         void prepareChunkSlotMap_(bool retained_table);
@@ -839,6 +835,11 @@ export namespace pP {
 
         // Loads the generated thermal table and creates its single device copy.
         [[nodiscard]] std::error_code createThermalLut_(rhi::IDevice &device, const std::filesystem::path &content_dir);
+        // Generates the device's one immutable 64x128 RG16F isotropic VNDF/Smith
+        // BRDF integration table with the real shader entry and waits once at
+        // initialization. It is never reallocated or rewritten per frame.
+        [[nodiscard]] std::error_code createBrdfLut_(
+            IRhiService &rhi_service, IShaderService &shader_service, const std::filesystem::path &content_dir);
         // Ensures the world-owned full-domain packed terrain buffer and its
         // completion-selected upload staging ring for `edge`. `recreate` forces
         // a zero-filled replacement for reset/recovery paths.
@@ -877,13 +878,25 @@ export namespace pP {
 
         // Optional native MRT variants share the same fenced roots and caches.
         rhi::ComPtr<rhi::IShaderProgram> m_reactive_shader_program{}, m_reactive_background_program{};
-        rhi::ComPtr<rhi::IShaderProgram> m_reactive_particle_program{}, m_reactive_fluid_program{},
-            m_reactive_solid_program{};
+        rhi::ComPtr<rhi::IShaderProgram> m_reactive_particle_program{};
         safe_ptr<IShaderService> m_shader_service{};
         std::filesystem::path m_content_dir{};
         rhi::IDevice *m_device{}; // Actual allocator; device outlives the pass.
         // Generated thermal lookup uploaded once per GridPass device.
         rhi::ComPtr<rhi::IBuffer> m_thermal_lut{};
+        // One immutable 64x128 RG16F BRDF integration table per device, plus its
+        // clamp/linear sampler and boot-time generation program.
+        rhi::ComPtr<rhi::ITexture> m_brdf_lut{};
+        rhi::ComPtr<rhi::ITextureView> m_brdf_lut_view{};
+        rhi::ComPtr<rhi::ISampler> m_brdf_sampler{};
+        rhi::ComPtr<rhi::IShaderProgram> m_brdf_lut_program{};
+        rhi::ComPtr<rhi::IComputePipeline> m_brdf_lut_pipeline{};
+        // Zero-valued fallback for worlds whose lighting owner has not published
+        // resolved cells/CH yet, so binding stays valid while the scene is black.
+        rhi::ComPtr<rhi::IBuffer> m_lighting_fallback{};
+        // Tests-only external categorical state; empty in production.
+        rhi::ComPtr<rhi::IBuffer> m_test_resolved{};
+        rhi::ComPtr<rhi::IBuffer> m_test_fine_ch{};
         struct VisibilityProgram {
             rhi::ComPtr<rhi::IShaderProgram> m_program{};
             rhi::ComPtr<rhi::IComputePipeline> m_pipeline{};
@@ -904,14 +917,8 @@ export namespace pP {
         GpuParticleProgram m_particle_census_program{};
         rhi::ComPtr<rhi::IShaderProgram> m_gpu_particle_program{};
         rhi::ComPtr<rhi::IShaderProgram> m_gpu_particle_spatial_program{};
-        rhi::ComPtr<rhi::IShaderProgram> m_fluid_spatial_program{}, m_solid_spatial_program{};
         std::optional<RenderPipelineKey> m_gpu_particle_key{};
         std::optional<GridCachedPipeline> m_gpu_particle_pipeline{};
-        std::array<rhi::ComPtr<rhi::IShaderProgram>, 4u> m_fluid_programs{};
-        std::array<rhi::ComPtr<rhi::IRenderPipeline>, 2u> m_fluid_splat_pipelines{};
-        rhi::ComPtr<rhi::IComputePipeline> m_fluid_filter_pipeline{};
-        std::array<rhi::ComPtr<rhi::IShaderProgram>, 3u> m_solid_programs{};
-        std::array<rhi::ComPtr<rhi::IRenderPipeline>, 2u> m_solid_splat_pipelines{};
         rhi::ComPtr<rhi::IQueryPool> m_particle_timing_queries{};
         bool m_visibility_prepared{false};
 

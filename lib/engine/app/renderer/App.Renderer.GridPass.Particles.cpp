@@ -820,9 +820,6 @@ namespace pP {
             context.m_encoder.writeTimestamp(m_particle_timing_queries, 1u);
         }
 
-        PPR_RETURN_ERROR_ON_FAIL(GridPass, prepareFluidSurface_(context));
-        PPR_RETURN_ERROR_ON_FAIL(GridPass, prepareSolidSurface_(context));
-
         storage.m_prepared = true;
         storage.m_slot_encoded = true;
         return {};
@@ -901,11 +898,8 @@ namespace pP {
 
         storage.m_prepared = false;
         const u32 particle_slot = storage.m_selected_slot;
-        // Both envelopes are prepared before drawing. Solids occlude liquid;
-        // the remaining disk pass contains only gases and legacy phase fixtures.
-        PPR_RETURN_ERROR_ON_FAIL(GridPass, renderFluidSurface_(context, particle_slot));
-        PPR_RETURN_ERROR_ON_FAIL(GridPass, renderSolidSurface_(context, particle_slot));
-
+        // Retired solid/liquid envelopes no longer draw. The remaining disk pass
+        // contains only gases and explicit legacy phase fixtures.
         // Match the disk fragment's phase rejection against this prepared source
         // inventory. Unknown visuals retain the legacy lane conservatively.
         const auto &materials = storage.m_slots[particle_slot].m_reader->m_metadata->m_materials;

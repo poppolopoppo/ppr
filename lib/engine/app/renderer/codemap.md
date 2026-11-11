@@ -222,8 +222,9 @@ accepted-frame/world diagnostics. A status slot is reused only after its
 submission completed and collection consumed it; `discardUnsubmitted` releases
 definitely-unsubmitted attempts and leaves ambiguous submissions quarantined;
 `shutdown` drains and inspects outstanding tickets before reporting success.
-`bind` supplies `g_resolved_cells` and `g_numeric_status` to material and
-inspection shaders. A second `prepare` while an attempt is armed and not yet
+`bind` supplies `g_resolved_cells`, `g_fine_ch`, the source-material palette, the
+thermal table and `g_numeric_status` to material and inspection shaders. A second
+`prepare` while an attempt is armed and not yet
 submitted or discarded is rejected with `operation_not_permitted` before it
 touches the armed attempt's slot, constants or recorded bindings; callers
 settle that attempt with `notifySubmitted` or `discardUnsubmitted` first.
@@ -239,73 +240,24 @@ owners through the existing frame fence, including world retirement.
 `App.Renderer.GridPass.Particles.cpp` owns `grid_particle_prepare.slang`: one pack
 dispatch on source changes, then three stable frustum-compaction dispatches per
 frame. Scratch is O(N), bounded by the global 1M-particle capacity; numerical
-rows never reorder. The remaining indirect particle draw keeps sampled disk
-alpha for gases and explicit legacy phase fixtures. Reconstructed solids use
-their element's exact terrain `materialSurface` path: physical world UVs, albedo,
-normal map and optical properties. Gas retains cold24/palette RGB. Phase flags are derived for every
-material, including terrain elements that become particles after digging.
-Radius in metres remains `cell_size_m * sqrt(volume_cells / pi)`.
+rows never reorder. The only remaining indirect particle draw is the sampled
+disk used for gas and explicit legacy phase fixtures. Gas retains cold24/palette
+RGB and multiplies it by the current fine-CH angular mean; it alpha-composites
+over the already shaded scene without relighting the background, adding an
+ambient floor, or contributing authored/thermal transport emission. Phase flags
+are derived for every material, including terrain elements that become particles
+after digging. Radius in metres remains `cell_size_m * sqrt(volume_cells / pi)`.
+Reconstructed solids and liquids are no longer drawn as smooth envelopes: the
+world-lighting projection selects one categorical material per native cell and
+the resolved-cell terrain draw shades it with the same material path.
 
-`App.Renderer.GridPass.Fluids.cpp` owns the 2D screen-space liquid path. Two
-indirect quad splats select the closest element in R32Uint/D32Float and accumulate
-same-element coverage in R32Float. `grid_liquid_kernel.slang` shares three-radius
-support, amplitude 4/9 and its matching isocontour across splats, optical height
-and visibility. The cubic kernel preserves integrated mass and an isolated disk
-radius while covering deformed interparticle gaps.
-`grid_fluid_filter.slang` applies a bounded non-separable 5x5 material-guided
-compute filter using shared-memory tiles. A final fullscreen composite uses
-material-aware bilinear reconstruction and a bounded rounded front-height
-proxy derived from density. Camera-ray-aware Fresnel, roughness-controlled sky
-and soft-key reflections, nearby backdrop reflections, authored opacity/IOR and
-emissive properties give liquids a glossy volume in the 2D scene. Refraction
-uses the authored physical depth and rounded normal, capped at twelve pixels;
-reflected backdrop lookups have an independent twenty-four-pixel bound. The same
-terrain contour occlusion and optical backdrop remain authoritative. Foreign element taps are renormalized rather than
-treated as empty space, avoiding interface gaps. Per-fragment world-plane
-reconstruction supports perspective views as well as orthographic pan/roll/zoom.
-This is the classic screen-space method adapted to 2D, without neighbor-PCA
-anisotropic particle kernels.
-
-Each existing completion-selected particle slot owns its attachments and roots;
-resize replaces only that completed slot. Fields are half the scene viewport,
-limited to a 1280-pixel longest edge with preserved aspect ratio, and use
-16 bytes per field pixel including element,
-depth, raw and filtered fields. Three populated slots cost about 24 MiB at a
-1920x1080 scene, about 40 MiB at 3445x1837, and at most 75 MiB at the cap
-(excluding driver allocation overhead).
-32-bit accumulation remains finite for the admitted 1M overlapping unit kernels.
-Resources are allocated only for an inventory containing liquids and follow
-world retirement and source-reader fences. Occlusion follows the terrain mode
-actually drawn; final particle/composite draws have depth writes disabled.
-An optional test-only query pool records six GPU phase pairs; normal production
-frames encode no additional timing queries or readback. Tests serialize its
-reset/read/replacement against the exact submission completion fence.
-
-`App.Renderer.GridPass.Solids.cpp` owns a separate solid occupancy lane on the
-same completion-selected particle slots. World-XY octagonal footprints retain
-flat faces under camera movement and roll. `grid_solid_kernel.slang` calibrates
-apothem from the physical circle area and shares support/amplitude/isolevel with
-splat geometry, composition and conservative visibility. All solid elements
-contribute to one R32Float occupancy sum; an independent R32Uint/D32Float nearest
-grain selection supplies categorical element labels in mixed rubble. Native
-composition filters their bilinear coverage using each distinct label's shaded
-premultiplied color, preserving texture interiors and antialiasing interfaces.
-Empty labels are excluded without changing the independent occupancy mask.
-The solid composite uses coherent world/displaced-contour derivatives, the same
-terrain occlusion, and exact `materialSurface` shading. It has no liquid filter,
-rounded height or reconstructed optical normal. Draw order is liquid envelope,
-solid envelope, then remaining gas disks.
-
-Solid fields use the same aspect-preserving half-resolution/1280 longest-edge
-bound, with three attachments totaling 12 bytes per pixel per populated cohort.
-Three cohorts add about 30 MiB at 3445x1837, at most 56.25 MiB for a square capped
-field, excluding driver allocation overhead. Solid and liquid attachments are
-separate because both stay live until composition. Allocation/resize commits a
-complete replacement only after that exact particle slot's previous reader is
-complete; the enclosing particle source/retirement fences retain both lanes.
-
-Before a resident runtime view exists, owned preview/offline seeds use the same
-GPU pipeline after one upload per changed inventory. The chunk cache accelerates
+Task 11 retired `App.Renderer.GridPass.Fluids.cpp`, `App.Renderer.GridPass.Solids.cpp`,
+`grid_liquid_kernel.slang`, `grid_solid_kernel.slang`, `grid_fluid_filter.slang`,
+their screen-space attachments, splat/filter/composite pipelines and spatial
+variants after checking their callers. Particle publication, pack/cull/scatter,
+capture census, source-reader fences and the gas disk draw remain. Before a
+resident runtime view exists, owned preview/offline seeds use the same GPU
+pipeline after one upload per changed inventory. The chunk cache accelerates
 admission/version checks only. Selecting a resident view revokes this seed lease;
 stale or failed runtime views cannot select the seed adapter. CPU draw geometry,
 cell proxies, owner tables, chunk radix sorting and FP64 admission are retired.
@@ -507,6 +459,25 @@ validation requirements; user visual acceptance is separate.
   4-byte dummy SRV serves flat-only rendering; direct and MDI lanes bind full ranges.
   `GridTilePayload` retains its 32-byte stride; offsets 20/24/28 carry cell-word base/flags/pad.
   MDI `SV_InstanceID`/startInstanceLocation parity remains to be proven with GPU readback on each backend.
+- **GridPass categorical PBR:** the visible material entry reads the
+  world-lighting owner's resolved cells, fine CH, source palette and thermal
+  table. Each raster sample reconstructs its own world-plane position, selects
+  exactly one native packed cell, and discards empty samples, so MSAA internal
+  occupancy boundaries receive real per-sample coverage. Continuous world-UV
+  derivatives are captured before cell selection. Visible response uses linear
+  texture RGB times linear tint, authored metallic/roughness/IOR, mapped world
+  normal, orthographic/current camera V, `diffuseIrradiance`/`specularRadiance`,
+  the shared RG16F BRDF pair and one authored+thermal emission term; receive-only
+  transparent cells omit thermal, use premultiplied authored opacity and do not
+  attenuate CH transport. The legacy contour/refraction path remains only for
+  explicit flat/legacy fixtures.
+- **GridPass BRDF table:** one device-lifetime immutable 64x128 RG16F table
+  (32 KiB) is generated once at `initialize` by `material_brdf_lut.slang`
+  (1,024 golden-ratio/radical-inverse VNDF/Smith samples per texel,
+  alpha=max(r,0.001), texel centers `(x+0.5)/64,(y+0.5)/128`), transitioned to
+  shader-resource state, and owned beside the thermal table. It is released by
+  `shutdown`/device-loss after renderer completion and before RHI shutdown; no
+  singleton owns it.
 - **Presentation** (`App.Renderer.Presentation.cppm/.cpp`): `PresentationGrid{window, resolved, raster, backing,
   pixel_scale}`, checked `makePresentationGrid(framebuffer, P)` W/P/R/S/B arithmetic (positive extents, P1..8,
   overflow rejection; zero framebuffer is caller suspension), immutable `ResolvedHdrView`, finite

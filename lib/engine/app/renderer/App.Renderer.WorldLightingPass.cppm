@@ -131,8 +131,10 @@ export namespace pP {
             const PreRenderContext &context, const lighting::WorldLightingInputs &inputs,
             const WorldLightingFrame &frame);
 
-        // Binds the current resolved cells and numeric status for material and
-        // inspection shaders. The cursor names are owner-private.
+        // Binds the current resolved cells, fine CH, source-material palette,
+        // thermal table and numeric status for material and inspection shaders.
+        // The source/thermal owners persist after a consumed attempt ticket.
+        // The cursor names are owner-private.
         [[nodiscard]] std::error_code bind(rhi::ShaderCursor &cursor) const;
 
         // Encodes the stage-end copy of this attempt's status records into its
@@ -242,6 +244,10 @@ export namespace pP {
             rhi::ComPtr<rhi::IBuffer> m_cascades{};
             rhi::ComPtr<rhi::IBuffer> m_source{};
             rhi::ComPtr<rhi::IBuffer> m_fine_ch{};
+            // Immutable binding owners that must outlive a consumed attempt
+            // ticket: the derived source palette and the device thermal table.
+            rhi::ComPtr<rhi::IBuffer> m_bound_source_materials{};
+            rhi::ComPtr<rhi::IBuffer> m_bound_thermal_lut{};
             std::array<ProjectionStatusSlot, kStatusRingSize> m_status{};
             GridWorldIdentity m_world{};
             u64 m_accepted_attempts{};

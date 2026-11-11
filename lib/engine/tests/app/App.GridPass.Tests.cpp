@@ -43,7 +43,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(std::is_standard_layout_v<GridTilePayload>);
 
             // GridFrame's matrix, visibility selector and metric share the shader ABI.
-            PPR_TEST_ASSERT(sizeof(GridPass::GridFrame) == 304u);
+            PPR_TEST_ASSERT(sizeof(GridPass::GridFrame) == 336u);
             PPR_TEST_ASSERT(PPR_OFFSETOF(GridPass::GridFrame, m_view_projection) == 0u);
             PPR_TEST_ASSERT(PPR_OFFSETOF(GridPass::GridFrame, m_use_visible_ids) == 64u);
             PPR_TEST_ASSERT(PPR_OFFSETOF(GridPass::GridFrame, m_cell_size_m) == 68u);
@@ -55,6 +55,10 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(PPR_OFFSETOF(GridPass::GridFrame, m_has_background) == 168u);
             PPR_TEST_ASSERT(PPR_OFFSETOF(GridPass::GridFrame, m_has_surface) == 172u);
             PPR_TEST_ASSERT(PPR_OFFSETOF(GridPass::GridFrame, m_layers) == 176u);
+            PPR_TEST_ASSERT(PPR_OFFSETOF(GridPass::GridFrame, m_camera_world_x) == 304u);
+            PPR_TEST_ASSERT(PPR_OFFSETOF(GridPass::GridFrame, m_surface_to_camera_x) == 316u);
+            PPR_TEST_ASSERT(PPR_OFFSETOF(GridPass::GridFrame, m_camera_ortho) == 328u);
+            PPR_TEST_ASSERT(PPR_OFFSETOF(GridPass::GridFrame, m_has_resolved_cells) == 332u);
             PPR_TEST_ASSERT(sizeof(GridSurfaceHeights) == 16384u);
             PPR_TEST_ASSERT(sizeof(GridBackgroundLayer) == 32u);
             PPR_TEST_ASSERT(sizeof(GridTerrainVisual) == 96u);

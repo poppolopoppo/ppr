@@ -1,5 +1,8 @@
-// Reader for the WorldLightingPass::bind contract: the same resolved-cell and
-// numeric-status names a material/inspection shader consumes.
+// Reader for the WorldLightingPass::bind contract: the same resolved-cell,
+// fine-CH, source-material, thermal-table and numeric-status names a
+// material/inspection shader consumes.
+#include "../world_lighting_codec.slang"
+
 struct BindProbe {
     uint cell;
     uint reserved[3];
@@ -7,6 +10,9 @@ struct BindProbe {
 
 ConstantBuffer<BindProbe> g_bind_probe;
 StructuredBuffer<uint> g_resolved_cells;
+StructuredBuffer<PackedCH> g_fine_ch;
+StructuredBuffer<SourceMaterial> g_source_materials;
+StructuredBuffer<float4> g_thermal_lut;
 StructuredBuffer<uint> g_numeric_status;
 RWStructuredBuffer<uint> g_bind_out;
 
