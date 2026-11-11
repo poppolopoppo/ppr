@@ -36,7 +36,7 @@ Windows/D3D12 is unavailable on this host and remains an unmet gate unless run.
 | 1 | complete (commits `14948a7`, `015b4df`, `7c5840b`, `502cf30`; reviews clean; known red legacy gates recorded below) |
 | 2 | complete (commits `8835fbb`, `15b6609`, `2be2fc2`; reviews clean; known red gates recorded below; the GPU cost blocker it recorded is resolved by the app GPU cost correction below) |
 | 2a | complete (app GPU cost correction: commits `ab37c5ba`, `3c3b9963`; independent review of `ab37c5ba` returned 5 Important + minors, all fixed; records below) |
-| 3 | pending — mandatory owner cleanup-acceptance stop; entry conditions and remaining risk recorded in the Task 3 section |
+| 3 | complete — owner accepted the cleaned application on 2026-11-11 |
 | 4 | complete (commit `317d9e8`; independent review approved; D3D12 pending) |
 | 5–19 | pending |
 
