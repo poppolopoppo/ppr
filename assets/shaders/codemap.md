@@ -297,6 +297,13 @@ bloom and metering cohorts are reused only through accepted-submit fences.
   pixels, not an exact/global native pattern guarantee. Runtime pattern
   admission and real terrain sample coverage remain open; Task 12 owns the
   temporal reconstruction integration.
+- `hable_temporal.slang` - always-on temporal Hable reconstruction
+  (`reconstructTemporal`): quarter-pixel lattice, continuous diamond weights,
+  contributing-original-sample bounds, reprojected history rejection and the
+  5%-25% current-frame blend. Scene-linear/unexposed; history reset/reprojection
+  policy lives in `ReconstructionPass`, not in this shader.
+- `tests/reconstruction_probe.slang` - test-only per-sample scene writer and
+  MSAA sample dump used by the reconstruction lattice/oracle agreement tests.
 
 Catalog terrain uploads the shared `engine.math` contour points and 16-case
 connectivity table verbatim (8-byte points, 72-byte cases). The fragment shader
@@ -420,6 +427,7 @@ single exposure/AgX evaluation.
 
 `temporal_resolve.slang` and `temporal_2x.slang` were the legacy screen-history
 and reactive-MRT reconstruction programs. Task 2 removed them with `RetroPass`;
-Task 12 owns the replacement Hable reconstruction, its history pair and its
-sample-rate scene entries. `spatial_msaa4.slang` remains as the independent
-kernel/sample-pattern qualification asset, not a runtime selector.
+`engine.app:renderer.reconstruction_pass` now owns the always-on Hable temporal
+reconstruction, its history pair and its sample-rate scene entries.
+`spatial_msaa4.slang` remains as the independent kernel/sample-pattern
+qualification asset, not a runtime selector.

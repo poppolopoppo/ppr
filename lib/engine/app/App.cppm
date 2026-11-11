@@ -29,6 +29,7 @@ export import :renderer.gpu_caches;
 export import :renderer.grid_pass;
 export import :renderer.post_process_pass;
 export import :renderer.presentation;
+export import :renderer.reconstruction_pass;
 export import :renderer.triangle_pass;
 export import :renderer.types;
 export import :renderer.world_lighting;

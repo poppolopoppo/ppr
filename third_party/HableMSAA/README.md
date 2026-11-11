@@ -40,6 +40,36 @@ The double CPU oracle discovers row/column neighbours geometrically in a cross
 of known samples; it does not copy shader tap names or its bucket expressions.
 Independent analytic affine and constant assertions additionally constrain it.
 
+## Temporal reconstruction
+
+`assets/shaders/hable_temporal.slang` implements the accepted temporal
+algorithm described by
+[Temporal Super Resolution via Multisampling](https://filmicworlds.com/blog/temporal-super-resolution-via-multisampling/).
+It is not the earlier spatial snippet: the shader uses the quarter-pixel
+lattice (`(nx+0.5)/4`), the known nodes `(1,0),(3,1),(0,2),(2,3)` in
+sample-index order, signed floor division for negative blocks, the continuous
+luminance-gradient diamond, contributing-original-sample RGB bounds, and the
+5% stationary / 25% motion current-frame blend. It reads the standard 4x
+sample pattern in raster top-left coordinates, reprojects through the
+un-jittered current/previous camera on the world plane, and samples previous
+history only when every nonzero-weight texel is inside the valid resolved
+rectangle. Invalid or offscreen history falls back to the current
+reconstruction; the article's boundary snippet is not used to retain a clamped
+out-of-frame sample.
+
+`engine.app:renderer.reconstruction_pass` owns the padded 4x scene target
+(`ceil(ceil(W/P)/2)`) and the single-sample resolved history pair (`2*S` per
+axis, only `R` valid). The scene stage provides an un-jittered camera whose
+framing describes `W`; the pass supplies the padded/jittered camera, reconstructs
+over the backing extent and exposes the resolved image to post-processing in the
+same stage-B command buffer. History is scene-linear and unexposed. Camera cuts,
+world replacement and any W/P/R/S/B change reset it; ordinary pan/zoom
+reprojects; exposure, bloom and sky-hour live outside the pass and preserve it.
+
+The earlier `assets/shaders/spatial_msaa4.slang` remains only as the sample
+pattern qualification asset. There is no AA selector, reactive mask, velocity
+texture or per-particle motion vector.
+
 ## Admission and remaining integration
 
 The test first recovers indexed positions using real threshold rectangles and

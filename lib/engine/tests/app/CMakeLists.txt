@@ -45,6 +45,7 @@ target_sources(engine.tests.app
         App.Display.Tests.cpp
         App.GridPass.Tests.cpp
         App.PostProcess.Tests.cpp
+        App.Reconstruction.Tests.cpp
         App.Frame.Tests.cpp
         App.FrameFence.Tests.cpp
         App.RenderLane.Tests.cpp
@@ -429,6 +430,32 @@ ppr_add_test_entry(TARGET engine.tests.app
     RESOURCE_LOCK gpu
     TIMEOUT 300
     LABELS unit engine app
+)
+
+# Always-on temporal Hable reconstruction: padded extents, lattice oracle,
+# history/motion policy and the real scene target/history pair. Both entries
+# claim the gpu lock; the validation twin re-runs the identical group under the
+# RHI debug layers.
+ppr_add_test_entry(TARGET engine.tests.app
+    NAME reconstruction
+    FILTER "app/reconstruction/"
+    LOOPS
+    RESOURCE_LOCK gpu
+    TIMEOUT 300
+    LABELS unit engine app
+)
+
+ppr_add_test_entry(TARGET engine.tests.app
+    NAME reconstruction_gpu_validation
+    FILTER "app/reconstruction/"
+    LOOPS
+    RESOURCE_LOCK gpu
+    TIMEOUT 480
+    LABELS unit engine app gpu_validation
+)
+
+set_tests_properties(engine.tests.app.reconstruction_gpu_validation PROPERTIES
+    ENVIRONMENT "PPR_TEST_GPU_VALIDATION=1"
 )
 
 # Backend qualification for the world-lighting storage, winner, sample-rate

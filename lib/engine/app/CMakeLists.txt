@@ -42,6 +42,7 @@ target_sources(engine.app
         renderer/App.Renderer.GridPass.cppm
         renderer/App.Renderer.PostProcessPass.cppm
         renderer/App.Renderer.Presentation.cppm
+        renderer/App.Renderer.ReconstructionPass.cppm
         renderer/App.Renderer.TrianglePass.cppm
         renderer/App.Renderer.Types.cppm
         renderer/App.Renderer.WorldLighting.cppm
@@ -101,6 +102,7 @@ target_sources(engine.app
         renderer/App.Renderer.GridPass.Particles.cpp
         renderer/App.Renderer.PostProcessPass.cpp
         renderer/App.Renderer.Presentation.cpp
+        renderer/App.Renderer.ReconstructionPass.cpp
         renderer/App.Renderer.TrianglePass.cpp
         renderer/App.Renderer.WorldLighting.cpp
         renderer/App.Renderer.WorldLightingPass.cpp

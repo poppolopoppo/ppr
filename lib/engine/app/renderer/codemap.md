@@ -21,11 +21,17 @@ commit the exposure role and the active-time baseline, while rejected attempts
 commit neither. Target format selects one sRGB encoding (hardware sRGB or shader
 UNorm), while float targets remain display-linear for readback.
 
-The earlier Hable spatial prerequisite remains qualified in `spatial_msaa4.slang`
-and the asset sampling/filter fixtures. Its continuous diamond reconstruction
-preserves signed linear HDR and exact 2x extents. The runtime temporal/spatial
-routes were removed with `RetroPass`; Task 12 owns the replacement Hable
-reconstruction, its history pair and the sampled scene entries.
+The earlier Hable spatial prerequisite remains qualified in `spatial_msaa4.slang`.
+`engine.app:renderer.reconstruction_pass` now owns the always-on temporal Hable reconstruction:
+`ReconstructionPass` allocates the Sx by Sy RGBA16F 4-sample scene target and the
+Bx by By single-sample history pair, supplies the padded/jittered `CameraSnapshot`, reconstructs
+the quarter-pixel lattice over B, and exposes only the R valid rectangle to post-processing.
+`beginFrame` proposes resources and phase without committing; `notifySceneSubmitted` pins stage-A
+scene writes; `notifySubmitted` commits camera/grid/cut/history role/phase. Camera cuts, world
+replacement and W/P/R/S/B changes reset screen history; pan/zoom reprojects; exposure, bloom and
+sky edits preserve it. There is no reactive image, velocity field or alternate AA mode. The
+`assets/shaders/hable_temporal.slang` kernel is the temporal article's algorithm, not the spatial
+snippet.
 
 Camera-free RHI-facing submission shapes (`RenderPipelineSignature/Key`, `DrawContext/Callback/Submission`,
 `ColorAttachmentOps`, `ESurfaceDepthPolicy`, `SurfaceRenderPass`) live header-only in
@@ -560,7 +566,7 @@ validation requirements; user visual acceptance is separate.
   `engine.shader` (per-pass program loads), `engine.image` + `engine.mesh` (cache upload types only),
   `:service.window` + `:window.handle` (Window resolves surfaces),
   `:scene.camera` (TrianglePass `CameraSnapshot` only — never a mutable `Camera`)
-- **Provides**: `engine.app:renderer`, `engine.app:renderer.frame_fence`, `engine.app:renderer.gpu_caches`, `engine.app:renderer.triangle_pass`, `engine.app:renderer.grid_pass`, `engine.app:renderer.presentation`, `engine.app:renderer.post_process_pass`, `engine.app:renderer.types`, `engine.app:renderer.world_lighting`, `engine.app:renderer.world_lighting_pass`
+- **Provides**: `engine.app:renderer`, `engine.app:renderer.frame_fence`, `engine.app:renderer.gpu_caches`, `engine.app:renderer.triangle_pass`, `engine.app:renderer.grid_pass`, `engine.app:renderer.presentation`, `engine.app:renderer.post_process_pass`, `engine.app:renderer.reconstruction_pass`, `engine.app:renderer.types`, `engine.app:renderer.world_lighting`, `engine.app:renderer.world_lighting_pass`
   (camera-free boundary: passes consume `DrawContext`/snapshot data while drawing)
 
 ## Key Files
@@ -574,6 +580,7 @@ validation requirements; user visual acceptance is separate.
 - `App.Renderer.GridPass.cpp` — GridPass implementations (validation/planTiles, shader program, single pipeline, upload lane, ring upload, single-draw encode)
 - `App.Renderer.Presentation.cppm/.cpp` — presentation grid math, `ResolvedHdrView`, post settings and validation
 - `App.Renderer.PostProcessPass.cppm/.cpp` — independent post owner: output cohorts, metering/adaptation, ceil bloom, once-only AgX, fixed-P presentation and settlement
+- `App.Renderer.ReconstructionPass.cppm/.cpp` — always-on Hable temporal owner: padded 4x scene target, resolved history pair, padded/jittered camera, lattice reconstruction, accepted-history settlement and fenced allocation retirement
 - `App.Renderer.GpuCaches.cppm` — pass-owned cache vocabulary (handles, `TriangleBagRange`, `ResolvedBag`, `GpuMaterial`, caches)
 - `App.Renderer.GpuCaches.cpp` — cache implementations (uploads, dedup, pack, teardown)
 - `App.Renderer.Types.cppm` — boundary types (`RenderPipelineSignature/Key`, `DrawContext/Callback/Submission`, `ColorAttachmentOps`, depth policy, `SurfaceRenderPass`); header-only, no matching `.cpp`

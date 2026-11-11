@@ -29,6 +29,8 @@ namespace pP::tests {
 
     const UnitTest &post_processTests() noexcept;
 
+    const UnitTest &reconstructionTests() noexcept;
+
     const UnitTest &pixel_readbackTests() noexcept;
 
     const UnitTest &surface_pixels_round_trip_through_pngTests() noexcept;
@@ -134,6 +136,7 @@ namespace pP::tests {
             render_viewTests(),
             grid_passTests(),
             post_processTests(),
+            reconstructionTests(),
             pixel_readbackTests(),
             surface_pixels_round_trip_through_pngTests(),
             renderer_triangle_reinit_okTests(),

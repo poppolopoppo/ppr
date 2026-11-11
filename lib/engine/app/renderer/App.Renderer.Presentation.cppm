@@ -18,6 +18,18 @@ export namespace pP {
     struct PresentationGrid {
         int2 m_window{}, m_resolved{}, m_raster{}, m_backing{};
         u32 m_pixel_scale{1u};
+
+        [[nodiscard]] bool operator==(const PresentationGrid &other) const noexcept {
+            return m_window.x == other.m_window.x and
+                   m_window.y == other.m_window.y and
+                   m_resolved.x == other.m_resolved.x and
+                   m_resolved.y == other.m_resolved.y and
+                   m_raster.x == other.m_raster.x and
+                   m_raster.y == other.m_raster.y and
+                   m_backing.x == other.m_backing.x and
+                   m_backing.y == other.m_backing.y and
+                   m_pixel_scale == other.m_pixel_scale;
+        }
     };
 
     /// Checked W/P/R/S/B arithmetic for a positive framebuffer. The caller
