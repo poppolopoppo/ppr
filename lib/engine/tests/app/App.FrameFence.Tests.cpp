@@ -1103,6 +1103,258 @@ namespace pP::tests::detail {
             return dist;
         }
 
+        // ------------------------------------------------------------------
+        // command tail (post-render) encoding
+        // ------------------------------------------------------------------
+
+        // A 64x64 RGBA8 target whose 256-byte rows need no copy padding, and a
+        // matching device-local destination the tail copy fills.
+        constexpr u32 kCommandTailExtent = 64u;
+        constexpr u32 kCommandTailTexelBytes = 4u;
+        constexpr u32 kCommandTailRowPitch = kCommandTailExtent * kCommandTailTexelBytes;
+        constexpr u64 kCommandTailBytes = static_cast<u64>(kCommandTailRowPitch) * kCommandTailExtent;
+        constexpr u8 kCommandTailPoison = 0xA5u;
+
+        [[nodiscard]] rhi::ComPtr<rhi::ITexture> makeCommandTailTarget(rhi::IDevice &device) {
+            rhi::TextureDesc target_desc{};
+            target_desc.type = rhi::TextureType::Texture2D;
+            target_desc.size = {kCommandTailExtent, kCommandTailExtent, 1u};
+            target_desc.arrayLength = 1u;
+            target_desc.mipCount = 1u;
+            target_desc.format = rhi::Format::RGBA8Unorm;
+            target_desc.sampleCount = 1u;
+            target_desc.memoryType = rhi::MemoryType::DeviceLocal;
+            target_desc.usage = static_cast<rhi::TextureUsage>(
+                static_cast<u32>(rhi::TextureUsage::RenderTarget) | static_cast<u32>(rhi::TextureUsage::CopySource));
+            target_desc.defaultState = rhi::ResourceState::RenderTarget;
+            target_desc.label = "frame-fence command-tail target";
+
+            rhi::ComPtr<rhi::ITexture> target{};
+            if (make_error_code(device.createTexture(target_desc, nullptr, target.writeRef()))) {
+                return {};
+            }
+            return target;
+        }
+
+        [[nodiscard]] rhi::ComPtr<rhi::IBuffer> makeCommandTailBuffer(rhi::IDevice &device) {
+            Array<u8> poison{};
+            poison.resize(static_cast<std::size_t>(kCommandTailBytes), kCommandTailPoison);
+
+            rhi::BufferDesc buffer_desc{};
+            buffer_desc.size = kCommandTailBytes;
+            buffer_desc.elementSize = kCommandTailTexelBytes;
+            buffer_desc.memoryType = rhi::MemoryType::DeviceLocal;
+            buffer_desc.usage = static_cast<rhi::BufferUsage>(
+                static_cast<u32>(rhi::BufferUsage::ShaderResource) |
+                static_cast<u32>(rhi::BufferUsage::UnorderedAccess) |
+                static_cast<u32>(rhi::BufferUsage::CopySource) |
+                static_cast<u32>(rhi::BufferUsage::CopyDestination));
+            buffer_desc.defaultState = rhi::ResourceState::UnorderedAccess;
+            buffer_desc.label = "frame-fence command-tail copy";
+
+            rhi::ComPtr<rhi::IBuffer> buffer{};
+            if (make_error_code(device.createBuffer(buffer_desc, poison.data(), buffer.writeRef()))) {
+                return {};
+            }
+            return buffer;
+        }
+
+        // Reads the tail destination as portable bytes; row pitch is the same
+        // 256-byte pitch the tail copy encoded, so no padding is reinterpreted.
+        [[nodiscard]] Expected<GatePixels> commandTailBufferReadback(rhi::IDevice &device, rhi::IBuffer &buffer) {
+            GatePixels pixels{};
+            pixels.m_row_pitch = kCommandTailRowPitch;
+            pixels.m_bytes.resize(static_cast<std::size_t>(kCommandTailBytes));
+            if (const std::error_code err = make_error_code(
+                    device.readBuffer(&buffer, 0u, pixels.m_bytes.size(), pixels.m_bytes.data()))) {
+                return std::unexpected{err};
+            }
+            return pixels;
+        }
+
+        [[nodiscard]] std::error_code encodeCommandTailCopy(
+            const PreRenderContext &context, rhi::IBuffer &destination, rhi::ITexture &source) {
+            context.m_encoder.copyTextureToBuffer(
+                &destination, 0u, kCommandTailBytes, kCommandTailRowPitch, &source, 0u, 0u, {0, 0, 0},
+                {kCommandTailExtent, kCommandTailExtent, 1u});
+            return {};
+        }
+
+        PPR_UNIT_TEST (command_tail_failure_is_definitely_unsubmitted) {
+            // Shared device (group acquire); Renderer + target + destination
+            // stay leaf-local and tear down inverse-order before the group
+            // release. A failing command tail abandons the encoder, so the
+            // whole submission — pass clear and tail copy alike — is
+            // definitely unsubmitted: settlement kRejected, no accepted fence
+            // value, no held credit, and the previous attachment content
+            // survives.
+            SharedFrameFenceGpu::resetBetweenLeaves();
+
+            const auto rhi = SharedFrameFenceGpu::rhi();
+            PPR_TEST_ASSERT(rhi.isValid());
+            rhi::IDevice &device = rhi->getDevice();
+
+            rhi::ComPtr<rhi::ITexture> target{};
+            rhi::ComPtr<rhi::IBuffer> destination{};
+            Renderer renderer{};
+            PPR_TEST_ASSERT(not renderer.initialize(*rhi));
+            PPR_DEFER {
+                destination.setNull();
+                target.setNull();
+                PPR_TEST_ASSERT(not renderer.shutdown());
+            };
+
+            target = makeCommandTailTarget(device);
+            destination = makeCommandTailBuffer(device);
+            PPR_TEST_ASSERT(target);
+            PPR_TEST_ASSERT(destination);
+
+            // Accepted preparation frame establishes known attachment content.
+            const ColorAttachmentOps green{.m_clear_color = float4{0.08f, 0.65f, 0.08f, 1.0f}};
+            PPR_TEST_ASSERT(not renderer.renderToTexture(*target, {}, green));
+            PPR_TEST_ASSERT(renderer.lastSubmitSettlement() == FrameSettlement::kSubmitted);
+            PPR_TEST_ASSERT(not renderer.waitForFenceValue(renderer.lastSubmittedFenceValue()));
+            PPR_TEST_ASSERT(not renderer.retireCompletedFrames());
+            const Expected<GatePixels> prepared = gateReadback_(device, *target);
+            PPR_TEST_ASSERT(prepared.has_value());
+            const std::array<u32, 4u> prepared_mean = gateMean_(*prepared, kCommandTailExtent);
+
+            const FenceCompletionValue before = renderer.lastSubmittedFenceValue();
+            const FenceCompletionValue frontier = renderer.retirementFrontier();
+
+            const auto failing_tail = [](const PreRenderContext &) -> std::error_code {
+                return std::make_error_code(std::errc::io_error);
+            };
+            const ColorAttachmentOps red{.m_clear_color = float4{0.65f, 0.08f, 0.08f, 1.0f}};
+            PPR_TEST_ASSERT(
+                renderer.renderToTexture(*target, {}, red, {}, PostRenderCallback{failing_tail}) ==
+                std::make_error_code(std::errc::io_error));
+
+            // Definite rejection: no submitted value, no frontier movement,
+            // no retained credit, admission still open.
+            PPR_TEST_ASSERT(renderer.lastSubmitSettlement() == FrameSettlement::kRejected);
+            PPR_TEST_ASSERT(renderer.lastSubmittedFenceValue() == before);
+            PPR_TEST_ASSERT(renderer.retirementFrontier() == frontier);
+            PPR_TEST_ASSERT(renderer.outstandingFrameCount() == 0u);
+            PPR_TEST_ASSERT(not renderer.checkFrameAdmission());
+
+            // Neither write of the abandoned submission executed: the
+            // attachment still holds the preparation clear and the tail
+            // destination still holds every poison byte.
+            const Expected<GatePixels> rejected = gateReadback_(device, *target);
+            PPR_TEST_ASSERT(rejected.has_value());
+            PPR_TEST_ASSERT(gateDist_(gateMean_(*rejected, kCommandTailExtent), prepared_mean) == 0u);
+
+            const Expected<GatePixels> untouched = commandTailBufferReadback(device, *destination);
+            PPR_TEST_ASSERT(untouched.has_value());
+            PPR_TEST_ASSERT(std::ranges::all_of(untouched->m_bytes, [](const std::byte byte) {
+                return byte == std::byte{kCommandTailPoison};
+            }));
+        };
+
+        PPR_UNIT_TEST (command_tail_copy_follows_attachment_writes) {
+            // Shared device (group acquire); Renderer + target + destination
+            // stay leaf-local and tear down inverse-order before the group
+            // release. An accepted command tail observes the pass's attachment
+            // writes in the same submission: the copy returns the new clear,
+            // not the previous attachment content. The tests-only sweep hold
+            // keeps the accepted submission outstanding so its credit,
+            // frontier and tail resources are observably retained until the
+            // real fence completes.
+            SharedFrameFenceGpu::resetBetweenLeaves();
+
+            const auto rhi = SharedFrameFenceGpu::rhi();
+            PPR_TEST_ASSERT(rhi.isValid());
+            rhi::IDevice &device = rhi->getDevice();
+
+            rhi::ComPtr<rhi::ITexture> target{};
+            rhi::ComPtr<rhi::IBuffer> destination{};
+            Renderer renderer{};
+            PPR_TEST_ASSERT(not renderer.initialize(*rhi));
+            bool renderer_torn_down = false;
+            PPR_DEFER {
+                // Best-effort drain on every path: release the hold, wait the
+                // outstanding submit to proven completion, retire, release the
+                // device children, then shut down.
+                renderer.setTestHoldSweep(false);
+                if (not renderer_torn_down) {
+                    std::ignore = renderer.waitForFenceValue(renderer.lastSubmittedFenceValue());
+                    std::ignore = renderer.retireCompletedFrames();
+                    destination.setNull();
+                    target.setNull();
+                    std::ignore = renderer.shutdown();
+                } else {
+                    destination.setNull();
+                    target.setNull();
+                }
+            };
+
+            target = makeCommandTailTarget(device);
+            destination = makeCommandTailBuffer(device);
+            PPR_TEST_ASSERT(target);
+            PPR_TEST_ASSERT(destination);
+
+            // Previous attachment content: green.
+            const ColorAttachmentOps green{.m_clear_color = float4{0.08f, 0.65f, 0.08f, 1.0f}};
+            PPR_TEST_ASSERT(not renderer.renderToTexture(*target, {}, green));
+            PPR_TEST_ASSERT(not renderer.waitForFenceValue(renderer.lastSubmittedFenceValue()));
+            PPR_TEST_ASSERT(not renderer.retireCompletedFrames());
+
+            // Accepted frame: red clear plus the submission-local tail copy.
+            renderer.setTestHoldSweep(true);
+            const FenceCompletionValue before = renderer.lastSubmittedFenceValue();
+            const FenceCompletionValue frontier = renderer.retirementFrontier();
+            const auto tail_copy = [&](const PreRenderContext &context) -> std::error_code {
+                return encodeCommandTailCopy(context, *destination, *target);
+            };
+            const ColorAttachmentOps red{.m_clear_color = float4{0.65f, 0.08f, 0.08f, 1.0f}};
+            PPR_TEST_ASSERT(not renderer.renderToTexture(*target, {}, red, {}, PostRenderCallback{tail_copy}));
+            const FenceCompletionValue accepted = renderer.lastSubmittedFenceValue();
+
+            // Accepted exactly once, and retained: the credit and frontier
+            // wait for real completion, so the copied-into destination cannot
+            // be recycled under pending GPU work.
+            PPR_TEST_ASSERT(renderer.lastSubmitSettlement() == FrameSettlement::kSubmitted);
+            PPR_TEST_ASSERT(accepted == before + 1u);
+            PPR_TEST_ASSERT(renderer.completedFenceValue() < accepted);
+            PPR_TEST_ASSERT(renderer.outstandingFrameCount() == 1u);
+            PPR_TEST_ASSERT(renderer.retirementFrontier() == frontier);
+
+            renderer.setTestHoldSweep(false);
+            PPR_TEST_ASSERT(not renderer.waitForFenceValue(accepted));
+            PPR_TEST_ASSERT(not renderer.retireCompletedFrames());
+            PPR_TEST_ASSERT(renderer.outstandingFrameCount() == 0u);
+            PPR_TEST_ASSERT(renderer.retirementFrontier() >= accepted);
+
+            // The tail copy matches the rendered attachment data — the red
+            // clear, never the preparation frame's green — and matches the
+            // attachment's own readback byte for byte.
+            const Expected<GatePixels> rendered = gateReadback_(device, *target);
+            const Expected<GatePixels> copied = commandTailBufferReadback(device, *destination);
+            PPR_TEST_ASSERT(rendered.has_value());
+            PPR_TEST_ASSERT(copied.has_value());
+            const std::array<u32, 4u> want{166u, 20u, 20u, 255u};
+            PPR_TEST_ASSERT(gateDist_(gateMean_(*rendered, kCommandTailExtent), want) <= 64u);
+            PPR_TEST_ASSERT(gateDist_(gateMean_(*copied, kCommandTailExtent), want) <= 64u);
+
+            u32 mismatches = 0u;
+            for (u32 row = 0u; row < kCommandTailExtent; ++row) {
+                const std::size_t copied_row = static_cast<std::size_t>(row) * kCommandTailRowPitch;
+                const std::size_t rendered_row = static_cast<std::size_t>(row) * copied->m_row_pitch;
+                for (u32 column = 0u; column < kCommandTailRowPitch; ++column) {
+                    if (copied->m_bytes[copied_row + column] != rendered->m_bytes[rendered_row + column]) {
+                        ++mismatches;
+                    }
+                }
+            }
+            PPR_TEST_ASSERT(mismatches == 0u);
+
+            destination.setNull();
+            target.setNull();
+            PPR_TEST_ASSERT(not renderer.shutdown());
+            renderer_torn_down = true;
+        };
+
         // Closes a queue gate on the Renderer's production queue: subsequent
         // production submits are ACCEPTED (fence values assigned) but cannot
         // execute until the host signals the gate fence to 1.
@@ -1674,6 +1926,8 @@ namespace pP::tests {
             detail::FrameFence::two_frames_pending_behind_queue_gate_with_execution_proof,
             detail::FrameFence::saturated_frame_skips_without_building_and_preserves_dt,
             detail::FrameFence::encode_failure_settles_credit_without_submit,
+            detail::FrameFence::command_tail_failure_is_definitely_unsubmitted,
+            detail::FrameFence::command_tail_copy_follows_attachment_writes,
             detail::FrameFence::throwing_draw_callback_unwinds_exactly_once,
             detail::FrameFence::grid_ring_growth_is_fenced_and_roots_encode,
             detail::FrameFence::triangle_payload_growth_and_variant_roots_encode,

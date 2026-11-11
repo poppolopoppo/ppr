@@ -45,6 +45,14 @@ hook. Preparation failure abandons the frame before submission; the surface
 path still settles its acquired image. Content passes own compute work and
 resource transitions issued through this camera-free seam.
 
+`PostRenderCallback` is the matching command-tail seam on `render` and
+`renderToTexture`: it borrows the same encoder AFTER the render-pass encoder has
+ended and BEFORE command-buffer finish/submit, which is where submission-local
+numeric status copies observe the draws. A tail failure abandons the encoder, so
+the frame is definitely unsubmitted and its credit returns immediately. Surface
+passes still carry only `m_prepare`; presentation-stage tail wiring belongs to
+the integration work, not this seam.
+
 Grid staged frames carry owned catalog visuals and an explicit cell metric.
 Supported scales are one metre for legacy fixtures and one third metre for
 prepared worlds. CPU reference culling, GPU visibility, and vertex positions
@@ -331,7 +339,7 @@ validation requirements; user visual acceptance is separate.
   `waitOnHost`, sweep + drain + credit reset + fence shutdown, unconfigure every configured surface, clear map/queue/service refs and the owner.
   `waitOnHost()` forwards when a queue exists, else success. RHI-service validity is always checked as
   `m_rhi_service.isValid()`.
-- `render(description, render_pass, draws)`: rejects uninitialized queue/service (`not_connected`) and empty/null
+- `render(description, render_pass, draws, prepare, finalize)`: rejects uninitialized queue/service (`not_connected`) and empty/null
   attachment descriptors (`invalid_argument`); `inspectAttachment_` resolves each color/depth view to
   format + mip-aware extent + sample count (null/missing/out-of-range/Undefined/0-sample → `invalid_argument`);
   `validateMatchingAttachment_` requires identical extent + sample count across all attachments; resolve targets
@@ -339,8 +347,10 @@ validation requirements; user visual acceptance is separate.
   command encoder, `beginRenderPass` (null → `io_error`), pushes a purple debug group, derives default
   viewport/scissor from the reference extent, then per `DrawSubmission` inserts a pink debug marker, applies
   `m_viewport/m_scissor` or defaults via `RenderState`, and invokes `m_encode_draws(DrawContext{device, pass,
-  pipeline_key, viewport, scissor, target_extent})`; finishes and submits one command buffer.
-- `renderToTexture(target, draws, options)`: builds a single color attachment from `target.getDefaultView()` with
+  pipeline_key, viewport, scissor, target_extent})`; runs the optional command-tail `finalize(PreRenderContext)` on
+  the same encoder after the pass ends; finishes and submits one command buffer. Either callback failure returns
+  before finish, so the frame is definitely unsubmitted.
+- `renderToTexture(target, draws, options, prepare, finalize)`: builds a single color attachment from `target.getDefaultView()` with
   `applyColorAttachmentOps_` (load/store/clear color) and forwards to `render()` with the texture label.
   Offscreen callers must `waitOnHost()` before readback. The submit is fenced like every other path
   (value observable via `lastSubmittedFenceValue`); readback callers use `waitForFenceValue` or the legacy
@@ -403,7 +413,8 @@ validation requirements; user visual acceptance is separate.
   `RenderPipelineKey`; `DrawContext{IDevice&, IRenderPassEncoder&, pipeline_key, viewport, scissor,
   target_extent}`;
   `DrawCallback = function_ref<error_code(DrawContext)>`; `TDrawable` concept (`render(DrawContext) →
-  error_code`); `DrawSubmission{description, encode_draws, optional viewport/scissor}` with direct and drawable
+  error_code`); `PostRenderCallback = function_ref<error_code(const PreRenderContext&)>` (command tail,
+  non-owning); `DrawSubmission{description, encode_draws, optional viewport/scissor}` with direct and drawable
   (`typeid` label + `nontype<&T::render>`) constructors — retains nothing after `render()` returns;
   `ColorAttachmentOps{clear_color (0.1,0.1,0.2,1), Clear/Store}`;
   `ESurfaceDepthPolicy{none, renderer_owned, external}`;

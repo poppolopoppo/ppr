@@ -836,7 +836,8 @@ namespace pP {
 
     std::error_code Renderer::render(
         string_literal description, const rhi::RenderPassDesc &render_pass,
-        const std::initializer_list<DrawSubmission> draws, const std::optional<PreRenderCallback> prepare) {
+        const std::initializer_list<DrawSubmission> draws, const std::optional<PreRenderCallback> prepare,
+        const std::optional<PostRenderCallback> finalize) {
         const hal::ProfileScope scope{"App.Renderer.Render"};
         // Off-thread (affinity) rejection: definitely unsubmitted, no credit
         // taken — and owner-confined state untouched. The settlement member
@@ -847,12 +848,12 @@ namespace pP {
             return std::make_error_code(std::errc::operation_not_permitted);
         }
 
-        return renderDraws_(description, render_pass, std::span{draws.begin(), draws.size()}, prepare);
+        return renderDraws_(description, render_pass, std::span{draws.begin(), draws.size()}, prepare, finalize);
     }
 
     std::error_code Renderer::renderDraws_(
         string_literal description, const rhi::RenderPassDesc &render_pass, const std::span<const DrawSubmission> draws,
-        const std::optional<PreRenderCallback> prepare) {
+        const std::optional<PreRenderCallback> prepare, const std::optional<PostRenderCallback> finalize) {
         const hal::ProfileScope scope_profile{"App.Renderer.Draws"};
         // Pre-guard rejections (F1 stale fate): definitely unsubmitted, no
         // credit taken — stamp kRejected so this call never inherits the
@@ -904,6 +905,20 @@ namespace pP {
             return encode_err;
         }
 
+        // Command tail: same encoder, after the pass encoder has ended and
+        // before finish/submit. A failure abandons the encoder, so nothing is
+        // submitted and the scope guard above settles a definite rejection.
+        // The callback borrows the encoder and cannot outlive this call.
+        if (finalize) {
+            PPR_RETURN_ERROR_ON_FAIL(
+                Renderer, (*finalize)(PreRenderContext{
+                              .m_device = m_rhi_service->getDevice(),
+                              .m_encoder = *encoder,
+                              .m_completed_fence_value = completed,
+                              .m_wait_for_fence = wait_for_fence,
+                          }));
+        }
+
         if (timing_slot) {
             encoder->writeTimestamp(m_gpu_queries, *timing_slot * 2u + 1u);
         }
@@ -927,7 +942,8 @@ namespace pP {
 
     std::error_code Renderer::renderToTexture(
         rhi::ITexture &render_target, const std::initializer_list<DrawSubmission> draws,
-        const ColorAttachmentOps &options, const std::optional<PreRenderCallback> prepare) {
+        const ColorAttachmentOps &options, const std::optional<PreRenderCallback> prepare,
+        const std::optional<PostRenderCallback> finalize) {
         if (m_rhi_service.isValid() and not onRenderThread_()) [[unlikely]] {
             return std::make_error_code(std::errc::operation_not_permitted);
         }
@@ -946,7 +962,7 @@ namespace pP {
                 .colorAttachments = &color_attachment,
                 .colorAttachmentCount = 1u,
             },
-            draws, prepare);
+            draws, prepare, finalize);
     }
 
     // ------------------------------------------------------------------

@@ -191,6 +191,12 @@ export namespace pP {
 
     using PreRenderCallback = std23::function_ref<std::error_code(const PreRenderContext &)>;
 
+    // Command tail: encoded on the same encoder AFTER the render-pass encoder
+    // has ended and before finish/submit. Numeric status copies belong here
+    // because a pre-render callback cannot observe values the draws have not
+    // written yet. Borrowed only; it cannot escape the synchronous call.
+    using PostRenderCallback = std23::function_ref<std::error_code(const PreRenderContext &)>;
+
     struct DrawContext final {
         rhi::IDevice &m_device;
         rhi::IRenderPassEncoder &m_pass;

@@ -128,13 +128,19 @@ export namespace pP {
         // exit. Never used on the steady-state path.
         void quarantineAdmission() noexcept;
 
+        // One command submission: `prepare` runs on the encoder before the
+        // render pass begins; `finalize` runs on it after the pass encoder has
+        // ended and before finish/submit, so submission-local status copies see
+        // the draws' results. Either failure abandons the frame unsubmitted.
         [[nodiscard]] std::error_code render(
             string_literal description, const rhi::RenderPassDesc &render_pass,
-            std::initializer_list<DrawSubmission> draws, std::optional<PreRenderCallback> prepare = {});
+            std::initializer_list<DrawSubmission> draws, std::optional<PreRenderCallback> prepare = {},
+            std::optional<PostRenderCallback> finalize = std::nullopt);
 
         [[nodiscard]] std::error_code renderToTexture(
             rhi::ITexture &render_target, std::initializer_list<DrawSubmission> draws,
-            const ColorAttachmentOps &options = {}, std::optional<PreRenderCallback> prepare = {});
+            const ColorAttachmentOps &options = {}, std::optional<PreRenderCallback> prepare = {},
+            std::optional<PostRenderCallback> finalize = std::nullopt);
 
         [[nodiscard]] std::error_code renderAndPresent(
             const Window &window, std::initializer_list<SurfaceRenderPass> passes);
@@ -361,7 +367,8 @@ export namespace pP {
 
         [[nodiscard]] std::error_code renderDraws_(
             string_literal description, const rhi::RenderPassDesc &render_pass,
-            const std::span<const DrawSubmission> draws, std::optional<PreRenderCallback> prepare);
+            const std::span<const DrawSubmission> draws, std::optional<PreRenderCallback> prepare,
+            std::optional<PostRenderCallback> finalize);
 
         // One SUBMIT through the app-owned fence: signals nextValue() after
         // execute on the graphics queue and commits only on success. A failed
