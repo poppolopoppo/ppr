@@ -1486,7 +1486,7 @@ namespace demo {
 
             const auto drawn = game::ui::drawWorldProgress(view);
             if (drawn.m_action != game::ui::EWorldAction::none) {
-                retainInputError_(m_session_service.post(game::SessionWorldAction{m_world_view.m_id, drawn.m_action}));
+                postSessionDelivery_(game::SessionWorldAction{m_world_view.m_id, drawn.m_action});
             }
 
             return drawn.m_popup_began;
@@ -1755,7 +1755,7 @@ namespace demo {
             const u32 width = m_build_preview.m_max.m_x - min.m_x + 1u;
             const u32 height = m_build_preview.m_max.m_y - min.m_y + 1u;
             try {
-                retainInputError_(m_session_service.post(
+                postSessionDelivery_(
                     game::SessionBuildOrder{
                         m_tool.m_world_generation,
                         colony::Footprint{
@@ -1763,7 +1763,7 @@ namespace demo {
                             .m_width = width,
                             .m_height = height,
                             .m_element = m_driver->boundaryMaterial()},
-                        is_wall ? colony::EColonyTool::build_wall : colony::EColonyTool::demolish}));
+                        is_wall ? colony::EColonyTool::build_wall : colony::EColonyTool::demolish});
             } catch (...) {
                 retainInputError_(currentException_());
             }
@@ -1778,7 +1778,7 @@ namespace demo {
                                                                                       : 0u;
             const auto placed = game::applySessionBuildOrder(*m_driver, order, displayed_world);
             if (not placed and placed.error() == std::errc::device_or_resource_busy) {
-                retainInputError_(m_session_service.deferTool(order));
+                deferSessionTool_(order);
                 return;
             }
 
@@ -2261,8 +2261,7 @@ namespace demo {
         /// error check before any further driver use).
         void dispatchIntent_(const colony::ColonyIntent intent) {
             if (m_driver) {
-                retainInputError_(
-                    m_session_service.post(game::SessionColonyIntent{m_driver->worldGeneration(), intent}));
+                postSessionDelivery_(game::SessionColonyIntent{m_driver->worldGeneration(), intent});
             }
         }
 
@@ -4635,7 +4634,7 @@ namespace demo {
 
             std::stable_partition(workshop_intents.begin(), workshop_intents.end(), mutatesWorkshopDraft_);
             for (auto &intent: workshop_intents) {
-                retainInputError_(m_session_service.post(std::move(intent)));
+                postSessionDelivery_(std::move(intent));
             }
 
             const game::ui::UnsavedEditsView transition_view{
@@ -4645,7 +4644,7 @@ namespace demo {
                 .m_saving = m_workshop_transition_saving};
             const auto action = game::ui::drawUnsavedEdits(transition_view);
             if (action != game::ui::EUnsavedAction::none) {
-                retainInputError_(m_session_service.post(action));
+                postSessionDelivery_(action);
             }
 
             if (const auto *const preview = m_workshop_displayed_preview.get(); preview and m_workshop_displayed) {
@@ -5029,8 +5028,30 @@ namespace demo {
             return {};
         }
 
+        // ------------------------------------------------------------------
+        // closed-session delivery admission
+        // ------------------------------------------------------------------
+
+        /// Late lane and world-completion acknowledgments can arrive after
+        /// stopControls() or close() during teardown. Closed-session
+        /// cancellation is expected and stays silent; every other admission
+        /// failure remains a visible input error.
+        void postSessionDelivery_(game::SessionDelivery delivery) {
+            const auto posted = m_session_service.post(std::move(delivery));
+            if (posted and posted != std::errc::operation_canceled) {
+                retainInputError_(posted);
+            }
+        }
+
+        void deferSessionTool_(game::SessionToolOrder order) {
+            const auto deferred = m_session_service.deferTool(std::move(order));
+            if (deferred and deferred != std::errc::operation_canceled) {
+                retainInputError_(deferred);
+            }
+        }
+
         void onGridWorldCompleted_(const GridWorldResult &result) override {
-            retainInputError_(m_session_service.post(result));
+            postSessionDelivery_(result);
         }
 
         void applyGridWorldResult_(const GridWorldResult &result) {
@@ -5726,7 +5747,7 @@ namespace demo {
 
             // Base credit settlement is immediate; game mutation waits for an
             // exclusive main service, including callbacks pumped by laneSync.
-            retainInputError_(m_session_service.post(result));
+            postSessionDelivery_(result);
         }
 
         // ------------------------------------------------------------------
@@ -5982,7 +6003,7 @@ namespace demo {
                 (cell->m_x + 0.5) * cell_metres, (cell->m_y + 0.5) * cell_metres, settings.m_radius_m,
                 settings.m_spawn_count, material_id,
                 spawn ? colony::EParticleToolKind::spawn : colony::EParticleToolKind::destroy};
-            retainInputError_(m_session_service.post(game::SessionParticleOrder{m_tool.m_world_generation, command}));
+            postSessionDelivery_(game::SessionParticleOrder{m_tool.m_world_generation, command});
         }
 
         [[nodiscard]] std::error_code refreshRadialForce_() {

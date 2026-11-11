@@ -314,7 +314,11 @@ namespace pP::game {
         const bool acknowledgment = std::holds_alternative<RenderFrameResult>(delivery) or
                                     std::holds_alternative<GridWorldResult>(delivery);
         if (not m_receiver_open or (not m_controls_open and not acknowledgment)) {
-            PPR_RETURN_ERROR_ON_FAIL(SessionDeliveryLog, std::errc::operation_canceled);
+            // Teardown closes admission before the lane and world-completion
+            // hooks deliver their final acknowledgments. Cancellation is the
+            // expected outcome there, so return it without an error-severity
+            // diagnostic; callers still distinguish it from success.
+            return std::make_error_code(std::errc::operation_canceled);
         }
 
         m_pending.push_back(std::move(delivery));
@@ -323,7 +327,9 @@ namespace pP::game {
 
     std::error_code SessionService::deferTool(SessionToolOrder order) {
         if (not m_controls_open or not m_receiver_open) {
-            PPR_RETURN_ERROR_ON_FAIL(SessionDeliveryLog, std::errc::operation_canceled);
+            // Same expected teardown cancellation as post(): once controls or
+            // the receiver close, a retried tool order has no session owner.
+            return std::make_error_code(std::errc::operation_canceled);
         }
 
         m_retries.push_back(std::move(order));
