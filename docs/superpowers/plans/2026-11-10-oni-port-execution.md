@@ -1043,8 +1043,9 @@ and operational acceptance. No Task 4 work has begun.
 
 ## Task 11 — sample-rate categorical PBR, shared BRDF LUT and lit gas complete
 
-- Commits: `e5e073e5` (initial categorical PBR/BRDF/gas), followed by the review
-  fix commit `fix: correct categorical view vector and retire legacy surface tests`.
+- Commits: `58a21d8a` `fix: correct categorical view vector and retire legacy
+  surface tests`, on top of `e5e073e5` `feat: shade categorical cells with
+  directional PBR and lit gas`.
 - Review: six Important findings addressed: engine-correct orthographic
   (`V=-forward`) and perspective (`V=normalize(origin-sample)`) view vectors with
   dedicated NoV/Fresnel probes; the categorical branch moved above the retired
