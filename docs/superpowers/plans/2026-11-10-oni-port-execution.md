@@ -33,7 +33,7 @@ Windows/D3D12 is unavailable on this host and remains an unmet gate unless run.
 | Task | State |
 | --- | --- |
 | 0 | complete (checkpoint `49a3a7d`, recovery verified, inventory recorded) |
-| 1 | pending |
+| 1 | complete (commits `14948a7`, `015b4df`, `7c5840b`, `502cf30`; reviews clean; known red legacy gates recorded below) |
 | 2 | pending |
 | 3 | pending — mandatory owner cleanup-acceptance stop |
 | 4–19 | pending; Task 4 and later must not begin before cleanup acceptance |
@@ -286,3 +286,121 @@ provenance/attribution intentionally.
   `out/build/clang-rel-profile` (ignored by Git).
 - `scripts/format_cpp.py` and `scripts/check_semantic_style.py` are the format and
   semantic-style gates for every C++ edit batch.
+
+## Task 1 — completion and GPU-suite correction
+
+### Commits and review
+
+- `14948a7` `refactor: disconnect superseded world-lighting integration`.
+- `015b4df` `fix: remove orphaned material helper and stale cleanup references`.
+- `7c5840b` `test: bound asset GPU correctness shards and retire obsolete performance sampling`.
+- `502cf30` `test: preserve live temporal coverage and correct GPU evidence`.
+- Task 1 review: 3 Important findings, all fixed; scoped re-review found all
+  addressed with no new Critical/Important breakage.
+- Timeout/acceleration review: 3 Important findings, all fixed in `502cf30`;
+  scoped re-review found all addressed with no new Critical/Important breakage.
+- YAGNI: no production abstraction, generic fixture framework or speculative
+  cache added. `gridMaterialDiffuseAlbedo` (orphaned) was removed. The only
+  retained extra is the test-only `setParticleTimingQueriesForTest` hook, now
+  deferred to Task 18; it has no current consumer after the benchmark retirement.
+
+### Timeout diagnosis
+
+- Failing entry: `engine.tests.asset.gpu`, executable
+  `out/build/clang-dev/lib/engine/tests/asset/engine.tests.asset`, preset
+  `clang-dev` (Debug + ASan), Linux/Vulkan/RTX 2080, `FILTER asset/render`,
+  `TIMEOUT 450`, GPU-locked.
+- Complete original log: `/tmp/opencode/asset-render.log`; CTest timeout at
+  450.17 s. Not a hang: leaves ran serially and accumulated cost. Last completed
+  leaf `asset/render/gates/tangent_w_render_proof`; last started
+  `grid_solid_particles_share_catalog_textures_and_metric_uvs` at about 400 s.
+- Root cause: one correctness entry mixed benchmark-only sampling loops and
+  obsolete Retro-policy leaves with live correctness coverage, and every
+  `GridPass`/`RetroPass` lifetime eagerly creates its full program/pipeline
+  family. ASan stack unwinding amplifies the allocation/submission cost.
+
+### Correction
+
+- Retired three benchmark-only leaves: `grid_material_shading_cost_samples`,
+  `picture_temporal_cost_samples`, `grid_liquid_full_resolution_temporal_cost`.
+  They had no unique correctness assertion; Task 18 owns replacement
+  performance evidence through the real-application profiler.
+- Trimmed the timing loop from `grid_liquid_optics_and_viewport_cost` and renamed
+  it `grid_liquid_optics_and_viewport_appearance`; appearance assertions remain.
+- Split routine correctness into six GPU-locked 450 s responsibility entries:
+  `gpu_caches`, `gpu_picture`, `gpu_grid_particles`, `gpu_grid_surface`,
+  `gpu_grid_liquid`, `gpu_misc`. Explicit leaf/group token lists are in
+  `lib/engine/tests/asset/CMakeLists.txt`; ASan suppression list updated;
+  validation entries unchanged.
+- Local work removal: collapsed three repeated `GridPass` lifetimes in the liquid
+  appearance leaf and two in the solid-particles leaf; shared one `RetroPass`
+  across four captures; shared one pass/picture in the slanted-interface leaf;
+  removed one fixture-only visibility reset that had no lifetime assertion;
+  removed duplicate HDR captures; added `drawOpticalGridOnly_` so discarded-frame
+  draws keep encode/submit/wait/retire but skip host readback.
+- Two live temporal-policy leaves (`temporal_camera_pan_...`,
+  `temporal_layered_background_pan_...`) were restored verbatim after review:
+  their production path still exists and Task 2 owns retirement. They run in
+  `gpu_picture`.
+- Union audit corrected to resolve `gateEditorLeaf()`: 63 leaves total,
+  62 routine-owned exactly once, resident-circle leaf owned only by the opt-in
+  `resident_particles_gpu` entry, zero duplicates.
+
+### Measured result (same preset/backend/environment, serialized)
+
+| Entry | Result | Wall time | Prior |
+| --- | --- | --- | --- |
+| `gpu_caches` | pass | 5–7 s | 6.9 s |
+| `gpu_picture` (8 leaves incl. restored temporal) | pass | 240 s | 194.4 s (6 leaves) |
+| `gpu_grid_particles` | pass | 272–293 s | 320.7 s |
+| `gpu_grid_surface` | exit 8 (known red leaf) | 153–167 s | 209.4 s |
+| `gpu_grid_liquid` | pass | 187–203 s | 280 s |
+| `gpu_misc` | pass | 107–118 s | 119–122 s |
+| six-shard sum | | 893–971 s | 1130 s (−14% to −21%) |
+| `solid_interface_gpu` | pass | 99 s | 295 s |
+| `solid_envelope_gpu` | pass | 180 s | 180 s |
+| `spatial_grid_gpu` | pass | 45 s | 45 s |
+
+The restored temporal leaves add 65.1 s inside `gpu_picture`; their coverage is
+required until Task 2 removes the production path. No all-entry total is quoted
+because the pre-change subset included four entries not re-run identically; those
+were re-measured as current behavior only: `spatial_retro_gpu` 54 s exit 8,
+`spatial_background_gpu` 99 s, `spatial_grading_gpu` 16 s,
+`resident_particles_gpu` 9 s.
+
+Per-leaf improvement examples: liquid appearance 128–129 → 49–50 s; solid
+catalog particles 88 → 43–55 s; slanted interface 293–295 → 95–99 s; visibility
+104.7 → 78–88 s. Repeat/reordered run reproduced statuses and leaf selection with
+an ~8% wall-time spread.
+
+### Known red gates and disposition
+
+- `grid_optical_controls_and_four_layer_parallax` fails at
+  `Asset.Render.Gates.Tests.cpp` (changed-pixel refraction assertion). It is
+  pre-existing, unchanged by this correction, and owned by Task 11's approved
+  categorical-surface replacement. `gpu_grid_surface` therefore exits 8.
+- `spatial_retro_matches_reference_and_preserves_lifecycle` still fails on the
+  commented odd-extent Retro checks; Task 2 owns the Retro retirement.
+- Task 1 acceptance must not claim a green asset GPU suite. These two red gates
+  remain visible for Task 2/Task 11 and final Task 19.
+
+### Bounded decision requested (not implemented)
+
+Each test process still pays about 22 s first-pass initialization and about 12 s
+per later `GridPass` lifetime; remaining initialization is roughly 40% of the
+shard cost. A production program-family lazy initialization or a shader-module
+cache would remove most of that, but it is a production API/caching change
+outside this cleanup's authority and YAGNI boundary. Owner authorization is
+required before such a change. App/post GPU fixture sharing was not started; it
+needs its own before/after measurement and is not established by the asset
+timings.
+
+### Evidence
+
+- `/tmp/opencode/asset-render.log` — original 450.17 s timeout.
+- `/tmp/opencode/asset-timeout-fix/` — per-shard logs, corrected union audit,
+  timing probes, repeat/reordered runs, post/correction result tables.
+- `.superpowers/sdd/2026-11-10-oni-port/task-1-report.md` — Task 1 implementation
+  and fix evidence.
+- `.superpowers/sdd/2026-11-10-oni-port/asset-timeout-report.md` — diagnosis,
+  correction, coverage disposition and measurements.
