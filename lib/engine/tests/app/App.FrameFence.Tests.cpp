@@ -321,10 +321,10 @@ namespace pP::tests::detail {
         //     non-rendering success.
         //   MANUAL_GATE1_PRESENT_FAILURE_STAMP (windowed present half;
         //     production site: lib/engine/app/App.Application.Editor.cpp
-        //     stampSubmittedPasses_ + renderPacket_ present section): an
-        //     injected present failure on a live surface after an accepted
-        //     SUBMIT: every participant (grid, triangle, fence-aware UI) is
-        //     still stamped off the accepted value.
+        //     settlePresentStage_ and the three-stage executeRenderWork_):
+        //     an injected present failure on a live surface after an
+        //     accepted SUBMIT: every participant (grid, triangle, fence-aware
+        //     UI) is still stamped off the accepted stage value.
         //   MANUAL_GATE1_POST_ACQUIRE_UNWIND (windowed surface half;
         //     production site: lib/engine/app/renderer/App.Renderer.cpp
         //     renderAndPresentImpl_ AcquiredImageGuard): a throwing draw
@@ -919,12 +919,13 @@ namespace pP::tests::detail {
 
         PPR_UNIT_TEST (submission_acceptance_drives_pass_stamping) {
             // Present-independent stamping through production pass APIs: the
-            // rule Editor::stampSubmittedPasses_ enforces is that every
-            // participant stamps off SUBMIT acceptance (lastSubmitted
-            // advancement), never off the present verdict. Both arms below
-            // run headless; the fence-aware UI arm follows the identical
-            // notifyFrameSubmitted rule (wired in stampSubmittedPasses_),
-            // and only the true present-failure half needs a live surface
+            // rule the Editor's settleSceneStage_/settlePresentStage_ enforce
+            // is that every participant stamps off SUBMIT acceptance
+            // (lastSubmitted advancement), never off the present verdict. Both
+            // arms below run headless; the fence-aware UI arm follows the
+            // identical notifyFrameSubmitted rule (wired in
+            // settlePresentStage_), and only the true present-failure half
+            // needs a live surface
             // (explicit windowed-manual item). Shared device (group acquire);
             // Renderer + passes + target stay leaf-local and tear down
             // inverse-order before the group release.
@@ -1539,9 +1540,10 @@ namespace pP::tests::detail {
             // The submission bound covers two logical frames of three ordered
             // stages: with two stage submissions GPU-pending the ledger still
             // has room for the next stage of the same logical frame, so the
-            // admission probe succeeds. The backend's command pool, not the
-            // credit ledger, is what a third parked submission would exhaust
-            // behind this closed gate, so nothing further is submitted here.
+            // admission probe succeeds. No further submission is made here:
+            // this leaf proves the two-pending execution facts, and a third
+            // parked command behind the closed gate would extend the test's
+            // scope without adding ledger evidence.
             PPR_TEST_ASSERT(renderer.outstandingFrameCount() == 2u);
             PPR_TEST_ASSERT(renderer.outstandingFrameCount() < FrameCreditLedger::capacity());
             PPR_TEST_ASSERT(not renderer.checkFrameAdmission());

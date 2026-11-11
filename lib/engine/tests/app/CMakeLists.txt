@@ -323,7 +323,7 @@ ppr_add_test_entry(TARGET engine.tests.app
     FILTER "app/run_gate/display_window_"
     LOOPS
     RESOURCE_LOCK gpu window
-    TIMEOUT 600
+    TIMEOUT 900
     LABELS unit engine app
 )
 
@@ -617,15 +617,20 @@ set_tests_properties(engine.tests.app.world_lighting_material_gpu_validation PRO
 
 # Three-stage settlement (A scene / B resolve / C present): value-only stage
 # results, the submission credit bound, real Renderer settlement, the retained
-# picture and the editor's inline A/B/C matrix with injected rejection and
-# ambiguity. The editor case presents through a real window, so both entries
-# claim the gpu and window locks.
+# picture, the forced lighting-status shutdown inspection and the editor's
+# inline A/B/C matrix with injected ambiguity at each stage, a stale-epoch
+# drop, the resize/world-replacement review focus and the seam guard. The
+# editor cases present through a real window, so both entries claim the gpu and
+# window locks. Measured 661 s routine / ~690 s validation on this host: the
+# real-window leaves are allocation-heavy and the entries carry the same
+# `fast_unwind_on_malloc=0` ASan property the asset editor entries use, so a
+# 900 s ceiling keeps an honest margin over the 600 s default.
 ppr_add_test_entry(TARGET engine.tests.app
     NAME world_lighting_settlement
     FILTER "app/world_lighting_settlement/"
     LOOPS
     RESOURCE_LOCK gpu window
-    TIMEOUT 600
+    TIMEOUT 900
     LABELS unit engine app
 )
 
@@ -634,7 +639,7 @@ ppr_add_test_entry(TARGET engine.tests.app
     FILTER "app/world_lighting_settlement/"
     LOOPS
     RESOURCE_LOCK gpu window
-    TIMEOUT 600
+    TIMEOUT 900
     LABELS unit engine app gpu_validation
 )
 

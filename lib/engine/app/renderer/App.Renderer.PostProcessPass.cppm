@@ -106,6 +106,24 @@ export namespace pP {
         void discardUnsubmitted() noexcept;
         [[nodiscard]] std::error_code collectCompleted(FenceCompletionValue completed);
 
+        // Tests-only observation of the committed exposure role. It moves only
+        // on an accepted stage B, so an accepted resolve followed by a rejected
+        // one must leave it unchanged.
+        struct ExposureRoleForTest {
+            GridWorldIdentity m_world{};
+            TimeSpan m_active_baseline{};
+            u32 m_slot{};
+            bool m_valid{};
+        };
+        [[nodiscard]] ExposureRoleForTest exposureRoleForTest() const noexcept {
+            return ExposureRoleForTest{
+                .m_world = m_exposure_world,
+                .m_active_baseline = m_active_baseline,
+                .m_slot = m_exposure_slot,
+                .m_valid = m_exposure_valid,
+            };
+        }
+
     private:
         // ------------------------------------------------------------------
         // per-output-slot cohort

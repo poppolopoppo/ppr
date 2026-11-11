@@ -24,9 +24,10 @@ export namespace pP {
     //
     // Two-credit logical-frame bound (P1, still one CPU lane): at most
     // kMaxOutstandingFrames logical frames are in flight, each issuing up to
-    // kFrameStageCount ordered stage submissions. The bound is enabled ONLY
-    // because every mutable resource below has an explicit last-use rule
-    // (see renderer/codemap.md R1-R25):
+    // kFrameStageCount ordered stage submissions. The safety argument is the
+    // APPLICATION reservation bound (two logical frames built) plus the
+    // per-logical-frame last-use rings below — not the backend command pool,
+    // which is not a lifetime proof:
     //   Grid/Triangle payload rings (3 slots) + indirect args advance once
     //     per logical frame and are keyed by per-slot completion values
     //     (shared cursor covered once); 3 slots > 2 logical frames;
@@ -36,6 +37,9 @@ export namespace pP {
     //   deferred release for pipelines/variants/UI growth (growth WAITS);
     //   atlas keeps the existing global-idle wait as first implementation
     //     (it serializes dirty frames; no overlap is claimed).
+    // A host that drives Renderer directly without the Application reservation
+    // bound is bounded only by the submission ledger below (6 outstanding
+    // stage submissions), not by the two-logical-frame policy.
 
     using FenceCompletionValue = u64;
 
@@ -52,10 +56,12 @@ export namespace pP {
     // queue (A scene, B resolve/post, C present). The renderer's credit
     // ledger bounds SUBMISSIONS at the same two logical frames' worth, so an
     // ordinary frame's three stages are admissible while the previous
-    // frame's tail is still GPU-pending — without permitting a third logical
-    // frame to be built. Fence values still name individual submissions;
-    // per-slot resource rings advance once per logical frame, so two
-    // logical frames stay inside their existing depths.
+    // frame's tail is still GPU-pending. The two-logical-frame limit itself
+    // remains the Application's construction-reservation bound; this constant
+    // does not permit a third logical frame for that host, and direct Renderer
+    // users are bounded by these six submissions alone. Fence values still
+    // name individual submissions; per-slot resource rings advance once per
+    // logical frame, so two logical frames stay inside their existing depths.
     inline constexpr u32 kFrameStageCount{3u};
     inline constexpr u32 kMaxOutstandingSubmissions{kMaxOutstandingFrames * kFrameStageCount};
 

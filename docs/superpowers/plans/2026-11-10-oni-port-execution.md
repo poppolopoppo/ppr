@@ -1227,3 +1227,65 @@ and operational acceptance. No Task 4 work has begun.
   resources" is credit/frontier retention; the two callback aliases are the same
   type by design.
 - **Known gate:** Windows/D3D12 unmeasured.
+
+## Task 14 — A/B/C settlement, retained pictures and teardown complete
+
+- Commits: `8c5cf6b0` `feat: integrate independently settled lighting resolve and
+  presentation stages`, plus the review follow-up
+  `fix: complete settlement failure matrix and stop C after ambiguity`.
+- Review: settlement model approved; three Important findings and minor
+  corrections, all addressed in the follow-up:
+  1. **Credit-model ratification.** The renderer ledger is
+     submission-scoped (`kMaxOutstandingSubmissions = 2 logical frames x 3
+     stages = 6`) while the Application keeps its two-logical-frame
+     construction-reservation bound. Coordinator ruling: accept this split. The
+     header now states the real safety argument (application reservation bound
+     plus per-logical-frame last-use rings, not a backend command pool) and
+     notes that hosts driving `Renderer` directly are bounded only by the six
+     submission credits. Ring depths and the app reservation bound unchanged.
+  2. **Failure-matrix coverage.** Added ambiguous **A** and ambiguous **C**
+     editor leaves (quarantine, aggregate, no later renderer call, C never
+     attempted), a forced numeric-status failure observed by
+     `WorldLightingPass::shutdown`, an editor stale-epoch drop leaf (payload
+     pending, echo round-trip, no frontier movement), a B history/exposure
+     exactly-once leaf across accepted-then-rejected resolution, and one
+     combined Review-Focus-1 leaf (B rejected after A while a resize and a world
+     replacement are pending: old exposure/history role and retained picture
+     hold, A's lighting commit and the scene fence stand, aggregate equals the
+     renderer's last accepted value, and a later accepted B moves the role).
+  3. **C after ambiguity.** Stage C is skipped whenever a stage reported
+     `kSubmitFailed`, and the retained-picture selection is made only when C
+     will actually be submitted (no post-pass mutation outside a submission).
+- Delivered: `RenderStageResult`/`m_stages` value records and the
+  `aggregateAcceptedSubmission` helper; stage A (publication/lighting prepare,
+  sample-rate 4x scene, numeric-status tail), stage B (Hable then
+  exposure/bloom/AgX, reconstruction `resolved()` after its prepare), and stage
+  C (fixed-P present + native UI, retained picture when B is rejected, no
+  attempt after ambiguity); suspension-excluding active time at the application
+  boundary; the temporary single-sample cleanup scene path removed;
+  reconstruction added to the editor lifecycle and teardown; world-candidate
+  `begin` carries the world edge (pre-existing publication defect, reproduced on
+  the base commit); `WorldLightingPass::bind` attaches numeric status only where
+  the program declares it; retiring-world lighting status drained before
+  release.
+- Tests: `app/world_lighting_settlement/` 17 leaves routine **664 s** and
+  GPU-validation twin **669 s** (900 s entries), plus frame_fence, slow_gates,
+  services_cpu, projection (+validation), trace, cascade, material, asset
+  `gpu_grid_surface`, asset `gpu_misc` and `game.tests`/`matter_restore_gpu`
+  green. Normal 1024 app: exit 0, world published/played, capture at 1280x720,
+  proven quiescence; only the two pre-existing E41018 shader warnings.
+- **Known gates:** Windows/D3D12 unmeasured for the three-submission path,
+  sample-rate 4x scene target and numeric-status tail. The
+  `m_has_resolved_cells == 0` flat fallback remains only for worlds with no
+  published catalog until Task 15's 1024 admission. Live interactive resize is
+  unavailable in this environment (covered by the real-window settlement test).
+- **Minor follow-ups folded in:** dropped-stage diagnostic distinguishes a
+  stage rejection from a non-rendering frame; stale `stampSubmittedPasses_`
+  test references updated; the test-only per-stage failure seam is consumed by
+  exactly one executed frame (an armed stage the frame never reaches is
+  discarded) with a dedicated guard leaf; the inline settlement closure is
+  documented as a future multi-stage trap; the OS-suspend `dt` caveat is
+  recorded separately from minimized suspension without changing the clock.
+- **Deferred minors:** Task 7 `initialize` still resolves `IRhiService`
+  internally; Task 6 deferred staging release still captures a raw device on the
+  confirmed-removal drain.

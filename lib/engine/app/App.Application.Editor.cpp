@@ -1177,9 +1177,15 @@ namespace pP {
             }
 
             // One active-presentation clock at the application boundary. A
-            // minimized/suspended window has no render target, so its interval
-            // never accumulates; rejected attempts keep the value and simply
-            // do not commit a pass baseline. No pass reads a clock.
+            // minimized window has no render target, so its interval never
+            // accumulates; rejected attempts keep the value and simply do not
+            // commit a pass baseline. No pass reads a clock.
+            //
+            // Caveat (recorded, not changed): this excludes minimized
+            // suspension only. An OS sleep/suspend can still deliver one large
+            // dt to the first admitted frame afterwards; suppressing that needs
+            // an explicit suspend-aware clock decision at the application
+            // boundary, which is outside this task.
             if (hasRenderTarget(*m_frame_packet)) {
                 m_active_elapsed += dt;
             }
@@ -1587,6 +1593,10 @@ namespace pP {
             inline_err = std::make_error_code(std::errc::state_not_recoverable);
         }
         inline_result.m_error = inline_err;
+        // The inline route settles the same owned result the lane would post:
+        // its aggregate value and per-stage outcomes are already final in
+        // `m_stages`. Any future inline settlement must consume the stage
+        // record, not reintroduce a single-submission assumption here.
         m_diagnostics.m_grid_staged_tiles = inline_result.m_grid_staged_tiles;
         m_diagnostics.m_grid_cached_tiles = inline_result.m_grid_cached_tiles;
         m_diagnostics.m_last_sweep_error = inline_result.m_sweep_error;
@@ -1710,6 +1720,13 @@ namespace pP {
                 out_result.m_grid_observations = m_grid_pass->observations();
             }
         };
+        // Tests-only per-stage submit-failure seam: consumed by exactly this
+        // executed frame. If the frame never reaches the armed stage (A was
+        // rejected, ambiguity stopped admission, the packet dropped), the
+        // injection is discarded with the frame and cannot leak into a later
+        // one. Production never arms it.
+        const std::optional<u32> injected_stage = std::exchange(m_test_stage_failure, std::nullopt);
+
         const FramePacket &packet = *request.m_packet;
         const DetachedUiDrawData &ui = request.m_ui;
         const GridPass::GridStagedFrame &grid_stage = request.m_grid_stage;
@@ -1966,7 +1983,7 @@ namespace pP {
         {
             const hal::ProfileScope scope_frame_execute{"PPR.Frame.Execute"};
             const CpuObservationScope cpu_surface{clock, cpu.m_surface};
-            if (m_test_stage_failure == kRenderStageScene) {
+            if (injected_stage == kRenderStageScene) {
                 renderer.setInjectedSubmitFailure(true);
             }
             const FenceCompletionValue before = renderer.lastSubmittedFenceValue();
@@ -1980,9 +1997,6 @@ namespace pP {
                 frame_error = std::make_error_code(std::errc::state_not_recoverable);
             }
             settleSceneStage_(out_result, before, frame_error);
-        }
-        if (m_test_stage_failure == kRenderStageScene) {
-            m_test_stage_failure.reset();
         }
 
         // ------------------------------------------------------------------
@@ -2010,7 +2024,7 @@ namespace pP {
 
             rhi::ITexture &output_texture = m_post_process->outputTexture();
             const CpuObservationScope cpu_surface{clock, cpu.m_surface};
-            if (m_test_stage_failure == kRenderStageResolve) {
+            if (injected_stage == kRenderStageResolve) {
                 renderer.setInjectedSubmitFailure(true);
             }
             const FenceCompletionValue before = renderer.lastSubmittedFenceValue();
@@ -2025,9 +2039,6 @@ namespace pP {
                 frame_error = std::make_error_code(std::errc::state_not_recoverable);
             }
             settleResolveStage_(out_result, before, frame_error);
-            if (m_test_stage_failure == kRenderStageResolve) {
-                m_test_stage_failure.reset();
-            }
         }
 
         // ------------------------------------------------------------------
@@ -2037,8 +2048,17 @@ namespace pP {
         // was rejected, a retained picture (the last accepted output for this
         // world and extent) may still be presented: that extends its reader
         // fence and commits no lighting/history/exposure state.
-        bool present_picture = out_result.m_stages[kRenderStageResolve].m_settlement == FrameSettlement::kSubmitted;
-        if (not present_picture and m_post_process->retainedPictureAvailable(grid.m_resolved, active_identity)) {
+        //
+        // A possibly-executed submit stops admission: C is never attempted
+        // there. Submitting after an ambiguous A/B would be refused anyway, and
+        // selecting a retained picture first would mutate the post pass's
+        // selection outside any submission. The retained-picture selection is
+        // therefore made only when C will actually be submitted.
+        bool present_picture = not out_result.m_submit_possibly_executed and
+                               out_result.m_stages[kRenderStageResolve].m_settlement == FrameSettlement::kSubmitted;
+        if (not present_picture and
+            not out_result.m_submit_possibly_executed and
+            m_post_process->retainedPictureAvailable(grid.m_resolved, active_identity)) {
             m_post_process->selectRetainedPicture(grid.m_resolved);
             present_picture = true;
         }
@@ -2095,7 +2115,7 @@ namespace pP {
                 out_result.m_surface_capture_sequence = request.m_surface_capture_sequence;
             }
 
-            if (m_test_stage_failure == kRenderStagePresent) {
+            if (injected_stage == kRenderStagePresent) {
                 renderer.setInjectedSubmitFailure(true);
             }
             const FenceCompletionValue before = renderer.lastSubmittedFenceValue();
@@ -2113,9 +2133,6 @@ namespace pP {
                 }
             }
             settlePresentStage_(out_result, before, frame_error);
-            if (m_test_stage_failure == kRenderStagePresent) {
-                m_test_stage_failure.reset();
-            }
 
             if (capture) {
                 // A capture stays armed across known pre-acquire backpressure
@@ -2172,10 +2189,23 @@ namespace pP {
         }
         if (stage_failure == std::make_error_code(std::errc::resource_unavailable_try_again) or
             stage_failure == std::make_error_code(std::errc::device_or_resource_busy)) {
+            // A later stage was definitely rejected by ordinary backpressure:
+            // earlier accepted stages stand and the frame is not presented.
+            // This is a dropped submission stage, distinct from a frame that
+            // never had a render target or an obsolete surface claim.
+            u32 dropped_stage = kRenderStageCount;
+            for (u32 stage = 0u; stage < kRenderStageCount; ++stage) {
+                if (out_result.m_stages[stage].m_error == stage_failure) {
+                    dropped_stage = stage;
+                    break;
+                }
+            }
             PPR_LOG(
-                Editor, info, "dropping non-rendering frame",
+                Editor, info, "dropped frame at stage rejection",
                 {
                     {"frame", packet.m_frame_id},
+                    {"stage", dropped_stage},
+                    {"accepted", out_result.m_submit_value},
                     {"error", stage_failure.message()},
                 });
             return default_value_v;

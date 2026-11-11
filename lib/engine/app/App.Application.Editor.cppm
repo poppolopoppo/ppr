@@ -86,6 +86,16 @@ export namespace pP {
             return *m_grid_pass;
         }
 
+        // TESTS ONLY: read-only views of the independent resolve/post owners.
+        // They expose committed-state observations only; production code never
+        // reaches into another owner's pass through these.
+        [[nodiscard]] const ReconstructionPass &getReconstructionPassForTest() const noexcept {
+            return *m_reconstruction;
+        }
+        [[nodiscard]] const PostProcessPass &getPostProcessPassForTest() const noexcept {
+            return *m_post_process;
+        }
+
         // Independent post-processing policy: values are validated before
         // backend work; the pixel scale is clamped to P1..8 here so every owned
         // frame request carries a valid resolution control. CPU-only: no GPU

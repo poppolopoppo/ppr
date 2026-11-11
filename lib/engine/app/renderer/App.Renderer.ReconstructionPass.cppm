@@ -73,6 +73,28 @@ export namespace pP {
         void discardUnsubmitted() noexcept;
         [[nodiscard]] std::error_code collectCompleted(FenceCompletionValue completed);
 
+        // ------------------------------------------------------------------
+        // tests-only committed-state observations
+        // ------------------------------------------------------------------
+        // Accepted stage-B state. It moves only on notifySubmitted, so a test
+        // can prove an accepted resolve commits exactly once and a later
+        // rejected attempt commits nothing.
+        [[nodiscard]] bool historyEstablishedForTest() const noexcept {
+            return m_history_established;
+        }
+        [[nodiscard]] u32 acceptedPhaseForTest() const noexcept {
+            return m_phase;
+        }
+        [[nodiscard]] u32 historyIndexForTest() const noexcept {
+            return m_history_index;
+        }
+        [[nodiscard]] GridWorldIdentity historyWorldForTest() const noexcept {
+            return m_history_world;
+        }
+        [[nodiscard]] FenceCompletionValue historyUseForTest() const noexcept {
+            return m_committed.m_history_use;
+        }
+
     private:
         // ------------------------------------------------------------------
         // frame allocations and pending/committed history
