@@ -11,8 +11,6 @@ struct ReconstructionParameters {
     int2 m_raster_extent;
     int2 m_backing_extent;
     int2 m_window_extent;
-    int2 m_previous_resolved_extent;
-    int2 m_previous_backing_extent;
     int2 m_previous_window_extent;
     float2 m_jitter;
     uint m_pixel_scale;
@@ -289,9 +287,9 @@ bool sampleHistory(float2 previous_pixel, out float3 color) {
         [unroll]
         for (int x = 0; x < 2; ++x) {
             const float weight = weights_x[x] * weights_y[y];
-            // Numerical dust below the resolved-texel scale must not turn a
-            // stationary history sample into an out-of-range footprint.
-            if (weight <= 1.0e-4) { continue; }
+            // Literal contract: only an exactly zero weight is ignored; any
+            // nonzero out-of-R texel invalidates the history sample.
+            if (weight <= 0.0) { continue; }
 
             const int2 texel = base + int2(x, y);
             if (texel.x < 0 || texel.y < 0 || texel.x >= g_reconstruction.m_resolved_extent.x ||
@@ -305,7 +303,8 @@ bool sampleHistory(float2 previous_pixel, out float3 color) {
 }
 
 [numthreads(8, 8, 1)]
-void reconstructTemporal(uint3 id : SV_DispatchThreadID) {    if (any(id.xy >= uint2(g_reconstruction.m_backing_extent))) { return; }
+void reconstructTemporal(uint3 id : SV_DispatchThreadID) {
+    if (any(id.xy >= uint2(g_reconstruction.m_backing_extent))) { return; }
     const int2 pixel = int2(id.xy);
 
     float3 current;

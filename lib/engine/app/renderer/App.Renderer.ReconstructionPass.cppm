@@ -84,6 +84,8 @@ export namespace pP {
             std::array<rhi::ComPtr<rhi::ITextureView>, 2> m_history_views{};
             int2 m_scene_extent{zero_v};
             int2 m_backing_extent{zero_v};
+            FenceCompletionValue m_scene_use{kFenceValueNone};
+            FenceCompletionValue m_history_use{kFenceValueNone};
         };
 
         // beginFrame proposes these values; prepare consumes them. Nothing here
@@ -99,6 +101,7 @@ export namespace pP {
             u32 m_previous_index{1u};
             u32 m_phase{};
             bool m_history_valid{};
+            bool m_tentative{};
             bool m_active{};
             bool m_prepared{};
         };
@@ -106,10 +109,16 @@ export namespace pP {
         [[nodiscard]] static CameraSnapshot makeSceneCamera_(
             const CameraSnapshot &camera, const PresentationGrid &grid, float2 jitter) noexcept;
         [[nodiscard]] static float2 phaseJitter_(u32 phase) noexcept;
+        [[nodiscard]] static bool matchesExtents_(
+            const FrameResources &resources, const PresentationGrid &grid) noexcept;
 
         [[nodiscard]] std::error_code createPrograms_(
             IShaderService &shader_service, rhi::IDevice &device, const std::filesystem::path &content_dir);
-        [[nodiscard]] std::error_code ensureResources_(rhi::IDevice &device, const PresentationGrid &grid);
+        [[nodiscard]] Expected<FrameResources> createResources_(
+            rhi::IDevice &device, const PresentationGrid &grid) const;
+        void deferResources_(FrameResources &&resources) noexcept;
+        [[nodiscard]] FrameResources &pendingResources_() noexcept;
+        [[nodiscard]] const FrameResources &pendingResources_() const noexcept;
         void releaseGpuResources_() noexcept;
 
         // ------------------------------------------------------------------
@@ -122,7 +131,11 @@ export namespace pP {
 
         DeferredReleaseQueue m_deferred_releases{};
 
-        FrameResources m_resources{};
+        // Accepted committed pair. A pending frame with different extents uses
+        // a tentative pair instead; the committed pair is retired only after
+        // acceptance, and a definite discard retires only the tentative pair.
+        FrameResources m_committed{};
+        std::optional<FrameResources> m_tentative{};
 
         // Committed accepted state. The phase and previous camera only move on
         // an accepted stage-B submission.
@@ -134,11 +147,9 @@ export namespace pP {
         u32 m_phase{};
         bool m_history_established{};
 
-        // Last-use values for the retired-allocation queue and the per-frame
-        // root objects. Nothing is destroyed before its readers complete.
+        // Per-frame root objects and the retirement cursor. Nothing is
+        // destroyed before its readers complete.
         std::array<FenceCompletionValue, kFrameRingSlots> m_root_use{};
-        FenceCompletionValue m_scene_use{kFenceValueNone};
-        FenceCompletionValue m_history_use{kFenceValueNone};
         u32 m_root_cursor{};
 
         PendingFrame m_pending{};

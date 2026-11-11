@@ -53,9 +53,10 @@ luminance-gradient diamond, contributing-original-sample RGB bounds, and the
 sample pattern in raster top-left coordinates, reprojects through the
 un-jittered current/previous camera on the world plane, and samples previous
 history only when every nonzero-weight texel is inside the valid resolved
-rectangle. Invalid or offscreen history falls back to the current
-reconstruction; the article's boundary snippet is not used to retain a clamped
-out-of-frame sample.
+rectangle; there is no weight floor, so an arbitrarily small nonzero weight on
+a padded texel rejects the sample. Invalid or offscreen history falls back to
+the current reconstruction; the article's boundary snippet is not used to retain
+a clamped out-of-frame sample.
 
 `engine.app:renderer.reconstruction_pass` owns the padded 4x scene target
 (`ceil(ceil(W/P)/2)`) and the single-sample resolved history pair (`2*S` per
@@ -63,8 +64,12 @@ axis, only `R` valid). The scene stage provides an un-jittered camera whose
 framing describes `W`; the pass supplies the padded/jittered camera, reconstructs
 over the backing extent and exposes the resolved image to post-processing in the
 same stage-B command buffer. History is scene-linear and unexposed. Camera cuts,
-world replacement and any W/P/R/S/B change reset it; ordinary pan/zoom
-reprojects; exposure, bloom and sky-hour live outside the pass and preserve it.
+world replacement and any W/P/R/S/B change reset it; a W change resets even when
+S/B stay the same. Ordinary pan/zoom reprojects; exposure, bloom and sky-hour
+live outside the pass and preserve it. `beginFrame` only proposes a tentative
+allocation; only an accepted stage-B submission commits the camera, grid,
+history role and phase. A discarded or capacity-busy attempt leaves the
+committed pair and history valid.
 
 The earlier `assets/shaders/spatial_msaa4.slang` remains only as the sample
 pattern qualification asset. There is no AA selector, reactive mask, velocity

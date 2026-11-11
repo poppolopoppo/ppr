@@ -36,8 +36,6 @@ namespace pP {
             int2 m_raster_extent{};
             int2 m_backing_extent{};
             int2 m_window_extent{};
-            int2 m_previous_resolved_extent{};
-            int2 m_previous_backing_extent{};
             int2 m_previous_window_extent{};
             float2 m_jitter{};
             u32 m_pixel_scale{};
@@ -47,13 +45,13 @@ namespace pP {
             float2 m_reserved_padding{};
             float2 m_reserved_padding1{};
         };
-        static_assert(sizeof(ReconstructionParameters) == 224u);
+        static_assert(sizeof(ReconstructionParameters) == 208u);
         static_assert(alignof(ReconstructionParameters) == 16u);
         static_assert(PPR_OFFSETOF(ReconstructionParameters, m_resolved_extent) == 128u);
-        static_assert(PPR_OFFSETOF(ReconstructionParameters, m_previous_window_extent) == 176u);
-        static_assert(PPR_OFFSETOF(ReconstructionParameters, m_jitter) == 184u);
-        static_assert(PPR_OFFSETOF(ReconstructionParameters, m_pixel_scale) == 192u);
-        static_assert(PPR_OFFSETOF(ReconstructionParameters, m_history_valid) == 200u);
+        static_assert(PPR_OFFSETOF(ReconstructionParameters, m_previous_window_extent) == 160u);
+        static_assert(PPR_OFFSETOF(ReconstructionParameters, m_jitter) == 168u);
+        static_assert(PPR_OFFSETOF(ReconstructionParameters, m_pixel_scale) == 176u);
+        static_assert(PPR_OFFSETOF(ReconstructionParameters, m_history_valid) == 184u);
 
         [[nodiscard]] rhi::SubresourceRange baseRange() noexcept {
             return {.layer = 0u, .layerCount = 1u, .mip = 0u, .mipCount = 1u};
@@ -227,6 +225,9 @@ namespace pP {
         PPR_RETURN_ERROR_ON_FAIL(
             Reconstruction,
             hasFieldOffset(layout, "m_resolved_extent", PPR_OFFSETOF(ReconstructionParameters, m_resolved_extent)) and
+                    hasFieldOffset(
+                        layout, "m_previous_window_extent",
+                        PPR_OFFSETOF(ReconstructionParameters, m_previous_window_extent)) and
                     hasFieldOffset(layout, "m_jitter", PPR_OFFSETOF(ReconstructionParameters, m_jitter)) and
                     hasFieldOffset(layout, "m_history_valid", PPR_OFFSETOF(ReconstructionParameters, m_history_valid))
                 ? std::error_code{}
@@ -246,84 +247,102 @@ namespace pP {
         return {};
     }
 
-    std::error_code ReconstructionPass::ensureResources_(rhi::IDevice &device, const PresentationGrid &grid) {
-        if (not m_resources.m_scene or
-            m_resources.m_scene_extent.x != grid.m_raster.x or
-            m_resources.m_scene_extent.y != grid.m_raster.y) {
-            if (m_resources.m_scene) {
-                m_deferred_releases.defer(
-                    m_scene_use, [held = std::move(m_resources.m_scene)]() mutable { held.setNull(); });
-                m_deferred_releases.defer(
-                    m_scene_use, [held = std::move(m_resources.m_scene_view)]() mutable { held.setNull(); });
-                m_scene_use = kFenceValueNone;
-            }
+    bool ReconstructionPass::matchesExtents_(
+        const ReconstructionPass::FrameResources &resources, const PresentationGrid &grid) noexcept {
+        return resources.m_scene and
+               resources.m_scene_extent.x == grid.m_raster.x and
+               resources.m_scene_extent.y == grid.m_raster.y and
+               resources.m_history[0] and
+               resources.m_backing_extent.x == grid.m_backing.x and
+               resources.m_backing_extent.y == grid.m_backing.y;
+    }
 
-            rhi::TextureDesc description{};
-            description.type = rhi::TextureType::Texture2DMS;
-            description.size = {
-                .width = static_cast<u32>(grid.m_raster.x), .height = static_cast<u32>(grid.m_raster.y), .depth = 1u};
-            description.arrayLength = 1u;
-            description.mipCount = 1u;
-            description.format = rhi::Format::RGBA16Float;
-            description.sampleCount = kSampleCount;
-            description.memoryType = rhi::MemoryType::DeviceLocal;
-            description.usage = static_cast<rhi::TextureUsage>(
-                static_cast<u32>(rhi::TextureUsage::RenderTarget) |
-                static_cast<u32>(rhi::TextureUsage::ShaderResource));
-            description.defaultState = rhi::ResourceState::RenderTarget;
-            description.label = "reconstruction scene color";
-            PPR_RETURN_ERROR_ON_FAIL(
-                Reconstruction, device.createTexture(description, nullptr, m_resources.m_scene.writeRef()));
-            PPR_RETURN_ERROR_ON_FAIL(
-                Reconstruction, m_resources.m_scene->getDefaultView(m_resources.m_scene_view.writeRef()));
-            m_resources.m_scene_extent = grid.m_raster;
+    Expected<ReconstructionPass::FrameResources> ReconstructionPass::createResources_(
+        rhi::IDevice &device, const PresentationGrid &grid) const {
+        // Allocate into locals; the caller publishes the extents only after
+        // every object exists, so a partial failure cannot leave a wrong-sized
+        // or null view under the old extent.
+        ReconstructionPass::FrameResources resources{};
+
+        rhi::TextureDesc scene_description{};
+        scene_description.type = rhi::TextureType::Texture2DMS;
+        scene_description.size = {
+            .width = static_cast<u32>(grid.m_raster.x), .height = static_cast<u32>(grid.m_raster.y), .depth = 1u};
+        scene_description.arrayLength = 1u;
+        scene_description.mipCount = 1u;
+        scene_description.format = rhi::Format::RGBA16Float;
+        scene_description.sampleCount = kSampleCount;
+        scene_description.memoryType = rhi::MemoryType::DeviceLocal;
+        scene_description.usage = static_cast<rhi::TextureUsage>(
+            static_cast<u32>(rhi::TextureUsage::RenderTarget) | static_cast<u32>(rhi::TextureUsage::ShaderResource));
+        scene_description.defaultState = rhi::ResourceState::RenderTarget;
+        scene_description.label = "reconstruction scene color";
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            Reconstruction, device.createTexture(scene_description, nullptr, resources.m_scene.writeRef()));
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            Reconstruction, resources.m_scene->getDefaultView(resources.m_scene_view.writeRef()));
+
+        for (u32 index = 0u; index < resources.m_history.size(); ++index) {
+            rhi::TextureDesc history_description{};
+            history_description.type = rhi::TextureType::Texture2D;
+            history_description.size = {
+                .width = static_cast<u32>(grid.m_backing.x), .height = static_cast<u32>(grid.m_backing.y), .depth = 1u};
+            history_description.arrayLength = 1u;
+            history_description.mipCount = 1u;
+            history_description.format = rhi::Format::RGBA16Float;
+            history_description.sampleCount = 1u;
+            history_description.memoryType = rhi::MemoryType::DeviceLocal;
+            // Copy flags support diagnostic readback/padding-poisoning seams;
+            // the production pass only needs SRV/UAV.
+            history_description.usage = static_cast<rhi::TextureUsage>(
+                static_cast<u32>(rhi::TextureUsage::ShaderResource) |
+                static_cast<u32>(rhi::TextureUsage::UnorderedAccess) |
+                static_cast<u32>(rhi::TextureUsage::CopySource) |
+                static_cast<u32>(rhi::TextureUsage::CopyDestination));
+            history_description.defaultState = rhi::ResourceState::ShaderResource;
+            history_description.label = "reconstruction resolved history";
+            PPR_RETURN_UNEXPECTED_ON_FAIL(
+                Reconstruction,
+                device.createTexture(history_description, nullptr, resources.m_history[index].writeRef()));
+            PPR_RETURN_UNEXPECTED_ON_FAIL(
+                Reconstruction,
+                resources.m_history[index]->getDefaultView(resources.m_history_views[index].writeRef()));
         }
 
-        if (not m_resources.m_history[0] or
-            m_resources.m_backing_extent.x != grid.m_backing.x or
-            m_resources.m_backing_extent.y != grid.m_backing.y) {
-            for (u32 index = 0u; index < m_resources.m_history.size(); ++index) {
-                if (m_resources.m_history[index]) {
-                    m_deferred_releases.defer(
-                        m_history_use, [held = std::move(m_resources.m_history[index])]() mutable { held.setNull(); });
-                    m_deferred_releases.defer(
-                        m_history_use,
-                        [held = std::move(m_resources.m_history_views[index])]() mutable { held.setNull(); });
-                }
-            }
-            m_history_use = kFenceValueNone;
+        resources.m_scene_extent = grid.m_raster;
+        resources.m_backing_extent = grid.m_backing;
+        return resources;
+    }
 
-            for (u32 index = 0u; index < m_resources.m_history.size(); ++index) {
-                rhi::TextureDesc description{};
-                description.type = rhi::TextureType::Texture2D;
-                description.size = {
-                    .width = static_cast<u32>(grid.m_backing.x),
-                    .height = static_cast<u32>(grid.m_backing.y),
-                    .depth = 1u};
-                description.arrayLength = 1u;
-                description.mipCount = 1u;
-                description.format = rhi::Format::RGBA16Float;
-                description.sampleCount = 1u;
-                description.memoryType = rhi::MemoryType::DeviceLocal;
-                description.usage = static_cast<rhi::TextureUsage>(
-                    static_cast<u32>(rhi::TextureUsage::ShaderResource) |
-                    static_cast<u32>(rhi::TextureUsage::UnorderedAccess) |
-                    static_cast<u32>(rhi::TextureUsage::CopySource) |
-                    static_cast<u32>(rhi::TextureUsage::CopyDestination));
-                description.defaultState = rhi::ResourceState::ShaderResource;
-                description.label = "reconstruction resolved history";
-                PPR_RETURN_ERROR_ON_FAIL(
-                    Reconstruction,
-                    device.createTexture(description, nullptr, m_resources.m_history[index].writeRef()));
-                PPR_RETURN_ERROR_ON_FAIL(
-                    Reconstruction,
-                    m_resources.m_history[index]->getDefaultView(m_resources.m_history_views[index].writeRef()));
-            }
-
-            m_resources.m_backing_extent = grid.m_backing;
+    void ReconstructionPass::deferResources_(ReconstructionPass::FrameResources &&resources) noexcept {
+        if (resources.m_scene) {
+            m_deferred_releases.defer(
+                resources.m_scene_use, [held = std::move(resources.m_scene)]() mutable { held.setNull(); });
         }
+        if (resources.m_scene_view) {
+            m_deferred_releases.defer(
+                resources.m_scene_use, [held = std::move(resources.m_scene_view)]() mutable { held.setNull(); });
+        }
+        for (u32 index = 0u; index < resources.m_history.size(); ++index) {
+            if (resources.m_history[index]) {
+                m_deferred_releases.defer(
+                    resources.m_history_use,
+                    [held = std::move(resources.m_history[index])]() mutable { held.setNull(); });
+            }
+            if (resources.m_history_views[index]) {
+                m_deferred_releases.defer(
+                    resources.m_history_use,
+                    [held = std::move(resources.m_history_views[index])]() mutable { held.setNull(); });
+            }
+        }
+    }
 
-        return {};
+    ReconstructionPass::FrameResources &ReconstructionPass::pendingResources_() noexcept {
+        return m_pending.m_tentative ? *m_tentative : m_committed;
+    }
+
+    const ReconstructionPass::FrameResources &ReconstructionPass::pendingResources_() const noexcept {
+        return m_pending.m_tentative ? *m_tentative : m_committed;
     }
 
     std::error_code ReconstructionPass::shutdown() {
@@ -341,7 +360,8 @@ namespace pP {
 
     void ReconstructionPass::releaseGpuResources_() noexcept {
         std::ignore = m_deferred_releases.drainAll();
-        m_resources = {};
+        m_committed = FrameResources{};
+        m_tentative.reset();
         m_roots = {};
         m_root_use = {};
         m_program.setNull();
@@ -354,8 +374,6 @@ namespace pP {
         m_history_index = 0u;
         m_phase = 0u;
         m_history_established = false;
-        m_scene_use = kFenceValueNone;
-        m_history_use = kFenceValueNone;
         m_root_cursor = 0u;
         m_pending = PendingFrame{};
         m_ready = false;
@@ -383,15 +401,24 @@ namespace pP {
             Reconstruction,
             m_pending.m_active ? std::make_error_code(std::errc::operation_not_permitted) : std::error_code{});
 
-        PPR_RETURN_ERROR_ON_FAIL(Reconstruction, ensureResources_(device, grid));
-
         // Root shader objects are frame resources too: never bind over one
-        // whose previous stage-B submission may still be reading it.
+        // whose previous stage-B submission may still be reading it. Admission
+        // runs before any resource proposal so a busy frame changes nothing.
         const u32 root = selectRingSlot(completed, m_root_use, m_root_cursor);
         PPR_RETURN_ERROR_ON_FAIL(
             Reconstruction, slotFenceComplete(completed, m_root_use[root])
                                 ? std::error_code{}
                                 : std::make_error_code(std::errc::device_or_resource_busy));
+
+        // A tentative pair is used only when the requested extents differ from
+        // the committed pair. It never replaces the committed pair until
+        // notifySubmitted; a discard retires only the tentative pair.
+        PPR_ASSERT(not m_tentative);
+        if (not matchesExtents_(m_committed, grid)) {
+            auto created = createResources_(device, grid);
+            PPR_RETURN_ERROR_ON_FAIL(Reconstruction, created.has_value() ? std::error_code{} : created.error());
+            m_tentative = std::move(*created);
+        }
 
         const bool reset = not m_history_established or
                            m_history_world != world or
@@ -399,7 +426,6 @@ namespace pP {
                            not (m_history_grid == grid);
         const u32 phase = reset ? 0u : (m_phase + 1u) % kPhaseCount;
         const u32 write_index = reset ? 0u : 1u - m_history_index;
-
 
         m_pending = PendingFrame{};
         m_pending.m_camera = CameraSnapshot{camera};
@@ -412,6 +438,7 @@ namespace pP {
         m_pending.m_write_index = write_index;
         m_pending.m_previous_index = 1u - write_index;
         m_pending.m_history_valid = not reset;
+        m_pending.m_tentative = m_tentative.has_value();
         m_pending.m_active = true;
 
         m_root_cursor = (root + 1u) % kFrameRingSlots;
@@ -425,8 +452,9 @@ namespace pP {
 
     rhi::ITexture &ReconstructionPass::sceneTexture() const noexcept {
         PPR_ASSERT(m_pending.m_active);
-        PPR_ASSERT(m_resources.m_scene);
-        return *m_resources.m_scene;
+        const FrameResources &resources = pendingResources_();
+        PPR_ASSERT(resources.m_scene);
+        return *resources.m_scene;
     }
 
     // ------------------------------------------------------------------
@@ -442,12 +470,13 @@ namespace pP {
                                 : std::make_error_code(std::errc::operation_not_permitted));
 
         const PendingFrame &pending = m_pending;
-        rhi::ITexture *const scene = m_resources.m_scene.get();
-        rhi::ITexture *const previous = m_resources.m_history[pending.m_previous_index].get();
-        rhi::ITexture *const next = m_resources.m_history[pending.m_write_index].get();
-        const rhi::ComPtr<rhi::ITextureView> &scene_view = m_resources.m_scene_view;
-        const rhi::ComPtr<rhi::ITextureView> &previous_view = m_resources.m_history_views[pending.m_previous_index];
-        const rhi::ComPtr<rhi::ITextureView> &next_view = m_resources.m_history_views[pending.m_write_index];
+        const FrameResources &resources = pendingResources_();
+        rhi::ITexture *const scene = resources.m_scene.get();
+        rhi::ITexture *const previous = resources.m_history[pending.m_previous_index].get();
+        rhi::ITexture *const next = resources.m_history[pending.m_write_index].get();
+        const rhi::ComPtr<rhi::ITextureView> &scene_view = resources.m_scene_view;
+        const rhi::ComPtr<rhi::ITextureView> &previous_view = resources.m_history_views[pending.m_previous_index];
+        const rhi::ComPtr<rhi::ITextureView> &next_view = resources.m_history_views[pending.m_write_index];
 
         ReconstructionParameters parameters{};
         parameters.m_current_inverse_view_projection = pending.m_camera.m_invert_view_projection;
@@ -457,10 +486,6 @@ namespace pP {
         parameters.m_raster_extent = pending.m_grid.m_raster;
         parameters.m_backing_extent = pending.m_grid.m_backing;
         parameters.m_window_extent = pending.m_grid.m_window;
-        parameters.m_previous_resolved_extent = pending.m_history_valid ? m_history_grid.m_resolved
-                                                                        : pending.m_grid.m_resolved;
-        parameters.m_previous_backing_extent = pending.m_history_valid ? m_history_grid.m_backing
-                                                                       : pending.m_grid.m_backing;
         parameters.m_previous_window_extent = pending.m_history_valid ? m_history_grid.m_window
                                                                       : pending.m_grid.m_window;
         parameters.m_jitter = phaseJitter_(pending.m_phase);
@@ -501,8 +526,9 @@ namespace pP {
 
     ResolvedHdrView ReconstructionPass::resolved() const {
         PPR_ASSERT(m_pending.m_active and m_pending.m_prepared);
+        const FrameResources &resources = pendingResources_();
         ResolvedHdrView view{};
-        view.m_view = m_resources.m_history_views[m_pending.m_write_index];
+        view.m_view = resources.m_history_views[m_pending.m_write_index];
         view.m_world = m_pending.m_world;
         view.m_backing = m_pending.m_grid.m_backing;
         view.m_valid = m_pending.m_grid.m_resolved;
@@ -516,10 +542,11 @@ namespace pP {
             return {};
         }
 
+        const FrameResources &resources = pendingResources_();
         const rhi::SubresourceRange range = baseRange();
         context.m_encoder.setTextureState(
-            m_resources.m_history[m_pending.m_write_index], range, rhi::ResourceState::ShaderResource);
-        context.m_encoder.setTextureState(m_resources.m_scene, range, rhi::ResourceState::RenderTarget);
+            resources.m_history[m_pending.m_write_index], range, rhi::ResourceState::ShaderResource);
+        context.m_encoder.setTextureState(resources.m_scene, range, rhi::ResourceState::RenderTarget);
         return {};
     }
 
@@ -532,7 +559,8 @@ namespace pP {
             return;
         }
 
-        m_scene_use = std::max(m_scene_use, submit_value);
+        FrameResources &resources = pendingResources_();
+        resources.m_scene_use = std::max(resources.m_scene_use, submit_value);
     }
 
     void ReconstructionPass::notifySubmitted(const FenceCompletionValue submit_value) noexcept {
@@ -540,9 +568,18 @@ namespace pP {
             return;
         }
 
-        m_scene_use = std::max(m_scene_use, submit_value);
-        m_history_use = std::max(m_history_use, submit_value);
+        FrameResources &resources = pendingResources_();
+        resources.m_scene_use = std::max(resources.m_scene_use, submit_value);
+        resources.m_history_use = std::max(resources.m_history_use, submit_value);
         m_root_use[m_pending.m_root] = std::max(m_root_use[m_pending.m_root], submit_value);
+
+        if (m_pending.m_tentative) {
+            // Acceptance swaps the tentative pair in and retires the old
+            // committed pair only after its readers complete.
+            deferResources_(std::move(m_committed));
+            m_committed = std::move(*m_tentative);
+            m_tentative.reset();
+        }
 
         m_history_established = true;
         m_history_index = m_pending.m_write_index;
@@ -555,8 +592,13 @@ namespace pP {
     }
 
     void ReconstructionPass::discardUnsubmitted() noexcept {
-        // Definitely unsubmitted work commits nothing. A stage-A scene writer
-        // that was reported stays pinned through m_scene_use.
+        // Definitely unsubmitted work commits nothing. A tentative allocation
+        // is retired after its reported stage-A readers; the committed pair and
+        // all accepted history state remain valid.
+        if (m_pending.m_tentative and m_tentative) {
+            deferResources_(std::move(*m_tentative));
+            m_tentative.reset();
+        }
         m_pending = PendingFrame{};
     }
 

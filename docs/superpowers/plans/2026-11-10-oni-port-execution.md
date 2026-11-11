@@ -1131,3 +1131,49 @@ and operational acceptance. No Task 4 work has begun.
   `m_surface_to_camera` sentence in the report; CPU-helper section banner;
   report timing freshness.
 - **Known gates:** Windows/D3D12 unmeasured.
+
+## Task 12 — always-on temporal Hable reconstruction and review fix
+
+- Implementation commit: `6418d663` `feat: add always-on Hable temporal reconstruction with padded extents`.
+- Review-fix commit: `fix: commit reconstruction history only on acceptance`.
+- Delivered: `engine.app:renderer.reconstruction_pass` with provisional
+  scene/history resources, `assets/shaders/hable_temporal.slang`,
+  `PresentationGrid` equality, and `app/reconstruction/` CPU + GPU coverage.
+  Extents are `R=ceil(W/P)`, `S=ceil(R/2)`, `B=2*S`; the scene target is Sx by
+  Sy RGBA16F 4-sample, the history pair is Bx by By RGBA16F, only R is valid.
+- Review findings fixed:
+  - **Critical:** `beginFrame` no longer retires the committed pair before
+    admission. A different-extent request allocates a tentative pair; only an
+    accepted stage-B `notifySubmitted` swaps it in and retires the old pair after
+    its readers. A definite discard retires only the tentative pair; a
+    capacity-busy `beginFrame` allocates nothing. Tests cover discard and busy
+    rejection followed by an accepted original-grid frame that must read the old
+    history bytes, not uninitialized memory.
+  - **Important:** removed the `1e-4` history-weight floor. The shader and CPU
+    oracle skip only exactly zero weights and reject any nonzero out-of-R texel.
+    A CPU case proves a 5e-5 padded-texel weight forces current-only.
+  - **Important:** the CPU lattice oracle now derives L/R/U/D by a brute-force
+    geometric scan for the nearest known node in each direction; it no longer
+    copies the shader's residue tables or left/up formulas. A bracket test covers
+    positive and negative unknown nodes.
+- Task 2 obligations:
+  - Hable history bytes, previous camera/grid and committed phase are proved
+    unchanged across a rejected attempt and an exposure/bloom/sky-like edit;
+    the reconstruction-side acceptance test is
+    `gpu_unaccepted_extent_change_preserves_committed_history`. The committed
+    exposure role is PostProcessPass-owned and remains covered by the existing
+    accepted/rejected `app/post_process` settlement tests; ReconstructionPass has
+    no exposure input to reset.
+  - Layered background alignment and opaque background admission are **re-scoped
+    to Task 14 integration**: ReconstructionPass owns neither the scene/background
+    draw path nor its opaque admission; it cannot validly test those draws without
+    a new fixture/framework. The reconstruction-side projection alignment across
+    P values and retained 4x source coverage are covered here by
+    `two_resolution_projection_alignment`, the probe sample dump and the lattice
+    phase tests.
+- Verification: `app/reconstruction/` 24/24 nodes pass routine; the
+  GPU-validation entry passes; `app/post_process` and
+  `asset/picture_spatial_gpu_validation` pass; format/style and `git diff --check`
+  clean.
+- **Known gates:** Windows/D3D12 unmeasured; Task 14 wiring and native
+  presentation enlargement remain pending.
