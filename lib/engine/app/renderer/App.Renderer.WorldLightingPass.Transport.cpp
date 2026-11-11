@@ -48,6 +48,25 @@ namespace pP {
         static_assert(PPR_OFFSETOF(CascadeStageFrame, m_sky_hour) == 12u);
         static_assert(PPR_OFFSETOF(CascadeStageFrame, m_status_record) == 16u);
 
+        // Mirrors FineFrame in assets/shaders/world_lighting_fine.slang.
+        struct alignas(16) FineStageFrame {
+            u32 m_frame_low{};
+            u32 m_frame_high{};
+            u32 m_fine_edge{lighting::kFineCHEdge};
+            u32 m_status_record{};
+            float m_current_weight{};
+            u32 m_first_field{};
+            u32 m_reserved0{};
+            u32 m_reserved1{};
+        };
+
+        static_assert(sizeof(FineStageFrame) == 32u and alignof(FineStageFrame) == 16u);
+        static_assert(PPR_OFFSETOF(FineStageFrame, m_frame_high) == 4u);
+        static_assert(PPR_OFFSETOF(FineStageFrame, m_fine_edge) == 8u);
+        static_assert(PPR_OFFSETOF(FineStageFrame, m_status_record) == 12u);
+        static_assert(PPR_OFFSETOF(FineStageFrame, m_current_weight) == 16u);
+        static_assert(PPR_OFFSETOF(FineStageFrame, m_first_field) == 20u);
+
         rhi::BufferRange transportRange(rhi::IBuffer *const buffer) noexcept {
             return {.offset = 0u, .size = buffer->getDesc().size};
         }
@@ -62,7 +81,8 @@ namespace pP {
             desc.usage = static_cast<rhi::BufferUsage>(
                 static_cast<u32>(rhi::BufferUsage::ShaderResource) |
                 static_cast<u32>(rhi::BufferUsage::UnorderedAccess) |
-                static_cast<u32>(rhi::BufferUsage::CopySource));
+                static_cast<u32>(rhi::BufferUsage::CopySource) |
+                static_cast<u32>(rhi::BufferUsage::CopyDestination));
             desc.defaultState = rhi::ResourceState::UnorderedAccess;
             desc.label = label;
             PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, device.createBuffer(desc, initial, result.writeRef()));
@@ -233,7 +253,7 @@ namespace pP {
 
         auto &resources = *m_resources;
         PPR_RETURN_ERROR_ON_FAIL(
-            WorldLightingPass, resources.m_cascade_programs[0u].m_program
+            WorldLightingPass, resources.m_cascade_programs[0u].m_program and resources.m_fine_programs[0u].m_program
                                    ? std::error_code{}
                                    : std::make_error_code(std::errc::not_connected));
 
@@ -261,7 +281,7 @@ namespace pP {
             PPR_RETURN_ERROR_ON_FAIL(
                 WorldLightingPass, transportStorageBuffer(
                                        device, kFineCHBytes, static_cast<u32>(sizeof(lighting::PackedCH)), zero.data(),
-                                       resources.m_fine_ch, "world-lighting fine CH placeholder"));
+                                       resources.m_fine_ch, "world-lighting fine CH field"));
         }
 
         for (u32 slot = 0u; slot < kStatusRingSize; ++slot) {
@@ -274,6 +294,17 @@ namespace pP {
                     WorldLightingPass, device.createRootShaderObject(
                                            resources.m_cascade_programs[entry].m_program,
                                            resources.m_cascade_roots[entry][slot].writeRef()));
+            }
+
+            for (u32 entry = 0u; entry < kFineEntryCount; ++entry) {
+                if (resources.m_fine_roots[entry][slot]) {
+                    continue;
+                }
+
+                PPR_RETURN_ERROR_ON_FAIL(
+                    WorldLightingPass,
+                    device.createRootShaderObject(
+                        resources.m_fine_programs[entry].m_program, resources.m_fine_roots[entry][slot].writeRef()));
             }
         }
 
@@ -300,9 +331,11 @@ namespace pP {
                                    ? std::error_code{}
                                    : std::make_error_code(std::errc::not_connected));
 
-        // Production binds the owner's zero prior-CH placeholder until fine
-        // reconstruction owns the in-place field; a known DC field may be
-        // supplied through the same optional publication slot.
+        // The source stage reads the field's pre-update DC. The owner's single
+        // in-place field is the production prior; a known DC field may still be
+        // supplied through the same optional publication slot for diagnostics.
+        // Every source read is ordered before fine reconstruction writes the
+        // field.
         rhi::IBuffer *const prior_ch = inputs.m_prior_ch ? inputs.m_prior_ch.get() : resources.m_fine_ch.get();
         if (inputs.m_prior_ch) {
             PPR_RETURN_ERROR_ON_FAIL(
@@ -428,6 +461,88 @@ namespace pP {
         // Cascade write -> fine reconstruction / scene read dependency.
         encoder.globalBarrier();
         encoder.setBufferState(resources.m_cascades, rhi::ResourceState::ShaderResource);
+        return {};
+    }
+
+    // ------------------------------------------------------------------
+    // fine CH reconstruction and in-place accumulation
+    // ------------------------------------------------------------------
+
+    std::error_code WorldLightingPass::encodeFine_(const PreRenderContext &context) {
+        auto &resources = *m_resources;
+        auto &attempt = resources.m_status[resources.m_attempt_slot];
+        rhi::ICommandEncoder &encoder = context.m_encoder;
+
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldLightingPass, resources.m_fine_programs[0u].m_program and
+                                       resources.m_fine_roots[0u][resources.m_attempt_slot] and
+                                       resources.m_fine_ch and
+                                       resources.m_cascades and
+                                       resources.m_source and
+                                       attempt.m_jump
+                                   ? std::error_code{}
+                                   : std::make_error_code(std::errc::not_connected));
+
+        const u64 accepted = resources.m_accepted_attempts;
+        const bool first_field = accepted == 0u;
+        const TimeSpan delta = attempt.m_active_elapsed - resources.m_accepted_active_elapsed;
+        const double delta_seconds = time::seconds(delta);
+
+        FineStageFrame values{};
+        values.m_frame_low = static_cast<u32>(accepted);
+        values.m_frame_high = static_cast<u32>(accepted >> 32u);
+        values.m_status_record = kNumericStageFine;
+        values.m_current_weight = first_field ? 0.0f : lighting::fineAccumulationWeight(delta_seconds);
+        values.m_first_field = first_field ? 1u : 0u;
+
+        encoder.pushDebugGroup("WorldLighting.Fine", {});
+        PPR_DEFER {
+            encoder.popDebugGroup();
+        };
+
+        // Every source-preparation read of the prior CH DC has already been
+        // ordered before this barrier. The field is read and written only at
+        // the invocation's own record; there is no neighbour read or history
+        // copy.
+        encoder.globalBarrier();
+        encoder.setBufferState(resources.m_fine_ch, rhi::ResourceState::UnorderedAccess);
+
+        auto &root = *resources.m_fine_roots[0u][resources.m_attempt_slot];
+        rhi::ShaderCursor cursor{&root};
+        const auto bind = [&](const char *const name, rhi::IBuffer *const buffer) -> std::error_code {
+            PPR_RETURN_ERROR_ON_FAIL(
+                WorldLightingPass, cursor[name].setBinding(rhi::Binding(buffer, transportRange(buffer))));
+            return {};
+        };
+
+        PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind("g_resolved_cells", resources.m_resolved));
+        PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind("g_visuals", attempt.m_inputs.m_visible_materials));
+        PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind("g_cell_source", resources.m_source));
+        PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind("g_cascades", resources.m_cascades));
+        PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind("g_fine_ch", resources.m_fine_ch));
+        PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind("g_numeric_status", attempt.m_status));
+        PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, cursor["g_jump"].setBinding(rhi::Binding(attempt.m_jump)));
+
+        rhi::ShaderCursor constants;
+        PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, cursor["g_fine"].getDereferenced(constants));
+        PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, constants.setData(&values, sizeof(values)));
+
+        auto *const pass = encoder.beginComputePass();
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldLightingPass, pass != nullptr ? std::error_code{} : std::make_error_code(std::errc::io_error));
+        {
+            PPR_DEFER {
+                pass->end();
+            };
+            pass->bindPipeline(resources.m_fine_programs[0u].m_pipeline, &root);
+            pass->dispatchCompute(kFineCHEdge / kFineDispatchThreads, kFineCHEdge / kFineDispatchThreads, 1u);
+        }
+
+        // Fine write -> scene read dependency. The field stays an SRV for the
+        // scene/visible readers in this submission and for the next submitted
+        // frame's source preparation on the same ordered queue.
+        encoder.globalBarrier();
+        encoder.setBufferState(resources.m_fine_ch, rhi::ResourceState::ShaderResource);
         return {};
     }
 }

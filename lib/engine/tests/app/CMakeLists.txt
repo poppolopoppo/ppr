@@ -63,6 +63,7 @@ target_sources(engine.tests.app
         App.WorldLighting.Projection.Tests.cpp
         App.WorldLighting.Trace.Tests.cpp
         App.WorldLighting.Cascade.Tests.cpp
+        App.WorldLighting.Fine.Tests.cpp
 
         ${CMAKE_SOURCE_DIR}/game/colony/Colony.cpp
         ${CMAKE_SOURCE_DIR}/game/colony/WorldGen.cpp
@@ -532,6 +533,31 @@ ppr_add_test_entry(TARGET engine.tests.app
 )
 
 set_tests_properties(engine.tests.app.world_lighting_cascade_gpu_validation PROPERTIES
+    ENVIRONMENT "PPR_TEST_GPU_VALIDATION=1"
+)
+
+# Fine CH reconstruction, in-place EMA and injected active-time behavior. The
+# leaves drive the real fine dispatch and test-only probes over the actual CH
+# fit/schedule helpers, so both entries claim the gpu lock.
+ppr_add_test_entry(TARGET engine.tests.app
+    NAME world_lighting_fine
+    FILTER "app/world_lighting_fine/"
+    LOOPS
+    RESOURCE_LOCK gpu
+    TIMEOUT 420
+    LABELS unit engine app
+)
+
+ppr_add_test_entry(TARGET engine.tests.app
+    NAME world_lighting_fine_gpu_validation
+    FILTER "app/world_lighting_fine/"
+    LOOPS
+    RESOURCE_LOCK gpu
+    TIMEOUT 600
+    LABELS unit engine app gpu_validation
+)
+
+set_tests_properties(engine.tests.app.world_lighting_fine_gpu_validation PROPERTIES
     ENVIRONMENT "PPR_TEST_GPU_VALIDATION=1"
 )
 

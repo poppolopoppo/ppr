@@ -18,14 +18,15 @@ struct NumericStatus {
 
 static const uint kNumericStatusWords = 8u;
 // Four projection records (clear/keys/rows/cells) followed by the transport
-// records (source preparation, terminal level L5, lower cascades L4..L1).
-static const uint kNumericStatusRecords = 7u;
+// records (source preparation, terminal level L5, lower cascades L4..L1) and
+// fine reconstruction.
+static const uint kNumericStatusRecords = 8u;
 static const uint kNoNumericIndex = 0xffffffffu;
 // The projection stage reports only invalid arithmetic/state (nonfinite and
-// out-of-domain candidates). The source/terminal/cascade stages report both
-// categories: invalid arithmetic/state and representational range overflow of
-// their bounded radiance records. Both minima are checked independently when a
-// stage is inspected.
+// out-of-domain candidates). The source/terminal/cascade/fine stages report
+// both categories: invalid arithmetic/state and representational range overflow
+// of their bounded radiance records. Both minima are checked independently when
+// a stage is inspected.
 static const uint kNumericInvalidState = 0u;
 static const uint kNumericRangeError = 1u;
 

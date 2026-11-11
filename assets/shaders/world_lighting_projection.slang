@@ -38,7 +38,7 @@ static const uint kProjectionStatusCells = 3u;
 // Candidate state: 0 accepted, 1 rejected (nonfinite, out-of-domain or
 // otherwise invalid), 4 inactive (an ordinary skip, not a failure). The
 // projection has no representational range: word 1 stays UINT32_MAX here, and
-// only the separate source/transport stage records use it.
+// only the separate source/transport/fine stage records use it.
 static const uint kProjectionCandidateInactive = 4u;
 
 struct ProjectionCandidate {

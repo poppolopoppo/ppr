@@ -65,15 +65,16 @@ namespace pP {
 
         constexpr std::array<const char *, kNumericStatusRecords> kNumericStageNames{
             "clear_winners", "reduce_keys", "reduce_rows", "resolve_cells", "prepare_source", "update_terminal",
-            "update_cascade"};
+            "update_cascade", "reconstruct_fine"};
 
         constexpr std::array<const char *, WorldLightingPass::kTransportEntryCount> kTransportEntries{
             "buildVisibility", "buildJump"};
 
         // Entry slots are fixed: the source module owns record 0, the cascade
-        // module owns records 1 and 2.
+        // module owns records 1 and 2, and the fine module owns record 7.
         constexpr std::array<const char *, 1u> kSourceEntries{"prepareSource"};
         constexpr std::array<const char *, 2u> kCascadeEntries{"updateTerminal", "updateCascade"};
+        constexpr std::array<const char *, 1u> kFineEntries{"reconstructFine"};
 
         std::error_code validateProjectionInputs(const lighting::WorldLightingInputs &inputs) {
             // Only the resources these dispatches bind are required. The source
@@ -245,10 +246,12 @@ namespace pP {
             m_resources->m_transport_programs[entry] = std::move(transport_programs[entry]);
         }
 
-        // Cached-source and cascade entries. One 40 MiB interval store carries
-        // L1..L5; the sky and the shared codecs are include-only fragments.
-        const auto load_cascade_programs = [&](const std::filesystem::path &file, const char *const label,
-                                               const u32 first_entry, const std::span<const char *const> entries) {
+        // Cached-source, cascade and fine-reconstruction entries. One 40 MiB
+        // interval store carries L1..L5; the sky, schedule, CH basis and codecs
+        // are include-only fragments.
+        const auto load_transport_programs = [&](const std::filesystem::path &file, const char *const label,
+                                                 const u32 first_entry, const std::span<const char *const> entries,
+                                                 ProjectionProgram *const programs) {
             shader::SharedModule module{};
             PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, shaders.loadModuleFromFile(file, label, module.writeRef()));
 
@@ -267,27 +270,29 @@ namespace pP {
                 shader::Diagnose diagnostics;
                 PPR_RETURN_ERROR_ON_FAIL(
                     WorldLightingPass, device.createShaderProgram(
-                                           description, m_resources->m_cascade_programs[entry].m_program.writeRef(),
-                                           diagnostics.writeRef()));
+                                           description, programs[entry].m_program.writeRef(), diagnostics.writeRef()));
 
                 rhi::ComputePipelineDesc pipeline{};
-                pipeline.program = m_resources->m_cascade_programs[entry].m_program;
+                pipeline.program = programs[entry].m_program;
                 PPR_RETURN_ERROR_ON_FAIL(
-                    WorldLightingPass, device.createComputePipeline(
-                                           pipeline, m_resources->m_cascade_programs[entry].m_pipeline.writeRef()));
+                    WorldLightingPass, device.createComputePipeline(pipeline, programs[entry].m_pipeline.writeRef()));
             }
 
             return std::error_code{};
         };
 
         PPR_RETURN_ERROR_ON_FAIL(
-            WorldLightingPass,
-            load_cascade_programs(
-                root / "shaders" / "world_lighting_source.slang", "world_lighting_source", 0u, kSourceEntries));
+            WorldLightingPass, load_transport_programs(
+                                   root / "shaders" / "world_lighting_source.slang", "world_lighting_source", 0u,
+                                   kSourceEntries, m_resources->m_cascade_programs.data()));
         PPR_RETURN_ERROR_ON_FAIL(
-            WorldLightingPass,
-            load_cascade_programs(
-                root / "shaders" / "world_lighting_cascade.slang", "world_lighting_cascade", 1u, kCascadeEntries));
+            WorldLightingPass, load_transport_programs(
+                                   root / "shaders" / "world_lighting_cascade.slang", "world_lighting_cascade", 1u,
+                                   kCascadeEntries, m_resources->m_cascade_programs.data()));
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldLightingPass, load_transport_programs(
+                                   root / "shaders" / "world_lighting_fine.slang", "world_lighting_fine", 0u,
+                                   kFineEntries, m_resources->m_fine_programs.data()));
 
         m_ready = true;
         PPR_LOG(WorldLightingPass, info, "WorldLightingPass initialized");
@@ -439,6 +444,15 @@ namespace pP {
                                    : std::make_error_code(std::errc::invalid_argument));
         PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, ensureResources_(context.m_device));
 
+        // The injected active presentation time must not move backwards. The
+        // accepted submission commits the new baseline; a discarded attempt
+        // leaves it untouched so its elapsed active time belongs to the next
+        // accepted lighting update.
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldLightingPass, frame.m_active_elapsed >= m_resources->m_accepted_active_elapsed
+                                   ? std::error_code{}
+                                   : std::make_error_code(std::errc::invalid_argument));
+
         // A world whose accepted-frame counter is exhausted cannot derive a
         // current or retained probe frame. Reject admission before any slot,
         // encoding or storage is touched rather than wrapping the counter.
@@ -452,6 +466,7 @@ namespace pP {
         auto &resources = *m_resources;
         auto &attempt = resources.m_status[resources.m_attempt_slot];
         attempt.m_inputs = inputs;
+        attempt.m_active_elapsed = frame.m_active_elapsed;
         resources.m_world = inputs.m_particles.current() ? inputs.m_particles.m_world : GridWorldIdentity{};
 
         if (auto encoding = encodeProjection_(context); encoding) {
@@ -473,6 +488,14 @@ namespace pP {
         // between the stages and before any tracing reader. The source cache and
         // intervals are shared in place, never reallocated per frame.
         if (auto encoding = encodeCascades_(context, frame); encoding) {
+            discardUnsubmitted();
+            PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, encoding);
+        }
+
+        // Fine reconstruction runs after every source-preparation CH read and
+        // before scene readers. It reads only its own prior record and writes
+        // that record in place.
+        if (auto encoding = encodeFine_(context); encoding) {
             discardUnsubmitted();
             PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, encoding);
         }
@@ -541,6 +564,7 @@ namespace pP {
         slot.m_inputs = {};
         slot.m_submission = kFenceValueNone;
         slot.m_read_submission = kFenceValueNone;
+        slot.m_active_elapsed = {};
         slot.m_world_generation = 0u;
         slot.m_accepted_frame = 0u;
         slot.m_pending = false;
@@ -560,6 +584,7 @@ namespace pP {
         attempt.m_submission = value;
         attempt.m_world_generation = m_resources->m_world.m_world_generation;
         attempt.m_accepted_frame = ++m_resources->m_accepted_attempts;
+        m_resources->m_accepted_active_elapsed = attempt.m_active_elapsed;
         m_resources->m_armed = false;
     }
 
@@ -727,7 +752,7 @@ namespace pP {
         return m_resources ? m_resources->m_source.get() : nullptr;
     }
 
-    rhi::IBuffer *WorldLightingPass::priorFineCHForTest() const noexcept {
+    rhi::IBuffer *WorldLightingPass::fineCHForTest() const noexcept {
         return m_resources ? m_resources->m_fine_ch.get() : nullptr;
     }
 

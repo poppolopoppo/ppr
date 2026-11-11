@@ -157,6 +157,72 @@ CH unpackCH(PackedCH value) {
     return result;
 }
 
+// ------------------------------------------------------------------
+// fine CH encode
+// ------------------------------------------------------------------
+// Mirrors the host codec: the DC coefficient is nonnegative RGB9E5, AC is one
+// signed eight-bit component per RGB channel (range [-127, 127], never -128)
+// with one shared FP32 scale = max(abs(AC))/127. Zero AC writes scale zero and
+// all 24 AC bytes zero. Quantization is nearest/ties-to-even on the clamped
+// endpoint.
+uint chPackCategory(CH value) {
+    if (!all(isfinite(value.m_coefficients[0])) || any(value.m_coefficients[0] < 0.0)) return 1u;
+    if (any(value.m_coefficients[0] > 65408.0)) return 2u;
+
+    for (uint coefficient = 1u; coefficient < 9u; ++coefficient) {
+        if (!all(isfinite(value.m_coefficients[coefficient]))) return 1u;
+    }
+
+    return 0u;
+}
+
+PackedCH packCH(CH value) {
+    PackedCH packed;
+    packed.m_dc = packRGB9E5(value.m_coefficients[0]);
+    packed.m_scale = 0.0;
+    packed.m_ac[0] = 0u;
+    packed.m_ac[1] = 0u;
+    packed.m_ac[2] = 0u;
+    packed.m_ac[3] = 0u;
+    packed.m_ac[4] = 0u;
+    packed.m_ac[5] = 0u;
+
+    float maximum = 0.0;
+    for (uint coefficient = 1u; coefficient < 9u; ++coefficient) {
+        maximum = max(maximum, max(abs(value.m_coefficients[coefficient].x),
+                                  max(abs(value.m_coefficients[coefficient].y),
+                                      abs(value.m_coefficients[coefficient].z))));
+    }
+
+    if (maximum == 0.0) return packed;
+
+    float scale = maximum / 127.0;
+    // A nonzero maximum whose FP32 scale underflows encodes zero AC; its
+    // absolute error is below 127 times the smallest positive FP32 value.
+    if (scale == 0.0) return packed;
+    packed.m_scale = scale;
+
+    for (uint coefficient = 1u; coefficient < 9u; ++coefficient) {
+        for (uint channel = 0u; channel < 3u; ++channel) {
+            float component = channel == 0u ? value.m_coefficients[coefficient].x
+                              : channel == 1u ? value.m_coefficients[coefficient].y
+                                              : value.m_coefficients[coefficient].z;
+            float scaled = component / scale;
+            float base = floor(scaled);
+            float fraction = scaled - base;
+            int quantized = int(base);
+            if (fraction > 0.5 || (fraction == 0.5 && (quantized & 1) != 0)) ++quantized;
+            quantized = clamp(quantized, -127, 127);
+
+            uint packed_component = (coefficient - 1u) * 3u + channel;
+            packed.m_ac[packed_component >> 2u] |=
+                (uint(quantized) & 0xffu) << ((packed_component & 3u) * 8u);
+        }
+    }
+
+    return packed;
+}
+
 float3 unpackSourceEmission(SourceMaterial material) {
     return unpackRGB9E5(material.m_emission);
 }

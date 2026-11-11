@@ -61,13 +61,14 @@ thermal table and the prior fine-CH DC field, sampled bilinearly at
 is the include-only analytic terminal sky (SkyColor 0.2/0.5/1, SunColor 20/10/2,
 SunA 5, SunS 64, fixed intensity 5, narrow unwrapped sector integration split
 once at the 2*pi seam, negative hour = black boundary sky).
-`world_lighting_cascade.slang` owns the fixed four-frame quarter-probe schedule
-(`mix32` group phase, derived age/trace frame, golden-ratio fixed-point phase),
-the 8-byte interval record addressing and the two cascade entries:
+`world_lighting_cascade.slang` owns the two cascade entries:
 `updateTerminal` (L5, four terminal sub-sectors per stored direction with
 `D=16,384` traced to the actual map exit and closed by the sky with zero
 transmittance) and `updateCascade` (L4..L1 near segment plus four retained
-parent-sector merges with bilinear spatial weights).
+parent-sector merges with bilinear spatial weights). The fixed four-frame
+quarter-probe schedule, probe geometry, derived trace directions and interval
+atlas addressing are shared with fine reconstruction through
+`world_lighting_schedule.slang` (include-only).
 
 `world_lighting_projection.slang` is the `WorldLightingPass` categorical
 projection: `clearWinners`, `reduceKeys`, `reduceRows` and `resolveCells` share
@@ -100,9 +101,22 @@ strictly ahead.
 direction) for the `app/world_lighting_cascade/` group. The
 `world_lighting_codec.slang` mirror also owns the 96-byte `TerrainVisual`
 classification row and `resolvedCellOccupied`, shared by projection,
-acceleration and tracing, plus the explicit binary16/RGB9E5/interval encoders
-(`packHalf`, `packRGB9E5`, `intervalPackCategory`, `packInterval`) that mirror
-the host codecs for the producer stages.
+acceleration and tracing, plus the explicit binary16/RGB9E5/interval/CH
+encoders (`packHalf`, `packRGB9E5`, `intervalPackCategory`, `packInterval`,
+`chPackCategory`, `packCH`) that mirror the host codecs for the producer
+stages.
+
+`world_lighting_ch.slang` is the include-only orthonormal circular-harmonic
+basis, weighted sample fit, `angularMean(CH)` and world-cell
+`angularMean(float2)` helper. The including module declares its fine-CH
+binding before the include (a structured read for visible/gas readers, a
+read/write field for the in-place writer). `world_lighting_fine.slang` owns
+`reconstructFine` (8x8 threads, 512-square): four clamped L1 taps, the 64
+nominal connectors, the near/far merge, exact weighted fitting, the in-place
+`1-exp(-2*dt)` EMA and one encode per record. It reads only its own prior
+record and writes all 32 bytes. `tests/world_lighting_fine_probe.slang`
+exposes the real fit/EMA helpers, the retained L1 schedule identity and
+`angularMean` for the `app/world_lighting_fine/` group.
 
 
 ## Design
@@ -278,6 +292,9 @@ bloom and metering cohorts are reused only through accepted-submit fences.
 - `grid_tiles.slang` - the live debug-grid tile vertex/fragment program (`vertexGridMain` + `fragmentGridMain`).
 - `world_lighting_source.slang` - cached-source preparation over the full native-cell domain.
 - `world_lighting_cascade.slang` - scheduled coarse cascade transport (`updateTerminal`, `updateCascade`).
+- `world_lighting_schedule.slang` - include-only four-frame probe schedule, probe geometry, directions and interval atlas.
+- `world_lighting_ch.slang` - include-only CH basis/fit and angular-mean helper.
+- `world_lighting_fine.slang` - in-place fine CH reconstruction and EMA (`reconstructFine`).
 - `world_lighting_sky.slang` - analytic terminal sky sector integration (include-only).
 - `post_process.slang` - resolved-size bloom combine and once-only AgX treatment.
 - `present_scene.slang` - fixed-P nearest enlargement/crop and single sRGB decision.

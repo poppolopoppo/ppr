@@ -114,6 +114,18 @@ export namespace pP::lighting {
 
     static_assert(kSourceCellBytes == 4'194'304u and kFineCHBytes == 8'388'608u);
 
+    // Approved accumulation rate: next = lerp(previous, reconstructed,
+    // 1 - exp(-2 * delta_seconds)) with the learning-rate multiplier fixed at
+    // one. This is an implementation constant, not a display control. The
+    // caller supplies elapsed active presentation time; paused simulation does
+    // not stop accumulation, while suspended/minimized intervals are excluded
+    // by the injected active-time value.
+    inline constexpr double kFineAccumulationRate{2.0};
+
+    [[nodiscard]] inline float fineAccumulationWeight(const double delta_seconds) noexcept {
+        return static_cast<float>(1.0 - std::exp(-kFineAccumulationRate * delta_seconds));
+    }
+
     // Probe spacing, direction count and probe-grid edge for one cascade level.
     [[nodiscard]] constexpr u32 cascadeSpacing(const u32 level) noexcept {
         return 2u << level;
@@ -244,9 +256,9 @@ export namespace pP::lighting {
     // buffers. m_terrain is the full-domain packed cell grid, m_visible_materials
     // is the admitted GridTerrainVisual palette, m_source_materials is the
     // eight-byte derived source palette and m_thermal_lut is the shared table.
-    // m_prior_ch is the fine CH field source preparation samples for diffuse
-    // feedback; until fine reconstruction exists the owner binds its zero
-    // placeholder field, and no source-history pair is allocated.
+    // m_prior_ch optionally supplies a known DC field for diagnostics; production
+    // leaves it empty and source preparation reads the owner's single in-place
+    // fine CH field before fine reconstruction overwrites it.
     struct WorldLightingInputs {
         pP::GridParticleGpuView m_particles{};
         pP::GridParticlePresentationIdentity m_identity{};

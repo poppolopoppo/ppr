@@ -171,8 +171,8 @@ previous_angular_mean`; the previous mean is the prior fine-CH DC field
 bilinearly sampled at `(cell+0.5)/2-0.5` and scaled by `Y0`, with no extra pi,
 cosine, normal, roughness or Fresnel factor. Empty, pure-metal-diffuse and
 receive-only/gas cells contribute exactly zero; the pass binds its own
-zero-initialized 8 MiB fine-CH placeholder until fine reconstruction owns the
-field in Task 10. The source dispatch is ordered before tracing.
+zero-initialized in-place 8 MiB fine-CH field. The source dispatch is ordered
+before tracing and before every fine write.
 `updateTerminal` fills L5 over the 512-square quarter-probe domain (16x16
 threads): four terminal sub-sectors per stored direction with `D=16,384` trace
 to the actual forward map exit (slab clip; exterior clear), closing every path
@@ -187,10 +187,33 @@ retain zero radiance and zero transmittance (never vacuum). Explicit global
 barriers order source -> L5 -> L4 -> ... -> L1 and the final SRV transition;
 nothing is reallocated per frame and there is no CPU wait or readback.
 
+`encodeFine_` then reconstructs the single in-place 512x512x32-byte fine CH
+field (8 MiB, zero-initialized per world) with one 8x8-thread dispatch. Fine
+centre `f=(p+0.5)*2` owns the connector box `[f-4,f+4]`; four L1 probes are
+gathered at `f/4-0.5` after clamping each index to the L1 domain, before that
+index derives its centre, group, validity, trace frame or storage address.
+Each of the 16 L1 directions uses the probe's own retained trace frame (the
+current frame only for a never-initialized tap), exits the box at `e`, and
+projects on `v=normalize(e-f)`. The near segment starts at `f+0.001*v`; the
+merge is `L=Lnear+Tnear*Lfar`, `T=Tnear*Tfar` with a never-initialized far
+interval `(0,0)`. Samples carry `bilinear_weight*2*pi/16`, are fit to the
+orthonormal circular basis (`Y0=1/sqrt(2*pi)`, `cos/sin(m*theta)/sqrt(pi)`,
+mean subtracted, Lanczos window `sinc(m*pi/5)` applied once), then all nine
+decoded FP32 RGB coefficients are blended by
+`1-exp(-2*delta_seconds)` and encoded exactly once. The first field bypasses
+the blend. Each invocation reads and overwrites only its own 32-byte record;
+the pass has no neighbouring CH read, history copy or ping-pong field. Explicit
+barriers order source reads before fine writes and fine writes before scene
+readers across successive submitted frames. The accepted submission commits
+the phase and active-time baseline; rejected/unsubmitted work commits neither.
+`angularMean(float2)` samples the decoded field at a world-cell position with
+the same `Y0` normalization for later visible/gas use.
+
 Each numeric stage owns one 32-byte `NumericStatusRecord` in the attempt's
-fixed-record status buffer: four projection stages then source preparation,
-terminal L5 and lower cascades; words 0/1 are atomic minima of the
-invalid-state and range-error index, words 2..7 stay zero. `finalize` copies
+fixed-record status buffer: four projection stages, source preparation,
+terminal L5, lower cascades and fine reconstruction; words 0/1 are atomic
+minima of the invalid-state and range-error index, words 2..7 stay zero.
+`finalize` copies
 all records to a mapped readback buffer in the same submission; the pass polls settlement
 through `collectCompleted(FenceCompletionValue)` with no host wait, and a
 completed ticket reports `state_not_recoverable` (invalid arithmetic/state) or

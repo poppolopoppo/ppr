@@ -1346,8 +1346,8 @@ namespace pP::tests::detail::WorldLightingCascade {
         PPR_TEST_ASSERT(pass.cascadeIntervalsForTest()->getDesc().elementSize == sizeof(lighting::PackedInterval));
         PPR_TEST_ASSERT(pass.sourceCellsForTest() != nullptr);
         PPR_TEST_ASSERT(pass.sourceCellsForTest()->getDesc().size == lighting::kSourceCellBytes);
-        PPR_TEST_ASSERT(pass.priorFineCHForTest() != nullptr);
-        PPR_TEST_ASSERT(pass.priorFineCHForTest()->getDesc().size == lighting::kFineCHBytes);
+        PPR_TEST_ASSERT(pass.fineCHForTest() != nullptr);
+        PPR_TEST_ASSERT(pass.fineCHForTest()->getDesc().size == lighting::kFineCHBytes);
 
         // Spacing, direction count, probe edge and atlas addressing.
         for (u32 level = 1u; level <= lighting::kCascadeLevels; ++level) {
@@ -1576,9 +1576,11 @@ namespace pP::tests::detail::WorldLightingCascade {
 
         // A blocker 1,228 cells from the corner probe centre: farther than the
         // premature finite 1,048.576-cell end but still inside the 1024-square
-        // map, so only the actual forward exit finds it.
+        // map, so only the actual forward exit finds it. The pure metal emits
+        // but has zero diffuse reflectance, so the multi-frame CH feedback added
+        // by fine reconstruction cannot change this frame's cached source.
         CategoricalMap map;
-        map.fillRect(884u, 884u, 916u, 916u, kEmissive);
+        map.fillRect(884u, 884u, 916u, 916u, kMetal);
         CascadeInputs inputs{visuals, map, sources, thermal};
         inputs.upload(fixture);
 
@@ -1592,7 +1594,7 @@ namespace pP::tests::detail::WorldLightingCascade {
         std::vector<u32> source_words(kCells, 0u);
         for (u32 cell = 0u; cell < kCells; ++cell) {
             // Only the blocker emits; every other cell is empty.
-            source_words[cell] = occupancy[cell] != 0u ? sources[kEmissive].m_emission : 0u;
+            source_words[cell] = occupancy[cell] != 0u ? sources[kMetal].m_emission : 0u;
         }
 
         const auto level_words = readLevel(fixture, pass.cascadeIntervalsForTest(), kTerminal);
@@ -1833,12 +1835,12 @@ namespace pP::tests::detail::WorldLightingCascade {
             PPR_TEST_ASSERT(closeRGB9E5(actual, expected));
         }
 
-        // Source preparation reads the pre-update field and never writes it: the
-        // supplied field and the owner's placeholder both keep their bytes.
+        // Source preparation reads the pre-update field and never writes it.
+        // The supplied diagnostic field keeps its bytes; the owner's in-place
+        // field is written by fine reconstruction after the source dispatch.
         const auto supplied = readWords(fixture, prior_ch.get(), 0u, 64u);
-        const auto placeholder = readWords(fixture, pass.priorFineCHForTest(), 0u, 64u);
-        PPR_TEST_ASSERT(std::ranges::all_of(placeholder, [](const u32 word) { return word == 0u; }));
         PPR_TEST_ASSERT(supplied[0u] != 0u);
+        PPR_TEST_ASSERT(pass.fineCHForTest() != nullptr);
 
         std::println("WORLD_LIGHTING_CASCADE source_feedback emission+thermal+diffuse*previous_mean=y0_scale");
         PPR_TEST_ASSERT(not pass.shutdown());
@@ -1863,9 +1865,11 @@ namespace pP::tests::detail::WorldLightingCascade {
         // Parent probes see different far intervals: the far blocker is hit by
         // the probes on its row and missed by the neighbours, so the child's
         // bilinear weights are observable. It sits beyond the 262-cell L5 start
-        // distance of the parent probes and inside the 1024-square map.
+        // distance of the parent probes and inside the 1024-square map. The pure
+        // metal emits with zero diffuse reflectance, so fine CH feedback cannot
+        // perturb the cached source across the twelve accepted frames.
         CategoricalMap map;
-        map.fillRect(400u, 86u, 404u, 89u, kEmissive);
+        map.fillRect(400u, 86u, 404u, 89u, kMetal);
         CascadeInputs inputs{visuals, map, sources, thermal};
         inputs.upload(fixture);
 
@@ -1879,7 +1883,7 @@ namespace pP::tests::detail::WorldLightingCascade {
         const std::vector<u8> occupancy = map.occupancy(visuals);
         std::vector<u32> source_words(kCells, 0u);
         for (u32 cell = 0u; cell < kCells; ++cell) {
-            source_words[cell] = occupancy[cell] != 0u ? sources[kEmissive].m_emission : 0u;
+            source_words[cell] = occupancy[cell] != 0u ? sources[kMetal].m_emission : 0u;
         }
 
         const u64 last_frame = kFrames - 1u;
