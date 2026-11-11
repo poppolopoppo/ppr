@@ -811,8 +811,9 @@ export namespace pP {
         // Loads the generated thermal table and creates its single device copy.
         [[nodiscard]] std::error_code createThermalLut_(rhi::IDevice &device, const std::filesystem::path &content_dir);
         // Ensures the world-owned full-domain packed terrain buffer and its
-        // completion-selected upload staging ring for `edge`.
-        [[nodiscard]] std::error_code ensureTerrainCells_(rhi::IDevice &device, u32 edge);
+        // completion-selected upload staging ring for `edge`. `recreate` forces
+        // a zero-filled replacement for reset/recovery paths.
+        [[nodiscard]] std::error_code ensureTerrainCells_(rhi::IDevice &device, u32 edge, bool recreate = false);
         // Encodes pending chunk copies into the current frame command buffer.
         [[nodiscard]] std::error_code flushTerrainCells_(const PreRenderContext &context);
 

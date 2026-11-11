@@ -152,6 +152,7 @@ string(JOIN "," ppr_asset_gpu_misc_filter
     "asset/render/gates/triangle_depth_occlusion_gate"
     "asset/render/gates/orm_golden_distinct_channels"
     "asset/render/gates/grid_source_palette_uses_filtered_texture_mean"
+    "asset/render/gates/grid_terrain_words_initialize_reset_and_republish_after_device_loss"
     "asset/render/gates/tangent_w_render_proof"
     "asset/render/gates/pipeline_signature_count_sensitivity"
     "asset/render/gates/pipeline_signature_tail_insensitivity"

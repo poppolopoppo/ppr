@@ -667,7 +667,8 @@ namespace pP {
         PPR_RETURN_ERROR_ON_FAIL(GridPass, stageDiagnostic_(stage));
         PPR_RETURN_ERROR_ON_FAIL(GridPass, submitTiles(std::span<const GridTileSubmission>{stage.m_tiles}));
         if (m_device != nullptr) {
-            PPR_RETURN_ERROR_ON_FAIL(GridPass, ensureTerrainCells_(*m_device, stage.m_world_edge));
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass, ensureTerrainCells_(*m_device, stage.m_world_edge, stage.m_reset_caches));
         }
 
         for (const GridStagedUpload &upload: stage.m_uploads) {
@@ -1149,7 +1150,7 @@ namespace pP {
         return make_error_code(device.createBuffer(desc, bytes.data(), m_thermal_lut.writeRef()));
     }
 
-    std::error_code GridPass::ensureTerrainCells_(rhi::IDevice &device, const u32 edge) {
+    std::error_code GridPass::ensureTerrainCells_(rhi::IDevice &device, const u32 edge, const bool recreate) {
         if (edge == 0u) {
             return {};
         }
@@ -1160,7 +1161,7 @@ namespace pP {
             GridPass, (m_world.m_world_edge == 0u or m_world.m_world_edge == edge)
                           ? std::error_code{}
                           : std::make_error_code(std::errc::invalid_argument));
-        if (m_world.m_terrain_cells and m_world.m_terrain_staging) {
+        if (not recreate and m_world.m_terrain_cells and m_world.m_terrain_staging) {
             return {};
         }
 
@@ -1172,8 +1173,11 @@ namespace pP {
             static_cast<u32>(rhi::BufferUsage::ShaderResource) | static_cast<u32>(rhi::BufferUsage::CopyDestination));
         desc.defaultState = rhi::ResourceState::ShaderResource;
         desc.label = "world packed terrain input";
+        // Chunks that are never presented (and chunks still awaiting a batched
+        // upload) must read as the all-zero empty word, never undefined memory.
+        Array<std::byte> zeros(static_cast<std::size_t>(desc.size), std::byte{0});
         rhi::ComPtr<rhi::IBuffer> terrain;
-        PPR_RETURN_ERROR_ON_FAIL(GridPass, device.createBuffer(desc, nullptr, terrain.writeRef()));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, device.createBuffer(desc, zeros.data(), terrain.writeRef()));
 
         // The staging ring is bounded like the existing cohort and reuses the
         // completion-selected frame slot. Host writes target only this mapped
@@ -1191,6 +1195,14 @@ namespace pP {
         void *mapped{};
         PPR_RETURN_ERROR_ON_FAIL(GridPass, device.mapBuffer(staging, rhi::CpuAccessMode::Write, &mapped));
 
+        if (m_world.m_terrain_cells) {
+            // The replaced full-domain input stays owned until its last
+            // submitted reader completes; strong references alone do not make
+            // its bytes immutable.
+            auto previous = std::move(m_world.m_terrain_cells);
+            m_deferred_releases.defer(
+                m_world.m_last_reader, [held = std::move(previous)]() mutable { held.setNull(); });
+        }
         m_world.m_terrain_cells = std::move(terrain);
         m_world.m_terrain_staging = std::move(staging);
         m_world.m_terrain_staging_mapped = mapped;
@@ -2672,6 +2684,9 @@ namespace pP {
         m_chunk_slot_uploaded.fill(false);
         for (auto it = m_world.m_cell_cache.begin(); it != m_world.m_cell_cache.end(); ++it) {
             it->second.m_pending = true;
+            if (it->second.m_cells.size() == kCellsPerChunk) {
+                it->second.m_full_pending = true;
+            }
         }
         releaseIndirectArgs_(nullptr);
         releaseTilePayloads_(nullptr);

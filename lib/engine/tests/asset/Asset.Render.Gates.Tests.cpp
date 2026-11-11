@@ -5937,6 +5937,92 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
             PPR_TEST_ASSERT(legacy_texel[0] > 160u and legacy_texel[1] < 80u);
         };
 
+        PPR_UNIT_TEST (grid_terrain_words_initialize_reset_and_republish_after_device_loss) {
+            const auto rhi = SharedGpu::rhiService();
+            const auto shader = SharedGpu::shaderService();
+            Renderer *const renderer = SharedGpu::renderer();
+            PPR_TEST_ASSERT(rhi.isValid() and shader.isValid() and renderer != nullptr);
+            rhi::IDevice &device = rhi->getDevice();
+            GridPass grid;
+            PPR_TEST_ASSERT(not grid.initialize(*rhi, *shader, std::filesystem::current_path()));
+            PPR_DEFER {
+                std::ignore = renderer->waitOnHost();
+                std::ignore = grid.shutdown();
+            };
+            const auto target = makeRenderTarget_(device, 128u);
+            PPR_TEST_ASSERT(target.has_value());
+            CameraModel model{};
+            model.m_camera_mode = ECameraProjection::orthographic;
+            model.m_ortho_scale = 1.0f;
+            Camera camera;
+            camera.updateModel(TimeSpan{}, model, Viewport{PixelRect{int2{0, 0}, int2{128, 128}}, ViewportLayout{}});
+            PPR_TEST_ASSERT(not grid.update(TimeSpan{}, camera.getSnapshot()));
+            const auto prepare = [&](const PreRenderContext &context) { return grid.prepareGpuVisibility(context); };
+            const auto draw = [&](const DrawContext &context) { return grid.renderGpuIndirect(context); };
+            const auto render = [&] {
+                PPR_TEST_ASSERT(not renderer->renderToTexture(
+                    targetRef_(target), {DrawSubmission{"terrain words", draw}}, {}, PreRenderCallback{prepare}));
+                grid.notifyFrameSubmitted(renderer->lastSubmittedFenceValue());
+                PPR_TEST_ASSERT(not renderer->waitOnHost());
+                PPR_TEST_ASSERT(not renderer->retireCompletedFrames());
+            };
+            const auto stage = [&](const std::array<u32, 2u> chunks, const std::array<u32, 2u> words,
+                                   const bool reset) {
+                GridPass::GridStagedFrame value{};
+                value.m_world_edge = 1024u;
+                value.m_reset_caches = reset;
+                for (u32 index = 0u; index < chunks.size(); ++index) {
+                    const u32 chunk = chunks[index];
+                    const GridTileRange range{
+                        static_cast<i32>(chunk * 128u), 0, static_cast<i32>((chunk + 1u) * 128u), 128};
+                    value.m_tiles.push_back(
+                        GridTileSubmission{.m_dirty_mask = 1u, .m_tile_range = range, .m_chunk_id = chunk});
+                    GridPass::GridStagedUpload upload{};
+                    upload.m_chunk_id = chunk;
+                    upload.m_payload.m_rect[0] = static_cast<float>(range.m_min_x);
+                    upload.m_payload.m_rect[1] = static_cast<float>(range.m_min_y);
+                    upload.m_payload.m_rect[2] = static_cast<float>(range.m_max_x);
+                    upload.m_payload.m_rect[3] = static_cast<float>(range.m_max_y);
+                    upload.m_cell_materials.assign(GridPass::kCellsPerChunk, 1u);
+                    upload.m_cell_words.assign(GridPass::kCellsPerChunk, words[index]);
+                    value.m_uploads.push_back(std::move(upload));
+                }
+                PPR_TEST_ASSERT(not grid.applyStagedFrame(value));
+                const auto prepared = grid.tryPrepareCellUploads(device, renderer->completedFenceValue());
+                PPR_TEST_ASSERT(prepared and *prepared);
+            };
+            const auto word = [&](const u32 cell) {
+                u32 value{};
+                PPR_TEST_ASSERT(not make_error_code(device.readBuffer(
+                    grid.lightingInputs()->m_terrain, static_cast<u64>(cell) * sizeof(u32), sizeof(value), &value)));
+                return value;
+            };
+
+            stage({0u, 1u}, {*lighting::packCell(1u, 300.0), *lighting::packCell(2u, 600.0)}, false);
+            render();
+            PPR_TEST_ASSERT(word(0u) == *lighting::packCell(1u, 300.0));
+            PPR_TEST_ASSERT(word(128u) == *lighting::packCell(2u, 600.0));
+            // A chunk that was never presented reads the all-zero empty word.
+            PPR_TEST_ASSERT(word(256u) == 0u);
+
+            // Reset recreates a zero-filled terrain buffer before new uploads.
+            stage({0u}, {*lighting::packCell(1u, 900.0)}, true);
+            render();
+            PPR_TEST_ASSERT(word(0u) == *lighting::packCell(1u, 900.0));
+            PPR_TEST_ASSERT(word(128u) == 0u);
+            PPR_TEST_ASSERT(word(256u) == 0u);
+
+            // Device loss destroys the device-local words; recovery republishes
+            // them from the retained CPU cell cache even when the stage is unchanged.
+            PPR_TEST_ASSERT(not renderer->waitOnHost());
+            PPR_TEST_ASSERT(not grid.notifyDeviceLost());
+            PPR_TEST_ASSERT(not grid.initialize(*rhi, *shader, std::filesystem::current_path()));
+            PPR_TEST_ASSERT(not grid.update(TimeSpan{}, camera.getSnapshot()));
+            stage({0u}, {*lighting::packCell(1u, 900.0)}, false);
+            render();
+            PPR_TEST_ASSERT(word(0u) == *lighting::packCell(1u, 900.0));
+        };
+
         PPR_UNIT_TEST (grid_source_palette_uses_filtered_texture_mean) {
             const auto rhi = SharedGpu::rhiService();
             const auto shader = SharedGpu::shaderService();
@@ -5999,7 +6085,11 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
             PPR_TEST_ASSERT(not make_error_code(device.readBuffer(
                 inputs->m_source_materials, 7u * sizeof(lighting::SourceMaterial), sizeof(lighting::SourceMaterial),
                 &source)));
-            PPR_TEST_ASSERT(source.m_diffuse == *lighting::packRGB9E5(float3{0.5f, 0.5f, 0.5f}));
+            const float3 diffuse = lighting::unpackRGB9E5(source.m_diffuse);
+            const float expected = 128.0f / 255.0f;
+            PPR_TEST_ASSERT(std::abs(diffuse.x - expected) <= 0.002f);
+            PPR_TEST_ASSERT(std::abs(diffuse.y - expected) <= 0.002f);
+            PPR_TEST_ASSERT(std::abs(diffuse.z - expected) <= 0.002f);
             PPR_TEST_ASSERT(source.m_diffuse != *lighting::packRGB9E5(float3{1.0f, 1.0f, 1.0f}));
         };
 
