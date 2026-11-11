@@ -686,3 +686,70 @@ separately claimed as fixed (the pre-load run shows no such errors in its log,
 but this does not generalize beyond it), and no Task 3 acceptance or
 Windows/D3D12 result is claimed. Full report:
 `.superpowers/sdd/2026-11-10-oni-port/task-3-report.md`.
+
+## Task 3 — cleanup acceptance evidence (awaiting owner decision)
+
+State: evidence collected; **owner acceptance not yet recorded. STOP here.**
+
+### Fix landed during acceptance
+
+- `6385fca8` `fix: treat closed-session teardown cancellation as expected`.
+  Late render/world acknowledgments posted after `close()` now return their
+  existing `operation_canceled` code without an error log; `TurboLarbin` routes
+  session deliveries through helpers that ignore only that expected closed-session
+  cancellation and forward every other error to the existing input-error path.
+  `2ff8d944` corrects the evidence labels and records the pre-load re-run.
+- The separate in-flight world-preparation cancellation is not separately claimed;
+  the observed pre-load post-fix run is clean.
+
+### Build and regression evidence
+
+- `cmake --preset clang-dev` then the affected targets built cleanly in Task 1/2.
+- `game/session_service/` 13/13 leaves pass (9.50 s), including
+  `terminal_control_stop_retains_acknowledgments_until_receiver_close`.
+- Regression closure:
+  `ctest --test-dir out/build/clang-dev -R '^(game.tests|engine.tests.app.(functional_cpu|functional_gpu|display_window|post_process|frame_fence))$' -j1`
+  → 6/6 pass, 212.23 s (game.tests 123.74 s; post_process 7.04 s).
+- Task 2 evidence remains applicable: post suite 16/16, app core entries 5/5,
+  affected asset shards and HDR/picture validation entries pass.
+
+### Ordinary application evidence
+
+All runs used the isolated `/tmp/opencode/task3/base.toml` overlay and the
+repository sanitizer policy. GPU/window runs were serialized.
+
+| Run | Result | Evidence |
+| --- | --- | --- |
+| `--worldgen-acceptance` (camera, seam edit, previews, two New Games) | PASS, exit 0; 0 engine errors; 10 pre-existing validation warnings | `/tmp/opencode/task3/worldgen-acceptance.log`, `worldgen-acceptance.png` (1280x720) |
+| Post-load ordinary exit, 1281x721 | exit 0; 0 `❌`/`FAILED`; world published 141.9 s; exit 167.1 s | `ordinary-clean-exit.log`, `ordinary-clean-exit.png` (1281x721) |
+| Pre-load auto-exit (original failing shape), 1281x721 | exit 0; 0 `❌`/`FAILED`/session-cancellation records | `preload-exit-after-fix.log`, `preload-exit-after-fix.png` |
+| Live resize/minimize/restore, then post-load exit | exit 0; 0 `❌`/`FAILED`; window changed 1281x721 → 1856x1003; KWin odd/even/minimize/restore requests acknowledged | `resize-restore-final.log`, `resize-restore-final.png` (1856x1003) |
+
+The application renders the seeded 1024 world with terrain materials/textures,
+particles, UI and the retained post path. The deterministic world fingerprint is
+stable across the acceptance and ordinary runs.
+
+### Remaining warnings and unverified checks
+
+- 6–10 `WARNING-Shader-OutputNotConsumed` Vulkan validation messages from the
+  pre-existing old fluid/solid/particle composite pipelines. They predate this
+  task and are owned by Task 11's categorical-surface replacement/Task 19 log
+  audit. They are retained raw, not filtered.
+- LSan is clean only with the repository NVIDIA suppression policy
+  (`cmake/sanitizers/nvidia.lsan.supp`). Without it, driver/DBus global leaks are
+  reported; that is the documented external-driver policy, not an engine fix.
+- Windows/D3D12 build, validation, sample pattern and presentation are unmeasured.
+- Manual owner checks not automatable here: Display Apply/Keep/Revert and timeout,
+  per-control post edits, and ordinary mouse dig/build. `--worldgen-acceptance`
+  automates the seam edit, camera/preview and two New Games; the rest must be
+  observed by the owner.
+- Known red test gates remain owned by Task 11: `gpu_grid_surface`
+  (`grid_optical_controls_and_four_layer_parallax`) and the checkpoint
+  dug-solids empty-interstice leaf. `matter_runtime`/`matter_gpu` deadlines are
+  bounded by the recorded shards; the production program-cache decision remains
+  pending and is not an acceptance blocker.
+
+### Owner gate
+
+The cleaned application and the evidence above are ready for the owner's visual
+and operational acceptance. No Task 4 work has begun.
