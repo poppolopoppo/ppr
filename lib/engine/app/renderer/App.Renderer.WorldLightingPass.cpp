@@ -63,11 +63,17 @@ namespace pP {
         constexpr std::array<const char *, WorldLightingPass::kNumericDispatchCount> kProjectionEntries{
             "clearWinners", "reduceKeys", "reduceRows", "resolveCells"};
 
-        constexpr std::array<const char *, WorldLightingPass::kNumericDispatchCount> kProjectionStageNames{
-            "clear_winners", "reduce_keys", "reduce_rows", "resolve_cells"};
+        constexpr std::array<const char *, kNumericStatusRecords> kNumericStageNames{
+            "clear_winners", "reduce_keys", "reduce_rows", "resolve_cells", "prepare_source", "update_terminal",
+            "update_cascade"};
 
         constexpr std::array<const char *, WorldLightingPass::kTransportEntryCount> kTransportEntries{
             "buildVisibility", "buildJump"};
+
+        // Entry slots are fixed: the source module owns record 0, the cascade
+        // module owns records 1 and 2.
+        constexpr std::array<const char *, 1u> kSourceEntries{"prepareSource"};
+        constexpr std::array<const char *, 2u> kCascadeEntries{"updateTerminal", "updateCascade"};
 
         std::error_code validateProjectionInputs(const lighting::WorldLightingInputs &inputs) {
             // Only the resources these dispatches bind are required. The source
@@ -213,6 +219,50 @@ namespace pP {
             m_resources->m_transport_programs[entry] = std::move(transport_programs[entry]);
         }
 
+        // Cached-source and cascade entries. One 40 MiB interval store carries
+        // L1..L5; the sky and the shared codecs are include-only fragments.
+        const auto load_cascade_programs = [&](const std::filesystem::path &file, const char *const label,
+                                               const u32 first_entry, const std::span<const char *const> entries) {
+            shader::SharedModule module{};
+            PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, shaders.loadModuleFromFile(file, label, module.writeRef()));
+
+            for (u32 offset = 0u; offset < entries.size(); ++offset) {
+                const u32 entry = first_entry + offset;
+                shader::ComPtr<slang::IEntryPoint> point{};
+                PPR_RETURN_ERROR_ON_FAIL(
+                    WorldLightingPass, module->findEntryPointByName(entries[offset], point.writeRef()));
+
+                slang::IComponentType *entry_points[]{point.get()};
+                rhi::ShaderProgramDesc description{};
+                description.linkingStyle = rhi::LinkingStyle::SingleProgram;
+                description.slangGlobalScope = module.get();
+                description.slangEntryPoints = entry_points;
+                description.slangEntryPointCount = 1u;
+                shader::Diagnose diagnostics;
+                PPR_RETURN_ERROR_ON_FAIL(
+                    WorldLightingPass, device.createShaderProgram(
+                                           description, m_resources->m_cascade_programs[entry].m_program.writeRef(),
+                                           diagnostics.writeRef()));
+
+                rhi::ComputePipelineDesc pipeline{};
+                pipeline.program = m_resources->m_cascade_programs[entry].m_program;
+                PPR_RETURN_ERROR_ON_FAIL(
+                    WorldLightingPass, device.createComputePipeline(
+                                           pipeline, m_resources->m_cascade_programs[entry].m_pipeline.writeRef()));
+            }
+
+            return std::error_code{};
+        };
+
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldLightingPass,
+            load_cascade_programs(
+                root / "shaders" / "world_lighting_source.slang", "world_lighting_source", 0u, kSourceEntries));
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldLightingPass,
+            load_cascade_programs(
+                root / "shaders" / "world_lighting_cascade.slang", "world_lighting_cascade", 1u, kCascadeEntries));
+
         m_ready = true;
         PPR_LOG(WorldLightingPass, info, "WorldLightingPass initialized");
         return {};
@@ -334,8 +384,7 @@ namespace pP {
     // ------------------------------------------------------------------
 
     std::error_code WorldLightingPass::prepare(
-        const PreRenderContext &context, const lighting::WorldLightingInputs &inputs,
-        [[maybe_unused]] const WorldLightingFrame &frame) {
+        const PreRenderContext &context, const lighting::WorldLightingInputs &inputs, const WorldLightingFrame &frame) {
         if (not m_ready) {
             PPR_RETURN_ERROR_ON_FAIL(
                 WorldLightingPass, m_shaders.isValid() and not m_root.empty()
@@ -357,7 +406,20 @@ namespace pP {
                                    : std::error_code{});
 
         PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, validateProjectionInputs(inputs));
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldLightingPass, frame.m_sky_hour >= -1 and frame.m_sky_hour <= 23
+                                   ? std::error_code{}
+                                   : std::make_error_code(std::errc::invalid_argument));
         PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, ensureResources_(context.m_device));
+
+        // A world whose accepted-frame counter is exhausted cannot derive a
+        // current or retained probe frame. Reject admission before any slot,
+        // encoding or storage is touched rather than wrapping the counter.
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldLightingPass, m_resources->m_accepted_attempts != std::numeric_limits<u64>::max()
+                                   ? std::error_code{}
+                                   : std::make_error_code(std::errc::result_out_of_range));
+
         PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, selectStatusSlot_(context.m_completed_fence_value));
 
         auto &resources = *m_resources;
@@ -376,6 +438,14 @@ namespace pP {
         // visibility write is ordered before the jump read and the later trace
         // readers inside the same encoder.
         if (auto encoding = encodeAcceleration_(context); encoding) {
+            discardUnsubmitted();
+            PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, encoding);
+        }
+
+        // Source preparation, then L5 through L1 with explicit dependencies
+        // between the stages and before any tracing reader. The source cache and
+        // intervals are shared in place, never reallocated per frame.
+        if (auto encoding = encodeCascades_(context, frame); encoding) {
             discardUnsubmitted();
             PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, encoding);
         }
@@ -519,7 +589,7 @@ namespace pP {
                                                      : make_error_code(std::errc::result_out_of_range);
             PPR_LOG(
                 WorldLightingPass, error, "world-lighting numeric status failure",
-                {{"category", invalid ? "invalid_state" : "range_error"}, {"stage", kProjectionStageNames[record]},
+                {{"category", invalid ? "invalid_state" : "range_error"}, {"stage", kNumericStageNames[record]},
                     {"index", index}, {"accepted_frame", slot.m_accepted_frame},
                     {"model_attempt", m_resources->m_attempt_sequence}, {"world_generation", slot.m_world_generation}});
             if (not first_err) {
@@ -622,4 +692,25 @@ namespace pP {
         return m_resources and slot < kStatusRingSize and m_resources->m_status[slot].m_submission != kFenceValueNone;
     }
 
+    rhi::IBuffer *WorldLightingPass::cascadeIntervalsForTest() const noexcept {
+        return m_resources ? m_resources->m_cascades.get() : nullptr;
+    }
+
+    rhi::IBuffer *WorldLightingPass::sourceCellsForTest() const noexcept {
+        return m_resources ? m_resources->m_source.get() : nullptr;
+    }
+
+    rhi::IBuffer *WorldLightingPass::priorFineCHForTest() const noexcept {
+        return m_resources ? m_resources->m_fine_ch.get() : nullptr;
+    }
+
+    u64 WorldLightingPass::acceptedFrameForTest() const noexcept {
+        return m_resources ? m_resources->m_accepted_attempts : 0u;
+    }
+
+    void WorldLightingPass::setAcceptedFrameForTest(const u64 frame) noexcept {
+        if (m_resources) {
+            m_resources->m_accepted_attempts = frame;
+        }
+    }
 }

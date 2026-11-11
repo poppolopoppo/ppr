@@ -63,6 +63,50 @@ float unpackHalf(uint bits) {
 }
 
 // ------------------------------------------------------------------
+// binary16 encode
+// ------------------------------------------------------------------
+
+// Exact IEEE binary32 -> binary16 nearest/ties-to-even, mirroring the host
+// codec. Interpreted values are the validated nonnegative coarse radiance and
+// transmittance words; the binary32 subnormal range is below binary16's
+// smallest subnormal and encodes as zero.
+uint packHalf(float value) {
+    uint bits = asuint(value);
+    uint sign = (bits >> 16u) & 0x8000u;
+    uint exponent = (bits >> 23u) & 0xffu;
+    uint mantissa = bits & 0x7fffffu;
+
+    if (exponent == 0xffu) return sign | 0x7c00u | (mantissa != 0u ? 0x200u : 0u);
+    if (exponent == 0u) return sign;
+
+    int half_exponent = int(exponent) - 112;
+    if (half_exponent >= 0x1f) return sign | 0x7c00u;
+
+    if (half_exponent <= 0) {
+        // Binary16 subnormal: value = significand * 2^(exponent-126), so the
+        // 24-bit significand shifts down by 126-exponent with guard/round/
+        // sticky handled by one retained bit and the discarded remainder.
+        uint shift = uint(126 - int(exponent));
+        if (shift > 24u) return sign;
+
+        uint significand = mantissa | 0x800000u;
+        uint retained = significand >> shift;
+        uint remainder = significand & ((1u << shift) - 1u);
+        uint halfway = 1u << (shift - 1u);
+        if (remainder > halfway || (remainder == halfway && (retained & 1u) != 0u)) ++retained;
+        return sign | retained;
+    }
+
+    uint retained = mantissa >> 13u;
+    uint remainder = mantissa & 0x1fffu;
+    uint result = sign | (uint(half_exponent) << 10u) | retained;
+    // A carry here propagates into the exponent field, which is the correct
+    // nearest encoding of a value that rounds up to the next binade.
+    if (remainder > 0x1000u || (remainder == 0x1000u && (retained & 1u) != 0u)) ++result;
+    return result;
+}
+
+// ------------------------------------------------------------------
 // shared-exponent RGB9E5 decode
 // ------------------------------------------------------------------
 
@@ -129,6 +173,52 @@ uint unpackCellMaterial(uint cell) {
 
 float unpackCellTemperature(uint cell) {
     return unpackHalf((cell >> 16u) & 0xffffu);
+}
+
+// ------------------------------------------------------------------
+// shared-exponent RGB9E5 encode
+// ------------------------------------------------------------------
+// Mirrors the host codec: validate the radiance domain, encode an all-zero
+// triple as word zero, then pick the smallest shared exponent whose rounded
+// mantissas fit in [0, 511] with nearest/ties-up rounding.
+uint rgb9e5PackCategory(float3 rgb) {
+    if (!all(isfinite(rgb)) || any(rgb < 0.0)) return 1u;
+    if (any(rgb > 65408.0)) return 2u;
+    return 0u;
+}
+
+uint packRGB9E5(float3 rgb) {
+    if (rgb.x == 0.0 && rgb.y == 0.0 && rgb.z == 0.0) return 0u;
+
+    for (uint exponent = 0u; exponent <= 31u; ++exponent) {
+        float3 scaled = rgb * exp2(24.0 - float(exponent));
+        // floor(scaled + 0.5) > 511 exactly when scaled >= 511.5.
+        if (any(scaled >= 511.5)) continue;
+
+        uint3 mantissa = uint3(floor(scaled + 0.5));
+        return mantissa.x | (mantissa.y << 9u) | (mantissa.z << 18u) | (exponent << 27u);
+    }
+
+    return 0u;
+}
+
+// ------------------------------------------------------------------
+// coarse interval encode
+// ------------------------------------------------------------------
+// Category 0 is encodable, 1 is invalid arithmetic/state (nonfinite, negative
+// radiance or a transmittance outside [0,1]) and 2 is representational overflow.
+uint intervalPackCategory(Interval value) {
+    if (!all(isfinite(value.m_radiance)) || any(value.m_radiance < 0.0)) return 1u;
+    if (!isfinite(value.m_transmittance) || value.m_transmittance < 0.0 || value.m_transmittance > 1.0) return 1u;
+    if (any(value.m_radiance > 65408.0)) return 2u;
+    return 0u;
+}
+
+PackedInterval packInterval(Interval value) {
+    PackedInterval packed;
+    packed.m_rg = packHalf(value.m_radiance.x) | (packHalf(value.m_radiance.y) << 16u);
+    packed.m_bt = packHalf(value.m_radiance.z) | (packHalf(value.m_transmittance) << 16u);
+    return packed;
 }
 
 // ------------------------------------------------------------------

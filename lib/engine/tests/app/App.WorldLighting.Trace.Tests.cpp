@@ -227,9 +227,20 @@ namespace pP::tests::detail::WorldLightingTrace {
         const FenceCompletionValue completed = kFenceValueNone, const bool wait = true) {
         const auto terrain = uploadTerrain(fixture, map);
 
+        // The same attempt also prepares the cached source; its palette and
+        // thermal table are present so the full publication set validates.
+        const std::array<lighting::SourceMaterial, kMaterialCount> sources{};
+        const std::vector<u8> thermal(lighting::kThermalLutBytes, 0u);
+        const auto source_materials = makeShaderBuffer(
+            fixture.device(), sizeof(sources), sizeof(lighting::SourceMaterial), sources.data());
+        const auto thermal_lut = makeShaderBuffer(
+            fixture.device(), thermal.size(), lighting::kThermalLutStride, thermal.data());
+
         lighting::WorldLightingInputs inputs{};
         inputs.m_terrain = terrain;
         inputs.m_visible_materials = palette;
+        inputs.m_source_materials = source_materials;
+        inputs.m_thermal_lut = thermal_lut;
         inputs.m_material_count = kMaterialCount;
 
         AccelerationAttempt attempt{};
@@ -1348,6 +1359,79 @@ namespace pP::tests::detail::WorldLightingTrace {
         std::println("WORLD_LIGHTING_TRACE numeric_failure index_min=0 later_index=2 containment=(0,0)");
         PPR_TEST_ASSERT(not pass.shutdown());
     };
+
+    // ------------------------------------------------------------------
+    // receive-only path, negative exact boundary and overflow status
+    // ------------------------------------------------------------------
+
+    PPR_UNIT_TEST (receive_only_path_negative_boundary_and_overflow_status) {
+        Fixture fixture;
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+        fixture.initialize();
+
+        const auto palette_values = makePalette();
+        const auto palette = uploadPalette(fixture, palette_values);
+        const auto source_word = *lighting::packRGB9E5(float3{0.5f, 0.25f, 2.0f});
+        const auto source = uploadSource(fixture, source_word);
+        TraceProbe probe{fixture};
+
+        // A receive-only transparent cell in the middle of the path is passed
+        // through; the opaque cell behind it stops the ray. The negative
+        // interior exact boundary starts on x=511 travelling towards -x, so the
+        // cell entered in the ray direction is 510.
+        CategoricalMap map;
+        map.occupy(500u, 512u, kReceiveOnly);
+        map.occupy(10u, 512u, kOpaque);
+        map.occupy(510u, 300u, kOpaque);
+
+        WorldLightingPass pass;
+        PPR_TEST_ASSERT(not pass.initialize(*fixture.m_shaders, std::filesystem::current_path()));
+
+        const auto occupancy = map.occupancy(palette_values);
+        const auto attempt = encodeAcceleration(fixture, pass, palette, map);
+        PPR_TEST_ASSERT(not attempt.m_prepare);
+        PPR_TEST_ASSERT(not attempt.m_finalize);
+        pass.notifySubmitted(1u);
+        PPR_TEST_ASSERT(not pass.collectCompleted(1u));
+
+        const std::array<float4, 4u> segments{
+            makeSegment(float2{900.5f, 512.5f}, float2{5.5f, 512.5f}),
+            makeSegment(float2{511.0f, 300.5f}, float2{300.5f, 300.5f}),
+            makeSegment(float2{500.5f, 512.5f}, float2{500.9f, 512.5f}),
+            makeSegment(float2{0.0f, 0.5f}, float2{std::numeric_limits<float>::min(), 0.5f}),
+        };
+
+        const auto result = probe.run(
+            pass.resolvedCellsForTest(), palette.get(), attempt.m_snapshot.m_jump, source.get(),
+            std::span<const float4>{segments.data(), segments.size()});
+
+        const CpuTrace through = referenceTrace(occupancy, source_word, segments[0u]);
+        PPR_TEST_ASSERT(through.m_hit == cellIndex(10u, 512u));
+        PPR_TEST_ASSERT(result.m_words[0u] == through.m_hit);
+        PPR_TEST_ASSERT(std::bit_cast<float>(result.m_words[4u]) == 0.0f);
+
+        const CpuTrace boundary = referenceTrace(occupancy, source_word, segments[1u]);
+        PPR_TEST_ASSERT(boundary.m_hit == cellIndex(510u, 300u));
+        PPR_TEST_ASSERT(result.m_words[5u] == boundary.m_hit);
+
+        // The receive-only start itself is transparent: a short segment inside it
+        // is clear, not a hit.
+        PPR_TEST_ASSERT(result.m_words[10u] == kNoNumericIndex);
+        PPR_TEST_ASSERT(std::bit_cast<float>(result.m_words[14u]) == 1.0f);
+
+        // A subnormal direction component overflows the aligned-block face
+        // parameter: that is a numeric failure, never the finite sentinel
+        // degrading into a clear interval.
+        PPR_TEST_ASSERT(result.m_words[15u] == kNoNumericIndex);
+        PPR_TEST_ASSERT(std::bit_cast<float>(result.m_words[16u]) == 0.0f);
+        PPR_TEST_ASSERT(std::bit_cast<float>(result.m_words[19u]) == 0.0f);
+        PPR_TEST_ASSERT(result.m_status[0u] == 3u);
+
+        std::println("WORLD_LIGHTING_TRACE receive_only_passed=true negative_boundary=510 overflow_index=3");
+        PPR_TEST_ASSERT(not pass.shutdown());
+    };
 }
 
 namespace pP::tests {
@@ -1364,6 +1448,7 @@ namespace pP::tests {
                 detail::WorldLightingTrace::acceleration_rebuild_drops_previous_occupancy,
                 detail::WorldLightingTrace::reflected_visibility_records_match_cpu_shapes,
                 detail::WorldLightingTrace::nonfinite_trace_reports_numeric_failure,
+                detail::WorldLightingTrace::receive_only_path_negative_boundary_and_overflow_status,
             });
         };
         return group;

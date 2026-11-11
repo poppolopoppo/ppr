@@ -53,6 +53,22 @@ binding and `thermalRGB(float kelvin)` (log-spaced row interpolation, zero below
 `tests/world_lighting_codec_probe.slang` and `tests/thermal_emission_probe.slang`
 are test-only entry-point wrappers for `app/world_lighting_codec/`.
 
+`world_lighting_source.slang` prepares the cached outgoing-radiance source
+(`prepareSource`, 16x16 threads over the 1024-square domain): one RGB9E5 word
+per native cell from the derived eight-byte material palette, the committed
+thermal table and the prior fine-CH DC field, sampled bilinearly at
+`(cell+0.5)/2-0.5` with clamped edges and scaled by `Y0`. `world_lighting_sky.slang`
+is the include-only analytic terminal sky (SkyColor 0.2/0.5/1, SunColor 20/10/2,
+SunA 5, SunS 64, fixed intensity 5, narrow unwrapped sector integration split
+once at the 2*pi seam, negative hour = black boundary sky).
+`world_lighting_cascade.slang` owns the fixed four-frame quarter-probe schedule
+(`mix32` group phase, derived age/trace frame, golden-ratio fixed-point phase),
+the 8-byte interval record addressing and the two cascade entries:
+`updateTerminal` (L5, four terminal sub-sectors per stored direction with
+`D=16,384` traced to the actual map exit and closed by the sky with zero
+transmittance) and `updateCascade` (L4..L1 near segment plus four retained
+parent-sector merges with bilinear spatial weights).
+
 `world_lighting_projection.slang` is the `WorldLightingPass` categorical
 projection: `clearWinners`, `reduceKeys`, `reduceRows` and `resolveCells` share
 one native-cell coordinate/key helper over the 1024-square domain. It reads the
@@ -74,10 +90,19 @@ texel. `world_lighting_trace.slang` is the shared include-only segment tracer
 with slab clipping, aligned-block jump advance, resolved classification and the
 cached per-cell source; `traceSegment(start, end)` is the common helper and
 `traceSegmentDetailed` carries the owning invocation and status record.
-`tests/world_lighting_trace_probe.slang` is the test-only batch probe. The
-`world_lighting_codec.slang` mirror now also owns the 96-byte `TerrainVisual`
+A nonfinite face parameter is a reported numeric failure rather than a clear
+interval, and `traceAdvanceAxis` derives the entered cell from the original ray
+faces so a corner or aligned-block-boundary crossing always keeps its next face
+strictly ahead.
+`tests/world_lighting_trace_probe.slang` is the test-only batch probe and
+`tests/world_lighting_cascade_probe.slang` exposes the real cascade schedule
+(phase, selected probe, derived age/actual trace frame, phase fraction and
+direction) for the `app/world_lighting_cascade/` group. The
+`world_lighting_codec.slang` mirror also owns the 96-byte `TerrainVisual`
 classification row and `resolvedCellOccupied`, shared by projection,
-acceleration and tracing.
+acceleration and tracing, plus the explicit binary16/RGB9E5/interval encoders
+(`packHalf`, `packRGB9E5`, `intervalPackCategory`, `packInterval`) that mirror
+the host codecs for the producer stages.
 
 
 ## Design
@@ -251,6 +276,9 @@ bloom and metering cohorts are reused only through accepted-submit fences.
 
 - `mesh_bindless.slang` - the live bindless static-mesh vertex/fragment program.
 - `grid_tiles.slang` - the live debug-grid tile vertex/fragment program (`vertexGridMain` + `fragmentGridMain`).
+- `world_lighting_source.slang` - cached-source preparation over the full native-cell domain.
+- `world_lighting_cascade.slang` - scheduled coarse cascade transport (`updateTerminal`, `updateCascade`).
+- `world_lighting_sky.slang` - analytic terminal sky sector integration (include-only).
 - `post_process.slang` - resolved-size bloom combine and once-only AgX treatment.
 - `present_scene.slang` - fixed-P nearest enlargement/crop and single sRGB decision.
 - `luminance_histogram.slang` / `auto_exposure.slang` - metering and adaptation.

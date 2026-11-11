@@ -35,8 +35,19 @@ export namespace pP {
     // UINT32_MAX means "no failure"; the engine never writes a failure through
     // a compound payload or a nondeterministic first-error-thread choice.
     inline constexpr u32 kNumericStatusWords = 8u;
-    inline constexpr u32 kNumericStatusRecords = 4u;
+    // Four projection records (clear/keys/rows/cells) followed by the three
+    // transport records (source preparation, terminal L5, lower cascades).
+    inline constexpr u32 kNumericStatusRecords = 7u;
     inline constexpr u32 kNoNumericIndex = 0xffff'ffffu;
+
+    // Fixed numeric-stage order shared by the GPU records and the CPU ticket.
+    inline constexpr u32 kNumericStageClearWinners = 0u;
+    inline constexpr u32 kNumericStageReduceKeys = 1u;
+    inline constexpr u32 kNumericStageReduceRows = 2u;
+    inline constexpr u32 kNumericStageResolveCells = 3u;
+    inline constexpr u32 kNumericStageSource = 4u;
+    inline constexpr u32 kNumericStageTerminal = 5u;
+    inline constexpr u32 kNumericStageCascade = 6u;
 
     struct NumericStatusRecord {
         u32 m_invalid_index{kNoNumericIndex};
@@ -65,11 +76,25 @@ export namespace pP {
         static constexpr u64 kVisibilityBufferBytes{lighting::kVisibilityBufferBytes};
         static constexpr u32 kTransportEntryCount{2u};
 
-        // Fixed numeric entry order; the index doubles as the status record
-        // index and the CPU ticket's pass/level.
-        static constexpr u32 kNumericDispatchCount{kNumericStatusRecords};
+        // Coarse cascade transport: one persistent 40 MiB interval store, one
+        // 4 MiB RGB9E5 source cache and the in-place zero fine CH placeholder.
+        static constexpr u32 kCascadeLevels{lighting::kCascadeLevels};
+        static constexpr u32 kCascadeRecordCount{lighting::kCascadeRecordCount};
+        static constexpr u64 kCascadeBufferBytes{lighting::kCascadeBufferBytes};
+        static constexpr u32 kSourceCellBytes{lighting::kSourceCellBytes};
+        static constexpr u64 kFineCHBytes{lighting::kFineCHBytes};
+        static constexpr u32 kCascadeEntryCount{3u};
+
+        // Fixed projection dispatch order. The status record index is the
+        // numeric stage constant, not this count: the transport stages own the
+        // additional records.
+        static constexpr u32 kNumericDispatchCount{4u};
         static constexpr u32 kStatusRingSize{kFrameRingSlots};
         static constexpr u32 kStatusAttemptBytes{kNumericStatusRecords * sizeof(NumericStatusRecord)};
+        static_assert(kNumericDispatchCount == 4u);
+        static_assert(
+            kNumericDispatchCount == kNumericStageResolveCells + 1u and
+            kNumericStatusRecords == kNumericStageCascade + 1u);
 
         WorldLightingPass() = default;
         WorldLightingPass(const WorldLightingPass &) = delete;
@@ -82,11 +107,12 @@ export namespace pP {
 
         // Retains the exact input owners for this attempt, allocates the
         // world's resolved cells, and encodes clearWinners, reduceKeys,
-        // reduceRows, resolveCells and the full-domain acceleration rebuild.
-        // Ring exhaustion is ordinary non-admission: no pending status slot is
-        // overwritten. A second prepare before the armed attempt is submitted
-        // or discarded is rejected (operation_not_permitted) without touching
-        // that attempt.
+        // reduceRows, resolveCells, the full-domain acceleration rebuild, the
+        // cached source and the scheduled L5-L1 cascade transport in that
+        // order. Ring exhaustion is ordinary non-admission: no pending status
+        // slot is overwritten. A second prepare before the armed attempt is
+        // submitted or discarded is rejected (operation_not_permitted) without
+        // touching that attempt.
         [[nodiscard]] std::error_code prepare(
             const PreRenderContext &context, const lighting::WorldLightingInputs &inputs,
             const WorldLightingFrame &frame);
@@ -137,6 +163,15 @@ export namespace pP {
         [[nodiscard]] std::span<u32> pendingStatusWordsForTest() noexcept;
         [[nodiscard]] bool statusSlotPendingForTest(u32 slot) const noexcept;
         [[nodiscard]] bool statusSlotSubmittedForTest(u32 slot) const noexcept;
+        // Persistent coarse cascades (5x1,048,576 uint2), the RGB9E5 source
+        // cache and the in-place zero fine CH placeholder.
+        [[nodiscard]] rhi::IBuffer *cascadeIntervalsForTest() const noexcept;
+        [[nodiscard]] rhi::IBuffer *sourceCellsForTest() const noexcept;
+        [[nodiscard]] rhi::IBuffer *priorFineCHForTest() const noexcept;
+        // Accepted lighting-frame index this world is currently on. The seam
+        // exercises schedule identity far beyond 2^32 and counter exhaustion.
+        [[nodiscard]] u64 acceptedFrameForTest() const noexcept;
+        void setAcceptedFrameForTest(u64 frame) noexcept;
 
     private:
         // ------------------------------------------------------------------
@@ -180,6 +215,15 @@ export namespace pP {
             std::array<ProjectionProgram, kTransportEntryCount> m_transport_programs{};
             std::array<std::array<rhi::ComPtr<rhi::IShaderObject>, kStatusRingSize>, kTransportEntryCount>
                 m_transport_roots{};
+            std::array<ProjectionProgram, kCascadeEntryCount> m_cascade_programs{};
+            std::array<std::array<rhi::ComPtr<rhi::IShaderObject>, kStatusRingSize>, kCascadeEntryCount>
+                m_cascade_roots{};
+            // One ordered in-place 40 MiB interval store, one 4 MiB source cache
+            // and the zero fine CH placeholder. They are created once per world
+            // and never reallocated per frame.
+            rhi::ComPtr<rhi::IBuffer> m_cascades{};
+            rhi::ComPtr<rhi::IBuffer> m_source{};
+            rhi::ComPtr<rhi::IBuffer> m_fine_ch{};
             std::array<ProjectionStatusSlot, kStatusRingSize> m_status{};
             GridWorldIdentity m_world{};
             u64 m_accepted_attempts{};
@@ -191,9 +235,11 @@ export namespace pP {
 
         [[nodiscard]] std::error_code ensureResources_(rhi::IDevice &device);
         [[nodiscard]] std::error_code ensureTransportResources_(rhi::IDevice &device);
+        [[nodiscard]] std::error_code ensureCascadeResources_(rhi::IDevice &device);
         [[nodiscard]] std::error_code selectStatusSlot_(FenceCompletionValue completed) noexcept;
         [[nodiscard]] std::error_code encodeProjection_(const PreRenderContext &context);
         [[nodiscard]] std::error_code encodeAcceleration_(const PreRenderContext &context);
+        [[nodiscard]] std::error_code encodeCascades_(const PreRenderContext &context, const WorldLightingFrame &frame);
         [[nodiscard]] std::error_code inspectAttempt_(ProjectionStatusSlot &slot);
         void clearAttempt_(ProjectionStatusSlot &slot) noexcept;
         void releaseResources_() noexcept;

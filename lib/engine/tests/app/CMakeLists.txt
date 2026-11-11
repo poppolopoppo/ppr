@@ -62,6 +62,7 @@ target_sources(engine.tests.app
         App.WorldLighting.Codec.Tests.cpp
         App.WorldLighting.Projection.Tests.cpp
         App.WorldLighting.Trace.Tests.cpp
+        App.WorldLighting.Cascade.Tests.cpp
 
         ${CMAKE_SOURCE_DIR}/game/colony/Colony.cpp
         ${CMAKE_SOURCE_DIR}/game/colony/WorldGen.cpp
@@ -504,6 +505,33 @@ ppr_add_test_entry(TARGET engine.tests.app
 )
 
 set_tests_properties(engine.tests.app.world_lighting_trace_gpu_validation PROPERTIES
+    ENVIRONMENT "PPR_TEST_GPU_VALIDATION=1"
+)
+
+# Cached-source preparation and the continuously scheduled L5-L1 transport. The
+# leaves drive the real source/terminal/cascade dispatches and read back the
+# persistent 40 MiB interval store and the 4 MiB source cache, so both entries
+# claim the gpu lock. The validation twin re-runs the identical group under the
+# RHI debug layers.
+ppr_add_test_entry(TARGET engine.tests.app
+    NAME world_lighting_cascade
+    FILTER "app/world_lighting_cascade/"
+    LOOPS
+    RESOURCE_LOCK gpu
+    TIMEOUT 420
+    LABELS unit engine app
+)
+
+ppr_add_test_entry(TARGET engine.tests.app
+    NAME world_lighting_cascade_gpu_validation
+    FILTER "app/world_lighting_cascade/"
+    LOOPS
+    RESOURCE_LOCK gpu
+    TIMEOUT 600
+    LABELS unit engine app gpu_validation
+)
+
+set_tests_properties(engine.tests.app.world_lighting_cascade_gpu_validation PROPERTIES
     ENVIRONMENT "PPR_TEST_GPU_VALIDATION=1"
 )
 

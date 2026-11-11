@@ -17,8 +17,36 @@ import std;
 namespace pP {
     namespace {
         // ------------------------------------------------------------------
-        // acceleration storage and dispatch plumbing
+        // cascade storage and dispatch plumbing
         // ------------------------------------------------------------------
+
+        // Mirrors SourceFrame in assets/shaders/world_lighting_source.slang.
+        struct alignas(16) SourceStageFrame {
+            u32 m_edge{WorldLightingPass::kWorldEdge};
+            u32 m_fine_edge{lighting::kFineCHEdge};
+            u32 m_status_record{};
+            u32 m_reserved{};
+        };
+
+        static_assert(sizeof(SourceStageFrame) == 16u and alignof(SourceStageFrame) == 16u);
+        static_assert(PPR_OFFSETOF(SourceStageFrame, m_fine_edge) == 4u);
+        static_assert(PPR_OFFSETOF(SourceStageFrame, m_status_record) == 8u);
+
+        // Mirrors CascadeFrame in assets/shaders/world_lighting_cascade.slang.
+        struct alignas(16) CascadeStageFrame {
+            u32 m_level{};
+            u32 m_frame_low{};
+            u32 m_frame_high{};
+            i32 m_sky_hour{-1};
+            u32 m_status_record{};
+            u32 m_reserved[3]{};
+        };
+
+        static_assert(sizeof(CascadeStageFrame) == 32u and alignof(CascadeStageFrame) == 16u);
+        static_assert(PPR_OFFSETOF(CascadeStageFrame, m_frame_low) == 4u);
+        static_assert(PPR_OFFSETOF(CascadeStageFrame, m_frame_high) == 8u);
+        static_assert(PPR_OFFSETOF(CascadeStageFrame, m_sky_hour) == 12u);
+        static_assert(PPR_OFFSETOF(CascadeStageFrame, m_status_record) == 16u);
 
         rhi::BufferRange transportRange(rhi::IBuffer *const buffer) noexcept {
             return {.offset = 0u, .size = buffer->getDesc().size};
@@ -109,7 +137,7 @@ namespace pP {
             }
         }
 
-        return {};
+        return ensureCascadeResources_(device);
     }
 
     // ------------------------------------------------------------------
@@ -192,6 +220,214 @@ namespace pP {
         encoder.globalBarrier();
         encoder.setBufferState(attempt.m_visibility, rhi::ResourceState::ShaderResource);
         encoder.setTextureState(attempt.m_jump, rhi::ResourceState::ShaderResource);
+        return {};
+    }
+
+    // ------------------------------------------------------------------
+    // cascade storage ownership
+    // ------------------------------------------------------------------
+
+    std::error_code WorldLightingPass::ensureCascadeResources_(rhi::IDevice &device) {
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldLightingPass, m_resources ? std::error_code{} : std::make_error_code(std::errc::not_connected));
+
+        auto &resources = *m_resources;
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldLightingPass, resources.m_cascade_programs[0u].m_program
+                                   ? std::error_code{}
+                                   : std::make_error_code(std::errc::not_connected));
+
+        // Creation-time zero contents are the approved cold start: an unvisited
+        // interval has zero radiance and zero transmittance, never vacuum, and
+        // source cells start black. None of these is reallocated per frame.
+        if (not resources.m_cascades) {
+            const std::vector<u8> zero(kCascadeBufferBytes, 0u);
+            PPR_RETURN_ERROR_ON_FAIL(
+                WorldLightingPass, transportStorageBuffer(
+                                       device, kCascadeBufferBytes, static_cast<u32>(sizeof(lighting::PackedInterval)),
+                                       zero.data(), resources.m_cascades, "world-lighting coarse cascade intervals"));
+        }
+
+        if (not resources.m_source) {
+            const std::vector<u8> zero(kSourceCellBytes, 0u);
+            PPR_RETURN_ERROR_ON_FAIL(
+                WorldLightingPass, transportStorageBuffer(
+                                       device, kSourceCellBytes, static_cast<u32>(sizeof(u32)), zero.data(),
+                                       resources.m_source, "world-lighting cached source"));
+        }
+
+        if (not resources.m_fine_ch) {
+            const std::vector<u8> zero(kFineCHBytes, 0u);
+            PPR_RETURN_ERROR_ON_FAIL(
+                WorldLightingPass, transportStorageBuffer(
+                                       device, kFineCHBytes, static_cast<u32>(sizeof(lighting::PackedCH)), zero.data(),
+                                       resources.m_fine_ch, "world-lighting fine CH placeholder"));
+        }
+
+        for (u32 slot = 0u; slot < kStatusRingSize; ++slot) {
+            for (u32 entry = 0u; entry < kCascadeEntryCount; ++entry) {
+                if (resources.m_cascade_roots[entry][slot]) {
+                    continue;
+                }
+
+                PPR_RETURN_ERROR_ON_FAIL(
+                    WorldLightingPass, device.createRootShaderObject(
+                                           resources.m_cascade_programs[entry].m_program,
+                                           resources.m_cascade_roots[entry][slot].writeRef()));
+            }
+        }
+
+        return {};
+    }
+
+    // ------------------------------------------------------------------
+    // cached source and continuous cascade encoding
+    // ------------------------------------------------------------------
+
+    std::error_code WorldLightingPass::encodeCascades_(
+        const PreRenderContext &context, const WorldLightingFrame &frame) {
+        auto &resources = *m_resources;
+        auto &attempt = resources.m_status[resources.m_attempt_slot];
+        const auto &inputs = attempt.m_inputs;
+        rhi::ICommandEncoder &encoder = context.m_encoder;
+
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldLightingPass, resources.m_cascades and
+                                       resources.m_source and
+                                       resources.m_fine_ch and
+                                       inputs.m_source_materials and
+                                       inputs.m_thermal_lut
+                                   ? std::error_code{}
+                                   : std::make_error_code(std::errc::not_connected));
+
+        // Production binds the owner's zero prior-CH placeholder until fine
+        // reconstruction owns the in-place field; a known DC field may be
+        // supplied through the same optional publication slot.
+        rhi::IBuffer *const prior_ch = inputs.m_prior_ch ? inputs.m_prior_ch.get() : resources.m_fine_ch.get();
+        if (inputs.m_prior_ch) {
+            PPR_RETURN_ERROR_ON_FAIL(
+                WorldLightingPass, prior_ch->getDesc().size == kFineCHBytes and
+                                           prior_ch->getDesc().elementSize == sizeof(lighting::PackedCH)
+                                       ? std::error_code{}
+                                       : std::make_error_code(std::errc::invalid_argument));
+        }
+
+        const u64 accepted = resources.m_accepted_attempts;
+        const u32 frame_low = static_cast<u32>(accepted);
+        const u32 frame_high = static_cast<u32>(accepted >> 32u);
+
+        // Source preparation reads the pre-update field only: no CH writer runs
+        // in this task, so every dispatch below observes the current materials
+        // plus the previous field's angular mean.
+        encoder.setBufferState(resources.m_source, rhi::ResourceState::UnorderedAccess);
+        encoder.setBufferState(attempt.m_status, rhi::ResourceState::UnorderedAccess);
+        encoder.setBufferState(inputs.m_source_materials, rhi::ResourceState::ShaderResource);
+        encoder.setBufferState(inputs.m_thermal_lut, rhi::ResourceState::ShaderResource);
+        encoder.setBufferState(prior_ch, rhi::ResourceState::ShaderResource);
+
+        const auto bind = [&](const u32 entry, const u32 level) -> std::error_code {
+            auto &root = *resources.m_cascade_roots[entry][resources.m_attempt_slot];
+            rhi::ShaderCursor cursor{&root};
+
+            const auto bind_buffer = [&](const char *const name, rhi::IBuffer *const buffer) -> std::error_code {
+                PPR_RETURN_ERROR_ON_FAIL(
+                    WorldLightingPass, cursor[name].setBinding(rhi::Binding(buffer, transportRange(buffer))));
+                return {};
+            };
+
+            PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind_buffer("g_resolved_cells", resources.m_resolved));
+            PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind_buffer("g_visuals", inputs.m_visible_materials));
+            PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind_buffer("g_cell_source", resources.m_source));
+            PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind_buffer("g_numeric_status", attempt.m_status));
+
+            rhi::ShaderCursor constants;
+            if (entry == 0u) {
+                PPR_RETURN_ERROR_ON_FAIL(
+                    WorldLightingPass, bind_buffer("g_source_materials", inputs.m_source_materials));
+                PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind_buffer("g_thermal_lut", inputs.m_thermal_lut));
+                PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind_buffer("g_prior_ch", prior_ch));
+                PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, cursor["g_source_frame"].getDereferenced(constants));
+
+                const SourceStageFrame values{.m_status_record = kNumericStageSource};
+                PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, constants.setData(&values, sizeof(values)));
+                return {};
+            }
+
+            PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind_buffer("g_cascades", resources.m_cascades));
+            PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, cursor["g_jump"].setBinding(rhi::Binding(attempt.m_jump)));
+            PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, cursor["g_cascade"].getDereferenced(constants));
+
+            CascadeStageFrame values{};
+            values.m_level = level;
+            values.m_frame_low = frame_low;
+            values.m_frame_high = frame_high;
+            values.m_sky_hour = frame.m_sky_hour;
+            values.m_status_record = entry == 1u ? kNumericStageTerminal : kNumericStageCascade;
+            PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, constants.setData(&values, sizeof(values)));
+            return {};
+        };
+
+        const auto dispatch = [&](const u32 entry, const u32 groups) -> std::error_code {
+            auto *const pass = encoder.beginComputePass();
+            PPR_RETURN_ERROR_ON_FAIL(
+                WorldLightingPass, pass != nullptr ? std::error_code{} : std::make_error_code(std::errc::io_error));
+            {
+                PPR_DEFER {
+                    pass->end();
+                };
+                pass->bindPipeline(
+                    resources.m_cascade_programs[entry].m_pipeline,
+                    resources.m_cascade_roots[entry][resources.m_attempt_slot].get());
+                pass->dispatchCompute(groups, groups, 1u);
+            }
+
+            return {};
+        };
+
+        const u32 source_groups = kWorldEdge / lighting::kCascadeDispatchThreads;
+        const u32 cascade_groups = lighting::kCascadeDomainEdge / lighting::kCascadeDispatchThreads;
+
+        {
+            encoder.pushDebugGroup("WorldLighting.Source", {});
+            PPR_DEFER {
+                encoder.popDebugGroup();
+            };
+            PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind(0u, 0u));
+            PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, dispatch(0u, source_groups));
+        }
+
+        // Source write -> trace read dependency before any cascade dispatch.
+        encoder.globalBarrier();
+        encoder.setBufferState(resources.m_source, rhi::ResourceState::ShaderResource);
+        encoder.setBufferState(resources.m_cascades, rhi::ResourceState::UnorderedAccess);
+
+        {
+            encoder.pushDebugGroup("WorldLighting.Terminal", {});
+            PPR_DEFER {
+                encoder.popDebugGroup();
+            };
+            PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind(1u, 0u));
+            PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, dispatch(1u, cascade_groups));
+        }
+
+        // Terminal write -> L4 parent read dependency, then one dependency per
+        // level. Each level reads the already-merged parent intervals and writes
+        // only its own probe/atlas records.
+        for (u32 level = kCascadeLevels - 1u; level >= 1u; --level) {
+            encoder.globalBarrier();
+            {
+                encoder.pushDebugGroup("WorldLighting.Cascade", {});
+                PPR_DEFER {
+                    encoder.popDebugGroup();
+                };
+                PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind(2u, level));
+                PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, dispatch(2u, cascade_groups));
+            }
+        }
+
+        // Cascade write -> fine reconstruction / scene read dependency.
+        encoder.globalBarrier();
+        encoder.setBufferState(resources.m_cascades, rhi::ResourceState::ShaderResource);
         return {};
     }
 }

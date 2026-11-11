@@ -111,10 +111,18 @@ partition (not the removed optical oracle). It defines the byte-exact published
 records `PackedInterval` (stride 8), `PackedCH` (stride 32) and `SourceMaterial`
 (stride 8), the decoded CPU values `Interval`/`CH`, the checked codecs
 `packCell`, `packRGB9E5`/`unpackRGB9E5`, `packInterval`/`unpackInterval`,
-`packCH`/`unpackCH`, `makeSourceMaterial` and `lastTraceFrame`, plus the
-committed thermal table shape constants. It has no device or pass ownership.
-The shader mirrors are `assets/shaders/world_lighting_codec.slang` and
-`assets/shaders/thermal_emission.slang`.
+`packCH`/`unpackCH`, `makeSourceMaterial` and `lastTraceFrame`, the approved
+coarse-cascade geometry/atlas helpers (`cascadeSpacing`, `cascadeDirections`,
+`cascadeProbeEdge`, `cascadeIntervalStart`/`End`, `cascadeRecordIndex`), the
+fixed four-frame schedule helpers (`mix32`, `cascadeGroupPhase`,
+`cascadeSelectedProbe`, `cascadeProbeAge`, `cascadePhaseWord`/`Fraction`,
+`cascadeProbeAngle`) and the 5x1,048,576-record/40 MiB interval store, 4 MiB
+RGB9E5 source-cache and 512-square/8 MiB fine-CH constants, plus the committed
+thermal table shape constants. It has no device or pass ownership. The shader
+mirrors are `assets/shaders/world_lighting_codec.slang` and
+`assets/shaders/thermal_emission.slang`; the schedule and sky live in
+`assets/shaders/world_lighting_cascade.slang` and
+`assets/shaders/world_lighting_sky.slang`.
 
 `engine.app:renderer.world_lighting_pass` is the per-world lighting owner
 (`WorldLightingPass`, `WorldLightingFrame`, `WorldLightingInputs`). One instance
@@ -150,13 +158,39 @@ with ordered resolved-write -> visibility-read -> jump-write -> trace-read
 dependencies and no host wait, per-frame allocation or global reduction. The
 `assets/shaders/world_lighting_trace.slang` helper traces a finite segment with
 slab clipping, aligned-block jump advance, resolved classification and the
-cached per-cell source; nonfinite or non-progressing traversal reports the
-numeric status failure instead of a clear interval.
+cached per-cell source; nonfinite face parameters or a non-progressing
+traversal report the numeric status failure instead of a clear interval, and
+`traceAdvanceAxis` rebuilds the entered cell from the original ray so a
+corner/block-boundary crossing always has its next face ahead.
 
-Each numeric dispatch owns one 32-byte `NumericStatusRecord` in the attempt's
-32-byte-record status buffer: words 0/1 are atomic minima of the invalid-state
-and range-error index, words 2..7 stay zero. `finalize` copies the four records
-to a mapped readback buffer in the same submission; the pass polls settlement
+`App.Renderer.WorldLightingPass.Transport.cpp` then prepares the cached source
+and transports the coarse cascades. One ordered 4 MiB RGB9E5 word per native
+cell is `authored_emission + thermal_emission(temperature) + diffuse *
+previous_angular_mean`; the previous mean is the prior fine-CH DC field
+bilinearly sampled at `(cell+0.5)/2-0.5` and scaled by `Y0`, with no extra pi,
+cosine, normal, roughness or Fresnel factor. Empty, pure-metal-diffuse and
+receive-only/gas cells contribute exactly zero; the pass binds its own
+zero-initialized 8 MiB fine-CH placeholder until fine reconstruction owns the
+field in Task 10. The source dispatch is ordered before tracing.
+`updateTerminal` fills L5 over the 512-square quarter-probe domain (16x16
+threads): four terminal sub-sectors per stored direction with `D=16,384` trace
+to the actual forward map exit (slab clip; exterior clear), closing every path
+with the analytic fixed-intensity sky and zero transmittance. A miss returns
+the sky-sector mean, a hit the cached source. `updateCascade` fills L4..L1 with
+a near segment from `c + d*a_l` to each of the four bilinearly gathered
+(clamped) parent probes at `p + d*a_(l+1)` and merges the four retained parent
+sectors `4*phi+j` by `L = Lnear + Tnear*Lfar`, `T = Tnear*Tfar`, averaging and
+weighting once. Levels share one persistent structured uint2 store (stride 8,
+five 8 MiB levels, 40 MiB); unselected intervals and never-initialized probes
+retain zero radiance and zero transmittance (never vacuum). Explicit global
+barriers order source -> L5 -> L4 -> ... -> L1 and the final SRV transition;
+nothing is reallocated per frame and there is no CPU wait or readback.
+
+Each numeric stage owns one 32-byte `NumericStatusRecord` in the attempt's
+fixed-record status buffer: four projection stages then source preparation,
+terminal L5 and lower cascades; words 0/1 are atomic minima of the
+invalid-state and range-error index, words 2..7 stay zero. `finalize` copies
+all records to a mapped readback buffer in the same submission; the pass polls settlement
 through `collectCompleted(FenceCompletionValue)` with no host wait, and a
 completed ticket reports `state_not_recoverable` (invalid arithmetic/state) or
 `result_out_of_range` (representational overflow) with category/stage/index/
@@ -544,7 +578,7 @@ validation requirements; user visual acceptance is separate.
 - `App.Renderer.WorldLighting.cppm/.cpp` — published world-lighting record words, CPU interval/CH values, RGB9E5/half/AC codecs, source-material admission and retained-direction scheduled frame identity
 - `App.Renderer.WorldLightingPass.cppm/.cpp` — per-world categorical projection owner: resolved cells, two winner-scratch grids, numeric status ring, settlement and diagnostics
 - `App.Renderer.WorldLightingPass.Projection.cpp` — `encodeProjection_` clear/reduce/resolve encoding with the shared coordinate/key contract
-- `App.Renderer.WorldLightingPass.Transport.cpp` — full-domain visibility/R8 jump rebuild, per-attempt-slot acceleration storage and dispatch ordering
+- `App.Renderer.WorldLightingPass.Transport.cpp` — full-domain visibility/R8 jump rebuild, per-attempt-slot acceleration storage, cached-source preparation, continuously scheduled L5-L1 cascade encoding and the persistent cascade/source/fine-CH storage
 
 The shared contour surface is enabled for catalog sessions. GridPass uploads
 `math::contourPoints/contourCases` and completion-safe per-slot global chunk maps;

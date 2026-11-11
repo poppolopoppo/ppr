@@ -17,7 +17,9 @@ struct NumericStatus {
 };
 
 static const uint kNumericStatusWords = 8u;
-static const uint kNumericStatusRecords = 4u;
+// Four projection records (clear/keys/rows/cells) followed by the transport
+// records (source preparation, terminal level L5, lower cascades L4..L1).
+static const uint kNumericStatusRecords = 7u;
 static const uint kNoNumericIndex = 0xffffffffu;
 // The projection stage reports only invalid arithmetic/state (nonfinite and
 // out-of-domain candidates). kNumericRangeError is reserved for later

@@ -60,6 +60,34 @@ int2 traceEnteredCell(float2 position, float2 direction) {
     return cell;
 }
 
+// The cell index along one axis at the point just after parameter `next`. Face
+// parameters are rebuilt from the original ray, and a crossing that rounds onto
+// a cell or aligned-block boundary advances with the ray direction. The selected
+// cell therefore always has its next forward face strictly ahead, which keeps a
+// corner crossing from reporting a spurious no-progress failure. The face
+// parameter grows by exactly one cell per 1/|delta|, so the crossed-cell count
+// is estimated directly rather than stepping a near-parallel axis.
+int traceAdvanceAxis(float start, float delta, int cell, float next) {
+    if (delta == 0.0) return cell;
+
+    int step = delta > 0.0 ? 1 : -1;
+    float face = delta > 0.0 ? (float(cell + 1) - start) / delta : (float(cell) - start) / delta;
+    if (face > next) return cell;
+
+    float advance = (next - face) * abs(delta);
+    int crossed = int(floor(advance)) + 1;
+    if (crossed < 1) crossed = 1;
+
+    cell += step * crossed;
+    face = delta > 0.0 ? (float(cell + 1) - start) / delta : (float(cell) - start) / delta;
+    while (face <= next) {
+        cell += step;
+        face = delta > 0.0 ? (float(cell + 1) - start) / delta : (float(cell) - start) / delta;
+    }
+
+    return cell;
+}
+
 // ------------------------------------------------------------------
 // finite segment traversal
 // ------------------------------------------------------------------
@@ -138,29 +166,30 @@ SegmentHit traceSegmentDetailed(float2 start, float2 end, uint invocation, uint 
             else if (delta.y < 0.0) next_y = (float(base.y) - start.y) / delta.y;
         }
 
+        // A nonfinite face parameter is a numeric failure, not the finite
+        // "no boundary on this axis" sentinel. Checking before min() keeps a
+        // pathological overflowing division from degrading into a clear
+        // interval through the sentinel value.
+        if (!isfinite(next_x) || !isfinite(next_y)) return traceFailure(invocation, status_record);
+
         float next = min(next_x, next_y);
         int2 entered = cell;
         if (jump <= 1u) {
-            if (next_x < next_y) entered.x += delta.x > 0.0 ? 1 : -1;
-            else if (next_y < next_x) entered.y += delta.y > 0.0 ? 1 : -1;
-            else {
-                entered.x += delta.x > 0.0 ? 1 : -1;
-                entered.y += delta.y > 0.0 ? 1 : -1;
-            }
+            entered.x = traceAdvanceAxis(start.x, delta.x, cell.x, next);
+            entered.y = traceAdvanceAxis(start.y, delta.y, cell.y, next);
         } else {
             // A jump crossing an aligned block face advances the crossed axis
-            // exactly; the other coordinate is the cell entered at the crossing
-            // point, which may differ from the cell the ray occupied when the
-            // jump began.
+            // exactly; the other coordinate is the cell containing the ray just
+            // after the crossing, which may differ from the cell the ray
+            // occupied when the jump began.
             int size = int(jump);
             int2 base = (cell / size) * size;
-            int2 crossing = traceEnteredCell(start + next * delta, delta);
             if (next_x < next_y) {
                 entered.x = delta.x > 0.0 ? base.x + size : base.x - 1;
-                entered.y = crossing.y;
+                entered.y = traceAdvanceAxis(start.y, delta.y, cell.y, next);
             } else if (next_y < next_x) {
                 entered.y = delta.y > 0.0 ? base.y + size : base.y - 1;
-                entered.x = crossing.x;
+                entered.x = traceAdvanceAxis(start.x, delta.x, cell.x, next);
             } else {
                 entered.x = delta.x > 0.0 ? base.x + size : base.x - 1;
                 entered.y = delta.y > 0.0 ? base.y + size : base.y - 1;

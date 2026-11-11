@@ -168,6 +168,8 @@ namespace pP::tests::detail::WorldLightingProjection {
         rhi::ComPtr<rhi::IBuffer> m_readonly{};
         rhi::ComPtr<rhi::IBuffer> m_terrain{};
         rhi::ComPtr<rhi::IBuffer> m_visuals{};
+        rhi::ComPtr<rhi::IBuffer> m_source_materials{};
+        rhi::ComPtr<rhi::IBuffer> m_thermal_lut{};
         lighting::WorldLightingInputs m_inputs{};
         u64 m_publication{};
 
@@ -242,8 +244,8 @@ namespace pP::tests::detail::WorldLightingProjection {
             m_inputs.m_identity = {view.m_world, view.m_publication, view.m_terrain_revision, view.m_joint_tick};
             m_inputs.m_terrain = m_terrain;
             m_inputs.m_visible_materials = m_visuals;
-            // The projection binds neither the source palette nor the thermal
-            // table; those stay empty here to exercise its actual contract.
+            m_inputs.m_source_materials = m_source_materials;
+            m_inputs.m_thermal_lut = m_thermal_lut;
             m_inputs.m_material_count = kMaterialCount;
         }
 
@@ -270,6 +272,17 @@ namespace pP::tests::detail::WorldLightingProjection {
             visuals[kEmissiveLiquid].m_emissive_strength = 2.0f;
 
             m_visuals = makeShaderBuffer(device, sizeof(visuals), 96u, visuals.data());
+
+            // The same accepted attempt now also prepares the cached source, so
+            // the world's full publication set is present: an all-zero derived
+            // source palette and an all-zero thermal table make the source
+            // cache black without changing the projection/acceleration contract
+            // under test.
+            const std::array<lighting::SourceMaterial, kMaterialCount> sources{};
+            m_source_materials = makeShaderBuffer(
+                device, sizeof(sources), sizeof(lighting::SourceMaterial), sources.data());
+            const std::vector<u8> thermal(lighting::kThermalLutBytes, 0u);
+            m_thermal_lut = makeShaderBuffer(device, thermal.size(), lighting::kThermalLutStride, thermal.data());
         }
     };
 
