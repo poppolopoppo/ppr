@@ -1195,6 +1195,20 @@ namespace pP {
         void *mapped{};
         PPR_RETURN_ERROR_ON_FAIL(GridPass, device.mapBuffer(staging, rhi::CpuAccessMode::Write, &mapped));
 
+        if (m_world.m_terrain_staging) {
+            // The previous staging buffer is a recorded copy source for
+            // submissions that may still be in flight. Defer both the buffer
+            // and its mapping view; the closure unmaps before releasing.
+            auto previous_staging = std::move(m_world.m_terrain_staging);
+            rhi::IDevice *const unmap_device = &device;
+            m_deferred_releases.defer(
+                m_world.m_last_reader, [held = std::move(previous_staging), unmap_device]() mutable {
+                    if (held != nullptr) {
+                        std::ignore = unmap_device->unmapBuffer(held.get());
+                    }
+                    held.setNull();
+                });
+        }
         if (m_world.m_terrain_cells) {
             // The replaced full-domain input stays owned until its last
             // submitted reader completes; strong references alone do not make
@@ -2684,6 +2698,9 @@ namespace pP {
         m_chunk_slot_uploaded.fill(false);
         for (auto it = m_world.m_cell_cache.begin(); it != m_world.m_cell_cache.end(); ++it) {
             it->second.m_pending = true;
+            // Entries with a complete packed-word row republish from CPU. A
+            // partial/legacy entry has no authoritative full-domain words and
+            // is legitimately requested again by its producer after recovery.
             if (it->second.m_cells.size() == kCellsPerChunk) {
                 it->second.m_full_pending = true;
             }

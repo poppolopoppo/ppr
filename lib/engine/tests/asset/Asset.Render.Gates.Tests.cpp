@@ -5966,6 +5966,12 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
                 PPR_TEST_ASSERT(not renderer->waitOnHost());
                 PPR_TEST_ASSERT(not renderer->retireCompletedFrames());
             };
+            const auto renderInFlight = [&] {
+                PPR_TEST_ASSERT(not renderer->renderToTexture(
+                    targetRef_(target), {DrawSubmission{"terrain words in flight", draw}}, {},
+                    PreRenderCallback{prepare}));
+                grid.notifyFrameSubmitted(renderer->lastSubmittedFenceValue());
+            };
             const auto stage = [&](const std::array<u32, 2u> chunks, const std::array<u32, 2u> words,
                                    const bool reset) {
                 GridPass::GridStagedFrame value{};
@@ -6012,15 +6018,30 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
             PPR_TEST_ASSERT(word(128u) == 0u);
             PPR_TEST_ASSERT(word(256u) == 0u);
 
+            // A reset while a previous submission is still reading the staging
+            // buffer must defer the old buffer/mapping, not destroy it.
+            stage({0u}, {*lighting::packCell(1u, 1100.0)}, false);
+            renderInFlight();
+            rhi::IBuffer *const old_staging = grid.terrainStagingForTest();
+            const u32 deferred_before = grid.pendingDeferredReleaseCountForTest();
+            stage({0u}, {*lighting::packCell(1u, 1200.0)}, true);
+            PPR_TEST_ASSERT(grid.terrainStagingForTest() != old_staging);
+            PPR_TEST_ASSERT(grid.pendingDeferredReleaseCountForTest() >= deferred_before + 2u);
+            renderInFlight();
+            PPR_TEST_ASSERT(not renderer->waitOnHost());
+            PPR_TEST_ASSERT(not renderer->retireCompletedFrames());
+            PPR_TEST_ASSERT(grid.pendingDeferredReleaseCountForTest() < deferred_before + 2u);
+            PPR_TEST_ASSERT(word(0u) == *lighting::packCell(1u, 1200.0));
+
             // Device loss destroys the device-local words; recovery republishes
             // them from the retained CPU cell cache even when the stage is unchanged.
             PPR_TEST_ASSERT(not renderer->waitOnHost());
             PPR_TEST_ASSERT(not grid.notifyDeviceLost());
             PPR_TEST_ASSERT(not grid.initialize(*rhi, *shader, std::filesystem::current_path()));
             PPR_TEST_ASSERT(not grid.update(TimeSpan{}, camera.getSnapshot()));
-            stage({0u}, {*lighting::packCell(1u, 900.0)}, false);
+            stage({0u}, {*lighting::packCell(1u, 1200.0)}, false);
             render();
-            PPR_TEST_ASSERT(word(0u) == *lighting::packCell(1u, 900.0));
+            PPR_TEST_ASSERT(word(0u) == *lighting::packCell(1u, 1200.0));
         };
 
         PPR_UNIT_TEST (grid_source_palette_uses_filtered_texture_mean) {

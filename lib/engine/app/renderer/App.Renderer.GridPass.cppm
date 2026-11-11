@@ -452,6 +452,14 @@ export namespace pP {
             return {slot.m_args.get(), slot.m_ids.get()};
         }
 
+        // Test-only ownership observations for the terrain staging lifetime.
+        [[nodiscard]] rhi::IBuffer *terrainStagingForTest() const noexcept {
+            return m_world.m_terrain_staging.get();
+        }
+        [[nodiscard]] u32 pendingDeferredReleaseCountForTest() const noexcept {
+            return m_deferred_releases.pendingCount();
+        }
+
         [[nodiscard]] std::array<rhi::IBuffer *, 3u> particleBuffersForTest() const noexcept {
             if (not m_world.m_gpu_particles) {
                 return {};
