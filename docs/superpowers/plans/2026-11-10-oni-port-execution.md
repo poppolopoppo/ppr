@@ -35,7 +35,7 @@ Windows/D3D12 is unavailable on this host and remains an unmet gate unless run.
 | 0 | complete (checkpoint `49a3a7d`, recovery verified, inventory recorded) |
 | 1 | complete (commits `14948a7`, `015b4df`, `7c5840b`, `502cf30`; reviews clean; known red legacy gates recorded below) |
 | 2 | complete (commits `8835fbb`, `15b6609`, `2be2fc2`; reviews clean; known red gates recorded below; the GPU cost blocker it recorded is resolved by the app GPU cost correction below) |
-| 2a | complete (app GPU cost correction: commits `ab37c5ba`, `test: bound matter terrain and runtime GPU entries`; independent review of `ab37c5ba` returned 5 Important + minors, all fixed; records below) |
+| 2a | complete (app GPU cost correction: commits `ab37c5ba`, `3c3b9963`; independent review of `ab37c5ba` returned 5 Important + minors, all fixed; records below) |
 | 3 | pending — mandatory owner cleanup-acceptance stop; entry conditions and remaining risk recorded in the Task 3 section |
 | 4–19 | pending; Task 4 and later must not begin before cleanup acceptance |
 
@@ -518,7 +518,7 @@ timings.
   solver rebuilds; split the 32-leaf `app/matter_gpu` aggregate into three
   responsibility entries (11/11/10).
 - `test: bound matter terrain and runtime GPU entries` (follow-up to the review of
-  `ab37c5ba`) — separated the two whole-grid terrain leaves into
+  `ab37c5ba`, commit `3c3b9963`) — separated the two whole-grid terrain leaves into
   `matter_terrain_gpu`, split `matter_runtime_gpu` into `matter_runtime_gpu` and
   `matter_runtime_scene_gpu`, corrected the report/tables/ledger evidence.
 - Independent review of `ab37c5ba` returned 5 Important findings and several
