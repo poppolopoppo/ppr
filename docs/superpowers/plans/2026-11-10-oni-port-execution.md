@@ -909,3 +909,35 @@ and operational acceptance. No Task 4 work has begun.
   - `inspectAttempt_` fails closed (`state_not_recoverable`) and keeps the slot
     when a submitted attempt never encoded its status copy; the only reachable
     path is a caller that submits without `finalize`.
+
+## Task 7 — categorical projection and numeric status complete
+
+- Commits: `59cd4c34` (projection/status), `77c022d8` (ledger), `1c08f4c5`
+  (reject prepare while armed; YAGNI/validation cleanup).
+- Review: approved behavior with one Important prepared-attempt/fence
+  association defect, fixed in `1c08f4c5`; scoped re-review found all findings
+  addressed, no new Critical/Important breakage.
+- Delivered: per-world `WorldLightingPass` in `GridPass::WorldResources`; two
+  4 MiB uint32 winner grids with shared coordinate/key helper, ordered
+  atomic-min keys/rows, stable-ID metadata-row ties, terrain precedence, gas
+  exclusion, exact endpoint mapping, invalid/NaN rejection without clamping,
+  full-domain `packCell` resolve, no 64-bit atomics/splats/dilation; 32-byte
+  numeric status records with two minima, reserved zero words, fixed tickets,
+  completion-fenced slot/readback lifecycle, no per-frame host wait, rejected/
+  ambiguous settlement; real GPU tests for tie/reorder/terrain/gas/0/1/dense/
+  next-frame/endpoint/status/shutdown.
+- **Task 8/14 obligations:**
+  - Projection validation deliberately requires only terrain + visible materials;
+    the later source/transport stage must validate source-palette/thermal
+    readiness in its own stage.
+  - Every `prepare` must be settled with `notifySubmitted` or
+    `discardUnsubmitted`; otherwise the next `prepare` returns
+    `operation_not_permitted`.
+  - Retiring-world status drain and `inspectAttempt_` fail-closed slot: Task 14
+    teardown/settlement audit.
+  - `bind` resource-state transitions, including numeric-status SRV/UAV ordering:
+    Task 8/14 production binding + D3D12 qualification.
+  - `initialize` resolves `IRhiService::get()` internally; revisit when Task 8
+    wires production.
+- **Known gates:** pre-existing `gpu_grid_surface` optical leaf (Task 11);
+  Windows/D3D12 and GPU-validation execution unmeasured on this host.
