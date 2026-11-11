@@ -44,6 +44,7 @@ namespace pP::colony {
 
         auto packet = std::move(*captured);
         packet.m_world_generation = *preview.m_presentation_generation;
+        packet.m_world_edge = preview.m_grid.edge();
         packet.m_full_refresh = true;
 
         // Preview particles already carry canonical production IDs. Convert the

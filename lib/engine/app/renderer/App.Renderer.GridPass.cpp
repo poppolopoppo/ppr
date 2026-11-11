@@ -667,8 +667,7 @@ namespace pP {
         PPR_RETURN_ERROR_ON_FAIL(GridPass, stageDiagnostic_(stage));
         PPR_RETURN_ERROR_ON_FAIL(GridPass, submitTiles(std::span<const GridTileSubmission>{stage.m_tiles}));
         if (m_device != nullptr) {
-            PPR_RETURN_ERROR_ON_FAIL(
-                GridPass, ensureTerrainCells_(*m_device, stage.m_world_edge, stage.m_reset_caches));
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, ensureTerrainCells_(*m_device, stage.m_world_edge));
         }
 
         for (const GridStagedUpload &upload: stage.m_uploads) {
@@ -760,7 +759,7 @@ namespace pP {
                               ? std::error_code{}
                               : std::make_error_code(std::errc::invalid_argument));
             if (m_device != nullptr) {
-                PPR_RETURN_ERROR_ON_FAIL(GridPass, ensureTerrainCells_(*m_device, m_world.m_world_edge, false));
+                PPR_RETURN_ERROR_ON_FAIL(GridPass, ensureTerrainCells_(*m_device, m_world.m_world_edge));
             }
             const auto applied = requestUpload(
                 GridUploadRequest{
@@ -1026,8 +1025,13 @@ namespace pP {
 
         const u32 dirty_count = static_cast<u32>(std::popcount(staged->m_dirty_mask));
         const bool has_cells = not request.m_cell_materials.empty();
+        const bool has_words = not request.m_cell_words.empty();
         if (request.m_tile_data_view.size() < dirty_count or
-            (has_cells and request.m_cell_materials.size() != kCellsPerChunk)) [[unlikely]] {
+            (has_cells and request.m_cell_materials.size() != kCellsPerChunk) or
+            (has_words and request.m_cell_words.size() != kCellsPerChunk) or
+            (has_words and not has_cells) or
+            (has_words and m_device != nullptr and (m_world.m_world_edge == 0u or not m_world.m_terrain_cells)))
+            [[unlikely]] {
             return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
         }
         if (has_cells) {
@@ -1041,26 +1045,13 @@ namespace pP {
                 range.m_max_y != static_cast<i32>((chunk_y + 1u) * kGridTileEdge)) [[unlikely]] {
                 return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
             }
-
-            if (not request.m_cell_words.empty() and m_world.m_terrain_cells_mapped != nullptr) {
-                if (request.m_cell_words.size() != kCellsPerChunk or
-                    m_world.m_world_edge == 0u or
-                    range.m_min_x < 0 or
+            if (has_words and
+                m_world.m_world_edge != 0u and
+                (range.m_min_x < 0 or
                     range.m_min_y < 0 or
                     static_cast<u32>(range.m_max_x) > m_world.m_world_edge or
-                    static_cast<u32>(range.m_max_y) > m_world.m_world_edge) [[unlikely]] {
-                    return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
-                }
-
-                auto *const cells = static_cast<u32 *>(m_world.m_terrain_cells_mapped);
-                for (u32 row = 0u; row < kGridTileEdge; ++row) {
-                    u32 *const destination = cells + (static_cast<std::size_t>(range.m_min_y + static_cast<i32>(row)) *
-                                                             m_world.m_world_edge +
-                                                         static_cast<std::size_t>(range.m_min_x));
-                    std::memcpy(
-                        destination, request.m_cell_words.data() + static_cast<std::size_t>(row) * kGridTileEdge,
-                        kGridTileEdge * sizeof(u32));
-                }
+                    static_cast<u32>(range.m_max_y) > m_world.m_world_edge)) [[unlikely]] {
+                return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
             }
         }
         if (dirty_count == 0u) {
@@ -1076,12 +1067,16 @@ namespace pP {
         // Pack before touching either cache. The low halfword is even cell i,
         // the high halfword is cell i+1 (including transparent 0xffff).
         std::unique_ptr<std::array<u32, kCellWordsPerChunk>> packed{};
+        Array<u32> full_words;
         if (has_cells) {
             packed = std::make_unique<std::array<u32, kCellWordsPerChunk>>();
             for (u32 word = 0u; word < kCellWordsPerChunk; ++word) {
                 (*packed)[word] = static_cast<u32>(request.m_cell_materials[word * 2u]) |
                                   (static_cast<u32>(request.m_cell_materials[word * 2u + 1u]) << 16u);
             }
+        }
+        if (has_words) {
+            full_words.assign(request.m_cell_words.begin(), request.m_cell_words.end());
         }
 
         // Chunk-sized tiles carry exactly one dirty tile (bit 0); the loop
@@ -1107,11 +1102,17 @@ namespace pP {
         m_world.m_resident_table_stale = true;
         if (has_cells) {
             const auto previous = m_world.m_cell_cache.find(request.m_chunk_id);
+            const bool changed = previous == m_world.m_cell_cache.end() or
+                                 *previous->second.m_words != *packed or
+                                 (has_words and previous->second.m_cells != full_words);
             // A deferred frame can replay the same unacknowledged revision.
             // Keep its partially copied cohort unless the actual cells change.
-            if (previous == m_world.m_cell_cache.end() or *previous->second.m_words != *packed) {
+            if (changed) {
+                const u64 generation = previous == m_world.m_cell_cache.end() ? 1u : previous->second.m_generation + 1u;
                 cancelCellCohort_();
-                m_world.m_cell_cache.insert_or_assign(request.m_chunk_id, GridCachedCells{std::move(packed), true});
+                m_world.m_cell_cache.insert_or_assign(
+                    request.m_chunk_id,
+                    GridCachedCells{std::move(packed), std::move(full_words), generation, true, has_words});
             }
         } else {
             cancelCellCohort_();
@@ -1148,44 +1149,131 @@ namespace pP {
         return make_error_code(device.createBuffer(desc, bytes.data(), m_thermal_lut.writeRef()));
     }
 
-    std::error_code GridPass::ensureTerrainCells_(rhi::IDevice &device, const u32 edge, const bool clear) {
+    std::error_code GridPass::ensureTerrainCells_(rhi::IDevice &device, const u32 edge) {
         if (edge == 0u) {
             return {};
         }
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass, edge <= static_cast<u32>(kGridWorldEdge) ? std::error_code{}
                                                                : std::make_error_code(std::errc::invalid_argument));
-        if (m_world.m_terrain_cells and m_world.m_world_edge == edge) {
-            if (clear and m_world.m_terrain_cells_mapped != nullptr) {
-                std::memset(m_world.m_terrain_cells_mapped, 0, static_cast<std::size_t>(edge) * edge * sizeof(u32));
-            }
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, (m_world.m_world_edge == 0u or m_world.m_world_edge == edge)
+                          ? std::error_code{}
+                          : std::make_error_code(std::errc::invalid_argument));
+        if (m_world.m_terrain_cells and m_world.m_terrain_staging) {
             return {};
         }
 
         rhi::BufferDesc desc{};
         desc.size = static_cast<u64>(edge) * edge * sizeof(u32);
         desc.elementSize = sizeof(u32);
-        desc.memoryType = rhi::MemoryType::Upload;
-        desc.usage = rhi::BufferUsage::ShaderResource;
+        desc.memoryType = rhi::MemoryType::DeviceLocal;
+        desc.usage = static_cast<rhi::BufferUsage>(
+            static_cast<u32>(rhi::BufferUsage::ShaderResource) | static_cast<u32>(rhi::BufferUsage::CopyDestination));
         desc.defaultState = rhi::ResourceState::ShaderResource;
         desc.label = "world packed terrain input";
-        rhi::ComPtr<rhi::IBuffer> buffer;
-        PPR_RETURN_ERROR_ON_FAIL(GridPass, device.createBuffer(desc, nullptr, buffer.writeRef()));
-        void *mapped{};
-        PPR_RETURN_ERROR_ON_FAIL(GridPass, device.mapBuffer(buffer, rhi::CpuAccessMode::Write, &mapped));
-        std::memset(mapped, 0, static_cast<std::size_t>(desc.size));
+        rhi::ComPtr<rhi::IBuffer> terrain;
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, device.createBuffer(desc, nullptr, terrain.writeRef()));
 
-        if (m_world.m_terrain_cells) {
-            // The replaced full-domain input stays owned until its last
-            // submitted reader completes; strong references alone do not make
-            // its bytes immutable.
-            auto previous = std::move(m_world.m_terrain_cells);
-            m_deferred_releases.defer(
-                m_world.m_last_reader, [held = std::move(previous)]() mutable { held.setNull(); });
-        }
-        m_world.m_terrain_cells = std::move(buffer);
-        m_world.m_terrain_cells_mapped = mapped;
+        // The staging ring is bounded like the existing cohort and reuses the
+        // completion-selected frame slot. Host writes target only this mapped
+        // upload buffer; a queue-ordered copy publishes device-visible words.
+        constexpr u32 staging_chunks = kTerrainUploadChunks * kTileRingSize;
+        rhi::BufferDesc staging_desc{};
+        staging_desc.size = static_cast<u64>(staging_chunks) * kCellsPerChunk * sizeof(u32);
+        staging_desc.elementSize = sizeof(u32);
+        staging_desc.memoryType = rhi::MemoryType::Upload;
+        staging_desc.usage = rhi::BufferUsage::CopySource;
+        staging_desc.defaultState = rhi::ResourceState::CopySource;
+        staging_desc.label = "world packed terrain upload staging";
+        rhi::ComPtr<rhi::IBuffer> staging;
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, device.createBuffer(staging_desc, nullptr, staging.writeRef()));
+        void *mapped{};
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, device.mapBuffer(staging, rhi::CpuAccessMode::Write, &mapped));
+
+        m_world.m_terrain_cells = std::move(terrain);
+        m_world.m_terrain_staging = std::move(staging);
+        m_world.m_terrain_staging_mapped = mapped;
+        m_world.m_terrain_staging_values.fill(kFenceValueNone);
+        m_world.m_terrain_encoded_chunks.clear();
+        m_world.m_terrain_encoded_generations.clear();
+        m_world.m_terrain_staging_encoded = false;
         m_world.m_world_edge = edge;
+        return {};
+    }
+
+    std::error_code GridPass::flushTerrainCells_(const PreRenderContext &context) {
+        if (not m_world.m_terrain_cells or
+            not m_world.m_terrain_staging or
+            m_world.m_terrain_staging_mapped == nullptr or
+            m_world.m_world_edge == 0u) {
+            return {};
+        }
+
+        Array<u32> chunks;
+        Array<u64> generations;
+        for (const auto entry: m_world.m_cell_cache) {
+            if (not entry.second.m_full_pending or entry.second.m_cells.size() != kCellsPerChunk) {
+                continue;
+            }
+            chunks.push_back(entry.first);
+            generations.push_back(entry.second.m_generation);
+            if (chunks.size() == kTerrainUploadChunks) {
+                break;
+            }
+        }
+        if (chunks.empty()) {
+            return {};
+        }
+
+        const u32 slot = m_tile_ring_cursor;
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, slot < kTileRingSize ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
+        if (not slotFenceComplete(context.m_completed_fence_value, m_world.m_terrain_staging_values[slot])) {
+            if (not context.m_wait_for_fence) {
+                return std::make_error_code(std::errc::device_or_resource_busy);
+            }
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, context.m_wait_for_fence(m_world.m_terrain_staging_values[slot]));
+        }
+
+        auto *const staging = static_cast<u32 *>(m_world.m_terrain_staging_mapped);
+        u32 *const slot_base = staging + static_cast<std::size_t>(slot) * kTerrainUploadChunks * kCellsPerChunk;
+        for (std::size_t index = 0u; index < chunks.size(); ++index) {
+            const auto found = m_world.m_cell_cache.find(chunks[index]);
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass, found != m_world.m_cell_cache.end() and
+                                  found->second.m_cells.size() == kCellsPerChunk and
+                                  found->second.m_generation == generations[index]
+                              ? std::error_code{}
+                              : std::make_error_code(std::errc::state_not_recoverable));
+            std::memcpy(slot_base + index * kCellsPerChunk, found->second.m_cells.data(), kCellsPerChunk * sizeof(u32));
+        }
+
+        const u32 chunks_per_edge = static_cast<u32>(kGridWorldEdge) / kGridTileEdge;
+        context.m_encoder.setBufferState(m_world.m_terrain_cells, rhi::ResourceState::CopyDestination);
+        context.m_encoder.setBufferState(m_world.m_terrain_staging, rhi::ResourceState::CopySource);
+        for (std::size_t index = 0u; index < chunks.size(); ++index) {
+            const u32 chunk_x = chunks[index] % chunks_per_edge;
+            const u32 chunk_y = chunks[index] / chunks_per_edge;
+            for (u32 row = 0u; row < kGridTileEdge; ++row) {
+                const u64 destination = (static_cast<u64>(chunk_y * kGridTileEdge + row) * m_world.m_world_edge +
+                                            chunk_x * kGridTileEdge) *
+                                        sizeof(u32);
+                const u64 source = (static_cast<u64>(slot) * kTerrainUploadChunks * kCellsPerChunk +
+                                       index * kCellsPerChunk +
+                                       row * kGridTileEdge) *
+                                   sizeof(u32);
+                context.m_encoder.copyBuffer(
+                    m_world.m_terrain_cells, destination, m_world.m_terrain_staging, source,
+                    kGridTileEdge * sizeof(u32));
+            }
+        }
+        context.m_encoder.setBufferState(m_world.m_terrain_cells, rhi::ResourceState::ShaderResource);
+
+        m_world.m_terrain_encoded_chunks = std::move(chunks);
+        m_world.m_terrain_encoded_generations = std::move(generations);
+        m_world.m_terrain_staging_slot = slot;
+        m_world.m_terrain_staging_encoded = true;
         return {};
     }
 
@@ -1370,6 +1458,22 @@ namespace pP {
     void GridPass::notifyFrameSubmitted(const FenceCompletionValue submit_value) noexcept {
         m_last_submitted_value = submit_value;
         m_world.m_last_reader = submit_value;
+        if (m_world.m_terrain_staging_encoded) {
+            const u32 slot = m_world.m_terrain_staging_slot;
+            if (slot < kTileRingSize) {
+                m_world.m_terrain_staging_values[slot] = submit_value;
+            }
+            for (std::size_t index = 0u; index < m_world.m_terrain_encoded_chunks.size(); ++index) {
+                const auto found = m_world.m_cell_cache.find(m_world.m_terrain_encoded_chunks[index]);
+                if (found != m_world.m_cell_cache.end() and
+                    found->second.m_generation == m_world.m_terrain_encoded_generations[index]) {
+                    found->second.m_full_pending = false;
+                }
+            }
+            m_world.m_terrain_encoded_chunks.clear();
+            m_world.m_terrain_encoded_generations.clear();
+            m_world.m_terrain_staging_encoded = false;
+        }
         if (m_world.m_gpu_particles and m_world.m_gpu_particles->m_pending_pack) {
             auto &particles = *m_world.m_gpu_particles;
             particles.m_packed_owner = std::move(particles.m_pending_owner);
@@ -2893,8 +2997,11 @@ namespace pP {
 
         // One immutable dense lookup per world. Ordinary SRV indexing is
         // separate from the nonuniform descriptor lookup in the fragment shader.
-        Array<GridTerrainVisual> palette;
-        palette.resize(m_world.m_terrain_visuals.empty() ? 1u : 65536u);
+        // Visible and source palettes are derived from the same computed mean in
+        // this one admitted publication pass.
+        const u32 palette_size = materialPaletteSize(not m_world.m_terrain_visuals.empty());
+        Array<GridTerrainVisual> palette(palette_size);
+        Array<lighting::SourceMaterial> source_materials(palette_size, lighting::SourceMaterial{});
         for (GridTerrainVisual visual: m_world.m_terrain_visuals) {
             // Shipped chains end at one texel. Truncated admitted chains use the
             // coarsest level's average. This filtered, quantized estimate keeps
@@ -2905,6 +3012,12 @@ namespace pP {
                                         m_world.m_texture_inventory->m_images[visual.m_texture_index]);
             PPR_RETURN_UNEXPECTED_ON_FAIL(GridPass, mean);
             std::ranges::copy(*mean, visual.m_filtered_mean_rgb);
+            const auto source = gridSourceMaterial(
+                visual,
+                float3{visual.m_filtered_mean_rgb[0], visual.m_filtered_mean_rgb[1], visual.m_filtered_mean_rgb[2]});
+            PPR_RETURN_UNEXPECTED_ON_FAIL(GridPass, source);
+            source_materials[visual.m_material_id] = *source;
+
             visual.m_texture_index = visual.m_texture_index == 0xffffffffu
                                          ? 0u
                                          : m_world.m_texture_inventory->m_slots[visual.m_texture_index];
@@ -2913,18 +3026,6 @@ namespace pP {
             }
 
             palette[visual.m_material_id] = visual;
-        }
-
-        // The source palette is derived in the same admitted catalog pass as
-        // the visible palette, so both name one catalog version. Indexed holes
-        // and the empty entry keep the all-zero record.
-        Array<lighting::SourceMaterial> source_materials(palette.size(), lighting::SourceMaterial{});
-        for (const GridTerrainVisual &visual: m_world.m_terrain_visuals) {
-            const auto source = gridSourceMaterial(
-                visual,
-                float3{visual.m_filtered_mean_rgb[0], visual.m_filtered_mean_rgb[1], visual.m_filtered_mean_rgb[2]});
-            PPR_RETURN_UNEXPECTED_ON_FAIL(GridPass, source);
-            source_materials[visual.m_material_id] = *source;
         }
 
         rhi::BufferDesc source_desc{};
@@ -2977,7 +3078,7 @@ namespace pP {
         result.m_visible_materials = m_world.m_terrain_palette;
         result.m_source_materials = m_world.m_source_materials;
         result.m_thermal_lut = m_thermal_lut;
-        result.m_material_count = safe_narrowing(m_world.m_terrain_visuals.empty() ? 1u : 65536u);
+        result.m_material_count = materialPaletteSize(not m_world.m_terrain_visuals.empty());
         return result;
     }
 
@@ -3161,6 +3262,7 @@ namespace pP {
                           context.m_device, std::max<u32>(1u, safe_narrowing(payloads.size())),
                           context.m_completed_fence_value, context.m_wait_for_fence));
         PPR_RETURN_ERROR_ON_FAIL(GridPass, selectSlot_(context.m_completed_fence_value, context.m_wait_for_fence));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, flushTerrainCells_(context));
         if (not payloads.empty() and not m_resident_table_uploaded[m_tile_ring_cursor]) {
             std::memcpy(
                 m_tile_payload_mapped[m_tile_ring_cursor], payloads.data(), payloads.size() * sizeof(GridTilePayload));
@@ -3990,7 +4092,12 @@ namespace pP {
         m_thermal_lut.setNull();
         m_world.m_source_materials.setNull();
         m_world.m_terrain_cells.setNull();
-        m_world.m_terrain_cells_mapped = nullptr;
+        m_world.m_terrain_staging.setNull();
+        m_world.m_terrain_staging_mapped = nullptr;
+        m_world.m_terrain_staging_values.fill(kFenceValueNone);
+        m_world.m_terrain_encoded_chunks.clear();
+        m_world.m_terrain_encoded_generations.clear();
+        m_world.m_terrain_staging_encoded = false;
         m_world.m_world_edge = 0u;
     }
 

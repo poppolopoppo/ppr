@@ -819,6 +819,7 @@ namespace pP::tests::detail::MatterAdapter {
         auto source = colony::makeMatterState(records(), 1.0, 1.0, colony::kMatterGravityY, 94u);
         PPR_TEST_ASSERT(source.has_value());
         source->m_identity.m_terrain_revision = 1u;
+        const Array<matter::GpuParticle> seeded_particles = source->m_particles;
         Array<u32> terrain(static_cast<std::size_t>(colony::kMatterTerrainEdge) * colony::kMatterTerrainEdge, 0u);
         std::ignore = success(runtime.beginPrepareResidentWorld(*source, std::move(terrain)));
         auto attached = success(runtime.beginPublishWorld(source->m_identity));
@@ -910,7 +911,74 @@ namespace pP::tests::detail::MatterAdapter {
             return left.m_material_temperature == right.m_material_temperature;
         }));
         PPR_TEST_ASSERT(not published.m_view->current());
-        source->m_identity = candidate.m_identity;
+        *source = candidate;
+
+        // Append carries a new stable ID with its real packed temperature.
+        auto appended = *source;
+        appended.m_records.push_back({40u, 0.75, 0.75, 0.5, 750.0, 555.0, 1500.0, 5u, sim::EGenerationMatter::solid});
+        matter::GpuParticle appended_particle{};
+        appended_particle.m_position_x = 3.75f;
+        appended_particle.m_position_y = 3.75f;
+        appended_particle.m_mass = 1.0f;
+        appended_particle.m_volume = 1.0f;
+        appended_particle.m_material = static_cast<float>(matter::ESourceMaterial::sand);
+        appended.m_particles.push_back(appended_particle);
+        appended.m_profile.m_particle_count = static_cast<u32>(appended.m_particles.size());
+        appended.m_identity.m_publication = source->m_identity.m_publication + 1u;
+        std::ignore = success(runtime.beginPrepareEdit(
+            source->m_identity, appended, static_cast<u32>(source->m_particles.size()), {},
+            colony::EMatterEditKind::particle_append));
+        std::ignore = success(runtime.beginPollEdit(appended.m_identity));
+        auto appended_view = success(runtime.beginPublishEdit(appended.m_identity));
+        PPR_TEST_ASSERT(appended_view.m_view and appended_view.m_view->m_metadata);
+        PPR_TEST_ASSERT(appended_view.m_view->m_metadata->m_version > replaced.m_view->m_metadata->m_version);
+        PPR_TEST_ASSERT(not replaced.m_view->current());
+        const Array<GridParticleMetadataRow> appended_rows = readMetadata(
+            rhi_service->getDevice(), *queue, *appended_view.m_view->m_metadata);
+        const auto appended_row = std::ranges::find_if(
+            appended_rows, [&](const auto &row) { return (u64{row.m_id_high} << 32u | row.m_id_low) == 40u; });
+        PPR_TEST_ASSERT(appended_row != appended_rows.end());
+        PPR_TEST_ASSERT(appended_row->m_material_temperature == *lighting::packCell(5u, 555.0));
+        const auto retained_id10 = std::ranges::find_if(
+            appended_rows, [&](const auto &row) { return (u64{row.m_id_high} << 32u | row.m_id_low) == 10u; });
+        PPR_TEST_ASSERT(retained_id10 != appended_rows.end());
+        PPR_TEST_ASSERT(retained_id10->m_material_temperature == *lighting::packCell(1u, 900.0));
+        *source = appended;
+
+        // Stable-ID ordering survives a numerical-row reorder: metadata rows
+        // stay sorted by ID while m_source_row names the committed solver row.
+        auto reordered = *source;
+        std::swap(reordered.m_records[0u], reordered.m_records[1u]);
+        std::swap(reordered.m_particles[0u], reordered.m_particles[1u]);
+        reordered.m_identity.m_publication = source->m_identity.m_publication + 1u;
+        std::ignore = success(runtime.beginPrepareEdit(
+            source->m_identity, reordered, static_cast<u32>(source->m_particles.size()), {},
+            colony::EMatterEditKind::particle_replace));
+        std::ignore = success(runtime.beginPollEdit(reordered.m_identity));
+        auto reordered_view = success(runtime.beginPublishEdit(reordered.m_identity));
+        PPR_TEST_ASSERT(reordered_view.m_view and reordered_view.m_view->m_metadata);
+        PPR_TEST_ASSERT(not appended_view.m_view->current());
+        const Array<GridParticleMetadataRow> reordered_rows = readMetadata(
+            rhi_service->getDevice(), *queue, *reordered_view.m_view->m_metadata);
+        u64 previous_id{};
+        for (const auto &row: reordered_rows) {
+            const u64 id = u64{row.m_id_high} << 32u | row.m_id_low;
+            PPR_TEST_ASSERT(id > previous_id);
+            previous_id = id;
+            PPR_TEST_ASSERT(
+                (row.m_material_temperature & 0xffffu) > 0u and (row.m_material_temperature & 0xffffu) < 0xffffu);
+            if (row.m_source_row == 0xffff'ffffu) {
+                continue;
+            }
+            PPR_TEST_ASSERT(row.m_source_row < reordered.m_particles.size());
+            std::array<float, 2u> position{};
+            PPR_TEST_ASSERT(not make_error_code(rhi_service->getDevice().readBuffer(
+                reordered_view.m_view->m_numerical, static_cast<u64>(row.m_source_row) * kGridParticleNumericalStride,
+                sizeof(position), position.data())));
+            PPR_TEST_ASSERT(position[0u] == reordered.m_particles[row.m_source_row].m_position_x);
+            PPR_TEST_ASSERT(position[1u] == reordered.m_particles[row.m_source_row].m_position_y);
+        }
+        *source = reordered;
 
         // Invalid Kelvin rejects before any upload or identity commit.
         const auto rejected_temperature = [&](const double kelvin) {
@@ -925,19 +993,19 @@ namespace pP::tests::detail::MatterAdapter {
         PPR_TEST_ASSERT(rejected_temperature(-1.0) == std::errc::invalid_argument);
         PPR_TEST_ASSERT(rejected_temperature(std::numeric_limits<double>::quiet_NaN()) == std::errc::invalid_argument);
         PPR_TEST_ASSERT(rejected_temperature(65'506.0) == std::errc::result_out_of_range);
-        PPR_TEST_ASSERT(replaced.m_view->current());
-        PPR_TEST_ASSERT(source->m_identity.m_publication == candidate.m_identity.m_publication);
+        PPR_TEST_ASSERT(reordered_view.m_view->current());
+        PPR_TEST_ASSERT(source->m_identity.m_publication == reordered.m_identity.m_publication);
 
         // End before collection drains an already-admitted copy and retains
         // the same committed source. Owned prior bytes survive later ticks.
         std::ignore = success(runtime.beginSnapshot(source->m_identity));
         std::ignore = success(runtime.beginEndSnapshot(source->m_identity));
-        PPR_TEST_ASSERT(replaced.m_view->current());
+        PPR_TEST_ASSERT(reordered_view.m_view->current());
         PPR_TEST_ASSERT(initial.m_readback->m_source.m_publication == 0u);
         PPR_TEST_ASSERT(
             std::memcmp(
-                initial.m_readback->m_particles.data(), source->m_particles.data(),
-                source->m_particles.size() * sizeof(matter::GpuParticle)) == 0);
+                initial.m_readback->m_particles.data(), seeded_particles.data(),
+                seeded_particles.size() * sizeof(matter::GpuParticle)) == 0);
 
         // Release view owners before the injected RHI fixture shuts down.
         attached.m_view.reset();

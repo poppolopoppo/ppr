@@ -5937,6 +5937,72 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
             PPR_TEST_ASSERT(legacy_texel[0] > 160u and legacy_texel[1] < 80u);
         };
 
+        PPR_UNIT_TEST (grid_source_palette_uses_filtered_texture_mean) {
+            const auto rhi = SharedGpu::rhiService();
+            const auto shader = SharedGpu::shaderService();
+            PPR_TEST_ASSERT(rhi.isValid() and shader.isValid());
+            rhi::IDevice &device = rhi->getDevice();
+            GridPass grid;
+            PPR_TEST_ASSERT(not grid.initialize(*rhi, *shader, std::filesystem::current_path()));
+            PPR_DEFER {
+                PPR_TEST_ASSERT(not grid.shutdown());
+            };
+
+            // Constant linear 0.5 albedo: the production filtered mean, not the
+            // explicit gridSourceMaterial() parameter, must feed the palette.
+            std::array<std::byte, 4u> pixels{};
+            pixels[0u] = std::byte{128u};
+            pixels[1u] = std::byte{128u};
+            pixels[2u] = std::byte{128u};
+            pixels[3u] = std::byte{255u};
+            image::ImageAsset image{};
+            image.m_width = 1u;
+            image.m_height = 1u;
+            image.m_mip_count = 1u;
+            image.m_format = image::ENativeImageFormat::rgba8_linear;
+            image.m_storage = mem::SharedBuffer::clone(mem::SharedBufferView{pixels.data(), pixels.size()});
+            image.m_subresources.push_back(
+                image::ImageSubresource{.m_view = image.m_storage, .m_row_pitch = 4u, .m_slice_pitch = pixels.size()});
+
+            GridPass::GridStagedFrame stage{};
+            stage.m_world_edge = 1024u;
+            stage.m_cell_size_m = 1.0f;
+            stage.m_has_catalog = true;
+            stage.m_boundary_material_id = 1u;
+            stage.m_reference_thickness_m = 1.0f;
+            stage.m_terrain_images.push_back(std::move(image));
+            GridTerrainVisual visual{};
+            visual.m_material_id = 7u;
+            visual.m_color_rgba = 0xffffffffu;
+            visual.m_texture_index = 0u;
+            visual.m_texture_period_m = 1.0f;
+            visual.m_metallic = 0.0f;
+            visual.m_roughness = 0.5f;
+            visual.m_opacity = 1.0f;
+            visual.m_ior = 1.0f;
+            stage.m_terrain_visuals.push_back(visual);
+            stage.m_tiles.push_back(
+                GridTileSubmission{.m_dirty_mask = 1u, .m_tile_range = {0, 0, 128, 128}, .m_chunk_id = 0u});
+            GridPass::GridStagedUpload upload{};
+            upload.m_cell_materials.assign(GridPass::kCellsPerChunk, 7u);
+            upload.m_cell_words.assign(GridPass::kCellsPerChunk, *lighting::packCell(7u, 300.0));
+            stage.m_uploads.push_back(std::move(upload));
+            PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
+
+            const auto prepared = grid.tryPrepareCellUploads(device, kFenceValueNone);
+            PPR_TEST_ASSERT(prepared and *prepared);
+            const auto inputs = grid.lightingInputs();
+            PPR_TEST_ASSERT(inputs.has_value());
+            PPR_TEST_ASSERT(inputs->m_material_count == GridPass::kGridMaterialPaletteCapacity);
+
+            lighting::SourceMaterial source{};
+            PPR_TEST_ASSERT(not make_error_code(device.readBuffer(
+                inputs->m_source_materials, 7u * sizeof(lighting::SourceMaterial), sizeof(lighting::SourceMaterial),
+                &source)));
+            PPR_TEST_ASSERT(source.m_diffuse == *lighting::packRGB9E5(float3{0.5f, 0.5f, 0.5f}));
+            PPR_TEST_ASSERT(source.m_diffuse != *lighting::packRGB9E5(float3{1.0f, 1.0f, 1.0f}));
+        };
+
         PPR_UNIT_TEST (grid_candidate_world_retains_active_until_matching_activation) {
             const auto rhi = SharedGpu::rhiService();
             const auto shader = SharedGpu::shaderService();
@@ -5975,19 +6041,48 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
                 return gateTexel_(*pixels, 64u, 64u);
             };
             GridPass::GridStagedFrame active{};
+            active.m_world_edge = 1024u;
             active.m_tiles.push_back(
                 GridTileSubmission{.m_dirty_mask = 1u, .m_tile_range = {0, 0, 128, 128}, .m_chunk_id = 0u});
             GridPass::GridStagedUpload upload{};
             upload.m_cell_materials.resize(GridPass::kCellsPerChunk, 1u);
+            upload.m_cell_words.assign(GridPass::kCellsPerChunk, *lighting::packCell(1u, 300.0));
             active.m_uploads.push_back(std::move(upload));
             PPR_TEST_ASSERT(not grid.applyStagedFrame(active));
             auto prepared = grid.tryPrepareCellUploads(device, renderer->completedFenceValue());
             PPR_TEST_ASSERT(prepared and *prepared);
             const auto before = render();
             PPR_TEST_ASSERT(before[0] > 160u and before[1] < 80u);
+
+            // Full-domain terrain words are device-local and published by a
+            // queue-ordered copy from the fenced staging ring.
+            const auto inputs = grid.lightingInputs();
+            PPR_TEST_ASSERT(inputs.has_value());
+            PPR_TEST_ASSERT(
+                inputs->m_terrain and
+                inputs->m_terrain->getDesc().memoryType == rhi::MemoryType::DeviceLocal and
+                inputs->m_terrain->getDesc().size == 1024ull * 1024ull * sizeof(u32));
+            Array<u32> terrain_words(GridPass::kCellsPerChunk);
+            PPR_TEST_ASSERT(not make_error_code(
+                device.readBuffer(inputs->m_terrain, 0u, terrain_words.size() * sizeof(u32), terrain_words.data())));
+            PPR_TEST_ASSERT(terrain_words[0u] == *lighting::packCell(1u, 300.0));
+
             PPR_TEST_ASSERT(render() == before);
             PPR_TEST_ASSERT(render() == before);
             PPR_TEST_ASSERT(grid.retainedAtlasCountForTest() == 1u);
+
+            // A temperature-only replacement reaches the device buffer after
+            // the previous reader fence and the new queue-ordered copy.
+            auto warmed = active;
+            warmed.m_uploads[0u].m_cell_words[0u] = *lighting::packCell(1u, 900.0);
+            PPR_TEST_ASSERT(not grid.applyStagedFrame(warmed));
+            prepared = grid.tryPrepareCellUploads(device, renderer->completedFenceValue());
+            PPR_TEST_ASSERT(prepared and *prepared);
+            PPR_TEST_ASSERT(not renderer->retireCompletedFrames());
+            PPR_TEST_ASSERT(render() == before);
+            PPR_TEST_ASSERT(not make_error_code(
+                device.readBuffer(inputs->m_terrain, 0u, terrain_words.size() * sizeof(u32), terrain_words.data())));
+            PPR_TEST_ASSERT(terrain_words[0u] == *lighting::packCell(1u, 900.0));
 
             auto candidate = active;
             candidate.m_content_fingerprint = 77u;

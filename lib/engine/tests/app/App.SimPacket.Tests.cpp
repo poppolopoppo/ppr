@@ -845,46 +845,73 @@ namespace pP::tests::detail {
         // packed terrain temperature publication
         // ------------------------------------------------------------------
 
-        PPR_UNIT_TEST (terrain_temperature_only_change_packs_and_advances_revision) {
-            const u32 local = 10u * sim::kChunkEdge + 10u;
-            const auto packet = [&](const float kelvin, const u64 revision) {
-                colony::SimFramePacket result{};
-                result.m_cell_size_m = 1.0f;
-                result.m_world_edge = 1024u;
-                result.m_resident_chunks.push_back(sim::ChunkPos{0u, 0u});
-                result.m_present_chunks.push_back(sim::ChunkPos{0u, 0u});
-                result.m_present_revisions.push_back(revision);
-                Array<sim::Cell> cells(sim::kCellsPerChunk);
-                cells[local] = sim::Cell{.m_element = 1u, .m_temperature = kelvin};
-                result.m_chunk_cells.push_back({sim::ChunkPos{0u, 0u}, std::move(cells)});
-                return result;
+        PPR_UNIT_TEST (terrain_temperature_only_change_repacks_through_production_adapter) {
+            colony::test_fixture::AuthoredFixture authored;
+            colony::ColonyDriver driver{};
+            PPR_TEST_ASSERT(not authored.initialize(driver, colony::ColonyDriverDesc{.m_seed = 1234567u}));
+            PPR_DEFER {
+                std::ignore = driver.shutdown();
             };
 
-            const auto first = packet(300.0f, 1u);
+            const u32 local = 11u * sim::kChunkEdge + 11u;
+            PPR_TEST_ASSERT(not driver.grid().setCell({10u, 10u}, sim::Cell{.m_element = 1u, .m_temperature = 300.0f}));
+            PPR_TEST_ASSERT(not driver.grid().setCell({11u, 11u}, sim::Cell{.m_element = 1u, .m_temperature = 300.0f}));
+            driver.setPaused(true);
+            PPR_TEST_ASSERT(not driver.requestDig({10u, 10u}, 1u, 1u));
+            PPR_TEST_ASSERT(not driver.update(std::chrono::milliseconds{16}));
+
+            const colony::SimFramePacket first = captureFixturePacket(1u, driver);
+            PPR_TEST_ASSERT(first.m_present_chunks.size() == 1u);
+            const u64 first_revision = first.m_present_revisions[0u];
             GridPass::GridStagedFrame first_stage{};
             PPR_TEST_ASSERT(not colony::buildGridStagedFrame(first, first_stage));
-            PPR_TEST_ASSERT(first_stage.m_world_edge == 1024u);
+            PPR_TEST_ASSERT(first_stage.m_world_edge == driver.grid().edge());
             PPR_TEST_ASSERT(first_stage.m_uploads.size() == 1u);
             PPR_TEST_ASSERT(first_stage.m_uploads[0u].m_cell_words.size() == sim::kCellsPerChunk);
             PPR_TEST_ASSERT(first_stage.m_uploads[0u].m_cell_words[local] == *lighting::packCell(1u, 300.0));
             PPR_TEST_ASSERT((first_stage.m_uploads[0u].m_cell_words[local] & 0xffffu) == 1u);
 
-            // Only the temperature changes: the packed material stays, the
-            // chunk presentation revision advances and repacks the word.
-            const auto second = packet(900.0f, 2u);
-            PPR_TEST_ASSERT(second.m_present_revisions[0u] > first.m_present_revisions[0u]);
+            const Array<colony::ColonyDriver::DirtyChunk> acked = packetAckSet(first);
+            driver.ackPresentChunks(std::span<const colony::ColonyDriver::DirtyChunk>{acked});
+            PPR_TEST_ASSERT(driver.presentEditsCapture().empty());
+
+            // The tested cell changes only temperature. A second real edit in
+            // the same chunk advances the production presentation revision and
+            // the adapter repacks the whole chunk from the live grid.
+            PPR_TEST_ASSERT(not driver.grid().setCell({11u, 11u}, sim::Cell{.m_element = 1u, .m_temperature = 900.0f}));
+            PPR_TEST_ASSERT(not driver.grid().setCell({12u, 10u}, sim::Cell{.m_element = 1u, .m_temperature = 400.0f}));
+            PPR_TEST_ASSERT(not driver.requestDig({12u, 10u}, 1u, 1u));
+            PPR_TEST_ASSERT(not driver.update(std::chrono::milliseconds{16}));
+
+            const colony::SimFramePacket second = captureFixturePacket(2u, driver);
+            PPR_TEST_ASSERT(second.m_present_chunks.size() == 1u);
+            PPR_TEST_ASSERT(second.m_present_revisions[0u] > first_revision);
             GridPass::GridStagedFrame second_stage{};
             PPR_TEST_ASSERT(not colony::buildGridStagedFrame(second, second_stage));
+            PPR_TEST_ASSERT(second_stage.m_uploads.size() == 1u);
             PPR_TEST_ASSERT(second_stage.m_uploads[0u].m_cell_words[local] == *lighting::packCell(1u, 900.0));
             PPR_TEST_ASSERT(
                 (second_stage.m_uploads[0u].m_cell_words[local] & 0xffffu) ==
                 (first_stage.m_uploads[0u].m_cell_words[local] & 0xffffu));
+            const auto live = driver.grid().residentCells({0u, 0u});
+            PPR_TEST_ASSERT(live and (*live)[local].m_temperature == 900.0f);
+        };
 
-            // Invalid Kelvin fails the owned staged build before any upload.
-            const auto invalid = packet(-1.0f, 3u);
-            GridPass::GridStagedFrame invalid_stage{};
-            PPR_TEST_ASSERT(colony::buildGridStagedFrame(invalid, invalid_stage) == std::errc::invalid_argument);
-            PPR_TEST_ASSERT(invalid_stage.m_uploads.empty() and invalid_stage.m_tiles.empty());
+        PPR_UNIT_TEST (invalid_terrain_kelvin_rejects_staged_build) {
+            const u32 local = 10u * sim::kChunkEdge + 10u;
+            colony::SimFramePacket packet{};
+            packet.m_cell_size_m = 1.0f;
+            packet.m_world_edge = 1024u;
+            packet.m_resident_chunks.push_back(sim::ChunkPos{0u, 0u});
+            packet.m_present_chunks.push_back(sim::ChunkPos{0u, 0u});
+            packet.m_present_revisions.push_back(1u);
+            Array<sim::Cell> cells(sim::kCellsPerChunk);
+            cells[local] = sim::Cell{.m_element = 1u, .m_temperature = -1.0f};
+            packet.m_chunk_cells.push_back({sim::ChunkPos{0u, 0u}, std::move(cells)});
+
+            GridPass::GridStagedFrame stage{};
+            PPR_TEST_ASSERT(colony::buildGridStagedFrame(packet, stage) == std::errc::invalid_argument);
+            PPR_TEST_ASSERT(stage.m_uploads.empty() and stage.m_tiles.empty());
         };
 
         PPR_UNIT_TEST (initial_batch_and_full_capture_pack_identical_terrain_words) {
@@ -986,7 +1013,8 @@ namespace pP::tests {
             detail::SimPacket::dropped_frame_never_acks_dirty_set,
             detail::SimPacket::staged_build_failure_preserves_dirty_set,
             detail::SimPacket::exception_during_settlement_preserves_pending_set,
-            detail::SimPacket::terrain_temperature_only_change_packs_and_advances_revision,
+            detail::SimPacket::terrain_temperature_only_change_repacks_through_production_adapter,
+            detail::SimPacket::invalid_terrain_kelvin_rejects_staged_build,
             detail::SimPacket::initial_batch_and_full_capture_pack_identical_terrain_words,
             detail::SimPacket::derived_source_palette_zeroes_metals_and_receive_only_rows,
         });

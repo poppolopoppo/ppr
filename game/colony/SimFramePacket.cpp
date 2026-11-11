@@ -703,7 +703,7 @@ namespace pP::colony {
         GridStagedFrame stage{};
         SimFramePacket presentation{};
         PPR_RETURN_UNEXPECTED_ON_FAIL(SimPresentation, capturePresentation_(presentation, driver, &m_particle_cache));
-        stage.m_world_edge = driver.grid().edge();
+        presentation.m_world_edge = driver.grid().edge();
 
         stage.m_cell_size_m = presentation.m_cell_size_m;
         stage.m_world_edge = presentation.m_world_edge;

@@ -347,6 +347,9 @@ export namespace pP {
         static constexpr u32 kCellWordsPerChunk{kCellsPerChunk / 2u};
         static constexpr u32 kCellAtlasSlots{2u * kGridTileCacheCapacity};
         static constexpr u32 kCellAtlasWords{kCellAtlasSlots * kCellWordsPerChunk};
+        // Dense material palette capacity; the visible and derived source
+        // palettes share this one sizing rule.
+        static constexpr u32 kGridMaterialPaletteCapacity{65536u};
 
         // Indirect-lane vertex count: 6 non-indexed verts per tile quad, the
         // same geometry the CPU-staged drawInstanced path draws.
@@ -447,11 +450,6 @@ export namespace pP {
         [[nodiscard]] std::pair<rhi::IBuffer *, rhi::IBuffer *> visibilityBuffersForTest() const noexcept {
             const VisibilitySlot &slot = m_visibility_slots[m_tile_ring_cursor];
             return {slot.m_args.get(), slot.m_ids.get()};
-        }
-
-        // Borrowed full-domain packed terrain input; owned by this pass/world.
-        [[nodiscard]] rhi::IBuffer *terrainCellsForTest() const noexcept {
-            return m_world.m_terrain_cells.get();
         }
 
         [[nodiscard]] std::array<rhi::IBuffer *, 3u> particleBuffersForTest() const noexcept {
@@ -619,6 +617,15 @@ export namespace pP {
         // pipeline entry below, whose per-slot roots are sized by it.
         static constexpr u32 kTileRingSize{3u};
         static_assert(kTileRingSize == kFrameRingSlots);
+
+        // Dense material palette capacity and terrain upload staging bound.
+        // Both the visible palette and the derived source palette use the same
+        // size rule; chunk uploads are bounded like the existing cell cohort.
+        static constexpr u32 kTerrainUploadChunks{8u};
+
+        [[nodiscard]] static constexpr u32 materialPaletteSize(const bool has_visuals) noexcept {
+            return has_visuals ? kGridMaterialPaletteCapacity : 1u;
+        }
 
         std::error_code createShaderProgram_(
             IShaderService &shader_service, rhi::IDevice &device, const std::filesystem::path &content_dir);
@@ -803,8 +810,11 @@ export namespace pP {
 
         // Loads the generated thermal table and creates its single device copy.
         [[nodiscard]] std::error_code createThermalLut_(rhi::IDevice &device, const std::filesystem::path &content_dir);
-        // Ensures the world-owned full-domain packed terrain buffer for `edge`.
-        [[nodiscard]] std::error_code ensureTerrainCells_(rhi::IDevice &device, u32 edge, bool clear);
+        // Ensures the world-owned full-domain packed terrain buffer and its
+        // completion-selected upload staging ring for `edge`.
+        [[nodiscard]] std::error_code ensureTerrainCells_(rhi::IDevice &device, u32 edge);
+        // Encodes pending chunk copies into the current frame command buffer.
+        [[nodiscard]] std::error_code flushTerrainCells_(const PreRenderContext &context);
 
         [[nodiscard]] std::error_code validateCellDraw_(const GridTilePlan &plan) const noexcept;
 
@@ -960,7 +970,10 @@ export namespace pP {
 
         struct GridCachedCells {
             std::unique_ptr<std::array<u32, kCellWordsPerChunk>> m_words{};
+            Array<u32> m_cells{};
+            u64 m_generation{1u};
             bool m_pending = true;
+            bool m_full_pending = true;
         };
 
 
@@ -1038,8 +1051,16 @@ export namespace pP {
             // from the same admitted catalog version.
             rhi::ComPtr<rhi::IBuffer> m_source_materials{};
             // World-owned full-domain packed terrain input (material16 + half Kelvin).
+            // GPU copies from the fenced staging ring below target this buffer;
+            // CPU code never writes GPU-readable device memory directly.
             rhi::ComPtr<rhi::IBuffer> m_terrain_cells{};
-            void *m_terrain_cells_mapped{};
+            rhi::ComPtr<rhi::IBuffer> m_terrain_staging{};
+            void *m_terrain_staging_mapped{};
+            std::array<FenceCompletionValue, kTileRingSize> m_terrain_staging_values{};
+            Array<u32> m_terrain_encoded_chunks{};
+            Array<u64> m_terrain_encoded_generations{};
+            u32 m_terrain_staging_slot{};
+            bool m_terrain_staging_encoded{};
             u32 m_world_edge{};
             u64 m_job_id{};
             u64 m_world_generation{};
@@ -1126,8 +1147,9 @@ export namespace pP {
         // actor overlay advances; frozen-session callers keep the default false.
         bool m_update_actors_on_retained_terrain{};
         float m_cell_size_m{1.0f};
-        // Full-domain edge for the packed terrain input; zero means the staging
-        // path carries only the per-chunk visible cell atlas.
+        // Full-domain edge for the packed terrain input. A stage that carries
+        // m_cell_words must set this to the owning world edge; zero means no
+        // full-domain input is published (per-chunk visible atlas only).
         u32 m_world_edge{};
         bool m_has_catalog{false};
         u32 m_boundary_material_id{1u};

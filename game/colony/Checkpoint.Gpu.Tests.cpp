@@ -380,6 +380,30 @@ namespace pP::game::tests::detail::checkpoint {
                 PPR_TEST_ASSERT(
                     std::bit_cast<std::array<u32, 22u>>(m_driver->matterState()->m_particles[row]) == words[row]);
 
+            // Restored temperatures publish through the same packed metadata
+            // path as the initial seed; compare the actual GPU words to the
+            // authoritative restored records and gas.
+            const auto view = m_driver->particleView();
+            PPR_TEST_ASSERT(view and view->m_metadata and view->m_metadata->m_version > 0u);
+            Array<GridParticleMetadataRow> published(view->m_metadata->m_count);
+            PPR_TEST_ASSERT(not make_error_code(m_queue->waitOnHost()));
+            PPR_TEST_ASSERT(not make_error_code(m_rhi->getDevice().readBuffer(
+                view->m_metadata->m_rows, 0u, published.size() * sizeof(GridParticleMetadataRow), published.data())));
+            for (const auto &row: published) {
+                const u64 id = u64{row.m_id_high} << 32u | row.m_id_low;
+                const auto record = std::ranges::find_if(
+                    m_driver->matterState()->m_records, [&](const auto &value) { return value.m_id == id; });
+                const auto gas = std::ranges::find_if(
+                    m_driver->matterState()->m_gas, [&](const auto &value) { return value.m_id == id; });
+                const sim::MatterParticle *const source = record != m_driver->matterState()->m_records.end() ? &*record
+                                                          : gas != m_driver->matterState()->m_gas.end()      ? &*gas
+                                                                                                             : nullptr;
+                PPR_TEST_ASSERT(source != nullptr);
+                PPR_TEST_ASSERT(
+                    row.m_material_temperature ==
+                    *lighting::packCell(static_cast<u16>(source->m_material), source->m_temperature_k));
+            }
+
             const auto accounting = m_runtime.accounting();
             PPR_TEST_ASSERT(accounting.has_value());
             std::fprintf(
