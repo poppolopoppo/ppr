@@ -6,6 +6,7 @@ module;
 module game.colony.sim_packet;
 
 import engine.core;
+import engine.app;
 import engine.sim;
 import engine.asset;
 import game.colony.content;
@@ -314,7 +315,8 @@ namespace pP::colony {
         // Prepared worlds retain catalog IDs, including vacuum zero. Explicit
         // numeric fixtures retain the translator's transparent sentinel.
         [[nodiscard]] std::error_code convertCells(
-            const std::span<const sim::Cell> cells, const SimFramePacket &packet, Array<u16> &scratch) {
+            const std::span<const sim::Cell> cells, const SimFramePacket &packet, Array<u16> &scratch,
+            Array<u32> &words) {
             std::bitset<65536u> terrain_ids{};
 
             if (packet.m_has_catalog) {
@@ -327,6 +329,7 @@ namespace pP::colony {
             }
 
             scratch.resize(sim::kCellsPerChunk);
+            words.resize(sim::kCellsPerChunk);
 
             for (std::size_t cell = 0u; cell < sim::kCellsPerChunk; ++cell) {
                 const u16 element = cells[cell].m_element;
@@ -336,6 +339,10 @@ namespace pP::colony {
                         SimPresentation, known ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
                 }
                 scratch[cell] = not packet.m_has_catalog and element == kElementVacuum ? u16{0xffffu} : element;
+                const u16 material = not packet.m_has_catalog and element == kElementVacuum ? u16{0u} : element;
+                const auto packed = lighting::packCell(material, static_cast<double>(cells[cell].m_temperature));
+                PPR_RETURN_ERROR_ON_FAIL(SimPresentation, packed);
+                words[cell] = *packed;
             }
             return {};
         }
@@ -446,6 +453,7 @@ namespace pP::colony {
         packet.m_path_counts = driver.pathCounts();
         packet.m_errands = driver.errandCount();
         packet.m_full_refresh = full_refresh;
+        packet.m_world_edge = driver.grid().edge();
 
         for (const ColonyDriver::DirtyChunk &row: driver.presentEditsCapture()) {
             packet.m_present_chunks.push_back(row.m_pos);
@@ -526,6 +534,7 @@ namespace pP::colony {
         packet.m_world_generation = driver.worldGeneration();
         packet.m_tick = driver.tickCount();
         packet.m_agent_count = static_cast<u32>(driver.agentSummaries().size());
+        packet.m_world_edge = driver.grid().edge();
 
         const auto dirty = driver.presentEditsCapture();
         const auto &grid = driver.grid();
@@ -583,6 +592,7 @@ namespace pP::colony {
         GridStagedFrame stage{};
         stage.m_ack_seed = driver.worldGeneration();
         stage.m_full_refresh = true;
+        stage.m_world_edge = grid.edge();
 
         for (u32 index = 0u; index < sim::kChunkCount; ++index) {
             if (context != nullptr) {
@@ -608,7 +618,8 @@ namespace pP::colony {
             upload.m_payload.m_rect[1] = static_cast<float>(range.m_min_y);
             upload.m_payload.m_rect[2] = static_cast<float>(range.m_max_x);
             upload.m_payload.m_rect[3] = static_cast<float>(range.m_max_y);
-            PPR_RETURN_UNEXPECTED_ON_FAIL(SimPresentation, convertCells(*cells, presentation, upload.m_cell_materials));
+            PPR_RETURN_UNEXPECTED_ON_FAIL(
+                SimPresentation, convertCells(*cells, presentation, upload.m_cell_materials, upload.m_cell_words));
             stage.m_uploads.push_back(std::move(upload));
             for (const auto &row: dirty) {
                 if (row.m_pos == pos) {
@@ -692,8 +703,10 @@ namespace pP::colony {
         GridStagedFrame stage{};
         SimFramePacket presentation{};
         PPR_RETURN_UNEXPECTED_ON_FAIL(SimPresentation, capturePresentation_(presentation, driver, &m_particle_cache));
+        stage.m_world_edge = driver.grid().edge();
 
         stage.m_cell_size_m = presentation.m_cell_size_m;
+        stage.m_world_edge = presentation.m_world_edge;
         stage.m_has_catalog = presentation.m_has_catalog;
         stage.m_initial_matter_valid = presentation.m_initial_matter_valid;
         stage.m_boundary_material_id = presentation.m_boundary_material_id;
@@ -753,6 +766,7 @@ namespace pP::colony {
         }
 
         stage.m_cell_size_m = packet.m_cell_size_m;
+        stage.m_world_edge = packet.m_world_edge;
         stage.m_has_catalog = packet.m_has_catalog;
         stage.m_initial_matter_valid = packet.m_initial_matter_valid;
         stage.m_boundary_material_id = packet.m_boundary_material_id;
@@ -827,7 +841,8 @@ namespace pP::colony {
                 return std::make_error_code(std::errc::invalid_argument);
             }
             Array<u16> converted{};
-            if (const std::error_code error = convertCells(*cells, packet, converted)) [[unlikely]] {
+            Array<u32> words{};
+            if (const std::error_code error = convertCells(*cells, packet, converted, words)) [[unlikely]] {
                 stage.m_tiles.clear();
                 stage.m_uploads.clear();
                 stage.m_full_refresh = false;
@@ -844,6 +859,7 @@ namespace pP::colony {
             upload.m_payload.m_rect[3] = static_cast<float>(tile.m_tile_range.m_max_y);
             upload.m_payload.m_material = 0u;
             upload.m_cell_materials = std::move(converted);
+            upload.m_cell_words = std::move(words);
             stage.m_uploads.push_back(std::move(upload));
         }
         return {};

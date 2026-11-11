@@ -5092,8 +5092,11 @@ namespace demo {
                 Demo, rhi_service.isValid() and shader_service.isValid()
                           ? std::error_code{}
                           : std::make_error_code(std::errc::not_connected));
+            rhi::ICommandQueue *const graphics_queue = getRenderer().graphicsQueue();
+            PPR_RETURN_ERROR_ON_FAIL(
+                Demo, graphics_queue != nullptr ? std::error_code{} : std::make_error_code(std::errc::not_connected));
             auto request = m_matter_runtime.beginInitialize(
-                renderLane(), rhi_service->getDevice(), *shader_service, getContentDir().path(),
+                renderLane(), rhi_service->getDevice(), *graphics_queue, *shader_service, getContentDir().path(),
                 m_worldgen_report ? m_observation_clock : nullptr);
             PPR_RETURN_ERROR_ON_FAIL(Demo, request);
             m_runtime_request = *request;

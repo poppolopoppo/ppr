@@ -38,7 +38,7 @@ namespace pP::tests::detail::WorldLightingBackend {
     };
 
     struct MetadataRecord {
-        u32 m_id_low{}, m_id_high{}, m_source_row{}, m_material{};
+        u32 m_id_low{}, m_id_high{}, m_source_row{}, m_material_temperature{};
         float m_gas_x{}, m_gas_y{}, m_radius{};
         u32 m_physical_fill_bits{};
     };
@@ -48,7 +48,7 @@ namespace pP::tests::detail::WorldLightingBackend {
     static_assert(sizeof(MetadataRecord) == 32u and alignof(MetadataRecord) == 4u);
     static_assert(PPR_OFFSETOF(MetadataRecord, m_id_high) == 4u);
     static_assert(PPR_OFFSETOF(MetadataRecord, m_source_row) == 8u);
-    static_assert(PPR_OFFSETOF(MetadataRecord, m_material) == 12u);
+    static_assert(PPR_OFFSETOF(MetadataRecord, m_material_temperature) == 12u);
     static_assert(PPR_OFFSETOF(MetadataRecord, m_gas_x) == 16u);
     static_assert(PPR_OFFSETOF(MetadataRecord, m_gas_y) == 20u);
     static_assert(PPR_OFFSETOF(MetadataRecord, m_radius) == 24u);
@@ -582,7 +582,7 @@ namespace pP::tests::detail::WorldLightingBackend {
                  {"m_id_low", 0u},
                  {"m_id_high", 4u},
                  {"m_source_row", 8u},
-                 {"m_material", 12u},
+                 {"m_material_temperature", 12u},
                  {"m_gas_x", 16u},
                  {"m_gas_y", 20u},
                  {"m_radius", 24u},

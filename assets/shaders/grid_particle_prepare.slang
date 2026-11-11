@@ -40,8 +40,9 @@ void packParticles(uint3 id:SV_DispatchThreadID) {
     if (id.x>=g_particle_prepare.count) return;
 
     MetadataRow metadata=g_metadata[id.x];
+    uint material=metadata.materialTemperature & 0xffffu;
     PresentationRow particle;
-    particle.material=metadata.material;
+    particle.material=material;
     if (metadata.sourceRow!=0xffffffffu) {
         NumericalRow hot=g_numerical[metadata.sourceRow];
         ReadonlyRow cold=g_readonly[metadata.sourceRow];
@@ -53,7 +54,7 @@ void packParticles(uint3 id:SV_DispatchThreadID) {
     } else {
         particle.position=float2(metadata.gasX,metadata.gasY);
         particle.radius=metadata.radius;
-        uint rgba=g_particle_palette[metadata.material].rgba;
+        uint rgba=g_particle_palette[material].rgba;
         particle.color=float4(float3((rgba>>24u)&255u,(rgba>>16u)&255u,(rgba>>8u)&255u)/255.0,1.0);
     }
 
@@ -78,10 +79,10 @@ void projectParticleCensus(uint3 id:SV_DispatchThreadID) {
     CensusRow row;
     row.idLow = metadata.idLow;
     row.idHigh = metadata.idHigh;
-    row.material = metadata.material;
+    row.material = metadata.materialTemperature & 0xffffu;
     // Existing palette word20 is the explicitly authored transport tag. This
     // reports declared vacuum, never infers optics from solver class/opacity.
-    row.status = metadata.material == 0u || g_particle_palette[metadata.material].carried[18] == 0x101u ? 8u : 0u;
+    row.status = row.material == 0u || g_particle_palette[row.material].carried[18] == 0x101u ? 8u : 0u;
     row.cellX = row.cellY = 0xffffffffu;
     bool moving=metadata.sourceRow!=0xffffffffu;
     bool sourceValid=!moving || metadata.sourceRow<g_particle_prepare.movingCount;

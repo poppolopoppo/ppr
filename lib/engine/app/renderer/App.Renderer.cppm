@@ -182,6 +182,13 @@ export namespace pP {
         // SAME queue (no second worker). Production code never calls this.
         [[nodiscard]] rhi::ICommandQueue *graphicsQueueForTest() const noexcept;
 
+        // Production shared-queue access: the exact graphics queue every
+        // renderer submission uses. Callers that encode device work on the
+        // same owner lane (Matter) borrow it; the Renderer retains ownership.
+        [[nodiscard]] rhi::ICommandQueue *graphicsQueue() const noexcept {
+            return m_graphics_queue.get();
+        }
+
         // Host wait for one app-owned fence value (growth gates, tests,
         // readback callers). Completion-only: display/vsync behavior is
         // unchanged by this call.

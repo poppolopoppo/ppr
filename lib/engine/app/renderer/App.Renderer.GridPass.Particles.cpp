@@ -4,6 +4,7 @@ module;
 
 module engine.app;
 import :renderer.grid_pass;
+import :renderer.world_lighting;
 import std;
 import engine.core;
 import engine.rhi;
@@ -72,10 +73,11 @@ namespace pP {
         for (const auto &row: rows) {
             const u64 id = (static_cast<u64>(row.m_id_high) << 32u) | row.m_id_low;
             const bool gas = row.m_source_row == 0xffff'ffffu;
+            const u32 material = row.m_material_temperature & 0xffffu;
             PPR_RETURN_UNEXPECTED_ON_FAIL(
                 GridPass, id > prior_id and
-                                  row.m_material > 0u and
-                                  row.m_material < 0xffffu and
+                                  material > 0u and
+                                  material < 0xffffu and
                                   (row.m_physical_fill_bits == 0u or
                                       (std::isnormal(std::bit_cast<float>(row.m_physical_fill_bits)) and
                                           std::bit_cast<float>(row.m_physical_fill_bits) > 0.0f)) and
@@ -102,7 +104,7 @@ namespace pP {
                 seen[row.m_source_row] = 1u;
             }
 
-            metadata->m_materials.push_back(row.m_material);
+            metadata->m_materials.push_back(material);
             prior_id = id;
         }
 
@@ -209,7 +211,9 @@ namespace pP {
             rows[row].m_id_low = static_cast<u32>(seed.m_id);
             rows[row].m_id_high = static_cast<u32>(seed.m_id >> 32u);
             rows[row].m_source_row = row;
-            rows[row].m_material = seed.m_material_id;
+            const auto packed = lighting::packCell(static_cast<u16>(seed.m_material_id), seed.m_temperature_k);
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, packed);
+            rows[row].m_material_temperature = *packed;
             rows[row].m_radius = static_cast<float>(
                 std::sqrt(seed.m_volume_m3 / static_cast<double>(m_world.m_reference_thickness_m) / std::numbers::pi));
         }

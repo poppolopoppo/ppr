@@ -44,7 +44,7 @@ if(MSVC AND PPR_ENABLE_SANITIZER_ADDRESS)
     target_link_options(engine.tests.asset PRIVATE "/alternatename:?__tlregdtor@@YAHXZ=__tlregdtor")
 endif()
 
-set(asset_fixture_directories shaders textures fonts)
+set(asset_fixture_directories shaders textures fonts lighting)
 if(EXISTS "${CMAKE_SOURCE_DIR}/assets/meshes")
     list(APPEND asset_fixture_directories meshes)
 endif()

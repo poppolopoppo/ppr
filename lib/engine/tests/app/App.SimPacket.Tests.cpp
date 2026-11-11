@@ -840,6 +840,126 @@ namespace pP::tests::detail {
             driver.ackPresentChunks(std::span<const colony::ColonyDriver::DirtyChunk>{fresh_ack});
             PPR_TEST_ASSERT(driver.presentEditsCapture().empty());
         };
+
+        // ------------------------------------------------------------------
+        // packed terrain temperature publication
+        // ------------------------------------------------------------------
+
+        PPR_UNIT_TEST (terrain_temperature_only_change_packs_and_advances_revision) {
+            const u32 local = 10u * sim::kChunkEdge + 10u;
+            const auto packet = [&](const float kelvin, const u64 revision) {
+                colony::SimFramePacket result{};
+                result.m_cell_size_m = 1.0f;
+                result.m_world_edge = 1024u;
+                result.m_resident_chunks.push_back(sim::ChunkPos{0u, 0u});
+                result.m_present_chunks.push_back(sim::ChunkPos{0u, 0u});
+                result.m_present_revisions.push_back(revision);
+                Array<sim::Cell> cells(sim::kCellsPerChunk);
+                cells[local] = sim::Cell{.m_element = 1u, .m_temperature = kelvin};
+                result.m_chunk_cells.push_back({sim::ChunkPos{0u, 0u}, std::move(cells)});
+                return result;
+            };
+
+            const auto first = packet(300.0f, 1u);
+            GridPass::GridStagedFrame first_stage{};
+            PPR_TEST_ASSERT(not colony::buildGridStagedFrame(first, first_stage));
+            PPR_TEST_ASSERT(first_stage.m_world_edge == 1024u);
+            PPR_TEST_ASSERT(first_stage.m_uploads.size() == 1u);
+            PPR_TEST_ASSERT(first_stage.m_uploads[0u].m_cell_words.size() == sim::kCellsPerChunk);
+            PPR_TEST_ASSERT(first_stage.m_uploads[0u].m_cell_words[local] == *lighting::packCell(1u, 300.0));
+            PPR_TEST_ASSERT((first_stage.m_uploads[0u].m_cell_words[local] & 0xffffu) == 1u);
+
+            // Only the temperature changes: the packed material stays, the
+            // chunk presentation revision advances and repacks the word.
+            const auto second = packet(900.0f, 2u);
+            PPR_TEST_ASSERT(second.m_present_revisions[0u] > first.m_present_revisions[0u]);
+            GridPass::GridStagedFrame second_stage{};
+            PPR_TEST_ASSERT(not colony::buildGridStagedFrame(second, second_stage));
+            PPR_TEST_ASSERT(second_stage.m_uploads[0u].m_cell_words[local] == *lighting::packCell(1u, 900.0));
+            PPR_TEST_ASSERT(
+                (second_stage.m_uploads[0u].m_cell_words[local] & 0xffffu) ==
+                (first_stage.m_uploads[0u].m_cell_words[local] & 0xffffu));
+
+            // Invalid Kelvin fails the owned staged build before any upload.
+            const auto invalid = packet(-1.0f, 3u);
+            GridPass::GridStagedFrame invalid_stage{};
+            PPR_TEST_ASSERT(colony::buildGridStagedFrame(invalid, invalid_stage) == std::errc::invalid_argument);
+            PPR_TEST_ASSERT(invalid_stage.m_uploads.empty() and invalid_stage.m_tiles.empty());
+        };
+
+        PPR_UNIT_TEST (initial_batch_and_full_capture_pack_identical_terrain_words) {
+            colony::ColonyDriver driver{};
+            const sim::GlobalCellPos cell{5u, 6u};
+            PPR_TEST_ASSERT(not driver.grid().setCell(cell, sim::Cell{.m_element = 4u, .m_temperature = 350.0f}));
+
+            auto initial = colony::makeInitialPresentationBatch(1u, driver, 0u, 8u);
+            PPR_TEST_ASSERT(initial.has_value());
+            GridPass::GridStagedFrame initial_stage{};
+            PPR_TEST_ASSERT(not colony::buildGridStagedFrame(*initial, initial_stage));
+            PPR_TEST_ASSERT(initial_stage.m_uploads.size() == 1u);
+
+            const auto captured = colony::captureWorldPresentation(driver);
+            PPR_TEST_ASSERT(captured and captured->m_uploads.size() == 1u);
+            const u32 local = cell.m_y * sim::kChunkEdge + cell.m_x;
+            const u32 expected = *lighting::packCell(4u, 350.0);
+            PPR_TEST_ASSERT(initial_stage.m_uploads[0u].m_cell_words[local] == expected);
+            PPR_TEST_ASSERT(captured->m_uploads[0u].m_cell_words[local] == expected);
+            PPR_TEST_ASSERT(initial_stage.m_world_edge == driver.grid().edge());
+            PPR_TEST_ASSERT(captured->m_world_edge == driver.grid().edge());
+        };
+
+        // ------------------------------------------------------------------
+        // derived source-material palette
+        // ------------------------------------------------------------------
+
+        PPR_UNIT_TEST (derived_source_palette_zeroes_metals_and_receive_only_rows) {
+            GridTerrainVisual metal{};
+            metal.m_material_id = 7u;
+            metal.m_color_rgba = 0xffffffffu;
+            metal.m_texture_index = 0xffffffffu;
+            metal.m_texture_period_m = 1.0f;
+            metal.m_metallic = 1.0f;
+            metal.m_roughness = 0.4f;
+            metal.m_opacity = 1.0f;
+            metal.m_ior = 1.5f;
+
+            const auto metal_source = gridSourceMaterial(metal, float3{1.0f, 1.0f, 1.0f});
+            PPR_TEST_ASSERT(metal_source.has_value());
+            PPR_TEST_ASSERT(metal_source->m_diffuse == 0u);
+
+            auto receive_only = metal;
+            receive_only.m_metallic = 0.0f;
+            receive_only.m_surface_flags = kGridSurfaceOpticalBlend;
+            const auto transparent = gridSourceMaterial(receive_only, float3{0.5f, 0.5f, 0.5f});
+            PPR_TEST_ASSERT(transparent and transparent->m_emission == 0u and transparent->m_diffuse == 0u);
+
+            auto diffuse = metal;
+            diffuse.m_metallic = 0.0f;
+            const auto white = gridSourceMaterial(diffuse, float3{1.0f, 1.0f, 1.0f});
+            PPR_TEST_ASSERT(white.has_value());
+            const float3 decoded = lighting::unpackRGB9E5(white->m_diffuse);
+            PPR_TEST_ASSERT(
+                std::abs(decoded.x - 1.0f) <= 0.01f and
+                std::abs(decoded.y - 1.0f) <= 0.01f and
+                std::abs(decoded.z - 1.0f) <= 0.01f);
+
+            for (const auto &invalid: std::array{
+                     GridTerrainVisual{.m_material_id = 9u, .m_metallic = 2.0f},
+                     GridTerrainVisual{.m_material_id = 9u, .m_roughness = -0.1f},
+                     GridTerrainVisual{.m_material_id = 9u, .m_opacity = 1.1f},
+                     GridTerrainVisual{.m_material_id = 9u, .m_ior = 0.9f},
+                     GridTerrainVisual{.m_material_id = 9u, .m_texture_period_m = 0.0f}}) {
+                const auto rejected = gridSourceMaterial(invalid, float3{1.0f, 1.0f, 1.0f});
+                PPR_TEST_ASSERT(not rejected and rejected.error() == std::errc::invalid_argument);
+            }
+            const auto invalid_mean = gridSourceMaterial(metal, float3{1.0f, 2.0f, 1.0f});
+            PPR_TEST_ASSERT(not invalid_mean and invalid_mean.error() == std::errc::invalid_argument);
+
+            // The dense palette is indexed by material ID; the empty entry and
+            // indexed holes stay all-zero rather than being synthesized.
+            PPR_TEST_ASSERT(lighting::SourceMaterial{}.m_emission == 0u);
+            PPR_TEST_ASSERT(lighting::SourceMaterial{}.m_diffuse == 0u);
+        };
     }
 } // namespace pP::tests::detail
 
@@ -866,6 +986,9 @@ namespace pP::tests {
             detail::SimPacket::dropped_frame_never_acks_dirty_set,
             detail::SimPacket::staged_build_failure_preserves_dirty_set,
             detail::SimPacket::exception_during_settlement_preserves_pending_set,
+            detail::SimPacket::terrain_temperature_only_change_packs_and_advances_revision,
+            detail::SimPacket::initial_batch_and_full_capture_pack_identical_terrain_words,
+            detail::SimPacket::derived_source_palette_zeroes_metals_and_receive_only_rows,
         });
     };
 

@@ -49,6 +49,7 @@ export namespace pP::colony {
 
     struct SimFramePacket {
         float m_cell_size_m{1.0f};
+        u32 m_world_edge{sim::kWorldEdge};
         bool m_has_catalog{false};
         bool m_initial_matter_valid{true};
         u32 m_boundary_material_id{1u};

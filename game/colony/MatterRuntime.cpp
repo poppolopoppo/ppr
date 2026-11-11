@@ -661,7 +661,13 @@ namespace pP::colony {
                 row.m_id_low = static_cast<u32>(record.m_id);
                 row.m_id_high = static_cast<u32>(record.m_id >> 32u);
                 row.m_source_row = source_row;
-                row.m_material = record.m_material;
+                PPR_RETURN_ERROR_ON_FAIL(
+                    GameMatter, record.m_material > 0u and record.m_material < 0xffffu
+                                    ? std::error_code{}
+                                    : std::make_error_code(std::errc::invalid_argument));
+                const auto packed = lighting::packCell(static_cast<u16>(record.m_material), record.m_temperature_k);
+                PPR_RETURN_ERROR_ON_FAIL(GameMatter, packed ? std::error_code{} : packed.error());
+                row.m_material_temperature = *packed;
                 row.m_physical_fill_bits = std::bit_cast<u32>(fill);
                 row.m_gas_x = static_cast<float>(record.m_x_m);
                 row.m_gas_y = static_cast<float>(record.m_y_m);
@@ -702,9 +708,10 @@ namespace pP::colony {
         std::shared_ptr<const MatterPhysicalLedger> m_active_ledger{}, m_prepared_ledger{};
         std::filesystem::path m_content_root{};
         rhi::IDevice *m_device{};
-        rhi::ComPtr<rhi::ICommandQueue> m_queue{};
+        rhi::ICommandQueue *m_queue{};
         IShaderService *m_shaders{};
         const ITimerClock *m_observation_clock{};
+        u64 m_metadata_version{};
         MatterIdentity m_identity{};
         MatterIdentity m_prepared_identity{};
         std::error_code m_submit_error{};
@@ -920,8 +927,8 @@ namespace pP::colony {
     }
 
     Expected<MatterRequest> MatterRuntime::beginInitialize(
-        RenderLane *const lane, rhi::IDevice &device, IShaderService &shaders, std::filesystem::path content_root,
-        const ITimerClock *const observation_clock) {
+        RenderLane *const lane, rhi::IDevice &device, rhi::ICommandQueue &queue, IShaderService &shaders,
+        std::filesystem::path content_root, const ITimerClock *const observation_clock) {
         if (m_state) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(GameMatter, std::errc::already_connected);
         }
@@ -930,26 +937,18 @@ namespace pP::colony {
             PPR_RETURN_UNEXPECTED_ON_FAIL(GameMatter, std::errc::not_connected);
         }
 
+        // The application supplies the renderer's actual graphics queue and
+        // retains it until Matter shutdown; this owner never reacquires one.
         auto state = std::make_shared<State>();
         state->m_device = &device;
+        state->m_queue = &queue;
         state->m_shaders = &shaders;
         state->m_content_root = std::move(content_root);
         state->m_observation_clock = observation_clock;
         m_lane = lane;
-
-        const auto owner = state;
         m_state = state;
 
-        return enqueue([owner]() -> std::error_code {
-            const auto error = make_error_code(
-                owner->m_device->getQueue(rhi::QueueType::Graphics, owner->m_queue.writeRef()));
-            if (error) {
-                // Release any partially returned queue on its acquisition lane.
-                owner->m_queue.setNull();
-                PPR_RETURN_ERROR_ON_FAIL(GameMatter, error);
-            }
-            return {};
-        });
+        return enqueue([]() -> std::error_code { return {}; });
     }
 
     Expected<MatterRequest> MatterRuntime::beginPrepareResidentWorld(const MatterState &source, Array<u32> terrain) {
@@ -990,9 +989,13 @@ namespace pP::colony {
             std::shared_ptr<MatterPhysicalLedger> ledger;
             auto rows = presentationMetadata(source, state->m_observation_clock ? &ledger : nullptr);
             PPR_RETURN_ERROR_ON_FAIL(GameMatter, rows);
+            PPR_RETURN_ERROR_ON_FAIL(
+                GameMatter, state->m_metadata_version != std::numeric_limits<u64>::max()
+                                ? std::error_code{}
+                                : std::make_error_code(std::errc::value_too_large));
+            const u64 metadata_version = ++state->m_metadata_version;
             auto prepared_metadata = prepareGridParticleMetadata(
-                *state->m_device, *rows, source.m_profile.m_particle_count, source.m_cell_metres,
-                source.m_identity.m_terrain_revision);
+                *state->m_device, *rows, source.m_profile.m_particle_count, source.m_cell_metres, metadata_version);
             PPR_RETURN_ERROR_ON_FAIL(GameMatter, prepared_metadata);
 
             if (ledger) {
@@ -1275,12 +1278,9 @@ namespace pP::colony {
             candidate.m_particles.begin() + (replace ? 0u : retained_count), candidate.m_particles.end());
         Array<GridParticleMetadataRow> metadata;
         std::shared_ptr<MatterPhysicalLedger> ledger;
-        const bool refresh_metadata = not terrain_edit or not uploaded.empty();
-        if (refresh_metadata) {
-            auto prepared = presentationMetadata(candidate, m_state->m_observation_clock ? &ledger : nullptr);
-            PPR_RETURN_UNEXPECTED_ON_FAIL(GameMatter, prepared);
-            metadata = std::move(*prepared);
-        }
+        auto prepared = presentationMetadata(candidate, m_state->m_observation_clock ? &ledger : nullptr);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(GameMatter, prepared);
+        metadata = std::move(*prepared);
 
         const auto state = m_state;
         const auto target = candidate.m_identity;
@@ -1290,8 +1290,8 @@ namespace pP::colony {
         const u32 moving_count = static_cast<u32>(candidate.m_particles.size());
         return enqueue(
             [state, source, target, retained_count, cell, terrain_edge, profile, moving_count, replace, terrain_edit,
-                refresh_metadata, uploaded = std::move(uploaded), metadata = std::move(metadata),
-                ledger = std::move(ledger), terrain = std::move(terrain)]() -> std::error_code {
+                uploaded = std::move(uploaded), metadata = std::move(metadata), ledger = std::move(ledger),
+                terrain = std::move(terrain)]() -> std::error_code {
                 PPR_RETURN_ERROR_ON_FAIL(
                     GameMatter, state and
                                         state->m_active and
@@ -1317,22 +1317,24 @@ namespace pP::colony {
                                     ? std::error_code{}
                                     : std::make_error_code(std::errc::invalid_argument));
 
-                auto prepared_metadata = state->m_active_metadata;
-                if (refresh_metadata) {
-                    auto resource = prepareGridParticleMetadata(
-                        *state->m_device, metadata, moving_count, cell, target.m_terrain_revision);
-                    PPR_RETURN_ERROR_ON_FAIL(GameMatter, resource);
-                    prepared_metadata = std::move(*resource);
-                    if (ledger) {
-                        ledger->m_metadata_owner = prepared_metadata;
-                    }
+                PPR_RETURN_ERROR_ON_FAIL(
+                    GameMatter, state->m_metadata_version != std::numeric_limits<u64>::max()
+                                    ? std::error_code{}
+                                    : std::make_error_code(std::errc::value_too_large));
+                const u64 metadata_version = ++state->m_metadata_version;
+                auto resource = prepareGridParticleMetadata(
+                    *state->m_device, metadata, moving_count, cell, metadata_version);
+                PPR_RETURN_ERROR_ON_FAIL(GameMatter, resource);
+                auto prepared_metadata = std::move(*resource);
+                if (ledger) {
+                    ledger->m_metadata_owner = prepared_metadata;
                 }
 
                 state->m_append_prepared = true;
                 state->m_append_ready = false;
                 state->m_prepared_identity = target;
                 state->m_prepared_metadata = std::move(prepared_metadata);
-                state->m_prepared_ledger = refresh_metadata ? ledger : state->m_active_ledger;
+                state->m_prepared_ledger = std::move(ledger);
                 const matter::TerrainView view =
                     terrain_edit ? matter::TerrainView{terrain, terrain_edge, terrain_edge, 2.5f, 2.5f}
                                  : matter::TerrainView{};
@@ -1420,7 +1422,7 @@ namespace pP::colony {
                 state->m_prepared_ledger.reset();
                 state->m_active_metadata.reset();
                 state->m_active_ledger.reset();
-                state->m_queue.setNull();
+                state->m_queue = nullptr;
                 return {};
             },
             {}, true);

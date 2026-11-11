@@ -6,7 +6,7 @@
 
 struct NumericalRow { float positionX, positionY; float carried[14]; };
 struct MetadataRow {
-    uint idLow,idHigh,sourceRow,material;
+    uint idLow,idHigh,sourceRow,materialTemperature;
     float gasX,gasY,radius;
     uint physicalFillBits;
 };

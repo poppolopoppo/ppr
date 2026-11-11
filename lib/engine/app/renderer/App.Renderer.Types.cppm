@@ -37,8 +37,10 @@ export namespace pP {
 
     // Stable row/ID mapping and gas-only physical inputs. Moving radius is
     // cell_metres*sqrt(Cold24.volume/pi); gas radius is sqrt(volume/thickness/pi).
+    // m_material_temperature packs material ID16 + IEEE binary16 Kelvin with
+    // the same encoding as resolved cells; consumers mask the low material bits.
     struct GridParticleMetadataRow {
-        u32 m_id_low{}, m_id_high{}, m_source_row{0xffff'ffffu}, m_material{};
+        u32 m_id_low{}, m_id_high{}, m_source_row{0xffff'ffffu}, m_material_temperature{};
         float m_gas_x{}, m_gas_y{}, m_radius{};
         // Zero explicitly means unavailable for legacy presentation-only input.
         // Otherwise binary32 V/(cell_metres^2*reference_thickness), before gas radius.
@@ -46,9 +48,16 @@ export namespace pP {
     };
 
     static_assert(sizeof(GridParticleMetadataRow) == 32u and alignof(GridParticleMetadataRow) == 4u);
+    static_assert(PPR_OFFSETOF(GridParticleMetadataRow, m_id_low) == 0u);
+    static_assert(PPR_OFFSETOF(GridParticleMetadataRow, m_id_high) == 4u);
+    static_assert(PPR_OFFSETOF(GridParticleMetadataRow, m_source_row) == 8u);
+    static_assert(PPR_OFFSETOF(GridParticleMetadataRow, m_material_temperature) == 12u);
     static_assert(PPR_OFFSETOF(GridParticleMetadataRow, m_gas_x) == 16u);
+    static_assert(PPR_OFFSETOF(GridParticleMetadataRow, m_gas_y) == 20u);
     static_assert(PPR_OFFSETOF(GridParticleMetadataRow, m_radius) == 24u);
     static_assert(PPR_OFFSETOF(GridParticleMetadataRow, m_physical_fill_bits) == 28u);
+    static_assert(
+        std::is_standard_layout_v<GridParticleMetadataRow> and std::is_trivially_copyable_v<GridParticleMetadataRow>);
 
     struct GridParticleMetadataResource {
         rhi::ComPtr<rhi::IBuffer> m_rows{};

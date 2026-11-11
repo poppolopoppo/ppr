@@ -7,6 +7,7 @@ module engine.app;
 import :renderer.grid_pass;
 import :renderer.frame_fence;
 import :renderer.types;
+import :renderer.world_lighting;
 import :scene.camera;
 import std;
 import engine.core;
@@ -117,8 +118,48 @@ namespace pP {
     }
 
     // ------------------------------------------------------------------
-    // catalog image interpretation
+    // derived transport source palette
     // ------------------------------------------------------------------
+
+    Expected<lighting::SourceMaterial> gridSourceMaterial(const GridTerrainVisual &visual, const float3 texture_mean) {
+        const bool receive_only = (visual.m_surface_flags & kGridSurfaceOpticalBlend) != 0u and
+                                  visual.m_emissive_strength == 0.0f;
+
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            GridPass, visual.m_roughness >= 0.0f and
+                              visual.m_roughness <= 1.0f and
+                              visual.m_opacity >= 0.0f and
+                              visual.m_opacity <= 1.0f and
+                              std::isfinite(visual.m_ior) and
+                              visual.m_ior >= 1.0f and
+                              std::isfinite(visual.m_texture_period_m) and
+                              visual.m_texture_period_m > 0.0f and
+                              std::isfinite(texture_mean.x) and
+                              texture_mean.x >= 0.0f and
+                              texture_mean.x <= 1.0f and
+                              std::isfinite(texture_mean.y) and
+                              texture_mean.y >= 0.0f and
+                              texture_mean.y <= 1.0f and
+                              std::isfinite(texture_mean.z) and
+                              texture_mean.z >= 0.0f and
+                              texture_mean.z <= 1.0f
+                          ? std::error_code{}
+                          : std::make_error_code(std::errc::invalid_argument));
+
+        if (receive_only) {
+            return lighting::SourceMaterial{};
+        }
+
+        const auto channel = [](const u32 rgba, const u32 shift) {
+            const float encoded = static_cast<float>((rgba >> shift) & 255u) / 255.0f;
+            return encoded <= 0.04045f ? encoded / 12.92f : std::pow((encoded + 0.055f) / 1.055f, 2.4f);
+        };
+        const float3 tint{
+            channel(visual.m_color_rgba, 24u), channel(visual.m_color_rgba, 16u), channel(visual.m_color_rgba, 8u)};
+        return lighting::makeSourceMaterial(
+            float3{visual.m_emissive_rgb[0], visual.m_emissive_rgb[1], visual.m_emissive_rgb[2]},
+            static_cast<double>(visual.m_emissive_strength), tint, texture_mean, visual.m_metallic);
+    }
 
     namespace {
         [[nodiscard]] std::array<float, 3u> filteredAlbedoMean_(const image::ImageAsset &source) {
@@ -308,9 +349,11 @@ namespace pP {
         PPR_RETURN_ERROR_ON_FAIL(GridPass, createGpuParticlePrograms_(shader_service, device, content_dir));
         PPR_RETURN_ERROR_ON_FAIL(GridPass, createFluidPrograms_(shader_service, device, content_dir));
         PPR_RETURN_ERROR_ON_FAIL(GridPass, createSolidPrograms_(shader_service, device, content_dir));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, createThermalLut_(device, content_dir));
 
         m_shader_service = safe_ptr{&shader_service};
         m_content_dir = content_dir;
+        m_device = &device;
         m_spatial_supported = device.hasFeature("standard-sample-locations-4") and
                               device.hasFeature("sample-rate-shading");
 
@@ -623,6 +666,10 @@ namespace pP {
         }
         PPR_RETURN_ERROR_ON_FAIL(GridPass, stageDiagnostic_(stage));
         PPR_RETURN_ERROR_ON_FAIL(GridPass, submitTiles(std::span<const GridTileSubmission>{stage.m_tiles}));
+        if (m_device != nullptr) {
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass, ensureTerrainCells_(*m_device, stage.m_world_edge, stage.m_reset_caches));
+        }
 
         for (const GridStagedUpload &upload: stage.m_uploads) {
             PPR_RETURN_ERROR_ON_FAIL(GridPass, appendDiagnostic_(upload));
@@ -631,6 +678,7 @@ namespace pP {
             request.m_tile_data_view = std::span<const GridTilePayload>{&upload.m_payload, 1u};
             request.m_cell_materials = std::span<const u16>{
                 upload.m_cell_materials.data(), upload.m_cell_materials.size()};
+            request.m_cell_words = std::span<const u32>{upload.m_cell_words.data(), upload.m_cell_words.size()};
             const Expected<u32> uploaded = requestUpload(request);
             if (not uploaded) [[unlikely]] {
                 clearTiles();
@@ -711,10 +759,13 @@ namespace pP {
                 GridPass, upload.m_cell_materials.size() == kCellsPerChunk
                               ? std::error_code{}
                               : std::make_error_code(std::errc::invalid_argument));
+            if (m_device != nullptr) {
+                PPR_RETURN_ERROR_ON_FAIL(GridPass, ensureTerrainCells_(*m_device, m_world.m_world_edge, false));
+            }
             const auto applied = requestUpload(
                 GridUploadRequest{
-                    upload.m_chunk_id, std::span{&upload.m_payload, 1u},
-                    std::span<const u16>{upload.m_cell_materials}});
+                    upload.m_chunk_id, std::span{&upload.m_payload, 1u}, std::span<const u16>{upload.m_cell_materials},
+                    std::span<const u32>{upload.m_cell_words}});
             PPR_RETURN_ERROR_ON_FAIL(GridPass, applied);
             PPR_RETURN_ERROR_ON_FAIL(
                 GridPass, *applied == 1u ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
@@ -990,6 +1041,27 @@ namespace pP {
                 range.m_max_y != static_cast<i32>((chunk_y + 1u) * kGridTileEdge)) [[unlikely]] {
                 return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
             }
+
+            if (not request.m_cell_words.empty() and m_world.m_terrain_cells_mapped != nullptr) {
+                if (request.m_cell_words.size() != kCellsPerChunk or
+                    m_world.m_world_edge == 0u or
+                    range.m_min_x < 0 or
+                    range.m_min_y < 0 or
+                    static_cast<u32>(range.m_max_x) > m_world.m_world_edge or
+                    static_cast<u32>(range.m_max_y) > m_world.m_world_edge) [[unlikely]] {
+                    return std::unexpected{std::make_error_code(std::errc::invalid_argument)};
+                }
+
+                auto *const cells = static_cast<u32 *>(m_world.m_terrain_cells_mapped);
+                for (u32 row = 0u; row < kGridTileEdge; ++row) {
+                    u32 *const destination = cells + (static_cast<std::size_t>(range.m_min_y + static_cast<i32>(row)) *
+                                                             m_world.m_world_edge +
+                                                         static_cast<std::size_t>(range.m_min_x));
+                    std::memcpy(
+                        destination, request.m_cell_words.data() + static_cast<std::size_t>(row) * kGridTileEdge,
+                        kGridTileEdge * sizeof(u32));
+                }
+            }
         }
         if (dirty_count == 0u) {
             // Quiescent chunk: nothing to upload, the cache keeps serving it.
@@ -1050,6 +1122,71 @@ namespace pP {
             }
         }
         return uploaded;
+    }
+
+    std::error_code GridPass::createThermalLut_(rhi::IDevice &device, const std::filesystem::path &content_dir) {
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass,
+            m_thermal_lut == nullptr ? std::error_code{} : std::make_error_code(std::errc::already_connected));
+        std::ifstream file{content_dir / "lighting" / "thermal_lut.bin", std::ios::binary};
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, file ? std::error_code{} : std::make_error_code(std::errc::no_such_file_or_directory));
+        Array<std::byte> bytes(lighting::kThermalLutBytes);
+        file.read(reinterpret_cast<char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, file.gcount() == static_cast<std::streamsize>(bytes.size())
+                          ? std::error_code{}
+                          : std::make_error_code(std::errc::invalid_argument));
+
+        rhi::BufferDesc desc{};
+        desc.size = bytes.size();
+        desc.elementSize = lighting::kThermalLutStride;
+        desc.memoryType = rhi::MemoryType::Upload;
+        desc.usage = rhi::BufferUsage::ShaderResource;
+        desc.defaultState = rhi::ResourceState::ShaderResource;
+        desc.label = "generated thermal lookup";
+        return make_error_code(device.createBuffer(desc, bytes.data(), m_thermal_lut.writeRef()));
+    }
+
+    std::error_code GridPass::ensureTerrainCells_(rhi::IDevice &device, const u32 edge, const bool clear) {
+        if (edge == 0u) {
+            return {};
+        }
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, edge <= static_cast<u32>(kGridWorldEdge) ? std::error_code{}
+                                                               : std::make_error_code(std::errc::invalid_argument));
+        if (m_world.m_terrain_cells and m_world.m_world_edge == edge) {
+            if (clear and m_world.m_terrain_cells_mapped != nullptr) {
+                std::memset(m_world.m_terrain_cells_mapped, 0, static_cast<std::size_t>(edge) * edge * sizeof(u32));
+            }
+            return {};
+        }
+
+        rhi::BufferDesc desc{};
+        desc.size = static_cast<u64>(edge) * edge * sizeof(u32);
+        desc.elementSize = sizeof(u32);
+        desc.memoryType = rhi::MemoryType::Upload;
+        desc.usage = rhi::BufferUsage::ShaderResource;
+        desc.defaultState = rhi::ResourceState::ShaderResource;
+        desc.label = "world packed terrain input";
+        rhi::ComPtr<rhi::IBuffer> buffer;
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, device.createBuffer(desc, nullptr, buffer.writeRef()));
+        void *mapped{};
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, device.mapBuffer(buffer, rhi::CpuAccessMode::Write, &mapped));
+        std::memset(mapped, 0, static_cast<std::size_t>(desc.size));
+
+        if (m_world.m_terrain_cells) {
+            // The replaced full-domain input stays owned until its last
+            // submitted reader completes; strong references alone do not make
+            // its bytes immutable.
+            auto previous = std::move(m_world.m_terrain_cells);
+            m_deferred_releases.defer(
+                m_world.m_last_reader, [held = std::move(previous)]() mutable { held.setNull(); });
+        }
+        m_world.m_terrain_cells = std::move(buffer);
+        m_world.m_terrain_cells_mapped = mapped;
+        m_world.m_world_edge = edge;
+        return {};
     }
 
     std::error_code GridPass::ensureCellBuffer_(rhi::IDevice &device, const bool atlas_required) {
@@ -2778,6 +2915,32 @@ namespace pP {
             palette[visual.m_material_id] = visual;
         }
 
+        // The source palette is derived in the same admitted catalog pass as
+        // the visible palette, so both name one catalog version. Indexed holes
+        // and the empty entry keep the all-zero record.
+        Array<lighting::SourceMaterial> source_materials(palette.size(), lighting::SourceMaterial{});
+        for (const GridTerrainVisual &visual: m_world.m_terrain_visuals) {
+            const auto source = gridSourceMaterial(
+                visual,
+                float3{visual.m_filtered_mean_rgb[0], visual.m_filtered_mean_rgb[1], visual.m_filtered_mean_rgb[2]});
+            PPR_RETURN_UNEXPECTED_ON_FAIL(GridPass, source);
+            source_materials[visual.m_material_id] = *source;
+        }
+
+        rhi::BufferDesc source_desc{};
+        source_desc.size = source_materials.size() * sizeof(lighting::SourceMaterial);
+        source_desc.elementSize = sizeof(lighting::SourceMaterial);
+        source_desc.memoryType = rhi::MemoryType::Upload;
+        source_desc.usage = rhi::BufferUsage::ShaderResource;
+        source_desc.defaultState = rhi::ResourceState::ShaderResource;
+        source_desc.label = "terrain source-material palette";
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            GridPass, source_desc.size <= device.getInfo().limits.maxBufferSize
+                          ? std::error_code{}
+                          : std::make_error_code(std::errc::no_buffer_space));
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            GridPass, device.createBuffer(source_desc, source_materials.data(), m_world.m_source_materials.writeRef()));
+
         rhi::BufferDesc desc{};
         desc.size = palette.size() * sizeof(GridTerrainVisual);
         desc.elementSize = sizeof(GridTerrainVisual);
@@ -2798,6 +2961,24 @@ namespace pP {
                           ? std::error_code{}
                           : std::make_error_code(std::errc::invalid_argument));
         return true;
+    }
+
+    Expected<lighting::WorldLightingInputs> GridPass::lightingInputs() const {
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            GridPass,
+            m_thermal_lut and m_world.m_terrain_cells and m_world.m_terrain_palette and m_world.m_source_materials
+                ? std::error_code{}
+                : std::make_error_code(std::errc::not_connected));
+
+        lighting::WorldLightingInputs result{};
+        result.m_particles = m_world.m_gpu_particles ? m_world.m_gpu_particles->m_view : GridParticleGpuView{};
+        result.m_identity = activeParticlePresentation().value_or(GridParticlePresentationIdentity{});
+        result.m_terrain = m_world.m_terrain_cells;
+        result.m_visible_materials = m_world.m_terrain_palette;
+        result.m_source_materials = m_world.m_source_materials;
+        result.m_thermal_lut = m_thermal_lut;
+        result.m_material_count = safe_narrowing(m_world.m_terrain_visuals.empty() ? 1u : 65536u);
+        return result;
     }
 
     std::error_code GridPass::bindMaterialBuffers_(
@@ -3772,6 +3953,7 @@ namespace pP {
         m_reactive_solid_program.setNull();
         m_shader_service = nullptr;
         m_content_dir.clear();
+        m_device = nullptr;
         m_spatial_msaa = false;
         m_cached_spatial_msaa = false;
         m_spatial_supported = false;
@@ -3805,6 +3987,11 @@ namespace pP {
         m_particle_mask_sampler.setNull();
         m_particle_mask_view.setNull();
         m_particle_mask.setNull();
+        m_thermal_lut.setNull();
+        m_world.m_source_materials.setNull();
+        m_world.m_terrain_cells.setNull();
+        m_world.m_terrain_cells_mapped = nullptr;
+        m_world.m_world_edge = 0u;
     }
 
     void GridPass::markPipelineUse_(GridCachedPipeline &pipeline, const u32 slot) noexcept {

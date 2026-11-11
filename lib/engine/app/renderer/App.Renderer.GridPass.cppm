@@ -5,6 +5,7 @@ export module engine.app:renderer.grid_pass;
 import :renderer.types;
 import :renderer.frame_fence;
 import :renderer.gpu_caches;
+import :renderer.world_lighting;
 import :scene.camera;
 
 import engine.core;
@@ -101,6 +102,12 @@ export namespace pP {
 
     // Visual-only unavailable rows remain admissible with zero sigma.
     [[nodiscard]] std::error_code validateGridMaterialOptics(const GridTerrainVisual &visual);
+
+    // Derived eight-byte transport source for one admitted visible row. Linear
+    // texture_mean is the existing filtered albedo mean; missing albedo passes
+    // white. Receive-only transparent rows and the empty entry are all zero.
+    [[nodiscard]] Expected<lighting::SourceMaterial> gridSourceMaterial(
+        const GridTerrainVisual &visual, float3 texture_mean);
 
     // ------------------------------------------------------------------
     // coarse material projection
@@ -253,6 +260,10 @@ export namespace pP {
         // Optional, borrowed row-major 128x128 u16 material IDs. Empty means
         // flat tile; 0xffff denotes transparent. Copied before return.
         std::span<const u16> m_cell_materials{};
+        // Optional, borrowed row-major 128x128 packed material+temperature
+        // words for the full-domain terrain input. Empty retains the previous
+        // packed cells; a temperature-only change uploads like a material one.
+        std::span<const u32> m_cell_words{};
     };
 
     // One visible tile: the submission index it planned from plus the
@@ -381,6 +392,13 @@ export namespace pP {
         [[nodiscard]] Expected<GridParticleCensus> readParticleCensus(
             FenceCompletionValue completed, FenceCompletionValue capture_submission);
 
+        // Strong immutable publication owners for the world-lighting consumer.
+        // The visible/source palettes and full-domain terrain buffer are built
+        // together from one admitted catalog version; the thermal table is the
+        // pass device's single uploaded copy. The pass never resolves a hidden
+        // service for these owners.
+        [[nodiscard]] Expected<lighting::WorldLightingInputs> lightingInputs() const;
+
         // Pure CPU planner: keeps the submissions whose tile boxes (expanded
         // by kGridCullEpsilon) intersect the snapshot frustum. Renders
         // nothing, so it is unit-testable without a device.
@@ -431,11 +449,15 @@ export namespace pP {
             return {slot.m_args.get(), slot.m_ids.get()};
         }
 
+        // Borrowed full-domain packed terrain input; owned by this pass/world.
+        [[nodiscard]] rhi::IBuffer *terrainCellsForTest() const noexcept {
+            return m_world.m_terrain_cells.get();
+        }
+
         [[nodiscard]] std::array<rhi::IBuffer *, 3u> particleBuffersForTest() const noexcept {
             if (not m_world.m_gpu_particles) {
                 return {};
             }
-
             const auto &particles = *m_world.m_gpu_particles;
             const auto &slot = particles.m_slots[particles.m_selected_slot];
             return {particles.m_packed.get(), slot.m_args.get(), slot.m_ids.get()};
@@ -779,6 +801,11 @@ export namespace pP {
 
         [[nodiscard]] std::error_code ensureCellBuffer_(rhi::IDevice &device, bool atlas_required);
 
+        // Loads the generated thermal table and creates its single device copy.
+        [[nodiscard]] std::error_code createThermalLut_(rhi::IDevice &device, const std::filesystem::path &content_dir);
+        // Ensures the world-owned full-domain packed terrain buffer for `edge`.
+        [[nodiscard]] std::error_code ensureTerrainCells_(rhi::IDevice &device, u32 edge, bool clear);
+
         [[nodiscard]] std::error_code validateCellDraw_(const GridTilePlan &plan) const noexcept;
 
         void applyCellPayload_(GridTilePayload &payload, u32 chunk_id) const noexcept;
@@ -814,6 +841,9 @@ export namespace pP {
             m_reactive_solid_program{};
         safe_ptr<IShaderService> m_shader_service{};
         std::filesystem::path m_content_dir{};
+        rhi::IDevice *m_device{}; // Actual allocator; device outlives the pass.
+        // Generated thermal lookup uploaded once per GridPass device.
+        rhi::ComPtr<rhi::IBuffer> m_thermal_lut{};
         struct VisibilityProgram {
             rhi::ComPtr<rhi::IShaderProgram> m_program{};
             rhi::ComPtr<rhi::IComputePipeline> m_pipeline{};
@@ -1004,6 +1034,13 @@ export namespace pP {
             u32 m_retirement_particle_cursor{};
             bool m_retirement_roots_detached{};
             rhi::ComPtr<rhi::IBuffer> m_terrain_palette{};
+            // Derived eight-byte source palette, built with the visible palette
+            // from the same admitted catalog version.
+            rhi::ComPtr<rhi::IBuffer> m_source_materials{};
+            // World-owned full-domain packed terrain input (material16 + half Kelvin).
+            rhi::ComPtr<rhi::IBuffer> m_terrain_cells{};
+            void *m_terrain_cells_mapped{};
+            u32 m_world_edge{};
             u64 m_job_id{};
             u64 m_world_generation{};
             u64 m_content_fingerprint{};
@@ -1072,6 +1109,9 @@ export namespace pP {
         u32 m_chunk_id = 0u;
         GridTilePayload m_payload{};
         Array<u16> m_cell_materials{};
+        // Row-major packed material+temperature words for the full-domain
+        // terrain input; empty keeps the previous cells.
+        Array<u32> m_cell_words{};
         Array<u16> m_diagnostic_indices{};
     };
 
@@ -1086,6 +1126,9 @@ export namespace pP {
         // actor overlay advances; frozen-session callers keep the default false.
         bool m_update_actors_on_retained_terrain{};
         float m_cell_size_m{1.0f};
+        // Full-domain edge for the packed terrain input; zero means the staging
+        // path carries only the per-chunk visible cell atlas.
+        u32 m_world_edge{};
         bool m_has_catalog{false};
         u32 m_boundary_material_id{1u};
         u64 m_content_fingerprint{};

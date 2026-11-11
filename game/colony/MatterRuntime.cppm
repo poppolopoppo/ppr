@@ -163,8 +163,8 @@ export namespace pP::colony {
         // Every begin owns its inputs once. Advance alone admits/takes the
         // existing lane slot; absence is transport pending, never GPU readiness.
         [[nodiscard]] Expected<MatterRequest> beginInitialize(
-            RenderLane *lane, rhi::IDevice &device, IShaderService &shaders, std::filesystem::path content_root,
-            const ITimerClock *observation_clock = nullptr);
+            RenderLane *lane, rhi::IDevice &device, rhi::ICommandQueue &queue, IShaderService &shaders,
+            std::filesystem::path content_root, const ITimerClock *observation_clock = nullptr);
         [[nodiscard]] Expected<MatterRequest> beginPrepareResidentWorld(const MatterState &state, Array<u32> terrain);
         [[nodiscard]] Expected<MatterRequest> beginPublishWorld(MatterIdentity identity);
         [[nodiscard]] Expected<MatterRequest> beginCancelWorld();

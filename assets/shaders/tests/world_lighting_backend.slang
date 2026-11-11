@@ -27,7 +27,7 @@ struct MetadataRow {
     uint m_id_low;
     uint m_id_high;
     uint m_source_row;
-    uint m_material;
+    uint m_material_temperature;
     float m_gas_x;
     float m_gas_y;
     float m_radius;

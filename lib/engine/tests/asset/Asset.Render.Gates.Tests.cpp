@@ -4201,7 +4201,7 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
                 for (u32 row = 0u; row < count; ++row) {
                     rows[row].m_id_low = row + 1u;
                     rows[row].m_source_row = row;
-                    rows[row].m_material = 1u;
+                    rows[row].m_material_temperature = 1u;
                     rows[row].m_radius = 1.0f;
                 }
 
@@ -4547,7 +4547,7 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
             PPR_TEST_ASSERT(not nonfinite_gas and nonfinite_gas.error() == std::errc::invalid_argument);
 
             invalid_metadata = census_metadata;
-            invalid_metadata[0u].m_material = 0u;
+            invalid_metadata[0u].m_material_temperature = 0u;
             const auto vacuum_metadata = prepareGridParticleMetadata(device, invalid_metadata, 2u, 1.0, epoch + 1u);
             PPR_TEST_ASSERT(not vacuum_metadata and vacuum_metadata.error() == std::errc::invalid_argument);
 
@@ -4567,7 +4567,7 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
                 metric_metadata[row].m_gas_y /= 3.0f;
             }
 
-            metric_metadata[2u].m_material = 3u;
+            metric_metadata[2u].m_material_temperature = 3u;
             auto expected_metric = expected_census;
             expected_metric[2u] = {3u, 1u, 3u, kGridParticleCensusVacuum, 64u, 64u};
             publish_census(census_hot, cold, metric_metadata, 2u, 1.0 / 3.0);
@@ -6477,7 +6477,7 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
                     GridParticleMetadataRow row{};
                     row.m_id_low = 1u;
                     row.m_source_row = 0u;
-                    row.m_material = particle_material;
+                    row.m_material_temperature = particle_material;
                     row.m_radius = 0.5f;
                     const auto metadata = prepareGridParticleMetadata(device, {&row, 1u}, 1u, 1.0, epoch);
                     PPR_TEST_ASSERT(metadata.has_value());

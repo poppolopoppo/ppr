@@ -301,8 +301,8 @@ namespace pP::game::tests::detail::checkpoint {
             PPR_TEST_ASSERT(
                 not make_error_code(m_rhi->getDevice().getQueue(rhi::QueueType::Graphics, m_queue.writeRef())));
 
-            PPR_TEST_ASSERT(not completeOwned(
-                m_runtime.beginInitialize(lane, m_rhi->getDevice(), *m_shaders, std::filesystem::current_path())));
+            PPR_TEST_ASSERT(not completeOwned(m_runtime.beginInitialize(
+                lane, m_rhi->getDevice(), *m_queue, *m_shaders, std::filesystem::current_path())));
         }
 
         void admitPrepared(PreparedWorld prepared, const sim::GenerationExecution &execution) {

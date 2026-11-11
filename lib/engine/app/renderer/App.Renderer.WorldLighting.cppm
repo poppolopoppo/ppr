@@ -2,8 +2,11 @@ module;
 #include "pP/Macros.h"
 export module engine.app:renderer.world_lighting;
 
+import :renderer.types;
+
 import engine.core;
 import engine.math;
+import engine.rhi;
 import std;
 
 export namespace pP::lighting {
@@ -109,4 +112,28 @@ export namespace pP::lighting {
     inline constexpr double kThermalLutMinKelvin = 256.0;
     inline constexpr double kThermalLutMaxKelvin = 65504.0;
     static_assert(kThermalLutBytes == 32768u);
+
+    // ------------------------------------------------------------------
+    // immutable per-world lighting publication inputs
+    // ------------------------------------------------------------------
+
+    // Strong owners only: the consumer never resolves a pass/service for these
+    // buffers. m_terrain is the full-domain packed cell grid, m_visible_materials
+    // is the admitted GridTerrainVisual palette, m_source_materials is the
+    // eight-byte derived source palette and m_thermal_lut is the shared table.
+    struct WorldLightingInputs {
+        pP::GridParticleGpuView m_particles{};
+        pP::GridParticlePresentationIdentity m_identity{};
+        rhi::ComPtr<rhi::IBuffer> m_terrain{};
+        rhi::ComPtr<rhi::IBuffer> m_visible_materials{};
+        rhi::ComPtr<rhi::IBuffer> m_source_materials{};
+        rhi::ComPtr<rhi::IBuffer> m_thermal_lut{};
+        u32 m_material_count{};
+    };
+}
+
+export namespace pP {
+    // Plan spelling for the lighting owner; the record is defined alongside
+    // the shared codecs so worlds and passes share one layout authority.
+    using WorldLightingInputs = lighting::WorldLightingInputs;
 }

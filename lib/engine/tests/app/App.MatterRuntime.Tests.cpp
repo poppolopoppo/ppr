@@ -48,6 +48,23 @@ namespace pP::tests::detail::MatterAdapter {
         return std::move(**completion);
     }
 
+    rhi::ComPtr<rhi::ICommandQueue> acquireGraphicsQueue(rhi::IDevice &device) {
+        rhi::ComPtr<rhi::ICommandQueue> queue;
+        PPR_TEST_ASSERT(not make_error_code(device.getQueue(rhi::QueueType::Graphics, queue.writeRef())));
+        PPR_TEST_ASSERT(queue != nullptr);
+        return queue;
+    }
+
+    Array<GridParticleMetadataRow> readMetadata(
+        rhi::IDevice &device, rhi::ICommandQueue &queue, const GridParticleMetadataResource &metadata) {
+        PPR_TEST_ASSERT(not make_error_code(queue.waitOnHost()));
+        Array<GridParticleMetadataRow> rows(metadata.m_count);
+        PPR_TEST_ASSERT(metadata.m_rows != nullptr);
+        PPR_TEST_ASSERT(not make_error_code(
+            device.readBuffer(metadata.m_rows, 0u, rows.size() * sizeof(GridParticleMetadataRow), rows.data())));
+        return rows;
+    }
+
     // ------------------------------------------------------------------
     // physical inventory and closed-world presentation
     // ------------------------------------------------------------------
@@ -450,8 +467,9 @@ namespace pP::tests::detail::MatterAdapter {
             PPR_TEST_ASSERT(not shaders->shutdown());
         };
 
-        std::ignore = success(
-            runtime.beginInitialize(&lane, rhi_service->getDevice(), *shaders, std::filesystem::current_path()));
+        auto queue = acquireGraphicsQueue(rhi_service->getDevice());
+        std::ignore = success(runtime.beginInitialize(
+            &lane, rhi_service->getDevice(), *queue, *shaders, std::filesystem::current_path()));
 
         // A retained admission-busy request owns one input and can be cancelled
         // before acquiring the shared slot. Wrong and consumed tickets reject.
@@ -664,8 +682,9 @@ namespace pP::tests::detail::MatterAdapter {
             return completion;
         };
 
-        std::ignore = success(
-            runtime.beginInitialize(nullptr, rhi_service->getDevice(), *shaders, std::filesystem::current_path()));
+        auto queue = acquireGraphicsQueue(rhi_service->getDevice());
+        std::ignore = success(runtime.beginInitialize(
+            nullptr, rhi_service->getDevice(), *queue, *shaders, std::filesystem::current_path()));
         std::optional<float> first_displacement;
 
         for (const u32 edge: {1024u, 2048u, 4096u}) {
@@ -794,8 +813,9 @@ namespace pP::tests::detail::MatterAdapter {
             return completion;
         };
 
-        std::ignore = success(
-            runtime.beginInitialize(nullptr, rhi_service->getDevice(), *shaders, std::filesystem::current_path()));
+        auto queue = acquireGraphicsQueue(rhi_service->getDevice());
+        std::ignore = success(runtime.beginInitialize(
+            nullptr, rhi_service->getDevice(), *queue, *shaders, std::filesystem::current_path()));
         auto source = colony::makeMatterState(records(), 1.0, 1.0, colony::kMatterGravityY, 94u);
         PPR_TEST_ASSERT(source.has_value());
         source->m_identity.m_terrain_revision = 1u;
@@ -836,11 +856,83 @@ namespace pP::tests::detail::MatterAdapter {
         PPR_TEST_ASSERT(published.m_view->m_publication == source->m_identity.m_publication);
         PPR_TEST_ASSERT(not attached.m_view->current() and published.m_view->current());
 
+        // Temperature-only same-count replacement: the independent metadata
+        // version advances, old retained readers still read their own packed
+        // temperature, and the numerical row layout is unchanged.
+        PPR_TEST_ASSERT(published.m_view->m_stride == kGridParticleNumericalStride);
+        PPR_TEST_ASSERT(published.m_view->m_readonly_stride == kGridParticleReadonlyStride);
+        PPR_TEST_ASSERT(published.m_view->m_numerical->getDesc().elementSize == kGridParticleNumericalStride);
+        PPR_TEST_ASSERT(published.m_view->m_readonly->getDesc().elementSize == kGridParticleReadonlyStride);
+        const Array<GridParticleMetadataRow> old_rows = readMetadata(
+            rhi_service->getDevice(), *queue, *published.m_view->m_metadata);
+        const u64 old_version = published.m_view->m_metadata->m_version;
+        for (const auto &record: source->m_records) {
+            const auto found = std::ranges::find_if(
+                old_rows, [&](const auto &row) { return (u64{row.m_id_high} << 32u | row.m_id_low) == record.m_id; });
+            PPR_TEST_ASSERT(found != old_rows.end());
+            PPR_TEST_ASSERT(
+                found->m_material_temperature ==
+                *lighting::packCell(static_cast<u16>(record.m_material), record.m_temperature_k));
+        }
+
+        const double old_authoritative_temperature = source->m_records[0u].m_temperature_k;
+        auto candidate = *source;
+        candidate.m_records[0u].m_temperature_k = 900.0;
+        candidate.m_gas[0u].m_temperature_k = 400.0;
+        candidate.m_identity.m_publication = source->m_identity.m_publication + 1u;
+        std::ignore = success(runtime.beginPrepareEdit(
+            source->m_identity, candidate, static_cast<u32>(source->m_particles.size()), {},
+            colony::EMatterEditKind::particle_replace));
+        std::ignore = success(runtime.beginPollEdit(candidate.m_identity));
+        auto replaced = success(runtime.beginPublishEdit(candidate.m_identity));
+        PPR_TEST_ASSERT(replaced.m_view and replaced.m_view->m_metadata);
+        PPR_TEST_ASSERT(replaced.m_view->m_metadata != published.m_view->m_metadata);
+        PPR_TEST_ASSERT(replaced.m_view->m_metadata->m_version > old_version);
+        PPR_TEST_ASSERT(replaced.m_view->m_stride == kGridParticleNumericalStride);
+        PPR_TEST_ASSERT(replaced.m_view->m_readonly_stride == kGridParticleReadonlyStride);
+        PPR_TEST_ASSERT(source->m_records[0u].m_temperature_k == old_authoritative_temperature);
+
+        const Array<GridParticleMetadataRow> new_rows = readMetadata(
+            rhi_service->getDevice(), *queue, *replaced.m_view->m_metadata);
+        PPR_TEST_ASSERT(new_rows.size() == old_rows.size());
+        for (const auto &record: candidate.m_records) {
+            const auto found = std::ranges::find_if(
+                new_rows, [&](const auto &row) { return (u64{row.m_id_high} << 32u | row.m_id_low) == record.m_id; });
+            PPR_TEST_ASSERT(found != new_rows.end());
+            PPR_TEST_ASSERT(
+                found->m_material_temperature ==
+                *lighting::packCell(static_cast<u16>(record.m_material), record.m_temperature_k));
+        }
+
+        const Array<GridParticleMetadataRow> retained_rows = readMetadata(
+            rhi_service->getDevice(), *queue, *published.m_view->m_metadata);
+        PPR_TEST_ASSERT(std::ranges::equal(retained_rows, old_rows, [](const auto &left, const auto &right) {
+            return left.m_material_temperature == right.m_material_temperature;
+        }));
+        PPR_TEST_ASSERT(not published.m_view->current());
+        source->m_identity = candidate.m_identity;
+
+        // Invalid Kelvin rejects before any upload or identity commit.
+        const auto rejected_temperature = [&](const double kelvin) {
+            auto invalid = *source;
+            invalid.m_identity.m_publication = source->m_identity.m_publication + 1u;
+            invalid.m_records[0u].m_temperature_k = kelvin;
+            auto request = runtime.beginPrepareEdit(
+                source->m_identity, invalid, 0u, {}, colony::EMatterEditKind::particle_replace);
+            PPR_TEST_ASSERT(not request);
+            return request.error();
+        };
+        PPR_TEST_ASSERT(rejected_temperature(-1.0) == std::errc::invalid_argument);
+        PPR_TEST_ASSERT(rejected_temperature(std::numeric_limits<double>::quiet_NaN()) == std::errc::invalid_argument);
+        PPR_TEST_ASSERT(rejected_temperature(65'506.0) == std::errc::result_out_of_range);
+        PPR_TEST_ASSERT(replaced.m_view->current());
+        PPR_TEST_ASSERT(source->m_identity.m_publication == candidate.m_identity.m_publication);
+
         // End before collection drains an already-admitted copy and retains
         // the same committed source. Owned prior bytes survive later ticks.
         std::ignore = success(runtime.beginSnapshot(source->m_identity));
         std::ignore = success(runtime.beginEndSnapshot(source->m_identity));
-        PPR_TEST_ASSERT(published.m_view->current());
+        PPR_TEST_ASSERT(replaced.m_view->current());
         PPR_TEST_ASSERT(initial.m_readback->m_source.m_publication == 0u);
         PPR_TEST_ASSERT(
             std::memcmp(
@@ -871,9 +963,10 @@ namespace pP::tests::detail::MatterAdapter {
             PPR_TEST_ASSERT(not shaders->shutdown());
         };
 
+        auto queue = acquireGraphicsQueue(rhi_service->getDevice());
         PPR_TEST_ASSERT(not completeInline(
-            runtime,
-            runtime.beginInitialize(nullptr, rhi_service->getDevice(), *shaders, std::filesystem::current_path()))
+            runtime, runtime.beginInitialize(
+                         nullptr, rhi_service->getDevice(), *queue, *shaders, std::filesystem::current_path()))
                 .m_execution.m_operation_error);
         PPR_TEST_ASSERT(not authored.initialize(driver, {.m_world_generation = 95u}));
         PPR_TEST_ASSERT(not driver.prepareMatter(runtime));
@@ -947,15 +1040,16 @@ namespace pP::tests::detail::MatterAdapter {
             stderr, "[matter-domain-device] api=%s adapter=%s workload=empty-particle-dense-grid-lifecycle-pause\n",
             device.apiName ? device.apiName : "unavailable", device.adapterName ? device.adapterName : "unavailable");
 
+        auto queue = acquireGraphicsQueue(rhi_service->getDevice());
         const auto unavailable = runtime.beginInitialize(
-            &stopped_lane, rhi_service->getDevice(), *shaders, std::filesystem::current_path());
+            &stopped_lane, rhi_service->getDevice(), *queue, *shaders, std::filesystem::current_path());
         PPR_TEST_ASSERT(not unavailable and unavailable.error() == std::errc::not_connected);
 
         PPR_TEST_ASSERT(not completeInline(runtime, runtime.beginShutdown()).m_execution.m_operation_error);
 
         PPR_TEST_ASSERT(not completeInline(
-            runtime,
-            runtime.beginInitialize(nullptr, rhi_service->getDevice(), *shaders, std::filesystem::current_path()))
+            runtime, runtime.beginInitialize(
+                         nullptr, rhi_service->getDevice(), *queue, *shaders, std::filesystem::current_path()))
                 .m_execution.m_operation_error);
 
         PPR_TEST_ASSERT(not authored.initialize(driver, {.m_world_generation = 81u}));

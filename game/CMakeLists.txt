@@ -226,7 +226,7 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
     )
     target_link_libraries(game.tests PRIVATE engine.physics engine.matter)
     add_dependencies(game.tests worldgen.assets)
-    ppr_stage_assets(game.tests shaders)
+    ppr_stage_assets(game.tests shaders lighting)
 
     target_include_directories(game.tests PRIVATE ${CMAKE_SOURCE_DIR}/lib/engine/tests/include)
 
