@@ -686,12 +686,12 @@ float4 fragmentMain(PsInput input) : SV_Target {
                 rhi::ComPtr<rhi::IBuffer> m_vertex_buffer{};
             };
 
-            // Two upload slots for two frame credits: ZERO slack by
-            // construction. Slots are selected by per-slot completion
-            // values, never by CPU parity — when both submissions are still
-            // GPU-pending the frame waits its slot out instead of
-            // overwriting early. Growth of either buffer waits for the
-            // youngest tracked use (R6).
+            // Two upload slots for the two logical frames the application
+            // admits: ZERO slack by construction. Slots are selected by
+            // per-slot completion values, never by CPU parity — when both
+            // logical frames are still GPU-pending the frame waits its slot
+            // out instead of overwriting early. Growth of either buffer waits
+            // for the youngest tracked use (R6).
             static constexpr u32 kUiFrameSlots{2u};
             std::array<FrameResources, kUiFrameSlots> m_frame_resources{};
             std::array<FenceCompletionValue, kUiFrameSlots> m_slot_values{};

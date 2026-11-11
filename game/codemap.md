@@ -127,7 +127,9 @@ reversible preparation, and treats renderer activation admission as commit
 intent. Its exact activation ACK precedes candidate attachment and the
 exactly-once WorldJob/host ownership transfer. Old GPU view selection is disabled
 between activation admission and joint publication; ordinary frames remain
-nonblocking. Pre-activation cancellation drains both candidates before resuming
+nonblocking. Each candidate `begin` command carries the world edge with its
+header so appended terrain-word uploads are dimensioned and admitted against
+the same domain. Pre-activation cancellation drains both candidates before resuming
 the retained identity/pause/readiness facts. Post-activation attachment or
 unknown completion errors retain the established terminal/quiescence policy.
 

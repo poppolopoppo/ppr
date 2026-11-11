@@ -710,9 +710,17 @@ namespace pP {
             WorldLightingPass,
             cursor["g_thermal_lut"].setBinding(
                 rhi::Binding(resources.m_bound_thermal_lut, projectionRange(resources.m_bound_thermal_lut))));
-        PPR_RETURN_ERROR_ON_FAIL(
-            WorldLightingPass,
-            cursor["g_numeric_status"].setBinding(rhi::Binding(attempt.m_status, projectionRange(attempt.m_status))));
+
+        // The numeric-status buffer is a writer-side resource: only the
+        // projection/dispatch entry points declare it. Material and inspection
+        // consumers include the same lighting records but must not receive an
+        // unbound field, so the binding follows the program's actual layout.
+        const rhi::ShaderCursor status_cursor = cursor["g_numeric_status"];
+        if (status_cursor.isValid()) {
+            PPR_RETURN_ERROR_ON_FAIL(
+                WorldLightingPass,
+                status_cursor.setBinding(rhi::Binding(attempt.m_status, projectionRange(attempt.m_status))));
+        }
         return {};
     }
 

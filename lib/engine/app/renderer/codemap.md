@@ -555,12 +555,15 @@ validation requirements; user visual acceptance is separate.
 
 1. Startup → `renderer.initialize(rhi_service)` (graphics queue only); first `renderAndPresent(window, …)`
    lazily creates + configures the window surface from `Window::m_framebuffer_size/m_native`
-2. Per-frame → stack the scene and UI `DrawSubmission` arrays → two `SurfaceRenderPass` records →
-   `renderAndPresent` (resize on drift → acquire → depth-free post presentation → color-load/no-depth UI render
-   pass → present). The temporary cleanup path renders stage A into an editor-owned single-sample R-sized scene
-   image, encodes metering/adaptation/bloom and the AgX output in the pre-render seam, then presents the
-   display-linear result and native UI in the same submission; Task 12 replaces the scene image with
-   ReconstructionPass and Task 14 owns the three-submission split.
+2. Per-frame → three ordered submissions on the one graphics queue, each settled by its own returned fence:
+   **A** (`render`, color+depth) runs publication uploads and the world-lighting prepare in its pre-render seam,
+   draws the sample-rate background/opaque/particle/translucent terrain and triangles into the reconstruction's
+   padded 4x scene target, and encodes the numeric-status copies in its command tail; **B** (`renderToTexture`)
+   runs Hable reconstruction then exposure/bloom/AgX into the resolved-size post output, with reconstruction
+   `resolved()` evaluated only after its prepare selected the next history image; **C** (`renderAndPresent`)
+   acquires/reconciles the surface, presents fixed-P nearest enlargement and native UI, and may present the last
+   accepted output (retained picture) when B was rejected. `RenderFrameResult::m_stages` carries each stage's
+   value/fate/error and `m_submit_value` is the latest accepted one.
 3. Offscreen/tests → `renderToTexture(target, …)` → `waitOnHost()` → readback
 4. On minimize/resize-to-zero → surface unconfigures but the record stays; next non-zero frame reconfigures
 5. Shutdown → Editor proves GPU idle first (`waitOnHost`; UNKNOWN → quarantine + retain + return error for

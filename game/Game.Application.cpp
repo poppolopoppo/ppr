@@ -1073,6 +1073,12 @@ namespace demo {
                 auto &source = m_workshop_stage ? *m_workshop_stage : m_world_job->presentation();
                 auto &header = command->m_stage;
                 header.m_cell_size_m = source.m_cell_size_m;
+                // The candidate's terrain-word publication and its cell rect
+                // validation are dimensioned by the world edge; the append
+                // batches carry per-chunk words that the owner admits against
+                // it. Omitting it leaves the candidate at 0 and every appended
+                // terrain-word upload is rejected.
+                header.m_world_edge = source.m_world_edge;
                 header.m_has_catalog = source.m_has_catalog;
                 header.m_boundary_material_id = source.m_boundary_material_id;
                 header.m_content_fingerprint = source.m_content_fingerprint;

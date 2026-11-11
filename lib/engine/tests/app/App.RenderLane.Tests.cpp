@@ -1494,6 +1494,61 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not lane.terminalError());
         };
 
+        PPR_UNIT_TEST (stage_results_round_trip_with_their_fates) {
+            // The three ordered stage settlements travel as values on the
+            // existing reliable result transport: distinct fence values,
+            // explicit fates/errors and the aggregate accepted value survive
+            // the handoff unchanged (no device, no borrowed owner).
+            std::counting_semaphore<> wake{0};
+            RenderLane lane{};
+            PPR_TEST_ASSERT(not lane.start(
+                {},
+                [](const RenderFrameRequest &, RenderFrameResult &result) -> std::error_code {
+                    result.m_active_elapsed = std::chrono::milliseconds{321};
+                    result.m_stages[kRenderStageScene].m_submission = 41u;
+                    result.m_stages[kRenderStageScene].m_settlement = FrameSettlement::kSubmitted;
+                    result.m_stages[kRenderStageResolve].m_error = std::make_error_code(
+                        std::errc::device_or_resource_busy);
+                    result.m_stages[kRenderStagePresent].m_error = std::make_error_code(
+                        std::errc::resource_unavailable_try_again);
+                    result.m_submit_value = aggregateAcceptedSubmission(result.m_stages);
+                    return std::make_error_code(std::errc::device_or_resource_busy);
+                },
+                {}, [&] { wake.release(); }));
+            PPR_DEFER {
+                lane.requestStop();
+                std::ignore = lane.join();
+            };
+
+            RenderFrameRequest request = makeRequest(5u);
+            request.m_reservation_epoch = 3u;
+            request.m_reservation_frame_id = 5u;
+            PPR_TEST_ASSERT(not lane.submitFrame(std::move(request)));
+            PPR_TEST_ASSERT(wake.try_acquire_for(std::chrono::seconds{30}));
+
+            Array<RenderFrameResult> results{};
+            PPR_TEST_ASSERT(awaitResult(lane, 5u, results));
+            PPR_TEST_ASSERT(results.size() == 1u);
+            const RenderFrameResult &result = results.front();
+            PPR_TEST_ASSERT(result.m_stages.size() == kRenderStageCount);
+            PPR_TEST_ASSERT(result.m_stages[kRenderStageScene].m_submission == 41u);
+            PPR_TEST_ASSERT(result.m_stages[kRenderStageScene].m_settlement == FrameSettlement::kSubmitted);
+            PPR_TEST_ASSERT(result.m_stages[kRenderStageResolve].m_settlement == FrameSettlement::kRejected);
+            PPR_TEST_ASSERT(
+                result.m_stages[kRenderStageResolve].m_error ==
+                std::make_error_code(std::errc::device_or_resource_busy));
+            PPR_TEST_ASSERT(
+                result.m_stages[kRenderStagePresent].m_error ==
+                std::make_error_code(std::errc::resource_unavailable_try_again));
+            PPR_TEST_ASSERT(result.m_submit_value == 41u);
+            PPR_TEST_ASSERT(aggregateAcceptedSubmission(result.m_stages) == 41u);
+            PPR_TEST_ASSERT(result.m_active_elapsed == std::chrono::milliseconds{321});
+            PPR_TEST_ASSERT(result.m_error == std::make_error_code(std::errc::device_or_resource_busy));
+            PPR_TEST_ASSERT(not result.m_submit_possibly_executed);
+            PPR_TEST_ASSERT(
+                reinterpret_cast<std::uintptr_t>(result.m_stages.data()) % alignof(RenderStageResult) == 0u);
+        };
+
         PPR_UNIT_TEST (throwing_wake_keeps_terminal_and_results_observable) {
             // Item 14 exclusion: IPlatform::wakeNativeEvents is noexcept. Throwing from that native
             // boundary terminates by design; changing its signature is not a test seam. The injectable
@@ -2066,6 +2121,7 @@ namespace pP::tests {
             detail::RenderLaneGate::running_sync_timeout_retains_slot_until_capture_destruction,
             detail::RenderLaneGate::queued_wait_timeout_cancels_owned_capture_and_rejects_reentry,
             detail::RenderLaneGate::saturated_results_preserve_order_and_exactly_once_delivery,
+            detail::RenderLaneGate::stage_results_round_trip_with_their_fates,
             detail::RenderLaneGate::throwing_wake_keeps_terminal_and_results_observable,
             detail::RenderLaneGate::lane_credit_return_wakes_main,
             detail::RenderLaneGate::lane_control_wake_without_work,

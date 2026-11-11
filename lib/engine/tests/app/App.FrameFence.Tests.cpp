@@ -69,32 +69,41 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(maxSlotValue(std::span<const FenceCompletionValue>{}) == kFenceValueNone);
         };
 
-        PPR_UNIT_TEST (ledger_binds_two_credits_then_busy) {
+        PPR_UNIT_TEST (ledger_binds_two_logical_frames_of_stage_credits_then_busy) {
             FrameCreditLedger ledger{};
-            PPR_TEST_ASSERT(ledger.capacity() == 2u);
+            // Two logical frames, each with its three ordered stage
+            // submissions (A scene, B resolve/post, C present).
+            PPR_TEST_ASSERT(ledger.capacity() == kMaxOutstandingFrames * kFrameStageCount);
             PPR_TEST_ASSERT(ledger.outstanding() == 0u);
 
-            // Two outstanding GPU submissions: the eligible-workload bound.
-            PPR_TEST_ASSERT(not ledger.acquire());
-            PPR_TEST_ASSERT(not ledger.acquire());
-            PPR_TEST_ASSERT(ledger.outstanding() == 2u);
+            // A full logical frame's A/B/C is admissible while an earlier
+            // frame's tail is still GPU-pending.
+            for (u32 stage = 0u; stage < kFrameStageCount; ++stage) {
+                PPR_TEST_ASSERT(not ledger.acquire());
+            }
+            PPR_TEST_ASSERT(ledger.outstanding() == kFrameStageCount);
 
-            // Third admission fails closed — the Editor probes this bound
+            // Fill the remaining logical frame's credits.
+            while (ledger.outstanding() != ledger.capacity()) {
+                PPR_TEST_ASSERT(not ledger.acquire());
+            }
+
+            // The next admission fails closed — the Editor probes this bound
             // BEFORE building a packet and drops the frame on busy (never
             // an app failure); the Renderer re-checks at submit time.
             PPR_TEST_ASSERT(ledger.acquire() == std::make_error_code(std::errc::device_or_resource_busy));
-            PPR_TEST_ASSERT(ledger.outstanding() == 2u);
+            PPR_TEST_ASSERT(ledger.outstanding() == ledger.capacity());
 
-            // Exactly one credit return per frame: each release frees one.
+            // Exactly one credit return per submission: each release frees one.
             PPR_TEST_ASSERT(not ledger.release());
-            PPR_TEST_ASSERT(ledger.outstanding() == 1u);
+            PPR_TEST_ASSERT(ledger.outstanding() == ledger.capacity() - 1u);
             PPR_TEST_ASSERT(not ledger.acquire());
-            PPR_TEST_ASSERT(ledger.outstanding() == 2u);
+            PPR_TEST_ASSERT(ledger.outstanding() == ledger.capacity());
 
             // Double release past zero fails closed, never wraps.
-            PPR_TEST_ASSERT(not ledger.release());
-            PPR_TEST_ASSERT(not ledger.release());
-            PPR_TEST_ASSERT(ledger.outstanding() == 0u);
+            while (ledger.outstanding() != 0u) {
+                PPR_TEST_ASSERT(not ledger.release());
+            }
             PPR_TEST_ASSERT(ledger.release() == std::make_error_code(std::errc::invalid_argument));
 
             // Device-loss escape: drops everything without completing it.
@@ -229,11 +238,15 @@ namespace pP::tests::detail {
             DeferredReleaseQueue queue{};
             std::array<FenceCompletionValue, 3u> slots{kFenceValueNone, kFenceValueNone, kFenceValueNone};
 
-            // Two simultaneously pending: both admitted, third refused.
-            PPR_TEST_ASSERT(not ledger.acquire());
-            PPR_TEST_ASSERT(not ledger.acquire());
+            // The ledger bounds stage SUBMISSIONS: two logical frames of
+            // three ordered stages each. Fill the whole bound, then the
+            // next acquisition is refused without side effects.
+            PPR_TEST_ASSERT(FrameCreditLedger::capacity() == kMaxOutstandingFrames * kFrameStageCount);
+            for (u32 credit = 0u; credit < FrameCreditLedger::capacity(); ++credit) {
+                PPR_TEST_ASSERT(not ledger.acquire());
+            }
             PPR_TEST_ASSERT(ledger.acquire() == std::make_error_code(std::errc::device_or_resource_busy));
-            PPR_TEST_ASSERT(ledger.outstanding() == 2u);
+            PPR_TEST_ASSERT(ledger.outstanding() == FrameCreditLedger::capacity());
 
             // Each frame stamps its ring slot and defers its releases at
             // its own submission value.
@@ -260,18 +273,22 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(destroyed == 1u);
             PPR_TEST_ASSERT(queue.pendingCount() == 1u);
             PPR_TEST_ASSERT(not ledger.release());
-            PPR_TEST_ASSERT(ledger.outstanding() == 1u);
+            PPR_TEST_ASSERT(ledger.outstanding() == FrameCreditLedger::capacity() - 1u);
             PPR_TEST_ASSERT(slotFenceComplete(kFirst, slots[0]));
             PPR_TEST_ASSERT(not slotFenceComplete(kFirst, slots[1]));
             PPR_TEST_ASSERT(selectRingSlot(kFirst, slots, 1u) == 2u);
 
-            // Second value completes: the remainder retires, the ledger
-            // drains to zero — every credit exactly once.
+            // Second value completes: the remainder retires. Drain the other
+            // held credits and prove the ledger reaches zero — every credit
+            // exactly once.
             PPR_TEST_ASSERT(queue.reclaim(kSecond) == 1u);
             PPR_TEST_ASSERT(destroyed == 2u);
             PPR_TEST_ASSERT(queue.pendingCount() == 0u);
             PPR_TEST_ASSERT(not ledger.release());
-            PPR_TEST_ASSERT(ledger.outstanding() == 0u);
+            while (ledger.outstanding() != 0u) {
+                PPR_TEST_ASSERT(not ledger.release());
+            }
+            PPR_TEST_ASSERT(ledger.release() == std::make_error_code(std::errc::invalid_argument));
             PPR_TEST_ASSERT(slotFenceComplete(kSecond, slots[1]));
         };
 
@@ -1030,13 +1047,20 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(renderer.completedFenceValue() < first);
             PPR_TEST_ASSERT(renderer.completedFenceValue() < second);
             PPR_TEST_ASSERT(renderer.outstandingFrameCount() == 2u);
-            // Saturated: a third admission refuses busy (no build).
+            // The submission bound admits a full logical frame's A/B/C while
+            // the previous frame's tail is still pending: fill the remaining
+            // stage credits, then admission refuses busy (no build).
+            for (u32 credit = 0u; credit < kMaxOutstandingSubmissions - 2u; ++credit) {
+                PPR_TEST_ASSERT(not renderer.renderToTexture(*target, {}));
+            }
+            PPR_TEST_ASSERT(renderer.outstandingFrameCount() == kMaxOutstandingSubmissions);
             PPR_TEST_ASSERT(renderer.checkFrameAdmission() == std::make_error_code(std::errc::device_or_resource_busy));
 
             renderer.setTestHoldSweep(false);
-            PPR_TEST_ASSERT(not renderer.waitForFenceValue(second));
+            const FenceCompletionValue newest = renderer.lastSubmittedFenceValue();
+            PPR_TEST_ASSERT(not renderer.waitForFenceValue(newest));
             PPR_TEST_ASSERT(not renderer.retireCompletedFrames());
-            PPR_TEST_ASSERT(renderer.completedFenceValue() >= second);
+            PPR_TEST_ASSERT(renderer.completedFenceValue() >= newest);
             PPR_TEST_ASSERT(renderer.outstandingFrameCount() == 0u);
             // Release the DeviceChild ref BEFORE shutdown: the texture holds
             // a strong device ref and RHI::destroy aborts on live children.
@@ -1504,21 +1528,31 @@ namespace pP::tests::detail {
             const FenceCompletionValue second = renderer.lastSubmittedFenceValue();
             grid.notifyFrameSubmitted(second);
 
-            // Both accepted N+1/N+2; gate still 0; fresh poll below N+1;
-            // outstanding == 2; third admission busy.
+            // Both accepted N+1/N+2; gate still 0; fresh poll below N+1.
             PPR_TEST_ASSERT(second == first + 1u);
             u64 gate_value = 99u;
             PPR_TEST_ASSERT(not make_error_code(gate->getCurrentValue(&gate_value)));
             PPR_TEST_ASSERT(gate_value == 0u);
             PPR_TEST_ASSERT(renderer.completedFenceValue() < first);
             PPR_TEST_ASSERT(renderer.outstandingFrameCount() == 2u);
-            PPR_TEST_ASSERT(renderer.checkFrameAdmission() == std::make_error_code(std::errc::device_or_resource_busy));
 
-            // Host-signals THE GATE → wait N+2, retire, zero outstanding.
+            // The submission bound covers two logical frames of three ordered
+            // stages: with two stage submissions GPU-pending the ledger still
+            // has room for the next stage of the same logical frame, so the
+            // admission probe succeeds. The backend's command pool, not the
+            // credit ledger, is what a third parked submission would exhaust
+            // behind this closed gate, so nothing further is submitted here.
+            PPR_TEST_ASSERT(renderer.outstandingFrameCount() == 2u);
+            PPR_TEST_ASSERT(renderer.outstandingFrameCount() < FrameCreditLedger::capacity());
+            PPR_TEST_ASSERT(not renderer.checkFrameAdmission());
+
+            // Host-signals THE GATE → wait the newest accepted value, retire,
+            // zero outstanding.
             PPR_TEST_ASSERT(not make_error_code(gate->setCurrentValue(1u)));
-            PPR_TEST_ASSERT(not renderer.waitForFenceValue(second));
+            const FenceCompletionValue newest = renderer.lastSubmittedFenceValue();
+            PPR_TEST_ASSERT(not renderer.waitForFenceValue(newest));
             PPR_TEST_ASSERT(not renderer.retireCompletedFrames());
-            PPR_TEST_ASSERT(renderer.completedFenceValue() >= second);
+            PPR_TEST_ASSERT(renderer.completedFenceValue() >= newest);
             PPR_TEST_ASSERT(renderer.outstandingFrameCount() == 0u);
 
             // Readback proves execution: each target shows its own clear
@@ -1591,9 +1625,9 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(target);
 
             renderer.setTestHoldSweep(true);
-            PPR_TEST_ASSERT(not renderer.renderToTexture(*target, {}));
-            PPR_TEST_ASSERT(not renderer.renderToTexture(*target, {}));
-            PPR_TEST_ASSERT(renderer.outstandingFrameCount() == 2u);
+            while (renderer.outstandingFrameCount() != kMaxOutstandingSubmissions) {
+                PPR_TEST_ASSERT(not renderer.renderToTexture(*target, {}));
+            }
 
             // Saturated frame: admission refuses busy — the producer builds
             // nothing (no submit attempted here) and reports success.
@@ -1899,7 +1933,7 @@ namespace pP::tests {
             detail::FrameFence::slot_selection_skips_incomplete_slots,
             detail::FrameFence::delayed_completion_never_overwrites_early,
             detail::FrameFence::growth_gate_waits_for_youngest_use,
-            detail::FrameFence::ledger_binds_two_credits_then_busy,
+            detail::FrameFence::ledger_binds_two_logical_frames_of_stage_credits_then_busy,
             detail::FrameFence::deferred_release_reclaims_only_completed,
             detail::FrameFence::obsolete_surface_work_rejects_before_acquisition,
             detail::FrameFence::packet_carries_surface_identity,

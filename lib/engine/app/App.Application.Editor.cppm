@@ -10,6 +10,7 @@ import :renderer.frame_fence;
 import :renderer.grid_pass;
 import :renderer.post_process_pass;
 import :renderer.presentation;
+import :renderer.reconstruction_pass;
 import :renderer.triangle_pass;
 import :service.client;
 import :service.input;
@@ -29,6 +30,7 @@ export namespace pP {
     class InputBackgroundLatch;
     class InputMapping;
     class IUIService;
+    class ReconstructionPass;
     class TrianglePass;
     class Window;
     class WindowInputContext;
@@ -94,6 +96,15 @@ export namespace pP {
         // releasing the previous controller; the editor keeps camera ownership.
         [[nodiscard]] std::error_code replaceMainCameraController(
             std::unique_ptr<ICameraController> controller, ECameraProjection projection);
+
+        // TESTS ONLY: arm the renderer's possibly-executed submit failure for
+        // exactly one stage (kRenderStageScene/Resolve/Present) of the next
+        // executed frame. The seam is consumed by that stage and forwards to
+        // the Renderer's existing injected-submit-failure contract; production
+        // never arms it. std::nullopt disarms.
+        void setInjectedStageSubmitFailureForTest(const std::optional<u32> stage) noexcept {
+            m_test_stage_failure = stage;
+        }
 
     protected:
         // Explicit diagnostic sequence extension. Only a clean, completed owned
@@ -232,7 +243,16 @@ export namespace pP {
         // Submission acceptance is independent of present: every participant
         // stamps off the accepted SUBMIT value (lastSubmitted advancement),
         // never off the present verdict.
-        void stampSubmittedPasses_(FenceCompletionValue accepted_value) noexcept;
+        // Lane-side stage settlement. Every stage records its own submit fate
+        // and accepted value; acceptance commits the stage's owned state once,
+        // a definite rejection commits nothing, and a possibly-executed submit
+        // quarantines dependent resources (never a retry or in-place rollback).
+        void settleSceneStage_(RenderFrameResult &out, FenceCompletionValue before, std::error_code error) noexcept;
+        void settleResolveStage_(RenderFrameResult &out, FenceCompletionValue before, std::error_code error) noexcept;
+        void settlePresentStage_(RenderFrameResult &out, FenceCompletionValue before, std::error_code error) noexcept;
+        // Definitely-unsubmitted release for A's armed owners (lighting
+        // attempt, reconstruction pending frame, post pending frame).
+        void discardUnsubmittedStages_() noexcept;
 
         // Owned packet staged by update() for render(); cleared on consume.
         std::optional<FramePacket> m_frame_packet{};
@@ -247,20 +267,22 @@ export namespace pP {
         Array<image::ImageAsset> m_images{};
         TrianglePass::UploadedScene m_uploaded_scene{};
 
-        // The temporary cleanup scene image: one single-sample R-sized color
-        // target plus matching depth, completion-governed on the render lane.
-        // Task 12 replaces it with ReconstructionPass's resolved view.
-        struct PostSceneImage {
-            rhi::ComPtr<rhi::ITexture> m_color{};
-            rhi::ComPtr<rhi::ITextureView> m_view{};
+        // Lane-owned stage attachments. Reconstruction owns the padded 4x
+        // scene color; the editor owns one completion-gated depth target per
+        // ring slot at the same raster extent.
+        struct SceneDepthSlot {
             rhi::ComPtr<rhi::ITexture> m_depth{};
-            rhi::ComPtr<rhi::ITextureView> m_depth_view{};
+            rhi::ComPtr<rhi::ITextureView> m_view{};
             int2 m_extent{zero_v};
             FenceCompletionValue m_last_use{kFenceValueNone};
         };
 
-        [[nodiscard]] std::error_code ensureSceneImage_(rhi::IDevice &device, int2 resolved_extent);
-        void releaseSceneImages_() noexcept;
+        [[nodiscard]] std::error_code ensureSceneDepth_(rhi::IDevice &device, int2 raster_extent);
+        // Resolves the stage-A/B attachment views for this frame (scene color
+        // and post output), recreating a cached view only when its texture
+        // identity changed.
+        [[nodiscard]] std::error_code resolveStageAttachments_(rhi::IDevice &device, int2 raster_extent);
+        void releaseStageTargets_() noexcept;
 
         std::unique_ptr<Player> m_player{};
         std::unique_ptr<Camera> m_camera{};
@@ -272,16 +294,24 @@ export namespace pP {
         std::unique_ptr<TrianglePass> m_triangle_pass{};
         std::unique_ptr<GridPass> m_grid_pass{};
         std::unique_ptr<PostProcessPass> m_post_process{};
+        std::unique_ptr<ReconstructionPass> m_reconstruction{};
         PostProcessSettings m_post_settings{};
         u32 m_pixel_scale{3u};
-        TimeSpan m_active_elapsed{};
-        std::array<PostSceneImage, kFrameRingSlots> m_scene_images{};
+        std::array<SceneDepthSlot, kFrameRingSlots> m_scene_depths{};
+        rhi::ComPtr<rhi::ITextureView> m_scene_color_view{};
         rhi::ComPtr<rhi::ITextureView> m_post_output_view{};
-        rhi::ITexture *m_post_output_texture{};
-        u32 m_scene_image_cursor{};
-        u32 m_scene_image_selected{};
-        bool m_scene_image_recorded{};
-        bool m_scene_passes_encoded{};
+        const rhi::ITexture *m_scene_color_texture{};
+        const rhi::ITexture *m_post_output_texture{};
+        // Main-boundary active-presentation clock (suspension excluded) and the
+        // camera-cut generation that resets screen history.
+        TimeSpan m_active_elapsed{};
+        u64 m_camera_cut_generation{};
+        u32 m_scene_depth_cursor{};
+        u32 m_scene_depth_selected{};
+        // TESTS ONLY: arm the renderer's possibly-executed submit failure for
+        // one stage (kRenderStage*) of the next executed frame. Production
+        // never sets it; see setInjectedStageSubmitFailureForTest.
+        std::optional<u32> m_test_stage_failure{};
 
         // Background-drag actuator @ detector priority; registrar == owner.
         // Routing-owned latch; actuator borrows it (detach-before-destroy).

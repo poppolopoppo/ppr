@@ -86,6 +86,12 @@ export namespace pP {
         // Fixed-P nearest enlargement/crop from the display-linear output to the
         // acquired surface. Samples exact integer resolved pixels; never UV-stretches.
         [[nodiscard]] std::error_code present(const DrawContext &context, const PresentationGrid &grid);
+        // A previously accepted stage-B output that a retained-picture stage C
+        // may present without a new stage B: same resolved extent and world.
+        [[nodiscard]] bool retainedPictureAvailable(int2 resolved_extent, GridWorldIdentity world) const noexcept;
+        // Selects that accepted output as stage C's source. Commits no lighting,
+        // history or exposure state; acceptance of a later B replaces it.
+        void selectRetainedPicture(int2 resolved_extent) noexcept;
         // Status-to-readback seam; the cleanup path exposes no numeric status.
         [[nodiscard]] std::error_code finalize(const PreRenderContext &context);
 

@@ -1209,6 +1209,34 @@ namespace pP {
         return {};
     }
 
+    bool PostProcessPass::retainedPictureAvailable(
+        const int2 resolved_extent, const GridWorldIdentity world) const noexcept {
+        if (not m_ready or not m_exposure_valid or m_exposure_slot >= kFrameRingSlots) {
+            return false;
+        }
+
+        const OutputSlot &slot = m_slots[m_exposure_slot];
+        return slot.m_output and
+               m_exposure_world == world and
+               slot.m_extent.x == resolved_extent.x and
+               slot.m_extent.y == resolved_extent.y;
+    }
+
+    void PostProcessPass::selectRetainedPicture(const int2 resolved_extent) noexcept {
+        if (not m_ready or not m_exposure_valid or m_exposure_slot >= kFrameRingSlots) {
+            return;
+        }
+
+        const OutputSlot &slot = m_slots[m_exposure_slot];
+        if (not slot.m_output or slot.m_extent.x != resolved_extent.x or slot.m_extent.y != resolved_extent.y) {
+            return;
+        }
+
+        m_selected = m_exposure_slot;
+        m_resolved_extent = resolved_extent;
+        m_frame_world = m_exposure_world;
+    }
+
     std::error_code PostProcessPass::finalize(const PreRenderContext &) {
         // The cleanup path owns no numeric status readback; Task 13's command
         // tail supplies the copy seam when a status cohort exists.

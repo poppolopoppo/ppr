@@ -415,6 +415,17 @@ export namespace pP {
         // service for these owners.
         [[nodiscard]] Expected<lighting::WorldLightingInputs> lightingInputs() const;
 
+        // Normal (non-logging) availability query for production branching:
+        // true when the admitted world supplies every publication owner world
+        // lighting consumes. A world that has not published its catalog yet
+        // keeps the documented flat fallback and prepares no lighting.
+        [[nodiscard]] bool lightingInputsAvailable() const noexcept {
+            return m_thermal_lut and
+                   m_world.m_terrain_cells and
+                   m_world.m_terrain_palette and
+                   m_world.m_source_materials;
+        }
+
         // ------------------------------------------------------------------
         // world-lighting owner
         // ------------------------------------------------------------------

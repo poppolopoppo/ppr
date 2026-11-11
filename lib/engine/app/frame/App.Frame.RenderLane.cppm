@@ -1,4 +1,5 @@
 module;
+#include "pP/Macros.h"
 
 export module engine.app:frame.render_lane;
 
@@ -131,6 +132,52 @@ export namespace pP {
     };
 
     // ------------------------------------------------------------------
+    // independently settled render stages (A scene, B resolve, C present)
+    // ------------------------------------------------------------------
+
+    // Fixed stage order of RenderFrameResult::m_stages. A logical frame is
+    // three ordered submissions on the one graphics queue: A publishes/uploads
+    // and draws the scene, B reconstructs and post-processes it, C presents.
+    inline constexpr u32 kRenderStageScene{0u};
+    inline constexpr u32 kRenderStageResolve{1u};
+    inline constexpr u32 kRenderStagePresent{2u};
+    inline constexpr u32 kRenderStageCount{3u};
+
+    // Value-only outcome of one ordered submission. No borrowed shader or
+    // device owner crosses this boundary: m_submission is the accepted fence
+    // value, m_settlement the submit fate, m_error the stage's own error.
+    // A stage that was never attempted carries kFenceValueNone / kRejected /
+    // success, so an attempted-but-unaccepted stage is distinguishable from a
+    // stage the frame never reached.
+    //
+    // Layout: u64 (8) + std::error_code (16) + FrameSettlement (1) = 32 bytes
+    // with natural alignment 8. The trailing 7 bytes are unavoidable padding
+    // after the enum; they keep the array stride at 32 without packing.
+    struct RenderStageResult {
+        FenceCompletionValue m_submission{kFenceValueNone};
+        std::error_code m_error{};
+        FrameSettlement m_settlement{FrameSettlement::kRejected};
+    };
+
+    static_assert(sizeof(RenderStageResult) == 32u and alignof(RenderStageResult) == 8u);
+    static_assert(PPR_OFFSETOF(RenderStageResult, m_submission) == 0u);
+    static_assert(PPR_OFFSETOF(RenderStageResult, m_error) == 8u);
+    static_assert(PPR_OFFSETOF(RenderStageResult, m_settlement) == 24u);
+    static_assert(std::is_standard_layout_v<RenderStageResult> and std::is_trivially_copyable_v<RenderStageResult>);
+
+    // The frame's aggregate accepted value: the latest accepted stage. A
+    // rejected or never-attempted later stage never erases an earlier
+    // acceptance, and no acceptance yields kFenceValueNone.
+    [[nodiscard]] inline FenceCompletionValue aggregateAcceptedSubmission(
+        const std::span<const RenderStageResult> stages) noexcept {
+        FenceCompletionValue accepted = kFenceValueNone;
+        for (const RenderStageResult &stage: stages) {
+            accepted = std::max(accepted, stage.m_submission);
+        }
+        return accepted;
+    }
+
+    // ------------------------------------------------------------------
     // frame result values and incorporated optical source receipts
     // ------------------------------------------------------------------
 
@@ -164,7 +211,16 @@ export namespace pP {
         std::optional<GridParticlePresentationIdentity> m_presented_particles{};
         u64 m_frame_id{0u};
         u64 m_surface_capture_sequence{}; // Nonzero only for an actual capture attempt.
+        // Latest ACCEPTED submission value across A/B/C, independent of a
+        // later stage's rejection and of presentation. A rejected resolve or
+        // present leaves this at the scene submission's value.
         FenceCompletionValue m_submit_value{kFenceValueNone};
+        // Ordered stage settlement. Every stage is present in the array;
+        // un-attempted stages keep the rejected/none/success defaults.
+        std::array<RenderStageResult, kRenderStageCount> m_stages{};
+        // Active-presentation elapsed value this attempt consumed (echo of the
+        // packet capture value, never a lane clock read).
+        TimeSpan m_active_elapsed{};
         std::error_code m_error{};
         std::error_code m_surface_capture_error{};
         bool m_dropped{false};

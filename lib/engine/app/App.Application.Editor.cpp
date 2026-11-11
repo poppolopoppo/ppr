@@ -72,27 +72,10 @@ namespace pP {
             result.m_grid_ack_revisions = stage.m_ack_revisions;
         }
 
-        // Temporary cleanup scene image signature: one linear HDR color target
-        // plus depth at 1x. Task 12 replaces the scene pass with Hable
-        // reconstruction and its padded camera/attachments.
-        [[nodiscard]] RenderPipelineSignature cleanupSceneSignature() noexcept {
-            RenderPipelineSignature signature{};
-            signature.m_color_formats[0] = rhi::Format::RGBA16Float;
-            signature.m_color_format_count = 1u;
-            signature.m_depth_stencil_format = rhi::Format::D32Float;
-            signature.m_sample_count = SampleCount::x1;
-            return signature;
-        }
-
-        // PostProcessPass::render targets exactly one RGBA16F attachment with
-        // no depth; presentation samples that same display-linear image.
-        [[nodiscard]] RenderPipelineSignature postOutputSignature() noexcept {
-            RenderPipelineSignature signature{};
-            signature.m_color_formats[0] = rhi::Format::RGBA16Float;
-            signature.m_color_format_count = 1u;
-            signature.m_sample_count = SampleCount::x1;
-            return signature;
-        }
+        // Stage B (resolve/post) renders into the post pass's own R-sized
+        // RGBA16F output; the Renderer derives that one-color, no-depth,
+        // single-sample signature from the attachment it is handed, and stage C
+        // samples the same display-linear image.
 
     } // namespace
 
@@ -263,6 +246,20 @@ namespace pP {
             PPR_RETAIN_ERROR_ON_FAIL(Editor, cleanup_err, m_post_process->shutdown());
             m_post_process.reset();
             PPR_RETURN_ERROR_ON_FAIL(Editor, post_err);
+        }
+
+        // Always-on temporal reconstruction owns the padded 4x scene target
+        // and the resolved history pair. Stage A draws into its scene texture,
+        // stage B reconstructs into its next history image.
+        m_reconstruction = std::make_unique<ReconstructionPass>();
+        const std::error_code reconstruction_err = m_reconstruction->initialize(*shader_service, getContentDir());
+        if (reconstruction_err) [[unlikely]] {
+            std::error_code cleanup_err{};
+            PPR_RETAIN_ERROR_ON_FAIL(Editor, cleanup_err, m_reconstruction->shutdown());
+            m_reconstruction.reset();
+            PPR_RETAIN_ERROR_ON_FAIL(Editor, cleanup_err, m_post_process->shutdown());
+            m_post_process.reset();
+            PPR_RETURN_ERROR_ON_FAIL(Editor, reconstruction_err);
         }
 
         m_ui_service = ui::createImGuiService();
@@ -453,58 +450,61 @@ namespace pP {
         m_pixel_scale = std::clamp(pixel_scale, 1u, 8u);
     }
 
-    std::error_code ApplicationEditor::ensureSceneImage_(rhi::IDevice &device, const int2 resolved_extent) {
-        PostSceneImage &image = m_scene_images[m_scene_image_selected];
-        if (image.m_color and
-            image.m_depth and
-            image.m_extent.x == resolved_extent.x and
-            image.m_extent.y == resolved_extent.y) {
+    std::error_code ApplicationEditor::ensureSceneDepth_(rhi::IDevice &device, const int2 raster_extent) {
+        // One completion-gated depth target per ring slot. Stage A writes it
+        // and stage B never reads it, but the slot a later frame rotates onto
+        // must not be rewritten before its writer's fence completes.
+        const u32 index = m_scene_depth_selected;
+        SceneDepthSlot &slot = m_scene_depths[index];
+        if (slot.m_depth and slot.m_extent.x == raster_extent.x and slot.m_extent.y == raster_extent.y) {
             return {};
         }
 
-        const u32 width = safe_narrowing(resolved_extent.x);
-        const u32 height = safe_narrowing(resolved_extent.y);
-
-        rhi::TextureDesc color{};
-        color.type = rhi::TextureType::Texture2D;
-        color.size = {.width = width, .height = height, .depth = 1u};
-        color.arrayLength = 1u;
-        color.mipCount = 1u;
-        color.format = rhi::Format::RGBA16Float;
-        color.memoryType = rhi::MemoryType::DeviceLocal;
-        color.usage = static_cast<rhi::TextureUsage>(
-            static_cast<u32>(rhi::TextureUsage::RenderTarget) | static_cast<u32>(rhi::TextureUsage::ShaderResource));
-        color.defaultState = rhi::ResourceState::ShaderResource;
-        color.label = "cleanup resolved scene color";
-
-        rhi::TextureDesc depth = color;
+        rhi::TextureDesc depth{};
+        depth.type = rhi::TextureType::Texture2DMS;
+        depth.size = {.width = safe_narrowing(raster_extent.x), .height = safe_narrowing(raster_extent.y), .depth = 1u};
+        depth.arrayLength = 1u;
+        depth.mipCount = 1u;
         depth.format = rhi::Format::D32Float;
+        depth.sampleCount = ReconstructionPass::kSampleCount;
+        depth.memoryType = rhi::MemoryType::DeviceLocal;
         depth.usage = rhi::TextureUsage::DepthStencil;
         depth.defaultState = rhi::ResourceState::DepthWrite;
-        depth.label = "cleanup resolved scene depth";
+        depth.label = "scene stage depth";
 
-        rhi::ComPtr<rhi::ITexture> color_texture;
-        rhi::ComPtr<rhi::ITextureView> color_view;
         rhi::ComPtr<rhi::ITexture> depth_texture;
         rhi::ComPtr<rhi::ITextureView> depth_view;
-        PPR_RETURN_ERROR_ON_FAIL(Editor, device.createTexture(color, nullptr, color_texture.writeRef()));
-        PPR_RETURN_ERROR_ON_FAIL(Editor, color_texture->getDefaultView(color_view.writeRef()));
         PPR_RETURN_ERROR_ON_FAIL(Editor, device.createTexture(depth, nullptr, depth_texture.writeRef()));
         PPR_RETURN_ERROR_ON_FAIL(Editor, depth_texture->getDefaultView(depth_view.writeRef()));
 
-        image.m_color = std::move(color_texture);
-        image.m_view = std::move(color_view);
-        image.m_depth = std::move(depth_texture);
-        image.m_depth_view = std::move(depth_view);
-        image.m_extent = resolved_extent;
+        slot.m_depth = std::move(depth_texture);
+        slot.m_view = std::move(depth_view);
+        slot.m_extent = raster_extent;
         return {};
     }
 
-    void ApplicationEditor::releaseSceneImages_() noexcept {
-        m_scene_images = {};
-        m_scene_image_cursor = 0u;
-        m_scene_image_selected = 0u;
-        m_scene_image_recorded = false;
+    std::error_code ApplicationEditor::resolveStageAttachments_(rhi::IDevice &device, const int2 raster_extent) {
+        rhi::ITexture &scene_color = m_reconstruction->sceneTexture();
+        if (m_scene_color_texture != &scene_color) {
+            PPR_RETURN_ERROR_ON_FAIL(Editor, scene_color.getDefaultView(m_scene_color_view.writeRef()));
+            m_scene_color_texture = &scene_color;
+        }
+
+        rhi::ITexture &post_output = m_post_process->outputTexture();
+        if (m_post_output_texture != &post_output) {
+            PPR_RETURN_ERROR_ON_FAIL(Editor, post_output.getDefaultView(m_post_output_view.writeRef()));
+            m_post_output_texture = &post_output;
+        }
+
+        return ensureSceneDepth_(device, raster_extent);
+    }
+
+    void ApplicationEditor::releaseStageTargets_() noexcept {
+        m_scene_depths = {};
+        m_scene_depth_cursor = 0u;
+        m_scene_depth_selected = 0u;
+        m_scene_color_view.setNull();
+        m_scene_color_texture = nullptr;
         m_post_output_view.setNull();
         m_post_output_texture = nullptr;
     }
@@ -748,6 +748,9 @@ namespace pP {
                             if (m_post_process) {
                                 PPR_RETAIN_ERROR_ON_FAIL(Editor, lane_err, m_post_process->notifyDeviceLost());
                             }
+                            if (m_reconstruction) {
+                                PPR_RETAIN_ERROR_ON_FAIL(Editor, lane_err, m_reconstruction->notifyDeviceLost());
+                            }
                             // Triangle device-loss notification runs on main
                             // below: its GpuCaches captured the initializing
                             // main thread and reject other threads.
@@ -760,6 +763,9 @@ namespace pP {
                         }
                         if (m_post_process) {
                             PPR_RETAIN_ERROR_ON_FAIL(Editor, lane_err, m_post_process->shutdown());
+                        }
+                        if (m_reconstruction) {
+                            PPR_RETAIN_ERROR_ON_FAIL(Editor, lane_err, m_reconstruction->shutdown());
                         }
                         // Triangle shutdown runs on main below, before the
                         // resets and the base shutdown's renderer/RHI release.
@@ -861,7 +867,8 @@ namespace pP {
             }
             m_grid_pass.reset();
             m_post_process.reset();
-            releaseSceneImages_();
+            m_reconstruction.reset();
+            releaseStageTargets_();
             m_triangle_pass.reset();
             lane_releases_done = true;
         }
@@ -881,6 +888,9 @@ namespace pP {
             }
             if (m_post_process) {
                 PPR_RETAIN_ERROR_ON_FAIL(Editor, first_err, m_post_process->notifyDeviceLost());
+            }
+            if (m_reconstruction) {
+                PPR_RETAIN_ERROR_ON_FAIL(Editor, first_err, m_reconstruction->notifyDeviceLost());
             }
             if (m_triangle_pass) {
                 PPR_RETAIN_ERROR_ON_FAIL(Editor, first_err, m_triangle_pass->notifyDeviceLost());
@@ -976,7 +986,12 @@ namespace pP {
             m_post_process.reset();
         }
 
-        releaseSceneImages_();
+        if (m_reconstruction and not lane_releases_done) {
+            PPR_RETAIN_ERROR_ON_FAIL(Editor, first_err, m_reconstruction->shutdown());
+            m_reconstruction.reset();
+        }
+
+        releaseStageTargets_();
 
         if (m_triangle_pass and not lane_releases_done) {
             PPR_RETAIN_ERROR_ON_FAIL(Editor, first_err, m_triangle_pass->shutdown());
@@ -1160,6 +1175,23 @@ namespace pP {
                 m_frame_packet->m_surface_generation = getRenderer().surfaceGenerationFor(
                     m_main_viewport->getWindow().m_handle);
             }
+
+            // One active-presentation clock at the application boundary. A
+            // minimized/suspended window has no render target, so its interval
+            // never accumulates; rejected attempts keep the value and simply
+            // do not commit a pass baseline. No pass reads a clock.
+            if (hasRenderTarget(*m_frame_packet)) {
+                m_active_elapsed += dt;
+            }
+            m_frame_packet->m_active_elapsed = m_active_elapsed;
+
+            // Screen-history reset identity: only a frame whose capture observed
+            // a camera cut advances it, so a rejected cut frame leaves the next
+            // frame on the same reset generation.
+            if (m_frame_packet->m_camera.m_has_camera_cut) {
+                ++m_camera_cut_generation;
+            }
+            m_frame_packet->m_render_camera_cut = m_camera_cut_generation;
         }
 
         // P2 pass-affinity: pass mutations run ON the owner lane (worker
@@ -1267,45 +1299,133 @@ namespace pP {
         m_diagnostics.m_last_submit_value = result.m_submit_value;
     }
 
-    void ApplicationEditor::stampSubmittedPasses_(const FenceCompletionValue previously_submitted) noexcept {
-        // Submission acceptance is independent of present: the Renderer
-        // commits the SUBMIT's value before presenting, so an accepted
-        // submit advances lastSubmitted even when the present below it
-        // fails. Stamp ALL participants off the advancement — never off
-        // the present verdict — so ring-slot bookkeeping agrees with the
-        // fence even on present failure. A rejected frame commits nothing;
-        // an ambiguous submit is owned by the renderer's quarantine and is
-        // neither discarded nor committed here.
-        Renderer &renderer = getRenderer();
-        const FenceCompletionValue accepted = renderer.lastSubmittedFenceValue();
-        const FrameSettlement fate = renderer.lastSubmitSettlement();
-        if (fate == FrameSettlement::kRejected) {
-            if (m_post_process) {
-                m_post_process->discardUnsubmitted();
-            }
-            m_scene_image_recorded = false;
-            return;
+    // ------------------------------------------------------------------
+    // stage settlement
+    // ------------------------------------------------------------------
+    void ApplicationEditor::discardUnsubmittedStages_() noexcept {
+        if (m_grid_pass) {
+            m_grid_pass->discardWorldLightingUnsubmitted();
         }
-        if (fate != FrameSettlement::kSubmitted or accepted == previously_submitted or accepted == kFenceValueNone) {
-            return;
-        }
-        if (m_scene_passes_encoded) {
-            m_grid_pass->notifyFrameSubmitted(accepted);
-            m_triangle_pass->notifyFrameSubmitted(accepted);
+        if (m_reconstruction) {
+            m_reconstruction->discardUnsubmitted();
         }
         if (m_post_process) {
-            m_post_process->notifySubmitted(accepted);
-            // Presentation runs in the same accepted submission in the cleanup
-            // path; this also pins the output for any later retained draw.
-            m_post_process->notifyPresented(accepted);
+            m_post_process->discardUnsubmitted();
         }
-        if (m_scene_image_recorded) {
-            PostSceneImage &image = m_scene_images[m_scene_image_selected];
-            image.m_last_use = std::max(image.m_last_use, accepted);
-            m_scene_image_recorded = false;
+    }
+
+    void ApplicationEditor::settleSceneStage_(
+        RenderFrameResult &out, const FenceCompletionValue before, const std::error_code error) noexcept {
+        RenderStageResult &stage = out.m_stages[kRenderStageScene];
+        stage.m_error = error;
+        stage.m_settlement = FrameSettlement::kRejected;
+
+        // Off-thread (affinity) rejection is invocation-local: the Renderer
+        // leaves owner-confined settlement untouched, so classify from the
+        // returned error and never consult the member fate.
+        if (error == std::make_error_code(std::errc::operation_not_permitted)) {
+            discardUnsubmittedStages_();
+            return;
         }
-        if (auto *fence_aware = dynamic_cast<IFenceAwareUiService *>(m_ui_service.get())) {
-            fence_aware->notifyFrameSubmitted(accepted);
+
+        Renderer &renderer = getRenderer();
+        const FenceCompletionValue after = renderer.lastSubmittedFenceValue();
+        const FrameSettlement fate = renderer.lastSubmitSettlement();
+        if (fate == FrameSettlement::kSubmitted and after != kFenceValueNone and after > before) {
+            // Confirmed acceptance: commit A's state exactly once. Publication
+            // consumers stamp the same value; the reconstruction pins the
+            // scene writer even if B is rejected.
+            stage.m_submission = after;
+            stage.m_settlement = FrameSettlement::kSubmitted;
+            m_grid_pass->notifyFrameSubmitted(after);
+            m_triangle_pass->notifyFrameSubmitted(after);
+            m_grid_pass->notifyWorldLightingSubmitted(after);
+            m_reconstruction->notifySceneSubmitted(after);
+            m_scene_depths[m_scene_depth_selected].m_last_use = std::max(
+                m_scene_depths[m_scene_depth_selected].m_last_use, after);
+            return;
+        }
+
+        if (fate == FrameSettlement::kSubmitFailed) {
+            // Possibly executed: admission stops and dependent GPU storage is
+            // quarantined. No retry, no in-place rollback, no discard.
+            stage.m_settlement = FrameSettlement::kSubmitFailed;
+            out.m_submit_possibly_executed = true;
+            return;
+        }
+
+        // Definite pre-submit rejection: nothing for this stage is committed.
+        discardUnsubmittedStages_();
+    }
+
+    void ApplicationEditor::settleResolveStage_(
+        RenderFrameResult &out, const FenceCompletionValue before, const std::error_code error) noexcept {
+        RenderStageResult &stage = out.m_stages[kRenderStageResolve];
+        stage.m_error = error;
+        stage.m_settlement = FrameSettlement::kRejected;
+
+        if (error == std::make_error_code(std::errc::operation_not_permitted)) {
+            m_reconstruction->discardUnsubmitted();
+            m_post_process->discardUnsubmitted();
+            return;
+        }
+
+        Renderer &renderer = getRenderer();
+        const FenceCompletionValue after = renderer.lastSubmittedFenceValue();
+        const FrameSettlement fate = renderer.lastSubmitSettlement();
+        if (fate == FrameSettlement::kSubmitted and after != kFenceValueNone and after > before) {
+            // Confirmed acceptance: the written history role/camera/phase and
+            // the exposure role/active-time baseline commit together exactly
+            // once. A's commits above remain untouched.
+            stage.m_submission = after;
+            stage.m_settlement = FrameSettlement::kSubmitted;
+            m_reconstruction->notifySubmitted(after);
+            m_post_process->notifySubmitted(after);
+            return;
+        }
+
+        if (fate == FrameSettlement::kSubmitFailed) {
+            stage.m_settlement = FrameSettlement::kSubmitFailed;
+            out.m_submit_possibly_executed = true;
+            return;
+        }
+
+        // Rejected B keeps A's commits and the previous screen-history role,
+        // camera, phase and exposure baseline. Only the pending resolution is
+        // discarded (a tentative history pair retires after A's scene readers).
+        m_reconstruction->discardUnsubmitted();
+        m_post_process->discardUnsubmitted();
+    }
+
+    void ApplicationEditor::settlePresentStage_(
+        RenderFrameResult &out, const FenceCompletionValue before, const std::error_code error) noexcept {
+        RenderStageResult &stage = out.m_stages[kRenderStagePresent];
+        stage.m_error = error;
+        stage.m_settlement = FrameSettlement::kRejected;
+
+        if (error == std::make_error_code(std::errc::operation_not_permitted)) {
+            return;
+        }
+
+        Renderer &renderer = getRenderer();
+        const FenceCompletionValue after = renderer.lastSubmittedFenceValue();
+        const FrameSettlement fate = renderer.lastSubmitSettlement();
+        if (fate == FrameSettlement::kSubmitted and after != kFenceValueNone and after > before) {
+            // Presentation evidence only: the picture's reader fence extends
+            // through this submission, and no lighting/history/exposure state
+            // is committed here.
+            stage.m_submission = after;
+            stage.m_settlement = FrameSettlement::kSubmitted;
+            m_post_process->notifyPresented(after);
+            if (auto *fence_aware = dynamic_cast<IFenceAwareUiService *>(m_ui_service.get())) {
+                fence_aware->notifyFrameSubmitted(after);
+            }
+            return;
+        }
+
+        if (fate == FrameSettlement::kSubmitFailed) {
+            stage.m_settlement = FrameSettlement::kSubmitFailed;
+            out.m_submit_possibly_executed = true;
         }
     }
 
@@ -1567,7 +1687,7 @@ namespace pP {
         out_result.m_presented_particles.reset();
         out_result.m_particle_census.reset();
         out_result.m_surface_capture_sequence = 0u;
-        m_scene_passes_encoded = false;
+        out_result.m_stages = {};
 
         const ITimerClock *const clock = request.m_observe_grid ? &observationClock() : nullptr;
         RenderCpuObservations cpu{};
@@ -1597,46 +1717,38 @@ namespace pP {
         out_result.m_frame_id = packet.m_frame_id;
         out_result.m_reservation_epoch = request.m_reservation_epoch;
         out_result.m_reservation_frame_id = request.m_reservation_frame_id;
+        out_result.m_active_elapsed = packet.m_active_elapsed;
         stampGridEcho(grid_stage, out_result);
 
-        // The independent post owner is lane-owned: a request without a live
-        // pass (initialization failed or teardown raced) fails closed.
-        if (not m_post_process) [[unlikely]] {
+        // The independent resolve and post owners are lane-owned: a request
+        // without a live pass (initialization failed or teardown raced) fails
+        // closed.
+        if (not m_post_process or not m_reconstruction) [[unlikely]] {
             PPR_RETURN_ERROR_ON_FAIL(Editor, make_error_code(std::errc::not_connected));
         }
 
-        // Cell uploads write a mapped atlas shared with earlier GPU frames.
-        // Fence and publish pending visible cells before opening the
-        // surface render pass. On the worker this whole function runs on
-        // the fixed lane (atlas preparation is render-owned); inline it
-        // runs on main. Either way no live Window/camera/input/service or
-        // live ImGui state is touched — only the owned packet, the
-        // detached UI data, and lane-confined GPU state.
-        // The lane-confined rhi service captured at startup is the only
-        // legal source on this (possibly worker) thread: never read the
-        // service store here — that hidden-singleton lookup would race the
-        // main thread's teardown erase. Fail closed when it is invalid.
+        // The lane-confined rhi service captured at startup is the only legal
+        // source on this (possibly worker) thread: never read the service store
+        // here — that hidden-singleton lookup would race the main thread's
+        // teardown erase. Fail closed when it is invalid.
         const safe_ptr<IRhiService> rhi_service = m_lane_rhi_service;
         if (not rhi_service.isValid()) [[unlikely]] {
             return make_error_code(std::errc::not_connected);
         }
 
-        // Non-rendering outcome for zero-size/minimized surfaces:
-        // skip uploads and present, report success. This is also the
-        // empty-packet fail-closed: a packet with no render target performs
-        // zero backend work. No stage application (no render happened), so
-        // no consumption ack: re-staged next buildable frame.
+        // Non-rendering outcome for zero-size/minimized surfaces: skip uploads
+        // and submission, report success. This is also the empty-packet
+        // fail-closed: a packet with no render target performs zero backend
+        // work. No stage is attempted, so no consumption ack: the payload is
+        // re-staged next buildable frame.
         if (not hasRenderTarget(packet)) {
             return default_value_v;
         }
 
         // Generational rejection before ANY backend work (uploads fence the
-        // queue, so they must not run for a stale packet): a packet built
-        // for an older surface shape retires here as an explicit
-        // non-rendering outcome. Presentation-only state is dropped; the
-        // world edits inside the staged payload stay in the driver's
-        // dirty set (no consumption ack rides a dropped frame), so the
-        // next buildable frame re-stages them.
+        // queue, so they must not run for a stale packet): a packet built for
+        // an older surface shape retires here as an explicit non-rendering
+        // outcome.
         const SurfaceIdentity packet_surface{
             .m_handle = packet.m_surface_identity,
             .m_generation = packet.m_surface_generation,
@@ -1657,25 +1769,25 @@ namespace pP {
         const auto presentation = makePresentationGrid(packet.m_framebuffer_size, request.m_pixel_scale);
         PPR_RETURN_ERROR_ON_FAIL(Editor, presentation ? std::error_code{} : presentation.error());
         const PresentationGrid grid = *presentation;
-        const CameraSnapshot &scene_camera = packet.m_camera;
 
         // A numerical buffer can become the solver's next candidate after
         // publication; stale draws are rejected below.
-        const bool particles_current = m_grid_pass->gpuParticleFrameCurrent(grid_stage.m_gpu_particles);
-
-        if (not particles_current) {
+        if (not m_grid_pass->gpuParticleFrameCurrent(grid_stage.m_gpu_particles)) {
             out_result.m_dropped = true;
             return {};
         }
 
+        // Completed numeric-status inspection and bounded retirements ride the
+        // ordinary frame boundary. A completed numeric failure stops further
+        // admission with its category; it is never reported as success.
+        PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->collectWorldLightingCompleted(renderer.completedFenceValue()));
+        PPR_RETURN_ERROR_ON_FAIL(Editor, m_reconstruction->collectCompleted(renderer.completedFenceValue()));
         std::ignore = m_post_process->collectCompleted(renderer.completedFenceValue());
 
-        // P2 pass-affinity: ALL pass CPU-state mutations run here, on the
-        // pass's owner lane (worker or main-inline), applied from the
-        // owned payload captured in update(). The camera snapshot +
-        // delta time come from the packet (immutable), the tile list and
-        // upload cells ride the per-frame staged payload built by the
-        // client — nothing live is read by either.
+        // ------------------------------------------------------------------
+        // frame preparation (before stage A arms its owners)
+        // ------------------------------------------------------------------
+        rhi::IDevice &device = rhi_service->getDevice();
         {
             const hal::ProfileScope scope_frame_prepare{"PPR.Frame.PrepareRender"};
             const CpuObservationScope cpu_staging{clock, cpu.m_staging};
@@ -1690,8 +1802,8 @@ namespace pP {
             }
 
             // Publish this request's preflighted lease before admitting its
-            // content. An empty replacement must supersede an older nonempty
-            // view without requiring an intervening frame.
+            // content. An empty replacement supersedes an older nonempty view
+            // without requiring an intervening frame.
             if (grid_stage.m_gpu_particles) {
                 PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->applyGpuParticleView(*grid_stage.m_gpu_particles));
             }
@@ -1699,84 +1811,102 @@ namespace pP {
             {
                 const hal::ProfileScope scope_uploads{"App.Editor.PrepareUploads"};
                 const CpuObservationScope cpu_uploads{clock, cpu.m_uploads};
-                const auto published = m_grid_pass->tryPrepareCellUploads(
-                    rhi_service->getDevice(), renderer.completedFenceValue());
+                const auto published = m_grid_pass->tryPrepareCellUploads(device, renderer.completedFenceValue());
                 PPR_RETURN_ERROR_ON_FAIL(Editor, published);
                 out_result.m_grid_stage_applied = out_result.m_grid_staging_applied and *published;
 
-                // Resident particles and their clipping terrain form one cohort.
-                // A partial terrain upload cannot draw the new numerical view.
+                // Resident particles and their clipping terrain form one
+                // cohort. A partial terrain upload cannot draw the new
+                // numerical view.
                 if (grid_stage.m_gpu_particles and not *published) {
                     return {};
                 }
             }
 
-            // Stage A/B selection happens before the caller evaluates the
-            // selected output; no exposure state is committed here.
+            // Stage A/B inputs are selected here, before any attachment is
+            // evaluated: reconstruction proposes the padded/jittered scene
+            // camera and the next screen-history write; post selects its own
+            // resolved output cohort (so outputTexture() is valid below).
             active_identity = m_grid_pass->activeWorldIdentity();
             PPR_RETURN_ERROR_ON_FAIL(
-                Editor,
-                m_post_process->beginFrame(
-                    rhi_service->getDevice(), grid.m_resolved, active_identity, renderer.completedFenceValue()));
+                Editor, m_reconstruction->beginFrame(
+                            device, packet.m_camera, grid, active_identity, packet.m_render_camera_cut,
+                            renderer.completedFenceValue()));
 
-            std::array<FenceCompletionValue, kFrameRingSlots> scene_values{};
+            const std::error_code post_begin = m_post_process->beginFrame(
+                device, grid.m_resolved, active_identity, renderer.completedFenceValue());
+            if (post_begin) {
+                m_reconstruction->discardUnsubmitted();
+                if (post_begin == std::make_error_code(std::errc::device_or_resource_busy)) {
+                    out_result.m_dropped = true;
+                    return {};
+                }
+                return post_begin;
+            }
+
+            // Depth targets are per ring slot: the slot this frame rotates onto
+            // must not be rewritten before its previous writer completed.
+            std::array<FenceCompletionValue, kFrameRingSlots> depth_values{};
             for (u32 index = 0u; index < kFrameRingSlots; ++index) {
-                scene_values[index] = m_scene_images[index].m_last_use;
+                depth_values[index] = m_scene_depths[index].m_last_use;
             }
 
-            const u32 scene_selected = selectRingSlot(
-                renderer.completedFenceValue(), scene_values, m_scene_image_cursor);
-            if (not slotFenceComplete(renderer.completedFenceValue(), scene_values[scene_selected])) {
-                return make_error_code(std::errc::device_or_resource_busy);
+            const u32 depth_slot = selectRingSlot(renderer.completedFenceValue(), depth_values, m_scene_depth_cursor);
+            if (not slotFenceComplete(renderer.completedFenceValue(), depth_values[depth_slot])) {
+                discardUnsubmittedStages_();
+                out_result.m_dropped = true;
+                return {};
             }
 
-            m_scene_image_cursor = scene_selected;
-            m_scene_image_selected = scene_selected;
-            PPR_RETURN_ERROR_ON_FAIL(Editor, ensureSceneImage_(rhi_service->getDevice(), grid.m_resolved));
+            m_scene_depth_cursor = depth_slot;
+            m_scene_depth_selected = depth_slot;
 
-            // The active clock excludes suspension because no frame reaches
-            // this point while the surface is minimized.
-            m_active_elapsed += packet.m_delta_time;
+            // The reconstruction owner supplies the padded/jittered camera to
+            // the scene passes; post-processing consumes only the resolved
+            // content rectangle.
+            const CameraSnapshot &scene_camera = m_reconstruction->sceneCamera();
+            const std::error_code triangle_update = m_triangle_pass->update(packet.m_delta_time, scene_camera);
+            if (triangle_update) {
+                discardUnsubmittedStages_();
+                return triangle_update;
+            }
 
-            PPR_RETURN_ERROR_ON_FAIL(Editor, m_triangle_pass->update(packet.m_delta_time, scene_camera));
-            PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->update(packet.m_delta_time, scene_camera, false));
+            // Sample-rate categorical shading on the real 4x MSAA target. No
+            // alternate AA path exists; an unsupported device fails here.
+            const std::error_code grid_update = m_grid_pass->update(packet.m_delta_time, scene_camera, true);
+            if (grid_update) {
+                discardUnsubmittedStages_();
+                return grid_update;
+            }
+
+            const std::error_code attachments = resolveStageAttachments_(device, grid.m_raster);
+            if (attachments) {
+                discardUnsubmittedStages_();
+                return attachments;
+            }
         }
+        const CameraSnapshot scene_camera = m_reconstruction->sceneCamera();
         out_result.m_grid_staged_tiles = m_grid_pass->stagedTileCount();
         out_result.m_grid_cached_tiles = m_grid_pass->cachedTileCount();
 
-        // Detached UI submission, bound synchronously on this lane: the
-        // callback captures the detached data by view for the duration of
-        // the encode below (never stored, never transported further).
-        const string_literal ui_description{std::in_place, "ui.detached"};
-        // Named local closure: DrawSubmission stores a function_ref to it, so
-        // a temporary closure would dangle the moment this full-expression
+        // ------------------------------------------------------------------
+        // stage A: publication, lighting, scene and gas
+        // ------------------------------------------------------------------
+        const rhi::Viewport scene_viewport = rhi::Viewport::fromSize(
+            static_cast<float>(grid.m_raster.x), static_cast<float>(grid.m_raster.y));
+        const rhi::ScissorRect scene_scissor = rhi::ScissorRect::fromSize(
+            safe_narrowing(grid.m_raster.x), safe_narrowing(grid.m_raster.y));
+
+        // Named local closures: DrawSubmission stores a function_ref to them,
+        // so a temporary closure would dangle the moment the full-expression
         // ends (ASan stack-use-after-scope at encode time).
-        const auto ui_encode = [&](const DrawContext &draw_context) -> std::error_code {
-            const CpuObservationScope cpu_ui{clock, cpu.m_ui_draw};
-            PPR_ASSERT(m_ui_service != nullptr);
-            return m_ui_service->renderDetachedUiFrame(ui, draw_context);
-        };
-        const DrawSubmission ui_draws{
-            ui_description,
-            ui_encode,
-        };
-
-        const auto scene_viewport = rhi::Viewport::fromSize(
-            static_cast<float>(grid.m_resolved.x), static_cast<float>(grid.m_resolved.y));
-        const auto scene_scissor = rhi::ScissorRect::fromSize(
-            safe_narrowing(grid.m_resolved.x), safe_narrowing(grid.m_resolved.y));
-
-        // Stage A content: the same passes draw into the editor-owned
-        // single-sample R-sized scene image. The per-part CPU observation
-        // scopes stay attached to the work they time.
-        const auto draw_scene_contents = [&](const DrawContext &context) -> std::error_code {
+        const auto scene_content_draw = [&](const DrawContext &context) -> std::error_code {
             {
                 const CpuObservationScope cpu_prepare{clock, cpu.m_triangle_draw};
                 PPR_RETURN_ERROR_ON_FAIL(
                     Editor, m_triangle_pass->prepare(context.m_device, context.m_render_pipeline_key));
             }
 
-            m_scene_passes_encoded = true;
             {
                 const CpuObservationScope cpu_draw{clock, cpu.m_grid_draw};
                 PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->renderBackground(context));
@@ -1788,326 +1918,269 @@ namespace pP {
             const CpuObservationScope cpu_draw{clock, cpu.m_triangle_draw};
             return m_triangle_pass->render(context);
         };
+        DrawSubmission scene_draws{string_literal{std::in_place, "scene.content"}, scene_content_draw};
+        scene_draws.m_viewport = scene_viewport;
+        scene_draws.m_scissor = scene_scissor;
 
-        const bool capture = request.m_capture_final_frame and
-                             request.m_surface_capture_sequence > m_frame_capture_attempted_sequence;
-
-        const auto prepare_background = [&](const PreRenderContext &context, const CameraSnapshot &camera,
-                                            const rhi::Viewport viewport,
-                                            const rhi::ScissorRect scissor) -> std::error_code {
-            return m_grid_pass->prepareBackground(context, camera, viewport, scissor);
-        };
-
-        // One submission contains stage A (scene into the temporary scene
-        // image), stage B (metering/exposure/bloom plus AgX into the pass-owned
-        // resolved output) and stage C (fixed-P nearest presentation + native
-        // UI). The explicit three-submission split arrives with Task 12/14.
+        bool lighting_armed{};
         const auto scene_prepare = [&](const PreRenderContext &context) -> std::error_code {
-            {
-                const CpuObservationScope cpu_prepare{clock, cpu.m_grid_prepare};
+            const CpuObservationScope cpu_prepare{clock, cpu.m_grid_prepare};
+            PPR_RETURN_ERROR_ON_FAIL(
+                Editor, m_grid_pass->prepareBackground(context, scene_camera, scene_viewport, scene_scissor));
+            PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->prepareGpuVisibility(context));
+            PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->prepareGpuParticles(context));
+
+            // World lighting is armed only when the admitted world supplies its
+            // publication owners. A world with no published catalog (the
+            // loading presentation before activation, or an unsupported world)
+            // keeps the documented `m_has_resolved_cells == 0` flat fallback
+            // and commits no lighting phase; the first frame whose world
+            // publishes its catalog prepares and commits A's lighting state.
+            if (m_grid_pass->lightingInputsAvailable()) {
                 PPR_RETURN_ERROR_ON_FAIL(
-                    Editor, prepare_background(context, scene_camera, scene_viewport, scene_scissor));
-                PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->prepareGpuVisibility(context));
-                PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->prepareGpuParticles(context));
+                    Editor, m_grid_pass->prepareWorldLighting(
+                                context, WorldLightingFrame{.m_active_elapsed = packet.m_active_elapsed}));
+                lighting_armed = true;
             }
 
-            const rhi::SubresourceRange range{.layer = 0u, .layerCount = 1u, .mip = 0u, .mipCount = 1u};
-            PostSceneImage &image = m_scene_images[m_scene_image_selected];
-            context.m_encoder.setTextureState(image.m_color, range, rhi::ResourceState::RenderTarget);
-            context.m_encoder.setTextureState(image.m_depth, range, rhi::ResourceState::DepthWrite);
-
-            const std::array<rhi::RenderPassColorAttachment, 1> scene_colors{
-                rhi::RenderPassColorAttachment{.view = image.m_view, .clearValue = {0.1f, 0.1f, 0.2f, 1.0f}}};
-            rhi::RenderPassDepthStencilAttachment scene_depth{};
-            scene_depth.view = image.m_depth_view;
-            scene_depth.depthClearValue = 1.0f;
-            rhi::RenderPassDesc scene_pass_desc{};
-            scene_pass_desc.colorAttachments = scene_colors.data();
-            scene_pass_desc.colorAttachmentCount = 1u;
-            scene_pass_desc.depthStencilAttachment = &scene_depth;
-            rhi::IRenderPassEncoder *const scene_pass = context.m_encoder.beginRenderPass(scene_pass_desc);
-            PPR_RETURN_ERROR_ON_FAIL(
-                Editor, scene_pass != nullptr ? std::error_code{} : std::make_error_code(std::errc::io_error));
-
-            const RenderPipelineKey scene_key(cleanupSceneSignature());
-            {
-                PPR_DEFER {
-                    scene_pass->end();
-                };
-
-                FenceWaitHook scene_wait{};
-                if (context.m_wait_for_fence) {
-                    scene_wait = FenceWaitHook{[&context](const FenceCompletionValue value) -> std::error_code {
-                        return context.m_wait_for_fence(value);
-                    }};
-                }
-                const DrawContext scene_context{
-                    .m_device = context.m_device,
-                    .m_pass = *scene_pass,
-                    .m_render_pipeline_key = scene_key,
-                    .m_viewport = scene_viewport,
-                    .m_scissor = scene_scissor,
-                    .m_target_extent = grid.m_resolved,
-                    .m_completed_fence_value = context.m_completed_fence_value,
-                    .m_wait_for_fence = std::move(scene_wait),
-                };
-                scene_pass->setRenderState({
-                    .viewports = {scene_context.m_viewport},
-                    .viewportCount = 1u,
-                    .scissorRects = {scene_context.m_scissor},
-                    .scissorRectCount = 1u,
-                    .vertexBuffers = {},
-                    .indexBuffer = {},
-                });
-                PPR_RETURN_ERROR_ON_FAIL(Editor, draw_scene_contents(scene_context));
-            }
-
-            context.m_encoder.setTextureState(image.m_color, range, rhi::ResourceState::ShaderResource);
-            m_scene_image_recorded = true;
-
-            const ResolvedHdrView resolved{
-                .m_view = image.m_view,
-                .m_world = active_identity,
-                .m_backing = grid.m_resolved,
-                .m_valid = grid.m_resolved,
-            };
-            PPR_RETURN_ERROR_ON_FAIL(
-                Editor, m_post_process->prepare(context, resolved, request.m_post, m_active_elapsed));
-
-            // Stage B render target: the pass's own resolved-size output.
-            rhi::ITexture &output_texture = m_post_process->outputTexture();
-            if (m_post_output_texture != &output_texture) {
-                PPR_RETURN_ERROR_ON_FAIL(Editor, output_texture.getDefaultView(m_post_output_view.writeRef()));
-                m_post_output_texture = &output_texture;
-            }
-
-            context.m_encoder.setTextureState(&output_texture, range, rhi::ResourceState::RenderTarget);
-            const std::array<rhi::RenderPassColorAttachment, 1> output_colors{
-                rhi::RenderPassColorAttachment{.view = m_post_output_view, .clearValue = {0.0f, 0.0f, 0.0f, 1.0f}}};
-            rhi::RenderPassDesc output_pass_desc{};
-            output_pass_desc.colorAttachments = output_colors.data();
-            output_pass_desc.colorAttachmentCount = 1u;
-            rhi::IRenderPassEncoder *const output_pass = context.m_encoder.beginRenderPass(output_pass_desc);
-            PPR_RETURN_ERROR_ON_FAIL(
-                Editor, output_pass != nullptr ? std::error_code{} : std::make_error_code(std::errc::io_error));
-
-            const RenderPipelineKey output_key(postOutputSignature());
-            {
-                PPR_DEFER {
-                    output_pass->end();
-                };
-
-                FenceWaitHook output_wait{};
-                if (context.m_wait_for_fence) {
-                    output_wait = FenceWaitHook{[&context](const FenceCompletionValue value) -> std::error_code {
-                        return context.m_wait_for_fence(value);
-                    }};
-                }
-                const DrawContext output_context{
-                    .m_device = context.m_device,
-                    .m_pass = *output_pass,
-                    .m_render_pipeline_key = output_key,
-                    .m_viewport = scene_viewport,
-                    .m_scissor = scene_scissor,
-                    .m_target_extent = grid.m_resolved,
-                    .m_completed_fence_value = context.m_completed_fence_value,
-                    .m_wait_for_fence = std::move(output_wait),
-                };
-                output_pass->setRenderState({
-                    .viewports = {output_context.m_viewport},
-                    .viewportCount = 1u,
-                    .scissorRects = {output_context.m_scissor},
-                    .scissorRectCount = 1u,
-                    .vertexBuffers = {},
-                    .indexBuffer = {},
-                });
-                PPR_RETURN_ERROR_ON_FAIL(Editor, m_post_process->render(output_context));
-            }
-
-            context.m_encoder.setTextureState(&output_texture, range, rhi::ResourceState::ShaderResource);
-            return m_post_process->finalize(context);
+            return {};
         };
 
-        // Stage C: fixed-P nearest enlargement/crop of the display-linear
-        // output. Native UI remains the final surface pass.
-        const auto present_draw = [&](const DrawContext &context) -> std::error_code {
-            return m_post_process->present(context, grid);
-        };
-        DrawSubmission scene_submission{"post.present", present_draw};
-
-        const std::initializer_list<SurfaceRenderPass> surface_passes{
-            {
-                .m_additional_colors = {},
-                // Presentation samples the resolved output as a fullscreen
-                // blit, so the surface pass owns no depth attachment.
-                .m_depth_policy = ESurfaceDepthPolicy::none,
-                .m_draws = {scene_submission},
-                .m_prepare = PreRenderCallback{scene_prepare},
-            },
-            {
-                .m_surface_color =
-                    ColorAttachmentOps{
-                        .m_load_op = rhi::LoadOp::Load,
-                    },
-                .m_additional_colors = {},
-                // Detached UI draws, constructed synchronously on this lane
-                // (inline or worker): the encode reads ONLY the detached
-                // data, never the live ImGui frontend.
-                .m_draws = {ui_draws},
-            },
+        // Submission-local numeric status copies observe this attempt's draws;
+        // the tail runs after the render pass ends and before submit.
+        const auto scene_finalize = [&](const PreRenderContext &context) -> std::error_code {
+            return lighting_armed ? m_grid_pass->finalizeWorldLighting(context) : std::error_code{};
         };
 
-        // Submission acceptance is independent of present: capture the
-        // fence frontier first so every participant is stamped off an
-        // accepted SUBMIT even when the present below it fails (G1-5).
-        // An obsolete packet (resized since capture without a same-frame
-        // reconfigure) or a capacity-busy ledger retires here as an
-        // explicit non-rendering outcome — dropped, never fatal: the next
-        // frame recaptures a fresh packet against the current surface.
-        // Quarantine/terminal failures keep their distinct codes and
-        // propagate to teardown/recovery — never suppressed as dropped
-        // frames.
-        //
-        // The window travels as a snapshot (owned copies only): the lane
-        // never touches the live Window. The title borrows packet storage,
-        // which outlives the call through the lane request.
-        const SurfaceWindowSnapshot window_snapshot{
-            .m_handle = packet.m_surface_identity,
-            .m_native = packet.m_surface_native,
-            .m_display = packet.m_surface_display,
-            .m_framebuffer_size = packet.m_framebuffer_size,
-            .m_title = packet.m_window_title,
-        };
-        const FenceCompletionValue previously_submitted = renderer.lastSubmittedFenceValue();
-        std::error_code frame_err{};
-        // Exception-safe submission-fate boundary (allocation-free, noexcept):
-        // an accepted SUBMIT followed by a throwing present diagnostic must
-        // still stamp participants + classify the fate exactly once. The
-        // guard captures this frame's before value and finalizes on every
-        // exit (normal + unwind) against the after value. The normal path
-        // invokes this same body before capture proof, never a second stamp.
-        struct SubmitFateFinalizer {
-            ApplicationEditor *m_self;
-            Renderer *m_renderer;
-            RenderFrameResult *m_out;
-            FenceCompletionValue m_before;
-            const std::error_code *m_frame_err;
-            bool m_done{};
+        const std::array<rhi::RenderPassColorAttachment, 1> scene_colors{
+            rhi::RenderPassColorAttachment{.view = m_scene_color_view, .clearValue = {0.1f, 0.1f, 0.2f, 1.0f}}};
+        rhi::RenderPassDepthStencilAttachment scene_depth{};
+        scene_depth.view = m_scene_depths[m_scene_depth_selected].m_view;
+        scene_depth.depthClearValue = 1.0f;
+        rhi::RenderPassDesc scene_pass_desc{};
+        scene_pass_desc.colorAttachments = scene_colors.data();
+        scene_pass_desc.colorAttachmentCount = 1u;
+        scene_pass_desc.depthStencilAttachment = &scene_depth;
 
-            void finalize() noexcept {
-                if (m_done) {
-                    return;
-                }
-
-                m_done = true;
-                m_self->stampSubmittedPasses_(m_before);
-                // Off-thread (affinity) rejection is invocation-local:
-                // the Renderer leaves owner-confined settlement untouched
-                // on that path, so classify from the returned error and
-                // never consult the member (which still holds the
-                // previous owner-thread fate). Every other path classifies
-                // THIS invocation only (F1 stale fate): an accepted SUBMIT
-                // must advance the fence strictly past this frame's before
-                // value. A rejection reports definitely-unsubmitted with
-                // this frame's identity — never the previous frame's value
-                // — and only a submit failure quarantines (possibly
-                // executed, no value).
-                if (m_frame_err != nullptr and
-                    *m_frame_err == std::make_error_code(std::errc::operation_not_permitted)) {
-                    m_out->m_submit_value = kFenceValueNone;
-                    m_out->m_submit_possibly_executed = false;
-                    return;
-                }
-                const FenceCompletionValue after = m_renderer->lastSubmittedFenceValue();
-                const FrameSettlement fate = m_renderer->lastSubmitSettlement();
-                if (fate == FrameSettlement::kSubmitted and after != kFenceValueNone and after > m_before) {
-                    m_out->m_submit_value = after;
-                    m_out->m_submit_possibly_executed = false;
-                } else if (fate == FrameSettlement::kSubmitFailed) {
-                    m_out->m_submit_value = kFenceValueNone;
-                    m_out->m_submit_possibly_executed = true;
-                } else {
-                    m_out->m_submit_value = kFenceValueNone;
-                    m_out->m_submit_possibly_executed = false;
-                }
-            }
-
-            ~SubmitFateFinalizer() noexcept {
-                if (not m_done) {
-                    finalize();
-                }
-            }
-        };
-        SubmitFateFinalizer submit_fate_guard{this, &renderer, &out_result, previously_submitted, &frame_err};
-
-        bool capture_image_acquired{};
-        const u64 previous_capture_sequence = m_frame_capture_attempted_sequence;
-        if (capture) {
-            m_frame_capture_attempted_sequence = request.m_surface_capture_sequence;
-            out_result.m_surface_capture_attempted = true;
-            out_result.m_surface_capture_sequence = request.m_surface_capture_sequence;
-        }
-
+        std::error_code frame_error{};
         {
             const hal::ProfileScope scope_frame_execute{"PPR.Frame.Execute"};
             const CpuObservationScope cpu_surface{clock, cpu.m_surface};
-            frame_err = renderer.renderAndPresent(
-                window_snapshot, {surface_passes.begin(), surface_passes.size()}, packet_surface,
-                &out_result.m_presented, capture ? &out_result.m_surface_pixels : nullptr,
-                capture ? &capture_image_acquired : nullptr);
+            if (m_test_stage_failure == kRenderStageScene) {
+                renderer.setInjectedSubmitFailure(true);
+            }
+            const FenceCompletionValue before = renderer.lastSubmittedFenceValue();
+            try {
+                frame_error = renderer.render(
+                    string_literal{std::in_place, "scene.stage"}, scene_pass_desc, {scene_draws},
+                    PreRenderCallback{scene_prepare}, PostRenderCallback{scene_finalize});
+            } catch (const std::bad_alloc &) {
+                throw; // The run boundary drains accepted work before fatal propagation.
+            } catch (...) {
+                frame_error = std::make_error_code(std::errc::state_not_recoverable);
+            }
+            settleSceneStage_(out_result, before, frame_error);
+        }
+        if (m_test_stage_failure == kRenderStageScene) {
+            m_test_stage_failure.reset();
         }
 
-        // The same exactly-once fate body now stamps the accepted slot before
-        // its capture-only readback is mapped. Early exits still use the guard.
-        submit_fate_guard.finalize();
+        // ------------------------------------------------------------------
+        // stage B: Hable resolve and independent post-processing
+        // ------------------------------------------------------------------
+        if (out_result.m_stages[kRenderStageScene].m_settlement == FrameSettlement::kSubmitted) {
+            const auto resolve_prepare = [&](const PreRenderContext &context) -> std::error_code {
+                // The reconstruction prepare selects and encodes the next
+                // history image; only then is its resolved view evaluated for
+                // the post pass in the same submission.
+                PPR_RETURN_ERROR_ON_FAIL(Editor, m_reconstruction->prepare(context));
+                return m_post_process->prepare(
+                    context, m_reconstruction->resolved(), request.m_post, packet.m_active_elapsed);
+            };
+            const auto resolve_finalize = [&](const PreRenderContext &context) -> std::error_code {
+                std::error_code first{};
+                PPR_RETAIN_ERROR_ON_FAIL(Editor, first, m_reconstruction->finalize(context));
+                PPR_RETAIN_ERROR_ON_FAIL(Editor, first, m_post_process->finalize(context));
+                return first;
+            };
+            const auto resolved_draw = [&](const DrawContext &context) -> std::error_code {
+                return m_post_process->render(context);
+            };
+            DrawSubmission resolve_draws{string_literal{std::in_place, "post.agx"}, resolved_draw};
 
-        if (capture) {
-            const bool pre_acquire_transient = not capture_image_acquired and
-                                               not out_result.m_presented and
-                                               not out_result.m_surface_pixels and
-                                               renderer.lastSubmitSettlement() == FrameSettlement::kRejected and
-                                               renderer.lastSubmittedFenceValue() == previously_submitted and
-                                               (not frame_err or
-                                                   frame_err == std::errc::device_or_resource_busy or
-                                                   frame_err == std::errc::resource_unavailable_try_again);
-            if (pre_acquire_transient) {
-                // The Renderer explicitly proves no acquisition/copy and no
-                // accepted/unknown submit. Keep the same one-shot request armed.
-                m_frame_capture_attempted_sequence = previous_capture_sequence;
-                out_result.m_surface_capture_attempted = false;
-                out_result.m_surface_capture_sequence = 0u;
-            } else {
-                out_result.m_surface_capture_error = frame_err;
-                if (not frame_err and (not out_result.m_presented or not out_result.m_surface_pixels)) {
-                    out_result.m_surface_capture_error = std::make_error_code(std::errc::io_error);
+            rhi::ITexture &output_texture = m_post_process->outputTexture();
+            const CpuObservationScope cpu_surface{clock, cpu.m_surface};
+            if (m_test_stage_failure == kRenderStageResolve) {
+                renderer.setInjectedSubmitFailure(true);
+            }
+            const FenceCompletionValue before = renderer.lastSubmittedFenceValue();
+            try {
+                frame_error = renderer.renderToTexture(
+                    output_texture, {resolve_draws},
+                    ColorAttachmentOps{.m_clear_color = float4{0.0f, 0.0f, 0.0f, 1.0f}},
+                    PreRenderCallback{resolve_prepare}, PostRenderCallback{resolve_finalize});
+            } catch (const std::bad_alloc &) {
+                throw; // The run boundary drains accepted work before fatal propagation.
+            } catch (...) {
+                frame_error = std::make_error_code(std::errc::state_not_recoverable);
+            }
+            settleResolveStage_(out_result, before, frame_error);
+            if (m_test_stage_failure == kRenderStageResolve) {
+                m_test_stage_failure.reset();
+            }
+        }
+
+        // ------------------------------------------------------------------
+        // stage C: fixed-P presentation and native UI
+        // ------------------------------------------------------------------
+        // Presentation of a new picture requires an accepted stage B. When B
+        // was rejected, a retained picture (the last accepted output for this
+        // world and extent) may still be presented: that extends its reader
+        // fence and commits no lighting/history/exposure state.
+        bool present_picture = out_result.m_stages[kRenderStageResolve].m_settlement == FrameSettlement::kSubmitted;
+        if (not present_picture and m_post_process->retainedPictureAvailable(grid.m_resolved, active_identity)) {
+            m_post_process->selectRetainedPicture(grid.m_resolved);
+            present_picture = true;
+        }
+
+        if (present_picture) {
+            const auto present_draw = [&](const DrawContext &context) -> std::error_code {
+                return m_post_process->present(context, grid);
+            };
+            const auto ui_encode = [&](const DrawContext &draw_context) -> std::error_code {
+                const CpuObservationScope cpu_ui{clock, cpu.m_ui_draw};
+                PPR_ASSERT(m_ui_service != nullptr);
+                return m_ui_service->renderDetachedUiFrame(ui, draw_context);
+            };
+            DrawSubmission present_submission{string_literal{std::in_place, "post.present"}, present_draw};
+            DrawSubmission ui_draws{string_literal{std::in_place, "ui.detached"}, ui_encode};
+
+            const std::initializer_list<SurfaceRenderPass> surface_passes{
+                {
+                    .m_additional_colors = {},
+                    // Presentation samples the resolved output as a fullscreen
+                    // blit, so the surface pass owns no depth attachment.
+                    .m_depth_policy = ESurfaceDepthPolicy::none,
+                    .m_draws = {present_submission},
+                },
+                {
+                    .m_surface_color =
+                        ColorAttachmentOps{
+                            .m_load_op = rhi::LoadOp::Load,
+                        },
+                    .m_additional_colors = {},
+                    // Detached UI draws, constructed synchronously on this lane
+                    // (inline or worker): the encode reads ONLY the detached
+                    // data, never the live ImGui frontend.
+                    .m_draws = {ui_draws},
+                },
+            };
+            const SurfaceWindowSnapshot window_snapshot{
+                .m_handle = packet.m_surface_identity,
+                .m_native = packet.m_surface_native,
+                .m_display = packet.m_surface_display,
+                .m_framebuffer_size = packet.m_framebuffer_size,
+                .m_title = packet.m_window_title,
+            };
+
+            // One-shot capture admission: a duplicate packet queued behind the
+            // first attempt carries the same sequence and never attempts twice.
+            const bool capture = request.m_capture_final_frame and
+                                 request.m_surface_capture_sequence > m_frame_capture_attempted_sequence;
+            bool capture_image_acquired{};
+            const u64 previous_capture_sequence = m_frame_capture_attempted_sequence;
+            if (capture) {
+                m_frame_capture_attempted_sequence = request.m_surface_capture_sequence;
+                out_result.m_surface_capture_attempted = true;
+                out_result.m_surface_capture_sequence = request.m_surface_capture_sequence;
+            }
+
+            if (m_test_stage_failure == kRenderStagePresent) {
+                renderer.setInjectedSubmitFailure(true);
+            }
+            const FenceCompletionValue before = renderer.lastSubmittedFenceValue();
+            {
+                const CpuObservationScope cpu_surface{clock, cpu.m_surface};
+                try {
+                    frame_error = renderer.renderAndPresent(
+                        window_snapshot, {surface_passes.begin(), surface_passes.size()}, packet_surface,
+                        &out_result.m_presented, capture ? &out_result.m_surface_pixels : nullptr,
+                        capture ? &capture_image_acquired : nullptr);
+                } catch (const std::bad_alloc &) {
+                    throw; // The run boundary drains accepted work before fatal propagation.
+                } catch (...) {
+                    frame_error = std::make_error_code(std::errc::state_not_recoverable);
+                }
+            }
+            settlePresentStage_(out_result, before, frame_error);
+            if (m_test_stage_failure == kRenderStagePresent) {
+                m_test_stage_failure.reset();
+            }
+
+            if (capture) {
+                // A capture stays armed across known pre-acquire backpressure
+                // only when no stage of this attempt was accepted: a rejected
+                // settlement with no fence advance and no acquisition. It
+                // never retries an accepted/unknown submit.
+                const bool no_accepted_stage = out_result.m_stages[kRenderStageScene].m_submission ==
+                                                   kFenceValueNone and
+                                               out_result.m_stages[kRenderStageResolve].m_submission ==
+                                                   kFenceValueNone and
+                                               out_result.m_stages[kRenderStagePresent].m_submission == kFenceValueNone;
+                const bool pre_acquire_transient = not capture_image_acquired and
+                                                   not out_result.m_presented and
+                                                   not out_result.m_surface_pixels and
+                                                   no_accepted_stage and
+                                                   not out_result.m_submit_possibly_executed and
+                                                   (not frame_error or
+                                                       frame_error == std::errc::device_or_resource_busy or
+                                                       frame_error == std::errc::resource_unavailable_try_again);
+                if (pre_acquire_transient) {
+                    m_frame_capture_attempted_sequence = previous_capture_sequence;
+                    out_result.m_surface_capture_attempted = false;
+                    out_result.m_surface_capture_sequence = 0u;
+                } else {
+                    out_result.m_surface_capture_error = frame_error;
+                    if (not frame_error and (not out_result.m_presented or not out_result.m_surface_pixels)) {
+                        out_result.m_surface_capture_error = std::make_error_code(std::errc::io_error);
+                    }
                 }
             }
         }
 
-        // Surface lane-observable outcome: the accepted SUBMIT value
-        // independent of present, and the possibly-executed discriminator
-        // for ambiguous throws (kSubmitFailed) were finalized by the guard
-        // above on all paths (normal + unwind). The value on the result is
-        // the same value the retirement frontier will later cover — the
-        // main-side settlement pairs them by equality, never by presence.
-        // Report lane-observable state back to main (surface generation
-        // mirror + font ack); the completion pump refreshes them.
+        // ------------------------------------------------------------------
+        // result aggregation
+        // ------------------------------------------------------------------
+        // The aggregate accepted value is the latest accepted stage, retained
+        // across a later rejection. A never-attempted or rejected frame keeps
+        // kFenceValueNone.
+        out_result.m_submit_value = aggregateAcceptedSubmission(out_result.m_stages);
         out_result.m_surface_handle = packet.m_surface_identity;
         out_result.m_surface_generation = renderer.surfaceGenerationFor(packet.m_surface_identity);
         if (m_ui_service) {
             out_result.m_ui_font_version_applied = m_ui_service->installedFontVersion();
         }
-        if (frame_err == std::make_error_code(std::errc::resource_unavailable_try_again) or
-            frame_err == std::make_error_code(std::errc::device_or_resource_busy)) {
+
+        // The first failing stage/error remains explicit. Ordinary capacity
+        // backpressure is a dropped presentation, never an app failure, and a
+        // replaced stage is never retried or committed in place.
+        std::error_code stage_failure{};
+        for (const RenderStageResult &stage: out_result.m_stages) {
+            if (stage.m_error and not stage_failure) {
+                stage_failure = stage.m_error;
+            }
+        }
+        if (stage_failure == std::make_error_code(std::errc::resource_unavailable_try_again) or
+            stage_failure == std::make_error_code(std::errc::device_or_resource_busy)) {
             PPR_LOG(
                 Editor, info, "dropping non-rendering frame",
                 {
                     {"frame", packet.m_frame_id},
-                    {"error", frame_err.message()},
+                    {"error", stage_failure.message()},
                 });
             return default_value_v;
         }
-        PPR_RETURN_ERROR_ON_FAIL(Editor, frame_err);
+        PPR_RETURN_ERROR_ON_FAIL(Editor, stage_failure);
 
         if (out_result.m_presented) {
             out_result.m_presented_grid = m_grid_pass->activeWorldIdentity();

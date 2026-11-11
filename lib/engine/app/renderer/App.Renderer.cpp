@@ -353,10 +353,10 @@ namespace pP {
         m_last_submit_settlement = FrameSettlement::kRejected;
 
         // Bounded by the credit ledger: the unretired set never exceeds
-        // kMaxOutstandingFrames, so this reserve keeps every steady-state
+        // kMaxOutstandingSubmissions, so this reserve keeps every steady-state
         // retireFrame_ below it allocation-free (retirement runs on scope
         // guards, including unwind paths).
-        m_unretired_submits.reserve(kMaxOutstandingFrames);
+        m_unretired_submits.reserve(kMaxOutstandingSubmissions);
 
         PPR_LOG(Renderer, info, "Renderer initialized");
         return default_value_v;
@@ -688,7 +688,7 @@ namespace pP {
         if (m_frame_fence.isTerminal()) [[unlikely]] {
             return std::make_error_code(std::errc::no_such_device_or_address);
         }
-        if (m_credits.outstanding() >= kMaxOutstandingFrames) [[unlikely]] {
+        if (m_credits.outstanding() >= m_credits.capacity()) [[unlikely]] {
             return std::make_error_code(std::errc::device_or_resource_busy);
         }
         return default_value_v;

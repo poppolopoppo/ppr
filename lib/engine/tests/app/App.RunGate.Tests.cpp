@@ -2828,7 +2828,12 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(renderer.lastSubmitSettlement() == FrameSettlement::kSubmitted);
             const FenceCompletionValue value_b = renderer.lastSubmittedFenceValue();
             PPR_TEST_ASSERT(value_b != kFenceValueNone and value_b > before_b);
-            const FenceCompletionValue before_c = value_b;
+            // Fill the stage-submission bound (two logical frames of A/B/C)
+            // so the next invocation is the one that is refused.
+            while (renderer.outstandingFrameCount() != kMaxOutstandingSubmissions) {
+                PPR_TEST_ASSERT(not renderer.renderToTexture(target, {}));
+            }
+            const FenceCompletionValue before_c = renderer.lastSubmittedFenceValue();
             const std::error_code busy_err = renderer.renderToTexture(target, {});
             PPR_TEST_ASSERT(busy_err == std::make_error_code(std::errc::device_or_resource_busy));
             // THIS invocation reports definitely-unsubmitted: the fence did
@@ -2858,7 +2863,7 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(charged_c != value_b);
             // Drain through production calls so teardown meets idle proof.
             renderer.setTestHoldSweep(false);
-            std::ignore = renderer.waitForFenceValue(value_b);
+            std::ignore = renderer.waitForFenceValue(renderer.lastSubmittedFenceValue());
             std::ignore = renderer.retireCompletedFrames();
         };
 

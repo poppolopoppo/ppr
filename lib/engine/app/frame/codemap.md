@@ -48,7 +48,12 @@ executor per frame, sweeps fence completion on the lane, and settles queued work
   publication, terrain revision and joint tick. CPU preparation, submission,
   staging consumption and GPU completion do not produce this resident proof.
   The fixed value travels on the existing result stream and owns no resources.
-- `RenderFrameResult` records retain their natural alignment. The lane reserves
+- `RenderFrameResult` carries one value-only `RenderStageResult` per ordered
+  submission (`m_stages` in A/B/C order: accepted fence value, `FrameSettlement`,
+  stage error), the aggregate latest accepted value and the consumed
+  active-presentation elapsed echo. Un-attempted stages keep
+  rejected/none/success, so "never reached" and "attempted but rejected" stay
+  distinct. Records retain their natural alignment. The lane reserves
   `sizeof(result) + alignof(result) - 1` bytes per raw-channel payload and uses
   the same `std::align` address for placement, reads and destruction; RawChannel
   itself continues to guarantee only u64-aligned payloads. Frame handles and

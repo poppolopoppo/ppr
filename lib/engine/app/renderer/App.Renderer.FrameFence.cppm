@@ -22,14 +22,16 @@ export namespace pP {
     // display signal — present-call duration and surface lifetime are
     // governed by their own backend contract, not by this fence.
     //
-    // Two-credit bound (P1, still one CPU lane): at most
-    // kMaxOutstandingFrames submitted-but-uncompleted frames. The bound is
-    // enabled ONLY because every mutable resource below has an explicit
-    // last-use rule (see renderer/codemap.md R1-R25):
-    //   Grid/Triangle payload rings (3 slots) + indirect args keyed by
-    //     per-slot completion values (shared cursor covered once);
+    // Two-credit logical-frame bound (P1, still one CPU lane): at most
+    // kMaxOutstandingFrames logical frames are in flight, each issuing up to
+    // kFrameStageCount ordered stage submissions. The bound is enabled ONLY
+    // because every mutable resource below has an explicit last-use rule
+    // (see renderer/codemap.md R1-R25):
+    //   Grid/Triangle payload rings (3 slots) + indirect args advance once
+    //     per logical frame and are keyed by per-slot completion values
+    //     (shared cursor covered once); 3 slots > 2 logical frames;
     //   UI FrameResources[2] keyed by completion (zero slack: 2 slots for
-    //     2 credits, so the second outstanding frame may have to wait);
+    //     2 logical frames, so the second outstanding frame may have to wait);
     //   per-frame/per-slot root shader objects (no persistent-root mutation);
     //   deferred release for pipelines/variants/UI growth (growth WAITS);
     //   atlas keeps the existing global-idle wait as first implementation
@@ -41,12 +43,25 @@ export namespace pP {
 
     // Two frame credits: building/queued/recording/GPU-pending frames
     // collectively consume at most two. Pairwise overlap only — three
-    // distinct in-flight frames would need three credits.
+    // distinct in-flight frames would need three credits. This is the
+    // LOGICAL-frame bound the application's construction reservations
+    // enforce; it is not the renderer's command-submission bound.
     inline constexpr u32 kMaxOutstandingFrames{2u};
 
-    // Grid/Triangle ring depth. 3 slots > 2 credits, so the slot a frame
-    // rotates onto is complete without waiting whenever every submission
-    // retired in order; the wait fallback below covers the rest.
+    // A logical frame issues three ordered stage submissions on the same
+    // queue (A scene, B resolve/post, C present). The renderer's credit
+    // ledger bounds SUBMISSIONS at the same two logical frames' worth, so an
+    // ordinary frame's three stages are admissible while the previous
+    // frame's tail is still GPU-pending — without permitting a third logical
+    // frame to be built. Fence values still name individual submissions;
+    // per-slot resource rings advance once per logical frame, so two
+    // logical frames stay inside their existing depths.
+    inline constexpr u32 kFrameStageCount{3u};
+    inline constexpr u32 kMaxOutstandingSubmissions{kMaxOutstandingFrames * kFrameStageCount};
+
+    // Grid/Triangle ring depth. 3 slots > 2 logical frames, so the slot a
+    // frame rotates onto is complete without waiting whenever every
+    // submission retired in order; the wait fallback below covers the rest.
     inline constexpr u32 kFrameRingSlots{3u};
 
     // Generational surface identity: a packet names the surface it was built
@@ -128,13 +143,17 @@ export namespace pP {
     inline constexpr int kUnknownGpuCompletionFatalExit{0xB1};
 
     // ------------------------------------------------------------------
-    // frame credit ledger: at most kMaxOutstandingFrames uncompleted frames
+    // submission credit ledger: at most kMaxOutstandingSubmissions
+    // uncompleted stage submissions
     // ------------------------------------------------------------------
     // Pure CPU accounting. Admission acquires; retirement releases exactly
-    // once per admitted frame, including exceptional paths (a frame that
-    // never submitted releases immediately; a submitted frame releases when
-    // its fence value completes). Double release fails closed; acquisition
-    // past the bound fails closed with device_or_resource_busy.
+    // once per admitted submission, including exceptional paths (a submission
+    // that never submitted releases immediately; a submitted stage releases
+    // when its fence value completes). Double release fails closed;
+    // acquisition past the bound fails closed with device_or_resource_busy.
+    // The bound covers two logical frames of three stage submissions each;
+    // the logical-frame bound itself remains kMaxOutstandingFrames, enforced
+    // by the application's construction reservations.
 
     class FrameCreditLedger {
     public:
@@ -152,7 +171,7 @@ export namespace pP {
         }
 
         [[nodiscard]] static constexpr u32 capacity() noexcept {
-            return kMaxOutstandingFrames;
+            return kMaxOutstandingSubmissions;
         }
 
     private:

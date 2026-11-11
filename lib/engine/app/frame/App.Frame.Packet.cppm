@@ -27,6 +27,16 @@ export namespace pP {
         TimeSpan m_delta_time{};
         TimeSpan m_total_elapsed{};
 
+        // Monotonic active-presentation elapsed time at capture, excluding
+        // suspended/minimized intervals. The application boundary accumulates
+        // it; lighting and post-processing consume the value and commit their
+        // own accepted baselines. No pass reads a clock.
+        TimeSpan m_active_elapsed{};
+        // Monotonic camera-cut generation for screen-history reset. It changes
+        // only when this capture observed a camera cut, so a rejected frame
+        // leaves the following frame on the same reset identity.
+        u64 m_render_camera_cut{};
+
         // Owned camera copy (revision included); never a live Camera view.
         CameraSnapshot m_camera{};
 

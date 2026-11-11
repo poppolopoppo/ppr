@@ -1736,6 +1736,22 @@ namespace pP {
                 retiring.m_retirement_diagnostic_cursor == kGridTileCacheCapacity and
                 retiring.m_retirement_particle_cursor == kGridTileCacheCapacity and
                 not retiring.m_texture_inventory) {
+                // Drain the retiring world's lighting status before its owner
+                // is destroyed: completed attempts are inspected here, and a
+                // pending (never-completed) attempt is reported by the owner's
+                // own shutdown rather than silently dropped. The world is being
+                // replaced, so a numeric failure is diagnostic, never a reason
+                // to keep the old world alive.
+                if (retiring.m_lighting) {
+                    if (const std::error_code status = retiring.m_lighting->collectCompleted(completed)) {
+                        PPR_LOG_WARNING_ON_FAIL(WorldLightingPass, status);
+                    }
+                    if (const std::error_code status = retiring.m_lighting->shutdown()) {
+                        PPR_LOG_WARNING_ON_FAIL(WorldLightingPass, status);
+                    }
+                    retiring.m_lighting.reset();
+                }
+
                 // Only metadata and a fixed number of GPU objects remain.
                 // Admission remains blocked until these owning releases finish.
                 m_retiring_world.reset();
@@ -3212,10 +3228,7 @@ namespace pP {
 
     Expected<lighting::WorldLightingInputs> GridPass::lightingInputs() const {
         PPR_RETURN_UNEXPECTED_ON_FAIL(
-            GridPass,
-            m_thermal_lut and m_world.m_terrain_cells and m_world.m_terrain_palette and m_world.m_source_materials
-                ? std::error_code{}
-                : std::make_error_code(std::errc::not_connected));
+            GridPass, lightingInputsAvailable() ? std::error_code{} : std::make_error_code(std::errc::not_connected));
 
         lighting::WorldLightingInputs result{};
         result.m_particles = m_world.m_gpu_particles ? m_world.m_gpu_particles->m_view : GridParticleGpuView{};

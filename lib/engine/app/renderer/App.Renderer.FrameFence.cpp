@@ -49,7 +49,7 @@ namespace pP {
     // ------------------------------------------------------------------
 
     std::error_code FrameCreditLedger::acquire() noexcept {
-        if (m_outstanding >= kMaxOutstandingFrames) [[unlikely]] {
+        if (m_outstanding >= capacity()) [[unlikely]] {
             return std::make_error_code(std::errc::device_or_resource_busy);
         }
         ++m_outstanding;

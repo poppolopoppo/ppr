@@ -66,6 +66,7 @@ target_sources(engine.tests.app
         App.WorldLighting.Cascade.Tests.cpp
         App.WorldLighting.Fine.Tests.cpp
         App.WorldLighting.Material.Tests.cpp
+        App.WorldLighting.Settlement.Tests.cpp
 
         ${CMAKE_SOURCE_DIR}/game/colony/Colony.cpp
         ${CMAKE_SOURCE_DIR}/game/colony/WorldGen.cpp
@@ -613,6 +614,45 @@ ppr_add_test_entry(TARGET engine.tests.app
 set_tests_properties(engine.tests.app.world_lighting_material_gpu_validation PROPERTIES
     ENVIRONMENT "PPR_TEST_GPU_VALIDATION=1"
 )
+
+# Three-stage settlement (A scene / B resolve / C present): value-only stage
+# results, the submission credit bound, real Renderer settlement, the retained
+# picture and the editor's inline A/B/C matrix with injected rejection and
+# ambiguity. The editor case presents through a real window, so both entries
+# claim the gpu and window locks.
+ppr_add_test_entry(TARGET engine.tests.app
+    NAME world_lighting_settlement
+    FILTER "app/world_lighting_settlement/"
+    LOOPS
+    RESOURCE_LOCK gpu window
+    TIMEOUT 600
+    LABELS unit engine app
+)
+
+ppr_add_test_entry(TARGET engine.tests.app
+    NAME world_lighting_settlement_gpu_validation
+    FILTER "app/world_lighting_settlement/"
+    LOOPS
+    RESOURCE_LOCK gpu window
+    TIMEOUT 600
+    LABELS unit engine app gpu_validation
+)
+
+set_tests_properties(engine.tests.app.world_lighting_settlement_gpu_validation PROPERTIES
+    ENVIRONMENT "PPR_TEST_GPU_VALIDATION=1"
+)
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND PPR_ENABLE_SANITIZER_ADDRESS)
+    # The editor cases create a real window. Retain the NVIDIA caller below
+    # those DBus frames so the existing driver-only suppressions apply, the
+    # same narrow policy the asset editor entries use.
+    foreach(ppr_app_settlement_shard IN ITEMS world_lighting_settlement world_lighting_settlement_gpu_validation)
+        set_property(TEST engine.tests.app.${ppr_app_settlement_shard} APPEND PROPERTY ENVIRONMENT_MODIFICATION
+            "ASAN_OPTIONS=string_append::fast_unwind_on_malloc=0:malloc_context_size=20"
+        )
+    endforeach()
+    unset(ppr_app_settlement_shard)
+endif()
 
 # Packed world-lighting codec and calibrated thermal lookup: CPU contracts plus
 # real GPU shader/device execution, so it claims the gpu lock.
