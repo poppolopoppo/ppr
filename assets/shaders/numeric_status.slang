@@ -22,9 +22,10 @@ static const uint kNumericStatusWords = 8u;
 static const uint kNumericStatusRecords = 7u;
 static const uint kNoNumericIndex = 0xffffffffu;
 // The projection stage reports only invalid arithmetic/state (nonfinite and
-// out-of-domain candidates). kNumericRangeError is reserved for later
-// source/transport stages whose bounded records can overflow representational
-// range; both minima are checked independently when their stage is inspected.
+// out-of-domain candidates). The source/terminal/cascade stages report both
+// categories: invalid arithmetic/state and representational range overflow of
+// their bounded radiance records. Both minima are checked independently when a
+// stage is inspected.
 static const uint kNumericInvalidState = 0u;
 static const uint kNumericRangeError = 1u;
 

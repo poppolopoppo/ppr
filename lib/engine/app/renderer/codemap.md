@@ -112,13 +112,14 @@ records `PackedInterval` (stride 8), `PackedCH` (stride 32) and `SourceMaterial`
 (stride 8), the decoded CPU values `Interval`/`CH`, the checked codecs
 `packCell`, `packRGB9E5`/`unpackRGB9E5`, `packInterval`/`unpackInterval`,
 `packCH`/`unpackCH`, `makeSourceMaterial` and `lastTraceFrame`, the approved
-coarse-cascade geometry/atlas helpers (`cascadeSpacing`, `cascadeDirections`,
-`cascadeProbeEdge`, `cascadeIntervalStart`/`End`, `cascadeRecordIndex`), the
-fixed four-frame schedule helpers (`mix32`, `cascadeGroupPhase`,
-`cascadeSelectedProbe`, `cascadeProbeAge`, `cascadePhaseWord`/`Fraction`,
-`cascadeProbeAngle`) and the 5x1,048,576-record/40 MiB interval store, 4 MiB
-RGB9E5 source-cache and 512-square/8 MiB fine-CH constants, plus the committed
-thermal table shape constants. It has no device or pass ownership. The shader
+coarse-cascade geometry (`cascadeSpacing`, `cascadeDirections`,
+`cascadeProbeEdge`, `cascadeGroupEdge`, and `cascadeIntervalStart`, whose
+`kCascadePenumbraWidth` derivation yields 1.024..262.144 cells), and the
+5x1,048,576-record/40 MiB interval store, 4 MiB RGB9E5 source-cache and
+512-square/8 MiB fine-CH constants, plus the committed thermal table shape
+constants. The fixed four-frame schedule, atlas addressing and terminal sky
+derivation live in their shaders; `lastTraceFrame` is the retained-direction
+interface fine reconstruction consumes. It has no device or pass ownership. The shader
 mirrors are `assets/shaders/world_lighting_codec.slang` and
 `assets/shaders/thermal_emission.slang`; the schedule and sky live in
 `assets/shaders/world_lighting_cascade.slang` and

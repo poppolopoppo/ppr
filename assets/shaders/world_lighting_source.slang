@@ -62,18 +62,13 @@ void prepareSource(uint2 cell : SV_DispatchThreadID) {
     uint index = cell.y * g_source_frame.m_edge + cell.x;
     uint resolved = g_resolved_cells[index];
     uint material = resolved & 0xffffu;
-
-    // Empty cells and receive-only transparent surfaces (including gas) neither
-    // emit nor diffuse; their thermal transport is not evaluated at all.
-    if (material == 0u) {
-        g_cell_source[index] = 0u;
-        return;
-    }
-
     TerrainVisual visual = g_visuals[material];
-    bool receive_only =
-        (visual.surfaceFlags & kOpticalBlendSurfaceFlag) != 0u && visual.emissiveStrength == 0.0;
-    if (receive_only) {
+
+    // The shared classification owns both rules: material zero is empty and a
+    // receive-only transparent surface (including gas) is not a transport
+    // source. Such cells neither emit nor diffuse, so thermal transport is not
+    // evaluated for them.
+    if (!resolvedCellOccupied(resolved, visual)) {
         g_cell_source[index] = 0u;
         return;
     }

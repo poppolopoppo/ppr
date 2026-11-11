@@ -30,6 +30,9 @@ namespace pP::tests::detail::WorldLightingCascade {
 
     inline constexpr u32 kTerminal = lighting::kCascadeTerminalLevel;
     inline constexpr u32 kTerminalDirections = lighting::kCascadeTerminalDirections;
+    // Stored L5 directions: 4 << (2*5). The terminal sub-sector count is four
+    // times this, so the two index spaces must never be mixed.
+    inline constexpr u32 kStoredDirections = kTerminalDirections / 4u;
     inline constexpr u32 kLevelRecords = lighting::kCascadeLevelRecords;
     inline constexpr u32 kDomainEdge = lighting::kCascadeDomainEdge;
     inline constexpr u32 kThreads = lighting::kCascadeDispatchThreads;
@@ -297,6 +300,14 @@ namespace pP::tests::detail::WorldLightingCascade {
         std::vector<u8> m_bytes{};
         rhi::ComPtr<rhi::IBuffer> m_buffer{};
 
+        // Rows are log-spaced exactly as thermal_emission.slang computes them.
+        [[nodiscard]] static u32 rowFor(const double kelvin) noexcept {
+            const double q = static_cast<double>(lighting::kThermalLutRows - 1u) *
+                             std::log(kelvin / lighting::kThermalLutMinKelvin) /
+                             std::log(lighting::kThermalLutMaxKelvin / lighting::kThermalLutMinKelvin);
+            return (std::min) (static_cast<u32>(std::floor(q)), lighting::kThermalLutRows - 1u);
+        }
+
         void load(Fixture &fixture) {
             m_bytes.assign(lighting::kThermalLutBytes, 0u);
             std::ifstream file{std::filesystem::current_path() / "lighting" / "thermal_lut.bin", std::ios::binary};
@@ -304,7 +315,23 @@ namespace pP::tests::detail::WorldLightingCascade {
             file.read(reinterpret_cast<char *>(m_bytes.data()), static_cast<std::streamsize>(m_bytes.size()));
             PPR_TEST_ASSERT(file.gcount() == static_cast<std::streamsize>(m_bytes.size()));
 
+            upload(fixture);
+        }
+
+        void upload(Fixture &fixture) {
+            PPR_TEST_ASSERT(m_bytes.size() == lighting::kThermalLutBytes);
             m_buffer = makeShaderBuffer(fixture.device(), m_bytes.size(), lighting::kThermalLutStride, m_bytes.data());
+        }
+
+        // Test-only corruption for the source invalid-state failure path.
+        void writeRow(const u32 row, const float3 value) {
+            PPR_TEST_ASSERT(row < lighting::kThermalLutRows);
+            const std::array<float, 3u> channels{value.x, value.y, value.z};
+            for (u32 channel = 0u; channel < channels.size(); ++channel) {
+                const u32 bits = std::bit_cast<u32>(channels[channel]);
+                std::memcpy(
+                    m_bytes.data() + row * lighting::kThermalLutStride + channel * sizeof(u32), &bits, sizeof(bits));
+            }
         }
 
         [[nodiscard]] double value(const u32 row, const u32 channel) const noexcept {
@@ -408,6 +435,25 @@ namespace pP::tests::detail::WorldLightingCascade {
         PPR_TEST_ASSERT(not pass.collectCompleted(fence));
     }
 
+    // Encodes and submits one accepted attempt without asserting a clean
+    // collection; the caller settles the ticket's status expectations.
+    void submitAttempt(
+        Fixture &fixture, WorldLightingPass &pass, const lighting::WorldLightingInputs &inputs, const u64 accepted,
+        const i32 hour, const FenceCompletionValue fence) {
+        pass.setAcceptedFrameForTest(accepted);
+
+        WorldLightingFrame frame{};
+        frame.m_sky_hour = hour;
+
+        auto encoder = makeEncoder(fixture);
+        PreRenderContext context{fixture.device(), *encoder, kFenceValueNone, {}};
+        PPR_TEST_ASSERT(not pass.prepare(context, inputs, frame));
+        PPR_TEST_ASSERT(not pass.finalize(context));
+        submit(fixture, *encoder);
+        pass.notifySubmitted(fence);
+        PPR_TEST_ASSERT(pass.acceptedFrameForTest() == accepted + 1u);
+    }
+
     // ------------------------------------------------------------------
     // schedule, sky and cascade CPU oracles
     // ------------------------------------------------------------------
@@ -502,6 +548,34 @@ namespace pP::tests::detail::WorldLightingCascade {
         return float3{integral.x * normalization, integral.y * normalization, integral.z * normalization};
     }
 
+    // Failing-mode oracle: wrap both endpoints into [0, 2*pi) independently and
+    // then sort them. A seam-crossing sector becomes the complementary arc,
+    // which a correct unwrapped implementation must never produce.
+    [[nodiscard]] float3 skySortedSectorOracle(const u32 sector, const u32 directions, const i32 hour) noexcept {
+        if (hour < 0) {
+            return float3{zero_v};
+        }
+
+        const double turn = 2.0 * std::numbers::pi;
+        const double width = turn / static_cast<double>(directions);
+        const double rotation = turn * static_cast<double>(hour) / 24.0;
+        const auto wrapPositive = [](const double angle) {
+            const double turn = 2.0 * std::numbers::pi;
+            double wrapped = std::fmod(angle, turn);
+            if (wrapped < 0.0) {
+                wrapped += turn;
+            }
+
+            return wrapped;
+        };
+
+        const double a0 = wrapPositive(static_cast<double>(sector) * width + rotation);
+        const double a1 = wrapPositive(static_cast<double>(sector + 1u) * width + rotation);
+        const float3 integral = skySegmentOracle((std::min) (a0, a1), (std::max) (a0, a1));
+        const float normalization = static_cast<float>(turn * 5.0 / width);
+        return float3{integral.x * normalization, integral.y * normalization, integral.z * normalization};
+    }
+
     struct EvidenceTrace {
         lighting::Interval m_interval{};
         u32 m_hit{kNoNumericIndex};
@@ -568,12 +642,26 @@ namespace pP::tests::detail::WorldLightingCascade {
     // stored-record decode and lower-level merge oracle
     // ------------------------------------------------------------------
 
-    [[nodiscard]] lighting::Interval decodeRecord(
-        const std::vector<u32> &level_words, const u32 level, const u32 probe_x, const u32 probe_y, const u32 phi) {
-        const u32 spacing = lighting::cascadeSpacing(level);
+    // Independent spelling of the approved atlas address inside one level:
+    // atlas_x = probe.x*s + phi%s, atlas_y = probe.y*s + phi/s,
+    // record = atlas_y*1024 + atlas_x. The whole-store address adds the
+    // (level-1)*1,048,576 level offset.
+    [[nodiscard]] constexpr u32 levelRecordIndex(
+        const u32 level, const u32 probe_x, const u32 probe_y, const u32 phi) noexcept {
+        const u32 spacing = 2u << level;
         const u32 atlas_x = probe_x * spacing + phi % spacing;
         const u32 atlas_y = probe_y * spacing + phi / spacing;
-        const std::size_t index = static_cast<std::size_t>(atlas_y) * kEdge + atlas_x;
+        return atlas_y * kEdge + atlas_x;
+    }
+
+    [[nodiscard]] constexpr u32 storeRecordIndex(
+        const u32 level, const u32 probe_x, const u32 probe_y, const u32 phi) noexcept {
+        return (level - 1u) * kLevelRecords + levelRecordIndex(level, probe_x, probe_y, phi);
+    }
+
+    [[nodiscard]] lighting::Interval decodeRecord(
+        const std::vector<u32> &level_words, const u32 level, const u32 probe_x, const u32 probe_y, const u32 phi) {
+        const std::size_t index = levelRecordIndex(level, probe_x, probe_y, phi);
 
         lighting::PackedInterval packed{};
         packed.m_rg = level_words[index * 2u];
@@ -818,7 +906,10 @@ namespace pP::tests::detail::WorldLightingCascade {
         // Every level, group and local probe over the first two blocks and a
         // block far beyond 2^32. The oracle re-derives selection, age, validity
         // and the actual trace frame from the approved schedule spelling.
-        const std::array<u64, 9u> frames{0u, 1u, 2u, 3u, 4u, 5u, 6u, 7u, (1ull << 32u) + 5u};
+        // Two blocks at the start plus frames above 2^32. +1 and +2 force the
+        // uint64 borrow chain: a retained probe's age exceeds the low word.
+        const std::array<u64, 11u> frames{
+            0u, 1u, 2u, 3u, 4u, 5u, 6u, 7u, (1ull << 32u) + 1u, (1ull << 32u) + 2u, (1ull << 32u) + 5u};
         for (const u64 frame: frames) {
             for (u32 level = 1u; level <= lighting::kCascadeLevels; ++level) {
                 const u32 group_edge = lighting::cascadeGroupEdge(level);
@@ -957,7 +1048,9 @@ namespace pP::tests::detail::WorldLightingCascade {
             }
         }
 
-        std::println("WORLD_LIGHTING_CASCADE schedule levels=5 frames=9 gpu_queries=true blocks_visit_once=true");
+        std::println(
+            "WORLD_LIGHTING_CASCADE schedule levels={} frames={} gpu_queries=true blocks_visit_once=true",
+            lighting::kCascadeLevels, frames.size());
     };
 
     PPR_UNIT_TEST (counter_exhaustion_rejects_admission_before_encoding) {
@@ -1007,6 +1100,203 @@ namespace pP::tests::detail::WorldLightingCascade {
 
         std::println("WORLD_LIGHTING_CASCADE counter_exhaustion rejected_before_encoding=true");
         PPR_TEST_ASSERT(not pass.shutdown());
+    };
+
+    // ------------------------------------------------------------------
+    // source buffer contracts and numeric status
+    // ------------------------------------------------------------------
+
+    PPR_UNIT_TEST (source_buffer_contracts_are_validated_before_encoding) {
+        Fixture fixture;
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+        fixture.initialize();
+
+        const auto visuals = makePalette();
+        const auto sources = makeSourcePalette();
+        ThermalTable thermal;
+        thermal.load(fixture);
+
+        CategoricalMap map;
+        CascadeInputs inputs{visuals, map, sources, thermal};
+        inputs.upload(fixture);
+
+        WorldLightingPass pass;
+        PPR_TEST_ASSERT(not pass.initialize(*fixture.m_shaders, std::filesystem::current_path()));
+
+        const auto expect_rejected = [&](const lighting::WorldLightingInputs &candidate, const std::errc expected) {
+            auto encoder = makeEncoder(fixture);
+            PreRenderContext context{fixture.device(), *encoder, kFenceValueNone, {}};
+            WorldLightingFrame frame{};
+            frame.m_sky_hour = 0;
+            PPR_TEST_ASSERT(pass.prepare(context, candidate, frame) == expected);
+            PPR_TEST_ASSERT(pass.acceptedFrameForTest() == 0u);
+            for (u32 slot = 0u; slot < WorldLightingPass::kStatusRingSize; ++slot) {
+                PPR_TEST_ASSERT(not pass.statusSlotPendingForTest(slot));
+            }
+        };
+
+        // Missing publication inputs are not an empty-world substitute.
+        {
+            auto candidate = inputs.inputs();
+            candidate.m_source_materials = nullptr;
+            expect_rejected(candidate, std::errc::not_connected);
+        }
+
+        {
+            auto candidate = inputs.inputs();
+            candidate.m_thermal_lut = nullptr;
+            expect_rejected(candidate, std::errc::not_connected);
+        }
+
+        // The derived source palette is eight-byte records covering every
+        // material index the source dispatch reads.
+        {
+            const std::array<u32, kMaterialCount> words{};
+            auto candidate = inputs.inputs();
+            candidate.m_source_materials = makeShaderBuffer(fixture.device(), sizeof(words), sizeof(u32), words.data());
+            expect_rejected(candidate, std::errc::invalid_argument);
+        }
+
+        {
+            std::array<lighting::SourceMaterial, kMaterialCount - 1u> short_palette{};
+            auto candidate = inputs.inputs();
+            candidate.m_source_materials = makeShaderBuffer(
+                fixture.device(), sizeof(short_palette), sizeof(lighting::SourceMaterial), short_palette.data());
+            expect_rejected(candidate, std::errc::invalid_argument);
+        }
+
+        // The thermal table is exactly 32,768 bytes with a 16-byte row stride.
+        {
+            const std::vector<u8> short_table(lighting::kThermalLutBytes - 16u, 0u);
+            auto candidate = inputs.inputs();
+            candidate.m_thermal_lut = makeShaderBuffer(
+                fixture.device(), short_table.size(), lighting::kThermalLutStride, short_table.data());
+            expect_rejected(candidate, std::errc::invalid_argument);
+        }
+
+        {
+            const std::vector<u8> wrong_stride(lighting::kThermalLutBytes, 0u);
+            auto candidate = inputs.inputs();
+            candidate.m_thermal_lut = makeShaderBuffer(fixture.device(), wrong_stride.size(), 12u, wrong_stride.data());
+            expect_rejected(candidate, std::errc::invalid_argument);
+        }
+
+        // The complete publication set is accepted and armed.
+        {
+            auto encoder = makeEncoder(fixture);
+            PreRenderContext context{fixture.device(), *encoder, kFenceValueNone, {}};
+            WorldLightingFrame frame{};
+            frame.m_sky_hour = 0;
+            PPR_TEST_ASSERT(not pass.prepare(context, inputs.inputs(), frame));
+            pass.discardUnsubmitted();
+        }
+
+        std::println("WORLD_LIGHTING_CASCADE source_contracts rejected_before_encoding=true");
+        PPR_TEST_ASSERT(not pass.shutdown());
+    };
+
+    PPR_UNIT_TEST (source_and_transport_numeric_status_are_reported_and_settled) {
+        Fixture fixture;
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+        fixture.initialize();
+
+        const auto visuals = makePalette();
+        auto sources = makeSourcePalette();
+        // 60,000 authored emission with unit diffuse reflectance.
+        sources[kEmissive] = *lighting::makeSourceMaterial(
+            rgb(60'000.0f, 0.0f, 0.0f), 1.0, rgb(1.0f, 1.0f, 1.0f), rgb(1.0f, 1.0f, 1.0f), 0.0);
+
+        ThermalTable thermal;
+        thermal.load(fixture);
+
+        // A 65,000 DC field adds about 25,931 to the diffuse term, so the single
+        // resolved cell overflows the RGB9E5 representable range.
+        const auto prior_ch = makeCHField(fixture, [](const u32, const u32) { return rgb(65'000.0f, 0.0f, 0.0f); });
+
+        CategoricalMap map;
+        map.occupy(400u, 300u, kEmissive);
+        CascadeInputs inputs{visuals, map, sources, thermal};
+        inputs.m_prior_ch = prior_ch;
+        inputs.upload(fixture);
+
+        WorldLightingPass pass;
+        PPR_TEST_ASSERT(not pass.initialize(*fixture.m_shaders, std::filesystem::current_path()));
+
+        const u32 failing_cell = cellIndex(400u, 300u);
+
+        // Real GPU range failure from the source stage (record 4) with the
+        // containing zero word written for the failing cell.
+        submitAttempt(fixture, pass, inputs.inputs(), 0u, -1, 1u);
+        {
+            const auto words = pass.pendingStatusWordsForTest();
+            PPR_TEST_ASSERT(words.size() == kNumericStatusRecords * kNumericStatusWords);
+            PPR_TEST_ASSERT(words[kNumericStageSource * kNumericStatusWords + 0u] == kNoNumericIndex);
+            PPR_TEST_ASSERT(words[kNumericStageSource * kNumericStatusWords + 1u] == failing_cell);
+            for (u32 word = 2u; word < kNumericStatusWords; ++word) {
+                PPR_TEST_ASSERT(words[kNumericStageSource * kNumericStatusWords + word] == 0u);
+            }
+        }
+
+        PPR_TEST_ASSERT(pass.collectCompleted(1u) == std::errc::result_out_of_range);
+        const auto contained = readWords(
+            fixture, pass.sourceCellsForTest(), static_cast<u64>(failing_cell) * sizeof(u32), sizeof(u32));
+        PPR_TEST_ASSERT(contained[0u] == 0u);
+
+        // Real GPU invalid-state failure: a NaN thermal LUT row feeding a hot
+        // opaque cell produces a nonfinite source value.
+        ThermalTable nan_thermal;
+        nan_thermal.load(fixture);
+        const float nan = std::numeric_limits<float>::quiet_NaN();
+        const u32 nan_row = ThermalTable::rowFor(4'000.0);
+        for (u32 row = nan_row - 2u; row <= nan_row + 2u; ++row) {
+            nan_thermal.writeRow(row, rgb(nan, nan, nan));
+        }
+
+        nan_thermal.upload(fixture);
+
+        CategoricalMap hot_map;
+        hot_map.occupy(200u, 100u, kHot, 4'000.0);
+        CascadeInputs hot_inputs{visuals, hot_map, sources, nan_thermal};
+        hot_inputs.upload(fixture);
+
+        submitAttempt(fixture, pass, hot_inputs.inputs(), 4u, -1, 2u);
+        {
+            const auto words = pass.pendingStatusWordsForTest();
+            PPR_TEST_ASSERT(words[kNumericStageSource * kNumericStatusWords + 0u] == cellIndex(200u, 100u));
+            PPR_TEST_ASSERT(words[kNumericStageSource * kNumericStatusWords + 1u] == kNoNumericIndex);
+        }
+
+        PPR_TEST_ASSERT(pass.collectCompleted(2u) == std::errc::state_not_recoverable);
+
+        // The terminal and lower-cascade records map to their own stages through
+        // the real readback inspection path. The GPU work here is clean; the
+        // minima are injected after completion exactly as Task 7's ticket test
+        // does for the projection records.
+        CategoricalMap clean_map;
+        CascadeInputs clean_inputs{visuals, clean_map, sources, thermal};
+        clean_inputs.upload(fixture);
+
+        submitAttempt(fixture, pass, clean_inputs.inputs(), 5u, -1, 3u);
+        pass.pendingStatusWordsForTest()[kNumericStageTerminal * kNumericStatusWords + 1u] = 9u;
+        PPR_TEST_ASSERT(pass.collectCompleted(3u) == std::errc::result_out_of_range);
+
+        submitAttempt(fixture, pass, clean_inputs.inputs(), 6u, -1, 4u);
+        pass.pendingStatusWordsForTest()[kNumericStageCascade * kNumericStatusWords + 0u] = 5u;
+        PPR_TEST_ASSERT(pass.collectCompleted(4u) == std::errc::state_not_recoverable);
+
+        // Teardown inspects an uninspected pending ticket instead of reporting a
+        // successful shutdown.
+        submitAttempt(fixture, pass, clean_inputs.inputs(), 7u, -1, 5u);
+        pass.pendingStatusWordsForTest()[kNumericStageTerminal * kNumericStatusWords + 0u] = 3u;
+        PPR_TEST_ASSERT(pass.shutdown() == std::errc::state_not_recoverable);
+
+        std::println(
+            "WORLD_LIGHTING_CASCADE numeric_status source_range=index source_invalid=index "
+            "terminal/cascade=readback_injection teardown=reported");
     };
 
     // ------------------------------------------------------------------
@@ -1075,25 +1365,30 @@ namespace pP::tests::detail::WorldLightingCascade {
         }
 
         // Record addressing: level offset, atlas tile and sector position.
-        PPR_TEST_ASSERT(lighting::cascadeRecordIndex(1u, 0u, 0u, 0u) == 0u);
-        PPR_TEST_ASSERT(lighting::cascadeRecordIndex(1u, 1u, 0u, 0u) == 4u);
-        PPR_TEST_ASSERT(lighting::cascadeRecordIndex(1u, 0u, 1u, 0u) == 4u * kEdge);
-        PPR_TEST_ASSERT(lighting::cascadeRecordIndex(1u, 0u, 0u, 5u) == 1u * kEdge + 1u);
-        PPR_TEST_ASSERT(lighting::cascadeRecordIndex(5u, 0u, 0u, 0u) == 4u * kLevelRecords);
-        PPR_TEST_ASSERT(lighting::cascadeRecordIndex(5u, 15u, 15u, 4095u) == 5u * kLevelRecords - 1u);
+        PPR_TEST_ASSERT(storeRecordIndex(1u, 0u, 0u, 0u) == 0u);
+        PPR_TEST_ASSERT(storeRecordIndex(1u, 1u, 0u, 0u) == 4u);
+        PPR_TEST_ASSERT(storeRecordIndex(1u, 0u, 1u, 0u) == 4u * kEdge);
+        PPR_TEST_ASSERT(storeRecordIndex(1u, 0u, 0u, 5u) == 1u * kEdge + 1u);
+        PPR_TEST_ASSERT(storeRecordIndex(5u, 0u, 0u, 0u) == 4u * kLevelRecords);
+        PPR_TEST_ASSERT(storeRecordIndex(5u, 15u, 15u, 4095u) == 5u * kLevelRecords - 1u);
+        PPR_TEST_ASSERT(levelRecordIndex(5u, 0u, 0u, 0u) == 0u);
+        PPR_TEST_ASSERT(levelRecordIndex(5u, 15u, 15u, 4095u) == kLevelRecords - 1u);
 
-        // Interval starts and finite ends; L5 traces the actual map exit.
+        // Interval starts derived from the fixed penumbra width, and the finite
+        // end a_(l+1) for l<5; L5 traces the actual map exit (no finite end).
         for (u32 level = 1u; level <= lighting::kCascadeLevels; ++level) {
             PPR_TEST_ASSERT(lighting::cascadeIntervalStart(level) == kIntervalStarts[level - 1u]);
         }
 
-        for (u32 level = 1u; level < lighting::kCascadeLevels; ++level) {
-            PPR_TEST_ASSERT(lighting::cascadeIntervalEnd(level).has_value());
-            PPR_TEST_ASSERT(*lighting::cascadeIntervalEnd(level) == kIntervalStarts[level]);
-        }
-
-        PPR_TEST_ASSERT(not lighting::cascadeIntervalEnd(lighting::kCascadeLevels).has_value());
         PPR_TEST_ASSERT(lighting::kCascadePenumbraWidth == 0.5f);
+        PPR_TEST_ASSERT(
+            lighting::cascadeIntervalStart(1u) == static_cast<float>(static_cast<double>(kEdge) * 0.5 * 1.0e-3 * 2.0));
+
+        for (u32 level = 1u; level < lighting::kCascadeLevels; ++level) {
+            PPR_TEST_ASSERT(
+                lighting::cascadeIntervalStart(level + 1u) == kIntervalStarts[level] and
+                level + 1u <= lighting::kCascadeLevels);
+        }
 
         // Cold start is zero radiance and zero transmittance, not vacuum: every
         // word of the persistent store and the source cache starts zero.
@@ -1177,16 +1472,18 @@ namespace pP::tests::detail::WorldLightingCascade {
         const auto black_words = readLevel(fixture, pass.cascadeIntervalsForTest(), kTerminal);
         PPR_TEST_ASSERT(std::ranges::all_of(black_words, [](const u32 word) { return word == 0u; }));
 
-        // The seam-crossing sector keeps its narrow unwrapped integral; the
-        // wrapped endpoints are never sorted into the complementary arc.
-        const u32 width_index = [&] {
+        // The seam-crossing terminal sub-sector keeps its narrow unwrapped
+        // integral; wrapped endpoints are never normalised and sorted into the
+        // complementary arc. The sub-sector lives in the 16,384-space, while a
+        // stored direction phi is the 4,096-space index that owns it.
+        const double turn = 2.0 * std::numbers::pi;
+        const double sector_width = turn / static_cast<double>(kTerminalDirections);
+        const double rotation = turn * 23.0 / 24.0;
+        const u32 seam_subsector = [&] {
             for (u32 sector = 0u; sector < kTerminalDirections; ++sector) {
-                const double width = 2.0 * std::numbers::pi / static_cast<double>(kTerminalDirections);
-                const double rotation = 2.0 * std::numbers::pi * 23.0 / 24.0;
-                const double start = static_cast<double>(sector) * width + rotation;
-                const double end = static_cast<double>(sector + 1u) * width + rotation;
-                if (static_cast<double>(static_cast<u32>(start / (2.0 * std::numbers::pi))) !=
-                    static_cast<double>(static_cast<u32>(end / (2.0 * std::numbers::pi)))) {
+                const double start = static_cast<double>(sector) * sector_width + rotation;
+                const double end = static_cast<double>(sector + 1u) * sector_width + rotation;
+                if (static_cast<u32>(std::floor(start / turn)) != static_cast<u32>(std::floor(end / turn))) {
                     return sector;
                 }
             }
@@ -1194,13 +1491,32 @@ namespace pP::tests::detail::WorldLightingCascade {
             return 0u;
         }();
 
-        const float3 narrow = skySectorOracle(width_index, kTerminalDirections, 23);
-        const float3 full = skySectorOracle(0u, 1u, 23);
-        const float3 complement = rgb(full.x - narrow.x, full.y - narrow.y, full.z - narrow.z);
-        PPR_TEST_ASSERT(std::abs(narrow.x) > 0.0f);
-        PPR_TEST_ASSERT(std::abs(complement.x - narrow.x) > 0.1f * std::abs(narrow.x));
+        const u32 seam_phi = seam_subsector / 4u;
+        const u32 stored_directions = lighting::cascadeDirections(kTerminal);
+        PPR_TEST_ASSERT(stored_directions == kTerminalDirections / 4u);
+        PPR_TEST_ASSERT(seam_phi < stored_directions);
+        PPR_TEST_ASSERT(seam_subsector >= seam_phi * 4u and seam_subsector < seam_phi * 4u + 4u);
 
-        // Re-run hour 23 and compare the seam sector through the real dispatch.
+        // CPU discrimination: the sorted-endpoints failing mode integrates the
+        // complement of the narrow arc, which differs from the narrow integral by
+        // orders of magnitude for this sector.
+        const float3 narrow = skySectorOracle(seam_subsector, kTerminalDirections, 23);
+        const float3 sorted = skySortedSectorOracle(seam_subsector, kTerminalDirections, 23);
+        PPR_TEST_ASSERT(std::abs(narrow.x) > 0.0f);
+        PPR_TEST_ASSERT(std::abs(sorted.x - narrow.x) > 0.5f * std::abs(narrow.x));
+
+        // Failing-mode stored average for the seam phi: replace only the seam
+        // sub-sector's sky contribution with the sorted (complementary) integral.
+        float3 failing_average{zero_v};
+        for (u32 sub = 0u; sub < 4u; ++sub) {
+            const u32 sector = seam_phi * 4u + sub;
+            const float3 value = sector == seam_subsector ? sorted : skySectorOracle(sector, kTerminalDirections, 23);
+            failing_average.x += value.x * 0.25f;
+            failing_average.y += value.y * 0.25f;
+            failing_average.z += value.z * 0.25f;
+        }
+
+        // Re-run hour 23 and compare the stored directions that span the seam.
         for (u64 frame = 24u; frame < 36u; ++frame) {
             runFrame(fixture, pass, inputs.inputs(), frame, 23, frame + 1u);
         }
@@ -1210,7 +1526,8 @@ namespace pP::tests::detail::WorldLightingCascade {
         for (u32 probe_y = 0u; probe_y < lighting::cascadeProbeEdge(kTerminal); ++probe_y) {
             for (u32 probe_x = 0u; probe_x < lighting::cascadeProbeEdge(kTerminal); ++probe_x) {
                 const u64 trace = probeTraceFrame(35u, kTerminal, probe_x, probe_y);
-                for (u32 phi: {width_index, (width_index + 1u) % kTerminalDirections}) {
+                for (u32 offset = 0u; offset < 3u; ++offset) {
+                    const u32 phi = (seam_phi + stored_directions + offset - 1u) % stored_directions;
                     const lighting::Interval stored = decodeRecord(seam_words, kTerminal, probe_x, probe_y, phi);
                     const lighting::Interval expected = terminalOracle(
                         occupancy, source_words, probe_x, probe_y, trace, phi, 23);
@@ -1218,15 +1535,30 @@ namespace pP::tests::detail::WorldLightingCascade {
                     PPR_TEST_ASSERT(
                         std::abs(stored.m_radiance.x - expected.m_radiance.x) <=
                         2.0e-3f * (std::abs(expected.m_radiance.x) + 1.0e-3f));
+                    PPR_TEST_ASSERT(
+                        std::abs(stored.m_radiance.y - expected.m_radiance.y) <=
+                        2.0e-3f * (std::abs(expected.m_radiance.y) + 1.0e-3f));
+                    PPR_TEST_ASSERT(
+                        std::abs(stored.m_radiance.z - expected.m_radiance.z) <=
+                        2.0e-3f * (std::abs(expected.m_radiance.z) + 1.0e-3f));
+
+                    if (phi == seam_phi) {
+                        // The GPU record is the narrow unwrapped integral, not
+                        // the sorted complementary arc.
+                        PPR_TEST_ASSERT(
+                            std::abs(stored.m_radiance.x - failing_average.x) > 0.5f * std::abs(stored.m_radiance.x));
+                    }
+
                     ++compared;
                 }
             }
         }
 
-        PPR_TEST_ASSERT(compared == 2u * lighting::cascadeProbeEdge(kTerminal) * lighting::cascadeProbeEdge(kTerminal));
+        PPR_TEST_ASSERT(compared == 3u * lighting::cascadeProbeEdge(kTerminal) * lighting::cascadeProbeEdge(kTerminal));
         std::println(
-            "WORLD_LIGHTING_CASCADE terminal_sky hours=-1,0,23 transmittance=0 seam_sector={} narrow!=complement",
-            width_index);
+            "WORLD_LIGHTING_CASCADE terminal_sky hours=-1,0,23 transmittance=0 seam_subsector={} seam_phi={} "
+            "stored_dir={} narrow!=sorted",
+            seam_subsector, seam_phi, stored_directions);
         PPR_TEST_ASSERT(not pass.shutdown());
     };
 
@@ -1325,7 +1657,9 @@ namespace pP::tests::detail::WorldLightingCascade {
         const auto words = readWords(fixture, pass.sourceCellsForTest(), 0u, lighting::kSourceCellBytes);
 
         // Cold start: the prior CH field is zero, so the diffuse term is exactly
-        // zero and the source is the authored emission.
+        // zero and the source is the authored emission. The diffuse-only cell at
+        // 300 K is exactly zero because its thermal emission lies below the
+        // RGB9E5 minimum positive value, not because 300 K is out of range.
         PPR_TEST_ASSERT(words[cellIndex(100u, 100u)] == sources[kEmissive].m_emission);
         PPR_TEST_ASSERT(words[cellIndex(200u, 100u)] == 0u);
         PPR_TEST_ASSERT(words[cellIndex(0u, 0u)] == 0u);
@@ -1616,7 +1950,6 @@ namespace pP::tests::detail::WorldLightingCascade {
                 for (u32 probe_x = 0u; probe_x < lighting::cascadeProbeEdge(kTerminal); ++probe_x) {
                     // Every probe's own selected direction must see the freshly
                     // prepared source, not the zero cold-start cache.
-                    const u64 trace = probeTraceFrame(0u, kTerminal, probe_x, probe_y);
                     const u32 phase = groupPhaseOracle(probe_x / 2u, probe_y / 2u, kTerminal);
                     const u32 local = (probe_x % 2u) + 2u * (probe_y % 2u);
                     if (probeAgeOracle(0u, phase, local) != 0u) {
@@ -1625,10 +1958,11 @@ namespace pP::tests::detail::WorldLightingCascade {
 
                     // A ray that starts inside the emitting volume returns the
                     // cached source with zero transmittance.
-                    const lighting::Interval stored = decodeRecord(first, kTerminal, probe_x, probe_y, 0u);
-                    PPR_TEST_ASSERT(stored.m_transmittance == 0.0f);
-                    PPR_TEST_ASSERT(stored.m_radiance.x > 0.0f);
-                    (void) trace;
+                    for (const u32 phi: {0u, 1u, 7u, kStoredDirections / 2u, kStoredDirections - 1u}) {
+                        const lighting::Interval stored = decodeRecord(first, kTerminal, probe_x, probe_y, phi);
+                        PPR_TEST_ASSERT(stored.m_transmittance == 0.0f);
+                        PPR_TEST_ASSERT(stored.m_radiance.x > 0.0f);
+                    }
                 }
             }
         }
@@ -1645,6 +1979,7 @@ namespace pP::tests::detail::WorldLightingCascade {
 
         u32 selected_count = 0u;
         u32 retained_count = 0u;
+        u32 retained_records = 0u;
         for (u32 gy = 0u; gy < lighting::cascadeGroupEdge(kTerminal); ++gy) {
             for (u32 gx = 0u; gx < lighting::cascadeGroupEdge(kTerminal); ++gx) {
                 const u32 phase = groupPhaseOracle(gx, gy, kTerminal);
@@ -1652,17 +1987,22 @@ namespace pP::tests::detail::WorldLightingCascade {
                 for (u32 local = 0u; local < 4u; ++local) {
                     const u32 probe_x = gx * 2u + (local % 2u);
                     const u32 probe_y = gy * 2u + (local / 2u);
-                    const u32 spacing = lighting::cascadeSpacing(kTerminal);
-                    const u32 atlas_x = probe_x * spacing;
-                    const std::size_t base = static_cast<std::size_t>(probe_y * spacing) * kEdge + atlas_x;
-                    const bool identical = level_before[base * 2u] == level_after[base * 2u] and
-                                           level_before[base * 2u + 1u] == level_after[base * 2u + 1u];
                     if (local == selected) {
                         ++selected_count;
-                    } else {
-                        PPR_TEST_ASSERT(identical);
-                        ++retained_count;
+                        continue;
                     }
+
+                    // Every stored direction of a retained probe keeps its exact
+                    // bytes, not only the first atlas record.
+                    for (const u32 phi: {0u, 1u, 7u, kStoredDirections / 2u, kStoredDirections - 1u}) {
+                        const std::size_t base = levelRecordIndex(kTerminal, probe_x, probe_y, phi);
+                        PPR_TEST_ASSERT(
+                            level_before[base * 2u] == level_after[base * 2u] and
+                            level_before[base * 2u + 1u] == level_after[base * 2u + 1u]);
+                        ++retained_records;
+                    }
+
+                    ++retained_count;
                 }
             }
         }
@@ -1670,10 +2010,12 @@ namespace pP::tests::detail::WorldLightingCascade {
         const u32 groups = lighting::cascadeGroupEdge(kTerminal) * lighting::cascadeGroupEdge(kTerminal);
         PPR_TEST_ASSERT(selected_count == groups);
         PPR_TEST_ASSERT(retained_count == 3u * groups);
+        PPR_TEST_ASSERT(retained_records == 5u * 3u * groups);
         PPR_TEST_ASSERT(not pass.shutdown());
         std::println(
-            "WORLD_LIGHTING_CASCADE retention selected={} retained={} source_before_tracing=true", selected_count,
-            retained_count);
+            "WORLD_LIGHTING_CASCADE retention selected={} retained={} retained_records={} "
+            "source_before_tracing=true",
+            selected_count, retained_count, retained_records);
     };
 
     // ------------------------------------------------------------------
@@ -1791,6 +2133,8 @@ namespace pP::tests {
             run.recurse({
                 detail::WorldLightingCascade::schedule_visits_each_probe_once_per_four_frame_block,
                 detail::WorldLightingCascade::counter_exhaustion_rejects_admission_before_encoding,
+                detail::WorldLightingCascade::source_buffer_contracts_are_validated_before_encoding,
+                detail::WorldLightingCascade::source_and_transport_numeric_status_are_reported_and_settled,
                 detail::WorldLightingCascade::cascade_storage_matches_the_approved_layout,
                 detail::WorldLightingCascade::terminal_sky_closes_every_path_with_zero_transmittance,
                 detail::WorldLightingCascade::terminal_traces_the_actual_map_exit_beyond_the_finite_end,

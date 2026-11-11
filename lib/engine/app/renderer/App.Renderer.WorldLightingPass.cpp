@@ -121,6 +121,32 @@ namespace pP {
             return {};
         }
 
+        // The cached-source stage indexes the derived eight-byte palette up to
+        // material_count-1 and the committed thermal table by row. Both are
+        // required publication inputs with exact shapes; a missing, undersized
+        // or differently-strided buffer is rejected before any encoding.
+        std::error_code validateSourceInputs(const lighting::WorldLightingInputs &inputs) {
+            PPR_RETURN_ERROR_ON_FAIL(
+                WorldLightingPass, inputs.m_source_materials and inputs.m_thermal_lut
+                                       ? std::error_code{}
+                                       : std::make_error_code(std::errc::not_connected));
+
+            rhi::IBuffer *const sources = inputs.m_source_materials.get();
+            rhi::IBuffer *const thermal = inputs.m_thermal_lut.get();
+
+            PPR_RETURN_ERROR_ON_FAIL(
+                WorldLightingPass, sources->getDesc().elementSize == sizeof(lighting::SourceMaterial) and
+                                           sources->getDesc().size >= static_cast<u64>(inputs.m_material_count) *
+                                                                          sizeof(lighting::SourceMaterial)
+                                       ? std::error_code{}
+                                       : std::make_error_code(std::errc::invalid_argument));
+            PPR_RETURN_ERROR_ON_FAIL(
+                WorldLightingPass, thermal->getDesc().size == lighting::kThermalLutBytes and
+                                           thermal->getDesc().elementSize == lighting::kThermalLutStride
+                                       ? std::error_code{}
+                                       : std::make_error_code(std::errc::invalid_argument));
+            return {};
+        }
     }
 
     // ------------------------------------------------------------------
@@ -406,6 +432,7 @@ namespace pP {
                                    : std::error_code{});
 
         PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, validateProjectionInputs(inputs));
+        PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, validateSourceInputs(inputs));
         PPR_RETURN_ERROR_ON_FAIL(
             WorldLightingPass, frame.m_sky_hour >= -1 and frame.m_sky_hour <= 23
                                    ? std::error_code{}

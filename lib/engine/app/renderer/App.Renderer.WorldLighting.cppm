@@ -76,10 +76,6 @@ export namespace pP::lighting {
     static_assert(sizeof(VisibilityRecord) == 8u and alignof(VisibilityRecord) == 4u);
     static_assert(PPR_OFFSETOF(VisibilityRecord, m_low) == 0u and PPR_OFFSETOF(VisibilityRecord, m_high) == 4u);
 
-    [[nodiscard]] constexpr bool visibilityBit(const VisibilityRecord record, const u32 bit) noexcept {
-        return ((bit < 32u ? record.m_low : record.m_high) & (1u << (bit & 31u))) != 0u;
-    }
-
     [[nodiscard]] constexpr u32 visibilityRecordIndex(
         const u32 level, const u32 record_x, const u32 record_y) noexcept {
         return kVisibilityLevelOffsets[level] + record_y * kVisibilityLevelPitches[level] + record_x;
@@ -135,75 +131,16 @@ export namespace pP::lighting {
         return cascadeProbeEdge(level) / 2u;
     }
 
-    // Ray interval start in native-cell distance units: 1.024, 4.096, 16.384,
-    // 65.536 and 262.144 cells for l=1..5. These are distances, not offsets.
+    // Ray interval start in native-cell distance units, derived from the fixed
+    // reference penumbra width: edge * penumbra_width * 1e-3 * 2^(2l-1) gives
+    // 1.024, 4.096, 16.384, 65.536 and 262.144 cells for l=1..5. These are
+    // distances, not buffer offsets. The finite end for l<5 is a_(l+1); L5
+    // traces to the actual map exit.
     [[nodiscard]] constexpr float cascadeIntervalStart(const u32 level) noexcept {
-        return 0.512f * static_cast<float>(1u << (2u * level - 1u));
-    }
-
-    // The finite interval end for l<5 is a_(l+1); L5 traces to the actual map
-    // exit and has no finite end.
-    [[nodiscard]] constexpr std::optional<float> cascadeIntervalEnd(const u32 level) noexcept {
-        if (level >= kCascadeLevels) {
-            return std::nullopt;
-        }
-
-        return cascadeIntervalStart(level + 1u);
-    }
-
-    // One level's record address inside the single structured store.
-    [[nodiscard]] constexpr u32 cascadeRecordIndex(
-        const u32 level, const u32 probe_x, const u32 probe_y, const u32 phi) noexcept {
-        const u32 spacing = cascadeSpacing(level);
-        const u32 atlas_x = probe_x * spacing + phi % spacing;
-        const u32 atlas_y = probe_y * spacing + phi / spacing;
-        return (level - 1u) * kCascadeLevelRecords + atlas_y * kLightingEdge + atlas_x;
-    }
-
-    // ------------------------------------------------------------------
-    // fixed four-frame quarter-probe schedule
-    // ------------------------------------------------------------------
-    // The group phase is a pure uint32 hash of the row-major 2x2 group and
-    // level. `h` selects one probe per accepted frame; a retained probe's last
-    // trace frame is derived, never stored, and is never negative.
-
-    [[nodiscard]] constexpr u32 mix32(u32 value) noexcept {
-        value = (value ^ (value >> 16u)) * 0x7feb352du;
-        value = (value ^ (value >> 15u)) * 0x846ca68bu;
-        return value ^ (value >> 16u);
-    }
-
-    [[nodiscard]] constexpr u32 cascadeGroupPhase(const u32 group_x, const u32 group_y, const u32 level) noexcept {
-        return mix32(group_x + cascadeGroupEdge(level) * group_y + 0x9e3779b9u * level) & 3u;
-    }
-
-    // Local 2x2 probe index k = local_x + 2*local_y selected by accepted frame n.
-    [[nodiscard]] constexpr u32 cascadeSelectedProbe(const u64 accepted_frame, const u32 group_phase) noexcept {
-        return static_cast<u32>((accepted_frame + group_phase) & 3u);
-    }
-
-    [[nodiscard]] constexpr u32 cascadeProbeAge(
-        const u64 accepted_frame, const u32 group_phase, const u32 local_probe) noexcept {
-        return (static_cast<u32>(accepted_frame & 3u) + group_phase + 4u - local_probe) & 3u;
-    }
-
-    // Golden-ratio fixed-point phase for one actual trace frame. Truncating the
-    // frame to 32 bits is intentional: the phase sequence repeats, the frame
-    // counter does not.
-    [[nodiscard]] constexpr u32 cascadePhaseWord(const u64 trace_frame) noexcept {
-        return static_cast<u32>(trace_frame) * 0x9e3779b9u;
-    }
-
-    [[nodiscard]] constexpr float cascadePhaseFraction(const u64 trace_frame) noexcept {
-        return (static_cast<float>(cascadePhaseWord(trace_frame) >> 9u) + 0.5f) / 8'388'608.0f;
-    }
-
-    [[nodiscard]] constexpr double cascadeProbeAngle(
-        const u32 phi, const u32 directions, const u64 trace_frame) noexcept {
-        return 2.0 *
-               std::numbers::pi *
-               (static_cast<double>(phi) + static_cast<double>(cascadePhaseFraction(trace_frame))) /
-               static_cast<double>(directions);
+        constexpr double cascade_0_length = static_cast<double>(kLightingEdge) *
+                                            static_cast<double>(kCascadePenumbraWidth) *
+                                            1.0e-3;
+        return static_cast<float>(cascade_0_length * static_cast<double>(1u << (2u * level - 1u)));
     }
 
     // ------------------------------------------------------------------

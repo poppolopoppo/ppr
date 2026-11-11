@@ -21,7 +21,9 @@ export namespace pP {
 
     // One accepted lighting attempt's input values. The projection is
     // camera-free and time-independent; the transport stage consumes the
-    // frame's active elapsed time and selected sky hour.
+    // frame's active elapsed time and selected sky hour. Production callers do
+    // not yet supply a non-default hour, so the terminal sky is the black
+    // boundary sky (-1) until later renderer wiring; 0..23 rotate it.
     struct WorldLightingFrame {
         TimeSpan m_active_elapsed{};
         i32 m_sky_hour{-1};
@@ -157,8 +159,8 @@ export namespace pP {
         // attempt selects another slot.
         [[nodiscard]] rhi::IBuffer *accelerationVisibilityForTest() const noexcept;
         [[nodiscard]] rhi::ITexture *accelerationJumpForTest() const noexcept;
-        // Mapped 4-record status readback of the last armed attempt, or empty
-        // when no attempt was armed. Used to observe minima and inject range
+        // Mapped fixed-record status readback of the last armed attempt, or
+        // empty when no attempt was armed. Used to observe minima and inject
         // faults.
         [[nodiscard]] std::span<u32> pendingStatusWordsForTest() noexcept;
         [[nodiscard]] bool statusSlotPendingForTest(u32 slot) const noexcept;

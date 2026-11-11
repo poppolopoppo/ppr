@@ -37,8 +37,8 @@ static const uint kProjectionStatusCells = 3u;
 
 // Candidate state: 0 accepted, 1 rejected (nonfinite, out-of-domain or
 // otherwise invalid), 4 inactive (an ordinary skip, not a failure). The
-// projection has no representational range: word 1 stays UINT32_MAX here and is
-// reserved for later source/transport stages that encode bounded records.
+// projection has no representational range: word 1 stays UINT32_MAX here, and
+// only the separate source/transport stage records use it.
 static const uint kProjectionCandidateInactive = 4u;
 
 struct ProjectionCandidate {
@@ -143,8 +143,8 @@ void reduceKeys(uint3 id: SV_DispatchThreadID) {
     if (candidate.status != 0u) {
         // Every rejected candidate (nonfinite, out-of-domain, invalid material
         // or source) is an invalid-state failure. There is no projection range
-        // error; the second minimum is reserved for later representational
-        // overflow.
+        // error; representational overflow belongs to the source/transport
+        // stage records.
         numericRecordFailure(g_projection.statusRecord, kNumericInvalidState, id.x);
         return;
     }
