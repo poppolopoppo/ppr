@@ -43,7 +43,8 @@ Windows/D3D12 is unavailable on this host and remains an unmet gate unless run.
 | 7 | complete (commit `59cd4c34`; Linux/Vulkan verified; D3D12 pending) |
 | 8 | complete (commit `62621c92`; independent review approved; D3D12 pending) |
 | 9 | complete (commits `d5f95024`, `563c73a8`; reviews clean; Task 10 handoffs recorded) |
-| 10–19 | pending |
+| 10 | complete (commits `e628d018`, `46e021ae`; reviews clean; Task 11 handoffs recorded) |
+| 11–19 | pending |
 
 ## Task 0 — evidence
 
@@ -1005,5 +1006,37 @@ and operational acceptance. No Task 4 work has begun.
     wiring.
 - **Deferred minors:** test robustness (optional dereference/span checks);
   report pre-fix evidence block remains alongside the follow-up.
+- **Known gates:** pre-existing `gpu_grid_surface` optical leaf (Task 11);
+  Windows/D3D12 unmeasured.
+
+## Task 10 — fine CH reconstruction complete
+
+- Commits: `e628d018` (in-place fine CH/connectors/fitting/EMA),
+  `46e021ae` (discriminating connector/far-merge/window-once evidence; cleanups).
+- Review: production math matched every specified contract; one Important
+  evidence gap (nonzero AC/connector geometry/far merge/window-once EMA not
+  causally tested) fixed in the follow-up; scoped re-review found all findings
+  addressed with no new Critical/Important breakage.
+- Delivered: one zero-initialized 512×512×32-byte in-place CH field (8 MiB);
+  source-reads-before-fine-writes and fine-writes-before-reader barriers across
+  frames; ±4 connector box, clamped L1 bilinear taps with retained trace frames,
+  connector-exit basis, `f+0.001v` near trace, `L=Lnear+Tnear*Lfar`,
+  `T=Tnear*Tfar`, `2π/16` weights and zero-weight skips; exact CH basis/fitting
+  with mean subtraction and once-only Lanczos; decoded FP32 EMA
+  `1-exp(-2*dt)` with first-field bypass and injected active time; all 32 bytes
+  written, own-record-only access, no history copy; `angularMean(float2)`;
+  numeric-status range/invalid containment. Real GPU tests cover uniform/zero
+  AC, signed rotated harmonics, connector geometry oracle, clamped edge/far
+  merge, window-once EMA, in-place bytes, timing/pause/suspend/rejection,
+  barriers and containment.
+- **Task 11 handoffs:** use `angularMean` for visible/gas lighting; add the
+  sample-rate categorical PBR/BRDF LUT/gas implementation and retire the old
+  smooth solid/liquid path.
+- **Deferred minors:** report claim that dedupe/renormalization of repeated
+  clamped taps would fail the far-merge test is false (unobservable by
+  construction); dead `L1OracleFrame::m_age`; redundant fine-edge assertion;
+  unused 8 MiB L1 readback in the quadrant test; hardcoded oracle constants.
+  Fine CH has no transmittance field; `T=Tnear*Tfar` is covered at the cascade
+  level via the shared merge.
 - **Known gates:** pre-existing `gpu_grid_surface` optical leaf (Task 11);
   Windows/D3D12 unmeasured.
