@@ -47,7 +47,8 @@ Windows/D3D12 is unavailable on this host and remains an unmet gate unless run.
 | 11 | complete (commits `e5e073e5`, `58a21d8a`, `0902f442`, `80c719c7`; reviews clean; camera-side visual gate for Task 19) |
 | 12 | complete (commits `6418d663`, `2e0f7ec5`, `b82877b7`; reviews clean; background coverage re-scoped to Task 14) |
 | 13 | complete (commit `2f46ae40`; independent review approved) |
-| 14–19 | pending |
+| 14 | complete (commits `8c5cf6b0`, `fd03d4c6`; reviews clean; credit ruling recorded) |
+| 15–19 | pending |
 
 ## Task 0 — evidence
 
@@ -1289,3 +1290,50 @@ and operational acceptance. No Task 4 work has begun.
 - **Deferred minors:** Task 7 `initialize` still resolves `IRhiService`
   internally; Task 6 deferred staging release still captures a raw device on the
   confirmed-removal drain.
+
+## Task 14 — A/B/C integration complete
+
+- Commits: `8c5cf6b0` (A/B/C settlement/retained pictures/teardown),
+  `fd03d4c6` (credit text, complete failure matrix, skip C after ambiguity,
+  minors).
+- Review: approved settlement model with three Important issues (credit-model
+  ratification/comment, failure-matrix gaps, C attempted after ambiguity). Fix
+  round addressed them; scoped re-review found all findings addressed with no
+  new Critical/Important breakage.
+- Delivered: value-only `RenderStageResult`/`m_stages` A/B/C with immediate
+  per-call settlement/fence capture; accepted-only lighting phase/CH/active-time
+  and screen-history/exposure commits; retained-picture C reader fencing;
+  ambiguous quarantine/no discard/no retry; C skipped after any ambiguous stage;
+  boundary-captured suspension-excluding active time; inverse world/shutdown
+  teardown; removal of the temporary cleanup scene path. Fixed two pre-existing
+  defects found by the normal-app gate (candidate `m_world_edge` copy; invalid
+  `g_numeric_status` bind on terrain).
+- **Coordinator ruling — credit model:** the renderer ledger is
+  submission-scoped (`kMaxOutstandingSubmissions = 2 logical frames × 3 stages =
+  6`); the 2-logical-frame bound remains in `Application` via its reservation
+  bound. Safety comes from that reservation bound plus the per-logical-frame
+  last-use rings, **not** from the backend command pool. Direct `Renderer` users
+  are bounded only by the 6-submission ledger. Reservation bound and ring depths
+  were not changed. Cost if wrong: a third queued submission behind a stuck host
+  gate has only the Application reservation backstop; revisit if a non-editor
+  multi-stage user appears.
+- Failure matrix: ambiguous A/C, forced status failure at pass shutdown, editor
+  stale-epoch drop/fresh packet, B history/exposure exactly once, and combined
+  Review Focus 1 (B rejected after A with resize/world replacement pending;
+  aggregate = A's actual; A commit/history role retention).
+- Verification: settlement suite 17/17 routine (~664 s) and GPU-validation
+  (~669 s) under 900 s entries; frame/lane/run-gate and affected grid/asset/game
+  entries pass; normal 1024 app run clean (capture, quiescence, shutdown; only
+  two pre-existing E41018 shader warnings).
+- **Deferred minors for Task 19 audit:** undocumented `display_window` timeout
+  600→900 s bump and unverified "~690 s validation" comment; residual
+  ledger-is-2-frames wording in `App.Renderer.cppm`/renderer codemap; OS-suspend
+  `dt` caveat beyond minimized suspension; injection seam reset semantics;
+  post-pass selection mutation outside a submission not directly observable;
+  retiring-world drain reports rather than propagates; Task 7 internal
+  `IRhiService` resolution and Task 6 raw-device deferred staging unchanged.
+- **Task 15 handoffs:** enforce 1024 rendered-world admission/startup default and
+  remove the temporary `m_has_resolved_cells == 0` legacy fallback once all
+  rendered worlds publish resolved cells; the lab supplies the ordinary visual
+  acceptance scene.
+- **Unavailable gate:** Windows/D3D12 unmeasured.
